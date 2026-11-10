@@ -3934,6 +3934,8 @@ One answer from a build track changes this section's overlays: QD-632 (question 
 
 Status: complete (2026-11-10)
 
+Amended 2026-11-10 for the owner's answers: QD-632 (a ref with no head starts in the epoch its first push names: 9.2.3, 9.2.6, 9.3's P1 and the model, 9.5, 9.6), QD-633 (an inline change list's leaf places: 9.2.2, 9.2.4, 9.2.6) and QD-640 (a head's `index_epoch`, which format-1 code reads past: 9.2.2). 9.9 records every answer, QD-607 to QD-612 and these three. The code these three change is one new task, EVS1-M2-50, in `.stack/plan/proposals/owner-answers-tasks.md`.
+
 Tasks held until complete: EVS1-M2-28, EVS1-M2-29, EVS1-M2-30.
 
 Model: `sidecar/sidecartest/model/details/PathEpoch.tla`, its configurations (`PathEpoch*.cfg`, `PathEpochTwin-*.cfg`, `PathEpochReach-*.cfg`) and `run-pathepoch.sh` beside it. New tasks: `.stack/plan/proposals/details-9-tasks.md` (EVS1-M2-44 to EVS1-M2-47). Questions filed: `.stack/questions/details-9-root-names.md`, `details-9-index-leaf.md`, `details-9-fold-deletes-sources.md`, `details-9-crossing-creation.md`, `details-9-map-source-window.md`, `details-9-map-verifiers.md`. Open questions this section builds on, each on the option 9.9 names: `evs1-m2-24-root-directory-names`, `evs1-m2-16-due-classification`, `evs1-m2-27-every-ref-lease-epoch`, `evs1-m2-10-directory-marker-version`, `evs1-m2-39-head-index-epoch`.
@@ -4008,8 +4010,10 @@ message EvsReadPathReply {
 message EvsIndexVersion {
   ...
   uint32 leaf_part = 5;                    // where its change sits in its statement's list: the part, 0 for a
-  uint32 leaf_index = 6;                   // one-part push, and the change's index in that part's list plus 1;
-                                           // 0 when the list is inline (the statement holds it)
+  uint32 leaf_index = 6;                   // one-part push and for an inline list, and the change's index in
+                                           // that part's list, or in the inline list, plus 1; leaf_index 0
+                                           // means only "not recorded": an entry folded before the fields
+                                           // existed (question evs1-m2-45-inline-leaf-place, QD-633)
 }
 message EvsRemovalMarker {
   ...
@@ -4029,7 +4033,7 @@ enum EvsRefusalCode {
 }
 ```
 
-`EvsPush`, `EvsPathMap`, `EvsPathMove`, `EvsSourcePath`, `EvsName` and `EvsHead` keep their fields. What this section adds to them is rules, for `protocol/EVS-FORMAT.md`:
+`EvsPush`, `EvsPathMap`, `EvsPathMove`, `EvsSourcePath`, `EvsName` and `EvsHead` keep their fields. `EvsHead.index_epoch` (24) and `EvsHeadSummary.index_epoch` (15) are the search index's, not a path epoch: a head carries one only once an erasure's CUT committed. Format-1 code reads past both (question evs1-m2-39-head-index-epoch, option 1; QD-640): the summary's is on `testdata/evs/reserved_numbers.yml`'s ignored list and the head's on its kept list, since a format-1 write carries it forward and evs's head rule keeps it from falling. Nothing in this section reads it: a PATH_EPOCH push names no index epoch and its commit leaves the head's as it was, a map and the copy move `.ur-index/` entries like any others, and a format-1 device goes on reading a ref's format-1 files after a CUT. What this section adds to these messages is rules, for `protocol/EVS-FORMAT.md`:
 
 ```text
 map       one move per path live at the source head S, the root included (9.2.8), ascending by new_token_path's
@@ -4043,7 +4047,12 @@ tail      one move per token path that a version in (S, b] created, b the PATH_E
 source    a change's source paths (payload section 12) name the path in each listed source at or above its floor
 paths     (9.2.3), never another; a removal delta's removed_tokens hold the child's token in the current epoch and in
           each of those sources
-leaf      a fold records leaf_part and leaf_index from the list it folds; a carry (a fold's or the copy's) keeps them
+leaf      a fold records leaf_part and leaf_index from the list it folds, inline or rooted: an inline list's
+          places are part 0 and the change's index in the statement's list plus 1; a carry (a fold's or the
+          copy's) keeps them
+first     a ref with no head starts in the epoch its first push names (9.2.3, 9.2.6): the newest REMOVE
+          generation its creator holds, 1 when there is none; an overlay's, its base ref's current epoch; a
+          deposit or erasure ref's, 1
 ```
 
 Client state, all local and sealed under §5's AEAD:
@@ -4119,6 +4128,27 @@ A read of a no-floor name additionally needs S empty; otherwise the directory de
 
 What the rules leave is one window, stated here and in §11.5: a new name's token sent on a head at most `EpochFreshFor` old can reach evs after a cut-over committed in between. It is refused or answered on the new head either way; the token under the epoch just left is one a holder dropped by that cut-over can test.
 
+**A ref with no head** (question evs1-m2-44-new-ref-crossing, option 2; QD-632). A ref does not start in epoch 1: it starts in the epoch its first push names. Every path of a first push is a new name on that ref, and the head the new-name rule reads is absent, so its creator names the epoch by this rule in place of `cur`:
+
+```text
+a ref that is no overlay    p = the newest generation r <= g that this device holds whose GenRotate cause is
+                            REMOVE (RepoKey(r), walked down from g as pressure walks it), g being the generation
+                            the push seals to; none: p = 1
+an overlay                  p = the current epoch of its base ref R, from R's head verified within EpochFreshFor;
+                            the creator holds RepoKey(p), else ErrGkmKeyMissing as for any read
+a deposit or erasure ref    p = 1, as below
+fresh                       the head read that found no head, within EpochFreshFor
+nothing is read             a ref with no head holds no entry: the planner sends no path request for it, and
+                            every change is a creation; the first push's token paths, under p alone and with no
+                            source path, are the first tokens evs sees under the ref
+```
+
+On a ref that is no overlay `quiet` holds by construction: p is the newest removal the device holds, so no REMOVE generation lies in (p, g] and pressure is none. A later REQUEST or SCHEDULE generation drops no holder, which is why the rule names the newest REMOVE generation and not g: a holder that has r but not yet g still reads the ref. A removal the creator has not been told of is §11.5's bound, as on any ref.
+
+On an overlay the floor rule and the new-name rule apply as they do on its base, with p for `cur`. A repo's refs share their path keys, so an inherited path has its floor from the base ref (8.2.4) and its token under p is one evs holds already. A name new to the repo is held by `quiet` against the base ref's pressure: while the base ref is under an immediate removal the overlay would start in the epoch the base is about to leave, so its creator waits for the base's cut-over as it would on 412 PATH_EPOCH_DUE, and then names the base's new epoch. A first push that holds only inherited paths would send no new token, but evs cannot tell it from one that does (9.2.6), so the creator holds every first push of an overlay that carries a change while its base ref's pressure is immediate. Overlay and base then share every token path at the overlay's creation; each ref cuts over by its own PATH_EPOCH afterwards, and a reader works each in its own epoch state.
+
+A first push is planned on the belief that the ref holds nothing, and it commits only as the push that creates the ref (9.2.6). When the ref has a head by the time the push would be sent, or by the time it lands, the plan is dropped and made again on the head then read, as a plan on any ref is: each path read through 9.2.4, each creation checked against its parent's listing. It is never retokened. And a request on a ref with no head sets no floor: E3 does not count it. Both matter for one case. Two devices create the same ref; one names epoch 2, and the other, which has not yet been told of the removal, names epoch 1 and lands first; a mapper cuts the ref over to epoch 2, and the copy has not run. If the first device's push were then taken, or retokened with the floor its own refused attempt gave it, it would name epoch 2 and no source, evs would find no entry for a path the other device created in epoch 1, and the creation would land on a file that stands. Planned again, the device finds that file's row in the listing. Forgetting what a request on no head showed evs only sends less (9.2.3's rule for a lost record). An overlay's first push refused 412 PATH_EPOCH because its base ref's epoch moved is the one first push sent again as it is, under the base's new epoch: its own ref still holds nothing.
+
 Deposit and erasure refs have neither floors nor rules: their entries are random ids under no path key, they stay at epoch 1 for life (plan-EVS1-epoch-kinds #2), and every request on them declares epoch 1.
 
 #### 9.2.4 Reads
@@ -4154,7 +4184,10 @@ A lookup recurses to the first directory that has a floor, and at the latest to 
 ```text
 the served version, removal, or the delta at names_through, committed at u:
     u after the newest cut-over: found by the current token path, as today
-    else by leaf_part and leaf_index (inline lists need neither); the proof's leaf is the EvsChange itself
+    else by leaf_part and leaf_index: the change at that place of its statement's list, whose EvsEntryVersion
+        bytes the push record holds in the list's order; under a rooted list the proof's leaf is the EvsChange
+        itself; an inline list (part 0, the index plus 1) needs no proof, the statement holding the list
+    leaf_index 0, an entry folded before the fields existed: the statement alone, as History's answer below
 each returned statement w after max(u, pin_version) whose list is under changes_root:
     the request names a token path in e(w): digest, covering prefixes and adjacent-leaf proofs under that path
     it names none: nothing for w
@@ -4178,6 +4211,8 @@ verifyPath(X, reply, walk W):
        under its statement's epoch, and a delta below the walk under cur (9.3's W1)
   then pin, and write the record: Floor, PinEpoch = cur
 ```
+
+With the place recorded for inline lists too (question evs1-m2-45-inline-leaf-place, option 1; QD-633), evs serves every committed version in one round after a cut-over: a directory whose newest delta an inline push of an older epoch wrote, and a version kept elided, included. Most directories are such, since a small push's list is inline. The statement-alone answer is left for an entry with no recorded place: the reader finds its own token path in the inline list, which is evidence evs holds it (E1), names that epoch and asks again.
 
 A path with no record is checked from the ref pin, and `read` goes on only when the reply's head has the pin's epoch state: the current epoch only rises, so no cut-over lies between them and the walk holds statements of the current epoch only. That is §11.9's trusts row and g0-recheck-0-head-reader-read-paths as they stand: what a never-read path was before its first read is evs's word.
 
@@ -4270,7 +4305,37 @@ Everything else of 5e stands: a newer generation, parts present and under 24 h o
 
 **The crossing creation.** 5e for any other push computes the due its own commit would record (`pathEpochDueOver`). If that due blocks creation and the push creates a path, evs answers 412 PATH_EPOCH_DUE and records it, and the refusal's fence write sets the head's due fields as the commit would have. The first push across a removal then stops creation whether it commits or not, and no committed statement creates a path on a blocking ref under an epoch below an immediate removal its own pin covers.
 
-**The read route** is 9.2.4's: token paths matched by epoch, `stale_epoch`, `entry_epoch`, proofs by leaf place or by the request's token path in the statement's epoch, `commit_version`. The fold writes `leaf_part` and `leaf_index` into each folded version, marker and `names_leaf_*`, and a carry keeps them.
+**A ref's first push** (question evs1-m2-44-new-ref-crossing, option 2; QD-632). On a ref with no head, absent or a placeholder a refusal or evacuation left, 5e no longer requires epoch 1 and no longer exempts the push from the crossing creation, which is what EVS1-M2-44 built. With p the push's `path_epoch` and g its generation:
+
+```text
+once      a push planned on no head (base version 0, the creating sections 15 and 16) on a ref that has a
+              head: 409, final, before its epoch is compared: BASE_STALE in file mode, non-fast-forward in git
+              mode; its sender plans again on the head (9.2.3)
+epoch     a deposit or erasure ref: p = 1 (plan-EVS1-epoch-kinds #2)
+          an overlay, its base (R, k) in payload section 16: p = the current epoch of R's head as step 4 read
+              it, and p <= g
+          any other ref: 1 <= p <= g
+          else 412 PATH_EPOCH, final, as for any push that names another epoch than the head's
+crossing  the due is computed from p as on any ref: gen/<k> for k in (p, g], the newest REMOVE among them,
+          classed by the pin of gen/<p>; a due that blocks creation, in a push that creates a path -> 412
+          PATH_EPOCH_DUE, recorded in the placeholder head; no due is written, there being no head to carry
+          one, and the next attempt computes it again from its own pin
+the base  an overlay's first push that creates a path while R's head blocks creation (its due_blocks_creation,
+          or before its block_until_ms) -> 412 PATH_EPOCH_DUE, recorded the same way: the overlay would start
+          in the epoch R is about to leave
+commit    step 7's new head carries path_epoch {current: p, no source}, with the due of the line above when one
+          was computed that does not block (a batched one, or a ref kind that never blocks), and none for any
+          generation at or below p
+PATH_EPOCH on a ref with no head: 409 MAP_SOURCE, as landed
+```
+
+The `once` line is what keeps path-level CAS whole at a ref's creation. Every other push is held to the head it was planned on by its epoch, since the epoch only rises at a cut-over; a push planned on no head names an epoch of its own choosing, which a later cut-over can reach, so it is held to "no head" directly.
+
+An honest creator names the newest REMOVE generation it holds, so (p, g] holds none, the first push records no due and creates freely. The crossing line is for a creator that names less: its refusal wedges nothing, since the same device holds gen/<k> for every k up to its own pin and sends again naming the generation the refusal crossed. So the sentence above holds of first pushes too, and "no committed statement creates a path under an epoch below an immediate removal its own pin covers" has no exception. An overlay whose base ref is under an immediate removal is refused by the base line, or by the crossing line when its own pin crosses that removal, until the base cuts over, as 9.2.3 has its creator wait. evs cannot tell an inherited path's first entry on an overlay from a new name, both being creations there, so the wait covers both, as the block already does on an overlay that has a head.
+
+A ref deleted by a DELETE push has a head, with its epoch state, and the push that creates it again is an ordinary push in that head's current epoch.
+
+**The read route** is 9.2.4's: token paths matched by epoch, `stale_epoch`, `entry_epoch`, proofs by leaf place or by the request's token path in the statement's epoch, `commit_version`. The fold writes `leaf_part` and `leaf_index` into each folded version, marker and `names_leaf_*`, for an inline list as for a rooted one (part 0, the index plus 1; QD-633), and a carry keeps them.
 
 **The copy checks its map.** `copyRun.loadMoves` hashes the parts as it reads them and compares with the head's `map_sha256`; on a mismatch, or a part out of 9.2.2's order, it moves nothing, alarms and ends, and the source stays listed. evs verified each part's signature at its upload, and a reader checks every row and entry it uses (9.3's M1), so this is the one whole-map check, made where the map is read whole anyway.
 
@@ -4279,9 +4344,10 @@ Everything else of 5e stands: a newer generation, parts present and under 24 h o
 ```text
 a request      the client: a head verified within EpochFreshFor and no immediate pressure (a new name only); then
                the floor rule for every token path it names
-a push at evs  5d the gate; 5e the epoch (412 PATH_EPOCH, final); 5e the crossing creation, the due and the block
-               (412 PATH_EPOCH_DUE, recorded); 5f the base; 5g the path-level CAS over the current entry and the
-               source copies named; step 7
+a push at evs  5d the gate; 5e a push planned on no head, on a ref that has one (409, final); 5e the epoch (412
+               PATH_EPOCH, final; on a ref with no head, the epoch its first push may name); 5e the crossing
+               creation, the due and the block (412 PATH_EPOCH_DUE, recorded); 5f the base; 5g the path-level CAS
+               over the current entry and the source copies named; step 7
 a PATH_EPOCH   the mapper: the job record, the parts, the replay to its base, the tail; evs: 5d; 5e a newer
                generation, a free source slot, the parts present and under 24 h, the source and its chain, the
                between fence, the tail over the window, nothing unfolded; 5f; step 7 with folded_through = v
@@ -4381,11 +4447,11 @@ Two mappers need no agreement. If both map to one generation, the first PATH_EPO
 
 ### 9.3 Invariants and why they hold
 
-**P1, no late token.** No request names `tp(X, e)` unless evs was already shown a token of X at or below e, or e is the head's current epoch as the sender verified it within `EpochFreshFor` and, on a blocking ref, the sender holds no immediate removal above it. *Why.* A token goes out under the floor rule or the new-name rule and no other. Under the floor rule e is at or above a floor, and each kind of evidence that sets a floor is evs holding the token: it served the statement, leaf or row that contains it (E1, E2), it answered the request that carried it (E3), or it holds the push whose statement a writer's signed entry says wrote the path (E4). A holder of K_path_e holds every lower path key, so it could already test the token at the floor. A map is the same rule with `born` for the floor. The new-name rule is the second clause as written. Two things remain and are published: the `EpochFreshFor` window of 9.2.3, and a device that has not yet been told of a removal, which is §11.5's bound as it stands ("names created before the path epoch that drops it").
+**P1, no late token.** No request names `tp(X, e)` unless evs was already shown a token of X at or below e, or e is the head's current epoch as the sender verified it within `EpochFreshFor` and, on a blocking ref, the sender holds no immediate removal above it, or the ref has no head and e is the epoch 9.2.3 gives its creator. *Why.* A token goes out under the floor rule, the new-name rule or the rule for a ref with no head, and no other. Under the floor rule e is at or above a floor, and each kind of evidence that sets a floor is evs holding the token: it served the statement, leaf or row that contains it (E1, E2), it answered the request that carried it (E3), or it holds the push whose statement a writer's signed entry says wrote the path (E4). A holder of K_path_e holds every lower path key, so it could already test the token at the floor. A map is the same rule with `born` for the floor. The new-name rule is the second clause as written. A first push is the third (QD-632). On a ref that is no overlay it tokenizes every name under p, the newest REMOVE generation its creator holds; a holder dropped at REMOVE generation r' holds exactly the path keys below r', and every removal the creator knows of has r' at or below p, so none of them can test a token under p: no new ref's first names are tokenized under a removed key. On an overlay p is the base ref's current epoch: an inherited path's token under p is at or above its floor on the base, and a name new to the repo is sent only under `quiet` against the base's pressure, which is the second clause read on the base. evs holds what is committed to the same line: 5e takes a first push only in an epoch from 1 to its own generation, an overlay's only in its base's current epoch, and refuses a creation in a first push whose pin crosses a blocking removal above the epoch it names (9.2.6). Before the answer a ref's first push created in epoch 1 whatever its sender held, so in a repo past a removal every new branch showed evs its first names under a key the removed holder has, until the ref's first cut-over; `PathEpochTwin-NewRefAtOne` is that. Two things remain and are published: the `EpochFreshFor` window of 9.2.3, and a device that has not yet been told of a removal, which is §11.5's bound as it stands ("names created before the path epoch that drops it").
 
 **P2, a conclusive read is the newest.** *Why.* A path's entry lives at an epoch at or above every floor any client holds for it: each kind of evidence dates from the path's placement there or earlier, and an entry only moves to newer epochs. So the sources a reader asks, those at or above its floor, include the entry's home, and evs's rule (the current entry, else the newest source's) returns it. A miss is taken as absence only when every listed source was asked, or the parent's table has no row for the name, and a standing path has a row (P6). The newest-version rule above the entry is §11.7's, and the window it reads holds only the current epoch (W1).
 
-**P3, path-level CAS across epochs.** A push commits only on the newest version of each path it changes, and no creation lands on a path that stands. *Why.* A change to a standing path names the sources at or above its floor, so 5g reads the entry's home (P2). A creation with no floor was planned on a listing with no row for the name, so the path was absent at the plan's head; any creation since is in the push's own epoch, where 5g reads it, unless the epoch moved, and then the push is refused, its epoch becomes the floor, and the retoken names it as a source, where 5g reads whatever was created there.
+**P3, path-level CAS across epochs.** A push commits only on the newest version of each path it changes, and no creation lands on a path that stands. *Why.* A change to a standing path names the sources at or above its floor, so 5g reads the entry's home (P2). A creation with no floor was planned on a listing with no row for the name, so the path was absent at the plan's head; any creation since is in the push's own epoch, where 5g reads it, unless the epoch moved, and then the push is refused, its epoch becomes the floor, and the retoken names it as a source, where 5g reads whatever was created there. A first push needs its own clause (QD-632): it was planned on a ref that held nothing, in an epoch its sender chose, so it commits only as the push that creates the ref, is refused whole on a ref that has a head, sets no floor, and is planned again from listings (9.2.3, 9.2.6). `PathEpochTwin-StaleFirstPush` is the design without that clause: a creation over a file another creator made in a lower epoch, after a cut-over reached the epoch the stale push named.
 
 **P4, statements are checked in their own epoch.** For every version, removal and delta a reader accepts, and every walked statement after it, the reader holds a proof under its own `tp(X, e)` for that statement's epoch that the statement does, or does not, change the path. *Why.* It is §11.9's reader row applied per epoch. The reader derives the token path itself, so evs cannot answer for another path; an inline list is checked without evs; a rooted one needs evs's adjacent-leaf proof, and a missing proof is asked for once and then refused. An honest writer names a path by its token in the statement's epoch, which 5e pins to the head's. So the rollback of 9.1 B is caught at statement 110, under `tp(X, 1)`.
 
@@ -4403,55 +4469,65 @@ Two mappers need no agreement. If both map to one generation, the first PATH_EPO
 
 **The model.** `PathEpoch.tla` holds one ref whose paths are files under one directory that any client lists without a token, which is the root. It models keys and heads (a rotation, a device learning it, a head read), reads by the floor and new-name rules and lookups, plans, pushes with their fold, the 412 and the retoken, abandoning a plan, a mapper building from either kind of index and committing against the fence, the tail and the source slots, and the copy: each move as its two writes, the PUT of the current entry and the DELETE of the source copies, with any other step between them, then the row translation and the drop. A token is the pair (path, epoch), and `seen` is every pair a request showed evs. Its invariants are P1 (`NoLateToken`, `FloorsBacked`), P2 (`ReadsNewest`), P3 (`NoLostUpdate`), P5 (`NoneMissed`, `EntriesHome`) and P6 (`RowsLead`, `NoGhostRows`), with `TypeOK`. Every rotation in it is a REMOVE and immediate. TLC is the owner's jar, a nightly from master at d8fb231, through `.stack/tools/tlc`; `run-pathepoch.sh details-9 all` runs everything below and deletes each run's state directory as it ends.
 
+A ref with no head (QD-632). The model's ref used to exist from the first state, in epoch 1 with no version, and a mapper could cut it over before its first push, which evs does not allow. With the constant `NewRef` the ref has no head until its first push commits: no path of it is read, no PATH_EPOCH commits, and the first push names its epoch, which the commit makes the head's. The creator names the newest generation it holds, every rotation here being a REMOVE, and sends its first names only while it holds none newer than the one it names. `PathEpochTwin-NewRefAtOne` is what landed before the answer, a first push that creates in epoch 1 whatever its sender holds: it breaks `NoLateToken` in a trace of six states (a rotation, the device learning it, a listing, the plan, the push). A device that has read no head of the ref sends no token in a read, and a creator knows the head its own push made. A push planned on no head is sent only while the ref still has none; `PathEpochTwin-StaleFirstPush` sends it to a ref that has since got a head, as any push is sent, and breaks `NoLostUpdate` in a trace of 13 states: one device plans the ref's first push in epoch 2, another creates the ref in epoch 1, a mapper cuts it over to epoch 2, and the first device's push, naming the head's epoch and no source, creates over the other's file. The model found that case in the design as this amendment first had it, which retokened a refused first push; 9.2.3 and 9.2.6 carry the rule that closes it. `PathEpochReach-NewRefLate` shows the design does create a ref above epoch 1. Every other configuration sets `NewRef` false and explores the graph it did. An overlay is not modeled: the model has one ref.
+
 ```text
 configuration                          what it holds, and the result               distinct states   depth      time
 PathEpoch.tla, the design (Twin none)
 PathEpoch                              2 writers, 1 mapper, 1 cut-over, 6 versions
-                                       pass, every invariant                            1,020,926      29       47 s
+                                       pass, every invariant                            1,020,926      30       30 s
 PathEpoch-Three                        1 writer, 1 mapper, 2 cut-overs, 7 versions
-                                       pass, every invariant                              558,167      34       22 s
+                                       pass, every invariant                              558,167      34       11 s
 PathEpoch-Two                          2 paths, 1 writer, 1 mapper, 1 cut-over, 5 versions
-                                       pass, every invariant                              178,282      27        9 s
+                                       pass, every invariant                              178,282      27        3 s
 PathEpoch-Mappers                      1 writer, 2 mappers, 2 cut-overs, 5 versions
-                                       pass, every invariant                            5,921,003      34  1 min 14 s
+                                       pass, every invariant                            5,921,003      34   2 min 2 s
 PathEpoch-Pair                         2 writers, 1 mapper, 2 cut-overs, 5 versions
-                                       pass, every invariant                           27,248,431      37  7 min 42 s
+                                       pass, every invariant                           27,248,431      37 14 min 42 s
+PathEpoch-NewRef                       a ref with no head (NewRef): 2 writers, 1 mapper, 2 rotations, 4 versions
+                                       pass, every invariant                            9,547,324      35   4 min 3 s
 PathEpoch-Wide                         2 paths, 2 writers, 2 mappers, 2 cut-overs, 9 versions; by simulation:
                                        1,400,000 traces of at most 80 steps from seed 9
-                                       pass, every invariant         117,909,723 generated       80  3 min 12 s
+                                       pass, every invariant         154,952,958 generated       80  7 min 34 s
 PathEpoch.tla, one rule of the design broken
 PathEpochTwin-SendAllSources           a read names every listed source (the landed tokenize; A)
-                                       NoLateToken violated, a trace of 10 states           1,000      15        0 s
+                                       NoLateToken violated, a trace of 12 states             669      14        1 s
 PathEpochTwin-MapAllSources            a map names every listed source (§11.6's map row; A)
-                                       NoLateToken violated, a trace of 12 states           3,391      14        0 s
+                                       NoLateToken violated, a trace of 12 states           1,980      14        1 s
 PathEpochTwin-StaleEpochSend           a new name sent on a head that is not fresh
-                                       NoLateToken violated, a trace of 7 states              411      10        0 s
+                                       NoLateToken violated, a trace of 7 states              345       9        1 s
 PathEpochTwin-NoNewNameRule            a new name sent by a device that holds the removal's generation (F)
-                                       NoLateToken violated, a trace of 5 states              253      11        0 s
+                                       NoLateToken violated, a trace of 5 states               53       7        2 s
+PathEpochTwin-NewRefAtOne              a ref's first push creates in epoch 1 whatever its sender holds (QD-632)
+                                       NoLateToken violated, a trace of 7 states              128      13        2 s
+PathEpochTwin-StaleFirstPush           a push planned on no head sent to a ref that has since got one (QD-632)
+                                       NoLostUpdate violated, a trace of 13 states          9,179      16        3 s
 PathEpochTwin-MissIsAbsent             a miss in the current epoch read as absence while sources stand
-                                       ReadsNewest violated, a trace of 11 states           2,966      14        0 s
+                                       ReadsNewest violated, a trace of 11 states           2,282      13        2 s
 PathEpochTwin-BlindRetoken             a retoken that names no source (C)
-                                       NoLostUpdate violated, a trace of 14 states         17,541      16        0 s
+                                       NoLostUpdate violated, a trace of 14 states         16,482      15        5 s
 PathEpochTwin-NoBetweenFence           a PATH_EPOCH across another (D)
-                                       NoneMissed violated, a trace of 12 states            8,287      14        0 s
+                                       NoneMissed violated, a trace of 12 states           10,832      13        5 s
 PathEpochTwin-NoTailCheck              a PATH_EPOCH whose tail misses a creation
-                                       NoneMissed violated, a trace of 8 states               648      14        0 s
+                                       NoneMissed violated, a trace of 8 states               396      12        4 s
 PathEpochTwin-FoldKeepsSources         a fold that leaves the source copies (the landed fold; E)
-                                       NoneMissed violated, a trace of 16 states           12,722      18        0 s
+                                       NoneMissed violated, a trace of 16 states           12,789      17        3 s
 PathEpochTwin-RowsBeforeMoves          the copy translates rows before the children's moves
-                                       RowsLead violated, a trace of 10 states                432      12        0 s
+                                       RowsLead violated, a trace of 9 states                 242      10        1 s
 PathEpochTwin-RemoveCurrentRowOnly     a removal that drops the current-epoch token alone (G)
-                                       NoGhostRows violated, a trace of 13 states           1,501      15        0 s
+                                       NoGhostRows violated, a trace of 12 states           1,171      14        3 s
 PathEpoch.tla, a state the design must reach (the invariant denies it)
 PathEpochReach-TwoCutOvers             a path created in epoch 1 standing in epoch 3 with the sources dropped
-                                       NeverTwoCutOvers violated, a trace of 13 states      2,458      14        0 s
+                                       NeverTwoCutOvers violated, a trace of 12 states      4,280      14        4 s
 PathEpochReach-Retoken                 a refused push retokened with a source path
-                                       NeverRetokened violated, a trace of 10 states        1,571      12        0 s
+                                       NeverRetokened violated, a trace of 10 states        1,503      11        3 s
+PathEpochReach-NewRefLate              a ref whose first push commits in an epoch above 1 (QD-632)
+                                       NeverBornLate violated, a trace of 6 states            234       8        2 s
 ```
 
-Every design run passes, and every twin and reach run ends on the one invariant its configuration names. The breadth-first runs are complete graphs; the largest kept 1,012 MB of state on disk. `PathEpoch-Wide` is a random simulation, which keeps no state set and shows only that the traces it drew held every invariant. A twin's count is what TLC had explored when it met the violation, and with several workers it moves a little from run to run. The machine carried four build lanes throughout.
+These are the runs of 2026-11-10 on the model with the ref's first push in it, every configuration run again. Every design run passes, and every twin and reach run ends on the one invariant its configuration names. The breadth-first runs are complete graphs; the largest kept 1,023 MB of state on disk. The five earlier breadth-first graphs are the graphs first recorded, state for state, since `NewRef` is false there; a trace's length and a depth move by a state between runs with several workers, and the simulation's count differs because the same seed draws its traces in another order once an action is added. `PathEpoch-Wide` is a random simulation, which keeps no state set and shows only that the traces it drew held every invariant. A twin's count is what TLC had explored when it met the violation, and with several workers it moves a little from run to run. The machine carried four build lanes throughout.
 
-What the runs cover: every interleaving, at those bounds, of two writers and a mapper over one and two cut-overs, with a push in flight across each cut-over, a refused push retokened or abandoned, a device that has and has not learned the new generation, a read on a stale head, two mappers at one generation and at two, a map built from either index, the copy's moves in any order against writes, a move left between its two writes while a push or a second cut-over lands, and the drop. What the model leaves out, and why each is safe:
+What the runs cover: a ref created by either of two writers in the epoch it names, with a rotation before, between and after their first pushes, the second creator dropped and planned again, and a cut-over of the new ref; and, as before, every interleaving, at those bounds, of two writers and a mapper over one and two cut-overs, with a push in flight across each cut-over, a refused push retokened or abandoned, a device that has and has not learned the new generation, a read on a stale head, two mappers at one generation and at two, a map built from either index, the copy's moves in any order against writes, a move left between its two writes while a push or a second cut-over lands, and the drop. What the model leaves out, and why each is safe:
 
 ```text
 nested directories    a prefix's floor is at most its child's, and the prefix states (removed, fresh) are §11.6's as
@@ -4463,6 +4539,10 @@ the source below      MAP_SOURCE and the mapper's cover of (S, b] are a mapper's
 the window            P5's alarm, and 9.9 puts the choice to the owner
 parts, seals, leases  9.2.5 changes nothing in them but what is sealed again
 and the block
+overlays              the model has one ref; an overlay's first push takes its base's epoch by a check on one
+                      head (9.2.6), and its paths' floors are the base's, which P1's argument covers
+a first push naming   an honest creator names the newest generation it holds; one that names less is 5e's
+less than it holds    crossing line, a sequential check on one push, tested on the code (9.6)
 ```
 
 ### 9.4 Cost
@@ -4543,6 +4623,19 @@ evs withholds a row or an entry             a never-read path reads absent (§11
                                             trusts row); a read one fails its record        record's rule alarm, as today
 evs asks for an older epoch's token         the client has no rule that sends one below     none: 9.2.3 has no such path
                                             a floor
+a first push names an epoch below a         412 PATH_EPOCH_DUE, recorded in the placeholder;  the creator names the generation
+blocking removal its own pin covers         no head and no due is written                   crossed and sends again
+a first push names an epoch above its       412 PATH_EPOCH, final                           the epoch is read again by 9.2.3
+generation, or an overlay's names another                                                   and the push sent under it: the
+than its base ref's current one                                                             ref still holds nothing
+two creators' first pushes race             one creates the ref; the other answers 409      it reads the head and plans again
+                                            (BASE_STALE, or non-fast-forward in git mode)   from listings; never retokened
+                                            whatever epoch it named, and sets no floor
+an overlay's base ref is under an           its creator waits (ErrEvsPathEpochDue), and evs  a mapper cuts the base over, and
+immediate removal                           answers a creating first push 412               the creator names its new epoch
+                                            PATH_EPOCH_DUE
+an entry folded with no leaf place          the reply carries the statement alone           the reader names that epoch and
+                                                                                            asks again, one more round
 ```
 
 Two rows can need a person: no eligible device coming back, and a map that omits or mis-seals paths. Both are alarmed.
@@ -4557,15 +4650,15 @@ Every test is a top-level `func TestXxx`, deterministic, on fakes with barriers.
 
 **Reads (`evs_epoch_read_test.go`, `evsservice/read_test.go`).** 9.1 B's three cases end to end on T2: a file last written before the cut-over by a rooted push reads and verifies, moved or not; a reader pinned before the cut-over refuses a rollback across it, with the change at an inline and at a rooted statement; an unmoved directory lists, its rows opened under `entry_epoch`. A carried row and an untagged one in one table. A request naming no current-epoch path: `stale_epoch`, and the retry. A rooted statement of an epoch the request did not name: the second round, once; evs still silent: refused. A proof whose leaf names another path: refused. A map that moves X under Y's token: the read of Y refused (M1). History across two cut-overs, by folded versions and by `commit_version`, with E4's check and a statement of another push refused.
 
-**Writes and the retoken (`evs_plan_test.go`, `evs_push_test.go`).** 9.1 C: w's creation after v's, across the cut-over, answers 409 and v's file stands; under a hook that forgets the lowered floor it commits, which the test asserts. G: a removal while its row is carried drops the row, and the name is created again with one row. F: a device holding the removal's generation plans a creation on a blocking ref: nothing is sent, `ErrEvsPathEpochDue`; on a mailbox ref it creates. K: a retoken keeps segment ids, receipts and slot ids, and the fake counts one upload; a CLOSURE across a cut-over charges once. A retoken of a 2,000-entry push in parts. A retoken whose generation the gate refuses goes to the rebuild.
+**Writes and the retoken (`evs_plan_test.go`, `evs_push_test.go`).** 9.1 C: w's creation after v's, across the cut-over, answers 409 and v's file stands; under a hook that forgets the lowered floor it commits, which the test asserts. G: a removal while its row is carried drops the row, and the name is created again with one row. F: a device holding the removal's generation plans a creation on a blocking ref: nothing is sent, `ErrEvsPathEpochDue`; on a mailbox ref it creates. A ref with no head (QD-632): in a repo whose newest REMOVE generation is 3 of 5, a creator's first push names epoch 3, sends no read first and no source path, and the capture shows no token of the ref under an epoch below 3; with no REMOVE generation it names 1; an overlay's creator names its base ref's current epoch, and waits while the base ref's pressure is immediate when the push holds a name new to the repo; a first push that meets a head is dropped, sets no floor and is planned again from the listing, and one whose base ref's epoch moved is sent again under the new epoch. K: a retoken keeps segment ids, receipts and slot ids, and the fake counts one upload; a CLOSURE across a cut-over charges once. A retoken of a 2,000-entry push in parts. A retoken whose generation the gate refuses goes to the rebuild.
 
-**evs (`evsservice/fold_test.go`, `epoch_test.go`, `epoch_copy_test.go`, `check_test.go`).** The fold deletes each named source copy after its PUT, on the run that wrote and on a run that finds the entry written (a kill between, by barrier); a directory's removal empties the named sources below it; 9.1 E end to end, the superseding copy's end LIST finding nothing, and with the delete off, an alarm. The between fence: D's two mappers, the second 409 MAP_SOURCE, then mapping again and committing. A source below the window by one page commits; by more, 409. A crossing push that creates: 412 PATH_EPOCH_DUE, recorded, the head's due set, a retry answered from the record; one that only modifies commits and records the due. The copy refuses a map with a swapped part and one out of order. Leaf places are written by a fold and kept by a carry.
+**evs (`evsservice/fold_test.go`, `epoch_test.go`, `epoch_copy_test.go`, `check_test.go`).** The fold deletes each named source copy after its PUT, on the run that wrote and on a run that finds the entry written (a kill between, by barrier); a directory's removal empties the named sources below it; 9.1 E end to end, the superseding copy's end LIST finding nothing, and with the delete off, an alarm. The between fence: D's two mappers, the second 409 MAP_SOURCE, then mapping again and committing. A source below the window by one page commits; by more, 409. A crossing push that creates: 412 PATH_EPOCH_DUE, recorded, the head's due set, a retry answered from the record; one that only modifies commits and records the due. A first push (QD-632), each case with its twin: naming its newest REMOVE generation it commits, and the head starts at that epoch with no source and no due; naming epoch 1 across a blocking removal it answers 412 PATH_EPOCH_DUE, recorded, with no head and no due written, and the same push naming the crossed generation commits; across a batched removal it commits and the head records the due; naming an epoch above its generation, 412 PATH_EPOCH; an overlay's in its base ref's current epoch commits, in any other 412 PATH_EPOCH; a deposit ref's in any epoch but 1, 412 PATH_EPOCH; a push with base version 0 on a ref that has a head, 409 before its epoch is compared, in both modes; `PathEpochTwin-StaleFirstPush`'s schedule end to end (a second creator's first push arriving after the first creator's ref was cut over to the epoch it names: refused, and under a hook that lets it through it creates over the standing file, which the test asserts); the landed exemption's test (a creating first push in epoch 1 past a removal commits) turned into the refusal. The copy refuses a map with a swapped part and one out of order. Leaf places are written by a fold and kept by a carry, for a rooted list and for an inline one (part 0, the index plus 1; QD-633). After a cut-over, with the request naming no token path in the older epoch: a directory whose newest delta an inline push of that epoch wrote, an elided version of an inline push, and a removal marker of one, each served in one round with its change; an entry whose place is not recorded answered with the statement alone.
 
 **The mapper (`evs_epoch_map_test.go`), FS-4's mapper half.** Paths inserted, deleted and renamed after the map's enumeration reach the tail, removed ones included. A kill after half the parts: the restart uploads the rest, byte-equal, and commits. A kill before the job record: nothing on evs. A map from a replayed index and from a listed one for the same tree name the same moves but for sources between `born` and the row's epoch. Steady creation: two tail refusals, the block, the commit inside it. Three sources: the job waits and commits after the drop. A batched due with two sources: no map is built. The mapper offline: `epoch_overdue` one hour past due, not during the deferral, not within an hour of its end. `MapMaxAge`, a newer REMOVE generation and a lost eligibility each abandon.
 
 **The root (`EVS1-M2-46`'s tests).** A top-level creation's row; List of the root; the root's move last; a top-level name looked up with no token of it sent.
 
-**Models.** `run-pathepoch.sh details-9 all` in the model suite beside `run-settle.sh`; the eleven twins join `mutants/mutants.yml` when the code lands, each mapped to the test above that fails without its rule.
+**Models.** `run-pathepoch.sh details-9 all` in the model suite beside `run-settle.sh`; the thirteen twins join `mutants/mutants.yml` when the code lands, each mapped to the test above that fails without its rule (`NewRefAtOne` and `StaleFirstPush` to the first-push rows).
 
 **Benchmarks, reported and not gated in the draft phase.** A 1M-path map built and hashed (target 10 s on the desktop leg); a 100,000-path map on the mobile leg under 4 MiB of working set; a read with a lookup at depth 5; a retoken of a 100,000-entry plan.
 
@@ -4604,7 +4697,14 @@ The held tasks need landed code changed first, and EVS1-M2-28 as planned is two 
 
 **EVS1-M2-30, erasure on the client** (held; M; one rule changed). ERASE pushes act on the erasure ref and declare epoch 1, as above. A CLOSURE writes the content ref through `Write`'s planner with the forced checkpoint, so it follows 9.2.5: its paths stand and have floors, and a CLOSURE refused 412 PATH_EPOCH is retokened with its segments, receipts and slot ids kept, so the closure upload is charged once; the trap "closure uploads count against the eraser's own allowance" needs no second 429 wait for a cut-over. Reconcile is unchanged in rule and gains one case: a refused CLOSURE is not "a duplicate CLOSURE's 409". evs's state shows no CLOSURE for it, and the resuming device builds it again from evs's state as for any unfinished pair. The erased list's (slot id, key index) pairs do not depend on tokens.
 
-**Order.** EVS1-M2-45, EVS1-M2-44 and EVS1-M2-46 in any order; then EVS1-M2-28; then EVS1-M2-47, EVS1-M2-29 and EVS1-M2-30 in any order. EVS1-M2-29 and EVS1-M2-30 need of EVS1-M2-28 only the sender's exempt branch and the retoken, which land in its first commit.
+**New after the owner's answers: EVS1-M2-50, a ref's first epoch, inline leaf places and the head's index_epoch** (sidecar; M; `.stack/plan/proposals/owner-answers-tasks.md`). It changes what EVS1-M2-28, EVS1-M2-39, EVS1-M2-44 and EVS1-M2-45 landed as drafts, and needs nothing else.
+- A ref's first push on evs (QD-632; 9.2.6). `evsservice/check_cas.go`: `CheckPathEpoch` on a ref with no head takes the first-push rule in place of `current := 1` and of the return that exempts it from the crossing creation, and on a ref that has a head refuses a push whose base version is 0 before it compares epochs (`EvsCheckReasonBaseStale`, or the non-fast-forward reason in git mode). `evsservice/epoch_commit.go`: `pathEpochDueOver` counts from the push's own epoch on a ref with no head (today `max(head generation, head epoch)`, which is 1 there). `evsservice/push_step4.go`, `versions.go` and `check.go`: for an overlay's first push the view carries the current epoch and the block state of the base ref's head, read in step 4 beside the base versions `OverlayChains.BaseVersions` reads; the base itself comes from the creating push's payload section 16, which EVS1-M2-48 lands, so the overlay line is built on it and fails closed (412 PATH_EPOCH) until then. `evsservice/push_commit.go` already starts a head at the push's `path_epoch` and applies a due, and `refuse.go` already writes no due on a head at version 0: both stand and gain tests.
+- A ref's first push on the client (9.2.3). `evs_epoch_read.go`: a new `firstEpoch` beside `pressure`, which walks the same generations, and `pressure`'s return of none for a ref with no head goes, since an overlay's creator is held by its base ref's pressure. `evs_plan.go`: a plan on a ref with no head names that epoch (today `evsCurrentEpoch(head.GetPathEpoch())`, which is 1) and reads no path. `evs_push.go`: a first push that meets a head is dropped and planned again, never retokened, and lowers no floor; one refused 412 PATH_EPOCH on a ref that still has no head is sent again under the epoch read again. EVS1-M2-34's `PlanGitUpdate` (held) names a new git-mode ref's epoch through the same function.
+- Inline leaf places (QD-633; 9.2.2, 9.2.4). `evsservice/fold.go`: `leafPlacesAt` returns part 0 and the index plus 1 for an inline list, where it returns no place today. `evsservice/read.go` and `read_proof.go`: `locate` and `entryVersionIn` take an inline list's change by its place, and `statementAlone` is left for a place not recorded; `inlineEntryVersionEliding`'s match by elided bytes stays for those entries.
+- The head's index_epoch (QD-640). `testdata/evs/reserved_numbers.yml`: `EvsHeadSummary.index_epoch` moves to `ignored` and `EvsHead.index_epoch` to `kept`; `testdata/evs/format2_refusals.json`: the `unswept` row becomes a reader row; `protocol/evs_reserved_test.go` and `sidecartest/evs_format2_refusal_test.go` read both. No other code changes.
+- Tests: 9.6's first-push and inline rows.
+
+**Order.** EVS1-M2-45, EVS1-M2-44 and EVS1-M2-46 in any order; then EVS1-M2-28; then EVS1-M2-47, EVS1-M2-29 and EVS1-M2-30 in any order. EVS1-M2-29 and EVS1-M2-30 need of EVS1-M2-28 only the sender's exempt branch and the retoken, which land in its first commit. EVS1-M2-50 follows EVS1-M2-28 and comes before EVS1-M2-34, which creates refs through it; its overlay line follows EVS1-M2-48. EVS1-M2-47, landed as a draft, is not changed: a mapper does nothing on a ref with no head.
 
 **Other landed code this section touches by name:** `evsservice/fold.go`, `epoch_commit.go`, `check_cas.go`, `refuse.go`, `epoch_copy.go`, `read.go`, `read_proof.go`, `sources.go`, `entry.go` (EVS1-M2-44 to -46); `evs_read.go`, `evs_proof.go`, `evs_list.go`, `evs_history.go`, `evs_pin_store.go`, `evs_plan.go`, `evs_directory.go`, `evs_push.go`, `evs_write.go`, `evs_payload.go`, `evs_settings.go`, `evs_refusal.go`, `evs_token.go`, `evs_digest.go`, `evs_export_file.go`, `evs_component.go` (EVS1-M2-28, -46, -47); `protocol/evs.proto`, `protocol/EVS-FORMAT.md`, `metadata_list.yml` (EVS1-M2-45). `evs_subscribe.go` does not change. EVS1-M2-41's FS-4 schedules gain 9.6's cases.
 
@@ -4613,6 +4713,8 @@ The held tasks need landed code changed first, and EVS1-M2-28 as planned is two 
 For a design-records track. Each item replaces the words it quotes and leaves the rest of its row.
 
 **§11.5, the token leak bound.** After "each landing when a mapper commits (writers alarm an hour past due, not while such an epoch waits)": "and the token of a name first sent within 5 s of a cut-over, which can reach the server under the epoch just left (11.6's read row)".
+
+**§11.6, path epochs' first sentence and the due row (QD-632).** For "1 at creation": "at a ref's creation the epoch its first push names: the newest REMOVE generation its creator holds, 1 when there is none; an overlay's, its base ref's current epoch; a deposit or erasure ref's, 1 for life". Add to the due row: "a ref's first push is held to the same rule from the epoch it names: evs takes it in an epoch from 1 to its own generation (an overlay's in its base ref's current epoch), starts the head there with no source, and refuses a creation in it across a removal that would block, so no ref's first names are tokenized under a removed key".
 
 **§11.6, the due row.** For "the first commit whose generation pin crosses a REMOVE generation": "the first push whose generation pin crosses a REMOVE generation, at its commit, or, when it creates a path that the due blocks, at its refusal (412 PATH_EPOCH_DUE, recorded, the refusal's fence writing the due)". After "then gets 412 PATH_EPOCH_DUE until the epoch lands": "; a client that holds such a generation sends no new name under the older epoch, in a read or a push, and waits the same way".
 
@@ -4650,13 +4752,17 @@ read     a client keeps, per path, the lowest epoch in which it holds evidence t
 
 **§11.6, the object key row.** For "Slot ids are 16 random bytes drawn per statement: a push rebuilt after a refusal draws new ones, and a retry of the same statement keeps them (11.8)": "Slot ids are 16 random bytes drawn when a push is sealed: a push sealed again after a refusal draws new ones, and a retry of the same statement and a push re-tokenized after 412 PATH_EPOCH keep them (11.8)".
 
-**§11.6, the protos.** `EvsReadPath`, `EvsReadPathReply`, `EvsIndexVersion`, `EvsRemovalMarker` and `EvsIndexEntry` take 9.2.2's fields, in §11.6 or §11.9 wherever each is declared.
+**§11.6, the protos.** `EvsReadPath`, `EvsReadPathReply`, `EvsIndexVersion`, `EvsRemovalMarker` and `EvsIndexEntry` take 9.2.2's fields, in §11.6 or §11.9 wherever each is declared; a leaf place is recorded for an inline list too, part 0 and the index plus 1, and `leaf_index` 0 means not recorded (QD-633).
+
+**§11.6, the kinds row (QD-640).** Move "EvsHead's index_epoch" out of what format-1 code refuses in use, to stand beside the window bits: "format-1 code reads past a head's `index_epoch` and its summary's, carrying the head's forward in its own writes".
 
 **§11.7, the epochs row.** After "rows already carried keeping theirs until the copy translates them (11.6)": "; once the current entry holds the change, the fold deletes the listed source copies the change's source paths name, and under a removed directory every key below it in those sources, its range folded only when they have answered".
 
 **§11.7, the holds row.** After "per file up to four folded EvsEntryVersions with their push id and commit version u": ", each with the place of its change in its statement's list".
 
-**§11.8, step 5e.** For "its source binding valid, its tail covering every later creation (else 409 with the paths)": "its source at or below the head with a matching chain and of the head's current epoch (else 409 MAP_SOURCE), its tail covering every creation the window holds after it (else 409 with the paths)". After "before block_until_ms -> 412 PATH_EPOCH_DUE": "; a creation in a push whose own pin crosses a due that would block -> 412 PATH_EPOCH_DUE, recorded with the due".
+**§11.8, step 5e.** For "its source binding valid, its tail covering every later creation (else 409 with the paths)": "its source at or below the head with a matching chain and of the head's current epoch (else 409 MAP_SOURCE), its tail covering every creation the window holds after it (else 409 with the paths)". After "before block_until_ms -> 412 PATH_EPOCH_DUE": "; a creation in a push whose own pin crosses a due that would block -> 412 PATH_EPOCH_DUE, recorded with the due". For the first row's "1 for a ref with no head" (QD-632): "on a ref with no head, an epoch p with 1 <= p <= the push's generation, which becomes the head's current epoch with no source; an overlay's, its base ref's current epoch; a deposit or erasure ref's, 1; the crossing rule counts from p".
+
+**§11.5, the token leak bound (QD-632).** The bound needs no clause for a new ref: with the first-push rule above, a new ref's first names are tokenized under no removed key.
 
 **§11.9, the request row.** For "each with its token path in the current epoch and in each listed source that may hold it (11.6)": "each with its token path in the current epoch and in the other epochs 11.6's read row allows, at most 8, matched by epoch". **The reply row.** After "with the statement that wrote it (when not among those returned) and its Merkle proof": ", found by the version's recorded place when its statement is of an older epoch,". After "the adjacent-leaf proofs (11.6's order) that neither the path nor a prefix holding it is among its changes": ", for statements of each epoch the request named the path in". **The reader row.** After "that no statement after the version's own changes the path, or a prefix holding it, again": ", each statement checked under the path's token path in its own epoch, which the reader derives, asking once more for an epoch it did not name".
 
@@ -4664,27 +4770,29 @@ read     a client keeps, per path, the lowest epoch in which it holds evidence t
 
 **§2.8 and `metadata_list.yml`.** evs-11's sees, after "each entry's up to four committed versions, folded from committed pushes": ", each with the place of its change in its own statement's list". evs-11's ttl, for "no source-epoch token of a later name reaching the server (§11.6)": "no source-epoch token of a later name reaching the server but one first sent within 5 s of the cut-over (§11.6)". The place is a fact the push record already shows the server; no row gains a value it could not compute.
 
+**§22, FS-4 (QD-632, QD-633).** It also gains: "a ref created after a removal starts in the removal's epoch, and its first push naming an older one is refused when it creates; a directory last changed by an inline push of an older epoch is read in one round after a cut-over".
+
 **§22, FS-4.** Its mapper and reader half gains: "two mappers at two generations from one head, the second refused MAP_SOURCE and mapping again; a path removed and re-created while its copy is superseded, the next copy's LIST finding nothing; a creation refused 412 PATH_EPOCH that would land on a file created in the epoch it left, answering 409; a reader pinned before a cut-over refusing a rollback across it; a capture showing no token under a source epoch that was not sent at or below it before".
 
-**Plan.** EVS1-M2-28's entry takes `details-9-tasks.md`'s lines; EVS1-M2-44 to EVS1-M2-47 are added; EVS1-M2-29 and EVS1-M2-30 keep their entries with 9.7's notes.
+**Plan.** EVS1-M2-28's entry takes `details-9-tasks.md`'s lines; EVS1-M2-44 to EVS1-M2-47 are added; EVS1-M2-29 and EVS1-M2-30 keep their entries with 9.7's notes; EVS1-M2-50 is added from `owner-answers-tasks.md`.
 
 ### 9.9 Owner questions
 
-This section is designed on the recommendation of each.
+This section was designed on the recommendation of each, and the owner answered all of them on 2026-11-10. Each answer is given after its question, with its ledger id.
 
-**Where the root's names live (`details-9-root-names.md`, restating `evs1-m2-24-root-directory-names`).** Lookups, listings and maps all start at the root, which today has no table. Options: (1) the root is a directory with the empty token path, its entry `idx/<repo>/<ref>/<p>.e`, moved last by the copy: a format rule, the digest's empty-path rule and EVS1-M2-46; (2) top-level names ride in sealed metadata and readers fold them: no reader can then look a top-level name up without replaying, so every no-floor top-level read would send a token or fail, and a mapper must replay from version 1; (3) a reserved first component: a visible change to every path. Recommendation: (1).
+**Where the root's names live (`details-9-root-names.md`, restating `evs1-m2-24-root-directory-names`).** Lookups, listings and maps all start at the root, which today has no table. Options: (1) the root is a directory with the empty token path, its entry `idx/<repo>/<ref>/<p>.e`, moved last by the copy: a format rule, the digest's empty-path rule and EVS1-M2-46; (2) top-level names ride in sealed metadata and readers fold them: no reader can then look a top-level name up without replaying, so every no-floor top-level read would send a token or fail, and a mapper must replay from version 1; (3) a reserved first component: a visible change to every path. Recommendation: (1). **Answered: QD-612, option 1**, the root is a directory with the empty token path; EVS1-M2-46 landed it.
 
-**How evs finds an old version's change (`details-9-index-leaf.md`).** A version written in an older epoch sits under a token evs may never be sent again. Options: (1) the fold records each folded version's place in its statement's list (two small integers per version, a marker and a table), evs proves from the place, and the reader checks the leaf against its own token: EVS1-M2-45, and four words in evs-11; (2) the entry keeps the path's token path in each epoch it lived in: up to 512 B an epoch per entry, and a second copy of old tokens in `idx/`; (3) evs scans the statement's list for the entry's hash: a 100,000-change list read whole for one file; (4) the client sends the old token when evs asks: that lets a server ask for any name's token under a removed key, which is the leak itself. Recommendation: (1).
+**How evs finds an old version's change (`details-9-index-leaf.md`).** A version written in an older epoch sits under a token evs may never be sent again. Options: (1) the fold records each folded version's place in its statement's list (two small integers per version, a marker and a table), evs proves from the place, and the reader checks the leaf against its own token: EVS1-M2-45, and four words in evs-11; (2) the entry keeps the path's token path in each epoch it lived in: up to 512 B an epoch per entry, and a second copy of old tokens in `idx/`; (3) evs scans the statement's list for the entry's hash: a 100,000-change list read whole for one file; (4) the client sends the old token when evs asks: that lets a server ask for any name's token under a removed key, which is the leak itself. Recommendation: (1). **Answered: QD-611, option 1**, the fold records each folded version's leaf place; EVS1-M2-45 landed it. QD-633 (question `evs1-m2-45-inline-leaf-place`, option 1) extends it to inline lists, which 9.2.2 and 9.2.4 now carry.
 
-**Whether the fold deletes source copies (`details-9-fold-deletes-sources.md`).** 9.1 E and its directory form leave entries in a source that no honest map names, and the source then never drains. Options: (1) the fold deletes the source copies its push named once the current entry stands, and empties the named sources below a removed directory: a change to the landed fold, at most three DELETEs a changed path while sources stand, each one the copy then skips; (2) the copy follows a leftover through the superseded maps to learn that a newer entry replaced it: the copy must keep and chain every map and tail since the oldest source, and a removed path still has no move to follow; (3) the copy deletes whatever its map does not name: then a map that omits a live path silently loses its index entry. Recommendation: (1).
+**Whether the fold deletes source copies (`details-9-fold-deletes-sources.md`).** 9.1 E and its directory form leave entries in a source that no honest map names, and the source then never drains. Options: (1) the fold deletes the source copies its push named once the current entry stands, and empties the named sources below a removed directory: a change to the landed fold, at most three DELETEs a changed path while sources stand, each one the copy then skips; (2) the copy follows a leftover through the superseded maps to learn that a newer entry replaced it: the copy must keep and chain every map and tail since the oldest source, and a removed path still has no move to follow; (3) the copy deletes whatever its map does not name: then a map that omits a live path silently loses its index entry. Recommendation: (1). **Answered: QD-607, option 1**, the fold deletes the source copies its pushes named; EVS1-M2-44 landed it.
 
-**The push that crosses a removal (`details-9-crossing-creation.md`).** §11.6 refuses creations once a due is recorded, and the commit that records it can itself create a path under the removed key. A client that holds the removal's generation is the only party that can keep the token from being sent, and 9.2.3 has it wait. Options for evs: (1) nothing more: an old or dishonest client's crossing creation commits, and the due is recorded only by a push that commits; (2) evs refuses a creation in the crossing push, 412 PATH_EPOCH_DUE, and records the due in the refusal's fence write: a dozen lines in 5e and the refuse path, creation stops at the first push across the removal whether or not it commits, and replaying readers can hold "no creation under an epoch below an immediate removal its pin covers" as a rule. Recommendation: (2). It cannot unsend the token; it keeps §11.6's sentence true of what is committed.
+**The push that crosses a removal (`details-9-crossing-creation.md`).** §11.6 refuses creations once a due is recorded, and the commit that records it can itself create a path under the removed key. A client that holds the removal's generation is the only party that can keep the token from being sent, and 9.2.3 has it wait. Options for evs: (1) nothing more: an old or dishonest client's crossing creation commits, and the due is recorded only by a push that commits; (2) evs refuses a creation in the crossing push, 412 PATH_EPOCH_DUE, and records the due in the refusal's fence write: a dozen lines in 5e and the refuse path, creation stops at the first push across the removal whether or not it commits, and replaying readers can hold "no creation under an epoch below an immediate removal its pin covers" as a rule. Recommendation: (2). It cannot unsend the token; it keeps §11.6's sentence true of what is committed. **Answered: QD-609, option 2**, evs refuses the crossing creation and records the due; EVS1-M2-44 landed it. QD-632 (question `evs1-m2-44-new-ref-crossing`, option 2) removes the one exemption that build kept, a ref's first push: a new ref starts in the newest epoch its creator holds, and an overlay in its base ref's current epoch (9.2.3, 9.2.6).
 
-**A map whose source left the window (`details-9-map-source-window.md`).** A map must be bound to a head still in the 64-to-127-version window when it commits, so on a ref committing once a second a map that takes two minutes to upload never commits. Options: (1) the source may be any version at or below the head, its chain read from one log page, evs checking the tail for the versions the window holds and the mapper answering for those between its source and its base, with the copy's end LIST and replaying readers catching a miss: one cached GET at the commit; (2) keep the window and have the mapper block every push, not only creations, while it uploads: a busy ref stops for minutes at each epoch; (3) evs checks every creation since the source from log pages and push records: thousands of reads inside one commit's 5 s. Recommendation: (1). The 24 h age of a part still bounds how stale a map can be.
+**A map whose source left the window (`details-9-map-source-window.md`).** A map must be bound to a head still in the 64-to-127-version window when it commits, so on a ref committing once a second a map that takes two minutes to upload never commits. Options: (1) the source may be any version at or below the head, its chain read from one log page, evs checking the tail for the versions the window holds and the mapper answering for those between its source and its base, with the copy's end LIST and replaying readers catching a miss: one cached GET at the commit; (2) keep the window and have the mapper block every push, not only creations, while it uploads: a busy ref stops for minutes at each epoch; (3) evs checks every creation since the source from log pages and push records: thousands of reads inside one commit's 5 s. Recommendation: (1). The 24 h age of a part still bounds how stale a map can be. **Answered: QD-608, option 1**, a map's source may be older than the window; EVS1-M2-44 landed it.
 
-**Who checks a whole map (`details-9-map-verifiers.md`).** evs stores parts under a hash it never computes, and §11.9 leaves the check to readers, for whom a 1M-path map is 293 MB. Options: (1) the copy job, which reads every part anyway, checks the hash and the order and moves nothing on a mismatch, and readers check each row and entry as they use it (M1): no reader downloads a map; (2) every replaying reader downloads and checks every committed map: 293 MB a device a cut-over at 1M paths; (3) evs hashes the parts inside the PATH_EPOCH commit: 40 GETs of 7 MiB in a commit's 5 s, or the hash redefined over part hashes, a format change. Recommendation: (1).
+**Who checks a whole map (`details-9-map-verifiers.md`).** evs stores parts under a hash it never computes, and §11.9 leaves the check to readers, for whom a 1M-path map is 293 MB. Options: (1) the copy job, which reads every part anyway, checks the hash and the order and moves nothing on a mismatch, and readers check each row and entry as they use it (M1): no reader downloads a map; (2) every replaying reader downloads and checks every committed map: 293 MB a device a cut-over at 1M paths; (3) evs hashes the parts inside the PATH_EPOCH commit: 40 GETs of 7 MiB in a commit's 5 s, or the hash redefined over part hashes, a format change. Recommendation: (1). **Answered: QD-610, option 1**, the copy job checks the whole map; EVS1-M2-44 landed it.
 
-**Questions this section builds on.** `evs1-m2-24-root-directory-names`: option 1, restated above with what a path epoch adds. `evs1-m2-16-due-classification`: option 1 as built, the client calling the same function, so a change of option changes both at once. `evs1-m2-27-every-ref-lease-epoch`: option 1; with option 3 a whole-repo subscription only loses latency on refs in other epochs. `evs1-m2-10-directory-marker-version`: option 2 as built; nothing here reads a directory marker's version but as an upper bound, and `names_leaf_*` take fields 7 and 8 so option 1's field 6 stays free. `evs1-m2-39-head-index-epoch`: option 1; a PATH_EPOCH names no index epoch, a format-1 mapper moves `.ur-index/` entries like any others since a move writes no file, and a format-2 kind-5 segment is uploaded again by a retoken (9.2.5), which is EVS2's to carry. None of the five blocks a held task but the first, which EVS1-M2-46 builds on its recommendation.
+**Questions this section builds on.** `evs1-m2-24-root-directory-names`: option 1, restated above with what a path epoch adds. `evs1-m2-16-due-classification`: option 1 as built, the client calling the same function, so a change of option changes both at once. `evs1-m2-27-every-ref-lease-epoch`: option 1; with option 3 a whole-repo subscription only loses latency on refs in other epochs. `evs1-m2-10-directory-marker-version`: option 2 as built; nothing here reads a directory marker's version but as an upper bound, and `names_leaf_*` take fields 7 and 8 so option 1's field 6 stays free. `evs1-m2-39-head-index-epoch`: option 1, **answered so (QD-640)**: format-1 code reads past a head's `index_epoch` (9.2.2); a PATH_EPOCH names no index epoch, a format-1 mapper moves `.ur-index/` entries like any others since a move writes no file, and a format-2 kind-5 segment is uploaded again by a retoken (9.2.5), which is EVS2's to carry. None of the five blocks a held task but the first, which EVS1-M2-46 built on its recommendation (QD-612). The other three stand on the option named here.
 
 ## 10. DROP lists a phone can check (§11.6, §11.7, §11.9)
 
