@@ -75,6 +75,11 @@ DelegationRow.admissions: {number: 8, type: uint32, row: api-7, sees: "Delegatio
 DelegationRow.pubkey: {number: 9, type: bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
 DelegationRow.reader_xwing_public_key: {number: 10, type: bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
 DelegationRow.max_admits: {number: 11, type: uint32, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+DelegationRow.forward_sidecar_id: {number: 12, type: bytes, row: api-7, sees: "a forwarding Delegation's sidecar and host client id and key (owner decision 197)"}
+DelegationRow.host_client_id: {number: 13, type: bytes, row: api-7, sees: "a forwarding Delegation's sidecar and host client id and key (owner decision 197)"}
+DelegationRow.host_client_public_key: {number: 14, type: bytes, row: api-7, sees: "a forwarding Delegation's sidecar and host client id and key (owner decision 197)"}
+DelegationRow.superseded_at: {number: 15, type: uint64, row: api-7, pending: "DESIGN-DETAILS 4.8 (details-4-forwarding-reader-key-in-rows): api-7 gains a forwarding Delegation's reader key digest and supersession position"}
+DelegationRow.reader_key_sha256: {number: 16, type: bytes, row: api-7, pending: "DESIGN-DETAILS 4.8 (details-4-forwarding-reader-key-in-rows): api-7 gains a forwarding Delegation's reader key digest and supersession position"}
 
 KeyRow.key_id: {number: 1, type: bytes, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
 KeyRow.member_id: {number: 2, type: bytes, row: api-7, sees: "registered presence and SSH public keys with member and purpose"}
@@ -176,6 +181,11 @@ Delegation.reader_xwing_public_key: {number: 3, type: bytes, row: api-7, sees: "
 Delegation.tag_ids: {number: 4, type: repeated bytes, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
 Delegation.max_admits: {number: 5, type: uint32, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
 Delegation.not_after: {number: 6, type: int64, row: api-7, sees: "Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends"}
+Delegation.forward: {number: 7, type: ForwardScope, row: api-7, sees: "a forwarding Delegation's sidecar and host client id and key (owner decision 197)"}
+
+ForwardScope.forward_sidecar_id: {number: 1, type: bytes, row: api-7, sees: "a forwarding Delegation's sidecar and host client id and key (owner decision 197)"}
+ForwardScope.host_client_id: {number: 2, type: bytes, row: api-7, sees: "a forwarding Delegation's sidecar and host client id and key (owner decision 197)"}
+ForwardScope.host_client_public_key: {number: 3, type: bytes, row: api-7, sees: "a forwarding Delegation's sidecar and host client id and key (owner decision 197)"}
 
 DelegationRevoke.header: {number: 1, type: StatementHeader, row: api-7, sees: "headers (signer's pin, nonce, expiry)"}
 DelegationRevoke.delegation_id: {number: 2, type: bytes, row: api-7, sees: "revocations (reason, and since_n for a compromise or a leak)"}

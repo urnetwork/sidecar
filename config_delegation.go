@@ -100,6 +100,11 @@ func configDelegationTagIds(tagBytes [][]byte) ([]Id, error) {
 // an Owner, Admin or Network admin, not read_only, that may apply each of its tags (§8's tagOwners).
 func configCheckDelegation(state *ConfigState, statement *configStatement) error {
 	delegation := statement.body.(*protocol.Delegation)
+	if ConfigDelegationForwards(delegation) {
+		// §7.9's forwarding row is TEAM-M8-01's rule: until it is built no forwarding Delegation takes effect, and
+		// the agent rule below never judges one
+		return fmt.Errorf("%w: a forwarding Delegation's rule", ErrConfigRuleMissing)
+	}
 	if len(statement.signers) != 1 || statement.signers[0].Kind != ConfigSignerSidecar {
 		return fmt.Errorf("%w: a Delegation takes one device's signature, never a Delegation's or a recovery key's", ErrConfigSigner)
 	}
@@ -149,6 +154,9 @@ func configCheckDelegation(state *ConfigState, statement *configStatement) error
 // A Delegation's effect: its row, keyed by its delegation_id, with its signer and position for the cascade.
 func configApplyDelegation(next *configStateBuilder, statement *configStatement) error {
 	delegation := statement.body.(*protocol.Delegation)
+	if ConfigDelegationForwards(delegation) {
+		return fmt.Errorf("%w: a forwarding Delegation's rule", ErrConfigRuleMissing)
+	}
 	if next.state.delegations[string(statement.id[:])] != nil {
 		return fmt.Errorf("%w: a delegation_id declared before", ErrConfigRule)
 	}
