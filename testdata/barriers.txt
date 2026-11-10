@@ -112,6 +112,17 @@ barrier evs.log_page.put.after evsservice/logpage.go
 barrier evs.log_page.put.before evsservice/logpage.go
 barrier evs.place.put.after evsservice/place.go
 barrier evs.place.put.before evsservice/place.go
+barrier evs.push.arrive evsservice/push.go
+barrier evs.push.refuse.after evsservice/refuse.go
+barrier evs.push.refuse.before evsservice/refuse.go
+barrier evs.push.slot_put.after evsservice/push_commit.go
+barrier evs.push.slot_put.before evsservice/push_commit.go
+barrier evs.push.step4.after evsservice/push_step4.go
+barrier evs.push.step4.before evsservice/push_step4.go
+barrier evs.push.step6.after evsservice/push_commit.go
+barrier evs.push.step6.before evsservice/push_commit.go
+barrier evs.push.step8.after evsservice/push_commit.go
+barrier evs.push.step8.before evsservice/push_commit.go
 barrier evs.repo.put.after evsservice/place.go
 barrier evs.repo.put.before evsservice/place.go
 barrier gkm.ack_write.after gkmservice/acks.go

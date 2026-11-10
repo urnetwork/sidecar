@@ -71,6 +71,28 @@ const (
 	BarrierLogPagePutAfter  = "evs.log_page.put.after"
 )
 
+// EVS1-M2-12: a push's steps (§11.8), keyed by <repo>:<ref>. The head's own CAS and read keep EVS1-M2-08's names.
+const (
+	// An attempt that has arrived and parsed its body, before step 4: FS-113's attempt held before its handler runs,
+	// while the lb's re-send is refused and recorded.
+	BarrierPushArrive = "evs.push.arrive"
+	// Around step 4's reads: the head, then the one round after it.
+	BarrierPushStep4Before = "evs.push.step4.before"
+	BarrierPushStep4After  = "evs.push.step4.after"
+	// Around step 6: the record's batch write, a page-out and the new slots, before step 7 may issue.
+	BarrierPushStep6Before = "evs.push.step6.before"
+	BarrierPushStep6After  = "evs.push.step6.after"
+	// Around one new slot's If-None-Match at step 6.
+	BarrierPushSlotPutBefore = "evs.push.slot_put.before"
+	BarrierPushSlotPutAfter  = "evs.push.slot_put.after"
+	// Around the refuse row's recording CAS: the push's refusal fence.
+	BarrierPushRefuseBefore = "evs.push.refuse.before"
+	BarrierPushRefuseAfter  = "evs.push.refuse.after"
+	// Around step 8, off the reply path: the sequence, hints, usage, the head cache and the fold trigger.
+	BarrierPushStep8Before = "evs.push.step8.before"
+	BarrierPushStep8After  = "evs.push.step8.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)
