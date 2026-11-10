@@ -13,10 +13,9 @@
 // writes at gkm, each an If-None-Match create, and by the member checks (gkm_verify_*.go) at this device's own
 // state. A kill at any point resumes from the keychain: nothing here keeps a flow's progress in memory alone.
 //
-// GkmGroupClient is GkmClient's real implementation as far as these tasks reach: RotateRepo (KEYS-M2-20),
-// CreateGroup and AuthAdvanced (KEYS-M2-21). CurrentRepoKey, RepoKey, EnsureWritable, DropKey and ForgetRepo are
-// KEYS-M2-22's key access, and until it lands they refuse with ErrGkmUnavailable, so nothing reads this client as
-// serving keys it does not yet serve.
+// GkmGroupClient is GkmClient's real implementation: RotateRepo (KEYS-M2-20), CreateGroup and AuthAdvanced
+// (KEYS-M2-21), CurrentRepoKey, RepoKey, EnsureWritable, DropKey and ForgetRepo (KEYS-M2-22, gkm_access.go), and
+// the group sync, pins and HeadCheck heads (KEYS-M2-23, gkm_sync.go and gkm_pins.go).
 //
 // Locks: a manager's flowLock is held across a whole flow and its I/O, so it is never taken under stateLock, which
 // guards only the newest state and the manager table. Safe for concurrent use.
@@ -63,6 +62,7 @@ type GkmGroupApi interface {
 	UploadGroupInfo(ctx context.Context, repoId Id, groupId Id, object *protocol.GkmGroupInfoObject) error
 	UploadWelcome(ctx context.Context, repoId Id, groupId Id, epoch uint64, request *protocol.GkmWelcomeRequest) error
 	Welcomes(ctx context.Context) ([]*protocol.GkmWelcomeEntry, error)
+	DropKeys(ctx context.Context, repoId Id, since uint64) (*protocol.GkmGenerationsReply, error)
 }
 
 var _ GkmGroupApi = (*GkmApi)(nil)
@@ -129,6 +129,16 @@ type GkmGroupClientArgs struct {
 	ReaderRepoIds func() []Id
 	// Each alarm a flow raises (§10.9): refused, head_alarm, approval_pending. It must not block. Nil drops them.
 	Alarm func(alarm *GkmAlarm)
+	// HeadStopState.SealAllowed: whether new content may be sealed in a group now, which EnsureWritable asks only
+	// after its commits and rotations, since the witness stop never holds a Remove, a rotation or a revocation
+	// (owner decision 129). Nil allows.
+	SealAllowed func(groupId Id) error
+	// HeadStopState.ReportFork: a pin this client refuses stops sealing there as a fork HeadCheck finds does
+	// (§6.4). It must not block. Nil reports none.
+	ReportFork func(fork HeadFork)
+	// Whether this process holds the network's state: §18.8's Web Lock in a page Worker, §5.8's flock elsewhere.
+	// One that does not loads no MLS state and runs no flow. Nil holds it.
+	HoldsState func() bool
 	// A uniform draw in [0, max), for the jittered waits. Nil draws from crypto/rand.
 	Jitter func(max time.Duration) time.Duration
 	// nil takes the defaults.
@@ -152,6 +162,15 @@ type GkmGroupClient struct {
 	repoIdManagers map[Id]*gkmGroupManager
 	// the hint work running now, by kind and repo
 	hintWorkKeys map[string]bool
+	// what HeadCheck and the acks read from memory: each held repo's pins and its tree's leaves (gkm_pins.go)
+	repoIdHeads map[Id]*gkmRepoHead
+	// when a late ask for a GroupInfo or a waiting leaf's want last went, by repo (H2)
+	repoIdWantAskedAt map[Id]time.Time
+	// when this device last joined a group through its last-resort KeyPackage, read from the keychain at first use
+	lastResortJoinedAt     time.Time
+	lastResortJoinedLoaded bool
+	// what the flows' yields measured (gkm_yield.go)
+	yieldStats GkmYieldStats
 }
 
 var _ GkmClient = (*GkmGroupClient)(nil)
@@ -166,13 +185,15 @@ func NewGkmGroupClient(args *GkmGroupClientArgs) (*GkmGroupClient, error) {
 		settings = DefaultGkmSettings()
 	}
 	return &GkmGroupClient{
-		args:           args,
-		settings:       settings,
-		clock:          clockOrReal(args.Clock),
-		log:            loggerOrDefault(args.Log),
-		lateAsks:       NewGkmLateAsks(settings),
-		repoIdManagers: map[Id]*gkmGroupManager{},
-		hintWorkKeys:   map[string]bool{},
+		args:              args,
+		settings:          settings,
+		clock:             clockOrReal(args.Clock),
+		log:               loggerOrDefault(args.Log),
+		lateAsks:          NewGkmLateAsks(settings),
+		repoIdManagers:    map[Id]*gkmGroupManager{},
+		hintWorkKeys:      map[string]bool{},
+		repoIdHeads:       map[Id]*gkmRepoHead{},
+		repoIdWantAskedAt: map[Id]time.Time{},
 	}, nil
 }
 
@@ -191,8 +212,12 @@ func (self *GkmGroupClient) AuthAdvanced(state GkmAuthView) {
 	self.state = state
 }
 
-// The newest verified state, or ErrGkmUnavailable before the first.
+// The newest verified state, or ErrGkmUnavailable before the first, and in a process that does not hold the
+// network's state, where no flow runs.
 func (self *GkmGroupClient) currentState() (GkmAuthView, error) {
+	if !self.holdsState() {
+		return nil, fmt.Errorf("%w: this process does not hold the network's state", ErrGkmUnavailable)
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.state == nil {
@@ -249,31 +274,6 @@ func (self *GkmGroupClient) wait(ctx context.Context, delay time.Duration) error
 	case <-self.clock.After(delay):
 		return nil
 	}
-}
-
-// KEYS-M2-22's key access, which this client does not serve yet: refused, never defaulted.
-func (self *GkmGroupClient) CurrentRepoKey(ctx context.Context, repoId Id) (*EvsRepoKey, error) {
-	return nil, fmt.Errorf("%w: key access lands with KEYS-M2-22", ErrGkmUnavailable)
-}
-
-// Refused until KEYS-M2-22.
-func (self *GkmGroupClient) RepoKey(ctx context.Context, repoId Id, generation uint64) (*EvsRepoKey, error) {
-	return nil, fmt.Errorf("%w: key access lands with KEYS-M2-22", ErrGkmUnavailable)
-}
-
-// Refused until KEYS-M2-22, whose step 2 runs RunPending and step 3 the rotation here.
-func (self *GkmGroupClient) EnsureWritable(ctx context.Context, repoId Id) (*EvsRepoKey, error) {
-	return nil, fmt.Errorf("%w: key access lands with KEYS-M2-22", ErrGkmUnavailable)
-}
-
-// Refused until KEYS-M2-22.
-func (self *GkmGroupClient) DropKey(ctx context.Context, repoId Id) (*GkmDropKey, error) {
-	return nil, fmt.Errorf("%w: key access lands with KEYS-M2-22", ErrGkmUnavailable)
-}
-
-// Refused until KEYS-M2-22: a shred must not read as done here.
-func (self *GkmGroupClient) ForgetRepo(ctx context.Context, repoId Id) error {
-	return fmt.Errorf("%w: key access lands with KEYS-M2-22", ErrGkmUnavailable)
 }
 
 // One repo's group as this sidecar drives it. One flow runs at a time.
@@ -570,13 +570,20 @@ func (self *GkmGroupClient) advancePins(repoId Id, edit func(pins *gkmRepoPins))
 		self.alarm(&GkmAlarm{Kind: GkmAlarmHead, RepoId: repoId, GroupId: stored.groupId, Epoch: next.epoch, Generation: next.generation, Reason: GkmRefusalFork, Detail: "a pin that would fall or fork"})
 		return fmt.Errorf("%w: a pin that would fall or fork", ErrGkmAuthOffChain)
 	}
-	return self.args.Secrets.Put(gkmRepoRecordName(repoId, "pins"), next.encode())
+	if err := self.args.Secrets.Put(gkmRepoRecordName(repoId, "pins"), next.encode()); err != nil {
+		return err
+	}
+	self.pinsMoved(repoId, stored, &next)
+	return nil
 }
 
 // The group's MLS state as this sidecar last adopted it, or ErrMlsGroupUnknown for a sidecar that holds no leaf.
 func (self *GkmGroupClient) loadGroup(groupId Id) (MlsGroup, error) {
 	if self.args.Mls == nil {
 		return nil, ErrMlsGroupUnknown
+	}
+	if !self.holdsState() {
+		return nil, fmt.Errorf("%w: this process does not hold the network's state", ErrGkmUnavailable)
 	}
 	return self.args.Mls.LoadGroup(groupId)
 }
@@ -981,6 +988,15 @@ func (self *gkmGroupManager) joinInFlow(ctx context.Context, state GkmAuthView, 
 	if err != nil {
 		return false, err
 	}
+	// the ladder below the generation the epoch carried (KF2). A failure leaves the join standing: the next read of
+	// an older generation walks again
+	self.walkLadderForLater(ctx, state, groupId)
+	if lastResort, ok := pendingJoin.(MlsLastResortJoin); ok && lastResort.LastResort() {
+		// its leaf's HPKE key is every other Welcome's that package serves: a path at once, and a new package
+		if err := self.noteLastResortJoin(); err != nil {
+			return false, err
+		}
+	}
 	return true, nil
 }
 
@@ -1010,7 +1026,9 @@ func (self *GkmGroupClient) heldRepoOfGroup(groupId Id) (Id, bool) {
 // Takes gkm's hints (§10.14): pending runs the engine, the granting device at once and every other writer after
 // PendingCommitDelay plus jitter; welcome joins; wrap-pending answers with a late delivery after its own wait; and
 // each resync runs all three for every repo held, so a lost hint costs at most the resync interval. A hint is only
-// a wake: whatever it names is refetched and verified. Each wake's work runs on its own goroutine until ctx ends,
+// a wake: whatever it names is refetched and verified. commit catches up or resyncs (KF5, gkm_sync.go), and a
+// resync also runs each repo's due self-update and its drop key's renewal. Each wake's work runs on its own
+// goroutine until ctx ends,
 // one at a time per repo and kind, so a wait never holds the intake and a repeated hint piles nothing up.
 func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 	if hints == nil {
@@ -1038,15 +1056,33 @@ func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 		}
 	})
 	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_WELCOME, func(ctx context.Context, wake *GkmHintWake) {
-		_, err := self.JoinWelcomes(ctx)
+		joinedRepoIds, err := self.JoinWelcomes(ctx)
 		self.logFlowError("welcome", err)
+		self.selfUpdateJoined(ctx, joinedRepoIds)
+	})
+	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_COMMIT, func(ctx context.Context, wake *GkmHintWake) {
+		if wake.GroupId == nil {
+			return
+		}
+		if repoId, ok := self.heldRepoOfGroup(*wake.GroupId); ok {
+			self.hintWork(ctx, "commit", repoId, func() {
+				self.logFlowError("commit", self.SyncRepo(ctx, repoId))
+			})
+		}
 	})
 	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_WRAP_PENDING, func(ctx context.Context, wake *GkmHintWake) {
-		if wake.GroupId == nil || wake.Recipient == "" {
+		if wake.GroupId == nil {
 			return
 		}
 		repoId, ok := self.heldRepoOfGroup(*wake.GroupId)
 		if !ok {
+			return
+		}
+		if wake.Recipient == "" {
+			// a waiting leaf's want, or a resync's (H2): the Remove it waits on, and the GroupInfo above 16 leaves
+			self.hintWork(ctx, "want", repoId, func() {
+				self.logFlowError("want", self.AnswerWant(ctx, repoId))
+			})
 			return
 		}
 		recipient := wake.Recipient
@@ -1055,13 +1091,22 @@ func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 		})
 	})
 	hints.AddResync(func(ctx context.Context) {
-		_, err := self.JoinWelcomes(ctx)
+		self.logFlowError("heads", self.LoadHeads())
+		joinedRepoIds, err := self.JoinWelcomes(ctx)
 		self.logFlowError("welcome", err)
+		self.selfUpdateJoined(ctx, joinedRepoIds)
 		repoIds, err := self.heldRepoIds()
 		if err != nil {
 			return
 		}
 		for _, repoId := range repoIds {
+			// catch-up or resync first, then the changes this device may commit, its self-update and a drop key's
+			// renewal, one repo's work at a time
+			self.hintWork(ctx, "sync", repoId, func() {
+				self.logFlowError("sync", self.SyncRepo(ctx, repoId))
+				self.logFlowError("self-update", self.RunSelfUpdate(ctx, repoId))
+				self.logFlowError("drop key renewal", self.RenewDropKey(ctx, repoId))
+			})
 			pending(repoId)
 		}
 	})
