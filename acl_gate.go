@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §8.9's gate cache: one per process, which every gate service shares (C-09), holding each network's verified state
 // at its newest position so a check reads it with no lock and no I/O (D-ACL-16, R-ACL-8, I-12).

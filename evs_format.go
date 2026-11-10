@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Which storage format a push needs (§11.6's format row, EVS-FORMAT.md's format 2 chapter; EVS2-M10-05): the
 // classifier evs runs at 5c against §19.11's format2 gate, and a format-2 client runs before it sends, so it knows
 // whether the push will raise a format-1 repo. A push carries format 2 when an entry version has versioning 1 or 2, a

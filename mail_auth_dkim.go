@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !js
+//go:build !sidecar_http && !js && !ios_extension
 
 // §15.5's dkim row (MAIL-M7-08): syntax and tags first, with no lookup; then at most 8 signatures, those whose d=
 // aligns with From under DMARC's relaxed rule first, each group from the bottom of the header up, oldest first; each

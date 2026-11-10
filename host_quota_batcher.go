@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The one usage producer (§20.6): evs, tlsedge, mxedge, smtpedge and taskworker each run one, adding
 // metered bytes as they move and stored-byte deltas as they land. Every WindowTimeout it closes its

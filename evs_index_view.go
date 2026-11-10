@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The index view (§11.14's head, settings, Files and Buckets rows; SEARCH-M10-08): one ref's index at a ref version,
 // read from its listing, since no single index head exists. A view holds the roots (.ur-index/i1 on a file-mode ref, i1
 // on ur/index, and i2 beside it during a rebuild), each root's settings, lock, all partition and buckets, and the ref's

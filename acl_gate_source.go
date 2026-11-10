@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // Where a gate reads a network's authorization log (§8.9, §7.9's read row). api, evs and gkm read the first metadata
 // cluster themselves (AclGateDirectSource); other gate services fetch from api, whose route is question

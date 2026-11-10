@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // place/<repo_id> (§11.8's placement, owner decision 145, evs-25): the create-only object on the first
 // metadata cluster that names the one metadata cluster holding every metadata object of a repo and of its gkm

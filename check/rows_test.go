@@ -158,16 +158,30 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{"TestLegsFailsOnAnSdkLegWithNoLegHere", "TestLegsFailsOnAnSdkTableItCannotFind"},
 	},
 	{
-		row: "legs", item: "the ios_extension leg's deps including the root package or protocol",
+		row: "legs", item: "the ios_extension legs compiling a root or protocol file their list does not name, or linking any other package of this repository but device and protocol/bridge (D-SDK-20, DESIGN-DETAILS 4.2.3)",
 		rule: func(self *repository, t testing.TB) []string {
-			return rowOff(self.report, self.settings.switches.iosExtensionLinksNoRoot, "iosExtensionLinksNoRoot", self.iosExtensionFindings(t))
+			return rowOff(self.report, self.settings.switches.iosExtensionHoldsItsList, "iosExtensionHoldsItsList", self.iosExtensionFindings(t))
 		},
 		switched: func(switches *rowSwitches) *bool {
-			return &switches.iosExtensionLinksNoRoot
+			return &switches.iosExtensionHoldsItsList
 		},
 		plantedTests: []string{
-			"TestLegsFailsOnIosExtensionLinkingTheRoot", "TestLegsFailsOnIosExtensionLinkingProtocol",
+			"TestLegsFailsOnARootFileOffTheIosExtensionList", "TestLegsFailsOnAProtocolFileOffTheIosExtensionList",
 			"TestLegsFailsOnTheMacExtensionSlice", "TestLegsFailsOnIosExtensionLinkingAnythingElseOfOurs",
+			"TestLegsFailsOnAnIosExtensionListItCannotRead", "TestLegsFailsOnAMalformedIosExtensionList",
+		},
+	},
+	{
+		row: "legs", item: "the ios_extension legs linking a module or package the forwarding leg refuses (DESIGN-DETAILS 4.2.3)",
+		rule: func(self *repository, t testing.TB) []string {
+			return rowOff(self.report, self.settings.switches.iosExtensionHoldsItsList, "iosExtensionHoldsItsList", self.iosExtensionModuleFindings(t))
+		},
+		switched: func(switches *rowSwitches) *bool {
+			return &switches.iosExtensionHoldsItsList
+		},
+		plantedTests: []string{
+			"TestLegsFailsOnIosExtensionLinkingARefusedModule", "TestLegsFailsOnIosExtensionLinkingARefusedPackage",
+			"TestLegsFailsOnIosExtensionLinkingAMethodPruningBreaker",
 		},
 	},
 	{
@@ -297,7 +311,8 @@ var failsOnRows = []failsOnRow{
 			"TestHygieneFailsOnAProtoEditedAfterGeneration", "TestHygieneFailsOnAHandEditedPbGo", "TestHygieneFailsOnAMissingPbGo",
 			"TestHygieneFailsOnAnOrphanPbGo", "TestHygieneFailsOnAnotherPluginVersion", "TestHygieneFailsOnAStalePbGoOnAReleaseBranch",
 			"TestHygieneFailsOnGeneratedCodeItCannotRegenerate", "TestHygieneFailsOnAMissingProtoc",
-			"TestHygieneFailsOnGeneratedCodeWhoseTestIsGone",
+			"TestHygieneFailsOnGeneratedCodeWhoseTestIsGone", "TestHygieneFailsOnAGeneratedFileOffTheIosExtensionListWithoutItsTag",
+			"TestHygieneFailsOnAGeneratedFileOnTheIosExtensionListWithTheTag",
 		},
 	},
 	{
@@ -489,9 +504,9 @@ var failsOnRows = []failsOnRow{
 	},
 
 	{
-		row: "size", item: "the ios_extension leg adding over §18.10's 1 MiB",
+		row: "size", item: "the forwarding leg adding over DESIGN-DETAILS 4.2.3's 6 MiB to the ios_extension leg, stripped (proposed; Q-SDK-7)",
 		checkoutTest: "TestSizeVerdictsHoldTheirLimits",
-		plantedTests: []string{"TestSizeFailsOnADeviceRoleOverItsLimit"},
+		plantedTests: []string{"TestSizeFailsOnAForwardingLegOverItsLimit"},
 	},
 	{
 		row: "size", item: "the sidecar_http js leg past §18.10's goal and miss rule",
@@ -676,8 +691,8 @@ func TestRowsThatStartLaterHoldNow(t *testing.T) {
 			t.Errorf("%s holds, so its switch should be on", entry.item)
 		}
 	}
-	if switched != 3 {
-		t.Errorf("%d rows stand behind a switch; §4.18 starts three in make check", switched)
+	if switched != 4 {
+		t.Errorf("%d rows stand behind a switch; §4.18 starts three in make check, the ios_extension one as two rows (DESIGN-DETAILS 4.2.3)", switched)
 	}
 }
 
@@ -697,9 +712,16 @@ func TestEachSwitchGovernsItsRow(t *testing.T) {
 			legs: []string{sidecarHttpLegName},
 		},
 		{
-			item: "the ios_extension leg's deps including the root package or protocol",
+			item: "the ios_extension legs compiling a root or protocol file their list does not name, or linking any other package of this repository but device and protocol/bridge (D-SDK-20, DESIGN-DETAILS 4.2.3)",
 			plant: func(fixture *fixture) {
-				fixture.write("device/device.go", "package device\n\nimport _ \"@module@\"\n")
+				fixture.write("mail_planted.go", "package sidecar\n")
+			},
+			legs: []string{iosExtensionLegName},
+		},
+		{
+			item: "the ios_extension legs linking a module or package the forwarding leg refuses (DESIGN-DETAILS 4.2.3)",
+			plant: func(fixture *fixture) {
+				fixture.write("planted.go", "package sidecar\n\nimport _ \"text/template\"\n")
 			},
 			legs: []string{iosExtensionLegName},
 		},

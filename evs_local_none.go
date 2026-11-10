@@ -1,4 +1,4 @@
-//go:build sidecar_http || js || ios || android || sdk_mobile_bind
+//go:build (sidecar_http || js || ios || android || sdk_mobile_bind) && !ios_extension
 
 // Head mode's Mount (§11.11's mobile and wasm row): mobile, the page Worker and the sdk read and write single files and
 // run no local git tier, so Mount refuses.

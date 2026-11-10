@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §21.9's preservation holds as every reader sees them: hold/<network_id>/<case_id>/_ on the first
 // metadata cluster (§11.8, evs-19), which api writes from abuse_legal_hold and evs, gkm and taskworker

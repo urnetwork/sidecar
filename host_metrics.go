@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // ServiceHost.Metrics: prometheus in server, kept behind this interface so it stays out of this
 // module (§4.5). A metric's name is urnetwork_<svc>_*. Its labels are route template, result, code,

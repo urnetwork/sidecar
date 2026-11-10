@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // What engines and the hosted Quota share (§20.6, §20.7): the meters a lease or a usage batch counts on,
 // the producers that send batches, how a batch's retry identity is made, and the grammar of CountRate's

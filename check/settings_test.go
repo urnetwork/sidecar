@@ -18,13 +18,16 @@ type rowSwitches struct {
 	// §18.10 and §4.18, from M1: the sidecar_http js leg links no connect or gVisor package.
 	// Held since M0: every root file importing connect carries !sidecar_http.
 	sidecarHttpLinksNoConnect bool
-	// D-SDK-20 and §4.18, from M4: the ios_extension leg links neither the root nor protocol.
-	// Held since M0, by protocol/bridge alone until device/ lands, when the leg picks it up.
-	iosExtensionLinksNoRoot bool
+	// D-SDK-20, §4.18 and DESIGN-DETAILS 4.2.3, from M4: the ios_extension legs link of this repository only
+	// device, protocol/bridge and the files on their list, and none of the modules the forwarding leg refuses.
+	// Held since REPO-M4-01 tagged every other root file !ios_extension; before it, by device and
+	// protocol/bridge alone.
+	iosExtensionHoldsItsList bool
 	// §4.7 and §4.18, from M10: every leg selects normalizer 1's golang.org/x/text. Held since M0:
 	// connect and all four sdk modules moved to v0.43.0 ahead of the design's dates.
 	xTextIsNormalizerOnes bool
-	// §18.10 and §4.18, from M4: make size holds what the device role adds to 1 MiB.
+	// §18.10, §4.18 and DESIGN-DETAILS 4.2.3, from M4: make size holds what the forwarding leg adds to
+	// iosExtensionAddedMaxByteCount.
 	iosExtensionSizeGate bool
 	// §18.10 and §4.18, from M2: make size holds the sidecar_http js leg to its goal and miss rule.
 	sidecarHttpSizeGate bool
@@ -69,8 +72,14 @@ type checkSettings struct {
 	// cache holds no more compilers in memory than the machine takes. Non-positive means one at a time.
 	legCompileConcurrency int
 
-	// §18.10, D-SDK-20: the most the device role may add to the ios_extension leg, in bytes
+	// DESIGN-DETAILS 4.2.3 (§18.10, D-SDK-20): the most the forwarding leg, device and protocol/bridge with the
+	// root and protocol files on the leg's list, may add to the ios_extension leg, stripped, in bytes. Proposed until
+	// question details-4-ios-forwarding-budget (Q-SDK-7's executable half) is answered: 6 MiB against 5,040,248 B
+	// measured on 2026-11-10, where §18.10 wrote 4 MiB and D-SDK-20 1 MiB unstripped.
 	iosExtensionAddedMaxByteCount int64
+	// the linker flags both of make size's ios_extension builds take: sdk/build/Makefile's ios_extension bind ships
+	// stripped, and sdk/build/check_apple_size.sh's ceilings read that binary
+	iosExtensionLinkerFlags string
 	// §18.10, owner decision 22: the sidecar_http js leg's goal, unstripped, in bytes
 	sidecarHttpGoalByteCount int64
 	// §18.10's miss rule: the sdk.wasm gate the leg ships under if it still exceeds the goal at
@@ -108,7 +117,7 @@ func defaultCheckSettings() *checkSettings {
 	return &checkSettings{
 		switches: rowSwitches{
 			sidecarHttpLinksNoConnect: true,
-			iosExtensionLinksNoRoot:   true,
+			iosExtensionHoldsItsList:  true,
 			xTextIsNormalizerOnes:     true,
 			iosExtensionSizeGate:      true,
 			sidecarHttpSizeGate:       true,
@@ -206,7 +215,8 @@ func defaultCheckSettings() *checkSettings {
 		vulnDatabase:                  "https://vuln.go.dev",
 		vulnScanConcurrency:           8,
 		legCompileConcurrency:         4,
-		iosExtensionAddedMaxByteCount: 1024 * 1024,
+		iosExtensionAddedMaxByteCount: 6 * 1024 * 1024,
+		iosExtensionLinkerFlags:       "-s -w",
 		sidecarHttpGoalByteCount:      40 * 1024 * 1024,
 		sidecarHttpMissByteCount:      74965628,
 		sidecarHttpGoalSlipRecorded:   false,

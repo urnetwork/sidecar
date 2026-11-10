@@ -250,6 +250,8 @@ func newProtoFixture(t *testing.T) *fixture {
 	fixture.write("protocol/bridge/signed.proto", plantedBridgeProto)
 	fixture.write("protocol/config.proto", plantedConfigProto)
 	generateProtos(t, filepath.Join(fixture.directory, "sidecar"), "protocol/config.proto", "protocol/bridge/signed.proto")
+	// config.pb.go is on the ios_extension leg's list, as the checkout's is, so protocol/Makefile writes no tag on it
+	writeIosExtensionLegList(fixture, "protocol/config.pb.go")
 	return fixture
 }
 

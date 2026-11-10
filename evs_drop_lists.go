@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A version's membership in a DROP's lists, from its signed body alone (plan-EVS2-drop-list-proof, decided): a ref's
 // version V, committed in path epoch e at token path t, is listed exactly when one of the body's paths holds (e, t) in
 // its lineage, V is below that path's through_version, and V has an entry, a removal never being listed

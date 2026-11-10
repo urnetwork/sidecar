@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // Each sending sidecar's DKIM keys (§14.6, owner decision 36): an RSA-2048 key per signing domain,
 // made on this device and kept in this network's keychain.ur, so URnetwork holds only the public keys

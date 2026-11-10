@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The search plan (§11.14's plan, retained, cjk and off rows; §16.10's phase rows; SEARCH-M10-22): per (repo, ref),
 // which partitions a search reads and in what order, newest first: the current bucket, the previous one, any expired
 // and retained buckets, then all's shards youngest first. Scope latest stops before all, and a since after all's newest

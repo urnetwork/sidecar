@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // socketStream: the one §6 stream a SocketConn runs on, opened by a dialer or accepted by a listener. It
 // is the seam between §9 and §6 (SOCK.md's seam table): listeners and dialers build and test on an

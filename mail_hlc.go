@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §15.7's hybrid logical clock for f/'s flag ops (MAIL-M7-06), as MAIL-FORMAT.md's f/ section states it: one
 // number, wall ms since the epoch in the top 48 bits and a counter in the low 16, so it compares as one and a
 // counter past 65,535 carries into the wall. A device ticks once per op it writes and raises its clock past every op

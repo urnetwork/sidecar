@@ -1,4 +1,4 @@
-//go:build !js && !ios && !android
+//go:build !js && !ios && !android && !ios_extension
 
 // DaemonClient, the caller's side of §5.8's local IPC, which ur's commands and relays use, and a desktop sdk's remote
 // backend links too (§18.4), so this file and the hello's and wire's are the daemon's only files without

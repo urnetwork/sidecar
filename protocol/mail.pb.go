@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // What mxedge tells a receiver about a sender (§15.4), the evidence a receiver seals at reception (§15.5), the
 // deposit that carries both (§15.7), and the files of a mailbox and of mailcfg (§15.7, §15.8).
 //

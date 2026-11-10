@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // X18, §17.4's address plan, as pure functions over a network's block and the ledger a reader opens from its BridgeLog
 // (bridge_statement_rules.go):
 //

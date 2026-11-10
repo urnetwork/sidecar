@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §15.7's IndexEntry (D-MAIL-5, D-MAIL-14, I-11): one message's row in its month's i/ segment, built by ingest
 // from the deposit's sealed trailer, the message's walk (MailParseMessage), the label MailLabelDecide gave from
 // that trailer (MAIL-M7-10) and the spam score and code MAIL-M7-12 found. Every value is MAIL-FORMAT.md's: each

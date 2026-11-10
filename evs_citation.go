@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The citation rule (§11.7's content, kind 5, staged and cite rows; §11.8's 5h; I-EVS-10; FI-17), as one pure function
 // that 5h and replaying readers both run, and that the client's planner can run before it signs. It answers only what
 // format 2 adds, each breach ErrEvsVersioning, 409 VERSIONING:

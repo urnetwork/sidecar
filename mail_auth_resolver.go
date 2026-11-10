@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !js
+//go:build !sidecar_http && !js && !ios_extension
 
 // Every lookup a receiver's checks make (D-MAIL-3, D-MAIL-14, FS-121; MAIL-M7-07), over its own DohCache.Forward
 // (§2.8 ext-3) through its MailDnsStub, within one message's MailAuthBudget, as the resolver mox's dkim, spf and dmarc

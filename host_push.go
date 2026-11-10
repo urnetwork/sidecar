@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // ServiceHost.Push: an owning service's half of §6.8's server push. Hints are lossy state sync, not a
 // mailbox: a client that misses one resyncs, so a failed Hint costs latency only, and the caller

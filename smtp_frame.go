@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The frames ahead of the raw TLS on a stream to smtpedge (D-SMTP-3, plan-SMTP-wire-gaps#3): each is
 // u32be body length ‖ u16be MessageType ‖ body, the body at most 65,536 B. Only SmtpPreamble, from the

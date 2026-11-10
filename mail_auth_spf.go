@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !js
+//go:build !sidecar_http && !js && !ios_extension
 
 // §15.5's spf row (MAIL-M7-08): RFC 7208's evaluation of sender_ip for MAIL FROM's domain, or the post-TLS EHLO's
 // with a null reverse path (plan-MAIL-small-readings#14), within §4.6.4's limits, which mox's spf enforces: 10 terms

@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Extractor 1's HTML stripping (§11.14's extract row; protocol/INDEX-FORMAT.md's Extractor 1, HTML): a scanner of our
 // own over decoded text, since the determinism row bans library-version input and a parser library's bump would
 // change which bytes reach the index. Script and style elements go with their content, comments and <!...> and

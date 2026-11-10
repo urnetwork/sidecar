@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The sender's one way into a member's mailbox (§15.7): the outbox o/, the outcomes or/, the prover
 // records p/, and DSN deposits. MAIL implements it on its formats (MAIL-M9-02's mailSmtpMailbox) and

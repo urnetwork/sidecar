@@ -197,15 +197,15 @@ budgets:
     reviewed: ""
     note: "the gate is no regression from PROTO-M1-11's recorded baseline; until PROTO-M5-05 writes that number here, the row reads missing"
   - id: ios-extension-device-role
-    spec: "§18.4 and §18.10, D-SDK-20: what the device role adds to the ios_extension leg, 1 MiB"
+    spec: "DESIGN-DETAILS 4.2.3 (§18.10, D-SDK-20, Q-SDK-7): what the forwarding leg, device and protocol/bridge with the root and protocol files on check/testdata/ios_extension_leg.txt, adds to the ios_extension leg, 6 MiB stripped"
     kind: size
-    owner: SDK-M4-01
+    owner: REPO-M4-01
     module: sidecar
     package: check
     name: TestSizeGateIosExtension
-    settings: "make size, unstripped"
-    limits: {bytes: 1048576}
-    reviewed: ""
+    settings: "make size, stripped with -s -w as sdk/build/Makefile's ios_extension bind ships"
+    limits: {bytes: 6291456}
+    reviewed: "2026-11-10: raised from D-SDK-20's 1 MiB unstripped to DESIGN-DETAILS 4.2.3's 6 MiB stripped, the budget section 4 of DESIGN-DETAILS sets for owner decision 197's forwarding leg (REPO-M4-01). Proposed: it stands until the owner answers question details-4-ios-forwarding-budget, and no person has reviewed the raise; sdk/build/check_apple_size.sh's 50 MiB extension ceiling does not move with it"
   - id: page-worker-wasm
     spec: "§18.10 and §22.9: the page Worker's wasm goal, 41,943,040 B"
     kind: size
