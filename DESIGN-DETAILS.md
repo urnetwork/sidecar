@@ -18,7 +18,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 8 | Git and evs in both directions | 3 | complete (2026-11-10) |
 | 9 | Client path epochs and re-tokenizing | 3 | complete (2026-11-10) |
 | 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | pending |
-| 11 | Canonical text extraction and exact body sizes for search | 2 | pending |
+| 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10) |
 | 12 | Bridge compiler and NAT engine (§17) | 4 | pending |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 
@@ -4802,9 +4802,771 @@ Tasks held until complete: EVS2-M10-09, EVS2-M10-10, EVS2-M10-22, EVSB-M10-03, E
 
 ## 11. Canonical text extraction and exact body sizes for search
 
-Status: pending
+Status: complete (2026-11-10)
 
 Tasks held until complete: SEARCH-M10-31, SEARCH-M10-36.
+
+Vectors: `sidecar/testdata/index/conformance/` (`mail.json`, `file.json`, `entities.json`, `charsets.json`, `sizes.json`). New tasks: `.stack/plan/proposals/details-11-tasks.md` (SEARCH-M10-42, SEARCH-M10-43, SEARCH-M10-44). Questions filed: `.stack/questions/details-11-own-decoders.md`, `details-11-extraction-bounds.md`, `details-11-body-encoding.md`, `details-11-small-readings.md`. Questions this section answers, each as 11.9 says: `search-m10-05-extractor-unstated-bytes`, `search-m10-07-extractor-field-placement`, and `plan-SEARCH-exact-body-sizes` as the owner decided it (QD-215). It amends one proposed fill, QD-474, in three places that 11.9 names.
+
+### 11.1 The problem
+
+Two things in §11.14 must come out byte for byte the same on every device, and neither is written down far enough to build.
+
+**Extraction.** An index entry is a document's row and its key set, and a key set is the trigrams of the document's normalized text. A device that holds a document's text rebuilds the entry and compares it with what the writer committed, and raises `index_mismatch` naming the signer when they differ (§11.14's coverage and reproduce rows; FI-22). So every byte the extractor hands the normalizer is a format byte. §11.14's extract row gives mail three lines, and `protocol/INDEX-FORMAT.md`'s Extractor 1 a dozen. Two implementations were written apart from them, as D-TEST-14 asks: `indexExtractMail` (SEARCH-M10-06) and SearchOracle's extractor (SEARCH-M10-07). Three things are wrong.
+
+*A. The two disagree.* On honest mail they agree. On the inputs below, each a vector in `mail.json`, they do not, and each difference changes the key set:
+
+```text
+vector                         input                                      index            oracle
+x-script-end-name              a<script>x</scriptx>y</script>z            az               ayz
+t-base64-nbsp-stops            base64 body  SGVs U+00A0 bG8=              Hel              Hello
+w-charset-with-space           Subject: =?UTF 8?Q?a?=                     as written       a
+w-nbsp-between, w-cr-between   =?UTF-8?Q?a?= U+00A0 =?UTF-8?Q?b?=         a U+00A0 b       ab
+p-sections-without-zero        filename=plain.txt; filename*1=b           plain.txt        (empty)
+p-sections-empty-fall-through  filename*0=""; filename=plain.txt          plain.txt        (empty)
+p-sections-repeat              filename*0=a; filename*0=b                 a                b
+b-unterminated                 a multipart with no close delimiter,       two CR LF        two
+                               whose last part is  two CR LF
+```
+
+The first, second, third and fifth are the ones question search-m10-05-extractor-unstated-bytes lists. The other four were found here, by running both over the vectors. To look for more, a copy of the oracle was made to read as the index does at exactly these six places (the script end tag, the bytes base64 skips, a word's charset, what counts as space between two words, RFC 2231's sections and precedence, the last part's line break) and fuzzed against the index: 1,533,211 executions from the vectors as seeds found no other difference.
+
+*B. Where they agree, they agree because both call the same library, and what those calls do on malformed input is written nowhere.* Each of these is what Go 1.27.3 does today, shown by a vector, and none is a rule of the format:
+
+```text
+t-qp-long-line        mime/quotedprintable reads lines through a 4,096 B buffer: a quoted-printable part with one
+                      longer line loses everything after that line's first 4,096 B. Both extractors lose it.
+t-qp-control-bytes    the same reader stops at a NUL, an ESC or a DEL: the rest of the part is lost
+t-base64-unpadded     encoding/base64 gives nothing for a last group without its padding: a body that is cut, or
+                      whose writer left the padding off, loses its last one or two bytes
+e-one-digit           html.UnescapeString leaves "&#9 x" as it is, and decodes "&#9;x" and "&#65 x"
+e-no-digits           it reads "&#x;" as U+FFFD
+e-overflow            it adds digits in 32 bits: "&#4294967361;" is "A"
+e-two-code-points     it has 2,229 of HTML's 2,231 names: "&nLt;" and "&nGt;" stay as written
+h-value-nbsp-stays    strings.TrimSpace trims U+00A0, U+0085 and 23 more code points from a header value
+h-name-ascii-case-only  strings.ToLower reads "Content-D" U+0130 "sposition" as Content-Disposition
+c-label-not-ascii     htmlindex.Get lowercases a label by Unicode: U+212A "oi8-r" names koi8-r
+c-replacement-empty   a part labelled iso-2022-kr or hz-gb-2312 decodes to one U+FFFD, even when it is empty
+p-section-signed      strconv.Atoi reads "filename*+0" as section 0, and a section number past 2^31 parses on
+                      64-bit legs and fails on 32-bit ones
+w-b-carriage-return   base64 inside an encoded word skips a CR
+```
+
+§11.14's determinism row forbids "library-version input", and QD-474 keeps the HTML parser out for that reason. The same holds for these calls: a Go release that fixes the 4,096 B limit, or the 32-bit sum, changes which bytes a writer indexes, and then every reader built on the other release reports an honest writer. The Unicode version is pinned and checked at start; the standard library's parsers are not, and cannot be, since they carry no version of their own.
+
+*C. Nothing bounds memory.* Both extractors hold the message, each part decoded, each part again in UTF-8 and the joined text at once: the landed one allocates 2.5 times a 50 MiB message that is one base64 text part, and 8 to 10 times a small HTML message (11.4). §11.15 gives the iOS app 4 MiB of working set and "never a whole file ... over 1 MiB in RAM", and the owner directed on 2026-11-10 that bulk state lives in storage (QD-641). A one-pass reading in fixed memory is not possible under the rules as the two read them, because three of them need unbounded lookahead: a header value of any length is joined before its encoded words decode; a delimiter line may carry any run of trailing whitespace; so may a quoted-printable soft line break.
+
+*D. Field order and placement are unstated* (question search-m10-07-extractor-field-placement): where a file's path goes, where attachment names go among the text parts, how To and Cc and several parts join, and what each chunk past the first carries. The two implementations took the same readings, pending an answer.
+
+**Sizes.** D-EVS-59 makes every `SearchRequest` body exactly 4,016 B and every `SearchReply` body exactly steps × 16,384 B, so that a relay learns nothing from a length. The only filler is `pad`, proto field 15: one tag byte, a varint length, then zeros, and proto3 leaves an empty field out. So `pad` adds 0 bytes, or 3 to 129 (a one-byte length), or 131 to 16,386 (two), or 16,388 and more (three). It cannot add 1, 2, 130 or 16,387. Run against the marshaler for every pad length to 70,000, those four are the only gaps up to 65,536. Concretely:
+
+```text
+a request whose other fields encode to 4,015 B, 4,014 B or 3,886 B       cannot be made 4,016 B
+a one-step reply whose other fields encode to 16,383, 16,382 or 16,254 B cannot be made 16,384 B
+a two-step reply whose other fields encode to 16,381 B                   cannot be made 32,768 B
+   (three steps: 32,765 B; four: 49,149 B)
+```
+
+A reply reaches these whenever its hits nearly fill a step: the size tests of 11.3 build replies of 6, 11 and 17 hits that sit exactly on the last gap at two, three and four steps. The owner decided the approach on 2026-11-06 (QD-215): no wire change, every other field stops 131 B short of the body's size, a multi-step reply "holds one hit back", and `SearchFilters` is capped at 768 B. What that leaves open is everything an implementer needs:
+
+- the pad's length as a function, and which contents are refused;
+- which hits a reply keeps, when the fields that describe the page (`complete`, `checked_through_ms`, `counts`) change size with the hits kept;
+- a proof that a request always fits and that a reply with a hit to give always returns one, which needs a cap on every field, and two fields have none (`SearchHit.correction`, `SearchCoverage.chain`);
+- what a receiver checks. "A non-zero pad" is INVALID (§11.14's status row), but a body can carry `pad` twice, the parser keeping the last, or carry a field this version does not know, and either hides non-zero bytes from that check;
+- the landed `padSearchReply` (`rpc_search.go`), which tries five pad lengths and fails on a gap, after which its caller answers a small `UNAVAILABLE` Error: a failure after parsing that is not padded, which D-EVS-59 forbids.
+
+### 11.2 The design
+
+Extraction is one function, written out below in full. It calls no parser of the standard library or of any module: base64, quoted-printable, character references, header fields, parameters and multipart bodies are each a rule here. What it takes from outside is tables, each pinned: Unicode 17.0.0 and the charset decoders, both from golang.org/x/text v0.43.0 and Go's `unicode` package, which normalizer 1 already pins and checks at start; HTML's named character references, a list its standard has frozen, held in `entities.json`; and the block tags, listed here. Five limits make it computable in one pass with fixed memory (11.2.8). It is total: every byte string has exactly one output and there is no error to return.
+
+The identifiers stay extractor 1 and normalizer 1. Index format 1 freezes at M10's exit (§23.8) and no index exists outside tests, so this section defines extractor 1 rather than adding a second. `protocol/INDEX-FORMAT.md`'s Extractor 1 and Documents sections are replaced by 11.8's text.
+
+Bodies keep the owner's rule, made exact: one function gives the pad's length, one predicate says which contents can be sized, the builders keep contents inside it by caps that 11.3 proves sufficient, and a receiver accepts a body only if it is the one encoding of its message. `search.proto` does not change.
+
+#### 11.2.1 Terms, constants and tables
+
+```text
+LF 0x0A   CR 0x0D   SP 0x20   HT 0x09
+white      the bytes 0x09 to 0x0D and 0x20
+blank      SP and HT
+lower(x)   x with each byte 0x41-0x5A raised by 0x20, every other byte as it is; "ignoring case" means equal
+           under lower
+trim(x)    x without its leading and its trailing white bytes
+letter     A-Z and a-z; digit 0-9; alphanumeric either; hex digit 0-9, A-F and a-f
+```
+
+No rule below reads a header, a parameter, a label, a tag name or an encoding's name as Unicode text: names compare under `lower`, and only white bytes are trimmed. Constants are facts of the format, never settings:
+
+```text
+HeaderMax       16,384 B   a logical header line, and the joined values of one field name (H4, H6)
+LineWindow       1,024 B   the longest delimiter line (B1); the longest blank run inside a soft line break (T3)
+MimeDepth           16     the multipart levels entered (M2)
+ChunkBytes   1,048,576 B   a document's share of its source's text (D4)
+Overlap            256 B   what a document repeats of the next (D4)
+SniffWindow      8,000 B   the bytes that decide text or binary (S2)
+TitleMax            80 B   a file's title (S4)
+FieldCut         1,024 B   normalized subject, from, to and title (N6)
+KeySetMax      524,288 B   a key set's encoding, past which its document is skipped (D6)
+```
+
+Tables, each part of extractor 1 or normalizer 1:
+
+```text
+Unicode       17.0.0: general categories and scripts from Go's unicode package (unicode.Version), normalization
+              and case folding from golang.org/x/text v0.43.0 (norm.Version, cases.UnicodeVersion). A build
+              linking anything else is another normalizer and writes nothing (INDEX-FORMAT.md's Tables).
+charsets      golang.org/x/text v0.43.0's encoding/htmlindex: 228 labels naming 40 encodings, listed in
+              charsets.json, and that module's decoder for each (C1-C3)
+references    HTML's 2,231 named character references, 106 of them also without their ';' and 93 of them two
+              code points: entities.json, SHA-256 9e7bac4a454044f307050b23fefa224beea56525742cc4774e1d4c6da6d40e57
+block tags    address article aside blockquote br center dd details dialog dir div dl dt fieldset figcaption
+              figure footer form h1 h2 h3 h4 h5 h6 header hgroup hr li main menu nav ol p pre section summary
+              table tbody td tfoot th thead tr ul                                              (44 names; X4)
+C1 table      what numeric references 128 to 159 mean, in order (E1): U+20AC 0081 201A 0192 201E 2026 2020 2021
+              02C6 2030 0160 2039 0152 008D 017D 008F 0090 2018 2019 201C 201D 2022 2013 2014 02DC 2122 0161
+              203A 0153 009D 017E 0178
+```
+
+#### 11.2.2 Normalizer 1, whole
+
+Normalizer 1 is `protocol/INDEX-FORMAT.md`'s, unchanged. It is restated here with every byte §11.14's text row leaves open, so that this section holds the whole path from a file's bytes to a key set.
+
+```text
+N1  Each byte that does not begin a well-formed UTF-8 sequence becomes U+FFFD, one for each such byte: an
+    overlong form, a surrogate, a value past U+10FFFF and a sequence cut short by the end of the value each
+    give one U+FFFD a byte. A well-formed U+FFFD stays.
+N2  NFKC, as x/text's norm.NFKC gives it, its stream-safe rule included: after 30 non-starters it inserts
+    U+034F.
+N3  Full case folding, as x/text's cases.Fold() gives it with no locale, then U+AB70-U+ABBF to
+    U+13A0-U+13EF and U+13F8-U+13FD to U+13F0-U+13F5 (QD-256).
+N4  NFD. Then each code point of category Mn is dropped when the nearest code point before it in the value
+    that is not Mn is of category L and of script Latin, Greek, Cyrillic, Arabic or Hebrew (the Script
+    property, not Script_Extensions). With no such code point before it, at a value's start, it stays. Then
+    NFC.
+N5  Each maximal run of code points outside categories L, M and N becomes one SP. U+FFFD is in such a run.
+N6  For fields 1 to 4, the result is cut to its longest prefix of at most FieldCut bytes that ends on a code
+    point.
+N7  A document's text is, for each field in number order whose value is not empty: SP, the field's normalized
+    value, SP. Nothing is trimmed, so a value that normalizes to a leading or trailing space shows two.
+N8  A document's key set is the distinct values b0 x 65,536 + b1 x 256 + b2 over every three consecutive
+    bytes of its text, the windows across two fields' padding included. A text under 3 B has none.
+```
+
+What the row left open, and how each is settled: N1 counts bytes, not maximal subparts. N1 to N5 run on each field's value by itself, with N4's "nearest code point before" starting afresh, and on each chunk by itself, so a chunk that begins or ends inside a character shows U+FFFD there. N6 cuts after N5, on normalized bytes, and may cut between a base and a mark N4 kept. A value that is not empty never normalizes to nothing, so N7's test is on the value before normalization.
+
+#### 11.2.3 Documents: kinds, fields, chunks and rows
+
+```text
+D1  A version is extracted as mail when its repo is a mailbox, or a general repo laid out as a group inbox
+    (§15.7), and its path begins "m/". Every other version that §11.14's never row lets in is extracted as a
+    file. A record entry's or a derived document's fields are its class's (§16.8, §16.11).
+D2  A file that S1-S3 find to be text has, for each chunk c of its text (D4), one document: field 4 is the
+    file's title (S4), one SP and the path's bytes; field 5 is c. Field 4 has that form even when the title
+    is empty. Fields 1-3 are empty.
+D3  A message has, for each chunk c of its body text, one document: field 1 is the decoded Subject, field 2
+    the decoded From, field 3 the decoded To and the decoded Cc, each left out when empty and joined by one
+    SP when both stand, and field 5 is c. Field 4 is empty. "Decoded X" is W applied to H6's joined value of
+    X, of the message's own header block alone. The body text is the walk's pieces (M1-M6) in the order the
+    walk gives them, the empty ones left out, joined by one SP.
+D4  The chunks of a text t are t[k x ChunkBytes : min(len(t), (k+1) x ChunkBytes + Overlap)] for k = 0, 1, ...
+    while k x ChunkBytes < len(t), and the one empty chunk when t is empty. Chunk k is the document with
+    chunk number k. Bytes are counted in the text as extracted (a file's after S1 and S3, a message's body
+    text), before normalization. Every chunk carries the same fields 1-4.
+D5  A document's row is INDEX-FORMAT.md's: its locator the path's bytes, its subject, from and to the values
+    of fields 1-3 before normalization, its title the title of S4 alone, never the path, each with N1 applied
+    and then cut by that file's Trimming; its size the length in bytes of the whole file or message, the
+    same on every chunk's row.
+D6  A document whose key set would encode past KeySetMax is skipped: it has no entry, and where its key was
+    indexed before, its version is a tombstone (§11.14's sniff row).
+```
+
+D2, D3 and D4 are question search-m10-07-extractor-field-placement's option 1. A path's words are found through field 4. A message's attachment names sit in field 5 where their parts stand, so a phrase can span a name and the text beside it only as they are laid out in the message. Field 4's cut (N6) means a path's tail past 1,024 normalized bytes of title and path is not indexed.
+
+A document's `doc_key`, version and attributes are not extraction's: `doc_key` is INDEX-FORMAT.md's Documents, from the path's bytes and the chunk number, and so does not move with a path epoch (section 9), whose tokens name index files and never enter a document.
+
+#### 11.2.4 Files
+
+```text
+S1  A file that begins FE FF is UTF-16 big-endian, and one that begins FF FE little-endian. The mark is
+    dropped. Each two bytes after it are a code unit; a surrogate pair is its code point; a surrogate with no
+    partner is U+FFFD; an odd last byte is U+FFFD. The text is the result in UTF-8, and the file is text.
+    Nothing else is asked of it: U+0000 is allowed.
+S2  Otherwise take the window, the file's first SniffWindow bytes or the whole file when it is shorter. The
+    file is binary, and gives no document, when the window holds a byte 0x00, or when, reading well-formed
+    UTF-8 sequences from the window's start, a byte is met that does not begin one, unless the bytes from
+    there to the window's end are a proper prefix of a well-formed sequence (a character the window cut).
+    The prefix test is exact: E0 80, ED A0 and F4 90 begin nothing. Otherwise the file is text, and its text
+    is all of its bytes, whatever lies past the window.
+S3  A text of S2 that begins EF BB BF loses those three bytes, once.
+S4  The title: split the text at each LF. The title line is the first line that holds a code point of
+    category L or N, reading the line as UTF-8 with N1's rule (so U+FFFD, which is neither, stands for each
+    ill-formed byte). Take that line; drop its leading run of '#' and SP bytes; drop its trailing run of SP,
+    HT and CR bytes; apply N1; cut to the longest prefix of at most TitleMax bytes that ends on a code point.
+    No such line: the title is empty.
+```
+
+S3 is new: without it a file saved with a UTF-8 mark shows the mark and its heading's "# " in its title.
+
+#### 11.2.5 Mail
+
+A message is read as RFC 5322 and MIME lay it out, by the rules below and no others. `extract_mail(content)`:
+
+```text
+fields, body = header_block(content)                                      H1-H5
+subject = words(joined(fields, "subject"))                                H6, W
+from    = words(joined(fields, "from"))
+to      = join_nonempty(words(joined(fields, "to")), words(joined(fields, "cc")))
+pieces  = []
+walk(fields, body, 0, pieces)                                             M1-M6
+text    = join_nonempty(pieces...)             the non-empty ones, in order, with one SP between
+one document per chunk of text (D3, D4)
+```
+
+**The header block.**
+
+```text
+H1  Lines end at LF. A line's content is its bytes before the LF, less one CR when it ends in one. The last
+    line may end at the end of the input instead.
+H2  The header block is the lines from the start up to the first line whose content is empty. That line
+    belongs to neither part; the body is everything after its LF. With no empty line, everything is header
+    and the body is empty. A line of only blank bytes is not empty.
+H3  A line whose first byte is blank, when a logical line stands before it, is appended to that logical
+    line as it is, its leading blank bytes included. Any other line begins a logical line.
+H4  A logical line is at most HeaderMax bytes: bytes past that are dropped as they arrive.
+H5  A logical line with no ':' is no field. Otherwise its name is lower(trim(bytes before the first ':'))
+    and its value is trim(bytes after it). Fields keep their order.
+H6  first(name) is the value of the first field of that name, or empty. joined(name) is the values of every
+    field of that name, in order, with one SP between each two, an empty value included, cut to its first
+    HeaderMax bytes.
+```
+
+**Encoded words** (RFC 2047). `words(v)` scans v from the left:
+
+```text
+W1  An encoded word is "=?" C "?" E "?" T "?=", where C, E and T hold no '?', and E is one byte: B, b, Q
+    or q. It may stand anywhere in v, inside a token too.
+W2  Its charset is C up to its first '*'. It is not an encoded word when the charset is empty, when the
+    charset or T holds a blank byte, or when W3 or W4 refuses T. Its text is T decoded by W3 or W4 and then
+    by C3 under the charset's label.
+W3  B: drop every '=' at T's end. What is left must be base64 alphabet bytes (A-Z a-z 0-9 + /) and not 1
+    more than a multiple of 4 long, or T is refused. Each 4 bytes give 3; a last 2 give 1 and a last 3 give
+    2, the unused bits ignored. An empty T decodes to nothing.
+W4  Q: '_' is SP; '=' and two hex digits are that byte; '=' followed by anything else, or by fewer than two
+    bytes, refuses T; every other byte is itself.
+W5  Find the leftmost "=?" at or after the scan position. If an encoded word starts there, take it and move
+    the position past its "?="; if not, move the position 2 bytes on and look again. When none is left, the
+    rest of v is text.
+W6  The text between two encoded words is dropped when it is empty or only blank bytes, and kept otherwise.
+    Text before the first word and after the last is kept. So is text between a word and something that is
+    not one.
+```
+
+**Media values and parameters** (RFC 2045, 2183, 2231), for Content-Type and Content-Disposition:
+
+```text
+P1  The value is lower(trim(bytes before the first ';')). An absent or empty field has the empty value and
+    no parameters.
+P2  The bytes after the first ';' are split at each ';' that is outside quotes. A '"' opens quotes and the
+    next '"' closes them; inside quotes a '\' and the byte after it are passed over together. A quote left
+    open runs to the end.
+P3  A piece with no '=' is no parameter. Otherwise its name is lower(trim(bytes before the first '=')) and
+    its raw value trim(bytes after it). A name ending in '*' is extended, and loses that '*'. If the name
+    then holds a '*', the bytes before the first one are the parameter's name and the bytes after it its
+    section, which must be 1 to 9 digits and nothing else, or the piece is no parameter. So a parameter has
+    up to three kinds of piece: plain, extended, and sections 0, 1, ..., each plain or extended. Of two
+    pieces of one name and kind (and one section number), the first counts.
+P4  A plain piece's value is its raw value unquoted: when it is at least 2 bytes and begins and ends with
+    '"', those two go, and inside, a '\' followed by a byte gives that byte. Anything else is as written. An
+    extended piece's raw value is never unquoted.
+P5  param(name), in this order: (a) if it has a section 0, join sections 0, 1, 2, ... up to the first
+    number that is missing; if the result is not empty, that is the value; (b) else its extended piece;
+    (c) else its plain piece; (d) else empty.
+P6  An extended value is charset ' language ' text when it holds two "'" (the first two split it), and
+    otherwise all text with no charset. Its text is percent-decoded: '%' and two hex digits are that byte;
+    if any '%' is followed by anything else, the whole text stands as written. In (a), an extended section
+    is percent-decoded, a plain one is not, and only section 0, when extended, is split for a charset. The
+    bytes are then decoded by C3 under that charset's label.
+```
+
+**Charsets.**
+
+```text
+C1  A label is trimmed. It names an encoding when every byte of it is 0x21 to 0x7E and lower(label) is one
+    of charsets.json's 228 labels.
+C2  No label, a label that names nothing, and a label that names utf-8 or replacement leave the bytes as
+    they are. Ill-formed UTF-8 then meets N1.
+C3  Any other label's bytes are decoded by x/text v0.43.0's decoder for its encoding. Those decoders answer
+    malformed input with U+FFFD and never fail. No charset is guessed from content.
+```
+
+**The walk.** `walk(fields, body, depth, pieces)`:
+
+```text
+M1  type = P(first("content-type")), disposition = P(first("content-disposition")). The media type is
+    type's value, or text/plain when that is empty; type's parameters stand either way.
+M2  A media type beginning "multipart/": let b = type.param("boundary"). If b is empty, or depth >=
+    MimeDepth, the entity gives nothing. Otherwise for each part of parts(body, b) (B1-B4), in order:
+    walk(header_block(part), depth + 1). The entity's own name is not read. Every part is walked, the parts
+    of multipart/alternative like any others.
+M3  Any other entity: its name is disposition.param("filename"), or when that is empty type.param("name").
+    A name that is not empty gives the piece words(name).
+M4  If disposition's value is "attachment", the entity gives nothing more.
+M5  text/plain gives the piece C3(type.param("charset"), transfer(first("content-transfer-encoding"), body)).
+    text/html gives the piece html_to_text of the same (11.2.6).
+M6  Every other media type gives nothing more: no bytes of it are decoded, and a message/rfc822 part is not
+    entered.
+```
+
+**Multipart bodies.** `parts(body, b)`:
+
+```text
+B1  Split body into lines at each LF (a line's bytes exclude the LF; the last line may end at the end). A
+    line is a delimiter line when it is at most LineWindow bytes and, without its trailing run of SP, HT and
+    CR bytes, equals "--" b; it is the close delimiter when it equals "--" b "--". The comparison is of
+    bytes, from the line's first byte.
+B2  A part begins after a delimiter line's LF and ends before the next delimiter or close delimiter line,
+    less that line's own break: when the part's last byte is LF it goes, and then a CR before it goes.
+B3  Lines before the first delimiter line belong to no part. At the close delimiter the parts end, and
+    whatever follows it belongs to none.
+B4  With no close delimiter, the last part runs to the end of body and keeps its last line break.
+```
+
+When a line is a delimiter of two nested multiparts, the outer one takes it, since the inner body is cut out of an outer part before it is split. A boundary that ends in SP, HT or CR, or is longer than 1,022 B, matches no line, and its multipart gives nothing.
+
+**Transfer encodings.** `transfer(e, body)`:
+
+```text
+T1  lower(trim(e)) equal to "base64" selects T2 and "quoted-printable" T3. Anything else, absent included,
+    leaves body as it is.
+T2  base64: white bytes are skipped. Alphabet bytes are taken up to the first byte that is neither, '='
+    included, where decoding ends. Each 4 give 3 bytes; at the end a last 2 give 1 and a last 3 give 2, the
+    unused bits ignored; a last 1 gives none.
+T3  quoted-printable, left to right: '=' and two hex digits are that byte. Any other '=' is a soft line
+    break, which gives nothing, when after it come at most LineWindow blank bytes and then LF, or CR LF, or
+    the end of body; all of that is consumed. Any other '=' is itself. Every other byte is itself, control
+    bytes included. No line is too long, and trailing blank bytes of a line stay.
+```
+
+#### 11.2.6 HTML to text
+
+`html_to_text(t)` is `references(tags(t))`: every tag goes first, and character references are decoded in what is left, once.
+
+**Tags.** `tags(t)` reads t from the left. A byte other than '<' is copied. At a '<':
+
+```text
+X1  "<!--" opens a comment, which ends after the first "-->" that begins 4 or more bytes past the '<'. It
+    gives nothing.
+X2  Otherwise "<!" or "<?" opens a declaration, which ends after the next '>'. It gives nothing.
+X3  Otherwise '<' followed by a letter or '/' opens a tag, which ends at the first '>' outside quotes,
+    looking from the byte after the '<': a '"' or a "'" opens quotes and the next byte equal to it closes
+    them. The tag is a closing tag when the byte after '<' is '/'.
+X4  The tag's name is lower of the alphanumeric bytes that follow the '<', or the "</", up to the first
+    byte that is not one, and may be empty. A tag whose name is a block tag gives one SP, closing or not.
+    Any other tag gives nothing.
+X5  A tag named script or style that is not a closing tag also takes its content: look, from the byte
+    after the tag's '>', for the first "</" followed by that name ignoring case and then by the end of t or
+    a byte that is not alphanumeric. That "</" opens a tag by X3, and reading resumes after its '>'. All of
+    it gives nothing, the SP of X4 too, since neither name is a block tag.
+X6  Any other '<' is copied.
+X7  A comment, declaration or tag with no end, a script or style with no end tag, and an end tag with no
+    '>' each take everything to the end of t.
+```
+
+**Character references.** `references(u)` reads u from the left. A byte other than '&' is copied. At an '&':
+
+```text
+E1  "&#", then an optional 'x' or 'X', then one or more digits (hex digits after an x), then an optional
+    ';' is a numeric reference; all of it is consumed. Its value is the digits' number, held at 0x110000
+    once it passes that. A value 0x80 to 0x9F gives the C1 table's code point; 0, 0xD800 to 0xDFFF and
+    anything past 0x10FFFF give U+FFFD; any other value gives that code point. With no digit, the '&' is
+    copied and reading goes on after it.
+E2  Otherwise take the alphanumeric bytes after the '&', as many as there are. With none, the '&' is copied
+    and reading goes on after it. Else the name is those bytes and a ';' if one follows them. If the name is
+    one of the 2,231, its one or two code points are given and all of it is consumed. Names match by exact
+    bytes: "AMP;" is one and "Amp;" is not.
+E3  Otherwise, for k = min(6, the name's length - 1) down to 2: if the name's first k bytes are one of the
+    106 names without ';', its code point is given and the '&' and those k bytes are consumed. The first k
+    that matches counts.
+E4  Otherwise the '&' and the name are copied.
+```
+
+E1 to E4 are HTML's own rule for text outside attributes, with its table whole. They are not `html.UnescapeString`: 11.1 B lists the four places that function departs from them.
+
+#### 11.2.7 Malformed input
+
+Nothing is refused and nothing is guessed. Each kind of damage has one reading, already given by a rule; this table collects them.
+
+```text
+no empty line after the header                 all header, empty body (H2)
+a header line with no ':'                      passed over; a continuation still joins it (H3, H5)
+a field or a joined value past 16,384 B        its first 16,384 B (H4, H6)
+several Subject, From, To or Cc fields         all, joined by SP before their words decode (H6)
+several Content-Type fields                    the first (H6)
+an encoded word that breaks W1-W4              text, as written
+an unknown charset, or none                    the bytes as they are; N1 maps what is not UTF-8 (C2)
+a multipart with no boundary, or 17 deep       nothing from it (M2)
+a part with no header, or no blank line        text/plain, or all header and an empty body (M1, H2)
+no close delimiter                             the last part runs to the end (B4)
+a delimiter line past 1,024 B                  not a delimiter: it is part of the body (B1)
+base64 with a byte outside its alphabet        what came before it, the last partial group decoded (T2)
+an '=' that is neither an escape nor a break   itself (T3)
+an unknown transfer encoding                   the body as it is (T1)
+a tag, comment or script with no end           everything after it is dropped (X7)
+a reference that names nothing                 text, as written (E4)
+a file with a NUL or ill-formed UTF-8 in       binary: no document; where it was indexed, a tombstone (S2;
+  its first 8,000 B                              §11.14's sniff row)
+ill-formed UTF-8 past 8,000 B                  U+FFFD a byte, at normalization (N1)
+a chunk whose key set passes 512 KiB           skipped (D6)
+```
+
+#### 11.2.8 One pass, fixed memory
+
+The rules above are written over whole values. Each was chosen so that the same function can be computed in one pass over the message with a fixed amount of memory, and SEARCH-M10-44 builds that form for app hosts. A stage reads the bytes the stage before it gives:
+
+```text
+stage                    what it keeps                                         from
+lines and delimiters     the current line's first 1,024 B; one held line       B1, B2
+                         break; up to 16 boundaries of at most 1,022 B
+header blocks            per entity, the first Content-Type, -Disposition      H4, H6
+                         and -Transfer-Encoding lines, 16,384 B each; for
+                         the message, the four joined values, 16,384 B each
+base64                   up to 3 alphabet bytes                                T2
+quoted-printable         an '=' and up to 1,024 blank bytes and a CR           T3
+charset                  the decoder's state, a few bytes                      C3
+tags                     a state, a quote byte, 8 B of a name, up to 8 B of    X1-X7
+                         a match in progress
+references               an '&' and up to 33 B                                 E1-E3
+pieces                   whether anything was given yet                        D3
+chunks                   the 256 B that two documents share                    D4
+normalizer and key set   INDEX-FORMAT.md's: a few KiB, and the key bitmap      N1-N8
+```
+
+Four points are not obvious. (1) A line is tested as a delimiter against every open boundary, outermost first, once its LF arrives or 1,024 B have passed without one; a line break is held back until the next line is known not to be a delimiter, and dropped when it is one (B2). (2) A header line of interest is kept to 16,384 B and the rest of it discarded as it arrives; every other header line is discarded whole. (3) A document's key set is collected while its text passes; at a chunk's end the next 256 B are fed to it, the document is finished, and the same 256 B begin the next, so one key bitmap is live at a time. (4) A file's title is needed by its first document, and may lie anywhere in the file: the file is in storage, so the title is found by a first read that stops at the first line with a letter or a number, which for nearly every file is its first line, and the documents are built by a second.
+
+A reference's 33 B is enough: the longest name is 32 B with its ';', a longer run can match no name whole, and E3 looks at 6 bytes. A tag's 8 B of name is enough: the longest name that matters is 10 B (blockquote, figcaption), and a longer run is compared as it arrives against the 44 names without being kept.
+
+#### 11.2.9 Exact body sizes
+
+A body is the deterministic proto3 encoding of its message, in which `pad`, the highest-numbered field of both messages, comes last. Write *content* for the length in bytes of that encoding with `pad` empty, and *size* for what the body must be: 4,016 for a request, steps × 16,384 for a reply, steps being the request's (1 to 4).
+
+```text
+Z1  A pad of L > 0 zero bytes encodes as 0x7A, L as a varint, and the L bytes: L + 2 bytes for L up to
+    127, L + 3 up to 16,383, L + 4 up to 2,097,151.
+Z2  pad_length(size, content): let gap = size - content. If 131 <= gap <= 16,386, L = gap - 3. If 16,388
+    <= gap <= 2,097,155, L = gap - 4. Otherwise there is none.
+Z3  A content is admissible for a size when 0 <= content <= size - 131 and size - content is not 16,387.
+    Builders build only admissible contents, and for those Z2 always answers.
+Z4  Caps, which builders keep and receivers check:
+      SearchRequest   query at most 512 B; at most 64 repos; a repo_id 16 B and a ref_id 16 B or empty;
+                      filters at most 768 B as encoded (QD-215); steps 1 to 4; and, with page above 0, no
+                      query, scope, repos, since_ms, until_ms, filters or fuzzy
+      SearchReply     at most 64 coverage rows, each with 16 B ids and a chain of at most 32 B; at most 20
+                      hits
+      SearchHit       ids and signer 16 B; locator at most 512 B; correction at most 256 B; at most 8
+                      fields, each text at most 256 B; snippet at most 200 B
+Z5  A request is built by filling its fields within Z4, taking its content, and setting pad to
+    pad_length(4,016, content) zero bytes. Within Z4 a request's content is at most 3,778 B on page 0 and
+    36 B on a later page, so it is always admissible. A search that would break a cap is not sent:
+    one whose filters pass 768 B stays on the device (QD-215), and more than 64 repos go in further
+    requests (§11.14's order row).
+Z6  A reply is built from the hits still to give, in rank order, and a function head(k) that gives the
+    reply's other fields when the first k of them are returned (status, phase, complete, checked_through_ms,
+    counts, and on page 0 the coverage rows). For k from min(20, the number to give) down to 0: take the
+    content of head(k) with those k hits; the first k whose content is admissible is the reply, padded by
+    Z2. Hits past k stay with the cursor for the next page. k = 0 is always admissible, and so is k = 1 when
+    there is a hit (11.3), so a page with a hit to give returns at least one.
+Z7  A failure after parsing is a reply of its status alone, with the version fields and, where the request
+    parsed, its search_id and page. Its content is at most 90 B, so it is admissible at every size.
+Z8  A receiver accepts a body only when all of these hold, checked in this order:
+      (a) its length is the size: 4,016 B for a request; for a reply, the steps the requester asked times
+          16,384;
+      (b) it parses as its message;
+      (c) its search_version is one this build supports;
+      (d) it holds no field this build does not know, at any depth, and marshaling the parsed message
+          deterministically gives the same bytes;
+      (e) every byte of pad is zero;
+      (f) its fields are within Z4.
+    An indexer answers a request that fails (a), (b), (d), (e) or (f) with status INVALID and one that
+    fails (c) with UNSUPPORTED_VERSION, each by Z7 at the request's steps where (b) held and steps is 1 to
+    4, and at one step otherwise. A requester treats a reply that fails (a) to (e), or that names another
+    search_id or page than it asked, as no reply: the indexer failed, and §11.14's failover row applies. For
+    (f) on a reply it drops what is past a cap and keeps the rest: hits past 20, a hit with a wrong-length
+    id or a locator past 512 B, a hit's fields past 8, and a field, snippet or correction past its length.
+```
+
+Z8 (d) is what makes (e) mean anything. Deterministic marshaling writes fields in number order, each scalar once and at its shortest, so a body that passes (d) has exactly one `pad`, at its end, and nothing else in it that the parser did not read. (c) comes before (d) so that a request of a later version, which may carry fields this build does not know, is told UNSUPPORTED_VERSION and not INVALID. Unknown status and served codes are SEARCH-M10-31's as planned: never read as OK or served.
+
+**Wire changes.** None to `search.proto`'s fields or numbers. Three comments change (11.8): `SearchHit.correction` gains "<= 256 B", `SearchCoverage.chain` "<= 32 B", and `SearchFilters` "<= 768 B encoded". §11.14's status row gains Z8 (d)'s refusal.
+
+**What others build on.** Problem 1 (merges, roll-ups and the journal) may rely on: an entry is a function of its own document; a document is a function of its path's bytes, its version's bytes and the tables of 11.2.1; a version's documents are numbered 0 to n - 1 with n = max(1, ⌈len(text) / ChunkBytes⌉), so a version with fewer chunks than the one before leaves tombstones for exactly the chunk numbers from its n up; two builds that extract one version write equal rows and key sets, so a merge never needs the text, and a host with the text checks an entry by building it. Problem 7 (remote search) may rely on Z2, Z3 and Z6 as functions, on Z7 for every failure after parsing, and on Z8's order; it owns what `head(k)` computes.
+
+### 11.3 Invariants and why they hold
+
+No part of this is concurrent: extraction and sizing are pure functions, so there is no model. The proofs are arguments over the rules, and the evidence is vectors, fuzzing against the landed code and exhaustive runs of the size arithmetic against the marshaler.
+
+```text
+R1 Total       extract_file and extract_mail return for every byte string and every path, with no error; a
+               message gives at least one document
+R2 A function  their result depends on the path's bytes, the content's bytes and 11.2.1's tables alone: no
+               clock, locale, map order, integer width, build leg or library parser enters it
+R3 Bounded     time is linear in the input; the fields hold at most 3.6 times the input's bytes plus a
+               constant
+R4 One pass    the one-pass form of 11.2.8 computes the same function in fixed memory
+R5 Kept out    no byte of an entity's body that M4 or M6 stops at reaches a field, and no header field but
+               Subject, From, To and Cc of the message's own block
+R6 Idempotent  N1-N5 give the same value when applied twice; nothing else is claimed to be
+
+Z-A Exact      a body built from an admissible content is exactly its size
+Z-B Requests   every request within Z4's caps is admissible
+Z-C Progress   a reply always has an admissible form, and one with at least one hit when there is a hit
+Z-D One form   a message has one body, so a pad of zeros hides nothing
+```
+
+**R1.** Every rule ends in an "otherwise" that takes input as text or drops it, and no rule can fail: H5 passes over a line, W2 leaves a word as written, C2 leaves bytes, M2 and M6 give nothing, T2 stops, T3 and X6 copy a byte, E4 copies. Every scan moves forward: each step consumes at least one byte, or, in W5, moves the position 2 on. The searches that run ahead (X1's "-->", X3's '>', X5's end tag, a line's LF) either find their mark and resume after it or end that value. A message always reaches D4, which gives one chunk even for an empty text.
+
+**R2.** Read the rules for what they take in. Bytes compare as bytes or under `lower`; the only sets of bytes are white, blank, letters, digits and the base64 alphabet. Numbers: a section is at most 999,999,999 and a numeric reference is held at 0x110000, so both fit 31 bits; everything else is a length. P3 keeps pieces by name and section, the first of each counting, and P5 reads them by name and by ascending section, so no order of a map is ever read. The tables are pinned and checked: the Unicode and x/text versions at start by `indexLinkedTables` (landed), the 2,231 references and 228 labels by the vector files, the block tags by vector `x-block-list`, the 40 decoders by the `c-sweep-` vectors over one sample. C3 is the one rule defined by reference to code, x/text v0.43.0's decoders, which normalizer 1 already makes part of the format; over 3,000 random inputs each, none of the 40 returned an error.
+
+**R3.** Sizes by stage: base64 gives 3 bytes for 4 and quoted-printable never more than it takes; a charset decoder gives at most 3 bytes a byte (measured at exactly 3.00 over those random inputs, a single byte becoming U+FFFD or a three-byte character); removing tags only removes; a reference never grows except `&nLt;` and `&nGt;`, 5 bytes giving 6. So a part's text is at most 3.6 times its bytes, and a header value's at most 3 times its 16,384. Time: every stage is a scan with bounded lookahead (11.2.8's table), and the whole-value form reads a part once per multipart level around it, at most 17 times. W5's failed starts cost in all no more than the value's length, since each reads to the third '?' after it and every start holds one.
+
+**R4.** By 11.2.8's table: every rule decides on the bytes it has plus a lookahead that the table bounds, and the three unbounded lookaheads of 11.1 C are gone (H4 and H6 cap a value, B1 caps a delimiter line, T3 caps a soft break's blank run). This is argued here and not run: SEARCH-M10-44 builds the form, and its fuzz target, equality with the whole-value form on every input and every split of it into writes, is the check.
+
+**R5.** M4 and M6 return before any rule reads the body. H6 is called with seven names and no other: four for the message, three for each entity. Vectors `m-order`, `m-text-attachment`, `b-preamble-epilogue` and `h-transport-headers` carry a canary where it must not be read, and the landed `FuzzIndexExtractAttachment` keeps its claim.
+
+**R6.** SEARCH-M10-03's fuzz target holds N1-N5 idempotent over every code point and 22 million strings, with QD-256's map. Extraction is not idempotent and nothing applies it twice. N7 is not either: a document's text has doubled spaces between fields that N5 would fold, and nothing normalizes a document's text again.
+
+**Z-A.** Let gap = size - content. If 131 <= gap <= 16,386 then L = gap - 3 lies in 128 to 16,383, whose varint is two bytes, and 1 + 2 + L = gap. If 16,388 <= gap <= 2,097,155 then L = gap - 4 lies in 16,384 to 2,097,151, three bytes, and 1 + 3 + L = gap. `pad` is the last field and no other field's encoding depends on it, so the body is the content's bytes followed by those gap bytes.
+
+**Z-B.** With every field at its cap and every integer at its widest, the marshaler gives a page-0 request 3,778 B: 2,432 for 64 repos, 515 for the query, 771 for the filters, 60 for the rest. A later page is at most 36 B. Both are under 3,885 = 4,016 - 131, and no request's gap can be 16,387.
+
+**Z-C.** With 64 coverage rows and every integer at its widest, a reply without hits is at most 7,578 B, and one hit at its caps adds at most 3,248 B. So the content with no hit is at most 7,578 and with one hit at most 10,826, both under 16,253 = 16,384 - 131, the tightest size. Neither can be size - 16,387, which is at least 16,381. Z6's loop therefore ends at k >= 1 when there is a hit and at k = 0 otherwise. A failure's 90 B is admissible at every size: its gap is 16,294 or more at one step and past 16,388 at more.
+
+**Z-D.** Z8 (d) accepts a body only if marshaling its parsed message gives it back, and the marshaler has one output for a message with no unknown field. So two accepted bodies that parse alike are equal, an accepted body has one `pad` and it is the body's tail, and (e) reads every byte of it.
+
+**What was run**, on 2026-11-10 with go1.27.3 on darwin/arm64, x/text v0.43.0, against `sidecar` at c7b928f. The harness is a reference implementation written from 11.2's rules, the cases, and the size checks. It lives outside the repository, since this section changes no code; 11.6 says which task rebuilds each check as a test.
+
+```text
+vectors          360 cases through the reference: 320 messages, 40 files. 306 carry a field or a verdict written
+                 by hand before the run, and all 306 matched. The landed normalizer and the oracle's give the
+                 same text for every document of every case.
+landed index     differs from the reference on 29 vectors, each named in 11.7; equal on the other 331, the six
+                 of testdata/index/extract/ among them
+landed oracle    differs on 38: those 29 where it reads as the index does, and the 9 of 11.1 A
+completeness     the reference, switched to read as the landed index at each place 11.7 lists and nowhere
+                 else, equals indexExtractMail over 2,840,431 fuzz executions seeded with the vectors, and
+                 indexExtractFile over a 40 s run: the list of changes is whole, to that confidence
+pad              every pad length 1 to 70,000 through the marshaler: the gaps it cannot fill, 0 to 65,536, are
+                 1, 2, 130 and 16,387, and Z2 gives the marshaler's length for every other gap from 131
+rule             for each of the five sizes and every content 0 to the size: admissible implies sizable; the
+                 rule refuses 128 contents a size that a shorter pad would have sized (gaps 0 and 3 to 129)
+requests         166,725 bodies: every query length 0 to 512 with every repo count 0 to 64, with no filters and
+                 with filters of 3, 126, 127 and 768 B; each exactly 4,016 B, parsed back equal, and Z8 (d) true
+replies          60,000 seeded random replies at 1 to 4 steps with 0 to 25 hits to give: each exactly its size,
+                 Z8 (d) true, the kept hits a prefix, at least one kept whenever there was one; 1,058 held hits
+                 back
+the gap          replies built to sit on it: 6 hits of 16,381 B at two steps, 11 of 32,765 B at three, 17 of
+                 49,149 B at four; each is built with one hit fewer, and with one more when one more is waiting
+refusals         a body of the right size with a non-zero pad byte, an unknown field, pad twice, or a varint
+                 one byte too long is refused by Z8; so is one of the wrong size
+```
+
+### 11.4 Cost
+
+Measured on the same host, one run each. "Landed" is `indexExtractMail` as it stands, which holds everything at once. The last column is what it allocated, as a multiple of the message.
+
+```text
+message                                           size        extract   normalize, keys   documents   allocated
+49 KiB, two alternatives, quoted-printable        49,401 B    0.5 ms    1.2 ms            1           9.5 x
+50 MiB, one 49 MiB base64 attachment              52.7 MB     8 ms      0.5 ms            1           0.0 x
+50 MiB, all one base64 text/plain part            53.1 MB     64 ms     1,117 ms          38          2.5 x
+2 MiB of windows-1252 HTML, every byte growing    2.1 MB      9 ms      50 ms             2           8.1 x
+```
+
+- **Time.** Normalizing and collecting keys runs at 30 to 35 MB/s here and is 10 to 20 times extraction's cost on text; an attachment costs a scan for delimiter lines, about 6 GB/s. The rules of 11.2 add nothing that shows: the reference's plain loops for base64 and quoted-printable ran the worst case at 98 MB/s, three times faster than the normalizer that follows them. A phone at a fifth of this host's speed extracts and normalizes a typical message in under 10 ms and the 50 MiB all-text message, the largest §15's limits admit, in about 6 s, at §11.15's 5 MB/s floor.
+- **Memory, whole-value form.** 2.5 to 10 times the message, as measured: the message, each part decoded, each part again in UTF-8, the joined text. For a 50 MiB message that is over 130 MB. It is fine on a desktop or the daemon (128 MiB budgets and up, §18) for the messages they meet, and it is why it must not be what an app host runs.
+- **Memory, one-pass form.** 11.2.8's table summed: the line window 1 KiB, sixteen boundaries 16 KiB, one entity's three header lines 48 KiB, the message's four joined values 64 KiB, and under 1 KiB for every other stage: at most 132 KiB, whatever the message. Beside it stand the normalizer's buffers and one key bitmap, 2 MiB and up to 1 MiB of touched words (SEARCH-M10-03, landed), and the store's 64 KiB frame. That is inside §11.15's 4 MiB for the iOS app only because one bitmap is live at a time (11.2.8, point 3). The message itself stays in storage and is read once, front to back; a file is read twice when its title is not near its start (point 4).
+- **Index size.** Extraction sets how many documents a version has: one per MiB of extracted text. Reading every alternative roughly doubles a typical message's text, and changes its key set little, since both alternatives hold the same words. The largest message, 50 MiB of single-byte text in base64, gives 37.5 MiB of bytes, up to 112 MiB of text and 108 documents, each skipped past 512 KiB of key set (D6): at most about the message's own size in index entries, as §11.14's document and sniff rows already allow.
+- **Padding.** A request is one size computation and one marshal of 4 KiB. A reply is at most 21 size computations and one marshal of 16 to 64 KiB, well under a millisecond. Z8 (d) is one more marshal and a comparison per body received. The rule gives up at most 131 B of a body, 0.8% of a step, and the gap costs one hit of one page only when a content lands on one value in 16,384.
+
+### 11.5 Failure modes
+
+```text
+malformed mail          read by 11.2.7's table. Nothing is refused, so no message is unsearchable for its
+                        damage: the index holds what a lenient reader would show. Two devices read it alike (R2).
+mail built to split     an input chosen so two honest builds disagree would turn the readers' check on an honest
+  two devices           writer. Under R2 there is none; before SEARCH-M10-42 and -43 land there are the classes
+                        of 11.1 A and B, so no index is written outside tests until both have landed.
+a cut message           its last part runs to the end (B4); base64 decodes to its last whole or partial group
+                        (T2); a last '=' is a soft break (T3); an open tag or script drops the tail (X7)
+huge parts              time and memory as 11.4. An attachment of any size costs a scan. Text is chunked (D4),
+                        and a chunk of noise is skipped (D6). The one-pass form never holds a part.
+a huge header           a field past 16,384 B is cut (H4, H6): its tail is not indexed. A header block of any
+                        length is read, each line of no interest discarded as it arrives.
+unknown charset         bytes as they are (C2): ASCII words are found, and the rest reads as U+FFFD, which N5
+                        folds into a space. No guess is made, since a guess is a table of its own to pin.
+wrong charset label     decoded as labelled: that part's text is indexed as the wrong characters and its true
+                        words are not found in it. Another alternative, if it is labelled right, is found. An
+                        HTML part's own <meta charset> is not read.
+iso-2022-kr, hz-gb-2312 the Encoding Standard decodes these to one U+FFFD. Here they pass as bytes (C2), so the
+                        ASCII in them is found.
+a writer on old rules   a build from before SEARCH-M10-42 writes entries that differ on the classes of 11.1; a
+                        reader with the text reports index_mismatch and uses its own. After the format freezes
+                        at M10's exit, any change to a rule of 11.2 is extractor 2 and a rebuild beside i1
+                        (§11.14's rebuild row).
+other tables            a build linking another Unicode or x/text writes nothing and reads status update (landed)
+a request over a cap    never sent: the search stays on the device (Z5)
+a hit over a cap        the builder leaves it out, as a receiver would (Z8 f), and counts it; building a reply
+                        cannot fail, so no small Error follows a parsed request
+a body not its one      INVALID from an indexer; no reply to a requester, which fails over (Z8)
+  encoding
+```
+
+### 11.6 The test plan
+
+**The conformance vectors**, `sidecar/testdata/index/conformance/`:
+
+```text
+mail.json      320 messages, each with its documents: fields 1, 2, 3 and 5 before normalization, the normalized
+               text, the key count and the row. By rule group, a vector counting once for each group it
+               pins: header block 28, encoded words 42, parameters 36, charsets 71 (40 of them one sample
+               through each encoding), the walk 31, multipart bodies 21, transfer encodings 32, tags 39,
+               references 26, documents and chunks 28 with file.json's.
+file.json      40 files, 35 of them on the sniff and the title: binary or text, field 4, the chunks, the row
+entities.json  the 2,231 named references
+charsets.json  the 228 labels and their 40 encodings
+sizes.json     85 rows of (size, content): sized or not, the pad's length and its varint's; and 7 whole
+               bodies, each with its content bytes and the SHA-256 of the body
+```
+
+- **How they were made.** The inputs were written by hand, one or more for each rule and each "otherwise" of 11.2, and include every example of 11.1 and the six cases `testdata/index/extract/` already pins. The outputs come from the reference implementation of 11.3. For 306 of them the expected field or verdict was also written by hand and compared.
+- **How they are kept.** They are data, with their inputs inside them. No implementation rewrites them: `SIDECAR_WRITE_VECTORS` does not reach this directory. A change to a rule of 11.2 changes this section, `INDEX-FORMAT.md`, the vectors and both implementations in one change, by hand.
+- **How both implementations pass them.** Each runs every vector through its own entry points and compares every value the vector gives: `indexExtractMail` and `indexExtractFile` with `IndexDocument.prepare` in the root (`evs_index_conformance_test.go`, SEARCH-M10-42), and `searchOracleMailDocuments` and `searchOracleFileDocuments` in `sidecartest` (`search_oracle_conformance_test.go`, SEARCH-M10-43). A value given as `len` and `sha256` is compared that way. Each also checks its own copy of the reference table against `entities.json`, name for name, and that its label lookup gives `charsets.json`'s encoding for each label and nothing for a label outside it.
+- **Every leg.** SEARCH-M10-41's runner reproduces `testdata/index/` on each leg, this directory included. The 32-bit legs matter here: P3's sections and E1's numbers are the places an integer's width could have shown.
+
+**The cross-implementation check** (SEARCH-M10-43, under `sidecar_testhooks`): `FuzzExtractOracleEqualsIndex` in `sidecartest` takes any bytes as a message and as a file, and requires the oracle's documents and the index's, reached through the seam `sidecar.TestHookIndexExtract`, to be equal: count, fields before normalization, rows. Its seeds are every vector under 64 KiB. `TestExtractOracleEqualsIndexOnCorpus` does the same over `SearchCorpus`'s generated mail and notes. The oracle's import check stays: the seam is called from the test file, never from an oracle file.
+
+**Fuzz targets.**
+
+```text
+FuzzIndexExtractMail, -File        landed: total; fields within 4 x the input + 1,024 B, which R3's 3.6 keeps;
+                                   seeds gain every vector
+FuzzIndexExtractAttachment         landed: no attachment byte in a field (R5)
+FuzzExtractOracleEqualsIndex       new: the two implementations agree on everything (R2)
+FuzzIndexExtractStreamEqualsWhole  new, SEARCH-M10-44: for any input and any split of it into writes, the
+                                   one-pass form's keys and rows equal the whole-value form's (R4)
+FuzzSearchRequestBody, -ReplyBody  §22.6's target, SEARCH-M10-31: parsing is total and memory-bounded; a body is
+                                   accepted only if Z8 holds; an accepted body marshals back to itself
+```
+
+**Unit tests for sizes** (`search_remote_wire_test.go`, SEARCH-M10-31), each a top-level test and each one of 11.3's runs:
+
+```text
+TestSearchPadFillsEveryGapButFour     every pad length 1 to 70,000 through the marshaler; Z2 against it
+TestSearchAdmissibleIsSound           every content at the five sizes
+TestSearchCapBounds                   the marshaler's sizes at the caps: 3,778, 36, 7,578, 3,248, 90
+TestSearchRequestSizes                every query length 0-512 with every repo count 0-64, filters none and at
+                                      3, 126, 127, 128 and 768 B
+TestSearchReplySizes                  seeded random replies at each step count; the kept hits a prefix
+TestSearchReplyOnTheGap               the built replies of 6, 11 and 17 hits at two, three and four steps
+TestSearchBodyIsItsOneEncoding        Z8's refusals: a non-zero pad, an unknown field, pad twice, a long varint,
+                                      fields out of order, a wrong size
+TestSearchSizeVectors                 sizes.json, row by row and body by body
+```
+
+FS-83's size cases stay as planned (0, 1 and 20 hits, TOO_BROAD, INVALID, CURSOR_EXPIRED, UNSUPPORTED_VERSION) and gain a reply on the gap at two steps. FS-76 gains the vectors' messages in its corpus (11.7).
+
+**Mutants.** Each of these, put back, must fail a vector, and the landed code is the proof that it does: the library's quoted-printable reader (`t-qp-long-line`, `t-qp-control-bytes`), its base64 (`t-base64-unpadded`), `html.UnescapeString` (`e-one-digit`, `e-overflow`, `e-two-code-points`), `strings.TrimSpace` and `strings.ToLower` (`h-value-nbsp-stays`, `h-name-ascii-case-only`), `strconv.Atoi` (`p-section-signed`), no HeaderMax (`h-cap-line`), no LineWindow (`b-line-past-window`). For sizes: a pad computed by trial that stops at a gap (`TestSearchReplyOnTheGap`), and a receiver without Z8 (d) (`TestSearchBodyIsItsOneEncoding`).
+
+### 11.7 Implementation notes, task by task
+
+Order: SEARCH-M10-42 and SEARCH-M10-43 at once, by different authors (D-TEST-14). SEARCH-M10-31 at once; it shares nothing with them. SEARCH-M10-44 after SEARCH-M10-42. SEARCH-M10-36 after SEARCH-M10-42 and SEARCH-M10-43, with its other needs. All are the data lane's. Entries for the three new tasks are in `.stack/plan/proposals/details-11-tasks.md`.
+
+**SEARCH-M10-31, remote search's wire** (held; M; its Build line changes). Build Z1 to Z8 in `search_remote_wire.go`. Proposed names: `searchRemotePadByteCount(bodyByteCount, contentByteCount int) (int, bool)` is Z2; `searchRemoteAdmissible` Z3; `searchRemoteBuildRequest` Z5; `searchRemoteBuildReply(steps int, hits []*protocol.SearchHit, head func(hitCount int) *protocol.SearchReply) ([]byte, int)` Z6, returning the body and how many hits it took; `searchRemoteFailureReply` Z7; `searchRemoteParseRequest` and `searchRemoteParseReply` Z8, the first returning the status to answer with. Landed code that changes: in `rpc_search.go`, `padSearchReply` loses its loop over five pad lengths and takes its length from `searchRemotePadByteCount`, keeping `errSearchReplySize` for a content that is not admissible; `searchInvalidReply` builds Z7's reply through it, and its output for the landed tests does not change. The plan's "a request over budget splits by repo" goes: under Z4 no request is over budget. Traps: take the content with `proto.Size` after clearing `pad`, never from a previous marshal; `head` must be a pure function of its count, since it is called up to 21 times, and it is where `checked_through_ms` is computed for the hits kept, which is the plan's own trap; apply Z8 (f)'s dropping to the builder's own hits first, so that building cannot fail; in Z8 check the version before (d); a parsed request is never answered with an Error. Tests: 11.6's.
+
+**SEARCH-M10-36, results against the oracle** (held; L; its Needs and corpus change). The schedules are as planned. Its corpus gains every conformance vector under 64 KiB as a document, at fixed days of the 200, and its query set gains terms that only the canonical reading finds: a word a soft line break joins, a name from RFC 2231 sections, a word after a 4,096 B quoted-printable line, a word behind `&#9` and one inside an unpadded base64 tail. So FS-76's "the desktop's hits checked against its own text equal the oracle's" is exercised on the inputs of 11.1, which the generated corpus never reached. It needs SEARCH-M10-42 and SEARCH-M10-43: on the landed extractors those documents fail it, at the nine vectors of 11.1 A.
+
+**SEARCH-M10-42, extractor 1 to the canonical rules** (new; M). The landed code that changes, by file:
+
+```text
+evs_index_extract_mail.go  indexSplitMailHeader: names and values by lower and trim of bytes (H5), HeaderMax
+                           (H4); the joined values cut (H6)
+                           indexDecodeCharset: the label's bytes, and utf-8 and replacement left alone (C1, C2)
+                           indexDecodeEncodedWord: base64 by W3, with no skipped CR
+                           indexParseMediaValue: lower and trim of bytes; a section is 1-9 digits (P3)
+                           indexMultipartParts: LineWindow (B1)
+                           indexTransferDecode: selects by T1 and calls the two decoders below
+                           the imports of encoding/base64, encoding/hex, mime/quotedprintable and strconv go
+evs_index_extract_transfer.go   new: indexBase64Body (T2) and indexQuotedPrintable (T3)
+evs_index_extract_html.go  indexStripHtml keeps X1-X7 as landed and ends in indexDecodeReferences (E1-E4); the
+                           import of html goes
+evs_index_extract_entities.go   new: the 2,231 names, generated from entities.json and checked against it
+evs_index_sniff.go         indexSniff: S3
+evs_index_document.go      no change of bytes: field 4 is already the title, a space and the path. Its comment
+                           and evs_index_extract_mail.go's lose "pending question".
+protocol/INDEX-FORMAT.md   Extractor 1 and Documents become 11.8's text
+```
+
+The 29 vectors the landed code fails are its list of work: `h-value-nbsp-stays`, `h-name-ascii-case-only`, `h-cap-line`, `h-cap-fold`, `h-cap-join`, `w-b-carriage-return`, `p-section-signed`, `p-section-ten-digits`, `b-line-past-window`, `t-base64-stops-at-garbage`, `t-base64-unpadded`, `t-base64-one-pad-of-two`, `t-qp-control-bytes`, `t-qp-long-line`, `t-qp-trailing-whitespace`, `t-qp-cr-without-lf`, `t-qp-padding-past-window`, `c-label-not-ascii`, `c-replacement-passes`, `c-replacement-empty`, `c-sweep-replacement`, `e-two-code-points`, `e-one-digit`, `e-one-digit-at-end`, `e-no-digits`, `e-overflow`, `s-utf-8-mark`, `s-utf-8-mark-only`, `s-utf-8-mark-twice`. Five of them (the three `h-cap-`, `t-qp-trailing-whitespace` and `s-utf-8-mark-twice`) change a field's bytes and not its entry. `testdata/index/extract/vectors.json` keeps its bytes: the reference gives the landed output for all six. It also adds the seam `TestHookIndexExtract` under `sidecar_testhooks`, which returns each document's chunk number, its five text fields as the normalizer is given them and its row's values. Traps: write the decoders as the rules read, byte loops with no regular expression and no library decoder, since the point is that nothing outside this repository can change them; the table is data, so generate it and test it against the file rather than typing it; `lower` and `trim` are of bytes everywhere, and `bytes.EqualFold`, `strings.ToLower` and `strings.TrimSpace` have no place in these files; keep `indexDropsMarks` and the normalizer untouched.
+
+**SEARCH-M10-43, the oracle's extractor to the canonical rules** (new; M; another author than SEARCH-M10-42's). `sidecartest/search_oracle_extract.go` is brought to 11.2 from this section and `INDEX-FORMAT.md`, sharing nothing with the index: its own base64, quoted-printable and reference decoders and its own generated copy of the table (`search_oracle_entities.go`). The 38 vectors it fails are the index's 29 and the 9 where it read differently: `x-script-end-name` (X5), `t-base64-nbsp-stops` (T2), `w-charset-with-space` (W2), `w-nbsp-between` and `w-cr-between` (W6), `p-sections-without-zero`, `p-sections-empty-fall-through` and `p-sections-repeat` (P3, P5), `b-unterminated` (B4). `searchOracleDocument` keeps its fields before normalization, for the cross check. It adds `search_oracle_conformance_test.go` and the cross-implementation fuzz target and corpus test of 11.6. Trap: the oracle may not take the index's table or decoders to save work; `TestSearchOracleImportsNoIndexCode` must keep failing on that.
+
+**SEARCH-M10-44, extraction in one pass** (new; L). Build 11.2.8 in new files (`evs_index_extract_stream.go` and beside it): a message is written to it front to back in pieces of any size, and it hands each finished document to the caller as its key set and row, never as text; a file is read through an `io.ReaderAt`. The whole-value functions stay, as the form the vectors and the oracle are compared with and the form the fuzz target holds this one to. Writers call the one-pass form on every host once it lands (SEARCH-M10-13 and SEARCH-M10-14, which problem 1 holds). Tests: every conformance vector, written in one piece, byte by byte and in random pieces; `FuzzIndexExtractStreamEqualsWhole`; a generated 50 MiB message of each of 11.4's shapes with the heap sampled at each document, its growth over the normalizer's own staying under 256 KiB whatever the message. Traps: hold a line break back until the next line is known not to be a delimiter; test a line against the boundaries outermost first; never buffer a part to learn its length; one key bitmap at a time, the 256 B overlap replayed into the next document.
+
+**Tasks not held that this touches.** SEARCH-M10-41's runner needs no change to reach the new directory; its report should name the 32-bit legs for it. SEARCH-M10-06 and SEARCH-M10-07 are drafted, and their extract files are finished by SEARCH-M10-42 and SEARCH-M10-43. SEARCH-M10-32 calls `searchRemoteBuildReply` with its own `head`, and answers every failure after parsing through `searchRemoteFailureReply`. The index document's other pads do not change: normalizer 1's one space each side of a field (`indexFieldPad`, N7) and a shard's keyed pad (`evs_index_pad.go`) are as landed.
+
+### 11.8 Proposed DESIGN.md text
+
+**§11.14, Documents, the extract row.** Replace the row: "extract   extractor 1, every byte of which protocol/INDEX-FORMAT.md fixes and testdata/index/conformance/ pins; it calls no library parser, reads damaged input by rule and refuses none; mail: the message's own Subject, From, To and Cc values with RFC 2047 words decoded (fields 1, 2 and 3, To before Cc), and in field 5, in the message's order and joined by one space, each part's name and each text/plain and text/html part's text, MIME-decoded (RFC 2045, 2231), HTML with its tags, scripts and styles removed and its character references decoded; every alternative is read, an attachment gives its name alone, and multiparts are read 16 deep; never transport headers, attachment bytes or base64; files: the title is the first line holding a letter or a number, without its heading marks, at most 80 B; field 4 is the title, a space and the path, and field 5 the text; records: §16.8's mapping of an entry's sealed body; every chunk of a document carries its fields 1-4; the extractor's id is in every file header".
+
+**§11.14, Documents, the sniff row.** After "or it opens with a UTF-16 byte-order mark and is decoded": "; a UTF-8 byte-order mark is dropped".
+
+**§11.14, Files and format, the determinism row.** After "no clock, randomness or library-version input": "; extraction's base64, quoted-printable, character-reference, header and multipart readings are the format's own rules, and no library's parser is part of them".
+
+**§11.14, search.proto.** `SearchFilters`: "// <= 768 B as encoded in a SearchRequest". `SearchCoverage.chain`: "// <= 32 B". `SearchHit.correction`: "// near: the corrected term, <= 256 B". The `pad` comments stand.
+
+**§11.14, the sizes row.** After "failures after parsing included;": "a body is the one deterministic encoding of its message, pad last; every other field stops at the body's size less 131 B, so pad's length takes two bytes or three, and a reply whose other fields would leave exactly 16,387 B returns the most hits, at most 20, that leave another gap;".
+
+**§11.14, the status row.** INVALID's list becomes: "(a wrong size, a body that is not its message's one encoding or holds a field this version does not know, a non-zero pad, a query over 512 B or 16 terms, over 64 repos, filters over 768 B or malformed, a later page carrying page 0's fields)". UNSUPPORTED_VERSION gains: "judged before the encoding, so a later version's fields are not INVALID".
+
+**§11.15.** A row: "Index extraction | one pass in fixed memory on app hosts: at most 132 KiB beyond normalizer 1's buffers and one key bitmap, whatever the message".
+
+**§11.17, D-EVS-44.** After "byte-exact determinism": ", extraction included: extractor 1 is specified to the byte and calls no library parser".
+
+**§11.17, D-EVS-59.** After "failures after parsing included": ", each body the one encoding of its message".
+
+**§16.10, filters.** "A remote request carries at most 768 B of encoded filters; a search with more stays on the device, with fallback reason none." (QD-215, restated where §16.10 lists them.)
+
+**§22.12, D-TEST-14.** Add: "The oracle's extractor and the index's are held to one set of conformance vectors and to equality under a fuzz target, since on damaged mail two readings of the same rule are the likeliest way for the two to differ."
+
+**§22.6.** The every-body target's `SearchRequest` and `SearchReply` line gains: "a body that is not its message's one encoding is refused". A line for extraction: "**Extractor 1** (messages and files): total; fields within four times the input; the index, the oracle and the one-pass form equal on every input; no attachment byte in a field."
+
+**§22.9's Index determinism row and §22.12's D-TEST-15.** `testdata/index/`'s list gains "extraction (mail, files, the character-reference table, the charset labels) and search body sizes".
+
+**§22.8, FS-76.** After "MIME with base64, quoted-printable and HTML parts": ", and the conformance vectors' damaged messages". **FS-83.** After "UNSUPPORTED_VERSION": ", and a two-step reply whose content sits on the 16,387 B gap".
+
+**§22.8, FI-22.** "a function of its format version, normalization version, extractor version and inputs alone".
+
+**protocol/INDEX-FORMAT.md** (SEARCH-M10-42 writes it; `design-records` need not). Its Extractor 1 and Documents sections become 11.2.1's constants and tables and the rules D1-D6, S1-S4, H1-H6, W1-W6, P1-P6, C1-C3, M1-M6, B1-B4, T1-T3, X1-X7 and E1-E4 as written here, with 11.2.7's table. Normalizer 1 gains the three clarifications under 11.2.2. "What this file adds" gains a row for each reading 11.9 lists.
+
+Nothing server-visible changes: no column, key, object family or proto field (I-18), and `search.proto`'s fields are sealed end to end.
+
+### 11.9 Owner questions
+
+Each is filed under `.stack/questions/`, and the design above is built on its recommendation.
+
+**Extraction's own decoders (`details-11-own-decoders.md`; amends QD-474).** Both implementations call the standard library for base64, quoted-printable, character references, case and whitespace, and what those calls do on damaged input is not stated and can change with a Go release. Options: (1) every such reading is a rule of the format, as 11.2 has them, with HTML's reference table in the repository: about 400 lines in each implementation and some 40 KB of table on the legs that index; a Go release can no longer change an index, and four defects go (a quoted-printable part cut at a 4,096 B line or a control byte, a base64 tail lost, `&#9` unread, two of HTML's names unread); (2) keep the calls, and make the Go release part of extractor 1's identity, recorded in headers: any release that touches those packages is a new extractor and a rebuild of every index, and the defects stay; (3) keep the calls and write down what they do today: the rules then describe one release's accidents, the 32-bit sum among them. Recommended: 1. It replaces three sentences of QD-474: references are E1-E4 and not `html.UnescapeString`; a label is read as bytes; `replacement` labels pass as bytes.
+
+**Extraction's limits (`details-11-extraction-bounds.md`).** Three readings need unbounded lookahead, so no one-pass extractor in fixed memory can be exact without a limit on each. Options: (1) HeaderMax 16,384 B and LineWindow 1,024 B as 11.2.1 has them: a header value's tail past 16 KiB is not indexed, where fields 1-3 keep 1,024 normalized bytes anyway, and a delimiter line or soft line break with over 1 KiB of trailing blanks is read as text; no honest message meets either; (2) no limits: exact on any input, and an app host then holds the largest header value or line in memory, up to the message's 50 MiB, or reads the message from storage more than once; (3) larger limits, 65,536 B and 4,096 B: the same shape at four times the memory, 520 KiB, for inputs no mailer writes. Recommended: 1.
+
+**A search body's one encoding (`details-11-body-encoding.md`).** Options: (1) a receiver refuses a body that is not the deterministic encoding of its message or that holds a field it does not know (Z8 d): the pad check is then complete and a message has one body; a later version's fields must ride a later `search_version`, which the indexer answers UNSUPPORTED_VERSION before it looks at the encoding; (2) accept whatever parses and check the `pad` it parsed: a later requester's fields 13 and 14 can reach an older indexer, which ignores them, and non-zero bytes can ride in a second `pad` or an unknown field, which only the two ends of the sealed session could use. Recommended: 1. The channel is between two devices that already share the session, so the gain is not secrecy; it is that "exactly these bytes" has one meaning, which the size tests and the fuzz target can state.
+
+**Small readings (`details-11-small-readings.md`).** Ten readings that change no D- item, listed there by number: a file's UTF-8 mark is dropped (S3); names, labels and encodings compare under ASCII `lower` and only white bytes are trimmed (11.2.1); an unterminated multipart's last part keeps its last line break (B4); of two RFC 2231 pieces of one name, kind and section the first counts, and sections that join to nothing fall through (P3, P5); a section is 1 to 9 digits (P3); base64 decodes a last partial group (T2, W3) and an encoded word's base64 skips nothing; quoted-printable passes control bytes and has no line limit (T3); a numeric reference needs one digit, `&#x;` is text and a number past U+10FFFF is U+FFFD (E1); `SearchHit.correction` is at most 256 B and `SearchCoverage.chain` at most 32 B (Z4); extractor 1 keeps its number (11.2). Options: accept all, or correct any by number. Recommended: accept all.
+
+**Existing questions this section answers.**
+
+- `search-m10-05-extractor-unstated-bytes`: its option 1, and further. Where the two differed, the index's reading is the rule in every case (X5, T2's white bytes, W2, W6, P3, P5, B4). Where both leaned on the library, the rule is 11.2's own (the first question above).
+- `search-m10-07-extractor-field-placement`: its option 1 (D2, D3, D4).
+- `plan-SEARCH-exact-body-sizes`: decided by the owner as QD-215, which stands. This section makes it exact (Z1-Z7), adds the receiver's rule (Z8) and the two caps its proof needs (Z4).
+- `plan-SEARCH-index-format-bytes` #8 (QD-474, a proposed fill): stands but for the three sentences named above. `plan-SEARCH-cherokee-fold` (QD-256), `plan-SEARCH-small-readings` #1 and #2 (QD-596, QD-387): stand, and N3 and D4 restate them.
 
 ## 12. Bridge compiler and NAT engine (§17)
 
