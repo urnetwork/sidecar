@@ -11,11 +11,11 @@
  {
   "num": 2,
   "code": "TRUST",
-  "words": 8684,
-  "code_words": 12928,
+  "words": 8705,
+  "code_words": 14858,
   "ceiling": 3000,
-  "over": 5684,
-  "over_pct": 189.5
+  "over": 5705,
+  "over_pct": 190.2
  },
  {
   "num": 3,
@@ -65,11 +65,11 @@
  {
   "num": 8,
   "code": "ACL",
-  "words": 6947,
-  "code_words": 2428,
+  "words": 6951,
+  "code_words": 2540,
   "ceiling": 3800,
-  "over": 3147,
-  "over_pct": 82.8
+  "over": 3151,
+  "over_pct": 82.9
  },
  {
   "num": 9,
@@ -84,7 +84,7 @@
   "num": 10,
   "code": "KEYS",
   "words": 9809,
-  "code_words": 6746,
+  "code_words": 6884,
   "ceiling": 4500,
   "over": 5309,
   "over_pct": 118.0
@@ -92,47 +92,47 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 20965,
-  "code_words": 37111,
+  "words": 21081,
+  "code_words": 37599,
   "ceiling": 5000,
-  "over": 15965,
-  "over_pct": 319.3
+  "over": 16081,
+  "over_pct": 321.6
  },
  {
   "num": 12,
   "code": "DNS",
-  "words": 4665,
-  "code_words": 1636,
+  "words": 4668,
+  "code_words": 1637,
   "ceiling": 3000,
-  "over": 1665,
-  "over_pct": 55.5
+  "over": 1668,
+  "over_pct": 55.6
  },
  {
   "num": 13,
   "code": "TLS",
-  "words": 6120,
+  "words": 6259,
   "code_words": 774,
   "ceiling": 3800,
-  "over": 2320,
-  "over_pct": 61.1
+  "over": 2459,
+  "over_pct": 64.7
  },
  {
   "num": 14,
   "code": "SMTP",
-  "words": 6918,
+  "words": 7028,
   "code_words": 1079,
   "ceiling": 4500,
-  "over": 2418,
-  "over_pct": 53.7
+  "over": 2528,
+  "over_pct": 56.2
  },
  {
   "num": 15,
   "code": "MAIL",
-  "words": 8321,
+  "words": 8397,
   "code_words": 1666,
   "ceiling": 4500,
-  "over": 3821,
-  "over_pct": 84.9
+  "over": 3897,
+  "over_pct": 86.6
  },
  {
   "num": 16,
@@ -146,11 +146,11 @@
  {
   "num": 17,
   "code": "BRIDGE",
-  "words": 7112,
+  "words": 7116,
   "code_words": 3180,
   "ceiling": 3800,
-  "over": 3312,
-  "over_pct": 87.2
+  "over": 3316,
+  "over_pct": 87.3
  },
  {
   "num": 18,
@@ -164,35 +164,35 @@
  {
   "num": 19,
   "code": "OPS",
-  "words": 7613,
-  "code_words": 8442,
+  "words": 7653,
+  "code_words": 8535,
   "ceiling": 3500,
-  "over": 4113,
-  "over_pct": 117.5
+  "over": 4153,
+  "over_pct": 118.7
  },
  {
   "num": 20,
   "code": "QUOTA",
-  "words": 4465,
-  "code_words": 3805,
+  "words": 4603,
+  "code_words": 3902,
   "ceiling": 2500,
-  "over": 1965,
-  "over_pct": 78.6
+  "over": 2103,
+  "over_pct": 84.1
  },
  {
   "num": 21,
   "code": "ABUSE",
-  "words": 3864,
-  "code_words": 293,
+  "words": 3929,
+  "code_words": 391,
   "ceiling": 2500,
-  "over": 1364,
-  "over_pct": 54.6
+  "over": 1429,
+  "over_pct": 57.2
  },
  {
   "num": 22,
   "code": "TEST",
   "words": 7114,
-  "code_words": 34711,
+  "code_words": 34871,
   "ceiling": 2500,
   "over": 4614,
   "over_pct": 184.6

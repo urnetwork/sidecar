@@ -5,7 +5,7 @@ Usage: python3 -I cites6.py <design_dir> <out_json>
 """
 import re, sys, json, pathlib, collections
 base = pathlib.Path(sys.argv[1])
-MAXD = 197
+MAXD = 208
 MAXSPAN = 10
 summary = []
 NUM = r'\d{1,3}(?!\d)(?:\s*[-–]\s*\d{1,3}(?!\d))?(?![.]\d)(?!:\d)(?!-\d)'

@@ -110,7 +110,7 @@ MLS epoch e --MLS-Exporter("UR evs 1.0 kek", repo_id, 32)--> KEK_e (key-encrypti
 RK_g: repo key generation g, 32 random bytes = PLAN's "session key"; cause_g ∈ {remove, request, schedule}
 GKM stores only:
   GenRotate_g = the Signed record in gen/<g> (below): C_g, parent C_{g-1}, cause, auth pin, time, holders
-                hash, GenLink_g, an optional LeafWrap, the drop key
+                hash, the wrap count, GenLink_g, an optional LeafWrap, the drop key and its expiry
   GenLink_g   = XChaCha20-Poly1305(K_link_g, RK_{g-1}; aad repo_id||g||cause_g)         the ladder
   GenWrap_e   = XChaCha20-Poly1305(KEK_e, RK_g; aad group_id||e||g)    in epoch object e, g its newest
   LeafWrap    = XChaCha20-Poly1305(KEK_e, RK_g; aad group_id||e||g)    in GenRotate_g, for every leaf of e
@@ -545,17 +545,17 @@ capacity     gkm/ holds ~15M objects, ~70 GB of each 1.92 TB drive, in year one 
 
 ```yaml
 gkm-1:
-  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator)
-  why: one accepted commit per epoch; re-forming
-  ttl: life of the repo
+  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
+  why: one accepted commit per epoch; re-forming; one repo to a group; sealing to forwarding Delegations (§10.5)
+  ttl: life of the repo, epoch 0 while epoch/0 exists; an owner marker until the repo's shred, a re-seed's form writing it again; a forwarding Delegation's reader key until 24 h after the Delegation ends or is superseded
 gkm-2:
-  sees: epoch objects; group_id, epoch, content type, generation, auth pin, size, time, uploader sidecar_id; the commit as PrivateMessage ciphertext; GenWrap
+  sees: epoch objects; group_id, epoch, content type, generation, auth pin, size, time, uploader sidecar_id; the commit as PrivateMessage ciphertext; GenWrap; at most 16 leaves, the sealed GroupInfo and the generation that seals it
   why: ordering; the write gate
   ttl: 30 d, then until every leaf acking in the last 30 d has applied it; never the newest epoch
 gkm-3:
   withdrawn: no roster delta in the clear (owner decision 59); membership shows only as sidecar ids in gkm-4, gkm-5, gkm-7 and gkm-10, as in api-7
 gkm-4:
-  sees: "KeyPackages (init and leaf HPKE keys, signature key, credential: sidecar_id, identity key, suite, not_after, admission hash, signature); claims (group, claimer, target); ReaderKeys (owner decision 114)"
+  sees: "KeyPackages (init and leaf HPKE keys, signature key, credential: sidecar_id, identity key and its algorithm, suite, not_after, admission hash, signature); claims (group, claimer, target); ReaderKeys (owner decision 114)"
   why: asynchronous adds; wrapped readers
   ttl: KeyPackages until claimed, or 90 d; claims 90 d; ReaderKeys until replaced or past their not_after, at most 7 d
 gkm-5:
@@ -567,11 +567,11 @@ gkm-6:
   why: offline catch-up and recovery
   ttl: as gkm-2
 gkm-7:
-  sees: key ladder; GenRotates (group, generation, parent and own commitments, cause, auth pin, time, holders hash, signer; GenLink and leaf-wrap ciphertexts; the drop public key where the kind takes deposits); GroupInfo pointers and, above 16 leaves, sealed GroupInfo; staged and late wraps (group, generation, commitment, recipient sidecar_id or delegation_id and the SHA-256 of the key sealed to, staged or late, a late one's auth pin and time, ciphertext, signer; owner decisions 114, 144, 182)
+  sees: key ladder; GenRotates (group, generation, parent and own commitments, cause, auth pin, time, holders hash, the count of its staged and recovery wraps, signer; GenLink and leaf-wrap ciphertexts; the drop public key and its expiry where the kind takes deposits); GroupInfo pointers and, above 16 leaves, sealed GroupInfo and the generation it names; staged and late wraps (group, generation, commitment, recipient sidecar_id or delegation_id and the SHA-256 of the key sealed to, staged or late, a late one's auth pin and time, ciphertext, signer; owner decisions 114, 144, 182)
   why: ladder, resync, deposits; wrapped readers
   ttl: life of the repo, a gen pack's GenRotates as gen/'s; GroupInfo until superseded; wraps until the next generation's exist, staged wraps of a lost claim 24 h, a recipient's wrap to an older key 30 d after one to a newer key exists
 gkm-8:
-  sees: recovery wraps (member_id, group_id, generation, an 8-byte prefix of the binding's Ed25519 key hash, which the authorization log already shows, HPKE ciphertext); the bindings are §7.9's RecoveryBind config records, not gkm objects
+  sees: recovery wraps (member_id, group_id, generation, the 8-byte prefix c8 of the generation's commitment, which gkm-7 shows whole, an 8-byte prefix of the binding's Ed25519 key hash, which the authorization log already shows, HPKE ciphertext); the bindings are §7.9's RecoveryBind config records, not gkm objects
   why: recovery after losing every device
   ttl: until a RecoveryRebind replaces them or the repo is deleted; staged ones of a lost claim 24 h
 gkm-9:

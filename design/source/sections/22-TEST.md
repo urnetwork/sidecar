@@ -774,7 +774,8 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             late, before the next request on its key or never, and never once taken or begun past its deadline,
             §19.6's 10 s or 11.7's earlier one for fold, copy and collection writes: D-OPS-20's settle rule, which
             StoreSettle.tla checks; each GET of a round is its own step, and a crashed instance may resume a stale
-            step after a retry), segment GC (its 25 h mark, fence, deadline and second check), the shredder, the
+            step after a retry), segment GC (the evacuation horizon, the pidx/ entries read after it and a DELETE
+            that names its object, with a first commit to a ref with no head stalled across it), the shredder, the
             folder (two at once, a removal fold run stale, duplicated or applying late, writing its markers
             If-Match), the marker collector (11.7's windows, each opening 150 ms after the last lapsed by the
             opener's clock, its DELETEs issued 15.3 s later with deadlines 50 ms before until_ms by its own clock),
@@ -1093,10 +1094,11 @@ FS-7   §11    five writers push one path from one base: one commits and the oth
               reader sees the committed version throughout, folded or in the window, across
               the losers' evacuation and a restart
 FS-8   §11    kills after a segment upload, between parts, before a seal, and between a push's FI-6,13c    T2+T3  M2-out
-              batch record and its slot PUTs; the fake clock passes 26 h and 2 d: GC and
-              evacuation reclaim every orphan, a dead push's slots included, and leave a
-              committed and an unknown commit beside them; a delayed step-7 PUT after a fence
-              write fails
+              batch record and its slot PUTs; the fake clock passes 26 h, 2 d and 3 d:
+              evacuation has dropped every dead record and its slots at 26 h and GC has
+              deleted every orphan segment at 3 d (owner decision 203), leaving a committed
+              and an unknown commit beside them; a delayed step-7 PUT after a fence write
+              fails
 FS-9   §11    a directory at its bound, built from real sealed names with nonce and tag, so    FI-1        T2     M2-out
               the 448 KiB of name table binds before the 4,096-child count (at 3,584 children
               with names under 64 B, sooner with longer ones), plus a concurrent child add,
@@ -1513,11 +1515,19 @@ FS-58  §11    a path changed in unfolded versions read, listed and CAS-checked,
               writing over the marker only 150 ms past until_ms by its clock, and a push
               based before the removal is refused by 5f's base range (owner decision 148)
 FS-59  §11    a segment uploaded; a push checked 23 h 59 min later pauses before its head CAS  FI-6        T2+T3  M2-out
-              on an idle ref; GC at 25 h raises the ref's fence, waits, checks again and
-              deletes; the push fails its CAS and answers 503 unknown, and its retry gets 409
-              SEGMENT_GONE after its fence; a re-upload of a 23.5 h old segment gets 409
-              SEGMENT_STALE; a forged or other-repo receipt is refused; the twin whose push
-              commits before the second check keeps the segment
+              on an idle ref; at 25 h GC deletes nothing; at 49 h evacuation fences the ref
+              for the push's record and drops it; the push fails its CAS and answers 503
+              unknown, and its retry gets 409 SEGMENT_GONE; GC then deletes the segment by a
+              DELETE naming its LastModified (owner decision 203); again with a push that
+              creates its ref and whose head write the store holds past 51 h: evacuation and
+              GC wait, and the write landing keeps the segment while its revert lets the
+              placeholder head fence the ref and GC delete; a creating push killed after its
+              record: a fenced placeholder, the ref listing as absent, the record and its
+              slots gone; two GC runs on one orphan with its bytes uploaded again and
+              committed between their DELETEs: the second answers 412 and the segment stays;
+              a re-upload of a 23.5 h old segment gets 409 SEGMENT_STALE; a forged or
+              other-repo receipt is refused; the twin whose push commits before evacuation
+              keeps the segment
 FS-60  §11    evacuation killed after a pack, after its pidx/ entry and before the batch       FI-1,13c    T2+T3  M2-out
               delete; a reader at each step finds every record; a pending record on an idle
               ref fenced, then dropped; a shredded repo's records dropped, a deleted repo's
@@ -2002,8 +2012,9 @@ FS-89  §11    a path of 30 versions (diff chains past two checkpoints, an era o
               only listed versions name, the head written fresh with the same oid and mode,
               history verifying with dropped rows and no alarm, export writing stubs that git
               fsck passes, diff and restore reporting dropped; its twin, a live version's
-              segment deleted by hand, alarms as a missing segment; --now deletes 25 min after
-              time_ms, not before
+              segment deleted by hand, alarms as a missing segment; --now deletes nothing
+              before evacuation's horizon has passed the drop's commit by 2 min, about 25 to
+              26 h after time_ms (owner decision 204), nor before not_before_ms + 25 min
 FS-90  §11    the job killed at each barrier (start CAS, resolve, each mark checkpoint,        FI-2,13a,27 T2+T3  M10-out
               verify, between a HEAD and its DELETE, after half the DELETEs) and resumed by
               another instance; a stale instance whose lease lapsed issuing a delayed DELETE

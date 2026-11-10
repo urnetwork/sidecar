@@ -1,6 +1,6 @@
 # Sidecar infrastructure: technical design
 
-Status: draft for peer review, revised 2026-11-04 after the first peer review (see [DESIGN-REVIEW-RESPONSE.md](DESIGN-REVIEW-RESPONSE.md)), on 2026-11-05 with the v1 additions of owner decisions [150](#od-150)-[184](#od-184) (versionless objects, the search index, CLI and MCP search, the indexer, the team directory and history drops), and on 2026-11-06 after the final meta review ([DESIGN-REVIEW-META.md](DESIGN-REVIEW-META.md)), with owner decisions [185](#od-185)-[191](#od-191), and at the implementation handoff, with owner decisions [192](#od-192)-[196](#od-196), and on 2026-11-09 with [owner decision 197](#od-197), on the apps' network extensions. The owner signed G0 on 2026-11-06 ([owner decision 193](#od-193)), and M0-M10 build on the `sidecar` branches ([owner decision 194](#od-194)); nothing has shipped.
+Status: draft for peer review, revised 2026-11-04 after the first peer review (see [DESIGN-REVIEW-RESPONSE.md](DESIGN-REVIEW-RESPONSE.md)), on 2026-11-05 with the v1 additions of owner decisions [150](#od-150)-[184](#od-184) (versionless objects, the search index, CLI and MCP search, the indexer, the team directory and history drops), and on 2026-11-06 after the final meta review ([DESIGN-REVIEW-META.md](DESIGN-REVIEW-META.md)), with owner decisions [185](#od-185)-[191](#od-191), and at the implementation handoff, with owner decisions [192](#od-192)-[196](#od-196), on 2026-11-09 with [owner decision 197](#od-197), on the apps' network extensions, and from 2026-11-10 with the build's owner answers, [owner decisions 198](#od-198) onward, as the design-records tracks fold them. The owner signed G0 on 2026-11-06 ([owner decision 193](#od-193)), and M0-M10 build on the `sidecar` branches ([owner decision 194](#od-194)); nothing has shipped.
 
 This document designs the sidecar infrastructure: the shared substrate under recURd, the private record of agent work, and under burner email, the consumer product in the URnetwork apps. It covers the new `github.com/urnetwork/sidecar` repo (the `sidecar.Sidecar` core, the sidecar subprotocol, the stdio MCP server, the `ur` CLI and the service engines); the horizontally scaled services that the server repo hosts for it (evs, gkm, sockets, dns with its dns edges, certs, tlsedge, smtpedge and mxedge), with the team-management and access-control additions; `sdk/sidecar.go`; the changes these need on connect's `sidecar` branch; and their build and deployment through sn, warp, config, vault, build, xops, mmm and the `urnetwork/minio` fork. It starts from the owner's PLAN.md (sidecar/design/PLAN.md). Out of scope: the apps, console and extension UI (only their seams are designed), harnesses and model hosting, the feedback service, recURd's record semantics beyond the X20 primitives (RECORD.md, an M0 deliverable designed separately), and prices beyond §20's tier and quota mechanics.
 
@@ -67,7 +67,7 @@ All sidecar work happens on a branch named `sidecar` in every repo it touches (o
 
 ## Owner decisions
 
-The owner answered 111 questions on 2026-11-03, after the end-to-end-encryption directive, then on 2026-11-04 14 more (entries 112-125) and 10 more (126-135), which settled every owner question that the fix rounds and the conformance pass raised; 5 entries on the storage tier (136-140); and 5 more (141-145), which answered the five owner questions that the 2026-11-04 peer review raised. That review closed the eleven Q- items left to it. The owner then corrected entry 140's record: its ~10-15 KiB of drive writes a push was a design-team estimate, unreachable when [owner decision 2](#od-2)'s head overwrite alone writes ~14 KiB, and the requirement is the PM9A3 profile itself, which the design meets at ~27-43 KiB a push, gated at 43 KiB (D-TEST-11). That decided [Q-EVS-9](#1118-open-questions), the one owner question raised while the sections were edited to the review, so no owner question was then open. The sections are edited to these answers. Where two answers disagree, owner/APPLY.md §2's supersession table and the later entries govern, and the table of [owner decisions by number](#owner-decisions-by-number) notes each case. The assembly's checks (decision citations, item status, residuals, and a grep for superseded options and for decided questions that still read as open) found no section text that contradicts a decision, except where a decision's own clauses conflict: [owner decision 114](#od-114)'s read-at-once and reap revocation do for Delegation-admitted agents, which §10.5 states as a residual. Entry 145's record was corrected on 2026-11-05 to the sections' sizing: ~490-650 pushes/s on the first set alone, ~400-450 a set once load spans clusters (batches per cluster), and five to six sets in year two. On 2026-11-05 the owner decided the four findings the second-round checks left partial (146-149: SL-N1, WR-N1, ST-N1 and AU-N2). Also on 2026-11-05 the owner named the indexer (150), set the v1 search index, versionless objects and CLI and MCP search (151-166), created the team directory (171), set no indexer by default (177, 178), and answered every owner question the v1 designs raised (167-170, 172-176, 179-184), so no owner question was then open. On 2026-11-05 and 2026-11-06, with the owner's SDK fixes and the final meta review, the owner extended the presence countersignature (185, 187, 189), kept P0 writes unlimited outside the wear bound with their excess forgiven (186, 190), and kept [owner decision 176](#od-176)'s five-page promise through accounting windows (188, 191). On 2026-11-06, at the implementation handoff, the owner ratified the countersignature on a `DelegationRevoke` that parks other devices (192), signed G0 (193), set M0-M10 to build straight through on the `sidecar` branches (194), gave D-OPS-20's MinIO build a fork of its own (195) and opened every touched repo's `sidecar` branch at M0 (196). On 2026-11-09, as the build planned the apps' integration, the owner put only IP and port forwarding in every app's VPN component, always on and self-contained, and ran Android's sidecar only while the app is open (197), amending owner decisions [87](#od-87) and [12](#od-12); designing it raised two owner questions, open below. This section lists the cross-cutting decisions, the open owner questions, what peer review closed, and every decision with the sections that implement it.
+The owner answered 111 questions on 2026-11-03, after the end-to-end-encryption directive, then on 2026-11-04 14 more (entries 112-125) and 10 more (126-135), which settled every owner question that the fix rounds and the conformance pass raised; 5 entries on the storage tier (136-140); and 5 more (141-145), which answered the five owner questions that the 2026-11-04 peer review raised. That review closed the eleven Q- items left to it. The owner then corrected entry 140's record: its ~10-15 KiB of drive writes a push was a design-team estimate, unreachable when [owner decision 2](#od-2)'s head overwrite alone writes ~14 KiB, and the requirement is the PM9A3 profile itself, which the design meets at ~27-43 KiB a push, gated at 43 KiB (D-TEST-11). That decided [Q-EVS-9](#1118-open-questions), the one owner question raised while the sections were edited to the review, so no owner question was then open. The sections are edited to these answers. Where two answers disagree, owner/APPLY.md §2's supersession table and the later entries govern, and the table of [owner decisions by number](#owner-decisions-by-number) notes each case. The assembly's checks (decision citations, item status, residuals, and a grep for superseded options and for decided questions that still read as open) found no section text that contradicts a decision, except where a decision's own clauses conflict: [owner decision 114](#od-114)'s read-at-once and reap revocation do for Delegation-admitted agents, which §10.5 states as a residual. Entry 145's record was corrected on 2026-11-05 to the sections' sizing: ~490-650 pushes/s on the first set alone, ~400-450 a set once load spans clusters (batches per cluster), and five to six sets in year two. On 2026-11-05 the owner decided the four findings the second-round checks left partial (146-149: SL-N1, WR-N1, ST-N1 and AU-N2). Also on 2026-11-05 the owner named the indexer (150), set the v1 search index, versionless objects and CLI and MCP search (151-166), created the team directory (171), set no indexer by default (177, 178), and answered every owner question the v1 designs raised (167-170, 172-176, 179-184), so no owner question was then open. On 2026-11-05 and 2026-11-06, with the owner's SDK fixes and the final meta review, the owner extended the presence countersignature (185, 187, 189), kept P0 writes unlimited outside the wear bound with their excess forgiven (186, 190), and kept [owner decision 176](#od-176)'s five-page promise through accounting windows (188, 191). On 2026-11-06, at the implementation handoff, the owner ratified the countersignature on a `DelegationRevoke` that parks other devices (192), signed G0 (193), set M0-M10 to build straight through on the `sidecar` branches (194), gave D-OPS-20's MinIO build a fork of its own (195) and opened every touched repo's `sidecar` branch at M0 (196). On 2026-11-09, as the build planned the apps' integration, the owner put only IP and port forwarding in every app's VPN component, always on and self-contained, and ran Android's sidecar only while the app is open (197), amending owner decisions [87](#od-87) and [12](#od-12); designing it raised two owner questions, open below. From 2026-11-10 the design-records tracks number the owner's answers to the build's questions as they fold them: the nightly count's shard sums (198), Team subscriptions (199), the fold's leaf places (200), gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203), the drop job's horizon (204), amending [owner decision 183](#od-183), settings in rows (205), the sweep's triggers (206), a reported URL's path (207) and the sealed abuse mailboxes (208). This section lists the cross-cutting decisions, the open owner questions, what peer review closed, and every decision with the sections that implement it.
 
 ### Cross-cutting decisions X1-X20
 
@@ -311,7 +311,7 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-180"></a>180 | 2026-11-05 | [Q-ACL-11](#815-open-questions) | The device's owner, or a tagged sidecar's sponsor, approves reach to another member's device, through `autogroup:dst-owner`, amending [owner decision 74](#od-74) for this case. | §1, §3, §7, §8, §16, §18, §22, §23 |
 | <a id="od-181"></a>181 | 2026-11-05 | [Q-MCP-9](#1614-open-questions) | Every repo a team creates is announced in the directory by default; owners can create private repos and revoke an announcement, which erases the name. | §1, §2, §3, §11, §16, §18, §22, §23 |
 | <a id="od-182"></a>182 | 2026-11-05 | [Q-KEYS-16](#1012-open-questions) | The directory is its own MLS group under the config group's leaves rule: member devices past the first 1,000 read it through wraps ([owner decision 144](#od-144)). | §1, §2, §3, §5, §6, §7, §8, §10, §11, §15, §16, §18, §19, §20, §22, §23 |
-| <a id="od-183"></a>183 | 2026-11-05 | [Q-EVS-23](#1118-open-questions) | A drop waits out a 7-day window in which any repo admin can cancel it; `now` skips the wait. | §1, §2, §5, §8, §11, §18, §20, §21, §22, §23 |
+| <a id="od-183"></a>183 | 2026-11-05 | [Q-EVS-23](#1118-open-questions) | A drop waits out a 7-day window in which any repo admin can cancel it; `now` skips the wait. Amended by [owner decision 204](#od-204): a `now` drop's deletions wait for evacuation's horizon, about 25 to 26 h. | §1, §2, §5, §8, §11, §18, §20, §21, §22, §23 |
 | <a id="od-184"></a>184 | 2026-11-05 | [Q-ABUSE-7](#2114-open-questions) | A preservation hold defers a drop's deletions silently: the drop reads and bills as finished, and nothing reveals the hold ([owner decision 93](#od-93)). | §1, §2, §5, §11, §18, §20, §21, §22, §23 |
 | <a id="od-185"></a>185 | 2026-11-05 | Presence countersignature | A `compromise` SidecarRevoke, and a KeyRevoke of a presence key, carry that key's countersignature whenever the signer registered a live presence key; api and every member device verify it. | §1, §2, §5, §6, §7, §16, §17, §18, §22, §23 |
 | <a id="od-186"></a>186 | 2026-11-05 | Write governor | P0 writes are never queued or refused; FI-14's wear bound exempts them, disclosed with P0 dashboards and alarms, amending [owner decision 140](#od-140) for P0 only. | §1, §2, §3, §7, §10, §11, §19, §20, §22, §23 |
@@ -326,6 +326,17 @@ Every entry of the owner's record (owner/DECISIONS.md), by number: 1-111 from th
 | <a id="od-195"></a>195 | 2026-11-06 | D-OPS-20 | D-OPS-20's MinIO build lives in a new `urnetwork/minio` fork, a sibling checkout with its own `sidecar` branch, keeping MinIO's AGPL source in one public place; the owner creates the GitHub repo before any push. | §3, §4, §19, §23 |
 | <a id="od-196"></a>196 | 2026-11-06 | Branch starts | A `sidecar` branch on all repos the work touches: warp's, config's, mmm's and vault's all open at M0, so §19.11 lands W5 at M0 and W2 and W8 by M4 on warp's branch. | §4, §19, §23 |
 | <a id="od-197"></a>197 | 2026-11-09 | [Q-SDK-2](#1813-open-questions), [Q-MAIL-2](#1513-open-questions) | Every app's VPN component runs the device's IP and port forwarding and nothing else of sidecar, always on and self-contained with its own forwarding key, amending [owner decision 87](#od-87); Android's sidecar runs only while the app is open, as iOS's does, amending [owner decision 12](#od-12). | §1, §2, §3, §4, §5, §6, §7, §8, §10, §11, §12, §15, §17, §18, §19, §20, §22, §23 |
+| <a id="od-198"></a>198 | 2026-11-10 | Stored count | The nightly pass's shard jobs keep per-network sums for the night in Redis `{evsn_<night>}` (48 h); a closing job writes each network's count once every shard of every metadata cluster has reported, and a night left unfinished keeps the old count. | §2, §19, §20 |
+| <a id="od-199"></a>199 | 2026-11-10 | Team billing | A `team_subscription` row (MG6) records each Team's Stripe subscription, customer, anchor and start, written at the first `invoice.paid` and ended at `customer.subscription.deleted`; only a live row is granted a period. | §2, §19, §20 |
+| <a id="od-200"></a>200 | 2026-11-10 | Path epochs | The fold records each folded version's place in its statement's change list (`leaf_part`, `leaf_index`), so evs serves the proof of a version an older path epoch wrote and the reader checks the leaf names its token. | §2 |
+| <a id="od-201"></a>201 | 2026-11-10 | Group owner | A group's first object is `gkm/<group_id>/owner` (repo and network), created If-None-Match from the token; every group route resolves through it, so no other repo's form can claim the group. | §2, §10 |
+| <a id="od-202"></a>202 | 2026-11-10 | Forwarding keys | A forwarding Delegation's row carries its reader key's SHA-256, and the 1,216 B key is the gkm object `gkm/dkey/<delegation_id>`, keeping 5,000-device rows near 2.2 MB under §8.8's 4 MiB. | §2, §10 |
+| <a id="od-203"></a>203 | 2026-11-10 | Segment GC | An unadopted segment goes once no batch is left from before its upload + 24 h + 2 min, 49 to 75 h, so GC raises no fence; evacuation fences a ref with no head by a placeholder head. | §2, §11, §19, §22 |
+| <a id="od-204"></a>204 | 2026-11-10 | Drop history | A drop job marks only once evacuation's horizon has passed each covered drop's commit by 2 min, so a `now` drop's deletions start about 25 to 26 h after it, amending [owner decision 183](#od-183)'s 25-minute fence. | §2, §11, §22 |
+| <a id="od-205"></a>205 | 2026-11-10 | Settings in rows | `self_admit` and `scim_signer` compile into `ProjectionRows.settings`, which full readers check against the head and api and the gates take, so every verifier judges a self-admission alike. | §2 |
+| <a id="od-206"></a>206 | 2026-11-10 | Versionless sweep | `AbuseHoldPass` queues a hold's end pass before it deletes `hold/`, and `sidecarctl evs purge-turn-on` queues the turn-on pass in the step that sets `format2.purge: on`. | §2, §11 |
+| <a id="od-207"></a>207 | 2026-11-06 | Abuse cases | A case keeps a reported URL's path and query until its first review ends, at most its review clock; never a reporter's address or free text but an appeal's own reason. | §2, §13, §21 |
+| <a id="od-208"></a>208 | 2026-11-06 | Abuse mailboxes | The abuse and legal-request mailboxes sit at one provider outside URnetwork's Postgres and clusters; each record is sealed to a vault-held HPKE key before it leaves api, so the provider and SES see sender, time and size. | §2, §19, §21 |
 
 ## Contents
 
@@ -678,7 +689,7 @@ An active or compelled operator keeps:
 - No fork detection without a shared pin.
 - I-10's no-policy allow-all, in product copy too ([owner decision 120](#od-120)).
 - §2.18's unaudited cryptography.
-- A head reader's trust in evs for which writer-signed version is current at its first pin, for a path it never read and, after a re-pin past §11.9's 4 MiB catch-up budget (shown as `verified since <time>`), for every path, HeadCheck confirming the pin, not those versions (§11.9).
+- A head reader's trust in evs for which writer-signed version, or a refused push's writer-signed entry that was never a version, is current at its first pin, for a path it never read and, after a re-pin past §11.9's 4 MiB catch-up budget (shown as `verified since <time>`), for every path, HeadCheck confirming the pin, not those versions (§11.9).
 - A shredded repo's statements and ciphertext in shared batches up to 26 h past key destruction (§11.12).
 - P0 safety work runs at once whatever its volume ([owner decision 186](#od-186)), so a wave of it on one metadata cluster, legal within every network's rates, holds that cluster's evacuation from when it empties the write budget's bucket until the wave ends (§11.13; [owner decision 190](#od-190)): each bound in this list that rests on hourly evacuation, the 26 h ones, stretches meanwhile (§11.21).
 - Erasure paced, at the storage limit or while spent, by each eraser's daily closure allowance, which §21 never cuts below its floor: an entry's own keys go at once, while its derived fields (`i/` entries and search-index copies) stay openable to their key holders, masked from search, for up to the wait §11.13 and §15.7 state from the erasure's closure bytes, not a fixed time per message, and longer while a ref's full erasure set holds back the erasure's CUT (§11.12's cut row); an erasure whose eraser's device is lost waits for another device that may finish it (§11.12's reconcile row; [owner decision 146](#od-146)).
@@ -692,7 +703,7 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 **The list** (the only TTL table; I-18):
 
 ```yaml
-# metadata_list.yml v9; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v10; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -723,6 +734,21 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # v9, updated 2026-11-09 for owner decision 197 (the apps' network extensions), adds api-4's forward_only mark,
 # api-7's forwarding Delegations with their sidecar and host client, and connect-1's delegations signed by a
 # forwarding key.
+# v10, updated 2026-11-10 for the build's answers (owner decisions 198-208, and the fixes the owner accepted on
+# 2026-11-06), adds api-1's cached verification flag; api-2's certified times; api-3's discovery attempt histories
+# and acme tokens; api-7's config_version, rows_byte_count and Genesis, egress and withdrawal modes, forwarding
+# reader key digests and supersessions (owner decision 202) and self_admit and scim_signer (205), its rules
+# showing only whether a rule limits ports; api-8's derived webhook signing keys; api-10's format versions and
+# canonical kinds; api-13's team_subscription (199), connected_sidecar set, lease draws up to 1 GiB and shown
+# balance floors; api-14's reported URL paths (207), reviewer ids, breaker levels, hold parts, hold passes' task
+# rows (206) and the sealed mailboxes (208); sock-1's lease positions and tombstones, sock-2's dial protocols,
+# sock-3's pair floors and lease-bound pair lives and sock-4's sweep claims; evs-4's receipt key ids and the
+# orphan and drop horizons (203, 204); evs-8's {evsc_} repo counts; evs-9's {evsn_} sums for the nightly count
+# (198); evs-10's settle bookkeeping; evs-11's change places (200); gkm-1's owner markers and forwarding reader
+# keys (201, 202), gkm-2's, gkm-4's, gkm-7's and gkm-8's wire values; tls-2's {vhk}tls: daily key; the edges'
+# stream framing; dns-1's restore, canary, NS and report-token values; smtp-4's {smg_} and {smd_} counters; and
+# mx-1's {vhk}mx: daily key. connect-1 states the contract horizon, and sock-1 drops a raw endpoint's
+# authentication mode, which api-7's rows hold.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -751,7 +777,7 @@ connect-1:
   store: transfer_contract, contract_close, contract_close_report (existing); the Redis contract-hole projection (existing)
   sees: source and destination client ids; contract ids; ProvideMode (Network, Service, FriendsAndFamily); roles, principal, source subject and source network, the contract class (control or data; §6.4) and the subject's WindowDelegation (subject, window client and key, target, expiry, share, its signer, the subject's identity key or its forwarding Delegation's key, and a share's ShareCert with its config generation, ShareSigner key and expiry, §17.9), all sealed in every mode (C13); per-party close reports (client, contract, bytes and the time each was received, a checkpoint at each idle receive-sequence exit among them), which pair the two clients; the contract-hole projection's client pairs
   why: route, authorize, settle and meter transfers; issue Service only for Find-recorded pairs (§6.10.1), and control contracts between any two admitted sidecars for witnesses (§6.4); debit relayed bytes (owner decision 10)
-  ttl: contracts expire within 60 min; paid ones (shares) reaped 7 d after payout, unpaid ones (Network, Service) at 300 d (server/model/subscription_model.go:47-52); close-report evidence 35-91 d (server/db_contract_close_evidence.go:94); projection keys with their contract, and in ops-3's bundles
+  ttl: contracts expire within 60 min; resolved ones go at the contract horizon, 35 to 91 d by its runtime control (server/model/contract_horizon_reaper.go, server.ContractRetention), from the partition cutover with their week; while the reaper is off, paid ones (shares) 7 d after payout and unpaid ones (Network, Service) at 300 d (server/model/subscription_model.go:47-52); a contract the reaper's keep rules hold stays until they clear; close-report evidence at the same horizon (server/db_contract_close_evidence_horizon.go); projection keys with their contract, and in ops-3's bundles
   owner: §6.10
 connect-2:
   service: connect relays (residents)
@@ -779,28 +805,28 @@ connect-5:
   store: none new; what connect-2's relay memory and connect-1's contract rows and close reports hold for the Network contracts, both directions, between an app host and an indexer it asks
   sees: per frame, the app host's and the indexer's client ids, size, timing and acks, every search request a 4,016 B body and every reply the requester's steps times 16,384 B, failures after parsing included, and a Ping and a Pong each minute while the app host is in the foreground; so when each "search more" and each further page runs, how many pages a search takes, and how long the indexer took to answer; from connect-1, for a pair that §6.11's bit 1 marks, its §6.10 windows, each direction's first contract created when the app host comes to the foreground, when the previous window ends while it is there, or when a search fails over to an indexer it had not warmed, and any other contract of a window created at a session re-establishment, which is at the search itself when a search finds the session lost before the next keepalive (owner decision 191), or at overflow; and one report a contract in both directions, sent at the window's end or at a suspended app's next run, of exactly 256 KiB on the window's first contract and 0 on the others (owner decisions 176, 188), so a window with up to five pages reports as one with none whatever its scheduled background, and 256 KiB plus 128 KiB steps when a sixth exchange, a second HeadCheckProof, or a stream or other RPC on a data contract overflows it; the floor itself shows api, since reports of exactly 256 KiB, or 256 KiB plus 128 KiB steps, mark the pair, that this app host's remote-search mode lets it ask that device and that the device serves search, which api-7 keeps sealed in the IndexerSet; never a query, term, filter, repo named, hit, snippet or result count, all sealed end to end (I-3, I-19)
   why: phones ask a designated indexer (owner decisions 175, 178) instead of downloading all partitions, which evs-26 would otherwise show
-  ttl: relay memory while in flight (connect-2); contract rows and close reports as connect-1 (unpaid Network contracts 300 d, close-report evidence 35-91 d)
+  ttl: relay memory while in flight (connect-2); contract rows and close reports as connect-1, at the contract horizon, 35 to 91 d, and at most 300 d while its reaper is off
   owner: §11.14
 api-1:
   service: api
   store: account, sign-in and payment tables (existing); network_idp_identity
-  sees: user id, verified email or phone, sign-in methods, IdP identities (idp_id, sub), payment methods and balances, tier, verification state (network_verified, §21.7)
+  sees: user id, verified email or phone, sign-in methods, IdP identities (idp_id, sub), payment methods and balances, tier, verification state (network_verified, §21.7), cached as 0 or 1 in api-13's {sq_<network_id>}verified for 60 s with a 5 s in-process tier, Pro's two windows (ProCacheTtl, ProLocalCacheTtl)
   why: sign-in, SSO, billing; the verification gate for public names and internet mail (owner decision 96)
   ttl: the account's life; IdP identities until removed (§7.11); existing tables also sit in the main dumps about 4 months (ops-2)
   owner: §7.6
 api-2:
   service: api, dns
   store: network (existing; network_name), network_name_reclaim (existing), network_team, dns_label
-  sees: network_id, network_name and its reclaim tombstones; the opaque label and the opt-in alias (owner decision 14), each with kind and state (live, retiring, tombstoned); team settings
+  sees: network_id, network_name and its reclaim tombstones; the opaque label and the opt-in alias (owner decision 14), each with kind and state (live, retiring, tombstoned), and dns_label.certified_time, set by certs when a chain naming the alias is issued or registered; team settings
   why: naming and routing (§12.5); takeover protection (I-14)
   ttl: labels and aliases never deleted (tombstoned), a changed alias retiring 90 d first (D-DNS-10); released names held 24 h (§7.12); team settings for the network's life (§7.5)
   owner: §12.5
 api-3:
   service: api
-  store: network_member, network_invite, network_idp, network_domain, network_scim_change
-  sees: members (member_id, user, email, role, reauth_deadline, pending JIT state); invitations (hashed token, email, role, expiry); IdP configuration (issuer, client, vault-encrypted secret); verified domains and their daily checks; SCIM changes awaiting an admin (Team v1)
-  why: sign-in, roles and SSO (§7.5, §7.6); groups, tags, device names and admissions live only in the config repo (owner decision 46)
-  ttl: members until removed; invitations until accepted or expired, at most 30 d; IdP rows until removed; domains while verified, dropped after 7 failed days; SCIM changes at most 7 d
+  store: network_member, network_invite, network_idp, network_domain, network_scim_change; Redis {address_<hash>} attempt histories (existing; the ones every Public route's limit uses, under POST /auth/sso-discover's own key prefix)
+  sees: members (member_id, user, email, role, reauth_deadline, pending JIT state); invitations (hashed token, email, role, expiry); IdP configuration (issuer, client, vault-encrypted secret); verified domains and their daily checks, with each domain's acme_token, public in the customer's CNAME (§13.8's delegated DNS-01); SCIM changes awaiting an admin (Team v1); discovery attempts per caller address hash, for 10 minutes (POST /auth/sso-discover's per-address limit, 30 in 10 minutes, keyed by the address's peppered hash; no domain or address held)
+  why: sign-in, roles and SSO (§7.5, §7.6); groups, tags, device names and admissions live only in the config repo (owner decision 46); discovery's limit bounds the IdP fetches a Public route makes api do
+  ttl: members until removed; invitations until accepted or expired, at most 30 d; IdP rows until removed; domains, with their acme_token, while verified, dropped after 7 failed days; SCIM changes at most 7 d; discovery attempt histories 10 min, a family that exists today and so also sits in ops-3's bundles
   owner: §7.6
 api-4:
   service: api; connect (contract gate); taskworker (the ephemeral reaper)
@@ -826,16 +852,16 @@ api-6:
 api-7:
   service: api (verifier, token exchange) and every gate (CreateContract, sockets, tlsedge, certs, dns, smtpedge, mxedge, evs, gkm)
   store: proj/<network_id>/<n>/_ and projrows/<network_id>/<sha256>/_ (the first metadata cluster); network_acl_head; Redis {acl_<networkId>}v, {acl_<networkId>}e (owner decision 136's verified read cache, n -> AuthEntry bytes from the newest base on) and {acl_<networkId>}q (the append limiter's counters; §7.9)
-  sees: "the authorization log's signed id-only entries (position, chain digest, kind, time), whose base headers carry the config head hash, folded_through, rows hash and threshold, and rows (members with roles and their recovery bindings newest first (key hash, reason) for the membership's life, sidecar admissions with identity keys, admission, revocation and park positions, the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration (§7.9's cascade), capabilities and each member device's live_since (the config leaf rank), member or keyed tag ids, ephemeral flags, expiry and sponsors, Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends, and a forwarding Delegation's sidecar and host client id and key (owner decision 197), registered presence and SSH public keys with member and purpose, Team scope labels) and their AclRows (has_document; keyed tag and group atoms mapped to member and sidecar ids; rules with targets, actions, ports, the CIDRs of ip targets, socket token paths, public names, audiences, publish rules' application modes (http or raw) and raw link grants' client-certificate SPKI SHA-256, which a requested grant's GrantActivate also shows (§8.4, §13.7, §16.6), and expiries; request rules with approver atoms (autogroup:dst-owner among them) and counts, expiry bounds and evidence channels; repos with kind, owner member, the owner's consented sidecar ids, folded access log with its versioning lock (its rules stay sealed), each EvsShare's signer, position and expiry, and holders_shrunk_at; BridgeRows egress modes; the audit reader and its AuditOptIn); statements with their types, headers (signer's pin, nonce, expiry) and signatures, presence countersignatures with evidence and act path: scoped admissions by a member's consented device or recovery key (owner decisions 112, 126), revocations (reason, and since_n for a compromise or a leak), OwnerConfirms and AdmissionConfirms, recovery bindings and rebinds as ids (member, signer, reason, the new and replaced recovery Ed25519 keys' hashes), the rest, X-Wing key and genesis signature included, sealed, authority proposals, cosigns and vetoes, recovery-signed ones and a restored binding's admission proposals included (owner decisions 127, 149), grant activations and revocations, suspensions and unsuspensions, EvsShares, repo access-log statements, SponsorSets, key registrations, indexer designations as ids (signer, subject, scope, retire; services sealed; owner decision 150), and bridge statements as ids (kind, signer, subject, rule id, expiry; an approved route's advertiser and rules) with sealed bodies; a team directory approval's grant only as its RepoGrant, EvsShare or GrantActivate, naming no request (§16.11); api's ticks: reaped ephemeral sidecar ids and activated proposal ids; admissions under a member outside its consented ids show its parked devices (owner decision 126); together, the reach graph; each network's newest position and statement and base counts per minute and day for the append limits; the config repo itself only as evs ciphertext"
+  sees: "the authorization log's signed id-only entries (position, chain digest, kind, time), whose base headers carry the config_version, config head hash, folded_through, rows hash, rows_byte_count and threshold; the network's Genesis (its network, config repo, owner member and sidecar, the owner's identity public key and time); and rows (members with roles and their recovery bindings newest first (key hash, reason) for the membership's life, sidecar admissions with identity keys, admission, revocation and park positions, the signer and position of each admission, AdmissionConfirm, OwnerConfirm, Delegation, recovery binding and key registration (§7.9's cascade), capabilities and each member device's live_since (the config leaf rank), member or keyed tag ids, ephemeral flags, expiry and sponsors, Delegations' signing and reader public keys, tag ids, max_admits and admissions, expiry, key drops and ends, and a forwarding Delegation's sidecar and host client id and key (owner decision 197), with its reader key's digest and supersession position, never the key itself (owner decision 202), registered presence and SSH public keys with member and purpose, Team scope labels, and the id-level settings self_admit and scim_signer (owner decision 205)) and their AclRows (has_document; keyed tag and group atoms mapped to member and sidecar ids; rules with targets, actions, whether a rule limits ports (never which), socket token paths, public names, audiences, publish rules' application modes (http or raw) and raw link grants' client-certificate SPKI SHA-256, which a requested grant's GrantActivate also shows (§8.4, §13.7, §16.6), and expiries; request rules with approver atoms (autogroup:dst-owner among them) and counts, expiry bounds and evidence channels; repos with kind, owner member, the owner's consented sidecar ids, folded access log with its versioning lock (its rules stay sealed), each EvsShare's signer, position and expiry, and holders_shrunk_at; BridgeRows egress modes; the audit reader and its AuditOptIn); statements with their types, headers (signer's pin, nonce, expiry) and signatures, presence countersignatures with evidence and act path: scoped admissions by a member's consented device or recovery key (owner decisions 112, 126), revocations (reason, and since_n for a compromise or a leak), OwnerConfirms and AdmissionConfirms, recovery bindings and rebinds as ids (member, signer, reason, the new and replaced recovery Ed25519 keys' hashes), the rest, X-Wing key and genesis signature included, sealed, authority proposals, cosigns and vetoes, recovery-signed ones and a restored binding's admission proposals included (owner decisions 127, 149), grant activations and revocations, suspensions and unsuspensions, EvsShares, repo access-log statements, SponsorSets, key registrations, indexer designations as ids (signer, subject, scope, retire; services sealed; owner decision 150), and bridge statements as ids (kind, signer, subject, rule id, expiry; an egress statement's mode and a withdrawal's, reset or drain; an approved route's advertiser and rules) with sealed bodies; a team directory approval's grant only as its RepoGrant, EvsShare or GrantActivate, naming no request (§16.11); api's ticks: reaped ephemeral sidecar ids and activated proposal ids; admissions under a member outside its consented ids show its parked devices (owner decision 126); together, the reach graph; each network's newest position and statement and base counts per minute and day for the append limits; the config repo itself only as evs ciphertext"
   why: one order for every authorization change; server gates without policy text or names, owner consent included (owner decisions 5, 72, 126; §7.9, §8.8); the cache, written only by api after each append and checked by readers against their pins, spares cluster reads and decides nothing
   ttl: entries from §7.9's retention point, min(the previous base, the newest base's folded_through + 1), for the network's life, re-uploaded verbatim by devices after a site loss at unchanged positions (§7.9, §19.10); a network newer than both dumps at a Postgres restore takes the deleted-network path, its proj/ and projrows/ objects deleted with the last of its repos' shreds (§19.10); older entries, and rows no retained base names, 30 d after the newer base; network_acl_head with its network; {acl_}v 48 h after its last change; {acl_}e 10 min after the network's last append; {acl_}q 25 h
   owner: §7.9
 api-8:
   service: api
   store: network_admin_event, network_audit_webhook
-  sees: admin events (per-network seq, actor, action, target, result, request id, hash chain; no client IP), DNS user and key writes included; SIEM webhook endpoints and deliveries
+  sees: admin events (per-network seq, actor, action, target, result, request id, hash chain; no client IP), DNS user and key writes included; SIEM webhook endpoints and deliveries; each webhook's signing key, HMAC-SHA256 of the vault resource network_audit_webhook_key over a fixed domain string and the webhook's id, answered once when the webhook is added and never stored
   why: audit (§7.11)
-  ttl: 400 d; deliveries retried 24 h; webhook settings until removed
+  ttl: 400 d; deliveries retried 24 h; webhook settings until removed; signing keys never stored, derived again from vault and the webhook's id to sign
   owner: §7.11
 api-9:
   service: api; CreateContract
@@ -847,7 +873,7 @@ api-9:
 api-10:
   service: api and the server gates (sockets, dns, certs, tlsedge, smtpedge)
   store: memory at the gate; approval_use; inside api-7's statements
-  sees: server-gated ApprovalDecisions (approval id, request hash, payload hash, decision, uses, expiry, approver member, evidence channel (device, presence or harness), SSHSIG, evidence hash, signer key, the requester sidecar id (the bearer's own) and the approver's projection pin) with the canonical action's fields that gate already sees (host, port, audience, expiry), each carried by a GrantActivate or presented with its action; ApprovalCancels (approval id, signer); per use, in approval_use, its index, effect key (a hash, the action's Idempotency-Key), state (done or cancelled), result and time; run and agent ids, recipients and previews stay sealed
+  sees: server-gated ApprovalDecisions (format version, approval id, request hash, payload hash, decision, uses, expiry, approver member, evidence channel (device, presence or harness), SSHSIG, evidence hash, signer key, the requester sidecar id (the bearer's own) and the approver's projection pin) with the canonical action's kind, version and scope and the fields that gate already sees (host, port, audience, expiry), each carried by a GrantActivate or presented with its action; ApprovalCancels (approval id, signer); per use, in approval_use, its index, effect key (a hash, the action's Idempotency-Key), state (done or cancelled), result and time; run and agent ids, recipients and previews stay sealed
   why: server gates for outward actions, each use consumed once, in the effect's own transaction (§8.10, §16.6; owner decision 75)
   ttl: decisions in gate memory only, a requested grant's also inside its GrantActivate (api-7; §8.10); approval_use rows (ids, hashes, state and result only) 1 d after the decision's not_after; the action's admin event, where §7.11 logs one (api-8)
   owner: §8.10
@@ -862,17 +888,17 @@ api-12:
   withdrawn: bridge rules, the overlay /16, LAN prefixes and port maps live in the config repo (owner decision 5); gates see api-7's ids and egress modes
 api-13:
   service: api, taskworker; the edges (leases); evs (usage batches); CreateContract (relayed reservations)
-  store: transfer_balance.tier, network_sidecar_limit, network_quota_state, network_service_usage, service_debit_journal, service_usage_batch, stripe_meter_report (with version, attempts and next_time); Redis {sq_<network_id>}; lease reservations, and relayed sidecar contracts' reservations made at CreateContract (§20.6), in escrow's per-balance Redis reservations (existing)
-  sees: each network's tier; limit overrides (key, value, a reason citing an ops change or §21 case); quota state (stored bytes, storage_over, spent time); daily usage per network and meter (edge leases, evs transfer, relayed bytes, seats); debit journal rows (usage, balance, meter, bytes, batch, applied); usage batches (batch id, producer, window start, applied time); Stripe meter reports (network, meter, day, identifier, value, state, version, attempts, next send); rate counters, among them each erasing sidecar's closure bytes for the day (owner decision 146); edge leases (network, meter, 64 MiB reservations, 16 MiB on Community); per relayed contract its reservation, grant and settled bytes
+  store: transfer_balance.tier, network_sidecar_limit, network_quota_state, network_service_usage, service_debit_journal, service_usage_batch, stripe_meter_report (with version, attempts and next_time), team_subscription; Redis {sq_<network_id>} (rates, the connected_sidecar sorted set and the verified flag); lease reservations, and relayed sidecar contracts' reservations made at CreateContract (§20.6), in escrow's per-balance Redis reservations (existing), and {escrow_<balance_id>}approx_floor
+  sees: each network's tier; limit overrides (key, value, a reason citing an ops change or §21 case); quota state (stored bytes, storage_over, spent time); daily usage per network and meter (edge leases, evs transfer, relayed bytes, seats); debit journal rows (usage, balance, meter, bytes, batch, applied); usage batches (batch id, producer, window start, applied time); Stripe meter reports (network, meter, day, identifier, value, state, version, attempts, next send); each Team's Stripe subscription and customer ids, billing anchor, start and end (owner decision 199); rate counters, among them each erasing sidecar's closure bytes for the day (owner decision 146); every connected sidecar client, each marked client scored by its expiry ms and refreshed on the resident poll as {np_}connected is, counted by one ZCOUNT from now at enrollment and connect ({sq_<network_id>}connected_sidecar); each network's network_verified as 0 or 1 ({sq_<network_id>}verified); edge leases (network, meter, reservations of 64 MiB to 1 GiB, 16 to 256 MiB on Community); per relayed contract its reservation, grant and settled bytes; each balance's lowest credit shown in the last 2 min
   why: quotas, transfer-balance debits (owner decision 10), Team billing (owner decision 92; §20)
-  ttl: counters 48 h; daily usage and meter reports 13 months; debit rows until applied; usage batches 24 h; overrides until lifted; quota state until its network is deleted; leases and relayed reservations until closed, settled or expired
+  ttl: counters 48 h, the connected set's key refreshed to 48 h at each write; the verified flag 60 s; daily usage and meter reports 13 months; debit rows until applied; usage batches 24 h; overrides until lifted; quota state and Team subscription rows until their network is deleted; leases and relayed reservations until closed, settled or expired; a balance's shown floor 2 min, in ops-3's bundles as escrow's existing keys are
   owner: §20.14
 api-14:
   service: api (abuse role), the taskworker abuse worker
-  store: abuse_case, abuse_action, abuse_appeal, network_abuse_state, abuse_legal_hold, abuse_access_log, legal_request
-  sees: abuse cases (category, target host, label or network, join keys, reporter class), actions (kills, halts, suspensions, cap tightening) and appeals with reviewers' reasons; each network's standing; holds (network, kind, scope, case, expiry) and their copied_rows, the in-scope records that drop or are overwritten on their own, namely rows of partitions that drop whole (tls-3, smtp-3, mx-2) and the Redis soft state existing at placement (evs-8's lease fields, gkm-10's acks); legal requests (instrument, country, accounts, productions, sealing orders); every abuse-role read; reporters' third-party data only until the join (§21.8)
-  why: abuse handling, legal process and preservation (§21; owner decision 133)
-  ttl: "cases, actions and appeals 13 months after the case closes; legal requests, productions and the access log 3 years; holds, with their copied rows, until their kind's deadline: 90 d plus one 90 d renewal, or 1 year for a §2258A report (§21.9); standing only while current"
+  store: abuse_case, abuse_action, abuse_appeal, network_abuse_state, abuse_legal_hold (keyed by network, case and part), abuse_access_log, legal_request; the task tables pending_task and finished_task (existing), for each hold's end pass; the abuse and legal-request mailboxes' sealed copies, off site (§21.10)
+  sees: abuse cases (category, target host, label or network, join keys, reporter class, and a reported URL's path and query until the case's first review ends), actions (kills, halts, suspensions, cap tightening, and platform-wide breaker levels as rows with no network) and appeals with reviewers' reasons, with a reviewer id, the staff member's opaque id and never a customer's, on each read, review and appeal decision; each network's standing; holds (network, kind, scope, case, expiry) and their copied_rows, the in-scope records that drop or are overwritten on their own, namely rows of partitions that drop whole (tls-3, smtp-3, mx-2) and the Redis soft state existing at placement (evs-8's lease fields, gkm-10's acks), in parts of at most 16 MiB of compressed rows, part 0 the hold itself; for each hold it ends, its sweep pass's network, scope's repo ids and placement and end times in the pass's task rows (owner decision 206); legal requests (instrument, country, accounts, productions, sealing orders); every abuse-role read; reporters' third-party data only until the join, never a reporter's address or free text, of which only an appeal's own reason is stored (§21.8; owner decision 207); each action, lift and hold as it commits, sealed to a vault-held HPKE key before it leaves api and mailed to the abuse or the legal-request mailbox at one provider outside URnetwork's Postgres and clusters, which, as SES, sees only each record's sender, time and size (§21.10; owner decision 208)
+  why: abuse handling, legal process and preservation (§21; owner decision 133); reviewers judge the page reported; a restore re-applies what the mailboxes hold (§19.10)
+  ttl: "cases, actions and appeals 13 months after the case closes, a reported URL's path and query only until the case's first review ends, at most its review clock; legal requests, productions and the access log 3 years; holds, with their copied rows, until their kind's deadline: 90 d plus one 90 d renewal, or 1 year for a §2258A report (§21.9); a hold pass's task rows until the pass runs, then 24 h, or 7 d while its post retries, and in ops-2's main dumps about 4 months, as tables that exist today; the mailboxes' records, an action's kept as api-14's actions and a hold's until its expire_time; standing only while current"
   owner: §21.10
 api-15:
   service: api
@@ -883,31 +909,31 @@ api-15:
   owner: §8.9
 sock-1:
   service: sockets
-  store: Redis {sg_<network_id>_<h16(name)>} (listener fields m, r, i and e; version v) and its lease-ordered ZSET (suffix ix)
-  sees: network_id; the name as a token path (16 B a segment, HMAC under a key from the config repo's K_sock, owner decision 67) or, for tls/, smtp/ and ur/, in plaintext; per listener the sealed name, client_id, listen_id, protocol, version, ALPN, application mode (http or raw, and a raw endpoint's authentication mode), weight, max_streams, flags (exclusive, affinity, serving, draining), reported in-flight and issued counts, ejection state and its Signed claim (the sidecar's identity key); the group version
-  why: Find, scheduling and sampling (§9.5-§9.8)
-  ttl: 45 s lease renewed by heartbeat; ejections at most 300 s; a K_sock rotation's 10 min dual registration links old and new token paths; outside the Redis bundles (D-OPS-16)
+  store: Redis {sg_<network_id>_<h16(name)>} (listener fields m, r, i and e, and x, a removal's tombstone; version v) and its lease-ordered ZSET (suffix ix)
+  sees: network_id; the name as a token path (16 B a segment, HMAC under a key from the config repo's K_sock, owner decision 67) or, for tls/, smtp/ and ur/, in plaintext; per listener the sealed name, client_id, listen_id, protocol, version, ALPN, application mode (http or raw), weight, max_streams, flags (exclusive, affinity, serving, draining), reported in-flight and issued counts, ejection state and its Signed claim (the sidecar's identity key); per lease the listener's sidecar_id, the authorization log position it was admitted at and the set_version of the page that wrote it; for 10 min after a removal for cause (60 s after an unlisten), the listener's client_id with the position and set version of the removal; the group version
+  why: Find, scheduling and sampling (§9.5-§9.8); a tombstone refuses a later write admitted below the removal's position or from an older set
+  ttl: 45 s lease renewed by heartbeat; ejections at most 300 s; tombstones 10 min after a removal for cause or the client's removal, 60 s after an unlisten; a K_sock rotation's 10 min dual registration links old and new token paths; outside the Redis bundles (D-OPS-16)
   owner: §9.5
 sock-2:
   service: sockets
   store: memory; per-dialer fields in sock-1's hash
-  sees: each Find's dialer client and network (edges add their K client ids), token path or edge name, affinity key (tlsedge's keyed /24 or /48 hash, never stored), the authorization log position that allowed it (§7.9), chosen listeners, grant id, issued tickets and the failed tickets a retry reports; each dialer's issued share and exclusions; reported accept timeouts; per-source registration and Find rates for the control-plane bound (memory; D-SOCK-15)
+  sees: each Find's dialer client and network (edges add their K client ids), token path or edge name, a dial's protocol, minimum version and offered ALPN ids, affinity key (tlsedge's keyed /24 or /48 hash, never stored), the authorization log position that allowed it (§7.9), chosen listeners, grant id, issued tickets and the failed tickets a retry reports; each dialer's issued share and exclusions; reported accept timeouts; per-source registration and Find rates for the control-plane bound (memory; D-SOCK-15)
   why: admission, scheduling and outlier ejection (§9.6, §9.7)
   ttl: the request; tickets 30 s; dialer shares and exclusions at most 300 s; no per-dial record (D-SOCK-9)
   owner: §9.6
 sock-3:
   service: sockets writes; CreateContract reads
   store: Redis {svc_<listener_client_id>}
-  sees: Service-contract pairs, field the dialer client (an edge's platform client, or a sidecar dialing ur/), value the grant expiry
-  why: CreateContract issues Service only for a pair Find recorded (§6.10.1, C9)
-  ttl: the grant's expiry, at most 24 h (ur/ 60 min), refreshed per Find; deleted on revocation or the last edge unlisten
+  sees: Service-contract pairs, field the dialer client (an edge's platform client, or a sidecar dialing ur/), value the grant expiry; the authorization log position at which a listener's pairs were last removed, for 10 min
+  why: CreateContract issues Service only for a pair Find recorded (§6.10.1, C9); the removal's floor refuses a pair written at an older position
+  ttl: "the grant's expiry, at most 15 min past the listener's last accepted registration (ur/: 60 min, refreshed per Find); deleted on revocation or the last edge unlisten; the floor 10 min"
   owner: §9.6
 sock-4:
   service: sockets
   store: Redis {sn_<network_id>}names
-  sees: a network's registered token paths and edge names, with sealed names, for listing
-  why: GET /socket/list; clients unseal names locally (owner decision 67)
-  ttl: entries leave with their leases
+  sees: a network's registered token paths and edge names, with sealed names, for listing; the authorization log position of the network's newest revocation sweep, for 30 s
+  why: GET /socket/list; clients unseal names locally (owner decision 67); one process a network and position claims the sweep (§9.8)
+  ttl: entries leave with their leases; the sweep's claim 30 s
   owner: §9.8
 sock-5:
   service: sockets
@@ -935,14 +961,14 @@ evs-3:
   store: head/<repo>/<ref> (metadata cluster); a verified copy in Redis {evsh_<repo_id>} for 10 min (evs-24)
   sees: "the commit point; version v, chain C_v, sealed ref name, overlay base, whether a committed DELETE left it a tombstone (deleted), path epoch with its listed sources, any due epoch and a mapper's creation block with its end (block_until_ms); the authorization pin (AuthPin: projection version n and chain A_n, §7.9) and generation pin (group, generation, C_g) of the newest commit; a window of the last 64-127 versions' entries (push id, statement hash prefix, the batch place of its statement and payload, an 8-byte digest of its changed token paths, flags, one marking a push that replaced or removed versionless versions and one a DROP push; at most 255 while folds lag); the chain before the window, the newest folded version (folded_through) and the time of its last write; the fence counter, the writer's clock at the newest evacuation or GC fence (fence_ms), and any seal lease; up to 8 refusal records, each a refused push id's first 8 bytes, its statement hash's first 2, the refusal's code and when the record lapses (until: the statement's time bound plus 1 s), and the writer's clock at the newest refusal fence (refused_ms); for a refused push that would have created its ref, a placeholder head at version 0 holding only those records; on a ref holding a search index, its index_epoch, the version of its newest CUT (§11.12); the marker collection (EvsCollect: done, the removal version through which markers are collected; the latest window's through, its newest removal version, and until_ms, its end, 30 s after it opens; §11.7)"
   why: If-Match commits; readers trust only committed push ids; hints to subscribers (§11.8, §11.10); collection windows keep folds from writing over the markers taskworker is deleting, so no DELETE removes a newer entry (owner decision 148; §11.7); the DROP bit lets evs refuse pushes citing a version a drop in the window lists (owner decision 173; §11.8); refusal records keep a refusal true for every later attempt of its push id, however late it reaches evs (§11.8's outcomes); the index epoch refuses an index push built before an erasure's CUT (§11.12, §11.14)
-  ttl: the ref's life, a DELETE leaving a tombstone head and a refused creation a placeholder head, which stays as a tombstone does; a refusal record until the first head write after it lapses; older versions page into log/ (evs-14)
+  ttl: the ref's life, a DELETE leaving a tombstone head and a refused or fenced creation a placeholder head, which stays as a tombstone does; a refusal record until the first head write after it lapses; older versions page into log/ (evs-14)
   owner: §11.8
 evs-4:
   service: evs; the segment cluster
   store: seg/<repo>/<segment_id> (segment cluster)
-  sees: segment id (SHA-256 of its bytes), Padmé-padded size up to 8 MiB, 32 B public header (format, flags, repo_id, generation), uploader client and sidecar, upload time, whether it came as an erasure's closure upload (?closure=1); upload receipts (repo, segment id, padded size, upload time, uploader sidecar, whether its header is a kind-5 header), MAC'd by evs, held by the client and returned with its push; the ranges each client reads, which for the search index's files show evs-26's view; kind-5 (versionless) segments, each one record of one version of one path, its 48 B header also naming its introducing push, uploaded with a receipt or written at evacuation from a staged copy in its push's batch (evs-22), and when each is deleted, about a minute after its version's replacement commits, which the change history already dates; which kind-1 segments only executed drops' listed versions name, and when the drop's job deletes each (evs-28)
+  sees: segment id (SHA-256 of its bytes), Padmé-padded size up to 8 MiB, 32 B public header (format, flags, repo_id, generation), uploader client and sidecar, upload time, whether it came as an erasure's closure upload (?closure=1); upload receipts (repo, segment id, padded size, upload time, uploader sidecar, whether its header is a kind-5 header), MAC'd by evs under its receipt key id, held by the client and returned with its push; the ranges each client reads, which for the search index's files show evs-26's view; kind-5 (versionless) segments, each one record of one version of one path, its 48 B header also naming its introducing push, uploaded with a receipt or written at evacuation from a staged copy in its push's batch (evs-22), and when each is deleted, about a minute after its version's replacement commits, which the change history already dates; which kind-1 segments only executed drops' listed versions name, and when the drop's job deletes each (evs-28)
   why: storage, quota, GC (§11.6, §11.13)
-  ttl: "while a retained push names it, then 7 d; an upload no committed push adopted: deleted 25-49 h after its upload, once its repo's idle refs are fenced; a kind-5 segment until about a minute after the push replacing its version commits, at most ~26 h when its committing process failed (evacuation's sweep), at its marker's collection when its removing push did not list it (evs-11), or, existing at a hold's placement, until the hold ends (§11.13); a kind-1 segment that only executed drops' listed versions name, though their pushes stay: deleted after its drop's window (7 d, or about 25 min with now) once over 25 h old, unless a hold covering the repo keeps it until the hold ends or a pack until compaction, and never served once the job's delete set names it (§11.13)"
+  ttl: "while a retained push names it, then 7 d; an upload no committed push adopted: deleted 49-75 h after its upload, once evacuation has settled every batch that could adopt it (owner decision 203); a kind-5 segment until about a minute after the push replacing its version commits, at most ~26 h when its committing process failed (evacuation's sweep), at its marker's collection when its removing push did not list it (evs-11), or, existing at a hold's placement, until the hold ends (§11.13); a kind-1 segment that only executed drops' listed versions name, though their pushes stay: deleted after its drop's window (7 d, or with now about 25 to 26 h, once evacuation's horizon has passed the drop's commit by 2 min; owner decision 204) once over 25 h old, unless a hold covering the repo keeps it until the hold ends or a pack until compaction, and never served once the job's delete set names it (§11.13)"
   owner: §11.13
 evs-5:
   service: evs
@@ -967,29 +993,29 @@ evs-7:
   owner: §11.8
 evs-8:
   service: evs
-  store: Redis {evsl_<repo_id>} (holder, ref, path epoch, prefix -> expiry) and {evsl_<repo_id>}v
-  sees: per client, the repos, refs, path epochs and up to 16 token prefixes it follows
-  why: change notification (PLAN.md:55; owner decision 2)
-  ttl: 7 d after the last renewal, each lease renewed once it is over 24 h old, never on a reconnect (§11.10); soft state outside the rdb bundles, re-created by holders after a loss (owner decision 136); a hold's copy excepted (api-14)
+  store: Redis {evsl_<repo_id>} (holder, ref, path epoch, prefix -> expiry) and {evsl_<repo_id>}v; {evsc_<client_id>} (repo ids, by last subscribe or renewal ms)
+  sees: per client, the repos, refs, path epochs and up to 16 token prefixes it follows, and which repos it subscribed to or renewed in the last 7 d, with when
+  why: change notification (PLAN.md:55; owner decision 2); the per-client repo cap (§11.10)
+  ttl: 7 d after the last renewal, each lease renewed once it is over 24 h old, never on a reconnect (§11.10); {evsc_} members dropped 7 d after their last subscribe or renewal, or at a DELETE of the client's last lease on the repo, the key expiring 8 d after its last write; soft state outside the rdb bundles, re-created by holders after a loss (owner decision 136); a hold's copy of the lease fields excepted (api-14), {evsc_} needing none since the lease fields hold the same facts
   owner: §11.10
 evs-9:
-  service: evs and taskworker's drop jobs report; api stores
-  store: api-13's rows, through ServiceHost.Quota.ReportUsage
-  sees: in 60 s usage batches, transfer bytes per caller network and stored-byte deltas per repo network, a drop job's as it deletes included; the over-limit list evs reads every 5 s
+  service: evs and taskworker's drop jobs report; api stores; taskworker's nightly pass counts
+  store: api-13's rows, through ServiceHost.Quota.ReportUsage; Redis {evsn_<night>} (the nightly pass's per-shard sums)
+  sees: in 60 s usage batches, transfer bytes per caller network and stored-byte deltas per repo network, a drop job's as it deletes included; the over-limit list evs reads every 5 s; per night, each shard job's stored-byte sum per network and which shards of which metadata clusters reported, which a closing job writes as each network's count once all have (owner decision 198)
   why: soft storage quotas and transfer debits (owner decisions 2, 10; §20.6)
-  ttl: as api-13; stored bytes counted nightly by §20.7's stored rule (§11.13)
+  ttl: as api-13; stored bytes counted nightly by §20.7's stored rule (§11.13); {evsn_} 48 h, outside the rdb bundles (D-OPS-16), a night that some shard never finished, or whose sums Redis lost, leaving the old count
   owner: §11.13
 evs-10:
   service: "the file cluster (MinIO: the metadata clusters and the segment cluster); taskworker's write-budget governor"
-  store: every object in every bucket; Redis {nvb_<set>} and {nvb_<cluster>}
-  sees: every evs, gkm, place/, proj/, projrows/, rev/ and hold/ object key with its size, checksum, times and access pattern, on an NVMe metadata cluster (one 8-drive PM9A3 set at EC:4, owner decisions 116, 136-139; a repo's objects on the cluster its place/ names, owner decision 145) or the HDD segment cluster (EC:8; owner decision 116); requests come only from evs, gkm, api and taskworker over the LAN, never from clients (D-OPS-4); per metadata set, the write budget's bucket level, floored at zero, calibration, allowance and accounts, its prepaid P2 wallet, each process's 5 s report (queued P1 and P2 priced bytes, credit moved and spent, P0 bytes by kind) and the P0 figures, P0's forgiven excess among them, and liabilities §19.8 exports, and per segment cluster, its drive operations a second and measured capacity (§19.6's hdd row), all from drive counters and process totals, with no network or repo id
+  store: every object in every bucket, and D-OPS-20's settle bookkeeping on each drive (each version's xl.meta, a DELETE's copy under .minio.sys/settle/); Redis {nvb_<set>} and {nvb_<cluster>}
+  sees: every evs, gkm, place/, proj/, projrows/, rev/ and hold/ object key with its size, checksum, times and access pattern, on an NVMe metadata cluster (one 8-drive PM9A3 set at EC:4, owner decisions 116, 136-139; a repo's objects on the cluster its place/ names, owner decision 145) or the HDD segment cluster (EC:8; owner decision 116); requests come only from evs, gkm, api and taskworker over the LAN, never from clients (D-OPS-4); per metadata set, the write budget's bucket level, floored at zero, calibration, allowance and accounts, its prepaid P2 wallet, each process's 5 s report (queued P1 and P2 priced bytes, credit moved and spent, P0 bytes by kind) and the P0 figures, P0's forgiven excess among them, and liabilities §19.8 exports, and per segment cluster, its drive operations a second and measured capacity (§19.6's hdd row), all from drive counters and process totals, with no network or repo id; in each version's xl.meta its write's settle id (x-minio-internal-settle-id, the key lock's random id, linked to nothing outside the cluster), and for each DELETE what it took, ciphertext and xl.meta, in .minio.sys/settle/<id>-<hash of the key>/ on each drive, as a revert needs (§19.6's settle row)
   why: durable ciphertext storage (X13; owner decisions 18, 21, 94, 116); drive endurance (owner decision 140; §11.13)
-  ttl: each object's own row; deletes and overwrites keep no prior version (unversioned buckets); no off-site copy (owner decision 94); request logs as ops-1; {nvb_} 15 s, but the write budget's saved bucket level, wallet and counter readings 48 h after the loop's last write
+  ttl: each object's own row; deletes and overwrites keep no prior version (unversioned buckets); no off-site copy (owner decision 94); request logs as ops-1; {nvb_} 15 s, but the write budget's saved bucket level, wallet and counter readings 48 h after the loop's last write; a settle id with its version; a DELETE's settle copy from the DELETE until the sweep removes it, at least 2 min after and longer while the key is held, never past §11.12's 10 min stragglers' pass, which §19.6 checks the sweep's interval against
   owner: §19.6
 evs-11:
   service: evs; taskworker's path-epoch copy and marker collection (§11.6, §11.7)
   store: idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e (metadata cluster)
-  sees: "path index; tokens t_i = HMAC-SHA256(K_path_p, t_(i-1) ‖ name_i)[:16], so keys show the tree's shape (depth, fan-out, files per directory) and per-file change history, and one path has one token on every ref of a repo within a path epoch; each entry's up to four committed versions, folded from committed pushes (the newest with its inline body), and no pending versions (entry version, push id, base version, previous push id and committed version, layout, time, kind, padded size, versioning setting (0 kept, 1 versionless, 2 the search index's; owner decision 168), sealed fields, chain locators (kind 5, staged or not, for versionless versions) and slot ids, or an inline body up to 16 KiB); a DROP's fold leaving a path's entry only its through_version, with the drop mark {drop_id, through_version}, which path-epoch copies carry; for each path a removal at r removes, a removed directory's current-epoch entries below it included, a removed-entry marker {removing push id, r, the path's version: one past its last} (§11.7), with, for a versionless file its removing push did not list, the kind-5 segment and slot ids its collection deletes; while the head lists sources, each entry's state in its object metadata, which reads HEAD at a path's prefixes: carried (from the source it names), fresh (new to the current epoch since the cut-over) or removed (its marker); per directory a name table of child tokens, kinds, a carried row's source epoch (§11.6) and individually sealed names padded to 64 B steps; at most 4,096 children and 448 KiB of name table"
+  sees: "path index; tokens t_i = HMAC-SHA256(K_path_p, t_(i-1) ‖ name_i)[:16], so keys show the tree's shape (depth, fan-out, files per directory) and per-file change history, and one path has one token on every ref of a repo within a path epoch; each entry's up to four committed versions, folded from committed pushes (the newest with its inline body), each with the place of its change in its own statement's list (leaf_part, leaf_index; owner decision 200), and no pending versions (entry version, push id, base version, previous push id and committed version, layout, time, kind, padded size, versioning setting (0 kept, 1 versionless, 2 the search index's; owner decision 168), sealed fields, chain locators (kind 5, staged or not, for versionless versions) and slot ids, or an inline body up to 16 KiB); a DROP's fold leaving a path's entry only its through_version, with the drop mark {drop_id, through_version}, which path-epoch copies carry; for each path a removal at r removes, a removed directory's current-epoch entries below it included, a removed-entry marker {removing push id, r, the path's version: one past its last, its change's place} (§11.7), with, for a versionless file its removing push did not list, the kind-5 segment and slot ids its collection deletes; while the head lists sources, each entry's state in its object metadata, which reads HEAD at a path's prefixes: carried (from the source it names), fresh (new to the current epoch since the cut-over) or removed (its marker); per directory a name table of child tokens, kinds, a carried row's source epoch (§11.6) and individually sealed names padded to 64 B steps, with its newest folded delta's place; at most 4,096 children and 448 KiB of name table"
   why: one-round-trip head reads, sparse fetch, prefix LIST, token-prefix subscriptions (owner decision 2); markers, written If-Match (If-None-Match on a 404) only over an entry holding an older version, so no repeated, queued or late removal fold writes over a newer entry, and a creation's entry version is max(its push's effective base version, a standing removal's) + 1, an overlay's base counting its chain's base versions (§11.7), so a path's versions never restart (owner decision 148); the drop mark keeps a listed version from being cited again (owner decision 173)
   ttl: the path's life; a marker until a re-creation's fold replaces it or, once folded_through >= r + 64 (a base range past the removal, so no push based before it can commit) and the head lists no source, taskworker's nightly pass deletes it in a collection window (evs-3; §11.7); a source epoch's markers are deleted unmoved when its copy ends (§11.6); up to four folded committed versions, older ones dropping at the next fold (§11.7). Never names or cross-repo equality (K_path is per repo); holders of a K_path, a removed reader included, can test guessed names created before the next path epoch, no source-epoch token of a later name reaching the server (§11.6)
   owner: §11.7
@@ -1031,7 +1057,7 @@ evs-16:
 evs-17:
   service: evs
   store: pidx/<repo>/<ref>/<v_first>-<pack_or_parcel_id> (metadata cluster)
-  sees: a pack's or parcel's offsets for the versions and log pages it holds, the record kinds it holds, and the segment ids its records introduce
+  sees: a pack's or parcel's offsets for the versions and log pages it holds (a parcel holds no log pages), the record kinds it holds, and the segment ids its records introduce
   why: find packed or parceled history (§11.13); one entry per container, so a pack's entries never collide with its parcels'
   ttl: as its pack or parcel; a parcel's entries go with it, after its pack's entries exist (§11.13)
   owner: §11.13
@@ -1068,7 +1094,7 @@ evs-22:
 evs-23:
   service: taskworker writes; evs reads
   store: hp/<repo>/<parcel_id> (metadata cluster)
-  sees: a small repo's records and log pages older than 24 h, with their offsets
+  sees: a small repo's records older than 24 h, with their offsets; its log pages wait at log/ until a pack takes them
   why: keep small repos' aged history on NVMe until it reaches 256 KiB or 7 d, without tiny HDD objects (owner decision 136)
   ttl: until packed, 7 d after its oldest record's commit plus at most an hour; shredded with the repo
   owner: §11.13
@@ -1109,15 +1135,15 @@ evs-28:
   owner: §11.13
 gkm-1:
   service: gkm
-  store: gkm/repo/<repo_id>/<seq>; gkm/<group_id>/epoch/0 (metadata cluster)
-  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator)
-  why: one accepted commit per epoch; re-forming
-  ttl: life of the repo
+  store: gkm/repo/<repo_id>/<seq>; gkm/<group_id>/owner and gkm/<group_id>/epoch/0 (metadata cluster); gkm/dkey/<delegation_id>
+  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
+  why: one accepted commit per epoch; re-forming; one repo to a group; sealing to forwarding Delegations (§10.5)
+  ttl: life of the repo, epoch 0 while epoch/0 exists; an owner marker until the repo's shred, a re-seed's form writing it again; a forwarding Delegation's reader key until 24 h after the Delegation ends or is superseded
   owner: §10.6
 gkm-2:
   service: gkm
   store: gkm/<group_id>/epoch/<n> (metadata cluster)
-  sees: epoch objects; group_id, epoch, content type, generation, auth pin, size, time, uploader sidecar_id; the commit as PrivateMessage ciphertext; GenWrap
+  sees: epoch objects; group_id, epoch, content type, generation, auth pin, size, time, uploader sidecar_id; the commit as PrivateMessage ciphertext; GenWrap; at most 16 leaves, the sealed GroupInfo and the generation that seals it
   why: ordering; the write gate
   ttl: 30 d, then until every leaf acking in the last 30 d has applied it; never the newest epoch
   owner: §10.6
@@ -1126,7 +1152,7 @@ gkm-3:
 gkm-4:
   service: gkm
   store: gkm/kp/<sidecar_id>/<ref>, gkm/kp/<sidecar_id>/<ref>.claim, gkm/rk/<sidecar_id> (the first metadata cluster)
-  sees: "KeyPackages (init and leaf HPKE keys, signature key, credential: sidecar_id, identity key, suite, not_after, admission hash, signature); claims (group, claimer, target); ReaderKeys (owner decision 114)"
+  sees: "KeyPackages (init and leaf HPKE keys, signature key, credential: sidecar_id, identity key and its algorithm, suite, not_after, admission hash, signature); claims (group, claimer, target); ReaderKeys (owner decision 114)"
   why: asynchronous adds; wrapped readers
   ttl: KeyPackages until claimed, or 90 d; claims 90 d; ReaderKeys until replaced or past their not_after, at most 7 d
   owner: §10.6
@@ -1147,14 +1173,14 @@ gkm-6:
 gkm-7:
   service: gkm
   store: "gkm/<group_id>/gen/<g>, gkm/<group_id>/genpack/<k> (§10.16's gen packs, from §19.9's gen trigger: gen/<256k+1> to gen/<256k+256> verbatim, those gen/ objects then deleted), gkm/<group_id>/group-info, gkm/<group_id>/wrap/<g>/<c8>/<recipient>/<k8> (metadata cluster)"
-  sees: key ladder; GenRotates (group, generation, parent and own commitments, cause, auth pin, time, holders hash, signer; GenLink and leaf-wrap ciphertexts; the drop public key where the kind takes deposits); GroupInfo pointers and, above 16 leaves, sealed GroupInfo; staged and late wraps (group, generation, commitment, recipient sidecar_id or delegation_id and the SHA-256 of the key sealed to, staged or late, a late one's auth pin and time, ciphertext, signer; owner decisions 114, 144, 182)
+  sees: key ladder; GenRotates (group, generation, parent and own commitments, cause, auth pin, time, holders hash, the count of its staged and recovery wraps, signer; GenLink and leaf-wrap ciphertexts; the drop public key and its expiry where the kind takes deposits); GroupInfo pointers and, above 16 leaves, sealed GroupInfo and the generation it names; staged and late wraps (group, generation, commitment, recipient sidecar_id or delegation_id and the SHA-256 of the key sealed to, staged or late, a late one's auth pin and time, ciphertext, signer; owner decisions 114, 144, 182)
   why: ladder, resync, deposits; wrapped readers
   ttl: life of the repo, a gen pack's GenRotates as gen/'s; GroupInfo until superseded; wraps until the next generation's exist, staged wraps of a lost claim 24 h, a recipient's wrap to an older key 30 d after one to a newer key exists
   owner: §10.6
 gkm-8:
   service: gkm
   store: gkm/recovery/<member_id>/<group_id>/<g>/<c8>/<b8> (metadata cluster)
-  sees: recovery wraps (member_id, group_id, generation, an 8-byte prefix of the binding's Ed25519 key hash, which the authorization log already shows, HPKE ciphertext); the bindings are §7.9's RecoveryBind config records, not gkm objects
+  sees: recovery wraps (member_id, group_id, generation, the 8-byte prefix c8 of the generation's commitment, which gkm-7 shows whole, an 8-byte prefix of the binding's Ed25519 key hash, which the authorization log already shows, HPKE ciphertext); the bindings are §7.9's RecoveryBind config records, not gkm objects
   why: recovery after losing every device
   ttl: until a RecoveryRebind replaces them or the repo is deleted; staged ones of a lost claim 24 h
   owner: §10.6
@@ -1175,30 +1201,30 @@ gkm-10:
 tls-1:
   service: lb (stream split, port 80 redirect), tlsedge
   store: memory; a 30 s negative cache; the lb's generated custom-host split map (active custom hostnames, public through SNI and CT; §13.4)
-  sees: per TCP 443 connection (and 8443, 8883 and 5671; owner decision 121) the SNI, which the lb's ssl_preread split and tlsedge read (owner decision 34), the whole ClientHello (ALPN list, ECH presence, size), the accepting port, setup timing, record sizes and bytes per direction, the chosen listener; on port 80, the Host and request line of plaintext requests, answered with a redirect to https
+  sees: per TCP 443 connection (and 8443, 8883 and 5671; owner decision 121) the SNI, which the lb's ssl_preread split and tlsedge read (owner decision 34), the whole ClientHello (ALPN list, ECH presence, size), the accepting port, setup timing, record sizes and bytes per direction, the chosen listener; on port 80, the Host and request line of plaintext requests, answered with a redirect to https; the sidecar subprotocol's framing of each stream with a listener, its Envelope, Chunk, Error and Stream* fields (ids, codes, offsets, windows, retry times and versions), in which StreamOpen.target holds only the <net>:<name> socket or service target the edge already routes by and early_data only bytes of the connection it already carries
   why: route by SNI without terminating (X1); caps; absorb scans; no plaintext path to tlsedge (§13.4, §13.5)
   ttl: connection memory; negative cache 30 s; the lb writes no access-log line for *.<root> names (I-13); tls-3 holds the only records
   owner: §13.5
 tls-2:
   service: lb, tlsedge
-  store: memory
-  sees: visitor IP and port (PROXY v1 or v2 from the lb); per-process cap keys per /64 or /32, with /48 and /24 aggregates (HMAC under a per-process key rotated daily)
+  store: memory; Redis {vhk}tls:<yyyymmdd>, the fleet's daily visitor-hash key
+  sees: visitor IP and port (PROXY v1 or v2 from the lb); per-process cap keys per /64 or /32, with /48 and /24 aggregates (HMAC under a per-process key rotated daily); the fleet-shared daily key of tls-3's hash and Find's affinity key, 32 random bytes the day's first process creates, from which k_record and k_affinity derive by HKDF-SHA256
   why: caps (§13.9); the keyed /24 or /48 affinity key to Find (sock-2); TlsEdgeOpen.client_ip to the listener over a sealed stream
-  ttl: memory, never logged (I-13); cap keys rotate daily
+  ttl: memory, never logged (I-13); cap keys rotate daily; the daily key 25 h (SET NX EX 90000, UTC dates), outside the rdb bundles (D-OPS-16), a process that cannot reach Redis using a random key of its own for that day
   owner: §13.4
 tls-3:
   service: tlsedge
   store: tls_connection_record (hourly partitions), tls_connection_day
-  sees: connection records (network_id, host from SNI, connection_id, start, duration, bytes, a /24 or /48 hash under a daily-rotated key, I-13); daily counts per network and host
+  sees: connection records (network_id, host from SNI, connection_id, start, duration, bytes, a /24 or /48 hash, HMAC-SHA256 under k_record from tls-2's fleet-shared daily key, I-13); daily counts per network and host
   why: abuse joins by connection_id (§21.8), the keyed hash linking one visitor's connections within a day; per-host bytes (§13.6, §13.9)
-  ttl: records dropped at 24 h, after any §21.9 hold has copied out its network's rows (owner decision 133); daily counts 13 months; URnetwork can invert the hash until its key rotates
+  ttl: records dropped at 24 h, after any §21.9 hold has copied out its network's rows (owner decision 133); daily counts 13 months; URnetwork can invert the hash until its key expires, 25 h after its date begins
   owner: §13.15
 tls-4:
   service: tlsedge, api, the abuse worker
   store: network_tls_suspension; Redis {tes_<network_id>} and its trigger {tes_<network_id>}n; lease spends (api-13); the published-names list, drawn from api-7
   sees: payload bytes per network (meter tls lease spends); kill-switch entries (a host or all the network's hosts, reason, until); the published-names list, active publish grants (host, port, label or alias, audience, expiry), which §21.6 checks hourly against Web Risk
   why: billing (owner decision 10); takedown and abuse checks without inspection (owner decision 41; §13.9, §21.6)
-  ttl: lease spends as api-13; a suspension until its case lifts it or its until time passes, then deleted with its keys, the case keeping the action (api-14); a name leaves the list when its grant expires or is revoked (Community publishes at most 7 d)
+  ttl: lease spends as api-13; a suspension until its case lifts it, a downgrade's renewal lifts it (§20.7), or its until time passes, then deleted with its keys, the case keeping the action (api-14); a name leaves the list when its grant expires or is revoked (Community publishes at most 7 d)
   owner: §13.9
 cert-1:
   service: certs (taskworker), api
@@ -1216,10 +1242,10 @@ cert-2:
   owner: §13.8
 dns-1:
   service: dns (API blocks and edges)
-  store: dns_root, network_dns_zone, network_dns_record, dns_zone_journal, network_dns_custom_host, dns_custom_host_map, dns_custom_host_map_applied; Redis {dns}serial:<root>; edge snapshots, and after a reload the snapshot it replaced; a restore's incident record and admin events (api-8)
-  sees: system and user records (A, AAAA, CNAME, TXT, MX, SRV, wildcards), DKIM selectors and keys, TLSA per receiver key, CAA, null MX, direct-MX addresses, replying burners' selector records and the MX, A and AAAA copies at their labels, until the PSL listing (owner decision 79; §12.7), challenge TXT values, strong-mode probes' CAA canaries (the customer's pin plus a nonce; §12.8), custom-host maps with each custom host's CAA mode (strong or weak), full-chain check result, map version and readiness (§12.8); the map's versions and digests, and each lb interface's reported version, digest and nginx master and its route probes' results (§13.4); the sending lb addresses, listed in _spf.<root> and named in their reverse zones by PTRs under bringyour.com (owner decision 124); zone suspensions (network, reason, until) and host suspensions (network, host; §12.9); the journal of diffs; serials; each user or key write also as an admin event (api-8); after a restore, the RRsets (network_id, owner, type) that differ between an edge's replaced snapshot and the restored zone, and the custom hosts W1's regeneration adds or drops (§12.6)
+  store: dns_root (with custom_host_map_version and restore_incident_id), network_dns_zone, network_dns_record, dns_zone_journal, network_dns_custom_host, dns_custom_host_map, dns_custom_host_map_applied, dns_restore_incident, dns_canary_verdict, dns_ns; Redis {dns}serial:<root>; edge snapshots, and after a reload the snapshot it replaced; a restore's incident record and admin events (api-8)
+  sees: system and user records (A, AAAA, CNAME, TXT, MX, SRV, wildcards), DKIM selectors and keys, TLSA per receiver key, CAA, null MX, direct-MX addresses, replying burners' selector records and the MX, A and AAAA copies at their labels, until the PSL listing (owner decision 79; §12.7), challenge TXT values, strong-mode probes' CAA canaries (the customer's pin plus a nonce; §12.8), custom-host maps with each custom host's CAA mode (strong or weak), full-chain check result, map version and readiness (§12.8); the map's versions and digests, and each lb interface's reported version, digest and nginx master and its route probes' results (§13.4); the sending lb addresses, listed in _spf.<root> and named in their reverse zones by PTRs under bringyour.com (owner decision 124); zone suspensions (network, reason, until) and host suspensions (network, host; §12.9); the journal of diffs; serials; each user or key write also as an admin event (api-8); after a restore, the RRsets (network_id, owner, type) that differ between an edge's replaced snapshot and the restored zone, and the custom hosts W1's regeneration adds or drops (§12.6), and each reclaimable name's CT leaf SHA-256; each lb interface's public addresses, router flag and the health an edge derives from its probes; each monitor source's canary verdict (source, serial, ok, time), overwritten in place; each NS's state, stopped time and reason; each network's report token, public in _dmarc
   why: serve the zones and the sending addresses' reverse zones; takedown (§21); DNS data is public by nature (CONVENTIONS §0)
-  ttl: records while published, withdrawn at once when their network is deleted (§12.5); PTRs while smtpedge.yml lists their address; challenges and canaries at most 1 h; journal 7 d; custom-host map versions 7 d, and interface reports while the interface is in the lb inventory; suspensions until Restore or their until time; {dns}serial projects dns_root (§19.7); a replaced snapshot until the restore step has its diff, at most 24 h after the reload, and deleted at once after a reload that is not a restore's; a restore's lists 400 d, in its incident record as in admin events (api-8)
+  ttl: records while published, withdrawn at once when their network is deleted (§12.5); PTRs while smtpedge.yml lists their address; challenges and canaries at most 1 h; journal 7 d; custom-host map versions 7 d, and interface reports while the interface is in the lb inventory; suspensions until Restore or their until time; {dns}serial projects dns_root (§19.7); a replaced snapshot until the restore step has its diff, at most 24 h after the reload, and deleted at once after a reload that is not a restore's; a restore's lists 400 d, in its incident record as in admin events (api-8); canary verdicts overwritten in place; NS rows while dns.yml lists the NS; report tokens with their network_dns_zone row
   owner: §12.6
 dns-2:
   service: the dns edge
@@ -1231,14 +1257,14 @@ dns-2:
 smtp-1:
   service: smtpedge
   store: memory, then smtp-3
-  sees: the proven preamble (from M9, owner decision 35); recipient domain, recipient count, Message-ID, header-From domain (a network, burner or verified Team domain), DKIM selector with d=, message byte count, retry-of send id, flags (BULK, REQUIRETLS, BURNER)
+  sees: the proven preamble (from M9, owner decision 35) and its format version; recipient domain, recipient count, Message-ID, header-From domain (a network, burner or verified Team domain), DKIM selector with d=, message byte count, retry-of send id, flags (BULK, REQUIRETLS, BURNER)
   why: the send gate, halts, connection and recipient quotas (owner decision 30), MX choice, abuse joins (§14.5, §14.7)
   ttl: "connection memory, then the send record (smtp-3: recipient domain, proven counts, retry-of, a Message-ID hash); the rest only in memory (D-SMTP-10)"
   owner: §14.5
 smtp-2:
   service: smtpedge
   store: memory
-  sees: per connection the network and sidecar (from the ticket), the sending IP (one of its host's shared lb addresses, owner decision 124) and its helo_name (that address's PTR name, already public by FCrDNS), the recipient domain's MX, TLSA and A lookups, MX host and IP, banner and pre-TLS EHLO and STARTTLS replies, TLS version and suite, SNI (the MX host), the MX's certificate (TLS 1.2's in clear with its ServerKeyExchange, TLS 1.3's under the server handshake secret the sidecar discloses; E2), the DNSSEC chain, proofs π1 to π3 and, in DATA mode, one per later body part (owner decision 125), the length and timing of every client and server record it relays (client records unpadded, Z3, so each command's length, every RCPT TO's included; server records a part's public inputs, Z7), bytes, result, the self-reported SmtpOutcome; the issued send_id, X-UR-Ref and Feedback-ID (a keyed network token, constant for burners); no key that opens application data, so no MX reply's plaintext inside TLS (D-SMTP-21, D-SMTP-22)
+  sees: per connection the network and sidecar (from the ticket), the sending IP (one of its host's shared lb addresses, owner decision 124) and its helo_name (that address's PTR name, already public by FCrDNS), the recipient domain's MX, TLSA and A lookups, MX host and IP, banner and pre-TLS EHLO and STARTTLS replies, TLS version and suite, SNI (the MX host), the MX's certificate (TLS 1.2's in clear with its ServerKeyExchange, TLS 1.3's under the server handshake secret the sidecar discloses; E2), the DNSSEC chain, proofs π1 to π3 and, in DATA mode, one per later body part (owner decision 125), the length and timing of every client and server record it relays (client records unpadded, Z3, so each command's length, every RCPT TO's included; server records a part's public inputs, Z7), bytes, result, the self-reported SmtpOutcome; the issued send_id, X-UR-Ref and Feedback-ID (a keyed network token, constant for burners); the retry delay smtpedge sets from smtp-4's counters; the sidecar subprotocol's framing of each stream with the sending sidecar, its Envelope, Chunk, Error and Stream* fields (ids, codes, offsets, windows, retry times and versions), in which StreamOpen.target holds only the <net>:<name> socket or service target the edge already routes by and early_data only bytes of the connection it already carries; no key that opens application data, so no MX reply's plaintext inside TLS (D-SMTP-21, D-SMTP-22)
   why: send, verify proofs, attribute, rate-limit (§14.4, §14.5)
   ttl: connection memory; record lengths, the disclosed secret and proofs never stored (D-SMTP-10); then smtp-3, without the MX IP
   owner: §14.5
@@ -1251,15 +1277,15 @@ smtp-3:
   owner: §14.14
 smtp-4:
   service: smtpedge
-  store: Redis {smq_<networkId>}; smtp_halt; edge memory
-  sees: per network the day's connection and recipient counts and reservations, bursts and concurrency; halt flags and smtp_halt rows (network or burner label, trigger, start); Community breaker totals and per-destination-domain counters, with no network; concurrency per sending address and destination /24
+  store: Redis {smq_<networkId>}; {smg_<yyyymmddhh>} and {smg_median}, the Community total for a UTC hour and its trailing median; {smd_<hex(SHA-256(domain)[0:16])>_<yyyymmddhh>}, a destination domain's Community connections for a UTC hour; smtp_halt; edge memory
+  sees: per network the day's connection and recipient counts and reservations, bursts and concurrency; halt flags and smtp_halt rows (network or burner label, trigger, start); Community breaker totals and per-destination-domain counters, with no network and the domain only as a SHA-256 prefix, and the trailing 168 hours' median that an hourly taskworker job writes from smtp_send rows; concurrency per sending address and destination /24
   why: quotas (§14.7); halts (owner decision 37; §14.8)
-  ttl: counters 48 h; halts 24 h; smtp_halt rows 13 months (§14.14); breaker and destination counters for their hourly windows; concurrency only in memory
+  ttl: counters 48 h; halts 24 h; smtp_halt rows 13 months (§14.14); breaker and destination counters 2 h after their UTC hour starts, the median 2 h; concurrency only in memory
   owner: §14.7
 smtp-5:
   service: smtpedge (report intake)
   store: smtp_complaint (with sealed_report), smtp_dmarc_daily
-  sees: reports parsed header-only, and aggregate attachments (DMARC XML, TLS-RPT JSON, gzip) parsed under size, ratio, entity and depth bounds, each report_id counted once (§14.8); reporter, type, arrival, the attribution fields (domain, DKIM d= and s= with result, Message-ID hash, X-UR-Ref, Feedback-ID) and join result; the last-hop Received IP and time for the join only; RUA and TLS-RPT aggregates per network, day and reporter (header_from domains, burner labels included, counts and results for URnetwork's sending addresses); sealed report copies
+  sees: reports parsed header-only, and aggregate attachments (DMARC XML, TLS-RPT JSON, gzip, or a zip of one file under gzip's 8 MiB and 100:1 bounds, a second entry refused) parsed under size, ratio, entity and depth bounds, each report_id counted once (§14.8); reporter, type, arrival, the attribution fields (domain, DKIM d= and s= with result, Message-ID hash, X-UR-Ref, Feedback-ID) and join result; the last-hop Received IP and time for the join only; RUA and TLS-RPT aggregates per network, day and reporter (header_from domains, burner labels included, counts and results for URnetwork's sending addresses); sealed report copies
   why: attribution, halts and breakers (§14.8, §21.5)
   ttl: complaint rows and aggregates 13 months (§14.14); sealed copies 30 d (owner decision 78); Received IPs, other third-party IPs and bodies never stored
   owner: §14.8
@@ -1272,10 +1298,10 @@ smtp-6:
   owner: §14.6
 mx-1:
   service: mxedge (router)
-  store: memory; Redis {mxc_<HMAC_k(prefix)>}
-  sees: sender IP and port (PROXY v1), the destination interface, pre-TLS EHLO or HELO name, forward-confirmed PTR, STARTTLS, SNI (the network's mail host, an alias's or scope's, or a custom MX host, which names the network), the ClientHello (held up to 30 s for a wake), IP-listing categories from the local feed mirror, timing, size, result; cap state per sender /64 or /32, its /48 and /24 aggregates and network; any plaintext MAIL, RCPT, DATA or BDAT before STARTTLS, refused; MailIngress, which carries sender IP, EHLO, PTR and listings to the receiver sealed
+  store: memory; Redis {mxc_<HMAC_k(prefix)>} and {vhk}mx:<yyyymmdd>, the fleet's daily key k
+  sees: sender IP and port (PROXY v1), the destination interface, pre-TLS EHLO or HELO name, forward-confirmed PTR, STARTTLS, SNI (the network's mail host, an alias's or scope's, or a custom MX host, which names the network), the ClientHello (held up to 30 s for a wake), IP-listing categories from the local feed mirror, timing, size, result; cap state per sender /64 or /32, its /48 and /24 aggregates and network; any plaintext MAIL, RCPT, DATA or BDAT before STARTTLS, refused; MailIngress and its format version, which carries sender IP, EHLO, PTR and listings to the receiver sealed; the sidecar subprotocol's framing of each stream with the receiver, its Envelope, Chunk, Error and Stream* fields (ids, codes, offsets, windows, retry times and versions), in which StreamOpen.target holds only the <net>:<name> socket or service target the edge already routes by and early_data only bytes of the connection it already carries
   why: route by SNI without terminating TLS (X6); banner rejects, caps and the 451 rule (owner decisions 33, 111)
-  ttl: connection memory, caps in memory; after a closed handshake a keyed hash of the sender's /24 or /48 for 1 h under a daily key, storing no address
+  ttl: connection memory, caps in memory; after a closed handshake a keyed hash of the sender's /24 or /48 for 1 h under k, the fleet-shared daily key {vhk}mx:<yyyymmdd>, lookups trying yesterday's too, storing no address; k 25 h, outside the rdb bundles (D-OPS-16), under a key of mxedge's own so tls-3's rows and {mxc_} keys never join
   owner: §15.4
 mx-2:
   service: mxedge
@@ -1395,7 +1421,7 @@ ext-10:
 - **I-10.** With an ACL document, only a rule opens a provider's loopback, LAN, link-local or overlay addresses to Network sources ([owner decision 50](#od-50)); without one, untagged sources keep today's disclosed allow-all (connect/ip_security.go:567-569; owner decisions [105](#od-105), [120](#od-120)), minus the provider's own daemon listeners (§17.6), and tagged ones get §8.5's implicit rules. No URnetwork-run client, the hosted ProxyDevice included (server/proxy/proxy_device.go:1302), holds Network rights in a customer network.
 - **I-11.** Mail an active URnetwork could read (EX3, EX4) is labeled per message, and each sent message records its §14.4 level.
 - **I-12.** Inline packet and frame paths never block or query PostgreSQL, and fail closed (connect/CODESTYLE.md:106-107).
-- **I-13.** URLs, generated names and logs carry opaque ids, never paths, repo names, aliases, recipients, subjects, or search queries, hits or snippets; client IPs are never logged or stored in the clear; tls-3's and mx-1's keyed hashes are the only address hashes the sidecar services add, and connect-3 lists the existing connection rows' peppered ones.
+- **I-13.** URLs, generated names and logs carry opaque ids, never paths, repo names, aliases, recipients, subjects, or search queries, hits or snippets; client IPs are never logged or stored in the clear; tls-3's and mx-1's keyed hashes are the only address hashes the sidecar services add, and connect-3 and api-3 list the existing peppered ones (connection rows, and the attempt histories behind POST /auth/sso-discover's limit).
 - **I-14.** A released name routes nothing to its new owner while the old owner's certificates, MX records, mail retries or sockets may still be honored (X5).
 - **I-15.** A removal, ephemeral reaping included, revokes the party's certificate, DKIM and TLSA records and tokens and starts a new key generation in each repo where it held a key that no live Delegation still delivers (lazy rewrap, [owner decision 64](#od-64); §10.5); a Delegation-admitted agent's reap, or an ephemeral one's own `not_after`, leaves its Delegation's key reading until the key drops at DelegationRevoke, `not_after`, a revocation for any reason but reaped or a `Suspend` of one of its agents, or a compromise revocation whose cascade voids it, each of which retires that key at its position, the Delegation's other agents reading on by their own wraps unless a compromise revocation or a DelegationRevoke's since_n parks them ([owner decision 114](#od-114); §7.9, §10.5). All members see every removal; a member's also rotates path keys at once (§11.6).
 - **I-16.** Heads, manifests, MLS epochs, generations, the authorization log and the config repo carry signed monotonic versions; clients refuse lower or conflicting ones, alarm, and confirm them with a witness (D-TRUST-10). After a site loss only a repo admin's EvsReseed lowers a head, and the authorization log resumes from devices' verbatim entries at unchanged positions and digests (§7.9, §19.10).
@@ -5442,6 +5468,10 @@ ceiling(s, r, g) = true unless s is ephemeral and r is an evs: resource; then g 
                    writes, or is an EvsShare to s; so every ephemeral sidecar that hardDeny spares, never a
                    parked one, reads the config (owner decision 6) and its team's directory, and none
                    writes a config head
+ports match      = for a rule with ip CIDRs or ports, each reader's check against the policy it compiles from
+                   the sealed source (AclLocalPolicy); rows carry only whether a rule limits ports
+                   (ports_limited, 8.8), so api and the gates check ids, and readers check a requested grant's
+                   prefix against its rule
 hardDeny         = unadmitted, revoked or parked sidecar (§7.9; parked by its compromise cascade or by a
                    leaked bundle's DelegationRevoke, unlike KF2's consent park) | unapproved client (§7) |
                    suspended subject | abuse halt (§21) | quota (§20)
@@ -5465,10 +5495,15 @@ Owner decisions [3](#od-3), [5](#od-5) and [6](#od-6) settle X3 (§7.9, Q-ACL-1)
 message AclRows {
   bool has_document = 1;                  // owner decisions 50, 105
   repeated AclAtom atoms = 2;             // §7.9's keyed tag and group ids -> member_ids, sidecar_ids
-  repeated AclRule rules = 3;             // rule_id, src atoms, targets, actions, ports, expires; a
+  repeated AclRule rules = 3;             // rule_id, src atoms, targets, actions, expires; a
                                           // publish's audience, app_mode and link_spki_sha256 (8.4), the
                                           // pin in full, as a requested grant's GrantActivate shows it to
-                                          // api anyway (§16.6 AD4)
+                                          // api anyway (§16.6 AD4); ports (5) reserved: bool
+                                          // ports_limited = 11 says the rule has an ip port list, never
+                                          // which, for 8.10's legacy rule; a route rule's targets are its
+                                          // via subjects, or with no via the advertisers that
+                                          // BridgeRoute.route_rule_ids names (§17.8); CIDRs and ports stay
+                                          // in each reader's AclLocalPolicy (8.6)
   repeated AclRequestRule requests = 4;
   repeated AclRepo repos = 5;             // repo_id, kind, owner_member_id and the owner's consented
                                           // sidecar_ids (§8.5), whose consenting admission, AdmissionConfirm
@@ -5499,7 +5534,8 @@ message AclTarget {                       // exactly one kind set
   repeated bytes socket_tokens = 5;       // §9.4's token path
   bool socket_prefix = 6;                 // whole-segment prefix; finer globs project to their literal prefix
   string public_name = 7;                 // tls/ and smtp/ sockets, dns hosts
-  bytes cidr = 8; bool mail_send = 9;
+  reserved 8;                             // an ip target's CIDR, kept in AclLocalPolicy, never in rows
+  bool mail_send = 9;
 }
 ```
 
@@ -5619,7 +5655,7 @@ Server gates are coarse (who talks to whom, holds a name, fetches ciphertext) an
 
 **Contract rule** (networks with a head row): non-companion a→b needs `reach(a,b)`, companion a→b `reach(b,a)`, replacing the origin-free normalization at `:917-927`; `reach` is an active dial or route grant, sockets expanding to listeners and `ip` grants to via subjects. The gate also refuses Network contracts from §18's hosted devices (I-10), and Public ones from declared no-egress clients (§20.8) or subjects in `exits` or `none` egress mode (`ContractError_NoPermission`). With a document, providers refuse LAN, loopback, link-local and overlay destinations to Network sources no rule allows ([owner decision 50](#od-50), §17). Witness exception: any two admitted sidecars of one network, neither revoked, parked nor suspended, get a Network contract of class `control` without a reach grant; it carries only Hello, Ping, HeadCheck and its proofs and, with a sidecar that serves remote search (Hello feature bit 0), §11.14's SEARCH and SEARCH_RESULT, which receivers enforce and the gate does not check, and providers deny IP on it (§6.4, D-PROTO-18, D-PROTO-21).
 
-**Receivers** see window-client ids [R:connect-ip](design/design-research/connect-ip.md); C13 seals the source client's stored `acl_subject_client_id` (never a request field), `source_network_id`, the contract class and the subject's `WindowDelegation` into `StoredContract` (D-PROTO-19), and receivers admit a native flow only from a verified delegation (§17.9). A **legacy** client (no `acl_enforcing`, set at mint, §7.7) is reached only through an unrestricted grant, naming it or a selector containing it as dst with `dial` and no `ip` ports, `sock` or `via`; otherwise it is source-only ([owner decision 106](#od-106)).
+**Receivers** see window-client ids [R:connect-ip](design/design-research/connect-ip.md); C13 seals the source client's stored `acl_subject_client_id` (never a request field), `source_network_id`, the contract class and the subject's `WindowDelegation` into `StoredContract` (D-PROTO-19), and receivers admit a native flow only from a verified delegation (§17.9). A **legacy** client (no `acl_enforcing`, set at mint, §7.7) is reached only through an unrestricted grant, naming it or a selector containing it as dst with `dial` and no `ip` ports (its rule's `ports_limited` false), `sock` or `via`; otherwise it is source-only ([owner decision 106](#od-106)).
 
 ### 8.11 Cross-network sharing and invites
 
@@ -6309,7 +6345,7 @@ MLS epoch e --MLS-Exporter("UR evs 1.0 kek", repo_id, 32)--> KEK_e (key-encrypti
 RK_g: repo key generation g, 32 random bytes = PLAN's "session key"; cause_g ∈ {remove, request, schedule}
 GKM stores only:
   GenRotate_g = the Signed record in gen/<g> (below): C_g, parent C_{g-1}, cause, auth pin, time, holders
-                hash, GenLink_g, an optional LeafWrap, the drop key
+                hash, the wrap count, GenLink_g, an optional LeafWrap, the drop key and its expiry
   GenLink_g   = XChaCha20-Poly1305(K_link_g, RK_{g-1}; aad repo_id||g||cause_g)         the ladder
   GenWrap_e   = XChaCha20-Poly1305(KEK_e, RK_g; aad group_id||e||g)    in epoch object e, g its newest
   LeafWrap    = XChaCha20-Poly1305(KEK_e, RK_g; aad group_id||e||g)    in GenRotate_g, for every leaf of e
@@ -6744,17 +6780,17 @@ capacity     gkm/ holds ~15M objects, ~70 GB of each 1.92 TB drive, in year one 
 
 ```yaml
 gkm-1:
-  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator)
-  why: one accepted commit per epoch; re-forming
-  ttl: life of the repo
+  sees: GroupForm chain (repo_id, group_id, previous group, generation, signer); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
+  why: one accepted commit per epoch; re-forming; one repo to a group; sealing to forwarding Delegations (§10.5)
+  ttl: life of the repo, epoch 0 while epoch/0 exists; an owner marker until the repo's shred, a re-seed's form writing it again; a forwarding Delegation's reader key until 24 h after the Delegation ends or is superseded
 gkm-2:
-  sees: epoch objects; group_id, epoch, content type, generation, auth pin, size, time, uploader sidecar_id; the commit as PrivateMessage ciphertext; GenWrap
+  sees: epoch objects; group_id, epoch, content type, generation, auth pin, size, time, uploader sidecar_id; the commit as PrivateMessage ciphertext; GenWrap; at most 16 leaves, the sealed GroupInfo and the generation that seals it
   why: ordering; the write gate
   ttl: 30 d, then until every leaf acking in the last 30 d has applied it; never the newest epoch
 gkm-3:
   withdrawn: no roster delta in the clear (owner decision 59); membership shows only as sidecar ids in gkm-4, gkm-5, gkm-7 and gkm-10, as in api-7
 gkm-4:
-  sees: "KeyPackages (init and leaf HPKE keys, signature key, credential: sidecar_id, identity key, suite, not_after, admission hash, signature); claims (group, claimer, target); ReaderKeys (owner decision 114)"
+  sees: "KeyPackages (init and leaf HPKE keys, signature key, credential: sidecar_id, identity key and its algorithm, suite, not_after, admission hash, signature); claims (group, claimer, target); ReaderKeys (owner decision 114)"
   why: asynchronous adds; wrapped readers
   ttl: KeyPackages until claimed, or 90 d; claims 90 d; ReaderKeys until replaced or past their not_after, at most 7 d
 gkm-5:
@@ -6766,11 +6802,11 @@ gkm-6:
   why: offline catch-up and recovery
   ttl: as gkm-2
 gkm-7:
-  sees: key ladder; GenRotates (group, generation, parent and own commitments, cause, auth pin, time, holders hash, signer; GenLink and leaf-wrap ciphertexts; the drop public key where the kind takes deposits); GroupInfo pointers and, above 16 leaves, sealed GroupInfo; staged and late wraps (group, generation, commitment, recipient sidecar_id or delegation_id and the SHA-256 of the key sealed to, staged or late, a late one's auth pin and time, ciphertext, signer; owner decisions 114, 144, 182)
+  sees: key ladder; GenRotates (group, generation, parent and own commitments, cause, auth pin, time, holders hash, the count of its staged and recovery wraps, signer; GenLink and leaf-wrap ciphertexts; the drop public key and its expiry where the kind takes deposits); GroupInfo pointers and, above 16 leaves, sealed GroupInfo and the generation it names; staged and late wraps (group, generation, commitment, recipient sidecar_id or delegation_id and the SHA-256 of the key sealed to, staged or late, a late one's auth pin and time, ciphertext, signer; owner decisions 114, 144, 182)
   why: ladder, resync, deposits; wrapped readers
   ttl: life of the repo, a gen pack's GenRotates as gen/'s; GroupInfo until superseded; wraps until the next generation's exist, staged wraps of a lost claim 24 h, a recipient's wrap to an older key 30 d after one to a newer key exists
 gkm-8:
-  sees: recovery wraps (member_id, group_id, generation, an 8-byte prefix of the binding's Ed25519 key hash, which the authorization log already shows, HPKE ciphertext); the bindings are §7.9's RecoveryBind config records, not gkm objects
+  sees: recovery wraps (member_id, group_id, generation, the 8-byte prefix c8 of the generation's commitment, which gkm-7 shows whole, an 8-byte prefix of the binding's Ed25519 key hash, which the authorization log already shows, HPKE ciphertext); the bindings are §7.9's RecoveryBind config records, not gkm objects
   why: recovery after losing every device
   ttl: until a RecoveryRebind replaces them or the repo is deleted; staged ones of a lost claim 24 h
 gkm-9:
@@ -7138,7 +7174,7 @@ Keys come from §10, identity from §5, push from §6, tokens, the projection an
 
 - **No code** exists for evs or a git server [R:server-platform](design/design-research/server-platform.md) §5.10.
 - **BlobStore** has an overwriting Put (server/blob.go:674-679), PutIfAbsent as one If-None-Match request (:683-697), whole-object Get, List and SetLifecycle, but "deliberately no Delete", no ranged read and no streamed put (:155-183).
-- **MinIO.** The deployed build (§19.3) checks If-Match and If-None-Match under its namespace lock but proceeds when that read loses quorum (minio@v0.0.0-20251015172955-9e49d5e7a648 cmd/erasure-object.go:1261-1279); PR #21653, merged 2025-10-24, fixes it, and [owner decision 18](#od-18)'s clusters build from the final upstream source (§19.6). MinIO verifies `x-amz-checksum-sha256` before an object exists (cmd/object-handlers.go:1993-2006) and inlines shards of up to 128 KiB in xl.meta (internal/config/storageclass/storage-class.go:278-294). It stores an object as a directory and lists that directory as one object without descending (cmd/metacache-walk.go:239-264). Names are at most 1,024 B (cmd/object-api-utils.go:197-203). xl.meta up to 4 KiB is written O_DSYNC, and larger ones with O_DIRECT and fdatasync (cmd/xl-storage.go:2247-2285). An overwrite also writes the previous xl.meta, inline data included, as a backup until quorum (:2784-2800, :2874-2887). With several pools, a PUT picks its pool by free space even when its key lives in another pool, and checks its precondition only there (cmd/erasure-server-pool.go:637-656; cmd/erasure-object.go:1261-1285). A DELETE evaluates no precondition (cmd/object-handlers.go:2563-2671; cmd/object-api-options.go:273-318), so an If-Match sent with it is ignored. A cancel stops a PUT on the handling host's own drives before their commit rename (cmd/xl-storage.go:2891-2893) but reaches no drive operation on another host, whose storage RPCs run under context.Background() (cmd/storage-rest-server.go:366, :708; internal/grid/handlers.go:294), and the handler's deferred unlock frees the object's lock while they run on (cmd/erasure-object.go:1269), so a cancelled write can land after a later request on its key, and holding the lock to the 30 s drive timeout would still release a commit stalled after its last check; §19.6's in-house build (D-OPS-20) closes both with its deadline and settle rules.
+- **MinIO.** The deployed build (§19.3) checks If-Match and If-None-Match under its namespace lock but proceeds when that read loses quorum (minio@v0.0.0-20251015172955-9e49d5e7a648 cmd/erasure-object.go:1261-1279); PR #21653, merged 2025-10-24, fixes it, and [owner decision 18](#od-18)'s clusters build from the final upstream source (§19.6). MinIO verifies `x-amz-checksum-sha256` before an object exists (cmd/object-handlers.go:1993-2006) and inlines shards of up to 128 KiB in xl.meta (internal/config/storageclass/storage-class.go:278-294). It stores an object as a directory and lists that directory as one object without descending (cmd/metacache-walk.go:239-264). Names are at most 1,024 B (cmd/object-api-utils.go:197-203). xl.meta up to 4 KiB is written O_DSYNC, and larger ones with O_DIRECT and fdatasync (cmd/xl-storage.go:2247-2285). An overwrite also writes the previous xl.meta, inline data included, as a backup until quorum (:2784-2800, :2874-2887). With several pools, a PUT picks its pool by free space even when its key lives in another pool, and checks its precondition only there (cmd/erasure-server-pool.go:637-656; cmd/erasure-object.go:1261-1285). Upstream's DELETE evaluates no precondition (cmd/object-handlers.go:2563-2671; cmd/object-api-options.go:273-318), so an If-Match sent with it is ignored; §19.6's in-house build honors one condition of its own, `x-ur-if-unmodified-ms`, under the key's lock. A cancel stops a PUT on the handling host's own drives before their commit rename (cmd/xl-storage.go:2891-2893) but reaches no drive operation on another host, whose storage RPCs run under context.Background() (cmd/storage-rest-server.go:366, :708; internal/grid/handlers.go:294), and the handler's deferred unlock frees the object's lock while they run on (cmd/erasure-object.go:1269), so a cancelled write can land after a later request on its key, and holding the lock to the 30 s drive timeout would still release a commit stalled after its last check; §19.6's in-house build (D-OPS-20) closes both with its deadline and settle rules.
 - **lb.** `client_max_body_size 16m` is global (warp/warpctl/config.go:1301); `streamable_paths` (warp/services/services.go:694-701) get 60 s timeouts and no request buffering (warp/warpctl/config.go:2311-2319).
 - **Crypto and clients.** x/crypto v0.54.0 (connect/go.mod:30) has XChaCha20-Poly1305 (chacha20poly1305/xchacha20poly1305.go:24) and no AES-SIV. Clients are reaped after 30+30 idle days (server/model/network_client_model.go:4179, :4199), so the durable signer is §5's `sidecar_id`.
 
@@ -7209,7 +7245,8 @@ map      the writer that rotates, or any writer holding every name of the ref (a
          re-sealed for the new parent and child tokens; the map binds its source head (map_source_version,
          map_source_chain); keys name the map, so a mapper whose source left the window, or that finds another's
          map abandoned, uploads a fresh one; once p or a newer epoch commits, taskworker deletes p's uncommitted
-         maps, and the nightly pass deletes a map uncommitted 25 h after its upload by 11.13's orphan rule
+         maps, and the nightly pass deletes a map above the head's epoch once 11.13's horizon has passed its oldest
+         part's LastModified + 24 h + 2 min, each part by a DELETE naming its LastModified (owner decision 203)
 tail     paths that window versions after the map's source create get moves like the map's, which the mapper
          builds from those pushes: the PATH_EPOCH push carries them in its payload under path_tail_sha256, and evs
          checks every token path those versions create (base_entry_version 0) against them, else 409 naming the
@@ -7599,7 +7636,8 @@ action    a DROP push (flags 256) on the path's ref carries EvsDropHistory (11.6
           repo only a consented, not-read-only device of its owner (owner decision 126), never MCP (§16.6); any repo
           admin (owner-bound: such a device of the owner) cancels it by a DROP with action 2 committed before
           not_before_ms less 60 s by evs's clock; a lock standing when its job starts voids it (§8.8); 11.13's job
-          deletes nothing before not_before_ms + 25 min
+          deletes nothing before not_before_ms + 25 min, and marks only once evacuation's horizon has passed the
+          drop's commit by 2 min, so a now drop's deletions start about 25 to 26 h after it (owner decision 204)
 rule      once it executes: kind-1 segments and slots that only listed versions name, on any ref and path, are
           deleted, each once over 25 h old; listed versions' statements, window entries, log pages, chain values,
           times, signers and entry hashes stay for the ref's life, so history verifies, and their entry versions
@@ -7807,8 +7845,9 @@ hp/<repo>/<parcel_id>                      a small repo's records older than 24 
 pmap/<repo>/<ref>/<p>/<map>/<part>/_       a Signed EvsPathMap part (11.6); <map> is its    If-None-Match       <= 8 MiB   the committed map:
                                            map's path_map_sha256                                                           the ref's history;
                                                                                                                            others go (11.6)
-pidx/<repo>/<ref>/<v_first>-<id>           a pack's or parcel's records and log pages, and  If-None-Match       <= 1 MiB   as its pack or parcel
-                                           the segments they introduce; <id> is that
+pidx/<repo>/<ref>/<v_first>-<id>           a pack's records and log pages, or a parcel's    If-None-Match       <= 1 MiB   as its pack or parcel
+                                           records (none of its log pages), and the
+                                           segments they introduce; <id> is that
                                            container's (11.13)
 spidx/<repo>/<n>/_                         reserved (11.13): offsets of segments in a pack  If-None-Match       <= 1 MiB   as its pack
 hold/<network_id>/<case_id>/_              §21.9's preservation hold, written by api;       api                 <= 1 KiB   its kind's (§21.9):
@@ -7890,8 +7929,8 @@ message EvsHead {                       // head/<repo>/<ref>; written only by If
   bool deleted = 18;                    // DELETE committed; a later push to the name continues the versions
   bytes window_base_chain = 19;         // C at version v-w, so the window's chain is computable forward
   uint64 folded_through = 20;           // 11.7's horizon: file changes folded or replaced, directory deltas applied
-  int64 written_ms = 21;                // evs's clock at this head's write (11.13's orphan rule)
-  int64 fence_ms = 22;                  // its writer's clock at the newest evacuation or GC fence (outcomes)
+  int64 written_ms = 21;                // evs's clock at this head's write
+  int64 fence_ms = 22;                  // its writer's clock at the newest evacuation fence (outcomes)
   EvsCollect collect = 23;              // 11.7's marker collection: done, through and a window's until_ms
   uint64 index_epoch = 24;              // on a ref holding an index: its newest CUT's version, else 0 (11.12);
                                         // never falls; a re-seed sets it from the newest CUT it replays
@@ -7932,7 +7971,7 @@ fill      at step 7 evs appends P's entry from the statement it checked and the 
           readers never parse the head object (they get 11.9's head summary)
 etag      every head write raises the version or, for a write that commits nothing (a refusal record, a fence, a
           seal lease, a creation block, dropping drained path-epoch sources, a collection window), the fence, so an
-          ETag never repeats; only evacuation and GC fences also set fence_ms, and a refusal fence sets refused_ms
+          ETag never repeats; only evacuation's fences also set fence_ms, and a refusal fence sets refused_ms
           (the outcome rules below)
 trust     a wrong place, hash or digest can only produce a missing or mismatched statement, which breaks the chain
           and alarms; the digest cannot hide a change, because readers check every returned statement's change list
@@ -8095,7 +8134,7 @@ retry id  a push id names one statement; the client retries with the same push i
           overlap, and one may reach its evs handler at any time, even after another's answer reached the client;
           a committed push id returns its original version from the head window or from the log pages of
           (b, b+64], packed or not, however many commits followed, and a recorded one its refusal (refuse, below)
-fence     evacuation and GC fences raise the head's fence and set fence_ms; refusal records, leases, blocks, source
+fence     evacuation's fences raise the head's fence and set fence_ms (GC raises none, 11.13); refusal records, leases, blocks, source
           drops and collection windows set no fence_ms and end nothing; an attempt that may issue step 7 (a push or
           seal, never a part) and reads a head whose fence_ms, from a write it did not make, is later than its own
           arrival less 100 ms ends with 503 {push_id, outcome: unknown} and no further step 7, so a fence ends every
@@ -8103,8 +8142,8 @@ fence     evacuation and GC fences raise the head's fence and set fence_ms; refu
           after it fails the time or receipt-age check the fence waited out (Resolve, below; 11.13's orphans); the
           margin needs every clock that writes fence_ms or an arrival within 50 ms of UTC: chrony on the evs, gkm
           and taskworker hosts, alarmed past 25 ms (§19.6); an evs process whose offset is unknown or over 50 ms
-          answers pushes 503 before step 4, and a taskworker in that state raises no evacuation or GC fence and GC
-          deletes nothing, so a pending record or an unadopted segment simply stays
+          answers pushes 503 before step 4, and a taskworker in that state raises no fence and GC deletes nothing,
+          so a pending record or an unadopted segment simply stays
 refuse    every refusal rests on a head read from the cluster (a cached step 4 that would refuse reruns with a GET);
           one the head or a terminal repo/ state settles for good (5a, 5c's shredding and ref rules and DROP_KIND,
           5d's pins and an index_epoch below the head's, 5e's epoch and tail, 5f, 5g's path and removal checks,
@@ -8125,7 +8164,9 @@ first     a push creating its ref, whose head is absent, records a refusal in a 
           If-None-Match at version 0 with no window, kind or mode, which reads, listings and GET .../refs treat as
           absent and the ref's first commit replaces by If-Match, as a later push continues a tombstone head's
           versions; a creating attempt then fails If-None-Match and meets the record on its reread; the
-          placeholder stays, as a tombstone head does
+          placeholder stays, as a tombstone head does; evacuation fences a ref with no head by creating the same
+          placeholder with its fence raised and fence_ms set (11.13; owner decision 203), and a creating attempt
+          then fails its If-None-Match and ends at the fence
 412       reread the head from the cluster; P committed -> 200; P recorded -> that refusal (5a); else, since an ETag
           never repeats, the old PUT can never apply: a fence after the attempt's arrival ends it (above); otherwise
           step 5 (b-h) reruns against the reread head, pins and path epoch included, then step 7 on its ETag: in git
@@ -8142,8 +8183,8 @@ unknown   a timeout (evs waits at least the store's request deadline), EOF or 5x
           the client's retry resolves it
 cleanup   none at answer time: a refused or unknown push's record and new slots stay until evacuation's Resolve finds
           it dead, which no attempt, earlier or later, survives (11.13); nothing in idx/ was written
-evacuate  hourly, 11.13's evacuation resolves every record of batches over 25 h old, fencing a ref before it drops a
-          pending record, and finds orphan pushes without trusting the log
+evacuate  hourly, 11.13's evacuation resolves every record of batches over 25 h old, fencing a ref, one with no head
+          by a placeholder head, before it drops a pending record, and finds orphan pushes without trusting the log
 Resolve   head window, then at most two log pages of (b, b+64]: P is committed at u, with its place, iff they name P
           at a version u in (b, b+64] (file mode) or at b+1 (git mode); dead iff not committed and the head is at or
           past b+64 (git mode: b+1), or its statement can no longer pass the time checks (time_ms + 35 min) and the
@@ -8165,9 +8206,12 @@ I-EVS-3  a push id commits at most once; its retry returns the original version;
          records it until the statement can pass 5b nowhere
 I-EVS-4  pending state never evicts the newest committed version of a path, and a reader finds that version in its
          entry or its push payload
-I-EVS-5  no segment becomes reachable after GC decided to delete it: GC deletes only after its 25 h mark, a fence on
-         every ref of its repo idle since its 24 h mark, the store's request deadline and a second check, and pushes,
-         seals included, adopt only uploads under 24 h old at their last check
+I-EVS-5  no segment becomes reachable after GC decided to delete it: a push, or a seal for its parts, adopts only
+         an upload under 24 h old at its last check and writes its batch record before its head write; evacuation
+         settles every record before its batch goes, a committed one behind a pidx/ entry that names its
+         segments and a pending one by a fence on its ref, a ref with no head by a placeholder head; and GC
+         deletes a segment only once no batch is left from before its LastModified + 24 h + 2 min, no pidx/
+         entry read after that names it, and by a DELETE that names its LastModified (owner decision 203)
 I-EVS-6  a file path's newest committed version is in its idx/ entry or the head window: a file version leaves the
          window only once it is folded or a newer window version of that file replaces it, and a removal only once
          its marker is written, which stays until collected past the horizon (11.7); a directory delta leaves only
@@ -8379,11 +8423,15 @@ loss     leases and the sequence are soft state outside the rdb bundles (owner d
          master's clock trails the old one's by less than the lost family's age less 1 µs per 1,000 raises
          (§19.6's chrony on the Redis hosts); holders re-create their leases at their next hourly resync, which
          reads every subscribed head
-slots    every script touches one hash tag ({evsl_<repo_id>}, {evsq_<repo_id>} or {evsh_<repo_id>}), and hints use
+slots    every script touches one hash tag ({evsl_<repo_id>}, {evsq_<repo_id>}, {evsh_<repo_id>} or {evsc_<client_id>},
+         whose script runs before the lease script), and hints use
          §6.8's per-client script, so no command crosses Redis Cluster slots
 caps     pro.yml's sidecar_abuse: 1,000 subscribed clients per repo, except the team directory, up to the
          network's config_admissions, whose readers poll the cards ref (§16.11) and lease only notice prefixes
-         q/<target>/; 500 repos per client
+         q/<target>/; 500 repos per client, counted in {evsc_<client_id>}, a sorted set of repo ids scored by last
+         subscribe or renewal ms: one script drops members older than 7 d, refuses if the repo is absent and the set
+         holds evs_repos_per_client, else adds it, and sets EXPIRE 8 d; a DELETE removes the repo once the client's
+         last lease on it goes; a loss fails open, and renewals rebuild the set within a day
 ```
 
 ### 11.11 The local tier
@@ -8667,7 +8715,8 @@ phases     each step rereads repo/ and runs only while it shows shredding with t
              batches go with them, at most 26 h after each batch was written (11.13)
            6 after 10 min, longer than the issue-time recheck of repo/ (cached at most 5 s) that 11.13's P2 writes
              and every gkm write make (§10.6), plus the store's request deadline, so no fold, evacuation or gkm
-             write lands later, repeat 2, 3 and 5 once for stragglers
+             write lands later, repeat 2, 3 and 5 once for stragglers; a DELETE's settle copy (§19.6's settle row,
+             evs-10) is gone by then, since §19.6 keeps the settle sweep's interval inside this pass
            7 rewrite repo/<repo> as shredded{deletion_id, time}, a tombstone kept with its place/ for the
              network's life
 drops      a drop's job pauses while repo/ shows deleted, resumes at a restore and ends at shredding, the shred
@@ -8682,8 +8731,8 @@ drops      a drop's job pauses while repo/ shows deleted, resumes at a restore a
 
 ```text
 needs     ServiceHost.Blobs declares, on every cluster, quorum-evaluated conditional PUT, consistent reads and LIST,
-          streamed and ranged I/O, object metadata on PUT and HEAD (11.7's entry states), an unconditional Delete
-          (11.3), §19.6's deadline and settle rules: a request refused once its x-ur-deadline-ms has passed, and a
+          streamed and ranged I/O, object metadata on PUT and HEAD (11.7's entry states), a Delete, unconditional
+          or naming its object's LastModified (11.3, §19.6), §19.6's deadline and settle rules: a request refused once its x-ur-deadline-ms has passed, and a
           PUT or DELETE that takes effect before any later request on its key or never (D-OPS-20; 11.7's stale and
           collect rows), and lifecycle rules, each metadata cluster in one pool (11.8), which §22's suite checks;
           segment PUTs ride streamable_paths: ["/evs/v1/repos/[^/]+/segments/[^/]+"]
@@ -8873,13 +8922,15 @@ when      hourly (so each day everything older than 24 h leaves the batches; own
           refills (owner decisions 186, 190; 11.21)
 resolve   per batch, GET it whole; per record, Resolve its push id on its ref (11.8): committed at this place ->
           keep; committed at another place -> drop; dead -> drop, deleting the new slots its record lists, the only
-          cleanup (11.8); pending -> raise the ref's fence (one head CAS), then Resolve again; parts follow their
+          cleanup (11.8); pending -> raise the ref's fence (one head CAS, or for a ref with no head one placeholder head created with its
+          fence raised, 11.8's first row), then Resolve again; parts follow their
           seal; reseed records count as committed
-move      per repo, the kept records plus its log pages older than 24 h, one pack or parcel per repo a run across all
-          the minute directories it evacuates: once its aged material (these, its parcels and unpacked log pages)
-          reaches 256 KiB, one pack/<repo>/<pack_id> on the segment cluster (If-None-Match, its SHA-256 as checksum)
-          holds all of it, then a pidx/ entry per ref, then its parcels and those log pages are deleted; below
-          256 KiB, one parcel hp/<repo>/<parcel_id> (If-None-Match) and its pidx/ entries; a repo's aged material
+move      per repo, the kept records, one pack or parcel per repo a run across all the minute directories it
+          evacuates: once its aged material (these, its parcels, and its log pages older than 24 h, which wait at
+          log/ until a pack takes them) reaches 256 KiB, one pack/<repo>/<pack_id> on the segment cluster
+          (If-None-Match, its SHA-256 as checksum) holds all of it, then a pidx/ entry per ref, then its parcels
+          and those log pages are deleted; below 256 KiB, one parcel hp/<repo>/<parcel_id> (If-None-Match) of the
+          records alone and its pidx/ entries, the log pages staying at log/; a repo's aged material
           also packs once its oldest (parcel content or unpacked log page) is 7 d old: in the run that evacuates
           the repo, or, for an idle repo, in the nightly pass, which packs any whose oldest would pass 7 d before
           the next pass
@@ -8893,7 +8944,7 @@ skip      every P2 write for a repo (folds, moves, packing, copies) rereads repo
 index     pidx/<repo>/<ref>/<v_first>-<id> (v_first zero-padded to 20 digits, <id> the container's pack_id or
           parcel_id, the first 16 B of SHA-256 over its bytes; nothing extends it, and containers never share a
           key): {container kind, versions v_first..v_last with each record's kind, offset and length, the log pages
-          it holds, the segment ids its records introduce}; a push whose parts and seal evacuate in different runs
+          a pack holds (a parcel's entry lists none), the segment ids its records introduce}; a push whose parts and seal evacuate in different runs
           has an entry in each container; a parcel is replaced by its pack's entries first, then the parcel and its
           entries are deleted
 readers   a record whose batch is gone is found by LIST pidx/<repo>/<ref>/ (cached; entries never change), a pack's
@@ -8948,8 +8999,12 @@ sweep     evacuation, resolving each committed record that lists candidates, HEA
           hold ends, one pass rereads the repo's versions flagged from 26 h before its placement to its end (log
           pages, then their records) and deletes what the hold kept; when §19.11's purge turns on from observe, one
           pass per admitted repo rereads its versions flagged with window bit 4 since its migration and deletes
-          what observe mode kept, as at a hold's end; §22.8's testHookBarrier sites include the purge's hold/
-          reread and evacuation's staged decision
+          what observe mode kept, as at a hold's end; the side that ends each condition queues its pass, both
+          idempotent: AbuseHoldPass schedules EvsSweepHoldEndTaskRequest for each hold it ends, before it deletes
+          the hold/ object, and `sidecarctl evs purge-turn-on`, run in the runbook step that sets format2.purge to
+          on, schedules EvsSweepTurnOnTaskRequest, a monitor row watching for observe's retained count staying flat
+          while purge is on (owner decision 206); §22.8's testHookBarrier sites include the purge's hold/ reread
+          and evacuation's staged decision
 budget    the purge is P2 work that u pays for at admission (accounts, above); HDD DELETEs spend no NVMe budget,
           and a candidate slot's DELETE writes ~3.5 KiB a drive
 ```
@@ -8974,7 +9029,9 @@ resolve   check each lineage's older entries against the map part or tail map_pa
           {mismatch}, which pages (§19.8); then write to dropscan/ the candidates: every segment and slot id a
           listed version names through a kind-1 locator or a slot id, less ids listed versions name only through
           kind-5 locators
-mark      at snapshot M, each ref's head read from the cluster after every covered drop's fence, over every ref of
+mark      once the horizon of the repo's metadata cluster (11.13's orphans row) has passed each covered drop's commit
+          time by 2 min, so every push validated before a drop has committed on a head a scan reads, or is dead
+          (owner decision 204): at snapshot M, each ref's head read from the cluster after every covered drop's fence, over every ref of
           the repo (file and git mode, shared and owned, creates-only, deposit and erasure refs, overlays and DELETE
           tombstones; owner decision 173), each live version (every committed version no executing or done drop
           lists) marks the candidates it names, comparing locators and slot ids from log pages, windows and records
@@ -9027,18 +9084,22 @@ push      the push request (step 3) and each part carry one receipt per new segm
           receipts, whose age the seal checks again
 keys      receipt keys are evs configuration, rotated monthly with the previous key kept 48 h (§19.4); losing a key
           only makes pending uploads re-upload
-orphans   the nightly pass LISTs each repo's seg/ prefix on the segment cluster, as it does for stored bytes; a
-          segment that no committed push of the repo introduced (pidx/ entries record what evacuated records
-          introduce; records still in batches are read in place) and whose LastModified is over 25 h old is an
-          orphan: taskworker raises the fence of each ref of the repo whose head was written before that
-          LastModified + 24 h (one head CAS each, at most one a day), waits the store's request deadline, checks the
-          repo's commits since its first check again, then deletes the segment; an uncommitted path map over 25 h
-          old goes the same way, fencing only its ref (11.6)
-why       a push, or a seal for its parts, adopts a segment only with a receipt under 24 h old at its last check and
-          commits within 5 s of it, so every adoption commits within 24 h of the upload, plus 5 s and the store's
-          request deadline; one stalled on an idle ref fails its head CAS after the fence and ends 503 unknown, and
-          the client's retry finds its receipt too old (409 SEGMENT_GONE, recorded; re-upload); one on a
-          ref written after the 24 h mark was fenced by that write; one that committed is found by the second check
+orphans   the nightly pass first takes each metadata cluster's horizon, from one LIST of pb/: the start of the
+          minute its oldest batch names, or 25 h before the LIST if that is earlier or none is left; it then LISTs
+          each repo's seg/ prefix on the segment cluster, as it does for stored bytes, and its pidx/ entries; a
+          segment whose LastModified + 24 h + 2 min is at or before its repo's cluster's horizon and that no pidx/
+          entry lists as introduced is an orphan, which taskworker deletes by a DELETE that names its LastModified
+          (§19.6), at most 10 a second a segment cluster, on clusters whose build passed §19.6's settle cases; it
+          raises no fence and reads no batch, so an orphan goes 49 to 75 h after its upload (owner decision 203);
+          an uncommitted path map above its ref's current epoch goes the same way, by its oldest part (11.6)
+why       a push, or a seal for its parts, adopts a segment only with a receipt under 24 h old at its last check,
+          writes its batch record within 5 s of that check and before its head write, in a minute that began no
+          later; so every record that can adopt the segment is in a batch from before its LastModified + 24 h +
+          2 min; evacuation deletes a batch only once it settled each record: committed, behind a pidx/ entry
+          naming the segment, or dead, its ref fenced after its statement lapsed, which ends every attempt however
+          late its head write lands, a write that stalled holding the key included, since the fence waits behind
+          it; past the horizon nothing is pending, so a segment no entry names is named by no version and never
+          will be, and a later upload of the same bytes is a new object, which the DELETE's LastModified refuses
 ```
 
 **Quotas (§20.6, §20.7):**
@@ -9877,7 +9938,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 | Latest buckets, 100 messages a day | both ≤ ~5.4 MB; each file ≤ 1 MiB, decrypted by frame within the working set above |
 | Search masks | one probe per candidate, lazily in rank order, into §5.9's version table through 256 KiB of cached pages a process; no set of the partitions' keys in memory; the table updated at a swap within 1 MiB (11.14) |
 | Cold "search more" | first progress ≤ 500 ms; each shard's hits ≤ 100 ms after it lands, ≤ 300 ms on phones and page Workers; complete within the missing bytes over the throughput, plus 1 s (§16.10's cold contract) |
-| A drop | nothing deleted before `not_before_ms` + 25 min; a job's two passes read ≤ 32 MB/s; 10,000 segments deleted in about 17 min; ≤ ~0.3 MB written a metadata drive for a drop whose job runs 10 min |
+| A drop | nothing deleted before `not_before_ms` + 25 min, nor before evacuation's horizon passes the drop's commit by 2 min, about 25 to 26 h after a `now` drop ([owner decision 204](#od-204)); a job's two passes read ≤ 32 MB/s; 10,000 segments deleted in about 17 min; ≤ ~0.3 MB written a metadata drive for a drop whose job runs 10 min |
 
 **Concurrency.** Pushes to one ref meet only at its head's If-Match: a file-mode loser with disjoint paths retries inside evs, so one ref sustains roughly 20-50 pushes/s; a git-mode loser gets a stock non-fast-forward and merges. Distinct refs never contend. In the twenty-agent test (§22), agents write their own refs in real time, and a merge into main every 60 s meets another in its ~60 ms window about 2% of the time, then merges again.
 
@@ -10001,7 +10062,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-24 (proposed).** Log pages hold the signed statements (at most 1 KiB each), and the head window names each recent one's place and hash; head readers verify every statement after their pin and the one behind each entry they read. *Why:* [owner decision 7](#od-7) for every reader (Q-EVS-6), at one block per head write.
 
-**D-EVS-25 (proposed).** Orphans are found without the log: hourly evacuation resolves every batch record, which names every slot its push wrote, and an unadopted segment or path map, found by the nightly LIST, is deleted only after fencing each idle ref of its repo. *Why:* an upload that never reached the log is otherwise invisible, and a grace period cannot fence a late commit.
+**D-EVS-25 (proposed).** Orphans are found without the log: hourly evacuation resolves every batch record, which names every slot its push wrote, fencing a pending record's ref, one with no head by a placeholder head; and an unadopted segment or path map, found by the nightly LIST, is deleted only once evacuation's horizon has passed every batch that could adopt it ([owner decision 203](#od-203)). *Why:* an upload that never reached the log is otherwise invisible; a grace period cannot fence a late commit, and a fence cannot reach a ref that does not exist yet, but every commit leaves its record first.
 
 **D-EVS-26 (proposed).** Erasure is a committed ERASE push that destroys every key of every representation: each retained version, each derived-field chain, the search index's files included (re-keyed first, by a CLOSURE push that only replaces committed file versions, each new chain within Padmé of the one it replaces, taken at the storage limit with size-bounded uploads within its eraser's own rate and daily allowance, which has a floor §21 cannot lower) and the deposit, which is slot-keyed; with the index, a CUT on each index ref first fences its publication (D-EVS-66), and its first ERASE takes the entry's own keys, which re-key nothing. *Why:* owner decisions [61](#od-61), [133](#od-133), [146](#od-146); a shared index or live deposit would otherwise outlive the erasure, and no admin's closures spend another's.
 
@@ -10015,11 +10076,11 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-31 (proposed).** `idx/` holds only committed versions, folded lazily (the oldest 64 at 96 unfolded, the rest after 10 min idle, always before a page-out and in a path epoch's own commit), a file's newest version per fold and every directory delta in order; a removal writes, If-Match and only over an older version, a marker that keeps the path's version, and markers go in head-announced collection windows once the horizon passes them by a base range, their DELETEs cancelled before the window ends, and folds over covered markers held past it, by margins that cover the clock bounds and the cancel's lag; a creation's version is max(its push's effective base version, on an overlay its base_version plus its chain's base versions, a standing removal's) + 1, so a path's versions never restart once its marker goes, nor fall below those it held on a base ref; reads and the CAS read an entry only after a head and merge the window versions after that head's folded_through. *Why:* a busy path is written once per fold, nothing pending evicts a committed version ([owner decision 140](#od-140)), and a DELETE, which MinIO applies unconditionally, could remove an entry a later fold wrote; versions must only rise, for 5g and the search index's newest-wins rule ([owner decision 148](#od-148)).
 
-**D-EVS-32 (proposed).** Hourly evacuation moves each repo's records and log pages older than 24 h into one HDD pack once they reach 256 KiB, else into NVMe parcels that pack within 7 d. *Why:* [owner decision 136](#od-136)'s residency, with whole-batch deletes and no tiny HDD objects.
+**D-EVS-32 (proposed).** Hourly evacuation moves each repo's records and log pages older than 24 h into one HDD pack once they reach 256 KiB; below that it moves the records into NVMe parcels while the log pages wait at log/, both packing within 7 d. *Why:* [owner decision 136](#od-136)'s residency, with whole-batch deletes and no tiny HDD objects.
 
 **D-EVS-33 (proposed).** evs, gkm, api and taskworker share each metadata cluster's write budget (0.8 DWPD and 50% of rated write IOPS on its busiest drive not under heal), a bucket that every measured drive byte drains, P0's included. P0 safety work (`rev/` and `proj/` writes, `repo/` lifecycle, shred steps, ERASE, CUT and CLOSURE pushes within their rate and every slot rewrite, Removes and REMOVE rotations) issues at once, never queued or refused, its bytes reported by kind and drawn from the bucket down to zero, past which they are P0's excess, forgiven; every other class issues only while the bucket holds it, restarting when a P0 storm ends and ramping up as the bucket refills, so their writes stay within the budget less the P0 writes the bucket held, and their IOs within it too (at least 512 B each, ≤ 39% of rated). P1 pays at admission for itself and the P2 work it causes, the deferred part moving into a prepaid wallet that funded P2 spends and the allowance never pays again, so a steady load is admitted at the full physical rate; unfunded P2 takes at most 40% of the allowance; P2 runs in deadline order; per-network fair queues refuse the heaviest network first, never P0 work; segment PUTs likewise queue per network on each segment cluster, refused heaviest first (503) past 50% of §19.6's measured drive-operation capacity. *Why:* [owner decision 140](#od-140), which [owner decision 186](#od-186) amends for P0 writes only: P0 work always runs at once and the wear bound exempts it, since per-tenant rates bound no cluster's aggregate safety work (100 large Teams each shrinking every 5 minutes ask ~2.9 TiB a day a drive, about twice the refill), so a P0 storm can wear the drives past 0.8 DWPD and their 1 DWPD rating, disclosed with §19.8's P0 alarms (11.21; Q-EVS-24); [owner decision 190](#od-190) forgives P0's excess, so a cluster's pushes and evacuation restart when a storm ends, at the cost of the storm's extra wear, ~0.23 drive-writes a 6-hour storm at that stress, which §19.8 counts against the rating; charging P2 at admission and again from the allowance would admit ~27% fewer pushes; a capped P2 would let evacuation outgrow 26 h.
 
-**D-EVS-34 (proposed).** Segment uploads write nothing to the metadata cluster: evs returns a MAC'd receipt that the push presents, and GC deletes an unadopted segment only after 25 h and a fence on each idle ref of its repo. *Why:* markers cost three writes per segment.
+**D-EVS-34 (proposed).** Segment uploads write nothing to the metadata cluster: evs returns a MAC'd receipt that the push presents, and GC deletes an unadopted segment only once every batch record that could adopt it has been evacuated, 49 h or more after its upload, by a DELETE that names the object ([owner decision 203](#od-203)). *Why:* markers cost three writes per segment.
 
 **D-EVS-35 (proposed).** Versioning is a per-version setting of a file, signed in its entry version: 0 keeps every version, 1 only the newest's content, 2 the same for the search index's files; config and mailcfg repos, git-mode refs and creates-only refs refuse 1 and 2, and a repo lock refuses 1 ([owner decision 168](#od-168)). *Why:* owner decisions [158](#od-158)-[160](#od-160); authority histories and exact git need every version.
 
@@ -10079,7 +10140,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-63 (proposed).** A drop deletes only kind-1 segments and slots that only listed versions name; statements, hashes and entry versions without inline records stay, so history verifies, and listed inline content waits for compaction, unserved; the kept head is written as a fresh checkpoint or re-cited chunk set; readers show pending, then dropped, never missing or tampered. *Why:* no diff chain keeps dropped content, and no drop reads as tampering.
 
-**D-EVS-64 (proposed).** From its commit no push may cite a listed version; the job starts 25 min after the window, marks every ref's live versions at one snapshot, verifies with a separate implementation at a later one, deletes only objects over 25 h old, and resumes from `drops/`. *Why:* a mutator cannot move a reference past a scan of immutable history, and two implementations must agree before any DELETE.
+**D-EVS-64 (proposed).** From its commit no push may cite a listed version; the job starts 25 min after the window, marks every ref's live versions at one snapshot once evacuation's horizon has passed each covered drop's commit by 2 min ([owner decision 204](#od-204)), verifies with a separate implementation at a later one, deletes only objects over 25 h old, and resumes from `drops/`. *Why:* a mutator cannot move a reference past a scan of immutable history, and two implementations must agree before any DELETE.
 
 **D-EVS-65 (proposed).** A hold defers a drop's deletions silently, the drop reading, listing and billing as finished; stored bytes fall as the job deletes; the DROP rewrites listed versions out of the index; mirrors apply it; compaction may later remove listed inline content, keeping every statement and every byte a live version needs. *Why:* owner decisions [93](#od-93), [133](#od-133), [159](#od-159), [165](#od-165) and [184](#od-184).
 
@@ -10375,7 +10436,7 @@ restore (§19.10, after the dumps load and the abuse step, before api's replay; 
   each edge reloads at restore_serial and posts its diff (POST /dns/reload-diff); once every running
     NS answers that SOA, restoring := false; the step lists, by network_id, owner and type, each RRset
     but challenges' and canaries' in a posted diff, and raises the custom-host map's version 2^24 above
-    the restored one, every host's map_version with it, so W1 loads the map from the restored rows
+    the restored one (dns_root.custom_host_map_version), every host's map_version with it, so W1 loads the map from the restored rows
     (§19.5) and each host stays pending until every interface is current for the new version
     (§13.4), listing the hosts that adds or drops, in the incident and in each network's admin events
     (§7.11), both kept 400 d, flagging networks with an open §21 case
@@ -10604,7 +10665,7 @@ func (self *UpgradeMux) SetLocalZone(localZone LocalZone)
 - **Consumes:** §7's DNS permission, `network_domain`, `RenameNetwork`, admin events, client names; §8 grants, owner consent, scope labels, §8.10's gate; §13 certs and its CAA walk; §14, §15 record content, the direct-MX check; §16 decisions, the spend check and `approval_use` (D-MCP-11, D-MCP-12); §6 topic `dns`; §4 C14; §19 dns edge hosts, router interfaces, W1's reload and drain, the restore (§19.10), the rota ([owner decision 143](#od-143)); §20 quotas; §21 `ScreenName`, `network_verified`, probation caps, open cases.
 - **Subprotocol messages:** `DnsZoneChanged` (0x1B01, §6.11) on push topic `dns` (§6.8), versioned by the zone serial.
 - **API routes:** §12.8.
-- **Tables** (migrations 926+): `dns_root` (root, serial, restore_serial, restoring), `dns_label` (primary key (root, label); network_id, kind, state; never deleted; a restore's CT rows start without a network), `network_dns_zone`, `network_dns_record`, `dns_zone_journal` (diffs, 7 d), `network_dns_custom_host` (with `state enum{pending,active}`, `caa_mode enum{strong,weak}`, `effective_caa_chain_ok bool`, `map_version` and `ready_time`), `dns_custom_host_map` (version, digest, create time; 7 d) and `dns_custom_host_map_applied` (interface, reported version, digest, nginx master, poll time, the last passing route probe's version and time, and the latest probe result of each added host probed for the reported version; while the interface is in the lb inventory); Redis `{dns}serial:<root>`, the last committed serial.
+- **Tables** (migrations 926+): `dns_root` (root, serial, restore_serial, restoring, custom_host_map_version bigint, restore_incident_id), `dns_label` (primary key (root, label); network_id, kind, state; never deleted; a restore's CT rows start without a network), `network_dns_zone`, `network_dns_record`, `dns_zone_journal` (diffs, 7 d), `network_dns_custom_host` (with `state enum{pending,active}`, `caa_mode enum{strong,weak}`, `effective_caa_chain_ok bool`, `map_version` and `ready_time`), `dns_custom_host_map` (version, digest, create time; 7 d) and `dns_custom_host_map_applied` (interface, reported version, digest, nginx master, poll time, the last passing route probe's version and time, and the latest probe result of each added host probed for the reported version; while the interface is in the lb inventory); Redis `{dns}serial:<root>`, the last committed serial.
 - **Services and config:** `dns` (server/cli/dns; `sidecar/dnsservice`): API blocks on `dns.bringyour.com`, `dnsedge` on the dns edge hosts (UDP and TCP 53); `config/<env>/dns.yml`; vault (ZSKs, DNSKEY windows); two offline KSK HSMs; taskworker (challenge and canary-CAA expiry, the restore's CT replay); `monitor` (canary).
 - **Assumptions about other sections:** §19.5 lists the router interfaces, publishes `rpt.bringyour.com`, its `_report` wildcard and the HELO names' A records ([owner decision 124](#od-124)), serves recurd.dev's redirect, tells the dns edges which interface W1 drains, runs `lbmap` beside each lb interface's nginx and returns the hosts a restore's regeneration adds or drops (§13.4); §19.10 sets `dns_root.restoring` as the dumps load and runs its abuse step (§21.10), then 12.6's restore step, before api's replay and its labels step, starting a stopped NS only from a reload; §2.8 dns-1 holds the replaced snapshot and the restore's listings to 12.6's ttls; §13.8 re-checks custom hosts on its schedule and writes again on `stale`. §22 tests the zone lint (CNAMEs beside data, `ruf`, `fo`, report mail into `<root>`), cross-network burner DMARC, role mail without SNI, private names per qtype, FCrDNS, the member-scope key-record check, the anchored soak, a replying burner's MX and A across its first and last selector, a drained or failed interface leaving `*`, `@`, every copy and `mx` on both NS, an operator CAA at a custom host's target behind a CNAME or a CAA-flattening ALIAS, an apex host's included, refused while it is still pending (FS-32), a direct MX redirected by operator records (FS-33), a custom host's ClientHello through the split (FS-35), label reclaim after a restore (FS-41, FS-42) and FS-42's dns step: a post-restore write; challenges committed before the loss, above every SOA or not, reading stale; an NS that misses the SOA read reloading, uncounted by `/dns/ready` until it serves restore_serial; custom hosts added or removed after the dump leaving or rejoining the map, listed (M6); and the TLSA and DKIM selectors of sidecars revoked after it gone from both NS once api's replay ends (M7, M9).
 
@@ -10855,12 +10916,14 @@ Caps protect the devices, which do the handshakes: endpoint caps are tier quotas
 | New per endpoint | 50 / 200 / 1,000 per s | token bucket per process |
 | Bandwidth per endpoint | 20 / 200 / 1,000 Mbit/s | token bucket in the splice, cap ÷ blocks |
 | Per visitor /64 (IPv6) or /32 (IPv4), per process | 64 concurrent, 20 per s; 4× those per /48 or /24 | HMAC under a per-process key rotated daily |
+
+**Visitor hashes.** Cap keys stay per process (§2.8 tls-2). tls-3's visitor hash and Find's affinity key use a fleet-shared daily key: 32 random bytes in Redis `{vhk}tls:<yyyymmdd>` (UTC), created by the first process with `SET NX EX 90000` and read by every process each minute and at the date change. `k_record` and `k_affinity` derive from it by HKDF-SHA256 with infos `urnetwork-sidecar-v1/tls-visitor-record` and `urnetwork-sidecar-v1/tls-visitor-affinity`, and the hash is HMAC-SHA256(k, family byte ‖ the /24 or /48 prefix)[:16], so one visitor links across processes for a day. A process that cannot reach Redis uses a random key of its own for that day, the closed direction. mxedge's daily key has the same shape under `{vhk}mx:<yyyymmdd>` (§15.4), so tls-3's rows and `{mxc_}` keys never join.
 | Per process | 50,000 connections | tlsedge.yml; §19 derives §9's platform Find limit from it |
 
 **Abuse hooks** ([owner decision 41](#od-41); §21 sets policy), none inspecting content:
 - **Kill switch.** `POST /tls/suspend` writes `network_tls_suspension` (§19.7), then one MULTI sets `{tes_<network_id>}` (`<host or *>` → reason, until) and INCRs its trigger (D-PROTO-12). tlsedge, on the shared key-event subscriber (§4.5), refuses new connections and resets open ones within 5 s, reloading from Postgres every 60 s; Find refuses too, and §8 suspension and revocation follow (§21.6). Row and keys go only when the case lifts it or `until` passes; a reload drops a kill only once neither its row nor its key holds it, so a Postgres restore lifts none, and §19.10's abuse step re-applies the kills and lifts mailed after the dump (§21.10).
 - **Time box, verification.** Publishes follow §8's `expires`: 24 h by default, at most 7 days on Community, 24 h on probation (§21.7); standing names only in Pro and Team documents (§8.5). They need §21.7's `network_verified`, so anonymous-only networks publish nothing (owner decisions [41](#od-41), [96](#od-96)).
-- **Published names, CT.** Active publish grants (host, port, label, expiry) form the list §21.6 checks hourly against Web Risk; reviewers open reported URLs as visitors, joining connections by `connection_id` for 24 h; §21's worker screens CT under `<root>` (§21.8), and D-TLS-8 covers mis-issuance.
+- **Published names, CT.** Active publish grants (host, port, label, expiry) form the list §21.6 checks hourly against Web Risk; reviewers open reported URLs as visitors, a case keeping a URL's path and query until its first review ends (§21.8; [owner decision 207](#od-207)), joining connections by `connection_id` for 24 h; §21's worker screens CT under `<root>` (§21.8), and D-TLS-8 covers mis-issuance.
 
 Server-visible fields are §2.8's tls-1 to tls-4, cert-1, cert-2, api-11 and api-7's publish rules (audience, `app_mode`, a raw link's `link_spki_sha256`); tls-3's records leave tlsedge in 10 s batches.
 
@@ -11202,7 +11265,7 @@ The unit stays PLAN.md:89's outbound connections per UTC day ([owner decision 30
 - **Destinations.** At most 200 Community connections per destination domain per hour; concurrency caps per (sending address, destination /24).
 - **Records.** The edge forwards exactly the records E3 admits, within 14.4's time limits; a client record its part refuses (unequal ciphertext, or a body past octet n), or a failed part, cuts the connection (14.8). Once the MX has closed, an outstanding part is moot, and a client record after the final `QUIT`, such as a close_notify, only ends the connection unforwarded; neither is a cut.
 
-**Enforcement.** Each preamble runs one Redis script on `{smq_<networkId>}` (halt, bucket, concurrency, the day's counters and reservations); MAIL debits a connection and its recipients, and close the observed bytes. Keys expire after 48 h; refusals return QUOTA with `retry_after_ms`.
+**Enforcement.** Each preamble runs one Redis script on `{smq_<networkId>}` (halt, bucket, concurrency, the day's counters and reservations); MAIL debits a connection and its recipients, and close the observed bytes. Keys expire after 48 h; refusals return QUOTA with `retry_after_ms`. A Community preamble also runs, at accept, one single-key script on each fleet-wide counter: `{smg_<yyyymmddhh>}`, the Community total, and `{smd_<hex(SHA-256(domain)[0:16])>_<yyyymmddhh>}`, its destination domain's, by UTC hour, each expiring 2 h after its hour starts: INCR, and past the cap DECR and answer TRY_LATER, a breaker trip alerting §19. A taskworker job each hour counts `smtp_send` rows by UTC hour over the trailing 168 complete hours for networks whose current tier is Community, takes the median of those hours, empty hours included, and writes it to `{smg_median}` (TTL 2 h); the breaker is max(500, 3 × median), and a missing median means 500. Redis loss restarts the counters, as 14.9 accepts.
 
 ### 14.8 Abuse attribution and the halt rule
 
@@ -11447,7 +11510,7 @@ report sender --TCP/25--> rpt.bringyour.com (two other lb interfaces) --> platfo
 
 **Listings.** The banner rejects only a commercial feed's botnet and exploit categories (for example Spamhaus XBL: https://www.spamhaus.com/data-access/rsync/, read 2026-11-04), from a licensed local mirror refreshed every 5 min, so no sender IP leaves for a lookup; other categories pass in `MailIngress.ip_listings`, and with the feed down nothing is rejected.
 
-**Memory and limits.** A closed handshake writes Redis `{mxc_<HMAC_k(prefix)>}` for the sender's /24 or /48, for 1 h under a daily `k`, storing no address (§2.8 mx-1), so a Postfix plaintext retry from a sibling sending address or another lb host gets 451. Splices end after 10 min idle (RFC 5321 §4.5.3.2.6), 10 min with under 1 MiB passed, 30 min, or 2× the message cap plus 1 MiB. Each router session leaves one `mail_connection_record` row (receiving network, time, size, result; no sender address or burner label), written in 10 s batches and kept 24 h, a §21.9 hold's copy excepted (§2.8 mx-2; 15.15).
+**Memory and limits.** A closed handshake writes Redis `{mxc_<HMAC_k(prefix)>}` for the sender's /24 or /48, for 1 h under a daily `k`, storing no address (§2.8 mx-1), so a Postfix plaintext retry from a sibling sending address or another lb host gets 451. `k` is the fleet-shared daily key `{vhk}mx:<yyyymmdd>`, of §13.9's shape under mxedge's own name, which `mxedge` and `mxedge-platform` both read, so no vault file is added and no long-lived secret sits on a TCP 25 block: writes use today's `k` and lookups try today's and yesterday's, so the 1 h rule holds across 00:00 UTC, and a Redis error reads as a recent closed handshake, so the sender gets `451 4.7.0`, never a lasting `530 5.7.0`. Splices end after 10 min idle (RFC 5321 §4.5.3.2.6), 10 min with under 1 MiB passed, 30 min, or 2× the message cap plus 1 MiB. Each router session leaves one `mail_connection_record` row (receiving network, time, size, result; no sender address or burner label), written in 10 s batches and kept 24 h, a §21.9 hold's copy excepted (§2.8 mx-2; 15.15).
 
 **Platform mail (D-MAIL-10; from M5).** `<root>`'s MX and §14.8's report addresses name `rpt.bringyour.com` (D-SMTP-19; §19.5 W4). Its listener terminates every session under a bringyour.com certificate, with the router's caps and plaintext refusal, refuses other recipients with `550 5.1.1` and passes the rest to §14.8's intake, which parses headers and aggregate report data only (D-SMTP-23), seals the raw bytes and persists no plaintext ([owner decision 78](#od-78); §2.8 mx-4, the statement's one exception). Session envelopes stay in memory.
 
@@ -13803,7 +13866,7 @@ rule id   route_id or map_id: under a decision, SHA-256("urnetwork-sidecar-v1/br
           not_after
 ```
 
-- **Placement** ([owner decision 5](#od-5)). Admin-signed heads carry the block, standing rules and 17.9's `BridgeShareSigner` files; sidecars file statements about themselves, and owners or sponsors about their subjects, as deltas entering §7.9's authorization log, verified at their position until a writer folds them in. Rule bodies are sealed to the config's current key generation (§10), so §8.12's invariant and D-TRUST-10's witness stop can delay them; a bodiless `BridgeWithdraw` never waits. Only ids show (kind, signer, subject, rule id, expiry and, for an approved route, the advertiser and the `route` rules it serves), which readers check. Gates see only §8's reach rules between sidecar ids and `BridgeRows`' egress modes (§8.10), never prefixes, addresses, ports, maps or aliases (§2.8, api-12).
+- **Placement** ([owner decision 5](#od-5)). Admin-signed heads carry the block, standing rules and 17.9's `BridgeShareSigner` files; sidecars file statements about themselves, and owners or sponsors about their subjects, as deltas entering §7.9's authorization log, verified at their position until a writer folds them in. Rule bodies are sealed to the config's current key generation (§10), so §8.12's invariant and D-TRUST-10's witness stop can delay them; a bodiless `BridgeWithdraw` never waits. Only ids show (kind, signer, subject, rule id, expiry, an egress statement's mode and, for an approved route, the advertiser and the `route` rules it serves), which readers check. Gates see only §8's reach rules between sidecar ids and `BridgeRows`' egress modes (§8.10), never prefixes, addresses, ports, maps or aliases (§2.8, api-12).
 - **Engine.** The compiler (`bridge_*.go`, §5) reads the config ([owner decision 6](#od-6)), verifies statements against §7.9's admissions and §8's grants within §8.9's latency targets, and compiles a `BridgeState` off the packet path: in the sidecar role on a daemon, and in an app's VPN component in the forwarding role, which reads the config by its forwarding Delegation's reader key ([owner decision 197](#od-197); 17.10); `device.Bridge` (17.10) applies it and later verified log entries, manages links, and swaps table and hook atomically. Before its first verified state it is pending and denies every private destination and exit; it persists its last verified state and never lowers it on unsigned input:
 
 ```text
@@ -15258,8 +15321,8 @@ Blocks are `beta 1 + g1 99` on every lb host unless noted.
 | gkm (§10) | `gkm.bringyour.com`: `/gkm/*`; W2 | §10.6's objects | JWKS, redis, metadata clusters |
 | sockets (§9) | `sockets.bringyour.com`: `/socket/*`; W2 | Redis; ticket key; projection loaded | JWKS, redis, ticket keys |
 | dns (§12): API; host-pinned `dnsedge` on each dns edge | `dns.bringyour.com`: §12.8's routes, journal feed; edges: UDP, TCP 53 | API: `dns_*`, `{dns}`; edge: current snapshot, verified key set | API: JWKS, pg, redis, DNSKEY windows; edge: current ZSK |
-| tlsedge (§13) | behind W1's split on 443; 8443, 8883 and 5671 unsplit (W7; [owner decision 121](#od-121)) | `{tes_}`; K platform clients | platform credential |
-| mxedge (§15): router; platform listener | TCP 25 (W4) | §15's tables, `{mxr_}`, `{mxc_}` | platform and feed credentials; platform-mail key (listener only) |
+| tlsedge (§13) | behind W1's split on 443; 8443, 8883 and 5671 unsplit (W7; [owner decision 121](#od-121)) | `{tes_}`, `{vhk}tls:`; K platform clients | platform credential |
+| mxedge (§15): router; platform listener | TCP 25 (W4) | §15's tables, `{mxr_}`, `{mxc_}`, `{vhk}mx:` | redis, both blocks; platform and feed credentials; platform-mail key (listener only) |
 | smtpedge (§14): g1 1 on 2 sending hosts; `exposed: false`, `cap_net_admin` | outbound 25 from its hosts' shared lb addresses by fwmark (warp/warpctl/config.go:2689; [owner decision 124](#od-124)) | `smtp_*`, `{smq_}`; addresses bound | platform credential, X-UR-Ref keys |
 | taskworker (existing) | — | the jobs §7, §10-§14, §20 and §21 list; the push sender | adds every cluster (GC, hourly evacuation and packing with v1's versionless sweep, shreds, gkm's reconciler, and from v1 §11.13's drop dry runs and jobs, P2 under D-OPS-21, with the segment-bucket DELETE it already holds) and the write budget's and HDD capacity's loops, ACME, EAB, Web Risk, APNs and FCM keys |
 
@@ -15450,7 +15513,10 @@ settle    a PUT or DELETE must take effect before every later request on its key
           and changes nothing; (3) releases the key's lock once N/2 + 1 drives have committed the write
           (success; a later commit of it only adds a copy), or, once no more of its commits can begin (every
           drive answered, or its deadline passed), reverting every committed drive to its previous
-          xl.meta, or a DELETE's .trash copy, which the trash sweep keeps while the key is held,
+          xl.meta, or a DELETE's copy in .minio.sys/settle/<id>-<hash of the key>/, ciphertext and xl.meta,
+          which the settle sweep keeps at least 2 min and while the key is held, its interval checked to stay
+          inside §11.12's 10 min stragglers' pass (§2.8 evs-10), each version's xl.meta naming its write by
+          x-minio-internal-settle-id, the key lock's random id,
           by (2)'s check, as the deployed build undoes a write short of quorum on every drive
           that took it (cmd/erasure-object.go:1059-1079), once the drives that may still hold it,
           committed and not yet reverted or still committing, number under N/2, so that write can
@@ -15461,14 +15527,18 @@ settle    a PUT or DELETE must take effect before every later request on its key
           commit of the request still runs and settles by (3), a host that does not answer counting as still
           committing; (5) serves a drive from a restarted process only once the old one has exited, by an
           exclusive flock on the drive; (6) heals no version that fewer than N/2 drives hold onto others,
-          removing it as dangling; so one drive or host failing holds a key at most for a revert's round trip,
+          removing it as dangling; a DELETE carrying x-ur-if-unmodified-ms is refused 412, under the key's
+          lock, when the object it finds was stored a second or more after that time, which is how GC deletes
+          only the object it listed (§11.13; owner decision 203); so one drive or host failing holds a key at most
+          for a revert's round trip,
           and a key waits longer only while a write lacking N/2 + 1 drives could still reach N/2 with a host
           among the drives holding it unreachable, until that host answers or its drives are replaced (19.10,
           19.17); §22.9's suite checks it (FS-114) per build, upgrade and cluster, reporting the lag from a
           cancel to a write's last drive answer, which no margin relies on, since a marker's collection DELETE
           (owner decision 148) and, from v1, the versionless purge's, the marker collection's kind-5 and slot
           DELETEs (§11.7, §11.13) and a drop job's (§11.13) are unconditional; on a cluster whose build has not
-          passed it, taskworker opens no collection window and v1's purge and drop jobs delete nothing,
+          passed it, taskworker opens no collection window, orphan GC deletes nothing and v1's purge and drop
+          jobs delete nothing,
           keeping markers and candidates
 clocks    chrony on every host running evs, gkm, taskworker, a Redis master or MinIO, by whose clocks
           §11.10's push sequence restarts and the settle row's deadlines hold (edge-6 and edge-5:
@@ -15479,8 +15549,8 @@ clocks    chrony on every host running evs, gkm, taskworker, a Redis master or M
           estimate of true time and slews the system clock toward it
           (https://chrony-project.org/doc/4.6/chronyc.html, tracking), unknown after 3 s without a reply or
           with an unsynchronised one (leap 3, stratum 16); while it is unknown or over 50 ms, §11.8's evs
-          answers pushes 503 and issues no v1 purge DELETE (§11.13), taskworker raises no evacuation or GC
-          fence and GC deletes nothing, and a MinIO host takes no request carrying a deadline and begins no
+          answers pushes 503 and issues no v1 purge DELETE (§11.13), taskworker raises no evacuation fence
+          and GC deletes nothing, and a MinIO host takes no request carrying a deadline and begins no
           drive commit, the work waiting, since §11.8 bounds every clock that writes fence_ms or a refusal
           record's until, and the settle row every clock that sets or checks a deadline; each exports it,
           monitor warning past 25 ms
@@ -15605,7 +15675,8 @@ MG5     §12: dns_*, network_dns_*; §13: network_tls_*, tls_connection_*; §16:
         gate); §21's seven
 MG6     §7's Team tables; §8: network_acl_share; §17: network_bridge_share;
         §20: transfer_balance.tier, transfer_balance's team_credit index (built concurrently; pending
-        from M4's dark comparator, behind escrow_draw_order, 19.11), stripe_meter_report
+        from M4's dark comparator, behind escrow_draw_order, 19.11), stripe_meter_report,
+        team_subscription (owner decision 199)
 MG7     §15: mail_network, mail_host_key, mail_direct_mx, mail_connection_record
 MG8     §7: network_client_owner.forward_only (owner decision 197); §18: sidecar_push_token
 MG9     §14: smtp_*
@@ -15629,7 +15700,7 @@ code      code reading a pending group's tables stays gated off (D-OPS-10) and u
 - Groups add tables, nullable columns and new-table indexes; existing tables get `newOnlineSqlMigration` indexes (server/db_migrations.go:50-52). `acl_subject_client_id` turns NOT NULL through a validated `NOT VALID` check (precedent :5961-5969).
 - Only `smtp_send` (daily, PK (send_day, send_id)), `tls_connection_record` and `mail_connection_record` (hourly) are partitioned. Cleanups wait for every database job (connect/CODESTYLE.md:88). Pools per process (config/main/db.yml): dns and smtpedge 4, others 2; locks stay transaction-scoped.
 
-**Redis (D-OPS-7).** Tags: `{scp_}`, `{wake_}` (§6, 19.4), `{wakeq_}`, `{tokgen_}` (§18.7), `{dpop_}` (§7), `{acl_}` (§8.9's `{acl_<networkId>}v`; §7.9's `{acl_<networkId>}e`, the verified projection cache, which only api writes ([owner decision 136](#od-136)), and `{acl_<networkId>}q`, the append limits' 25 h counter), `{sg_}`, `{sn_}`, `{sc_}`, `{svc_}` (§9), `{gka_}` (§10), `{evsq_}`, `{evsl_}`, `{evsh_}`, v1's `{evsd_}`, `{nvb_}` (§11), `{dns}` (§12), `{tes_}`, `{tcb_}` (§13), `{smq_}` (§14), `{mxr_}`, `{mxc_}` (§15), `{sq_}` (§20). Every key is rebuildable: it projects Postgres or a cluster (the head and projection caches for 10 min, certs' budget from `network_tls_cert`, tokens per slot by taskworker's sentinel pass, drop hints by the nightly LIST of `drops/` within a day), returns by re-registration (leases, acks), restarts above its old values (the push sequence) or expires within 48 h (the write budget's allowance in 15 s, and its saved bucket, wallet and counter readings 48 h after the loop's last write, a lost one restarting the bucket and the wallet at zero, which is conservative); switches and halts reach Postgres first and reload within 60 s. The hint listener follows slot owners (`RunRedisShardSubscription`); caps (config/main/redis.yml): sockets 64, evs 32, others 16.
+**Redis (D-OPS-7).** Tags: `{scp_}`, `{wake_}` (§6, 19.4), `{wakeq_}`, `{tokgen_}` (§18.7), `{dpop_}` (§7), `{acl_}` (§8.9's `{acl_<networkId>}v`; §7.9's `{acl_<networkId>}e`, the verified projection cache, which only api writes ([owner decision 136](#od-136)), and `{acl_<networkId>}q`, the append limits' 25 h counter), `{sg_}`, `{sn_}`, `{sc_}`, `{svc_}` (§9), `{gka_}` (§10), `{evsq_}`, `{evsl_}`, `{evsh_}`, `{evsc_}`, v1's `{evsd_}`, `{nvb_}` (§11), `{evsn_}` (§20.7's nightly count; [owner decision 198](#od-198)), `{dns}` (§12), `{tes_}`, `{tcb_}` (§13), `{smq_}`, `{smg_}`, `{smd_}` (§14), `{mxr_}`, `{mxc_}` (§15), `{vhk}` (§13.9, §15.4: the daily visitor-hash keys, 25 h), `{sq_}` (§20). Every key is rebuildable: it projects Postgres or a cluster (the head and projection caches for 10 min, certs' budget from `network_tls_cert`, tokens per slot by taskworker's sentinel pass, drop hints by the nightly LIST of `drops/` within a day), returns by re-registration (leases, acks), restarts above its old values (the push sequence) or expires within 48 h (the write budget's allowance in 15 s, and its saved bucket, wallet and counter readings 48 h after the loop's last write, a lost one restarting the bucket and the wallet at zero, which is conservative); switches and halts reach Postgres first and reload within 60 s. The hint listener follows slot owners (`RunRedisShardSubscription`); caps (config/main/redis.yml): sockets 64, evs 32, others 16.
 
 ### 19.8 Observability and SLOs
 
@@ -15873,7 +15944,7 @@ the push sender, APNs or   wakes stop; clients resync (§6.8)                   
   FCM
 a host's clock or chronyd  while its offset is unknown or over 50 ms, evs      fix chrony's sources, or drain the host
                            there answers pushes 503, taskworker raises no
-                           evacuation or GC fence and GC deletes nothing, and
+                           evacuation fence and GC deletes nothing, and
                            a storage host takes no request with a deadline
                            and begins no drive commit, its drives sitting out
                            writes (19.6, §11.8); a Redis host's offset only
@@ -15949,7 +16020,8 @@ postgres   ops            restore the newest main dump, then the newest sidecar 
                           objects deleted with the last shred, all listed in the incident
 abuse      abuse role     next, at any hour (19.8's rota), before any block reads the restored rows: §21.10's
                           step re-applies, in mail order, every unexpired action and every lift the abuse
-                          mailbox holds from after the sidecar dump, so the dns step's snapshot withholds what
+                          mailbox holds from after the sidecar dump, each record opened with the mailboxes'
+                          vault-held HPKE key (owner decision 208), so the dns step's snapshot withholds what
                           they suspend and the edges' first reloads keep every kill and halt; it re-places
                           holds placed after the dump from the legal-request mailbox, also outside Postgres,
                           and tells counsel; a hold whose objects the site took is void
@@ -16126,7 +16198,7 @@ A network is in when listed or when hash(network_id) mod 100 < `percent`. A disa
 
 **D-OPS-19 (proposed).** The metadata set runs 19.6's XFS and MinIO settings, and each storage host exports its metadata drives' write counters and SMART wear, and its HDDs' operation counters, to monitor, §11.13's write budget and its HDD share (19.6). *Why:* the drives' endurance is the binding budget, and only drive counters measure it ([owner decision 140](#od-140)); the HDD sets' operations bind before their space (Q-OPS-2).
 
-**D-OPS-20 (proposed).** Both clusters run an in-house MinIO build, from the `urnetwork/minio` fork's `sidecar` branch ([owner decision 195](#od-195)), with 19.6's deadline and settle rules: every request but a streamed segment PUT carries its deadline, which the build checks where it takes the key's lock and at each drive commit; each drive commit applies only while its drive still holds the version the coordinator read under the lock; and a PUT or DELETE releases its key only once it holds a write quorum or can never reach a read quorum, reverting every drive that took it, another host settling a dead coordinator's write. *Why:* in the deployed build a cancel reaches no drive on another host and the lock is released first, and even a lock held to the 30 s drive timeout releases a commit that stalled after its last check, so a cancelled or timed-out write can land after a later request on its key read it or passed its precondition, breaking §11.7's marker collection, v1's versionless purge and drop jobs (§11.13) and every conditional write's atomicity; holding a key while such a write settles is the cost, paid only when a host fails during a write that has not reached its write quorum; a fork, not a patch series in warp, keeps MinIO's AGPL source in one public place.
+**D-OPS-20 (proposed).** Both clusters run an in-house MinIO build, from the `urnetwork/minio` fork's `sidecar` branch ([owner decision 195](#od-195)), with 19.6's deadline and settle rules: every request but a streamed segment PUT carries its deadline, which the build checks where it takes the key's lock and at each drive commit; each drive commit applies only while its drive still holds the version the coordinator read under the lock; and a PUT or DELETE releases its key only once it holds a write quorum or can never reach a read quorum, reverting every drive that took it, another host settling a dead coordinator's write; and a DELETE may name the LastModified of the object it means, as GC's do ([owner decision 203](#od-203)). *Why:* in the deployed build a cancel reaches no drive on another host and the lock is released first, and even a lock held to the 30 s drive timeout releases a commit that stalled after its last check, so a cancelled or timed-out write can land after a later request on its key read it or passed its precondition, breaking §11.7's marker collection, v1's versionless purge and drop jobs (§11.13) and every conditional write's atomicity; holding a key while such a write settles is the cost, paid only when a host fails during a write that has not reached its write quorum; a fork, not a patch series in warp, keeps MinIO's AGPL source in one public place.
 
 **D-OPS-21 (proposed).** Drop jobs are P2 taskworker work, one per segment cluster at a time, each reading at most 32 MB/s and deleting at most 10 objects a second, paused while HDD drive operations exceed 50% of measured capacity (19.6). *Why:* [owner decision 173](#od-173)'s scan of every ref must not starve customers' reads or the HDD sets' heal and evacuation.
 
@@ -16164,7 +16236,7 @@ None: owner decisions [18](#od-18), [94](#od-94) and [145](#od-145) keep MinIO, 
 - **Consumes:** engines (§4, §9-§15); §7.8's `rev/` and re-seed mode; §7.9's log, verified cache and site-loss resumption; §8.9; §10.6, §10.8, §10.16's gen packs; §11.8's placement and clock rule, §11.13's mix, write budget, HDD share, v1's purge, sweep and drop jobs and the search index's costs; §11.14's search index; §16.11's directory; §12.6's restore step and `/dns/reload-diff`; §13.4; §14.6; §15.4; §18.7; §20's jobs and draw order; §21's tables, `hold/`, intake and abuse mailbox (§21.10); §22's tests; X15 (§23).
 - **Subprotocol messages:** none. **API routes:** none new. **Tables:** none owned; 19.7 summarizes; the push sender reads `{scp_<C>}tok`, `{scp_<C>}tokrev`, `{scp_<C>}ack` and `{wakeq_<shard>}`, and taskworker reconciles tokens per hash slot by `{tokgen_<n>}` and re-applies changed rows each pass (19.4; §18.7's steps 5 and 6).
 - **Services and config:** services.yml blocks, two dns edge hosts; `sidecar.yml` (gates, `place_new`, `drained`, `preview_networks`, `sockets_control_qps`, `urnetwork_edge`); `db.yml` and `redis.yml` caps; vault JWKS, ZSK, APNs, FCM and feed credentials; receipt keys in evs's secret files; D-OPS-20's MinIO build from `urnetwork/minio`; xops's `file-clusters` with 19.6's XFS and MinIO settings, the storage hosts' diskstats exporter, chrony on the evs, gkm, taskworker, Redis and storage hosts with the Redis hosts' offset exporter, the daily sidecar dump, the main dump's exclude list and planetoid's pg-sidecar stream (D-OPS-18), the bundle filter (§4.8); the pager.
-- **Assumptions about other sections:** §7.8's re-seed mode mints only `repo:<id>:admin` for evs's `/reseed` and gkm's GroupForm, which §11.12 also admits for a repo re-seeded as deleted; §7.9 resumes the log from member devices' verbatim entries, each adopted once two members' devices hold it, FS-41 checks that readers see no FORK, that one member's forged TICK takes no position and that a Team whose other members hold only read_only devices resumes, and FS-42 restores both dumps in each order of their snapshot times, keeping the newer one's rows, and checks that revocations between or after the dumps hold once api's replay ends, their TLSA (M7) and DKIM selectors (M9) gone, that a network newer than both takes the deleted-network path, that actions and lifts mailed after the dump hold (§21.10), and that a dns write, an ACME challenge, an NS that missed the SOA read and a custom host after the restore behave as 19.10's dns step says, which runs §12.6's restore step; §10.6, §11.7, §11.8 and v1's purge and drop jobs (§11.13) rely on 19.6's request deadline, which the Blobs client sends as x-ur-deadline-ms, and its settle rule, which §22's suite checks (FS-114); §11.13's HDD admission and drop jobs read 19.6's published HDD drive operations and capacity, and the versionless sweep HEADs each candidate before its DELETE (19.8); while 19.6's clock offset is unknown or over 50 ms, §11.8's evs answers pushes 503, and taskworker raises no evacuation or GC fence and GC deletes nothing; §11.10's restarted push sequence relies on 19.6's chrony on the Redis hosts; §20.9's draw sites read `escrow_draw_order`; §11.8 places new repos on `place_new`, and §11.22 lists a segment placement that keeps the receipt check before any added HDD set (19.9); §11.13's accounts debit P1 admissions from A1 at full price, moving their deferred P2 work into the wallet W, funded P2 spending only W and P1 and unfunded P2 only T, while P0 issues at once, its measured bytes draining the bucket down to its floor at zero, past which they are its forgiven excess ([owner decision 190](#od-190)), and no other class issues while the bucket is empty; §10.6's acks and §11.10's leases and push sequence live in Redis; §18.7's trigger feeds `{wakeq_<shard>}`, and its sentinel pass re-projects the slots of a master lost or restarted; §21.8 feeds 19.8's pager; §22.8 measures §11.13's mix, §10.6's sizes, bytes per object and push, records per batch per cluster, and rotations and path-epoch copies, expiry-driven ones included, and its `hdd` row the segment cluster's capacity by 19.6's HDD counters; HE allows port 25.
+- **Assumptions about other sections:** §7.8's re-seed mode mints only `repo:<id>:admin` for evs's `/reseed` and gkm's GroupForm, which §11.12 also admits for a repo re-seeded as deleted; §7.9 resumes the log from member devices' verbatim entries, each adopted once two members' devices hold it, FS-41 checks that readers see no FORK, that one member's forged TICK takes no position and that a Team whose other members hold only read_only devices resumes, and FS-42 restores both dumps in each order of their snapshot times, keeping the newer one's rows, and checks that revocations between or after the dumps hold once api's replay ends, their TLSA (M7) and DKIM selectors (M9) gone, that a network newer than both takes the deleted-network path, that actions and lifts mailed after the dump hold (§21.10), and that a dns write, an ACME challenge, an NS that missed the SOA read and a custom host after the restore behave as 19.10's dns step says, which runs §12.6's restore step; §10.6, §11.7, §11.8 and v1's purge and drop jobs (§11.13) rely on 19.6's request deadline, which the Blobs client sends as x-ur-deadline-ms, and its settle rule, which §22's suite checks (FS-114); §11.13's HDD admission and drop jobs read 19.6's published HDD drive operations and capacity, and the versionless sweep HEADs each candidate before its DELETE (19.8); while 19.6's clock offset is unknown or over 50 ms, §11.8's evs answers pushes 503, and taskworker raises no evacuation fence and GC deletes nothing; §11.10's restarted push sequence relies on 19.6's chrony on the Redis hosts; §20.9's draw sites read `escrow_draw_order`; §11.8 places new repos on `place_new`, and §11.22 lists a segment placement that keeps the receipt check before any added HDD set (19.9); §11.13's accounts debit P1 admissions from A1 at full price, moving their deferred P2 work into the wallet W, funded P2 spending only W and P1 and unfunded P2 only T, while P0 issues at once, its measured bytes draining the bucket down to its floor at zero, past which they are its forgiven excess ([owner decision 190](#od-190)), and no other class issues while the bucket is empty; §10.6's acks and §11.10's leases and push sequence live in Redis; §18.7's trigger feeds `{wakeq_<shard>}`, and its sentinel pass re-projects the slots of a master lost or restarted; §21.8 feeds 19.8's pager; §22.8 measures §11.13's mix, §10.6's sizes, bytes per object and push, records per batch per cluster, and rotations and path-epoch copies, expiry-driven ones included, and its `hdd` row the segment cluster's capacity by 19.6's HDD counters; HE allows port 25.
 
 ### 19.17 Risks
 
@@ -16418,12 +16490,12 @@ cost     one Redis script per relayed contract (one per 1-256 MiB moved); no Pos
 | Limit | Checked at | At the limit | On downgrade |
 |---|---|---|---|
 | `storage` | evs's over-limit list (20.6) over the nightly stored count (below) | uploads and pushes adding payload refused (Team: above 2 TiB, metered above 200 GiB); maintenance pushes, an erasure's bounded CLOSURE push and its uploads, re-seeding, config and mailcfg pushes within §7.9's limits, reads, deletes and export work | read-only |
-| `tls_endpoints`: publish grants per (host, port) | grant activation; `ValidateListen` (§13.9) | refused | grants expire; standing names over quota suspended after 14 days |
+| `tls_endpoints`: publish grants per (host, port) | grant activation; `ValidateListen` (§13.9) | refused | grants expire; standing names over quota suspended after 14 days by `model.SetTlsSuspension` with reason `quota:downgrade` and no `abuse_case`, lifted on renewal: no §21 action, so not mailed, not counted toward `restricted` or escalation, and re-derived by a restore |
 | `dns_entries`: user RRsets | record CAS (§12.8) | refused | newest over quota withheld after 14 days |
 | custom domains, mail From included (§14.6) | `custom-host-add` (§12.8) | Team only | web hosts and mail From withheld after 14 days; mail hosts keep MX, TLSA and routing |
 | `config_admissions`, `acl_*` | the writer's validation, api's verifier (§7.9, §8.8); from 90% of `config_admissions`, admins' devices' cleanup list (§7.10's `cleanup` row) | delta or head refused | existing ones stay; new ones must fit |
 | `smtp_*` | smtpedge `{smq_}` script (§14.7) | QUOTA; mail stays queued | next preamble |
-| `sidecar_clients`: connected | enrollment and connect, as `concurrent_clients` (server/connect/resident.go:1170-1187) | refused; 4001 at connect | connected clients stay |
+| `sidecar_clients`: connected | enrollment and connect, as `concurrent_clients` (server/connect/resident.go:1170-1187), by one ZCOUNT from now to +inf of `{sq_<network_id>}connected_sidecar`, a sorted set of every marked client scored by its expiry ms, written and refreshed on the resident poll as `{np_}connected` is, its 48 h ttl refreshed at each write | refused; 4001 at connect | connected clients stay |
 | members, SSO (§7.5, §7.6) | §7.5's Team routes, by `NetworkTierOf` | Team only | frozen: sign-in, data kept; invites, roles, IdP, SCIM refused |
 
 **Stored bytes and maintenance at the limit (D-QUOTA-3).**
@@ -16447,7 +16519,11 @@ count    taskworker's nightly pass over each repo's prefixes on its metadata clu
          prefix serves both; a version counts from head windows and log pages while its batch exists, then from
          the parcel or pack that holds it, or, staged versionless content, from the segment evacuation writes for
          it, if any, so a record mid-evacuation counts twice only until its minute's batches are deleted, and the
-         next pass corrects it; usage batches move the count between passes (20.6); §11.13 gives its cost
+         next pass corrects it; the pass runs as shard jobs, each replacing its per-network sums for the night in
+         Redis {evsn_<night>} (48 h), and a closing job, once every shard of every metadata cluster has reported,
+         writes each network's sum, zero for a network with a count and no sums, while a night that some shard
+         never finished, or whose sums Redis lost, leaves the old count (owner decision 198); usage batches move
+         the count between passes (20.6); §11.13 gives its cost
 limit    at the storage limit (Team: past storage_overage_max, or past storage while storage_gib_month is unset)
          and while spent, evs refuses new payload, segment uploads and pushes naming a new segment or inline
          record alike; it accepts maintenance pushes, which add no payload (CONSUME, BASE, ERASE, PATH_EPOCH and
@@ -16564,7 +16640,7 @@ type QuotaLease interface {
 
 ### 20.9 Team billing and abuse limits
 
-**Post-paid (owner decisions [92](#od-92), [122](#od-122)).** One Stripe subscription per Team network prices the base, seats (graduated above `included_seats`; meter `team_seats`, formula `last`) and overage at 20.4's `team:` prices; Stripe holds only price ids, in `config/<env>/stripe.yml` as for Pro (server/controller/subscription_stripe_controller.go:64-65), and checkout refuses one whose amount differs. Transfer overage draws a 10 TiB credit line (`grant_kind` `team_credit`) that every draw uses last (D-QUOTA-9), metered as its daily GiB (pre-aggregated daily, `sum`; Meters below) at the data-pack rate, $3 per TiB (config/all/pro.yml:221-222). Settlement pays providers from balance revenue, so the line carries `net_revenue_nano_cents` at that rate, a per-period risk for URnetwork. Storage over 200 GiB is metered as daily GiB-days (pre-aggregated daily, `sum`), a GiB-day at 12/365 of the GiB-month price. `invoice.payment_failed`, like an exhausted line, stops renewal and refuses as an empty balance; `invoice.paid` renews.
+**Post-paid (owner decisions [92](#od-92), [122](#od-122)).** One Stripe subscription per Team network prices the base, seats (graduated above `included_seats`; meter `team_seats`, formula `last`) and overage at 20.4's `team:` prices; Stripe holds only price ids, in `config/<env>/stripe.yml` as for Pro (server/controller/subscription_stripe_controller.go:64-65), and checkout refuses one whose amount differs. Transfer overage draws a 10 TiB credit line (`grant_kind` `team_credit`) that every draw uses last (D-QUOTA-9), metered as its daily GiB (pre-aggregated daily, `sum`; Meters below) at the data-pack rate, $3 per TiB (config/all/pro.yml:221-222). Settlement pays providers from balance revenue, so the line carries `net_revenue_nano_cents` at that rate, a per-period risk for URnetwork. Storage over 200 GiB is metered as daily GiB-days (pre-aggregated daily, `sum`), a GiB-day at 12/365 of the GiB-month price. `invoice.payment_failed`, like an exhausted line, stops renewal and refuses as an empty balance; `invoice.paid` renews. `team_subscription` (MG6) records each Team's Stripe subscription and customer ids, billing anchor and start: the first `invoice.paid` writes it, `customer.subscription.deleted` ends it, and the hourly reconciler can repair it from Stripe. `RefreshTeamTransferBalances` grants a period only to a Team whose row is live, with no unresolved payment failure, at the row's anchor, and the meter reports, which only such Teams get, take their customer and start from it ([owner decision 199](#od-199)).
 
 **Draw order (D-QUOTA-9).** One comparator orders every draw of a payer's transfer balances and, reversed, every return:
 
@@ -16716,9 +16792,13 @@ service_debit_journal(usage_id, balance_id, meter, debit_byte_count,     deleted
 service_usage_batch(batch_id PK, producer, window_start, applied_time)   24 h
 stripe_meter_report(network_id, meter, usage_day, version, identifier,   13 months
   value, state, attempts, next_time)
+team_subscription(network_id, subscription_id, customer_id,              until its network is deleted
+  anchor_time, start_time, end_time NULL)
 Redis {sq_<network_id>}: rates, and each erasing sidecar's closure       48 h
   uploads a minute, closure bytes a UTC day, last closure ask and next
-  turn, which give k (20.7)
+  turn, which give k (20.7); connected_sidecar, every connected marked
+  client by its expiry ms (20.7); verified, network_verified as 0 or 1   60 s
+  (§21.7)
 ```
 
 - **Services and config:** the 20.4 keys in pro.yml; sidecar.yml's `escrow_draw_order` gate (§19.11, 20.9); Team price ids in `config/<env>/stripe.yml`; the three meters, created once before M6; a Stripe invoice-finalization rule (72 h, metered subscription-cycle invoices); `POST /network/team-checkout`'s 1 h session with `subscription_data.billing_cycle_anchor` at 00:00:00 UTC (20.9); taskworker jobs `RefreshTeamTransferBalances`, `RollupServiceUsage`, `ReportStripeMeters`, `ReconcileSidecarCounters`.
@@ -16799,7 +16879,7 @@ Breakers act early: `<root>` cannot be replaced, and listings also block platfor
 
 | Control | Policy |
 |---|---|
-| Kill switch (§13.9) | host, then label (21.4), then revocation (`cessationOfOperation`, https://letsencrypt.org/docs/revoking/) and no renewal (§13.8); lifted only through the case, never by a restore (21.10) |
+| Kill switch (§13.9) | host, then label (21.4), then revocation (`cessationOfOperation`, https://letsencrypt.org/docs/revoking/) and no renewal (§13.8); an abuse kill is lifted only through its case, never by a restore (21.10); a quota downgrade's suspension of standing names (§20.7) is no §21 action |
 | Proactive check | published hosts and user record names, hourly, against Web Risk's locally matched Update API (https://docs.cloud.google.com/web-risk/docs/overview); Safe Browsing is non-commercial only (https://developers.google.com/safe-browsing) |
 | CT watch ([owner decision 41](#od-41)) | the abuse worker sends 21.8 any name under `<root>` in CT that `ScreenName`'s current lists refuse; D-TLS-8 covers mis-issuance |
 
@@ -16827,7 +16907,7 @@ Breakers act early: `<root>` cannot be replaced, and listings also block platfor
 
 **Header-only parsing** ([owner decision 78](#od-78)). Report and role mail get §14.8's parse and sealed copy or are dropped unread; an auto-reply points senders to the form, which takes URLs and header blocks.
 
-**Pipeline.** Each report becomes an `abuse_case`, joined to a network by host or address (§12's label map; a burner address names its `<net>`), headers (§14.8) or edge `connection_id` (24 h); third-party data is dropped after the join.
+**Pipeline.** Each report becomes an `abuse_case`, joined to a network by host or address (§12's label map; a burner address names its `<net>`), headers (§14.8) or edge `connection_id` (24 h); third-party data is dropped after the join, except a reported URL's path and query, which the case keeps until its first review ends, at most its review clock, so that reviewers open the page reported (§13.9; [owner decision 207](#od-207)); a reporter's address and free text are never kept, and of free text only an appeal's own reason is stored.
 
 | Signal | Machine action | Review (v0: business hours, the action holding) |
 |---|---|---|
@@ -16845,7 +16925,7 @@ Breakers act early: `<root>` cannot be replaced, and listings also block platfor
 
 **Production** reaches only §2.8's rows while retained, never content, keys, internal names or paths (§2.5), notably:
 - accounts and identities (api-1, api-5), the projection's reach graph (api-7) and abuse cases (api-14);
-- connect-1's contract pairs (client ids, bytes, times): Network and Service contracts for up to 300 days, shares for 7 days after payout;
+- connect-1's contract pairs (client ids, bytes, times), for the horizon connect-1 states;
 - evs's push history (sidecar ids, times, path tokens, padded sizes; evs-4, evs-12, evs-14), kept for the repo's life by default, DROP statements included: who, when, which token paths and how many versions (evs-12); its drops', drop jobs' and dry runs' state for 30 days after each ends (evs-28) and its 7-day request log (evs-7); gkm's membership as sidecar ids;
 - edge records for 24 h (tls-3, with keyed visitor-address hashes; mx-2, with no sender address) and, from M9, send records for 30 days (smtp-3).
 
@@ -16854,7 +16934,10 @@ It never reaches relay frames or dials (connect-2), inbound sender addresses (mx
 **Preservation holds (owner decisions [133](#od-133), [184](#od-184)).** A hold keeps one network's in-scope records existing at placement until its kind's deadline (§2703(f): 90 days, renewable once; §2258A: 1 year), and collects nothing new. TTL sweeps skip those rows; `copied_rows` copies what drops or is overwritten on its own: rows of partitions that drop whole (tls-3, smtp-3, mx-2) and the Redis soft state existing at placement (evs-8's lease fields, gkm-10's acks; [owner decision 136](#od-136)); and api mirrors each hold as `hold/<network_id>/<case_id>/_` on the first metadata cluster (§11.8; [owner decision 145](#od-145)), so §11.13's GC and §10.6's reconciler skip in-scope objects on every cluster, and evacuation moves a held network's batched records, a shredding repo's included, into packs and parcels that nothing deletes while the hold stands (evs-19). A drop of a path's history (§11.7) whose targets a hold covers still commits: it reads, lists and bills as finished, as an unheld drop would, and its dropped versions are served to no one, while its deletions wait until every covering hold has ended (§11.13); no answer, listing or bill tells the network that a hold exists, so a sealed order stays sealed ([owner decision 184](#od-184)). A site loss voids what a hold kept on the file cluster, which has no off-site copy ([owner decision 94](#od-94)); §19.10's restore returns its rows and tells counsel.
 
 ```text
-abuse_legal_hold(network_id, kind, scope, case_id, expire_time, copied_rows)
+abuse_legal_hold(network_id, case_id, part, kind, scope, expire_time, copied_rows)
+part     the primary key is (network_id, case_id, part): part 0 is the hold itself, and parts 1 and up each
+         hold at most 16 MiB of compressed rows in copied_rows, so a busy network's tls-3 rows fit 21.16's
+         seven tables
 kind     preserve_2703f  90 d from placement, renewed once for 90 d by a renewed request (18 U.S.C. §2703(f)(2))
          report_2258a    1 year from the NCMEC report (18 U.S.C. §2258A(h)); not renewable here
 overlap  holds over one scope keep it until the latest expire_time; expiry resumes TTL sweeps, GC, held shreds
@@ -16876,12 +16959,16 @@ counsel  before holds ship (M5), confirms each kind's applicability and owner de
 
 ```text
 record   each action (kill, zone or host suspension, halt, §8 suspension, limit tightening) and each lift
-         is mailed, as it commits, to the abuse mailbox (config/<env>/abuse.yml), held off site, as
-         {action_id, case_id, category, network_id, kind, target, until, time}; kept as api-14's actions
+         is sealed to a vault-held HPKE key in api and mailed, as it commits, to the abuse mailbox
+         (config/<env>/abuse.yml), as {action_id, case_id, category, network_id, kind, target, until, time};
+         kept as api-14's actions; each hold placed goes the same way to the legal-request mailbox, kept
+         until its expire_time; both mailboxes sit at one provider outside URnetwork's Postgres and clusters,
+         which the owner names, so it and SES see only each record's sender, time and size (owner
+         decision 208)
 restore  §19.10's abuse step, after the dumps load and before the token exchange reopens, the edges read
          the restored rows or §12.6's restore step builds the zone: the abuse role (§19.8's rota, at any
          hour) re-applies, in mail order and idempotently by action_id, every unexpired action and every
-         lift mailed after the dump, re-creating its case under its id
+         lift mailed after the dump, each opened with the vault key, re-creating its case under its id
 check    §12.6's step flags restored RRsets of networks with open cases; the abuse role clears each flag
 gap      an action committed in the seconds before the primary's loss, its mail not yet sent, is lost
          with it; tlsedge still keeps a kill that Redis holds (§13.9), and feed and Web Risk hits recur
@@ -16944,8 +17031,8 @@ A semiannual report counts requests by instrument and country, accounts affected
 - **Subprotocol messages:** none; state changes ride §6's `core`, `sock` and `mail` hints.
 - **API routes** (api, §19.4): `POST /abuse/report` (Public, rate-limited); `GET /abuse/cases` (Network, read roles); `POST /abuse/appeal` (Owner or Admin; never a client token); `GET /abuse/status` (Client, own state; sidecar-classified, on §7.4's `strict_exp` allowlist); `POST /abuse/action` (staff, off the public API; it refuses a `network_sidecar_limit` row that sets `evs_closure_bytes_floor` or `evs_closure_uploads_per_s`, both fixed, or takes `evs_closure_bytes_per_day` below the floor: §20.5, §20.7).
 - **Tables** (api; migrations ≥926 in §19.7's MG5): `abuse_case`, `abuse_action`, `abuse_appeal`, `network_abuse_state`, `abuse_legal_hold` (with `kind`, 21.9), `abuse_access_log`, `legal_request`.
-- **Services and config:** the taskworker abuse worker (feeds, Web Risk, the CT watch, breakers, 21.7's closure-growth cases, TTL sweeps, hold copies); pro.yml `sidecar_abuse:` thresholds; `config/<env>/abuse.yml` for feeds, Web Risk, reviewer and pager routing, the abuse mailbox and counsel's out-of-hours contact; a Web Risk key in vault.
-- **Assumptions about other sections:** §14 and §15 run `rpt.bringyour.com` from M5; §19.8's out-of-hours rota carries 21.8's notices from M5, paging both members at once, and review runs 24/7 from M6; §19.10 restores holds' rows, re-places later holds, tells counsel and runs 21.10's abuse step in 21.10's order, and §12.6's restore step flags restored RRsets of networks with open cases; §2.8's header and api-14 publish `copied_rows` (tls-3's, smtp-3's and mx-2's rows, evs-8's lease fields, gkm-10's acks), and mx-2's, evs-8's and gkm-10's ttls except a hold's copy; api-14 lists the abuse mailbox's copies (21.10); §11.13 moves a held shredding repo's batched records, and §11.12 resumes its shred at phase 5 when the hold ends; §11.13's drop job rereads `hold/` before each batch of deletions and defers a covered drop's deletions until every covering hold ends, the drop reading, listing and billing as an unheld one ([owner decision 184](#od-184)); §16.11's daemons and readers apply the directory's request limits as `GET /sidecar/limits` gives them, §21's rows included (§20.4); §23.7 tracks counsel's confirmation of [owner decision 133](#od-133)'s condition and of each hold kind's applicability (`preserve_2703f`, `report_2258a`); §22 tests sweeps, access logs, holds beside shredding, a held --now shred's batched records packed, kept until the hold ends, then deleted (FS-6), hold kinds' deadlines (FS-48), clocks across a weekend (FS-49), held drops (FS-92) and, at M5, FS-39's report-intake cases and S7's SNI-less `abuse@<root>`.
+- **Services and config:** the taskworker abuse worker (feeds, Web Risk, the CT watch, breakers, 21.7's closure-growth cases, TTL sweeps, hold copies); pro.yml `sidecar_abuse:` thresholds; `config/<env>/abuse.yml` for feeds, Web Risk, reviewer and pager routing, the abuse and legal-request mailboxes and counsel's out-of-hours contact; a Web Risk key and the mailboxes' HPKE key in vault.
+- **Assumptions about other sections:** §14 and §15 run `rpt.bringyour.com` from M5; §19.8's out-of-hours rota carries 21.8's notices from M5, paging both members at once, and review runs 24/7 from M6; §19.10 restores holds' rows, re-places later holds, tells counsel and runs 21.10's abuse step in 21.10's order, and §12.6's restore step flags restored RRsets of networks with open cases; §2.8's header and api-14 publish `copied_rows` (tls-3's, smtp-3's and mx-2's rows, evs-8's lease fields, gkm-10's acks), and mx-2's, evs-8's and gkm-10's ttls except a hold's copy; api-14 lists both mailboxes' sealed copies (21.10); §11.13 moves a held shredding repo's batched records, and §11.12 resumes its shred at phase 5 when the hold ends; §11.13's drop job rereads `hold/` before each batch of deletions and defers a covered drop's deletions until every covering hold ends, the drop reading, listing and billing as an unheld one ([owner decision 184](#od-184)); §16.11's daemons and readers apply the directory's request limits as `GET /sidecar/limits` gives them, §21's rows included (§20.4); §23.7 tracks counsel's confirmation of [owner decision 133](#od-133)'s condition and of each hold kind's applicability (`preserve_2703f`, `report_2258a`); §22 tests sweeps, access logs, holds beside shredding, a held --now shred's batched records packed, kept until the hold ends, then deleted (FS-6), hold kinds' deadlines (FS-48), clocks across a weekend (FS-49), held drops (FS-92) and, at M5, FS-39's report-intake cases and S7's SNI-less `abuse@<root>`.
 
 ### 21.17 Risks
 
@@ -17743,7 +17830,8 @@ model       EvsCommit.tla (TLA+, checked by TLC: https://github.com/tlaplus/tlap
             late, before the next request on its key or never, and never once taken or begun past its deadline,
             §19.6's 10 s or 11.7's earlier one for fold, copy and collection writes: D-OPS-20's settle rule, which
             StoreSettle.tla checks; each GET of a round is its own step, and a crashed instance may resume a stale
-            step after a retry), segment GC (its 25 h mark, fence, deadline and second check), the shredder, the
+            step after a retry), segment GC (the evacuation horizon, the pidx/ entries read after it and a DELETE
+            that names its object, with a first commit to a ref with no head stalled across it), the shredder, the
             folder (two at once, a removal fold run stale, duplicated or applying late, writing its markers
             If-Match), the marker collector (11.7's windows, each opening 150 ms after the last lapsed by the
             opener's clock, its DELETEs issued 15.3 s later with deadlines 50 ms before until_ms by its own clock),
@@ -18062,10 +18150,11 @@ FS-7   §11    five writers push one path from one base: one commits and the oth
               reader sees the committed version throughout, folded or in the window, across
               the losers' evacuation and a restart
 FS-8   §11    kills after a segment upload, between parts, before a seal, and between a push's FI-6,13c    T2+T3  M2-out
-              batch record and its slot PUTs; the fake clock passes 26 h and 2 d: GC and
-              evacuation reclaim every orphan, a dead push's slots included, and leave a
-              committed and an unknown commit beside them; a delayed step-7 PUT after a fence
-              write fails
+              batch record and its slot PUTs; the fake clock passes 26 h, 2 d and 3 d:
+              evacuation has dropped every dead record and its slots at 26 h and GC has
+              deleted every orphan segment at 3 d (owner decision 203), leaving a committed
+              and an unknown commit beside them; a delayed step-7 PUT after a fence write
+              fails
 FS-9   §11    a directory at its bound, built from real sealed names with nonce and tag, so    FI-1        T2     M2-out
               the 448 KiB of name table binds before the 4,096-child count (at 3,584 children
               with names under 64 B, sooner with longer ones), plus a concurrent child add,
@@ -18482,11 +18571,19 @@ FS-58  §11    a path changed in unfolded versions read, listed and CAS-checked,
               writing over the marker only 150 ms past until_ms by its clock, and a push
               based before the removal is refused by 5f's base range (owner decision 148)
 FS-59  §11    a segment uploaded; a push checked 23 h 59 min later pauses before its head CAS  FI-6        T2+T3  M2-out
-              on an idle ref; GC at 25 h raises the ref's fence, waits, checks again and
-              deletes; the push fails its CAS and answers 503 unknown, and its retry gets 409
-              SEGMENT_GONE after its fence; a re-upload of a 23.5 h old segment gets 409
-              SEGMENT_STALE; a forged or other-repo receipt is refused; the twin whose push
-              commits before the second check keeps the segment
+              on an idle ref; at 25 h GC deletes nothing; at 49 h evacuation fences the ref
+              for the push's record and drops it; the push fails its CAS and answers 503
+              unknown, and its retry gets 409 SEGMENT_GONE; GC then deletes the segment by a
+              DELETE naming its LastModified (owner decision 203); again with a push that
+              creates its ref and whose head write the store holds past 51 h: evacuation and
+              GC wait, and the write landing keeps the segment while its revert lets the
+              placeholder head fence the ref and GC delete; a creating push killed after its
+              record: a fenced placeholder, the ref listing as absent, the record and its
+              slots gone; two GC runs on one orphan with its bytes uploaded again and
+              committed between their DELETEs: the second answers 412 and the segment stays;
+              a re-upload of a 23.5 h old segment gets 409 SEGMENT_STALE; a forged or
+              other-repo receipt is refused; the twin whose push commits before evacuation
+              keeps the segment
 FS-60  §11    evacuation killed after a pack, after its pidx/ entry and before the batch       FI-1,13c    T2+T3  M2-out
               delete; a reader at each step finds every record; a pending record on an idle
               ref fenced, then dropped; a shredded repo's records dropped, a deleted repo's
@@ -18971,8 +19068,9 @@ FS-89  §11    a path of 30 versions (diff chains past two checkpoints, an era o
               only listed versions name, the head written fresh with the same oid and mode,
               history verifying with dropped rows and no alarm, export writing stubs that git
               fsck passes, diff and restore reporting dropped; its twin, a live version's
-              segment deleted by hand, alarms as a missing segment; --now deletes 25 min after
-              time_ms, not before
+              segment deleted by hand, alarms as a missing segment; --now deletes nothing
+              before evacuation's horizon has passed the drop's commit by 2 min, about 25 to
+              26 h after time_ms (owner decision 204), nor before not_before_ms + 25 min
 FS-90  §11    the job killed at each barrier (start CAS, resolve, each mark checkpoint,        FI-2,13a,27 T2+T3  M10-out
               verify, between a HEAD and its DELETE, after half the DELETEs) and resumed by
               another instance; a stale instance whose lease lapsed issuing a delayed DELETE
@@ -21420,7 +21518,7 @@ Every statement in sidecar/design/PLAN.md (381 lines), traced to the sections th
 
 ## Appendix G. Server-visible metadata list
 
-§2.8 holds `metadata_list.yml` (v9, updated 2026-11-09 for [owner decision 197](#od-197)), the list the product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This appendix no longer copies it, so the two cannot drift. The list has 94 rows, 5 of them withdrawn: connect-1 to connect-5, api-1 to api-15, sock-1 to sock-5, evs-1 to evs-28, gkm-1 to gkm-10, tls-1 to tls-4, cert-1 and cert-2, dns-1 and dns-2, smtp-1 to smtp-6, mx-1 to mx-4, ops-1 to ops-3 and ext-1 to ext-10; api-12, evs-20, gkm-3, ext-2 and ext-9 are withdrawn and keep their ids, so citations resolve.
+§2.8 holds `metadata_list.yml` (v10, updated 2026-11-10 for the build's answers), the list the product promises: URnetwork's servers never receive plaintext content or keys, in any mode, and see only the values it names (D-TRUST-4), with one bounded exception, the platform report listener (§2.8). This appendix no longer copies it, so the two cannot drift. The list has 94 rows, 5 of them withdrawn: connect-1 to connect-5, api-1 to api-15, sock-1 to sock-5, evs-1 to evs-28, gkm-1 to gkm-10, tls-1 to tls-4, cert-1 and cert-2, dns-1 and dns-2, smtp-1 to smtp-6, mx-1 to mx-4, ops-1 to ops-3 and ext-1 to ext-10; api-12, evs-20, gkm-3, ext-2 and ext-9 are withdrawn and keep their ids, so citations resolve.
 
 ## Appendix H. Research sources
 

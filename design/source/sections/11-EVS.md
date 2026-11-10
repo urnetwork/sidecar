@@ -41,7 +41,7 @@ Keys come from §10, identity from §5, push from §6, tokens, the projection an
 
 - **No code** exists for evs or a git server [R:server-platform] §5.10.
 - **BlobStore** has an overwriting Put (server/blob.go:674-679), PutIfAbsent as one If-None-Match request (:683-697), whole-object Get, List and SetLifecycle, but "deliberately no Delete", no ranged read and no streamed put (:155-183).
-- **MinIO.** The deployed build (§19.3) checks If-Match and If-None-Match under its namespace lock but proceeds when that read loses quorum (minio@v0.0.0-20251015172955-9e49d5e7a648 cmd/erasure-object.go:1261-1279); PR #21653, merged 2025-10-24, fixes it, and owner decision 18's clusters build from the final upstream source (§19.6). MinIO verifies `x-amz-checksum-sha256` before an object exists (cmd/object-handlers.go:1993-2006) and inlines shards of up to 128 KiB in xl.meta (internal/config/storageclass/storage-class.go:278-294). It stores an object as a directory and lists that directory as one object without descending (cmd/metacache-walk.go:239-264). Names are at most 1,024 B (cmd/object-api-utils.go:197-203). xl.meta up to 4 KiB is written O_DSYNC, and larger ones with O_DIRECT and fdatasync (cmd/xl-storage.go:2247-2285). An overwrite also writes the previous xl.meta, inline data included, as a backup until quorum (:2784-2800, :2874-2887). With several pools, a PUT picks its pool by free space even when its key lives in another pool, and checks its precondition only there (cmd/erasure-server-pool.go:637-656; cmd/erasure-object.go:1261-1285). A DELETE evaluates no precondition (cmd/object-handlers.go:2563-2671; cmd/object-api-options.go:273-318), so an If-Match sent with it is ignored. A cancel stops a PUT on the handling host's own drives before their commit rename (cmd/xl-storage.go:2891-2893) but reaches no drive operation on another host, whose storage RPCs run under context.Background() (cmd/storage-rest-server.go:366, :708; internal/grid/handlers.go:294), and the handler's deferred unlock frees the object's lock while they run on (cmd/erasure-object.go:1269), so a cancelled write can land after a later request on its key, and holding the lock to the 30 s drive timeout would still release a commit stalled after its last check; §19.6's in-house build (D-OPS-20) closes both with its deadline and settle rules.
+- **MinIO.** The deployed build (§19.3) checks If-Match and If-None-Match under its namespace lock but proceeds when that read loses quorum (minio@v0.0.0-20251015172955-9e49d5e7a648 cmd/erasure-object.go:1261-1279); PR #21653, merged 2025-10-24, fixes it, and owner decision 18's clusters build from the final upstream source (§19.6). MinIO verifies `x-amz-checksum-sha256` before an object exists (cmd/object-handlers.go:1993-2006) and inlines shards of up to 128 KiB in xl.meta (internal/config/storageclass/storage-class.go:278-294). It stores an object as a directory and lists that directory as one object without descending (cmd/metacache-walk.go:239-264). Names are at most 1,024 B (cmd/object-api-utils.go:197-203). xl.meta up to 4 KiB is written O_DSYNC, and larger ones with O_DIRECT and fdatasync (cmd/xl-storage.go:2247-2285). An overwrite also writes the previous xl.meta, inline data included, as a backup until quorum (:2784-2800, :2874-2887). With several pools, a PUT picks its pool by free space even when its key lives in another pool, and checks its precondition only there (cmd/erasure-server-pool.go:637-656; cmd/erasure-object.go:1261-1285). Upstream's DELETE evaluates no precondition (cmd/object-handlers.go:2563-2671; cmd/object-api-options.go:273-318), so an If-Match sent with it is ignored; §19.6's in-house build honors one condition of its own, `x-ur-if-unmodified-ms`, under the key's lock. A cancel stops a PUT on the handling host's own drives before their commit rename (cmd/xl-storage.go:2891-2893) but reaches no drive operation on another host, whose storage RPCs run under context.Background() (cmd/storage-rest-server.go:366, :708; internal/grid/handlers.go:294), and the handler's deferred unlock frees the object's lock while they run on (cmd/erasure-object.go:1269), so a cancelled write can land after a later request on its key, and holding the lock to the 30 s drive timeout would still release a commit stalled after its last check; §19.6's in-house build (D-OPS-20) closes both with its deadline and settle rules.
 - **lb.** `client_max_body_size 16m` is global (warp/warpctl/config.go:1301); `streamable_paths` (warp/services/services.go:694-701) get 60 s timeouts and no request buffering (warp/warpctl/config.go:2311-2319).
 - **Crypto and clients.** x/crypto v0.54.0 (connect/go.mod:30) has XChaCha20-Poly1305 (chacha20poly1305/xchacha20poly1305.go:24) and no AES-SIV. Clients are reaped after 30+30 idle days (server/model/network_client_model.go:4179, :4199), so the durable signer is §5's `sidecar_id`.
 
@@ -112,7 +112,8 @@ map      the writer that rotates, or any writer holding every name of the ref (a
          re-sealed for the new parent and child tokens; the map binds its source head (map_source_version,
          map_source_chain); keys name the map, so a mapper whose source left the window, or that finds another's
          map abandoned, uploads a fresh one; once p or a newer epoch commits, taskworker deletes p's uncommitted
-         maps, and the nightly pass deletes a map uncommitted 25 h after its upload by 11.13's orphan rule
+         maps, and the nightly pass deletes a map above the head's epoch once 11.13's horizon has passed its oldest
+         part's LastModified + 24 h + 2 min, each part by a DELETE naming its LastModified (owner decision 203)
 tail     paths that window versions after the map's source create get moves like the map's, which the mapper
          builds from those pushes: the PATH_EPOCH push carries them in its payload under path_tail_sha256, and evs
          checks every token path those versions create (base_entry_version 0) against them, else 409 naming the
@@ -502,7 +503,8 @@ action    a DROP push (flags 256) on the path's ref carries EvsDropHistory (11.6
           repo only a consented, not-read-only device of its owner (owner decision 126), never MCP (§16.6); any repo
           admin (owner-bound: such a device of the owner) cancels it by a DROP with action 2 committed before
           not_before_ms less 60 s by evs's clock; a lock standing when its job starts voids it (§8.8); 11.13's job
-          deletes nothing before not_before_ms + 25 min
+          deletes nothing before not_before_ms + 25 min, and marks only once evacuation's horizon has passed the
+          drop's commit by 2 min, so a now drop's deletions start about 25 to 26 h after it (owner decision 204)
 rule      once it executes: kind-1 segments and slots that only listed versions name, on any ref and path, are
           deleted, each once over 25 h old; listed versions' statements, window entries, log pages, chain values,
           times, signers and entry hashes stay for the ref's life, so history verifies, and their entry versions
@@ -710,8 +712,9 @@ hp/<repo>/<parcel_id>                      a small repo's records older than 24 
 pmap/<repo>/<ref>/<p>/<map>/<part>/_       a Signed EvsPathMap part (11.6); <map> is its    If-None-Match       <= 8 MiB   the committed map:
                                            map's path_map_sha256                                                           the ref's history;
                                                                                                                            others go (11.6)
-pidx/<repo>/<ref>/<v_first>-<id>           a pack's or parcel's records and log pages, and  If-None-Match       <= 1 MiB   as its pack or parcel
-                                           the segments they introduce; <id> is that
+pidx/<repo>/<ref>/<v_first>-<id>           a pack's records and log pages, or a parcel's    If-None-Match       <= 1 MiB   as its pack or parcel
+                                           records (none of its log pages), and the
+                                           segments they introduce; <id> is that
                                            container's (11.13)
 spidx/<repo>/<n>/_                         reserved (11.13): offsets of segments in a pack  If-None-Match       <= 1 MiB   as its pack
 hold/<network_id>/<case_id>/_              §21.9's preservation hold, written by api;       api                 <= 1 KiB   its kind's (§21.9):
@@ -793,8 +796,8 @@ message EvsHead {                       // head/<repo>/<ref>; written only by If
   bool deleted = 18;                    // DELETE committed; a later push to the name continues the versions
   bytes window_base_chain = 19;         // C at version v-w, so the window's chain is computable forward
   uint64 folded_through = 20;           // 11.7's horizon: file changes folded or replaced, directory deltas applied
-  int64 written_ms = 21;                // evs's clock at this head's write (11.13's orphan rule)
-  int64 fence_ms = 22;                  // its writer's clock at the newest evacuation or GC fence (outcomes)
+  int64 written_ms = 21;                // evs's clock at this head's write
+  int64 fence_ms = 22;                  // its writer's clock at the newest evacuation fence (outcomes)
   EvsCollect collect = 23;              // 11.7's marker collection: done, through and a window's until_ms
   uint64 index_epoch = 24;              // on a ref holding an index: its newest CUT's version, else 0 (11.12);
                                         // never falls; a re-seed sets it from the newest CUT it replays
@@ -835,7 +838,7 @@ fill      at step 7 evs appends P's entry from the statement it checked and the 
           readers never parse the head object (they get 11.9's head summary)
 etag      every head write raises the version or, for a write that commits nothing (a refusal record, a fence, a
           seal lease, a creation block, dropping drained path-epoch sources, a collection window), the fence, so an
-          ETag never repeats; only evacuation and GC fences also set fence_ms, and a refusal fence sets refused_ms
+          ETag never repeats; only evacuation's fences also set fence_ms, and a refusal fence sets refused_ms
           (the outcome rules below)
 trust     a wrong place, hash or digest can only produce a missing or mismatched statement, which breaks the chain
           and alarms; the digest cannot hide a change, because readers check every returned statement's change list
@@ -998,7 +1001,7 @@ retry id  a push id names one statement; the client retries with the same push i
           overlap, and one may reach its evs handler at any time, even after another's answer reached the client;
           a committed push id returns its original version from the head window or from the log pages of
           (b, b+64], packed or not, however many commits followed, and a recorded one its refusal (refuse, below)
-fence     evacuation and GC fences raise the head's fence and set fence_ms; refusal records, leases, blocks, source
+fence     evacuation's fences raise the head's fence and set fence_ms (GC raises none, 11.13); refusal records, leases, blocks, source
           drops and collection windows set no fence_ms and end nothing; an attempt that may issue step 7 (a push or
           seal, never a part) and reads a head whose fence_ms, from a write it did not make, is later than its own
           arrival less 100 ms ends with 503 {push_id, outcome: unknown} and no further step 7, so a fence ends every
@@ -1006,8 +1009,8 @@ fence     evacuation and GC fences raise the head's fence and set fence_ms; refu
           after it fails the time or receipt-age check the fence waited out (Resolve, below; 11.13's orphans); the
           margin needs every clock that writes fence_ms or an arrival within 50 ms of UTC: chrony on the evs, gkm
           and taskworker hosts, alarmed past 25 ms (§19.6); an evs process whose offset is unknown or over 50 ms
-          answers pushes 503 before step 4, and a taskworker in that state raises no evacuation or GC fence and GC
-          deletes nothing, so a pending record or an unadopted segment simply stays
+          answers pushes 503 before step 4, and a taskworker in that state raises no fence and GC deletes nothing,
+          so a pending record or an unadopted segment simply stays
 refuse    every refusal rests on a head read from the cluster (a cached step 4 that would refuse reruns with a GET);
           one the head or a terminal repo/ state settles for good (5a, 5c's shredding and ref rules and DROP_KIND,
           5d's pins and an index_epoch below the head's, 5e's epoch and tail, 5f, 5g's path and removal checks,
@@ -1028,7 +1031,9 @@ first     a push creating its ref, whose head is absent, records a refusal in a 
           If-None-Match at version 0 with no window, kind or mode, which reads, listings and GET .../refs treat as
           absent and the ref's first commit replaces by If-Match, as a later push continues a tombstone head's
           versions; a creating attempt then fails If-None-Match and meets the record on its reread; the
-          placeholder stays, as a tombstone head does
+          placeholder stays, as a tombstone head does; evacuation fences a ref with no head by creating the same
+          placeholder with its fence raised and fence_ms set (11.13; owner decision 203), and a creating attempt
+          then fails its If-None-Match and ends at the fence
 412       reread the head from the cluster; P committed -> 200; P recorded -> that refusal (5a); else, since an ETag
           never repeats, the old PUT can never apply: a fence after the attempt's arrival ends it (above); otherwise
           step 5 (b-h) reruns against the reread head, pins and path epoch included, then step 7 on its ETag: in git
@@ -1045,8 +1050,8 @@ unknown   a timeout (evs waits at least the store's request deadline), EOF or 5x
           the client's retry resolves it
 cleanup   none at answer time: a refused or unknown push's record and new slots stay until evacuation's Resolve finds
           it dead, which no attempt, earlier or later, survives (11.13); nothing in idx/ was written
-evacuate  hourly, 11.13's evacuation resolves every record of batches over 25 h old, fencing a ref before it drops a
-          pending record, and finds orphan pushes without trusting the log
+evacuate  hourly, 11.13's evacuation resolves every record of batches over 25 h old, fencing a ref, one with no head
+          by a placeholder head, before it drops a pending record, and finds orphan pushes without trusting the log
 Resolve   head window, then at most two log pages of (b, b+64]: P is committed at u, with its place, iff they name P
           at a version u in (b, b+64] (file mode) or at b+1 (git mode); dead iff not committed and the head is at or
           past b+64 (git mode: b+1), or its statement can no longer pass the time checks (time_ms + 35 min) and the
@@ -1068,9 +1073,12 @@ I-EVS-3  a push id commits at most once; its retry returns the original version;
          records it until the statement can pass 5b nowhere
 I-EVS-4  pending state never evicts the newest committed version of a path, and a reader finds that version in its
          entry or its push payload
-I-EVS-5  no segment becomes reachable after GC decided to delete it: GC deletes only after its 25 h mark, a fence on
-         every ref of its repo idle since its 24 h mark, the store's request deadline and a second check, and pushes,
-         seals included, adopt only uploads under 24 h old at their last check
+I-EVS-5  no segment becomes reachable after GC decided to delete it: a push, or a seal for its parts, adopts only
+         an upload under 24 h old at its last check and writes its batch record before its head write; evacuation
+         settles every record before its batch goes, a committed one behind a pidx/ entry that names its
+         segments and a pending one by a fence on its ref, a ref with no head by a placeholder head; and GC
+         deletes a segment only once no batch is left from before its LastModified + 24 h + 2 min, no pidx/
+         entry read after that names it, and by a DELETE that names its LastModified (owner decision 203)
 I-EVS-6  a file path's newest committed version is in its idx/ entry or the head window: a file version leaves the
          window only once it is folded or a newer window version of that file replaces it, and a removal only once
          its marker is written, which stays until collected past the horizon (11.7); a directory delta leaves only
@@ -1282,11 +1290,15 @@ loss     leases and the sequence are soft state outside the rdb bundles (owner d
          master's clock trails the old one's by less than the lost family's age less 1 µs per 1,000 raises
          (§19.6's chrony on the Redis hosts); holders re-create their leases at their next hourly resync, which
          reads every subscribed head
-slots    every script touches one hash tag ({evsl_<repo_id>}, {evsq_<repo_id>} or {evsh_<repo_id>}), and hints use
+slots    every script touches one hash tag ({evsl_<repo_id>}, {evsq_<repo_id>}, {evsh_<repo_id>} or {evsc_<client_id>},
+         whose script runs before the lease script), and hints use
          §6.8's per-client script, so no command crosses Redis Cluster slots
 caps     pro.yml's sidecar_abuse: 1,000 subscribed clients per repo, except the team directory, up to the
          network's config_admissions, whose readers poll the cards ref (§16.11) and lease only notice prefixes
-         q/<target>/; 500 repos per client
+         q/<target>/; 500 repos per client, counted in {evsc_<client_id>}, a sorted set of repo ids scored by last
+         subscribe or renewal ms: one script drops members older than 7 d, refuses if the repo is absent and the set
+         holds evs_repos_per_client, else adds it, and sets EXPIRE 8 d; a DELETE removes the repo once the client's
+         last lease on it goes; a loss fails open, and renewals rebuild the set within a day
 ```
 
 ### 11.11 The local tier
@@ -1570,7 +1582,8 @@ phases     each step rereads repo/ and runs only while it shows shredding with t
              batches go with them, at most 26 h after each batch was written (11.13)
            6 after 10 min, longer than the issue-time recheck of repo/ (cached at most 5 s) that 11.13's P2 writes
              and every gkm write make (§10.6), plus the store's request deadline, so no fold, evacuation or gkm
-             write lands later, repeat 2, 3 and 5 once for stragglers
+             write lands later, repeat 2, 3 and 5 once for stragglers; a DELETE's settle copy (§19.6's settle row,
+             evs-10) is gone by then, since §19.6 keeps the settle sweep's interval inside this pass
            7 rewrite repo/<repo> as shredded{deletion_id, time}, a tombstone kept with its place/ for the
              network's life
 drops      a drop's job pauses while repo/ shows deleted, resumes at a restore and ends at shredding, the shred
@@ -1585,8 +1598,8 @@ drops      a drop's job pauses while repo/ shows deleted, resumes at a restore a
 
 ```text
 needs     ServiceHost.Blobs declares, on every cluster, quorum-evaluated conditional PUT, consistent reads and LIST,
-          streamed and ranged I/O, object metadata on PUT and HEAD (11.7's entry states), an unconditional Delete
-          (11.3), §19.6's deadline and settle rules: a request refused once its x-ur-deadline-ms has passed, and a
+          streamed and ranged I/O, object metadata on PUT and HEAD (11.7's entry states), a Delete, unconditional
+          or naming its object's LastModified (11.3, §19.6), §19.6's deadline and settle rules: a request refused once its x-ur-deadline-ms has passed, and a
           PUT or DELETE that takes effect before any later request on its key or never (D-OPS-20; 11.7's stale and
           collect rows), and lifecycle rules, each metadata cluster in one pool (11.8), which §22's suite checks;
           segment PUTs ride streamable_paths: ["/evs/v1/repos/[^/]+/segments/[^/]+"]
@@ -1776,13 +1789,15 @@ when      hourly (so each day everything older than 24 h leaves the batches; own
           refills (owner decisions 186, 190; 11.21)
 resolve   per batch, GET it whole; per record, Resolve its push id on its ref (11.8): committed at this place ->
           keep; committed at another place -> drop; dead -> drop, deleting the new slots its record lists, the only
-          cleanup (11.8); pending -> raise the ref's fence (one head CAS), then Resolve again; parts follow their
+          cleanup (11.8); pending -> raise the ref's fence (one head CAS, or for a ref with no head one placeholder head created with its
+          fence raised, 11.8's first row), then Resolve again; parts follow their
           seal; reseed records count as committed
-move      per repo, the kept records plus its log pages older than 24 h, one pack or parcel per repo a run across all
-          the minute directories it evacuates: once its aged material (these, its parcels and unpacked log pages)
-          reaches 256 KiB, one pack/<repo>/<pack_id> on the segment cluster (If-None-Match, its SHA-256 as checksum)
-          holds all of it, then a pidx/ entry per ref, then its parcels and those log pages are deleted; below
-          256 KiB, one parcel hp/<repo>/<parcel_id> (If-None-Match) and its pidx/ entries; a repo's aged material
+move      per repo, the kept records, one pack or parcel per repo a run across all the minute directories it
+          evacuates: once its aged material (these, its parcels, and its log pages older than 24 h, which wait at
+          log/ until a pack takes them) reaches 256 KiB, one pack/<repo>/<pack_id> on the segment cluster
+          (If-None-Match, its SHA-256 as checksum) holds all of it, then a pidx/ entry per ref, then its parcels
+          and those log pages are deleted; below 256 KiB, one parcel hp/<repo>/<parcel_id> (If-None-Match) of the
+          records alone and its pidx/ entries, the log pages staying at log/; a repo's aged material
           also packs once its oldest (parcel content or unpacked log page) is 7 d old: in the run that evacuates
           the repo, or, for an idle repo, in the nightly pass, which packs any whose oldest would pass 7 d before
           the next pass
@@ -1796,7 +1811,7 @@ skip      every P2 write for a repo (folds, moves, packing, copies) rereads repo
 index     pidx/<repo>/<ref>/<v_first>-<id> (v_first zero-padded to 20 digits, <id> the container's pack_id or
           parcel_id, the first 16 B of SHA-256 over its bytes; nothing extends it, and containers never share a
           key): {container kind, versions v_first..v_last with each record's kind, offset and length, the log pages
-          it holds, the segment ids its records introduce}; a push whose parts and seal evacuate in different runs
+          a pack holds (a parcel's entry lists none), the segment ids its records introduce}; a push whose parts and seal evacuate in different runs
           has an entry in each container; a parcel is replaced by its pack's entries first, then the parcel and its
           entries are deleted
 readers   a record whose batch is gone is found by LIST pidx/<repo>/<ref>/ (cached; entries never change), a pack's
@@ -1851,8 +1866,12 @@ sweep     evacuation, resolving each committed record that lists candidates, HEA
           hold ends, one pass rereads the repo's versions flagged from 26 h before its placement to its end (log
           pages, then their records) and deletes what the hold kept; when §19.11's purge turns on from observe, one
           pass per admitted repo rereads its versions flagged with window bit 4 since its migration and deletes
-          what observe mode kept, as at a hold's end; §22.8's testHookBarrier sites include the purge's hold/
-          reread and evacuation's staged decision
+          what observe mode kept, as at a hold's end; the side that ends each condition queues its pass, both
+          idempotent: AbuseHoldPass schedules EvsSweepHoldEndTaskRequest for each hold it ends, before it deletes
+          the hold/ object, and `sidecarctl evs purge-turn-on`, run in the runbook step that sets format2.purge to
+          on, schedules EvsSweepTurnOnTaskRequest, a monitor row watching for observe's retained count staying flat
+          while purge is on (owner decision 206); §22.8's testHookBarrier sites include the purge's hold/ reread
+          and evacuation's staged decision
 budget    the purge is P2 work that u pays for at admission (accounts, above); HDD DELETEs spend no NVMe budget,
           and a candidate slot's DELETE writes ~3.5 KiB a drive
 ```
@@ -1877,7 +1896,9 @@ resolve   check each lineage's older entries against the map part or tail map_pa
           {mismatch}, which pages (§19.8); then write to dropscan/ the candidates: every segment and slot id a
           listed version names through a kind-1 locator or a slot id, less ids listed versions name only through
           kind-5 locators
-mark      at snapshot M, each ref's head read from the cluster after every covered drop's fence, over every ref of
+mark      once the horizon of the repo's metadata cluster (11.13's orphans row) has passed each covered drop's commit
+          time by 2 min, so every push validated before a drop has committed on a head a scan reads, or is dead
+          (owner decision 204): at snapshot M, each ref's head read from the cluster after every covered drop's fence, over every ref of
           the repo (file and git mode, shared and owned, creates-only, deposit and erasure refs, overlays and DELETE
           tombstones; owner decision 173), each live version (every committed version no executing or done drop
           lists) marks the candidates it names, comparing locators and slot ids from log pages, windows and records
@@ -1930,18 +1951,22 @@ push      the push request (step 3) and each part carry one receipt per new segm
           receipts, whose age the seal checks again
 keys      receipt keys are evs configuration, rotated monthly with the previous key kept 48 h (§19.4); losing a key
           only makes pending uploads re-upload
-orphans   the nightly pass LISTs each repo's seg/ prefix on the segment cluster, as it does for stored bytes; a
-          segment that no committed push of the repo introduced (pidx/ entries record what evacuated records
-          introduce; records still in batches are read in place) and whose LastModified is over 25 h old is an
-          orphan: taskworker raises the fence of each ref of the repo whose head was written before that
-          LastModified + 24 h (one head CAS each, at most one a day), waits the store's request deadline, checks the
-          repo's commits since its first check again, then deletes the segment; an uncommitted path map over 25 h
-          old goes the same way, fencing only its ref (11.6)
-why       a push, or a seal for its parts, adopts a segment only with a receipt under 24 h old at its last check and
-          commits within 5 s of it, so every adoption commits within 24 h of the upload, plus 5 s and the store's
-          request deadline; one stalled on an idle ref fails its head CAS after the fence and ends 503 unknown, and
-          the client's retry finds its receipt too old (409 SEGMENT_GONE, recorded; re-upload); one on a
-          ref written after the 24 h mark was fenced by that write; one that committed is found by the second check
+orphans   the nightly pass first takes each metadata cluster's horizon, from one LIST of pb/: the start of the
+          minute its oldest batch names, or 25 h before the LIST if that is earlier or none is left; it then LISTs
+          each repo's seg/ prefix on the segment cluster, as it does for stored bytes, and its pidx/ entries; a
+          segment whose LastModified + 24 h + 2 min is at or before its repo's cluster's horizon and that no pidx/
+          entry lists as introduced is an orphan, which taskworker deletes by a DELETE that names its LastModified
+          (§19.6), at most 10 a second a segment cluster, on clusters whose build passed §19.6's settle cases; it
+          raises no fence and reads no batch, so an orphan goes 49 to 75 h after its upload (owner decision 203);
+          an uncommitted path map above its ref's current epoch goes the same way, by its oldest part (11.6)
+why       a push, or a seal for its parts, adopts a segment only with a receipt under 24 h old at its last check,
+          writes its batch record within 5 s of that check and before its head write, in a minute that began no
+          later; so every record that can adopt the segment is in a batch from before its LastModified + 24 h +
+          2 min; evacuation deletes a batch only once it settled each record: committed, behind a pidx/ entry
+          naming the segment, or dead, its ref fenced after its statement lapsed, which ends every attempt however
+          late its head write lands, a write that stalled holding the key included, since the fence waits behind
+          it; past the horizon nothing is pending, so a segment no entry names is named by no version and never
+          will be, and a later upload of the same bytes is a new object, which the DELETE's LastModified refuses
 ```
 
 **Quotas (§20.6, §20.7):**
@@ -2780,7 +2805,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 | Latest buckets, 100 messages a day | both ≤ ~5.4 MB; each file ≤ 1 MiB, decrypted by frame within the working set above |
 | Search masks | one probe per candidate, lazily in rank order, into §5.9's version table through 256 KiB of cached pages a process; no set of the partitions' keys in memory; the table updated at a swap within 1 MiB (11.14) |
 | Cold "search more" | first progress ≤ 500 ms; each shard's hits ≤ 100 ms after it lands, ≤ 300 ms on phones and page Workers; complete within the missing bytes over the throughput, plus 1 s (§16.10's cold contract) |
-| A drop | nothing deleted before `not_before_ms` + 25 min; a job's two passes read ≤ 32 MB/s; 10,000 segments deleted in about 17 min; ≤ ~0.3 MB written a metadata drive for a drop whose job runs 10 min |
+| A drop | nothing deleted before `not_before_ms` + 25 min, nor before evacuation's horizon passes the drop's commit by 2 min, about 25 to 26 h after a `now` drop (owner decision 204); a job's two passes read ≤ 32 MB/s; 10,000 segments deleted in about 17 min; ≤ ~0.3 MB written a metadata drive for a drop whose job runs 10 min |
 
 **Concurrency.** Pushes to one ref meet only at its head's If-Match: a file-mode loser with disjoint paths retries inside evs, so one ref sustains roughly 20-50 pushes/s; a git-mode loser gets a stock non-fast-forward and merges. Distinct refs never contend. In the twenty-agent test (§22), agents write their own refs in real time, and a merge into main every 60 s meets another in its ~60 ms window about 2% of the time, then merges again.
 
@@ -2904,7 +2929,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-24 (proposed).** Log pages hold the signed statements (at most 1 KiB each), and the head window names each recent one's place and hash; head readers verify every statement after their pin and the one behind each entry they read. *Why:* owner decision 7 for every reader (Q-EVS-6), at one block per head write.
 
-**D-EVS-25 (proposed).** Orphans are found without the log: hourly evacuation resolves every batch record, which names every slot its push wrote, and an unadopted segment or path map, found by the nightly LIST, is deleted only after fencing each idle ref of its repo. *Why:* an upload that never reached the log is otherwise invisible, and a grace period cannot fence a late commit.
+**D-EVS-25 (proposed).** Orphans are found without the log: hourly evacuation resolves every batch record, which names every slot its push wrote, fencing a pending record's ref, one with no head by a placeholder head; and an unadopted segment or path map, found by the nightly LIST, is deleted only once evacuation's horizon has passed every batch that could adopt it (owner decision 203). *Why:* an upload that never reached the log is otherwise invisible; a grace period cannot fence a late commit, and a fence cannot reach a ref that does not exist yet, but every commit leaves its record first.
 
 **D-EVS-26 (proposed).** Erasure is a committed ERASE push that destroys every key of every representation: each retained version, each derived-field chain, the search index's files included (re-keyed first, by a CLOSURE push that only replaces committed file versions, each new chain within Padmé of the one it replaces, taken at the storage limit with size-bounded uploads within its eraser's own rate and daily allowance, which has a floor §21 cannot lower) and the deposit, which is slot-keyed; with the index, a CUT on each index ref first fences its publication (D-EVS-66), and its first ERASE takes the entry's own keys, which re-key nothing. *Why:* owner decisions 61, 133, 146; a shared index or live deposit would otherwise outlive the erasure, and no admin's closures spend another's.
 
@@ -2918,11 +2943,11 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-31 (proposed).** `idx/` holds only committed versions, folded lazily (the oldest 64 at 96 unfolded, the rest after 10 min idle, always before a page-out and in a path epoch's own commit), a file's newest version per fold and every directory delta in order; a removal writes, If-Match and only over an older version, a marker that keeps the path's version, and markers go in head-announced collection windows once the horizon passes them by a base range, their DELETEs cancelled before the window ends, and folds over covered markers held past it, by margins that cover the clock bounds and the cancel's lag; a creation's version is max(its push's effective base version, on an overlay its base_version plus its chain's base versions, a standing removal's) + 1, so a path's versions never restart once its marker goes, nor fall below those it held on a base ref; reads and the CAS read an entry only after a head and merge the window versions after that head's folded_through. *Why:* a busy path is written once per fold, nothing pending evicts a committed version (owner decision 140), and a DELETE, which MinIO applies unconditionally, could remove an entry a later fold wrote; versions must only rise, for 5g and the search index's newest-wins rule (owner decision 148).
 
-**D-EVS-32 (proposed).** Hourly evacuation moves each repo's records and log pages older than 24 h into one HDD pack once they reach 256 KiB, else into NVMe parcels that pack within 7 d. *Why:* owner decision 136's residency, with whole-batch deletes and no tiny HDD objects.
+**D-EVS-32 (proposed).** Hourly evacuation moves each repo's records and log pages older than 24 h into one HDD pack once they reach 256 KiB; below that it moves the records into NVMe parcels while the log pages wait at log/, both packing within 7 d. *Why:* owner decision 136's residency, with whole-batch deletes and no tiny HDD objects.
 
 **D-EVS-33 (proposed).** evs, gkm, api and taskworker share each metadata cluster's write budget (0.8 DWPD and 50% of rated write IOPS on its busiest drive not under heal), a bucket that every measured drive byte drains, P0's included. P0 safety work (`rev/` and `proj/` writes, `repo/` lifecycle, shred steps, ERASE, CUT and CLOSURE pushes within their rate and every slot rewrite, Removes and REMOVE rotations) issues at once, never queued or refused, its bytes reported by kind and drawn from the bucket down to zero, past which they are P0's excess, forgiven; every other class issues only while the bucket holds it, restarting when a P0 storm ends and ramping up as the bucket refills, so their writes stay within the budget less the P0 writes the bucket held, and their IOs within it too (at least 512 B each, ≤ 39% of rated). P1 pays at admission for itself and the P2 work it causes, the deferred part moving into a prepaid wallet that funded P2 spends and the allowance never pays again, so a steady load is admitted at the full physical rate; unfunded P2 takes at most 40% of the allowance; P2 runs in deadline order; per-network fair queues refuse the heaviest network first, never P0 work; segment PUTs likewise queue per network on each segment cluster, refused heaviest first (503) past 50% of §19.6's measured drive-operation capacity. *Why:* owner decision 140, which owner decision 186 amends for P0 writes only: P0 work always runs at once and the wear bound exempts it, since per-tenant rates bound no cluster's aggregate safety work (100 large Teams each shrinking every 5 minutes ask ~2.9 TiB a day a drive, about twice the refill), so a P0 storm can wear the drives past 0.8 DWPD and their 1 DWPD rating, disclosed with §19.8's P0 alarms (11.21; Q-EVS-24); owner decision 190 forgives P0's excess, so a cluster's pushes and evacuation restart when a storm ends, at the cost of the storm's extra wear, ~0.23 drive-writes a 6-hour storm at that stress, which §19.8 counts against the rating; charging P2 at admission and again from the allowance would admit ~27% fewer pushes; a capped P2 would let evacuation outgrow 26 h.
 
-**D-EVS-34 (proposed).** Segment uploads write nothing to the metadata cluster: evs returns a MAC'd receipt that the push presents, and GC deletes an unadopted segment only after 25 h and a fence on each idle ref of its repo. *Why:* markers cost three writes per segment.
+**D-EVS-34 (proposed).** Segment uploads write nothing to the metadata cluster: evs returns a MAC'd receipt that the push presents, and GC deletes an unadopted segment only once every batch record that could adopt it has been evacuated, 49 h or more after its upload, by a DELETE that names the object (owner decision 203). *Why:* markers cost three writes per segment.
 
 **D-EVS-35 (proposed).** Versioning is a per-version setting of a file, signed in its entry version: 0 keeps every version, 1 only the newest's content, 2 the same for the search index's files; config and mailcfg repos, git-mode refs and creates-only refs refuse 1 and 2, and a repo lock refuses 1 (owner decision 168). *Why:* owner decisions 158-160; authority histories and exact git need every version.
 
@@ -2982,7 +3007,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-63 (proposed).** A drop deletes only kind-1 segments and slots that only listed versions name; statements, hashes and entry versions without inline records stay, so history verifies, and listed inline content waits for compaction, unserved; the kept head is written as a fresh checkpoint or re-cited chunk set; readers show pending, then dropped, never missing or tampered. *Why:* no diff chain keeps dropped content, and no drop reads as tampering.
 
-**D-EVS-64 (proposed).** From its commit no push may cite a listed version; the job starts 25 min after the window, marks every ref's live versions at one snapshot, verifies with a separate implementation at a later one, deletes only objects over 25 h old, and resumes from `drops/`. *Why:* a mutator cannot move a reference past a scan of immutable history, and two implementations must agree before any DELETE.
+**D-EVS-64 (proposed).** From its commit no push may cite a listed version; the job starts 25 min after the window, marks every ref's live versions at one snapshot once evacuation's horizon has passed each covered drop's commit by 2 min (owner decision 204), verifies with a separate implementation at a later one, deletes only objects over 25 h old, and resumes from `drops/`. *Why:* a mutator cannot move a reference past a scan of immutable history, and two implementations must agree before any DELETE.
 
 **D-EVS-65 (proposed).** A hold defers a drop's deletions silently, the drop reading, listing and billing as finished; stored bytes fall as the job deletes; the DROP rewrites listed versions out of the index; mirrors apply it; compaction may later remove listed inline content, keeping every statement and every byte a live version needs. *Why:* owner decisions 93, 133, 159, 165 and 184.
 

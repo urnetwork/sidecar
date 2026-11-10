@@ -4,7 +4,11 @@ pair's accounting windows (188, 191). Adds owner decisions 192-196 from the impl
 DelegationRevoke's countersignature (192), the G0 sign-off (193), the straight-through build (194), the minio fork
 (195) and the branch starts (196). Adds owner decision 197 (2026-11-09): the apps' network extensions run only IP
 and port forwarding, always on and self-contained, amending 87, and Android's sidecar runs only while the app is
-open, amending 12."""
+open, amending 12. From 2026-11-10 adds the build's owner answers, 198 onward, as the design-records tracks fold
+them from sidecar/DESIGN-AMENDMENTS.md: the nightly count's shard sums (198), Team subscriptions (199), the
+fold's leaf places (200), gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203),
+the drop job's horizon, amending 183 (204), settings in rows (205), the sweep's triggers (206), a reported URL's
+path (207) and the sealed abuse mailboxes (208)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -51,6 +55,41 @@ INDEX = list(_P9['INDEX']) + [
      "Every app's VPN component runs the device's IP and port forwarding and nothing else of sidecar, always on and "
      "self-contained with its own forwarding key, amending @@OD:87@@; Android's sidecar runs only while the app is "
      "open, as iOS's does, amending @@OD:12@@."),
+    (198, "Stored count",
+     "The nightly pass's shard jobs keep per-network sums for the night in Redis `{evsn_<night>}` (48 h); a closing "
+     "job writes each network's count once every shard of every metadata cluster has reported, and a night left "
+     "unfinished keeps the old count."),
+    (199, "Team billing",
+     "A `team_subscription` row (MG6) records each Team's Stripe subscription, customer, anchor and start, written at "
+     "the first `invoice.paid` and ended at `customer.subscription.deleted`; only a live row is granted a period."),
+    (200, "Path epochs",
+     "The fold records each folded version's place in its statement's change list (`leaf_part`, `leaf_index`), so "
+     "evs serves the proof of a version an older path epoch wrote and the reader checks the leaf names its token."),
+    (201, "Group owner",
+     "A group's first object is `gkm/<group_id>/owner` (repo and network), created If-None-Match from the token; "
+     "every group route resolves through it, so no other repo's form can claim the group."),
+    (202, "Forwarding keys",
+     "A forwarding Delegation's row carries its reader key's SHA-256, and the 1,216 B key is the gkm object "
+     "`gkm/dkey/<delegation_id>`, keeping 5,000-device rows near 2.2 MB under §8.8's 4 MiB."),
+    (203, "Segment GC",
+     "An unadopted segment goes once no batch is left from before its upload + 24 h + 2 min, 49 to 75 h, so GC "
+     "raises no fence; evacuation fences a ref with no head by a placeholder head."),
+    (204, "Drop history",
+     "A drop job marks only once evacuation's horizon has passed each covered drop's commit by 2 min, so a `now` "
+     "drop's deletions start about 25 to 26 h after it, amending @@OD:183@@'s 25-minute fence."),
+    (205, "Settings in rows",
+     "`self_admit` and `scim_signer` compile into `ProjectionRows.settings`, which full readers check against the "
+     "head and api and the gates take, so every verifier judges a self-admission alike."),
+    (206, "Versionless sweep",
+     "`AbuseHoldPass` queues a hold's end pass before it deletes `hold/`, and `sidecarctl evs purge-turn-on` queues "
+     "the turn-on pass in the step that sets `format2.purge: on`."),
+    (207, "Abuse cases",
+     "A case keeps a reported URL's path and query until its first review ends, at most its review clock; never a "
+     "reporter's address or free text but an appeal's own reason."),
+    (208, "Abuse mailboxes",
+     "The abuse and legal-request mailboxes sit at one provider outside URnetwork's Postgres and clusters; each "
+     "record is sealed to a vault-held HPKE key before it leaves api, so the provider and SES see sender, time "
+     "and size."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -68,11 +107,14 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 198))
+assert [r[0] for r in INDEX] == list(range(1, 209))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
-              194: '2026-11-06', 195: '2026-11-06', 196: '2026-11-06', 197: '2026-11-09'})
+              194: '2026-11-06', 195: '2026-11-06', 196: '2026-11-06', 197: '2026-11-09',
+              198: '2026-11-10', 199: '2026-11-10', 200: '2026-11-10', 201: '2026-11-10', 202: '2026-11-10',
+              203: '2026-11-10', 204: '2026-11-10', 205: '2026-11-10', 206: '2026-11-10', 207: '2026-11-06',
+              208: '2026-11-06'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -93,8 +135,9 @@ STATUS = ("Status: draft for peer review, revised 2026-11-04 after the first pee
           "decisions 150-184 (versionless objects, the search index, CLI and MCP search, the indexer, the team directory "
           "and history drops), and on 2026-11-06 after the final meta review "
           "([DESIGN-REVIEW-META.md](DESIGN-REVIEW-META.md)), with owner decisions 185-191, and at the implementation "
-          "handoff, with owner decisions 192-196, and on 2026-11-09 with owner decision 197, on the apps' network "
-          "extensions. The owner signed G0 on 2026-11-06 (owner decision 193), and M0-M10 build on the `sidecar` "
+          "handoff, with owner decisions 192-196, on 2026-11-09 with owner decision 197, on the apps' network "
+          "extensions, and from 2026-11-10 with the build's owner answers, owner decisions 198 onward, as the "
+          "design-records tracks fold them. The owner signed G0 on 2026-11-06 (owner decision 193), and M0-M10 build on the `sidecar` "
           "branches (owner decision 194); nothing has shipped.")
 
 # Implementation handoff (2026-11-06): the branch policy said the documents join the repo on the `sidecar` branch,
@@ -167,3 +210,17 @@ _D197 = "amending @@OD:87@@ and @@OD:12@@. "
 assert DECISIONS_INTRO.count(_D197) == 1
 DECISIONS_INTRO = DECISIONS_INTRO.replace(
     _D197, "amending @@OD:87@@ and @@OD:12@@; designing it raised two owner questions, open below. ")
+# The build's owner answers (2026-11-06 and 2026-11-10), numbered from 198 as the design-records tracks fold them.
+_D198 = "designing it raised two owner questions, open below. "
+assert DECISIONS_INTRO.count(_D198) == 1
+DECISIONS_INTRO = DECISIONS_INTRO.replace(
+    _D198, _D198 + "From 2026-11-10 the design-records tracks number the owner's answers to the build's questions as "
+    "they fold them: the nightly count's shard sums (198), Team subscriptions (199), the fold's leaf places (200), "
+    "gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203), the drop job's "
+    "horizon (204), amending @@OD:183@@, settings in rows (205), the sweep's triggers (206), a reported URL's "
+    "path (207) and the sealed abuse mailboxes (208). ")
+# Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
+_i183 = [r[0] for r in INDEX].index(183)
+assert INDEX[_i183][2].endswith("`now` skips the wait."), 183
+INDEX[_i183] = (183, INDEX[_i183][1], INDEX[_i183][2] + " Amended by @@OD:204@@: a `now` drop's deletions wait "
+                "for evacuation's horizon, about 25 to 26 h.")
