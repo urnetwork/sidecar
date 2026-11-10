@@ -84,7 +84,7 @@ func TestPlaceCreatesPlaceThenRepoOnTheNewRepoCluster(t *testing.T) {
 		t.Fatalf("place/ %+v", place)
 	}
 	repoBytes := fixture.object("meta-1", RepoKey(repoId))
-	object, err := ParseEvsRepoObject(repoId, repoBytes)
+	object, err := sidecar.ParseEvsRepoObject(repoId, repoBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestRepoCacheKeepsAnAnswerAtMostItsTtl(t *testing.T) {
 		t.Fatal(err)
 	}
 	repos := NewRepoCache(fixture.clock, fixture.engine.Settings())
-	if _, err := repos.Read(fixture.ctx, cluster, repoId); !errors.Is(err, ErrEvsRepoNotFound) {
+	if _, err := repos.Read(fixture.ctx, cluster, repoId); !errors.Is(err, sidecar.ErrEvsRepoNotFound) {
 		t.Fatalf("before: %v", err)
 	}
 	if status := fixture.putRepo(repoId, creator); status != http.StatusOK {
@@ -418,7 +418,7 @@ func TestRepoCacheKeepsAnAnswerAtMostItsTtl(t *testing.T) {
 	}
 	getsBefore := fixture.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpGet)
 	fixture.clock.Advance(4 * time.Second)
-	if _, err := repos.Read(fixture.ctx, cluster, repoId); !errors.Is(err, ErrEvsRepoNotFound) {
+	if _, err := repos.Read(fixture.ctx, cluster, repoId); !errors.Is(err, sidecar.ErrEvsRepoNotFound) {
 		t.Errorf("a cached 404 at 4 s: %v", err)
 	}
 	fixture.clock.Advance(time.Second)

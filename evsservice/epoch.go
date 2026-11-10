@@ -73,7 +73,7 @@ func (self *EvsEngine) pathEpochRoutes() []*EvsRoute {
 func (self *EvsEngine) requireActiveRepo(request *EvsRequest) bool {
 	read, err := self.repos.Read(request.Ctx, request.Cluster, request.RepoId)
 	switch {
-	case errors.Is(err, ErrEvsRepoNotFound):
+	case errors.Is(err, sidecar.ErrEvsRepoNotFound):
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND)
 		return false
 	case err != nil:

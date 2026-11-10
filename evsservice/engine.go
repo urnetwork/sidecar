@@ -78,6 +78,10 @@ type EvsRoute struct {
 	NeedsSureClock bool
 	// The route needs its repo placed, and gets its cluster. False only for the route that places it.
 	Placed bool
+	// On a placed route: §11.12's refused row, a deleted repo answering 409 REPO_DELETED and one shredding or shredded
+	// 409 SHREDDING before the route runs, from repo/ cached at most 5 s. For a route that reads no repo/ state of its
+	// own; the push's 5c and the lifecycle routes hold their own.
+	RefuseDeleted bool
 	// Answers the request through its methods. Runs on the request's goroutine.
 	Serve func(request *EvsRequest)
 }
@@ -131,7 +135,7 @@ type EvsEngine struct {
 	// records and log pages past their batches, through pidx/
 	locator *RecordLocator
 	metrics *evsMetrics
-	handler    http.Handler
+	handler http.Handler
 	// what the router took at the start, in its order
 	servedRoutes []*EvsRoute
 
@@ -144,8 +148,8 @@ type EvsEngine struct {
 	// commits whose step 8 has started, and those whose step 8 has finished
 	stepEightCount     *sidecar.MonitorValue[int]
 	stepEightDoneCount *sidecar.MonitorValue[int]
-	draining      chan struct{}
-	drainingOnce  sync.Once
+	draining           chan struct{}
+	drainingOnce       sync.Once
 }
 
 // Starts the engine. host needs Blobs, Budget and Metrics; a nil Budget refuses to start, since no metadata write
@@ -233,6 +237,7 @@ func (self *EvsEngine) routes() []*EvsRoute {
 	routes = append(routes, self.subscriptionRoutes()...)
 	routes = append(routes, self.pathEpochRoutes()...)
 	routes = append(routes, self.erasureRoutes()...)
+	routes = append(routes, self.repoRoutes()...)
 	return append(routes, self.deps.testRoutes...)
 }
 
@@ -423,6 +428,9 @@ func (self *EvsEngine) guard(route *EvsRoute) http.HandlerFunc {
 			return
 		}
 		if route.Placed && !request.resolvePlace() {
+			return
+		}
+		if route.Placed && route.RefuseDeleted && !request.refuseDeleted() {
 			return
 		}
 		route.Serve(request)
@@ -632,6 +640,21 @@ func (self *EvsRequest) resolvePlace() bool {
 		self.engine.metrics.alarms.Add(1, "place_invalid")
 	}
 	self.Unavailable(nil)
+	return false
+}
+
+// §11.12's refused row for a route that reads no repo/ state of its own: a deleted repo answers 409 REPO_DELETED and
+// one past it 409 SHREDDING; keying and active pass. false once it has answered the refusal.
+func (self *EvsRequest) refuseDeleted() bool {
+	read, err := self.engine.repos.Read(self.Ctx, self.Cluster, self.RepoId)
+	if !self.engine.answerTransition(self, err) {
+		return false
+	}
+	switch read.Object.GetState() {
+	case protocol.EvsRepoState_EVS_REPO_KEYING, protocol.EvsRepoState_EVS_REPO_ACTIVE:
+		return true
+	}
+	self.RefuseCode(repoStateRefusal(read.Object).Code)
 	return false
 }
 

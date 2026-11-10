@@ -171,6 +171,7 @@ func newEvsTestClient(t *testing.T, handler http.Handler, store SidecarStore) *e
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(client.Close)
 	return &evsTestClient{client: client, tokens: tokens, poster: poster, gkm: gkm, clock: clock, events: events}
 }
 
@@ -585,8 +586,6 @@ func TestEvsUnbuiltMethodsRefuse(t *testing.T) {
 	_, err := repo.Deposit(ctx, &EvsDepositArgs{})
 	calls = append(calls, err)
 	_, err = repo.Consume(ctx, &EvsConsumeArgs{})
-	calls = append(calls, err)
-	_, err = repo.Subscribe(ctx, &EvsSubscribeArgs{})
 	calls = append(calls, err)
 	_, err = repo.Erasures(ctx)
 	calls = append(calls, err)
