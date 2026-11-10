@@ -141,8 +141,7 @@ func (self *Sidecar) Devices() ([]MemberDevice, error) {
 	return devices, nil
 }
 
-// SidecarRevokeAuthority over ConfigState, each answer the state's own.
-
+// SidecarRevokeAuthority over ConfigState: §16.6's approval-capable device, ACL's predicate.
 func (self *ConfigAuthority) ApprovalCapable(sidecarId Id) bool {
 	state := self.client.State()
 	if state == nil {
@@ -152,11 +151,14 @@ func (self *ConfigAuthority) ApprovalCapable(sidecarId Id) bool {
 	return err == nil && acl.ApprovalCapable(sidecarId)
 }
 
+// SidecarRevokeAuthority over ConfigState: whether an active Suspend names the sidecar.
 func (self *ConfigAuthority) Suspended(sidecarId Id) bool {
 	state := self.client.State()
 	return state != nil && state.Suspended(sidecarId)
 }
 
+// SidecarRevokeAuthority over ConfigState: k for a device of an AdminSet member, whose revocation needs authority
+// (ConfigState.revokeSigners), else 1.
 func (self *ConfigAuthority) RevokeSignatures(targetId Id) int {
 	state := self.client.State()
 	if state == nil {
@@ -170,6 +172,7 @@ func (self *ConfigAuthority) RevokeSignatures(targetId Id) int {
 	return 1
 }
 
+// SidecarRevokeAuthority over ConfigState: the registered keys whose KeyRow names the sidecar as signer, by key_id.
 func (self *ConfigAuthority) RegisteredKeys(sidecarId Id) []*bridge.KeyRow {
 	keys := []*bridge.KeyRow{}
 	state := self.client.State()
@@ -187,6 +190,7 @@ func (self *ConfigAuthority) RegisteredKeys(sidecarId Id) []*bridge.KeyRow {
 	return keys
 }
 
+// SidecarRevokeAuthority over the client's retained entries: api's time for entry n.
 func (self *ConfigAuthority) EntryTime(n uint64) (time.Time, bool) {
 	self.client.followLock.Lock()
 	defer self.client.followLock.Unlock()

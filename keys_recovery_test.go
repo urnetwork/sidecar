@@ -5,16 +5,17 @@ package sidecar
 //
 //	SIDECAR_REGENERATE_RECOVERY_VECTORS=1 go test -run '^TestRecoveryVectors$' .
 //
-// writes the vectors where none exist, and never changes one already there: a printed code outlives any software.
+// writes the vectors while the file holds none, and never changes one already there: a printed code outlives any
+// software. The file is embedded, since the Worker leg has no files.
 
 import (
 	"bytes"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -75,13 +76,13 @@ func TestRecoveryCodeRefusesBadEntry(t *testing.T) {
 		text string
 		want error
 	}{
-		{"", ErrRecoveryCodeWords},
-		{strings.TrimSuffix(good, " yellow"), ErrRecoveryCodeWords},
-		{good + " yellow", ErrRecoveryCodeWords},
-		{strings.Replace(good, "sausage", "sausagez", 1), ErrRecoveryCodeWords},
-		{strings.Replace(good, "yellow", "year", 1), ErrRecoveryCodeChecksum},
+		{text: "", want: ErrRecoveryCodeWords},
+		{text: strings.TrimSuffix(good, " yellow"), want: ErrRecoveryCodeWords},
+		{text: good + " yellow", want: ErrRecoveryCodeWords},
+		{text: strings.Replace(good, "sausage", "sausagez", 1), want: ErrRecoveryCodeWords},
+		{text: strings.Replace(good, "yellow", "year", 1), want: ErrRecoveryCodeChecksum},
 		// two words changed places
-		{"winner legal thank year wave sausage worth useful legal winner thank yellow", ErrRecoveryCodeChecksum},
+		{text: "winner legal thank year wave sausage worth useful legal winner thank yellow", want: ErrRecoveryCodeChecksum},
 	}
 	for _, testCase := range cases {
 		_, err := ParseRecoveryCode(testCase.text)
@@ -107,6 +108,9 @@ type recoveryVector struct {
 }
 
 const recoveryVectorsPath = "testdata/recovery/vectors.json"
+
+//go:embed testdata/recovery/vectors.json
+var recoveryVectorsJson []byte
 
 // What the derivation gives for one entropy, as a vector.
 func deriveRecoveryVector(t *testing.T, entropy []byte, networkId Id, genesisSha256 []byte) recoveryVector {
@@ -150,22 +154,20 @@ func TestRecoveryVectors(t *testing.T) {
 		countingBytes(0x10, 16),
 		countingBytes(0xa5, 16),
 	}
-	encoded, err := os.ReadFile(filepath.FromSlash(recoveryVectorsPath))
-	if errors.Is(err, os.ErrNotExist) && os.Getenv("SIDECAR_REGENERATE_RECOVERY_VECTORS") == "1" {
+	encoded := recoveryVectorsJson
+	if len(bytes.TrimSpace(encoded)) <= len("[]") && os.Getenv("SIDECAR_REGENERATE_RECOVERY_VECTORS") == "1" {
 		vectors := []recoveryVector{}
 		for _, entropy := range entropies {
 			vectors = append(vectors, deriveRecoveryVector(t, entropy, networkId, genesisSha256[:]))
 		}
-		encoded, err = json.MarshalIndent(vectors, "", "  ")
+		generated, err := json.MarshalIndent(vectors, "", "  ")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.FromSlash(recoveryVectorsPath), append(encoded, '\n'), 0o644); err != nil {
+		encoded = append(generated, '\n')
+		if err := os.WriteFile(recoveryVectorsPath, encoded, 0o644); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err != nil {
-		t.Fatal(err)
 	}
 	vectors := []recoveryVector{}
 	if err := json.Unmarshal(encoded, &vectors); err != nil {
