@@ -5628,3 +5628,62 @@ A fold's ConfigRecords include the BASE entries in (after, folded_through] as Co
 Changes: DESIGN-DETAILS.md section 5 stands as written; TEAM-M2-08, -09 and -10 (landed) stand; QD-456's fill amended (design-records).
 
 Questions: `details-5-base-records-in-folds.md`.
+
+<a id="later"></a>
+## Later decisions
+
+Decisions taken after this file was generated, each naming the section it folds into. A design-records track folds the ones that name its sections, with that section's items above, and deletes them here.
+
+### QD-652: Should closure pacing admit by seat, each seat good only in its own second, in place of a bucket that admits by arrival?
+*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §20 Tiers, quotas, metering, and billing.*
+
+Closure pacing admits by seat. A seat is a 1/R cell at the tail of the network's pacing, good from its instant to the end of its calendar second; a seat is handed out only in a second with a free cell; an eraser whose seat is due takes, and nothing else is checked, so arrival order decides nothing. A refusal is not recorded under its debit id, so the same upload asks again. An eraser that misses its seat's second by more than the cell's tolerance (250 ms to 1 s at R = 4) is seated again, at once while the second has a free cell, one round later in a full network. Reading 19's 5-minute horizon and its setting go; the steady state is the landed one (k erasers each every k/R s). QUOTA-M2-14 changes QuotaClosurePacing, the fake, the {sq_} script and quotasuite's pacing cases together. This answers quota-m2-03-pacing-boundary-order with a fourth option and quota-m2-01-rate-key-grammar #3 with its other reading.
+
+Changes: DESIGN-DETAILS.md section 13 stands as written; QUOTA-M2-14 builds it; §20.7 closure and wait rows (design-records).
+
+Questions: `details-13-pacing-seats.md`, `quota-m2-03-pacing-boundary-order.md`.
+
+### QD-653: Should bytes a lease spent under a reservation that has since lapsed go unbilled, and should a lease's own tokens live 15 minutes instead of 24 hours?
+*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §20 Tiers, quotas, metering, and billing.*
+
+No lease byte is debited without its carve: a batch is posted only once its carves answered; bytes whose reservation was gone are dropped from the event, counted in urnetwork_quota_lease_unbilled_bytes_total and alerted; ApplyUsageBatch refuses a lease meter's event its carves do not cover. A lease's own tokens live 15 min and are extended every 5 min while the lease lives, and the host stops spending a token's bytes 30 s before it could lapse; carved tokens keep 24 h. The cost is under-billing of at most one window's bytes a host during a Redis outage as seen from that host; a dead edge's hold returns in 15 min. Lease.tla holds NoOverdraw only with this. QUOTA-M2-07 and QUOTA-M2-15 build it; landed ApplyUsageBatch and the fake's lease excess change.
+
+Changes: DESIGN-DETAILS.md section 13 stands as written; QUOTA-M2-07 and QUOTA-M2-15 build it; §20.6 leases and loss rows, E-d (design-records).
+
+Questions: `details-13-lease-lapse.md`.
+
+### QD-654: Should a lease draw more than 64 MiB at a time when its traffic is fast?
+*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §20 Tiers, quotas, metering, and billing. Also amends §2.*
+
+A lease's draw is 64 MiB (16 MiB on Community) or, when that is more, 4 s of the lease's own measured rate rounded up to a multiple of it, at most 16 times it (1 GiB; 256 MiB on Community), renewed with a quarter of the draw or 2 s of traffic left, whichever is more. A slow lease draws as §20.6 has it; a fast one renews about once per 4 s with 2 s to do it. A lease can hold up to 4 s of its traffic unspent, which a Redis loss can over-admit for it. §20.6's draw row and api-13's published sizes ('64 MiB to 1 GiB, 16 to 256 MiB on Community') change (design-records). QUOTA-M2-07 builds it.
+
+Changes: DESIGN-DETAILS.md section 13 stands as written; QUOTA-M2-07 builds it; §20.6 draw row and §2.8 api-13 sizes (design-records).
+
+Questions: `details-13-lease-draw-size.md`.
+
+### QD-655: Should a gate service refuse for a network once it knows the authorization log moved and cannot verify the new entries, where QD-055 has the last verified state keep serving?
+*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §8 Access control. Also amends §9.*
+
+A sockets process answers unavailable for a network once it has had evidence for 5 s (§8.9's target for server gates) that the authorization log passed what it holds and it has not verified the new entries: the {acl_<networkId>}v event, a store answer naming a higher position, or after a resubscription a {acl_}v that differs from the one its state was loaded at. With no evidence, the last verified state serves without limit, so an api outage changes nothing (api is the log's only writer). This narrows QD-055's 'on failure the last verified projection, facts and list keep serving' to 'keep serving what nothing contradicts'. Section 13 specifies it for sockets; SOCK-M5-07 builds it; SockReg.tla checks the strict form.
+
+Changes: DESIGN-DETAILS.md section 13 stands as written; SOCK-M5-07 builds it; QD-055 narrowed; §8.9 gates and §9.8 text (design-records).
+
+Questions: `details-13-gate-behind.md`.
+
+### QD-656: Should a tls/ or smtp/ Service pair live 15 minutes past its listener's last accepted registration, in place of its grant's expiry up to 24 hours?
+*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §9 Abstract socket listeners and the scheduler. Also amends §2.*
+
+A tls/ or smtp/ Service pair ({svc_<listener_client_id>} field <dialer_client_id>) is written by Find with a ttl of the lesser of the grant's remaining life and 15 min; a registration call that accepts an edge entry of the client renews its pairs, at most every 5 min a process; a removal leaves a floor that refuses a write allowed at an older position. A revoked, removed or dead listener's pairs end within 15 min whatever any sweep did. ur/ pairs keep §9.6's rule (60 min, refreshed per Find). sock-3's ttl text changes (design-records). SOCK-M5-18, SOCK-M5-05 and SOCK-M5-06 build it.
+
+Changes: DESIGN-DETAILS.md section 13 stands as written; SOCK-M5-18, -05 and -06 build it; §9.6 edge Finds and §2.8 sock-3 ttl (design-records).
+
+Questions: `details-13-edge-pair-life.md`.
+
+### QD-657: Can §2.8's sock-1, sock-3, sock-4 and api-13 rows be amended for the values section 13 keeps in Redis?
+*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §2 Trust model and threat model.*
+
+§2.8's rows are amended, through design-records in the metadata list's next version: sock-1 gains, per lease, the listener's sidecar_id, the authorization log position it was admitted at and the set_version of the page that wrote it, and for 10 min after a removal for cause (60 s after an unlisten) the listener's client_id with the position and set version of the removal; sock-3 gains the position a listener's pairs were last removed at, for 10 min, and the ttl 'the grant's expiry, at most 15 min past the listener's last accepted registration (ur/: 60 min, refreshed per Find)'; sock-4 gains the position of the network's newest revocation sweep, for 30 s; api-13 gains each balance's lowest credit shown in the last 2 min, {escrow_<balance_id>}approx_floor, and lease reservations of '64 MiB to 1 GiB, 16 to 256 MiB on Community'. Each value has a short stated life, and nothing leaves the service that the rows do not already disclose elsewhere. SOCK-M5-18's fields and QUOTA-M2-15's floor key reach a release only after these rows land (I-18).
+
+Changes: §2.8 sock-1, sock-3, sock-4 and api-13 (design-records, before SOCK-M5-18 and QUOTA-M2-15 ship).
+
+Questions: `details-13-metadata-rows.md`.
