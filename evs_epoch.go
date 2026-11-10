@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Path epochs as evs and its clients both judge them (§11.6's due, map and commit rows; D-EVS-12; DESIGN-DETAILS
 // 9.2.2, 9.2.3 and 9.2.6): one function for each rule both sides apply, so the two never differ.
 //
