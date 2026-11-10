@@ -8,7 +8,9 @@ open, amending 12. From 2026-11-10 adds the build's owner answers, 198 onward, a
 them from sidecar/DESIGN-AMENDMENTS.md: the nightly count's shard sums (198), Team subscriptions (199), the
 fold's leaf places (200), gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203),
 the drop job's horizon, amending 183 (204), settings in rows (205), the sweep's triggers (206), a reported URL's
-path (207) and the sealed abuse mailboxes (208)."""
+path (207), the sealed abuse mailboxes (208), head readers' read records (209), the primary's physical copies (210),
+the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum repository in v1 (213)
+and the witness call outside the planes (214)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -90,6 +92,24 @@ INDEX = list(_P9['INDEX']) + [
      "The abuse and legal-request mailboxes sit at one provider outside URnetwork's Postgres and clusters; each "
      "record is sealed to a vault-held HPKE key before it leaves api, so the provider and SES see sender, time "
      "and size."),
+    (209, "Head reads",
+     "Head readers keep a sealed record per path read (ref, path, entry version, pin), at most 16,384 a network, and "
+     "read a recorded path from its record's pin, so the published limit is a path never read or no longer remembered."),
+    (210, "D-TRUST-7",
+     "The primary's physical copies count as backups: each is refreshed or destroyed within 7 d, and the 24 h edge "
+     "records' partitions are UNLOGGED, so no physical copy holds them."),
+    (211, "Key origin",
+     "`sidecar.ur.io` is served direct, unproxied, never through Cloudflare, which terminates https://ur.io; §2.8's "
+     "EX7 discloses that Cloudflare sees page requests and can alter page script."),
+    (212, "Recovery rebind",
+     "After a compromise rebind at r, `--compromise` lists the member's devices, clamps the rebind signer's since_n "
+     "to r + 1 so the rebind stands, and revokes that signer last, by the replacement it enrolls."),
+    (213, "Linux packages",
+     "v1 ships no apt or yum repository: `.deb` and `.rpm` stay direct downloads through `install.sh`'s verified "
+     "path, with no GPG key or repository host."),
+    (214, "D-ARCH-2",
+     "A checkpointer's own HTTPS call to a witness its log admin named is no URnetwork carrier: it carries a signed "
+     "note and a consistency proof, never an entry, and no URnetwork server takes part."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -107,14 +127,15 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 209))
+assert [r[0] for r in INDEX] == list(range(1, 215))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
               194: '2026-11-06', 195: '2026-11-06', 196: '2026-11-06', 197: '2026-11-09',
               198: '2026-11-10', 199: '2026-11-10', 200: '2026-11-10', 201: '2026-11-10', 202: '2026-11-10',
               203: '2026-11-10', 204: '2026-11-10', 205: '2026-11-10', 206: '2026-11-10', 207: '2026-11-06',
-              208: '2026-11-06'})
+              208: '2026-11-06', 209: '2026-11-06', 210: '2026-11-06', 211: '2026-11-06', 212: '2026-11-06',
+              213: '2026-11-06', 214: '2026-11-06'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -218,7 +239,9 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "they fold them: the nightly count's shard sums (198), Team subscriptions (199), the fold's leaf places (200), "
     "gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203), the drop job's "
     "horizon (204), amending @@OD:183@@, settings in rows (205), the sweep's triggers (206), a reported URL's "
-    "path (207) and the sealed abuse mailboxes (208). ")
+    "path (207), the sealed abuse mailboxes (208), head readers' read records (209), the primary's physical "
+    "copies (210), the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum "
+    "repository in v1 (213) and the witness call outside the planes (214). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

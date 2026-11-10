@@ -297,3 +297,62 @@ message ConfigName {
   bytes  sidecar_id = 1;
   string name = 2;                     // a DNS label, as ValidateConfigClientName takes it
 }
+
+// tags and groups: each tag or group a head's policy names, beside its opaque atom id (plan-ACL-atom-and-rule-ids
+// #1): 16 bytes of crypto/rand that the writer draws the first time a head names it, redrawn while its first 15
+// bytes are zero (an autogroup's form), and kept for as long as the name is. Deterministically encoded, in name
+// order. A config file, which evs holds as ciphertext.
+message ConfigAtomTable {
+  repeated ConfigAtomName atoms = 1;
+}
+
+message ConfigAtomName {
+  string name = 1;                     // without its tag: or group: prefix
+  bytes  atom_id = 2;                  // 16 B
+}
+
+// rules: each document rule's id, keyed by the SHA-256 of the rule's canonical form (plan-ACL-atom-and-rule-ids #3),
+// so an unchanged rule keeps its id across saves and K_sock rotations. Deterministically encoded, in key order.
+message ConfigRuleTable {
+  repeated ConfigRuleId rules = 1;
+}
+
+message ConfigRuleId {
+  bytes canonical_sha256 = 1;          // 32 B
+  bytes rule_id = 2;                   // 16 B of crypto/rand
+}
+
+// labels: the repo labels an evs: resource may name instead of an id (§8.4). Deterministically encoded, in label
+// order.
+message ConfigLabelTable {
+  repeated ConfigRepoLabel labels = 1;
+}
+
+message ConfigRepoLabel {
+  string label = 1;
+  bytes  repo_id = 2;                  // 16 B
+}
+
+// resolve: one row per user:, network: and client: selector the policy names and no others, which compile reads
+// alone (plan-ACL-selector-resolution). The writer fills it at save, a server's answer only a proposal.
+// Deterministically encoded, each list in the order of its first field.
+message ConfigResolution {
+  repeated ConfigMemberResolution members = 1;
+  repeated ConfigNetworkResolution networks = 2;
+  repeated ConfigClientResolution clients = 3;
+}
+
+message ConfigMemberResolution {
+  string email = 1;                    // lowercase, as ParseAclPolicy folds it
+  bytes  member_id = 2;
+}
+
+message ConfigNetworkResolution {
+  string text = 1;                     // the label or alias the policy writes, never a legacy name (D-DNS-2)
+  bytes  network_id = 2;
+}
+
+message ConfigClientResolution {
+  bytes client_id = 1;
+  bytes sidecar_id = 2;                // the sidecar a verified SidecarIdentityBinding names; empty for none
+}

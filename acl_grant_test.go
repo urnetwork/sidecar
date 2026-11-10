@@ -372,8 +372,8 @@ func TestAclGrantActivateFoldsAndRefusesReplays(t *testing.T) {
 		reach.Rule.GetExpires() != aclTestNow.UnixMilli()+aclRequestDefaultExpiryMs {
 		t.Fatalf("the activated grant: %+v", reach)
 	}
-	if decision := state.MayDial(AclSidecarSubject(cast.laptop), AclSidecarSubject(cast.phone), 6, 23, aclTestNow); decision.Allowed {
-		t.Error("the grant's port did not fold")
+	if !reach.Rule.GetPortsLimited() {
+		t.Error("the grant's port did not fold as ports_limited")
 	}
 	if spent := state.spentGrant(activate.GetGrantId()); spent.GetRetainUntilMs() != aclTestDecisionNotAfter+5000+aclDecisionSkewMs {
 		t.Errorf("retain_until_ms %d", spent.GetRetainUntilMs())

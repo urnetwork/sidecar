@@ -74,8 +74,8 @@ type testWriterWorld struct {
 }
 
 func newTestWriterWorld(t *testing.T) *testWriterWorld {
-	t.Cleanup(sidecar.RegisterConfigAclCompiler(func(head *sidecar.ConfigHead, aclStatements *protocol.AclRows) (*protocol.AclRows, error) {
-		return aclStatements, nil
+	t.Cleanup(sidecar.RegisterConfigAclCompiler(func(head *sidecar.ConfigHead, rows *sidecar.ConfigCompileRows) (*protocol.AclRows, error) {
+		return rows.AclStatements, nil
 	}))
 	ctx := context.Background()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())

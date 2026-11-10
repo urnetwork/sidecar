@@ -47,8 +47,8 @@ func testConfigHead(t testing.TB, net *testConfigNet, folds ...[]ConfigFoldRecor
 // An acl compile that keeps the log's acl statements as they are, for tests on hand-made rows (C-05).
 func registerTestConfigAclCompiler(t testing.TB) {
 	t.Helper()
-	t.Cleanup(RegisterConfigAclCompiler(func(head *ConfigHead, aclStatements *protocol.AclRows) (*protocol.AclRows, error) {
-		return aclStatements, nil
+	t.Cleanup(RegisterConfigAclCompiler(func(head *ConfigHead, rows *ConfigCompileRows) (*protocol.AclRows, error) {
+		return rows.AclStatements, nil
 	}))
 }
 

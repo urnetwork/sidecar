@@ -116,8 +116,8 @@ restore (§19.10, after the dumps load and the abuse step, before api's replay; 
   each edge reloads at restore_serial and posts its diff (POST /dns/reload-diff); once every running
     NS answers that SOA, restoring := false; the step lists, by network_id, owner and type, each RRset
     but challenges' and canaries' in a posted diff, and raises the custom-host map's version 2^24 above
-    the restored one (dns_root.custom_host_map_version), every host's map_version with it, so W1 loads the map from the restored rows
-    (§19.5) and each host stays pending until every interface is current for the new version
+    the restored one (dns_root.custom_host_map_version), every host's map_version with it, so W1 loads
+    the map from the restored rows (§19.5) and each host stays pending until every interface is current for the new version
     (§13.4), listing the hosts that adds or drops, in the incident and in each network's admin events
     (§7.11), both kept 400 d, flagging networks with an open §21 case
 monitor, at the site and on 1 outside host: rewrite canary.<root> TXT each minute through the journal;

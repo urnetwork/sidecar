@@ -3,6 +3,10 @@
 // form a union over a deny base, with no deny grant and no precedence (D-ACL-2), so a check returns the
 // first rule it finds and never weighs one against another.
 //
+// Rows hold no ports and no CIDRs (plan-BRIDGE-gate-row-prefixes #1), so these are the gates' checks, who
+// reaches whom and who holds what: "ports match" and a route's address are the client's, which AclEngine
+// adds from AclLocalPolicy through the accept hooks below, on the same candidate rules.
+//
 // hardDeny here is what the state shows: an unadmitted, revoked or parked sidecar, an admission past its
 // not_after, a sidecar whose member left, and a suspended subject. A gate adds abuse halts, quota and an
 // unapproved client through AclSubject.Deny. A destination subject hard denied is no destination either:
@@ -76,6 +80,8 @@ const (
 	// refused: a device of an owner-bound repo's owner without §8.5's consent there, which KF2 parks until the
 	// owner's OwnerConfirm (owner decision 126)
 	AclReasonUnconsented
+	// refused: an AclEngine with no state installed
+	AclReasonNoState
 )
 
 // A short name for logs and refusals.
@@ -123,6 +129,8 @@ func (self AclReason) String() string {
 		return "seats_full"
 	case AclReasonUnconsented:
 		return "unconsented"
+	case AclReasonNoState:
+		return "no_state"
 	}
 	return "unknown"
 }
@@ -320,10 +328,10 @@ func (self *AclState) listensOn(destination *aclResolved, dialRule *aclRule, now
 	return false
 }
 
-// The first rule in force allowing one of actions from source to destination, ports checked when asked,
-// sockets expanding to their listeners when asked.
+// The first rule in force allowing one of actions from source to destination that accept, when not nil, also
+// takes, sockets expanding to their listeners when asked. accept is the client's narrowing: AclEngine's ports.
 func (self *AclState) findSubjectRule(source *aclResolved, destination *aclResolved, nowMs int64, actions uint32,
-	checkPorts bool, ipProtocol uint32, port uint32, expandSockets bool) *aclRule {
+	accept func(rule *aclRule) bool, expandSockets bool) *aclRule {
 	for w := 0; w < self.ruleWordCount; w += 1 {
 		var word uint64
 		for action := protocol.AclAction_ACL_ACTION_DIAL; action <= aclActionMax; action += 1 {
@@ -345,7 +353,7 @@ func (self *AclState) findSubjectRule(source *aclResolved, destination *aclResol
 			bit := bits.TrailingZeros64(word)
 			word &= word - 1
 			rule := &self.rules[w*64+bit]
-			if !rule.activeAt(nowMs) || (checkPorts && !rule.portsMatch(ipProtocol, port)) {
+			if !rule.activeAt(nowMs) || (accept != nil && !accept(rule)) {
 				continue
 			}
 			if source.sidecar == nil && !self.inSrc(source, rule) {
@@ -375,16 +383,20 @@ func (self *AclState) Reach(source AclSubject, destination AclSubject, now time.
 	if destinationResolved.deny != 0 {
 		return aclDeny(destinationResolved.deny)
 	}
-	if rule := self.findSubjectRule(&sourceResolved, &destinationResolved, nowMs, aclReachActions, false, 0, 0, true); rule != nil {
+	if rule := self.findSubjectRule(&sourceResolved, &destinationResolved, nowMs, aclReachActions, nil, true); rule != nil {
 		return aclAllowRule(rule)
 	}
 	return aclDeny(AclReasonNoGrant)
 }
 
-// Whether source may dial destination on one port: a dial grant naming the destination whose ports take
-// the protocol and port, an empty ports list taking every one. ipProtocol is the IP protocol number.
-func (self *AclState) MayDial(source AclSubject, destination AclSubject, ipProtocol uint32, port uint32, now time.Time) AclDecision {
-	nowMs := now.UnixMilli()
+// Whether source may dial destination: a dial grant naming the destination. The rule's ports are the
+// destination's to check (AclEngine.AllowInbound), since rows carry only whether it limits them.
+func (self *AclState) MayDial(source AclSubject, destination AclSubject, now time.Time) AclDecision {
+	return self.mayDial(source, destination, now.UnixMilli(), nil)
+}
+
+// MayDial with a client's narrowing of each candidate rule.
+func (self *AclState) mayDial(source AclSubject, destination AclSubject, nowMs int64, accept func(rule *aclRule) bool) AclDecision {
 	sourceResolved := self.resolve(&source, nowMs)
 	if sourceResolved.deny != 0 {
 		return aclDeny(sourceResolved.deny)
@@ -394,7 +406,7 @@ func (self *AclState) MayDial(source AclSubject, destination AclSubject, ipProto
 		return aclDeny(destinationResolved.deny)
 	}
 	dial := uint32(1) << uint32(protocol.AclAction_ACL_ACTION_DIAL)
-	if rule := self.findSubjectRule(&sourceResolved, &destinationResolved, nowMs, dial, true, ipProtocol, port, false); rule != nil {
+	if rule := self.findSubjectRule(&sourceResolved, &destinationResolved, nowMs, dial, accept, false); rule != nil {
 		return aclAllowRule(rule)
 	}
 	return aclDeny(AclReasonNoGrant)
@@ -470,11 +482,16 @@ func (self *AclState) MayListen(subject AclSubject, socket AclSocketName, now ti
 	})
 }
 
-// Whether the subject may route to an address via a subject, on one port: a route grant whose cidrs hold
-// the address, 0.0.0.0/0 and ::/0 leaving out loopback and link-local (§8.4), or whose autogroup:internet
-// takes a public one, and whose subject targets, if it names any, hold the via subject.
-func (self *AclState) MayRoute(source AclSubject, address netip.Addr, ipProtocol uint32, port uint32, via AclSubject, now time.Time) AclDecision {
-	nowMs := now.UnixMilli()
+// Whether the subject may route to an address via a subject: a route grant whose via subjects, its subject
+// targets, hold the via subject, or whose autogroup:internet takes the address, a public one. The rule's
+// prefixes and ports are the client's to check (AclEngine.AllowRoute): rows carry neither, and a route rule
+// with no via names its advertisers only through BridgeRows, so it reaches no via here.
+func (self *AclState) MayRoute(source AclSubject, address netip.Addr, via AclSubject, now time.Time) AclDecision {
+	return self.mayRoute(source, address, via, now.UnixMilli(), nil)
+}
+
+// MayRoute with a client's narrowing of each candidate rule.
+func (self *AclState) mayRoute(source AclSubject, address netip.Addr, via AclSubject, nowMs int64, accept func(rule *aclRule) bool) AclDecision {
 	sourceResolved := self.resolve(&source, nowMs)
 	if sourceResolved.deny != 0 {
 		return aclDeny(sourceResolved.deny)
@@ -485,10 +502,13 @@ func (self *AclState) MayRoute(source AclSubject, address netip.Addr, ipProtocol
 	}
 	address = address.Unmap()
 	rule := self.findResourceRule(&sourceResolved, nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
-		if !rule.portsMatch(ipProtocol, port) || !rule.coversAddress(address) {
+		if accept != nil && !accept(rule) {
 			return false
 		}
-		return !rule.hasSubjectTargets() || self.targetsSubject(&sourceResolved, &viaResolved, rule)
+		if rule.internetTarget && aclAddressPublic(address) {
+			return true
+		}
+		return rule.hasSubjectTargets() && self.targetsSubject(&sourceResolved, &viaResolved, rule)
 	})
 	if rule != nil {
 		return aclAllowRule(rule)
@@ -496,20 +516,20 @@ func (self *AclState) MayRoute(source AclSubject, address netip.Addr, ipProtocol
 	return aclDeny(AclReasonNoGrant)
 }
 
-// Whether the rule's ip targets take the address.
-func (self *aclRule) coversAddress(address netip.Addr) bool {
+// Whether an address is a public destination, which autogroup:internet takes (§8.4).
+func aclAddressPublic(address netip.Addr) bool {
+	return address.IsValid() && address.IsGlobalUnicast() && !address.IsPrivate()
+}
+
+// Whether a cidr takes an address, 0.0.0.0/0 and ::/0 leaving out loopback and link-local (§8.4).
+func aclCidrCovers(cidr netip.Prefix, address netip.Addr) bool {
 	if !address.IsValid() {
 		return false
 	}
-	for _, cidr := range self.cidrs {
-		if cidr.Bits() == 0 && (address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast()) {
-			continue
-		}
-		if cidr.Contains(address) {
-			return true
-		}
+	if cidr.Bits() == 0 && (address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast()) {
+		return false
 	}
-	return self.internetTarget && address.IsGlobalUnicast() && !address.IsPrivate()
+	return cidr.Contains(address)
 }
 
 // Whether the subject may publish a dns host (§8.4's dns:<host>): a publish grant whose public_name, a host
