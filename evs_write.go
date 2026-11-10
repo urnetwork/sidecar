@@ -7,7 +7,8 @@
 // Each attempt: GkmClient.EnsureWritable first, so nothing is sealed to a generation a non-reader holds (§8.12); a
 // plan on a verified read (evs_plan.go); its records sealed (evs_upload.go); a new push id; its segments uploaded with
 // ?push=P; the statement built on the head the plan read and sent, retried under that one push id until evs answers
-// (evs_push.go). A refusal asking for a rebuild runs the attempt again under a new push id from a fresh read, at most
+// (evs_push.go), and re-tokenized on 412 PATH_EPOCH with what it sealed kept (DESIGN-DETAILS 9.2.5). A refusal asking
+// for a rebuild runs the attempt again under a new push id from a fresh read; rebuilds and retokens together at most
 // PushRebuildCount times; a creation refused 409 is planned once more, since the removal a fresh read shows sets its
 // version (§11.7's versions row), unless the path now stands, whose 409 then goes back; every other refusal, a
 // file-mode 409 with paths among them, goes back to the caller.
@@ -83,12 +84,15 @@ func (self *EvsRepo) WritePaths(ctx context.Context, args *EvsWritePathsArgs) (*
 		return nil, err
 	}
 	var creations map[string]bool
-	for rebuild := 0; ; rebuild += 1 {
-		result, plan, err := self.writeOnce(ctx, args.Writes, refName, refId, 0 < rebuild)
+	rebuilds := 0
+	for attempt := 0; ; attempt += 1 {
+		result, plan, err := self.writeOnce(ctx, args.Writes, refName, refId, 0 < attempt, &rebuilds)
 		switch {
 		case err == nil:
 			return result, nil
-		case (evsNeedsRebuild(err) || errors.Is(err, errEvsPlanEpochMoved)) && rebuild < self.client.settings.PushRebuildCount:
+		case (evsNeedsRebuild(err) || errors.Is(err, errEvsPlanEpochMoved) || errors.Is(err, errEvsRetokenSealsAgain)) &&
+			rebuilds < self.client.settings.PushRebuildCount:
+			rebuilds += 1
 			continue
 		case evsCreationConflict(err) && creations == nil && plan != nil:
 			creations = map[string]bool{}
@@ -101,7 +105,7 @@ func (self *EvsRepo) WritePaths(ctx context.Context, args *EvsWritePathsArgs) (*
 				return nil, err
 			}
 			// read the removal the first read did not show, and plan once more, unless a creation now stands
-			retried, _, retryErr := self.writeOnce(ctx, args.Writes, refName, refId, true, creations)
+			retried, _, retryErr := self.writeOnce(ctx, args.Writes, refName, refId, true, &rebuilds, creations)
 			if retryErr == nil {
 				return retried, nil
 			}
@@ -119,8 +123,8 @@ func (self *EvsRepo) WritePaths(ctx context.Context, args *EvsWritePathsArgs) (*
 var errEvsCreationStands = errors.New("evs: a path created concurrently")
 
 // One attempt: see the file header. creations, when given, are paths the last plan created, refused with
-// errEvsCreationStands if this plan finds one standing.
-func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refName []byte, refId Id, fresh bool, creations ...map[string]bool) (*EvsWritePathsResult, *EvsWritePlan, error) {
+// errEvsCreationStands if this plan finds one standing. rebuilds counts the write's rebuilds and retokens.
+func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refName []byte, refId Id, fresh bool, rebuilds *int, creations ...map[string]bool) (*EvsWritePathsResult, *EvsWritePlan, error) {
 	repoKey, err := self.client.args.Gkm.EnsureWritable(ctx, self.repoId)
 	if err != nil {
 		return nil, nil, err
@@ -141,15 +145,7 @@ func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refN
 		return nil, plan, err
 	}
 	defer sealed.Close()
-	pushId := NewEvsPushId()
-	if err := self.uploadSegments(ctx, sealed, pushId); err != nil {
-		return nil, plan, err
-	}
-	attempt, err := self.buildPush(ctx, sealed, pushId)
-	if err != nil {
-		return nil, plan, err
-	}
-	reply, err := self.sendPush(ctx, attempt)
+	pushId, reply, err := self.sendSealed(ctx, sealed, rebuilds)
 	if err != nil {
 		return nil, plan, err
 	}
