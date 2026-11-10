@@ -28,6 +28,8 @@ type aclTestView struct {
 	sponsors map[Id]Id
 	// a signer whose records are void from a position on, as a cascade's since_n voids them
 	voidFrom map[string]uint64
+	// devices §7.9's leaves rule entitles to a config or directory leaf; nil entitles none
+	leafEntitled map[Id]bool
 }
 
 func (self *aclTestView) Pin() *bridge.AuthPin {
@@ -70,6 +72,10 @@ func (self *aclTestView) Sponsor(sidecarId Id) (Id, bool) {
 func (self *aclTestView) CascadeVoids(signer []byte, at uint64) bool {
 	since, found := self.voidFrom[string(signer)]
 	return found && since <= at
+}
+
+func (self *aclTestView) LeafEntitled(sidecarId Id) bool {
+	return self.leafEntitled[sidecarId]
 }
 
 // A state under construction: its view, its rows and the next log position.
