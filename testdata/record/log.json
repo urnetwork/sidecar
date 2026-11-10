@@ -1,0 +1,23 @@
+{
+  "comment": "RECORD.md section 20's vectors for the verifiable log (section 10): leaves are leaf(h) = SHA-256(0x00 || h) over the ASCII bytes of each name, roots and proofs RFC 9162's, and the note c2sp.org/tlog-checkpoint's body. Hex throughout, the note's text as it is signed.",
+  "leaves": [
+    {"signed_body_text": "h0", "leaf": "350510645fd65ddae8f5b9098665088df2d026b30b9325df11dcec0fa27eb7c2"},
+    {"signed_body_text": "h1", "leaf": "124c9798d584477abb8fb018dfb61be5d436dc834970e19f60c72a12a21a4c8a"},
+    {"signed_body_text": "h2", "leaf": "1b803349c53bd6865827b68e585171787b948fbad01e52c0336f901f7be944f5"}
+  ],
+  "roots": [
+    {"size": 2, "root": "d9265ea843135249bf15b04a94e0b0da3ebafafbd8eeb9f48de671d8c55faf82"},
+    {"size": 3, "root": "5f1c3a8b1cd491c2acf4d7ca5c92689efe2d470a7bb33653131cc28f9458768d"}
+  ],
+  "inclusion": [
+    {"index": 1, "size": 3, "path": ["350510645fd65ddae8f5b9098665088df2d026b30b9325df11dcec0fa27eb7c2", "1b803349c53bd6865827b68e585171787b948fbad01e52c0336f901f7be944f5"]}
+  ],
+  "consistency": [
+    {"first": 2, "second": 3, "path": ["1b803349c53bd6865827b68e585171787b948fbad01e52c0336f901f7be944f5"]}
+  ],
+  "note": {
+    "log_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size": 3,
+    "body": "ur.io/recurd/log/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n3\nXxw6ixzUkcKs9NfKXJJonv4tRwp7szZTExzCj5RYdo0=\n"
+  }
+}

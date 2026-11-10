@@ -221,6 +221,10 @@ func (self *gkmGroupManager) commitAndRotateInFlow(ctx context.Context, state Gk
 	client := self.client
 	err := self.syncEpochsInFlow(ctx, state)
 	if err == nil {
+		// a leaf_wrap of the newest generation opens once its epoch is adopted
+		err = self.openNewestInFlow(ctx, state)
+	}
+	if err == nil {
 		err = self.runPendingInFlow(ctx)
 	}
 	if err == nil {

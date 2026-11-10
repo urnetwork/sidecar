@@ -350,6 +350,27 @@ func (self *gkmGroupManager) walkLadderInFlow(ctx context.Context, state GkmAuth
 	return nil
 }
 
+// The newest generation, where this device holds it without its key, tried again: the epoch its leaf_wrap names may
+// have been adopted since, or a late delivery may have come.
+func (self *gkmGroupManager) openNewestInFlow(ctx context.Context, state GkmAuthView) error {
+	client := self.client
+	pins, err := client.repoPins(self.repoId)
+	if errors.Is(err, ErrGkmKeyMissing) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	top, err := client.newestHeldGeneration(self.repoId)
+	if errors.Is(err, ErrGkmKeyMissing) || err == nil && top.key != nil {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return self.openHeldGenerationInFlow(ctx, state, pins.groupId, top)
+}
+
 // The walk a refresh, a first wrap, a join and a sync make ahead of any read of an older generation. Its failure
 // holds back nothing newer: the generation this device opened stands, and RepoKey walks again, with the error, when
 // an older one is asked for.
