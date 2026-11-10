@@ -543,9 +543,7 @@ func (self *EvsEngine) afterCommit(committed *EvsCommitted) {
 			if err := uploads.Usage.AddStored(connect.Id(committed.RepoNetworkId), committed.RecordByteCount); err != nil {
 				self.log.Infof("[evs] stored bytes of a commit not counted: %v", err)
 			}
-			if err := uploads.Usage.AddTransfer(connect.Id(committed.CallerNetworkId), committed.RequestByteCount); err != nil {
-				self.log.Infof("[evs] transfer of a commit not counted: %v", err)
-			}
+			// transfer is the router's to count, every request's and reply's bytes once (transfer_meter.go)
 		}
 		self.heads.CacheCommit(ctx, committed.RepoId, committed.RefId, committed.Head, pushSequence)
 		self.folder.NoteCommit(committed.ClusterId, committed.RepoId, committed.RefId, committed.Head.Head)

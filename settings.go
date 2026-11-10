@@ -356,6 +356,42 @@ type GkmSettings struct {
 	LateAskInterval time.Duration
 	// QD-031 (decided): a GenRotate's drop key lives this long, drop_not_after_ms = time_ms + this: 90 days.
 	DropKeyLifetime time.Duration
+	// KF2 and KF3 (DESIGN-DETAILS 6.2.2): a writer leaf that did not sign the statement a pending change answers
+	// waits this long before it commits it, so the granting device normally commits alone: 15 s.
+	PendingCommitDelay time.Duration
+	// The most a writer adds to PendingCommitDelay, drawn uniformly, so the others do not all commit at once: 5 s.
+	PendingCommitJitter time.Duration
+	// §10.6's re-add: a joiner whose Welcome has not appeared this long after its epoch is removed and added again
+	// by a writer leaf: 10 min.
+	WelcomeTimeout time.Duration
+	// §10.6's late wraps: a holder waits a random time up to this before it answers wrap-pending, so one normally
+	// delivers: 15 s.
+	LateDeliverJitter time.Duration
+	// §10.4: a leaf that committed no path this long commits a path-only self-update: 7 days.
+	SelfUpdateInterval time.Duration
+	// The same above LargeGroupLeafCount leaves: 30 days.
+	SelfUpdateIntervalLarge time.Duration
+	// The leaf count above which SelfUpdateIntervalLarge applies: 50.
+	LargeGroupLeafCount int
+	// §10.5's SCHEDULE: a writer rotates a generation older than this: 30 days.
+	ScheduleInterval time.Duration
+	// KF5: a device at most this many epochs behind processes each in order, and one further behind resyncs: 100.
+	ResyncReplayMax int
+	// QD-066: the deliveries one staging request carries: 256, gkm's bound.
+	RotateBatchSize int
+	// How many staging requests of one rotation run at once: 4.
+	RotateBatchConcurrency int
+	// How many times one staging request is sent while gkm answers some delivery with no result: 3.
+	RotateStageSendCount int
+	// How many times a claim whose answer was lost is sent again with the same bytes, each after gen/ showed
+	// nothing there: 3.
+	RotateClaimSendCount int
+	// How many generations one rotation may start, each after losing the claim before to a winner that does not
+	// cover what it rotates for or is poisoned: 4.
+	RotatePassCount int
+	// §8.12: the most leaves a committer seats in a data repo's tree: 1,000, never past MLS's bound
+	// (GkmSeatCount), which every member holds alike.
+	SeatCount int
 }
 
 // The desktop daemon's gkm settings, the only source of their defaults.
@@ -381,6 +417,21 @@ func DefaultGkmSettings() *GkmSettings {
 		AckInterval:                  24 * time.Hour,
 		LateAskInterval:              1 * time.Minute,
 		DropKeyLifetime:              90 * 24 * time.Hour,
+		PendingCommitDelay:           15 * time.Second,
+		PendingCommitJitter:          5 * time.Second,
+		WelcomeTimeout:               10 * time.Minute,
+		LateDeliverJitter:            15 * time.Second,
+		SelfUpdateInterval:           7 * 24 * time.Hour,
+		SelfUpdateIntervalLarge:      30 * 24 * time.Hour,
+		LargeGroupLeafCount:          50,
+		ScheduleInterval:             30 * 24 * time.Hour,
+		ResyncReplayMax:              100,
+		RotateBatchSize:              256,
+		RotateBatchConcurrency:       4,
+		RotateStageSendCount:         3,
+		RotateClaimSendCount:         3,
+		RotatePassCount:              4,
+		SeatCount:                    1000,
 	}
 }
 
@@ -394,6 +445,10 @@ func (self *GkmSettings) validate() error {
 		return fmt.Errorf("%w: Gkm.KeyPackageLowCount past the full count", errInvalidSettings)
 	case self.KeyPackageRenewAge <= self.KeyPackageLastResortRenewAge:
 		return fmt.Errorf("%w: Gkm.KeyPackageLastResortRenewAge not before the set's renewal", errInvalidSettings)
+	case GkmSeatCount < self.SeatCount:
+		return fmt.Errorf("%w: Gkm.SeatCount past a tree's 1,000 leaves", errInvalidSettings)
+	case gkmWrapBatchMaxCount < self.RotateBatchSize:
+		return fmt.Errorf("%w: Gkm.RotateBatchSize past gkm's 256 a request", errInvalidSettings)
 	}
 	return nil
 }

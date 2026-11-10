@@ -12,7 +12,9 @@
 //     Retry-After, and the engine stays ready;
 //  4. ur_sidecar_id matched to §5's binding (EvsAuthState): 403 SCOPE, or 503 while the state is not loaded;
 //  5. on a repo route, the token's repo:<id>:<role> scopes against the rights the route takes, the strongest held
-//     honored only while the newest verified state agrees (D-ACL-21): 403 SCOPE, or 503;
+//     honored only while the newest verified state agrees (D-ACL-21): 403 SCOPE, or 503; then, on one that does not
+//     write, §20.6's spent row: a spent network's reply is paced on its own repo and refused on another's
+//     (quota_read_gate.go);
 //  6. on a write, rev/ for the token's three subjects: 401 when one voids it, 503 when evs cannot tell;
 //  7. on a route that may issue a head CAS, a process whose clock §19.6 finds unknown or over 50 ms off answers
 //     503 before step 4 (§11.8's fence row);
@@ -235,7 +237,12 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	for _, route := range self.servedRoutes {
 		mux.HandleFunc(route.Method+" "+route.Pattern, self.guard(route))
 	}
-	self.handler = mux
+	// every request's and reply's body bytes count as the caller's transfer (transfer_meter.go)
+	var usage *UsageBatcher
+	if deps.Uploads != nil {
+		usage = deps.Uploads.Usage
+	}
+	self.handler = MeterTransfer(mux, usage, nil, log)
 	go self.run()
 	return self, nil
 }
@@ -429,6 +436,10 @@ func (self *EvsEngine) guard(route *EvsRoute) http.HandlerFunc {
 			if !request.AuthorizeRepo(repoId, route.Rights) {
 				return
 			}
+			if !route.Write && !request.checkRead() {
+				// a spent network reads its own repos, paced, and no other's (quota_read_gate.go)
+				return
+			}
 		}
 		if route.Write {
 			if !request.checkRevocation() {
@@ -467,6 +478,7 @@ func (self *EvsEngine) authenticate(request *EvsRequest) bool {
 		return false
 	}
 	request.Principal = principal
+	meterTransferCaller(request.Writer, principal.NetworkId)
 	if principal.SidecarId == nil {
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
 		return false
