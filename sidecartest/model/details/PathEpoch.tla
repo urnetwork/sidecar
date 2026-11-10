@@ -341,15 +341,23 @@ MapCommit(m) ==
 
 Holding(x) == {s \in cmap[x] \cap srcs : idx[s][x].st # "none"}
 
-CopyMove(x) ==
+\* A move is two writes, and the job may die or be superseded between them: the PUT of the current entry, carried
+\* from the newest source holding the path, and then the DELETE of every source copy the move names. Where a
+\* fold wrote the current entry first, only the DELETE is left (11.6's 412 rule).
+CopyPut(x) ==
     /\ srcs # {}
     /\ Holding(x) # {}
+    /\ idx[cur][x].st = "none"
     /\ Twin = "RowsBeforeMoves" \/ ~rowsDone
+    /\ idx' = [idx EXCEPT ![cur][x] = idx[Max(Holding(x))][x]]
+    /\ UNCHANGED <<gen, ver, cur, srcs, hist, truth, row, cmap, rowsDone, seen, flags, kgen, hcur, hsrc, floor, know, pend, mp>>
+
+CopyDelete(x) ==
+    /\ srcs # {}
+    /\ Holding(x) # {}
+    /\ idx[cur][x].st # "none"
     /\ idx' = [e \in Epochs |-> [y \in Paths |->
-                  IF y # x THEN idx[e][y]
-                  ELSE IF e = cur THEN (IF idx[cur][x].st = "none" THEN idx[Max(Holding(x))][x] ELSE idx[cur][x])
-                  ELSE IF e \in cmap[x] \cap srcs THEN NoEntry
-                  ELSE idx[e][x]]]
+                  IF y = x /\ e \in cmap[x] \cap srcs THEN NoEntry ELSE idx[e][y]]]
     /\ UNCHANGED <<gen, ver, cur, srcs, hist, truth, row, cmap, rowsDone, seen, flags, kgen, hcur, hsrc, floor, know, pend, mp>>
 
 \* The directory moves after its children: each carried row a move names in the row's own epoch becomes the
@@ -381,7 +389,7 @@ Next ==
     \/ \E d \in Clients, x \in Paths, op \in {"create", "modify", "remove"} : Plan(d, op, x)
     \/ \E d \in Clients : Push(d) \/ Retoken(d) \/ Abandon(d)
     \/ \E m \in Mappers : MapCommit(m) \/ \E byRow \in BOOLEAN : MapBuild(m, byRow)
-    \/ \E x \in Paths : CopyMove(x)
+    \/ \E x \in Paths : CopyPut(x) \/ CopyDelete(x)
     \/ CopyRows
     \/ DropSources
 
