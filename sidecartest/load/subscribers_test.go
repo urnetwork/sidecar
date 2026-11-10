@@ -23,6 +23,8 @@ func runSubscribersOnFakeClock(t *testing.T, clock *sidecartest.FakeClock, workl
 	go func() {
 		reports <- workload.Run(context.Background())
 	}()
+	// the report, once the run ended while the harness waited for it to settle
+	var ended *SubscriberReport
 	settle := func() {
 		for {
 			progress, driverChanged := workload.Progress()
@@ -38,8 +40,8 @@ func runSubscribersOnFakeClock(t *testing.T, clock *sidecartest.FakeClock, workl
 			case <-driverChanged:
 			case <-waitChanged:
 			case <-quietChanged:
-			case <-reports:
-				t.Fatal("the run ended before the harness saw it settle")
+			case ended = <-reports:
+				return
 			case <-time.After(loadTestGuardTimeout):
 				t.Fatalf("the run never caught up: %+v, %d waiting", progress, waiting)
 			}
@@ -47,6 +49,9 @@ func runSubscribersOnFakeClock(t *testing.T, clock *sidecartest.FakeClock, workl
 	}
 	for {
 		settle()
+		if ended != nil {
+			return ended
+		}
 		select {
 		case report := <-reports:
 			return report
@@ -158,5 +163,30 @@ func TestSubscriberWorkloadCountsAHintThatNeverComes(t *testing.T) {
 	report.Report.CommitSet = map[string]string{"sidecar": "a commit"}
 	if err := report.GateEvidence(); err == nil || !strings.Contains(err.Error(), "missed 3 hints") {
 		t.Fatalf("missed hints reached a gate: %v", err)
+	}
+}
+
+// Past LatencyCount the report keeps a uniform sample of that size, and past HintHistoryCount a subscriber keeps its
+// newest hints alone, so a long run's memory stays bounded while every commit is still judged.
+func TestSubscriberWorkloadBoundsWhatItKeeps(t *testing.T) {
+	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+	settings := DefaultSubscriberSettings()
+	settings.Driver = &DriverSettings{Name: "bounded", Rate: 10, Steady: 5 * time.Second, MaxFailureKinds: 4, Clock: clock}
+	settings.LatencyCount = 20
+	settings.HintHistoryCount = 4
+	workload := NewSubscriberWorkload(settings, &withholdingTarget{subscribers: 3, withheld: -1})
+	report := runSubscribersOnFakeClock(t, clock, workload, nil)
+	if report.Report.Succeeded != 50 || report.MissedHints != 0 {
+		t.Fatalf("succeeded %d, missed %d", report.Report.Succeeded, report.MissedHints)
+	}
+	if report.HintLatencyMillis.Count != 20 {
+		t.Fatalf("%d latencies kept, want the bound's 20 of 150", report.HintLatencyMillis.Count)
+	}
+	workload.stateLock.Lock()
+	defer workload.stateLock.Unlock()
+	for subscriber, hints := range workload.hints {
+		if len(hints) != 4 || hints[3].version != 50 {
+			t.Fatalf("subscriber %d keeps %d hints, the newest %v", subscriber, len(hints), hints)
+		}
 	}
 }

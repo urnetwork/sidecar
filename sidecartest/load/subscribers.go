@@ -26,8 +26,10 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"time"
 
@@ -66,13 +68,20 @@ type SubscriberSettings struct {
 	// How long an arrival waits, on the driver's clock, for every subscriber's hint before the rest count as
 	// missed: §11.15's p99 bound, 2 s.
 	HintTimeout time.Duration
+	// The most latencies the report's percentiles are taken over; past it a uniform sample of them is kept, so a
+	// soak's days of commits hold a bounded set. Must be positive.
+	LatencyCount int
+	// The most recent hints kept per subscriber, which must reach back past the oldest commit in flight: at
+	// §11.15's 20 pushes a second and a 2 s timeout, 40. Must be positive.
+	HintHistoryCount int
 }
 
-// One commit a second for a minute after ten seconds of warm-up, each waiting up to §11.15's 2 s for its hints.
+// One commit a second for a minute after ten seconds of warm-up, each waiting up to §11.15's 2 s for its hints,
+// percentiles over up to a million latencies, and 256 hints a subscriber.
 func DefaultSubscriberSettings() *SubscriberSettings {
 	driver := DefaultDriverSettings()
 	driver.Name = "evs-subscribers"
-	return &SubscriberSettings{Driver: driver, HintTimeout: 2 * time.Second}
+	return &SubscriberSettings{Driver: driver, HintTimeout: 2 * time.Second, LatencyCount: 1000 * 1000, HintHistoryCount: 256}
 }
 
 // What a subscriber run reports: the driver's report of its commits, and every subscriber's hint latency.
@@ -98,9 +107,12 @@ type SubscriberWorkload struct {
 	// closed and replaced at each hint
 	hintChanged chan struct{}
 	latencies   []time.Duration
-	missed      int64
-	started     bool
-	watchOnce   sync.Once
+	// latencies offered, kept or not, and the sample's choices, seeded so a run repeats
+	latencyOffered int64
+	latencyRandom  *rand.Rand
+	missed         int64
+	started        bool
+	watchOnce      sync.Once
 	// arrivals waiting on their hints with their timeout armed, closed and replaced at each change
 	waiting     int64
 	waitChanged chan struct{}
@@ -111,22 +123,27 @@ type subscriberHint struct {
 	at      time.Time
 }
 
-// A workload of target under settings, nil for the defaults.
+// A workload of target under settings, nil for the defaults. A LatencyCount or HintHistoryCount that is not positive
+// panics, since such a run reports nothing.
 func NewSubscriberWorkload(settings *SubscriberSettings, target SubscriberTarget) *SubscriberWorkload {
 	if settings == nil {
 		settings = DefaultSubscriberSettings()
+	}
+	if settings.LatencyCount <= 0 || settings.HintHistoryCount <= 0 {
+		panic(fmt.Sprintf("load: a subscriber run needs positive bounds, not %d latencies and %d hints", settings.LatencyCount, settings.HintHistoryCount))
 	}
 	clock := settings.Driver.Clock
 	if clock == nil {
 		clock = sidecar.RealClock{}
 	}
 	workload := &SubscriberWorkload{
-		settings:    settings,
-		target:      target,
-		clock:       clock,
-		hints:       make([][]subscriberHint, target.Subscribers()),
-		hintChanged: make(chan struct{}),
-		waitChanged: make(chan struct{}),
+		settings:      settings,
+		target:        target,
+		clock:         clock,
+		hints:         make([][]subscriberHint, target.Subscribers()),
+		hintChanged:   make(chan struct{}),
+		waitChanged:   make(chan struct{}),
+		latencyRandom: rand.New(rand.NewPCG(0x5eb5, 0xc0de)),
 	}
 	workload.driver = NewDriver(settings.Driver, workload.arrival)
 	return workload
@@ -162,7 +179,11 @@ func (self *SubscriberWorkload) hinted(subscriber int, version uint64) {
 	if subscriber < 0 || len(self.hints) <= subscriber {
 		return
 	}
-	self.hints[subscriber] = append(self.hints[subscriber], subscriberHint{version: version, at: at})
+	hints := append(self.hints[subscriber], subscriberHint{version: version, at: at})
+	if self.settings.HintHistoryCount < len(hints) {
+		hints = slices.Delete(hints, 0, len(hints)-self.settings.HintHistoryCount)
+	}
+	self.hints[subscriber] = hints
 	close(self.hintChanged)
 	self.hintChanged = make(chan struct{})
 }
@@ -217,12 +238,25 @@ func (self *SubscriberWorkload) arrival(ctx context.Context, n int64) error {
 	for _, hints := range self.hints {
 		for _, hint := range hints {
 			if version <= hint.version {
-				self.latencies = append(self.latencies, max(0, hint.at.Sub(answered)))
+				self.keepLatencyWithLock(max(0, hint.at.Sub(answered)))
 				break
 			}
 		}
 	}
 	return nil
+}
+
+// Keeps a latency in the report's sample: every one up to LatencyCount, then each with the chance that keeps the
+// sample uniform over all offered (reservoir sampling).
+func (self *SubscriberWorkload) keepLatencyWithLock(latency time.Duration) {
+	self.latencyOffered += 1
+	if len(self.latencies) < self.settings.LatencyCount {
+		self.latencies = append(self.latencies, latency)
+		return
+	}
+	if at := self.latencyRandom.Int64N(self.latencyOffered); at < int64(len(self.latencies)) {
+		self.latencies[at] = latency
+	}
 }
 
 // One arrival as a Workload, for a caller that paces arrivals itself across phases, as the soak does, numbering them
