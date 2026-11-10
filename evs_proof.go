@@ -315,6 +315,11 @@ func (self *EvsVerifier) verifyRemoval(head *EvsVerifiedHead, epochs *EvsPathEpo
 // Checks a directory's deltas after its folded table: each a version of the directory, in version order, after the
 // table's names_through, verified as a version is under the directory's token path in its own statement's epoch.
 // The table itself is evs's fold, whose names List checks against their tokens.
+//
+// A delta that is the served version, which evs lists again while the table holds nothing folded, was verified with
+// that version's proof. Any other walked delta in a statement whose list is under changes_root is refused: the reply
+// has no place for its proof (question evs1-m2-28-rooted-delta-proofs), so it fails closed rather than take the delta on
+// evs's word.
 func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply, verified *EvsVerifiedPath) error {
 	verified.Names = reply.GetNames()
 	verified.NamesThrough = reply.GetNamesThrough()
@@ -325,6 +330,12 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, epochs *EvsPathEpoc
 		}
 		last = delta.GetCommitVersion()
 		deltaPath := &EvsVerifiedPath{TokenPath: verified.TokenPath}
+		if delta.GetCommitVersion() == verified.CommitVersion && !delta.GetElided() && bytes.Equal(delta.GetEntryVersion(), verified.EntryBytes) {
+			deltaPath.EntryBytes, deltaPath.Entry, deltaPath.CommitVersion = verified.EntryBytes, verified.Entry, verified.CommitVersion
+			deltaPath.Statement, deltaPath.Floor = verified.Statement, verified.Floor
+			verified.Deltas = append(verified.Deltas, deltaPath)
+			continue
+		}
 		if _, walked := head.StatementAt(delta.GetCommitVersion()); !walked {
 			// a delta at or below the read's pin carries no statement: what it adds is evs's word, as a never-read
 			// path's version is (Q-EVS-6), and its names are still checked against their tokens
@@ -350,6 +361,9 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, epochs *EvsPathEpoc
 // proofs evs sent for each path its covering prefixes reach (EvsAbsencePaths). A directory's own later writes are its
 // deltas, at deltaVersions, already verified; any other is a delta evs left out. A rooted statement with no proof, of
 // an epoch the request did not name, adds that epoch to the epochs answered: the reader asks once more naming it.
+// A rooted statement that changed a prefix of the path by a delta, which does not end the path, has no absence proof
+// evs can give for that prefix and no other proof the reply can carry, so it is refused (question
+// evs1-m2-28-rooted-delta-proofs), where an inline list's own delta is not.
 func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *EvsPathEpochs, since uint64, absences []*protocol.EvsAbsenceProof, deltaVersions map[uint64]bool, absent bool) ([]uint64, error) {
 	more := []uint64{}
 	for _, walked := range head.Statements {
