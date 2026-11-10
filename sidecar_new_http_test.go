@@ -414,7 +414,11 @@ func TestHttpPollRefusedAndRefreshRefusedEndsTheGeneration(t *testing.T) {
 	api.pollAnswers <- http.StatusUnauthorized
 	sidecar := newHttpTestSidecar(t, instance, keyStore, api)
 
-	status := awaitHttpSidecarStatus(t, sidecar, func(status SidecarStatus) bool { return status.State == SidecarStateUnenrolled })
+	// The run loop passes through Unenrolled with no reason on its way from Locked to the generation's Offline, so the
+	// state alone does not say the generation ended: the reason its end carries does.
+	status := awaitHttpSidecarStatus(t, sidecar, func(status SidecarStatus) bool {
+		return status.State == SidecarStateUnenrolled && status.Reason != ""
+	})
 	if status.Reason != SidecarReasonRefused {
 		t.Errorf("reason %q", status.Reason)
 	}
