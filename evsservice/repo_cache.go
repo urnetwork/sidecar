@@ -28,12 +28,6 @@ type EvsRepoRead struct {
 	ReadAt time.Time
 }
 
-// Whether a format-1 binary may write to the repo: a format-2 repo/ answers 503 before step 4 and writes nothing
-// (plan-EVS1-format-unsupported#4).
-func (self *EvsRepoRead) Format1() bool {
-	return self.Object.GetFormat() == sidecar.EvsRepoFormat1
-}
-
 // One cached answer: a read, or a 404 good until notFoundUntil.
 type repoCacheEntry struct {
 	read          *EvsRepoRead

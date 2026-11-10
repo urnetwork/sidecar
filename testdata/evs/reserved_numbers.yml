@@ -10,8 +10,9 @@
 # kept     of those, what format-1 writers and copies carry unchanged, rather than refusing
 # layouts  format 2's numbers in fixed layouts, which their codecs hold to this list (EVS-FORMAT.md)
 #
-# EVS2-M2-01 walks format 2's writes against this list before format 1's bytes freeze at M2's exit, and adds what
-# it finds.
+# EVS2-M2-01 walked format 2's writes against this list before format 1's bytes freeze at M2's exit
+# (protocol/EVS-FORMAT.md's "Format 1's reservations" gives each row's place), and added the two request bodies'
+# staged fields, which format-1 evs refuses in use as the rest.
 
 held:
   EvsPush: [21]
@@ -31,6 +32,8 @@ fields:
   EvsRemovalMarker.segment_ids: 4
   EvsRemovalMarker.slot_ids: 5
   EvsHeadSummary.index_epoch: 15
+  EvsPushRequest.staged: 4
+  EvsPartRequest.staged: 4
   EvsReadPathReply.state: 11
   EvsReadPathReply.drop_id: 12
   EvsReadPathReply.not_before_ms: 13

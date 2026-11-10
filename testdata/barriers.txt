@@ -118,6 +118,8 @@ barrier evs.lease.cas.after evsservice/push_lease.go
 barrier evs.lease.cas.before evsservice/push_lease.go
 barrier evs.log_page.put.after evsservice/logpage.go
 barrier evs.log_page.put.before evsservice/logpage.go
+barrier evs.migrate.raise.after evsservice/repo_format.go
+barrier evs.migrate.raise.before evsservice/repo_format.go
 barrier evs.part.append.after evsservice/push_part.go
 barrier evs.part.append.before evsservice/push_part.go
 barrier evs.place.put.after evsservice/place.go

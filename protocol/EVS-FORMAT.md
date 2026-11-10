@@ -246,6 +246,28 @@ Query values are decimal, and ids in them lowercase hex. The other routes' bodie
 
 **The deposit head.** A push's 200 on the caller's own deposit ref carries `deposit_head`: for a commit the version it committed, for a 5a retry the current head. So does 5f's BASE_STALE there, read from the cluster head. `consumed_through` is the head's, which the ingester declares in its CONSUME's `EvsPush.consumed_through`, the highest version of the deposit ref at or below which its read left no unconsumed deposit, and which evs copies to `EvsHead.consumed_through`, never falling (plan-EVS1-deposit-head, plan-RECORD-depositor-spool). A depositor learns nothing else of the head.
 
+## Format 1's reservations
+
+`testdata/evs/reserved_numbers.yml` is the decided list of what format 1 holds for format 2 (§11.6's kinds row, D-PHASE-9), and `protocol/evs_reserved_test.go` holds `evs.proto` to it. EVS2-M2-01 walked every place format 2 writes against it before format 1's bytes freeze, and what it found stands as follows.
+
+| Format 2 writes | Format 1 holds | Format-1 code |
+|---|---|---|
+| An entry version's `versioning` 1 or 2, a kind-5 or `staged` locator, a staged new-objects item, `EvsUploadReceipt.versionless` | fields 14, 6 and 8, locator kind 5, new-object kind 2 | refuses each in a push, part or seal 409 FORMAT_UNSUPPORTED {needs_format: 2}, recorded |
+| Staged bytes after a payload: `EvsPushRequest.staged`, `EvsPartRequest.staged` | field 4 of each, which the walk added to the list | refuses a body holding any, alike |
+| A DROP or CUT: flags 256 and 512, `drop_sha256`, `index_epoch`, payload sections 9 and 10 | flags, fields 33 and 34, sections 9 and 10, `EvsHead.index_epoch` 24, `EvsHeadSummary.index_epoch` 15 | refuses the push, alike |
+| Window bits 4 and 5, `EvsProvenance.tainted` | flag values 16 and 32, field 2 | reads past each, applying nothing |
+| A record's staged segments and purge list, after its payload | batch header format 2 and record format 2, the only way to that tail | refuses a format-2 batch or record as needing format 2 |
+| A kind-5 segment | segment header format 2 | refuses it as needing format 2 |
+| A read reply's `collected`, `drop_pending` and `dropped`, and a drop's five fields | `EvsReadPathState` 1 to 3, `EvsReadPathReply` 11 to 16 | a reader refuses the path as FORMAT_UNSUPPORTED, with no fork, tamper or missing-segment alarm |
+| An entry's drop mark and a marker's carried segment and slot ids | `EvsIndexEntry.drop_mark` 5, `EvsRemovalMarker` 4 and 5 | a fold or copy carries them unchanged; a newer marker over an older one inherits its ids; a write that cannot keep a marker's ids on a standing entry alarms `fold_carried_ids` and deletes no content (plan-EVS2-marker-carried-ids's interim) |
+| `repo/`'s format 2 | `EvsRepoObject.format` 8, `EvsRefsReply.format` 1 | answers a push 503 with Retry-After before any check, serves stored bytes, and issues no fold, page-out or path-epoch copy write |
+| `sealed_fields`' `content_sha256` | `EvsSealedFields` 6, optional | cannot see it, the fields being sealed; a format-1 client leaves it empty |
+| A DROP's lists over parts | `EvsPushPart.sections` 8, a general field (plan-EVS2-drop-list-parts) | carries it for format 1's own sections; flag 256 refuses a DROP before the section is read |
+
+The refusal table holds format 2's nine codes from M2: VERSIONING 15, DROPPED 19, DROP_PATH 20, DROP_CONSENT 21, DROP_STATE 22, DROP_BOUNDARY 23, DROP_LIST 24 and INDEX_EPOCH 9, each recordable, and DROP_KIND 71, final. So a format-1 instance after a rollback answers a push id whose refusal a format-2 instance recorded with that code and `recorded: true`, never as an unknown code. DROP_KIND never reaches a head: a repo's kind does not change, so §11.8's refuse row settles it without a record.
+
+An instance's format is a fact of its binary: this code runs as format 2, and a test stands in for the rolled-back binary by `EvsSettings.InstanceFormat` 1. No number here serves keep-last-n (owner decision 165).
+
 ## Not fixed here
 
 - **A ref's sealed name and an overlay's base.** The head holds both, and no part of a push carries them: the statement has no field for either, and no payload section is theirs. questions/evs1-m2-01-ref-creation-fields.md asks how a creating push conveys them. Until it is answered, evs stores no sealed ref name, so a reader maps a listed ref back only by deriving ref ids from names it holds; and since no push can declare a base, writers create every ref whole and evs records no overlay.
@@ -299,6 +321,8 @@ Format 2 (v1; R-PHASE-13, owner decision 163) gives meaning to what format 1 res
 `repo/`'s `EvsRepoObject.format` is 1 when the repo is created, always (plan-EVS2-small-readings#11), and 2 once a push carrying a format-2 value raises it: an If-Match on `repo/` changing only `format`, after step 6's record and before step 7, which never lowers it. A raise whose push then fails stands, since format-1 data is valid format 2. `GET .../refs` answers it in `EvsRefsReply.format`. evs takes format-2 values only from networks in §19.11's `format2` gate. A push carries format 2 when an entry version has versioning 1 or 2, a locator is kind 5 or staged, a new-objects item is kind 2, or the statement sets flag 256 or 512, field 33 or field 34; the provenance's `tainted` bit, which format 1 ignores, does not count.
 
 Format-1 code meeting a format-2 construct in a push refuses it 409 FORMAT_UNSUPPORTED {needs_format: 2}, recorded; meeting a format-2 `repo/` it answers a push 503 before step 4, serves stored bytes and writes nothing (plan-EVS1-format-unsupported).
+
+**The gate at 5c (EVS2-M10-05).** A format-2 evs asks §19.11's `format2` gate of a push only when the push carries format 2. Outside the gate it answers 409 VERSIONING, recorded first, since a gate can change (plan-EVS2-small-readings#3), so that push id answers its record even after the gate opens. Inside it, on a format-1 repo, the raise runs under the push's own grant, priced with it as one overwrite of `repo/`: it reads `repo/` from the cluster, and on a 412 or a lost answer reads again, continuing when it finds format 2 and active. A repo it finds keying, deleted, shredding or shredded is never written; the attempt goes back to steps 4 and 5, where 5c refuses by its own rule. Step 7's 5 s still bounds the whole. The gate's `purge` and `drop` modes are read apart from `enabled`, each observe unless exactly `on`, so a gate closed again admits no new push while the repos it raised stay format 2 under those modes. A network's bucket is `ServiceGateBucket`, the one every gate shares (plan-OPS-small-readings#2).
 
 ## What format 2 gives meaning to
 

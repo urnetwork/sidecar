@@ -80,7 +80,7 @@ func (self *EvsEngine) requireActiveRepo(request *EvsRequest) bool {
 		request.Unavailable(nil)
 		return false
 	}
-	if refusal := checkRepoState(read.Object); refusal != nil {
+	if refusal := checkRepoState(read.Object, self.settings.InstanceFormat); refusal != nil {
 		request.Refuse(refusal.Reply(sidecar.Id{}))
 		return false
 	}

@@ -133,6 +133,14 @@ const (
 	BarrierCopyMoveAfter  = "evs.copy.move.after"
 )
 
+// EVS2-M10-05: the migration's raise of repo/ to format 2 (§11.6's format row), keyed by the repo.
+const (
+	// Around the whole raise, its read, decision and If-Match on repo/: a raise killed at either resumes by its
+	// push's next attempt, and two racing raises hold here.
+	BarrierMigrateRaiseBefore = "evs.migrate.raise.before"
+	BarrierMigrateRaiseAfter  = "evs.migrate.raise.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)

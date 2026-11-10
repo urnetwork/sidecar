@@ -423,7 +423,7 @@ func TestRepoCacheKeepsAnAnswerAtMostItsTtl(t *testing.T) {
 	}
 	fixture.clock.Advance(time.Second)
 	read, err := repos.Read(fixture.ctx, cluster, repoId)
-	if err != nil || !read.Format1() {
+	if err != nil || read.Object.GetFormat() != sidecar.EvsRepoFormat1 {
 		t.Fatalf("at 5 s: %v %v", read, err)
 	}
 	if _, err := repos.Read(fixture.ctx, cluster, repoId); err != nil {
