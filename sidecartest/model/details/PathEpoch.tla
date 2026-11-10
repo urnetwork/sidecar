@@ -4,7 +4,7 @@
 (*                                                                         *)
 (* One ref of a name-bearing repo. Its paths are files under one directory *)
 (* whose name table every client can read without a token (the root, as    *)
-(* section 9.2.3 has it). evs holds, per path epoch, an entry for each     *)
+(* section 9.2.8 has it). evs holds, per path epoch, an entry for each     *)
 (* path; the head names the current epoch and the source epochs that       *)
 (* still hold entries. Writers create, change and remove paths; mappers    *)
 (* build a map of the live paths into a newer generation's tokens and      *)
@@ -120,14 +120,14 @@ Leaks(d, x, E) ==
 
 Shown(x, E) == {<<x, e>> : e \in E}
 
-\* 9.2.2's floor rule: the current epoch as the device knows it, and each listed source at or above the floor.
+\* 9.2.3's floor rule: the current epoch as the device knows it, and each listed source at or above the floor.
 AskedFor(d, x) ==
     {hcur[d]} \cup (IF Twin = "SendAllSources" THEN hsrc[d] ELSE {s \in hsrc[d] : s >= floor[d][x]})
 
 \* A device may tokenize under an epoch only with that generation's key.
 HoldsKey(d, e) == kgen[d] >= e
 
-\* 9.2.2's rule for a name with no floor: its token goes only under the head's current epoch as just read, and
+\* 9.2.3's rule for a name with no floor: its token goes only under the head's current epoch as just read, and
 \* only while the device knows no generation past it.
 MaySendNew(d) ==
     /\ Twin = "StaleEpochSend" \/ (hcur[d] = cur /\ hsrc[d] = srcs)
