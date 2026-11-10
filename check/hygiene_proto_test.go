@@ -235,18 +235,42 @@ func (self *repository) staleGeneratedFindings(t testing.TB) []string {
 	return findings
 }
 
-// A generated file nothing here knows how to regenerate. Only protoc's output has a rule so far, so
-// the first go generate output fails until this file learns its generator, rather than going stale
-// unwatched. Read by Go's own marker line, which gofmt and the linters honor.
+// A generated file nothing here knows how to regenerate. protoc's output has the rule above; a go
+// generate output passes only when the settings name the test that holds it to its source, and that
+// test is a top-level func of a test file in its package, which every module's go test runs. Any other
+// generated file fails, rather than going stale unwatched. Read by Go's own marker line, which gofmt
+// and the linters honor.
 func (self *repository) unregeneratedFindings(t testing.TB) []string {
 	t.Helper()
-	findings := []string{}
-	for _, file := range self.sourceFiles(t) {
-		if strings.HasSuffix(file.path, ".pb.go") {
+	files := self.sourceFiles(t)
+	// each package's top-level test funcs
+	packageTests := map[string]map[string]bool{}
+	for _, file := range files {
+		if !file.isTest {
 			continue
 		}
-		if ast.IsGenerated(file.syntax) {
+		for _, declaration := range file.syntax.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Recv != nil {
+				continue
+			}
+			if packageTests[file.packageName] == nil {
+				packageTests[file.packageName] = map[string]bool{}
+			}
+			packageTests[file.packageName][function.Name.Name] = true
+		}
+	}
+	findings := []string{}
+	for _, file := range files {
+		if strings.HasSuffix(file.path, ".pb.go") || !ast.IsGenerated(file.syntax) {
+			continue
+		}
+		test, listed := self.settings.generatedFileTests[testRuleFileKey(file)]
+		switch {
+		case !listed:
 			findings = append(findings, findingf("%s is generated, and this rule has no way to regenerate it", self.displayPath(file.path)))
+		case !packageTests[file.packageName][test]:
+			findings = append(findings, findingf("%s is generated, and %s, which holds it to its source, is missing", self.displayPath(file.path), test))
 		}
 	}
 	return findings

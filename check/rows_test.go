@@ -297,6 +297,7 @@ var failsOnRows = []failsOnRow{
 			"TestHygieneFailsOnAProtoEditedAfterGeneration", "TestHygieneFailsOnAHandEditedPbGo", "TestHygieneFailsOnAMissingPbGo",
 			"TestHygieneFailsOnAnOrphanPbGo", "TestHygieneFailsOnAnotherPluginVersion", "TestHygieneFailsOnAStalePbGoOnAReleaseBranch",
 			"TestHygieneFailsOnGeneratedCodeItCannotRegenerate", "TestHygieneFailsOnAMissingProtoc",
+			"TestHygieneFailsOnGeneratedCodeWhoseTestIsGone",
 		},
 	},
 	{

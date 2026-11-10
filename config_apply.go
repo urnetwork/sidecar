@@ -552,6 +552,7 @@ func (self *ConfigLog) applyStatement(state *ConfigState, kept *configKeptEntry)
 			if statement.completes != nil {
 				kept.verdict.CompletedProposalId = configCompletedProposalId(statement)
 			}
+			configAdvanceShrinks(state, next, configEntryEffects(statement, nil))
 			next.addRing(kept.n, statement.id)
 			return next.finish()
 		}
@@ -728,6 +729,7 @@ func (self *ConfigLog) applyTick(state *ConfigState, kept *configKeptEntry) (*Co
 		kept.verdict.Refusal = err
 		return newConfigStateBuilder(state, kept.n, kept.chain, kept.entry.GetTimeMs()).finish(), nil
 	}
+	configAdvanceShrinks(state, next, configEntryEffects(nil, activations))
 	kept.tick, kept.activations = tick, activations
 	return next.finish(), nil
 }

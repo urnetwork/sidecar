@@ -90,6 +90,10 @@ type checkSettings struct {
 	// was granted and why. An exception that matches nothing fails, so the lists only shrink.
 	realTimeWaitExceptions map[string]testRuleException
 	testDataExceptions     map[string]testRuleException
+	// go generate's outputs, keyed as the test rules key a file, each to the top-level test of its package that
+	// holds it equal to its source and rewrites it: the stale rule passes a listed file while that test exists,
+	// which every module's go test runs in make check
+	generatedFileTests map[string]string
 }
 
 // What a module's license file says beyond its licenses' own words, read by a person.
@@ -207,6 +211,10 @@ func defaultCheckSettings() *checkSettings {
 		sidecarHttpMissByteCount:      74965628,
 		sidecarHttpGoalSlipRecorded:   false,
 		iosMinimumVersion:             "16.0",
+		generatedFileTests: map[string]string{
+			// mail_operators.yml's list as Go (plan-MAIL-small-readings#18)
+			"mail_operators_gen.go": "TestMailOperatorsGenIsCurrent",
+		},
 		wallClockExceptions: map[string]wallClockException{
 			"id.go time.Now": {
 				since: "2026-11-08",

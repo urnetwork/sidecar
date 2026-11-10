@@ -285,6 +285,7 @@ func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256
 
 	// the state at b itself, with S(b)'s pin and chains
 	state.n, state.chain, state.timeMs = baseN, chains[baseIndex], baseEntry.GetTimeMs()
+	configAdvanceBaseShrinks(next, previousBase, header)
 	result := next.finish()
 	self.keep(start)
 	self.retainBase(result, rowsBytes)

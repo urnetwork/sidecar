@@ -222,6 +222,7 @@ func (self *configStateHistory) rebuild(view *configHistoryView, k uint64) (*Con
 				if err := configApplyStatement(next, kept.statement, false); err != nil {
 					return nil, fmt.Errorf("the statement at %d: %w", j, err)
 				}
+				configAdvanceShrinks(state, next, configEntryEffects(kept.statement, nil))
 				next.addRing(kept.n, kept.statement.id)
 			case bridge.AuthEntryKindTick:
 				if kept.tick == nil {
@@ -230,6 +231,7 @@ func (self *configStateHistory) rebuild(view *configHistoryView, k uint64) (*Con
 				if err := configApplyTick(next, kept.tick, kept.activations); err != nil {
 					return nil, fmt.Errorf("the tick at %d: %w", j, err)
 				}
+				configAdvanceShrinks(state, next, configEntryEffects(nil, kept.activations))
 			default:
 				return nil, fmt.Errorf("a base at %d, which the window keeps", j)
 			}

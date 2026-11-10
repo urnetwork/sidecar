@@ -72,23 +72,31 @@ type MailAuthSettings struct {
 	DkimRsaMaxBitCount int
 	// The PTR names of sender_ip looked up forward, as RFC 7208 §4.6.4 bounds a ptr term.
 	PtrNameMaxCount int
+	// The ARC sets a chain may hold and still be verified; 9 to 50 are incomplete, with no lookup (§15.5's arc row).
+	// Non-positive verifies none.
+	ArcVerifySetMaxCount int
+	// The messages a receiver checks at once, the rest waiting in arrival order, so with max_streams' 16 sessions each
+	// check ends within 2 min of its last byte (§15.5's receiver row). Non-positive admits none.
+	CheckSlotMaxCount int
 }
 
 // The one default: §15.5's numbers.
 func DefaultMailAuthSettings() *MailAuthSettings {
 	return &MailAuthSettings{
-		QueryMaxCount:      64,
-		InFlightMaxCount:   8,
-		QueryTimeout:       5 * time.Second,
-		CheckTimeout:       30 * time.Second,
-		StubEntryMaxCount:  4096,
-		StubMaxTtl:         3600 * time.Second,
-		StubNegativeMaxTtl: 300 * time.Second,
-		HeaderMaxByteCount: 256 * 1024,
-		DkimFieldMaxCount:  64,
-		DkimSelectMaxCount: 8,
-		DkimRsaMaxBitCount: 8192,
-		PtrNameMaxCount:    10,
+		QueryMaxCount:        64,
+		InFlightMaxCount:     8,
+		QueryTimeout:         5 * time.Second,
+		CheckTimeout:         30 * time.Second,
+		StubEntryMaxCount:    4096,
+		StubMaxTtl:           3600 * time.Second,
+		StubNegativeMaxTtl:   300 * time.Second,
+		HeaderMaxByteCount:   256 * 1024,
+		DkimFieldMaxCount:    64,
+		DkimSelectMaxCount:   8,
+		DkimRsaMaxBitCount:   8192,
+		PtrNameMaxCount:      10,
+		ArcVerifySetMaxCount: 8,
+		CheckSlotMaxCount:    4,
 	}
 }
 
