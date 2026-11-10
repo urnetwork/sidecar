@@ -105,6 +105,9 @@ type RecordStreamHead struct {
 	SidecarId Id
 	// The newest committed version, 0 before the first push.
 	Version uint64
+	// The ref's id (§11.6), which a checkpoint's frontier names (RECORD.md section 10.1). Zero from a binding that
+	// does not state it, and then no batch is cut or judged over the stream.
+	RefId Id
 }
 
 // One committed push of a stream, as a reader replays it. The binding returns only pushes whose statements verify by
@@ -116,6 +119,9 @@ type RecordStreamVersion struct {
 	AuthPin    *bridge.AuthPin
 	SlotId     Id
 	Entries    []*RecordStreamEntry
+	// C_v, the ref's chain value at this version (§11.8), which a checkpoint's frontier carries beside the version.
+	// Empty from a binding that does not state it.
+	Chain []byte
 }
 
 // A slot object as it stands: its live rows in ascending key_index, an erased row gone and no index shifted (§11.6).
@@ -307,6 +313,9 @@ type RecordAuthView interface {
 	Reads(repoId Id, sidecarId Id) bool
 	// Whether it writes a stream of its own there: §16.8's matrix's writers, read_only devices and parked ones never.
 	Writes(repoId Id, sidecarId Id) bool
+	// Whether it is a device of an admin of the repo (§8.6): who signs a log's retention, its log_settings and its
+	// erasures (RECORD.md section 6.3's writer column).
+	Admins(repoId Id, sidecarId Id) bool
 	// Whether it deposits there.
 	Deposits(repoId Id, sidecarId Id) bool
 	// Whether its deposits there are read receipts alone: a reader of an owner-bound repo that is not its writer
@@ -373,6 +382,11 @@ func (self RecordAuthUnavailable) Reads(repoId Id, sidecarId Id) bool {
 
 // Never.
 func (self RecordAuthUnavailable) Writes(repoId Id, sidecarId Id) bool {
+	return false
+}
+
+// Never.
+func (self RecordAuthUnavailable) Admins(repoId Id, sidecarId Id) bool {
 	return false
 }
 

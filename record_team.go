@@ -41,6 +41,8 @@ var (
 	// In team mode a claim or handoff is state of the calling run's announcement (§16.11): RECORD-M6-16 changes it,
 	// and the tool answers FAILED_PRECONDITION for a session no run binds; no entry is written.
 	ErrRecordRouteAnnouncement = errors.New("record claim or handoff is state of the run's announcement in team mode")
+	// A draft names a log that takes no entry from this sidecar: not written, and never spooled for later.
+	ErrRecordRouteNoLog = errors.New("record draft names a log this sidecar cannot write")
 	// A draft for T alone in a network with no team record: an admin's approval, which no personal log takes.
 	ErrRecordRouteNoTeamRecord = errors.New("record draft for the team record in a network with none")
 )
@@ -212,6 +214,33 @@ func recordRoutesFor(auth RecordAuthView, sidecarId Id, kind RecordKind, teamOnl
 	}
 	routes.vault = vault
 	return routes, nil
+}
+
+// Section 6.3's kinds whose row is the log they are about, which a draft names by RecordDraft.LogId.
+func recordKindNamesItsLog(kind RecordKind) bool {
+	return kind == RecordKindDisclosure
+}
+
+// The route of a draft that names its log (RecordDraft.LogId): the team record, by this sidecar's stream or its
+// deposits, or its author's vault. A receipt-only depositor files no such entry, since ingest takes only read from
+// it (RECORD.md section 5.4's class step), and a log this sidecar neither writes nor deposits to takes none.
+func recordRoutesToLog(auth RecordAuthView, sidecarId Id, kind RecordKind, logId Id) (*recordRoutes, error) {
+	if !recordKindNamesItsLog(kind) {
+		return nil, fmt.Errorf("%w: %s names no log of its own", ErrRecordDraftInvalid, kind)
+	}
+	teamRecordId, _ := recordTeamLogs(auth)
+	if teamRecordId != nil && *teamRecordId == logId {
+		deposit, ok := recordLogMode(auth, sidecarId, logId)
+		if !ok {
+			return nil, fmt.Errorf("%w: the team record takes nothing from this sidecar", ErrRecordRouteNoLog)
+		}
+		return &recordRoutes{team: &recordRoute{logId: logId, deposit: deposit}, teamBody: recordTeamBodySame}, nil
+	}
+	vault, err := recordVaultRoute(auth, sidecarId)
+	if err != nil || vault.logId != logId {
+		return nil, fmt.Errorf("%w: log %s is neither the team record nor this author's vault", ErrRecordRouteNoLog, logId)
+	}
+	return &recordRoutes{vault: vault, vaultEntry: true}, nil
 }
 
 // T's body of a vault body: the projection, or the same bytes. repoPrivate clears ContextBody's and ChangeBody's

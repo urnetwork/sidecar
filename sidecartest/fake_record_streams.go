@@ -16,12 +16,17 @@
 //     every time is the injected clock's;
 //   - every commit raises the repo's push sequence (§11.10's sequence row) and keeps the value beside its ref, as
 //     {evsh_<repo_id>} does for GET .../refs?moved_after (§11.9); RestartSequence models its loss, after which the
-//     sequence starts above every earlier value and no ref holds one, so a listing answers every ref.
+//     sequence starts above every earlier value and no ref holds one, so a listing answers every ref;
+//   - a stream has a ref id and each of its versions a chain value C_v (§11.8), which a checkpoint's frontier names
+//     (RECORD.md section 10.1): the ref id is this fake's own digest of the repo and the writer, standing in for
+//     §11.6's keyed one, and C_v is EvsChainNext over this fake's statement digests;
+//   - RemoveStreamEntries takes entry files out of a stream as a committed BASE does (§11.8), leaving its versions.
 //
 // It holds no format code: entries, slot rows, batches and notes are the caller's bytes, kept and returned as they
 // came, and nothing is sealed, tokenized or verified. What it does not keep: the pins a push declares, beyond
 // GATE_CLOSED on demand; statements and their replay; segments and padding; the storage limit and DIRECTORY_FULL;
-// BASE; drop keys; and deposit slots, which the binding keeps beside each deposit.
+// BASE's own statements, beyond RemoveStreamEntries' effect on a stream; drop keys; and deposit slots, which the
+// binding keeps beside each deposit.
 //
 // Safe for concurrent use. Barriers and subscribers run with no lock held.
 
@@ -152,6 +157,15 @@ type fakeRecordStream struct {
 	version  uint64
 	paths    map[string]bool
 	versions []*sidecar.RecordStreamVersion
+	refId    sidecar.Id
+	chain    [sha256.Size]byte
+}
+
+// A stream's ref id here: the first 16 bytes of a digest of the repo and the writer. evs's is §11.6's HMAC under
+// K_ref, which this fake holds no key for; a frontier only needs it stable and distinct.
+func FakeRecordStreamRefId(repoId sidecar.Id, writerSidecarId sidecar.Id) sidecar.Id {
+	digest := fakeRecordStatement([]byte("stream ref"), repoId[:], writerSidecarId[:])
+	return sidecar.Id(digest[:16])
 }
 
 // A depositor's deposit ref: its unconsumed deposits in version order, and every id it ever created.
@@ -275,6 +289,23 @@ func (self *FakeRecordStreams) SetGateClosed(repoId sidecar.Id, closed bool) {
 	defer self.stateLock.Unlock()
 	if repo, ok := self.repos[repoId]; ok {
 		repo.gateClosed = closed
+	}
+}
+
+// Takes the entry files at paths out of writerSidecarId's stream, as a committed BASE does at expiry (§11.8): the
+// versions that created them stay, with their statements' chain values, and hold those entries no longer. A reader
+// arriving later finds the pushes and not the files.
+func (self *FakeRecordStreams) RemoveStreamEntries(repoId sidecar.Id, writerSidecarId sidecar.Id, paths []string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	repo := self.repos[repoId]
+	if repo == nil || repo.streams[writerSidecarId] == nil {
+		return
+	}
+	for _, version := range repo.streams[writerSidecarId].versions {
+		version.Entries = slices.DeleteFunc(version.Entries, func(entry *sidecar.RecordStreamEntry) bool {
+			return slices.Contains(paths, entry.Path)
+		})
 	}
 }
 
@@ -469,7 +500,8 @@ func (self *fakeRecordStreamsClient) Append(ctx context.Context, repoId sidecar.
 		}
 		stream := repo.streams[self.sidecarId]
 		if stream == nil {
-			stream = &fakeRecordStream{paths: map[string]bool{}}
+			refId := FakeRecordStreamRefId(repoId, self.sidecarId)
+			stream = &fakeRecordStream{paths: map[string]bool{}, refId: refId, chain: sidecar.EvsChainStart(repoId, refId)}
 		}
 		created := map[string]bool{}
 		for _, entry := range push.Entries {
@@ -481,6 +513,7 @@ func (self *fakeRecordStreamsClient) Append(ctx context.Context, repoId sidecar.
 		}
 		repo.streams[self.sidecarId] = stream
 		stream.version += 1
+		stream.chain = sidecar.EvsChainNext(stream.chain, push.PushId, statement)
 		commit := &sidecar.RecordStreamCommit{Version: stream.version, TimeMillis: self.world.clock.Now().UnixMilli()}
 		version := &sidecar.RecordStreamVersion{
 			Version:    commit.Version,
@@ -488,6 +521,7 @@ func (self *fakeRecordStreamsClient) Append(ctx context.Context, repoId sidecar.
 			TimeMillis: commit.TimeMillis,
 			AuthPin:    fakeRecordClonePin(push.AuthPin),
 			SlotId:     push.SlotId,
+			Chain:      bytes.Clone(stream.chain[:]),
 		}
 		for _, entry := range push.Entries {
 			stream.paths[entry.Path] = true
@@ -511,7 +545,7 @@ func (self *fakeRecordStreamsClient) Streams(ctx context.Context, repoId sidecar
 			return fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
 		}
 		for writerId, stream := range repo.streams {
-			heads = append(heads, &sidecar.RecordStreamHead{SidecarId: writerId, Version: stream.version})
+			heads = append(heads, &sidecar.RecordStreamHead{SidecarId: writerId, Version: stream.version, RefId: stream.refId})
 		}
 		return nil
 	})
@@ -542,6 +576,7 @@ func (self *fakeRecordStreamsClient) ReadStream(ctx context.Context, repoId side
 				TimeMillis: version.TimeMillis,
 				AuthPin:    fakeRecordClonePin(version.AuthPin),
 				SlotId:     version.SlotId,
+				Chain:      bytes.Clone(version.Chain),
 			}
 			for _, entry := range version.Entries {
 				copied.Entries = append(copied.Entries, &sidecar.RecordStreamEntry{Path: entry.Path, Entry: bytes.Clone(entry.Entry)})

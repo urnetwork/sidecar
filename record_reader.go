@@ -86,6 +86,9 @@ type RecordReadEntry struct {
 	State       RecordEntryState
 	// The body as stored, opened and committed to; nil without its key, while invalid, and once erased.
 	Body []byte
+	// The salt body_commitment opens with, held with Body and gone with it: what a disclosure packet or an export
+	// with bodies carries beside the body (RECORD.md sections 9 and 11). Never a key.
+	Salt []byte
 	// The body did not open, did not commit, or broke its kind's caps: shown as invalid, its header standing.
 	BodyInvalid bool
 	// The header's tainted: reading its text taints the reader's run first (§16.6, I-9).
@@ -103,6 +106,7 @@ func (self *RecordReadEntry) clone() *RecordReadEntry {
 	clone := *self
 	clone.SignedBytes = bytes.Clone(self.SignedBytes)
 	clone.Body = bytes.Clone(self.Body)
+	clone.Salt = bytes.Clone(self.Salt)
 	clone.Copies = nil
 	for _, entryCopy := range self.Copies {
 		copied := *entryCopy
@@ -152,6 +156,33 @@ type RecordReader struct {
 
 	stateLock sync.Mutex
 	logs      map[Id]*recordReadLog
+	// run after each sync that pinned, with the log's sync lock held and no state lock: the verifiable log's monitor
+	// (RECORD.md section 10.2's monitor row)
+	syncHooks []func(ctx context.Context, logId Id)
+}
+
+// One leaf a push holds, in its place in the push.
+type RecordReadPushLeaf struct {
+	Leaf [sha256.Size]byte
+	Kind RecordKind
+}
+
+// One committed push of a stream as this reader verified it: the leaves of the entries it kept, in §16.8's order
+// within the push, copies of entries another stream holds among them.
+type RecordReadPush struct {
+	Version    uint64
+	TimeMillis int64
+	// C_v, as the binding stated it; empty when it stated none.
+	Chain  []byte
+	Leaves []RecordReadPushLeaf
+}
+
+// One stream of a log as read: what RECORD.md section 10.1's batches are cut from and judged against.
+type RecordReadStream struct {
+	StreamSidecarId Id
+	// The ref's id, zero when the binding stated none.
+	RefId  Id
+	Pushes []*RecordReadPush
 }
 
 // One log as read.
@@ -169,6 +200,11 @@ type recordReadLog struct {
 	erasureVersion uint64
 	erasedKeys     map[RecordSlotKey]bool
 	erasedEntryIds map[Id]bool
+	// each stream's ref id and verified pushes, in version order
+	streamRefIds map[Id]Id
+	streamPushes map[Id][]*RecordReadPush
+	// the last sync read every stream to its head
+	complete bool
 }
 
 // A reader over args, reading nothing until its first Sync. Store is required; nil settings are the defaults.
@@ -232,6 +268,8 @@ func (self *RecordReader) readLog(logId Id) *recordReadLog {
 			writerChains:   map[Id]*recordReadChain{},
 			erasedKeys:     map[RecordSlotKey]bool{},
 			erasedEntryIds: map[Id]bool{},
+			streamRefIds:   map[Id]Id{},
+			streamPushes:   map[Id][]*RecordReadPush{},
 		}
 		self.logs[logId] = log
 	}
@@ -262,16 +300,26 @@ func (self *RecordReader) Sync(ctx context.Context, logId Id) error {
 	}
 	slices.SortFunc(heads, func(a *RecordStreamHead, b *RecordStreamHead) int { return a.SidecarId.Cmp(b.SidecarId) })
 	hookKey := recordChainIdText(logId)
+	complete := true
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		log.complete = false
+	}()
 	for _, head := range heads {
 		readVersion := func() uint64 {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
+			if head.RefId != (Id{}) {
+				log.streamRefIds[head.SidecarId] = head.RefId
+			}
 			return log.streamVersions[head.SidecarId]
 		}()
 		if head.Version < max(readVersion, log.pins.streamVersions[head.SidecarId]) {
 			// evs holds less of this stream than this device already read
 			streamId := head.SidecarId
 			self.raise(SidecarRecordAlarmChainFork, logId, &streamId)
+			complete = false
 			continue
 		}
 		if head.Version == readVersion {
@@ -292,6 +340,7 @@ func (self *RecordReader) Sync(ctx context.Context, logId Id) error {
 				return err
 			}
 			if ahead {
+				complete = false
 				break
 			}
 			readVersion = version.Version
@@ -306,7 +355,83 @@ func (self *RecordReader) Sync(ctx context.Context, logId Id) error {
 		return err
 	}
 	self.checkChains(auth, log)
-	return self.pin(log)
+	if err := self.pin(log); err != nil {
+		return err
+	}
+	hooks := func() []func(ctx context.Context, logId Id) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		log.complete = complete
+		return slices.Clone(self.syncHooks)
+	}()
+	for _, hook := range hooks {
+		hook(ctx, logId)
+	}
+	return nil
+}
+
+// Runs hook after each sync of a log that pinned, on the syncing goroutine, with that log's sync lock held: a hook
+// reads this reader and never syncs it.
+func (self *RecordReader) addSyncHook(hook func(ctx context.Context, logId Id)) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.syncHooks = append(self.syncHooks, hook)
+}
+
+// The log's streams as read, by stream id, each push a copy, and whether the last sync read every stream to its
+// head: false while a push waits on a pin this state has not reached, or a stream wound back.
+func (self *RecordReader) Streams(logId Id) ([]*RecordReadStream, bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	log, ok := self.logs[logId]
+	if !ok {
+		return nil, false
+	}
+	streams := []*RecordReadStream{}
+	for streamId, pushes := range log.streamPushes {
+		stream := &RecordReadStream{StreamSidecarId: streamId, RefId: log.streamRefIds[streamId]}
+		for _, push := range pushes {
+			stream.Pushes = append(stream.Pushes, &RecordReadPush{
+				Version: push.Version, TimeMillis: push.TimeMillis, Chain: bytes.Clone(push.Chain), Leaves: slices.Clone(push.Leaves),
+			})
+		}
+		streams = append(streams, stream)
+	}
+	slices.SortFunc(streams, func(a *RecordReadStream, b *RecordReadStream) int { return a.StreamSidecarId.Cmp(b.StreamSidecarId) })
+	return streams, log.complete
+}
+
+// The entries of kinds read at or after index from of the log's read order, each a copy, and the index to ask from
+// next: how a follower of a few kinds reads on without copying the log.
+func (self *RecordReader) EntriesOfKinds(logId Id, from int, kinds ...RecordKind) ([]*RecordReadEntry, int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	log, ok := self.logs[logId]
+	if !ok {
+		return nil, 0
+	}
+	entries := []*RecordReadEntry{}
+	for _, entry := range log.ordered[min(max(from, 0), len(log.ordered)):] {
+		if slices.Contains(kinds, entry.Kind()) {
+			entries = append(entries, entry.clone())
+		}
+	}
+	return entries, len(log.ordered)
+}
+
+// The entry read with leaf, false for none.
+func (self *RecordReader) EntryOfLeaf(logId Id, leaf [sha256.Size]byte) (*RecordReadEntry, bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	log, ok := self.logs[logId]
+	if !ok {
+		return nil, false
+	}
+	entry, held := log.leafEntries[leaf]
+	if !held {
+		return nil, false
+	}
+	return entry.clone(), true
 }
 
 // Verifies one push's entries in §16.8's order and keeps what passes. True when the push's pin is ahead of this
@@ -347,6 +472,7 @@ func (self *RecordReader) readVersion(ctx context.Context, streams RecordStreams
 	})
 	slotRows := map[uint32][]byte{}
 	slotRead := false
+	push := &RecordReadPush{Version: version.Version, TimeMillis: version.TimeMillis, Chain: bytes.Clone(version.Chain)}
 	for _, arrival := range arrivals {
 		header := arrival.verified.Header
 		writerId := recordIdOf(header.Header.GetWriterSidecarId())
@@ -354,6 +480,7 @@ func (self *RecordReader) readVersion(ctx context.Context, streams RecordStreams
 			self.raise(SidecarRecordAlarmBadEntry, log.logId, &writerId)
 			continue
 		}
+		push.Leaves = append(push.Leaves, RecordReadPushLeaf{Leaf: header.LeafHash(), Kind: header.Kind()})
 		entryCopy := &RecordEntryCopy{
 			StreamSidecarId: streamId, Version: version.Version, Path: arrival.path, KeyIndex: arrival.fields.keyIndex,
 			TimeMillis: version.TimeMillis,
@@ -421,6 +548,10 @@ func (self *RecordReader) readVersion(ctx context.Context, streams RecordStreams
 			self.applyErasureEntry(log, entry)
 		}
 	}
+	// only a push read whole counts: one cut by a failed slot read is read again
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	log.streamPushes[streamId] = append(log.streamPushes[streamId], push)
 	return false, nil
 }
 
@@ -468,17 +599,19 @@ func (self *RecordReader) openBody(logId Id, writerId Id, entry *RecordReadEntry
 		var body []byte
 		body, err = RecordOpen(entry.Header, fields.sealedBody, key, salt)
 		clear(key)
-		clear(salt)
 		if err == nil {
 			if capErr := RecordBodyValidateStored(entry.Kind(), body); capErr != nil {
 				entry.BodyInvalid = true
 				clear(body)
+				clear(salt)
 				self.raise(SidecarRecordAlarmOverCap, logId, &writerId)
 				return
 			}
 			entry.Body = body
+			entry.Salt = salt
 			return
 		}
+		clear(salt)
 	}
 	entry.BodyInvalid = true
 	self.raise(SidecarRecordAlarmBadEntry, logId, &writerId)
@@ -638,6 +771,8 @@ func (self *RecordReader) applyErasureEntry(log *recordReadLog, erasure *RecordR
 func recordEraseEntryWithLock(entry *RecordReadEntry) {
 	clear(entry.Body)
 	entry.Body = nil
+	clear(entry.Salt)
+	entry.Salt = nil
 	entry.BodyInvalid = false
 	entry.State = RecordEntryErased
 }

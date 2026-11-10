@@ -268,6 +268,16 @@ barrier record.chain.head.after record_chain.go
 barrier record.chain.head.before record_chain.go
 barrier record.consume.after record_ingest.go
 barrier record.consume.before record_ingest.go
+barrier record.log.entry.after record_log.go
+barrier record.log.entry.before record_log.go
+barrier record.log.file.after record_log.go
+barrier record.log.file.before record_log.go
+barrier record.log.journal.after record_log.go
+barrier record.log.journal.before record_log.go
+barrier record.log.sign.after record_log.go
+barrier record.log.sign.before record_log.go
+barrier record.log.witness.after record_log.go
+barrier record.log.witness.before record_log.go
 barrier record.plan.after record_slot.go
 barrier record.plan.before record_slot.go
 barrier record.presence_count.after record_presence.go
@@ -420,6 +430,7 @@ secret record_entry_key record_seal.go
 secret record_entry_salt record_chain.go
 secret record_entry_salt record_deposit.go
 secret record_entry_salt record_seal.go
+secret record_log_key record_log.go
 secret recovery_code keys_recovery.go
 secret recovery_ed25519_seed keys_recovery.go
 secret recovery_xwing_seed keys_recovery.go

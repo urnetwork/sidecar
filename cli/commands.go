@@ -262,6 +262,11 @@ func (self *urCli) runCommand(ctx context.Context, command *urCommand, args []st
 	if err := command.run(ctx, self, options); err != nil {
 		// a credential never reaches an error's text: errors carry codes, and RedactAuthKey covers a key
 		fmt.Fprintf(self.stderr, "ur %s: %s\n", command.name, sidecar.RedactAuthKey(err.Error()))
+		// a command whose exit code is part of its contract names it (ur record verify's 2)
+		var exit *urExitError
+		if errors.As(err, &exit) {
+			return exit.code
+		}
 		return urExitFailed
 	}
 	return urExitOk
