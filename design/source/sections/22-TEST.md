@@ -1247,8 +1247,8 @@ FS-22  §10    an old recovery code's derived keys after RecoveryRebind{reason: 
               new path token or post-cutover content opens, and a write at the old generation
               gets 412 GATE_CLOSED; a routine rebind only rotates; --compromise lists the
               member's devices live while the old binding was current, its own included,
-              each revocation's since_n clamped past the rebind for its signer, so the rebind
-              stands, and moved earlier the plan shows the rebind voiding; a personal
+              the rebind signer's since_n clamped past the rebind, so the rebind stands, and
+              moved earlier the plan shows the rebind voiding; a personal
               network's last device enrolls its replacement, which revokes it from after that
               admission (owner decision 212)
 FS-23  §10    a deposit-only principal, an agent depositing into a vault and, at M7, a         I-15        T2+T3  M2-out;

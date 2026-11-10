@@ -6,13 +6,13 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 304 decided items and 309 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
+Holds 305 decided items and 309 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
 
 ## Index
 
 | DESIGN.md section | Decided | Proposed |
 |---|---|---|
-| [§2 Trust model and threat model](#s2) | 2 | 0 |
+| [§2 Trust model and threat model](#s2) | 3 | 0 |
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§4 Repositories, code placement, branches, and build](#s4) | 15 | 21 |
 | [§5 The Sidecar core](#s5) | 19 | 28 |
@@ -53,6 +53,17 @@ Changes: §2.8 EX7; §2.8 ext rows; §2.4 TB1; §18.8; §19.5 W10.
 Questions: `plan-SDK-small-readings.md#3`.
 
 Not folded (2026-11-10): the ext row for Cloudflare, since a new §2.8 row needs its `planned` line in testdata/metadata/fields.yml in the same commit, which a design-records track does not edit (question `dr-s2-s3-new-metadata-rows.md`); the rest is folded as owner decision 211 (§2.8 EX7, §2.4 TB1, §2.10, §18.8, §19.5's W10).
+
+### QD-023: Which key signs apt and yum metadata, and where do those repositories live?
+*Decided by the owner: owner 2026-11-06. Also amends §4.*
+
+the file's option 3: drop apt and yum from v1, and keep .deb and .rpm as direct downloads through install.sh's verified path. No GPG key and no repository host. §4.18 loses that item, and `apt upgrade` needs a Q- item. This replaces Proposed. (The recommendation it replaces: A second offline key, a GPG key held and used in the same two-person ceremony as the SSH key: `InRelease` and rpm signatures are made at promotion, and the trees publish under `https://ur.io/recurd/apt/` and `https://ur.io/recurd/yum/` through mmm. If the owner would rather cut scope, drop apt and yum from v1 and keep `.deb` and `.rpm` as direct downloads, with a Q- item.)
+
+Changes: §2.6; §4.10; §4.18.
+
+Questions: `plan-REPO-v1-channels.md`.
+
+Not folded (2026-11-10): the Q- item for `apt upgrade` that the owner asked for, since a new §4 id needs its evidence line in check/repo_matrix_test.go's repoMatrix in the same commit (TestEveryRepoIdHasEvidence), which a design-records track does not edit (question `dr-s2-s3-new-metadata-rows.md`); the rest is folded as owner decision 213 (§2.6, §4.10, §4.18).
 
 ### QD-030: Who holds the abuse and legal-request mailboxes, and what can that provider read?
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §21, §19.*

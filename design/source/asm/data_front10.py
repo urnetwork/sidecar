@@ -9,8 +9,8 @@ them from sidecar/DESIGN-AMENDMENTS.md: the nightly count's shard sums (198), Te
 fold's leaf places (200), gkm's owner marker (201), forwarding reader keys at gkm (202), the orphan horizon (203),
 the drop job's horizon, amending 183 (204), settings in rows (205), the sweep's triggers (206), a reported URL's
 path (207), the sealed abuse mailboxes (208), head readers' read records (209), the primary's physical copies (210),
-the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum repository in v1 (213),
-which raised the open owner question Q-REPO-6, and the witness call outside the planes (214)."""
+the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum repository in v1 (213)
+and the witness call outside the planes (214)."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -104,9 +104,9 @@ INDEX = list(_P9['INDEX']) + [
     (212, "Recovery rebind",
      "After a compromise rebind at r, `--compromise` lists the member's devices, clamps the rebind signer's since_n "
      "to r + 1 so the rebind stands, and revokes that signer last, by the replacement it enrolls."),
-    (213, "Q-REPO-6",
+    (213, "Linux packages",
      "v1 ships no apt or yum repository: `.deb` and `.rpm` stay direct downloads through `install.sh`'s verified "
-     "path, with no GPG key or repository host; how Linux users update is open."),
+     "path, with no GPG key or repository host."),
     (214, "D-ARCH-2",
      "A checkpointer's own HTTPS call to a witness its log admin named is no URnetwork carrier: it carries a signed "
      "note and a consistency proof, never an entry, and no URnetwork server takes part."),
@@ -201,9 +201,8 @@ _OPEN_OLD = "None. Every Q- item whose decider was the owner is decided. "
 assert OPEN_INTRO.count(_OPEN_OLD) == 1, 'open-questions lead moved'
 OPEN_INTRO = OPEN_INTRO.replace(
     _OPEN_OLD,
-    "Three: two raised on 2026-11-09 in designing owner decision 197's forwarding, Q-BRIDGE-8 (an app device's "
-    "overlay address) and Q-SDK-7 (forwarding's budget in the iOS network extension), and Q-REPO-6 (how Linux "
-    "users update without apt or yum), which owner decision 213 asked for. The sections are written to each "
+    "Two, raised on 2026-11-09 in designing owner decision 197's forwarding: Q-BRIDGE-8 (an app device's overlay "
+    "address) and Q-SDK-7 (forwarding's budget in the iOS network extension). The sections are written to each "
     "recommendation, marked \"(proposed; Q-...)\". Every other Q- item whose decider was the owner is decided. ")
 OPEN_OWNER = [
     ("Q-BRIDGE-8", "Does an app device claim its overlay address when its forwarding is set up (owner decision 197)?",
@@ -220,15 +219,9 @@ OPEN_OWNER = [
      "(a): one implementation of security-critical rules, inside today's runtime targets, measured on surrogates "
      "(owner decision 100)",
      "the `ios_extension` leg's `make size` value and §4.7's leg rule (M4); iOS forwarding (M8)", "M4"),
-    ("Q-REPO-6", "How do Linux users update `ur`, now that v1 ships no apt or yum repository (owner decision 213)?",
-     "(a) re-run `install.sh`'s verified path or fetch the next `.deb` or `.rpm`; (b) apt and yum repositories "
-     "later, signed by a second offline two-person GPG key; (c) a self-updater checking the signed `SHA256SUMS`",
-     "(a) for v1, the owner deciding at v1's exit review whether Linux users need (b)",
-     "nothing before v1's channels", "M6"),
 ]
 for _a, _b in [("[open owner questions](#open-owner-questions) (none remain)",
-                "[open owner questions](#open-owner-questions) (@@NQOWNWORD@@, raised with owner decisions 197 "
-                "and 213)"),
+                "[open owner questions](#open-owner-questions) (@@NQOWNWORD@@, raised with owner decision 197)"),
                ("and @@NQW@@ withdrawn; none is open.", "@@NQW@@ withdrawn, and @@NQOPEN@@ open for the owner.")]:
     assert HOW.count(_a) == 1, _a
     HOW = HOW.replace(_a, _b)
@@ -248,8 +241,7 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "horizon (204), amending @@OD:183@@, settings in rows (205), the sweep's triggers (206), a reported URL's "
     "path (207), the sealed abuse mailboxes (208), head readers' read records (209), the primary's physical "
     "copies (210), the key origin served direct (211), the compromise rebind's procedure (212), no apt or yum "
-    "repository in v1 (213), which raised a third open owner question, and the witness call outside the planes "
-    "(214). ")
+    "repository in v1 (213) and the witness call outside the planes (214). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183

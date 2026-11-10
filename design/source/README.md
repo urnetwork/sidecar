@@ -92,9 +92,9 @@ The tooling changed in two places: `validate10.py`'s `decision_rows` takes the 2
 
 ## Validation after the build's answers, owner decisions 198-214 (2026-11-10)
 
-The design-records track for §2 and §3 folded those sections' items from sidecar/DESIGN-AMENDMENTS.md. The owner's answers that change a behavior or a rule became owner decisions 198-214, each citing its ledger id: those decided one at a time on 2026-11-10 (198-206), and the owner-class items the owner accepted in bulk on 2026-11-06 (207-214), numbered as they were folded. Accepted defect fixes, readings and fills went in as text. Decision 213 asked for Q-REPO-6, a third open owner question, which the front matter's table lists, §23.6 places and `data_front7.py`'s check now allows. `build.sh` on this folder reproduced DESIGN.md (SHA-256 `b9c6bb9a7f76f724b37a91c186b4c066928b2aa694595ea635a3af7961f5a7bb`) at that track's last fold, and the validation shows:
+The design-records track for §2 and §3 folded those sections' items from sidecar/DESIGN-AMENDMENTS.md. The owner's answers that change a behavior or a rule became owner decisions 198-214, each citing its ledger id: those decided one at a time on 2026-11-10 (198-206), and the owner-class items the owner accepted in bulk on 2026-11-06 (207-214), numbered as they were folded. Accepted defect fixes, readings and fills went in as text. Decision 213 also asked for a Q- item on `apt upgrade`, which waits on §4's evidence matrix in check/ (sidecar/DESIGN-AMENDMENTS.md, QD-023). `build.sh` on this folder reproduced DESIGN.md (SHA-256 `b9c6bb9a7f76f724b37a91c186b4c066928b2aa694595ea635a3af7961f5a7bb`) at that track's last fold, and the validation shows:
 
-- **Ids.** None duplicated, undefined, or outside its own section; one new Q- item, Q-REPO-6, with its register summary.
+- **Ids.** None duplicated, undefined, or outside its own section; no new D- or Q- item.
 - **Owner decisions.** All 214 rows are present and cited; row 183 notes decision 204's amendment of its 25-minute fence. `validate10.py`'s `LATE_DATES` gives each row from 198 its date.
 - **Superseded options.** 303 grep hits, each with a reading; those on changed lines were read on 2026-11-10. None is live.
 - **Text.** No bare placeholders or HTML tags; the one research-sheet id stands.

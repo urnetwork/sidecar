@@ -650,22 +650,9 @@
   "source": "hand-2026-11-09"
  },
  {
-  "family": "owner_or_peer_pending",
-  "file": "04-REPO.md",
-  "line": 293,
-  "col": 693,
-  "match": "*Decider:* owner",
-  "snippet": "same signed `SHA256SUMS`. *Recommendation:* (a) for v1, the owner deciding at v1's exit review whether Linux users need (b). *Blocks:* nothing before v1's channels (M6). *Decider:* owner.",
-  "reading": "Q-REPO-6 is the open owner question owner decision 213 asked for; the front matter's open owner questions list it, §23.6 places it at M6, and §4.10 and §4.18 follow its recommendation, marked (proposed; Q-REPO-6).",
-  "live": false,
-  "gap": false,
-  "stated": false,
-  "source": "hand-2026-11-10"
- },
- {
   "family": "decided_q_open",
   "file": "04-REPO.md",
-  "line": 297,
+  "line": 295,
   "col": 319,
   "match": "forwarding files (Q-SDK-5",
   "snippet": "ile or wasm build links them (owner decision 104; Q-REPO-5), and the forwarding role's packet side in the leaf `device/`, so the iOS extension links of the root only its forwarding files (Q-SDK-5, closed by peer review; D-SDK-20; owner decision 197).",
@@ -678,7 +665,7 @@
  {
   "family": "window_14d_weekly",
   "file": "04-REPO.md",
-  "line": 313,
+  "line": 311,
   "col": 72,
   "match": "Weekly",
   "snippet": "| Branches drift from mains that release almost daily | High | Medium | Weekly and per-milestone merges; pending migration groups (D-OPS-6) |",

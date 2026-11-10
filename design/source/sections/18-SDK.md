@@ -278,8 +278,8 @@ func (self *SidecarApprovals) Decide(approvalId *Id, decision string, callback S
 	// reviews §5.6's plan, which this device derives, with §5.6's approval, deny dismisses it; recovery window
 	// (AdminSet devices, either kind): deny signs §7.9's RecoveryVeto naming it, countersigned as §7.9's presence
 	// row asks (owner decision 187); recovery_rebind: not me signs a SidecarRevoke for compromise of the rebind's
-	// signer from a since_n at or before the rebind, and I did this runs §5.9's compromise procedure, each listed
-	// device's since_n clamped past the rebind for its signer, which goes last (owner decision 212);
+	// signer from a since_n at or before the rebind, and I did this runs §5.9's compromise procedure, which clamps
+	// since_n past the rebind for the rebind's signer, revoked last (owner decision 212);
 	// recovery_unseen: revoke signs a SidecarRevoke for compromise of the recovered device from a since_n at or
 	// before its activation; each once the person confirms §7.9's cascade list (what P parks and voids, what
 	// stands, and each device that sealed to a binding it voids, to revoke for compromise and enroll anew if its

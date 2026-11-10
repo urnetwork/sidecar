@@ -1036,7 +1036,7 @@ The build raised its questions in a ledger (`.stack/decisions/LEDGER.json`, outs
 
 213. **v1 ships no apt or yum repository: `.deb` and `.rpm` stay direct downloads through `install.sh`'s verified path (the build recommended a second offline key).**
     - Question: §4.18 listed apt and yum for v1 and nothing more, but apt needs a signed InRelease and dnf a signature in each rpm, §2.6 listed no GPG key, and an online key would let one host ship a client to every apt and yum user at their next upgrade, which D-REPO-7's offline key prevents for `install.sh`.
-    - Answer, in the owner's words: drop apt and yum from v1, and keep .deb and .rpm as direct downloads through install.sh's verified path. No GPG key and no repository host. §4.18 loses that item, and `apt upgrade` needs a Q- item, which is Q-REPO-6.
+    - Answer, in the owner's words: drop apt and yum from v1, and keep .deb and .rpm as direct downloads through install.sh's verified path. No GPG key and no repository host. §4.18 loses that item, and `apt upgrade` needs a Q- item.
     - Cost: Linux users lose `apt upgrade` and `dnf upgrade` for `ur`.
     - Not taken: a second offline GPG key used in the same two-person ceremony at promotion, the trees under ur.io/recurd through mmm (the recommendation); an online key in vault used by the release, which reopens the single-origin risk.
     - Raised by the build (plan-REPO; the build's ledger, QD-023).
