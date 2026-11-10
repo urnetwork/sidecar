@@ -99,22 +99,11 @@ func RestoreConfigLogRowsOnly(settings *ConfigLogSettings, retained *ConfigRetai
 	if err != nil {
 		return nil, err
 	}
-	if err := self.restore(retained, rowsSource); err != nil {
+	if err := self.restore(retained, rowsSource, floor); err != nil {
 		return nil, err
 	}
-	if floor != nil {
-		state := self.state.Load()
-		if state.n < floor.GetVersion() {
-			return nil, fmt.Errorf("%w: %d below %d", ErrConfigBelowPin, state.n, floor.GetVersion())
-		}
-		if chain, ok := state.chainAt(floor.GetVersion()); ok && !bytes.Equal(chain[:], floor.GetChain()) {
-			runError := &ConfigRunError{N: floor.GetVersion(), RemoteChain: chain, Reason: "a second A_n at the reader's own pin"}
-			if len(floor.GetChain()) == sha256.Size {
-				runError.LocalChain, runError.HasLocalChain = [sha256.Size]byte(floor.GetChain()), true
-			}
-			self.log.Errorf("[config]%s cold start refused at %d: %s", self.networkId, floor.GetVersion(), runError.Reason)
-			return nil, runError
-		}
+	if err := self.checkFloor(floor); err != nil {
+		return nil, err
 	}
 	return self, nil
 }
@@ -315,13 +304,15 @@ func ConfigRowsKey(networkId Id, rowsSha256 []byte) string {
 // at the new tip (§7.9's base row, api's 409).
 var ErrConfigTipMoved = errors.New("config tip moved")
 
-// api's verdict on a base before it appends one (§7.9's base row), as Check is for a statement: ErrConfigTipMoved when
-// the header's version is not the tip's next or its prev_chain is not A_tip; else what applying it at the next
-// position would find, a signer that is no config writer at S(tip), a bad signature, rows that do not hash to
-// rows_sha256 or do not build, or either version below the newest base's, as an ErrConfigRefused. Nothing is kept and
-// no state changes, so a refused base is no fork here: it never reached the log. A rows-only reader cannot read the
-// config head, so its descent is CheckConfigPushes's, from the pushes the base carries
-// (plan-TEAM-api-config-head-reach). For the goroutine that applies, as Apply is.
+// api's verdict on a base before it appends one (§7.9's base row; DESIGN-DETAILS 5.2.4's ApiAcceptBase), as Check is for
+// a statement: ErrConfigTipMoved when the header's version is not the tip's next or its prev_chain is not A_tip; else
+// what applying it at the next position would find, a signer that is no config writer at S(tip), a bad signature,
+// rows that do not hash to rows_sha256 or do not build, either version below the newest base's, a folded_through
+// neither the newest base's nor at or past it, more than 4,096 entries unfolded, or tail_verdicts other than api's own
+// verdicts on the tail, as an ErrConfigRefused. Nothing is kept and no state changes, so a refused base is no fork
+// here: it never reached the log. A rows-only reader cannot read the config head, so its descent is
+// CheckConfigPushes's, from the pushes the base carries (plan-TEAM-api-config-head-reach). For the goroutine that
+// applies, as Apply is.
 func (self *ConfigLog) CheckBase(signedHeader []byte, rows []byte) error {
 	if self.fork != nil {
 		return fmt.Errorf("%w: the log stopped at a fork", ErrConfigRefused)
@@ -360,8 +351,16 @@ func (self *ConfigLog) CheckBase(signedHeader []byte, rows []byte) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrConfigRule, err)
 	}
+	verdicts, err := self.checkBaseTail(state.base, header, entry.GetN())
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
 	scratch := &configKeptEntry{n: entry.GetN(), chain: chain, entry: entry, entryBytes: nil}
-	if _, err := self.stateFromBase(state, scratch, header, rows, &ConfigHeadFacts{}); err != nil {
+	next, _, err := self.stateFromBase(state, scratch, header, rows)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
+	if err := self.reapplyTail(next, header.GetFoldedThrough(), entry.GetN(), verdicts, false); err != nil {
 		return fmt.Errorf("%w: %w", ErrConfigRule, err)
 	}
 	return nil

@@ -260,14 +260,18 @@ message RecoveryVeto {                 // an AdminSet member's admitted device, 
   bytes proposal_id = 2;
 }
 
-// One statement or tick a config head holds (plan-TEAM-config-head-format #1): §7.9's BASE row has a head hold,
-// as records, exactly the log's statements and ticks in (the previous base's folded_through, folded_through],
-// each by id with the position of the entry that carried it. A config file, which evs holds as ciphertext.
+// One entry a config head holds (plan-TEAM-config-head-format #1): §7.9's BASE row has a head hold, as records,
+// exactly the log's entries in (the previous base's folded_through, folded_through], each by id with the position
+// of the entry that carried it, BASE entries included (DESIGN-DETAILS 5.2.3; question
+// details-5-base-records-in-folds), so a reader holding the genesis recomputes A_1..A_ft from the head alone. A
+// config file, which evs holds as ciphertext.
 message ConfigRecord {
-  bytes  id = 1;                       // SHA-256 of the Signed for a STATEMENT (StatementId); empty for a TICK
+  bytes  id = 1;                       // SHA-256 of the Signed's signed bytes for a STATEMENT (StatementId) or a
+                                       //   BASE; empty for a TICK
   uint64 n = 2;                        // the carrying entry's position
   int64  time_ms = 3;                  // the carrying entry's time
-  uint32 kind = 4;                     // AuthEntry.kind: 2 STATEMENT or 3 TICK, never a BASE
+  uint32 kind = 4;                     // AuthEntry.kind: 1 BASE, its body the Signed ProjectionHeader; 2 STATEMENT;
+                                       //   3 TICK
   bytes  body = 5;                     // AuthEntry.body verbatim
 }
 

@@ -111,6 +111,8 @@ type testConfigNet struct {
 
 	log      *ConfigLog
 	statesAt map[uint64]*ConfigState
+	// the verdict the reader under test reached at each position, which a base's tail_verdicts carries
+	verdicts map[uint64]ConfigVerdict
 	// the presence key each device registered last, which countersigns its next covered statement in a helper
 	presenceKeys map[Id]*testPresenceKey
 }
@@ -125,6 +127,7 @@ func newTestConfigNet(t testing.TB) *testConfigNet {
 		source:        newTestConfigRowsSource(),
 		timeMs:        testConfigStartMs,
 		statesAt:      map[uint64]*ConfigState{},
+		verdicts:      map[uint64]ConfigVerdict{},
 	}
 	self.owner = testConfigDevice{sidecarId: testConfigId("owner device"), memberId: self.ownerMemberId, key: testConfigDeviceKey("owner device")}
 	genesis := &bridge.Genesis{
@@ -226,7 +229,23 @@ func (self *testConfigNet) push(entryBytes []byte) ConfigVerdict {
 		self.t.Fatalf("entry %d: %v", entry.GetN(), err)
 	}
 	self.statesAt[entry.GetN()] = self.log.State()
+	self.verdicts[entry.GetN()] = verdict
 	return verdict
+}
+
+// The tail_verdicts a base at the tip's next position folding through foldedThrough carries, as an honest writer
+// fills them: the reader's verdict at each entry since, 0 at a base (DESIGN-DETAILS 5.2.2).
+func (self *testConfigNet) tailVerdicts(foldedThrough uint64) []byte {
+	self.t.Helper()
+	verdicts := []uint8{}
+	for k := foldedThrough + 1; k <= self.n; k += 1 {
+		verdict, found := self.verdicts[k]
+		if !found {
+			self.t.Fatalf("no verdict at %d for a base's tail", k)
+		}
+		verdicts = append(verdicts, verdict.tailBits())
+	}
+	return configEncodeTailVerdicts(verdicts)
 }
 
 // Signs, sequences and applies one statement.
@@ -285,6 +304,7 @@ func (self *testConfigNet) makeBase(signer testConfigDevice, rows *bridge.Projec
 		RowsSha256:       rowsSha256[:],
 		RowsByteCount:    uint32(len(rowsBytes)),
 		Threshold:        threshold,
+		TailVerdicts:     self.tailVerdicts(foldedThrough),
 	}
 	return self.makeEntry(bridge.AuthEntryKindBase, self.sign(signer, bridge.SignedType_SIGNED_PROJECTION_HEADER, header))
 }
