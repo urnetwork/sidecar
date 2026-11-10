@@ -24,9 +24,11 @@ var gateM1Sweep = RegisterGateSweep(&GateSweep{
 	Items: []*GateItem{
 		{
 			Item: "stage 1 and D-TEAM-14 enforced (§23.4's M1 exit; TEAM-M1-01)",
+			// api's tests read the keys test-env.sh provides, so each runs on the private stores, and its db half
+			// reads MG0's tables, which only a sidecar_pending build registers
 			Tests: []*GateTest{
-				{Repo: "server", Package: "./api", Names: []string{"TestClientAdminRefusalIsEnforcedWhateverTheConfigSays", "TestEmbedRefusalIsNotCountedAsStageOne", "TestStrictExpTokenIsRefusedOnEveryPaymentRoute", "TestStrictExpGateRefusesWhateverTheConfigSays"}},
-				{Repo: "server", Package: "./api", Stores: true, Names: []string{"TestSidecarTokenRoutes", "TestMarkedClientTokensAreRefusedOnEveryAdminRoute", "TestClientWhoseMarksCannotBeReadIsRefusedOnEveryAdminRoute", "TestApiRefusesAnExpiredStrictExpToken"}},
+				{Repo: "server", Package: "./api", Stores: true, Names: []string{"TestClientAdminRefusalIsEnforcedWhateverTheConfigSays", "TestEmbedRefusalIsNotCountedAsStageOne", "TestStrictExpTokenIsRefusedOnEveryPaymentRoute", "TestStrictExpGateRefusesWhateverTheConfigSays", "TestSidecarTokenRoutes"}},
+				{Repo: "server", Package: "./api", Tags: "sidecar_pending", Stores: true, Names: []string{"TestMarkedClientTokensAreRefusedOnEveryAdminRoute", "TestClientWhoseMarksCannotBeReadIsRefusedOnEveryAdminRoute", "TestApiRefusesAnExpiredStrictExpToken"}},
 			},
 			External: "production: stage 1 enforced there after its 14 log-only days (D-PHASE-3), which no local run shows",
 		},
