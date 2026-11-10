@@ -224,8 +224,7 @@ message AclAudit {                        // a reader every member sees (owner d
 // adding a second target under the previous key (plan-SOCK-ksock-rotation); socket_prefix with no token every
 // application and share/ socket; public_name a tls/ or smtp/ name or a dns host, glob kept, told apart by a /.
 message AclTarget {
-  reserved 8;
-  reserved "cidr";                        // CIDRs stay on devices (plan-BRIDGE-gate-row-prefixes #1)
+  reserved 8;                             // an ip target's CIDR, kept in AclLocalPolicy, never in rows
   bytes atom = 1;
   bytes sidecar_id = 2;
   bytes network_id = 3;

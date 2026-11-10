@@ -6,7 +6,9 @@ package sidecar
 
 import (
 	"bytes"
+	"embed"
 	"errors"
+	"io/fs"
 	"slices"
 	"strings"
 	"testing"
@@ -127,44 +129,71 @@ func aclReferenceModels(policy *AclPolicy) bool {
 	return true
 }
 
-func FuzzCompileAcl(f *testing.F) {
-	for _, seed := range []string{
+// The seeds f.Add gives FuzzCompileAcl, beside its corpus in testdata/fuzz/FuzzCompileAcl.
+func aclCompileFuzzSeeds() []string {
+	return []string{
 		string(AclImplicitPolicySource()),
 		aclWorkedExampleSource,
 		`{"grants": [{"src": ["autogroup:member"], "dst": ["autogroup:self"], "allow": ["dial", "route"]}]}`,
 		`{"tagOwners": {"tag:a": ["autogroup:admin"]}, "grants": [{"src": ["tag:a"], "dst": ["evs:*", "sock:app/*"], "allow": ["read", "dial"]}]}`,
 		`{"grants": [{"src": ["autogroup:ephemeral"], "dst": ["*"], "allow": ["write"], "expires": "2026-01-01T00:00:00Z"}]}`,
-	} {
-		f.Add([]byte(seed))
 	}
-	f.Fuzz(func(t *testing.T, source []byte) {
-		property := newAclPropertyWorld()
-		property.world.policy = source
-		policy, err := ParseAclPolicy(source)
+}
+
+// testdata/fuzz/FuzzCompileAcl, embedded: go test reads a fuzz corpus only where a file system lets it, and the
+// sidecar_http Worker has none.
+//
+//go:embed testdata/fuzz/FuzzCompileAcl
+var testAclCompileFuzzFiles embed.FS
+
+// One fuzz input's checks: it refuses or compiles, twice to the same bytes, and where the reference models it, it
+// answers as the reference does.
+func testAclCompileSourceHolds(t *testing.T, source []byte) {
+	property := newAclPropertyWorld()
+	property.world.policy = source
+	policy, err := ParseAclPolicy(source)
+	if err != nil {
+		if _, compileErr := CompileAcl(property.world.input()); compileErr == nil {
+			t.Fatal("a document that does not parse compiled")
+		}
+		return
+	}
+	aclFuzzFillTables(property.world, policy)
+	property.world.setPolicy(t, string(source))
+	first, err := CompileAcl(property.world.input())
+	if err != nil {
+		if !errors.Is(err, ErrAclCompile) && !errors.Is(err, ErrAclRowsTooLarge) {
+			t.Fatalf("refused with no compile refusal: %v", err)
+		}
+		return
+	}
+	second, err := CompileAcl(property.world.input())
+	if err != nil || !bytes.Equal(aclEncodeRows(t, first), aclEncodeRows(t, second)) {
+		t.Fatalf("a second compile differs: %v", err)
+	}
+	if !aclReferenceModels(policy) {
+		return
+	}
+	if count := property.disagreements(t, aclReferenceExact); count != 0 {
+		t.Fatalf("%d disagreements with the reference", count)
+	}
+}
+
+// FuzzCompileAcl's seeds, its f.Add seeds and its corpus, on every leg, the Worker's included.
+func TestCompileAclFuzzSeedsHold(t *testing.T) {
+	for _, seed := range aclCompileFuzzSeeds() {
+		testAclCompileSourceHolds(t, []byte(seed))
+	}
+	const directory = "testdata/fuzz/FuzzCompileAcl"
+	entries, err := fs.ReadDir(testAclCompileFuzzFiles, directory)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("%d seeds: %v", len(entries), err)
+	}
+	for _, entry := range entries {
+		seed, err := testAclCompileFuzzFiles.ReadFile(directory + "/" + entry.Name())
 		if err != nil {
-			if _, compileErr := CompileAcl(property.world.input()); compileErr == nil {
-				t.Fatal("a document that does not parse compiled")
-			}
-			return
+			t.Fatal(err)
 		}
-		aclFuzzFillTables(property.world, policy)
-		property.world.setPolicy(t, string(source))
-		first, err := CompileAcl(property.world.input())
-		if err != nil {
-			if !errors.Is(err, ErrAclCompile) && !errors.Is(err, ErrAclRowsTooLarge) {
-				t.Fatalf("refused with no compile refusal: %v", err)
-			}
-			return
-		}
-		second, err := CompileAcl(property.world.input())
-		if err != nil || !bytes.Equal(aclEncodeRows(t, first), aclEncodeRows(t, second)) {
-			t.Fatalf("a second compile differs: %v", err)
-		}
-		if !aclReferenceModels(policy) {
-			return
-		}
-		if count := property.disagreements(t, aclReferenceExact); count != 0 {
-			t.Fatalf("%d disagreements with the reference", count)
-		}
-	})
+		testAclCompileSourceHolds(t, testAclPolicySeedSource(t, entry.Name(), seed))
+	}
 }

@@ -1000,18 +1000,6 @@ var testFenceAdditions = []struct {
 	},
 }
 
-// Fields the owner's answers take out of messages the design fences, ahead of design-records' fold, each reserved by
-// number and name in its place, with the question that holds the answer. Each leaves the fence it narrows, so both
-// directions stay exact, and one the design stops writing fails until its line here leaves.
-var testFenceRemovals = []struct {
-	message  string
-	field    string
-	number   int32
-	question string
-}{
-	{message: "AclTarget", field: "cidr", number: 8, question: "plan-BRIDGE-gate-row-prefixes"},
-}
-
 // One value an owner's answer adds to an enum the design fences.
 type testFenceValueAddition struct {
 	enum     string

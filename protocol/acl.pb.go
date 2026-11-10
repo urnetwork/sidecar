@@ -2646,7 +2646,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"repo_kinds\x18\x02 \x03(\rR\trepoKinds\x12\x19\n" +
 	"\brepo_ids\x18\x03 \x03(\fR\arepoIds\x12 \n" +
 	"\faudit_opt_in\x18\x04 \x01(\fR\n" +
-	"auditOptIn\"\xa7\x02\n" +
+	"auditOptIn\"\xa1\x02\n" +
 	"\tAclTarget\x12\x12\n" +
 	"\x04atom\x18\x01 \x01(\fR\x04atom\x12\x1d\n" +
 	"\n" +
@@ -2660,7 +2660,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"publicName\x12\x1b\n" +
 	"\tmail_send\x18\t \x01(\bR\bmailSend\x12\x1b\n" +
 	"\tclient_id\x18\n" +
-	" \x01(\fR\bclientIdJ\x04\b\b\x10\tR\x04cidr\"\x93\x01\n" +
+	" \x01(\fR\bclientIdJ\x04\b\b\x10\t\"\x93\x01\n" +
 	"\rAclSuspension\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\fR\asubject\x12\x1d\n" +
 	"\n" +
