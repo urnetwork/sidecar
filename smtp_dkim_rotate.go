@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The writes behind SmtpDkimKeys (§14.6): a domain's first key, its rotation every DkimRotateTimeout,
 // and its retirement when a burner label burns (§15.9). Each is one POST /smtp/dkim-keys, and each is

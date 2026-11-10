@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // ServiceHost.ClockCheck: how far this process's clock may stand from true time (§19.6's clocks row).
 // §11.8's fence margin, §11.7's collection margins and §19.6's deadline and settle rules hold only

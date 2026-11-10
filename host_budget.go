@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // ServiceHost.Budget: §11.13's write budget (D-EVS-21, D-EVS-33, R-EVS-19), one per process and shared
 // by the evs, gkm, api and taskworker work it hosts. Every write to a metadata cluster spends that

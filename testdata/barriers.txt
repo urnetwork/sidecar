@@ -120,6 +120,8 @@ barrier evs.fold.entry_write.after evsservice/fold.go
 barrier evs.fold.entry_write.before evsservice/fold.go
 barrier evs.fold.list.after evsservice/marker.go
 barrier evs.fold.list.before evsservice/marker.go
+barrier evs.fold.source_delete.after evsservice/fold_sources.go
+barrier evs.fold.source_delete.before evsservice/fold_sources.go
 barrier evs.head.cache_write.after evsservice/head_cache.go
 barrier evs.head.cache_write.before evsservice/head_cache.go
 barrier evs.head.cas.after evsservice/head.go

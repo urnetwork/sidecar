@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // ServiceHost.Abuse: a network's §21.7 standing and its network_verified, as §8's contract gate and
 // §12-§15's gates read them (D-ABUSE-4). api keeps both in Postgres (network_abuse_state,

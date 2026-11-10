@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §17.8's statements at body level: what a reader that holds the config's generations makes of the bridge statements
 // the log took at id level (bridge_statement.go). BridgeLog.Open opens each sealed body (OpenConfigBody) in log order
 // and runs the rules no keyless verifier can:

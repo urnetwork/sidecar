@@ -55,7 +55,7 @@ Each is an `evs.proto` enum, so the numbers live in one place. Fields the design
 | 9 | INDEX_EPOCH | 409 | 5d's index epoch |
 | 10 | MAP_PARTS | 409 | 5e: a map's parts missing or over 24 h old |
 | 11 | EPOCH_SOURCES_FULL | 412 | 5e |
-| 12 | PATH_EPOCH_DUE | 412 | 5e: a creation while blocked |
+| 12 | PATH_EPOCH_DUE | 412 | 5e: a creation while blocked, or in the push whose own pin crosses a due that would block it (DESIGN-DETAILS 9.2.6) |
 | 13 | DIRECTORY_FULL | 409 | 5g |
 | 14 | SEGMENT_GONE | 409 | 5h: a receipt past its age |
 | 15 | VERSIONING | 409 | 5c and 5h |
@@ -80,6 +80,7 @@ Each is an `evs.proto` enum, so the numbers live in one place. Fields the design
 | 72 | SEGMENT_STALE | 409 | the segment route, and a re-upload |
 | 73 | STATEMENT_MISSING | 409 | DELETE and restore without their projected statement |
 | 74 | GROUP_NOT_READY | 409 | the activate route (plan-EVS1-repo-activate-route) |
+| 75 | MAP_SOURCE | 409 | 5e, a PATH_EPOCH: its map's source unknown, under another chain or of an epoch no longer current, and a map part whose key holds other bytes (DESIGN-DETAILS 9.2.6) |
 | 128 | INVALID | 400 | a body, statement or signature that does not parse or verify, or a statement over 1 KiB |
 | 129 | NOT_FOUND | 404 | a repo, ref or object evs holds no record of |
 | 130 | PARTS_MISSING | 409 | a seal's part missing at its place |
@@ -245,6 +246,21 @@ Query values are decimal, and ids in them lowercase hex. The other routes' bodie
 **The read reply** is a stream of u32 length | `EvsReadFrame`, each frame one of §11.9's parts by its set fields, with no oneof: the head summary first; the statement of each version after the pin, in order, or `behind` with the first missing version; one frame per path; then the records, slots, map parts, log pages and push records they name, an object past 1 MiB spanning frames by `offset`; and last a frame with `end` set. A streams read repeats head, statements, paths and objects per ref, and a ref it stops at its 4 MiB answers `more` with its next version (#8). A reader refuses a path frame holding any `EvsReadPathState` as FORMAT_UNSUPPORTED {needs_format: 2} (protos-services-read-states).
 
 **The deposit head.** A push's 200 on the caller's own deposit ref carries `deposit_head`: for a commit the version it committed, for a 5a retry the current head. So does 5f's BASE_STALE there, read from the cluster head. `consumed_through` is the head's, which the ingester declares in its CONSUME's `EvsPush.consumed_through`, the highest version of the deposit ref at or below which its read left no unconsumed deposit, and which evs copies to `EvsHead.consumed_through`, never falling (plan-EVS1-deposit-head, plan-RECORD-depositor-spool). A depositor learns nothing else of the head.
+
+## Path epochs
+
+DESIGN-DETAILS.md section 9 settles these rules, and governs where it and §11.6 differ until design-records folds its 9.8 into the design. Every value here is format 1's, unfrozen.
+
+- **A map** holds one move per path live at its source head S, the root included (EVS1-M2-46), ascending by `new_token_path`'s bytes within a part and across parts, so each part is a run and the copy takes them last part first. A part is at most 8 MiB signed, a map at most 1,024 parts (`EvsPathMapMaxPartCount`). A move's sources name the path in the epoch current at S, then in each source S lists at or above the epoch its standing creation committed in, or its row's, newest first; `sealed_name` is the name under `manifest_{p_new}` with AAD repo_id || u64be(p_new) || new parent || new child token, and empty for the root. `path_map_sha256` is SHA-256 over the parts' signed bytes in part order (`EvsPathMapSha256`), which the copy checks with the order as it reads the parts, moving nothing on a mismatch.
+- **A tail** holds one move per token path a version in (S, b] created, b the PATH_EPOCH push's base, whether or not the path still stands, ascending; its sources name the current epoch alone. evs checks it against the creations its window holds after S.
+- **A map's source** S is at or below the head with C_S its `map_source_chain`, read from the window, or from log page S/64 when that page is among `MapSourcePageCount` (1) just below the window; the epoch S's statement declares, a PATH_EPOCH's being its p_new, must be the head's current one, so no PATH_EPOCH committed after S. Anything else is 409 MAP_SOURCE, final, as is a map part posted under a key holding other bytes.
+- **Source paths** (payload section 12) name a change's path in each listed source at or above its floor (DESIGN-DETAILS 9.2.3), never another; a removal delta's `removed_tokens` hold the child's token in the current epoch and in each of those sources. Once the current entry holds a change, the fold deletes the source copies its source paths name, and below a removed directory every key in those sources, before its range counts as folded.
+- **A crossing creation.** A push whose own commit would record a due that blocks creation, and that creates a path, is 412 PATH_EPOCH_DUE, recorded, its refusal's fence write recording the due as the commit would have. A ref with no head is exempt, its first push creating in epoch 1 (question evs1-m2-44-new-ref-crossing).
+- **Leaf places.** `EvsIndexVersion.leaf_part` and `leaf_index`, the same on `EvsRemovalMarker` for the change that removed the path or its prefix, and `EvsIndexEntry.names_leaf_part` and `names_leaf_index` for the delta at `names_through`, say where the change sits in its statement's list: for a list under `changes_root`, the part, 0 for a one-part push and the part's number from 1 for a sealed one, and the change's index in that part's list plus 1; both 0 for an inline list, which the statement holds. A fold records them from the list it folds; a carry, a fold's or the copy's, keeps them; an elided version keeps them.
+- **A read** names a path's token path in at most 8 epochs, one each (`EvsReadPathMaxEpochCount`), matched to the head by `epoch`, never by position; an epoch of 0 or named twice is 400 INVALID. The current epoch's and the listed sources' are read by §11.6's read rule. A path naming none in the head's current epoch is answered `stale_epoch`, its reply's token path the first the request named, and nothing is read for it. `entry_epoch` names the epoch whose copy served, 0 the current one.
+- **Statements in their own epoch.** A served version, removal or delta at `names_through` committed after the newest cut-over is found by the current token path; one of an older epoch by its leaf place, else by the request's token path in that epoch. A statement after it under `changes_root` gets adjacent-leaf proofs under the request's token path in its own epoch, and nothing when the request names none there. Window versions after `folded_through` are all the current epoch's.
+- **History.** `commit_version`, with `version`, is the ref version an older version's push committed at, from the newer version's `prev_commit_version`. evs serves the version from the entry's folded versions by their leaf places, else from the window, else from the push at `commit_version` by the request's token path in that push's epoch.
+- **The statement alone.** A version, removal or delta evs can locate by none of these, an inline list of an epoch the request names no token path in, is answered with its statement alone: the path's reply carries `statement` and nothing it would speak for, and the reader that finds its own token path there may name that epoch and ask again (question evs1-m2-45-inline-leaf-place). An elided version an inline list wrote is restored from the one write of its push whose bytes elide to it.
 
 ## Format 1's reservations
 

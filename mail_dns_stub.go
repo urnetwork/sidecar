@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // A receiver's DNS stub (g0-recheck-0-receiver-evidence#1; MAIL-M7-07): the per-receiver cache in front of its own
 // DohCache.Forward, which caches nothing, as Forward's doc says the caller's stub does. Answers are kept by record

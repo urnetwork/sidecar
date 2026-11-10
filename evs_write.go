@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // EvsRepo.Write and WritePaths (§11.20, §18.5; EVS1-M2-25, EVS1-M2-26): files written or removed on a file-mode ref
 // in one push. Head mode cannot build a git tree, which needs every sibling's oid, so a git-mode ref answers
 // EVS_GIT_REF and is written through the local tier (§11.7). Format 1 writes versioning on only.

@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !js
+//go:build !sidecar_http && !js && !ios_extension
 
 // RFC 6376's header fields, tag-lists, canonicalization and signature hash, written again for ARC (RFC 8617;
 // MAIL-M7-09), since mox keeps its own unexported (plan-MAIL-mox-subset#1). ARC imports these from DKIM (RFC 8617

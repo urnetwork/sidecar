@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Owner decision 135's operator list (D-MAIL-13; R-MAIL-16, I-11; MAIL-M7-10): mail_operators.yml in this public
 // repository, embedded in each release with its list version. The root links no YAML parser, so mail_operators_gen.go
 // holds the list as Go, written from the file by go generate, and TestMailOperatorsGenIsCurrent fails while the two

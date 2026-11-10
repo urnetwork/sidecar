@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // dnssec_chain validated to the root (§14.4's TL1, D-SMTP-2): the edge sends it in SmtpPreambleResult,
 // and the sidecar trusts nothing from the edge but the chain itself, its own embedded root anchors and

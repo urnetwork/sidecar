@@ -1,4 +1,4 @@
-//go:build !js && !ios && !android && !windows
+//go:build !js && !ios && !android && !windows && !ios_extension
 
 // The daemon's socket on Unix (§5.9): $XDG_RUNTIME_DIR/ur/<i>.sock on Linux, and on macOS under DARWIN_USER_TEMP_DIR,
 // $TMPDIR, within the 104-byte sun_path. A path that would not fit, or a system with neither directory, falls back to

@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The edge's two ways out to the world (§14.4), as seams: a DNSSEC-validating resolver for MX, TLSA
 // and addresses, and a TCP 25 dialer bound to a sending address. smtpedge's engine resolves and dials

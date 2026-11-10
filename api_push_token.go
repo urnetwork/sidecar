@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // POST /sidecar/push-token (§18.7's step 0; D-SDK-16): a host's wake token for the sidecar's own client.
 // Apps post it at every launch, and again after a refresh answers restore_required (§19.10's rows step);
 // the server keeps one row per client, whose revision every change raises. An empty token deletes it.

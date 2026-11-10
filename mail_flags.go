@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §15.7's flags (D-MAIL-5; MAIL-M7-06): f/<yyyymm>/<n>, append-only segments of at most 4,096 MailFlagOp, each a
 // change to one key (message_id, op, label) of a message of that month: seen, flagged, a label, trash. Last writer
 // wins by MAIL-FORMAT.md's order, which is total over what an op says, so devices holding the same ops agree on every

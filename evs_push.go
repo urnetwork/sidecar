@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The push sender (§11.8's client steps and outcomes; D-EVS-5, D-EVS-20, D-EVS-22, D-EVS-23; EVS1-M2-26): a sealed
 // write's push built under one push id, sent, and retried or rebuilt by what evs answers.
 //

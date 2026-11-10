@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §14.14's sender route on SidecarApi: POST /smtp/dkim-keys, the only way a DKIM selector reaches DNS
 // (§12.7, §14.6, owner decision 36). The body holds selectors, signing domains and public keys and

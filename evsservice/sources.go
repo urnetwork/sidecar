@@ -1,7 +1,7 @@
 // §11.6's read row: the entry that stands for a path while its head lists source epochs (§11.6's commit and copy
-// rows). Clients send each path's token path in the current epoch and in each listed source that may hold it; evs
-// GETs them, and HEADs each prefix's current entry, whose state rides in object metadata, all in one round, then
-// settles by §11.7's states:
+// rows). Clients send each path's token path in the current epoch and in each listed source at or above its floor
+// (DESIGN-DETAILS 9.2.3), matched by epoch (EvsPathTokensAt); evs GETs them, and HEADs each prefix's current entry,
+// whose state rides in object metadata, all in one round, then settles by §11.7's states:
 //
 //   - under a removed prefix the path is absent;
 //   - under a fresh prefix it is absent too, unless its own current entry is fresh;
@@ -35,6 +35,41 @@ type EvsSourceTokenPath struct {
 type EvsPathTokens struct {
 	Current sidecar.EvsTokenPath
 	Sources []*EvsSourceTokenPath
+	// A read's: every token path its request names, by epoch, the current one's among them, which serve the
+	// statements of their epochs (DESIGN-DETAILS 9.2.4). nil for a push's change, whose source paths name its sources.
+	ByEpoch map[uint64]sidecar.EvsTokenPath
+}
+
+// The token paths a read names, by epoch, matched to head (DESIGN-DETAILS 9.2.4: by the epoch field, never by
+// position): Current the one in the head's current epoch, nil when the read names none, and Sources those in the
+// epochs the head lists as sources.
+func EvsPathTokensAt(byEpoch map[uint64]sidecar.EvsTokenPath, head *protocol.EvsHead) *EvsPathTokens {
+	tokens := &EvsPathTokens{Current: byEpoch[EvsHeadCurrentEpoch(head)], ByEpoch: byEpoch}
+	for _, source := range head.GetPathEpoch().GetSources() {
+		if tokenPath, ok := byEpoch[source.GetEpoch()]; ok {
+			tokens.Sources = append(tokens.Sources, &EvsSourceTokenPath{Epoch: source.GetEpoch(), TokenPath: tokenPath})
+		}
+	}
+	return tokens
+}
+
+// Whether digest may change the path in any epoch the read names it in: what lets a read pass a statement by.
+func (self *EvsPathTokens) MayChangeIn(digest sidecar.EvsPathsDigest) bool {
+	for _, tokenPath := range self.ByEpoch {
+		if digest.MayChange(tokenPath) {
+			return true
+		}
+	}
+	return false
+}
+
+// The path's token path in epoch, of a head whose current epoch is current: Current for it, else the read's for that
+// epoch. nil when the path is named in none.
+func (self *EvsPathTokens) In(epoch uint64, current uint64) sidecar.EvsTokenPath {
+	if epoch == current {
+		return self.Current
+	}
+	return self.ByEpoch[epoch]
 }
 
 // The head's current path epoch: 1 for a ref whose head names none yet.

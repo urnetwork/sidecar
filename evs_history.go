@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // History (§11.7's history row, §18.5): a path's versions, newest first, each read as an older version (§11.9's
 // request row) and verified against its own statement as a head read's is. The walk follows each version's
 // prev_push_id and prev_commit_version: a write replaces the version one below it, so the walk asks for that one and

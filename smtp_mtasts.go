@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // TL2's policies (§14.4, D-SMTP-2): MTA-STS (RFC 8461), which the sidecar finds and fetches itself and
 // caches to each policy's max_age, so a malicious or compelled edge can neither strip nor forge one.

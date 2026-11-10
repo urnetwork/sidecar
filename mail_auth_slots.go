@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !js
+//go:build !sidecar_http && !js && !ios_extension
 
 // §15.5's receiver row (D-MAIL-14, FS-121; MAIL-M7-09): a receiver's check slots. At most CheckSlotMaxCount messages,
 // 4, check at once, and the rest wait in arrival order. A message's 30 s start only when a slot takes it, after its

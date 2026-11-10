@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §9's JSON routes, which server/cli/sockets serves at /socket/* and connect/api/bringyour.yml documents
 // (§9.15). They name connect.Id, so they stay off the sidecar_http leg with the listeners and dialers

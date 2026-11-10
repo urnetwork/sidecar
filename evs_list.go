@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // List (§11.7's name row, §11.9's newest row): a directory's children at the newest committed version, the folded
 // table evs keeps with, in version order, each verified delta after it applied: a delta adds or replaces rows and
 // removes the tokens it lists. Every row opens under its own epoch's keys and AAD and is checked against its token,

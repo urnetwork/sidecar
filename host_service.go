@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // What a hosting process supplies to a server engine, and what the engine gives back (§4.5). Engines
 // are the <svc>service child packages. server hosts them, and they never import it, so go-redis,

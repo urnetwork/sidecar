@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Diff chains on the read side (§11.14's chains row; FS-107; SEARCH-M10-23). A diff resolves by its doc_key and base
 // version in its bucket's shards, sealed slots and large entries, never a head, the base's chain likewise; copies of
 // one version are one, and a self-contained copy answers first. A current diff whose chain does not resolve, runs past

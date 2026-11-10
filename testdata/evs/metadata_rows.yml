@@ -32,15 +32,21 @@ EvsIndexEntry.names: {number: 2, type: EvsNameTable, row: evs-11, sees: "per dir
 EvsIndexEntry.names_through: {number: 3, type: uint64, row: evs-11, pending: "11.7's listing row reads a folded table with the version it holds; evs-11 names the table and not that version"}
 EvsIndexEntry.marker: {number: 4, type: EvsRemovalMarker, row: evs-11, sees: "a removed-entry marker"}
 EvsIndexEntry.drop_mark: {number: 5, type: EvsDropMark, row: evs-11, sees: "the drop mark {drop_id, through_version}"}
+EvsIndexEntry.names_leaf_part: {number: 7, type: uint32, row: evs-11, pending: "DESIGN-DETAILS 9.8: evs-11 gains each folded version's, marker's and table's place in its own statement's list, which design-records writes into §2.8 (question details-9-index-leaf)"}
+EvsIndexEntry.names_leaf_index: {number: 8, type: uint32, row: evs-11, pending: "as EvsIndexEntry.names_leaf_part"}
 EvsIndexVersion.push_id: {number: 1, type: bytes, row: evs-11, sees: "push id"}
 EvsIndexVersion.commit_version: {number: 2, type: uint64, row: evs-11, sees: "committed version"}
 EvsIndexVersion.entry_version: {number: 3, type: bytes, row: evs-11, sees: "entry version"}
 EvsIndexVersion.elided: {number: 4, type: bool, row: evs-11, sees: "the newest with its inline body"}
+EvsIndexVersion.leaf_part: {number: 5, type: uint32, row: evs-11, pending: "as EvsIndexEntry.names_leaf_part"}
+EvsIndexVersion.leaf_index: {number: 6, type: uint32, row: evs-11, pending: "as EvsIndexEntry.names_leaf_part"}
 EvsRemovalMarker.push_id: {number: 1, type: bytes, row: evs-11, sees: "removing push id"}
 EvsRemovalMarker.removal_version: {number: 2, type: uint64, row: evs-11, sees: "{removing push id, r"}
 EvsRemovalMarker.path_version: {number: 3, type: uint64, row: evs-11, sees: "the path's version: one past its last"}
 EvsRemovalMarker.segment_ids: {number: 4, type: repeated bytes, row: evs-11, sees: "the kind-5 segment and slot ids its collection deletes"}
 EvsRemovalMarker.slot_ids: {number: 5, type: repeated bytes, row: evs-11, sees: "the kind-5 segment and slot ids its collection deletes"}
+EvsRemovalMarker.leaf_part: {number: 6, type: uint32, row: evs-11, pending: "as EvsIndexEntry.names_leaf_part"}
+EvsRemovalMarker.leaf_index: {number: 7, type: uint32, row: evs-11, pending: "as EvsIndexEntry.names_leaf_part"}
 EvsDropMark.drop_id: {number: 1, type: bytes, row: evs-11, sees: "the drop mark {drop_id, through_version}"}
 EvsDropMark.through_version: {number: 2, type: uint64, row: evs-11, sees: "the drop mark {drop_id, through_version}"}
 
@@ -109,6 +115,7 @@ EvsReadRequest.pushes: {number: 9, type: repeated EvsReadPush, row: evs-7, sees:
 EvsReadRequest.refs: {number: 10, type: repeated EvsReadRef, row: evs-2, sees: "ref ids"}
 EvsReadPath.token_paths: {number: 1, type: repeated EvsSourcePath, row: evs-11, sees: "tokens t_i"}
 EvsReadPath.version: {number: 2, type: uint64, row: evs-7, pending: "11.9 serves older versions on request; evs-7 does not name which version a read asks for"}
+EvsReadPath.commit_version: {number: 3, type: uint64, row: evs-7, pending: "DESIGN-DETAILS 9.2.4's history names the ref version an older version's push committed at; evs-7 does not name which version a read asks for"}
 EvsReadRange.segment_id: {number: 1, type: bytes, row: evs-4, sees: "segment id (SHA-256 of its bytes)"}
 EvsReadRange.offset: {number: 2, type: uint32, row: evs-7, sees: "ranges and slots read"}
 EvsReadRange.length: {number: 3, type: uint32, row: evs-7, sees: "ranges and slots read"}
@@ -161,6 +168,8 @@ EvsReadPathReply.state: {number: 11, type: EvsReadPathState, row: evs-28, until:
 EvsReadPathReply.drop_id: {number: 12, type: bytes, row: evs-28, until: M10, pending: "as EvsReadPathReply.state"}
 EvsReadPathReply.not_before_ms: {number: 13, type: int64, row: evs-28, until: M10, pending: "as EvsReadPathReply.state"}
 EvsReadPathReply.drop_version: {number: 14, type: uint64, row: evs-28, until: M10, pending: "as EvsReadPathReply.state"}
+EvsReadPathReply.entry_epoch: {number: 17, type: uint64, row: evs-11, pending: "DESIGN-DETAILS 9.2.2: the epoch whose copy served a path, which evs-11's entry states (carried from the source it names) imply and a reply does not name"}
+EvsReadPathReply.stale_epoch: {number: 18, type: bool, row: evs-7, pending: "DESIGN-DETAILS 9.2.4: a read naming no token path in the head's current epoch, answered with nothing read; evs-7 names each answer's status and not this one"}
 EvsMerkleProof.leaf: {number: 1, type: bytes, row: evs-12, sees: "changes of token path, base entry version and entry hash"}
 EvsMerkleProof.index: {number: 2, type: uint64, row: evs-12, sees: "a Merkle root and count over the changes"}
 EvsMerkleProof.size: {number: 3, type: uint64, row: evs-12, sees: "a Merkle root and count over the changes"}

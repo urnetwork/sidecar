@@ -3,7 +3,8 @@
 // proof to changes_root, part level last, when the change list is not inline; and for each later statement whose
 // list is not inline and whose covering prefixes reach the path or a prefix holding it, the adjacent-leaf proofs
 // that it is not among the changes (§11.6's merkle row). A removal is proven by its own change, or by the change
-// removing the prefix that ended the path.
+// removing the prefix that ended the path. A change of an older path epoch is found by the leaf place its fold
+// recorded (changeAt), since evs is never sent that epoch's token of a path it did not hold (read.go).
 //
 // Pushes are read by version: a window version's record at the place its entry names, an older one's statement
 // from its log page and its record at the place the page's entry names, each read once a request and the records
@@ -303,6 +304,58 @@ func (self *readPushes) removalOf(push *readPush, tokenPath sidecar.EvsTokenPath
 		}
 	}
 	return nil, 0, 0, nil
+}
+
+// The change at place in the push's list (DESIGN-DETAILS 9.2.2's leaf row), with its part and index there: a
+// one-part push's place names part 0, a sealed push's its part from 1. ErrEvsIndexEntryInvalid for a place the push
+// does not have, which only a fold's fault records.
+func (self *readPushes) changeAt(push *readPush, place evsLeafPlace) (*sidecar.EvsCheckedChange, int, int, error) {
+	if err := self.readRecord(push); err != nil {
+		return nil, 0, 0, err
+	}
+	part := 0
+	switch {
+	case push.sealParts != nil && (place.part == 0 || uint32(len(push.sealParts)) < place.part):
+		return nil, 0, 0, fmt.Errorf("%w: part %d of a seal of %d", ErrEvsIndexEntryInvalid, place.part, len(push.sealParts))
+	case push.sealParts != nil:
+		part = int(place.part) - 1
+	case place.part != 0:
+		return nil, 0, 0, fmt.Errorf("%w: part %d of a one-part push", ErrEvsIndexEntryInvalid, place.part)
+	}
+	changes, err := self.changesOf(push, part)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if place.index == 0 || uint32(len(changes)) < place.index {
+		return nil, 0, 0, fmt.Errorf("%w: change %d of a list of %d", ErrEvsIndexEntryInvalid, place.index, len(changes))
+	}
+	index := int(place.index) - 1
+	return changes[index], part, index, nil
+}
+
+// The whole EvsEntryVersion bytes of a version an inline list wrote, which its entry holds elided: the one write of
+// the push whose bytes elide to the version's. nil when none does, or more than one, which only a fault makes; an
+// inline list is a one-part push of a few changes, so this reads no more than the statement's record.
+func (self *readPushes) inlineEntryVersionEliding(push *readPush, elided *protocol.EvsIndexVersion) ([]byte, error) {
+	changes, err := self.changesOf(push, 0)
+	if err != nil {
+		return nil, err
+	}
+	var found []byte
+	for _, change := range changes {
+		if !change.WritesEntry() {
+			continue
+		}
+		cut := elideEvsIndexVersion(&protocol.EvsIndexVersion{EntryVersion: change.EntryVersion})
+		if !cut.GetElided() || !bytes.Equal(cut.GetEntryVersion(), elided.GetEntryVersion()) {
+			continue
+		}
+		if found != nil {
+			return nil, nil
+		}
+		found = change.EntryVersion
+	}
+	return found, nil
 }
 
 // The change's EvsEntryVersion bytes as the push's payload or part carried them (its entry_sha256's preimage); nil

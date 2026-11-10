@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Extractor 1 for files (§11.14's extract and documents rows): a text file's title, its first heading or line, at most
 // 80 B, indexed with the path, and its text as the body, one document per 1 MiB of text, each with the next 256 B. A
 // binary gives no document, so a version that turns binary is a tombstone at its version, the writer's to write.

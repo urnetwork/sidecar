@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !js
+//go:build !sidecar_http && !js && !ios_extension
 
 // §15.5's reception-time checks (R-MAIL-16, D-MAIL-3, D-MAIL-14, I-11, FS-121; MAIL-M7-08, MAIL-M7-09): SPF, the DKIM
 // signatures, DMARC, the forward-confirmed PTR of sender_ip, whether the SNI host's TLSA held this receiver's key, and

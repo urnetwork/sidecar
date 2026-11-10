@@ -8,8 +8,9 @@ package evsservice
 
 import (
 	"bytes"
-	"crypto/sha256"
+	"fmt"
 	"net/http"
+	"slices"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -23,10 +24,16 @@ import (
 
 // gen/2 of the fixture's group under cause, pinned to the newest state, and its commitment.
 func (self *pushFixture) putGenerationTwo(cause sidecar.GkmCause) []byte {
-	commitment := bytes.Repeat([]byte{9}, 32)
+	return self.putGenerationAt(2, cause, self.check.commitment)
+}
+
+// gen/<generation> of the fixture's group under cause, after the generation whose commitment is parent, pinned to the
+// newest state, and its commitment.
+func (self *pushFixture) putGenerationAt(generation uint64, cause sidecar.GkmCause, parent []byte) []byte {
+	commitment := bytes.Repeat([]byte{byte(7 + generation)}, 32)
 	record := &protocol.GenRotate{
-		GroupId: self.check.groupId.Bytes(), RepoId: self.check.repoId.Bytes(), Generation: 2, Commitment: commitment,
-		ParentCommitment: bytes.Clone(self.check.commitment), Genlink: make([]byte, 72), Cause: uint32(cause),
+		GroupId: self.check.groupId.Bytes(), RepoId: self.check.repoId.Bytes(), Generation: generation, Commitment: commitment,
+		ParentCommitment: bytes.Clone(parent), Genlink: make([]byte, 72), Cause: uint32(cause),
 		Auth: self.check.auth.Pin(), TimeMs: self.clock.Now().UnixMilli(), HoldersSha256: bytes.Repeat([]byte{4}, 32),
 	}
 	signed, err := sidecar.SignGenRotate(record, sidecar.GkmSignFunction(checkTestSign(self.check.signingKey, self.check.signerId)))
@@ -37,7 +44,7 @@ func (self *pushFixture) putGenerationTwo(cause sidecar.GkmCause) []byte {
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	if _, err := self.cluster.PutIfNoneMatch(self.ctx, sidecar.GkmGenerationPath(self.check.groupId, 2), signedBytes, nil); err != nil {
+	if _, err := self.cluster.PutIfNoneMatch(self.ctx, sidecar.GkmGenerationPath(self.check.groupId, generation), signedBytes, nil); err != nil {
 		self.t.Fatal(err)
 	}
 	return commitment
@@ -45,10 +52,25 @@ func (self *pushFixture) putGenerationTwo(cause sidecar.GkmCause) []byte {
 
 // A plan at generation 2 under commitment and the newest state's pin.
 func (self *pushFixture) planAtTwo(commitment []byte) *sidecar.EvsPushPlan {
+	return self.planAt(2, commitment)
+}
+
+// A plan at generation under commitment and the newest state's pin, in path epoch 1.
+func (self *pushFixture) planAt(generation uint64, commitment []byte) *sidecar.EvsPushPlan {
 	plan := self.plan()
-	plan.Generation = 2
+	plan.Generation = generation
 	plan.GenerationCommitment = commitment
 	plan.Auth = self.check.auth.Pin()
+	return plan
+}
+
+// As planAt, in the head's current path epoch, carrying source paths while the head lists sources.
+func (self *pushFixture) planOnHead(generation uint64, commitment []byte) *sidecar.EvsPushPlan {
+	plan := self.planAt(generation, commitment)
+	if head := self.head(); !head.Absent() {
+		plan.PathEpoch = EvsHeadCurrentEpoch(head.Head)
+		plan.SourcesStand = 0 < len(head.Head.GetPathEpoch().GetSources())
+	}
 	return plan
 }
 
@@ -142,9 +164,99 @@ func (self *pushFixture) mapPart(moves ...*protocol.EvsPathMove) ([]byte, []byte
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	partSum := sha256.Sum256(partBytes)
-	mapSum := sha256.Sum256(partSum[:])
-	return partBytes, mapSum[:]
+	return partBytes, sidecar.EvsPathMapSha256([][]byte{partBytes})
+}
+
+// A map to epoch over the head at sourceVersion under sourceChain, one part per list of moves, signed by the
+// fixture's writer: the parts' bytes and the map's hash over them (DESIGN-DETAILS 9.2.2).
+func (self *pushFixture) mapPartsAt(epoch uint64, sourceVersion uint64, sourceChain []byte, partMoves ...[]*protocol.EvsPathMove) ([][]byte, []byte) {
+	parts := [][]byte{}
+	for i, moves := range partMoves {
+		moves = slices.Clone(moves)
+		slices.SortFunc(moves, func(a *protocol.EvsPathMove, b *protocol.EvsPathMove) int {
+			return epochTestTokenPath(a.GetNewTokenPath()).Compare(epochTestTokenPath(b.GetNewTokenPath()))
+		})
+		body, err := proto.Marshal(&protocol.EvsPathMap{
+			RepoId: self.check.repoId.Bytes(), RefId: self.check.refId.Bytes(), PathEpoch: epoch, Part: uint32(i + 1),
+			Parts: uint32(len(partMoves)), Moves: moves, SourceVersion: sourceVersion, SourceChain: sourceChain,
+		})
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		signed, err := checkTestSign(self.check.signingKey, self.check.signerId)(evsPathMapPurpose, bridge.SignedType_SIGNED_EVS_PATH_MAP, body, nil)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		partBytes, err := proto.Marshal(signed)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		parts = append(parts, partBytes)
+	}
+	return parts, sidecar.EvsPathMapSha256(parts)
+}
+
+// A move's token path, for sorting.
+func epochTestTokenPath(components [][]byte) sidecar.EvsTokenPath {
+	tokenPath, _ := sidecar.ParseEvsTokenPath(components)
+	return tokenPath
+}
+
+// Uploads a map's parts under mapSha256 through POST .../path-epoch, each answering 200.
+func (self *pushFixture) uploadParts(parts [][]byte, mapSha256 []byte) {
+	self.t.Helper()
+	for i, partBytes := range parts {
+		if recorder := self.postRoute("/path-epoch", &protocol.EvsPathMapRequest{PathMapSha256: mapSha256, Part: partBytes}); recorder.Code != http.StatusOK {
+			self.t.Fatalf("map part %d answered %d (%s)", i+1, recorder.Code, refusalOf(self.t, recorder).GetCode())
+		}
+	}
+}
+
+// The PATH_EPOCH push to epoch at generation under commitment over a map, sourced at sourceVersion under
+// sourceChain, with tail.
+func (self *pushFixture) pathEpochPlanAt(epoch uint64, generation uint64, commitment []byte, mapSha256 []byte, sourceVersion uint64, sourceChain []byte, tail ...*protocol.EvsPathMove) *sidecar.EvsPushPlan {
+	plan := self.planAt(generation, commitment)
+	plan.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH)
+	plan.PathEpoch = epoch
+	plan.PathMapSha256 = mapSha256
+	plan.MapSourceVersion = sourceVersion
+	plan.MapSourceChain = sourceChain
+	for _, move := range tail {
+		moveBytes, err := proto.Marshal(move)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		plan.TailMoves = append(plan.TailMoves, moveBytes)
+	}
+	return plan
+}
+
+// A move of a path from its token path in each of the from epochs to its token path in epoch, the paths labeled as
+// epochPath labels them.
+func pathEpochTestMoveAt(epoch uint64, from []uint64, labels ...string) *protocol.EvsPathMove {
+	move := &protocol.EvsPathMove{NewTokenPath: epochPath(epoch, labels...).Components(), SealedName: []byte("sealed name")}
+	for _, source := range from {
+		move.Sources = append(move.Sources, &protocol.EvsSourcePath{Epoch: source, TokenPath: epochPath(source, labels...).Components()})
+	}
+	return move
+}
+
+// A path's token path in epoch as these tests name it: the labels in epoch 1, and behind "epoch <n>" past it, as
+// pathEpochTestMove names epoch 2's.
+func epochPath(epoch uint64, labels ...string) sidecar.EvsTokenPath {
+	if epoch <= 1 {
+		return checkTestPath(labels...)
+	}
+	return checkTestPath(append([]string{fmt.Sprintf("epoch %d", epoch)}, labels...)...)
+}
+
+// The encoded source path of a path in epoch, as a change names it while sources stand.
+func epochSourcePath(t *testing.T, epoch uint64, labels ...string) []byte {
+	encoded, err := proto.Marshal(&protocol.EvsSourcePath{Epoch: epoch, TokenPath: epochPath(epoch, labels...).Components()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 // One POST of a route's body under the writer's token.
@@ -317,4 +429,168 @@ func TestPathEpochClearsAnImmediateDue(t *testing.T) {
 	creation.SourcesStand = true
 	fixture.create(creation, "epoch 2", "new")
 	fixture.requireCommitted(fixture.push(creation), 4)
+}
+
+// DESIGN-DETAILS 9.2.6's crossing creation: the first push across an immediate removal that creates a path gets 412
+// PATH_EPOCH_DUE, recorded, and its refusal's fence write records the due as its commit would have, so the next
+// creation meets the due on the head; a retry of the same statement is answered from the record; a push across it
+// that only modifies commits.
+func TestPathEpochCrossingCreationIsRefusedAndRecordsTheDue(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	plan := fixture.plan()
+	fixture.create(plan, "a")
+	fixture.requireCommitted(fixture.push(plan), 1)
+	fixture.check.appendState(fixture.check.firstView.Pin().GetVersion()+1, nil)
+	commitment := fixture.putGenerationTwo(sidecar.GkmCauseRemove)
+	refusedAt := fixture.clock.Now()
+
+	crossing := fixture.planAtTwo(commitment)
+	fixture.create(crossing, "new")
+	recorder := fixture.push(crossing)
+	requireRefusal(t, recorder, http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE)
+	if paths := refusalOf(t, recorder).GetPaths(); len(paths) != 1 {
+		t.Fatalf("the crossing creation's refusal names %d paths", len(paths))
+	}
+	head := fixture.head()
+	pathEpoch := head.Head.GetPathEpoch()
+	if head.Version() != 1 || len(head.Head.GetRefused()) == 0 {
+		t.Fatalf("head at %d with %d refusal bytes: the refusal was not recorded", head.Version(), len(head.Head.GetRefused()))
+	}
+	if pathEpoch.GetDueGeneration() != 2 || !pathEpoch.GetDueBlocksCreation() || pathEpoch.GetDueByMs() != refusedAt.UnixMilli() || pathEpoch.GetCurrent() != 1 {
+		t.Fatalf("the refusal's fence wrote path epoch %v", pathEpoch)
+	}
+
+	// the same statement again: the record answers
+	again := fixture.post(fixture.token(fixture.check.signerId), fixture.body(crossing))
+	requireRefusal(t, again, http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE)
+	if !refusalOf(t, again).GetRecorded() {
+		t.Fatal("a retry of the refused statement was not answered from the record")
+	}
+
+	modification := fixture.planAtTwo(commitment)
+	fixture.write(modification, 1, "a")
+	fixture.requireCommitted(fixture.push(modification), 2)
+	if due := fixture.head().Head.GetPathEpoch(); due.GetDueGeneration() != 2 || !due.GetDueBlocksCreation() {
+		t.Fatalf("a modification after the refusal left path epoch %v", due)
+	}
+}
+
+// The crossing creation blocks only where an immediate due does: a mailbox repo's crossing push creates and commits,
+// recording its due, and a ref's first push, whose head does not exist, commits its creation (question
+// evs1-m2-44-new-ref-crossing).
+func TestPathEpochCrossingCreationWhereCreationIsNotBlocked(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	fixture.putRepo(protocol.RepoKind_REPO_KIND_MAILBOX, protocol.EvsRepoState_EVS_REPO_ACTIVE)
+	plan := fixture.plan()
+	fixture.create(plan, "a")
+	fixture.requireCommitted(fixture.push(plan), 1)
+	fixture.check.appendState(fixture.check.firstView.Pin().GetVersion()+1, nil)
+	commitment := fixture.putGenerationTwo(sidecar.GkmCauseRemove)
+	crossing := fixture.planAtTwo(commitment)
+	fixture.create(crossing, "new")
+	fixture.requireCommitted(fixture.push(crossing), 2)
+	if pathEpoch := fixture.head().Head.GetPathEpoch(); pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueBlocksCreation() {
+		t.Fatalf("a mailbox's crossing recorded %v", pathEpoch)
+	}
+
+	first := newPushFixture(t, nil)
+	first.check.appendState(first.check.firstView.Pin().GetVersion()+1, nil)
+	firstCommitment := first.putGenerationTwo(sidecar.GkmCauseRemove)
+	creation := first.planAtTwo(firstCommitment)
+	first.create(creation, "a")
+	first.requireCommitted(first.push(creation), 1)
+	if pathEpoch := first.head().Head.GetPathEpoch(); pathEpoch.GetDueGeneration() != 2 || !pathEpoch.GetDueBlocksCreation() {
+		t.Fatalf("a ref's first push across the removal recorded %v", pathEpoch)
+	}
+}
+
+// DESIGN-DETAILS 9.1 D and the between fence: two mappers map from one head in epoch 1, a to generation 2 and b to
+// generation 3. a's PATH_EPOCH commits; b's, whose source is of epoch 1 and no longer current, gets 409 MAP_SOURCE,
+// final, recorded nowhere; b maps again from the new head and commits, epoch 3 current over sources 2 and 1.
+func TestPathEpochBetweenFenceRefusesTheSecondOfTwoMappers(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	commitmentTwo := fixture.crossRemove(false)
+	commitmentThree := fixture.putGenerationAt(3, sidecar.GkmCauseRemove, commitmentTwo)
+	source := fixture.head()
+
+	partsTwo, mapTwo := fixture.mapPartsAt(2, source.Version(), source.Head.GetChain(), []*protocol.EvsPathMove{pathEpochTestMoveAt(2, []uint64{1}, "a")})
+	fixture.uploadParts(partsTwo, mapTwo)
+	partsThree, mapThree := fixture.mapPartsAt(3, source.Version(), source.Head.GetChain(), []*protocol.EvsPathMove{pathEpochTestMoveAt(3, []uint64{1}, "a")})
+	fixture.uploadParts(partsThree, mapThree)
+
+	fixture.requireCommitted(fixture.push(fixture.pathEpochPlanAt(2, 2, commitmentTwo, mapTwo, source.Version(), source.Head.GetChain())), 3)
+	refusedBefore := fixture.head().Head.GetRefused()
+	stale := fixture.pathEpochPlanAt(3, 3, commitmentThree, mapThree, source.Version(), source.Head.GetChain())
+	requireRefusal(t, fixture.push(stale), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE)
+	if head := fixture.head(); head.Version() != 3 || !bytes.Equal(head.Head.GetRefused(), refusedBefore) || EvsHeadCurrentEpoch(head.Head) != 2 {
+		t.Fatalf("the refused map left head %d at epoch %d, refused %x", head.Version(), EvsHeadCurrentEpoch(head.Head), head.Head.GetRefused())
+	}
+
+	// b maps again from the epoch it now finds: the path in epoch 2, and in epoch 1 where it stood before
+	again := fixture.head()
+	partsAgain, mapAgain := fixture.mapPartsAt(3, again.Version(), again.Head.GetChain(), []*protocol.EvsPathMove{pathEpochTestMoveAt(3, []uint64{2, 1}, "a")})
+	fixture.uploadParts(partsAgain, mapAgain)
+	fixture.requireCommitted(fixture.push(fixture.pathEpochPlanAt(3, 3, commitmentThree, mapAgain, again.Version(), again.Head.GetChain())), 4)
+	pathEpoch := fixture.head().Head.GetPathEpoch()
+	if pathEpoch.GetCurrent() != 3 || len(pathEpoch.GetSources()) != 2 || pathEpoch.GetSources()[0].GetEpoch() != 2 ||
+		pathEpoch.GetSources()[1].GetEpoch() != 1 || !bytes.Equal(pathEpoch.GetSources()[0].GetMapSha256(), mapAgain) {
+		t.Fatalf("path epoch %v", pathEpoch)
+	}
+}
+
+// DESIGN-DETAILS 9.2.6's source rule: a map whose source has left the window commits from the log page just below it,
+// C_S carried from the page's first chain; a source two pages below the window gets 409 MAP_SOURCE, and so does a
+// source past the head, or under another chain.
+func TestPathEpochSourceBelowTheWindow(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	commitment := fixture.crossRemove(false)
+	chains := map[uint64][]byte{2: fixture.head().Head.GetChain()}
+	for version := uint64(3); EvsHeadWindowFirstVersion(fixture.head().Head) < 2*EvsLogPageVersionCount; version += 1 {
+		plan := fixture.planAtTwo(commitment)
+		fixture.write(plan, version-1, "a")
+		fixture.requireCommitted(fixture.push(plan), version)
+		chains[version] = fixture.head().Head.GetChain()
+	}
+	head := fixture.head()
+	if first := EvsHeadWindowFirstVersion(head.Head); first != 2*EvsLogPageVersionCount {
+		t.Fatalf("the window starts at %d", first)
+	}
+	refuse := func(name string, sourceVersion uint64, sourceChain []byte) {
+		t.Helper()
+		parts, mapSha256 := fixture.mapPartsAt(2, sourceVersion, sourceChain, []*protocol.EvsPathMove{pathEpochTestMoveAt(2, []uint64{1}, "a")})
+		fixture.uploadParts(parts, mapSha256)
+		recorder := fixture.push(fixture.pathEpochPlanAt(2, 2, commitment, mapSha256, sourceVersion, sourceChain))
+		if recorder.Code != http.StatusConflict || refusalOf(t, recorder).GetCode() != protocol.EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE {
+			t.Fatalf("%s: %d (%s), want 409 MAP_SOURCE", name, recorder.Code, refusalOf(t, recorder).GetCode())
+		}
+	}
+	refuse("a source two pages below the window", 10, chains[10])
+	refuse("a source one page below under another chain", 100, chains[99])
+	refuse("a source past the head", head.Version()+1, head.Head.GetChain())
+	if fixture.head().Version() != head.Version() {
+		t.Fatal("a refused PATH_EPOCH committed")
+	}
+
+	parts, mapSha256 := fixture.mapPartsAt(2, 100, chains[100], []*protocol.EvsPathMove{pathEpochTestMoveAt(2, []uint64{1}, "a")})
+	fixture.uploadParts(parts, mapSha256)
+	fixture.requireCommitted(fixture.push(fixture.pathEpochPlanAt(2, 2, commitment, mapSha256, 100, chains[100])), head.Version()+1)
+	if pathEpoch := fixture.head().Head.GetPathEpoch(); pathEpoch.GetCurrent() != 2 || len(pathEpoch.GetSources()) != 1 {
+		t.Fatalf("path epoch %v", pathEpoch)
+	}
+}
+
+// A map part posted under a hash whose key already holds another part gets 409 MAP_SOURCE: the mapper maps again
+// under a new hash, where MAP_PARTS would only have it upload again.
+func TestPathMapPartUnderAnotherPartsKeyAnswersMapSource(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	fixture.crossRemove(false)
+	source := fixture.head()
+	parts, mapSha256 := fixture.mapPartsAt(2, source.Version(), source.Head.GetChain(), []*protocol.EvsPathMove{pathEpochTestMoveAt(2, []uint64{1}, "a")})
+	fixture.uploadParts(parts, mapSha256)
+	other, _ := fixture.mapPartsAt(2, source.Version(), source.Head.GetChain(), []*protocol.EvsPathMove{pathEpochTestMoveAt(2, []uint64{1}, "b")})
+	recorder := fixture.postRoute("/path-epoch", &protocol.EvsPathMapRequest{PathMapSha256: mapSha256, Part: other[0]})
+	requireRefusal(t, recorder, http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE)
+	if !sidecar.IsEvsMapSource(&sidecar.EvsError{Status: recorder.Code, Code: refusalOf(t, recorder).GetCode()}) {
+		t.Fatal("the client does not read MAP_SOURCE as such")
+	}
 }

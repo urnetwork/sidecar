@@ -15,13 +15,107 @@ import (
 	"io"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 )
+
+// The ios_extension leg's list (D-SDK-20; DESIGN-DETAILS 4.2.3), relative to the root module: the root and protocol
+// files Apple's network extensions may link, which is the forwarding role's file closure. One path a line, sorted, from
+// the root module, with # lines as comments. legs_closure_test.go computes it; this package only reads it.
+const iosExtensionLegListPath = "check/testdata/ios_extension_leg.txt"
+
+// A line of the list: a root file or a protocol file, never a test file or one in another directory.
+var iosExtensionLegListEntryPattern = regexp.MustCompile(`^(protocol/)?[A-Za-z0-9][A-Za-z0-9_.-]*\.go$`)
+
+// The list as a checkout holds it, with what is wrong with its form. A list that cannot be read is a finding, since a
+// rule that read no list has not passed.
+type iosExtensionLegList struct {
+	files    map[string]bool
+	findings []string
+}
+
+// Reads the list under the root module directory.
+func readIosExtensionLegList(moduleDirectory string) *iosExtensionLegList {
+	list := &iosExtensionLegList{files: map[string]bool{}}
+	data, err := os.ReadFile(filepath.Join(moduleDirectory, filepath.FromSlash(iosExtensionLegListPath)))
+	if err != nil {
+		list.findings = append(list.findings, findingf("the ios_extension leg's list does not read: %v", err))
+		return list
+	}
+	previous := ""
+	for index, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		at := findingf("%s:%d", iosExtensionLegListPath, index+1)
+		switch {
+		case !iosExtensionLegListEntryPattern.MatchString(line) || strings.HasSuffix(line, "_test.go"):
+			list.findings = append(list.findings, findingf("%s: %q is no root or protocol file the leg could compile", at, line))
+			continue
+		case list.files[line]:
+			list.findings = append(list.findings, findingf("%s: %s is named twice", at, line))
+		case line < previous:
+			list.findings = append(list.findings, findingf("%s: %s is out of order after %s; the list is sorted, so its diff shows each change", at, line, previous))
+		}
+		list.files[line] = true
+		previous = line
+	}
+	if len(list.files) == 0 && len(list.findings) == 0 {
+		list.findings = append(list.findings, findingf("%s names no file", iosExtensionLegListPath))
+	}
+	return list
+}
+
+// Modules no file on the list imports, refused in the ios_extension legs' go list -deps by the module a package comes
+// from, whole path elements, so a /v2 path counts: mail's servers and verifiers, DNS, ACME and its test server, the MCP
+// sdk, brotli and yaml (DESIGN-DETAILS 4.2.3's rule 2).
+var iosExtensionRefusedModules = []string{
+	"github.com/andybalholm/brotli",
+	"github.com/emersion/go-imap",
+	"github.com/emersion/go-message",
+	"github.com/emersion/go-smtp",
+	"github.com/letsencrypt/pebble",
+	"github.com/mholt/acmez",
+	"github.com/miekg/dns",
+	"github.com/mjl-/adns",
+	"github.com/mjl-/mox",
+	"github.com/modelcontextprotocol/go-sdk",
+	"gopkg.in/yaml.v3",
+}
+
+// Packages refused there by import path, whatever module holds them: x/text's legacy encodings and x/net's HTML parser,
+// whose tables a package-level variable roots past any dead-code pass, and the std packages that keep every exported
+// method alive (pruningBreakers).
+var iosExtensionRefusedPackages = []string{
+	"golang.org/x/net/html",
+	"golang.org/x/text/encoding",
+	"html/template",
+	"net/rpc",
+	"text/template",
+}
+
+// The build line protocol/Makefile writes above a generated protocol file the list does not name.
+const iosExtensionGeneratedTagLine = "//go:build !ios_extension\n\n"
+
+// A generated file as protocol/Makefile leaves it: protoc's output, tagged when it is one of protocol's own files and
+// the list does not name it. protocol/bridge is linked whole.
+func iosExtensionTagGenerated(list *iosExtensionLegList, generatedFile string, data []byte) []byte {
+	if path.Dir(generatedFile) != "protocol" || list.files[generatedFile] {
+		return data
+	}
+	return append([]byte(iosExtensionGeneratedTagLine), data...)
+}
+
+// True when the rules read an ios_extension leg, the iOS extension's or the macOS slices'.
+func (self *repository) readsIosExtensionLeg() bool {
+	return slices.ContainsFunc(self.legs, func(leg *buildLeg) bool { return leg.hasTag(iosExtensionTag) })
+}
 
 // Mail libraries a page Worker has no use for, since it reads mail and neither receives, serves nor
 // checks it (R-MAIL-13, MAIL.md's build legs). dependencies.yml's client class cannot say this, because
@@ -39,20 +133,127 @@ var sidecarHttpRefusedMailModules = []string{
 // (sdk/build/mobile_method_pruning_test.go:12-22).
 var pruningBreakers = []string{"net/rpc", "text/template", "html/template"}
 
-// D-SDK-20: the leg's closure holds neither the root package nor protocol, and §4.9 words it as
-// device/ and protocol/bridge only, so nothing else of this repository either. protocol/bridge sits
-// under protocol's path and is what the leg is for, which is why these are read as whole packages.
+// D-SDK-20 and DESIGN-DETAILS 4.2.3's rules 1 and 3: of this repository the ios_extension legs link device and
+// protocol/bridge whole, and of the root and protocol only the files on the leg's list, and no other package. A root or
+// protocol file either leg compiles that the list does not name fails with its fix, the tag; protocol/Makefile writes it
+// on every generated file off the list. The list may name a file no leg compiles, so it shrinks by a deletion or a tag
+// with no edit, and each such name is reported; it grows only in a commit that edits it, since nothing here writes it.
+// Files are read as the legs compile them, so a file only the macOS slices build is seen.
 func (self *repository) iosExtensionFindings(t testing.TB) []string {
 	t.Helper()
-	findings := []string{}
+	if !self.readsIosExtensionLeg() {
+		return nil
+	}
+	list := readIosExtensionLegList(self.moduleDirectory)
+	findings := slices.Clone(list.findings)
+	compiled := map[string]bool{}
 	for _, leg := range self.legs {
 		if !leg.hasTag(iosExtensionTag) {
 			continue
 		}
 		for _, listed := range self.closure(t, leg) {
 			relative, ours := repositoryRelative(listed.ImportPath)
-			if ours && !underPath(relative, "device") && !underPath(relative, "protocol/bridge") {
+			if !ours || underPath(relative, "device") || underPath(relative, "protocol/bridge") {
+				continue
+			}
+			if relative != "." && relative != "protocol" {
 				findings = append(findings, findingf("%s links %s", leg.name, listed.ImportPath))
+				continue
+			}
+			for _, goFile := range slices.Concat(listed.GoFiles, listed.CgoFiles) {
+				name := goFile
+				if relative == "protocol" {
+					name = "protocol/" + goFile
+				}
+				compiled[name] = true
+				if list.files[name] {
+					continue
+				}
+				fix := "give it //go:build !ios_extension, or put it on the list in the commit that needs it there"
+				if strings.HasSuffix(goFile, ".pb.go") {
+					fix = "run make proto, which tags every generated file off the list"
+				}
+				findings = append(findings, findingf("%s compiles %s, which is not on %s: %s (DESIGN-DETAILS 4.2.3)",
+					leg.name, name, iosExtensionLegListPath, fix))
+			}
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(list.files)) {
+		if !compiled[name] {
+			self.report("%s names %s, which no ios_extension leg compiles: the list may shrink by it", iosExtensionLegListPath, name)
+		}
+	}
+	slices.Sort(findings)
+	return findings
+}
+
+// What connect links on the leg by itself, connect and connect/protocol's go list -deps: the iOS extension's packages
+// before sidecar was in it, which make size's baseline also keeps (size_test.go). A leg this cannot list is an error,
+// since a rule that read no baseline has not run.
+func (self *repository) iosExtensionBaselineImportPaths(t testing.TB, leg *buildLeg) (map[string]bool, error) {
+	t.Helper()
+	directory, err := self.legDirectory(leg)
+	if err != nil {
+		return nil, err
+	}
+	arguments := []string{"list", "-deps", "-tags=" + strings.Join(leg.tags, ",")}
+	connected := false
+	for _, require := range self.module(t, ".").file.Require {
+		if firstPartyBase(require.Path) == connectBasePath {
+			arguments = append(arguments, require.Path, require.Path+"/protocol")
+			connected = true
+		}
+	}
+	if !connected {
+		return nil, fmt.Errorf("%s: the root module requires no connect, so there is no baseline to read", leg.name)
+	}
+	output, err := runGo(directory, leg.environment(), arguments...)
+	if err != nil {
+		return nil, err
+	}
+	importPaths := map[string]bool{}
+	for _, line := range strings.Fields(string(output)) {
+		importPaths[line] = true
+	}
+	return importPaths, nil
+}
+
+// DESIGN-DETAILS 4.2.3's rule 2: no ios_extension leg's go list -deps holds a package of a refused module or under a
+// refused package beyond what connect links there by itself, so a file put on the list cannot bring one in, nor can a
+// file a list file reaches. Connect's own closure is no part of the rule: the extension carries it with or without
+// sidecar, and its uTLS links brotli on every extension leg.
+func (self *repository) iosExtensionModuleFindings(t testing.TB) []string {
+	t.Helper()
+	findings := []string{}
+	for _, leg := range self.legs {
+		if !leg.hasTag(iosExtensionTag) {
+			continue
+		}
+		baseline, err := self.iosExtensionBaselineImportPaths(t, leg)
+		if err != nil {
+			findings = append(findings, findingf("no refused module was read on %s: %v", leg.name, err))
+			continue
+		}
+		for _, listed := range self.closure(t, leg) {
+			if baseline[listed.ImportPath] {
+				continue
+			}
+			refused := ""
+			if listed.Module != nil {
+				for _, module := range iosExtensionRefusedModules {
+					if underPath(listed.Module.Path, module) {
+						refused = module
+					}
+				}
+			}
+			for _, refusedPackage := range iosExtensionRefusedPackages {
+				if underPath(listed.ImportPath, refusedPackage) {
+					refused = refusedPackage
+				}
+			}
+			if refused != "" {
+				findings = append(findings, findingf("%s links %s, under %s, which the forwarding leg refuses (DESIGN-DETAILS 4.2.3)",
+					leg.name, listed.ImportPath, refused))
 			}
 		}
 	}

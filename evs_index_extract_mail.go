@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Extractor 1 for mail (§11.14's extract row; §15.7's search index row; D-MAIL-16): a message's From, To, Cc and
 // Subject values, RFC 2047-decoded, and its text/plain parts, text/html parts stripped of tags, scripts and styles,
 // and attachment names, MIME-decoded (RFC 2045-2047, 2231); never a transport header, an attachment's bytes or

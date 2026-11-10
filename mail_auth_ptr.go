@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !js
+//go:build !sidecar_http && !js && !ios_extension
 
 // The receiver's own forward-confirmed PTR of sender_ip (§15.5; MAIL-M7-08), which owner decision 135's operator
 // match reads, never mxedge's: the address's PTR names, each looked up forward until one holds the address, at most

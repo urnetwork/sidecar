@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The sockets SidecarComponent (§5.4, §9): the registrar (socket_registrar.go) on a Sidecar's client generations. The
 // registrar and its set live for the network across generations, since a Listen outlives a reconnect; each generation

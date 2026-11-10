@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // ServiceHost.Quota (§20.7), implemented by server: limits, rates, edge leases and usage. api_quota.go
 // holds the types every leg decodes.

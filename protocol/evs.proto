@@ -400,6 +400,9 @@ enum EvsRefusalCode {
   EVS_REFUSAL_SEGMENT_STALE = 72;
   EVS_REFUSAL_STATEMENT_MISSING = 73;
   EVS_REFUSAL_GROUP_NOT_READY = 74;
+  EVS_REFUSAL_MAP_SOURCE = 75;          // a PATH_EPOCH whose map's source is unknown, under another chain or of an
+                                        // epoch no longer current, or a map part whose key holds other bytes: the
+                                        // mapper maps again, where MAP_PARTS uploads again (DESIGN-DETAILS 9.2.6)
 
   EVS_REFUSAL_INVALID = 128;            // a body, statement or signature that does not parse or verify
   EVS_REFUSAL_NOT_FOUND = 129;
@@ -472,6 +475,9 @@ message EvsIndexEntry {                 // idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e,
   uint64 names_through = 3;             // the ref version of the newest delta folded into names
   EvsRemovalMarker marker = 4;          // a removed path's
   EvsDropMark drop_mark = 5;            // a dropped path's (format 2), which format-1 writers keep
+  uint32 names_leaf_part = 7;           // where the delta at names_through sits in its statement's list, as
+  uint32 names_leaf_index = 8;          // EvsIndexVersion's leaf_part and leaf_index (DESIGN-DETAILS 9.2.2); 6 is
+                                        // left for evs1-m2-10-directory-marker-version's names_version
 }
 message EvsIndexVersion {               // one committed version and where it committed
   bytes push_id = 1;
@@ -479,6 +485,10 @@ message EvsIndexVersion {               // one committed version and where it co
   bytes entry_version = 3;              // the EvsEntryVersion bytes its change's entry_sha256 names, unless elided
   bool elided = 4;                      // its inline bodies are cut, as for all but the newest; evs restores them
                                         // from its push record before serving it
+  uint32 leaf_part = 5;                 // where its change sits in its statement's list: the part, 0 for a one-part
+  uint32 leaf_index = 6;                // push, and the change's index in that part's list plus 1; 0 when the list
+                                        // is inline (the statement holds it); a fold records them, a carry keeps
+                                        // them, and evs finds an older epoch's change by them (DESIGN-DETAILS 9.2.2)
 }
 message EvsRemovalMarker {              // 11.7's removal row
   bytes push_id = 1;                    // the removing push
@@ -486,6 +496,8 @@ message EvsRemovalMarker {              // 11.7's removal row
   uint64 path_version = 3;              // the removal's own version, one past the path's last
   repeated bytes segment_ids = 4;       // format 2: a versionless file its push did not list, whose kind-5 segments
   repeated bytes slot_ids = 5;          // and slots its collection deletes; format-1 writers keep them
+  uint32 leaf_part = 6;                 // where the change that removed the path or its prefix sits, as
+  uint32 leaf_index = 7;                // EvsIndexVersion's leaf_part and leaf_index (DESIGN-DETAILS 9.2.2)
 }
 message EvsDropMark {                   // format 2 (11.7), which format-1 writers and copies keep
   bytes drop_id = 1;
@@ -614,8 +626,13 @@ message EvsReadRequest {                // POST .../read (11.9)
   repeated EvsReadRef refs = 10;        // a streams read's, alone in its request: at most 64 (11.9's streams row)
 }
 message EvsReadPath {
-  repeated EvsSourcePath token_paths = 1;  // the current epoch's first, then each listed source that may hold it
-  uint64 version = 2;                   // 0 the newest committed, else that older version
+  repeated EvsSourcePath token_paths = 1;  // the path in the head's current epoch, and in any other epoch the reader
+                                        // may name (DESIGN-DETAILS 9.2.3): a listed source's is read for the entry
+                                        // (11.6's read rule), and each one serves the statements of its epoch; at
+                                        // most 8, one per epoch; evs matches by the epoch field, never by position
+  uint64 version = 2;                   // 0 the newest committed, else that older version of the path
+  uint64 commit_version = 3;            // with version: the ref version its push committed at, from the newer
+                                        // version's prev_commit_version; 0 unknown (DESIGN-DETAILS 9.2.4's history)
 }
 message EvsReadRange {
   bytes segment_id = 1;
@@ -671,7 +688,7 @@ message EvsReadStatement {
   bytes statement = 2;                  // the Signed EvsPush as received
 }
 message EvsReadPathReply {              // one path: its version, its listing, or what stands for them
-  repeated bytes token_path = 1;        // in the current epoch
+  repeated bytes token_path = 1;        // in the current epoch; a stale_epoch path's, the first its request named
   EvsIndexVersion version = 2;          // never elided
   bytes statement = 3;                  // the one that wrote it, when not among those this reply returned
   repeated EvsMerkleProof proof = 4;    // to that statement's changes_root, part level last; empty when inline
@@ -689,6 +706,10 @@ message EvsReadPathReply {              // one path: its version, its listing, o
                                         // reply returns it nowhere else (format 2)
   bytes drop_body = 16;                 // and its EvsDropHistory bytes, which its drop_sha256 covers, on the first
                                         // path of this reply naming the drop (format 2)
+  uint64 entry_epoch = 17;              // the epoch whose idx/ copy served the version, table or marker; 0 the
+                                        // head's current one (DESIGN-DETAILS 9.2.2)
+  bool stale_epoch = 18;                // the request named no token path in the head's current epoch: nothing was
+                                        // read for this path, and the reader asks again on this head
 }
 message EvsMerkleProof {                // one RFC 9162 tree's inclusion proof (11.6's merkle row)
   bytes leaf = 1;                       // the bytes the leaf hashes: an EvsChange as listed, or a part's changes_root

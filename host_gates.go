@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // ServiceHost.Gates: §19.11's gates (D-OPS-10), as config/<env>/sidecar.yml sets them. The host
 // rereads the file every 60 s, so an engine asks on each request and keeps no answer. Engines cannot

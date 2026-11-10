@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Owner decision 135's labels (§15.5's Labels; R-MAIL-16, D-MAIL-13, D-MAIL-14, I-11, FS-39, FS-121; MAIL-M7-10):
 // MailLabelDecide labels a deposited message from its sealed trailer alone, never from later DNS, a pure function on
 // every leg, so every device that ingests a deposit labels it alike.

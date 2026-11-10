@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Export's signed provenance (§11.12's export row): refs/notes/ur, one note per exported commit that ends a push,
 // naming the push, its signer, its client, the ref version it committed at and its Signed EvsPush as received, so
 // anyone holding the export can check the statement against the network's keys without evs. The notes commit is

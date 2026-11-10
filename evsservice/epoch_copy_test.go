@@ -8,6 +8,7 @@ package evsservice
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -355,5 +356,200 @@ func TestEpochCopyHoldsItsPace(t *testing.T) {
 	}
 	if count != run.settings.CopyRepoOpsPerSecond {
 		t.Errorf("%d operations before the repo's rate held", count)
+	}
+}
+
+// Commits a and b in epoch 1, then a PATH_EPOCH to epoch 2 over a map of two parts, part 1 moving first and part 2
+// second, its hash given by hashOf over the parts' bytes as uploaded: the map's hash.
+func (self *pushFixture) committedTwoPartEpochTwo(first string, second string, hashOf func(parts [][]byte) []byte) []byte {
+	commitment := self.crossRemove(false)
+	creation := self.planAtTwo(commitment)
+	self.create(creation, "b")
+	self.requireCommitted(self.push(creation), 3)
+	source := self.head()
+	parts, _ := self.mapPartsAt(2, source.Version(), source.Head.GetChain(),
+		[]*protocol.EvsPathMove{pathEpochTestMoveAt(2, []uint64{1}, first)}, []*protocol.EvsPathMove{pathEpochTestMoveAt(2, []uint64{1}, second)})
+	mapSha256 := hashOf(parts)
+	self.uploadParts(parts, mapSha256)
+	self.requireCommitted(self.push(self.pathEpochPlanAt(2, 2, commitment, mapSha256, source.Version(), source.Head.GetChain())), 4)
+	return mapSha256
+}
+
+// The labels a and b in the order their epoch-2 token paths sort.
+func sortedEpochTwoLabels() (string, string) {
+	if epochPath(2, "a").Compare(epochPath(2, "b")) < 0 {
+		return "a", "b"
+	}
+	return "b", "a"
+}
+
+// DESIGN-DETAILS 9.2.6, the copy checks its map: parts whose bytes hash to another value than the map_sha256 the
+// head's source names, here the parts hashed in the other order, or whose moves do not ascend across parts, move
+// nothing; the run ends ErrEvsCopyMapInvalid and the source stays listed with every entry it held.
+func TestEpochCopyRefusesAMapWithASwappedPart(t *testing.T) {
+	lower, higher := sortedEpochTwoLabels()
+	swappedHash := func(parts [][]byte) []byte { return sidecar.EvsPathMapSha256([][]byte{parts[1], parts[0]}) }
+	cases := []struct {
+		name          string
+		first, second string
+		hashOf        func(parts [][]byte) []byte
+	}{
+		{name: "parts hashed in another order", first: lower, second: higher, hashOf: swappedHash},
+		{name: "moves out of order across parts", first: higher, second: lower, hashOf: sidecar.EvsPathMapSha256},
+	}
+	for _, c := range cases {
+		fixture := newPushFixture(t, nil)
+		fixture.committedTwoPartEpochTwo(c.first, c.second, c.hashOf)
+		keys := fixture.epochKeys(1)
+		result, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), nil, fixture.copyArgs(2))
+		if !errors.Is(err, ErrEvsCopyMapInvalid) {
+			t.Fatalf("%s: %v, want ErrEvsCopyMapInvalid", c.name, err)
+		}
+		if result.MovedCount != 0 || result.DeletedCount != 0 || result.SourcesDropped {
+			t.Errorf("%s: %+v", c.name, result)
+		}
+		if !slices.Equal(fixture.epochKeys(1), keys) || len(fixture.epochKeys(2)) != 0 || len(fixture.head().Head.GetPathEpoch().GetSources()) != 1 {
+			t.Errorf("%s: epoch 1 %q, epoch 2 %q", c.name, fixture.epochKeys(1), fixture.epochKeys(2))
+		}
+	}
+	// the same map whole and in order moves both
+	fixture := newPushFixture(t, nil)
+	fixture.committedTwoPartEpochTwo(lower, higher, sidecar.EvsPathMapSha256)
+	result, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), nil, fixture.copyArgs(2))
+	if err != nil || result.MovedCount != 2 || !result.SourcesDropped {
+		t.Fatalf("the map in order: %+v %v", result, err)
+	}
+}
+
+// Folds every unfolded version of the ref by the engine's own folder, as its idle fold would, then raises
+// folded_through over them by a fence write, as that process's next commit would.
+func (self *pushFixture) foldRef() *EvsFoldResult {
+	self.t.Helper()
+	cluster, err := self.engine.Blobs().Cluster("meta-1")
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	result, err := self.engine.folder.Fold(self.ctx, &EvsFoldRequest{
+		Cluster: cluster, RepoId: self.check.repoId, RefId: self.check.refId, Rank: sidecar.WriteP2RankFold,
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	head := self.head()
+	if horizon := self.engine.folder.Horizon(self.check.repoId, self.check.refId, head.Head); head.Head.GetFoldedThrough() < horizon {
+		next := CloneEvsHead(head.Head)
+		next.FoldedThrough = horizon
+		next.Fence += 1
+		if _, err := self.engine.heads.Commit(self.paidContext(), self.cluster, self.check.repoId, self.check.refId, head, next); err != nil {
+			self.t.Fatal(err)
+		}
+	}
+	return result
+}
+
+// DESIGN-DETAILS 9.1 E end to end: a is created in epoch 1; the cut-over to epoch 2 leaves it in source 1; a is
+// removed and created again in epoch 2, each change naming its epoch-1 copy, and their fold deletes that copy; a
+// cut-over to epoch 3 supersedes epoch 2's copy before it runs, its map naming a in epoch 2 alone, since a was born
+// there; and epoch 3's copy then finds source 1 empty and drops both sources. With the fold keeping its source copies,
+// as before 9.2.6, the same run finds a's epoch-1 copy that no move names, alarms and keeps the sources listed.
+func TestEpochCopyDrainsASupersededSourceOnceTheFoldDeletedItsLeftover(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		fixture := newPushFixture(t, nil)
+		fixture.engine.folder.keepSourceCopies = keep
+		commitmentTwo := fixture.crossRemove(false)
+		source := fixture.head()
+		parts, mapTwo := fixture.mapPartsAt(2, source.Version(), source.Head.GetChain(), []*protocol.EvsPathMove{pathEpochTestMoveAt(2, []uint64{1}, "a")})
+		fixture.uploadParts(parts, mapTwo)
+		fixture.requireCommitted(fixture.push(fixture.pathEpochPlanAt(2, 2, commitmentTwo, mapTwo, source.Version(), source.Head.GetChain())), 3)
+
+		removal := fixture.planOnHead(2, commitmentTwo)
+		removal.Changes = append(removal.Changes, &sidecar.EvsPlannedChange{
+			TokenPath: epochPath(2, "a"), BaseEntryVersion: 2, SourcePaths: [][]byte{epochSourcePath(t, 1, "a")},
+		})
+		fixture.requireCommitted(fixture.push(removal), 4)
+		creation := fixture.planOnHead(2, commitmentTwo)
+		fixture.create(creation, "epoch 2", "a")
+		creation.Changes[0].SourcePaths = [][]byte{epochSourcePath(t, 1, "a")}
+		fixture.requireCommitted(fixture.push(creation), 5)
+		folded := fixture.foldRef()
+		if want := map[bool]int{false: 1, true: 0}[keep]; folded.SourceDeleteCount != want {
+			t.Fatalf("keep %t: the fold deleted %d source copies", keep, folded.SourceDeleteCount)
+		}
+		if fixture.entryAt(1, "a").Absent() == keep {
+			t.Fatalf("keep %t: epoch 1 holds a: %t", keep, !fixture.entryAt(1, "a").Absent())
+		}
+
+		commitmentThree := fixture.putGenerationAt(3, sidecar.GkmCauseRemove, commitmentTwo)
+		superseding := fixture.head()
+		parts, mapThree := fixture.mapPartsAt(3, superseding.Version(), superseding.Head.GetChain(), []*protocol.EvsPathMove{pathEpochTestMoveAt(3, []uint64{2}, "a")})
+		fixture.uploadParts(parts, mapThree)
+		fixture.requireCommitted(fixture.push(fixture.pathEpochPlanAt(3, 3, commitmentThree, mapThree, superseding.Version(), superseding.Head.GetChain())), 6)
+		if sources := fixture.head().Head.GetPathEpoch().GetSources(); len(sources) != 2 {
+			t.Fatalf("keep %t: sources %v", keep, sources)
+		}
+
+		result, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), nil, fixture.copyArgs(3))
+		if err != nil {
+			t.Fatalf("keep %t: %v", keep, err)
+		}
+		if fixture.entryAt(3, "epoch 3", "a").Absent() {
+			t.Fatalf("keep %t: a did not move into epoch 3", keep)
+		}
+		switch {
+		case !keep && (!result.SourcesDropped || result.MissedCount != 0 || len(fixture.epochKeys(1)) != 0 || len(fixture.epochKeys(2)) != 0):
+			t.Errorf("the fold deleting: %+v, epoch 1 %q, epoch 2 %q", result, fixture.epochKeys(1), fixture.epochKeys(2))
+		case keep && (result.SourcesDropped || result.MissedCount != 1 || len(fixture.head().Head.GetPathEpoch().GetSources()) != 2):
+			t.Errorf("the fold keeping: %+v", result)
+		}
+	}
+}
+
+// DESIGN-DETAILS 9.2.6 with the copy: a directory changed after the cut-over is carried into the current epoch by its
+// fold, which then deletes its source copy; the copy's move for it finds no source, and still translates the rows the
+// carry tagged with the source's epoch, after its children's moves, before the sources drop (P6).
+func TestEpochCopyTranslatesADirectoryAFoldCarriedAndDeletedTheSourceOf(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	commitment := fixture.crossRemove(false)
+	plan := fixture.planAtTwo(commitment)
+	plan.Changes = append(plan.Changes, &sidecar.EvsPlannedChange{
+		TokenPath: checkTestPath("d"), EntryVersion: fixture.check.directoryEntry(plan, 3, []*protocol.EvsName{
+			{Token: checkTestPath("d", "x").Last().Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: []byte("x sealed for epoch 1")},
+		}, nil),
+	})
+	fixture.create(plan, "d", "x")
+	fixture.requireCommitted(fixture.push(plan), 3)
+	fixture.awaitStepEights()
+	fixture.cutOverToEpochTwo(commitment, pathEpochTestMoveAt(2, []uint64{1}, "a"), pathEpochTestMoveAt(2, []uint64{1}, "d"),
+		pathEpochTestMoveAt(2, []uint64{1}, "d", "x"))
+
+	// a delta on d in epoch 2, naming its epoch-1 copy, adds y; its fold carries d and deletes that copy
+	delta := fixture.planOnHead(2, commitment)
+	delta.Changes = append(delta.Changes, &sidecar.EvsPlannedChange{
+		TokenPath: epochPath(2, "d"), BaseEntryVersion: 3, SourcePaths: [][]byte{epochSourcePath(t, 1, "d")},
+		EntryVersion: fixture.check.directoryEntry(delta, 4, []*protocol.EvsName{
+			{Token: epochPath(2, "d", "y").Last().Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: []byte("y sealed for epoch 2")},
+		}, nil),
+	})
+	fixture.requireCommitted(fixture.push(delta), 5)
+	fixture.awaitStepEights()
+	if folded := fixture.foldRef(); folded.SourceDeleteCount != 1 || !fixture.entryAt(1, "d").Absent() {
+		t.Fatalf("the delta's fold: %+v", folded)
+	}
+	if carried := fixture.entryAt(2, "epoch 2", "d"); carried.State.State != EvsEntryStateCarried || len(carried.Entry.GetNames().GetNames()) != 2 {
+		t.Fatalf("d's carried entry %+v", carried)
+	}
+
+	result, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), nil, fixture.copyArgs(2))
+	if err != nil || !result.SourcesDropped || result.MissedCount != 0 {
+		t.Fatalf("the copy: %+v %v", result, err)
+	}
+	rows := fixture.entryAt(2, "epoch 2", "d").Entry.GetNames().GetNames()
+	if len(rows) != 2 {
+		t.Fatalf("d holds %d rows", len(rows))
+	}
+	for _, row := range rows {
+		if row.GetEpoch() != 0 {
+			t.Fatalf("a row still carried from epoch %d after the sources dropped: %+v, result %+v", row.GetEpoch(), rows, result)
+		}
 	}
 }

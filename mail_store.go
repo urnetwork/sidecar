@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // mailStore (MAIL-M7-06): what MAIL's writers and readers need of one mail repo's file-mode ref, by path, so the
 // message list (i/), the flags (f/), the spam model (s/model) and the view over them are written against it and tested
 // with no evs. It reads a file's newest version with that version, lists a directory, and writes paths in one push,

@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §14.5's send capability, on every leg: the modes, TLS levels and outcomes a send reports, what
 // SmtpSender.Send takes and returns, and what SmtpSender.Check predicts. sdk's CheckSend and
 // GetSendResult and MCP's mail_send name these types, so this file names no connect type and builds on

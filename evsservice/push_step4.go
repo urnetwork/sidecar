@@ -342,6 +342,7 @@ func (self *pushAttempt) buildView() (*pushOutcome, bool) {
 		return self.unavailableOn(err), false
 	}
 	self.due = due
+	view.CrossingDue = due
 	self.pathEpoch = nil
 	if push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0 {
 		pathEpoch, err := self.readPathEpoch(head.Head)

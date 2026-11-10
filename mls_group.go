@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // One group's state at one epoch, as one member holds it, and the commits that move it (RFC 9420 §11, §12.2 to
 // §12.4): §10.4's subset, Add, Remove and GroupContextExtensions inline, path-only commits for self-update, and
 // external commits (mls_external.go). Everything else the RFC frames is refused when parsed (mls_framing.go,

@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §13.8's CAA at <root>. It sits in the root so dnsservice can call it, and a name without this set is open to every
 // CA, so an input that would leave the set empty or unusable is refused, never rendered.
 //

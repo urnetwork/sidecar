@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The query grammar (§16.10's query row, §11.14's query row; D-EVS-55; SEARCH-M10-22). A query is at most 512 B and 16
 // terms after the index's own normalization. Words and "quoted phrases" are required substring terms, ANDed; a OR b
 // joins alternatives; -term excludes a hit only where this device confirms the term; field:text confines a term to

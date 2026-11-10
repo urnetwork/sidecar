@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Export's git side (§11.12's export row, §11.7's mode table): a plain bare repository written object by object as
 // git's loose objects, with no git process, so what an export writes depends only on what it reads: no local time, map
 // order or locale reaches a byte, and two exporters of one history give equal oids.

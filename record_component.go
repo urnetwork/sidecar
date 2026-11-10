@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The record SidecarComponent (§5.4): runs a SidecarRecord's push loop on each client generation, so entries the writer
 // journaled while offline reach evs once a generation runs, and stops with the generation. Appending needs no

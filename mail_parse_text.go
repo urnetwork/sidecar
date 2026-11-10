@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The text a message walk keeps (MAIL-M7-11), made safe to re-emit: every value here is a sender's, and it reaches
 // IMAP clients, agents, indexes and the headers ingest renders. A single-line value has each run of whitespace, CR
 // and LF among it, as one space and every other control character dropped, so it can never split a header or a list

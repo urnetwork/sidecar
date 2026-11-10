@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // A DNS wire parser of the sender's own for dnssec_chain (§14.4's TL1, D-SMTP-2): uncompressed resource
 // records of the eight types a chain to the root needs (DNSKEY, DS, RRSIG, NSEC, NSEC3, MX, TLSA and

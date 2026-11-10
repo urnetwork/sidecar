@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // AclGateCache's tunables (§8.9, §8.18), each a field with its default here and nowhere else.
 
