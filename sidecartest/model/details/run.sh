@@ -20,7 +20,7 @@ ROOT=/Users/builder/urnetwork-sidecar
 track=$1
 shift
 designs="AuthLog AuthLog-K1 AuthLog-Adversary AuthLog-Narrow"
-twins="Twin-JudgeTail-Head Twin-JudgeTail-At Twin-NoProposalRows Twin-NoSettingsRows Twin-NoRingRows Twin-ReJudgeTail Twin-CascadeFromAt Twin-NoBitsCheck Twin-NoBitsCheck-Forks Twin-CloseAtBase Twin-NoTailCap"
+twins="Twin-JudgeTail-Head Twin-JudgeTail-At Twin-NoProposalRows Twin-NoSettingsRows Twin-NoRingRows Twin-ReJudgeTail Twin-CascadeFromAt Twin-NoBitsCheck Twin-NoBitsCheck-Forks Twin-CloseAtBase Twin-NoTailCap Twin-NewestConfirmOnly Twin-DelegationEndIgnored"
 case "${1:-all}" in
   all) set -- $designs $twins ;;
   design) set -- $designs ;;

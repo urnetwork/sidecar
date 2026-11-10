@@ -3,9 +3,9 @@
 // applies by bridge.VerifyBaseKeyless (the signature, prev_chain, rows by rows_sha256 and size, and neither version
 // below the previous base's, so no base rolls back policy or the fold), its signer a config writer at S(my.n), then
 // its rows replace the state's and its tail re-applies keeping each verdict; statements and ticks apply by the
-// ordinary rules at S(my.n). So a rows-only verdict is a full reader's, save where a rule reads what only the head
-// holds: a ServiceSettings value, which a rows-only state reports unknown and the rule fails closed on (question
-// team-m2-02-self-admit-at-rows-only-readers).
+// ordinary rules at S(my.n). So a rows-only verdict is a full reader's: the settings a rule judges by, self_admit and
+// scim_signer, ride rows (DESIGN-DETAILS 5.2.3, config_settings.go), and only devices read the head-only ones, which a
+// rows-only state reports unknown.
 //
 // Gates read the log from wherever is cheapest: the verified read cache {acl_<networkId>}e when it records {acl_}v's
 // current value and holds every position they need, else proj/ on the first metadata cluster (§7.9, ACL-M2-13's
@@ -75,7 +75,7 @@ func (self *ConfigRunError) Unwrap() error {
 }
 
 // A log at S(0) for a reader that holds no config key: NewConfigLog's, whose bases skip the config head's check and
-// whose states report ServiceSettings unknown. A gate starts one at the network's newest base with
+// whose states report the head-only ServiceSettings unknown. A gate starts one at the network's newest base with
 // RestoreConfigLogRowsOnly instead, since entries before the retention point are gone.
 func NewConfigLogRowsOnly(settings *ConfigLogSettings, signedGenesis []byte) (*ConfigLog, error) {
 	self, err := NewConfigLog(settings, signedGenesis)
@@ -119,7 +119,8 @@ func RestoreConfigLogRowsOnly(settings *ConfigLogSettings, retained *ConfigRetai
 	return self, nil
 }
 
-// Whether this log holds no config key: its bases skip the head check and its states report ServiceSettings unknown.
+// Whether this log holds no config key: its bases skip the head check and its states report the head-only
+// ServiceSettings unknown.
 func (self *ConfigLog) RowsOnly() bool {
 	return self.rowsOnly
 }

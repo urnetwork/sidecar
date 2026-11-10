@@ -5,7 +5,8 @@
 //
 // §7's rows, members, sidecars, Delegations and registered keys, are what the log's records give at the head's
 // folded_through, so the caller passes them: a writer from its state at its fold, a reader from its own log
-// (ConfigCompileRows). The acl part is §8's, from the head's policy, tags, groups and files beside the log's acl
+// (ConfigCompileRows). The settings are the head's: its ServiceSettings' self_admit and scim_signer, always present,
+// the zero value for none (DESIGN-DETAILS 5.2.2). The acl part is §8's, from the head's policy, tags, groups and files beside the log's acl
 // statements, and ACL's CompileAcl gives it (ACL-M2-04). C-05 has this task declare the seam and ACL register the
 // compile: until one is registered, CompileProjectionRows refuses, so no base compiles without its acl part.
 //
@@ -106,8 +107,12 @@ func CompileProjectionRows(head *ConfigHead, rows *ConfigCompileRows) ([]byte, e
 	if err != nil {
 		return nil, fmt.Errorf("config compile: acl: %w", err)
 	}
+	settings, _, err := head.ServiceSettings()
+	if err != nil {
+		return nil, fmt.Errorf("config compile: service_settings: %w", err)
+	}
 
-	projection := &bridge.ProjectionRows{Acl: aclBytes}
+	projection := &bridge.ProjectionRows{Acl: aclBytes, Settings: ConfigProjectionSettings(settings)}
 	var sortErr error
 	projection.Members = configSortRows(rows.Members, (*bridge.MemberRow).GetMemberId, "members", &sortErr)
 	projection.Sidecars = configSortRows(rows.Sidecars, (*bridge.SidecarRow).GetSidecarId, "sidecars", &sortErr)
