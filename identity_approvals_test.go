@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"errors"
+	"slices"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -108,10 +109,19 @@ func TestParkedDeviceStaysParkedOnDeny(t *testing.T) {
 	if err := world.sidecar.DecideApproval(t.Context(), item.ApprovalId, SidecarDecisionApprove, SidecarActConfirmed, nil); !errors.Is(err, ErrSidecarApprovalUnknown) {
 		t.Errorf("a decided item decided again: %v", err)
 	}
-	// revoke is RevokeDevice's, and refuses until it lands, the item staying open
+	// revoke is RevokeDevice's (TestAlarmRevokeAnswerRunsRevokeDevice): on a sidecar that is not past enrollment it
+	// refuses, signing nothing, the item staying open
 	_, other := openTestAdmissionAlarm(t, world)
-	if err := world.sidecar.DecideApproval(t.Context(), other.ApprovalId, SidecarDecisionRevoke, SidecarActConfirmed, nil); !errors.Is(err, ErrSidecarApprovalUnbuilt) {
+	if err := world.sidecar.DecideApproval(t.Context(), other.ApprovalId, SidecarDecisionRevoke, SidecarActConfirmed, nil); !errors.Is(err, ErrSidecarDevicesPrecondition) {
 		t.Errorf("revoke: %v", err)
+	}
+	if posted := postedStatements(t, world.sidecar); len(posted) != 0 {
+		t.Errorf("a refused revoke signed %d statements", len(posted))
+	}
+	if items, err := world.sidecar.PendingApprovals(); err != nil || !slices.ContainsFunc(items, func(pending *SidecarApprovalItem) bool {
+		return pending.ApprovalId == other.ApprovalId
+	}) {
+		t.Errorf("the refused item closed: %v", err)
 	}
 }
 

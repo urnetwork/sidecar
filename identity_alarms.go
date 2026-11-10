@@ -149,6 +149,7 @@ func (self *Sidecar) authorityInstalled(authority SidecarAuthority) {
 	remove := authority.AddEntryCallback(func(entry *SidecarAuthorityEntry) {
 		self.applyRecoverySealEntry(authority, entry)
 		self.applyAlarmEntry(authority, entry)
+		self.applyRevokeEntry(authority, entry)
 	})
 	func() {
 		self.alarms.stateLock.Lock()
