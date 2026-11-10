@@ -3,6 +3,10 @@
 // /dev/tty, never through MCP. --leaked is for a bundle that leaked: what the Delegation's key admitted from --since on,
 // a log position or an RFC 3339 time the log has an entry at or after, parks (§7.9's cascade). Revoking the auth key at
 // api stops only that key's bearer, and every copy of a bundle admits until this lands (D-TEAM-22).
+//
+// A forwarding Delegation (TEAM-M8-01; D-TEAM-33; owner decision 197) is listed by the sidecar it forwards for and
+// where a newer one superseded it, never by admissions or agents, since it admits nothing. Its revocation takes no
+// --leaked: it admitted nothing to park, and the log refuses one that carries a since_n.
 
 package main
 
@@ -64,6 +68,10 @@ type urDelegationItem struct {
 	NotAfter       int64        `json:"not_after_ms,omitempty"`
 	AdmissionsLeft uint32       `json:"admissions_left"`
 	AgentIds       []sidecar.Id `json:"agent_ids"`
+	// For a forwarding Delegation, the sidecar it forwards for; absent for any other.
+	ForwardSidecarId *sidecar.Id `json:"forward_sidecar_id,omitempty"`
+	// The position of that sidecar's newer forwarding Delegation, which superseded this one; absent for none.
+	SupersededAt uint64 `json:"superseded_at,omitempty"`
 }
 
 type urDelegationsReply struct {
@@ -106,6 +114,14 @@ func urAdminDelegationMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 					if !state.NotAfter.IsZero() {
 						item.NotAfter = state.NotAfter.UnixMilli()
 					}
+					if len(state.ForwardSidecarId) != 0 {
+						forwardSidecarId, err := sidecar.IdFromBytes(state.ForwardSidecarId)
+						if err != nil {
+							return nil, fmt.Errorf("Delegation %x names a malformed forwarding sidecar: %w", state.DelegationId, err)
+						}
+						item.ForwardSidecarId = &forwardSidecarId
+						item.SupersededAt = state.SupersededAt
+					}
 					reply.Items = append(reply.Items, item)
 				}
 				return reply, nil
@@ -133,11 +149,21 @@ func urAdminDelegationMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 	}
 }
 
-// One Delegation's line.
+// One Delegation's line. A forwarding Delegation's names its sidecar in place of admissions and agents.
 func urDelegationLine(item *urDelegationItem) string {
 	key := "key live"
 	if item.KeyDroppedAt != 0 {
 		key = fmt.Sprintf("key dropped at %d", item.KeyDroppedAt)
+	}
+	if item.ForwardSidecarId != nil {
+		standing := "live"
+		switch {
+		case item.EndedAt != 0:
+			standing = fmt.Sprintf("ended at %d", item.EndedAt)
+		case item.SupersededAt != 0:
+			standing = fmt.Sprintf("superseded at %d", item.SupersededAt)
+		}
+		return fmt.Sprintf("%s  from %d  %s  forwards for sidecar %s  %s", item.DelegationId, item.At, key, item.ForwardSidecarId, standing)
 	}
 	authority := fmt.Sprintf("admits %d more", item.AdmissionsLeft)
 	if item.NotAfter != 0 {
@@ -167,7 +193,17 @@ func runUrAdminDelegations(ctx context.Context, cli *urCli, options docopt.Opts)
 	delegationId, _ := options.String("<delegation_id>")
 	params := &urDelegationRevokeParams{DelegationId: strings.ToLower(delegationId), Leaked: urOptionBool(options, "--leaked")}
 	since, _ := options.String("--since")
+	var item *urDelegationItem
+	for _, candidate := range reply.Items {
+		if candidate.DelegationId == params.DelegationId {
+			item = candidate
+		}
+	}
 	switch {
+	case item == nil:
+		return errors.New("no such Delegation")
+	case item.ForwardSidecarId != nil && params.Leaked:
+		return errors.New("a forwarding Delegation admitted nothing, so its revocation takes no --leaked")
 	case since != "" && !params.Leaked:
 		return errors.New("--since goes with --leaked")
 	case params.Leaked && since == "":
@@ -181,21 +217,20 @@ func runUrAdminDelegations(ctx context.Context, cli *urCli, options docopt.Opts)
 			return fmt.Errorf("--since takes a log position or an RFC 3339 time: %q", since)
 		}
 	}
-	var item *urDelegationItem
-	for _, candidate := range reply.Items {
-		if candidate.DelegationId == params.DelegationId {
-			item = candidate
-		}
-	}
-	if item == nil {
-		return errors.New("no such Delegation")
-	}
 	tty, err := cli.openTty()
 	if err != nil {
 		return fmt.Errorf("%w: %w", errUrNoTty, err)
 	}
 	fmt.Fprintln(tty, "revoke Delegation: "+urDelegationLine(item))
-	fmt.Fprintln(tty, "  it admits nothing more, and its shared reader key retires; its agents read on by their own ReaderWraps")
+	switch {
+	case item.ForwardSidecarId != nil && (item.EndedAt != 0 || item.SupersededAt != 0):
+		fmt.Fprintln(tty, "  a forwarding Delegation no longer live: revoking it changes nothing live")
+	case item.ForwardSidecarId != nil:
+		fmt.Fprintln(tty, "  a forwarding Delegation: hosts deny its key from this entry on, and that device's VPN component")
+		fmt.Fprintln(tty, "  forwards again only after a new setup the person confirms in the app")
+	default:
+		fmt.Fprintln(tty, "  it admits nothing more, and its shared reader key retires; its agents read on by their own ReaderWraps")
+	}
 	if params.Leaked {
 		fmt.Fprintln(tty, "  for a leaked bundle: what it admitted from "+since+" on parks")
 	}
