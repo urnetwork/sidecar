@@ -155,12 +155,17 @@ type EvsResolution struct {
 // it resolves as its statement's push; a reseed counts as committed. head is the ref's head as the caller read it
 // from the cluster, nil when the ref has none.
 func (self *EvsEngine) ResolvePush(ctx context.Context, cluster sidecar.BlobCluster, record *sidecar.EvsBatchRecord, head *protocol.EvsHead) (*EvsResolution, error) {
+	return ResolveBatchRecord(ctx, record, head, func(ctx context.Context, page uint64) (*LogPage, error) {
+		return self.readLogPage(ctx, cluster, record.RepoId, record.RefId, page)
+	})
+}
+
+// A batch record's statement: a push's, part's, seal's or reseed's first item, parsed in either format.
+func EvsBatchRecordStatement(record *sidecar.EvsBatchRecord) (*sidecar.EvsStatement, error) {
 	var statementBytes []byte
 	var err error
 	switch record.Type {
-	case protocol.EvsBatchRecordType_EVS_BATCH_RESEED:
-		return &EvsResolution{State: EvsResolveCommitted}, nil
-	case protocol.EvsBatchRecordType_EVS_BATCH_PUSH:
+	case protocol.EvsBatchRecordType_EVS_BATCH_PUSH, protocol.EvsBatchRecordType_EVS_BATCH_RESEED:
 		statementBytes, _, err = sidecar.ParseEvsPushRecordBody(record.Body)
 	case protocol.EvsBatchRecordType_EVS_BATCH_PART:
 		statementBytes, _, _, _, err = sidecar.ParseEvsPartRecordBody(record.Body)
@@ -172,16 +177,22 @@ func (self *EvsEngine) ResolvePush(ctx context.Context, cluster sidecar.BlobClus
 	if err != nil {
 		return nil, err
 	}
-	statement, err := sidecar.ParseEvsStatementFormat2(statementBytes)
+	return sidecar.ParseEvsStatementFormat2(statementBytes)
+}
+
+// ResolvePush's rule for a caller that holds no engine, taskworker's evacuation: readPage reads one log page of the
+// record's ref, from log/ or, once packed, from its pack.
+func ResolveBatchRecord(ctx context.Context, record *sidecar.EvsBatchRecord, head *protocol.EvsHead, readPage func(ctx context.Context, page uint64) (*LogPage, error)) (*EvsResolution, error) {
+	if record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED {
+		return &EvsResolution{State: EvsResolveCommitted}, nil
+	}
+	statement, err := EvsBatchRecordStatement(record)
 	if err != nil {
 		return nil, err
 	}
 	push := statement.Push
 	gitMode := protocol.EvsRefMode(push.GetRefMode()) == protocol.EvsRefMode_EVS_REF_GIT
-	standing, err := EvsPushStandingIn(ctx, head, record.PushId, statement.Sha256, push.GetBaseVersion(), gitMode,
-		func(ctx context.Context, page uint64) (*LogPage, error) {
-			return self.readLogPage(ctx, cluster, record.RepoId, record.RefId, page)
-		})
+	standing, err := EvsPushStandingIn(ctx, head, record.PushId, statement.Sha256, push.GetBaseVersion(), gitMode, readPage)
 	if err != nil {
 		return nil, err
 	}

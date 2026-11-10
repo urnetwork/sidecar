@@ -237,6 +237,25 @@ func decodeEvsNewObjectOf(item []byte, format2 bool) (*EvsNewObject, error) {
 	return object, nil
 }
 
+// A new-objects section's items, each held to its shape in either format: what a stored record's payload or a part's
+// sections list as new, which evacuation reads to index a kept record's segments and to delete a dead record's
+// slots (§11.13's resolve and index rows).
+func EvsDecodeNewObjects(sectionBytes []byte) ([]*EvsNewObject, error) {
+	items, err := EvsPayloadItems(sectionBytes)
+	if err != nil {
+		return nil, err
+	}
+	objects := make([]*EvsNewObject, 0, len(items))
+	for _, item := range items {
+		object, err := decodeEvsNewObjectOf(item, true)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, object)
+	}
+	return objects, nil
+}
+
 // A key an ERASE or CLOSURE names (§11.12).
 type EvsErasedKey struct {
 	SlotId   Id

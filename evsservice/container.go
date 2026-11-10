@@ -218,6 +218,75 @@ func containerRecordType(recordBytes []byte) (protocol.EvsBatchRecordType, error
 	return recordType, nil
 }
 
+// One item of a stored container: a record with the version it committed, or a log page with its page.
+type ContainerItem struct {
+	// containerItemRecord or containerItemLogPage.
+	LogPage bool
+	RefId   sidecar.Id
+	// A record's version, a log page's page.
+	Number uint64
+	// Where Bytes starts in the container, which its pidx/ entry names.
+	Offset uint64
+	Bytes  []byte
+}
+
+// A stored container's kind and items, in its order, held to the layout BuildContainer writes: its magic, format,
+// item count and items that tile the bytes, a parcel holding records only. Evacuation reads a parcel this way to
+// repack it (§11.13's move row). Item bytes alias containerBytes.
+func ParseContainer(containerBytes []byte) (protocol.EvsContainerKind, []*ContainerItem, error) {
+	invalid := func(format string, args ...any) (protocol.EvsContainerKind, []*ContainerItem, error) {
+		return 0, nil, fmt.Errorf("%w: %s", ErrEvsContainerInvalid, fmt.Sprintf(format, args...))
+	}
+	if len(containerBytes) < containerHeaderByteCount {
+		return invalid("%d bytes", len(containerBytes))
+	}
+	var kind protocol.EvsContainerKind
+	switch {
+	case bytes.HasPrefix(containerBytes, containerPackMagic):
+		kind = protocol.EvsContainerKind_EVS_CONTAINER_PACK
+	case bytes.HasPrefix(containerBytes, containerParcelMagic):
+		kind = protocol.EvsContainerKind_EVS_CONTAINER_PARCEL
+	default:
+		return invalid("no container magic")
+	}
+	if containerBytes[4] != containerFormat1 || containerBytes[5] != 0 || containerBytes[6] != 0 || containerBytes[7] != 0 ||
+		!bytes.Equal(containerBytes[12:16], []byte{0, 0, 0, 0}) {
+		return invalid("format %d or reserved bytes set", containerBytes[4])
+	}
+	itemCount := binary.BigEndian.Uint32(containerBytes[8:12])
+	items := []*ContainerItem{}
+	at := containerHeaderByteCount
+	for at < len(containerBytes) {
+		if len(containerBytes)-at < containerItemHeaderByteCount {
+			return invalid("an item header cut short")
+		}
+		itemKind := containerBytes[at]
+		if (itemKind != containerItemRecord && itemKind != containerItemLogPage) || containerBytes[at+1] != 0 || containerBytes[at+2] != 0 || containerBytes[at+3] != 0 {
+			return invalid("item kind %d", itemKind)
+		}
+		if itemKind == containerItemLogPage && kind != protocol.EvsContainerKind_EVS_CONTAINER_PACK {
+			return invalid("a log page in a parcel")
+		}
+		length := int(binary.BigEndian.Uint32(containerBytes[at+28 : at+32]))
+		start := at + containerItemHeaderByteCount
+		if len(containerBytes)-start < length {
+			return invalid("an item of %d bytes past the container", length)
+		}
+		items = append(items, &ContainerItem{
+			LogPage: itemKind == containerItemLogPage,
+			RefId:   sidecar.Id(containerBytes[at+4 : at+20]),
+			Number:  binary.BigEndian.Uint64(containerBytes[at+20 : at+28]),
+			Offset:  uint64(start),
+			Bytes:   containerBytes[start : start+length],
+		})
+		at = start + length
+	}
+	if uint64(len(items)) != uint64(itemCount) {
+		return invalid("%d items where the header states %d", len(items), itemCount)
+	}
+	return kind, items, nil
+}
+
 // pack/<repo>/<pack_id> or hp/<repo>/<parcel_id>.
 func (self *Container) Key(repoId sidecar.Id) string {
 	if self.Kind == protocol.EvsContainerKind_EVS_CONTAINER_PACK {

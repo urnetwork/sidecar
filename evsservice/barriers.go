@@ -141,6 +141,26 @@ const (
 	BarrierMigrateRaiseAfter  = "evs.migrate.raise.after"
 )
 
+// EVSB-M2-11: hourly evacuation (§11.13's resolve, move and delete rows; I-EVS-7). The order a schedule holds:
+// container, then each pidx/ entry, then the delete of what they replace, then a minute's batches.
+const (
+	// Around the fence of a pending record's ref, keyed by <repo>:<ref>. The head's own CAS keeps EVS1-M2-08's names.
+	BarrierEvacuateFenceBefore = "evs.evacuate.fence.before"
+	BarrierEvacuateFenceAfter  = "evs.evacuate.fence.after"
+	// Around a pack's or parcel's PUT, keyed by the repo.
+	BarrierEvacuateContainerPutBefore = "evs.evacuate.container_put.before"
+	BarrierEvacuateContainerPutAfter  = "evs.evacuate.container_put.after"
+	// Around each pidx/ entry's create, keyed by <repo>:<ref>.
+	BarrierEvacuatePidxPutBefore = "evs.evacuate.pidx_put.before"
+	BarrierEvacuatePidxPutAfter  = "evs.evacuate.pidx_put.after"
+	// Around the delete of each parcel a pack replaced, its entries first, keyed by the repo.
+	BarrierEvacuateParcelDeleteBefore = "evs.evacuate.parcel_delete.before"
+	BarrierEvacuateParcelDeleteAfter  = "evs.evacuate.parcel_delete.after"
+	// Around each batch's DELETE, keyed by the batch.
+	BarrierEvacuateBatchDeleteBefore = "evs.evacuate.batch_delete.before"
+	BarrierEvacuateBatchDeleteAfter  = "evs.evacuate.batch_delete.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)
