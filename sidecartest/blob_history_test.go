@@ -403,3 +403,33 @@ func TestRecorderKeepsWhatAListAnswered(t *testing.T) {
 		t.Error("a LIST showing a deleted key passed")
 	}
 }
+
+// A DELETE that named its object and got a 412 took no effect (§19.6): FI-30's oracle holds the next
+// read to the object that stood, and refuses a history in which the refused DELETE removed it.
+func TestHistoryTakesARefusedNamedDeleteAsNoEffect(t *testing.T) {
+	fixture := newRecordedFixture(t)
+	ctx := t.Context()
+	if _, err := fixture.recorded.PutIfNoneMatch(ctx, "seg/r/s", []byte("v1"), nil); err != nil {
+		t.Fatal(err)
+	}
+	older := sidecar.WithBlobUnmodified(ctx, fixture.clock.Now().Add(-49*time.Hour))
+	if err := fixture.recorded.Delete(older, "seg/r/s"); !errors.Is(err, sidecar.ErrBlobPrecondition) {
+		t.Fatalf("a DELETE naming an older object: %v", err)
+	}
+	if _, err := fixture.recorded.Head(ctx, "seg/r/s"); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckBlobHistory(fixture.recorder.History(), nil); err != nil {
+		t.Error(err)
+	}
+
+	start := DefaultClockStart()
+	removed := historyAt(start,
+		&BlobHistoryEntry{Op: BlobHistoryPutIfNoneMatch, WriteEtag: "e1", Outcome: BlobOutcomeOk},
+		&BlobHistoryEntry{Op: BlobHistoryDelete, Outcome: BlobOutcomePrecondition},
+		&BlobHistoryEntry{Op: BlobHistoryHead, Outcome: BlobOutcomeNotFound},
+	)
+	if err := CheckBlobHistory(removed, nil); err == nil {
+		t.Error("a refused DELETE that removed its object passed")
+	}
+}

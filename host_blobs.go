@@ -46,7 +46,8 @@ var (
 	// gone, and §11.8's read row finds the record in pidx/.
 	ErrBlobNotFound = errors.New("blob not found")
 	// A PUT's condition failed and nothing was written: an If-None-Match on a key that exists, or an
-	// If-Match on one that has moved or does not exist.
+	// If-Match on one that has moved or does not exist. Or a Delete that named its object with
+	// WithBlobUnmodified found a newer one under its key, and deleted nothing.
 	ErrBlobPrecondition = errors.New("blob precondition failed")
 	// §19.6's settle holds the key, so the request waited and got a 503 and took no effect. A write
 	// before it on the key is still settling: the caller retries later, and a key held past a minute
@@ -113,6 +114,41 @@ func WithBlobDeadline(ctx context.Context, deadline time.Time) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, blobDeadlineKey{}, deadline)
+}
+
+// The context key WithBlobUnmodified stores under.
+type blobUnmodifiedKey struct{}
+
+// How far past the time a Delete names an object's LastModified may be and still be the object it
+// means: under a second, since a caller may pass a time it read from a HEAD, whose Last-Modified has
+// whole seconds (§19.6). The store's rule, so a format value and not a setting.
+const BlobUnmodifiedSlack = 1 * time.Second
+
+// ctx for a Delete that names its object: lastModified is the LastModified its caller read, from a
+// LIST or a HEAD, of the object it means to delete. The store compares under the key's lock, and an
+// object stored BlobUnmodifiedSlack or more after that time is another object, so the Delete answers
+// ErrBlobPrecondition and deletes nothing (§19.6, x-ur-if-unmodified-ms). A key already gone is nil, as
+// for any Delete.
+//
+// This is how a deletion decided on a listing takes only what was listed (§11.13): orphan GC, the
+// nightly pass and the sweep send it, so a run that wakes late, or beside its successor, removes the
+// object it judged or nothing, however a key was written since. A Delete on a ctx without it is
+// unconditional, as a marker's collection and the versionless purge are.
+func WithBlobUnmodified(ctx context.Context, lastModified time.Time) context.Context {
+	return context.WithValue(ctx, blobUnmodifiedKey{}, lastModified)
+}
+
+// The LastModified a Delete on ctx names, and whether it names one: what an implementation sends as
+// x-ur-if-unmodified-ms, in Unix ms.
+func BlobUnmodified(ctx context.Context) (lastModified time.Time, ok bool) {
+	lastModified, ok = ctx.Value(blobUnmodifiedKey{}).(time.Time)
+	return lastModified, ok
+}
+
+// Whether a Delete naming named must refuse an object stored at lastModified: the store's rule, in
+// whole ms, which every implementation and T2's fake keep alike.
+func BlobUnmodifiedRefuses(named time.Time, lastModified time.Time) bool {
+	return named.UnixMilli()+BlobUnmodifiedSlack.Milliseconds() <= lastModified.UnixMilli()
 }
 
 // What a request issued at issued carries as x-ur-deadline-ms (Unix ms by the sender's clock):
@@ -261,8 +297,11 @@ type BlobCluster interface {
 	// (connect/CODESTYLE.md:135). Each has its Key, ByteCount, Etag and LastModified, never Metadata. A
 	// limit that is not positive is an error.
 	List(ctx context.Context, keyPrefix string, startAfter string, limit int) (objects []*BlobInfo, more bool, err error)
-	// Unconditional, since the store evaluates no precondition on a DELETE (§11.3), and nil for a key
-	// already gone (§11.13), so a HEAD first is what tells the two apart.
+	// Unconditional, since upstream's store evaluates no precondition on a DELETE (§11.3), unless ctx
+	// names the object with WithBlobUnmodified: §19.6's build then deletes only an object stored under
+	// BlobUnmodifiedSlack after that time, and answers ErrBlobPrecondition, deleting nothing, for a
+	// newer one. nil for a key already gone (§11.13), named or not, so a HEAD first is what tells the
+	// two apart.
 	Delete(ctx context.Context, key string) error
 }
 

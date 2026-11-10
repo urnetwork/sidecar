@@ -909,3 +909,49 @@ func TestPutImmutablePassesDefiniteRefusalsThrough(t *testing.T) {
 		t.Errorf("head: %v", err)
 	}
 }
+
+func TestWithBlobUnmodifiedNamesTheObject(t *testing.T) {
+	if _, ok := BlobUnmodified(context.Background()); ok {
+		t.Error("a plain context names an object")
+	}
+	listed := time.Unix(1000, 250_000_000)
+	ctx := WithBlobUnmodified(context.Background(), listed)
+	got, ok := BlobUnmodified(ctx)
+	if !ok || !got.Equal(listed) {
+		t.Errorf("named %v, %t", got, ok)
+	}
+	// a deadline and a name ride one context without touching each other
+	ctx = WithBlobDeadline(ctx, time.Unix(2000, 0))
+	if got, ok := BlobUnmodified(ctx); !ok || !got.Equal(listed) {
+		t.Errorf("after a deadline: named %v, %t", got, ok)
+	}
+	if deadline := BlobRequestDeadline(ctx, time.Unix(1990, 0), time.Minute); !deadline.Equal(time.Unix(2000, 0)) {
+		t.Errorf("deadline %v", deadline)
+	}
+}
+
+// The store's rule (§19.6): an object stored a second or more after the time named is another object.
+func TestBlobUnmodifiedRefusesAnObjectStoredASecondLater(t *testing.T) {
+	named := time.UnixMilli(1_700_000_000_500)
+	cases := []struct {
+		stored  time.Duration
+		refused bool
+	}{
+		{stored: 0, refused: false},
+		{stored: -5 * time.Second, refused: false},
+		{stored: 500 * time.Millisecond, refused: false},
+		{stored: 999 * time.Millisecond, refused: false},
+		{stored: 1 * time.Second, refused: true},
+		{stored: 49 * time.Hour, refused: true},
+	}
+	for _, c := range cases {
+		if refused := BlobUnmodifiedRefuses(named, named.Add(c.stored)); refused != c.refused {
+			t.Errorf("an object stored %v after the time named: refused %t", c.stored, refused)
+		}
+	}
+	// a time read from a HEAD has whole seconds, and still names its object
+	stored := time.UnixMilli(1_700_000_000_999)
+	if BlobUnmodifiedRefuses(stored.Truncate(time.Second), stored) {
+		t.Error("a LastModified cut to the second no longer names its object")
+	}
+}
