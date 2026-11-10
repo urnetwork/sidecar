@@ -235,7 +235,12 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	for _, route := range self.servedRoutes {
 		mux.HandleFunc(route.Method+" "+route.Pattern, self.guard(route))
 	}
-	self.handler = mux
+	// every request's and reply's body bytes count as the caller's transfer (transfer_meter.go)
+	var usage *UsageBatcher
+	if deps.Uploads != nil {
+		usage = deps.Uploads.Usage
+	}
+	self.handler = MeterTransfer(mux, usage, nil, log)
 	go self.run()
 	return self, nil
 }
@@ -467,6 +472,7 @@ func (self *EvsEngine) authenticate(request *EvsRequest) bool {
 		return false
 	}
 	request.Principal = principal
+	meterTransferCaller(request.Writer, principal.NetworkId)
 	if principal.SidecarId == nil {
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
 		return false

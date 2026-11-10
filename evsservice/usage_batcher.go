@@ -1,6 +1,7 @@
 // evs's usage producer (§20.6, §11.13's transfer row; EVSB-M2-15): one per evs process over the root's
-// QuotaUsageBatcher under producer evs, which EVS1-M2-12's step 8 and EVSB-M2-09's uploads feed. Stored-byte
-// deltas go to the repo's network and transfer to the caller's, on meter evs. Every 60 s window goes out as
+// QuotaUsageBatcher under producer evs, which EVS1-M2-12's step 8 and EVSB-M2-09's uploads feed with stored bytes
+// and the router's meter with transfer (transfer_meter.go). Stored-byte deltas go to the repo's network and
+// transfer to the caller's, on meter evs. Every 60 s window goes out as
 // batches whose id is the first 16 B of SHA-256(producerInstanceId || windowSeq), retried under that id for at
 // most 10 min and then dropped, counted and alerted, so api applies each once: under-billing, never
 // double-billing (FI-13 (a)). Drain sends the open window at once, as SIGTERM asks. The index rows land with
