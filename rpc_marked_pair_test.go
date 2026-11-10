@@ -4,10 +4,11 @@
 // connect's window ledger: bit-1 Hellos mark before sending and on receipt, adopting as connect asks, and
 // a repeat retires nothing; the Ping grid holds 55 minutes and the Hello stands past HelloCacheTimeout;
 // each side touches the session as of the frame that showed it live, the indexer before its Pong,
-// however late its worker runs; a 3-minute suspension re-establishes by a Hello at the next foreground;
-// a 3-minute drop in the foreground re-establishes by the search before the next tick; a failover search
-// opens its own window; a window ending in the background clears the mode and the next search marks
-// again; and HeadCheck's round counts the first-choice indexer in the foreground.
+// however late its worker runs; a 3-minute suspension sends nothing, even for a wake armed as it began,
+// and re-establishes by a Hello at the next foreground, as does a foreground return the keepalive never
+// saw begin; a 3-minute drop in the foreground re-establishes by the search before the next tick; a
+// failover search opens its own window; a window ending in the background clears the mode and the next
+// search marks again; and HeadCheck's round counts the first-choice indexer in the foreground.
 //
 // A PeerWindow call the fake holds stands for a goroutine the scheduler left behind, so a test forces the
 // orders a loaded machine can run in, among them the one tip-check's full suite found at 71679a2 and
@@ -32,38 +33,22 @@ import (
 type testEvents struct {
 	stateLock sync.Mutex
 	events    []string
-	// each event as recorded, for a test that waits on one
-	recorded chan string
 }
 
 func newTestEvents() *testEvents {
-	return &testEvents{recorded: make(chan string, 1024)}
+	return &testEvents{}
 }
 
 func (self *testEvents) add(event string) {
 	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
 	self.events = append(self.events, event)
-	self.stateLock.Unlock()
-	select {
-	case self.recorded <- event:
-	default:
-	}
 }
 
 func (self *testEvents) list() []string {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return slices.Clone(self.events)
-}
-
-// Waits for an event equal to want, failing after testSubprotocolAwaitTimeout.
-func (self *testEvents) await(t *testing.T, want string) {
-	t.Helper()
-	for {
-		if testAwait(t, self.recorded, want) == want {
-			return
-		}
-	}
 }
 
 // connect's C19 ledger faked: who is in the mode, the send window each opened at its mark, and every call
@@ -363,9 +348,42 @@ func TestKeepaliveGridHolds55Minutes(t *testing.T) {
 	}
 }
 
-// A 3-minute suspension: the background sends nothing, and the next foreground re-establishes the lost
-// session by a Hello at once.
+// A 3-minute suspension: the background sends nothing, even with the move into it landing while the
+// keepalive reads the window for its first wake and the suspension's first minute passing that wake
+// before the loop looks at it; and the next foreground re-establishes the lost session by a Hello at
+// once, before any Ping. Each read of the app's sends follows a wait the keepalive armed, so the read
+// holds everything the loop sent before it.
 func TestSuspensionReestablishesAtTheNextForeground(t *testing.T) {
+	world := newTestMarkedWorld(t)
+	app := world.app
+	indexer := world.indexer
+	app.subprotocol.MarkSearchPeer(Id(indexer.clientId))
+	if err := app.subprotocol.EnsureHello(t.Context(), Id(indexer.clientId)); err != nil {
+		t.Fatal(err)
+	}
+	sentBefore := len(app.sent())
+	hold := app.peerWindows.holdPeerWindow(t, indexer.clientId)
+	app.subprotocol.SetForeground(true)
+	testAwait(t, hold.held, "the keepalive's first wake")
+	app.subprotocol.SetForeground(false)
+	step := app.settings.MarkedKeepaliveInterval
+	app.clock.Advance(step)
+	indexer.clock.Advance(step)
+	hold.free()
+	testAwaitKeepaliveMark(t, app, 1)
+	app.clock.Advance(3*time.Minute - step)
+	indexer.clock.Advance(3*time.Minute - step)
+	app.subprotocol.SetForeground(true)
+	testAwaitKeepaliveMark(t, app, 2)
+	if types := testEnvelopeTypes(app.sent()[sentBefore:]); !slices.Equal(types, []string{"HELLO"}) {
+		t.Errorf("sent from the suspension's start on: %v", types)
+	}
+}
+
+// A move into the foreground the keepalive never sees as one, its tick waiting out a lost Ping's Pong
+// through the whole background, still re-establishes the lost session by a Hello at once, not at the
+// next tick.
+func TestForegroundReturnDuringAPingReestablishesAtOnce(t *testing.T) {
 	world := newTestMarkedWorld(t)
 	app := world.app
 	indexer := world.indexer
@@ -375,18 +393,25 @@ func TestSuspensionReestablishesAtTheNextForeground(t *testing.T) {
 	}
 	app.subprotocol.SetForeground(true)
 	testAwaitKeepaliveMark(t, app, 1)
-	app.subprotocol.SetForeground(false)
 	sentBefore := len(app.sent())
-	app.clock.Advance(3 * time.Minute)
-	indexer.clock.Advance(3 * time.Minute)
-	if len(app.sent()) != sentBefore {
-		t.Errorf("a suspended app sent %d frames", len(app.sent())-sentBefore)
-	}
-	from := len(app.windowEvents.list())
+	// the first tick's Ping is lost, and the tick waits on its Pong
+	app.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
+		return nil
+	})
+	waitCount, _ := app.clock.waitCount.Get()
+	step := app.settings.MarkedKeepaliveInterval
+	indexer.clock.Advance(step)
+	app.clock.Advance(step)
+	app.clock.awaitWaitCount(waitCount + 1)
+	// the host suspends and returns while the tick waits, and the suspension outlasts the session
+	app.subprotocol.SetForeground(false)
 	app.subprotocol.SetForeground(true)
-	app.windowEvents.await(t, "send HELLO indexer")
-	if testEventIndex(app.windowEvents.list(), "send PING indexer", from) >= 0 {
-		t.Errorf("a Ping before the Hello that re-establishes")
+	app.setDeliver(nil)
+	indexer.clock.Advance(3 * time.Minute)
+	app.clock.Advance(3 * time.Minute)
+	testAwaitKeepaliveMark(t, app, 2)
+	if types := testEnvelopeTypes(app.sent()[sentBefore:]); !slices.Equal(types, []string{"PING", "HELLO"}) {
+		t.Errorf("sent from the lost Ping on: %v", types)
 	}
 }
 
@@ -488,14 +513,18 @@ func TestDropReestablishedByTheSearchBeforeTheNextTick(t *testing.T) {
 	})
 	app.clock.Advance(app.settings.MarkedSessionTimeout)
 	indexer.clock.Advance(app.settings.MarkedSessionTimeout)
+	tickFrom := len(app.windowEvents.list())
 	ticked := make(chan struct{})
 	waitCount, _ := app.clock.waitCount.Get()
 	go func() {
 		defer close(ticked)
 		app.subprotocol.keepaliveTick(indexer.clientId, true)
 	}()
-	app.windowEvents.await(t, "send HELLO indexer")
+	// the tick's Hello has gone into the drop once the tick waits on its answer
 	app.clock.awaitWaitCount(waitCount + 1)
+	if testEventIndex(app.windowEvents.list(), "send HELLO indexer", tickFrom) < 0 {
+		t.Errorf("the tick past the timeout sent no Hello: %v", app.windowEvents.list()[tickFrom:])
+	}
 	app.clock.Advance(app.settings.DefaultCallTimeout)
 	testAwait(t, ticked, "the tick's end")
 	if app.subprotocol.peerVerified(indexer.clientId) {
