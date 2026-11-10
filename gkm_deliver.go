@@ -523,7 +523,7 @@ func (self *gkmGroupManager) deliverLateInFlow(ctx context.Context, recipient st
 			// not tried: the same bytes go again
 			continue
 		case http.StatusPreconditionFailed:
-			return self.judgeLateWinner(state, top, wrapType, result.GetWinner())
+			return self.judgeLateWinner(state, pins.groupId, top, wrapType, result.GetWinner())
 		case http.StatusConflict:
 			// not the newest generation any more, or a key gkm no longer serves: the next hint asks again
 			return nil
@@ -536,9 +536,9 @@ func (self *gkmGroupManager) deliverLateInFlow(ctx context.Context, recipient st
 	return fmt.Errorf("%w: gkm gave no answer for a late delivery", ErrGkmUnavailable)
 }
 
-// Judges the delivery that holds a late delivery's path, as any member judges one it reads when it answers
-// wrap-pending (§10.9): a refused one is alarmed, and poisons nothing later.
-func (self *gkmGroupManager) judgeLateWinner(state GkmAuthView, top *gkmHeldGeneration, wrapType GkmWrapType, winner []byte) error {
+// Judges the delivery that holds a late delivery's path in groupId, as any member judges one it reads when it
+// answers wrap-pending (§10.9): a refused one is alarmed, and poisons nothing later.
+func (self *gkmGroupManager) judgeLateWinner(state GkmAuthView, groupId Id, top *gkmHeldGeneration, wrapType GkmWrapType, winner []byte) error {
 	client := self.client
 	signed := &bridge.Signed{}
 	if err := proto.Unmarshal(winner, signed); err != nil {
@@ -549,7 +549,7 @@ func (self *gkmGroupManager) judgeLateWinner(state GkmAuthView, top *gkmHeldGene
 		client.alarm(&GkmAlarm{Kind: GkmAlarmRefused, RepoId: self.repoId, Generation: top.generation.Rotate.GetGeneration(), Reason: GkmRefusalDelivery, Detail: "a delivery that does not verify"})
 		return nil
 	}
-	verdict, err := CheckDelivery(state, &GkmDeliveryCheckArgs{RepoId: self.repoId, Delivery: delivery, Generation: top.generation, Now: client.clock.Now()})
+	verdict, err := CheckDelivery(state, &GkmDeliveryCheckArgs{RepoId: self.repoId, Delivery: delivery, Generation: top.generation, GroupId: groupId, Now: client.clock.Now()})
 	if err != nil {
 		return err
 	}

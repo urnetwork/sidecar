@@ -7,7 +7,8 @@
 // pin; a re-form refused from a device that may not make one; a taken group id redrawn; a kill resumed; a repo
 // re-seeded as deleted taking the form and the ladder alone; a stalled general repo's group re-formed by its admin
 // while the old group stands, a member joining by its Welcome before any sync; a depositor's pin following the new
-// group along its chain; and a GenHead of the replaced group compared along the form.
+// group along its chain; a GenHead of the replaced group compared along the form; and a late delivery of a ladder
+// generation naming the new group (QD-074 rule 7).
 
 package sidecar_test
 
@@ -709,5 +710,75 @@ func TestAGenHeadComparesAcrossAReform(t *testing.T) {
 	}
 	if len(b.alarms) != 1 || b.alarms[0].Kind != sidecar.GkmAlarmHead || len(b.forks) != 1 {
 		t.Errorf("the fork's alarm and report: %+v %+v", b.alarms, b.forks)
+	}
+}
+
+// QD-074's rule 7: while a re-formed group's ladder stands and its re-former has not rotated past it, as while a
+// repo re-seeded as deleted waits for its restore, a holder's LATE delivery of the form's generation names the new
+// group, the path's, where gen/<g> names the old one; a new agent takes it as its first wrap through the new group,
+// and a delivery there that names the old group opens nothing.
+func TestALateDeliveryOfALadderGenerationNamesTheNewGroup(t *testing.T) {
+	world := newGkmReformWorld(t)
+	world.loseSite()
+	newGroupId, err := world.flows[world.a].client.ReformGroup(world.ctx, &sidecar.GkmReformArgs{RepoId: world.repoId, Reseed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := world.flows[world.b]
+	if err := b.client.SyncRepo(world.ctx, world.repoId); err != nil {
+		t.Fatalf("b adopts the re-form: %v", err)
+	}
+	d := world.flow(world.admit("d", sidecar.NewId()))
+	e := world.flow(world.admit("e", sidecar.NewId()))
+	world.grant(false, d.gkmWorldDevice, e.gkmWorldDevice)
+	tip := world.stateFor()
+
+	if err := b.client.DeliverFirstWrap(world.ctx, world.repoId, d.id); err != nil {
+		t.Fatalf("b's late delivery of generation 2: %v", err)
+	}
+	if err := d.client.SyncRepo(world.ctx, world.repoId); err != nil {
+		t.Fatalf("d takes its first wrap: %v", err)
+	}
+	if key, _, found, err := d.client.TestHeldGeneration(world.repoId, 2); err != nil || !found || key == nil || !bytes.Equal(key.Commitment(), world.storedCommitment(b, 2)) {
+		t.Fatalf("d holds no key of generation 2 through the new group: %v", err)
+	}
+	if groupId, _, generation, err := d.client.TestPins(world.repoId); err != nil || groupId != newGroupId || generation != 2 {
+		t.Errorf("d's pin: generation %d, %v", generation, err)
+	}
+	if key, err := d.client.RepoKey(world.ctx, world.repoId, 1); err != nil || key.Generation() != 1 {
+		t.Errorf("d walks the ladder down to generation 1: %v", err)
+	}
+	for _, flow := range []*gkmFlowDevice{b, d} {
+		if len(flow.alarms) != 0 {
+			t.Errorf("%s alarmed: %+v", flow.label, flow.alarms[0])
+		}
+	}
+
+	// the same generation's delivery under the new group's path, naming the old group
+	key2, err := b.client.RepoKey(world.ctx, world.repoId, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := sidecar.SealGkmDelivery(key2, &sidecar.GkmDeliveryArgs{
+		GroupId: world.oldGroupId, Type: sidecar.GkmWrapTypeReader, Recipient: e.id.Bytes(),
+		RecipientPublicKey: e.readerPrivateKeys[string(e.readerKeySha256)].PublicKey().Bytes(),
+		Kind:               sidecar.GkmDeliveryLate, Auth: tip.Pin(), Time: world.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := sidecar.SignGkmDelivery(body, sidecar.GkmWrapTypeReader, world.b.signer.Sign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := b.api.UploadWraps(world.ctx, world.repoId, newGroupId, 2, key2.Commitment(), &protocol.GkmWrapBatch{Deliveries: [][]byte{mustGkmSignedBytes(t, signed)}})
+	if err != nil || len(reply.GetResults()) != 1 || reply.GetResults()[0].GetStatus() != http.StatusCreated {
+		t.Fatalf("the delivery naming the old group was not stored: %v", err)
+	}
+	if err := e.client.SyncRepo(world.ctx, world.repoId); err != nil && !errors.Is(err, sidecar.ErrGkmKeyMissing) {
+		t.Fatalf("e's sync: %v", err)
+	}
+	if key, _, _, _ := e.client.TestHeldGeneration(world.repoId, 2); key != nil {
+		t.Errorf("a delivery under the new group naming the old one opened")
 	}
 }

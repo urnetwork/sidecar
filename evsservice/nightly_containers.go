@@ -2,9 +2,10 @@
 //
 //	unnamed  a pack or parcel whose id no pidx/ entry key of its repo names, once it is UnnamedContainerAge (25 h)
 //	         old by its LastModified and the cluster's horizon has passed every batch it could hold records of,
-//	         so that no evacuation can find its records in a batch again and reuse it: one DELETE naming its listed
-//	         LastModified (sidecar.WithBlobUnmodified), a 412 counted as replaced and never as deleted, a held key
-//	         or an unknown outcome left for the next night
+//	         so that no evacuation can find its records in a batch again and reuse it, and, for a pack, while the
+//	         repo has no parcel and no log page at log/ that a move could build the same bytes from again: one
+//	         DELETE naming its listed LastModified (sidecar.WithBlobUnmodified), a 412 counted as replaced and
+//	         never as deleted, a held key or an unknown outcome left for the next night
 //	idle     a repo whose oldest parcel content or unpacked log page would pass PackAge (7 d) before the next
 //	         pass is packed by evacuation's move with no kept records (Evacuator.PackIdleRepo), which also deletes
 //	         each parcel a pack already holds, its entries first, so a run killed between a pack's entries and its
@@ -182,8 +183,11 @@ func (self *NightlyPass) deleteUnnamed(ctx context.Context, cluster sidecar.Blob
 			candidates = append(candidates, &unnamed{object: parcel, cluster: cluster, parcel: true})
 		}
 	}
+	// a pack a killed move left is built again, byte for byte, by the next move of the same parcels and log pages,
+	// which reuses it on its 412 and then names it: while any stand, a run beside this one could be that move
+	rebuildable := 0 < len(listing.parcels) || 0 < len(listing.logPages)
 	for _, pack := range listing.packs {
-		if containerId, ok := nightlyContainerId(packKeyPrefix+repoHex+"/", pack.Key); ok && !named[containerId] && due(pack) {
+		if containerId, ok := nightlyContainerId(packKeyPrefix+repoHex+"/", pack.Key); ok && !named[containerId] && due(pack) && !rebuildable {
 			candidates = append(candidates, &unnamed{object: pack, cluster: segmentCluster})
 		}
 	}
