@@ -35,6 +35,7 @@ import (
 	cryptorand "crypto/rand"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -260,6 +261,9 @@ func (self *EvsRepo) sendSealed(ctx context.Context, sealed *EvsSealedWrite, reb
 			return pushId, nil, err
 		}
 		reply, err := self.sendPush(ctx, attempt)
+		if err == nil {
+			self.client.epochs.noteCommitted(self.repoId, sealed.Plan.RefId, reply.GetVersion())
+		}
 		if !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH) {
 			return pushId, reply, err
 		}
@@ -273,13 +277,31 @@ func (self *EvsRepo) sendSealed(ctx context.Context, sealed *EvsSealedWrite, reb
 	}
 }
 
+// A test's hook on a retoken's floors once the refusal lowered them, nil outside tests: what DESIGN-DETAILS 9.6's
+// 9.1 C test forgets the floors with, to show the creation that then lands.
+var evsRetokenFloorsHook func(plan *EvsWritePlan)
+
 // The retoken row of the file header, on a push sealed refused 412 PATH_EPOCH.
 func (self *EvsRepo) retoken(ctx context.Context, sealed *EvsSealedWrite) error {
 	plan := sealed.Plan
 	plan.lowerFloors(plan.PathEpoch)
+	if evsRetokenFloorsHook != nil {
+		evsRetokenFloorsHook(plan)
+	}
 	head, err := self.readHeadPast(ctx, plan.RefId, plan.PathEpoch)
 	if err != nil {
 		return err
+	}
+	if slices.ContainsFunc(plan.Paths, (*EvsPlannedPath).creates) {
+		// a creation on a blocking ref whose pressure is immediate again waits, as the planner's does
+		quiet, err := self.quiet(ctx, &evsRefEpoch{refId: plan.RefId, epoch: head.Head.GetPathEpoch(), version: head.Version,
+			generation: head.Head.GetGeneration(), refKind: plan.RefKind})
+		if err != nil {
+			return err
+		}
+		if !quiet {
+			return ErrEvsPathEpochDue
+		}
 	}
 	if err := plan.Retoken(ctx, head); err != nil {
 		return err

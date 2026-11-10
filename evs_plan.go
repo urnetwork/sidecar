@@ -21,9 +21,16 @@
 // in batches of 64 paths, the push based on the first batch's head. Where M10's index writer joins (§11.20) is the
 // client's EvsWritePlanHook, run on every plan before it is sealed.
 //
+// Path epochs (DESIGN-DETAILS 9.2.5). The plan reads every path by 9.2.4's rules and takes each one's floor from that
+// read. A creation is planned only where the read found the path absent, looked up in its parent's table when it has
+// no floor, and on a blocking ref under immediate pressure not at all (ErrEvsPathEpochDue, no token of it sent). A
+// change names its path in the current epoch and, as source paths, in each listed source at or above its floor; a
+// removal lowers the path's floor to its row's epoch and its parent's delta removes the child's token in the current
+// epoch and in each such source, so a fold drops a carried row too. A push refused 412 PATH_EPOCH is made again by
+// Retoken.
+//
 // Not built here, and failing closed: writes to record-class repos, whose records name slot keys (EVS1-M2-29, -30
-// and §15, §16's writers); rename and copy, which keep a file's chain under another path through the reuse list;
-// writes while the head lists source epochs, whose changes carry source paths (EVS1-M2-28).
+// and §15, §16's writers); rename and copy, which keep a file's chain under another path through the reuse list.
 //
 // On every leg. Not safe for concurrent use: one plan at a time per write.
 
@@ -35,6 +42,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"google.golang.org/protobuf/proto"
@@ -268,9 +276,6 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 					Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
 					Generation: args.Generation, keys: result.keys, floors: map[string]uint64{},
 				}
-				if 0 < len(head.GetPathEpoch().GetSources()) {
-					return fmt.Errorf("%w: a write while the head lists source epochs (EVS1-M2-28)", ErrEvsWriteNotBuilt)
-				}
 				if err := plan.setRef(head, args.RefName, self.client.args.Identity().SidecarId); err != nil {
 					return err
 				}
@@ -280,13 +285,13 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 				if plan.nameKey, err = result.keys.manifest(ctx, plan.PathEpoch); err != nil {
 					return err
 				}
-			} else if evsCurrentEpoch(head.GetPathEpoch()) != plan.PathEpoch || 0 < len(head.GetPathEpoch().GetSources()) {
+			} else if !evsSamePathEpoch(head.GetPathEpoch(), plan.Head.GetPathEpoch()) {
 				return errEvsPlanEpochMoved
 			}
 			for i, readPath := range result.paths {
 				if readPath.path != "" {
-					// evs answered a request naming the path in the current epoch (DESIGN-DETAILS 9.2.3's E3)
-					plan.floors[readPath.path] = evsLowerFloor(plan.floors[readPath.path], plan.PathEpoch)
+					// the floor the read gathered (DESIGN-DETAILS 9.2.3)
+					plan.floors[readPath.path] = evsLowerFloor(plan.floors[readPath.path], readPath.floor)
 				}
 				write := writes[readPath.path]
 				if write == nil {
@@ -316,6 +321,9 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 	}
 	for _, write := range args.Writes {
 		plan.Paths = append(plan.Paths, planned[write.Path])
+	}
+	if err := self.planEpochs(ctx, plan); err != nil {
+		return nil, err
 	}
 	directoryPaths, err := evsDirectoryChanges(ctx, plan, planned, directories)
 	if err != nil {
@@ -722,6 +730,48 @@ func (self *EvsWritePlan) Retoken(ctx context.Context, head *EvsVerifiedHead) er
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// The plan's path-epoch rules over its written paths (DESIGN-DETAILS 9.2.5): a creation on a blocking ref under
+// immediate pressure waits for the epoch, ErrEvsPathEpochDue, nothing sent; while the head lists sources, a removal
+// lowers its path's floor to its row's epoch (E2), which its parent's delta then names the child's token in; and each
+// written path's source paths by its floor. A directory change takes its own in evsDirectoryChanges.
+func (self *EvsRepo) planEpochs(ctx context.Context, plan *EvsWritePlan) error {
+	if creates := slices.ContainsFunc(plan.Paths, (*EvsPlannedPath).creates); creates || 0 < len(plan.Sources) {
+		state := &evsRefEpoch{refId: plan.RefId, epoch: plan.Head.GetPathEpoch(), version: plan.BaseVersion,
+			generation: plan.Head.GetGeneration(), refKind: plan.RefKind}
+		if creates {
+			quiet, err := self.quiet(ctx, state)
+			if err != nil {
+				return err
+			}
+			if !quiet {
+				return ErrEvsPathEpochDue
+			}
+		}
+	}
+	if 0 < len(plan.Sources) {
+		for _, planned := range plan.Paths {
+			if !planned.Remove {
+				continue
+			}
+			row, err := self.lookup(ctx, plan.RefId, planned.Path)
+			if err != nil {
+				return err
+			}
+			if row != nil {
+				plan.floors[planned.Path] = evsLowerFloor(plan.floors[planned.Path], row.epoch)
+			}
+		}
+	}
+	for _, planned := range plan.Paths {
+		sourcePaths, err := plan.sourcePathsOf(ctx, planned)
+		if err != nil {
+			return err
+		}
+		planned.SourcePaths = sourcePaths
 	}
 	return nil
 }

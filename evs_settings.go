@@ -67,6 +67,22 @@ type EvsSettings struct {
 	// A retoken keeps a segment's receipt while it is under this old, 22 h, and uploads the segment again past it,
 	// since evs adopts an upload only under 24 h old (DESIGN-DETAILS 9.2.5).
 	RetokenReceiptMaxAge time.Duration
+	// A creation that a ref's coming path epoch holds (412 PATH_EPOCH_DUE, or the planner's ErrEvsPathEpochDue) is
+	// planned again after its retry_after_ms, or this long when it names none, 10 s, or at the ref's next verified
+	// head, whichever comes first, at most PushRetryCount times before the caller gets EVS_PATH_EPOCH_DUE.
+	PathEpochDueWait time.Duration
+
+	// DESIGN-DETAILS 9.2.2's client settings. A new name is tokenized only on a head verified this recently: 5 s,
+	// the window §11.5 publishes, in which a name's token sent on the epoch just left can reach evs after a cut-over.
+	EpochFreshFor time.Duration
+	// The most epochs one read names a path in: 8, what evs takes (EvsReadPathMaxEpochCount).
+	ReadEpochCount int
+	// The verified listings a client keeps in memory for lookups, by ref, directory and head version: 256.
+	ListingCacheCount int
+	// A writer raises evs_alarm epoch_overdue this long past a due's due_by_ms: 1 h (§11.6's alarm row).
+	EpochOverdueAfter time.Duration
+	// The most rounds one read takes across epoch moves, lookups and second asks before it gives up: 8.
+	ReadEpochRoundCount int
 	// How many times a seal posts its parts again after 409 PARTS_MISSING: 3.
 	PartsMissingRetryCount int
 	// A git-mode push's seal lease, which it takes after its segments and before its parts: 120 s, the most evs grants
@@ -118,6 +134,12 @@ func DefaultEvsSettings() *EvsSettings {
 		PushRetryMaxWait:         60 * time.Second,
 		PushRebuildCount:         8,
 		RetokenReceiptMaxAge:     22 * time.Hour,
+		PathEpochDueWait:         10 * time.Second,
+		EpochFreshFor:            5 * time.Second,
+		ReadEpochCount:           8,
+		ListingCacheCount:        256,
+		EpochOverdueAfter:        time.Hour,
+		ReadEpochRoundCount:      8,
 		PartsMissingRetryCount:   3,
 		SealLeaseDuration:        120 * time.Second,
 		SubscribeRereadDelay:     5 * time.Second,

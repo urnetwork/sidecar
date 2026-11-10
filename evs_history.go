@@ -2,10 +2,14 @@
 
 // History (§11.7's history row, §18.5): a path's versions, newest first, each read as an older version (§11.9's
 // request row) and verified against its own statement as a head read's is. The walk follows each version's
-// prev_push_id and prev_commit_version: a write replaces the version one below it, so the walk asks for that one and
-// checks the entry it gets names the push and commit the newer one said it replaced; a creation ends the walk, its
-// path's earlier life being a removed one this draft does not walk past (§11.7's versions row keeps the numbers
-// apart). At most EvsSettings.HistoryVersionCount versions.
+// prev_push_id and prev_commit_version: a write replaces the version one below it, so the walk asks for that one by
+// number with commit_version (DESIGN-DETAILS 9.2.4's history) and checks the entry it gets names the push and commit
+// the newer one said it replaced; a creation ends the walk, its path's earlier life being a removed one this draft
+// does not walk past (§11.7's versions row keeps the numbers apart). At most EvsSettings.HistoryVersionCount versions.
+//
+// Across path epochs: a version written in an epoch the request names no token path in is answered with its
+// statement alone, which the reader takes as E4 when its push id is the prev_push_id the newer version names, and
+// asks again naming that statement's epoch (evs_epoch_read.go), one more round per epoch boundary the walk crosses.
 //
 // Format 1's versions are all kept, so each reads state kept; collected, drop_pending and dropped are format 2's.
 //
@@ -30,7 +34,11 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 	var expectPushId []byte
 	var expectCommit uint64
 	for len(history.Versions) < self.client.settings.HistoryVersionCount {
-		result, err := self.read(ctx, refId, []string{args.Path}, version, args.Fresh && version == args.Version)
+		path := &evsReadPath{path: args.Path, version: version}
+		if version != 0 {
+			path.commitVersion, path.prevPushId = expectCommit, expectPushId
+		}
+		result, err := self.readPaths(ctx, refId, []*evsReadPath{path}, args.Fresh && version == args.Version)
 		if err != nil {
 			return nil, err
 		}
