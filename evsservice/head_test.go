@@ -233,9 +233,6 @@ func TestHeadCommitDropsLapsedRefusalsOnlyOnASureClock(t *testing.T) {
 
 func TestHeadRaiseFenceSetsFenceMsAndMovesNoVersion(t *testing.T) {
 	fixture := newHeadFixture(t)
-	if _, err := fixture.heads.RaiseFence(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId); !errors.Is(err, ErrEvsHeadAbsent) {
-		t.Errorf("a ref with no head: %v", err)
-	}
 	absent, _ := fixture.heads.ReadCluster(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId)
 	stored, err := fixture.heads.Commit(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId, absent, testHead(3, 3))
 	if err != nil {
@@ -489,5 +486,103 @@ func TestParseEvsHeadRefusesABrokenHead(t *testing.T) {
 	}
 	if _, err := ParseEvsHead(make([]byte, EvsHeadMaxByteCount+1)); !errors.Is(err, ErrEvsHeadInvalid) {
 		t.Errorf("past the bound: %v", err)
+	}
+}
+
+// DESIGN-DETAILS 2.2.3's fence rule: a ref with no head is fenced by creating a placeholder head, If-None-Match, at
+// version 0 with no window, kind or mode, fence 1 and fence_ms its writer's clock.
+func TestHeadRaiseFenceCreatesAPlaceholderOnARefWithNoHead(t *testing.T) {
+	fixture := newHeadFixture(t)
+	fixture.clock.Advance(25 * time.Hour)
+	puts := fixture.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpPut)
+	fenced, err := fixture.heads.RaiseFence(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nowMs := fixture.clock.Now().UnixMilli()
+	head := fenced.Head
+	if fenced.Absent() || head.GetVersion() != 0 || head.GetFence() != 1 || head.GetFenceMs() != nowMs || head.GetWrittenMs() != nowMs {
+		t.Fatalf("placeholder %v", head)
+	}
+	if len(head.GetWindow()) != 0 || head.GetRefKind() != 0 || head.GetRefMode() != 0 || len(head.GetPushId()) != 0 || len(head.GetRefused()) != 0 {
+		t.Fatalf("a fence's placeholder carries more than its fence: %v", head)
+	}
+	if len(fenced.Bytes) > evsFencePlaceholderByteCount {
+		t.Errorf("a placeholder of %d bytes, priced as %d", len(fenced.Bytes), evsFencePlaceholderByteCount)
+	}
+	if got := fixture.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpPut) - puts; got != 1 {
+		t.Errorf("%d PUTs for one fence", got)
+	}
+	stored, err := fixture.heads.ReadCluster(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId)
+	if err != nil || stored.Etag != fenced.Etag || !proto.Equal(stored.Head, head) {
+		t.Fatalf("the stored placeholder: %v, %v", stored, err)
+	}
+
+	// a creating attempt that held the absent head can no longer create it
+	if _, err := fixture.heads.Commit(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId, &EvsStoredHead{}, testHead(1, 1)); !errors.Is(err, sidecar.ErrBlobPrecondition) {
+		t.Errorf("a create on the absent head after the fence: %v", err)
+	}
+	// and the ref's first commit replaces the placeholder by If-Match, keeping its fence count
+	first := testHead(1, 1)
+	first.Fence = head.GetFence()
+	committed, err := fixture.heads.Commit(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId, fenced, first)
+	if err != nil || committed.Version() != 1 || committed.Head.GetFence() != 1 {
+		t.Fatalf("the first commit on a fenced placeholder: %v, %v", committed, err)
+	}
+
+	// a second fence of the same ref is the overwrite any fence is
+	fixture.clock.Advance(time.Minute)
+	again, err := fixture.heads.RaiseFence(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId)
+	if err != nil || again.Version() != 1 || again.Head.GetFence() != 2 {
+		t.Fatalf("a fence over the committed head: %v, %v", again, err)
+	}
+}
+
+// A lost response on the placeholder's creation is found by the reread, and one that never landed goes again.
+func TestHeadRaiseFenceResolvesALostPlaceholderCreation(t *testing.T) {
+	fixture := newHeadFixture(t)
+	faults := fixture.host.Blobs.Faults()
+	if _, err := faults.Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpPut, KeyPrefix: "head/", Result: sidecartest.ApplyThenDrop}); err != nil {
+		t.Fatal(err)
+	}
+	fenced, err := fixture.heads.RaiseFence(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId)
+	if err != nil || fenced.Version() != 0 || fenced.Head.GetFence() != 1 {
+		t.Fatalf("a creation whose answer was lost: %v, %v", fenced, err)
+	}
+
+	other := testId("other ref")
+	if _, err := faults.Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpPut, KeyPrefix: "head/", Result: sidecartest.FailBeforeApply}); err != nil {
+		t.Fatal(err)
+	}
+	fenced, err = fixture.heads.RaiseFence(fixture.ctx, fixture.cluster, fixture.repoId, other)
+	if err != nil || fenced.Version() != 0 || fenced.Head.GetFence() != 1 {
+		t.Fatalf("a creation that never landed: %v, %v", fenced, err)
+	}
+}
+
+// A head write stalled at the store holds the key: the placeholder's creation fails ErrBlobHeld, which is the
+// caller's to wait out, and nothing is written.
+func TestHeadRaiseFenceOnAHeldKeyWritesNothing(t *testing.T) {
+	fixture := newHeadFixture(t)
+	if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpPut, KeyPrefix: "head/", Result: sidecartest.Held}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.heads.RaiseFence(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId); !errors.Is(err, sidecar.ErrBlobHeld) {
+		t.Fatalf("a fence on a held key: %v", err)
+	}
+	if stored, _ := fixture.heads.ReadCluster(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId); !stored.Absent() {
+		t.Fatal("a held creation wrote a head")
+	}
+}
+
+// An unsure clock creates no placeholder either.
+func TestHeadRaiseFenceCreatesNothingOnAnUnsureClock(t *testing.T) {
+	fixture := newHeadFixture(t)
+	fixture.host.ClockCheck.SetUnknown()
+	if _, err := fixture.heads.RaiseFence(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId); !errors.Is(err, ErrEvsClockUnsure) {
+		t.Fatalf("an unsure clock: %v", err)
+	}
+	if stored, _ := fixture.heads.ReadCluster(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId); !stored.Absent() {
+		t.Fatal("an unsure clock wrote a head")
 	}
 }

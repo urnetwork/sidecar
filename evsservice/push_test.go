@@ -742,3 +742,58 @@ func TestResolvePush(t *testing.T) {
 		t.Fatalf("resolution %+v %v", resolution, err)
 	}
 }
+
+// DESIGN-DETAILS 2.2.3's record rule: an attempt appends its batch record and awaits its write before it issues
+// step 7. A batch that is not written, or whose write's outcome stays unknown, ends the attempt 503 with no head
+// write issued: a head PUT here would fire the plan that waits for one.
+func TestPushIssuesNoHeadWriteWhenItsBatchIsNotWritten(t *testing.T) {
+	for _, result := range []sidecartest.FaultResult{sidecartest.FailBeforeApply, sidecartest.Held} {
+		fixture := newPushFixture(t, nil)
+		faults := fixture.host.Blobs.Faults()
+		// every create of the batch fails, the retry of an unknown outcome included
+		if _, err := faults.Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpPut, KeyPrefix: batchKeyPrefix, Result: result, Repeat: -1}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := faults.Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpPut, KeyPrefix: "head/", Result: sidecartest.FailBeforeApply}); err != nil {
+			t.Fatal(err)
+		}
+		plan := fixture.plan()
+		fixture.create(plan, "a")
+		recorder := fixture.push(plan)
+		requireRefusal(t, recorder, http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+		headWrites := 0
+		for _, unfired := range faults.Unfired() {
+			if unfired.KeyPrefix == "head/" {
+				headWrites += 1
+			}
+		}
+		if headWrites != 1 {
+			t.Fatalf("%v on the batch: a head write was issued with no record behind it", result)
+		}
+		if !fixture.head().Absent() {
+			t.Fatalf("%v on the batch: a head was written", result)
+		}
+		faults.Clear()
+	}
+}
+
+// On an unsure clock a push writes no batch and no head, and commits once the clock is sure again.
+func TestPushOnAnUnsureClockWritesNoBatchAndNoHead(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	plan := fixture.plan()
+	fixture.create(plan, "a")
+	body := fixture.body(plan)
+	token := fixture.token(fixture.check.signerId)
+	fixture.host.ClockCheck.SetUnknown()
+	if recorder := fixture.post(token, body); recorder.Code == http.StatusOK {
+		t.Fatal("a push committed on an unsure clock")
+	}
+	if !fixture.head().Absent() {
+		t.Fatal("an unsure clock wrote a head")
+	}
+	if keys, _, err := fixture.cluster.List(fixture.ctx, batchKeyPrefix, "", 10); err != nil || len(keys) != 0 {
+		t.Fatalf("batches on an unsure clock: %v, %v", keys, err)
+	}
+	fixture.host.ClockCheck.SetOffset(0)
+	fixture.requireCommitted(fixture.post(token, body), 1)
+}

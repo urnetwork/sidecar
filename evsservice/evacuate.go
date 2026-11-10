@@ -353,6 +353,13 @@ type evacuateRun struct {
 	result  *EvacuationResult
 	// the first error a step met, which the run reports once it has done what it could
 	firstErr error
+	// the P2 class its metadata writes take: evacuation's, funded by the pushes that wrote the batches, or, for the
+	// nightly pass's pack of an idle repo, packing's, unfunded (§11.13's order and wallet rows)
+	rank   sidecar.WriteP2Rank
+	funded bool
+	// how far off the next run that may pack the repo is: a pack is due once its oldest would pass PackAge before
+	// then (§11.13's move row)
+	nextRunInterval time.Duration
 }
 
 // One run on clusterId: see the file header. The result says what it did; the error is the first a step met, or
@@ -379,6 +386,10 @@ func (self *Evacuator) Run(ctx context.Context, clusterId string) (*EvacuationRe
 		sealParts: map[string]map[string]bool{},
 		alarmed:   map[string]bool{},
 		result:    &EvacuationResult{ClusterId: clusterId},
+
+		rank:            sidecar.WriteP2RankEvacuation,
+		funded:          true,
+		nextRunInterval: self.settings.RunInterval,
 	}
 	run.run()
 	if age, ok, err := self.OldestBatchAge(ctx, clusterId); err == nil {
@@ -635,10 +646,10 @@ func (self *evacuateRun) acquire(minute uint32, operation WriteOperation, rechec
 		return nil, err
 	}
 	return self.evacuator.host.Budget.AcquireP2(self.ctx, self.clusterId, &sidecar.WriteP2Work{
-		Rank:      sidecar.WriteP2RankEvacuation,
+		Rank:      self.rank,
 		Due:       batchMinuteTime(minute),
 		ByteCount: byteCount,
-		Funded:    true,
+		Funded:    self.funded,
 		Recheck:   recheck,
 	})
 }
@@ -715,6 +726,39 @@ func (self *evacuateRun) deleteMinute(minute *evacuateMinute) {
 		}
 	}
 	self.result.MinuteDeletedCount += 1
+}
+
+// Packs one idle repo for the nightly pass (§11.13's move row: "for an idle repo, in the nightly pass, which packs
+// any whose oldest would pass 7 d before the next pass"): the move with no kept records, its metadata writes unfunded
+// P2 of rank packing, due by nextPassInterval from now. Like any move it also deletes each parcel a pack already
+// holds, its entries first, and each packed log page, nothing while a hold covers the repo. errEvacuateRepoWaits when
+// repo/ lets no write issue. The result counts what it packed and deleted.
+func (self *Evacuator) PackIdleRepo(ctx context.Context, clusterId string, repoId sidecar.Id, nextPassInterval time.Duration) (*EvacuationResult, error) {
+	cluster, err := self.blobs.Cluster(clusterId)
+	if err != nil {
+		return nil, err
+	}
+	run := &evacuateRun{
+		evacuator: self,
+		ctx:       ctx,
+		cluster:   cluster,
+		clusterId: clusterId,
+		now:       self.clock.Now(),
+		repos:     map[sidecar.Id]*evacuateRepo{},
+		refHeads:  map[string]*EvsStoredHead{},
+		sealParts: map[string]map[string]bool{},
+		alarmed:   map[string]bool{},
+		result:    &EvacuationResult{ClusterId: clusterId},
+
+		rank:            sidecar.WriteP2RankPack,
+		funded:          false,
+		nextRunInterval: nextPassInterval,
+	}
+	repo := &evacuateRepo{repoId: repoId, firstMinute: BatchMinute(run.now)}
+	if err := run.moveRepo(repo); err != nil {
+		return run.result, err
+	}
+	return run.result, run.firstErr
 }
 
 // The job's args for one cluster's run: its id. No args start every cluster's.

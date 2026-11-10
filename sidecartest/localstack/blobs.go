@@ -43,6 +43,8 @@ const (
 	s3ChecksumHeader       = "X-Amz-Checksum-Sha256"
 	// §19.6's deadline header (D-OPS-20).
 	blobDeadlineHeader = "X-Ur-Deadline-Ms"
+	// §19.6: the LastModified, in Unix ms, of the object a DELETE means.
+	blobUnmodifiedHeader = "X-Ur-If-Unmodified-Ms"
 	// §19.6: objects carry this and no other content type.
 	blobContentType = "application/octet-stream"
 )
@@ -646,12 +648,21 @@ func (self *blobCluster) List(ctx context.Context, keyPrefix string, startAfter 
 	return objects, document.IsTruncated, nil
 }
 
+// A Delete that names its object (WithBlobUnmodified) carries x-ur-if-unmodified-ms, which §19.6's
+// build answers 412 for a newer object. A stock build ignores the header.
 func (self *blobCluster) Delete(ctx context.Context, key string) error {
-	answer, err := self.send(ctx, &blobRequest{method: http.MethodDelete, key: key})
+	request := &blobRequest{method: http.MethodDelete, key: key}
+	if named, ok := sidecar.BlobUnmodified(ctx); ok {
+		request.headers = map[string]string{blobUnmodifiedHeader: strconv.FormatInt(named.UnixMilli(), 10)}
+	}
+	answer, err := self.send(ctx, request)
 	if err != nil {
 		return &sidecar.BlobUnknownError{Err: err}
 	}
 	defer answer.close()
+	if answer.response.StatusCode == http.StatusPreconditionFailed {
+		return sidecar.ErrBlobPrecondition
+	}
 	if answer.response.StatusCode != http.StatusNoContent && answer.response.StatusCode != http.StatusOK {
 		return &sidecar.BlobUnknownError{Err: newS3Failure(answer.response)}
 	}

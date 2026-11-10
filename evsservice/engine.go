@@ -222,7 +222,7 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	self.format2 = NewFormat2Gate(host)
 	self.heads = NewHeadStore(clock, host.ClockCheck, host.Redis, settings, log)
 	self.records = NewRecordCache(settings)
-	self.batches = NewBatchWriter(cancelCtx, clock, blobs, self.records, settings, log)
+	self.batches = NewBatchWriter(cancelCtx, clock, host.ClockCheck, blobs, self.records, settings, log)
 	self.overlays = NewOverlayChains(self.heads, settings)
 	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.repos, priceTable, settings, log)
 	self.generations = NewGenerationRecords(settings)

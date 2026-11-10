@@ -10,7 +10,8 @@
 //   - written_ms is the writer's clock at every write (§11.13's orphan rule);
 //   - any write drops the refusal records whose until_s its writer's clock has passed, except on a process whose
 //     clock is unsure, which drops none (§11.8's refusal row);
-//   - only evacuation and GC fences set fence_ms (RaiseFence), and a refusal fence sets refused_ms (its caller);
+//   - only evacuation's fences also set fence_ms (RaiseFence; GC raises none, §11.13), and a refusal fence sets
+//     refused_ms (its caller);
 //   - at most 255 window entries and 8 refusal records, and §11.8's size: ~8.9 KiB at 127 entries, 17 KiB at 255.
 //
 // Reads come from the cluster, or from {evsh_<repo_id>} (head_cache.go) where §11.9's cache row allows it: within
@@ -43,13 +44,15 @@ var (
 	ErrEvsHeadInvalid = errors.New("evs head invalid")
 	// A next head that would break one of the head's rules: a caller's bug, and nothing was written.
 	ErrEvsHeadRule = errors.New("evs head rule broken")
-	// A fence asked of a ref with no head: there is nothing to fence (questions/evs-models-gc-unfenced-new-ref).
-	ErrEvsHeadAbsent = errors.New("evs head absent")
-	// This process's clock is unsure, so it raises no evacuation or GC fence (§19.6's clocks row).
+	// This process's clock is unsure, so it raises no evacuation fence and opens no batch (§19.6's clocks row).
 	ErrEvsClockUnsure = errors.New("evs clock unsure")
 	// RaiseFence lost FenceRetryCount races in a row.
 	ErrEvsHeadBusy = errors.New("evs head busy")
 )
+
+// What a placeholder head a fence makes holds, for its create's price: its fence, fence_ms and written_ms, under
+// 32 bytes.
+const evsFencePlaceholderByteCount = 32
 
 // A head as one read or write left it.
 type EvsStoredHead struct {
@@ -337,12 +340,21 @@ func (self *HeadStore) CacheCommit(ctx context.Context, repoId sidecar.Id, refId
 	self.cache.Write(ctx, repoId, refId, committed, pushSequence)
 }
 
-// The fence evacuation and GC raise on a ref (§11.8's fence row, §11.13): one head CAS that raises the fence and sets
-// fence_ms to this process's clock, changing no version, so every attempt of a push that arrived before it and may
-// still issue step 7 ends 503 unknown. It reads the head from the cluster and writes If-Match its ETag; a 412 rereads
-// and tries again, at most FenceRetryCount times; an unknown outcome rereads and finds whether it landed, the settle
-// rule ordering that read after it. While this process's clock is unsure it raises nothing (ErrEvsClockUnsure), and a
-// ref with no head has nothing to fence (ErrEvsHeadAbsent). The caller's ctx carries its P2 class.
+// The fence evacuation raises on a ref for a pending batch record (§11.8's fence row, §11.13's resolve row): one head
+// CAS that raises the fence and sets fence_ms to this process's clock, changing no version, so every attempt of a
+// push that arrived before it and may still issue step 7 ends 503 unknown. It reads the head from the cluster and
+// writes If-Match its ETag; a 412 rereads and tries again, at most FenceRetryCount times; an unknown outcome rereads
+// and finds whether it landed, the settle rule ordering that read after it. While this process's clock is unsure it
+// raises nothing (ErrEvsClockUnsure). The caller's ctx carries its P2 class.
+//
+// A ref with no head is fenced by creating one (DESIGN-DETAILS 2.2.3's fence rule): a placeholder head, If-None-Match,
+// at version 0 with no window, kind or mode, fence 1 and fence_ms set. It is the placeholder a refusal makes (§11.8's
+// first row), so reads, listings and the lease route treat it as absent, and the ref's first commit replaces it by
+// If-Match and keeps its fence count. A creating attempt that held the absent head fails its own If-None-Match, reads
+// the placeholder, finds fence_ms past its arrival and ends 503 unknown. A 412 on the creation means a write landed
+// first, a first commit or a refusal's placeholder: the reread finds it and the next round fences it by If-Match, as
+// after any 412. A head write stalled at the store holds the key, so the creation waits behind it and then fails
+// ErrBlobHeld, which is the caller's to wait out.
 func (self *HeadStore) RaiseFence(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id) (*EvsStoredHead, error) {
 	if !self.clockSure() {
 		return nil, ErrEvsClockUnsure
@@ -352,13 +364,11 @@ func (self *HeadStore) RaiseFence(ctx context.Context, cluster sidecar.BlobClust
 		return nil, err
 	}
 	for attempt := 0; attempt <= self.settings.FenceRetryCount; attempt += 1 {
-		if prior.Absent() {
-			return nil, ErrEvsHeadAbsent
-		}
 		// a turn of the clock between attempts reads as unsure, and stops the fence
 		if !self.clockSure() {
 			return nil, ErrEvsClockUnsure
 		}
+		// an absent prior clones to the empty head, so this is the placeholder, and Commit creates it
 		next := CloneEvsHead(prior.Head)
 		next.Fence = prior.Head.GetFence() + 1
 		fenceMs := self.clock.Now().UnixMilli()
