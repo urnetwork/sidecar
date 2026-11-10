@@ -330,9 +330,9 @@ func (self *Purger) notifyWithLock() {
 	self.changed = make(chan struct{})
 }
 
-// A barrier of item's: a test's error stops the item there, as a kill would.
+// A test's stop at the barrier a site has just passed, each site calling testHookBarrier with its own name so the
+// inventory lists it: an error stops the item there, as a kill would.
 func (self *Purger) step(item *purgeItem, name string, key string) bool {
-	testHookBarrier(name, key)
 	if self.deps.atStep != nil && self.deps.atStep(name, key) != nil {
 		item.stopped = true
 		return false
@@ -590,6 +590,7 @@ func (self *Purger) purgeCandidate(item *purgeItem, index int, cluster sidecar.B
 		}
 		// hold/ again as each DELETE issues, cached at most 5 s: none issues after a hold's placement is read
 		barrierKey := fmt.Sprintf("%s:%d:%d", barrierRefKey(commit.RepoId, commit.RefId), index, j)
+		testHookBarrier(BarrierPurgeHoldsBefore, barrierKey)
 		if !self.step(item, BarrierPurgeHoldsBefore, barrierKey) {
 			left += len(ids) - j
 			break
@@ -598,6 +599,7 @@ func (self *Purger) purgeCandidate(item *purgeItem, index int, cluster sidecar.B
 		if err != nil {
 			cover = &sidecar.HoldCover{Unknown: true}
 		}
+		testHookBarrier(BarrierPurgeHoldsAfter, barrierKey)
 		if !self.step(item, BarrierPurgeHoldsAfter, barrierKey) {
 			left += len(ids) - j
 			break
@@ -697,6 +699,7 @@ func (self *Purger) deleteSegment(item *purgeItem, segmentCluster sidecar.BlobCl
 		self.reportFreed(commit, info.ByteCount, false)
 		return purgeOutcomeHeld
 	}
+	testHookBarrier(BarrierPurgeDeleteBefore, barrierKey)
 	if !self.step(item, BarrierPurgeDeleteBefore, barrierKey) {
 		return purgeOutcomeLeft
 	}
@@ -706,6 +709,7 @@ func (self *Purger) deleteSegment(item *purgeItem, segmentCluster sidecar.BlobCl
 		self.count(func(stats *PurgeStats) { stats.DeletedCount += 1 })
 		self.reportFreed(commit, info.ByteCount, true)
 	}
+	testHookBarrier(BarrierPurgeDeleteAfter, barrierKey)
 	self.step(item, BarrierPurgeDeleteAfter, barrierKey)
 	if deleteErr != nil {
 		// held, or unknown: the sweep HEADs it again
@@ -751,6 +755,7 @@ func (self *Purger) deleteSlot(item *purgeItem, cluster sidecar.BlobCluster, id 
 		return purgeOutcomeLeft
 	}
 	defer grant.Close()
+	testHookBarrier(BarrierPurgeDeleteBefore, barrierKey)
 	if !self.step(item, BarrierPurgeDeleteBefore, barrierKey) {
 		return purgeOutcomeLeft
 	}
@@ -758,6 +763,7 @@ func (self *Purger) deleteSlot(item *purgeItem, cluster sidecar.BlobCluster, id 
 	if deleteErr == nil {
 		self.count(func(stats *PurgeStats) { stats.DeletedCount += 1 })
 	}
+	testHookBarrier(BarrierPurgeDeleteAfter, barrierKey)
 	self.step(item, BarrierPurgeDeleteAfter, barrierKey)
 	if deleteErr != nil {
 		return purgeOutcomeLeft

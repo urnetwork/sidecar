@@ -176,8 +176,9 @@ func NewSweep(host *sidecar.ServiceHost, deps *SweepDeps) (*Sweep, error) {
 	return self, nil
 }
 
+// A test's stop at the barrier a site has just passed; each site calls testHookBarrier with its own name, so the
+// inventory lists it.
 func (self *Sweep) step(name string, key string) error {
-	testHookBarrier(name, key)
 	if self.deps.atStep != nil {
 		return self.deps.atStep(name, key)
 	}
@@ -310,10 +311,12 @@ func (self *Sweep) sweepSegment(ctx context.Context, segmentCluster sidecar.Blob
 	if (staged && cover.Covered()) || cover.Keeps(info.LastModified) {
 		return "", nil
 	}
+	testHookBarrier(BarrierSweepDeleteBefore, barrierKey)
 	if err := self.step(BarrierSweepDeleteBefore, barrierKey); err != nil {
 		return "", err
 	}
 	deleteErr := segmentCluster.Delete(sidecar.WithBlobUnmodified(ctx, info.LastModified), key)
+	testHookBarrier(BarrierSweepDeleteAfter, barrierKey)
 	if err := self.step(BarrierSweepDeleteAfter, barrierKey); err != nil && deleteErr == nil {
 		self.countFreed(info.ByteCount, result)
 		return versionlessSweepDeleted, err
@@ -362,10 +365,12 @@ func (self *Sweep) sweepSlot(ctx context.Context, cluster sidecar.BlobCluster, r
 		return "", err
 	}
 	defer grant.Close()
+	testHookBarrier(BarrierSweepDeleteBefore, barrierKey)
 	if err := self.step(BarrierSweepDeleteBefore, barrierKey); err != nil {
 		return "", err
 	}
 	deleteErr := cluster.Delete(sidecar.WithBlobUnmodified(grant.Context(), info.LastModified), key)
+	testHookBarrier(BarrierSweepDeleteAfter, barrierKey)
 	stepErr := self.step(BarrierSweepDeleteAfter, barrierKey)
 	switch {
 	case deleteErr == nil:
