@@ -221,7 +221,11 @@ func (self *ConfigLog) applyBase(state *ConfigState, kept *configKeptEntry, rows
 	if err := self.reapplyTail(next, header.GetFoldedThrough(), kept.n, bits, true); err != nil {
 		return nil, self.baseFork(kept, "%v", err)
 	}
-	configAdvanceBaseShrinks(next, state.base, header)
+	var previousRows []byte
+	if state.base != nil {
+		previousRows = self.baseRows[[sha256.Size]byte(state.base.header.GetRowsSha256())]
+	}
+	configAdvanceBaseShrinks(next, state.base, header, previousRows, rowsMessage)
 	result := next.finish()
 	self.retainBase(result, rows)
 	return result, nil

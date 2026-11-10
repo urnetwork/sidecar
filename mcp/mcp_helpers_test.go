@@ -79,6 +79,10 @@ func (self *fakeMcpNetwork) Runs() (*sidecar.RunStore, error) {
 	return self.runs, nil
 }
 
+func (self *fakeMcpNetwork) LocalStore() sidecar.SidecarStore {
+	return self.store.Root()
+}
+
 func (self *fakeMcpNetwork) Spool() (*sidecar.Spool, error) {
 	if self.spool == nil {
 		return nil, sidecar.ErrSidecarStoreLocked

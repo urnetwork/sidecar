@@ -13,7 +13,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | pending |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | pending |
 | 5 | Authorization-log verdicts across folds (§7.9) | 13 | complete (2026-11-09) |
-| 6 | MLS group key management (§10) | 13 | pending |
+| 6 | MLS group key management (§10) | 13 | complete (2026-11-10) |
 | 7 | Remote search across designated indexers (§11.14, §18.4) | 3 | pending |
 | 8 | Git and evs in both directions | 3 | pending |
 | 9 | Client path epochs and re-tokenizing | 3 | pending |
@@ -540,9 +540,692 @@ Neither question blocks the held tasks: both are additive before M2's freeze, an
 
 ## 6. MLS group key management (§10)
 
-Status: pending
+Status: complete (2026-11-10)
 
 Tasks held until complete: KEYS-M2-19, KEYS-M2-20, KEYS-M2-21, KEYS-M2-22, KEYS-M2-23, KEYS-M2-24, KEYS-M2-25, KEYS-M2-26, KEYS-M2-27, KEYS-M2-28, KEYS-M2-29, KEYS-M2-31, KEYS-M4-01.
+
+Model: `sidecar/sidecartest/model/details/Gkm.tla`, its configurations (`Gkm*.cfg`, `GkmTwin-*.cfg`) and `run-gkm.sh` beside it. Questions filed: `.stack/questions/details-6-last-resort-extension.md`, `.stack/questions/details-6-welcome-pointer-key.md`, `.stack/questions/details-6-group-owner-marker.md`, `.stack/questions/details-6-claim-key-prefix.md`, `.stack/questions/details-6-ladder-aad-widths.md`, `.stack/questions/details-6-reform-epoch-zero-floor.md`.
+
+### 6.1 The problem
+
+§10 keeps one MLS group per repo and, above it, one key generation chain. Three things move it: commits, which make epoch n from epoch n-1 by one If-None-Match create of `epoch/<n>`; rotations, which make generation g+1 from g by one If-None-Match create of `gen/<g+1>` after every delivery of RK_{g+1} is staged; and the authorization log, which every device reads at its own pace and which decides, at each position, who holds the key (`KeyHolders`, D-KEYS-16). Several devices of several members commit and rotate at once; a device's log position (its tip), its MLS epoch and its newest generation each lag the others' by hours or weeks; deliveries are written by whoever is online and read whenever the recipient returns; devices lose their state and come back by resync or by the member's recovery code. The requirement is fourfold: every member device converges on one group state per repo and epoch; no removed member reads a later generation or anything sealed after its removal; no device loses access it is entitled to; and every refusal is safe and recoverable.
+
+The text as written is close, and most of it stands. Four places are wrong or open, each with a scenario, and three choices wait on the owner:
+
+**A last-resort KeyPackage's Welcomes collide (question keys-m2-13-last-resort-welcome-pointer).** `gkm/welcome/<sidecar_id>/<ref>` keys a Welcome pointer by the KeyPackageRef the Add used. A one-time KeyPackage serves one claim, so its ref names one Welcome; the last-resort KeyPackage serves every claim once the one-time ones are gone (§10.6: "never deleted") and is the only one a device with 128 claims outstanding, or a device offline past its refill, has left. Device E, its one-time KeyPackages exhausted, is added to repo B on Monday and to repo A on Tuesday, both through its last-resort KeyPackage, before it comes online. Both Adds write a pointer at `gkm/welcome/E/<lr-ref>`: with If-None-Match the second is refused and A's Welcome is unreachable; with an overwrite B's is. The committer cannot tell, and E never joins that group: §10.6's "a writer leaf removes and re-adds the joiner after 10 minutes" fires only when the uploader crashed before writing the Welcome, and here the Welcome exists. E, an entitled reader, reads nothing of that repo until some unrelated Remove and re-Add happens. The landed `gkmservice/welcomes.go` keeps the standing pointer and alarms, which is the right interim, and the model's `GkmTwin-PointerByRef` reaches the lost Welcome in five steps.
+
+**A GroupForm can name another repo's group (question keys-m2-12-groupform-names-anothers-group).** gkm ties a group to its repo only through `gkm/repo/<repo_id>/<seq>`, and a group route names only the group, which gkm resolves to the repo among the token's scopes whose newest form names it. A member who reads repo A (r) and administers repo B (admin) learns A's group id from A's heads, files a GroupForm for B naming it, and B's `rw` now reaches A's group: it can occupy `gen/<g+1>` with a claim A's members refuse (§10.9), which wedges A's rotations and so its write gate until a re-form, and it can post commits to A's epochs. Nothing leaks (every object there is ciphertext), but a reader holds a write position in another repo's group, and which repo a process resolves depends on which forms it read first. The landed `groups.go` refuses a form naming a group that already has objects, one LIST per form; that still leaves the race between A's form and A's `epoch/0`, in which B's form lands first and the resolver sees two newest forms naming one group. `GkmTwin-FormsUnchecked` shows the claim by a non-writer.
+
+**A commit can carry the REMOVE generation into a tree that still holds the removed leaf.** §10.5 lets a wrapped writer rotate for a removed leaf X "by ReaderWraps to every remaining leaf" while no leaf has committed the Remove, so that no repo stays gated while every leaf is offline; §10.6's epoch PUT check makes every commit carry `GenWrap_n` of gkm's newest generation; and §10.4 has every leaf, read_only ones included, commit a path-only self-update every 7 days (30 above 50 leaves). Put together: agent D rotates to g+1 after member device X is revoked, wrapping RK_{g+1} to leaves A and C; the tree at epoch e still holds X; C, a read_only page Worker whose self-update is due, commits a path-only commit at e+1 carrying GenWrap_{e+1} = seal(KEK_{e+1}, RK_{g+1}). X's leaf is in e+1's tree, so X derives KEK_{e+1} from the commit (which gkm serves to any reader token, and which a copy of the ciphertext serves to anyone) and opens RK_{g+1}: the generation that exists to exclude X. §10.9's roster row ("every commit's roster lies within the key holders at its auth pin") forbids the commit, and §10.6's leaf row forbids C the Remove it would need, but nothing tells C to wait, and the two readings a builder is left with are a leak (C commits, members adopt) or a stall (members refuse C's commit, which then stands at `epoch/<e+1>` as the epoch every later commit must build on). The same shape blocks every resync (an external commit "removes at most its own old leaf") while a dropped leaf stands. `GkmTwin-GenWrapIgnoresRoster` reaches the leak in five steps.
+
+**A re-formed group's epoch 0 has no auth pin (question keys-wire-reform-epoch-zero).** A re-form's generations arrive after its form, through the ladder, so `POST /gkm/repos/<id>/forms` has no GenRotate to read epoch 0's pin from, and the landed `epochs.go` refuses every commit onto a pinless epoch. A re-formed group takes no commit at all until this is settled, which blocks KEYS-M2-25 and FS-6's re-seed.
+
+The three choices the brief names are settled in 6.2.2: which extension marks a last-resort KeyPackage (keys-m2-07-last-resort), which Welcome a device gets when two share a last-resort KeyPackage's pointer key (the first failure above), and group-id uniqueness across repos (the second). Beside them, 6.2.2 fixes what else the tasks would otherwise have to decide: the ladder's AAD widths and generation 1's cause (keys-ladder-aad-widths), the claim key's prefix (keys-m2-13-claim-key-prefix), the data each flow persists and the names of every new object, field and setting.
+
+Three further rules that the text states but spreads over four places, each of which the model shows a violation without, are gathered in 6.2.3: a claim's auth pin never falls below its parent's (§10.6's claim checks), a LATE delivery is signed at a state at or past its generation's pin (§10.9's late row), and a leaf_wrap uses only an epoch whose tree holds holders alone (§10.5's remove row). `GkmTwin-ClaimBelowParent`, `GkmTwin-LateBelowClaimPin` and `GkmTwin-LeafWrapDirtyTree` each break one and reach a removed leaf reading the generation that excludes it; `GkmTwin-NoGate` seals past a shrink; `GkmTwin-SelfJoinCarriesGenWrap` lets a recovered device's self-join hand the lost device's leaf the next generation.
+
+### 6.2 The design
+
+#### 6.2.1 The principle
+
+**Every secret of a generation reaches a party by exactly one of four paths, and each path is fenced by one object that a verifier can judge at its own pin.** RK_g reaches a leaf through a GenWrap in an epoch object, through a leaf_wrap in `gen/<g>`, through a STAGED delivery written before `gen/<g>`'s claim, or through a LATE delivery written after it; a non-leaf only through the last two, and a member's recovery code through its RecoveryWraps. The four fences are: (1) *the roster rule*, that every commit's new tree lies within `KeyHolders` at the commit's auth pin, which the committer checks before it commits and every member checks before it adopts, so that no epoch object ever wraps a generation to a tree holding a party that generation excludes; (2) *the claim chain*, that `gen/<g+1>`'s auth pin and time are at or past `gen/<g>`'s, so that holders only ever shrink along the chain; (3) *the delivery pin*, that a STAGED delivery is judged at its claim's holder set and a LATE one at its signer's state, which is at or past the claim's; and (4) *the leaf_wrap condition*, that a leaf_wrap's epoch holds holders alone. With these, "removed reads nothing new" is a property of the store, whatever any honest device's timing, and the model's `RemovedReadsNothingNew` checks exactly that over the reach a removed party has when it fetches everything.
+
+Two consequences shape the flows. A leaf that may not commit a Remove (a read_only leaf; any external commit) **waits** while its tree holds a dropped leaf, and a hint keeps writer leaves awake until one commits it. And every refusal a member makes of a commit is a refusal to *adopt*, never a fork: the object stands at gkm, members alarm, and the group is repaired by a Remove of the committer and a rotation, or by a re-form, as §10.9 says; so the committer-side check must be the one that normally runs, and the member-side one the backstop.
+
+Convergence needs no new mechanism: `epoch/<n>` and `gen/<g>` are each one If-None-Match create chained on its predecessor, every member adopts its own commit only on gkm's 200 and another's only from the stored object, and the generation pin and epoch pin never fall at any device. What this section adds is the set of preconditions under which a device *makes* each object, so that honest devices never write one that others must refuse.
+
+#### 6.2.2 Formats settled
+
+Each is a format change before M2's freeze (owner decision 194), with its §2.8 line where a server reads it; 6.8 gives the lines and 6.9 the questions.
+
+**Last-resort KeyPackages** carry draft-ietf-mls-extensions' `last_resort` extension, type 0x000A, empty `extension_data`, in `KeyPackage.extensions` only, and every leaf lists 0x000A and 0xF553 (`ur_group`) in `capabilities.extensions`. gkm reads the flag from the KeyPackage it stores (`MlsKeyPackageInfo.LastResort`), never from the route. Two rules RFC 9420 §16.8 implies become ours: a device that joined through its last-resort KeyPackage commits a path-only self-update at its first opportunity after the join (the leaf's HPKE key is shared with every other Welcome that package serves until then), and replaces the last-resort KeyPackage at its next upkeep pass; and a device takes its last-resort KeyPackage's Welcomes under I-16's rule alone (no join at or below the newest epoch it reached of the group), which `mls_engine.go` already keeps. As built in `mls_extension.go` (keys-m2-07-last-resort option 1; question details-6-last-resort-extension).
+
+**Welcome pointers** are keyed by group and epoch, never by ref: `gkm/welcome/<sidecar_id>/<group_id>/<n>`, n 20 digits as every epoch number, group_id 32 lowercase hex (QD-442). `GkmWelcomePointer` gains `bytes key_package_ref = 3`, the ref the Add used, so a joiner opens the Welcome with the KeyPackage that ref names and the reader needs no other lookup. One Welcome, one key, whatever KeyPackage it used. `GET /gkm/welcomes` lists the prefix `gkm/welcome/<sidecar_id>/` as it does now and answers each pointer with its Welcome; a device holding several pointers for one group takes the one with the highest n above the newest epoch it reached and skips the rest, since a lower one names a leaf a later Remove took out (the 10-minute re-add) or an epoch below its pin. The reconciler deletes a pointer at its recipient's first ack past n, at most 90 days, as it does today. (keys-m2-13-last-resort-welcome-pointer option 1; question details-6-welcome-pointer-key.)
+
+**A group belongs to one repo from its first byte.** The first write of a creation or a re-form is the group's owner marker, `gkm/<group_id>/owner`, created If-None-Match, holding `GkmGroupOwner{bytes repo_id = 1; bytes network_id = 2}`, written by gkm from the token; a marker that exists with other bytes answers 409 and nothing else of the request is written; equal bytes resume a crashed request. Only then come the form, `epoch/0` and, for a creation, `gen/1`. gkm resolves every group route through the marker: `GET gkm/<group_id>/owner` (immutable, cached for the process's life), the repo it names must be among the token's scopes, and that repo's newest form must name the group; a token naming no such repo is refused whatever its other scopes. The shred deletes the marker with the group's other objects, and a re-seed's form in §19.10's deleted mode writes it again. The LIST the landed `groups.go` makes before a form goes. Group ids stay 16 random bytes (plan-KEYS-reform-ladder's rule 1 stands). gkm-1's §2.8 row, which already shows (repo_id, group_id) pairs, gains the marker in words; it discloses nothing new. (keys-m2-12 option 1's intent, made race-free; question details-6-group-owner-marker.)
+
+**The ladder's AAD widths** are as built: `u64be(g)` and `u64be(e)` wherever §10.5 writes g or e, one byte for `cause`, so GenLink's AAD is `repo_id || u64be(g) || u8(cause)` (25 B), GenWrap's and LeafWrap's `group_id || u64be(e) || u64be(g)` (32 B) and GroupInfo's `group_id || u64be(e)` (24 B); `gen/1` carries cause REQUEST (2), and a reader refuses REMOVE there. `testdata/gkm/ladder.json` pins the bytes. (keys-ladder-aad-widths option 1; question details-6-ladder-aad-widths.)
+
+**The claim key** `gkm/kp/<sidecar_id>/<ref>.claim` stands, and §11.8's "no key prefixes another" means a *path* prefix (an existing key followed by `/` at the new key's next byte, or the reverse), MinIO's real constraint; `sidecartest/fake_blobs.go` checks that, and KEYS-M2-13's filter of the one byte-prefix report goes once it does. (keys-m2-13-claim-key-prefix option 1; question details-6-claim-key-prefix.)
+
+**A re-form's epoch 0 carries no auth pin**, as `GkmGroupReformRequest` landed; gkm gives epoch 1's pin its floor from `gen/<form.generation>`'s auth, which the ladder must have written before the group takes any commit (plan-KEYS-reform-ladder rule 5), so the epoch PUT check reads "never below the previous epoch's pin, or, for epoch 1 of a re-formed group, below gen/<the form's generation>'s". (keys-wire-reform-epoch-zero option 1; question details-6-reform-epoch-zero-floor.)
+
+**Names.** New settings in `GkmSettings` (client): `PendingCommitDelay` (15 s plus jitter, KF2/KF3's other writers), `WelcomeTimeout` (10 min, the re-add), `LateAskInterval` (1 min), `LateDeliverJitter` (0-15 s), `SelfUpdateInterval` (7 d) and `SelfUpdateIntervalLarge` (30 d, above `LargeGroupLeafCount` 50), `ScheduleInterval` (30 d), `ResyncReplayMax` (100 epochs), `RotateBatchSize` (256) and `RotateBatchConcurrency` (4), `SeatCount` (1,000). In `GkmServiceSettings`: `PendingHintInterval` (60 s), `DroppedLeafHintInterval` (60 s, 6.2.3's hint), `GroupInfoPointerLagCount` (16). Keychain items in `keychain.ur` (§5.9): `gkm/<repo_id>/gen/<g>` (RK_g and the Signed GenRotate, per plan-KEYS-reform-ladder rule 2), `gkm/<repo_id>/draft` (a rotation's RK' and GenRotate draft), `gkm/<repo_id>/pins` (6.2.6), `gkm/<repo_id>/pending` (6.2.4's pending-change record), and the MLS state files KEYS-M2-09 keeps.
+#### 6.2.3 The rules
+
+Notation: `S` this device's newest verified state at tip `n`; `H(n, t) = KeyHolders(R, S(n), t)`; `tree(e)` the leaves of epoch e; `g*` gkm's newest generation and `gen/<g>.auth`, `.time` its claim's pin and time; `shrunk(n)` = `holders_shrunk_at` at `S(n)`; `expiry(t)` the newest holder expiry at or before `t`; `covers(g, n, t)` = `gen/<g>.auth.version >= shrunk(n)` with the pin on my chain and `gen/<g>.time >= expiry(t)` (§7.9's coverage, as `GkmGenerationCovers` has it).
+
+```text
+R1 judged pins    a device judges a commit at its header's auth, a claim at its auth and a STAGED delivery at
+                  its claim's, a LATE one at its own auth (§10.9's judged row); one above n waits (never a
+                  refusal), one off the chain is a fork alarm, one before my previous base is not judged
+                  and counts against no one; a device builds nothing on an object it has not judged: it
+                  commits only at the newest epoch it adopted, rotates only from a generation it holds and
+                  judged, and delivers only a generation it holds and judged
+R2 pin floors     a commit's auth is at or past the previous epoch's and the carried generation's; a claim's
+                  auth and time are at or past its parent's; a LATE delivery's auth is at or past its
+                  generation's; gkm refuses what it can see of these (the epoch PUT and claim checks, the
+                  wrap checks' late row), members refuse the rest; so holders only shrink along each chain
+R3 roster         every commit's new tree lies within H(auth, time) at its own header, but a recovery self-join
+                  with generation 0, which may leave the lost devices' leaves; the committer checks this
+                  before it commits, and carries every Remove it may commit that the rule needs (the pending
+                  engine, 6.2.4); a member refuses a commit whose tree breaks it and never adopts or
+                  encrypts to its epoch, raising refused (plan reading 7), and the group repairs as §10.9's
+                  "a bad commit can stall" says; a leaf that may not commit a Remove (read_only; an external
+                  commit, which removes only its own old leaf) waits while its tree holds a dropped leaf,
+                  self-updates and resyncs included, and hint H1 keeps a writer leaf awake until it commits
+                  the Remove
+R4 GenWrap        a commit's GenWrap wraps g*, which the committer holds and judged, under the new epoch's
+                  KEK; with R3 that epoch's tree holds holders of g* alone (g*'s holders are H at its claim,
+                  and the commit's auth is at or past it by R2); the one exception is the generation-0
+                  self-join, which carries none
+R5 leaf_wrap      a rotator uses a leaf_wrap under KEK_e only if it is a leaf of e and tree(e) ⊆ H at its
+                  state; else every leaf of e in H gets a ReaderWrap, as every agent does; an epoch whose
+                  tree holds a dropped leaf never carries a leaf_wrap, and no later epoch wraps g+1 into
+                  that tree (R3, R4)
+R6 delivery       a STAGED delivery's recipient is in the claim's holder set, and a LATE one's in H at the
+                  signer's auth and time, the signer a holder that is not read_only and whose auth is at or
+                  past gen/<g*>'s; a LATE delivery names a key the recipient published and gkm serves; a
+                  delivery valid at its own state stays valid (§10.9's history row)
+R7 gate           a writer seals to the newest generation it holds only while that generation covers
+                  shrunk(n) and expiry(now) at its state, and evs passes the push only while it covers them
+                  at evs's state (§10.6, §11.8); EnsureWritable rotates first when it does not; a depositor
+                  seals to a drop key under the same coverage (D-KEYS-17)
+R8 one tree       a device adopts its own commit only on gkm's 200 and another's only from epoch/<n> as
+                  stored; its epoch pin (group_id, n, epoch_authenticator) and generation pin (g, C_g) never
+                  fall, and no join, Welcome or external, takes it to an epoch at or below the newest it
+                  reached (I-16); HeadCheck compares both pins (6.2.6)
+```
+
+Why R3 is checked by the committer and not only by members: a bad commit leaks the moment it stands at `epoch/<n>`, since the removed leaf, or anyone holding the ciphertext, derives KEK_n from it whatever honest members do; a member's refusal contains the damage (it treats the carried generation as poisoned: never seals to it again, rotates at once with cause REMOVE, and the next leaf commit removes the committer, §10.9's poisoned row) but cannot undo it. Every honest leaf therefore runs the same check before it commits, and the model's twin shows what the text's self-update interval alone would do.
+
+Hints (§10.6's duties, extended):
+
+```text
+H1 dropped leaf   the reconciler hints pending every DroppedLeafHintInterval to a repo's writers while gkm's
+                  newest verified state shows a holder dropped since the newest epoch's auth pin and time, as
+                  it already does while the gate is closed; gkm cannot see whether the dropped holder was a
+                  leaf, so the hint is sent either way and costs one wake a minute per affected group; it
+                  stops at the first epoch whose pin passes the drop
+H2 waiting leaf   a leaf that waits under R3 asks GET .../group-info?want=<e+1> at most once a LateAskInterval,
+                  which hints wrap-pending to the writers as an older want does (KF5); a writer so hinted
+                  runs EnsureWritable's commit step
+H3 pending        as today: pending to the writers, the statement's signer first, at each holder change,
+                  every PendingHintInterval while the gate is closed; in the directory group to the signer
+                  and the config writers only (D-KEYS-23)
+```
+
+#### 6.2.4 The flows as state machines
+
+Each flow is a machine per (device, repo); every transition names the object it writes and the check that fences it. `persist` means a keychain write under §5.9's AEAD before the next step, so a kill resumes from it. Pseudocode is the implementer's: Go names from the plan (`gkm_*.go`), fields from `protocol/gkm.proto`.
+
+**The pending engine** (KEYS-M2-21), one per group, single-flight, drives every membership change. Its input is the log applier's `AuthAdvanced(S)` and gkm's hints; its state is derived, never stored but for the Welcomes it owes:
+
+```text
+Pending(S, e) for a leaf of epoch e, tree(e), H = H(n, now):
+  removes   = tree(e) \ H                                    (every dropped leaf; R3)
+            ∪ {x ∈ tree(e) : x not leaf-entitled at S}        (config and directory groups: §7.9's move)
+            ∪ {x ∈ tree(e) : stale(x)}                        (§10.9's stale row, KEYS-M2-19's one function)
+  adds      = {d ∈ H ∩ member devices : d ∉ tree(e), d leaf-entitled (config, directory) or seated
+              (data: earliest-admitted first up to SeatCount), d has a KeyPackage gkm serves, d consented
+              where the kind is owner-bound (§8.5), d anchored if a restored binding admitted it (§10.8)}
+  welcomes  = Welcomes this device committed whose pointer it has not yet written
+  rotate    = ¬covers(g*, n, now) ∨ gen/<g*>.time + ScheduleInterval < now ∨ a request is pending
+
+may(c)      c commits removes and adds iff c is a writer leaf (not read_only, not wrapped); the admission's or
+            revocation's signer may in the config and directory groups (owner decisions 128, 182); the
+            granting device first, other writer leaves after PendingCommitDelay; a wrapped writer commits
+            nothing and rotates (6.2.4's Rotate) or writes first wraps (KF2)
+
+Run(c):     while Pending ≠ ∅ and may(c):
+  1  if removes ∪ adds ≠ ∅: Commit(removes, adds)             one commit carries all of them (R3)
+  2  write each owed Welcome and pointer                       welcome/<n>, then welcome/<d>/<group>/<n>
+  3  if rotate: Rotate()                                       6.2.4's Rotate
+  4  refetch S and gkm's newest epoch and generation; loop
+```
+
+**Commit** (any leaf; the engine's step 1, a self-update, a resync's or self-join's external commit):
+
+```text
+states   Idle → Staged(commit, e+1) → Uploading → Adopted | Discarded
+pre      at the newest epoch e I adopted; tip n ≥ epoch/<e>.auth and ≥ gen/<g*>.auth; I hold RK_{g*} (R1);
+         new tree ⊆ H(n, now) (R3), or the self-join exception; path = true for every commit but an Add-only
+         one; read_only: path only, no proposal; an external commit: ExternalInit, my old leaf's Remove, a path
+stage    engine.Commit(args) → staged; header {generation g*, auth (n, A_n)} in authenticated_data; seal
+         GenWrap_{e+1} = seal(KEK_{e+1}, RK_{g*}; group_id || u64be(e+1) || u64be(g*)) and, at ≤ 16 leaves,
+         GroupInfo_{e+1} under K_groupinfo of g*, group_info_generation = g*; persist nothing (a staged commit
+         that dies is remade)
+upload   POST epochs/<e+1> {commit, gen_wrap, sealed_group_info, group_info_generation}
+         200   Adopt; pins ← (e+1, epoch_authenticator), (g*, C_{g*}); if Adds: owe the Welcome (persist
+               welcomes owed with the Welcome bytes and recipients, keyed by (group, e+1)); hint commit rides
+         409   Discard; Process(winner) as any received commit; rerun Pending (KF6)
+         403   refused by gkm's checks (rate, pin, header): alarm refused if my checks passed; wait for S
+         unknown  GET epoch/<e+1>: mine (same commit bytes) = 200; another = 409; 404 = repeat the POST
+welcome  POST welcome/<e+1> {welcome, recipients [(sidecar_id, ref)]}; gkm writes welcome/<n> If-None-Match,
+         then a pointer per recipient If-None-Match, equal bytes answering success; a crash before this step
+         leaves joiners waiting: a writer leaf that sees no welcome/<e+1> after WelcomeTimeout removes and
+         re-adds them (the engine's removes gain "added at e+1 with no Welcome after WelcomeTimeout")
+```
+
+**Process** (a received commit, from `GET epochs?after=` or a commit hint):
+
+```text
+pre      epoch/<e+1> stored; tip n ≥ its header's auth (else wait: R1)
+check    engine.Process(bytes) stages it (signature, proposals, path, confirmation tag: mls_group.go); then
+         §10.9's committer and check rows at the header's auth: the committer may make it (Add: a writer leaf
+         or the signer; Remove: a writer leaf or the signer, never the target; path-only: any leaf; external:
+         the sidecar itself, resync or self-join); each Add's credential admitted, pinned, consented, seated
+         or entitled; each Remove's input (a revocation, park, Suspend, grant end, entitlement loss, or a
+         stale leaf by the credential's not_after rule); the new tree ⊆ H at the header (R3) but a
+         generation-0 self-join; header.generation = the previous epoch's or newer, and its GenWrap opens to
+         RK matching gen/<g>'s C_g (or none at generation 0)
+adopt    Adopt(); pins forward; if removed: leave the group (at ← none), keep every RK_g held, read on by
+         wraps if still a holder (a stale-removed or wrapped device), else by nothing new
+refuse   alarm refused naming the committer and epoch; never adopt; keep processing nothing of this group
+         until a later epoch's chain shows the group repaired (a Remove of the committer and a rotation, or a
+         GroupForm); seal nothing to the generation its GenWrap carried (poisoned, §10.9)
+```
+
+**Rotate** (KEYS-M2-20; §10.5's five steps, with every fence named):
+
+```text
+states   Idle → Drafted(RK', GenRotate) → Staging(k of W) → Claiming → Done | Lost(winner)
+pre      I am a writer (or the statement's signer, config group), a holder or covered at S; I hold RK_{g*} and
+         judged gen/<g*> (tip n ≥ its auth); GET gen/<g*+1> → 404
+1 draft  H = H(n, now); RK' random; C' = SHA-256("UR evs 1.0 commit" || repo_id || u64be(g*+1) || RK');
+         GenLink = seal(K_link', RK_{g*}; repo_id || u64be(g*+1) || u8(cause)); cause = REMOVE iff
+         GkmRotationRemoveRequired (a shrink, expiry or compromise retirement since gen/<g*>'s pin and time,
+         or a poisoned parent), else REQUEST or SCHEDULE; holders_sha256 over H's identities; drop key if the
+         kind takes deposits (drop_not_after_ms = time_ms + DropKeyLifetime); persist draft {RK', GenRotate}
+2 set    W = deliveries:
+           leaves      if I am a leaf of my epoch e and tree(e) ⊆ H: leaf_wrap {e, seal(KEK_e, RK')} in the
+                       GenRotate (R5); else a ReaderWrap to each leaf of e in H, to the ReaderKey gkm serves
+                       for it if 10.5's readerkey check passes (time_ms < not_after ≤ time_ms + 7 d + 10 min)
+           wrapped     config and directory groups: each member device in H outside tree(e): a ReaderWrap
+           agents      each agent in H not covered by a live Delegation in H: a ReaderWrap
+           delegations each live Delegation in H: a DelegationWrap to its reader key
+           recovery    each member reading R with a current binding: a RecoveryWrap at its b8
+         wrap_count = |W|; every delivery STAGED at wrap/<g*+1>/<c8>/<recipient>/<k8> and recovery/.., in
+         batches of RotateBatchSize, RotateBatchConcurrency at once (QD-066); a 412 with equal bytes is
+         success, with other bytes an alarm (another rotator with my C', impossible unless RK' leaked); a 0
+         item is sent again; persist nothing between batches: a restart re-stages (If-None-Match makes it
+         safe) and stale staged objects of a lost claim are GC'd after 24 h
+3 claim  POST gen/<g*+1> (the Signed GenRotate), the linearization point; testHookBarrier around it
+         201   Done; keychain gen/<g*+1> ← {RK', bytes}; pin (g*+1, C') forward; delete the draft; seal to
+               g*+1 from now
+         412   winner = the stored GenRotate: judge it (§10.9's rotation checks at its auth: signer, chain,
+               holders recomputed at its pin and time, each STAGED delivery I can read, cause, time);
+               if it passes and covers(g*+1, n, now) and I have a delivery or leaf_wrap to open: adopt it
+               (keychain, pin), delete the draft, Done; if it passes but does not cover what I rotate for:
+               fetch my key of it (a late ask if none), then go to 1 at g*+2; if it fails: poisoned (alarm,
+               never seal to it, rotate at g*+2 at once with cause REMOVE, and the admins revoke its signer)
+         403   my state is behind gkm's (signer, auth or time check): refetch S and retry at 1; a time
+               refusal waits for my clock
+         unknown  GET gen/<g*+1>: my C' = 201; another = 412; 404 = repeat the POST with the same bytes
+```
+
+**Late delivery** (KEYS-M2-20, the deliverer; KEYS-M2-22, the asker):
+
+```text
+asker    a holder whose GET wraps/<g*>?recipient=&want=<my k8> finds no delivery of g* to a key it holds: ask
+         with since = first ask, at most once a LateAskInterval; a device none of whose keys opens anything
+         publishes a fresh ReaderKey first (upkeep); meanwhile it reads with what it holds, and a leaf keeps
+         processing epochs (a GenWrap of g* in any epoch it adopts also serves)
+deliver  on wrap-pending naming recipient x: wait LateDeliverJitter; require: I am a holder (or covered), not
+         read_only, hold RK_{g*} and judged gen/<g*>, tip n ≥ gen/<g*>.auth (R2), x ∈ H(n, now) (R6); GET
+         reader-key/<x> (or the Delegation's key): 10.5's readerkey check; PUT one LATE KeyDelivery at
+         wrap/<g*>/<c8>/<x>/<k8> with auth (n, A_n) and time_ms = max(now, gen/<g*>.time_ms); 201 done; 412:
+         judge the winner (delivery checks); 409 (not newest, or a key gkm no longer serves): refetch and
+         retry once; unknown: repeat the PUT (If-None-Match)
+```
+
+**KF1, create** (KEYS-M2-21):
+
+```text
+states   Filed(RepoCreate) → Placed(keying) → Owner → Form → Epoch0 → Gen1 → Staged(k of W) → Active → FirstAdd
+1        file RepoCreate (§8.8); evs creates repo/<id> keying and place/<id> (§11.8); persist nothing yet
+2        draw group_id (16 random bytes), RK_1, GenRotate_1 {generation 1, no parent, cause REQUEST, auth (n,
+         A_n), holders_sha256 over H(n, now), wrap_count}; engine.CreateGroup(group_id, ur_group {network,
+         repo, kind, owner}); seal GenWrap_0 and GroupInfo_0 under RK_1; persist draft {group_id, RK_1,
+         GenRotate_1, MLS state}
+3        POST /gkm/groups {form, gen_rotate, gen_wrap, sealed_group_info, cipher_suite}: gkm writes owner,
+         form, epoch/0, gen/1 in that order, each If-None-Match, equal bytes resuming (QD-464); 409 on
+         other bytes at the owner marker: the id is taken, draw another at 2
+4        stage generation 1's deliveries as Rotate's step 2 (ReaderWraps to agents and, in the config and
+         directory groups, to member devices in H; DelegationWraps; RecoveryWraps); while the repo is keying
+         gkm accepts STAGED deliveries of generation 1 by gen/1's signer (§10.6's wrap checks)
+5        POST /evs/v1/repos/<id>/activate (RESOLUTIONS plan-EVS1-repo-activate-route): only after 4, so no
+         content predates its recovery wraps (D-KEYS-18); then delete the draft, keep gen/1 in the keychain
+6        the engine's first run adds every pending member device in one Add commit (KF2)
+crash    before 3: resume from the draft (same bytes); between 3 and 5: resume at 4 (the repo is still
+         keying, the group exists); the creator's only device lost before 5: the repo stays keying forever
+         (FS-20), and a repo admin's device may re-form it or delete it
+```
+
+**KF2, add a device D; KF3, add a member** (the engine's adds):
+
+```text
+D        enrolls; SidecarAdmit lands at n_a; uploads ReaderKey and, as a member device, KeyPackages (a device
+         a restored binding admitted: ReaderKey only until anchored); gkm hints pending at its first upload
+         and at each state that lists D as a reader
+leaf     a writer leaf (the granting device first; the signer in the config and directory groups) claims a
+         KeyPackage (POST key-packages/claim; 404: D has none yet, D reads by first wrap where the group
+         wraps, else waits) and commits the Add with every other pending change; the Welcome and pointer
+         follow; D joins: JoinWelcome, open GenWrap_n for RK_{g*} against gen/<g*>'s C_g, open GroupInfo_n
+         under K_groupinfo of group_info_generation, Complete; walk the ladder down to generation 1; pins
+         start at (n, epoch_authenticator) and (g*, C_{g*}); D acks
+wrapped  an agent, or in the config and directory groups a member device that is wrapped or has no
+         KeyPackage: a LATE ReaderWrap of g* from any holder but a read_only one, hinted writers first, signed
+         at a state listing D (R6); a covered agent reads at once through its Delegation's wrap
+seat     data repos: at most SeatCount leaves; the engine fills a free seat with the earliest-admitted waiting
+         device that has a KeyPackage (§8.12); the 1,001st waits keyless, named in the writer's preview
+consent  owner-bound kinds: an unconsented D is parked (no Add, no wrap) and raises approval_pending (§8.5)
+member N a grant or EvsShare for N lands; KF2 runs for each of N's devices
+```
+
+**KF4, remove X** (the engine's removes, then Rotate):
+
+```text
+1  entry n' revokes X (or a grant ends, a park, a Suspend, an expiry at T_e): holders_shrunk_at = n' (or
+   expiry(T_e)); evs refuses pushes whose generation does not cover it (412 GATE_CLOSED), gkm hints pending
+2  a writer leaf, the revoking device first, commits Remove(X) with a path (R3) at auth ≥ n'; a wrapped
+   revoker (config, directory) skips to 3 and the next leaf commit removes X (H1 keeps leaves awake)
+3  any writer rotates: a leaf whose tree is clean by leaf_wrap under KEK_{e+1}; a wrapped writer, or a leaf
+   whose tree still holds X, by ReaderWraps to every remaining leaf and agent (R5); cause REMOVE
+4  the gate reopens for writes declaring g+1 (R7); EnsureWritable runs 2 and 3 for a writer before its next
+   write, so reaps and expiries batch (D-KEYS-6)
+5  §11.7's next write of each file is a full checkpoint, and a path epoch is due (§11.6)
+```
+
+**KF5, catch-up and resync** (KEYS-M2-23):
+
+```text
+behind   ≤ ResyncReplayMax epochs: Process each in order (the Adopt chain)
+resync   further behind, or commits pruned, processing failed, or my leaf was removed as stale: open the
+         current sealed GroupInfo (inline at ≤ 16 leaves, probing epoch/<pointer+1>.. to a 404; above, the
+         group-info object, a ?want= hinting a leaf to write it) with K_groupinfo of the generation it names,
+         which I hold or ask for late; then an external commit at g* (R1-R4: tip ≥ epoch/<e>.auth and ≥
+         gen/<g*>.auth; tree(e) \ {my old leaf} ⊆ H, else wait under R3 and ask H2); else await a re-add or
+         use the recovery code
+```
+
+**KF6, concurrent commits:** the 409 loser discards its staged commit, having written no Welcome, processes the winner (Process) and reruns Pending; two rotations race only at `gen/<g+1>` (Rotate's 412). **KF7, gkm unavailable:** `CurrentRepoKey` and `RepoKey` answer from the keychain, `DropKey` from the newest GenRotate held if it still covers at my state (R7), writes continue while every shrink is covered (evs checks the gate from the log) and stop at the first uncovered one until gkm returns; joins, catch-up, rotations and deliveries wait and retry on the hint intake's resync.
+
+**Recovery** (KEYS-M2-24; §10.8 with its order made explicit):
+
+```text
+states   Fetching → Admitted → Anchored → SelfJoined(config) → Joined(others) → Revoking → Rotated
+1        under recovery:<member_id>, GET recovery/<member_id>/wraps: the newest per group whose b8 is my
+         binding's; open each RecoveryWrap against gen/<g>'s C_g; walk the ladder; read the log and these
+         wraps only
+2        admitted (§7.9's table); §7.9's anchor on the config group's RecoveryWrap: head_alarm (fork) and stop
+         on failure
+3        self-join the config group and every group M writes by external commit: if tree(e) ⊆ H at my tip,
+         generation g* with its GenWrap (an ordinary resync); else generation 0 with no GenWrap (R4's
+         exception), the lost devices' leaves staying; join the others through KF2 (upload KeyPackages)
+4        revoke M's lost devices (§5.6's calls); then, as a writer leaf, the engine's next Commit removes
+         every dropped leaf (R3), then Rotate (cause REMOVE); the self-join's epoch gave them nothing, and no
+         generation after their revocation is wrapped into a tree holding them
+restored a binding a void restored: ReaderKey, no KeyPackage, the late ReaderWrap of the config group's
+         current generation (KF2's wrapped row), the anchor on its RK_g, only then 3 and 4 (§7.9's restored)
+rebind   ur keychain recovery-rotate: re-wrap each group's current generation to the new binding at its own b8,
+         delete the old binding's wraps only once every new one exists, request a REQUEST rotation, or REMOVE
+         for a compromise, which also starts a path epoch at once
+```
+
+**Drop** (a holder leaving: §10.5's table): a shrink (revocation, park, Suspend, grant end, Delegation end or key drop, compromise retirement) closes the gate at its entry; an expiry closes it at T_e with no entry; the reconciler hints pending; the engine's next run removes the leaf (if any) and rotates with cause REMOVE; a Delegation's key drop excludes the Delegation's wrap and every parked agent; an unsuspended agent returns by a late ReaderWrap of its own. A ReaderKey lapse or replacement, a move between leaf and wrap, a covered agent's reap and a newer forwarding Delegation drop nothing and rotate nothing (§10.6's never list).
+
+**Re-form** (KEYS-M2-25; plan-KEYS-reform-ladder's rules 1-9): owner marker (6.2.2), form naming previous_group_id and the newest generation held, epoch/0 with no pin, the ladder route in ascending batches of 64, then the group takes commits from epoch 1 with its pin floor at gen/<form.generation>'s auth; readers re-add by KF2 and late wraps; members check the form's signer by §10.6's rule, each C_k against their cache, and judge each GenRotate's signature only where their retained log reaches.
+
+#### 6.2.5 Key access (KEYS-M2-22)
+
+```text
+CurrentRepoKey(repo)  the newest generation held and judged: EvsRepoKey{RK_g, C_g, cause, auth, time};
+                      ErrGkmUnavailable with none; a stale newest is still answered (reads never wait on a
+                      rotation), and §11.7 reads its cause for the checkpoint rule
+RepoKey(repo, g)      from the keychain, or the ladder walked down from the newest held through the Signed
+                      GenRotates (GET gen?since= for any missing; each verified at its pin where my log
+                      reaches, by C_g chain always); a key that is not there is refused, never defaulted
+EnsureWritable(repo)  1 require writer at S (ErrGkmNotWriter); 2 Run(c) the pending engine for the changes
+                      this device may commit (as a leaf: removes and adds; as a wrapped writer: nothing but
+                      first wraps); 3 if ¬covers(g*, n, now) or SCHEDULE due: Rotate (6.2.4), a wrapped
+                      writer or a dirty tree by ReaderWraps (R5); 4 refuse (ErrGkmWait) while the newest
+                      generation still does not cover at S, even with evs's gate off (the writers' own rule,
+                      §8.12), and while a non-holder leaf stands in a tree that wrapped it (R3's poisoned
+                      case); 5 return CurrentRepoKey; the witness stop never holds 2 or 3 (owner decision 129)
+DropKey(repo)         §10.5's depositor rule: the newest GenRotate gkm serves (GET repos/<id>/drop-key?since=),
+                      verified; covers(g, n, now) at my state; now < drop_not_after_ms ≤ time_ms +
+                      DropKeyLifetime + 10 min; g not below my pin, which then rises; else ErrGkmWait, and a
+                      writer rotates on the renewal hint (plan-KEYS-drop-key-lifetime)
+RotateRepo(repo)      ur keys rotate: Rotate with cause REQUEST (never REMOVE unless one is due)
+ForgetRepo(repo)      §11.12's shred: drop RK_g, GenRotates, MLS state, pins and pending records
+```
+
+#### 6.2.6 Group sync, pins and HeadCheck (KEYS-M2-23)
+
+Each device keeps, per repo, `pins{epoch: (group_id, e, epoch_authenticator), gen: (group_id, g, C_g)}` in the keychain, advanced only forward: a commit adopted, a Welcome completed, a generation claimed, opened or adopted. A lower or conflicting value from any source (a push's sealed epoch pin, a head's generation pin, a GenRotate, a HeadCheck peer) is `head_alarm` (fork) with both values; the device stops sealing in that repo until the chain extends its pin. `GroupHead` and `GenHead` for §6's HeadCheck are these pins, GroupHeads only for groups both peers are leaves of, GenHeads for repos both read, 16 of each a round, rotating by group id. §6.4's rules apply: same epoch, same epoch_authenticator else FORK; same g, same C_g else FORK; the lower side reads `gen?since=` or `epochs?after=` up to the higher, checking the chain, and a chain that does not extend its pin is a FORK. After a re-form, a GenHead's group_id differs: the lower side resolves the repo's newest GroupForm (plan-KEYS-reform-ladder rule 8) and compares (g, C_g) along the form chain. Self-updates: a leaf that committed no path for `SelfUpdateInterval` (`SelfUpdateIntervalLarge` above `LargeGroupLeafCount` leaves) commits a path-only commit under R1-R4, read_only leaves included (D-KEYS-26), and defers it under R3 while its tree holds a dropped leaf. Acks: daily, the newest adopted epoch, per group.
+### 6.3 Invariants and why they hold
+
+```text
+RemovedReadsNothingNew  for every generation g and party s neither among gen/<g>'s holders nor admitted after
+                        its claim (a joiner takes the history down the ladder), s opens nothing at or above g,
+                        however much of the store s fetches
+                        why: s reaches RK_g only by a GenWrap in an epoch whose tree holds s (R3, R4 keep
+                        every epoch wrapping g within g's holders), a leaf_wrap under an epoch whose tree
+                        holds s (R5), a STAGED delivery (gen/<g>'s holders) or a LATE one (R6: at a state
+                        at or past g's pin, where s is a holder only if it was at g's pin, since holders
+                        shrink along the chain by R2); the ladder opens downward only
+NoContentToDropped      no content sealed at state n opens to a party dropped at n
+                        why: R7 seals only to a generation covering shrunk(n) and expiry(now), whose holder
+                        set excludes the dropped party, and RemovedReadsNothingNew keeps it there
+RosterWithinHolders     every epoch's tree lies within the holders at its commit's pin, but a generation-0
+                        self-join's; why: R3 at the committer, backed by every member's refusal
+GenerationsFromWriters  every gen/<g> is claimed by a writer of the repo that holds the key at its pin
+                        why: §10.6's claim checks (scope, signer) resolved through the owner marker (6.2.2),
+                        so no other repo's scope reaches the group
+WelcomesReachable       every Welcome has a pointer its recipient can read; why: one pointer key per (device,
+                        group, epoch), created If-None-Match, never shared by two Welcomes
+ChainsMonotone          auth pins never fall along the epoch chain or the generation chain; why: R2 at gkm
+                        (the epoch PUT and claim checks) and at every member
+Convergence             every member at epoch n holds the same tree and epoch_authenticator, and every holder
+                        of generation g the same RK_g; why: one If-None-Match object per index, R8's adopt
+                        rule, MLS's confirmation tag and C_g; the model keeps the store as the one copy, so
+                        this is R8's action structure rather than a checked formula
+HoldersReach (liveness) once the log and the rotations stop, every holder of the newest generation holds
+                        it; why: a leaf through its epoch's GenWrap or a leaf_wrap, an agent through its
+                        staged delivery, a holder whose key lapsed or who joined after the claim through a
+                        LATE delivery by any holder that is not read_only (fair), a member device not yet
+                        in a data repo's tree through its Add (fair at a writer leaf)
+```
+
+**The model.** `sidecartest/model/details/Gkm.tla` keeps one repo A's store as the shared state: the epoch chain (committer, tree, carried generation, pin, time, kind), the generation chain (rotator, holders, pin, time, staged recipients, leaf_wrap epoch), LATE deliveries, Welcomes with their pointer keys, each member device's one-time KeyPackage count, the content sealed (generation, state) and repo B's Welcomes. Each sidecar keeps its tip, the epoch it adopted and the newest it ever reached (I-16). The log is a sequence of admissions, a recovery admission, revocations and an agent's grant expiry; its position is the clock, and an expiry is seen by clock while a revocation is seen by tip, which is how a device with a stale state but a current clock behaves. What a party can open, `Reach`, is derived from the store alone: every GenWrap of an epoch whose tree holds its leaf, every leaf_wrap under such an epoch, every delivery to it, its recovery wraps, and the ladder below; so a removed device that fetches the whole store, or colludes with the server, is the adversary. Five sidecars: a the creator and a writer leaf, b a writer leaf, c a read_only leaf, d an agent that rotates and delivers but never commits, e the device a member's recovery code admits, which the squat twin casts as a reader of A and admin of B. Actions: an entry, a device's advance, a member's processing of the next epoch, a leaf's commit (Add, Remove, path-only, a stale Remove) carrying every pending Remove it may, a Welcome join, an Add in B, a rotation, a LATE delivery, a resync by external commit, the recovered device's self-join, a lost state, a content seal under the gate, and under the squat twin the form and claim. It leaves out ReaderKey lapses and replacements (a delivery to a holder is a delivery to a key it holds), Delegations and their covered agents (an agent holds its own wrap), the leaf rank of the config group, GroupInfo availability, the 412 loser's adoption (two rotations are two claims), gkm's rate limits and the write budget, and the server's forks (HeadCheck's domain, §6). `Losers` names the devices that may lose their state, `StaleTargets` the leaves a writer may remove as stale and `WithB` whether repo B adds devices, so a configuration's bounds are its constants. `Twin` selects a rule to break; `Story` fixes each twin's actions so TLC reaches its violation directly; the design runs with no story. `run-gkm.sh <track>` runs every configuration (`Gkm`, `Gkm-Epochs`, `Gkm-Live`, `Gkm-Wide`, `Gkm-Deep` and the twins) through `.stack/tools/tlc` and prints a verdict line per run; it stops a run whose state directory passes 8 GB on the shared disk and deletes every run's state directory when it ends, so a run is bounded on disk as it is in states.
+
+Runs, TLC at the owner's jar (master d8fb231): `Gkm`, `Gkm-Epochs` and `Gkm-Live` breadth-first over every reachable state at their bounds, `Gkm-Wide` and `Gkm-Deep` by TLC's random simulation, a fixed number of traces of a fixed depth from a fixed seed, since their complete graphs pass the disk a shared build machine can give a run (the breadth-first search at MaxLog 2, MaxEpochs 4 and MaxGens 3 held 62 GB of state after 3.5 h without finishing on 2026-11-09 and was stopped); a simulation shows only that the behaviors it drew kept every invariant:
+
+```text
+configuration                 Twin                    bounds (MaxSeals 1; ReadOnly {c}; Agents {d}; Recovered e; Squatter e)
+                                                      result                                   distinct states  depth  time
+Gkm                           none                    MaxLog 1, MaxEpochs 3, MaxGens 2; readers a, c, d, leaves a, c, writers a, d, e;
+                                                      no lost state, no stale Remove; breadth-first
+                                                      pass, every invariant                      419,200        17     14 s
+Gkm-Epochs                    none                    the same at MaxEpochs 4
+                                                      pass, every invariant                      4,864,888      20     2 min 12 s
+Gkm-Live                      none                    Gkm's bounds under LiveSpec's fairness, the property Live
+                                                      pass, Live and every invariant             419,200        17     1 min 33 s
+Gkm-Wide                      none                    MaxLog 3, MaxEpochs 4, MaxGens 3; readers a, b, c, d, leaves a, b, c, writers
+                                                      a, b, d, e; b may lose its state, c may be removed as stale; by random
+                                                      simulation, 200,000 traces of up to 12 steps from seed 1
+                                                      pass, every invariant on those traces      36,559,120 generated   3 min 43 s
+Gkm-Deep                      none                    MaxLog 2, MaxEpochs 5, MaxGens 3, the same devices; 100,000 traces of up to
+                                                      16 steps from seed 2
+                                                      pass, every invariant on those traces      25,272,503 generated   3 min 37 s
+GkmTwin-PointerByRef          PointerByRef            StoryPointer, WithB   WelcomesReachable violated, 6-state trace      6     6
+GkmTwin-FormsUnchecked        FormsUnchecked          StorySquat, e a reader of A, not a writer
+                                                                            GenerationsFromWriters violated, 5 states    5     5
+GkmTwin-GenWrapIgnoresRoster  GenWrapIgnoresRoster    StoryGenWrap          RemovedReadsNothingNew violated, 6 states    6     6
+GkmTwin-SelfJoinCarriesGenWrap SelfJoinCarriesGenWrap StorySelfJoin         RemovedReadsNothingNew violated, 8 states    8     8
+GkmTwin-LateBelowClaimPin     LateBelowClaimPin       StoryLate             RemovedReadsNothingNew violated, 5 states    5     5
+GkmTwin-ClaimBelowParent      ClaimBelowParent        StoryClaim            RemovedReadsNothingNew violated, 5 states    5     5
+GkmTwin-LeafWrapDirtyTree     LeafWrapDirtyTree       StoryLeafWrap         RemovedReadsNothingNew violated, 4 states    4     4
+GkmTwin-NoGate                NoGate                  StoryGate             NoContentToDropped violated, 3 states        3     3
+```
+
+Each twin run took about a second, and its distinct-state count is its trace, since the story leaves TLC one path; a depth counts TLC's initial state. The twins run at MaxLog 3, MaxEpochs 5 and MaxGens 3 with every device, so their stories are reachable at the design's wider bounds. The breadth-first runs explore every behavior their constants allow, and `Gkm-Epochs`, one commit deeper, took ten times `Gkm`'s states; a run with one more entry, device or generation passes the shared disk's bound, so those bounds run by simulation, whose seeds and trace counts are fixed in `run-gkm.sh` and repeat. Every run deleted its state directory on exit and stayed under 2 GB on disk. The three failures of §10 as written (6.1) appear in `GkmTwin-PointerByRef` (the second Welcome of a last-resort KeyPackage has no pointer), `GkmTwin-FormsUnchecked` (a reader of A claims A's next generation under B's scope) and `GkmTwin-GenWrapIgnoresRoster` (the read_only leaf's self-update hands the removed leaf the REMOVE generation), and are gone in the design: the design runs hold every invariant at the same and larger bounds, with the same log alphabet, devices at every combination of tips, concurrent commits and rotations from every leaf and the agent, deliveries in every order, lost state, resyncs and the recovery self-join. The five design-rule twins show what each fence is for: without R2 at the claim (`ClaimBelowParent`), R6's pin (`LateBelowClaimPin`), R5 (`LeafWrapDirtyTree`), R4's exception (`SelfJoinCarriesGenWrap`) or R7 (`NoGate`), a removed leaf reads what the design keeps from it.
+
+### 6.4 Cost
+
+Against D-KEYS-14's table, which §22.8's `groups` benchmark (KEYS-M2-31) measures; RFC 9420's structures on suite 0x0010, X-Wing public key 1,216 B and ciphertext 1,120 B, Ed25519 32 B and 64 B, credential 207 B:
+
+```text
+tree          leaf 1.54-1.57 KB (X-Wing encryption key 1,216, signature key 32, credential 207, capabilities
+              and extensions ~50, signature 64); parent 1.25 KB plus 4 B an unmerged leaf; so 10 leaves
+              16-27 KB, 100 leaves 158-282 KB, 1,000 leaves 1.58-2.83 MB (parents blank .. full), which is
+              D-KEYS-14's 2.83 MB and stands: nothing here adds a node
+commit        a path commit updates log2(leaves) levels, each a new X-Wing key and one ciphertext (1,120 B
+              plus a 48 B sealed path secret) per node of its copath resolution: every parent full, ~2.4 KB
+              a level, 26 KB at 1,000 leaves; every parent blank, the top level's resolution is ~500 leaves,
+              1.18 MB; an Add-only commit 0.2 KB plus 2.85 KB a joiner; a PrivateMessage adds ~100 B of
+              framing; the GkmCommitHeader 50 B; GenWrap 72 B; the inline GroupInfo at ≤ 16 leaves under
+              50 KB
+Welcome       0.4 KB plus 1.2 KB a joiner (one X-Wing ciphertext each), no tree: the joiner takes the tree
+              from the sealed GroupInfo (0.7 MB at 1,000 leaves, one GET)
+pointer       GkmWelcomePointer grows by the 32 B ref; one object per (recipient, group, epoch) as before
+owner marker  one 40 B object per group, written once; one GET per group per gkm process, then cached
+rotation      GenRotate ~0.5 KB (1.7 KB with a drop key); ReaderWrap ~1.37 KB staged, ~1.42 KB late;
+              RecoveryWrap 1.17 KB; a leaf rotator with a clean tree stages one 72 B leaf_wrap for every leaf
+              and a wrap per agent, Delegation and recovery binding; a wrapped rotator, or a leaf whose tree
+              holds a dropped leaf, a ReaderWrap per leaf: 1,000 leaves cost ~1.37 MB of staged objects,
+              ~45 batched requests (QD-066) and ~9 KiB a drive per object (§11.13); the config and directory
+              groups at a 5,000-admission Team: ~6,000 objects, ~7.5 MB, as §10.15 sizes it
+memory        one tree loaded at a time (§10.5): 2.83 MB at 1,000 leaves; a path commit clones the tree and
+              the key schedule before it stages (mls_group.go), ~6 MB transient, plus ~1.2 MB of path
+              material in the blank-parent case; a Welcome join holds the sealed GroupInfo (0.7 MB) and the
+              tree it decodes (2.83 MB); so a 1,000-leaf group peaks under ~10 MB on a phone, within §18.4's
+              budgets, and KEYS-M2-09 logs the allocation totals KEYS-M2-31 turns into a sampled peak;
+              the pending engine's record and pins are under 1 KB a repo; a 1,000-generation ladder is
+              ~0.5 MB of Signed GenRotates beside 32 KB of keys
+store         per §10.6's table, unchanged for commits (4 GETs and a PUT), rotations (1 GET, W PUTs, 1
+requests      claim), Adds (claim, delete, Welcome, pointer, group-info) and late wraps; plus: creation and
+              re-form +1 PUT (the marker); group resolution +1 GET per group per process (was a form read
+              per 5 s); H1 adds at most one hint a minute per group with a dropped holder, on Redis only;
+              H2 one GET a minute per waiting leaf; a self-update after a last-resort join is one commit
+              more per such join
+time          a 1,000-leaf path commit: ~10 X-Wing encapsulations and ~10 decapsulations a member in the
+              full-parent case (under 1 ms each on a 2020 phone core), ~500 at the top level in the blank
+              case (~0.5 s, which the js/wasm leg yields across, KEYS-M4-01); a 1,000-leaf tree hash ~1 ms
+```
+
+### 6.5 Failure modes and recovery
+
+```text
+a commit a member refuses   the object stands; the member alarms (refused, naming committer and epoch), adopts
+                            nothing, seals nothing to the generation it carried; honest committers never make
+                            one (R3 at the committer), so this is a bug or a compromised leaf; repair: a writer
+                            leaf's Remove of the committer, a REMOVE rotation (6.2.4), and the refusing
+                            members process on from the repaired chain, or an admin re-forms the group
+                            (KEYS-M2-25); content sealed to the poisoned generation re-checkpoints at its
+                            next write (§11.7)
+a dropped leaf stands       (a wrapped writer rotated; every leaf offline or read_only) reads continue, the
+                            gate is open, read_only self-updates and every resync wait (R3); H1 hints the
+                            writer leaves each minute until one commits the Remove; a read_only leaf whose
+                            self-update waits past stale_leaf_days is removed as stale and returns by resync,
+                            which waits on the same Remove; no leak, since no epoch wraps the new generation
+                            into that tree
+a lost Welcome              the uploader crashed between epoch/<n> and welcome/<n>: a writer leaf sees no
+                            Welcome after WelcomeTimeout, removes and re-adds the joiner; a slow uploader's
+                            late Welcome lands at its own pointer key and the joiner takes the newer one
+a lost claim                staged objects with no gen/<g>: GC after 24 h; the rotator resumes from its draft
+                            with the same bytes, or finds another's claim and judges it
+a 412 that does not cover   the loser fetches its delivery of the winner (a late ask if it has none), then
+                            rotates again at g+2 for what the winner left uncovered
+a rotator ahead of gkm      403 at the claim (auth gkm's state has not reached): retry when gkm's state
+                            arrives (§8.9's 5 s), a time refusal when the clock moves
+a generation no holder can  every delivery to a lapsed key: the holder publishes a new ReaderKey and asks; any
+open                        holder but a read_only one delivers (15 min, then 64 others); a leaf also takes
+                            the next GenWrap; nothing is lost, since the ladder opens downward from any later
+                            generation it gets
+gkm down (KF7)              reads and deposits from the keychain; writes while covered; joins, rotations,
+                            deliveries wait on the hint intake's resync
+a device far behind         KF5's resync from the newest GroupInfo under the generation it names, which a late
+                            delivery gives; above 16 leaves, one leaf online writes the GroupInfo on the ?want=
+                            hint
+a device with lost state    resync (its leaf stands) or, with the keychain gone, the member's recovery code
+                            (6.2.4's Recovery), or an admin's re-add after revocation
+a group-id collision        409 at the owner marker: the creator draws another id; a re-form naming a taken id
+                            is refused and the admin re-forms with a fresh one
+a squatting form            refused at the marker (409); nothing written
+a re-formed group's first   refused until gen/<form.generation> exists (plan-KEYS-reform-ladder rule 5); the
+commit                      re-former uploads the ladder first, then commits
+site loss                   D-KEYS-13: a repo admin's device re-forms from its keychain (RK_g and the Signed
+                            GenRotates), the marker and form first; readers re-add by KF2 and late wraps
+a fork at any pin           head_alarm (fork) with both values; sealing stops in that repo until the chain
+                            extends the pin; §6.4's HeadCheck relays it
+```
+### 6.6 The test plan
+
+Unit tests (sidecar root, each a top-level `func TestXxx`, on `FakeMls` then the real subset, fake clocks and barriers only, `testHookSecret` at every key and `testHookBarrier` at every claim and epoch PUT):
+
+```text
+TestACommitCarriesEveryPendingRemove             a writer leaf at a state past two revocations commits one Remove of
+                                                 both with its Add; a member refuses the same commit made without
+                                                 them (R3) and alarms refused naming the committer
+TestAReadOnlyLeafWaitsWhileADroppedLeafStands    after a wrapped rotation the read_only leaf's due self-update
+                                                 waits, asks H2, and commits once a writer leaf's Remove lands; the
+                                                 twin's commit, injected, is refused by every member
+TestAResyncWaitsWhileADroppedLeafStands          KF5's external commit waits under R3 and lands after the Remove
+TestNoEpochWrapsAGenerationToANonHolder          over generated runs (revocations, rotations by leaves and the agent,
+                                                 commits from every leaf, resyncs, the self-join), every stored
+                                                 epoch's tree lies within the holders of the generation its GenWrap
+                                                 carries, and Reach of each removed device, computed as the model
+                                                 does from the fake store, stays below the first generation after
+                                                 its drop
+TestARotationsClaimNeverFallsBelowItsParent      a rotator at a stale tip refuses to claim (ErrGkmAuthAhead) and
+                                                 gkm refuses a claim whose auth is below gen/<g>'s
+TestALateDeliveryIsSignedAtOrPastTheClaimsPin    a holder behind the claim does not deliver; one at the pin does; a
+                                                 LATE delivery below the pin, injected, is refused by gkm and
+                                                 judged invalid by members
+TestALeafWrapNeedsACleanTree                     a leaf whose tree holds a dropped leaf rotates by ReaderWraps to
+                                                 every leaf; with a clean tree one leaf_wrap; the removed leaf opens
+                                                 neither
+TestARecoverySelfJoinCarriesNoGenWrapOverLostLeaves
+                                                 generation 0 while the lost devices' leaves stand, generation g*
+                                                 with a clean tree; the recovered device's next commit removes them
+                                                 and the rotation after is the first new generation (FS-20)
+TestAWelcomePointerIsKeyedByGroupAndEpoch        a device whose last-resort KeyPackage served two Adds in two groups
+                                                 holds two pointers and joins both; two Adds of one device in one
+                                                 group (the 10-minute re-add) leave two pointers and it joins the
+                                                 newer; a pointer at or below its reached epoch is skipped
+TestALastResortJoinSelfUpdatesAtOnce             the joiner's first commit after a last-resort join is a path-only
+                                                 commit, and its next upkeep pass replaces the last-resort
+                                                 KeyPackage
+TestAGroupBelongsToOneRepo                       a form for B naming A's group answers 409 at the marker and writes
+                                                 nothing; a B-scoped token reaches none of A's routes; equal bytes
+                                                 resume a crashed creation; the shred deletes the marker and a
+                                                 re-seed's form writes it again
+TestAReformsFirstCommitFloorsAtTheFormsGeneration
+                                                 epoch 1 of a re-formed group is refused below gen/<form.generation>'s
+                                                 auth and before the ladder reaches that generation
+TestEnsureWritableCommitsThenRotatesThenRefuses  the four steps in order on a fake clock: pending changes committed,
+                                                 a REMOVE rotation when uncovered, SCHEDULE at 30 days, ErrGkmWait
+                                                 while uncovered at my state with evs's gate off
+TestKeyAccessWalksTheLadderFromAnyHeldGeneration RepoKey(g) from a newest held generation through cached and fetched
+                                                 GenRotates; a wrong C_g, GenLink, AAD width or cause refused; gen/1
+                                                 with cause REMOVE refused
+TestPinsNeverFall                                a lower or conflicting epoch or generation pin from a push, a head,
+                                                 a GenRotate or a HeadCheck peer raises head_alarm (fork) and stops
+                                                 sealing; the chain extending the pin resumes it
+TestDropKeyFollowsTheDepositorRule               FS-23's M2 half as a unit: an older unexpired GenRotate after a
+                                                 removal refused with evs's gate off; a lapsed drop key waits
+TestTheLadderAadWidthsArePinned                  testdata/gkm/ladder.json byte-equal on every leg (exists; gains the
+                                                 gen/1 cause row)
+```
+
+Schedule rows (KEYS-M2-27 to -29, KEYS-M4-01), each with its success twin and `ApplyThenDrop` where a write is involved: FS-15 gains "a wrapped rotation while a leaf stands, then the read_only leaf's self-update waits under R3, the writer leaf's Remove releases it, and the removed leaf opens nothing of g+1", "a resync waiting on the same Remove", "a claim at a stale tip refused" and "two Adds of one device through its last-resort KeyPackage in two groups, both joined"; FS-20 gains "the self-join's generation 0 only while the lost leaves stand" and "a kill between the owner marker and the form, then the form and epoch/0, resumed with equal bytes"; FS-24 gains "H1's pending hint while a dropped holder precedes the newest epoch's pin, stopping at the first commit past it" and "H2's want from a waiting leaf"; FS-103 gains "a LATE delivery whose signer's state trails the claim refused, and one at the pin accepted"; FS-104 gains the twin's injected commit "refused by every member and the oracle, the carried generation poisoned"; FS-6 and FS-41 gain the marker (deleted at a shred, written by a re-seed's form, refused for another repo); FS-97's leaf legs gain "a stale Remove of a page Worker whose tree holds a dropped leaf carries that Remove too". §22.7's committers block gains "a squatting form refused" and "a last-resort join's immediate self-update".
+
+Model twins the tasks add to `Gkm.tla` (new twin values and stories; the file's own tests are the configurations in `run-gkm.sh`): KEYS-M2-19 adds `MembersSkipRosterCheck` (members adopt a commit whose tree breaks R3, which must break `RemovedReadsNothingNew` as `GenWrapIgnoresRoster` does, reached from an injected commit rather than a read_only leaf's); KEYS-M2-20 adds `StagedToNonHolder` (a rotation stages a delivery to a party outside its holder set, `RemovedReadsNothingNew`) and `AdoptNonCoveringWinner` (the 412 loser adopts and seals to a winner that does not cover its shrink, `NoContentToDropped`); KEYS-M2-21 adds `AddWithoutRemove` (an Add commit that leaves a dropped leaf, `RosterWithinHolders`); KEYS-M2-24 adds `RecoverBeforeAnchor` as a story under a lying-store flag if one is added, else a unit test; KEYS-M2-25 adds `FormWithoutMarker` (`GenerationsFromWriters`). Each twin names the invariant it breaks, as the configurations here do.
+
+mlsinterop vectors (KEYS-M2-11's artifact, §22.10's ladder row): `ladder_test.go` gains the gen/1 cause byte (REQUEST, 0x02) in GenLink's AAD and a GenWrap of a generation-0 self-join's epoch (none: the row records that epoch's GenWrap is empty and its GroupInfo seals under `group_info_generation`); `testdata/gkm/wrap_paths.json` gains `gkm/welcome/<sidecar_id>/<group_id>/<n>` and `gkm/<group_id>/owner`; the stacks row's lifecycle gains a join through a last-resort KeyPackage (tmc/mls sends `last_resort` 0x000A) followed by the joiner's path commit, so both stacks agree on the extension's number and placement; and a GroupInfo with `ratchet_tree` from a tree holding a last-resort leaf.
+
+### 6.7 Implementation notes, task by task
+
+Order: the formats first (KEYS-M2-19's branch carries the proto and path changes, since every later task reads them), then member checks (-19), rotation and deliveries (-20), the engine and flows (-21), key access (-22), sync and pins (-23), recovery (-24), re-form (-25), the commands (-26), then the schedules (-27 to -29), sizes (-31) and the page Worker (M4-01).
+
+**Landed code that must change** (sidecar root unless said):
+
+```text
+protocol/gkm.proto             GkmWelcomePointer.key_package_ref = 3; new GkmGroupOwner{repo_id = 1; network_id = 2};
+                               the GkmEpochObject comment at epoch 0 of a re-form: "no auth; epoch 1's floor is
+                               gen/<form.generation>'s"; testdata/gkm/metadata_rows.yml rows for both (gkm-1, gkm-5)
+gkm_paths.go                   GkmWelcomePointerPath(sidecarId, groupId, epoch), GkmGroupOwnerPath(groupId); the
+                               wrap_paths.json vectors gain both
+gkmservice/welcomes.go         pointers at the new key; the collision count and alarm go; the Welcomes listing reads
+                               the ref from the pointer
+gkmservice/groups.go           the owner marker as the first write of a creation and a re-form, 409 on other bytes;
+                               the LIST goes; GET /gkm/groups/<id> and every group route resolve through the marker
+                               (a new gkmGroupOwners cache, immutable entries); the re-form's epoch 0 unchanged
+gkmservice/epochs.go           the epoch PUT check's floor for epoch 1 of a re-formed group: gen/<form.generation>'s
+                               auth, read through generations.go's accessor; the fail-closed refusal of a pinless
+                               previous epoch narrows to that case
+gkmservice/reconciler.go       H1: pending hints while a holder dropped since the newest epoch's pin and time, from
+                               the same state watch; H2's want is groupinfo.go's existing hint
+gkmservice/shred.go            deletes gkm/<group_id>/owner with the group's objects
+gkmservice/objects.go          the owner family in the key inventory
+sidecartest/fake_blobs.go      path-prefix rule (EVSB's file: raise with the question, not an edit; until then
+                               KEYS-M2-13's filter stays)
+sidecartest/fake_gkm.go        FakeGkm gains the roster rule's effect for FakeMls trees: a client's rotation uses a
+                               leaf_wrap only on a clean tree, and EnsureWritable's step 2 runs the pending engine
+                               (KEYS-M2-21's seam) before it rotates
+gkm_upkeep.go                  after a last-resort join: replace the last-resort KeyPackage at the next pass
+                               (KEYS-M2-23 reports the join to upkeep through GkmUpkeepRole)
+mls_extension.go, gkm_keys.go  unchanged: 0x000A and the widths stand as built
+```
+
+**KEYS-M2-19 (member checks).** Build first, with the format changes above on its branch. `CheckCommit(view, group, staged, header)` runs §10.9's committer and check rows at `header.auth` (`GkmAuthView.At`, waiting with `ErrGkmAuthAhead`, fork on `ErrGkmAuthOffChain`), then R3: `staged.Added()`, `Removed()` and the new roster against `KeyHolders(view.At(header.auth), repo, header.time)`, the generation-0 external-commit exception for a recovery-admitted uploader only; then R4: `header.generation` at or past the previous epoch's and its GenWrap opening to `gen/<g>`'s `C_g`. Stale Removes by the owner's rule (`UrMlsCredential.not_after - 90 d + stale_leaf_days <= my clock + 60 s`, read from the prior epoch's tree), in one function `gkmStaleRemoveValid`. `CheckRotation` is §10.9's rotation checks with R2 (auth and time at or past the parent's); `CheckDelivery` the delivery checks with R6, judged at the delivery's own state. The poison verdict: a type `GkmVerdict{Refused bool; Poisoned uint64 (generation); Reason}` the engine and sync read. Tests: one refusal and one success per row, the R3 cases above, S3's forged admission, KeyPackage and ReaderKey; the oracle (KEYS-M2-29) stays separate code.
+
+**KEYS-M2-20 (Rotate and late deliveries).** 6.2.4's Rotate as one code path for every cause and rotator, `persist draft` through the keychain's `gkm/<repo_id>/draft` item, batched staging through `GkmApi.UploadWraps` and `UploadRecoveryWraps`, the claim through `ClaimGeneration` with `testHookBarrier` around it, and the 412 branch with `CheckRotation` and the cover test (`GkmGenerationCovers` against what this rotation rotates for). R5's leaf case from `MlsGroup.Roster()` against H. `drop_public_key` and `drop_not_after_ms` for kinds that take deposits or an inbox (RESOLUTIONS plan-KEYS-drop-key-lifetime and plan-MAIL-group-inbox). Late deliveries as 6.2.4's deliver, with R2's `tip >= gen/<g*>.auth` precondition and the readerkey check; `dwraps` for a Delegation's signer. Tests: KEYS.md's list plus 6.6's rotation rows; a kill before and after each step resuming from the draft.
+
+**KEYS-M2-21 (membership flows).** The pending engine as 6.2.4 (one `gkmGroupManager` per group, single-flight, inputs `AuthAdvanced` and the hint intake's `pending`, `welcome` and `wrap-pending` handlers), with `Pending(S, e)` as a pure function (`gkm_members.go`) the tests and the oracle can call, `may(c)` from §10.9's committers, seats from §8.12 (`gkm_seats.go`, reusing §7.9's leaves rule for the config and directory groups), KF1 as the state machine with its keychain draft and the `activate` call after the deliveries, KF2/KF3 through the engine, KF4 through the engine then `Rotate`, KF6's loser path, the `WelcomeTimeout` re-add, and the owed-Welcome record. `GkmClient.CreateGroup` and `AuthAdvanced` land here; `EnsureWritable`'s step 2 calls `Run(c)`. Tests: §22.5's KF1 to KF4 and KF6 on `FakeMls` then the real subset, the engine's R3 cases, a kill at each KF1 step, a repo never activated before its recovery wraps exist, the two-group last-resort join.
+
+**KEYS-M2-22 (key access).** 6.2.5 as written, over the keychain's `gkm/<repo_id>/gen/<g>` items (RK_g with the Signed GenRotate bytes, plan-KEYS-reform-ladder rule 2), `gkm_ladder.go` walking down through cached or fetched GenRotates with `OpenGkmLadder`, `EnsureWritable`'s four steps, `DropKey` over `GkmApi.DropKeys`, `ForgetRepo`, and the late ask (`GkmLateAsks`, landed in gkm_api.go) driven from a `wraps` fetch that finds nothing for a held key. The checkpoint signal is `EvsRepoKey.Cause()` (landed). Tests: 6.6's key-access rows; FS-23's half; a pin that never falls.
+
+**KEYS-M2-23 (sync, pins, HeadCheck).** 6.2.6: KF5 with R1-R4's preconditions and the R3 wait with H2; self-updates with the wait; `gkm_pins.go` keeping `gkm/<repo_id>/pins` and answering `GroupHead` and `GenHead` to PROTO-M2-02's HeadCheck (its `SealAllowed` and `ReportFork` seams, PROTO-M2-04); the commit-hint handler (fetch `epochs?after=`, Process each); acks through upkeep's `AckGroups`; the last-resort join's immediate self-update and its report to upkeep. Tests: KEYS.md's list plus 6.6's pin and wait rows; replay at 100 and 101 epochs; a fork at one epoch alarming.
+
+**KEYS-M2-24 (recovery).** 6.2.4's Recovery with its states persisted (`gkm/<repo_id>/pending` carries the recovery phase), the generation-0 self-join exactly when the tree holds a non-holder at the device's tip, the ordinary external join otherwise, the next commit's removes through the engine, then `Rotate`; the restored order; the rebind's re-wrap and delete order. Tests: §22.7's recovery rows and 6.6's self-join row; FS-20's and FS-22's cases run in -27 and -28.
+
+**KEYS-M2-25 (re-form and re-seed).** No longer blocked: plan-KEYS-reform-ladder is decided and 6.2.2 settles epoch 0's floor and the marker. Build `gkm_reform.go` (the re-former's form, marker, epoch 0, ladder upload in ascending batches of 64, re-adds and wraps) and `gkmservice/reform.go`'s ladder route (QD-074's checks) and the floor rule. Tests: FS-6's gkm legs, a re-form refused from a non-admin device, a member refusing a mismatched C_g, a re-form naming a taken group id refused at the marker, FS-41's group legs on T3.
+
+**KEYS-M2-26 (`ur keys rotate`, `ur evs rekey`).** Unchanged in scope; `RotateRepo` is `Rotate` with cause REQUEST, REMOVE only if one is due (`GkmRotationRemoveRequired`).
+
+**KEYS-M2-27, -28, -29 (schedules).** As the plan has them, plus 6.6's added rows; -29's `DeliveryOracle` judges from the log and the fake store alone and, for FS-104's new case, computes `Reach` as the model does; FS-15's wrapped-rotation-then-read_only-self-update case is the schedule that shows the leak twin refused on real code.
+
+**KEYS-M2-31 (sizes).** As the plan has it; the table gains the owner marker and the new pointer, and the memory row measures the join and path-commit peaks 6.4 estimates (a sampled peak on the ios32 surrogate, not allocation totals).
+
+**KEYS-M4-01 (page Worker and stale leaves).** The group view §7.10's stale row needs (`SidecarStaleGroupView`'s real implementation over the engine's `Pending` and the credential `not_after` rule), the yield points, and the read_only leaf's R3 wait: a Worker whose self-update or resync waits must not count as stale for that reason alone (its leaf's credential is what the stale rule reads, so a Worker that cannot commit because a dropped leaf stands is removed only after stale_leaf_days, as any quiet leaf, and returns by resync once the Remove lands). FS-97's leaf legs as 6.6 adds them.
+
+Scope changes: KEYS-M2-25 loses its "blocked on the question" clause; KEYS-M2-19 gains the proto and path changes; KEYS-M2-21 gains the pending engine's R3 and the WelcomeTimeout re-add as named parts; KEYS-M2-23 gains the R3 wait and H2; no held task loses scope.
+### 6.8 Proposed DESIGN.md text
+
+For the design-records track, section by section; each replaces the sentence or row named.
+
+**§10.4, the credential block.** Add: "A last-resort KeyPackage carries draft-ietf-mls-extensions' `last_resort` extension, type 0x000A with empty extension_data, in its own extensions, and every leaf lists 0x000A and 0xF553 in its capabilities; a device that joined through it commits a path-only self-update at its first opportunity and replaces it at its next upkeep pass."
+
+**§10.5, the hierarchy block.** After `GroupInfo_e` add the widths: "GenLink's AAD is repo_id || u64be(g) || u8(cause_g), GenWrap's and LeafWrap's group_id || u64be(e) || u64be(g), GroupInfo's group_id || u64be(e); gen/1 carries cause REQUEST." In Rotate's step 3 `leaves` row, after "else a ReaderWrap to each leaf's ReaderKey" add "(a leaf_wrap never uses an epoch whose tree holds a non-holder)".
+
+**§10.6, the object table.** Replace the `gkm/welcome/<sidecar_id>/<ref>` row with `gkm/welcome/<sidecar_id>/<group_id>/<n>`, "with the Welcome; pointer {group_id, n, key_package_ref}; one per Welcome, so a last-resort KeyPackage's Welcomes never share a key; a device holding several for one group takes the highest n above the newest epoch it reached". Add a row `gkm/<group_id>/owner`, "If-None-Match, the first write of a creation or re-form; {repo_id, network_id}, written by gkm from the token; the only binding of a group to its repo, through which every group route resolves; deleted by the shred". In the checks row replace "whose newest GroupForm names the group" with "which gkm/<group_id>/owner names, among the token's scopes, and whose newest GroupForm names the group". In the Welcomes row replace "joiners get a pointer and a welcome hint" with "joiners get a pointer, keyed by group and epoch, and a welcome hint". In the epoch PUT check add: "never below the previous epoch's, or, for epoch 1 of a re-formed group, below gen/<the form's generation>'s auth, since a re-form's epoch 0 carries none". Add to the pending changes row: "and every 60 s while its newest verified state shows a holder dropped since the group's newest epoch's auth pin and time, so a leaf commits the Remove a wrapped rotation left".
+
+**§10.6, the keys rule.** In the object table's note add: "§11.8's 'no key prefixes another' is a path prefix, so `<ref>` beside `<ref>.claim` stands."
+
+**§10.7, KF2.** After "a committer per 10.9 claims a KeyPackage and commits the Add with other pending changes" add "(every Remove it may commit among them, so the new tree lies within the key holders at its pin)". KF5: after "resyncs by external commit" add "once its tree holds no dropped leaf but its own old one, waiting otherwise for a writer leaf's Remove, which gkm hints".
+
+**§10.9, the roster row.** Replace with: "roster: every commit's new tree lies within the key holders at its auth pin, and in the config and directory groups within the leaf-entitled devices (§7.9), except a recovery self-join's revoked leaves (10.8), whose generation-0 epoch has no GenWrap; a committer checks this before it commits and carries every Remove it may, a leaf that may not commit one (read_only; an external commit) waits while its tree holds a dropped leaf, and a member refuses a commit that breaks it, never adopting its epoch and treating the generation its GenWrap carried as poisoned; so no epoch wraps a generation to a tree holding a party that generation excludes, and no leaf wrap uses such an epoch". Self-update row: add "deferred while the leaf's tree holds a dropped leaf it may not remove". External commit row: add "and waits under the roster row while its tree holds another dropped leaf".
+
+**§10.11.** D-KEYS-18 gains "KF1 writes the group's owner marker before its form"; D-KEYS-24 gains "a Welcome pointer is keyed by (recipient, group, epoch)"; new **D-KEYS-27 (proposed):** "Every commit's new tree lies within the key holders at its pin, checked by the committer, which carries every Remove it may, and by every member; a leaf that may not commit a Remove waits while its tree holds a dropped leaf, and gkm hints writer leaves meanwhile. *Why:* an epoch that wraps a generation to a tree holding a removed leaf hands it the generation that excludes it, whatever honest members then do." New **D-KEYS-28 (proposed):** "A group belongs to one repo from its first byte: gkm/<group_id>/owner, created If-None-Match before the GroupForm, names the repo through which alone gkm resolves the group. *Why:* a form naming another repo's group would give a reader a write position there."
+
+**§10.14, routes.** `POST /gkm/groups` and `/forms` gain "writes the owner marker first; 409 when it names a taken group id". The object list in Provides gains the marker and the pointer's key.
+
+**§2.8.** gkm-1's `sees` gains "and each group's owner marker (repo_id, network_id)"; gkm-5's gains "pointers keyed by recipient, group and epoch, naming the KeyPackageRef the Add used".
+
+**§22.7 and the FS rows.** The cases 6.6 names: FS-15, FS-20, FS-24, FS-103, FS-104, FS-6, FS-41, FS-97 and the committers block.
+
+**§23.8.** No change: the fields freeze with the gkm wire at M2's exit (D-KEYS-10), these among them.
+
+### 6.9 Owner questions
+
+Each is filed under `.stack/questions/` in the brief's format; the section is built on the recommendation in every case.
+
+**details-6-last-resort-extension** (keys-m2-07-last-resort restated). Which extension marks a last-resort KeyPackage? Options: (1) draft-ietf-mls-extensions' `last_resort`, 0x000A, empty, as built; (2) a private-use type beside ur_group, 0xF554; (3) no extension, the route or key says. Costs: (1) a draft's number, moved by D-KEYS-12's migration if IANA changes it, and the one value OpenMLS sends; (2) stable, read by no other stack; (3) changes QD-526's accepted request and gkm-4. Recommendation: (1).
+
+**details-6-welcome-pointer-key** (keys-m2-13-last-resort-welcome-pointer restated). Options: (1) key pointers by group and epoch, `gkm/welcome/<sidecar_id>/<group_id>/<n>`, the ref inside the pointer; (2) `<ref>` for one-time and `<ref>/<group_id>` for last-resort KeyPackages; (3) keep the key, overwrite, and re-add after 10 minutes. Costs: (1) one key-form change, one proto field, gkm-5's wording; (2) two key forms and a path-prefix pair; (3) a lost Welcome per collision and a 10-minute delay. Recommendation: (1).
+
+**details-6-group-owner-marker** (keys-m2-12-groupform-names-anothers-group, widened). Options: (1) an owner marker `gkm/<group_id>/owner` written If-None-Match before the form, the only binding gkm resolves by; (2) the question's option 1, a LIST before the form; (3) accept the reach. Costs: (1) one 40 B object per group, a §2.8 line under gkm-1 (no new value: the pair is already shown), one GET per group per process, and the landed LIST goes; (2) a LIST per form and a race between a repo's form and its epoch/0 in which two newest forms name one group and the resolver must refuse both; (3) any reader can wedge another repo's rotations. Recommendation: (1).
+
+**details-6-claim-key-prefix** (keys-m2-13-claim-key-prefix restated). Options: (1) §11.8's rule means a path prefix and `sidecartest/fake_blobs.go` checks that; (2) move claims to `gkm/kpc/`; (3) exempt `.claim` in the fake. Costs: (1) one change in EVSB's file and a sentence in §11.8; (2) a key-form change and QD-442; (3) a special case. Recommendation: (1); until answered KEYS-M2-13's filter of the one report stays.
+
+**details-6-ladder-aad-widths** (keys-ladder-aad-widths restated). Options: (1) as built, u64be for g and e, u8 for cause, gen/1 REQUEST; (2) u32be for cause; (3) gen/1's cause free. Costs: (1) text only; (2) one line and regenerated vectors; (3) a reader rule for two shapes. Recommendation: (1).
+
+**details-6-reform-epoch-zero-floor** (keys-wire-reform-epoch-zero restated). Options: (1) as landed, no auth at a re-form's epoch 0, epoch 1's floor from gen/<form.generation>'s auth; (2) a Signed GenRotate in the reform request; (3) epoch 0 through the epochs route after the ladder. Costs: (1) one sentence in the epoch PUT check; (2) the same bytes twice and a ladder check; (3) a special case on the epochs route and a third route in deleted mode. Recommendation: (1).
+
+None blocks the held tasks: every one is additive before M2's freeze, and each task above builds on the recommendation.
 
 ## 7. Remote search across designated indexers (§11.14, §18.4)
 
