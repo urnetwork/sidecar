@@ -169,8 +169,8 @@ func FuzzConfigDelta(f *testing.F) {
 			net.chain = testConfigEntryChainTB(t, entryBytes)
 			net.entries = append(net.entries, entryBytes)
 
-			if len(net.log.kept) > entryCount+1 || len(net.log.ringOrder) > configStatementWindow {
-				t.Fatalf("kept %d entries and %d ids after %d entries", len(net.log.kept), len(net.log.ringOrder), entryCount)
+			if len(net.log.kept) > entryCount+1 || len(net.log.State().ring) > configStatementWindow {
+				t.Fatalf("kept %d entries and %d ids after %d entries", len(net.log.kept), len(net.log.State().ring), entryCount)
 			}
 		}
 		if net.log.Fork() == nil {

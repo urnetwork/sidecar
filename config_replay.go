@@ -1,13 +1,16 @@
-// §7.9's retention row for a reader that did not walk the log from genesis: a new device, or one restarting from
-// what it kept. It starts at the newest base b it holds, verifying b's signature and, through its rows source, its
-// config head's chain to genesis rather than the pruned entries; chains A_k back from b's prev_chain through the kept
-// entries to the retention point; re-applies the statements and ticks among folded_through+1..b-1 as S(b) says,
-// judging each at its own position, so it judges every at as a long-running reader does; then applies b+1 on.
+// §7.9's retention row for a reader that did not walk the log from genesis: a new device, one restarting from what it
+// kept, or one that fell behind the retention point (DESIGN-DETAILS 5.2.4's StartAtBase). It starts at the newest base
+// b it holds: verifies b's signature under a config writer its own rows name, the fold rule against the base before
+// it and the tail cap; for a full reader, checks b's config head as its anchor (the head's genesis is the log's, its
+// records equal every held entry through folded_through, and the chain recomputed from the genesis through the head's
+// records, bases included, reaches the first held entry); then loads b's rows and re-applies the tail
+// folded_through+1..b-1 by b's tail_verdicts, judging nothing, taking every verdict there from the base, and applies
+// b+1 on as a long-running reader does. So a new device reaches a long-running reader's S(b) without judging a tail it
+// could only judge on b's head (questions team-m2-02-new-device-tail-verdicts and the replay ring's, which DESIGN-DETAILS
+// 5.1 answers).
 //
-// What a new device cannot know it does not judge: entries the base folded are its rows, and their ids join the ring
-// as applied, since no state before b is left to judge them by. A statement judged in the tail stands on b's rows
-// rather than on the state at its own position, so one whose verdict turns on what b's head changed, a tag owner or a
-// setting, can differ from a long-running reader's (question team-m2-02-new-device-tail-verdicts).
+// A new device holds no verdict for the entries b's rows fold: it keeps their bytes for the head check and the next
+// base's fold, and its replay ring is b's rows' plus the tail's.
 //
 // Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret.
 
@@ -16,6 +19,7 @@ package sidecar
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 
 	"google.golang.org/protobuf/proto"
@@ -49,19 +53,51 @@ func (self configRetainedRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigH
 // entry after it. rowsSource serves rows retained does not hold and checks the base's config head. An error when the
 // kept entries do not chain or hold no base, or when the base fails its checks.
 func RestoreConfigLog(settings *ConfigLogSettings, retained *ConfigRetained, rowsSource ConfigRowsSource) (*ConfigLog, error) {
+	return restoreConfigLogAbove(settings, retained, rowsSource, nil)
+}
+
+// RestoreConfigLog held to floor, a pin this reader held before, nil for none (DESIGN-DETAILS 5.5's far-behind
+// reader): a log ending below it is ErrConfigBelowPin; a run holding another A_n at its position is ErrConfigRunRefused;
+// and a floor before what the run holds is checked by the base's head, the chain recomputed through its records, so a
+// restart is never a silent move onto another chain.
+func restoreConfigLogAbove(settings *ConfigLogSettings, retained *ConfigRetained, rowsSource ConfigRowsSource, floor *bridge.AuthPin) (*ConfigLog, error) {
 	self, err := NewConfigLog(settings, retained.SignedGenesis)
 	if err != nil {
 		return nil, err
 	}
-	if err := self.restore(retained, rowsSource); err != nil {
+	if err := self.restore(retained, rowsSource, floor); err != nil {
+		return nil, err
+	}
+	if err := self.checkFloor(floor); err != nil {
 		return nil, err
 	}
 	return self, nil
 }
 
+// Whether this log stands at or above floor and holds floor's A_n where it holds a digest there. Nil floor passes.
+func (self *ConfigLog) checkFloor(floor *bridge.AuthPin) error {
+	if floor == nil {
+		return nil
+	}
+	state := self.state.Load()
+	if state.n < floor.GetVersion() {
+		return fmt.Errorf("%w: %d below %d", ErrConfigBelowPin, state.n, floor.GetVersion())
+	}
+	if chain, ok := state.chainAt(floor.GetVersion()); ok && !bytes.Equal(chain[:], floor.GetChain()) {
+		runError := &ConfigRunError{N: floor.GetVersion(), RemoteChain: chain, Reason: "a second A_n at the reader's own pin"}
+		if len(floor.GetChain()) == sha256.Size {
+			runError.LocalChain, runError.HasLocalChain = [sha256.Size]byte(floor.GetChain()), true
+		}
+		self.log.Errorf("[config]%s restart refused at %d: %s", self.networkId, floor.GetVersion(), runError.Reason)
+		return runError
+	}
+	return nil
+}
+
 // Starts a log at S(0) at the newest base among retained.Entries and applies every entry after it, as
-// RestoreConfigLog says, a full reader's or a rows-only one's.
-func (self *ConfigLog) restore(retained *ConfigRetained, rowsSource ConfigRowsSource) error {
+// RestoreConfigLog says, a full reader's or a rows-only one's. floor, nil for none, is a pin this reader held before,
+// which a full reader's anchor checks where the entries no longer reach it.
+func (self *ConfigLog) restore(retained *ConfigRetained, rowsSource ConfigRowsSource, floor *bridge.AuthPin) error {
 	if len(retained.Entries) == 0 {
 		return nil
 	}
@@ -80,6 +116,9 @@ func (self *ConfigLog) restore(retained *ConfigRetained, rowsSource ConfigRowsSo
 		}
 		if !bytes.Equal(entry.GetNetworkId(), self.networkId.Bytes()) {
 			return fmt.Errorf("%w: kept entry %d is another network's", ErrConfigEntryMalformed, i)
+		}
+		if len(entry.GetPrevChain()) != sha256.Size {
+			return fmt.Errorf("%w: kept entry %d has no prev_chain", ErrConfigEntryMalformed, i)
 		}
 		if 0 < i {
 			if entry.GetN() != entries[i-1].GetN()+1 || !bytes.Equal(entry.GetPrevChain(), chains[i-1][:]) {
@@ -102,7 +141,7 @@ func (self *ConfigLog) restore(retained *ConfigRetained, rowsSource ConfigRowsSo
 		return fmt.Errorf("%w: entry 1 does not chain onto the genesis", ErrConfigFork)
 	}
 
-	if err := self.startAtBase(entries, chains, retained.Entries, baseIndex, source); err != nil {
+	if err := self.startAtBase(entries, chains, retained.Entries, baseIndex, source, floor); err != nil {
 		return err
 	}
 	for i := baseIndex + 1; i < len(entries); i += 1 {
@@ -113,30 +152,33 @@ func (self *ConfigLog) restore(retained *ConfigRetained, rowsSource ConfigRowsSo
 	return nil
 }
 
-// Builds S(b) for the base at baseIndex from its rows, the kept entries before it chained to its prev_chain, and the
-// tail among folded_through+1..b-1 judged on its rows. Publishes S(b).
-func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256.Size]byte, entryBytes [][]byte, baseIndex int, rowsSource ConfigRowsSource) error {
+// Builds S(b) for the base at baseIndex (DESIGN-DETAILS 5.2.4's StartAtBase): its checks and, for a full reader, its
+// anchor; its rows; the kept entries before it chained to its prev_chain; and the tail among folded_through+1..b-1
+// re-applied by its tail_verdicts. Publishes S(b).
+func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256.Size]byte, entryBytes [][]byte, baseIndex int, rowsSource ConfigRowsSource, floor *bridge.AuthPin) error {
 	baseEntry := entries[baseIndex]
+	baseN := baseEntry.GetN()
 	signed, header, err := configParseBase(baseEntry)
 	if err != nil {
-		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseEntry.GetN(), err)
+		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseN, err)
 	}
 	signerId, err := configBaseSigner(signed)
 	if err != nil {
-		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseEntry.GetN(), err)
+		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseN, err)
 	}
+	foldedThrough := header.GetFoldedThrough()
 	// S(b) is b's rows with its tail re-applied, so entries that start after the tail's first position would give a
 	// state missing what the tail did, a revocation among it: refused, never built short
-	if tailFrom := header.GetFoldedThrough() + 1; tailFrom < baseEntry.GetN() && tailFrom < entries[0].GetN() {
+	if tailFrom := foldedThrough + 1; tailFrom < baseN && tailFrom < entries[0].GetN() {
 		return fmt.Errorf("%w: the kept entries start at %d, after base %d's tail from %d", ErrConfigEntryMalformed,
-			entries[0].GetN(), baseEntry.GetN(), tailFrom)
+			entries[0].GetN(), baseN, tailFrom)
 	}
 	rowsBytes, err := rowsSource.Rows(self.networkId, header.GetRowsSha256())
 	if err != nil {
-		return fmt.Errorf("%w: base %d's rows: %w", ErrConfigFork, baseEntry.GetN(), err)
+		return fmt.Errorf("%w: base %d's rows: %w", ErrConfigFork, baseN, err)
 	}
 
-	// the base the kept entries hold before b, whose header bounds b's versions and names the retention point
+	// the base the kept entries hold before b, whose header bounds b's versions and fold and names the retention point
 	var previousBase *configBase
 	for i := baseIndex - 1; 0 <= i; i -= 1 {
 		if entries[i].GetKind() != bridge.AuthEntryKindBase {
@@ -150,87 +192,99 @@ func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256
 		break
 	}
 
-	// what b lands on, as far as a new device knows it: S(0)'s genesis with b's rows, whose config writers vouch for
-	// b's signer once its head chains to genesis
+	// what b lands on, as far as a reader that starts here knows it: S(0)'s genesis with b's rows, whose config writers
+	// vouch for b's signer once its anchor holds
 	genesisState := self.state.Load()
-	start := &configKeptEntry{n: baseEntry.GetN(), chain: chains[baseIndex], entry: baseEntry, entryBytes: bytes.Clone(entryBytes[baseIndex])}
+	start := &configKeptEntry{n: baseN, chain: chains[baseIndex], entry: baseEntry, entryBytes: bytes.Clone(entryBytes[baseIndex]), verdictHeld: true}
 	start.verdict = ConfigVerdict{
-		Pin:         &bridge.AuthPin{Version: baseEntry.GetN(), Chain: bytes.Clone(chains[baseIndex][:])},
+		Pin:         &bridge.AuthPin{Version: baseN, Chain: bytes.Clone(chains[baseIndex][:])},
 		Kind:        bridge.AuthEntryKindBase,
 		SignedType:  bridge.SignedType_SIGNED_PROJECTION_HEADER,
 		StatementId: bridge.SignedBytesSha256(bridge.SignedPurposeAuthority, bridge.SignedType_SIGNED_PROJECTION_HEADER, signed.GetBody()),
 	}
-	facts := &ConfigHeadFacts{}
-	if !self.rowsOnly {
-		facts, err = rowsSource.CheckHead(&ConfigHeadCheck{Header: header, Rows: rowsBytes})
-		if err != nil {
-			return fmt.Errorf("%w: base %d's config head: %w", ErrConfigFork, baseEntry.GetN(), err)
-		}
-		if facts == nil {
-			facts = &ConfigHeadFacts{}
-		}
-	}
-	next, err := self.stateFromBase(genesisState, start, header, rowsBytes, facts)
+	next, rows, err := self.stateFromBase(genesisState, start, header, rowsBytes)
 	if err != nil {
-		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseEntry.GetN(), err)
+		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseN, err)
 	}
 	state := next.state
 	state.previousBase = previousBase
 	if !state.IsConfigWriter(signerId) {
-		return fmt.Errorf("%w: base %d's signer is no config writer in its own rows", ErrConfigFork, baseEntry.GetN())
+		return fmt.Errorf("%w: base %d's signer is no config writer in its own rows", ErrConfigFork, baseN)
 	}
 	var previousHeader *bridge.ProjectionHeader
 	if previousBase != nil {
 		previousHeader = previousBase.header
 	}
 	if _, err := bridge.VerifyBaseKeyless(baseEntry, state.IdentityKey(signerId), rowsBytes, previousHeader); err != nil {
-		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseEntry.GetN(), err)
+		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseN, err)
 	}
 
-	// A_k from the first kept entry on, which the tail's at reads; S(b) keeps them from its retention point
-	state.chainsFrom = entries[0].GetN()
-	state.chains = append([][sha256.Size]byte(nil), chains[:baseIndex+1]...)
-	if 1 < entries[0].GetN() {
-		state.chainsFrom = entries[0].GetN() - 1
-		state.chains = append([][sha256.Size]byte{[sha256.Size]byte(entries[0].GetPrevChain())}, state.chains...)
-	} else {
-		state.chainsFrom = 0
-		state.chains = append([][sha256.Size]byte{genesisState.chain}, state.chains...)
-	}
-
+	// the kept entries before b, which the tail's re-application and the next base's fold read; those b's rows fold
+	// carry no verdict this reader holds
 	self.kept = nil
 	self.keptFrom = entries[0].GetN()
-	foldedThrough := header.GetFoldedThrough()
-	// the kept bases before b, newest last, which name the retention point of the state each tail entry lands on
-	keptBases := []*bridge.ProjectionHeader{}
-	keptBasePositions := []uint64{}
 	for i := 0; i < baseIndex; i += 1 {
 		kept := &configKeptEntry{n: entries[i].GetN(), chain: chains[i], entry: entries[i], entryBytes: bytes.Clone(entryBytes[i])}
 		kept.verdict = ConfigVerdict{Pin: &bridge.AuthPin{Version: kept.n, Chain: bytes.Clone(chains[i][:])}, Kind: entries[i].GetKind()}
-		switch {
-		case entries[i].GetKind() == bridge.AuthEntryKindBase:
-			keptSigned, keptHeader, err := configParseBase(entries[i])
+		switch entries[i].GetKind() {
+		case bridge.AuthEntryKindBase:
+			keptSigned, _, err := configParseBase(entries[i])
 			if err != nil {
 				return fmt.Errorf("%w: base %d: %w", ErrConfigFork, kept.n, err)
 			}
 			kept.verdict.SignedType = bridge.SignedType_SIGNED_PROJECTION_HEADER
 			kept.verdict.StatementId = bridge.SignedBytesSha256(bridge.SignedPurposeAuthority, bridge.SignedType_SIGNED_PROJECTION_HEADER, keptSigned.GetBody())
-			keptBases = append(keptBases, keptHeader)
-			keptBasePositions = append(keptBasePositions, kept.n)
-		case kept.n <= foldedThrough:
-			// folded into b's rows: taken as applied, its id kept so a repeat stays refused
-			if entries[i].GetKind() == bridge.AuthEntryKindStatement {
-				kept.verdict.SignedType, kept.verdict.StatementId = configEntryStatementId(entries[i])
-			}
-		default:
-			// the tail, judged on b's rows at its own position
-			self.judgeTailEntry(next, kept, configTailRetentionPoint(state.chainsFrom, keptBasePositions, keptBases))
+			kept.verdictHeld = true
+		case bridge.AuthEntryKindStatement:
+			kept.verdict.SignedType, kept.verdict.StatementId = configEntryStatementId(entries[i])
 		}
 		self.keep(kept)
 	}
+	verdicts, err := self.checkBaseTail(previousBase, header, baseN)
+	if err != nil {
+		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseN, err)
+	}
+
+	facts := &ConfigHeadFacts{}
+	if !self.rowsOnly {
+		folded, _ := self.foldedRecords(entries[0].GetN(), foldedThrough)
+		facts, err = rowsSource.CheckHead(&ConfigHeadCheck{
+			Header:         header,
+			Folded:         folded,
+			FoldedKnown:    true,
+			Rows:           rowsBytes,
+			GenesisChain:   genesisState.genesisChain,
+			FoldedFrom:     entries[0].GetN(),
+			FirstPrevChain: [sha256.Size]byte(entries[0].GetPrevChain()),
+			Floor:          floor,
+		})
+		if errors.Is(err, ErrConfigHeadUnavailable) {
+			return err
+		}
+		if err != nil {
+			return fmt.Errorf("%w: base %d's config head: %w", ErrConfigFork, baseN, err)
+		}
+		if facts == nil {
+			facts = &ConfigHeadFacts{}
+		}
+		if err := CheckServiceSettings(facts.Settings); err != nil {
+			return fmt.Errorf("%w: base %d's config head: service_settings: %w", ErrConfigFork, baseN, err)
+		}
+	}
+	if err := self.holdHeadFacts(state, rows, facts); err != nil {
+		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseN, err)
+	}
+
+	// A_k from the first kept entry's prev_chain on, which the tail and the entries after b read; S(b) keeps them from
+	// its retention point
+	state.chainsFrom = entries[0].GetN() - 1
+	state.chains = append([][sha256.Size]byte{[sha256.Size]byte(entries[0].GetPrevChain())}, chains[:baseIndex+1]...)
+	if err := self.reapplyTail(next, foldedThrough, baseN, verdicts, true); err != nil {
+		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseN, err)
+	}
 
 	// the state at b itself, with S(b)'s pin and chains
-	state.n, state.chain, state.timeMs = baseEntry.GetN(), chains[baseIndex], baseEntry.GetTimeMs()
+	state.n, state.chain, state.timeMs = baseN, chains[baseIndex], baseEntry.GetTimeMs()
 	result := next.finish()
 	self.keep(start)
 	self.retainBase(result, rowsBytes)
@@ -253,58 +307,4 @@ func configEntryStatementId(entry *bridge.AuthEntry) (bridge.SignedType, [sha256
 		return bridge.SignedType_SIGNED_TYPE_NONE, [sha256.Size]byte{}
 	}
 	return signedType, bridge.SignedBytesSha256(purpose, signedType, signed.GetBody())
-}
-
-// The retention point of the state a tail entry lands on, as far as a new device can tell: min(the base before the
-// newest, the newest's folded_through + 1) when it keeps both, and never below the first position whose A_k it holds,
-// since a base before what it keeps lies below that position and an at before it is off what it can check.
-func configTailRetentionPoint(chainsFrom uint64, keptBasePositions []uint64, keptBases []*bridge.ProjectionHeader) uint64 {
-	point := chainsFrom
-	if count := len(keptBases); 2 <= count {
-		exact := min(keptBasePositions[count-2], keptBases[count-1].GetFoldedThrough()+1)
-		point = max(point, exact)
-	}
-	return point
-}
-
-// Judges one tail entry at its own position on the state next is building, which stands at k-1 for the judgment,
-// and applies it to next when it takes effect.
-func (self *ConfigLog) judgeTailEntry(next *configStateBuilder, kept *configKeptEntry, retentionPoint uint64) {
-	state := next.state
-	state.n = kept.n - 1
-	state.chain = state.chains[state.n-state.chainsFrom]
-	view := next.snapshot()
-	switch kept.entry.GetKind() {
-	case bridge.AuthEntryKindStatement:
-		statement, err := self.judgeStatement(view, kept.entry, retentionPoint)
-		if statement != nil {
-			kept.verdict.SignedType, kept.verdict.StatementId = statement.signedType, statement.id
-		}
-		if err == nil {
-			err = configApplyStatement(next, statement, false)
-		}
-		if err != nil {
-			kept.verdict.Refusal = err
-			return
-		}
-		kept.statement = statement
-		if statement.completes != nil {
-			kept.verdict.CompletedProposalId = configCompletedProposalId(statement)
-		}
-	case bridge.AuthEntryKindTick:
-		tick := &bridge.ApiTick{}
-		if err := proto.Unmarshal(kept.entry.GetBody(), tick); err != nil {
-			kept.verdict.Refusal = fmt.Errorf("%w: tick: %w", ErrConfigRule, err)
-			return
-		}
-		activations, err := configCheckTick(view, tick, kept.n, kept.entry.GetTimeMs())
-		if err == nil {
-			err = configApplyTick(next, tick, activations)
-		}
-		if err != nil {
-			kept.verdict.Refusal = err
-			return
-		}
-		kept.tick, kept.activations = tick, activations
-	}
 }

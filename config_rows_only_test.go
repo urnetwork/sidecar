@@ -89,9 +89,13 @@ func (self *testConfigNet) generate(seed uint64, count int) {
 		case op == 7:
 			self.post(stranger, bridge.SignedType_SIGNED_MEMBER_ADMIT, self.memberAdmitStatement(label))
 		default:
-			// S(0)'s empty rows compile no head an honest writer saves, so a fold names a position from base 1 on
+			// S(0)'s empty rows compile no head an honest writer saves, so a fold names a position from base 1 on; and
+			// DESIGN-DETAILS 5.2.3's fold rule keeps the previous base's fold or folds at or past that base
+			if pick(3) != 0 {
+				previousBase := max(self.log.State().Base().GetVersion(), 1)
+				foldedThrough = previousBase + uint64(pick(int(self.n-previousBase)+1))
+			}
 			foldedThrough = max(foldedThrough, 1)
-			foldedThrough += uint64(pick(int(self.n-foldedThrough) + 1))
 			configVersion += uint64(pick(2))
 			if verdict := self.fold(self.owner, foldedThrough, configVersion); !verdict.Accepted() {
 				self.t.Fatalf("the fold at %d: %v", verdict.Pin.GetVersion(), verdict.Refusal)
