@@ -1006,6 +1006,48 @@ The build raised its questions in a ledger (`.stack/decisions/LEDGER.json`, outs
     - Not taken: (2) clear records at a third-party mailbox, as §21.10 read; (3) a URnetwork-run mailbox on an off-site host, another mail service to run, with SES still carrying the records unless sealed.
     - Raised by the build (plan-ABUSE; the build's ledger, QD-030).
 
+209. **Head readers keep a sealed record of each path they read, so the published limit stays "a path it never read or no longer remembers" (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: §2.8, §11.9, Q-EVS-6 and FS-10 limited a head reader's trust in evs to a path it had never read, yet its durable state was only (ref, v, C_v) and a reply starts after pin_version, so once its pin passed a path's change, a server could serve that path at an older committed version unseen.
+    - Answer: head readers durably keep, sealed under §5's AEAD, one record per path read: (ref_id, path, entry version, pin at last read), at most HeadReadRecordCount = 16,384 a network, least recently used out. A read of a recorded path sets pin_version to the record's pin, not the ref's (a request of several paths takes the oldest of their pins); the reader checks every statement after it by §11.9's reader row, refuses and alarms if the served version is below the record or a later statement changes the path, then raises the record. A path whose record was evicted, or whose pin is past §11.9's 4 MiB budget, counts as never read. No wire change.
+    - Cost: a bounded sealed table, about 1 MiB at 16,384 paths, and larger catch-up reads.
+    - Not taken: (2) widening the disclosure to every path older than the pin, so a phone re-reading its own file could be rolled back silently; (3) a state commitment over the token tree, §11.22's Later item, which reopens Q-EVS-6's rejected Merkle root before M2's freeze.
+    - Raised by G0's re-checks (the build's ledger, QD-043).
+
+210. **The primary's physical copies count as backups: each lives at most 7 d, and the 24 h edge records' partitions are UNLOGGED (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: D-TRUST-7 says no backup may outlive a published ttl, and ops-2 named only dumps, but edge-6's `pg-base`, the base the main dump reads, and edge-5's `main-pgbase-<date>` are physical copies of the whole primary, every sidecar row included, and the dump's timer is held today, so a base can sit for weeks.
+    - Answer: count them. Each copy is refreshed or destroyed within 7 d: `pg-base` by the main dump's timer, else the base goes and the next run makes a full copy, and edge-5's generation by a timer or destruction. `tls_connection_record`'s and `mail_connection_record`'s partitions become UNLOGGED, so pg_basebackup copies none of the 24 h edge records, and a primary crash loses them, as a restore already does. ops-2 discloses the rest: physical working copies of the primary hold every table for at most 7 d.
+    - Cost: the dump's timer must run, or a lost base costs a 19 h full copy; edge-5 needs a timer; a crash loses a day of join records.
+    - Not taken: (2) not counting them and disclosing their real age, which changes a published promise; (3) a separate database or tablespace for sidecar tables, against owner decisions 2 and 18's single Postgres.
+    - Raised by the build (the dump work in xops; the build's ledger, QD-051).
+
+211. **`sidecar.ur.io` is served direct, never through Cloudflare, which terminates https://ur.io, and §2.8 discloses what Cloudflare can see (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: Cloudflare terminates the public ur.io connection (mmm/mmm/nginx/nginx.conf.j2:65-66), yet no §2.8 row, EX7 or §2.4 named it, so a third party sat undisclosed in a decrypting page's path, and proxying `sidecar.ur.io` would let it replace `sidecar.wasm` and take keys.
+    - Answer: serve `sidecar.ur.io` direct: it joins warpctl's `domains` and mmm's `expose_aliases` as W10's names do, under a W5 certificate at the lb, as an unproxied record, and `warpctl dns` refuses it proxied (a new name starts unproxied today). Those values live in vault, so that edit is external. §2.8 gains an EX7 clause and an ext row saying Cloudflare terminates https://ur.io: it sees page requests and can alter page script, so it can request views while that script runs, never the key origin's code, key or token.
+    - Cost: one DNS guard and §2.8's text, and the disclosure that a third party can read views through altered page script.
+    - Not taken: (2) moving ur.io/recurd off Cloudflare too, which moves the whole ur.io origin and loses its CDN and country analytics; (3) the key origin behind Cloudflare, disclosed, which would let a third party swap the loader and wasm and undo D-SDK-18's reason for a key origin.
+    - Raised by the build (plan-SDK; the build's ledger, QD-012).
+
+212. **One procedure after a compromise rebind: the member's devices listed, the rebind kept standing, and its signer revoked last (option 1, amended, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: a compromise rebind retires a leaked recovery code, but a keychain backup sealed to the old code still opens with it, and §5.9's rule to revoke each such device for compromise was worked out only for a voided binding: nothing triggered it after a rebind, a since_n before the copy voids a rebind its device signed, and a personal network's last device had no other signer.
+    - Answer: once the rebind lands at position r, `recovery-rotate --compromise` lists each device of the member live while the retired binding was current, raises `recovery_rebind` naming that span on its own device too, and offers each a compromise revocation. since_n defaults to §7.9's loss-time proposal, clamped to r + 1 for the rebind's signer and for any device whose closure would reach that signer, so the rebind stands; a person who believes a clone acted may move it earlier, and the plan then shows the rebind voiding and who must sign it again. The rebind's signer goes last: it enrolls a replacement, which revokes it from a since_n after that admission. §18.5's `recovery_rebind` answer splits in two: "not me" keeps since_n at or before the rebind, and "I did this" takes this rule. Only the rebind's signer is clamped, so other devices keep the loss-time since_n.
+    - Cost: a stated residual: where no signer outside exists, what a clone signed before that position stands.
+    - Not taken: (2) the void rule as written, since_n at the retired binding's entry, which voids a rebind its device signed and cannot be met for a personal network's last device; (3) advice the CLI prints, which leaves §2.10's bound unmet.
+    - Raised by G0's re-checks (the build's ledger, QD-016).
+
+213. **v1 ships no apt or yum repository: `.deb` and `.rpm` stay direct downloads through `install.sh`'s verified path (the build recommended a second offline key).**
+    - Question: §4.18 listed apt and yum for v1 and nothing more, but apt needs a signed InRelease and dnf a signature in each rpm, §2.6 listed no GPG key, and an online key would let one host ship a client to every apt and yum user at their next upgrade, which D-REPO-7's offline key prevents for `install.sh`.
+    - Answer, in the owner's words: drop apt and yum from v1, and keep .deb and .rpm as direct downloads through install.sh's verified path. No GPG key and no repository host. §4.18 loses that item, and `apt upgrade` needs a Q- item, which is Q-REPO-6.
+    - Cost: Linux users lose `apt upgrade` and `dnf upgrade` for `ur`.
+    - Not taken: a second offline GPG key used in the same two-person ceremony at promotion, the trees under ur.io/recurd through mmm (the recommendation); an online key in vault used by the release, which reopens the single-origin risk.
+    - Raised by the build (plan-REPO; the build's ledger, QD-023).
+
+214. **A checkpointer's HTTPS call to a customer's witness is no URnetwork carrier (option 1, the recommendation, accepted with the build's owner items in bulk on 2026-11-06).**
+    - Question: D-ARCH-2 says a new carrier needs an owner's decision, and none of §3.5's six planes runs from a sidecar to a customer's service, so a checkpointer's POST of its checkpoint to a C2SP witness that a log admin names needed one.
+    - Answer: it is no URnetwork carrier: a checkpointer's own outbound HTTPS call to a witness a log admin named in a signed, /dev/tty-confirmed `log_settings`. It carries a signed note and a consistency proof, never an entry; no agent can set the host; and §2.8 stands, since no URnetwork server takes part. §3.5's map names it outside the six planes, and RECORD.md section 10.2's step 6 turns on.
+    - Cost: a daemon dials a host URnetwork does not run; a witness learns only the log's origin, size and growth times.
+    - Not taken: (2) running a witness as a sidecar, which costs each customer or auditor a sidecar and an adapter in front of its C2SP witness; (3) no online call, so a person or forwarder carries each checkpoint and witnessed times lag.
+    - Raised by the RECORD.md draft (the build's ledger, QD-242).
+
 ## Owner instructions after the v1 build (2026-11-05)
 
 These are instructions, not design decisions, so they carry no number.

@@ -6,13 +6,13 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 312 decided items and 311 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
+Holds 304 decided items and 309 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
 
 ## Index
 
 | DESIGN.md section | Decided | Proposed |
 |---|---|---|
-| [§2 Trust model and threat model](#s2) | 10 | 2 |
+| [§2 Trust model and threat model](#s2) | 2 | 0 |
 | [§3 Architecture overview and end-to-end flows](#s3) | 1 | 0 |
 | [§4 Repositories, code placement, branches, and build](#s4) | 15 | 21 |
 | [§5 The Sidecar core](#s5) | 19 | 28 |
@@ -52,23 +52,7 @@ Changes: §2.8 EX7; §2.8 ext rows; §2.4 TB1; §18.8; §19.5 W10.
 
 Questions: `plan-SDK-small-readings.md#3`.
 
-### QD-016: After a compromise rebind: who is told, from which since_n, and who revokes the last device
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §5, §7, §10, §18.*
-
-Recommended procedure, in §5.9 with §7.9, §2.10, §18.5 and new FS-22 cases. Once the rebind lands at position r, `recovery-rotate --compromise` lists each device of M live while the retired binding was current, raises recovery_rebind naming that span on its own device too, and offers each a compromise revocation. since_n defaults to §7.9's loss-time proposal, clamped to r + 1 for the rebind's signer and for any device whose closure would reach that signer, so the rebind stands. A person who believes a clone acted may move it earlier, and the plan then shows the rebind voiding and who must sign it again. The rebind's signer goes last: it enrolls a replacement, which revokes it from a since_n after that admission. §18.5's recovery_rebind answer splits in two: "not me" keeps since_n at or before the rebind, and "I did this" takes this rule. §2.10 states the residual: where no signer outside exists, what a clone signed before that position stands. This differs from the question's option 1 in one way: only the rebind's signer is clamped, so other devices keep the loss-time since_n.
-
-Changes: §2.10; §5.6; §5.9; §7.9; §10.8; §18.5; FS-22; D-TEAM-26.
-
-Questions: `g0-recheck-2-compromise-rebind-backups.md#1`.
-
-### QD-023: Which key signs apt and yum metadata, and where do those repositories live?
-*Decided by the owner: owner 2026-11-06. Also amends §4.*
-
-the file's option 3: drop apt and yum from v1, and keep .deb and .rpm as direct downloads through install.sh's verified path. No GPG key and no repository host. §4.18 loses that item, and `apt upgrade` needs a Q- item. This replaces Proposed. (The recommendation it replaces: A second offline key, a GPG key held and used in the same two-person ceremony as the SSH key: `InRelease` and rpm signatures are made at promotion, and the trees publish under `https://ur.io/recurd/apt/` and `https://ur.io/recurd/yum/` through mmm. If the owner would rather cut scope, drop apt and yum from v1 and keep `.deb` and `.rpm` as direct downloads, with a Q- item.)
-
-Changes: §2.6; §4.10; §4.18.
-
-Questions: `plan-REPO-v1-channels.md`.
+Not folded (2026-11-10): the ext row for Cloudflare, since a new §2.8 row needs its `planned` line in testdata/metadata/fields.yml in the same commit, which a design-records track does not edit (question `dr-s2-s3-new-metadata-rows.md`); the rest is folded as owner decision 211 (§2.8 EX7, §2.4 TB1, §2.10, §18.8, §19.5's W10).
 
 ### QD-030: Who holds the abuse and legal-request mailboxes, and what can that provider read?
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §21, §19.*
@@ -81,74 +65,6 @@ Questions: `plan-ABUSE-metadata-rows.md#4`.
 
 Not folded (2026-11-10): the new ext row for the mailboxes' provider, since a new §2.8 row needs its `planned` line in testdata/metadata/fields.yml in the same commit, which a design-records track does not edit (question `dr-s2-s3-new-metadata-rows.md`); the rest is folded as owner decision 208 (§2.8 api-14, §19.10, §21.10, §21.16).
 
-### QD-043: Do head readers keep a per-path read record, or does the published limit widen to every path older than the pin?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §11, §5.*
-
-Recommended: option 1. Head readers durably keep, sealed under §5's AEAD, one record per path read: (ref_id, path, entry version, pin at last read), at most HeadReadRecordCount = 16,384 a network, least recently used out. A read of a recorded path sets pin_version to the record's pin, not the ref's (a request of several paths uses the oldest of their pins, since pin_version is per request); the reader checks every statement after it by §11.9's reader row, refuses and alarms if the served version is below the record or a later statement changes the path, then raises the record. A path whose record was evicted, or whose pin is past §11.9's 4 MiB budget, counts as never read: §2.8, §11.9's trusts row, Q-EVS-6 and FS-10 say "a path it never read or no longer remembers". FS-10 adds: P read at v20 at pin 25, the pin moved to 30, P changed at v28 by a statement with no inline change list, then v20 and v10 each refused. No wire change.
-
-Changes: §2.8 head-reader disclosure; §11.9 reader and trusts rows; Q-EVS-6; FS-10; §5.9.
-
-Questions: `g0-recheck-0-head-reader-read-paths.md#1`.
-
-### QD-051: Do the physical copies of the primary count as backups under D-TRUST-7?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §19.*
-
-Count them. (1) Each copy is refreshed or destroyed within 7 d: `pg-base` by the main dump's timer, else the base goes and the next run makes a full copy, and edge-5's `main-pgbase-<date>` by a timer or destruction. (2) `tls_connection_record` and `mail_connection_record` partitions become UNLOGGED: pg_basebackup copies no data of an unlogged relation, so the 24 h edge records never enter a physical copy, and a primary crash loses them, as a restore already does. (3) ops-2 discloses the rest: "physical working copies of the primary hold every table for at most 7 d".
-
-Changes: D-TRUST-7; D-OPS-18; §2.8 ops-2; §19.3; §19.6; §19.7.
-
-Questions: `xops-dump-physical-copies.md`.
-
-### QD-114: ur.io's byJwt in localStorage makes §18.8's and §2.10's claims about an XSS too narrow
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §18, §22, §5, §7.*
-
-§18.8's `pages` and `disclosed` rows and §2.10's ur.io row say what is true: ur.io's account panel keeps a network `byJwt` in `localStorage`, so script in https://ur.io, ur.io/recurd included, can take that token while a member is signed in on that browser. It reaches network-credential routes, but a client minted with it gets no admission, key or plaintext without a consented device (§5.6, §7.9). §22.9's 'a script injected on ur.io finds none' is scoped to the Worker's key and token. Moving ur.io's session out of `localStorage` is separate mmm work and does not block this text.
-
-Changes: §2.10 ur.io row; §18.8 pages, disclosed; §22.9 Browsers row.
-
-Questions: `plan-SDK-key-origin-credential.md#2`.
-
-### QD-231: §2.10's list of what stands after a compromise omits IndexerSets
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §7, §5.*
-
-Add `IndexerSets` after `SponsorSets` in §2.10's what-stands clause (02-TRUST.md:826), matching §7.9's cascade row (07-TEAM.md:404-405). Code follows §7.9: an IndexerSet a sidecar in P signed stands until revoked, and §5.6's plan lists it among what stands.
-
-Changes: §2.10.
-
-Questions: `g0-density-text-alignments.md#3`.
-
-### QD-271: What ends a recovery code's reads is stated three ways
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §7, §10, §5.*
-
-§5.9's account governs. Replace "which only a compromise rebind ends" (07-TEAM.md:690), and the same end named in §2.10, §10.8, Q-KEYS-7 and Q-TEAM-11, with: a rebind or a cascade void stops new wraps; the code keeps opening what was wrapped to it and reads the current generation until the next rotation, which `--compromise` makes a remove rotation with a path epoch at once.
-
-Changes: §2.10; §7.9; §10.8; Q-KEYS-7; Q-TEAM-11.
-
-Questions: `g0-recheck-1-wr-n4-recovery-window.md#2`.
-
-### QD-272: Three sentences overstate the witness bound
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-[g0-recheck-0-witness-residuals#1] Q-MCP-4 ends: "*Residual:* §2.8's: no bound across a split the server makes, or in own groups", the words Q-TRUST-9 uses. [g0-recheck-0-witness-residuals#2] D-TEAM-17 reads: "... and HeadCheck compares (n, A_n), unwitnessed writers in shared groups stopping at `witness_bound_hours` and those in own groups only alarming." Its Why stands. [g0-recheck-0-witness-residuals#3] D-SOCK-14's Why ends "a breached server can only deny or delay, within §2.8's exposure bound", and §2.7 reads "leaving a breached server only denial or delay, within §2.8's exposure bound".
-
-Changes: Q-MCP-4; D-TEAM-17; D-SOCK-14; §2.7.
-
-Questions: `g0-recheck-0-witness-residuals.md#1`, `g0-recheck-0-witness-residuals.md#2`, `g0-recheck-0-witness-residuals.md#3`.
-
-### QD-364: "Proto field" in the guard
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-A field reachable from a message a `<svc>service` or server decodes, the walk stopping at `bytes` fields the design seals. `testdata/metadata/fields.yml` and per-area `metadata_rows.yml` map each to a row. "And back" holds for a row once its owning milestone has landed; a row ahead of it carries `planned: Mn` in those classification files, never in `metadata_list.yml`, which stays byte for byte §2.8's block.
-
-Questions: `plan-TEST-small-readings.md#5`.
-
-### QD-558: BridgeState.rules holds a BridgeRules message in bridge.proto
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-`BridgeState.rules` stays `bytes` and holds a marshalled `BridgeRules`, declared with its row messages in protocol/bridge/bridge.proto. Field numbers are BRIDGE-M4-06's, in the order first written. No §2.8 row: it travels only in process or over the device RPC.
-
-Questions: `plan-BRIDGE-small-readings.md#2`.
-
 <a id="s3"></a>
 ## §3 Architecture overview and end-to-end flows
 
@@ -160,6 +76,8 @@ Rule it no URnetwork carrier, in one sentence in §3: a checkpointer's own outbo
 Changes: D-ARCH-2; §3.5 planes; RECORD.md section 10.2; Q-RECORD-8.
 
 Questions: `record-md-witness-carrier.md`.
+
+Not folded (2026-11-10): RECORD.md section 10.2's step 6 and Q-RECORD-8, which live in RECORD.md, outside design/source/ and so outside a design-records track's files; the DESIGN.md part is folded as owner decision 214 (D-ARCH-2, §3.5).
 
 <a id="s4"></a>
 ## §4 Repositories, code placement, branches, and build
@@ -5422,6 +5340,8 @@ Changes: DESIGN-DETAILS.md section 13 stands as written; QUOTA-M2-07 builds it; 
 
 Questions: `details-13-lease-draw-size.md`.
 
+Partly folded (2026-11-10): §2.8 api-13's sizes landed with QD-657; §20.6's draw row waits for §20's fold.
+
 ### QD-655: Should a gate service refuse for a network once it knows the authorization log moved and cannot verify the new entries, where QD-055 has the last verified state keep serving?
 *Decided by the owner on 2026-11-10, asked one question at a time. Folds into §8 Access control. Also amends §9.*
 
@@ -5439,3 +5359,5 @@ A tls/ or smtp/ Service pair ({svc_<listener_client_id>} field <dialer_client_id
 Changes: DESIGN-DETAILS.md section 13 stands as written; SOCK-M5-18, -05 and -06 build it; §9.6 edge Finds and §2.8 sock-3 ttl (design-records).
 
 Questions: `details-13-edge-pair-life.md`.
+
+Partly folded (2026-11-10): §2.8 sock-3's ttl landed with QD-657; §9.6's edge Finds wait for §9's fold.

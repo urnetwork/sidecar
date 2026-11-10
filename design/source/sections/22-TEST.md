@@ -279,7 +279,12 @@ schema guard (I-18): every server-visible column (helo_name, network_client_leas
   hp/ idx/ slot/ pmap/ pidx/ spidx/ hold/ seg/ pack/ proj/ projrows/ rev/ gkm/ drops/
   dropscan/) and proto field maps to a list row and back, format 2's included (each
   version's versioning setting, kind-5 and staged locators, window bits 4 and 5, the DROP
-  flag and drop_sha256, purge times), and a row without a purpose or a TTL fails
+  flag and drop_sha256, purge times), and a row without a purpose or a TTL fails; a proto
+  field is one reachable from a message a service engine or a server decodes, the walk
+  stopping at bytes the design seals; testdata/metadata/fields.yml and each area's
+  metadata_rows.yml map each to its row, and "and back" holds for a row once its owning
+  milestone has landed, a row ahead of it carrying planned: Mn there, never in
+  metadata_list.yml, which stays §2.8's block byte for byte
 self-test: a sidecar_leaktest build leaks into each class, which must catch it
 assert every stored commit but an external commit parses as PrivateMessage, and in S3
          and S4 GkmCommitHeader carries only the generation and the auth pin (D-KEYS-3)
@@ -1117,7 +1122,10 @@ FS-10  §11    a reader-only member plus the server forge an entry for a head-mo
               whose prefixes cover a path it left unchanged, a head reader of that path
               checks its absence by adjacent-leaf proofs from the read reply, fetching no
               change list, and a push whose change list is out of order is refused; a reader
-              10,000 versions behind re-pins with a gap mark
+              10,000 versions behind re-pins with a gap mark; P read at v20 at pin 25, the
+              pin moved to 30, P changed at v28 by a statement with no inline change list:
+              v20 and v10 each refused, and a path whose read record was evicted reads as
+              never read (owner decision 209)
 FS-11  §11    a reader paused after a negative pidx/ lookup while evacuation publishes a pack, FI-1        T2+T3  M2-out
               then deletes the batch: its one relist finds the record
 FS-12  §11    a crash after the lease's Redis write and before the 200; the client retries     hint SLO    T2+T3  M2-out
@@ -1237,7 +1245,12 @@ FS-21  §2,6   a document giving the writer's peers no reach to each other (a pe
               the HeadCheck path and the alarm as D-TRUST-10 states
 FS-22  §10    an old recovery code's derived keys after RecoveryRebind{reason: compromise}: no I-15, FI-3  T2     M2-out
               new path token or post-cutover content opens, and a write at the old generation
-              gets 412 GATE_CLOSED; a routine rebind only rotates
+              gets 412 GATE_CLOSED; a routine rebind only rotates; --compromise lists the
+              member's devices live while the old binding was current, its own included,
+              each revocation's since_n clamped past the rebind for its signer, so the rebind
+              stands, and moved earlier the plan shows the rebind voiding; a personal
+              network's last device enrolls its replacement, which revokes it from after that
+              admission (owner decision 212)
 FS-23  §10    a deposit-only principal, an agent depositing into a vault and, at M7, a         I-15        T2+T3  M2-out;
               receiver into a mailbox, fetches a rotated drop key, deposits and follows a                         mailbox at
               rotation, and every read, ReaderWrap, epoch, GroupInfo and recovery route                           M7-out
@@ -2621,7 +2634,7 @@ Beyond the schedules:
 - **ZK preamble** (`smtpproof`, BDAT and DATA (owner decision 125), on D-SMTP-16's hardware; census MXs): D-SMTP-16's adversarial corpus, FS-31's server-state cases included, fails before any effect; p95 times, coverage, interop.
 - **ACME** (Pebble with 5% bad nonces in T2 and T3; LE staging; GTS, ZeroSSL): §13.8's challenges, ARI, CAA, an operator CAA at a custom host's exact target refused (FS-32); custom-domain desktops order and renew on Pebble; LE staging refuses URnetwork's account under a customer `accounturi`, which Pebble never checks (https://github.com/letsencrypt/pebble/blob/main/va/va.go, 2026-11-04); CT watch on a fixture (staging CT is unreliable: https://letsencrypt.org/docs/staging-environment/, 2026-04-10).
 - **DNS** (zonemaster; Unbound, BIND, Knot Resolver; two public resolvers): R-DNS-7; compact denial and wildcards validate; before the DS, Unbound validates against the KSK as a trust anchor; a broken canary signature pages.
-- **Browsers** (Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion): 421 on coalescing; split PQ hellos; other origins' POST, subresource GET and WebSocket arrive sessionless, and login works without Fetch Metadata (§13.7); private audiences without a usable ALPN (FS-34) and custom hosts through the split (FS-35); another origin, a framed copy and localhost are refused the key origin, no key or token crosses postMessage, and a script injected on ur.io finds none; IndexedDB survives a reload, and after Safari's 7-day storage cap evicts the key origin its page Worker re-enrolls through a consented device, the old leaf leaving by §10.9's stale-leaf rule; a storage-pressure eviction of a non-persistent bucket does the same, the re-enrollment's admitting device, an admin's in a Team with self_admit off, revoking each Worker it saw removed as stale from every group it is a leaf of that seated it, and the member's consented device, in that act or at its OwnerConfirm, offering to revoke the evicted one (§7.10's stale row; FS-97); the key-origin frame calls navigator.storage.persist(), and the page tells the person what an eviction costs (§18.8); in two ur.io tabs on one network only the Web Lock's holder loads state, refreshes, commits and writes the keychain, the other Worker relaying, and closing the holder's tab hands over the lock, relayed requests retrying; a vault record opens with C4 absent; no ICE candidate in the overlay block (§17.17), and a CGNAT fixture whose WAN address lies in the block keeps its carrier path and overlay reachability; no torn writes; no network `by_jwt` in the worker.
+- **Browsers** (Chrome, Firefox, Safari, curl; Playwright on ur.io's page Worker and the native companion): 421 on coalescing; split PQ hellos; other origins' POST, subresource GET and WebSocket arrive sessionless, and login works without Fetch Metadata (§13.7); private audiences without a usable ALPN (FS-34) and custom hosts through the split (FS-35); another origin, a framed copy and localhost are refused the key origin, no key or token crosses postMessage, and a script injected on ur.io finds neither the Worker's key nor its token; IndexedDB survives a reload, and after Safari's 7-day storage cap evicts the key origin its page Worker re-enrolls through a consented device, the old leaf leaving by §10.9's stale-leaf rule; a storage-pressure eviction of a non-persistent bucket does the same, the re-enrollment's admitting device, an admin's in a Team with self_admit off, revoking each Worker it saw removed as stale from every group it is a leaf of that seated it, and the member's consented device, in that act or at its OwnerConfirm, offering to revoke the evicted one (§7.10's stale row; FS-97); the key-origin frame calls navigator.storage.persist(), and the page tells the person what an eviction costs (§18.8); in two ur.io tabs on one network only the Web Lock's holder loads state, refreshes, commits and writes the keychain, the other Worker relaying, and closing the holder's tab hands over the lock, relayed requests retrying; a vault record opens with C4 absent; no ICE candidate in the overlay block (§17.17), and a CGNAT fixture whose WAN address lies in the block keeps its carrier path and overlay reachability; no torn writes; no network `by_jwt` in the worker.
 - **Memory, size** (darwin/arm64 iOS settings in T4; ios32 surrogate cells, one with a link; §18.4's other hosts): §18.4's budgets, and forwarding's within Q-SDK-7's on an ios32 cell whose forwarding role compiles a 5,000-device team's config (owner decision 197), in every LOWBAR phase on iOS, the link cell deciding links and holding an app-device host's NAT with bridge flows at §17.5's idles through C5's per-flow IdleTimeout, while its public egress flows keep the NAT's own; sizes unstripped (§18.10); `make check` fails an HTTP-only file importing connect; the mobile sender's 1,024-slot pin table, churned past 1,024 live pairs, routes the excess unpinned and refuses none (§17.5).
 - **Index determinism** (darwin/arm64, linux/amd64 and arm64, windows/amd64, gomobile android/arm64 and the iOS settings, js/wasm in Node and, through Playwright, Chrome, Firefox and Safari): testdata/index/ reproduces byte-equal plaintext and hashes under GOMAXPROCS 1 and 16, repeated runs (Go randomizes map order) and changed TZ and locale; the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` equal the format's normalization version and x/text's linked module version equals `IndexFileHeader` field 14's, so a toolchain or x/text bump fails until a new one is assigned (D-TEST-15).
 

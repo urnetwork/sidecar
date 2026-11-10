@@ -236,7 +236,7 @@ fixture    the tags served through GOPROXY=file:// with GOWORK=off, an empty mod
 | OS | Artifacts and signing | Path |
 |---|---|---|
 | macOS | `.pkg` and `.tar.gz` of a Developer ID `ur` bundle with a provisioning profile and hardened runtime (D-CORE-12), notarized and stapled (run.sh:2644-2673) | `/usr/local/bin/ur`, linked into the bundle |
-| Linux | `.deb`, `.rpm`, `.pkg.tar.zst` (nfpm) and `.tar.gz` | `/usr/bin/ur`; the script uses `/usr/local/bin/ur` |
+| Linux | `.deb`, `.rpm`, `.pkg.tar.zst` (nfpm) and `.tar.gz`, direct downloads through `install.sh`'s verified path, with no apt or yum repository, GPG key or repository host (owner decision 213; updates: proposed, Q-REPO-6) | `/usr/bin/ur`; the script uses `/usr/local/bin/ur` |
 | Windows | `.zip`, winget later; signtool SHA-256 with a timestamp (windows/app/SIGNING.md:17) | `%LOCALAPPDATA%\Programs\URnetwork\ur.exe` |
 
 - **`git-remote-ur`** ships beside `ur` in every package as a link to the same binary, which dispatches on argv[0] (a copy in the Windows zip); git runs it for `ur://` URLs from PATH (gitremote-helpers(7); §11.11), so Windows users add the zip's directory to PATH.
@@ -290,6 +290,8 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 
 **Q-REPO-5.** Should server-only engines live in the root (PLAN.md:13)? **Decided by owner 2026-11-03 (owner decision 104):** (b), child packages, and (d), a nested module for the X7 prover (§4.4); `cli/` is a nested module too, so the root never requires the prover (§4.7). *Residual:* none.
 
+**Q-REPO-6.** How do Linux users update `ur`, now that v1 ships no apt or yum repository, so `apt upgrade` and `dnf upgrade` never reach it (owner decision 213)? *Options:* (a) they re-run `install.sh`, whose verified path checks the offline key's signature, or fetch the next `.deb` or `.rpm`, so no update reaches a Linux host by itself; (b) apt and yum repositories later, signed at promotion by a second offline two-person GPG key, their trees under ur.io/recurd through mmm; (c) a self-updater in `ur` that checks the same signed `SHA256SUMS`. *Recommendation:* (a) for v1, the owner deciding at v1's exit review whether Linux users need (b). *Blocks:* nothing before v1's channels (M6). *Decider:* owner.
+
 ### 4.15 Departures from PLAN.md
 
 - **PLAN.md:13** ("all service code goes in the root"): engines live in `<svc>service` child packages and the X7 prover in a nested module, so no mobile or wasm build links them (owner decision 104; Q-REPO-5), and the forwarding role's packet side in the leaf `device/`, so the iOS extension links of the root only its forwarding files (Q-SDK-5, closed by peer review; D-SDK-20; owner decision 197).
@@ -318,5 +320,5 @@ The checkout holds documents only, on `main` (§4.3): at the root, README.md (it
 
 - **v0, before code (M0):** LICENSE, the hook, the root's and `cli/`'s go.mod, dependencies.yml and `make check` on sidecar's `sidecar` branch, merged at M0's Gn-out (DESIGN.md and the documents are on `main` already, 708bb45); M0's branches; the lock entry, the release step and its fixture.
 - **v0, first usable:** §4.6's M1, M4 and M5 rows; the first hosted engine; signed `ur` packages; the `make size` gate; `sidecar_http`'s import rule (M1) and size measure (M2); `device/` and its `ios_extension` rule, with the root's forwarding files (M4; owner decision 197).
-- **v1:** C18 (M6); C19's window accounting (M10; owner decisions 176, 188) and 4.7's x/text bump, ahead of M10's index code; Homebrew, winget, apt/yum. **Later:** C4 with §18's worker, and C17 for that streaming Worker if its spike needs it.
+- **v1:** C18 (M6); C19's window accounting (M10; owner decisions 176, 188) and 4.7's x/text bump, ahead of M10's index code; Homebrew and winget; no apt or yum repository, `.deb` and `.rpm` staying direct downloads (owner decision 213; Q-REPO-6). **Later:** C4 with §18's worker, and C17 for that streaming Worker if its spike needs it.
 - **Blocking:** M0's `make check` blocks the first consumer pin; C13 blocks C18; C19 blocks M10's Gn-out, since §2.8's connect-5 assumes it.
