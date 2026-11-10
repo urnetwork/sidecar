@@ -12,9 +12,11 @@
 // chain's; else 409 with the paths, which goes back to the caller, as a duplicate CLOSURE's 409 does, which the
 // caller's reconcile counts done.
 //
-// Not built here, and failing closed: a CLOSURE of a record-class repo's slot-keyed chains, which the planner refuses
-// until record-class writes land (ErrEvsWriteNotBuilt); the sealed erasure id a CLOSURE carries, which no format
-// field holds yet; and ?closure=1 uploads at the storage limit.
+// In a record-class repo the new chain's key goes in a new slot, which the CLOSURE introduces, and the old chain's
+// slot key is what its erased list names (evs_plan.go's slot-keyed chains).
+//
+// Not built here, and failing closed: the sealed erasure id a CLOSURE carries, which no format field holds yet
+// (question evs1-m2-30-erasure-note-format); and ?closure=1 uploads at the storage limit.
 //
 // On desktop and mobile legs. Safe for concurrent use.
 
