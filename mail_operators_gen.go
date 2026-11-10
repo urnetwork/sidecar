@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Code generated from mail_operators.yml by TestMailOperatorsGenIsCurrent. DO NOT EDIT.
 
 package sidecar

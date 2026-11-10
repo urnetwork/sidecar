@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §9.9's errors (D-SOCK-8): what Dial, Listen, Accept and a SocketConn return, each a *net.OpError with
 // Net "ur" wrapping one of the values below, so Go code written for TCP and its retry logic work

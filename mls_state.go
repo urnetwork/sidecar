@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // MLS state on disk (§10.5's last paragraph; D-KEYS-14): each group's state, trees included, under §5.9's AEAD in
 // <state>/net/<network_id>/gkm/, which a SidecarStore seals, so this file makes no file-system call and runs on
 // sidecar_http over IndexedDB as well (SidecarHost.Store()). The store's sealing covers every byte, temporary files

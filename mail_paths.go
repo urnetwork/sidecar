@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §15.7's layout (D-MAIL-5, D-MAIL-6): the path of each file mailcfg, a mailbox and a group repo hold, spelled as
 // MAIL-FORMAT.md's Paths section writes them. Pure and on every leg, so a page Worker that head-reads i/ and m/
 // builds the same paths a daemon writes.

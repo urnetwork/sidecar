@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §18.9's host list (D-SDK-7, R-SDK-10): the hosts a sidecar reaches, what each is needed for, and the issuer SPKIs
 // a chain to each may end at. api_hosts_v1.json is the one copy of these names (QD-119): ur fills its service urls
 // from it, sdk takes each service's label from it and puts that under its NetworkSpace's host, mmm publishes it at

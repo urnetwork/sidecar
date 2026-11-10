@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §15.7's message list as a person sees it (R-MAIL-13, D-MAIL-16; MAIL-M7-06): a mailbox's i/ entries and the group
 // messages its r/ references name, with f/'s flags merged in, newest first, a page at a time. It reads only through
 // mailStore, so a daemon, an app that mirrors i/ in full and head-reads m/ (§18.4), and a page Worker list alike; it

@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The client's half of §9.5 (R-SOCK-1, D-SOCK-3, D-SOCK-13): the registrar, which holds every Listen of one network's
 // sidecar as the client's full set and keeps it registered at the sockets service, one call at a time per client.

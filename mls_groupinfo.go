@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // GroupInfo (RFC 9420 §12.4.3): one epoch's GroupContext, its confirmation tag and extensions, signed by a
 // leaf of that epoch. A joiner reads it twice over in §10.6: a Welcome carries one without the ratchet tree,
 // and the full one, ratchet_tree and external_pub included, arrives sealed under K_groupinfo (§10.5), from the

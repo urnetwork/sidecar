@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The join of §9's socketStream seam (socket_stream.go, SOCK-M5-09) to §6's streams (CONTRACTS.md C-16): a
 // SubprotocolStream is already that seam's net.Conn with CloseWrite and Reset, so this only renames a

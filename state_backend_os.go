@@ -1,4 +1,4 @@
-//go:build !js
+//go:build !js && !ios_extension
 
 // A SidecarStoreBackend over OS files, for desktops and for an app's StateDir. Temp files all sit in
 // <state>/tmp, so a kill leaves them in one place to sweep. js has no files, and the page Worker's

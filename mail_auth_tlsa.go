@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !js
+//go:build !sidecar_http && !js && !ios_extension
 
 // sni_tlsa_live (§15.5, D-MAIL-4; MAIL-M7-08): whether the SNI host's TLSA held this receiver's key when the message
 // arrived, compared by SPKI as §12 publishes it, 3 1 1: DANE-EE, the SubjectPublicKeyInfo, its SHA-256. Labels read

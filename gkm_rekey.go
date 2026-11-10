@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // ur evs rekey's job (§10.16's v0, R-KEYS-3, D-KEYS-6, owner decision 64; KEYS-M2-26): a client job that
 // re-checkpoints the files of a repo under its current generation, so that no file's chain still reaches back to a
 // key an older generation held. A removed reader keeps what it could already open; rewriting is lazy by §11.7's rule

@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // One-command admin tokens (§7.8's ur-cli row, D-TEAM-7): the command an admin token is bound to, and the bytes
 // that bind it, shared by ur-cli and api so both compute one digest. An admin token's cmd claim is
 //

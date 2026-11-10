@@ -1,4 +1,4 @@
-//go:build !(linux && !android) && !(darwin && !ios && !sdk_mobile_bind) && !windows
+//go:build !(linux && !android) && !(darwin && !ios && !sdk_mobile_bind) && !windows && !ios_extension
 
 // Where no machine id can be read: phones, whose ids are not this code's to read, and the page Worker.
 // sidecar.json keeps no hash there, and a copy of the state cannot be told.

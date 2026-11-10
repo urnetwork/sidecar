@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // BootstrapNetwork (TEAM-M2-09; §7.9's bootstrap): the network's first untagged sidecar of its owner signs the Genesis,
 // the first config head and base 1, whose prev_chain is A_0 = SHA-256(Signed Genesis). api takes base 1 as entry 1
 // If-None-Match, so of two first devices racing, one genesis wins. The winner creates the config repo, pushes the head

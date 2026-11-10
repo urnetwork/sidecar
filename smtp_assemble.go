@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The octets a send's relation accepts (SPEC.md section 4.2's normal form, Z5 and Z6), made in two
 // steps. AssembleSmtpMessage runs before the preamble: it takes MAIL's finished message (§15.10's step

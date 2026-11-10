@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // ServiceHost.Redis: the Redis Cluster behind engines, with go-redis kept in server (§4.5). It holds
 // soft state only. Every key is rebuildable (D-OPS-7), from Postgres or a cluster, by re-registration,

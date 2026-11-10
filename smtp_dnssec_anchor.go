@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // The DNSSEC trust anchors dnssec_chain validates under: the root zone's key-signing keys, as DS
 // records, embedded in the sidecar and updated by release (plan-SMTP-small-readings#2). The edge's

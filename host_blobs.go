@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // ServiceHost.Blobs: the file clusters (§11.8, §11.13, §19.6). evs and gkm keep every durable thing
 // here, each repo's metadata objects on the one metadata cluster its create-only place/<repo_id>

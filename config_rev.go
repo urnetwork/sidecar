@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §7.8's revocation objects as evs and gkm read them (owner decision 2; §2.8 evs-18): one object per
 // revoked subject, rev/<network_id>/<kind>/<subject_id>/_ on the first metadata cluster, whatever cluster

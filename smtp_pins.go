@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §14.4's pins (D-SMTP-2): each MX host's best TLS level, held SmtpSenderSettings.PinTimeout from the
 // last send that reached it, below which nothing is sent while it holds, and the post-TLS mode of the

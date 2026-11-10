@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !js
+//go:build !sidecar_http && !js && !ios_extension
 
 // §15.5's verdicts row for DMARC (RFC 7489; MAIL-M7-08): the From domain's record by mox's dmarc.Lookup, which falls
 // back to the organizational domain, and the verdict computed here rather than by mox's dmarc.Verify, which makes any

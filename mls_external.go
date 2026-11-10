@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // External commits (RFC 9420 §12.4.3.2), which §10.4 takes only to resync or recover (KF5, §10.8): a sidecar
 // outside the epoch joins from its full GroupInfo, by an ExternalInit that exports the new epoch's init_secret
 // to the group's external_pub, at most a Remove of its own old leaf, and a path that installs its new leaf in

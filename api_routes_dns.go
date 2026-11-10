@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §12's api routes for sidecars. GET /sidecar/label is plan-DNS-labels-before-m5's: the caller's
 // network's label, allocated on first need, and its alias, which feed NetworkLabelTable from M2, before
 // the dns block's GET /dns/zone answers the same from M5.

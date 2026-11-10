@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §9.6's tickets on every leg: what a Find signs and a dialer presents in StreamOpen.ticket, and what
 // §6.11 registers for §9. This file names no connect type and carries no build tag. socket_api.go
 // holds the routes' bodies, which do name one.

@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Whether a file is text, and its title (§11.14's sniff and extract rows; protocol/INDEX-FORMAT.md's Extractor 1). A
 // file is text when its first 8,000 bytes hold no NUL and are valid UTF-8 but for a cut final sequence, git's rule
 // with UTF-8 added, or when it opens with a UTF-16 byte-order mark, which selects the decoding and is dropped. No

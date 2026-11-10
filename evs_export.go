@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Export (§11.12's export row, R-EVS-10, FI-9): plain git rebuilt from evs, into a new bare repository, with git's
 // own oids. Each ref's whole history is read from version 1 and verified as a replaying reader does (the walk from C_0
 // to the head, every statement's signer and rules), then rebuilt push by push from each push's record:

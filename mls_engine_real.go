@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The real MlsEngine: §10.4's subset over mls_group.go's state machine and mls_state.go's files, one per sidecar
 // and network. sidecartest/mlssuite holds it to the same behavior as sidecartest.FakeMls, so what was built on
 // the fake keeps working here.

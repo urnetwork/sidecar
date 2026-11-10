@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §15.5's dns and work rows for one message (D-MAIL-14, FS-121; MAIL-M7-07): at most 64 queries beyond stub hits,
 // 8 in flight, each answered within 5 s or temperror, and 30 s for the whole check, counted from when a check slot

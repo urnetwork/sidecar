@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Posting intersection (§11.14's plan row; SEARCH-M10-23): a shard's candidates for a query, from the lists of the
 // query's trigrams alone. Lists come rarest first, so the candidate set only shrinks: a sparse candidate set gallops
 // into a gap list and tests a bitset bit by bit, and a dense one ANDs a bitset byte by byte. Alternatives of a group

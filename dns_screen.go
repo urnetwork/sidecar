@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §21.6's screen of new names (R-ABUSE-3, D-ABUSE-1, D-ABUSE-4, Q-ABUSE-4; owner decisions 14 and
 // 97). Brands enter only through names a network creates: aliases, record owners, published hosts
 // and burner From domains. ScreenName applies §12.5's brand rule and §21.6's Names paragraph to each

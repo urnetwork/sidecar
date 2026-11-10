@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §15.7's message list (D-MAIL-5, D-MAIL-16; MAIL-M7-06): i/<yyyymm>/<n>, append-only segments of IndexEntry, each a
 // MailIndexSegment holding at most 1 MiB or 4,096 entries, which search never replaces. MAIL-FORMAT.md's i/ section
 // is the format: a segment is one field-1 record per entry and nothing else a writer adds, so a writer appends the

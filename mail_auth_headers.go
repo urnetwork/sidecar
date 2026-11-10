@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §15.5's headers row (D-MAIL-14, FS-121; MAIL-M7-08): what the checks read of a message. mox's dkim.Verify parses the
 // whole header section before anything else, so a sender could make it read megabytes of fields; it is only ever

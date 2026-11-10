@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Sealing a plan and uploading its segments (§11.8's client steps 1 and 2, EVS1-M2-26): an EvsWritePlan's records
 // sealed under the generation GkmClient.EnsureWritable returned, which precedes every seal so no writer seals to a
 // generation a non-reader holds (§8.12), then each new segment PUT with ?push=P before the push is posted, at most

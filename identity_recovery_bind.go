@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // Signing a member's recovery binding (§5.9's Recovery code, §7.9's RecoveryBind and RecoveryRebind, D-CORE-10,
 // D-CORE-14; owner decisions 62, 127, 149, 189): what `ur keychain recovery-rotate [--compromise]` runs.
 //

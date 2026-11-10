@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // `ur keychain rotate`: a new U and a new R_n for every network, every file re-sealed, and nothing
 // stranded by a kill at any step (§5.9).
 //

@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // SocketConn: §9.9's connection, a net.Conn over one §6 stream (D-SOCK-8), what a dialer's Dial and a
 // listener's Accept return (SOCK-M5-11, SOCK-M5-12). Close sends FIN and stops reading, so the peer

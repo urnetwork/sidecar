@@ -50,6 +50,8 @@ func mailOperatorsGenSource(list *MailOperatorList) ([]byte, error) {
 		return "[]string{" + strings.Join(quoted, ", ") + "}"
 	}
 	var source strings.Builder
+	// the iOS extension links no mail_ file (DESIGN-DETAILS 4.2.3), so the generated one carries the tag the rest do
+	source.WriteString("//go:build !ios_extension\n\n")
 	source.WriteString("// Code generated from mail_operators.yml by TestMailOperatorsGenIsCurrent. DO NOT EDIT.\n\n")
 	source.WriteString("package sidecar\n\n")
 	source.WriteString("// mail_operators.yml's list, which this release embeds (D-MAIL-13). MailOperatorListEmbedded hands out copies.\n")

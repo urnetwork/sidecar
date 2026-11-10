@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // An index root's paths and small files, and the check every fetched index file passes before it is kept (§11.14's
 // paths, settings, lock, manifests and verify rows; protocol/INDEX-FORMAT.md's Paths and Small files).
 //

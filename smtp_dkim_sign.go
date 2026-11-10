@@ -1,4 +1,4 @@
-//go:build !sidecar_http
+//go:build !sidecar_http && !ios_extension
 
 // §14.6's two DKIM signatures over a SmtpWireMessage, after the preamble's OK. Both are rsa-sha256,
 // relaxed/relaxed, with no l= and x= 7 days after t=, and neither covers the other:

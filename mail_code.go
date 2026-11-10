@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // One-time codes (§15.9's GetOneTimeCodes; R-MAIL-6; MAIL-M7-12): the sign-up or login code a message carries, for
 // IndexEntry.one_time_code, found in its subject, else its first text part, by a small pattern set: a code is a
 // standalone run of 4 to 8 digits, which may be split once into two halves by a space or a hyphen ("123 456",
