@@ -125,6 +125,11 @@ type DelegationState struct {
 	AdmissionsLeft uint32
 	// Its agents, revoked ones included.
 	AgentIds []Id
+	// For a forwarding Delegation (§7.9's forwarding row), the sidecar it forwards for, else nil: it has no tags, no
+	// agents and no admission authority, and its NotAfter is zero.
+	ForwardSidecarId []byte
+	// The position of that sidecar's newer forwarding Delegation, which superseded this one; 0 for none.
+	SupersededAt uint64
 }
 
 // The plan of an act on agentId at this state; for a revocation, compromise asks a cascade from sinceN (0 for the
@@ -260,6 +265,10 @@ func (self *ConfigState) DelegationStates() []*DelegationState {
 			At:           delegation.GetAt(),
 			KeyDroppedAt: delegation.GetKeyDroppedAt(),
 			EndedAt:      delegation.GetEndedAt(),
+			SupersededAt: delegation.GetSupersededAt(),
+		}
+		if ConfigDelegationRowForwards(delegation) {
+			state.ForwardSidecarId = bytes.Clone(delegation.GetForwardSidecarId())
 		}
 		if delegation.GetNotAfter() != 0 {
 			state.NotAfter = time.UnixMilli(delegation.GetNotAfter())
@@ -283,7 +292,8 @@ func (self *ConfigState) DelegationStates() []*DelegationState {
 }
 
 // The DelegationRevoke `ur admin delegations revoke` signs: the Delegation's end, and for a leaked bundle (--leaked)
-// a park of what its key admitted from sinceN on (§7.9's cascade). Refuses one this state does not hold or that ended.
+// a park of what its key admitted from sinceN on (§7.9's cascade). Refuses one this state does not hold or that ended,
+// and leaked for a forwarding Delegation, whose revocation carries since_n 0 alone.
 func (self *ConfigState) DelegationRevokeStatement(delegationId []byte, leaked bool, sinceN uint64) (*protocol.DelegationRevoke, error) {
 	delegation := self.Delegation(delegationId)
 	if delegation == nil {
@@ -294,6 +304,10 @@ func (self *ConfigState) DelegationRevokeStatement(delegationId []byte, leaked b
 	}
 	revoke := &protocol.DelegationRevoke{DelegationId: bytes.Clone(delegationId)}
 	if leaked {
+		if ConfigDelegationRowForwards(delegation) {
+			// it admitted nothing to park, and the log refuses its revocation with a since_n (D-TEAM-33)
+			return nil, fmt.Errorf("Delegation %x is a forwarding Delegation, which a revocation ends with no since_n", delegationId)
+		}
 		revoke.SinceN = max(sinceN, delegation.GetAt())
 	}
 	return revoke, nil

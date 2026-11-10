@@ -108,6 +108,13 @@ func readGkmWrapPath(request *GkmRequest) (uint64, string, bool) {
 func (self *GkmEngine) newWrapBatchContext(request *GkmRequest, generation uint64, c8 string) (*gkmWrapBatchContext, bool) {
 	groupId := *request.GroupId
 	batch := &gkmWrapBatchContext{request: request, groupId: groupId, generation: generation, c8: c8}
+	// a re-formed group takes no wrap until its ladder reaches its form's generation (QD-074 rule 5; reform.go)
+	if pending, ok := self.reformLadderPending(request, groupId); !ok {
+		return nil, false
+	} else if pending {
+		request.Forbidden()
+		return nil, false
+	}
 	facts, err := self.generationFacts(request.Ctx, request.Cluster, groupId, generation)
 	switch {
 	case errors.Is(err, sidecar.ErrBlobNotFound):

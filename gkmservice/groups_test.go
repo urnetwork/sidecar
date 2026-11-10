@@ -465,7 +465,7 @@ func TestGkmGroupCreateRefusesWhatItsChecksDoNotPass(t *testing.T) {
 
 // §10.8: a re-form files the repo's next form, naming its newest group, and the new group's epoch/0 with the form's
 // generation and no auth pin; a re-form naming another group as its previous one is refused, and a commit onto the
-// pinless epoch 0 is refused until question keys-wire-reform-epoch-zero is answered.
+// pinless epoch 0 is refused while the ladder has not given the group its form's generation (reform_test.go).
 func TestGkmReformFilesTheNextFormAndAPinlessEpochZero(t *testing.T) {
 	world := newGkmGroupWorld(t)
 	fixture := world.fixture

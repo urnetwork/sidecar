@@ -19,10 +19,9 @@
 //   - A re-form (§10.8; D-KEYS-12, D-KEYS-13) writes the marker, then the repo's next form, which names the repo's
 //     newest group as its previous one, then the new group's epoch/0, whose header holds the form's generation and
 //     no auth pin, as GkmGroupReformRequest's landed body has it; the group's generations follow by the ladder route
-//     (KEYS-M2-25). After a site loss gkm holds no form, so the re-form is the repo's first. Epoch 1's pin floor in
-//     a re-formed group is gen/<form.generation>'s auth (DESIGN-DETAILS 6.2.2), which KEYS-M2-25 builds with the
-//     ladder; until then the epoch PUT check refuses a commit onto an epoch with no pin (epochs.go), so a re-formed
-//     group takes no commit yet.
+//     (reform.go). After a site loss gkm holds no form, so the re-form is the repo's first. Epoch 1's pin floor in
+//     a re-formed group is gen/<form.generation>'s auth (DESIGN-DETAILS 6.2.2; reform.go's reformPinFloor), so a
+//     re-formed group takes no commit until its ladder has reached that generation.
 //
 // No KeyHolders or proposal is read here: members check the form's signer, their cached C_g and gen/1 (§10.9).
 
@@ -482,8 +481,8 @@ func (self *GkmEngine) serveReform(request *GkmRequest) {
 		return
 	}
 	epochZero := &protocol.GkmEpochObject{
-		// no auth pin: epoch 1's floor is gen/<form.generation>'s (DESIGN-DETAILS 6.2.2), which KEYS-M2-25 builds
-		// with the ladder, and until then the epoch PUT check fails closed on a pinless epoch
+		// no auth pin: epoch 1's floor is gen/<form.generation>'s (DESIGN-DETAILS 6.2.2), which the ladder writes
+		// before the group takes a commit (reform.go)
 		Header:              &protocol.GkmCommitHeader{Generation: form.body.GetGeneration()},
 		Uploader:            request.SidecarId.Bytes(),
 		TimeMs:              request.Now().UnixMilli(),

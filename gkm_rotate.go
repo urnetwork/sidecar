@@ -319,7 +319,8 @@ func (self *gkmGroupManager) rotateDraft(ctx context.Context, state GkmAuthView,
 		return nil, nil, err
 	}
 	args.WrapCount = uint32(len(targets))
-	key, rotate, err := top.key.NextGeneration(args)
+	// in the pinned group, which after a re-form is not the one the parent's statement names (gkm_reform.go)
+	key, rotate, err := top.key.NextGenerationIn(pins.groupId, args)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -424,7 +425,7 @@ func (self *gkmGroupManager) takeWinner(ctx context.Context, state GkmAuthView, 
 	if err != nil {
 		return nil, err
 	}
-	generation, err := ParseGenRotate(winnerBytes, pins.groupId, generationNumber, GkmIdentityKeys(state))
+	generation, err := client.parseServedGeneration(ctx, state, self.repoId, pins.groupId, generationNumber, winnerBytes)
 	if err != nil {
 		if errors.Is(err, ErrGkmAuthentication) || errors.Is(err, ErrGkmMalformed) {
 			// nothing verifiable stands at gen/<g*+1>, so nothing can be held or linked past it: the admins

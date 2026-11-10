@@ -11,7 +11,9 @@
 //	            coverage, GkmGateCheck): an older, unexpired GenRotate after a removal is refused
 //	unexpired   now is before drop_not_after_ms
 //	pin         its generation is not below this depositor's pin, which then rises; gkm serving nothing at the pin,
-//	            or another commitment there, is a fork
+//	            or another commitment there, is a fork. After a re-form the route serves the new group, whose
+//	            ladder holds the pinned statement as the old group did, and the pin's group follows the chain from
+//	            it (KEYS-M2-25; gkm_reform.go)
 //
 // A pin of the repo this depositor saw fork stops its deposits as it stops a writer's seals (ErrGkmForked), until
 // the chain extends the pin.
@@ -212,11 +214,16 @@ func (self *gkmGroupManager) newestDropGenerationInFlow(ctx context.Context, sta
 		})
 		return held, nil
 	}
-	err = client.advancePins(self.repoId, func(pins *gkmRepoPins) {
-		pins.groupId = Id(newest.Rotate.GetGroupId())
-		pins.generation = newest.Rotate.GetGeneration()
-		pins.commitment = bytes.Clone(newest.Rotate.GetCommitment())
-	})
+	if 0 < pins.generation && Id(newest.Rotate.GetGroupId()) != pins.groupId {
+		// a re-formed group's, which a depositor follows along the chain just verified from its pin (gkm_reform.go)
+		err = client.movePinsAlongChain(self.repoId, newest)
+	} else {
+		err = client.advancePins(self.repoId, func(pins *gkmRepoPins) {
+			pins.groupId = Id(newest.Rotate.GetGroupId())
+			pins.generation = newest.Rotate.GetGeneration()
+			pins.commitment = bytes.Clone(newest.Rotate.GetCommitment())
+		})
+	}
 	if err != nil {
 		return nil, err
 	}
