@@ -1022,21 +1022,34 @@ func EvsCheckSealFormat2(statement *EvsStatement, parts [][]byte, partStaged [][
 	return evsCheckSealOf(statement, parts, partStaged, true)
 }
 
-// A seal's checks, of either format.
+// A committed push's seal over its parts as their records store them, of either format, as EvsCheckStoredPayload
+// reads a one-part push's: EvsCheckSealFormat2's checks without the staged bytes, which ride outside every hash and
+// outside packs and parcels, so a fold or a reader takes back what step 7 committed and judges none of format 2's
+// values (§11.6's format row).
+func EvsCheckStoredSeal(statement *EvsStatement, parts [][]byte) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
+	return evsCheckSealOf(statement, parts, nil, true)
+}
+
+// A seal's checks, of either format; format 2 with no staged bytes is a stored seal's (EvsCheckStoredSeal), which
+// matches none.
 func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte, format2 bool) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
 	push := statement.Push
 	if push.GetPartCount() == 0 || uint32(len(parts)) != push.GetPartCount() {
 		return nil, nil, fmt.Errorf("%w: %d parts for a count of %d", ErrEvsPushInvalid, len(parts), push.GetPartCount())
 	}
+	stored := format2 && partStaged == nil
 	checkedParts := make([]*EvsCheckedPart, len(parts))
 	partHashes := make([]byte, 0, len(parts)*sha256.Size)
 	partLeaves := make([][][]byte, len(parts))
 	for i, partBytes := range parts {
 		var checkedPart *EvsCheckedPart
 		var err error
-		if format2 {
+		switch {
+		case stored:
+			checkedPart, err = EvsCheckStoredPart(statement, partBytes)
+		case format2:
 			checkedPart, err = EvsCheckPartFormat2(statement, partBytes, partStaged[i])
-		} else {
+		default:
 			checkedPart, err = EvsCheckPart(statement, partBytes)
 		}
 		if err != nil {
@@ -1106,6 +1119,9 @@ func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte
 		var err error
 		if checked.Drop, err = evsCheckDropSlices(statement, joined.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY), listSlices); err != nil {
 			return nil, nil, err
+		}
+		if stored {
+			return checked, checkedParts, nil
 		}
 		if checked.Staged, err = evsMatchStaged(push, checked.NewObjects, stagedSegments); err != nil {
 			return nil, nil, err
