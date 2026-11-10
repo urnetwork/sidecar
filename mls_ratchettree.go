@@ -38,6 +38,17 @@ type mlsTreeSettings struct {
 	// valid 90 days (§10.6). Non-positive disables the bound, which only tests do, because the mlswg's
 	// leaves never expire.
 	MaximumLeafLifetime time.Duration
+	// Called between the steps of the tree's long loops, a leaf validated, a path secret sealed, a parent hash
+	// verified, a leaf added: js/wasm runs one thread, so a page Worker's engine yields here (§18.10's threads row;
+	// MlsEngineArgs.Yield). Nil calls nothing. It must be safe for concurrent use.
+	Yield func()
+}
+
+// Between two steps of a long loop.
+func (self *mlsTreeSettings) yield() {
+	if self.Yield != nil {
+		self.Yield()
+	}
 }
 
 // The defaults every tree runs on outside tests.
@@ -510,6 +521,7 @@ func (self *mlsRatchetTree) verifyParentHashes() error {
 		if self.nodes[index].parent == nil {
 			continue
 		}
+		self.settings.yield()
 		if err := self.verifyParentHash(mlsNodeIndex(index)); err != nil {
 			return err
 		}
@@ -602,6 +614,7 @@ func (self *mlsRatchetTree) validate(validation *mlsLeafValidation) error {
 		}
 		hasMember = true
 		leafIndex := mlsNodeIndex(index).leaf()
+		self.settings.yield()
 		if err := node.leaf.validateAlone(self.suite, self.settings, validation.credentialValidator, validation.groupId, leafIndex); err != nil {
 			return fmt.Errorf("leaf %d: %w", leafIndex, err)
 		}
@@ -690,6 +703,7 @@ func (self *mlsRatchetTree) addLeaf(leaf *mlsLeafNode) (mlsLeafIndex, error) {
 	if err != nil {
 		return 0, err
 	}
+	self.settings.yield()
 	self.setNode(index.node(), mlsTreeNode{leaf: leaf})
 	for _, ancestor := range index.node().directPath(self.leafCount()) {
 		parent := self.nodes[ancestor].parent

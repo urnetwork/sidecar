@@ -5,6 +5,11 @@
 // thread once 50 ms have passed on the clock since the last yield (sidecar_yield.go). On native legs a yield is a
 // cheap hand-off, so the same code runs on every leg.
 //
+// Inside one MLS operation the engine yields too: a 1,000-leaf tree's validation, a path sealed to every leaf under
+// blank parents and an Add commit's leaves each take hundreds of milliseconds natively, so the engine calls
+// MlsEngineArgs.Yield between a leaf's validation, a path secret's seal, a parent hash and an added leaf, and a
+// page Worker passes NewMlsYield's.
+//
 // A step itself is not cut: one commit's processing or one X-Wing seal is one step. The client keeps what its flows'
 // yields measured, the steps taken and the longest stretch of clock between two, so the wasm leg's run reads how
 // long the Worker went without yielding.
@@ -16,8 +21,34 @@
 package sidecar
 
 import (
+	"runtime"
+	"sync"
 	"time"
 )
+
+// A yield for MlsEngineArgs.Yield: between two steps of the engine's long loops it yields the thread once 50 ms have
+// passed on clock since the last yield. Safe for concurrent use, as an engine's methods are; the thread is yielded
+// with no lock held.
+func NewMlsYield(clock Clock) func() {
+	clock = clockOrReal(clock)
+	var stateLock sync.Mutex
+	last := clock.Now()
+	return func() {
+		due := func() bool {
+			stateLock.Lock()
+			defer stateLock.Unlock()
+			now := clock.Now()
+			if now.Sub(last) < sidecarYieldInterval {
+				return false
+			}
+			last = now
+			return true
+		}()
+		if due {
+			runtime.Gosched()
+		}
+	}
+}
 
 // What the flows' yields measured since the client started.
 type GkmYieldStats struct {
