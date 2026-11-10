@@ -5644,12 +5644,3 @@ A tls/ or smtp/ Service pair ({svc_<listener_client_id>} field <dialer_client_id
 Changes: DESIGN-DETAILS.md section 13 stands as written; SOCK-M5-18, -05 and -06 build it; §9.6 edge Finds and §2.8 sock-3 ttl (design-records).
 
 Questions: `details-13-edge-pair-life.md`.
-
-### QD-657: Can §2.8's sock-1, sock-3, sock-4 and api-13 rows be amended for the values section 13 keeps in Redis?
-*Decided by the owner on 2026-11-10, asked one question at a time. Folds into §2 Trust model and threat model.*
-
-§2.8's rows are amended, through design-records in the metadata list's next version: sock-1 gains, per lease, the listener's sidecar_id, the authorization log position it was admitted at and the set_version of the page that wrote it, and for 10 min after a removal for cause (60 s after an unlisten) the listener's client_id with the position and set version of the removal; sock-3 gains the position a listener's pairs were last removed at, for 10 min, and the ttl 'the grant's expiry, at most 15 min past the listener's last accepted registration (ur/: 60 min, refreshed per Find)'; sock-4 gains the position of the network's newest revocation sweep, for 30 s; api-13 gains each balance's lowest credit shown in the last 2 min, {escrow_<balance_id>}approx_floor, and lease reservations of '64 MiB to 1 GiB, 16 to 256 MiB on Community'. Each value has a short stated life, and nothing leaves the service that the rows do not already disclose elsewhere. SOCK-M5-18's fields and QUOTA-M2-15's floor key reach a release only after these rows land (I-18).
-
-Changes: §2.8 sock-1, sock-3, sock-4 and api-13 (design-records, before SOCK-M5-18 and QUOTA-M2-15 ship).
-
-Questions: `details-13-metadata-rows.md`.

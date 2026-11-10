@@ -132,7 +132,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 156,
+  "line": 157,
   "col": 22,
   "match": "Redis holds only rebuildable soft state and verified caches (owner decision 136:",
   "snippet": "# (owner decision 2); Redis holds only rebuildable soft state and verified caches (owner decision 136: evs-8,",
@@ -145,7 +145,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 157,
+  "line": 158,
   "col": 92,
   "match": "off-site",
   "snippet": "# evs-24, gkm-10, api-7's {acl_}e); no backup of key slots or wraps (owner decision 90); no off-site copy",
@@ -158,7 +158,7 @@
  {
   "family": "pools",
   "file": "02-TRUST.md",
-  "line": 158,
+  "line": 159,
   "col": 72,
   "match": "pools",
   "snippet": "# (owner decision 94); the metadata tier grows by whole clusters, never pools, each repo placed on one at",
@@ -171,7 +171,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 160,
+  "line": 161,
   "col": 100,
   "match": "off-site",
   "snippet": "# Postgres: sidecar tables, with the network, user and client rows they name, go to their own daily off-site",
@@ -184,7 +184,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 161,
+  "line": 162,
   "col": 13,
   "match": "14 days",
   "snippet": "# dump, kept 14 days, tables whose ttl here is at most 7 d excluded, so a row outlives its ttl, or its hold,",
@@ -197,7 +197,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 162,
+  "line": 163,
   "col": 13,
   "match": "14 d",
   "snippet": "# by at most 14 d; tables that exist today also sit in the main dumps for about 4 months (ops-2, D-TRUST-7).",
@@ -210,7 +210,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 268,
+  "line": 269,
   "col": 45,
   "match": "7-day window",
   "snippet": "  sees: \"invites (hashed 256-bit code, uses, 7-day window, inviting and accepting networks); bridge shares (share_id, both network ids, target and alias tables sealed under a key the code derives and the server cannot, versions",
@@ -223,10 +223,10 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 290,
+  "line": 291,
   "col": 222,
   "match": "Redis {sq_<network_id>}; lease",
-  "snippet": "t, network_quota_state, network_service_usage, service_debit_journal, service_usage_batch, stripe_meter_report (with version, attempts and next_time), team_subscription; Redis {sq_<network_id>}; lease reservations, and relayed sidecar contracts' reservations made at CreateContract (§20.6), in escrow's per-balance Redis reservations (existing)",
+  "snippet": "t, network_quota_state, network_service_usage, service_debit_journal, service_usage_batch, stripe_meter_report (with version, attempts and next_time), team_subscription; Redis {sq_<network_id>}; lease reservations, and relayed sidecar contracts' reservations made at CreateContract (§20.6), in escrow's per-balance Redis reservations (existing), and {escrow_<balance_id>",
   "reading": "api-13: quota and lease reservations in Redis, not storage state; team_subscription is a Postgres billing table (owner decision 199), not evs state.",
   "live": false,
   "gap": false,
@@ -236,11 +236,11 @@
  {
   "family": "mib64_trigger",
   "file": "02-TRUST.md",
-  "line": 291,
-  "col": 700,
+  "line": 292,
+  "col": 716,
   "match": "64 MiB",
-  "snippet": "anchor, start and end (owner decision 199); rate counters, among them each erasing sidecar's closure bytes for the day (owner decision 146); edge leases (network, meter, 64 MiB reservations, 16 MiB on Community); per relayed contract its reservation, grant and settled bytes",
-  "reading": "64 MiB here is the edge-lease reservation size (16 MiB on Community), matching §20's lease flow. It is not the retired packing trigger.",
+  "snippet": "d end (owner decision 199); rate counters, among them each erasing sidecar's closure bytes for the day (owner decision 146); edge leases (network, meter, reservations of 64 MiB to 1 GiB, 16 to 256 MiB on Community); per relayed contract its reservation, grant and settled bytes; each balance's lowest credit shown in the last 2 min",
+  "reading": "64 MiB here is the smallest edge-lease draw (16 MiB on Community), up to 1 GiB on a fast lease, matching §20's lease flow. It is not the retired packing trigger.",
   "live": false,
   "gap": false,
   "stated": false,
@@ -249,7 +249,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 298,
+  "line": 299,
   "col": 406,
   "match": "Redis soft state existing at placement (evs-8's lease fields, gkm",
   "snippet": "e, expiry) and their copied_rows, the in-scope records that drop or are overwritten on their own, namely rows of partitions that drop whole (tls-3, smtp-3, mx-2) and the Redis soft state existing at placement (evs-8's lease fields, gkm-10's acks); legal requests (instrument, country, accounts, productions, sealing orders); every abuse-role read; reporters' third-party data only until the join (§21.8)",
@@ -262,7 +262,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 360,
+  "line": 361,
   "col": 66,
   "match": "Redis {evsh_<repo_id>} for 10 min (evs",
   "snippet": "  store: head/<repo>/<ref> (metadata cluster); a verified copy in Redis {evsh_<repo_id>} for 10 min (evs-24)",
@@ -275,7 +275,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 395,
+  "line": 396,
   "col": 9,
   "match": "Redis {evsl_<repo_id>} (holder, ref, path epoch",
   "snippet": "  store: Redis {evsl_<repo_id>} (holder, ref, path epoch, prefix -> expiry) and {evsl_<repo_id>}v",
@@ -288,7 +288,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 412,
+  "line": 413,
   "col": 101,
   "match": "off-site",
   "snippet": "  ttl: each object's own row; deletes and overwrites keep no prior version (unversioned buckets); no off-site copy (owner decision 94); request logs as ops-1; {nvb_} 15 s, but the write budget's saved bucket level, wallet and counter readings 48 h after the loop's last write",
@@ -301,7 +301,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 502,
+  "line": 503,
   "col": 9,
   "match": "Redis {evsq_<repo_id>} (push sequence), {evsh_<repo_id>} (verified head",
   "snippet": "  store: Redis {evsq_<repo_id>} (push sequence), {evsh_<repo_id>} (verified head cache)",
@@ -314,7 +314,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 596,
+  "line": 597,
   "col": 16,
   "match": "Redis {gka_<group_id>}; group_id, sidecar_id, newest applied epoch",
   "snippet": "  sees: acks in Redis {gka_<group_id>}; group_id, sidecar_id, newest applied epoch, time; written at most daily",
@@ -327,7 +327,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 598,
+  "line": 599,
   "col": 174,
   "match": "Redis, after which gkm deletes no epoch",
   "snippet": "l: overwritten by the leaf's next ack; 31 d after its last write; deleted with its group's gkm objects at a shred (§11.12); soft state outside the rdb bundles, lost with Redis, after which gkm deletes no epoch for 30 d; a hold's copy excepted (api-14)",
@@ -340,7 +340,7 @@
  {
   "family": "edge_termination",
   "file": "02-TRUST.md",
-  "line": 604,
+  "line": 605,
   "col": 28,
   "match": "terminating (X1); caps; absorb scans; no plaintext path to tlsedge",
   "snippet": "  why: route by SNI without terminating (X1); caps; absorb scans; no plaintext path to tlsedge (§13.4, §13.5)",
@@ -353,7 +353,7 @@
  {
   "family": "pg_redis_durable",
   "file": "02-TRUST.md",
-  "line": 623,
+  "line": 624,
   "col": 33,
   "match": "Redis {tes_<network_id>} and its trigger {tes_<network_id>}n; lease",
   "snippet": "  store: network_tls_suspension; Redis {tes_<network_id>} and its trigger {tes_<network_id>}n; lease spends (api-13); the published-names list, drawn from api-7",
@@ -366,7 +366,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 736,
+  "line": 737,
   "col": 347,
   "match": "off-site",
   "snippet": "s the ids of networks, members and sidecars newer than the main dump (D-OPS-18); tables that exist today (accounts, networks, clients, contracts) in the main dumps, with off-site copies on planetoid",
@@ -379,7 +379,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 738,
+  "line": 739,
   "col": 32,
   "match": "14 d",
   "snippet": "  ttl: sidecar dump generations 14 d, so a row outlives its ttl by at most 14 d, and tables with ttls of at most 7 d none; existing tables about 4 months, 9 generations (xops/main/ansible/host_files/by-us-f",
@@ -392,7 +392,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 738,
+  "line": 739,
   "col": 75,
   "match": "14 d",
   "snippet": "  ttl: sidecar dump generations 14 d, so a row outlives its ttl by at most 14 d, and tables with ttls of at most 7 d none; existing tables about 4 months, 9 generations (xops/main/ansible/host_files/by-us-fmt-5-edge-6/db-archive/README.md:201-203)",
@@ -405,7 +405,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 799,
+  "line": 800,
   "col": 16,
   "match": "off-site",
   "snippet": "  withdrawn: no off-site copy in v0 (owner decision 94)",
@@ -418,7 +418,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 888,
+  "line": 889,
   "col": 148,
   "match": "14-day",
   "snippet": "**D-TRUST-7 (proposed).** Retention follows §2.11 and §2.8's `ttl` column; sidecar tables leave the 4-month main dumps for their own daily off-site 14-day dump, and sidecar Redis families the 8-month bundles (ops-2, ops-3). *Why:* retained fields can be subpoenaed; no backup may outlive a published ttl.",
@@ -431,7 +431,7 @@
  {
   "family": "offsite",
   "file": "02-TRUST.md",
-  "line": 888,
+  "line": 889,
   "col": 139,
   "match": "off-site",
   "snippet": "**D-TRUST-7 (proposed).** Retention follows §2.11 and §2.8's `ttl` column; sidecar tables leave the 4-month main dumps for their own daily off-site 14-day dump, and sidecar Redis families the 8-month bundles (ops-2, ops-3). *Why:* retained fields can be subpoenaed; no backup may outlive a published ttl.",
@@ -444,7 +444,7 @@
  {
   "family": "audit_gate",
   "file": "02-TRUST.md",
-  "line": 912,
+  "line": 913,
   "col": 189,
   "match": "audited",
   "snippet": "product copy claim \"end-to-end encrypted\" without external review (owner decision 99)? **Decided by owner 2026-11-04 (owner decision 119):** (a) yes, now, with §2.18's unaudited-cryptography disclosure on the security page; sidecar/design/pitch5.html:931 changes. *Residual:* none.",
@@ -457,7 +457,7 @@
  {
   "family": "audit_gate",
   "file": "02-TRUST.md",
-  "line": 937,
+  "line": 938,
   "col": 4,
   "match": "audited",
   "snippet": "| Unaudited cryptography: in-house MLS on draft ciphersuite 0x0010, post-quantum against passive adversaries only, the key ladder and its Ed25519 authority signatures, which a futur",
@@ -470,7 +470,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 943,
+  "line": 944,
   "col": 263,
   "match": "7-day window",
   "snippet": "ritten version's content gone a minute later | Medium | Medium | History written while versioning was on stays (owner decision 158) unless a repo admin drops it, after a 7-day window any repo admin can cancel or at once with `now` (owner decisions 173, 183); config and mailcfg repos and git-mode refs refuse it; a repo admin's lock (§8.8); statements ",
@@ -483,7 +483,7 @@
  {
   "family": "window_14d_weekly",
   "file": "02-TRUST.md",
-  "line": 944,
+  "line": 945,
   "col": 69,
   "match": "7-day window",
   "snippet": "| A rogue or compromised repo admin drops history | Low | High | The 7-day window, with notices on every repo admin's devices, any admin's cancel and a lock voiding a pending drop; in owner-bound repos only the owner's consented devices (owner decisio",

@@ -146,8 +146,9 @@ Feedback (sidecar/FEEDBACK-SYSTEM.md:11) and hosted models are out of scope.
 # forwarding key.
 # v10, updated 2026-11-10 for the build's answers (owner decisions 198 onward, and the fixes the owner accepted on
 # 2026-11-06), adds api-3's discovery attempt histories, api-7's egress statement modes, api-8's derived webhook
-# signing keys, api-13's team_subscription (owner decision 199) and evs-9's {evsn_} sums for the nightly count
-# (owner decision 198).
+# signing keys, api-13's team_subscription (owner decision 199), lease draws up to 1 GiB and shown balance floors,
+# evs-9's {evsn_} sums for the nightly count (owner decision 198), and sock-1's lease positions and tombstones,
+# sock-3's pair floors and lease-bound pair lives and sock-4's sweep claims.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -287,10 +288,10 @@ api-12:
   withdrawn: bridge rules, the overlay /16, LAN prefixes and port maps live in the config repo (owner decision 5); gates see api-7's ids and egress modes
 api-13:
   service: api, taskworker; the edges (leases); evs (usage batches); CreateContract (relayed reservations)
-  store: transfer_balance.tier, network_sidecar_limit, network_quota_state, network_service_usage, service_debit_journal, service_usage_batch, stripe_meter_report (with version, attempts and next_time), team_subscription; Redis {sq_<network_id>}; lease reservations, and relayed sidecar contracts' reservations made at CreateContract (§20.6), in escrow's per-balance Redis reservations (existing)
-  sees: each network's tier; limit overrides (key, value, a reason citing an ops change or §21 case); quota state (stored bytes, storage_over, spent time); daily usage per network and meter (edge leases, evs transfer, relayed bytes, seats); debit journal rows (usage, balance, meter, bytes, batch, applied); usage batches (batch id, producer, window start, applied time); Stripe meter reports (network, meter, day, identifier, value, state, version, attempts, next send); each Team's Stripe subscription and customer ids, billing anchor, start and end (owner decision 199); rate counters, among them each erasing sidecar's closure bytes for the day (owner decision 146); edge leases (network, meter, 64 MiB reservations, 16 MiB on Community); per relayed contract its reservation, grant and settled bytes
+  store: transfer_balance.tier, network_sidecar_limit, network_quota_state, network_service_usage, service_debit_journal, service_usage_batch, stripe_meter_report (with version, attempts and next_time), team_subscription; Redis {sq_<network_id>}; lease reservations, and relayed sidecar contracts' reservations made at CreateContract (§20.6), in escrow's per-balance Redis reservations (existing), and {escrow_<balance_id>}approx_floor
+  sees: each network's tier; limit overrides (key, value, a reason citing an ops change or §21 case); quota state (stored bytes, storage_over, spent time); daily usage per network and meter (edge leases, evs transfer, relayed bytes, seats); debit journal rows (usage, balance, meter, bytes, batch, applied); usage batches (batch id, producer, window start, applied time); Stripe meter reports (network, meter, day, identifier, value, state, version, attempts, next send); each Team's Stripe subscription and customer ids, billing anchor, start and end (owner decision 199); rate counters, among them each erasing sidecar's closure bytes for the day (owner decision 146); edge leases (network, meter, reservations of 64 MiB to 1 GiB, 16 to 256 MiB on Community); per relayed contract its reservation, grant and settled bytes; each balance's lowest credit shown in the last 2 min
   why: quotas, transfer-balance debits (owner decision 10), Team billing (owner decision 92; §20)
-  ttl: counters 48 h; daily usage and meter reports 13 months; debit rows until applied; usage batches 24 h; overrides until lifted; quota state and Team subscription rows until their network is deleted; leases and relayed reservations until closed, settled or expired
+  ttl: counters 48 h; daily usage and meter reports 13 months; debit rows until applied; usage batches 24 h; overrides until lifted; quota state and Team subscription rows until their network is deleted; leases and relayed reservations until closed, settled or expired; a balance's shown floor 2 min, in ops-3's bundles as escrow's existing keys are
   owner: §20.14
 api-14:
   service: api (abuse role), the taskworker abuse worker
@@ -308,10 +309,10 @@ api-15:
   owner: §8.9
 sock-1:
   service: sockets
-  store: Redis {sg_<network_id>_<h16(name)>} (listener fields m, r, i and e; version v) and its lease-ordered ZSET (suffix ix)
-  sees: network_id; the name as a token path (16 B a segment, HMAC under a key from the config repo's K_sock, owner decision 67) or, for tls/, smtp/ and ur/, in plaintext; per listener the sealed name, client_id, listen_id, protocol, version, ALPN, application mode (http or raw, and a raw endpoint's authentication mode), weight, max_streams, flags (exclusive, affinity, serving, draining), reported in-flight and issued counts, ejection state and its Signed claim (the sidecar's identity key); the group version
-  why: Find, scheduling and sampling (§9.5-§9.8)
-  ttl: 45 s lease renewed by heartbeat; ejections at most 300 s; a K_sock rotation's 10 min dual registration links old and new token paths; outside the Redis bundles (D-OPS-16)
+  store: Redis {sg_<network_id>_<h16(name)>} (listener fields m, r, i and e, and x, a removal's tombstone; version v) and its lease-ordered ZSET (suffix ix)
+  sees: network_id; the name as a token path (16 B a segment, HMAC under a key from the config repo's K_sock, owner decision 67) or, for tls/, smtp/ and ur/, in plaintext; per listener the sealed name, client_id, listen_id, protocol, version, ALPN, application mode (http or raw, and a raw endpoint's authentication mode), weight, max_streams, flags (exclusive, affinity, serving, draining), reported in-flight and issued counts, ejection state and its Signed claim (the sidecar's identity key); per lease the listener's sidecar_id, the authorization log position it was admitted at and the set_version of the page that wrote it; for 10 min after a removal for cause (60 s after an unlisten), the listener's client_id with the position and set version of the removal; the group version
+  why: Find, scheduling and sampling (§9.5-§9.8); a tombstone refuses a later write admitted below the removal's position or from an older set
+  ttl: 45 s lease renewed by heartbeat; ejections at most 300 s; tombstones 10 min after a removal for cause or the client's removal, 60 s after an unlisten; a K_sock rotation's 10 min dual registration links old and new token paths; outside the Redis bundles (D-OPS-16)
   owner: §9.5
 sock-2:
   service: sockets
@@ -323,16 +324,16 @@ sock-2:
 sock-3:
   service: sockets writes; CreateContract reads
   store: Redis {svc_<listener_client_id>}
-  sees: Service-contract pairs, field the dialer client (an edge's platform client, or a sidecar dialing ur/), value the grant expiry
-  why: CreateContract issues Service only for a pair Find recorded (§6.10.1, C9)
-  ttl: the grant's expiry, at most 24 h (ur/ 60 min), refreshed per Find; deleted on revocation or the last edge unlisten
+  sees: Service-contract pairs, field the dialer client (an edge's platform client, or a sidecar dialing ur/), value the grant expiry; the authorization log position at which a listener's pairs were last removed, for 10 min
+  why: CreateContract issues Service only for a pair Find recorded (§6.10.1, C9); the removal's floor refuses a pair written at an older position
+  ttl: the grant's expiry, at most 15 min past the listener's last accepted registration (ur/: 60 min, refreshed per Find); deleted on revocation or the last edge unlisten; the floor 10 min
   owner: §9.6
 sock-4:
   service: sockets
   store: Redis {sn_<network_id>}names
-  sees: a network's registered token paths and edge names, with sealed names, for listing
-  why: GET /socket/list; clients unseal names locally (owner decision 67)
-  ttl: entries leave with their leases
+  sees: a network's registered token paths and edge names, with sealed names, for listing; the authorization log position of the network's newest revocation sweep, for 30 s
+  why: GET /socket/list; clients unseal names locally (owner decision 67); one process a network and position claims the sweep (§9.8)
+  ttl: entries leave with their leases; the sweep's claim 30 s
   owner: §9.8
 sock-5:
   service: sockets
