@@ -97,6 +97,12 @@ type SidecarSettings struct {
 	// kill or a lost answer leaves it pending, retried with the same bytes (§5.6's sign row, §5.9). 7 days, §7.9's
 	// most, a reading: §5.6 sets none shorter, and a cosign at k > 1 needs the whole of it.
 	StatementTimeout time.Duration
+	// Whether this sidecar signs a RecoveryBind or RecoveryRebind. Off, the default: QD-010 fixes the derivation
+	// from a code to its keys (keys_recovery.go), and no real binding is signed until §5.9 states it, since a
+	// printed code outlives any regeneration (plan-CORE-recovery-derivation #2's interim). While off,
+	// RotateRecovery answers ErrRecoveryBindingGated and signs nothing; keychain.wrap's copy still follows a
+	// binding another device signed.
+	RecoveryBindings bool
 
 	// Nil, the default: connect's default logger, glog, on connect legs (adapted, log_connect.go); no
 	// logging at all on the sidecar_http leg.

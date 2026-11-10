@@ -139,8 +139,17 @@ func (self *Sidecar) authorityInstalled(authority SidecarAuthority) {
 	if authority == nil {
 		return
 	}
+	// keychain.wrap's recovery copy comes to the member's current binding as this authority's newest state has it,
+	// and again at each entry, before the entry's alarms, so a void's alarm names the span the void just ended
+	if pin := authority.Pin(); pin != nil {
+		if err := self.syncRecoverySeal(authority, pin); err != nil && !errors.Is(err, ErrSidecarNoIdentity) {
+			self.log.Warningf("[keys]keychain.wrap's recovery copy was not brought to the current binding: %s", err)
+		}
+	}
 	remove := authority.AddEntryCallback(func(entry *SidecarAuthorityEntry) {
+		self.applyRecoverySealEntry(authority, entry)
 		self.applyAlarmEntry(authority, entry)
+		self.applyRevokeEntry(authority, entry)
 	})
 	func() {
 		self.alarms.stateLock.Lock()
@@ -388,8 +397,9 @@ func (self *Sidecar) alarmsOfEntry(facts *sidecarAlarmFacts, identity *SidecarId
 		if id, err := IdFromBytes(voided.Signer); err == nil {
 			signerId = &id
 		}
-		// keychain.wrap's sealing pins (§5.9's backup rule) are KEYS-M2-24's to name; none are known here yet
-		events = append(events, SidecarEvent{Kind: SidecarEventRecoveryRebind, SidecarId: signerId})
+		// the span this device's keychain.wrap was sealed to the voided binding (§5.9's backup rule): a backup taken
+		// inside it holds a sealing to that binding
+		events = append(events, SidecarEvent{Kind: SidecarEventRecoveryRebind, SidecarId: signerId, Evidence: self.recoverySealEvidence(voided.KeySha256, entry.Pin)})
 		itemId := sidecarApprovalItemId(SidecarApprovalRecoveryRebind, voided.KeySha256, n)
 		record.open(&sidecarApprovalRecord{ItemId: itemId, Kind: SidecarApprovalRecoveryRebind, SidecarId: signerId, MemberId: &memberId, Position: n, RaisedAtMs: nowMs})
 	}

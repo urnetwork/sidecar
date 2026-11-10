@@ -1,0 +1,75 @@
+[
+  {
+    "sidecar_id": "2122232425262728292a2b2c2d2e2f30",
+    "revoked_at": 0,
+    "standing_since_n": 0,
+    "reason": 1,
+    "since_n": 0,
+    "signatures": 1,
+    "presence": false,
+    "key_ids": null,
+    "plan_id": "947bb9cc875825733d77ec15e61193b5"
+  },
+  {
+    "sidecar_id": "2122232425262728292a2b2c2d2e2f30",
+    "revoked_at": 0,
+    "standing_since_n": 0,
+    "reason": 1,
+    "since_n": 0,
+    "signatures": 1,
+    "presence": true,
+    "key_ids": [
+      "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "808182838485868788898a8b8c8d8e8f90919293"
+    ],
+    "plan_id": "c1b14eabda3d7299dcb06c65824ad7b8"
+  },
+  {
+    "sidecar_id": "2122232425262728292a2b2c2d2e2f30",
+    "revoked_at": 0,
+    "standing_since_n": 0,
+    "reason": 4,
+    "since_n": 1042,
+    "signatures": 1,
+    "presence": false,
+    "key_ids": null,
+    "plan_id": "fc7f213251b44b78c90385603f0afe7e"
+  },
+  {
+    "sidecar_id": "2122232425262728292a2b2c2d2e2f30",
+    "revoked_at": 0,
+    "standing_since_n": 0,
+    "reason": 4,
+    "since_n": 1042,
+    "signatures": 2,
+    "presence": true,
+    "key_ids": [
+      "808182838485868788898a8b8c8d8e8f90919293"
+    ],
+    "plan_id": "ff5013a7b7cbb5336ef579b7a483ea81"
+  },
+  {
+    "sidecar_id": "2122232425262728292a2b2c2d2e2f30",
+    "revoked_at": 2000,
+    "standing_since_n": 0,
+    "reason": 1,
+    "since_n": 0,
+    "signatures": 1,
+    "presence": true,
+    "key_ids": [
+      "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+    ],
+    "plan_id": "86453e7b13dea5e9aa0b8fff8dc405c2"
+  },
+  {
+    "sidecar_id": "2122232425262728292a2b2c2d2e2f30",
+    "revoked_at": 2000,
+    "standing_since_n": 1500,
+    "reason": 4,
+    "since_n": 1042,
+    "signatures": 1,
+    "presence": false,
+    "key_ids": null,
+    "plan_id": "71f7aaacfaaa903c96da3ac1b20afeb7"
+  }
+]

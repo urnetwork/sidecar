@@ -40,6 +40,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -209,6 +210,73 @@ func (self *sidecarAct) AddSealed(signedType bridge.SignedType, statement proto.
 	self.countersigned = nil
 	self.evidence = nil
 	return nil
+}
+
+// Adds statement as §7.9's several row asks at the act's state: on its own where one counted signer suffices, else
+// inside an AuthorityProposal this sidecar signs as its first counted signer, which cosigns then complete
+// (SidecarProposalAuthority.ProposalRequired, the log's answer, never the caller's). seal, nil for none, runs on the
+// statement once its own header is set, as AddSealed's does. Answers whether it went as a proposal, whose proposal_id
+// proposalId then gives. An authority that cannot say takes the statement on its own, which verifiers refuse where
+// k > 1 asks for a proposal, so nothing takes effect.
+func (self *sidecarAct) addCounted(signedType bridge.SignedType, statement proto.Message, seal func(header *bridge.StatementHeader, statement proto.Message) error) (bool, error) {
+	if self.ran {
+		return false, ErrSidecarActState
+	}
+	proposal := false
+	if proposals, ok := self.authority.(SidecarProposalAuthority); ok {
+		body, err := proto.MarshalOptions{Deterministic: true}.Marshal(statement)
+		if err != nil {
+			return false, err
+		}
+		proposal = proposals.ProposalRequired(&SidecarStatement{SignerId: self.identity.SidecarId, Type: signedType, Body: body})
+	}
+	if !proposal {
+		return false, self.AddSealed(signedType, statement, seal)
+	}
+	if self.origin != SidecarActConfirmed {
+		return false, ErrSidecarActMode
+	}
+	headerField := statement.ProtoReflect().Descriptor().Fields().ByNumber(1)
+	if headerField == nil || headerField.Message() == nil ||
+		headerField.Message().FullName() != (&bridge.StatementHeader{}).ProtoReflect().Descriptor().FullName() {
+		return false, fmt.Errorf("%w: the statement carries no StatementHeader", ErrSidecarSignRefused)
+	}
+	nonce := make([]byte, configNonceByteCount)
+	if _, err := io.ReadFull(self.random, nonce); err != nil {
+		return false, fmt.Errorf("no randomness for a nonce: %w", err)
+	}
+	header := &bridge.StatementHeader{
+		NetworkId:  self.identity.NetworkId.Bytes(),
+		At:         &bridge.AuthPin{Version: self.at.GetVersion(), Chain: bytes.Clone(self.at.GetChain())},
+		Nonce:      nonce,
+		NotAfterMs: self.notAfterMs(),
+	}
+	withHeader := proto.Clone(statement)
+	withHeader.ProtoReflect().Set(headerField, protoreflect.ValueOfMessage(header.ProtoReflect()))
+	if seal != nil {
+		if err := seal(header, withHeader); err != nil {
+			return false, err
+		}
+	}
+	proposedBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(withHeader)
+	if err != nil {
+		return false, err
+	}
+	return true, self.Add(bridge.SignedType_SIGNED_AUTHORITY_PROPOSAL, &protocol.AuthorityProposal{
+		StatementType: uint32(signedType),
+		Statement:     proposedBytes,
+	})
+}
+
+// §7.9's proposal_id of the act's statement at index, an AuthorityProposal: the id cosigns and vetoes name
+// (config_records.go's ProposalId, over the signed purpose, type and body). Nil for any other statement.
+func (self *sidecarAct) proposalId(index int) []byte {
+	if index < 0 || len(self.statements) <= index || self.statements[index].signedType != bridge.SignedType_SIGNED_AUTHORITY_PROPOSAL {
+		return nil
+	}
+	statement := self.statements[index]
+	proposalId := bridge.SignedBytesSha256(statement.purpose, statement.signedType, statement.body)
+	return proposalId[:]
 }
 
 // A statement's not_after from now, ms since the epoch: StatementTimeout, at most §7.9's 7 days.

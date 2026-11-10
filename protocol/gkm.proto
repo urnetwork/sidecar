@@ -107,7 +107,8 @@ message GkmEpochObject {
   bytes commit = 1;              // an MLSMessage: PrivateMessage, or an external commit's PublicMessage; empty at epoch 0
   GkmCommitHeader header = 2;    // gkm's copy of the commit's authenticated_data, for its own checks: a member reads the
                                  //   one MLS authenticates. At a creation's epoch 0, gen/1's generation and auth; at a
-                                 //   re-form's, the form's generation and no auth, its gen/ coming after by the ladder
+                                 //   re-form's, the form's generation and no auth: epoch 1's floor is
+                                 //   gen/<form.generation>'s, which the ladder writes before the group takes a commit
   bytes uploader = 3;            // sidecar_id; at epoch 0 the creator or re-former (gkm-1)
   int64 time_ms = 4;             // gkm's clock at the write
   bytes gen_wrap = 5;            // GenWrap_n, of header.generation; empty at a generation-0 self-join (10.8)
@@ -129,10 +130,19 @@ message GkmGroupInfoObject {
   bytes sealed_group_info = 3;   // GroupInfo_epoch, above 16 leaves; empty in a pointer
 }
 
-// gkm/welcome/<sidecar_id>/<ref>, written with the Welcome.
+// gkm/welcome/<sidecar_id>/<group_id>/<n>, written with the Welcome: one Welcome, one key, whatever KeyPackage it
+// used, so a last-resort KeyPackage that served two Adds leaves two pointers (DESIGN-DETAILS 6.2.2).
 message GkmWelcomePointer {
   bytes group_id = 1;
   uint64 epoch = 2;              // n of gkm/<group_id>/welcome/<n>
+  bytes key_package_ref = 3;     // <ref> of the KeyPackage the Add used, which the joiner opens the Welcome with
+}
+
+// gkm/<group_id>/owner, the first write of a creation or a re-form, If-None-Match, by gkm from the token: a group
+// belongs to one repo from its first byte, and every group route resolves through it (DESIGN-DETAILS 6.2.2).
+message GkmGroupOwner {
+  bytes repo_id = 1;
+  bytes network_id = 2;
 }
 
 // gkm/kp/<sidecar_id>/<ref>.claim. The target is the sidecar_id in its key.

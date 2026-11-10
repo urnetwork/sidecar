@@ -1,7 +1,7 @@
 // The keychain's commands (§5.9's Pass, R-CORE-7, plan-CORE-cli-ui-missing #2): ur unlock opens U with the pass, ur
 // lock drops U and every R_n from memory as auto-lock does, ur keychain pass rewraps U under a new pass, and ur
 // keychain rotate rotates U and every R_n. Every pass is read from /dev/tty with echo off, never argv, the environment
-// or stdin, and approves nothing.
+// or stdin, and approves nothing. ur keychain recovery-rotate is cmd_keychain_recovery.go's.
 
 package main
 
@@ -27,8 +27,8 @@ func init() {
 	})
 	registerUrCommand(&urCommand{
 		name:    "keychain",
-		usage:   "  ur keychain pass\n  ur keychain rotate",
-		summary: "change the keychain's pass, or rotate its keys",
+		usage:   "  ur keychain pass\n  ur keychain rotate\n  ur keychain recovery-rotate [--compromise]",
+		summary: "change the keychain's pass, rotate its keys, or replace the recovery code",
 		run:     runUrKeychain,
 	})
 }
@@ -47,6 +47,9 @@ func runUrLock(ctx context.Context, cli *urCli, options docopt.Opts) error {
 }
 
 func runUrKeychain(ctx context.Context, cli *urCli, options docopt.Opts) error {
+	if recoveryRotate, _ := options.Bool("recovery-rotate"); recoveryRotate {
+		return runUrKeychainRecoveryRotate(ctx, cli, options)
+	}
 	if rotate, _ := options.Bool("rotate"); rotate {
 		pass, err := readPassFromTty(cli, "pass: ")
 		if err != nil {

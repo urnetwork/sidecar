@@ -528,6 +528,8 @@ func (self *gkmFixture) fileForm(repoId sidecar.Id, clusterId string, seq uint64
 	body := self.marshal(&protocol.GroupForm{RepoId: repoId.Bytes(), GroupId: groupId.Bytes(), Generation: 1})
 	signed := &bridge.Signed{Body: body, SignerId: testId("creator").Bytes(), Signature: make([]byte, 64), Type: uint32(bridge.SignedType_SIGNED_GROUP_FORM)}
 	self.put(clusterId, GkmFormKey(repoId, seq), self.marshal(signed))
+	// the group's owner marker, as a creation writes it first, in the fixture's one network
+	self.put(clusterId, GkmGroupOwnerKey(groupId), self.marshal(&protocol.GkmGroupOwner{RepoId: repoId.Bytes(), NetworkId: sidecar.Id(self.networkId).Bytes()}))
 }
 
 // One admitted sidecar with its own identity key, which signs as it would.

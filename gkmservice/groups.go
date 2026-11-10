@@ -10,15 +10,19 @@
 //     §10.6's signer rule as gkm can judge it, since AclState.EvsAccess gives admin only to a repo admin's device and,
 //     in owner-bound kinds, only to the owner's consented device. Its signature verifies under the identity key the
 //     log admits for that sidecar.
-//   - A form must name a group no object of which exists yet on the repo's cluster. Question
-//     keys-m2-12-groupform-names-anothers-group asks whether gkm must refuse a form naming another repo's group;
-//     until it is answered gkm refuses one, failing closed, at one LIST per creation or re-form.
-//   - A re-form (§10.8; D-KEYS-12, D-KEYS-13) writes the repo's next form, which names the repo's newest group as its
-//     previous one, then the new group's epoch/0, whose header holds the form's generation and no auth pin, as
-//     GkmGroupReformRequest's landed body has it; the group's generations follow by the ladder route (KEYS-M2-25).
-//     After a site loss gkm holds no form, so the re-form is the repo's first. Whether a re-form's epoch 0 carries an
-//     auth pin is question keys-wire-reform-epoch-zero, and until it is answered the epoch PUT check refuses a commit
-//     onto an epoch with none (epochs.go), so a re-formed group takes no commit yet.
+//   - A group belongs to one repo from its first byte (DESIGN-DETAILS 6.2.2): the first write of a creation or a
+//     re-form is the group's owner marker, gkm/<group_id>/owner, If-None-Match, a GkmGroupOwner {repo_id,
+//     network_id} gkm writes from the token. A marker that stands with other bytes answers 409 and nothing else of
+//     the request is written; equal bytes resume a crashed request. Every group route resolves through the marker
+//     (resolveGroup): the repo it names must be among the token's scopes and that repo's forms must name the group,
+//     so a form for one repo naming another's group reaches none of its routes, whichever form a process read first.
+//   - A re-form (§10.8; D-KEYS-12, D-KEYS-13) writes the marker, then the repo's next form, which names the repo's
+//     newest group as its previous one, then the new group's epoch/0, whose header holds the form's generation and
+//     no auth pin, as GkmGroupReformRequest's landed body has it; the group's generations follow by the ladder route
+//     (KEYS-M2-25). After a site loss gkm holds no form, so the re-form is the repo's first. Epoch 1's pin floor in
+//     a re-formed group is gen/<form.generation>'s auth (DESIGN-DETAILS 6.2.2), which KEYS-M2-25 builds with the
+//     ladder; until then the epoch PUT check refuses a commit onto an epoch with no pin (epochs.go), so a re-formed
+//     group takes no commit yet.
 //
 // No KeyHolders or proposal is read here: members check the form's signer, their cached C_g and gen/1 (§10.9).
 
@@ -47,6 +51,9 @@ const gkmSealedKeyByteCount = 24 + 32 + 16
 
 // The purpose a GroupForm is signed under (QD-527).
 const gkmGroupFormPurpose = "group-form"
+
+// A GkmGroupOwner's bytes: two 16-byte ids, each under a tag and a length.
+const gkmGroupOwnerByteCount = 2 * (2 + 16)
 
 // The most bytes of a Signed GroupForm or GenRotate a route reads: a GenRotate with a drop key is about 1.7 KB.
 const gkmStatementMaxByteCount = 16 * 1024
@@ -249,13 +256,41 @@ func (self *GkmEngine) checkPin(request *GkmRequest, pin *bridge.AuthPin) bool {
 	return false
 }
 
-// Whether any object of groupId exists on cluster: one LIST of a single key.
-func gkmGroupHasObjects(ctx context.Context, cluster sidecar.BlobCluster, groupId sidecar.Id) (bool, error) {
-	infos, _, err := cluster.List(ctx, GkmGroupPrefix(groupId), "", 1)
+// The owner marker's bytes for a group of repoId in networkId.
+func gkmGroupOwnerBytes(repoId sidecar.Id, networkId sidecar.Id) ([]byte, error) {
+	return proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GkmGroupOwner{
+		RepoId:    repoId.Bytes(),
+		NetworkId: networkId.Bytes(),
+	})
+}
+
+// Writes the form's group's owner marker, If-None-Match, the first write of a creation or a re-form: the token's
+// repo and network. Equal bytes already there are this request's earlier try; other bytes mean the group id is
+// another repo's, and answer 409 before anything else of the request is written. false once it has answered.
+func (self *GkmEngine) createGroupOwner(request *GkmRequest, form *gkmFormUpload) bool {
+	ownerBytes, err := gkmGroupOwnerBytes(form.repoId, sidecar.Id(request.Principal.NetworkId))
 	if err != nil {
-		return false, err
+		request.Unavailable()
+		return false
 	}
-	return 0 < len(infos), nil
+	if !request.CheckRepoWritable() {
+		return false
+	}
+	barrierKey := gkmBarrierGroupKey(form.groupId)
+	testHookBarrier(BarrierGroupOwnerBefore, barrierKey)
+	winner, err := createGkmObject(request.Ctx, request.Cluster, GkmGroupOwnerKey(form.groupId), ownerBytes, self.settings.ObjectMaxByteCount)
+	testHookBarrier(BarrierGroupOwnerAfter, barrierKey)
+	if err != nil {
+		self.answerStoreError(request, err)
+		return false
+	}
+	if winner != nil {
+		// the id is taken: the creator draws another (KF1's step 3)
+		request.Conflict(nil)
+		return false
+	}
+	self.owners.remember(form.groupId, form.repoId)
+	return true
 }
 
 // The seq a form takes among the repo's forms, read fresh: the seq of a stored form with its bytes, which is a
@@ -298,20 +333,11 @@ func (self *GkmEngine) formSeq(request *GkmRequest, form *gkmFormUpload, reform 
 	return newest.Seq + 1, false, true
 }
 
-// Files a form at seq, If-None-Match, after the group-is-new check: a form that loses its seq to other bytes answers
-// 409 with them. false once it has answered.
-func (self *GkmEngine) fileForm(request *GkmRequest, form *gkmFormUpload, seq uint64, retry bool) bool {
-	if !retry {
-		// question keys-m2-12-groupform-names-anothers-group: a form never names a group that has objects
-		taken, err := gkmGroupHasObjects(request.Ctx, request.Cluster, form.groupId)
-		if err != nil {
-			self.answerStoreError(request, err)
-			return false
-		}
-		if taken {
-			request.Conflict(nil)
-			return false
-		}
+// Files a form at seq, If-None-Match, after its group's owner marker: a form that loses its seq to other bytes
+// answers 409 with them. false once it has answered.
+func (self *GkmEngine) fileForm(request *GkmRequest, form *gkmFormUpload, seq uint64) bool {
+	if !self.createGroupOwner(request, form) {
+		return false
 	}
 	if !request.CheckRepoWritable() {
 		return false
@@ -401,16 +427,16 @@ func (self *GkmEngine) serveGroupCreate(request *GkmRequest) {
 		NetworkId:           request.Principal.NetworkId.Bytes(),
 		CipherSuite:         createRequest.GetCipherSuite(),
 	}
-	// a repo's creation writes are §11.13's P1 (plan-EVSB-write-classes): the form, epoch/0 and gen/1, every one on
-	// the repo's cluster, so the request's ctx carries their class from here
+	// a repo's creation writes are §11.13's P1 (plan-EVSB-write-classes): the owner marker, the form, epoch/0 and
+	// gen/1, every one on the repo's cluster, so the request's ctx carries their class from here
 	prices := self.settings.Prices
-	writeCtx, ok := request.SpendWrites(request.Cluster, "", prices.create(len(form.raw))+prices.create(proto.Size(epochZero))+prices.create(len(generationBytes)))
+	writeCtx, ok := request.SpendWrites(request.Cluster, "", prices.create(gkmGroupOwnerByteCount)+prices.create(len(form.raw))+prices.create(proto.Size(epochZero))+prices.create(len(generationBytes)))
 	if !ok {
 		return
 	}
 	request.Ctx = writeCtx
-	seq, retry, ok := self.formSeq(request, form, false)
-	if !ok || !self.fileForm(request, form, seq, retry) {
+	seq, _, ok := self.formSeq(request, form, false)
+	if !ok || !self.fileForm(request, form, seq) {
 		return
 	}
 	if !self.createEpochZero(request, form.groupId, epochZero) {
@@ -456,7 +482,8 @@ func (self *GkmEngine) serveReform(request *GkmRequest) {
 		return
 	}
 	epochZero := &protocol.GkmEpochObject{
-		// no auth pin: question keys-wire-reform-epoch-zero, which the epoch PUT check fails closed on
+		// no auth pin: epoch 1's floor is gen/<form.generation>'s (DESIGN-DETAILS 6.2.2), which KEYS-M2-25 builds
+		// with the ladder, and until then the epoch PUT check fails closed on a pinless epoch
 		Header:              &protocol.GkmCommitHeader{Generation: form.body.GetGeneration()},
 		Uploader:            request.SidecarId.Bytes(),
 		TimeMs:              request.Now().UnixMilli(),
@@ -466,15 +493,15 @@ func (self *GkmEngine) serveReform(request *GkmRequest) {
 		NetworkId:           request.Principal.NetworkId.Bytes(),
 		CipherSuite:         reformRequest.GetCipherSuite(),
 	}
-	// a re-form's writes queue as P1, both on the repo's cluster, so the request's ctx carries their class from here
+	// a re-form's writes queue as P1, each on the repo's cluster, so the request's ctx carries their class from here
 	prices := self.settings.Prices
-	writeCtx, ok := request.SpendWrites(request.Cluster, "", prices.create(len(form.raw))+prices.create(proto.Size(epochZero)))
+	writeCtx, ok := request.SpendWrites(request.Cluster, "", prices.create(gkmGroupOwnerByteCount)+prices.create(len(form.raw))+prices.create(proto.Size(epochZero)))
 	if !ok {
 		return
 	}
 	request.Ctx = writeCtx
-	seq, retry, ok := self.formSeq(request, form, true)
-	if !ok || !self.fileForm(request, form, seq, retry) {
+	seq, _, ok := self.formSeq(request, form, true)
+	if !ok || !self.fileForm(request, form, seq) {
 		return
 	}
 	if !self.createEpochZero(request, form.groupId, epochZero) {

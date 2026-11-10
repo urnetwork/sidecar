@@ -11,7 +11,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | pending |
 | 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | pending |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | pending |
-| 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | pending |
+| 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
 | 5 | Authorization-log verdicts across folds (§7.9) | 13 | complete (2026-11-09) |
 | 6 | MLS group key management (§10) | 13 | complete (2026-11-10) |
 | 7 | Remote search across designated indexers (§11.14, §18.4) | 3 | pending |
@@ -42,9 +42,827 @@ Tasks held until complete: SMTP-M9-07, SMTP-M9-08, SMTP-M9-09, SMTP-M9-13, SMTP-
 
 ## 4. Forwarding in the apps' VPN component: key, verification and size (owner decision 197)
 
-Status: pending
+Status: complete (2026-11-10)
 
 Tasks held until complete: BRIDGE-M2-01, BRIDGE-M4-15, BRIDGE-M4-18, BRIDGE-M4-19, BRIDGE-M4-20, BRIDGE-M4-22, BRIDGE-M6-05, BRIDGE-M6-06, BRIDGE-M6-07, BRIDGE-M6-08, BRIDGE-M8-01, BRIDGE-M8-02, BRIDGE-M8-03, SDK-M10-01, SDK-M10-02, SDK-M10-03, SDK-M10-04, SDK-M10-05, SDK-M10-06, SDK-M3-01, SDK-M4-04, SDK-M4-05, SDK-M4-06, SDK-M4-08, SDK-M4-09, SDK-M6-02, SDK-M6-03, SDK-M8-01, SDK-M8-02, SDK-M8-03, SDK-M8-04, SDK-M8-05, SDK-M8-06, SDK-M8-07, SDK-M8-08, SDK-M8-10, SDK-M8-12, SDK-M8-14, SDK-M8-15, SDK-M9-01.
+
+Model: `sidecar/sidecartest/model/details/Fwd.tla`, its configurations (`Fwd*.cfg`, `FwdTwin-*.cfg`) and `run-fwd.sh` beside it. Task list for the orchestrator: `.stack/plan/proposals/details-4-tasks.md`, which replaces `od-197-forwarding.md`. Questions filed: `.stack/questions/details-4-ios-forwarding-budget.md`, `details-4-ios-compile-memory.md`, `details-4-forwarding-reader-key-in-rows.md`, `details-4-compile-deadline.md`. Every size and heap figure below was measured on 2026-11-10 on the `sidecar` branch at 173e06d with Go 1.27.3 and Xcode's clang (iOS 16.0 minimum), unless it says estimate.
+
+### 4.1 The problem
+
+Owner decision 197 puts the device's IP and port forwarding, and nothing else of sidecar, in every app's VPN component (Apple's network extension on iOS and macOS, Android's VPN service, the Windows and Linux app services), always on, self-contained, with its own key, taking rule changes directly. The design-od197 track wrote that into DESIGN.md (§7.9's forwarding row and D-TEAM-33, §10.5, §17.8 to §17.10, §18.4, §18.6, §18.10, D-SDK-20, D-SDK-32): a forwarding Delegation that the sidecar S signs for keys the component generated, a `forward_only` forwarding client F, the component's own following of the log, its own compile, and its own signing of `WindowDelegation`s. Five things are left open, and four of them fail as written once measured.
+
+**Size.** D-SDK-20 gave the keyless device role 1 MiB of growth in the iOS extension. `make size` today reads 37,789,784 B without the role and 39,017,184 B with it: 1,227,400 B added, over the limit before decision 197 adds anything (question sdk-m4-02-make-size-over, at 1,170,816 B the day before). §18.10 then proposes "at most 4 MiB" for the forwarding leg (Q-SDK-7), a figure nobody measured. Linking the root as it stands with §18.10's kept list (the follower, config verification, DelegationWrap unwrap and the ladder, evs head reads, the ACL state, the token path) and leaving the rest to the linker's dead-code removal adds 7,978,128 B unstripped and 7,123,048 B stripped. And §18.10's remedy, an allow-list of "the root's forwarding files", cannot be short: the root files those entry points need in order to compile are 269 of the leg's 428, because config, acl, evs, identity, record and rpc files name each other's types.
+
+**Memory.** §18.10 proposes a Go heap of 4 MiB steady and 8 MiB while compiling, also unmeasured, inside a tunnel whose Go runtime measures 19.6 MiB connected and 26.0 to 27.4 MiB under provider load against a 28 MiB target and a 32 MiB soft limit (sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md). The landed loader holds a network's whole state decoded: with the rows of a 5,000-device team it takes 10.5 MB (4.4), so the compile §18.6 describes does not fit 8 MiB for the team §22.9's cell names, and a follower that keeps that state between compiles passes 4 MiB steady at about 1,900 devices.
+
+**Rows.** A forwarding Delegation's row carries its X-Wing reader key, 1,216 B. One a device, in a team where two devices in three are apps, makes 5,000 devices' rows 5,898,574 B, over §8.8's 4 MiB, which every verifier refuses; the cap falls from about 13,400 devices to about 2,600 app devices. §10.15's risk row counted the wraps and missed the rows.
+
+**Verification.** `BridgeState` is unsigned, and §18.6's `SetState(state)` takes it alone (question sdk-m4-01-state-proof). The od197 text names two verifiers in one process without saying which judges: `sidecar/device`'s posture, which checks bases and six statement kinds by rules of its own, and the root's follower. Section 5 requires that a verdict be judged once, by the rule table, and the landed posture lifts a Suspend on its own reading of an Unsuspend, which is an opening on a second judge. The overlay's kinds (§17.8) hold no `DelegationRevoke` and no supersession, so a revoked forwarding key stays admitted until the next compile, and nothing says what happens when no compile can run.
+
+**The key's lifecycle as code.** §18.6's setup block names the steps but not their order, what survives a kill between them, where a second key set lives while the first still signs, what a host does between a supersession's entry and its compile, or what a rolled-back store may do.
+
+The requirement: the VPN component enforces only what the authorization log's rule table judged, applies every revocation it can check at once and every other within a stated bound, never lowers enforcement on unsigned or stale input, and fits a size and memory budget that is measured, on every platform, with one implementation of every security-critical rule.
+
+### 4.2 The design
+
+#### 4.2.1 The principle
+
+**One judge, two tiers: a denial is cheap and immediate, an opening comes only from a judged compile.** The VPN component is §7.9's rows-only verifier, the kind api and the gates are, with one thing more: a reader key that opens the config. It runs two tiers.
+
+Tier 1 is the posture (`sidecar/device`, landed by SDK-M4-01), resident, streaming, built on `protocol/bridge`'s types alone. It verifies what it is given against the anchor, applies as an overlay of denials every revocation it can check, and opens nothing. Tier 2 is the compile (`Forwarder`, root), transient: it restores the shared rows-only `ConfigLog` from the store, which is the judge (section 5's `StartAtBase` and `Judge` for a rows-only verifier, the code api runs), opens sealed bodies and the head by the forwarding reader key, builds `AclState`, runs `CompileBridgeState` for S, hands tier 1 the state with the log run that vouches for it, and releases everything. Between compiles the component holds no network state in memory but the compiled tables.
+
+Three consequences. The posture's own statement checks never decide what opens, so they need not equal the rule table's, only never pass what a signature does not cover. Every statement that could narrow reach and that the posture cannot apply starts a clock, and when no compile has resolved it in time the posture stops admitting (4.2.5). And the forwarding role is not a full reader: it does not re-compile a head to check a base's rows, which the app's sidecar role, a full reader, does whenever it runs and reports through the witness hint.
+
+This answers sdk-m4-01-state-proof without a channel: the component fetches the log itself, so the base, its rows and the entries a state rests on are already in its own store, and `Posture.SetState(state, log)` keeps the argument SDK-M4-01 built, filled in process.
+
+#### 4.2.2 Formats settled
+
+Each is additive before M2's freeze (owner decision 194). Field numbers continue each message's.
+
+```proto
+// sidecar/protocol/bridge/auth.proto: declared here, not in config.proto, because sidecar/device reads a
+// Delegation's field 7 by wire and may import only protocol/bridge
+message ForwardScope {                 // config.proto: Delegation.forward = 7; set means a forwarding Delegation
+  bytes forward_sidecar_id = 1;        // S, which must be the signer
+  bytes host_client_id = 2;            // the device client D, in D's network; empty in any other
+  bytes host_client_public_key = 3;    // D's ClientKey public key (C15); set with host_client_id
+}
+message DelegationRow {
+  // 1-11 as today. A forwarding Delegation's row: tag_atoms empty, not_after 0, max_admits 0, admissions 0,
+  // and reader_xwing_public_key (10) empty, its digest in 16
+  bytes  forward_sidecar_id = 12;
+  bytes  host_client_id = 13;
+  bytes  host_client_public_key = 14;
+  uint64 superseded_at = 15;           // the position of S's newer forwarding Delegation; 0 none
+  bytes  reader_key_sha256 = 16;       // SHA-256(the Delegation's reader_xwing_public_key)
+}
+
+// sidecar/protocol/bridge/bridge.proto
+message BridgeIdentity {
+  // 1-5 as today
+  bytes forward_delegation_id = 6;     // the subject's forwarding Delegation live at the state, 32 B; empty none
+  bytes forward_public_key = 7;        // its Ed25519 key, 32 B
+}
+message Pending {
+  // 1-4 as today
+  bytes forward_delegation_id = 5;     // the forwarding Delegation this component's keys are named in
+}
+message ForwardingKeys {               // VPN component -> sidecar role: public halves only
+  bytes key_set_id = 1;                // 16 random bytes naming this set of keys
+  bytes forward_public_key = 2;        // Ed25519, 32 B
+  bytes reader_xwing_public_key = 3;   // 1,216 B
+  bytes client_public_key = 4;         // F's ClientKey public key
+  bytes host_client_id = 5;            // D, where this network is D's
+  bytes host_client_public_key = 6;
+}
+message ForwardingHandOff {            // sidecar role -> VPN component; never logged (I-7)
+  Pending pending = 1;
+  bytes  key_set_id = 2;
+  bytes  forward_client_id = 3;        // F
+  string forward_client_jwt = 4;
+  int64  strict_exp_ms = 5;
+  bytes  config_repo_id = 6;
+  bytes  config_group_id = 7;
+  bytes  signed_delegation = 8;        // the Signed Delegation as filed
+  AuthPin delegation_at = 9;           // the log position that carried it
+}
+```
+
+**The reader key leaves rows.** A forwarding Delegation's statement keeps its `reader_xwing_public_key` (the log entry is 1.4 KB once), its row carries the key's SHA-256, and the key itself is an object at gkm, `gkm/dkey/<delegation_id hex>`, 1,216 B, created If-None-Match by the Delegation's signer through `PUT /gkm/delegation-keys/<delegation_id>` and read by any config reader through `GET`. gkm requires the body's SHA-256 to equal the row's digest; a rotator takes the key from the statement where it holds the entry and else from the object, checks the digest, and seals the DelegationWrap, whose `recipient_key_sha256` is the same digest. With it 5,000 devices' rows are 2,181,164 B and the cap sits near 9,600 devices (4.4). An auth key's Delegation keeps its key in its row: a network has a handful. (Question details-4-forwarding-reader-key-in-rows.)
+
+**A window delegation's signer** is read from `signer_id`'s length, never by trying keys (QD-093): 16 B is a `sidecar_id` and the identity key; 32 B is a `delegation_id`, `key_id` the SHA-256 of the forwarding public key, and the delegation verifies only under `BridgeIdentity.forward_public_key` of the subject it names, whose `forward_delegation_id` equals `signer_id`.
+
+**The component's store**, per network, in the VPN component's own container (never an app group):
+
+```text
+key store (SidecarForwardKeyStore, the platform stores §5.9 names); net8 = the network id's first 8 B, hex
+  fwd.<net8>.<slot>.sign     the forwarding key's Ed25519 seed, 32 B          slot = current | next
+  fwd.<net8>.<slot>.reader   the X-Wing seed, 32 B
+  fwd.<net8>.<slot>.client   F's ClientKey seed, 32 B
+  fwd.<net8>.<slot>.id       key_set_id, 16 B, and once handed off the delegation_id, 32 B
+  fwd.<net8>.root            the forwarding root key, 32 B random, which seals the files below
+  fwd.<net8>.token           F's jwt, replaced at each refresh
+  fwd.<net8>.floor           u64be(n) || A_n, 40 B: the highest pin this component committed
+files, each sealed (below), under fwd/<network_id hex>/
+  posture/<name>             device.PostureStore's records: manifest, base entry, rows, entries, state
+  log/<n, 20 digits>         the entries from the newest base's retention point up to that base, which the judge
+                             re-applies by the base's tail_verdicts; dropped when a newer base's point passes them
+  head/<config_head_sha256>  a verified config head's files, the newest two kept
+  gen/<g, 20 digits>         RK_g with its Signed GenRotate, every generation opened
+  setup                      the ForwardingHandOff without its token
+sealed record  "UFS1" || file id (16 random B) || chunks of 64 KiB plaintext, each AES-256-GCM under
+               HKDF-SHA256(root key, salt file id, info "urnetwork-sidecar-v1/forward-store" || name),
+               nonce u32be(0) || u64be(chunk index), AAD name || file id || u64be(index) || u8(final)
+```
+
+AES-GCM because `sidecar/device` may import only std, connect and `protocol/bridge`; a per-file key makes the counter nonce safe; the final-chunk byte detects truncation; the name in the key and AAD stops a record being moved. Rows stream through it in 64 KiB chunks, never held whole.
+
+**Settings.** `ForwarderSettings` (root; `DefaultForwarderSettings(hostClass)` fills them): `CompileDelay` 2 s, `CompileMinInterval` 10 s, `CompileRetryInterval` 30 s doubling to 10 min, `CompileMemoryMaxByteCount` (Apple extensions 10 MiB, Android 16 MiB, desktop services 64 MiB), `CompileHeapCeilingByteCount` (Apple extensions 30 MiB, else 0 for none), `FollowInterval` 1 h, `FollowPageMaxCount` 64, `KeyWaitAlarmInterval` 10 min, `HeadCacheCount` 2, `FreeMemoryAfterCompile` (mobile classes). `PostureSettings` gains `NarrowingOverdueTimeout` 10 min.
+
+#### 4.2.3 The binary split
+
+```text
+links in the leg      sidecar/device and sidecar/protocol/bridge, as today
+                      the root, built with ios_extension, only the files on the leg's list: the closure of
+                        bridge_forward*.go (BRIDGE-M8-05) and the compiler, 269 of 428 root files today
+                      sidecar/protocol, 15 of its 17 generated files (mail.pb.go and socket.pb.go leave)
+                      sdk's device_sidecar*.go, which name the root only through the Forwarder
+leaves, by tag        every other root file: all 32 mail_, 22 mls_, 16 host_ and 5 search_ files, 15 of 17
+                        smtp_, 8 of 10 socket_, 28 of 82 evs_ (evs_index_, evs_export, evs_git_), and the
+                        rest of the 159, each under //go:build !ios_extension
+leaves, by module     mox, adns, go-smtp, go-message, go-imap, miekg/dns, acmez, pebble, the MCP sdk, brotli,
+                        yaml.v3, golang.org/x/text/encoding, golang.org/x/net/html: none is imported by a
+                        listed file, and make check refuses each in the leg's go list -deps
+never linked          cli/, mcp/, every <svc>service, smtpproof, sidecarctl: other modules or packages
+```
+
+**Why a computed list.** The file closure was found by building the leg with every root and `protocol` file outside a growing set replaced by an empty one, adding the file that declares each undefined name until it compiles (ten rounds). It is 269 files because the root's files are not layered: 31 `record_`, 25 `rpc_`, 18 `identity_` and 11 `directory_` files are in it for a type or constant each. The linker then drops what nothing reaches, so the list's length does not set the size: of the 269, 118 hold any linked code. What the tags buy is the code and tables that a package-level variable or `init` roots, which no dead-code pass removes: `mox/publicsuffix` (335 KB), the `x/text` encodings (about 700 KB), `html`, `x/text/language`. Measured, the same entry points cost 2,004,152 B more unstripped without the tags, 1,885,888 B stripped. Cutting the list further (an `ios_extension` seam so the leg's files stop naming `record_` and `rpc_` types) is review-phase work the ratchet invites; it would shorten the list and barely move the size.
+
+**The rules `make check` holds** (REPO-M4-01): the leg's root and `protocol` `GoFiles` are a subset of `check/testdata/ios_extension_leg.txt`, and a file outside it fails with the fix, which is the tag; the leg's closure holds none of the modules above and none of `net/rpc`, `text/template`, `html/template`; the list shrinks freely and grows only in a commit that edits it. sdk's `TestIosExtensionRegistersOnlyBridgeDescriptors` reads the same list.
+
+**Protobuf.** The leg keeps `google.golang.org/protobuf` and the generated code: the runtime is in the extension already through connect (it adds 80 B), and `protocol`'s linked symbols are 338,076 B. A hand-written decoder for the leg would save under half a megabyte and fork every format the judge reads; the one streaming scan that exists, the posture's pass over rows, stays. `protoc-gen-go` emits no build constraint, so protocol/Makefile adds `//go:build !ios_extension` to `mail.pb.go` and `socket.pb.go` after generation.
+
+**Crypto.** Everything the leg needs is in the Go standard library and already linked by connect: Ed25519 (`crypto/ed25519`) to verify statements and sign delegations and DPoP proofs; HPKE-XWing (`crypto/hpke`, KEM 0x647a, over `crypto/mlkem` and X25519) to open DelegationWraps, open only; AES-128-GCM inside HPKE and AES-256-GCM for the store; ChaCha20-Poly1305 (`x/crypto`, linked by connect) for sealed config bodies and evs; SHA-256 and HKDF. Measured, the leg adds 13,296 B of crypto symbols, all Argon2 and BLAKE2b reached through `keys_unlock.go`, which forwarding never calls and a later cut removes. No MLS: no `mls_` file is in the closure, since a forwarding Delegation reads by wraps and is never a leaf. No third-party post-quantum library.
+
+**Sizes**, ios/arm64, a probe that keeps alive connect's whole exported surface (the baseline `make size` uses) plus what each row names:
+
+```text
+probe                                                        unstripped     stripped    added, stripped
+baseline: connect and connect/protocol                       37,789,784   34,217,792
++ device and protocol/bridge (the leg today)                 39,017,184   35,301,048      1,083,256
++ the root with 18.10's kept list, no tags (od197 as written) 45,767,912   41,340,840      7,123,048
++ the forwarding entry points below, no tags                 45,543,272   41,143,928      6,926,136
++ the forwarding entry points below, the 269-file list       43,539,120   39,258,040      5,040,248
+entry points: the rows-only ConfigLog, OpenConfigBody, NewConfigHead, NewAclState and ParseAclPolicy,
+  ParseGkmDelivery, OpenGkmDelivery and OpenGkmLadder, GkmApi's Generations and Wraps, EvsRepo.ReadHead,
+  SidecarApi's Refresh, ExchangeToken, AuthClient, GetIdentity, ReadConfigProjection and SyncPoll
+of the last row's 5,217,578 B of added symbols: pclntab and runtime tables 1,887,560; type data and other
+  963,408; the root 952,643; protocol 338,076; device 246,556; strings 175,640; protocol/bridge 97,576
+segments, stripped: __TEXT +3,981,312; __DATA_CONST +950,272; __DATA +98,304
+not yet built, so not in any row: bridge statements, the compiler, the Forwarder and its signer; estimate
+  350,000 B stripped: about ten files at the config rule files' 8.9 KB of code each, times the leg's
+  measured 3.1 B of stripped binary a byte of package code, rounded up
+```
+
+The budget this section proposes (question details-4-ios-forwarding-budget): the leg adds at most **6 MiB, 6,291,456 B, measured stripped** over the pre-sidecar extension, against 5,040,248 B measured and about 5.4 MB expected; the signed extension's ceiling rises from 50 MiB to 54 MiB as §18.10 proposes (47,738,704 B on 2026-11-02 plus 5.4 MB is 53.1 MB, 3.5 MB under 56,623,104 B). `make size` measures stripped because sdk/build/Makefile ships `-s -w` and `check_apple_size.sh`'s ceilings read that binary; this also closes sdk-m4-02-make-size-over, whose option 2 it is. The 4 MiB of §18.10 cannot be met by the shared judge. Of the root's 952,643 B of linked code, the config rule table and state are 276,864 B, the evs read path 243,936 B and the ACL state 162,416 B, each before its tables, and the same probe without evs head reads, gkm's client or the poll still adds 4,400,320 B stripped.
+
+#### 4.2.4 The memory plan
+
+The tunnel's limit is the binding constraint, not its executable. The plan has three parts.
+
+**Nothing of the network stays decoded between compiles.** Steady, the component holds per network: the compiled `BridgeState` inside `device.Bridge` (the table, per-subject rows, identities at about 160 B with a forwarding key, names at about 80 B), the posture's in-memory part (the pin, has_document, the config writers' keys, the overlay), the pin table (1,024 slots on mobile) and the `Forwarder`'s timers. The rows, entries, heads and generation keys are files. For a personal network that is under 300 KB; for a 5,000-device team in which every device reaches this one, about 2 MB (estimate). The gate stays §18.10's 4 MiB steady, which SDK-M8-15's cell samples.
+
+**A compile is admitted by an estimate and bounded by the process.** Measured with the landed loader (`configLoadRows` over a fixture of n devices in n/3 members, two devices in three with a forwarding row in 4.2.2's form, three repos a member, a 1,024-entry ring):
+
+```text
+devices    rows bytes    decoded and loaded    ratio     with the reader key in rows (today's row)
+      6        11,435          144,104          12.6          15,895 ->    153,888
+    100        55,638          361,472           6.5         130,343 ->    434,352
+  1,000       461,206        2,331,144           5.1       1,204,911 ->  3,056,936
+  5,000     2,181,164       10,528,336           4.8       5,898,574 -> 14,161,032   (rows over 4 MiB)
+ 20,000     8,644,252       40,961,848           4.7      (rows over 4 MiB either way)
+estimate(compile) = 5 x rows_byte_count + 2 x head byte count + the newest base's tail bytes + 1 MiB
+admit iff  estimate <= CompileMemoryMaxByteCount
+      and  (CompileHeapCeilingByteCount = 0 or heap in use + estimate <= CompileHeapCeilingByteCount)
+```
+
+Section 5.4 estimated two to three times the bytes; the measurement is five, because a row decodes into a struct and a separate allocation for each id, key and hash it holds. In the Apple extensions the cap is 10 MiB and the ceiling 30 MiB, under the tunnel's 32 MiB soft limit: rows up to 1.8 MiB compile, about 4,300 devices at this fixture's mix, when the tunnel sits at its measured 19.6 MiB; under provider load (26.0 to 27.4 MiB) only 770 to 1,440 devices' rows fit at that moment and the compile is deferred. A compile that the cap refuses raises `bridge_alarm` (`compile_over_budget`) and never runs on that device; one the ceiling defers retries at `CompileRetryInterval` and raises `compile_deferred` after 10 min. Either way the last verified state stays in force, denials keep applying, and 4.2.5's deadline decides when a waiting narrowing entry forces pending. A network over the cap at setup stays pending on that device. (Question details-4-ios-compile-memory.)
+
+**A compile gives its memory back.** It holds no reference past its hand-off, and on mobile classes calls `debug.FreeOSMemory`, which on darwin returns pages by `MADV_FREE_REUSABLE`, the form `phys_footprint` accounts. The static cost of the larger binary is bounded above by the growth of the segments the loader may dirty, 1,048,576 B (`__DATA_CONST` and `__DATA` above), and its start heap is measured by a native darwin/arm64 probe after a collection at `main`: 912,656 B at the baseline, 1,007,296 B with the device role, 1,537,952 B with the leg, so 625,296 B for the added descriptors and rule tables.
+
+Links are unchanged: a window client carries a full client graph, and the iOS tunnel runs none until §22.9 measures one (owner decision 100; `LinkCountMax` 0).
+
+#### 4.2.5 Verification
+
+**What tier 1 checks, and what it does with each entry.** The posture verifies, as landed: the chain from its pin; a base's Signed header under a config writer named in the rows it holds (the previous base's, or for its first base the base's own, as a cold gate starts); `rows_sha256` over the rows as they stream to the store; and each statement's signature under its signer's identity key in those rows. A base's `tail_verdicts` it stores and does not read: verdicts reach it only as a compiled state. Then, by SignedType:
+
+```text
+applied as a denial, at once   SidecarRevoke, MemberRevoke, Suspend, GrantRevoke, BridgeWithdraw (as landed)
+(overlay; never an opening)    DelegationRevoke: denies the forwarding key of the delegation_id it names
+                               Delegation whose field 7 names its own signer: denies that sidecar's
+                                 forwarding key under any other delegation_id (supersession)
+                               a covered SidecarRevoke, MemberRevoke or Suspend counts on its identity
+                                 signature alone; the judge checks the countersignature (decisions 185, 187)
+narrowing, not applied         any of the above that the posture cannot check: its signer is not in the stored
+(joins Waiting, starts the       rows, its signature does not verify under the key those rows hold, its signer's
+compile deadline)                class is short, or (a DelegationRevoke) it names no forwarding Delegation in the
+                                 state; and every AuthorityProposal, AuthorityCosign, RecoveryRebind, AdminSet,
+                                 BridgeEgress and TICK, and every BASE whose config_head_sha256 differs from
+                                 the stored base's
+opening or neutral             everything else, Unsuspend included: wants a compile, starts no deadline
+wrong network, broken chain    not an entry of this log: head_alarm (fork), nothing applied, pin unmoved
+```
+
+The posture lifts nothing: an Unsuspend is an opening and waits for the compile, where the landed code lifts an overlay Suspend on its own class check. `Waiting` records each narrowing entry's position and the time it was first seen, in the manifest, so a restart does not reset the clock. When one has waited `NarrowingOverdueTimeout` (10 min) the decision is `Overdue`, which `device.Bridge` enforces exactly as pending (private destinations and exits denied, flows closed after the policy swap), until a state at or past every waiting entry arrives. (Question details-4-compile-deadline.)
+
+**A state.** `Posture.SetState(state, log)` accepts a state only when: its pin is on the posture's chain and at or above the state in force (a lower one is dropped, not an error); the log run verifies from the state's newest base through its pin; `has_document` equals the verified rows'; and a move from doc to nodoc rests on a verified base above `document_seen_at`. On acceptance the overlay and `Waiting` keep exactly the entries above the state's pin, since the state embodies every verdict at or below it, and the posture's pin becomes the larger of the two. Then it commits and raises the floor.
+
+**The Forwarder**, one per network, in root files on the leg's list:
+
+```text
+ReceiveHint(position) | timer(FollowInterval) | start | Witness(pin, fork):
+  Follow:
+    loop  page := api.ReadConfigProjection(after = the newest stored entry)   -- F's token (forward_only)
+          store.AppendEntries(page.Entries); store.PutRows(page.Rows)  -- sealed; rows stream
+          if the posture is enforcing: sink.ApplyDeltas(PostureLog{page.Entries, OpenRows})
+                                                                       -- tier 1: chain, base, denials
+          until not page.More or FollowPageMaxCount pages
+    if any entry this follow was not applied as a denial, or the posture is pending with an anchor,
+       or Waiting is not empty:  schedule Compile after CompileDelay (single-flight; at most one each
+       CompileMinInterval; a hint during a compile schedules exactly one more)
+  Witness: Follow up to pin; pin not on my chain -> head_alarm(fork) with both pins;
+           fork = true -> sink.SetFork(true): the posture enforces pending, and no compile runs, until a
+           later Witness with fork = false
+
+Compile:                                                 -- captures cPin := the newest stored entry
+  0 admission (4.2.4); refused or deferred -> alarm, keep the state, return
+  1 judge    log := RestoreConfigLogRowsOnly(settings, retained{genesis, the newest base, its tail from log/},
+                      rowsSource = the store, floor)     -- section 5: StartAtBase at the base by its bits
+             log.ApplyRun(the entries (base, cPin], 256 at a time)   -- Judge each at id level
+             any error or fork -> alarm state_unverified, keep the state, return
+  2 keys     for each generation g a sealed body or the head names and gen/<g> does not hold:
+               GkmApi.Generations(since) -> ParseGenRotate; GkmApi.Wraps(g, recipient = my delegation_id)
+               -> ParseGkmDelivery(SIGNED_DELEGATION_WRAP) -> OpenGkmDelivery(reader key) -> RK_g;
+               OpenGkmLadder downward; store gen/<g>
+             no wrap yet -> ask late once a LateAskInterval; bodies of that generation stay pending
+               (BRIDGE-M2-01's id-level effect); alarm config_key_waiting after KeyWaitAlarmInterval
+  3 head     if head/<base.config_head_sha256> is not stored: EvsRepo.ReadHead of the config repo at
+               base.config_version with the exchange's repo:<config_repo_id>:r token; require its chain value
+               to equal config_head_sha256; NewConfigHead(files); require rows.settings to equal the head's
+               ServiceSettings and rows' has_document to equal whether it holds a policy; store it
+             unreadable now -> keep the state, retry; another head than the one named -> head_alarm
+  4 compile  acl := NewAclState(rows.acl, log.State()); state := CompileBridgeState(view{log.State(), head,
+               acl, OpenConfigBody over gen/}, S)                       -- BRIDGE-M4-16
+  5 hand     sink.SetState(state, PostureLog{entries from the base through cPin, OpenRows})
+  6 release  the posture committed the state and raised the floor in step 5; drop log, head, acl and
+             state; FreeOSMemory on mobile classes
+```
+
+The judge is the rows-only `ConfigLog` and no other: the code path api and the gates take, with section 5's rules unchanged. The Forwarder adds what a gate lacks, the reader key, and uses it only in steps 2 to 4. It checks the head against the base (step 3's three equalities) but does not re-compile rows from it: that is a full reader's check, and the app's sidecar role makes it. A compile that fails at any step changes nothing.
+
+**What a host does with a forwarding-key principal.** `VerifyPrincipal` admits a 32-byte-signer delegation as 4.2.2 says, from the compiled state. `ResolveEgress`'s per-flow recheck then denies it while the overlay holds a `DelegationRevoke` of its id, a supersession of its sidecar, or any denial of the subject, and `Bridge.Revoke` closes its flows after the policy swap (D-BRIDGE-21's order). So a revoked or replaced forwarding key stops at the host as fast as the entry arrives, compile or no compile, and the replacement key is admitted only after the compile that judged its Delegation.
+
+**Restart.** The posture restores from the sealed store before the first packet, as landed, and then checks the floor: a manifest pin below `fwd.<net8>.floor`, or equal on another chain, is a rolled-back store, which is pending with `store_rolled_back` until a follow brings the pin back to the floor on the floor's chain. The floor is as strong as the platform's key store: on Apple a keychain item outside the container; on Android, Windows and Linux a sealed file beside the seeds, which stops a restored copy of the state files but not a process that already holds the seeds.
+
+#### 4.2.6 The forwarding key's lifecycle
+
+```text
+states, per network, in the VPN component (C) and the sidecar role (S)
+  none        no key set: legacy
+  generated   C made a key set in slot next and gave S its public halves (ForwardingKeys)
+  delegated   S's forwarding Delegation naming them is in the log at n; F minted; hand-off delivered
+  active      C's own posture holds a state at or past n that shows that Delegation live: slot next
+              becomes current, the signer signs with it, the old set is deleted
+  superseded  a newer Delegation of S is in the log: hosts deny this key from that entry (4.2.5)
+  revoked     its DelegationRevoke, or S's revocation or void: denied at every host from that entry
+  lapsed      F unrefreshed past its strict_exp (the component off 7 days): pending until a new hand-off
+  wiped       S's own sign-out (its SidecarRevoke, verified as plan-SDK-pending-sidecar-id says): keys,
+              store and floor erased; legacy
+
+setup (BRIDGE-M8-06 in S, SDK-M8-16 in C, SDK-M8-07 between them), each step idempotent
+  C0  keys := generate(Ed25519 seed, X-Wing seed, ClientKey seed) into slot next under a fresh key_set_id;
+      reply ForwardingKeys (a repeat while next is unpromoted returns the same set)
+  S1  write record forward/<network>/setup {key_set_id, public halves, step}; sign Delegation{pubkey,
+      reader_xwing_public_key, forward{S, D and D's key in D's network}}; delegation_id = SHA-256(Signed);
+      record the Signed bytes
+  S2  POST /network/config/delta; WaitFor its position n            (409 at the tip: re-sign at the new pin
+                                                                     and record again)
+  S3  PUT /gkm/delegation-keys/<delegation_id>                      (409 until gkm's state holds the row)
+  S4  write the late DelegationWrap of the config's current generation to that key (10.5's dwraps)
+  S5  POST /network/auth-client {source S's client, admin_refused, strict_exp, forward_only,
+      client_public_key} with S's DPoP proof -> F                   (a repeat for the same key reuses F)
+  S6  return ForwardingHandOff
+  C7  check signed_delegation: its pubkey, reader key and, where set, host client equal slot next's and
+      this device's, forward names pending.sidecar_id, and it verifies under pending.identity_public_key;
+      else refuse and keep current. Store the token and setup; SetPending if legacy; Follow
+  C8  when a state at or past delegation_at shows forward_delegation_id live for S: promote next to current,
+      re-sign every live window client, delete the old set
+when  S runs it at each new client generation of S (enrollment, re-enrollment, pairing), at any run of the
+      app 90 days or more after the last, and when no forwarding Delegation of S is live; after a
+      DelegationRevoke by a signer other than S, only once the person confirms in the app (never MCP)
+kill  around S2: a repeat posts the recorded bytes again, and a copy already in the log is found there by
+      its id, since the replay row refuses the second, so one Delegation is filed. After S2: the record's
+      step resumes. Between C7 and C8: C keeps signing with
+      current, which hosts admit until they apply the newer Delegation's entry, then with next after C8;
+      the gap is at most one compile at each host, and links fail closed across it and rebuild
+```
+
+What each key may do, and where that is enforced: the forwarding key signs only `WindowDelegation`s naming S (hosts check the subject against the identity it is listed under; api and readers refuse a `SidecarAdmit` or `AdmissionConfirm` it signs); the reader key opens only the config's generations (its holder identity reaches the config alone, §10.5); F's token passes only TEAM-M8-02's allowlist and exchanges only for `repo:<config_repo_id>:r`. The component holds no key of S, and S holds none of the component's.
+
+The key fits section 5 unchanged: a forwarding Delegation and its revocation are ordinary statements, judged once by the rule table at their positions, carried in `tail_verdicts`, folded into a `DelegationRow` with signer, position, `superseded_at` and `ended_at`. Section 5.2.3's guess of a `KeyRegister` purpose is not taken; its alternative, "`DelegationRow` already carries what this section needs", holds with fields 12 to 16.
+
+### 4.3 Invariants and why they hold
+
+```text
+OnlyJudgedOpens      every reach the component enforces is in a state the rows-only judge compiled, at a pin
+                     on the anchored chain
+                     why: SetState is the only source of rules and identities; the overlay holds denial kinds
+                     alone and the posture lifts nothing (4.2.5)
+OnlyLiveKeysAdmitted a host admits a delegation under forwarding key k only while k is S's live forwarding
+                     key at the highest position the host ever applied, or while an entry the posture could
+                     not check is inside its deadline
+                     why: the state gives the key live at its pin; every entry that ends it (revocation,
+                     supersession, suspension, S's revocation) is a denial kind applied on its signature; one
+                     the posture cannot check waits at most NarrowingOverdueTimeout, then the posture is
+                     pending; a state keeps the overlay above its pin and never replaces a higher state; a
+                     store below the floor is pending
+DP1                  after a device's first verified state, no restart, delay, unsigned input, lower state or
+                     rolled-back store lowers enforcement
+                     why: as SDK-M4-01 built it, plus the floor and the lower-state rule
+StalenessBound       the enforced reach is the reach judged at the state's pin, minus the applied denials
+                     after it, and no narrowing entry the component has fetched is older than 10 min unless
+                     the posture is pending
+KeysStayPut          no private key of the component crosses the device RPC or a function boundary to the
+                     sidecar role, and none of S's enters the component
+                     why: ForwardingKeys holds public halves and the hand-off holds a token and public data
+OneJudge             the component accepts no verdict but the rule table's: the posture's checks decide only
+                     denials, and a compile failure changes nothing
+```
+
+**The model.** `Fwd.tla` keeps the log of one sidecar S (forwarding Delegations, their revocations, S's suspension, unsuspension and revocation) and one host's forwarding role: the posture's pin, the compiled state's pin and key, the overlay, compiles in flight that finish in any order, a key-store floor, and a copy of the store that an attacker puts back. Each entry carries `ok`, whether the rule table accepts it (a refused entry is one api sequenced that verifies under its signer's key), and a revocation carries `seen`, whether the posture holds its signer's row. The judge is section 5's S(n) reduced to S's forwarding row. `Tick` marks the entries then waiting as past their deadline. It leaves out the delegation's other fields, share signers, `strict_exp` and every other subject. `Twin` breaks one rule; `run-fwd.sh <track>` runs every configuration through `.stack/tools/tlc` and prints a verdict line per run.
+
+Runs, TLC at the owner's jar (master d8fb231), breadth-first over every reachable state at the bounds, 14 workers:
+
+```text
+configuration                Twin                  bounds                                 result
+                                                                              distinct states  depth  time
+Fwd                          none                  4 entries, 2 keys, 2 compiles in flight
+                             pass: OnlyLiveKeysAdmitted, OverlayAfterState         35,190,248    19   2 min 30 s
+Fwd-Rollback                 none                  4 entries, 2 keys, 1 compile, the store copied and put back
+                             pass: both                                            49,904,532    22   2 min 38 s
+FwdTwin-NoDelegationOverlay  NoDelegationOverlay   3 entries   OnlyLiveKeysAdmitted violated, 7-state trace
+FwdTwin-OverlayLifts         OverlayLifts          4 entries   OnlyLiveKeysAdmitted violated, 9-state trace
+FwdTwin-OverlayOpens         OverlayOpens          3 entries   OnlyLiveKeysAdmitted violated, 3-state trace
+FwdTwin-StateDropsOverlay    StateDropsOverlay     3 entries   OnlyLiveKeysAdmitted violated, 7-state trace
+FwdTwin-LowerStateAccepted   LowerStateAccepted    3 entries, 2 compiles   OnlyLiveKeysAdmitted violated, 9 states
+FwdTwin-NoFloor              NoFloor               3 entries, rollback     OnlyLiveKeysAdmitted violated, 9 states
+FwdTwin-NoOverdue            NoOverdue             3 entries   OnlyLiveKeysAdmitted violated, 8-state trace
+```
+
+Each twin run took under 2 s and stopped within 700,000 states. Two of the twins are the text and code as they stood: `NoDelegationOverlay` is §17.8's overlay list on 2026-11-09 (a revoked forwarding key admitted after its revocation's entry was applied), and `OverlayLifts` is the landed posture (an Unsuspend the rule table refused reopens a suspended sidecar's key). `StateDropsOverlay` and `LowerStateAccepted` are the two ways a compile racing later entries can lose a revocation; `OverlayOpens` is the shortcut of taking a newer Delegation's key without a compile; `NoFloor` and `NoOverdue` remove the two bounds this section adds. A fold needs no case of its own in the model: the posture reads no verdict from a base, and the judge restores from the newest base at each compile, which is section 5's `StartAtBase`, checked there.
+
+### 4.4 Cost
+
+```text
+executable, stripped, the leg over the pre-sidecar probe; cgo off but for ios
+  ios/arm64       34,217,792 -> 39,258,040   +5,040,248    budget 6,291,456; the device role alone +1,083,256
+  darwin/arm64    35,387,122 -> 40,613,954   +5,226,832    the macOS extension's leg; +1,126,128
+  linux/amd64     36,434,080 -> 41,779,360   +5,345,280    the Linux app service; +1,163,264
+  windows/amd64   37,127,680 -> 42,607,616   +5,479,936    the Windows app service; +1,189,888
+  android         not measured: the VPN service links the app's whole binding, sidecar role included, so
+                  forwarding adds no leg there; the probe needs the binding's -checklinkname=0
+  expected at M8  the measured rows plus about 350,000 B for the bridge files not yet built (estimate)
+memory, the Apple extensions (4.2.4)
+  static          at most 1,048,576 B of segments the loader may dirty; 625,296 B of start heap (native probe)
+  steady          the compiled state and tables: under 300 KB for a personal network, about 2 MB at 5,000
+                  identities (estimate); gate 4 MiB
+  compile         4.2.4's estimate, transient: 1.1 MiB for a personal network, 3.2 MiB at 1,000
+                  devices, 11.4 MiB at 5,000 (refused at the 10 MiB cap)
+  other hosts     Android 16 MiB cap, desktop services 64 MiB, no ceiling: the 4 MiB rows cap compiles in 21 MiB
+wire
+  setup           the Delegation's entry about 1.4 KB; the gkm key object 1,216 B; one DelegationWrap 1,168 B
+                  plus its Signed envelope; one auth-client call; the hand-off about 2.5 KB in process or RPC
+  each rotation   one DelegationWrap of about 1.2 KB a live forwarding Delegation: 6 MB at 5,000 app devices,
+                  staged in 10.5's batches (§10.15's row stands)
+  following       a hint, then one projection read: about 600 B an entry; at a base whose rows changed, the
+                  rows: under 12 KB for a personal network, 2.2 MB at 5,000 devices, about once a fold
+  compile         a head it has not cached; the GenRotates and one wrap of each new generation
+  a contract      a WindowDelegation of about 200 B, 350 B with a ShareCert, and one Ed25519 verification
+rows              a forwarding Delegation's row about 200 B, where the key in the row made it 1,300 B: the
+                  4 MiB cap near 9,600 devices at the fixture's mix, against about 3,500 (2,600 if every
+                  device is an app)
+time              a compile at 5,000 devices: one 2.2 MB parse, one load and one pass, under 200 ms on a 2020
+                  phone core (estimate, from 5.4's per-entry costs); a pure revocation needs none
+```
+
+### 4.5 Failure modes and recovery
+
+```text
+the app never runs again        forwarding goes on: F refreshes itself, follows and compiles; only setup
+                                (a new client generation, a foreign revocation's confirmation) needs the app
+the VPN component off 7 days    F lapses with no grace; at start the posture is pending (forward_client_lapsed)
+                                and the app's next run mints another F for the same key set (S5 alone)
+api or gkm unreachable          follows and compiles retry; the state stands; no deadline runs for entries it
+                                has not fetched (a host that hears nothing cannot be told to narrow)
+a compile cannot run            over the cap: compile_over_budget, the state stands, denials apply, a waiting
+                                narrowing entry forces pending after 10 min and the network stays pending on
+                                this device; over the ceiling: deferred and retried, the same deadline
+a DelegationWrap is missing     the generation's bodies stay pending at id level, older ones compile, a late
+                                ask goes out each LateAskInterval, config_key_waiting after 10 min; any
+                                holder that is not read_only delivers (KF2's wrapped row)
+the head cannot be read         the state stands and the compile retries; the base's id-level rows still feed
+                                tier 1's denials
+a lying config writer           a base whose rows do not compile from its head is not caught here (a rows-only
+                                verifier); the app's sidecar role forks on it and sends Witness(fork), which
+                                forces pending; between the app's runs the view is unwitnessed (§17.17's row)
+a malicious api                 a refused statement it sequences can deny (availability, as withholding can)
+                                until the next compile, never open; a forged entry breaks the chain or a
+                                signature and is a fork alarm
+the store is corrupt            pending, never legacy; a new follow from the anchor rebuilds it
+the store is rolled back        pending with store_rolled_back until the pin is back at the floor
+the key store is not Present    forwarding pending, never reset (§5.9); keys are made only at a setup
+a kill during setup             4.2.6's kill row: one Delegation, one F, no key lost
+a revoked sidecar's component   its own SidecarRevoke wipes it; an admin's revocation of S ends its Delegation
+                                at every host, F's exchange refuses it, and its posture, applying the entry,
+                                denies everything S hosted
+the device is restored to       ThisDeviceOnly key items do not move, so the store state is not Present:
+new hardware                    pending until the app enrolls and sets up again
+```
+
+### 4.6 The test plan
+
+Unit tests, each a top-level `func TestXxx`, fake clocks and barriers only:
+
+```text
+device/   TestADelegationRevokeDeniesItsKeyAtOnce, TestANewerDelegationDeniesTheOlderKey,
+          TestAnUnsuspendLiftsNothingUntilAState, TestAnUncheckableRevocationGoesOverdue (across a restart),
+          TestAStateKeepsTheOverlayAboveItsPin, TestALowerStateIsDropped, TestARolledBackStoreIsPending,
+          TestSealedRecordsRefuseEveryTamper, FuzzPostureNeverOpens                          (SDK-M8-17)
+          the forwarding path's delegation vectors and each mismatch with its twin; an overlay revocation
+          closing exactly its key's flows                                                    (BRIDGE-M8-04)
+root      TestForwarderAppliesARevocationWithNoCompile, TestForwarderCompilesAfterAnOpening,
+          TestForwarderJudgesAsARowsOnlyGate (its ConfigLog equals a gate's over generated logs with bases),
+          TestForwarderAdmissionRefusesAndDefers, TestForwarderKillAtEachStepChangesNothing,
+          TestForwarderOpensANewGenerationByItsWrap, TestForwarderHeadMustBeTheBasesHead,
+          TestForwardingSignerSignsOnlyItsSidecar                                            (BRIDGE-M8-05)
+          TestSetupResumesAfterEachStep, TestForeignRevocationWaitsForConfirm                (BRIDGE-M8-06)
+          the forwarding row's refusals and supersession; rows equal across a fold           (TEAM-M8-01)
+          a delegation key object refused off its digest; a rotation skipping a missing one  (KEYS-M8-01)
+sdk       keys never cross (a capture of every call); two networks at once; next promoted only at the live
+          state; F's refresh and lapse; the three RPC methods on DeviceRemote and an older peer (SDK-M8-16, -07)
+check/    the leg's list, its refused modules and its size row, each with a planted failure   (REPO-M4-01)
+```
+
+Schedule rows. FS-38 gains the forwarding-key delegation (admitted; forged, superseded and revoked ones opening zero upstream sockets). §22.5's §17 row gains, on T2 and T3 with the app's sidecar stopped: a grant and a revocation within §8.9's targets; a `DelegationRevoke` racing a compile; a supersession racing a contract; a compile finishing below a newer state; a refused Unsuspend; an uncheckable revocation with compiles blocked going pending at 10 min. FS-18 gains KEYS-M8-01's cases. FS-14 gains a forwarding row across a fold at a new device and a gate. Each twin of `Fwd.tla` is one of these schedules on real code (BRIDGE-M8-07).
+
+Gates. `make size`'s `ios_extension` row at 6,291,456 B stripped from M4. On the ios32 surrogate (owner decision 100): the compile cell at 3,000 and 5,000 devices, the steady heap after `FreeOSMemory`, the start heap, and the link cell (SDK-M8-15, BRIDGE-M8-03). Nothing here was measured on a device, and no surrogate figure is evidence for one.
+
+### 4.7 The final task list and implementation notes
+
+Each entry is in the area plans' format with one line added, `Change:`, which says new, changed, unchanged or dropped against the plans as they stand on 2026-11-10 and against `od-197-forwarding.md`, which this list replaces. Paths start at ROOT. A changed entry gives the task's final lines; a line it does not give stays as the plan has it.
+
+#### New tasks
+
+##### TEAM-M2-20: The forwarding Delegation's fields and the forward_only column before M2's freeze
+- Change: new (od-197-forwarding.md's, amended: `ForwardScope` lives in auth.proto, `DelegationRow` gains `reader_key_sha256`, `Pending` gains the delegation id, and bridge.proto gains the two setup messages)
+- Milestone: M2
+- Repos: sidecar, server
+- Size: S
+- Spec: D-TEAM-33, D-SDK-32, I-18, owner decision 197, DESIGN-DETAILS 4.2.2
+- Needs: TEAM-M2-01: `Delegation`, `DelegationRow`; running protos-bridge; TEST-M1-01: the v9 metadata list
+- Provides: `bridge.ForwardScope{forward_sidecar_id = 1, host_client_id = 2, host_client_public_key = 3}` in auth.proto and `Delegation.forward = 7` of that type in config.proto; `DelegationRow` fields `forward_sidecar_id = 12`, `host_client_id = 13`, `host_client_public_key = 14`, `superseded_at = 15`, `reader_key_sha256 = 16`; `BridgeIdentity` fields `forward_delegation_id = 6`, `forward_public_key = 7`; `Pending.forward_delegation_id = 5`; `bridge.ForwardingKeys` and `bridge.ForwardingHandOff`; the nullable `network_client_owner.forward_only` column in MG8 under `sidecar_pending`
+- Files: sidecar/protocol/config.proto, sidecar/protocol/config.pb.go, sidecar/protocol/bridge/auth.proto, sidecar/protocol/bridge/auth.pb.go, sidecar/protocol/bridge/bridge.proto, sidecar/protocol/bridge/bridge.pb.go, sidecar/config_records.go, sidecar/config_records_test.go, server/db_migrations_sidecar_pending.go
+- Build: Formats only, as DESIGN-DETAILS 4.2.2 writes them, so they freeze with M2's records. `ForwardScope` is declared in auth.proto, not config.proto, because `sidecar/device` parses a Delegation's field 7 by wire and may import only `protocol/bridge`. A forwarding Delegation's row leaves `reader_xwing_public_key` (10) empty and carries its SHA-256 in 16: 1,216 B a device in rows would pass §8.8's 4 MiB at about 2,600 app devices (4.1's measurement). `forward` set means a forwarding Delegation; an older reader, which skips the unknown field, refuses the statement for its missing `not_after`, the closed direction. `ForwardingKeys` and `ForwardingHandOff` cross only the device RPC or a function call, so they take no §2.8 row. The column follows §19.7's MG8 line, never MG0.
+- Tests: round trips and the schema guard's map for each new field; `FuzzConfigStatementType` with a forwarding Delegation; the migration pending under `sidecar_pending` and applying cleanly on the test stack.
+
+##### TEAM-M8-01: Forwarding Delegations in the verifier and at api
+- Change: new (od-197-forwarding.md's, with the row's digest and supersession position)
+- Milestone: M8
+- Repos: sidecar, server
+- Size: M
+- Spec: D-TEAM-33, D-TEAM-26, D-TEAM-30, I-4, I-15, FI-3, owner decision 197, DESIGN-DETAILS 4.2.6
+- Needs: TEAM-M2-20; TEAM-M2-03: scoped signers; TEAM-M2-04: `ConfigState.DelegationEnded`, `DelegationKeyDropped`, the cascade; TEAM-M2-16: api's admission and removal; TEAM-M2-17: shrink and causal identities
+- Provides: §7.9's forwarding row as a `configStatementRule`: `ConfigState.ForwardingDelegation(sidecarId)` (the live one, or none), supersession at the newer one's position (`superseded_at`), its ends and key drops; the refusals; api's host-client check; `DelegationRow` filled for forwarding Delegations with `reader_key_sha256` and no reader key
+- Files: sidecar/config_forwarding.go, sidecar/config_forwarding_test.go, sidecar/config_delegation.go, server/controller/config_delegation_check.go, server/controller/config_delegation_check_test.go
+- Build: A forwarding Delegation is signed only by its `forward_sidecar_id`'s identity key, that sidecar admitted, not read_only, not parked and not revoked at S(n-1); `tag_ids` empty, `max_admits` 0, `not_after` 0, `reader_xwing_public_key` 1,216 B and `pubkey` 32 B, each refused otherwise. api accepts it only if `host_client_id`, where set, is the source client of S's current bound client (`network_client.source_client_id`) and `host_client_public_key` that client's registered key. It admits nothing: api and readers refuse a `SidecarAdmit` or `AdmissionConfirm` whose signer resolves to one. A `DelegationRevoke` of one carries `since_n` 0 only, from S, a device allowed to revoke S (§5.6) or an admin. Ends: its revocation, S's revocation for any reason, its void when S is in a cascade's P. A newer forwarding Delegation of S supersedes it at the newer one's position: `superseded_at` is set, it is no end for §10.5 (no shrink), and a `DelegationRevoke` naming a superseded one takes effect and changes nothing live. Its key drops while S is parked or suspended and returns with S. Every effect is computable at re-application from the body and the rebuilt rows (DESIGN-DETAILS 5.2.3). Trap: D-TEAM-30's agent rules (tags, `max_admits`, `not_after` ≤ 90 d, parking admitted sidecars) must not apply to it.
+- Tests: T1 tables per rule, each refusal with its positive twin: signed by another sidecar, with tags, `max_admits` or a `not_after`, a short reader key, a host client that is not S's source client; a `SidecarAdmit` signed by its key; a `DelegationRevoke` with `since_n` > 0. Supersession keeps one live per S and sets `superseded_at`; S's sign-out, a lost revocation and a compromise revocation each end it; a Suspend drops its key until the Unsuspend. Rows equal across a fold at a new device and a rows-only gate (FS-14's shape), field 10 empty and 16 set.
+
+##### TEAM-M8-02: The forward_only mark, its allowlist, its proof key and its exchange
+- Change: new (od-197-forwarding.md's, unchanged but for the allowlist's two reads)
+- Milestone: M8
+- Repos: server, sdk
+- Size: M
+- Spec: R-TEAM-8, D-TEAM-8, D-TEAM-14, I-6, I-7, owner decision 197
+- Needs: TEAM-M1-04: the marks on `POST /network/auth-client`; TEAM-M1-01: the `strict_exp` allowlist; TEAM-M1-02: the DPoP verifier; TEAM-M1-06: the exchange; TEAM-M2-15: scopes from the projection; TEAM-M8-01; TEAM-M2-20
+- Provides: `forward_only` on `POST /network/auth-client`, inherited by children; its narrower allowlist; the DPoP key from the mint's `client_public_key` for a client with no binding; the exchange's forwarding rule; the auth-client route's doc in connect/api/bringyour.yml
+- Files: server/api/handlers/network_client_handlers.go, server/model/network_client_owner_model.go, server/api/route_authz.go, server/api/route_authz_test.go, server/session/dpop.go, server/session/dpop_test.go, server/oauth/exchange_scopes.go, server/oauth/exchange_scopes_test.go, connect/api/bringyour.yml
+- Build: §7.4's mark row: `forward_only` takes a source client that is a bound sidecar client and its DPoP proof, and sets `admin_refused` and `strict_exp` too. The allowlist for a `forward_only` bearer: `GET /auth/refresh`, `POST /network/auth-client` and `POST /network/remove-client` for its own children, `POST /oauth/token`'s exchange, `GET /network/config/projection`, `GET /sidecar/identity/<sidecar_id>` and its `?client_id=` form, `GET /sidecar/sync/poll` for `team` hints, `GET /key/<id>` and `POST /connect/control`; every other route answers 403 as the sidecar allowlist does. With no binding, the proof key is the `client_public_key` its mint named. §7.8's exchange: a `forward_only` client gets only `repo:<config_repo_id>:r` at evs and gkm, and only while its sidecar's forwarding Delegation is live (TEAM-M8-01), whatever its sidecar reads. Trap: F acts as S at every gate (D-ACL-3), so without this rule F's token would exchange for all of S's scopes.
+- Tests: a forwarding client's mint, refresh and child mint and removal with their proofs; every other route refused for its bearer and its window clients; the exchange answering only the config's `r`, refused once the Delegation ends or is superseded by one naming other keys; an `admin_refused` child without the mark unchanged.
+
+##### KEYS-M8-01: The forwarding key holder and its reader key at gkm
+- Change: new (od-197-forwarding.md's, amended: the reader key is a gkm object the row's digest names)
+- Milestone: M8
+- Repos: sidecar
+- Size: M
+- Spec: D-KEYS-16, D-KEYS-24, I-1, I-15, I-18, FS-18, owner decision 197, DESIGN-DETAILS 4.2.2
+- Needs: KEYS-M2-03: `KeyHolders`; KEYS-M2-15: wraps; KEYS-M2-20: Rotate's delivery set; KEYS-M2-21: committers and seats; TEAM-M8-01
+- Provides: `KeyHolders`' forwarding term: identity kind 5 (`forward` || sidecar_id), reach the config alone, live while §7.9's row keeps it; `gkm/dkey/<delegation_id>` with `PUT` and `GET /gkm/delegation-keys/<delegation_id>` and `GkmApi.UploadDelegationKey`, `GkmApi.DelegationKey`; a rotator's lookup of a forwarding Delegation's reader key; supersession as a key replacement with a late DelegationWrap, no shrink; its end as a shrink
+- Files: sidecar/gkm_holders.go, sidecar/gkm_holders_forward_test.go, sidecar/gkm_api.go, sidecar/gkm_paths.go, sidecar/gkmservice/delegation_keys.go, sidecar/gkmservice/delegation_keys_test.go, sidecar/gkmservice/wraps.go, sidecar/gkmservice/wraps_test.go, sidecar/gkmservice/reconciler.go, sidecar/sidecartest/fs_keys_delegation_test.go
+- Build: §10.5's table rows. The object is the 1,216 B X-Wing public key, created If-None-Match by the Delegation's signer; gkm requires SHA-256(body) to equal the row's `reader_key_sha256` at its newest verified state, answers 409 until that state holds the row, and equal bytes resume. Any token that reads the config repo may GET it. A rotator takes a forwarding Delegation's key from the statement where it holds the entry, else from the object, and requires its SHA-256 to equal the row's digest before it seals to it; a wrap's `recipient_key_sha256` is that digest, which gkm's wrap check compares with the row. A rotation stages one DelegationWrap per live forwarding Delegation in the config group; one whose object is missing is skipped and counted, and delivered late once it exists. The sidecar that signs a forwarding Delegation uploads the object and then writes its late DelegationWrap at the config's current generation (§10.5's dwraps). A newer forwarding Delegation of the same sidecar keeps the holder identity, so `holders_sha256` is unchanged and the new key gets a late delivery; a `DelegationRevoke` of the live one, or its sidecar's revocation, is a shrink and the next generation is cause REMOVE. The reconciler deletes the object 24 h after its Delegation ended or was superseded. `metadata_list.yml` gains the object under gkm-1 through design-records first (I-18); the key is a value rows showed before this change.
+- Tests: FS-18's forwarding cases: a rotation wraps to the live forwarding key and not to a superseded one; a supersession changes no `holders_sha256`; a `DelegationRevoke` makes the next generation REMOVE and excludes the key; a forwarding key opens the config and nothing else. An object whose bytes do not hash to the row's digest refused at gkm and at a rotator; a rotation with a missing object skips and later delivers.
+
+##### REPO-M4-01: The ios_extension leg's forwarding list, its module rule and its size budget
+- Change: new (od-197-forwarding.md's, amended: the list is the measured closure, the size is measured stripped, and the budget is 6 MiB)
+- Milestone: M4
+- Repos: sidecar, sdk
+- Size: M
+- Spec: D-SDK-20, D-SDK-8, D-REPO-4, R-SDK-6, Q-SDK-5, Q-SDK-7, owner decision 197, DESIGN-DETAILS 4.2.3
+- Needs: REPO-M0-04: `failsOnRows`; running make-check; SDK-M4-02's descriptor test
+- Provides: `check/testdata/ios_extension_leg.txt`, the root and `protocol` files the leg links; `//go:build !ios_extension` on every other root file and, through protocol/Makefile, on `mail.pb.go` and `socket.pb.go`; the leg's file rule and refused-module rule; `make size`'s `ios_extension` row at 6,291,456 B, stripped; sdk's descriptor and import tests on the list
+- Files: sidecar/check/legs_test.go, sidecar/check/legrows_test.go, sidecar/check/planted_legs_test.go, sidecar/check/size_test.go, sidecar/check/size_gate_test.go, sidecar/check/settings_test.go, sidecar/check/testdata/ios_extension_leg.txt, sidecar/protocol/Makefile, sidecar/Makefile, sdk/sidecar_ios_extension_test.go, sdk/dependency_boundary_test.go, the root files that gain the tag
+- Build: DESIGN-DETAILS 4.2.3. The list is computed, never hand-picked: start from the root files BRIDGE-M8-05 names (before they exist, from config_rows_only.go, config_seal.go, config_head.go, acl_state.go, acl_eval.go, gkm_delivery.go, gkm_keys.go, gkm_api.go, api_client.go, api_routes_core.go, evs_read.go and push_poll.go), build the leg with every other root and `protocol` file replaced by an empty one through `-overlay`, add the file that declares each undefined name, and repeat until it compiles. On 2026-11-10 that is 269 of the leg's 428 root files and 15 of 17 generated `protocol` files. Tag every file outside it `!ios_extension`, joined with `&&` to a constraint it already has. Rules: (1) the leg's root and `protocol` `GoFiles` are a subset of the list, and a file outside it fails naming the fix, which is the tag; (2) the leg's `go list -deps` holds no package of github.com/mjl-/mox, github.com/mjl-/adns, github.com/emersion/go-smtp, go-message or go-imap, github.com/miekg/dns, github.com/mholt/acmez, github.com/letsencrypt/pebble, github.com/modelcontextprotocol/go-sdk, github.com/andybalholm/brotli, gopkg.in/yaml.v3, golang.org/x/text/encoding or golang.org/x/net/html, and none of `net/rpc`, `text/template`, `html/template`; (3) the list may shrink freely and grows only in a commit that edits it. `make size`: the probe keeps connect's surface, `device`'s, `protocol/bridge`'s and, of the root, the exported surface of bridge_forward*.go alone, and both builds take `-ldflags=-s -w`, the flags sdk/build/Makefile ships with; `settings.iosExtensionAddedMaxByteCount` becomes 6,291,456, labeled proposed until question details-4-ios-forwarding-budget is answered. The leg is the same on `gomobile macos/arm64 extension`. Trap: the extension's executable ceiling in sdk/build/check_apple_size.sh moves only on the owner's answer; until then a build over 50 MiB fails there, the closed direction.
+- Tests: a planted root file outside the list, a planted `protocol` file, and a planted import of each refused module, each failing with its positive twin; the size verdict at its edge; `TestSizeGateFindsATablePlantedInDevice` against the new limit and a table planted in a listed root file; sdk's descriptor test reading the list.
+
+##### SDK-M8-17: The posture under decision 197: denials, the compile deadline, the sealed store and the floor
+- Change: new (this section's; the delta to SDK-M4-01's landed posture)
+- Milestone: M8
+- Repos: sidecar
+- Size: M
+- Spec: D-SDK-13, D-BRIDGE-18, DP1, I-4, owner decisions 185, 187, 189, 197, DESIGN-DETAILS 4.2.5 and 4.3
+- Needs: SDK-M4-01: `device.Posture`; BRIDGE-M4-11: enforcement of a `PostureDecision`; TEAM-M2-20
+- Provides: `PostureOverlayDelegationRevoke` and `PostureOverlayForwardSupersede`; `PostureDecision.Waiting` and `Overdue`; `PostureSettings.NarrowingOverdueTimeout` (10 min) and `Now`; `device.NewSealedPostureStore(inner, rootKey)`; `PostureSettings.Floor` (`device.PostureFloor{Load, Commit}`); `Posture.SetFork(fork bool)`; `PostureAlarmStoreRolledBack`, `PostureAlarmCompileOverdue`
+- Files: sidecar/device/posture.go, sidecar/device/posture_apply.go, sidecar/device/posture_verify.go, sidecar/device/posture_store.go, sidecar/device/posture_seal.go, sidecar/device/posture_seal_test.go, sidecar/device/posture_overlay_test.go, sidecar/device/posture_floor_test.go, sidecar/device/posture_fuzz_test.go
+- Build: DESIGN-DETAILS 4.2.5's tier 1. (1) Two overlay kinds: a `SIGNED_DELEGATION_REVOKE` whose signer is standing at the stored rows denies the forwarding key of the Delegation its field 2 names, read by wire, and a `SIGNED_DELEGATION` whose field 7 parses as a `bridge.ForwardScope` naming its own signer denies that sidecar's forwarding key under any other `delegation_id`, both until a state at or past them. (2) An Unsuspend lifts nothing: `postureEffect`'s lift fields go, and the entry only marks a compile wanted. (3) Every entry the posture does not apply as a denial and whose SignedType is in the narrowing set (4.2.5's table) joins `Waiting` with the time it was first seen, persisted in the manifest; once one has waited `NarrowingOverdueTimeout` the decision is `Overdue`, which `device.Bridge` enforces as pending, until a state at or past every such entry arrives. The clock is `PostureSettings.Now`, read only for this. (4) `NewSealedPostureStore` wraps any `PostureStore`: each record is `UFS1` || a 16 B file id || 64 KiB chunks sealed with AES-256-GCM under HKDF-SHA256(root key, file id, "urnetwork-sidecar-v1/forward-store" || name), nonce u32be(0) || u64be(chunk index), AAD the name, the file id, the index and a final-chunk byte; std only, since `device` may not import x/crypto. (5) The floor: after each commit whose pin rose the posture calls `Floor.Commit(n, chain)`; at load a manifest whose pin is below `Floor.Load()`, or equal with another chain, is pending with `PostureAlarmStoreRolledBack`, and the posture stays pending until its pin reaches the floor on the floor's chain. (6) `SetState` drops a state whose pin is below the state in force and keeps every overlay and waiting entry above the new state's pin. (7) `SetFork(true)`, persisted in the manifest, makes the decision pending until `SetFork(false)`: the app's sidecar role, a full reader, found a base that does not compile from its head. Trap: the overlay never opens: no kind added here may raise reach, and `FuzzPostureNeverOpens` holds it.
+- Tests: each new kind with its positive twin and a wrong signer; an Unsuspend after an overlay Suspend leaves the subject denied until the next state; an unverifiable SidecarRevoke goes Overdue after 10 min on a fake clock, across a restart, and clears at a state; a lower state refused; a state at pin p keeps the overlay above p (Fwd.tla's StateDropsOverlay and LowerStateAccepted on real code); sealed records refuse a flipped byte, a truncated file, a swapped chunk and a record moved to another name; a rolled-back store is pending and alarms, then recovers at the floor; `FuzzPostureNeverOpens` over generated logs.
+
+##### BRIDGE-M8-04: Forwarding-key delegations at hosts and senders
+- Change: new (od-197-forwarding.md's, with the overlay's enforcement)
+- Milestone: M8
+- Repos: sidecar
+- Size: M
+- Spec: D-BRIDGE-17, D-BRIDGE-5, D-SDK-32, I-3, I-4, FS-38, owner decision 197, DESIGN-DETAILS 4.2.5
+- Needs: BRIDGE-M4-10: `bridge.VerifyWindowDelegation`; BRIDGE-M4-11; BRIDGE-M4-12: the link's destination check; BRIDGE-M4-16: `CompileBridgeState`; TEAM-M2-20; TEAM-M8-01; SDK-M8-17
+- Provides: `bridge.VerifyWindowDelegation`'s forwarding path; the compiler filling `BridgeIdentity.forward_delegation_id` and `forward_public_key` from each subject's live forwarding Delegation; `BridgeEgressPolicy` refusing a principal whose forwarding key the overlay denies; for an app host, `BridgeRuleLink`'s target client and pinned key from its forwarding Delegation's host client
+- Files: sidecar/protocol/bridge/delegation.go, sidecar/protocol/bridge/delegation_test.go, sidecar/testdata/bridge/delegation/, sidecar/device/bridge_principal.go, sidecar/device/bridge_principal_test.go, sidecar/device/bridge_state.go, sidecar/device/bridge_state_test.go, sidecar/device/bridge_link.go, sidecar/device/bridge_link_test.go, sidecar/bridge_compile.go, sidecar/bridge_compile_test.go
+- Build: §17.9's verify row. A `signer_id` of 32 bytes is a `delegation_id` and `key_id` the SHA-256 of its public key: the delegation verifies only under the subject's `BridgeIdentity.forward_public_key` with that `forward_delegation_id`, the subject named by the delegation equal to the identity's. A 16-byte `signer_id` keeps the identity-key path. Paths by length, never by trying keys (QD-093). The principal carries which key admitted it; `ResolveEgress`'s per-flow recheck denies a forwarding-key principal while the overlay holds a `DelegationRevoke` of its id or a supersession of its sidecar, and `Bridge.Revoke` closes its flows after the policy swap (D-BRIDGE-21's order). A principal the identity key admitted is untouched by either. The target row: a link to an app host checks `destination_client_public_key` against the host client key the rules pin, never `GET /sidecar/identity`, which names S's own client. Trap: the compiler writes the forwarding fields only for a Delegation live at the state, so a superseded or revoked one leaves at the next compile.
+- Tests: vectors in testdata/bridge/delegation/ for the forwarding path; each mismatch alone (another sidecar's forwarding key, a superseded one, a revoked one, a ShareCert type, a 32-byte signer with a 16-byte key id) refused with its positive twin; an overlay DelegationRevoke closes exactly the flows its key admitted, an identity-key principal of the same subject surviving; an app host's link refusing a substituted host key; zero upstream sockets on an operator-minted contract carrying a forged forwarding delegation, as FS-38 counts them.
+
+##### BRIDGE-M8-05: The Forwarder: following, the transient compile and signing in a VPN component
+- Change: new (od-197-forwarding.md's, rewritten to DESIGN-DETAILS 4.2.4 and 4.2.5)
+- Milestone: M8
+- Repos: sidecar
+- Size: L
+- Spec: D-SDK-13, D-SDK-20, D-SDK-32, D-BRIDGE-18, R-BRIDGE-3, I-4, I-12, owner decision 197, DESIGN-DETAILS 4.2.4, 4.2.5, 4.2.6
+- Needs: BRIDGE-M4-16; BRIDGE-M8-04; TEAM-M2-11: the rows-only `ConfigLog`; TEAM-M2-08: `OpenConfigBody`, `NewConfigHead`; ACL-M2-02: `NewAclState`; KEYS-M2-20: `ParseGkmDelivery`, `OpenGkmDelivery`, `OpenGkmLadder`; KEYS-M8-01; TEAM-M8-01; TEAM-M8-02; EVS1's `EvsRepo.ReadHead` on the config repo; REPO-M4-01: the leg's list
+- Provides: `Forwarder` (`NewForwarder(ctx, *ForwarderArgs)`), with `ReceiveHint(position)`, `Witness(pin, fork)`, `Status()`, `Close()`; `ForwarderSettings` and `DefaultForwarderSettings(hostClass)`; `ForwarderStore` and `ForwarderKeys`, the interfaces sdk implements; `ForwardingSigner.SignWindowDelegation`; `ForwarderSink`, which `device.Bridge` satisfies through sdk (`SetPending`, `SetState(state, log)`, `ApplyDeltas(log)`, `SetFork(fork)`, `Decision()`); `bridge_alarm` reasons `compile_over_budget`, `compile_deferred`, `config_key_waiting`, `forward_client_lapsed`
+- Files: sidecar/bridge_forward.go, sidecar/bridge_forward_follow.go, sidecar/bridge_forward_compile.go, sidecar/bridge_forward_keys.go, sidecar/bridge_forward_sign.go, sidecar/bridge_forward_test.go, sidecar/bridge_forward_follow_test.go, sidecar/bridge_forward_compile_test.go, sidecar/bridge_forward_keys_test.go, sidecar/bridge_forward_sign_test.go
+- Build: DESIGN-DETAILS 4.2.5's `Follow` and `Compile`, in root files on REPO-M4-01's list, naming no type outside it. No state stays in memory between compiles but the pin, the timers and the settings: `Follow` hands each page to the sink's `ApplyDeltas` and schedules a compile when 4.2.5's table says; `Compile` runs the admission rule (estimate = 5 x rows_byte_count + 2 x head byte count + the newest base's tail bytes + 1 MiB, against `CompileMemoryMaxByteCount`, and with the process's heap in use against `CompileHeapCeilingByteCount`), restores a rows-only `ConfigLog` from the store at its newest base and applies the entries after it through `ApplyRun` 256 at a time, opens the generations it needs by DelegationWrap under the forwarding reader key, reads a head it has not cached, builds `AclState`, calls `CompileBridgeState` for S, hands the state with its log run to the sink, commits, drops every reference and, on mobile host classes, calls `debug.FreeOSMemory`. It is single-flight per network, coalesces for `CompileDelay` and never starts within `CompileMinInterval` of the last. It never signs a statement and holds no identity key. The signer signs only its sidecar's delegations: subject S, `signer_id` the Delegation's id, `key_id` the SHA-256 of the forwarding public key, `not_after_ms` at most the window client's `strict_exp`; on a share link the share's current ShareSigner from the compiled state while its cert is unexpired. `Witness` fetches up to the app's pin and raises `head_alarm` on a pin off its chain; `fork = true` calls the sink's `SetFork`, which forces pending until a later witness clears it. Trap: an error anywhere in a compile changes nothing: the sink is called only with a whole state. Trap: no import of an `mls_`, `mail_`, `search_` or any file outside the leg's list, which `make check` fails.
+- Tests: on `sidecartest`'s fakes, with no sidecar role running: a new grant and a revocation reach the sink within §8.9's targets; a pure revocation reaches it with no compile; an Unsuspend reaches it only by a compile; a config rotation's DelegationWrap opens the new generation and a missing one alarms `config_key_waiting` while older bodies still compile; a superseded key set stops opening after the next rotation; the signer refuses another subject; a share's new signer re-signs live links; `Witness` reports a pin off its chain; the admission rule refuses a 5,000-device fixture at the iOS settings and compiles a 3,000-device one, heap sampled; two hints during a compile make one more compile; a kill at each step of `Compile` leaves the store loadable and the state unchanged.
+
+##### BRIDGE-M8-06: Forwarding's setup in the sidecar role
+- Change: new (od-197-forwarding.md's, with the steps' order, their record and the key set)
+- Milestone: M8
+- Repos: sidecar
+- Size: M
+- Spec: D-SDK-32, D-TEAM-33, D-CORE-13, I-6, I-7, I-8, owner decision 197, DESIGN-DETAILS 4.2.6
+- Needs: TEAM-M8-01; TEAM-M8-02; KEYS-M8-01; CORE-M8-01: child mints; CORE-M1-10: `Daemon.RegisterMethod`; TEAM-M2-10: `ConfigClient.WaitFor`
+- Provides: `Sidecar.SetUpForwarding(ctx, networkId, *bridge.ForwardingKeys) (*bridge.ForwardingHandOff, error)`; `Sidecar.ForwardingSetupDue(networkId) ForwardingSetupReason`; `Sidecar.ConfirmForwardingSetup(networkId)`; `Sidecar.ForwardingWitness(networkId)`; the control methods `bridge.forwarding.setup` and `bridge.forwarding.witness` for a paired remote-mode app (proposed names)
+- Files: sidecar/bridge_forward_setup.go, sidecar/bridge_forward_setup_test.go, sidecar/daemon_bridge.go, sidecar/daemon_bridge_test.go
+- Build: DESIGN-DETAILS 4.2.6's setup, six steps, each idempotent, with a record `forward/<network_id>/setup` in the sidecar's store written before step 1 and after each step: (1) sign the Delegation for the keys given, `forward` naming S and, where S's client is the device client's child, that client and its key, and record the Signed bytes; (2) file those bytes through `POST /network/config/delta` and `WaitFor` their position, a repeat finding a copy already in the log by its id, and a 409 at the tip re-signing at the new pin; (3) `UploadDelegationKey`; (4) write the late DelegationWrap of the config's current generation; (5) mint F with `forward_only`, the component's `client_public_key` and S's DPoP proof; (6) return the hand-off. A repeat with the record's `key_set_id` resumes at the first step not done; a repeat with another supersedes. `ForwardingSetupDue` answers `new_client_generation`, `ninety_days`, `none_live` or `foreign_revocation`; the last runs only after `ConfirmForwardingSetup`, which an app's UI calls and MCP cannot. From control mode only for the paired app (§5.8). Trap: the hand-off carries no key of S, and F's token is never logged or returned to any other caller (I-7).
+- Tests: setup at enrollment, re-enrollment and pairing; a kill after each step resumes to one Delegation and one F; the 90-day rotation and no other; a foreign revocation held until confirmed, and S's own revocation not held; an MCP or unpaired control caller refused; the hand-off's contents, and a log scan finding no token.
+
+##### BRIDGE-M8-07: M8-out: forwarding's cases end to end
+- Change: new (od-197-forwarding.md's, with Fwd.tla's twins as schedules)
+- Milestone: M8
+- Repos: sidecar, server, sdk
+- Size: M
+- Spec: FS-38, FI-11, D-BRIDGE-17, D-SDK-32, I-3, I-4, owner decision 197, DESIGN-DETAILS 4.6
+- Needs: BRIDGE-M8-04; BRIDGE-M8-05; BRIDGE-M8-06; SDK-M8-16; SDK-M8-17; TEAM-M8-01; TEAM-M8-02; KEYS-M8-01; BRIDGE-M4-22: `sidecartest.BridgeNet`, `Net.MintContract`
+- Provides: §22.5's §17 row's forwarding cases at M8 on T2 and T3; §23.6's M8 row for forwarding
+- Files: sidecar/sidecartest/fault/fs_bridge_forwarding_m8_test.go, sidecar/sidecartest/bridge_net.go, server/controller/connect_bridge_forwarding_test.go
+- Build: DESIGN-DETAILS 4.6's schedule rows on FS-38's operator-minted contracts: a forwarding-key delegation admitted, every refused one opening zero upstream sockets; with the app's sidecar stopped, a new grant and a revocation reach the host in §8.9's targets; a DelegationRevoke racing a compile; a supersession racing a contract; a compile finishing below a newer state; `forward_only` getting the config's `r` alone. Each of Fwd.tla's twins is one schedule that must hold on real code.
+- Tests: the cases above on T2 and T3, reported by tier; any blocked by an open question listed, never skipped silently.
+
+##### SDK-M8-16: The VPN component's forwarding host in DeviceLocal
+- Change: new (od-197-forwarding.md's, with the key sets, the floor and the per-class settings; the RPC methods move to SDK-M8-07)
+- Milestone: M8
+- Repos: sdk
+- Size: L
+- Spec: R-SDK-3, R-SDK-6, D-SDK-13, D-SDK-20, D-SDK-32, DP1, I-3, owner decision 197, DESIGN-DETAILS 4.2.2, 4.2.4, 4.2.6
+- Needs: SDK-M4-01; SDK-M4-02; SDK-M8-17; BRIDGE-M8-05; PROTO-M8-01: `team` hints to `acl_enforcing` device clients
+- Provides: `SidecarForwardKeyStore` (app-implemented, gobind-safe, statuses as `SidecarKeyStore`'s); `deviceLocalForwarding`, one per network, with `keys(networkId)`, `handOff(*bridge.ForwardingHandOff)`, `witness(networkId, pin, fork)`; the forwarding store, sealed, in the VPN component's own container; F's refresh; D's `team` hints and the long-poll feeding the `Forwarder`; `deviceLocalBridgeOwner` holding one device role per network; the status mirror's forwarding fields
+- Files: sdk/device_sidecar_forward.go, sdk/device_sidecar_forward_store.go, sdk/device_sidecar_forward_keys.go, sdk/device_sidecar.go, sdk/device_sidecar_store.go, sdk/device_sidecar_forward_test.go, sdk/device_sidecar_forward_store_test.go, sdk/device_sidecar_forward_keys_test.go
+- Build: DESIGN-DETAILS 4.2.6, the VPN component's side. `keys` generates a key set (the forwarding seed, the X-Wing seed, F's ClientKey seed) under a fresh `key_set_id` into the `next` slot and returns public halves only; `handOff` checks the Signed Delegation names exactly those public keys and S, stores the token, and promotes `next` to `current` only once the component's own posture holds a state at or past `delegation_at` that shows that Delegation live, deleting the old set then. The store is 4.2.2's layout: seeds, the root key, the token and the floor through `SidecarForwardKeyStore` (§5.9's table), everything else in files under `device.NewSealedPostureStore`, outside any app group. Keys are generated only at a setup; a store state other than Present leaves forwarding pending, never resets it. Settings by host class from `DefaultForwarderSettings`: iOS and macOS extensions `CompileMemoryMaxByteCount` 10 MiB and `CompileHeapCeilingByteCount` 30 MiB, Android 16 MiB and none, desktop services 64 MiB and none. Forwarding runs whenever the VPN component runs: no app setting stops it, and `EnableBridge` is a release gate only (§17.16). One `Forwarder`, posture and forwarding client per network the hand-offs name; the router takes each network's block and, where two collide, the first-joined network's (§17.4); hosting runs only in the device client's network. F is refreshed by its own DPoP proofs at 40 to 50% of its `strict_exp`; an expired token at start makes the posture pending with `forward_client_lapsed`. Trap: on Android the service shares the app's process, so keep the forwarding store's keys and files apart from the sidecar role's, and say in the doc that the process boundary is app work (§18.15).
+- Tests: keys never cross, by a capture of every call out of the package; a rule change and a revocation applied with the app's sidecar stopped; two networks forwarding at once, each on its own posture, with hosting refused outside the device client's; F refreshed by its own proofs, and after 7 days unrefreshed pending until a new hand-off; a hand-off naming other keys refused; `next` promoted only at the live state, and a kill between hand-off and promotion keeps signing with `current`; the posture restored before the first packet from the sealed store; a corrupt store pending, never legacy; a rolled-back store pending; DP1's rows on the forwarding path.
+
+#### Changed tasks
+
+##### SDK-M4-01: The posture machine in device/
+- Change: changed (drafted). Its code stands; its delta is SDK-M8-17. Spec gains owner decision 197 and DESIGN-DETAILS 4.2.5.
+- Build: One machine for the forwarding role, fed in process by the VPN component's own `Forwarder`: `Posture.SetState(state, log)` keeps the argument it was built with, which answers question sdk-m4-01-state-proof with no channel (4.2.5). `Pending` arrives at forwarding's setup with `sidecar_id`, the identity key (QD-211) and the forwarding Delegation's id. Doc comments naming the keyless device role and a sidecar role's states change to the forwarding role and its own compile.
+
+##### SDK-M4-02: The deviceBridge seam in sdk
+- Change: changed (partial)
+- Needs: adds REPO-M4-01
+- Build: As planned, with three changes. `sdkPostureStore` moves out of the NetworkSpace's `storagePath` where that is the app group, into the VPN component's own container, and is wrapped by `device.NewSealedPostureStore` (SDK-M8-16 supplies the root key; until M8 the M4 seam stays dark behind `EnableBridge` and writes nothing). `sdk/sidecar_ios_extension_test.go`'s "only protocol/bridge's descriptors" becomes REPO-M4-01's list. "make size passing with margin" means REPO-M4-01's stripped row: the seam with `device` and `protocol/bridge` adds 1,083,256 B stripped on 2026-11-10 against 6,291,456 B, which closes question sdk-m4-02-make-size-over on its option 2 with the limit this section proposes. `EnableBridge` stays a release gate, never a setting.
+
+##### SDK-M6-01: The sdk.Sidecar shell
+- Change: changed (drafted)
+- Build: App hosts' `Components` never include "bridge": `NewSidecarLocal` and `NewSidecarRemote` refuse it with a typed error, since forwarding is the VPN component's.
+
+##### SDK-M8-01: Host services: the Api session, EnrollWithDevice, Unlock and state
+- Change: changed (open)
+- Build: As planned, and `applySidecarHostClass` runs Android's sidecar role only while the app is open, OS windows and wakes aside, as iOS's. Forwarding's setup after enrollment is SDK-M8-07's wiring, so this task gains no need.
+- Tests: adds an Android host class that starts no background sidecar while the VPN runs.
+
+##### SDK-M8-02: The remote backend: NewSidecarRemote over §5.8's control mode
+- Change: changed (open)
+- Needs: adds BRIDGE-M8-06
+- Build: As planned, and it relays forwarding's setup and witness to the daemon over `bridge.forwarding.setup` and `bridge.forwarding.witness` for a paired desktop app, carrying `bridge.ForwardingKeys` out and `bridge.ForwardingHandOff` back, never a key.
+
+##### SDK-M8-04: SidecarMail: aliases, coverage, the receiver and burners
+- Change: changed (open)
+- Build: As planned, but `SetReceiverEnabled` files or retires a remote-mode app's daemon's `IndexerSet` for mail, and local mode answers refused, since app hosts receive only while open (owner decision 197).
+- Tests: drop the Android receiver case; `TestReceiverEnableFilesIndexerSet` on the remote backend.
+
+##### SDK-M8-07: The device channel: the hand-off, status, routes and acl_enforcing
+- Change: changed (open; retitled). Dropped: `rpcBridgeStateSink`, `DeviceLocalRpc.SetBridgeState` and its chunks (reading 11), the control method `bridge.state`, `sidecar/daemon_bridge.go`'s state relay.
+- Milestone: M8
+- Repos: sdk, sidecar
+- Size: M
+- Spec: R-SDK-3, D-SDK-1, D-SDK-3, D-SDK-13, D-SDK-32, D-BRIDGE-12, DP1, Q-SDK-2, I-4, I-7, I-10, owner decision 197
+- Needs: SDK-M4-01; SDK-M4-02; SDK-M8-01; SDK-M8-02; SDK-M8-16; BRIDGE-M8-06; BRIDGE-M4-13: `Bridge.Routes`, `Bridge.SetLocalAddresses`; TEAM-M1-04: `acl_enforcing` on `POST /network/auth-client`; PROTO-M8-01; CORE-M1-10: `Daemon.RegisterMethod`
+- Provides: `DeviceLocalRpc.ForwardingKeys`, `DeviceLocalRpc.ForwardingHandOff`, `DeviceLocalRpc.ForwardingWitness`; `DeviceLocalRpc.GetBridgeStatus`; `DeviceRemoteRpc.BridgeStatusChanged`; `Device.GetBridgeStatus`; `Device.AddBridgeStatusChangeListener`; `BridgeStatus` with the forwarding fields; `DeviceLocal.GetBridgeRoutes`; `BridgeRouteList`; `DeviceLocal.SetBridgeLocalAddresses`; the status mirror; `AuthNetworkClientArgs.AclEnforcing`; the `acl_enforcing` mint; `sdk/sidecar_forward_setup.go`'s run of setup after `EnrollWithDevice` and at each `ForwardingSetupDue`; the bound `Sidecar.ConfirmForwardingSetup(networkId)` and the `bridge_alarm` reason `forwarding_revoked` that prompts it
+- Files: sdk/device_sidecar_channel.go, sdk/device_sidecar_routes.go, sdk/device_rpc.go, sdk/device_rpc_methods.go, sdk/device.go, sdk/device_local.go, sdk/api.go, sdk/sidecar_forward_setup.go, sdk/device_sidecar_channel_test.go, sdk/device_rpc_mirror_test.go, sdk/sidecar_forward_setup_test.go
+- Build: §18.6's Setup and Mirror. Three additive RPC methods carry setup: `ForwardingKeys(networkId)` returns the component's public halves, `ForwardingHandOff(bytes)` delivers the hand-off, `ForwardingWitness(networkId, pin, fork)` the app's witnessed pin; in process on Android, over the device RPC to the Apple extensions, and from `ur daemon` through the paired desktop app (SDK-M8-02). Each is listed in its method table, an older peer answers unknown, and `DeviceRpcVersion` stays 3. No state, delegation or key crosses. `sidecar_forward_setup.go` (`!ios_extension`) runs `Sidecar.SetUpForwarding` after `EnrollWithDevice`, at each `ForwardingSetupDue` when the sidecar role starts, and after the person's `ConfirmForwardingSetup`, which it offers by raising `forwarding_revoked` when `ForwardingSetupDue` answers `foreign_revocation`; it sends `ForwardingWitness` at each witnessed pin and at a fork. `GetBridgeRoutes`, `SetBridgeLocalAddresses`, the status mirror and the `acl_enforcing` mint are as planned, the mint now after the forwarding role leaves legacy. D's `team` follower is SDK-M8-16's and feeds the `Forwarder`. Hosted devices refuse all of it.
+- Tests: `TestDeviceRpcMethodTablesServeEveryMethod`; `TestDeviceRpcVersionStaysThree`; the mirror's T4 rows; a capture of the three methods' payloads holding no private key; `TestHandOffQueuedWhileDisconnected`; `TestSetupRunsAfterEnrollment`; `TestForeignRevocationWaitsForConfirm`; `TestDesktopPathThroughControl` on a fake daemon; `TestUnsignedResponseOverRpcIgnored` (DP1).
+
+##### SDK-M8-08: BridgeHost in DeviceLocal on the forwarding client
+- Change: changed (open; retitled). Dropped: `DeviceRemoteRpc.SignWindowDelegation`, `DeviceLocalRpc.SetWindowDelegation`, `DeviceLocalRpc.ResignShares`, the control method `bridge.delegation.sign`, and the keyless requester half of `Sidecar.SignWindowDelegation`.
+- Milestone: M8
+- Repos: sdk
+- Size: M
+- Spec: D-SDK-3, D-SDK-13, D-SDK-32, I-3, I-5, R-CTX-5
+- Needs: SDK-M8-16; BRIDGE-M8-05: `ForwardingSigner`; BRIDGE-M4-12: `device.BridgeLinkMultiClientSettings`, `device.NewBridgeLinkGenerator`; BRIDGE-M4-06: `device.BridgeHost`
+- Provides: `DeviceLocal.NewBridgeLink`
+- Files: sdk/device_sidecar_host.go, sdk/device_sidecar_host_test.go
+- Build: `DeviceLocal.NewBridgeLink` implements `device.BridgeHost` on `device.BridgeLinkMultiClientSettings` and `device.NewBridgeLinkGenerator`. The generator's `ClientCredentials` are the forwarding client F's for the link's network, so each window client is F's child, inherits `forward_only` and `strict_exp`, and is sealed by C13 as S's client (D-ACL-3). `sign` is the network's `ForwardingSigner.SignWindowDelegation`, in process, so no link waits on the app; when a compile brings a new `BridgeShareSigner` the host calls `sign` again for each live window client of that share (§17.10). With no current key set, or F lapsed, `sign` errors and the link fails closed. This replaces QD-184's mint over the device channel on app hosts.
+- Tests: `TestNewBridgeLinkSettings`; a window client minted under F seals S's client as subject; a sign error opens zero contracts; `TestNotAfterCapped`; `TestExpiredShareCertRefused`; a new share signer re-signs live links; the app's process stopped throughout.
+
+##### SDK-M8-15: T4's surrogate cells and app-host suites
+- Change: changed (open)
+- Needs: SDK-M8-07; SDK-M8-08; SDK-M8-16; CORE-M8-03; SDK-M8-06
+- Build: As planned, with forwarding's cells: on the ios32 surrogate a forwarding role compiles a 3,000-device team's config with its sampled heap peak within `CompileMemoryMaxByteCount` and refuses a 5,000-device one with `compile_over_budget`, its state kept (until question details-4-ios-compile-memory is answered otherwise); its steady heap after `FreeOSMemory` within 4 MiB at 5,000 identities; the leg's start heap over the baseline's reported (625,296 B on 2026-11-10's probe). The Android cell runs no background sidecar.
+
+##### SDK-M10-02: Host classes, conditions, windows and foreground
+- Change: changed (open)
+- Build: As planned, but Android's class matches iOS's: foreground, plus WorkManager's charging and unmetered windows as iOS's BGProcessingTask; no VPN-held background (owner decision 197).
+
+##### BRIDGE-M4-16: The compiler: BridgeState from verified config
+- Change: changed (open; held under problem 12, whose section owns its algorithm)
+- Build: Three constraints from this section. It reads the config only through `BridgeConfigView`, which a daemon backs with its full reader and a VPN component with the Forwarder's rows-only `ConfigLog`, opened head and opened bodies, so it never calls `ConfigClient`. It fills `BridgeIdentity.forward_delegation_id` and `forward_public_key` from each subject's live forwarding Delegation, and an app host's link target and pinned key from that Delegation's host client. Its files are on REPO-M4-01's list and it allocates nothing proportional to the network beyond its output and one pass over the view.
+
+##### BRIDGE-M4-17: The bridge component: engine, delegations and the host's NAT
+- Change: changed (open; held under problem 12)
+- Build: On app hosts the component is not built: `Components` refuse "bridge" (SDK-M6-01), no `BridgeStateSink` feeds a device role over a channel, and no keyless requester's delegation is signed. `SetDeviceRole` stays for `cli/`'s `ur tun`, and `Sidecar.SignWindowDelegation` serves the daemon's own links.
+
+##### BRIDGE-M8-01: App-device hosts after C16
+- Change: changed (open)
+- Needs: BRIDGE-M4-05; BRIDGE-M4-10; BRIDGE-M4-21; BRIDGE-M8-04; SDK-M8-16
+- Build: As planned, in D's network only. Senders' target check uses the host client key S's forwarding Delegation names (BRIDGE-M8-04). The device role's states come from its own `Forwarder`. Whether setup files the device's `BridgeAddress` stays §17.4's on demand (Q-BRIDGE-8).
+
+##### BRIDGE-M8-02: Link gates and egress on apps
+- Change: changed (open; retitled from "Keyless window clients, link gates and egress on apps"). Dropped: the sidecar role's mint over the device channel (QD-184's path), `sdk/device_sidecar_mint.go`, `sidecar/bridge_mint.go` and their tests.
+- Needs: BRIDGE-M4-12; BRIDGE-M4-14; SDK-M8-08; BRIDGE-M8-05
+- Provides: `LinkCountMax` per platform; §17.9's egress spec on app devices
+- Files: sdk/device_sidecar_egress.go, sdk/device_sidecar_egress_test.go
+- Build: Links on apps are SDK-M8-08's. This task sets `LinkCountMax` per platform, 0 on iOS until §22.9 measures one (owner decision 100), and builds egress on apps as planned: a subject's default route goes to an approved exit, or nowhere, through `NetworkPeer` with `PostQuantumEncryption`, default off.
+- Tests: `LinkCountMax` 0 builds nothing and rejects. Egress `none` sends nothing; `exits` sends only to an exit.
+
+##### BRIDGE-M8-03: §22.9's bridge cells: link memory, forwarding's compile, CGNAT and overlay ICE harnesses
+- Change: changed (open)
+- Needs: BRIDGE-M4-08; BRIDGE-M4-12; BRIDGE-M8-01; BRIDGE-M8-02; BRIDGE-M8-05
+- Build: As planned, and the memory cell also samples a forwarding compile beside one link on the ios32 surrogate, reporting the heap peak against 4.4's table, and reruns 4.4's rows fixture so the 5x factor is re-measured whenever `SidecarRow` or `AclRows` change.
+
+#### Changed outside BRIDGE and SDK, carried from od-197-forwarding.md
+
+| Task | Change |
+|---|---|
+| BRIDGE-M4-10, BRIDGE-M4-11, BRIDGE-M4-12 (drafted) | No change at M4; extended by BRIDGE-M8-04 and SDK-M8-17. On apps the generator's parent is F (SDK-M8-08). |
+| BRIDGE-M4-06 (drafted) | Comments only: the delegation signer is the forwarding signer; `bridge.proto`'s comments on a sidecar role's view for its device role change. |
+| KEYS-M2-03, KEYS-M2-28 | Extended by KEYS-M8-01: the forwarding kind and identity; supersession without a shrink and its revocation's REMOVE rotation join FS-18. |
+| TEAM-M1-01, TEAM-M1-02, TEAM-M1-04, TEAM-M1-06 | Extended by TEAM-M8-02; `forward_only` joins the marks a child inherits. |
+| TEAM-M2-01, TEAM-M2-04 | Extended by TEAM-M2-20's fields; the agent rules exclude a Delegation with `forward` set. |
+| MAIL-M8-04, MAIL-M8-05, MAIL-M8-10 | No app is a mail indexer; an app's wake only resyncs; the indexer paths are the desktop daemon, a NAS or a VPS. |
+| PROTO-M8-01 | No change: D's `team` hints feed the forwarding role's follower. |
+
+#### Unchanged
+
+BRIDGE-M2-01, BRIDGE-M4-15, BRIDGE-M4-18, BRIDGE-M4-19, BRIDGE-M4-20, BRIDGE-M4-22, BRIDGE-M6-05, BRIDGE-M6-06, BRIDGE-M6-07, BRIDGE-M6-08, SDK-M3-01, SDK-M4-04, SDK-M4-05, SDK-M4-06, SDK-M4-08, SDK-M4-09, SDK-M6-02, SDK-M6-03, SDK-M8-03, SDK-M8-05, SDK-M8-06, SDK-M8-10, SDK-M8-12, SDK-M8-14, SDK-M9-01, SDK-M10-01, SDK-M10-03, SDK-M10-04, SDK-M10-05, SDK-M10-06: unchanged; each builds as its plan entry says, with the note 4.7 gives it.
+
+#### Dropped
+
+None whole. The dropped halves are in SDK-M8-07, SDK-M8-08 and BRIDGE-M8-02 above. RESOLUTIONS' plan-BRIDGE-keyless-window-parent (QD-184) and plan-SDK-small-readings #11 (QD-559) no longer apply on app hosts.
+
+#### Order and lanes
+
+The core lane takes TEAM-M2-20 (before M2's freeze), TEAM-M8-01, TEAM-M8-02 and KEYS-M8-01; the ops lane takes REPO-M4-01 (it can start now), SDK-M8-17, BRIDGE-M8-04 to BRIDGE-M8-07, SDK-M8-16, SDK-M8-07 and SDK-M8-08; the edge lane takes MAIL's three changes. Longest chain: TEAM-M2-20 -> TEAM-M8-01 -> KEYS-M8-01 -> BRIDGE-M8-05 -> SDK-M8-16 -> SDK-M8-07 -> SDK-M8-15.
+
+#### Notes for the held tasks
+
+**Landed code that must change** (file, then the task that changes it):
+
+```text
+sidecar/protocol/bridge/auth.proto, bridge.proto, protocol/config.proto and their .pb.go   4.2.2's fields (TEAM-M2-20)
+sidecar/device/posture.go, posture_apply.go, posture_verify.go   two overlay kinds; no lift on Unsuspend; Waiting
+                               and Overdue; the lower-state rule; the floor; doc comments naming the keyless
+                               role (SDK-M8-17)
+sidecar/device/posture_store.go   NewFilePostureStore stays the inner store; NewSealedPostureStore wraps it (SDK-M8-17)
+sidecar/device/bridge_principal.go, bridge_state.go, bridge_link.go   the 32-byte signer path; the overlay's new
+                               kinds enforced per flow; an app host's pinned key (BRIDGE-M8-04)
+sidecar/protocol/bridge/delegation.go   VerifyWindowDelegation's forwarding path (BRIDGE-M8-04)
+sidecar/device/bridge.go, bridge_settings.go, bridge_host.go, bridge_rules.go, doc.go   comments: the forwarding
+                               signer and the component's own compile, not §18.6's channel
+sidecar/check/legs_test.go, legrows_test.go, size_test.go, size_gate_test.go, settings_test.go, Makefile   the leg's
+                               rule and row (REPO-M4-01); 159 root files and two generated ones gain the tag
+sidecar/config_delegation.go   the agent rules exclude a Delegation with forward set (TEAM-M8-01)
+sidecar/gkm_holders.go, gkm_api.go, gkm_paths.go, gkmservice/wraps.go, reconciler.go   kind 5 and the key object
+                               (KEYS-M8-01)
+sdk/device_sidecar.go          deviceLocalBridgeOwner holds one device role per network, not one (SDK-M8-16)
+sdk/device_sidecar_store.go    its directory leaves any app group; wrapped by the sealed store (SDK-M4-02, SDK-M8-16)
+sdk/sidecar_ios_extension_test.go, dependency_boundary_test.go   the leg's list (REPO-M4-01)
+sdk/sidecar.go, sidecar_types.go   refuse "bridge" in an app's Components (SDK-M6-01)
+sdk/build/APPLE_EXTENSION_MEMORY_BUDGET.md   the device-role table gains this section's rows when the leg lands
+```
+
+No landed code ran a sidecar feature other than forwarding in a VPN component, and none ran Android's mail, sockets, search or evs in the background.
+
+**BRIDGE-M2-01 (statements).** Unchanged, and no longer waiting: bridge statements are ordinary rule-table statements judged at id level everywhere, which is what lets the Forwarder's rows-only judge run them. Two things to hold to: the id-level half must not need a config key (the leg's judge may lack a generation, 4.2.5 step 2), and an entry held pending for its body keeps its id-level effect. The forwarding row is TEAM-M8-01's rule, not this table's.
+
+**BRIDGE-M4-15 (address plan), BRIDGE-M4-18 (`ur tun` on Linux), BRIDGE-M4-19 (filings), BRIDGE-M4-20 (`ur bridge`).** Unchanged: CLI hosts have no forwarding role, and the daemon runs the bridge under its identity key. In -15 and -19 nothing files a `BridgeAddress` at an app's setup (Q-BRIDGE-8 stays on demand). In -19 and -20, `block`, `egress`, `invite` and every filing stay sidecar-role acts: the forwarding key signs no statement, so an app's filings come from the app's sidecar role while it is open.
+
+**BRIDGE-M4-22 (M4-out).** Unchanged. FS-38's sender and host rows run on identity-key delegations at M4; the forwarding-key rows are BRIDGE-M8-07's. `sidecartest.BridgeNet` should take the delegation's signer as a parameter now, so M8 adds a signer rather than a second harness.
+
+**BRIDGE-M6-05, -06, -07, -08 (shares, `ur tun` on macOS and Windows, reach receipts, M6-out).** Unchanged. On an app, a share link's delegation is signed in the VPN component with the share's current `BridgeShareSigner`, which the compile reads from the head into the state it hands the posture, so -05's host side sees the same `ShareCert`-signed delegations whoever built the link. The ShareKey itself never enters a VPN component: `BridgeShareSigner` files are re-certified by the ShareKey holder's sidecar role (§17.9), which an app runs only while open, so a share whose only holder is a phone can lapse after 7 days closed; -07's receipts are written by the sidecar role and coalesce what the component's status mirror counted.
+
+**BRIDGE-M8-01, -02, -03.** Changed, as listed.
+
+**SDK-M3-01 (credential rules).** Unchanged. One addition to its doc: F's token lives only in `SidecarForwardKeyStore`, never in `.auth_state`.
+
+**SDK-M4-04, -05, -06, -08, -09 (the page Worker, the key-origin frame, sidecar.ur.io, FS-37, browser conformance) and SDK-M6-02 (console operations).** Unchanged and untouched by forwarding: the page Worker is the `sidecar_http` leg, which links no connect and no bridge, so nothing in them depends on where forwarding runs.
+
+**SDK-M6-03 (SidecarDirectory, SignEdgeLogin).** Unchanged.
+
+**SDK-M8-01, -02, -04, -07, -08, -15.** Changed, as listed. The order among them: SDK-M8-17, then SDK-M8-16, then SDK-M8-07 and SDK-M8-08.
+
+**SDK-M8-03 (SidecarEvs, SidecarSockets), SDK-M8-05 (SidecarApprovals), SDK-M8-06 (binding gates).** Unchanged. -05's device list shows one device per app, never a second entry for its forwarding Delegation, and its revocation plan names the forwarding Delegation among what a device's revocation ends. -06's export tables gain `SidecarForwardKeyStore` and one bound call, `Sidecar.ConfirmForwardingSetup`, which SDK-M8-07 adds and an app offers on the `bridge_alarm` reason `forwarding_revoked`; setup has no other app-facing API.
+
+**SDK-M8-10 (the push sender), SDK-M8-12 (FS-36, FS-120), SDK-M8-14 (the quick burner), SDK-M9-01 (CheckSend).** Unchanged. A wake reaches the app's sidecar role only; the VPN component takes `team` hints on D or by F's long-poll and needs no wake.
+
+**SDK-M10-01, -03, -04, -05, -06 (search and drops).** Unchanged. SDK-M10-02 changes by one line, as listed. -06's T4 legs run beside SDK-M8-15's forwarding cells and must not count the compile's transient heap against search's working set: sample each alone.
+
+### 4.8 Proposed DESIGN.md text
+
+For the design-records track, section by section; each replaces the sentence or row named.
+
+**§17.8, `Forwarding roles`.** Replace "between compiles its posture applies the log's `SidecarRevoke`, `MemberRevoke`, `Suspend`, `Unsuspend`, `GrantRevoke` and `BridgeWithdraw` entries" with "between compiles its posture applies as denials the log's `SidecarRevoke`, `MemberRevoke`, `Suspend`, `GrantRevoke`, `BridgeWithdraw` and `DelegationRevoke` entries and a newer forwarding Delegation's supersession, each on its signer's identity key in the rows it holds, and lifts nothing: an `Unsuspend` and every opening take effect at the next compile; a statement that could narrow reach and that it cannot check forces pending when no compile has judged it within 10 minutes". Add: "The compile's judge is §7.9's rows-only verifier, as api's: the forwarding role checks a head against the base that names it and does not re-compile rows from it."
+
+**§17.8, `persist` row.** Add "sealed under forwarding's root key; the highest pin committed is also kept in the key store, and a store below it is pending".
+
+**§17.9, `verify` row.** After "by the key of the subject's forwarding Delegation live at this state" add "(a 32-byte signer_id is its delegation_id, verified only under that subject's `BridgeIdentity.forward_public_key`), which the host denies again from the entry that revokes or supersedes it".
+
+**§18.4, the host table's iOS row.** "network extension; 18.10's budget" stands; the budget's numbers change in 18.10.
+
+**§18.6, `deviceBridge`.** `SetState(state *bridge.BridgeState, log *device.PostureLog) error` and `ApplyDeltas(log *device.PostureLog) error`, with the comment "the log run that vouches for the state, from the component's own store".
+
+**§18.6, Setup.** Replace the block's `keys` to `hand off` rows with 4.2.6's steps C0 to C8, and add its `kill` row. Add to `when`: "and when no forwarding Delegation of S is live".
+
+**§18.6, Following.** Replace the `follow` row with: "it fetches the log with F's token and hands each page to its posture, which applies denials at once; when an entry is not a denial it runs a compile off the packet path: a rows-only `ConfigLog` restored from its store judges the entries, DelegationWraps open the generations, the head the base names is read and checked against it, and `AclState` and §17.8's compiler produce S's state, all released afterwards; a compile is admitted by an estimate of about five times its rows' bytes against the host's cap and heap ceiling, and one refused leaves the last state in force and raises `bridge_alarm`". Add to `witness`: "a fork the sidecar role finds forces the forwarding role pending".
+
+**§18.6, posture block.** `stored` gains "the entries waiting for a compile with the time each was first seen, and a fork its sidecar role reported"; `never` gains "a state below the one in force, or a store below the key store's floor".
+
+**§18.10, Forwarding leg.** Replace `kept` and `excluded` with 4.2.3's first block. Replace `make size` with "from M4 the leg adds at most 6 MiB, measured stripped, over the pre-sidecar extension (5,040,248 B measured on 2026-11-10 before the bridge files), and the signed iOS extension's ceiling rises from 50 MiB to 54 MiB (proposed; Q-SDK-7)". Replace `memory` with "forwarding's Go heap at most 4 MiB steady; a compile is transient and admitted by an estimate of about five times its rows' bytes against 10 MiB and a 30 MiB process ceiling in the Apple extensions, about 4,300 devices' rows, past which the network stays pending on that device and raises `bridge_alarm` (proposed; Q-SDK-7)".
+
+**§18.11.** Add rows: "A file allow-list of forwarding files alone | a short list | the root's files are not layered: the closure is 269 of 428 | not available without seam work: a computed list, tags on the rest, and the linker" and "The follower kept resident in the tunnel | no reload a compile | 10.5 MB decoded at 5,000 devices | rejected: transient compiles".
+
+**§18.12.** D-SDK-13 gains "the posture applies denials at once and opens only on a compiled state; a narrowing entry no compile has judged in 10 minutes forces pending". D-SDK-20 becomes "The forwarding role is `sidecar/device` with the root files on the `ios_extension` leg's list, a computed closure every other root file is tagged out of, whose list, refused modules and stripped size `make check` and `make size` hold". D-SDK-32 gains "its reader key is a gkm object named by the row's digest; a key set is promoted only when the component's own state shows its Delegation live".
+
+**§18.13, Q-SDK-7.** Option (a)'s figures become this section's: 6 MiB stripped, 54 MiB, 4 MiB steady, the compile's admission rule and its 10 MiB cap.
+
+**§7.9, the proto block and the forwarding row.** Add `ForwardScope` and `DelegationRow` 12 to 16 with 4.2.2's comments. In the row replace "a newer one of S supersedes it at its position" with "a newer one of S supersedes it at its position, recorded as superseded_at, which is no end for §10.5"; add "its row carries its reader key's SHA-256, never the key".
+
+**§10.5, `dwraps` and the holder table; §10.6's object table.** Add the object `gkm/dkey/<delegation_id>` ("a forwarding Delegation's reader key, 1,216 B, If-None-Match by its signer, its SHA-256 the row's reader_key_sha256; rotators and gkm check the digest; deleted 24 h after the Delegation ends or is superseded") and the two routes; in `dwraps`, "its sidecar uploads the key object, then writes the wrap".
+
+**§8.8.** The rows budget note gains "a forwarding Delegation's row is about 200 B".
+
+**§2.8.** gkm-1's `sees` gains "and each forwarding Delegation's reader public key, by delegation_id"; api-7's Delegation line gains "a forwarding Delegation's reader key digest, host client and supersession position".
+
+**§5.9, `Forwarding's keys`.** Add "in two slots, current and next, a set promoted when the component's state shows its Delegation live; and the floor, the highest pin committed".
+
+**§4.7, the legs row; §4.9.** The `ios_extension` rule becomes REPO-M4-01's three rules; `make size`'s row reads stripped.
+
+**§22.5's §17 row, §22.9's Memory row, FS-14, FS-18, FS-38.** The cases 4.6 names; the Memory row's "compiles a 5,000-device team's config" becomes "compiles a 3,000-device team's config within its cap and refuses a 5,000-device one with the alarm".
+
+**§17.17.** The row "Links, or forwarding's compile, do not fit the iOS tunnel" gains the measured bound; add "A statement the posture cannot check waits up to 10 minutes for a compile | Low | Medium | the deadline forces pending; denials it can check apply at once".
+
+**RESOLUTIONS.** sdk-m4-01-state-proof: superseded by decision 197; the component fetches the log itself and `SetState(state, log)` stands. sdk-m4-02-make-size-over: option 2, with the limit Q-SDK-7 sets. plan-BRIDGE-keyless-window-parent and plan-SDK-small-readings #11: no longer apply on app hosts.
+
+### 4.9 Owner questions
+
+Each is filed under `.stack/questions/`; the section is built on the recommendation in every case.
+
+**details-4-ios-forwarding-budget** (Q-SDK-7's executable half, with measurements; it also settles sdk-m4-02-make-size-over). Options: (1) the leg adds at most 6 MiB, measured stripped, and the signed extension's ceiling rises from 50 to 54 MiB; (2) hold §18.10's proposed 4 MiB; (3) hold 1 MiB with a second follower, policy evaluator and compiler in `sidecar/device`. Costs: (1) a ceiling the owner has raised by review before, and about 1 MiB of static memory; measured 5,040,248 B today, about 5.4 MB with the bridge files; (2) not reachable with the shared judge, whose measured floor is 4.4 MB before evs head reads, gkm and the compiler, so it means (3) for part of the rules; (3) two implementations of security-critical rules to keep equal. Recommendation: (1).
+
+**details-4-ios-compile-memory** (Q-SDK-7's memory half). A compile needs about five times the rows' bytes. Options: (1) cap a compile at 10 MiB under a 30 MiB process ceiling in the Apple extensions: networks to about 4,300 devices compile there, larger ones stay pending on iPhones and Macs' extensions with an alarm, and under provider load a compile waits; (2) cap 12 MiB with the ceiling at the 32 MiB soft limit, which admits a 5,000-device team only while the tunnel is otherwise idle and leaves the collector no room; (3) for networks over the cap, the app's sidecar role compiles and hands the state with its log run over the device RPC, as the keyless role did, which waits on the app; (4) a compact, per-host state in the shared verifier (core lane), which removes the bound and is a rework of `ConfigState`. Recommendation: (1) now and (4) as review-phase work if large teams on iOS matter; not (3), which decision 197 ruled out.
+
+**details-4-forwarding-reader-key-in-rows.** Options: (1) the row carries the reader key's SHA-256 and the key is a gkm object; (2) keep the 1,216 B key in the row; (3) X25519-only reader keys for forwarding, 32 B. Costs: (1) one object family, two routes, a digest check at rotators, a §2.8 line for a value rows already showed; (2) §8.8's 4 MiB cap at about 2,600 app devices, and three times the compile memory; (3) config generations wrapped to a forwarding key lose post-quantum protection against a recorded wrap. Recommendation: (1).
+
+**details-4-compile-deadline.** What a VPN component does when a statement that could narrow reach has waited for a compile that has not run. Options: (1) pending after 10 minutes; (2) keep the last state indefinitely and alarm; (3) pending after 60 seconds. Costs: (1) forwarding stops on a device under sustained memory pressure in a busy team, and resumes at the next compile; (2) a revocation the posture cannot check (its signer admitted since the base, or made by proposal, tick or cascade) may never apply on a device that cannot compile; (3) ordinary compile deferrals under provider load would drop forwarding. Recommendation: (1).
+
+Q-BRIDGE-8 (design-od197-app-address-at-setup) stays open and unchanged: this section builds on its option 1, on demand.
+
+None blocks the held tasks: each is additive or a setting, and each task above builds on the recommendation. REPO-M4-01 marks its limit proposed until the first is answered, and nothing ships to iOS on it before then.
 
 ## 5. Authorization-log verdicts across folds (§7.9)
 
