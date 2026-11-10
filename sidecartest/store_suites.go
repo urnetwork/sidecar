@@ -39,6 +39,7 @@ func StoreSuites() []*StoreSuite {
 		{Name: "RunMxEdgeStoreSuite", Fakes: []string{"FakeMxEdgeStore"}, Store: "model.MxEdgeStore"},
 		{Name: "RunSmtpEdgeStoreSuite", Fakes: []string{"FakeSmtpEdgeStore"}, Store: "server's SmtpEdgeStore"},
 		{Name: "RunConfigLogStoreSuite", Fakes: []string{"FakeApi"}, Store: "model's config log sequencer"},
+		{Name: "RunGkmStoreSuite", Fakes: []string{"FakeBlobs", "FakeRedis"}, Store: "server.FileClusters and sidecarhost.Redis, as server/cli/gkm holds them"},
 	}
 }
 

@@ -30,6 +30,8 @@
 //     sidecar code.
 //   - dns_store_fake.go and dns_store_suite.go, the seams of dnsservice and their suite, which runs
 //     here on the fake and in server on dnshost.Store.
+//   - gkm_store_suite.go, the conditional writes gkmservice rests on, which runs on FakeBlobs and
+//     FakeRedis in gkmservice's tests and on server's clusters and Redis in server/gkm's T3.
 //   - mxedge_store_fake.go, mxedgeservice's seam, which MAIL-M7-21's real store replaces.
 //   - fake_record_streams.go and fake_record_auth.go, the record's seams (record_seam.go): evs's record-class refs,
 //     §7.9's and §8's state at a pin, and §16.6's run files; record_streams_suite.go, the suite RECORD-M3-12's
