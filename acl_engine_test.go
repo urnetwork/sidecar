@@ -279,9 +279,11 @@ func TestAclEngineChecksDoNotAllocate(t *testing.T) {
 		t.Fatal(err)
 	}
 	inbound := &AclInbound{Source: AclSidecarSubject(world.phone), IpProtocol: aclIpProtocolTcp, Port: 22}
+	socketInbound := &AclInbound{Source: AclSidecarSubject(world.agent), SocketName: "app/db1", NameToken: world.world.tokenPath(t, "app/db1")}
 	address := netip.MustParseAddr("192.0.2.7")
 	checks := map[string]func(){
-		"AllowInbound": func() { engine.AllowInbound(inbound, aclTestNow) },
+		"AllowInbound":        func() { engine.AllowInbound(inbound, aclTestNow) },
+		"AllowInbound socket": func() { engine.AllowInbound(socketInbound, aclTestNow) },
 		"AllowRoute": func() {
 			engine.AllowRoute(AclSidecarSubject(world.phone), address, aclIpProtocolTcp, 443, AclSidecarSubject(world.router), aclTestNow)
 		},

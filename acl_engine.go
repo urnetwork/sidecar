@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §8.9's client engine: every admitted sidecar evaluates its own rules here, with no always-on compiler (owner
 // decision 6). Install swaps one state and its AclLocalPolicy in through an atomic.Pointer, and every check reads
 // the installed pair with no lock and no allocation, so a check concurrent with an Install sees the old pair or the
@@ -151,9 +153,9 @@ func (self *AclEngine) Install(state *AclState, local *AclLocalPolicy) error {
 				return fmt.Errorf("%w: %d", ErrAclEngineFork, offeredPin.GetVersion())
 			}
 		}
-		testHookBarrier("acl_engine_install_before", self.sidecarId.String())
+		testHookBarrier("acl_engine.install.before", self.sidecarId.String())
 		self.installed.Store(next)
-		testHookBarrier("acl_engine_install_after", self.sidecarId.String())
+		testHookBarrier("acl_engine.install.after", self.sidecarId.String())
 		return nil
 	}()
 	if alarm != nil {
@@ -236,15 +238,16 @@ func (self *AclEngine) AllowInbound(inbound *AclInbound, now time.Time) AclDecis
 	})
 }
 
-// Whether a rule's exact sockets take a name: any glob of its local detail, or the rows' token path alone for a rule
-// with none, an activated grant's, whose target is one exact path.
+// Whether a rule's exact sockets take a name: any glob of its local detail, segment by segment, a last segment of *
+// taking every name below its prefix (acl-policy-small-readings #1), or the rows' token path alone for a rule with
+// none, an activated grant's, whose target is one exact path. The name is the listener's own, an application or
+// share/ name in §9.4's form, so no glob reaches a namespace a policy must name outright; nothing is copied.
 func aclLocalSocketMatch(local *AclLocalRule, name string) bool {
 	if local == nil {
 		return true
 	}
-	concrete := AclResource{Kind: AclResourceSocket, Name: name}
 	for _, glob := range local.Sockets {
-		if (AclResource{Kind: AclResourceSocket, Name: glob}).covers(concrete) || glob == "*" {
+		if aclPublicSocketCovers(glob, name) {
 			return true
 		}
 	}

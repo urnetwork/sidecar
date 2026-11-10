@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // §8.8's Saving: what a writer's device refuses before it compiles, tests, previews and signs a policy head. Each
 // refusal names its rule and field for the preview, never a value (I-13). The list is §8.8's:
 //

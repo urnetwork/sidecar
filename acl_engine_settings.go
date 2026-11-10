@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // AclEngine's tunables (connect/CODESTYLE.md's settings rule).
 
 package sidecar
