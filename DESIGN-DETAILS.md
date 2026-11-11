@@ -1880,10 +1880,13 @@ scan state: 24 bits, least significant first
  0-1    pos      0 inside a line; 1 the last octet was CR; 2 it was LF, so a line starts next;
                  3 it was "." at a line's start (body only)
  2      name     a field name is unfinished: a line that is no continuation has not reached its colon
- 3-9    run      that name's octets so far, 1 to 126, or 127 for more; 0 when name is 0
+ 3-9    run      octets so far of the line in progress, when it began in this record and is no continuation:
+                 1 to 126, or 127 for more; 127 for a line that began in an earlier record; 0 after a line's end
+                 and inside a continuation
  10-15  prefix   one bit for each of from:  message-id:  x-ur-ref:  feedback-id:  list-unsubscribe-post:  and the
-                 fixed signature's prefix: the name so far is that literal's first run octets (names without case,
-                 the prefix exactly)
+                 fixed signature's prefix: run is under that literal's length and the line so far is its first
+                 run octets (names without case, the prefix exactly). The prefix runs past its colon, which is
+                 why run counts the line and not the name
  16     single   the line that ended at the last octet is one of rule 4's or rule 6's single fields
  17-23  zero
 start = pos 2 and nothing else: before a header block's first octet, and before a body's
@@ -1899,11 +1902,11 @@ every header record
  H4  nameStart(i) = lineStart(i) and c[i] is neither SP nor HTAB; a name's first octet is neither ":" nor ".";
      from a nameStart, or from i = 0 when in.name, until the next ":", no octet is SP, HTAB or CR       rule 3
  H5  hit(L, i)  = nameStart(i) and c[i .. i+|L|) = L, with every octet of it inside the record
-     cross(L)   = in.name and in.prefix[L] and 1 <= in.run < |L| and c[0 .. |L| - in.run) = L[in.run ..)
+     cross(L)   = in.prefix[L] and c[0 .. |L| - in.run) = L[in.run ..)
  H6  in.single implies c[0] is neither SP nor HTAB                                                      rules 4, 6
  H7  out.pos = 1 if c[n-1] is CR, 2 if LF, else 0;  out.name = a name is unfinished after c[n-1];
-     out.run = that name's octets if it began in this record and has under 127, else 127; 0 without a name;
-     out.prefix[L] = out.name and out.run < |L| and c[n - out.run .. n) = L[0 .. out.run)
+     out.run = as the state defines it, for the line in progress after c[n-1];
+     out.prefix[L] = 1 <= out.run < |L| and c[n - out.run .. n) = L[0 .. out.run)
 the first record (shape msg): in = start
  H8  c[0] is neither SP nor HTAB                                                                        rule 3
  H9  sum over i of hit(L, i) = 1 for from:, message-id:, x-ur-ref:, feedback-id: and the fixed prefix;
@@ -1918,7 +1921,7 @@ the header block's last record
  H13 its last four octets are CR LF CR LF by its template, and Field is 0 on the last two               rule 2
 ```
 
-Each part asserts Com(T, U, in, sigma_in) = `CarryIn` (hdr) and Com(T, U, out, sigma_out) = `CarryOut` (msg, hdr). A prototype of H1 to H7 and H12 compiles to 819 constraints an octet under AES and 431 under ChaCha20, keystream included: 90 an octet beyond the keystream, where the first record's full scan is 178, because a later record reads no literal, runs no From positions and needs no local-part table.
+Each part asserts Com(T, U, in, sigma_in) = `CarryIn` (hdr) and Com(T, U, out, sigma_out) = `CarryOut` (msg, hdr). A prototype of H1 to H7 and H12 compiles to 819 constraints an octet under AES and 431 under ChaCha20, keystream included: 90 an octet beyond the keystream, where the first record's full scan is 178, because a later record reads no literal, runs no From positions and needs no local-part table. The prototype was compiled both with the run counted over the name and, as the state above has it, over the line: the same figures.
 
 **DATA's body by record.** A body is cut into records of the body shape's capacity, the last shorter.
 
@@ -2015,10 +2018,12 @@ VerifyPart(p):
   6  server range: coveredServer <= server_record_count <= records relayed; a part with no client record covers at
      least one more server record
   7  mode: part 2 names BDAT or DATA; every later part repeats it
-  8  roles, from the table: the part's kind is env, msg, hdr or body by what it opens, and it opens at most one header
-     record or one body record. header_record_count is on the part that opens header record 1, 1 to
-     HeaderRecordMaxCount, and absent elsewhere. BDAT's command is opened with header record 1. last is on the part
-     that opens QUIT
+  8  roles, from the table, and the part's kind by what it opens: MAIL, RCPT or DATA, or no record -> env;
+     header record 1 -> msg; a later header record -> hdr; a body record or the end mark -> body. A part opens
+     records of one kind, and at most one header record or one body record; QUIT rides the last part of any of the
+     three message kinds, and the end mark only a body part. BDAT's command is opened with header record 1 and by
+     no other part. header_record_count is on the part that opens header record 1, 1 to HeaderRecordMaxCount, and
+     absent elsewhere. last is on the part that opens QUIT, and on no other
   9  replies: part 2: reply_count = 1, it covers at least one server record, and it opens MAIL.
      Any other part: reply_count <= commandsCovered - repliesProven, and 0 if it covers no new server record.
      A part that opens the first message record: repliesProven + reply_count = 2 + R, or 3 + R in DATA mode
@@ -2029,7 +2034,8 @@ VerifyPart(p):
  12  shape: the first shape of the key set's catalog, of the part's kind and the suite's family, whose pools hold
      the part's records; none -> refuse
      statement := KeyCommitment C (part 1: p.key_commitment, with Z1's handshake inputs);
-                  CarryIn: the gate's carry, or the start constant for header record 1 and for the first body part;
+                  CarryIn (hdr and body shapes): the gate's carry, which is the start constant before the
+                  first body part; header record 1 starts from the same constant inside the msg circuit;
                   CarryOut p.carry;  ReplyCount p.reply_count;  EhloRule: index = 2;
                   RequireChunking: index = 2 and BDAT;
                   Last354: DATA and reply_count > 0 and repliesProven + reply_count = 3 + R;
@@ -2100,8 +2106,10 @@ a server record read after a part was built and before the send's last message r
 
 proving and submitting: parts are proven in index order, up to ProveConcurrency at once among parts whose statements
                         are complete (the msg, hdr and body parts are, once their records are sealed). A part is
-                        submitted when its proof is done and every part before it was answered OK. Its records go to
-                        the stream when its own answer is OK
+                        submitted when its proof is done and every part before it was answered OK, and takes its
+                        index then: no statement holds an index, so a part proven early keeps its proof when a
+                        part for a late server record goes in ahead of it. Its records go to the stream when its
+                        own answer is OK
 ```
 
 The sender knows every scan state and draws every blind before it proves the first message part, so hdr and body parts do not wait on one another.
@@ -2119,7 +2127,7 @@ units = 1                                              the key part
 
 send                                              AES-128-GCM (1.3 and 1.2)       ChaCha20
 up to 12 recipients, header block up to 831         3                             3  (up to 11 recipients, 1,215 octets)
-3 recipients, 2 KiB header block                    4                             4
+3 recipients, 2,000-octet header block              4                             4
 the gate: 10 recipients, 4,095-octet header block   6                             5
 50 recipients, 4,095                                9                             8
 100 recipients, 4,095                              13                            10
@@ -2148,7 +2156,7 @@ SPEC.md 10.2 and 10.3 stand: the edge runs the ceremony alone, because only the 
 ```
 
 - **The ceremony** is `RunSetup` as landed, with three changes: one phase 1 for the one domain size; `circuit_sha256` and every `byte_count` written; and `setup -extend <directory>`, which adds entries for catalog shapes a key set lacks, on its phase 1, and leaves every existing entry as it is. Extending makes a new id under which the old shapes keep their keys, so a host's cache of them stands. `smtpproof/setup` stays where reading 24 put it.
-- **Published** at `<SmtpProofKeysUrl>/<id in hex>/<name>`: `keyset.json`, the phase 1 and phase 2 contributions, the verifying keys. `SmtpProofKeysUrl` is an entry of §18.9's host table, which `cli/` fills (QD-119), so no host name sits in code. About 0.9 GiB for the eleven shapes by their encodings (a 2^20 phase 1 contribution is 192 MiB, a shape's phase 2 about 63 MiB); proving keys are not published, since each host derives its own.
+- **Published** at `<SmtpProofKeysUrl>/<id in hex>/<name>`: `keyset.json`, the phase 1 and phase 2 contributions, the verifying keys. `SmtpProofKeysUrl` comes from an entry of §18.9's host table (`api_hosts_v1.json`), which `cli/` fills (QD-119), so no host name sits in code beside that table. About 0.9 GiB for the eleven shapes by their encodings (a 2^20 phase 1 contribution is 192 MiB, a shape's phase 2 about 63 MiB); proving keys are not published, since each host derives its own.
 - **At the edge**: `config/<env>/smtpedge.yml` lists `proof_key_sets`, each an id, a directory holding its `keyset.json` and verifying keys, and an optional `not_after`. `NewVerifier` takes up to `VerifierSettings.KeySetMaxCount` sets, checks each file against `keyset.json` and `keyset.json` against its id, and drops a set past its `not_after` at start. A session uses the set its preamble names, for its whole life. Changing the list is a configuration change and a restart, which ends connections, as any deploy of smtpedge does.
 - **In the release**: `cli/smtp_prover.go`'s `smtpKeySetPins`, newest first, replaces the single pin. The newest is the set this build's circuits were set up for. An older one stays listed only while this build compiles the same circuits for it (a re-run ceremony), which the host checks by digest, not by trust.
 
@@ -2168,9 +2176,12 @@ SPEC.md 10.2 and 10.3 stand: the edge runs the ceremony alone, because only the 
  7  write the proving key in gnark's dump form and the R1CS to cache as <name>.partial.<random>, sync, rename;
     then the .ok, the same way, last
  8  delete the fetched contributions unless KeySettings.KeepTranscripts
-load, at a send:  step 3's test and nothing less: the .ok for this build's digest and the pinned key hash, and both
-                  files hashing to it. Anything else is "no keys", and the shape is checked again at idle
+load, at a send:  step 3's test and nothing less, with d read from smtpShapeDigests: the .ok for this build's
+                  digest and the pinned key hash, and both files hashing to it. Nothing is compiled. Anything else
+                  is "no keys", and the shape is checked again at idle
 ```
+
+- **The circuit's digest.** `circuit_sha256` is the SHA-256 of a shape's compiled constraint system as gnark's `WriteTo` writes it. Those bytes were the same in three separate processes for two shapes here. The release carries `smtpShapeDigests`, each catalog shape's digest, generated beside the key set's pin and held to the source by `TestShapeDigestsAreThisBuilds`, which compiles every catalog shape on every leg that links the prover. Step 2 also requires the digest it computes to equal the table's, so a build whose table and source disagree proves nothing, and a platform on which the encoding differed would fail that test, not a host. The table is what lets a send load a shape without compiling it: the cached circuit is the file whose hash is the table's.
 
 - **A family is ready** in a set when every shape of it is: for chacha20, key-v0304, env, msg, hdr and body; for aes128gcm the same with key-v0304-aes128gcm, and TLS 1.2 is offered once key-v0303-aes128gcm is ready too. The TLS client offers only ready families' suites, so a host that has verified one family sends to every MX that takes it, and a handshake that fits no ready family fails before EHLO: a burst token, no unit, `deferred`.
 - **Which set a connection uses.** `Prover.KeySet()` is the newest pinned set with a ready family, or none, in which case the host only queues (D-SMTP-18). The sender puts it in the preamble. On KEYS it tries the next older pinned set with a ready family, once, and otherwise holds the message as `deferred` for `SmtpSenderSettings.KeysRetryTimeout` (6 h).
@@ -2247,7 +2258,7 @@ sidecar.SmtpSenderSettings       as landed, and:
 - **S1, the keys are the MX's (9.2, once).** The key part's circuit derives ck, civ, sk, siv from a witness that 9.2 shows is the MX's secret, and asserts C = Com of exactly those wires. So C commits to the MX's keys.
 - **S2, every part uses them.** A later part's statement has the gate's C as a public input (step 12), never a value the part carries. Its circuit asserts Com(its key wires, its rho) = C. If those wires differ from the MX's keys, the two openings of C give a discrete-log relation among G_j and H. So every keystream in every part is the MX's, which is what 9.3 needs of each part.
 - **S3, a verified part is fixed.** Step 12 builds the statement from the gate's state and step 14 commits only if no part landed since (`commits`), so the C, the carry, the counts and the ranges a proof was verified against are the gate's at the moment it lands. No step replaces a part.
-- **S4, the header block across records.** Let the header block be c_1 .. c_k, every record but the last at least 128 octets, the last at least 4, and let each record's part verify with `CarryIn` the commitment the gate kept. By binding, the state a part opens is the state the part before published, and H2 and H7 make that the true state of the block's scan at the boundary, by induction from `start`. Then Z5 holds of the concatenation: rules 1 to 3 are H1 to H4 at every octet, with `pos` and `name` standing for the octet and the name across a boundary, and H13 at the end. For rules 4 to 6, every line start of the block is a `nameStart` in exactly one record, and a literal L at it either lies inside that record, a `hit`, or runs past its end. In the second case it ends in the next record, since L has at most 99 octets and the record at least 128, and there `cross(L)` is true, because `run` and `prefix[L]` say exactly that the name so far is L's beginning. H9 counts one hit of each L in the first record, and H12 allows no hit and no crossing after it. So each single field and the fixed prefix begin exactly one line of the block, that line is in the first record, H10 reads its literal form there, and H11 with H6 let no continuation follow it. That is Z5, with the added fact of where those lines sit.
+- **S4, the header block across records.** Let the header block be c_1 .. c_k, every record but the last at least 128 octets, the last at least 4, and let each record's part verify with `CarryIn` the commitment the gate kept. By binding, the state a part opens is the state the part before published, and H2 and H7 make that the true state of the block's scan at the boundary, by induction from `start`. Then Z5 holds of the concatenation: rules 1 to 3 are H1 to H4 at every octet, with `pos` and `name` standing for the octet and the name across a boundary, and H13 at the end. For rules 4 to 6, every line start of the block is a `nameStart` in exactly one record, and a literal L at it either lies inside that record, a `hit`, or runs past its end. In the second case it ends in the next record, since L has at most 99 octets and the record at least 128, and there `cross(L)` is true, because `run` and `prefix[L]` say exactly that the line so far is L's beginning. H9 counts one hit of each L in the first record, and H12 allows no hit and no crossing after it. So each single field and the fixed prefix begin exactly one line of the block, that line is in the first record, H10 reads its literal form there, and H11 with H6 let no continuation follow it. That is Z5, with the added fact of where those lines sit.
 - **S5, DATA's body across records.** The same induction over B1 to B3: `pos` is the true state, B1 pairs every CR with an LF across boundaries, and B2 with `pos` 3 refuses a line that is exactly "." wherever a boundary falls in it. The last record ends in LF, so the end mark starts a line. That is SPEC.md's Z6 over the concatenation, and 9.6 follows.
 - **S6, the replies.** A part's server records are contiguous from the last covered record (step 6) and parse from a reply's start to a reply's end as exactly `reply_count` replies, each accepting, the last a 354 where `Last354` (Z8). So the verified parts' counts sum to the number of replies in the covered records, each proven. Step 9 lets the first message record be covered only when that sum is 2 + R (3 + R), and step 16 releases a message record only when every relayed server record is covered. The honest MX answers commands in order (9.1), so at that moment it has accepted EHLO, MAIL and exactly R recipients, has said 354 in DATA mode, and has said nothing since: 9.4's premise.
 - **S7.** With S1 to S6, 9.3 gives the MX's input as the concatenation of proven contents, 9.5 and 9.6 are unchanged, and 9.7 concludes.
@@ -2322,7 +2333,7 @@ By the count the send is 15% smaller under AES; by the domain, which is what SPE
 send                                             units AES / ChaCha20   M1 (8 GB), projected   m5.large at 41,000/s    by domain
 the key part (D-SMTP-16's π1 row)                    1 / 1               2 to 3 s               20 s / 18 s             20 s
 up to 12 recipients, an 831-octet header block       3 / 3               8 to 11 s              70 s / 68 s             59 s
-3 recipients, 2 KiB                                  4 / 4               10 to 14 s             95 s / 92 s             78 s
+3 recipients, 2,000 octets                           4 / 4               10 to 14 s             95 s / 92 s             78 s
 the gate: 10 recipients, 4,095 octets                6 / 5               15 to 21 s / 13 to 18 s  144 s / 116 s         118 s / 98 s
 100 recipients, 4,095                               13 / 10              33 to 46 s / 25 to 35 s  319 s / 239 s         255 s / 196 s
 100 recipients, 16,383                              23 / 15              58 to 81 s / 38 to 53 s  567 s / 361 s         451 s / 294 s
@@ -2377,7 +2388,7 @@ Circuit tests run gnark's solver, as the plan has it; real proofs stay behind `s
 - **SMTP-M9-37, shapes and scans.** `TestProductionShapesFillOneDomain` (3.2.6). `TestSpecMdNamesEveryProductionShape` on the eleven. `TestAesShapesServeTls12AndTls13`: one compiled env, msg, hdr and body circuit solves both versions' vectors. Header scans, each against `relation.go`'s single pass over the concatenation and against the checker: the sender's corpus cut at every length from 128 up; a single field's name cut at each of its octets across the first boundary and across a later one, refused; the fixed prefix cut at each of its 99 octets, refused; a single field ending exactly at the first record's end followed by a continuation, refused; CR and LF either side of a boundary; a final CRLF CRLF cut at each of its four octets; a record of 127 octets that is not the last, refused by the gate. Body scans: a "." line cut after LF, after ".", and after CR; a bare LF first in a record. Replies: `reply_count` one more and one fewer than the records hold; a part ending inside a reply; `Last354` on a 250; `EhloRule` beside a 220 line; a ticket under `Tls13` 0. `TestEnvelopeGroupsAreAFunctionOfPublicValues`.
 - **SMTP-M9-38, the gate.** One test a fence of 3.2.5, in its order, and one for each of `ProofParts.tla`'s twins as a Go test on `edgeSession` with barriers (`edge.verify.before`, `edge.commit.before`): `TestGateSuppliesTheKeyCommitment`, `TestGateSuppliesTheCarry`, `TestGateCountsRepliesBeforeTheMessage`, `TestGateHoldsMessageRecordsBehindALateRecord`, `TestGateRefusesASecondPartThatVerifiedBesideTheFirst`. A part with no client record covering a ticket, before and after `last`. An exact resend is a no-op and a changed resend ends the session. `FuzzEdgeRecordOrder` gains parts with no client record and loses replacement.
 - **SMTP-M9-39, the prover.** The planner on fixed inputs: 1, 10, 12, 13, 50 and 100 recipients, header blocks of 831, 832, 4,095 and 16,383 octets, each family, against 3.2.6's unit counts; replies that overflow the msg part; a reply record that fits no shape returns `EnvelopeRetry`. Memory accounting on a fake loader: never over `MemoryMaxByteCount`, a shape in use never unloaded, idle unload. `TestMeasureWholeSend` and `BenchmarkPartMemory` on the new shapes.
-- **SMTP-M9-40, keys.** `ProofKeys.tla`'s twins as tests: a cache entry of another circuit digest is not taken (`TestCacheEntryOfAnotherCircuitIsNoKey`, which is 3.1 E); a published proving key is never read; a `.partial` file is no entry; a malformed transcript, another circuit's transcript and keys the transcript does not fix are each refused (the landed tests, kept); phase 1 is verified once for two shapes; `-extend` leaves existing entries byte-equal; the fetch against a local listener serving a short file, a long file, a wrong hash and a dropped connection resumed; a family is offered in the ClientHello only when ready; the verifier takes two sets and drops one past `not_after`.
+- **SMTP-M9-40, keys.** `ProofKeys.tla`'s twins as tests: a cache entry of another circuit digest is not taken (`TestCacheEntryOfAnotherCircuitIsNoKey`, which is 3.1 E); a published proving key is never read; a `.partial` file is no entry; a malformed transcript, another circuit's transcript and keys the transcript does not fix are each refused (the landed tests, kept); phase 1 is verified once for two shapes; `-extend` leaves existing entries byte-equal; `TestShapeDigestsAreThisBuilds`, and a build whose table names another digest refusing the shape at step 2; the fetch against a local listener serving a short file, a long file, a wrong hash and a dropped connection resumed; a family is offered in the ClientHello only when ready; the verifier takes two sets and drops one past `not_after`.
 
 **Evidence tables.** `testdata/mutations/table.md` (SMTP-M9-29) keeps one row a check and gains cells: Z1's "a later part opens other keys than the key part committed", Z5's "a scan started from another state than the record before left", Z6's DATA cell likewise, Z8's "`reply_count` is not what the records hold", and E3's "a first message record before 2 + R replies are proven". FS-31 (SMTP-M9-30) gains the same five as adversarial rows, each failing before any effect, and its 100-recipient and 16 KiB honest controls. `smtpproof/checker` (SMTP-M9-28) takes the revised relation from 3.2.3 and 3.2.4 alone.
 
@@ -2413,6 +2424,7 @@ smtpproof/prover_measure.go         a unit per ready family; the measure's new f
 smtpproof/setup.go, setup_keys.go,  keyset.json 2; one phase 1; the cache by circuit digest; dumps;
   setup/main.go, verifier.go        -extend; several key sets at the verifier; the fetch                      SMTP-M9-40
 cli/smtp_prover.go                  smtpKeySetPins; EnsureKeys in place of VerifyProvingKeys                  SMTP-M9-40
+smtpproof/shape_digests.go (new)    smtpShapeDigests, generated; held to the source by a test                 SMTP-M9-40
 smtp_dkim_sign.go, smtp_assemble.go the header block's order; the head bound; the block bound as a setting    SMTP-M9-04
 smtp_pins.go                        an MX host's envelope group count beside its mode                         SMTP-M9-08
 smtpproof/SPEC.md, testdata/        draft 3: sections 4.3, 5, 7, 9, 10, 11, 12; vectors; the mutation table   SMTP-M9-33, -29
@@ -2527,7 +2539,7 @@ Five questions are filed. The section is built on each recommendation.
 - *What it adds to trust.* For confidentiality: that the blind is drawn uniformly and kept, from the same source as the TLS keys and the proof's own randomness. If that failed completely, C would be a test for a guess of all 448 key bits, which each record's tag already is. For soundness: discrete logs on a second curve, about 2^125, above BN254's own margin. For review: one gadget of about 150 lines, measured at 3,261 constraints, and 3.3's argument.
 - *What it buys.* Z1 once: 1.9M constraints become 0.7M. Every circuit in one 2^20 domain: the gate's send goes from 11 units to 6, 216 s to 118 s on an m5.large by domain (170 s to 144 s by the count), and by projection from 28 to 39 s to 15 to 21 s on the M1. One proof's memory from 1.7 to 7.0 GiB to 1.3 GiB. Eleven shapes and one domain size where there are 22 and four. Any recipient count on one connection. The earlier estimate priced the commitment as 1.4M constraints saved; it did not price the domain, which is where the time is.
 
-Options. (1) A Pedersen commitment as 3.2.2 has it. (2) A hash commitment, SHA-256 over the keys and a 256-bit blind with the module's existing gadget: computationally hiding only, and two or three compressions, 53,000 to 79,000 constraints, in every part, 5 to 8% of each unit. (3) No commitment. Then every part keeps Z1, a part cannot be smaller than Z1's 708,498 constraints with room to open anything, and the landed 22 shapes stand: 11 units for the gate, the 8 GB M1 unable to hold TLS 1.2's π3, recipients past a shape's pool by splitting the send over connections at a unit each. Carries would still be allowed, since they commit to no key, but there would be little to carry. (4) Recursion or folding. Not available here: gnark verifies Groth16 over BN254 inside a circuit only over a second curve and at millions of constraints a proof, and no folding scheme has a Go implementation under §4.7's licenses. Lookups for AES reopen SPEC.md 10.1 and gnark's version, and would halve AES at best. **Recommendation: (1).** If the answer is (3): SMTP-M9-36 and -37 are dropped; SMTP-M9-38 and -39 lose the key commitment and keep parts with no client record and immutable parts; SMTP-M9-08 gains the split of a domain's recipients; SMTP-M9-40 and the fifth failure's fix stand as written; and the five held tasks build the same seam with `key_commitment` unused.
+Options. (1) A Pedersen commitment as 3.2.2 has it. (2) A hash commitment, SHA-256 over the keys and a 256-bit blind with the module's existing gadget: computationally hiding only, and two or three compressions, 53,000 to 79,000 constraints, in every part, 5 to 8% of each unit. (3) No commitment. Then every part keeps Z1, a part cannot be smaller than Z1's 708,498 constraints with room to open anything, and the landed 22 shapes stand: 11 units for the gate, the 8 GB M1 unable to hold TLS 1.2's π3, recipients past a shape's pool by splitting the send over connections at a unit each. Carries would still be allowed, since they commit to no key, but there would be little to carry. (4) Recursion or folding. Not available here: gnark verifies a Groth16 proof inside a circuit only by emulating the pairing's field or over a second curve, at millions of constraints a proof, more than the Z1 it would save, and from `std/`, which this module does not import; and no folding scheme is among the modules this run may use. Lookups for AES reopen SPEC.md 10.1 and gnark's version, and would halve AES at best. **Recommendation: (1).** If the answer is (3): SMTP-M9-36 and -37 are dropped; SMTP-M9-38 and -39 lose the key commitment and keep parts with no client record and immutable parts; SMTP-M9-08 gains the split of a domain's recipients; SMTP-M9-40 and the fifth failure's fix stand as written; and the five held tasks build the same seam with `key_commitment` unused.
 
 **2. `details-3-speed-bar`: what do D-SMTP-16's m5.large rows become?** No relation over these circuits meets 60 s there for the gate's send (3.1 A, 3.4): the revised one projects to 118 to 144 s under AES and 98 to 116 s under ChaCha20, and DATA's 100 KiB to 27 to 34 min under AES. QD-144 already answers a confirmed miss: relax the row to the measured number. Options: (1) that, with the rows stated in units and the m5.large's left to SMTP-M9-32's bench, about 150 s and 35 min until then; (2) keep 60 s on the m5.large for a smaller send, three units (up to 12 recipients and an 831-octet header block), and state larger sends by units; (3) drop the m5.large as a prover class, so such hosts only queue for the member's other hosts; (4) reopen SPEC.md 10.1 for lookups. **Recommendation: (1).** 3.8's Speed text is written to it.
 
@@ -2548,7 +2560,7 @@ Options. (1) A Pedersen commitment as 3.2.2 has it. (2) A hash commitment, SHA-2
 
 **Readings taken.** Each changes no D- item beyond what question 1 covers, and each is listed so it can be overruled.
 
-1. *The header block's order.* The single fields come first and both signatures after them, where the landed assembler writes the signatures first. RFC 6376 §5.4 has a signer prepend its signature as a matter of SHOULD; a verifier takes signed fields by name from the bottom up wherever the signature sits. D-SMTP-16's interop run is where this is confirmed. If a receiver objects, the fallback is a msg shape with a larger head and no server blocks, one unit more a send.
+1. *The header block's order.* The single fields come first and both signatures after them, where the landed assembler writes the signatures first. RFC 6376 §5.6 asks only that a new signature go before any other DKIM-Signature field, and notes the top of the header block as the easiest place to do that; a verifier takes signed fields by name from the bottom up (§5.4.2) wherever the signature sits. D-SMTP-16's interop run is where this is confirmed. If a receiver objects, the fallback is a msg shape with a larger head and no server blocks, one unit more a send.
 2. *The fixed signature's prefix is still counted over the whole header block,* exactly once, as Z5.5 has it, though nothing rests on a second such line being absent. That keeps Z5 word for word, at 12 constraints an octet in later records.
 3. *DATA's records are cut by length,* replacing reading 3's whole lines. The edge then sees the body's length and no line end.
 4. *No part is proven again.* §14.5's "the same part proven again" becomes a later part with no client record. The cost is the same, one proof, and a verified part's published state can no longer change.
@@ -4718,9 +4730,11 @@ Three more answers add rules in this area that this section does not restate. Ea
 
 Status: complete (2026-11-11)
 
-Tasks held until complete: SEARCH-M10-19, SEARCH-M10-32, SEARCH-M10-33.
+Amended 2026-11-11 for the owner's answer QD-707 (question details-7-hedge, option 2, which was not this section's recommendation): a remote search asks the first two own search indexers at once, each for the repos it may answer, and both of those pairs are kept warm from each foreground; there is no hedge delay, and `Search.RemoteHedgeDelay` does not exist. The amendment also settles how the warm pairs combine: two own pairs and, under the condition this section already had, one other member's, three at most. Changed: 7.2's P2, 7.2.1's settings (with QD-702: this section's constants are settings fields), 7.2.3, 7.2.4, 7.2.8, 7.2.9's last paragraph, 7.3 and `RemoteAsk.tla` (the action `Assign` in place of `Ask` and `Hedge`, the invariants `TwoAtOnce`, `WarmFirst` and `OneServes`, the twins `PairOthers`, `AskAllOwn` and `KeepBoth` in place of `HedgeOthers`, a configuration with three own indexers, and every `RemoteAsk` configuration run again), 7.4, 7.5, 7.6, 7.7's notes for PROTO-M10-06 and SEARCH-M10-33, 7.8 and 7.9, which records every answer, QD-707 to QD-711. The other four answers took the recommendations, so nothing else moves. Changed plan lines: `.stack/plan/proposals/details-7-qd707-tasks.md`.
 
-Models: `sidecar/sidecartest/model/details/IndexSync.tla`, `RemoteAsk.tla`, `RemoteCursor.tla` and `RemoteMerge.tla`, their configurations (`IndexSync*.cfg`, `RemoteAsk*.cfg`, `RemoteCursor*.cfg`, `RemoteMerge*.cfg`) and `run-remote.sh` beside them. Task changes for the orchestrator: `.stack/plan/proposals/details-7-tasks.md` (two new tasks, TEAM-M10-02 and PROTO-M10-06). Questions filed: `.stack/questions/details-7-hedge.md`, `details-7-match-first.md`, `details-7-fold-guard.md`, `details-7-stale-all.md`, `details-7-small-readings.md`. The section is built on each one's recommendation. Two questions this problem was given are already answered and are built in as answered: `plan-SEARCH-sync-before-search` (QD-048: no fetch at search time, leading-edge coalescing) and `plan-SEARCH-foreground-signal` (QD-158: `Sidecar.SetSearchForeground`).
+Tasks held until complete: SEARCH-M10-19, SEARCH-M10-32, SEARCH-M10-33. PROTO-M10-06 and SEARCH-M10-33 were held again for this amendment.
+
+Models: `sidecar/sidecartest/model/details/IndexSync.tla`, `RemoteAsk.tla`, `RemoteCursor.tla` and `RemoteMerge.tla`, their configurations (`IndexSync*.cfg`, `RemoteAsk*.cfg`, `RemoteCursor*.cfg`, `RemoteMerge*.cfg`) and `run-remote.sh` beside them. Task changes for the orchestrator: `.stack/plan/proposals/details-7-tasks.md` (two new tasks, TEAM-M10-02 and PROTO-M10-06). Questions filed: `.stack/questions/details-7-hedge.md`, `details-7-match-first.md`, `details-7-fold-guard.md`, `details-7-stale-all.md`, `details-7-small-readings.md`. The section was built on each one's recommendation, and 7.9 has the owner's answers, one of which, the first, chose otherwise. Two questions this problem was given are already answered and are built in as answered: `plan-SEARCH-sync-before-search` (QD-048: no fetch at search time, leading-edge coalescing) and `plan-SEARCH-foreground-signal` (QD-158: `Sidecar.SetSearchForeground`).
 
 ### 7.1 The problem
 
@@ -4759,8 +4773,8 @@ The requirement. A query leaves p only for a device `eligible` lets answer it, j
 ```text
 P1 eligibility   one predicate, 7.2.2's, evaluated by each side in its own newest verified config state at
                  every send and every page, never from a list made earlier
-P2 one at a time each repo of a search has at most one indexer serving it. Own indexers first, a second own
-                 one in parallel after the hedge delay, then one other member's once its notice is answered
+P2 one at a time each repo of a search has at most one indexer serving it. Own indexers first, the two the
+                 device keeps warm at once (QD-707), then one other member's once its notice is answered
 P3 exact pages   candidates run in one order, newest first; a page accounts for a prefix of it, and
                  checked_through_ms is the newest candidate not yet accounted for; a repeat is the same
                  bytes; an ended search stays ended
@@ -4774,7 +4788,7 @@ P5 one pin       a snapshot's bucket files are whole at one version of the index
 
 P1 removes A and J. P2 fills I. P3 removes D and E and settles K. P4 removes G and H, with F's bound. P5 removes B and C.
 
-#### 7.2.1 Terms, constants and settings
+#### 7.2.1 Terms and settings
 
 ```text
 own(d, p)        d and p are untagged devices of one member; or the config state holds one member (a
@@ -4790,18 +4804,18 @@ watermark        (time, repo's place in the request, doc_key): a place in the ca
 span             of a leg, for the repos it served from text: the times (checked_through_ms, bound]
 ```
 
-Constants are facts of the format or of this design, never settings:
+Settings (QD-702: every limit, count and time of this section is a settings field, and none is a constant). All are in `SidecarSearchSettings` with their defaults in `DefaultSidecarSettings()`. The first three were this section's constants: they are values of the format and of evs's time check, so a deployment does not change one on one side alone, but code and tests read them from the settings. The ended-id life is `CursorTimeout` itself, and a read's limits are the evs client's:
 
 ```text
 SkewGuard            40 min   evs's time check both ways: 10 min ahead on the pinned push, 30 min behind on a
                               push in parts (§11.8's 5b)
 PinRingCount         64       (version, chain) pairs a requester keeps a ref, to match a coverage's pin
 RetainFactor         2        a retained bucket lives at most 2 x its window after its roll-up (§11.14)
-EndedIdLife          Search.CursorTimeout: how long an indexer remembers the id of a search it ended
-ReadPathCount, ReadByteCount   64 paths and 32 MiB a read (§11.9)
+CursorTimeout        10 min   also how long an indexer remembers the id of a search it ended
+the evs read limits  64 paths and 32 MiB a read (§11.9), read from the evs client's settings
 ```
 
-Settings, all in `SidecarSearchSettings` with their defaults in `DefaultSidecarSettings()`. The first block is landed (settings.go); the second is new:
+The rest. The first block is landed (settings.go); the second is new:
 
 ```text
 RemoteTimeout        3 s, 5 s metered     a leg's first page, its Hello included; and each later page
@@ -4809,7 +4823,9 @@ RemoteSearchCount 4, RemoteQueueCount 16, RemoteQueueTimeout 1 s, RemoteCpuPerMi
 RemoteCursorCount 64, RemoteRequesterRate 30 a minute burst 10, CursorTimeout 10 min, PageCpu 2 s,
 PageCandidateCount 1,000, TooBroadCandidateCount 20,000, HintCoalesce 1 min, ServedRecordTimeout 30 d
 
-RemoteHedgeDelay     1 s, 1.5 s metered   when a second own indexer is asked beside a silent first (7.9)
+RemoteOwnAskCount    2                    the own indexers a search asks at once, which are the own pairs the
+                                          foreground keeps warm (QD-707)
+RemoteOtherWarmCount 1                    other members' indexers kept warm beside them, in mode on (7.2.3)
 RemoteSkipTimeout    2 min                a failed indexer is not asked (D-SDK-27)
 RemoteOnlineTimeout  10 min               how long a HelloResult, Pong or page keeps an indexer online, and
                                           the first own choice sticky
@@ -4879,7 +4895,7 @@ App hosts only. A remote-mode Sidecar and a browser Worker never ask (§18.7). A
 
 ```text
 todo          waiting for the plan
-asking        named in a request whose page 0 has not come: to one indexer, or after a hedge to two own ones
+asking        named in a request whose page 0 has not come: to one indexer, or to the two warm own ones
 served(d)     d's coverage served it; the later pages of that leg carry its hits
 fallback(r)   no indexer is asked for it now, for reason r: the download (7.2.4). It returns to todo when a
               notice it waits on is answered, when the config state or the mode moves, and when an indexer
@@ -4891,21 +4907,26 @@ fallback(r)   no indexer is asked for it now, for reason r: the download (7.2.4)
 ```text
 assign(search σ, the repos in todo):
   S = the newest verified config state, read now
+  W = the warm own set the asker last named (below), less any member S no longer lets answer p
   for each R in todo, in the scope's order:
       own(R)   = [d : eligible_S(d, R, p) by E1 to E6, and by E7 where a Hello of the pair stands, and
                   own(d, p) and usable(d, R)]                                          sorted by ownKey
       other(R) = [the same with not own(d, p)]                                         sorted by otherKey
       if the mode is off:                        fallback(R, off)
-      else if own(R) is not empty:               target(R) = own(R)[0]
+      else if own(R) is not empty:
+            both = [d in own(R) : d in W]
+            if both is not empty:                targets(R) = both: one or two, asked at once (QD-707)
+            else:                                targets(R) = [own(R)[0]]: an own indexer outside W, alone
       else if the mode is on and other(R) is not empty:
             d = other(R)[0]; m = d's notice member
-            if ack[m] is allowed:                target(R) = d
+            if ack[m] is allowed:                targets(R) = [d]
             else:                                fallback(R, notice): R waits on the notice for m, naming
                                                  d; nothing is sent, and the phone searches it itself
       else:                                      fallback(R, the reason of the last indexer tried, else none)
   the repos of one target go in one request, in the scope's order; past 64, in a second request, its own
   leg. An indexer holds two cursors a requester (§11.14's limits row), so a target takes at most two
-  requests of a search: the repos past 128 take their next choice, as if that indexer were not usable
+  requests of a search: the repos past 128 take their next choice, as if that indexer were not usable.
+  Every request of one run of the plan is built from the one reading of S and sent in the same step
 
 usable(d, R)  = d not in tried_σ(R), and now >= skip_until[d], distrust_until[d] and refused_until[d, R],
                 and d not dropped, and one more request to d is inside RemoteRequesterRate by p's own count
@@ -4918,13 +4939,20 @@ H(a, b)       = the first 8 bytes, as a big-endian integer, of SHA-256("UR searc
                 a and b the 16 raw id bytes; ascending
 ```
 
+**Two at once, and only two.** A repo both warm own indexers may answer is named to both, in two requests sent together, and the first page 0 to serve it wins it (7.2.4). A repo one of them may answer goes to that one. An own indexer outside W is asked only when neither warm one can be, because both failed in this search, are skipped, or do not read the repo; it is asked alone, and its pair opens at the search as a failover's does (owner decision 191). Nothing else is ever asked beside another indexer: not a third own one, and never another member's.
+
 `otherKey` is the sticky rule. The device that last served this member's team repos stays first for all of them until it fails, so a member's queries over a set of repos reach one other device (§11.14's order row); with no memory, every device of one member starts at the same device, by H over the member's id. A device that ranks lower takes over only on a failure, and then stays.
 
 **The notice** is §18.4's, once per notice member. `Sidecar.AcknowledgeSearchIndexer(memberId, allow)` records the answer: allow sets `ack[m]`, and the repos waiting on m return to `todo`; refuse sets the mode to own, which ends every leg of σ to an indexer that is not own (nothing more is asked of it, and a reply still in flight is dropped), and their repos return to `todo` to find an own indexer or fall back. A nil member clears every answer. A repo waiting on a notice is planned again whenever the config state or the mode moves, so it never waits on a device that has since been revoked.
 
-**Bit 1 and the warm pairs.** `Subprotocol.SetFeatures(features, asksSearch)` is given `asksSearch(peer)` = the mode is not off, and peer is an indexer that E1 to E6 let answer p for some repo p reads, own or with its notice member's answer allowed. It is recomputed from the state on each call, so a revoked indexer loses the bit at once. At each foreground (`SetSearchForeground(true)`), and when the mode, an answer or the config's indexers change while in the foreground, the asker names the warm pairs: the first own indexer by `ownKey` over every repo p reads, and, in mode on, the first other member's indexer by `otherKey` whose notice is answered, when some repo p reads has no eligible own indexer. §18.7 has the second "kept alike". The landed `Subprotocol.MarkSearchPeer` keeps one pair; PROTO-M10-06 widens it to two (7.7). Each warm pair costs C19's floor a window while the app is in the foreground (7.4).
+**Bit 1 and the warm pairs.** `Subprotocol.SetFeatures(features, asksSearch)` is given `asksSearch(peer)` = the mode is not off, and peer is an indexer that E1 to E6 let answer p for some repo p reads, own or with its notice member's answer allowed. It is recomputed from the state on each call, so a revoked indexer loses the bit at once. At each foreground (`SetSearchForeground(true)`), and when the mode, an answer or the config's indexers change while in the foreground, the asker names the warm pairs, at most three:
 
-#### 7.2.4 Asking: legs, the hedge and failover
+- **the warm own set W**: the first `RemoteOwnAskCount` (2) by `ownKey` of the own indexers that E1 to E6 let answer p for some repo p reads. These are the two a search asks at once (QD-707), so no contract opens at a search on either;
+- **one other member's** (`RemoteOtherWarmCount`, 1): in mode on, the first other member's indexer by `otherKey` whose notice is answered, when some repo p reads has no eligible own indexer. This is the pair this section kept as its second before QD-707, under the same condition; it is now a third beside two own ones, because the two own pairs are QD-707's and the repos only another member's device can answer still ride a contract that opened at the foreground, not at the search (owner decision 188).
+
+A device with one own indexer names one own pair, as before. W is kept in memory with the time it was named, and the plan asks at once only its members, so that between two foregrounds a search never asks two own indexers of which one is cold. The landed `Subprotocol.MarkSearchPeer` keeps one pair; PROTO-M10-06 widens it to three (7.7). Each warm pair costs C19's floor a window while the app is in the foreground (7.4).
+
+#### 7.2.4 Asking: legs, the two own legs and failover
 
 A leg is one search_id toward one indexer. Its request is built by Z5 (11.2.9) and sent with `Subprotocol.Call`, which runs a bit-1 Hello first when the pair's session is not live (rpc_marked_pair.go, landed), so a leg to a pair that is not warm opens that pair's window at the search, as owner decision 191 accepts.
 
@@ -4938,7 +4966,7 @@ a leg's states
                of it and a reply still in flight is dropped. No Cancel is ever sent (§11.14)
 
 page 0 goes out: steps 1, scope 2, the query as typed, the leg's repos, since, until, filters, fuzzy;
-  supersedes = a cursor p still holds at d that it no longer wants (a closed stream's, a hedge's loser, the
+  supersedes = a cursor p still holds at d that it no longer wants (a closed stream's, a leg's that lost, the
   leg this one reopens), the oldest first; else, when this would be a third open search at d, the older of
   the two; else 0
 
@@ -4951,12 +4979,14 @@ page 0 arrives, status OK, PARTIAL or TOO_BROAD:
   the leg with no row, fail the leg (below):
       SERVED_TEXT, SERVED_INDEX   if R is still asking: R is served by this leg; served[d][R] = now; the
                                   row's pin goes to the pin check (below). If another leg already serves R
-                                  (the hedge's other leg won it): this leg's hits of R are dropped
+                                  (the other own leg won it): this leg's hits of R are dropped, on this
+                                  page and every later one
       a refusal                   refused_until[d, R] = now + RemoteRefusedTimeout; unless another leg still
                                   asks for R, R returns to todo
   a leg that serves no repo is ended: abandoned
-  the hits go to the merge (7.2.6), each checked first: its repo is one this leg serves, else it is dropped
-  and counts as a mismatch against d
+  the hits go to the merge (7.2.6), each checked first: its repo is one this leg serves, else it is dropped;
+  a hit of a repo this leg's coverage did not serve counts as a mismatch against d, and a hit of a repo it
+  served and lost to the other own leg does not
 
 a later page arrives: its hits to the merge, the span moves; complete: done
 
@@ -4976,15 +5006,15 @@ the leg fails when
                                     is ended; each repo it was asking or serving returns to todo, with d in
                                     tried_σ(R), unless another leg still asks for it; the plan runs
 
-the hedge, for a leg to an own indexer that the plan chose (not itself a hedge):
-  at RemoteHedgeDelay from its start, if it still waits for page 0:
-      S = the config state now; e = the first by ownKey of the own indexers, other than d, that are
-      eligible_S and usable for at least one repo of the leg
-      if there is one: a second leg, to e, for those repos, e joining tried_σ of each
-  the first page 0 that serves a repo wins that repo. The loser's cursor is left to idle out or to be
-  superseded by p's next request at that indexer; it counts as one of p's two open searches there. An
-  indexer that answered and lost a repo did not fail it: it leaves tried_σ of that repo, and is asked
-  again, under a new search_id, if the winner fails later
+two own legs that name one repo (the plan sent both, to the warm own set):
+  each has its own search_id, its own deadline and its own failure; neither waits for the other
+  the first page 0 that serves a repo wins that repo, and the other leg's reply is dropped for it, not
+  merged. The loser's cursor is left to idle out or to be superseded by p's next request at that
+  indexer; it counts as one of p's two open searches there. A leg that won some of its repos goes on for
+  those. An indexer that answered and lost a repo did not fail it: it leaves tried_σ of that repo, and is
+  asked again, under a new search_id, if the winner fails later
+  one of the two fails while the other still asks for the repo: the repo stays asking, on the other
+  both fail: the repo returns to todo with both in tried_σ, and the plan asks the next own indexer, alone
 
 reopen, on CURSOR_EXPIRED for page n >= 1, once a search:
   a new search_id, supersedes = the old one, page 0, the leg's repos that are still served by it, and
@@ -5004,7 +5034,7 @@ a local Cancel, or the stream closing: every leg is ended. Nothing is sent.
 
 **Fallback.** A repo that reaches `fallback` goes to `SearchMore` (SEARCH-M10-20): owner decision 155's download, under §18.4's metered rule and caps. A repo waiting on a notice is in the fallback too (§11.14's failover row), and leaves it for the plan when the answer allows; what its download had fetched stays cached. Its `FallbackReason` (§18.5) is: `off`, the mode; `notice`, an unanswered notice; `none`, no indexer is eligible for it, or its filters pass 768 B; else the reason the last indexer tried for it failed: `offline` (no HelloResult or Pong, or the session lost), `busy` (RESOURCE_EXHAUSTED), `refused` (a coverage refusal, PERMISSION_DENIED, UNIMPLEMENTED, INVALID, UNSUPPORTED_VERSION), `unreachable` (anything else). The stream's `Remote` state is: `off` in mode off; `asking` while any leg waits for page 0; else `notice` when a repo waits on a notice and none is served; `answered` when every repo of the scope is served; `partial` when some are; `fallback` when none is and some repo had an eligible indexer; and empty when no repo had one. `RemoteBy` is the indexer serving the most repos, or the one a notice names.
 
-**What an asker never does.** It sends nothing for a keystroke. It asks a page past 0 only when the app asks for more, so it spends no exchange the person did not ask for (C19's promise is five a window, 7.4). It never sends a query to two other members' devices for one repo at once, and never hedges to one. It never sends to an indexer by a list made before the config state it holds now.
+**What an asker never does.** It sends nothing for a keystroke. It asks a page past 0 only when the app asks for more, so it spends no exchange the person did not ask for (C19's promise is five a window, 7.4). It never sends a query to two other members' devices for one repo at once, never asks another member's device beside any other, and never asks more than two own indexers at once. It never sends to an indexer by a list made before the config state it holds now.
 
 #### 7.2.5 Serving: the handler, the cursor and a page
 
@@ -5230,7 +5260,8 @@ A snapshot is therefore never a mix. Its bucket files are the files one version 
 §18.4's remote row: tap to first page, pre-warmed, on a warm indexer cache of five years of mail at 100 a day, p50 300 ms and p95 1 s on Wi-Fi, 500 ms and 1.5 s on LTE. The path, with what each step may take for the p50 to hold:
 
 ```text
-phone   build and seal one 4,016 B request (Z5), one envelope                        <= 5 ms
+phone   build and seal one 4,016 B request (Z5), one envelope, for each of the two   <= 10 ms
+        warm own indexers
 up      one envelope through the pair's relays, the contract and session standing    half a round trip
 indexer steps 1 to 6: no I/O but the config state and the cursor table               <= 2 ms
         candidates: the buckets' lists for the query, and all's youngest shard       <= 10 ms warm (§18.4's
@@ -5238,12 +5269,12 @@ indexer steps 1 to 6: no I/O but the config state and the cursor table          
         verification: text read, extraction and normalization (section 11), match;   <= 60 ms for 20 hits at
         11.4 measured 1.7 ms for a 49 KiB message                                    a precise query
         Z6: at most 21 marshals of 16 KiB, and the pad                               <= 2 ms
-down    five envelopes, 16,596 B                                                     half a round trip
+down    five envelopes, 16,596 B, from each; the first page is the faster leg's       half a round trip
 phone   Z8 (one parse, one marshal), the pin check, the merge's probes of the       <= 15 ms
         version table for 20 keys through its 256 KiB of pages
 ```
 
-That is about 95 ms outside the network, so the p50 holds with a relayed round trip of up to 200 ms on Wi-Fi and 400 ms on LTE. The p95, 1 s on Wi-Fi, has room for a round trip of 500 ms and a verification pass of 400 ms, seven times the median's. A query whose candidates mostly fail verification spends PageCpu, 2 s, and answers PARTIAL: the targets are stated over FS-76's query set, and §22.8's remote row measures them. Three rules of this section exist for the time: the keepalive'd warm pairs of 7.2.3, without which the first page pays a Hello and a contract (500 ms to 1.5 s, §18.4's cold figure); the candidate order's use of each file's times, so that page 0 of a mailbox search reads no all shard; and the indexer's snapshot being the one it already holds, with no sync before answering. A failed first indexer costs RemoteHedgeDelay plus a cold start where a second own indexer exists, and RemoteTimeout plus a cold start otherwise (7.9's first question).
+That is about 100 ms outside the network, so the p50 holds with a relayed round trip of up to 200 ms on Wi-Fi and 400 ms on LTE. The p95, 1 s on Wi-Fi, has room for a round trip of 500 ms and a verification pass of 400 ms, seven times the median's. A query whose candidates mostly fail verification spends PageCpu, 2 s, and answers PARTIAL: the targets are stated over FS-76's query set, and §22.8's remote row measures them. Three rules of this section exist for the time: the keepalive'd warm pairs of 7.2.3, without which the first page pays a Hello and a contract (500 ms to 1.5 s, §18.4's cold figure); the candidate order's use of each file's times, so that page 0 of a mailbox search reads no all shard; and the indexer's snapshot being the one it already holds, with no sync before answering. With two warm own indexers the first page is the faster of two legs, so a slow or dead one adds nothing, and the tail the p95 sees is the better of two round trips and two verification passes (QD-707). With one own indexer a failed first page costs RemoteTimeout and then a cold start, unless the next choice is the other member's warm pair. The second leg costs the phone one more request to seal and one more reply to check, off the first page's path, and the second indexer a page's compute that is dropped.
 
 #### 7.2.9 Fences, in order
 
@@ -5281,9 +5312,9 @@ the bridge                all usable only while every roll-up between the    a s
                           it
 ```
 
-On the asker every send runs in one order: read the config state; evaluate eligibility, the mode and the notice; build the request; send. On the indexer every page runs 7.2.5's seven steps in order. In a round the manifest is written after the version table and before any file is retired.
+On the asker every send runs in one order: read the config state; evaluate eligibility, the mode and the notice; build the request; send. The two requests of a search to its warm own indexers are built from one such reading and sent together. On the indexer every page runs 7.2.5's seven steps in order. In a round the manifest is written after the version table and before any file is retired.
 
-**Wire and stored formats.** `search.proto` keeps every message, field, number and size; three of its comments change (7.8). No new Hello bit, message type or error code. Nothing server-visible changes: no column, key, object family or proto field (I-18), and no index file's format. connect sees what §6.10 says of a marked pair, and a second warm pair is one more such pair. What is new is local to a device: the search manifest and the plan part in §5.9's cache, two rows in `search.state`, and the settings of 7.2.1.
+**Wire and stored formats.** `search.proto` keeps every message, field, number and size; three of its comments change (7.8). No new Hello bit, message type or error code. Nothing server-visible changes: no column, key, object family or proto field (I-18), and no index file's format. connect sees what §6.10 says of a marked pair, and a second or third warm pair is one more such pair. What is new is local to a device: the search manifest and the plan part in §5.9's cache, two rows in `search.state`, and the settings of 7.2.1.
 
 ### 7.3 Invariants and why they hold
 
@@ -5291,17 +5322,20 @@ On the asker every send runs in one order: read the config state; evaluate eligi
 I1 Reach           a request naming repo R is sent to indexer d only while eligible(d, R, p) holds in p's
                    newest verified state (E1 to E7), and d is own, or the mode is on and d's notice member's
                    answer is allowed. An owner-bound repo is named only to a consented device of its owner.
-                   why: the plan and the hedge read the config state, the mode and the answers in the step
-                   that builds the request (7.2.3, 7.2.4); nothing is sent from an earlier reading. E5's
-                   first line is in the predicate itself.
-I2 One at a time   a repo is asked of at most one other member's device at once, and two legs name one repo
-                   only when both go to own indexers.
-                   why: the plan gives a repo one target; the only second leg is the hedge, whose target is
-                   drawn from own indexers; a failed leg ends before its repo returns to the plan.
+                   why: the plan reads the config state, the mode and the answers in the step that builds
+                   its requests (7.2.3, 7.2.4), both of a pair from one reading; nothing is sent from an
+                   earlier reading. E5's first line is in the predicate itself.
+I2 One at a time   a repo is asked of at most one other member's device at once; two legs name one repo
+                   only when both go to own indexers, and those are the warm two; never more than two.
+                   A repo is served by one leg.
+                   why: the plan gives a repo the members of the warm own set that can be asked, at most
+                   two, or else one target; the first page 0 to serve a repo takes it and a later one is
+                   dropped for it; a failed leg ends before its repo returns to the plan.
 I3 Settles         every repo of a search ends served, waiting on a notice, or in the fallback.
                    why: a leg waits at most RemoteTimeout; an indexer that fails a repo stays in tried for
-                   the search, and the one way out of tried, answering and losing a hedge, happens once a
-                   leg; so the plan runs finitely often, and a repo with nothing left to try falls back.
+                   the search, and the one way out of tried, answering and losing the repo to the other
+                   own leg, happens once a leg; so the plan runs finitely often, and a repo with nothing
+                   left to try falls back.
 I4 Page exact      every candidate of a cursor's text-served repos with a time above checked_through_ms, and
                    not erased since, is in a page the requester took exactly when its text matches.
                    why: the order is total and fixed for a cursor (the snapshot and the text view are held
@@ -5346,7 +5380,7 @@ S5 Converges       once evs is quiet, a device that keeps syncing reaches the he
 
 **The models.** Four small models, one a concern, each with a `Twin` constant that breaks one rule. `run-remote.sh <track>` runs every configuration through `.stack/tools/tlc` and prints a verdict line a run.
 
-`RemoteAsk.tla` is one search on p: three repos (p's vault, a vault member m2 shared with p, a team repo) and four indexers (two own, m2's, m3's at network scope), each with a member, scopes and the repos it reads. Eligibility is 7.2.2's predicate over those. An indexer serves any part of what it is asked, or does not answer, or is revoked while the search runs; the person answers a notice either way. It leaves out later pages, sizes, C19 and the rendezvous hash, for which `Rank` stands. The twin `LandedRule` puts `SearchIndexersFor` as landed in the predicate's place. Its liveness configuration runs on a smaller network: the vault, the team repo, the two own indexers and one other member's.
+`RemoteAsk.tla` is one search on p: three repos (p's vault, a vault member m2 shared with p, a team repo) and four indexers (two own, m2's, m3's at network scope), each with a member, scopes and the repos it reads. Eligibility is 7.2.2's predicate over those. The plan is one step, `Assign`: every waiting repo that has someone to ask is asked then, the warm own set's members together. An indexer serves any part of what it is asked, or does not answer, or is revoked while the search runs; the person answers a notice either way. It leaves out later pages, sizes, C19 and the foreground that names the warm pairs (`WarmOwn` stands for the set it named), and the rendezvous hash, for which `Rank` stands. The twin `LandedRule` puts `SearchIndexersFor` as landed in the predicate's place. Its liveness configuration runs on a smaller network: the vault, the team repo, the two own indexers and one other member's. `RemoteAsk-Three` adds a third own indexer to that network, so that "the first two" has something to leave out, and `AskAllOwn` is its twin.
 
 `RemoteCursor.tla` is the pages of one search between a requester and an indexer: three candidates, two of one time, any subset of which matches; pages of at most one hit that examine any number of candidates; requests and replies lost and repeated; one erasure; one reopen.
 
@@ -5360,12 +5394,17 @@ Runs, TLC at the owner's jar (master d8fb231), breadth-first over every reachabl
 configuration                          bounds                                             result
                                                                           distinct states  depth  time         disk
 RemoteAsk                              3 repos, 2 own indexers, 2 other members', every mode
-                                       pass: Reach, OwnerBound, OneOther,
-                                       ServedByLive, OwnModeQuiet                1,064,474     25  41 s         114 MB
+                                       pass: Reach, OwnerBound, OneOther, TwoAtOnce,
+                                       WarmFirst, OneServes, ServedByLive,
+                                       OwnModeQuiet                                595,488     24  1 min 0 s     73 MB
+RemoteAsk-Three                        2 repos, 3 own indexers, 1 other member's
+                                       pass: the eight                             276,850     20  23 s          33 MB
 RemoteAsk-Live                         2 repos, 2 own indexers, 1 other member's, under LiveSpec's fairness
-                                       pass: the five, and the property Settles     28,724     18  7 s            3 MB
+                                       pass: the eight, and the property Settles    16,452     17  9 s            2 MB
 RemoteAskTwin-PlanOnce                 Reach violated, a 3-state trace
-RemoteAskTwin-HedgeOthers              OneOther violated, a 3-state trace
+RemoteAskTwin-PairOthers               OneOther violated, a 3-state trace
+RemoteAskTwin-AskAllOwn                TwoAtOnce violated, a 2-state trace
+RemoteAskTwin-KeepBoth                 OneServes violated, a 4-state trace
 RemoteAskTwin-NoNotice                 Reach violated, a 2-state trace
 RemoteAskTwin-LandedRule               OwnerBound violated, a 2-state trace
 RemoteAskTwin-KeepOnOwn                OwnModeQuiet violated, an 8-state trace
@@ -5399,15 +5438,17 @@ IndexSyncTwin-RetainStale              NoGhost violated, a 6-state trace
 IndexSyncTwin-AllAhead                 AllBehind violated, a 5-state trace
 ```
 
-Each twin run took 10 s or less. The traces are the failures 7.1 describes. `LandedRule`'s is one step: the asker's own indexer, which reads the shared vault, is named for it. `PlanOnce`'s is a revocation between the search's start and its first send. `StaleAllSearched`'s is 7.1's B: a deletion synced, its bucket rolled up and retained, the retained bucket dropped, and all still searched. `RetainStale`'s is a version written into the bucket after the device's copy of it. `MixedPin`'s shortest trace is a removal and a re-creation in one head: the device syncing to the first push takes the head as the second left it, and shows at its pin a version that pin does not hold; 7.1's C is the same mix across two files. `ReopenSameId`'s is 7.1's E, step for step. `WatermarkPastHeld`'s is a first page that examined two matching candidates and returned one. Two rules of 7.2 came from writing these models: the ended set, without which `ReopenSameId`'s trace exists; and that a repo whose serving leg fails goes back to waiting on the hedge's other leg where that one still asks for it, which `ServedByLive` needs. `RemoteAsk` was run again after its hedge rule gained "an indexer that answered and lost may be asked again"; the figures are that run's.
+Each twin run took 20 s or less. The traces are the failures 7.1 describes. `LandedRule`'s is one step: the asker's own indexer, which reads the shared vault, is named for it. `PlanOnce`'s is a revocation between the search's start and its first send. `StaleAllSearched`'s is 7.1's B: a deletion synced, its bucket rolled up and retained, the retained bucket dropped, and all still searched. `RetainStale`'s is a version written into the bucket after the device's copy of it. `MixedPin`'s shortest trace is a removal and a re-creation in one head: the device syncing to the first push takes the head as the second left it, and shows at its pin a version that pin does not hold; 7.1's C is the same mix across two files. `ReopenSameId`'s is 7.1's E, step for step. `WatermarkPastHeld`'s is a first page that examined two matching candidates and returned one. Two rules of 7.2 came from writing these models: the ended set, without which `ReopenSameId`'s trace exists; and that a repo whose serving leg fails goes back to waiting on the other own leg where that one still asks for it, which `ServedByLive` needs. The `RemoteAsk` rows are the amendment's runs for QD-707, on 2026-11-11 at a load average over 100: the three design configurations with 14 workers, the twins with one, so each trace is a shortest one. `PairOthers`'s is a revocation of one own indexer and a plan that asks m2's device beside the other. `AskAllOwn`'s is the first plan, with three own indexers named for one repo. `KeepBoth`'s is two own indexers asked and both answering: without the drop, two legs serve one repo. The other three models are untouched and their rows stand.
 
 What the models do not show. They are bounded: a second roll-up, a third indexer of one member and a fourth page are not in them. They say nothing of bytes, of time but as order, or of the engines that produce candidates. I4 is checked for one repo; across repos the order is the same order with one more key. An indexer's restart, which loses its ended set, is not modelled: the requester's rule that page 0 is never repeated under one search_id covers it (7.2.4). M5's bound is arithmetic over §11.8's time check and is argued above, not modelled.
 
 ### 7.4 Cost
 
-**Wire.** A request is 4,016 B, one envelope, 4,043 B as connect counts it; a reply at one step is 16,384 B in five envelopes, 16,596 B (§6.10). An exchange is 20.2 KiB both ways whatever it carries. C19's floor covers five exchanges a window and pair (§6.10): a "search more" that reads three pages spends three; a hedge spends one on the second pair; a retry, a reopen and a request split past 64 repos spend one each. The sixth in a window moves that window's report from F to F plus a 128 KiB step, which is why the asker sends a later page only when the app asks, resumes a reopened search below what it has, and remembers a refusal for RemoteRefusedTimeout. Page 0 with 64 repos spends up to 7.1 KiB of its step on coverage rows (at most 113 B a row), leaving room for 2 to 20 hits; a hit is at most 3.2 KiB (Z4) and typically 400 B.
+**Wire.** A request is 4,016 B, one envelope, 4,043 B as connect counts it; a reply at one step is 16,384 B in five envelopes, 16,596 B (§6.10). An exchange is 20.2 KiB both ways whatever it carries. C19's floor covers five exchanges a window and pair (§6.10): a "search more" that reads three pages spends three on the winner's pair and one, its page 0, on the other own pair (QD-707); a retry, a reopen and a request split past 64 repos spend one each. So every search costs two exchanges where it cost one, 40.4 KiB for its first page, and each pair's five still cover five searches a window. The sixth in a window moves that window's report from F to F plus a 128 KiB step, which is why the asker sends a later page only when the app asks, resumes a reopened search below what it has, and remembers a refusal for RemoteRefusedTimeout. Page 0 with 64 repos spends up to 7.1 KiB of its step on coverage rows (at most 113 B a row), leaving room for 2 to 20 hits; a hit is at most 3.2 KiB (Z4) and typically 400 B.
 
-**The warm pairs.** Each costs a window's floor, 2F = 512 KiB of transfer balance, per 55 min in the foreground, and one Ping and Pong a minute (§6.10, §20.6). One own pair is §18.7's; the second, another member's, exists only in mode on, after its notice, where some repo has no own indexer.
+**The warm pairs.** Each costs a window's floor, 2F = 512 KiB of transfer balance, per 55 min in the foreground, and one Ping and Pong a minute (§6.10, §20.6). A device with one own indexer keeps one pair, as §18.7 has it. With two or more own indexers it keeps two (QD-707): 512 KiB an hour more. The third, another member's, exists only in mode on, after its notice, where some repo has no own indexer: 512 KiB an hour more again, where before QD-707 it was the second. So the most a foreground hour costs in floors is about 1.5 MiB of transfer balance, and a search-indexing desktop pays the same floor for each phone pair it holds.
+
+**The second own leg.** Every search over a repo both warm own indexers read runs page 0 twice: two indexers' candidate passes and verifications, inside `PageCpu` each, and one reply of 16,384 B that is checked and dropped. The dropped leg's cursor stays at its indexer until `CursorTimeout` or until p's next request there supersedes it, 24 KiB (below).
 
 **The asker.** Per search: the claims table at 56 B a claim, at most 20,000 (1.1 MiB), inside §18.4's 4 MiB a search; one reply being parsed, 16 KiB, and its copy for Z8 (d). Per indexer: under 200 B of health state; `search.state` grows by 24 B a served repo and indexer, kept 24 h. Per ref followed: the pin ring, 64 x 40 B. No storage is written by a search but `served` and `distrust_until`.
 
@@ -5421,8 +5462,13 @@ What the models do not show. They are bounded: a second roll-up, a third indexer
 
 ```text
 failure                          what happens                                  recovery
-the first own indexer is slow    the hedge asks the second at                  the first reply wins; the other
-                                 RemoteHedgeDelay                              cursor idles out
+one of the two warm own          the other was asked in the same step: its     the first page 0 wins each repo;
+indexers is slow or dead         page is the first page, with no delay         the slower reply is dropped for
+                                                                               those repos and its cursor idles
+                                                                               out; a dead one is skipped
+both warm own indexers fail      each leg ends at its own RemoteTimeout        the next own indexer, alone and
+                                                                               cold; then another member's;
+                                                                               then the download
 an indexer is offline            no page by RemoteTimeout: skipped             the next eligible one, then the
                                  RemoteSkipTimeout                             download; asked again when a
                                                                                Pong or HelloResult shows it
@@ -5494,13 +5540,21 @@ search_remote_order_test.go
           TestRendezvousVector (H over fixed ids, bytes in the test); TestOwnOrderPutsTheLastAnswerFirst;
           TestAnotherMembersIndexerIsSticky; TestTwoDevicesOfAMemberStartAtOneIndexer
 search_remote_ask_test.go
-          TestEligibilityIsReadAtEachSend (a revocation between the plan and the hedge: PlanOnce);
-          TestTheHedgeGoesOnlyToAnOwnIndexer; TestTheFirstPageWinsARepo; TestARefusedRepoGoesOn;
+          TestEligibilityIsReadAtEachSend (a revocation between two runs of the plan: PlanOnce);
+          TestTheTwoWarmOwnIndexersAreAskedAtOnce (both requests built from one reading, sent before either
+          reply); TestNoOtherMembersIndexerIsAskedBesideAnother (PairOthers); TestAThirdOwnIndexerIsAskedOnlyAlone
+          (AskAllOwn); TestTheFirstPageWinsARepo; TestTheLosingReplyIsDropped (KeepBoth: its hits of a won repo
+          never reach the merge, and count as no mismatch); TestALoserIsAskedAgainWhenTheWinnerFails;
+          TestARefusedRepoGoesOn;
           TestNoRequestBeforeTheNotice; TestOnlyMyDevicesEndsOtherLegs (KeepOnOwn);
           TestALostReplyIsAskedOnceMore; TestPageZeroIsNeverRepeated; TestACursorExpiredReopensOnceAndResumes;
           TestNoPageIsAskedUnasked;
           TestAConfigChangeEndsALeg; TestAnIndexerSeenAgainIsAskedOnce; TestFallbackReasons;
           TestRemoteStates; TestAThirdSearchSupersedesTheOldest; TestNoCancelIsSent
+search_remote_warm_test.go
+          TestTheForegroundNamesTwoOwnPairs; TestOneOwnIndexerNamesOne; TestAnotherMembersPairIsAThird (mode
+          on, its notice answered, a repo with no own indexer; none otherwise); TestTheWarmSetIsNamedAgainOnAConfigChange;
+          TestASearchAsksOnlyTheNamedWarmSetAtOnce
 search_remote_cursor_test.go
           TestARepeatIsByteEqual; TestARepeatedPageNeverAdvances (RepeatAdvances); TestAnEndedIdStaysEnded
           (ReopenSameId); TestAnErasureEndsTheCursorAndItsReply (KeepReplyAcrossErase);
@@ -5530,15 +5584,15 @@ search_sync_test.go
           TestACrashResumesFromThePlan (killed at each barrier); TestAnErasureEndsOpenSnapshots
 ```
 
-Barriers (`testHookBarrier`), keyed `<repo>/<ref>`: `search.sync.replayed`, `.fetched` (a file), `.tables` (the version table merged), `.swapped`, `.retired`; `search.remote.asked` (a request built, before its send), `.hedged`, `.reply` (the plan's: a page stored, before its send), `.ended` (a cursor).
+Barriers (`testHookBarrier`), keyed `<repo>/<ref>`: `search.sync.replayed`, `.fetched` (a file), `.tables` (the version table merged), `.swapped`, `.retired`; `search.remote.asked` (a request built, before its send; once for each of a pair), `.reply` (the plan's: a page stored, before its send), `.ended` (a cursor).
 
-Schedule rows. FS-83 gains: the EvsShare'd vault asked only of its owner's indexer, never of the asker's own, which reads it too; a personal network's network-scope indexer answering its owner's mailbox; an indexer revoked between a search's start and its hedge, never asked; a hedge whose loser's reply is dropped; a search reopened after 10 min idle that pays one exchange and shows no hit twice; a late repeat of page 0 after an erasure answered CURSOR_EXPIRED; a possible match committed 30 min before the indexer's pinned push, in parts, not folded; a higher-version possible claim leaving a confirmed row a match; an omission at unequal pins raising nothing. FS-77 gains: a phone with a cached all, a roll-up that carried a deletion, and the retained bucket lost to an ERASE: the deleted message is in no search until all is fetched again. FS-74 gains: a reader syncing across a merge and a slot's reuse holds one version of the ref at every barrier. §22.8's remote row measures 7.2.8's steps apart: indexer compute for page 0, and the round trip.
+Schedule rows. FS-83 gains: the EvsShare'd vault asked only of its owner's indexer, never of the asker's own, which reads it too; a personal network's network-scope indexer answering its owner's mailbox; an indexer revoked before a search's plan runs again, never asked; two own indexers asked at once with no contract opening at the search on either pair, the slower one's reply dropped; one of the two killed before page 0, the first page arriving from the other with no added delay; a search reopened after 10 min idle that pays one exchange and shows no hit twice; a late repeat of page 0 after an erasure answered CURSOR_EXPIRED; a possible match committed 30 min before the indexer's pinned push, in parts, not folded; a higher-version possible claim leaving a confirmed row a match; an omission at unequal pins raising nothing. FS-77 gains: a phone with a cached all, a roll-up that carried a deletion, and the retained bucket lost to an ERASE: the deleted message is in no search until all is fetched again. FS-74 gains: a reader syncing across a merge and a slot's reuse holds one version of the ref at every barrier. §22.8's remote row measures 7.2.8's steps apart: indexer compute for page 0, and the round trip.
 
 Model twins on real code. Each twin of the four models is one of the unit tests above, named beside it in the lists.
 
 ### 7.7 Implementation notes, task by task
 
-Order: TEAM-M10-02 first, since both ends of a search call its predicate. SEARCH-M10-19 next, since the server and the engine read its snapshot. SEARCH-M10-32 and SEARCH-M10-33 then in either order; SEARCH-M10-34 after SEARCH-M10-33. PROTO-M10-06 at any time: until it lands SEARCH-M10-33 names one warm pair. The SEARCH tasks are the data lane's; the two new tasks change drafted code in the core lane's files and are the core lane's. Entries are in `.stack/plan/proposals/details-7-tasks.md`.
+Order: TEAM-M10-02 first, since both ends of a search call its predicate. SEARCH-M10-19 next, since the server and the engine read its snapshot. SEARCH-M10-32 and SEARCH-M10-33 then in either order; SEARCH-M10-34 after SEARCH-M10-33. PROTO-M10-06 before SEARCH-M10-33 since QD-707: the two-at-once ask rests on both own pairs being warm, so SEARCH-M10-33 needs `MarkSearchPeers`. The SEARCH tasks are the data lane's; the two new tasks change drafted code in the core lane's files and are the core lane's. Entries are in `.stack/plan/proposals/details-7-tasks.md`, and the lines QD-707 changes in `.stack/plan/proposals/details-7-qd707-tasks.md`.
 
 **The landed code that changes**, and the task that changes it:
 
@@ -5551,11 +5605,12 @@ config_indexer.go          SearchIndexersFor takes 7.2.2's E1 to E6. For an owne
                            read) then applies to team repos only, and the landed network clause gains the
                            one-member case. Indexers() also leaves out a subject an active Suspend names,
                            and an ephemeral searcher gets none
-rpc_marked_pair.go         MarkSearchPeer(clientId) becomes MarkSearchPeers(clientIds []Id), at most two:
-  (PROTO-M10-04, drafted;  the keepalive, the session rule and featuresToward run for each; HeadCheck's
-  PROTO-M10-06, new)       round counts the first (the own one); an empty list names none
-settings.go                7.2.1's second block, with defaults, RemoteHedgeDelay as [2]time.Duration like
-  (SEARCH-M10-19, -33)     RemoteTimeout: each task adds the fields it reads
+rpc_marked_pair.go         MarkSearchPeer(clientId) becomes MarkSearchPeers(clientIds []Id), at most
+  (PROTO-M10-04, drafted;  SidecarProtocolSettings.MarkedPeerMaxCount (3, new, in envelope_settings.go): the
+  PROTO-M10-06, new)       own ones first. The keepalive, the session rule and featuresToward run for each;
+                           HeadCheck's round counts the first; an empty list names none
+settings.go                7.2.1's settings, with defaults; no RemoteHedgeDelay. Each task adds the fields
+  (SEARCH-M10-19, -33)     it reads: SEARCH-M10-33 RemoteOwnAskCount and RemoteOtherWarmCount among them
 state_search_derived.go    the closed list of parts gains SearchCachePartPlan ("plan"), a part of the ref
   (CORE-M10-01, drafted;   (SearchCacheRefPath)
   SEARCH-M10-19)
@@ -5564,13 +5619,13 @@ rpc_search.go              unchanged: searchHandler's size rules stand under 7.2
 
 **TEAM-M10-02, search eligibility to 7.2.2's predicate** (new; S; core lane). The first row above. Tests: 7.6's `TestEligibleTable` rows that the function decides, beside TEAM-M10-01's own. Trap: the indexer's side passes the requester as searcher and checks that its own id is in the answer, so E1 and E2 are evaluated for itself by the same code.
 
-**PROTO-M10-06, two warm pairs** (new; S; core lane). The second row. Tests: PROTO-M10-04's lifecycle cases for two peers; FS-125 is unchanged, since each pair's windows are its own.
+**PROTO-M10-06, the warm pairs: two own and one other member's** (new; S; core lane; amended for QD-707). The second row. The keepalive holds every named pair: its own window, its own Ping grid from that window's start, its own session rule. Tests: PROTO-M10-04's lifecycle cases for three peers, two of them own; FS-125 is unchanged, since each pair's windows are its own.
 
 **SEARCH-M10-19, the sync engine** (held; L; its Build is 7.2.7). `search_sync.go`: `SearchSync` with `Round`, `Trigger(reason)`, `Snapshot`, and the leading-edge coalescer; `search_manifest.go`: `SearchManifest` and `SearchSyncPlan`, sealed JSON as `state_search_cache.go`'s records are, format 1; `search_fetch.go`: step 4, its order and the `collected` restart; `search_retained.go`: step 5's three cases and usability. It calls, and does not rewrite: `SearchCache.PutRecord`, `PutDerived`, `SetRefVersion`, `RetainBucket`, `ApplyRolledThrough`, `DropRetained`, `SweepRetained`, `Evict`; `SearchVersionTable.Merge` (CORE-M10-02); `IndexReproducer` (SEARCH-M10-21) at step 3, behind an interface that is nil until that task lands, when every wanted file is fetched. What its plan entry gains: the manifest's fields; a/m, x and settings in the latest set; `time_min_ms` and `time_max_ms` a file, taken while `indexValidateFile` walks it; the plan part and resumption; the rule that a listing retains nothing; all swapped only at the latest set's pin; usability computed when a snapshot is taken, from the manifest's roll-ups between the two pins and the cache's retained list; bad files; `SyncRoundCount` and `SyncRetryInterval`; the pin ring. What leaves it: "a fetch answering collected rereads the head, drops what it fetched and takes the newest", which is now a restart of the round; and "until a/m's rolled_through_day covers it, an ERASE occurs in the repo or 2W days pass" keeps its three ends but each now also makes all unusable. Traps: write the manifest after the version table and before retiring a file; never fetch for a search, local or remote; the fetch order reads nothing a search set but the "most recently searched repos first" order of whole repos (FI-23); a phone keeps no latest set for the team directory; a file's two times count its tombstones too, so a deletion sorts where its push does. Tests: 7.6's `search_sync_test.go`.
 
 **SEARCH-M10-32, serving** (held; L; its Build is 7.2.2's verdict table and 7.2.5). `search_remote_serve.go`: `SearchRemoteServer.Handle` in 7.2.5's seven steps, `EndRepo(repo)` for the erasure hooks, the served record; `search_remote_cursor.go`: the per-requester table, the ended set, `page`, the watermark and `head(k)` for SEARCH-M10-31's `searchRemoteBuildReply`; `search_remote_eligible.go`: the verdict table over `SearchIndexersFor` and `SearchSyncSnapshot`. It needs from SEARCH-M10-26 one thing, stated here so that task builds it: an iterator over a set of snapshots that yields a query's candidates after a watermark, in 7.2.5's order, holding at most K, with each candidate's current-entry check done; and the engine's verification of one candidate against a text view. Until SEARCH-M10-26 lands the server is built against that interface and a fake. Step 2's rate, queue and CPU checks are CORE-M10-05's `SidecarRemoteBudget`, which the handler calls before it reads the body. What its plan entry gains: the order of the checks; the cursor table's seven rows; later pages re-authorized, a failure ending the cursor (K); the ended set; the candidate order across partitions, read by each file's two times; W' and the meaning of `checked_through_ms`, `phase` and `complete`; inclusive `since_ms` and `until_ms`; the coverage row's fields by served kind; row 7's bad-file rule. What leaves it: "a read revoked mid-cursor refuses that repo on the next page", which is now CURSOR_EXPIRED and a refusal in the reopened search's coverage. Traps: step 2 reads no byte of the body; a repeat takes no compute slot past step 4; the cursor holds the snapshot, so a swap never changes a cursor's order; counts are running totals; nothing but the served record is written, and it is written at page 0 only. Tests: 7.6's `search_remote_cursor_test.go` and `search_remote_serve_test.go`; FS-83's serving cases as planned.
 
-**SEARCH-M10-33, asking** (held; L; its Build is 7.2.3 and 7.2.4). `search_remote_order.go`: `assign`, the keys and H; `search_remote_ask.go`: `SearchRemoteClient.Ask`, the leg's states, the hedge, the reopen, fallback reasons and the `Remote` states; `search_remote_notice.go`: the answers and the mode; `search_remote_warm.go`: `asksSearch`, the warm pairs and `Sidecar.SetSearchForeground`. Needs gain TEAM-M10-02, and PROTO-M10-06 for the second warm pair. What its plan entry gains: eligibility read at every send; the hedge's delay and its one-leg rule; the first page winning a repo; the retry of a later page; the reopen with `until_ms`; the refused and served memories and where each lives; `otherKey`'s sticky rule over the scope; two warm pairs; the pin ring's check (the ring itself is SEARCH-M10-19's). Traps: hedge only among own indexers, and only from a leg the plan chose; a hedge's loser still counts as an open search at its indexer; a leg that serves no repo is ended, not kept; page 0 is never sent twice under one search_id; never ask a page the app did not ask for; eligibility, the mode and the answers are read in the step that builds the request, with the barrier `search.remote.asked` after them. Tests: 7.6's `search_remote_order_test.go` and `search_remote_ask_test.go`; FS-83's eligibility, notice and failover cases; FS-125's lifecycle cases for two warm pairs.
+**SEARCH-M10-33, asking** (held; L; its Build is 7.2.3 and 7.2.4). `search_remote_order.go`: `assign`, the keys and H; `search_remote_ask.go`: `SearchRemoteClient.Ask`, the leg's states, the two own legs and the first-page rule, the reopen, fallback reasons and the `Remote` states; `search_remote_notice.go`: the answers and the mode; `search_remote_warm.go`: `asksSearch`, the warm pairs and `Sidecar.SetSearchForeground`. Needs gain TEAM-M10-02 and PROTO-M10-06, which the ask now rests on. What its plan entry gains: eligibility read at every send; the warm own set, named at each foreground, whose members a search asks at once (QD-707); an own indexer outside it asked only alone; the first page winning a repo and the other reply dropped; the retry of a later page; the reopen with `until_ms`; the refused and served memories and where each lives; `otherKey`'s sticky rule over the scope; up to three warm pairs, two own and one other member's; the pin ring's check (the ring itself is SEARCH-M10-19's). Traps: two at once only for the warm own set, never a third own indexer and never another member's beside anything; both requests from one reading of the config state; no timer between them, and no `RemoteHedgeDelay`; the loser's hits of a repo it lost are dropped on every page and are no mismatch; the loser still counts as an open search at its indexer; a leg that serves no repo is ended, not kept; page 0 is never sent twice under one search_id; never ask a page the app did not ask for; eligibility, the mode and the answers are read in the step that builds the request, with the barrier `search.remote.asked` after them. Tests: 7.6's `search_remote_order_test.go` and `search_remote_ask_test.go`; FS-83's eligibility, notice and failover cases; FS-125's lifecycle cases for three warm pairs.
 
 **Proposed shapes**, for SEARCH-M10-32 and SEARCH-M10-33 to take or rename; none is on the wire or in storage:
 
@@ -5585,7 +5640,7 @@ searchRemoteTable    per requester: at most two live cursors by searchId, and th
                      each ended; over all requesters at most RemoteCursorCount live, the least recently
                      used ending first
 searchRemoteLeg      {indexer Id, searchId uint64, repos, state, page uint32, deadline time.Time,
-                      hedge, reopened bool, checkedThroughMs int64, phase uint32, status uint32,
+                      reopened bool, lost map of repo, checkedThroughMs int64, phase uint32, status uint32,
                       untilMs int64, pins []{repo, ref Id, version uint64, chain []byte, timeMs int64,
                       served, uncovered uint32}, void map of repo}
 searchRemoteHealth   per indexer: onlineUntil, answeredAt, skipUntil time.Time, dropped bool, mismatches
@@ -5602,7 +5657,7 @@ searchClaim          {repoIndex uint16, docKey [16]byte, version uint64, timeMs 
 - SEARCH-M10-31 (the wire): `head(k)` is 7.2.5's; nothing else changes.
 - SEARCH-M10-39 and SEARCH-M10-40 (FS-83, benchmarks): 7.6's rows; the remote benchmark reports indexer compute and round trip apart.
 - CORE-M10-03 and CORE-M10-04: `search.state` holds `served`, `distrust_until`, the mode and the answers; `ApplyErase`, `ApplyCut` and the drop's local deletion call `SearchRemoteServer.EndRepo` and end the repo's open snapshots before they return, and an executed drop drops the ref's retained buckets as an ERASE does.
-- TEAM-M10-01 and PROTO-M10-04 are drafted; TEAM-M10-02 and PROTO-M10-06 carry their changes. CORE-M10-01 is drafted; its one new part is SEARCH-M10-19's line.
+- TEAM-M10-01 and PROTO-M10-04 are drafted; TEAM-M10-02 and PROTO-M10-06 carry their changes. PROTO-M10-06's cap is a settings field, `SidecarProtocolSettings.MarkedPeerMaxCount`. CORE-M10-01 is drafted; its one new part is SEARCH-M10-19's line.
 
 ### 7.8 Proposed DESIGN.md text
 
@@ -5610,13 +5665,13 @@ For the design-records track, section by section; each replaces the sentence or 
 
 **§11.14, Reads.** `fetch`: after "the most recently searched repos first" add "; settings, the erasure set and a/m belong to the latest set every device keeps". `swap` becomes: "the manifest of a new pin replaces the old one, atomically, only when every bucket file that pin lists is held at the listed version, so a snapshot is one version of the ref; all is swapped separately and only at the snapshot's pin, so it is never ahead; a file that fails its checks is listed bad and does not hold the swap; running searches keep their snapshot; files no manifest, plan or open snapshot names are deleted". `collected` becomes: "a fetch of a replaced index file that answers `collected` restarts the round on the new head, which brings every file to it". `retained` becomes: "readers search every bucket present, expired ones included; a device whose all is older than a roll-up keeps the rolled bucket only if its copy is the roll-up's input, which it knows from the statements it replayed, and searches its all only while every roll-up since all's pin is bridged so; the bucket goes when all is swapped past the roll-up, at an ERASE or an executed drop in the repo, or 2W days after, and all is then not searched until it is fetched again; a device keeping only latest drops the bucket". `trigger`: hints coalesce leading-edge (QD-048).
 
-**§11.14, remote search.** `eligible` gains "for R owner-bound to M, consented(d, M), d's designation at member scope, or at network scope where the config holds one member"; and "each side evaluates it at every send and every page". `order` becomes: "own search indexers first, the one that answered last within 10 min, then by rendezvous hash (SHA-256 over a label and the two sidecar_ids); a second own indexer is asked in parallel when the first has sent no page after `Search.RemoteHedgeDelay` (1 s, 1.5 s metered), and the first page 0 to serve a repo wins it; then, where `who` allows, another member's, the one that served this member's repos within 24 h first, else by rendezvous hash of (member_id, indexer sidecar_id), one at a time". `failover` gains: "a later page is asked once more before its leg fails; CURSOR_EXPIRED reopens the search once, resumed by `until_ms` at the last `checked_through_ms`; a repo an indexer refused is not asked of it for 10 min". `ranking` becomes: "across SERVED_TEXT repos candidates go in one order, newest first by (time, the repo's place in the request, doc_key), over every partition; a page reads all's shards only when the order reaches the newest row all holds; each is verified against the text before it is returned, and one whose text the indexer does not hold at that version is returned as a phone would judge it; `checked_through_ms` is the time of the newest candidate not yet accounted for, a hit held back for size included, so every candidate above it was examined and returned if it matched; phase 1 while that candidate is newer than every all row, 2 after, 3 with none left; SERVED_INDEX repos' hits and near hits follow and claim nothing". `status` gains: "a request for a page other than the cursor's or the next is INVALID and leaves the cursor; an ended search_id answers CURSOR_EXPIRED for every page, page 0 included, for 10 min; a lost read, the requester's or the indexer's, ends the cursor". `serve` gains the order of the checks (7.2.5) and "`since_ms` and `until_ms` are inclusive". `merge` becomes 7.2.6's row and span: "per (repo, ref, doc_key) the strongest claim is shown: a verified or confirmed claim before a possible one before a near one, then the higher version, then verified, then an indexer's; the phone's own possible or near hit is folded into "n not matched by <device>" only when no indexer claims the document and a SERVED_TEXT leg with `uncovered` 0 has checked past its time, the phone's pin of an index that rides the content ref being no higher than the leg's, or the hit's time more than 40 min below `ref_time_ms`; omission is raised only where the index rides the content ref and the leg's pinned version is the phone's own".
+**§11.14, remote search.** `eligible` gains "for R owner-bound to M, consented(d, M), d's designation at member scope, or at network scope where the config holds one member"; and "each side evaluates it at every send and every page". `order` becomes: "own search indexers first, the one that answered last within 10 min, then by rendezvous hash (SHA-256 over a label and the two sidecar_ids); the first two, whose pairs the foreground keeps warm, are asked at once, each for the repos it may answer, the first page 0 to serve a repo wins it and the other reply is dropped (QD-707); a further own indexer is asked alone, when neither of those can be; then, where `who` allows, another member's, the one that served this member's repos within 24 h first, else by rendezvous hash of (member_id, indexer sidecar_id), one at a time". `failover` gains: "a later page is asked once more before its leg fails; CURSOR_EXPIRED reopens the search once, resumed by `until_ms` at the last `checked_through_ms`; a repo an indexer refused is not asked of it for 10 min". `ranking` becomes: "across SERVED_TEXT repos candidates go in one order, newest first by (time, the repo's place in the request, doc_key), over every partition; a page reads all's shards only when the order reaches the newest row all holds; each is verified against the text before it is returned, and one whose text the indexer does not hold at that version is returned as a phone would judge it; `checked_through_ms` is the time of the newest candidate not yet accounted for, a hit held back for size included, so every candidate above it was examined and returned if it matched; phase 1 while that candidate is newer than every all row, 2 after, 3 with none left; SERVED_INDEX repos' hits and near hits follow and claim nothing". `status` gains: "a request for a page other than the cursor's or the next is INVALID and leaves the cursor; an ended search_id answers CURSOR_EXPIRED for every page, page 0 included, for 10 min; a lost read, the requester's or the indexer's, ends the cursor". `serve` gains the order of the checks (7.2.5) and "`since_ms` and `until_ms` are inclusive". `merge` becomes 7.2.6's row and span: "per (repo, ref, doc_key) the strongest claim is shown: a verified or confirmed claim before a possible one before a near one, then the higher version, then verified, then an indexer's; the phone's own possible or near hit is folded into "n not matched by <device>" only when no indexer claims the document and a SERVED_TEXT leg with `uncovered` 0 has checked past its time, the phone's pin of an index that rides the content ref being no higher than the leg's, or the hit's time more than 40 min below `ref_time_ms`; omission is raised only where the index rides the content ref and the leg's pinned version is the phone's own".
 
 **§11.14's proto comments** (no field changes): `SearchRequest.until_ms`, "inclusive; a reopened search narrows it to resume"; `SearchReply.checked_through_ms`, "the time of the newest candidate not yet accounted for; 0: none is left"; `SearchCoverage.ref_version`, "the text pin when SERVED_TEXT; the index pin when SERVED_INDEX and the index is in the ref; else 0".
 
-**§5.4.** `SidecarSearchSettings` gains 7.2.1's second block. **§5.9**, `state`: "which repos each indexer served, 24 h; an indexer's distrust deadline"; `holds`: the search manifest's fields and the plan part. **§6.10 and §18.7**, `foreground`: "the first own search indexer and, in mode on once its notice is answered and where some repo has no own indexer, the first other member's, are kept warm; at most two pairs". **§7.9**, Indexers: "an owner-bound repo is answered only by a consented device of its owner, at member scope, or at network scope in a network of one member". **§16.10**, scope: "a search of the cache reads all only while it is usable (§11.14's retained row)".
+**§5.4.** `SidecarSearchSettings` gains 7.2.1's settings: `SkewGuard`, `PinRingCount` and `RetainFactor`, which were constants, and the second block with `RemoteOwnAskCount` and `RemoteOtherWarmCount` and no hedge delay; `SidecarProtocolSettings` gains `MarkedPeerMaxCount` (3). **§5.9**, `state`: "which repos each indexer served, 24 h; an indexer's distrust deadline"; `holds`: the search manifest's fields and the plan part. **§6.10 and §18.7**, `foreground`: "the first two own search indexers and, in mode on once its notice is answered and where some repo has no own indexer, the first other member's, are kept warm; at most three pairs, each at its own window floor". **§7.9**, Indexers: "an owner-bound repo is answered only by a consented device of its owner, at member scope, or at network scope in a network of one member". **§16.10**, scope: "a search of the cache reads all only while it is usable (§11.14's retained row)".
 
-**§18.4.** `remote` row: "a second own indexer is asked after `Search.RemoteHedgeDelay`"; targets, remote: "a failed first indexer costs `Search.RemoteHedgeDelay` and a cold start where a second own indexer exists, else `Search.RemoteTimeout` and a cold start". D-SDK-27 gains the hedge delay and the second warm pair.
+**§18.4.** `remote` row: "the first two own indexers are asked at once and the faster answers (QD-707)"; targets, remote: "with two warm own indexers the first page is the faster of two legs, so one slow or dead indexer adds nothing; with one, a failed first indexer costs `Search.RemoteTimeout` and a cold start"; its cost line gains "every search spends an exchange on each of two own pairs, and the foreground a second own pair's floor, 512 KiB of transfer balance an hour, and a third's where another member's pair is kept". D-SDK-27 drops "hedged" for "the first two asked at once" and gains the warm pairs, two own and one other member's.
 
 **§22.** FI-24 gains "evaluated at each send"; FI-18 gains "a snapshot is one version of its ref, and all is searched only while bridged". FS-83, FS-77 and FS-74 gain 7.6's rows. §22.8's model row names `details/IndexSync.tla`, `RemoteAsk.tla`, `RemoteCursor.tla` and `RemoteMerge.tla`.
 
@@ -5624,7 +5679,7 @@ For the design-records track, section by section; each replaces the sentence or 
 
 Each is filed under `.stack/questions/`, and the section is built on the recommendation.
 
-1. **The hedge** (`details-7-hedge.md`). §11.14 has own indexers "hedged in parallel" and gives no delay. Options: (1) a second own indexer is asked when the first has sent no page after 1 s (1.5 s metered), the §18.4 p95 targets, the second pair cold: about one search in twenty opens a contract on the second pair at its own time, as owner decision 191 already accepts for a failover, and a dead first indexer costs about 2 s where it costs about 4 today; (2) both of the first two own indexers are asked at once and both kept warm: no contract opens at a search, every search costs two exchanges and two indexers' CPU, and the foreground costs a second window's floor (512 KiB an hour more); (3) no hedge: the next own indexer at `Search.RemoteTimeout` only. Recommendation: (1).
+1. **The hedge** (`details-7-hedge.md`). §11.14 has own indexers "hedged in parallel" and gives no delay. Options: (1) a second own indexer is asked when the first has sent no page after 1 s (1.5 s metered), the §18.4 p95 targets, the second pair cold: about one search in twenty opens a contract on the second pair at its own time, as owner decision 191 already accepts for a failover, and a dead first indexer costs about 2 s where it costs about 4 today; (2) both of the first two own indexers are asked at once and both kept warm: no contract opens at a search, every search costs two exchanges and two indexers' CPU, and the foreground costs a second window's floor (512 KiB an hour more); (3) no hedge: the next own indexer at `Search.RemoteTimeout` only. Recommendation: (1). **Answered by the owner on 2026-11-11 (QD-707): option 2.** The section is amended to it: 7.2.3's plan and warm pairs, 7.2.4's two own legs, and no hedge delay anywhere.
 
 2. **A match before a higher version** (`details-7-match-first.md`). §11.14's merge row says "the higher version wins" and "the phone's own confirmed hits always stay"; they disagree when a weaker claim has the higher version. Options: (1) a verified or confirmed claim outranks a possible or near one at any version, and versions decide within a class: the phone's confirmed hits stay as the row says, and no indexer can push another's verified hit down by claiming a newer version of it as possible; a claim verified at an older version may be shown above a newer possible one, and opening it judges the newer version; (2) the higher version always wins: a newer possible claim replaces a confirmed row, and the second sentence goes. Recommendation: (1).
 
@@ -5632,9 +5687,9 @@ Each is filed under `.stack/questions/`, and the section is built on the recomme
 
 4. **A stale all without its bucket is not searched** (`details-7-stale-all.md`). Options: (1) a phone whose all is older than a roll-up, and that no longer holds that roll-up's bucket as the roll-up read it, searches its buckets only until all is fetched again: no deleted document is ever found; a phone that fetched all once and then saw an ERASE, or was offline through a roll-up, loses its instant coverage past the buckets until its next window or "search more", which fetches a/m and the changed shards, usually a few MiB; (2) as written: the stale all stays searched and "search more" refreshes it: a keystroke search can show a deleted message. Recommendation: (1).
 
-5. **Readings** (`details-7-small-readings.md`). Eleven places where §11.14, §18.4 or §7.9 leave a choice that changes no D- item: (1) a personal network, for E5, is a config state with one member; (2) candidates run in one order across partitions and "buckets first" is its effect; (3) a lost read ends the cursor, and the refusal appears in the reopened search's coverage; (4) a reopened search resumes by `until_ms`, with no new field, and may then show near hits the unbroken search would not have; (5) an indexer remembers an ended search_id for 10 min; (6) a hedge's loser is dropped, not merged; (7) the first own choice is the own indexer that answered last, not the highest-ranked one that answered; (8) another member's indexer is sticky over the search's whole scope, by its last service of any of those repos; (9) a refused repo is not asked of that indexer for 10 min, a failed indexer for 2 min, and both memories are in RAM only; (10) the second warm pair is another member's indexer, per §18.7's "kept alike", which the landed keepalive does not yet do; (11) a/m, the erasure set and the settings file are in the latest set on every device. Recommendation: accept all eleven.
+5. **Readings** (`details-7-small-readings.md`). Eleven places where §11.14, §18.4 or §7.9 leave a choice that changes no D- item: (1) a personal network, for E5, is a config state with one member; (2) candidates run in one order across partitions and "buckets first" is its effect; (3) a lost read ends the cursor, and the refusal appears in the reopened search's coverage; (4) a reopened search resumes by `until_ms`, with no new field, and may then show near hits the unbroken search would not have; (5) an indexer remembers an ended search_id for 10 min; (6) a losing reply is dropped, not merged, which since QD-707 is the slower of the two own legs asked at once; (7) the first own choice is the own indexer that answered last, not the highest-ranked one that answered; (8) another member's indexer is sticky over the search's whole scope, by its last service of any of those repos; (9) a refused repo is not asked of that indexer for 10 min, a failed indexer for 2 min, and both memories are in RAM only; (10) replaced by QD-707 and settled in 7.2.3: both of the first two own pairs are kept warm, and another member's pair, under the condition this reading gave it, is a third beside them, at one more window floor, 512 KiB of transfer balance an hour in the foreground; (11) a/m, the erasure set and the settings file are in the latest set on every device. Recommendation: accept all eleven.
 
-None blocks a held task: each is built as recommended, and the first four name what changes if the owner chooses otherwise (1: the hedge timer in SEARCH-M10-33; 2 and 3: the row and span in SEARCH-M10-34; 4: `AllUsable` in SEARCH-M10-19 and SEARCH-M10-26).
+**The answers** (owner, 2026-11-11). QD-707: question 1, option 2, not the recommendation; this amendment. QD-708: question 2, option 1. QD-709: question 3, option 1; `SkewGuard` is a settings field (QD-702). QD-710: question 4, option 1. QD-711: the eleven readings stand, reading 6 covering the two-at-once ask and reading 10 replaced as above. What the amendment had to settle beyond the answer's own words, and settles in 7.2.3, each listed so it can be overruled: the two asked at once are the two the foreground named, so that neither is ever cold; an own indexer outside them is asked only alone, and only when neither of them can be; and another member's warm pair is a third, not a replacement for the second own pair, which would undo QD-707, and not dropped, which would open a contract at the search for the repos only that member's device can answer.
 
 ## 8. Git and evs in both directions
 

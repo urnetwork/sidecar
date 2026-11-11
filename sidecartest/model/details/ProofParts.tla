@@ -37,6 +37,9 @@
      ReleaseUncovered a message record does not wait for server records relayed after its part verified
      NoCommitRecheck  a part that verified while another landed is committed all the same
 
+   A part here may open both header records, which the design's shapes do not allow; the invariants hold for
+   that wider gate too.
+
    Left out: the handshake and E1 and E2, which fix the keys; the unopened body and its count; DATA mode,
    whose body parts carry a scan state exactly as record 5 does; tickets, which a part covers with a count of
    zero; hiding, which no state machine shows. *)

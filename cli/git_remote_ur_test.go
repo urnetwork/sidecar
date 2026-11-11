@@ -49,3 +49,21 @@ func TestUrMountShareAndCredentialStore(t *testing.T) {
 		t.Fatalf("store: %d", code)
 	}
 }
+
+// The daemon's git-hook mode with no evs client, or no network holding the session, ends the hook with a line on its
+// stderr and exit code 1, which refuses the push.
+func TestUrGitHookModeRefusesAnUnknownSession(t *testing.T) {
+	held := urDaemonEvsClient
+	urDaemonEvsClient = nil
+	defer func() { urDaemonEvsClient = held }()
+	out := &bytes.Buffer{}
+	stream := &urReplayedStream{reader: strings.NewReader(`{"session":"0123"}` + "\n"), writer: out}
+	if err := urDaemonGitHookMode(nil)(context.Background(), &sidecar.DaemonHello{Service: "pre-receive"}, stream); err != nil {
+		t.Fatal(err)
+	}
+	frames := out.Bytes()
+	if len(frames) < 5 || frames[0] != 3 || !strings.Contains(string(frames), "no network of this daemon holds") ||
+		!bytes.HasSuffix(frames, []byte{4, 0, 0, 0, 1, 1}) {
+		t.Fatalf("the frames %q", frames)
+	}
+}

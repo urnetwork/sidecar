@@ -8,7 +8,10 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 
@@ -53,4 +56,52 @@ func runUrGitHook(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		return &urExitError{code: code, err: fmt.Errorf("the %s hook exited %d", name, code)}
 	}
 	return nil
+}
+
+// The daemon's git-hook mode (DESIGN-DETAILS 8.2.8): the header names a receive session, and the hosted network whose
+// mounts opened it serves the hook (sidecar.EvsMounts.ServeGitHook), the header handed on ahead of the stream. A
+// session no network holds, or a daemon that builds no evs client, exits the hook 1, which refuses the push.
+func urDaemonGitHookMode(daemon *sidecar.Daemon) sidecar.DaemonModeHandler {
+	return func(ctx context.Context, hello *sidecar.DaemonHello, stream io.ReadWriter) error {
+		reader := bufio.NewReader(stream)
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			return err
+		}
+		header := &sidecar.EvsGitHookHeader{}
+		if err := json.Unmarshal(line, header); err != nil {
+			return err
+		}
+		replayed := &urReplayedStream{reader: io.MultiReader(bytes.NewReader(line), reader), writer: stream}
+		if urDaemonEvsClient != nil {
+			for _, network := range daemon.Sidecars() {
+				client, err := urDaemonEvsClient(network.Sidecar)
+				if err != nil {
+					continue
+				}
+				mounts, err := client.Mounts()
+				if err != nil || !mounts.HasReceiveSession(header.Session) {
+					continue
+				}
+				return mounts.ServeGitHook(ctx, hello.Service, replayed)
+			}
+		}
+		return sidecar.RefuseEvsGitHook(stream, "ur: no network of this daemon holds the push's receive session")
+	}
+}
+
+// A stream whose reads begin with bytes already read off it.
+type urReplayedStream struct {
+	reader io.Reader
+	writer io.Writer
+}
+
+// Reads the replayed bytes, then the stream's.
+func (self *urReplayedStream) Read(p []byte) (int, error) {
+	return self.reader.Read(p)
+}
+
+// Writes to the stream.
+func (self *urReplayedStream) Write(p []byte) (int, error) {
+	return self.writer.Write(p)
 }

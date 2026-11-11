@@ -94,9 +94,13 @@ func TestKeychainRecoveryRotateShowsTheCodeOnce(t *testing.T) {
 	if !bytes.Equal(keys.Ed25519PublicKey(), binding.Ed25519PublicKey) || !bytes.Equal(keys.XwingPublicKey(), binding.XwingPublicKey) {
 		t.Error("the words shown do not derive the binding signed")
 	}
-	// stdout holds no word of it
+	// stdout holds no word of it, as a whole word: a code word can sit inside one of stdout's own ("cover" in "recovery")
+	printed := map[string]bool{}
+	for _, field := range strings.Fields(stdout.String()) {
+		printed[field] = true
+	}
 	for _, word := range words {
-		if 4 < len(word) && strings.Contains(stdout.String(), word) && word != "recovery" && word != "rotate" {
+		if 4 < len(word) && printed[word] && word != "recovery" && word != "rotate" {
 			t.Errorf("stdout holds the code's word %q: %q", word, stdout.String())
 		}
 	}

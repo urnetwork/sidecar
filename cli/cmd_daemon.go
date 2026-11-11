@@ -651,6 +651,11 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		daemon.Close()
 		return err
 	}
+	// a mount's git hooks, which ur git-hook relays (git_hook.go)
+	if err := daemon.RegisterMode(sidecar.DaemonModeGitHook, urDaemonGitHookMode(daemon)); err != nil {
+		daemon.Close()
+		return err
+	}
 	// §16's MCP, whatever the networks' states: a call on a Locked or Unenrolled one names what the person runs
 	mcpServer := mcp.NewMcpServer(mcp.DaemonOf(daemon), mcp.NewMcpServerSettings(settings, sidecar.Version))
 	if err := daemon.RegisterMode(sidecar.DaemonModeMcp, mcpServer.Serve); err != nil {

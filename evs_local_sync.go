@@ -161,25 +161,23 @@ func (self *EvsGitSyncEngine) followed(ctx context.Context) ([]Id, error) {
 	return refIds, nil
 }
 
-// The test hook at the replay loop's start, nil outside tests: what a test replaces the wakes a store's listener
-// would bring with.
-var evsLocalSyncStartHook func(engine *EvsGitSyncEngine)
-
 // Runs the engine until ctx ends (the externally driven loop): the restart steps, a replay of every followed ref, then
 // a replay of each ref a change, a push's answer or a wake names, and of every followed ref each SyncResyncInterval;
 // git gc between rounds when its thresholds pass. A replay's failure is logged and tried again at the next wake.
 func (self *EvsGitSyncEngine) Run(ctx context.Context) error {
+	if err := self.Start(ctx); err != nil {
+		self.client.log.Warningf("[evs]the sync engine of repo %s did not start clean: %v", self.mount.RepoId, err)
+	}
+	return self.run(ctx)
+}
+
+// Run's loop, its start already made.
+func (self *EvsGitSyncEngine) run(ctx context.Context) error {
 	repoId := self.mount.RepoId
 	remove := self.client.AddRepoChangeListener(&repoId, func(change *EvsRepoChange) {
 		self.Wake(change.RefId)
 	})
 	defer remove()
-	if err := self.Start(ctx); err != nil {
-		self.client.log.Warningf("[evs]the sync engine of repo %s did not start clean: %v", repoId, err)
-	}
-	if evsLocalSyncStartHook != nil {
-		evsLocalSyncStartHook(self)
-	}
 	wakeAll := func() {
 		refIds, err := self.followed(ctx)
 		if err != nil {
