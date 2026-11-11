@@ -62,6 +62,7 @@ var (
 // Tunables of reading and folding a ledger.
 type BridgeLedgerSettings struct {
 	// A ledger file is read this many bytes at a time, and no row is longer: 64 KiB, against the rows' 3 KB at most.
+	// Non-positive is the default.
 	ChunkByteCount int
 	// The most bytes the unfolded statements' opened bodies may hold at one reader: 4 MiB, against a few KB in
 	// practice. Past it the open refuses with ErrBridgeLedgerOverBudget. Non-positive bounds nothing.
@@ -144,7 +145,7 @@ func (self *BridgeBodyJudge) repoKeyAt() func(generation uint64) *EvsRepoKey {
 	return self.RepoKeyAt
 }
 
-// JudgeBridgeBody (DESIGN-DETAILS 12.2.3): opens a route's or map's sealed body with the judge's keys and verifies its
+// DESIGN-DETAILS 12.2.3's JudgeBridgeBody: opens a route's or map's sealed body with the judge's keys and verifies its
 // approval on before, the state the entry lands on. A statement that files no rule has no verdict, nil.
 func (self *BridgeBodyJudge) Judge(before *ConfigState, statement *BridgeLogStatement) *BridgeBodyVerdict {
 	var body proto.Message
@@ -262,7 +263,10 @@ type bridgeLedgerStreamReader struct {
 // A reader of a file's bytes as the manifest names it: its hash, its row count and a fresh row of its kind.
 func newBridgeLedgerStreamReader(source io.Reader, file *protocol.BridgeLedgerFile, newRow func() proto.Message, settings *BridgeLedgerSettings) *bridgeLedgerStreamReader {
 	digest := sha256.New()
-	chunkByteCount := max(settings.ChunkByteCount, 4*1024)
+	chunkByteCount := settings.ChunkByteCount
+	if chunkByteCount <= 0 {
+		chunkByteCount = DefaultBridgeLedgerSettings().ChunkByteCount
+	}
 	return &bridgeLedgerStreamReader{
 		source:       bufio.NewReaderSize(io.TeeReader(source, digest), chunkByteCount),
 		digest:       digest,

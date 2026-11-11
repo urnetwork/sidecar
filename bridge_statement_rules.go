@@ -493,7 +493,7 @@ func bridgeLedgerReaderAt(reader *BridgeLedgerReader) (uint64, int64) {
 	return cutoffN, timeMs
 }
 
-// OpenBridgeLedger (DESIGN-DETAILS 12.2.3): the ledger at the reader's state, S(n), from rows, the ledger files of the
+// DESIGN-DETAILS 12.2.3's open: the ledger at the reader's state, S(n), from rows, the ledger files of the
 // head its newest base names, and the state's unfolded statements past the rows' fold, in log order. rows nil is the
 // empty ledger before any fold. An error is rows that are no ledger, rows folded below the state's base (which would
 // miss statements), or bodies past the unfolded budget.

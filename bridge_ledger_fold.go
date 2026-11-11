@@ -75,7 +75,7 @@ func bridgeLedgerEntryTimeMs(reader *BridgeLedgerReader, n uint64) (int64, bool)
 	return 0, false
 }
 
-// FoldBridgeLedger (DESIGN-DETAILS 12.2.3): the ledger files of a head folded through foldedThrough, from previous, the
+// DESIGN-DETAILS 12.2.3's fold: the ledger files of a head folded through foldedThrough, from previous, the
 // rows of the head being extended, and reader.State's unfolded statements in (previous' fold, foldedThrough], as the top
 // of this file says. reader.State is the writer's state at its tip, or a checker's at S(b-1); reader.EntryTimeMs must
 // answer the entries the head folds, as a log's kept entries do. previous nil is the empty ledger before any fold.
@@ -312,7 +312,7 @@ func (self *BridgeLedger) foldFiles(foldedThrough uint64, folded bool) (map[stri
 	return files, nil
 }
 
-// CheckBridgeLedgerFold (DESIGN-DETAILS 12.2.3): whether head, the config head base b names folding through
+// DESIGN-DETAILS 12.2.3's fold check: whether head, the config head base b names folding through
 // foldedThrough, holds the bridge ledger reader.State, S(b-1), folds from previous, the head the previous base names (nil
 // before the first base), as FoldBridgeLedger does. Answers true checked, or false unchecked where the reader holds a
 // body it could not open at or below the fold, which then takes the head's rows; an error wrapping
