@@ -1,6 +1,7 @@
-// Where a posture persists (§18.6's stored row, §17.8's persist row): the network process's own store, the iOS
-// app-group container, Android's app storage or urnetworkd's state directory, so PostureStore is an interface and
-// NewFilePostureStore the one this package brings.
+// Where a posture persists (§18.6's stored row, §17.8's persist row, DESIGN-DETAILS 4.2.2): the VPN component's own
+// container, never an app group, under fwd/<network_id hex>/posture/, so PostureStore is an interface,
+// NewFilePostureStore the inner store this package brings, and NewSealedPostureStore (posture_seal.go) the wrapper that
+// seals every record under the component's forwarding root key.
 //
 // A posture is a few records. The manifest, "posture", names the rest and is written last, so its rename is the one
 // point at which a new posture takes effect: rows-<g>, entries-<g> and state-<g> are written first under a generation
@@ -16,10 +17,14 @@
 //	16 state record  17 state record's SHA-256  18 document_seen_at
 //	19 share certificate, repeated: 1 share_id  2 generation  3 Signed ShareCert, verbatim
 //	20 overlay entry, repeated, oldest first: 1 kind  2 n  3 id  4 suspend_id  5 withdraw mode  6 covered (1)
-//	   7 the Suspend signer's class (1 owner or sponsor, 2 admin)
+//	   7 a ForwardSupersede's delegation_id
+//	21 waiting entry, repeated, in position order: 1 n  2 through n, where not n  3 first seen, ms since the epoch
+//	   as protobuf's int64 varint
+//	22 fork (1)
 //
-// The overlay is kept as derived, not derived again on a restart: a delta base between states replaces the rows a
-// statement before it was checked by, and every entry of it was verified when it arrived (posture.go).
+// The overlay and Waiting are kept as derived, not derived again on a restart: a delta base between states replaces
+// the rows a statement before it was checked by, and every entry of it was verified when it arrived (posture.go), and
+// a waiting entry's first sight is what its clock runs from, so a restart does not reset it.
 //
 // entries-<g> holds the entries since the base, each a varint length then its AuthEntry, verbatim. state-<g> holds
 // the BridgeState in force, deterministically encoded. rows-<g> holds the base's ProjectionRows, verbatim.
@@ -40,6 +45,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
 
@@ -104,6 +110,8 @@ const (
 	postureFieldDocumentSeenAt
 	postureFieldShareCert
 	postureFieldOverlay
+	postureFieldWaiting
+	postureFieldFork
 )
 
 // A share certificate's field numbers inside its manifest field.
@@ -121,7 +129,14 @@ const (
 	postureOverlayFieldSuspendId
 	postureOverlayFieldWithdrawMode
 	postureOverlayFieldCovered
-	postureOverlayFieldSuspendClass
+	postureOverlayFieldDelegationId
+)
+
+// A waiting entry's field numbers inside its manifest field.
+const (
+	postureWaitingFieldN protowire.Number = iota + 1
+	postureWaitingFieldThroughN
+	postureWaitingFieldFirstSeen
 )
 
 // The newest verified ShareCert of a share this host serves (§17.9), kept so a restart refuses one below it.
@@ -152,6 +167,8 @@ type postureManifest struct {
 	documentSeenAt    uint64
 	shareCerts        []postureShareCert
 	overlay           []PostureOverlayEntry
+	waiting           []PostureWaitingEntry
+	fork              bool
 }
 
 // The manifest's bytes, every field in number order and none that is zero.
@@ -204,6 +221,22 @@ func (self *postureManifest) encode() []byte {
 		encoded = protowire.AppendTag(encoded, postureFieldOverlay, protowire.BytesType)
 		encoded = protowire.AppendBytes(encoded, encodePostureOverlayEntry(&entry))
 	}
+	for _, entry := range self.waiting {
+		waiting := protowire.AppendVarint(protowire.AppendTag(nil, postureWaitingFieldN, protowire.VarintType), entry.N)
+		if entry.ThroughN != entry.N {
+			waiting = protowire.AppendTag(waiting, postureWaitingFieldThroughN, protowire.VarintType)
+			waiting = protowire.AppendVarint(waiting, entry.ThroughN)
+		}
+		if firstSeenMs := entry.FirstSeen.UnixMilli(); firstSeenMs != 0 {
+			waiting = protowire.AppendTag(waiting, postureWaitingFieldFirstSeen, protowire.VarintType)
+			waiting = protowire.AppendVarint(waiting, uint64(firstSeenMs))
+		}
+		encoded = protowire.AppendTag(encoded, postureFieldWaiting, protowire.BytesType)
+		encoded = protowire.AppendBytes(encoded, waiting)
+	}
+	if self.fork {
+		appendUint(postureFieldFork, 1)
+	}
 	return encoded
 }
 
@@ -230,11 +263,13 @@ func encodePostureOverlayEntry(entry *PostureOverlayEntry) []byte {
 	if entry.Covered {
 		appendUint(postureOverlayFieldCovered, 1)
 	}
-	appendUint(postureOverlayFieldSuspendClass, uint64(entry.suspendClass))
+	appendBytes(postureOverlayFieldDelegationId, entry.DelegationId)
 	return encoded
 }
 
-// One overlay entry's fields, each at most once and in order, of a kind this package writes.
+// One overlay entry's fields, each at most once and in order, of a kind this package writes, with what that kind
+// carries: a Suspend its suspend_id, a DelegationRevoke a delegation_id as its id, a ForwardSupersede a sidecar_id as
+// its id and the newer delegation_id.
 func decodePostureOverlayEntry(encoded []byte) (*PostureOverlayEntry, error) {
 	entry := &PostureOverlayEntry{}
 	failed := fmt.Errorf("%w: manifest overlay entry does not decode", ErrPostureStoreFailed)
@@ -247,8 +282,7 @@ func decodePostureOverlayEntry(encoded []byte) (*PostureOverlayEntry, error) {
 		last = number
 		encoded = encoded[tagLength:]
 		switch number {
-		case postureOverlayFieldKind, postureOverlayFieldN, postureOverlayFieldWithdrawMode, postureOverlayFieldCovered,
-			postureOverlayFieldSuspendClass:
+		case postureOverlayFieldKind, postureOverlayFieldN, postureOverlayFieldWithdrawMode, postureOverlayFieldCovered:
 			if wireType != protowire.VarintType {
 				return nil, failed
 			}
@@ -266,10 +300,8 @@ func decodePostureOverlayEntry(encoded []byte) (*PostureOverlayEntry, error) {
 				entry.WithdrawMode = bridge.BridgeWithdrawMode(value)
 			case postureOverlayFieldCovered:
 				entry.Covered = value == 1
-			case postureOverlayFieldSuspendClass:
-				entry.suspendClass = int(value)
 			}
-		case postureOverlayFieldId, postureOverlayFieldSuspendId:
+		case postureOverlayFieldId, postureOverlayFieldSuspendId, postureOverlayFieldDelegationId:
 			if wireType != protowire.BytesType {
 				return nil, failed
 			}
@@ -278,19 +310,73 @@ func decodePostureOverlayEntry(encoded []byte) (*PostureOverlayEntry, error) {
 				return nil, failed
 			}
 			encoded = encoded[length:]
-			if number == postureOverlayFieldId {
+			switch number {
+			case postureOverlayFieldId:
 				entry.Id = bytes.Clone(value)
-			} else {
+			case postureOverlayFieldSuspendId:
 				entry.SuspendId = bytes.Clone(value)
+			case postureOverlayFieldDelegationId:
+				entry.DelegationId = bytes.Clone(value)
 			}
 		default:
 			return nil, failed
 		}
 	}
-	if entry.Kind < PostureOverlaySidecarRevoke || PostureOverlayBridgeWithdraw < entry.Kind || entry.N == 0 || len(entry.Id) == 0 {
+	if entry.Kind < PostureOverlaySidecarRevoke || PostureOverlayForwardSupersede < entry.Kind || entry.N == 0 || len(entry.Id) == 0 {
 		return nil, failed
 	}
-	if (entry.Kind == PostureOverlaySuspend) != (len(entry.SuspendId) != 0 && entry.suspendClass != 0) {
+	if (entry.Kind == PostureOverlaySuspend) != (len(entry.SuspendId) != 0) {
+		return nil, failed
+	}
+	if (entry.Kind == PostureOverlayForwardSupersede) != (len(entry.DelegationId) != 0) {
+		return nil, failed
+	}
+	switch entry.Kind {
+	case PostureOverlayDelegationRevoke:
+		if len(entry.Id) != postureDelegationIdByteCount {
+			return nil, failed
+		}
+	case PostureOverlayForwardSupersede:
+		if len(entry.Id) != postureIdByteCount || len(entry.DelegationId) != postureDelegationIdByteCount {
+			return nil, failed
+		}
+	}
+	return entry, nil
+}
+
+// One waiting entry's fields, each at most once and in order: a position, through one at or past it, and a first
+// sight.
+func decodePostureWaitingEntry(encoded []byte) (*PostureWaitingEntry, error) {
+	failed := fmt.Errorf("%w: manifest waiting entry does not decode", ErrPostureStoreFailed)
+	values := map[protowire.Number]uint64{}
+	last := protowire.Number(0)
+	for 0 < len(encoded) {
+		number, wireType, tagLength := protowire.ConsumeTag(encoded)
+		if tagLength < 0 || number <= last || wireType != protowire.VarintType ||
+			(number != postureWaitingFieldN && number != postureWaitingFieldThroughN && number != postureWaitingFieldFirstSeen) {
+			return nil, failed
+		}
+		last = number
+		encoded = encoded[tagLength:]
+		value, length := protowire.ConsumeVarint(encoded)
+		if length < 0 {
+			return nil, failed
+		}
+		encoded = encoded[length:]
+		values[number] = value
+	}
+	entry := &PostureWaitingEntry{
+		N:         values[postureWaitingFieldN],
+		ThroughN:  values[postureWaitingFieldN],
+		FirstSeen: time.UnixMilli(int64(values[postureWaitingFieldFirstSeen])),
+	}
+	if throughN, ok := values[postureWaitingFieldThroughN]; ok {
+		if throughN <= entry.N {
+			return nil, failed
+		}
+		entry.ThroughN = throughN
+	}
+	if entry.N == 0 {
 		return nil, failed
 	}
 	return entry, nil
@@ -311,13 +397,14 @@ func decodePostureManifest(encoded []byte) (*postureManifest, error) {
 			return nil, failed("tag does not decode")
 		}
 		encoded = encoded[tagLength:]
-		if number < last || (number == last && number != postureFieldShareCert && number != postureFieldOverlay) {
+		if number < last || (number == last && number != postureFieldShareCert && number != postureFieldOverlay &&
+			number != postureFieldWaiting) {
 			return nil, failed("field %d out of order", number)
 		}
 		last = number
 		switch number {
 		case postureFieldVersion, postureFieldGeneration, postureFieldState, postureFieldPinN, postureFieldEntriesCount,
-			postureFieldDocumentSeenAt:
+			postureFieldDocumentSeenAt, postureFieldFork:
 			if wireType != protowire.VarintType {
 				return nil, failed("field %d of wire type %d", number, wireType)
 			}
@@ -339,11 +426,16 @@ func decodePostureManifest(encoded []byte) (*postureManifest, error) {
 				manifest.entriesCount = value
 			case postureFieldDocumentSeenAt:
 				manifest.documentSeenAt = value
+			case postureFieldFork:
+				if value != 1 {
+					return nil, failed("fork %d", value)
+				}
+				manifest.fork = true
 			}
 		case postureFieldNetworkId, postureFieldAnchor, postureFieldSidecarId, postureFieldIdentityPublicKey,
 			postureFieldPinChain, postureFieldBaseEntry, postureFieldRowsRecord, postureFieldRowsSha256,
 			postureFieldEntriesRecord, postureFieldEntriesSha256, postureFieldStateRecord, postureFieldStateSha256,
-			postureFieldShareCert, postureFieldOverlay:
+			postureFieldShareCert, postureFieldOverlay, postureFieldWaiting:
 			if wireType != protowire.BytesType {
 				return nil, failed("field %d of wire type %d", number, wireType)
 			}
@@ -390,6 +482,12 @@ func decodePostureManifest(encoded []byte) (*postureManifest, error) {
 					return nil, err
 				}
 				manifest.overlay = append(manifest.overlay, *entry)
+			case postureFieldWaiting:
+				entry, err := decodePostureWaitingEntry(value)
+				if err != nil {
+					return nil, err
+				}
+				manifest.waiting = append(manifest.waiting, *entry)
 			}
 		default:
 			return nil, failed("unknown field %d", number)
@@ -465,7 +563,8 @@ const filePostureTempPrefix = ".write-"
 // in the same directory, written, fsynced and closed, then renamed over the record, then the directory fsynced, so a
 // kill leaves the old record or the new one (§22.9's no torn writes). Opening sweeps what a killed write left.
 //
-// Use one directory per network, the network process's own: never the sidecar role's state directory (§18.6).
+// Use one directory per network, in the VPN component's own container: never an app group, and never the sidecar
+// role's state directory (DESIGN-DETAILS 4.2.2). NewSealedPostureStore wraps it there.
 func NewFilePostureStore(directoryPath string) (PostureStore, error) {
 	if directoryPath == "" {
 		return nil, fmt.Errorf("%w: no directory", ErrPostureStoreFailed)

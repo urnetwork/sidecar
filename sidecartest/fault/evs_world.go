@@ -75,6 +75,8 @@ type EvsTierDeps struct {
 	ReceiptKeys *evsservice.ReceiptKeys
 	// The segment cluster's HDD share's settings (EvsWorldSettings.HddInterval).
 	Hdd *evsservice.HddAdmissionSettings
+	// The engine's log, nil for none: the Net's capture when the settings ask (T2's block only).
+	Log sidecar.Logger
 }
 
 // One instance's block: an engine server hosts, with what it owns.
@@ -85,6 +87,16 @@ type EvsTierHost interface {
 }
 
 var evsTiers sync.Map
+
+var evsWorlds sync.Map
+
+// The world NewEvsWorld made last on net, or nil: what a history check reads once a row's run has ended.
+func EvsWorldOf(net *Net) *EvsWorld {
+	if world, ok := evsWorlds.Load(weak.Make(net)); ok {
+		return world.(*EvsWorld)
+	}
+	return nil
+}
 
 // Names the tier net's evs worlds build on. server's T3 test calls this from its NetSettings.Engines, as each Net
 // is made, so every Net of a row's rules gets it; with none named, a world builds on T2's terms.
@@ -108,6 +120,9 @@ func evsTierOf(net *Net) *EvsTier {
 type EvsWorldSettings struct {
 	// The repo's kind.
 	Kind protocol.RepoKind
+	// Setup places nothing and makes no group: a schedule places the repo through the route (PlaceRepo), as a create
+	// resuming the RepoCreate the world's projection holds does, and then makes its group (FinishCreate).
+	Unplaced bool
 	// The instances Setup starts, each a process of its name.
 	Instances []string
 	// The devices Setup starts, the first writer making the repo's group.
@@ -128,6 +143,9 @@ type EvsWorldSettings struct {
 	AdjustEngine func(instance string, settings *evsservice.EvsSettings)
 	// A device's client settings past the defaults, nil for none.
 	AdjustClient func(device string, settings *sidecar.EvsSettings)
+	// Every instance's handler serves through the Net's privacy capture (CC1) and logs to it (§22.7), for a
+	// scenario that scans what servers held.
+	Capture bool
 }
 
 // One device of a world.
@@ -270,9 +288,26 @@ type EvsWorld struct {
 	duplicates map[string][]string
 	// each device's evs alarms
 	deviceAlarms map[string][]string
+	// what each device's placement of the repo answered
+	placeStatuses map[string]int
 	// what the outcome check has seen: each committed version's push id, and each push id's version
 	versionPushIds map[uint64]sidecar.Id
 	pushIdVersions map[sidecar.Id]uint64
+	// every attempt an instance took, in the order each began, and the logical clock their times are read from
+	attempts     []*EvsWorldAttempt
+	attemptClock int64
+}
+
+// One attempt of a push as an instance took it, for a history check of §11.8's commit rule (Porcupine, EVS1-M2-42):
+// Call when the instance began it and Return when it answered, both on the world's logical clock, which moves at
+// every event under the world's lock and so orders them as they happened. An attempt its instance never answered,
+// killed or still held, has Return 0 and no Answer: its outcome is unknown and its end open.
+type EvsWorldAttempt struct {
+	PushId   sidecar.Id
+	Instance string
+	Call     int64
+	Return   int64
+	Answer   *EvsWorldAnswer
 }
 
 // A world on net, drawing its ids and keys; it writes nothing until Setup runs as a schedule's first step. settings
@@ -296,6 +331,7 @@ func NewEvsWorld(net *Net, settings *EvsWorldSettings) *EvsWorld {
 		pushes:         map[sidecar.Id]*EvsWorldPush{},
 		duplicates:     map[string][]string{},
 		deviceAlarms:   map[string][]string{},
+		placeStatuses:  map[string]int{},
 		versionPushIds: map[uint64]sidecar.Id{},
 		pushIdVersions: map[sidecar.Id]uint64{},
 	}
@@ -310,7 +346,52 @@ func NewEvsWorld(net *Net, settings *EvsWorldSettings) *EvsWorld {
 		self.devices[device.Name] = device
 		self.deviceNames = append(self.deviceNames, device.Name)
 	}
+	key := weak.Make(net)
+	if _, loaded := evsWorlds.LoadOrStore(key, self); loaded {
+		evsWorlds.Store(key, self)
+	} else {
+		runtime.AddCleanup(net, func(key weak.Pointer[Net]) { evsWorlds.Delete(key) }, key)
+	}
 	return self
+}
+
+// An attempt beginning now, its call time taken from the logical clock.
+func (self *EvsWorld) beginAttempt(pushId sidecar.Id, instance string) *EvsWorldAttempt {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.attemptClock += 1
+	attempt := &EvsWorldAttempt{PushId: pushId, Instance: instance, Call: self.attemptClock}
+	self.attempts = append(self.attempts, attempt)
+	return attempt
+}
+
+// The attempt answered now.
+func (self *EvsWorld) endAttempt(attempt *EvsWorldAttempt, answer *EvsWorldAnswer) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.attemptClock += 1
+	attempt.Return = self.attemptClock
+	attempt.Answer = answer
+}
+
+// Every attempt so far, in the order they began, each a copy.
+func (self *EvsWorld) Attempts() []*EvsWorldAttempt {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	attempts := []*EvsWorldAttempt{}
+	for _, attempt := range self.attempts {
+		copied := *attempt
+		attempts = append(attempts, &copied)
+	}
+	return attempts
+}
+
+// The logical clock's reading now: a time after every attempt's call and return so far.
+func (self *EvsWorld) AttemptClock() int64 {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.attemptClock += 1
+	return self.attemptClock
 }
 
 // The device of name. Panics on a name the settings do not hold: a schedule naming one is wrong where it was
@@ -362,6 +443,26 @@ func (self *EvsWorld) Setup(ctx context.Context, net *Net) error {
 	}
 	self.receiptKeys = receiptKeys
 
+	gkm := sidecartest.NewFakeGkm(net.Clock(), &evsWorldGkmBlobs{BlobStore: net.Host().Blobs}, nil)
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.gkm = gkm
+	}()
+	if self.settings.Unplaced {
+		for _, instance := range self.settings.Instances {
+			if err := self.StartInstance(instance); err != nil {
+				return err
+			}
+		}
+		for _, name := range self.deviceNames {
+			if err := self.startDevice(self.devices[name], view); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	first, err := net.Host().Blobs.FirstCluster()
 	if err != nil {
 		return err
@@ -385,12 +486,6 @@ func (self *EvsWorld) Setup(ctx context.Context, net *Net) error {
 		return fmt.Errorf("repo/: %w", err)
 	}
 
-	gkm := sidecartest.NewFakeGkm(net.Clock(), &evsWorldGkmBlobs{BlobStore: net.Host().Blobs}, nil)
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		self.gkm = gkm
-	}()
 	for _, instance := range self.settings.Instances {
 		if err := self.StartInstance(instance); err != nil {
 			return err
@@ -579,6 +674,9 @@ func (self *EvsWorld) buildInstance(ctx context.Context, host *sidecar.ServiceHo
 	if tier := evsTierOf(self.net); tier != nil && tier.NewHost != nil {
 		return tier.NewHost(ctx, host, settings, deps)
 	}
+	if self.settings.Capture {
+		deps.Log = self.net.Capture().Logger("evs " + instance)
+	}
 	return newEvsWorldHost(ctx, host, settings, deps)
 }
 
@@ -623,6 +721,7 @@ func newEvsWorldHost(ctx context.Context, host *sidecar.ServiceHost, settings *e
 	uploads.Hdd = hdd
 	engine, err := evsservice.NewEvsEngine(ctx, host, settings, &evsservice.EvsEngineDeps{
 		AuthState: deps.AuthState,
+		Log:       deps.Log,
 		Uploads:   uploads,
 		GateViews: deps.GateViews,
 	})
@@ -667,6 +766,14 @@ func (self *EvsWorld) instanceHost(instance string) EvsTierHost {
 	return host
 }
 
+// What an instance's requests are served by: its block's handler, through the Net's capture when the settings ask.
+func (self *EvsWorld) handlerOf(instance string, host EvsTierHost) http.Handler {
+	if self.settings.Capture {
+		return self.net.Capture().WrapHandler("evs "+instance, host.Handler())
+	}
+	return host.Handler()
+}
+
 // The engine of a running instance, for a step that drives its parts.
 func (self *EvsWorld) Engine(instance string) (*evsservice.EvsEngine, error) {
 	host := self.instanceHost(instance)
@@ -706,6 +813,11 @@ func (self *EvsWorld) startDevice(device *EvsWorldDevice, view *sidecartest.Fake
 		Gkm:      device.Gkm,
 		Store:    sidecartest.NewFakeStore().Root(),
 		Config:   func() sidecar.GkmAuthView { return self.currentView() },
+		// the world's projection already holds the repo's RepoCreate, which a create resumes (CreateRepo); a device
+		// files nothing else
+		FileStatement: func(ctx context.Context, signedType bridge.SignedType, statement proto.Message) error {
+			return fmt.Errorf("the evs world files no %s", signedType)
+		},
 		Emit: func(event sidecar.SidecarEvent) {
 			if event.Kind != sidecar.SidecarEventEvsAlarm {
 				return
@@ -935,7 +1047,7 @@ func (self *EvsWorld) serveHelper(device *EvsWorldDevice, request *http.Request,
 		recorder := httptest.NewRecorder()
 		served := request.Clone(request.Context())
 		served.Body = io.NopCloser(bytes.NewReader(body))
-		host.Handler().ServeHTTP(recorder, served)
+		self.handlerOf(tried[len(tried)-1], host).ServeHTTP(recorder, served)
 		if err := self.awaitStepEights(host.Engine()); err != nil {
 			return nil, err
 		}
@@ -961,12 +1073,18 @@ func (self *EvsWorld) serve(ctx context.Context, instance string, request *http.
 	run := self.net.Barriers().Start(actor, func() error {
 		served := request.Clone(actor.Context())
 		served.Body = io.NopCloser(bytes.NewReader(body))
-		host.Handler().ServeHTTP(recorder, served)
+		var attempt *EvsWorldAttempt
+		if pushId != nil {
+			attempt = self.beginAttempt(*pushId, instance)
+		}
+		self.handlerOf(instance, host).ServeHTTP(recorder, served)
 		if err := self.awaitStepEights(host.Engine()); err != nil {
 			return err
 		}
 		if pushId != nil {
-			self.noteAnswer(*pushId, evsWorldAnswerOf(instance, recorder))
+			answer := evsWorldAnswerOf(instance, recorder)
+			self.endAttempt(attempt, answer)
+			self.noteAnswer(*pushId, answer)
 		}
 		close(answered)
 		return nil
@@ -1041,11 +1159,14 @@ func (self *EvsWorld) serveDuplicates(device *EvsWorldDevice, request *http.Requ
 		one.run = self.net.Barriers().Start(actor, func() error {
 			copied := request.Clone(actor.Context())
 			copied.Body = io.NopCloser(bytes.NewReader(body))
-			host.Handler().ServeHTTP(one.recorder, copied)
+			attempt := self.beginAttempt(pushId, instance)
+			self.handlerOf(instance, host).ServeHTTP(one.recorder, copied)
 			if err := self.awaitStepEights(host.Engine()); err != nil {
 				return err
 			}
-			self.noteAnswer(pushId, evsWorldAnswerOf(instance, one.recorder))
+			answer := evsWorldAnswerOf(instance, one.recorder)
+			self.endAttempt(attempt, answer)
+			self.noteAnswer(pushId, answer)
 			close(one.answered)
 			return nil
 		})
