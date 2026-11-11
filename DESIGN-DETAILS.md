@@ -10,7 +10,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 |---|---|---|---|
 | 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10) |
 | 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10) |
-| 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | pending |
+| 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | complete (2026-11-11) |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
 | 5 | Authorization-log verdicts across folds (§7.9) | 13 | complete (2026-11-09) |
 | 6 | MLS group key management (§10) | 13 | complete (2026-11-10) |
@@ -1686,9 +1686,878 @@ This section is designed on the recommendation of each of the first three; the f
 
 ## 3. Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5)
 
-Status: pending
+Status: complete (2026-11-11)
 
 Tasks held until complete: SMTP-M9-07, SMTP-M9-08, SMTP-M9-09, SMTP-M9-13, SMTP-M9-32.
+
+Models: `sidecar/sidecartest/model/details/ProofParts.tla` (the edge's record gate over parts bound to one key part) and `ProofKeys.tla` (a prover host's keys across key sets, releases and its cache), their configurations (`ProofParts*.cfg`, `ProofKeys*.cfg`) and `run-proof.sh` beside them. New tasks: `.stack/plan/proposals/details-3-tasks.md` (SMTP-M9-35 to SMTP-M9-40, OPS-M9-02). Questions filed: `.stack/questions/details-3-key-commitment.md`, `details-3-speed-bar.md`, `details-3-recipient-groups.md`, `details-3-key-rotation.md`, `details-3-metadata-rows.md`. Questions this section answers, each as 3.9 says: `smtpproof-start-z1-reproof-cost`, `smtpproof-start-key-distribution`, `smtpproof-start-shts-wire`, `smtp-m9-22-recipient-classes`; `smtp-m9-06-pin-key` and `smtp-m9-06-tl4-allowance-action` stay the owner's and nothing here waits on them.
+
+**This section is built on the recommendation of `details-3-key-commitment`, which asks the owner to change a rule they kept on 2026-11-06 (QD-144).** D-SMTP-22 says no commitment to an application key is public. The design below makes one group element public per connection: a perfectly hiding commitment to the session's keys. 3.2.2 states what that element is, 3.3 why it tells the edge nothing, and 3.9 the trade-off in plain terms and what is built instead if the answer is no. The five held tasks build the same seam under either answer; the circuit tasks (SMTP-M9-36 and what needs it) wait for it.
+
+Measurements in this section were taken on 2026-11-11 with gnark v0.15.0 on the shared Apple M4 Pro (14 cores, 64 GiB) at load averages of 90 to 100, from the landed gadgets and three prototypes that are not in the tree: constraint counts come from compiling, and one unit-sized circuit was set up and proven once in a process of its own. Neither of D-SMTP-16's reference machines has been run; every figure for them is a projection and says so.
+
+### 3.1 The problem
+
+§14.5 proves a send in parts: π1 before EHLO, π2 before the envelope, π3 before the message, and in DATA mode one part per 2 KiB of body. D-SMTP-22 keeps both directions' keys private and allows no public value that commits to them, so each part proves Z1 again: from a private handshake secret, through TLS's key schedule, to the keys it uses. Five things fail. The first four are the brief's; the fifth was found here.
+
+**A. Cost.** The landed shapes for D-SMTP-16's speed-gate send (BDAT, a 4 KiB header block, 10 recipients), as SPEC.md 11.4 compiled them on 2026-11-08:
+
+```text
+TLS 1.3, AES-128-GCM     constraints   of which Z1    domain it proves in   CPU measured, M4 Pro
+π1  EHLO                     566,338       515,322    2^20  1,048,576           5.3 s
+π2  envelope               1,623,070       708,498    2^21  2,097,152          11.6 s
+π3  BDAT, header block     4,788,371       708,498    2^23  8,388,608          47.0 s
+whole send                 6,977,779     1,932,318    11 × 2^20                63.9 s
+```
+
+1. *Z1 three times.* 1,932,318 constraints prove the same key schedule three times. At ORIGO's 41,000 constraints a second on an m5.large, D-SMTP-16's 60 s buy 2,460,000, so Z1's repeats take 79% of the bar before one octet of the message is opened, and the whole send takes 170 s.
+2. *The domain, found here.* Groth16's prover works over a power-of-two domain that holds the constraints, and its time follows the domain, not the count. SPEC.md 11.4's own rows show it: TLS 1.2's BDAT π3 (4.7M constraints) and its DATA π3 (6.3M) share the 2^23 domain and took 44.5 and 44.7 CPU-seconds; every row sits between 5.1 and 6.4 CPU-seconds per 2^20 of domain. π3 pays for 8.39M of domain to prove 4.79M constraints, because Z1 pushes it past 2^22 (4,194,304). Without Z1 it is 4,079,873 and fits. ORIGO's figure is itself 400,000 constraints in the 2^19 domain, 9.8 s: 19.6 s per 2^20. By domain the landed send is 11 units, 216 s on an m5.large.
+3. *The floor.* A 4 KiB header block under AES-128-GCM is 256 keystream blocks of 11,665 constraints, 2,986,240 in all: 73 s at 41,000 a second for the keystream alone, before its scan, the envelope, the replies or any key. No relation over these gadgets proves the gate's send to an AES MX in 60 s on that machine. What a design can do is stop paying twice: Z1 once, and no empty domain.
+
+*Scenario.* A team's `ur daemon` on a 2 vCPU cloud host sends a ten-recipient message to an MX that selects AES-128-GCM. π1 takes 14 s, π2 40 s, π3 117 s. The message arrives nearly three minutes after the handshake, every time.
+
+**B. Recipients (question smtp-m9-22-recipient-classes).** A shape's pools are fixed. π2's holds MAIL and 14 RCPTs of short addresses under AES, 10 under ChaCha20; π3's holds 12 replies of under 32 octets.
+
+*Scenario 1.* A Team member sends to 15 people at one company. π2 has no shape, the prover refuses before MAIL, and the send ends with no unit charged and no mail: `smtp_recipients_per_message` allows 100.
+*Scenario 2.* A member sends to 8 people at a domain whose MX answers each RCPT with a 45-octet line (`250 2.1.5 OK` and a queue id), each in a record of its own. A reply then takes 3 of AES's 16-octet blocks, so π3's 24 blocks hold MAIL's reply and 7 more. The ninth reply has no block, π3 has no shape, and the send ends after MAIL: a unit spent, the message unsent.
+
+Each class of more recipients is 12 more shapes with Z1 in every one, and a 100-recipient π2 is 4.6M constraints.
+
+**C. Memory (QD-483).** SPEC.md 11.4 measured a process that only loads one key and proves: 1.7 GiB for AES's π3 under heavy load, 6.3 GiB for TLS 1.2's on lightly loaded cores, 7.0 GiB for TLS 1.2's DATA π3.
+
+*Scenario.* A member's only prover host is an 8 GB M1 MacBook Air. `Prover.Measure` proves each suite's largest shape first. TLS 1.2's DATA π3 passes 7 GiB, the machine swaps or the process is killed, the host records no `p/`, and the member's phones queue mail that nothing sends.
+
+§5's `MemoryBudgetByteCount` (192 MiB on a search daemon) bounds §6's caps; QD-483 put proving outside it and named no bound for proving at all.
+
+**D. Keys (question smtpproof-start-key-distribution).** No production setup has run, so `NewProver` and `NewVerifier` hold no key and refuse every part. What a setup would have to produce today: 22 shapes over four domain sizes, 2^20 to 2^23; a phase 1 contribution per size, 1.5 GiB at 2^23; proving keys of 77 to 866 MiB, about 9 GiB a host; and `VerifySetupTranscript` checks a shape's phase 1 again for every shape of that size.
+
+*Scenario.* A host installs `ur`, verifies keys at idle for hours, and sends. A release changes one gadget. Every shape that holds it needs a new ceremony, a new download and a new check.
+
+**E. A cached key outlives the circuit it was checked against, found here.** `KeySet.VerifyProvingKeys` skips a shape whose cache file exists, and the file is named by the proving key's hash alone (`cachedProvingKeyPath`). `cachedProvingKeys.load` then reads that key and compiles the circuit from the running build.
+
+1. A build compiling circuit c1 verifies key set A's transcript against c1 and caches A's key.
+2. A release changes a gadget, so the same shape compiles to c2, and by mistake still pins A.
+3. On a fresh host the check fails and nothing proves, which is the designed outcome. On this host the file exists, nothing is checked, and the prover runs c2's witness through c1's key.
+
+A proof under a key of another circuit is not a valid Groth16 proof, and its third element is then a function of the witness that no simulator produces: zero knowledge is gone for that part, and the witness is the session's keys and plaintext. SPEC.md 10.2's rule, "a prover host uses a proving key only if `verifySetup` ... against the circuit it compiled from its own source, produced that key", holds per check and not per build. `ProofKeysWritten-StaleCache` reaches it in 6 states (3.3).
+
+**The requirement.** Z1 is proven once in a connection, and every other part is bound to the keys it fixed without the edge learning anything about them. Every circuit fills one domain, and one size of domain serves every shape. A send's parts follow its size: recipients, header octets and body octets each cost parts, and none has a class to fall out of, up to `smtp_recipients_per_message` and a 16 KiB header block. One proof's memory is bounded by a setting a host can meet on 8 GB. A host proves only with a key its own check produced against the circuit its own build compiles, whatever is pinned, published or cached. And the soundness claim of SPEC.md section 1 stands word for word.
+
+### 3.2 The design
+
+#### 3.2.1 The principle
+
+Four moves, each of which removes one of 3.1's failures and leans on the one before it.
+
+1. **One key part.** Part 1 proves Z1 for both directions and makes one group element public: C, a perfectly hiding commitment to the client key and IV and the server key and IV (3.2.2). Every later part proves that it knows an opening of C and uses those keys. That costs 3,261 constraints under AES-128-GCM and 4,453 under ChaCha20, measured, where Z1 costs 708,498.
+2. **One domain.** With Z1 out of them, parts can be small. Every production circuit is sized to fill one 2^20 domain, a **unit**, and a send takes as many units as it has to open. One domain size means one phase 1, proving keys of one size and one memory figure.
+3. **Parts follow the send.** The envelope goes in groups of commands, the header block in records, DATA's body in records, and each gets a part. What a scan must remember from one record to the next travels the same way the keys do: as a perfectly hiding commitment, the **carry**, which one part publishes and the next opens.
+4. **A verified part never changes.** §14.5 lets a part be "proven again with a later `server_record_count`". With carries that would let a part's published state change after its records left. Instead a server record that arrives late is covered by the next part, and a part may open no client record at all.
+
+What does not change: E1 and E2, Z1's handshake inputs, the SHTS disclosure (0x1607, QD-487), the normal form of SPEC.md section 4 (one command per record, templates from public lengths), Z2 to Z9 as checks, E3's release rules, Groth16 over BN254 with gnark v0.15.0 and nothing from `std/`, and the proof's 164 octets. The commitments are arithmetic inside the circuit over wires the circuit already holds; no gnark `Commit` is used, so `TestCircuitsUseNoCommitments`, `decodeProof` and SPEC.md 10.2's argument for vanilla Groth16 stand.
+
+```text
+sidecar                                   smtpedge                              MX
+ |--SmtpPreamble, naming its key set-------->|--banner, EHLO, STARTTLS----------->|
+ |==ClientHello .. Finished (spliced; 1.3 discloses SHTS, E2)====================>|
+ |--part 1 (key): Z1 once, C, the EHLO record-->| verify: C is the connection's from here
+ |==EHLO=========================================================================>|
+ |<=EHLO reply====================================================================|
+ |--part 2 (env): opens C; that reply: 1 reply, all 250, CHUNKING; MAIL, RCPT x g1-->| verify
+ |==MAIL, RCPT x g1==============================================================>|
+ |<=their replies=================================================================|
+ |--part 3.. (env): opens C; 1 + g1 replies, each 2xx; RCPT x g2-->|   one part a group, while recipients remain
+ |--part m (msg): opens C; the last group's replies; BDAT n LAST, header record 1; carry S1-->| verify
+ |==BDAT n LAST, header record 1=================================================>|
+ |--part m+1.. (hdr): opens C and S1; header record 2; carry S2-->|   one part a record
+ |--the last part: the header block's last record and QUIT; last-->| verify
+ |==that record, the body unopened to octet n, QUIT==============================>|
+ DATA: the last env part opens DATA; msg proves the 354 and opens header record 1; a body part opens each
+ body record, opening and publishing a carry; the last also opens ". CRLF" and "QUIT CRLF".
+```
+
+The gate's send (10 recipients, a 4 KiB header block) is part 1, one env, one msg and three hdr parts under AES-128-GCM: six units where the landed shapes take eleven. A send to 100 recipients is the same connection with seven more env parts.
+
+#### 3.2.2 The commitments
+
+Both commitments are Pedersen commitments over the twisted Edwards curve whose base field is BN254's scalar field, so its points are pairs of circuit wires and its group law is a handful of constraints.
+
+```text
+E:  -x^2 + y^2 = 1 + d x^2 y^2  over F_r, r BN254's scalar field
+    d = 12181644023421730124874158521699555681764249180949974110617291017600649128846
+    order 8 l, l = 2736030358979909402780800718157159386076813972158567259200215660948447373041, prime
+    (gnark-crypto ecc/bn254/twistededwards's curve, which the witness side and the tests use; the circuit side is
+     this module's own gadget). a = -1 is a square in F_r and d is not, checked by test, so the addition law
+       (x1, y1) + (x2, y2) = ( (x1 y2 + y1 x2) / (1 + d x1 x2 y1 y2),  (y1 y2 + x1 x2) / (1 - d x1 x2 y1 y2) )
+     is complete: no pair of points has a zero denominator, and (0, 1) is the identity.
+
+generator(tag, i):                    -- a point of order l whose discrete log nobody knows
+    for c = 0, 1, 2, ...:
+        y  = SHA-256("urnetwork smtpproof commit v1" || 0x00 || tag || 0x00 || u32be(i) || u32be(c)), as a big-endian integer, mod r
+        x2 = (1 - y^2) / (-1 - d y^2);  next c if the denominator is 0 or x2 is no square
+        x  = the square root of x2 that is the smaller integer
+        P  = 8 (x, y);  next c if P = (0, 1)
+        return P
+    G_j = generator("key", j), H = generator("key blind", 0)          the key commitment's
+    T_0 = generator("scan", 0), U = generator("scan blind", 0)        the carry's
+
+Com(generators, blindGenerator, bits, rho):
+    split bits into runs of 246, the last shorter; run j is the integer m_j = sum of bit_i 2^i
+    return sum_j m_j G_j + rho blindGenerator
+
+key commitment   C = Com(G, H, ck || civ || sk || siv, rho)
+    ck, sk: the client and server write keys, 16 octets under AES-128-GCM, 32 under ChaCha20
+    civ, siv: 12 octets each. TLS 1.3: the write IVs. TLS 1.2: the 4-octet salt and 8 zero octets
+    octets in that order, each octet's bits least significant first: 448 bits and two generators, or 704 and three
+carry            S = Com(T, U, state, sigma), state the 24 bits of 3.2.4
+blinds           rho and each sigma: 251 bits, uniform in [0, l), drawn from crypto/rand by rejection, one rho a connection
+                 and one sigma a carry, never derived, never reused, and passed to testHookSecret where they are drawn
+
+on the wire and as public inputs: x || y, each 32 octets big-endian and below r. The gate refuses any other length,
+a coordinate not below r, and a pair that is not on E.
+```
+
+**The gadget.** Message and blind bits are boolean wires. They are taken three at a time. For window w of run j the table is the eight constants v 8^w G_j, v = 0 to 7; the selected point's coordinates are the table's multilinear form in the three bits, 4 products, and adding it to the running point by the law above is 7 constraints. The first window starts the running point. The result is asserted equal to the public pair. Measured from a prototype checked against gnark-crypto's own arithmetic, booleans included: 3,261 constraints for 448 bits and a blind, 4,453 for 704, 1,279 for a carry.
+
+**What these are.** Binding is computational: two openings of one commitment give a relation among generators whose logs nobody knows, a discrete log on E, about 2^125 work. Hiding is perfect: every generator has order l, so the message's part is a point of the order-l subgroup, and rho H is uniform over that subgroup when rho is uniform in [0, l). C is then a uniform point of the subgroup whatever the keys are, and so is every carry whatever the state is. Nothing about how the generators were chosen, and nothing the edge knows, changes that.
+
+#### 3.2.3 The relation, revised
+
+The checks keep their names. Z1 is still "the keys are the handshake's", and it is now established in two steps.
+
+```text
+Z1, key part      witness HS (1.3) or master_secret (1.2), and rho
+                  the landed derivation, both directions always, to ck, civ, sk, siv; 1.2 also opens SF (D-SMTP-21)
+                  C = Com(G, H, ck || civ || sk || siv, rho)                      C is public: the part carries it
+Z1, later parts   witness ck, civ, sk, siv, rho
+                  Com(G, H, ck || civ || sk || siv, rho) = C                      C is public: the edge supplies it
+                  Z2 and Z7 take their keystreams from these wires
+```
+
+| Part | Shape | Client records it opens | Server records it covers | Checks |
+|---|---|---|---|---|
+| 1 | key | EHLO | none | Z1 (derivation and C), Z2 Z3 Z4 |
+| 2 | env | MAIL and the first group of RCPT | through the EHLO reply: 1 reply | Z1 (opening) Z2 Z3 Z4 Z7 Z8 Z9 |
+| later envelope parts | env | the next group of RCPT; the last group ends with DATA in DATA mode | the replies to the group before | Z1 Z2 Z3 Z4 Z7 Z8 |
+| first message part | msg | BDAT's command (BDAT), header record 1; with a one-record header block in BDAT mode also QUIT, `last` | the replies to the last group; the 354 in DATA mode | Z1 Z2 Z3 Z4 Z5 Z6 Z7 Z8 |
+| header parts | hdr | one later header record; BDAT's last also QUIT, `last` | none | Z1 Z2 Z3 Z5 Z6 |
+| body parts, DATA | body | one body record; the last also the end mark and QUIT, `last` | none | Z1 Z2 Z3 Z6 |
+| any part with no client record | env | none | one or more: a late ticket | Z1 Z7 Z8 |
+
+- **Z2, Z3, Z4** are as landed. A record's role follows from its position alone (3.2.5), so its template does too.
+- **Z5** is SPEC.md's six rules over the header block, which is now the concatenation of 1 to `HeaderRecordMaxCount` records. 3.2.4 states them record by record. One thing is added: the four single fields, `List-Unsubscribe-Post` on a BULK message, and the fixed signature's line through its `d=` and `s=` tags lie in the first record. An honest sender puts them there (3.7, SMTP-M9-04), and a header block that does not is unprovable.
+- **Z6**, BDAT: unchanged, with "the head" now the header block's records. DATA: SPEC.md's conditions over the concatenation of header and body records. Records are no longer whole lines (reading 3): a body record is cut at a fixed length and the scan's state crosses in a carry.
+- **Z7** is as landed, with one public bit more, `Tls13`: a block's private ticket flag is forced to 0 when it is 0, which the landed circuit did by compiling TLS 1.2 apart.
+- **Z8** is stated per part: the server records a part covers begin at the start of a reply and end at the end of one, and hold exactly `reply_count` replies. With `EhloRule` (part 2 alone) that is one reply, every line coded 250. Otherwise every reply is coded 2xx, except that with `Last354` the last is coded 354. Across the connection the gate adds the counts and requires 2 + R before any message record, 3 + R in DATA mode (3.2.5), which is §14.5's "exactly 1 + R replies, then 354" beside the EHLO reply.
+- **Z9** is as landed, in part 2: `RequireChunking` is set exactly when part 2 names BDAT.
+
+**Public inputs.** As SPEC.md 5.1, with these changes. The key part's statement gains `KeyCommitment`, two elements, after Z1's handshake inputs. A later part's statement begins with `KeyCommitment` and holds no handshake input: `ShtsHash`, `HelloHash`, `FinishedHash`, the 1.2 inputs and SF's block leave every shape but key's. A shape with header or body blocks has `CarryOut`, two elements, and hdr and body have `CarryIn` before it. A shape with server blocks has `ReplyCount`, `EhloRule`, `RequireChunking`, `Last354` and `Tls13`, one element each, in place of `ExpectedReplies`, `RequireChunking` and `DataMode`. Every public wire is still read by a constraint (reading 29): a flag a shape cannot use is bound to 0 there.
+
+**One family of circuits for TLS 1.2 and 1.3 under AES.** The landed circuit already forms a record's nonce as the IV XOR the counter wire's upper 64 bits, with the 1.2 IV's last 8 octets zero. With the IV now a private opening of C rather than a derived constant, the 1.2 key part commits to the salt and 8 zero octets, and the same env, msg, hdr and body circuits serve TLS 1.3's AES-128-GCM and both TLS 1.2 suites. The type octet, the explicit nonce and the lengths differ only in what the edge assigns to public wires. That costs TLS 1.2 the 64 constraints a block the landed 1.2 shapes saved, about 5,000 a unit.
+
+#### 3.2.4 Scans that cross records
+
+**The header block's records.** The sender cuts the header block by length alone, so the cut says nothing but the length the edge already sees:
+
+```text
+headBytes = octets the family's msg shape holds in its head blocks; restBytes = what its hdr shape holds in its rest blocks
+    (blocks x 16 or 64, less TLS 1.3's type octet; 3.2.6)
+split(L):                                    -- L = the header block's octets, through its final CRLF CRLF
+    if L <= headBytes: return [L]
+    sizes = [headBytes]; left = L - headBytes
+    while left > restBytes: sizes.append(restBytes); left -= restBytes
+    sizes.append(left)
+    if left < HeaderLastRecordMinByteCount: move the difference from the record before it
+    return sizes
+```
+
+The edge accepts any cut in which every record but the last holds at least `HeaderRecordMinByteCount` octets (128) and the last at least `HeaderLastRecordMinByteCount` (4). The first bound is longer than the longest literal the scan looks for, the fixed signature's 99-octet prefix, so a name or prefix can straddle one boundary and never two.
+
+**The state.**
+
+```text
+scan state: 24 bits, least significant first
+ 0-1    pos      0 inside a line; 1 the last octet was CR; 2 it was LF, so a line starts next;
+                 3 it was "." at a line's start (body only)
+ 2      name     a field name is unfinished: a line that is no continuation has not reached its colon
+ 3-9    run      that name's octets so far, 1 to 126, or 127 for more; 0 when name is 0
+ 10-15  prefix   one bit for each of from:  message-id:  x-ur-ref:  feedback-id:  list-unsubscribe-post:  and the
+                 fixed signature's prefix: the name so far is that literal's first run octets (names without case,
+                 the prefix exactly)
+ 16     single   the line that ended at the last octet is one of rule 4's or rule 6's single fields
+ 17-23  zero
+start = pos 2 and nothing else: before a header block's first octet, and before a body's
+```
+
+**Z5 by record.** c is a record's content of n octets, `in` the state it starts from and `out` the state it leaves. `Field[i]` is public and 1 on every header octet but the block's final CRLF. L ranges over the six literals above.
+
+```text
+every header record
+ H1  each octet is HTAB, SP to "~", CR or LF                                                            rule 1
+ H2  LF at i exactly when CR at i-1; at i = 0, exactly when in.pos = 1                                  rule 1
+ H3  lineStart(i) = Field[i] and (LF at i-1, or i = 0 and in.pos = 2); a line does not start with CR    rule 2
+ H4  nameStart(i) = lineStart(i) and c[i] is neither SP nor HTAB; a name's first octet is neither ":" nor ".";
+     from a nameStart, or from i = 0 when in.name, until the next ":", no octet is SP, HTAB or CR       rule 3
+ H5  hit(L, i)  = nameStart(i) and c[i .. i+|L|) = L, with every octet of it inside the record
+     cross(L)   = in.name and in.prefix[L] and 1 <= in.run < |L| and c[0 .. |L| - in.run) = L[in.run ..)
+ H6  in.single implies c[0] is neither SP nor HTAB                                                      rules 4, 6
+ H7  out.pos = 1 if c[n-1] is CR, 2 if LF, else 0;  out.name = a name is unfinished after c[n-1];
+     out.run = that name's octets if it began in this record and has under 127, else 127; 0 without a name;
+     out.prefix[L] = out.name and out.run < |L| and c[n - out.run .. n) = L[0 .. out.run)
+the first record (shape msg): in = start
+ H8  c[0] is neither SP nor HTAB                                                                        rule 3
+ H9  sum over i of hit(L, i) = 1 for from:, message-id:, x-ur-ref:, feedback-id: and the fixed prefix;
+     = Bulk for list-unsubscribe-post:                                                                  rules 4, 5, 6
+ H10 each hit's literal form, read at the hit as landed (checkLiteralAt, the From positions); an octet past the
+     record's end reads as 0 and fails, so each of those lines lies inside this record                  rules 4, 5, 6
+ H11 a single field's line is not followed by SP or HTAB inside the record;
+     out.single = a single field's line ends at c[n-1]                                                  rules 4, 6
+a later record (shape hdr): in = the carry the gate kept
+ H12 cross(L) = 0 and hit(L, i) = 0 for every L and i, list-unsubscribe-post: only when Bulk;  out.single = 0
+the header block's last record
+ H13 its last four octets are CR LF CR LF by its template, and Field is 0 on the last two               rule 2
+```
+
+Each part asserts Com(T, U, in, sigma_in) = `CarryIn` (hdr) and Com(T, U, out, sigma_out) = `CarryOut` (msg, hdr). A prototype of H1 to H7 and H12 compiles to 819 constraints an octet under AES and 431 under ChaCha20, keystream included: 90 an octet beyond the keystream, where the first record's full scan is 178, because a later record reads no literal, runs no From positions and needs no local-part table.
+
+**DATA's body by record.** A body is cut into records of the body shape's capacity, the last shorter.
+
+```text
+every body record (shape body): in = start for the body's first record, else the carry the gate kept
+ B1  LF at i exactly when CR at i-1; at i = 0, exactly when in.pos = 1
+ B2  an octet at a line's start (after LF; at i = 0 when in.pos = 2) that is "." is not followed by CR;
+     at i = 0, in.pos = 3 forbids CR
+ B3  out.pos = 1 after CR; 3 after "." at a line's start; 2 after LF; else 0;  every other bit of out is 0
+the body's last record: its last octet is LF, by a public flag as landed, so the end mark starts a line
+```
+
+A body with no octet has no body record, and its last part opens only the end mark and QUIT, with `CarryIn` = `start`. The gate supplies Com(T, U, start, 0) wherever a scan starts: the start state is public, so its commitment needs no blind.
+
+**Replies.** A part covers whole server records, as landed, and its server blocks are parsed by the landed state machine from "at a reply's first digit" to the same state, which it asserts at the end together with `replies = ReplyCount`. The prover builds a part when it has read whole replies, so the boundary is there to use. Nothing of the parser crosses a part, and so there is no carry for it.
+
+**Envelope groups.** The sender sends the envelope's commands (MAIL, R × RCPT, and DATA in DATA mode) in groups, waits for a group's replies, and proves them with the next group. Where the MX offers PIPELINING a group goes at once, otherwise command by command under the same part, as landed.
+
+```text
+group(commands left, estimate):                                  -- the next group
+    take commands in order while  their records fit the env shape's client blocks
+                              and count * blocks(estimate) <= the env shape's server blocks
+                              and count <= EnvelopeGroupMaxCount when that is set
+    blocks(e) = ceil((e + 1) / 16) under AES in 1.3, ceil(e / 16) in 1.2, ceil((e + 1) / 64) under ChaCha20: a reply
+                may come as a record of its own, and a record starts a block
+estimate = ReplyEstimateByteCount (40) for the first group; afterwards the group before's mean reply, from public
+           values alone: the content octets of the server records its part covered over that part's reply_count,
+           rounded up, plus ReplyMarginByteCount (8)
+```
+
+The replies to the last group go into the msg part when they fit its server blocks. When they do not, an env part with no client record covers them first, and the msg part covers none. When a group's replies fit no part at all (one server record larger than the env shape's server blocks), no shape exists: the prover ends the connection before any message record and reports `EnvelopeRetry` (3.5).
+
+#### 3.2.5 The wire and the gate
+
+```proto
+message SmtpPreamble {             // 0x1601; fields 1 to 9 as §14.5
+  bytes proof_key_set = 10;        // SHA-256 of the keyset.json every part of this connection is proven under (3.2.7)
+}
+// SmtpPreambleResult.code gains 8 KEYS: the edge does not accept that key set. No MX is dialed, nothing is debited.
+
+message SmtpProof {                // 0x1605
+  bytes send_id = 1;
+  uint32 index = 2;                // the part's ordinal, from 1; part 1 is the key part
+  uint32 mode = 3;                 // 0 in part 1; 1 BDAT or 2 DATA from part 2 on, which fixes it (Z9)
+  uint64 first_record = 4;         // client application records covered, by TLS sequence number;
+  uint64 last_record = 5;          //   a part that opens none has last_record = first_record - 1
+  bytes proof = 6;                 // 164 octets
+  bool last = 7;                   // covers octet n, the end mark (DATA) and QUIT
+  uint64 server_record_count = 8;  // server records after Finished that this and earlier parts cover
+  repeated bytes records = 9;      // ciphertext of each client record the part opens, in sequence order
+                                   //   (BDAT's last part: its header record from first_record, then QUIT at last_record)
+  bytes key_commitment = 10;       // part 1 only: C, 64 octets (3.2.2)
+  uint32 reply_count = 11;         // the replies the server records it covers hold (Z8)
+  uint32 header_record_count = 12; // on the part that opens the header block's first record, and no other:
+                                   //   how many client records hold the header block
+  bytes carry = 13;                // on a part that opens a header or body record: the scan state after it, 64 octets
+}
+```
+
+`SmtpHandshake` (0x1607), `SmtpProofResult` and `SmtpOutcome` are unchanged. The root seam follows (3.7, SMTP-M9-35): `SmtpProofPart` gains the four fields, `SmtpProofPreamble` gains `ProofKeySet`, and `NewSmtpProofSession` answers `ErrSmtpProofKeySet` for a set the verifier does not hold, which the engine sends as KEYS.
+
+**Roles.** A client record's role is its position, so the edge assigns every template with no word from the prover but k:
+
+```text
+f = the first application record's sequence number (0 in TLS 1.3, 1 in 1.2); R = recipient_count; k = header_record_count
+ f                  EHLO
+ f+1                MAIL
+ f+2 .. f+1+R       RCPT
+ f+2+R              BDAT n LAST in BDAT mode, DATA in DATA mode
+ f+3+R .. f+2+R+k   header records 1 .. k
+ BDAT   every record after header record k and before the last part's last_record is body, unopened; QUIT is at last_record
+ DATA   body records from f+3+R+k, one a part; the end mark and QUIT follow the last, in the last part
+commands, which the MX answers: EHLO, MAIL, RCPT, DATA.
+message records, which E3 step 5 holds: BDAT's command, header records, body records, the end mark.
+```
+
+**The gate.** `edgeSession.VerifyPart`, in the order its fences run. Each refusal ends the session (reading 20); only step 13's is a cut.
+
+```text
+state, under stateLock: C; parts; nextRecord (f at the start); coveredServer; repliesProven; commandsCovered; mode;
+                        k; headerCovered; carry; commits; plus E3's as landed
+
+VerifyPart(p):
+  1  the session has ended                                     -> refuse.  The MX has closed -> moot, nothing more
+  2  the handshake's inputs do not exist yet                   -> E3
+  3  p.index = len(parts): byte-equal to that part             -> no-op, OK;  else -> E3
+     p.index != len(parts) + 1                                 -> E3
+  4  index 1: records = [the record at f]; first_record = last_record = f; mode 0; server_record_count 0;
+              reply_count 0; no carry; no header_record_count; key_commitment 64 octets, two values below r, on E
+     index > 1: key_commitment empty
+  5  client range: first_record = nextRecord, and either records empty with last_record = first_record - 1, or the
+     records are sequence numbers first_record, first_record + 1, ... to last_record, except that a BDAT part with
+     last carries QUIT alone at last_record. At most PartRecordMaxCount. After a part with last: records empty
+  6  server range: coveredServer <= server_record_count <= records relayed; a part with no client record covers at
+     least one more server record
+  7  mode: part 2 names BDAT or DATA; every later part repeats it
+  8  roles, from the table: the part's kind is env, msg, hdr or body by what it opens, and it opens at most one header
+     record or one body record. header_record_count is on the part that opens header record 1, 1 to
+     HeaderRecordMaxCount, and absent elsewhere. BDAT's command is opened with header record 1. last is on the part
+     that opens QUIT
+  9  replies: part 2: reply_count = 1, it covers at least one server record, and it opens MAIL.
+     Any other part: reply_count <= commandsCovered - repliesProven, and 0 if it covers no new server record.
+     A part that opens the first message record: repliesProven + reply_count = 2 + R, or 3 + R in DATA mode
+ 10  lengths: every opened record has a template at its length (as landed); every header record but the last holds
+     at least HeaderRecordMinByteCount octets and the last at least HeaderLastRecordMinByteCount; BDAT's chunk
+     octets and DATA's octet count as landed
+ 11  carry: 64 octets, two values below r, on E, when the part opens a header or body record; empty otherwise
+ 12  shape: the first shape of the key set's catalog, of the part's kind and the suite's family, whose pools hold
+     the part's records; none -> refuse
+     statement := KeyCommitment C (part 1: p.key_commitment, with Z1's handshake inputs);
+                  CarryIn: the gate's carry, or the start constant for header record 1 and for the first body part;
+                  CarryOut p.carry;  ReplyCount p.reply_count;  EhloRule: index = 2;
+                  RequireChunking: index = 2 and BDAT;
+                  Last354: DATA and reply_count > 0 and repliesProven + reply_count = 3 + R;
+                  Tls13; and every block, template and flag as landed
+     at := commits
+  -- stateLock released
+ 13  verify under the session's key set                        fails -> cut (ErrSmtpRecordCut), unless ctx ended
+  -- stateLock taken
+ 14  the session ended meanwhile -> refuse;  commits != at -> E3: another part landed while this one verified
+ 15  commit: parts += p; commits += 1; part 1: C := p.key_commitment.
+     nextRecord := last_record + 1 if it opened a record; coveredServer := server_record_count;
+     repliesProven += reply_count; commandsCovered += the commands it opened; mode and k as it named them;
+     carry := p.carry if it opened a header or body record, and the start constant once it opened header record k
+ 16  release, as landed: held client records leave in order while each is covered by a part, equals the ciphertext
+     that part proved if opened, keeps BDAT's chunk within octet n, and, a message record, finds
+     coveredServer = records relayed. The records step 16 hands back are all this call returns
+```
+
+Three things differ from the landed gate beyond the new fields. A part is never replaced: step 3 passes only an exact resend, and the "proven again" branch goes (`preparePartWithLock`'s `replacing`). A part may open no client record. And `MailForwarded` becomes "the record at f+1 has been handed out", since part 2 is no longer the whole envelope.
+
+#### 3.2.6 Shapes and the planner
+
+**The catalog.** Eleven shapes in two families, each a 2^20 domain. Pools are in keystream blocks of 16 octets (AES-128-GCM) or 64 (ChaCha20). The counts below are assembled from compiled circuits: the landed gadgets compiled at these pool sizes without Z1, with the opening and the carries added at their measured costs, the key shapes from the landed π1 with the second direction's 193,176 constraints added, and the hdr shapes from the prototype of 3.2.4.
+
+```text
+shape (KeySet name)               pools, in blocks                    constraints   public    of 2^20   holds (TLS 1.3; 1.2 holds one octet more a record)
+key-v0304-aes128gcm-c8            client 8                               810,203     1,167     77.4%    an EHLO record of up to 127 octets
+key-v0304-chacha20-c2             client 2                               758,333     1,161     72.4%    the same
+key-v0303-aes128gcm-c8            client 8                               770,339     2,470     73.7%    the same; both TLS 1.2 suites
+env-aes128gcm-s40-c40             server 40, client 40 with locals     1,021,658     6,655     98.1%    MAIL and 12 RCPT of up to 47 octets; a reply record of 639
+                                                                                                        octets, or 40 of up to 15
+msg-aes128gcm-s16-c4-h52          server 16, client 4, head 52         1,023,348     7,614     98.3%    BDAT's command and QUIT; 831 header octets; replies in a
+                                                                                                        record of 255 octets, or 16 of up to 15
+hdr-aes128gcm-c2-r75              client 2, rest 75                    1,018,425     6,180     97.7%    1,199 header octets; QUIT
+body-aes128gcm-c2-b81             client 2, body 81                    1,020,529     8,734     98.2%    1,295 body octets; the end mark and QUIT
+env-chacha20-s19-c20              server 19, client 20 with locals     1,009,057    12,033     97.4%    20 commands of up to 63 octets; a reply record of 1,215
+                                                                                                        octets, or 19 of up to 63
+msg-chacha20-s12-c2-h19           server 12, client 2, head 19         1,005,225    12,243     97.0%    BDAT's command and QUIT; 1,215 header octets; replies in a
+                                                                                                        record of 767 octets, or 12 of up to 63
+hdr-chacha20-c1-r35               client 1, rest 35                      998,249    11,435     96.3%    2,239 header octets; QUIT
+body-chacha20-c2-b40              client 2, body 40                    1,010,566    16,565     98.0%    2,559 body octets; the end mark and QUIT
+```
+
+The aes128gcm family serves TLS 1.3's AES-128-GCM and both TLS 1.2 suites (3.2.3); only the key shape differs by version. The landed catalog has 22 shapes over four domain sizes.
+
+- **The fill rule.** A shape's pools are the settings of `ProofSettings.Shapes` (3.2.8), and the task that lands a shape sets each pool to the largest count for which the compiled circuit's constraints plus public inputs stay at or under `DomainSize` less `DomainHeadroomCount` (10,486, 1%), in the pool order the table lists them, and records the compiled figures in SPEC.md 10.4 and 11.4. `TestProductionShapesFillOneDomain` fails a shape over the bound or under 90% of it, the key shapes aside.
+- **Names.** A KeySet name spells kind, family (and version, for key), and every pool, as above; `partShapeName` follows. A changed pool is another name and another key.
+- **The first fit.** `partShapeFor` takes the part's kind from its roles and its family from the suite, and returns the first catalog shape of that kind and family whose pools hold the part's records. The prover and the edge call the same function over the same public values.
+- **Suite order.** The TLS client offers ChaCha20 first: `ProverSettings.SuiteOrder` defaults to 0x1303, 0x1301, 0xc02b, 0xc02f, where the landed client offers AES first. An octet under ChaCha20 costs 341 constraints of keystream against 729, and an MX that follows the client's preference then halves the header's cost. A suite whose family has no verified keys is not offered (3.2.7).
+
+**The planner.** `proverRun` plans as the connection goes, since replies decide the next step.
+
+```text
+after the handshake:    part 1 (key): EHLO
+after the EHLO reply:   the mode, as landed; the groups, by 3.2.4's rule, one at a time
+                        part 2 (env): the EHLO reply's records; group 1
+after group j's replies, while commands remain:
+                        an env part: those replies; group j+1
+after the last group's replies:
+                        seal BDAT's command (BDAT), the header records by split(L), the body records, QUIT, in order
+                        the replies fit the msg shape's server blocks -> the msg part covers them
+                        else -> an env part with no client record covers them, and the msg part covers none
+                        msg: BDAT's command, header record 1 (and QUIT, last, when k = 1 in BDAT mode)
+                        hdr x (k - 1): one header record each; BDAT's last opens QUIT, last
+                        DATA: body x n: one body record each; the last opens the end mark and QUIT, last
+a server record read after a part was built and before the send's last message record has gone:
+                        an env part with no client record, submitted next, covering it
+
+proving and submitting: parts are proven in index order, up to ProveConcurrency at once among parts whose statements
+                        are complete (the msg, hdr and body parts are, once their records are sealed). A part is
+                        submitted when its proof is done and every part before it was answered OK. Its records go to
+                        the stream when its own answer is OK
+```
+
+The sender knows every scan state and draws every blind before it proves the first message part, so hdr and body parts do not wait on one another.
+
+**The recipient-shape catalog.** There is no recipient class. What a send costs, in units, by what it holds:
+
+```text
+units = 1                                              the key part
+      + E                                              envelope groups: AES 12 RCPT with MAIL, then 13 a group, for records of up
+                                                       to 47 octets (an address of up to 35); ChaCha20 18 with MAIL, then 19
+      + X                                              0, or 1 when the last group's replies overflow the msg shape's server blocks
+      + 1                                              the msg part
+      + ceil(max(0, L - head) / rest)                  header parts: head 831, rest 1,199 (AES); head 1,215, rest 2,239 (ChaCha20)
+      + DATA only: max(1, ceil(body octets / body))    body 1,295 (AES), 2,559 (ChaCha20)
+
+send                                              AES-128-GCM (1.3 and 1.2)       ChaCha20
+up to 12 recipients, header block up to 831         3                             3  (up to 11 recipients, 1,215 octets)
+3 recipients, 2 KiB header block                    4                             4
+the gate: 10 recipients, 4,095-octet header block   6                             5
+50 recipients, 4,095                                9                             8
+100 recipients, 4,095                              13                            10
+100 recipients, 16,383 (the longest)               23                            15
+DATA, the gate's header block, 100 KiB in all      82                            44
+```
+
+The rows count each reply as a record of its own of up to 15 octets, which is the worst packing for a pool that counts records; replies an MX writes together take fewer blocks. No client record can outgrow a pool: the longest RCPT is 332 octets (a 64-octet local part, a 255-octet domain), 21 AES blocks or 6 of ChaCha20's. Two bounds remain, each failing closed: a single server record over the env shape's server blocks (639 octets under AES, 1,215 under ChaCha20), which ends the send before the message (3.5); and a header block over `HeaderBlockMaxByteCount` (16,384), refused at assembly as today.
+
+#### 3.2.7 Keys: the setup, the key set, where they live and how a host takes them
+
+SPEC.md 10.2 and 10.3 stand: the edge runs the ceremony alone, because only the edge relies on soundness; a prover host takes a key only from its own check of the transcript against the circuit it compiled, because zero knowledge may not rest on the edge. The owner's answer to `smtpproof-start-key-distribution` (QD-123) stands: the files come from a public path on ur.io, pinned by hash in the release, fetched without a token. What follows is what that answer left open, and the one thing that must change (3.1 E).
+
+**The key set.** `keyset.json` version 2, whose SHA-256 is the key set's id, the release's pin and the preamble's `proof_key_set`:
+
+```text
+{ "version": 2,
+  "beacon": hex,
+  "phase1": [ { "domain_size": 1048576, "contributions": [ { "name", "sha256", "byte_count" } ] } ],
+  "shapes": [ { "name": "hdr-aes128gcm-c2-r75",
+                "circuit_sha256": hex,        SHA-256 of the shape's compiled R1CS as its WriteTo writes it
+                "domain_size": 1048576,
+                "contributions": [ { "name", "sha256", "byte_count" } ],
+                "proving_key":   { "sha256", "byte_count" },             its WriteTo encoding; the file is not published
+                "verifying_key": { "name", "sha256", "byte_count" } } ] }
+```
+
+- **The ceremony** is `RunSetup` as landed, with three changes: one phase 1 for the one domain size; `circuit_sha256` and every `byte_count` written; and `setup -extend <directory>`, which adds entries for catalog shapes a key set lacks, on its phase 1, and leaves every existing entry as it is. Extending makes a new id under which the old shapes keep their keys, so a host's cache of them stands. `smtpproof/setup` stays where reading 24 put it.
+- **Published** at `<SmtpProofKeysUrl>/<id in hex>/<name>`: `keyset.json`, the phase 1 and phase 2 contributions, the verifying keys. `SmtpProofKeysUrl` is an entry of §18.9's host table, which `cli/` fills (QD-119), so no host name sits in code. About 0.9 GiB for the eleven shapes by their encodings (a 2^20 phase 1 contribution is 192 MiB, a shape's phase 2 about 63 MiB); proving keys are not published, since each host derives its own.
+- **At the edge**: `config/<env>/smtpedge.yml` lists `proof_key_sets`, each an id, a directory holding its `keyset.json` and verifying keys, and an optional `not_after`. `NewVerifier` takes up to `VerifierSettings.KeySetMaxCount` sets, checks each file against `keyset.json` and `keyset.json` against its id, and drops a set past its `not_after` at start. A session uses the set its preamble names, for its whole life. Changing the list is a configuration change and a restart, which ends connections, as any deploy of smtpedge does.
+- **In the release**: `cli/smtp_prover.go`'s `smtpKeySetPins`, newest first, replaces the single pin. The newest is the set this build's circuits were set up for. An older one stays listed only while this build compiles the same circuits for it (a re-run ceremony), which the host checks by digest, not by trust.
+
+**What a host does.** `KeySet.EnsureKeys(ctx, family)` replaces `VerifyProvingKeys`. It runs at idle on a host that sends mail or is a consented prover host (3.7, SMTP-M9-09), never elsewhere, for each pinned set, each family in `KeySettings.FamilyOrder`, each of the family's shapes:
+
+```text
+ 1  keyset.json: fetched to keys/<id>/, at most ManifestMaxByteCount, kept only if its SHA-256 is the pin
+ 2  compile the shape from this build; d = SHA-256 of its R1CS. d != the entry's circuit_sha256 -> the shape is
+    refused for this set: it is not this build's circuit
+ 3  cache/<d>-<proving_key.sha256>.ok exists, names d and that key hash, and the .pk and .r1cs files beside it
+    hash to what it records -> the shape is ready
+ 4  phase 1 for the domain size: cache/phase1-<h>.commons with its .ok, h the SHA-256 over the beacon and the
+    contributions' hashes -> use it. Else fetch each contribution (its byte_count bounds the read, its sha256 is
+    checked as it streams), VerifyPhase1, and write the commons and its .ok
+ 5  fetch the shape's phase 2 contributions the same way; VerifyPhase2(r1cs, commons, beacon, contributions)
+ 6  the proving key's and the verifying key's WriteTo encodings hash to the entry's -> else the shape is refused
+ 7  write the proving key in gnark's dump form and the R1CS to cache as <name>.partial.<random>, sync, rename;
+    then the .ok, the same way, last
+ 8  delete the fetched contributions unless KeySettings.KeepTranscripts
+load, at a send:  step 3's test and nothing less: the .ok for this build's digest and the pinned key hash, and both
+                  files hashing to it. Anything else is "no keys", and the shape is checked again at idle
+```
+
+- **A family is ready** in a set when every shape of it is: for chacha20, key-v0304, env, msg, hdr and body; for aes128gcm the same with key-v0304-aes128gcm, and TLS 1.2 is offered once key-v0303-aes128gcm is ready too. The TLS client offers only ready families' suites, so a host that has verified one family sends to every MX that takes it, and a handshake that fits no ready family fails before EHLO: a burst token, no unit, `deferred`.
+- **Which set a connection uses.** `Prover.KeySet()` is the newest pinned set with a ready family, or none, in which case the host only queues (D-SMTP-18). The sender puts it in the preamble. On KEYS it tries the next older pinned set with a ready family, once, and otherwise holds the message as `deferred` for `SmtpSenderSettings.KeysRetryTimeout` (6 h).
+- **The fetch** is a plain HTTPS GET with `Range` to resume, no cookie, token, account or identifying header, a generic client name, at most one file at a time, retried from `KeySettings.FetchRetryInterval` (5 min) doubling to `FetchRetryMaxInterval` (6 h). Every byte is checked against a hash that chains to the release's pin before it is parsed, so the path needs no trust. What the origin sees is 3.8's smtp-7 row, which exists before the fetch runs (I-18).
+- **Rotation.** A key set is replaced when a circuit changes (the new release pins the new set alone), when the catalog grows (`-extend`: the new release pins the new id first and the old id second, so a host proves under the old until the new shapes verify), or when the ceremony is run again over unchanged circuits (the same two pins). The edge lists the new set before the release that pins it ships, and gives the old one a `not_after` once that release is out. How often to re-run a ceremony over unchanged circuits is `details-3-key-rotation`.
+
+#### 3.2.8 Memory and settings
+
+**The memory plan.** One unit-sized circuit (1,028,566 constraints, 11,095 public inputs) was set up once and proven three times in a process that loaded only its circuit and key, as a host would:
+
+```text
+the compiled circuit, read from disk (95 MiB, 0.6 s)                          228 MiB of heap; 237 to 348 MiB across the catalog's shapes
+the proving key: 131 MiB in gnark's compressed encoding, 261 MiB as a dump    389 MiB of heap: the dump, and 128 MiB of FFT tables for 2^20
+a loaded shape                                                                617 MiB; 737 MiB for the header shapes
+one proof                                                                     6.0 to 6.3 CPU-seconds; peak resident 1,279 MiB, so 627 MiB over the loaded shape
+verifying it                                                                  2.2 ms
+```
+
+A dump loads in 0.13 s where the compressed key must take a square root a point, so the cache holds dumps (3.2.7 step 7). Against the landed π3's 1.7 to 7.0 GiB, the plan is a budget that a host's settings state and the prover keeps to by counting:
+
+```text
+charge:  ShapeMemoryByteCount (768 MiB) a loaded shape;  PartMemoryByteCount (704 MiB) a proof in flight
+rule:    loaded shapes x ShapeMemoryByteCount + proofs in flight x PartMemoryByteCount <= MemoryMaxByteCount
+load:    over the budget -> unload the least recently used shape that no proof in flight uses; none -> wait
+prove:   take one of ProveConcurrency slots, load the part's shape, charge the part, prove, release the charge
+idle:    a shape unused for ShapeIdleTimeout (2 min) is unloaded; when the last goes, the heap is returned to the
+         system (debug.FreeOSMemory)
+```
+
+`MemoryMaxByteCount` defaults to 2,240 MiB: two loaded shapes, the one proving and the next, and one proof. A send uses its shapes in runs (key, then env, then msg, then hdr or body), so two is enough to never wait on a load. A host that can give more raises `ProveConcurrency`; each proof at once is 704 MiB more. `MemoryBudgetByteCount` is untouched: QD-483 stands, and proving now has a bound of its own, in the injected prover's settings. A host whose `Measure` cannot finish inside the budget records no `p/` and only queues, as QD-483 has it. Mapping the key dump from the cache file instead of reading it into the heap would take 261 MiB a shape out of the heap and is review-phase work, in the spirit of QD-641; the draft reads it.
+
+**Settings (QD-702).** Every number above is a field. Identifiers stay constants: the curve's d and l, the generator tags, the scan state's bit positions, the literals of SPEC.md 4.2 and Z5, `keySetVersion`, message ids, role and mode values, and the proof's 164 octets, which is the encoding of three group elements.
+
+```text
+smtpproof.ProofSettings          DefaultProofSettings(); carried by ProverSettings.Proof and VerifierSettings.Proof, one default
+  Shapes                         the catalog of 3.2.6: each a kind, a family or version, and its pools in blocks
+  DomainSize                     1,048,576 points
+  DomainHeadroomCount            10,486 constraints and public inputs a shape leaves free
+  RecordContentMaxByteCount      16,384 octets (TLS)          RecordCiphertextMaxByteCount  16,640 octets (TLS)
+  LocalMaxByteCount              64 octets (RFC 5321)         DomainMaxByteCount            255 octets
+  LabelMaxByteCount              63 octets
+  HeaderBlockMaxByteCount        16,384 octets                HeaderRecordMaxCount          16 records
+  HeaderRecordMinByteCount       128 octets                   HeaderLastRecordMinByteCount  4 octets
+  LiteralLineMaxByteCount        124 octets                   LiteralAddressMaxByteCount    93 octets
+  LiteralTagMaxByteCount         93 octets                    ScanPinInterval               32 octets
+  RecipientMaxCount              100 recipients (§20.4's largest)
+  PartMaxCount                   8,192 parts a connection     PartRecordMaxCount            64 records a part
+smtpproof.ProverSettings         as landed, and:
+  Proof                          *ProofSettings
+  SuiteOrder                     0x1303, 0x1301, 0xc02b, 0xc02f
+  MemoryMaxByteCount             2,240 MiB    ShapeMemoryByteCount 768 MiB    PartMemoryByteCount 704 MiB
+  ProveConcurrency               1 proof at once in a send    ShapeIdleTimeout              2 min
+  EnvelopeGroupMaxCount          0, for what fits             ReplyEstimateByteCount 40 octets   ReplyMarginByteCount 8 octets
+  DataPartTime, DataConnectionTime, DataProofBytes, MaxServerBytes, ForceData   as landed
+  (DataPartBytes and MaxRecordContentBytes leave: the body shape and Proof.RecordContentMaxByteCount say them)
+smtpproof.VerifierSettings       as landed, and:  Proof *ProofSettings;  KeySetMaxCount 4 key sets
+smtpproof.KeySettings            DefaultKeySettings()
+  FamilyOrder                    aes128gcm, chacha20: every TLS 1.3 server has the first
+  ManifestMaxByteCount           262,144 octets               FetchFileMaxByteCount         536,870,912 octets
+  FetchTimeout                   30 min a file                FetchRetryInterval 5 min      FetchRetryMaxInterval 6 h
+  VerifyConcurrency              1 shape at once              KeepTranscripts               false
+sidecar.SmtpSenderSettings       as landed, and:
+  HeaderHeadMaxByteCount         720 octets the single fields and the fixed signature's first line may fill
+  HeaderBlockMaxByteCount        16,384 octets, in place of the constant SmtpHeaderBlockMaxByteCount
+  KeysRetryTimeout               6 h          ProverMeasureInterval 7 days    EnvelopeRetryGroupCount 1 command
+```
+
+### 3.3 Invariants and why they hold
+
+**Assumptions.** SPEC.md 9.1's, and one more: discrete logarithms in the order-l subgroup of E are hard (about 2^125 work, above the 100 to 110 bits SPEC.md 9.8 already gives BN254). Forging against it, like forging a proof, costs abuse control and never confidentiality.
+
+**Soundness.** SPEC.md section 1's claim is unchanged. The argument is SPEC.md section 9's with one step replaced and three added.
+
+- **S1, the keys are the MX's (9.2, once).** The key part's circuit derives ck, civ, sk, siv from a witness that 9.2 shows is the MX's secret, and asserts C = Com of exactly those wires. So C commits to the MX's keys.
+- **S2, every part uses them.** A later part's statement has the gate's C as a public input (step 12), never a value the part carries. Its circuit asserts Com(its key wires, its rho) = C. If those wires differ from the MX's keys, the two openings of C give a discrete-log relation among G_j and H. So every keystream in every part is the MX's, which is what 9.3 needs of each part.
+- **S3, a verified part is fixed.** Step 12 builds the statement from the gate's state and step 14 commits only if no part landed since (`commits`), so the C, the carry, the counts and the ranges a proof was verified against are the gate's at the moment it lands. No step replaces a part.
+- **S4, the header block across records.** Let the header block be c_1 .. c_k, every record but the last at least 128 octets, the last at least 4, and let each record's part verify with `CarryIn` the commitment the gate kept. By binding, the state a part opens is the state the part before published, and H2 and H7 make that the true state of the block's scan at the boundary, by induction from `start`. Then Z5 holds of the concatenation: rules 1 to 3 are H1 to H4 at every octet, with `pos` and `name` standing for the octet and the name across a boundary, and H13 at the end. For rules 4 to 6, every line start of the block is a `nameStart` in exactly one record, and a literal L at it either lies inside that record, a `hit`, or runs past its end. In the second case it ends in the next record, since L has at most 99 octets and the record at least 128, and there `cross(L)` is true, because `run` and `prefix[L]` say exactly that the name so far is L's beginning. H9 counts one hit of each L in the first record, and H12 allows no hit and no crossing after it. So each single field and the fixed prefix begin exactly one line of the block, that line is in the first record, H10 reads its literal form there, and H11 with H6 let no continuation follow it. That is Z5, with the added fact of where those lines sit.
+- **S5, DATA's body across records.** The same induction over B1 to B3: `pos` is the true state, B1 pairs every CR with an LF across boundaries, and B2 with `pos` 3 refuses a line that is exactly "." wherever a boundary falls in it. The last record ends in LF, so the end mark starts a line. That is SPEC.md's Z6 over the concatenation, and 9.6 follows.
+- **S6, the replies.** A part's server records are contiguous from the last covered record (step 6) and parse from a reply's start to a reply's end as exactly `reply_count` replies, each accepting, the last a 354 where `Last354` (Z8). So the verified parts' counts sum to the number of replies in the covered records, each proven. Step 9 lets the first message record be covered only when that sum is 2 + R (3 + R), and step 16 releases a message record only when every relayed server record is covered. The honest MX answers commands in order (9.1), so at that moment it has accepted EHLO, MAIL and exactly R recipients, has said 354 in DATA mode, and has said nothing since: 9.4's premise.
+- **S7.** With S1 to S6, 9.3 gives the MX's input as the concatenation of proven contents, 9.5 and 9.6 are unchanged, and 9.7 concludes.
+
+**Zero knowledge.** Against an edge that ran the setup and deviates as it likes:
+
+- **K1, the commitments say nothing.** C is uniform over the order-l subgroup whatever the keys are, and each carry is uniform whatever the state is, because each has a fresh uniform blind on a generator of that subgroup (3.2.2). This is perfect, not computational: it does not depend on who knows what about the generators.
+- **K2, the proofs say nothing.** Each proof is a Groth16 proof under a key the host's own check derived from a verified transcript over the circuit that proves, so it is distributed as a simulated proof of its statement (SPEC.md 10.2). The statements hold C and the carries, which K1 makes simulatable without the witness. So the edge's whole view, commitments and proofs together, is distributed as a simulator's that is given only the public inputs.
+- **K3, the part structure says nothing new.** A part's ranges, `last`, `mode` and `server_record_count` are as landed. `header_record_count` and each header record's length are `split` of the header block's length, which the edge already sees. `reply_count` is the number of commands the group before held, which the edge relayed, unless an overflow split a group's replies, and that follows from server record lengths it relayed. Group sizes follow from command record lengths and the estimate, which is computed from public values alone (3.2.4). DATA's body records are now cut by length where the landed ones ended at line ends, so their lengths reveal less than before. What a failed part reveals is as SPEC.md 10.2 says.
+- **K4, the key is the host's own.** `ProofKeys.tla`: no proof is made under a key that is malformed, torn, or of another circuit than the one proving, over every build, pin and cache state.
+
+*If the blinds failed.* The argument above needs rho uniform and secret. Suppose an implementation bug made rho known to the edge. C would then be a binding function of the 448 or 704 key bits: a way to test a guess of all of them, and nothing shorter. A record's ciphertext and tag already give the edge that test. So even the total failure of hiding hands the edge nothing it lacks today; what would break is the claim, not the mail.
+
+**The models.** TLC, the owner's jar (master at `d8fb231`), through `run-proof.sh`, each run breadth-first with a 4 GiB heap, the design runs over their whole state graphs; no run's state directory passed 1 MB. The two design runs used 4 workers. The twins, the written configuration and the reach configurations used 1 worker, so each trace is a shortest one and the state counts are where the search met it; `run-proof.sh details-3 all` passes with the default workers too, with other counts for those.
+
+`ProofParts.tla` is one connection with an adversarial sidecar: client records EHLO, MAIL, RCPT, two header records and QUIT, an MX that answers late and may refuse RCPT or send one unprovable record, two parts verifying at once. A proof verifies exactly when its statement is true of the real connection, except that under any keys but the handshake's it verifies whatever it claims.
+
+```text
+config                              result                                             distinct states   depth   time
+ProofParts                          ContentSound, HeaderSound, EnvelopeProven,                  22,364      17   65 s
+                                    HeldUntilCovered, OneKey hold
+ProofPartsTwin-KeyFromPart          ContentSound violated, a trace of 5 states                      35       5    9 s
+ProofPartsTwin-CarryFromPart        HeaderSound violated, 12 states                              2,747      12   53 s
+ProofPartsTwin-NoReplyTotal         EnvelopeProven violated, 6 states                               88       6    7 s
+ProofPartsTwin-ReleaseUncovered     HeldUntilCovered violated, 11 states                           673      11   16 s
+ProofPartsTwin-NoCommitRecheck      HeaderSound violated, 12 states                              7,646      12   56 s
+ProofPartsReach-Delivered           an honest send is delivered whole, 10 states                   365      10   15 s
+```
+
+- *KeyFromPart* is the cheap fix done wrong, each part binding keys of its own: after the key part, part 2 names another commitment and opens a RCPT at another domain, which the MX reads.
+- *CarryFromPart*: the header's second record is scanned from `start` where the first left a name unfinished, and a field name split across the two records passes. This is the smuggled header that S4 exists to stop.
+- *NoReplyTotal*: the first message record goes after the EHLO reply alone, before the MX has answered RCPT.
+- *ReleaseUncovered*: the MX's unprovable record is relayed while the msg part verifies, and the header leaves anyway.
+- *NoCommitRecheck*: two parts verify against one state and both land. One opens the stream's first header record; the other opens a ciphertext that was never sent, with a scan state of its choosing, and its state is what the second record is scanned from.
+
+`ProofKeys.tla` is one host over two key sets, two circuits and every build (a circuit and the sets it pins), installed in any order, with the published sets free to be malformed or for another circuit than the build that pins them, crashes mid-write, and an edge that adds and retires sets.
+
+```text
+config                              result                                             distinct states   depth   time
+ProofKeys                           ZkSafe, AcceptedAtOpen, OneSet hold                         14,424      18    4 s
+ProofKeysWritten-StaleCache         ZkSafe violated, a trace of 6 states                         1,755       6    4 s
+ProofKeysTwin-TrustPublished        ZkSafe violated, 5 states                                    2,851       5    3 s
+ProofKeysTwin-PartialStands         ZkSafe violated, 5 states                                    1,164       5    4 s
+ProofKeysTwin-AcceptRetired         AcceptedAtOpen violated, 4 states                              659       4    6 s
+ProofKeysTwin-MixedSets             OneSet violated, 7 states                                    3,187       7    6 s
+ProofKeysReach-Proves               a host proves, 5 states                                      1,176       5    4 s
+ProofKeysReach-Rotated              a host that proved under A holds a connection under B        8,048      10    3 s
+                                    after the edge retired A, 10 states
+```
+
+**The named counterexample is gone.** `ProofKeysWritten-StaleCache` is 3.1 E as the code landed: a build of circuit c1 checks set A and caches its key, a build of circuit c2 that still pins A is installed, the file exists, and c2 is proven under c1's key. In `ProofKeys` the entry is named by the circuit's digest as well as the key's hash and a build takes only its own circuit's entry: `ZkSafe` holds over all 14,424 states, which include that install.
+
+### 3.4 Cost
+
+**The gate's BDAT send** (a 4,095-octet header block, 10 recipients). Constraints are compiled figures (3.2.6). The m5.large columns are projections: the brief's 41,000 constraints a second, and ORIGO's own run read by domain, 9.8 s for 2^19, so 19.6 s a unit. The M4 Pro column is measured CPU time: the landed rows are SPEC.md 11.4's, and the revised rows are units at the 6.2 CPU-seconds one unit measured here.
+
+```text
+                               constraints   units of 2^20   m5.large at 41,000/s   m5.large by domain   M4 Pro CPU
+landed   TLS 1.3 AES-128-GCM     6,977,779        11               170 s                 216 s             63.9 s
+         TLS 1.3 ChaCha20        5,065,844         7               124 s                 137 s             42.4 s
+         TLS 1.2 AES-128-GCM     7,029,907        11               171 s                 216 s             61.9 s
+revised  TLS 1.3 AES-128-GCM     5,910,484         6               144 s                 118 s             37 s
+         TLS 1.3 ChaCha20        4,769,113         5               116 s                  98 s             31 s
+         TLS 1.2 AES-128-GCM     5,895,132         6               144 s                 118 s             37 s
+```
+
+By the count the send is 15% smaller under AES; by the domain, which is what SPEC.md's measurements and this section's follow, it is 45% smaller. **Neither reading meets 60 s on an m5.large, and none can at this gate**: 3.1's floor is 73 s of AES keystream. The key part alone is 19.8 s there. What 60 s buys on that machine, by domain, is three units: a send of up to 12 recipients whose header block is at most 831 octets under AES or 1,215 under ChaCha20. Question `details-3-speed-bar` puts the row to the owner on those numbers; QD-144 already says a confirmed miss relaxes it to what SMTP-M9-32's bench measures.
+
+**Per send**, by 3.2.6's unit counts, and on the machines that prove. A unit is 6.2 CPU-seconds on the M4 Pro (4.5 to 5.1 s of wall time at a load average of 95). The M1 figures are projections from it: its four performance and four efficiency cores should take 2.5 to 3.5 s a unit, and SMTP-M9-32 measures that.
+
+```text
+send                                             units AES / ChaCha20   M1 (8 GB), projected   m5.large at 41,000/s    by domain
+the key part (D-SMTP-16's π1 row)                    1 / 1               2 to 3 s               20 s / 18 s             20 s
+up to 12 recipients, an 831-octet header block       3 / 3               8 to 11 s              70 s / 68 s             59 s
+3 recipients, 2 KiB                                  4 / 4               10 to 14 s             95 s / 92 s             78 s
+the gate: 10 recipients, 4,095 octets                6 / 5               15 to 21 s / 13 to 18 s  144 s / 116 s         118 s / 98 s
+100 recipients, 4,095                               13 / 10              33 to 46 s / 25 to 35 s  319 s / 239 s         255 s / 196 s
+100 recipients, 16,383                              23 / 15              58 to 81 s / 38 to 53 s  567 s / 361 s         451 s / 294 s
+DATA, the gate's header block, 100 KiB in all       82 / 44              3.4 to 4.8 min / 1.8 to 2.6 min   33.9 min / 18.0 min   26.8 min / 14.4 min
+```
+
+- D-SMTP-16's M1 rows are met by projection: 10 s for the key part, 30 s for the gate's BDAT send, 10 min for DATA's 100 KiB. Today's shapes project to 28 to 39 s for the BDAT send there, by the same reading, and their TLS 1.2 π3 does not fit its memory.
+- DATA's 100 KiB on an m5.large is inside 20 min under ChaCha20 and outside it under AES. The landed shapes take 109.5M constraints for it, 44.5 min at 41,000 a second, 203 units by domain.
+- `smtp_data_proof_bytes`, 2 h of body parts at the slowest family's rate (reading 22): about 3.0 MiB on the M1 by projection (2,400 units less the send's own, at 1,295 octets), and 358 KiB on an m5.large at 41,000 a second, 457 KiB by domain. D-SMTP-20's "≈1 MiB" and "≈600 KiB" were never measured; the landed 2 KiB part is 2,103,103 constraints, 281 KiB in 2 h at that rate.
+- A phone does not prove (D-SMTP-18), and nothing here changes that. For scale: a unit needs 1.3 GiB resident and the cache below.
+
+**Memory** (3.2.8, measured): 1,279 MiB peak for one proof with its shape loaded; the default budget is 2,240 MiB. Landed: 1.7 to 7.0 GiB for π3 alone.
+
+**I/O.** A host's cache: eleven proving keys as dumps, 261 MiB for a full unit and about 200 MiB for a key shape, 2.6 GiB; eleven compiled circuits of 17 to 151 MiB, about 0.9 GiB; one phase 1's commons, about 0.2 GiB. About 3.7 GiB, against about 9 GiB of keys for the landed 22 shapes. The download is about 0.9 GiB, once a key set, against about 2.8 GiB of phase 1 contributions alone for the landed four domain sizes. The check is the cost that is not measured at this size: SPEC.md section 12 has 130 CPU-minutes for a 2^20 shape's ceremony, check and one proof together on the M4 Pro, so a host's check of one shape is under that, and eleven shapes are hours of idle CPU on a desktop and most of a day on an m5.large, once a key set. Phase 1 is now checked once and not per shape. SMTP-M9-32 measures `EnsureKeys` per shape on both machines.
+
+**Wire.** A part is its 164-octet proof, at most 64 octets of commitment and 64 of carry, a few varints, and the ciphertext of what it opens: at most 2.6 KiB (a ChaCha20 body record with its framing). The gate's send is six parts and about 6 KiB of `SmtpProof` in all, as today's three parts are; DATA sends its opened octets twice, in the part and on the stream, as today.
+
+**The edge.** Verifying the unit took 2.2 ms with 11,095 public inputs; building a statement is linear in the same count. The gate's send is under 30 ms of edge CPU. A session holds C and one carry, 128 octets, beyond the landed bounds (`MaxHeldBytes`, `MaxServerBytes`, 256 KiB each), and at most `PartMaxCount` parts' ranges. A 2 h DATA connection from a fast host is about 2,900 parts, about 9 s of edge CPU over the 2 h.
+
+**The ceremony.** One phase 1 at 2^20 and eleven phase 2 runs, where the landed catalog needs four phase 1 runs to 2^23 and twenty-two phase 2 runs. Setting up the unit circuit with gnark's single-party test setup took 1 min 53 s and 1.95 GiB here; the two-phase ceremony is slower (SPEC.md section 12) and has not been run at production size.
+
+### 3.5 Failure modes and recovery
+
+| Failure | What happens | Recovery |
+|---|---|---|
+| A part's witness fails the relation (a refused MAIL or RCPT, no CHUNKING under BDAT, no 354) | As landed: the prover does not prove, nothing more is released | The landed outcomes: `refused` with the MX's code, the mode's reconnect, a DSN per recipient |
+| The MX's replies to one group are a single record larger than the env shape's server blocks | No shape. The prover ends the connection before any message record and returns `SmtpProofResult.EnvelopeRetry` | `SmtpSender` retries once on a new connection with `EnvelopeGroupMaxCount` = `EnvelopeRetryGroupCount` (1) and `retry_of_send_id`; a unit, since MAIL went. The pin store keeps the group count beside the mode for that MX host, so later sends start there. A second overflow is `failed` |
+| The EHLO reply is larger than the env shape's server blocks | No shape; the send ends before MAIL: a burst token, no unit | `failed` for that domain, and a DSN: such an MX cannot be proven to |
+| The single fields and the fixed signature's first line pass `HeaderHeadMaxByteCount` | `ErrSmtpAssemble` before the preamble | A DSN naming the From display name's length, as assembly's other refusals |
+| A late NewSessionTicket, at any point | It holds message records (E3 step 5) | The next part is an env part with no client record that covers it; after the last part too |
+| The MX closes during the header's records | Outstanding parts are moot; the MX discards a chunk it did not get whole (RFC 3030) | The landed retry schedule |
+| Two parts reach the gate at once | Step 14 ends the connection: its order checks no longer stand | The landed prover submits one at a time; a retry is a new connection |
+| A blind is not uniform or is reused | Hiding of C or a carry fails for that connection; soundness and the mail's confidentiality do not (3.3) | Prevented, not recovered: one draw site, `crypto/rand` only, `testHookSecret` at the draw, a test that two connections' and two carries' blinds differ |
+| The edge answers KEYS | No MX is dialed | The next older pinned set with a ready family, once; else `deferred` for `KeysRetryTimeout`, the entry left for another prover host, and `ur status` says this build's proofs are not accepted |
+| A fetched file fails its hash or its length | It is deleted unread | Refetched after `FetchRetryInterval`, doubling; the shape is not ready meanwhile |
+| A transcript fails `VerifyPhase1` or `VerifyPhase2`, or its keys are not the ones `keyset.json` names | The shape is refused for that set, and so is its family | None on the host: the set is bad, and the host only queues that family. `ur status` names the shape. A new release pins a good set |
+| This build's circuit digest is not the set's | The shape is refused for that set (step 2) | The same: the release pinned a set made for other circuits. Fresh and upgraded hosts now fail alike |
+| A crash during the check or the cache write | `*.partial.*` files remain; no `.ok` | Step 3 finds no entry and the check runs again; stray partial files are deleted at the next run |
+| A cache file is changed or lost | Load finds the hash wrong: "no keys" | The shape is checked again at idle from the transcript |
+| The budget cannot hold a proof (another send holds it) | The proof waits for its charge | `ProverConcurrency` 1 sends at a time keeps this to a send's own parts |
+| `Measure` cannot finish inside the budget or the 2 minutes | No `p/`, or `p/` with DATA closed | The host only queues, or sends BDAT alone (QD-483, reading 22) |
+| The edge restarts for a new key set list | Streams reset | The backup ticket, as §14.9 |
+| The ceremony's secrets leak | Whoever holds them forges parts under that set until it is retired: abuse control fails, no mail is exposed | A new ceremony and a release that pins its set; the old set's `not_after`. §14.8's report joins still attribute by DKIM |
+
+### 3.6 The test plan
+
+Circuit tests run gnark's solver, as the plan has it; real proofs stay behind `smtpproof_full`. Each row names the task that adds it.
+
+**Unit tests and vectors.**
+
+- **SMTP-M9-36, the commitment.** `TestCommitCurveIsComplete`: a is a square and d is not. `TestCommitGeneratorsAreFixed`: each generator's coordinates against literals in `testdata/vectors/commit.json`, each of order l, none the identity. `TestCommitGadgetMatchesGnarkCrypto`: the circuit against `ecc/bn254/twistededwards` for 448, 704 and 24 message bits over random messages and blinds, and one bit off refused in the message and in the blind. `TestCommitBlindsAreFresh`: two connections' rho and every carry's sigma differ, and each passes `testHookSecret`. `TestGadgetSizesAreSpecMds` gains the three opening sizes (3,261, 4,453, 1,279). `TestKeyPartBindsBothDirections`: a key part whose commitment holds another server key is unsatisfiable. `TestLaterPartOpensTheKeyPartsCommitment`: every later shape with one key bit off, or another blind, is unsatisfiable. Vectors: the six fixed connections of SPEC.md 5.1 regenerated, with C, rho and each carry.
+- **SMTP-M9-37, shapes and scans.** `TestProductionShapesFillOneDomain` (3.2.6). `TestSpecMdNamesEveryProductionShape` on the eleven. `TestAesShapesServeTls12AndTls13`: one compiled env, msg, hdr and body circuit solves both versions' vectors. Header scans, each against `relation.go`'s single pass over the concatenation and against the checker: the sender's corpus cut at every length from 128 up; a single field's name cut at each of its octets across the first boundary and across a later one, refused; the fixed prefix cut at each of its 99 octets, refused; a single field ending exactly at the first record's end followed by a continuation, refused; CR and LF either side of a boundary; a final CRLF CRLF cut at each of its four octets; a record of 127 octets that is not the last, refused by the gate. Body scans: a "." line cut after LF, after ".", and after CR; a bare LF first in a record. Replies: `reply_count` one more and one fewer than the records hold; a part ending inside a reply; `Last354` on a 250; `EhloRule` beside a 220 line; a ticket under `Tls13` 0. `TestEnvelopeGroupsAreAFunctionOfPublicValues`.
+- **SMTP-M9-38, the gate.** One test a fence of 3.2.5, in its order, and one for each of `ProofParts.tla`'s twins as a Go test on `edgeSession` with barriers (`edge.verify.before`, `edge.commit.before`): `TestGateSuppliesTheKeyCommitment`, `TestGateSuppliesTheCarry`, `TestGateCountsRepliesBeforeTheMessage`, `TestGateHoldsMessageRecordsBehindALateRecord`, `TestGateRefusesASecondPartThatVerifiedBesideTheFirst`. A part with no client record covering a ticket, before and after `last`. An exact resend is a no-op and a changed resend ends the session. `FuzzEdgeRecordOrder` gains parts with no client record and loses replacement.
+- **SMTP-M9-39, the prover.** The planner on fixed inputs: 1, 10, 12, 13, 50 and 100 recipients, header blocks of 831, 832, 4,095 and 16,383 octets, each family, against 3.2.6's unit counts; replies that overflow the msg part; a reply record that fits no shape returns `EnvelopeRetry`. Memory accounting on a fake loader: never over `MemoryMaxByteCount`, a shape in use never unloaded, idle unload. `TestMeasureWholeSend` and `BenchmarkPartMemory` on the new shapes.
+- **SMTP-M9-40, keys.** `ProofKeys.tla`'s twins as tests: a cache entry of another circuit digest is not taken (`TestCacheEntryOfAnotherCircuitIsNoKey`, which is 3.1 E); a published proving key is never read; a `.partial` file is no entry; a malformed transcript, another circuit's transcript and keys the transcript does not fix are each refused (the landed tests, kept); phase 1 is verified once for two shapes; `-extend` leaves existing entries byte-equal; the fetch against a local listener serving a short file, a long file, a wrong hash and a dropped connection resumed; a family is offered in the ClientHello only when ready; the verifier takes two sets and drops one past `not_after`.
+
+**Evidence tables.** `testdata/mutations/table.md` (SMTP-M9-29) keeps one row a check and gains cells: Z1's "a later part opens other keys than the key part committed", Z5's "a scan started from another state than the record before left", Z6's DATA cell likewise, Z8's "`reply_count` is not what the records hold", and E3's "a first message record before 2 + R replies are proven". FS-31 (SMTP-M9-30) gains the same five as adversarial rows, each failing before any effect, and its 100-recipient and 16 KiB honest controls. `smtpproof/checker` (SMTP-M9-28) takes the revised relation from 3.2.3 and 3.2.4 alone.
+
+**Schedule rows.** §22.5's `smtpproof` row gains "parts bound to one key part: key substitution between parts, a forged carry, a short reply count" and "keys: a stale cache entry, a torn write, a retired set". FS-123 is unchanged. No new FS row is proposed.
+
+**Model twins.** `run-proof.sh details-3 all` is 3.3's fifteen runs; the Go tests above are their twins in code, named in SMTP-M9-38's and SMTP-M9-40's entries.
+
+**Bench rows (SMTP-M9-32).** D-SMTP-16's rows as they stand, and beside them: seconds and peak resident memory for one unit of each of the eleven shapes; the gate's BDAT send per family in units and seconds; `EnsureKeys` per shape; each on the M1 and the m5.large.
+
+### 3.7 Implementation notes, task by task
+
+The plan entries are `.stack/plan/SMTP.md`'s; the new and changed ones are `.stack/plan/proposals/details-3-tasks.md`, in the plan's format. Six tasks are new: SMTP-M9-35 to SMTP-M9-40, and OPS-M9-02. The five held tasks keep their entries with the changes below. Five drafted tasks change: SMTP-M9-04, -28, -29, -30 and -33.
+
+**Order.** SMTP-M9-35 lands first and alone releases SMTP-M9-07, -08, -09 and -13, which build on the fakes as their entries say. The circuit work follows in one lane, since it is one package: SMTP-M9-36, then -37, then -38, then -39, with SMTP-M9-40 beside them from the start (it touches only the setup files, the verifier's key loading and `cli/`). SMTP-M9-32 is last. SMTP-M9-36 is the one task that the owner's answer to `details-3-key-commitment` decides; everything before it builds the same either way.
+
+**Landed code that changes, by file.**
+
+```text
+protocol/smtp.proto, smtp.pb.go     SmtpPreamble 10; SmtpProof 10 to 13; SMTP_PREAMBLE_KEYS = 8               SMTP-M9-35
+smtp_proof.go                       SmtpProofPart, SmtpProofPreamble, SmtpProofJob, SmtpProofResult,
+                                    SmtpProverMeasure, SmtpProver; ErrSmtpProofKeySet                         SMTP-M9-35
+sidecartest fakes                   FakeSmtpProver, FakeSmtpProofVerifier, StubSmtpEdge follow the seam       SMTP-M9-35
+metadata_list.yml                   smtp-2's new values; smtp-7                                               SMTP-M9-35, -40
+smtpproof/circuit_keys.go           the key part derives both directions always; later parts take no Z1      SMTP-M9-36
+smtpproof/circuit_part.go           partShape's kinds and pools; Define opens C; the statement's new wires    SMTP-M9-36, -37
+smtpproof/backend.go                partShapes() becomes ProofSettings.Shapes; partShapeFor by roles          SMTP-M9-37
+smtpproof/circuit_message.go        the header scan by record with its carry; the body scan with its carry    SMTP-M9-37
+smtpproof/circuit_replies.go        ReplyCount, EhloRule, Last354, Tls13 in place of per-kind compilation     SMTP-M9-37
+smtpproof/relation.go, checker/     roles by position; Z1, Z5, Z6 and Z8 per part                             SMTP-M9-36, -37, -28
+smtpproof/edge.go                   3.2.5's fences; no replacement; parts with no client record               SMTP-M9-38
+smtpproof/prover.go, tls_client.go  the planner; groups; split; suite order; only ready families offered      SMTP-M9-39
+smtpproof/prover_measure.go         a unit per ready family; the measure's new fields                         SMTP-M9-39
+smtpproof/setup.go, setup_keys.go,  keyset.json 2; one phase 1; the cache by circuit digest; dumps;
+  setup/main.go, verifier.go        -extend; several key sets at the verifier; the fetch                      SMTP-M9-40
+cli/smtp_prover.go                  smtpKeySetPins; EnsureKeys in place of VerifyProvingKeys                  SMTP-M9-40
+smtp_dkim_sign.go, smtp_assemble.go the header block's order; the head bound; the block bound as a setting    SMTP-M9-04
+smtp_pins.go                        an MX host's envelope group count beside its mode                         SMTP-M9-08
+smtpproof/SPEC.md, testdata/        draft 3: sections 4.3, 5, 7, 9, 10, 11, 12; vectors; the mutation table   SMTP-M9-33, -29
+```
+
+**Constants that move into settings (QD-702).** Each moves in the task that touches its file, named here:
+
+```text
+circuit_message.go   literalLineBytes 124, literalAddressBytes 93, literalTagBytes 93   -> ProofSettings.Literal*MaxByteCount    SMTP-M9-37
+circuit_replies.go   pinInterval 32                                                     -> ProofSettings.ScanPinInterval         SMTP-M9-37
+relation.go          localMaxBytes 64, domainMaxBytes 255, labelMaxBytes 63             -> ProofSettings.*MaxByteCount           SMTP-M9-37
+backend.go           partShapes()'s block counts                                        -> ProofSettings.Shapes                  SMTP-M9-37
+tls_wire.go          tlsMaxPlaintextBytes 16,384, tlsMaxCiphertextBytes 16,640          -> ProofSettings.Record*MaxByteCount     SMTP-M9-39
+prover.go            ProverSettings.MaxRecordContentBytes, DataPartBytes                -> leave for Proof's and the body shape  SMTP-M9-39
+prover_measure.go    measurePartIndex                                                   -> goes with the index's old meaning     SMTP-M9-39
+smtp_assemble.go     SmtpHeaderBlockMaxByteCount 16,384                                 -> SmtpSenderSettings.HeaderBlockMaxByteCount  SMTP-M9-04
+probe.go             mxProbeLineMaxByteCount 512, mxProbeReplyMaxLineCount 64           -> the probe's settings; no task here touches the file, so SMTP-M7-01's settings sweep takes it
+```
+
+What stays a constant, as identifiers and cryptographic facts: the proof's 164 octets and `proofCountBytes`, `wordBytes` (31, the octets below the field's 254 bits), `replyWindowBytes` (the keyword literal's length), octet values, every TLS identifier, key, IV, tag and nonce length, `xUrRefOctets` and `netTokenOctets` (the widths of §14.6's issued forms), `keySetVersion`, `keySetManifestName`, the curve's parameters and the generator tags.
+
+**The held tasks.**
+
+**SMTP-M9-07, the connection driver.** As planned, and four things on SMTP-M9-35's seam. (1) The preamble's `proof_key_set` is `SmtpProver.KeySet()`; when that is empty the host has no ready family, no connection is made, and the driver returns "no prover" so SMTP-M9-08 queues. (2) Code 8 KEYS maps to `SmtpConnectionResult.KeysRefused`, a hold and never a failure. (3) `SmtpProofJob` carries `KeySet`, the id the preamble named, and `EnvelopeGroupMaxCount` (0 unless SMTP-M9-08 retries); `smtpProofChannel.SubmitPart` encodes all thirteen fields and decodes nothing new. (4) `SmtpProofResult` gains `EnvelopeRetry` beside `ReconnectByteCount`, and per-recipient reply codes as the plan's trap already asks. Build in that order, then the plan's tests, with one row each for KEYS and `EnvelopeRetry` on `FakeSmtpProver`. `SmtpSenderSettings.ProverConcurrency` stays 1 and still means sends at once; proofs at once inside a send are the prover's `ProveConcurrency`.
+
+**SMTP-M9-08, Send and Check.** As planned, and: (1) `Send` makes one connection a recipient domain with all of that domain's recipients, up to the tier's `smtp_recipients_per_message`. Nothing splits a domain's recipients for the proofs' sake: the envelope goes in groups inside the prover (question `details-3-recipient-groups`). (2) On `KeysRefused` it tries the next older key set the prover reports ready, once, and else holds the entry as `deferred` with `retry_after_ms` from `KeysRetryTimeout`, leaving an outbox entry for another host. (3) On `EnvelopeRetry` it retries once with `EnvelopeGroupMaxCount` = `EnvelopeRetryGroupCount`, `retry_of_send_id` set, and stores that count on the MX host's pin entry beside its mode (`smtp_pins.go`, landed with SMTP-M9-06, gains the field); a second is `failed`. (4) `Check`'s expected delay for BDAT is units × the host's `UnitTime`, with units from 3.2.6's formula over the measure's `HeadByteCount`, `HeaderRecordByteCount` and `EnvelopeGroupCount`; for DATA it adds the body's octets over `DataBytesPerSecond`; for a phone, from the `p/` record of the host that would send. No outcome is added: KEYS is `deferred`, an overflow that persists is `failed`. Build (1), then (2) and (3) with their fake rows, then (4).
+
+**SMTP-M9-09, the outbox and prover hosts.** As planned, and `SmtpProverHost` gains the keys' life. At idle, and only on a host that has sent mail or is a consented prover host, it calls `SmtpProver.PrepareKeys(ctx)` (SMTP-M9-35's seam, `EnsureKeys` behind it) until every family is ready or refused, one shape at a time, cancelling when a send starts. It calls `Measure` when a family becomes ready, when the key set changes and each `ProverMeasureInterval`. `SmtpProverRecord` at `p/<sidecar_id>` gains `unit_millis`, `head_byte_count`, `header_record_byte_count`, `envelope_group_count`, the key set's id and the ready suites, so a phone's `Check` can price a send. A host with no ready family records no `p/`. Trap: the fetch must not start before the member has enabled mail on this device, since the fetch is what 3.8's smtp-7 row describes. Build the prepare loop first, on the fake.
+
+**SMTP-M9-13, the edge connection.** As planned, and: (1) after the preamble's gate, quota and halt checks pass and before the MX is dialed, `NewSmtpProofSession`; `ErrSmtpProofKeySet` answers `SmtpPreambleResult{code: KEYS}`, releases the reservation and ends the stream, with no debit and no burst token. (2) The `SMTP_PROOF` handler decodes fields 10 to 13 into `SmtpProofPart`, bounds the request at `SmtpEdgeSettings.ProofMaxByteCount` (16,384 octets; a part is under 3 KiB) and the parts at `ProofSettings.PartMaxCount` through the session, and is otherwise as planned. (3) Nothing in the engine knows a part's kind; `MailForwarded` keeps its meaning. (4) Metrics gain the parts a connection took and the verify time, with no labels. `smtpedge.yml`'s `proof_key_sets` is SMTP-M9-20's parsing and OPS-M9-02's content. §14.4's idle limits stand: the longest BDAT send of 3.4, 23 units on an m5.large, is under 10 minutes.
+
+**SMTP-M9-32, the bench.** As planned, on the new shapes: D-SMTP-16's rows, and the rows 3.6 lists. It reports each part's constraints, public inputs and domain beside its time, since the domain is what the time follows, and labels a shared host as the plan says. It needs SMTP-M9-39 and SMTP-M9-40, and runs `EnsureKeys` on a key set that `smtpproof/setup` made for the purpose.
+
+**The new tasks,** in brief; their entries carry the detail.
+
+- **SMTP-M9-35, the wire and the seam for bound parts** (S). The proto fields, the root types, the fakes, and smtp-2's rows in `metadata_list.yml`. No behavior: the landed prover and gate ignore the new fields until SMTP-M9-38 and -39.
+- **SMTP-M9-36, the key commitment and the key part** (L). `commit.go` (generators, `Com`, blinds) on gnark-crypto's curve; `circuit_commit.go`, the gadget of 3.2.2; the three key shapes; the opening in every later shape; `relation.go`'s and the checker's Z1 in two steps. It leaves the landed envelope, message and body shapes in place with Z1 swapped for the opening, so the tree proves end to end before the shapes change.
+- **SMTP-M9-37, unit shapes: the catalog, scans across records, reply counts** (L). `ProofSettings`; the eleven shapes by the fill rule; H1 to H13 and B1 to B3; the server gadget's flags; roles by position; `partShapeFor`.
+- **SMTP-M9-38, the gate over bound parts** (M). 3.2.5, fence by fence, and the twins' tests.
+- **SMTP-M9-39, the prover over step parts** (M). The planner, groups, `split`, the suite order, the loader with its dumps and its accounting, `Measure`.
+- **SMTP-M9-40, key set 2** (M). `keyset.json` 2, one phase 1, `EnsureKeys`, the cache, the fetch, `-extend`, pins, several sets at the verifier; smtp-7's row before the fetch is enabled.
+- **OPS-M9-02, the key set's public path and the edge's key sets** (S). The static path under ur.io, `SmtpProofKeysUrl` in §18.9's table, `smtpedge.yml`'s `proof_key_sets` and the directory that holds each set's `keyset.json` and verifying keys. Running a production ceremony is outside this run.
+
+**The drafted tasks that change.** SMTP-M9-04: `SmtpWireMessage.render` writes X-UR-Ref, Feedback-ID, From, Message-ID and, on a BULK message, List-Unsubscribe-Post first, then the fixed signature, then the full signature, then the message's other fields in their order; assembly refuses when those fields and the fixed signature's first line pass `HeaderHeadMaxByteCount`; the block bound becomes a setting. Every length stays fixed before the preamble, so `ByteCount` is unchanged. SMTP-M9-28: the checker takes 3.2.3 and 3.2.4, still importing nothing from the prover tree. SMTP-M9-29 and SMTP-M9-30: 3.6's new cells and rows. SMTP-M9-33: SPEC.md draft 3. SMTP-M9-27's remaining work is SMTP-M9-40's.
+
+### 3.8 Proposed DESIGN.md text
+
+For a design-records track. Text not named here stands. Each item assumes `details-3-key-commitment`, `details-3-speed-bar` and `details-3-recipient-groups` are answered as recommended.
+
+**§14.4, Shape.** After "else DATA (14.5).": "The sidecar sends the envelope's commands in groups and waits for each group's replies before the next, so that each group's replies are proven with the group that follows (14.5); within a group it pipelines only if the post-TLS EHLO reply offers PIPELINING."
+
+**§14.5, `SmtpPreamble`.** Add `bytes proof_key_set = 10;  // the key set its parts are proven under: keyset.json's SHA-256 (14.9)`. `SmtpPreambleResult.code` gains `8 KEYS`.
+
+**§14.5, `SmtpProof`.** As 3.2.5 writes it: `index`'s comment becomes "the part's ordinal, from 1; part 1 is the key part"; `first_record` and `last_record` gain "a part that opens none has last_record = first_record - 1"; fields 10 to 13 are added.
+
+**§14.5, the check table.** Z1's row: "Under the edge's handshake inputs (below), in the connection's first part: 1.3: a private HS yields the disclosed SHTS, then MS and both directions' application keys and IVs (ORIGO); 1.2: a private master secret yields the key block, under which the relayed server Finished record decrypts to the verify_data that secret gives the relayed handshake (D-SMTP-21); and the public commitment C commits to those keys and IVs. In every later part: the keys and IVs it uses open C". Z5's row gains "over the header block's records in order, the single fields and the fixed signature's line in the first". Z6's DATA half: "octets 1 to n, over the header and body records in order, end in CRLF, ...". Z8's row: "Those replies are a valid SMTP exchange for the proven flow, part by part: the server records a part covers hold exactly its `reply_count` whole replies; the post-TLS EHLO reply advertises CHUNKING before a proven BDAT, MAIL and each RCPT get 2xx, DATA gets 354 before any message octet, and no message record is covered before all of them are proven". E3's row: "... no message record (BDAT's command and chunk, DATA's octets) goes before verified parts cover every server record relayed before it and every reply the envelope's commands are owed, proving each MX reply (Z8) ...".
+
+**§14.5, Relation (D-SMTP-22),** in place of the paragraph through "a part resent ... replaces it":
+
+> **Relation (D-SMTP-22).** Public inputs are values the edge holds anyway: Z1's handshake inputs (above), the client ciphertexts a part opens (`records`, which the stream must repeat, E3), the server records it covers, the preamble and issued values, the part's ranges and counts, and the commitments the sidecar publishes: C, in the connection's first part, and a carry on each part that opens a header or DATA body record. Both directions' keys, IVs and plaintext are private witnesses. The first part, the key part, proves Z1 once and that C commits to both directions' keys and IVs; every later part proves that the keys it uses open C, and holds no key schedule. C and each carry are Pedersen commitments under a fresh uniform blind: each is a uniformly random group element whatever it commits to, so no public value depends on a key or on an octet of plaintext, and binding ties every part to the keys the first fixed (DESIGN-DETAILS 3.2.2, 3.3). A part covers the client records `first_record` to `last_record`, or none, and the server records from the previous part's `server_record_count` up to its own, which hold exactly its `reply_count` replies, so prover and edge check the same records, and it can verify before its records are sent, so the sidecar paces them (14.4). The envelope takes one part a group of commands, the header block one part a record, and DATA's body one part a record; the state a scan carries from one record to the next is the carry, which the edge hands from each part to the next. An MX awaiting a command sends no reply, so a server record relayed past a part's count, such as a late NewSessionTicket, only holds message records (E3) until the next part, which may open no client record, covers it; once the MX closes, a 421 included, outstanding parts are moot. DATA opens every octet. BDAT's parts open the records through the header block and the final `QUIT`; the body between streams unopened once the last part verifies, and the edge counts each of its records as its length minus 17 octets, the most a 1.3 record carries (RFC 8446 §5.2; a 1.2 record, typed in clear by E1, carries exactly its length minus 24). So the MX never counts more chunk octets than the edge: it reaches octet n and the proven `QUIT` only if every body record is unpadded application data, and otherwise ends the chunk inside the `QUIT` record, or never. No client record reaches the MX after it (14.7), and 6 octets hold no transaction, so a malformed body alters only its own unproven content or fails the send. A part that cannot be proven, as after a refused MAIL or RCPT, ends the connection before any message octet, and the sidecar retries or returns a DSN per recipient; a part resent under its `send_id` and `index`, byte for byte, is idempotent, and a verified part is never replaced.
+
+**§14.5, the sequence diagram.** As 3.2.1 draws it.
+
+**§14.5, DATA mode.** "Parts carry the scan state across their boundaries" becomes "Each part opens one record and carries the scan state to the next in a hiding commitment (D-SMTP-22)"; "the sidecar sizes them by its measured speed to prove within 2 min" becomes "a part is one fixed circuit, and a host whose part takes over 2 min sends no DATA"; "(≈1 MiB on the M1 reference, ≈600 KiB on an m5.large)" becomes "(about 3 MiB on the M1 reference and 360 to 460 KiB on an m5.large, by projection until D-SMTP-16's runs)".
+
+**§14.5, Check.** "the expected delay: BDAT's proofs (≤ 30 s on an M1)" becomes "the expected delay: BDAT's parts at that host's measured time a part (six parts for D-SMTP-16's send, ≤ 30 s on an M1)".
+
+**§14.5, the M9 gate, Speed.** "**Speed** (p95). Every part is one circuit of 2^20, a unit. BDAT, for a 4 KiB header block and 10 recipients, six units under AES-128-GCM and five under ChaCha20: ≤ 10 s for the key part and ≤ 30 s for the send on an Apple M1 MacBook Air (8 GB); on an AWS m5.large, the time SMTP-M9-32's bench measures there, about 150 s by projection (QD-144). DATA, for a 100 KiB message: ≤ 10 min on the M1; on the m5.large ≤ 20 min under ChaCha20 and the measured time under AES-128-GCM, about 35 min by projection. For scale, ..." and the rest as it stands.
+
+**§14.9, the table's last row.** Sidecar column: "`smtpproof`, a nested module the root never requires; `cli/` injects its provers on desktop builds (owner decision 104; §4.4), with the key sets the release pins by hash, whose transcripts a prover host fetches from ur.io at idle and checks against the circuits it compiles before it uses a key (DESIGN-DETAILS 3.2.7)". Server column: "server injects the verifier into smtpedge, with the key sets `smtpedge.yml` lists".
+
+**§14.11.** D-SMTP-16: no change to its text; its Speed bullet is 14.5's. D-SMTP-20: "in 2-minute parts" becomes "in parts of one record, each proving within 2 min"; "(≈1 MiB on an M1)" becomes "(about 3 MiB on an M1)". D-SMTP-22:
+
+> **D-SMTP-22 (proposed).** 14.5's relation also proves the MX's authenticated replies (post-TLS capabilities, envelope replies, the 354) under private server application keys (Z7-Z9). The key schedule is proven once, in the connection's first part, which publishes a perfectly hiding commitment to both directions' keys; every later part opens it. Each part carries the client ciphertexts it opens and names the server records it covers and the replies they hold; no message record leaves the edge before verified parts cover every server record relayed before it and every reply the envelope is owed; state a scan carries across records travels in a perfectly hiding commitment; a verified part is never replaced; and BDAT's body streams unopened under the relation's count bound; `smtpproof/SPEC.md` freezes it. *Why:* a malicious sidecar's control flow is no evidence of the MX's grammar (RFC 3030 §2, RFC 3207 §4.2); an implicit server range fails an honest part when a record arrives during proving; a part that verifies before its records are sent lets the sidecar pace commands for an MX without PIPELINING and keeps message bodies out of edge memory; and proving the key schedule in every part cost three times over what the gate allows and pushed every circuit past one domain, where a commitment that is uniform whatever it holds gives the edge nothing D-SMTP-21 withholds.
+
+**§14.14.** Subprotocol messages: no new message. Services and config: `smtpedge.yml` gains "the proof key sets it accepts (id, directory, not_after)".
+
+**§14.15.** The first row's mitigation gains "one key part and unit-sized parts (D-SMTP-22)". A new row: "The ceremony's secrets leak, and its holder forges parts | Low | Medium | Only abuse control rests on them (the sidecar checks every key it uses); a new ceremony and release retire the set; DKIM joins still attribute".
+
+**§2.8, smtp-2.** "proofs π1 to π3 and, in DATA mode, one per later body part (owner decision 125)" becomes "the id of the key set the sidecar proves under; a proof per part: the key part, one per envelope group, one per header record and, in DATA mode, one per body record (owner decision 125), each with its reply count and, once, the header block's record count; the key commitment and the scan-state commitments the sidecar publishes, uniformly random group elements that depend on no key and no plaintext (D-SMTP-22)".
+
+**§2.8, a new row.**
+
+```yaml
+smtp-7:
+  service: the key set path on ur.io (static files; §2.8 EX7 for who terminates ur.io)
+  store: none of sidecar's
+  sees: per fetch the client's address and time, the key set's id and the names of the files fetched, which say that the address runs a mail prover host, on which key set, and which TLS families it has prepared; no account, token, cookie or sidecar id
+  why: a prover host checks the setup's transcripts itself before it uses a key (D-SMTP-16), and they are about 0.9 GiB a key set, too large for the package (QD-123)
+  ttl: as ur.io's other static downloads (§4.10)
+  owner: §14.9
+```
+
+**§4.10.** A bullet: "**The mail prover's key sets** are in no package. A host that sends mail fetches the key set its release pins, by hash, from ur.io at idle and checks it before use (§14.9; DESIGN-DETAILS 3.2.7): about 0.9 GiB fetched and 4 GiB kept."
+
+**§5.4, the settings' comment on memory.** "Proving sits outside `MemoryBudgetByteCount` (QD-483), under the injected prover's own `MemoryMaxByteCount` (2,240 MiB; DESIGN-DETAILS 3.2.8)."
+
+**§6.11.** `SmtpPreambleResult.code` gains `KEYS 8`.
+
+**§15.7, `p/`.** "a prover host's measured smtp_data_proof_bytes and DATA rate (§14.5), its time a part and what a part holds, and the key set and suites it has ready".
+
+**§22.** FS-31's adversary list gains "a later part under other keys than the key part committed, a header or body record scanned from a forged state, a reply count the records do not hold, a message record before the envelope's replies are proven". §22.5's `smtpproof` row gains "key-set cache: another circuit's entry, a torn write, a retired set". §22.10's `smtpproof/SPEC.md` line stands.
+
+### 3.9 Owner questions
+
+Five questions are filed. The section is built on each recommendation.
+
+**1. `details-3-key-commitment`: may one perfectly hiding commitment to the session's keys be public?** This is the brief's "cheap fix", and it is the owner's rule that it touches: D-SMTP-22's "no application key or commitment to one is public", kept on 2026-11-06 (QD-144) on the estimate that a commitment "saves about 1.4M of an estimated 6M to 7M constraints ... and would add a new zero-knowledge argument to unaudited circuits". The trade-off, plainly:
+
+- *What becomes public.* One group element a connection, C, and one more per header or body record after the first. C is a commitment to the application keys: the sidecar cannot open it to other keys.
+- *What the edge learns from it.* Nothing, and not by a hardness assumption: C is a uniformly random element whatever the keys are, to an edge with unbounded computation and the setup's trapdoor alike. The rule's purpose, that the edge holds nothing that helps open application data (D-SMTP-21, smtp-2), is kept in full. Its wording is not.
+- *What it adds to trust.* For confidentiality: that the blind is drawn uniformly and kept, from the same source as the TLS keys and the proof's own randomness. If that failed completely, C would be a test for a guess of all 448 key bits, which each record's tag already is. For soundness: discrete logs on a second curve, about 2^125, above BN254's own margin. For review: one gadget of about 150 lines, measured at 3,261 constraints, and 3.3's argument.
+- *What it buys.* Z1 once: 1.9M constraints become 0.7M. Every circuit in one 2^20 domain: the gate's send goes from 11 units to 6, 216 s to 118 s on an m5.large by domain (170 s to 144 s by the count), and by projection from 28 to 39 s to 15 to 21 s on the M1. One proof's memory from 1.7 to 7.0 GiB to 1.3 GiB. Eleven shapes and one domain size where there are 22 and four. Any recipient count on one connection. The earlier estimate priced the commitment as 1.4M constraints saved; it did not price the domain, which is where the time is.
+
+Options. (1) A Pedersen commitment as 3.2.2 has it. (2) A hash commitment, SHA-256 over the keys and a 256-bit blind with the module's existing gadget: computationally hiding only, and two or three compressions, 53,000 to 79,000 constraints, in every part, 5 to 8% of each unit. (3) No commitment. Then every part keeps Z1, a part cannot be smaller than Z1's 708,498 constraints with room to open anything, and the landed 22 shapes stand: 11 units for the gate, the 8 GB M1 unable to hold TLS 1.2's π3, recipients past a shape's pool by splitting the send over connections at a unit each. Carries would still be allowed, since they commit to no key, but there would be little to carry. (4) Recursion or folding. Not available here: gnark verifies Groth16 over BN254 inside a circuit only over a second curve and at millions of constraints a proof, and no folding scheme has a Go implementation under §4.7's licenses. Lookups for AES reopen SPEC.md 10.1 and gnark's version, and would halve AES at best. **Recommendation: (1).** If the answer is (3): SMTP-M9-36 and -37 are dropped; SMTP-M9-38 and -39 lose the key commitment and keep parts with no client record and immutable parts; SMTP-M9-08 gains the split of a domain's recipients; SMTP-M9-40 and the fifth failure's fix stand as written; and the five held tasks build the same seam with `key_commitment` unused.
+
+**2. `details-3-speed-bar`: what do D-SMTP-16's m5.large rows become?** No relation over these circuits meets 60 s there for the gate's send (3.1 A, 3.4): the revised one projects to 118 to 144 s under AES and 98 to 116 s under ChaCha20, and DATA's 100 KiB to 27 to 34 min under AES. QD-144 already answers a confirmed miss: relax the row to the measured number. Options: (1) that, with the rows stated in units and the m5.large's left to SMTP-M9-32's bench, about 150 s and 35 min until then; (2) keep 60 s on the m5.large for a smaller send, three units (up to 12 recipients and an 831-octet header block), and state larger sends by units; (3) drop the m5.large as a prover class, so such hosts only queue for the member's other hosts; (4) reopen SPEC.md 10.1 for lookups. **Recommendation: (1).** 3.8's Speed text is written to it.
+
+**3. `details-3-recipient-groups`: are many recipients at one domain sent in envelope groups on one connection?** This answers `smtp-m9-22-recipient-classes` with a third way. Options: (1) groups: one connection, one quota unit, one transaction at the MX, one more part for each 12 to 19 recipients, so 100 recipients cost 7 parts more than 10 do; (2) the sender splits a domain's recipients over connections of one group each: every connection repeats the key part, the message part and the header's parts and costs a unit, about ten times the proving for 100 recipients, and the MX sees ten transactions; (3) a recipient class of larger shapes, which unit shapes make pointless. **Recommendation: (1).** `smtp_recipients_per_message` then caps the connection, as §20.4's comment has it.
+
+**4. `details-3-key-rotation`: when is a ceremony run again over unchanged circuits?** A key set must change when a circuit does. Beyond that, a leaked ceremony secret lets its holder forge parts, which defeats abuse control and exposes no mail, and running the ceremony again does not undo a leak that has not been noticed. Each new set costs every prover host about 0.9 GiB and hours of idle CPU. Options: (1) only on a circuit change, a catalog change, or a suspected exposure of the ceremony host; (2) also on a schedule, yearly, the old set's `not_after` 90 days after the release that pins the new one; (3) with every release. **Recommendation: (1).** The mechanism in 3.2.7 serves all three.
+
+**5. `details-3-metadata-rows`: can smtp-2 be amended and smtp-7 added as 3.8 writes them?** I-18 wants a row before a server sees a value. smtp-2 gains the key set's id, the per-part counts and the commitments; smtp-7 is the fetch QD-123 accepted, whose row was left to be written. Options: (1) as 3.8; (2) no fetch, the key set in the package, which QD-123 rejected for its size. **Recommendation: (1).** SMTP-M9-35's fields and SMTP-M9-40's fetch reach a release only after the rows land.
+
+**The six open questions.**
+
+- `smtpproof-start-z1-reproof-cost` (QD-144, decided): reopened by this section's brief and put again as question 1, with the measurements that answer's estimate lacked. Its second half, relaxing the m5.large row to the measured number, stands and is question 2's recommendation.
+- `smtpproof-start-key-distribution` (QD-123, decided): stands. 3.2.7 fills in what it left: transcripts are fetched and keys derived, never fetched; one domain size; the cache keyed by the circuit's digest; families ready one at a time; several pins; the row's text. "Reduce the 20 shapes to what M7's census justifies" is met without the census: eleven shapes, none sized by a guess about recipients.
+- `smtpproof-start-shts-wire` (QD-487, a fill): stands as written. `SmtpHandshake` is unchanged, and the key part follows it.
+- `smtp-m9-22-recipient-classes` (open): answered by question 3. Until the owner answers, SMTP-M9-08 builds no split and the prover's groups carry every count.
+- `smtp-m9-06-pin-key` (open): not this section's. It decides how the TLS pin is keyed; the envelope group count this section adds to a pin entry is a property of the MX host's software and sits on the host's entry under either answer. It stays the owner's, and nothing here waits on it.
+- `smtp-m9-06-tl4-allowance-action` (open): not this section's, and nothing here touches it. It stays the owner's.
+
+**Readings taken.** Each changes no D- item beyond what question 1 covers, and each is listed so it can be overruled.
+
+1. *The header block's order.* The single fields come first and both signatures after them, where the landed assembler writes the signatures first. RFC 6376 §5.4 has a signer prepend its signature as a matter of SHOULD; a verifier takes signed fields by name from the bottom up wherever the signature sits. D-SMTP-16's interop run is where this is confirmed. If a receiver objects, the fallback is a msg shape with a larger head and no server blocks, one unit more a send.
+2. *The fixed signature's prefix is still counted over the whole header block,* exactly once, as Z5.5 has it, though nothing rests on a second such line being absent. That keeps Z5 word for word, at 12 constraints an octet in later records.
+3. *DATA's records are cut by length,* replacing reading 3's whole lines. The edge then sees the body's length and no line end.
+4. *No part is proven again.* §14.5's "the same part proven again" becomes a later part with no client record. The cost is the same, one proof, and a verified part's published state can no longer change.
+5. *The check ids stay E1 to E3 and Z1 to Z9.* The opening is Z1's second step, the carries are Z5's and Z6's, the counts Z8's and E3's.
+6. *The TLS client offers ChaCha20 first.*
+7. *The reply estimate is a mean taken from public values,* so that a group's size, which the edge sees, depends on nothing private.
+8. *`smtpproof/setup` stays a command of its own* (reading 24), with `-extend`.
+
+Not in this run, and stated as open: a production ceremony on the host the owner names; D-SMTP-16's runs on the M1 and the m5.large, which turn 3.4's projections into measurements; the two non-authors' soundness argument, which now has 3.3's S1 to S6 and K1 to K4 to argue.
 
 ## 4. Forwarding in the apps' VPN component: key, verification and size (owner decision 197)
 
