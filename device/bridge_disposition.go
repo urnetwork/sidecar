@@ -11,16 +11,17 @@
 //	                          denies every Network flow (pending, refused rules, legacy at a host)
 //	(subject, map)            the map, while kept: in force, or draining until its drain ends, its flows kept and no new
 //	                          ones taken; and the subject's dial rows
-//	(subject, 3)              the hosted addresses, each until its block's drain ends; the subject's dial rows; the
-//	                          allow-all, which a document or a tag ends
+//	(subject, 3, address)     the hosted address, until its block's drain ends; the subject's dial rows; the allow-all,
+//	                          which a document or a tag ends
 //	(subject, 4)              the allow-all
 //	(subject, route)          the served route, until its drain ends, and its remap, until its block's; the subject's
 //	                          route rows that meet it; the allow-all for a remap
 //	(subject, 7)              the subject's exit rows, and at a host that it serves an exit
 //
 // So a revocation or an expiry resets at once, an edit drains: a removed route or address keeps admitting until
-// max(drain_seconds, 600 s), a retargeted map keeps only the flows it opened, and then their tags end. Coarse tags make
-// an ending reach every flow of its pair: an old address's drain ends rule 3's flows to the new address too, and a
+// max(drain_seconds, 600 s), a retargeted map keeps only the flows it opened, and then their tags end. Rule 3's tag
+// names the hosted address (bridge-m4-11-rule-three-tags, DESIGN-DETAILS 12.2.2), so an old address's drain end closes
+// its own flows and none to the new address. Elsewhere a tag is coarse, and an ending reaches every flow of its pair: a
 // revoked grant ends the subject's flows under every rule the grant reached.
 //
 // A rule 0 change ends nothing: an open flow is connected to wherever it was dialed, and rule 0 is checked per flow.
@@ -29,6 +30,7 @@ package device
 
 import (
 	"fmt"
+	"net/netip"
 	"slices"
 	"time"
 )
@@ -95,10 +97,10 @@ func (self *bridgePolicyState) admission(profile BridgePolicyProfile, at time.Ti
 	if sdk {
 		subjects = append(subjects, self.otherClient)
 	}
-	hostedAtoms := []string{}
+	hostedAddrs := []netip.Addr{}
 	for _, addr := range self.hostedAddrs {
 		if !self.lapsedInPreviousBlock(addr, at) {
-			hostedAtoms = append(hostedAtoms, "hosted:"+addr.String())
+			hostedAddrs = append(hostedAddrs, addr)
 		}
 	}
 	servesExit := self.servesExit(at)
@@ -135,8 +137,12 @@ func (self *bridgePolicyState) admission(profile BridgePolicyProfile, at time.Ti
 				}
 			}
 		}
-		if 0 < len(hostedAtoms) && (allowAll || 0 < len(dialAtoms)) {
-			admission.add(tag([]byte{BridgeRuleHosted}), slices.Concat(hostedAtoms, dialAtoms, allowAllAtoms)...)
+		if allowAll || 0 < len(dialAtoms) {
+			// one tag an address, so an address's end closes its flows alone
+			for _, addr := range hostedAddrs {
+				ruleId := bridgeHostedRuleId(addr)
+				admission.add(tag(ruleId[:]), slices.Concat([]string{"hosted:" + addr.String()}, dialAtoms, allowAllAtoms)...)
+			}
 		}
 		for _, served := range self.served {
 			if served.exit || !served.admits(at) {

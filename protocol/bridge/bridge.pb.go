@@ -879,6 +879,7 @@ type BridgeRules struct {
 	Served                  []*BridgeRuleServed    `protobuf:"bytes,7,rep,name=served,proto3" json:"served,omitempty"`                // the subnets and exit this host serves (rules 6 and 7)
 	Subjects                []*BridgeRuleSubject   `protobuf:"bytes,8,rep,name=subjects,proto3" json:"subjects,omitempty"`            // who may reach this host and how (rules 1, 3, 4, 6 and 7)
 	Egress                  *BridgeRuleEgress      `protobuf:"bytes,9,opt,name=egress,proto3" json:"egress,omitempty"`                // this device's own default route; unset keeps today's
+	Untagged                *BridgeRuleSubject     `protobuf:"bytes,10,opt,name=untagged,proto3" json:"untagged,omitempty"`           // the rows autogroup:untagged holds at this host, with no sidecar_id,
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -972,6 +973,13 @@ func (x *BridgeRules) GetSubjects() []*BridgeRuleSubject {
 func (x *BridgeRules) GetEgress() *BridgeRuleEgress {
 	if x != nil {
 		return x.Egress
+	}
+	return nil
+}
+
+func (x *BridgeRules) GetUntagged() *BridgeRuleSubject {
+	if x != nil {
+		return x.Untagged
 	}
 	return nil
 }
@@ -2851,7 +2859,7 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\x0econfig_repo_id\x18\x06 \x01(\fR\fconfigRepoId\x12&\n" +
 	"\x0fconfig_group_id\x18\a \x01(\fR\rconfigGroupId\x12+\n" +
 	"\x11signed_delegation\x18\b \x01(\fR\x10signedDelegation\x12?\n" +
-	"\rdelegation_at\x18\t \x01(\v2\x1a.urnetwork.sidecar.AuthPinR\fdelegationAt\"\x9f\x04\n" +
+	"\rdelegation_at\x18\t \x01(\v2\x1a.urnetwork.sidecar.AuthPinR\fdelegationAt\"\xe1\x04\n" +
 	"\vBridgeRules\x129\n" +
 	"\x05block\x18\x01 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\x05block\x12J\n" +
 	"\x0eprevious_block\x18\x02 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\rpreviousBlock\x12;\n" +
@@ -2861,7 +2869,9 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\x04maps\x18\x06 \x03(\v2 .urnetwork.sidecar.BridgeRuleMapR\x04maps\x12;\n" +
 	"\x06served\x18\a \x03(\v2#.urnetwork.sidecar.BridgeRuleServedR\x06served\x12@\n" +
 	"\bsubjects\x18\b \x03(\v2$.urnetwork.sidecar.BridgeRuleSubjectR\bsubjects\x12;\n" +
-	"\x06egress\x18\t \x01(\v2#.urnetwork.sidecar.BridgeRuleEgressR\x06egress\"\xc3\x01\n" +
+	"\x06egress\x18\t \x01(\v2#.urnetwork.sidecar.BridgeRuleEgressR\x06egress\x12@\n" +
+	"\buntagged\x18\n" +
+	" \x01(\v2$.urnetwork.sidecar.BridgeRuleSubjectR\buntagged\"\xc3\x01\n" +
 	"\x0fBridgeRuleEntry\x12;\n" +
 	"\x06prefix\x18\x01 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\x06prefix\x12:\n" +
 	"\x04kind\x18\x02 \x01(\x0e2&.urnetwork.sidecar.BridgeRuleEntryKindR\x04kind\x127\n" +
@@ -3114,45 +3124,46 @@ var file_protocol_bridge_bridge_proto_depIdxs = []int32{
 	16, // 12: urnetwork.sidecar.BridgeRules.served:type_name -> urnetwork.sidecar.BridgeRuleServed
 	17, // 13: urnetwork.sidecar.BridgeRules.subjects:type_name -> urnetwork.sidecar.BridgeRuleSubject
 	19, // 14: urnetwork.sidecar.BridgeRules.egress:type_name -> urnetwork.sidecar.BridgeRuleEgress
-	23, // 15: urnetwork.sidecar.BridgeRuleEntry.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	0,  // 16: urnetwork.sidecar.BridgeRuleEntry.kind:type_name -> urnetwork.sidecar.BridgeRuleEntryKind
-	14, // 17: urnetwork.sidecar.BridgeRuleEntry.links:type_name -> urnetwork.sidecar.BridgeRuleLink
-	23, // 18: urnetwork.sidecar.BridgeRuleMap.match_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	24, // 19: urnetwork.sidecar.BridgeRuleMap.ports:type_name -> urnetwork.sidecar.BridgePortRange
-	1,  // 20: urnetwork.sidecar.BridgeRuleServed.kind:type_name -> urnetwork.sidecar.BridgeRouteKind
-	23, // 21: urnetwork.sidecar.BridgeRuleServed.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	23, // 22: urnetwork.sidecar.BridgeRuleServed.exposed_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	18, // 23: urnetwork.sidecar.BridgeRuleSubject.dial:type_name -> urnetwork.sidecar.BridgeRuleReach
-	18, // 24: urnetwork.sidecar.BridgeRuleSubject.route:type_name -> urnetwork.sidecar.BridgeRuleReach
-	18, // 25: urnetwork.sidecar.BridgeRuleSubject.exit:type_name -> urnetwork.sidecar.BridgeRuleReach
-	23, // 26: urnetwork.sidecar.BridgeRuleReach.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	24, // 27: urnetwork.sidecar.BridgeRuleReach.ports:type_name -> urnetwork.sidecar.BridgePortRange
-	2,  // 28: urnetwork.sidecar.BridgeRuleEgress.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
-	14, // 29: urnetwork.sidecar.BridgeRuleEgress.exits:type_name -> urnetwork.sidecar.BridgeRuleLink
-	40, // 30: urnetwork.sidecar.BridgeApproval.decisions:type_name -> urnetwork.sidecar.Signed
-	23, // 31: urnetwork.sidecar.BridgeBlock.ipv4_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	23, // 32: urnetwork.sidecar.BridgeBlock.previous_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	41, // 33: urnetwork.sidecar.BridgeAddress.header:type_name -> urnetwork.sidecar.StatementHeader
-	41, // 34: urnetwork.sidecar.BridgeRoute.header:type_name -> urnetwork.sidecar.StatementHeader
-	23, // 35: urnetwork.sidecar.BridgeRouteBody.prefixes:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	23, // 36: urnetwork.sidecar.BridgeRouteBody.exposed_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	1,  // 37: urnetwork.sidecar.BridgeRouteBody.kind:type_name -> urnetwork.sidecar.BridgeRouteKind
-	25, // 38: urnetwork.sidecar.BridgeRouteBody.approval:type_name -> urnetwork.sidecar.BridgeApproval
-	41, // 39: urnetwork.sidecar.BridgeMap.header:type_name -> urnetwork.sidecar.StatementHeader
-	23, // 40: urnetwork.sidecar.BridgeMapBody.match_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	24, // 41: urnetwork.sidecar.BridgeMapBody.ports:type_name -> urnetwork.sidecar.BridgePortRange
-	25, // 42: urnetwork.sidecar.BridgeMapBody.approval:type_name -> urnetwork.sidecar.BridgeApproval
-	41, // 43: urnetwork.sidecar.BridgeEgress.header:type_name -> urnetwork.sidecar.StatementHeader
-	2,  // 44: urnetwork.sidecar.BridgeEgress.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
-	41, // 45: urnetwork.sidecar.BridgeAlias.header:type_name -> urnetwork.sidecar.StatementHeader
-	23, // 46: urnetwork.sidecar.BridgeAliasBody.alias_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
-	41, // 47: urnetwork.sidecar.BridgeWithdraw.header:type_name -> urnetwork.sidecar.StatementHeader
-	3,  // 48: urnetwork.sidecar.BridgeWithdraw.mode:type_name -> urnetwork.sidecar.BridgeWithdrawMode
-	49, // [49:49] is the sub-list for method output_type
-	49, // [49:49] is the sub-list for method input_type
-	49, // [49:49] is the sub-list for extension type_name
-	49, // [49:49] is the sub-list for extension extendee
-	0,  // [0:49] is the sub-list for field type_name
+	17, // 15: urnetwork.sidecar.BridgeRules.untagged:type_name -> urnetwork.sidecar.BridgeRuleSubject
+	23, // 16: urnetwork.sidecar.BridgeRuleEntry.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	0,  // 17: urnetwork.sidecar.BridgeRuleEntry.kind:type_name -> urnetwork.sidecar.BridgeRuleEntryKind
+	14, // 18: urnetwork.sidecar.BridgeRuleEntry.links:type_name -> urnetwork.sidecar.BridgeRuleLink
+	23, // 19: urnetwork.sidecar.BridgeRuleMap.match_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	24, // 20: urnetwork.sidecar.BridgeRuleMap.ports:type_name -> urnetwork.sidecar.BridgePortRange
+	1,  // 21: urnetwork.sidecar.BridgeRuleServed.kind:type_name -> urnetwork.sidecar.BridgeRouteKind
+	23, // 22: urnetwork.sidecar.BridgeRuleServed.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	23, // 23: urnetwork.sidecar.BridgeRuleServed.exposed_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	18, // 24: urnetwork.sidecar.BridgeRuleSubject.dial:type_name -> urnetwork.sidecar.BridgeRuleReach
+	18, // 25: urnetwork.sidecar.BridgeRuleSubject.route:type_name -> urnetwork.sidecar.BridgeRuleReach
+	18, // 26: urnetwork.sidecar.BridgeRuleSubject.exit:type_name -> urnetwork.sidecar.BridgeRuleReach
+	23, // 27: urnetwork.sidecar.BridgeRuleReach.prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	24, // 28: urnetwork.sidecar.BridgeRuleReach.ports:type_name -> urnetwork.sidecar.BridgePortRange
+	2,  // 29: urnetwork.sidecar.BridgeRuleEgress.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
+	14, // 30: urnetwork.sidecar.BridgeRuleEgress.exits:type_name -> urnetwork.sidecar.BridgeRuleLink
+	40, // 31: urnetwork.sidecar.BridgeApproval.decisions:type_name -> urnetwork.sidecar.Signed
+	23, // 32: urnetwork.sidecar.BridgeBlock.ipv4_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	23, // 33: urnetwork.sidecar.BridgeBlock.previous_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	41, // 34: urnetwork.sidecar.BridgeAddress.header:type_name -> urnetwork.sidecar.StatementHeader
+	41, // 35: urnetwork.sidecar.BridgeRoute.header:type_name -> urnetwork.sidecar.StatementHeader
+	23, // 36: urnetwork.sidecar.BridgeRouteBody.prefixes:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	23, // 37: urnetwork.sidecar.BridgeRouteBody.exposed_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	1,  // 38: urnetwork.sidecar.BridgeRouteBody.kind:type_name -> urnetwork.sidecar.BridgeRouteKind
+	25, // 39: urnetwork.sidecar.BridgeRouteBody.approval:type_name -> urnetwork.sidecar.BridgeApproval
+	41, // 40: urnetwork.sidecar.BridgeMap.header:type_name -> urnetwork.sidecar.StatementHeader
+	23, // 41: urnetwork.sidecar.BridgeMapBody.match_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	24, // 42: urnetwork.sidecar.BridgeMapBody.ports:type_name -> urnetwork.sidecar.BridgePortRange
+	25, // 43: urnetwork.sidecar.BridgeMapBody.approval:type_name -> urnetwork.sidecar.BridgeApproval
+	41, // 44: urnetwork.sidecar.BridgeEgress.header:type_name -> urnetwork.sidecar.StatementHeader
+	2,  // 45: urnetwork.sidecar.BridgeEgress.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
+	41, // 46: urnetwork.sidecar.BridgeAlias.header:type_name -> urnetwork.sidecar.StatementHeader
+	23, // 47: urnetwork.sidecar.BridgeAliasBody.alias_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
+	41, // 48: urnetwork.sidecar.BridgeWithdraw.header:type_name -> urnetwork.sidecar.StatementHeader
+	3,  // 49: urnetwork.sidecar.BridgeWithdraw.mode:type_name -> urnetwork.sidecar.BridgeWithdrawMode
+	50, // [50:50] is the sub-list for method output_type
+	50, // [50:50] is the sub-list for method input_type
+	50, // [50:50] is the sub-list for extension type_name
+	50, // [50:50] is the sub-list for extension extendee
+	0,  // [0:50] is the sub-list for field type_name
 }
 
 func init() { file_protocol_bridge_bridge_proto_init() }

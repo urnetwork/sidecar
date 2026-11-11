@@ -38,6 +38,8 @@ type egressReferenceDecision struct {
 	idle    time.Duration
 	// the table's row that decided, for the generator's coverage
 	row string
+	// the flow's subject was another client holding autogroup:untagged's rows, for the generator's coverage
+	untagged bool
 }
 
 // The reference's ranges, written out.
@@ -100,8 +102,10 @@ func egressReferenceResolve(
 	tcpIdle time.Duration,
 	otherIdle time.Duration,
 ) egressReferenceDecision {
+	// set once the subject is known
+	untaggedRows := false
 	deny := func(row string) egressReferenceDecision {
-		return egressReferenceDecision{verdict: connect.EgressVerdictDeny, row: row}
+		return egressReferenceDecision{verdict: connect.EgressVerdictDeny, row: row, untagged: untaggedRows}
 	}
 	sdk := profile == device.BridgePolicyProfileSdkProvider
 	mode := flow.ProvideMode
@@ -180,6 +184,8 @@ func egressReferenceResolve(
 	// the subject
 	var subject *bridge.BridgeRuleSubject
 	var subjectId connect.Id
+	// another client: a source no row binds, untagged, under the zero id
+	otherClient := false
 	if sdk {
 		for _, candidate := range rules.GetSubjects() {
 			for _, clientId := range candidate.GetClientIds() {
@@ -198,6 +204,11 @@ func egressReferenceResolve(
 				return deny("subject")
 			}
 			subjectId = connect.Id(subject.GetSidecarId())
+		} else {
+			// it holds the rows autogroup:untagged holds, the field's, and none without it
+			otherClient = true
+			subject = rules.GetUntagged()
+			untaggedRows = subject != nil
 		}
 	} else {
 		principal := flow.Principal
@@ -251,10 +262,17 @@ func egressReferenceResolve(
 			idle = tcpIdle
 		}
 	}
-	tagged := subject != nil && subject.GetTagged()
+	tagged := !otherClient && subject != nil && subject.GetTagged()
 	noDocumentUntagged := input.State == device.PostureEnforcingNoDocument && !tagged
 	admitted := func(row string, verdict connect.EgressVerdict, target netip.AddrPort, ruleId []byte) egressReferenceDecision {
-		return egressReferenceDecision{verdict: verdict, target: target, ruleTag: egressReferenceTag(subjectId, ruleId), idle: idle, row: row}
+		return egressReferenceDecision{
+			verdict:  verdict,
+			target:   target,
+			ruleTag:  egressReferenceTag(subjectId, ruleId),
+			idle:     idle,
+			row:      row,
+			untagged: untaggedRows,
+		}
 	}
 
 	// times
@@ -440,7 +458,8 @@ func egressReferenceResolve(
 			if daemon(loopback, port) {
 				return deny("3")
 			}
-			return admitted("3", connect.EgressVerdictMap, netip.AddrPortFrom(loopback, port), []byte{3})
+			// the rule's number, then the hosted address the flow was sent to
+			return admitted("3", connect.EgressVerdictMap, netip.AddrPortFrom(loopback, port), append([]byte{3}, addr.AsSlice()...))
 		}
 	} else if inBlocks(addr) {
 		return deny("block")
@@ -656,6 +675,24 @@ func (self *egressGen) state() *egressGenState {
 		}
 		fixture.Served = append(fixture.Served, served)
 	}
+	rows := func(routeRows bool) []sidecartest.BridgeRulesFixtureReach {
+		reach := []sidecartest.BridgeRulesFixtureReach{}
+		for range self.below(3) {
+			row := sidecartest.BridgeRulesFixtureReach{Ports: self.ports(egressGenPick(self, "*", "tcp", "udp", "icmp"))}
+			if routeRows {
+				row.Prefix = egressGenPick(self, "192.168.50.0/24", "192.168.50.0/25", "10.30.0.0/16", "198.51.100.0/24",
+					blockBase+".200.0/24", "0.0.0.0/0")
+			}
+			if self.oneIn(2) {
+				row.Grant = byte(self.below(4) + 1)
+			}
+			if self.oneIn(3) {
+				row.Expires = self.timeMs()
+			}
+			reach = append(reach, row)
+		}
+		return reach
+	}
 	subjectCount := 1 + self.below(3)
 	for i := range subjectCount {
 		seed := byte(0x20 + i)
@@ -663,29 +700,19 @@ func (self *egressGen) state() *egressGenState {
 		if self.oneIn(3) {
 			subject.Clients = append(subject.Clients, seed+0x40)
 		}
-		rows := func(routeRows bool) []sidecartest.BridgeRulesFixtureReach {
-			reach := []sidecartest.BridgeRulesFixtureReach{}
-			for range self.below(3) {
-				row := sidecartest.BridgeRulesFixtureReach{Ports: self.ports(egressGenPick(self, "*", "tcp", "udp", "icmp"))}
-				if routeRows {
-					row.Prefix = egressGenPick(self, "192.168.50.0/24", "192.168.50.0/25", "10.30.0.0/16", "198.51.100.0/24",
-						blockBase+".200.0/24", "0.0.0.0/0")
-				}
-				if self.oneIn(2) {
-					row.Grant = byte(self.below(4) + 1)
-				}
-				if self.oneIn(3) {
-					row.Expires = self.timeMs()
-				}
-				reach = append(reach, row)
-			}
-			return reach
-		}
 		subject.Dial = rows(false)
 		subject.Route = rows(true)
 		subject.Exit = rows(false)
 		fixture.Subjects = append(fixture.Subjects, subject)
 		generated.subjects = append(generated.subjects, subject)
+	}
+	// autogroup:untagged's rows half the time, which another client holds at an sdk provider
+	if self.oneIn(2) {
+		untagged := &sidecartest.BridgeRulesFixtureUntagged{}
+		untagged.Dial = rows(false)
+		untagged.Route = rows(true)
+		untagged.Exit = rows(false)
+		fixture.Untagged = untagged
 	}
 
 	state := &bridge.BridgeState{}
@@ -852,16 +879,21 @@ func TestBridgeEgressPolicyEqualsTheReference(t *testing.T) {
 			nows = append(nows, now)
 			decision := egressReferenceResolve(state.profile, state.input, flow, now, 600*time.Second, 5*time.Minute)
 			rows[decision.row+" "+decision.verdict.String()] += 1
+			if decision.untagged {
+				rows["untagged "+decision.row+" "+decision.verdict.String()] += 1
+			}
 		}
 		if difference := egressCompare(state, flows, nows); difference != "" {
 			t.Fatal(difference)
 		}
 	}
-	// the generator reaches every row of the table both ways it can go, so agreement is not agreement on denying
+	// the generator reaches every row of the table both ways it can go, so agreement is not agreement on denying, and
+	// another client's exit by autogroup:untagged's rows both ways
 	for _, row := range []string{
 		"legacy pass", "mode pass", "mode deny", "class deny", "protocol deny", "subject deny", "principal deny",
 		"state deny", "0 deny", "1 map", "1 deny", "1_remap map", "1_remap deny", "2 deny", "3 map", "3 deny",
 		"block deny", "4 pass", "5 deny", "6 pass", "6 deny", "7 pass", "7 deny", "8 deny",
+		"untagged 7 pass", "untagged 7 deny",
 	} {
 		if rows[row] < 50 {
 			t.Errorf("%s reached %d times", row, rows[row])
