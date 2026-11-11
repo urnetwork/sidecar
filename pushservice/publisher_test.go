@@ -411,7 +411,7 @@ func testResetVersions(t testing.TB, parts []*protocol.PushReset) map[string]uin
 	t.Helper()
 	topicVersions := map[string]uint64{}
 	for _, part := range parts {
-		if pushservice.MaxResetVersionCount < len(part.Versions) {
+		if pushservice.DefaultPushFormatSettings().ResetPartVersionCount < len(part.Versions) {
 			t.Errorf("a part of %d versions", len(part.Versions))
 		}
 		for _, topicVersion := range part.Versions {
@@ -723,7 +723,7 @@ func TestPublisherBackpressureResetsRatherThanGrows(t *testing.T) {
 	settings.QueueByteCount = 4096
 	env := newTestPublisherEnv(t, settings)
 	env.startIdle(nil)
-	body := []byte(strings.Repeat("h", pushservice.MaxHintByteCount))
+	body := []byte(strings.Repeat("h", pushservice.DefaultPushFormatSettings().MaxHintByteCount))
 	for version := uint64(1); version <= 20; version += 1 {
 		env.hint(sidecar.PushTopicTeam, version, body)
 	}

@@ -1,6 +1,7 @@
 // §6.6's SidecarPublisherSettings: the tunables of a resident's publisher (publisher.go) and of api's
-// long-poll's hold (long_poll.go), with the publisher's own beside them. Protocol values, such as the 48
-// versions a reset part carries and the 256 B of a hint, are constants, not settings.
+// long-poll's hold (long_poll.go), with the publisher's own beside them, and PushFormatSettings, §6.8's
+// wire limits, which every writer and reader of a client's slot carries the same (QD-702: a limit is a
+// settings field whose default is the protocol's value, read from the instance where it is used).
 
 package pushservice
 
@@ -13,6 +14,32 @@ import (
 
 // A setting a publisher cannot run on.
 var errPublisherSettings = errors.New("sidecar publisher: settings out of range")
+
+// §6.8's wire limits on push: protocol values, so a change here is a protocol change, which no deployment
+// makes on one side alone. The hint writer, the publisher and the long-poll each carry a copy from
+// DefaultPushFormatSettings, so the default is in one place.
+type PushFormatSettings struct {
+	// The most a hint's bytes hold: 256 B, ids, kinds and versions, never content (§6.8's PushHint.hint).
+	MaxHintByteCount int
+	// The most versions one PushReset part carries, which one envelope holds (§6.5's budget): 48.
+	ResetPartVersionCount int
+}
+
+// The protocol's values.
+func DefaultPushFormatSettings() *PushFormatSettings {
+	return &PushFormatSettings{
+		MaxHintByteCount:      256,
+		ResetPartVersionCount: 48,
+	}
+}
+
+// Whether the limits can carry anything: both positive.
+func (self *PushFormatSettings) validate() error {
+	if self.MaxHintByteCount <= 0 || self.ResetPartVersionCount <= 0 {
+		return errors.New("push format: limits must be positive")
+	}
+	return nil
+}
 
 // Resident publishers (server/connect) and the api long-poll (§6.6).
 type SidecarPublisherSettings struct {
@@ -41,6 +68,15 @@ type SidecarPublisherSettings struct {
 	RetryMinInterval time.Duration
 	// The longest such wait: 30 s, well inside a client's hourly resync.
 	RetryMaxInterval time.Duration
+	// How often the publisher sets {scp_<C>}live again while it runs: 30 s (§18.7), a third of
+	// LiveTimeout, so one lost write or one long retry wait never lets the marker lapse under a live
+	// resident. Must be positive and under LiveTimeout.
+	LiveRefreshInterval time.Duration
+	// How long {scp_<C>}live lives from each write: 90 s (§18.7's EX 90), so the marker of a resident that
+	// went away lapses within it and the client's wake-class hints are woken at once again. Whole seconds.
+	LiveTimeout time.Duration
+	// §6.8's wire limits.
+	Format PushFormatSettings
 }
 
 // The defaults: §6.6's, and the publisher's own above.
@@ -54,11 +90,15 @@ func DefaultSidecarPublisherSettings() *SidecarPublisherSettings {
 		AckTimeout:          1 * time.Hour,
 		RetryMinInterval:    1 * time.Second,
 		RetryMaxInterval:    30 * time.Second,
+		LiveRefreshInterval: 30 * time.Second,
+		LiveTimeout:         90 * time.Second,
+		Format:              *DefaultPushFormatSettings(),
 	}
 }
 
-// Whether a publisher can run on these: every bound positive, the ack's ttl a second or more, and room
-// for at least one envelope. LongPollHoldTimeout is the long-poll's, which checks it.
+// Whether a publisher can run on these: every bound positive, the ack's and the live marker's ttls a
+// second or more, a refresh inside the marker's life, and room for at least one envelope.
+// LongPollHoldTimeout is the long-poll's, which checks it.
 func (self *SidecarPublisherSettings) validate() error {
 	switch {
 	case self.HintCoalesceTimeout <= 0, self.PendingResetCount <= 0, self.ReadHintCount <= 0:
@@ -69,6 +109,11 @@ func (self *SidecarPublisherSettings) validate() error {
 		return errPublisherSettings
 	case self.RetryMinInterval <= 0, self.RetryMaxInterval < self.RetryMinInterval:
 		return errPublisherSettings
+	case self.LiveTimeout < time.Second, self.LiveRefreshInterval <= 0, self.LiveTimeout <= self.LiveRefreshInterval:
+		return errPublisherSettings
+	}
+	if err := self.Format.validate(); err != nil {
+		return errors.Join(errPublisherSettings, err)
 	}
 	return nil
 }

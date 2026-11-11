@@ -5,7 +5,8 @@
 //
 // A publisher starts with a reset. It reads the hint stream's tail first and ver second, so a hint that
 // lands between the two reads is in both and repeats rather than vanishes, which a client ignores. It
-// sends ver's topics, filtered to Topics, as PushReset parts of at most 48 versions under one epoch,
+// sends ver's topics, filtered to Topics, as PushReset parts of at most 48 versions (the format's
+// ResetPartVersionCount) under one epoch,
 // unique to the run, the last complete (D-PROTO-20). Then each event on the client's n, which reaches it
 // as a Kick, has it wait HintCoalesceTimeout, read the stream past the last entry it sent, and send the
 // entries in seq order as PushHints: every hint of a topic but the batch's last of it keeps its seq and
@@ -24,12 +25,19 @@
 // Every frame is a hint, never content (R-PROTO-8). A batch goes with connect's frame ack on its last
 // frame, and that ack raises {scp_<C>}ack to the batch's last stream id while tok exists (§18.7's step
 // 3; a reset's last part acks the tail it read): a frame ack is the client's connect stack, not its
-// application, and feeds only wake suppression (R-PROTO-10). {scp_<C>}live's refresh is PROTO-M8-01's.
+// application, and feeds only wake suppression (R-PROTO-10).
+//
+// While it runs, the publisher sets {scp_<C>}live (EX LiveTimeout, 90 s) at its start and every
+// LiveRefreshInterval (30 s) after: §18.7's marker that the client's resident is up, which puts a
+// wake-class hint's wake off by 15 s so the publisher delivers it first. Close leaves the marker to
+// lapse, since a client that moved to another resident has that one's publisher writing it too; a
+// resident that went away stops writing it, and within 90 s the client's hints wake it at once again.
+// A failed write is counted and tried at the next interval.
 //
 // One goroutine runs a publisher from Start until Close or its context ends. It waits on the clock and
-// never spins: one read a coalescing window, a doubling wait after a Redis error or a refused send, and
-// a lost ack raise is left to the next batch's. Kick, Reset and Close are safe for concurrent use, and
-// Kick and Reset never block.
+// never spins: one read a coalescing window, a doubling wait after a Redis error or a refused send, one
+// live write an interval, and a lost ack raise is left to the next batch's. Kick, Reset and Close are
+// safe for concurrent use, and Kick and Reset never block.
 
 package pushservice
 
@@ -99,6 +107,9 @@ type SidecarPublisherStats struct {
 	// ack scripts run, and those that raised ack
 	AckCount       uint64
 	AckRaisedCount uint64
+	// {scp_<C>}live writes that landed, and those that failed
+	LiveCount       uint64
+	LiveFailedCount uint64
 }
 
 // Running totals behind SidecarPublisherStats.
@@ -113,6 +124,8 @@ type sidecarPublisherStats struct {
 	redisErrorCount  atomic.Uint64
 	ackCount         atomic.Uint64
 	ackRaisedCount   atomic.Uint64
+	liveCount        atomic.Uint64
+	liveFailedCount  atomic.Uint64
 }
 
 // §6.8's SidecarPublisher. NewSidecarPublisher makes one, Start runs it once, and Close ends it.
@@ -246,6 +259,8 @@ func (self *SidecarPublisher) Stats() SidecarPublisherStats {
 		RedisErrorCount:  self.stats.redisErrorCount.Load(),
 		AckCount:         self.stats.ackCount.Load(),
 		AckRaisedCount:   self.stats.ackRaisedCount.Load(),
+		LiveCount:        self.stats.liveCount.Load(),
+		LiveFailedCount:  self.stats.liveFailedCount.Load(),
 	}
 }
 
@@ -322,15 +337,24 @@ type publisherRun struct {
 	raisedAckStreamId string
 	// the wait after the last failure, zero after a success
 	retryInterval time.Duration
+	// fires when {scp_<C>}live is due again
+	liveDue <-chan time.Time
 }
 
 func (self *publisherRun) run() {
 	settings := self.publisher.settings
 	// a read is due: the window first, then the stream past the position
 	readDue := false
+	self.refreshLive()
 	for {
 		if self.ctx.Err() != nil {
 			return
+		}
+		// a refresh that came due during a window or a retry wait
+		select {
+		case <-self.liveDue:
+			self.refreshLive()
+		default:
 		}
 		self.raiseAck()
 		if self.publisher.takeReset() || !self.hasPosition {
@@ -382,8 +406,26 @@ func (self *publisherRun) run() {
 		case <-self.publisher.kick:
 			readDue = true
 		case <-self.publisher.signal:
+		case <-self.liveDue:
+			self.refreshLive()
 		}
 	}
+}
+
+// Sets {scp_<C>}live for LiveTimeout and arms the next refresh LiveRefreshInterval on. A write that fails
+// is counted, and the next interval's tries again.
+func (self *publisherRun) refreshLive() {
+	settings := self.publisher.settings
+	testHookBarrier("pushservice.publisher.live.before", self.barrierKey)
+	err := self.env.Redis.Set(self.ctx, HintLiveKey(self.env.ClientId), []byte("1"), settings.LiveTimeout)
+	testHookBarrier("pushservice.publisher.live.after", self.barrierKey)
+	if err != nil {
+		self.publisher.stats.liveFailedCount.Add(1)
+		self.publisher.stats.redisErrorCount.Add(1)
+	} else {
+		self.publisher.stats.liveCount.Add(1)
+	}
+	self.liveDue = self.publisher.clock.After(settings.LiveRefreshInterval)
 }
 
 // Waits the next retry interval, doubling it up to RetryMaxInterval. False once the run has ended.
@@ -488,9 +530,10 @@ func (self *publisherRun) sendReset() error {
 	}
 
 	epoch := self.nextEpoch()
-	partCount := max((len(topics)+MaxResetVersionCount-1)/MaxResetVersionCount, 1)
+	partVersionCount := self.publisher.settings.Format.ResetPartVersionCount
+	partCount := max((len(topics)+partVersionCount-1)/partVersionCount, 1)
 	for part := range partCount {
-		partTopics := topics[part*MaxResetVersionCount : min((part+1)*MaxResetVersionCount, len(topics))]
+		partTopics := topics[part*partVersionCount : min((part+1)*partVersionCount, len(topics))]
 		versions := make([]*protocol.TopicVersion, 0, len(partTopics))
 		for _, topic := range partTopics {
 			versions = append(versions, &protocol.TopicVersion{Topic: topic, Version: topicVersions[topic]})
@@ -545,7 +588,7 @@ func (self *publisherRun) sendHints() error {
 		switch {
 		case !self.topicAdmitted(item.hint.Topic):
 			item.hint = &protocol.PushHint{Seq: item.hint.Seq}
-		case lastTopicIndexes[item.hint.Topic] != index || MaxHintByteCount < len(item.hint.Hint):
+		case lastTopicIndexes[item.hint.Topic] != index || self.publisher.settings.Format.MaxHintByteCount < len(item.hint.Hint):
 			if 0 < len(item.hint.Hint) {
 				item.hint.Hint = nil
 				self.publisher.stats.coalescedCount.Add(1)
