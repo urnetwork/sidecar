@@ -139,18 +139,22 @@ func (self *evsGitObjectWriter) WriteGitObject(kind string, content []byte) (Evs
 	return self.write(kind, content)
 }
 
+// Writes a loose object streamed from content.
 func (self *evsGitObjectWriter) WriteGitObjectFrom(kind string, content io.Reader, size int64) (EvsGitOid, error) {
 	return self.writeFrom(kind, content, size)
 }
 
+// Whether the repository holds oid as a loose object.
 func (self *evsGitObjectWriter) HasGitObject(oid EvsGitOid) bool {
 	return self.has(oid)
 }
 
+// Nothing: a loose object is readable once written.
 func (self *evsGitObjectWriter) PendingGitObject(oid EvsGitOid) (string, []byte, bool) {
 	return "", nil, false
 }
 
+// Nothing to flush: see PendingGitObject.
 func (self *evsGitObjectWriter) Flush(ctx context.Context) error {
 	return nil
 }

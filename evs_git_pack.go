@@ -65,15 +65,17 @@ type EvsGitPackWriter struct {
 	byteCount int64
 }
 
+// An empty pack over spool, which it writes from offset 0.
 func NewEvsGitPackWriter(spool EvsGitPackSpool) *EvsGitPackWriter {
 	return &EvsGitPackWriter{spool: spool}
 }
 
-// The objects added since the pack started, and the bytes their entries take.
+// The objects added since the pack started.
 func (self *EvsGitPackWriter) Count() uint32 {
 	return self.count
 }
 
+// The bytes the entries added since the pack started take in the spool.
 func (self *EvsGitPackWriter) ByteCount() int64 {
 	return self.byteCount
 }
@@ -168,6 +170,7 @@ type evsCountingWriter struct {
 	count  int64
 }
 
+// Passes p on, counting what was written.
 func (self *evsCountingWriter) Write(p []byte) (int, error) {
 	n, err := self.writer.Write(p)
 	self.count += int64(n)
@@ -180,6 +183,7 @@ type evsOffsetWriter struct {
 	offset int64
 }
 
+// Writes p at the offset, then moves the offset past it.
 func (self *evsOffsetWriter) Write(p []byte) (int, error) {
 	n, err := self.spool.WriteAt(p, self.offset)
 	self.offset += int64(n)
@@ -210,6 +214,8 @@ func NewEvsGitPackSink(spool EvsGitPackSpool, flush EvsGitPackFlush, held func(o
 	}
 }
 
+// Adds an object whose bytes are in memory unless the sink holds it; a tree, commit or tag stays readable until
+// the flush.
 func (self *EvsGitPackSink) WriteGitObject(kind string, content []byte) (EvsGitOid, error) {
 	oid := evsGitObjectOid(kind, content)
 	if self.HasGitObject(oid) {
@@ -240,6 +246,7 @@ func (self *EvsGitPackSink) WriteGitObjectFrom(kind string, content io.Reader, s
 	return oid, nil
 }
 
+// Whether oid is pending in the pack or held by the repository.
 func (self *EvsGitPackSink) HasGitObject(oid EvsGitOid) bool {
 	if _, ok := self.pending[oid]; ok {
 		return true
@@ -247,6 +254,7 @@ func (self *EvsGitPackSink) HasGitObject(oid EvsGitOid) bool {
 	return self.held != nil && self.held(oid)
 }
 
+// A pending tree, commit or tag, which the repository does not hold until the flush; a pending blob is not kept.
 func (self *EvsGitPackSink) PendingGitObject(oid EvsGitOid) (string, []byte, bool) {
 	content, ok := self.pendingBytes[oid]
 	if !ok {
@@ -263,6 +271,7 @@ func (self *EvsGitPackSink) FlushIfFull(ctx context.Context) error {
 	return self.Flush(ctx)
 }
 
+// Writes the pack through the flush function and starts the next; a flush that fails keeps every object pending.
 func (self *EvsGitPackSink) Flush(ctx context.Context) error {
 	if self.writer.Count() == 0 {
 		return nil

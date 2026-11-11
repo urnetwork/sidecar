@@ -288,6 +288,7 @@ func (self *evsGitExport) finish(ctx context.Context, ref *evsGitExportRef) erro
 	return nil
 }
 
+// An export's replays into writer's repository, its tree cache bounded by the client's TreeCacheByteCount.
 func newEvsGitExport(repo *EvsRepo, writer *evsGitObjectWriter) *evsGitExport {
 	return &evsGitExport{
 		repo:      repo,

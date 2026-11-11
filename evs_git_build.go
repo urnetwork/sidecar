@@ -78,6 +78,7 @@ type evsGitBuildNode struct {
 	raw      []byte
 }
 
+// A directory with no change yet.
 func newEvsGitBuildNode() *evsGitBuildNode {
 	return &evsGitBuildNode{files: map[string]*protocol.EvsSealedChange{}, children: map[string]*evsGitBuildNode{}}
 }
@@ -308,10 +309,12 @@ type evsGitCachedTree struct {
 	byteCount int64
 }
 
+// A cache holding at most byteCount of trees.
 func newEvsGitTreeCache(byteCount int64) *evsGitTreeCache {
 	return &evsGitTreeCache{byteCount: byteCount, order: list.New(), trees: map[EvsGitOid]*list.Element{}}
 }
 
+// A tree's entries when the cache holds it, which makes it the most recently used.
 func (self *evsGitTreeCache) get(oid EvsGitOid) ([]EvsGitRawEntry, bool) {
 	element, ok := self.trees[oid]
 	if !ok {
