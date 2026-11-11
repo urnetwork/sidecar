@@ -131,10 +131,13 @@ func TestSocketFindHttpSendsTheRoute(t *testing.T) {
 	if !errors.Is(err, ErrSocketUnavailable) || !errors.As(err, &codeErr) || codeErr.RetryAfter != 2*time.Second {
 		t.Errorf("a 503: %v", err)
 	}
-	if _, err := newSocketFindHttp(&SocketFindHttpArgs{SocketsUrl: "https://sockets.example/", Bearer: func(ctx context.Context) (string, error) { return "", nil }}); err == nil {
+	if _, err := newSocketFindHttp(&SocketFindHttpArgs{SocketsUrl: "https://sockets.example/", Transport: transport, Bearer: func(ctx context.Context) (string, error) { return "", nil }}); err == nil {
 		t.Error("a url with a trailing slash")
 	}
-	if _, err := newSocketFindHttp(&SocketFindHttpArgs{SocketsUrl: "https://sockets.example"}); err == nil {
+	if _, err := newSocketFindHttp(&SocketFindHttpArgs{SocketsUrl: "https://sockets.example", Transport: transport}); err == nil {
 		t.Error("no bearer")
+	}
+	if _, err := newSocketFindHttp(&SocketFindHttpArgs{SocketsUrl: "https://sockets.example", Bearer: func(ctx context.Context) (string, error) { return "t", nil }}); err == nil {
+		t.Error("no transport")
 	}
 }

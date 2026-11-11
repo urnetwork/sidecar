@@ -100,7 +100,8 @@ func (self *socketFindClient) find(ctx context.Context, args *SocketFindArgs) (*
 type SocketFindHttpArgs struct {
 	// The sockets service's origin, with no trailing slash: §19.4's sockets url.
 	SocketsUrl string
-	// Carries every request. Nil is http.DefaultTransport.
+	// Carries every request: the host's own, since nothing in this package reaches net/http's defaults, whose
+	// unbound sockets can follow a tunnel's default route (CORE-M1-04).
 	Transport http.RoundTripper
 	// The caller's client token for this call.
 	Bearer func(ctx context.Context) (string, error)
@@ -114,16 +115,13 @@ const socketFindMaxAnswerByteCount = 64 * 1024
 // A send for a caller with no SidecarApi: one JSON POST with the caller's bearer, whose 200 body is the route's
 // answer. Any other status is a *SidecarApiError carrying Retry-After's wait, which a dialer reads as unavailable.
 func newSocketFindHttp(args *SocketFindHttpArgs) (socketFindSend, error) {
-	if args == nil || args.SocketsUrl == "" || args.Bearer == nil {
-		return nil, fmt.Errorf("%w: a find client needs the sockets url and a bearer", errInvalidSettings)
+	if args == nil || args.SocketsUrl == "" || args.Bearer == nil || args.Transport == nil {
+		return nil, fmt.Errorf("%w: a find client needs the sockets url, a transport and a bearer", errInvalidSettings)
 	}
 	if err := checkServiceUrl("SocketsUrl", args.SocketsUrl, "http", "https"); err != nil {
 		return nil, err
 	}
 	transport := args.Transport
-	if transport == nil {
-		transport = http.DefaultTransport
-	}
 	maxAnswerByteCount := args.MaxAnswerByteCount
 	if maxAnswerByteCount <= 0 {
 		maxAnswerByteCount = socketFindMaxAnswerByteCount
