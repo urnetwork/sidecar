@@ -772,6 +772,8 @@ values:
 not_keys:
   "http/1.1": "an ALPN id, the second a route probe's hello offers, which the lb's http branch selects (§13.4)"
   "tls/<>/<>": "a tls/<port>/<host> socket name (§9.4), what tlsedge's name map resolves a visitor's SNI to for Find (§13.5): no stored key"
+  "tls/": "the first segment of a tls/<port>/<host> socket name (§9.4), which a sockets store matches in a client's set to say whether it still holds an edge name (DESIGN-DETAILS 13.2.3's step 9): no stored key"
+  "smtp/": "the first segment of an smtp/25/<host> socket name (§9.4), matched as tls/ is: no stored key"
 
 rows:
   connect-1: {server: [transfer_contract, contract_close, contract_close_report]}

@@ -31,15 +31,34 @@ type SocketStoreSettings struct {
 	SampleCount int
 	// §9.6 and §9.7's ticket, clamp and ejection values, which a pick reads.
 	Scheduler *SocketSchedulerSettings
+	// How long a removal for cause, or a client's removal, fences its lease, and a pair removal its pairs
+	// (DESIGN-DETAILS 13.2.3): 10 min. It must outlast the longest a sockets process can be stale without
+	// knowing it, the gate cache's 5 min poll and one 30 s load, or a stale process's write could land
+	// after the fence lapsed.
+	TombstoneTtl time.Duration
+	// How long an unlisten fences its lease against pages of an older set: 60 s, past any page a client
+	// sent before it, since a call that waits longer has timed out.
+	UnlistenFenceTtl time.Duration
+	// The longest a tls/ or smtp/ pair lives past its listener's last accepted registration (QD-656):
+	// 15 min. A Find writes one for the lesser of this and its grant's remaining life, and a registration
+	// renews them, so a revoked, removed or dead listener's pairs end within it.
+	EdgePairTtl time.Duration
+	// How many name keys of a removed client's set one step of RemoveClient takes (§9.8): 1,024, a page's
+	// worth, which bounds what one step examines however many names the client held.
+	RemoveClientBatchCount int
 }
 
-// §9.5's, §9.7's and §9.8's values.
+// §9.5's, §9.7's and §9.8's values, with DESIGN-DETAILS 13.2.3's fences.
 func DefaultSocketStoreSettings() *SocketStoreSettings {
 	return &SocketStoreSettings{
-		Lease:        45 * time.Second,
-		ClientSetTtl: 5 * time.Minute,
-		SampleCount:  64,
-		Scheduler:    DefaultSocketSchedulerSettings(),
+		Lease:                  45 * time.Second,
+		ClientSetTtl:           5 * time.Minute,
+		SampleCount:            64,
+		Scheduler:              DefaultSocketSchedulerSettings(),
+		TombstoneTtl:           10 * time.Minute,
+		UnlistenFenceTtl:       60 * time.Second,
+		EdgePairTtl:            15 * time.Minute,
+		RemoveClientBatchCount: 1024,
 	}
 }
 
@@ -102,9 +121,9 @@ type SocketsSettings struct {
 	Store     *SocketStoreSettings
 	Bound     *SocketControlBoundSettings
 	FairQueue *SocketFairQueueSettings
-	// The longest a {svc_} pair lives past its last Find, whatever the grant says (§9.6): 24 h.
-	PairTtlMax time.Duration
-	// The same for ur/ names (§9.6, plan-SMTP-small-readings' per-service constant): 60 min.
+	// The longest a ur/ {svc_} pair lives past its last Find, whatever the grant says (§9.6,
+	// plan-SMTP-small-readings' per-service constant): 60 min. A tls/ or smtp/ pair takes the store's
+	// EdgePairTtl instead (QD-656).
 	PlatformPairTtlMax time.Duration
 	// How long one store call may take before it reads as unavailable: 2 s, inside a dialer's 5 s
 	// accept timeout.
@@ -123,7 +142,6 @@ func DefaultSocketsSettings() *SocketsSettings {
 		Store:              DefaultSocketStoreSettings(),
 		Bound:              DefaultSocketControlBoundSettings(),
 		FairQueue:          DefaultSocketFairQueueSettings(),
-		PairTtlMax:         24 * time.Hour,
 		PlatformPairTtlMax: 60 * time.Minute,
 		StoreTimeout:       2 * time.Second,
 		ProbeInterval:      5 * time.Second,
@@ -143,6 +161,10 @@ func (self *SocketStoreSettings) Validate() error {
 		{name: "lease", positive: 0 < self.Lease},
 		{name: "client_set_ttl", positive: 0 < self.ClientSetTtl},
 		{name: "sample_count", positive: 2 <= self.SampleCount},
+		{name: "tombstone_ttl", positive: 0 < self.TombstoneTtl},
+		{name: "unlisten_fence_ttl", positive: 0 < self.UnlistenFenceTtl},
+		{name: "edge_pair_ttl", positive: 0 < self.EdgePairTtl},
+		{name: "remove_client_batch_count", positive: 0 < self.RemoveClientBatchCount},
 	} {
 		if !check.positive {
 			return fmt.Errorf("%w: %s", ErrSocketsSettingsRefused, check.name)
@@ -202,7 +224,6 @@ func (self *SocketsSettings) Validate() error {
 		{name: "concurrency", positive: 0 < self.FairQueue.Concurrency},
 		{name: "queue_count", positive: 0 < self.FairQueue.QueueCount},
 		{name: "max_wait", positive: 0 < self.FairQueue.MaxWait},
-		{name: "pair_ttl_max", positive: 0 < self.PairTtlMax},
 		{name: "platform_pair_ttl_max", positive: 0 < self.PlatformPairTtlMax},
 		{name: "store_timeout", positive: 0 < self.StoreTimeout},
 		{name: "probe_interval", positive: 0 < self.ProbeInterval},

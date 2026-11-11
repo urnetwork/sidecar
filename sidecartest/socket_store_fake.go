@@ -3,10 +3,15 @@
 // RunSocketStoreSuite. A pick is socketsservice.PickSocketListeners itself, on candidates read as the Lua
 // script reads them, so the two agree pick for pick on the same clock and draws.
 //
-// Every lease, share and report lives by the injected clock alone, as the Redis store's do by the
-// clock it passes its scripts: a backing ttl there is a backstop, never what a lease means. A call goes
-// through hostCall, so a plan under FaultOpHost with the key "sockets.<Method>" reaches it, and each is
-// counted, so a test can show a path made one call and no other. Safe for concurrent use.
+// The fences are DESIGN-DETAILS 13.2.3's, as the group, pair and claim scripts keep them (SOCK-M5-18): a
+// lease's position and set version, a removal's tombstone, which outlives the group's last listener, a
+// pair floor, and the sweep's claim. Positions and set versions here are uint64s, which the scripts
+// compare as decimal strings by length and then bytes, and the two agree.
+//
+// Every lease, share, tombstone, floor and claim lives by the injected clock alone, as the Redis store's
+// do by the clock it passes its scripts: a backing ttl there is a backstop, never what a lease means. A
+// call goes through hostCall, so a plan under FaultOpHost with the key "sockets.<Method>" reaches it, and
+// each is counted, so a test can show a path made one call and no other. Safe for concurrent use.
 
 package sidecartest
 
@@ -36,7 +41,12 @@ type fakeSocketGroupKey struct {
 
 // One listener of a group, as sock-1 and sock-2 let a store keep it.
 type fakeSocketListener struct {
-	registration      *sidecar.SocketRegistration
+	registration *sidecar.SocketRegistration
+	// The listener's sidecar, the highest position the lease was admitted at, and the set_version of the
+	// page that last wrote it.
+	sidecarId         *connect.Id
+	policyVersion     uint64
+	setVersion        uint64
 	leaseExpireMillis int64
 	reportedInflight  int
 	reportMillis      int64
@@ -69,6 +79,24 @@ type fakeSocketPair struct {
 	expireMillis      int64
 }
 
+// A removal's tombstone, x:<L> of a group, or a listener's pair floor, ~f of its {svc_} key: the newest
+// position (and, for a tombstone, set version) a removal stood at, until expireMillis.
+type fakeSocketFence struct {
+	setVersion    uint64
+	policyVersion uint64
+	cause         socketsservice.SocketRemoveCause
+	expireMillis  int64
+}
+
+// What one removal did, as the group script's del answers.
+type fakeSocketDelResult struct {
+	removed      bool
+	lastListener bool
+	kept         bool
+	// The lease's position, when kept.
+	policyVersion uint64
+}
+
 // The store's state.
 type FakeSocketStore struct {
 	clock    Clock
@@ -80,7 +108,14 @@ type FakeSocketStore struct {
 	clientSets map[connect.Id]*fakeSocketClientSet
 	// by listener, then dialer
 	listenerIdPairs map[connect.Id]map[connect.Id]*fakeSocketPair
-	opCounts        map[string]int
+	// by group, then listener: kept apart from the groups, since a tombstone outlives its group's last
+	// listener
+	groupTombstones map[fakeSocketGroupKey]map[connect.Id]*fakeSocketFence
+	// by listener
+	pairFloors map[connect.Id]*fakeSocketFence
+	// by network
+	sweepClaims map[connect.Id]*socketsservice.SocketSweepClaim
+	opCounts    map[string]int
 }
 
 // A store on clock, nil being real time, with settings, nil being the defaults. A nil faults takes a
@@ -102,6 +137,9 @@ func NewFakeSocketStore(clock Clock, settings *socketsservice.SocketStoreSetting
 		groups:          map[fakeSocketGroupKey]*fakeSocketGroup{},
 		clientSets:      map[connect.Id]*fakeSocketClientSet{},
 		listenerIdPairs: map[connect.Id]map[connect.Id]*fakeSocketPair{},
+		groupTombstones: map[fakeSocketGroupKey]map[connect.Id]*fakeSocketFence{},
+		pairFloors:      map[connect.Id]*fakeSocketFence{},
+		sweepClaims:     map[connect.Id]*socketsservice.SocketSweepClaim{},
 		opCounts:        map[string]int{},
 	}
 }
@@ -126,6 +164,17 @@ func (self *FakeSocketStore) Wipe() {
 	self.groups = map[fakeSocketGroupKey]*fakeSocketGroup{}
 	self.clientSets = map[connect.Id]*fakeSocketClientSet{}
 	self.listenerIdPairs = map[connect.Id]map[connect.Id]*fakeSocketPair{}
+	self.groupTombstones = map[fakeSocketGroupKey]map[connect.Id]*fakeSocketFence{}
+	self.pairFloors = map[connect.Id]*fakeSocketFence{}
+	self.sweepClaims = map[connect.Id]*socketsservice.SocketSweepClaim{}
+}
+
+// See SocketStoreSuiteHooks: the client's set goes, as its ttl ends it, and its leases stay.
+func (self *FakeSocketStore) LapseClientSet(ctx context.Context, clientId connect.Id) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	delete(self.clientSets, clientId)
+	return nil
 }
 
 // One call through the fault queue and the count, serve running under the lock at the store's now.
@@ -195,7 +244,7 @@ func fakeSocketInRange(nameKey []byte, keyStart []byte, keyEnd []byte) bool {
 }
 
 // Ends listenerClientId's lease in the group under key, and says what that left. found is false when it
-// held no live lease there.
+// held no live lease there. A taken entry's own removal, which leaves no tombstone.
 func (self *FakeSocketStore) removeListenerWithLock(key fakeSocketGroupKey, listenerClientId connect.Id, nowMillis int64) (found bool, lastListener bool) {
 	group := self.liveGroupWithLock(key, nowMillis)
 	if group == nil || group.listeners[listenerClientId] == nil {
@@ -210,6 +259,123 @@ func (self *FakeSocketStore) removeListenerWithLock(key fakeSocketGroupKey, list
 	return true, false
 }
 
+// A ttl in whole milliseconds, rounded up, as HPEXPIRE keeps one.
+func fakeSocketTtlMillis(ttl time.Duration) int64 {
+	return (ttl + time.Millisecond - 1).Milliseconds()
+}
+
+// How long a tombstone of cause lives.
+func (self *FakeSocketStore) tombstoneTtl(cause socketsservice.SocketRemoveCause) time.Duration {
+	if cause == socketsservice.SocketRemoveUnlisten {
+		return self.settings.UnlistenFenceTtl
+	}
+	return self.settings.TombstoneTtl
+}
+
+// The live tombstone of listenerClientId in the group under key, or nil.
+func (self *FakeSocketStore) liveTombstoneWithLock(key fakeSocketGroupKey, listenerClientId connect.Id, nowMillis int64) *fakeSocketFence {
+	tombstones := self.groupTombstones[key]
+	tombstone := tombstones[listenerClientId]
+	if tombstone == nil {
+		return nil
+	}
+	if tombstone.expireMillis <= nowMillis {
+		delete(tombstones, listenerClientId)
+		if len(tombstones) == 0 {
+			delete(self.groupTombstones, key)
+		}
+		return nil
+	}
+	return tombstone
+}
+
+// Leaves a tombstone, merged with a live one by the higher of each number and the longer life.
+func (self *FakeSocketStore) writeTombstoneWithLock(key fakeSocketGroupKey, listenerClientId connect.Id, written *fakeSocketFence, nowMillis int64) {
+	if live := self.liveTombstoneWithLock(key, listenerClientId, nowMillis); live != nil {
+		written.setVersion = max(written.setVersion, live.setVersion)
+		written.policyVersion = max(written.policyVersion, live.policyVersion)
+		written.cause = max(written.cause, live.cause)
+		written.expireMillis = max(written.expireMillis, live.expireMillis)
+	}
+	tombstones := self.groupTombstones[key]
+	if tombstones == nil {
+		tombstones = map[connect.Id]*fakeSocketFence{}
+		self.groupTombstones[key] = tombstones
+	}
+	tombstones[listenerClientId] = written
+}
+
+// The group script's del: ends listenerClientId's lease for cause at (setVersion, policyVersion), unless a
+// newer page or position wrote it, and leaves a tombstone. A nil setVersion is the lease's own, as a removal
+// no page carries passes.
+func (self *FakeSocketStore) delWithLock(key fakeSocketGroupKey, listenerClientId connect.Id, cause socketsservice.SocketRemoveCause, setVersion *uint64, policyVersion uint64, nowMillis int64) *fakeSocketDelResult {
+	group := self.liveGroupWithLock(key, nowMillis)
+	if group == nil || group.listeners[listenerClientId] == nil {
+		return &fakeSocketDelResult{}
+	}
+	listener := group.listeners[listenerClientId]
+	removalSetVersion := listener.setVersion
+	if setVersion != nil {
+		removalSetVersion = *setVersion
+	}
+	switch cause {
+	case socketsservice.SocketRemoveUnlisten:
+		if removalSetVersion < listener.setVersion {
+			return &fakeSocketDelResult{kept: true, policyVersion: listener.policyVersion}
+		}
+	case socketsservice.SocketRemoveRefused:
+		if policyVersion < listener.policyVersion || removalSetVersion < listener.setVersion {
+			return &fakeSocketDelResult{kept: true, policyVersion: listener.policyVersion}
+		}
+	}
+	_, lastListener := self.removeListenerWithLock(key, listenerClientId, nowMillis)
+	self.writeTombstoneWithLock(key, listenerClientId, &fakeSocketFence{
+		setVersion:    removalSetVersion,
+		policyVersion: policyVersion,
+		cause:         cause,
+		expireMillis:  nowMillis + fakeSocketTtlMillis(self.tombstoneTtl(cause)),
+	}, nowMillis)
+	return &fakeSocketDelResult{removed: true, lastListener: lastListener}
+}
+
+// The listener's live pair floor, or nil.
+func (self *FakeSocketStore) livePairFloorWithLock(listenerClientId connect.Id, nowMillis int64) *fakeSocketFence {
+	floor := self.pairFloors[listenerClientId]
+	if floor != nil && floor.expireMillis <= nowMillis {
+		delete(self.pairFloors, listenerClientId)
+		return nil
+	}
+	return floor
+}
+
+// pair_remove: every pair of the listener goes, and the floor stands at the higher of position and a live
+// floor, for the longer of TombstoneTtl and what it had left.
+func (self *FakeSocketStore) removePairsWithLock(listenerClientId connect.Id, position uint64, nowMillis int64) {
+	delete(self.listenerIdPairs, listenerClientId)
+	floor := &fakeSocketFence{
+		policyVersion: position,
+		expireMillis:  nowMillis + fakeSocketTtlMillis(self.settings.TombstoneTtl),
+	}
+	if live := self.livePairFloorWithLock(listenerClientId, nowMillis); live != nil {
+		floor.policyVersion = max(floor.policyVersion, live.policyVersion)
+		floor.expireMillis = max(floor.expireMillis, live.expireMillis)
+	}
+	self.pairFloors[listenerClientId] = floor
+}
+
+// Whether the set holds a name key a pair stands for.
+func fakeSocketSetHoldsPairName(set *fakeSocketClientSet) bool {
+	if set == nil {
+		return false
+	}
+	for nameKey := range set.nameKeys {
+		if socketsservice.SocketPairNameKey([]byte(nameKey)) {
+			return true
+		}
+	}
+	return false
+}
+
 // See socketsservice.SocketStore.
 func (self *FakeSocketStore) Ping(ctx context.Context) error {
 	return self.call(ctx, "Ping", func(nowMillis int64) error {
@@ -217,21 +383,38 @@ func (self *FakeSocketStore) Ping(ctx context.Context) error {
 	})
 }
 
+// Whether a page is one the engine could send: entries and refused keys each sorted, inside the range,
+// non-empty, and no name key both allowed and refused.
+func fakeSocketPageWellFormed(page *socketsservice.SocketStorePage) error {
+	if page == nil {
+		return fmt.Errorf("%w: no page", socketsservice.ErrSocketStoreRequest)
+	}
+	var previousNameKey []byte
+	allowedNameKeys := map[string]bool{}
+	for index, registration := range page.Registrations {
+		nameKey := registration.NameKey()
+		if len(nameKey) == 0 || !fakeSocketInRange(nameKey, page.KeyStart, page.KeyEnd) ||
+			(0 < index && bytes.Compare(nameKey, previousNameKey) <= 0) {
+			return fmt.Errorf("%w: entry %d", socketsservice.ErrSocketStoreRequest, index)
+		}
+		previousNameKey = nameKey
+		allowedNameKeys[string(nameKey)] = true
+	}
+	for index, nameKey := range page.RefusedNameKeys {
+		if len(nameKey) == 0 || !fakeSocketInRange(nameKey, page.KeyStart, page.KeyEnd) || allowedNameKeys[string(nameKey)] ||
+			(0 < index && bytes.Compare(nameKey, page.RefusedNameKeys[index-1]) <= 0) {
+			return fmt.Errorf("%w: refused entry %d", socketsservice.ErrSocketStoreRequest, index)
+		}
+	}
+	return nil
+}
+
 // See socketsservice.SocketStore.
 func (self *FakeSocketStore) ApplyPage(ctx context.Context, page *socketsservice.SocketStorePage) (*socketsservice.SocketStorePageResult, error) {
 	var result *socketsservice.SocketStorePageResult
 	err := self.call(ctx, "ApplyPage", func(nowMillis int64) error {
-		if page == nil {
-			return fmt.Errorf("%w: no page", socketsservice.ErrSocketStoreRequest)
-		}
-		var previousNameKey []byte
-		for index, registration := range page.Registrations {
-			nameKey := registration.NameKey()
-			if len(nameKey) == 0 || !fakeSocketInRange(nameKey, page.KeyStart, page.KeyEnd) ||
-				(0 < index && bytes.Compare(nameKey, previousNameKey) <= 0) {
-				return fmt.Errorf("%w: entry %d", socketsservice.ErrSocketStoreRequest, index)
-			}
-			previousNameKey = nameKey
+		if err := fakeSocketPageWellFormed(page); err != nil {
+			return err
 		}
 
 		set := self.liveClientSetWithLock(page.ListenerClientId, nowMillis)
@@ -243,18 +426,48 @@ func (self *FakeSocketStore) ApplyPage(ctx context.Context, page *socketsservice
 			set = &fakeSocketClientSet{nameKeys: map[string]bool{}}
 			self.clientSets[page.ListenerClientId] = set
 		}
+		previousNameKeys := []string{}
+		for nameKey := range set.nameKeys {
+			if fakeSocketInRange([]byte(nameKey), page.KeyStart, page.KeyEnd) {
+				previousNameKeys = append(previousNameKeys, nameKey)
+			}
+		}
+		sort.Strings(previousNameKeys)
 
 		result = &socketsservice.SocketStorePageResult{SetVersion: page.SetVersion}
 		heldNameKeys := map[string]bool{}
+		// keys the page names, and those whose removal a newer page or position stood against
+		pageNameKeys := map[string]bool{}
+		standingNameKeys := map[string]bool{}
+		lastListenerNameKeys := map[string]bool{}
 		for _, registration := range page.Registrations {
 			key := fakeSocketGroupKey{networkId: page.NetworkId, nameKey: string(registration.NameKey())}
-			group := self.liveGroupWithLock(key, nowMillis)
+			pageNameKeys[key.nameKey] = true
 			outcome := &socketsservice.SocketStoreEntryOutcome{}
 			result.Outcomes = append(result.Outcomes, outcome)
 
+			// a removal at a newer position or by a newer set stands
+			if tombstone := self.liveTombstoneWithLock(key, page.ListenerClientId, nowMillis); tombstone != nil &&
+				(page.PolicyVersion < tombstone.policyVersion || page.SetVersion < tombstone.setVersion) {
+				outcome.Fenced = true
+				outcome.FencePolicyVersion = tombstone.policyVersion
+				outcome.FenceCause = tombstone.cause
+				continue
+			}
+			group := self.liveGroupWithLock(key, nowMillis)
 			var existing *fakeSocketListener
 			if group != nil {
 				existing = group.listeners[page.ListenerClientId]
+			}
+			if existing != nil {
+				outcome.PriorPolicyVersion = existing.policyVersion
+				if page.SetVersion < existing.setVersion {
+					outcome.Stale = true
+					standingNameKeys[key.nameKey] = true
+					continue
+				}
+			}
+			if group != nil {
 				for listenerClientId, listener := range group.listeners {
 					if listenerClientId == page.ListenerClientId {
 						continue
@@ -283,49 +496,118 @@ func (self *FakeSocketStore) ApplyPage(ctx context.Context, page *socketsservice
 				group.version += 1
 			}
 			listener.registration = copySocketRegistration(registration)
+			listener.sidecarId = copySocketId(page.SidecarId)
+			listener.policyVersion = max(page.PolicyVersion, listener.policyVersion)
+			listener.setVersion = page.SetVersion
 			listener.leaseExpireMillis = nowMillis + self.settings.Lease.Milliseconds()
 			listener.reportedInflight = registration.Inflight
 			listener.reportMillis = nowMillis
 			if len(registration.NameToken) != 0 {
 				group.listedSealedName = bytes.Clone(registration.SealedName)
 			}
+			// the put clears the tombstone it passed
+			if tombstones := self.groupTombstones[key]; tombstones != nil {
+				delete(tombstones, page.ListenerClientId)
+				if len(tombstones) == 0 {
+					delete(self.groupTombstones, key)
+				}
+			}
 			heldNameKeys[key.nameKey] = true
 		}
 
-		// what the set held in range and the page does not hold now unlistens; outside it stays
-		previousNameKeys := []string{}
-		for nameKey := range set.nameKeys {
-			if fakeSocketInRange([]byte(nameKey), page.KeyStart, page.KeyEnd) {
-				previousNameKeys = append(previousNameKeys, nameKey)
+		// the refused, for cause at the page's position
+		refusedRemovedNameKeys := map[string]bool{}
+		for _, nameKey := range page.RefusedNameKeys {
+			key := fakeSocketGroupKey{networkId: page.NetworkId, nameKey: string(nameKey)}
+			pageNameKeys[key.nameKey] = true
+			setVersion := page.SetVersion
+			del := self.delWithLock(key, page.ListenerClientId, socketsservice.SocketRemoveRefused, &setVersion, page.PolicyVersion, nowMillis)
+			removal := &socketsservice.SocketStoreRemoval{}
+			switch {
+			case del.removed:
+				removal.Removed = &socketsservice.SocketStoreRemoved{
+					NetworkId:        page.NetworkId,
+					ListenerClientId: page.ListenerClientId,
+					NameKey:          bytes.Clone(nameKey),
+					LastListener:     del.lastListener,
+				}
+				refusedRemovedNameKeys[key.nameKey] = true
+				lastListenerNameKeys[key.nameKey] = del.lastListener
+			case del.kept:
+				removal.Kept = true
+				removal.PolicyVersion = del.policyVersion
+				standingNameKeys[key.nameKey] = true
 			}
+			result.RefusedOutcomes = append(result.RefusedOutcomes, removal)
 		}
-		sort.Strings(previousNameKeys)
+
+		// what the set held in range and the page does not name unlistens; outside it stays
 		for _, nameKey := range previousNameKeys {
-			delete(set.nameKeys, nameKey)
-			if heldNameKeys[nameKey] {
+			if pageNameKeys[nameKey] {
 				continue
 			}
 			key := fakeSocketGroupKey{networkId: page.NetworkId, nameKey: nameKey}
-			_, lastListener := self.removeListenerWithLock(key, page.ListenerClientId, nowMillis)
+			setVersion := page.SetVersion
+			del := self.delWithLock(key, page.ListenerClientId, socketsservice.SocketRemoveUnlisten, &setVersion, 0, nowMillis)
+			if del.kept {
+				standingNameKeys[nameKey] = true
+				continue
+			}
+			lastListenerNameKeys[nameKey] = del.lastListener
+		}
+
+		removedNameKeys := map[string]bool{}
+		for _, nameKey := range previousNameKeys {
+			if !heldNameKeys[nameKey] && !standingNameKeys[nameKey] {
+				removedNameKeys[nameKey] = true
+			}
+		}
+		for nameKey := range refusedRemovedNameKeys {
+			removedNameKeys[nameKey] = true
+		}
+		sortedRemovedNameKeys := make([]string, 0, len(removedNameKeys))
+		for nameKey := range removedNameKeys {
+			sortedRemovedNameKeys = append(sortedRemovedNameKeys, nameKey)
+		}
+		sort.Strings(sortedRemovedNameKeys)
+		for _, nameKey := range sortedRemovedNameKeys {
 			result.Removed = append(result.Removed, &socketsservice.SocketStoreRemoved{
 				NetworkId:        page.NetworkId,
 				ListenerClientId: page.ListenerClientId,
 				NameKey:          []byte(nameKey),
-				LastListener:     lastListener,
+				LastListener:     lastListenerNameKeys[nameKey],
 			})
 		}
+
+		for _, nameKey := range previousNameKeys {
+			delete(set.nameKeys, nameKey)
+		}
 		for nameKey := range heldNameKeys {
+			set.nameKeys[nameKey] = true
+		}
+		// a lease a newer page wrote stays the set's
+		for nameKey := range standingNameKeys {
 			set.nameKeys[nameKey] = true
 		}
 		set.networkId = page.NetworkId
 		set.setVersion = page.SetVersion
 		set.expireMillis = nowMillis + self.settings.ClientSetTtl.Milliseconds()
+		result.EdgeEntriesRemain = fakeSocketSetHoldsPairName(set)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	return result, nil
+}
+
+// A copy of an optional id.
+func copySocketId(id *connect.Id) *connect.Id {
+	if id == nil {
+		return nil
+	}
+	copied := *id
+	return &copied
 }
 
 // The candidate a pick reads for listener, deep enough that the pick cannot reach the store.
@@ -360,8 +642,11 @@ func fakeSocketStoreListener(listenerClientId connect.Id, listener *fakeSocketLi
 	registration := copySocketRegistration(listener.registration)
 	registration.Inflight = listener.reportedInflight
 	return &socketsservice.SocketStoreListener{
-		Registration: registration,
-		Candidate:    fakeSocketCandidate(listenerClientId, listener),
+		Registration:  registration,
+		Candidate:     fakeSocketCandidate(listenerClientId, listener),
+		SidecarId:     copySocketId(listener.sidecarId),
+		PolicyVersion: listener.policyVersion,
+		SetVersion:    listener.setVersion,
 	}
 }
 
@@ -578,10 +863,18 @@ func (self *FakeSocketStore) ListNames(ctx context.Context, networkId connect.Id
 }
 
 // See socketsservice.SocketStore.
-func (self *FakeSocketStore) SetServicePair(ctx context.Context, listenerClientId connect.Id, dialerClientId connect.Id, grantExpireMillis uint64, ttl time.Duration) error {
-	return self.call(ctx, "SetServicePair", func(nowMillis int64) error {
+func (self *FakeSocketStore) SetServicePair(ctx context.Context, listenerClientId connect.Id, dialerClientId connect.Id, grantExpireMillis uint64, ttl time.Duration, position uint64) (bool, uint64, error) {
+	wrote := false
+	floorPosition := uint64(0)
+	err := self.call(ctx, "SetServicePair", func(nowMillis int64) error {
 		if ttl <= 0 {
 			return fmt.Errorf("%w: a ttl of %v", socketsservice.ErrSocketStoreRequest, ttl)
+		}
+		if floor := self.livePairFloorWithLock(listenerClientId, nowMillis); floor != nil {
+			floorPosition = floor.policyVersion
+			if position < floor.policyVersion {
+				return nil
+			}
 		}
 		pairs := self.listenerIdPairs[listenerClientId]
 		if pairs == nil {
@@ -590,11 +883,15 @@ func (self *FakeSocketStore) SetServicePair(ctx context.Context, listenerClientI
 		}
 		pairs[dialerClientId] = &fakeSocketPair{
 			grantExpireMillis: grantExpireMillis,
-			// rounded up to the millisecond, as HPEXPIRE keeps it
-			expireMillis: nowMillis + (ttl + time.Millisecond - 1).Milliseconds(),
+			expireMillis:      nowMillis + fakeSocketTtlMillis(ttl),
 		}
+		wrote = true
 		return nil
 	})
+	if err != nil {
+		return false, 0, err
+	}
+	return wrote, floorPosition, nil
 }
 
 // See socketsservice.SocketStore.
@@ -621,9 +918,33 @@ func (self *FakeSocketStore) GetServicePair(ctx context.Context, listenerClientI
 }
 
 // See socketsservice.SocketStore.
-func (self *FakeSocketStore) RemoveServicePairs(ctx context.Context, listenerClientId connect.Id) error {
+func (self *FakeSocketStore) RemoveServicePairs(ctx context.Context, listenerClientId connect.Id, position uint64) error {
 	return self.call(ctx, "RemoveServicePairs", func(nowMillis int64) error {
-		delete(self.listenerIdPairs, listenerClientId)
+		self.removePairsWithLock(listenerClientId, position, nowMillis)
+		return nil
+	})
+}
+
+// See socketsservice.SocketStore.
+func (self *FakeSocketStore) TouchServicePairs(ctx context.Context, listenerClientId connect.Id) error {
+	return self.call(ctx, "TouchServicePairs", func(nowMillis int64) error {
+		ttlMaxMillis := fakeSocketTtlMillis(self.settings.EdgePairTtl)
+		pairs := self.listenerIdPairs[listenerClientId]
+		for dialerClientId, pair := range pairs {
+			if pair.expireMillis <= nowMillis {
+				delete(pairs, dialerClientId)
+				continue
+			}
+			ttlMillis := ttlMaxMillis
+			if pair.grantExpireMillis != 0 {
+				ttlMillis = min(ttlMillis, int64(pair.grantExpireMillis)-nowMillis)
+			}
+			if ttlMillis <= 0 {
+				delete(pairs, dialerClientId)
+				continue
+			}
+			pair.expireMillis = nowMillis + ttlMillis
+		}
 		return nil
 	})
 }
@@ -632,28 +953,36 @@ func (self *FakeSocketStore) RemoveServicePairs(ctx context.Context, listenerCli
 func (self *FakeSocketStore) RemoveClient(ctx context.Context, clientId connect.Id) ([]*socketsservice.SocketStoreRemoved, error) {
 	removed := []*socketsservice.SocketStoreRemoved{}
 	err := self.call(ctx, "RemoveClient", func(nowMillis int64) error {
-		delete(self.listenerIdPairs, clientId)
-		set := self.liveClientSetWithLock(clientId, nowMillis)
-		if set == nil {
-			return nil
-		}
-		delete(self.clientSets, clientId)
-		nameKeys := make([]string, 0, len(set.nameKeys))
-		for nameKey := range set.nameKeys {
-			nameKeys = append(nameKeys, nameKey)
-		}
-		sort.Strings(nameKeys)
-		for _, nameKey := range nameKeys {
-			key := fakeSocketGroupKey{networkId: set.networkId, nameKey: nameKey}
-			if found, lastListener := self.removeListenerWithLock(key, clientId, nowMillis); found {
-				removed = append(removed, &socketsservice.SocketStoreRemoved{
-					NetworkId:        set.networkId,
-					ListenerClientId: clientId,
-					NameKey:          []byte(nameKey),
-					LastListener:     lastListener,
-				})
+		if set := self.liveClientSetWithLock(clientId, nowMillis); set != nil {
+			// a batch at a time, each leaving the set once its leases are gone
+			for 0 < len(set.nameKeys) {
+				nameKeys := make([]string, 0, len(set.nameKeys))
+				for nameKey := range set.nameKeys {
+					nameKeys = append(nameKeys, nameKey)
+				}
+				sort.Strings(nameKeys)
+				if self.settings.RemoveClientBatchCount < len(nameKeys) {
+					nameKeys = nameKeys[:self.settings.RemoveClientBatchCount]
+				}
+				for _, nameKey := range nameKeys {
+					key := fakeSocketGroupKey{networkId: set.networkId, nameKey: nameKey}
+					del := self.delWithLock(key, clientId, socketsservice.SocketRemoveClientRemoved, nil, socketsservice.SocketRemovedClientPosition, nowMillis)
+					if del.removed {
+						removed = append(removed, &socketsservice.SocketStoreRemoved{
+							NetworkId:        set.networkId,
+							ListenerClientId: clientId,
+							NameKey:          []byte(nameKey),
+							LastListener:     del.lastListener,
+						})
+					}
+				}
+				for _, nameKey := range nameKeys {
+					delete(set.nameKeys, nameKey)
+				}
 			}
+			delete(self.clientSets, clientId)
 		}
+		self.removePairsWithLock(clientId, socketsservice.SocketRemovedClientPosition, nowMillis)
 		return nil
 	})
 	if err != nil {
@@ -663,32 +992,74 @@ func (self *FakeSocketStore) RemoveClient(ctx context.Context, clientId connect.
 }
 
 // See socketsservice.SocketStore.
-func (self *FakeSocketStore) RemoveEntries(ctx context.Context, networkId connect.Id, refs []*socketsservice.SocketStoreEntryRef) ([]*socketsservice.SocketStoreRemoved, error) {
-	removed := []*socketsservice.SocketStoreRemoved{}
+func (self *FakeSocketStore) RemoveEntries(ctx context.Context, networkId connect.Id, cause socketsservice.SocketRemoveCause, position uint64, refs []*socketsservice.SocketStoreEntryRef) ([]*socketsservice.SocketStoreRemoval, error) {
+	removals := []*socketsservice.SocketStoreRemoval{}
 	err := self.call(ctx, "RemoveEntries", func(nowMillis int64) error {
+		if !socketsservice.SocketRemovalAllowed(cause, position) {
+			return fmt.Errorf("%w: a removal of cause %d at %d", socketsservice.ErrSocketStoreRequest, cause, position)
+		}
 		for _, ref := range refs {
 			if len(ref.NameKey) == 0 {
 				return fmt.Errorf("%w: no name key", socketsservice.ErrSocketStoreRequest)
 			}
 		}
 		for _, ref := range refs {
+			key := fakeSocketGroupKey{networkId: networkId, nameKey: string(ref.NameKey)}
+			del := self.delWithLock(key, ref.ListenerClientId, cause, nil, position, nowMillis)
+			removal := &socketsservice.SocketStoreRemoval{}
+			if del.kept {
+				removal.Kept = true
+				removal.PolicyVersion = del.policyVersion
+				removals = append(removals, removal)
+				continue
+			}
+			// the set forgets a lease that is gone, whoever ended it
 			if set := self.liveClientSetWithLock(ref.ListenerClientId, nowMillis); set != nil && set.networkId == networkId {
 				delete(set.nameKeys, string(ref.NameKey))
 			}
-			key := fakeSocketGroupKey{networkId: networkId, nameKey: string(ref.NameKey)}
-			if found, lastListener := self.removeListenerWithLock(key, ref.ListenerClientId, nowMillis); found {
-				removed = append(removed, &socketsservice.SocketStoreRemoved{
+			if del.removed {
+				removal.Removed = &socketsservice.SocketStoreRemoved{
 					NetworkId:        networkId,
 					ListenerClientId: ref.ListenerClientId,
 					NameKey:          bytes.Clone(ref.NameKey),
-					LastListener:     lastListener,
-				})
+					LastListener:     del.lastListener,
+				}
 			}
+			removals = append(removals, removal)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return removed, nil
+	return removals, nil
+}
+
+// See socketsservice.SocketStore.
+func (self *FakeSocketStore) ClaimSweep(ctx context.Context, networkId connect.Id, position uint64, ttl time.Duration, held *socketsservice.SocketSweepClaim) (*socketsservice.SocketSweepClaim, bool, error) {
+	var claim *socketsservice.SocketSweepClaim
+	claimed := false
+	err := self.call(ctx, "ClaimSweep", func(nowMillis int64) error {
+		if ttl <= 0 {
+			return fmt.Errorf("%w: a ttl of %v", socketsservice.ErrSocketStoreRequest, ttl)
+		}
+		if live := self.sweepClaims[networkId]; live != nil && nowMillis < live.UntilMillis {
+			mine := held != nil && *held == *live
+			if !mine && position <= live.PolicyVersion {
+				kept := *live
+				claim = &kept
+				return nil
+			}
+		}
+		taken := &socketsservice.SocketSweepClaim{PolicyVersion: position, UntilMillis: nowMillis + fakeSocketTtlMillis(ttl)}
+		self.sweepClaims[networkId] = taken
+		answer := *taken
+		claim = &answer
+		claimed = true
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return claim, claimed, nil
 }
