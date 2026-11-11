@@ -215,3 +215,35 @@ func TestListenersBindOnlyLoopbackAboveFiftyThousand(t *testing.T) {
 		t.Errorf("the default: %d, %v", port, err)
 	}
 }
+
+func TestRunRefusesADomainOutsideExampleAndMissingDirectories(t *testing.T) {
+	valid := func() *pagestackSettings {
+		settings := defaultPagestackSettings()
+		settings.keyOrigin, settings.pages = t.TempDir(), t.TempDir()
+		return settings
+	}
+	if err := checkPagestackSettings(valid()); err != nil {
+		t.Fatalf("the defaults over two directories: %v", err)
+	}
+	notDirectory := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notDirectory, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]func(settings *pagestackSettings){
+		// the test data rule keeps real names out of this file, so a reserved one other than .example stands for them
+		"another reserved domain": func(settings *pagestackSettings) { settings.domain = "sidecartest.test" },
+		"a domain past .example":  func(settings *pagestackSettings) { settings.domain = "sidecartest.example.com" },
+		"no key origin":           func(settings *pagestackSettings) { settings.keyOrigin = "" },
+		"a missing pages":         func(settings *pagestackSettings) { settings.pages = filepath.Join(t.TempDir(), "absent") },
+		"a file for pages":        func(settings *pagestackSettings) { settings.pages = notDirectory },
+		"a public listener":       func(settings *pagestackSettings) { settings.listen = "0.0.0.0:58443" },
+		"a low proxy port":        func(settings *pagestackSettings) { settings.proxy = "127.0.0.1:8080" },
+	}
+	for name, edit := range cases {
+		settings := valid()
+		edit(settings)
+		if err := checkPagestackSettings(settings); err == nil {
+			t.Errorf("%s was taken", name)
+		}
+	}
+}
