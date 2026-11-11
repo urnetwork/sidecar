@@ -12,7 +12,10 @@
 //
 // and with it: the erasure ref's public id carries the erasure kind and no other id does, a deposit ref's id is its
 // depositor's public one (plan-EVS1-ref-name-bytes#3); a ref's first push sets its kind, mode and owner, which every
-// later push repeats (409 REF_MODE), as replaying readers require; only git-mode refs take overlays; IMMUTABLE, which
+// later push repeats (409 REF_MODE), as replaying readers require; only git-mode refs take overlays; a creating push,
+// on no head, a placeholder or a deleted head, alone carries payload sections 15 and 16, its sealed ref name and
+// overlay base, the base a git-mode ref other than its own at a version that ref has, and on the first push after a
+// DELETE the head's base again (DESIGN-DETAILS 8.2.2, question evs1-m2-01-ref-creation-fields); IMMUTABLE, which
 // tags carry, goes only on git-mode refs, and a ref whose head push carried it takes only a DELETE; PATH_EPOCH never
 // goes on deposit or erasure refs, which stay at path epoch 1 (plan-EVS1-epoch-kinds#2); and BASE, ERASE and CLOSURE
 // take admin wherever they go. A BASE's changes are only removals and it introduces nothing, a CONSUME's are only
@@ -29,6 +32,8 @@ import (
 	"bytes"
 	"fmt"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/connect"
 
@@ -145,6 +150,9 @@ func checkRefTable(view *PushView) *EvsCheckRefusal {
 			return refRule("an IMMUTABLE ref takes only a DELETE")
 		}
 	}
+	if refusal := checkCreatingSections(view, refMode); refusal != nil {
+		return refusal
+	}
 
 	// the flags each ref kind takes
 	switch {
@@ -226,6 +234,44 @@ func checkRefTable(view *PushView) *EvsCheckRefusal {
 		if 0 < len(view.Payload.NewObjects) || 0 < len(view.Payload.SlotBodies) {
 			return newEvsCheckRefusal(EvsCheckReasonChangeShape, "a BASE that introduces an object")
 		}
+	}
+	return nil
+}
+
+// Payload sections 15 and 16: only on a creating push, the base only on a git-mode one, naming a git-mode ref other
+// than its own at a version that ref has, and after a DELETE the head's own base. All 409 REF_MODE, final: each is a
+// property of the statement and of heads whose kind, mode and versions never change.
+func checkCreatingSections(view *PushView, refMode protocol.EvsRefMode) *EvsCheckRefusal {
+	payload := view.Payload
+	if len(payload.RefName) == 0 && payload.Base == nil && !(view.headExists() && view.Head.GetDeleted()) {
+		return nil
+	}
+	refRule := func(detail string) *EvsCheckRefusal {
+		return newEvsCheckRefusal(EvsCheckReasonRefRule, detail)
+	}
+	creating := !view.headExists() || view.Head.GetDeleted()
+	if !creating {
+		return refRule("a ref name or overlay base on a push that does not create its ref")
+	}
+	if payload.Base != nil && refMode != protocol.EvsRefMode_EVS_REF_GIT {
+		return refRule("an overlay base on a file-mode push")
+	}
+	if view.headExists() && view.Head.GetDeleted() {
+		// the first push after a DELETE repeats the head's base, none for none
+		if !proto.Equal(view.Head.GetBase(), payload.Base) && !(view.Head.GetBase() == nil && payload.Base == nil) {
+			return refRule("a re-creating push whose base is not the head's")
+		}
+		return nil
+	}
+	if payload.Base == nil {
+		return nil
+	}
+	base := view.OverlayBase
+	if base == nil {
+		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "an overlay base step 4 did not read")
+	}
+	if base.GetVersion() < payload.Base.GetVersion() || base.GetRefMode() != uint32(protocol.EvsRefMode_EVS_REF_GIT) {
+		return refRule("an overlay base naming a ref that is not git mode or not at that version")
 	}
 	return nil
 }

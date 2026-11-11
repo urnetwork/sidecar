@@ -4812,7 +4812,7 @@ Vectors: `sidecar/testdata/index/conformance/` (`mail.json`, `file.json`, `entit
 
 Two things in §11.14 must come out byte for byte the same on every device, and neither is written down far enough to build.
 
-**Extraction.** An index entry is a document's row and its key set, and a key set is the trigrams of the document's normalized text. A device that holds a document's text rebuilds the entry and compares it with what the writer committed, and raises `index_mismatch` naming the signer when they differ (§11.14's coverage and reproduce rows; FI-22). So every byte the extractor hands the normalizer is a format byte. §11.14's extract row gives mail three lines, and `protocol/INDEX-FORMAT.md`'s Extractor 1 a dozen. Two implementations were written apart from them, as D-TEST-14 asks: `indexExtractMail` (SEARCH-M10-06) and SearchOracle's extractor (SEARCH-M10-07). Three things are wrong.
+**Extraction.** An index entry is a document's row and its key set, and a key set is the trigrams of the document's normalized text. A device that holds a document's text rebuilds the entry and compares it with what the writer committed, and raises `index_mismatch` naming the signer when they differ (§11.14's coverage and reproduce rows; FI-22). So every byte the extractor hands the normalizer is a format byte. §11.14's extract row gives mail three lines, and `protocol/INDEX-FORMAT.md`'s Extractor 1 a dozen. Two implementations were written apart from them, as D-TEST-14 asks: `indexExtractMail` (SEARCH-M10-06) and SearchOracle's extractor (SEARCH-M10-07). Four things are wrong or missing.
 
 *A. The two disagree.* On honest mail they agree. On the inputs below, each a vector in `mail.json`, they do not, and each difference changes the key set:
 
@@ -5371,6 +5371,12 @@ landed oracle    differs on 41: those 32, where it reads as the index does, and 
 completeness     the reference, switched to read as the landed index at each place 11.7 lists and nowhere
                  else, equals indexExtractMail over 1,283,751 fuzz executions seeded with the vectors, and
                  indexExtractFile over 176,041 executions: the list of changes is whole, to that confidence
+a second reading the rules of 11.2 written out again from this text, in Python with none of Go's libraries,
+                 give the vectors' fields and verdicts for 335 of the 372. The other 37 pass through an
+                 x/text decoder that reading does not have. Where Python's own table was tried in its place
+                 it differed on four: x/text reads 0x80 to 0x9F of ISO 8859-2, -5 and -15 as U+FFFD, and
+                 two code points of KOI8-U otherwise, which is why C3 names the module and the c-sweep
+                 vectors pin it.
 pad              every pad length 1 to 70,000 through the marshaler: the gaps it cannot fill, 0 to 65,536, are
                  1, 2, 130 and 16,387, and Z2 gives the marshaler's length for every other gap from 131
 rule             for each of the five sizes and every content 0 to the size: admissible implies sizable; the
@@ -5427,6 +5433,9 @@ unknown charset         bytes as they are (C2): ASCII words are found, and the r
 wrong charset label     decoded as labelled: that part's text is indexed as the wrong characters and its true
                         words are not found in it. Another alternative, if it is labelled right, is found. An
                         HTML part's own <meta charset> is not read.
+another decoder        C3 means x/text v0.43.0's tables. They are not every library's: its ISO 8859 decoders
+                        read 0x80 to 0x9F as U+FFFD where others give C1 controls. A writer on another
+                        decoder fails the c-sweep vectors.
 iso-2022-kr, hz-gb-2312 the Encoding Standard decodes these to one U+FFFD. Here they pass as bytes (C2), so the
                         ASCII in them is found.
 a word a line breaks    normalizer 1 turns a line break into a space, so a CJK word broken by a hard line break
@@ -5469,6 +5478,7 @@ sizes.json     85 rows of (size, content): sized or not, the pad's length and it
                bodies, each with its content bytes and the SHA-256 of the body
 ```
 
+- **Their form.** A vector's `input` is its parts in order, each `t` (text) or `x` (hex) and an optional repeat count `n`; its `path` is text, or `path_x` in hex when the path is not UTF-8. A value is `t`, `x`, or `len` and `sha256` when it is long. A document's `fields` are by number, an absent one being empty. Each file's `about` says the same.
 - **How they were made.** The inputs were written by hand, one or more for each rule and each "otherwise" of 11.2, and include every example of 11.1 and the six cases `testdata/index/extract/` already pins. The outputs come from the reference implementation of 11.3. For 324 of them the expected field or verdict was also written by hand and compared, and where the landed extractor already agrees, 340 vectors, its rows and key counts were compared too.
 - **How they are kept.** They are data, with their inputs inside them. No implementation rewrites them: `SIDECAR_WRITE_VECTORS` does not reach this directory. A change to a rule of 11.2 changes this section, `INDEX-FORMAT.md`, the vectors and both implementations in one change, by hand.
 - **How both implementations pass them.** Each runs every vector through its own entry points and compares every value the vector gives: `indexExtractMail` and `indexExtractFile` with `IndexDocument.prepare` in the root (`evs_index_conformance_test.go`, SEARCH-M10-42), and `searchOracleMailDocuments` and `searchOracleFileDocuments` in `sidecartest` (`search_oracle_conformance_test.go`, SEARCH-M10-43). A value given as `len` and `sha256` is compared that way. Each also checks its own copy of the reference table against `entities.json`, name for name, and that its label lookup gives `charsets.json`'s encoding for each label and nothing for a label outside it.
@@ -5581,7 +5591,7 @@ The 32 vectors the landed code fails are its list of work: `h-value-nbsp-stays`,
 
 **§22.8, FI-22.** "a function of its format version, normalization version, extractor version and inputs alone".
 
-**protocol/INDEX-FORMAT.md** (SEARCH-M10-42 writes it; `design-records` need not). Its Extractor 1 and Documents sections become 11.2.1's constants and tables and the rules D1-D6, S1-S4, H1-H6, W1-W6, P1-P6, C1-C3, M1-M6, B1-B4, T1-T3, X1-X7 and E1-E4 as written here, with 11.2.7's table. Normalizer 1 gains the three clarifications under 11.2.2. "What this file adds" gains a row for each reading 11.9 lists.
+**protocol/INDEX-FORMAT.md** (SEARCH-M10-42 writes it; `design-records` need not). Its Extractor 1 and Documents sections become 11.2.1's constants and tables and the rules D1-D6, S1-S4, H1-H6, W1-W6, P1-P6, C1-C3, M1-M6, B1-B4, T1-T3, X1-X7 and E1-E4 as written here, with 11.2.7's table. Normalizer 1 gains the clarifications under 11.2.2. "What this file adds" gains a row for each reading 11.9 lists.
 
 Nothing server-visible changes: no column, key, object family or proto field (I-18), and `search.proto`'s fields are sealed end to end.
 

@@ -316,7 +316,10 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 		if err == nil {
 			partLeaves := [][][]byte{}
 			for _, checkedPart := range checkedParts {
-				partLeaves = append(partLeaves, checkedPart.changeLeaves)
+				// a changeless part is no leaf of the root (DESIGN-DETAILS 8.2.2's parts row)
+				if checkedPart.HoldsChanges() {
+					partLeaves = append(partLeaves, checkedPart.changeLeaves)
+				}
 			}
 			tree, err = NewEvsPartedChangeTree(partLeaves)
 		}
@@ -1072,4 +1075,42 @@ func (self *evsTestPushServer) commitPathEpoch(statement *EvsStatement, payload 
 // Whether signed's signature verifies under publicKey as a path map part's.
 func ed25519Verify(publicKey []byte, signed *bridge.Signed) bool {
 	return bridge.VerifySigned(signed, "evs-path-epoch", bridge.SignedType_SIGNED_EVS_PATH_MAP, bridge.SignedKeyAlgEd25519, publicKey) == nil
+}
+
+// DESIGN-DETAILS 8.2.10's rekey on a git-mode ref, at the planner: a rekey write, a forced checkpoint held to the
+// version it read, re-checkpoints the standing blob as the REKEY shape; one whose new blob or mode is not the standing
+// version's is ErrEvsRekeyChanged, and any other write ErrEvsGitRef; neither sends anything.
+func TestEvsPlanTakesOnlyRekeyWritesOnAGitModeRef(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	writer.world.mode = protocol.EvsRefMode_EVS_REF_GIT
+	writer.world.push(&evsTestChange{path: "tree.txt", content: []byte("tree")})
+	writer.server.know("tree.txt")
+	rekey := func(content []byte, mode uint32) error {
+		_, err := writer.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
+			Path: "tree.txt", Content: bytes.NewReader(content), Mode: mode, ForceCheckpoint: true, IfVersion: 1,
+		}}})
+		return err
+	}
+	if err := rekey([]byte("another tree"), 0); !errors.Is(err, ErrEvsRekeyChanged) {
+		t.Errorf("a rekey write changing the oid: %v", err)
+	}
+	if err := rekey([]byte("tree"), EvsGitModeExecutable); !errors.Is(err, ErrEvsRekeyChanged) {
+		t.Errorf("a rekey write changing the mode: %v", err)
+	}
+	unforced, err := writer.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
+		Path: "tree.txt", Content: bytes.NewReader([]byte("tree")), IfVersion: 1,
+	}}})
+	if !errors.Is(err, ErrEvsGitRef) || unforced != nil {
+		t.Errorf("a write that is no rekey: %v", err)
+	}
+	if len(writer.server.postedStatements) != 0 || len(writer.server.uploads) != 0 {
+		t.Fatal("a refused write sent something")
+	}
+	if err := rekey([]byte("tree"), 0); err != nil {
+		t.Fatalf("the rekey write: %v", err)
+	}
+	read, info, err := writer.read(t, "tree.txt")
+	if err != nil || string(read) != "tree" || info.Version != 2 {
+		t.Errorf("read back: %q at %d: %v", read, info.Version, err)
+	}
 }

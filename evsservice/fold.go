@@ -1157,15 +1157,23 @@ func (self *RecordPushSource) leafPlacesAt(ctx context.Context, version uint64, 
 		}
 		return leaves, nil
 	}
+	// the parts that hold changes, which come before every changeless part (DESIGN-DETAILS 8.2.2's parts row)
+	changefulCount := 0
+	for _, sealPart := range push.sealParts {
+		if sealPart.Changeless {
+			break
+		}
+		changefulCount += 1
+	}
 	part, partStart := 0, 0
 	for i, change := range changes {
-		if part+1 < len(push.sealParts) && change.TokenPath.Equal(push.sealParts[part+1].FirstTokenPath) {
+		if part+1 < changefulCount && change.TokenPath.Equal(push.sealParts[part+1].FirstTokenPath) {
 			part, partStart = part+1, i
 		}
 		leaves[i] = evsLeafPlace{part: uint32(part + 1), index: uint32(i - partStart + 1)}
 	}
-	if part+1 != len(push.sealParts) {
-		return nil, fmt.Errorf("%w: %d parts of changes for a seal of %d", ErrEvsStatementMismatch, part+1, len(push.sealParts))
+	if 0 < len(changes) && part+1 != changefulCount {
+		return nil, fmt.Errorf("%w: %d parts of changes for a seal of %d", ErrEvsStatementMismatch, part+1, changefulCount)
 	}
 	return leaves, nil
 }

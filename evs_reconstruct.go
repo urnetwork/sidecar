@@ -340,7 +340,8 @@ func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResu
 	push := verified.Statement.Push
 	chain := entry.GetChain()
 	if len(chain) == 0 {
-		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: a file with no chain", ErrEvsEntryRefused)
+		// a gitlink's, mode 160000, size 0 and the link's oid, and no other file's (DESIGN-DETAILS 8.2.2's gitlink row)
+		return self.gitlinkContent(ctx, result, verified)
 	}
 	objectIds := [][]byte{}
 	for _, locator := range chain {
@@ -365,6 +366,11 @@ func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResu
 	fileId, err := IdFromBytes(fields.GetFileId())
 	if err != nil {
 		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: a file id", ErrEvsSealInvalid)
+	}
+	if fields.GetMode() == EvsGitModeGitlink {
+		// a gitlink has no content, so a chain under one is tampering
+		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
+		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: a gitlink with a chain", ErrEvsSealInvalid)
 	}
 	if err := self.fetchMissing(ctx, result, entry); err != nil {
 		return nil, nil, EvsGitOid{}, err
@@ -396,6 +402,28 @@ func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResu
 		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: content whose oid is not its fields'", ErrEvsSealInvalid)
 	}
 	return content, fields, oid, nil
+}
+
+// A file version with an empty chain: a gitlink, its sealed mode 160000, size 0 and the linked commit's oid, which it
+// gives as its content's oid over an empty spill. Any other mode, or a size, under an empty chain is tampering, which
+// evs cannot see (DESIGN-DETAILS 8.2.2's gitlink row).
+func (self *EvsRepo) gitlinkContent(ctx context.Context, result *evsReadResult, verified *EvsVerifiedPath) (*evsSpill, *protocol.EvsSealedFields, EvsGitOid, error) {
+	manifest, err := result.keys.manifest(ctx, verified.Statement.Push.GetGeneration())
+	if err != nil {
+		return nil, nil, EvsGitOid{}, err
+	}
+	fields, err := EvsOpenFields(manifest, verified.Entry.GetSealedFields())
+	if err != nil {
+		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
+		return nil, nil, EvsGitOid{}, err
+	}
+	if fields.GetMode() != EvsGitModeGitlink || fields.GetSize() != 0 {
+		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
+		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: an empty chain under mode %o", ErrEvsSealInvalid, fields.GetMode())
+	}
+	// EvsOpenFields held the oid to SHA-1's 20 bytes
+	oid := EvsGitOid(fields.GetGitOid())
+	return newEvsSpill(self.client.args.Store, self.client.settings.DeltaBaseMemoryByteCount), fields, oid, nil
 }
 
 // Runs a chain into a spill: a checkpoint then each diff on the result before it, or chunks one after another.

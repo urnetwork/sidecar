@@ -110,6 +110,14 @@ func TestEvsEnumNumbersStable(t *testing.T) {
 				"EVS_PAYLOAD_NEW_OBJECTS": 6, "EVS_PAYLOAD_SLOT_BODIES": 7, "EVS_PAYLOAD_ERASED_LIST": 8,
 				"EVS_PAYLOAD_DROP_BODY": 9, "EVS_PAYLOAD_DROP_LISTS": 10, "EVS_PAYLOAD_TAIL_MOVES": 11,
 				"EVS_PAYLOAD_SOURCE_PATHS": 12, "EVS_PAYLOAD_REUSE_LIST": 13, "EVS_PAYLOAD_MERKLE_PROOFS": 14,
+				"EVS_PAYLOAD_REF_NAME": 15, "EVS_PAYLOAD_OVERLAY_BASE": 16,
+			},
+		},
+		{
+			name: "EvsGitShape",
+			got:  EvsGitShape_value,
+			want: map[string]int32{
+				"EVS_GIT_SHAPE_UNSPECIFIED": 0, "EVS_GIT_UPDATE": 1, "EVS_GIT_DELETE": 2, "EVS_GIT_REKEY": 3,
 			},
 		},
 		{
@@ -208,11 +216,24 @@ func TestEvsSealedValuesKeepTheirNumbers(t *testing.T) {
 		},
 		"EvsSealedMetadata": {
 			"1 group GroupHead", "2 provenance EvsProvenance", "3 commits repeated EvsSealedCommit",
-			"4 signed_import bytes",
+			"4 signed_import bytes", "5 git EvsGitUpdate", "6 ref_name bytes", "7 base EvsOverlay",
 		},
-		"EvsProvenance":   {"1 agent_id bytes", "2 tainted bool"},
-		"EvsSealedCommit": {"1 object bytes", "2 changes repeated EvsSealedChange"},
+		"EvsProvenance": {"1 agent_id bytes", "2 tainted bool"},
+		"EvsSealedCommit": {
+			"1 object bytes", "2 changes repeated EvsSealedChange", "3 trees repeated EvsSealedTree",
+		},
 		"EvsSealedChange": {"1 path repeated bytes", "2 mode uint32", "3 git_oid bytes"},
+		// DESIGN-DETAILS 8.2.2's git update, sealed, so no server reads it
+		"EvsGitUpdate": {
+			"1 shape enum", "2 old_tip bytes", "3 new_tip bytes", "4 tags repeated bytes",
+			"5 sources repeated EvsOverlay", "6 segment_ids repeated bytes", "7 blobs repeated EvsSealedBlob",
+		},
+		"EvsSealedBlob": {
+			"1 git_oid bytes", "2 size uint64", "3 base_oid bytes", "4 file_id bytes",
+			"5 records repeated EvsHistoryLocator",
+		},
+		"EvsHistoryLocator": {"1 segment uint32", "2 offset uint32", "3 length uint32"},
+		"EvsSealedTree":     {"1 path repeated bytes", "2 object bytes"},
 	}
 	for _, name := range slices.Sorted(maps.Keys(want)) {
 		message := testMessage(t, string(name))

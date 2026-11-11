@@ -141,3 +141,49 @@ func EvsOwnedRefOwner(refName []byte) (Id, bool) {
 	}
 	return sidecarId, true
 }
+
+// A ref name's bound: git's own for a ref's path, which a loose ref's file name must keep within. A format bound, not
+// a tunable.
+const EvsRefNameMaxByteCount = 4096
+
+// A sealed ref name's bound, payload section 15's: a name at its bound with the seal's nonce and tag.
+const EvsSealedRefNameMaxByteCount = EvsRefNameMaxByteCount + evsSealOverhead
+
+// The label a sealed ref name's AAD starts with (DESIGN-DETAILS 8.2.2's sections row).
+const evsRefNameAadLabel = "UR evs 1.0 ref name"
+
+// "UR evs 1.0 ref name" || repo_id || ref_id.
+func evsRefNameAad(repoId Id, refId Id) []byte {
+	aad := make([]byte, 0, len(evsRefNameAadLabel)+32)
+	aad = append(aad, evsRefNameAadLabel...)
+	aad = append(aad, repoId.Bytes()...)
+	return append(aad, refId.Bytes()...)
+}
+
+// A creating push's payload section 15: refName sealed alone under manifestKey, manifest_g of the push's generation,
+// which evs copies into the head's sealed_ref_name and a reader opens with EvsOpenRefName.
+func EvsSealRefName(manifestKey *EvsManifestKey, refId Id, refName []byte) ([]byte, error) {
+	if err := manifestKey.checkHeld(); err != nil {
+		return nil, err
+	}
+	if len(refName) == 0 || EvsRefNameMaxByteCount < len(refName) {
+		return nil, fmt.Errorf("%w: a ref name of %d bytes", ErrEvsRefNameInvalid, len(refName))
+	}
+	return evsSeal(manifestKey.key, refName, evsRefNameAad(manifestKey.repoId, refId))
+}
+
+// A head's sealed ref name opened under manifestKey, manifest_g of the creating push's generation: ErrEvsSealInvalid
+// for one that does not open, or opens to no name.
+func EvsOpenRefName(manifestKey *EvsManifestKey, refId Id, sealed []byte) ([]byte, error) {
+	if err := manifestKey.checkHeld(); err != nil {
+		return nil, err
+	}
+	refName, err := evsOpen(manifestKey.key, sealed, evsRefNameAad(manifestKey.repoId, refId))
+	if err != nil {
+		return nil, err
+	}
+	if len(refName) == 0 || EvsRefNameMaxByteCount < len(refName) {
+		return nil, fmt.Errorf("%w: a sealed ref name of %d bytes", ErrEvsSealInvalid, len(refName))
+	}
+	return refName, nil
+}
