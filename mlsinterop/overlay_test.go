@@ -121,7 +121,7 @@ func TestTmcStacksUnderTheSuitePatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	workPath := filepath.Join(scratch, "go.work")
-	work := "go 1.27.3\n\nuse (\n\t" + moduleDirectory + "\n\t" + copied + "\n)\n"
+	work := "go 1.27.4\n\nuse (\n\t" + moduleDirectory + "\n\t" + copied + "\n)\n"
 	if err := os.WriteFile(workPath, []byte(work), 0o644); err != nil {
 		t.Fatal(err)
 	}

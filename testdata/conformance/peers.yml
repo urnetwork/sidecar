@@ -277,15 +277,15 @@ rows:
     tests: []
     peers:
       - peer: darwin/arm64
-        pin: "go1.27.3"
+        pin: "go1.27.4"
         source: "D-TEST-15: one Go toolchain on every leg, go.mod's go line"
         runs: []
       - peer: linux/amd64 and linux/arm64
-        pin: "go1.27.3"
+        pin: "go1.27.4"
         source: "D-TEST-15: one Go toolchain on every leg, go.mod's go line"
         runs: []
       - peer: windows/amd64
-        pin: "go1.27.3"
+        pin: "go1.27.4"
         source: "D-TEST-15: one Go toolchain on every leg, go.mod's go line"
         runs: []
       - peer: gomobile android/arm64 and the iOS settings

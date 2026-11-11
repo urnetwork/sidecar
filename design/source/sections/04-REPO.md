@@ -13,7 +13,7 @@ This section decides where code lives and how it is built, branched, versioned, 
 | R-REPO-3 | go.mod, sidecar.go, protocol/, mcp/, cli/main.go; service code in the root | PLAN.md:9-21 |
 | R-REPO-4 | New pieces, MLS included, in sidecar; all work on `sidecar` branches | owner rules 1, 4 |
 | R-REPO-5 | No parent package imports a child; commits carry no AI attribution | connect/CODESTYLE.md:24-47, 80-83 |
-| R-REPO-6 | Go 1.27.3, pinned siblings, rollout classes, no cgo in sidecar packages | server/README.md:5-14; sdk/js/Makefile:69 |
+| R-REPO-6 | Go 1.27.4, pinned siblings, rollout classes, no cgo in sidecar packages | server/README.md:5-14; sdk/js/Makefile:69 |
 | R-REPO-7 | Open source, signed releases, one calendar version; reproducible builds a goal, not a gate | sidecar/design/pitch5.html:930; build/README.md:3-7; owner decision 77 |
 | R-REPO-8 | sidecar public from 2026-11-04 as it is; every touched repo merges `sidecar` into `main` at each exit review | owner decisions 117, 118 |
 
@@ -150,7 +150,7 @@ Dispositions follow owner decisions 22, 85 (C14 into M4), 86 (C18) and 176 (C19)
 
 ```text
 module github.com/urnetwork/sidecar
-go 1.27.3
+go 1.27.4
 tool google.golang.org/protobuf/cmd/protoc-gen-go
 replace github.com/urnetwork/connect => ../connect
 replace github.com/pion/sctp => ../connect/sctp

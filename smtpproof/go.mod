@@ -1,6 +1,6 @@
 module github.com/urnetwork/sidecar/smtpproof
 
-go 1.27.3
+go 1.27.4
 
 replace github.com/urnetwork/sidecar => ..
 

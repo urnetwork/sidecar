@@ -162,38 +162,38 @@ modules:
 
 // The clean tree, by path from the fixture's top. sidecar/ is the checkout; the rest are siblings.
 var fixtureFiles = map[string]string{
-	"connect/go.mod":               "module @connect@\n\ngo 1.27.3\n\nrequire (\n\t@glog@ v0.0.0\n\tgithub.com/pion/sctp v1.0.0\n\tgvisor.dev/gvisor v0.0.0-20260909230408-9b1144b679cb\n)\n",
+	"connect/go.mod":               "module @connect@\n\ngo 1.27.4\n\nrequire (\n\t@glog@ v0.0.0\n\tgithub.com/pion/sctp v1.0.0\n\tgvisor.dev/gvisor v0.0.0-20260909230408-9b1144b679cb\n)\n",
 	"connect/LICENSE":              fixtureMplLicense,
 	"connect/connect.go":           "package connect\n\nimport (\n\t_ \"@glog@\"\n\t_ \"github.com/pion/sctp\"\n\t_ \"gvisor.dev/gvisor/pkg/tcpip\"\n)\n\nfunc Connect() {}\n",
 	"connect/protocol/protocol.go": "package protocol\n\nfunc Frame() {}\n",
-	"connect/sctp/go.mod":          "module github.com/pion/sctp\n\ngo 1.27.3\n",
+	"connect/sctp/go.mod":          "module github.com/pion/sctp\n\ngo 1.27.4\n",
 	"connect/sctp/LICENSE":         fixtureMitLicense,
 	"connect/sctp/sctp.go":         "package sctp\n",
-	"glog/go.mod":                  "module @glog@\n\ngo 1.27.3\n",
+	"glog/go.mod":                  "module @glog@\n\ngo 1.27.4\n",
 	"glog/LICENSE":                 fixtureApache,
 	"glog/glog.go":                 "package glog\n",
-	"gvisor/go.mod":                "module gvisor.dev/gvisor\n\ngo 1.27.3\n",
+	"gvisor/go.mod":                "module gvisor.dev/gvisor\n\ngo 1.27.4\n",
 	"gvisor/LICENSE":               fixtureApache,
 	"gvisor/pkg/tcpip/tcpip.go":    "package tcpip\n",
 
 	"sdk/dependency_boundary_test.go": "package sdk\n\nvar messagingBoundaryLegs = []messagingBoundaryLeg{\n\t{name: \"root linux/amd64\", environment: []string{\"GOOS=linux\", \"GOARCH=amd64\"}},\n}\n",
-	"sdk/go.mod":                      "module @sdk@\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.43.0\n",
+	"sdk/go.mod":                      "module @sdk@\n\ngo 1.27.4\n\nrequire golang.org/x/text v0.43.0\n",
 	"sdk/sdk.go":                      "package sdk\n",
 	"sdk/build/Makefile":              "build_ios:\n\tgomobile bind -tags sdk_mobile_bind,ios_extension\n",
 	"sdk/cgo/Makefile":                "build:\n\tgo build -buildmode=c-shared\n",
 	"sdk/js/Makefile":                 "build:\n\tGOOS=js GOARCH=wasm go build\n",
-	"sdk/js/go.mod":                   "module @sdk@/js\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.43.0\n",
-	"sdk/cgo/go.mod":                  "module @sdk@/cgo\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.43.0\n",
-	"sdk/build/go.mod":                "module @sdk@/build\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.43.0\n",
-	"server/go.mod":                   "module @server@\n\ngo 1.27.3\n",
+	"sdk/js/go.mod":                   "module @sdk@/js\n\ngo 1.27.4\n\nrequire golang.org/x/text v0.43.0\n",
+	"sdk/cgo/go.mod":                  "module @sdk@/cgo\n\ngo 1.27.4\n\nrequire golang.org/x/text v0.43.0\n",
+	"sdk/build/go.mod":                "module @sdk@/build\n\ngo 1.27.4\n\nrequire golang.org/x/text v0.43.0\n",
+	"server/go.mod":                   "module @server@\n\ngo 1.27.4\n",
 	"server/model/model.go":           "package model\n",
 	"server/cli/api/Makefile":         "build:\n\tgo build\n",
-	"sn/go.mod":                       "module @sn@\n\ngo 1.27.3\n",
+	"sn/go.mod":                       "module @sn@\n\ngo 1.27.4\n",
 	"sn/sn.go":                        "package sn\n",
-	"proxy/go.mod":                    "module @proxy@\n\ngo 1.27.3\n",
+	"proxy/go.mod":                    "module @proxy@\n\ngo 1.27.4\n",
 	"proxy/proxy.go":                  "package proxy\n",
 
-	"sidecar/go.mod":             "module @module@\n\ngo 1.27.3\n\ntool google.golang.org/protobuf/cmd/protoc-gen-go\n\nrequire @connect@ v0.0.0\n" + fixtureIndirectRequires + fixtureSiblingReplaces,
+	"sidecar/go.mod":             "module @module@\n\ngo 1.27.4\n\ntool google.golang.org/protobuf/cmd/protoc-gen-go\n\nrequire @connect@ v0.0.0\n" + fixtureIndirectRequires + fixtureSiblingReplaces,
 	"sidecar/dependencies.yml":   fixtureDependencies,
 	"sidecar/sidecar.go":         "package sidecar\n\nfunc Sidecar() {}\n",
 	"sidecar/connect_require.go": "//go:build !sidecar_http\n\npackage sidecar\n\nimport _ \"@connect@\"\n",
@@ -227,17 +227,17 @@ func testHookBarrier(name string, key string) {
 	// the ios_extension legs' list: every root and protocol file the clean tree compiles there
 	"sidecar/check/testdata/ios_extension_leg.txt": fixtureIosExtensionLegListHeader + "connect_require.go\nprotocol/doc.go\nsidecar.go\ntesthook.go\n",
 
-	"sidecar/cli/go.mod": "module @module@/cli\n\ngo 1.27.3\n\nrequire (\n\t@module@ v0.0.0\n\t@module@/smtpproof v0.0.0\n)\n\nrequire @connect@ v0.0.0 // indirect\n" + fixtureIndirectRequires +
+	"sidecar/cli/go.mod": "module @module@/cli\n\ngo 1.27.4\n\nrequire (\n\t@module@ v0.0.0\n\t@module@/smtpproof v0.0.0\n)\n\nrequire @connect@ v0.0.0 // indirect\n" + fixtureIndirectRequires +
 		"\nreplace @module@ => ..\n\nreplace @module@/smtpproof => ../smtpproof\n" + fixtureNestedReplaces,
 	"sidecar/cli/main.go": "package main\n\nimport (\n\t_ \"@module@\"\n\t_ \"@module@/smtpproof\"\n)\n\nfunc main() {}\n",
 
-	"sidecar/smtpproof/go.mod": "module @module@/smtpproof\n\ngo 1.27.3\n\nreplace @module@ => ..\n" + fixtureNestedReplaces,
+	"sidecar/smtpproof/go.mod": "module @module@/smtpproof\n\ngo 1.27.4\n\nreplace @module@ => ..\n" + fixtureNestedReplaces,
 	"sidecar/smtpproof/doc.go": "package smtpproof\n",
 
-	"sidecar/mlsinterop/go.mod": "module @module@/mlsinterop\n\ngo 1.27.3\n\nreplace @module@ => ..\n" + fixtureNestedReplaces,
+	"sidecar/mlsinterop/go.mod": "module @module@/mlsinterop\n\ngo 1.27.4\n\nreplace @module@ => ..\n" + fixtureNestedReplaces,
 	"sidecar/mlsinterop/doc.go": "package mlsinterop\n",
 
-	"sidecar/sidecarctl/go.mod":  "module @module@/sidecarctl\n\ngo 1.27.3\n" + fixtureNestedReplaces,
+	"sidecar/sidecarctl/go.mod":  "module @module@/sidecarctl\n\ngo 1.27.4\n" + fixtureNestedReplaces,
 	"sidecar/sidecarctl/main.go": "package main\n\nfunc main() {}\n",
 }
 
