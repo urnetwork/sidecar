@@ -14,8 +14,12 @@
 //
 // On every mount's bare repository the daemon sets receive.procReceiveRefs to refs/heads and refs/tags, so every
 // branch and tag update reaches its proc-receive hook (EVS1-M2-36), receive.advertiseAtomic to false, so `git push
-// --atomic` fails before any write, and core.hooksPath to a directory the daemon owns. The bare repository is SHA-1
-// only (plan-EVS1-format-bytes#4). In a mount's working clone, ur mount add sets committer.name to the agent label and
+// --atomic` fails before any write, and core.hooksPath to a directory the daemon owns. It also sets 8.2.11's upkeep
+// (DESIGN-DETAILS 8.2.11): transfer.hideRefs refs/ur, so the daemon's own namespace is neither advertised nor taken
+// from a client; git's own gc, receive's autogc and fsck off, the daemon running gc itself; receive's
+// denyNonFastForwards and denyDeletes off and core.logAllRefUpdates off, force and delete being evs's to judge. The
+// daemon's namespace refs/ur/ is made at the mount: evs's tips at refs/ur/evs/<ref_id> and an import's source at
+// refs/ur/import/<id> (8.2.2). The bare repository is SHA-1 only (plan-EVS1-format-bytes#4). In a mount's working clone, ur mount add sets committer.name to the agent label and
 // committer.email to <client_id>@ur.invalid (owner decision 81). A mount serves git-mode refs; evs refuses a push to a
 // file-mode ref with REF_MODE, which the receive path reports as ng.
 //
@@ -37,6 +41,9 @@ import (
 
 // The registry's directory in the evs component's store.
 const evsMountDirectory = "mounts/"
+
+// The namespace the daemon keeps in each bare repository, hidden from clients (DESIGN-DETAILS 8.2.2, 8.2.11).
+const evsLocalDaemonRefPrefix = "refs/ur"
 
 // The local tier's plaintext tree in a network's directory, and what each mount keeps there.
 const (
@@ -216,10 +223,20 @@ func (self *EvsMounts) Add(ctx context.Context, repoId Id, args *EvsMountArgs) (
 		{"config", "receive.advertiseAtomic", "false"},
 		{"config", "core.hooksPath", mount.HooksDir},
 		{"config", "core.sharedRepository", evsLocalSharedRepository},
+		{"config", "--replace-all", "transfer.hideRefs", evsLocalDaemonRefPrefix},
+		{"config", "gc.auto", "0"},
+		{"config", "receive.autogc", "false"},
+		{"config", "transfer.fsckObjects", "false"},
+		{"config", "receive.denyNonFastForwards", "false"},
+		{"config", "receive.denyDeletes", "false"},
+		{"config", "core.logAllRefUpdates", "false"},
 	} {
 		if _, err := self.git.Run(ctx, mount.BareDir, setting...); err != nil {
 			return nil, err
 		}
+	}
+	if err := os.MkdirAll(filepath.Join(mount.BareDir, filepath.FromSlash(evsLocalDaemonRefPrefix)), 0o700); err != nil {
+		return nil, err
 	}
 	if args.Dir != "" {
 		if _, err := os.Stat(filepath.Join(args.Dir, ".git")); err == nil {

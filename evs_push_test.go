@@ -237,6 +237,21 @@ func TestEvsWriteGitModeRefIsEvsGitRef(t *testing.T) {
 	}
 }
 
+// Writes a small file so the ref has a head, then forgets what that write posted and called: a retoken is of a push
+// on a ref that has a head, a push on a ref with none being planned again instead (DESIGN-DETAILS 9.2.3's first push).
+func (self *evsTestWriter) seed(t *testing.T) {
+	t.Helper()
+	if _, err := self.write(t, "seed.txt", []byte("seed")); err != nil {
+		t.Fatal(err)
+	}
+	self.server.stateLock.Lock()
+	self.server.postedStatements, self.server.uploads, self.server.postedParts = nil, nil, nil
+	self.server.stateLock.Unlock()
+	self.gkm.stateLock.Lock()
+	self.gkm.ensured = 0
+	self.gkm.stateLock.Unlock()
+}
+
 // Cuts the world over to each epoch of epochs in turn, one at each push that arrives, by a PATH_EPOCH commit that lists
 // the old current epoch first among its sources.
 func (self *evsTestWriter) cutOverAtPushes(epochs ...uint64) {
@@ -288,6 +303,7 @@ func TestEvsPushRetokenKeepsWhatItSealed(t *testing.T) {
 	writer.gkm.newest = 2
 	writer.world.generation = 2
 	writer.server.uploadMs = writer.test.clock.Now().UnixMilli()
+	writer.seed(t)
 	writer.cutOverAtPushes(2)
 	content := evsTestContent("retoken", 64*1024)
 	result, err := writer.write(t, "big.txt", content)
@@ -321,8 +337,8 @@ func TestEvsPushRetokenKeepsWhatItSealed(t *testing.T) {
 			if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
 				t.Fatal(err)
 			}
-			// a creation on the new base, the PATH_EPOCH at version 1: max(b, m) + 1
-			if entry.GetVersion() != 2 || entry.GetBaseVersion() != 1 || len(entry.GetChain()) != 1 ||
+			// a creation on the new base, the PATH_EPOCH at version 2 after the seed's: max(b, m) + 1
+			if entry.GetVersion() != 3 || entry.GetBaseVersion() != 2 || len(entry.GetChain()) != 1 ||
 				hex.EncodeToString(entry.GetChain()[0].GetId()) != writer.server.uploads[0] {
 				t.Errorf("the entry: version %d on %d, its chain %v", entry.GetVersion(), entry.GetBaseVersion(), entry.GetChain())
 			}
@@ -353,6 +369,7 @@ func TestEvsPushRetokenAcrossTwoCutOvers(t *testing.T) {
 	writer.gkm.newest = 3
 	writer.world.generation = 3
 	writer.server.uploadMs = writer.test.clock.Now().UnixMilli()
+	writer.seed(t)
 	writer.cutOverAtPushes(2, 3)
 	result, err := writer.write(t, "big.txt", evsTestContent("two cut-overs", 64*1024))
 	if err != nil {
@@ -383,6 +400,7 @@ func TestEvsPushRetokenUploadsAgainPastTheReceiptAge(t *testing.T) {
 	writer.gkm.newest = 2
 	writer.world.generation = 2
 	writer.server.uploadMs = writer.test.clock.Now().Add(-23 * time.Hour).UnixMilli()
+	writer.seed(t)
 	writer.cutOverAtPushes(2)
 	if _, err := writer.write(t, "big.txt", evsTestContent("old receipt", 64*1024)); err != nil {
 		t.Fatal(err)

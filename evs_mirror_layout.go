@@ -46,6 +46,7 @@ package sidecar
 
 import (
 	"bytes"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -633,4 +634,185 @@ func (self *EvsMirrorStore) Forget() error {
 		}
 	}
 	return nil
+}
+
+// The local tier's state for a repo a desktop mounts (DESIGN-DETAILS 8.2.2's local state): in the evs component's
+// sealed directory beside mirror/ and mounts/, under local/<repo_id>/, each file by its family and the ids it is kept
+// by. Unlike a mirror's objects these files change: each is rewritten whole, a page of the tips log appended to.
+//
+//	ref/<ref_id>              EvsGitRef: what replay applied of a git-mode ref (EVS1-M2-35)
+//	tips/<ref_id>/<page>      the version-tip log, 4,096 versions a page
+//	tipindex/<oid byte>       commit oid -> (ref_id, version), 256 sorted files by the oid's first byte
+//	held/<ref_id>             an overlay's held paths
+//	born/<ref_id>             section 9's born journal, fed by replay
+//	journal/<ref_id>          EvsJournalRef (EVS1-M2-36)
+//	import/<id>               an import's EvsImportRecord, so a rerun resumes it (EVS1-M2-34)
+const evsLocalStateDirectory = "local"
+
+// A family of a repo's local state, by its directory there.
+type EvsLocalFamily string
+
+const (
+	// What replay applied of a ref, by ref id.
+	EvsLocalRefs EvsLocalFamily = "ref"
+	// The version-tip log, by ref id and page.
+	EvsLocalTips EvsLocalFamily = "tips"
+	// Commit oid to (ref, version), by the oid's first byte.
+	EvsLocalTipIndex EvsLocalFamily = "tipindex"
+	// An overlay's held paths, by ref id.
+	EvsLocalHeld EvsLocalFamily = "held"
+	// The born journal, by ref id.
+	EvsLocalBorn EvsLocalFamily = "born"
+	// A ref's journal of updates, by ref id.
+	EvsLocalJournals EvsLocalFamily = "journal"
+	// An import's record, by import id.
+	EvsLocalImports EvsLocalFamily = "import"
+)
+
+// The versions one page of the tips log holds (8.2.2).
+const EvsLocalTipsPageVersionCount = 4096
+
+// An import's id (DESIGN-DETAILS 8.2.6): 8 random bytes, written as 16 lowercase hex digits.
+type EvsImportId [8]byte
+
+// A new random import id.
+func NewEvsImportId() EvsImportId {
+	importId := EvsImportId{}
+	// never fails: since Go 1.24 a broken system generator crashes the program instead
+	cryptorand.Read(importId[:])
+	return importId
+}
+
+// Its 16 lowercase hex digits.
+func (self EvsImportId) String() string {
+	return hex.EncodeToString(self[:])
+}
+
+// The id 16 lowercase hex digits write, refusing any other text.
+func ParseEvsImportId(text string) (EvsImportId, error) {
+	decoded, err := hex.DecodeString(text)
+	if err != nil || len(decoded) != len(EvsImportId{}) || hex.EncodeToString(decoded) != text {
+		return EvsImportId{}, fmt.Errorf("%w: no import id is %q", ErrEvsMirrorObjectInvalid, text)
+	}
+	return EvsImportId(decoded), nil
+}
+
+// One file of a repo's local state: its family and the ids its name holds.
+type EvsLocalKey struct {
+	Family EvsLocalFamily
+	// ref, tips, held, born and journal's ref.
+	RefId Id
+	// A tips page's number.
+	Page uint64
+	// A tip index file's oid byte.
+	OidByte byte
+	// An import record's id.
+	ImportId EvsImportId
+}
+
+// The directory of repoId's local state in the evs component's store.
+func evsLocalStatePrefix(repoId Id) string {
+	return evsLocalStateDirectory + "/" + evsUrlId(repoId) + "/"
+}
+
+// The name inside a repo's local state directory, or ErrEvsMirrorObjectInvalid for a family it does not know.
+func (self EvsLocalKey) Name() (string, error) {
+	family := string(self.Family)
+	switch self.Family {
+	case EvsLocalRefs, EvsLocalHeld, EvsLocalBorn, EvsLocalJournals:
+		return family + "/" + evsUrlId(self.RefId), nil
+	case EvsLocalTips:
+		return family + "/" + evsUrlId(self.RefId) + "/" + evsMirrorNumber(self.Page), nil
+	case EvsLocalTipIndex:
+		return family + "/" + hex.EncodeToString([]byte{self.OidByte}), nil
+	case EvsLocalImports:
+		return family + "/" + self.ImportId.String(), nil
+	}
+	return "", fmt.Errorf("%w: no local family %q", ErrEvsMirrorObjectInvalid, self.Family)
+}
+
+// The key a name inside a repo's local state directory stands for, refusing any name Name would not give.
+func ParseEvsLocalName(name string) (EvsLocalKey, error) {
+	refused := fmt.Errorf("%w: no local state file is named %q", ErrEvsMirrorObjectInvalid, name)
+	segments := strings.Split(name, "/")
+	refId := func(text string) (Id, bool) {
+		decoded, err := hex.DecodeString(text)
+		if err != nil || len(decoded) != 16 || hex.EncodeToString(decoded) != text {
+			return Id{}, false
+		}
+		return Id(decoded), true
+	}
+	var key EvsLocalKey
+	ok := false
+	switch family := EvsLocalFamily(segments[0]); family {
+	case EvsLocalRefs, EvsLocalHeld, EvsLocalBorn, EvsLocalJournals:
+		if len(segments) == 2 {
+			key.Family = family
+			key.RefId, ok = refId(segments[1])
+		}
+	case EvsLocalTips:
+		if len(segments) == 3 && len(segments[2]) == evsMirrorNumberDigitCount {
+			key.Family = family
+			var refOk bool
+			key.RefId, refOk = refId(segments[1])
+			page, err := strconv.ParseUint(segments[2], 10, 64)
+			key.Page, ok = page, refOk && err == nil
+		}
+	case EvsLocalTipIndex:
+		if len(segments) == 2 {
+			decoded, err := hex.DecodeString(segments[1])
+			if err == nil && len(decoded) == 1 {
+				key.Family, key.OidByte, ok = family, decoded[0], true
+			}
+		}
+	case EvsLocalImports:
+		if len(segments) == 2 {
+			importId, err := ParseEvsImportId(segments[1])
+			key.Family, key.ImportId, ok = family, importId, err == nil
+		}
+	}
+	if !ok {
+		return EvsLocalKey{}, refused
+	}
+	if again, err := key.Name(); err != nil || again != name {
+		return EvsLocalKey{}, refused
+	}
+	return key, nil
+}
+
+// The infix of a helper ref's name inside its sidecar's owned refs (DESIGN-DETAILS 8.2.6).
+const evsImportRefInfix = "import/"
+
+// A helper ref an import makes for a first-parent step too large for one push (DESIGN-DETAILS 8.2.6, QD-604):
+// ur/<sidecar_id>/import/<id>/<n>, an owned ref of the importing sidecar, n a decimal number from 1 in the order the
+// import first needed it.
+func EvsImportHelperRefName(sidecarId Id, importId EvsImportId, n uint32) []byte {
+	return EvsOwnedRefName(sidecarId, evsImportRefInfix+importId.String()+"/"+strconv.FormatUint(uint64(n), 10))
+}
+
+// The sidecar, import and number a helper ref's name gives, false for any other name: what the receive path takes only
+// the deletion of (8.2.8) and `ur status` lists as leftover when no record names it. A number is decimal from 1 with no
+// leading zero, as EvsImportHelperRefName writes it.
+func ParseEvsImportHelperRefName(refName []byte) (Id, EvsImportId, uint32, bool) {
+	sidecarId, ok := EvsOwnedRefOwner(refName)
+	if !ok {
+		return Id{}, EvsImportId{}, 0, false
+	}
+	rest, found := strings.CutPrefix(string(refName[len(EvsOwnedRefName(sidecarId, "")):]), evsImportRefInfix)
+	if !found {
+		return Id{}, EvsImportId{}, 0, false
+	}
+	idText, numberText, found := strings.Cut(rest, "/")
+	if !found {
+		return Id{}, EvsImportId{}, 0, false
+	}
+	importId, err := ParseEvsImportId(idText)
+	if err != nil {
+		return Id{}, EvsImportId{}, 0, false
+	}
+	n, err := strconv.ParseUint(numberText, 10, 32)
+	if err != nil || n == 0 || strconv.FormatUint(n, 10) != numberText {
+		return Id{}, EvsImportId{}, 0, false
+	}
+	return sidecarId, importId, uint32(n), true
 }

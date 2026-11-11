@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -153,4 +154,50 @@ func firstWordOf(args []string) string {
 		return "git"
 	}
 	return args[0]
+}
+
+// A long-lived git process with its standard input and output piped: one a reader such as cat-file --batch keeps open
+// and asks in turn. It runs in Run's environment, bounded by ctx and by Close, not by GitCommandTimeout; its standard
+// error is dropped, since it may name paths (I-13).
+type EvsGitProcess struct {
+	command *exec.Cmd
+	cancel  context.CancelFunc
+	Stdin   io.WriteCloser
+	Stdout  io.ReadCloser
+}
+
+// Starts git with args in dir, which must be absolute.
+func (self *EvsGitRunner) Start(ctx context.Context, dir string, args ...string) (*EvsGitProcess, error) {
+	if !filepath.IsAbs(dir) {
+		return nil, fmt.Errorf("%w: a git directory by a relative path", errInvalidSettings)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	command := exec.CommandContext(runCtx, self.gitPath, append([]string{"-C", dir}, args...)...)
+	command.Env = self.environment()
+	command.Dir = self.home
+	command.Stderr = io.Discard
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if err := command.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("%w: %s did not start", ErrEvsGitFailed, firstWordOf(args))
+	}
+	return &EvsGitProcess{command: command, cancel: cancel, Stdin: stdin, Stdout: stdout}, nil
+}
+
+// Ends it: its input closed and the process stopped, so a reader that left output unread never blocks it, then
+// waited for.
+func (self *EvsGitProcess) Close() error {
+	self.Stdin.Close()
+	self.cancel()
+	self.command.Wait()
+	return nil
 }

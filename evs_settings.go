@@ -47,6 +47,29 @@ type EvsSettings struct {
 	// The objects a replay's pack sink writes between two packs: 64 MiB (8.2.2), each pack then indexed into the bare
 	// repository; export writes loose objects and has no chunk.
 	ObjectSinkChunkByteCount int64
+	// The first-parent ancestors of a new branch's tip searched for an overlay's base: 10,000 (DESIGN-DETAILS 8.2.4).
+	OverlayBaseSearchCount int
+	// The parts at which an import cuts a push: 512, the bound being 1,024 (DESIGN-DETAILS 8.2.6).
+	ImportPushPartCount int
+	// The sealed content at which an import cuts a push: 32 GiB.
+	ImportPushByteCount int64
+	// The time past which an import cuts a push whose parts would take longer to post at the rate measured: 10 min.
+	ImportPostTime time.Duration
+	// The sealed metadata an import assumes a commit takes before it is built: 1 KiB.
+	ImportCommitEstimate int64
+	// The parts past which one first-parent step is too large for one push, which the import then splits through
+	// helper refs (QD-604): 960, the bound being 1,024.
+	ImportStepPartCount int
+	// The time past which a step whose parts would take longer to post is too large for one push: 20 min, a
+	// statement's bound being 30.
+	ImportStepPostTime time.Duration
+	// The time past which a step whose content would take longer to upload is too large for one push: 18 h, a receipt
+	// serving 22.
+	ImportStepUploadTime time.Duration
+	// The helper refs one import may make: 64 (QD-604).
+	ImportHelperCount int
+	// How deep one helper ref may nest inside another: 8 (QD-604).
+	ImportHelperDepth int
 	// The most of a segment a read fetches whole: 256 KiB (§11.9's rounds row); a larger one is read by
 	// 64 KiB-aligned ranges.
 	SegmentWholeByteCount int64
@@ -164,6 +187,16 @@ func DefaultEvsSettings() *EvsSettings {
 		HistoryVersionCount:      1000,
 		TreeCacheByteCount:       64 * 1024 * 1024,
 		ObjectSinkChunkByteCount: 64 * 1024 * 1024,
+		OverlayBaseSearchCount:   10000,
+		ImportPushPartCount:      512,
+		ImportPushByteCount:      32 * 1024 * 1024 * 1024,
+		ImportPostTime:           10 * time.Minute,
+		ImportCommitEstimate:     1024,
+		ImportStepPartCount:      960,
+		ImportStepPostTime:       20 * time.Minute,
+		ImportStepUploadTime:     18 * time.Hour,
+		ImportHelperCount:        64,
+		ImportHelperDepth:        8,
 		SegmentWholeByteCount:    256 * 1024,
 		GitCommandTimeout:        5 * time.Minute,
 		RefLockTimeout:           3 * time.Minute,

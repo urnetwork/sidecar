@@ -356,6 +356,8 @@ type RecordPushSource struct {
 	cluster sidecar.BlobCluster
 	repoId  sidecar.Id
 	refId   sidecar.Id
+	// finds a record whose batch evacuation emptied (EVSB-M2-10's pidx/); nil reads batches alone
+	locator *RecordLocator
 	// the pushes read so far, by version, so several paths of one request share a read
 	versionPushes map[uint64]*recordPush
 }
@@ -379,6 +381,32 @@ type recordPush struct {
 // A source for one ref of one repo on its cluster.
 func NewRecordPushSource(cache *RecordCache, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id) *RecordPushSource {
 	return &RecordPushSource{cache: cache, cluster: cluster, repoId: repoId, refId: refId, versionPushes: map[uint64]*recordPush{}}
+}
+
+// The source, reading a record whose batch is gone through locator, as every read of evsservice's goes
+// (locate.go): a window version's record that evacuation moved to a pack is read there, not answered unavailable.
+func (self *RecordPushSource) WithLocator(locator *RecordLocator) *RecordPushSource {
+	self.locator = locator
+	return self
+}
+
+// The record at place: its batch's, else, once evacuation emptied the batch, the pack's that pidx/ names, kept in
+// the cache as a batch's would be.
+func (self *RecordPushSource) readRecord(ctx context.Context, place *protocol.EvsPlace) (*sidecar.EvsBatchRecord, error) {
+	record, err := ReadRecord(ctx, self.cache, self.cluster, place)
+	if !errors.Is(err, ErrEvsRecordEvacuated) || self.locator == nil {
+		return record, err
+	}
+	recordBytes, err := self.locator.ReadRecord(ctx, self.cluster, self.repoId, self.refId, place)
+	if err != nil {
+		return nil, err
+	}
+	record, err = sidecar.ParseEvsBatchRecord(recordBytes)
+	if err != nil {
+		return nil, err
+	}
+	self.cache.Put(self.cluster.ClusterId(), place, recordBytes)
+	return record, nil
 }
 
 // See EvsPushSource.
@@ -442,7 +470,7 @@ func sealPartHolding(parts []*sidecar.EvsSealPart, tokenPath sidecar.EvsTokenPat
 
 // The window entry's record, checked to be the push the entry names and of this repo and ref.
 func (self *RecordPushSource) readPush(ctx context.Context, entry *sidecar.EvsWindowEntry) (*recordPush, error) {
-	record, err := ReadRecord(ctx, self.cache, self.cluster, entry.Place)
+	record, err := self.readRecord(ctx, entry.Place)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +525,7 @@ func (self *RecordPushSource) readPart(ctx context.Context, push *recordPush, in
 		return changes, nil
 	}
 	sealPart := push.sealParts[index]
-	record, err := ReadRecord(ctx, self.cache, self.cluster, sealPart.Place)
+	record, err := self.readRecord(ctx, sealPart.Place)
 	if err != nil {
 		return nil, err
 	}
