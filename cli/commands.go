@@ -9,8 +9,9 @@
 //
 // Nothing here writes a log to stdout, which an MCP relay owns: a command's output is for the person and its logs go
 // to stderr. Nothing here takes a secret from argv, the environment or stdin: a pass comes only from the terminal
-// (tty.go), and the one credential argv carries, `ur connect --token`, is a single-use auth key spent by the
-// enrollment it starts.
+// (tty.go), and the credentials argv carries are two: `ur connect --token`, a single-use auth key spent by the
+// enrollment it starts, and `ur share get`'s link, whose fragment is a share's secret, as §9.9 spells the command
+// (question sock-m5-14-share-link-argv).
 
 package main
 
