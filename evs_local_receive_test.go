@@ -15,12 +15,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // The environment variable that turns this test binary into `ur git-hook` (the helper process below).
@@ -421,5 +424,51 @@ func TestEvsLocalReceiveWithNoHookCommandRefuses(t *testing.T) {
 	}
 	if local := receiver.local("refs/heads/main"); local != nil {
 		t.Fatalf("main moved to %v", local)
+	}
+}
+
+// An owned ref's queue refused for good (SCOPE) holds: ur evs status's journal shows the code and the commits stay on
+// the local ref; the queue waits while the local ref stands, and `ur evs retry` releases it, the next push landing.
+func TestEvsLocalReceiveHeldQueueReleasedByRetry(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	receiver := newEvsTestReceiver(t, publisher)
+	sidecarId := publisher.writer.test.client.args.Identity().SidecarId
+	owned := string(EvsOwnedRefName(sidecarId, "held"))
+	dir := receiver.clone()
+	c1 := receiver.commit(dir, map[string]string{"a.txt": "held\n"})
+	if out, ok := receiver.push(dir, "origin", "HEAD:refs/heads/"+owned); !ok {
+		t.Fatalf("the push: %s", out)
+	}
+	refId := publisher.ref(owned).refId
+	publisher.writer.server.stateLock.Lock()
+	publisher.writer.server.pushRefusals = []*evsTestRefusal{{status: http.StatusForbidden, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE}}}
+	publisher.writer.server.stateLock.Unlock()
+	if err := receiver.mount.receiver.publishQueued(context.Background(), refId); err != nil {
+		t.Fatal(err)
+	}
+	statuses, _ := receiver.mount.receiver.JournalStatus()
+	if len(statuses) != 1 || statuses[0].HoldCode != "SCOPE" {
+		t.Fatalf("the hold %+v", statuses)
+	}
+	if local := receiver.local("refs/heads/" + owned); local == nil || *local != c1 {
+		t.Fatalf("the held commits left the local ref: %v", local)
+	}
+	// held while the local ref stands: the queue sends nothing
+	posted := publisher.posted()
+	if err := receiver.mount.receiver.publishQueued(context.Background(), refId); err != nil || publisher.posted() != posted {
+		t.Fatalf("a held queue pushed: %v", err)
+	}
+	released, err := receiver.mount.receiver.Retry(context.Background(), nil)
+	if err != nil || len(released) != 1 || string(released[0]) != owned {
+		t.Fatalf("retry released %q %v", released, err)
+	}
+	if err := receiver.mount.receiver.publishQueued(context.Background(), refId); err != nil {
+		t.Fatal(err)
+	}
+	if version := receiver.headVersion(owned); version != 1 {
+		t.Fatalf("the retried queue's push: %d", version)
+	}
+	if statuses, _ := receiver.mount.receiver.JournalStatus(); len(statuses) != 0 {
+		t.Fatalf("the journal after the retry %+v", statuses)
 	}
 }

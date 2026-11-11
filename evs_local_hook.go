@@ -193,6 +193,12 @@ func (self *EvsMounts) OpenReceiveSession(mount *EvsLocalRepo, agent string) (*E
 	}
 }
 
+// Whether this registry opened the receive session id and it is still open: what a daemon hosting several networks
+// asks each network's registry before it hands a hook session to one.
+func (self *EvsMounts) HasReceiveSession(id string) bool {
+	return self.receiveSession(id) != nil
+}
+
 // The open session of id, nil for none.
 func (self *EvsMounts) receiveSession(id string) *EvsGitReceiveSession {
 	self.stateLock.Lock()
@@ -295,6 +301,14 @@ func (self *EvsMounts) ServeGitHook(ctx context.Context, hook string, stream io.
 		fmt.Fprintln(stderr, "ur: no such git hook")
 	}
 	return exit(byte(code))
+}
+
+// Ends a hook session that nothing serves: message on its stderr, and exit 1, which refuses the push.
+func RefuseEvsGitHook(stream io.Writer, message string) error {
+	if err := writeEvsGitHookFrame(stream, evsGitHookStderr, []byte(message+"\n")); err != nil {
+		return err
+	}
+	return writeEvsGitHookFrame(stream, evsGitHookExit, []byte{1})
 }
 
 // What a relay of one hook runs on.
