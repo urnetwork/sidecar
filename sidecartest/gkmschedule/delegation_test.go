@@ -73,3 +73,27 @@ func TestFsKeysDelegationADroppedWrappedWritersStaleClaimNeverSatisfiesTheGate(t
 		t.Errorf("the reader does not hold the REMOVE generation: %v", err)
 	}
 }
+
+func TestFsKeysDelegationACoveredAgentsSuspendLeavesItNothingNewUntilItsOwnLateWrap(t *testing.T) {
+	FsKeysScheduleCoveredAgentSuspended(t, FsKeysT2(t))
+}
+
+func TestFsKeysDelegationADelegationRevokeExcludesItsKey(t *testing.T) {
+	FsKeysScheduleDelegationRevoked(t, FsKeysT2(t))
+}
+
+func TestFsKeysDelegationAReapedCoveredAgentReadsUntilTheKeyDrops(t *testing.T) {
+	FsKeysScheduleCoveredAgentReaped(t, FsKeysT2(t))
+}
+
+func TestFsKeysDelegationAnEphemeralCoveredAgentPastItsNotAfterStartsNoRotation(t *testing.T) {
+	FsKeysScheduleEphemeralCoveredAgentPastItsNotAfter(t, FsKeysT2(t))
+}
+
+func TestFsKeysDelegationACopiedBundleAfterACompromiseOpensNothingNew(t *testing.T) {
+	FsKeysScheduleCopiedBundleCompromise(t, FsKeysT2(t))
+}
+
+func TestFsKeysDelegationACopiedBundleAfterARemovalAdmitsOnlyUncoveredReaders(t *testing.T) {
+	FsKeysScheduleCopiedBundleRemoved(t, FsKeysT2(t))
+}
