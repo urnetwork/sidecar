@@ -1,5 +1,6 @@
-// Matching (SEARCH-M10-23): shard intersection against a brute-force scan on random shards, heads and slots with their
-// chains, FS-107's forged diff reading not yet searchable, too_broad, and a phone's working set.
+// Matching (SEARCH-M10-23 and SEARCH-M10-45): shard intersection against a brute-force scan on random shards, heads
+// and slots with their diffs on own bases, an absorbed slot read only as a base, FS-107's forged diff reading not yet
+// searchable, too_broad, and a phone's working set.
 
 package sidecar
 
@@ -192,89 +193,117 @@ func TestSearchMatchAbsentTrigramEndsTheShard(t *testing.T) {
 	}
 }
 
-// A bucket with D's v1 in its shard, v2 a diff on it sealed, v3 a diff composed onto v1 in a head, and E full in
-// another head: v3 matches its own trigrams through the shard base, v1 its own, v2 is below D's newest and is no
-// candidate, and nothing alarms.
-func TestSearchMatchHeadsSlotsAndChains(t *testing.T) {
+// A bucket on own bases (DESIGN-DETAILS 1.2.9): A's sealed slot holds D's v1 full and A's head v2, a diff on it; B's
+// head holds E full. v2 matches its own trigrams through A's slot, a trigram v1 and v2 share offers both, one v2
+// removed offers v1 alone, and nothing alarms.
+func TestSearchMatchChainsOnOwnBases(t *testing.T) {
 	base := testIndexKeys(0x616100, 40, 1)
 	v2 := slices.Clone(base)
-	v2[0] = 0x717171
+	v2[1] = 0x727272
 	v2 = indexSortedKeys(v2)
-	v3 := slices.Clone(base)
-	v3[1] = 0x727272
-	v3 = indexSortedKeys(v3)
 	d := testIndexId("d", 1)
-	reader, _ := testOpenShard(t, []*indexShardDocument{{key: d, version: 1, timeSeconds: 1, row: testFileRow(base), keys: base}})
-	diff := func(version uint64, keys indexKeySet) *indexEntry {
-		return &indexEntry{kind: indexEntryDiff, key: d, version: version, baseVersion: 1, timeSeconds: 2, row: testFileRow(keys), delta: indexDeltaBetween(base, keys)}
-	}
+	a, b := evsTestId("a"), evsTestId("b")
 	eKeys := testIndexKeys(0x737373, 10, 1)
 	source := &searchPartitionSource{
 		partition: searchPartitionCurrent,
-		shards:    []*searchShardSource{{n: 0, reader: reader}},
 		slots: []*searchSlotSource{
-			{slot: &indexSlot{entries: []*indexEntry{diff(2, v2)}}, writer: evsTestId("a"), seq: 1, path: "s/1", signer: evsTestId("a")},
-			{slot: &indexSlot{entries: []*indexEntry{diff(3, v3)}}, writer: evsTestId("a"), seq: 2, head: true, path: "s/2", signer: evsTestId("a")},
-			{slot: &indexSlot{entries: []*indexEntry{{kind: indexEntryFull, key: testIndexId("e", 1), version: 1, row: testFileRow(eKeys), keys: eKeys}}}, writer: evsTestId("b"), seq: 1, head: true},
+			{slot: &indexSlot{entries: []*indexEntry{{kind: indexEntryFull, key: d, version: 1, timeSeconds: 1, row: testFileRow(base), keys: base}}}, writer: a, seq: 1, path: "s/1", signer: a},
+			{slot: &indexSlot{entries: []*indexEntry{{kind: indexEntryDiff, key: d, version: 2, baseVersion: 1, timeSeconds: 2, row: testFileRow(v2), delta: indexDeltaBetween(base, v2)}}}, writer: a, seq: 2, head: true, path: "s/2", signer: a},
+			{slot: &indexSlot{entries: []*indexEntry{{kind: indexEntryFull, key: testIndexId("e", 1), version: 1, row: testFileRow(eKeys), keys: eKeys}}}, writer: b, seq: 1, head: true},
 		},
 	}
-	match := func(keys ...uint32) *searchPartitionResult {
-		result, err := searchMatch(&searchMatchArgs{query: testQueryOf([]indexKeySet{keys}), source: source, maxCandidateCount: 20000})
+	match := func(keys ...uint32) []uint64 {
+		result, err := searchMatch(&searchMatchArgs{query: testQueryOf([]indexKeySet{keys}), source: source, maxCandidateCount: 20000, newest: func(key [indexIdByteCount]byte) (uint64, bool) { return 0, false }})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(result.unresolved) != 0 {
 			t.Fatalf("unresolved %+v", result.unresolved)
 		}
-		return result
-	}
-	onlyV3 := match(0x727272)
-	if len(onlyV3.candidates) != 1 || onlyV3.candidates[0].entry == nil || onlyV3.candidates[0].entry.version != 3 || onlyV3.candidates[0].trigramCount != len(v3) {
-		t.Fatalf("v3's own trigram: %+v", onlyV3.candidates)
-	}
-	shared := match(base[5], base[6])
-	versions := []uint64{}
-	for _, candidate := range shared.candidates {
-		if candidate.entry != nil {
-			versions = append(versions, candidate.entry.version)
-		} else {
-			versions = append(versions, 1)
+		versions := []uint64{}
+		for _, candidate := range result.candidates {
+			if candidate.entry.key == d {
+				versions = append(versions, candidate.entry.version)
+				if candidate.entry.version == 2 && (candidate.chain == nil || candidate.trigramCount != len(v2)) {
+					t.Fatalf("v2's chain %+v", candidate.chain)
+				}
+			}
 		}
+		slices.Sort(versions)
+		return versions
 	}
-	slices.Sort(versions)
-	if !slices.Equal(versions, []uint64{1, 3}) {
-		t.Errorf("a trigram v1 and v3 share: versions %v", versions)
+	if versions := match(0x727272); !slices.Equal(versions, []uint64{2}) {
+		t.Errorf("v2's own trigram: %v", versions)
 	}
-	if removed := match(base[1]); len(removed.candidates) != 1 || removed.candidates[0].shard == nil {
-		t.Errorf("a trigram v3 removed: %+v", removed.candidates)
+	if versions := match(base[5], base[6]); !slices.Equal(versions, []uint64{1, 2}) {
+		t.Errorf("a trigram v1 and v2 share: %v", versions)
 	}
-	if v2Only := match(0x717171); len(v2Only.candidates) != 0 {
-		t.Errorf("v2, below D's newest, is a candidate")
-	}
-	if e := match(0x737374); len(e.candidates) != 1 || e.candidates[0].entry.key != testIndexId("e", 1) {
-		t.Errorf("E: %+v", e.candidates)
+	if versions := match(base[1]); !slices.Equal(versions, []uint64{1}) {
+		t.Errorf("a trigram v2 removed: %v", versions)
 	}
 }
 
-// FS-107: a current diff whose base no file holds, or whose composed set's size is not its row's count, reads not yet
-// searchable naming its signer, never a match and never no match; one below its key's newest entry alarms nothing.
+// An absorbed slot holds no candidate: its version is in the shard, which answers for it. It is still a diff's base,
+// so the head's diff on it resolves.
+func TestSearchMatchAbsorbedSlotIsOnlyABase(t *testing.T) {
+	base := testIndexKeys(0x616100, 40, 1)
+	v2 := slices.Clone(base)
+	v2[1] = 0x727272
+	v2 = indexSortedKeys(v2)
+	d := testIndexId("d", 1)
+	a := evsTestId("a")
+	reader, _ := testOpenShard(t, []*indexShardDocument{{key: d, version: 1, timeSeconds: 1, row: testFileRow(base), keys: base}})
+	source := &searchPartitionSource{
+		partition: searchPartitionCurrent,
+		shards:    []*searchShardSource{{n: 0, reader: reader}},
+		slots: []*searchSlotSource{
+			{slot: &indexSlot{entries: []*indexEntry{{kind: indexEntryFull, key: d, version: 1, timeSeconds: 1, row: testFileRow(base), keys: base}}}, writer: a, seq: 1, absorbed: true, path: "s/1", signer: a},
+			{slot: &indexSlot{entries: []*indexEntry{{kind: indexEntryDiff, key: d, version: 2, baseVersion: 1, timeSeconds: 2, row: testFileRow(v2), delta: indexDeltaBetween(base, v2)}}}, writer: a, seq: 2, head: true, path: "s/2", signer: a},
+		},
+	}
+	result, err := searchMatch(&searchMatchArgs{query: testQueryOf([]indexKeySet{{base[1]}}), source: source, maxCandidateCount: 20000})
+	if err != nil || len(result.unresolved) != 0 {
+		t.Fatalf("%v, unresolved %+v", err, result.unresolved)
+	}
+	if len(result.candidates) != 1 || result.candidates[0].shard == nil {
+		t.Errorf("v1 offered %d times, the absorbed slot's among them: %+v", len(result.candidates), result.candidates)
+	}
+	result, err = searchMatch(&searchMatchArgs{query: testQueryOf([]indexKeySet{{0x727272}}), source: source, maxCandidateCount: 20000})
+	if err != nil || len(result.unresolved) != 0 || len(result.candidates) != 1 || result.candidates[0].entry == nil || result.candidates[0].entry.version != 2 {
+		t.Errorf("v2 on its absorbed base: %v, %+v", err, result)
+	}
+}
+
+// FS-107: an unabsorbed diff whose base no file of its own writer holds, another writer's copy of the version not
+// counting, reads not yet searchable naming its signer, never a match and never no match; so does one whose composed
+// set's size is not its row's count, and one below its key's newest version, since under own bases nothing excuses
+// it. A diff of a document the erasure set lists is left out unresolved and alarms nothing.
 func TestSearchMatchForgedDiffReadsNotYetSearchable(t *testing.T) {
 	keys := testIndexKeys(0x616100, 40, 1)
-	forger := evsTestId("forger")
+	forger, other := evsTestId("forger"), evsTestId("other")
 	forged := &indexEntry{kind: indexEntryDiff, key: testIndexId("d", 1), version: 5, baseVersion: 4, timeSeconds: 2, row: testFileRow(keys), delta: indexDelta{added: indexKeySet{0x616100}, removed: indexKeySet{}}}
+	othersCopy := &indexEntry{kind: indexEntryFull, key: testIndexId("d", 1), version: 4, row: testFileRow(keys[1:]), keys: keys[1:]}
 	base := &indexEntry{kind: indexEntryFull, key: testIndexId("d", 2), version: 1, row: testFileRow(keys[1:]), keys: keys[1:]}
 	misCounted := &indexEntry{kind: indexEntryDiff, key: testIndexId("d", 2), version: 2, baseVersion: 1, timeSeconds: 2, row: testFileRow(testIndexKeys(0x616100, 45, 1)), delta: indexDelta{added: indexKeySet{0x616100}, removed: indexKeySet{}}}
 	stale := &indexEntry{kind: indexEntryDiff, key: testIndexId("d", 3), version: 6, baseVersion: 5, timeSeconds: 2, row: testFileRow(keys), delta: indexDelta{}}
 	newer := &indexEntry{kind: indexEntryFull, key: testIndexId("d", 3), version: 7, row: testFileRow(keys), keys: keys}
+	erased := &indexEntry{kind: indexEntryDiff, key: testIndexId("d", 4), version: 3, baseVersion: 2, timeSeconds: 2, row: testFileRow(keys), delta: indexDelta{}}
 	source := &searchPartitionSource{
 		partition: searchPartitionCurrent,
 		slots: []*searchSlotSource{
 			{slot: &indexSlot{entries: []*indexEntry{base}}, writer: forger, seq: 1, path: "s/1", signer: forger},
-			{slot: &indexSlot{entries: []*indexEntry{forged, misCounted, stale}}, writer: forger, seq: 2, path: "s/2", signer: forger},
+			{slot: &indexSlot{entries: []*indexEntry{forged, misCounted, stale, erased}}, writer: forger, seq: 2, path: "s/2", signer: forger},
 			{slot: &indexSlot{entries: []*indexEntry{newer}}, writer: forger, seq: 3, head: true, path: "s/3", signer: forger},
+			{slot: &indexSlot{entries: []*indexEntry{othersCopy}}, writer: other, seq: 1, path: "o/1", signer: other},
+			{slot: &indexSlot{}, writer: other, seq: 2, head: true, path: "o/2", signer: other},
 		},
 	}
-	result, err := searchMatch(&searchMatchArgs{query: testQueryOf([]indexKeySet{{keys[3]}}), source: source, maxCandidateCount: 20000})
+	result, err := searchMatch(&searchMatchArgs{
+		query: testQueryOf([]indexKeySet{{keys[3]}}), source: source, maxCandidateCount: 20000,
+		erased: func(key [indexIdByteCount]byte, version uint64) bool {
+			return key == testIndexId("d", 4) && version <= 3
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,15 +311,15 @@ func TestSearchMatchForgedDiffReadsNotYetSearchable(t *testing.T) {
 	for _, entry := range result.unresolved {
 		unresolved[entry.key] = entry
 	}
-	if len(unresolved) != 2 || unresolved[testIndexId("d", 1)] == nil || unresolved[testIndexId("d", 2)] == nil {
+	if len(unresolved) != 3 || unresolved[testIndexId("d", 1)] == nil || unresolved[testIndexId("d", 2)] == nil || unresolved[testIndexId("d", 3)] == nil {
 		t.Fatalf("unresolved %+v", result.unresolved)
 	}
 	if entry := unresolved[testIndexId("d", 1)]; entry.signer != forger || entry.path != "s/2" || entry.version != 5 {
 		t.Errorf("the alarm names %+v", entry)
 	}
 	for _, candidate := range result.candidates {
-		if candidate.entry != nil && (candidate.entry == forged || candidate.entry == misCounted || candidate.entry == stale) {
-			t.Errorf("a broken or stale diff is a candidate")
+		if candidate.entry != nil && (candidate.entry == forged || candidate.entry == misCounted || candidate.entry == stale || candidate.entry == erased) {
+			t.Errorf("a broken or erased diff is a candidate")
 		}
 	}
 }
@@ -354,36 +383,4 @@ func TestSearchMatchStaysInsideAPhoneWorkingSet(t *testing.T) {
 		t.Errorf("matching allocated %d B, past a phone's 4 MiB", allocated)
 	}
 	t.Logf("matching 4 shards of %d B allocated %d B for %d candidates", shards[0].reader.layout.length, allocated, result.candidateCount)
-}
-
-// A sealed diff whose base a merge dropped, keeping a newer version of its document in the shard, is stale: with no
-// version table the shard shows it, so it alarms nothing and is no candidate. A newer tombstone shows it too.
-func TestSearchMatchStaleDiffOverAMergedVersionAlarmsNothing(t *testing.T) {
-	keys := testIndexKeys(0x616100, 40, 1)
-	d, e := testIndexId("d", 1), testIndexId("e", 1)
-	reader, _ := testOpenShard(t, []*indexShardDocument{{key: d, version: 5, timeSeconds: 1, row: testFileRow(keys), keys: keys}})
-	tombstoned := &indexShard{header: testShardHeader(indexFileBucketShard), tombstones: []*indexShardTombstone{{kind: indexEntryTombstone, key: e, version: 9, timeSeconds: 1}}}
-	tombstoneReader, err := indexOpenShard(indexBytesFrames(testBuildShard(t, tombstoned, false, testPadKey(t, 2))), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stale := func(key [indexIdByteCount]byte) *indexEntry {
-		return &indexEntry{kind: indexEntryDiff, key: key, version: 3, baseVersion: 2, timeSeconds: 2, row: testFileRow(keys), delta: indexDelta{}}
-	}
-	writer := evsTestId("writer")
-	source := &searchPartitionSource{
-		partition: searchPartitionCurrent,
-		shards:    []*searchShardSource{{n: 0, reader: reader}, {n: 1, reader: tombstoneReader}},
-		slots:     []*searchSlotSource{{slot: &indexSlot{entries: []*indexEntry{stale(d), stale(e)}}, writer: writer, seq: 4, path: "s/4", signer: writer}},
-	}
-	result, err := searchMatch(&searchMatchArgs{query: testQueryOf([]indexKeySet{{keys[2]}}), source: source, maxCandidateCount: 20000})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.unresolved) != 0 {
-		t.Errorf("a stale diff alarmed: %+v", result.unresolved)
-	}
-	if len(result.candidates) != 1 || result.candidates[0].shard == nil {
-		t.Errorf("candidates %+v", result.candidates)
-	}
 }
