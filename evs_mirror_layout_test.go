@@ -408,3 +408,67 @@ func TestEvsMirrorSealsWhatItHolds(t *testing.T) {
 		}
 	}
 }
+
+// DESIGN-DETAILS 8.2.2's local state names under local/<repo_id>/: each family's name round-trips, and a name no key
+// gives is refused.
+func TestEvsLocalStateNames(t *testing.T) {
+	refId := evsTestId("local ref")
+	importId := EvsImportId{1, 2, 3, 4, 5, 6, 7, 8}
+	for _, key := range []EvsLocalKey{
+		{Family: EvsLocalRefs, RefId: refId}, {Family: EvsLocalHeld, RefId: refId}, {Family: EvsLocalBorn, RefId: refId},
+		{Family: EvsLocalJournals, RefId: refId}, {Family: EvsLocalTips, RefId: refId, Page: 7},
+		{Family: EvsLocalTipIndex, OidByte: 0xa5}, {Family: EvsLocalImports, ImportId: importId},
+	} {
+		name, err := key.Name()
+		if err != nil {
+			t.Fatalf("%s: %v", key.Family, err)
+		}
+		parsed, err := ParseEvsLocalName(name)
+		if err != nil || parsed != key {
+			t.Errorf("%s: %q parsed to %+v, %v", key.Family, name, parsed, err)
+		}
+	}
+	if name, _ := (EvsLocalKey{Family: EvsLocalImports, ImportId: importId}).Name(); name != "import/0102030405060708" {
+		t.Errorf("an import record's name %q", name)
+	}
+	if name, _ := (EvsLocalKey{Family: EvsLocalTips, RefId: refId, Page: 7}).Name(); !strings.HasSuffix(name, "/00000000000000000007") {
+		t.Errorf("a tips page's name %q", name)
+	}
+	for _, name := range []string{
+		"ref", "ref/" + strings.Repeat("A", 32), "ref/" + strings.Repeat("a", 30), "tips/" + evsUrlId(refId) + "/7",
+		"tipindex/a", "tipindex/a5a5", "import/01020304050607", "import/0102030405060708/x", "mirror/x",
+	} {
+		if _, err := ParseEvsLocalName(name); !errors.Is(err, ErrEvsMirrorObjectInvalid) {
+			t.Errorf("%q: %v", name, err)
+		}
+	}
+}
+
+// A helper ref's name (DESIGN-DETAILS 8.2.6): ur/<sidecar_id>/import/<id>/<n>, an owned ref of the importing
+// sidecar, parsed back to its sidecar, import and number; any other name, a number with a leading zero or 0 among
+// them, is not one.
+func TestEvsImportHelperRefNames(t *testing.T) {
+	sidecarId := evsTestId("importing sidecar")
+	importId := EvsImportId{0xde, 0xad, 0xbe, 0xef, 0, 1, 2, 3}
+	name := EvsImportHelperRefName(sidecarId, importId, 12)
+	if string(name) != "ur/"+sidecarId.String()+"/import/deadbeef00010203/12" {
+		t.Fatalf("name %q", name)
+	}
+	if owner, ok := EvsOwnedRefOwner(name); !ok || owner != sidecarId {
+		t.Fatalf("a helper ref is an owned ref of its sidecar: %v %v", owner, ok)
+	}
+	parsedSidecar, parsedImport, n, ok := ParseEvsImportHelperRefName(name)
+	if !ok || parsedSidecar != sidecarId || parsedImport != importId || n != 12 {
+		t.Fatalf("parsed %v %v %d %v", parsedSidecar, parsedImport, n, ok)
+	}
+	prefix := "ur/" + sidecarId.String() + "/import/deadbeef00010203/"
+	for _, other := range []string{
+		prefix + "0", prefix + "012", prefix + "x", prefix, prefix + "1/2", "ur/" + sidecarId.String() + "/import/deadbeef0001020/1",
+		"ur/" + sidecarId.String() + "/conflicts/main/20261110T000000Z", "main", "ur/not-a-sidecar/import/deadbeef00010203/1",
+		prefix + "4294967296",
+	} {
+		if _, _, _, ok := ParseEvsImportHelperRefName([]byte(other)); ok {
+			t.Errorf("%q parsed as a helper ref", other)
+		}
+	}
+}
