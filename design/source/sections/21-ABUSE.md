@@ -109,7 +109,14 @@ It never reaches relay frames or dials (connect-2), inbound sender addresses (mx
 **Preservation holds (owner decisions 133, 184).** A hold keeps one network's in-scope records existing at placement until its kind's deadline (§2703(f): 90 days, renewable once; §2258A: 1 year), and collects nothing new. TTL sweeps skip those rows; `copied_rows` copies what drops or is overwritten on its own: rows of partitions that drop whole (tls-3, smtp-3, mx-2) and the Redis soft state existing at placement (evs-8's lease fields, gkm-10's acks; owner decision 136); and api mirrors each hold as `hold/<network_id>/<case_id>/_` on the first metadata cluster (§11.8; owner decision 145), so §11.13's GC and §10.6's reconciler skip in-scope objects on every cluster, and evacuation moves a held network's batched records, a shredding repo's included, into packs and parcels that nothing deletes while the hold stands (evs-19). A drop of a path's history (§11.7) whose targets a hold covers still commits: it reads, lists and bills as finished, as an unheld drop would, and its dropped versions are served to no one, while its deletions wait until every covering hold has ended (§11.13); no answer, listing or bill tells the network that a hold exists, so a sealed order stays sealed (owner decision 184). A site loss voids what a hold kept on the file cluster, which has no off-site copy (owner decision 94); §19.10's restore returns its rows and tells counsel.
 
 ```text
-abuse_legal_hold(network_id, case_id, part, kind, scope, expire_time, copied_rows)
+abuse_legal_hold(network_id, case_id, part, kind, scope, place_time, report_time, renew_time, expire_time,
+                 copied_rows, copy_state)
+object   hold/<network_id>/<case_id>/_ is UTF-8 JSON of at most 1 KiB, unsigned, keys in this order:
+         {"version":1,"network_id":"<id>","case_id":"<id>","kind":"preserve_2703f"|"report_2258a",
+         "scope":"network"|["<repo_id>",...],"place_time_ms":<int>,"expire_time_ms":<int>}; a renewal rewrites
+         it If-Match, keeping place_time_ms; a body that does not parse, or an unknown version, kind or scope,
+         covers the whole network, and a record past expire_time_ms is no hold; renew_time set refuses a
+         second renewal, and report_2258a's deadline runs from report_time
 part     the primary key is (network_id, case_id, part): part 0 is the hold itself, and parts 1 and up each
          hold at most 16 MiB of compressed rows in copied_rows, so a busy network's tls-3 rows fit 21.16's
          seven tables

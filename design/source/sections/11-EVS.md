@@ -161,6 +161,7 @@ copy     one taskworker job per ref, for the newest map and its tail only, as P2
          from its children's moves, matching each row in that row's own epoch, PUTs the new entry (If-None-Match,
          carried) and deletes
          every source copy; on 412 a file, or a removed or fresh entry (11.7), is done, its source copies deleted
+         (a source marker's carried ids first put in an orphan marker, 11.7's orphan row)
          unmoved, and a carried directory's carried rows are translated and the entry PUT If-Match, read again on
          412; after each PUT it HEADs the path's prefixes in the current epoch and, finding one removed or fresh,
          turns what it put into a marker (If-Match on that PUT's ETag, 11.7; on 412 the newer entry stands); at most
@@ -202,7 +203,8 @@ record          header sealed under manifest (160 B): record id, kind, key ref, 
                 git oid (32 B with its oid_kind, SHA-1 alone in v0, owner decision 249), nonce prefix. Body: 64 KiB
                 STREAM frames under its object key, nonce = 19 B prefix || 32-bit counter || final flag, as in age
                 (https://github.com/C2SP/C2SP/blob/main/age.md). AAD = repo_id || file_id || record id || generation
-                || frame index. evs checks nothing.
+                || frame index. The header is sealed under manifest, or on a deposit ref under K_dep (Bytes,
+                below). evs checks nothing.
 segment         immutable, <= 8 MiB: 32 B public header {URvs, format 1, flags, repo_id, generation}, records,
                 random padding to Padme(length); id = SHA-256 of all bytes. evs checks id, size, repo, generation.
                 A kind-5 segment's header is format 2's, 48 B, adding the push_id that introduces it, which evs
@@ -234,7 +236,9 @@ kinds           EvsLocator.kind 1 (segment) and 2 (inline) ship in format 1, whi
                 directory on file-mode refs and the ur/index and ur/lfs refs (11.14); format 2 (v1) gives them
                 meaning (11.7); kinds 3 (push-payload range) and 4 (pack range) stay reserved and refused, so either
                 can ship with a format version that readers learn before writers use it
-format          a repo's format is repo/'s object format: 1, or 2 from v1; evs takes format-2 values only from
+format          a repo's format is repo/'s object format: 1, or 2 from v1; PUT /evs/v1/repos/<id> always writes 1,
+                the raise below is the only path to 2, a raise whose push then fails stands, since format-1 data
+                is valid format 2, and nothing lowers it; evs takes format-2 values only from
                 networks in §19.11's format2 gate, raising a format-1 repo at the first such push by an If-Match on
                 repo/ before its step 7 (11.8), and GET .../refs returns it; format-1 data is valid format 2, so
                 nothing is rewritten; a reader below format 2 says the repo needs an update and refuses its format-2
@@ -242,7 +246,7 @@ format          a repo's format is repo/'s object format: 1, or 2 from v1; evs t
                 bytes, refuses its pushes (503) and purges nothing
 ```
 
-**Records** are `checkpoint`, `diff` (a git pack delta against the file's previous version, https://git-scm.com/docs/gitformat-pack) or `chunk`. Trees are not stored: directory names and each child's sealed {mode, oid} rebuild them exactly, except an imported tree that does not, which travels as its bytes beside the commit that brought it (`EvsSealedCommit.trees`), the tree builder using them once git's reading of them equals the entries it built; an imported commit travels as its bytes, and only a sidecar's new commits meet the strict codec, so owner decision 81's committer rule stays as strict as it is (owner decision 236). Commits travel sealed in push records with provenance (§5.5's `agent_id`; agent-subkey signatures from v1; from M3, format 1 included, the writing run's `tainted` bit, so §16.6 and the search index mark files from a tainted run: a version so marked reads `trust: untrusted` and reading it taints the run first, while a push bound to no run, a person's own `git push` included, carries none; owner decision 245) and §10's `epoch_authenticator`. A file's random 16-B `file_id`, sealed in its entry, lets a rename keep its chain and stops evs swapping chains between files.
+**Records** are `checkpoint`, `diff` (a git pack delta against the file's previous version, https://git-scm.com/docs/gitformat-pack) or `chunk`. Trees are not stored: directory names and each child's sealed {mode, oid} rebuild them exactly, except an imported tree that does not, which travels as its bytes beside the commit that brought it (`EvsSealedCommit.trees`), the tree builder using them once git's reading of them equals the entries it built; an imported commit travels as its bytes, and only a sidecar's new commits meet the strict codec, so owner decision 81's committer rule stays as strict as it is (owner decision 236). Commits travel sealed in push records with provenance (§5.5's `agent_id`; agent-subkey signatures from v1; from M3, format 1 included, the writing run's `tainted` bit, so §16.6 and the search index mark files from a tainted run: a version so marked reads `trust: untrusted` and reading it taints the run first, while a push bound to no run, a person's own `git push` included, carries none; owner decision 245) and §10's `epoch_authenticator`. A file's random 16-B `file_id`, sealed in its entry, lets a rename keep its chain and stops evs swapping chains between files. From format 2 the sealed metadata also carries `index_none`, under sealed_metadata_sha256, on a push that changes no document (11.14's coverage row); nothing server-visible changes.
 
 ```proto
 message EvsPush {                       // sidecar/protocol/evs.proto, inside §6 Signed, purpose evs-push; <= 1 KiB signed
@@ -276,6 +280,8 @@ message EvsPush {                       // sidecar/protocol/evs.proto, inside §
                                         // file: the head's index_epoch it was built at, the ref's erasure set at
                                         // that epoch applied (11.8's 5d, 11.14); else 0 (format 2)
 }
+// evs.proto also declares EvsPush's consumed_through = 35, a CONSUME's mark (11.12's deposits row), which joins
+// this fence in one change with protocol's fence test, whose additions list holds it now
 message EvsTokenPath { repeated bytes token = 1; }            // 16 B per component
 message EvsChange {
   repeated bytes token_path = 1;        // 16 B per component, in the push's path epoch
@@ -290,6 +296,8 @@ message EvsPushPart {                   // unsigned; parts_sha256 binds it
   bytes sealed_metadata = 6;            // a slice; sealed_metadata_sha256 covers the slices in order
   bytes changes_root = 7;               // root over this part's changes; the statement's root is over these roots
 }
+// evs.proto also declares EvsPushPart's sections = 8, this part's slice of the payload's other sections (Bytes,
+// below), which joins this fence the same way
 message EvsEntryVersion {               // what entry_sha256 hashes; in the push record, and folded into idx/
   uint64 version = 1;                   // base_entry_version + 1; a creation's max(the push's effective base
                                         // version, an overlay's chain included, a standing removal's) + 1, so it
@@ -378,7 +386,8 @@ payload  in the push's batch record for a one-part push, else spread over its pa
          sealed metadata, inline records, the change list when not inline, the part hashes, the new-objects list
          (segment id, padded size and the UTC day of its upload, from its receipt, or a staged mark for a staged
          segment, whose bytes follow the payload outside every payload hash, 11.7; slot ids), new slot bodies, the
-         erased list, a DROP's EvsDropHistory and then its sorted lists, across the push's parts when large (11.7),
+         erased list, a DROP's EvsDropHistory and then its sorted lists, across the push's parts when large in each
+         part's sections field (slices, below; 11.7),
          a PATH_EPOCH's tail moves, the source paths (per change, an EvsSourcePath for each listed
          source that may hold it, 11.6's read rule, in change order), the reuse list of committed versions whose
          segments a new version cites ((ref, token path, entry version), 11.8) and, per entry version, its Merkle
@@ -392,6 +401,72 @@ checks   at push time evs checks that each entry version hashes to its change's 
 merkle   RFC 9162 hashing: leaf SHA-256(0x00 || bytes), node SHA-256(0x01 || left || right); changes sort by
          their token paths' bytes, each part a contiguous run in part order, so inclusion proofs of two adjacent
          leaves show that no path between them changed (11.9)
+```
+
+**Bytes.** protocol/EVS-FORMAT.md writes format 1's bytes out in full, pinned by testdata/evs/ vectors, for M2's entry review; the rows below fix what it rests on:
+
+```text
+integers  big-endian throughout
+enums     ref_kind 1 shared, 2 owned, 3 deposit, 4 erasure; EvsEntryVersion.kind and EvsName.kind 1 file, 2
+          directory; a record's kind 1 checkpoint, 2 diff, 3 chunk; a batch record's type 1 push, 2 part, 3 seal,
+          4 reseed; repo/'s kind acl.proto's RepoKind, general 1 to secret 9, and its state 1 keying, 2 active, 3
+          deleted, 4 shredding, 5 shredded
+codes     EvsRefusal.code is an EvsRefusalCode, each with a fixed status: 1 SCOPE 403, 2 TIME_STALE 409, 3
+          REPO_KEYING 409, 4 REPO_DELETED 409, 5 QUOTA_PAYMENT 402, 6 QUOTA_LIMIT 403, 7 CLUSTER_FULL 507, 8
+          GATE_CLOSED 412, 9 INDEX_EPOCH 409, 10 MAP_PARTS 409, 11 EPOCH_SOURCES_FULL 412, 12 PATH_EPOCH_DUE 412, 13
+          DIRECTORY_FULL 409, 14 SEGMENT_GONE 409, 15 VERSIONING 409, 16 SLOT_UNKNOWN 409, 17 SLOT_STALE 409, 18
+          NOTHING_TO_ERASE 409, 19 DROPPED 409, 20 DROP_PATH 409, 21 DROP_CONSENT 409, 22 DROP_STATE 409, 23
+          DROP_BOUNDARY 409, 24 DROP_LIST 409, 25 FORMAT_UNSUPPORTED 409, the rest as EVS-FORMAT.md numbers them;
+          QUOTA_LIMIT is 403 and never 429, since a 429 refuses nothing (11.8)
+objects   proto3: EvsRepoObject {repo_id 1, kind 2, owner_member_id 3, state 4, state_ms 5, state_signer 6,
+          deletion_id 7, format 8, sealed_name 9, network_id 10}; EvsRepoPlacement {cluster_id 1,
+          creator_sidecar_id 2}; EvsSlotObject {keys 1} with EvsSlotKey {key_index 1, generation 2, wrapped 3}, an
+          erased key leaving the list and no index shifting; EvsIndexEntry {versions 1, names 2, names_through 3,
+          marker 4, drop_mark 5}, with 11.7's leaf places (owner decisions 200, 233)
+sealed    sealed_fields (EvsSealedFields {file_id 1, mode 2, git_oid 3, oid_kind 4, size 5, content_sha256 6}) and
+          sealed metadata (EvsSealedMetadata) are proto3, sealed as 24 B nonce | ciphertext | 16 B tag under
+          manifest_g, AAD "UR evs 1.0 fields" or "UR evs 1.0 metadata" || repo_id || u64be(g)
+keys      in object keys, repo, ref, slot and parcel ids are lowercase hex with no dashes, segment ids lowercase
+          hex of their 32 B, tokens 26 lowercase RFC 4648 base32 characters unpadded, and versions, epochs, page
+          numbers and parts decimal zero-padded to 20 digits; the deepest idx/ key is 956 B, within 11.3's 1,024
+header    a record's 160 B header is 24 B nonce | 120 B sealed | 16 B tag, XChaCha20-Poly1305 under manifest_g (a
+          deposit's under K_dep, below), g the segment header's generation or an inline record's push generation,
+          AAD "UR evs 1.0 record" || repo_id || u64be(g); the 120 B: record_id 16 | base_record_id 16 (zero unless
+          a diff) | oid 32 | slot_id 16 (zero unless key_ref_kind 1) | generation 8 | body_length 8 | key_index 2
+          | kind 1 | key_ref_kind 1 (0 the container's own key, 1 a slot) | oid_kind 1 (1 SHA-1, left-aligned and
+          zero-filled; 2 SHA-256) | nonce_prefix 19
+wrapped   a general repo's kind-1 segment holds a 72 B wrapped-key block at byte 32, right after the public header:
+          24 B nonce | 32 B object key sealed | 16 B tag, XChaCha20-Poly1305 under fek_g, g the header's
+          generation, AAD "UR evs 1.0 object key" || repo_id || u64be(g); its records follow at byte 104, and a
+          kind-5 segment puts the block at byte 48; an inline chain's first inline record's EvsLocator.inline bytes
+          open with the same block, and the chain's later records use that key (key_ref_kind 0); slot-keyed repos
+          and deposits have no block; the public header, padding and evs's checks are unchanged
+deposits  K_dep = HKDF-SHA256(object key, salt repo_id, info "UR evs 1.0 deposit") seals a deposit's record header
+          (key_ref_kind 1), its EvsEntryVersion.sealed_fields and, under its first entry's K_dep, its push's
+          sealed metadata, with the AEAD and nonce rules above; bodies stay under the object key, and §15.7's
+          sealed header is a trailer of the body; sealed_ref_name stays empty and deposit entries carry no name
+          row, their tokens being random ids; a reader takes the slot from the entry's cleartext slot_ids, opens
+          it with the drop private key, then derives K_dep
+payload   sections of type u8 | length u32 | bytes, ascending, each at most once, absent when empty: 1 entry
+          versions, 2 sealed metadata, 3 inline records, 4 change list, 5 part hashes, 6 new objects, 7 slot
+          bodies, 8 erased list, 9 DROP body, 10 DROP lists, 11 tail moves, 12 source paths, 13 reuse list, 14
+          Merkle proofs; repeated items u32 length | bytes, part hashes bare 32 B values, and each *_sha256
+          statement field hashes its section's bytes; a new-objects item is kind u8 (1 segment, 2 staged segment, 3
+          slot) | id (32 B, a slot's 16 B) | padded_size u64 | upload_day u32 (days since the Unix epoch, 0 for
+          staged and slots); staged bytes follow the last section, outside every hash
+slices    a part's sections field carries its slice of every section beyond EvsPushPart's fields 3-6, in the
+          payload's order and framing, the slices concatenated in part order equalling what a one-part push
+          carries; a DROP rides as sections 9 and 10, its EvsDropHistory bytes, then each EvsDropPath's list in
+          paths order as bare 32 B values, a slice splitting anywhere; parts_sha256 covers the field, which counts
+          against the part's 1 MiB; the seal, never a part, runs the DROP's body and list checks, streaming the
+          slices, so lists are not capped to one part, and format 1 needs no new refusal, flag 256 refusing a DROP
+          as FORMAT_UNSUPPORTED before the field is read
+http      bodies are evs.proto messages, application/x-protobuf, but a segment PUT's raw bytes: EvsPushRequest
+          {statement 1, payload 2, receipts 3, staged 4, part_places 5}, statement the Signed EvsPush bytes as
+          received, a seal setting part_places and no payload; EvsPartRequest {statement 1, part 2, receipts 3,
+          staged 4}; EvsLeaseRequest {ref_id 1, base_version 2, ms 3}; EvsPushReply {version 1, place 2,
+          deposit_head 3}; EvsRefusalReply {push_id 1, code 2, recorded 3, retry_after_ms 4, paths 5, outcome 6,
+          needs_format 7, quota 8, deposit_head 9}; the read reply is a stream of u32 length | EvsReadFrame (11.9)
 ```
 
 ### 11.7 Diffs, checkpoints, index entries, reconstruction
@@ -449,17 +524,17 @@ setting   per file version: 0 keeps every version (the default); 1 versionless; 
           the repo's ur/index ref; 11.14; owner decision 168); in format 2 only 11.14's mechanisms write under
           .ur-index/ and on ur/index, and readers ignore any other version there and alarm; directories carry 0;
           a path's setting is its newest version's, and a new version keeps it unless its writer sets another
-choose    a writer sets a new path's setting from the rules in force at its creation (owner decision 167): the
-          repo's own, from its access log's RepoVersioning (§8.8), else its network's VersioningRules (§7.9), else
-          the platform rule, versionless above 64 MiB of plaintext; first match wins; a present rule set replaces
-          the next source entirely, so a path none of its rules matches is created versioned (0), and the platform
-          rule applies only where neither the repo nor the network has a record (owner decision 164); an
-          owner-bound repo's own rules are sealed to its generation, so only that repo's readers read them (§8.8);
-          the index writes 2, 11.11's git-lfs store 1 and §15.7's mail component s/model 1 (each 0 in a locked
-          repo, the index excepted), and the team directory 1 on its cards ref's d/, r/ and q/ paths from its
+choose    a writer sets a new path's setting from the rules in force at its creation (owner decision 167): the repo's
+          own, from its access log's RepoVersioning (§8.8), else its network's VersioningRules (§7.9), else the
+          platform rule, versionless above 64 MiB of plaintext; first match wins; a present rule set replaces the
+          next source entirely, so a path none of its rules matches is created versioned (0), and the platform rule
+          applies only where neither the repo nor the network has a record (owner decision 164); an owner-bound
+          repo's own rules are sealed to its generation, so only that repo's readers read them (§8.8); the index
+          writes 2, 11.11's git-lfs store 1 (its settings file 0) and §15.7's mail component s/model 1 (each 0 in a
+          locked repo, the index excepted), and the team directory 1 on its cards ref's d/, r/ and q/ paths from its
           format 2 (format 1's notices are versioned files; §16.11), whatever the rules say; a writer changes an
-          existing path's setting only explicitly (ur evs versioning, MCP's and the SDK's argument), as a new
-          version that rewrites nothing stored; evs never reads rules
+          existing path's setting only explicitly (ur evs versioning, MCP's and the SDK's argument), as a new version
+          that rewrites nothing stored; evs never reads rules
 refused   409 VERSIONING for 1 or 2 in config and mailcfg repos, whose replaying readers verify authority from
           every version (§7.9, §15.7), on git-mode refs, and on creates-only refs (record-class streams, deposit
           and erasure refs); for 1, not 2 (owner decision 168), in a repo whose access log holds a lock §8.8's
@@ -476,7 +551,8 @@ kind 5    a segment holding exactly one record of one versionless version, its 4
           (id, AEAD, then content_sha256 and the git oid); an upload whose header names another push than its
           ?push= gets 409 VERSIONING, and its receipt marks it versionless (11.6), so equal bytes are only ever the
           same push's retry and no push adopts another's segment as its own upload
-staged    a record that pads to at most 16 KiB rides in its push's or part's payload as a one-record segment
+staged    a record that pads to at most 16 KiB, but an ur/lfs object's, which is always a kind-5 upload so a touch
+          always cites it, rides in its push's or part's payload as a one-record segment
           (Padmé-padded) instead of PUT .../segments: its new-objects entry carries a staged mark and its locator
           staged = true; no receipt; evacuation moves the record without the staged bytes and writes them to seg/
           only while their version is retained (11.13), so content replaced within about a day of its write never
@@ -488,7 +564,8 @@ cite      a kind-5 segment is named only by the version that introduced it and t
           segment only by its introducing version, a later version re-staging its <= 16 KiB
 keys      general repos keep each kind-5 segment's key in its sealed header, so it goes with the segment; slot-keyed
           repos (record-class repos, group inboxes) keep a versionless path's one key in a slot that only that
-          path's versions name, reused by each next version until checkpoint rule (4), a CLOSURE or ur evs rekey
+          path's versions name and, in turn, the rename target of the push that removes it, reused by each next
+          version until checkpoint rule (4), a CLOSURE or ur evs rekey
           draws a fresh one in a new slot, so an overwrite writes no slot
 removal   a push removing a directory, and a ref's DELETE, list each versionless file below as a file removal (the
           client holds the tree), so the commit names every version it replaces and the purge deletes their content
@@ -531,7 +608,8 @@ This is Perforce's rule, applied per version: each version's own setting says wh
 
 ```text
 action    a DROP push (flags 256) on the path's ref carries EvsDropHistory (11.6): per lineage of the path's token
-          paths across epochs, its versions below through_version, by entry hash; not_before_ms is time_ms + 7
+          paths across epochs, its versions with an entry_sha256 below through_version, by entry hash, a removal
+          having none, so it is never listed or counted; not_before_ms is time_ms + 7
           days, or time_ms with now, as RepoDelete's (owner decision 183); one repo admin signs it, in an owner-bound
           repo only a consented, not-read-only device of its owner (owner decision 126), never MCP (§16.6); any repo
           admin (owner-bound: such a device of the owner) cancels it by a DROP with action 2 committed before
@@ -569,20 +647,28 @@ states    drop_pending: a listed version before not_before_ms by the reader's cl
           refused: nothing fetched or shown, history keeping its version, time, signer, entry hash and, where
           served, padded size; no alarm for a listed version, while a 404 on a version no live drop lists alarms
           as a missing segment does; a DROP failing a reader's checks (its signer's role at its auth pin, for a
-          drop no lock there (§8.8), drop_sha256 and listed_sha256, each lineage entry the path's token path in
-          its epoch, the boundary, and, replaying, the listed set equal to the lineage's versions below
-          through_version) raises SidecarEvent history_drop in state invalid, naming the signer (§5.4), and drops
+          drop no lock there (§8.8), drop_sha256, not_before_ms equal to time_ms + 604,800,000 or time_ms, each
+          lineage entry the path's token path in its epoch, the boundary, and, replaying, listed_sha256 and the
+          listed set equal to the lineage's versions with an entry below through_version, which only a replaying
+          reader holds whole) raises SidecarEvent history_drop in state invalid, naming the signer (§5.4), and drops
           nothing for that reader; a replaced versionless version in range stays collected; D-TEST-18's observe
           mode changes only whether the server deletes
 holds     a hold never refuses the DROP push; its deletions wait while a hold covers the repo, and the drop reads,
           lists and bills as finished (owner decision 184; 11.13)
 refused   409 DROP_KIND in config and mailcfg repos; REF_MODE on git-mode refs, overlays included, and creates-only
-          refs; DROP_PATH for ur/index, ur/lfs, .ur-index/ and directory paths; VERSIONING for a versionless head, a
-          locked repo (a drop, never a cancel), or a format-1 repo outside §19.11's format2 gate; DROP_CONSENT for
+          refs; DROP_PATH, recorded, for a lineage whose head is a directory entry or at versioning 2; VERSIONING,
+          recorded, for one at versioning 1, a locked repo (a drop, never a cancel), or a format-1 repo outside
+          §19.11's format2 gate; the reserved names, which X2 hides from evs (ur/index, ur/lfs and .ur-index/),
+          refused by name at honest clients and by readers, a DROP whose lineage resolves to one raising
+          history_drop in state invalid, naming the signer, and its written version there ignored, as the setting
+          row ignores any version under an index root no 11.14 mechanism wrote, though an admin on a modified client
+          can drop old versions of a versioned file there (<root>/settings, ur/lfs's settings, or an ur/lfs object
+          written at versioning 0 under a since-lifted lock), the head staying each time; DROP_CONSENT for
           an owner-bound repo's other signers; DROP_BOUNDARY for a written version that is not the path's next,
           versioning 0 and self-contained, or a removed one that is not the standing removal; DROP_LIST for a list
           whose count, order or repeats are wrong, past 2^20, or, written, lacking the base step 4 read; DROP_STATE
-          for a cancel of no pending drop on this ref, or within 60 s of its not_before_ms; 403 below admin scope;
+          for a drop whose not_before_ms is neither time_ms + 604,800,000 nor time_ms (a cancel carries 0), a cancel
+          of no pending drop on this ref, or one within 60 s of its not_before_ms; 403 below admin scope;
           429 past evs_drops_per_day (§20.4), which counts drops (EvsDropHistory action 1) only: a cancel never
           counts and is never refused by it, so one admin's drops cannot block another's cancel (owner decision 183;
           D-QUOTA-12); QuotaRefusal at the limit when the kept checkpoint needs an upload
@@ -692,6 +778,16 @@ collect   markers whose removal r the horizon has passed by a base range (folded
           (11.8's fence row), and a 404 needs no wait, a window deleting a key once; each margin needs only those
           clocks and §19.6's deadline and settle rules, never a measured lag, and on a cluster whose build has not
           passed §22.9's settle cases (FS-114) taskworker opens no window, markers staying
+orphan    carried ids never leave with their entry: before a write or delete would drop them (a fold's creation over
+          a marker with carried ids, a fold's creation over an entry whose newest versionless version a prefix
+          removal in the same fold range did not list, so no marker was ever written, or a copy's unmoved delete of a
+          source marker with carried ids), the fold or copy first PUTs an orphan marker idx/<repo>/<ref>/_o/<r as 20
+          digits>-<first 8 B of SHA-256(ids) in hex>.e (If-None-Match, equal bytes on 412 success) holding {removing
+          push id, r, token path, kind-5 segment ids, slot ids}, then proceeds, so a crash only repeats the PUT; the
+          collection LISTs idx/<repo>/<ref>/_o/ once per ref and collects each whose r is at or below the window's
+          through exactly as a marker, by the same margins, clock and hold rules, a hold leaving it for a window
+          after the hold ends, deleting only ids the path's newest version does not name; its key sits outside any
+          epoch, so copies never move it, and evs-4's and evs-5's ttls hold
 directory a push's directory change is a delta {names added, child tokens removed} that merges without a path-level
           CAS, since each child's own path is checked, except that a child directory D is checked both ways: a push
           removing D gets 409 with D's path if a delta to D committed after its base, and a push changing D gets
@@ -730,7 +826,8 @@ metadata cluster (NVMe)                    holds                                
 place/<repo_id>                            the repo's metadata cluster (placement, below);  If-None-Match       <= 256 B   the repo and its
                                            first cluster only                                                              tombstone
 repo/<repo>                                kind, owner_member_id, state and deletion_id     If-Match            <= 4 KiB   the repo; a shredded
-                                           (11.12), object format, sealed name                                           tombstone stays
+                                           (11.12), object format, sealed name, its                                        tombstone stays
+                                           network_id, set at creation and never changed
 head/<repo>/<ref>                          the commit point: fields, 64-byte window         If-Match; created   <= 9 KiB   the ref; DELETE leaves
                                            entries                                          If-None-Match       (17 while  a tombstone head
                                                                                                                 folds lag)
@@ -741,7 +838,8 @@ pb/<yyyymmddhh>/<mm>/<instance>-<seq>      a batch: push, part, seal and reseed 
                                            versionless segments
 idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e       index entry in path epoch p: folded committed    If-Match; created   <= 512 KiB the path; a
                                            versions, or a removal's marker, its state in    If-None-Match                  marker until
-                                           object metadata (11.7)                                                          collected (11.7)
+                                           object metadata (11.7); orphan markers at                                       collected (11.7)
+                                           idx/<repo>/<ref>/_o/ (11.7's orphan row)
 slot/<repo>/<slot_id>                      up to 64 sealed object keys: under fek_g, or     If-None-Match;      <= 8 KiB   until erased, consumed,
                                            HPKE to the drop key for deposits                rewritten If-Match             shredded or dropped
                                                                                                                            (11.13); a dead
@@ -760,12 +858,15 @@ pidx/<repo>/<ref>/<v_first>-<id>           a pack's records and log pages, or a 
                                            container's (11.13)
 spidx/<repo>/<n>/_                         reserved (11.13): offsets of segments in a pack  If-None-Match       <= 1 MiB   as its pack
 hold/<network_id>/<case_id>/_              §21.9's preservation hold, written by api;       api                 <= 1 KiB   its kind's (§21.9):
-                                           first cluster only                                                              90 d, renewable
-                                                                                                                           once, or 1 year for
-                                                                                                                           report_2258a
+                                           first cluster only; UTF-8 JSON {version,                                        90 d, renewable
+                                           network_id, case_id, kind, scope,                                               once, or 1 year for
+                                           place_time_ms, expire_time_ms}, unsigned                                        report_2258a
 drops/<repo>/_                             the repo's drop table, running drop job and dry  If-Match; created   <= 64 KiB  the repo; an entry
-                                           runs (11.13)                                     If-None-Match                  30 d after its drop
-                                                                                                                           or dry run ends
+                                           runs (11.13)                                     If-None-Match                  at most 30 d after
+                                                                                                                           its drop or dry run
+                                                                                                                           ends, a void record
+                                                                                                                           the repo's life
+                                                                                                                           (11.13)
 segment cluster (HDD)
 seg/<repo>/<segment_id>                    one segment; segment_id = SHA-256 of its bytes   If-None-Match and   <= 8 MiB   while a retained
                                                                                             its checksum                   version names it; a
@@ -849,6 +950,8 @@ message EvsHead {                       // head/<repo>/<ref>; written only by If
   bytes refused = 25;                   // 16-byte EvsRefusal records, at most 8, oldest first (outcomes)
   int64 refused_ms = 26;                // its writer's clock at the newest refusal fence
 }
+// evs.proto also declares EvsHead's consumed_through = 27, the never-falling mark evs copies from a CONSUME
+// (11.12's deposits row), which joins this fence in one change with protocol's fence test
 message EvsOverlay { bytes ref_id = 1; uint64 version = 2; }
 message EvsSealLease { bytes push_id = 1; int64 until_ms = 2; }
 message EvsPathEpoch {
@@ -929,8 +1032,9 @@ latency   under light load a push's record is written at once, in step 6's round
 ```text
 client 1  choose push_id P; build the statement on the head it read (v = b, C_b)
        2  PUT each new segment (chains over 16 KiB; at most 4 at once; a versionless record padding to at most 16 KiB
-          is staged in the payload instead, 11.7) with ?push=P: evs streams it with If-None-Match and its id as
-          x-amz-checksum-sha256 and answers 200 {receipt} (11.13's uploads); the client posts only after every 200
+          is staged in the payload instead, but an ur/lfs object, which is always an upload, 11.7) with ?push=P: evs
+          streams it with If-None-Match and its id as x-amz-checksum-sha256 and answers 200 {receipt} (11.13's
+          uploads); the client posts only after every 200
        3  POST .../push {Signed EvsPush, payload, receipts}
 evs    4  the head first: its verified cache entry (11.9) when that version is at least b, else a cluster GET, a
           round (any refusal rests on a cluster read, outcomes below), with the head of any other ref a `reuse`
@@ -940,7 +1044,9 @@ evs    4  the head first: its verified cache entry (11.9) when that version is a
           source (committed in its ref's entry, or, with its statement, in that ref's window) and, from the
           process's cache or batch ranges, the statement of each window version after that folded_through whose
           digest matches a changed path or a prefix holding it, and for a PATH_EPOCH, of each window version after
-          its map's source that creates a path; for versions older than the window, the log pages that settle them
+          its map's source that creates a path, and the statement and DROP body, never the lists, of every window
+          version with bit 5 set, whatever its digest and folded_through, which 5h's DROPPED check reads; for
+          versions older than the window, the log pages that settle them
           (cached); the authorization state and the generation record from evs's caches (§10)
        5  checks:
           a  retry: P already committed (the head window, or the log pages of (b, b+64]) -> 200 {its version}; a
@@ -951,7 +1057,10 @@ evs    4  the head first: its verified cache entry (11.9) when that version is a
              further ahead of evs's clock getting 429 TIME_AHEAD with retry_after_ms, which refuses nothing, so a
              refusal record lasts at most twice that bound and 1 s; statement <= 1 KiB; payload hashes (11.6)
           c  scope, ref kind and ref mode rules (the refs table below), 11.7's versioning refusals and lock, and the
-             repo's format (11.6), else 409 VERSIONING; a DROP's kind, path, consent and cancel rules and, for a
+             repo's format (11.6), else 409 VERSIONING, a format-2 evs's answer outside §19.11's gate, while
+             format-1 evs answers a format-2 construct in a push, part or seal 409 FORMAT_UNSUPPORTED
+             {needs_format: 2}, and a format-2 repo/ on a format-1 binary 503 with Retry-After before step 4,
+             writing nothing; a DROP's kind, path, consent and cancel rules and, for a
              drop but never a cancel, its network's evs_drops_per_day (11.7's refused row); the erasure ref's id
              only with ref_kind erasure, and ref_kind erasure only at that id (409 REF_MODE; 11.6's ref ids row);
              repo/ state active; 11.13's storage limit
@@ -968,7 +1077,8 @@ evs    4  the head first: its verified cache entry (11.9) when that version is a
              (4)); a creation while due_blocks_creation or before block_until_ms, or in a push whose own commit
              would record a due that blocks (owner decision 229) -> 412 PATH_EPOCH_DUE
           f  base: git mode b = v (TIP) and no live lease of another push; file mode b >= v - 63, so the push lands
-             within (b, b+64], and C_b matches the history
+             within (b, b+64], and C_b matches the history, else 409 BASE_STALE, carrying EvsDepositHead from the
+             cluster head on the caller's own deposit ref (11.12)
           g  path-level CAS on each changed file path: its newest committed version (11.7's rule: the entry, or a
              newer version after the folded_through of the head read before it) equals base_entry_version, 0 naming
              it absent, each new version following 11.7's versions rule (a creation's max(b, m) + 1, b the effective
@@ -982,12 +1092,14 @@ evs    4  the head first: its verified cache entry (11.9) when that version is a
              completed fails only that file's reads, which readers alarm on; kind-5 locators only in versionless
              versions, each naming a staged segment of this push, an upload of this push whose receipt is marked
              versionless, or an unstaged kind-5 locator of its path's base version or of a path this push removes,
-             never a reuse source's; a versionless version's kind-1 locators only from its path's base version, and
-             no kind-2 locator; no slot a versionless version names named by another path's version; else 409
-             VERSIONING; no base, deleted path or reuse source a DROP lists (11.7's fence; 409 DROPPED); from M2
-             (11.22), every slot a new version names introduced by this push or named by a version step 4 read; a
-             DROP's written boundary and its lists' base (409 DROP_BOUNDARY, DROP_LIST; 11.7); then the push's purge
-             candidates (11.13)
+             never a reuse source's; a versionless version's kind-1 locators only from its path's base version or a
+             path this push removes, and no kind-2 locator; no slot a versionless version names named by another
+             path's version, but a version the push creates may name the slot of a path this push removes (a rename),
+             each kind-5 segment or slot of a removed path named by at most one new version of the push, checked
+             across parts at the seal; else 409 VERSIONING; no base, deleted path or reuse source a DROP lists
+             (11.7's fence; 409 DROPPED); from M2 (11.22), every slot a new version names introduced by this push or
+             named by a version step 4 read; a DROP's written boundary and its lists' base (409 DROP_BOUNDARY,
+             DROP_LIST; 11.7); then the push's purge candidates (11.13)
        6  one round: append P's record to the process's open batch, a batch opening only while the process's clock is
           sure (§19.6), and await its write (batches, above); if the window would pass 127 versions, fold any of its
           oldest 64 still unfolded (If-Match) and PUT log/<n> for them (If-None-Match; equal bytes on 412), or, if
@@ -1000,15 +1112,17 @@ evs    4  the head first: its verified cache entry (11.9) when that version is a
           - any paged out, window_base_chain, folded_through, written_ms, lease cleared, and for a CUT index_epoch
           v+1} If-Match step 4's ETag: the commit point; issued only within 5 s of step 4's reads, else steps 4
           and 5 (a-h) run again first
-       8  outcome (below): 200 -> reply 200 {v+1}; then the push sequence and hints (11.10), usage events (11.13),
+       8  outcome (below): 200 -> reply 200 {v+1}, with EvsDepositHead on the caller's own deposit ref (11.12);
+          then the push sequence and hints (11.10), usage events (11.13),
           the head cache entry (11.9), a DROP's or cancel's append to drops/<repo>/_ (If-Match, retried on 412)
           and its {evsd_} hint to taskworker (11.13), the fold of the oldest 64 if 96 are unfolded, and, 60 s
           later, the purge of its candidates (11.13), off the reply path
 parts     a push over 1 MiB or 1,024 entry writes goes in n <= 1,024 parts within both bounds, a part holding no
           change only when it holds a slice of a spilled section such as sealed metadata: such parts come after
           every part that holds a change, carry no changes_root and are no leaf of the statement's root, and
-          parts_sha256 covers them, evs recording and hashing them with no entry check (owner decision 239); the
-          client signs the
+          parts_sha256 covers them, evs recording and hashing them with no entry check (owner decision 239), each
+          part's sections field carrying its slice of the payload's other sections (11.6's Bytes); the client signs
+          the
           statement with part_count, parts_sha256 and changes_root, then POSTs .../push/P/<k> {Signed EvsPush,
           EvsPushPart k, receipts}, at most 4 at once; evs runs steps 4, 5 (a-e, g, h) for that part's entries,
           appends the part, its receipts and the head version it checked as a batch record (a batch alone above
@@ -1069,21 +1183,23 @@ fence     evacuation's fences raise the head's fence and set fence_ms (GC raises
           answers pushes 503 before step 4, and a taskworker in that state raises no fence and GC deletes nothing,
           so a pending record or an unadopted segment simply stays
 refuse    every refusal rests on a head read from the cluster (a cached step 4 that would refuse reruns with a GET);
-          one the head or a terminal repo/ state settles for good (5a, 5c's shredding and ref rules and DROP_KIND,
-          5d's pins and an index_epoch below the head's, 5e's epoch and tail, 5f, 5g's path and removal checks,
-          11.12's rekey rule) is final, and a part's needs nothing more, since only its push's seal commits; before
-          answering any other (5b's time, 5c's scope, keying, deleted state or storage limit, DROP_PATH, DROP_CONSENT
-          and DROP_STATE, 5d's predicate and an index_epoch above the head's, 5e's map parts, EPOCH_SOURCES_FULL and
-          a block's PATH_EPOCH_DUE, 5g's DIRECTORY_FULL, 5h with DROPPED, DROP_BOUNDARY and DROP_LIST, step 6's
-          SLOT_STALE, 11.12's NOTHING_TO_ERASE), evs records it: one head CAS, the push's refusal fence, raises the
-          fence and adds {P, its statement prefix, the code, until} to the head's refusal records, until being
-          time_ms plus P's bound (10 min, a seal's 30 min) and 1 s, retried after a 412 at most 8 times until it
-          lands, P shows committed (-> 200) or P shows recorded (-> that refusal), else 503 {push_id, outcome:
-          unknown}; then an attempt of P that read an older head fails its step 7 on the new ETag, one that reads the
-          record gets it from 5a, and one that reads the head after the record lapsed fails 5b, the dropping
-          writer's clock being within 50 ms of UTC, so no attempt of P, however late it reaches evs, commits after
-          the answer, a stale over-limit list included; with 8 records live, or a refusal fence under 1 s old
-          (refused_ms), evs answers 429 with retry_after_ms instead; a 429 refuses nothing, and the client retries P
+          one the head or a terminal repo/ state settles for good (5a, 5c's shredding and ref rules, DROP_KIND and
+          VERSIONING from a config or mailcfg repo, a git-mode ref or a creates-only ref, 5d's pins and an
+          index_epoch below the head's, 5e's epoch and tail, 5f, 5g's path and removal checks, 11.12's rekey rule) is
+          final, and a part's needs nothing more, since only its push's seal commits; before answering any other
+          (5b's time, 5c's scope, keying, deleted state or storage limit, VERSIONING from the lock, §19.11's gate or
+          a DROP's versionless head, FORMAT_UNSUPPORTED, DROP_PATH, DROP_CONSENT and DROP_STATE, 5d's predicate and
+          an index_epoch above the head's, 5e's map parts, EPOCH_SOURCES_FULL and a block's PATH_EPOCH_DUE, 5g's
+          DIRECTORY_FULL, 5h with DROPPED, DROP_BOUNDARY and DROP_LIST, step 6's SLOT_STALE, 11.12's
+          NOTHING_TO_ERASE), evs records it: one head CAS, the push's refusal fence, raises the fence and adds {P,
+          its statement prefix, the code, until} to the head's refusal records, until being time_ms plus P's bound
+          (10 min, a seal's 30 min) and 1 s, retried after a 412 at most 8 times until it lands, P shows committed
+          (-> 200) or P shows recorded (-> that refusal), else 503 {push_id, outcome: unknown}; then an attempt of P
+          that read an older head fails its step 7 on the new ETag, one that reads the record gets it from 5a, and
+          one that reads the head after the record lapsed fails 5b, the dropping writer's clock being within 50 ms of
+          UTC, so no attempt of P, however late it reaches evs, commits after the answer, a stale over-limit list
+          included; with 8 records live, or a refusal fence under 1 s old (refused_ms), evs answers 429 with
+          retry_after_ms instead; a 429 refuses nothing, and the client retries P
 first     a push creating its ref, whose head is absent, records a refusal in a placeholder head created
           If-None-Match at version 0 with no window, kind or mode, which reads, listings and GET .../refs treat as
           absent and the ref's first commit replaces by If-Match, as a later push continues a tombstone head's
@@ -1151,7 +1267,8 @@ I-EVS-9  a kind-5 segment, or a slot that only a versionless path's versions nam
          deleting process's clock, and no hold keeps it; every path's newest version keeps its content
 I-EVS-10 no committed version names a kind-5 segment except the version that introduced it, that path's later
          versions on the same ref in turn, and rename targets in the push that removes the path; a staged
-         segment only its introducing version; a versionless path's slot only that path's versions
+         segment only its introducing version; a versionless path's slot only that path's versions and, in turn,
+         the rename target of the push that removes it
 I-EVS-11 at a ref version, each document key has at most one version in the all partition and at most one in each
          bucket's shards, and a reader's merged view holds each document's newest indexed version or nothing; the
          push that removes an expired bucket adds its documents to all
@@ -1250,13 +1367,17 @@ moved     GET .../refs?moved_after=<push sequence> lists only the refs whose las
           a value from before the sequence's restart, or a hash that lacks a ref, answers every ref, as GET
           .../refs does; a commit whose raise a crash lost (11.10's sequence row) is listed only at its ref's
           next commit, so a reader also lists every ref, with no moved_after, at its first sync each UTC day
-reply     one framed stream: the head summary (v, C_v, push id, pins, path epoch, index epoch); the Signed EvsPush
+reply     one framed stream of u32 length | EvsReadFrame, each frame one of these parts by its set fields, with no
+          oneof (§22.5's lint), the last with end true: the head summary (v, C_v, push id, pins, path epoch, index
+          epoch); the Signed EvsPush
           of every version after pin_version, from the window's places, or `behind` with the first missing
           version when the pin is older than the window (the client pages GET .../log?ref=&since=, <= 1,000
           statements a page); per
           path, the newest committed version (older ones on request, a replaced versionless version answering
           `collected` for its content, a listed one `drop_pending` {drop_id, not_before_ms} or `dropped` {drop_id,
-          version} with the DROP's statement, body and the list range proving membership; for a removed path, its
+          version} with the DROP's statement and body, from which a head reader decides membership alone: V is
+          listed iff some EvsDropPath's lineage holds V's token path in V's epoch, V is below through_version and
+          V has an entry, every reader checking drop_sha256 over the body; for a removed path, its
           removal's push id, version and path version, from its marker or the window; on an overlay, `base` for a
           path it holds no version of; 11.7), with the statement
           that wrote it (when not among those returned) and its Merkle proof,
@@ -1294,14 +1415,20 @@ reader    checks each returned statement's signature against its config's writer
           alarms if the served version is below the record's or a later statement changes the path, then raises
           the record (owner decision 209); a head below its pin is refused unless a verified EvsReseed covers it
           (11.13, §19.10), which it shows as a loss
-collected a kind-5 segment or staged range that 404s answers `collected` for a replaced versionless version, whose
-          reader re-reads the head fresh and restarts on the newest version, and a 404 of a listed version's content
+collected from T, the end of the UTC minute in the replacing record's EvsPlace plus 60 s, every read of a replaced
+          versionless version answers `collected` by evs's checked clock, whether or not its bytes remain (staged in
+          a batch, purge: observe, or kept by a hold), evs serving it before T and never using time_ms, which may
+          trail the commit by 10 min (30 for a seal), so client reads stay version-addressed; any version whose
+          kind-5 segment or staged range 404s answers `collected` too; its reader re-reads the head fresh and
+          restarts on the newest version, and a 404 of a listed version's content
           reads `dropped`, with no alarm, unless its drop was cancelled or refused (11.7's states); for a path's
           newest version it alarms as a missing segment does (11.7)
-dropped   a reader shows a listed version by 11.7's states, which the DROP's signed list, window and cancels decide;
+dropped   a reader shows a listed version by 11.7's states, which the DROP's signed body, window and cancels decide,
+          a replaying reader holding its lists too;
           evs's refused report is unsigned and only lets a reader show content still stored, so a lying server can
           at most hide content; a read of its content answers EVS_DROPPED (§18.5; MCP FAILED_PRECONDITION)
-serve     from not_before_ms, unless the drop is cancelled or refused, evs serves for each listed version its
+serve     from not_before_ms, unless the drop is cancelled or refused (its void record, 11.13's table row; a drop
+          absent from the table with none reads executed, the safe default), evs serves for each listed version its
           statement and `dropped`, its entry version only when its chain names no inline record, never an inline
           record of its chain (elided from any record it serves, every other entry version keeping its own hash),
           and, once the job's delete set exists, no byte of a deleted, held or packed id in it (404, as if
@@ -1311,6 +1438,9 @@ trusts    for a path it has never read or no longer remembers (its record evicte
           re-pin past the budget, for every path, is evs's word (it could serve an older version or a refused
           push's entry); every later change is verified; its next HeadCheck with a replaying peer confirms the pin
           (v, C_v), not those versions (§2.8)
+states    a path entry's state is EvsReadPathState {0 unspecified, 1 collected, 2 drop_pending, 3 dropped}, with the
+          states' payloads (drop_id, not_before_ms, version) as ordinary fields of that entry; format-1 code
+          refuses each as FORMAT_UNSUPPORTED {needs_format: 2}, and the enum joins D-PHASE-9's reservation lint
 budget    a mobile catch-up fetches at most 4 MiB of statements and proofs (4,000-8,000 versions); further behind,
           the reader re-pins at the head and marks the gap, shown as "verified since <time>"
 ```
@@ -1345,7 +1475,8 @@ sequence after a commit, evs raises the push sequence {evsq_<repo_id>} in Redis 
          skip sends it to the window; GET .../refs returns it; a crash before the raise leaves that commit to the
          hourly resync; the hint's delta also lets a client compare the ref's version with its pin
 hint     §6.8's PushHint{topic "evs:<repo_id>", version: the push sequence, delta} per matching client, delta
-         EvsHeadChanged{ref_id, version, chain, push_id}, coalesced to 10 per second per repo
+         EvsHeadChanged{ref_id, version, chain, push_id}, numbered 1 to 4 in that order, version the ref's while
+         PushHint.version is the repo's push sequence, coalesced to 10 per second per repo
 gap      hints are lossy (§6): a client catches up at once on repos whose versions moved in §6.8's PushReset,
          reading the window or GET .../log?ref=&since= (<= 1,000 versions a page); its full resync of every
          subscribed ref, fresh, runs hourly at a random offset, and after an incomplete reset a background daemon
@@ -1395,7 +1526,7 @@ import      ur evs import <dir> [<ref>]: into a new or owned ref, cut at commits
             that <dir>'s own git-lfs store holds, so the tip check refuses only what neither store holds
 ```
 
-**Binding (owner decisions 84, 130; D-TRUST-8).** Listeners bind all interfaces unless `--listen` narrows them (cli/UI.md:11). Plain http with Basic auth, which git needs before 2.46 (https://github.com/git/git/blob/v2.46.0/Documentation/RelNotes/2.46.0.txt), answers only on 127.0.0.1 and ::1; beyond loopback the mount serves only ssh, whose host key `ur mount` prints, or https with the device's §13 certificate, else a self-signed one whose fingerprint it prints (§15.10). HTTP checks Host; an ssh key maps to the sidecar or an isolated agent (§5.5).
+**Binding (owner decisions 84, 130; D-TRUST-8).** Listeners bind all interfaces unless `--listen` narrows them (cli/UI.md:11). Plain http with Basic auth, which git needs before 2.46 (https://github.com/git/git/blob/v2.46.0/Documentation/RelNotes/2.46.0.txt), answers only on 127.0.0.1 and ::1; beyond loopback the mount serves only ssh, whose host key `ur mount` prints, or https with the device's §13 certificate, else a self-signed one whose fingerprint it prints (§15.10). HTTP checks Host; an ssh key maps to the sidecar or an isolated agent (§5.5). The http front, on loopback and off, takes Basic with username `ur` and a per-mount secret, 32 random bytes `ur mount add` draws and keeps in the sealed store (§5.9), compared in constant time, else 401; `git-credential-ur` (§4.10, §7.17), which `ur mount add` and `ur mount share` set as the clone's `credential.<url>.helper`, dials the daemon's control socket, whose peer-uid check (§5.8) is the real authentication, and prints the username and secret for a host and port the daemon serves, nothing for any other. The secret never enters a remote URL, an environment variable, MCP output or a log, and grants only what the daemon grants its OS user, as §15.10's credential does (owner decision 47); no service token is involved, so I-7 takes no exception.
 
 **Refs (D-EVS-28):**
 
@@ -1472,13 +1603,24 @@ tip check git-lfs uploads only objects of commits the remote's old tip does not 
 smudge    checkout reads objects through the agent; ur mount sets lfs.skipdownloaderrors, so a commit whose objects
           were pruned checks out with pointer files in their place, and ur names each such object and when its prune
           committed; the tip check keeps every current tip's objects present, so only history checks out pointers
-prune     daily, an indexer (§7.9's IndexerSet) or another device holding every ref reads every ref's head from evs
-          at its start s (syncing a tip it lacks, else refusing) and removes, in one push (parts as needed), each
-          object that no tip of that read and no commit of the last N days requires (R) and whose newest version, its
-          last upload or touch, is older than N days at s; N is 30, or a repo admin's setting of at least 7 days in
-          ur/lfs's signed settings file (a smaller value reads as 7); each removal names the object's version, so a
+prune     daily, any device holding every ref that may write ur/lfs, whatever its service list, an unretired and
+          unparked IndexerSet subject (§7.9) starting at 00:00 UTC plus its offset and any other at 12:00 UTC plus
+          it, the offset u64be(SHA-256(sidecar_id || repo_id)[0:8]) mod 43,200 s, a device asleep then running at
+          its next wake that UTC day; it reads every ref's head from evs at its start s (syncing a tip it lacks,
+          else refusing) and removes, in one push (parts as needed), each object that no tip of that read and no
+          commit of the last N days requires (R), a commit counting when its committer date or the time_ms of the
+          first push that introduced it falls in [s - N days, s], and whose newest version, its last upload or
+          touch, is older than N days at s; N comes from the settings file (below); each removal names the
+          object's version, so a
           concurrent touch wins at path-level CAS and the prune reruns; the purge deletes the content a minute after
           the prune commits (11.13)
+settings  a versioned file `settings` at ur/lfs's root, one path component of those 8 bytes, which no object's
+          2-character first directory can collide with, at versioning 0 though the store's objects are 1, an inline
+          record whose body is EvsLfsSettings {uint32 window_days = 1}, marshaled deterministically and sealed as
+          any file, so it needs no §2.8 row; N is 30 when it is absent or window_days is 0, 1 to 6 read as 7, and 7
+          or more as written; a version counts only if its push's signer held repo admin (§8.8) at its auth pin,
+          else devices alarm and use the newest version such a signer wrote; a prune reads it at its start s, and
+          `ur evs lfs window <days>` writes it, 7 to 365
 ```
 
 **Mobile and wasm** run head mode: the evs core with its own git codec and delta code (about 1k lines) reads and writes single files on file-mode refs (git-mode refs are read-only in head mode) and commits only changed entries; mobile never diffs files over 1 MiB, runs at most 2 transfers, and fetches versionless content only on an explicit open, except the search index's, which follows the index's fetch policy. They write their own index entries in the push that changes a document, keep the latest buckets of the repos they sync, fetch the all partition under §18.4's policy, and merge only when out of slots or on Wi-Fi while charging (11.14).
@@ -1506,13 +1648,13 @@ secret       any number a member, owner-bound:  record-class   the owner's conse
              domain's ACME account key (§13.8)
 ```
 
-**Owner-bound** repos carry `owner_member_id` (D-EVS-11). Only the owner's consented devices (§8.5) read and write them, so one admin signature never makes a reader; others read through a consented device's `EvsShare` or as a Team's visible audit reader, the only reader admins may add, though they may revoke (owner decisions 63, 126); the owner's other sidecars deposit into its vault and mailbox, and a `secret` takes only read receipts; MCP's evs tools reach no `secret` repo and never read the config's contents (§16.6). Members refuse, and no writer commits, any other Add or wrap; KF2 parks such a device with `approval_pending`, and the owner's devices alarm on admissions under the owner they did not sign (§10.7, §5.4).
+**Owner-bound** repos carry `owner_member_id` (D-EVS-11). The first consented, not read_only device of member M with an entry to write files RepoCreate{kind vault} (§10's KF1), and M's vault is M's live vault repo whose RepoCreate has the lowest log position, live as RECORD.md section 4.2 reads it, by which writers, depositors and readers all judge at their pin; once its RepoCreate lands, and before its first write, a device reads the log, and if another repo is the vault it ingests any deposit into that one and files RepoDelete{now} for its own empty repo. Only the owner's consented devices (§8.5) read and write them, so one admin signature never makes a reader; others read through a consented device's `EvsShare` or as a Team's visible audit reader, the only reader admins may add, though they may revoke (owner decisions 63, 126); the owner's other sidecars deposit into its vault and mailbox, and a `secret` takes only read receipts; MCP's evs tools reach no `secret` repo and never read the config's contents (§16.6). Members refuse, and no writer commits, any other Add or wrap; KF2 parks such a device with `approval_pending`, and the owner's devices alarm on admissions under the owner they did not sign (§10.7, §5.4).
 
-**Naming and creation.** `repo_id` is random, URLs carry only ids (I-13), display names are sealed, and labels exist only in the config repo (owner decision 59). A sidecar files §8.8's `RepoCreate`, becoming repo admin; `PUT /evs/v1/repos/<id>` then places the repo (11.8) and writes `repo/<id>` (If-None-Match) with kind and owner from the projection, `keying` until §10's KF1. A config repo's `repo/<id>` follows its network's first projection base, whose sidecar alone holds the first `admin` token (§7.9). A team network's one `directory` repo is filed by `team-create`'s first Owner device after the config's first base (§7.5, D-TEAM-28), or by an admin device that finds none; api and readers refuse a second in a network, and api one outside the team tier, which readers cannot see (§20.5's `NetworkTierOf`). Its admins are its creator and every config writer.
+**Naming and creation.** `repo_id` is random, URLs carry only ids (I-13), display names are sealed, and labels exist only in the config repo (owner decision 59). A sidecar files §8.8's `RepoCreate`, becoming repo admin; `PUT /evs/v1/repos/<id>` then places the repo (11.8) and writes `repo/<id>` (If-None-Match) with kind and owner from the projection and network_id from the token's network, checked against the projection's AclRepo, never changed and kept in the shredded tombstone, `keying` until §10's KF1; taskworker matches `hold/` and reports stored bytes by that network, a re-seed writes it from the projection, and a reader that finds it absent treats the repo as held and keeps everything. A config repo's `repo/<id>` follows its network's first projection base, whose sidecar alone holds the first `admin` token (§7.9). A team network's one `directory` repo is filed by `team-create`'s first Owner device after the config's first base (§7.5, D-TEAM-28), or by an admin device that finds none; api and readers refuse a second in a network, and api one outside the team tier, which readers cannot see (§20.5's `NetworkTierOf`). Its admins are its creator and every config writer.
 
 **Grants (owner decisions 7, 8, 60, 114, 144, 182).** Member devices are leaves of the repo's MLS group, except readers of the config and of the team directory past §7.9's first 1,000, which read by wraps; the directory's readers are fixed by kind, which refuses `RepoAdmin` adds, `RepoGrant` and `RepoRevoke` (§8.5, D-ACL-24); tagged, ephemeral, CI and cloud sidecars hold per-generation `ReaderWrap`s or a covering Delegation's wrap (§10.5), and RecoveryWraps hold recovery copies (owner decision 62). Writers are sidecars whose pushes readers accept. Repo admins and config writers sign the access log (§8.8), which clients verify from the config repo and the token exchange mirrors as scopes. `ur mount share` files a grant, or an `EvsShare` for owner-bound kinds; `ur share` is §9's (D-SOCK-16).
 
-**Deposits.** `Deposit(name, reader)` checks the drop key against §10's `GenRotate_g` and §10.5's depositor rule, then appends entries under random ids, each body under a random key that a slot holds HPKE-wrapped to the drop key (below), to the depositor's `deposit` ref (11.6); entries may span segments, so 50 MiB messages pass the lb (§15). Receivers and tagged or headless sidecars deposit; a reader with `rw` ingests in version order, then commits a CONSUME deleting the entries and their slots. A reader of an owner-bound repo that is not its writer deposits only `read` receipts (§16.8): at most 4 KiB each and 256 a day per repo, else 429; evs sees only sealed bytes, so the owner's ingest enforces the kind, taking from such a depositor only entries of kind `read` with source `observed` and consuming any other without ingesting it, with an alarm.
+**Deposits.** `Deposit(name, reader)` checks the drop key against §10's `GenRotate_g` and §10.5's depositor rule, then appends entries under random ids, each body under a random key that a slot holds HPKE-wrapped to the drop key (below), to the depositor's `deposit` ref (11.6); entries may span segments, so 50 MiB messages pass the lb (§15). Receivers and tagged or headless sidecars deposit; a reader with `rw` ingests in version order, then commits a CONSUME deleting the entries and their slots. A depositor learns its own ref's version and chain, so it can infer that and when a reader consumed, and nothing else of the head: EvsDepositHead {version, chain, consumed_through} rides a push's 200 on the caller's own deposit ref (the version committed, or for a 5a retry the current head) and 5f's 409 BASE_STALE there, read from the cluster head and final, so nothing is recorded; every read route stays closed to it (FS-23). It keeps the newest in its sealed store and builds each push on it, rebuilding after BASE_STALE under a new push id and new slot ids and keeping receipts under 24 h old; a new ref's first push uses version 0 and C_0, which it computes. The ingester's CONSUME declares consumed_through, the highest version of the deposit ref at or below which no unconsumed deposit remains by its own read, which evs copies to the head, never falling, so a depositor, receipt-only readers included, learns when its deposits were ingested: it prunes its spooled deposits at or below the mark and keeps the rest within §16.7's 1 GiB, oldest dropped first and coverage naming spool_drop, with no age bound, since ingest lets no outcome hold a ref back. A reader of an owner-bound repo that is not its writer deposits only `read` receipts (§16.8): at most 4 KiB each and 256 a day per repo, else 429; evs sees only sealed bytes, so the owner's ingest enforces the kind, taking from such a depositor only entries of kind `read` with source `observed` and consuming any other without ingesting it, with an alarm.
 
 **Erasure** (owner decisions 61, 133) is key destruction:
 
@@ -1570,10 +1712,11 @@ cut       a CUT push (flag 512, format 2; admin, and in a directory repo the aut
           and erase rows); at the storage limit and while spent it is maintenance, spending no allowance, since its
           one staged record replaces its ref's set; an erasure that finds the set full cuts once pending ones
           complete, its first ERASE (closure, above) not waiting
-deposits  a depositor draws a random object key per deposit, seals the body under it, and puts HPKE-XWing(drop key
-          of g, object key) in a slot its deposit push introduces, so the drop private key, which every reader
-          derives from RK_g, opens a deposit only while its slot exists; CONSUME deletes the consumed entries and
-          their slots; segments of consumed deposits go after 7 d
+deposits  a depositor draws a random object key per deposit, seals the body under it and the record header, the
+          entry's sealed fields and, under its first entry's, the push's sealed metadata under K_dep from it (11.6's
+          Bytes), and puts HPKE-XWing(drop key of g, object key) in a slot its deposit push introduces, so the drop
+          private key, which every reader derives from RK_g, opens a deposit only while its slot exists; CONSUME
+          deletes the consumed entries and their slots; segments of consumed deposits go after 7 d
 after     readers mask in search, from its CUT or first ERASE, each document an erasure lists (11.14); readers and
           mirrors, on an ERASE's hint, delete their cached object keys, slot copies and every decrypted copy of
           the erased entries (local mail stores and IMAP caches, record and index caches; §15.7, §16.8, §5.9's
@@ -1583,10 +1726,15 @@ after     readers mask in search, from its CUT or first ERASE, each document an 
 residual  a mirror offline at the erasure keeps its copy until it syncs; if the site is lost and no surviving device
           holds the ERASE, a stale mirror can re-seed the key; any device holding the ERASE re-applies it; keys a
           former reader cached are beyond recall (§2.18); a ref's erasure set shows its current readers an erased
-          document's doc_key until a later CUT drops it; an erasure no device that may finish it runs stays pending,
-          masked and fenced, its remaining keys live (reconcile, below)
+          document's doc_key until a later CUT drops it, and a short dictionary block a CLOSURE left (11.14's shrink
+          row) shows them roughly which key ranges only the erased document held, until the next merge; an erasure
+          no device that may finish it runs stays pending, masked and fenced, its remaining keys live (reconcile,
+          below)
 reconcile an erasure resumes from evs's state, not one device's memory: its CUTs' sets list it until it is complete,
-          its CLOSUREs' and ERASEs' sealed notes name its id, and its ERASEs' notes name its documents and each one
+          its CLOSUREs' and ERASEs' sealed notes name its id (for the directory's erasure runner the
+          DirectoryErasureRequest's request_id, which racing runners and the 30-day sweep share, as RECORD.md's
+          ErasureBody.request_id does, so no note field is added), and its ERASEs' notes name its documents and
+          each one
           whose last key went, so a derived chain of a document whose own keys are gone is still owed; its eraser's
           device resumes it at its next start; 25 h after its CUT or its last ERASE, whichever is later, with none
           since, another device of the eraser's member that may erase it (owner-bound: a consented device not
@@ -1633,6 +1781,11 @@ directory the team directory's ERASE, CUT and CLOSURE pushes, their uploads and 
 ```text
 state      keying -> active (KF1) -> deleted{deletion_id, time, signer} -> shredding{deletion_id, time}
            -> shredded{deletion_id, time}; every transition is If-Match on repo/<repo>
+activate   POST /evs/v1/repos/<id>/activate (admin), no body: evs reads repo/ from the cluster; keying: it lists
+           gkm/repo/<id>/, reads the newest GroupForm, HEADs gkm/<group_id>/gen/1 and CASes repo/ to active by
+           If-Match, no GroupForm or no gen/1 answering 409 GROUP_NOT_READY; active: 200, so a retry is harmless;
+           any later state: that state's refusal; the write is P1 for the creating network; evs cannot see
+           whether wraps are complete, so KF1's order on the creator stays the guarantee (§10.7)
 log first  the device files §8.8's RepoDelete{repo_id, deletion_id, now} or RepoRestore{repo_id, deletion_id} into
            the access log, then calls the route, which requires that statement in evs's newest projection
            (AclRepo) and takes deletion_id, now and time from its entry, else 409 STATEMENT_MISSING; taskworker's
@@ -1672,7 +1825,7 @@ drops      a drop's job pauses while repo/ shows deleted, resumes at a restore a
            deleting everything (11.13)
 ```
 
-**Export** (`ur evs export`) rebuilds plain git: git-mode refs with their original oids, file-mode refs with one deterministic commit per version (11.7), leaving out the search index's `.ur-index/` files (its roots and erasure set) and the `ur/index` ref, which are derived (11.14), and the `ur/lfs` store (11.11), checked by `git fsck`, with signed provenance in `refs/notes/ur`; a purged versionless version exports as a git-lfs pointer to its content_sha256 and size, noted there, and a dropped version as the stub blob `ur-dropped <drop id hex> <entry hash hex>\n`, its mode from its entry version where served, else the next kept version's, the drop noted there; a pending drop's versions export with their content.
+**Export** (`ur evs export`) rebuilds plain git: git-mode refs with their original oids, file-mode refs with one deterministic commit per version (11.7), leaving out the search index's `.ur-index/` files (its roots and erasure set) and the `ur/index` ref, which are derived (11.14), and the `ur/lfs` store (11.11), checked by `git fsck`, with signed provenance in `refs/notes/ur`; every replaced versionless version exports as the git-lfs pointer to its content_sha256 and size, noted there, whether or not its bytes survive in a store, batch or cache, and only a path's newest version exports its content, and a dropped version as the stub blob `ur-dropped <drop id hex> <entry hash hex>\n`, its mode from its entry version where served, else the next kept version's, the drop noted there; a pending drop's versions export with their content.
 
 ### 11.13 Backend, IOPS, GC, quotas, durability
 
@@ -1828,9 +1981,15 @@ gates    P0 issues at once, never queued, refused or paced (owner decision 186);
          ask ~57,600 config and directory rotations a day, ~2.9 TiB a day a drive, about twice r, which the drives
          write past 0.8 DWPD and their 1 DWPD rating while it lasts (11.21; §19.8's P0 page)
 reports  every evs, gkm, api and taskworker process reports in {nvb_<set>} every 5 s its queued P1 priced bytes, its
-         unfunded P2 demand and backlog, its funded backlog, the credit it moved into W and spent from it, and its P0
-         priced bytes by kind (revocation, log, lifecycle, shred, erasure, remove, rotation); P0's measured writes are
-         those bytes times k; §19.6's loop splits A1, A_U and A2 across processes by the reports
+         unfunded P2 demand and backlog, its funded backlog by P2 rank (evacuation, page-out folds, other folds,
+         copies, packing, retention, GC, drops), its priced bytes issued by class (P1, unfunded P2, funded P2) and
+         in flight, the credit it moved into W and spent from it, and its P0 priced bytes by kind (revocation, log,
+         lifecycle, shred, erasure, remove, rotation); k is measured bytes over all priced bytes issued in the last
+         10 min, P0's included, so P0's measured writes are its bytes times k; T and A2 subtract what is in flight,
+         and A2 is handed out rank by rank; {nvb_<set>} also carries a per-cluster at_limit flag, which the budget
+         loop sets from FileClusterAdminInfo at 80% summed raw use or 70% inodes (§19.9) and evs reads with its
+         allowance, keeping the last value while the key is absent; §19.6's loop splits A1, A_U and A2 across
+         processes by the reports, with no network or repo id
 order    P2 runs by deadline: evacuation, oldest minute directory first; the folds a page-out needs; other folds,
          path-epoch copies, packing, retention, GC and drops; a fence goes with the work that raises it, a refusal's
          record with its request
@@ -1922,8 +2081,9 @@ purge     a versionless version V of path X is replaced at the first committed v
           or removes it (directly, as a listed file below a removed directory, or by the ref's DELETE); u's
           candidates are V's kind-5 segments less every segment a version of u's push names, and, in slot-keyed
           repos, V's slot when no version of u's push names it; evs computes them in step 5 from the versions step
-          4 read (a part's at part time), lists them in the record of the push, part or seal (at most 2,048 ids,
-          else a mark from which the sweep recomputes them) and sets window bit 4 (11.8)
+          4 read (a part's at part time), lists them in the record of the push, part or seal (at most 2,048 ids and
+          within the record's 1 MiB, which counts its staged tail too, else a mark from which the sweep recomputes
+          them, whatever the id count) and sets window bit 4 (11.8)
 who       the evs process that commits u: once its step-7 PUT answers 200, or a reread shows u committed, it
           queues u's candidates in memory; 60 s later, the readers' allowance, it rereads X's newest version and
           the network's hold/ objects (cached at most 5 s), and DELETEs each candidate that the newest version
@@ -1942,10 +2102,11 @@ holds     a hold whose scope covers the repo keeps each candidate that existed a
           ERASE still destroys keys at once
 staged    evacuation decides each staged segment of a committed record as it evacuates the batch: written to
           seg/<repo>/<id> (If-None-Match, its id as checksum; equal bytes on 412 are success) before the batch's
-          DELETE when its version is still its path's newest committed version, was replaced under 60 s earlier, or
-          a hold keeps it; dropped otherwise; a dead or duplicate record's staged segments go with it; taskworker
-          reports the staged content it drops, or writes only for a hold, as negative stored-byte deltas in its
-          usage batches (producer taskworker, §20.6)
+          DELETE when its version is still its path's newest committed version, was replaced under 60 s earlier, or a
+          hold keeps it, and, while §19.11's purge is observe, when it was replaced, logged as a candidate for the
+          turn-on pass to delete, reads still answering `collected`; dropped otherwise; a dead or duplicate record's
+          staged segments go with it; taskworker reports the staged content it drops, or writes only for a hold, as
+          negative stored-byte deltas in its usage batches (producer taskworker, §20.6)
 sweep     evacuation, resolving each committed record that lists candidates, HEADs each candidate that its path's
           newest version does not name and no hold keeps, staged ones at seg/, and DELETEs only a present one (most
           are already gone, the committing process or an earlier evacuation having removed them, and MinIO answers a
@@ -1980,12 +2141,26 @@ who       a job per repo, covering every drop whose start has passed, from drops
 start     pending -> executing at the start CAS once not_before_ms + 25 min has passed (owner decision 183), with no
           cancel of the drop after it in its ref's history (read at the CAS); a lock then standing makes it refused
           {locked}; pending -> cancelled when a cancel commits; neither deletes anything
-resolve   check each lineage's older entries against the map part or tail map_parts names, and each list against
-          the ref's statements and records: the listed set must equal every version of the lineage's token paths,
-          each in its epoch, below through_version, itself the DROP's write or the standing removal, else refused
-          {mismatch}, which pages (§19.8); then write to dropscan/ the candidates: every segment and slot id a
-          listed version names through a kind-1 locator or a slot id, less ids listed versions name only through
-          kind-5 locators
+resolve   check each lineage's older entries against the map part or tail map_parts names, and each list against the
+          ref's statements and records: the listed set must equal every version with an entry_sha256 of the lineage's
+          token paths, each in its epoch, below through_version, a removal never listed, itself the DROP's write or
+          the standing removal, else refused {mismatch}, which pages (§19.8); then write to dropscan/ the candidates:
+          every segment and slot id a listed version names through a kind-1 locator or a slot id, less ids listed
+          versions name only through kind-5 locators
+table     drops/<repo>/_ holds fixed-size records within 64 KiB: a drop at most 128 B (ids, ref, push id, version,
+          place, not_before_ms, state, phase, freed and held bytes, preview_id), a dry run at most 64 B, the running
+          job at most 256 B, which also points at any job still holding ids; a dry run's paths, lists and results
+          and a job's snapshots, covered drops and sets go in dropscan/<repo>/<id>/<f>, <id> the job's or dry run's
+          16 B id in lowercase hex and <f> the file's kind (snap, cand, mark, del or held), a hyphen and a 10-digit
+          zero-padded decimal sequence from 0 (mark-0000000042), a checkpoint writing the next, never overwriting;
+          an entry leaves 30 d after it ends, or sooner when a write would pass 64 KiB, ended entries oldest first
+          but never one whose DROP committed under 27 h ago, since evacuation re-appends a committed DROP the table
+          lacks; pending, executing and observed entries never leave; a held entry occupies, lists and leaves the
+          table exactly as its done twin would, its resume state in the job's held files, so no count or listing
+          shows a hold; a cancelled or refused drop leaves a 17 B void record {drop_id, state} for the repo's life,
+          so an absent entry with no void record reads executed; 5c answers a drop 429 when pending, executing and
+          observed entries and void records would pass 48 KiB, held entries never counting, a cancel never refused,
+          and dry runs only evicting
 horizon   the job marks only once the horizon of the repo's metadata cluster (11.13's orphans row) has passed each
           covered drop's commit time by 2 min, so every push validated before a drop has committed on a head a scan
           reads, or is dead (owner decision 204)
@@ -2136,8 +2311,10 @@ erasure   immediate on the server; on each mirror, which applies each ERASE push
 re-seed   by §19.10's runbook (POST .../reseed): config first, then groups, then per repo, placed afresh (11.8), the
           ERASE pushes devices hold first, then statements, payloads, parts, segments and pack contents past the
           current head in version order, as reseed records, and last, after every ref's history, the slots; evs
-          applies every ERASE before it serves a slot, accepts a slot only if a re-seeded version names it and no
-          ERASE covers its key, and takes re-seeds only for repos the projection lists live or restorable (a repo
+          applies every ERASE before it serves a slot, accepts a slot only if a re-seeded version names it, and
+          strips from it every key an ERASE it holds covers, as an ERASE's rewrite does, key indexes unchanged,
+          storing no slot left with no key, an ERASE taken after a slot rewriting it as at commit (a 412 compares
+          bytes after stripping), and takes re-seeds only for repos the projection lists live or restorable (a repo
           whose access log ends in RepoDelete past 7 d or with now is refused; one whose log ends in an unrestored
           RepoDelete without now, under 7 d old, is placed with repo/ deleted{deletion_id, its entry's time} first,
           then takes its history, group and slots (11.12's re-seed exception), so access stays refused and restore
@@ -2183,7 +2360,9 @@ head      no single index head exists: the listing of <root> at a ref version is
 ```text
 document  a text file; a mail message (§15.7's m/ files); a record entry, or a document §16.8 derives from entries
           (a run card); text past 1 MiB is one document per 1 MiB of the file, each with the next 256 B, so a
-          query of up to 256 B across a boundary is found and an append to a large file re-indexes its last chunk
+          query of up to 256 B across a boundary is found and an append to a large file re-indexes its last chunk;
+          a term reaching further past a boundary, or terms ANDed across two chunks, are in no document, and
+          SearchOracle evaluates each query per document, not per file
 key       doc_key = HMAC-SHA256(K_ref, "UR evs 1.0 doc" || ref_id || u16be(len(name)) || name || u32be(chunk))[:16];
           name = the path's bytes, or a derived document's registered name (a run card run/ || run_id, a directory
           announcement a/ || announcement_id); K_ref from RK_1 (§10.5), so keys survive rotations and path epochs;
@@ -2217,13 +2396,25 @@ extract   mail: MIME-decoded (RFC 2045-2047, 2231): From, To, Cc and Subject val
           parts with tags, scripts and styles stripped, and attachment names; never transport headers, attachment
           bytes or base64; files: title = the first heading or line (at most 80 B), indexed with the path, body =
           the text; records: §16.8's mapping of an entry's sealed body; the extractor's id is in every file header
+charsets  extractor 1 decodes a MIME part, RFC 2047 word or RFC 2231 value through golang.org/x/text/encoding/htmlindex
+          from the pinned module; no charset or an unknown label is read as UTF-8, and invalid bytes go to U+FFFD at
+          normalization
+html      extractor 1's own scanner on the decoded text, no parser library: <script> and <style> go with their
+          content, up to the matching end tag, case-insensitive; comments, <!...> and <?...> go; a tag is <, then a
+          letter or /, to the next > outside quotes; a tag in the block list (address, article, aside, blockquote,
+          br, center, dd, details, dialog, dir, div, dl, dt, fieldset, figcaption, figure, footer, form, h1-h6,
+          header, hgroup, hr, li, main, menu, nav, ol, p, pre, section, summary, table, tbody, td, tfoot, th,
+          thead, tr, ul) becomes one space and any other tag nothing; then entities decode by the standard
+          library's html.UnescapeString, so &lt; stays text
 ```
 
 **Normalization (normalizer 1).**
 
 ```text
-text      invalid UTF-8 -> U+FFFD; NFKC; full case folding; accents: NFD, nonspacing marks after a Latin, Greek,
-          Cyrillic, Arabic or Hebrew letter dropped, NFC (so が and กิน keep their marks and Hangul stays one
+text      invalid UTF-8 -> U+FFFD; NFKC; full case folding, cases.Fold() followed by a fixed map, U+AB70-U+ABBF to
+          U+13A0-U+13EF and U+13F8-U+13FD to U+13F0-U+13F5, which x/text's fold swaps, published with the tables so
+          SearchOracle applies it too and a no-op on a correct fold; accents: NFD, nonspacing marks after a Latin,
+          Greek, Cyrillic, Arabic or Hebrew letter dropped, NFC (so が and กิน keep their marks and Hangul stays one
           syllable); each run of code points that are not letters, marks or numbers -> one space (so Indic vowel
           signs stay); subject, from, to and title cut at 1 KiB on a code point; each field padded with one space
           each side, fields joined in field order
@@ -2236,22 +2427,29 @@ tables    golang.org/x/text links Unicode 15.0.0 tables under Go < 1.27 and 17.0
           of a defect covering 19,960 two-rune strings, supplementary letters included (U+10044 U+0307 to U+1E0A;
           §4.7), and connect/go.mod:33 and sdk/go.mod:97 still require v0.40.0 (server/go.mod:59, v0.43.0);
           headers record norm.Version, cases.UnicodeVersion and the module version; another table or module
-          version is another normalizer, and a rebuild
+          version is another normalizer, and a rebuild; testdata/index/ pins the fold map: U+13A0 and U+AB70 both
+          give U+13A0, U+13F0 and U+13F8 both give U+13F0
 trigrams  every 3-byte window of the normalized UTF-8; a document's set of distinct 24-bit keys; an aligned CJK
           character is one trigram, so one- and two-character queries resolve
 ```
 
-**Files and format.**
+**Files and format.** protocol/INDEX-FORMAT.md writes these bytes out in full, pinned by testdata/index/ vectors, for M10's entry review.
 
 ```text
 paths     <root>/settings, <root>/lock, <root>/a/m and <root>/a/<n> (the all partition); per bucket <root>/b/<S>/m,
           <root>/b/<S>/s/<n> (bucket shards) and <root>/b/<S>/w/<h>/<writer>/<k> (slots: <writer> the sidecar_id in
           hex, <h> its first two hex digits, k 0-15) and .../<writer>/L<seq> (large entries); per ref, beside its
           roots, its erasure set x (.ur-index/x on a file-mode ref, x on ur/index), an IndexErasureSet only a CUT
-          writes (11.12); names are sealed and tokenized like any path
+          writes (11.12); names are sealed and tokenized like any path; ASCII throughout: <S> the bucket's start
+          day as unpadded decimal, <n> an unpadded decimal shard number from 0, a new shard taking the manifest's
+          highest n plus 1 and joined shards keeping the lower n, <k> in w/ unpadded decimal 0-15, L<seq> L and
+          the unpadded decimal seq, <writer> the sidecar_id in lowercase hex and <h> its first two digits
 slot      one writer's entries, at most 16,208 B, so its record (11.6's 160 B header and one 16 B frame tag) is 16
           KiB and is staged in its push's batch (11.7); a writer's head is its slot with the highest seq, and keeps
-          one entry per doc_key, a newer one replacing the writer's older one there
+          one entry per doc_key, a newer one replacing the writer's older one there; a slot's entries sort ascending
+          by their 16 B key (doc_key, or ref_id for a ref tombstone), then by kind, one entry a key, a replacing
+          entry taking its predecessor's sorted place, so a head is a function of its entry set, and decoders
+          refuse out-of-order or repeated keys
 entry     kind (1 full, 2 diff, 3 tombstone, 4 ref tombstone) | doc_key (a ref tombstone: ref_id) | VByte version |
           VByte time (s) | diff: VByte base version | full and diff: row | full: key set; diff: added and removed
           key sets against its base's set (commit path's dependency row); encoded from its own document only
@@ -2260,7 +2458,12 @@ row       doc kind (file, mail, record, derived) | VByte flags (bit 0 tainted, f
           bits 3-17 a field cut at its cap) | VByte size | VByte chunk | VByte trigram count | VByte started and
           expires (s; a derived document's, else 0) | ref_id (in ur/index only) | locator (the path or derived name,
           at most 512 B), subject, from, to, title (each at most 160 B) and §16.8's and §16.11's registered display
-          fields (each at most 256 B), each a VByte length and UTF-8 cut on a code point; at most 2 KiB
+          fields (each at most 256 B), each a VByte length and UTF-8 cut on a code point, file and mail rows
+          stopping after title and record and derived rows then holding fields 6-15 in number order, each with its
+          length, 0 when empty; at most 2 KiB: each field is first cut to its own cap, setting flag bit 2+n for
+          field n, and a row still past 2,048 B walks locator, then fields 1-4, then 6-15, each keeping what the
+          2,048 B leave after the fixed part and the fields before it, cut on a code point, its flag bit set; flag
+          bit 18 says the locator is cut, or held a non-UTF-8 path mapped to U+FFFD, so it is not the exact path
 key set   VByte count, then VByte gaps between ascending keys, the first gap key + 1
 large     one entry over 8 KiB, alone, at most 1 MiB, a segment upload
 shard     at most 1,032,192 B before its pad and 1 MiB with it (the Padmé step there is 16 KiB), so every index
@@ -2272,30 +2475,50 @@ tombstones the deletions a bucket keeps for older partitions until its roll-up (
           15's count of entries ascending by kind, then key: kind (3 tombstone, 4 ref tombstone) | doc_key or
           ref_id | VByte version | VByte time (s), with no postings; a key at most once in a shard and never in
           both its tables, a ref tombstone only on ur/index, and none in an all shard
-dictionary VByte block count; per block of 64 keys, its first key (3 B) and the VByte offsets of its entries and of
-          its first list; per key, ascending: a byte {bits 0-1 prefix shared with the previous key of its block,
-          0 for a block's first; bit 2 bitset}, the key's other bytes, VByte document count, VByte list bytes; a
-          1 MiB shard's block index is typically ~10-16 KiB (more for CJK-heavy text), so a phone finds a key's
-          list by frame
+dictionary VByte block count; per block of 64 keys (1 to 64 in a rewrite that keeps a replaced partition, shrink
+          below; decoders refuse an empty or larger block and re-encode from the file's own partition), its first key
+          (3 B) and the VByte offsets of its entries and of its first list, both absolute, the entries' from the
+          first byte after the block index and the list's from the first byte of the postings; per key, ascending: a
+          byte {bits 0-1 prefix shared with the previous key of its block, 0 for a block's first; bit 2 bitset}, the
+          key's other bytes, VByte document count, VByte list bytes; a 1 MiB shard's block index is typically ~10-16
+          KiB (more for CJK-heavy text), so a phone finds a key's list by frame
 postings  per key, VByte gaps between ascending docids (the first, docid + 1) or a bitset of ⌈N/8⌉ bytes, whichever
-          is shorter, VByte on a tie; document-level, with no positions
+          is shorter, VByte on a tie; document-level, with no positions; in a bitset docid d is bit d & 7 (least
+          significant first) of byte d >> 3, unused high bits of the last byte zero, and N is the shard's live
+          document count, IndexFileHeader.count
 pad       slots and large entries: none of their own, since their sizes add per document; a shard: zero bytes,
           u32be(HMAC-SHA256(K_index_g, "pad" || SHA-256(the shard before its pad))[0:4]) mod the Padmé step at its
-          length (§10.5's index key at the writer's newest generation g, which the header names), so a shard's size
-          does not show which trigrams a probe document shares with others, even at a padding boundary; a CLOSURE
-          pads to the replaced version's exact length instead (erasure, below)
-codes     VByte, bitsets and front coding only; nothing is compressed across documents, since inbound mail and
-          collaborators' commits can inject probes (a compression oracle); a shard's dictionary and lists, the
-          only structures shared across documents, sit under the keyed pad
+          length (§10.5's index key at the writer's newest generation g, which the header names: K_index_g =
+          HKDF-SHA256(RK_g, salt repo_id, info "UR evs 1.0 index" || u64be(g)), with no further context, g the
+          header's pad_generation, the HMAC's input the 3 ASCII bytes "pad" then the 32-byte SHA-256), so a shard's
+          size does not show which trigrams a probe document shares with others, even at a padding boundary; a
+          CLOSURE pads to the replaced version's exact length instead (erasure, below); every index file carries
+          IndexFileHeader.body_length, and everything past those bytes is pad, all zero bytes, else index_malformed,
+          so a decoder takes any such pad on any file type within the file's size bound and re-encoding keeps the
+          file's pad length; a writer's next head rewrite writes no pad
+codes     VByte, bitsets and front coding only; VByte is unsigned LEB128, as encoding/binary.AppendUvarint writes it:
+          7 bits a byte, least significant group first, the high bit set on every byte but the last, minimal, at most
+          10 bytes; an entry's kind, a row's doc kind and a tombstone's kind are one byte each (entry 1-4; doc kind 1
+          file, 2 mail, 3 record, 4 derived, SearchHit.doc_kind's values; tombstone 3-4), any other value
+          non-canonical; doc_key and ref_id are 16 raw bytes; nothing is compressed across documents, since inbound
+          mail and collaborators' commits can inject probes (a compression oracle); a shard's dictionary and lists,
+          the only structures shared across documents, sit under the keyed pad
 determinism a file is a function of its inputs: pinned tables and ids, docids by doc_key, ascending keys, minimal
-          VByte, the shorter-list rule, blocks of 64, no clock, randomness or library-version input; headers and
+          VByte, the shorter-list rule, blocks of 64 (or the replaced partition, shrink below; merges and roll-ups
+          always re-block by 64, and both outcomes are functions of the inputs, so reproduction holds), no clock,
+          randomness or library-version input; headers and
           manifests are proto3 marshaled deterministically, repeated fields sorted; devices that build one file
           from the same inputs write the same plaintext, whose SHA-256 its entry version carries (11.7)
-shrink    removing a document never lengthens a shard: rows, keys and lists only go, a merged VByte gap is never
-          longer than the two it replaces, and the shorter-list rule picks again; so a CLOSURE rewrite always fits
-          its pad
+shrink    any rewrite padded to a replaced length (a CLOSURE, a DROP's rewrite, a roll-up's step-4 rewrite) first
+          builds the shard canonically, in blocks of 64, and pads if that fits the replaced length; if not, it
+          rebuilds keeping the replaced shard's block partition, each block keeping its surviving keys, prefix
+          sharing resetting at each block's first key, and an emptied block going: a removed key saves at least 4 B
+          and costs the next key at most 2, so this always fits; the rewrite keeps the replaced header's
+          pad_generation
 caps      a writer holds at most 16 slots in a bucket; a bucket's shards and a/ at most 3,500 files each (11.7's
-          name table), past which a/ splits into a/<k>/ directories of 1,000
+          name table): shards below n = 3,499 at a/<n>, and from there at a/<k>/<n> with k = 3,499 + (n - 3,499) /
+          1,000 rounded down, so shard 3,499 is a/3499/3499 and shard 4,499 a/3500/4499, no file moving at the split
+          and a/ inside 11.7's 3,584 names until some 84,000 shards
 ```
 
 ```proto
@@ -2406,7 +2629,13 @@ epoch     every push but a CLOSURE that creates or replaces an index file versio
           an erased document's destroyed keys no longer open, or dropped and left to backfill (coverage, below); a
           replaying reader alarms on an index push that names another epoch than the version of the ref's newest
           CUT before it; hints only speed this, and no indexer takes part
-coverage  a push is indexed when it changes its writer's head (in-ref) or a coverage reaches its version; readers
+coverage  a push is indexed when it changes its writer's head (in-ref), a coverage reaches its version, it touches
+          only .ur-index/ or ur/index, or it carries format 2's index_none mark in its sealed metadata, which an
+          index-aware writer sets when its push changes no document (every changed path under the never row, or
+          binary or skipped with no prior indexed version; a version that turns binary is already a tombstone);
+          hosts with the text check a marked push as an omitted document (D-EVS-56), raise index_mismatch naming
+          the signer and re-enter it as a backfill, an old client's push having no mark and staying unindexed until
+          backfilled, and a reader may classify a mailbox's non-m/ token prefixes with no fetch; readers
           derive indexed_through, the newest version up to which every push is indexed, and show later ones as not
           yet searchable; an indexer serving the repo for search (above), else the next capable writer, backfills a
           push still unindexed 10 min after its commit into its own head and raises its horizon, holding the
@@ -2498,7 +2727,9 @@ verify    11.9's checks (signed statement, entry hash), then content_sha256 afte
           format (past 1 MiB, a dictionary out of order, a docid out of range, a tombstone table out of order or
           naming a key its doc table holds, a tombstone in an all shard, a non-canonical encoding) is dropped and
           raises SidecarEvent index_malformed {repo, ref, path, signer} (§5.4); nothing is compressed, so no
-          decoder needs a memory bound
+          decoder needs a memory bound; after a CLOSURE a manifest's IndexShard.docs is an upper bound and its
+          first_day to last_day a covering range, which no step compares with the shard's header and the next merge
+          or roll-up recomputes, an eraser still finding a document by a/m's days and the shard's doc table
 swap      the new manifest replaces the old one atomically once every kept file of the new pin is cached and the
           version table (§5.9) covers it; running searches keep their snapshot; files no manifest names are
           deleted once no search holds them
@@ -2745,22 +2976,31 @@ ranking   across SERVED_TEXT repos, candidates go newest first by (time, doc_key
 sizes     every request body exactly 4,016 B, one envelope, timeout_ms always 10,000; every reply body exactly
           steps x 16,384 B (steps 1-4, 1 in v1), failures after parsing included; nothing compressed, no Cancel,
           no early or short reply; errors decided before parsing are small envelope Errors that depend on the
-          requester's identity, rate or build, never on a query: UNAUTHENTICATED (§6.4's identity check),
+          requester's identity, rate or build, never on a query; a builder rule fills the size with no wire change:
+          every field but pad stops at the body's size less 131 B, so pad is at least 131 B and its length varint
+          two bytes, removing the 1, 2 and 130 B holes, a multi-step reply whose pad would be exactly 16,387 B
+          holds one hit back, and a reply holds hits for the next page; SearchFilters is at most 768 B encoded in a
+          SearchRequest, so page 0 holds at most 2,987 + 3 + 768 = 3,758 B against its 3,885 B budget and every
+          request fits, a search whose filters pass 768 B staying on the device with FallbackReason none, local
+          search keeping no such cap; a body that cannot be sized is never sent short: UNAUTHENTICATED (§6.4's
+          identity check),
           PERMISSION_DENIED (not an admitted, untagged, non-ephemeral member device, or no search designation or
           Search.RemoteServe off), RESOURCE_EXHAUSTED (retry_after_ms), UNIMPLEMENTED
 status    OK; PARTIAL (2 s of CPU or 1,000 verifications ended the page, more to come); TOO_BROAD (a partition over
-          20,000 candidates: header-confirmed hits and counts, complete); CURSOR_EXPIRED (search_id unknown, idle
-          10 min, superseded, a third search of the requester, or an ERASE, CUT or lost read in its scope; the phone
+          20,000 candidates: header-confirmed hits and counts, complete); CURSOR_EXPIRED (search_id unknown, idle 10
+          min, superseded, a third search of the requester, or an ERASE, CUT or lost read in its scope; the phone
           reopens once); INVALID (a wrong size, a non-zero pad, a query over 512 B or 16 terms, over 64 repos, a
-          malformed filter); UNSUPPORTED_VERSION; per repo in coverage, SERVED_TEXT, SERVED_INDEX or a refusal,
-          which sends that repo on (failover, above)
+          malformed filter or SearchFilters past 768 B); UNSUPPORTED_VERSION; per repo in coverage, SERVED_TEXT,
+          SERVED_INDEX or a refusal, which sends that repo on (failover, above)
 limits    requester: at most 2 open searches an indexer, a third's page 0 superseding the oldest, 30 requests a
-          minute (burst 10), 64 repos a request, a larger scope split by indexer, then by 64; indexer: per
-          requester the same, else RESOURCE_EXHAUSTED before parsing; Search.RemoteSearchCount (4) computing beside
-          §16.10's 4 local searches, RemoteQueueCount (16) waiting at most 1 s, RemoteCpuPerMinute (30 s of CPU a
-          minute), RemoteCursorCount (64) cursors idle at most 10 min, each at most 16 KiB of resume state plus its
-          last reply; a lost reply is retried by page and answered from the cursor, not §6.6's idempotency cache,
-          which holds only mutating methods' responses, and SEARCH mutates nothing (§6.6)
+          minute (burst 10), 64 repos a request, a larger scope split by indexer, then by 64; indexer: per requester
+          the same, else RESOURCE_EXHAUSTED before parsing; Search.RemoteSearchCount (4) computing beside §16.10's 4
+          local searches, RemoteQueueCount (16) waiting at most 1 s, RemoteCpuPerMinute (30 s of CPU a minute; this
+          and the page's 2 s charge a compute slot's busy wall time on the injected clock, summed across slots for
+          RemoteCpuPerMinute, which over-counts under contention, so a page ends PARTIAL early and never late),
+          RemoteCursorCount (64) cursors idle at most 10 min, each at most 16 KiB of resume state plus its last
+          reply; a lost reply is retried by page and answered from the cursor, not §6.6's idempotency cache, which
+          holds only mutating methods' responses, and SEARCH mutates nothing (§6.6)
 serve     the indexer authorizes in its own state, naming a refused repo in coverage, never as an error; it runs
           this subsection's plan over the buckets, retained buckets and all it holds, plus its local overlay for
           pushes past indexed_through that its text covers, verifying against its mirror, mounted tree or bare
@@ -3043,7 +3283,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-35 (proposed).** Versioning is a per-version setting of a file, signed in its entry version: 0 keeps every version, 1 only the newest's content, 2 the same for the search index's files; config and mailcfg repos, git-mode refs and creates-only refs refuse 1 and 2, and a repo lock refuses 1 (owner decision 168). *Why:* owner decisions 158-160; authority histories and exact git need every version.
 
-**D-EVS-36 (proposed).** Versionless content lives in one-record kind-5 segments whose headers name the introducing push, cited only by that path's next version or a rename target of the push removing it; content padding to at most 16 KiB is staged in its batch; slot-keyed repos keep one key per versionless path. *Why:* path-level CAS fences every citation; short-lived small content costs no HDD write or NVMe object, and an overwrite no slot.
+**D-EVS-36 (proposed).** Versionless content lives in one-record kind-5 segments whose headers name the introducing push, cited only by that path's next version or a rename target of the push removing it; content padding to at most 16 KiB is staged in its batch, except an ur/lfs object's, always uploaded; slot-keyed repos keep one key per versionless path, which a rename target of the push removing it may take over, each removed path's segment or slot named by at most one new version. *Why:* path-level CAS fences every citation; short-lived small content costs no HDD write or NVMe object, and an overwrite no slot.
 
 **D-EVS-37 (proposed).** The committing evs process deletes replaced versionless content 60 s after the commit is certain; evacuation drops replaced staged content and HEADs every candidate, deleting any still present, so a lost queue leaves content at most ~26 h; a hold keeps only content that existed at its placement. *Why:* owner decisions 161 and 133, with no new object family or metadata write.
 
@@ -3095,7 +3335,7 @@ never     a query, which documents match it, or which trigrams documents share: 
 
 **D-EVS-61 (proposed).** The `directory` kind has one repo per team network, record-class: a shared file-mode `cards` ref, whose `d/`, `r/` and `q/` paths are versionless from its format 2 and checked by readers against their writers; per-writer streams; `ur/index`; and `erasure`, whose ERASE, CUT and CLOSURE take `admin`, as every repo's, held only by its consented, not-read-only admins, a repo owner's revocation erasing through §16.11's erasure runner. Its index is on by kind, with a 7-day window, and refuses `off`; its group seats readers under §7.9's leaves rule; its daemons read moved streams 64 to a request (11.9). *Why:* owner decision 171 gives this repo's index every announcement, specific beside owner decision 156; evs sees no path, so readers enforce writers, as Q-EVS-3's prefix rules do, but a reader's check after a key is destroyed restores nothing, so erasure needs an authority evs checks first; owner decisions 177, 181, 182.
 
-**D-EVS-62 (proposed).** A drop is a DROP push (flag 256) on the path's file-mode ref, signed by one repo admin (owner-bound: only a consented, not-read-only device of the owner; never MCP), listing per lineage every dropped version by entry hash and the version that stays; it waits 7 days, in which any repo admin may cancel, `now` skipping the window as RepoDelete's does, and a lock voids it; config and mailcfg repos, git-mode, creates-only and derived refs, directory paths and versionless heads refuse it. *Why:* owner decisions 126, 173 and 183; a push orders the drop with the path's versions and the head fences it.
+**D-EVS-62 (proposed).** A drop is a DROP push (flag 256) on the path's file-mode ref, signed by one repo admin (owner-bound: only a consented, not-read-only device of the owner; never MCP), listing per lineage every dropped version by entry hash and the version that stays; it waits 7 days, in which any repo admin may cancel, `now` skipping the window as RepoDelete's does, and a lock voids it; config and mailcfg repos, git-mode and creates-only refs, directory paths and versionless heads refuse it at evs, and the derived refs and paths it cannot see (ur/index, ur/lfs, .ur-index/) at clients and readers. *Why:* owner decisions 126, 173 and 183; a push orders the drop with the path's versions and the head fences it.
 
 **D-EVS-63 (proposed).** A drop deletes only kind-1 segments and slots that only listed versions name; statements, hashes and entry versions without inline records stay, so history verifies, and listed inline content waits for compaction, unserved; the kept head is written as a fresh checkpoint or re-cited chunk set; readers show pending, then dropped, never missing or tampered. *Why:* no diff chain keeps dropped content, and no drop reads as tampering.
 
@@ -3178,12 +3418,15 @@ never     a query, which documents match it, or which trigrams documents share: 
        directory's included): 200 {EvsUploadReceipt}, or 409 SEGMENT_STALE, or 409 VERSIONING for a kind-5 header naming
        another push, or 503 with Retry-After past the segment cluster's HDD share for the heaviest network
        (11.13's hdd row), or 507 CLUSTER_FULL while the repo's metadata cluster stands at §19.9's cohort limit;
-       at the storage limit or while spent, §20.7's QuotaRefusal (402 with x402 terms when a
-       purchase lifts the limit, else RESOURCE_EXHAUSTED; a closure upload past its eraser's 60 a minute or daily
-       closure allowance 429 with retry_after_ms, 11.12, §20.7)
+       at the storage limit or while spent, §20.7's QuotaRefusal (402 with upgrade: true and no terms when a
+       purchase lifts the limit, since only api-hosted routes quote x402 terms, else RESOURCE_EXHAUSTED; a
+       closure upload past its eraser's 60 a minute or daily closure allowance 429 with retry_after_ms, 11.12,
+       §20.7)
   POST /evs/v1/repos/<id>/push {statement, payload, receipts}, /push/<push_id>/<k> {part, receipts}: 200 {place}
        (rw; deposit only to the caller's deposit ref); the seal POSTs .../push {statement, the parts' places}
-  POST /evs/v1/repos/<id>/push/<push_id>/lease, /path-epoch, /path-epoch/block (rw)
+  POST /evs/v1/repos/<id>/push/<push_id>/lease (rw);  POST /evs/v1/repos/<id>/path-epoch {an EvsPathMap part,
+       11.6's map row} and /evs/v1/repos/<id>/path-epoch/block (rw), which name a ref and upload before any push
+  POST /evs/v1/repos/<id>/activate (admin), no body (11.12's activate row)
   POST /evs/v1/repos/<id>/read {..., fresh} (`base` {ref, version} for an overlay's path it holds no version of),
        or {refs} for up to 64 owned streams (11.9's streams row);
        GET /evs/v1/repos/<id>/refs[?moved_after=<push sequence>], /log?ref=&since=
@@ -3193,9 +3436,12 @@ never     a query, which documents match it, or which trigrams documents share: 
   GET  /evs/v1/repos/<id>/drops/preview/<preview_id> (admin) -> state, progress, list_match per path, versions,
        frees, shared, inline, packed, young, snapshot;  GET /evs/v1/repos/<id>/drops (r) -> each drop's state,
        progress and freed bytes, a held drop reading done; DROP pushes and cancels go through POST .../push
-  push refusals, each with the push id: 409 REF_MODE, PUSH_ID_REUSED, SEGMENT_GONE, SEGMENT_STALE, SLOT_STALE,
-       PARTS_MISSING, VERSIONING, DIRECTORY_FULL, NOTHING_TO_ERASE, INDEX_EPOCH, SHREDDING, DROPPED, DROP_KIND,
-       DROP_PATH, DROP_CONSENT, DROP_BOUNDARY, DROP_LIST, DROP_STATE, non-fast-forward; 412 GATE_CLOSED,
+  push refusals, each with the push id: 403 SCOPE; 402 QUOTA_PAYMENT and 403 QUOTA_LIMIT; 409 TIME_STALE,
+       REPO_KEYING, REPO_DELETED, MAP_PARTS, SLOT_UNKNOWN, FORMAT_UNSUPPORTED {needs_format: 2}, REF_MODE,
+       PUSH_ID_REUSED, SEGMENT_GONE, SEGMENT_STALE, SLOT_STALE, PARTS_MISSING, VERSIONING, DIRECTORY_FULL,
+       NOTHING_TO_ERASE, INDEX_EPOCH, SHREDDING, DROPPED, DROP_KIND, DROP_PATH, DROP_CONSENT, DROP_BOUNDARY,
+       DROP_LIST, DROP_STATE, non-fast-forward, and file mode's 5f BASE_STALE, unrecorded, carrying EvsDepositHead
+       on the caller's own deposit ref; 412 GATE_CLOSED,
        PATH_EPOCH, PATH_EPOCH_DUE, EPOCH_SOURCES_FULL; QuotaRefusal at the storage limit or while spent, as for
        uploads, and 507 CLUSTER_FULL with Retry-After for what the storage limit refuses while the repo's
        cluster stands at §19.9's cohort limit, each once the head records it; a recorded refusal again, with

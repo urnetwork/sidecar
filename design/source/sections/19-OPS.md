@@ -298,10 +298,15 @@ budget    per metadata cluster, a taskworker loop holding a Redis lease drains �
           publishes {nvb_<set>} (15 s ttl: calibration, the bucket B, floored at zero, §11.13's allowance T as
           A_U for unfunded P2 and A1 for P1, and the funded P2 allowance A2 from the wallet W), splitting each
           across processes by what each evs, gkm, api and taskworker process reports in it every 5 s (§11.13's
-          reports row), P0's bytes by kind among them, and counts by those kinds P0's forgiven excess, its bytes
-          past what B held; it keeps B, W and the counter readings they were taken at in a state key rewritten
-          every 5 s with a 48 h ttl, so a loop that takes the lease resumes them exactly, and with none (Redis
-          lost) starts W and B at zero, which is conservative; heals, MRF and scanner writes are in the counters
+          reports row: priced bytes issued by class and in flight and the funded backlog by P2 rank, so k is
+          measured bytes over all priced bytes issued in the last 10 min, P0's included, T and A2 subtract what
+          is in flight, and A2 goes out rank by rank), P0's bytes by kind among them, setting a per-cluster
+          at_limit flag in it from FileClusterAdminInfo at 80% summed raw use or 70% inodes (19.9's cohorts row),
+          which evs reads with its allowance and keeps while the key is absent, and counts by those kinds P0's
+          forgiven excess, its bytes past what B held; it keeps B, W and the counter readings they were taken at
+          in a state key rewritten every 5 s with a 48 h ttl, so a loop that takes the lease resumes them
+          exactly, and with none (Redis lost) starts W and B at zero, which is conservative; heals, MRF and
+          scanner writes are in the counters
 hdd       per segment cluster, a taskworker loop holding a Redis lease publishes every 5 s, in {nvb_<cluster>}
           (15 s ttl), its drive operations a second (its HDDs' reads and writes completed over the last 5 s,
           heals and the scanner included) and its capacity, the rate §22.8's M3 hdd run achieved on it by the
@@ -574,8 +579,11 @@ one PM9A3 set, 4 KiB blocks  ~40% raw, ~32% inodes    ~244-261% raw,           1
                                                                                each of 8 drives plus inodes, and year one
                                                                                fits at 20-75% raw (owner decisions 136,
                                                                                138)
-drive writes                 0.40 DWPD (0.31 on 1     3.7-4.0 DWPD (2.8-3.0)   §11.13's model until §22.8 measures it
-                             KiB blocks)              on one set
+drive writes                 0.40 DWPD (0.31 on 1     3.3 DWPD on one set at   §11.13's model until §22.8 measures it
+                             KiB blocks)              ~5 records a batch,
+                                                      3.7-4.0 (2.8-3.0) near
+                                                      capacity, five sets'
+                                                      worth
   with v1's search index     0.42 DWPD (0.35)         3.9-4.2 DWPD (3.1-3.4)   §11.13's costs at owner decision 172's
                                                                                cadence: one companion push a minute on
                                                                                1 KiB blocks (in parentheses), one every
@@ -642,7 +650,8 @@ cohorts   a cluster's repos (its cohort) keep growing after place_new moves on, 
           and projects each cluster's exhaustion, the first date its own growth reaches 80% raw, 70% inodes, a
           0.75 DWPD 7-day mean or its copy capacity; the move tool is built to land before the earliest such
           date, never by the estate's free space, the first cluster's repos its first move; until it exists, a
-          cluster at 80% raw or 70% inodes takes only what §20.7's storage limit accepts: evs refuses
+          cluster at 80% raw or 70% inodes, which evs reads from {nvb_<set>}'s at_limit flag (19.6's budget row),
+          takes only what §20.7's storage limit accepts: evs refuses
           payload-adding pushes and segment uploads for its repos with 507 CLUSTER_FULL and Retry-After, while
           deletion, erasure, shreds, CONSUME, BASE, drops and config and mailcfg pushes pass, and the rota is
           paged (19.8); FS-119 drills a saturating cohort beside a mostly empty cluster
@@ -829,7 +838,9 @@ repos      devices        first the ERASE pushes (§11.12) each device signed in
                           time}: placed so, it takes its history, group and slots through /reseed and its
                           GroupForm, which re-seed mode alone admits while deleted (§11.12), so access stays
                           refused while restore and the timer resume; it applies every ERASE it holds before it
-                          serves a slot, and refuses slot keys an applied erasure covers; where every copy ends
+                          serves a slot, accepts a slot only if a re-seeded version names it, and strips from it
+                          every key an applied erasure covers, key indexes unchanged, storing none left with no
+                          key; where every copy ends
                           below a reader's pin, a repo admin's EvsReseed {repo, ref, version, C_v, incident}
                           (§11.6) lets the reader accept the shorter history, showing the loss; a search index
                           (v1) that no device's mirror holds is rebuilt from text once its repo is re-seeded, by
