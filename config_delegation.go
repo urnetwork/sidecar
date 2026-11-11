@@ -214,6 +214,9 @@ func (self *ConfigState) delegationRevokeSigner(signers []ConfigSigner, delegati
 
 // A DelegationRevoke: a Delegation this state holds, since_n 0 or a position before the entry, and one device's
 // signature that may revoke it. Revoking an ended Delegation is no refusal: it ends nothing again, and a since_n parks.
+// A forwarding Delegation whose row left the rows (config_forwarding.go's leaves row, QD-648) is one this state does not
+// hold, so a revocation naming it is refused as unknown, at every reader alike, since every reader's rows dropped it at
+// the same base.
 func configCheckDelegationRevoke(state *ConfigState, statement *configStatement) error {
 	revoke := statement.body.(*protocol.DelegationRevoke)
 	if len(statement.signers) != 1 || statement.signers[0].Kind != ConfigSignerSidecar {
@@ -221,7 +224,7 @@ func configCheckDelegationRevoke(state *ConfigState, statement *configStatement)
 	}
 	delegation := state.delegations[string(revoke.GetDelegationId())]
 	if delegation == nil {
-		return fmt.Errorf("%w: no such Delegation", ErrConfigRule)
+		return fmt.Errorf("%w: no such Delegation: unknown, or a forwarding one whose row left the rows", ErrConfigRule)
 	}
 	if ConfigDelegationRowForwards(delegation) {
 		return configCheckForwardingRevoke(state, statement, delegation)

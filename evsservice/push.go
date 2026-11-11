@@ -354,7 +354,7 @@ func (self *pushAttempt) bind() bool {
 		request.Refuse(refusal.Reply(self.pushId))
 		return false
 	}
-	self.pushes = NewRecordPushSource(engine.records, self.cluster, self.repoId, self.refId)
+	self.pushes = NewRecordPushSource(engine.records, self.cluster, self.repoId, self.refId).WithLocator(engine.locator)
 	return true
 }
 

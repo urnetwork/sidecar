@@ -27,7 +27,9 @@
 // change names its path in the current epoch and, as source paths, in each listed source at or above its floor; a
 // removal lowers the path's floor to its row's epoch and its parent's delta removes the child's token in the current
 // epoch and in each such source, so a fold drops a carried row too. A push refused 412 PATH_EPOCH is made again by
-// Retoken.
+// Retoken. On a ref with no head the read sends no path and every write creates; the plan, made in the epoch an
+// absent head reads as, moves whole to the epoch its ref starts in (firstEpoch; DESIGN-DETAILS 9.2.3, QD-632), and its
+// push commits only as the one that creates the ref.
 //
 // Record-class repos (slot-keyed: §11.6's object key row) keep each chain's object key in a deletable slot/ object
 // rather than in its segment: a new chain, a checkpoint or chunks, draws a fresh key in a new slot as it is sealed
@@ -155,6 +157,9 @@ type EvsWritePlan struct {
 	scope  string
 	// a git-mode push's update, which the sender seals as EvsSealedMetadata.git: a rekey's REKEY shape, set by setRef
 	gitUpdate *protocol.EvsGitUpdate
+	// planned on a ref with no head, in the epoch firstEpoch gave: a refusal is answered by planning again, never by a
+	// retoken, and lowers no floor (DESIGN-DETAILS 9.2.3)
+	firstPush bool
 	// the repo keeps its object keys in slots, a record-class repo's (see the file header)
 	slotKeyed bool
 }
@@ -318,6 +323,10 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 				if err := plan.setRef(head, args.RefName, self.client.args.Identity().SidecarId, rekeyOnly); err != nil {
 					return err
 				}
+				// a ref with no head, which the read sent no path of: the push commits only as the one that creates
+				// the ref, in the epoch it starts in (DESIGN-DETAILS 9.2.3's first push), which the plan moves to whole
+				// once it is made
+				plan.firstPush = result.head.Version == 0
 				if plan.pathKey, err = result.keys.path(ctx, plan.PathEpoch); err != nil {
 					return err
 				}
@@ -369,6 +378,15 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 		return nil, err
 	}
 	plan.Paths = append(plan.Paths, directoryPaths...)
+	if plan.firstPush {
+		epoch, err := self.firstEpoch(ctx, plan.RefKind, nil, args.Generation)
+		if err != nil {
+			return nil, err
+		}
+		if err := plan.tokenizeIn(ctx, epoch); err != nil {
+			return nil, err
+		}
+	}
 	if hook := self.client.writePlanHook(); hook != nil {
 		if err := hook(ctx, plan); err != nil {
 			return nil, err
@@ -828,26 +846,38 @@ func (self *EvsWritePlan) Retoken(ctx context.Context, head *EvsVerifiedHead) er
 	if self.Generation < current || self.Generation < head.Head.GetGeneration() {
 		return errEvsRetokenSealsAgain
 	}
-	pathKey, err := self.keys.path(ctx, current)
-	if err != nil {
-		return err
-	}
-	nameKey, err := self.keys.manifest(ctx, current)
-	if err != nil {
-		return err
-	}
 	self.BaseVersion, self.BaseChain, self.Head = head.Version, head.Chain, head.Head
-	self.PathEpoch, self.Sources = current, evsSourceEpochs(head.Head.GetPathEpoch())
-	self.pathKey, self.nameKey = pathKey, nameKey
+	self.Sources = evsSourceEpochs(head.Head.GetPathEpoch())
+	if err := self.tokenizeIn(ctx, current); err != nil {
+		return err
+	}
 	for _, planned := range self.Paths {
-		if planned.TokenPath, err = self.tokenPathIn(ctx, planned.names, current); err != nil {
+		if planned.creates() {
+			planned.Version = max(self.BaseVersion, planned.removalVersion) + 1
+		}
+	}
+	return nil
+}
+
+// Makes every path's token path and source paths, and every directory's rows, again in epoch, the plan's keys moved
+// there: a retoken's work on its new head, and a first push's, made in the epoch an absent head reads as, on the epoch
+// its ref starts in (DESIGN-DETAILS 9.2.3). What is sealed stays.
+func (self *EvsWritePlan) tokenizeIn(ctx context.Context, epoch uint64) error {
+	pathKey, err := self.keys.path(ctx, epoch)
+	if err != nil {
+		return err
+	}
+	nameKey, err := self.keys.manifest(ctx, epoch)
+	if err != nil {
+		return err
+	}
+	self.PathEpoch, self.pathKey, self.nameKey = epoch, pathKey, nameKey
+	for _, planned := range self.Paths {
+		if planned.TokenPath, err = self.tokenPathIn(ctx, planned.names, epoch); err != nil {
 			return err
 		}
 		if planned.SourcePaths, err = self.sourcePathsOf(ctx, planned); err != nil {
 			return err
-		}
-		if planned.creates() {
-			planned.Version = max(self.BaseVersion, planned.removalVersion) + 1
 		}
 	}
 	for _, planned := range self.Paths {

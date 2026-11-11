@@ -854,8 +854,9 @@ func TestCheckGateFs3(t *testing.T) {
 	requireCheckRefusal(t, "after the expiry", CheckGate(&afterExpiry), EvsCheckReasonGateClosed)
 }
 
-// 5e: the head's current epoch, 1 for a ref with no head; a creation while due or blocked; a PATH_EPOCH push's own
-// rules through its seam.
+// 5e: the head's current epoch; a ref's first push in an epoch from 1 to its generation, a deposit's at 1 (DESIGN-DETAILS
+// 9.2.6's first push, QD-632); a push planned on no head on a ref that has one refused before its epoch is compared; a
+// creation while due or blocked; a PATH_EPOCH push's own rules through its seam.
 func TestCheckPathEpoch(t *testing.T) {
 	fixture := newCheckFixture(t)
 	viewOf := func(epoch uint64, create bool, flags uint32) *PushView {
@@ -874,9 +875,36 @@ func TestCheckPathEpoch(t *testing.T) {
 		}
 		return fixture.view(plan)
 	}
-	absent := viewOf(1, true, 0)
-	requireCheckPass(t, "epoch 1 on a ref with no head", CheckPathEpoch(absent))
-	requireCheckRefusal(t, "epoch 2 on a ref with no head", CheckPathEpoch(viewOf(2, true, 0)), EvsCheckReasonPathEpoch)
+	firstOf := func(epoch uint64, kind protocol.EvsRefKind) *PushView {
+		plan := fixture.plan()
+		plan.PathEpoch, plan.Generation, plan.RefKind = epoch, 3, kind
+		if kind == protocol.EvsRefKind_EVS_REF_DEPOSIT {
+			plan.OwnerSidecarId = &fixture.signerId
+			plan.RefId = sidecar.EvsDepositRefId(fixture.repoId, fixture.signerId)
+		}
+		plan.Changes = []*sidecar.EvsPlannedChange{fixture.change(plan, checkTestPath("new"), 0, 1)}
+		return fixture.view(plan)
+	}
+	for epoch := uint64(1); epoch <= 3; epoch += 1 {
+		requireCheckPass(t, fmt.Sprintf("a first push in epoch %d at generation 3", epoch), CheckPathEpoch(firstOf(epoch, protocol.EvsRefKind_EVS_REF_SHARED)))
+	}
+	requireCheckRefusal(t, "a first push in epoch 4 at generation 3", CheckPathEpoch(firstOf(4, protocol.EvsRefKind_EVS_REF_SHARED)), EvsCheckReasonPathEpoch)
+	requireCheckPass(t, "a deposit ref's first push in epoch 1", CheckPathEpoch(firstOf(1, protocol.EvsRefKind_EVS_REF_DEPOSIT)))
+	requireCheckRefusal(t, "a deposit ref's first push in epoch 2", CheckPathEpoch(firstOf(2, protocol.EvsRefKind_EVS_REF_DEPOSIT)), EvsCheckReasonPathEpoch)
+
+	// planned on no head, on a ref that has one: refused before its epoch, which here is wrong too, is compared
+	for _, mode := range []protocol.EvsRefMode{protocol.EvsRefMode_EVS_REF_FILE, protocol.EvsRefMode_EVS_REF_GIT} {
+		plan := fixture.plan()
+		plan.RefMode, plan.PathEpoch, plan.BaseVersion = mode, 5, 0
+		plan.Changes = []*sidecar.EvsPlannedChange{fixture.change(plan, checkTestPath("new"), 0, 2)}
+		view := fixture.view(plan)
+		view.Head = checkTestHead(view, 1)
+		reason := EvsCheckReasonBaseStale
+		if mode == protocol.EvsRefMode_EVS_REF_GIT {
+			reason = EvsCheckReasonNonFastForward
+		}
+		requireCheckRefusal(t, fmt.Sprintf("a %s push planned on no head on a ref that has one", mode), CheckPathEpoch(view), reason)
+	}
 
 	atEpoch := func(epoch uint64, create bool, pathEpoch *protocol.EvsPathEpoch) *PushView {
 		view := viewOf(epoch, create, 0)
@@ -945,7 +973,48 @@ func TestCheckPathEpochRefusesACrossingCreation(t *testing.T) {
 	requireCheckPass(t, "a creation crossing an immediate due that does not block",
 		CheckPathEpoch(viewOf(true, &pathEpochDue{generation: 2, immediate: true}, true)))
 	requireCheckPass(t, "a creation crossing nothing", CheckPathEpoch(viewOf(true, nil, true)))
-	requireCheckPass(t, "a ref's first push crossing a due that blocks", CheckPathEpoch(viewOf(true, blocking, false)))
+	// a ref's first push crossing a due that blocks, counted from the epoch it names, is refused as any crossing
+	// creation (DESIGN-DETAILS 9.2.6)
+	requireCheckRefusal(t, "a ref's first push crossing a due that blocks", CheckPathEpoch(viewOf(true, blocking, false)), EvsCheckReasonPathEpochDue)
+	requireCheckPass(t, "a ref's first push crossing a batched due", CheckPathEpoch(viewOf(true, &pathEpochDue{generation: 2}, false)))
+	requireCheckPass(t, "a ref's first push that creates nothing across a due that blocks", CheckPathEpoch(viewOf(false, blocking, false)))
+}
+
+// An overlay's first push (DESIGN-DETAILS 9.2.6's first push, QD-632): in its base ref's current epoch as step 4 read
+// the base's head, else 412 PATH_EPOCH; a creation while the base ref's head blocks creation, by its due or before its
+// block_until_ms, 412 PATH_EPOCH_DUE, recorded.
+func TestCheckPathEpochOfAnOverlaysFirstPush(t *testing.T) {
+	fixture := newCheckFixture(t)
+	base := &protocol.EvsOverlay{RefId: testId("base ref").Bytes(), Version: 4}
+	viewOf := func(epoch uint64, basePathEpoch *protocol.EvsPathEpoch) *PushView {
+		plan := fixture.plan()
+		plan.RefMode, plan.PathEpoch, plan.Generation, plan.Base = protocol.EvsRefMode_EVS_REF_GIT, epoch, 3, base
+		plan.Changes = []*sidecar.EvsPlannedChange{fixture.change(plan, checkTestPath("new"), 0, 5)}
+		view := fixture.view(plan)
+		view.OverlayBase = &protocol.EvsHead{
+			Version: 4, RefKind: uint32(protocol.EvsRefKind_EVS_REF_SHARED), RefMode: uint32(protocol.EvsRefMode_EVS_REF_GIT), PathEpoch: basePathEpoch,
+		}
+		return view
+	}
+	atTwo := &protocol.EvsPathEpoch{Current: 2}
+	requireCheckPass(t, "an overlay in its base's epoch", CheckPathEpoch(viewOf(2, atTwo)))
+	requireCheckRefusal(t, "an overlay in an epoch below its base's", CheckPathEpoch(viewOf(1, atTwo)), EvsCheckReasonPathEpoch)
+	requireCheckRefusal(t, "an overlay in an epoch above its base's", CheckPathEpoch(viewOf(3, atTwo)), EvsCheckReasonPathEpoch)
+	requireCheckRefusal(t, "an overlay past its generation", CheckPathEpoch(viewOf(4, &protocol.EvsPathEpoch{Current: 4})), EvsCheckReasonPathEpoch)
+	unread := viewOf(2, atTwo)
+	unread.OverlayBase = nil
+	requireCheckRefusal(t, "an overlay base step 4 did not read", CheckPathEpoch(unread), EvsCheckReasonUnchecked)
+
+	due := &protocol.EvsPathEpoch{Current: 2, DueGeneration: 3, DueBlocksCreation: true}
+	refusal := CheckPathEpoch(viewOf(2, due))
+	requireCheckRefusal(t, "an overlay creating while its base blocks creation", refusal, EvsCheckReasonPathEpochDue)
+	if refusal != nil && (!refusal.Recorded() || len(refusal.Paths) != 1 || !refusal.Paths[0].Equal(checkTestPath("new"))) {
+		t.Errorf("the base's block's refusal %v names %v", refusal, refusal.Paths)
+	}
+	blocked := &protocol.EvsPathEpoch{Current: 2, BlockUntilMs: fixture.now.Add(time.Minute).UnixMilli()}
+	requireCheckRefusal(t, "an overlay creating before its base's block lapses", CheckPathEpoch(viewOf(2, blocked)), EvsCheckReasonPathEpochDue)
+	lapsed := &protocol.EvsPathEpoch{Current: 2, BlockUntilMs: fixture.now.UnixMilli()}
+	requireCheckPass(t, "an overlay creating once its base's block lapsed", CheckPathEpoch(viewOf(2, lapsed)))
 }
 
 // 5f: TIP and the live lease in git mode; the 63-version window in file mode; C_b; and BASE_STALE carrying the head

@@ -8,17 +8,29 @@
 //	its key           signs no log statement: api and every reader refuse a SidecarAdmit or AdmissionConfirm whose
 //	                    signer resolves to one; it signs only S's WindowDelegations, which hosts verify (§17.9)
 //	DelegationRevoke  since_n 0 only, from S, a device allowed to revoke S (§5.6) or an Owner's or Admin's device; one
-//	                    naming an ended or superseded Delegation takes effect and changes nothing live
+//	                    naming an ended or superseded Delegation takes effect and changes nothing live, and one naming
+//	                    a Delegation whose row left the rows is refused as naming none
 //	supersession      a newer forwarding Delegation of S supersedes the one live before it at the newer one's position,
 //	                    superseded_at: no end for §10.5, so no shrink, and one live a sidecar
 //	ends              its DelegationRevoke; S's revocation for any reason, a member's removal and an ephemeral reap
 //	                    included; its void, S in a compromise cascade's P when it signed it (config_cascade.go)
 //	key drops         while S is parked or suspended, key_dropped_at the position that dropped it, and 0 again when S
 //	                    is neither: it returns with S
+//	leaves            a superseded or ended one's row leaves the rows at the first base whose retention point passes
+//	                    the later of superseded_at and ended_at by 4,096 positions (QD-648; the base compile,
+//	                    config_base.go's foldRows); a live one stays however old
 //
 // Its row leaves reader_xwing_public_key empty and carries the key's SHA-256 in reader_key_sha256: the key is gkm's
 // object, since 1,216 B a device would pass §8.8's 4 MiB of rows at about 2,600 app devices (DESIGN-DETAILS 4.2.2).
 // What a host may read of it is the config alone (§10.5), which KEYS's holders decide from the row.
+//
+// Rows that only grew would pass that 4 MiB too: every app device files a new forwarding Delegation at each new client
+// generation and at least every 90 days, and none carries a not_after for a tombstone rule to end. So a row that can no
+// longer matter leaves: once a base's retention point passes its supersession or end by the replay row's 4,096, §7.9's
+// replay row refuses every copy of its Signed bytes, whose at lies before the row's own position, and nothing forwards
+// or admits under a key that is not live. The rule reads the row's positions and the base's retention point alone, a
+// function of rows and positions, so the writer and every full reader compile the same rows and every other reader
+// takes them; never a time, so no clock moves it. KEYS's holder set reads live rows only, so it loses nothing.
 //
 // Every effect here reads only the statement's body and the state being built, never what the check found, so a
 // base's re-application gives every reader the same rows (DESIGN-DETAILS 5.2.3): the row's signer is the body's
@@ -38,8 +50,14 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// ForwardScope.host_client_public_key's size: a ClientKey, Ed25519 (C15).
-const configHostClientPublicKeyByteCount = ed25519.PublicKeySize
+// §7.9's forwarding row's sizes and bounds, which every reader holds alike.
+const (
+	// ForwardScope.host_client_public_key's size: a ClientKey, Ed25519 (C15).
+	configHostClientPublicKeyByteCount = ed25519.PublicKeySize
+	// How far a base's retention point passes a forwarding Delegation's supersession or end before its row leaves the
+	// rows: the replay row's window, past which no copy of its Signed bytes lands (QD-648).
+	configForwardingRowRetention = configStatementWindow
+)
 
 // Whether a row is a forwarding Delegation's: it names the sidecar it forwards for.
 func ConfigDelegationRowForwards(row *bridge.DelegationRow) bool {
@@ -53,6 +71,31 @@ func configRowForwardSidecar(row *bridge.DelegationRow) (Id, bool) {
 	}
 	sidecarId, err := IdFromBytes(row.GetForwardSidecarId())
 	return sidecarId, err == nil
+}
+
+// Whether a row leaves the rows of a base whose retention point is retentionPoint (QD-648): a forwarding
+// Delegation's, superseded or ended, once retentionPoint passes the later of superseded_at and ended_at by 4,096. A
+// live one never leaves, however old, and no other Delegation's row is touched, an auth key's included (the answer
+// leaves those for later).
+func configForwardingRowLeaves(row *bridge.DelegationRow, retentionPoint uint64) bool {
+	if !ConfigDelegationRowForwards(row) {
+		return false
+	}
+	leftAt := max(row.GetSupersededAt(), row.GetEndedAt())
+	// written as a subtraction, so a position near the top of uint64 cannot wrap past the point
+	return leftAt != 0 && configForwardingRowRetention <= retentionPoint && leftAt <= retentionPoint-configForwardingRowRetention
+}
+
+// The Delegation rows a base keeps, its retention point retentionPoint: all but the forwarding rows that leave there,
+// in the order given. delegations is not changed.
+func configKeptDelegationRows(delegations []*bridge.DelegationRow, retentionPoint uint64) []*bridge.DelegationRow {
+	kept := make([]*bridge.DelegationRow, 0, len(delegations))
+	for _, row := range delegations {
+		if !configForwardingRowLeaves(row, retentionPoint) {
+			kept = append(kept, row)
+		}
+	}
+	return kept
 }
 
 // A forwarding Delegation: its own sidecar's signature alone, that sidecar standing and not read_only; its fields'

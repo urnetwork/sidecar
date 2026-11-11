@@ -365,6 +365,21 @@
       }
     },
     {
+      "name": "read-head-index-epoch",
+      "construct": "a head carrying index_epoch, which only a CUT sets: a format-1 evs commits on it, carrying it, and serves it in the head's summary, which a format-1 reader reads past (QD-640)",
+      "numbers": [
+        "EvsHead.index_epoch",
+        "EvsHeadSummary.index_epoch"
+      ],
+      "side": "reader",
+      "outcome": "ignored",
+      "twin": {
+        "construct": "the same reply with an entry version that does not hash to its statement's",
+        "outcome": "alarm",
+        "alarm": "tamper"
+      }
+    },
+    {
       "name": "read-window-bits-4-5",
       "construct": "a head whose window entries carry bits 4 (a versionless version replaced) and 5 (a DROP): a format-1 evs commits on it, carrying them, and serves it",
       "numbers": [
@@ -521,13 +536,5 @@
       "twin": "the push that first introduced the slot, sent again, meets its own committed record and answers 200"
     }
   ],
-  "unswept": [
-    {
-      "numbers": [
-        "EvsHead.index_epoch",
-        "EvsHeadSummary.index_epoch"
-      ],
-      "why": "a head carries index_epoch only once a CUT committed, which raises the repo to format 2, where a format-1 evs takes no push; no format-1 code reads either field, and whether a format-1 reader should refuse a ref whose head summary carries one is not stated (11.6 lists it among what is refused in use, FS-72's constructs do not)"
-    }
-  ]
+  "unswept": []
 }

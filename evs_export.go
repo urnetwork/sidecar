@@ -429,7 +429,7 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 	checked, err := EvsGitCheckUpdate(ctx, &EvsGitUpdateArgs{
 		RepoId: self.repo.repoId, RefId: ref.refId, RefName: ref.name, Statement: statement.Statement, Payload: payload,
 		Metadata: metadata, PriorTip: ref.tip, Creating: creating, SectionRefName: sectionRefName, RefIdOf: refIdOf,
-		HeadBase:  ref.head.Head.GetBase(),
+		HeadBase: ref.head.Head.GetBase(),
 		ReplaySources: func(ctx context.Context, sources []*protocol.EvsOverlay) error {
 			for _, source := range sources {
 				if err := self.replaySource(ctx, source); err != nil {

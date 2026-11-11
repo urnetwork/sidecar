@@ -24,8 +24,12 @@
 //	pressure  on a blocking ref (a shared or owned ref of a general, config or mailcfg repo), a head that records a due
 //	          above cur, else the newest generation this device holds above max(the head's generation, cur) whose
 //	          GenRotate cause is REMOVE, classed by evs's own rule (EvsClassifyPathEpochDue): immediate holds new
-//	          names. A ref with no head takes none, since its first push creates in epoch 1 and records the due itself
-//	          (question evs1-m2-44-new-ref-crossing, option 1, as landed)
+//	          names. A ref with no head is read as holding nothing, and no token of it is sent (DESIGN-DETAILS 9.2.3); its
+//	          first push names the epoch firstEpoch gives, so on a ref that is no overlay no REMOVE lies above it and
+//	          there is no pressure, and an overlay's creator is held by its base ref's pressure
+//	first     a ref with no head starts in the epoch its first push names (QD-632): the newest generation at or below
+//	          the one the push seals to whose cause is REMOVE, 1 when none; an overlay's base ref's current epoch, from
+//	          its head verified within EpochFreshFor; 1 on a deposit or erasure ref
 //	exempt    deposit and erasure refs name entries by random ids under no path key, stay at path epoch 1 for life,
 //	          and take neither floors nor rules: every push on them declares epoch 1 and can meet neither 412
 //	          PATH_EPOCH nor PATH_EPOCH_DUE (plan-EVS1-epoch-kinds #2)
@@ -142,6 +146,9 @@ type evsRefEpoch struct {
 	version    uint64
 	generation uint64
 	refKind    protocol.EvsRefKind
+	// a ref with no head that an overlay's first push creates: its base, whose pressure holds the creator (set by a
+	// planner on the state it judges the push by, never on a cached head's)
+	base *protocol.EvsOverlay
 }
 
 // The ref's epoch state as the last verified head gave it, nil when this client has verified none.
@@ -268,8 +275,24 @@ func (self *EvsRepo) pressure(ctx context.Context, state *evsRefEpoch) (evsPress
 		return evsPressureBatched, epoch.GetDueGeneration(), nil
 	}
 	if state.version == 0 && self.client.epochs.committedVersion(self.repoId, state.refId) == 0 {
-		// a ref with no head, which no push of this device has given one either
-		return evsPressureNone, 0, nil
+		// a ref with no head, which no push of this device has given one either (DESIGN-DETAILS 9.2.3): its first push
+		// names firstEpoch, the newest removal held, so none lies above it, and an overlay's creator is held by its base
+		// ref's pressure
+		if state.base == nil {
+			return evsPressureNone, 0, nil
+		}
+		baseRefId, err := IdFromBytes(state.base.GetRefId())
+		if err != nil {
+			return evsPressureImmediate, 0, fmt.Errorf("%w: an overlay base's ref id", ErrEvsWriteInvalid)
+		}
+		baseState, err := self.freshEpochState(ctx, baseRefId)
+		if err != nil {
+			return evsPressureNone, 0, err
+		}
+		if baseState.version == 0 {
+			return evsPressureImmediate, 0, fmt.Errorf("%w: an overlay whose base ref has no head", ErrEvsWriteInvalid)
+		}
+		return self.pressure(ctx, baseState)
 	}
 	newest, err := self.client.args.Gkm.CurrentRepoKey(ctx, self.repoId)
 	if err != nil {
@@ -302,6 +325,66 @@ func (self *EvsRepo) pressure(ctx context.Context, state *evsRefEpoch) (evsPress
 		return evsPressureImmediate, removal, nil
 	}
 	return evsPressureBatched, removal, nil
+}
+
+// The epoch a ref with no head starts in (DESIGN-DETAILS 9.2.3's first push, QD-632; the file header's first row):
+// 1 on a deposit or erasure ref; on an overlay, its base ref's current epoch from a head verified within
+// EpochFreshFor, read again when the one held is older; on any other ref the newest generation at or below
+// generation, the one the push seals to, whose GenRotate cause is REMOVE, walked down as pressure walks up, 1 when
+// there is none. Naming it, a creator sends no name under an epoch a holder dropped at or below generation can test,
+// and crosses no removal, so its first push records no due. A generation gkm does not answer ends it with that error,
+// sending nothing.
+func (self *EvsRepo) firstEpoch(ctx context.Context, refKind protocol.EvsRefKind, base *protocol.EvsOverlay, generation uint64) (uint64, error) {
+	if evsEpochExempt(refKind) {
+		return 1, nil
+	}
+	if base != nil {
+		baseRefId, err := IdFromBytes(base.GetRefId())
+		if err != nil {
+			return 0, fmt.Errorf("%w: an overlay base's ref id", ErrEvsWriteInvalid)
+		}
+		state, err := self.freshEpochState(ctx, baseRefId)
+		if err != nil {
+			return 0, err
+		}
+		if state.version == 0 {
+			return 0, fmt.Errorf("%w: an overlay whose base ref has no head", ErrEvsWriteInvalid)
+		}
+		return evsCurrentEpoch(state.epoch), nil
+	}
+	if evsFirstEpochHook != nil {
+		return evsFirstEpochHook(generation), nil
+	}
+	for candidate := generation; 1 < candidate; candidate -= 1 {
+		key, err := self.client.args.Gkm.RepoKey(ctx, self.repoId, candidate)
+		if err != nil {
+			return 0, err
+		}
+		if key.Cause() == GkmCauseRemove {
+			return candidate, nil
+		}
+	}
+	return 1, nil
+}
+
+// A test's hook on the epoch a ref that is no overlay starts in, nil outside tests: DESIGN-DETAILS 9.6's
+// PathEpochTwin-NewRefAtOne answers 1 whatever the creator holds, the twin the capture must catch.
+var evsFirstEpochHook func(generation uint64) uint64
+
+// The ref's epoch state as a head verified within EpochFreshFor gives it, the head read again when the one held is
+// older or none is.
+func (self *EvsRepo) freshEpochState(ctx context.Context, refId Id) (*evsRefEpoch, error) {
+	if state := self.client.refEpochState(self.repoId, refId); self.client.epochFresh(state) {
+		return state, nil
+	}
+	if _, err := self.readHeadAlone(ctx, refId, true); err != nil {
+		return nil, err
+	}
+	state := self.client.refEpochState(self.repoId, refId)
+	if state == nil {
+		return nil, fmt.Errorf("%w: a head read that left no epoch state", ErrEvsReplyInvalid)
+	}
+	return state, nil
 }
 
 // Whether new names may be sent on the ref (9.2.3's quiet): always on a ref whose kind never blocks creation, else
@@ -711,6 +794,25 @@ func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPa
 // row for is settled absent with no token of it sent.
 func (self *EvsRepo) choose(ctx context.Context, refId Id, keys *evsReadKeys, state *evsRefEpoch, paths []*evsReadPath) ([]*evsReadPath, bool, error) {
 	current := evsCurrentEpoch(state.epoch)
+	if state.version == 0 && self.client.epochs.committedVersion(self.repoId, refId) == 0 {
+		// a ref with no head holds no entry: every path is absent, and no token of it is sent, so a request on a ref
+		// with no head sets no floor (DESIGN-DETAILS 9.2.3; E3 does not count it)
+		for _, path := range paths {
+			path.epochs, path.verified = nil, nil
+			path.settled = &EvsVerifiedPath{Absent: true}
+			// its token path in the epoch an absent head reads as, made here and sent nowhere, which a first push's
+			// plan moves to the epoch its ref starts in (evs_plan.go)
+			path.current = path.token
+			if path.token == nil {
+				tokenPath, err := keys.tokenPathIn(ctx, path.names, current)
+				if err != nil {
+					return nil, false, err
+				}
+				path.current = tokenPath
+			}
+		}
+		return nil, false, nil
+	}
 	var quiet *bool
 	fresh := self.client.epochFresh(state)
 	asked := []*evsReadPath{}

@@ -9,7 +9,8 @@
 //   - A form is Signed by the sidecar that files it, whose admin scope on the repo the newest verified state honors:
 //     §10.6's signer rule as gkm can judge it, since AclState.EvsAccess gives admin only to a repo admin's device and,
 //     in owner-bound kinds, only to the owner's consented device. Its signature verifies under the identity key the
-//     log admits for that sidecar.
+//     log admits for that sidecar, and its auth pin, the signer's state when it signed, at which members judge the
+//     signer (QD-643), is on gkm's chain and not ahead of it, as a claim's is.
 //   - A group belongs to one repo from its first byte (DESIGN-DETAILS 6.2.2): the first write of a creation or a
 //     re-form is the group's owner marker, gkm/<group_id>/owner, If-None-Match, a GkmGroupOwner {repo_id,
 //     network_id} gkm writes from the token. A marker that stands with other bytes answers 409 and nothing else of
@@ -104,7 +105,9 @@ func (self *GkmEngine) readFormUpload(request *GkmRequest, signed *bridge.Signed
 }
 
 // §10.6's form signer rule, as gkm judges it: the form is the token's own sidecar's, signed under the identity key
-// the log admits for it, and the guard has honored its admin scope on the repo. false once it has answered 403.
+// the log admits for it, and the guard has honored its admin scope on the repo; and the auth pin the form carries,
+// the signer's state when it signed (QD-643), is held to gkm's newest state as a claim's is, on the chain and not
+// ahead. false once it has answered: 403, 400 for a form with no pin, 503 for a pin past gkm's state.
 func (self *GkmEngine) checkFormSigner(request *GkmRequest, form *gkmFormUpload) bool {
 	if !bytes.Equal(form.signed.GetSignerId(), request.SidecarId.Bytes()) || !request.Rights.Has(sidecar.AclEvsAdmin) {
 		request.Forbidden()
@@ -115,7 +118,7 @@ func (self *GkmEngine) checkFormSigner(request *GkmRequest, form *gkmFormUpload)
 		request.Forbidden()
 		return false
 	}
-	return true
+	return self.checkPin(request, form.body.GetAuth())
 }
 
 // What epoch/0 holds besides what gkm writes, held to its shape: a 72-byte GenWrap_0, a sealed GroupInfo_0 within

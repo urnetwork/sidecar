@@ -22,7 +22,10 @@
 //	         under RetokenReceiptMaxAge, slot ids and bodies, inline records, sealed fields, chains and each base,
 //	         then sent under a new push id (DESIGN-DETAILS 9.2.5). A retoken counts against PushRebuildCount with
 //	         rebuilds; a head whose generation is past the sealed one is a rebuild, as the gate would refuse it. A
-//	         deposit or the erasure ref stays at epoch 1, so its 412 PATH_EPOCH goes back to the caller
+//	         deposit or the erasure ref stays at epoch 1, so its 412 PATH_EPOCH goes back to the caller. A push
+//	         planned on no head is never retokened, and lowers no floor: it is planned again, on the head now there or
+//	         in the epoch its ref starts in read again, as evs's 409 for one that meets a head has it planned again
+//	         (DESIGN-DETAILS 9.2.3, PathEpochTwin-StaleFirstPush)
 //	return   any other refusal goes back to the caller as an *EvsError: a file-mode 409 with paths among them
 //
 // A part's own 409 PARTS_MISSING at the seal posts the parts again and seals P again (evs_push_parts.go).
@@ -296,6 +299,12 @@ func (self *EvsRepo) sendSealed(ctx context.Context, sealed *EvsSealedWrite, reb
 		}
 		if evsEpochExempt(sealed.Plan.RefKind) || self.client.settings.PushRebuildCount <= *rebuilds {
 			return pushId, nil, err
+		}
+		if sealed.Plan.firstPush {
+			// planned on no head: planned again, on the head now there or under the epoch read again, and never
+			// retokened, which would name the epoch a cut-over reached over a file another creator made in a lower one
+			// (DESIGN-DETAILS 9.2.3, PathEpochTwin-StaleFirstPush)
+			return pushId, nil, fmt.Errorf("%w: %w", errEvsPlanEpochMoved, err)
 		}
 		*rebuilds += 1
 		if err := self.retoken(ctx, sealed); err != nil {

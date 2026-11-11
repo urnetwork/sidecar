@@ -230,7 +230,8 @@ func (self *pushAttempt) readOverlayBase(base *protocol.EvsOverlay) (*protocol.E
 	if err != nil {
 		return nil, nil, err
 	}
-	baseHead, err := engine.heads.ReadCached(self.ctx, self.cluster, self.repoId, baseRefId, base.GetVersion(), false)
+	// the cluster's head, whose current epoch and block an overlay's first push is held to (DESIGN-DETAILS 9.2.6)
+	baseHead, err := engine.heads.ReadCluster(self.ctx, self.cluster, self.repoId, baseRefId)
 	if err != nil {
 		return nil, nil, err
 	}

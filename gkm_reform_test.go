@@ -26,6 +26,7 @@ import (
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 var _ sidecar.GkmReformApi = (*gkmFakeApi)(nil)
@@ -387,6 +388,7 @@ func TestAMemberRefusesAReformThatFailsItsChecks(t *testing.T) {
 		forgedGroupId := sidecar.NewId()
 		formBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GroupForm{
 			RepoId: world.repoId.Bytes(), GroupId: forgedGroupId.Bytes(), PreviousGroupId: world.oldGroupId.Bytes(), Generation: generation,
+			Auth: world.log.Tip().Pin(),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -780,5 +782,118 @@ func TestALateDeliveryOfALadderGenerationNamesTheNewGroup(t *testing.T) {
 	}
 	if key, _, _, _ := e.client.TestHeldGeneration(world.repoId, 2); key != nil {
 		t.Errorf("a delivery under the new group naming the old one opened")
+	}
+}
+
+// A GroupForm the world's member b meets, by signer at auth, re-forming the old group at generation 2 into a group
+// that holds ladder, the old group's statements; b's sync then follows or refuses it. The group's id.
+func (self *gkmReformWorld) plantForm(signer *gkmWorldDevice, auth *bridge.AuthPin, ladder []*bridge.Signed) sidecar.Id {
+	self.t.Helper()
+	groupId := sidecar.NewId()
+	formBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GroupForm{
+		RepoId: self.repoId.Bytes(), GroupId: groupId.Bytes(), PreviousGroupId: self.oldGroupId.Bytes(), Generation: 2, Auth: auth,
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	form, err := signer.signer.Sign("group-form", bridge.SignedType_SIGNED_GROUP_FORM, formBody, nil)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.store.repoForms[self.repoId] = []*bridge.Signed{form}
+	self.store.groupGenerations[groupId] = slices.Clone(ladder)
+	return groupId
+}
+
+// QD-643 (KEYS-M2-32; R1's judged row): a member judges a GroupForm's signer at the auth pin the form carries. Its
+// owner's device re-forms, signing at its state; a re-form and a creation both carry the signer's pin; once the
+// re-former is no longer the owner's consented device the member still follows its form, judged at its pin; a form
+// whose signer was never allowed at its pin is refused with an alarm; a pin above the member's tip waits, with no
+// alarm, until the log reaches it; a pin off its chain is a fork; and a form whose pin is before the member's
+// previous base is not judged, counting against no one.
+func TestAFormIsJudgedAtItsPin(t *testing.T) {
+	world := newGkmReformWorld(t)
+	a := world.flows[world.a]
+	b := world.flows[world.b]
+	world.loseSite()
+	signedAt := world.log.Tip().Pin()
+	newGroupId, err := a.client.ReformGroup(world.ctx, &sidecar.GkmReformArgs{RepoId: world.repoId})
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := &protocol.GroupForm{}
+	if err := proto.Unmarshal(world.store.repoForms[world.repoId][0].GetBody(), form); err != nil || !proto.Equal(form.GetAuth(), signedAt) {
+		t.Fatalf("the re-form's form does not carry its signer's state: %v", err)
+	}
+	// a's consent goes: at the newest state a may no longer form the vault's group, but at its form's pin it might
+	world.repo.ConsentedSidecarIds = slices.DeleteFunc(world.repo.ConsentedSidecarIds, func(id []byte) bool { return bytes.Equal(id, world.a.id.Bytes()) })
+	view := world.stateFor()
+	if err := sidecar.GkmFormSignerAllowed(view, world.repoId, world.a.id); !errors.Is(err, sidecar.ErrGkmNotWriter) {
+		t.Fatalf("the re-former still forms the group at the newest state: %v", err)
+	}
+	if adopted, err := b.client.AdoptReform(world.ctx, world.repoId); !adopted || err != nil {
+		t.Fatalf("a form judged at its pin, its signer demoted since: %v", err)
+	}
+	if groupId, _, _, err := b.client.TestPins(world.repoId); err != nil || groupId != newGroupId || len(b.alarms) != 0 {
+		t.Errorf("the member did not follow the form: %v, %d alarms", err, len(b.alarms))
+	}
+
+	// a signer never allowed at the pin it signed at: refused, alarmed, nothing adopted
+	refusing := newGkmReformWorld(t)
+	rb := refusing.flows[refusing.b]
+	refusingLadder := slices.Clone(refusing.store.groupGenerations[refusing.oldGroupId])
+	refusing.loseSite()
+	refusing.plantForm(refusing.x, refusing.log.Tip().Pin(), refusingLadder)
+	if adopted, err := rb.client.AdoptReform(refusing.ctx, refusing.repoId); adopted || !errors.Is(err, sidecar.ErrGkmReformRefused) {
+		t.Errorf("a form whose signer was never allowed at its pin: %v", err)
+	}
+	if len(rb.alarms) != 1 || rb.alarms[0].Kind != sidecar.GkmAlarmRefused || rb.alarms[0].Reason != sidecar.GkmRefusalSigner || rb.alarms[0].SidecarId != refusing.x.id {
+		t.Errorf("the refused form's alarm: %+v", rb.alarms)
+	}
+	// a pin off the member's chain: a fork, alarmed as one
+	refusing.plantForm(refusing.a, sidecartest.FakeGkmForkPin(refusing.log.Tip().Pin().GetVersion()), refusingLadder)
+	if adopted, err := rb.client.AdoptReform(refusing.ctx, refusing.repoId); adopted || !errors.Is(err, sidecar.ErrGkmReformRefused) {
+		t.Errorf("a form whose pin is off the chain: %v", err)
+	}
+	if len(rb.alarms) != 2 || rb.alarms[1].Kind != sidecar.GkmAlarmHead || rb.alarms[1].Reason != sidecar.GkmRefusalFork {
+		t.Errorf("the fork's alarm: %+v", rb.alarms)
+	}
+
+	// a pin above the member's tip waits, with no alarm, until the log reaches it
+	waiting := newGkmReformWorld(t)
+	wb := waiting.flows[waiting.b]
+	waitingLadder := slices.Clone(waiting.store.groupGenerations[waiting.oldGroupId])
+	waiting.loseSite()
+	ahead := waiting.state()
+	// b has not taken the newest position, at which a signs
+	waitingGroupId := waiting.plantForm(waiting.a, ahead.Pin(), waitingLadder)
+	if adopted, err := wb.client.AdoptReform(waiting.ctx, waiting.repoId); adopted || !errors.Is(err, sidecar.ErrGkmAuthAhead) {
+		t.Errorf("a form above the member's tip: %v", err)
+	}
+	if len(wb.alarms) != 0 {
+		t.Errorf("a form above the tip alarmed: %+v", wb.alarms)
+	}
+	wb.client.AuthAdvanced(ahead)
+	if adopted, err := wb.client.AdoptReform(waiting.ctx, waiting.repoId); !adopted || err != nil {
+		t.Errorf("the form once the log reached its pin: %v", err)
+	}
+	if groupId, _, _, err := wb.client.TestPins(waiting.repoId); err != nil || groupId != waitingGroupId {
+		t.Errorf("the member did not follow the form it waited on: %v", err)
+	}
+
+	// a pin before the member's previous base is not judged, and counts against no one
+	old := newGkmReformWorld(t)
+	ob := old.flows[old.b]
+	oldLadder := slices.Clone(old.store.groupGenerations[old.oldGroupId])
+	old.loseSite()
+	oldPin := old.log.Tip().Pin()
+	old.stateFor()
+	old.log.Retain(old.log.Tip().Pin().GetVersion())
+	oldGroupId := old.plantForm(old.x, oldPin, oldLadder)
+	if adopted, err := ob.client.AdoptReform(old.ctx, old.repoId); !adopted || err != nil {
+		t.Errorf("a form whose pin is before the previous base: %v", err)
+	}
+	if groupId, _, _, err := ob.client.TestPins(old.repoId); err != nil || groupId != oldGroupId || len(ob.alarms) != 0 {
+		t.Errorf("a form not judged was held against its signer: %v, %+v", err, ob.alarms)
 	}
 }

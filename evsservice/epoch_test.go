@@ -476,8 +476,7 @@ func TestPathEpochCrossingCreationIsRefusedAndRecordsTheDue(t *testing.T) {
 }
 
 // The crossing creation blocks only where an immediate due does: a mailbox repo's crossing push creates and commits,
-// recording its due, and a ref's first push, whose head does not exist, commits its creation (question
-// evs1-m2-44-new-ref-crossing).
+// recording its due.
 func TestPathEpochCrossingCreationWhereCreationIsNotBlocked(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	fixture.putRepo(protocol.RepoKind_REPO_KIND_MAILBOX, protocol.EvsRepoState_EVS_REPO_ACTIVE)
@@ -492,15 +491,137 @@ func TestPathEpochCrossingCreationWhereCreationIsNotBlocked(t *testing.T) {
 	if pathEpoch := fixture.head().Head.GetPathEpoch(); pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueBlocksCreation() {
 		t.Fatalf("a mailbox's crossing recorded %v", pathEpoch)
 	}
+}
 
-	first := newPushFixture(t, nil)
-	first.check.appendState(first.check.firstView.Pin().GetVersion()+1, nil)
-	firstCommitment := first.putGenerationTwo(sidecar.GkmCauseRemove)
-	creation := first.planAtTwo(firstCommitment)
-	first.create(creation, "a")
-	first.requireCommitted(first.push(creation), 1)
-	if pathEpoch := first.head().Head.GetPathEpoch(); pathEpoch.GetDueGeneration() != 2 || !pathEpoch.GetDueBlocksCreation() {
-		t.Fatalf("a ref's first push across the removal recorded %v", pathEpoch)
+// DESIGN-DETAILS 9.2.6's first push (QD-632): on a ref with no head across an immediate removal its pin covers, a first
+// push naming the crossed generation commits with the head in that epoch, no source and no due; one naming 1 crosses
+// the removal and answers 412 PATH_EPOCH_DUE, recorded in a placeholder head that carries no due, so the next attempt
+// computes it again; across a batched removal a first push naming 1 commits and records the due; and a first push
+// naming an epoch past its generation is 412 PATH_EPOCH.
+func TestPathEpochARefsFirstPushNamesTheEpochItStartsIn(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	fixture.check.appendState(fixture.check.firstView.Pin().GetVersion()+1, nil)
+	commitment := fixture.putGenerationTwo(sidecar.GkmCauseRemove)
+
+	low := fixture.planAtTwo(commitment)
+	fixture.create(low, "a")
+	requireRefusal(t, fixture.push(low), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE)
+	head := fixture.head()
+	if head.Version() != 0 || head.Head.GetPathEpoch().GetDueGeneration() != 0 || len(head.Head.GetRefused()) == 0 {
+		t.Fatalf("a first push across the removal left head %d with path epoch %v and %d refusal bytes", head.Version(), head.Head.GetPathEpoch(), len(head.Head.GetRefused()))
+	}
+	past := fixture.planAtTwo(commitment)
+	past.PathEpoch = 3
+	fixture.create(past, "a")
+	requireRefusal(t, fixture.push(past), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH)
+
+	crossed := fixture.planAtTwo(commitment)
+	crossed.PathEpoch = 2
+	fixture.create(crossed, "a")
+	fixture.requireCommitted(fixture.push(crossed), 1)
+	if pathEpoch := fixture.head().Head.GetPathEpoch(); pathEpoch.GetCurrent() != 2 || len(pathEpoch.GetSources()) != 0 || pathEpoch.GetDueGeneration() != 0 {
+		t.Fatalf("the first push in the crossed generation's epoch left path epoch %v", pathEpoch)
+	}
+
+	batched := newPushFixture(t, nil)
+	batchedCommitment := batched.putGenerationTwo(sidecar.GkmCauseRemove)
+	plan := batched.planAtTwo(batchedCommitment)
+	batched.create(plan, "a")
+	batched.requireCommitted(batched.push(plan), 1)
+	if pathEpoch := batched.head().Head.GetPathEpoch(); pathEpoch.GetCurrent() != 1 || pathEpoch.GetDueGeneration() != 2 || pathEpoch.GetDueBlocksCreation() {
+		t.Fatalf("a first push across a batched removal left path epoch %v", pathEpoch)
+	}
+}
+
+// An overlay's first push (DESIGN-DETAILS 9.2.6): its base ref created in epoch 2, the overlay's first push in epoch 2
+// commits with its head in epoch 2, and one in epoch 1 is 412 PATH_EPOCH; while the base ref's head blocks creation, a
+// creating first push of the overlay is 412 PATH_EPOCH_DUE.
+func TestPathEpochAnOverlaysFirstPushTakesItsBaseRefsEpoch(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	fixture.check.appendState(fixture.check.firstView.Pin().GetVersion()+1, nil)
+	commitment := fixture.putGenerationTwo(sidecar.GkmCauseRemove)
+	baseRefId, overlayRefId := testId("base ref"), testId("overlay ref")
+	atTwo := func(plan *sidecar.EvsPushPlan, epoch uint64) *sidecar.EvsPushPlan {
+		plan.Generation, plan.GenerationCommitment, plan.Auth, plan.PathEpoch = 2, commitment, fixture.check.auth.Pin(), epoch
+		return plan
+	}
+	fixture.requireCommitted(fixture.push(atTwo(fixture.gitPlanOn(baseRefId, "base-file", 1), 2)), 1)
+	fixture.awaitStepEights()
+	base := &protocol.EvsOverlay{RefId: baseRefId.Bytes(), Version: 1}
+
+	low := atTwo(fixture.gitPlanOn(overlayRefId, "overlay-file", 2), 1)
+	low.Base = base
+	requireRefusal(t, fixture.push(low), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH)
+	inBase := atTwo(fixture.gitPlanOn(overlayRefId, "overlay-file", 2), 2)
+	inBase.Base = base
+	fixture.requireCommitted(fixture.push(inBase), 1)
+	if pathEpoch := fixture.headOf(overlayRefId).Head.GetPathEpoch(); pathEpoch.GetCurrent() != 2 || pathEpoch.GetDueGeneration() != 0 {
+		t.Fatalf("the overlay's head starts in %v", pathEpoch)
+	}
+
+	// a second overlay of a base whose head blocks creation
+	fixture.rewriteHeadOf(baseRefId, func(head *protocol.EvsHead) {
+		head.PathEpoch.BlockUntilMs = fixture.clock.Now().Add(time.Hour).UnixMilli()
+	})
+	blocked := atTwo(fixture.gitPlanOn(testId("second overlay"), "second-file", 2), 2)
+	blocked.Base = base
+	requireRefusal(t, fixture.push(blocked), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE)
+}
+
+// 5e's once line (DESIGN-DETAILS 9.2.6): a push planned on no head, on a ref that has one, is 409 before its epoch is
+// compared: BASE_STALE in file mode, non-fast-forward in git mode.
+func TestPathEpochAPushPlannedOnNoHeadIsRefusedOnARefThatHasOne(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	plan := fixture.plan()
+	fixture.create(plan, "a")
+	fixture.requireCommitted(fixture.push(plan), 1)
+	stale := fixture.plan()
+	stale.BaseVersion, stale.BaseChain, stale.PathEpoch = 0, sidecar.EvsChainStart(fixture.check.repoId, fixture.check.refId), 7
+	fixture.create(stale, "b")
+	requireRefusal(t, fixture.push(stale), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
+
+	gitRefId := testId("git ref")
+	fixture.requireCommitted(fixture.push(fixture.gitPlanOn(gitRefId, "x", 1)), 1)
+	fixture.awaitStepEights()
+	gitStale := fixture.gitPlanOn(testId("unused"), "y", 1)
+	gitStale.RefId, gitStale.PathEpoch = gitRefId, 7
+	requireRefusal(t, fixture.push(gitStale), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_NON_FAST_FORWARD)
+}
+
+// PathEpochTwin-StaleFirstPush end to end (DESIGN-DETAILS 9.2.3): A, holding the removal, plans the ref's first push in
+// epoch 2; B, not yet told, creates the same file in epoch 1 and lands first; a mapper cuts the ref over to epoch 2,
+// and the copy has not run. A's push, planned on no head, is refused 409 before its epoch is compared, and A plans
+// again on the head. The twin: with the once line off, A's creation commits over B's standing file, which no change of
+// A's names in epoch 1, so evs finds no entry for it.
+func TestPathEpochStaleFirstPushIsRefusedWhereItsTwinCreatesOverAFile(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	// B, not yet told of the removal, creates a in epoch 1 at generation 1 and lands first
+	b := fixture.plan()
+	fixture.create(b, "a")
+	fixture.requireCommitted(fixture.push(b), 1)
+	fixture.awaitStepEights()
+	// A holds the removal and planned the ref's first push on no head, in epoch 2
+	fixture.check.appendState(fixture.check.firstView.Pin().GetVersion()+1, nil)
+	commitment := fixture.putGenerationTwo(sidecar.GkmCauseRemove)
+	planned := fixture.planAtTwo(commitment)
+	planned.PathEpoch, planned.BaseVersion, planned.BaseChain = 2, 0, sidecar.EvsChainStart(fixture.check.repoId, fixture.check.refId)
+	planned.Changes = append(planned.Changes, fixture.check.change(planned, epochPath(2, "a"), 0, 1))
+	// a mapper cuts the ref over to epoch 2, and the copy has not run
+	fixture.cutOverToEpochTwo(commitment, pathEpochTestMoveAt(2, []uint64{1}, "a"))
+	if pathEpoch := fixture.head().Head.GetPathEpoch(); pathEpoch.GetCurrent() != 2 || len(pathEpoch.GetSources()) != 1 {
+		t.Fatalf("the cut-over: %v", pathEpoch)
+	}
+	requireRefusal(t, fixture.push(planned), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE)
+
+	// the twin, a fresh statement of the same plan
+	evsFirstPushOnceSkipped = true
+	defer func() { evsFirstPushOnceSkipped = false }()
+	twin := fixture.planAtTwo(commitment)
+	twin.PathEpoch, twin.BaseVersion, twin.BaseChain = 2, 0, sidecar.EvsChainStart(fixture.check.repoId, fixture.check.refId)
+	twin.Changes = append(twin.Changes, fixture.check.change(twin, epochPath(2, "a"), 0, 1))
+	fixture.requireCommitted(fixture.push(twin), 3)
+	if fixture.entryAt(1, "a").Absent() {
+		t.Fatal("B's file in epoch 1 is gone")
 	}
 }
 
@@ -592,5 +713,18 @@ func TestPathMapPartUnderAnotherPartsKeyAnswersMapSource(t *testing.T) {
 	requireRefusal(t, recorder, http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_MAP_SOURCE)
 	if !sidecar.IsEvsMapSource(&sidecar.EvsError{Status: recorder.Code, Code: refusalOf(t, recorder).GetCode()}) {
 		t.Fatal("the client does not read MAP_SOURCE as such")
+	}
+}
+
+// Writes ref's head again with mutate applied under a raised fence, as a fence write such as the block's does.
+func (self *pushFixture) rewriteHeadOf(refId sidecar.Id, mutate func(head *protocol.EvsHead)) {
+	self.t.Helper()
+	prior := self.headOf(refId)
+	next := CloneEvsHead(prior.Head)
+	mutate(next)
+	next.Fence = prior.Head.GetFence() + 1
+	next.FenceMs = self.clock.Now().UnixMilli()
+	if _, err := self.engine.heads.Commit(self.ctx, self.cluster, self.check.repoId, refId, prior, next); err != nil {
+		self.t.Fatal(err)
 	}
 }

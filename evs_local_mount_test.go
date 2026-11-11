@@ -98,6 +98,18 @@ func TestEvsMountCreatesAndReopens(t *testing.T) {
 	if got := config(info.BareDir, "core.hooksPath", false); !strings.HasSuffix(got, ".hooks") {
 		t.Errorf("hooksPath %q", got)
 	}
+	// 8.2.11's upkeep, and the daemon's namespace
+	for key, want := range map[string]string{
+		"transfer.hideRefs": "refs/ur", "gc.auto": "0", "receive.autogc": "false", "transfer.fsckObjects": "false",
+		"receive.denyNonFastForwards": "false", "receive.denyDeletes": "false", "core.logAllRefUpdates": "false",
+	} {
+		if got := config(info.BareDir, key, false); got != want {
+			t.Errorf("%s %q", key, got)
+		}
+	}
+	if stat, err := os.Stat(filepath.Join(info.BareDir, "refs", "ur")); err != nil || !stat.IsDir() {
+		t.Errorf("refs/ur/: %v", err)
+	}
 	if got := config(info.BareDir, "core.sharedRepository", false); got != "0600" {
 		t.Errorf("sharedRepository %q", got)
 	}

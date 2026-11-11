@@ -59,6 +59,7 @@ type GkmGroupApi interface {
 	ReaderKey(ctx context.Context, sidecarId Id) (*bridge.Signed, error)
 	ReaderKeys(ctx context.Context, sidecarIds []Id) ([]*bridge.Signed, error)
 	DelegationKey(ctx context.Context, configRepoId Id, delegationId []byte) ([]byte, error)
+	DelegationKeys(ctx context.Context, configRepoId Id, delegationIds [][]byte) ([][]byte, error)
 	ClaimKeyPackage(ctx context.Context, repoId Id, groupId Id, target Id) (*protocol.GkmKeyPackageClaimReply, error)
 	GroupInfo(ctx context.Context, repoId Id, groupId Id, want *uint64) (*protocol.GkmGroupInfoObject, error)
 	UploadGroupInfo(ctx context.Context, repoId Id, groupId Id, object *protocol.GkmGroupInfoObject) error
@@ -176,6 +177,9 @@ type GkmGroupClient struct {
 	// the DelegationWraps rotations skipped for a forwarding Delegation whose reader key neither the log nor gkm gave
 	// (gkm_deliver.go)
 	delegationWrapsSkipped atomic.Uint64
+	// the newest state at which this device alarmed a refused RepoCreate of a repo an agent created, by repo
+	// (FormAgentRepos)
+	agentRepoRefusedVersions map[Id]uint64
 }
 
 var _ GkmClient = (*GkmGroupClient)(nil)
@@ -1072,6 +1076,10 @@ func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 	}
 	hints.SetHandler(protocol.GkmHintKind_GKM_HINT_PENDING, func(ctx context.Context, wake *GkmHintWake) {
 		if wake.GroupId == nil {
+			// a repo with no group yet, which a sidecar with no leaf created (QD-638)
+			self.hintWork(ctx, "form", Id{}, func() {
+				self.logFlowError("form", self.FormAgentRepos(ctx))
+			})
 			return
 		}
 		if repoId, ok := self.heldRepoOfGroup(*wake.GroupId); ok {
@@ -1118,6 +1126,9 @@ func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 		joinedRepoIds, err := self.JoinWelcomes(ctx)
 		self.logFlowError("welcome", err)
 		self.selfUpdateJoined(ctx, joinedRepoIds)
+		self.hintWork(ctx, "form", Id{}, func() {
+			self.logFlowError("form", self.FormAgentRepos(ctx))
+		})
 		repoIds, err := self.heldRepoIds()
 		if err != nil {
 			return
@@ -1133,6 +1144,81 @@ func (self *GkmGroupClient) AttachHints(ctx context.Context, hints *GkmHints) {
 			pending(repoId)
 		}
 	})
+}
+
+// QD-638's member step: for each repo this device reads and holds no group of whose creator holds no leaf, a
+// tagged or ephemeral sidecar, the device judges the repo's RepoCreate at its state (GkmFormsAgentRepo) and, when it
+// may form the group and gkm holds no form of the repo yet, runs KF1's steps 2 to 4 as the group's creator: the
+// owner marker, the form, epoch 0 with its own leaf, generation 1 and its deliveries, the agent's ReaderWrap among
+// them. The agent activates the repo once it holds generation 1, and every other holder is the pending engine's, as
+// for any repo. A RepoCreate this device refuses is alarmed once per state and left keying; a race another device won
+// ends this one's creation (ErrGkmGroupFormed), which is no error here. A device that holds no leaf forms nothing.
+func (self *GkmGroupClient) FormAgentRepos(ctx context.Context) error {
+	if self.args.Mls == nil || self.args.ReaderRepoIds == nil {
+		return nil
+	}
+	state, err := self.currentState()
+	if err != nil {
+		return err
+	}
+	errs := []error{}
+	for _, repoId := range self.args.ReaderRepoIds() {
+		if _, err := self.repoPins(repoId); err == nil {
+			continue
+		} else if !errors.Is(err, ErrGkmKeyMissing) {
+			errs = append(errs, err)
+			continue
+		}
+		agentRepo, err := GkmFormsAgentRepo(state, repoId, self.args.SidecarId, self.clock.Now())
+		if errors.Is(err, ErrGkmNoRepo) {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if agentRepo.Verdict.Refused {
+			if self.noteAgentRepoRefused(repoId, state.Pin().GetVersion()) {
+				self.alarm(&GkmAlarm{
+					Kind: GkmAlarmRefused, RepoId: repoId, SidecarId: agentRepo.CreatorId,
+					Reason: agentRepo.Verdict.Reason, Detail: agentRepo.Verdict.Detail,
+				})
+			}
+			continue
+		}
+		if !agentRepo.Form {
+			continue
+		}
+		reply, err := self.args.Api.Forms(ctx, repoId)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if 0 < len(reply.GetForms()) {
+			// formed already: this device joins by its Welcome
+			continue
+		}
+		repo := state.Repo(repoId)
+		_, err = self.CreateGroup(ctx, &GkmCreateGroupArgs{NetworkId: self.args.NetworkId, RepoId: repoId, Kind: repo.GetKind()})
+		if err != nil && !errors.Is(err, ErrGkmGroupFormed) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Whether a refusal of repoId's RepoCreate at the state of version is new, and so alarmed: once per repo and state.
+func (self *GkmGroupClient) noteAgentRepoRefused(repoId Id, version uint64) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.agentRepoRefusedVersions == nil {
+		self.agentRepoRefusedVersions = map[Id]uint64{}
+	}
+	if refused, ok := self.agentRepoRefusedVersions[repoId]; ok && version <= refused {
+		return false
+	}
+	self.agentRepoRefusedVersions[repoId] = version
+	return true
 }
 
 // Runs work on its own goroutine unless the same kind of work for the repo is already running.

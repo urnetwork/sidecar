@@ -183,6 +183,10 @@ message SidecarRow {
                                                  //   position order, for the sidecar's life; 5-8 the newest of each
                                                  //   (DESIGN-DETAILS 5.2.2)
   repeated CascadeSpanRow cascades = 22;         // each compromise cascade that held it in P, in position order
+  int64  admitted_time_ms = 23;                  // ms since the epoch: time_ms of the entry its admission took effect
+                                                 //   at, admitted_at's, its SidecarAdmit's, the completing cosign's or
+                                                 //   the tick's, never a reader's clock; 0 for the Genesis's device,
+                                                 //   which no entry admitted (QD-646)
 }
 
 // The fields §7.9 lists, then the Delegation's signing and reader public keys and max_admits, which api-7
@@ -200,7 +204,9 @@ message DelegationRow {
   bytes  reader_xwing_public_key = 10;   // §10.5; empty on a forwarding Delegation's row, its digest in 16
   uint32 max_admits = 11;
   // A forwarding Delegation's row (D-TEAM-33, owner decision 197; DESIGN-DETAILS 4.2.2): tag_atoms empty,
-  // not_after 0, max_admits 0, admissions 0. Each is empty or 0 on any other Delegation's row.
+  // not_after 0, max_admits 0, admissions 0. Each is empty or 0 on any other Delegation's row. Once superseded or
+  // ended it leaves the rows at the first base whose retention point passes the later of superseded_at and
+  // ended_at by 4,096 positions (QD-648).
   bytes  forward_sidecar_id = 12;        // S, its signer
   bytes  host_client_id = 13;
   bytes  host_client_public_key = 14;
