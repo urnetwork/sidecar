@@ -1,22 +1,23 @@
 // FS-9 (§22.8; §11.7's directory bound, §11.8's 5g; EVS1-M2-41) on the evs world (evs_world.go), T2 alone as the
 // catalog has it.
 //
-// The registered case, Fs9DirectoryAtItsBound, beside its twin: one push, in parts, writes 3,584 children of a
-// directory D under an existing top-level directory, each name under 64 B, so each sealed name with its nonce and tag frames to a 128-byte row and the 448
+// The registered case, Fs9DirectoryAtItsBound, beside its twin: pushes of 512 writes, a step each so no actor holds
+// the driver's baton past its stall bound, each followed by a fold and a commit raising folded_through over it, write
+// 3,584 children of a directory D under an existing top-level directory, each name under 64 B, so each sealed name with its nonce and tag frames to a 128-byte row and the 448
 // KiB of name table binds exactly, before the 4,096-child count; D's table is folded; a child added by another writer
 // is refused 409 DIRECTORY_FULL from 5g after the ref's fence, and so is a second a second later, once the first's
 // refusal record is past §11.8's one a second, after the reader lists D whole. The twin, Fs9DirectoryBelowItsBound,
 // writes 3,582, and both child adds commit, the second filling D to its bound, each listing taking them.
 //
-// The clause beside it, Fs9UnfoldedListing, lists D at its bound and adds a child before the fold, FS-9's unfolded
-// half. On the landed engine the read reply's path frame, which carries the four parts' directory deltas and their
+// The clause beside it, Fs9UnfoldedListing, writes D at its bound in one push in parts and lists it and adds a child
+// before the fold, FS-9's unfolded half. On the landed engine the read reply's path frame, which carries the four parts' directory deltas and their
 // proofs, passes the read frame's 1 MiB and 64 KiB bound, so evs notes stream_failed and the reply ends before its
 // last frame, for the listing and for the creation's own read of D alike (question
 // evs1-m2-40-unfolded-listing-frame); no test runs it until that is answered.
 //
 // D is not top-level: a push in parts that creates a top-level name changes the root's table, whose empty token path
 // its seal record names as the first part's, which sidecar.ParseEvsSealRecordBody refuses, so FI-1's walk fails on
-// it (question evs1-m2-40-seal-root-part).
+// it (question evs1-m2-40-seal-root-part). The clause beside it writes D in one push in parts.
 //
 // FS-9's same bound through a paused copy with carried rows counted untagged, the directory removal and creation
 // races in both orders, as multi-part pushes sealed after the other commit, and a part adding to a full D are
@@ -86,7 +87,22 @@ func fs9Schedule(net *Net, childCount int) *Schedule {
 	steps := []*Step{
 		{Actor: "writerA", Action: world.Setup},
 		{Actor: "writerA", Action: world.Write("writerA", "x/keep.txt", EvsWorldContent("fs9 keep", 16))},
-		{Actor: "writerA", Action: world.WritePaths("writerA", children)},
+	}
+	for first := 0; first < childCount; first += 512 {
+		chunk := map[string][]byte{}
+		for _, name := range names[first:min(first+512, childCount)] {
+			chunk["x/d/"+name] = children["x/d/"+name]
+		}
+		// each push plans on D folded, with folded_through over its table: a second unfolded delta of one directory
+		// has no proof a read can carry (question evs1-m2-28-rooted-delta-proofs)
+		steps = append(steps,
+			&Step{Actor: "writerA", Action: world.WritePaths("writerA", chunk)},
+			&Step{Actor: "folder", Action: world.Fold("evs1")},
+			// outside D's directory: a plan under it would cross the push's rooted delta before folded_through does
+			&Step{Actor: "writerA", Action: world.Write("writerA", fmt.Sprintf("top-%d.txt", first), EvsWorldContent(fmt.Sprintf("fs9 top %d", first), 16))},
+		)
+	}
+	steps = append(steps, []*Step{
 		{Actor: "folder", Action: world.Fold("evs1")},
 		{Actor: "writerB", Action: addOne("writerB", firstAdd)},
 		{Actor: "reader", Action: world.VerifyListing("reader", "x/d", listed...)},
@@ -94,7 +110,7 @@ func fs9Schedule(net *Net, childCount int) *Schedule {
 		{Actor: "writerB", Action: addOne("writerB", secondAdd)},
 		{Actor: "reader", Action: world.VerifyListing("reader", "x/d", listedAfter...)},
 		{Actor: "reader", Action: world.Verify("reader", "x/d/"+names[0], "x/d/"+names[len(names)-1], "x/d/"+firstAdd, "x/d/"+secondAdd)},
-	}
+	}...)
 	return &Schedule{Id: "FS-9", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2}}
 }
 
