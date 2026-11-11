@@ -167,10 +167,32 @@ func (self *evsByteAppender) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// An object source whose trees are kept once read, bounded by byteCount: what a publish's many lookups in a few trees
+// read through, each tree once.
+type evsGitCachedTrees struct {
+	source EvsGitObjectSource
+	cache  *evsGitTreeCache
+}
+
+func newEvsGitCachedTrees(source EvsGitObjectSource, byteCount int64) *evsGitCachedTrees {
+	return &evsGitCachedTrees{source: source, cache: newEvsGitTreeCache(byteCount)}
+}
+
+// The object's kind and bytes, a tree's from the cache when held.
+func (self *evsGitCachedTrees) ReadGitObject(ctx context.Context, oid EvsGitOid) (string, []byte, error) {
+	return self.source.ReadGitObject(ctx, oid)
+}
+
 // A tree's entries as git reads them, sorted by name bytes, nil for none: the empty tree's, or a tree absent here.
 func evsGitSortedEntries(ctx context.Context, source EvsGitObjectSource, oid *EvsGitOid) ([]EvsGitRawEntry, error) {
 	if oid == nil || *oid == EvsGitEmptyTreeOid {
 		return nil, nil
+	}
+	cached, isCached := source.(*evsGitCachedTrees)
+	if isCached {
+		if entries, ok := cached.cache.get(*oid); ok {
+			return entries, nil
+		}
 	}
 	kind, encoded, err := source.ReadGitObject(ctx, *oid)
 	if err != nil {
@@ -184,6 +206,9 @@ func evsGitSortedEntries(ctx context.Context, source EvsGitObjectSource, oid *Ev
 		return nil, fmt.Errorf("tree %x: %w", oid[:], err)
 	}
 	slices.SortFunc(entries, func(a EvsGitRawEntry, b EvsGitRawEntry) int { return bytes.Compare(a.Name, b.Name) })
+	if isCached {
+		cached.cache.put(*oid, entries, len(encoded))
+	}
 	return entries, nil
 }
 

@@ -660,6 +660,11 @@ func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, versi
 		return self.tokensAt(key, self.commits[commitVersion-1].parsed.Push.GetPathEpoch())
 	}
 	reply := &protocol.EvsReadPathReply{TokenPath: tokenPath.Components(), EntryEpoch: entryEpoch}
+	if state == nil && self.base != nil {
+		// an overlay's path it holds no version of: its base, which the reader reads instead (§11.7)
+		reply.Base = self.base
+		return reply, nil, nil
+	}
 	if state == nil {
 		// never written: absent, with the proofs that no later statement's change list holds it
 		for later := uint64(1); later <= uint64(len(self.commits)); later += 1 {

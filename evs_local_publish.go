@@ -74,6 +74,10 @@ type EvsLocalPublishArgs struct {
 	// re-creating push states its net change against (8.2.4's branch row), nil for one deleted with no tip.
 	Deleted bool
 	LastTip *EvsGitOid
+	// An overlay's base as replay holds it from the head (EvsGitRef.base), for a push that does not create its ref or
+	// re-creates it after a DELETE; a new branch's is chosen here by the base search (evs_local_overlay.go), nil for
+	// none.
+	Base *protocol.EvsOverlay
 	// An import's push: every carried commit is listed by an EvsImport this sidecar signs, as a repo admin, over the
 	// push's own commits (8.2.6), held to git's graph alone.
 	Import bool
@@ -93,6 +97,8 @@ type EvsLocalPublishResult struct {
 	// The carried commits, parents first, and the sources the push named.
 	Commits []EvsGitOid
 	Sources []*protocol.EvsOverlay
+	// The overlay's base the push named, or the ref holds, nil for none: what replay keeps in EvsGitRef.
+	Base *protocol.EvsOverlay
 	// How many history blobs it carried.
 	HistoryBlobCount int
 }
@@ -188,6 +194,8 @@ type evsGitPublishUpdate struct {
 	changes    []*EvsGitPathChange
 	// the push ids this update sent, which the history may hold
 	pushIds map[Id]bool
+	// an overlay's base, the head's or the one the base search chose
+	base *protocol.EvsOverlay
 }
 
 // Steps 1 and 2 of the file header, and the net change, which no attempt changes.
@@ -249,6 +257,49 @@ func newEvsGitPublishUpdate(ctx context.Context, args *EvsLocalPublishArgs, refI
 	if args.State == nil {
 		return nil, fmt.Errorf("%w: a publish with no replay state", ErrEvsWriteInvalid)
 	}
+	// an overlay's base: a new branch's from the base search, else the head's; its tip is held by every reader, and a
+	// new overlay states its first net change against the base tip's tree (8.2.4)
+	self.base = args.Base
+	var baseTip *EvsGitOid
+	switch {
+	case self.tagRef:
+		if self.base != nil {
+			return nil, fmt.Errorf("%w: a tag ref with a base", ErrEvsGitUpdateInvalid)
+		}
+	case self.base == nil && self.creating && !args.Deleted:
+		found, err := args.Mount.overlayBase(ctx, refId, peeled, args.State, args.Repo.client.settings.OverlayBaseSearchCount)
+		if err != nil {
+			return nil, err
+		}
+		if found != nil {
+			self.base = &protocol.EvsOverlay{RefId: found.RefId.Bytes(), Version: found.Version}
+			tip := found.Tip
+			baseTip = &tip
+		}
+	case self.base != nil:
+		baseRefId, err := IdFromBytes(self.base.GetRefId())
+		if err != nil {
+			return nil, fmt.Errorf("%w: an overlay base's ref id", ErrEvsWriteInvalid)
+		}
+		tip, ok, err := args.State.TipAt(ctx, baseRefId, self.base.GetVersion())
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("%w: an overlay whose base version replay has not applied", ErrEvsGitUpdateInvalid)
+		}
+		baseTip = &tip
+	}
+	if baseTip != nil {
+		peeledBase, _, err := evsGitPeel(ctx, objects, *baseTip)
+		if err != nil {
+			return nil, err
+		}
+		excl = append(excl, peeledBase)
+		if self.creating && !args.Deleted {
+			stood = &peeledBase
+		}
+	}
 	carried, err := args.Mount.carried(ctx, refId, peeled, excl, args.State)
 	if err != nil {
 		return nil, err
@@ -294,8 +345,67 @@ func newEvsGitPublishUpdate(ctx context.Context, args *EvsLocalPublishArgs, refI
 		if self.changes, err = evsGitNetChange(ctx, objects, stoodTree, nextTree); err != nil {
 			return nil, err
 		}
+		if err := self.markReuses(ctx); err != nil {
+			return nil, err
+		}
 	}
 	return self, nil
+}
+
+// Marks each file write whose chain another ref's standing entry may serve (8.2.4's reuse row): a source whose tip's
+// tree holds the new blob at the path, cited whole; else, on an overlay, the base, whose entry of the blob that stood
+// the write's diff applies to where the overlay holds no version of the path. The plan reads each entry and plans a
+// checkpoint where it holds another blob.
+func (self *evsGitPublishUpdate) markReuses(ctx context.Context) error {
+	type sourceTree struct {
+		refId Id
+		tree  EvsGitOid
+	}
+	trees := []*sourceTree{}
+	for _, source := range self.carried.sources {
+		peeled, _, err := evsGitPeel(ctx, self.objects, source.Tip)
+		if err != nil {
+			return err
+		}
+		tree, err := evsGitTreeOf(ctx, self.objects, peeled)
+		if err != nil {
+			return err
+		}
+		trees = append(trees, &sourceTree{refId: source.RefId, tree: tree})
+	}
+	var baseRefId *Id
+	if self.base != nil {
+		refId, err := IdFromBytes(self.base.GetRefId())
+		if err != nil {
+			return fmt.Errorf("%w: an overlay base's ref id", ErrEvsWriteInvalid)
+		}
+		baseRefId = &refId
+	}
+	cached := newEvsGitCachedTrees(self.objects, self.repo.client.settings.TreeCacheByteCount)
+	for _, change := range self.changes {
+		if change.Kind != protocol.EvsEntryKind_EVS_ENTRY_FILE || change.Mode == EvsGitModeGitlink {
+			continue
+		}
+		names, err := evsPathNames(change.Path)
+		if err != nil {
+			return err
+		}
+		for _, source := range trees {
+			entry, found, err := evsGitFileAt(ctx, cached, source.tree, names)
+			if err != nil {
+				return err
+			}
+			if found && entry.Oid == change.Oid {
+				refId := source.refId
+				change.ReuseRefId, change.ReuseWhole = &refId, true
+				break
+			}
+		}
+		if change.ReuseRefId == nil && baseRefId != nil && change.Stood == protocol.EvsEntryKind_EVS_ENTRY_FILE {
+			change.ReuseRefId = baseRefId
+		}
+	}
+	return nil
 }
 
 // One attempt on base version baseVersion: steps 3 to 6 of the file header, under a fresh generation and push ids.
@@ -311,7 +421,7 @@ func (self *evsGitPublishUpdate) publishOnce(ctx context.Context, baseVersion ui
 	git := proto.Clone(self.git).(*protocol.EvsGitUpdate)
 	plan, err := repo.PlanGitUpdate(ctx, &EvsGitPlanArgs{
 		RefName: self.args.RefName, RefId: self.refId, Update: git, Changes: self.changes, BaseVersion: baseVersion,
-		Blobs: self.objects, Generation: repoKey.Generation(),
+		Base: self.base, Blobs: self.objects, Generation: repoKey.Generation(),
 	})
 	if err != nil {
 		return nil, err
@@ -320,8 +430,9 @@ func (self *evsGitPublishUpdate) publishOnce(ctx context.Context, baseVersion ui
 	plan.Flags = self.flags
 	plan.gitExtras = &evsGitPushExtras{commits: self.commits, creating: self.creating}
 	if self.creating {
-		// payload sections 15 and 16, the first after a DELETE's as a new ref's (8.2.2's sections row)
-		plan.gitExtras.refName = self.args.RefName
+		// payload sections 15 and 16, the first after a DELETE's as a new ref's, repeating the head's base (8.2.2's
+		// sections row)
+		plan.gitExtras.refName, plan.gitExtras.base = self.args.RefName, self.base
 	}
 	sealed, err := repo.client.sealWrite(ctx, plan, repoKey)
 	if err != nil {
@@ -345,7 +456,7 @@ func (self *evsGitPublishUpdate) publishOnce(ctx context.Context, baseVersion ui
 	}
 	return &EvsLocalPublishResult{
 		PushId: pushId, Version: reply.GetVersion(), Shape: git.GetShape(), Flags: self.flags, Commits: self.commitOids,
-		Sources: git.GetSources(), HistoryBlobCount: historyCount,
+		Sources: git.GetSources(), Base: self.base, HistoryBlobCount: historyCount,
 	}, nil
 }
 
@@ -394,7 +505,7 @@ func (self *evsGitPublishUpdate) judgeMoved(ctx context.Context, moved *EvsGitHe
 		if self.pushIds[Id(push.GetPushId())] {
 			return &EvsLocalPublishResult{
 				PushId: Id(push.GetPushId()), Version: statement.Version, Shape: self.git.GetShape(), Flags: self.flags,
-				Commits: self.commitOids, Sources: self.git.GetSources(),
+				Commits: self.commitOids, Sources: self.git.GetSources(), Base: self.base,
 			}, false, nil
 		}
 		switch {

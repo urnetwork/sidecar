@@ -134,8 +134,8 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 				}
 				pushPlan.Base = extras.base
 			}
-			pushPlan.ReuseList = extras.reuse
 		}
+		pushPlan.ReuseList = plan.reuse
 	}
 	if self.client.args.GroupHead != nil {
 		if groupHead, ok := self.client.args.GroupHead(repoKey.GroupId()); ok {
@@ -207,19 +207,6 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 		}
 	}
 	return attempt, nil
-}
-
-// What a git-mode push seals beside its update (DESIGN-DETAILS 8.2.2; 8.2.5's step 5): its carried commits and its
-// signed import; on a push that creates its ref, or is the first after a DELETE, the ref's name and an overlay's base,
-// which payload sections 15 and 16 carry beside their sealed copies; and its reuse list. Its history segments are the
-// sealed write's own, introduced and uploaded with the entries' segments.
-type evsGitPushExtras struct {
-	commits      []*protocol.EvsSealedCommit
-	signedImport []byte
-	creating     bool
-	refName      []byte
-	base         *protocol.EvsOverlay
-	reuse        []*EvsReuse
 }
 
 // The segment ids an entry version's chain names.

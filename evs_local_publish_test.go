@@ -338,6 +338,8 @@ type evsTestPublishedRef struct {
 	version uint64
 	chain   [32]byte
 	deleted bool
+	// an overlay's base, as replay keeps it from the head
+	base *protocol.EvsOverlay
 }
 
 func newEvsTestPublisher(t *testing.T) *evsTestPublisher {
@@ -436,6 +438,7 @@ func (self *evsTestPublisher) publish(name string, new *EvsGitOid, configure ...
 	args := &EvsLocalPublishArgs{
 		Mount: self.mount.repo, Repo: self.writer.repo, RefName: []byte(name), Old: ref.tip, New: new,
 		BaseVersion: ref.version, BaseChain: ref.chain, Deleted: ref.deleted, LastTip: ref.lastTip, State: self.state,
+		Base: ref.base,
 	}
 	for _, f := range configure {
 		f(args)
@@ -444,6 +447,7 @@ func (self *evsTestPublisher) publish(name string, new *EvsGitOid, configure ...
 	if err != nil {
 		return nil, err
 	}
+	ref.base = result.Base
 	self.apply(name, result.Version, new)
 	return result, nil
 }
@@ -891,5 +895,150 @@ func TestEvsLocalPublishJudgesAHeadPastItsBase(t *testing.T) {
 	posted := publisher.posted()
 	if _, err := publisher.publish("main", &sibling); !errors.Is(err, ErrEvsGitTipMoved) || publisher.posted() != posted {
 		t.Fatalf("a sibling of a committed update: %v", err)
+	}
+}
+
+// The checked payload of the ref's committed version.
+func (self *evsTestPublisher) payload(name string, version uint64) *EvsCheckedPayload {
+	self.t.Helper()
+	world := self.writer.server.worldOf(self.ref(name).refId)
+	world.stateLock.Lock()
+	commit := world.commits[version-1]
+	world.stateLock.Unlock()
+	if 0 < len(commit.built.Parts) {
+		checked, _, err := EvsCheckSeal(commit.parsed, commit.built.Parts)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		return checked
+	}
+	checked, err := EvsCheckPayload(commit.parsed, commit.built.Payload)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return checked
+}
+
+// FS-5's overlay and 8.1's H: a branch created at a commit main holds is an overlay of main at that version, which the
+// base search finds; its first push writes the one file it changed, a diff on main's entry that a reuse item cites,
+// and no directory; removing an inherited file writes its directory whole without it and nothing for the file. The
+// export, which replays the base first, holds every oid.
+func TestEvsLocalPublishOverlayHoldsOnlyWhatItWrites(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	text := strings.Repeat("an inherited line\n", 64)
+	m1 := publisher.commit(map[string]string{"src/a.go": text, "src/b.go": "b\n", "docs/readme": "r\n"})
+	if _, err := publisher.publish("main", &m1); err != nil {
+		t.Fatal(err)
+	}
+	mainRefId := publisher.ref("main").refId
+	f1 := publisher.commit(map[string]string{"src/a.go": text + "a change\n", "src/b.go": "b\n", "docs/readme": "r\n"}, m1)
+	created, err := publisher.publish("feature", &f1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := &protocol.EvsOverlay{RefId: mainRefId.Bytes(), Version: 1}
+	if !proto.Equal(created.Base, base) || !proto.Equal(publisher.metadata("feature", 1).GetBase(), base) {
+		t.Fatalf("the overlay's base %v", created.Base)
+	}
+	payload := publisher.payload("feature", 1)
+	if len(payload.Changes) != 1 || len(payload.ReuseList) != 1 || payload.ReuseList[0].RefId != mainRefId || !proto.Equal(payload.Base, base) {
+		t.Fatalf("the overlay's first push: %d changes, %d reuse items", len(payload.Changes), len(payload.ReuseList))
+	}
+	feature := publisher.writer.server.worldOf(publisher.ref("feature").refId)
+	feature.stateLock.Lock()
+	if !proto.Equal(feature.base, base) || feature.paths["src"] != nil || feature.paths["src/a.go"] == nil {
+		feature.stateLock.Unlock()
+		t.Fatal("the overlay holds what it did not write")
+	}
+	feature.stateLock.Unlock()
+	f2 := publisher.commit(map[string]string{"src/a.go": text + "a change\n", "docs/readme": "r\n"}, f1)
+	if _, err := publisher.publish("feature", &f2); err != nil {
+		t.Fatal(err)
+	}
+	feature.stateLock.Lock()
+	src := feature.paths["src"]
+	removedFile := feature.paths["src/b.go"]
+	feature.stateLock.Unlock()
+	if src == nil || len(src.rows) != 1 || removedFile != nil {
+		t.Fatalf("the inherited file's directory, held whole: %v; the file's own state %v", src, removedFile)
+	}
+	dir, exported := publisher.export("main", "feature")
+	if len(exported.Refs) != 2 || exported.Refs[1].Tip != f2 {
+		t.Fatalf("exported %+v", exported.Refs)
+	}
+	if fsck := evsTestFsck(t, dir); strings.Join(fsck, "") != "" {
+		t.Fatalf("fsck %v", fsck)
+	}
+}
+
+// The base search: the nearest tip on the new tip's first-parent line that the tip index holds, and any other branch
+// whose tip the new tip descends from, the one leaving the fewest commits chosen; a tag is never a base, and no
+// candidate leaves the branch with none.
+func TestEvsLocalOverlayBaseSearch(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	m1 := publisher.commit(map[string]string{"a": "1\n"})
+	m2 := publisher.commit(map[string]string{"a": "2\n"}, m1)
+	if _, err := publisher.publish("main", &m2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publisher.publish("refs/tags/v2", &m2); err != nil {
+		t.Fatal(err)
+	}
+	f1 := publisher.commit(map[string]string{"a": "2\n", "f": "f\n"}, m2)
+	f2 := publisher.commit(map[string]string{"a": "2\n", "f": "f2\n"}, f1)
+	publisher.mount.sync()
+	found, err := publisher.mount.repo.overlayBase(context.Background(), evsTestId("new branch"), f2, publisher.state, 10000)
+	if err != nil || found == nil || found.RefId != publisher.ref("main").refId || found.Version != 1 {
+		t.Fatalf("found %+v: %v", found, err)
+	}
+	lone := publisher.commit(map[string]string{"z": "z\n"})
+	publisher.mount.sync()
+	if found, err := publisher.mount.repo.overlayBase(context.Background(), evsTestId("new branch"), lone, publisher.state, 10000); err != nil || found != nil {
+		t.Fatalf("a branch sharing no commit: %+v %v", found, err)
+	}
+}
+
+// §22.8's pushes row at the unit leg's size: a commit of 1,100 files on a new ref goes as one push in parts, past one
+// part's 1,024 entry writes, and exports.
+func TestEvsLocalPublishAWideCommitGoesInParts(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	files := map[string]string{}
+	for i := 0; i < 1100; i += 1 {
+		files[fmt.Sprintf("d%02d/f%04d.txt", i%20, i)] = fmt.Sprint("file ", i, "\n")
+	}
+	tip := publisher.commit(files)
+	if _, err := publisher.publish("main", &tip); err != nil {
+		t.Fatal(err)
+	}
+	world := publisher.writer.world
+	world.stateLock.Lock()
+	parts := len(world.commits[0].built.Parts)
+	world.stateLock.Unlock()
+	if parts < 2 {
+		t.Fatalf("%d parts", parts)
+	}
+	if _, exported := publisher.export("main"); exported.Refs[0].Tip != tip {
+		t.Fatalf("exported %+v", exported.Refs[0])
+	}
+}
+
+// §11.19's bounds on a new tree, checked on the changes before any read: a directory's names past 448 KiB, and a path
+// of 33 components.
+func TestEvsGitCheckLimitsRefusesNamesAndDepth(t *testing.T) {
+	children := []*EvsGitChild{}
+	for i := 0; i < 1000; i += 1 {
+		children = append(children, &EvsGitChild{Name: []byte(fmt.Sprintf("%0500d", i)), Kind: protocol.EvsEntryKind_EVS_ENTRY_FILE})
+	}
+	wide := &EvsGitPathChange{Path: "wide", Kind: protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY, Children: children}
+	if err := evsGitCheckLimits([]*EvsGitPathChange{wide}); !errors.Is(err, ErrEvsDirectoryFull) {
+		t.Fatalf("names past 448 KiB: %v", err)
+	}
+	wide.Children = children[:100]
+	if err := evsGitCheckLimits([]*EvsGitPathChange{wide}); err != nil {
+		t.Fatalf("names within the bound: %v", err)
+	}
+	deep := &EvsGitPathChange{Path: strings.Repeat("d/", 32) + "f", Kind: protocol.EvsEntryKind_EVS_ENTRY_FILE}
+	if err := evsGitCheckLimits([]*EvsGitPathChange{deep}); !errors.Is(err, ErrEvsDirectoryFull) {
+		t.Fatalf("a path of 33 components: %v", err)
 	}
 }

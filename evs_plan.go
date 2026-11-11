@@ -168,6 +168,21 @@ type EvsWritePlan struct {
 	blobs     EvsGitBlobSource
 	contents  []*evsSpill
 	gitExtras *evsGitPushExtras
+	// an overlay's base, the creating push's or the head's, and the entries of other refs the push cites
+	overlayBase *protocol.EvsOverlay
+	reuse       []*EvsReuse
+}
+
+// What a git-mode push seals beside its update (DESIGN-DETAILS 8.2.2; 8.2.5's step 5): its carried commits and its
+// signed import; and on a push that creates its ref, or is the first after a DELETE, the ref's name and an overlay's
+// base, which payload sections 15 and 16 carry beside their sealed copies. Its reuse list is the plan's, and its
+// history segments the sealed write's own, introduced and uploaded with the entries' segments.
+type evsGitPushExtras struct {
+	commits      []*protocol.EvsSealedCommit
+	signedImport []byte
+	creating     bool
+	refName      []byte
+	base         *protocol.EvsOverlay
 }
 
 // One path's part of a push.
@@ -904,6 +919,10 @@ func (self *EvsRepo) planEpochs(ctx context.Context, plan *EvsWritePlan) error {
 	if creates := slices.ContainsFunc(plan.Paths, (*EvsPlannedPath).creates); creates || 0 < len(plan.Sources) {
 		state := &evsRefEpoch{refId: plan.RefId, epoch: plan.Head.GetPathEpoch(), version: plan.BaseVersion,
 			generation: plan.Head.GetGeneration(), refKind: plan.RefKind}
+		if plan.firstPush {
+			// an overlay's creator is held by its base ref's pressure (DESIGN-DETAILS 8.2.10, QD-632)
+			state.base = plan.overlayBase
+		}
 		if creates {
 			quiet, err := self.quiet(ctx, state)
 			if err != nil {
@@ -960,6 +979,7 @@ type EvsGitHeadMovedError struct {
 	BaseVersion uint64
 }
 
+// The head's version and the base's.
 func (self *EvsGitHeadMovedError) Error() string {
 	return fmt.Sprintf("evs: the ref's head is at %d, past the update's base %d", self.Head.Version, self.BaseVersion)
 }
@@ -985,6 +1005,12 @@ type EvsGitPathChange struct {
 	Children []*EvsGitChild
 	Added    []*EvsGitChild
 	Removed  [][]byte
+	// A ref whose standing entry of this path a file write may cite (8.2.4's reuse row), nil for none: an overlay's
+	// base ref, whose entry holding StoodOid the write's diff applies to where the overlay holds no version of the
+	// path; or, with ReuseWhole, a source ref whose entry holds Oid, its chain cited whole. The plan reads the entry
+	// and plans a checkpoint where it holds another blob.
+	ReuseRefId *Id
+	ReuseWhole bool
 }
 
 // A directory's child in a tree: its raw name and its kind.
@@ -1015,7 +1041,8 @@ type EvsGitPlanArgs struct {
 	Changes []*EvsGitPathChange
 	// The version the update is built on, whose tip is the update's old one: a head past it is EvsGitHeadMovedError.
 	BaseVersion uint64
-	// A creating push's overlay base, payload section 16, nil for none.
+	// An overlay's base: a creating push's, which it names in payload section 16 and whose ref's current epoch it
+	// starts in; for a ref with a head, nil or the head's own. Nil for a ref with none.
 	Base *protocol.EvsOverlay
 	// Each write's new bytes, by its oid.
 	Blobs EvsGitBlobSource
@@ -1047,8 +1074,14 @@ type EvsGitPlanArgs struct {
 //	           each change names its source paths by its floor, as PlanWrite's do; a ref's first push moves whole to
 //	           the epoch it starts in (firstEpoch: an overlay's is its base ref's current one, read fresh)
 //
-// Not built here, and failing closed: an overlay's paths (ErrEvsOverlayBase), which read through the base ref, and
-// the reuse list, which cites a base's or a source's standing chain.
+//	overlay    a path the overlay holds no version of (evs answers its base, or the overlay has no head yet) is
+//	           inherited: a removal of it is no change, its parent's table dropping it; a directory whose children
+//	           change is created whole, every child of the new tree listed (QD-605); a file written is a creation on
+//	           the overlay, its diff on the base's entry where that entry holds the blob that stood
+//	reuse      a cited entry (EvsGitPathChange.ReuseRefId) is read on its ref after the ref's own reads: a base's
+//	           entry holding the blob that stood takes the write's diff, a source's holding the new blob is cited
+//	           whole where the checkpoint rules let it stand, each with a reuse item {ref, entry version, its token
+//	           path there}; one holding another blob, or none, plans a checkpoint
 func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*EvsWritePlan, error) {
 	for _, reserved := range evsReservedRefNames {
 		if bytes.Equal(args.RefName, reserved) {
@@ -1076,6 +1109,7 @@ func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*
 		changes[change.Path] = change
 	}
 	renames := evsGitRenames(args.Changes)
+	pendings := []*evsGitPendingReuse{}
 	plan := (*EvsWritePlan)(nil)
 	planned := map[string]*EvsPlannedPath{}
 	contents := []*evsSpill{}
@@ -1108,6 +1142,13 @@ func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*
 				return err
 			}
 			plan.firstPush = result.head.Version == 0
+			plan.overlayBase = args.Base
+			if !plan.firstPush {
+				if args.Base != nil && (head.GetBase() == nil || !proto.Equal(args.Base, head.GetBase())) {
+					return fmt.Errorf("%w: an overlay base that is not the head's", ErrEvsGitStateDiffers)
+				}
+				plan.overlayBase = head.GetBase()
+			}
 			if plan.pathKey, err = result.keys.path(ctx, plan.PathEpoch); err != nil {
 				return err
 			}
@@ -1131,11 +1172,13 @@ func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*
 			if source, ok := renames[readPath.path]; ok {
 				from = &evsGitRenameSource{path: source, verified: verifieds[source]}
 			}
-			path, err := self.planGitPath(ctx, plan, result, readPath, result.replies[i], changes[readPath.path], from, &contents)
+			path, err := self.planGitPath(ctx, plan, result, readPath, result.replies[i], changes[readPath.path], from, &contents, &pendings)
 			if err != nil {
 				return err
 			}
-			planned[readPath.path] = path
+			if path != nil {
+				planned[readPath.path] = path
+			}
 		}
 		return nil
 	}
@@ -1148,6 +1191,9 @@ func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*
 		if err := readBatch(batch, args.Fresh || 0 < i); err != nil {
 			return nil, err
 		}
+	}
+	if err := self.planGitReuses(ctx, plan, pendings); err != nil {
+		return nil, err
 	}
 	for _, change := range args.Changes {
 		if path := planned[change.Path]; path != nil {
@@ -1165,7 +1211,7 @@ func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*
 		}
 	}
 	if plan.firstPush {
-		epoch, err := self.firstEpoch(ctx, plan.RefKind, args.Base, args.Generation)
+		epoch, err := self.firstEpoch(ctx, plan.RefKind, plan.overlayBase, args.Generation)
 		if err != nil {
 			return nil, err
 		}
@@ -1336,10 +1382,11 @@ func evsNameRowBoundByteCount(name []byte, kind protocol.EvsEntryKind) int {
 }
 
 // One changed path's plan from its read on the ref: see PlanGitUpdate. from is a created file's rename source, nil for
-// none. A write's bytes are spilled into contents, which the plan closes once they are sealed.
-func (self *EvsRepo) planGitPath(ctx context.Context, plan *EvsWritePlan, result *evsReadResult, readPath *evsReadPath, verified *EvsVerifiedPath, change *EvsGitPathChange, from *evsGitRenameSource, contents *[]*evsSpill) (*EvsPlannedPath, error) {
-	if verified.Base != nil {
-		return nil, ErrEvsOverlayBase
+// none. A write's bytes are spilled into contents, which the plan closes once they are sealed; a write citing another
+// ref's entry joins pendings, its chain planned once that ref is read. nil for a change an overlay drops.
+func (self *EvsRepo) planGitPath(ctx context.Context, plan *EvsWritePlan, result *evsReadResult, readPath *evsReadPath, verified *EvsVerifiedPath, change *EvsGitPathChange, from *evsGitRenameSource, contents *[]*evsSpill, pendings *[]*evsGitPendingReuse) (*EvsPlannedPath, error) {
+	if verified.Base != nil || (plan.firstPush && plan.overlayBase != nil) {
+		return self.planGitInherited(ctx, plan, readPath, change, contents, pendings)
 	}
 	planned := &EvsPlannedPath{Path: change.Path, TokenPath: readPath.current, Kind: change.Kind, names: readPath.names}
 	stood := protocol.EvsEntryKind_EVS_ENTRY_KIND_UNSPECIFIED
@@ -1417,6 +1464,19 @@ func (self *EvsRepo) planGitPath(ctx context.Context, plan *EvsWritePlan, result
 	planned.Fields = &protocol.EvsSealedFields{
 		FileId: NewEvsSlotId().Bytes(), Mode: change.Mode, GitOid: bytes.Clone(change.Oid[:]), OidKind: protocol.EvsOidKind_EVS_OID_SHA1,
 		Size: uint64(size),
+	}
+	if change.ReuseRefId != nil && change.ReuseWhole {
+		// a source's standing entry of the new blob, cited whole once that ref is read; the path's own file_id kept
+		// for the checkpoint it falls back to
+		if writesOver {
+			fields, err := self.openStandingFields(ctx, result, verified)
+			if err != nil {
+				return nil, err
+			}
+			planned.Fields.FileId = fields.GetFileId()
+		}
+		*pendings = append(*pendings, &evsGitPendingReuse{planned: planned, change: change, write: write, readPath: readPath})
+		return planned, nil
 	}
 	var previous *EvsChainState
 	var previousContent *evsSpill
@@ -1502,4 +1562,146 @@ func evsGitJoin(parent string, name []byte) string {
 		return string(name)
 	}
 	return parent + "/" + string(name)
+}
+
+// A path an overlay holds no version of (see PlanGitUpdate's overlay row): a removal is no change, a directory whose
+// children change is created whole, a file written is a creation, its diff on the base's entry once the base is read.
+func (self *EvsRepo) planGitInherited(ctx context.Context, plan *EvsWritePlan, readPath *evsReadPath, change *EvsGitPathChange, contents *[]*evsSpill, pendings *[]*evsGitPendingReuse) (*EvsPlannedPath, error) {
+	if change.removes() {
+		// its parent's table drops it, written whole where the overlay first holds it
+		return nil, nil
+	}
+	planned := &EvsPlannedPath{
+		Path: change.Path, TokenPath: readPath.current, Kind: change.Kind, names: readPath.names, Version: plan.BaseVersion + 1,
+	}
+	if change.Kind == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
+		for _, child := range change.Children {
+			planned.children = append(planned.children, &evsChildChange{path: evsGitJoin(change.Path, child.Name), name: child.Name, kind: child.Kind})
+		}
+		return planned, nil
+	}
+	if change.Kind != protocol.EvsEntryKind_EVS_ENTRY_FILE || !evsFileModeValid(change.Mode) {
+		return nil, fmt.Errorf("%w: %q of kind %d, mode %o", ErrEvsWriteInvalid, change.Path, change.Kind, change.Mode)
+	}
+	planned.Fields = &protocol.EvsSealedFields{
+		FileId: NewEvsSlotId().Bytes(), Mode: change.Mode, GitOid: bytes.Clone(change.Oid[:]), OidKind: protocol.EvsOidKind_EVS_OID_SHA1,
+	}
+	if change.Mode == EvsGitModeGitlink {
+		planned.Checkpoint = EvsCheckpointNewFile
+		return planned, nil
+	}
+	content := newEvsSpill(self.client.args.Store, self.client.settings.DeltaBaseMemoryByteCount)
+	*contents = append(*contents, content)
+	size, err := self.copyGitBlob(ctx, plan, change.Oid, content)
+	if err != nil {
+		return nil, err
+	}
+	if EvsFileMaxByteCount < size {
+		return nil, fmt.Errorf("%w: %d bytes", ErrEvsFileTooLarge, size)
+	}
+	planned.Fields.Size = uint64(size)
+	write := &EvsPathWrite{Path: change.Path, Content: content, Mode: change.Mode}
+	if change.ReuseRefId != nil {
+		*pendings = append(*pendings, &evsGitPendingReuse{planned: planned, change: change, write: write, readPath: readPath})
+		return planned, nil
+	}
+	if err := self.planChain(ctx, plan, planned, write, nil, nil, nil, nil, change.Oid); err != nil {
+		return nil, err
+	}
+	return planned, nil
+}
+
+// A file write whose chain cites another ref's standing entry, planned once that ref is read.
+type evsGitPendingReuse struct {
+	planned  *EvsPlannedPath
+	change   *EvsGitPathChange
+	write    *EvsPathWrite
+	readPath *evsReadPath
+}
+
+// Reads each cited ref's entries, 64 a request, and plans each pending write on what its entry holds: see
+// PlanGitUpdate's reuse row.
+func (self *EvsRepo) planGitReuses(ctx context.Context, plan *EvsWritePlan, pendings []*evsGitPendingReuse) error {
+	refIdPendings := map[Id][]*evsGitPendingReuse{}
+	refIds := []Id{}
+	for _, pending := range pendings {
+		refId := *pending.change.ReuseRefId
+		if refIdPendings[refId] == nil {
+			refIds = append(refIds, refId)
+		}
+		refIdPendings[refId] = append(refIdPendings[refId], pending)
+	}
+	for _, refId := range refIds {
+		group := refIdPendings[refId]
+		for start := 0; start < len(group); start += EvsReadMaxPathCount {
+			batch := group[start:min(len(group), start+EvsReadMaxPathCount)]
+			paths := make([]string, len(batch))
+			for i, pending := range batch {
+				paths[i] = pending.change.Path
+			}
+			if err := func() error {
+				result, err := self.read(ctx, refId, paths, 0, false)
+				if err != nil {
+					return err
+				}
+				defer result.objects.close()
+				for i, pending := range batch {
+					if err := self.planGitReuse(ctx, plan, refId, result, result.paths[i], result.replies[i], pending); err != nil {
+						return err
+					}
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// One pending write on the cited ref's read of its path: a diff on a base's entry holding the blob that stood, a
+// source's entry holding the new blob cited whole, else a checkpoint; each reuse with its item.
+func (self *EvsRepo) planGitReuse(ctx context.Context, plan *EvsWritePlan, refId Id, result *evsReadResult, readPath *evsReadPath, verified *EvsVerifiedPath, pending *evsGitPendingReuse) error {
+	planned, change := pending.planned, pending.change
+	expected := change.StoodOid
+	if change.ReuseWhole {
+		expected = change.Oid
+	}
+	if verified.Entry != nil && verified.Entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE) {
+		fields, err := self.openStandingFields(ctx, result, verified)
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(fields.GetGitOid(), expected[:]) && fields.GetMode() != EvsGitModeGitlink {
+			content, state, _, _, err := self.readBaseKeys(ctx, result, verified)
+			if err != nil {
+				return err
+			}
+			defer content.close()
+			reuse := &EvsReuse{RefId: refId, EntryVersion: verified.Entry.GetVersion(), TokenPath: readPath.current}
+			fileId := planned.Fields.GetFileId()
+			planned.Fields.FileId = fields.GetFileId()
+			if change.ReuseWhole {
+				kept, err := self.planGitRename(ctx, plan, planned, verified, state, fields)
+				if err != nil {
+					return err
+				}
+				if kept {
+					plan.reuse = append(plan.reuse, reuse)
+					return nil
+				}
+				planned.Fields.FileId = fileId
+			} else {
+				if err := self.planChain(ctx, plan, planned, pending.write, verified, state, content, nil, change.Oid); err != nil {
+					return err
+				}
+				if planned.Checkpoint == EvsCheckpointNone {
+					plan.reuse = append(plan.reuse, reuse)
+				}
+				return nil
+			}
+		}
+	}
+	planned.Chain = nil
+	return self.planChain(ctx, plan, planned, pending.write, nil, nil, nil, nil, change.Oid)
 }
