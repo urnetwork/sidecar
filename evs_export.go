@@ -426,6 +426,16 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 		}
 		return EvsRefId(refKey, refName)
 	}
+	if base := ref.head.Head.GetBase(); creating && base != nil {
+		// an overlay's readers hold what its base tip reaches (DESIGN-DETAILS 8.3's G2): the base ref is replayed to
+		// the version it names before the overlay's first push is judged, as a source is
+		if err := self.replaySource(ctx, base); err != nil {
+			if evsExportRefusesVersion(err) {
+				return self.refuse(ref, statement, err)
+			}
+			return err
+		}
+	}
 	checked, err := EvsGitCheckUpdate(ctx, &EvsGitUpdateArgs{
 		RepoId: self.repo.repoId, RefId: ref.refId, RefName: ref.name, Statement: statement.Statement, Payload: payload,
 		Metadata: metadata, PriorTip: ref.tip, Creating: creating, SectionRefName: sectionRefName, RefIdOf: refIdOf,
