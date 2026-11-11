@@ -232,13 +232,8 @@ func TestDefaultProtocolSettingsMatchDesign(t *testing.T) {
 		WakeInterval:                     1 * time.Hour,
 		SyncRefetchInterval:              1 * time.Hour,
 	}
-	// SEARCH's wire values are their own object, held to §6.5's and DESIGN-DETAILS 11.2.9's numbers below
-	got := *settings
-	got.Search = nil
-	if got != *want {
-		t.Errorf("%+v, want %+v", got, *want)
-	}
-	wantSearch := &SearchWireSettings{
+	// SEARCH's wire values, §6.5's and DESIGN-DETAILS 11.2.9's
+	want.Search = SearchWireSettings{
 		RequestByteCount:         4016,
 		Timeout:                  10 * time.Second,
 		StepByteCount:            16384,
@@ -258,8 +253,8 @@ func TestDefaultProtocolSettingsMatchDesign(t *testing.T) {
 		HitFieldTextMaxByteCount: 256,
 		SnippetMaxByteCount:      200,
 	}
-	if settings.Search == nil || *settings.Search != *wantSearch {
-		t.Errorf("Search %+v, want %+v", settings.Search, *wantSearch)
+	if *settings != *want {
+		t.Errorf("%+v, want %+v", *settings, *want)
 	}
 }
 

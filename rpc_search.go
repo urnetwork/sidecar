@@ -3,7 +3,7 @@
 // SEARCH's envelope rules (§6.5's search rows, §6.6, §11.14's sizes row; D-PROTO-21, D-EVS-59), in the
 // path below SEARCH's handler and caller, so every size and time a relay sees is the requester's to set
 // and none tells it what was asked or found. Every value below is SearchWireSettings', which this side
-// carries as SidecarProtocolSettings.Search (rpc_search_settings.go):
+// carries as SidecarProtocolSettings.Search (envelope_search_settings.go):
 //
 //   - a request is one envelope with no chunk header and a body of exactly RequestByteCount, 4,016 B,
 //     and its timeout_ms is always Timeout, 10 s, whatever its caller's ctx says, so the envelope has one

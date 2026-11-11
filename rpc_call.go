@@ -375,7 +375,7 @@ func (self *Subprotocol) callOnce(
 		return nil, err
 	}
 	if search {
-		return searchResponseBody(response, self.settings.Search)
+		return searchResponseBody(response, &self.settings.Search)
 	}
 	switch protocol.MessageType(response.envelope.Type) {
 	case messageType + 1:

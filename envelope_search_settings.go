@@ -2,12 +2,13 @@
 // a request's one body size and timeout, a reply's step and most steps, the widths pad's length may take,
 // and Z4's caps on every other field, which keep a body's content where its pad always fits (QD-215,
 // QD-693). They are the protocol's values, and changing one is a protocol change that no deployment makes on
-// one side alone, so this one object holds them and its defaults stay here (QD-702). This side carries it as
-// SidecarProtocolSettings.Search: SEARCH's envelope rules (rpc_search.go) and remote search's builders and
-// parsers (search_remote_wire.go) read it there, the requester's and the indexer's alike.
+// one side alone, so this one object holds them and its defaults stay here (QD-702). This side carries it by
+// value as SidecarProtocolSettings.Search, so those settings stay comparable: SEARCH's envelope rules
+// (rpc_search.go) and remote search's builders and parsers (search_remote_wire.go) read it there, the
+// requester's and the indexer's alike.
 //
-// It links on every leg because SidecarProtocolSettings does; nothing on the sidecar_http or ios_extension
-// legs reads it but SEARCH's envelope rules.
+// It links on every leg because SidecarProtocolSettings does, and imports nothing but time; nothing on the
+// sidecar_http or ios_extension legs reads it but SEARCH's envelope rules.
 
 package sidecar
 

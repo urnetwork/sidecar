@@ -12,7 +12,7 @@
 // most 3,248 B; a failure's at most 90 B (Z-B, Z-C). So a request within the caps is always admissible, a reply
 // always has an admissible form, and one with a hit to give returns at least one.
 //
-// Every value is SearchWireSettings' (rpc_search_settings.go). These are pure functions: SearchRemoteServer
+// Every value is SearchWireSettings' (envelope_search_settings.go). These are pure functions: SearchRemoteServer
 // (SEARCH-M10-32) and SearchRemoteClient (SEARCH-M10-33) call them, the server with its own head(k).
 
 package sidecar
