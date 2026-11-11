@@ -493,7 +493,7 @@ func TestMailVaultNoteUsedAtKeepsFirstAndLast(t *testing.T) {
 		{domain: "accounts.shop.example", at: base.Add(48 * time.Hour)},
 		{domain: "SHOP.example.", at: base.Add(24 * time.Hour)},
 		{domain: "news.shop.example", at: base.Add(72 * time.Hour)},
-		{domain: "mail.bank.example.co.uk", at: base},
+		{domain: "mail.bank.example", at: base},
 	}
 	for _, use := range uses {
 		if err := device.vault.NoteUsedAt(ctx, "Shop@Otter-4821.acme.root.example", use.domain, use.at); err != nil {
@@ -506,7 +506,7 @@ func TestMailVaultNoteUsedAtKeepsFirstAndLast(t *testing.T) {
 	}
 	want := []*protocol.VaultUsedAt{
 		{RegistrableDomain: "shop.example", First: uint64(base.Add(24 * time.Hour).UnixMilli()), Last: uint64(base.Add(72 * time.Hour).UnixMilli())},
-		{RegistrableDomain: "example.co.uk", First: uint64(base.UnixMilli()), Last: uint64(base.UnixMilli())},
+		{RegistrableDomain: "bank.example", First: uint64(base.UnixMilli()), Last: uint64(base.UnixMilli())},
 	}
 	if len(usedAts) != len(want) || !proto.Equal(usedAts[0], want[0]) || !proto.Equal(usedAts[1], want[1]) {
 		t.Fatalf("used at %v", usedAts)
@@ -521,7 +521,7 @@ func TestMailVaultNoteUsedAtKeepsFirstAndLast(t *testing.T) {
 	if err := device.vault.NoteUsedAt(ctx, address, "shop.example", base.Add(73*time.Hour)); err != nil || device.store.writeCount != writes+1 {
 		t.Fatalf("a use past the interval: %d writes, %v", device.store.writeCount-writes, err)
 	}
-	for _, domain := range []string{"", "co.uk", "example", "192.0.2.1", "shop..example", "shop_example.example", "-shop.example"} {
+	for _, domain := range []string{"", "example", "test.", "192.0.2.1", "shop..example", "shop_example.example", "-shop.example"} {
 		if err := device.vault.NoteUsedAt(ctx, address, domain, base); !errors.Is(err, ErrMailVaultDomainInvalid) {
 			t.Errorf("%q: %v", domain, err)
 		}
@@ -997,15 +997,17 @@ func TestMailVaultSecretsReachNoLogOrError(t *testing.T) {
 	}
 }
 
-// A sender's name and its registrable domain, the public suffix list's eTLD+1, and the names with none.
+// A sender's name and its registrable domain, the public suffix list's eTLD+1, and the names with none. Test data
+// keeps to reserved names (CODESTYLE), under which the list's default rule makes the top label the suffix; a
+// multi-label suffix is the list's own, held by x/net/publicsuffix's tests.
 func TestMailRegistrableDomain(t *testing.T) {
 	cases := map[string]string{
 		"shop.example":                        "shop.example",
 		"mail.accounts.shop.example":          "shop.example",
 		"Mail.Shop.Example.":                  "shop.example",
-		"mail.bank.example.co.uk":             "example.co.uk",
-		"user.github.io":                      "user.github.io",
-		"co.uk":                               "",
+		"a.b.c.test":                          "c.test",
+		"example":                             "",
+		"invalid.":                            "",
 		"":                                    "",
 		"192.0.2.1":                           "",
 		"shop..example":                       "",
