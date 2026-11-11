@@ -82,6 +82,7 @@ type EvsRecordHeader struct {
 }
 
 // The header held to format 1: a kind and key ref §11.6 names, a slot only for a slot key, a base only for a diff,
+// which a history diff leaves zero,
 // a SHA-1 oid (v0 writes and reads SHA-1 only, plan-EVS1-format-bytes#4), a generation, and a body a record can
 // carry.
 func (self *EvsRecordHeader) check() error {
@@ -91,9 +92,9 @@ func (self *EvsRecordHeader) check() error {
 			return fmt.Errorf("%w: a base record outside a diff", ErrEvsRecordInvalid)
 		}
 	case protocol.EvsRecordKind_EVS_RECORD_DIFF:
-		if self.BaseRecordId == (Id{}) {
-			return fmt.Errorf("%w: a diff with no base record", ErrEvsRecordInvalid)
-		}
+		// a diff in an entry's chain names the record it applies to, which the chain's walk holds it to; a history
+		// diff's base_record_id is zero, its base named by oid in the sealed metadata (DESIGN-DETAILS 8.2.2's history
+		// row)
 	default:
 		return fmt.Errorf("%w: record kind %d", ErrEvsRecordInvalid, self.Kind)
 	}
