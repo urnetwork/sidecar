@@ -59,7 +59,7 @@
 		},
 		{
 			"call": "ApplyDeltas base 5",
-			"state": "enforcing_nodoc",
+			"state": "enforcing_doc",
 			"pin": 5,
 			"state_pin": 3,
 			"overlay": 1,

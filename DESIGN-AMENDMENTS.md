@@ -6,7 +6,7 @@ Every design decision made since DESIGN.md was last rebuilt and not yet folded i
 
 **Folding.** Only a design-records track edits `design/source/` and rebuilds DESIGN.md with `design/source/build.sh`. Each design-records track takes one DESIGN.md section, applies its items below (and the matching "Proposed DESIGN.md text" of DESIGN-DETAILS.md), and in the same commit deletes those items from this file. When this file holds no items it is deleted. Owner decisions that change behavior go into `design/source/owner/DECISIONS.md` as numbered owner decisions, after decision 197, as decision 197 was.
 
-Holds 284 decided items and 282 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
+Holds 252 decided items and 278 proposed ones, generated from the ledger on 2026-11-10. QD-597 (owner decision 197) is already folded.
 
 ## Index
 
@@ -21,7 +21,7 @@ Holds 284 decided items and 282 proposed ones, generated from the ledger on 2026
 | [§8 Access control](#s8) | 14 | 13 |
 | [§9 Abstract socket listeners and the scheduler](#s9) | 5 | 2 |
 | [§10 Group keys for evs: MLS and the GKM service](#s10) | 23 | 15 |
-| [§11 Encrypted versioned storage](#s11) | 48 | 41 |
+| [§11 Encrypted versioned storage](#s11) | 25 | 37 |
 | [§12 DNS](#s12) | 7 | 0 |
 | [§13 The TLS edge and certificates](#s13) | 3 | 13 |
 | [§14 The SMTP edge](#s14) | 8 | 13 |
@@ -32,13 +32,15 @@ Holds 284 decided items and 282 proposed ones, generated from the ledger on 2026
 | [§21 Abuse, safety, and legal process](#s21) | 17 | 17 |
 | [§22 Testing and verification](#s22) | 7 | 15 |
 | [§23 Phasing, milestones, and rollout](#s23) | 3 | 3 |
-| [No section named](#s0) | 13 | 0 |
+| [No section named](#s0) | 4 | 0 |
 
 ## DESIGN-DETAILS.md sections to fold
 
 Sections 2, 4, 5, 6, 8 and 9 of DESIGN-DETAILS.md are complete; each ends with its proposed DESIGN.md text. Their owner questions were answered on 2026-11-10 (QD-598 to QD-629, below under the sections they amend). Three answers differ from a section's recommendation and the design agent amends the section before it is folded: QD-604 (section 8, imports make helper refs), QD-621 (section 4, an overdue narrowing statement keeps the last state and alarms) and the model and wording fixes of QD-628, QD-632, QD-633, QD-642 and QD-644. Sections 1, 3, 7, 10, 11, 12 and 13 are still being written.
 
-Partly folded (2026-11-10), with §2's and §3's items: section 2.8 where QD-623 (owner decision 203) needed it, its §2.8, §11.3, §11.6, §11.13 and §11.17 parts, §11.8's but step 6's clock rule, §19.6's rule (6) clause and what deletes nothing on an unpassed build, §22.8's EvsCommit.tla row, FS-8 and FS-59's text. Section 2.8 still to fold: §11.8 step 6's clock rule and the clocks row's ", evs opens no batch"; §19.6 rule (2)'s stamp, rule (3)'s DELETE release and its PUT and DELETE waits, and the list row (QD-625's, with §11.13's needs row and FS-114); §19.10's held-key and §19.17's risk rows; D-OPS-20's text and *Why*; the StoreSettle.tla row, FI-30's last clause and FS-114's clauses; and FS-59's checks column, FI-1,6, which sidecartest/fault/catalog.yml must take in the same change. Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 6.8's gkm-5 pointers (QD-618, under §10); 8.8's evs-4 words; and 9.8's evs-11 ttl.
+Sections 8 and 9's owner answers are folded as owner decisions (2026-11-10): section 9's QD-607 to QD-610, QD-612, QD-632 and QD-633 as 227-233, with QD-613 (section 6's key prefixes) as 234 and QD-640 as 235, and section 8's QD-598 to QD-606 as 236-244, each stated in §11 where it binds. Their proposed DESIGN.md text (8.8, 9.8) waits for the design agent's amendments above, and is folded only with them.
+
+Section 2.8 is folded (2026-11-10): where QD-623 (owner decision 203) needed it with §2's and §3's items, and the rest with §11's, as owner decisions 225 (QD-624) and 226 (QD-625). One part waits: FS-59's checks column, FI-1,6 for FI-6, which sidecartest/fault/catalog.yml must take in the same change, since the fault catalog's test holds each FS row's checks to that file and a design-records track edits no test data; FS-59 keeps FI-6 meanwhile. Of the other sections' §2.8 parts, those their items name are folded: 4.8's (QD-622), 5.8's two settings (QD-629), 6.8's gkm-1 (QD-614), 9.8's evs-11 places (QD-611) and 13.8's (QD-657). Still to fold, with their sections: 5.8's other api-7 words (tail verdicts, open proposals, the applied-id ring, confirmations), which ProjectionHeader.tail_verdicts and ProjectionRows.proposals and ring already carry in protocol/bridge/auth.proto; 6.8's gkm-5 pointers (QD-618, under §10); 8.8's evs-4 words; and 9.8's evs-11 ttl.
 
 <a id="s2"></a>
 ## §2 Trust model and threat model
@@ -1928,33 +1930,6 @@ Changes: §11.7 fold row; §11.7 collect row; §11.6 copy row; §11.8 idx/ row; 
 
 Questions: `plan-EVS2-marker-carried-ids.md`.
 
-### QD-042: I-9 counts tainted runs' writes from M3, but the bit that carries the fact is format 2's, at M10
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §16.*
-
-Recommended: option 3, and it does not hang on M2's freeze as the question fears. The bit is already reserved in format 1's sealed push provenance, format-1 code ignores rather than refuses it, and `EvsPushNeedsFormat2` does not count it, so no byte changes and no repo rises to format 2. From M3, `EvsRepo.Write` sets `tainted` in the push provenance when the write's run is tainted (`Sidecar.RunTainted`), and `evs_read`, `ur://evs` and §16.6's taint row read it from the same sealed metadata that carries EvsImport: a version so marked is `trust: untrusted`, and reading it taints the run first. Edits: §11.6's Records says "from M3"; its kinds row and FS-72 drop the tainted bit from what format-1 code ignores; §16.16's assumption matches; the provenance half of EVS2-M10-15 and `EvsPushProvenance.Tainted` of EVS2-M10-17 move to M3. §16.17 states the residual: a push bound to no run, a person's own `git push` included, carries no bit.
-
-Changes: §11.6 Records; §11.6 kinds; FS-72; §16.16 Assumptions; §16.17.
-
-Questions: `plan-MCP-format1-tainted-files.md`.
-
-### QD-047: Retention GC's 'no retained push' never ends while every statement stays, so what it deletes is undefined
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §16, §2.*
-
-Recommended: option 2, stated plainly. Retention stays at M6 as expiry, ERASE and BASE, and the ciphertext reclaim moves to Later beside compaction. Reword §11.13's gc row, §16.8's 'GC later removes the expired ciphertext' and evs-4's ttl to say expired ciphertext stays, keyless, until a later GC. Define 'retained' now for what M2 does delete: a deposit's version is retained until a committed CONSUME removes it, and its segments go 7 d after that once no other version names them, as EVSB-M2-12 plans. If the owner keeps the reclaim, use option 1's rule: 7 d after a BASE, delete only segments that no entry of its live set and no later version names, by a mark and verify like the drop job's, under holds.
-
-Changes: §11.13 gc row; §16.8 Retention; §2.8 evs-4; §11.22.
-
-Questions: `plan-EVSB-fs94-compaction-clause.md#2`.
-
-### QD-053: Compaction is promised in v1 and has no mechanism
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §23, §20, §2.*
-
-Recommended: move compaction to Later. Add it to §11.22's and §23.4's Later lists, and change each 'until v1's compaction' to 'until a later compaction, unscheduled' in §11.7, §11.12's bytes row, §11.13, §20.6, §20.7, evs-4 and evs-12. Erased and dropped inline ciphertext and packed segments then stay stored and billed for the repo's life, unreadable once their keys are gone. D-EVS-65's 'may later' already fits.
-
-Changes: §11.22; §23.4 Later; §11.12 bytes row; §11.13 limit and freed rows; §20.6; §20.7; §2.8 evs-4 and evs-12.
-
-Questions: `plan-EVS1-v1-unspecified.md#1`.
-
 ### QD-058: A hold's stored form and columns are undefined
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §21, §2.*
 
@@ -1982,15 +1957,6 @@ Changes: §11.8 step 8 and 5f; §11.12 Deposits; §11.20 push refusals; FS-23.
 
 Questions: `plan-EVS1-deposit-head.md`.
 
-### QD-091: A deposit ref in a general repo blocks for good under an immediate epoch, because no one may map it
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Make the rule per ref as well as per kind. Deposit and erasure refs, in every kind, name entries by random 16 B ids under no K_path: evs records no due on them, sets no block, refuses a PATH_EPOCH there (409 REF_MODE) and keeps them at path epoch 1 for life, so depositors and CONSUME pushes declare 1. Creation blocks only on shared and owned refs of general, config and mailcfg repos. §11.6's tokens row says that erasure-ref entries use random ids, as deposits do.
-
-Changes: §11.6 due and tokens rows; §11.8 5e and Refs table; D-EVS-12.
-
-Questions: `plan-EVS1-epoch-kinds.md#2`.
-
 ### QD-095: No route moves a repo from keying to active, so no repo could ever open
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §10.*
 
@@ -2009,15 +1975,6 @@ Changes: §11.8; §11.12; §11.13; §19.10; FS-41.
 
 Questions: `g0-recheck-2-reseed-slot-keys.md#1`.
 
-### QD-097: Any writer can squat the erasure ref's name, which blocks every erasure in the repo
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2.*
-
-(1) Give the erasure ref a public id, as deposit refs have: ref_id = the first 16 B of SHA-256("UR evs 1.0 erasure" || repo_id). At 5c evs refuses any push to that id whose ref_kind is not erasure, and any erasure ref_kind at another id (409 REF_MODE). (2) The local tier refuses, before any evs write, a branch named erasure, ur/index or ur/lfs, and a branch under ur/ whose second component is not this sidecar's id. (3) Replaying readers check that a ref named ur/<id>/… has owner_sidecar_id <id>. cards stays name-derived: it is the directory's, a repo with no git refs.
-
-Changes: §11.6 ref ids row; §11.8 5c and Refs table; §11.11 receive row; §2.8 evs-2.
-
-Questions: `plan-EVS1-ref-name-bytes.md#3`.
-
 ### QD-099: A rename in a slot-keyed repo needs the removed path's slot, which 5h and I-EVS-10 forbid
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
 
@@ -2035,15 +1992,6 @@ Seal them under a key derived from the deposit's own object key: K_dep = HKDF-SH
 Changes: §11.6 record row; §11.12 deposits row; §15.7 Deposit.
 
 Questions: `plan-EVS1-format-bytes.md#5`.
-
-### QD-152: BASE is a flag at M2 with no rule for what it carries or what evs checks
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §16.*
-
-Write BASE into §11.8 as the question reads it. A BASE (flag 4) is a push at admin scope on an owned record-class stream, the directory's included. Its changes are only removals (entry_sha256 empty), each naming the path's newest version in base_entry_version. It carries no entry version, segment, slot or inline record, and it may use changes_root and parts past 1 KiB. Anything else answers 409 with the paths. It commits at the next version with window bit 3, and its statement stays in history. What remains after it is the live set, which is what 're-lists' means. Readers accept a removal on a creates-only stream only from a BASE signed by a repo admin at its auth pin, and read the gap in that writer's seq chain as expired, not withheld. Keys go by ERASE first; BASE deletes nothing itself. What GC then frees is plan-EVSB-fs94-compaction-clause.md#2.
-
-Changes: §11.8 Refs table; §11.13 gc row; §16.8 Retention.
-
-Questions: `plan-EVS1-v1-unspecified.md#6`.
 
 ### QD-153: A flat listed_sha256 cannot prove a list range, so §11.9's membership proof does not exist
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
@@ -2099,15 +2047,6 @@ Changes: §11.8 drops/ row; §2.8 evs-28; §11.13 who row; §11.9 serve row.
 
 Questions: `plan-EVS2-drop-table-bound.md`.
 
-### QD-186: §11.6's due row leaves directory and secret out of both lists; both keep creating
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §15, §16.*
-
-Option 1, with the row covering all nine kinds. Under an immediate epoch, general, config and mailcfg repos block creation (412 PATH_EPOCH_DUE). vault, mailbox, record, team_record, directory and secret keep creating, the reason reading 'name entries only by id or sequence (§15.7, §16.8, §16.11)'. due_blocks_creation stays false on refs of those six, and EVS1-M2-16 drops its fail-closed branch for directory and secret. D-EVS-12's 'name-bearing repos' stands.
-
-Changes: §11.6 due row.
-
-Questions: `plan-EVS1-epoch-kinds.md#1`.
-
 ### QD-198: evs cannot answer DROP_PATH for ur/index, ur/lfs and .ur-index/, because X2 hides ref and path names from it
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
 
@@ -2162,24 +2101,6 @@ Changes: §11.9 collected row; FS-66.
 
 Questions: `plan-EVS2-small-readings.md#5`.
 
-### QD-233: No section says whether the 2 GiB file cap holds in format 2 for versionless files and git-lfs objects
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-Recommended: keep 2,147,483,648 B of plaintext (512 chunks) through M10. Writers and the git-lfs agent refuse a larger file by name (EVS_FILE_TOO_LARGE), so `git push` fails before the ref moves. §11.7's sentence drops 'v0' and states the cap through v1. A later raise to about 8 GiB is a constant and tests, with no format change.
-
-Changes: §11.7 Large files.
-
-Questions: `plan-EVS2-file-cap.md`.
-
-### QD-237: May a repo use git's sha256 object format?
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22.*
-
-Recommended: SHA-1 only in v0, with the width reserved. Format 1 carries #3's 32 B oid and oid_kind. The daemon creates its bare repository with --object-format=sha1. ur mount add, ur evs import and git-remote-ur refuse a sha256 repository, naming it, before any evs write. Head mode's codec and export stay SHA-1 only. Adding sha256 later needs no format change.
-
-Changes: §11.6 record and sealed_fields rows; §11.11; §22.9 git row.
-
-Questions: `plan-EVS1-format-bytes.md#4`.
-
 ### QD-244: §11.13's equations need fields that its reports row and evs-10 do not carry
 *Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §2, §19.*
 
@@ -2197,15 +2118,6 @@ evs answers 402 with the `QuotaRefusal` body, `upgrade: true`, and no terms; onl
 Changes: §11.20; §20.7.
 
 Questions: `plan-QUOTA-small-readings.md#18`.
-
-### QD-254: No cluster carries lifecycle rules, and §11.13's needs row and §22.9 must stop listing them
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §22.*
-
-Option 1. No lifecycle rule on any bucket. Strike 'and lifecycle rules' from §11.13's needs row. In §22.9's File clusters list, replace 'lifecycle' with 'no lifecycle rule set on either bucket', and add that case to server/cli/filecluster-suite, since blobsuite sees only BlobCluster. dropscan/ files stay deleted by their job (§11.8's immutable row). BlobCluster stays as landed, with no lifecycle call.
-
-Changes: §11.13 needs row; §22.9 File clusters.
-
-Questions: `plan-EVSB-lifecycle-rules.md`.
 
 ### QD-256: x/text's cases.Fold() swaps Cherokee case, so normalizer 1 is not idempotent and Cherokee search misses
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
@@ -2225,15 +2137,6 @@ Changes: §11.11 prune row; §11.7 choose row; FS-73; evs.proto (new message).
 
 Questions: `plan-EVS2-lfs-settings.md`.
 
-### QD-268: §11.22 lists cross-network shares, while §16.11 and §16.12 say no cross-network evs read exists in v1
-*Accepted by the owner on 2026-11-06, in bulk as recommended. Also amends §16, §17.*
-
-Strike 'cross-network' from §11.22's v1 list. Cross-network shares are §17.9's IP path at M6 (owner decision 86), evs builds nothing for them, and a guest view of the directory stays Later (§16.18).
-
-Changes: §11.22.
-
-Questions: `plan-EVS1-v1-unspecified.md#3`.
-
 ### QD-270: ur/lfs objects must never stage, which narrows D-EVS-36 and §11.7's staged row
 *Accepted by the owner on 2026-11-06, in bulk as recommended.*
 
@@ -2243,116 +2146,6 @@ Changes: D-EVS-36; §11.7 staged row; §11.8 step 2.
 
 Questions: `plan-EVS2-small-readings.md#8`.
 
-### QD-276: Two listed version 1 items have no meaning
-*Accepted by the owner on 2026-11-06, in bulk as recommended.*
-
-[plan-EVS1-v1-unspecified#2] Recommended: move it to Later and strike it from §11.22's v1 list; git users update a working tree with stock git. If cli/UI.md turns up with a requirement, the owner reads it first (plan-CORE-cli-ui-missing). [plan-EVS1-v1-unspecified#4] Recommended: strike it from §11.22's v1 list to Later. No section says what a derived share is, and nothing depends on one.
-
-Changes: §11.22.
-
-Questions: `plan-EVS1-v1-unspecified.md#2`, `plan-EVS1-v1-unspecified.md#4`.
-
-### QD-598: Should a git-mode push carry a non-canonical tree and any commit as their bytes, so that `ur evs import` takes every history stock git can walk, in place of refusing the forms the codec refuses?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-An imported commit travels as its bytes, and a tree that does not rebuild from names, modes and oids travels as its bytes beside the commit that brought it (EvsSealedCommit.trees); the tree builder uses those bytes after checking that git's reading of them equals the entries it built. The strict codec is asked only of new commits a sidecar makes, so owner decision 81's committer rule stays as strict as it is. Still refused: a tree entry name holding a slash, a tree naming one entry twice, a tag of a tree or blob, and a sha256 repository. DESIGN-DETAILS.md section 8 is built on this as written.
-
-Changes: DESIGN-DETAILS.md section 8 stands as written; EVS1-M2-49, EVS1-M2-34 and EVS1-M2-35 build it.
-
-Questions: `details-8-import-forms.md`, `evs-codec-import-forms.md`.
-
-### QD-599: How does a git-mode push carry the blobs its commits name that are not in the net change: a file changed twice in one push, a file added and removed, a merged side branch?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A blob that a git-mode push's commits name and its net change does not is carried as one sealed history record (a checkpoint, chunks, or a diff against the same path's blob in the commit's first parent) in a segment the push introduces, located from the sealed metadata by EvsSealedBlob {git_oid, size, base_oid, file_id, records}. No entry version's chain names a history record, and no GC may take a segment a retained push introduced (section 8's G11, a rule for §11.13 and EVS2's drop job). DESIGN-DETAILS.md section 8 is built on this as written.
-
-Changes: DESIGN-DETAILS.md section 8 stands as written; EVS1-M2-48, EVS1-M2-49, EVS1-M2-34 and EVS1-M2-35 build it; the G11 rule binds EVSB-M10-04 to -06 and EVS2-M10-20.
-
-Questions: `details-8-history-blobs.md`.
-
-### QD-603: Should an EvsImport sign the commits of the one push that carries it, in place of a whole import's list that a reader of a split import cannot check?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-An EvsImport signs the commits of the one push that carries it: tip_oid is that push's new tip, oid_list_sha256 the SHA-256 over that push's carried commit oids in carried order, count their number. The importing daemon signs one for each push as it cuts it, and a push with an EvsImport carries imported commits only. No field changes; a reader checks it against the push in front of it and needs nothing else. §11.8's 'each push carrying the EvsImport' is read this way. DESIGN-DETAILS.md section 8 is built on this as written.
-
-Changes: DESIGN-DETAILS.md section 8 stands as written; EVS1-M2-34 and EVS1-M2-35 build it.
-
-Questions: `details-8-import-per-push.md`.
-
-### QD-609: Should evs refuse a creation in the very push whose generation pin crosses an immediate removal, and record the due by that refusal?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-evs refuses a creation in a push whose own commit would record a due that blocks: 412 PATH_EPOCH_DUE, recorded, and the refusal's fence write sets the head's due fields as the commit would have. It cannot unsend a token, which §11.5's bound says, but it keeps §11.6's no-new-name-under-a-removed-key rule true of everything committed and gets the due onto the head early. Client and evs share one classification function (question evs1-m2-16-due-classification, option 1). DESIGN-DETAILS.md section 9 is built on this, and EVS1-M2-44 landed it on 2026-11-10.
-
-Changes: DESIGN-DETAILS.md section 9 stands as written; EVS1-M2-44 (landed) stands.
-
-Questions: `details-9-crossing-creation.md`.
-
-### QD-612: Is the root a directory with the empty token path, so that lookups, listings and path maps can start there? (evs1-m2-24-root-directory-names, restated by section 9)
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The root is a directory whose token path is empty in every epoch: a change may name the empty path only for a directory delta; its entry is idx/<repo>/<ref>/<p>.e beside idx/<repo>/<ref>/<p>/; a read may name it in any epoch with no token; a path map holds its move first, with an empty path in each epoch and no sealed name, and the copy moves it last. DESIGN-DETAILS.md section 9 (9.2.8) is built on this, and EVS1-M2-46 landed it on 2026-11-10.
-
-Changes: DESIGN-DETAILS.md section 9 stands as written; EVS1-M2-46 (landed) stands.
-
-Questions: `details-9-root-names.md`, `evs1-m2-24-root-directory-names.md`.
-
-### QD-613: Does §11.8's "no key prefixes another" mean a path prefix, so `gkm/kp/<sidecar_id>/<ref>.claim` stands and FakeBlobs checks path prefixes? (keys-m2-13-claim-key-prefix, restated by section 6)
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-§11.8's 'no key prefixes another' means a path prefix: an existing key followed by '/' at the new key's next byte, or the reverse, which is what MinIO's directory-object listing needs (§11.3). gkm/kp/<sidecar_id>/<ref>.claim stands beside gkm/kp/<sidecar_id>/<ref>. sidecartest's FakeBlobs checks path prefixes only (the data lane's change), §11.8's keys row says which prefix it means (design-records), and KEYS-M2-13's filter of the one report comes out once the fake changes.
-
-Changes: sidecartest/fake_blobs.go checks path prefixes (data lane); KEYS-M2-13's filter removed; §11.8 keys row wording (design-records).
-
-Questions: `details-6-claim-key-prefix.md`, `keys-m2-13-claim-key-prefix.md`.
-
-### QD-624: Should the in-house MinIO build honor x-ur-if-unmodified-ms on a DELETE, so that a GC run deletes only the object it listed?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The in-house MinIO build honors x-ur-if-unmodified-ms: T on a DELETE, under the key's lock: 412, with nothing sent to a drive, when the object it finds was stored a second or more after T; a missing key answers 204 as today. sidecar.WithBlobUnmodified(ctx, lastModified) carries it, as WithBlobDeadline carries a deadline; orphan GC, the nightly pass's container deletes and the sweep send it. §11.3's 'a DELETE evaluates no precondition' changes (design-records). DESIGN-DETAILS.md section 2 is built on this, and the evsb-m2-23 track (EVSB-M2-22 and -23) has landed it.
-
-Changes: DESIGN-DETAILS.md section 2 stands as written; EVSB-M2-22 and -23 (landed) stand; §11.3 MinIO bullet (design-records).
-
-Questions: `details-2-conditional-delete.md`.
-
-Partly folded (2026-11-10): DESIGN-DETAILS.md 2.8's words for it landed with QD-623's fold (owner decision 203): §11.3's MinIO bullet, §11.13's needs and orphans rows and the clause after §19.6's settle rule (6), which cites owner decision 203. This item's own owner decision number, cited there and in §11.3, and the rest of its text (412 with nothing sent to a drive, a missing key's 204, who sends the header) wait for §11's fold.
-
-### QD-625: Should the in-house MinIO build answer a LIST 503 when it could have dropped a key, since evacuation's horizon and GC's reads of pidx/ delete on what a LIST shows?
-*Decided by the owner on 2026-11-10, asked one question at a time. Also amends §19.*
-
-The in-house MinIO build answers a LIST 503 when a set it must read has three or more drives offline, or any offline while one heals, and asks every online drive whatever list_quorum says. LISTs then fail in §19.6's at_risk state on a metadata set and with one host down on a 16-drive segment set, where evacuation, the nightly pass and uncached pidx/ lookups wait. FS-114 gains the clause; §11.13's needs row says what a LIST does in that state (design-records). DESIGN-DETAILS.md section 2 is built on this, and EVSB-M2-22 has landed it.
-
-Changes: DESIGN-DETAILS.md section 2 stands as written; EVSB-M2-22 (landed) stands; §11.13 needs row and FS-114 (design-records).
-
-Questions: `details-2-list-whole.md`.
-
-### QD-632: When a ref's first push crosses an immediate removal, may it create its paths in epoch 1, and if not, in which epoch does a new ref start?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A ref that is not an overlay starts in the newest path epoch its creator holds: on a ref with no head, 5e accepts a path_epoch p with 1 <= p <= the push's generation, taking p as the new head's current epoch with no sources and no due below p, and the creator names its newest REMOVE generation held (DESIGN-DETAILS 9.2.3). An overlay's first push takes its base ref's current epoch, so overlay and base share token paths. P1 then holds for new refs: no new ref's first names are tokenized under a removed key. This replaces the exemption EVS1-M2-44 built (a ref's first push creating in epoch 1). §11.6's '1 at creation' is restated (design-records); the design agent amends DESIGN-DETAILS 9.2.3, 9.2.6 and 9.3 and section 8's overlay rule; a follow-up EVS1 task changes 5e and head creation (evsservice/check_cas.go) and the client (after EVS1-M2-28).
-
-Changes: DESIGN-DETAILS 9.2.3, 9.2.6, 9.3 and section 8's overlays amended by the design agent; new EVS1 task after EVS1-M2-28: 5e and head creation accept p on a ref with no head; the client names it; §11.6 '1 at creation' and §11.5's bound (design-records).
-
-Questions: `evs1-m2-44-new-ref-crossing.md`.
-
-### QD-633: How does evs find the change of a version of an older path epoch whose statement's change list is inline, when DESIGN-DETAILS 9.2.2 records no leaf place for an inline list?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The fold records the leaf place for an inline change list too: leaf_part 0 and leaf_index the change's index in the statement's list plus 1, with 0 meaning only 'not recorded'. evs then serves every committed version, directories and elided versions included, in one round after a cut-over; the statement-alone answer stays only for entries folded before the fields existed. DESIGN-DETAILS 9.2.2's comment ('0 when the list is inline') changes by the design agent, and evs-11's amended row reads as it does. A small EVS1 follow-up changes the fold's recording and the read route.
-
-Changes: DESIGN-DETAILS 9.2.2 and 9.2.4 wording (design agent); EVS1 follow-up: fold records inline places; read route uses them (evsservice/fold.go, read.go, tests).
-
-Questions: `evs1-m2-45-inline-leaf-place.md`.
-
-### QD-640: Does format-1 code refuse a ref whose head carries index_epoch, or read past it?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-Format-1 code reads past a head's index_epoch: EvsHeadSummary.index_epoch joins testdata/evs/reserved_numbers.yml's ignored list and EvsHead.index_epoch its kept list (format-1 writes carry it), and §11.6's kinds-row sentence moves them beside the window bits (design-records). The format-2 sweep (EVS1-M2-39) gains a reader row. No code changes. A format-1 device keeps reading a ref's format-1 files after an erasure's CUT, as FS-72's 'serves stored bytes' keeps. DESIGN-DETAILS section 9 builds on this.
-
-Changes: testdata/evs/reserved_numbers.yml and format2_refusals.json rows (EVS1 follow-up, small); §11.6 kinds row (design-records).
-
-Questions: `evs1-m2-39-head-index-epoch.md`.
-
 ### QD-286: EVS1-M2-01, -04 and -05 write format 1's missing bytes, and design-records folds them in before Gn-in
 *Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
 
@@ -2361,13 +2154,6 @@ Option 1. EVS1-M2-01, -04 and -05 write protocol/EVS-FORMAT.md from rows #2 to #
 Changes: §11.6 (additions only).
 
 Questions: `plan-EVS1-format-bytes.md#1`.
-
-### QD-296: FS-94's last clause tests a stub, so it needs no compaction to exist
-*Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
-
-Read 'compaction's stub test' as a test of a pure function: given a record and the live versions, it returns the bytes a live version needs. It lands with FS-94 at M10-out and deletes nothing. This holds whichever way compaction is decided.
-
-Questions: `plan-EVSB-fs94-compaction-clause.md#1`.
 
 ### QD-300: Who writes down §11.14's open byte layouts before format 2's vector schemas are fixed
 *Proposed reading: the agents' reading of text the design leaves open; work builds on it.*
@@ -2522,15 +2308,6 @@ VByte is unsigned LEB128, as encoding/binary.AppendUvarint writes it: 7 bits a b
 
 Questions: `plan-SEARCH-index-format-bytes.md#1`.
 
-### QD-450: A record stream's ref name
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-A writer's stream in a record-class repo is the ref named `ur/<sidecar_id as 32 lowercase hex>/record`, in ASCII, hashed by §11.6's ref_id formula, so a requester derives the decider's ref_id from `decider_sidecar_id`. §11.8's record-class row states the pattern. plan-EVS1-ref-name-bytes should take the same hex for `ur/<sidecar_id>/…`.
-
-Changes: §11.8 Refs table.
-
-Questions: `plan-RECORD-stream-names.md#1`.
-
 ### QD-460: Numbers for EvsHeadChanged
 *Proposed fill: a gap the agents filled; work builds on it.*
 
@@ -2594,24 +2371,6 @@ Questions: `plan-SEARCH-index-format-bytes.md#3`.
 A slot's entries sort ascending by their 16-byte key (doc_key, or ref_id for a ref tombstone), then by kind, one entry a key. A replaced entry goes and its successor takes its sorted place, so a head is a function of its entry set and not of arrival order. Decoders refuse out-of-order or repeated keys.
 
 Questions: `plan-SEARCH-index-format-bytes.md#2`.
-
-### QD-484: A branch hashes its short name and a tag hashes refs/tags/<t>
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-Option 1. The ref name bytes are <b> for refs/heads/<b>, the full refs/tags/<t> for a tag, and the bare name for every other ref (main, ur/<id>/…, ur/index, ur/lfs, cards). sealed_ref_name holds the same bytes, so a reader maps a listed ref back. The local tier refuses a branch whose short name starts with refs/. Only refs/heads and refs/tags reach evs (§11.11's receive row).
-
-Changes: §11.6 ref ids row.
-
-Questions: `plan-EVS1-ref-name-bytes.md#1`.
-
-### QD-485: The text forms of <sidecar_id> and <time> inside ref names
-*Proposed fill: a gap the agents filled; work builds on it.*
-
-<sidecar_id> in ur/<sidecar_id>/… is Id.String(): 36 characters, lowercase hex in the 8-4-4-4-12 form. <time> in ur/<sidecar_id>/conflicts/<ref>/<time> is UTC yyyymmddThhmmssZ, which git allows in a ref name.
-
-Changes: §11.8 Refs table; §11.11 restart row.
-
-Questions: `plan-EVS1-ref-name-bytes.md#2`.
 
 ### QD-506: Encoding and field names of planned route entries the design leaves unwritten
 *Proposed fill: a gap the agents filled; work builds on it.*
@@ -4833,87 +4592,6 @@ Recommended: run the question file's restore loop, which writes fourteen one-lin
 Changes: BRIEF.md hard limits.
 
 Questions: `wire-consumers-sdk-worktree-links.md`.
-
-### QD-600: How does a replaying reader know that a commit a push brings was already in the repo, so that owner decision 81's committer rule applies to new commits only, as the hook's does?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A git-mode push names up to 16 committed versions of other git-mode refs of the repo (EvsGitUpdate.sources), chosen by its writer from tips its mirror has applied; a reader replays each source to that version first. What a source's tip reaches is neither carried nor judged again; everything the push carries is new and held to owner decision 81's committer rule, or listed by the push's own EvsImport. A version is applied only after the versions it names, a cycle of waits is refused, and a ref whose source cannot be replayed waits with no alarm of its own (8.5). DESIGN-DETAILS.md section 8 is built on this as written.
-
-Changes: DESIGN-DETAILS.md section 8 stands as written; EVS1-M2-48, EVS1-M2-34, EVS1-M2-35 and EVS1-M2-36 build it.
-
-Questions: `details-8-pulled-sources.md`.
-
-### QD-601: May a part of a push hold no change, so that sealed metadata larger than the room beside a push's changes can be sent?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A part of a push may hold no change when it holds a slice of a spilled section such as sealed metadata. Such parts come after every part that holds a change, carry no changes_root and are no leaf of the statement's root; parts_sha256 covers them as it covers every part; evs records and hashes them and runs no entry check for them. EVS-FORMAT.md's 'each holds at least one change' becomes this rule. DESIGN-DETAILS.md section 8 is built on this as written.
-
-Changes: DESIGN-DETAILS.md section 8 stands as written; EVS1-M2-48 builds it (EVS-FORMAT.md, the builder, evsCheckPartOf, NewEvsPartedChangeTree, the part and seal routes).
-
-Questions: `details-8-changeless-parts.md`.
-
-### QD-602: What is a conflict branch's life: who makes it, is it published, and who removes it?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A conflict branch is made only by settle, at the local ref's commit, named ur/<sidecar_id>/conflicts/<ref's name>/<time> with the next free second. It is an owned ref of its sidecar, published by the queue as an overlay of the conflicted ref, so the member's other devices see it. The daemon never merges, moves or deletes it; its owner does, with stock git. ur status lists each until its ref is deleted, and evs_conflict carries the conflicted ref and the branch's name. A ref with 64 conflict branches stops settling, its local ref left alone, until one is deleted. DESIGN-DETAILS.md section 8 is built on this as written.
-
-Changes: DESIGN-DETAILS.md section 8 stands as written; EVS1-M2-35 builds it.
-
-Questions: `details-8-conflict-branches.md`.
-
-### QD-604: Should v0 refuse an import whose history has one first-parent step too large for one push, naming the way round it, or add staged pushes that carry history without moving the tip?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-When one first-parent step of an import would pass a push's bounds, the import itself creates helper refs under ur/<sidecar_id>/import/<id>/<n>, imports the merged side into them, and then carries the step's merge commit alone, naming the helper refs as sources; this recurses where a side has such a step of its own. No format change (8.9 says option 2 can be added over option 1 without one). DESIGN-DETAILS.md section 8 was built on option 1, the refusal, so the design agent amends 8.2.6 and 8.9 (the helper refs' naming, recursion, their cleanup, resume after a kill, and failure handling) before EVS1-M2-34 is built; EVS1-M2-34 is held until then. A single commit that changes more than 1,048,576 entries stays a hard bound that no option can pass.
-
-Changes: DESIGN-DETAILS.md 8.2.6 and 8.9 amended by the design agent; EVS1-M2-34 held until the amendment lands.
-
-Questions: `details-8-import-step-bound.md`.
-
-### QD-605: How does an overlay ref remove a path it inherits from its base, and list a directory: by holding a directory whole or not at all?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-An overlay holds a directory whole or not at all. The first push on an overlay that adds or removes a child of a directory writes that directory as a creation whose delta lists every child it has in the new tree; later pushes send deltas. A path reads as the overlay's own standing entry; else absent if any ancestor directory the overlay holds does not list the next name; else the base's. No evs change. DESIGN-DETAILS.md section 8 is built on this as written.
-
-Changes: DESIGN-DETAILS.md section 8 stands as written; EVS1-M2-34 and EVS1-M2-35 build it.
-
-Questions: `details-8-overlay-directories.md`.
-
-### QD-606: Should a tag ref hold no path state, so that a tag of history a ref already reaches is one empty push and never needs a path epoch or a rekey?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A tag ref holds no path state and has no base. Its one push carries no change and names, as sources, the refs whose tips already reach its commit; what its commit reaches beyond those is carried as commits and history blobs. A tag of anything a branch already reaches is one push with no commit, no change and no upload. Writers and replaying readers refuse a change on a tag ref; a reader that wants a file at a tag reads it through a device with the commits, or resolves the tag's commit to a branch version. DESIGN-DETAILS.md section 8 is built on this as written.
-
-Changes: DESIGN-DETAILS.md section 8 stands as written; EVS1-M2-34 and EVS1-M2-35 build it.
-
-Questions: `details-8-tag-refs.md`.
-
-### QD-607: Should a fold delete the source-epoch copies its pushes named once the current entry stands, so that a superseded copy never leaves an entry no map will name?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-While sources stand, a fold deletes each listed source copy its pushes' source paths name once the current entry holds the change, and under a removed directory lists and deletes everything below it in those sources; its range counts as folded only when the deletes answered. A source then holds only what still has to move, at every moment. DESIGN-DETAILS.md section 9 is built on this, and EVS1-M2-44 landed it on 2026-11-10.
-
-Changes: DESIGN-DETAILS.md section 9 stands as written; EVS1-M2-44 (landed) stands.
-
-Questions: `details-9-fold-deletes-sources.md`.
-
-### QD-608: May a path map's source head be older than the head's window when its PATH_EPOCH commits, with evs checking the tail only for the versions the window holds?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-A path map's source may be any version at or below the head. evs reads the source's statement and chain from the window or from that version's log page, and requires the epoch it declares to be the head's current one, so no PATH_EPOCH lies between. It checks the tail against every creation among the versions the window holds; creations between the source and the window are the mapper's to cover, and a miss there is caught by the copy's end LIST (alarm, source kept) and by replaying readers. A map part's 24 h age still bounds a map's staleness. DESIGN-DETAILS.md section 9 is built on this, and EVS1-M2-44 landed it on 2026-11-10.
-
-Changes: DESIGN-DETAILS.md section 9 stands as written; EVS1-M2-44 (landed) stands.
-
-Questions: `details-9-map-source-window.md`.
-
-### QD-610: Who checks a whole path map against its hash: the copy job as it reads the parts, every replaying reader, or evs at the commit?
-*Decided by the owner on 2026-11-10, asked one question at a time.*
-
-The copy job, which reads every part of a committed path map anyway, hashes the parts against the head's map_sha256 and checks their order before it moves anything, moving nothing and alarming on a mismatch. Readers check each row and entry as they use it, and no replaying reader downloads a map. DESIGN-DETAILS.md section 9 is built on this, and EVS1-M2-44 landed it on 2026-11-10.
-
-Changes: DESIGN-DETAILS.md section 9 stands as written; EVS1-M2-44 (landed) stands.
-
-Questions: `details-9-map-verifiers.md`.
 
 ### QD-621: What should a VPN component do when a statement that could narrow reach has waited for a compile that has not run?
 *Decided by the owner on 2026-11-10, asked one question at a time.*
