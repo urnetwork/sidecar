@@ -207,9 +207,12 @@ func TestDaemonHelloParse(t *testing.T) {
 		`{"ur_local":1,"mode":"control","version":"synthetic-version"}`,
 		`{"ur_local":1,"mode":"hook","version":"synthetic-version","pid":1}`,
 		`{"ur_local":1,"mode":"git","version":"synthetic-version","repo":"k7q2m9/repo","service":"git-upload-pack"}`,
+		`{"ur_local":1,"mode":"socket","version":"synthetic-version","socket":"k7q2m9:db/primary","cwd":"/tmp/x","pid":7}`,
+		`{"ur_local":1,"mode":"socket","version":"synthetic-version","socket":"share/abcdefghijklmnopqrstuvwxyz","socket_sidecar_id":"0197aa00-0000-7000-8000-000000000001"}`,
 	}
+	helloByteCount := DefaultSidecarSettings().LocalSettings.HelloByteCount
 	for _, line := range accepted {
-		if _, code, err := parseDaemonHello([]byte(line), version); err != nil {
+		if _, code, err := parseDaemonHello([]byte(line), version, helloByteCount); err != nil {
 			t.Errorf("%s: %s %v", line, code, err)
 		}
 	}
@@ -225,9 +228,16 @@ func TestDaemonHelloParse(t *testing.T) {
 		`{"ur_local":1,"mode":"control","version":"synthetic-version","repo":"a/b"}`:                            DaemonHelloErrorMalformed,
 		`{"ur_local":1,"mode":"control","version":"synthetic-version","pid":-1}`:                                DaemonHelloErrorMalformed,
 		`not json`: DaemonHelloErrorMalformed,
+		// the socket mode: an address it parses, and a sharer's id exactly when the address is a share/ name
+		`{"ur_local":1,"mode":"socket","version":"synthetic-version"}`:                                                                                  DaemonHelloErrorMalformed,
+		`{"ur_local":1,"mode":"socket","version":"synthetic-version","socket":"db/../x"}`:                                                               DaemonHelloErrorMalformed,
+		`{"ur_local":1,"mode":"socket","version":"synthetic-version","socket":"share/abcdefghijklmnopqrstuvwxyz"}`:                                      DaemonHelloErrorMalformed,
+		`{"ur_local":1,"mode":"socket","version":"synthetic-version","socket":"db/primary","repo":"a/b"}`:                                               DaemonHelloErrorMalformed,
+		`{"ur_local":1,"mode":"control","version":"synthetic-version","socket":"db/primary"}`:                                                           DaemonHelloErrorMalformed,
+		`{"ur_local":1,"mode":"socket","version":"synthetic-version","socket":"db/primary","socket_sidecar_id":"0197aa00-0000-7000-8000-000000000001"}`: DaemonHelloErrorMalformed,
 	}
 	for line, want := range refused {
-		_, code, err := parseDaemonHello([]byte(line), version)
+		_, code, err := parseDaemonHello([]byte(line), version, helloByteCount)
 		if code != want || !errors.Is(err, ErrDaemonHello) {
 			t.Errorf("%s: %s %v", line, code, err)
 		}

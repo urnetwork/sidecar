@@ -282,10 +282,12 @@ func TestDefaultSettingsTheDesignLeavesOpen(t *testing.T) {
 		t.Errorf("AutoLockTimeout %v", settings.KeychainSettings.AutoLockTimeout)
 	}
 	wantLocal := SidecarLocalSettings{
-		IdleExitTimeout:  10 * time.Minute,
-		RequestByteCount: 4 * 1024 * 1024,
-		RequestTimeout:   30 * time.Second,
-		FirstPort:        17000,
+		IdleExitTimeout:        10 * time.Minute,
+		RequestByteCount:       4 * 1024 * 1024,
+		RequestTimeout:         30 * time.Second,
+		FirstPort:              17000,
+		HelloByteCount:         16 * 1024,
+		SessionBufferByteCount: 4 * 1024,
 	}
 	if *settings.LocalSettings != wantLocal {
 		t.Errorf("local settings %+v, want %+v", *settings.LocalSettings, wantLocal)

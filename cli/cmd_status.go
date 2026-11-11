@@ -73,6 +73,10 @@ func printUrStatus(cli *urCli, reply *urStatusReply) {
 		}
 		fmt.Fprintf(out, "listening:  %s on %s (%s)\n", listener.Service, strings.Join(listener.Addresses, ", "), exposure)
 	}
+	if 0 < reply.Sockets || 0 < reply.LiveShares {
+		// a share is served only while this daemon runs (§9.9), so the person learns why it stays up
+		fmt.Fprintf(out, "sockets:    %d held, %d live shares; the daemon stays up while any is\n", reply.Sockets, reply.LiveShares)
+	}
 	keyStore := reply.KeyStore
 	if keyStore == string(osKeyStoreKeyFile) {
 		keyStore += " (warning: a 0600 key file wraps the unlock key, which any process of this user can read)"
