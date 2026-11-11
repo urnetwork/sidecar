@@ -6,12 +6,16 @@
 // lost together; the reader's cached read misses and is served from the cluster's head; the next commit's sequence
 // is above every earlier one, seeded again from the store's clock; and no device alarms, a lower version included.
 //
-// FS-62's lease holders re-creating their leases at the hourly resync and missing no later commit, a reader with a
-// newer pin sent past a stale cached head, a ref cached over 10 min ago not served while another ref writes, a push
-// with a stale cached ETag failing step 7 at one cluster read, FS-1 with {evsh_} a version behind, {acl_} lost and
-// stale, the epoch reconciler deleting nothing for 30 d, and the exact sequence vectors through the real publisher on
-// every leg are EVS1-M2-41's report's: the world's devices hold no subscription, since a subscriber's loop waits on a
-// clock the world answers at once.
+// Fs62LeaseHolderResync, a clause beside it: a lease holder loses its lease with the same four families and misses no
+// commit. The reader subscribes to main and a commit is hinted to it and read; the families are lost; the next commit
+// is hinted to no one; an hour on the reader's resync reads main fresh, catching it, finds its lease gone and leases
+// again at its next round; and the commit after that is hinted and read. Its subscriber's rounds run one a step on
+// the reader's actor, as FS-12's do (evs_world_hints.go), so it runs only in the sidecar_testhooks build.
+//
+// FS-62's reader with a newer pin sent past a stale cached head, a ref cached over 10 min ago not served while another
+// ref writes, a push with a stale cached ETag failing step 7 at one cluster read, FS-1 with {evsh_} a version behind,
+// {acl_} lost and stale, the epoch reconciler deleting nothing for 30 d, and the exact sequence vectors through the
+// real publisher on every leg are EVS1-M2-41's report's.
 
 package fault
 
@@ -28,6 +32,45 @@ import (
 )
 
 var Fs62 = Register("FS-62", "", []Tier{TierT2, TierT3}, Fs62SoftStateLost)
+
+// See the file header.
+func Fs62LeaseHolderResync(net *Net) *Schedule {
+	world := NewEvsWorld(net, nil)
+	steps := []*Step{
+		{Actor: "writerA", Action: world.Setup},
+		{Actor: "admin", Action: world.SetQuotaLimits(map[string]int64{"evs_subscribers_per_repo": fs12SubscribersPerRepo})},
+		{Actor: "writerA", Action: world.Write("writerA", "a.txt", EvsWorldContent("fs62 resync a", 200))},
+		{Actor: "reader", Action: world.Subscribe("reader")},
+		{Actor: "check", Action: world.ExpectLease("reader", true)},
+		// past the reader's 5 s reread, so its round reads for the hint alone
+		{Advance: 6 * time.Second},
+		{Actor: "writerB", Action: world.Write("writerB", "b.txt", EvsWorldContent("fs62 resync b", 200))},
+		{Actor: "reader", Action: world.DeliverHints("reader")},
+		{Actor: "check", Action: world.ExpectHinted("reader", "b.txt", true)},
+		{Actor: "reader", Action: world.SubscriptionRound("reader")},
+		{Actor: "check", Action: world.ExpectChange("reader", "b.txt")},
+		// {evsq_}, {evsl_} with its version, {evsh_} and {gka_} lost together
+		{Advance: time.Second},
+		{Actor: "admin", Action: world.LoseSoftState()},
+		{Actor: "check", Action: world.ExpectLease("reader", false)},
+		{Actor: "writerA", Action: world.Write("writerA", "c.txt", EvsWorldContent("fs62 resync c", 200))},
+		{Actor: "reader", Action: world.DeliverHints("reader")},
+		{Actor: "check", Action: world.ExpectHinted("reader", "c.txt", false)},
+		// the hourly resync reads main fresh and catches c.txt, and the next round leases again
+		{Advance: time.Hour},
+		{Actor: "reader", Action: world.SubscriptionRound("reader")},
+		{Actor: "check", Action: world.ExpectChange("reader", "c.txt")},
+		{Actor: "reader", Action: world.SubscriptionRound("reader")},
+		{Actor: "check", Action: world.ExpectLease("reader", true)},
+		{Actor: "writerB", Action: world.Write("writerB", "d.txt", EvsWorldContent("fs62 resync d", 200))},
+		{Actor: "reader", Action: world.DeliverHints("reader")},
+		{Actor: "check", Action: world.ExpectHinted("reader", "d.txt", true)},
+		{Actor: "reader", Action: world.SubscriptionRound("reader")},
+		{Actor: "check", Action: world.ExpectChange("reader", "d.txt")},
+		{Actor: "reader", Action: world.Verify("reader", "a.txt", "b.txt", "c.txt", "d.txt")},
+	}
+	return &Schedule{Id: "FS-62 lease holder resync", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3}}
+}
 
 // See the file header.
 func Fs62SoftStateLost(net *Net) *Schedule {
@@ -90,13 +133,15 @@ func (self *EvsWorld) redisValue(ctx context.Context, key string) ([]byte, bool,
 	return values[0], true, nil
 }
 
-// A step action: the repo's soft state in Redis is lost at once, the push sequence, the leases, the head cache and
-// its group's acks, as a Redis restart loses them, under an inspecting context, so it is no write of the row's.
+// A step action: the repo's soft state in Redis is lost at once, the push sequence, the leases and their version,
+// the head cache and its group's acks, as a Redis restart loses them, under an inspecting context, so it is no write
+// of the row's.
 func (self *EvsWorld) LoseSoftState() func(ctx context.Context, net *Net) error {
 	return func(ctx context.Context, net *Net) error {
 		keys := []string{
 			evsservice.PushSequenceKey(self.RepoId),
 			evsservice.LeaseKey(self.RepoId),
+			evsservice.LeaseVersionKey(self.RepoId),
 			evsservice.HeadCacheKey(self.RepoId),
 		}
 		self.stateLock.Lock()
