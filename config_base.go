@@ -286,11 +286,18 @@ func configFoldRecordOf(kept *configKeptEntry) ConfigFoldRecord {
 // L(folded_through), the log-derived rows a new base's head compiles with (DESIGN-DETAILS 5.2.2): base 1's from the
 // Genesis, which the log before it holds nothing of; the previous base's rows when the fold did not move; else this
 // reader's state at folded_through, which StateAt serves from the previous base on (the ft rule keeps it there).
+// state is S(n-1), whose newest base is the new base's previous one, as a writer's tip state is.
+//
+// Then the base compile's one rule of its own (QD-648): each superseded or ended forwarding Delegation's row whose
+// supersession or end the new base's retention point, min(the previous base, folded_through + 1), passes by 4,096
+// leaves. The writer folds through this and every full reader checks its compile through it, so every reader drops a
+// row at the same base, and a rows-only reader or a new device takes the rows that already dropped it.
 func (self *ConfigLog) foldRows(state *ConfigState, header *bridge.ProjectionHeader) (*ConfigCompileRows, error) {
 	foldedThrough := header.GetFoldedThrough()
 	if state.base == nil {
 		return configGenesisCompileRows(state.genesis), nil
 	}
+	var compileRows *ConfigCompileRows
 	if foldedThrough == state.base.header.GetFoldedThrough() {
 		rowsBytes, found := self.baseRows[[sha256.Size]byte(state.base.header.GetRowsSha256())]
 		if !found {
@@ -300,17 +307,23 @@ func (self *ConfigLog) foldRows(state *ConfigState, header *bridge.ProjectionHea
 		if err := proto.Unmarshal(rowsBytes, rows); err != nil {
 			return nil, err
 		}
-		return configCompileRowsFromRows(rows)
+		var err error
+		if compileRows, err = configCompileRowsFromRows(rows); err != nil {
+			return nil, err
+		}
+	} else {
+		chain, ok := state.chainAt(foldedThrough)
+		if !ok {
+			return nil, fmt.Errorf("A_%d is not kept", foldedThrough)
+		}
+		folded, err := state.StateAt(&bridge.AuthPin{Version: foldedThrough, Chain: chain[:]})
+		if err != nil {
+			return nil, err
+		}
+		compileRows = ConfigCompileRowsOf(folded)
 	}
-	chain, ok := state.chainAt(foldedThrough)
-	if !ok {
-		return nil, fmt.Errorf("A_%d is not kept", foldedThrough)
-	}
-	folded, err := state.StateAt(&bridge.AuthPin{Version: foldedThrough, Chain: chain[:]})
-	if err != nil {
-		return nil, err
-	}
-	return ConfigCompileRowsOf(folded), nil
+	compileRows.Delegations = configKeptDelegationRows(compileRows.Delegations, configRetentionPointAt(state.base, foldedThrough))
+	return compileRows, nil
 }
 
 // The state a base's rows give, before the tail re-applies and before the head's facts are held: its rows replace

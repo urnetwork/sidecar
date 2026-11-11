@@ -223,7 +223,8 @@ enum VersioningMode { VERSIONING_MODE_UNSPECIFIED = 0; VERSIONING_MODE_ON = 1; V
 
 // sidecar/protocol/bridge/auth.proto
 // §7.9's rows, as ProjectionRows' comments list them, with what protos-bridge-row-fields #1 and #2 add:
-// SidecarRow's fields 16 to 20 and DelegationRow's 9 to 11, decided by the owner with their numbers.
+// SidecarRow's fields 16 to 20 and DelegationRow's 9 to 11, decided by the owner with their numbers; and
+// SidecarRow's admitted_time_ms, 23, which the owner gave its number in QD-646.
 message MemberRow {
   bytes member_id = 1; MemberRole role = 2; bytes recovery_key_sha256 = 3;
   repeated RecoveryBindingRow bindings = 4;
@@ -238,6 +239,7 @@ message SidecarRow {
   uint32 capabilities = 12; bytes delegation_id = 13; uint64 live_since = 14; int64 not_after = 15;
   bytes identity_public_key = 16; string identity_alg = 17; bytes member_id = 18; repeated bytes tag_ids = 19;
   bool ephemeral = 20; repeated ConfirmationRow confirmations = 21; repeated CascadeSpanRow cascades = 22;
+  int64 admitted_time_ms = 23;
 }
 // DESIGN-DETAILS 5.2.2's rows, its proto block's own numbers (complete 2026-11-09, pending its fold into §7.9 and the
 // owner's details-5-settings-in-rows), with the cascade's spans and the indexer rows that questions
