@@ -477,9 +477,15 @@ func (self *FsKeysWorld) AwaitHint(device *FsKeysDevice, match func(hint *FsKeys
 	}
 }
 
-// gkm's reconciler on the world's host, its state the world's log, told of each position Advance appends.
+// gkm's reconciler on the world's host, its state the world's log, told of each position Advance appends. nil
+// settings take the defaults with the engine's own service settings, which cache no place/, repo/, form or
+// group-info read, so a repo placed after a pass is found at the next.
 func (self *FsKeysWorld) StartReconciler(settings *gkmservice.GkmReconcilerSettings) *gkmservice.GkmReconciler {
 	self.t.Helper()
+	if settings == nil {
+		settings = gkmservice.DefaultGkmReconcilerSettings()
+		settings.Service = self.engineSettings
+	}
 	reconciler, err := gkmservice.NewGkmReconciler(self.Ctx, self.serviceHost(), settings, &gkmservice.GkmReconcilerDeps{State: &fsKeysReconcilerState{world: self}})
 	if err != nil {
 		self.t.Fatal(err)
