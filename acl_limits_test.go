@@ -8,8 +8,6 @@ package sidecar
 import (
 	"testing"
 
-	"github.com/urnetwork/connect"
-
 	"github.com/urnetwork/sidecar/protocol"
 )
 
@@ -87,7 +85,9 @@ func TestAclCheckGrantActivateQuotaReadsTheWritersLimits(t *testing.T) {
 	ask := testingPublishAsk("tls/443/b.example")
 	const nowMs = int64(1_800_000_000_000)
 	refusal := AclCheckTlsEndpoints(state, ask, nowMs, (&QuotaLimits{Tier: "team", Limits: map[string]int64{}}).Limits[AclTlsEndpointsLimitKey], false)
-	connect.AssertEqual(t, refusal != nil && refusal.Limit == 0 && !refusal.Upgrade, true)
+	if refusal == nil || refusal.Limit != 0 || refusal.Upgrade {
+		t.Errorf("Team with no tls_endpoints key: refusal %+v", refusal)
+	}
 	if _, err := AclCheckGrantActivateQuota(state, &protocol.GrantActivate{}, nowMs, nil); err == nil {
 		t.Error("a GrantActivate with no canonical action")
 	}
