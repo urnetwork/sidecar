@@ -899,14 +899,16 @@ func (self *GkmApi) Ack(ctx context.Context, repoId Id, groupId Id, epoch uint64
 	return self.callMessage(ctx, &gkmCall{route: "POST /gkm/groups/{group_id}/ack", method: http.MethodPost, path: gkmGroupPath(groupId, "/ack"), scopes: scopes, body: body}, nil)
 }
 
-// GET /gkm/welcomes, with each token: this sidecar's Welcomes, each once, by its KeyPackageRef.
+// GET /gkm/welcomes, with each token: this sidecar's Welcomes, each once, by its pointer's group and epoch, which is
+// what names a Welcome: one last-resort KeyPackage serves Adds in several groups, and every one of them is joined
+// (DESIGN-DETAILS 6.2.2's pointer row).
 func (self *GkmApi) Welcomes(ctx context.Context) ([]*protocol.GkmWelcomeEntry, error) {
 	batches := self.accessBatches()
 	if len(batches) == 0 {
 		return nil, ErrGkmNoScope
 	}
 	welcomes := []*protocol.GkmWelcomeEntry{}
-	seenRefs := map[string]bool{}
+	seenPointers := map[string]bool{}
 	for _, scopes := range batches {
 		reply := &protocol.GkmWelcomesReply{}
 		call := &gkmCall{route: "GET /gkm/welcomes", method: http.MethodGet, path: "/gkm/welcomes", scopes: scopes, retry: true}
@@ -914,10 +916,12 @@ func (self *GkmApi) Welcomes(ctx context.Context) ([]*protocol.GkmWelcomeEntry, 
 			return nil, err
 		}
 		for _, welcome := range reply.GetWelcomes() {
-			if seenRefs[string(welcome.GetKeyPackageRef())] {
+			pointer := welcome.GetPointer()
+			pointerKey := string(pointer.GetGroupId()) + "/" + strconv.FormatUint(pointer.GetEpoch(), 10)
+			if seenPointers[pointerKey] {
 				continue
 			}
-			seenRefs[string(welcome.GetKeyPackageRef())] = true
+			seenPointers[pointerKey] = true
 			welcomes = append(welcomes, welcome)
 		}
 	}
