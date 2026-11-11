@@ -200,3 +200,27 @@ func fsKeysOnlyGroup(t *testing.T, world *FsKeysWorld) sidecar.Id {
 	t.Fatal("no form")
 	return sidecar.Id{}
 }
+
+func TestFsKeysRecoveryACodeOnlyDeviceSelfJoinsAtGenerationZeroOverLostLeaves(t *testing.T) {
+	FsKeysScheduleRecoveryOverLostLeaves(t, FsKeysT2(t))
+}
+
+func TestFsKeysRecoveryACodeOnlyDeviceSelfJoinsWithTheNewestGenerationOverACleanTree(t *testing.T) {
+	FsKeysScheduleRecoveryOverACleanTree(t, FsKeysT2(t))
+}
+
+func TestFsKeysRecoveryAKillBeforeThePointersRewriteLeavesTheProbeToFindTheNewestEpoch(t *testing.T) {
+	FsKeysSchedulePointerRewrite(t, FsKeysT2(t))
+}
+
+func TestFsKeysRecoveryACompromiseRebindLeavesTheOldCodeNothing(t *testing.T) {
+	FsKeysScheduleCompromiseRebind(t, FsKeysT2(t))
+}
+
+func TestFsKeysRecoveryARoutineRebindOnlyRotates(t *testing.T) {
+	FsKeysScheduleRoutineRebind(t, FsKeysT2(t))
+}
+
+func TestFsKeysRecoveryAGenerationZeroJoinFromAnOrdinaryDeviceIsRefused(t *testing.T) {
+	FsKeysScheduleGenerationZeroFromAnOrdinaryDevice(t, FsKeysT2(t))
+}

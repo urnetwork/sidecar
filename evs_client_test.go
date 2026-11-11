@@ -574,7 +574,8 @@ func TestEvsHintRaisesOnlyTheHintedVersion(t *testing.T) {
 	}
 }
 
-// Every method this draft does not build answers ErrEvsNotBuilt and sends nothing.
+// Every method this draft does not build answers ErrEvsNotBuilt and sends nothing, and Import with no mount registry,
+// a head-mode client's, refuses the same way.
 func TestEvsUnbuiltMethodsRefuse(t *testing.T) {
 	sent := 0
 	test := newEvsTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

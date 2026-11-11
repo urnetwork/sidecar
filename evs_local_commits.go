@@ -41,7 +41,7 @@ var ErrEvsGitUpdateInvalid = errors.New("evs: a git update its push cannot carry
 // The ref prefix in a mount's bare repository at which the daemon keeps each ref's tip as evs holds it (8.2.2).
 const evsLocalEvsRefPrefix = evsLocalDaemonRefPrefix + "/evs/"
 
-// One ref a push may name as a source, as replay holds it.
+// One ref a push may name as a source, or an overlay take as its base, as replay holds it.
 type EvsGitSourceRef struct {
 	RefId Id
 	Kind  protocol.EvsRefKind
@@ -50,12 +50,21 @@ type EvsGitSourceRef struct {
 	Tip     EvsGitOid
 	// When replay applied that version, in the order it applied versions: the higher, the more recent.
 	AppliedOrder uint64
+	// A tag ref, which is never a base (DESIGN-DETAILS 8.2.4).
+	Tag bool
 }
 
-// What publish reads of replay's state: the ref whose refs/ur/evs/ tip it is, at the version its tips log gives. ok
-// false for a ref replay holds no tip of, which is no source.
+// What publish reads of replay's state (EVS1-M2-35's EvsGitRef, tips log and tip index).
 type EvsGitSourceState interface {
+	// The ref whose refs/ur/evs/ tip it is, at the version its tips log gives: ok false for a ref replay holds no tip
+	// of, which is no source.
 	SourceRef(ctx context.Context, refId Id) (*EvsGitSourceRef, bool, error)
+	// Every git-mode ref replay holds a tip of, at the version it applied: the base search's other branches.
+	Refs(ctx context.Context) ([]*EvsGitSourceRef, error)
+	// Every ref version whose tip was oid, from the tip index: none for a commit no applied version had as its tip.
+	TipsOf(ctx context.Context, oid EvsGitOid) ([]*EvsGitSourceRef, error)
+	// The ref's tip at version, from its tips log: false for a version replay has not applied or that left no tip.
+	TipAt(ctx context.Context, refId Id, version uint64) (EvsGitOid, bool, error)
 }
 
 // What an update carries.

@@ -372,9 +372,10 @@ func (self *EvsRepo) firstEpoch(ctx context.Context, refKind protocol.EvsRefKind
 var evsFirstEpochHook func(generation uint64) uint64
 
 // The ref's epoch state as a head verified within EpochFreshFor gives it, the head read again when the one held is
-// older or none is.
+// older, below a version this device's own push committed at, or none is.
 func (self *EvsRepo) freshEpochState(ctx context.Context, refId Id) (*evsRefEpoch, error) {
-	if state := self.client.refEpochState(self.repoId, refId); self.client.epochFresh(state) {
+	if state := self.client.refEpochState(self.repoId, refId); self.client.epochFresh(state) &&
+		self.client.epochs.committedVersion(self.repoId, refId) <= state.version {
 		return state, nil
 	}
 	if _, err := self.readHeadAlone(ctx, refId, true); err != nil {
