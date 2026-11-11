@@ -277,32 +277,38 @@ func TestEvsMountRecordNamesNoPath(t *testing.T) {
 	}
 }
 
-// A ref lock held by the sync engine keeps receive-pack's update waiting: a receive whose ctx ends first never takes
-// it, and one after the release does.
+// An apply lock held by the sync engine keeps a receive's L_r waiting: a receive whose ctx ends first never takes it,
+// another ref's is free, and one after the release takes it; the publish lock is a lock of its own.
 func TestEvsRefLockHeldBySyncBlocksReceive(t *testing.T) {
 	locks := NewEvsRefLocks(DefaultEvsSettings(), evsTestStillClock{})
-	releaseSync, err := locks.Lock(context.Background(), "refs/heads/main")
+	main, other := evsTestId("main ref"), evsTestId("other ref")
+	releaseSync, err := locks.LockApply(context.Background(), main)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	waiting := make(chan error, 1)
 	go func() {
-		_, err := locks.Lock(ctx, "refs/heads/main")
+		_, err := locks.LockApply(ctx, main)
 		waiting <- err
 	}()
 	cancel()
 	if err := <-waiting; !errors.Is(err, context.Canceled) {
 		t.Fatalf("receive took a held lock: %v", err)
 	}
-	if other, err := locks.Lock(context.Background(), "refs/heads/other"); err != nil {
+	if release, err := locks.LockApply(context.Background(), other); err != nil {
 		t.Fatalf("another ref: %v", err)
 	} else {
-		other()
+		release()
+	}
+	if release, err := locks.LockPublish(context.Background(), main); err != nil {
+		t.Fatalf("the publish lock of a ref whose apply lock is held: %v", err)
+	} else {
+		release()
 	}
 	got := make(chan func(), 1)
 	go func() {
-		release, err := locks.Lock(context.Background(), "refs/heads/main")
+		release, err := locks.LockApply(context.Background(), main)
 		if err != nil {
 			t.Error(err)
 		}
@@ -310,13 +316,59 @@ func TestEvsRefLockHeldBySyncBlocksReceive(t *testing.T) {
 	}()
 	releaseSync()
 	releaseReceive := <-got
-	if !locks.Held("refs/heads/main") {
+	if !locks.ApplyHeld(main) {
 		t.Errorf("receive does not hold the lock")
 	}
 	releaseReceive()
 	releaseReceive()
-	if locks.Held("refs/heads/main") {
+	if locks.ApplyHeld(main) {
 		t.Errorf("released twice, still held")
+	}
+}
+
+// The upkeep lock: shared holders never wait on each other, gc waits for every one of them, and a shared taker waits
+// while gc holds it.
+func TestEvsRefLocksUpkeepIsSharedBesideGc(t *testing.T) {
+	locks := NewEvsRefLocks(DefaultEvsSettings(), evsTestStillClock{})
+	first, err := locks.LockUpkeepShared(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := locks.LockUpkeepShared(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gc := make(chan func(), 1)
+	go func() {
+		release, err := locks.LockUpkeepExclusive(context.Background())
+		if err != nil {
+			t.Error(err)
+		}
+		gc <- release
+	}()
+	first()
+	select {
+	case <-gc:
+		t.Fatal("gc took the lock while a receive held it shared")
+	default:
+	}
+	second()
+	releaseGc := <-gc
+	ctx, cancel := context.WithCancel(context.Background())
+	shared := make(chan error, 1)
+	go func() {
+		_, err := locks.LockUpkeepShared(ctx)
+		shared <- err
+	}()
+	cancel()
+	if err := <-shared; !errors.Is(err, context.Canceled) {
+		t.Fatalf("a shared taker beside gc: %v", err)
+	}
+	releaseGc()
+	if release, err := locks.LockUpkeepShared(context.Background()); err != nil {
+		t.Fatal(err)
+	} else {
+		release()
 	}
 }
 

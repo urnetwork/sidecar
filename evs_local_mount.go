@@ -29,18 +29,24 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 )
 
 // The registry's directory in the evs component's store.
 const evsMountDirectory = "mounts/"
+
+// The per-mount secret's length, a format value of plan-EVS1-git-http-credential.
+const evsLocalHttpSecretByteCount = 32
 
 // The namespace the daemon keeps in each bare repository, hidden from clients (DESIGN-DETAILS 8.2.2, 8.2.11).
 const evsLocalDaemonRefPrefix = "refs/ur"
@@ -73,11 +79,25 @@ type EvsLocalRepo struct {
 	Mirror *EvsMirrorStore
 	locks  *EvsRefLocks
 	git    *EvsGitRunner
+	// the mount's sync engine (evs_local_sync.go), nil for a mount a test builds by hand
+	sync *EvsGitSyncEngine
+	// the per-mount secret git's http front takes as Basic's password (plan-EVS1-git-http-credential), nil for none
+	httpSecret []byte
 }
 
-// Takes the ref's daemon lock, which receive-pack's update and the sync engine's apply both hold (§11.11's locks row).
-func (self *EvsLocalRepo) LockRef(ctx context.Context, ref string) (func(), error) {
-	return self.locks.Lock(ctx, ref)
+// The mount's locks: P_r, L_r and M (DESIGN-DETAILS 8.2.9).
+func (self *EvsLocalRepo) Locks() *EvsRefLocks {
+	return self.locks
+}
+
+// The mount's sync engine, nil for none.
+func (self *EvsLocalRepo) Sync() *EvsGitSyncEngine {
+	return self.sync
+}
+
+// The git runner the mount runs on.
+func (self *EvsLocalRepo) GitRunner() *EvsGitRunner {
+	return self.git
 }
 
 // Runs git on the bare repository.
@@ -85,10 +105,13 @@ func (self *EvsLocalRepo) Git(ctx context.Context, args ...string) ([]byte, erro
 	return self.git.Run(ctx, self.BareDir, args...)
 }
 
-// A mount's stored record. The paths are the layout's, never stored.
+// A mount's stored record. The paths are the layout's, never stored. The store seals it, so the http front's secret
+// rests sealed with the rest of the evs component's state (§5.9).
 type evsMountRecord struct {
 	Dir        string `json:"dir,omitempty"`
 	AgentLabel string `json:"agent_label,omitempty"`
+	// 32 random bytes drawn at the first ur mount add (plan-EVS1-git-http-credential)
+	HttpSecret []byte `json:"http_secret,omitempty"`
 }
 
 // One daemon's mounts.
@@ -180,7 +203,7 @@ func (self *EvsMounts) localRepo(repoId Id, record *evsMountRecord) (*EvsLocalRe
 	if err != nil {
 		return nil, err
 	}
-	return &EvsLocalRepo{
+	mount := &EvsLocalRepo{
 		RepoId:     repoId,
 		Dir:        record.Dir,
 		BareDir:    filepath.Join(self.gitTree, evsUrlId(repoId)+evsLocalBareRepoExtension),
@@ -189,7 +212,10 @@ func (self *EvsMounts) localRepo(repoId Id, record *evsMountRecord) (*EvsLocalRe
 		Mirror:     mirror,
 		locks:      NewEvsRefLocks(self.client.settings, self.client.clock),
 		git:        self.git,
-	}, nil
+		httpSecret: record.HttpSecret,
+	}
+	mount.sync = newEvsGitSyncEngine(self.client, mount)
+	return mount, nil
 }
 
 // Mounts repoId: its bare repository created SHA-1 and configured, or reopened; the working clone's committer set
@@ -204,6 +230,13 @@ func (self *EvsMounts) Add(ctx context.Context, repoId Id, args *EvsMountArgs) (
 		label = identity.SidecarId.String()
 	}
 	record := &evsMountRecord{Dir: args.Dir, AgentLabel: label}
+	if held, ok := self.Get(repoId); ok && 0 < len(held.httpSecret) {
+		record.HttpSecret = held.httpSecret
+	} else {
+		record.HttpSecret = make([]byte, evsLocalHttpSecretByteCount)
+		// never fails: since Go 1.24 a broken system generator crashes the program instead
+		cryptorand.Read(record.HttpSecret)
+	}
 	mount, err := self.localRepo(repoId, record)
 	if err != nil {
 		return nil, err
@@ -270,10 +303,23 @@ func (self *EvsMounts) Add(ctx context.Context, repoId Id, args *EvsMountArgs) (
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if held := self.repoIdMounts[repoId]; held != nil {
-		mount.locks = held.locks
+		// the same mount again: its locks and its engine, which may be mid-replay, stay
+		mount.locks, mount.sync = held.locks, held.sync
 	}
 	self.repoIdMounts[repoId] = mount
 	return mount, nil
+}
+
+// Every mount, by repo id.
+func (self *EvsMounts) List() []*EvsLocalRepo {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	mounts := make([]*EvsLocalRepo, 0, len(self.repoIdMounts))
+	for _, mount := range self.repoIdMounts {
+		mounts = append(mounts, mount)
+	}
+	slices.SortFunc(mounts, func(a *EvsLocalRepo, b *EvsLocalRepo) int { return bytes.Compare(a.RepoId[:], b.RepoId[:]) })
+	return mounts
 }
 
 // Serves the repo to stock git from a plaintext bare repository (§11.11): the client's mount registry adds or
