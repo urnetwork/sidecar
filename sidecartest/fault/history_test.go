@@ -11,6 +11,7 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
+// A ref of a repo of its own.
 func historyTestRef() HistoryRef {
 	return HistoryRef{RepoId: sidecar.NewId(), RefId: sidecar.NewId()}
 }

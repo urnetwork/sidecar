@@ -50,6 +50,7 @@ const (
 	OperationRead
 )
 
+// "push" or "read".
 func (self OperationKind) String() string {
 	switch self {
 	case OperationPush:
@@ -73,6 +74,7 @@ const (
 	OutcomeUnknown
 )
 
+// "committed", "aborted" or "unknown".
 func (self Outcome) String() string {
 	switch self {
 	case OutcomeCommitted:
@@ -217,6 +219,7 @@ func NewHistory(name string) *History {
 	return &History{name: name}
 }
 
+// What the history records, as NewHistory named it.
 func (self *History) Name() string {
 	return self.name
 }
@@ -281,15 +284,15 @@ func (self *History) Validate() error {
 // none came, which the instances' unanswered attempts already hold, so it adds no operation.
 func (self *EvsWorld) History(name string) *History {
 	history := NewHistory(name)
-	devices := map[sidecar.Id]string{}
+	pushIdDevices := map[sidecar.Id]string{}
 	for _, push := range self.Pushes() {
-		devices[push.PushId] = push.Device
+		pushIdDevices[push.PushId] = push.Device
 	}
 	ref := HistoryRef{RepoId: self.RepoId, RefId: self.RefId()}
 	for _, attempt := range self.Attempts() {
 		operation := &Operation{
 			Kind:     OperationPush,
-			Actor:    devices[attempt.PushId],
+			Actor:    pushIdDevices[attempt.PushId],
 			Instance: attempt.Instance,
 			Ref:      ref,
 			PushId:   attempt.PushId,
