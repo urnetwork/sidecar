@@ -13,8 +13,14 @@ the key origin served direct (211), the compromise rebind's procedure (212), no 
 the witness call outside the planes (214), forwarding's iOS executable budget and compile cap (215, 216), deciding
 Q-SDK-7, the key origin's per-network databases (217), multi-use bridge approvals (218), the key origin's sign-in
 hand-off (219), requested grants' sealed detail (220), promoted key-origin builds (221), wintun.dll left unbundled
-(222), the ur.io/recurd page (223), C16's latch (224), and the store's DELETE that names its object (225) and its
-whole LIST (226)."""
+(222), the ur.io/recurd page (223), C16's latch (224), the store's DELETE that names its object (225) and its
+whole LIST (226), and the path-epoch rules of 227-233 (a fold's source deletes, a map's source below the window, the
+crossing creation refused, the copy's map check, the root directory, a new ref's epoch, inline leaf places), key
+path prefixes (234), format 1 reading past index_epoch (235), and git and evs both ways in 236-244 (imports as
+bytes, history blobs, a push's sources, changeless parts, conflict branches, one import statement per push, an
+import's helper refs, overlay directories and tag refs), and the owner items of 2026-11-06 for §11 in 245-250: the
+tainted bit from M3, retention without the reclaim, compaction Later, the 2 GiB file cap, SHA-1 repos and working-tree
+sync and derived shares Later."""
 import runpy, pathlib
 _P9 = runpy.run_path(str(pathlib.Path(__file__).parent / 'data_front9.py'))
 globals().update({k: v for k, v in _P9.items() if not k.startswith('__')})
@@ -153,6 +159,78 @@ INDEX = list(_P9['INDEX']) + [
     (226, "Store LISTs",
      "The in-house MinIO build answers a LIST only when it is whole: it asks every online drive of each set and "
      "answers 503 while three or more of a set's drives are offline, or one while another heals."),
+    (227, "Path epochs",
+     "While sources stand, a fold deletes each source copy its pushes named once the current entry holds the change, "
+     "and everything below a removed directory in them, so a source holds only what still has to move."),
+    (228, "Path epochs",
+     "A path map's source may be any version at or below the head in its current epoch, read from the window or its "
+     "log page; evs checks the tail against the window's creations, and a part's 24 h age bounds staleness."),
+    (229, "Path epochs",
+     "evs refuses a creation in the push whose own commit would record a blocking due, 412 PATH_EPOCH_DUE, recorded, "
+     "its refusal's fence write setting the head's due fields as the commit would have."),
+    (230, "Path maps",
+     "The path-epoch copy hashes a committed map's parts against the head's `map_sha256` and checks their order "
+     "before moving anything, alarming on a mismatch; no replaying reader downloads a map."),
+    (231, "The root",
+     "The root is a directory whose token path is empty in every epoch, its entry at `idx/<repo>/<ref>/<p>.e`, read "
+     "with no token; a path map holds its move first and the copy moves it last."),
+    (232, "Path epochs",
+     "A new ref starts in the newest path epoch its creator holds, 5e taking any p from 1 to the push's generation on "
+     "a ref with no head; an overlay's first push takes its base ref's current epoch."),
+    (233, "Path epochs",
+     "The fold records an inline change list's leaf place too, leaf_index the change's index plus 1, so evs serves "
+     "every committed version of an older epoch in one round, extending @@OD:200@@."),
+    (234, "Key prefixes",
+     "§11.8's \"no key prefixes another\" means a path prefix, an existing key followed by `/` or the reverse, so a "
+     "KeyPackage's `.claim` stands beside it."),
+    (235, "Format 1",
+     "Format-1 code reads past a head's index_epoch, as past window bits 4 and 5, so a format-1 device keeps reading "
+     "a ref's format-1 files after an erasure's CUT."),
+    (236, "Imports",
+     "An imported commit travels as its bytes, and a tree that does not rebuild from its entries as its bytes beside "
+     "it (`EvsSealedCommit.trees`), so an import takes every history stock git can walk; only new commits meet the "
+     "strict codec."),
+    (237, "History blobs",
+     "A blob a git-mode push's commits name and its net change does not travels as one sealed history record in a "
+     "segment the push introduces (`EvsSealedBlob`); no GC takes a segment a retained push introduced."),
+    (238, "Push sources",
+     "A git-mode push names up to 16 committed versions of the repo's other git-mode refs as sources, replayed "
+     "first, so @@OD:81@@'s committer rule judges only the commits it carries."),
+    (239, "Push parts",
+     "A part may hold no change when it holds a slice of a spilled section such as sealed metadata; such parts come "
+     "last, carry no changes_root, and parts_sha256 covers them."),
+    (240, "Conflict branches",
+     "Only settle makes a conflict branch, `ur/<sidecar_id>/conflicts/<ref>/<time>`, an owned overlay of the "
+     "conflicted ref that the queue publishes and only its owner removes; 64 on a ref stop its settling."),
+    (241, "Imports",
+     "An EvsImport signs the commits of the one push that carries it (its tip, the carried oids' hash and count), so "
+     "each push of a split import verifies alone."),
+    (242, "Imports",
+     "A first-parent step too large for one push makes helper refs under `ur/<sidecar_id>/import/<id>/<n>`, imports "
+     "the merged side there and carries the merge commit alone, naming them as sources."),
+    (243, "Overlays",
+     "An overlay holds a directory whole or not at all: its first push changing a directory's names writes the whole "
+     "table, so an inherited path's removal stands and listings need no evs change."),
+    (244, "Tag refs",
+     "A tag ref holds no path state and has no base: its one push carries no change and names as sources the refs "
+     "that reach its commit, so a tag of what a branch reaches uploads nothing."),
+    (245, "Taint (I-9)",
+     "From M3 a push bound to a tainted run sets format 1's reserved tainted bit in its sealed provenance, and readers "
+     "read such a version as untrusted, tainting the run first; a push bound to no run carries none."),
+    (246, "Retention",
+     "Retention stays expiry, ERASE and BASE at M6; the reclaim of expired ciphertext moves to Later beside "
+     "compaction, so it stays, keyless; a deposit's version is retained until a committed CONSUME."),
+    (247, "Compaction",
+     "Compaction moves to Later: erased and dropped inline ciphertext and packed segments stay stored and billed for "
+     "the repo's life, unreadable once their keys are gone."),
+    (248, "File cap",
+     "A file is capped at 2 GiB of plaintext (512 chunks) through M10, versionless files and git-lfs objects "
+     "included; a larger one is refused by name before the ref moves."),
+    (249, "Git object format",
+     "Repos use git's SHA-1 object format only in v0, the oid's width reserved; the local tier refuses a sha256 "
+     "repository, naming it, before any evs write."),
+    (250, "§11.22",
+     "Working-tree sync and derived shares leave v1 for Later; git users update a working tree with stock git."),
 ]
 # Owner decision 188 amends 176's summary (the reconciler's ASM.md, 1.2).
 _i176 = [r[0] for r in INDEX].index(176)
@@ -170,7 +248,7 @@ for _n, _old_end, _note in [
     _i = [r[0] for r in INDEX].index(_n)
     assert INDEX[_i][2].endswith(_old_end), _n
     INDEX[_i] = (_n, INDEX[_i][1], INDEX[_i][2] + _note)
-assert [r[0] for r in INDEX] == list(range(1, 227))
+assert [r[0] for r in INDEX] == list(range(1, 251))
 DATES = dict(_P9['DATES'])
 DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '2026-11-06', 189: '2026-11-06',
               190: '2026-11-06', 191: '2026-11-06', 192: '2026-11-06', 193: '2026-11-06',
@@ -180,7 +258,12 @@ DATES.update({185: '2026-11-05', 186: '2026-11-05', 187: '2026-11-05', 188: '202
               208: '2026-11-06', 209: '2026-11-06', 210: '2026-11-06', 211: '2026-11-06', 212: '2026-11-06',
               213: '2026-11-06', 214: '2026-11-06', 215: '2026-11-10', 216: '2026-11-10', 217: '2026-11-10',
               218: '2026-11-10', 219: '2026-11-06', 220: '2026-11-06', 221: '2026-11-06', 222: '2026-11-06',
-              223: '2026-11-06', 224: '2026-11-06', 225: '2026-11-10', 226: '2026-11-10'})
+              223: '2026-11-06', 224: '2026-11-06', 225: '2026-11-10', 226: '2026-11-10', 227: '2026-11-10',
+              228: '2026-11-10', 229: '2026-11-10', 230: '2026-11-10', 231: '2026-11-10', 232: '2026-11-10',
+              233: '2026-11-10', 234: '2026-11-10', 235: '2026-11-10', 236: '2026-11-10', 237: '2026-11-10',
+              238: '2026-11-10', 239: '2026-11-10', 240: '2026-11-10', 241: '2026-11-10', 242: '2026-11-10',
+              243: '2026-11-10', 244: '2026-11-10', 245: '2026-11-06', 246: '2026-11-06', 247: '2026-11-06',
+              248: '2026-11-06', 249: '2026-11-06', 250: '2026-11-06'})
 _ANCHOR = "This section lists the cross-cutting decisions"
 assert _ANCHOR in _P9['DECISIONS_INTRO']
 DECISIONS_INTRO = _P9['DECISIONS_INTRO'].replace(
@@ -284,8 +367,15 @@ DECISIONS_INTRO = DECISIONS_INTRO.replace(
     "repository in v1 (213), the witness call outside the planes (214), forwarding's iOS executable budget and "
     "compile cap (215, 216), the key origin's per-network databases (217), multi-use bridge approvals (218), the key "
     "origin's sign-in hand-off (219), requested grants' sealed detail (220), promoted key-origin builds (221), "
-    "wintun.dll left unbundled (222), the ur.io/recurd page (223), C16's latch (224), and the store's DELETE that "
-    "names its object (225) and its whole LIST (226). ")
+    "wintun.dll left unbundled (222), the ur.io/recurd page (223), C16's latch (224), the store's DELETE that "
+    "names its object (225) and its whole LIST (226), a fold's source deletes (227), a map's source below the "
+    "window (228), the crossing creation refused (229), the copy's map check (230), the root directory (231), a new "
+    "ref's epoch (232), inline leaf places (233), extending @@OD:200@@, key path prefixes (234), format 1 reading "
+    "past index_epoch (235), imports as bytes (236), history blobs (237), a push's sources (238), changeless parts "
+    "(239), conflict branches (240), one import statement per push (241), an import's helper refs (242), overlay "
+    "directories (243), tag refs (244), the tainted bit from M3 (245), retention without the reclaim (246), "
+    "compaction Later (247), the 2 GiB file cap (248), SHA-1 repos (249) and working-tree sync and derived shares "
+    "Later (250). ")
 # Owner decision 204 amends 183's 25-minute fence for `now` drops, which its row notes as 176's does.
 _i183 = [r[0] for r in INDEX].index(183)
 assert INDEX[_i183][2].endswith("`now` skips the wait."), 183
