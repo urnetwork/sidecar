@@ -34,3 +34,7 @@ func TestFsKeysClaimsAClaimAtAStaleTipIsRefused(t *testing.T) {
 func TestFsKeysClaimsALastResortKeyPackageServesTwoGroups(t *testing.T) {
 	FsKeysScheduleLastResortInTwoGroups(t, FsKeysT2(t))
 }
+
+func TestFsKeysClaimsAKillAroundTheWrapGenAndEpochWritesResumes(t *testing.T) {
+	FsKeysScheduleKillsBetweenWrites(t, FsKeysT2(t))
+}

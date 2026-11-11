@@ -21,6 +21,10 @@ package gkmschedule
 //   - a delivery to a non-holder: a hostile leaf claims a generation whose leaf_wrap lies under an epoch whose tree
 //     still holds a revoked leaf, which gkm, seeing no tree, takes; every member judging it poisons it, alarms
 //     naming the hostile leaf, and rotates REMOVE past it, the revoked leaf reaching nothing of that rotation;
+//   - kills before and after the wrap, gen/ and epoch/ writes: a wrapped writer's REMOVE rotation and the writer
+//     leaf's Remove carrying it, the writer of one of those writes and gkm killed there, each restart resuming from
+//     its keychain: one REMOVE generation, the Remove carrying it, every holder converging and the revoked leaf
+//     reaching nothing of it;
 //   - 6.6's added rows: a rotator at a stale tip refuses to claim past a generation pinned above its state, and gkm
 //     refuses a claim whose auth is below gen/<g>'s; one device's last-resort KeyPackage serves two Adds in two
 //     groups, and it joins both.
@@ -29,6 +33,7 @@ import (
 	"bytes"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -535,5 +540,99 @@ func FsKeysScheduleLastResortInTwoGroups(t FsKeysT, newWorld FsKeysNewWorld) {
 	}
 	if c.Client.LastResortJoinedAt().IsZero() {
 		t.Errorf("c noted no last-resort join")
+	}
+}
+
+// FS-15's kills: for each of the wrap, gen/ and epoch/ writes, before it leaves and after gkm took it, the agent w's
+// REMOVE rotation past x's revocation and a's Remove carrying it, the writer of that write killed there: from then on
+// every request of its process fails, as a dead process's does, and gkm dies with it. Their restarts, gkm's on
+// another instance over the same stores, resume from the keychain: one REMOVE generation, the Remove carrying gen/'s
+// newest as it lands, b converging, x reaching nothing of either. a learns of w's rotation, which commits nothing, by
+// gkm:<group_id>'s hint (FS-24), whose work, SyncRepo, runs before its pending run.
+func FsKeysScheduleKillsBetweenWrites(t FsKeysT, newWorld FsKeysNewWorld) {
+	for _, kill := range []struct {
+		segment string
+		after   bool
+	}{{"wraps", false}, {"wraps", true}, {"gen", false}, {"gen", true}, {"epochs", false}, {"epochs", true}} {
+		name := kill.segment
+		if kill.after {
+			name += " after"
+		}
+		world := newWorld(protocol.RepoKind_REPO_KIND_GENERAL)
+		a := world.AddMember("a", false)
+		b := world.AddMember("b", false)
+		x := world.AddMember("x", false)
+		w := world.AddAgent("w")
+		world.Grant(true, a, b, x, w)
+		world.Admin(a)
+		world.Advance()
+		world.Publish()
+		world.Create(a)
+		world.AddPending(a)
+		world.Again("w's first wrap", func() error {
+			_, err := w.Client.CurrentRepoKey(world.Ctx, world.RepoId)
+			return err
+		})
+		world.Revoke(x)
+		x.Offline = true
+		world.Advance()
+		victim := w
+		if kill.segment == "epochs" {
+			victim = a
+		}
+		dead := false
+		victim.Transport.Before = func(request *http.Request) FsKeysFault {
+			if dead {
+				return FsKeysFaultFailBefore
+			}
+			parts := strings.Split(request.URL.Path, "/")
+			if request.Method == http.MethodPost && 5 < len(parts) && parts[2] == "groups" && parts[4] == kill.segment {
+				dead = true
+				if kill.after {
+					return FsKeysFaultDropAnswer
+				}
+				return FsKeysFaultFailBefore
+			}
+			return FsKeysFaultNone
+		}
+		// the flows up to the kill, each failing once its process is dead
+		w.Client.EnsureWritable(world.Ctx, world.RepoId)
+		a.Client.SyncRepo(world.Ctx, world.RepoId)
+		a.Client.RunPending(world.Ctx, world.RepoId)
+		if !dead {
+			t.Fatalf("%s: the kill never came", name)
+		}
+		victim.Transport.Before = nil
+		world.RestartEngine()
+		victim.Restart()
+		world.Again(name+": w's rotation after the kill", func() error {
+			_, err := w.Client.EnsureWritable(world.Ctx, world.RepoId)
+			return err
+		})
+		world.Again(name+": a's sync after the kill", func() error { return a.Client.SyncRepo(world.Ctx, world.RepoId) })
+		world.Again(name+": a's Remove after the kill", func() error { return a.Client.RunPending(world.Ctx, world.RepoId) })
+		if count := world.GenerationCount(); count != 2 || sidecar.GkmCause(world.Generation(2).Rotate.GetCause()) != sidecar.GkmCauseRemove {
+			t.Errorf("%s: %d generations past the kill", name, count)
+			continue
+		}
+		if labels := world.Roster(a); labels != "ab" {
+			t.Errorf("%s: the tree after the Remove: %s", name, labels)
+		}
+		// the Remove carries gen/'s newest as it lands: generation 1 where w died before its claim, so a's Remove
+		// landed first and w's resumed claim followed, else 2
+		carried := uint64(2)
+		if kill.segment == "wraps" || kill.segment == "gen" && !kill.after {
+			carried = 1
+		}
+		if header := world.EpochObject(world.NewestEpoch()).GetHeader(); header.GetGeneration() != carried {
+			t.Errorf("%s: the Remove carries generation %d, not %d", name, header.GetGeneration(), carried)
+		}
+		world.Again("b's sync", func() error { return b.Client.SyncRepo(world.Ctx, world.RepoId) })
+		if key, err := b.Client.CurrentRepoKey(world.Ctx, world.RepoId); err != nil || key.Generation() != 2 {
+			t.Errorf("%s: b does not hold generation 2: %v", name, err)
+		}
+		if reached := world.RemovedReach(x); reached != 1 {
+			t.Errorf("%s: the revoked leaf reaches generation %d", name, reached)
+		}
 	}
 }
