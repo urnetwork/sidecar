@@ -203,9 +203,19 @@ type EvsExportResult struct {
 // One exported ref.
 type EvsExportedRef struct {
 	GitRef string
-	Tip    EvsGitOid
+	// Its tip, zero when every version is refused or the ref ends deleted.
+	Tip EvsGitOid
 	// The evs versions it rebuilt.
 	Versions uint64
+	// Each git-mode version that failed its check, which stopped the ref at the version before until a DELETE
+	// (DESIGN-DETAILS 8.5); none when every version applied.
+	Refused []*EvsExportRefusal
+}
+
+// A git-mode version export refused, and why: never skipped in silence.
+type EvsExportRefusal struct {
+	Version uint64
+	Reason  string
 }
 
 // What Mount serves (§11.11; cli/UI.md's ur mount add).
