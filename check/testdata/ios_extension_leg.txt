@@ -305,6 +305,7 @@ rpc_headcheck_rounds.go
 rpc_headcheck_sources.go
 rpc_headcheck_state.go
 rpc_headcheck_stop.go
+rpc_headcheck_wake.go
 rpc_headcheck_witness.go
 rpc_hello.go
 rpc_idempotency.go
