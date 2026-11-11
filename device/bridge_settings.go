@@ -24,6 +24,9 @@ type BridgeSettings struct {
 	// reverses it: 4,096, as many as the posture's overlay. Past it Revoke refuses, and the next state, which carries
 	// the revocation, applies it. Positive.
 	RevocationMaxCount int
+	// The longest id Bridge.Revoke takes: 64 bytes, a grant's or a rule's 32 with room for an atom's. A longer one is
+	// refused. Positive.
+	RevocationIdMaxByteCount int
 
 	// The slots of the sender's pin table (§17.5's pins row): 8,192 on desktop, 1,024 on mobile. A pin keeps one live
 	// pair on its link where an entry offers a choice. With no free slot a pair routes by the hash, unpinned, and
@@ -116,28 +119,29 @@ type BridgeSettings struct {
 // §17's values, for a desktop: a daemon, a desktop network process or a VPS.
 func DefaultBridgeSettings() *BridgeSettings {
 	return &BridgeSettings{
-		PinSlotCount:            8192,
-		PinTcpIdleTimeout:       600 * time.Second,
-		PinIdleTimeout:          5 * time.Minute,
-		PinTouchInterval:        1 * time.Second,
-		LinkDownTimeout:         30 * time.Second,
-		LinkConnectTimeout:      3 * time.Second,
-		LinkIdleTimeout:         600 * time.Second,
-		LinkRebuildInterval:     6 * 24 * time.Hour,
-		LinkBuildTimeout:        30 * time.Second,
-		LinkCountMax:            64,
-		LinkRoomIdleTimeout:     60 * time.Second,
-		RejectPerSecond:         20,
-		RejectBurst:             40,
-		RejectSourceSlotCount:   256,
-		RejectEntryHoldTimeout:  600 * time.Second,
-		NameTtl:                 60 * time.Second,
-		ResolverQueueCount:      64,
-		ResolverWorkerCount:     4,
-		ResolverUpstreamTimeout: 5 * time.Second,
-		RulesMaxByteCount:       8 * 1024 * 1024,
-		RulesMaxFieldCount:      1024 * 1024,
-		RevocationMaxCount:      4 * 1024,
+		PinSlotCount:             8192,
+		PinTcpIdleTimeout:        600 * time.Second,
+		PinIdleTimeout:           5 * time.Minute,
+		PinTouchInterval:         1 * time.Second,
+		LinkDownTimeout:          30 * time.Second,
+		LinkConnectTimeout:       3 * time.Second,
+		LinkIdleTimeout:          600 * time.Second,
+		LinkRebuildInterval:      6 * 24 * time.Hour,
+		LinkBuildTimeout:         30 * time.Second,
+		LinkCountMax:             64,
+		LinkRoomIdleTimeout:      60 * time.Second,
+		RejectPerSecond:          20,
+		RejectBurst:              40,
+		RejectSourceSlotCount:    256,
+		RejectEntryHoldTimeout:   600 * time.Second,
+		NameTtl:                  60 * time.Second,
+		ResolverQueueCount:       64,
+		ResolverWorkerCount:      4,
+		ResolverUpstreamTimeout:  5 * time.Second,
+		RulesMaxByteCount:        8 * 1024 * 1024,
+		RulesMaxFieldCount:       1024 * 1024,
+		RevocationMaxCount:       4 * 1024,
+		RevocationIdMaxByteCount: 64,
 	}
 }
 
@@ -190,6 +194,7 @@ func (self *BridgeSettings) validate() error {
 		{name: "RulesMaxByteCount", value: self.RulesMaxByteCount},
 		{name: "RulesMaxFieldCount", value: self.RulesMaxFieldCount},
 		{name: "RevocationMaxCount", value: self.RevocationMaxCount},
+		{name: "RevocationIdMaxByteCount", value: self.RevocationIdMaxByteCount},
 	}
 	for _, count := range positiveCounts {
 		if count.value <= 0 {
