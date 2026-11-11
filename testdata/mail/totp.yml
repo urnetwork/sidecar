@@ -1,0 +1,236 @@
+# RFC 6238 Appendix B's TOTP vectors and RFC 4226 Appendix D's HOTP vectors, the latter as TOTP at a 1 s period, so
+# a time of t seconds is counter t. mail_totp_test.go holds MailTotpCode to them on every leg the root's tests run on,
+# the sidecar_http Worker included, which is why the file is embedded and kept to this flat shape: the root links no
+# YAML parser, so the test reads it line by line and stops on any other line.
+#
+# Each secret is its RFC's ASCII seed in hex: "12345678901234567890" for SHA-1, the 32 bytes
+# "12345678901234567890123456789012" for SHA-256 and the 64 bytes "1234...1234" for SHA-512, as RFC 6238's reference
+# code and its erratum have them. time and valid_until are seconds since the epoch, valid_until the end of time's
+# period. Each code is the RFC's published value, reproduced by Python's hmac before it was written here, apart from
+# the code under test.
+
+vectors:
+  - name: rfc6238-sha1-59
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 59
+    period: 30
+    digits: 8
+    code: "94287082"
+    valid_until: 60
+  - name: rfc6238-sha256-59
+    algorithm: sha256
+    secret: 3132333435363738393031323334353637383930313233343536373839303132
+    time: 59
+    period: 30
+    digits: 8
+    code: "46119246"
+    valid_until: 60
+  - name: rfc6238-sha512-59
+    algorithm: sha512
+    secret: 31323334353637383930313233343536373839303132333435363738393031323334353637383930313233343536373839303132333435363738393031323334
+    time: 59
+    period: 30
+    digits: 8
+    code: "90693936"
+    valid_until: 60
+  - name: rfc6238-sha1-1111111109
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 1111111109
+    period: 30
+    digits: 8
+    code: "07081804"
+    valid_until: 1111111110
+  - name: rfc6238-sha256-1111111109
+    algorithm: sha256
+    secret: 3132333435363738393031323334353637383930313233343536373839303132
+    time: 1111111109
+    period: 30
+    digits: 8
+    code: "68084774"
+    valid_until: 1111111110
+  - name: rfc6238-sha512-1111111109
+    algorithm: sha512
+    secret: 31323334353637383930313233343536373839303132333435363738393031323334353637383930313233343536373839303132333435363738393031323334
+    time: 1111111109
+    period: 30
+    digits: 8
+    code: "25091201"
+    valid_until: 1111111110
+  - name: rfc6238-sha1-1111111111
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 1111111111
+    period: 30
+    digits: 8
+    code: "14050471"
+    valid_until: 1111111140
+  - name: rfc6238-sha256-1111111111
+    algorithm: sha256
+    secret: 3132333435363738393031323334353637383930313233343536373839303132
+    time: 1111111111
+    period: 30
+    digits: 8
+    code: "67062674"
+    valid_until: 1111111140
+  - name: rfc6238-sha512-1111111111
+    algorithm: sha512
+    secret: 31323334353637383930313233343536373839303132333435363738393031323334353637383930313233343536373839303132333435363738393031323334
+    time: 1111111111
+    period: 30
+    digits: 8
+    code: "99943326"
+    valid_until: 1111111140
+  - name: rfc6238-sha1-1234567890
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 1234567890
+    period: 30
+    digits: 8
+    code: "89005924"
+    valid_until: 1234567920
+  - name: rfc6238-sha256-1234567890
+    algorithm: sha256
+    secret: 3132333435363738393031323334353637383930313233343536373839303132
+    time: 1234567890
+    period: 30
+    digits: 8
+    code: "91819424"
+    valid_until: 1234567920
+  - name: rfc6238-sha512-1234567890
+    algorithm: sha512
+    secret: 31323334353637383930313233343536373839303132333435363738393031323334353637383930313233343536373839303132333435363738393031323334
+    time: 1234567890
+    period: 30
+    digits: 8
+    code: "93441116"
+    valid_until: 1234567920
+  - name: rfc6238-sha1-2000000000
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 2000000000
+    period: 30
+    digits: 8
+    code: "69279037"
+    valid_until: 2000000010
+  - name: rfc6238-sha256-2000000000
+    algorithm: sha256
+    secret: 3132333435363738393031323334353637383930313233343536373839303132
+    time: 2000000000
+    period: 30
+    digits: 8
+    code: "90698825"
+    valid_until: 2000000010
+  - name: rfc6238-sha512-2000000000
+    algorithm: sha512
+    secret: 31323334353637383930313233343536373839303132333435363738393031323334353637383930313233343536373839303132333435363738393031323334
+    time: 2000000000
+    period: 30
+    digits: 8
+    code: "38618901"
+    valid_until: 2000000010
+  - name: rfc6238-sha1-20000000000
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 20000000000
+    period: 30
+    digits: 8
+    code: "65353130"
+    valid_until: 20000000010
+  - name: rfc6238-sha256-20000000000
+    algorithm: sha256
+    secret: 3132333435363738393031323334353637383930313233343536373839303132
+    time: 20000000000
+    period: 30
+    digits: 8
+    code: "77737706"
+    valid_until: 20000000010
+  - name: rfc6238-sha512-20000000000
+    algorithm: sha512
+    secret: 31323334353637383930313233343536373839303132333435363738393031323334353637383930313233343536373839303132333435363738393031323334
+    time: 20000000000
+    period: 30
+    digits: 8
+    code: "47863826"
+    valid_until: 20000000010
+  - name: rfc4226-hotp-0
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 0
+    period: 1
+    digits: 6
+    code: "755224"
+    valid_until: 1
+  - name: rfc4226-hotp-1
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 1
+    period: 1
+    digits: 6
+    code: "287082"
+    valid_until: 2
+  - name: rfc4226-hotp-2
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 2
+    period: 1
+    digits: 6
+    code: "359152"
+    valid_until: 3
+  - name: rfc4226-hotp-3
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 3
+    period: 1
+    digits: 6
+    code: "969429"
+    valid_until: 4
+  - name: rfc4226-hotp-4
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 4
+    period: 1
+    digits: 6
+    code: "338314"
+    valid_until: 5
+  - name: rfc4226-hotp-5
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 5
+    period: 1
+    digits: 6
+    code: "254676"
+    valid_until: 6
+  - name: rfc4226-hotp-6
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 6
+    period: 1
+    digits: 6
+    code: "287922"
+    valid_until: 7
+  - name: rfc4226-hotp-7
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 7
+    period: 1
+    digits: 6
+    code: "162583"
+    valid_until: 8
+  - name: rfc4226-hotp-8
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 8
+    period: 1
+    digits: 6
+    code: "399871"
+    valid_until: 9
+  - name: rfc4226-hotp-9
+    algorithm: sha1
+    secret: 3132333435363738393031323334353637383930
+    time: 9
+    period: 1
+    digits: 6
+    code: "520489"
+    valid_until: 10
