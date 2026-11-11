@@ -379,8 +379,10 @@ Removable(b, w, S) ==
 \* newer entry replacing the head's entry of its document; sealing the head as it stood and opening
 \* the next slot with e; or writing e and, the slot now full, opening the next slot for the push's
 \* other documents, which the model does not follow (p2, an empty head). A full entry of a big
-\* document is a large entry numbered below a renumbered head. hp, hv and hent are the head as the
-\* base showed it, which the push replaces, the erasure set's versions left out (R2; the epoch row).
+\* document is a large entry numbered below a renumbered head. hp and hv are the head as the base
+\* showed it, which the push replaces (R2); hent is what it holds, the erasure set's versions left out
+\* (the epoch row), which a push that commits finds there still, so a head sealed as it stood is
+\* written again from what it holds then.
 HeadPushes(w, b, e) ==
     LET head == HeadOf(b, w)
         big == IsBig(e.d) /\ e.k = "full"
@@ -389,7 +391,7 @@ HeadPushes(w, b, e) ==
         hent == IF head = NoPath THEN {} ELSE Clean(file[head].ent)
         push(p, hp, seq, ent, refs, p2, seq2) ==
             [kind |-> "head", b |-> b, w |-> w, hp |-> hp, hv |-> IF hp = NoPath THEN 0 ELSE file[hp].ver,
-             hent |-> hent, p |-> p, ver |-> file[p].ver, seq |-> seq, ent |-> ent,
+             p |-> p, ver |-> file[p].ver, seq |-> seq, ent |-> ent,
              p2 |-> p2, ver2 |-> IF p2 = NoPath THEN 0 ELSE file[p2].ver, seq2 |-> seq2, lgAdd |-> lg,
              lgDrop |-> Removable(b, w, refs), entry |-> e, epoch |-> ep, t |-> clock]
         first == IF big THEN {} ELSE {e}
@@ -468,13 +470,13 @@ HeadApply(P) ==
                    ELSE IF q = P.p2
                    THEN [live |-> TRUE, ver |-> file[q].ver + 1, gen |-> KeyOf(q), seq |-> P.seq2, ent |-> {}]
                    ELSE IF Rewrites(P) /\ q = P.hp
-                   THEN [file[q] EXCEPT !.ver = @ + 1, !.ent = P.hent]
+                   THEN [file[q] EXCEPT !.ver = @ + 1, !.ent = Clean(@)]
                    ELSE file[q]]
     /\ large' = [large EXCEPT ![P.b][P.w] = (@ \ P.lgDrop) \cup P.lgAdd]
     /\ indexed' = [indexed EXCEPT ![P.entry.d] = Newer(@, P.entry)]
     /\ stored1' = stored1 \cup Stored1(P.p, KeyOf(P.p), P.ent)
-                      \cup (IF Rewrites(P) THEN Stored1(P.hp, file[P.hp].gen, P.hent) ELSE {})
-    /\ leaked' = (leaked \/ HoldsListed(P.ent) \/ (Rewrites(P) /\ HoldsListed(P.hent)))
+                      \cup (IF Rewrites(P) THEN Stored1(P.hp, file[P.hp].gen, Clean(file[P.hp].ent)) ELSE {})
+    /\ leaked' = (leaked \/ HoldsListed(P.ent) \/ (Rewrites(P) /\ HoldsListed(Clean(file[P.hp].ent))))
     /\ epochBad' = (epochBad \/ P.epoch # ep)
 
 HeadCommit(w) ==
