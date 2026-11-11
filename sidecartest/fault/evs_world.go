@@ -40,7 +40,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -104,7 +103,8 @@ func EvsWorldOf(net *Net) *EvsWorld {
 func SetEvsTier(net *Net, tier *EvsTier) {
 	key := weak.Make(net)
 	if _, loaded := evsTiers.LoadOrStore(key, tier); !loaded {
-		runtime.AddCleanup(net, func(key weak.Pointer[Net]) { evsTiers.Delete(key) }, key)
+		// removed when the Net closes, not when it is collected, as evsWorlds' entries are
+		context.AfterFunc(net.Context(), func() { evsTiers.Delete(key) })
 		return
 	}
 	evsTiers.Store(key, tier)
@@ -370,7 +370,9 @@ func NewEvsWorld(net *Net, settings *EvsWorldSettings) *EvsWorld {
 	if _, loaded := evsWorlds.LoadOrStore(key, self); loaded {
 		evsWorlds.Store(key, self)
 	} else {
-		runtime.AddCleanup(net, func(key weak.Pointer[Net]) { evsWorlds.Delete(key) }, key)
+		// removed when the Net closes: the world holds its Net, so a cleanup waiting for the Net's collection never
+		// ran and every world of the process stayed
+		context.AfterFunc(net.Context(), func() { evsWorlds.Delete(key) })
 	}
 	return self
 }

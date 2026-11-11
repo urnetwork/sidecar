@@ -50,7 +50,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -123,7 +122,9 @@ func evsOracleMemoryOf(net *Net) *evsOracleMemory {
 	}
 	actual, loaded := evsOracleMemories.LoadOrStore(key, memory)
 	if !loaded {
-		runtime.AddCleanup(net, func(key weak.Pointer[Net]) { evsOracleMemories.Delete(key) }, key)
+		// removed when the Net closes: the memory holds its walk's Oracle and so the Net, so a cleanup waiting for the
+		// Net's collection never ran, and every Net's stores stayed (TestFs1 alone kept 17.5 GB)
+		context.AfterFunc(net.Context(), func() { evsOracleMemories.Delete(key) })
 	}
 	return actual.(*evsOracleMemory)
 }
