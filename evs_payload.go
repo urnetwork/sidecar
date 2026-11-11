@@ -11,10 +11,13 @@
 // in parts is checked part by part as each arrives (EvsCheckPart), and whole at its seal (EvsCheckSeal), which joins
 // the parts' slices into the one-part payload they spell.
 //
-// Two answers wait on open questions and fail closed meanwhile: section 3 and EvsPushPart.inline_records, which
-// questions/evs1-m2-01-inline-record-home leaves to the locators, are refused if set; and no section carries a ref's
-// sealed name or an overlay's base (questions/evs1-m2-01-ref-creation-fields). Format 2's DROP sections and staged
-// segments are refused as FORMAT_UNSUPPORTED.
+// One answer waits on an open question and fails closed meanwhile: section 3 and EvsPushPart.inline_records, which
+// questions/evs1-m2-01-inline-record-home leaves to the locators, are refused if set. Sections 15 and 16, a creating
+// push's sealed ref name and overlay base, are DESIGN-DETAILS 8.2.2's on question evs1-m2-01-ref-creation-fields's
+// option 1: held here to their shape, and to the pushes that may carry them at 5c, which needs the head. A part may
+// hold no change when it holds a slice of a section that did not fit beside the changes (8.2.2's parts row): such
+// parts come after every part with a change, carry no changes_root and are no leaf of the statement's root. Format 2's
+// DROP sections and staged segments are refused as FORMAT_UNSUPPORTED.
 //
 // Format 2 (EVS-FORMAT.md's format 2 chapter) runs the same checks through EvsCheckPayloadFormat2, EvsCheckPartFormat2
 // and EvsCheckSealFormat2, which take what format 1 refuses as needing format 2: versioning 1 and 2, kind-5 and staged
@@ -52,7 +55,7 @@ const (
 	EvsChangedPrefixesMaxByteCount = 512
 
 	evsPayloadSectionHeaderByteCount = 5
-	evsPayloadMaxSectionType         = 14
+	evsPayloadMaxSectionType         = 16
 	evsNewSegmentItemByteCount       = 1 + 32 + 8 + 4
 	evsNewSlotItemByteCount          = 1 + 16 + 8 + 4
 	evsErasedItemByteCount           = 16 + 2
@@ -70,7 +73,7 @@ type EvsPayload struct {
 	sections [evsPayloadMaxSectionType + 1][]byte
 }
 
-// The sections of a payload's bytes: ascending types 1 to 14, each once and none empty, nothing after the last.
+// The sections of a payload's bytes: ascending types 1 to 16, each once and none empty, nothing after the last.
 // Format 2's DROP sections are ErrEvsFormatUnsupported.
 func ParseEvsPayload(payloadBytes []byte) (*EvsPayload, error) {
 	return parseEvsPayload(payloadBytes, false)
@@ -319,6 +322,10 @@ type EvsCheckedPayload struct {
 	Erased         []*EvsErasedKey
 	TailMoves      [][]byte
 	ReuseList      []*EvsReuse
+	// a creating push's section 15, its sealed ref name as received, and section 16, its overlay base (DESIGN-DETAILS
+	// 8.2.2); nil when absent
+	RefName []byte
+	Base    *protocol.EvsOverlay
 	// a change creating a path, or a directory delta adding a name: the window's bit 0
 	CreatesPath bool
 	// format 2: the staged segments, one per kind-2 new-objects item and in that order
@@ -386,8 +393,10 @@ func checkEvsEntryVersionOf(entryBytes []byte, push *protocol.EvsPush, format2 b
 	}
 	switch protocol.EvsEntryKind(entry.GetKind()) {
 	case protocol.EvsEntryKind_EVS_ENTRY_FILE:
-		if len(entry.GetSealedFields()) == 0 || len(entry.GetChain()) == 0 || entry.GetNames() != nil {
-			return false, fmt.Errorf("%w: a file without sealed fields or a chain, or with names", ErrEvsPushInvalid)
+		// an empty chain is a gitlink's, mode 160000, which only a reader can tell from the sealed fields
+		// (DESIGN-DETAILS 8.2.2's gitlink row): evs takes it on any file
+		if len(entry.GetSealedFields()) == 0 || entry.GetNames() != nil {
+			return false, fmt.Errorf("%w: a file without sealed fields, or with names", ErrEvsPushInvalid)
 		}
 		for _, locator := range entry.GetChain() {
 			if err := checkEvsLocatorOf(locator, format2); err != nil {
@@ -662,6 +671,23 @@ func checkEvsSectionsOf(statement *EvsStatement, payload *EvsPayload, checked *E
 			}
 			checked.Changes[i].SourcePaths = sourcePaths
 		}
+	}
+
+	if refName := payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_REF_NAME); len(refName) != 0 {
+		if len(refName) <= evsSealOverhead || EvsSealedRefNameMaxByteCount < len(refName) {
+			return fmt.Errorf("%w: a sealed ref name of %d bytes", ErrEvsPushInvalid, len(refName))
+		}
+		checked.RefName = refName
+	}
+	if baseBytes := payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_OVERLAY_BASE); len(baseBytes) != 0 {
+		base := &protocol.EvsOverlay{}
+		if err := proto.Unmarshal(baseBytes, base); err != nil {
+			return fmt.Errorf("%w: an overlay base that does not parse", ErrEvsPushInvalid)
+		}
+		if len(base.GetRefId()) != 16 || base.GetVersion() == 0 || bytes.Equal(base.GetRefId(), push.GetRefId()) {
+			return fmt.Errorf("%w: an overlay base of another shape, or of the ref itself", ErrEvsPushInvalid)
+		}
+		checked.Base = base
 	}
 
 	reuseItems, err := EvsPayloadItems(payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_REUSE_LIST))
@@ -952,16 +978,23 @@ func evsCheckPartOf(statement *EvsStatement, partBytes []byte, format2 bool) (*E
 	if len(part.GetInlineRecords()) != 0 {
 		return nil, fmt.Errorf("%w: inline records in a part, which questions/evs1-m2-01-inline-record-home holds to the locators", ErrEvsPushInvalid)
 	}
+	var root [sha256.Size]byte
 	if len(leaves) == 0 {
-		return nil, fmt.Errorf("%w: a part with no change", ErrEvsPushInvalid)
-	}
-	tree, err := NewEvsChangeTree(leaves)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrEvsPushInvalid, err)
-	}
-	root := tree.Root()
-	if !bytes.Equal(part.GetChangesRoot(), root[:]) {
-		return nil, fmt.Errorf("%w: the part's changes_root is not over its changes", ErrEvsPushInvalid)
+		// a changeless part (DESIGN-DETAILS 8.2.2's parts row): a slice and nothing else, under no changes_root, which
+		// the seal holds to come after every part with a change
+		if len(part.GetChangesRoot()) != 0 || len(part.GetEntryVersions()) != 0 ||
+			(len(part.GetSealedMetadata()) == 0 && len(part.GetSections()) == 0) {
+			return nil, fmt.Errorf("%w: a part with no change that holds no slice, or names a root or an entry", ErrEvsPushInvalid)
+		}
+	} else {
+		tree, err := NewEvsChangeTree(leaves)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrEvsPushInvalid, err)
+		}
+		root = tree.Root()
+		if !bytes.Equal(part.GetChangesRoot(), root[:]) {
+			return nil, fmt.Errorf("%w: the part's changes_root is not over its changes", ErrEvsPushInvalid)
+		}
 	}
 	checked := &EvsCheckedPart{
 		Part: part.GetPart(), Root: root, Sha256: sha256.Sum256(partBytes), metadata: part.GetSealedMetadata(),
@@ -999,8 +1032,16 @@ func evsCheckPartOf(statement *EvsStatement, partBytes []byte, format2 bool) (*E
 	return checked, nil
 }
 
-// The first change's token path, which a seal record keeps per part.
+// Whether the part holds a change: a changeless part holds only slices (DESIGN-DETAILS 8.2.2's parts row).
+func (self *EvsCheckedPart) HoldsChanges() bool {
+	return 0 < len(self.Changes)
+}
+
+// The first change's token path, which a seal record keeps per part; nil for a changeless part.
 func (self *EvsCheckedPart) FirstTokenPath() EvsTokenPath {
+	if !self.HoldsChanges() {
+		return nil
+	}
 	return self.Changes[0].TokenPath
 }
 
@@ -1040,7 +1081,9 @@ func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte
 	stored := format2 && partStaged == nil
 	checkedParts := make([]*EvsCheckedPart, len(parts))
 	partHashes := make([]byte, 0, len(parts)*sha256.Size)
-	partLeaves := make([][][]byte, len(parts))
+	// the leaves of the parts that hold changes, which alone the statement's root is over
+	partLeaves := [][][]byte{}
+	changeless := false
 	for i, partBytes := range parts {
 		var checkedPart *EvsCheckedPart
 		var err error
@@ -1060,7 +1103,14 @@ func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte
 		}
 		checkedParts[i] = checkedPart
 		partHashes = append(partHashes, checkedPart.Sha256[:]...)
-		partLeaves[i] = checkedPart.changeLeaves
+		switch {
+		case !checkedPart.HoldsChanges():
+			changeless = true
+		case changeless:
+			return nil, nil, fmt.Errorf("%w: part %d holds a change after a part with none", ErrEvsPushInvalid, i+1)
+		default:
+			partLeaves = append(partLeaves, checkedPart.changeLeaves)
+		}
 	}
 	partsDigest := sha256.Sum256(partHashes)
 	if !bytes.Equal(partsDigest[:], push.GetPartsSha256()) {

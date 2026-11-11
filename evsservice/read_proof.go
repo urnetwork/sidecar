@@ -388,9 +388,16 @@ func (self *readPushes) inclusionProof(push *readPush, part int, index int) ([]*
 	if push.sealParts == nil {
 		return proofs, nil
 	}
-	partRoots := make([][]byte, len(push.sealParts))
-	for i, sealPart := range push.sealParts {
-		partRoots[i] = sealPart.ChangesRoot[:]
+	// the statement's root is over the parts that hold changes, which come first (DESIGN-DETAILS 8.2.2's parts row)
+	partRoots := [][]byte{}
+	for _, sealPart := range push.sealParts {
+		if sealPart.Changeless {
+			break
+		}
+		partRoots = append(partRoots, sealPart.ChangesRoot[:])
+	}
+	if len(partRoots) <= part {
+		return nil, fmt.Errorf("%w: a proof of part %d of %d with changes", ErrEvsStatementMismatch, part, len(partRoots))
 	}
 	partTree := sidecar.NewEvsMerkleTree(partRoots)
 	path, err := partTree.InclusionPath(part)
@@ -413,7 +420,14 @@ func (self *readPushes) absenceProof(push *readPush, tokenPath sidecar.EvsTokenP
 	absence := &protocol.EvsAbsenceProof{Version: push.version, TokenPath: tokenPath.Components()}
 	partCount := 1
 	if push.sealParts != nil {
-		partCount = len(push.sealParts)
+		// the parts that hold changes: a changeless part comes after them and holds no leaf
+		partCount = 0
+		for _, sealPart := range push.sealParts {
+			if sealPart.Changeless {
+				break
+			}
+			partCount += 1
+		}
 	}
 	belowPart, belowIndex := part, index-1
 	for belowIndex < 0 && 0 < belowPart {

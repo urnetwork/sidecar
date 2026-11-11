@@ -113,8 +113,12 @@ type PushView struct {
 
 	// What step 4 read of each changed path, by its token path's KeyString.
 	Paths map[string]*PathRead
-	// The base versions along the ref's overlay chain (OverlayChains), empty for a ref that is no overlay.
+	// The base versions along the ref's overlay chain (OverlayChains), empty for a ref that is no overlay. A creating
+	// push's chain starts at the base its payload section 16 names (DESIGN-DETAILS 8.2.2).
 	OverlayBaseVersions []uint64
+	// The head of the ref a creating push's section 16 names as its overlay base, as step 4 read it from the cluster
+	// or a cache at least that version; nil when the push names none, and a placeholder when that ref has none.
+	OverlayBase *protocol.EvsHead
 
 	// The receipts the request carries, and evs's receipt keys to check them under.
 	Receipts    []*protocol.EvsUploadReceipt

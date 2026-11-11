@@ -465,7 +465,13 @@ func (self *pushAttempt) buildNextHead(pageOut *EvsPageOut) (*protocol.EvsHead, 
 		next.PathEpoch = &protocol.EvsPathEpoch{Current: max(1, push.GetPathEpoch())}
 		next.WindowBaseChain = append([]byte{}, chain[:]...)
 		next.Window = nil
+		// a creating push's payload sections 15 and 16, which 5c took on this push alone (DESIGN-DETAILS 8.2.2)
+		self.copyCreatingSections(next)
 	} else {
+		if prior.GetDeleted() {
+			// the first push after a DELETE: a name it carries again, its base the head's, which 5c held it to
+			self.copyCreatingSections(next)
+		}
 		var err error
 		chain, err = sidecar.EvsChainFromBytes(prior.GetChain())
 		if err != nil {
@@ -501,6 +507,16 @@ func (self *pushAttempt) buildNextHead(pageOut *EvsPageOut) (*protocol.EvsHead, 
 		return nil, err
 	}
 	return next, nil
+}
+
+// A creating push's sealed ref name and overlay base into the head it commits, each where the push carries it.
+func (self *pushAttempt) copyCreatingSections(next *protocol.EvsHead) {
+	if refName := self.payload.RefName; len(refName) != 0 {
+		next.SealedRefName = bytes.Clone(refName)
+	}
+	if base := self.payload.Base; base != nil {
+		next.Base = &protocol.EvsOverlay{RefId: bytes.Clone(base.GetRefId()), Version: base.GetVersion()}
+	}
 }
 
 // What step 8 takes of this attempt's commit.

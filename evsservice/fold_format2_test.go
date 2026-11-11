@@ -913,6 +913,15 @@ func TestFormat2FoldWhileSourcesStandKeepsTheMarkAndAlarmsWhereIdsLeave(t *testi
 	}
 }
 
+// A part as its seal names it: its place, root and first token path, or for a changeless part its place alone
+// (DESIGN-DETAILS 8.2.2's parts row).
+func format2SealPart(place *protocol.EvsPlace, checked *sidecar.EvsCheckedPart) *sidecar.EvsSealPart {
+	if !checked.HoldsChanges() {
+		return &sidecar.EvsSealPart{Place: place, Changeless: true}
+	}
+	return &sidecar.EvsSealPart{Place: place, ChangesRoot: checked.Root, FirstTokenPath: checked.FirstTokenPath()}
+}
+
 // Commits a format-2 push of changes in parts, as the seal of §11.8's parts row leaves it: each part's record, the
 // first of format 2's form listing purge, then the seal's record naming their places, changes_roots and first token
 // paths.
@@ -940,7 +949,7 @@ func (self *evsWorld) pushFormat2InParts(purge *protocol.EvsPurgeList, newObject
 		if 0 < i {
 			listing = nil
 		}
-		sealParts = append(sealParts, &sidecar.EvsSealPart{Place: self.putFormat2Record(record, listing), ChangesRoot: checked.Root, FirstTokenPath: checked.Changes[0].TokenPath})
+		sealParts = append(sealParts, format2SealPart(self.putFormat2Record(record, listing), checked))
 	}
 	place := self.putFormat2Record(&sidecar.EvsBatchRecord{
 		Type: protocol.EvsBatchRecordType_EVS_BATCH_SEAL, RepoId: self.repoId, RefId: self.refId, PushId: plan.PushId,
@@ -1319,10 +1328,10 @@ func TestFormat2DropInPartsSetsEachWrittenLineagesMark(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		sealParts = append(sealParts, &sidecar.EvsSealPart{Place: world.putFormat2Record(&sidecar.EvsBatchRecord{
+		sealParts = append(sealParts, format2SealPart(world.putFormat2Record(&sidecar.EvsBatchRecord{
 			Type: protocol.EvsBatchRecordType_EVS_BATCH_PART, RepoId: world.repoId, RefId: world.refId, PushId: plan.PushId,
 			SignerSidecarId: world.signerId, TimeMs: plan.TimeMs, Body: sidecar.EvsPartRecordBody(built.Statement.Bytes, partBytes, nil, plan.BaseVersion),
-		}, nil), ChangesRoot: checked.Root, FirstTokenPath: checked.Changes[0].TokenPath})
+		}, nil), checked))
 	}
 	place := world.putFormat2Record(&sidecar.EvsBatchRecord{
 		Type: protocol.EvsBatchRecordType_EVS_BATCH_SEAL, RepoId: world.repoId, RefId: world.refId, PushId: plan.PushId,
