@@ -223,4 +223,3 @@ func (self *EvsWorld) LoseLeases() func(ctx context.Context, net *Net) error {
 		return nil
 	}
 }
-
