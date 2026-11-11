@@ -2,9 +2,10 @@
 # Runs DESIGN-DETAILS.md section 1's model, IndexMerge.tla, through the owner's TLC (ROOT/.stack/tools/tlc). A
 # design config (IndexMerge.cfg, IndexMerge-*.cfg) must pass. A config named *Written-* runs a rule of §11.14 as
 # written, one named *Twin-* breaks one rule of the design, and one named *Reach-* denies a state the design must
-# reach; each of those must end with the one invariant its cfg names last violated. Prints one verdict line per
-# run with the states, depth and time TLC reported and the most its state directory held, sampled every 5 s,
-# which section 1.3 records.
+# reach; each of those must end with the one invariant its cfg names last violated. A config named *Probe-* is
+# not the design and not part of all: it runs when named, and must pass. Prints one verdict line per run with
+# the states, depth and time TLC reported and the most its state directory held, sampled every 5 s, which
+# section 1.3 records.
 #
 #   run-indexmerge.sh <track> [all | design | written | twins | reach | <Config>...]
 #
