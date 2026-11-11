@@ -30,10 +30,9 @@
 // traps that read the fold, a withdrawn id and a held id, therefore see the unfolded tail alone at id level; a full
 // reader's ledger runs them over the whole history it joins from the config head (JoinBridgeLogs).
 //
-// BridgeEgress is refused until its mode shows at id level: the owner's answer to plan-BRIDGE-egress-mode-at-gates
-// moves mode to BridgeEgress.mode = 4, after §2.8's api-7 row names it (I-18), and neither has landed, so no reader
-// without a key could fold the statement into BridgeRows (bridgeEgressClearMode; question
-// bridge-m2-01-egress-mode-field).
+// A BridgeEgress shows its mode at id level, in BridgeEgress.mode = 4, which §2.8's api-7 row names (QD-630, I-18), so
+// every reader, a keyless gate's included, folds each entry's mode into BridgeRows in log order; one that shows no mode,
+// or a value outside the enum, is refused at every reader (bridgeEgressClearMode).
 //
 // Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret. A BridgeLog is immutable and safe
 // for concurrent use. On every leg, the sidecar_http page Worker's included: root Id, no connect type.
@@ -275,12 +274,11 @@ func (self *ConfigState) Bridge() *BridgeLog {
 	return self.bridge
 }
 
-// The mode a BridgeEgress shows at id level, and whether it shows one. The owner's answer to
-// plan-BRIDGE-egress-mode-at-gates puts it in BridgeEgress.mode = 4 once §2.8's api-7 row names it (I-18); until
-// bridge.proto carries that field no keyless reader sees a mode, so this answers false and the rule refuses the
-// statement (question bridge-m2-01-egress-mode-field). When the field lands this returns it, and nothing else changes.
+// The mode a BridgeEgress shows at id level, BridgeEgress.mode = 4 (QD-630, §2.8's api-7), and whether it shows one:
+// unspecified shows none, which the rule refuses, as it does a value outside the enum.
 func bridgeEgressClearMode(egress *bridge.BridgeEgress) (bridge.BridgeEgressMode, bool) {
-	return bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_UNSPECIFIED, false
+	mode := egress.GetMode()
+	return mode, mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_UNSPECIFIED
 }
 
 // Registers §17.8's six log statements. BridgeBlock has no rule: it carries no StatementHeader, so the log refuses it
@@ -435,7 +433,7 @@ func bridgeLogStatementOf(statement *configStatement) (*BridgeLogStatement, erro
 		}
 		mode, shown := bridgeEgressClearMode(body)
 		if !shown {
-			return nil, fmt.Errorf("%w: a BridgeEgress shows no mode at id level until BridgeEgress.mode lands (plan-BRIDGE-egress-mode-at-gates)", ErrConfigRuleMissing)
+			return nil, fmt.Errorf("%w: a BridgeEgress that shows no mode", ErrConfigRule)
 		}
 		switch mode {
 		case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE:

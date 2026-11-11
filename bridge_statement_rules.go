@@ -1215,18 +1215,21 @@ func (self *BridgeLedger) Aliases() []*BridgeLedgerAlias {
 // Verifies a rule's BridgeApproval as §8.8 does a GrantActivate's (CheckGrantActivate), on S(n-1), the state the
 // statement's entry landed on, which this state's log must still retain:
 //
-//	action    the stored CanonicalAction parses, is a bridge_expose and names the statement's signer as its target;
-//	          a route's prefixes each lie inside one of its cidrs, and a map's target_port and expires are the
-//	          action's where it sets them
-//	match     every decision approves, hashes exactly these action bytes and names the signer as its requester, and
-//	          they share one approval_id and request_sha256
+//	action    this use's stored CanonicalAction parses, is a single bridge_expose and names the statement's signer as
+//	          its target; a route's prefixes each lie inside one of its cidrs, and a map's target_port and expires are
+//	          the action's where it sets them
+//	template  with template_action set, a multi-use decision's template (owner decision 218): it parses as a stored
+//	          action too, and the use matches it (ActionMatchesTemplate); every decision then hashes the template and
+//	          has uses above 1, and the spend check is the template's
+//	match     every decision approves, hashes the action it binds, the template or else the use, names the signer as
+//	          its requester, and they share one approval_id and request_sha256
 //	quorum    every decision is from a distinct approver, unexpired at the entry's time within §8.6's skew, and
 //	          passes §16.6's spend check; a decision that does not voids the rule
-//	rule id   SHA-256("urnetwork-sidecar-v1/bridge-rule" || effect_key) of this approval and action
+//	rule id   SHA-256("urnetwork-sidecar-v1/bridge-rule" || effect_key) of this approval and this use's action
 //
-// The budget is the smallest uses and the expiry the earliest not_after. A multi-use decision binds a template the
-// approval does not carry (question bridge-m2-01-multi-use-approval), so an approval whose decisions hash anything
-// but these bytes is refused, and one approval fixes one rule id.
+// The budget is the smallest uses and the expiry the earliest not_after, which the ledger's count binds. Without a
+// template every filing under one approval names the one use its decisions hash, so it fixes one rule id whatever
+// their uses say: the single-use reading.
 func (self *ConfigState) CheckBridgeApproval(statement *BridgeLogStatement, body proto.Message, approval *bridge.BridgeApproval) (*BridgeApprovalFacts, error) {
 	if statement.N == 0 {
 		return nil, ErrBridgeApprovalUnverifiable
@@ -1250,6 +1253,18 @@ func (self *ConfigState) CheckBridgeApproval(statement *BridgeLogStatement, body
 	if SidecarActionKind(action.Action.GetKind()) != SidecarActionExpose || action.Action.GetScope() {
 		return nil, errors.New("the approved action is no single bridge_expose")
 	}
+	// what the decisions hash: a multi-use decision's template, which the use must fall inside, else the use itself
+	bound := action
+	if len(approval.GetTemplateAction()) != 0 {
+		template, err := ParseStoredCanonicalAction(approval.GetTemplateAction())
+		if err != nil {
+			return nil, fmt.Errorf("the template: %w", err)
+		}
+		if !ActionMatchesTemplate(template, action) {
+			return nil, errors.New("the use does not match its template")
+		}
+		bound = template
+	}
 	if !bytes.Equal(action.Action.GetTargetSidecarId(), statement.Signer.Bytes()) {
 		return nil, errors.New("the approved action names another target")
 	}
@@ -1259,7 +1274,7 @@ func (self *ConfigState) CheckBridgeApproval(statement *BridgeLogStatement, body
 	if len(approval.GetDecisions()) == 0 {
 		return nil, errors.New("an approval with no decision")
 	}
-	payloadSha256 := action.PayloadSha256()
+	payloadSha256 := bound.PayloadSha256()
 	spendCheck := before.aclSpendCheck()
 	facts := &BridgeApprovalFacts{Uses: math.MaxUint32, NotAfterMs: math.MaxInt64}
 	approvers := []Id{}
@@ -1276,6 +1291,8 @@ func (self *ConfigState) CheckBridgeApproval(statement *BridgeLogStatement, body
 			return nil, errors.New("a decision that does not approve")
 		case !bytes.Equal(decisionBody.GetPayloadSha256(), payloadSha256[:]):
 			return nil, errors.New("a decision for another action")
+		case bound != action && decisionBody.GetUses() <= 1:
+			return nil, errors.New("a template under a single-use decision")
 		case !bytes.Equal(decisionBody.GetRequesterSidecarId(), statement.Signer.Bytes()):
 			return nil, errors.New("a decision for another requester")
 		case first != nil && (!bytes.Equal(decisionBody.GetApprovalId(), first.GetApprovalId()) || !bytes.Equal(decisionBody.GetRequestSha256(), first.GetRequestSha256())):
@@ -1285,7 +1302,7 @@ func (self *ConfigState) CheckBridgeApproval(statement *BridgeLogStatement, body
 		case decisionBody.GetNotAfterMillis()+aclDecisionSkewMs < statement.TimeMs:
 			return nil, errors.New("a decision expired before the entry")
 		}
-		if err := spendCheck.Spendable(acl, decision, action, statement.Signer, before.Pin(), aclTime(statement.TimeMs)); err != nil {
+		if err := spendCheck.Spendable(acl, decision, bound, statement.Signer, before.Pin(), aclTime(statement.TimeMs)); err != nil {
 			return nil, err
 		}
 		if first == nil {

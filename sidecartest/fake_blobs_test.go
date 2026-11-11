@@ -636,32 +636,75 @@ func TestLastModifiedReadsTheInjectedClock(t *testing.T) {
 	}
 }
 
-func TestAKeyThatPrefixesAnotherFailsTheTest(t *testing.T) {
-	cases := []struct{ first, second string }{
-		{first: "place/a", second: "place/a/b"},
-		{first: "place/a/b", second: "place/a"},
-		{first: "proj/n/1", second: "proj/n/11"},
-		{first: "proj/n/11", second: "proj/n/1"},
+// Writes keys in order to a fresh store's first cluster: what the store reported, as it reported it, and what it
+// holds as violations.
+func writeKeysForReports(t *testing.T, keys []string) ([]string, []string) {
+	t.Helper()
+	reported := []string{}
+	settings := DefaultFakeBlobsSettings()
+	settings.Report = func(violation string) { reported = append(reported, violation) }
+	store := NewFakeBlobs(nil, nil, nil, settings)
+	cluster, err := store.FirstCluster()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range cases {
-		reported := []string{}
-		settings := DefaultFakeBlobsSettings()
-		settings.Report = func(violation string) { reported = append(reported, violation) }
-		store := NewFakeBlobs(nil, nil, nil, settings)
-		cluster, err := store.FirstCluster()
-		if err != nil {
+	for _, key := range keys {
+		if _, err := cluster.PutIfNoneMatch(t.Context(), key, []byte("v"), nil); err != nil {
 			t.Fatal(err)
 		}
-		for _, key := range []string{c.first, c.second} {
-			if _, err := cluster.PutIfNoneMatch(t.Context(), key, []byte("v"), nil); err != nil {
-				t.Fatal(err)
+	}
+	return reported, store.Violations()
+}
+
+// §11.8's keys row means a path prefix (owner decision 234): a key followed by / at another's next byte fails the
+// test in either order, and a byte prefix that is no path prefix stands in either order, §10.6's <ref>.claim beside
+// its <ref> among them.
+func TestAKeyThatPrefixesAnotherFailsTheTest(t *testing.T) {
+	ref := "gkm/kp/0123456789abcdef0123456789abcdef/fedcba9876543210fedcba9876543210"
+	cases := []struct {
+		first, second string
+		violates      bool
+	}{
+		{first: "place/a", second: "place/a/b", violates: true},
+		{first: "place/a/b", second: "place/a", violates: true},
+		{first: "proj/n/1", second: "proj/n/11", violates: false},
+		{first: "proj/n/11", second: "proj/n/1", violates: false},
+		{first: ref, second: ref + ".claim", violates: false},
+		{first: ref + ".claim", second: ref, violates: false},
+	}
+	for _, c := range cases {
+		reported, violations := writeKeysForReports(t, []string{c.first, c.second})
+		if !c.violates {
+			if len(reported) != 0 || len(violations) != 0 {
+				t.Errorf("%s and %s: reported %v, violations %v", c.first, c.second, reported, violations)
 			}
+			continue
 		}
 		if len(reported) != 1 || !strings.Contains(reported[0], "prefixes") {
 			t.Errorf("%s and %s: reported %v", c.first, c.second, reported)
 		}
-		if len(store.Violations()) != 1 {
-			t.Errorf("violations %v", store.Violations())
+		if len(violations) != 1 {
+			t.Errorf("%s and %s: violations %v", c.first, c.second, violations)
+		}
+	}
+}
+
+// The scan for keys under a new key looks at the first key at or after it and a /, not at the key that sorts next:
+// a.claim sorts between a and a/b. Written in every order, the three report the a and a/b pair once, and no other.
+func TestAPathPrefixIsFoundPastASiblingThatSortsBetween(t *testing.T) {
+	orders := [][]string{
+		{"a", "a.claim", "a/b"},
+		{"a", "a/b", "a.claim"},
+		{"a.claim", "a", "a/b"},
+		{"a.claim", "a/b", "a"},
+		{"a/b", "a", "a.claim"},
+		{"a/b", "a.claim", "a"},
+	}
+	want := fmt.Sprintf("key %q prefixes key %q", "a", "a/b")
+	for _, order := range orders {
+		reported, violations := writeKeysForReports(t, order)
+		if !slices.Equal(reported, []string{want}) || !slices.Equal(violations, []string{want}) {
+			t.Errorf("%v: reported %v, violations %v", order, reported, violations)
 		}
 	}
 }
