@@ -57,6 +57,8 @@ type postureHeld struct {
 	documentSeenAt    uint64
 	shareCerts        []postureShareCert
 	fork              bool
+	// the newest denial verified and not held past OverlayMaxCount, 0 none: pending until a state at or past it
+	overlayFullThroughN uint64
 
 	// enforcing only
 	pinN          uint64
@@ -84,7 +86,7 @@ func (self *postureHeld) clone() *postureHeld {
 // §17.8's state. Enforcing is doc unless the state in force says has_document = false on its base, the base the
 // posture holds says so too and sits above the latch, and no entry after the state's pin saw a document: a base
 // between states saying no document opens nothing before a state judges it (DESIGN-DETAILS 4.3's OnlyJudgedOpens).
-// A fork holds an enforcing posture at pending.
+// A fork, or a denial the overlay could not hold, holds an enforcing posture at pending.
 func (self *postureHeld) postureState() PostureState {
 	if self == nil {
 		return PostureLegacy
@@ -93,7 +95,7 @@ func (self *postureHeld) postureState() PostureState {
 	case postureStoredLegacy:
 		return PostureLegacy
 	case postureStoredEnforcing:
-		if self.fork {
+		if self.fork || self.overlayFullThroughN != 0 {
 			return PosturePending
 		}
 		if self.base.hasDocument || self.base.entry.GetN() <= self.documentSeenAt || self.bridgeState.GetHasDocument() ||
@@ -116,7 +118,7 @@ func (self *postureHeld) statePinN() uint64 {
 
 // What is in force, without this call's alarms.
 func (self *postureHeld) decision() PostureDecision {
-	decision := PostureDecision{State: self.postureState(), Fork: self.fork}
+	decision := PostureDecision{State: self.postureState(), Fork: self.fork, OverlayFullThroughN: self.overlayFullThroughN}
 	if decision.State != PostureLegacy {
 		decision.NetworkId = self.networkId
 		decision.SidecarId = self.sidecarId
@@ -133,15 +135,16 @@ func (self *postureHeld) decision() PostureDecision {
 // The manifest that records it.
 func (self *postureHeld) manifest() *postureManifest {
 	manifest := &postureManifest{
-		generation:        self.generation,
-		stored:            self.stored,
-		networkId:         self.networkId,
-		anchor:            self.anchor,
-		sidecarId:         self.sidecarId,
-		identityPublicKey: self.identityPublicKey,
-		documentSeenAt:    self.documentSeenAt,
-		shareCerts:        self.shareCerts,
-		fork:              self.fork,
+		generation:          self.generation,
+		stored:              self.stored,
+		networkId:           self.networkId,
+		anchor:              self.anchor,
+		sidecarId:           self.sidecarId,
+		identityPublicKey:   self.identityPublicKey,
+		documentSeenAt:      self.documentSeenAt,
+		shareCerts:          self.shareCerts,
+		fork:                self.fork,
+		overlayFullThroughN: self.overlayFullThroughN,
 	}
 	if self.stored == postureStoredEnforcing {
 		manifest.pinN = self.pinN
@@ -267,8 +270,8 @@ func (self *Posture) readRecord(name string, maxByteCount int) ([]byte, [posture
 }
 
 // What a held state is when the store does not verify, or sits below the floor: pending, keeping what the manifest
-// says of the anchor, the ids, the latch, the fork and the share certificates, so a next state can restore
-// enforcement and never a lower one.
+// says of the anchor, the ids, the latch, the fork, a full overlay's position and the share certificates, so a next
+// state can restore enforcement and never a lower one.
 func postureHeldUnverified(manifest *postureManifest) *postureHeld {
 	held := &postureHeld{stored: postureStoredPending}
 	if manifest != nil {
@@ -284,6 +287,7 @@ func postureHeldUnverified(manifest *postureManifest) *postureHeld {
 		held.documentSeenAt = manifest.documentSeenAt
 		held.shareCerts = manifest.shareCerts
 		held.fork = manifest.fork
+		held.overlayFullThroughN = manifest.overlayFullThroughN
 	}
 	return held
 }
@@ -512,6 +516,11 @@ func (self *Posture) verifyStored(manifest *postureManifest) (*postureHeld, erro
 		return nil, failed("an overlay past its bound")
 	}
 	held.overlay = manifest.overlay
+	// a denial the full overlay could not hold lies after the state's pin, which would have cleared it; past the
+	// posture's pin it is one a resync below it kept, as for the overlay
+	if full := manifest.overlayFullThroughN; full != 0 && full <= statePinN {
+		return nil, failed("a full overlay's position at or before the state's pin")
+	}
 	// as for the overlay, an entry past the pin is one a resync below it kept
 	previous := statePinN
 	for _, entry := range manifest.waiting {
@@ -639,8 +648,10 @@ type postureOperation struct {
 	manifestTried bool
 	alarms        []PostureAlarm
 	wiped         bool
-	// an entry this call took that it did not apply as a denial
+	// an entry this call took that it did not apply as a denial, or a denial it could not hold
 	compileWanted bool
+	// this call alarmed for a denial the full overlay could not hold, which it does once a call
+	overlayFullAlarmed bool
 	// sidecar rows found in next's base's rows in this call, and every id looked for
 	rowsFound map[[postureIdByteCount]byte]*postureSidecarRow
 	lookedUp  map[[postureIdByteCount]byte]bool
@@ -987,9 +998,18 @@ func (self *postureOperation) applyStatement(parsed *postureEntry, batchIds map[
 		return outcome, nil
 	}
 	if self.posture.settings.OverlayMaxCount <= len(next.overlay) {
-		err := fmt.Errorf("%w: past the %d overlay entries held between states", ErrPostureRefused, self.posture.settings.OverlayMaxCount)
-		self.alarm(PostureAlarmMalformed, entry.GetN(), err)
-		return postureOutcomeWaiting, err
+		// a denial verified and not held would be a revocation left unapplied: the posture is pending instead until a
+		// state at or past it, which only a compile brings, and goes on following the chain meanwhile (question
+		// sdk-m8-17-overlay-bound-without-compiles, the closed direction until it is answered)
+		if !self.overlayFullAlarmed {
+			self.overlayFullAlarmed = true
+			err := fmt.Errorf("%w: past the %d overlay entries held between states, pending until a state at or past the denial",
+				ErrPostureRefused, self.posture.settings.OverlayMaxCount)
+			self.alarm(PostureAlarmMalformed, entry.GetN(), err)
+		}
+		next.overlayFullThroughN = max(next.overlayFullThroughN, entry.GetN())
+		self.compileWanted = true
+		return outcome, nil
 	}
 	next.overlay = append(next.overlay, *effect.add)
 	return outcome, nil
@@ -1212,12 +1232,13 @@ func (self *Posture) setPendingWithLock(pending *bridge.Pending) (PostureDecisio
 		}
 	}
 	held := &postureHeld{
-		stored:         postureStoredPending,
-		networkId:      bytes.Clone(pending.GetNetworkId()),
-		anchor:         bytes.Clone(pending.GetGenesisSha256()),
-		documentSeenAt: next.documentSeenAt,
-		shareCerts:     next.shareCerts,
-		fork:           next.fork,
+		stored:              postureStoredPending,
+		networkId:           bytes.Clone(pending.GetNetworkId()),
+		anchor:              bytes.Clone(pending.GetGenesisSha256()),
+		documentSeenAt:      next.documentSeenAt,
+		shareCerts:          next.shareCerts,
+		fork:                next.fork,
+		overlayFullThroughN: next.overlayFullThroughN,
 	}
 	if hasIds {
 		held.sidecarId, held.identityPublicKey = bytes.Clone(pending.GetSidecarId()), bytes.Clone(pending.GetIdentityPublicKey())
@@ -1359,6 +1380,10 @@ func (self *Posture) setStateWithLock(state *bridge.BridgeState, log *PostureLog
 		return entry.N <= statePinN
 	})
 	next.waiting = postureWaitingAbove(next.waiting, statePinN)
+	// a denial the full overlay could not hold is embodied only by a state at or past it
+	if next.overlayFullThroughN <= statePinN {
+		next.overlayFullThroughN = 0
+	}
 	return operation.finish(nil)
 }
 
