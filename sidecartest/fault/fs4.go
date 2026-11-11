@@ -10,12 +10,15 @@
 // the cut-over, before evs's copy job and after it drops the source; and the creation lands in epoch 2 and lists. The
 // twin, Fs4NoRemoval, has nobody leave: the creation lands at once in epoch 1 and no PATH_EPOCH is made.
 //
-// FS-4's further clauses (inserts, removals and renames after a map's enumeration reaching its tail, a tail omitting a
-// creation refused 409, steady creation under an immediate and a batched epoch with the 2-min block, the overdue
-// alarm, old-epoch parts and seals 412 PATH_EPOCH, a mapper killed after half its parts, the paused copy with two
-// removals and three sources, the carried directory D through p1, p2 and p3, removals after cut-over before the copy,
-// a move between one round's GETs, no late token, EPOCH_SOURCES_FULL after the fence, kills at each copy boundary and
-// a lease holder re-subscribing) are EVS1-M2-41's report's; FI-3's oracle is not bound (TEST-M2-05).
+// The clause Fs4ThreeSources (fs4_sources.go) cuts over three times with no copy running, so reads and listings find
+// every file across sources 3, 2 and 1 and then across the copy that drops them.
+//
+// FS-4's further clauses (inserts, removals and renames after a map's enumeration reaching its tail, steady creation
+// under an immediate and a batched epoch with the 2-min block, the overdue alarm, old-epoch parts and seals 412
+// PATH_EPOCH, a mapper killed after half its parts, the carried directory D through p1, p2 and p3, removals after
+// cut-over before the copy, a move between one round's GETs, no late token, EPOCH_SOURCES_FULL after the fence, kills
+// at each copy boundary and a lease holder re-subscribing) are EVS1-M2-41's report's; FI-3's oracle is not bound
+// (TEST-M2-05).
 
 package fault
 

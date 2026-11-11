@@ -5,6 +5,11 @@
 // it appends one, answering RESOURCE_EXHAUSTED; after a downgrade a new head must fit while the old one still
 // evaluates (§20.7), since only a check of a new head reads the limits.
 //
+// §20.7's tls_endpoints row lives here too (QUOTA-M4-04): publish grants per (host, port), counted at grant activation.
+// Readers evaluate no tier, so the count sits outside the shared fold: the writer checks its QuotaLimits before it
+// signs a GrantActivate (AclCheckGrantActivateQuota) and api's verifier checks NetworkSidecarLimits
+// (model.CheckGrantActivationLimits), both on AclCheckTlsEndpoints' one table.
+//
 // On every leg, the sidecar_http page Worker's included: root Id, no connect type.
 
 package sidecar
@@ -12,6 +17,8 @@ package sidecar
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -73,4 +80,87 @@ func AclRowsCheckLimits(rows *protocol.AclRows, rowsByteCount int, limits *AclLi
 		return fmt.Errorf("%w: %d requests rules, over the tier's acl_requests", ErrAclRowsTooLarge, len(rows.GetRequests()))
 	}
 	return nil
+}
+
+// §20.4's key for §20.7's tls_endpoints row.
+const AclTlsEndpointsLimitKey = "tls_endpoints"
+
+// A tls/ socket name, tls/<port>/<host>, names one endpoint: a (host, port).
+const aclTlsEndpointPrefix = "tls/"
+
+// The (host, port) endpoints with a publish grant active at state at timeMs (§13.9's endpoint): each tls/<port>/<host>
+// target of a rule that allows publish and has not expired, an activated grant's and a standing publish's alike.
+// Custom-domain aliases are tls/ names like any other, so they count; listeners and certificates are no rule, and
+// the mta-sts system publish takes no tls/ grant of its own (§13.9, §15.5), so neither does.
+func aclActiveTlsEndpoints(state *AclState, timeMs int64) map[string]bool {
+	endpoints := map[string]bool{}
+	for _, rule := range state.rows.GetRules() {
+		if expires := rule.GetExpires(); expires != 0 && expires <= timeMs {
+			continue
+		}
+		if !slices.Contains(rule.GetActions(), uint32(protocol.AclAction_ACL_ACTION_PUBLISH)) {
+			continue
+		}
+		for _, target := range rule.GetTargets() {
+			if name := target.GetPublicName(); strings.HasPrefix(name, aclTlsEndpointPrefix) {
+				endpoints[name] = true
+			}
+		}
+	}
+	return endpoints
+}
+
+// A GrantActivate's ask, read from its canonical action as CheckGrantActivate reads it.
+func AclGrantActivateAsk(activate *protocol.GrantActivate) (*AclGrantAsk, error) {
+	action, err := ParseStoredCanonicalAction(activate.GetCanonicalAction())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrConfigRule, err)
+	}
+	return ParseAclGrantAction(action.Action)
+}
+
+// §20.7's tls_endpoints check of a grant activation at state, S(n-1), sequenced at timeMs: each (host, port) the
+// grant publishes that no active grant holds takes a unit, and past limit the activation is refused with a
+// QuotaRefusal whose Used is the endpoints active. A grant that publishes nothing, or only endpoints already active,
+// takes no unit. A negative limit has none, and zero refuses any new endpoint. Only the activation is judged: a grant
+// already active keeps running through a downgrade until it expires, and an expired one frees its unit.
+func AclCheckTlsEndpoints(state *AclState, ask *AclGrantAsk, timeMs int64, limit int64, upgrade bool) *QuotaRefusal {
+	if !slices.Contains(ask.Allow, protocol.AclAction_ACL_ACTION_PUBLISH) {
+		return nil
+	}
+	active := aclActiveTlsEndpoints(state, timeMs)
+	added := map[string]bool{}
+	for _, target := range ask.Dst {
+		if name := target.GetPublicName(); strings.HasPrefix(name, aclTlsEndpointPrefix) && !active[name] {
+			added[name] = true
+		}
+	}
+	if len(added) == 0 || limit < 0 || int64(len(active)+len(added)) <= limit {
+		return nil
+	}
+	return &QuotaRefusal{
+		LimitKey: AclTlsEndpointsLimitKey,
+		Limit:    limit,
+		Used:     int64(len(active)),
+		Upgrade:  upgrade,
+	}
+}
+
+// The writer's tls_endpoints check before it signs a GrantActivate at state, the position it files at, timeMs its
+// time: limits as GET /sidecar/limits gave them, a key they lack reading 0, which refuses, so a limit this build
+// does not know fails closed. A writer cannot tell whether enforce_sidecar_limits is on (question
+// quota-m1-02-limits-while-dark), so it applies the limits it reads: the closed direction, where api's verifier
+// passes while they are dark.
+func AclCheckGrantActivateQuota(state *AclState, activate *protocol.GrantActivate, timeMs int64, limits *QuotaLimits) (*QuotaRefusal, error) {
+	ask, err := AclGrantActivateAsk(activate)
+	if err != nil {
+		return nil, err
+	}
+	limit := int64(0)
+	upgrade := true
+	if limits != nil {
+		limit = limits.Limits[AclTlsEndpointsLimitKey]
+		upgrade = limits.Tier != "team"
+	}
+	return AclCheckTlsEndpoints(state, ask, timeMs, limit, upgrade), nil
 }

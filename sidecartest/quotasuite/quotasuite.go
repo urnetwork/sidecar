@@ -1105,6 +1105,13 @@ func caseARefusedLeaseMarksSpent(ctx context.Context, target *Target) error {
 		return err
 	}
 	defer lease.Close()
+	// the mark lifts once a balance has room: at the 60 s spent pass, which Settle runs where the target
+	// has one (plan-QUOTA-small-readings #4; DESIGN-DETAILS 13.5's spent row)
+	if target.Settle != nil {
+		if err := target.Settle(); err != nil {
+			return err
+		}
+	}
 	if spent, err := isSpent(ctx, target, networkId); err != nil || spent {
 		return fmt.Errorf("a drawing lease left the network spent: %v", err)
 	}
