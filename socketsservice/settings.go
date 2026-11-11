@@ -1,7 +1,9 @@
 // The engine's tunables (connect/CODESTYLE.md:140): DefaultSocketsSettings is the only source of a
 // default, and server/cli/sockets lays config/<env>/sidecar.yml's sockets_control_qps over it (§19.11).
-// Protocol and format values, such as §9.5's 1,024 entries a page and §9.4's sizes, are constants beside
-// the code that reads them, never settings.
+// Every limit is a field too, protocol and format limits included (QD-702): §9.5's and §9.6's field sizes
+// are Format, the root's SocketFormatSettings, which the client side's settings carry as well, so their
+// defaults stay the protocol's in one place. §9.5's 1,024 entries a page and §9.4's name sizes (request.go)
+// are still constants until their files move.
 //
 // Every count and duration must be positive, and Validate refuses anything else, so no zero reads as
 // unlimited or off. Nothing here bounds a count of names, listeners or streams (owner decision 66): the
@@ -13,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/urnetwork/sidecar"
 )
 
 // A settings value the engine cannot run on. The wrapping error names the field.
@@ -161,6 +165,17 @@ type SocketsSettings struct {
 	// How many names one page of GET /socket/list examines: 1,024, a registration page's worth, each page one
 	// token of the caller's bucket (SOCK.md reading 10).
 	ListPageCount int
+	// §9.5's and §9.6's field sizes and defaults, which a page's and a Find's shape checks read: the root's one
+	// object, at the protocol's values (QD-702).
+	Format *sidecar.SocketFormatSettings
+	// The most bytes one registrations call's body holds: 4 MiB, a page of 1,024 entries, each at most a token
+	// path, a seal, a claim and the rest in base64 and JSON. A longer body is invalid.
+	RegistrationsMaxBodyByteCount int
+	// The most bytes one Find's body holds: 64 KiB, two failed tickets, K client ids and the rest in base64 and
+	// JSON, many times over. A longer body is invalid.
+	FindMaxBodyByteCount int
+	// The most client ids an edge's Find names: 64, an edge process's K clients (§13.6's 4 by default) with room.
+	FindMaxClientIdCount int
 }
 
 // §9's values.
@@ -181,6 +196,11 @@ func DefaultSocketsSettings() *SocketsSettings {
 		QuotaRetryAfter:       5 * time.Second,
 		ClaimMemoCount:        128 * 1024,
 		ListPageCount:         1024,
+
+		Format:                        sidecar.DefaultSocketFormatSettings(),
+		RegistrationsMaxBodyByteCount: 4 * 1024 * 1024,
+		FindMaxBodyByteCount:          64 * 1024,
+		FindMaxClientIdCount:          64,
 	}
 }
 
@@ -247,6 +267,9 @@ func (self *SocketsSettings) Validate() error {
 	if self.FairQueue == nil {
 		return fmt.Errorf("%w: no fair queue settings", ErrSocketsSettingsRefused)
 	}
+	if self.Format == nil {
+		return fmt.Errorf("%w: no format settings", ErrSocketsSettingsRefused)
+	}
 	for _, check := range []struct {
 		name     string
 		positive bool
@@ -271,6 +294,20 @@ func (self *SocketsSettings) Validate() error {
 		{name: "quota_retry_after", positive: 0 < self.QuotaRetryAfter},
 		{name: "claim_memo_count", positive: 2 <= self.ClaimMemoCount},
 		{name: "list_page_count", positive: 0 < self.ListPageCount},
+		{name: "registrations_max_body_byte_count", positive: 0 < self.RegistrationsMaxBodyByteCount},
+		{name: "find_max_body_byte_count", positive: 0 < self.FindMaxBodyByteCount},
+		{name: "find_max_client_id_count", positive: 0 < self.FindMaxClientIdCount},
+		{name: "format.claim_max_byte_count", positive: 0 < self.Format.ClaimMaxByteCount},
+		{name: "format.protocol_max_byte_count", positive: 0 < self.Format.ProtocolMaxByteCount},
+		{name: "format.alpn_max_count", positive: 0 < self.Format.AlpnMaxCount},
+		{name: "format.alpn_max_byte_count", positive: 0 < self.Format.AlpnMaxByteCount},
+		{name: "format.app_mode_max_byte_count", positive: 0 < self.Format.AppModeMaxByteCount},
+		{name: "format.max_weight", positive: 0 < self.Format.MaxWeight},
+		{name: "format.default_weight", positive: 0 < self.Format.DefaultWeight && self.Format.DefaultWeight <= self.Format.MaxWeight},
+		{name: "format.default_max_streams", positive: 0 < self.Format.DefaultMaxStreams},
+		{name: "format.ticket_max_byte_count", positive: 0 < self.Format.TicketMaxByteCount},
+		{name: "format.failed_ticket_max_count", positive: 0 < self.Format.FailedTicketMaxCount},
+		{name: "format.affinity_key_max_byte_count", positive: 0 < self.Format.AffinityKeyMaxByteCount},
 	} {
 		if !check.positive {
 			return fmt.Errorf("%w: %s", ErrSocketsSettingsRefused, check.name)

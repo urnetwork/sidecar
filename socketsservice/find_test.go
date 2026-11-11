@@ -432,7 +432,10 @@ func TestSocketFindPicksAgainWhenEveryPickedListenerIsRefused(t *testing.T) {
 	}
 	secondDraw := uint32(100 * slices.Index(remaining, refusedIndexes[1]))
 	process.service.SetDrawsForTest(uint32(100*firstIndex), secondDraw, 0)
-	picks := world.fakeStore.OpCount("Pick")
+	before := map[string]int{}
+	for _, method := range []string{"Pick", "RemoveEntries", "RemoveServicePairs"} {
+		before[method] = world.fakeStore.OpCount(method)
+	}
 	code, result := process.find(scene.dialer.token, scene.findArgs())
 	if code != http.StatusOK || result.Error != nil {
 		t.Fatalf("answered %d, %+v", code, result)
@@ -440,8 +443,11 @@ func TestSocketFindPicksAgainWhenEveryPickedListenerIsRefused(t *testing.T) {
 	if ticket := world.verifyTicket(result.Primary); !bytes.Equal(ticket.GetListenerClientId(), keep.clientId.Bytes()) {
 		t.Fatal("a refused listener took the ticket")
 	}
-	if picked := world.fakeStore.OpCount("Pick") - picks; picked != 2 {
-		t.Fatalf("%d picks", picked)
+	// the refused path's calls: one removal for both, and no pair call, a blinded name standing for no pair
+	for method, count := range map[string]int{"Pick": 2, "RemoveEntries": 1, "RemoveServicePairs": 0} {
+		if made := world.fakeStore.OpCount(method) - before[method]; made != count {
+			t.Errorf("the refused path made %d %s calls, not %d", made, method, count)
+		}
 	}
 	listeners, _ := world.fakeStore.ListListeners(world.ctx, scene.networkId, scene.nameToken)
 	if len(listeners) != 1 {
@@ -483,6 +489,38 @@ func TestSocketFindDeniesWhatItsCallerCannotReach(t *testing.T) {
 	}
 	if world.fakeStore.OpCount("Pick") != picks {
 		t.Fatal("a Find its caller cannot reach read a group")
+	}
+}
+
+// QD-702: a Find's sizes are the process's settings, never constants. A process that takes fewer edge clients or
+// failed tickets than a Find carries refuses it as invalid, before any group is read.
+func TestSocketFindReadsItsSizesFromSettings(t *testing.T) {
+	world := newTestSocketWorld(t)
+	process := world.newProcess(func(settings *socketsservice.SocketsSettings) {
+		settings.FindMaxClientIdCount = 2
+		settings.Format.FailedTicketMaxCount = 1
+	})
+	networkId := testSocketId()
+	edge := world.newEdge(3)
+	dialer := world.newSidecar(networkId)
+	failedTickets := []*sidecar.SocketFailedTicket{
+		{Ticket: []byte("first"), Reason: sidecar.SocketFailedReasonTimeout},
+		{Ticket: []byte("second"), Reason: sidecar.SocketFailedReasonTimeout},
+	}
+	for index, call := range []struct {
+		token string
+		args  *sidecar.SocketFindArgs
+	}{
+		{token: edge.token, args: &sidecar.SocketFindArgs{Name: "tls/443/blog", NetworkId: &networkId, ClientIds: edge.clientIdArgs()}},
+		{token: dialer.token, args: &sidecar.SocketFindArgs{NameToken: testSocketTokenPath(t, 1), NetworkId: &networkId, FailedTickets: failedTickets}},
+	} {
+		code, result := process.find(call.token, call.args)
+		if code != http.StatusOK || result.Error == nil || result.Error.Code != sidecar.SocketErrorCodeInvalid {
+			t.Errorf("call %d answered %d, %+v", index, code, result)
+		}
+	}
+	if count := world.fakeStore.OpCount("Pick"); count != 0 {
+		t.Fatalf("%d picks", count)
 	}
 }
 
@@ -589,6 +627,117 @@ func TestSocketEdgeFindMapsItsClientsAndWritesThePair(t *testing.T) {
 	}
 	if observed := process.gate.Observed(networkId); !slices.Contains(observed, position+5) {
 		t.Fatalf("observed %v", observed)
+	}
+}
+
+// DESIGN-DETAILS 13.2.3's find step 7: a refused listener whose last edge name the removal took loses its {svc_}
+// pairs at the Find's position, leaving a floor that refuses a pair written below it, while a refused listener
+// that still holds another edge name keeps its pairs. The refused path's calls beyond the pick are the one
+// RemoveEntries, a RemoveServicePairs for the listener left with no edge name, and one more Pick. Once granted
+// again, the listener's next registration renews its pairs and the next Find writes its pair afresh, this
+// process's memos of the removed pairs forgotten.
+func TestSocketFindRemovesARefusedListenersLastPairs(t *testing.T) {
+	world := newTestSocketWorld(t)
+	process := world.newProcess(nil)
+	if err := process.service.RegisterNamespace(sidecar.SocketNamespaceTls, &testSocketRecordingHooks{}); err != nil {
+		t.Fatal(err)
+	}
+	networkId := testSocketId()
+	blog := "tls/443/blog"
+	shop := "tls/443/shop"
+	grantExpireMillis := uint64(world.clock.Now().Add(2 * time.Hour).UnixMilli())
+	only := world.newSidecar(networkId)
+	both := world.newSidecar(networkId)
+	for _, listener := range []*testSocketSidecar{only, both} {
+		process.gate.SetIdentityKey(networkId, listener.sidecarId, listener.publicKey())
+		process.gate.AllowListen(networkId, listener.sidecarId, []byte(blog), testSocketGrant("listen"))
+	}
+	process.gate.AllowListen(networkId, both.sidecarId, []byte(shop), testSocketGrant("listen"))
+	process.gate.AllowPublicDial(networkId, []byte(blog), testSocketGrant("public"))
+	process.gate.AllowPublish(networkId, []byte(blog), sidecartest.FakeSocketGrant{GrantId: []byte("publish"), ExpireMillis: grantExpireMillis})
+	process.gate.Load(networkId)
+	onlyRegistration := only.edgeRegistration(t, blog, "tls", "http")
+	process.registerOk(only, 1, onlyRegistration)
+	process.registerOk(both, 1, both.edgeRegistration(t, blog, "tls", "http"), both.edgeRegistration(t, shop, "tls", "http"))
+	edge := world.newEdge(4)
+	args := &sidecar.SocketFindArgs{Name: blog, NetworkId: &networkId, ClientIds: edge.clientIdArgs()}
+
+	code, result := process.find(edge.token, args)
+	if code != http.StatusOK || result.Error != nil || result.Backup == nil {
+		t.Fatalf("answered %d, %+v", code, result)
+	}
+	listenerDialerClientIds := map[connect.Id]connect.Id{}
+	for _, findTicket := range []*sidecar.SocketFindTicket{result.Primary, result.Backup} {
+		ticket := world.verifyTicket(findTicket)
+		listenerClientId, _ := connect.IdFromBytes(ticket.GetListenerClientId())
+		dialerClientId, _ := connect.IdFromBytes(ticket.GetDialerClientId())
+		listenerDialerClientIds[listenerClientId] = dialerClientId
+	}
+	pairFound := func(listener *testSocketSidecar) bool {
+		t.Helper()
+		_, found, err := world.fakeStore.GetServicePair(world.ctx, listener.clientId, listenerDialerClientIds[listener.clientId])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+	if !pairFound(only) || !pairFound(both) {
+		t.Fatal("the first Find wrote no pair")
+	}
+
+	for _, listener := range []*testSocketSidecar{only, both} {
+		process.gate.RevokeListen(networkId, listener.sidecarId, []byte(blog))
+	}
+	revokedPosition := process.gate.Load(networkId)
+	before := map[string]int{}
+	for _, method := range []string{"Pick", "RemoveEntries", "RemoveServicePairs", "SetServicePair"} {
+		before[method] = world.fakeStore.OpCount(method)
+	}
+	signed := process.service.SignedTicketCount()
+	code, result = process.find(edge.token, args)
+	if code != http.StatusOK || result.Error == nil || result.Error.Code != sidecar.SocketErrorCodeNoListener || result.Primary != nil {
+		t.Fatalf("a Find of two refused listeners answered %d, %+v", code, result)
+	}
+	if count := process.service.SignedTicketCount() - signed; count != 0 {
+		t.Fatalf("%d tickets signed", count)
+	}
+	for method, count := range map[string]int{"Pick": 2, "RemoveEntries": 1, "RemoveServicePairs": 1, "SetServicePair": 0} {
+		if made := world.fakeStore.OpCount(method) - before[method]; made != count {
+			t.Errorf("the refused path made %d %s calls, not %d", made, method, count)
+		}
+	}
+	if pairFound(only) {
+		t.Fatal("the pair of a listener with no edge name left stands")
+	}
+	if !pairFound(both) {
+		t.Fatal("the pair of a listener that still holds an edge name went")
+	}
+	for _, listener := range []*testSocketSidecar{only, both} {
+		if hints := process.host.Push.Hints(listener.clientId); len(hints) != 1 {
+			t.Fatalf("%d hints for a removed listener", len(hints))
+		}
+	}
+
+	// granted again: the page renews the pairs at once, and the Find writes the pair afresh
+	process.gate.AllowListen(networkId, only.sidecarId, []byte(blog), testSocketGrant("listen"))
+	process.gate.Load(networkId)
+	touches := world.fakeStore.OpCount("TouchServicePairs")
+	process.registerOk(only, 2, onlyRegistration)
+	if count := world.fakeStore.OpCount("TouchServicePairs") - touches; count != 1 {
+		t.Fatalf("the registration after the removal made %d pair touches", count)
+	}
+	code, result = process.find(edge.token, args)
+	if code != http.StatusOK || result.Error != nil || result.Backup != nil {
+		t.Fatalf("a Find after the grant answered %d, %+v", code, result)
+	}
+	if !pairFound(only) {
+		t.Fatal("the Find after the removal wrote no pair")
+	}
+
+	// the floor stands at the removal's position
+	wrote, floor, err := world.fakeStore.SetServicePair(world.ctx, only.clientId, listenerDialerClientIds[only.clientId], grantExpireMillis, time.Minute, revokedPosition-1)
+	if err != nil || wrote || floor != revokedPosition {
+		t.Fatalf("a pair below the removal's position: %v, %d, %v", wrote, floor, err)
 	}
 }
 
