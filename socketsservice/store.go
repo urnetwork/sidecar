@@ -149,10 +149,10 @@ type SocketStorePageResult struct {
 	Stale bool
 	// The client's stored set_version once the call is done.
 	SetVersion uint64
-	// One per allowed entry of the page, in its order.
+	// One per allowed entry of the page, in its order; empty when the set refused the page as the call began.
 	Outcomes []*SocketStoreEntryOutcome
-	// One per RefusedNameKeys, in its order. The engine answers revoked for one Removed, and denied for one
-	// that held no lease.
+	// One per RefusedNameKeys, in its order, and empty as Outcomes is. The engine answers revoked for one
+	// Removed, and denied for one that held no lease.
 	RefusedOutcomes []*SocketStoreRemoval
 	// Leases inside the range that the client held before the call and holds no more, in name key
 	// order: entries the page lacks, entries the engine refused, and entries now taken or fenced.
