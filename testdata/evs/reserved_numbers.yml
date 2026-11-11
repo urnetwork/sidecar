@@ -60,11 +60,15 @@ ignored:
   - EvsWindowFlag.EVS_WINDOW_VERSIONLESS_REPLACED
   - EvsWindowFlag.EVS_WINDOW_DROP
   - EvsProvenance.tainted
+  # the search index's epoch in a head's summary, which a format-1 reader reads past (QD-640)
+  - EvsHeadSummary.index_epoch
 
 kept:
   - EvsIndexEntry.drop_mark
   - EvsRemovalMarker.segment_ids
   - EvsRemovalMarker.slot_ids
+  # a head's index_epoch, which a format-1 commit carries forward and evs's head rule keeps from falling (QD-640)
+  - EvsHead.index_epoch
 
 layouts:
   batch header format: 2

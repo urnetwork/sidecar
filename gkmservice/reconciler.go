@@ -10,7 +10,12 @@
 //     and time, whatever the gate says (DESIGN-DETAILS 6.2.3's H1): a wrapped writer's rotation reopens the gate
 //     while the dropped holder's leaf may still stand, and a leaf that may commit no Remove waits on a writer leaf
 //     to commit it. gkm cannot see whether the dropped holder was a leaf, so the hint goes either way, and it
-//     stops at the first epoch whose pin passes the drop. Work is driven by
+//     stops at the first epoch whose pin passes the drop. A repo a sidecar with no leaf created, a tagged or
+//     ephemeral one, has no group until a member device forms it (QD-638): while such a repo stands keying with no
+//     form, pending goes to the network's config writers every PendingHintInterval, naming no group, since none
+//     exists, and the first member device that may form it runs KF1's steps 2 to 4 (sidecar's FormAgentRepos). A
+//     repo is watched for this from the state that first holds it until it has a form, is active, or is gone, so one
+//     placed after its RepoCreate is still found. Work is driven by
 //     the state's changes ({acl_<networkId>}v, through GkmReconcilerState.Watch) and those expiry times, never by a
 //     scan of every repo each minute; what a change costs is its own network's repos, and a gate's check reads its
 //     repo's newest form and generation.
@@ -246,6 +251,9 @@ type gkmClosedGate struct {
 	hintedAt time.Time
 	// how often its hint repeats: the gate's interval while it is closed, the dropped leaf's while only that holds
 	interval time.Duration
+	// a repo with no form yet, watched for a sidecar with no leaf having created it (QD-638), whose hint goes to the
+	// config writers and names no group
+	formless bool
 }
 
 // The reconciler. See the file header.
@@ -499,7 +507,8 @@ func (self *GkmReconciler) reconcileNetwork(change *GkmStateChange, wake bool) {
 			holdersChanged = err != nil || !bytes.Equal(before.Sha256(), after.Sha256())
 			shrinkMoved = previous.View.Repo(repoId).GetHoldersShrunkAt() != repo.GetHoldersShrunkAt()
 		}
-		if previous == nil || holdersChanged || shrinkMoved || wake || self.gateTracked(repoId) {
+		newRepo := previous != nil && previous.View.Repo(repoId) == nil
+		if previous == nil || newRepo || holdersChanged || shrinkMoved || wake || self.gateTracked(repoId) {
 			closed, groupId, known := self.gateClosed(state.View, repoId, now)
 			if known {
 				dropped := self.holderDroppedSinceNewestEpoch(state.View, repoId, groupId, now)
@@ -507,6 +516,8 @@ func (self *GkmReconciler) reconcileNetwork(change *GkmStateChange, wake bool) {
 					self.hintPending(state, repoId, groupId, change.SignerId, configWriterIds)
 				}
 				self.trackGate(networkId, repoId, closed, dropped, now)
+			} else {
+				self.reconcileFormless(state, networkId, repoId, configWriterIds, now)
 			}
 		}
 		expiry, found, err := sidecar.GkmHolderExpiry(state.View, repoId, now, now.Add(self.settings.ExpiryHorizon))
@@ -730,6 +741,77 @@ func (self *GkmReconciler) deleteDelegationKey(delegationId string) {
 	done = true
 }
 
+// The formless row of the file header for one repo gkm holds no form of: while it stands keying and a sidecar with
+// no leaf created it, pending to the config writers, naming no group, and the repo watched for its interval; while it
+// is not placed yet, watched with no hint; once it has a form, is active or is gone, or a member device created it,
+// forgotten. A read that fails keeps it watched, so nothing is decided on a guess.
+func (self *GkmReconciler) reconcileFormless(state *GkmNetworkState, networkId sidecar.Id, repoId sidecar.Id, configWriterIds []sidecar.Id, now time.Time) {
+	watch, hint := self.formlessAgentRepo(state.View, repoId)
+	if hint {
+		self.sendHint(configWriterIds, protocol.GkmHintKind_GKM_HINT_PENDING, nil)
+	}
+	self.trackFormless(networkId, repoId, watch, now)
+}
+
+// Whether a repo with no form is still to be watched, and whether its hint is due now: placed, keying, still with no
+// form, and created by a sidecar with no leaf at view, a tagged or ephemeral one, by place/'s creator, which evs
+// writes from the creating token (QD-638).
+func (self *GkmReconciler) formlessAgentRepo(view sidecar.GkmAuthView, repoId sidecar.Id) (watch bool, hint bool) {
+	ctx := self.ctx
+	if repo := view.Repo(repoId); repo == nil || repo.GetDeletion() != nil {
+		return false, false
+	}
+	cluster, place, err := self.places.Cluster(ctx, repoId)
+	switch {
+	case errors.Is(err, sidecar.ErrEvsRepoNotPlaced):
+		// its RepoCreate is in the log and evs has not placed it yet
+		return true, false
+	case err != nil:
+		return true, false
+	}
+	creator := view.SidecarRow(place.CreatorSidecarId)
+	if creator == nil || (len(creator.GetTagIds()) == 0 && !creator.GetEphemeral()) {
+		// a member device forms its own repo's group (KF1); a creator the state does not hold yet is looked at again
+		return creator == nil, false
+	}
+	_, found, err := gkmNewestFormGroup(ctx, cluster, repoId, self.settings.Service)
+	if err != nil {
+		return true, false
+	}
+	if found {
+		return false, false
+	}
+	objectBytes, _, err := readGkmObject(ctx, cluster, GkmEvsRepoKey(repoId), gkmEvsRepoMaxByteCount)
+	if errors.Is(err, sidecar.ErrBlobNotFound) {
+		// placed and not yet written: evs writes repo/ just after place/
+		return true, false
+	}
+	if err != nil {
+		return true, false
+	}
+	object, err := parseGkmEvsRepoObject(repoId, objectBytes)
+	if err != nil || object.GetState() != protocol.EvsRepoState_EVS_REPO_KEYING {
+		return err != nil, false
+	}
+	return true, true
+}
+
+// Watches a repo with no form at its interval, PendingHintInterval, or forgets it.
+func (self *GkmReconciler) trackFormless(networkId sidecar.Id, repoId sidecar.Id, watch bool, hintedAt time.Time) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if !watch {
+		if gate, ok := self.closedGates[repoId]; ok && gate.formless {
+			delete(self.closedGates, repoId)
+		}
+		return
+	}
+	if _, ok := self.closedGates[repoId]; !ok && self.settings.ClosedGateCount <= len(self.closedGates) {
+		return
+	}
+	self.closedGates[repoId] = &gkmClosedGate{networkId: networkId, hintedAt: hintedAt, interval: self.settings.PendingHintInterval, formless: true}
+}
+
 // Whether a repo's gate is tracked as closed.
 func (self *GkmReconciler) gateTracked(repoId sidecar.Id) bool {
 	self.stateLock.Lock()
@@ -786,6 +868,7 @@ func (self *GkmReconciler) rehintClosedGates() {
 	for _, gate := range gates {
 		closed, groupId, known := self.gateClosed(gate.state.View, gate.repoId, now)
 		if !known {
+			self.reconcileFormless(gate.state, gate.networkId, gate.repoId, gkmConfigWriters(gate.state), now)
 			continue
 		}
 		dropped := self.holderDroppedSinceNewestEpoch(gate.state.View, gate.repoId, groupId, now)

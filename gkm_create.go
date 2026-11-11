@@ -19,7 +19,11 @@
 // stands answers its generation 1 once its deliveries stand. A creator whose only device is lost before activation
 // leaves the repo keying, and a repo admin's device re-forms or deletes it (FS-20).
 //
-// A sidecar that holds no leaf creates no group: KF1's epoch 0 has one leaf, the creator's. The state must already
+// A sidecar that holds no leaf creates no group: KF1's epoch 0 has one leaf, the creator's. A repo such a sidecar,
+// a tagged or ephemeral one, creates is formed by the first member device gkm's pending hint reaches (QD-638;
+// FormAgentRepos): it runs steps 2 to 4 as the group's creator, and the agent, which stays the repo's admin, activates
+// the repo once it holds generation 1. Two member devices that act at once race at the repo's first form, and the
+// loser's 409, a form standing that is not its own, discards its draft (ErrGkmGroupFormed). The state must already
 // hold the repo's row, its RepoCreate applied, or the holders cannot be computed and CreateGroup answers
 // ErrGkmNoRepo for its caller to retry once the log advances.
 
@@ -42,6 +46,10 @@ import (
 
 // The purpose a GroupForm is signed under (QD-527), as gkmservice verifies it.
 const gkmGroupFormPurpose = "group-form"
+
+// Another device formed the repo's group first: this creation's draft is discarded, and the device joins the group
+// that stands by its Welcome.
+var ErrGkmGroupFormed = errors.New("gkm: another device formed the repo's group")
 
 // KF1's draft as the keychain holds it: the group drawn, RK_1 and the request, byte for byte.
 type gkmCreateDraft struct {
@@ -107,10 +115,23 @@ func (self *gkmGroupManager) createInFlow(ctx context.Context, args *GkmCreateGr
 			return nil, err
 		}
 		if taken {
-			// the id is another repo's: this draft goes and another is drawn
+			// the id is another repo's, or another device formed this repo's group first: this draft goes, its MLS
+			// state with it, and either another id is drawn or the device stops
 			record.create = nil
 			if err := self.putPendingRecord(record); err != nil {
 				return nil, err
+			}
+			if forgetter, ok := client.args.Mls.(MlsGroupForgetter); ok {
+				if err := forgetter.ForgetGroup(draft.groupId); err != nil && !errors.Is(err, ErrMlsGroupUnknown) {
+					return nil, err
+				}
+			}
+			reply, err := client.args.Api.Forms(ctx, self.repoId)
+			if err != nil {
+				return nil, err
+			}
+			if 0 < len(reply.GetForms()) {
+				return nil, fmt.Errorf("%w: repo %s", ErrGkmGroupFormed, self.repoId)
 			}
 			continue
 		}
@@ -190,7 +211,8 @@ func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroup
 	if err != nil {
 		return nil, err
 	}
-	formBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GroupForm{RepoId: self.repoId.Bytes(), GroupId: groupId.Bytes(), Generation: 1})
+	// the form carries the state its signer's right is judged at (QD-643), the one gen/1's holders are counted at
+	formBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GroupForm{RepoId: self.repoId.Bytes(), GroupId: groupId.Bytes(), Generation: 1, Auth: state.Pin()})
 	if err != nil {
 		return nil, err
 	}

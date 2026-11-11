@@ -413,8 +413,8 @@ enum BridgeRuleEntryKind {
 // sidecar/protocol/gkm.proto
 // §10.5's list; not_after holds ms, so it stays 64 bits.
 message ReaderKey { bytes sidecar_id = 1; bytes xwing_public_key = 2; int64 not_after = 3; }
-// §2.8's gkm-1; its signer is Signed's.
-message GroupForm { bytes repo_id = 1; bytes group_id = 2; bytes previous_group_id = 3; uint64 generation = 4; }
+// §2.8's gkm-1 with QD-643's pin, the signer's state when it signs; its signer is Signed's.
+message GroupForm { bytes repo_id = 1; bytes group_id = 2; bytes previous_group_id = 3; uint64 generation = 4; AuthPin auth = 5; }
 // §10.14's list and kinds.
 message GkmHint { bytes group_id = 1; uint64 epoch = 2; GkmHintKind kind = 3; bytes recipient = 4; }
 enum GkmHintKind {
@@ -457,6 +457,9 @@ message GkmFormsReply { repeated Signed forms = 1; }
 message GkmLadderRequest { repeated Signed generations = 1; }
 message GkmReaderKeysRequest { repeated bytes sidecar_ids = 1; }
 message GkmReaderKeysReply { repeated Signed reader_keys = 1; }
+// POST /gkm/delegation-keys (QD-637), a config rotator's batches of forwarding Delegations' reader keys.
+message GkmDelegationKeysRequest { repeated bytes delegation_ids = 1; }
+message GkmDelegationKeysReply { repeated bytes reader_keys = 1; }
 // §10.14's POST .../wraps/<g>/<c8>, batched, and GET .../wraps/<g>; POST .../welcome/<n>, for gkm-5's recipients, and
 // GET /gkm/welcomes; POST .../ack, for gkm-10; GET and POST /gkm/recovery/<member_id>/wraps, for gkm-8; and POST
 // .../recovery-wraps/<g>/<c8>, a rotator's batches.
