@@ -95,6 +95,7 @@ envelope_chunk.go
 envelope_codes.go
 envelope_constants.go
 envelope_reassembly.go
+envelope_search_settings.go
 envelope_settings.go
 evs_batch.go
 evs_batch_format2.go
@@ -118,6 +119,7 @@ evs_index_normalize.go
 evs_index_pad.go
 evs_index_postings.go
 evs_index_row.go
+evs_index_settings.go
 evs_index_shard.go
 evs_index_shard_reader.go
 evs_index_slot.go

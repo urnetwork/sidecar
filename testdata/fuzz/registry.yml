@@ -247,7 +247,8 @@ rows:
     owner: SEARCH-M10-31
     milestone: M10
     targets:
-      - {name: FuzzSearchRemoteWire, package: "."}
+      - {name: FuzzSearchRequestBody, package: "."}
+      - {name: FuzzSearchReplyBody, package: "."}
 
   - id: search-merge
     bullet: "The remote-search merge"

@@ -23,16 +23,16 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// A SEARCH body of exactly SearchRequestByteCount: a SearchRequest of steps, padded.
+// A SEARCH body of exactly the request size: a SearchRequest of steps, padded.
 func testSearchRequestBody(t *testing.T, searchId uint64, page uint32, steps uint32) []byte {
 	t.Helper()
 	request := &protocol.SearchRequest{SearchVersion: 1, SearchId: searchId, Page: page, Steps: steps, Scope: 1, Query: "needle"}
-	for padByteCount := SearchRequestByteCount - proto.Size(request) - 4; padByteCount <= SearchRequestByteCount; padByteCount += 1 {
+	for padByteCount := DefaultSearchWireSettings().RequestByteCount - proto.Size(request) - 4; padByteCount <= DefaultSearchWireSettings().RequestByteCount; padByteCount += 1 {
 		if padByteCount < 0 {
 			continue
 		}
 		request.Pad = make([]byte, padByteCount)
-		if proto.Size(request) == SearchRequestByteCount {
+		if proto.Size(request) == DefaultSearchWireSettings().RequestByteCount {
 			body, err := proto.Marshal(request)
 			if err != nil {
 				t.Fatal(err)
@@ -73,7 +73,7 @@ func testSearchReply(t *testing.T, request *SubprotocolRequest) ([]byte, error) 
 		SearchId:      searchRequest.SearchId,
 		Page:          searchRequest.Page,
 		Status:        uint32(protocol.SearchStatus_SEARCH_OK),
-	}, int(searchRequest.Steps))
+	}, int(searchRequest.Steps), DefaultSearchWireSettings())
 }
 
 // Every request is one envelope of 4,016 B with no chunk header and timeout_ms 10,000, whether the
@@ -83,7 +83,7 @@ func TestSearchFrameSizes(t *testing.T) {
 	a, b, _ := newTestSearchPair(t, func(request *SubprotocolRequest) ([]byte, error) {
 		return testSearchReply(t, request)
 	})
-	for steps := uint32(1); steps <= SearchResultMaxStepCount; steps += 1 {
+	for steps := uint32(1); steps <= uint32(DefaultSearchWireSettings().MaxStepCount); steps += 1 {
 		ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
 		sentBefore := len(a.sent())
 		repliedBefore := len(b.sent())
@@ -92,7 +92,7 @@ func TestSearchFrameSizes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("steps %d: %v", steps, err)
 		}
-		if len(answer) != int(steps)*SearchResultStepByteCount {
+		if len(answer) != int(steps)*DefaultSearchWireSettings().StepByteCount {
 			t.Errorf("steps %d: a reply of %d B", steps, len(answer))
 		}
 		requests := []*protocol.Envelope{}
@@ -101,7 +101,7 @@ func TestSearchFrameSizes(t *testing.T) {
 				requests = append(requests, envelope)
 			}
 		}
-		if len(requests) != 1 || requests[0].Chunk != nil || len(requests[0].Body) != SearchRequestByteCount || requests[0].TimeoutMs != 10000 {
+		if len(requests) != 1 || requests[0].Chunk != nil || len(requests[0].Body) != DefaultSearchWireSettings().RequestByteCount || requests[0].TimeoutMs != 10000 {
 			t.Errorf("steps %d: requests %d, first %+v", steps, len(requests), requests[0].Chunk)
 		}
 		sizes := []int{}
@@ -130,7 +130,7 @@ func TestSearchRequestOfAnotherSizeIsNeverSent(t *testing.T) {
 		t.Fatal(err)
 	}
 	sentBefore := len(a.sent())
-	for _, byteCount := range []int{0, SearchRequestByteCount - 1, SearchRequestByteCount + 1, 2 * SearchRequestByteCount} {
+	for _, byteCount := range []int{0, DefaultSearchWireSettings().RequestByteCount - 1, DefaultSearchWireSettings().RequestByteCount + 1, 2 * DefaultSearchWireSettings().RequestByteCount} {
 		_, err := a.subprotocol.Call(t.Context(), Id(b.clientId), protocol.MessageType_SEARCH, make([]byte, byteCount), nil)
 		if code, _ := SubprotocolErrorCode(err); code != protocol.ErrorCode_ERR_INVALID_ARGUMENT {
 			t.Errorf("%d B: %v", byteCount, err)
@@ -147,7 +147,7 @@ func TestSearchRequestOfAnotherSizeIsAnsweredInvalidAtItsSteps(t *testing.T) {
 	a, b, runs := newTestSearchPair(t, func(request *SubprotocolRequest) ([]byte, error) {
 		return testSearchReply(t, request)
 	})
-	for steps := uint32(1); steps <= SearchResultMaxStepCount; steps += 1 {
+	for steps := uint32(1); steps <= uint32(DefaultSearchWireSettings().MaxStepCount); steps += 1 {
 		short := testSearchRequestBody(t, 9, 1, steps)
 		request := &protocol.SearchRequest{}
 		proto.Unmarshal(short, request)
@@ -167,7 +167,7 @@ func TestSearchRequestOfAnotherSizeIsAnsweredInvalidAtItsSteps(t *testing.T) {
 		if err := proto.Unmarshal(answer, reply); err != nil {
 			t.Fatal(err)
 		}
-		if len(answer) != int(steps)*SearchResultStepByteCount || reply.Status != uint32(protocol.SearchStatus_SEARCH_INVALID) ||
+		if len(answer) != int(steps)*DefaultSearchWireSettings().StepByteCount || reply.Status != uint32(protocol.SearchStatus_SEARCH_INVALID) ||
 			reply.SearchId != 9 || reply.Page != 1 || !bytes.Equal(reply.Pad, make([]byte, len(reply.Pad))) {
 			t.Errorf("steps %d: %d B, status %d", steps, len(answer), reply.Status)
 		}
@@ -182,7 +182,7 @@ func TestSearchRequestOfAnotherSizeIsAnsweredInvalidAtItsSteps(t *testing.T) {
 // An answer whose size no reply may take is never sent: the request answers UNAVAILABLE.
 func TestSearchAnswerOfAnotherSizeIsNeverSent(t *testing.T) {
 	a, b, _ := newTestSearchPair(t, func(request *SubprotocolRequest) ([]byte, error) {
-		return make([]byte, SearchResultStepByteCount-1), nil
+		return make([]byte, DefaultSearchWireSettings().StepByteCount-1), nil
 	})
 	_, err := a.subprotocol.Call(t.Context(), Id(b.clientId), protocol.MessageType_SEARCH, testSearchRequestBody(t, 1, 0, 1), nil)
 	if code, _ := SubprotocolErrorCode(err); code != protocol.ErrorCode_ERR_UNAVAILABLE {
@@ -198,21 +198,21 @@ func TestSearchAnswerOfAnotherSizeIsNeverSent(t *testing.T) {
 // A SEARCH_RESULT that arrives off a reply's sizes fails the call, never retried; one of each step
 // passes.
 func TestSearchResultOfAnotherSizeFailsTheCall(t *testing.T) {
-	for _, byteCount := range []int{0, 1000, SearchResultStepByteCount - 1, SearchResultStepByteCount + 1, (SearchResultMaxStepCount + 1) * SearchResultStepByteCount} {
+	for _, byteCount := range []int{0, 1000, DefaultSearchWireSettings().StepByteCount - 1, DefaultSearchWireSettings().StepByteCount + 1, (DefaultSearchWireSettings().MaxStepCount + 1) * DefaultSearchWireSettings().StepByteCount} {
 		response := &rpcResponse{envelope: &protocol.Envelope{Type: uint32(protocol.MessageType_SEARCH_RESULT), Flags: EnvelopeFlagResponse, Body: make([]byte, byteCount)}}
-		if _, err := searchResponseBody(response); !errors.Is(err, ErrSubprotocolResponse) {
+		if _, err := searchResponseBody(response, DefaultSearchWireSettings()); !errors.Is(err, ErrSubprotocolResponse) {
 			t.Errorf("a SEARCH_RESULT of %d B: %v", byteCount, err)
 		}
 	}
-	for steps := 1; steps <= SearchResultMaxStepCount; steps += 1 {
-		response := &rpcResponse{envelope: &protocol.Envelope{Type: uint32(protocol.MessageType_SEARCH_RESULT), Flags: EnvelopeFlagResponse, Body: make([]byte, steps*SearchResultStepByteCount)}}
-		if _, err := searchResponseBody(response); err != nil {
+	for steps := 1; steps <= DefaultSearchWireSettings().MaxStepCount; steps += 1 {
+		response := &rpcResponse{envelope: &protocol.Envelope{Type: uint32(protocol.MessageType_SEARCH_RESULT), Flags: EnvelopeFlagResponse, Body: make([]byte, steps*DefaultSearchWireSettings().StepByteCount)}}
+		if _, err := searchResponseBody(response, DefaultSearchWireSettings()); err != nil {
 			t.Errorf("%d steps: %v", steps, err)
 		}
 	}
 	// a reply of another type answers no search
-	response := &rpcResponse{envelope: &protocol.Envelope{Type: uint32(testCallType + 1), Flags: EnvelopeFlagResponse, Body: make([]byte, SearchResultStepByteCount)}}
-	if _, err := searchResponseBody(response); !errors.Is(err, ErrSubprotocolResponse) {
+	response := &rpcResponse{envelope: &protocol.Envelope{Type: uint32(testCallType + 1), Flags: EnvelopeFlagResponse, Body: make([]byte, DefaultSearchWireSettings().StepByteCount)}}
+	if _, err := searchResponseBody(response, DefaultSearchWireSettings()); !errors.Is(err, ErrSubprotocolResponse) {
 		t.Errorf("another type: %v", err)
 	}
 }

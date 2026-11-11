@@ -61,7 +61,7 @@ func testHoldsTerm(t testing.TB, keys indexKeySet, term string) bool {
 // cut by the 8,000th byte is not, and a UTF-16 byte-order mark selects the decoding.
 func TestSniffFindsBinaries(t *testing.T) {
 	euro := "€"
-	cutAtTheWindow := strings.Repeat("a", indexSniffByteCount-1) + euro
+	cutAtTheWindow := strings.Repeat("a", DefaultIndexFormatSettings().SniffByteCount-1) + euro
 	utf16Units := utf16.Encode([]rune("café \U0001F600"))
 	bigEndian := append([]byte{}, indexUtf16BigEndianMark...)
 	littleEndian := append([]byte{}, indexUtf16LittleEndianMark...)
@@ -78,7 +78,7 @@ func TestSniffFindsBinaries(t *testing.T) {
 		{name: "ascii", content: []byte("plain text\n"), text: "plain text\n", isText: true},
 		{name: "empty", content: []byte{}, text: "", isText: true},
 		{name: "a nul", content: []byte("ab\x00cd"), isText: false},
-		{name: "a nul past 8,000 bytes", content: append([]byte(strings.Repeat("a", indexSniffByteCount)), 0), text: strings.Repeat("a", indexSniffByteCount) + "\x00", isText: true},
+		{name: "a nul past 8,000 bytes", content: append([]byte(strings.Repeat("a", DefaultIndexFormatSettings().SniffByteCount)), 0), text: strings.Repeat("a", DefaultIndexFormatSettings().SniffByteCount) + "\x00", isText: true},
 		{name: "latin-1", content: []byte("caf\xE9 au lait"), isText: false},
 		{name: "a sequence the window cuts", content: []byte(cutAtTheWindow), text: cutAtTheWindow, isText: true},
 		{name: "a lone continuation byte", content: []byte("a\x80b"), isText: false},
@@ -88,11 +88,11 @@ func TestSniffFindsBinaries(t *testing.T) {
 		{name: "utf-16 with an odd byte", content: append(bytes.Clone(littleEndian), 'x'), text: "café \U0001F600�", isText: true},
 	}
 	for _, c := range cases {
-		text, isText := indexSniff(c.content)
+		text, isText := indexSniff(c.content, DefaultIndexFormatSettings())
 		if isText != c.isText || (isText && string(text) != c.text) {
 			t.Errorf("%s: text %t %q", c.name, isText, text)
 		}
-		documents, ok := indexExtractFile([]byte("f"), c.content)
+		documents, ok := indexExtractFile([]byte("f"), c.content, DefaultIndexFormatSettings())
 		if ok != c.isText || (ok && len(documents) != 1) {
 			t.Errorf("%s: extracted %t, %d documents", c.name, ok, len(documents))
 		}
@@ -117,7 +117,7 @@ func TestFileTitles(t *testing.T) {
 		{text: "bad \xFF byte", title: "bad � byte"},
 	}
 	for _, c := range cases {
-		if title := indexTitle([]byte(c.text)); title != c.title {
+		if title := indexTitle([]byte(c.text), DefaultIndexFormatSettings()); title != c.title {
 			t.Errorf("%q titled %q, want %q", c.text, title, c.title)
 		}
 	}
@@ -129,22 +129,22 @@ func TestFileTitles(t *testing.T) {
 func TestTextPastOneMiBIsChunked(t *testing.T) {
 	line := []byte("lorem ipsum dolor sit amet consectetur adipiscing elit\n")
 	content := []byte("# Long notes\n")
-	for len(content) < 2*indexChunkByteCount+1000 {
+	for len(content) < 2*DefaultIndexFormatSettings().ChunkByteCount+1000 {
 		content = append(content, line...)
 	}
 	across := []byte("zebrafinch quokkawombat")
-	boundary := indexChunkByteCount - 10
+	boundary := DefaultIndexFormatSettings().ChunkByteCount - 10
 	copy(content[boundary:], across)
-	reaching := []byte("platypus" + strings.Repeat("y", indexOverlapByteCount) + "narwhal")
-	second := 2*indexChunkByteCount - 4
+	reaching := []byte("platypus" + strings.Repeat("y", DefaultIndexFormatSettings().OverlapByteCount) + "narwhal")
+	second := 2*DefaultIndexFormatSettings().ChunkByteCount - 4
 	copy(content[second:], reaching)
-	documents, ok := indexExtractFile([]byte("notes/long.md"), content)
+	documents, ok := indexExtractFile([]byte("notes/long.md"), content, DefaultIndexFormatSettings())
 	if !ok || len(documents) != 3 {
 		t.Fatalf("%d documents", len(documents))
 	}
 	for chunk, document := range documents {
-		start := chunk * indexChunkByteCount
-		end := min(len(content), start+indexChunkByteCount+indexOverlapByteCount)
+		start := chunk * DefaultIndexFormatSettings().ChunkByteCount
+		end := min(len(content), start+DefaultIndexFormatSettings().ChunkByteCount+DefaultIndexFormatSettings().OverlapByteCount)
 		if document.Chunk != uint32(chunk) || !bytes.Equal(document.Fields[indexFieldBody], content[start:end]) {
 			t.Errorf("chunk %d holds %d B", chunk, len(document.Fields[indexFieldBody]))
 		}
@@ -184,7 +184,7 @@ func TestChunkPastItsKeySetCapIsSkipped(t *testing.T) {
 	if !indexKeySetSkipped(sparse) {
 		t.Errorf("a sparse set of %d B was kept", sparse.encodedByteCount())
 	}
-	prose := bytes.Repeat([]byte("The quick brown fox jumps over the lazy dog, again and again. "), indexChunkByteCount/62)
+	prose := bytes.Repeat([]byte("The quick brown fox jumps over the lazy dog, again and again. "), DefaultIndexFormatSettings().ChunkByteCount/62)
 	document := &IndexDocument{Kind: IndexDocFile, Name: []byte("prose.txt"), ByteCount: uint64(len(prose))}
 	document.Fields[indexFieldBody] = prose
 	prepared, err := document.prepare(testIndexNormalizer(t), false, Id{})
@@ -422,10 +422,10 @@ func testExtractVectorOf(t testing.TB, c testExtractCase) testExtractVector {
 	t.Helper()
 	var documents []*IndexDocument
 	if c.mail {
-		documents = indexExtractMail([]byte(c.path), c.content)
+		documents = indexExtractMail([]byte(c.path), c.content, DefaultIndexFormatSettings())
 	} else {
 		var ok bool
-		if documents, ok = indexExtractFile([]byte(c.path), c.content); !ok {
+		if documents, ok = indexExtractFile([]byte(c.path), c.content, DefaultIndexFormatSettings()); !ok {
 			t.Fatalf("%s sniffed as binary", c.name)
 		}
 	}
@@ -487,7 +487,7 @@ func TestExtractVectors(t *testing.T) {
 // HTML stripped, and nothing of a transport header, an attachment's bytes, base64 or a message/rfc822 part.
 func TestMailExtractsItsTextAndNamesOnly(t *testing.T) {
 	c := testExtractCases()[0]
-	documents := indexExtractMail([]byte(c.path), c.content)
+	documents := indexExtractMail([]byte(c.path), c.content, DefaultIndexFormatSettings())
 	if len(documents) != 1 {
 		t.Fatalf("%d documents", len(documents))
 	}
@@ -525,10 +525,10 @@ func TestMimeNestingStopsAtSixteen(t *testing.T) {
 		}
 		return testMessage("From: a@example.com\n"+strings.SplitN(body, "\n\n", 2)[0], strings.SplitN(body, "\n\n", 2)[1])
 	}
-	if text := string(indexExtractMail([]byte("m/1"), nested(16))[0].Fields[indexFieldBody]); text != "deepest words" {
+	if text := string(indexExtractMail([]byte("m/1"), nested(16), DefaultIndexFormatSettings())[0].Fields[indexFieldBody]); text != "deepest words" {
 		t.Errorf("16 levels read %q", text)
 	}
-	if text := string(indexExtractMail([]byte("m/1"), nested(17))[0].Fields[indexFieldBody]); text != "" {
+	if text := string(indexExtractMail([]byte("m/1"), nested(17), DefaultIndexFormatSettings())[0].Fields[indexFieldBody]); text != "" {
 		t.Errorf("17 levels read %q", text)
 	}
 }
@@ -580,7 +580,7 @@ func TestNeverRowExcludes(t *testing.T) {
 // companion row's ref_id, and a derived document's times and private marker.
 func TestPreparedDocumentRows(t *testing.T) {
 	refId := evsTestId("main ref")
-	file, ok := indexExtractFile([]byte("docs/README.md"), []byte("# Search\nTrigrams.\n"))
+	file, ok := indexExtractFile([]byte("docs/README.md"), []byte("# Search\nTrigrams.\n"), DefaultIndexFormatSettings())
 	if !ok {
 		t.Fatal("binary")
 	}
