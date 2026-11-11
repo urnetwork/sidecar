@@ -59,6 +59,7 @@ type GkmGroupApi interface {
 	ReaderKey(ctx context.Context, sidecarId Id) (*bridge.Signed, error)
 	ReaderKeys(ctx context.Context, sidecarIds []Id) ([]*bridge.Signed, error)
 	DelegationKey(ctx context.Context, configRepoId Id, delegationId []byte) ([]byte, error)
+	DelegationKeys(ctx context.Context, configRepoId Id, delegationIds [][]byte) ([][]byte, error)
 	ClaimKeyPackage(ctx context.Context, repoId Id, groupId Id, target Id) (*protocol.GkmKeyPackageClaimReply, error)
 	GroupInfo(ctx context.Context, repoId Id, groupId Id, want *uint64) (*protocol.GkmGroupInfoObject, error)
 	UploadGroupInfo(ctx context.Context, repoId Id, groupId Id, object *protocol.GkmGroupInfoObject) error

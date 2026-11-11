@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -196,6 +197,25 @@ func (self *fsKeysDelegationState) HoldersDropped(principal *sidecar.Principal, 
 	return fsKeysDelegationAnswer(dropped)
 }
 
+// The engine's handler as each device's transport, counting the requests the world's devices make by method and
+// route, so a test can tell how many reads a rotation made.
+type fsKeysDelegationTransport struct {
+	world *fsKeysDelegationWorld
+}
+
+func (self *fsKeysDelegationTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	route := request.Method + " " + request.URL.Path
+	if strings.HasPrefix(request.URL.Path, "/gkm/delegation-keys/") {
+		route = request.Method + " /gkm/delegation-keys/{delegation_id}"
+	}
+	func() {
+		self.world.stateLock.Lock()
+		defer self.world.stateLock.Unlock()
+		self.world.routeCounts[route] += 1
+	}()
+	return (&gkmHandlerTransport{handler: self.world.engine.Handler()}).RoundTrip(request)
+}
+
 // One member device of the world: its identity key, its ReaderKey, its api and its group client.
 type fsKeysDelegationDevice struct {
 	signer           *FakeGkmSigner
@@ -240,6 +260,10 @@ type fsKeysDelegationWorld struct {
 	// what the next position's rows hold
 	delegations    []*bridge.DelegationRow
 	configShrunkAt uint64
+
+	stateLock sync.Mutex
+	// the requests the devices made, by method and route (fsKeysDelegationTransport)
+	routeCounts map[string]int
 }
 
 // The world at its first position: the three member devices of one member, reading both repos and the creator and
@@ -249,15 +273,16 @@ func newFsKeysDelegationWorld(t *testing.T) *fsKeysDelegationWorld {
 	clock := NewFakeClock(DefaultClockStart())
 	host := NewFakeHost(ctx, clock, nil, nil, nil)
 	world := &fsKeysDelegationWorld{
-		t:         t,
-		ctx:       ctx,
-		clock:     clock,
-		host:      host,
-		log:       NewFakeGkmAuthLog(),
-		networkId: connect.NewId(),
-		memberId:  sidecar.NewId(),
-		config:    &fsKeysDelegationRepo{repoId: sidecar.NewId(), groupId: sidecar.NewId(), kind: protocol.RepoKind_REPO_KIND_CONFIG},
-		general:   &fsKeysDelegationRepo{repoId: sidecar.NewId(), groupId: sidecar.NewId(), kind: protocol.RepoKind_REPO_KIND_GENERAL},
+		t:           t,
+		ctx:         ctx,
+		clock:       clock,
+		host:        host,
+		log:         NewFakeGkmAuthLog(),
+		networkId:   connect.NewId(),
+		memberId:    sidecar.NewId(),
+		config:      &fsKeysDelegationRepo{repoId: sidecar.NewId(), groupId: sidecar.NewId(), kind: protocol.RepoKind_REPO_KIND_CONFIG},
+		general:     &fsKeysDelegationRepo{repoId: sidecar.NewId(), groupId: sidecar.NewId(), kind: protocol.RepoKind_REPO_KIND_GENERAL},
+		routeCounts: map[string]int{},
 	}
 	host.Gates.OpenService(sidecar.ServiceGateGkm, world.networkId)
 	state := &fsKeysDelegationState{log: world.log, memberId: world.memberId, configRepoId: world.config.repoId}
@@ -302,7 +327,7 @@ func (self *fsKeysDelegationWorld) newDevice(role string) *fsKeysDelegationDevic
 	connectSidecarId := connect.Id(signer.SidecarId)
 	device.api, err = sidecar.NewGkmApi(&sidecar.GkmApiArgs{
 		GkmUrl:    "https://gkm.example",
-		Transport: &gkmHandlerTransport{handler: self.engine.Handler()},
+		Transport: &fsKeysDelegationTransport{world: self},
 		ServiceToken: func(ctx context.Context, resource string, scopes []string) (string, error) {
 			return self.host.Authenticator.Issue(&sidecar.Principal{
 				NetworkId: self.networkId,
@@ -374,6 +399,15 @@ func (self *fsKeysDelegationWorld) appendState() *FakeGkmAuthView {
 		}
 	}
 	return view
+}
+
+// The requests of route the devices made since the last call, which starts the count again.
+func (self *fsKeysDelegationWorld) takeRouteCount(route string) int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	count := self.routeCounts[route]
+	delete(self.routeCounts, route)
+	return count
 }
 
 // The next position's number.
@@ -468,6 +502,13 @@ func (self *fsKeysDelegationWorld) placeGroup(repo *fsKeysDelegationRepo, view *
 // TEAM-M8-01 writes it, its reader key a fresh X-Wing key whose SHA-256 alone the row holds.
 func (self *fsKeysDelegationWorld) forward(label string) *fsKeysDelegationForward {
 	self.t.Helper()
+	return self.forwardOf(self.app, label)
+}
+
+// A new forwarding Delegation of device's VPN component at the next position, superseding the one of device live
+// before it, as forward's is the app's.
+func (self *fsKeysDelegationWorld) forwardOf(device *fsKeysDelegationDevice, label string) *fsKeysDelegationForward {
+	self.t.Helper()
 	privateKey, err := hpke.MLKEM768X25519().GenerateKey()
 	if err != nil {
 		self.t.Fatal(err)
@@ -476,18 +517,18 @@ func (self *fsKeysDelegationWorld) forward(label string) *fsKeysDelegationForwar
 	keySha256 := sha256.Sum256(publicKey)
 	delegationId := sha256.Sum256([]byte("forwarding Delegation " + label))
 	at := self.nextPosition()
+	forwardSidecarId := device.signer.SidecarId
 	for _, row := range self.delegations {
-		if row.GetEndedAt() == 0 && row.GetSupersededAt() == 0 {
+		if bytes.Equal(row.GetForwardSidecarId(), forwardSidecarId.Bytes()) && row.GetEndedAt() == 0 && row.GetSupersededAt() == 0 {
 			row.SupersededAt = at
 		}
 	}
-	appSidecarId := self.app.signer.SidecarId
 	self.delegations = append(self.delegations, &bridge.DelegationRow{
 		DelegationId:     delegationId[:],
-		Signer:           appSidecarId.Bytes(),
+		Signer:           forwardSidecarId.Bytes(),
 		At:               at,
 		Pubkey:           bytes.Repeat([]byte{0x5a}, 32),
-		ForwardSidecarId: appSidecarId.Bytes(),
+		ForwardSidecarId: forwardSidecarId.Bytes(),
 		ReaderKeySha256:  keySha256[:],
 	})
 	return &fsKeysDelegationForward{delegationId: delegationId[:], privateKey: privateKey, publicKey: publicKey, keySha256: keySha256[:]}
@@ -826,5 +867,118 @@ func TestFsKeysDelegationARotationWithNoObjectSkipsAndDeliversLate(t *testing.T)
 	// the app's newest generation is no longer gkm's newest: its late wrap is refused as stale, and nothing changes
 	if err := world.app.client.DeliverDelegationWraps(world.ctx, forward.delegationId); err != nil {
 		t.Errorf("a late wrap of a generation gkm no longer holds newest: %v", err)
+	}
+}
+
+// KEYS-M8-02 (QD-637): a config rotation reads every live forwarding Delegation's key by one POST
+// /gkm/delegation-keys, and no GET; the one whose object stands is wrapped to, and a key gkm holds none of and a key
+// off its row's digest, as a lying store serves it, each cost their own holder the wrap alone, counted.
+func TestFsKeysDelegationARotationReadsForwardingKeysInOneBatch(t *testing.T) {
+	world := newFsKeysDelegationWorld(t)
+	appForward := world.forward("app")
+	creatorForward := world.forwardOf(world.creator, "creator")
+	rotatorForward := world.forwardOf(world.rotator, "rotator")
+	world.appendState()
+	world.upload(appForward)
+	stray, err := hpke.MLKEM768X25519().GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	objectKey, err := gkmservice.GkmDelegationKeyKey(rotatorForward.delegationId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.put(objectKey, stray.PublicKey().Bytes())
+	world.takeRouteCount("POST /gkm/delegation-keys")
+	world.takeRouteCount("GET /gkm/delegation-keys/{delegation_id}")
+	skipped := world.rotator.client.DelegationWrapsSkipped()
+
+	key2 := world.rotate(world.config)
+	if count := world.takeRouteCount("POST /gkm/delegation-keys"); count != 1 {
+		t.Errorf("the rotation read forwarding keys in %d batches", count)
+	}
+	if count := world.takeRouteCount("GET /gkm/delegation-keys/{delegation_id}"); count != 0 {
+		t.Errorf("the rotation read %d forwarding keys one at a time", count)
+	}
+	generation2 := world.newestGeneration(world.config)
+	if opened := world.openForwarding(world.config, generation2, appForward); opened == nil || !bytes.Equal(opened.Commitment(), key2.Commitment()) {
+		t.Errorf("the forwarding key whose object stands does not open generation 2")
+	}
+	wraps := world.delegationWraps(world.config, generation2.Rotate.GetGeneration())
+	for _, forward := range []*fsKeysDelegationForward{creatorForward, rotatorForward} {
+		if _, found := wraps[hex.EncodeToString(forward.delegationId)]; found {
+			t.Errorf("a wrap to a forwarding Delegation whose key gkm holds none of, or holds off its digest")
+		}
+	}
+	if len(wraps) != 1 {
+		t.Errorf("generation 2 is wrapped to %d forwarding Delegations", len(wraps))
+	}
+	if world.rotator.client.DelegationWrapsSkipped() != skipped+2 {
+		t.Errorf("%d skipped wraps counted, want 2", world.rotator.client.DelegationWrapsSkipped()-skipped)
+	}
+}
+
+// KEYS-M8-02 (QD-637): GkmApi.DelegationKeys reads 300 forwarding Delegations' keys in two requests against gkm's
+// route, answered in the order asked: each stored key byte for byte, nil for one with no object and one gkm's state
+// holds no row of.
+func TestFsKeysDelegationKeysReadThreeHundredInTwoRequestsInOrder(t *testing.T) {
+	world := newFsKeysDelegationWorld(t)
+	delegationIds := [][]byte{}
+	want := [][]byte{}
+	for i := range 300 {
+		delegationId := sha256.Sum256([]byte("batched forwarding Delegation " + strconv.Itoa(i)))
+		delegationIds = append(delegationIds, delegationId[:])
+		if i%7 == 6 {
+			// no row at gkm's state
+			want = append(want, nil)
+			continue
+		}
+		readerKey := make([]byte, 1216)
+		readerKey[0] = byte(i)
+		readerKey[1] = byte(i >> 8)
+		keySha256 := sha256.Sum256(readerKey)
+		world.delegations = append(world.delegations, &bridge.DelegationRow{
+			DelegationId:     delegationId[:],
+			Signer:           world.app.signer.SidecarId.Bytes(),
+			At:               world.nextPosition(),
+			Pubkey:           bytes.Repeat([]byte{0x5a}, 32),
+			ForwardSidecarId: world.app.signer.SidecarId.Bytes(),
+			ReaderKeySha256:  keySha256[:],
+			// superseded at once, so the rows hold no 300 live holders of one sidecar
+			SupersededAt: world.nextPosition(),
+		})
+		if i%3 == 2 {
+			// a row and no object
+			want = append(want, nil)
+			continue
+		}
+		objectKey, err := gkmservice.GkmDelegationKeyKey(delegationId[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		world.put(objectKey, readerKey)
+		want = append(want, readerKey)
+	}
+	world.appendState()
+	world.takeRouteCount("POST /gkm/delegation-keys")
+
+	readerKeys, err := world.rotator.api.DelegationKeys(world.ctx, world.config.repoId, delegationIds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := world.takeRouteCount("POST /gkm/delegation-keys"); count != 2 {
+		t.Errorf("300 ids read in %d requests", count)
+	}
+	if len(readerKeys) != len(want) {
+		t.Fatalf("%d answers for %d ids", len(readerKeys), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(readerKeys[i], want[i]) || (want[i] == nil) != (readerKeys[i] == nil) {
+			t.Errorf("answer %d: %d bytes, want %d", i, len(readerKeys[i]), len(want[i]))
+		}
+	}
+	// an api that holds no scope of the config asks nothing
+	if _, err := world.rotator.api.DelegationKeys(world.ctx, sidecar.NewId(), delegationIds[:1]); err == nil {
+		t.Errorf("a batch under no scope of the repo named")
 	}
 }

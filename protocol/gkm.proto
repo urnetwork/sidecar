@@ -239,6 +239,16 @@ message GkmReaderKeysReply {
   repeated Signed reader_keys = 1;  // ReaderKeys in the request's order, an empty Signed for a sidecar that has none
 }
 
+// POST /gkm/delegation-keys (QD-637), which spares a config rotator a GET per forwarding Delegation, as the reader-keys
+// route spares it one per recipient.
+message GkmDelegationKeysRequest {
+  repeated bytes delegation_ids = 1;  // at most 256, each 32 bytes
+}
+message GkmDelegationKeysReply {
+  repeated bytes reader_keys = 1;  // each stored 1,216 B X-Wing key byte for byte, in the request's order, empty for none
+                                   //   stored; a sealer holds each to its Delegation's row before sealing to it
+}
+
 // POST /gkm/groups/<id>/wraps/<g>/<c8>, so a rotation of thousands stays inside W2's limit. gkm runs each delivery through
 // the wrap checks and answers in order, so a batch of one behaves as one delivery would. If-None-Match makes a retry
 // safe.

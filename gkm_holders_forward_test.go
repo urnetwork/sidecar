@@ -439,6 +439,117 @@ func TestGkmForwardingReaderKeyTakesTheStatementThenTheObjectHeldToTheDigest(t *
 	}
 }
 
+// KEYS-M8-02 (QD-637): a rotator reads every forwarding holder's key the log does not give in one batched call, before
+// it seals to any, and still holds each key to its own row's digest: a holder gkm has no key for, and one whose key is
+// off its digest, each lose their wrap and cost the other holder nothing; a holder whose entry the log keeps is not
+// asked; the batch's own failure refuses the read.
+func TestGkmForwardingReaderKeysFetchedReadsOnceAndHoldsEachKeyToItsRow(t *testing.T) {
+	net := newGkmForwardNet(t)
+	ctx := context.Background()
+	laptopId, laptopKey := net.forwardWithKey(net.laptop, "laptop")
+	phoneId, phoneKey := net.forwardWithKey(net.phone, "phone")
+	state := net.log.State()
+	holders := net.holders(net.configId)
+	laptopHolder, found := gkmForwardHolder(holders, net.laptop.sidecarId)
+	if !found {
+		t.Fatal("no forwarding holder of the laptop")
+	}
+	phoneHolder, found := gkmForwardHolder(holders, net.phone.sidecarId)
+	if !found {
+		t.Fatal("no forwarding holder of the phone")
+	}
+	strayKey, err := hpke.MLKEM768X25519().GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// gkm's objects, as a fetch answers them, and what each call asked
+	objects := map[string][]byte{}
+	calls := [][][]byte{}
+	var fetchErr error
+	fetch := func(ctx context.Context, delegationIds [][]byte) ([][]byte, error) {
+		calls = append(calls, delegationIds)
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		keys := [][]byte{}
+		for _, delegationId := range delegationIds {
+			keys = append(keys, objects[string(delegationId)])
+		}
+		return keys, nil
+	}
+	hidden := gkmForwardViewWithoutEntries{GkmAuthView: state}
+
+	// the laptop's object stands and the phone's does not: one call names both
+	objects[string(laptopId)] = laptopKey.PublicKey().Bytes()
+	read, err := GkmForwardingReaderKeysFetched(ctx, hidden, holders, fetch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || len(calls[0]) != 2 {
+		t.Fatalf("the reads: %d calls", len(calls))
+	}
+	if key, err := GkmForwardingReaderKey(ctx, hidden, laptopHolder, read); err != nil || !bytes.Equal(key, laptopKey.PublicKey().Bytes()) {
+		t.Errorf("the laptop's key from the batch: %v", err)
+	}
+	if _, err := GkmForwardingReaderKey(ctx, hidden, phoneHolder, read); !errors.Is(err, ErrGkmKeyMissing) {
+		t.Errorf("the phone's key, which gkm has none of: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Errorf("a lookup after the batch read again: %d calls", len(calls))
+	}
+
+	// the phone's object holds another key than its row names: that holder alone loses its wrap
+	objects[string(phoneId)] = strayKey.PublicKey().Bytes()
+	read, err = GkmForwardingReaderKeysFetched(ctx, hidden, holders, fetch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GkmForwardingReaderKey(ctx, hidden, phoneHolder, read); !errors.Is(err, ErrGkmKeyMissing) || !errors.Is(err, ErrGkmReplyInvalid) {
+		t.Errorf("the phone's key off its digest: %v", err)
+	}
+	if key, err := GkmForwardingReaderKey(ctx, hidden, laptopHolder, read); err != nil || !bytes.Equal(key, laptopKey.PublicKey().Bytes()) {
+		t.Errorf("the laptop's key beside a bad one: %v", err)
+	}
+	// the twin: the phone's own key
+	objects[string(phoneId)] = phoneKey.PublicKey().Bytes()
+	read, err = GkmForwardingReaderKeysFetched(ctx, hidden, holders, fetch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key, err := GkmForwardingReaderKey(ctx, hidden, phoneHolder, read); err != nil || !bytes.Equal(key, phoneKey.PublicKey().Bytes()) {
+		t.Errorf("the phone's own key: %v", err)
+	}
+
+	// the log keeps both entries: nothing is asked of gkm
+	calls = nil
+	read, err = GkmForwardingReaderKeysFetched(ctx, state, holders, fetch)
+	if err != nil || len(calls) != 0 {
+		t.Fatalf("with the entries kept: %v, %d calls", err, len(calls))
+	}
+	if key, err := GkmForwardingReaderKey(ctx, state, phoneHolder, read); err != nil || !bytes.Equal(key, phoneKey.PublicKey().Bytes()) {
+		t.Errorf("the phone's key from its entry: %v", err)
+	}
+
+	// a batch that fails refuses the read, and no source of objects leaves each holder missing
+	unreachable := errors.New("gkm unreachable")
+	fetchErr = unreachable
+	if _, err := GkmForwardingReaderKeysFetched(ctx, hidden, holders, fetch); !errors.Is(err, unreachable) {
+		t.Errorf("a batch that fails: %v", err)
+	}
+	read, err = GkmForwardingReaderKeysFetched(ctx, hidden, holders, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GkmForwardingReaderKey(ctx, hidden, laptopHolder, read); !errors.Is(err, ErrGkmKeyMissing) {
+		t.Errorf("no source of objects: %v", err)
+	}
+	fetchErr = nil
+	short := func(ctx context.Context, delegationIds [][]byte) ([][]byte, error) { return nil, nil }
+	if _, err := GkmForwardingReaderKeysFetched(ctx, hidden, holders, short); !errors.Is(err, ErrGkmReplyInvalid) {
+		t.Errorf("a batch that answers fewer keys than it was asked: %v", err)
+	}
+}
+
 // The key digest a DelegationWrap names: a forwarding row's reader_key_sha256, any other's its reader key's SHA-256;
 // a row with neither at its size has none.
 func TestGkmDelegationKeySha256ByRowKind(t *testing.T) {

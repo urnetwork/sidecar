@@ -8,9 +8,10 @@
 //	agents       a ReaderWrap to each agent among the holders, which no live Delegation there covers
 //	delegations  a DelegationWrap to each live Delegation among the holders, at its reader key
 //	forwarding   in the config, a DelegationWrap to each sidecar's live forwarding Delegation among the holders, at
-//	             the reader key its statement names where this device keeps the entry, else gkm's object, held to the
-//	             row's digest (GkmForwardingReaderKey); one with neither is skipped and counted, and delivered late
-//	             once its object stands: its sidecar uploads the object, then writes that wrap (§10.5's dwraps)
+//	             the reader key its statement names where this device keeps the entry, else gkm's object, read for
+//	             every such holder at once through POST /gkm/delegation-keys (QD-637) and each held to its own row's
+//	             digest (GkmForwardingReaderKey); one with neither is skipped and counted, and delivered late once its
+//	             object stands: its sidecar uploads the object, then writes that wrap (§10.5's dwraps)
 //	recovery     a RecoveryWrap to each member with a recovery identity among the holders, at its binding
 //
 // A ReaderWrap seals only to a ReaderKey gkm serves that the state's admitted identity key signed and that passes
@@ -88,6 +89,11 @@ func (self *gkmGroupManager) deliverySet(ctx context.Context, state GkmAuthView,
 	}
 	readerIds := []Id{}
 	targets := []*gkmDeliveryTarget{}
+	// every forwarding holder's key the log does not give, read from gkm in batches before the loop (QD-637)
+	forwardingKeyFetch, err := GkmForwardingReaderKeysFetched(ctx, state, holders, self.delegationKeysFetch())
+	if err != nil {
+		return nil, err
+	}
 	for _, holder := range holders {
 		switch holder.Kind {
 		case GkmHolderLeaf, GkmHolderAgent:
@@ -121,7 +127,7 @@ func (self *gkmGroupManager) deliverySet(ctx context.Context, state GkmAuthView,
 			}
 			targets = append(targets, &gkmDeliveryTarget{kind: gkmDeliveryTargetDelegation, recipient: bytes.Clone(holder.Id), publicKey: bytes.Clone(publicKey)})
 		case GkmHolderForwarding:
-			publicKey, err := GkmForwardingReaderKey(ctx, state, holder, self.delegationKeyFetch())
+			publicKey, err := GkmForwardingReaderKey(ctx, state, holder, forwardingKeyFetch)
 			if errors.Is(err, ErrGkmKeyMissing) {
 				// skipped and counted: a late delivery gives it this generation once its object stands
 				client.delegationWrapsSkipped.Add(1)
@@ -177,11 +183,11 @@ func (self *gkmGroupManager) deliverySet(ctx context.Context, state GkmAuthView,
 	return targets, nil
 }
 
-// gkm's object of a forwarding Delegation's reader key, read under this repo's scopes, which in the config's group
-// are the config's, whose readers alone may read it.
-func (self *gkmGroupManager) delegationKeyFetch() GkmDelegationKeyFetch {
-	return func(ctx context.Context, delegationId []byte) ([]byte, error) {
-		return self.client.args.Api.DelegationKey(ctx, self.repoId, delegationId)
+// gkm's objects of forwarding Delegations' reader keys, read in batches under this repo's scopes, which in the
+// config's group are the config's, whose readers alone may read them (QD-637).
+func (self *gkmGroupManager) delegationKeysFetch() GkmDelegationKeysFetch {
+	return func(ctx context.Context, delegationIds [][]byte) ([][]byte, error) {
+		return self.client.args.Api.DelegationKeys(ctx, self.repoId, delegationIds)
 	}
 }
 
@@ -472,7 +478,11 @@ func (self *gkmGroupManager) deliverLateInFlow(ctx context.Context, recipient st
 			return nil
 		}
 		if holder.Kind == GkmHolderForwarding {
-			key, err := GkmForwardingReaderKey(ctx, state, holder, self.delegationKeyFetch())
+			fetch, err := GkmForwardingReaderKeysFetched(ctx, state, GkmHolders{holder}, self.delegationKeysFetch())
+			if err != nil {
+				return err
+			}
+			key, err := GkmForwardingReaderKey(ctx, state, holder, fetch)
 			if errors.Is(err, ErrGkmKeyMissing) {
 				// no key to seal to yet: its sidecar uploads the object, then writes this delivery itself
 				return nil

@@ -123,6 +123,9 @@ GkmLadderRequest.generations: {number: 1, type: repeated Signed, row: gkm-7, see
 GkmReaderKeysRequest.sidecar_ids: {number: 1, type: repeated bytes, row: gkm-4, sees: "ReaderKeys"}
 GkmReaderKeysReply.reader_keys: {number: 1, type: repeated Signed, row: gkm-4, sees: "ReaderKeys"}
 
+GkmDelegationKeysRequest.delegation_ids: {number: 1, type: repeated bytes, row: gkm-1, sees: "by delegation_id"}
+GkmDelegationKeysReply.reader_keys: {number: 1, type: repeated bytes, row: gkm-1, sees: "each forwarding Delegation's reader public key"}
+
 GkmWrapBatch.deliveries: {number: 1, type: repeated bytes, row: gkm-7, sees: "staged and late wraps"}
 GkmWrapResult.status: {number: 1, type: uint32, row: gkm-7, sees: "staged and late wraps"}
 GkmWrapResult.winner: {number: 2, type: bytes, row: gkm-7, sees: "staged and late wraps"}

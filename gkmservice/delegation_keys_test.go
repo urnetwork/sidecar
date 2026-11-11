@@ -214,6 +214,113 @@ func TestGkmDelegationKeyReadIsTheConfigsReaders(t *testing.T) {
 	}
 }
 
+// A POST /gkm/delegation-keys body naming delegationIds.
+func (self *gkmFixture) delegationKeysBody(delegationIds ...[]byte) []byte {
+	return self.marshal(&protocol.GkmDelegationKeysRequest{DelegationIds: delegationIds})
+}
+
+// POST /gkm/delegation-keys (KEYS-M8-02, QD-637): each stored key in the request's order to a token reading the
+// network's config repo, an empty entry for a Delegation with no object, one the state holds no row of and one that
+// does not forward, so none of them fails the batch; 256 ids answered and 257 refused, as an empty list and an id of
+// another size are; 403 to a token that reads only another repo, or that the state no longer lets read the config;
+// 404 for a batch naming no forwarding Delegation the state holds; 503 while the state is cold.
+func TestGkmDelegationKeysReadAnswersInOrderToTheConfigsReaders(t *testing.T) {
+	fixture := newGkmFixture(t)
+	memberId := testId("member-a")
+	configRepoId := testId("repo-config")
+	otherRepoId := testId("repo-other")
+	fixture.placeRepo(configRepoId, "meta-2", protocol.EvsRepoState_EVS_REPO_ACTIVE)
+	fixture.placeRepo(otherRepoId, "meta-2", protocol.EvsRepoState_EVS_REPO_ACTIVE)
+	forwarding := fixture.newSidecar("sc-forwarding", memberDeviceFacts(memberId))
+	reader := fixture.newSidecar("sc-reader", memberDeviceFacts(memberId))
+	outsider := fixture.newSidecar("sc-outsider", memberDeviceFacts(memberId))
+	fixture.auth.grant(forwarding.sidecarId, configRepoId, sidecar.AclEvsRead)
+	fixture.auth.grant(reader.sidecarId, configRepoId, sidecar.AclEvsRead)
+	fixture.auth.grant(outsider.sidecarId, otherRepoId, sidecar.AclEvsRead)
+	forwardingId := forwarding.sidecarId
+	forwardingToken := fixture.token(forwarding.sidecarId, repoScope(configRepoId, "r"))
+	readerToken := fixture.token(reader.sidecarId, repoScope(configRepoId, "r"))
+
+	// two forwarding Delegations whose keys are stored, one whose key is not, one the state holds no row of and one
+	// that keeps its key in its row
+	stored := []*gkmTestForwardingKey{newGkmTestForwardingKey(t, "stored 1"), newGkmTestForwardingKey(t, "stored 2")}
+	unstored := newGkmTestForwardingKey(t, "unstored")
+	unknown := newGkmTestForwardingKey(t, "unknown")
+	agentKey := newGkmTestForwardingKey(t, "an auth key's")
+	for _, key := range append(append([]*gkmTestForwardingKey{}, stored...), unstored) {
+		fixture.auth.setDelegationKey(key.delegationId, &GkmDelegationKeyFacts{ReaderKeySha256: key.keySha256, ForwardSidecarId: &forwardingId, ConfigRepoId: configRepoId})
+	}
+	fixture.auth.setDelegationKey(agentKey.delegationId, &GkmDelegationKeyFacts{ReaderKeySha256: agentKey.keySha256, ConfigRepoId: configRepoId})
+	for _, key := range stored {
+		if recorder := fixture.serve(http.MethodPut, gkmTestDelegationKeyPath(key.delegationId), forwardingToken, key.publicKey); recorder.Code != http.StatusOK {
+			t.Fatalf("the upload: %d", recorder.Code)
+		}
+	}
+
+	order := [][]byte{stored[1].delegationId, unstored.delegationId, unknown.delegationId, stored[0].delegationId, agentKey.delegationId, stored[1].delegationId}
+	want := [][]byte{stored[1].publicKey, {}, {}, stored[0].publicKey, {}, stored[1].publicKey}
+	recorder := fixture.serve(http.MethodPost, "/gkm/delegation-keys", readerToken, fixture.delegationKeysBody(order...))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("a config reader's batch: %d", recorder.Code)
+	}
+	reply := &protocol.GkmDelegationKeysReply{}
+	if err := proto.Unmarshal(recorder.Body.Bytes(), reply); err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.GetReaderKeys()) != len(want) {
+		t.Fatalf("%d answers for %d ids", len(reply.GetReaderKeys()), len(want))
+	}
+	for i, readerKey := range reply.GetReaderKeys() {
+		if !bytes.Equal(readerKey, want[i]) {
+			t.Errorf("answer %d: %d bytes, want %d", i, len(readerKey), len(want[i]))
+		}
+	}
+
+	// the bound: 256 ids answered, 257 refused
+	full := [][]byte{}
+	for range gkmDelegationKeysMaxCount {
+		full = append(full, stored[0].delegationId)
+	}
+	recorder = fixture.serve(http.MethodPost, "/gkm/delegation-keys", readerToken, fixture.delegationKeysBody(full...))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("a batch of %d: %d", len(full), recorder.Code)
+	}
+	if err := proto.Unmarshal(recorder.Body.Bytes(), reply); err != nil || len(reply.GetReaderKeys()) != gkmDelegationKeysMaxCount {
+		t.Errorf("a batch of %d: %d answers, %v", len(full), len(reply.GetReaderKeys()), err)
+	}
+	for _, c := range []struct {
+		name string
+		body []byte
+	}{
+		{name: "257 ids", body: fixture.delegationKeysBody(append(full, stored[0].delegationId)...)},
+		{name: "no id", body: fixture.delegationKeysBody()},
+		{name: "a short id", body: fixture.delegationKeysBody(stored[0].delegationId, stored[1].delegationId[1:])},
+		{name: "a body that does not parse", body: []byte{0xff, 0xff, 0xff}},
+	} {
+		if recorder := fixture.serve(http.MethodPost, "/gkm/delegation-keys", readerToken, c.body); recorder.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d", c.name, recorder.Code)
+		}
+	}
+
+	// the scope: a token that reads only another repo, then one the state no longer lets read the config
+	if recorder := fixture.serve(http.MethodPost, "/gkm/delegation-keys", fixture.token(outsider.sidecarId, repoScope(otherRepoId, "r")), fixture.delegationKeysBody(order...)); recorder.Code != http.StatusForbidden {
+		t.Errorf("a batch by a token that does not read the config: %d", recorder.Code)
+	}
+	fixture.auth.drop(reader.sidecarId, configRepoId)
+	if recorder := fixture.serve(http.MethodPost, "/gkm/delegation-keys", readerToken, fixture.delegationKeysBody(order...)); recorder.Code != http.StatusForbidden {
+		t.Errorf("a batch by a sidecar the state no longer lets read the config: %d", recorder.Code)
+	}
+	fixture.auth.grant(reader.sidecarId, configRepoId, sidecar.AclEvsRead)
+
+	if recorder := fixture.serve(http.MethodPost, "/gkm/delegation-keys", readerToken, fixture.delegationKeysBody(unknown.delegationId, agentKey.delegationId)); recorder.Code != http.StatusNotFound {
+		t.Errorf("a batch naming no forwarding Delegation the state holds: %d", recorder.Code)
+	}
+	fixture.auth.unloaded = true
+	if recorder := fixture.serve(http.MethodPost, "/gkm/delegation-keys", readerToken, fixture.delegationKeysBody(order...)); recorder.Code != http.StatusServiceUnavailable {
+		t.Errorf("a batch while the state is cold: %d", recorder.Code)
+	}
+}
+
 // A Signed DelegationWrap of key's generation to a Delegation, sealed to publicKey, staged or late at pin and at.
 func (self *gkmGroupWorld) delegationWrap(signer *gkmTestSidecar, key *sidecar.EvsRepoKey, delegationId []byte, publicKey []byte, kind sidecar.GkmDeliveryKind, pin *bridge.AuthPin, at time.Time) []byte {
 	self.t.Helper()
