@@ -314,6 +314,7 @@ rpc_marked_pair.go
 rpc_peer.go
 rpc_pins.go
 rpc_search.go
+rpc_search_settings.go
 rpc_send.go
 rpc_subprotocol.go
 settings.go

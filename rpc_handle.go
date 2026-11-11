@@ -88,7 +88,7 @@ func (self *Subprotocol) Handle(messageType protocol.MessageType, handler Subpro
 		// SEARCH's rules key on its type, whatever the options (rpc_search.go): it mutates nothing, so a
 		// retry is answered from the indexer's cursor, and its sizes are fixed below its handler
 		handleOptions.Mutating = false
-		handler = searchHandler(handler, self.log)
+		handler = searchHandler(handler, self.settings.Search, self.log)
 	}
 	return self.setMessageTypeDispatch(messageType, func(ctx context.Context, message *subprotocolMessage) {
 		self.dispatchRequest(handler, &handleOptions, message)
