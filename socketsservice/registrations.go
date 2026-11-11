@@ -736,30 +736,34 @@ func newSocketLeaseCounter(lease time.Duration, gauge sidecar.MetricsGauge) *soc
 	return &socketLeaseCounter{lease: lease, gauge: gauge, rangeCounts: map[socketPageRangeKey]*socketPageLeaseCount{}}
 }
 
-// Records that clientId's page from keyStart wrote count leases at now, and sets the gauge.
+// Records that clientId's page from keyStart wrote count leases at now, and sets the gauge, outside the lock: two
+// pages racing may leave it a page behind until the next.
 func (self *socketLeaseCounter) record(clientId connect.Id, keyStart []byte, count int, now time.Time) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if self.lease <= now.Sub(self.lastSweepTime) {
-		self.lastSweepTime = now
-		for key, rangeCount := range self.rangeCounts {
-			if !now.Before(rangeCount.expireTime) {
-				self.total -= rangeCount.count
-				delete(self.rangeCounts, key)
+	total := func() int {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if self.lease <= now.Sub(self.lastSweepTime) {
+			self.lastSweepTime = now
+			for key, rangeCount := range self.rangeCounts {
+				if !now.Before(rangeCount.expireTime) {
+					self.total -= rangeCount.count
+					delete(self.rangeCounts, key)
+				}
 			}
 		}
-	}
-	key := socketPageRangeKey{clientId: clientId, keyStart: string(keyStart)}
-	if previous := self.rangeCounts[key]; previous != nil {
-		self.total -= previous.count
-	}
-	if count == 0 {
-		delete(self.rangeCounts, key)
-	} else {
-		self.rangeCounts[key] = &socketPageLeaseCount{count: count, expireTime: now.Add(self.lease)}
-		self.total += count
-	}
-	self.gauge.Set(float64(self.total))
+		key := socketPageRangeKey{clientId: clientId, keyStart: string(keyStart)}
+		if previous := self.rangeCounts[key]; previous != nil {
+			self.total -= previous.count
+		}
+		if count == 0 {
+			delete(self.rangeCounts, key)
+		} else {
+			self.rangeCounts[key] = &socketPageLeaseCount{count: count, expireTime: now.Add(self.lease)}
+			self.total += count
+		}
+		return self.total
+	}()
+	self.gauge.Set(float64(total))
 }
 
 // Counts the page's written leases into the gauge.

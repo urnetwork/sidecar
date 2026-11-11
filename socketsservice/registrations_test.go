@@ -172,6 +172,20 @@ func TestSocketRegistrationsRebuildAfterAStoreWipe(t *testing.T) {
 	if listed := testSocketListedNameKeys(t, world, listener.networkId); len(listed) != 20 {
 		t.Fatalf("%d names after one interval", len(listed))
 	}
+	// the gauge counts the newest page of each client range, so a heartbeat does not count its leases twice
+	if leases := process.host.Metrics.Value("urnetwork_sockets_registrations"); leases != 20 {
+		t.Fatalf("the registrations gauge reads %v", leases)
+	}
+	process.registerOk(listener, 3, registrations[:5]...)
+	if leases := process.host.Metrics.Value("urnetwork_sockets_registrations"); leases != 5 {
+		t.Fatalf("after a smaller page the gauge reads %v", leases)
+	}
+	world.clock.Advance(45 * time.Second)
+	other := testSocketEnrolledListener(world, process)
+	process.registerOk(other, 1, other.blindedRegistration(t, testSocketTokenPath(t, 1)))
+	if leases := process.host.Metrics.Value("urnetwork_sockets_registrations"); leases != 1 {
+		t.Fatalf("past the lease the gauge reads %v", leases)
+	}
 }
 
 // §22.5: a client looping registrations is shed with unavailable once its burst is spent, and its next token
