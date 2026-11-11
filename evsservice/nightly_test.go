@@ -1,12 +1,18 @@
 package evsservice
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"errors"
+	"maps"
 	"slices"
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -127,22 +133,187 @@ func TestNightlyPassShardsByRepoIdPrefix(t *testing.T) {
 	}
 }
 
+// A shard's args go back whole, its start key last whatever bytes it holds; the start's empty args and any other
+// shape read as no shard's; and every run of one shard, of any night or part, shares the shard's once key.
 func TestEvsNightlyArgsRoundTrip(t *testing.T) {
-	args := EvsNightlyArgs("meta-1", "a7", "repo/a7ff")
-	clusterId, shard, startAfter, ok := ParseEvsNightlyArgs(args)
-	if !ok || clusterId != "meta-1" || shard != "a7" || startAfter != "repo/a7ff" {
-		t.Fatalf("%q %q %q %t", clusterId, shard, startAfter, ok)
+	args := &EvsNightlyShardArgs{ClusterId: "meta-1", Shard: "a7", StartAfter: "repo/a7ff\nwith a break", Night: 1762819200123, Part: 2, Whole: true}
+	parsed, ok := ParseEvsNightlyArgs(EvsNightlyArgs(args))
+	if !ok || *parsed != *args {
+		t.Fatalf("%+v %t", parsed, ok)
 	}
-	if _, _, _, ok := ParseEvsNightlyArgs(nil); ok {
-		t.Fatal("the start's empty args read as a shard's")
+	for _, bad := range []string{
+		"",
+		"meta-1",
+		"meta-1\na7\nrepo/a7ff",
+		"\na7\n1762819200123\n0\n1\n",
+		"meta-1\na7\n0\n0\n1\n",
+		"meta-1\na7\nnight\n0\n1\n",
+		"meta-1\na7\n1762819200123\n-1\n1\n",
+		"meta-1\na7\n1762819200123\n0\nyes\n",
+	} {
+		if _, ok := ParseEvsNightlyArgs([]byte(bad)); ok {
+			t.Errorf("%q read as a shard's args", bad)
+		}
 	}
-	if _, _, _, ok := ParseEvsNightlyArgs([]byte("meta-1")); ok {
-		t.Fatal("args of another shape read as a shard's")
-	}
-	request := EvsNightlyTaskRequest("meta-1", "a7", "", time.Unix(1700000000, 0), nil)
-	other := EvsNightlyTaskRequest("meta-1", "a8", "", time.Unix(1700000000, 0), nil)
-	if request.Name != EvsNightlyTaskName || request.OnceKey == other.OnceKey || request.OnceKey == EvsNightlyStartTaskRequest(time.Unix(1700000000, 0)).OnceKey {
+	at := time.Unix(1700000000, 0)
+	request := EvsNightlyTaskRequest(args, at, nil)
+	other := EvsNightlyTaskRequest(&EvsNightlyShardArgs{ClusterId: "meta-1", Shard: "a8", Night: args.Night, Whole: true}, at, nil)
+	if request.Name != EvsNightlyTaskName || request.OnceKey == other.OnceKey || request.OnceKey == EvsNightlyStartTaskRequest(at).OnceKey {
 		t.Fatalf("once keys %q %q", request.OnceKey, other.OnceKey)
+	}
+	if next := EvsNightlyTaskRequest(&EvsNightlyShardArgs{ClusterId: "meta-1", Shard: "a7", Night: args.Night + 1, Whole: true}, at, nil); next.OnceKey != request.OnceKey {
+		t.Fatalf("another night's run of the shard under %q", next.OnceKey)
+	}
+}
+
+// Another repo of networkId on meta-1, holding one segment of body: its id.
+func (self *nightlyFixture) putOtherRepo(label string, networkId sidecar.Id, body []byte) sidecar.Id {
+	self.t.Helper()
+	repoId := testId("repo " + label)
+	placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: "meta-1", CreatorSidecarId: self.check.signerId}).Marshal()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if _, err := self.cluster.PutIfNoneMatch(self.ctx, sidecar.EvsPlaceKey(repoId), placeBytes, nil); err != nil {
+		self.t.Fatal(err)
+	}
+	repoBytes, err := proto.Marshal(&protocol.EvsRepoObject{
+		RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, State: protocol.EvsRepoState_EVS_REPO_ACTIVE, Format: 1, NetworkId: networkId.Bytes(),
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if _, err := self.cluster.PutIfNoneMatch(self.ctx, RepoKey(repoId), repoBytes, nil); err != nil {
+		self.t.Fatal(err)
+	}
+	segmentId := sha256.Sum256(body)
+	if _, err := self.segmentCluster().PutIfNoneMatch(self.ctx, SegmentKey(repoId, segmentId), body, nil); err != nil {
+		self.t.Fatal(err)
+	}
+	return repoId
+}
+
+// The night's sums on the fixture's Redis.
+func (self *nightlyFixture) sums() *NightlySums {
+	self.t.Helper()
+	sums, err := NewNightlySums(self.host.Redis, self.passSettings)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return sums
+}
+
+// The nightly start queues each shard of each metadata cluster with the night, its own time, and the night's closing
+// job naming every shard; the run that lists its shard whole replaces the shard's sums for the night, which read
+// back as each network's stored bytes; and a run with a read that failed counts on and reports nothing.
+func TestNightlyPassReportsAWholeShardForItsNight(t *testing.T) {
+	fixture := newNightlyFixture(t)
+	fixture.commit("a")
+	fixture.putSegment("first")
+	host := fixture.host.ServiceHost()
+	if result, err := RunNightlyPass(fixture.ctx, host, fixture.deps(), nil); err != nil || result != nil {
+		t.Fatalf("the start: %+v %v", result, err)
+	}
+	night := fixture.clock.Now().UnixMilli()
+	var shardArgs *EvsNightlyShardArgs
+	var closeArgs *EvsNightlyCloseArgs
+	for _, request := range fixture.host.Tasks.Pending() {
+		switch {
+		case request.Name == EvsNightlyCloseTaskName:
+			closeArgs, _ = ParseEvsNightlyCloseArgs(request.Args)
+			if !request.RunAt.Equal(fixture.clock.Now().Add(fixture.passSettings.NightlyCloseRetryInterval)) {
+				t.Fatalf("the closing job first asks at %v", request.RunAt)
+			}
+		case request.Name == EvsNightlyTaskName && 0 < len(request.Args):
+			shardArgs, _ = ParseEvsNightlyArgs(request.Args)
+		}
+	}
+	if shardArgs == nil || shardArgs.ClusterId != "meta-1" || shardArgs.Night != night || shardArgs.Part != 0 || !shardArgs.Whole {
+		t.Fatalf("the shard's run: %+v", shardArgs)
+	}
+	if closeArgs == nil || closeArgs.Night != night || !slices.Equal(closeArgs.ShardFields, []string{"meta-1:"}) {
+		t.Fatalf("the closing job: %+v", closeArgs)
+	}
+
+	result, err := RunNightlyPass(fixture.ctx, host, fixture.deps(), EvsNightlyArgs(shardArgs))
+	if err != nil || !result.Complete || !result.Reported || result.Night != night {
+		t.Fatalf("the shard's run: %+v %v", result, err)
+	}
+	counts, found, err := fixture.sums().Read(fixture.ctx, night, "meta-1", "")
+	stored := result.NetworkBytes[fixture.check.networkId]
+	if err != nil || !found || len(counts) != 1 || stored == nil || counts[fixture.check.networkId] != stored.StoredByteCount() {
+		t.Fatalf("the shard's sums %v %t %v, the run's %+v", counts, found, err, stored)
+	}
+
+	// another night's run, with a LIST that fails
+	later := *shardArgs
+	later.Night = night + 1
+	if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{Op: sidecartest.FaultOpList, KeyPrefix: segmentKeyPrefix, Result: sidecartest.FailBeforeApply}); err != nil {
+		t.Fatal(err)
+	}
+	result, err = RunNightlyPass(fixture.ctx, host, fixture.deps(), EvsNightlyArgs(&later))
+	if err == nil || result == nil || result.Reported || result.RepoCount != 1 {
+		t.Fatalf("a run with a read that failed: %+v %v", result, err)
+	}
+	if _, found, err := fixture.sums().Read(fixture.ctx, later.Night, "meta-1", ""); err != nil || found {
+		t.Fatalf("a run with a read that failed reported: %t %v", found, err)
+	}
+}
+
+// A shard listed over several runs carries its sums from run to run in the night's key and never in its args, and
+// the run that reaches the shard's end reports every repo's; a chain whose carried sums are gone reports nothing.
+func TestNightlyPassCarriesAShardsSumsAcrossItsRuns(t *testing.T) {
+	fixture := newNightlyFixture(t)
+	fixture.passSettings.RunRepoCount = 1
+	fixture.putSegment("first")
+	otherNetworkId := testId("network other")
+	otherBody := []byte("the other repo's segment")
+	fixture.putOtherRepo("other", otherNetworkId, otherBody)
+	host := fixture.host.ServiceHost()
+	night := fixture.clock.Now().UnixMilli()
+
+	first, err := RunNightlyPass(fixture.ctx, host, fixture.deps(), EvsNightlyArgs(&EvsNightlyShardArgs{ClusterId: "meta-1", Night: night, Whole: true}))
+	if err != nil || !first.More || first.Reported || first.RepoCount != 1 {
+		t.Fatalf("the first run: %+v %v", first, err)
+	}
+	var next *EvsNightlyShardArgs
+	for _, request := range fixture.host.Tasks.Pending() {
+		if request.Name == EvsNightlyTaskName {
+			next, _ = ParseEvsNightlyArgs(request.Args)
+		}
+	}
+	if next == nil || next.Part != 1 || !next.Whole || next.StartAfter != first.NextStartAfter || next.Night != night {
+		t.Fatalf("the next run: %+v", next)
+	}
+	for _, request := range fixture.host.Tasks.AllRequests() {
+		for _, networkId := range []sidecar.Id{fixture.check.networkId, otherNetworkId} {
+			if bytes.Contains(request.Args, networkId[:]) || bytes.Contains(request.Args, []byte(sidecar.EvsKeyId(networkId))) {
+				t.Fatalf("a run's args name a network: %q", request.Args)
+			}
+		}
+	}
+
+	last, err := RunNightlyPass(fixture.ctx, host, fixture.deps(), EvsNightlyArgs(next))
+	if err != nil || last.More || !last.Reported || last.Complete {
+		t.Fatalf("the last run: %+v %v", last, err)
+	}
+	want := nightlyStoredByteCounts(first.NetworkBytes)
+	if err := addNightlySums(want, nightlyStoredByteCounts(last.NetworkBytes)); err != nil {
+		t.Fatal(err)
+	}
+	counts, found, err := fixture.sums().Read(fixture.ctx, night, "meta-1", "")
+	if err != nil || !found || !maps.Equal(counts, want) || len(counts) != 2 || counts[otherNetworkId] != int64(len(otherBody)) {
+		t.Fatalf("the shard's sums %v %t %v, want %v", counts, found, err, want)
+	}
+
+	// the chain's carried sums lost: the last run, run again, reports nothing
+	fixture.host.Redis.LoseKeys(NightlySumsKey(night))
+	again, err := RunNightlyPass(fixture.ctx, host, fixture.deps(), EvsNightlyArgs(next))
+	if err != nil || again.Reported {
+		t.Fatalf("the last run again: %+v %v", again, err)
+	}
+	if _, found, err := fixture.sums().Read(fixture.ctx, night, "meta-1", ""); err != nil || found {
+		t.Fatalf("a chain with its sums gone reported: %t %v", found, err)
 	}
 }
 

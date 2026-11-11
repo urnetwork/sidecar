@@ -25,6 +25,16 @@ const (
 	socketRegistrationResultUnavailable = "unavailable"
 	socketRegistrationResultStale       = "stale"
 	socketRegistrationResultInvalid     = "invalid"
+	// a token with no sidecar_id outside urnetwork-edge
+	socketRegistrationResultDenied = "denied"
+	// a refused token, or a removed client: 401
+	socketRegistrationResultUnauthorized = "unauthorized"
+)
+
+// find_total's results beyond §9.6's: a refused token or removed client, and a malformed Find.
+const (
+	socketFindResultUnauthorized = "unauthorized"
+	socketFindResultInvalid      = "invalid"
 )
 
 // failure_reports_total's reasons, a dialer's own word for a failed ticket (socket_api.go).
