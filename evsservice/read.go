@@ -246,7 +246,7 @@ func (self *readAttempt) read() (*readReply, error) {
 	for attempt := 0; ; attempt += 1 {
 		self.head = head
 		self.pushes = newReadPushes(engine, self.ctx, self.cluster, self.repoId, self.refId, head.Head)
-		self.source = NewRecordPushSource(engine.records, self.cluster, self.repoId, self.refId)
+		self.source = NewRecordPushSource(engine.records, self.cluster, self.repoId, self.refId).WithLocator(engine.locator)
 		reply, err := self.readAt()
 		switch {
 		case errors.Is(err, ErrEvsEntryAheadOfHead), errors.Is(err, ErrEvsHorizonAhead):
