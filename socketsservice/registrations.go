@@ -54,28 +54,14 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// §9.5's sizes as a page's shape checks them (step 3). An entry past one refuses its page.
-const (
-	// A page of 1,024 entries, each at most a token path, a seal, a claim and the rest in base64 and JSON.
-	socketRegistrationsMaxBodyByteCount = 4 * 1024 * 1024
-	// A claim is a §6 Signed over a SocketRegistrationClaim of at most a name, a listen id and a protocol.
-	socketClaimMaxByteCount     = 1024
-	socketProtocolMaxByteCount  = 32
-	socketAlpnMaxCount          = 16
-	socketAlpnMaxByteCount      = 255
-	socketAppModeMaxByteCount   = 8
-	socketRegistrationMaxWeight = 1000
-)
-
-// §9.5's defaults, which a page's allowed entries reach the store with.
+// §9.5's protocol and app mode names, which a page's allowed entries reach the store with. The sizes a page's
+// shape is held to, and the default weight and max_streams, are SocketsSettings.Format's (QD-702).
 const (
 	socketDefaultProtocol     = "tcp"
 	socketDefaultTlsProtocol  = "tls"
 	socketDefaultSmtpProtocol = "smtp-starttls"
 	socketDefaultTlsAppMode   = "http"
 	socketRawTlsAppMode       = "raw"
-	socketDefaultWeight       = 100
-	socketDefaultMaxStreams   = 256
 )
 
 // How one entry of a page stands while the page is judged.
@@ -180,7 +166,7 @@ func (self *SocketsService) registrations(r *http.Request) (*sidecar.SocketRegis
 		return answer, refusal
 	}
 	args := &sidecar.SocketRegistrationsArgs{}
-	readErr := readSocketJson(r, socketRegistrationsMaxBodyByteCount, args)
+	readErr := readSocketJson(r, int64(self.settings.RegistrationsMaxBodyByteCount), args)
 	release, refusal := self.queueTurn(r.Context(), networkId)
 	if refusal != nil {
 		return answer, refusal
@@ -188,7 +174,7 @@ func (self *SocketsService) registrations(r *http.Request) (*sidecar.SocketRegis
 	defer release()
 
 	// 3
-	if readErr != nil || !socketPageFormed(args) {
+	if readErr != nil || !socketPageFormed(args, self.settings.Format) {
 		return answer, socketRefusalOf(sidecar.SocketErrorCodeInvalid, 0)
 	}
 
@@ -322,8 +308,8 @@ func (self *SocketsService) registrations(r *http.Request) (*sidecar.SocketRegis
 	return answer, nil
 }
 
-// Step 3: the page's shape and every field's size, before anything is judged.
-func socketPageFormed(args *sidecar.SocketRegistrationsArgs) bool {
+// Step 3: the page's shape and every field's size, before anything is judged, each size format's.
+func socketPageFormed(args *sidecar.SocketRegistrationsArgs, format *sidecar.SocketFormatSettings) bool {
 	if sidecar.SocketRegistrationPageMaxEntryCount < len(args.Registrations) ||
 		socketNameKeyMaxByteCount < len(args.KeyStart) || socketNameKeyMaxByteCount < len(args.KeyEnd) {
 		return false
@@ -347,12 +333,12 @@ func socketPageFormed(args *sidecar.SocketRegistrationsArgs) bool {
 		} else if !socketTokenPathFormed(registration.NameToken) || len(registration.SealedName) != socketSealedNameByteCount {
 			return false
 		}
-		if socketClaimMaxByteCount < len(registration.Claim) || socketProtocolMaxByteCount < len(registration.Protocol) ||
-			socketAlpnMaxCount < len(registration.Alpn) || socketAppModeMaxByteCount < len(registration.AppMode) {
+		if format.ClaimMaxByteCount < len(registration.Claim) || format.ProtocolMaxByteCount < len(registration.Protocol) ||
+			format.AlpnMaxCount < len(registration.Alpn) || format.AppModeMaxByteCount < len(registration.AppMode) {
 			return false
 		}
 		for _, alpn := range registration.Alpn {
-			if alpn == "" || socketAlpnMaxByteCount < len(alpn) {
+			if alpn == "" || format.AlpnMaxByteCount < len(alpn) {
 				return false
 			}
 		}
@@ -384,7 +370,7 @@ func (self *SocketsService) judgeEntry(
 		return entry
 	}
 	entry.name = name
-	stored, ok := socketStoredRegistration(registration, name)
+	stored, ok := socketStoredRegistration(registration, name, self.settings.Format)
 	if !ok {
 		return entry
 	}
@@ -431,11 +417,11 @@ func (self *SocketsService) judgeEntry(
 }
 
 // registration with §9.5's defaults applied, or false when one of its values is out of §9.5's bounds: a
-// negative version, in-flight count or max_streams, a weight past 1,000, an app_mode or ALPN ids on a name
-// that takes none, or the zero listen id.
-func socketStoredRegistration(registration *sidecar.SocketRegistration, name *socketParsedName) (*sidecar.SocketRegistration, bool) {
+// negative version, in-flight count or max_streams, a weight past format's most, an app_mode or ALPN ids on a
+// name that takes none, or the zero listen id.
+func socketStoredRegistration(registration *sidecar.SocketRegistration, name *socketParsedName, format *sidecar.SocketFormatSettings) (*sidecar.SocketRegistration, bool) {
 	if registration.Version < 0 || registration.Inflight < 0 || registration.MaxStreams < 0 ||
-		registration.Weight < 0 || socketRegistrationMaxWeight < registration.Weight || *registration.ListenId == (connect.Id{}) {
+		registration.Weight < 0 || format.MaxWeight < registration.Weight || *registration.ListenId == (connect.Id{}) {
 		return nil, false
 	}
 	stored := *registration
@@ -464,10 +450,10 @@ func socketStoredRegistration(registration *sidecar.SocketRegistration, name *so
 		}
 	}
 	if stored.Weight == 0 {
-		stored.Weight = socketDefaultWeight
+		stored.Weight = format.DefaultWeight
 	}
 	if stored.MaxStreams == 0 {
-		stored.MaxStreams = socketDefaultMaxStreams
+		stored.MaxStreams = format.DefaultMaxStreams
 	}
 	return &stored, true
 }
@@ -640,15 +626,7 @@ func (self *SocketsService) keepPairs(clientId connect.Id, position uint64, allo
 		}
 	}
 	if edgeRemoved && !result.EdgeEntriesRemain {
-		err := func() error {
-			ctx, done := self.storeContext()
-			defer done()
-			return self.store.RemoveServicePairs(ctx, clientId, position)
-		}()
-		if err == nil {
-			self.pairWrites.forgetListener(clientId)
-			self.pairTouches.forget(clientId)
-		}
+		self.removePairs(clientId, position)
 		return
 	}
 	if edgeAccepted && self.pairTouches.due(clientId, now) {
