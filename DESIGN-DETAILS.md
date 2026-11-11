@@ -19,7 +19,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 9 | Client path epochs and re-tokenizing | 3 | complete (2026-11-10) |
 | 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | pending |
 | 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10) |
-| 12 | Bridge compiler and NAT engine (§17) | 4 | pending |
+| 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-10) |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
@@ -6584,9 +6584,1015 @@ Each is filed under `.stack/questions/`, and the design above is built on its re
 
 ## 12. Bridge compiler and NAT engine (§17)
 
-Status: pending
+Status: complete (2026-11-10)
 
 Tasks held until complete: BRIDGE-M4-16, BRIDGE-M4-17, BRIDGE-M6-03, BRIDGE-M6-04.
+
+Models: `sidecar/sidecartest/model/details/BridgeNat.tla` (the engine against the host's NAT), `ShareSign.tla` (a share's signers against removal and revocation) and `BridgeFold.tla` (one body-level verdict at every reader), their configurations (`BridgeNat*.cfg`, `ShareSign*.cfg`, `BridgeFold*.cfg`) and `run-bridge.sh` beside them. New tasks: `.stack/plan/proposals/details-12-tasks.md` (BRIDGE-M4-23, BRIDGE-M4-24, ACL-M2-17). Questions filed: `.stack/questions/details-12-ledger-in-head.md`, `details-12-unfolded-verdicts.md`, `details-12-start-gate.md`, `details-12-alias-table-pin.md`, `details-12-ratchet-commit.md`. Questions this section answers, each as 12.9 says: `bridge-m4-09-other-client-rows`, `bridge-m4-11-rule-three-tags`. It builds on the answers already given to `plan-BRIDGE-share-pins` (QD-077), `plan-BRIDGE-subject-resolution` (QD-161), `plan-BRIDGE-gate-row-prefixes` (QD-004, QD-003), `plan-BRIDGE-keyless-window-parent` (QD-184, as section 4 replaced it), `plan-BRIDGE-small-readings`, `plan-BRIDGE-windows-tun-driver` (QD-125), `g0-density-share-seal-format` (QD-108), `bridge-m2-01-egress-mode-field` (QD-630) and `bridge-m2-01-multi-use-approval` (QD-631). Section 4 stands as written: this section fills the compile its `Compile` step 4 calls and the engine its sink is, and changes neither.
+
+### 12.1 The problem
+
+§17.8 says in one sentence that "the compiler reads the config, verifies statements against §7.9's admissions and §8's grants, and compiles a `BridgeState` off the packet path", and in another that `device.Bridge` "applies it and later verified log entries, manages links, and swaps table and hook atomically". Four tasks build that: the compiler (BRIDGE-M4-16), the component around it with the host's NAT (BRIDGE-M4-17), shares (BRIDGE-M6-03) and their keys and signers (BRIDGE-M6-04). What has landed is the two ends: at the root, the statements' id-level rules and a body-level ledger (`BridgeLog`, `BridgeLedger`; BRIDGE-M2-01), and in `sidecar/device`, the posture, the egress policy and the disposition that turns one published state into the next (SDK-M4-01, BRIDGE-M4-06 to -14). Between them six things fail as written. Each is given as a run.
+
+**A. Two readers, two ledgers.** A route's or a map's approval rides its sealed body (§17.8's `approval`), so api, which holds no config key, cannot judge it, and section 5's `tail_verdicts` carry no bit for it. The landed ledger judges it on S(n-1) through `ConfigState.StateAt`, which serves positions from the previous base to the tip and nothing a restored log never built, and answers `ErrBridgeApprovalUnverifiable`, void, for the rest.
+
+1. Entry 40 is a `BridgeRoute` of 192.168.1.0/24 by host H, approved on Ana's phone. Entry 41 is a base.
+2. Daemon D has followed the log since entry 30. It judged entry 40 at its position: the route is active, and D routes the prefix to H.
+3. Phone P's VPN component restores its judge at base 41 for every compile (section 4.2.5). Entry 40 is below the base, where a restored log holds no state to judge it on: void. P answers the prefix unreachable.
+4. H's own daemon restarts and restores at base 41. The route it advertises is void in its own state: rule 6 denies D's flows, which D's table sends.
+
+The two ledgers then disagree on more than the one rule. The void route's `exposed_prefix` is free at P and held at D, so a `BridgeAlias` filed into it at entry 45 is valid at P and void at D, and one alias block routes to a foreign host on one device and nowhere on another. Nothing forks: both chain the same A_n. The landed code names the hole ("approvals older than the retained history are void unless the reader passes kept verdicts"), and kept verdicts are worse: they make the answer depend on how long a device has been running.
+
+**B. A policy change turns a verdict for some readers only.** Entry 50 is a `BridgeMap` approved by Ben. Entry 52 is a base whose head removes Ben from the request rule's approvers and folds nothing. A reader present at 50 holds the verdict it judged then, active. A device that starts at base 52 can judge entry 50 only on base 52's rows, where Ben approves nothing: void. `BridgeFoldTwin-KeepOwnVerdict` reaches it, and `BridgeFoldTwin-NewDeviceVoid` reaches run A.
+
+**C. A compile costs the network's history.** Rows carry nothing of the bridge but egress modes, because every other row would show a prefix, an address or a port (D-BRIDGE-6). So the only folded record of the bridge is the head's fold files, which hold every entry the log ever took (section 5.2.3). The landed design joins them ahead of the tail (`JoinBridgeLogs`) and opens every sealed body in log order, at every compile. A three-year-old team network with 400,000 entries has about 240 MB of fold files; the Apple extensions' compile is capped at 10 MiB (section 4.2.4), and a daemon would spend seconds of AEAD a compile to learn that nothing changed.
+
+**D. The NAT keeps what the rules dropped.** D-BRIDGE-21 fences one flow against one revocation: register before the dial, publish before `CloseFlows`, recheck before the first byte. The engine around it has four more ways to lose a revocation.
+
+1. *A late compile drops a denial.* `Bridge.Revoke(type, id, 0)` holds its narrowing "until the next state past the one in force". The state in force is at pin 60. A compile captures pin 61. Entry 62 is a `GrantRevoke` the root judged, and `Revoke` holds it at 61. The compile finishes: its state is at 61, "past the one in force", the narrowing is dropped, and the state, compiled before entry 62, admits the grant. `BridgeNatTwin-RevokeAtZero` is this run.
+2. *A restart forgets the judge.* A daemon's root follower judges a `MemberRevoke` that two admins co-signed, which the posture cannot check on one signature, and narrows the bridge in memory. The process restarts before the next compile. The posture restores the last compiled state and the denials it could check; the provider starts; the revoked member's sidecar opens a flow. `BridgeNatTwin-ProviderBeforeCatchUp` is this run.
+3. *A provider before its hook.* A new client generation builds a new NAT and provider. A Network source's first frame reaches the NAT before `SetEgressHook`: with no hook, connect's behavior is today's, and the flow opens to the host's LAN. Installing the hook cancels it, after its first bytes. `BridgeNatTwin-ProviderBeforeHook`.
+4. *An address change resets the new address's flows.* Rule 3's tag is (subject, 3) for every hosted address, so when an old address's drain ends, `CloseFlows` ends every rule 3 flow of every subject, the ones opened to the new address included (question bridge-m4-11-rule-three-tags). D-BRIDGE-7 promises that an edit breaks no live TCP.
+
+**E. Shares have formats in prose and a race in their keys.** §17.9 names a target table, an alias table, a ShareKey and a shortfall, each sealed under K, and QD-108 fixed the seal's bytes; no message has fields. Two more things are unsettled.
+
+1. *A renewal races a removal.* Y's ShareKey holder read generation 7, certifies generation 7's signer for another 7 days, and writes it. Between its read and its write, Y removed sidecar R and rotated to generation 8. If the write lands in a head sealed at 7, R, which holds generation 7's key and is handed the ciphertext by the operator, reads a seed whose cert outlives R's removal by more than §17.9's 7 days. `ShareSignTwin-NoWriteGate` is this run.
+2. *Two accepts take one block.* Two of Y's admins accept two shares at once. Each runs the preflight on the ledger it holds, and each takes the first free aligned block of the upper /17, the same one. Both `BridgeAlias` statements land. The ledger's rule gives the block to the first in log order and voids the second, whose share api then holds as `active` with an alias no router installs.
+
+**F. Other clients, and where a signer's seed goes.** An sdk provider before C16 gives a sealed subject that no row binds `autogroup:untagged`'s rows, and `BridgeRules` has nowhere to put them, so under a document an app device loses the exit its policy grants (question bridge-m4-09-other-client-rows). And a share link built in an app's VPN component is signed there with the share's ShareSigner (§18.6's sign row), while §17.9 says the seed reaches "sidecar roles only, not `BridgeState`": the compile must hand the forwarding role a seed without putting it in the message that crosses the device RPC.
+
+The requirement. Every reader that compiles at one pin holds one ledger: the same addresses, rules, aliases and verdicts, whatever base it started from and however long it has run. A compile reads a bounded amount, in one pass, with a working set that follows what reaches the host, on a daemon and in a VPN component by one code path. What the NAT carries is what the newest applied log position allows: no flow opens, and none stays open past its close, under a rule the device has durably judged revoked, across late compiles, timers, new client generations and restarts. A share's signer stops admitting a removed sidecar inside §17.9's bound, and nothing a renewal, a restart or a rotation does widens it.
+
+### 12.2 The design
+
+#### 12.2.1 The principle
+
+Three rules, one for each of the compiler, the engine and the shares.
+
+**One ledger, judged where the entry lands and frozen at the fold.** The *ledger* at a pin is what every sealed bridge body means there: who holds which address, which rules are active, void or withdrawn, each subject's egress spec, each alias. A body is judged on the state its entry lands on, by every reader that holds the body's generation, the rule BRIDGE-M2-01 already follows for whether a signer was an admin (`SignerAdmin`, "read on the state the entry lands on, so a base's re-application follows the rebuilt rows"). A base's tail is judged again as section 5 re-applies it, on the new base's rows. When a writer folds an entry it freezes the verdict it holds into the config head, as rows of the *ledger fold*, and every later reader takes the row. So a ledger is a function of the newest base's head and rows, the entries since its fold and the generation keys, and of nothing a reader remembers.
+
+**One compile, a pure function, in passes.** `CompileBridgeState` maps (the state at a pin, the head that pin's base names, the unfolded bridge statements with their verdicts, the generation keys, the host's sidecar id, the host's local facts) to a `BridgeState`. It reads no clock, no network and no random source, iterates no Go map, and marshals deterministically, so two compilers given the same inputs return the same bytes. It reads the fold's files front to back a fixed number of times and keeps only what it was looking for, and it is the same code on a daemon and in a VPN component.
+
+**One fence: persist, publish, close, and a gate at the start.** Every change of what a host enforces takes the same three steps in the same order: the evidence is durable, the policy is published at the next generation, and then the flows of every rule tag the new policy no longer admits are closed. A denial is held at its own log position, never at a relative one. After a start, the provider takes no frame until the hook is installed and every denial the device had judged before it stopped is applied again.
+
+Shares add no fourth rule. A share's signer is a file in the config head, so the write gate that keeps a removed reader from reading new heads keeps it from new signers, and X's host holds a ratchet it never lowers.
+
+#### 12.2.2 Formats settled
+
+Each is additive. `config.proto` and `bridge.proto` are unfrozen until their milestones' gates (owner decision 194). Of these only `BridgeEgress.mode` is visible to a server, and QD-630 already ordered its §2.8 line. The ledger's files and the share grant are files of the config repo, which evs holds as ciphertext; the share tables and the alias body ride seals; and `BridgeRules` travels in process. So nothing here adds a §2.8 row.
+
+```proto
+// sidecar/protocol/config.proto: the bridge ledger's fold, files of the config head beside fold/<d>/<i>
+message BridgeLedgerManifest {           // bridge/ledger/manifest
+  uint32 format = 1;                     // 1
+  uint64 folded_through = 2;             // the head's fold: the rows hold every bridge statement at or below it
+  int64  time_ms = 3;                    // the time of the newest folded record: the fold's time, never a clock
+  uint32 rule_shard_bits = 4;            // 8, or 16 from the fold at which the rows hold more than 262,144 rules
+  repeated BridgeLedgerFile files = 5;   // every other ledger file the head holds, in path order
+}
+message BridgeLedgerFile { string path = 1; bytes sha256 = 2; uint64 row_count = 3; }
+
+message BridgeLedgerAddresses { repeated BridgeLedgerAddressRow rows = 1; }    // bridge/ledger/addresses, by host_bits
+message BridgeLedgerAddressRow {
+  uint32 host_bits = 1;                  // the low 16 bits of the IPv4 (§17.4: kept across block changes)
+  bytes  sidecar_id = 2;
+  uint64 claimed_at = 3;                 // the BridgeAddress's entry
+  uint64 released_at = 4;                // the entry that released it, its holder's revocation or removal; 0 live
+  int64  released_ms = 5;                // that entry's time; the tombstone holds 30 days from it (I-14)
+}
+
+message BridgeLedgerRules { repeated BridgeLedgerRuleRow rows = 1; }           // bridge/ledger/rules/<xx>, by rule_id
+message BridgeLedgerRuleRow {
+  bytes  rule_id = 1;
+  uint32 signed_type = 2;                // 0x1903 a route, 0x1904 a map
+  bytes  owner = 3;                      // the advertiser or host, which signed the first filing
+  uint64 first_at = 4;   int64 first_ms = 5;     // the first filing's entry and time
+  uint64 newest_at = 6;  int64 newest_ms = 7;    // the newest filing of the held id
+  BridgeLedgerDisposition disposition = 8;
+  BridgeRouteBody route = 9;             // bridge.proto's: the body in force, its approval cleared: the first filing's,
+  BridgeMapBody   map = 10;              //   with the newest filing's weight, site_id and drain_seconds; neither when void
+  repeated bytes route_rule_ids = 11;
+  int64  expires = 12;                   // a map's
+  bool   standing = 13;                  // filed with no approval: active only where a standing grant covers it
+  bytes  approval_id = 14;               // 16 B, with approval_not_after_ms and uses, when filed under a decision
+  int64  approval_not_after_ms = 15;
+  uint32 approval_uses = 16;             // the decision's budget, which counts every row that names approval_id
+  uint64 withdrawn_at = 17;  int64 withdrawn_ms = 18;
+  BridgeWithdrawMode withdraw_mode = 19;
+  bytes  withdrawn_by = 20;              // the withdrawal's signer
+  bool   withdrawn_by_admin = 21;
+  int64  retain_until_ms = 22;           // when a withdrawn id leaves the rows; 0 keeps it for the network's life
+}
+enum BridgeLedgerDisposition {
+  BRIDGE_LEDGER_DISPOSITION_UNSPECIFIED = 0;
+  BRIDGE_LEDGER_DISPOSITION_ACTIVE = 1;      // the body is in force, subject to the compile's standing-grant check
+  BRIDGE_LEDGER_DISPOSITION_VOID = 2;        // the body did not open or broke its rule: the id is held, nothing else
+  BRIDGE_LEDGER_DISPOSITION_WITHDRAWN = 3;   // a BridgeWithdraw bound it; draining until withdrawn_ms + its drain
+  BRIDGE_LEDGER_DISPOSITION_RESERVED = 4;    // a withdrawal ahead of the id's first filing: it binds withdrawn_by's
+}                                            //   filings, or anyone's when withdrawn_by_admin
+
+message BridgeLedgerEgressSpecs { repeated BridgeLedgerEgressRow rows = 1; }   // bridge/ledger/egress, by subject
+message BridgeLedgerEgressRow {
+  bytes  subject = 1;                    // a sidecar_id or a keyed atom
+  BridgeEgressMode mode = 2;             // the newest BridgeEgress's clear mode (QD-630)
+  repeated bytes exit_sidecar_ids = 3;   // under exits, from its body; none when the body is void
+  bytes  exit_tag_id = 4;
+  uint64 at = 5;
+}
+
+message BridgeLedgerAliases { repeated BridgeLedgerAliasRow rows = 1; }        // bridge/ledger/aliases, by
+message BridgeLedgerAliasRow {                                                 //   (share_id, target_index)
+  BridgeAliasBody body = 1;
+  bytes  signer = 2;
+  uint64 at = 3;
+  uint64 released_at = 4;  int64 released_ms = 5;   // a release (below): draining until released_ms + its drain
+}
+```
+
+```proto
+// sidecar/protocol/bridge/bridge.proto
+message BridgeApproval {
+  // 1-2 as today
+  bytes template_action = 3;             // QD-631 (owner decision 218)
+}
+message BridgeEgress {
+  // 1-3 as today; BridgeEgressBody reserves 1
+  BridgeEgressMode mode = 4;             // QD-630, once §2.8's api-7 names it
+}
+message BridgeAliasBody {
+  // 1-4 as today
+  bytes  host_identity_public_key = 5;   // QD-077: T_i's host's identity key, copied from the opened target table
+  bytes  sharing_network_id = 6;         // X, the network the host is a sidecar of
+  uint32 drain_seconds = 7;              // a release's drain, 300 s when 0, 3,600 s at most
+  bool   release = 8;                    // ends the alias of this share_id and target_index; alias_prefix as held
+}
+message BridgeShareGrant {               // X's config file bridge/share-grant/<share_id hex> (QD-077)
+  bytes  share_id = 1;
+  bytes  grant_id = 2;                   // the share's GrantActivate; the file counts only while that grant is live
+  bytes  share_public_key = 3;           // Y's ShareKey, Ed25519
+  bytes  target_table_sha256 = 4;        // SHA-256 of the sealed target table as network_bridge_share stores it
+  bytes  table_key = 5;                  // K
+  bytes  accepting_network_id = 6;       // Y
+  bytes  alias_table_sha256 = 7;         // SHA-256 of the sealed alias table X's approving admin opened
+  uint64 target_table_version = 8;
+  uint64 alias_table_version = 9;
+}
+// the share seal's bodies (QD-108): each sealed under K with its label, padded by pad to a multiple of 256 B
+message BridgeShareTargets { repeated BridgeShareTarget targets = 1; bytes pad = 15; }      // label "targets"
+message BridgeShareTarget {
+  uint32 index = 1;                      // from 0, dense
+  bytes  host_sidecar_id = 2;
+  bytes  host_identity_public_key = 3;   // QD-077
+  BridgeIpv4Prefix prefix = 4;           // what X's host reaches: its hosted address as a /32, or a served prefix
+  uint32 protocol = 5;                   // 0 every protocol; 6 or 17 with ports
+  repeated BridgePortRange ports = 6;
+}
+message BridgeShareAliases { repeated BridgeShareAlias aliases = 1; bytes pad = 15; }       // label "aliases"
+message BridgeShareAlias {
+  uint32 index = 1;
+  uint32 alias_host_bits = 2;            // the low 16 bits of A_i's network address: Y's block is not X's to know
+  uint32 length = 3;                     // equal to its target's
+}
+message BridgeShareKeyBody { bytes share_public_key = 1; bytes pad = 15; }                  // label "share-key"
+message BridgeShareShortfall {                                                             // label "shortfall"
+  uint32 index = 1;                      // the first target that found no room
+  uint32 length = 2;                     // its prefix length
+  uint32 free_address_count = 3;         // the upper /17's free addresses at the preflight
+  uint32 largest_free_length = 4;        // the shortest prefix length with an aligned free block; 33 for none
+  bytes  pad = 15;
+}
+message BridgeRules {
+  // 1-9 as today
+  BridgeRuleSubject untagged = 10;       // the rows autogroup:untagged holds at this host, with no sidecar_id,
+                                         //   member_id or client_ids: what an sdk provider before C16 gives a
+                                         //   sealed subject no row binds (bridge-m4-09-other-client-rows, option 1)
+  repeated BridgeRuleShare shares = 11;  // the shares this host serves, X's side (17.9)
+}
+message BridgeRuleLink {
+  // 1-9 as today
+  bytes share_id = 10;                   // a share link, Y's side: FriendsAndFamily to an alias's host
+  bytes target_network_id = 11;          // with share_id: X
+}
+message BridgeRuleShare {
+  bytes share_id = 1;
+  bytes accepting_network_id = 2;        // Y: the principal's network must be it
+  bytes share_public_key = 3;            // as BridgeState.share_keys carries it
+  bytes grant_id = 4;                    // a GrantRevoke of it ends the share between states
+  int64 expires = 5;
+  repeated BridgeRuleShareTarget targets = 6;   // the targets this host hosts, by index
+}
+message BridgeRuleShareTarget {
+  uint32 index = 1;
+  uint32 alias_host_bits = 2;
+  uint32 length = 3;
+  BridgeIpv4Prefix target = 4;           // T_i: To's low bits past length are kept
+  uint32 protocol = 5;
+  repeated BridgePortRange ports = 6;
+}
+```
+
+**The head's paths** (`config_head.go`'s known paths gain them):
+
+```text
+bridge/ledger/manifest               one BridgeLedgerManifest; absent only in a head whose fold holds no bridge statement
+bridge/ledger/addresses              BridgeLedgerAddresses; absent when it would hold no row, as every file below
+bridge/ledger/egress                 BridgeLedgerEgressSpecs
+bridge/ledger/aliases                BridgeLedgerAliases
+bridge/ledger/rules/<xx>             BridgeLedgerRules whose rule_id begins with byte xx, two lowercase hex digits;
+bridge/ledger/rules/<xx>/<yy>          with rule_shard_bits 16, by its first two bytes
+bridge/share-grant/<share_id hex>    a BridgeShareGrant (QD-077), 32 hex digits
+```
+
+Encoding, which every writer on every leg must give alike, since the manifest hashes each file: protobuf's deterministic marshal; rows sorted by their key's bytes, `host_bits` as a number; no empty file; bodies carried as their messages with `approval` cleared and unknown fields refused, never as the bytes a signer sent; times as the log's `time_ms`. Rule ids are SHA-256 outputs or 32 random bytes, so 256 shards hold a 300 B row count each within a factor of two of the mean; the shard width is a function of the row count at the fold, so every writer picks the same one, and there is no cap on rules (owner decision 66).
+
+**Rule tags.** `EgressDecision.RuleTag` stays the first 8 bytes of SHA-256(subject_id || rule_id). Rule 3's rule_id becomes five bytes, 0x03 and the hosted address's IPv4, so an old address's drain end closes that address's flows alone (bridge-m4-11-rule-three-tags, option 2); rules 4 and 7 keep their one byte. A share flow's subject_id is its `share_id` and its rule_id is five bytes, 0x53 and u32be(target index), since X's host cannot list Y's subjects. Every tag is still enumerable from the state without tracking flows.
+
+**Settings.** `BridgeComponentSettings` (root; `DefaultBridgeComponentSettings()` fills them): `CompileDelay` 100 ms, `CompileMinInterval` 1 s, `CompileRetryInterval` 5 s doubling to 5 min, `CatchUpAlarmTimeout` 30 s, `WindowDelegationMaxLifetime` 168 h, `BindingRefreshInterval` 6 h, `BindingRetainTimeout` 7 days, `BindingMaxCount` 16 a subject, `ShareRenewInterval` 1 h, `ShareRenewBelow` 72 h, `ShareCertLifetime` 168 h, `ShareTableRefreshInterval` 1 h, `AcceptRetryCount` 3, `AutoAddressEnabled` false (plan-BRIDGE-small-readings #18). `BridgeLedgerSettings`: `ChunkByteCount` 64 KiB, `UnfoldedBodyMaxByteCount` 4 MiB (the opened bodies of the unfolded statements a compile holds; past it the compile refuses with `bridge_alarm` `ledger_over_budget` and the state stands), `RuleShardRowCount` 262,144.
+
+#### 12.2.3 The ledger: judging, the fold and its check
+
+```text
+JudgeBridgeBody(before, e at k)                  -- ConfigLogSettings.BridgeBodyJudge; nil at every keyless verifier
+  the log calls it for each BridgeRoute and BridgeMap filing that takes effect: when it judges the entry, with
+  before = S(k-1), and whenever it re-applies it at a base b, with before = R_b(k-1), b's rows with the tail's
+  entries below k applied by their verdicts (section 5.2.3's Reapply)
+  body := OpenConfigBody(e.sealed_body, keys)
+     its generation is not held   -> Unopened{generation}
+     the seal or padding fails    -> Refused{seal}, which is the reader's alarm
+  body.approval is unset          -> Standing        -- whether a standing grant covers it is the compile's (12.2.4)
+  else  facts, err := before.CheckBridgeApproval(e, body, body.approval)   -- as landed, on `before` itself: action,
+                                                        match, quorum and the spend check on before's AclState
+        err -> Refused{err}  |  ok -> Approved{approval_id, rule_id, uses, not_after_ms}
+  the verdict rides the BridgeLogStatement the state's fold then holds (Approval), as SignerAdmin does
+
+OpenBridgeLedger(rows, unfolded, state, keys) -> ledger
+  rows       T(ft), the head's ledger files, as 12.2.4's passes read them
+  unfolded   state.Bridge(): the statements that took effect in (ft, n], in log order, each with its verdict
+  for e in unfolded:
+    BridgeAddress    the landed rules, over rows and the entries before e: the first claim in log order wins; a
+                     second for an addressed host is void; a tombstone holds 30 days; the upper /17 only once the
+                     lower is full, never inside an alias or an exposed prefix
+    BridgeRoute,     Unopened -> pending: the id held, nothing active
+    BridgeMap        Refused  -> void
+                     Standing, Approved -> the landed rules: a held id changes only weight, site_id and
+                       drain_seconds; a withdrawn or reserved id is void; D-BRIDGE-8; the body's shape; room for an
+                       exposed prefix. Approved also: the statement's rule id is facts.rule_id, and the rows and
+                       earlier entries that name facts.approval_id number fewer than facts.uses
+    BridgeEgress     replaces its subject's spec; its exits from the body, none while pending or void
+    BridgeAlias      void unless its signer was an admin's device where it landed (SignerAdmin). A release ends the
+                     alias of its share_id and target_index, by that alias's signer or an admin, draining; any
+                     other needs room in the upper /17 and a free (share_id, target_index)
+    BridgeWithdraw   binds the rule it names, or reserves the id for its signer's filings (an admin's: anyone's)
+  releases   a sidecar that state holds revoked at entry r, or whose member is gone, released its address at r
+```
+
+`CheckBridgeApproval` changes in one way: it judges on its receiver, the state the log hands it, where the landed one asks `StateAt(statement.N - 1)`. `ErrBridgeApprovalUnverifiable` goes, and with it `BridgeLedgerReader.Approvals` and every verdict a reader kept for itself.
+
+**Which state judges an unfolded filing.** For a reader at pin n whose newest base is b, with fold ft:
+
+```text
+k <= ft        the fold's row, frozen
+ft < k < b     Judge(R_b(k-1), e_k): the tail, judged again at b on b's rows, as section 5 re-applies it
+b < k <= n     Judge(S(k-1), e_k): judged at its position
+```
+
+S(k-1) is R_b(k-1) for k above b (section 5.2.2), so the last two lines are one rule: an unfolded filing is judged on the state its entry lands on, as the newest base rebuilds that state. Every reader at pin n holds b's rows, the entries from ft on and their verdict bits, so every reader builds the same states and reaches the same verdicts. A verdict differs from the one judged at the entry's own position in one case: a base leaves the filing unfolded, and its head changes what the approval's spend check reads (the request rule, its approvers, its evidence list). Every reader then turns the verdict at that base, alike (`BridgeFoldReach-Turn`). The writer rule below keeps that to the seconds between a head's writing and its base's acceptance, and question details-12-unfolded-verdicts gives the alternative that removes it.
+
+```text
+FoldBridgeLedger(T(ft'), the writer's state at its tip, ft) -> T(ft)          -- inside ConfigWriter's plan, at a base
+  ledger := OpenBridgeLedger(T(ft'), the state's unfolded statements at or below ft, state, keys)
+  an Unopened filing at k stops the fold at k-1: a writer never freezes what it could not open. A config writer
+     holds every generation, so this is a broken delivery: it alarms config_key_waiting and folds to k-1
+  rows   the ledger's addresses, live and the tombstones still holding at time_ms; its rules, active, void, withdrawn
+         and reserved, a withdrawn or reserved row leaving once time_ms passes retain_until_ms; its egress specs; its
+         aliases, a released one leaving at its drain's end
+  time_ms := the time of the entry at ft
+  each file whose rows changed is written; the manifest names every file with its hash
+writer rule    a base folds through the writer's tip whenever a bridge statement is unfolded there, where section 5
+               lets a policy-only base keep its fold. So a filing stays unfolded across a base only when it landed
+               between the head's writing and the base's acceptance (section 5.2.4's 409)
+
+CheckBridgeLedgerFold(head, previous head, my state at b-1) -> ok | mismatch | unchecked     -- inside CheckHead
+  a full reader standing at S(b-1), before it takes base b:
+     mine := FoldBridgeLedger(the previous head's T(ft'), my state, ft)
+     every file's hash and the manifest equal   -> ok
+     any differs                                -> ErrConfigHeadMismatch: a FORK, as a rows mismatch is
+     I hold an Unopened filing at or below ft   -> unchecked: I take the head's rows, as a new device does
+  a device that starts at b takes the rows; so does a VPN component, which is a rows-only verifier with a reader
+  key and checks no compile (section 4.2.1), its app's sidecar role checking this one whenever it runs
+```
+
+A verdict frozen at a fold is the one every reader standing under the previous base held, because the writer folds the statements its own state holds, judged under that base. A writer cannot freeze another: the readers standing there fork on it. And a frozen verdict never changes: a later fold copies the row.
+
+Three smaller rules complete the ledger. A rule's approval budget is counted over rows and entries by `approval_id`, so it needs no table of its own: a row that names a decision keeps the count for as long as the rule lives, and once every rule of a decision has left the rows the decision's `not_after` has passed, which refuses any later filing under it. A void id stays for the network's life (`retain_until_ms` 0), since the entry that filed it is in the head's folds as long. And a daemon that gains a generation late judges the filings it held `Unopened` through `ConfigLog.RejudgeBridgeBodies`, which hands the judge S(k-1) from `StateAt` for an entry above the base and, for a tail entry, rebuilds R_b(k-1) from the retained base rows; a VPN component needs no such call, since every compile restores its judge at the base with the keys it then holds.
+
+#### 12.2.4 The compiler
+
+```go
+// sidecar/bridge_compile.go
+type BridgeConfigView interface {
+	State() *ConfigState          // S(n): the pin, the log's time, the rows' sidecars, members and Delegations
+	Acl() *AclState               // NewAclState(rows.acl, State()), built once by the caller
+	AclLocal() *AclLocalPolicy    // the sealed policy's CIDRs and ports (§8.6); nil with no document
+	Head() *ConfigHead            // the head S(n)'s base names, without its folds: block, names, share files
+	LedgerFile(path string) (BridgeLedgerFileReader, error) // a ledger file of that head; nil for none
+	RepoKeyAt(generation uint64) *EvsRepoKey                // nil for a generation not held
+}
+type BridgeLedgerFileReader interface { // rows in file order, one decoded at a time
+	Next() (proto.Message, error) // io.EOF at the end, after the bytes read hashed to the manifest's sha256
+	Close()
+}
+type BridgeCompileLocal struct { // what the host knows of itself
+	SidecarId       Id                   // S
+	DaemonListeners []string             // rule 0: DaemonLocalListen's binds, host:port; none in a VPN component
+	Bindings        BridgeBindingView    // verified identity bindings by sidecar_id and by client_id (below)
+	ShareTables     BridgeShareTableView // the sealed tables of the shares this host serves, by share_id (12.2.7)
+	PreviousBlock   *bridge.BridgeBlock  // the block last compiled (D-BRIDGE-16's "keeps the previous block")
+}
+type BridgeCompiled struct {
+	State        *bridge.BridgeState
+	Digest       [sha256.Size]byte       // SHA-256 of State's deterministic marshal
+	ShareSigners []*BridgeShareSignerUse // the signers this host signs share links with; never in State
+	Waits        []BridgeCompileWait     // pending bodies by generation; bindings and share tables not yet held
+	Alarms       []BridgeAlarm
+	Block        *bridge.BridgeBlock     // the block in force, the next compile's PreviousBlock
+}
+func CompileBridgeState(view BridgeConfigView, local *BridgeCompileLocal, settings *BridgeLedgerSettings) (*BridgeCompiled, error)
+func CompileBridgePending(state *ConfigState, identity *SidecarIdentity) *bridge.Pending
+```
+
+A daemon backs the view with its `ConfigClient`'s state and its evs working copy of the head; a VPN component with the Forwarder's rows-only `ConfigLog`, its opened head and its sealed store (section 4.2.5's steps 1 to 3). `LedgerFile` is the only way the compiler touches the ledger's rows, and both backings hand it a stream: a file is never decoded whole.
+
+```text
+CompileBridgeState(view, local)                         n := the pin, t := S(n)'s time_ms, S := local.SidecarId
+ 1 block     ReadBridgeBlock(head, state, local.PreviousBlock): a refused block keeps the previous and alarms
+             block_refused (D-BRIDGE-16); none yet: no addresses, no entries, the rest compiles
+ 2 reach     one pass over the rows' sidecars in sidecar_id order, each X other than S that stands at t:
+               in[X]  := acl.DialRules(X, S), acl.RouteRules(X, S), acl.ExitRules(X, S)       -- X reaches S
+               out[X] := acl.DialRules(S, X) is not empty, or there is no document and S is untagged
+             with no document, in[X] exists with no rows for every untagged X: rule 4 passes it, and the host
+             still needs its identity to verify its delegation
+             untagged := the rows autogroup:untagged holds at S                    -- BridgeRules.untagged
+ 3 open      every unfolded statement's body, with the keys held; their sum past UnfoldedBodyMaxByteCount
+             refuses the compile (ledger_over_budget)
+ 4 wanted    W_s := {S}, every X in out, and the subjects of unfolded BridgeAddresses
+             W_r := the rule ids unfolded statements name;  W_a := the approval ids their verdicts name
+             P   := the prefixes unfolded routes and aliases name
+ 5 passes    over the head's ledger files, each read once, front to back, a row decoded, used and dropped:
+             addresses  keep the rows of W_s; set a 65,536-bit map of the host bits held, live or a tombstone
+                        holding at t; count the lower /17's held hosts
+             aliases    keep each row as (range, share, index, host, key): at most 32,512; mark the map
+             rules/*    keep the rows of W_r; count rows by approval id in W_a; keep every row S owns; keep each
+                        route in force that overlaps P or that S may use (step 7); mark each exposed prefix
+             egress     keep S's row and the rows of the atoms S holds
+ 6 ledger    OpenBridgeLedger over what the passes kept and the unfolded statements (12.2.3)
+ 7 build     addresses  S's live address in the block, and in the previous block while it drains
+             entries    block/16 unassigned and block.0.0/24 service; a /32 link entry for each X in out with a
+                        live address; for each route in force that S may use (acl.RouteRules(S, its advertiser)
+                        meeting its prefix by AclLocal, or no document and S untagged), an entry for each of its
+                        prefixes, or for its exposed prefix, whose links are the advertisers of that identical
+                        prefix (D-BRIDGE-8's replicas), a withdrawn one until its drain's end; for each alias S
+                        may use (acl's reach to its share), a link entry with share_id; the same under the
+                        previous block while it drains
+             links      the target's client and key: its current binding from local.Bindings, verified under its
+                        SidecarRow's identity key; for an app host, the host client and key its live forwarding
+                        DelegationRow names (section 4.2.2); on a share link, the binding verified under the
+                        alias row's host_identity_public_key. A target with none is left out and named in Waits
+             maps       S's maps in force; one that targets a block address, a daemon listener or a §13.7 control
+                        panel is void here and alarms
+             served     S's routes in force with their exposed prefixes, a withdrawn one until its drain's end
+             subjects   for each X with in[X], in sidecar_id order: its member, whether it is tagged, its client
+                        ids (below), and its dial, route and exit rows, one a rule, with that rule's ports and
+                        prefix from AclLocal, its grant id and its expiry; a row expired at t is left out
+             egress     acl.EgressMode(S) over the rows' BridgeRows; under exits, the exits of the ledger's spec
+                        naming S, else of the first atom S holds that has one, in atom id order, each a link
+             shares     12.2.7's rows for each share-grant file whose grant is live and whose tables verify
+ 8 state     BridgeState{auth := n's pin; genesis; has_document := acl.HasDocument(); rules := the rows above;
+               names := ConfigNames' name of each addressed sidecar among S and out, and of each alias S may use;
+               name_zones; identities := for each subject its SidecarRow's key, admitted_at, revoked and
+               suspended, and its live forwarding Delegation's id and key; share_keys := each compiled share's;
+               daemon_listeners := local's}
+ 9 digest    SHA-256 of the state's deterministic marshal
+```
+
+**In force.** A rule row is in force when its disposition is active and either it was filed under a decision or a standing grant covers it at this state: for a route, a `route` grant of the document among the ids its `route_rule_ids` names whose `ip:` CIDRs hold every prefix of the route and whose via subjects hold its advertiser; for a map, a `dial` grant of the document that names its host and whose ports cover the map's; with no document, an untagged owner's rules are covered (owner decision 120) and a tagged owner's only by §8.5's implicit rules. `AclLocalPolicy.StandingCovers` answers from the state in force, so a policy edit that drops the grant ends the rule at that base and a later edit restores it: an effect that follows the rows, as a folded grant ends when its `source_rule_id` leaves the document (QD-079). A map past its `expires` at t is left out; the device role ends one that lapses between compiles by its own clock, as landed.
+
+**Equal bytes.** What makes two compiles of one input equal:
+
+```text
+order     every repeated field in one order: addresses ascending; entries by prefix address, then length; an
+          entry's links by target_sidecar_id, then rule_id; maps and served by rule id; subjects and identities by
+          sidecar_id; a subject's rows by grant_id, prefix, protocol, first port; client_ids ascending; share_keys
+          and shares by share_id; a share's targets by index
+maps      no Go map is ranged over: each is read through its sorted keys; the state marshals with protobuf's
+          deterministic option, which orders the names map
+time      t is S(n)'s time_ms. Rows carry expiries and drain times as log times. Nothing reads a clock
+random    nothing draws one: an allocation (an address, an alias block) is the filer's act, and the ledger only
+          judges it
+keys      a body whose generation is not held is pending and named in Waits: two compilers differ only where their
+          key sets do, and their Digests then differ
+local     DaemonListeners, Bindings, ShareTables and PreviousBlock are inputs: equal inputs, equal bytes
+```
+
+`Digest` is in `BridgeComponent.Status` and the Forwarder's status beside the pin. A daemon and a VPN component of one device never compile for one sidecar, so nothing compares digests in production; the tests do (12.6), and `ur bridge` shows it so two devices' views of one host can be compared by hand.
+
+**Client ids and bindings** (QD-161). The compile calls nothing. What it needs from a server it reads from `local.Bindings`, which the component fills off the compile path and persists:
+
+```text
+current      for each sidecar a compile named in out, in or Waits: GET /sidecar/identity/<sidecar_id>, verified
+             under the SidecarRow's identity key (VerifySidecarIdentityBinding), again each BindingRefreshInterval
+             and when a link's ContractDestinationCheck fails
+by client    a client id VerifyPrincipal refused, which the hook counts and never waits on: GET
+             /sidecar/identity?client_id=, kept if its binding verifies to a subject of the state, alarmed as
+             principal_mismatch if it names another sidecar or none
+kept         each (sidecar, client id) for BindingRetainTimeout, 7 days, the longest a window client lives, after
+             it stopped being current; at most BindingMaxCount a sidecar, the newest kept
+client_ids   a subject's current and kept ids
+```
+
+A binding that arrives changes an input, so the component compiles again; `Waits` is how it knows which to fetch.
+
+**The working set.** Beside its output a compile holds: one 64 KiB chunk a ledger file open, the 8 KiB host map, the alias ranges (16 B each, at most 520 KB), the rows of W_s and W_r, the unfolded statements' opened bodies (bounded at 4 MiB, a few KB in practice) and the reach of step 2, which is the output's subjects and entries before they are rows. Nothing else of the network is held: the rows' sidecars are read in one pass from the state the caller already holds, and the ledger's files are streamed. The output follows what reaches S and what S reaches (12.4).
+
+#### 12.2.5 The engine: one fence, one gate
+
+`device.Bridge` is the engine's enforcing half and has landed: the posture commits, `BridgeEgressPolicy.Publish` swaps the policy at the next generation, `bridgeDispositionTags` names the tags the new policy no longer admits, and `CloseFlows` runs on every NAT the hook is installed on, outside every lock (BRIDGE-M4-09, -11). `BridgeComponent` is the root's half, which a daemon runs and an app does not (section 4.7): it follows the config, compiles, and feeds the sink. `BridgeStateSink` is section 4's `ForwarderSink` with two methods more, so `device.Bridge` has one set of producers' calls:
+
+```go
+// sidecar/bridge_component.go; cli/ adapts device.Bridge to it for ur tun, and sdk for the Forwarder
+type BridgeStateSink interface {
+	SetPending(pending *bridge.Pending) error
+	SetState(state *bridge.BridgeState, log *BridgeStateLog) error // the log run from the state's base through its pin
+	ApplyDeltas(log *BridgeStateLog) error
+	SetFork(fork bool) error
+	Decision() BridgeSinkDecision
+	Revoke(statementType bridge.SignedType, id []byte, n uint64) error // n is the denial's own position, never 0
+	EgressHook() connect.EgressHook
+}
+```
+
+```text
+BridgeComponent, per network; one goroutine owns every call into the sink, so they are ordered
+OnEntry(e at n, verdict, effects)      -- ConfigClient.AddEntryCallback: the entry is in the client's store first
+  sink.ApplyDeltas(the entries through n)        -- tier 1: the posture persists them and applies what it can check
+  for each denial d in effects (AclSuspendEffects and the forwarding row's: a revocation, a removal, a park, a
+      suspension, a revoked grant, a withdrawal, a revoked or superseded forwarding Delegation):
+      sink.Revoke(d.type, d.id, n)               -- what the judge decided and the posture could not check, held at n
+  if e is not a pure denial: want a compile
+OnState(state)                         -- a base, a head, a generation key, a binding or a share table arrived
+  want a compile
+Compile                                -- single-flight; CompileDelay after the first want; one more if wanted meanwhile
+  n := the client's verified tip; view := that state, its head, the keys held now
+  out := CompileBridgeState(view, local)         -- an error, or a refused block alone, changes nothing but an alarm
+  sink.SetState(out.State, the log run)          -- the posture drops a state below the one in force, and keeps
+                                                    every denial above n: its overlay's and Revoke's
+  signer.Install(out.ShareSigners); a changed signer -> ResignShares (12.2.8)
+  local.PreviousBlock := out.Block; fetch what out.Waits names
+inside the sink, as landed, for every call above and for its own timer (an expiry, a drain's end):
+  1 persist    the posture commits what it verified: the state, or the entries, to its store
+  2 publish    BridgeEgressPolicy.Publish: one pointer swap, generation g+1
+  3 close      CloseFlows(tag) on every bound NAT for each tag g+1 no longer admits, outside the lock
+  4 route      the sender's table and names swap; links re-sign as the posture's identity
+```
+
+Three rules make that order safe against everything that runs beside it.
+
+*A denial is held at its own position.* `Revoke` refuses n = 0, which the landed code reads as "the state's pin plus one". A denial at n is dropped only by a state at or past n, which was compiled with that entry applied. A compile that captured a lower pin and finishes later leaves it standing, and a compile that finishes below the state in force is dropped whole (section 4.2.5's lower-state rule).
+
+*A flow lives by its generation.* connect's C5 contract is unchanged: a flow registers its decision and generation before it dials, `CloseFlows(tag)` ends every registered flow of the tag below the published generation, and a flow whose dial completes re-reads the generation and re-resolves on a newer one. So a flow that resolved before a publish and registers after the close is caught by its own recheck, and a close that runs late, after two more publishes, ends only flows registered before the publish that queued it or a later one: it can end a flow a later grant would admit again, never spare one a revocation should end.
+
+*The provider waits at the gate.* A start, and each new client generation, runs in this order:
+
+```text
+Attach(env)                                     -- CORE-M1-08, per client generation
+  1 restore    the sink exists, or NewBridge restores the posture and publishes its decision: pending denies every
+               Network flow; a restored enforcing state is in force with the denials the posture stored
+  2 hook       the generation's LocalUserNat is built with the hook in its settings, never installed afterwards
+  3 catch up   wait for the ConfigClient's restored state (its own store; no network); then, for every entry
+               above the sink's state pin that the client holds, OnEntry's two calls, in order; then a compile
+               at the tip if one can run
+               the client's verified position is below the posture's pin (its store lagged): wait for its
+               follow to reach it, raising bridge_alarm catch_up_waiting after CatchUpAlarmTimeout, 30 s
+  4 provide    only now is the provider built on the generation's client, so only now can a source's frame
+               reach the NAT
+```
+
+Step 3 needs one rule of `ConfigClient`, which this section states and TEAM-M2-10's code is checked against: an entry is in the client's store before any entry callback runs. With it the catch-up reads only local stores and takes milliseconds. An app's VPN component has no resident judge, so its catch-up is step 1 alone: every denial its posture applied is in the posture's store, and what the posture could not check waits for a compile, as section 4 has it (QD-621).
+
+A new client generation keeps the sink: the old generation's NAT ends with its context, which ends its flows and unbinds its closer, and the new NAT is bound when its hook is set. While both exist a close reaches both.
+
+#### 12.2.6 Signing delegations
+
+```go
+// sidecar/bridge_sign.go
+type BridgeDelegationRequest struct {
+	NetworkId             Id
+	SubjectSidecarId      Id
+	WindowClientId        Id
+	WindowClientPublicKey []byte // the window client's ClientKey public key, 32 B
+	TargetSidecarId       Id
+	NotAfter              time.Time // the window client's strict_exp (§7.4)
+	ShareId               Id        // zero on a same-network link
+}
+func (self *Sidecar) SignWindowDelegation(request *BridgeDelegationRequest) ([]byte, error)
+```
+
+```text
+refused   another network or another subject than this sidecar's own; a key that is not 32 B; a NotAfter in the
+          past or more than WindowDelegationMaxLifetime, 7 days, ahead; no compiled state (pending)
+          a target the newest compiled state names in no link: an entry's, an exit's, or with ShareId an alias's
+          host of that share
+same      Signed{type 0x1908, purpose window-delegation, signer_id := sidecar_id, 16 B}, by the identity key
+network   (Sidecar.Sign, CORE-M1-05); not_after_ms := NotAfter
+share     the share's BridgeShareSignerUse from the newest compile: refused when there is none, when its cert is
+          within 60 s of its not_after, or when its generation is below one this sidecar already signed with;
+          Signed{signer_id := share_id, key_id := SHA-256(the signer's public key)}, share_cert embedded,
+          not_after_ms := the earlier of NotAfter and the cert's
+never     a seed, or the signed bytes, in a log line, an event, BridgeState, a device RPC reply or an MCP tool
+```
+
+The forwarding role's signer is section 4's `ForwardingSigner`, with the same refusals and its own key; on a share link it uses the `ShareSigners` its own compile returned.
+
+#### 12.2.7 Shares: tables, the preflight, invite, accept and activation
+
+A share is §8.11's: X's admin-approved `route` or `dial` grant to `network:Y`, activated by a `GrantActivate`. This section adds what rides it: two sealed tables and a sealed key at api (`network_bridge_share`, BRIDGE-M6-02), one config file in X, and `BridgeAlias` statements and one config file in Y.
+
+```text
+invite     X's admin, on a /dev/tty-confirmed ur command or in an app's UI, never MCP
+           code := 32 random bytes, shown once as the invite; K := HKDF-SHA256(code, salt x_network_id,
+                   info "urnetwork-sidecar-v1/bridge-share") (testHookSecret); neither reaches a server
+           targets := BridgeShareTargets, index from 0: each host's sidecar_id, its identity key from X's rows, and
+                      its hosted address as a /32 or a prefix it serves, with the grant's protocol and ports
+           POST /acl/invite with §8.11's share, SHA-256(code), and the table sealed under K, label targets,
+                version 1 -> share_id. The target table never changes: other targets are another share
+accept     Y's admin, the same way, holding the code
+           opens the target table (a failed open refuses and alarms; no fallback)
+           preflight (below), on the ledger at this device's tip -> aliases, or a refusal
+           ShareKey := BridgeShareKeyring.Create(share_id)                          -- 12.2.8
+           files one BridgeAlias a target, each carrying its T_i's host and host identity key; waits for each
+                 to land, then reads its own ledger at that position: every alias in force -> go on; any void (a
+                 concurrent accept took the block) -> release the ones that landed, run the preflight again at
+                 the new tip, at most AcceptRetryCount times, then refuse as no_space
+           writes bridge/share/<share_id>, the first BridgeShareSigner, in a head (SaveHead)
+           POST /acl/accept-invite with the alias table sealed under K, label aliases, version 1, the ShareKey's
+                public key sealed under K, label share-key, and accept_status active
+           a refusal posts accept_status refused_too_large, or refused_no_space with the shortfall sealed under K,
+                and files no alias
+activate   X's approving admin, the same way
+           reads both tables and the key (GET /network/bridge/share/<share_id>), opens them with K, and is shown
+                Y's network and each target before approving
+           in one act: files the share's GrantActivate, and writes bridge/share-grant/<share_id> in a head: the
+                grant id, the ShareKey's public key, K, Y's network id, and each table's hash and version
+revoke     X: a GrantRevoke of the grant; every X host's next state drops the share, and between states the
+              overlay's GrantRevoke denies its principal, and CloseFlows ends its flows
+           Y: a BridgeAlias release for each target, by an admin; routers drain the aliases
+```
+
+```text
+BridgeSharePreflight(ledger, targets) -> aliases | refused_too_large | refused_no_space{shortfall}    (D-BRIDGE-20)
+  held := the upper /17's host bits that are taken: aliases, a released one until its drain's end; exposed
+          prefixes of routes in force or draining; host addresses spilled there, live or tombstones
+  for T_i in index order:
+     L := T_i's prefix length; L < 17 -> refused_too_large
+     for a := 0x8000; a < 0x10000; a += 2^(32-L):          -- aligned blocks, first fit from the bottom
+        any bit of [a, a + 2^(32-L)) held -> next
+        L = 32 and a's last octet is 0x00 or 0xff -> next
+        A_i := a/L; hold it; break
+     no block -> refused_no_space{i, L, the free address count, the longest free aligned block's length}
+  two targets never share a block, whatever their prefixes in X: two shares of one 192.168.1.0/24 get two /24s
+```
+
+The preflight is a function of the ledger and the table, so two devices at one pin plan the same aliases; what makes two concurrent accepts safe is not the plan but the ledger, which gives a block to the first alias in log order, and the accepter's check of its own ledger before it reports `active`.
+
+**What each side compiles.** In Y, an alias in force is a link entry of the sender's table for each subject that Y's grants let reach the share (§8.11's `dial` on `network:X`): its prefix is the alias in Y's block, its link names the host, X's network and the share, and the host's key is the one the alias row carries, so a substituted target key fails the sender's check on a share link as on any other (FS-38). In X, a host compiles a share from its grant file only while the file's grant is live, and only from tables that hash to the file's pins; the tables are fetched off the compile path into `local.ShareTables` (again each `ShareTableRefreshInterval`), and a table at another hash or version than the pin is ignored with `bridge_alarm` `share_table_mismatch`. The host's rows hold the targets it hosts itself. Its hook, on a FriendsAndFamily flow whose principal's verified share and network select the rows, matches the destination's low 16 bits against each target's `alias_host_bits` and `length`, rewrites it to T_i keeping the bits past the length, and then runs rules 0 to 3 and 6 under the share's ports (§17.6's row). It matches host bits because Y's block is not in the table and need not be: Y's senders keep an alias's host bits when Y's block cycles, so nothing X pinned changes.
+
+#### 12.2.8 ShareKeys, ShareSigners and re-signing
+
+```text
+BridgeShareKeyring, on the accepting admin's device
+  Create(share_id)       seed := 32 random bytes (testHookSecret); stored as bridge/share-key/<share_id hex> in that
+                         admin's owner-bound secret (§11.12), created If-None-Match; never in the config
+  Certify(share_id, g)   signer_seed := 32 random bytes (testHookSecret), fresh for every cert;
+                         cert := Signed{type 0x1909, purpose window-delegation, signer_id := share_id, key_id :=
+                           SHA-256(ShareKey public key), ShareCert{share_id, g, the signer's public key,
+                           not_after_ms := now + ShareCertLifetime}}
+
+renew, on a device that reads the ShareKey and writes the config: each ShareRenewInterval and at each new generation
+  g := the config repo's generation as this device holds it (GkmClient.CurrentRepoKey)
+  file := the newest verified head's bridge/share/<share_id>
+  due := no file, or file.config_generation < g, or its cert has less than ShareRenewBelow, 3 days, left
+  due -> ConfigWriter.SaveHead replacing the file with {share_id, g, Certify(share_id, g)}, the head sealed at g
+         evs refuses a head sealed at g once g no longer covers holders_shrunk_at (§10.6's write gate): the device
+         then reads the generation again and starts over with a new seed. A signer that did not land is dropped
+  not due -> nothing: a second pass at g is a no-op
+
+use, at every Y sidecar that compiles (a daemon, or an app's forwarding role)
+  the compile returns a BridgeShareSignerUse for a share's file only when: its share_id is the path's; its cert
+  parses as a ShareCert of that share whose generation is the file's and whose signer key is the seed's public
+  key; and its generation is at least the newest this sidecar has used for the share
+  a new signer -> BridgeHost re-signs each live window client of that share's links, in process, or over
+  §18.6's ResignShares where the sidecar role signs for a paired host; their next contracts carry it
+
+admit, at an X host (bridge.VerifyShareCert, then VerifyWindowDelegation)
+  the delegation names a share this state compiled; its share_cert verifies under that share's pinned ShareKey
+  with signer_id the share_id; the cert's share_id is the delegation's; its not_after_ms is ahead and at most
+  ShareCertLifetime and §8.6's 60 s away; its generation is at least the share's ratchet; the delegation verifies
+  under the cert's signer key; then the same-network row's window client, key, target, not_after and network checks
+  a generation above the ratchet: the ratchet is raised and committed to the posture's store before the contract
+  is admitted, one commit a share a rise, in that contract's sequence and never a packet's
+  the principal's not_after is the earlier of the delegation's and the cert's
+
+holder removed   at each compile a Y sidecar role reads who holds the ShareKey, the consented devices of the
+                 member whose device signed the share's aliases, and whether that member is still in the AdminSet;
+                 a device revoked, or the member gone from it, raises bridge_alarm share_holder_removed once,
+                 naming the share and the device or member, so X re-invites (§17.9's bound row)
+```
+
+Two choices here are this section's. A cert is never renewed in place: every `Certify` makes a new seed, so one seed rides one file, sealed at the generation its cert names, and "who holds this seed" is "who reads a head sealed at that generation". And the write gate is the fence against the stale holder of 12.1's E.1: the holder's check of its own view cannot be, since its view is what is stale.
+
+### 12.3 Invariants and why they hold
+
+```text
+LedgerEqual       two readers at one pin that hold the same generation keys hold one ledger: the same address for
+                  every sidecar, the same disposition for every rule id, the same aliases
+                  why: a ledger is OpenBridgeLedger(the newest base's fold rows, the unfolded statements, their
+                  verdicts). The rows are the head's and the statements the log's, and each verdict is a function of
+                  the entry, its key and R_b(k-1), which every reader at that pin builds alike (section 5's
+                  Agreement). Nothing a reader remembers enters
+FoldFaithful      a fold's rows are the ledger the readers standing under the previous base held at folded_through
+                  why: the writer folds its own state's statements, and every full reader standing there computes
+                  the same fold and forks on a difference (CheckBridgeLedgerFold)
+FoldedStays       a verdict, once folded, is the same in every later fold
+                  why: a fold copies the rows it does not change
+CompileEqual      CompileBridgeState returns the same bytes for the same view and local facts, on every leg, at any
+                  GOMAXPROCS, on a daemon and in a VPN component
+                  why: 12.2.4's table, and one code path over LedgerFile
+CompileBounded    a compile reads each ledger file once and holds its output, the wanted rows, two fixed maps and
+                  the unfolded bodies, never the ledger and never the head's folds
+OnlyVerifiedOpens what a host enforces opens nothing but what a state compiled at a verified pin allows (D-BRIDGE-18)
+                  why: the sink takes rules only by SetState, which the posture checks against its chain;
+                  ApplyDeltas and Revoke only narrow
+DenialsOutlive    a denial applied at position n stands until a state at or past n: no compile that captured a
+                  lower pin, no timer and no lower state removes it
+                  why: the overlay and Revoke's list drop an entry only for a state whose pin is at or above its
+                  position, and Revoke takes no relative position
+DialFence         no flow passes its first byte while the published policy denies its rule (D-BRIDGE-21)
+                  why: it registers before it dials, and its recheck re-resolves it on any newer generation
+NoStaleFlow       an open flow whose rule the published policy denies exists only while its CloseFlows is queued
+                  why: publish precedes close; a close ends every registered flow of its tag below the generation
+                  published when it runs, which is at or above the one that queued it; and a flow that registers
+                  later either resolved under a policy that admits it or is stopped by DialFence
+StartGate         after a start no flow is admitted until the hook is installed and every denial the device held
+                  durably before it stopped is applied again
+                  why: Attach's order, with the provider built last
+PolicySound,      the published policy admits no rule the device durably knows is revoked, and no open flow stands
+FlowSound         under one but while its close is queued
+                  why: DenialsOutlive, StartGate and NoStaleFlow together
+SevenDayBound     X's host admits a sidecar Y removed no later than ShareCertLifetime after its removal reached evs
+                  why: a removed sidecar holds only the seeds of heads sealed at generations it held; the write
+                  gate lands no such head after the removal; a cert runs ShareCertLifetime from its signing, which
+                  precedes its landing; and X's host refuses a not_after further ahead than that
+RatchetBound      X's host never admits a removed sidecar once it has verified a generation that sidecar did not hold
+                  why: one seed rides one file, sealed at its cert's generation; the ratchet refuses a lower
+                  generation, and it is committed before the admission that raised it
+RevokedAdmitsNothing  nothing is admitted on a share whose grant X revoked
+                  why: the compile takes a share only from a grant file whose grant is live, and between states
+                  the overlay's GrantRevoke denies its principal
+SeedsStayHome     no ShareKey seed, signer seed or K is in a BridgeState, a device RPC message, an MCP result, a
+                  log line or an event
+                  why: BridgeCompiled.ShareSigners is a root value handed to the signer alone, and K leaves the
+                  compile only as the rows it opened
+AliasesDisjoint   no two aliases in force, exposed prefixes or spilled hosts share an address of the upper /17
+                  why: the ledger gives a block to the first claim in log order and voids the rest, and an accept
+                  reports active only after its own ledger shows every alias in force
+```
+
+**The models.** Three, each small enough to check breadth-first over every reachable state at its bounds. They leave out what other sections' models hold: the chain, bases and forks of the log (`AuthLog.tla`), the forwarding key and the posture's waiting entries (`Fwd.tla`), and gkm's rotations (`Gkm.tla`).
+
+`BridgeNat.tla` is one host and one subject. The log grants and revokes rules; a revocation is checkable by the posture or only by a judge. The engine fetches entries, applies denials, starts compiles that capture the fetched position and finish in any order, publishes at a rising generation and queues closes that run later in any order. The NAT's flows resolve, register, dial, recheck and open as C5 has them. A restart loses everything volatile: the judge's denials, the compiles, the policy, the queued closes and every flow. `Judge` is true for a daemon and false for a VPN component. It checks `DialFence`, `NoStaleFlow`, `PolicySound` and `FlowSound`.
+
+`ShareSign.tla` is Y's config generation and write gate, a ShareKey holder whose view of the generation can be stale, one sidecar that stays and one that Y removes, and X's host with its ratchet. Days are ticks and `Life` stands for a cert's 7 days. The removed sidecar signs with any seed of a head sealed at a generation it held, under any cert that ever landed. It checks `SevenDayBound`, `RatchetBound`, `RevokedAdmitsNothing` and `OneSeedOneFile`.
+
+`BridgeFold.tla` is a log of filings, each approved by one approver, and bases, each a policy, a fold and a ledger. One reader has been present since the bootstrap and writes the bases; another starts at any base. Each keeps its verdicts as 12.2.3's rules say and applies entries at its own pace. It checks `Equal` (two readers at one position hold one verdict for every filing), `LedgerChecks` (a reader that holds verdicts for what a base folds finds the ledger equal to them) and `FoldedStays`.
+
+Runs, TLC at the owner's jar (master d8fb231), breadth-first, 4 workers, on 2026-11-10 on a machine carrying four build lanes (load average near 80). `run-bridge.sh <track>` runs every configuration and prints a verdict line for each.
+
+```text
+configuration                        bounds                                              result
+                                                                             distinct states  depth  time
+BridgeNat.tla
+BridgeNat                            1 rule, 2 flows, 3 entries, 2 compiles, 1 restart, a daemon
+                                     pass: TypeOK, DialFence, NoStaleFlow, PolicySound, FlowSound
+                                                                                      80,716     21  4 s
+BridgeNat-Forwarder                  the same in a VPN component (no resident judge)
+                                     pass: the five                                   95,022     21  5 s
+BridgeNat-TwoRules                   2 rules, 2 flows, 3 entries, 1 compile, 1 restart
+                                     pass: the five                                  153,595     20  6 s
+BridgeNat-Long                       1 rule, 1 flow, 4 entries, 3 compiles, 2 restarts
+                                     pass: the five                                1,056,497     23  36 s
+BridgeNatTwin-CloseBeforePublish     NoStaleFlow violated, a 10-state trace
+BridgeNatTwin-NoRecheck              DialFence violated, a 10-state trace
+BridgeNatTwin-StateDropsOverlay      PolicySound violated, a 7-state trace
+BridgeNatTwin-LowerStateAccepted     PolicySound violated, a 9-state trace
+BridgeNatTwin-RevokeAtZero           PolicySound violated, a 7-state trace
+BridgeNatTwin-ProviderBeforeCatchUp  FlowSound violated, a 13-state trace
+BridgeNatTwin-ProviderBeforeHook     NoStaleFlow violated, a 6-state trace
+BridgeNatReach-Opens                 the design, with "no flow opens" as an invariant: violated, an 8-state trace
+ShareSign.tla
+ShareSign                            3 generations, 3 signer files, Life 2 in a run of 6 days
+                                     pass: TypeOK, SevenDayBound, RatchetBound, RevokedAdmitsNothing,
+                                     OneSeedOneFile                                  537,100     20  17 s
+ShareSign-Wide                       3 generations, 3 signer files, Life 3 in a run of 7 days
+                                     pass: the five                                  909,636     21  32 s
+ShareSignTwin-NoWriteGate            SevenDayBound violated, a 9-state trace
+ShareSignTwin-SeedReuse              RatchetBound violated, a 9-state trace
+ShareSignTwin-NoRatchet              RatchetBound violated, a 9-state trace
+ShareSignTwin-RatchetVolatile        RatchetBound violated, an 11-state trace
+ShareSignTwin-LongCert               SevenDayBound violated, a 10-state trace
+ShareSignTwin-RevokeKeepsKey         RevokedAdmitsNothing violated, a 5-state trace
+ShareSignReach-Member                the design, with "no current reader is admitted": violated, a 5-state trace
+ShareSignReach-RemovedInBound        the design, with "no removed sidecar is admitted": violated, a 5-state trace
+ShareSignReach-HolderRemoved         a departed ShareKey holder, with "it is never admitted": violated, 3 states
+BridgeFold.tla
+BridgeFold                           5 entries, 2 approvers, a present reader and one starting at any base
+                                     pass: TypeOK, Equal, LedgerChecks, FoldedStays 1,026,489     16  53 s
+BridgeFoldTwin-KeepOwnVerdict        Equal violated, a 6-state trace
+BridgeFoldTwin-NewDeviceVoid         Equal violated, a 6-state trace
+BridgeFoldTwin-NoLedger              Equal violated, a 6-state trace
+BridgeFoldTwin-FreezeNewPolicy       LedgerChecks violated, a 5-state trace
+BridgeFoldReach-Turn                 the design, with "no base turns an unfolded verdict": violated, a 5-state trace
+```
+
+Each twin and reach run took under 4 s and stopped within 32,000 states; with four workers TLC's trace is not always the shortest, and the lengths are those of the run recorded. Two larger runs were stopped unfinished to leave the host to the lanes: `BridgeFold` at 6 entries, at 6.7 million distinct states, and `ShareSign` at 4 generations, 4 files and 7 days, after ten minutes. Neither had found anything when it was stopped, and neither is evidence.
+
+What the twins are. Three are the code or text as it stood: `RevokeAtZero` is the landed `Bridge.Revoke` called with n = 0, `NewDeviceVoid` is the landed ledger's `ErrBridgeApprovalUnverifiable`, and `KeepOwnVerdict` is its `Approvals` hook for kept verdicts. `NoLedger` is §17.8 as written, with nothing of the bridge folded but the log itself. `CloseBeforePublish` and `NoRecheck` remove D-BRIDGE-21's two halves. `StateDropsOverlay` and `LowerStateAccepted` are the two ways a late compile loses a denial, as in `Fwd.tla`, here carried to the flow. `ProviderBeforeCatchUp` and `ProviderBeforeHook` remove the gate. `NoWriteGate`, `SeedReuse`, `NoRatchet`, `RatchetVolatile` and `LongCert` each remove one of the five things `SevenDayBound` and `RatchetBound` rest on; `RevokeKeepsKey` is a compile that fills `share_keys` from a file whose grant has ended. `FreezeNewPolicy` is a writer that judges what it folds by the head it is writing, which the readers standing there refuse.
+
+What the reach runs are. `Opens` and `Member` show the designs admit what they should. `RemovedInBound` is §17.9's accepted bound: a removed sidecar is admitted, inside the bound, until a later generation's cert reaches the host. `HolderRemoved` is its other accepted row: a device that held the ShareKey and left can certify until X revokes the share, which is why 12.2.8 raises `share_holder_removed`. `Turn` is the one case in which a verdict differs from the one judged at its entry's position (12.2.3), stated so the owner can weigh it (12.9).
+
+### 12.4 Cost
+
+Figures marked estimate are computed from the formats and from costs other sections measured; nothing here was measured on a device, and BRIDGE-M4-16's benchmark and SDK-M8-15's cell replace them.
+
+```text
+the ledger's fold in the head (estimate, from the rows' wire sizes)
+  an address row     30 B: host bits, a 16 B id, two positions and a time
+  a rule row         about 200 B for a map, 180 to 260 B for a route by its prefixes and route_rule_ids
+  an alias row       about 125 B, with the host's identity key
+  an egress row      about 30 B, more with a list of exits
+  a personal network 6 devices, 6 addresses, 10 rules: under 3 KB in 4 files
+  a 5,000-device team, every device addressed, 2,000 rules: addresses 150 KB, rules 400 KB across 256 shards
+                     of about 1.6 KB, the manifest about 16 KB
+  the block full     64,770 addresses: 1.9 MB in one file; 32,512 /32 aliases: 4.1 MB, the largest a file gets
+  a fold writes      the manifest, and each file a folded statement touched: one address claim rewrites the
+                     addresses file, one rule its shard
+a compile (estimate; a daemon on an M-class core, a 2020 phone core about four times slower)
+  reach              one pass over the rows' sidecars, three enumerations each at ACL-M2-09's measured 64 to 69 ns
+                     a rule check: 5,000 sidecars in about 15 ms
+  passes             the ledger's files once, decoded a row at a time: 600 KB in under 5 ms; unsealing the same from
+                     a VPN component's store, AES-256-GCM in 64 KiB chunks, about as long again
+  unfolded bodies    one XChaCha20-Poly1305 open of at most 4 KiB each: 100 of them in under 1 ms
+  approvals          one Ed25519 verification a decision, about 50 µs, only for unfolded filings under a decision
+  output             a deterministic marshal: 2 MB in about 5 ms
+  in all             a personal network under 1 ms; a 5,000-device team about 30 ms on a daemon and 120 ms on a
+                     phone, inside section 4.4's 200 ms; it does not grow with the log's length
+  before this        every compile opened every sealed body the log ever took: 400,000 entries, 240 MB of folds
+memory a compile adds to what its caller holds (the state and AclState, which section 4.2.4's estimate covers)
+  fixed              one 64 KiB chunk an open ledger file, at most 2 at once; the 8 KiB host map
+  aliases            16 B a row: 520 KB with every /32 of the upper /17 aliased, a few hundred bytes in practice
+  wanted rows        the addresses of what S reaches, 30 B each decoded to about 100 B; S's own rules
+  unfolded bodies    at most UnfoldedBodyMaxByteCount, 4 MiB; a tail of 4,096 statements at a typical 150 B is 600 KB
+  output             what reaches S and what S reaches: a personal network under 4 KB; under a document a host with
+                     50 subjects and 50 targets about 25 KB; with no document, every untagged sidecar: at 5,000
+                     devices about 600 KB of subjects, 800 KB of identities and 550 KB of entries, the 2 MB that
+                     section 4.2.4 estimated for the steady state
+  against 4.2.4      its estimate's "2 x head byte count" counts the head's files a compile decodes whole (the
+                     policy, tags, groups, rules, names, labels, resolve, the block and the share files), not the
+                     folds, which no compile reads, nor the ledger's files, which are streamed and count as the
+                     two open chunks. Its "+ 1 MiB" covers this compile where the output is under about 0.5 MB;
+                     BRIDGE-M8-05 adds twice the last compiled state's size to the estimate, so a no-document
+                     team's larger output is admitted on what it will take
+an update at the NAT
+  a denial           no compile: one posture commit (one sealed record), one Publish, which indexes the state's
+                     rows again (about 1 ms at 1,000 rows), and CloseFlows for each tag that lost an admission
+  CloseFlows         one scan of the NAT's flows a tag, under each shard's own mutex: 10,000 flows in about 1 ms.
+                     A suspension closes a subject's tags, a few; a base that changes 1,000 subjects' rows can
+                     close several thousand tags, seconds of scanning off the packet path. A scan that takes a set
+                     of tags (an additive EgressFlowCloser method) is review-phase work if §22.9 shows it matters
+  the packet path    unchanged: one atomic load a flow at its recheck, nothing a packet
+  latency            a revocation reaches the hook in the time of one commit and one publish; a grant in
+                     CompileDelay, 100 ms, plus one compile: within §8.9's targets on a daemon by two orders
+shares
+  an invite          one sealed table, 256 B a block of padding; an accept, one BridgeAlias a target (about 300 B
+                     an entry), one head write, one sealed table and key
+  a rotation of Y    one head write a share by a holder (a fresh seed and cert, about 250 B), one re-sign a live
+                     window client a share link, and at each X host one Ed25519 verification and one store commit
+                     for the first contract that carries the new generation
+  a contract         as §17.9's cost row: about 350 B and two verifications with a ShareCert
+```
+
+### 12.5 Failure modes and recovery
+
+```text
+a body's generation is not held     the filing is pending: its id is held, nothing of it is active, Waits names the
+                                    generation, and the first (re)application with the key judges it. Older bodies
+                                    compile. A writer does not fold past it
+a body's seal does not open         void, and bridge_alarm state_unverified naming the entry; never a fallback
+a ledger file fails its hash,       the compile fails and changes nothing: the state in force stands, the sink is not
+or the manifest names none          called, bridge_alarm state_unverified; a daemon forks on the base (FoldFaithful's
+                                    check), a VPN component keeps its last state and its app's sidecar role reports
+                                    the fork (section 4.5's lying-writer row)
+a lying config writer's fold        every full reader standing under the previous base forks on the base that names
+                                    it; a device that starts there takes it, as it takes that writer's rows, and the
+                                    fork's alarm is what tells the network (section 5.5)
+a base turns an unfolded verdict    every reader turns it alike; the requester files again under a new decision.
+                                    Rare by the writer rule, and stated in 12.9
+the compile is over its budget      ledger_over_budget (more than 4 MiB of unfolded bodies) or section 4's admission:
+                                    the state stands, denials go on applying, the next fold shrinks the tail
+a binding is missing                the link, or the subject's client ids, is left out and named in Waits; the link
+                                    fails closed; the component fetches and compiles again. A window client of an
+                                    older generation recovers at its next contract (QD-161)
+a denial arrives during a compile   it is applied at once and held at its position; the compile's state, at a lower
+                                    pin, leaves it standing
+a compile finishes below the state  dropped whole
+the process dies between a publish  the NAT and its flows die with the process; nothing outlives the close it missed
+and its closes
+the process dies with a judged      at the next start the gate replays it before the provider is built; if the
+denial held only in memory          ConfigClient's store is behind the posture's pin the provider waits for the
+                                    follow, alarming after 30 s
+the posture's store is corrupt      pending, never legacy (section 4.5); the provider is built and denies every
+or rolled back                      private destination and exit
+a new client generation             the new NAT is built with the hook; the old one's flows end with its context
+api withholds entries               the host enforces what it has; nothing it had applied is lost by a restart
+a share's table does not match      the share is not compiled at that host, share_table_mismatch; flows to its
+its pin, or does not open           aliases are denied; X's admin activates again against the tables it reads
+a concurrent accept took the block  the second accept's alias is void in its own ledger; it releases, plans again at
+                                    the new tip, up to three times, then reports refused_no_space
+the ShareKey holder is offline      signers lapse 7 days after their last cert: Y's sidecars refuse to sign with an
+                                    expired one, links fail closed, and any device of that admin that writes the
+                                    config renews on its next run (section 4.7's note for a phone-only holder)
+the holder's renewal races a        evs refuses the head sealed at the old generation; the holder starts over at the
+rotation                            new one with a new seed; the refused signer is never used
+a sidecar Y removed keeps signing   admitted until a later generation's cert reaches the host or its last cert
+                                    expires, at most 7 days (§17.9's bound, accepted)
+the ShareKey's holder leaves        share_holder_removed at every Y sidecar role; X revokes and re-invites
+an X host restarts                  its ratchet is in the posture's store, committed before the admission that
+                                    raised it, and ShareCerts re-verify offline against the pinned key
+a signer file from a config writer  Y's sidecars sign with it, X's host refuses the cert, their links mark down:
+without the ShareKey                fail closed, and the holder's next renewal replaces the file
+```
+
+### 12.6 The test plan
+
+Unit tests, each a top-level `func TestXxx`, on fake clocks, barriers and `sidecartest`'s fakes:
+
+```text
+root, the ledger      TestBridgeLedgerEqualFromAnyBase (generated logs with bases, folds and policy changes; a reader
+(BRIDGE-M4-23)        present since the bootstrap and one restored at each base hold equal ledgers and equal
+                      BridgeState bytes at every pin), TestAnApprovalIsJudgedOnTheStateItLandsOn,
+                      TestABaseJudgesItsTailOnItsOwnRows, TestAFoldFreezesWhatItsReadersHeld,
+                      TestALedgerFoldMismatchForks, TestAnUnopenedFilingStopsTheFold,
+                      TestALateGenerationJudgesThePendingFiling, TestBridgeLedgerFilesAreDeterministic (byte-equal
+                      across runs, GOMAXPROCS and legs), TestRuleShardsWiden, FuzzBridgeLedgerFold (a fold of a
+                      random log equals the ledger of that log opened whole)
+root, the compiler    golden states in testdata/bridge/compile/, byte-equal across runs and GOMAXPROCS; the plan's
+(BRIDGE-M4-16)        cases (§8.5's no-document rows, D-BRIDGE-8, a route in force only once approved or covered, a map
+                      onto a listener or an overlay address refused, a name equal to a published host omitted, a
+                      withdrawn route draining, has_document and rules from one pin); TestCompileReadsEachLedgerFileOnce
+                      (a counting reader), TestCompileHoldsNoLedger (heap sampled at a 5,000-address fold against
+                      12.4's working set), TestCompileIsEqualOnADaemonAndAForwarderView, TestCompileNamesWhatItWaitsFor,
+                      TestAStandingRuleFollowsThePolicy, TestUntaggedRowsAreAutogroupUntaggeds, BenchmarkCompile at
+                      6, 1,000 and 5,000 devices
+root, the component   the plan's cases (Pending before the first state, states rising only, a burst coalesced, the
+(BRIDGE-M4-17)        signer's refusals, TestNoProviderBeforeHook, a new generation leaving no goroutine, latency on a
+                      fake clock, no prefix or name in logs); TestADenialIsHeldAtItsPosition (a compile that captured a
+                      lower pin finishes after a Revoke and admits nothing), TestRevokeRefusesPositionZero,
+                      TestTheGateReplaysJudgedDenialsBeforeTheProvider (a restart between a k-of-n MemberRevoke and its
+                      compile), TestTheGateWaitsForALaggingStore, TestACloseRunsAfterItsPublish (barriers at
+                      bridge_state.close.before), TestEntriesAreStoredBeforeTheirCallbacks
+device/               TestRuleThreeTagsNameTheAddress (an old address's drain end closes none of the new one's flows),
+(BRIDGE-M4-24)        TestOtherClientsHoldUntaggedRows, FuzzParseBridgeRules with the new fields
+root, shares          seal vectors in testdata/bridge/share/ for the four labels, each refusing another share's table, a
+(BRIDGE-M6-03)        wrong label, a wrong version and a flipped bit; the plan's §22.7 cases; TestPreflightIsFirstFitAndAligned,
+                      TestPreflightIsEqualAtOnePin, TestTwoAcceptsOfOneBlockLeaveOneActive (the second re-plans),
+                      TestAcceptReportsActiveOnlyWhenItsLedgerDoes, TestAShareCompilesOnlyFromPinnedTables,
+                      TestAShareEndsWithItsGrant, TestAliasesMatchByHostBitsAcrossABlockChange; server capture holds no
+                      target, alias or key
+root and bridge,      the plan's cases; TestACertIsNeverRenewedInPlace, TestARenewalRefusedAtTheWriteGateStartsOver
+signers               (the stale holder of 12.1's E.1, a barrier between its read and its write),
+(BRIDGE-M6-04)        TestTheRatchetIsCommittedBeforeItAdmits (a kill at the barrier leaves the ratchet raised or the
+                      contract refused, never neither), TestARemovedSidecarIsRefusedAfterALaterCert, TestTheRatchetSurvivesARestart,
+                      TestSeedsNeverLeaveTheSigner (a capture of BridgeState, every device RPC message and every event)
+```
+
+Schedule rows. FS-56 gains the engine's schedules, each a twin of `BridgeNat.tla` on real code with barriers: a close held after its publish while a flow registers and dials; two publishes before the first close; a compile finishing below a held denial; a restart between a judged denial and its compile; a provider's first frame against the hook's installation. FS-38's share rows gain: a renewal racing a rotation at the write gate; a removed sidecar with an unexpired cert before and after a later generation's cert reaches the host, and after the host restarts; a ShareCert over 7 days out; a share revoked between states. FS-14 gains a bridge filing across a fold at a new device, a daemon and a VPN component, with equal `Digest`s, and a base that turns an unfolded verdict, at all three alike. §22.5's §17 row gains the compile's benchmark and "no compile reads a fold file". Each twin of the three models is one of these schedules, and each accepted reach trace is one the code must also reach, with its alarm where it has one.
+
+Gates. `BenchmarkCompile` at 5,000 devices within section 4.4's 200 ms on the reference phone class and its heap within 12.4's working set, from M4; SDK-M8-15's cell samples the same compile inside the admission cap at M8. The ios_extension leg's size row counts the ledger and the compiler from M4 (section 4.2.3 estimated them at 350,000 B).
+
+### 12.7 Implementation notes, task by task
+
+Three new tasks carry what the four held tasks need from landed code; `.stack/plan/proposals/details-12-tasks.md` gives them in the plan's format with the held tasks' changed lines. Order: BRIDGE-M2-02 (the egress mode and multi-use approvals, already planned), then BRIDGE-M4-23 and ACL-M2-17 side by side, then BRIDGE-M4-24 and BRIDGE-M4-16, then BRIDGE-M4-17; BRIDGE-M6-03 and BRIDGE-M6-04 follow at M6 as planned.
+
+**BRIDGE-M4-23 (new): the bridge ledger: fold files, the body judge and the head check.** 12.2.2's `config.proto` messages and head paths; `OpenBridgeLedger` over rows and unfolded statements; `FoldBridgeLedger`; `CheckBridgeLedgerFold`; the judge. Landed code that changes:
+
+```text
+bridge_statement.go        BridgeLogStatement gains Approval (the verdict). configApplyBridgeStatement, which runs at
+                           judgment and at re-application, calls the log's BridgeBodyJudge for a route or map filing
+                           with the state the entry lands on, and stores the verdict before With. JoinBridgeLogs goes
+bridge_statement_rules.go  its //go:build !ios_extension goes: the compiler links it, and the leg's list grows by it
+                           in the commit that says so (section 4.2.3's rule). BridgeLedger is built over a row source
+                           and the unfolded statements, where it replays one whole log; CheckBridgeApproval judges on
+                           its receiver and no longer calls StateAt; ErrBridgeApprovalUnverifiable and
+                           BridgeLedgerReader.Approvals go; applyAlias gains the admin signer and the release
+config_state.go            ConfigLogSettings gains BridgeBodyJudge; nil keeps today's behavior at every keyless verifier
+config_state_at.go         ConfigLog.RejudgeBridgeBodies: S(k-1) from StateAt above the base, R_b(k-1) rebuilt from the
+                           retained base rows for a tail entry, for the filings held Unopened
+config_head.go             the known paths gain bridge/ledger/manifest, addresses, egress, aliases, rules/<xx>,
+                           rules/<xx>/<yy> and bridge/share-grant/<share_id hex> (QD-077, not yet there)
+config_writer.go           ConfigWriterArgs gains BridgeFold: plan calls it after it has chosen the fold and before the
+                           head is hashed, with the previous head and the writer's state; it returns the ledger's
+                           file edits and the fold it reached, which can be below the one asked (an Unopened filing).
+                           foldDue answers true while a bridge statement is unfolded and a base is being published
+config_base.go             ConfigHeadCheck gains BridgeFoldCheck, called inside CheckHead with Previous set; a
+                           mismatch is ErrConfigHeadMismatch
+check/testdata/ios_extension_leg.txt   gains bridge_statement_rules.go, bridge_ledger.go, bridge_ledger_fold.go
+```
+
+The three `config_*` changes are seams of a few lines each in core-lane files; the orchestrator schedules the task when that lane is not in them. Traps: the fold must be written by the same streaming merge the compile reads with, never from a decoded whole, or a writer on a phone cannot fold; the manifest's hashes are over the files' plaintext as the head holds them; a fold whose bridge part is empty writes no manifest, and a reader takes an absent manifest as an empty ledger only when the head's fold records hold no bridge statement at or below `folded_through` (a full reader checks that; a device that starts there cannot, and takes it as it takes rows).
+
+**ACL-M2-17 (new): reach enumerators for the compiler.** `AclState.DialRules(source, destination)`, `RouteRules(source, via)` and `ExitRules(source, via)` return every rule and activated grant by which the source holds the action, in rule id order, each with its rule id, grant id and expiry, where `MayDial` and `MayRoute` return the first; `AclState.EgressMode(subject)` exports what `egressRestricted` computes; `AclLocalPolicy.StandingCovers(kind, owner, body)` answers 12.2.4's "in force"; `AclState.ShareReach(subject, shareId)` at M6. They are read paths over indexes `acl_state.go` already builds (`acl_eval.go`, `acl_contract.go`, `acl_compile.go`), on the leg's list. This is what the plan's "`AclEngine.AllowRoute` serves the compiler" becomes: the engine answers one flow, and the compiler needs the rows.
+
+**BRIDGE-M4-24 (new): the device role's three changes.** In `device/bridge_egress.go` and `bridge_egress_rules.go`, rule 3's tag takes the hosted address (`BridgeRuleTag(subject, {0x03, a, b, c, d})`), and `bridge_disposition.go`'s (subject, 3) atoms split by address; `otherClient` takes `BridgeRules.untagged`'s rows, and `ParseBridgeRules` (`bridge_rules.go`) checks field 10 as a subject's rows with no ids. In `device/bridge_state.go`, `Revoke` refuses n = 0 with `ErrBridgeRevocationRefused`. `sidecartest.BridgeRulesFixture` follows. The share fields (11, and `BridgeRuleLink`'s 10 and 11) and the FriendsAndFamily row are BRIDGE-M6-05's, as planned.
+
+**BRIDGE-M4-16: the compiler.** `CompileBridgeState` as 12.2.4, in `bridge_compile.go` (the passes and the build), `bridge_compile_rows.go` (reach and the subject rows) and a new `bridge_compile_local.go` (`BridgeCompileLocal`, `BridgeBindingView`, the binding cache and its store). Needs gain BRIDGE-M2-02, BRIDGE-M4-23 and ACL-M2-17, and lose the three questions, which are answered. Provides gain `BridgeCompiled`, `BridgeCompileLocal`, `BridgeBindingView` and `BridgeStateDigest`. Section 4.7's three constraints stand: it reads the config only through `BridgeConfigView`; it fills the forwarding fields from live forwarding Delegations; its files are on the leg's list. Traps: range over no Go map; take t from the state, never the clock; a wanted set is collected before a pass, since a pass cannot go back; a binding the compile lacks is a wait, never a fetch; `names` holds only what the table holds; the block's `previous_prefix` rows are emitted only while t is before its `drain_until`. The Forwarder's view (BRIDGE-M8-05) must hand `LedgerFile` a reader over the sealed head store, and adds twice the last compiled state's size to its admission estimate (12.4).
+
+**BRIDGE-M4-17: the component.** `BridgeComponent` as 12.2.5: the one goroutine, `OnEntry`'s two calls, the single-flight compile, `Attach`'s four steps. `bridge_provider.go` builds the generation's `LocalUserNat` with the hook in `LocalUserNatSettings` and the provider only after the catch-up. `BridgeStateSink` is 12.2.5's interface; `cli/` adapts `device.Bridge` to it, converting `BridgeStateLog` to `device.PostureLog`. `Sidecar.SignWindowDelegation` as 12.2.6. Needs gain BRIDGE-M4-24. Landed code that changes: `config_client.go` only if `TestEntriesAreStoredBeforeTheirCallbacks` fails on it, in which case the store write moves ahead of the callbacks (a core-lane fix this task reports rather than makes); `sidecar_types.go` gains `bridge_alarm`'s reasons `ledger_over_budget`, `share_table_mismatch` and `catch_up_waiting` beside QD-557's. Section 4.7's line stands: on app hosts the component is not built. Traps: never call `Revoke` with 0; never call the sink from two goroutines; the binding and share-table fetches run on their own goroutine and only change inputs; a compile error leaves `PreviousBlock` as it was.
+
+**BRIDGE-M6-03: shares.** 12.2.2's share messages in `bridge.proto`, with §17.9's fence line landing in the same change (QD-077's "waits on"); `BridgeShareSeal` on QD-108's bytes with the four labels; `BridgeSharePreflight` as 12.2.7 over the ledger's upper map; `BridgeFiler.Invite`, `AcceptInvite` and the activation, each step idempotent and recorded as §16.6's effects are, so a kill resumes; `BridgeShareTableView`'s fetch and pin check. Needs lose both questions, answered, and gain BRIDGE-M4-23. Files gain `sidecar/protocol/bridge/bridge.proto` and `bridge.pb.go`, `sidecar/bridge_share_table.go` and its test. Traps: the target table is immutable; the accept reports `active` only after its own ledger shows every alias in force; a release carries the alias's prefix as held, so a reader that lacks the alias's generation can still free the block; `table_key` is K itself in X's config, so X's config readers hold it, which §2.6 should say with the ShareKey's custody.
+
+**BRIDGE-M6-04: keys and signers.** 12.2.8. `BridgeShareKeyring` over the admin's `secret` repo; `BridgeShareSignerFile` and the renew loop on `ConfigWriter.SaveHead`; `bridge.VerifyShareCert` in `protocol/bridge/share_cert.go`; the admit row in `device/bridge_principal.go`, with the ratchet's commit through `PostureStore` (SDK-M4-01 keeps and raises ShareCerts; this adds the commit before the admission and `TestTheRatchetSurvivesARestart`); `BridgeComponent.ResignShares`; the holder alarm. Files gain `sidecar/device/bridge_principal.go`, `bridge_principal_test.go` and `posture_store.go`. Traps: a new seed for every cert; a renewal the write gate refused is dropped, never retried with the same file; a sidecar never signs with a generation below one it has already used for that share, and goes on signing with an unexpired signer of an older generation until the holder's renewal lands, as §17.9's sign row has it; the alarm is raised once a share and removed id, remembered in the component's store.
+
+Other tasks. BRIDGE-M8-05 (the Forwarder) is unchanged in shape and gains two lines: its view's `LedgerFile`, and its judge's `BridgeBodyJudge` with the generations in its `gen/` store, so a filing sealed to a generation that arrives in the compile's step 2 is pending in that compile and judged by the next, which the Forwarder schedules once. BRIDGE-M4-19 and -20 (`BridgeFiler`, `ur bridge`) read the ledger through `OpenBridgeLedger` for their listings and `FindRule`. BRIDGE-M6-05 builds the FriendsAndFamily row on `BridgeRules.shares`. TEAM-M2-09's writer and TEAM-M2-10's head check gain BRIDGE-M4-23's seams and are otherwise as landed.
+
+### 12.8 Proposed DESIGN.md text
+
+For a design-records track, section by section. Text in quotation marks is to be placed; the rest says where.
+
+**§17.8, statement block.** The `rule id` row's last clause becomes: "a fold freezes each bridge statement's body-level verdict into the config head's bridge ledger (`bridge/ledger/`), which keeps a withdrawn id until its decision's not_after and a void id for the network's life".
+
+**§17.8, Placement.** After "verified at their position until a writer folds them in" add: "A sealed body is judged by every reader that holds its generation, on the state its entry lands on, and a base's tail is judged again on that base's rows; when a writer folds a statement it writes the verdict it holds into the head's bridge ledger: the addresses and tombstones, each rule's body and disposition, each subject's egress spec and each alias, in files by kind, with rules in shards by id. Every reader standing under the previous base computes the same files and forks on a difference, and a device that starts at the base takes them. So every reader at one pin holds one ledger, and no reader re-opens a folded statement."
+
+**§17.8, Engine.** Replace the first sentence with: "The compiler (`bridge_*.go`, §5) is a pure function of the state at a pin, the head that pin's base names, the unfolded bridge statements with their verdicts, the generation keys and the host: it opens the unfolded bodies, reads the head's ledger files once each without holding them, expands §8's reach into per-subject rows and returns a `BridgeState` whose bytes are equal at every reader given equal inputs; it runs off the packet path, in the sidecar role on a daemon and in an app's VPN component in the forwarding role (owner decision 197; 17.10)". After "swaps table and hook atomically" add: "Every change takes one order: the evidence is committed, the policy is published at the next generation, then `CloseFlows` runs for each rule tag the new policy no longer admits. A denial is held at its own log position until a state at or past it, so a compile that captured an earlier position and finishes later removes none. After a start, and at each new client generation, the hook is in the NAT's settings before the NAT exists, and the provider is built only once every denial the device held before it stopped is applied again."
+
+**§17.8, `BridgeRules` and 17.6.** The `RuleTag` comment's "rules 3, 4 and 7 taking one byte, the rule number, as their rule_id" becomes "rules 4 and 7 taking one byte, the rule number, as their rule_id, rule 3 that byte and the hosted address, and a share's flows the share_id as subject with 0x53 and the target's index". The subject paragraph's "under a document holds only autogroup:untagged's rows" gains ", which the rules carry as `untagged`".
+
+**§17.9, fence.** Add `BridgeShareGrant`, `BridgeShareTargets`, `BridgeShareTarget`, `BridgeShareAliases`, `BridgeShareAlias`, `BridgeShareKeyBody`, `BridgeShareShortfall` and `BridgeAliasBody`'s fields 5 to 8 as 12.2.2 has them, in the change that lands them in bridge.proto (QD-077).
+
+**§17.9, share pins.** `X's pin` gains: "with the accepting network's id and the hash and version of each table, the alias table being the one X's approving admin opened; a host compiles the share only from tables that hash to them". Add a row: "match     X's host matches a destination's low 16 bits against an alias's host bits and length, since Y's block is not X's to know and a block change keeps them".
+
+**§17.9, share signers.** `ShareSigner` gains: "every cert has a seed of its own: a renewal makes a new seed, so one seed rides one file, in a head sealed at the generation its cert names; a renewal that §10.6's gate refuses is dropped and made again at the new generation". `admit` gains: "a generation above the share's newest is committed to the persisted state before the contract that carried it is admitted". Shares paragraph, after "runs the preflight below": "files the aliases, and reports `active` only once its own ledger shows each in force, planning again if a concurrent accept took a block". Add: "A target table never changes: other targets are another share. An alias ends by a `BridgeAlias` release from its signer or an admin."
+
+**§17.13.** D-BRIDGE-6 gains: "a statement's body-level verdict is judged on the state its entry lands on and frozen at the fold into the head's bridge ledger, which every reader standing there checks". D-BRIDGE-18 gains: "a start replays every judged denial before the provider is built". D-BRIDGE-21 gains: "the engine's order is commit, publish, close, with every denial held at its own position". D-BRIDGE-17 gains: "each cert certifies a fresh seed, and the host commits a raised generation before it admits".
+
+**§17.16.** Provides gains the ledger's messages and paths. Assumptions gains: "§7.9's config head holds `bridge/ledger/` and `bridge/share-grant/`, its writer folds the ledger at each base that folds a bridge statement and its head check compares it; `ConfigClient` stores an entry before its callbacks run; §8 enumerates the rules by which one subject reaches another for the compiler".
+
+**§17.17.** Add: "A base that leaves a bridge filing unfolded and changes the policy its approval was judged by turns that filing's verdict at every reader | Low | Low | writers fold through their tip whenever a bridge statement is unfolded, so only a filing in the seconds between a head's writing and its base's acceptance is exposed; the requester files again (DESIGN-DETAILS 12.2.3)".
+
+**§7.9.** The repo's file list gains the ledger's paths and `bridge/share-grant/<share_id hex>`. The BASE row's head check gains "and the head's bridge ledger equals the fold of the previous head's ledger and the entries folded since, at a reader that opened them". The fold row gains "a writer that publishes a base while a bridge statement is unfolded folds through its tip".
+
+**§8.** §8.6 or §8.9 gains the enumerators' sentence: "the compiler reads, for a host, every rule and activated grant by which each subject may dial it, route through it or exit through it, and the same for what the host may reach (§17.8)".
+
+**§18.6, Following.** The `follow` row's compile clause gains: "the compile streams the head's bridge ledger from the component's store and reads no fold".
+
+**§22.** The dial-fence invariant gains the engine's: "no flow opens, and none stays open past its close, under a rule the host has durably judged revoked, across late compiles, new client generations and restarts"; FS-56, FS-38 and FS-14 gain 12.6's schedule rows; §22.5's §17 row gains "a compile reads no fold file, and a daemon's and a forwarding role's compiles of one view are byte-equal".
+
+**§2.6, §2.10.** §2.6's custody rows gain "K, a share's table key, is in the sharing network's config (`bridge/share-grant/`), so every reader of that config holds it". §2.10's share-signer bound is unchanged.
+
+### 12.9 Owner questions
+
+Each is filed under `.stack/questions/`, and the section is built on the recommendation in every case.
+
+**details-12-ledger-in-head.** Where the body-level state of folded bridge statements lives. Options: (1) the config head carries a bridge ledger, written at each fold and checked by every full reader standing there, as rows are; (2) no ledger: every compile opens every bridge statement the log ever took, and a verdict that needs a state the reader no longer holds is void there; (3) approvals leave the sealed body for the clear statement, with the action's prefixes in `sealed_detail`, so api judges them as it judges a GrantActivate and `tail_verdicts` carry them. Costs: (1) six kinds of file in the head, a fold step and a head check in TEAM's writer and reader, about 600 KB at 5,000 devices; (2) compiles that grow with the log (240 MB of folds at 400,000 entries) and ledgers that differ by how long a device has run, which is 12.1's A and B; (3) api sees who approved which route and map, the statements and BRIDGE-M2-01's rules change, and `record-m2-01-canonical-action-detail` must be settled first; folded bodies would still need (1) for a bounded compile. Recommendation: (1). The design takes it.
+
+**details-12-unfolded-verdicts.** What judges a filing's approval after a base that did not fold it. Options: (1) the new base's rows, as section 5 re-applies a tail, frozen when a writer folds it, with writers folding through their tip whenever a bridge statement is unfolded; (2) one more bit an entry in `ProjectionHeader`, a body verdict the writer sets and full readers check, so the verdict judged at the entry's position always stands; (3) the writer pushes a new head whenever its base's acceptance races a bridge filing, so no filing is ever unfolded across a base. Costs: (1) a base whose head changes the request rule or its approvers turns the verdict of a filing that landed in the seconds before it, at every reader alike, and the requester files again; (2) a server-visible field (one bit a sealed bridge statement: whether its approval held), a §2.8 row, and changes to api's base check and TEAM's writer and readers; (3) another evs push and a retry loop in the writer's most contended path, and a head that depends on the tail. Recommendation: (1): the case needs a policy edit to land within seconds of an approved filing and to disqualify that approval, and nothing opens by it that the new policy does not allow. The design takes it.
+
+**details-12-start-gate.** Whether a daemon host serves bridge flows after a restart before its judge has replayed. Options: (1) the provider is built only after every judged denial above the restored state is applied again, which reads local stores alone when `ConfigClient` stores entries before their callbacks, and waits for the follow when its store lagged; (2) the provider starts on the restored posture at once; (3) as (1), but start after 30 s with an alarm. Costs: (1) a host whose config store lagged its posture's serves no bridge flow until it reaches api again; (2) a revocation only a judge could check (k of n, a proposal's activation, a cascade) that was applied before the restart is not in force until the first compile after it, which `BridgeNatTwin-ProviderBeforeCatchUp` shows admitting a flow; (3) the same hole after 30 s offline. Recommendation: (1), the closed direction; its cost needs a crash between two local writes and no network. The design takes it.
+
+**details-12-alias-table-pin.** How X's hosts trust Y's alias table. Options: (1) X's approving admin pins the alias table's hash and version in `BridgeShareGrant` beside the target table's, and X's host matches aliases by host bits; (2) any alias table that opens under K at the stored version; (3) Y's block in the table, re-pinned by X's admin at each block change of Y. Costs: (1) two fields and a hash in a config file, and X activates again if Y ever re-aliases; (2) a second holder of a multi-use code, with the operator, can swap which alias reaches which of the share's targets; (3) an admin's act in X for every block change in Y. Recommendation: (1). The design takes it. It adds fields 6 to 9 to QD-077's `BridgeShareGrant`.
+
+**details-12-ratchet-commit.** When X's host stores a share's raised generation. Options: (1) before it admits the contract that carried it: one store commit a share a rise, in that contract's sequence; (2) after, off the sequence; (3) refuse that contract, commit, admit the next. Costs: (1) a few milliseconds on the first contract after each rotation of Y, never a packet's or a later contract's; (2) a crash between the admission and the commit loses the raise, and a removed sidecar is admitted again until a current one presents the newer cert (`ShareSignTwin-RatchetVolatile`), inside the cert's 7 days; (3) the first contract after every rotation fails and its link marks down for 30 s. Recommendation: (1). The design takes it.
+
+Existing questions this section answers, each built on the option named:
+
+- `bridge-m4-09-other-client-rows`: option 1, `BridgeRules.untagged = 10`, filled by the compile's reach pass and read by the sdk provider's other client (12.2.2, 12.2.4).
+- `bridge-m4-11-rule-three-tags`: option 2, rule 3's tag names the hosted address (12.2.2; BRIDGE-M4-24).
+- `plan-BRIDGE-subject-resolution` (QD-161): as answered, with the cache, its bounds and its refresh in 12.2.4, and the share exception kept.
+- `plan-BRIDGE-share-pins` (QD-077): as answered, with fields 6 to 9 added to the grant file and the alias body's network, drain and release (the question above).
+- `g0-density-share-seal-format` (QD-108): as answered; 12.2.2 gives the four bodies their fields.
+- `plan-BRIDGE-gate-row-prefixes` (QD-004, QD-003): as answered: the compile reads CIDRs and ports from `AclLocalPolicy`, and rule bodies from the sealed ledger; no server-visible row gains anything here.
+- `plan-BRIDGE-keyless-window-parent` (QD-184): superseded by owner decision 197 as section 4 has it; a daemon's own token mints, and `SignWindowDelegation` serves the daemon's links.
+- `bridge-m2-01-egress-mode-field` (QD-630) and `bridge-m2-01-multi-use-approval` (QD-631): as answered; the ledger's egress rows carry the clear mode, and the approval budget counts rows by `approval_id` up to the decision's uses.
+- `plan-BRIDGE-small-readings` #11: amended by the rule 3 tag above; #12, #13, #14, #17 and #18 are built on as answered.
+- `sdk-m4-01-state-proof`: answered by section 4; `BridgeStateSink.SetState` carries the log run for the daemon's producer too.
 
 ## 13. Smaller scheduling problems: closure pacing, quota leases, socket registration
 
