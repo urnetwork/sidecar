@@ -331,7 +331,7 @@ message ForwardingHandOff {
 message BridgeEgressRow { bytes subject = 1; BridgeEgressMode mode = 2; }
 message BridgeIpv4Prefix { fixed32 address = 1; uint32 length = 2; }
 message BridgePortRange { uint32 first = 1; uint32 last = 2; }
-message BridgeApproval { bytes canonical_action = 1; repeated Signed decisions = 2; }
+message BridgeApproval { bytes canonical_action = 1; repeated Signed decisions = 2; bytes template_action = 3; }
 message BridgeBlock {
   BridgeIpv4Prefix ipv4_prefix = 1; BridgeIpv4Prefix previous_prefix = 2; int64 drain_until = 3;
 }
@@ -352,9 +352,11 @@ message BridgeMapBody {
   BridgeIpv4Prefix match_prefix = 1; uint32 protocol = 2; repeated BridgePortRange ports = 3; bytes target = 4;
   uint32 target_port = 5; uint32 drain_seconds = 6; BridgeApproval approval = 7;
 }
-message BridgeEgress { StatementHeader header = 1; bytes subject = 2; bytes sealed_body = 3; }
+message BridgeEgress {
+  StatementHeader header = 1; bytes subject = 2; bytes sealed_body = 3; BridgeEgressMode mode = 4;
+}
 message BridgeEgressBody {
-  BridgeEgressMode mode = 1; repeated bytes exit_sidecar_ids = 2; bytes exit_tag_id = 3;
+  reserved 1; reserved "mode"; repeated bytes exit_sidecar_ids = 2; bytes exit_tag_id = 3;
 }
 message BridgeAlias { StatementHeader header = 1; bytes sealed_body = 2; }
 message BridgeAliasBody {

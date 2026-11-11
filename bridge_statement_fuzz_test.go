@@ -70,7 +70,7 @@ func bridgeFuzzStatement(net *testConfigNet, signedType bridge.SignedType, signe
 	case bridge.SignedType_SIGNED_BRIDGE_MAP:
 		return &bridge.BridgeMap{Header: header, MapId: ruleId, Host: signer.sidecarId.Bytes(), SealedBody: sealedBody}
 	case bridge.SignedType_SIGNED_BRIDGE_EGRESS:
-		return &bridge.BridgeEgress{Header: header, Subject: signer.sidecarId.Bytes(), SealedBody: sealedBody}
+		return &bridge.BridgeEgress{Header: header, Subject: signer.sidecarId.Bytes(), SealedBody: sealedBody, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS}
 	case bridge.SignedType_SIGNED_BRIDGE_ALIAS:
 		return &bridge.BridgeAlias{Header: header, SealedBody: sealedBody}
 	}
@@ -151,8 +151,13 @@ func FuzzBridgeStatement(f *testing.F) {
 			t.Fatalf("%s was refused and the fold moved from %d to %d", signedType, before, after)
 		case !verdict.Accepted() && !errors.Is(verdict.Refusal, ErrConfigRefused):
 			t.Fatalf("%s: a refusal outside the log's classes: %v", signedType, verdict.Refusal)
-		case verdict.Accepted() && signedType == bridge.SignedType_SIGNED_BRIDGE_EGRESS:
-			t.Fatal("a BridgeEgress took effect while it shows no mode at id level")
+		}
+		if egress, ok := statement.(*bridge.BridgeEgress); ok && verdict.Accepted() {
+			// what the gate folds is the mode it read in the clear
+			rows, err := net.log.State().BridgeRows()
+			if err != nil || BridgeRowsEgressMode(rows, laptop.sidecarId) != egress.GetMode() {
+				t.Fatalf("a BridgeEgress of mode %s took effect and the rows hold %v, %v", egress.GetMode(), rows, err)
+			}
 		}
 		net.everyReaderAgrees()
 
