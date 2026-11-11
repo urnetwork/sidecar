@@ -67,6 +67,7 @@ var (
 	ErrEvsMirrorRecordInvalid = errors.New("evs: a mirrored record of another statement")
 )
 
+// What a mirror holds itself to: §11.13's status row's ages and §11.9's request bounds.
 type EvsMirrorSettings struct {
 	// §11.13's status row: a ref counts as mirrored while the mirror holds its head, or lacks only versions younger
 	// than this. 1 h. Positive.
@@ -82,6 +83,7 @@ type EvsMirrorSettings struct {
 	MissingNameCount int
 }
 
+// §11.13's 1 h and 7 days, and the request bounds evs holds a read to.
 func DefaultEvsMirrorSettings() *EvsMirrorSettings {
 	return &EvsMirrorSettings{
 		HeadLag:            1 * time.Hour,
@@ -174,6 +176,7 @@ type evsMirrorState struct {
 	KeyGenerationsMissing []uint64 `json:"key_generations_missing,omitempty"`
 }
 
+// The state the last sync and check left, empty before the first.
 func (self *EvsMirror) loadState() (*evsMirrorState, error) {
 	state := &evsMirrorState{}
 	reader, err := self.store.store.Open(evsMirrorStateName)
@@ -194,6 +197,7 @@ func (self *EvsMirror) loadState() (*evsMirrorState, error) {
 	return state, nil
 }
 
+// Replaces the state whole, durably.
 func (self *EvsMirror) saveState(state *evsMirrorState) error {
 	data, err := json.Marshal(state)
 	if err != nil {
@@ -234,6 +238,7 @@ type evsMirrorMissingSet struct {
 	erasedOk map[string]bool
 }
 
+// Counts missing once by its family and name, naming it while under the limit.
 func (self *evsMirrorMissingSet) add(missing *EvsMirrorMissing) {
 	key := string(missing.Family) + "/" + missing.Name
 	if self.nameSet[key] {
@@ -312,6 +317,7 @@ func (self *EvsMirror) Sync(ctx context.Context) (*EvsMirrorSyncResult, error) {
 	return result, nil
 }
 
+// The members of set, sorted.
 func evsMirrorSortedKeys(set map[string]bool) []string {
 	keys := make([]string, 0, len(set))
 	for key, ok := range set {

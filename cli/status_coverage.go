@@ -43,6 +43,7 @@ type urNetworkCoverage struct {
 	Unknown string `json:"unknown,omitempty"`
 }
 
+// status.coverage's reply: each hosted network's lines.
 type urStatusCoverageReply struct {
 	Networks []*urNetworkCoverage `json:"networks,omitempty"`
 }
@@ -101,6 +102,7 @@ func printUrStatusCoverage(ctx context.Context, cli *urCli) {
 	printUrCoverageReply(cli, reply)
 }
 
+// Each network's lines as the daemon gave them, or why it gave none.
 func printUrCoverageReply(cli *urCli, reply *urStatusCoverageReply) {
 	for _, network := range reply.Networks {
 		if network.Unknown != "" {

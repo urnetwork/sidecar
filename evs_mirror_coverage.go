@@ -376,14 +376,17 @@ func EvsMirrorStatusLines(ctx context.Context, args *EvsMirrorStatusArgs) ([]str
 	return lines, nil
 }
 
+// A repo kind as status lines name it: "team_record".
 func evsMirrorKindName(kind protocol.RepoKind) string {
 	return strings.ToLower(strings.TrimPrefix(kind.String(), "REPO_KIND_"))
 }
 
+// An indexer service as status lines name it: "mirror".
 func evsMirrorServiceName(service protocol.IndexerService) string {
 	return strings.ToLower(strings.TrimPrefix(service.String(), "INDEXER_SERVICE_"))
 }
 
+// An indexer scope as status lines name it: "network".
 func evsMirrorScopeName(scope protocol.IndexerScope) string {
 	return strings.ToLower(strings.TrimPrefix(scope.String(), "INDEXER_SCOPE_"))
 }
