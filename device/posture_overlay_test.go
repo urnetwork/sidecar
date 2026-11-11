@@ -1,8 +1,8 @@
 // The forwarding role's tier 1 (DESIGN-DETAILS 4.2.5, SDK-M8-17) on the fixture network: the two denial kinds decision
 // 197 adds, each with its positive twin and a wrong signer; an Unsuspend that lifts nothing; what may narrow waits and
 // alarms on a fake clock, never making the decision pending; a state keeps what lies above its pin, a lower one is
-// dropped (Fwd.tla's StateDropsOverlay and LowerStateAccepted twins on real code); a fork holds pending; and a base
-// between states opens nothing.
+// dropped (Fwd.tla's StateDropsOverlay and LowerStateAccepted twins on real code); a fork holds pending; a base
+// between states opens nothing; and a full overlay holds pending until a state past what it could not hold.
 
 package device
 
@@ -726,5 +726,175 @@ func TestWaitingMergesPastItsBound(t *testing.T) {
 	_, restored := NewPosture(store.survivor(), settings)
 	if len(restored.Waiting) != 1 || restored.Waiting[0].N != third || len(restored.Alarms) != 0 {
 		t.Errorf("restored %+v, %v", restored.Waiting, restored.Alarms)
+	}
+}
+
+// Past OverlayMaxCount a denial the posture verified and cannot hold makes it pending, persisted, rather than leave a
+// revocation it could check unapplied, and it follows the chain meanwhile, holding every denial it held; a state below
+// the newest such denial leaves it pending, and one at it restores enforcement, with room again for the next denial
+// (question sdk-m8-17-overlay-bound-without-compiles, the closed direction until it is answered). At the bound itself
+// nothing changes.
+func TestAFullOverlayHoldsPendingUntilAStatePastIt(t *testing.T) {
+	fixture := newPostureFixture(t)
+	settings := testPostureSettings()
+	settings.OverlayMaxCount = 2
+	store := newMemoryPostureStore()
+	posture, _ := NewPosture(store, settings)
+	fixture.base(fixture.ownerPhone, true)
+	fixture.tick()
+	fixture.tick()
+	if _, err := posture.SetPending(fixture.pending()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := posture.SetState(fixture.state(3, true), fixture.log(1, 3)); err != nil {
+		t.Fatal(err)
+	}
+	grantRevoke := func(seed byte) uint64 {
+		return fixture.statement(fixture.ownerPhone, bridge.SignedPurposeAcl, bridge.SignedType_SIGNED_GRANT_REVOKE,
+			&bridge.GrantRevoke{Header: fixture.header(), GrantId: postureFixtureId(seed)})
+	}
+	first := fixture.sidecarRevoke(fixture.ownerPhone, fixture.aliceLaptop, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST)
+	second := fixture.suspend(fixture.ownerPhone, fixture.agent.id, postureFixtureId(0x79))
+	decision, err := posture.ApplyDeltas(fixture.log(first, second))
+	if err != nil || decision.State != PostureEnforcingDocument || len(decision.Overlay) != 2 || decision.OverlayFullThroughN != 0 ||
+		len(decision.Alarms) != 0 {
+		t.Fatalf("at the bound: %v, %v, overlay %+v, full %d, %v", err, decision.State, decision.Overlay, decision.OverlayFullThroughN,
+			decision.Alarms)
+	}
+	third := grantRevoke(0x83)
+	fourth := grantRevoke(0x84)
+	decision, err = posture.ApplyDeltas(fixture.log(third, fourth))
+	if err != nil || decision.State != PosturePending || decision.OverlayFullThroughN != fourth || decision.BridgeState != nil ||
+		!decision.Changed || !decision.CompileWanted {
+		t.Fatalf("past the bound: %v, %v, full %d, changed %v, compile wanted %v", err, decision.State, decision.OverlayFullThroughN,
+			decision.Changed, decision.CompileWanted)
+	}
+	// one alarm a call, at the first denial it could not hold
+	full := slices.DeleteFunc(slices.Clone(decision.Alarms), func(alarm PostureAlarm) bool {
+		return alarm.Kind != PostureAlarmMalformed
+	})
+	if len(full) != 1 || full[0].N != third {
+		t.Errorf("alarms %+v", decision.Alarms)
+	}
+	if held := posture.held; held.pinN != fourth || len(held.overlay) != 2 || held.statePinN() != 3 {
+		t.Errorf("held: pin %d, overlay %+v, state at %d", held.pinN, held.overlay, held.statePinN())
+	}
+	fifth := grantRevoke(0x85)
+	decision, err = posture.ApplyDeltas(fixture.log(fifth, fifth))
+	if err != nil || decision.State != PosturePending || decision.OverlayFullThroughN != fifth {
+		t.Fatalf("a later denial: %v, %v, full %d", err, decision.State, decision.OverlayFullThroughN)
+	}
+	// a restart restores it, with no alarm
+	store = store.survivor()
+	posture, decision = NewPosture(store, settings)
+	if decision.State != PosturePending || decision.OverlayFullThroughN != fifth || len(decision.Alarms) != 0 {
+		t.Fatalf("restored: %v, full %d, %v", decision.State, decision.OverlayFullThroughN, decision.Alarms)
+	}
+	// a state below the newest denial it could not hold leaves it pending, though it takes the state
+	decision, err = posture.SetState(fixture.state(fourth, true), nil)
+	if err != nil || decision.State != PosturePending || decision.OverlayFullThroughN != fifth || posture.held.statePinN() != fourth {
+		t.Fatalf("a state below it: %v, %v, full %d", err, decision.State, decision.OverlayFullThroughN)
+	}
+	// a state at it restores enforcement, and the overlay holds a denial again
+	decision, err = posture.SetState(fixture.state(fifth, true), nil)
+	if err != nil || decision.State != PostureEnforcingDocument || decision.OverlayFullThroughN != 0 || len(decision.Overlay) != 0 ||
+		!decision.Changed {
+		t.Fatalf("a state at it: %v, %v, full %d, overlay %+v", err, decision.State, decision.OverlayFullThroughN, decision.Overlay)
+	}
+	sixth := fixture.suspend(fixture.ownerPhone, fixture.agent.id, postureFixtureId(0x7a))
+	decision, err = posture.ApplyDeltas(fixture.log(sixth, sixth))
+	if err != nil || decision.State != PostureEnforcingDocument || len(decision.Overlay) != 1 || decision.Overlay[0].N != sixth {
+		t.Errorf("after it: %v, %v, overlay %+v", err, decision.State, decision.Overlay)
+	}
+	_, restored := NewPosture(store.survivor(), settings)
+	if restored.State != PostureEnforcingDocument || restored.OverlayFullThroughN != 0 || len(restored.Alarms) != 0 {
+		t.Errorf("restored after it: %v, full %d, %v", restored.State, restored.OverlayFullThroughN, restored.Alarms)
+	}
+}
+
+// A stored full overlay's position at or before the state's pin, which that state would have cleared, is a store that
+// does not verify: pending, with an alarm.
+func TestAFullOverlayAtTheStateIsUnverified(t *testing.T) {
+	fixture := newPostureFixture(t)
+	settings := testPostureSettings()
+	settings.OverlayMaxCount = 1
+	store := newMemoryPostureStore()
+	posture, _ := NewPosture(store, settings)
+	fixture.base(fixture.ownerPhone, true)
+	fixture.tick()
+	fixture.tick()
+	if _, err := posture.SetPending(fixture.pending()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := posture.SetState(fixture.state(3, true), fixture.log(1, 3)); err != nil {
+		t.Fatal(err)
+	}
+	first := fixture.sidecarRevoke(fixture.ownerPhone, fixture.aliceLaptop, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST)
+	second := fixture.suspend(fixture.ownerPhone, fixture.agent.id, postureFixtureId(0x79))
+	decision, err := posture.ApplyDeltas(fixture.log(first, second))
+	if err != nil || decision.State != PosturePending || decision.OverlayFullThroughN != second {
+		t.Fatalf("past the bound: %v, %v, full %d", err, decision.State, decision.OverlayFullThroughN)
+	}
+	manifest, err := decodePostureManifest(store.record(postureManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the positive twin: as written, it restores
+	if _, restored := NewPosture(store.survivor(), settings); restored.State != PosturePending || restored.OverlayFullThroughN != second ||
+		len(restored.Alarms) != 0 {
+		t.Fatalf("as written: %v, full %d, %v", restored.State, restored.OverlayFullThroughN, restored.Alarms)
+	}
+	for _, n := range []uint64{3, 2} {
+		changed := store.survivor()
+		manifest.overlayFullThroughN = n
+		changed.setRecord(postureManifestName, manifest.encode())
+		_, restored := NewPosture(changed, settings)
+		if restored.State != PosturePending || !postureAlarmed(restored, PostureAlarmStoreUnverified) {
+			t.Errorf("a full overlay at %d: %v, %v", n, restored.State, restored.Alarms)
+		}
+	}
+}
+
+// A resync to a state below a denial the full overlay could not hold keeps the posture pending past the new pin, and
+// a restart restores that with no alarm, as it restores the overlay entries a resync keeps; following on from the new
+// pin, a state past the denial restores enforcement.
+func TestAFullOverlayStandsPastAResyncedPin(t *testing.T) {
+	fixture := newPostureFixture(t)
+	settings := testPostureSettings()
+	settings.OverlayMaxCount = 1
+	store := newMemoryPostureStore()
+	posture, _ := NewPosture(store, settings)
+	fixture.base(fixture.ownerPhone, true)
+	fixture.tick()
+	fixture.tick()
+	if _, err := posture.SetPending(fixture.pending()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := posture.SetState(fixture.state(3, true), fixture.log(1, 3)); err != nil {
+		t.Fatal(err)
+	}
+	first := fixture.sidecarRevoke(fixture.ownerPhone, fixture.aliceLaptop, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST)
+	second := fixture.suspend(fixture.ownerPhone, fixture.agent.id, postureFixtureId(0x79))
+	base := fixture.base(fixture.ownerPhone, true)
+	decision, err := posture.ApplyDeltas(fixture.log(first, base))
+	if err != nil || decision.State != PosturePending || decision.OverlayFullThroughN != second || posture.held.base.entry.GetN() != base {
+		t.Fatalf("past the bound: %v, %v, full %d", err, decision.State, decision.OverlayFullThroughN)
+	}
+	// a state older than the newest base, on its own base's log, resyncs below the denial the overlay could not hold
+	decision, err = posture.SetState(fixture.state(first, true), fixture.log(1, first))
+	if err != nil || decision.State != PosturePending || decision.OverlayFullThroughN != second || posture.held.pinN != first {
+		t.Fatalf("the resync: %v, %v, full %d, pin %d", err, decision.State, decision.OverlayFullThroughN, posture.held.pinN)
+	}
+	store = store.survivor()
+	posture, decision = NewPosture(store, settings)
+	if decision.State != PosturePending || decision.OverlayFullThroughN != second || len(decision.Alarms) != 0 {
+		t.Fatalf("restored: %v, full %d, %v", decision.State, decision.OverlayFullThroughN, decision.Alarms)
+	}
+	if decision, err = posture.ApplyDeltas(fixture.log(second, base)); err != nil || decision.State != PosturePending {
+		t.Fatalf("following on: %v, %v", err, decision.State)
+	}
+	decision, err = posture.SetState(fixture.state(base, true), nil)
+	if err != nil || decision.State != PostureEnforcingDocument || decision.OverlayFullThroughN != 0 {
+		t.Errorf("a state past it: %v, %v, full %d", err, decision.State, decision.OverlayFullThroughN)
 	}
 }
