@@ -60,19 +60,10 @@ func evsExportKey(names [][]byte) string {
 	return string(bytes.Join(names, []byte{0}))
 }
 
-// A copy that shares no map.
-func (self evsExportState) clone() evsExportState {
-	clone := evsExportState{}
-	for key, path := range self {
-		clone[key] = path
-	}
-	return clone
-}
-
-// Writes git's loose objects and refs into a bare repository.
+// Writes git's loose objects and refs into a bare repository. It keeps nothing per object: the repository's files
+// answer what it holds, so an export's memory does not grow with its history (DESIGN-DETAILS 8.2.7).
 type evsGitObjectWriter struct {
-	dir     string
-	written map[EvsGitOid]bool
+	dir string
 }
 
 // A new bare repository at dir, which must not hold one: HEAD naming main, an objects store and refs.
@@ -92,7 +83,7 @@ func newEvsGitObjectWriter(dir string) (*evsGitObjectWriter, error) {
 	if err := os.WriteFile(filepath.Join(dir, "config"), []byte(config), 0o644); err != nil {
 		return nil, err
 	}
-	return &evsGitObjectWriter{dir: dir, written: map[EvsGitOid]bool{}}, nil
+	return &evsGitObjectWriter{dir: dir}, nil
 }
 
 // Writes an object of kind whose content is in memory, answering its oid.
@@ -125,7 +116,7 @@ func (self *evsGitObjectWriter) writeFrom(kind string, content io.Reader, size i
 		return EvsGitOid{}, err
 	}
 	oid := EvsGitOid(digest.Sum(nil))
-	if self.written[oid] {
+	if self.has(oid) {
 		return oid, nil
 	}
 	hexOid := hex.EncodeToString(oid[:])
@@ -139,15 +130,65 @@ func (self *evsGitObjectWriter) writeFrom(kind string, content io.Reader, size i
 	if err := os.Rename(temp.Name(), filepath.Join(objectDir, hexOid[2:])); err != nil {
 		return EvsGitOid{}, err
 	}
-	self.written[oid] = true
 	return oid, nil
+}
+
+// export's object sink and source (EvsGitObjectSink, EvsGitObjectSource): loose objects, each readable once
+// written, so nothing is ever pending and a flush has nothing to do.
+func (self *evsGitObjectWriter) WriteGitObject(kind string, content []byte) (EvsGitOid, error) {
+	return self.write(kind, content)
+}
+
+// Writes a loose object streamed from content.
+func (self *evsGitObjectWriter) WriteGitObjectFrom(kind string, content io.Reader, size int64) (EvsGitOid, error) {
+	return self.writeFrom(kind, content, size)
+}
+
+// Whether the repository holds oid as a loose object.
+func (self *evsGitObjectWriter) HasGitObject(oid EvsGitOid) bool {
+	return self.has(oid)
+}
+
+// Nothing: a loose object is readable once written.
+func (self *evsGitObjectWriter) PendingGitObject(oid EvsGitOid) (string, []byte, bool) {
+	return "", nil, false
+}
+
+// Nothing to flush: see PendingGitObject.
+func (self *evsGitObjectWriter) Flush(ctx context.Context) error {
+	return nil
+}
+
+// A loose object's kind and bytes, its header and its hash checked: ErrEvsGitObjectMissing for one not written.
+func (self *evsGitObjectWriter) ReadGitObject(ctx context.Context, oid EvsGitOid) (string, []byte, error) {
+	hexOid := hex.EncodeToString(oid[:])
+	file, err := os.Open(filepath.Join(self.dir, "objects", hexOid[:2], hexOid[2:]))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil, ErrEvsGitObjectMissing
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	defer file.Close()
+	decompressor, err := zlib.NewReader(file)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: a loose object that does not inflate", ErrEvsExport)
+	}
+	defer decompressor.Close()
+	object, err := io.ReadAll(decompressor)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: a loose object that does not inflate", ErrEvsExport)
+	}
+	header, content, found := bytes.Cut(object, []byte{0})
+	kind, size, sized := strings.Cut(string(header), " ")
+	if !found || !sized || size != fmt.Sprint(len(content)) || evsGitObjectOid(kind, content) != oid {
+		return "", nil, fmt.Errorf("%w: a loose object that is not its oid", ErrEvsExport)
+	}
+	return kind, content, nil
 }
 
 // Whether an object is in the repository.
 func (self *evsGitObjectWriter) has(oid EvsGitOid) bool {
-	if self.written[oid] {
-		return true
-	}
 	hexOid := hex.EncodeToString(oid[:])
 	_, err := os.Stat(filepath.Join(self.dir, "objects", hexOid[:2], hexOid[2:]))
 	return err == nil
