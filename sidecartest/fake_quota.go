@@ -1,6 +1,7 @@
 // ServiceHost.Quota in memory (§20.6, §20.7), keeping each rule a test can see: rate windows on the
-// injected clock; all-or-none counts, a replayed debit id answering with its first result; the closure
-// pacing; each eraser's allowance, never under its floor; leases that reserve on balances in escrow's
+// injected clock; all-or-none counts, a debit id that passed answering pass again and a refused one judged
+// afresh (DESIGN-DETAILS 13.2.1); the closure pacing by seat, asked only when no other counter refused; each
+// eraser's allowance, never under its floor; leases that reserve on balances in escrow's
 // draw order, the credit line last, and give back in reverse; batches applied once by id; the
 // over-limit maps; and what losing Redis, a failing Redis or a lost response does. Rate keys resolve
 // through sidecar.ParseQuotaRateKey, as server's {sq_} script does, and quotasuite runs one body on this
@@ -48,8 +49,6 @@ type FakeQuotaSettings struct {
 	DebitIdLifetime time.Duration
 	// How long an applied batch's id is remembered: service_usage_batch's 24 h (§20.14).
 	BatchIdLifetime time.Duration
-	// How long past its turn an eraser's pacing slot lapses: reading 19's 5 min.
-	ClosureSlotHorizon time.Duration
 }
 
 func DefaultFakeQuotaSettings() *FakeQuotaSettings {
@@ -60,7 +59,6 @@ func DefaultFakeQuotaSettings() *FakeQuotaSettings {
 		ReservationLifetime:         24 * time.Hour,
 		DebitIdLifetime:             48 * time.Hour,
 		BatchIdLifetime:             24 * time.Hour,
-		ClosureSlotHorizon:          5 * time.Minute,
 	}
 }
 
@@ -127,18 +125,12 @@ type fakeQuotaRateCounter struct {
 	used        int64
 }
 
-type fakeQuotaDebit struct {
-	// nil: the debit counted
-	refusal   *sidecar.QuotaRefusal
-	countTime time.Time
-}
-
 type fakeQuotaNetwork struct {
 	limits *sidecar.QuotaLimits
-	// what Redis holds: rate counters by key, debit ids, the pacing
-	rateCounters map[string]*fakeQuotaRateCounter
-	debits       map[connect.Id]*fakeQuotaDebit
-	pacing       *sidecar.QuotaClosurePacing
+	// what Redis holds: rate counters by key, each passed debit id with when it counted, the pacing
+	rateCounters    map[string]*fakeQuotaRateCounter
+	debitCountTimes map[connect.Id]time.Time
+	pacing          *sidecar.QuotaClosurePacing
 	// what Postgres holds, in draw order
 	balances          []*QuotaBalance
 	transferUsed      map[string]int64
@@ -193,11 +185,11 @@ func (self *FakeQuota) networkWithLock(networkId connect.Id) *fakeQuotaNetwork {
 	network, ok := self.networks[networkId]
 	if !ok {
 		network = &fakeQuotaNetwork{
-			limits:       &sidecar.QuotaLimits{Tier: "free", Limits: map[string]int64{}},
-			rateCounters: map[string]*fakeQuotaRateCounter{},
-			debits:       map[connect.Id]*fakeQuotaDebit{},
-			pacing:       sidecar.NewQuotaClosurePacing(),
-			transferUsed: map[string]int64{},
+			limits:          &sidecar.QuotaLimits{Tier: "free", Limits: map[string]int64{}},
+			rateCounters:    map[string]*fakeQuotaRateCounter{},
+			debitCountTimes: map[connect.Id]time.Time{},
+			pacing:          sidecar.NewQuotaClosurePacing(),
+			transferUsed:    map[string]int64{},
 		}
 		self.networks[networkId] = network
 	}
@@ -312,7 +304,7 @@ func (self *FakeQuota) SentBatches() []*sidecar.UsageBatch {
 	return slices.Clone(self.sentBatches)
 }
 
-// Loses Redis, as a failover with no replica does: every rate counter, debit id and pacing slot is
+// Loses Redis, as a failover with no replica does: every rate counter, debit id and pacing seat is
 // forgotten, so a debit id counts again, and every reservation is gone while live leases keep spending
 // what they hold, the over-admission §20.15 bounds by the lease size. Postgres keeps balances, debits,
 // batch ids and the spent marks.
@@ -322,7 +314,7 @@ func (self *FakeQuota) LoseRedis() {
 	self.redisEpoch += 1
 	for _, network := range self.networks {
 		network.rateCounters = map[string]*fakeQuotaRateCounter{}
-		network.debits = map[connect.Id]*fakeQuotaDebit{}
+		network.debitCountTimes = map[connect.Id]time.Time{}
 		network.pacing = sidecar.NewQuotaClosurePacing()
 	}
 }
@@ -433,15 +425,16 @@ func (self *FakeQuota) CountRate(ctx context.Context, networkId connect.Id, keyA
 		}
 		now := self.clock.Now()
 		network := self.networkWithLock(networkId)
-		if debit, ok := network.debits[debitId]; ok && now.Sub(debit.countTime) < self.settings.DebitIdLifetime {
-			refusal = cloneQuotaRefusal(debit.refusal)
+		if countTime, ok := network.debitCountTimes[debitId]; ok && now.Sub(countTime) < self.settings.DebitIdLifetime {
+			// a debit that passed answers pass again and counts nothing, touching no seat
 			return nil
 		}
 		limits := network.limits
 		perS := sidecar.QuotaClosurePacingPerS(limits)
-		// check every key before counting any, and ask the pacing even past a refusal, so a refused
-		// eraser holds its slot and counts in k until its turn
+		// judge every counter before counting any; the pacing is asked only when none refused, so an
+		// eraser its own rate or allowance refuses is given no seat (DESIGN-DETAILS 13.2.1)
 		var first *sidecar.QuotaRefusal
+		var pacedRule *sidecar.QuotaRateRule
 		for _, key := range keys {
 			rule := keyRules[key]
 			amount := keyAmounts[key]
@@ -451,25 +444,28 @@ func (self *FakeQuota) CountRate(ctx context.Context, networkId connect.Id, keyA
 				first = rule.Refusal(limits, counter.used, now)
 			}
 			if rule.Paced {
-				ok, liftTime, takenThisSecond := network.pacing.Ask(rule.SubjectId, now, perS, self.settings.ClosureSlotHorizon)
-				if !ok && first == nil {
-					first = sidecar.QuotaClosurePacingRefusal(limits, takenThisSecond, now, liftTime)
-				}
+				pacedRule = rule
+			}
+		}
+		if first == nil && pacedRule != nil {
+			ok, seatTime, takenThisSecond := network.pacing.Ask(pacedRule.SubjectId, now, perS)
+			if !ok {
+				first = sidecar.QuotaClosurePacingRefusal(limits, takenThisSecond, network.pacing.Clock(), seatTime)
 			}
 		}
 		if first != nil {
-			network.debits[debitId] = &fakeQuotaDebit{refusal: first, countTime: now}
-			refusal = cloneQuotaRefusal(first)
+			// a refusal counted nothing and records nothing, so its debit id is judged afresh
+			refusal = first
 			return nil
 		}
 		for _, key := range keys {
 			rule := keyRules[key]
 			network.rateCounterWithLock(key, rule.Window.Index(now)).used += keyAmounts[key]
-			if rule.Paced {
-				network.pacing.Take(rule.SubjectId, now, perS)
-			}
 		}
-		network.debits[debitId] = &fakeQuotaDebit{countTime: now}
+		if pacedRule != nil {
+			network.pacing.Take(pacedRule.SubjectId, now, perS)
+		}
+		network.debitCountTimes[debitId] = now
 		return nil
 	})
 	if err != nil {

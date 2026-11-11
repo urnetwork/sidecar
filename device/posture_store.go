@@ -20,7 +20,7 @@
 //	   7 a ForwardSupersede's delegation_id
 //	21 waiting entry, repeated, in position order: 1 n  2 through n, where not n  3 first seen, ms since the epoch
 //	   as protobuf's int64 varint
-//	22 fork (1)
+//	22 fork (1)  23 a full overlay's position: the newest denial verified and not held past OverlayMaxCount
 //
 // The overlay and Waiting are kept as derived, not derived again on a restart: a delta base between states replaces
 // the rows a statement before it was checked by, and every entry of it was verified when it arrived (posture.go), and
@@ -112,6 +112,7 @@ const (
 	postureFieldOverlay
 	postureFieldWaiting
 	postureFieldFork
+	postureFieldOverlayFullThroughN
 )
 
 // A share certificate's field numbers inside its manifest field.
@@ -169,6 +170,8 @@ type postureManifest struct {
 	overlay           []PostureOverlayEntry
 	waiting           []PostureWaitingEntry
 	fork              bool
+	// 0 for none
+	overlayFullThroughN uint64
 }
 
 // The manifest's bytes, every field in number order and none that is zero.
@@ -237,6 +240,7 @@ func (self *postureManifest) encode() []byte {
 	if self.fork {
 		appendUint(postureFieldFork, 1)
 	}
+	appendUint(postureFieldOverlayFullThroughN, self.overlayFullThroughN)
 	return encoded
 }
 
@@ -404,7 +408,7 @@ func decodePostureManifest(encoded []byte) (*postureManifest, error) {
 		last = number
 		switch number {
 		case postureFieldVersion, postureFieldGeneration, postureFieldState, postureFieldPinN, postureFieldEntriesCount,
-			postureFieldDocumentSeenAt, postureFieldFork:
+			postureFieldDocumentSeenAt, postureFieldFork, postureFieldOverlayFullThroughN:
 			if wireType != protowire.VarintType {
 				return nil, failed("field %d of wire type %d", number, wireType)
 			}
@@ -431,6 +435,12 @@ func decodePostureManifest(encoded []byte) (*postureManifest, error) {
 					return nil, failed("fork %d", value)
 				}
 				manifest.fork = true
+			case postureFieldOverlayFullThroughN:
+				// nothing zero is written
+				if value == 0 {
+					return nil, failed("a full overlay's position of 0")
+				}
+				manifest.overlayFullThroughN = value
 			}
 		case postureFieldNetworkId, postureFieldAnchor, postureFieldSidecarId, postureFieldIdentityPublicKey,
 			postureFieldPinChain, postureFieldBaseEntry, postureFieldRowsRecord, postureFieldRowsSha256,
