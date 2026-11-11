@@ -85,7 +85,7 @@ func TestHygieneFailsOnAMovedForkReplace(t *testing.T) {
 func TestHygieneFailsOnAModuleLinkingAForkWithoutItsReplace(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.edit("go.mod", "replace @glog@ => ../glog\n", "replace @glog@ => ../glog\n\nreplace github.com/emersion/go-smtp => ./third_party/go-smtp\n")
-	fixture.edit("mlsinterop/go.mod", "go 1.27.3\n", "go 1.27.3\n\nrequire github.com/emersion/go-smtp v0.25.1 // indirect\n")
+	fixture.edit("mlsinterop/go.mod", "go 1.27.4\n", "go 1.27.4\n\nrequire github.com/emersion/go-smtp v0.25.1 // indirect\n")
 	wantFindings(t, fixture.open().replaceFindings(t),
 		"mlsinterop: requires github.com/emersion/go-smtp and does not replace it with QD-193's fork at ../third_party/go-smtp")
 }
@@ -123,8 +123,8 @@ func TestHygieneAllowsTheForkReplacesOnARelease(t *testing.T) {
 
 func TestHygieneFailsOnAnotherGoLine(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.edit("mlsinterop/go.mod", "go 1.27.3", "go 1.27.2")
-	wantFindings(t, fixture.open().moduleLineFindings(t), "mlsinterop: go 1.27.2, and §4.7's is 1.27.3")
+	fixture.edit("mlsinterop/go.mod", "go 1.27.4", "go 1.27.2")
+	wantFindings(t, fixture.open().moduleLineFindings(t), "mlsinterop: go 1.27.2, and §4.7's is 1.27.4")
 }
 
 // A tool line adds its requirements to every consumer's graph, which is why govulncheck is not one.
@@ -136,7 +136,7 @@ func TestHygieneFailsOnAnExtraToolLine(t *testing.T) {
 
 func TestHygieneFailsOnAGoWorkFile(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.write("go.work", "go 1.27.3\n\nuse .\n")
+	fixture.write("go.work", "go 1.27.4\n\nuse .\n")
 	wantFindings(t, fixture.open().workFileFindings(t), "go.work changes what builds resolve")
 }
 

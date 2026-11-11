@@ -279,7 +279,7 @@ github.com/urnetwork/sidecar
 
 **Toolchain and pins** ([§4.7](DESIGN.md#47-module-dependencies-enforcement-consumption), [§4.9](DESIGN.md#49-generation-targets-versions-license-style)):
 
-- **Go and protobuf.** Go 1.27.3; protobuf and protoc-gen-go v1.36.11; built with `CGO_ENABLED=0 -trimpath`.
+- **Go and protobuf.** Go 1.27.4; protobuf and protoc-gen-go v1.36.11; built with `CGO_ENABLED=0 -trimpath`.
 - **golang.org/x/text.** One version on every leg, at least v0.43.0. `make check` enforces this from M10.
 - **Libraries.** go-sdk v1.7.0 for MCP. The test leg uses tmc/mls, mls-go v1.6.0, the mlswg interop client, and go-git as the git oracle.
 - **Replaces and pins.** Replaces point connect, pion/sctp, glog and gvisor at sibling checkouts. Go does not inherit replaces, so server, sn and the four sdk modules repeat them. server's source-graph lock (`server/local/source-graph/lock.yml`) and build's submodules pin the same sidecar commits.

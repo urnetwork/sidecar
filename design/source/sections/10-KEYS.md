@@ -26,7 +26,7 @@ This section owns X12: the in-house MLS subset, ciphersuite, credentials and gro
 ### 10.3 What exists today
 
 - **GKM** appears only at PLAN.md:53; no repo has code for it [R:ext-storage-crypto].
-- **Go 1.27.3** (connect/go.mod:3). `crypto/hpke` implements X-Wing as `MLKEM768X25519()`, KEM 0x647a, from draft-ietf-hpke-pq (GOROOT/src/crypto/hpke/pq.go:21, :39-41); `crypto/mldsa` arrived in Go 1.27 (GOROOT/api/go1.27.txt:4).
+- **Go 1.27.4** (connect/go.mod:3). `crypto/hpke` implements X-Wing as `MLKEM768X25519()`, KEM 0x647a, from draft-ietf-hpke-pq (GOROOT/src/crypto/hpke/pq.go:21, :39-41); `crypto/mldsa` arrived in Go 1.27 (GOROOT/api/go1.27.txt:4).
 - **Constraints.** The browser build is `CGO_ENABLED=0` (sdk/js/Makefile:69). server's `BlobStore` has `PutIfAbsent` but no Delete, If-Match or ranged read (server/blob.go:160-192); `ServiceHost.Blobs` adds them, per metadata cluster (§4.5, §19).
 - **Test material** (2026-11-03). The mlswg's 16 vector files carry only RFC 9420's classical suites (https://github.com/mlswg/mls-implementations/tree/main/test-vectors). MIT differential peers: thomas-vilte/mls-go v1.6.0 (0x0001-0x0003; [R:ext-storage-crypto] §2.4); tmc/mls, whose provisional 0x004F has exactly 0x0010's algorithms (wire.go:33-50); OpenMLS, whose unregistered 0x004D pairs X-Wing with ChaCha20-Poly1305 (https://cryspen.com/post/pq-openmls/).
 
