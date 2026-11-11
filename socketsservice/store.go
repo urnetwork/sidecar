@@ -129,6 +129,11 @@ type SocketStoreRemoval struct {
 	// was admitted at, which is evidence that the log reached it when above the removal's.
 	Kept          bool
 	PolicyVersion uint64
+	// Whether the ref's listener's set still holds a name key that begins tls/ or smtp/ once the call is
+	// done, as SocketStorePageResult's: with none left and an edge name Removed, the engine removes the
+	// listener's pairs (DESIGN-DETAILS 13.2.3's find step 7, and the sweep's). Every ref of one listener
+	// carries the same answer.
+	EdgeEntriesRemain bool
 }
 
 // A lease a call ended, as unlisten or removal left it.
@@ -273,7 +278,8 @@ type SocketStore interface {
 	// Some leases of one network, removed for cause at position (§9.8; DESIGN-DETAILS 13.2.3): the sweep's
 	// and a Find's removal of leases that no longer pass a re-check. cause is SocketRemoveRefused, or
 	// SocketRemoveClientRemoved at SocketRemovedClientPosition. One answer per ref, in order: a lease
-	// admitted above position is kept. A removed lease leaves its client's set.
+	// admitted above position is kept. A removed lease leaves its client's set, and each answer says whether
+	// that set still holds an edge name.
 	RemoveEntries(ctx context.Context, networkId connect.Id, cause SocketRemoveCause, position uint64, refs []*SocketStoreEntryRef) ([]*SocketStoreRemoval, error)
 	// Takes the network's revocation sweep at position for ttl, unless an unexpired claim at position or
 	// above is held: the claim comes back with whether this call took it. held is the claim this caller

@@ -326,6 +326,54 @@ func TestSocketListenTakesAnEdgeSplice(t *testing.T) {
 	}
 }
 
+// An smtp/ listener is a receiver's (§15.5): smtp/25/mx speaking smtp-starttls with 16 streams, registered not
+// serving and refusing tickets until §15 calls SetServing(true) once its key is published; another host or
+// protocol is refused before anything registers.
+func TestSocketListenRegistersAReceiverNotServingUntilItsKey(t *testing.T) {
+	fixture := newTestListenFixture(t)
+	fixture.component.listenAction = func(name string, settings *SocketListenSettings) (*SidecarAction, error) {
+		return &SidecarAction{Kind: SidecarActionListen, Canonical: []byte(name), Risk: SidecarRiskNormal}, nil
+	}
+	for _, refused := range []struct {
+		address  string
+		settings *SocketListenSettings
+	}{
+		{address: "smtp/25/www"},
+		{address: "smtp/25/@"},
+		{address: "smtp/25/mx", settings: &SocketListenSettings{Protocol: "tcp"}},
+	} {
+		parsed, _ := ParseSocketAddress(refused.address)
+		if _, err := fixture.component.listen(t.Context(), parsed, refused.settings, false); !errors.Is(err, errSocketRegistrationInvalid) {
+			t.Errorf("%s: %v", refused.address, err)
+		}
+	}
+	listener := fixture.listen(t, "smtp/25/mx", nil)
+	defer listener.Close()
+	page := testSocketAwait(t, fixture.service.pages, "the page")
+	registration := page.Registrations[0]
+	if registration.Name != "smtp/25/mx" || registration.Protocol != "smtp-starttls" || registration.MaxStreams != 16 || registration.Serving {
+		t.Fatalf("the registration %+v", registration)
+	}
+	edgeTicket := func() []byte {
+		return fixture.ticket(t, listener, func(ticket *protocol.SocketTicket) {
+			ticket.Name = "smtp/25/mx"
+			ticket.NameToken = nil
+			ticket.DialerNetworkId = fixture.service.urnetworkEdge.Bytes()
+		})
+	}
+	if _, err := fixture.open(listener, &socketAdmissionRequest{ticketBytes: edgeTicket(), sourceId: fixture.dialerId, edge: true}); testRejectCode(err) != protocol.StreamRejectCode_SR_BUSY {
+		t.Errorf("a receiver not serving took a ticket: %v", err)
+	}
+	listener.SetServing(true)
+	page = testSocketAwait(t, fixture.service.pages, "the serving page")
+	if !page.Registrations[0].Serving {
+		t.Fatalf("SetServing(true) sent %+v", page.Registrations[0])
+	}
+	if _, err := fixture.open(listener, &socketAdmissionRequest{ticketBytes: edgeTicket(), sourceId: fixture.dialerId, edge: true}); err != nil {
+		t.Fatalf("a serving receiver refused an edge splice: %v", err)
+	}
+}
+
 // tls/ and smtp/ go through Authorize: its pending answer reaches the caller with nothing registered, and the
 // production action, whose row waits on a question, refuses the Listen before any gate.
 func TestSocketListenAuthorizesOutwardNames(t *testing.T) {

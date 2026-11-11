@@ -219,6 +219,8 @@ func TestAclFollowerDropsAFailedAck(t *testing.T) {
 	if ack := acks.next(t); ack.version != net.n {
 		t.Fatalf("the next ack %+v", ack)
 	}
+	// the sender holds the ack before ack() counts it; the loop arms its interval only after, so the counts are final
+	aclTestArmed(t, clock)
 	if stats := follower.Stats(); stats.AckFailureCount != 1 || stats.AckCount != 1 {
 		t.Errorf("stats %+v", stats)
 	}

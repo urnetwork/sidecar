@@ -140,6 +140,12 @@ func DefaultConfigWriterSettings() *ConfigWriterSettings {
 	}
 }
 
+// The bridge ledger's fold a writer's plan calls (FoldBridgeLedger, DESIGN-DETAILS 12.2.3): the ledger files of a head
+// folded through foldedThrough from previous, the head being extended, and state, the writer's tip, with entryTimeMs
+// answering the entries the fold holds. It answers the fold reached, which a body the writer could not open can hold
+// below the one asked. BridgeBodyJudge.Fold is one.
+type ConfigBridgeFold func(previous *ConfigHead, state *ConfigState, foldedThrough uint64, entryTimeMs func(n uint64) (int64, bool)) (*BridgeLedgerFold, error)
+
 // What a ConfigWriter runs on.
 type ConfigWriterArgs struct {
 	// This device, which signs heads and bases.
@@ -150,6 +156,9 @@ type ConfigWriterArgs struct {
 	Heads     ConfigHeadRef
 	Publisher ConfigBasePublisher
 	Settings  *ConfigWriterSettings
+	// The bridge ledger's fold. Nil folds no bridge statement: a fold stops below the first one, or keeps the previous
+	// fold where §7.9's fold rule does not allow that, so no head this writer saves misses its ledger.
+	BridgeFold ConfigBridgeFold
 }
 
 // One device's config writer.
@@ -337,14 +346,17 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		return nil, fmt.Errorf("%w: the config repo holds version %d, below the newest base's %d", ErrConfigHeadConflict, version, base.GetConfigVersion())
 	}
 
-	// the fold and the records it adds, read under the client's follow lock: the log's kept entries are its follower's
+	// the fold and the records it adds, read under the client's follow lock: the log's kept entries are its follower's.
+	// A bridge statement unfolded at the tip folds through it, so a filing stays unfolded across a base only when it
+	// lands between this head's writing and the base's acceptance (DESIGN-DETAILS 12.2.3's writer rule)
 	foldedThrough := base.GetFoldedThrough()
-	if fold || configTailMax < state.n-foldedThrough {
+	if fold || configTailMax < state.n-foldedThrough || state.Bridge().Len() != 0 {
 		foldedThrough = state.n
 	}
 	foldedThrough = max(foldedThrough, head.FoldedThrough())
 	var records []ConfigFoldRecord
 	var compileRows *ConfigCompileRows
+	var ledgerFold *BridgeLedgerFold
 	err = func() error {
 		self.args.Client.followLock.Lock()
 		defer self.args.Client.followLock.Unlock()
@@ -354,6 +366,14 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		}
 		if fork := log.Fork(); fork != nil {
 			return fmt.Errorf("%w: %w", ErrConfigWriterNotWriter, fork)
+		}
+		// the ledger at the fold, which can stop it below a body this writer could not open
+		if head.FoldedThrough() < foldedThrough {
+			var err error
+			if ledgerFold, err = self.bridgeFold(head, state, foldedThrough, log.EntryTimeMs); err != nil {
+				return err
+			}
+			foldedThrough = ledgerFold.FoldedThrough
 		}
 		known := false
 		records, known = log.foldedRecords(head.FoldedThrough()+1, foldedThrough)
@@ -368,10 +388,15 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		return nil, err
 	}
 
-	// the head: the current one with the edit and the fold, saved when either changes it
+	// the head: the current one with the edit, the bridge ledger and the fold, saved when any changes it
 	next := head
 	if edit != nil {
 		if next, err = edit(next); err != nil {
+			return nil, err
+		}
+	}
+	if ledgerFold != nil {
+		if next, err = ledgerFold.Apply(next); err != nil {
 			return nil, err
 		}
 	}
@@ -408,6 +433,41 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 		rows:          rows,
 		threshold:     state.threshold,
 	}, nil
+}
+
+// The bridge ledger's fold through foldedThrough over the head being extended, by args.BridgeFold. With none, the fold
+// stops below the first bridge statement it would take, or stays at the head's where §7.9's fold rule does not allow
+// that, and the head's ledger stands: a writer that cannot write the ledger never folds a statement into a head
+// without it. A fold stopped below a body the writer could not open alarms config_key_waiting.
+func (self *ConfigWriter) bridgeFold(head *ConfigHead, state *ConfigState, foldedThrough uint64, entryTimeMs func(n uint64) (int64, bool)) (*BridgeLedgerFold, error) {
+	if self.args.BridgeFold != nil {
+		fold, err := self.args.BridgeFold(head, state, foldedThrough, entryTimeMs)
+		if err != nil {
+			return nil, err
+		}
+		if fold.Stopped != nil {
+			self.log.Warningf("[config]%s config_key_waiting: the fold stops at %d below a bridge body of generation %d", self.args.Client.NetworkId(), fold.FoldedThrough, fold.Stopped.Generation)
+		}
+		return fold, nil
+	}
+	reached := foldedThrough
+	for _, statement := range state.Bridge().Statements() {
+		if head.FoldedThrough() < statement.N && statement.N <= reached {
+			reached = statement.N - 1
+			break
+		}
+	}
+	if base := state.Base(); reached != head.FoldedThrough() && (base == nil || reached < base.GetVersion()) {
+		reached = head.FoldedThrough()
+	}
+	if reached < foldedThrough {
+		self.log.Warningf("[config]%s no bridge fold is installed: the fold stops at %d", self.args.Client.NetworkId(), reached)
+	}
+	files, err := bridgeLedgerRowsFiles(&bridgeLedgerHeadRows{head: head})
+	if err != nil {
+		return nil, err
+	}
+	return &BridgeLedgerFold{FoldedThrough: reached, Files: files}, nil
 }
 
 // Whether two heads hold the same files.

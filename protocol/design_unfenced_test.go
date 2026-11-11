@@ -197,6 +197,39 @@ message ConfigResolution {
 message ConfigMemberResolution { string email = 1; bytes member_id = 2; }
 message ConfigNetworkResolution { string text = 1; bytes network_id = 2; }
 message ConfigClientResolution { bytes client_id = 1; bytes sidecar_id = 2; }
+// The bridge ledger's fold files beside fold/<d>/<i>, DESIGN-DETAILS 12.2.2's proto block's own numbers (complete
+// 2026-11-11, QD-667), pending its fold into §17.8 and §7.9.
+message BridgeLedgerManifest {
+  uint32 format = 1; uint64 folded_through = 2; int64 time_ms = 3; uint32 rule_shard_bits = 4;
+  repeated BridgeLedgerFile files = 5;
+}
+message BridgeLedgerFile { string path = 1; bytes sha256 = 2; uint64 row_count = 3; }
+message BridgeLedgerAddresses { repeated BridgeLedgerAddressRow rows = 1; }
+message BridgeLedgerAddressRow {
+  uint32 host_bits = 1; bytes sidecar_id = 2; uint64 claimed_at = 3; uint64 released_at = 4; int64 released_ms = 5;
+}
+message BridgeLedgerRules { repeated BridgeLedgerRuleRow rows = 1; }
+message BridgeLedgerRuleRow {
+  bytes rule_id = 1; uint32 signed_type = 2; bytes owner = 3; uint64 first_at = 4; int64 first_ms = 5;
+  uint64 newest_at = 6; int64 newest_ms = 7; BridgeLedgerDisposition disposition = 8; BridgeRouteBody route = 9;
+  BridgeMapBody map = 10; repeated bytes route_rule_ids = 11; int64 expires = 12; bool standing = 13;
+  bytes approval_id = 14; int64 approval_not_after_ms = 15; uint32 approval_uses = 16; uint64 withdrawn_at = 17;
+  int64 withdrawn_ms = 18; BridgeWithdrawMode withdraw_mode = 19; bytes withdrawn_by = 20;
+  bool withdrawn_by_admin = 21; int64 retain_until_ms = 22;
+}
+enum BridgeLedgerDisposition {
+  BRIDGE_LEDGER_DISPOSITION_UNSPECIFIED = 0; BRIDGE_LEDGER_DISPOSITION_ACTIVE = 1; BRIDGE_LEDGER_DISPOSITION_VOID = 2;
+  BRIDGE_LEDGER_DISPOSITION_WITHDRAWN = 3; BRIDGE_LEDGER_DISPOSITION_RESERVED = 4;
+}
+message BridgeLedgerEgressSpecs { repeated BridgeLedgerEgressRow rows = 1; }
+message BridgeLedgerEgressRow {
+  bytes subject = 1; BridgeEgressMode mode = 2; repeated bytes exit_sidecar_ids = 3; bytes exit_tag_id = 4;
+  uint64 at = 5;
+}
+message BridgeLedgerAliases { repeated BridgeLedgerAliasRow rows = 1; }
+message BridgeLedgerAliasRow {
+  BridgeAliasBody body = 1; bytes signer = 2; uint64 at = 3; uint64 released_at = 4; int64 released_ms = 5;
+}
 // §7.8's client-only bundle, a field list without numbers.
 message AuthKeyBundle {
   uint32 version = 1; bytes genesis_sha256 = 2; AuthPin head = 3; bytes delegation_id = 4;

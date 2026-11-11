@@ -24,6 +24,14 @@
 //
 // The pass keeps no cursor between nights: a missed night only delays, and a killed run's shard is listed again.
 //
+// The stored count (owner decision 198; EVSB-M2-26): a night is the start's time, which every run of the night
+// carries in its args. A shard's chain of runs carries the sums it has counted from run to run in the night's Redis
+// key, never in its args, since task rows outlive that key's 48 h, and the run that lists the shard to its end
+// replaces the shard's sums for the night there, but only when every run of the chain counted every repo it listed
+// with no read failing. The night's closing job, which the start queues last, writes each network's count once every
+// shard of every metadata cluster this process holds has reported, which for taskworker is every one
+// (nightly_sums.go). No run of the pass writes a count.
+//
 // Safe for concurrent use: each Run holds its own state, and one run per cluster and shard is the job's once key.
 
 package evsservice
@@ -33,6 +41,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,18 +81,32 @@ type NightlyPassSettings struct {
 	// A container no pidx/ entry names is deleted once it is this old by its LastModified: 25 h, and never less
 	// (§11.13's resume row).
 	UnnamedContainerAge time.Duration
+	// How long the closing job waits before it asks again while a shard of its night has not reported: 10 min, so a
+	// night's count lands within minutes of its last shard. The start's first ask waits as long.
+	NightlyCloseRetryInterval time.Duration
+	// How long one run of the closing job may take before taskworker ends it: 1 h, a write per network.
+	NightlyCloseMaxTime time.Duration
+	// Networks one read of the count store gives the closing job's zero writes. Must be positive.
+	NightlyCloseZeroPageSize int
+	// How long a night's sums live in Redis from the night's first write, and how old a night may be before its
+	// closing job gives it up: 48 h, §2.8's ttl for {evsn_}, which no setting passes.
+	NightlySumsTtl time.Duration
 }
 
 // One job a cluster until a cluster's repos need more (§11.13's cost row: one LIST per repo prefix a night).
 func DefaultNightlyPassSettings() *NightlyPassSettings {
 	return &NightlyPassSettings{
-		RunInterval:         24 * time.Hour,
-		RunMaxTime:          6 * time.Hour,
-		ShardHexDigitCount:  0,
-		RunRepoCount:        100000,
-		ListLimit:           1000,
-		HeadWindowAge:       26 * time.Hour,
-		UnnamedContainerAge: evsNightlyMinUnnamedContainerAge,
+		RunInterval:               24 * time.Hour,
+		RunMaxTime:                6 * time.Hour,
+		ShardHexDigitCount:        0,
+		RunRepoCount:              100000,
+		ListLimit:                 1000,
+		HeadWindowAge:             26 * time.Hour,
+		UnnamedContainerAge:       evsNightlyMinUnnamedContainerAge,
+		NightlyCloseRetryInterval: 10 * time.Minute,
+		NightlyCloseMaxTime:       1 * time.Hour,
+		NightlyCloseZeroPageSize:  1000,
+		NightlySumsTtl:            evsNightlySumsMaxTtl,
 	}
 }
 
@@ -98,6 +121,10 @@ func (self *NightlyPassSettings) Validate() error {
 		return fmt.Errorf("%w: %d shard digits", ErrNightlyPassSettings, self.ShardHexDigitCount)
 	case self.RunRepoCount <= 0 || self.ListLimit <= 0:
 		return fmt.Errorf("%w: a bound that is not positive", ErrNightlyPassSettings)
+	case self.NightlySumsTtl <= 0 || evsNightlySumsMaxTtl < self.NightlySumsTtl:
+		return fmt.Errorf("%w: a sums ttl of %s, outside §2.8's %s", ErrNightlyPassSettings, self.NightlySumsTtl, evsNightlySumsMaxTtl)
+	case self.NightlyCloseRetryInterval <= 0 || self.NightlyCloseMaxTime <= 0 || self.NightlyCloseZeroPageSize <= 0:
+		return fmt.Errorf("%w: a closing job's interval, run time or page that is not positive", ErrNightlyPassSettings)
 	}
 	return nil
 }
@@ -172,6 +199,11 @@ type NightlyResult struct {
 	// Every repo of the shard was listed and counted with no read failing: only then do the run's NetworkBytes
 	// stand for the shard.
 	Complete bool
+	// The night a job's run counted for, from its args: zero for a run Run was called for directly.
+	Night int64
+	// The run listed its shard to its end, every run of its chain whole, and replaced the shard's sums for the
+	// night: what the closing job reads.
+	Reported bool
 }
 
 // A network's stored bytes in one run's repos, by family (§11.13's bytes row).
@@ -517,30 +549,70 @@ func (self *NightlyPass) runRepo(ctx context.Context, cluster sidecar.BlobCluste
 	return err
 }
 
-// The job's args for one shard's run: the cluster, the shard and where to start, none of them content (I-13). No
-// args start every shard's.
-func EvsNightlyArgs(clusterId string, shard string, startAfter string) []byte {
-	return []byte(clusterId + "\n" + shard + "\n" + startAfter)
+// One shard's run as its args carry it: the cluster, the shard, where to start, the night and the run's place in
+// the shard's chain, none of them content (I-13). The sums the chain has counted so far wait in the night's Redis
+// key, never here, since a task's row outlives {evsn_}'s 48 h (nightly_sums.go).
+type EvsNightlyShardArgs struct {
+	ClusterId string
+	Shard     string
+	// The repo/ key the run starts after: empty for the shard's first run.
+	StartAfter string
+	// The nightly start's time in Unix ms, which keys the night's sums.
+	Night int64
+	// The runs of the shard's chain before this one: 0 for its first.
+	Part int
+	// Every run before this one counted every repo it listed with no read failing: only a whole chain reports.
+	Whole bool
+}
+
+// The args of one shard's run: a field a line, the start key last, since a key under repo/ is whatever bytes a LIST
+// gives. No args start every shard's.
+func EvsNightlyArgs(args *EvsNightlyShardArgs) []byte {
+	whole := "0"
+	if args.Whole {
+		whole = "1"
+	}
+	return []byte(strings.Join([]string{
+		args.ClusterId, args.Shard, strconv.FormatInt(args.Night, 10), strconv.Itoa(args.Part), whole, args.StartAfter,
+	}, "\n"))
 }
 
 // The args of one shard's run. ok is false for the start's empty args and for bytes of another shape.
-func ParseEvsNightlyArgs(args []byte) (clusterId string, shard string, startAfter string, ok bool) {
-	fields := strings.Split(string(args), "\n")
-	if len(fields) != 3 || fields[0] == "" {
-		return "", "", "", false
+func ParseEvsNightlyArgs(args []byte) (*EvsNightlyShardArgs, bool) {
+	fields := strings.SplitN(string(args), "\n", 6)
+	if len(fields) != 6 || fields[0] == "" {
+		return nil, false
 	}
-	return fields[0], fields[1], fields[2], true
+	night, err := strconv.ParseInt(fields[2], 10, 64)
+	if err != nil || night <= 0 {
+		return nil, false
+	}
+	part, err := strconv.Atoi(fields[3])
+	if err != nil || part < 0 {
+		return nil, false
+	}
+	if fields[4] != "0" && fields[4] != "1" {
+		return nil, false
+	}
+	return &EvsNightlyShardArgs{
+		ClusterId:  fields[0],
+		Shard:      fields[1],
+		StartAfter: fields[5],
+		Night:      night,
+		Part:       part,
+		Whole:      fields[4] == "1",
+	}, true
 }
 
 // One shard's run in the queue, once-keyed by cluster and shard, so a start and a rerun coalesce.
-func EvsNightlyTaskRequest(clusterId string, shard string, startAfter string, runAt time.Time, settings *NightlyPassSettings) *sidecar.TaskRequest {
+func EvsNightlyTaskRequest(args *EvsNightlyShardArgs, runAt time.Time, settings *NightlyPassSettings) *sidecar.TaskRequest {
 	if settings == nil {
 		settings = DefaultNightlyPassSettings()
 	}
 	return &sidecar.TaskRequest{
 		Name:    EvsNightlyTaskName,
-		OnceKey: EvsNightlyTaskName + "." + clusterId + "." + shard,
-		Args:    EvsNightlyArgs(clusterId, shard, startAfter),
+		OnceKey: EvsNightlyTaskName + "." + args.ClusterId + "." + args.Shard,
+		Args:    EvsNightlyArgs(args),
 		RunAt:   runAt,
 		MaxTime: settings.RunMaxTime,
 	}
@@ -552,26 +624,47 @@ func EvsNightlyStartTaskRequest(runAt time.Time) *sidecar.TaskRequest {
 }
 
 // One run of evs.nightly. With no args it is the nightly start: it queues itself an interval on, then each shard of
-// each metadata cluster now. With a shard's args it is that shard's run, which queues itself again from the key it
-// reached when it stopped at its bound. The result is nil for the start.
+// each metadata cluster now, carrying the night, the start's own time, and last the night's closing job, so a start
+// that fails partway leaves no closing job waiting on a shard it never queued. With a shard's args it is that
+// shard's run, which queues itself again from the key it reached when it stopped at its bound, and replaces the
+// shard's sums for the night once its chain has listed the shard whole. The result is nil for the start.
 func RunNightlyPass(ctx context.Context, host *sidecar.ServiceHost, deps *NightlyPassDeps, args []byte) (*NightlyResult, error) {
-	if host == nil || host.Tasks == nil {
-		return nil, errors.New("evs's nightly pass needs a host with a task queue")
+	if host == nil || host.Tasks == nil || host.Redis == nil {
+		return nil, errors.New("evs's nightly pass needs a host with a task queue and Redis")
 	}
 	pass, err := NewNightlyPass(host, deps)
 	if err != nil {
 		return nil, err
 	}
+	sums, err := NewNightlySums(host.Redis, pass.settings)
+	if err != nil {
+		return nil, err
+	}
 	now := pass.clock.Now()
 	if len(args) == 0 {
+		night := now.UnixMilli()
 		if err := host.Tasks.Schedule(ctx, EvsNightlyStartTaskRequest(now.Add(pass.settings.RunInterval))); err != nil {
 			return nil, err
 		}
+		shardFields := []string{}
 		for _, clusterId := range host.Blobs.MetadataClusterIds() {
+			if clusterId == "" || strings.Contains(clusterId, "\n") {
+				return nil, fmt.Errorf("%w: a metadata cluster id %q that no args can carry", ErrNightlyPassSettings, clusterId)
+			}
 			for _, shard := range pass.settings.Shards() {
-				if err := host.Tasks.Schedule(ctx, EvsNightlyTaskRequest(clusterId, shard, "", now, pass.settings)); err != nil {
+				shardArgs := &EvsNightlyShardArgs{ClusterId: clusterId, Shard: shard, Night: night, Whole: true}
+				if err := host.Tasks.Schedule(ctx, EvsNightlyTaskRequest(shardArgs, now, pass.settings)); err != nil {
 					return nil, err
 				}
+				shardFields = append(shardFields, NightlyShardField(clusterId, shard))
+			}
+		}
+		// a closing job with no shard to wait on would write zero for every network that holds a count
+		if 0 < len(shardFields) {
+			closeArgs := &EvsNightlyCloseArgs{Night: night, ShardFields: shardFields}
+			request := EvsNightlyCloseTaskRequest(closeArgs, now.Add(pass.settings.NightlyCloseRetryInterval), pass.settings)
+			if err := host.Tasks.Schedule(ctx, request); err != nil {
+				return nil, err
 			}
 		}
 		// the first cluster's control plane, counted apart for §19.9's cohorts row (cluster_limit.go): a count that
@@ -581,16 +674,25 @@ func RunNightlyPass(ctx context.Context, host *sidecar.ServiceHost, deps *Nightl
 		}
 		return nil, nil
 	}
-	clusterId, shard, startAfter, ok := ParseEvsNightlyArgs(args)
+	shardArgs, ok := ParseEvsNightlyArgs(args)
 	if !ok {
 		return nil, fmt.Errorf("%w: evs.nightly args", ErrNightlyPassSettings)
 	}
-	if !slices.Contains(host.Blobs.MetadataClusterIds(), clusterId) {
+	if !slices.Contains(host.Blobs.MetadataClusterIds(), shardArgs.ClusterId) {
 		return nil, fmt.Errorf("%w: evs.nightly for a cluster this process does not hold", sidecar.ErrBlobClusterUnknown)
 	}
-	result, err := pass.Run(ctx, clusterId, shard, startAfter)
-	if result != nil && result.More {
-		request := EvsNightlyTaskRequest(clusterId, shard, result.NextStartAfter, pass.clock.Now(), pass.settings)
+	result, err := pass.Run(ctx, shardArgs.ClusterId, shardArgs.Shard, shardArgs.StartAfter)
+	if result == nil {
+		return nil, err
+	}
+	result.Night = shardArgs.Night
+	next, reportErr := pass.reportShard(ctx, sums, shardArgs, result, err)
+	if reportErr != nil {
+		// nothing is queued yet, so the run is retried with its own args and reads its chain's sums again
+		return result, reportErr
+	}
+	if next != nil {
+		request := EvsNightlyTaskRequest(next, pass.clock.Now(), pass.settings)
 		if scheduleErr := host.Tasks.Schedule(ctx, request); scheduleErr != nil && err == nil {
 			err = scheduleErr
 		}

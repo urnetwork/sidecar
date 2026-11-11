@@ -1,7 +1,7 @@
 // The engine's lifecycle: construction, readiness, drain and close, and the parts every route shares.
-// Its routes arrive with their own tasks, each in its own file: POST /socket/registrations, GET
-// /socket/list and GET /socket/keys with SOCK-M5-05, POST /socket/find with SOCK-M5-06. Until a route's
-// task lands the route is absent, so Handler answers 404 for it and never a faked answer.
+// Its routes are each in their own file: POST /socket/registrations (registrations.go), GET /socket/list
+// (list.go) and GET /socket/keys (keys.go), SOCK-M5-05's, and POST /socket/find (find.go, tickets.go),
+// SOCK-M5-06's. request.go holds the steps they share, and refusals.go what they refuse from memory.
 //
 // The engine turns ready only when everything a route needs is present: a store that answers its probe,
 // a gate that has loaded, and a ticket key that signs (§19.4's column for sockets: Redis, ticket key,
@@ -17,6 +17,7 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/urnetwork/connect"
 
@@ -50,6 +51,22 @@ type SocketsService struct {
 	bound      *SocketControlBound
 	fairQueue  *SocketFairQueue
 	namespaces *socketNamespaceRegistry
+
+	// What the routes refuse from memory (refusals.go), which SOCK-M5-07's ClientRemoved and KillChanged fill.
+	removedClients *socketRemovedClients
+	killSet        *socketKillSet
+	// Claims seen to pass (registrations.go), pair renewals and pair writes this process made (find.go), and
+	// the registrations gauge's count.
+	claimMemo    *socketClaimMemo
+	pairTouches  *socketPairTouches
+	pairWrites   *socketPairWrites
+	leaseCounter *socketLeaseCounter
+	// One uniform draw for a pick (§9.7): the system's randomness, which a test may fix.
+	draw func() uint32
+	// Tickets signed, so a test can show that a refusal signed none, and claim signatures checked, so a test
+	// can show that a heartbeat checks none.
+	signedCount      atomic.Int64
+	claimVerifyCount atomic.Int64
 
 	// What the last probe found.
 	storeReachable *sidecar.MonitorValue[bool]
@@ -85,6 +102,7 @@ func NewSocketsService(
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
 	clock := host.ClockOrReal()
+	metrics := newSocketMetrics(host.Metrics)
 	self := &SocketsService{
 		ctx:            cancelCtx,
 		cancel:         cancel,
@@ -93,10 +111,17 @@ func NewSocketsService(
 		gate:           gate,
 		settings:       settings,
 		clock:          clock,
-		metrics:        newSocketMetrics(host.Metrics),
+		metrics:        metrics,
 		bound:          NewSocketControlBound(settings.Bound, clock),
 		fairQueue:      NewSocketFairQueue(settings.FairQueue, clock),
 		namespaces:     newSocketNamespaceRegistry(),
+		removedClients: newSocketRemovedClients(settings.RemovedClientTtl),
+		killSet:        newSocketKillSet(),
+		claimMemo:      newSocketClaimMemo(settings.ClaimMemoCount),
+		pairTouches:    newSocketPairTouches(settings.EdgePairTouchInterval),
+		pairWrites:     newSocketPairWrites(settings.PairWriteInterval),
+		leaseCounter:   newSocketLeaseCounter(settings.Store.Lease, metrics.registrations),
+		draw:           socketCryptoDraw,
 		storeReachable: sidecar.NewMonitorValue(false),
 		probeCount:     sidecar.NewMonitorValue(0),
 		released:       make(chan struct{}),
@@ -207,11 +232,15 @@ func (self *SocketsService) Close() {
 	<-self.released
 }
 
-// See sidecar.HttpEngine. Built once. Each route's task adds its route here from its own file, and a
-// route not yet built answers 404.
+// See sidecar.HttpEngine. Built once: §9.15's four routes, each served from its own file, and any other
+// path or method answers as the mux does, 404 or 405.
 func (self *SocketsService) Handler() http.Handler {
 	self.handlerOnce.Do(func() {
 		mux := http.NewServeMux()
+		mux.HandleFunc("POST /socket/registrations", self.serveRegistrations)
+		mux.HandleFunc("GET /socket/list", self.serveList)
+		mux.HandleFunc("GET /socket/keys", self.serveKeys)
+		mux.HandleFunc("POST /socket/find", self.serveFind)
 		self.handler = mux
 	})
 	return self.handler

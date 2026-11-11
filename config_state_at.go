@@ -31,6 +31,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -295,4 +296,132 @@ func (self *ConfigState) StateAt(pin *bridge.AuthPin) (*ConfigState, error) {
 // concurrent use, with no lock but a rebuild cache's.
 func (self *ConfigLog) StateAt(pin *bridge.AuthPin) (*ConfigState, error) {
 	return self.state.Load().StateAt(pin)
+}
+
+// Replaces the tip with a state at its own position: the window's last state, kept or not.
+func (self *configStateHistory) replaceTip(state *ConfigState) {
+	view := self.view.Load()
+	if view == nil || view.tip.n != state.n {
+		return
+	}
+	next := &configHistoryView{
+		from:    view.from,
+		states:  view.states[:len(view.states):len(view.states)],
+		entries: view.entries,
+		tip:     state,
+	}
+	if last := len(next.states) - 1; 0 <= last && next.states[last] != nil {
+		next.states = append(next.states[:last:last], state)
+	}
+	self.view.Store(next)
+}
+
+// Judges again, with the BridgeBodyJudge's keys as they are now, each unfolded route or map filing whose verdict is
+// Unopened at a generation the judge now holds, for a daemon that gained a generation late (DESIGN-DETAILS 12.2.3): an
+// entry above the newest base on S(k-1) from StateAt; one in that base's tail on R_b(k-1), which re-applying the tail
+// over the base's retained rows rebuilds, as the base itself did. Publishes the tip again at its own pin, its bridge
+// part carrying the new verdicts, and answers how many changed. States before the tip keep the verdicts they were built
+// with; the entries after the tip build on the new ones, and the next base judges its tail again. For the log's one
+// applying goroutine, as Apply.
+func (self *ConfigLog) RejudgeBridgeBodies() (int, error) {
+	judge := self.settings.BridgeBodyJudge
+	tip := self.state.Load()
+	if judge == nil || tip.Bridge().Len() == 0 {
+		return 0, nil
+	}
+	held := func(statement *BridgeLogStatement) bool {
+		verdict := statement.Approval
+		return statement.filesRule() && verdict != nil && verdict.Kind == BridgeBodyUnopened && judge.repoKeyAt()(verdict.Generation) != nil
+	}
+	if !slices.ContainsFunc(tip.Bridge().Statements(), held) {
+		return 0, nil
+	}
+	base := tip.base
+	var tailVerdicts map[[sha256.Size]byte]*BridgeBodyVerdict
+	if base != nil && slices.ContainsFunc(tip.Bridge().Statements(), func(statement *BridgeLogStatement) bool {
+		return held(statement) && statement.N < base.n
+	}) {
+		var err error
+		if tailVerdicts, err = self.bridgeTailVerdicts(tip); err != nil {
+			return 0, err
+		}
+	}
+	changedCount := 0
+	statements := slices.Clone(tip.Bridge().Statements())
+	for i, statement := range statements {
+		if !held(statement) {
+			continue
+		}
+		var verdict *BridgeBodyVerdict
+		if base != nil && statement.N < base.n {
+			verdict = tailVerdicts[statement.StatementId]
+		} else {
+			chain, ok := tip.chainAt(statement.N - 1)
+			if !ok {
+				continue
+			}
+			before, err := tip.StateAt(&bridge.AuthPin{Version: statement.N - 1, Chain: chain[:]})
+			if err != nil {
+				return changedCount, err
+			}
+			verdict = judge.Judge(bridgeStateBefore(before, statement.N, statement.TimeMs), statement)
+		}
+		if verdict == nil || verdict.Kind == BridgeBodyUnopened {
+			continue
+		}
+		rejudged := *statement
+		rejudged.Approval = verdict
+		statements[i] = &rejudged
+		changedCount += 1
+	}
+	if changedCount == 0 {
+		return 0, nil
+	}
+	next := configCopyState(tip)
+	next.bridge = NewBridgeLog(statements)
+	barrierKey := self.networkId.String()
+	testHookBarrier("config.bridge_rejudge.before", barrierKey)
+	self.history.replaceTip(next)
+	self.state.Store(next)
+	testHookBarrier("config.bridge_rejudge", barrierKey)
+	return changedCount, nil
+}
+
+// The verdicts the newest base's tail gets with the judge's keys as they are now, by statement id: the tail re-applied
+// over the base's retained rows, as the base itself re-applied it, on a builder of its own.
+func (self *ConfigLog) bridgeTailVerdicts(tip *ConfigState) (map[[sha256.Size]byte]*BridgeBodyVerdict, error) {
+	base := tip.base
+	kept := self.keptEntry(base.n)
+	rowsBytes, found := self.baseRows[[sha256.Size]byte(base.header.GetRowsSha256())]
+	if kept == nil || !found {
+		return nil, fmt.Errorf("base %d's entry or rows are not kept", base.n)
+	}
+	baseState, ok := self.history.stateAt(base.n)
+	if !ok {
+		return nil, fmt.Errorf("S(%d) is not kept", base.n)
+	}
+	// a copy whose arrays end where its own do, so the rebuild appends to arrays of its own and never writes into the
+	// ones the log's later states share
+	previous := configCopyState(baseState)
+	previous.chains = previous.chains[:len(previous.chains):len(previous.chains)]
+	previous.ring = previous.ring[:len(previous.ring):len(previous.ring)]
+	next, _, err := self.stateFromBase(previous, kept, base.header, rowsBytes)
+	if err != nil {
+		return nil, err
+	}
+	foldedThrough := base.header.GetFoldedThrough()
+	verdicts, err := configDecodeTailVerdicts(base.header.GetTailVerdicts(), base.n-foldedThrough-1)
+	if err != nil {
+		return nil, err
+	}
+	if err := self.reapplyTail(next, foldedThrough, base.n, verdicts, false); err != nil {
+		return nil, err
+	}
+	tailVerdicts := map[[sha256.Size]byte]*BridgeBodyVerdict{}
+	for _, statement := range next.state.Bridge().Statements() {
+		if statement.Approval != nil {
+			tailVerdicts[statement.StatementId] = statement.Approval
+		}
+	}
+	return tailVerdicts, nil
 }

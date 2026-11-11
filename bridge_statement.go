@@ -28,7 +28,11 @@
 // folded_through, in log order. A base's rows carry none of them but BridgeRows' egress modes, so a base empties the
 // fold and its tail re-applies, and a new device and a long-running reader hold one BridgeLog (FS-14's shape). The
 // traps that read the fold, a withdrawn id and a held id, therefore see the unfolded tail alone at id level; a full
-// reader's ledger runs them over the whole history it joins from the config head (JoinBridgeLogs).
+// reader's ledger runs them over the config head's ledger rows too (bridge_ledger.go, OpenBridgeLedger).
+//
+// A route's or map's body is judged as its entry takes effect, by the log's BridgeBodyJudge on the state the entry lands
+// on (DESIGN-DETAILS 12.2.3): S(k-1) at its own position, R_b(k-1) when a base b re-applies it. The verdict rides the
+// statement the fold holds (Approval), as SignerAdmin does, and a keyless verifier, which installs no judge, holds none.
 //
 // A BridgeEgress shows its mode at id level, in BridgeEgress.mode = 4, which §2.8's api-7 row names (QD-630, I-18), so
 // every reader, a keyless gate's included, folds each entry's mode into BridgeRows in log order; one that shows no mode,
@@ -101,6 +105,9 @@ type BridgeLogStatement struct {
 	EgressMode bridge.BridgeEgressMode
 	// The sealed body as carried; empty for a withdrawal.
 	SealedBody []byte
+	// A route's or map's body-level verdict, which the log's BridgeBodyJudge reached on the state the entry lands on;
+	// nil where no judge ran, a keyless verifier's, and for every other statement.
+	Approval *BridgeBodyVerdict
 }
 
 // Whether the statement files a rule: a BridgeRoute or a BridgeMap.
@@ -144,22 +151,6 @@ func NewBridgeLog(statements []*BridgeLogStatement) *BridgeLog {
 		return nil
 	}
 	return &BridgeLog{statements: slices.Clone(statements)}
-}
-
-// folded then tail: the whole history a full reader's ledger reads, the statements a config head folded and the ones
-// a ConfigState holds since. A statement both hold, by its id, is taken once, from folded.
-func JoinBridgeLogs(folded *BridgeLog, tail *BridgeLog) *BridgeLog {
-	statements := slices.Clone(folded.Statements())
-	held := map[[sha256.Size]byte]bool{}
-	for _, statement := range statements {
-		held[statement.StatementId] = true
-	}
-	for _, statement := range tail.Statements() {
-		if !held[statement.StatementId] {
-			statements = append(statements, statement)
-		}
-	}
-	return NewBridgeLog(statements)
 }
 
 // The log with one more statement. The receiver is unchanged.
@@ -315,14 +306,18 @@ func configCheckBridgeStatement(state *ConfigState, statement *configStatement) 
 }
 
 // A bridge statement's id-level effect: it joins the fold, and a BridgeEgress writes its subject's mode into the rows'
-// BridgeRows, as gates and api apply each entry over a base's rows (bridge_rows.go). Whether its signer was an admin is
-// read on the state the entry lands on, so a base's re-application follows the rebuilt rows.
+// BridgeRows, as gates and api apply each entry over a base's rows (bridge_rows.go). Whether its signer was an admin,
+// and a route's or map's body-level verdict, are read on the state the entry lands on, so a base's re-application
+// follows the rebuilt rows; next holds nothing of the entry yet when this runs.
 func configApplyBridgeStatement(next *configStateBuilder, statement *configStatement) error {
 	logStatement, err := bridgeLogStatementOf(statement)
 	if err != nil {
 		return err
 	}
 	logStatement.SignerAdmin = bridgeSignerAdmin(next.state, statement)
+	if judge := next.state.bridgeBodyJudge(); judge != nil && logStatement.filesRule() {
+		logStatement.Approval = judge.Judge(bridgeStateBefore(next.state, statement.n, statement.timeMs), logStatement)
+	}
 	if logStatement.SignedType == bridge.SignedType_SIGNED_BRIDGE_EGRESS {
 		bridgeRows, err := bridgeRowsWithEgress(next.state.aclRows.GetBridge(), logStatement.Subject, logStatement.EgressMode)
 		if err != nil {

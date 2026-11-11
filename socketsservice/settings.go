@@ -1,7 +1,9 @@
 // The engine's tunables (connect/CODESTYLE.md:140): DefaultSocketsSettings is the only source of a
 // default, and server/cli/sockets lays config/<env>/sidecar.yml's sockets_control_qps over it (§19.11).
-// Protocol and format values, such as §9.5's 1,024 entries a page and §9.4's sizes, are constants beside
-// the code that reads them, never settings.
+// Every limit is a field too, protocol and format limits included (QD-702): §9.5's and §9.6's field sizes
+// are Format, the root's SocketFormatSettings, which the client side's settings carry as well, so their
+// defaults stay the protocol's in one place. §9.5's 1,024 entries a page and §9.4's name sizes (request.go)
+// are still constants until their files move.
 //
 // Every count and duration must be positive, and Validate refuses anything else, so no zero reads as
 // unlimited or off. Nothing here bounds a count of names, listeners or streams (owner decision 66): the
@@ -13,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/urnetwork/sidecar"
 )
 
 // A settings value the engine cannot run on. The wrapping error names the field.
@@ -134,18 +138,69 @@ type SocketsSettings struct {
 	// The most milliseconds a refusal asks a caller to wait when the bound or the queue refuses it:
 	// 1 s. The bound's own answer is the time to its next token, which this caps.
 	MaxRetryAfter time.Duration
+	// How long a removed client stays in the removed-client set after its {X}c_removed event (DESIGN-DETAILS
+	// 13.2.3): 10 min, past any lease it held, so this process refuses its pages and its leases from memory
+	// while RemoveClient's tombstones and its token's revocation take over.
+	RemovedClientTtl time.Duration
+	// How often, at most, a registration that accepts a client's tls/ or smtp/ entry renews that client's
+	// pairs in this process (QD-656): 5 min, a third of EdgePairTtl, so a live listener's pairs never lapse
+	// between its heartbeats.
+	EdgePairTouchInterval time.Duration
+	// How long a pair this process wrote for one listener, listen, dialer and grant expiry stands before a
+	// Find writes it again (DESIGN-DETAILS 13.2.3's find step 8): 60 s, so a busy edge writes a pair a minute
+	// rather than one a Find.
+	PairWriteInterval time.Duration
+	// The wait a refusal asks for when this process cannot judge yet: a network unloaded or behind, or a
+	// picked lease admitted above the view's position. 250 ms, by when this process has usually loaded.
+	BehindRetryAfter time.Duration
+	// The wait a page asks for when a newer removal fenced one of its entries: 1 s.
+	FencedRetryAfter time.Duration
+	// The wait Find's quota refusal asks for: 5 s, the period of §20.7's over-limit snapshot (§9.6's step 3),
+	// so a dialer asks again once the answer can have changed.
+	QuotaRetryAfter time.Duration
+	// How many verified claims the engine remembers (DESIGN-DETAILS 13.2.3's registration step 5), so that a
+	// heartbeat checks no signature: 131,072. It bounds memory and never names, since a claim it has
+	// forgotten is checked again.
+	ClaimMemoCount int
+	// How many names one page of GET /socket/list examines: 1,024, a registration page's worth, each page one
+	// token of the caller's bucket (SOCK.md reading 10).
+	ListPageCount int
+	// §9.5's and §9.6's field sizes and defaults, which a page's and a Find's shape checks read: the root's one
+	// object, at the protocol's values (QD-702).
+	Format *sidecar.SocketFormatSettings
+	// The most bytes one registrations call's body holds: 4 MiB, a page of 1,024 entries, each at most a token
+	// path, a seal, a claim and the rest in base64 and JSON. A longer body is invalid.
+	RegistrationsMaxBodyByteCount int
+	// The most bytes one Find's body holds: 64 KiB, two failed tickets, K client ids and the rest in base64 and
+	// JSON, many times over. A longer body is invalid.
+	FindMaxBodyByteCount int
+	// The most client ids an edge's Find names: 64, an edge process's K clients (§13.6's 4 by default) with room.
+	FindMaxClientIdCount int
 }
 
 // §9's values.
 func DefaultSocketsSettings() *SocketsSettings {
 	return &SocketsSettings{
-		Store:              DefaultSocketStoreSettings(),
-		Bound:              DefaultSocketControlBoundSettings(),
-		FairQueue:          DefaultSocketFairQueueSettings(),
-		PlatformPairTtlMax: 60 * time.Minute,
-		StoreTimeout:       2 * time.Second,
-		ProbeInterval:      5 * time.Second,
-		MaxRetryAfter:      time.Second,
+		Store:                 DefaultSocketStoreSettings(),
+		Bound:                 DefaultSocketControlBoundSettings(),
+		FairQueue:             DefaultSocketFairQueueSettings(),
+		PlatformPairTtlMax:    60 * time.Minute,
+		StoreTimeout:          2 * time.Second,
+		ProbeInterval:         5 * time.Second,
+		MaxRetryAfter:         time.Second,
+		RemovedClientTtl:      10 * time.Minute,
+		EdgePairTouchInterval: 5 * time.Minute,
+		PairWriteInterval:     60 * time.Second,
+		BehindRetryAfter:      250 * time.Millisecond,
+		FencedRetryAfter:      time.Second,
+		QuotaRetryAfter:       5 * time.Second,
+		ClaimMemoCount:        128 * 1024,
+		ListPageCount:         1024,
+
+		Format:                        sidecar.DefaultSocketFormatSettings(),
+		RegistrationsMaxBodyByteCount: 4 * 1024 * 1024,
+		FindMaxBodyByteCount:          64 * 1024,
+		FindMaxClientIdCount:          64,
 	}
 }
 
@@ -212,6 +267,9 @@ func (self *SocketsSettings) Validate() error {
 	if self.FairQueue == nil {
 		return fmt.Errorf("%w: no fair queue settings", ErrSocketsSettingsRefused)
 	}
+	if self.Format == nil {
+		return fmt.Errorf("%w: no format settings", ErrSocketsSettingsRefused)
+	}
 	for _, check := range []struct {
 		name     string
 		positive bool
@@ -228,6 +286,28 @@ func (self *SocketsSettings) Validate() error {
 		{name: "store_timeout", positive: 0 < self.StoreTimeout},
 		{name: "probe_interval", positive: 0 < self.ProbeInterval},
 		{name: "max_retry_after", positive: 0 < self.MaxRetryAfter},
+		{name: "removed_client_ttl", positive: 0 < self.RemovedClientTtl},
+		{name: "edge_pair_touch_interval", positive: 0 < self.EdgePairTouchInterval},
+		{name: "pair_write_interval", positive: 0 < self.PairWriteInterval},
+		{name: "behind_retry_after", positive: 0 < self.BehindRetryAfter},
+		{name: "fenced_retry_after", positive: 0 < self.FencedRetryAfter},
+		{name: "quota_retry_after", positive: 0 < self.QuotaRetryAfter},
+		{name: "claim_memo_count", positive: 2 <= self.ClaimMemoCount},
+		{name: "list_page_count", positive: 0 < self.ListPageCount},
+		{name: "registrations_max_body_byte_count", positive: 0 < self.RegistrationsMaxBodyByteCount},
+		{name: "find_max_body_byte_count", positive: 0 < self.FindMaxBodyByteCount},
+		{name: "find_max_client_id_count", positive: 0 < self.FindMaxClientIdCount},
+		{name: "format.claim_max_byte_count", positive: 0 < self.Format.ClaimMaxByteCount},
+		{name: "format.protocol_max_byte_count", positive: 0 < self.Format.ProtocolMaxByteCount},
+		{name: "format.alpn_max_count", positive: 0 < self.Format.AlpnMaxCount},
+		{name: "format.alpn_max_byte_count", positive: 0 < self.Format.AlpnMaxByteCount},
+		{name: "format.app_mode_max_byte_count", positive: 0 < self.Format.AppModeMaxByteCount},
+		{name: "format.max_weight", positive: 0 < self.Format.MaxWeight},
+		{name: "format.default_weight", positive: 0 < self.Format.DefaultWeight && self.Format.DefaultWeight <= self.Format.MaxWeight},
+		{name: "format.default_max_streams", positive: 0 < self.Format.DefaultMaxStreams},
+		{name: "format.ticket_max_byte_count", positive: 0 < self.Format.TicketMaxByteCount},
+		{name: "format.failed_ticket_max_count", positive: 0 < self.Format.FailedTicketMaxCount},
+		{name: "format.affinity_key_max_byte_count", positive: 0 < self.Format.AffinityKeyMaxByteCount},
 	} {
 		if !check.positive {
 			return fmt.Errorf("%w: %s", ErrSocketsSettingsRefused, check.name)

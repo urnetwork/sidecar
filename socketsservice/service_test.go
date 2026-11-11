@@ -187,21 +187,24 @@ func TestClosedSocketGateAllowsNothing(t *testing.T) {
 	}
 }
 
-// Until a route's task lands, the route is absent rather than faked.
-func TestSocketsServiceRoutesAreAbsentUntilBuilt(t *testing.T) {
+// §9.15's four routes are served: the three Client-class ones refuse a call with no token, GET /socket/keys
+// answers anyone, and any other path is the mux's 404.
+func TestSocketsServiceServesItsFourRoutes(t *testing.T) {
 	service, _ := testSocketsService(t, nil, nil)
 	for _, route := range []struct {
 		method string
 		path   string
+		code   int
 	}{
-		{method: http.MethodPost, path: "/socket/registrations"},
-		{method: http.MethodPost, path: "/socket/find"},
-		{method: http.MethodGet, path: "/socket/list"},
-		{method: http.MethodGet, path: "/socket/keys"},
+		{method: http.MethodPost, path: "/socket/registrations", code: http.StatusUnauthorized},
+		{method: http.MethodPost, path: "/socket/find", code: http.StatusUnauthorized},
+		{method: http.MethodGet, path: "/socket/list", code: http.StatusUnauthorized},
+		{method: http.MethodGet, path: "/socket/keys", code: http.StatusOK},
+		{method: http.MethodGet, path: "/socket/other", code: http.StatusNotFound},
 	} {
 		recorder := httptest.NewRecorder()
 		service.Handler().ServeHTTP(recorder, httptest.NewRequest(route.method, route.path, nil))
-		if recorder.Code != http.StatusNotFound {
+		if recorder.Code != route.code {
 			t.Errorf("%s %s answered %d", route.method, route.path, recorder.Code)
 		}
 	}
@@ -269,6 +272,13 @@ func TestSocketsSettingsRefuseWhatIsNotPositive(t *testing.T) {
 		func(settings *socketsservice.SocketsSettings) { settings.StoreTimeout = -time.Second },
 		func(settings *socketsservice.SocketsSettings) { settings.Bound = nil },
 		func(settings *socketsservice.SocketsSettings) { settings.Store = nil },
+		func(settings *socketsservice.SocketsSettings) { settings.Format = nil },
+		func(settings *socketsservice.SocketsSettings) { settings.Format.TicketMaxByteCount = 0 },
+		func(settings *socketsservice.SocketsSettings) { settings.Format.DefaultWeight = settings.Format.MaxWeight + 1 },
+		func(settings *socketsservice.SocketsSettings) { settings.Format.AlpnMaxCount = -1 },
+		func(settings *socketsservice.SocketsSettings) { settings.RegistrationsMaxBodyByteCount = 0 },
+		func(settings *socketsservice.SocketsSettings) { settings.FindMaxBodyByteCount = 0 },
+		func(settings *socketsservice.SocketsSettings) { settings.FindMaxClientIdCount = 0 },
 	} {
 		settings := socketsservice.DefaultSocketsSettings()
 		mutate(settings)
