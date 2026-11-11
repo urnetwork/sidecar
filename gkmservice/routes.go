@@ -15,8 +15,8 @@
 //	          forwarding Delegation's reader key, by the sidecar its row names (the handler, DESIGN-DETAILS 4.2.2)
 //	public    GET reader-key/<sidecar_id>, POST reader-keys: a public record, under an admitted sidecar's token
 //	read      GET a group, its epochs, gen/, wraps (the caller's own), group-info, Welcomes, and POST ack: r, rw or
-//	          admin; GET delegation-keys/<delegation_id>: r, rw or admin on the network's config repo, which the
-//	          handler authorizes from the Delegation's row
+//	          admin; GET delegation-keys/<delegation_id> and POST delegation-keys: r, rw or admin on the network's
+//	          config repo, which the handler authorizes from the Delegations' rows
 //	leaf      POST epochs/<n>: r, rw or admin, from a member device; members refuse what gkm cannot see (§10.9)
 //	info      POST group-info: r, rw or admin, from a member device that is not read_only
 //	deliver   POST wraps/<g>/<c8>: r, rw or admin, from a sidecar that is not read_only, under the wrap checks
@@ -152,6 +152,8 @@ var gkmRoutes = []*GkmRoute{
 	// KEYS-M8-01: a forwarding Delegation's reader key, on the first cluster (DESIGN-DETAILS 4.2.2)
 	{Pattern: "PUT /gkm/delegation-keys/{delegation_id}", Scope: gkmScopeOwn, Target: gkmTargetNone, Write: true, Serve: (*GkmEngine).serveDelegationKeyUpload},
 	{Pattern: "GET /gkm/delegation-keys/{delegation_id}", Scope: gkmScopeRead, Target: gkmTargetBody, Serve: (*GkmEngine).serveDelegationKeyRead},
+	// KEYS-M8-02: up to 256 of them at once, under the GET's scope (QD-637)
+	{Pattern: "POST /gkm/delegation-keys", Scope: gkmScopeRead, Target: gkmTargetBody, Serve: (*GkmEngine).serveDelegationKeysRead},
 }
 
 // The path values the patterns name.

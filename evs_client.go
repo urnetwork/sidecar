@@ -43,6 +43,9 @@ var (
 	ErrEvsNoStatementPoster = errors.New("evs: no statement poster")
 	// The client has no verified config state to judge statements at, so nothing reads as verified.
 	ErrEvsNoConfig = errors.New("evs: no verified config state")
+	// A repo this sidecar, which holds no leaf, created waits keying for a member device to form its group and wrap
+	// generation 1 to it (QD-638): the repo is made and stays keying, and CreateRepo with ResumeRepoId waits again.
+	ErrEvsRepoKeying = errors.New("evs: the repo waits keying for a member device to form its group")
 )
 
 // Files one of §8.8's access-log statements (RepoCreate, RepoDelete, RepoRestore): the core's poster builds its
@@ -309,9 +312,17 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 	}); err != nil {
 		return nil, err
 	}
-	groupArgs := &GkmCreateGroupArgs{NetworkId: self.args.NetworkId, RepoId: repoId, Kind: args.Kind, OwnerMemberId: args.OwnerMemberId}
-	if _, err := self.args.Gkm.CreateGroup(ctx, groupArgs); err != nil {
-		return nil, fmt.Errorf("evs: the repo's group: %w", err)
+	if self.holdsNoLeaf() {
+		// QD-638: a member device forms the group of a repo this sidecar creates, and wraps generation 1 to it;
+		// activation waits for that wrap, as KF1's waits for its deliveries
+		if err := self.awaitFirstGeneration(ctx, repoId); err != nil {
+			return repo, err
+		}
+	} else {
+		groupArgs := &GkmCreateGroupArgs{NetworkId: self.args.NetworkId, RepoId: repoId, Kind: args.Kind, OwnerMemberId: args.OwnerMemberId}
+		if _, err := self.args.Gkm.CreateGroup(ctx, groupArgs); err != nil {
+			return nil, fmt.Errorf("evs: the repo's group: %w", err)
+		}
 	}
 	if err := repo.callLifecycle(ctx, &evsCall{
 		route:  "POST /evs/v1/repos/{repo_id}/activate",
@@ -337,6 +348,41 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 		}
 	}
 	return repo, nil
+}
+
+// Whether this sidecar holds no leaf at its verified state, a tagged or an ephemeral one, so a member device forms
+// the groups of the repos it creates (QD-638). False with no state, whose CreateGroup refuses for such a sidecar.
+func (self *EvsClient) holdsNoLeaf() bool {
+	if self.args.Config == nil || self.args.Identity == nil {
+		return false
+	}
+	state := self.args.Config()
+	identity := self.args.Identity()
+	if state == nil || identity == nil {
+		return false
+	}
+	row := state.SidecarRow(identity.SidecarId)
+	return row != nil && (0 < len(row.GetTagIds()) || row.GetEphemeral())
+}
+
+// Waits for this sidecar's generation 1 of repoId, the wrap the member device that forms the group stages to it:
+// asked again after GroupFormWait, at most GroupFormWaitCount times, then ErrEvsRepoKeying with what gkm answered, the
+// repo left keying for a CreateRepo with ResumeRepoId.
+func (self *EvsClient) awaitFirstGeneration(ctx context.Context, repoId Id) error {
+	for waits := 0; ; waits += 1 {
+		key, err := self.args.Gkm.CurrentRepoKey(ctx, repoId)
+		if err == nil && key != nil {
+			return nil
+		}
+		if self.settings.GroupFormWaitCount <= waits {
+			return fmt.Errorf("%w: repo %s: %w", ErrEvsRepoKeying, repoId, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-self.clock.After(self.settings.GroupFormWait):
+		}
+	}
 }
 
 // A hint on evs:<repo_id> (§11.10): PushHint.version, the repo's push sequence, and its delta, an EvsHeadChanged. It

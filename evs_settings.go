@@ -147,6 +147,12 @@ type EvsSettings struct {
 	// the caller gets ErrGkmWait (§11.12's deposits row: it waits for a newer rotation).
 	DropKeyWait      time.Duration
 	DropKeyWaitCount int
+	// A repo a sidecar with no leaf creates waits keying for a member device to form its group (QD-638): CreateRepo
+	// asks gkm for its generation 1 again after GroupFormWait, 10 s, at most GroupFormWaitCount times, 12, two of
+	// gkm's 60 s pending hints, before it answers ErrEvsRepoKeying with the repo made, which a later CreateRepo with
+	// ResumeRepoId waits on again. A non-positive count asks once.
+	GroupFormWait      time.Duration
+	GroupFormWaitCount int
 
 	// §11.10's lease row: a subscription rereads its head fresh this long after its lease's 200, 5 s, so a commit an
 	// evs process matched against leases read before the write is caught.
@@ -222,6 +228,8 @@ func DefaultEvsSettings() *EvsSettings {
 		PartsMissingRetryCount:   3,
 		DropKeyWait:              30 * time.Second,
 		DropKeyWaitCount:         20,
+		GroupFormWait:            10 * time.Second,
+		GroupFormWaitCount:       12,
 		SealLeaseDuration:        120 * time.Second,
 		SealLeaseRenewInterval:   60 * time.Second,
 		SubscribeRereadDelay:     5 * time.Second,

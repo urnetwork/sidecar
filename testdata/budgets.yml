@@ -181,10 +181,9 @@ budgets:
     module: server
     package: ""
     name: quota.lease
-    settings: "a lease hit on a cached balance"
-    limits: {postgres: 0}
+    settings: "a lease opened on a balance reading the set holds: its first draw's one reservation, and a second handle on the open lease"
+    limits: {postgres: 0, redis_calls: 1}
     reviewed: ""
-    note: "redis_calls is QUOTA-M2-07's to set; until it does, the row reads missing"
   - id: receive-allocs
     spec: "§22.5's §6 row: receive allocs, which names no number"
     kind: bench

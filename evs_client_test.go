@@ -596,3 +596,93 @@ func TestEvsUnbuiltMethodsRefuse(t *testing.T) {
 		t.Errorf("sent %d", sent)
 	}
 }
+
+// A state that answers an agent's own row, a tagged one, as its verified state shows it; it answers nothing else.
+type evsTestAgentView struct {
+	GkmAuthView
+	row *bridge.SidecarRow
+}
+
+func (self *evsTestAgentView) SidecarRow(sidecarId Id) *bridge.SidecarRow {
+	return self.row
+}
+
+// An agent's gkm client: no generation of the repo until a member device has formed its group, which formedAt asks
+// in shows, or never with a negative one.
+type evsTestAgentGkm struct {
+	evsTestGkm
+	asks     int
+	formedAt int
+}
+
+func (self *evsTestAgentGkm) CurrentRepoKey(ctx context.Context, repoId Id) (*EvsRepoKey, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.asks += 1
+	if 0 <= self.formedAt && self.formedAt <= self.asks {
+		return evsTestRepoKey(repoId, 1), nil
+	}
+	return nil, ErrGkmUnavailable
+}
+
+// QD-638 (KEYS-M2-32): a tagged sidecar's CreateRepo files the RepoCreate and places the repo, creates no group of its
+// own, and waits for generation 1, which a member device's group gives it: asked again after GroupFormWait until it
+// holds it, then activated; with no member device acting it answers ErrEvsRepoKeying after GroupFormWaitCount waits,
+// the repo made and not activated, and a CreateRepo resuming it activates once the group stands.
+func TestEvsCreateRepoByAnAgentWaitsForAMemberDevicesGroup(t *testing.T) {
+	routes := []string{}
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		routes = append(routes, request.Method+" "+request.URL.Path)
+		writer.WriteHeader(http.StatusOK)
+	})
+	test := newEvsTestClient(t, handler, newEvsTestStore(t))
+	identity := test.client.args.Identity()
+	view := &evsTestAgentView{row: &bridge.SidecarRow{SidecarId: identity.SidecarId.Bytes(), TagIds: [][]byte{evsTestId("tag").Bytes()}}}
+	test.client.args.Config = func() GkmAuthView { return view }
+	agentGkm := &evsTestAgentGkm{formedAt: 3}
+	test.client.args.Gkm = agentGkm
+	repo, err := test.client.CreateRepo(context.Background(), &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_GENERAL})
+	if err != nil {
+		t.Fatalf("the agent's CreateRepo: %v", err)
+	}
+	repoPath := "/evs/v1/repos/" + evsUrlId(repo.RepoId())
+	if want := []string{"PUT " + repoPath, "POST " + repoPath + "/activate"}; strings.Join(routes, ",") != strings.Join(want, ",") {
+		t.Errorf("routes %v", routes)
+	}
+	if len(agentGkm.created) != 0 {
+		t.Errorf("an agent created a group of its own: %v", agentGkm.created)
+	}
+	if waited := test.clock.waited(); len(waited) != 2 || waited[0] != test.client.settings.GroupFormWait {
+		t.Errorf("the agent's waits: %v", waited)
+	}
+
+	// no member device acts: the repo is made, keying, and the error says so
+	routes = nil
+	never := &evsTestAgentGkm{formedAt: -1}
+	test.client.args.Gkm = never
+	keying, err := test.client.CreateRepo(context.Background(), &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_GENERAL})
+	if !errors.Is(err, ErrEvsRepoKeying) || keying == nil {
+		t.Fatalf("an agent's CreateRepo with no member device acting: %v", err)
+	}
+	if never.asks != test.client.settings.GroupFormWaitCount+1 {
+		t.Errorf("%d asks, want %d", never.asks, test.client.settings.GroupFormWaitCount+1)
+	}
+	for _, route := range routes {
+		if strings.HasSuffix(route, "/activate") {
+			t.Fatalf("a repo no member device formed was activated")
+		}
+	}
+	// a member device returns and forms it: the resumed CreateRepo activates
+	routes = nil
+	test.client.args.Gkm = &evsTestAgentGkm{formedAt: 1}
+	resumeRepoId := keying.RepoId()
+	if _, err := test.client.CreateRepo(context.Background(), &EvsCreateRepoArgs{Kind: protocol.RepoKind_REPO_KIND_GENERAL, ResumeRepoId: &resumeRepoId}); err != nil {
+		t.Fatalf("the resumed CreateRepo: %v", err)
+	}
+	if len(routes) == 0 || !strings.HasSuffix(routes[len(routes)-1], "/activate") {
+		t.Errorf("the resumed CreateRepo did not activate: %v", routes)
+	}
+	if len(test.poster.filed) != 2 {
+		t.Errorf("%d RepoCreates filed for two repos", len(test.poster.filed))
+	}
+}

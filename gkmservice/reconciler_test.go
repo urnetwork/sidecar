@@ -338,3 +338,89 @@ func TestGkmReconcilerHintsWhileADroppedHolderPrecedesTheNewestEpochsPin(t *test
 		t.Errorf("pending hints after an epoch whose pin passes the drop: %d, was %d", count, stopped)
 	}
 }
+
+// Places repoId keying on clusterId as evs's PUT by creator does.
+func (self *gkmFixture) placeRepoBy(repoId sidecar.Id, clusterId string, creator sidecar.Id) {
+	self.t.Helper()
+	placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: clusterId, CreatorSidecarId: creator}).Marshal()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.put("meta-1", sidecar.EvsPlaceKey(repoId), placeBytes)
+	self.put(clusterId, GkmEvsRepoKey(repoId), self.marshal(&protocol.EvsRepoObject{
+		RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, State: protocol.EvsRepoState_EVS_REPO_KEYING,
+		Format: 1, NetworkId: testId("network-a").Bytes(),
+	}))
+}
+
+// The pending hints a sidecar's client holds that name no group: QD-638's, for a repo with no group yet.
+func (self *gkmReconcilerWorld) formlessHints(sidecarId sidecar.Id) int {
+	self.t.Helper()
+	count := 0
+	for _, hint := range self.fixture.hints(sidecarId) {
+		if hint.GetKind() == protocol.GkmHintKind_GKM_HINT_PENDING && len(hint.GetGroupId()) == 0 {
+			count += 1
+		}
+	}
+	return count
+}
+
+// QD-638 (KEYS-M2-32): a repo a tagged sidecar placed, keying with no form, has pending go to the network's config
+// writers, naming no group, at the state that first holds it and every PendingHintInterval while it stands so; a
+// repo a member device placed takes none, since its creator forms its group; a repo not yet placed is watched and
+// hinted once it is; and the agent's repo's first form ends its hints.
+func TestGkmReconcilerHintsTheConfigWritersOfAKeyingRepoAnAgentCreated(t *testing.T) {
+	world := newGkmReconcilerWorld(t)
+	fixture := world.fixture
+	configRepoId, agentRepoId, memberRepoId, laterRepoId := testId("repo-config"), testId("repo-agent"), testId("repo-member"), testId("repo-later")
+	configWriter, agent, otherWriter := testId("sc-config-writer"), testId("sc-agent"), testId("sc-other-writer")
+	for _, sidecarId := range []sidecar.Id{configWriter, agent, otherWriter} {
+		fixture.clientOf(sidecarId)
+	}
+	fixture.placeRepoBy(agentRepoId, "meta-2", agent)
+	fixture.placeRepoBy(memberRepoId, "meta-2", configWriter)
+	rows := sidecartest.FakeGkmAuthRows(
+		&protocol.AclRepo{RepoId: configRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG},
+		&protocol.AclRepo{RepoId: agentRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL},
+		&protocol.AclRepo{RepoId: memberRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL},
+		&protocol.AclRepo{RepoId: laterRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL},
+	)
+	sidecarRows, memberRow := sidecartest.FakeGkmAuthMemberDevices(world.memberId, configWriter, otherWriter)
+	rows.Sidecars = append(sidecarRows, &bridge.SidecarRow{SidecarId: agent.Bytes(), TagIds: [][]byte{testId("tag-agent").Bytes()}, AdmittedAt: 1})
+	rows.Members = []*bridge.MemberRow{memberRow}
+	view := world.log.Append(&sidecartest.FakeGkmAuthFixture{
+		Rows:         rows,
+		IdentityKeys: map[sidecar.Id][]byte{},
+		RepoReaders:  map[sidecar.Id][]sidecar.Id{configRepoId: {configWriter, otherWriter, agent}, agentRepoId: {agent, configWriter}},
+		RepoWriters:  map[sidecar.Id][]sidecar.Id{configRepoId: {configWriter}, agentRepoId: {agent}, memberRepoId: {configWriter}},
+	})
+	repoIds := []sidecar.Id{configRepoId, agentRepoId, memberRepoId, laterRepoId}
+	world.awaitState(view, func() { world.state.set(world.networkId, view, repoIds, nil) })
+	if count := world.formlessHints(configWriter); count != 1 {
+		t.Fatalf("the config writer's hints at the agent's repo's first sight: %d", count)
+	}
+	if count := world.formlessHints(otherWriter); count != 0 {
+		t.Errorf("a member device that writes no config was hinted: %d", count)
+	}
+	if count := world.formlessHints(agent); count != 0 {
+		t.Errorf("the agent was hinted: %d", count)
+	}
+	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
+	if count := world.formlessHints(configWriter); count != 2 {
+		t.Errorf("the config writer's hints one interval on: %d", count)
+	}
+	// the later repo is placed by the agent: watched since its row appeared, it is hinted at the next interval
+	fixture.placeRepoBy(laterRepoId, "meta-2", agent)
+	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
+	if count := world.formlessHints(configWriter); count != 4 {
+		t.Errorf("the config writer's hints once the later repo is placed: %d", count)
+	}
+	// a member device forms the agent's repos' groups: the hints stop
+	fixture.fileForm(agentRepoId, "meta-2", 1, testId("group-agent"))
+	fixture.fileForm(laterRepoId, "meta-2", 1, testId("group-later"))
+	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
+	world.awaitPass(func() { fixture.clock.Advance(world.reconciler.settings.PendingHintInterval) })
+	if count := world.formlessHints(configWriter); count != 4 {
+		t.Errorf("the config writer's hints once the groups stand: %d", count)
+	}
+}

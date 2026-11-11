@@ -1,8 +1,10 @@
 // §7.9's forwarding row on the test network (D-TEAM-33; owner decision 197; DESIGN-DETAILS 4.2.6): a forwarding
 // Delegation's shape and its one signer, each refusal beside the same statement without its fault; its key admitting
 // nothing; its revocation with since_n 0 alone; supersession keeping one live a sidecar; its ends with its sidecar; its
-// key's drop while the sidecar is suspended or parked and its return; and its rows, the reader key as a digest, equal at
-// a long-running reader, a new device and a rows-only gate across a fold (FS-14's shape).
+// key's drop while the sidecar is suspended or parked and its return; its rows, the reader key as a digest, equal at
+// a long-running reader, a new device and a rows-only gate across a fold (FS-14's shape); and a superseded or ended
+// one's row leaving at the base whose retention point passes it by 4,096, at every reader alike and checked by a full
+// reader's own compile, by the positions its fold rows hold, so a revocation in that base's tail ends with it (QD-648).
 
 package sidecar
 
@@ -11,6 +13,8 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -774,4 +778,352 @@ func TestDelegationStatesTellAForwardingDelegationApart(t *testing.T) {
 	if leaked, err := state.DelegationRevokeStatement(agents.id, true, 1); err != nil || leaked.GetSinceN() == 0 {
 		t.Errorf("a leaked revocation of an agent's Delegation: %v %v", leaked, err)
 	}
+}
+
+// A full reader's rows source that checks each base's compile as CheckConfigBase does: compile(head, the reader's own
+// L(folded_through)) must be the rows the base names, byte for byte, or the base is a fork. head is the one every
+// writerFold compiles with. The bases the net's fixtures hand-make, up to config version checkAbove, it does not check.
+type testConfigCompileSource struct {
+	*testConfigRowsSource
+	head       *ConfigHead
+	checkAbove uint64
+}
+
+// Checks the compile, then answers as the net's source does.
+func (self *testConfigCompileSource) CheckHead(check *ConfigHeadCheck) (*ConfigHeadFacts, error) {
+	if check.Previous != nil && self.checkAbove < check.Header.GetConfigVersion() {
+		compiled, err := CompileProjectionRows(self.head, check.CompileRows)
+		if err != nil {
+			return nil, err
+		}
+		if !bytes.Equal(compiled, check.Rows) {
+			return nil, fmt.Errorf("%w: the head compiles to other rows", ErrConfigHeadMismatch)
+		}
+	}
+	return self.testConfigRowsSource.CheckHead(check)
+}
+
+// A full reader beside the net's own that checks every base's compile against its own fold rows.
+type testConfigCompilingReader struct {
+	net     *testConfigNet
+	source  *testConfigCompileSource
+	log     *ConfigLog
+	applied int
+}
+
+// A compiling reader of the net from its genesis, caught up to the tip, which checks the compile of every base after
+// the newest one now.
+func (self *testConfigNet) compilingReader(head *ConfigHead) *testConfigCompilingReader {
+	self.t.Helper()
+	log, err := NewConfigLog(testConfigLogSettings(), self.signedGenesis)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	source := &testConfigCompileSource{testConfigRowsSource: self.source, head: head, checkAbove: self.log.State().Base().GetConfigVersion()}
+	reader := &testConfigCompilingReader{net: self, source: source, log: log}
+	reader.catchUp()
+	return reader
+}
+
+// Applies every entry the net sequenced since the last call, failing the test at any error, a fork among them.
+func (self *testConfigCompilingReader) catchUp() *ConfigState {
+	self.net.t.Helper()
+	for ; self.applied < len(self.net.entries); self.applied += 1 {
+		if _, err := self.log.Apply(self.net.entries[self.applied], self.source); err != nil {
+			self.net.t.Fatalf("the compiling reader at %d: %v", self.applied+1, err)
+		}
+	}
+	return self.log.State()
+}
+
+// The entry of a base over rows at the tip's next position, the rows published byte for byte, without moving the tip.
+func (self *testConfigNet) baseOverRows(signer testConfigDevice, rows []byte, foldedThrough uint64, configVersion uint64, threshold uint32) []byte {
+	self.t.Helper()
+	rowsSha256 := sha256.Sum256(rows)
+	self.source.rows[rowsSha256] = bytes.Clone(rows)
+	header := &bridge.ProjectionHeader{
+		NetworkId:        self.networkId.Bytes(),
+		Version:          self.n + 1,
+		PrevChain:        bytes.Clone(self.chain[:]),
+		FoldedThrough:    foldedThrough,
+		ConfigVersion:    configVersion,
+		ConfigHeadSha256: testConfigHeadSha256(configVersion),
+		RowsSha256:       rowsSha256[:],
+		RowsByteCount:    uint32(len(rows)),
+		Threshold:        threshold,
+		TailVerdicts:     self.tailVerdicts(foldedThrough),
+	}
+	return self.makeEntry(bridge.AuthEntryKindBase, self.sign(signer, bridge.SignedType_SIGNED_PROJECTION_HEADER, header))
+}
+
+// A base folding through foldedThrough as a writer publishes one (config_writer.go's plan): its rows compile(head, L),
+// L the net's reader's own fold rows at the tip, so they drop what the base compile drops; its config version the next.
+func (self *testConfigNet) writerFold(signer testConfigDevice, head *ConfigHead, foldedThrough uint64) ConfigVerdict {
+	self.t.Helper()
+	state := self.log.State()
+	configVersion := state.Base().GetConfigVersion() + 1
+	compileRows, err := self.log.foldRows(state, &bridge.ProjectionHeader{FoldedThrough: foldedThrough})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	rows, err := CompileProjectionRows(head, compileRows)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	verdict := self.push(self.baseOverRows(signer, rows, foldedThrough, configVersion, state.threshold))
+	if !verdict.Accepted() {
+		self.t.Fatalf("the base at %d: %v", verdict.Pin.GetVersion(), verdict.Refusal)
+	}
+	return verdict
+}
+
+// QD-648's rule by position alone: a superseded or ended forwarding row leaves at a retention point that passes the
+// later of its superseded_at and ended_at by 4,096, never one position before; a live one, an auth key's Delegation
+// and a retention point below 4,096 keep their rows; and no position wraps.
+func TestAForwardingRowLeavesByPositionAlone(t *testing.T) {
+	forwarding := func(supersededAt uint64, endedAt uint64) *bridge.DelegationRow {
+		return &bridge.DelegationRow{ForwardSidecarId: testConfigId("s").Bytes(), SupersededAt: supersededAt, EndedAt: endedAt}
+	}
+	cases := []struct {
+		name           string
+		row            *bridge.DelegationRow
+		retentionPoint uint64
+		leaves         bool
+	}{
+		{name: "superseded, a position short", row: forwarding(100, 0), retentionPoint: 100 + 4095},
+		{name: "superseded, passed by 4,096", row: forwarding(100, 0), retentionPoint: 100 + 4096, leaves: true},
+		{name: "superseded, passed by more", row: forwarding(100, 0), retentionPoint: 100 + 9000, leaves: true},
+		{name: "ended, a position short", row: forwarding(0, 7), retentionPoint: 7 + 4095},
+		{name: "ended, passed by 4,096", row: forwarding(0, 7), retentionPoint: 7 + 4096, leaves: true},
+		{name: "superseded then ended, past the supersession only", row: forwarding(100, 300), retentionPoint: 100 + 4096},
+		{name: "superseded then ended, past the end", row: forwarding(100, 300), retentionPoint: 300 + 4096, leaves: true},
+		{name: "live, however far", row: forwarding(0, 0), retentionPoint: 1 << 40},
+		{name: "an ended auth key's Delegation", row: &bridge.DelegationRow{EndedAt: 7, NotAfter: 1}, retentionPoint: 1 << 40},
+		{name: "a retention point below 4,096", row: forwarding(1, 0), retentionPoint: 4095},
+		{name: "the first position past 4,096", row: forwarding(1, 0), retentionPoint: 4097, leaves: true},
+		{name: "a position near the top", row: forwarding(^uint64(0)-10, 0), retentionPoint: ^uint64(0)},
+	}
+	for _, c := range cases {
+		if leaves := configForwardingRowLeaves(c.row, c.retentionPoint); leaves != c.leaves {
+			t.Errorf("%s: leaves %v", c.name, leaves)
+		}
+	}
+	rows := []*bridge.DelegationRow{forwarding(1, 0), forwarding(0, 0), {EndedAt: 1}}
+	kept := configKeptDelegationRows(rows, 1+4096)
+	if len(kept) != 2 || kept[0] != rows[1] || kept[1] != rows[2] || len(rows) != 3 {
+		t.Errorf("kept %v of %v", kept, rows)
+	}
+}
+
+// QD-648 on the log, base by base: a superseded forwarding row, an ended one and one superseded then ended stay in the
+// rows while the base's retention point is short of the later of their positions by a single position, and leave at the
+// base whose point passes it by 4,096, whether that base moves the fold or keeps it. Every reader holds the same rows
+// at each base: a full reader checking each base's compile against its own fold rows, another walking from the
+// genesis, a new device and a rows-only gate. Live forwarding rows filed among them, past 4,096 positions old by the
+// last base, stay, and so does an auth key's ended Delegation. After the drop, a DelegationRevoke naming a dropped id is refused as unknown and the
+// dropped Delegation's own Signed bytes as a replay, while one naming a live row takes effect.
+func TestAForwardingRowLeavesAtRetentionPlus4096AtEveryReader(t *testing.T) {
+	net, ci, _ := newTestConfigTagNet(t)
+	registerTestConfigAclCompiler(t)
+	head := testConfigHead(t, net)
+	member, laptop := net.consentedMember("m")
+	phone := net.device("m phone", member)
+	net.admitDevice(laptop, phone, 0)
+	agents := net.delegate(net.owner, "ci", []Id{ci}, 2, net.timeMs+7*24*testConfigHourMs)
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_DELEGATION_REVOKE, net.delegationRevoke(agents.id, 0))
+
+	l1 := net.forward(laptop, "l1")
+	p1 := net.forward(phone, "p1")
+	p1At := p1.at(net)
+	p2 := net.forward(phone, "p2")
+	t0 := p2.at(net)
+	net.mustPost(laptop, bridge.SignedType_SIGNED_DELEGATION_REVOKE, net.delegationRevoke(l1.id, 0))
+	p3 := net.forward(phone, "p3")
+	net.mustPost(phone, bridge.SignedType_SIGNED_DELEGATION_REVOKE, net.delegationRevoke(p2.id, 0))
+	l2 := net.forward(laptop, "l2")
+	state := net.log.State()
+	leftAt := map[string]uint64{
+		"p1": state.Delegation(p1.id).GetSupersededAt(),
+		"l1": state.Delegation(l1.id).GetEndedAt(),
+		"p2": state.Delegation(p2.id).GetEndedAt(),
+	}
+	if leftAt["p1"] != t0 || leftAt["l1"] != t0+1 || state.Delegation(p2.id).GetSupersededAt() != t0+2 || leftAt["p2"] != t0+3 {
+		t.Fatalf("the rows left at %v, p2 superseded at %d, from %d", leftAt, state.Delegation(p2.id).GetSupersededAt(), t0)
+	}
+	compiling := net.compilingReader(head)
+
+	// empty ticks fill the positions up to t0 + 4,094
+	for net.n < t0+configForwardingRowRetention-2 {
+		if verdict := net.tick(&bridge.ApiTick{}); !verdict.Accepted() {
+			t.Fatalf("a tick at %d: %v", verdict.Pin.GetVersion(), verdict.Refusal)
+		}
+	}
+	rowIds := map[string][]byte{"p1": p1.id, "l1": l1.id, "p2": p2.id, "p3": p3.id, "l2": l2.id, "agents": agents.id}
+	// the first base's retention point is the fixture's newest base, which it folds past
+	fixtureBase := net.log.State().Base().GetVersion()
+	bases := []struct {
+		// whether it folds through the tip, else keeps the previous base's folded_through
+		foldTip        bool
+		retentionPoint uint64
+		present        []string
+	}{
+		{foldTip: true, retentionPoint: fixtureBase, present: []string{"p1", "l1", "p2", "p3", "l2", "agents"}},
+		{foldTip: true, retentionPoint: t0 + 4095, present: []string{"p1", "l1", "p2", "p3", "l2", "agents"}},
+		{foldTip: true, retentionPoint: t0 + 4096, present: []string{"l1", "p2", "p3", "l2", "agents"}},
+		{foldTip: false, retentionPoint: t0 + 4097, present: []string{"p2", "p3", "l2", "agents"}},
+		{foldTip: true, retentionPoint: t0 + 4098, present: []string{"p2", "p3", "l2", "agents"}},
+		{foldTip: true, retentionPoint: t0 + 4099, present: []string{"p3", "l2", "agents"}},
+	}
+	for i, base := range bases {
+		foldedThrough := net.log.State().Base().GetFoldedThrough()
+		if base.foldTip {
+			foldedThrough = net.n
+		}
+		landed := net.writerFold(net.owner, head, foldedThrough)
+		compilingState := compiling.catchUp()
+		net.everyReaderAgrees()
+		readers := append(net.everyReader(), net.log, compiling.log)
+		for j, reader := range readers {
+			state := reader.State()
+			if state.RetentionPoint() != base.retentionPoint {
+				t.Errorf("base %d at %d: reader %d's retention point %d, want %d", i, landed.Pin.GetVersion(), j, state.RetentionPoint(), base.retentionPoint)
+			}
+			for name, delegationId := range rowIds {
+				if present := state.Delegation(delegationId) != nil; present != slices.Contains(base.present, name) {
+					t.Errorf("base %d at retention %d: reader %d holds %s: %v", i, base.retentionPoint, j, name, present)
+				}
+			}
+			if live := state.ForwardingDelegation(phone.sidecarId); live == nil || !bytes.Equal(live.GetDelegationId(), p3.id) {
+				t.Errorf("base %d: reader %d: the phone's live forwarding Delegation is %v", i, j, live)
+			}
+		}
+		testConfigStatesEqual(t, compilingState, net.log.State())
+	}
+
+	// a dropped id is unknown; its own Signed bytes are a replay; a live row as old as the dropped ones stays, and its
+	// revocation takes effect
+	net.mustRefuse(phone, bridge.SignedType_SIGNED_DELEGATION_REVOKE, net.delegationRevoke(p1.id, 0), ErrConfigRule)
+	net.mustRefuse(net.owner, bridge.SignedType_SIGNED_DELEGATION_REVOKE, net.delegationRevoke(l1.id, 0), ErrConfigRule)
+	replayed := net.push(net.makeEntry(bridge.AuthEntryKindStatement, net.statementOf(net.entries[p1At-1])))
+	if replayed.Accepted() || !errors.Is(replayed.Refusal, ErrConfigReplay) {
+		t.Errorf("the dropped Delegation's own bytes again: %v", replayed.Refusal)
+	}
+	revoked := net.mustPost(phone, bridge.SignedType_SIGNED_DELEGATION_REVOKE, net.delegationRevoke(p3.id, 0))
+	if endedAt, ended := net.log.State().DelegationEnded(p3.id); !ended || endedAt != revoked.Pin.GetVersion() {
+		t.Errorf("the live row's revocation: ended at %d, %v", endedAt, ended)
+	}
+	compiling.catchUp()
+	net.everyReaderAgrees()
+	testConfigStatesEqual(t, compiling.log.State(), net.log.State())
+}
+
+// A base that keeps a row the rule drops is a fork at a full reader, whose own compile drops it, and the same fold
+// with the row dropped lands there.
+func TestABaseKeepingALeftForwardingRowForksAFullReader(t *testing.T) {
+	net := newTestConfigNet(t)
+	registerTestConfigAclCompiler(t)
+	head := testConfigHead(t, net)
+	member, laptop := net.consentedMember("m")
+	phone := net.device("m phone", member)
+	net.admitDevice(laptop, phone, 0)
+	first := net.forward(phone, "first")
+	net.forward(phone, "second")
+	supersededAt := net.log.State().Delegation(first.id).GetSupersededAt()
+	for net.n < supersededAt+configForwardingRowRetention-1 {
+		net.tick(&bridge.ApiTick{})
+	}
+	// one full reader shown the base that kept the row, the other only the honest one
+	shown, follower := net.compilingReader(head), net.compilingReader(head)
+	net.writerFold(net.owner, head, net.n)
+	shown.catchUp()
+	follower.catchUp()
+
+	// the next base's retention point is supersededAt + 4,096: a writer that kept the row
+	foldedThrough := net.n
+	if point := configRetentionPointAt(net.log.State().base, foldedThrough); point != supersededAt+configForwardingRowRetention {
+		t.Fatalf("the next base's retention point %d", point)
+	}
+	kept, err := CompileProjectionRows(head, ConfigCompileRowsOf(net.statesAt[foldedThrough]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dishonest := net.baseOverRows(net.owner, kept, foldedThrough, net.log.State().Base().GetConfigVersion()+1, net.log.State().threshold)
+	_, err = shown.log.Apply(dishonest, shown.source)
+	var fork *ConfigForkError
+	if !errors.As(err, &fork) || fork.N != net.n+1 {
+		t.Fatalf("a base keeping the left row: %v", err)
+	}
+
+	landed := net.writerFold(net.owner, head, foldedThrough)
+	if net.log.State().Delegation(first.id) != nil {
+		t.Fatal("the honest base kept the left row")
+	}
+	if state := follower.catchUp(); state.Pin().GetVersion() != landed.Pin.GetVersion() || state.Delegation(first.id) != nil {
+		t.Errorf("a full reader at %d holds the left row: %v", state.Pin().GetVersion(), state.Delegation(first.id) != nil)
+	}
+	net.everyReaderAgrees()
+}
+
+// A revocation in the tail of the base that drops its Delegation's row (QD-648): the phone revokes its superseded
+// forwarding Delegation after a base, which ends the row there at every reader, so at the tip the row's later position
+// is the revocation's. The next base folds through that base alone, so its fold rows, which the base compile reads,
+// hold the row superseded and unended, and its retention point passes the supersession by 4,096: the row leaves at that
+// base, and the revocation's re-applied effect ends there with it, at every reader alike, a full reader's own compile
+// and state included. The revocation's own bytes stay a replay, its id in the ring the tail re-applied, and a second
+// revocation names none.
+func TestARevocationInTheTailOfTheBaseThatDropsItsRowEndsThere(t *testing.T) {
+	net := newTestConfigNet(t)
+	registerTestConfigAclCompiler(t)
+	head := testConfigHead(t, net)
+	member, laptop := net.consentedMember("m")
+	phone := net.device("m phone", member)
+	net.admitDevice(laptop, phone, 0)
+	first := net.forward(phone, "first")
+	second := net.forward(phone, "second")
+	supersededAt := net.log.State().Delegation(first.id).GetSupersededAt()
+	compiling := net.compilingReader(head)
+
+	// a base at supersededAt + 4,096, folding through the tip, keeps the row: its retention point is the fixture's base
+	for net.n < supersededAt+configForwardingRowRetention-1 {
+		if verdict := net.tick(&bridge.ApiTick{}); !verdict.Accepted() {
+			t.Fatalf("a tick at %d: %v", verdict.Pin.GetVersion(), verdict.Refusal)
+		}
+	}
+	previous := net.writerFold(net.owner, head, net.n)
+	if previous.Pin.GetVersion() != supersededAt+configForwardingRowRetention || net.log.State().Delegation(first.id) == nil {
+		t.Fatalf("the base at %d left the row: %v", previous.Pin.GetVersion(), net.log.State().Delegation(first.id) == nil)
+	}
+
+	// the revocation, after that base, ends the superseded row at its own position
+	revoked := net.mustPost(phone, bridge.SignedType_SIGNED_DELEGATION_REVOKE, net.delegationRevoke(first.id, 0))
+	if endedAt, ended := net.log.State().DelegationEnded(first.id); !ended || endedAt != revoked.Pin.GetVersion() {
+		t.Fatalf("the revocation ended the row at %d, %v", endedAt, ended)
+	}
+
+	// the next base folds through the previous base, so the revocation is its tail and its retention point is the
+	// previous base: supersededAt + 4,096, far short of the revocation's position plus 4,096
+	landed := net.writerFold(net.owner, head, previous.Pin.GetVersion())
+	compiling.catchUp()
+	net.everyReaderAgrees()
+	for i, reader := range append(net.everyReader(), net.log, compiling.log) {
+		state := reader.State()
+		if state.Pin().GetVersion() != landed.Pin.GetVersion() || state.RetentionPoint() != supersededAt+configForwardingRowRetention {
+			t.Errorf("reader %d at %d, its retention point %d", i, state.Pin().GetVersion(), state.RetentionPoint())
+		}
+		if state.Delegation(first.id) != nil {
+			t.Errorf("reader %d holds the row whose revocation rode the tail", i)
+		}
+		if live := state.ForwardingDelegation(phone.sidecarId); live == nil || !bytes.Equal(live.GetDelegationId(), second.id) {
+			t.Errorf("reader %d: the phone's live forwarding Delegation is %v", i, live)
+		}
+	}
+	testConfigStatesEqual(t, compiling.log.State(), net.log.State())
+
+	replayed := net.push(net.makeEntry(bridge.AuthEntryKindStatement, net.statementOf(net.entries[revoked.Pin.GetVersion()-1])))
+	if replayed.Accepted() || !errors.Is(replayed.Refusal, ErrConfigReplay) {
+		t.Errorf("the revocation's own bytes again: %v", replayed.Refusal)
+	}
+	net.mustRefuse(phone, bridge.SignedType_SIGNED_DELEGATION_REVOKE, net.delegationRevoke(first.id, 0), ErrConfigRule)
+	compiling.catchUp()
+	net.everyReaderAgrees()
 }
