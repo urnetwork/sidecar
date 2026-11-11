@@ -5046,3 +5046,21 @@ A VPN component raises bridge_alarm narrowing_overdue when a narrowing entry has
 Changes: design agent: section 4 amendment, 4.2.5 and 4.3 StalenessBound wording, Fwd.tla alarm clause; core-lane follow-up: device/ posture alarm timer backs off (SDK-M8-17's code).
 
 Questions: `details-4-overdue-alarm-repeat.md`.
+
+### QD-697: How does server's source-graph lock move to go1.27.4, when only the owner hand-edits lock.yml and runs a real re-pin?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
+
+Once the go1.27.4 bumps land in every repo, the orchestrator sets server/local/source-graph/lock.yml's go line to 1.27.4 and runs build/all/sidecar-branches.zsh repin, which moves each sibling's pin and build's gitlinks to its current sidecar tip and commits both in server and build (no push; the next checkpoint push carries them). The owner authorized this one hand edit and re-pin on 2026-11-11; otherwise lock.yml edits and real re-pins stay the owner's (REPO-M0-03).
+
+Changes: server/local/source-graph/lock.yml go line 1.27.4; build/all/sidecar-branches.zsh repin after the bump lands.
+
+Questions: `go-1-27-4-source-lock.md`.
+
+### QD-698: Do the two measurement harnesses that pin go1.27.3 on purpose move to go1.27.4 with the repos?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
+
+Server's competition evaluator (server/connect/sim-latency's image digest, GOVERSION guards and toolchain-policy test, server/competitionagent and server/cli/competitionsubeval) and the tests repo's perf runner (tests/runner/perf, whose h1 diagnostic requires a go1.27.3 producer and preflight manifest) stay on go1.27.3, so their frozen baselines stay comparable; they move when the owner re-qualifies them, at the latest before sidecar merges to main. On these branches the evaluator image cannot build server's module, which now requires 1.27.4, and a perf run of these branches would fail the h1 preflight. Neither harness module depends on a bumped module, so both still build. Records of past runs stay as written.
+
+Changes: no change to the two harnesses; before sidecar merges to main: re-qualify both on go1.27.4.
+
+Questions: `go-1-27-4-harnesses.md`.
