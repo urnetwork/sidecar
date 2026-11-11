@@ -158,6 +158,15 @@ type evsTestWorld struct {
 	mode         protocol.EvsRefMode
 	gitState     map[string]EvsGitOid
 	nextMetadata []byte
+	// the next push's payload sections 15 and 16, a creating push's sealed ref name and base
+	nextRefName []byte
+	nextBase    *protocol.EvsOverlay
+	// the next push's flags, and the new objects it introduces beside its entries' segments
+	nextFlags      uint32
+	nextNewObjects []*EvsNewObject
+	// other refs of the repo, each a world of its own sharing the repo, keys, signer, config and segments, served by
+	// the ref id a request names (otherRef)
+	others map[Id]*evsTestWorld
 	// the head's current path epoch, 0 for 1: a PATH_EPOCH the world's pushes never made, as a subscription's
 	// leases follow it; and the source epochs it lists, newest first
 	currentEpoch uint64
@@ -453,6 +462,8 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 		plan.SealedMetadata = self.nextMetadata
 		self.nextMetadata = nil
 	}
+	plan.RefName, plan.Base, plan.Flags, plan.NewObjects = self.nextRefName, self.nextBase, self.nextFlags, self.nextNewObjects
+	self.nextRefName, self.nextBase, self.nextFlags, self.nextNewObjects = nil, nil, 0, nil
 	type pending struct {
 		key     string
 		version uint64
@@ -735,6 +746,10 @@ func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, versi
 
 // Serves POST .../read and GET .../log.
 func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if other := self.otherOf(request); other != nil {
+		other.ServeHTTP(writer, request)
+		return
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	switch {
@@ -788,10 +803,14 @@ func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Re
 			locators = append(locators, pathLocators...)
 		}
 		for _, readPush := range read.GetPushes() {
-			if record, ok := self.pushRecordWithLock(readPush.GetPushId(), readPush.GetVersion()); ok {
-				frames = append(frames, &protocol.EvsReadFrame{Object: &protocol.EvsReadObject{
-					Kind: protocol.EvsReadObjectKind_EVS_READ_OBJECT_BATCH_RECORD, Id: readPush.GetPushId(), Body: record,
-				}})
+			if record, ok := self.pushRecordWithLock(readPush.GetPushId(), readPush.GetVersion(), readPush.GetPart()); ok {
+				// a record past 1 MiB spans frames, each the next slice at its own offset
+				for at := 0; at == 0 || at < len(record); at += 1024 * 1024 {
+					frames = append(frames, &protocol.EvsReadFrame{Object: &protocol.EvsReadObject{
+						Kind: protocol.EvsReadObjectKind_EVS_READ_OBJECT_BATCH_RECORD, Id: readPush.GetPushId(), Number: uint64(readPush.GetPart()),
+						Offset: uint32(at), Body: record[at:min(len(record), at+1024*1024)],
+					}})
+				}
 			}
 		}
 		for _, readRange := range read.GetRanges() {
@@ -872,8 +891,9 @@ func (self *evsTestClient) eventsOf(kind SidecarEventKind) []SidecarEvent {
 	return events
 }
 
-// The push record the world serves for a push: its statement and payload as items.
-func (self *evsTestWorld) pushRecordWithLock(pushId []byte, version uint64) ([]byte, bool) {
+// The push record the world serves for a push: its statement and payload as items, or for a part of a push in parts
+// that part's record, its statement and the part as items.
+func (self *evsTestWorld) pushRecordWithLock(pushId []byte, version uint64, part uint32) ([]byte, bool) {
 	if version == 0 || uint64(len(self.commits)) < version {
 		return nil, false
 	}
@@ -887,5 +907,73 @@ func (self *evsTestWorld) pushRecordWithLock(pushId []byte, version uint64) ([]b
 		SignerSidecarId: Id(commit.parsed.Push.GetSignerSidecarId()), TimeMs: commit.parsed.Push.GetTimeMs(),
 		Body: evsJoinItems([][]byte{commit.statement, commit.built.Payload}),
 	}
+	if part != 0 {
+		if len(commit.built.Parts) < int(part) {
+			return nil, false
+		}
+		record.Type = protocol.EvsBatchRecordType_EVS_BATCH_PART
+		record.Body = EvsPartRecordBody(commit.statement, commit.built.Parts[part-1], nil, version)
+	}
 	return record.encode(), true
+}
+
+// Another ref of the world's repo by its name, made on first use: a world of its own whose pushes are its ref's,
+// sharing the repo, keys, signer, config, gkm and segments, served by the ref id a request names.
+func (self *evsTestWorld) otherRef(refName []byte) *evsTestWorld {
+	self.t.Helper()
+	refKey, err := NewEvsRefKey(evsTestRepoKey(self.repoId, 1))
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	refId, err := EvsRefId(refKey, refName)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.others == nil {
+		self.others = map[Id]*evsTestWorld{}
+	}
+	if other := self.others[refId]; other != nil {
+		return other
+	}
+	other := &evsTestWorld{
+		t: self.t, repoId: self.repoId, refId: refId, signer: self.signer, config: self.config, gkm: self.gkm,
+		generation: self.generation, paths: map[string]*evsTestPath{}, segments: self.segments, window: self.window,
+		serveVersion: map[string]uint64{}, mode: self.mode, gitState: map[string]EvsGitOid{},
+	}
+	self.others[refId] = other
+	return other
+}
+
+// The other ref a request names, nil for the world's own: a read's by its body's ref id, which is left for the
+// handler to read again, and a log's by its ref query.
+func (self *evsTestWorld) otherOf(request *http.Request) *evsTestWorld {
+	self.stateLock.Lock()
+	others := self.others
+	self.stateLock.Unlock()
+	if len(others) == 0 {
+		return nil
+	}
+	switch {
+	case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/read"):
+		body, _ := io.ReadAll(request.Body)
+		request.Body = io.NopCloser(bytes.NewReader(body))
+		read := &protocol.EvsReadRequest{}
+		if proto.Unmarshal(body, read) != nil {
+			return nil
+		}
+		refId, err := IdFromBytes(read.GetRefId())
+		if err != nil {
+			return nil
+		}
+		return others[refId]
+	case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/log"):
+		for refId, other := range others {
+			if request.URL.Query().Get("ref") == evsUrlId(refId) {
+				return other
+			}
+		}
+	}
+	return nil
 }

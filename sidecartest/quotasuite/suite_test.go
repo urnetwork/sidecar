@@ -70,15 +70,15 @@ func (self *forgetfulQuota) ReportUsage(ctx context.Context, batch *sidecar.Usag
 	return self.FakeQuota.ReportUsage(ctx, &copied)
 }
 
-// The suite fails a Quota that counts a retried debit or batch twice, and one that re-asks the window
-// on a replayed refusal, so passing it means something.
+// The suite fails a Quota that counts a retried debit or batch twice, so passing it means something.
 func TestTheSuiteCatchesAQuotaThatForgetsIds(t *testing.T) {
 	newTarget := newFakeTarget(func(quota *sidecartest.FakeQuota) sidecar.Quota {
 		return &forgetfulQuota{FakeQuota: quota}
 	})
 	for _, c := range []*suiteCase{
 		{name: "a-debit-counts-once-across-a-lost-response", run: caseADebitCountsOnce},
-		{name: "a-replayed-debit-answers-its-first-result", run: caseAReplayAnswersItsFirstResult},
+		{name: "a-passed-debit-replays-and-a-refused-one-is-judged-afresh", run: caseAReplayIsJudgedByItsPass},
+		{name: "an-upload-refused-for-its-turn-asks-again-under-its-id", run: caseARefusedUploadAsksAgain},
 		{name: "a-batch-applies-once-across-a-lost-response", run: caseABatchAppliesOnce},
 	} {
 		if err := c.run(t.Context(), newTarget(t)); err == nil {

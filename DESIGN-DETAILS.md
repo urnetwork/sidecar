@@ -8,7 +8,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 
 | # | Problem | Tasks held | Status |
 |---|---|---|---|
-| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | pending |
+| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | in progress (2026-11-10): every part is written; 1.3's table of model runs is being completed |
 | 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10) |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | pending |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
@@ -24,9 +24,840 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
 
-Status: pending
+Status: in progress (2026-11-10): every part is written; 1.3's table of model runs is being completed
 
 Tasks held until complete: SEARCH-M10-10, SEARCH-M10-11, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, SEARCH-M10-35, TEST-M10-02.
+
+Model: `sidecar/sidecartest/model/details/IndexMerge.tla`, its configurations (`IndexMerge.cfg`, `IndexMerge-*.cfg`, `IndexMergeWritten-*.cfg`, `IndexMergeTwin-*.cfg`, `IndexMergeReach-*.cfg`) and `run-indexmerge.sh` beside it. New tasks: `.stack/plan/proposals/details-1-tasks.md` (SEARCH-M10-45, SEARCH-M10-46). Questions filed: `.stack/questions/details-1-own-bases.md`, `details-1-promotion.md`, `details-1-late-entries.md`, `details-1-superseded-rows.md`, `details-1-small-readings.md`. Questions this section answers, each as 1.9 says: `search-m10-07-rollup-merge-race`, `search-m10-07-keep-base-full-copy`, `search-m10-07-late-journal-tombstone`, `search-m10-07-merge-stale-diff`.
+
+### 1.1 The problem
+
+§11.14's index is a set of versionless files under one root, and every change to it is one push: a set of files, each replaced at the version its builder read (11.8's 5g), committed by one head CAS. A push can fence only the paths it writes. It cannot say "this other file is still as I read it". Four kinds of push run beside each other with nothing joining them:
+
+```text
+a writer's push   appends entries to its own head, a slot only it writes; seals the head into a ring of slots;
+                  writes an entry over 8 KiB as a large entry, a file of its own
+a merge           folds a bucket's sealed slots and large entries into the bucket's shards, and moves each
+                  writer's absorbed watermark in the bucket's manifest, after which the writer reuses its slots
+a roll-up         under the lock, moves an expired bucket into the all partition and removes the bucket
+a companion push  a head push that trails its content: the entries of git-mode refs and record streams wait in
+                  a journal on their committer's device and are pushed minutes, or after a crash or a flight
+                  days, later; a backfill is the same push from another device
+```
+
+An entry is a full key set, a diff against a base, or a tombstone. Writers' clocks may sit 10 min either side of evs's, so two pushes in one order can carry signed times 20 min apart in the other, and an entry's bucket follows its push's signed time. Everywhere the newest version of a document wins, and a deletion is a tombstone that must outlive every older entry of its document, in every file, on every device, until none is left to mask.
+
+Three things in the text as written depend on a file their push does not write, and each of TLC's four counterexamples is one of them. They are given here as the lane's model `IndexRollup.tla` found them and as this section's `IndexMerge.tla` finds them again (1.3). Writer A is a committer with a journal, B a backfiller, d2 a document edited through versions 1 to 4, d3 a document created at version 1 and deleted at version 2.
+
+**A. A roll-up races a merge of a newer bucket (question search-m10-07-rollup-merge-race).** The roll-up's step 4 removes "an entry of a newer bucket below a version or tombstone this roll-up carries" by rewriting its file in place. The roll-up's push replaces that file. A merge of the newer bucket replaces the bucket's shard and manifest and leaves slots where they are. Neither writes a path the other writes.
+
+1. d3 at v1 is committed on a git-mode ref. B indexes it into bucket 1. A's late companion entry of the same version lands in A's slot of bucket 2.
+2. d3 is deleted at v2. B's tombstone, built before A's entry landed and signed at the window boundary, goes to bucket 1.
+3. Bucket 1 expires. Roller R takes the lock and builds: the tombstone at v2 is carried, and A's slot of bucket 2 is listed for step 4.
+4. A's next push opens a new slot, which seals the one holding d3 at v1. A merge of bucket 2 absorbs it: bucket 2's shard now holds d3 at v1.
+5. R's push commits. Its lock, all, a/m, bucket 1's files and A's slot are as it read them. The tombstone goes with bucket 1, A's slot is rewritten without d3, and bucket 2's shard still holds d3 at v1.
+
+Every search then finds a deleted document, and bucket 2's own roll-up later carries it into all. `IndexMergeWritten-RollupMergeRace` reaches it.
+
+**B. A merge drops a base that a head entry still names (question search-m10-07-keep-base-full-copy).** A diff names a base "outside every head": a shard row or a sealed slot's entry, which a merge may replace by a newer version. So the merge reads every writer's head and keeps "the oldest such base" when a document's newest head entries "are all diffs with a base among the inputs". A backfilled full copy beside a writer's diff makes them not all diffs.
+
+1. A puts d2 at v1, full, in its head and seals it.
+2. A appends d2 at v2 as a diff on v1 (dependency a). B, having built before A's push landed, puts its own full copy of v2 in its head.
+3. A appends d2 at v3 as a diff composed onto v1 (dependency b), and builds v4 the same way while v1 is still the newest entry outside every head.
+4. B puts a full copy of v3 in a new slot, which seals its copy of v2.
+5. A merge is built. Its inputs hold v1 and B's sealed v2. The newest head entries are v3, A's diff and B's full copy: not all diffs. It keeps v2 and drops v1.
+6. A's v4 lands, then the merge. d2's current entry is A's v4 on v1, and no file holds v1.
+
+§11.14's chains row makes that `index_malformed` against A, which wrote by the rules, and d2 reads not yet searchable. `IndexMergeWritten-KeepBase` reaches it.
+
+**C. A late journaled entry brings a deleted document back (question search-m10-07-late-journal-tombstone).** The companion row drops a journaled entry as superseded when "an entry at that push's base holds [its document] at a higher version". The roll-up's step 4 says "every tombstone then goes, nothing older remaining". Both read the index alone, and nothing bounds a journal's age.
+
+1. A commits d3 at v1 on a git-mode ref and journals its entry. Its companion push does not go yet.
+2. d3 is deleted at v2 by a commit that skips the index. B indexes the deletion 10 min later, a tombstone at v2, which its clock at a window boundary puts in bucket 1.
+3. Bucket 1 expires and is rolled up. all holds no row of d3, so the tombstone takes nothing and goes.
+4. A's companion push is built. The index holds nothing of d3, so d3 at v1 is not superseded, and it lands in bucket 2.
+
+Every search then finds d3 at v1 for good: coverage counts the deletion's push as indexed, so nothing re-enters the tombstone. `IndexMergeWritten-LateJournal` reaches it.
+
+**D. A merge's newest input is a diff whose base is gone (question search-m10-07-merge-stale-diff).** Keep-a-base protects only a document's newest head entries. The chains row accepts the rest: "a diff below its key's newest entry ... is no candidate". But a head is sealed when its writer opens the next slot, and its entries then become a merge's inputs.
+
+1. A's head holds d2 at v1, full. It is sealed and a merge puts v1 in the shard.
+2. A writes d2 at v2 as a diff on v1, then v3 as a diff composed onto v1, sealing the head that holds v2.
+3. d2 at v4 was committed before A's v3 push was built. B indexes v4 into its own head, full.
+4. A merge: its inputs hold v1 and v2. The newest head entry is v4, full, so it keeps v2, composed, and drops v1. A's head still holds v3 on v1.
+5. A pushes again, sealing the head that holds v3.
+6. The next merge's newest input of d2 is v3, whose base v1 no input holds. "Each document's newest version among the inputs, diffs composed" names no output.
+
+`IndexMergeWritten-StaleDiff` reaches a merge that cannot compose its newest input.
+
+**What else the same structure admits.** Working the four through turned up six more, none of which a rule for one of the four closes.
+
+*E. The questions' first options, taken together, still fail.* With keep-a-base widened to any newest head diff (B's option 1) and a merge skipping a diff that does not compose "below a newer entry of its document in a head" (D's option 1), `IndexMergeWritten-Patched` breaks. v1 is in the shard and A's head holds v2 as a diff on it. B's full copy of v2 is sealed when B's full copy of v3 lands. A builds v3 composed onto v1. A merge is built: its inputs are v1 and B's v2, and the newest head entry is B's v3, a full copy, so no head diff at that version names a base, and it keeps v2 and drops v1. A's v3 lands and is sealed in the same push. The merge after that has A's diff of v3 as its newest input, no base for it, and a head entry at the same version, not a newer one, so the patched rule does not apply either. The lane's model does not reach this: its head push fails whenever the bucket's manifest moved after the push was built, which §11.14 does not say and which would make every merge refuse every writer in flight.
+
+*F. The lane's model fences what the design does not.* The same manifest check hides every race between a head push built before a merge commits and landing after it. Those are the races B and D are about. `IndexMerge.tla` lets a head push land whatever the manifest did.
+
+*G. A DROP's rewrite races a diff in flight.* §11.14's drop row removes a listed version from each index file holding it and "the kept head's entries enter the signer's own head full, since no older version stays as a base". A writer's diff built before the DROP, naming a listed version as its base, lands after it: the DROP rewrote the shard, the writer's push replaced only its own head, and the current entry has no base. No rule covers it.
+
+*H. Step 4 can remove a base under a newer diff.* On a companion ref, y lands in bucket 2; a version v' above it lands in bucket 1, its builder not having seen y; the document's writer then writes x above v' as a diff on y. Bucket 1's roll-up carries v', finds y in bucket 2 "below a version this roll-up carries" and removes it. x has no base.
+
+*I. A roll-up can commit while an older entry is in flight into a newer bucket.* Step 4 handles what the newer buckets hold at the roll-up's base. Nothing in its push fences a head push that lands between its base and its commit. Only the age of an expired bucket keeps that apart, and no rule says so.
+
+*J. What a head holds is not a function a reader can compute.* The dependency row makes a writer's entry depend on whether "no writer's head holds a diff at that version", so reproducing one writer's head (§11.14's reproduce row, D-EVS-56) needs every other writer's head at the push's base, and a companion head depends on which journaled entries its device chose to send and when it read the content ref, neither of which the head records.
+
+The root is the same in B, D, E, G and H: a diff's base lives in a file that someone other than the diff's writer rewrites, and no CAS joins the two. In A and I it is a roll-up deleting from files it does not otherwise own. In C it is a tombstone dropped while an older entry can still arrive.
+
+### 1.2 The design
+
+Five rules replace the dependency row, the merge's keep-a-base clause, the roll-up's step 4 and the companion row's superseded rule. Buckets, slots, seals, shards, the lock, the erasure's CUT and CLOSUREs, and reads are as §11.14 has them unless a rule below says otherwise.
+
+```text
+R1 own bases     a diff rests on a full entry in another file of its own writer in its own bucket: a slot
+                 that is not the head, or a large entry. A writer's files are its own: no merge writes or
+                 removes one, and the writer keeps a file while a diff of its unabsorbed slots rests on it.
+R2 the head rule every push that writes a file of a writer's in a bucket replaces that writer's head there at
+                 the version the push's base showed. So a writer's pushes in a bucket commit one at a time, and
+                 each finds every file of the writer's as it read them.
+R3 merges        a merge reads no head. Its output is each document's newest version among the bucket's
+                 shards, sealed slots and large entries, every diff composed onto its own writer's base. It
+                 replaces the bucket's manifest and the shards it changes.
+R4 promotion     a roll-up rewrites no file of a newer bucket in place. A version or tombstone it carries,
+                 whose document a newer bucket holds only at older versions, moves into that bucket's shards
+                 and stays until that bucket rolls. The push replaces that bucket's manifest.
+R5 the pin       an entry that trails its content (a companion entry, a backfill) is built from the content
+                 ref as its builder read it from evs after it read the index, and is dropped when that holds
+                 its document at a higher version. An index push is sent only within IndexPushLife of its
+                 signed time.
+```
+
+R1 and R2 remove B, D, E, G and H by construction: nothing a diff needs is in reach of another device's push without a CAS on a file the diff's writer also writes. R3 follows from R1, and makes a merge a function of fewer inputs. R4 removes A, H and the in-place rewrite itself, and narrows I to R5's bound. R5 removes C.
+
+#### 1.2.1 Terms and constants
+
+```text
+bucket N           b/<S>/ under an index root; its window is UTC days [S, S + W)
+a writer's files   in a bucket: its slots w/<h>/<writer>/<k>, k 0-15, and its large entries .../L<seq>
+seq                one counter a writer a bucket, from 1, numbering slots and large entries
+head               the writer's slot with the highest seq in the bucket; INDEX-FORMAT.md keeps it above every
+                   other seq of the writer's (a push that numbers anything renumbers the head above it)
+watermark a_W      IndexManifest.absorbed for writer W, 0 where the manifest or the row is absent
+absorbed           a slot other than the head, or a large entry, with seq <= a_W. An absorbed file holds nothing
+                   for search, merges and roll-ups: what it held is in the shards. One thing is still read from
+                   it: the base of a diff (R1).
+kept               a file of a writer's, other than its head, holding a full entry that a diff in the writer's
+                   unabsorbed slots names. The writer does not reuse a kept slot or remove a kept large entry.
+unabsorbed         a writer's head, and every other file of the writer's with seq > a_W
+sealed             an unabsorbed slot that is not its writer's head
+settled            what a bucket holds outside heads: its shards, sealed slots and unabsorbed large entries
+base of a diff     for a diff of key k at base version y in slot p of writer W in bucket N: the full entry of k
+                   at version y in a large entry of W in N or in a slot of W in N other than p and W's head; of
+                   two such, the one in the file with the higher seq
+signed time t      the push's time_ms (11.6), which evs holds within 10 min of its clock (parts and a seal: 30)
+```
+
+Constants are facts of format 1 or of this design, never settings, except the two marked:
+
+```text
+SlotMax          16,208 B    a slot                              EntryMax     8,192 B   an entry in a slot
+LargeMax      1,048,576 B    a large entry                       ShardBody 1,032,192 B  a shard before its pad
+ShardJoin       524,288 B    two adjacent shards under it join   DirectBytes 262,144 B  a push's entries past it go
+MergeBytes      131,072 B    settled slot and large-entry bytes                         straight into shards
+                             that make a merge due               RingSlots 8, KeepSlots 8, SlotCount 16
+LockTerm         30 min      a roll-up lock's term               LockGrace    10 min    past until_ms, takeable
+IndexPushLife     5 min      from a push's signed time to its last send; 25 min for a push in parts
+BackfillAge      10 min      a push unindexed this long is backfilled (§11.14's coverage row)
+CompanionInterval 5 min      setting Search.CompanionInterval (QD-511)
+JournalByteCount  64 MiB     setting Search.JournalByteCount: a device's journal of extracted entries, in storage
+```
+
+#### 1.2.2 Formats
+
+`evsindex.proto` keeps every message and field. `protocol/INDEX-FORMAT.md` keeps every encoding. What changes is which files may hold what, and one sort:
+
+```text
+diff            an entry of kind 2 stands only in a slot (type 1), never in a large entry, and is at most
+                EntryMax. Its base version names the full entry (kind 1) of its doc_key at that version in
+                another file of the same writer_sidecar_id and the same bucket: a slot that is not that
+                writer's head, or a large entry (type 2). No diff rests on a diff, so a chain is one step and
+                "the base's chain plus one stays under 16" has nothing left to bound.
+large entry     holds one full entry (kind 1) over EntryMax, or none after a rewrite that removed it. Its
+                writer removes it (1.2.3); a merge does not.
+slot            as before: one entry a key, sorted. A slot's diffs may name files with any seq of its
+                writer's, absorbed or not.
+shard           as before. A doc-table row is a full version: no row rests on anything.
+coverage        IndexFileHeader.coverage is sorted by ref_id, then horizon false before true, at most one row
+                of each kind a ref (1.2.6). It was strictly ascending by ref_id.
+manifest        IndexManifest.absorbed holds a row for each writer with a watermark above 0. A manifest may
+                exist with no shard (a roll-up's promotion or a merge whose inputs all lost).
+decoders        a slot whose diff names a base that no other file of its writer in its bucket holds breaks the
+                format when the slot is unabsorbed: index_malformed names the slot's signer. Under R1 and R2 no
+                honest writer's slot can be in that state (I1), so the alarm no longer falls on a writer that
+                wrote by the rules. In an absorbed slot nothing is checked.
+```
+
+Nothing server-visible changes: no column, key, object family or proto field (I-18).
+
+#### 1.2.3 A writer's push
+
+A writer's index push is a function of the writer's own files in the bucket, the bucket's manifest row for the writer, the erasure set, the bucket windows, the push's signed time and the documents it carries. It reads no other writer's file and no shard. It is `indexPlanHead` (landed, SEARCH-M10-09) with the dependency row replaced and three rules added.
+
+```text
+plan(view at base b, writer W, signed time t, documents D, coverage C):
+  if the erasure set does not read: write nothing (landed, fail closed)
+  for each document d of D not listed by the erasure set at or above its version, ascending by key:
+      N(d) = the bucket of t (indexBucketFor); D-EVS-45's move to a newer bucket already holding d stays
+             as landed. No invariant needs it (1.3), so a writer that does not hold a newer bucket's files
+             skips the move rather than fetching them.
+  per bucket N written:
+      own   = W's slots and large entries in N at b, and a_W; head = its slot with the highest seq
+      keep  = W's kept files in N (1.2.1), counted over W's unabsorbed slots as this plan leaves them: a
+              diff the push replaces in the head no longer counts, and each diff chosen below does
+      E     = [ choose(own, keep, d) for d in N's documents ], in key order
+      if the push's encoded entries, over all its buckets, pass DirectBytes:
+            the push merges them itself: merge(N, extra = its documents as full entries) (1.2.4), and
+            writes W's head there without the keys it carried, with C. Nothing else below.
+      entries over EntryMax are large entries, one file each, numbered from W's highest seq + 1
+      the rest go to the head in key order, a newer entry replacing the head's entry of its key; when the
+            next does not fit SlotMax the head is sealed and the next slot opens:
+                the lowest k whose slot is absorbed, is not the head and is not in keep;
+                else the lowest unused k. W holds at most KeepSlots kept slots and RingSlots others: at a
+                ninth other slot it merges first, or, unable to, takes it and alarms; with all SlotCount
+                in use nothing is written, the push stays unindexed and a backfill covers it
+      a full entry that becomes a large entry also removes the head's older entry of its key
+      remove  = every large entry of W in N with seq <= a_W that is not in keep
+      head rule (R2): the plan writes the slot that was W's head at b, with its own bytes again when
+                nothing in it changed (the one case: a head sealed as it stood); where W had no slot in N
+                it creates slot 0, empty if every entry is a large entry
+      every slot the push writes carries C, else the coverage its head carried
+
+choose(own, keep, d):
+  a removal, a dropped chunk, a version turned binary or skipped: a tombstone at its version
+  f = the full entry of d
+  B = the full entries of d's key, at a version below d's that the erasure set does not list, in own's
+      large entries and in own's slots other than the head, as the push's base shows them
+  if B is not empty and d is not a creation (replaces != 0):
+      base  = the member of B with the highest version, then in the file with the highest seq
+      delta = (keys(d) - keys(base), keys(base) - keys(d))
+      e     = the diff of d on base's version with delta
+      if 2 * (|added| + |removed|) < |keys(base)| and len(e) <= EntryMax
+         and (base's file is a large entry, or is already in keep, or keep holds fewer than KeepSlots slots):
+            e, in a slot; base's file joins keep
+  f, in a slot when len(f) <= EntryMax, else as a large entry
+```
+
+What this drops from the landed rule: the bucket need not be the current one; the document's newest entry need not be at the version this one replaces; no other writer's head and no shard is read; and case (b)'s composition is the only kind there is, since a delta is always taken against the base itself. A base is where it was before, in a sealed slot or a large entry, but only the writer's own, and it stays a base after a merge absorbs it, because its writer keeps the file.
+
+What it costs: a document's first entry from each writer in each bucket is full, and stays full until the head holding it seals, where the landed rule allowed a diff on a base another writer or a merge had left outside every head. What it saves: the landed rule wrote full whenever the previous version sat in another writer's head (§11.15's index-entries row says so), so two writers alternating on one file wrote a full entry every time; here each writes one full entry and then diffs against it, whoever wrote in between. Measured on this repository's files (1.4): a source file of 29 KB to 137 KB has a full entry of 1.9 to 3.5 KiB and a 1% edit of it a diff of about 100 B, and no prose or source file up to 1 MB reached EntryMax, so nearly every base is a full entry in a sealed slot and large entries are the exception.
+
+**Why the head rule costs almost nothing.** A push that appends rewrites its head already, and one that numbers a large entry or a filled slot renumbers the head. The one push that left its base's head untouched is a seal whose first entry does not fit: it wrote only the next slot. It now stages the old head's bytes again, at most 16,208 B, in a push that already stages one slot.
+
+**What R2 gives.** Let P be a push by W into N built at b. If P commits, W's head in N was at the version P read. Every push that changed a file of W's in N after b replaced that head (R2 binds the writer's own pushes, a DROP's rewrites and anything else that writes a writer's file; the two exceptions are below). So every file of W's in N is as P read it, and P's plan, which named bases and removed large entries on that reading, is still right. Two pushes of one sidecar built on one base cannot both commit, which FS-74 already expects of two that append; it now also holds for one that appends and one that seals.
+
+The exceptions. A CLOSURE replaces committed versions only and may not be made to rewrite a head it has no other reason to touch; it is fenced by the CUT before it, which refuses every index push built before the CUT (I-EVS-17), and by the rule that no entry rests on a version the erasure set lists (`choose`'s B; landed in `indexChooseEntry`). A roll-up removes every file of an expired bucket in one push, heads included.
+
+**Who else writes a writer's files.** A DROP's rewrite (SEARCH-M10-18) that removes a listed version from a file of W's, a slot or a large entry, also removes, in the same push, each diff in W's unabsorbed slots that rests on it, enters the composed version full in the DROP signer's own head when it is the kept head (§11.14's drop row, unchanged in effect), and replaces W's head in that bucket (R2), together with the bucket's manifest (R3's fence). That closes G.
+
+#### 1.2.4 Merges
+
+When, and who: §11.14's when row. A bucket is due when its sealed slots and unabsorbed large entries reach MergeBytes, or a writer is out of slots. Never on a bucket that is expired at the merge's signed time.
+
+```text
+merge(N at base b, extra = none):
+  m    = N's manifest at b; absent: no shard, every watermark 0
+  per writer W with a file in N:
+      U_W = W's sealed slots and W's unabsorbed large entries
+  every entry the erasure set lists at or below its version is left out first, a diff by its own version
+      (§11.14's epoch row)
+  candidates, per key:
+      the shards' entry of the key: a row or a tombstone
+      each entry of the key in a slot of U_W: a full entry or a tombstone as it is; a diff composed onto
+          its base (1.2.1). A diff whose base is missing is malformed: it is left out and alarms
+          index_malformed {signer: the slot's} (I1 says an honest slot never has one)
+      the full entry of each large entry in U_W
+      extra, when a push merges its own entries (1.2.3) or a roll-up promotes (1.2.5)
+  winner(key) = the candidate with the highest version. At one version: a tombstone; then the shards' own
+      entry; then the full entry from the lowest writer_sidecar_id, then the lowest seq. Honest copies of
+      one version are equal (section 11's R2), so the order only makes the result a function.
+  on ur/index, per ref: the newest ref tombstone is kept, and every row of that ref below its version goes
+  a'_W = max(a_W, the highest seq in U_W)
+  shards = layout(m's shards, winners)
+  manifest = {start_day, days, shards ascending by n, absorbed: a'_W for each W with a'_W > 0}
+  push: each shard that changed (replaced at its version, created, or removed when emptied), the manifest
+      (replaced at its version, or created), index_epoch. No file of any writer's.
+
+layout(shards by ascending n, winners):
+  1 C = the keys whose winner is not the shards' entry of the key. Remove from each shard its entry of
+    each key in C, and each row a ref tombstone or the erasure set drops.
+  2 A = the winners of C, ascending by key. Y = the shard with the highest n, or shard 0 when there is none.
+    take(Y, A): if Y with all of A encodes within ShardBody, all of A. Else the count c found by:
+        lo = 0; hi = len(A); while lo < hi: mid = (lo + hi + 1) / 2;
+            if Y with A[0:mid] encodes within ShardBody then lo = mid else hi = mid - 1; c = lo
+    Y takes A[0:c]. While A has more: Y = a new shard, the highest n + 1, and take again.
+  3 scanning by ascending n: while a shard and the next one after it come to fewer than ShardJoin bytes
+    before their pads, the two become one under the lower n; the joined shard is tested again with its next.
+  4 a shard left with no row and no tombstone is removed.
+  5 each changed shard is encoded in blocks of 64 and padded with the keyed pad at the merger's newest
+    generation, which its header names. A shard nothing changed is not written.
+```
+
+`take` is stated as a procedure because a shard's length is not quite monotone in its documents: re-blocking by 64 can save a few bytes when a key is added (QD-173 found the mirror of it). Every implementation runs the same search, so every one finds the same c. "Encodes within" is the length the shard encoder gives before the pad.
+
+A merge whose winners are all the shards' own entries still commits: the manifest alone, so that the writers can reuse their slots.
+
+**What a merge no longer does.** It reads no head, so the input row's "its writers' heads there for output's base rule alone" and the output row's whole "unless" clause go. It removes no large entry, since a head it did not read may rest on one (1.3's twin `MergeRemovesLarge`); the entry's writer removes it at its next push there, and the bucket's roll-up removes what a writer that never returns left. It never keeps an older version in place of a newer input.
+
+**Fences.** The manifest is replaced or created by every merge, by every push that merges its own entries and by every promotion, so of two that read one state of a bucket's shards, one commits. A DROP's rewrite of a settled file replaces it too (1.2.3). Slots are not fenced against a merge and need not be: a merge reads sealed slots, which only their writer may overwrite, and only once the watermark this merge commits passes them; a writer's plan built before the merge commits sees them unabsorbed and leaves them. A base a merge composed from is in a file its writer keeps while the diff's slot is unabsorbed, so until the merge commits. A builder reads every input at one ref version; an input that answers `collected` (11.9), because its writer has since replaced it, restarts the build on the new head.
+
+#### 1.2.5 Roll-ups
+
+Trigger, runner and lock: §11.14's rows, with one reading made a rule: a bucket is expired, for a merge, a roll-up and a lock, at the push's signed time, never at a device's clock. A reader that reproduces a roll-up whose signed time is before its bucket's expiry raises `index_mismatch`.
+
+```text
+rollup(S), S the oldest expired bucket at t:
+  1 the lock: a push changing <root>/lock from a free version, or one whose until_ms is LockGrace past, to
+    {the runner, S, t + LockTerm}; renewed by the same CAS at half its term while the runner works
+  2 read at the head, after the lock commits: S whole (manifest, shards, every writer's slots and large
+    entries, heads included); every newer bucket's entries by key, heads included; all (a/m and shards)
+  3 carried(key) = the winner, as a merge picks it, over S's shards, every unabsorbed slot of S, heads
+    included, and S's unabsorbed large entries; per ref, S's newest ref tombstone. The erasure set's
+    documents are left out.
+  4 per key with carried c; n = the newest entry of the key in the newer buckets (heads, sealed slots,
+    unabsorbed large entries, shards; tombstones count); a = all's row of the key:
+       n exists and n.version < c.version   promote: c goes to P, the newest bucket holding an entry of
+                                            the key. A tombstone c also removes a. A live c leaves a.
+       else, c a tombstone                  a goes when it is below c; c goes
+       else                                 the newer of c and a is all's row
+    per ref tombstone r of S: all's rows of that ref below r.version go. If a newer bucket holds an entry
+    of that ref below r.version, r is promoted to the newest such bucket; else r goes.
+  5 all's shards = layout(all's shards, the rows step 4 gives all). Per bucket P with promotions:
+    merge(P, extra = its promoted entries) with every U_W taken as empty, so P's watermarks stand, its
+    shards take the promoted rows and tombstones, and its manifest is replaced (created where P had none)
+  6 one push, in parts if large (11.8): all's changed shards; a/m with rolled_through_day = S; each P's
+    changed shards and manifest; the removal of b/<S>/ listing each of its files; the lock set free from
+    the version the runner holds. It names index_epoch.
+```
+
+Fence, crash, idempotent: §11.14's rows. A 409 on the lock stops the runner. Any other 409, and 409 INDEX_EPOCH, reruns from step 2 with the lock still held.
+
+**What replaces step 4's rewrite.** Nothing is removed from a newer bucket. The carried version or tombstone joins it, in its shards, where every reader's newest-wins rule and every later merge of that bucket find it above the older entries: a bucket's shards are an input of each of its merges, so an older entry in a sealed slot loses to it, and an older entry in a head is masked until its writer replaces it or the bucket rolls. When P itself rolls, the promoted entry is P's carried entry for its key, and the same rule runs again.
+
+**Why promotion needs no fence but the manifest.** Step 4 reads the newer buckets only to learn n, the newest version they hold of a key. A merge of a newer bucket does not change n: it moves entries between files of one bucket and keeps the newest. A head push raises n or leaves it, but for an entry older than c that lands after the roll-up read: that is I of 1.1, and R5 with the expired bucket's age keeps it out (1.2.7). A DROP never removes a path's newest version. So the roll-up's choice per key stands whatever lands beside it, and the one thing it writes in a newer bucket, P's shards, is fenced by P's manifest against every merge of P.
+
+**all and the buckets.** §11.14's one row said every all row is older than each bucket entry of its key. After a promotion of a live version, all may keep an older row beside a newer bucket's older entries and the promoted one. What masking needs, and what holds (I4), is the weaker statement: all's row of a key is never newer than the newest bucket entry of that key. I-EVS-11's last clause becomes: the push that removes an expired bucket adds each of its documents to all or, for one a newer bucket held only older entries of, to that bucket's shards.
+
+#### 1.2.6 The journal, companion pushes and backfills
+
+An in-ref push carries its entries with its content, so its content CAS is its fence: an entry of version v commits only in the push that makes v. Everything below is for entries that trail their content: companion pushes on `ur/index` for git-mode refs and record streams, and backfills on either kind of index.
+
+**The journal** is one sealed log per repo in the search component's directory of `SidecarStore`, held in storage and read by stream (QD-641). It holds units:
+
+```text
+unit        {content ref_id, content version c, that push's signed time, state, documents}
+document    {doc_key, name, version v, put or remove, and for a put its row and key set as extraction gave
+            them}; a ref DELETE's unit holds a ref tombstone {ref_id, the version it committed at}
+state       committed   c is a committed version of the content ref that this sidecar signed
+            sent        the unit is in a built companion push Q whose outcome is not known
+writes      a unit is appended, committed, when the device's replica of the content ref applies a version this
+            sidecar signed: section 8's settle on a git-mode ref, the append's committed outcome on a
+            stream. Nothing is journaled for a push that has not committed, so no unit names a version evs
+            does not hold. A device that extracted at push time keeps the result beside the push and the
+            unit takes it; a device that died in between extracts again from the text when it settles.
+leaves      published: Q committed (its 200, or 11.8's outcome by push id, read before any rebuild)
+            superseded or erased: at a build (below)
+            sent -> committed: Q was refused, or its IndexPushLife passed unsent
+bound       past Search.JournalByteCount the oldest units lose their key sets and keep their documents'
+            keys and versions. A device holding the text extracts again at the build. One that does not
+            drops the unit, and its push is backfilled.
+search      the device's own searches read committed and sent units as a local overlay (§11.14's companion
+            row); SearchCache.ApplyErase and ApplyCut remove a listed document's units
+```
+
+**A companion push** is built in this order, and the order is the fence (R5):
+
+```text
+companion(repo), at most once a CompanionInterval while a unit is committed; at once when the head would
+seal; before the device sleeps or exits:
+  1 t = now. This is the push's signed time, taken before any read.
+  2 read ur/index's head from evs: base b, index_epoch, the erasure set, the writer's own files and
+    manifest row in the bucket of t
+  3 for each content ref R with a committed unit: read R's head from evs, not from a cache, and bring the
+    replica to it: the pin p_R. On a git-mode ref that is settle; on a stream, the head and the statements
+    since the device's pin, which name the token paths each push changed.
+  4 due = every committed unit of R with c <= p_R. Per doc_key over them, the unit with the highest c
+    gives the document. It is dropped when
+       superseded   R at p_R holds its path at a higher version, or removed at a higher one, or R was
+                    deleted or re-created after c; the newer version is its own committer's, or a backfill's
+       erased       the erasure set lists it at or above its version
+    A ref DELETE this sidecar signed gives a ref tombstone unless R was re-created by p_R and deleted
+    again, when the newest counts.
+  5 plan(b, this writer, t, the documents left, coverage) (1.2.3), where coverage is the head's rows with
+    {R, p_R, horizon false} for each R of step 3
+  6 send within IndexPushLife of t. On 200 every due unit leaves. On 409 for a path, 409 INDEX_EPOCH, 429
+    TIME_AHEAD, or the life passing: the units are committed again and the build starts over at step 1. A
+    push refused TIME_AHEAD is never sent again as built; the device takes evs's clock from the refusal.
+    An unknown outcome is settled by push id first.
+  A build that leaves no document still sends when it raises a coverage row, so that a push whose every
+  document was superseded stops reading as unindexed.
+```
+
+**A backfill** is the same build by a device that holds the text, with the units computed, not journaled:
+
+```text
+backfill(index ref I, content ref R), by an indexer serving the repo for search, else by a capable writer
+when it next builds an index push for I (§11.14's coverage row):
+  1-3 as a companion push. On a file-mode ref's own index, R is I, the pin p_R is the push's base b, and no
+      second read is made.
+  4 unindexed = the versions of R at or below p_R that count as not indexed by QD-209's rule
+    h = the highest version at or below p_R such that every unindexed version at or below it has a signed
+        time at or before t - BackfillAge
+    documents = for each path whose newest change at p_R was made by an unindexed version at or below h:
+        its state at p_R, a put extracted from R's text at p_R or a tombstone at its removal's version. A
+        path changed again after h is left to that change's own entry.
+  5 coverage: {R, h, horizon true}, and on ur/index {R, p_R, horizon false} beside it
+  6 as a companion push
+```
+
+Both kinds may ride one push: a device with committed units and backfill work builds one plan from both document sets.
+
+**Why the pin is enough.** Take an entry of document d at version v that such a push publishes, built at t with pin p. Suppose a tombstone or a newer version of d, at v' > v, has already been dropped or carried by a roll-up when the push commits, which is the only way an older entry does harm (I5). R at p held d at v, so v' was committed to R after the builder's read of R, which came after its read of the index at step 2. The entry of v' was committed later still, into a bucket whose window holds its signed time, so no earlier than 10 min before that bucket's last day ends. That bucket's roll-up carries a signed time at which the bucket is expired: a whole window, at least 7 days, past its end, less the 10 min (30 for a push in parts) evs allows. So the roll-up committed more than 6 days and 23 h after the builder's step 2. The push was sent within IndexPushLife of t, and t was taken before step 2. It cannot have landed after that roll-up.
+
+What this rests on: evs's time check (11.8's 5b), which every index push already passes; the builder's own order of steps; and a device not sending a push it built days ago. The last is the residual, and 1.5 and 1.9 state it: a device whose clock runs a week fast, that builds, stalls a week and then sends the stored bytes, is refused by nothing. R5's "never sent again as built" and the life are client rules for exactly that case, and hosts with the text catch what gets through (D-EVS-56) and re-enter the tombstone (1.5).
+
+#### 1.2.7 Fences, in order
+
+```text
+fence                     what it is                                         what it keeps apart
+head CAS (R2)             the writer's head in the bucket, replaced at the    two pushes of one writer; a writer and a DROP's
+                          version read, by every push writing its files       rewrite of its files
+manifest CAS (R3, R4)     b/<S>/m, replaced or created                        two merges; a merge and a promotion; a merge
+                                                                              and a push merging its own entries; a merge
+                                                                              and a DROP's rewrite of a settled file
+shard CAS                 each shard a push changes                           the same, and a CLOSURE on a shard
+lock CAS                  <root>/lock from the version the runner took        two roll-ups (I-EVS-12)
+bucket removal            every file of S at the version read                 a roll-up and anything still writing S
+a/m and all's shards      replaced at the versions read                       a roll-up and a CLOSURE or DROP on all
+index_epoch               11.8's 5d, moved only by a CUT                      every index push and an erasure (I-EVS-17)
+the pin (R5)              content read after the index, in one build          a trailing entry and a newer version of its
+                                                                              document already in the index
+IndexPushLife (R5)        signed time taken first; sent within the life;      a trailing entry and a roll-up that dropped
+                          never resent after TIME_AHEAD; evs's 10 min         its document's tombstone; a roll-up and an
+                                                                              older entry in flight into a newer bucket
+expiry by signed time     a merge names no expired bucket, a roll-up only     a bucket's last entry and its roll-up, by a
+                          an expired one, both at the push's signed time      window less 20 min
+```
+
+Every builder runs in one order: take t; read the index head; take or check the lock (a roll-up); read content pins (a trailing push); build; upload; commit. On a refusal it starts again from the first step, except that an unknown outcome is settled by push id before anything is rebuilt, and a roll-up keeps its lock.
+
+**Clock skew.** Nothing reads a device's clock but to choose t, and evs holds t within 10 min of its own. A bucket's window, an entry's bucket, whether a bucket is expired and when a lock may be taken are all functions of signed times, so a reader 10 min off computes what the writer did. Two writers 20 min apart at a window boundary leave a newer version in the older bucket; reads mask it by version, and the older bucket's roll-up promotes it (R4). The lock's LockGrace is the same 10 min: a taker waits until its own t is that far past until_ms, so two honest runners never both believe they hold it, and if they did the lock CAS decides.
+
+#### 1.2.8 What a head holds, and who can rebuild it
+
+A head is `"URix" | header | entries`, the entries sorted by key, one a key (INDEX-FORMAT.md). The header's fields are the format's and the linked tables', the bucket's window, the writer, its seq and its coverage rows. Nothing else is in it: no clock but t in each entry, no pin but the coverage rows.
+
+Every file a writer's push writes is `plan`'s output (1.2.3), a function of:
+
+```text
+the writer's files in the bucket at the push's base, and its manifest row      from the ref's listing there
+the erasure set and the bucket windows at the base                             from the listing
+the push's signed time and its signer                                          from the statement
+the documents the push carries                                                 by kind of push, below
+the coverage rows                                                              by kind of push, below
+the tables (normalizer 1, extractor 1, Unicode and x/text versions)            pinned; headers record them
+```
+
+and the documents and coverage are themselves functions of what a reader with the text holds:
+
+```text
+an in-ref push    the documents its content changes give (section 11's extraction); no coverage row
+a companion push  per content ref R, with p the version in its {R, p, false} row and q the version in the
+                  same row of the head it replaces (0 if none): for each path whose newest change at p was
+                  made by a version in (q, p] that the push's signer signed, its state at p
+a backfill        with h from its {R, h, true} row and p from its {R, p, false} row (the push's base on a
+                  file-mode ref's own index): 1.2.6's backfill, step 4
+```
+
+So any device that holds the writer's files in the bucket at the push's base, the content ref's history to p and the text of the changed paths rebuilds every file of the push and compares `content_sha256`: equal, it fetches nothing; unequal, `index_mismatch` names the signer (§11.14's reproduce row, D-EVS-56). It needs no other writer's head and no shard, which the landed rule required. The team directory's readers (§16.11) derive a card writer's next head the same way from its previous head and the card version.
+
+A merge, a roll-up and a promotion are functions of the files their pushes replace and remove and, for a merge, the slots its new watermarks cover, at the push's base, with the erasure set and the pad generation the new shards' headers name. A reproducer learns the inputs from the push (§11.14's reproduce row); a merge's no longer include any head.
+
+#### 1.2.9 Readers
+
+Three things change for a search, all in SEARCH-M10-23's and SEARCH-M10-24's ground (1.7):
+
+```text
+absorbed files   a slot other than the head, or a large entry, at or below its writer's watermark is not
+                 scanned; it is read only as a diff's base
+chains           a diff resolves in one step, from the full entry in its own writer's other slot or large
+                 entry. Where the bucket's shards hold a row of the same key at the base's version, a reader
+                 may test a query's trigrams against that row's postings instead: copies of one version are
+                 equal
+malformed        an unabsorbed diff with no base is index_malformed naming the slot's signer, and its document
+                 reads not yet searchable until a host with the text re-enters it (§11.14's chains row). The
+                 row's "a diff below its key's newest entry is no candidate, resolved or not, and alarms
+                 nothing" goes: under I1 there is no such diff to excuse.
+```
+
+Newest-wins over every partition a device holds, the version table, masks and retained buckets are as §11.14 has them.
+
+### 1.3 Invariants and why they hold
+
+```text
+I1 own bases       every diff in an unabsorbed slot, of a document the erasure set does not list, has its base,
+                   a full entry of its key, in another file of its own writer in its bucket (proposed I-EVS-18)
+I2 merges total    a merge composes every input it reads and writes each key's newest version; a bucket's
+                   shards hold one version a key, a row or a tombstone, never a diff; a tombstone stays until
+                   the bucket rolls
+I3 results         the view over all and the buckets is each document's newest indexed version, and no seal,
+                   merge, slot reuse, large-entry removal, promotion or roll-up changes it (FI-18)
+I4 buckets exact   a device keeping only the buckets shows no document at an older version than its newest:
+                   no all row is newer than the newest bucket entry of its key
+I5 no return       no entry lands below a version or tombstone of its document that a roll-up has dropped or
+                   moved into all
+I6 one roll-up     a bucket is rolled by at most one committed roll-up, from the lock version its runner took
+                   (I-EVS-12, FI-20)
+I7 one version     all holds one version a key and no tombstone (I-EVS-11)
+I8 a function      every file a writer's push, a merge or a roll-up writes is a function of 1.2.8's inputs
+                   (FI-22)
+```
+
+**I1.** By induction over commits. A writer's own push P, built at b: if it commits, its writer's head in the bucket was at the version P read, so by R2 no other push has changed a file of that writer's there since b, a CLOSURE aside. P's plan adds diffs whose bases stood in the writer's other files at b, and reuses or removes only files that its own result does not keep. The watermark may have moved since b; that only makes more slots absorbed, so fewer diffs are owed a base. A merge writes no writer's file and only raises watermarks. A roll-up removes a bucket's files together, and a promotion writes shards. A DROP's rewrite takes the diffs that rest on what it removes and replaces the head (1.2.3). A CLOSURE takes a listed document's base and its diffs in separate pushes, so between them a diff of a listed document may lack its base: every reader, merge and roll-up leaves out the erasure set's documents before it composes anything, which is why I1 excepts them, and no diff built after the CUT rests on a listed version. Model: `ChainsResolve`; twins `NoOwnCas`, `ReusePinned`, `CleanupReferenced`, `MergeRemovesLarge`.
+
+**I2.** A merge's inputs are full rows and tombstones (the shards), the entries of sealed slots and the unabsorbed large entries. By I1 every diff among them has its base. Each of those files is stable from the merge's base to its commit: a sealed slot is overwritten only once absorbed, which only this merge's commit or an earlier winner's can do, and a base is kept while its diff's slot is unabsorbed. One version a key follows from the winner replacing the shards' entry. Model: the ghost `broken`, `OneVersionEach`, `TypeOk`'s "no diff in a shard"; twin `MergeDropsTombstone`.
+
+**I3.** Take a key and its newest indexed version over heads, settled files and all. A seal moves nothing. A merge writes into the shards the newest version over the shards and the files it absorbs, so the newest over the settled files is unchanged, and it touches no head. A head push landing between a merge's build and its commit adds to a head, or seals one into a slot whose seq is above every seq the merge read (the head holds its writer's highest seq, and new files are numbered above it), so the merge's watermark does not cover it. A slot is reused, and a large entry removed, only when absorbed and not kept, when what it held is in the shards. A roll-up's step 4 puts each carried entry into all or into a newer bucket, or drops it only for a newer entry elsewhere, a tombstone having first taken all's row. Model: `ResultsHold`; twins `ReuseUnabsorbed`, `RollupForgetsHeads`, `NoPromote`, `PromoteBlind`.
+
+**I4.** all changes only at a roll-up, and takes a carried version c only when it is not promoted: when no newer bucket holds the key, or the newest entry there is at or above c. In the first case no bucket holds the key once the rolled bucket is gone. In the second the bucket's newest is at or above all's new row. Entries that land later are newer versions, or older ones that I5 keeps out. Model: `BucketsExact`.
+
+**I5.** 1.2.6's argument: the pin, the life and expiry by signed time. In the model's terms: a push built late in one window may land early in the next and no later, and a bucket is rolled two windows after its own. Model: `ResultsHold` with Skew; the as-written `Supersede = "index"` and twin `LongLife` each bring a deleted document back.
+
+**I6, I7.** The lock CAS and the removal of every file of the bucket at the version read; all's layout. Model: `RollsOnce` with two rollers, a crash and a lapse; `OneVersionEach`.
+
+**I8.** By reading 1.2.3 to 1.2.5: every order is a sort by key, every choice among equals is fixed (the base with the highest version and seq, the tie order, the lowest slot, `take`'s search), and the only clock is t. It is not modelled; 1.6's vectors and properties hold it.
+
+**The model.** `IndexMerge.tla` holds one index ref over three windows: two writers' slots (two each, with seqs), their large entries, a shard and a manifest a bucket, all, the lock, and the content of two documents, d2 edited four times and d3 created and then deleted by a commit that skips the index. The journaler's entries trail their content; the backfiller indexes what no entry reaches. A head push has four shapes (create, append, seal as the head stood, fill and open the next slot), an entry may be full or a diff where a base stands, and a push built in one step commits in another, with anything between. A writer's process may die with a push in flight that still lands. Merges, a roll-up under its lock with two rollers, crashes and lapses run beside them. A head push is refused only by its own files' CAS, never by a manifest (1.1 F). Constants switch each rule between the design and §11.14 as written, and `Twin` breaks one rule of the design.
+
+What it leaves out, and why that is safe. Sizes: KeepSlots and the delta bound only turn diffs into full entries, and the model lets either be chosen. Several shards a bucket: `layout` is a function of the winners, and the model's one shard makes the shard's CAS and the manifest's the same step, so `PromoteBlind` removes both. Ref tombstones follow a document tombstone's rule with a ref for a key. Pushes carry one entry; a push of several is some sequence of these with fewer states between. D-EVS-45's move is one of the placements the model already allows. The erasure's CUT, CLOSUREs and epoch are `IndexRollup.tla`'s, and SEARCH-M10-46 joins the two. A DROP's rewrite is not modelled: its rule (1.2.3) is argued under I1 and held by FS-107's case.
+
+**The runs**, on 2026-11-10 with TLC from tla2tools at d8fb231, through `run-indexmerge.sh`, on a host shared with the build lanes. Breadth-first runs cover their whole state graph; the two marked simulation draw a fixed number of traces from a fixed seed and show only that those kept every invariant.
+
+```text
+(first landing: the runs are in progress. The design configurations on the single-bucket and the three-window
+grounds, the four as-written configurations and eleven twins have run as this table will record; the wide
+simulation and the final numbers follow in the next landing.)
+```
+
+### 1.4 Cost
+
+**Measured**, on 2026-11-10 with go1.27.3 on darwin/arm64, the landed codec at cf35d87, one run on a host under the build lanes' load. The corpus is the design's own sources cut into 4,000 documents with a median of 1.5 KB of text; the harness is in `.stack/scratch/details-1/` and changes no code.
+
+```text
+a full entry           mean 1,131 B, median 1,057 B, nine in ten under 1,748 B, the largest 3,667 B
+a full shard           2,190 documents in 1,032,039 B: 471 B a document, 0.67 B a posting. The same documents as
+                       entries are 2,474,168 B, so a merge shrinks what it absorbs to about 42%
+files as documents     29 KB of Go 1,894 B of key set; 56 KB of Go 3,053 B; 137 KB of TLA+ 3,475 B; 1 MB of
+                       prose 7,278 B; a 15 KB go.sum 9,164 B, the one file found past EntryMax
+a 1% edit of each      a delta of 92 to 279 B: a diff is some 3% of its full entry
+composing a diff       9 to 119 µs
+one shard encode       1.1 to 1.3 s for a full shard, 843 to 884 ns a posting. §11.14 states 7.0 to 9.7 ns for a
+                       merge. The landed encoder is a draft and the host was loaded; nothing in this design adds
+                       to an encode, but take calls it up to 12 times when a shard fills (below)
+a merge at half fill   a 0.5 MiB shard decoded in 0.4 to 1.0 s and encoded again with 64 more documents in 0.7
+                       to 0.8 s, by the same draft code
+```
+
+**A merge**, per bucket, for a device that holds the bucket:
+
+```text
+reads        none from evs: the shards it will change, the sealed slots, the large entries and the kept
+             files their diffs rest on, from its cache
+writes       the youngest shard, grown by about 42% of the absorbed bytes, so some 54 KiB a merge at
+             MergeBytes; each shard holding an older version of a document it carries (below); the manifest,
+             under 1 KiB
+requests     one upload a changed shard and one push
+time         one encode a changed shard; at §11.14's speed 10 to 15 ms each, on the draft encoder about a second
+take         only when the youngest shard fills, once in about 19 merges: up to 12 length computations of a
+             1 MiB shard
+```
+
+**A roll-up** of a bucket of n documents: one lock push; S's winners into all, n × 471 to 900 B, as ⌈that / 1 MiB⌉ + 1 uploads; a/m; the removal of b/<S>/, one entry a file (the manifest, the shards and every writer's slots and large entries); a promotion's shard and manifest when there is one, which needs two writers' clocks apart at the boundary or a trailing entry; and each all shard holding a row that a carried version or tombstone replaces.
+
+**The journal and a companion push**: the journal is storage, at most JournalByteCount; a build is one head read of `ur/index` and one of each content ref with a committed unit (§11.15: 250 ms each at p50 on a desktop), the replay of what the device had not yet seen, and one push staging its head, at most 16,208 B, and any slot it seals; at most one a CompanionInterval a writer.
+
+**Three workloads.**
+
+```text
+                              a mailbox, 100          a mailbox, 300          a git-mode repository: 20 writers,
+                              messages a day          messages a day          500 commits a day of 5 files,
+                                                                              5,000 files live
+entries a day                 100 full, ~150 KiB      300 full, ~450 KiB      ~500 first entries of 1.9-3.5 KiB
+                                                                              and ~2,000 diffs of ~0.2 KiB:
+                                                                              ~1.8 MiB (all full: ~6.6 MiB)
+merges a day                  1 to 2                  3 to 4                  ~14 (all full: ~50)
+a merge writes                the youngest shard,     the same                every shard of the bucket: 3
+                              0.5 MiB on average                              shards, ~2.4 MiB
+merge uploads a month         ~20 MiB                 ~60 MiB                 ~1 GiB
+a bucket at its end           3,000 documents,        9,000 documents,        5,000 rows, 2.4 MiB, with up to
+                              1.4-2.7 MiB, 2-3        4-8 MiB, 5-9 shards     20 x 8 kept slots, 2.5 MiB, beside
+                              shards                                          them
+its roll-up                   3-4 uploads, ~30        6-10 uploads, in        3-4 uploads and each all shard
+                              removals, 5 requests    parts                   holding a replaced row
+against §11.15                both latest buckets     past it at 300 a day,   no row; §11.15's row is for mail
+                              within ~5.4 MB          as §11.14's traffic
+                                                      row already says
+```
+
+The first two columns are §11.14's own traffic figures reached another way, and this design changes nothing in them: a message is written once, so no diff, kept slot or large entry arises, and a merge writes one shard. The third column is where the design shows:
+
+- **Diffs.** With own bases about four entries in five are diffs once a writer has touched a file in the bucket. The as-written rule gave a diff only where the previous version sat outside every head, which twenty writers on one tree break at each alternation; no figure for it can be given without a trace of real commits, and the review phase should take one.
+- **Kept slots.** Up to 8 slots, 128 KiB, a writer a bucket stay after absorption. Readers hold them already: they synced them as sealed slots.
+- **Large entries** are rare (one file in the sample) and wait for their writer's next push in the bucket.
+- **The head rule** adds a second staged slot, at most 16,208 B, to a seal whose first entry does not fit: for one-entry pushes, one push in about eleven. A push that fills a head and opens the next already staged two.
+- **The fan-out of a merge** is the cost that stands out, and it is §11.14's, not this section's: a merge drops a document's older row "from the shard holding it", keys are HMACs, and so a merge carrying k edited documents into a bucket of s shards rewrites up to min(k, s) + 1 of them. Three shards a merge here; for a million files imported into one bucket and then edited (FS-109's size), some 450 shards exist and a merge of 128 KiB of diffs rewrites about 300 of them, 300 MiB, about 14 times a day while that bucket lives. A device that reproduces the merge downloads none of it, and evs purges each replaced shard a minute later, but the uploads are real. Question `details-1-superseded-rows` puts the alternative to the owner; this section keeps the rule.
+
+**Memory on app hosts (QD-641).** Nothing here needs a bucket in RAM. A plan reads the writer's own slots, at most 16 files of 16 KiB, and for a diff one base's key set, by stream. A merge is a k-way pass over inputs that stay in storage: the changed shard's dictionary and postings read in key order, each absorbed entry's key set read in key order through a 4 KiB buffer (about 110 entries at MergeBytes), a docid map of 4 B a document, and the output's postings and dictionary written to two files and joined, so the working set is under 1 MiB whatever the shard holds. A roll-up's "newest version of this key in the newer buckets" is a probe of §5.9's version table, or a sorted run in storage built from the newer buckets' doc tables and slots. The journal is read by unit, never whole. `take`'s length computations use the same pass without writing bytes.
+
+**Requests and time, the large case.** A roll-up of a 9,000-document bucket into a five-year all whose rows a month's 2,700 deletions are spread over: up to every all shard rewritten, 165 at 100 messages a day, in parts: 165 MiB up, 3 to 4 s of transfer at §11.15's 50 MB/s on a desktop and 33 s at a phone's 5 MB/s, plus an encode a shard (2.5 s in all at §11.14's speed, minutes on the draft encoder). That is §11.14's "the changed shards' uploads", once a window, and why its runner row prefers an indexer or a desktop; a phone that cannot finish inside LockTerm renews the lock or leaves the roll-up to a capable writer.
+
+### 1.5 Failure modes and recovery
+
+```text
+a writer killed mid-push       nothing shows before its head CAS. If the push committed, the next build reads it.
+                               If its outcome is unknown, the builder asks by push id before it rebuilds (11.8).
+                               A push the dead process left in flight may still land inside its life: R2 makes
+                               it and its successor conflict, so one commits and the other replans (1.3,
+                               IndexMerge-Restart).
+a writer's lost CAS            409 on its head: another of its own pushes, or a DROP's rewrite, landed. It reads
+                               its files again and replans: §11.14's conflict row, now for every push of the
+                               writer, a seal included. Nothing is lost or doubled: a plan is a function of the
+                               files it reread and the documents it still carries.
+a merge killed                 before its push: uploads only, orphans under 11.13. After: committed. Unknown
+                               outcome: by push id, then rerun on the new state. A merge takes no lock and holds
+                               no state.
+a merge's lost CAS             409 on the manifest or a shard: another merge, a promotion or a DROP's rewrite
+                               landed. It reruns on the new state. 409 INDEX_EPOCH: it rereads the erasure set
+                               and reruns without the listed documents.
+a merge's input replaced       a slot the merge read was reused before the merge finished reading: the read
+                               answers collected, and the merge restarts on the head. It can only happen to a
+                               merge already beaten by another, since a slot is reused only once absorbed.
+a roller killed                §11.14's crash row: nothing shows before step 6's CAS; the lock lapses LockGrace
+                               after its until_ms. A second runner starts from step 1. If the dead runner's push
+                               then lands, the lock CAS refuses it; if it landed first, the second runner finds
+                               b/<S>/ gone with rolled_through_day >= S and stops.
+a roll-up's lost CAS           on the lock: stop. On a promotion's manifest or shard: a merge of that bucket
+                               landed; rerun from step 2, lock held. On a file of S: a CLOSURE or a DROP's
+                               rewrite landed there; rerun. INDEX_EPOCH: rerun without the listed documents.
+a promotion target moves       between a roll-up's read and its commit a newer bucket takes a newer entry of
+                               the key: the promoted entry lands below it and is masked; that bucket's roll-up
+                               drops it. The roll-up is not rerun for it.
+a writer's clock 10 min off    its entries carry its signed time and go to that time's bucket, at a boundary the
+                               older one. Reads mask by version. The older bucket's roll-up promotes what the
+                               newer bucket holds only older entries of (R4).
+a device's clock far off       evs refuses a push more than 10 min behind and answers 429 TIME_AHEAD to one
+                               ahead. An index builder takes evs's clock from the refusal, takes a new t and
+                               builds again from its first read. It never waits out retry_after_ms to send the
+                               same bytes.
+a writer offline for days      its journal keeps its committed units, in storage. Its unindexed pushes are
+                               backfilled by others after BackfillAge, so search is whole without it. On return
+                               its companion build reads the index and then each content ref from evs: units
+                               whose documents moved on are dropped as superseded, the rest are published as
+                               copies of what a backfill wrote, which is harmless, and its coverage row moves
+                               to the pin. Its head in a bucket that has since rolled is gone with the bucket; a
+                               push it had built before going offline is past its life and is never sent.
+a writer that never returns    its unabsorbed slots merge like anyone's. Its kept slots and large entries stay
+                               until the bucket rolls: at most KeepSlots slots and whatever large entries it
+                               left, for at most two more windows.
+a journal lost                 a wiped device has no units. Its pushes stay unindexed and are backfilled.
+a journal past its bound       the oldest units lose their key sets. A device holding the text extracts again;
+                               one that does not drops the unit to a backfill.
+a stale stored push sent       the residual of R5: a device whose clock ran at least a window less 20 min fast
+                               when it built, that stalled as long and then sent the stored bytes. Nothing
+                               refuses it. If it carries an entry below a tombstone a roll-up has dropped, the
+                               deleted document is back in the index. Hosts with the text catch it (below).
+a deleted document indexed     a host with the text that meets a live entry whose path its content ref holds
+                               removed, or at a higher version, with no tombstone or newer entry above it in the
+                               index, raises index_mismatch naming the entry's signer and backfills the
+                               tombstone or the newer version (D-EVS-56 gains this check; SEARCH-M10-21). A
+                               network with no host holding the text keeps the stale hit until one syncs.
+a diff with no base            only a writer off the rules, or damage, leaves one in an unabsorbed slot:
+                               index_malformed names the slot's signer; a merge leaves the diff out; a host with
+                               the text re-enters the document full (§11.14's chains row).
+a runner that rolls early      a roll-up whose signed time is before its bucket's expiry is caught by every
+                               reproducer: index_mismatch naming it. Its effect is a roll-up done early, which
+                               breaks no invariant but R5's margin.
+the storage limit              heads ride content pushes and stop with them. Merges and roll-ups add payload
+                               and wait; a promotion is part of a roll-up and waits with it; searches read the
+                               partitions as they stand (§11.14's limit row).
+a phone as the only writer     it merges when out of slots or on Wi-Fi while charging, and rolls within §18.4's
+                               budget or leaves both to a capable writer (§11.14's devices and runner rows).
+                               It holds each input in storage and streams it (1.4).
+```
+
+### 1.6 The test plan
+
+**Vectors** (D-TEST-15), under `sidecar/testdata/index/`, each a set of input files and the output files' plaintext hashes:
+
+```text
+head/      a first entry full; a second edit while the first is in the head (full again); an edit after the head
+           sealed (a diff on the sealed slot); a big document (a large entry, then diffs); a delta past half its
+           base (full); a creation after a removal (full); a seal that skips a kept slot; a seal as the head
+           stood (the head's bytes written again); KeepSlots reached (full); an absorbed large entry removed and
+           a kept one left; a push past DirectBytes
+merge/     a sealed diff composed onto its writer's kept slot and onto a large entry; one version from two
+           writers (the tie order); a tombstone over a row; a ref tombstone; the erasure set's document left out;
+           take at the cap (the count the search finds, and the shard opened after it); a join; a merge that
+           changes only the manifest; a merge with extra entries
+rollup/    a bucket into an empty all; over an older all row; a tombstone taking all's row; a promotion of a
+           tombstone and of a live version, with the target bucket's shard and manifest; a ref tombstone; a
+           second run's plaintext equal to the first
+companion/ a head from two units of one document (the newer alone); a superseded unit left out; a coverage row
+           raised with no entry; a backfill's two rows
+```
+
+**On the fake store** (`evs_index_fake_test.go`), top-level tests with barriers and a fake clock:
+
+```text
+R2            two pushes of one writer on one base, appending and sealing, in both orders: one 409, a replan,
+              every entry once; a push that reuses a slot against one that names it as a base
+merges        two mergers: equal plaintext, one commits; a head push landing between a merge's build and its
+              commit: both commit, the head's base still there; the writer's next push removes its absorbed
+              large entries and no kept one; INDEX_EPOCH; an input answered collected
+roll-ups      each FS-75 barrier killed; two runners; a lapsed holder's late push; a promotion racing a merge of
+              its target, in both orders; a newer entry landing in the target between read and commit
+journal       a unit written at settle and not before; a companion build's read order asserted through the
+              fake's request log (index head, then each content head, then the push); a unit superseded at the
+              pin; a 409 returning units to committed; TIME_AHEAD followed by a new build and never a resend;
+              a push not sent after IndexPushLife on a fake clock, monotonic and wall; restart with units on
+              disk; the bound; a dropped hint still leaving an erased document out
+```
+
+**Schedules.** FS-74, FS-75, FS-107 and FS-108 as 1.8 rewords them, through real engines on T2 and server's handlers on T3 (SEARCH-M10-35, SEARCH-M10-36). FS-107 runs with every cache discarded and the purge between, as now: a base lost to a reused slot shows only then.
+
+**The explorer.** SEARCH-M10-35's seeded explorer drives the fake store with `IndexMerge.tla`'s actions (a head push in each of its four shapes, a merge, a roll-up's steps, a companion build split at each read, a restart, a tick) and checks FI-18, FI-20 and I1 after every step: ten seeds a merge on T2.
+
+**Properties** (fuzz targets in the root): a merge is a function (any order of its inputs' files gives equal bytes); a merge of nothing but its own output changes only nothing; `plan` twice on one base and one document set gives equal bytes; every file a plan, a merge or a roll-up writes passes the canonical decoder and I1 holds on the result.
+
+**Mutants.** Each twin of 1.3 is a mutant of the code and must fail a named test: a seal that leaves the head unwritten (R2's two-push test); a seal that reuses a kept slot, a push that removes a kept large entry and a merge that removes large entries (FS-107, caches discarded); a merge that drops a tombstone and a roll-up that reads no head (FS-108); a roll-up that drops a tombstone above a newer bucket's older entry, and one that writes the target's shard without its manifest (FS-75's promotion case); a companion build that reads content before the index or from a cached pin, and one that resends after TIME_AHEAD (the journal tests).
+
+### 1.7 Implementation notes, task by task
+
+Order: SEARCH-M10-45 first, since every other task plans on its `plan`. Then SEARCH-M10-10, then SEARCH-M10-11 and SEARCH-M10-12 together, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, and the schedules as their mechanisms land. SEARCH-M10-46 at any time. All are the evs lane's. Entries for the two new tasks are in `.stack/plan/proposals/details-1-tasks.md`.
+
+**SEARCH-M10-45, writer heads on own bases** (new; M). It finishes SEARCH-M10-09's draft to 1.2.2 and 1.2.3. The landed code that changes:
+
+```text
+evs_index_dependency.go   indexChooseEntry becomes 1.2.3's choose over the writer's own files and a keep set;
+                          it takes no indexBucketDocuments. indexBucketDocuments.resolve and resolveDepth give
+                          way to one lookup, the full entry of a key and version in a writer's other slots and
+                          large entries; indexChainMaxDiffCount, indexEntryPlace and keptOutsideHeads go.
+evs_index_head.go         indexPlanHead loads no shard for the push's own buckets (it still looks at newer
+                          buckets for D-EVS-45's move, and only where the device holds them). indexPlaceEntries:
+                          the branch "sealed as it stood" writes the old head's bytes again; takeSlot skips kept
+                          slots and counts the ring over slots that are not kept; a plan gains the removals of
+                          absorbed large entries that are not kept; a push past DirectBytes writes its head too.
+                          indexHeadPlan.files() gains removals().
+evs_index_view.go         indexViewWriter gains unabsorbed() and kept(); nothing else.
+evs_index_files.go        indexValidateFile: coverage sorted by ref_id then horizon; a large entry's one entry is
+                          kind 1; a diff only in a slot.
+search_chains.go,         a diff resolves in one step in its own writer's files (1.2.9); absorbed slots and
+search_match.go           absorbed large entries are not scanned (SEARCH-M10-23's draft resolved through the
+                          bucket's shards, sealed slots and large entries, chains included)
+protocol/INDEX-FORMAT.md  1.8's text
+testdata/index/head/      rewritten to 1.6's list
+```
+
+Traps: bases are chosen against the files as the push's base shows them, never against a slot this same push writes; the keep set is recomputed from the plan's own result, in key order, so two builds agree; the head rule holds for a push that writes only large entries and for one that merges its own entries; `indexComposeDelta` has no caller left in a writer and stays for tests of INDEX-FORMAT.md's Deltas.
+
+**SEARCH-M10-10, bucket merges** (held; L; its Build changes). Build 1.2.4: `indexMerge` as the pure function `merge` with `layout` and `take`, and `IndexMerger` as its runner. Needs: SEARCH-M10-45 in place of SEARCH-M10-09 alone. What leaves its plan entry: heads as an input, the output row's "unless" clause, "absorbed large entries are removed", and "never drop a base a current head names", which is now the writer's keep rule. What joins it: `extra` entries and a no-absorb mode, for a push that merges its own entries and for SEARCH-M10-11's promotions; the tie order; a manifest-only commit; restart on `collected`. Proposed shapes: `indexMergeArgs{bucket *indexViewBucket, extra []*indexEntry, absorb bool, erased func(key, version) bool, padKey *indexPadKey, tables indexTables}` and `indexMergeResult{shards []*indexPlannedFile, removedShards []*indexPushRemoval, manifest *indexPlannedFile, malformed []*indexMalformedDiff}`. Barriers `evs.index.merge.built`, `.uploaded`, `.pushed`. Traps: the shard encoder is called up to 12 times by `take` when a shard fills, so `take` asks it for a length, not bytes, and the encoder must reach §11.14's 7 to 10 ns a posting first (the draft measured 843 ns under load, 1.4); on an app host the inputs stay in storage and the merge is a k-way pass over their key streams (1.4); the watermark is the highest seq read, never the head's; a merge writes no slot and removes no large entry. Tests: 1.6's merge vectors and fake-store cases; FS-74's two mergers; FS-107's and FS-108's merge clauses.
+
+**SEARCH-M10-11, roll-ups and the index lock** (held; L; its Build changes). Build 1.2.5. `indexRollup` is pure over S whole, all, and a lookup "the newest version of this key in the newer buckets", which the runner answers from §5.9's version table where CORE-M10-02 has landed and else from a key-to-version run built in storage from the newer buckets' doc tables and slots. Step 4's in-place rewrite leaves the task: the roll-up calls `indexMerge` with `extra` and `absorb` false for each promotion target. `rewriteWithout` (landed, SEARCH-M10-05) keeps its two other callers, a CLOSURE and a DROP. Expiry is judged at the push's signed time, for the trigger, the lock and the merge runner's "never on an expired bucket"; the lock renews at half its term. `indexer_search.go` schedules merges, roll-ups and backfills as planned. Traps: read S, the newer buckets and all at one head version taken after the lock commits; a 409 that is not the lock's keeps the lock and reruns from the read; a promotion writes the target's manifest even when it had none; a/m's `rolled_through_day` and I-EVS-11 as 1.8 words them. Tests: 1.6's roll-up vectors (one with a promotion replaces "one removing an older newer-bucket entry"); FS-75's barriers; the promotion races.
+
+**SEARCH-M10-13, the in-ref writer on the real push builder** (held; L; Needs and Build change). Needs gain SEARCH-M10-45, SEARCH-M10-42 and SEARCH-M10-44: no index is written outside tests on the old extractor (section 11.5), and `Prepare` runs on phones, where extraction must be the one-pass form. It may be drafted against the whole-value extractor behind one seam and switched when SEARCH-M10-44 lands. `IndexWriter.Prepare(plan)` calls `indexPlanHead` (1.2.3) with the push's documents and adds every file and removal it returns to the statement. Conflict: a 409 naming the writer's head, or any file of its own, rereads its files and plans again, which is §11.14's "merges its delta into the winner's file" in effect; it is the same for an append and a seal. A push past DirectBytes calls `indexMerge` with its entries and commits the shards, the manifest and its head together. An in-ref push needs no pin and no life of its own: its content CAS is its fence. Dropped chunks: a version with fewer chunks than the one it replaces writes tombstones for the chunk numbers from its count up to the replaced version's count less one (section 11's interface), the replaced count taken from the replaced version's text; a device that does not hold that text and will not fetch it writes no index entry for the push, which then reads unindexed and is backfilled. Tests as planned, with R2's two-push case in both shapes.
+
+**SEARCH-M10-14, companion pushes and the journal** (held; L; Needs and Build change). Needs gain SEARCH-M10-45 and SEARCH-M10-42; SEARCH-M10-44 reaches it through SEARCH-M10-13's seam. Build 1.2.6: `IndexJournal` (the unit log in the search component's sealed directory, its two states, the bound, `Committed(ref, version, signedTimeMs, documents)` called from section 8's settle and from a stream append's committed outcome, `ApplyErase` and `ApplyCut`) and `IndexCompanion` (the build in its six steps, the cadence, the flush before sleep or exit, the life). Settings: `Search.CompanionInterval` (QD-511) and `Search.JournalByteCount`. Traps: step 3's content head is read from evs, never from the replica's pin or a cache, and after step 2; t is taken before step 2 and the life is measured on the monotonic and the wall clock both; a push refused TIME_AHEAD is rebuilt, not resent; units leave the journal only on a known commit; the journal holds key sets, so it is read by stream and never whole (QD-641); a coverage row is raised even when every due unit was superseded. Tests: 1.6's journal list; §22.5's companion row; FS-74's killed writer; FS-108's ref DELETE and its late entry dropped at the pin.
+
+**SEARCH-M10-15, settings, builds, off, rebuild and `ur evs index`** (held; L; two additions). A build ("on", migration's first build, a rebuild into i2, a site-loss rebuild) is a trailing push in R5's sense and follows 1.2.6's backfill: it reads the index, then the content at a pin, writes each latest window's documents through `indexMerge` with `extra` and older ones through `layout` on all, under the lock, and writes its own head in each bucket with the rows {R, pin, horizon true}. Two builders that hold the same pin build equal plaintext, which `take` and the tie order give. Each of its pushes in parts lives 25 min. Off removes every file of every writer in one push, heads included, so R2 holds without more. Everything else in its entry stands.
+
+**SEARCH-M10-35, FS-74, FS-75 and FS-79** (held; L; cases added). FS-74 gains: one sidecar's two pushes, one appending and one sealing, of which one gets 409; a merge landing between a writer's diff and its base's absorption, the base still read; a writer's return removing its absorbed large entries. FS-75 gains: a roll-up that promotes, killed at each barrier, with a merge of the target racing it in both orders; a roll-up whose signed time is before the expiry, refused by reproducers. Its seeded explorer is 1.6's. FS-79 is unchanged but for builds following R5.
+
+**TEST-M10-02, FI-18 to FI-24** (held; L; three checks added). `fault.FI(18)` also holds I1 on every listing it reads (every diff in an unabsorbed slot has its base in its writer's files) and I4 (all's row of a key is never above the newest bucket entry of that key), both from the canonical decoder's output and neither from index code. `fault.FI(20)` counts a promoted entry as moved: the bucket's files leave only in the push that commits all, or the target bucket's shards, holding their postings. Mutants added to its list: a merge that removes a large entry a head rests on; a roll-up that drops a tombstone above an older entry of a newer bucket; a companion push built from a pin read before the index.
+
+**SEARCH-M10-46, IndexRollup.tla on section 1's rules** (new; M). The lane's model keeps what `IndexMerge.tla` leaves out, the erasure's CUT, CLOSUREs and epoch, and takes this section's rules for the rest: own bases with the keep rule, R2, a merge that reads no head, promotion, the pin. Its four question constants go. Its `HeadCommit` stops checking the bucket's manifest (1.1 F). §22.8's model row and `sidecartest/model/modelled.yml` name `details/IndexMerge.tla` beside it.
+
+**Tasks not held that this touches.**
+
+- SEARCH-M10-09 is drafted; SEARCH-M10-45 finishes it.
+- SEARCH-M10-12 (coverage and backfill; it waits on SEARCH-M10-10): the backfill is 1.2.6's, with h and its two rows; `indexCoverageOf` reads up to two rows a ref; a push whose documents were all superseded is covered by its committer's next row; "re-enter a broken chain's version" becomes "re-enter a document whose diff has no base".
+- SEARCH-M10-18 (DROP rewrites): a rewrite that removes a base from a writer's file removes the diffs that name it, enters a kept head's composed version full in the signer's own head, and replaces that writer's head and the bucket's manifest in the same push (1.2.3).
+- SEARCH-M10-17 (erasure's rewrites): unchanged. Its list still names "each writer's slots and large entries in each bucket"; kept and lingering files are among them. A CLOSURE needs no head rewrite (1.2.3).
+- SEARCH-M10-21 (reproduction): a head is reproduced from 1.2.8's inputs; hosts with the text add 1.5's check for a live entry of a removed path.
+- SEARCH-M10-23 and SEARCH-M10-24 (matching and masks): 1.2.9; the reader half is in SEARCH-M10-45.
+- SEARCH-M10-36 (FS-76, FS-107, FS-108): FS-107 and FS-108 as 1.8 rewords them.
+- SEARCH-M10-02 is drafted; SEARCH-M10-46 brings its model to these rules.
+
+### 1.8 Proposed DESIGN.md text
+
+**§11.14, Files and format.** The slot row: after "a newer one replacing the writer's older one there" add "; a slot other than the head, or a large entry, at or below its writer's absorbed seq holds nothing but the bases of diffs". The entry row: for "diff: added and removed key sets against its base's set (commit path's dependency row)" read "diff: added and removed key sets against its base's set, the full entry of its key at the base version in another slot or a large entry of its own writer in its bucket (commit path's dependency row); only in a slot". The large row: add "; a full entry; its writer removes it once it is absorbed and no diff rests on it". The caps row: for "a writer holds at most 16 slots in a bucket" read "a writer holds at most 16 slots in a bucket, at most 8 of them kept for the diffs that rest on them and 8 others".
+
+**§11.14, Commit path, the dependency row.** Replace it: "dependency a diff for version v names its base by version and rests on a full entry of its document in another file of its own writer in its own bucket: a slot that is not the head, absorbed or not, or a large entry; the newest such entry below v is the base and the delta is taken against it, so no diff rests on a diff, on a head, on a shard or on any file another device writes; a diff is written only where the delta is under half the base's set and the entry within 8 KiB, the document is no creation, and the base's slot is kept or fewer than 8 are; anything else is full; a writer keeps a file a diff of its unabsorbed slots rests on: it does not reuse such a slot nor remove such a large entry, and it removes its other absorbed large entries at its next push in the bucket; every push that writes a file of a writer's in a bucket replaces that writer's head there at the version its base showed, a head sealed as it stood written again with its own bytes, so a writer's pushes commit one at a time; a DROP's rewrite of a writer's file does the same and removes the diffs resting on what it removed (drop, below); an erasure removes a document's entries together".
+
+**§11.14, Commit path, the seal row.** For "the lowest k whose seq the bucket's manifest shows absorbed, else a new k up to 8" read "the lowest k that the bucket's manifest shows absorbed and that is not kept (dependency, above), else a new k, up to 8 slots that are not kept".
+
+**§11.14, Commit path, the companion row.** Replace from "each entry is encoded when its head push is built" to "as a backfill's is" with: "a companion push is built in one order: its signed time taken, the head of ur/index read, then each content ref's head read from evs, the pin; it carries, per document of the committer's journaled versions at or below the pin, the newest, and drops one whose path the content ref holds at the pin at a higher version or removed, or whose ref was deleted since, leaving the newer version to its own committer or a backfill; its coverage names the pin; it is sent within 5 min of its signed time and otherwise built again, and never sent again as built after a 429 TIME_AHEAD". The conflict row: for "only an eraser's CLOSURE, a DROP's rewrite, a roll-up's step 4 or the writer's own other push rewrites a head" read "only an eraser's CLOSURE, a DROP's rewrite or the writer's own other push rewrites a writer's file".
+
+**§11.14, Commit path, the coverage row.** After "backfills a push still unindexed 10 min after its commit into its own head and raises its horizon": "from the content at a pin read as a companion push reads it, each path at its state there; a path changed again after the horizon is left to that change's own entry". Strike "holding the buckets and all current at its push's base, dropping superseded entries (companion, above)".
+
+**§11.14, Merges.** The input row: "input the bucket's manifest and shards, and its sealed slots and unabsorbed large entries, at the merge's base version, with the files of each writer that their diffs rest on; no head; the new manifest's absorbed seqs and the files the push replaces name them, so a reproducer learns its inputs from the push". The output row: "output each document's newest version among the inputs, each diff composed onto its base, and the erasure set's documents left out (commit path's epoch row); at one version a tombstone, then the shards' own entry, then the copy from the lowest writer id and seq; a live version as a doc-table row with its postings, a tombstone in the tombstone table, dropping the bucket's older rows of its key, and a ref tombstone those of its ref below its version, each kept for older partitions until the roll-up; appended in doc_key order to the youngest shard, which takes the longest run that fits by INDEX-FORMAT.md's search, a next one opening at the cap, its older version dropped from the shard holding it, so a bucket's shards hold one version per document, a row or a tombstone; adjacent shards under 512 KiB together are joined; a merge writes and removes no file of any writer's: slots stay for their writers to reuse, and large entries for their writers to remove". The commit row: for "the shards (uploads with receipts), the manifest and the removals" read "the shards (uploads with receipts) and the manifest, which every merge replaces or creates".
+
+**§11.14, Roll-up.** The steps row, step 4, from "an entry of a newer bucket below a version or tombstone this roll-up carries" to "every tombstone then goes, nothing older remaining": "a version or tombstone this roll-up carries, whose document a newer bucket holds only at older versions, which racing index pushes near a boundary can leave, goes instead into the shards of the newest bucket holding an entry of it, in the same push, which replaces or creates that bucket's manifest, and stays there until that bucket rolls; a promoted tombstone still takes all's row; a ref tombstone above a newer bucket's older entry of its ref likewise; every other tombstone then goes". Step 6: for "the shards and rewrites" read "the shards, each promotion's shards and manifest". The trigger row: add "judged at the push's signed time, as is the lock". The one row: for "with step 4, every all row is older than each bucket entry of its key and each bucket's ref tombstone of its ref, so all holds no tombstone" read "with step 4, no all row is newer than the newest bucket entry of its key, nor above a bucket's ref tombstone of its ref, so all holds no tombstone". The cost row: for "rarely, one newer bucket's file rewritten" read "rarely, one newer bucket's youngest shard and manifest rewritten".
+
+**§11.14, Reads.** The chains row: "chains a diff resolves in one step, by its doc_key and base version in another slot or a large entry of its own writer in its bucket; a shard row of that key at that version is the same set; an unabsorbed diff whose base no such file holds, or whose composed set's size is not the diff row's trigram count, breaks the format: index_malformed names its signer, the document reads not yet searchable in coverage, never no match, and a host with the text re-enters that version full, as a backfill". The plan row: for "heads and unmerged slots are scanned per document, whose key set or composed diff chain" read "heads, sealed slots and unabsorbed large entries are scanned per document, whose key set or composed diff". The newest row: for "every all row being older than each bucket entry of its key (roll-up's one row)" read "no all row being newer than the newest bucket entry of its key (roll-up's one row)". The reproduce row: for "(the new manifest's absorbed seqs and the files the push replaces name them, the ref's listing there a merge's heads)" read "(the new manifest's absorbed seqs and the files the push replaces name them)", and after the team directory's sentence: "any writer's head is rebuilt alike from that writer's files in the bucket at the push's base and the documents the push carries: an in-ref push's content changes, or for a companion push or a backfill the paths its coverage rows name (1.2.8 of DESIGN-DETAILS.md)". The coverage row gains: "and check each live entry against its path: one whose content ref holds the path removed or at a higher version, with nothing above it in the index, is index_mismatch against its signer, and the host backfills what is missing".
+
+**§11.14, What the server sees, the shape row.** For "rarely with one newer bucket's file rewritten in place (roll-up's step 4)" read "rarely with one newer bucket's shard and manifest rewritten (roll-up's step 4)".
+
+**§11.14, the drop row.** After "padded to the replaced length as erase's rewrite is, with no ERASE or CLOSURE flag": "; where it takes a base from a writer's file it takes the diffs resting on it too, and replaces that writer's head and the bucket's manifest in the same push".
+
+**§11.15, the index entries row.** "Index entries per push | proportional to the changed text where a full entry of the document sits in another of the writer's own files in the bucket (a sealed slot, or a large entry), else the document's whole key set: a writer's first entry of a document in a bucket, and each edit until the head holding it seals; a 1 MiB document per changed chunk of a large file (11.14)".
+
+**§11.17.** D-EVS-46: for "A diff rests only on its document's previous version outside every head in the current bucket, or carries over the base of the writer's own head diff it replaces, and merges keep a base a head names" read "A diff rests only on a full entry of its document in another file of its own writer in its bucket, which that writer keeps while the diff needs it; every push that writes a writer's file replaces that writer's head". Its why gains: "a base in a file another device rewrites cannot be fenced by a push that writes only a head (DESIGN-DETAILS.md section 1)". D-EVS-47: for "a merge's writers' heads included" read "a merge reading no head"; for "and removing any older entry racing pushes left in a newer bucket" read "and moving a version or tombstone above an older entry that racing pushes left in a newer bucket into that bucket's shards". D-EVS-49: after "with coverage": ", built from the content ref as read after the index and sent within 5 min".
+
+**§11.8, I-EVS-11.** For "the push that removes an expired bucket adds its documents to all" read "the push that removes an expired bucket adds each of its documents to all or, for one a newer bucket holds only older entries of, to that bucket's shards". A new invariant after I-EVS-17: "I-EVS-18 every diff in a slot no merge has absorbed has its base, a full entry of its document, in another file of its own writer in its bucket".
+
+**§11.21, the risk row** "A diff's base or a deletion's mask leaves the index before the entries relying on it": its mitigation becomes "11.14's dependency row (own bases, the head rule), merges that read no head, the roll-up's promotion and the companion push's pin; an unabsorbed diff with no base is `index_malformed`; FS-107, FS-108, IndexRollup.tla and details/IndexMerge.tla".
+
+**§22.8, FI-18.** After "since every diff's chain and every tombstone a result needs stays in the committed index": ", a diff's base in a file its own writer keeps (I-EVS-18)". **FI-20.** For "the bucket's files leave the index only in the push that commits all holding their postings" read "the bucket's files leave the index only in the push that commits all, or for a promoted document a newer bucket's shards, holding their postings".
+
+**§22.8, FS-74.** After "one commits, the other gets 409, and its index code merges its delta into the winner's file and retries, losing and duplicating nothing": ", whether both append or one seals the head". **FS-75.** After "a window change applies from the next bucket (§11.14), every document staying searchable": "; a roll-up carrying a tombstone or a version above an older entry in a newer bucket writes it into that bucket's shards with its manifest, a merge of that bucket racing it in both orders, one of the two getting 409; a roll-up signed before its bucket's expiry is index_mismatch at every reproducer".
+
+**§22.8, FS-107.** Replace the row's body: "diff dependency (11.14's dependency, merges and chains rows), every cache discarded before each search, the purge and evacuation run between: D created and edited twice in one unsealed head (each full entry replacing the last), then, the head sealed, edited again (a diff on the sealed slot), small and large (a large entry, then diffs on it); a fresh phone holding only the current index searches an unchanged trigram and each added and removed one; again after a merge absorbs the slot holding the base, the writer keeping that slot through three more seals and reusing it only once no diff rests on it; with each edit by another writer, each writing its own full entry once and then diffs; a merge landing between a diff's build and its commit, and a backfilled full copy of D's version beside the diff: both read, the base still there; the writer's two pushes on one base, one appending a diff and one sealing: one gets 409; a DROP listing the base takes the diff with it and writes the kept head full; a ninth kept slot is not taken and the entry is full; a forged diff whose base no file of its writer holds raises index_malformed and reads not yet searchable until a host with the text re-enters it, never no match; no body is fetched, and every search equals SearchOracle's".
+
+**§22.8, FS-108.** For "searches mask the newer bucket's older entry, and the older bucket's roll-up removes it, rewriting its file in place" read "searches mask the newer bucket's older entry, and the older bucket's roll-up writes the tombstone into the newer bucket's shards, where it masks that entry until that bucket rolls". For "a late companion entry below an indexed version is dropped" read "a late companion entry whose document its content ref holds removed or at a higher version is dropped at the pin, with the tombstone's bucket already rolled up and nothing of the document left in the index".
+
+**§22.8, the model row.** `details/IndexMerge.tla` beside `IndexRollup.tla`: "own bases and the head rule, merges, promotion and the pin, with §11.14's rules as written as failing configurations".
+
+**protocol/INDEX-FORMAT.md** (SEARCH-M10-45 writes it). Entries: after "A diff's base version is below its version, and no key is in both of its sets": "A diff stands only in a slot. Its base is the full entry of its key at its base version in another file of the same writer and bucket: a slot that is not that writer's head, or a large entry; of two, the one in the file with the higher seq." Deltas: "Format 1's writers take every delta against the base itself, so nothing composes two deltas; the rule stands for readers of a later format." Slots and large entries: "A large entry's one entry is full." and, for "`coverage` is strictly ascending by ref_id", "`coverage` ascends by ref_id, then horizon false before true, with at most one row of each a ref." Shards gains `take` and the join as 1.2.4 has them, and the tie order. Small files: "`absorbed` holds a row for each writer with a watermark above 0; a manifest may list no shard." Times: "An entry's time is that of the content push that made its version; its bucket follows the signed time of the index push that carries it."
+
+Nothing server-visible changes: no column, key, object family or proto field (I-18), and §2.8's evs-26 keeps its words but for the shape row's phrase above.
+
+### 1.9 Owner questions
+
+Each is filed under `.stack/questions/`, and the design above is built on its recommendation.
+
+**Where a diff's base lives (`details-1-own-bases.md`).** §11.14 puts a diff's base in a shard or in any writer's sealed slot, which merges rewrite and absorb, and four patches to that have each left a counterexample (B, D, E and G of 1.1). Options: (1) a diff rests only on a full entry in its own writer's other files, which that writer keeps, with the head rule: no cross-device dependency is left, a merge reads no head, and `index_malformed` can no longer fall on an honest writer; it costs one full entry from each writer for each document it edits in a bucket, up to 8 kept slots (128 KiB) a writer a bucket that outlive their absorption, large entries that wait for their writer's next push, and a change to SEARCH-M10-09's and SEARCH-M10-23's drafts; (2) keep shard and sealed bases and take the questions' first options with the further patches the model asks for: no landed code changes, but `IndexMergeWritten-Patched` fails as worded, a DROP in flight and step 4 need rules of their own, each new kind of index push must be proved against every writer's heads again, and the honest-writer alarm stays reachable; (3) no diffs: every edit writes its document's whole key set, 1.9 to 3.5 KiB against about 100 B for the source files measured, some 20 to 30 times the merge traffic of an edited repo. Recommended: 1.
+
+**What a roll-up does about an older entry in a newer bucket (`details-1-promotion.md`).** Options: (1) promotion (R4): the carried version or tombstone moves into the newer bucket's shards and its manifest is replaced; nothing is rewritten in place, no writer's file is touched, and a late older entry is still masked for as long as that bucket lives; it costs that bucket's youngest shard and manifest, and I-EVS-11's last clause and FI-20 gain "or a newer bucket's shards"; (2) question rollup-merge-race's option 1: keep the in-place rewrite and replace the newer bucket's manifest: fewer words change, but the roll-up still deletes from writers' heads and slots, must replace each such writer's head as well (R2), conflicts with every one of those writers in flight, and still removes a base under a newer diff (H of 1.1) unless a further rule is added; (3) merges read older buckets and drop what they supersede (that question's option 2): phones that merge do not hold older buckets' files. Recommended: 1.
+
+**What keeps a late entry below a dropped tombstone out (`details-1-late-entries.md`).** No push can fence a content ref and an index ref together, so no CAS closes C of 1.1. Options: (1) R5: the content pin read after the index, IndexPushLife, and never resending a stored push, with hosts holding the text repairing what a broken client gets through; it rests on evs's 10 min time check and on an expired bucket being at least a window old, and it leaves one residual: a device whose clock ran about a week fast, that stalls that long and sends stored bytes (1.5); no server change; (2) evs bumps a head counter at every roll-up and refuses index pushes built before it, as `index_epoch` does for a CUT: exact with no timing argument, but a new server rule and a new 409 for every writer in flight at each roll-up, in a design that keeps evs blind to the index (owner decision 157; D-EVS-66's "an opaque counter" was accepted once, for erasure); (3) all keeps tombstones (that question's option 3): about 25 B a deleted document for good, phones keeping only the buckets would still need them, and I-EVS-11's "all holds no tombstone" goes. Recommended: 1, with 2 held as the fallback if the review phase wants the residual closed.
+
+**How many shards a merge may rewrite (`details-1-superseded-rows.md`).** §11.14 has a merge drop a document's older row "from the shard holding it", so a merge rewrites every shard that holds an older version of a document it carries, and a roll-up every all shard likewise. For mail that is the youngest shard alone. For an edited repository it is nearly every shard of the bucket at every merge (1.4). This section keeps the rule, since it is the design's and not one of the four counterexamples. Options: (1) keep it, as designed here: one version of a document in a bucket's shards (I-EVS-11), an eraser finds a document in one shard, and the cost of 1.4's third and fourth rows; (2) leave a superseded row where it is, masked by version, and rewrite a shard only when under half its rows are current: a merge then writes the youngest shard and little else, at the price of up to twice the bucket's bytes on every device, an eraser listing every shard that holds a version, and I-EVS-11's bucket clause; it reaches into the erasure's bounds (owner decision 146), which this section does not own. Recommended: 1 now, and 2 measured in the review phase on FS-76's corpus before M10's exit freezes the bytes.
+
+**Small readings (`details-1-small-readings.md`).** Twelve readings that change no D- item, listed there by number: a bucket is expired, for a merge, a roll-up and the lock, at the push's signed time; an absorbed slot or large entry holds nothing but bases; a manifest may exist with no shard and lists only writers with a watermark; coverage rows sort by ref_id then horizon, one of each a ref; an entry's time is its content push's, its bucket its index push's; a merge's tie order at one version; `take`'s search; a merge that changes nothing but watermarks still commits; a push past DirectBytes writes its head; the lock renews at half its term; a companion push that only raises coverage is sent; a writer that cannot count a replaced version's chunks writes no entry for that push. Options: accept all, or correct any by number. Recommended: accept all.
+
+**Existing questions this section answers.**
+
+- `search-m10-07-keep-base-full-copy`: none of its options. Its option 1 is run as `KeepBase = "any"` and fails with the others' first options (E of 1.1). The base moves into its own writer's files (R1), which is its option 2's aim, reached without reading other writers' heads.
+- `search-m10-07-merge-stale-diff`: none of its options. Under R1 and R2 a merge's inputs always compose (I2), so the question has no case left.
+- `search-m10-07-rollup-merge-race`: the fence of its option 1, the newer bucket's manifest, on a different step 4 (R4, the second question above).
+- `search-m10-07-late-journal-tombstone`: its option 1, made exact: the pin is read from evs after the index, in the push's own build, and the push has a life (R5, the third question above).
+- `plan-SEARCH-no-document-pushes` (QD-209), `plan-SEARCH-shrink-claim` (QD-173), `plan-SEARCH-small-readings` #4 and #6 (QD-406, QD-511), `plan-SEARCH-index-format-bytes` (QD-300) and `plan-SEARCH-sync-before-search` (QD-048): stand. QD-173's partition-keeping rewrite loses one of its three callers, the roll-up's step 4. QD-477's slot order and QD-475's paths are used as they are.
 
 ## 2. Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6)
 
