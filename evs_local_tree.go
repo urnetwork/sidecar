@@ -174,6 +174,7 @@ type evsGitCachedTrees struct {
 	cache  *evsGitTreeCache
 }
 
+// source's trees, kept once read to byteCount.
 func newEvsGitCachedTrees(source EvsGitObjectSource, byteCount int64) *evsGitCachedTrees {
 	return &evsGitCachedTrees{source: source, cache: newEvsGitTreeCache(byteCount)}
 }

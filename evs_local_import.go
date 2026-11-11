@@ -147,8 +147,17 @@ type EvsUnfinishedImport struct {
 }
 
 // A test's hook at each of an import's kill points, nil outside tests: an error stops the import there, as a kill
-// would, with what it wrote kept.
+// would, with what it wrote kept. It is given the point's last name, helper_recorded and so on.
 var evsImportKillHook func(point string) error
+
+// The import's kill points (DESIGN-DETAILS 8.6), each a barrier keyed <repo>:<ref> of the ref it moved.
+const (
+	evsImportBarrierHelperRecorded = "evs.local.import.helper_recorded"
+	evsImportBarrierHelperPushed   = "evs.local.import.helper_pushed"
+	evsImportBarrierHelperDone     = "evs.local.import.helper_done"
+	evsImportBarrierStepSent       = "evs.local.import.step_sent"
+	evsImportBarrierCleanDeleted   = "evs.local.import.clean_deleted"
+)
 
 // Registers the sync engine imports run through (EVS1-M2-35's); nil removes it.
 func (self *EvsMounts) SetSync(sync EvsGitSync) {
@@ -404,12 +413,16 @@ func (self *evsImporter) run(ctx context.Context, name []byte, tip EvsGitOid, cu
 		if err := self.publish(ctx, name, refId, cut); err != nil {
 			return err
 		}
-		point := "step_sent"
-		if under != 0 || depth != 0 {
-			point = "helper_pushed"
-		}
-		if err := self.kill(point, name); err != nil {
-			return err
+		if under == 0 && depth == 0 {
+			testHookBarrier(evsImportBarrierStepSent, self.barrierKey(refId))
+			if err := self.killed("step_sent"); err != nil {
+				return err
+			}
+		} else {
+			testHookBarrier(evsImportBarrierHelperPushed, self.barrierKey(refId))
+			if err := self.killed("helper_pushed"); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -569,6 +582,7 @@ func (self *evsImporter) split(ctx context.Context, name []byte, merge EvsGitOid
 			return fmt.Errorf("%w: commit %x needs helpers past ImportHelperDepth", ErrEvsImportStepBound, merge[:])
 		}
 		helper := self.helperFor(merge, parent)
+		recorded := false
 		if helper == nil {
 			if self.settings.ImportHelperCount <= len(self.liveHelpers()) {
 				return fmt.Errorf("%w: commit %x needs helpers past ImportHelperCount", ErrEvsImportStepBound, merge[:])
@@ -581,16 +595,21 @@ func (self *evsImporter) split(ctx context.Context, name []byte, merge EvsGitOid
 			if err := self.write(); err != nil {
 				return err
 			}
-			if err := self.kill("helper_recorded", name); err != nil {
+			recorded = true
+		}
+		helperName := EvsImportHelperRefName(self.sidecarId, self.importId, helper.N)
+		helperId, err := self.repo.resolveRefId(ctx, helperName, nil)
+		if err != nil {
+			return err
+		}
+		if recorded {
+			// the record holds the helper durably before anything is sent for it
+			testHookBarrier(evsImportBarrierHelperRecorded, self.barrierKey(helperId))
+			if err := self.killed("helper_recorded"); err != nil {
 				return err
 			}
 		}
-		helperName := EvsImportHelperRefName(self.sidecarId, self.importId, helper.N)
 		if helper.State == EvsImportHelperOpen {
-			helperId, err := self.repo.resolveRefId(ctx, helperName, nil)
-			if err != nil {
-				return err
-			}
 			state, err := self.sync.Ref(ctx, helperId)
 			if err != nil {
 				return err
@@ -613,17 +632,14 @@ func (self *evsImporter) split(ctx context.Context, name []byte, merge EvsGitOid
 			if err := self.write(); err != nil {
 				return err
 			}
-			if err := self.kill("helper_done", name); err != nil {
+			testHookBarrier(evsImportBarrierHelperDone, self.barrierKey(helperId))
+			if err := self.killed("helper_done"); err != nil {
 				return err
 			}
 		}
 		if helper.State == EvsImportHelperDone {
 			// a done helper's tip is its parent: the step no longer holds what it reaches, unless the helper was
 			// deleted, which the next pass of this loop finds oversized again and numbers anew
-			helperId, err := self.repo.resolveRefId(ctx, helperName, nil)
-			if err != nil {
-				return err
-			}
 			state, err := self.sync.Ref(ctx, helperId)
 			if err != nil {
 				return err
@@ -714,7 +730,8 @@ func (self *evsImporter) clean(ctx context.Context) error {
 				return err
 			}
 		}
-		if err := self.kill("clean_deleted", helperName); err != nil {
+		testHookBarrier(evsImportBarrierCleanDeleted, self.barrierKey(helperId))
+		if err := self.killed("clean_deleted"); err != nil {
 			return err
 		}
 		helper.State = EvsImportHelperDeleted
@@ -745,13 +762,17 @@ func (self *evsImporter) finish(ctx context.Context) error {
 	return self.store.Remove(name)
 }
 
-// A kill point: the harness's barrier, and the test's hook.
-func (self *evsImporter) kill(point string, name []byte) error {
-	testHookBarrier("evs.local.import."+point, evsUrlId(self.repo.repoId)+"/"+string(name))
+// A kill point's test hook, past its barrier: nil outside tests.
+func (self *evsImporter) killed(point string) error {
 	if evsImportKillHook != nil {
 		return evsImportKillHook(point)
 	}
 	return nil
+}
+
+// A kill point's barrier key, <repo>:<ref>, as evsservice's barriers key a ref.
+func (self *evsImporter) barrierKey(refId Id) string {
+	return EvsKeyId(self.repo.repoId) + ":" + EvsKeyId(refId)
 }
 
 // The record's name in the evs component's store.
