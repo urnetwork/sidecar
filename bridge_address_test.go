@@ -74,7 +74,7 @@ func testBridgeAliasStatement(net *testConfigNet, n uint64, prefix *bridge.Bridg
 	header := net.header()
 	body := &bridge.BridgeAliasBody{ShareId: testConfigId("share").Bytes(), TargetIndex: uint32(n), AliasPrefix: prefix, Host: testConfigId("far host").Bytes()}
 	statement := &BridgeLogStatement{
-		SignedType: bridge.SignedType_SIGNED_BRIDGE_ALIAS, N: n, TimeMs: testConfigStartMs, Signer: Id{0x51},
+		SignedType: bridge.SignedType_SIGNED_BRIDGE_ALIAS, N: n, TimeMs: testConfigStartMs, Signer: Id{0x51}, SignerAdmin: true,
 		Seal:       NewConfigSealContext(bridge.SignedType_SIGNED_BRIDGE_ALIAS, header),
 		SealedBody: net.bridgeSeal(bridge.SignedType_SIGNED_BRIDGE_ALIAS, header, body, 1),
 	}

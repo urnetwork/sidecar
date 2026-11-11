@@ -331,11 +331,12 @@ func TestBridgeRuleIdVectors(t *testing.T) {
 }
 
 // A withdrawn id is refused before a fold at id level, at every reader. After a fold the keyless verifiers hold no
-// withdrawal, so the log takes the filing, and a full reader's ledger over the head's history voids it. A rule under a
-// standing grant is dropped once its last filing's header could no longer be replayed, and its id is then free.
+// withdrawal, so the log takes the filing, and a full reader's ledger, opened over the head's ledger rows, voids it. A
+// rule under a standing grant is dropped once its last filing's header could no longer be replayed, and its id is then
+// free.
 func TestAWithdrawnBridgeRuleIdIsRefusedBeforeAndAfterAFold(t *testing.T) {
-	net := newTestConfigNet(t)
-	_, laptop, _ := testBridgeCast(net)
+	net := newTestBridgeLedgerNet(t)
+	_, laptop, _ := testBridgeCast(net.testConfigNet)
 	_, otherLaptop := net.consentedMember("other")
 	route, withdraw := bridge.SignedType_SIGNED_BRIDGE_ROUTE, bridge.SignedType_SIGNED_BRIDGE_WITHDRAW
 	reset := bridge.BridgeWithdrawMode_BRIDGE_WITHDRAW_MODE_RESET
@@ -360,34 +361,28 @@ func TestAWithdrawnBridgeRuleIdIsRefusedBeforeAndAfterAFold(t *testing.T) {
 		t.Fatalf("the other signer's rule: %+v", rule)
 	}
 
-	history := net.log.State().Bridge()
-	net.fold(net.owner, net.n, 2)
+	net.foldLedger(net.n, nil)
 	if net.log.State().Bridge().Len() != 0 {
 		t.Fatal("a base's rows carry no bridge statement, so the fold starts empty")
 	}
 	refiled := net.mustPost(laptop, route, net.bridgeRoute(laptop, ruleId, body))
 	net.everyReaderAgrees()
-	state := net.log.State()
-	reader := &BridgeLedgerReader{State: state, RepoKeyAt: testConfigSealKeyAt(testConfigSealKey(1))}
-	ledger := JoinBridgeLogs(history, state.Bridge()).Open(reader)
+	ledger := net.ledgerOf(net.log)
 	testBridgeDisposition(t, ledger, refiled.Pin.GetVersion(), BridgeDispositionVoid)
-	if rule := ledger.Rule(ruleId); rule == nil || rule.Withdrawn == nil || rule.Active() {
-		t.Fatalf("the ledger's rule after the fold: %+v", rule)
+	if rule := ledger.Rule(ruleId); rule == nil || rule.Withdrawn == nil || rule.Active() || rule.First != nil {
+		t.Fatalf("the ledger's rule after the fold, taken from the rows: %+v", rule)
 	}
 	if rule := ledger.Rule(otherId); rule == nil || !rule.Active() || !rule.Standing {
 		t.Fatalf("the other signer's rule in the ledger: %+v", rule)
 	}
 
 	// 8 days on, the withdrawn filing's header has expired everywhere: the fold drops the id, and a filing of it is new
-	history = JoinBridgeLogs(history, state.Bridge())
-	net.fold(net.owner, net.n, 3)
+	net.foldLedger(net.n, nil)
 	net.timeMs += 8 * testBridgeDayMs
 	again := net.mustPost(laptop, route, net.bridgeRoute(laptop, ruleId, body))
-	state = net.log.State()
-	reader = &BridgeLedgerReader{State: state, RepoKeyAt: testConfigSealKeyAt(testConfigSealKey(1))}
-	ledger = JoinBridgeLogs(history, state.Bridge()).Open(reader)
+	ledger = net.ledgerOf(net.log)
 	testBridgeDisposition(t, ledger, again.Pin.GetVersion(), BridgeDispositionActive)
-	if rule := ledger.Rule(ruleId); rule == nil || !rule.Active() || rule.First.N != again.Pin.GetVersion() {
+	if rule := ledger.Rule(ruleId); rule == nil || !rule.Active() || rule.FirstAt != again.Pin.GetVersion() {
 		t.Fatalf("the rule after its withdrawn id was dropped: %+v", rule)
 	}
 }
@@ -409,8 +404,18 @@ func (self testBridgeApproval) wire(t *testing.T) *bridge.BridgeApproval {
 	return &bridge.BridgeApproval{CanonicalAction: encoded}
 }
 
+// A judge with generation 1's key and whatever else is passed, whose approvals verify as the test's say.
+func testBridgeTestJudge(keys ...*EvsRepoKey) *BridgeBodyJudge {
+	return &BridgeBodyJudge{RepoKeyAt: testConfigSealKeyAt(append(keys, testConfigSealKey(1))...), checkApproval: testBridgeApprovalCheck}
+}
+
+// A judge with generation 1's key and whatever else is passed, verifying approvals as the state does.
+func testBridgeJudge(keys ...*EvsRepoKey) *BridgeBodyJudge {
+	return &BridgeBodyJudge{RepoKeyAt: testConfigSealKeyAt(append(keys, testConfigSealKey(1))...)}
+}
+
 // Reads a test approval back as verified facts.
-func testBridgeApprovalCheck(statement *BridgeLogStatement, body proto.Message, approval *bridge.BridgeApproval) (*BridgeApprovalFacts, error) {
+func testBridgeApprovalCheck(before *ConfigState, statement *BridgeLogStatement, body proto.Message, approval *bridge.BridgeApproval) (*BridgeApprovalFacts, error) {
 	said := testBridgeApproval{}
 	if err := json.Unmarshal(approval.GetCanonicalAction(), &said); err != nil {
 		return nil, err
@@ -427,6 +432,7 @@ func testBridgeApprovalCheck(statement *BridgeLogStatement, body proto.Message, 
 func TestADecisionsBridgeRulesStopAtItsUses(t *testing.T) {
 	net := newTestConfigNet(t)
 	_, laptop, _ := testBridgeCast(net)
+	net.log.settings.BridgeBodyJudge = testBridgeTestJudge()
 	route := bridge.SignedType_SIGNED_BRIDGE_ROUTE
 	notAfter := net.timeMs + 2*testBridgeDayMs
 	approved := func(label string, a byte) (*bridge.BridgeRouteBody, []byte) {
@@ -446,10 +452,7 @@ func TestADecisionsBridgeRulesStopAtItsUses(t *testing.T) {
 	strayBody, _ := approved("stray", 4)
 	stray := net.mustPost(laptop, route, net.bridgeRoute(laptop, testBridgeRuleId("not the approval's"), strayBody))
 
-	open := func() *BridgeLedger {
-		state := net.log.State()
-		return state.Bridge().Open(&BridgeLedgerReader{State: state, RepoKeyAt: testConfigSealKeyAt(testConfigSealKey(1)), Approvals: testBridgeApprovalCheck})
-	}
+	open := net.bridgeLedger
 	ledger := open()
 	testBridgeDisposition(t, ledger, first.Pin.GetVersion(), BridgeDispositionActive)
 	testBridgeDisposition(t, ledger, retry.Pin.GetVersion(), BridgeDispositionHeld)
@@ -463,10 +466,13 @@ func TestADecisionsBridgeRulesStopAtItsUses(t *testing.T) {
 		t.Fatalf("the third rule holds its id and nothing else: %+v", rule)
 	}
 
-	// with no check of its own and no spend check installed, the state's check verifies nothing, and every approved
-	// rule is void: an unbuilt check fails closed
-	unbuilt := net.bridgeLedger()
-	testBridgeDisposition(t, unbuilt, first.Pin.GetVersion(), BridgeDispositionVoid)
+	// a reader whose log installed no judge holds no verdict, so every approved rule waits: unjudged opens nothing
+	unjudged := net.newReader().State()
+	unjudgedLedger := unjudged.Bridge().Open(&BridgeLedgerReader{State: unjudged, RepoKeyAt: testConfigSealKeyAt(testConfigSealKey(1))})
+	testBridgeDisposition(t, unjudgedLedger, first.Pin.GetVersion(), BridgeDispositionPending)
+	if rule := unjudgedLedger.Rule(firstId); rule == nil || rule.Active() || !rule.Pending {
+		t.Fatalf("an unjudged rule: %+v", rule)
+	}
 
 	// withdrawn, the id stays with its approval until the decision's not_after and its skew, then leaves the fold
 	net.mustPost(laptop, bridge.SignedType_SIGNED_BRIDGE_WITHDRAW, net.bridgeWithdraw(firstId, bridge.BridgeWithdrawMode_BRIDGE_WITHDRAW_MODE_RESET))
@@ -483,9 +489,7 @@ func TestADecisionsBridgeRulesStopAtItsUses(t *testing.T) {
 		timeMs int64
 		kept   bool
 	}{{timeMs: notAfter + aclDecisionSkewMs, kept: true}, {timeMs: notAfter + aclDecisionSkewMs + 1, kept: false}} {
-		late := state.Bridge().Open(&BridgeLedgerReader{
-			State: state, RepoKeyAt: testConfigSealKeyAt(testConfigSealKey(1)), Approvals: testBridgeApprovalCheck, TimeMs: c.timeMs,
-		})
+		late := state.Bridge().Open(&BridgeLedgerReader{State: state, RepoKeyAt: testConfigSealKeyAt(testConfigSealKey(1)), TimeMs: c.timeMs})
 		found := false
 		for _, rule := range late.Rules(route) {
 			found = found || bytes.Equal(rule.RuleId, firstId)
@@ -507,7 +511,7 @@ func (self testBridgeSpendCheck) Spendable(state *AclState, decision *StoredAppr
 }
 
 // A bridge_expose approval for target over cidrs, with one device decision by approver for requester.
-func testBridgeExposeApproval(t *testing.T, label string, target Id, cidrs []string, requester Id, approver Id, notAfterMs int64) (*bridge.BridgeApproval, []byte) {
+func testBridgeExposeApproval(t testing.TB, label string, target Id, cidrs []string, requester Id, approver Id, notAfterMs int64) (*bridge.BridgeApproval, []byte) {
 	action := testConfigMarshal(t, &protocol.CanonicalAction{
 		Kind: uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EXPOSE), Version: 1, TargetSidecarId: target.Bytes(), Cidrs: cidrs,
 	})
@@ -524,15 +528,27 @@ func testBridgeExposeApproval(t *testing.T, label string, target Id, cidrs []str
 	return &bridge.BridgeApproval{CanonicalAction: action, Decisions: []*bridge.Signed{signed}}, ruleId[:]
 }
 
-// CheckBridgeApproval on real decisions, at the state each entry landed on: a route under the id its approval fixes
-// and inside its cidrs is in force; one under another id, outside the cidrs, signed by a sidecar the decision does not
-// name, under an action for another target, or filed past the decision's not_after is void; and so is every one until
-// a spend check is installed.
+// CheckBridgeApproval on real decisions, judged where each entry lands: a route under the id its approval fixes and
+// inside its cidrs is in force; one under another id, outside the cidrs, signed by a sidecar the decision does not
+// name, under an action for another target, or filed past the decision's not_after is void; and so is every one filed
+// while no spend check is installed.
 func TestABridgeApprovalVerifiesAsAGrantActivateDoes(t *testing.T) {
 	net := newTestConfigNet(t)
 	member, laptop, desktop := testBridgeCast(net)
+	net.log.settings.BridgeBodyJudge = testBridgeJudge()
 	route := bridge.SignedType_SIGNED_BRIDGE_ROUTE
 	notAfter := net.timeMs + testBridgeDayMs
+
+	// no spend check is installed yet, so the judge refuses every decision where its entry lands: an unbuilt check
+	// fails closed
+	unbuiltApproval, unbuiltId := testBridgeExposeApproval(t, "unbuilt", laptop.sidecarId, []string{"192.168.0.0/16"}, laptop.sidecarId, member, notAfter)
+	unbuiltBody := testBridgeSubnet(testBridgePrefix(192, 168, 6, 0, 24), "site")
+	unbuiltBody.Approval = unbuiltApproval
+	unbuilt := net.mustPost(laptop, route, net.bridgeRoute(laptop, unbuiltId, unbuiltBody))
+	if entry := testBridgeDisposition(t, net.bridgeLedger(), unbuilt.Pin.GetVersion(), BridgeDispositionVoid); !errors.Is(entry.Reason, ErrAclSpendCheckUnbuilt) {
+		t.Fatalf("the unbuilt spend check: %v", entry.Reason)
+	}
+	net.log.settings.AclSpendCheck = testBridgeSpendCheck{}
 	approval, ruleId := testBridgeExposeApproval(t, "first", laptop.sidecarId, []string{"192.168.0.0/16"}, laptop.sidecarId, member, notAfter)
 	withApproval := func(prefix *bridge.BridgeIpv4Prefix) *bridge.BridgeRouteBody {
 		body := testBridgeSubnet(prefix, "site")
@@ -559,10 +575,6 @@ func TestABridgeApprovalVerifiesAsAGrantActivateDoes(t *testing.T) {
 	goodBody.Approval = goodApproval
 	good := net.mustPost(laptop, route, net.bridgeRoute(laptop, goodId, goodBody))
 
-	unbuilt := net.bridgeLedger()
-	testBridgeDisposition(t, unbuilt, good.Pin.GetVersion(), BridgeDispositionVoid)
-
-	net.log.settings.AclSpendCheck = testBridgeSpendCheck{}
 	ledger := net.bridgeLedger()
 	testBridgeDisposition(t, ledger, outside.Pin.GetVersion(), BridgeDispositionVoid)
 	testBridgeDisposition(t, ledger, otherId.Pin.GetVersion(), BridgeDispositionVoid)
@@ -584,7 +596,7 @@ func TestABridgeApprovalVerifiesAsAGrantActivateDoes(t *testing.T) {
 
 // One device decision by approver for requester under label's approval_id: it approves the action stored as decided,
 // with uses.
-func testBridgeDecision(t *testing.T, label string, decided []byte, uses uint32, requester Id, approver Id, notAfterMs int64) *bridge.Signed {
+func testBridgeDecision(t testing.TB, label string, decided []byte, uses uint32, requester Id, approver Id, notAfterMs int64) *bridge.Signed {
 	approvalId := testConfigId("expose approval " + label)
 	payload, requestSha := sha256.Sum256(decided), sha256.Sum256([]byte("expose request"))
 	decision := &protocol.ApprovalDecision{
@@ -597,14 +609,14 @@ func testBridgeDecision(t *testing.T, label string, decided []byte, uses uint32,
 }
 
 // A bridge_expose use of target over cidrs, as stored.
-func testBridgeExposeUse(t *testing.T, target Id, cidrs ...string) []byte {
+func testBridgeExposeUse(t testing.TB, target Id, cidrs ...string) []byte {
 	return testConfigMarshal(t, &protocol.CanonicalAction{
 		Kind: uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EXPOSE), Version: 1, TargetSidecarId: target.Bytes(), Cidrs: cidrs,
 	})
 }
 
 // The template of a multi-use bridge_expose for target, as stored: scope set, every use's cidrs its own.
-func testBridgeExposeTemplate(t *testing.T, target Id) []byte {
+func testBridgeExposeTemplate(t testing.TB, target Id) []byte {
 	return testConfigMarshal(t, &protocol.CanonicalAction{
 		Kind: uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EXPOSE), Version: 1, Scope: true, TargetSidecarId: target.Bytes(),
 	})
@@ -631,6 +643,7 @@ func TestAMultiUseBridgeDecisionFilesUpToItsUses(t *testing.T) {
 	net := newTestConfigNet(t)
 	member, laptop, _ := testBridgeCast(net)
 	net.log.settings.AclSpendCheck = testBridgeSpendCheck{}
+	net.log.settings.BridgeBodyJudge = testBridgeJudge()
 	route := bridge.SignedType_SIGNED_BRIDGE_ROUTE
 	notAfter := net.timeMs + testBridgeDayMs
 	template := testBridgeExposeTemplate(t, laptop.sidecarId)
@@ -678,6 +691,7 @@ func TestABridgeApprovalHoldsAUseToItsTemplate(t *testing.T) {
 	net := newTestConfigNet(t)
 	member, laptop, desktop := testBridgeCast(net)
 	net.log.settings.AclSpendCheck = testBridgeSpendCheck{}
+	net.log.settings.BridgeBodyJudge = testBridgeJudge()
 	route := bridge.SignedType_SIGNED_BRIDGE_ROUTE
 	notAfter := net.timeMs + testBridgeDayMs
 	template := testBridgeExposeTemplate(t, laptop.sidecarId)
@@ -1122,7 +1136,7 @@ func TestABridgeCanaryAppearsOnlyInsideSealedBodies(t *testing.T) {
 		Ports: []*bridge.BridgePortRange{{First: canaryPort, Last: canaryPort}}, Target: canaryTarget, TargetPort: canaryPort,
 	}
 	net.mustPost(desktop, bridge.SignedType_SIGNED_BRIDGE_MAP, net.bridgeMap(desktop, mapId, 0, mapBody))
-	net.mustPost(laptop, bridge.SignedType_SIGNED_BRIDGE_ALIAS, net.bridgeAlias(&bridge.BridgeAliasBody{
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_BRIDGE_ALIAS, net.bridgeAlias(&bridge.BridgeAliasBody{
 		ShareId: testConfigId("canary share").Bytes(), AliasPrefix: testBridgePrefix(100, 93, 201, 0, 24), Host: testConfigId("canary host").Bytes(),
 	}))
 	canaryExit := testConfigId("canary exit")
@@ -1186,14 +1200,19 @@ func TestABridgeCanaryAppearsOnlyInsideSealedBodies(t *testing.T) {
 }
 
 // Aliases and exposed prefixes hold the upper /17 apart: an alias over another, one in the lower /17 or wider than
-// /17, and a second for one target of a share are void.
+// /17, and a second for one target of a share are void; and so is one a device filed that was no admin's where it
+// landed (DESIGN-DETAILS 12.2.3), beside the admin's that holds.
 func TestBridgeAliasesHoldTheUpperHalfApart(t *testing.T) {
 	net := newTestConfigNet(t)
 	_, laptop, _ := testBridgeCast(net)
-	alias := func(target uint32, prefix *bridge.BridgeIpv4Prefix) uint64 {
+	aliasBy := func(signer testConfigDevice, target uint32, prefix *bridge.BridgeIpv4Prefix) uint64 {
 		body := &bridge.BridgeAliasBody{ShareId: testConfigId("share").Bytes(), TargetIndex: target, AliasPrefix: prefix, Host: testConfigId("far host").Bytes()}
-		return net.mustPost(laptop, bridge.SignedType_SIGNED_BRIDGE_ALIAS, net.bridgeAlias(body)).Pin.GetVersion()
+		return net.mustPost(signer, bridge.SignedType_SIGNED_BRIDGE_ALIAS, net.bridgeAlias(body)).Pin.GetVersion()
 	}
+	alias := func(target uint32, prefix *bridge.BridgeIpv4Prefix) uint64 {
+		return aliasBy(net.owner, target, prefix)
+	}
+	byMember := aliasBy(laptop, 5, testBridgePrefix(100, 80, 131, 0, 24))
 	first := alias(0, testBridgePrefix(100, 80, 128, 0, 24))
 	over := alias(1, testBridgePrefix(100, 80, 128, 0, 23))
 	again := alias(0, testBridgePrefix(100, 80, 130, 0, 24))
@@ -1202,8 +1221,8 @@ func TestBridgeAliasesHoldTheUpperHalfApart(t *testing.T) {
 	second := alias(4, testBridgePrefix(100, 80, 129, 0, 24))
 	ledger := net.bridgeLedger()
 	for n, want := range map[uint64]BridgeDisposition{
-		first: BridgeDispositionActive, over: BridgeDispositionVoid, again: BridgeDispositionVoid, lower: BridgeDispositionVoid,
-		wide: BridgeDispositionVoid, second: BridgeDispositionActive,
+		byMember: BridgeDispositionVoid, first: BridgeDispositionActive, over: BridgeDispositionVoid, again: BridgeDispositionVoid,
+		lower: BridgeDispositionVoid, wide: BridgeDispositionVoid, second: BridgeDispositionActive,
 	} {
 		testBridgeDisposition(t, ledger, n, want)
 	}
