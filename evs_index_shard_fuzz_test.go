@@ -116,7 +116,7 @@ func FuzzIndexSmallFile(f *testing.F) {
 			func() (proto.Message, error) { return indexDecodeLock(file) },
 			func() (proto.Message, error) { return indexDecodeManifest(file, false) },
 			func() (proto.Message, error) { return indexDecodeManifest(file, true) },
-			func() (proto.Message, error) { return indexDecodeErasureSet(file) },
+			func() (proto.Message, error) { return indexDecodeErasureSet(file, DefaultIndexFormatSettings()) },
 		}
 		for _, decode := range decoders {
 			message, err := decode()

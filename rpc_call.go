@@ -82,7 +82,7 @@ func SubprotocolErrorCode(err error) (protocol.ErrorCode, bool) {
 }
 
 // One call's options. A SEARCH call keeps its own rules whatever these say (rpc_search.go): its
-// timeout_ms is SearchTimeout, its wait ends there or at ctx, and it sends no Cancel.
+// timeout_ms is Search.Timeout of its settings, its wait ends there or at ctx, and it sends no Cancel.
 type CallOptions struct {
 	// The call's deadline, sent as timeout_ms: DefaultCallTimeout when zero, at most MaxCallTimeout, and
 	// cut to ctx's deadline. A larger one is refused.
@@ -246,10 +246,10 @@ func (self *Subprotocol) Call(ctx context.Context, clientId Id, messageType prot
 	search := messageType == protocol.MessageType_SEARCH
 	if search {
 		// one envelope of one size, and one timeout_ms, whatever the caller asks (rpc_search.go)
-		if len(body) != SearchRequestByteCount {
+		if len(body) != self.settings.Search.RequestByteCount {
 			return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "a SEARCH body of another size"}
 		}
-		timeout = SearchTimeout
+		timeout = self.settings.Search.Timeout
 	}
 	if timeout < 0 || MaxCallTimeout < timeout {
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "timeout past the protocol's maximum"}
@@ -321,7 +321,7 @@ func (self *Subprotocol) callOnce(
 	search := messageType == protocol.MessageType_SEARCH
 	if search {
 		// whatever ctx says, so the envelope has one length (§6.5)
-		timeoutMs = uint32(SearchTimeout / time.Millisecond)
+		timeoutMs = uint32(self.settings.Search.Timeout / time.Millisecond)
 	}
 	envelopes, err := chunkBody(&protocol.Envelope{
 		Version:   WireVersionMajor,
@@ -375,7 +375,7 @@ func (self *Subprotocol) callOnce(
 		return nil, err
 	}
 	if search {
-		return searchResponseBody(response)
+		return searchResponseBody(response, &self.settings.Search)
 	}
 	switch protocol.MessageType(response.envelope.Type) {
 	case messageType + 1:

@@ -224,6 +224,8 @@ func defaultCheckSettings() *checkSettings {
 		generatedFileTests: map[string]string{
 			// mail_operators.yml's list as Go (plan-MAIL-small-readings#18)
 			"mail_operators_gen.go": "TestMailOperatorsGenIsCurrent",
+			// HTML's named character references as Go, from testdata/index/conformance/entities.json (DESIGN-DETAILS 11.2.6)
+			"evs_index_extract_entities.go": "TestIndexReferenceTableIsCurrent",
 		},
 		wallClockExceptions: map[string]wallClockException{
 			"id.go time.Now": {

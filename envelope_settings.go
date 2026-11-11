@@ -104,6 +104,9 @@ type SidecarProtocolSettings struct {
 	// How often a client resyncs its topics, so correctness never rests on a hint's delivery: 1 h
 	// (§6.8).
 	SyncRefetchInterval time.Duration
+	// SEARCH's wire values, which its envelope rules and remote search's builders and parsers read here
+	// (envelope_search_settings.go). A value, so these settings compare.
+	Search SearchWireSettings
 }
 
 // The one source of §6.6's defaults, the desktop's. A fresh value each call, as DefaultSidecarSettings's
@@ -142,6 +145,7 @@ func DefaultSidecarProtocolSettings() *SidecarProtocolSettings {
 		HeadCheckUnwitnessedInterval:     10 * time.Minute,
 		WakeInterval:                     1 * time.Hour,
 		SyncRefetchInterval:              1 * time.Hour,
+		Search:                           *DefaultSearchWireSettings(),
 	}
 }
 
@@ -168,6 +172,9 @@ func (self *SidecarProtocolSettings) validate() error {
 	}
 	if MaxReassemblyBodyByteCount < self.ReassemblyMaxBodyByteCount {
 		return fmt.Errorf("%w: ProtocolSettings.ReassemblyMaxBodyByteCount is past the protocol's maximum", errInvalidSettings)
+	}
+	if self.Search.RequestByteCount <= 0 || self.Search.StepByteCount <= 0 || self.Search.MaxStepCount <= 0 {
+		return fmt.Errorf("%w: ProtocolSettings.Search is unset", errInvalidSettings)
 	}
 	return nil
 }

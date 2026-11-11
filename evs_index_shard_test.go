@@ -1163,11 +1163,11 @@ func TestSmallFilesAreCanonical(t *testing.T) {
 	erasureSet, err := indexEncodeErasureSet(&protocol.IndexErasureSet{ListedSince: 4, Erasures: []*protocol.IndexErasure{
 		{ErasureId: writerB, EraserSidecarId: writerA, Epoch: 5, CutMs: 1800000000000, Docs: []*protocol.IndexErased{{DocKey: writerB, Version: 3}, {DocKey: writerA, Version: 1}}},
 		{ErasureId: writerA, EraserSidecarId: writerA, Epoch: 4},
-	}})
+	}}, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded, err := indexDecodeErasureSet(erasureSet); err != nil || !bytes.Equal(decoded.Erasures[0].ErasureId, writerA) || !bytes.Equal(decoded.Erasures[1].Docs[0].DocKey, writerA) {
+	if decoded, err := indexDecodeErasureSet(erasureSet, DefaultIndexFormatSettings()); err != nil || !bytes.Equal(decoded.Erasures[0].ErasureId, writerA) || !bytes.Equal(decoded.Erasures[1].Docs[0].DocKey, writerA) {
 		t.Errorf("an erasure set: %v", err)
 	}
 	lock, err := indexEncodeLock(&protocol.IndexLock{HolderSidecarId: writerA, BucketStartDay: 20310, UntilMs: 1800000000000})
@@ -1254,13 +1254,13 @@ func TestSmallFilesAreCanonical(t *testing.T) {
 		"erasures out of order": func() error {
 			_, err := indexDecodeErasureSet(raw(&protocol.IndexErasureSet{Erasures: []*protocol.IndexErasure{
 				{ErasureId: writerB, EraserSidecarId: writerA}, {ErasureId: writerA, EraserSidecarId: writerA},
-			}}))
+			}}), DefaultIndexFormatSettings())
 			return err
 		},
 		"erased documents out of order": func() error {
 			_, err := indexDecodeErasureSet(raw(&protocol.IndexErasureSet{Erasures: []*protocol.IndexErasure{
 				{ErasureId: writerA, EraserSidecarId: writerA, Docs: []*protocol.IndexErased{{DocKey: writerB}, {DocKey: writerA}}},
-			}}))
+			}}), DefaultIndexFormatSettings())
 			return err
 		},
 		"an erasure set past 16,208 B": func() error {
@@ -1268,7 +1268,7 @@ func TestSmallFilesAreCanonical(t *testing.T) {
 			for index := range 1000 {
 				docs = append(docs, &protocol.IndexErased{DocKey: testIndexIdBytes("erased", index), Version: 1})
 			}
-			_, err := indexEncodeErasureSet(&protocol.IndexErasureSet{Erasures: []*protocol.IndexErasure{{ErasureId: writerA, EraserSidecarId: writerA, Docs: docs}}})
+			_, err := indexEncodeErasureSet(&protocol.IndexErasureSet{Erasures: []*protocol.IndexErasure{{ErasureId: writerA, EraserSidecarId: writerA, Docs: docs}}}, DefaultIndexFormatSettings())
 			return err
 		},
 	}
@@ -1293,11 +1293,11 @@ func TestValidateFileByPath(t *testing.T) {
 	slotPath, _ := paths.slot(20340, writer, 0)
 	largePath, _ := paths.largeEntry(20340, writer, 7)
 	large := &indexSlot{header: testSlotHeader(indexFileLargeEntry), entries: []*indexEntry{testLargeEntry()}}
-	largeFile, err := indexEncodeSlot(large, false)
+	largeFile, err := indexEncodeSlot(large, false, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
-	slotFile, err := indexEncodeSlot(testSlotOfLength(t, 3000), false)
+	slotFile, err := indexEncodeSlot(testSlotOfLength(t, 3000), false, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1326,10 +1326,10 @@ func TestValidateFileByPath(t *testing.T) {
 	}
 	for _, c := range valid {
 		sum := sha256.Sum256(c.file)
-		if _, err := indexValidateFile(parse(c.path), indexBytesFrames(c.file), sum[:]); err != nil {
+		if _, err := indexValidateFile(parse(c.path), indexBytesFrames(c.file), sum[:], DefaultIndexFormatSettings()); err != nil {
 			t.Errorf("%s: %v", c.path, err)
 		}
-		if _, err := indexValidateFile(parse(c.path), indexBytesFrames(c.file), make([]byte, sha256.Size)); !errors.Is(err, errIndexMalformed) {
+		if _, err := indexValidateFile(parse(c.path), indexBytesFrames(c.file), make([]byte, sha256.Size), DefaultIndexFormatSettings()); !errors.Is(err, errIndexMalformed) {
 			t.Errorf("%s under another hash: %v", c.path, err)
 		}
 	}
@@ -1350,7 +1350,7 @@ func TestValidateFileByPath(t *testing.T) {
 	}
 	for _, c := range misplaced {
 		sum := sha256.Sum256(c.file)
-		if _, err := indexValidateFile(parse(c.path), indexBytesFrames(c.file), sum[:]); !errors.Is(err, errIndexMalformed) {
+		if _, err := indexValidateFile(parse(c.path), indexBytesFrames(c.file), sum[:], DefaultIndexFormatSettings()); !errors.Is(err, errIndexMalformed) {
 			t.Errorf("%s held another file: %v", c.path, err)
 		}
 	}
@@ -1358,12 +1358,12 @@ func TestValidateFileByPath(t *testing.T) {
 	raw.header.Format = 2
 	newer := raw.assemble(t)
 	sum := sha256.Sum256(newer)
-	if _, err := indexValidateFile(parse(paths.bucketShard(20340, 0)), indexBytesFrames(newer), sum[:]); !errors.Is(err, errIndexNewerFormat) {
+	if _, err := indexValidateFile(parse(paths.bucketShard(20340, 0)), indexBytesFrames(newer), sum[:], DefaultIndexFormatSettings()); !errors.Is(err, errIndexNewerFormat) {
 		t.Errorf("a newer format: %v", err)
 	}
-	tooLong := make([]byte, indexSlotMaxByteCount+1)
+	tooLong := make([]byte, DefaultIndexFormatSettings().SlotMaxByteCount+1)
 	sum = sha256.Sum256(tooLong)
-	if _, err := indexValidateFile(parse(slotPath), indexBytesFrames(tooLong), sum[:]); !errors.Is(err, errIndexMalformed) {
+	if _, err := indexValidateFile(parse(slotPath), indexBytesFrames(tooLong), sum[:], DefaultIndexFormatSettings()); !errors.Is(err, errIndexMalformed) {
 		t.Errorf("a slot past its cap: %v", err)
 	}
 }

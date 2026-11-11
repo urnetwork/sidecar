@@ -7,9 +7,9 @@
 //	doc_key = HMAC-SHA256(K_ref, "UR evs 1.0 doc" || ref_id || u16be(len(name)) || name || u32be(chunk))[:16]
 //
 // with K_ref from RK_1 (D-KEYS-22), so keys survive rotations and path epochs, and a rename is a removal and a
-// creation. Text past 1 MiB is one document per 1 MiB, each with the next 256 B, so a query of up to 256 B across a
-// boundary is found. A chunk whose key set would encode past 512 KiB, which nearly every query would match, is
-// skipped.
+// creation. Text past IndexFormatSettings.ChunkByteCount, 1 MiB, is one document per 1 MiB, each with the next
+// OverlapByteCount, 256 B, so a query of up to 256 B across a boundary is found (D4). A chunk whose key set would
+// encode past 512 KiB, which nearly every query would match, is skipped (D6).
 //
 // An index covers only documents every reader of its ref can open, and config, mailcfg and secret repos hold none
 // (D-EVS-43), which indexExcluded decides before a version is read.
@@ -34,12 +34,6 @@ const (
 	IndexDocMail    IndexDocKind = indexDocMail
 	IndexDocRecord  IndexDocKind = indexDocRecord
 	IndexDocDerived IndexDocKind = indexDocDerived
-)
-
-// A document's chunks: 1 MiB each, and the next 256 B.
-const (
-	indexChunkByteCount   = 1024 * 1024
-	indexOverlapByteCount = 256
 )
 
 // doc_key's label, its ASCII bytes.
@@ -75,11 +69,13 @@ type IndexDocument struct {
 	ExpiresSeconds uint64
 }
 
-// One document a chunk of text: every 1 MiB, each with the next 256 B, and one for an empty text.
-func indexChunks(text []byte) [][]byte {
+// D4: one document a chunk of text, t[k × ChunkByteCount : min(len(t), (k+1) × ChunkByteCount + OverlapByteCount)]
+// while k × ChunkByteCount < len(t), and the one empty chunk for an empty text. Bytes count in the text as extracted,
+// before normalization.
+func indexChunks(text []byte, settings *IndexFormatSettings) [][]byte {
 	chunks := [][]byte{}
-	for start := 0; start == 0 || start < len(text); start += indexChunkByteCount {
-		chunks = append(chunks, text[start:min(len(text), start+indexChunkByteCount+indexOverlapByteCount)])
+	for start := 0; start == 0 || start < len(text); start += settings.ChunkByteCount {
+		chunks = append(chunks, text[start:min(len(text), start+settings.ChunkByteCount+settings.OverlapByteCount)])
 	}
 	return chunks
 }
@@ -105,9 +101,8 @@ func indexDocKey(refKey []byte, refId Id, name []byte, chunk uint32) ([indexIdBy
 	return [indexIdByteCount]byte(mac.Sum(nil)[:indexIdByteCount]), nil
 }
 
-// The document's fields as normalizer 1 reads them, in number order. A file's title is followed by one space and its
-// path, which indexes the path's words with the title's, the reading question
-// search-m10-07-extractor-field-placement recommends and SearchOracle takes, pending its answer.
+// The document's fields as normalizer 1 reads them, in number order. A file's field 4 is its title, one space and its
+// path's bytes, even when the title is empty, which indexes the path's words with the title's (D2).
 func (self *IndexDocument) textFields() []indexTextField {
 	fields := []indexTextField{}
 	for number := 1; number <= indexFieldLast; number += 1 {
