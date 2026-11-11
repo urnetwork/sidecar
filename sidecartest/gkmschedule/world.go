@@ -218,6 +218,8 @@ type FsKeysWorld struct {
 	views []*sidecartest.FakeGkmAuthView
 	// what the services' host takes in place of the fake host's own stores
 	adjust func(host *sidecar.ServiceHost)
+	// the barrier driver's Blocking, where the world runs on a fault schedule's Net
+	blocking func(wait func())
 }
 
 // How a schedule makes each world it runs in: T2's on the fake host, T3's on the local stack's stores.
@@ -455,9 +457,15 @@ func (self *FsKeysWorld) AwaitHint(device *FsKeysDevice, match func(hint *FsKeys
 				return hint
 			}
 		}
-		select {
-		case <-changed:
-		case <-self.Ctx.Done():
+		done := false
+		self.block(func() {
+			select {
+			case <-changed:
+			case <-self.Ctx.Done():
+				done = true
+			}
+		})
+		if done {
 			self.t.Fatalf("%s was never told the hint", device.Label)
 			return nil
 		}
@@ -485,9 +493,15 @@ func (self *FsKeysWorld) AwaitPass(reconciler *gkmservice.GkmReconciler, run fun
 		if before < count {
 			return
 		}
-		select {
-		case <-changed:
-		case <-self.Ctx.Done():
+		done := false
+		self.block(func() {
+			select {
+			case <-changed:
+			case <-self.Ctx.Done():
+				done = true
+			}
+		})
+		if done {
 			self.t.Fatal("the reconciler made no pass")
 			return
 		}
@@ -1023,9 +1037,7 @@ func (self *FsKeysDevice) PublishKeyPackages() {
 		}
 		keyPackages = append(keyPackages, keyPackage.Encoded)
 	}
-	if err := self.Api.UploadKeyPackages(world.Ctx, keyPackages); err != nil {
-		world.t.Fatalf("%s's KeyPackages: %v", self.Label, err)
-	}
+	world.Again(self.Label+"'s KeyPackages", func() error { return self.Api.UploadKeyPackages(world.Ctx, keyPackages) })
 }
 
 // A fresh ReaderKey of the device, valid 6 days, uploaded and its private key kept.
@@ -1041,9 +1053,7 @@ func (self *FsKeysDevice) PublishReaderKey() {
 	self.readerPrivateKeys[string(digest[:])] = privateKey
 	self.readerKeySha256 = digest[:]
 	self.ReaderKey = readerKey
-	if err := self.Api.UploadReaderKey(world.Ctx, readerKey); err != nil {
-		world.t.Fatalf("%s's ReaderKey: %v", self.Label, err)
-	}
+	world.Again(self.Label+"'s ReaderKey", func() error { return self.Api.UploadReaderKey(world.Ctx, readerKey) })
 }
 
 // The first cluster, where the world's repos are placed.
@@ -1079,7 +1089,7 @@ func (self *FsKeysWorld) placeRepo(repoId sidecar.Id, kind protocol.RepoKind, cr
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	if _, err := cluster.PutIfNoneMatch(self.Ctx, sidecar.EvsPlaceKey(repoId), place, nil); err != nil {
+	if err := self.putOnce(cluster, sidecar.EvsPlaceKey(repoId), place); err != nil {
 		self.t.Fatal(err)
 	}
 	self.putRepoStateOf(repoId, kind, protocol.EvsRepoState_EVS_REPO_KEYING)
@@ -1097,15 +1107,7 @@ func (self *FsKeysWorld) putRepoStateOf(repoId sidecar.Id, kind protocol.RepoKin
 	body := self.marshal(&protocol.EvsRepoObject{
 		RepoId: repoId.Bytes(), Kind: kind, State: state, Format: 1, NetworkId: sidecar.Id(self.NetworkId).Bytes(),
 	})
-	key := gkmservice.GkmEvsRepoKey(repoId)
-	info, err := cluster.Head(self.Ctx, key)
-	switch {
-	case errors.Is(err, sidecar.ErrBlobNotFound):
-		_, err = cluster.PutIfNoneMatch(self.Ctx, key, body, nil)
-	case err == nil:
-		_, err = cluster.PutIfMatch(self.Ctx, key, info.Etag, body, nil)
-	}
-	if err != nil {
+	if err := self.putOver(cluster, gkmservice.GkmEvsRepoKey(repoId), body); err != nil {
 		self.t.Fatalf("repo/ %s: %v", state, err)
 	}
 }
@@ -1120,10 +1122,11 @@ func (self *FsKeysWorld) Activate() {
 func (self *FsKeysWorld) Create(creator *FsKeysDevice) *sidecar.EvsRepoKey {
 	self.t.Helper()
 	self.Place(creator)
-	key, err := creator.Client.CreateGroup(self.Ctx, &sidecar.GkmCreateGroupArgs{NetworkId: sidecar.Id(self.NetworkId), RepoId: self.RepoId, Kind: self.Kind})
-	if err != nil {
-		self.t.Fatalf("KF1: %v", err)
-	}
+	var key *sidecar.EvsRepoKey
+	self.Again("KF1", func() (err error) {
+		key, err = creator.Client.CreateGroup(self.Ctx, &sidecar.GkmCreateGroupArgs{NetworkId: sidecar.Id(self.NetworkId), RepoId: self.RepoId, Kind: self.Kind})
+		return err
+	})
 	self.GroupId = key.GroupId()
 	self.Activate()
 	return key
@@ -1137,12 +1140,13 @@ func (self *FsKeysWorld) CreateConfig(creator *FsKeysDevice) *sidecar.EvsRepoKey
 		self.t.Fatal("no config repo: ConfigWriters names its writers first")
 	}
 	self.placeRepo(self.ConfigRepoId, protocol.RepoKind_REPO_KIND_CONFIG, creator)
-	key, err := creator.Client.CreateGroup(self.Ctx, &sidecar.GkmCreateGroupArgs{
-		NetworkId: sidecar.Id(self.NetworkId), RepoId: self.ConfigRepoId, Kind: protocol.RepoKind_REPO_KIND_CONFIG,
+	var key *sidecar.EvsRepoKey
+	self.Again("the config repo's KF1", func() (err error) {
+		key, err = creator.Client.CreateGroup(self.Ctx, &sidecar.GkmCreateGroupArgs{
+			NetworkId: sidecar.Id(self.NetworkId), RepoId: self.ConfigRepoId, Kind: protocol.RepoKind_REPO_KIND_CONFIG,
+		})
+		return err
 	})
-	if err != nil {
-		self.t.Fatalf("the config repo's KF1: %v", err)
-	}
 	self.ConfigGroupId = key.GroupId()
 	self.putRepoStateOf(self.ConfigRepoId, protocol.RepoKind_REPO_KIND_CONFIG, protocol.EvsRepoState_EVS_REPO_ACTIVE)
 	return key
@@ -1157,16 +1161,15 @@ func (self *FsKeysWorld) AddPending(committer *FsKeysDevice) {
 // AddPending in the repo repoId names, the world's repo or its config repo.
 func (self *FsKeysWorld) AddPendingIn(committer *FsKeysDevice, repoId sidecar.Id) {
 	self.t.Helper()
-	if err := committer.Client.RunPending(self.Ctx, repoId); err != nil {
-		self.t.Fatalf("%s's pending run: %v", committer.Label, err)
-	}
+	self.Again(committer.Label+"'s pending run", func() error { return committer.Client.RunPending(self.Ctx, repoId) })
 	for _, device := range self.Devices {
 		if device == committer || device.Mls == nil || device.Offline || !self.standing(device) {
 			continue
 		}
-		if _, err := device.Client.JoinWelcomes(self.Ctx); err != nil {
-			self.t.Fatalf("%s's join: %v", device.Label, err)
-		}
+		self.Again(device.Label+"'s join", func() error {
+			_, err := device.Client.JoinWelcomes(self.Ctx)
+			return err
+		})
 	}
 }
 
