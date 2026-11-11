@@ -82,7 +82,7 @@ func TestCgoAllowsTheKeychainFileOnTheFallbackLeg(t *testing.T) {
 func TestCgoFailsOnANewThirdPartyCgoFile(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs("cgo linux/amd64")
-	fixture.writeSibling("thirdparty/go.mod", "module example.com/thirdparty\n\ngo 1.27.3\n")
+	fixture.writeSibling("thirdparty/go.mod", "module example.com/thirdparty\n\ngo 1.27.4\n")
 	fixture.writeSibling("thirdparty/native.go", "package thirdparty\n\nimport \"C\"\n")
 	fixture.requireLocal("example.com/thirdparty", "v1.0.0", "thirdparty")
 	fixture.write("planted.go", "package sidecar\n\nimport _ \"example.com/thirdparty\"\n")

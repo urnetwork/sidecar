@@ -183,7 +183,7 @@ func (self *repository) replaceFindings(t testing.TB) []string {
 	return findings
 }
 
-// §4.7's block: go 1.27.3 on every module, and the root's one tool line, whose requirements would
+// §4.7's block: go 1.27.4 on every module, and the root's one tool line, whose requirements would
 // otherwise enter every consumer's graph.
 func (self *repository) moduleLineFindings(t testing.TB) []string {
 	t.Helper()

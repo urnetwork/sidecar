@@ -89,7 +89,7 @@ func TestSeedFilesFindTheRootInEitherLayout(t *testing.T) {
 			name: "development",
 			goMod: `module github.com/urnetwork/sidecar/mlsinterop
 
-go 1.27.3
+go 1.27.4
 
 require github.com/urnetwork/sidecar v0.0.0
 
@@ -101,7 +101,7 @@ replace github.com/urnetwork/sidecar => ../
 			name: "release",
 			goMod: `module github.com/urnetwork/sidecar/mlsinterop
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/urnetwork/sidecar/smtpproof/v2026 v2026.11.6-1234567

@@ -55,7 +55,7 @@ func TestDepsFailsOnSnInALeg(t *testing.T) {
 func TestDepsFailsOnAnEngineLinkingGoRedis(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs("engines linux/amd64")
-	fixture.writeSibling("goredis/go.mod", "module github.com/redis/go-redis/v9\n\ngo 1.27.3\n")
+	fixture.writeSibling("goredis/go.mod", "module github.com/redis/go-redis/v9\n\ngo 1.27.4\n")
 	fixture.writeSibling("goredis/redis.go", "package redis\n")
 	fixture.requireLocal("github.com/redis/go-redis/v9", "v9.23.0", "goredis")
 	fixture.edit("dependencies.yml", "modules:\n", "modules:\n  - module: github.com/redis/go-redis/v9\n    spdx: BSD-2-Clause\n    reason: a listing is no way round the rule\n    leg: [engine]\n")
@@ -66,7 +66,7 @@ func TestDepsFailsOnAnEngineLinkingGoRedis(t *testing.T) {
 func TestDepsFailsOnAnUnlistedModuleInALeg(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs("cli linux/amd64")
-	fixture.writeSibling("unlisted/go.mod", "module example.com/unlisted\n\ngo 1.27.3\n")
+	fixture.writeSibling("unlisted/go.mod", "module example.com/unlisted\n\ngo 1.27.4\n")
 	fixture.writeSibling("unlisted/unlisted.go", "package unlisted\n")
 	fixture.requireLocal("example.com/unlisted", "v1.0.0", "unlisted")
 	fixture.edit("cli/go.mod", "replace @module@ => ..", "require example.com/unlisted v1.0.0\n\nreplace example.com/unlisted => ../../unlisted\n\nreplace @module@ => ..")
@@ -163,7 +163,7 @@ func TestDepsFailsOnANestedModuleRequiringProxy(t *testing.T) {
 // C-23 lets sidecarctl read warp's configuration through warp's packages, and no other module.
 func TestDepsLetsSidecarctlAloneRequireWarp(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.edit("sidecarctl/go.mod", "go 1.27.3\n", "go 1.27.3\n\nrequire "+warpBasePath+" v0.0.0\n")
+	fixture.edit("sidecarctl/go.mod", "go 1.27.4\n", "go 1.27.4\n\nrequire "+warpBasePath+" v0.0.0\n")
 	wantFindings(t, fixture.open().firstPartyRequireFindings(t))
 
 	fixture.edit("cli/go.mod", "require @connect@ v0.0.0 // indirect", "require @connect@ v0.0.0 // indirect\n\nrequire "+warpBasePath+" v0.0.0 // indirect")
@@ -180,7 +180,7 @@ func TestDepsFailsOnARequireNoPackageReaches(t *testing.T) {
 // A module beyond §4.7's four and C-23's sidecarctl.
 func TestDepsFailsOnAModuleOutsideTheTable(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.write("tools/go.mod", "module @module@/tools\n\ngo 1.27.3\n")
+	fixture.write("tools/go.mod", "module @module@/tools\n\ngo 1.27.4\n")
 	wantFindings(t, fixture.open().moduleSetFindings(t),
 		"no leg reads the module @module@/tools",
 		"tools is the module @module@/tools, which is not in §4.7's table")
@@ -189,7 +189,7 @@ func TestDepsFailsOnAModuleOutsideTheTable(t *testing.T) {
 // -modfile can point a build at one of these, and no leg would see what it requires.
 func TestDepsFailsOnAnAlternateModuleFile(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.write("alt.go.mod", "module @module@/alt\n\ngo 1.27.3\n")
+	fixture.write("alt.go.mod", "module @module@/alt\n\ngo 1.27.4\n")
 	wantFindings(t, fixture.open().moduleSetFindings(t),
 		". is the module @module@/alt, which is not in §4.7's table",
 		"no leg reads the module @module@/alt")
@@ -206,7 +206,7 @@ func TestDepsFailsOnAModuleNoLegReads(t *testing.T) {
 func plantXText(t *testing.T, version string) *repository {
 	t.Helper()
 	fixture := newFixture(t)
-	fixture.writeSibling("faketext/go.mod", "module golang.org/x/text\n\ngo 1.27.3\n")
+	fixture.writeSibling("faketext/go.mod", "module golang.org/x/text\n\ngo 1.27.4\n")
 	fixture.requireLocal(xTextBasePath, version, "faketext")
 	fixture.edit("cli/go.mod", "replace @module@ => ..", "require golang.org/x/text "+version+" // indirect\n\nreplace golang.org/x/text => ../../faketext\n\nreplace @module@ => ..")
 	return fixture.open()
@@ -238,18 +238,18 @@ func TestDepsFailsOnAReplacedXText(t *testing.T) {
 // gomobile's legs build under sdk/build, so a sidecar module's own selection does not reach them.
 func TestDepsFailsOnASiblingLegsXText(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.writeSibling("sdk/build/go.mod", "module @sdk@/build\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.41.0\n")
+	fixture.writeSibling("sdk/build/go.mod", "module @sdk@/build\n\ngo 1.27.4\n\nrequire golang.org/x/text v0.41.0\n")
 	wantFindings(t, fixture.open().xTextFindings(t), "sdk/build requires golang.org/x/text v0.41.0")
 }
 
 func TestDepsFailsOnASharedVersionMismatch(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs("root linux/amd64")
-	fixture.writeSibling("shared/go.mod", "module example.com/shared\n\ngo 1.27.3\n")
+	fixture.writeSibling("shared/go.mod", "module example.com/shared\n\ngo 1.27.4\n")
 	fixture.writeSibling("shared/shared.go", "package shared\n")
 	fixture.requireLocal("example.com/shared", "v1.0.0", "shared")
 	fixture.write("planted.go", "package sidecar\n\nimport _ \"example.com/shared\"\n")
-	fixture.writeSibling("server/go.mod", "module @server@\n\ngo 1.27.3\n\nrequire example.com/shared v1.1.0\n")
+	fixture.writeSibling("server/go.mod", "module @server@\n\ngo 1.27.4\n\nrequire example.com/shared v1.1.0\n")
 	wantFindings(t, fixture.open().sharedVersionFindings(t), "links example.com/shared v1.0.0, and server requires v1.1.0")
 }
 
@@ -305,7 +305,7 @@ func newLicensedModuleFixture(t *testing.T, spdx string, files map[string]string
 	t.Helper()
 	fixture := newFixture(t)
 	fixture.keepLegs("root linux/amd64")
-	fixture.writeSibling("licensed/go.mod", "module example.com/licensed\n\ngo 1.27.3\n")
+	fixture.writeSibling("licensed/go.mod", "module example.com/licensed\n\ngo 1.27.4\n")
 	for name, content := range files {
 		fixture.writeSibling("licensed/"+name, content)
 	}
@@ -531,13 +531,13 @@ func newVersionSkewFixture(t *testing.T, spdx string, rootVersion string, rootLi
 	fixture := newFixture(t)
 	fixture.keepLegs("root linux/amd64", "tests mlsinterop linux/amd64")
 	for directory, license := range map[string]string{"skewed-root": rootLicense, "skewed-mlsinterop": mlsinteropLicense} {
-		fixture.writeSibling(directory+"/go.mod", "module example.com/skewed\n\ngo 1.27.3\n")
+		fixture.writeSibling(directory+"/go.mod", "module example.com/skewed\n\ngo 1.27.4\n")
 		fixture.writeSibling(directory+"/LICENSE", license)
 		fixture.writeSibling(directory+"/skewed.go", "package skewed\n")
 	}
 	fixture.requireLocal("example.com/skewed", rootVersion, "skewed-root")
 	fixture.write("skewed.go", "package sidecar\n\nimport _ \"example.com/skewed\"\n")
-	fixture.edit("mlsinterop/go.mod", "go 1.27.3\n", "go 1.27.3\n\nrequire example.com/skewed "+mlsinteropVersion+"\n\nreplace example.com/skewed => ../../skewed-mlsinterop\n")
+	fixture.edit("mlsinterop/go.mod", "go 1.27.4\n", "go 1.27.4\n\nrequire example.com/skewed "+mlsinteropVersion+"\n\nreplace example.com/skewed => ../../skewed-mlsinterop\n")
 	fixture.write("mlsinterop/skewed.go", "package mlsinterop\n\nimport _ \"example.com/skewed\"\n")
 	fixture.edit("dependencies.yml", "modules:\n", "modules:\n  - module: example.com/skewed\n    spdx: "+spdx+"\n    reason: two modules of this repository select it apart\n    leg: [client, test]\n")
 	return fixture
