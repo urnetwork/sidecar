@@ -284,7 +284,7 @@ func (self *Subprotocol) sendRefusal(reply *rpcReplyTarget, refusal *Subprotocol
 // goroutine may: it holds up no one else. False when it was not sent.
 func (self *Subprotocol) sendReplyEnvelope(reply *rpcReplyTarget, envelope *protocol.Envelope) bool {
 	timeout := max(reply.deadline.Sub(self.clock.Now()), 0)
-	if err := self.sendEnvelopeAcked(reply.destinationId, envelope, ignoreSubprotocolAck, timeout, replyTransferKey(reply.transferKey)); err != nil {
+	if err := self.sendEnvelopeAcked(reply.destinationId, envelope, ignoreSubprotocolAck, timeout, self.replyLane(reply.transferKey)); err != nil {
 		self.stats.replyFailedCount.Add(1)
 		return false
 	}

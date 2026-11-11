@@ -104,6 +104,13 @@ type SidecarProtocolSettings struct {
 	// How often a client resyncs its topics, so correctness never rests on a hint's delivery: 1 h
 	// (§6.8).
 	SyncRefetchInterval time.Duration
+	// Whether this sidecar asks for P2P to a same-network sidecar peer whose Hello verified (D-PROTO-10;
+	// QD-045, QD-583): false, so every pair stays relay-only until the owner's call on FS-126 and its
+	// measurement. On, a send to such a peer rides connect's stream lane, which a P2P route may carry, and a
+	// reply keeps the lane its request rode; Required, Hello and HeadCheck hold across a move, since a route
+	// is not an identity, and push still comes only over platform carriers (D-PROTO-8), whatever this says.
+	// Before any network turns it on, §2.8's connect rows and §2.10 say what P2P shows (QD-045).
+	EnablePeerP2p bool
 }
 
 // The one source of §6.6's defaults, the desktop's. A fresh value each call, as DefaultSidecarSettings's
@@ -142,6 +149,7 @@ func DefaultSidecarProtocolSettings() *SidecarProtocolSettings {
 		HeadCheckUnwitnessedInterval:     10 * time.Minute,
 		WakeInterval:                     1 * time.Hour,
 		SyncRefetchInterval:              1 * time.Hour,
+		EnablePeerP2p:                    false,
 	}
 }
 

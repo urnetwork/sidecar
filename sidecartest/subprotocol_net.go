@@ -84,10 +84,21 @@ func (self *subprotocolComponent) Close() {
 // dispatcher. Answers the sidecars, in order, and the authority, which a test moves to revoke, park or
 // admit more.
 func (self *Net) AddSubprotocolSidecars(names ...string) ([]*SubprotocolSidecar, *FakeAuthority, error) {
+	return self.AddSubprotocolSidecarsWith(nil, names...)
+}
+
+// AddSubprotocolSidecars, each sidecar on the settings settings makes for it, nil making the defaults, which the
+// Net fills as AddSidecar does: how a test turns on what a release leaves off, SidecarProtocolSettings.EnablePeerP2p
+// among them.
+func (self *Net) AddSubprotocolSidecarsWith(settings func() *sidecar.SidecarSettings, names ...string) ([]*SubprotocolSidecar, *FakeAuthority, error) {
 	authority := NewFakeAuthority()
 	sidecars := []*SubprotocolSidecar{}
 	for _, name := range names {
-		testSidecar, err := self.AddSidecar(name, nil)
+		var sidecarSettings *sidecar.SidecarSettings
+		if settings != nil {
+			sidecarSettings = settings()
+		}
+		testSidecar, err := self.AddSidecar(name, sidecarSettings)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -127,7 +127,7 @@ func (self *Subprotocol) receiveStreamOpen(
 			return
 		}
 	}
-	opts := []any{replyTransferKey(peer.TransferKey)}
+	opts := []any{self.replyLane(peer.TransferKey)}
 
 	var stream *SubprotocolStream
 	var listener *streamListener
