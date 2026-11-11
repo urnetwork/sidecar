@@ -388,6 +388,61 @@ func (VersioningMode) EnumDescriptor() ([]byte, []int) {
 	return file_protocol_config_proto_rawDescGZIP(), []int{6}
 }
 
+type BridgeLedgerDisposition int32
+
+const (
+	BridgeLedgerDisposition_BRIDGE_LEDGER_DISPOSITION_UNSPECIFIED BridgeLedgerDisposition = 0
+	BridgeLedgerDisposition_BRIDGE_LEDGER_DISPOSITION_ACTIVE      BridgeLedgerDisposition = 1 // the body is in force, subject to the compile's standing-grant check
+	BridgeLedgerDisposition_BRIDGE_LEDGER_DISPOSITION_VOID        BridgeLedgerDisposition = 2 // the body did not open or broke its rule: the id is held, nothing else
+	BridgeLedgerDisposition_BRIDGE_LEDGER_DISPOSITION_WITHDRAWN   BridgeLedgerDisposition = 3 // a BridgeWithdraw bound it; draining until withdrawn_ms + its drain
+	BridgeLedgerDisposition_BRIDGE_LEDGER_DISPOSITION_RESERVED    BridgeLedgerDisposition = 4 // a withdrawal ahead of the id's first filing: it binds withdrawn_by's
+)
+
+// Enum value maps for BridgeLedgerDisposition.
+var (
+	BridgeLedgerDisposition_name = map[int32]string{
+		0: "BRIDGE_LEDGER_DISPOSITION_UNSPECIFIED",
+		1: "BRIDGE_LEDGER_DISPOSITION_ACTIVE",
+		2: "BRIDGE_LEDGER_DISPOSITION_VOID",
+		3: "BRIDGE_LEDGER_DISPOSITION_WITHDRAWN",
+		4: "BRIDGE_LEDGER_DISPOSITION_RESERVED",
+	}
+	BridgeLedgerDisposition_value = map[string]int32{
+		"BRIDGE_LEDGER_DISPOSITION_UNSPECIFIED": 0,
+		"BRIDGE_LEDGER_DISPOSITION_ACTIVE":      1,
+		"BRIDGE_LEDGER_DISPOSITION_VOID":        2,
+		"BRIDGE_LEDGER_DISPOSITION_WITHDRAWN":   3,
+		"BRIDGE_LEDGER_DISPOSITION_RESERVED":    4,
+	}
+)
+
+func (x BridgeLedgerDisposition) Enum() *BridgeLedgerDisposition {
+	p := new(BridgeLedgerDisposition)
+	*p = x
+	return p
+}
+
+func (x BridgeLedgerDisposition) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BridgeLedgerDisposition) Descriptor() protoreflect.EnumDescriptor {
+	return file_protocol_config_proto_enumTypes[7].Descriptor()
+}
+
+func (BridgeLedgerDisposition) Type() protoreflect.EnumType {
+	return &file_protocol_config_proto_enumTypes[7]
+}
+
+func (x BridgeLedgerDisposition) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BridgeLedgerDisposition.Descriptor instead.
+func (BridgeLedgerDisposition) EnumDescriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{7}
+}
+
 type AdminSet struct {
 	state         protoimpl.MessageState  `protogen:"open.v1"`
 	Header        *bridge.StatementHeader `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
@@ -2779,11 +2834,770 @@ func (x *ConfigClientResolution) GetSidecarId() []byte {
 	return nil
 }
 
+// The bridge ledger's fold (DESIGN-DETAILS 12.2.2, QD-667): files of the config head beside fold/<d>/<i>, which evs
+// holds as ciphertext, so no server reads them. At each fold a writer writes the body-level verdict it holds for every
+// folded bridge statement (§17.8): addresses and tombstones, each rule's body and disposition, each subject's egress
+// spec, each alias; every full reader standing under the previous base computes the same files and forks on a
+// difference, and a device that starts at the base takes them. Every writer on every leg encodes them alike, since
+// the manifest hashes each: protobuf's deterministic marshal; rows sorted by their key's bytes, host_bits as a
+// number; no empty file; bodies as their messages with approval cleared; times as the log's time_ms.
+type BridgeLedgerManifest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Format        uint32                 `protobuf:"varint,1,opt,name=format,proto3" json:"format,omitempty"`                                      // 1
+	FoldedThrough uint64                 `protobuf:"varint,2,opt,name=folded_through,json=foldedThrough,proto3" json:"folded_through,omitempty"`   // the head's fold: the rows hold every bridge statement at or below it
+	TimeMs        int64                  `protobuf:"varint,3,opt,name=time_ms,json=timeMs,proto3" json:"time_ms,omitempty"`                        // the time of the newest folded record: the fold's time, never a clock
+	RuleShardBits uint32                 `protobuf:"varint,4,opt,name=rule_shard_bits,json=ruleShardBits,proto3" json:"rule_shard_bits,omitempty"` // 8, or 16 from the fold at which the rows hold more than 262,144 rules
+	Files         []*BridgeLedgerFile    `protobuf:"bytes,5,rep,name=files,proto3" json:"files,omitempty"`                                         // every other ledger file the head holds, in path order
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeLedgerManifest) Reset() {
+	*x = BridgeLedgerManifest{}
+	mi := &file_protocol_config_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeLedgerManifest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeLedgerManifest) ProtoMessage() {}
+
+func (x *BridgeLedgerManifest) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeLedgerManifest.ProtoReflect.Descriptor instead.
+func (*BridgeLedgerManifest) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *BridgeLedgerManifest) GetFormat() uint32 {
+	if x != nil {
+		return x.Format
+	}
+	return 0
+}
+
+func (x *BridgeLedgerManifest) GetFoldedThrough() uint64 {
+	if x != nil {
+		return x.FoldedThrough
+	}
+	return 0
+}
+
+func (x *BridgeLedgerManifest) GetTimeMs() int64 {
+	if x != nil {
+		return x.TimeMs
+	}
+	return 0
+}
+
+func (x *BridgeLedgerManifest) GetRuleShardBits() uint32 {
+	if x != nil {
+		return x.RuleShardBits
+	}
+	return 0
+}
+
+func (x *BridgeLedgerManifest) GetFiles() []*BridgeLedgerFile {
+	if x != nil {
+		return x.Files
+	}
+	return nil
+}
+
+type BridgeLedgerFile struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Sha256        []byte                 `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"` // of the file's plaintext as the head holds it
+	RowCount      uint64                 `protobuf:"varint,3,opt,name=row_count,json=rowCount,proto3" json:"row_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeLedgerFile) Reset() {
+	*x = BridgeLedgerFile{}
+	mi := &file_protocol_config_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeLedgerFile) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeLedgerFile) ProtoMessage() {}
+
+func (x *BridgeLedgerFile) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeLedgerFile.ProtoReflect.Descriptor instead.
+func (*BridgeLedgerFile) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *BridgeLedgerFile) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *BridgeLedgerFile) GetSha256() []byte {
+	if x != nil {
+		return x.Sha256
+	}
+	return nil
+}
+
+func (x *BridgeLedgerFile) GetRowCount() uint64 {
+	if x != nil {
+		return x.RowCount
+	}
+	return 0
+}
+
+type BridgeLedgerAddresses struct {
+	state         protoimpl.MessageState    `protogen:"open.v1"`
+	Rows          []*BridgeLedgerAddressRow `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeLedgerAddresses) Reset() {
+	*x = BridgeLedgerAddresses{}
+	mi := &file_protocol_config_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeLedgerAddresses) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeLedgerAddresses) ProtoMessage() {}
+
+func (x *BridgeLedgerAddresses) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeLedgerAddresses.ProtoReflect.Descriptor instead.
+func (*BridgeLedgerAddresses) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *BridgeLedgerAddresses) GetRows() []*BridgeLedgerAddressRow {
+	if x != nil {
+		return x.Rows
+	}
+	return nil
+}
+
+type BridgeLedgerAddressRow struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	HostBits      uint32                 `protobuf:"varint,1,opt,name=host_bits,json=hostBits,proto3" json:"host_bits,omitempty"` // the low 16 bits of the IPv4 (§17.4: kept across block changes)
+	SidecarId     []byte                 `protobuf:"bytes,2,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`
+	ClaimedAt     uint64                 `protobuf:"varint,3,opt,name=claimed_at,json=claimedAt,proto3" json:"claimed_at,omitempty"`    // the BridgeAddress's entry
+	ReleasedAt    uint64                 `protobuf:"varint,4,opt,name=released_at,json=releasedAt,proto3" json:"released_at,omitempty"` // the entry that released it, its holder's revocation or removal; 0 live
+	ReleasedMs    int64                  `protobuf:"varint,5,opt,name=released_ms,json=releasedMs,proto3" json:"released_ms,omitempty"` // that entry's time; the tombstone holds 30 days from it (I-14)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeLedgerAddressRow) Reset() {
+	*x = BridgeLedgerAddressRow{}
+	mi := &file_protocol_config_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeLedgerAddressRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeLedgerAddressRow) ProtoMessage() {}
+
+func (x *BridgeLedgerAddressRow) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeLedgerAddressRow.ProtoReflect.Descriptor instead.
+func (*BridgeLedgerAddressRow) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *BridgeLedgerAddressRow) GetHostBits() uint32 {
+	if x != nil {
+		return x.HostBits
+	}
+	return 0
+}
+
+func (x *BridgeLedgerAddressRow) GetSidecarId() []byte {
+	if x != nil {
+		return x.SidecarId
+	}
+	return nil
+}
+
+func (x *BridgeLedgerAddressRow) GetClaimedAt() uint64 {
+	if x != nil {
+		return x.ClaimedAt
+	}
+	return 0
+}
+
+func (x *BridgeLedgerAddressRow) GetReleasedAt() uint64 {
+	if x != nil {
+		return x.ReleasedAt
+	}
+	return 0
+}
+
+func (x *BridgeLedgerAddressRow) GetReleasedMs() int64 {
+	if x != nil {
+		return x.ReleasedMs
+	}
+	return 0
+}
+
+type BridgeLedgerRules struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rows          []*BridgeLedgerRuleRow `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeLedgerRules) Reset() {
+	*x = BridgeLedgerRules{}
+	mi := &file_protocol_config_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeLedgerRules) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeLedgerRules) ProtoMessage() {}
+
+func (x *BridgeLedgerRules) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeLedgerRules.ProtoReflect.Descriptor instead.
+func (*BridgeLedgerRules) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *BridgeLedgerRules) GetRows() []*BridgeLedgerRuleRow {
+	if x != nil {
+		return x.Rows
+	}
+	return nil
+}
+
+type BridgeLedgerRuleRow struct {
+	state              protoimpl.MessageState    `protogen:"open.v1"`
+	RuleId             []byte                    `protobuf:"bytes,1,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	SignedType         uint32                    `protobuf:"varint,2,opt,name=signed_type,json=signedType,proto3" json:"signed_type,omitempty"` // 0x1903 a route, 0x1904 a map
+	Owner              []byte                    `protobuf:"bytes,3,opt,name=owner,proto3" json:"owner,omitempty"`                              // the advertiser or host, which signed the first filing
+	FirstAt            uint64                    `protobuf:"varint,4,opt,name=first_at,json=firstAt,proto3" json:"first_at,omitempty"`          // the first filing's entry and time
+	FirstMs            int64                     `protobuf:"varint,5,opt,name=first_ms,json=firstMs,proto3" json:"first_ms,omitempty"`
+	NewestAt           uint64                    `protobuf:"varint,6,opt,name=newest_at,json=newestAt,proto3" json:"newest_at,omitempty"` // the newest filing of the held id
+	NewestMs           int64                     `protobuf:"varint,7,opt,name=newest_ms,json=newestMs,proto3" json:"newest_ms,omitempty"`
+	Disposition        BridgeLedgerDisposition   `protobuf:"varint,8,opt,name=disposition,proto3,enum=urnetwork.sidecar.BridgeLedgerDisposition" json:"disposition,omitempty"`
+	Route              *bridge.BridgeRouteBody   `protobuf:"bytes,9,opt,name=route,proto3" json:"route,omitempty"` // the body in force, its approval cleared: the first filing's, with the
+	Map                *bridge.BridgeMapBody     `protobuf:"bytes,10,opt,name=map,proto3" json:"map,omitempty"`    //   newest filing's weight, site_id and drain_seconds; neither when void
+	RouteRuleIds       [][]byte                  `protobuf:"bytes,11,rep,name=route_rule_ids,json=routeRuleIds,proto3" json:"route_rule_ids,omitempty"`
+	Expires            int64                     `protobuf:"varint,12,opt,name=expires,proto3" json:"expires,omitempty"`                        // a map's
+	Standing           bool                      `protobuf:"varint,13,opt,name=standing,proto3" json:"standing,omitempty"`                      // filed with no approval: active only where a standing grant covers it
+	ApprovalId         []byte                    `protobuf:"bytes,14,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"` // 16 B, with approval_not_after_ms and uses, when filed under a decision
+	ApprovalNotAfterMs int64                     `protobuf:"varint,15,opt,name=approval_not_after_ms,json=approvalNotAfterMs,proto3" json:"approval_not_after_ms,omitempty"`
+	ApprovalUses       uint32                    `protobuf:"varint,16,opt,name=approval_uses,json=approvalUses,proto3" json:"approval_uses,omitempty"` // the decision's budget, which counts every row that names approval_id
+	WithdrawnAt        uint64                    `protobuf:"varint,17,opt,name=withdrawn_at,json=withdrawnAt,proto3" json:"withdrawn_at,omitempty"`
+	WithdrawnMs        int64                     `protobuf:"varint,18,opt,name=withdrawn_ms,json=withdrawnMs,proto3" json:"withdrawn_ms,omitempty"`
+	WithdrawMode       bridge.BridgeWithdrawMode `protobuf:"varint,19,opt,name=withdraw_mode,json=withdrawMode,proto3,enum=urnetwork.sidecar.BridgeWithdrawMode" json:"withdraw_mode,omitempty"`
+	WithdrawnBy        []byte                    `protobuf:"bytes,20,opt,name=withdrawn_by,json=withdrawnBy,proto3" json:"withdrawn_by,omitempty"` // the withdrawal's signer
+	WithdrawnByAdmin   bool                      `protobuf:"varint,21,opt,name=withdrawn_by_admin,json=withdrawnByAdmin,proto3" json:"withdrawn_by_admin,omitempty"`
+	RetainUntilMs      int64                     `protobuf:"varint,22,opt,name=retain_until_ms,json=retainUntilMs,proto3" json:"retain_until_ms,omitempty"` // when a withdrawn id leaves the rows; 0 keeps it for the network's life
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *BridgeLedgerRuleRow) Reset() {
+	*x = BridgeLedgerRuleRow{}
+	mi := &file_protocol_config_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeLedgerRuleRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeLedgerRuleRow) ProtoMessage() {}
+
+func (x *BridgeLedgerRuleRow) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeLedgerRuleRow.ProtoReflect.Descriptor instead.
+func (*BridgeLedgerRuleRow) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *BridgeLedgerRuleRow) GetRuleId() []byte {
+	if x != nil {
+		return x.RuleId
+	}
+	return nil
+}
+
+func (x *BridgeLedgerRuleRow) GetSignedType() uint32 {
+	if x != nil {
+		return x.SignedType
+	}
+	return 0
+}
+
+func (x *BridgeLedgerRuleRow) GetOwner() []byte {
+	if x != nil {
+		return x.Owner
+	}
+	return nil
+}
+
+func (x *BridgeLedgerRuleRow) GetFirstAt() uint64 {
+	if x != nil {
+		return x.FirstAt
+	}
+	return 0
+}
+
+func (x *BridgeLedgerRuleRow) GetFirstMs() int64 {
+	if x != nil {
+		return x.FirstMs
+	}
+	return 0
+}
+
+func (x *BridgeLedgerRuleRow) GetNewestAt() uint64 {
+	if x != nil {
+		return x.NewestAt
+	}
+	return 0
+}
+
+func (x *BridgeLedgerRuleRow) GetNewestMs() int64 {
+	if x != nil {
+		return x.NewestMs
+	}
+	return 0
+}
+
+func (x *BridgeLedgerRuleRow) GetDisposition() BridgeLedgerDisposition {
+	if x != nil {
+		return x.Disposition
+	}
+	return BridgeLedgerDisposition_BRIDGE_LEDGER_DISPOSITION_UNSPECIFIED
+}
+
+func (x *BridgeLedgerRuleRow) GetRoute() *bridge.BridgeRouteBody {
+	if x != nil {
+		return x.Route
+	}
+	return nil
+}
+
+func (x *BridgeLedgerRuleRow) GetMap() *bridge.BridgeMapBody {
+	if x != nil {
+		return x.Map
+	}
+	return nil
+}
+
+func (x *BridgeLedgerRuleRow) GetRouteRuleIds() [][]byte {
+	if x != nil {
+		return x.RouteRuleIds
+	}
+	return nil
+}
+
+func (x *BridgeLedgerRuleRow) GetExpires() int64 {
+	if x != nil {
+		return x.Expires
+	}
+	return 0
+}
+
+func (x *BridgeLedgerRuleRow) GetStanding() bool {
+	if x != nil {
+		return x.Standing
+	}
+	return false
+}
+
+func (x *BridgeLedgerRuleRow) GetApprovalId() []byte {
+	if x != nil {
+		return x.ApprovalId
+	}
+	return nil
+}
+
+func (x *BridgeLedgerRuleRow) GetApprovalNotAfterMs() int64 {
+	if x != nil {
+		return x.ApprovalNotAfterMs
+	}
+	return 0
+}
+
+func (x *BridgeLedgerRuleRow) GetApprovalUses() uint32 {
+	if x != nil {
+		return x.ApprovalUses
+	}
+	return 0
+}
+
+func (x *BridgeLedgerRuleRow) GetWithdrawnAt() uint64 {
+	if x != nil {
+		return x.WithdrawnAt
+	}
+	return 0
+}
+
+func (x *BridgeLedgerRuleRow) GetWithdrawnMs() int64 {
+	if x != nil {
+		return x.WithdrawnMs
+	}
+	return 0
+}
+
+func (x *BridgeLedgerRuleRow) GetWithdrawMode() bridge.BridgeWithdrawMode {
+	if x != nil {
+		return x.WithdrawMode
+	}
+	return bridge.BridgeWithdrawMode(0)
+}
+
+func (x *BridgeLedgerRuleRow) GetWithdrawnBy() []byte {
+	if x != nil {
+		return x.WithdrawnBy
+	}
+	return nil
+}
+
+func (x *BridgeLedgerRuleRow) GetWithdrawnByAdmin() bool {
+	if x != nil {
+		return x.WithdrawnByAdmin
+	}
+	return false
+}
+
+func (x *BridgeLedgerRuleRow) GetRetainUntilMs() int64 {
+	if x != nil {
+		return x.RetainUntilMs
+	}
+	return 0
+}
+
+type BridgeLedgerEgressSpecs struct {
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	Rows          []*BridgeLedgerEgressRow `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeLedgerEgressSpecs) Reset() {
+	*x = BridgeLedgerEgressSpecs{}
+	mi := &file_protocol_config_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeLedgerEgressSpecs) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeLedgerEgressSpecs) ProtoMessage() {}
+
+func (x *BridgeLedgerEgressSpecs) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeLedgerEgressSpecs.ProtoReflect.Descriptor instead.
+func (*BridgeLedgerEgressSpecs) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *BridgeLedgerEgressSpecs) GetRows() []*BridgeLedgerEgressRow {
+	if x != nil {
+		return x.Rows
+	}
+	return nil
+}
+
+type BridgeLedgerEgressRow struct {
+	state          protoimpl.MessageState  `protogen:"open.v1"`
+	Subject        []byte                  `protobuf:"bytes,1,opt,name=subject,proto3" json:"subject,omitempty"`                                       // a sidecar_id or a keyed atom
+	Mode           bridge.BridgeEgressMode `protobuf:"varint,2,opt,name=mode,proto3,enum=urnetwork.sidecar.BridgeEgressMode" json:"mode,omitempty"`    // the newest BridgeEgress's clear mode (QD-630)
+	ExitSidecarIds [][]byte                `protobuf:"bytes,3,rep,name=exit_sidecar_ids,json=exitSidecarIds,proto3" json:"exit_sidecar_ids,omitempty"` // under exits, from its body; none when the body is void
+	ExitTagId      []byte                  `protobuf:"bytes,4,opt,name=exit_tag_id,json=exitTagId,proto3" json:"exit_tag_id,omitempty"`
+	At             uint64                  `protobuf:"varint,5,opt,name=at,proto3" json:"at,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *BridgeLedgerEgressRow) Reset() {
+	*x = BridgeLedgerEgressRow{}
+	mi := &file_protocol_config_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeLedgerEgressRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeLedgerEgressRow) ProtoMessage() {}
+
+func (x *BridgeLedgerEgressRow) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeLedgerEgressRow.ProtoReflect.Descriptor instead.
+func (*BridgeLedgerEgressRow) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *BridgeLedgerEgressRow) GetSubject() []byte {
+	if x != nil {
+		return x.Subject
+	}
+	return nil
+}
+
+func (x *BridgeLedgerEgressRow) GetMode() bridge.BridgeEgressMode {
+	if x != nil {
+		return x.Mode
+	}
+	return bridge.BridgeEgressMode(0)
+}
+
+func (x *BridgeLedgerEgressRow) GetExitSidecarIds() [][]byte {
+	if x != nil {
+		return x.ExitSidecarIds
+	}
+	return nil
+}
+
+func (x *BridgeLedgerEgressRow) GetExitTagId() []byte {
+	if x != nil {
+		return x.ExitTagId
+	}
+	return nil
+}
+
+func (x *BridgeLedgerEgressRow) GetAt() uint64 {
+	if x != nil {
+		return x.At
+	}
+	return 0
+}
+
+type BridgeLedgerAliases struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Rows          []*BridgeLedgerAliasRow `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeLedgerAliases) Reset() {
+	*x = BridgeLedgerAliases{}
+	mi := &file_protocol_config_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeLedgerAliases) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeLedgerAliases) ProtoMessage() {}
+
+func (x *BridgeLedgerAliases) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeLedgerAliases.ProtoReflect.Descriptor instead.
+func (*BridgeLedgerAliases) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *BridgeLedgerAliases) GetRows() []*BridgeLedgerAliasRow {
+	if x != nil {
+		return x.Rows
+	}
+	return nil
+}
+
+type BridgeLedgerAliasRow struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Body          *bridge.BridgeAliasBody `protobuf:"bytes,1,opt,name=body,proto3" json:"body,omitempty"`
+	Signer        []byte                  `protobuf:"bytes,2,opt,name=signer,proto3" json:"signer,omitempty"`
+	At            uint64                  `protobuf:"varint,3,opt,name=at,proto3" json:"at,omitempty"`
+	ReleasedAt    uint64                  `protobuf:"varint,4,opt,name=released_at,json=releasedAt,proto3" json:"released_at,omitempty"` // a release: draining until released_ms + its drain
+	ReleasedMs    int64                   `protobuf:"varint,5,opt,name=released_ms,json=releasedMs,proto3" json:"released_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeLedgerAliasRow) Reset() {
+	*x = BridgeLedgerAliasRow{}
+	mi := &file_protocol_config_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeLedgerAliasRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeLedgerAliasRow) ProtoMessage() {}
+
+func (x *BridgeLedgerAliasRow) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_config_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeLedgerAliasRow.ProtoReflect.Descriptor instead.
+func (*BridgeLedgerAliasRow) Descriptor() ([]byte, []int) {
+	return file_protocol_config_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *BridgeLedgerAliasRow) GetBody() *bridge.BridgeAliasBody {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+func (x *BridgeLedgerAliasRow) GetSigner() []byte {
+	if x != nil {
+		return x.Signer
+	}
+	return nil
+}
+
+func (x *BridgeLedgerAliasRow) GetAt() uint64 {
+	if x != nil {
+		return x.At
+	}
+	return 0
+}
+
+func (x *BridgeLedgerAliasRow) GetReleasedAt() uint64 {
+	if x != nil {
+		return x.ReleasedAt
+	}
+	return 0
+}
+
+func (x *BridgeLedgerAliasRow) GetReleasedMs() int64 {
+	if x != nil {
+		return x.ReleasedMs
+	}
+	return 0
+}
+
 var File_protocol_config_proto protoreflect.FileDescriptor
 
 const file_protocol_config_proto_rawDesc = "" +
 	"\n" +
-	"\x15protocol/config.proto\x12\x11urnetwork.sidecar\x1a\x1aprotocol/bridge/auth.proto\x1a\x1cprotocol/bridge/signed.proto\"\xd8\x01\n" +
+	"\x15protocol/config.proto\x12\x11urnetwork.sidecar\x1a\x1aprotocol/bridge/auth.proto\x1a\x1cprotocol/bridge/bridge.proto\x1a\x1cprotocol/bridge/signed.proto\"\xd8\x01\n" +
 	"\bAdminSet\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x16\n" +
 	"\x06owners\x18\x02 \x03(\fR\x06owners\x12\x16\n" +
@@ -2975,7 +3789,75 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\x16ConfigClientResolution\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\fR\bclientId\x12\x1d\n" +
 	"\n" +
-	"sidecar_id\x18\x02 \x01(\fR\tsidecarId*b\n" +
+	"sidecar_id\x18\x02 \x01(\fR\tsidecarId\"\xd1\x01\n" +
+	"\x14BridgeLedgerManifest\x12\x16\n" +
+	"\x06format\x18\x01 \x01(\rR\x06format\x12%\n" +
+	"\x0efolded_through\x18\x02 \x01(\x04R\rfoldedThrough\x12\x17\n" +
+	"\atime_ms\x18\x03 \x01(\x03R\x06timeMs\x12&\n" +
+	"\x0frule_shard_bits\x18\x04 \x01(\rR\rruleShardBits\x129\n" +
+	"\x05files\x18\x05 \x03(\v2#.urnetwork.sidecar.BridgeLedgerFileR\x05files\"[\n" +
+	"\x10BridgeLedgerFile\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x16\n" +
+	"\x06sha256\x18\x02 \x01(\fR\x06sha256\x12\x1b\n" +
+	"\trow_count\x18\x03 \x01(\x04R\browCount\"V\n" +
+	"\x15BridgeLedgerAddresses\x12=\n" +
+	"\x04rows\x18\x01 \x03(\v2).urnetwork.sidecar.BridgeLedgerAddressRowR\x04rows\"\xb5\x01\n" +
+	"\x16BridgeLedgerAddressRow\x12\x1b\n" +
+	"\thost_bits\x18\x01 \x01(\rR\bhostBits\x12\x1d\n" +
+	"\n" +
+	"sidecar_id\x18\x02 \x01(\fR\tsidecarId\x12\x1d\n" +
+	"\n" +
+	"claimed_at\x18\x03 \x01(\x04R\tclaimedAt\x12\x1f\n" +
+	"\vreleased_at\x18\x04 \x01(\x04R\n" +
+	"releasedAt\x12\x1f\n" +
+	"\vreleased_ms\x18\x05 \x01(\x03R\n" +
+	"releasedMs\"O\n" +
+	"\x11BridgeLedgerRules\x12:\n" +
+	"\x04rows\x18\x01 \x03(\v2&.urnetwork.sidecar.BridgeLedgerRuleRowR\x04rows\"\xf1\x06\n" +
+	"\x13BridgeLedgerRuleRow\x12\x17\n" +
+	"\arule_id\x18\x01 \x01(\fR\x06ruleId\x12\x1f\n" +
+	"\vsigned_type\x18\x02 \x01(\rR\n" +
+	"signedType\x12\x14\n" +
+	"\x05owner\x18\x03 \x01(\fR\x05owner\x12\x19\n" +
+	"\bfirst_at\x18\x04 \x01(\x04R\afirstAt\x12\x19\n" +
+	"\bfirst_ms\x18\x05 \x01(\x03R\afirstMs\x12\x1b\n" +
+	"\tnewest_at\x18\x06 \x01(\x04R\bnewestAt\x12\x1b\n" +
+	"\tnewest_ms\x18\a \x01(\x03R\bnewestMs\x12L\n" +
+	"\vdisposition\x18\b \x01(\x0e2*.urnetwork.sidecar.BridgeLedgerDispositionR\vdisposition\x128\n" +
+	"\x05route\x18\t \x01(\v2\".urnetwork.sidecar.BridgeRouteBodyR\x05route\x122\n" +
+	"\x03map\x18\n" +
+	" \x01(\v2 .urnetwork.sidecar.BridgeMapBodyR\x03map\x12$\n" +
+	"\x0eroute_rule_ids\x18\v \x03(\fR\frouteRuleIds\x12\x18\n" +
+	"\aexpires\x18\f \x01(\x03R\aexpires\x12\x1a\n" +
+	"\bstanding\x18\r \x01(\bR\bstanding\x12\x1f\n" +
+	"\vapproval_id\x18\x0e \x01(\fR\n" +
+	"approvalId\x121\n" +
+	"\x15approval_not_after_ms\x18\x0f \x01(\x03R\x12approvalNotAfterMs\x12#\n" +
+	"\rapproval_uses\x18\x10 \x01(\rR\fapprovalUses\x12!\n" +
+	"\fwithdrawn_at\x18\x11 \x01(\x04R\vwithdrawnAt\x12!\n" +
+	"\fwithdrawn_ms\x18\x12 \x01(\x03R\vwithdrawnMs\x12J\n" +
+	"\rwithdraw_mode\x18\x13 \x01(\x0e2%.urnetwork.sidecar.BridgeWithdrawModeR\fwithdrawMode\x12!\n" +
+	"\fwithdrawn_by\x18\x14 \x01(\fR\vwithdrawnBy\x12,\n" +
+	"\x12withdrawn_by_admin\x18\x15 \x01(\bR\x10withdrawnByAdmin\x12&\n" +
+	"\x0fretain_until_ms\x18\x16 \x01(\x03R\rretainUntilMs\"W\n" +
+	"\x17BridgeLedgerEgressSpecs\x12<\n" +
+	"\x04rows\x18\x01 \x03(\v2(.urnetwork.sidecar.BridgeLedgerEgressRowR\x04rows\"\xc4\x01\n" +
+	"\x15BridgeLedgerEgressRow\x12\x18\n" +
+	"\asubject\x18\x01 \x01(\fR\asubject\x127\n" +
+	"\x04mode\x18\x02 \x01(\x0e2#.urnetwork.sidecar.BridgeEgressModeR\x04mode\x12(\n" +
+	"\x10exit_sidecar_ids\x18\x03 \x03(\fR\x0eexitSidecarIds\x12\x1e\n" +
+	"\vexit_tag_id\x18\x04 \x01(\fR\texitTagId\x12\x0e\n" +
+	"\x02at\x18\x05 \x01(\x04R\x02at\"R\n" +
+	"\x13BridgeLedgerAliases\x12;\n" +
+	"\x04rows\x18\x01 \x03(\v2'.urnetwork.sidecar.BridgeLedgerAliasRowR\x04rows\"\xb8\x01\n" +
+	"\x14BridgeLedgerAliasRow\x126\n" +
+	"\x04body\x18\x01 \x01(\v2\".urnetwork.sidecar.BridgeAliasBodyR\x04body\x12\x16\n" +
+	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
+	"\x02at\x18\x03 \x01(\x04R\x02at\x12\x1f\n" +
+	"\vreleased_at\x18\x04 \x01(\x04R\n" +
+	"releasedAt\x12\x1f\n" +
+	"\vreleased_ms\x18\x05 \x01(\x03R\n" +
+	"releasedMs*b\n" +
 	"\fIndexerScope\x12\x1d\n" +
 	"\x19INDEXER_SCOPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15INDEXER_SCOPE_NETWORK\x10\x01\x12\x18\n" +
@@ -3005,7 +3887,13 @@ const file_protocol_config_proto_rawDesc = "" +
 	"\x0eVersioningMode\x12\x1f\n" +
 	"\x1bVERSIONING_MODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12VERSIONING_MODE_ON\x10\x01\x12\x17\n" +
-	"\x13VERSIONING_MODE_OFF\x10\x02B'Z%github.com/urnetwork/sidecar/protocolb\x06proto3"
+	"\x13VERSIONING_MODE_OFF\x10\x02*\xdf\x01\n" +
+	"\x17BridgeLedgerDisposition\x12)\n" +
+	"%BRIDGE_LEDGER_DISPOSITION_UNSPECIFIED\x10\x00\x12$\n" +
+	" BRIDGE_LEDGER_DISPOSITION_ACTIVE\x10\x01\x12\"\n" +
+	"\x1eBRIDGE_LEDGER_DISPOSITION_VOID\x10\x02\x12'\n" +
+	"#BRIDGE_LEDGER_DISPOSITION_WITHDRAWN\x10\x03\x12&\n" +
+	"\"BRIDGE_LEDGER_DISPOSITION_RESERVED\x10\x04B'Z%github.com/urnetwork/sidecar/protocolb\x06proto3"
 
 var (
 	file_protocol_config_proto_rawDescOnce sync.Once
@@ -3019,8 +3907,8 @@ func file_protocol_config_proto_rawDescGZIP() []byte {
 	return file_protocol_config_proto_rawDescData
 }
 
-var file_protocol_config_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_protocol_config_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
+var file_protocol_config_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
+var file_protocol_config_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_protocol_config_proto_goTypes = []any{
 	(IndexerScope)(0),                // 0: urnetwork.sidecar.IndexerScope
 	(IndexerService)(0),              // 1: urnetwork.sidecar.IndexerService
@@ -3029,97 +3917,124 @@ var file_protocol_config_proto_goTypes = []any{
 	(DirectoryRunsMode)(0),           // 4: urnetwork.sidecar.DirectoryRunsMode
 	(DirectoryWorkersMode)(0),        // 5: urnetwork.sidecar.DirectoryWorkersMode
 	(VersioningMode)(0),              // 6: urnetwork.sidecar.VersioningMode
-	(*AdminSet)(nil),                 // 7: urnetwork.sidecar.AdminSet
-	(*MemberAdmit)(nil),              // 8: urnetwork.sidecar.MemberAdmit
-	(*SidecarAdmit)(nil),             // 9: urnetwork.sidecar.SidecarAdmit
-	(*AdmissionConfirm)(nil),         // 10: urnetwork.sidecar.AdmissionConfirm
-	(*SponsorSet)(nil),               // 11: urnetwork.sidecar.SponsorSet
-	(*IndexerSet)(nil),               // 12: urnetwork.sidecar.IndexerSet
-	(*IndexerServices)(nil),          // 13: urnetwork.sidecar.IndexerServices
-	(*RecoveryBind)(nil),             // 14: urnetwork.sidecar.RecoveryBind
-	(*RecoveryBindBody)(nil),         // 15: urnetwork.sidecar.RecoveryBindBody
-	(*RecoveryRebind)(nil),           // 16: urnetwork.sidecar.RecoveryRebind
-	(*KeyRegister)(nil),              // 17: urnetwork.sidecar.KeyRegister
-	(*KeyRevoke)(nil),                // 18: urnetwork.sidecar.KeyRevoke
-	(*Delegation)(nil),               // 19: urnetwork.sidecar.Delegation
-	(*DelegationRevoke)(nil),         // 20: urnetwork.sidecar.DelegationRevoke
-	(*AuthKeyBundle)(nil),            // 21: urnetwork.sidecar.AuthKeyBundle
-	(*ServiceDirectorySettings)(nil), // 22: urnetwork.sidecar.ServiceDirectorySettings
-	(*ServiceSettings)(nil),          // 23: urnetwork.sidecar.ServiceSettings
-	(*VersioningRule)(nil),           // 24: urnetwork.sidecar.VersioningRule
-	(*SocketKeyFile)(nil),            // 25: urnetwork.sidecar.SocketKeyFile
-	(*VersioningRules)(nil),          // 26: urnetwork.sidecar.VersioningRules
-	(*AuthorityProposal)(nil),        // 27: urnetwork.sidecar.AuthorityProposal
-	(*AuthorityCosign)(nil),          // 28: urnetwork.sidecar.AuthorityCosign
-	(*RecoveryVeto)(nil),             // 29: urnetwork.sidecar.RecoveryVeto
-	(*ConfigRecord)(nil),             // 30: urnetwork.sidecar.ConfigRecord
-	(*ConfigFold)(nil),               // 31: urnetwork.sidecar.ConfigFold
-	(*ConfigNameTable)(nil),          // 32: urnetwork.sidecar.ConfigNameTable
-	(*ConfigName)(nil),               // 33: urnetwork.sidecar.ConfigName
-	(*ConfigAtomTable)(nil),          // 34: urnetwork.sidecar.ConfigAtomTable
-	(*ConfigAtomName)(nil),           // 35: urnetwork.sidecar.ConfigAtomName
-	(*ConfigRuleTable)(nil),          // 36: urnetwork.sidecar.ConfigRuleTable
-	(*ConfigRuleId)(nil),             // 37: urnetwork.sidecar.ConfigRuleId
-	(*ConfigLabelTable)(nil),         // 38: urnetwork.sidecar.ConfigLabelTable
-	(*ConfigRepoLabel)(nil),          // 39: urnetwork.sidecar.ConfigRepoLabel
-	(*ConfigResolution)(nil),         // 40: urnetwork.sidecar.ConfigResolution
-	(*ConfigMemberResolution)(nil),   // 41: urnetwork.sidecar.ConfigMemberResolution
-	(*ConfigNetworkResolution)(nil),  // 42: urnetwork.sidecar.ConfigNetworkResolution
-	(*ConfigClientResolution)(nil),   // 43: urnetwork.sidecar.ConfigClientResolution
-	(*bridge.StatementHeader)(nil),   // 44: urnetwork.sidecar.StatementHeader
-	(bridge.MemberRole)(0),           // 45: urnetwork.sidecar.MemberRole
-	(bridge.RecoveryRebindReason)(0), // 46: urnetwork.sidecar.RecoveryRebindReason
-	(bridge.KeyAlg)(0),               // 47: urnetwork.sidecar.KeyAlg
-	(bridge.KeyPurpose)(0),           // 48: urnetwork.sidecar.KeyPurpose
-	(*bridge.WebAuthnEvidence)(nil),  // 49: urnetwork.sidecar.WebAuthnEvidence
-	(*bridge.ForwardScope)(nil),      // 50: urnetwork.sidecar.ForwardScope
-	(*bridge.AuthPin)(nil),           // 51: urnetwork.sidecar.AuthPin
+	(BridgeLedgerDisposition)(0),     // 7: urnetwork.sidecar.BridgeLedgerDisposition
+	(*AdminSet)(nil),                 // 8: urnetwork.sidecar.AdminSet
+	(*MemberAdmit)(nil),              // 9: urnetwork.sidecar.MemberAdmit
+	(*SidecarAdmit)(nil),             // 10: urnetwork.sidecar.SidecarAdmit
+	(*AdmissionConfirm)(nil),         // 11: urnetwork.sidecar.AdmissionConfirm
+	(*SponsorSet)(nil),               // 12: urnetwork.sidecar.SponsorSet
+	(*IndexerSet)(nil),               // 13: urnetwork.sidecar.IndexerSet
+	(*IndexerServices)(nil),          // 14: urnetwork.sidecar.IndexerServices
+	(*RecoveryBind)(nil),             // 15: urnetwork.sidecar.RecoveryBind
+	(*RecoveryBindBody)(nil),         // 16: urnetwork.sidecar.RecoveryBindBody
+	(*RecoveryRebind)(nil),           // 17: urnetwork.sidecar.RecoveryRebind
+	(*KeyRegister)(nil),              // 18: urnetwork.sidecar.KeyRegister
+	(*KeyRevoke)(nil),                // 19: urnetwork.sidecar.KeyRevoke
+	(*Delegation)(nil),               // 20: urnetwork.sidecar.Delegation
+	(*DelegationRevoke)(nil),         // 21: urnetwork.sidecar.DelegationRevoke
+	(*AuthKeyBundle)(nil),            // 22: urnetwork.sidecar.AuthKeyBundle
+	(*ServiceDirectorySettings)(nil), // 23: urnetwork.sidecar.ServiceDirectorySettings
+	(*ServiceSettings)(nil),          // 24: urnetwork.sidecar.ServiceSettings
+	(*VersioningRule)(nil),           // 25: urnetwork.sidecar.VersioningRule
+	(*SocketKeyFile)(nil),            // 26: urnetwork.sidecar.SocketKeyFile
+	(*VersioningRules)(nil),          // 27: urnetwork.sidecar.VersioningRules
+	(*AuthorityProposal)(nil),        // 28: urnetwork.sidecar.AuthorityProposal
+	(*AuthorityCosign)(nil),          // 29: urnetwork.sidecar.AuthorityCosign
+	(*RecoveryVeto)(nil),             // 30: urnetwork.sidecar.RecoveryVeto
+	(*ConfigRecord)(nil),             // 31: urnetwork.sidecar.ConfigRecord
+	(*ConfigFold)(nil),               // 32: urnetwork.sidecar.ConfigFold
+	(*ConfigNameTable)(nil),          // 33: urnetwork.sidecar.ConfigNameTable
+	(*ConfigName)(nil),               // 34: urnetwork.sidecar.ConfigName
+	(*ConfigAtomTable)(nil),          // 35: urnetwork.sidecar.ConfigAtomTable
+	(*ConfigAtomName)(nil),           // 36: urnetwork.sidecar.ConfigAtomName
+	(*ConfigRuleTable)(nil),          // 37: urnetwork.sidecar.ConfigRuleTable
+	(*ConfigRuleId)(nil),             // 38: urnetwork.sidecar.ConfigRuleId
+	(*ConfigLabelTable)(nil),         // 39: urnetwork.sidecar.ConfigLabelTable
+	(*ConfigRepoLabel)(nil),          // 40: urnetwork.sidecar.ConfigRepoLabel
+	(*ConfigResolution)(nil),         // 41: urnetwork.sidecar.ConfigResolution
+	(*ConfigMemberResolution)(nil),   // 42: urnetwork.sidecar.ConfigMemberResolution
+	(*ConfigNetworkResolution)(nil),  // 43: urnetwork.sidecar.ConfigNetworkResolution
+	(*ConfigClientResolution)(nil),   // 44: urnetwork.sidecar.ConfigClientResolution
+	(*BridgeLedgerManifest)(nil),     // 45: urnetwork.sidecar.BridgeLedgerManifest
+	(*BridgeLedgerFile)(nil),         // 46: urnetwork.sidecar.BridgeLedgerFile
+	(*BridgeLedgerAddresses)(nil),    // 47: urnetwork.sidecar.BridgeLedgerAddresses
+	(*BridgeLedgerAddressRow)(nil),   // 48: urnetwork.sidecar.BridgeLedgerAddressRow
+	(*BridgeLedgerRules)(nil),        // 49: urnetwork.sidecar.BridgeLedgerRules
+	(*BridgeLedgerRuleRow)(nil),      // 50: urnetwork.sidecar.BridgeLedgerRuleRow
+	(*BridgeLedgerEgressSpecs)(nil),  // 51: urnetwork.sidecar.BridgeLedgerEgressSpecs
+	(*BridgeLedgerEgressRow)(nil),    // 52: urnetwork.sidecar.BridgeLedgerEgressRow
+	(*BridgeLedgerAliases)(nil),      // 53: urnetwork.sidecar.BridgeLedgerAliases
+	(*BridgeLedgerAliasRow)(nil),     // 54: urnetwork.sidecar.BridgeLedgerAliasRow
+	(*bridge.StatementHeader)(nil),   // 55: urnetwork.sidecar.StatementHeader
+	(bridge.MemberRole)(0),           // 56: urnetwork.sidecar.MemberRole
+	(bridge.RecoveryRebindReason)(0), // 57: urnetwork.sidecar.RecoveryRebindReason
+	(bridge.KeyAlg)(0),               // 58: urnetwork.sidecar.KeyAlg
+	(bridge.KeyPurpose)(0),           // 59: urnetwork.sidecar.KeyPurpose
+	(*bridge.WebAuthnEvidence)(nil),  // 60: urnetwork.sidecar.WebAuthnEvidence
+	(*bridge.ForwardScope)(nil),      // 61: urnetwork.sidecar.ForwardScope
+	(*bridge.AuthPin)(nil),           // 62: urnetwork.sidecar.AuthPin
+	(*bridge.BridgeRouteBody)(nil),   // 63: urnetwork.sidecar.BridgeRouteBody
+	(*bridge.BridgeMapBody)(nil),     // 64: urnetwork.sidecar.BridgeMapBody
+	(bridge.BridgeWithdrawMode)(0),   // 65: urnetwork.sidecar.BridgeWithdrawMode
+	(bridge.BridgeEgressMode)(0),     // 66: urnetwork.sidecar.BridgeEgressMode
+	(*bridge.BridgeAliasBody)(nil),   // 67: urnetwork.sidecar.BridgeAliasBody
 }
 var file_protocol_config_proto_depIdxs = []int32{
-	44, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
-	44, // 1: urnetwork.sidecar.MemberAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
-	45, // 2: urnetwork.sidecar.MemberAdmit.role:type_name -> urnetwork.sidecar.MemberRole
-	44, // 3: urnetwork.sidecar.SidecarAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
-	44, // 4: urnetwork.sidecar.AdmissionConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
-	44, // 5: urnetwork.sidecar.SponsorSet.header:type_name -> urnetwork.sidecar.StatementHeader
-	44, // 6: urnetwork.sidecar.IndexerSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	55, // 0: urnetwork.sidecar.AdminSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	55, // 1: urnetwork.sidecar.MemberAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
+	56, // 2: urnetwork.sidecar.MemberAdmit.role:type_name -> urnetwork.sidecar.MemberRole
+	55, // 3: urnetwork.sidecar.SidecarAdmit.header:type_name -> urnetwork.sidecar.StatementHeader
+	55, // 4: urnetwork.sidecar.AdmissionConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
+	55, // 5: urnetwork.sidecar.SponsorSet.header:type_name -> urnetwork.sidecar.StatementHeader
+	55, // 6: urnetwork.sidecar.IndexerSet.header:type_name -> urnetwork.sidecar.StatementHeader
 	0,  // 7: urnetwork.sidecar.IndexerSet.scope:type_name -> urnetwork.sidecar.IndexerScope
 	1,  // 8: urnetwork.sidecar.IndexerServices.services:type_name -> urnetwork.sidecar.IndexerService
-	44, // 9: urnetwork.sidecar.RecoveryBind.header:type_name -> urnetwork.sidecar.StatementHeader
-	44, // 10: urnetwork.sidecar.RecoveryRebind.header:type_name -> urnetwork.sidecar.StatementHeader
-	46, // 11: urnetwork.sidecar.RecoveryRebind.reason:type_name -> urnetwork.sidecar.RecoveryRebindReason
-	44, // 12: urnetwork.sidecar.KeyRegister.header:type_name -> urnetwork.sidecar.StatementHeader
-	47, // 13: urnetwork.sidecar.KeyRegister.alg:type_name -> urnetwork.sidecar.KeyAlg
-	48, // 14: urnetwork.sidecar.KeyRegister.purpose:type_name -> urnetwork.sidecar.KeyPurpose
-	49, // 15: urnetwork.sidecar.KeyRegister.key_webauthn:type_name -> urnetwork.sidecar.WebAuthnEvidence
-	44, // 16: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	44, // 17: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
-	50, // 18: urnetwork.sidecar.Delegation.forward:type_name -> urnetwork.sidecar.ForwardScope
-	44, // 19: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	51, // 20: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
+	55, // 9: urnetwork.sidecar.RecoveryBind.header:type_name -> urnetwork.sidecar.StatementHeader
+	55, // 10: urnetwork.sidecar.RecoveryRebind.header:type_name -> urnetwork.sidecar.StatementHeader
+	57, // 11: urnetwork.sidecar.RecoveryRebind.reason:type_name -> urnetwork.sidecar.RecoveryRebindReason
+	55, // 12: urnetwork.sidecar.KeyRegister.header:type_name -> urnetwork.sidecar.StatementHeader
+	58, // 13: urnetwork.sidecar.KeyRegister.alg:type_name -> urnetwork.sidecar.KeyAlg
+	59, // 14: urnetwork.sidecar.KeyRegister.purpose:type_name -> urnetwork.sidecar.KeyPurpose
+	60, // 15: urnetwork.sidecar.KeyRegister.key_webauthn:type_name -> urnetwork.sidecar.WebAuthnEvidence
+	55, // 16: urnetwork.sidecar.KeyRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	55, // 17: urnetwork.sidecar.Delegation.header:type_name -> urnetwork.sidecar.StatementHeader
+	61, // 18: urnetwork.sidecar.Delegation.forward:type_name -> urnetwork.sidecar.ForwardScope
+	55, // 19: urnetwork.sidecar.DelegationRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	62, // 20: urnetwork.sidecar.AuthKeyBundle.head:type_name -> urnetwork.sidecar.AuthPin
 	4,  // 21: urnetwork.sidecar.ServiceDirectorySettings.runs:type_name -> urnetwork.sidecar.DirectoryRunsMode
 	5,  // 22: urnetwork.sidecar.ServiceDirectorySettings.workers:type_name -> urnetwork.sidecar.DirectoryWorkersMode
 	2,  // 23: urnetwork.sidecar.ServiceSettings.team_mail:type_name -> urnetwork.sidecar.TeamMailMode
 	3,  // 24: urnetwork.sidecar.ServiceSettings.self_admit:type_name -> urnetwork.sidecar.SelfAdmitMode
-	22, // 25: urnetwork.sidecar.ServiceSettings.directory:type_name -> urnetwork.sidecar.ServiceDirectorySettings
+	23, // 25: urnetwork.sidecar.ServiceSettings.directory:type_name -> urnetwork.sidecar.ServiceDirectorySettings
 	6,  // 26: urnetwork.sidecar.VersioningRule.versioning:type_name -> urnetwork.sidecar.VersioningMode
-	24, // 27: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
-	44, // 28: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
-	44, // 29: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
-	44, // 30: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
-	30, // 31: urnetwork.sidecar.ConfigFold.records:type_name -> urnetwork.sidecar.ConfigRecord
-	33, // 32: urnetwork.sidecar.ConfigNameTable.names:type_name -> urnetwork.sidecar.ConfigName
-	35, // 33: urnetwork.sidecar.ConfigAtomTable.atoms:type_name -> urnetwork.sidecar.ConfigAtomName
-	37, // 34: urnetwork.sidecar.ConfigRuleTable.rules:type_name -> urnetwork.sidecar.ConfigRuleId
-	39, // 35: urnetwork.sidecar.ConfigLabelTable.labels:type_name -> urnetwork.sidecar.ConfigRepoLabel
-	41, // 36: urnetwork.sidecar.ConfigResolution.members:type_name -> urnetwork.sidecar.ConfigMemberResolution
-	42, // 37: urnetwork.sidecar.ConfigResolution.networks:type_name -> urnetwork.sidecar.ConfigNetworkResolution
-	43, // 38: urnetwork.sidecar.ConfigResolution.clients:type_name -> urnetwork.sidecar.ConfigClientResolution
-	39, // [39:39] is the sub-list for method output_type
-	39, // [39:39] is the sub-list for method input_type
-	39, // [39:39] is the sub-list for extension type_name
-	39, // [39:39] is the sub-list for extension extendee
-	0,  // [0:39] is the sub-list for field type_name
+	25, // 27: urnetwork.sidecar.VersioningRules.rules:type_name -> urnetwork.sidecar.VersioningRule
+	55, // 28: urnetwork.sidecar.AuthorityProposal.header:type_name -> urnetwork.sidecar.StatementHeader
+	55, // 29: urnetwork.sidecar.AuthorityCosign.header:type_name -> urnetwork.sidecar.StatementHeader
+	55, // 30: urnetwork.sidecar.RecoveryVeto.header:type_name -> urnetwork.sidecar.StatementHeader
+	31, // 31: urnetwork.sidecar.ConfigFold.records:type_name -> urnetwork.sidecar.ConfigRecord
+	34, // 32: urnetwork.sidecar.ConfigNameTable.names:type_name -> urnetwork.sidecar.ConfigName
+	36, // 33: urnetwork.sidecar.ConfigAtomTable.atoms:type_name -> urnetwork.sidecar.ConfigAtomName
+	38, // 34: urnetwork.sidecar.ConfigRuleTable.rules:type_name -> urnetwork.sidecar.ConfigRuleId
+	40, // 35: urnetwork.sidecar.ConfigLabelTable.labels:type_name -> urnetwork.sidecar.ConfigRepoLabel
+	42, // 36: urnetwork.sidecar.ConfigResolution.members:type_name -> urnetwork.sidecar.ConfigMemberResolution
+	43, // 37: urnetwork.sidecar.ConfigResolution.networks:type_name -> urnetwork.sidecar.ConfigNetworkResolution
+	44, // 38: urnetwork.sidecar.ConfigResolution.clients:type_name -> urnetwork.sidecar.ConfigClientResolution
+	46, // 39: urnetwork.sidecar.BridgeLedgerManifest.files:type_name -> urnetwork.sidecar.BridgeLedgerFile
+	48, // 40: urnetwork.sidecar.BridgeLedgerAddresses.rows:type_name -> urnetwork.sidecar.BridgeLedgerAddressRow
+	50, // 41: urnetwork.sidecar.BridgeLedgerRules.rows:type_name -> urnetwork.sidecar.BridgeLedgerRuleRow
+	7,  // 42: urnetwork.sidecar.BridgeLedgerRuleRow.disposition:type_name -> urnetwork.sidecar.BridgeLedgerDisposition
+	63, // 43: urnetwork.sidecar.BridgeLedgerRuleRow.route:type_name -> urnetwork.sidecar.BridgeRouteBody
+	64, // 44: urnetwork.sidecar.BridgeLedgerRuleRow.map:type_name -> urnetwork.sidecar.BridgeMapBody
+	65, // 45: urnetwork.sidecar.BridgeLedgerRuleRow.withdraw_mode:type_name -> urnetwork.sidecar.BridgeWithdrawMode
+	52, // 46: urnetwork.sidecar.BridgeLedgerEgressSpecs.rows:type_name -> urnetwork.sidecar.BridgeLedgerEgressRow
+	66, // 47: urnetwork.sidecar.BridgeLedgerEgressRow.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
+	54, // 48: urnetwork.sidecar.BridgeLedgerAliases.rows:type_name -> urnetwork.sidecar.BridgeLedgerAliasRow
+	67, // 49: urnetwork.sidecar.BridgeLedgerAliasRow.body:type_name -> urnetwork.sidecar.BridgeAliasBody
+	50, // [50:50] is the sub-list for method output_type
+	50, // [50:50] is the sub-list for method input_type
+	50, // [50:50] is the sub-list for extension type_name
+	50, // [50:50] is the sub-list for extension extendee
+	0,  // [0:50] is the sub-list for field type_name
 }
 
 func init() { file_protocol_config_proto_init() }
@@ -3132,8 +4047,8 @@ func file_protocol_config_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_config_proto_rawDesc), len(file_protocol_config_proto_rawDesc)),
-			NumEnums:      7,
-			NumMessages:   37,
+			NumEnums:      8,
+			NumMessages:   47,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

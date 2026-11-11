@@ -11,6 +11,13 @@
 //	versioning_rules                 one Signed VersioningRules, verbatim
 //	bridge/block                     one Signed BridgeBlock, verbatim
 //	bridge/share/<share_id hex>      a BridgeShareSigner (§17.9)
+//	bridge/share-grant/<share_id hex>
+//	                                 a BridgeShareGrant (§17.9, QD-077)
+//	bridge/ledger/manifest           the bridge ledger's fold (bridge_ledger.go, DESIGN-DETAILS 12.2.2): its manifest,
+//	bridge/ledger/addresses          and its files of rows by kind, the rules in shards by the rule id's first byte,
+//	bridge/ledger/egress             or first two bytes at 16 bits, each two lowercase hex digits
+//	bridge/ledger/aliases
+//	bridge/ledger/rules/<xx>[/<yy>]
 //	socket/key                       K_sock's SocketKeyFile (plan-SOCK-ksock-rotation)
 //	policy.hujson                    the policy's source bytes (§8)
 //	tags groups rules names labels resolve
@@ -73,6 +80,18 @@ const (
 	configHeadFoldDigits = 8
 )
 
+// The bridge ledger's files (bridge_ledger.go, DESIGN-DETAILS 12.2.2) and the share grants (QD-077).
+const (
+	ConfigHeadBridgeLedgerManifestPath  = "bridge/ledger/manifest"
+	ConfigHeadBridgeLedgerAddressesPath = "bridge/ledger/addresses"
+	ConfigHeadBridgeLedgerEgressPath    = "bridge/ledger/egress"
+	ConfigHeadBridgeLedgerAliasesPath   = "bridge/ledger/aliases"
+	// rules/<xx>, or rules/<xx>/<yy> at 16 bits
+	ConfigHeadBridgeLedgerRulesPrefix = "bridge/ledger/rules/"
+	// bridge/share-grant/<share_id hex>: a BridgeShareGrant
+	ConfigHeadBridgeShareGrantPrefix = "bridge/share-grant/"
+)
+
 // A bridge/share file's name: a share_id, 16 B, in lowercase hex.
 const configHeadShareIdHexLength = 2 * 16
 
@@ -90,6 +109,11 @@ var configHeadFilePaths = map[string]bool{
 	ConfigHeadNamesPath:           true,
 	ConfigHeadLabelsPath:          true,
 	ConfigHeadResolvePath:         true,
+
+	ConfigHeadBridgeLedgerManifestPath:  true,
+	ConfigHeadBridgeLedgerAddressesPath: true,
+	ConfigHeadBridgeLedgerEgressPath:    true,
+	ConfigHeadBridgeLedgerAliasesPath:   true,
 }
 
 var (
@@ -133,9 +157,24 @@ func configHeadPathKnown(path string) bool {
 	if _, ok := configFoldIndex(path); ok {
 		return true
 	}
-	if shareIdHex, ok := strings.CutPrefix(path, ConfigHeadBridgeSharePrefix); ok {
+	shareIdHexKnown := func(shareIdHex string) bool {
 		decoded, err := hex.DecodeString(shareIdHex)
 		return err == nil && len(shareIdHex) == configHeadShareIdHexLength && hex.EncodeToString(decoded) == shareIdHex
+	}
+	if shareIdHex, ok := strings.CutPrefix(path, ConfigHeadBridgeSharePrefix); ok {
+		return shareIdHexKnown(shareIdHex)
+	}
+	if shareIdHex, ok := strings.CutPrefix(path, ConfigHeadBridgeShareGrantPrefix); ok {
+		return shareIdHexKnown(shareIdHex)
+	}
+	if shard, ok := strings.CutPrefix(path, ConfigHeadBridgeLedgerRulesPrefix); ok {
+		// <xx> at 8 bits, <xx>/<yy> at 16: each one byte in two lowercase hex digits
+		shardByteKnown := func(text string) bool {
+			decoded, err := hex.DecodeString(text)
+			return err == nil && len(decoded) == 1 && hex.EncodeToString(decoded) == text
+		}
+		first, second, deep := strings.Cut(shard, "/")
+		return shardByteKnown(first) && (!deep || shardByteKnown(second))
 	}
 	return false
 }
@@ -465,6 +504,16 @@ func CheckConfigBase(head *ConfigHead, check *ConfigHeadCheck, rows *ConfigCompi
 				record.GetKind() != want.Kind || !bytes.Equal(record.GetBody(), want.Body) {
 				return nil, fmt.Errorf("%w: the head's record at %d is not the log's entry %d", ErrConfigHeadMismatch, record.GetN(), want.N)
 			}
+		}
+	}
+
+	// the bridge ledger's fold, which a reader standing here computes for itself (DESIGN-DETAILS 12.2.3)
+	if check.BridgeFoldCheck != nil {
+		if err := check.BridgeFoldCheck(head); err != nil {
+			if errors.Is(err, ErrConfigHeadUnavailable) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("%w: bridge ledger: %w", ErrConfigHeadMismatch, err)
 		}
 	}
 

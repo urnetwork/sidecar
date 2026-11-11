@@ -125,6 +125,7 @@ func FuzzBridgeStatement(f *testing.F) {
 		signedType := bridgeFuzzStatementTypes[int(typeIndex)%len(bridgeFuzzStatementTypes)]
 		net := newTestConfigNet(t)
 		_, laptop, desktop := testBridgeCast(net)
+		net.log.settings.BridgeBodyJudge = testBridgeTestJudge()
 
 		// a held rule, an address and a withdrawn id for the fuzzed statement to meet
 		net.mustPost(desktop, bridge.SignedType_SIGNED_BRIDGE_ADDRESS, net.bridgeAddress(desktop, testBridgeIpv4(100, 80, 3, 9)))
@@ -153,16 +154,16 @@ func FuzzBridgeStatement(f *testing.F) {
 			t.Fatalf("%s: a refusal outside the log's classes: %v", signedType, verdict.Refusal)
 		}
 		if egress, ok := statement.(*bridge.BridgeEgress); ok && verdict.Accepted() {
-			// what the gate folds is the mode it read in the clear
+			// what the gate folds is the mode it read in the clear, for the subject the statement names
 			rows, err := net.log.State().BridgeRows()
-			if err != nil || BridgeRowsEgressMode(rows, laptop.sidecarId) != egress.GetMode() {
+			if err != nil || BridgeRowsEgressMode(rows, Id(egress.GetSubject())) != egress.GetMode() {
 				t.Fatalf("a BridgeEgress of mode %s took effect and the rows hold %v, %v", egress.GetMode(), rows, err)
 			}
 		}
 		net.everyReaderAgrees()
 
 		state := net.log.State()
-		keyed := state.Bridge().Open(&BridgeLedgerReader{State: state, RepoKeyAt: testConfigSealKeyAt(testConfigSealKey(1)), Approvals: testBridgeApprovalCheck})
+		keyed := state.Bridge().Open(&BridgeLedgerReader{State: state, RepoKeyAt: testConfigSealKeyAt(testConfigSealKey(1))})
 		bridgeFuzzCheckLedger(t, keyed, after)
 		if len(keyed.Pending()) != 0 && verdict.Accepted() && len(statementBytes) == 0 {
 			t.Fatal("a reader holding the generation left an untouched statement pending")

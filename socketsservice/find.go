@@ -17,7 +17,8 @@
 //  6. one Pick: no_listener, busy, or a primary and a backup, each with its stored lease
 //  7. the newest view S', and if it moved, step 3's verdicts again on S'. Then the listener check on each
 //     picked listener (checkListener). A refused listener is removed for cause at S''s position, which leaves
-//     its tombstone, and hinted SOCKET_HINT_REVOKED. If the primary got no ticket the backup, if it passed,
+//     its tombstone, with its {svc_} pairs at that position when it holds no other edge name, and hinted
+//     SOCKET_HINT_REVOKED. If the primary got no ticket the backup, if it passed,
 //     is the primary; if every picked listener was refused, one more Pick, then no_listener; if no picked
 //     listener could be judged, unavailable for BehindRetryAfter, by when this process has loaded
 //  8. for an edge Find, the {svc_} pair of each listener of the answer, at S''s position, for the lesser of
@@ -46,20 +47,6 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
-)
-
-// A Find's sizes, which a well-formed dialer never passes.
-const (
-	// Two failed tickets of 512 B, K client ids and the rest, in base64 and JSON, many times over.
-	socketFindMaxBodyByteCount = 64 * 1024
-	// A dialer reports the tickets of its last Find, which returned at most two (§9.6).
-	socketFindMaxFailedTicketCount = 2
-	// A signed ticket's bytes (§9.6).
-	socketFindMaxTicketByteCount = 512
-	// An edge process's K clients (§13.6's 4 by default), with room.
-	socketFindMaxClientIdCount = 64
-	// tlsedge's keyed hash of the visitor's /24 or /48 (§9.7).
-	socketFindMaxAffinityKeyByteCount = 64
 )
 
 // What the listener check made of one picked listener.
@@ -128,10 +115,10 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 		return nil, refusal
 	}
 	args := &sidecar.SocketFindArgs{}
-	if err := readSocketJson(r, socketFindMaxBodyByteCount, args); err != nil {
+	if err := readSocketJson(r, int64(self.settings.FindMaxBodyByteCount), args); err != nil {
 		return nil, socketRefusalOf(sidecar.SocketErrorCodeInvalid, 0)
 	}
-	name, edgeClientIds, ok := socketFindFormed(caller, args)
+	name, edgeClientIds, ok := socketFindFormed(caller, args, self.settings)
 	if !ok {
 		return nil, socketRefusalOf(sidecar.SocketErrorCodeInvalid, 0)
 	}
@@ -271,10 +258,10 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 	return result, nil
 }
 
-// Step 1's shape: one network, exactly one of an edge name in canonical form and a token path, at most two
-// failed tickets each whole, an affinity key within its size, and client ids from an urnetwork-edge caller
-// alone, which must send at least one. The name, and an edge's K ids in their order.
-func socketFindFormed(caller *socketCaller, args *sidecar.SocketFindArgs) (*socketParsedName, []connect.Id, bool) {
+// Step 1's shape, each size settings': one network, exactly one of an edge name in canonical form and a token
+// path, at most two failed tickets each whole, an affinity key within its size, and client ids from an
+// urnetwork-edge caller alone, which must send at least one. The name, and an edge's K ids in their order.
+func socketFindFormed(caller *socketCaller, args *sidecar.SocketFindArgs, settings *SocketsSettings) (*socketParsedName, []connect.Id, bool) {
 	if args.NetworkId == nil || *args.NetworkId == (connect.Id{}) {
 		return nil, nil, false
 	}
@@ -282,11 +269,11 @@ func socketFindFormed(caller *socketCaller, args *sidecar.SocketFindArgs) (*sock
 	if !ok {
 		return nil, nil, false
 	}
-	if socketFindMaxFailedTicketCount < len(args.FailedTickets) || socketFindMaxAffinityKeyByteCount < len(args.AffinityKey) {
+	if settings.Format.FailedTicketMaxCount < len(args.FailedTickets) || settings.Format.AffinityKeyMaxByteCount < len(args.AffinityKey) {
 		return nil, nil, false
 	}
 	for _, failed := range args.FailedTickets {
-		if failed == nil || len(failed.Ticket) == 0 || socketFindMaxTicketByteCount < len(failed.Ticket) ||
+		if failed == nil || len(failed.Ticket) == 0 || settings.Format.TicketMaxByteCount < len(failed.Ticket) ||
 			(failed.Reason != sidecar.SocketFailedReasonTimeout && failed.Reason != sidecar.SocketFailedReasonRefused) {
 			return nil, nil, false
 		}
@@ -294,7 +281,7 @@ func socketFindFormed(caller *socketCaller, args *sidecar.SocketFindArgs) (*sock
 	if !caller.edge {
 		return name, nil, len(args.ClientIds) == 0
 	}
-	if len(args.ClientIds) == 0 || socketFindMaxClientIdCount < len(args.ClientIds) {
+	if len(args.ClientIds) == 0 || settings.FindMaxClientIdCount < len(args.ClientIds) {
 		return nil, nil, false
 	}
 	edgeClientIds := make([]connect.Id, 0, len(args.ClientIds))
@@ -456,9 +443,10 @@ func (self *SocketsService) checkListener(view SocketGateView, networkId connect
 }
 
 // Removes refused listeners' leases of name for cause at position (one RemoveEntries), which leaves each a
-// tombstone, and hints each removed client SOCKET_HINT_REVOKED for its listen. A removal the store keeps for a
-// newer admission is evidence. Their pairs are left to EdgePairTtl: the store does not say whether a listener
-// holds another edge name, whose pairs a removal here would take too.
+// tombstone, and hints each removed client SOCKET_HINT_REVOKED for its listen. A listener whose last edge name
+// this removed loses its {svc_} pairs at position too, leaving their floor, as registration's step 9 removes
+// them: its pairs stand for its edge grants, and it holds no edge name now. A removal the store keeps for a
+// newer admission is evidence.
 func (self *SocketsService) removeRefused(networkId connect.Id, position uint64, name *socketParsedName, refused []*SocketStoreListener, now time.Time) {
 	refs := make([]*SocketStoreEntryRef, 0, len(refused))
 	for _, listener := range refused {
@@ -478,11 +466,33 @@ func (self *SocketsService) removeRefused(networkId connect.Id, position uint64,
 	for index, removal := range removals {
 		switch {
 		case removal.Removed != nil:
+			if SocketPairNameKey(removal.Removed.NameKey) && !removal.EdgeEntriesRemain {
+				self.removePairs(removal.Removed.ListenerClientId, position)
+			}
 			self.hintRevoked(refused[index], now)
 		case removal.Kept && position < removal.PolicyVersion:
 			self.gate.Observe(networkId, removal.PolicyVersion)
 		}
 	}
+}
+
+// Removes listenerClientId's {svc_} pairs at position, leaving their floor, once it holds no edge name (QD-656;
+// DESIGN-DETAILS 13.2.3's registration step 9 and find step 7), and forgets this process's memos of them, so
+// the next Find writes them again and the next accepted edge registration renews them. A failed call leaves
+// the pairs to EdgePairTtl, which ends them within 15 minutes whatever happens here.
+func (self *SocketsService) removePairs(listenerClientId connect.Id, position uint64) {
+	err := func() error {
+		ctx, done := self.storeContext()
+		defer done()
+		testHookBarrier("sockets.pairs.remove.before", "")
+		defer testHookBarrier("sockets.pairs.remove.after", "")
+		return self.store.RemoveServicePairs(ctx, listenerClientId, position)
+	}()
+	if err != nil {
+		return
+	}
+	self.pairWrites.forgetListener(listenerClientId)
+	self.pairTouches.forget(listenerClientId)
 }
 
 // SOCKET_HINT_REVOKED for listener's listen (§9.5): its client calls registrations at once, and that answer

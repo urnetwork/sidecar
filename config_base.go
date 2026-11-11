@@ -95,6 +95,10 @@ type ConfigHeadCheck struct {
 	FoldedFrom     uint64
 	FirstPrevChain [sha256.Size]byte
 	Floor          *bridge.AuthPin
+	// With Previous: the bridge ledger's check of the head (CheckBridgeLedgerFold, DESIGN-DETAILS 12.2.3), which
+	// CheckConfigBase calls, an error being ErrConfigHeadMismatch's fork, or ErrConfigHeadUnavailable's wait. Nil
+	// checks no ledger: a reader with no BridgeBodyJudge.
+	BridgeFoldCheck func(head *ConfigHead) error
 }
 
 // What the head check found.
@@ -189,13 +193,14 @@ func (self *ConfigLog) applyBase(state *ConfigState, kept *configKeptEntry, rows
 			return nil, self.baseFork(kept, "the rows at folded_through %d: %v", header.GetFoldedThrough(), err)
 		}
 		facts, err = rowsSource.CheckHead(&ConfigHeadCheck{
-			Previous:     state,
-			Header:       header,
-			Folded:       folded,
-			FoldedKnown:  true,
-			Rows:         rows,
-			CompileRows:  compileRows,
-			GenesisChain: state.genesisChain,
+			Previous:        state,
+			Header:          header,
+			Folded:          folded,
+			FoldedKnown:     true,
+			Rows:            rows,
+			CompileRows:     compileRows,
+			GenesisChain:    state.genesisChain,
+			BridgeFoldCheck: self.bridgeFoldCheck(state, header),
 		})
 		if errors.Is(err, ErrConfigHeadUnavailable) {
 			return nil, err
