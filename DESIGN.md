@@ -2417,7 +2417,7 @@ This section decides where code lives and how it is built, branched, versioned, 
 | R-REPO-3 | go.mod, sidecar.go, protocol/, mcp/, cli/main.go; service code in the root | PLAN.md:9-21 |
 | R-REPO-4 | New pieces, MLS included, in sidecar; all work on `sidecar` branches | owner rules 1, 4 |
 | R-REPO-5 | No parent package imports a child; commits carry no AI attribution | connect/CODESTYLE.md:24-47, 80-83 |
-| R-REPO-6 | Go 1.27.3, pinned siblings, rollout classes, no cgo in sidecar packages | server/README.md:5-14; sdk/js/Makefile:69 |
+| R-REPO-6 | Go 1.27.4, pinned siblings, rollout classes, no cgo in sidecar packages | server/README.md:5-14; sdk/js/Makefile:69 |
 | R-REPO-7 | Open source, signed releases, one calendar version; reproducible builds a goal, not a gate | sidecar/design/pitch5.html:930; build/README.md:3-7; [owner decision 77](#od-77) |
 | R-REPO-8 | sidecar public from 2026-11-04 as it is; every touched repo merges `sidecar` into `main` at each exit review | owner decisions [117](#od-117), [118](#od-118) |
 
@@ -2554,7 +2554,7 @@ Dispositions follow owner decisions [22](#od-22), [85](#od-85) (C14 into M4), 86
 
 ```text
 module github.com/urnetwork/sidecar
-go 1.27.3
+go 1.27.4
 tool google.golang.org/protobuf/cmd/protoc-gen-go
 replace github.com/urnetwork/connect => ../connect
 replace github.com/pion/sctp => ../connect/sctp
@@ -6329,7 +6329,7 @@ This section owns X12: the in-house MLS subset, ciphersuite, credentials and gro
 ### 10.3 What exists today
 
 - **GKM** appears only at PLAN.md:53; no repo has code for it [R:ext-storage-crypto](design/design-research/ext-storage-crypto.md).
-- **Go 1.27.3** (connect/go.mod:3). `crypto/hpke` implements X-Wing as `MLKEM768X25519()`, KEM 0x647a, from draft-ietf-hpke-pq (GOROOT/src/crypto/hpke/pq.go:21, :39-41); `crypto/mldsa` arrived in Go 1.27 (GOROOT/api/go1.27.txt:4).
+- **Go 1.27.4** (connect/go.mod:3). `crypto/hpke` implements X-Wing as `MLKEM768X25519()`, KEM 0x647a, from draft-ietf-hpke-pq (GOROOT/src/crypto/hpke/pq.go:21, :39-41); `crypto/mldsa` arrived in Go 1.27 (GOROOT/api/go1.27.txt:4).
 - **Constraints.** The browser build is `CGO_ENABLED=0` (sdk/js/Makefile:69). server's `BlobStore` has `PutIfAbsent` but no Delete, If-Match or ranged read (server/blob.go:160-192); `ServiceHost.Blobs` adds them, per metadata cluster (§4.5, §19).
 - **Test material** (2026-11-03). The mlswg's 16 vector files carry only RFC 9420's classical suites (https://github.com/mlswg/mls-implementations/tree/main/test-vectors). MIT differential peers: thomas-vilte/mls-go v1.6.0 (0x0001-0x0003; [R:ext-storage-crypto](design/design-research/ext-storage-crypto.md) §2.4); tmc/mls, whose provisional 0x004F has exactly 0x0010's algorithms (wire.go:33-50); OpenMLS, whose unregistered 0x004D pairs X-Wing with ChaCha20-Poly1305 (https://cryspen.com/post/pq-openmls/).
 
@@ -9430,7 +9430,7 @@ text      invalid UTF-8 -> U+FFFD; NFKC; full case folding; accents: NFD, nonspa
           each side, fields joined in field order
 tables    golang.org/x/text links Unicode 15.0.0 tables under Go < 1.27 and 17.0.0 under Go 1.27
           (.gomodcache/golang.org/x/text@v0.43.0/unicode/norm/tables15.0.0.go:3, tables17.0.0.go:3; cases/ alike),
-          and connect and sdk declare go 1.27.3 (connect/go.mod:3, sdk/go.mod:3): normalizer 1 is Unicode 17.0.0
+          and connect and sdk declare go 1.27.4 (connect/go.mod:3, sdk/go.mod:3): normalizer 1 is Unicode 17.0.0
           from one x/text module version, at least v0.43.0, linked by every leg with one toolchain, since one
           norm.Version does not fix NFC: v0.40.0 and v0.41.0 compose U+05D2 U+0307 to U+105C9 and U+05DA U+0307 to
           U+105E4 (U+FB32 and U+FB3A alike), where v0.42.0 and v0.43.0 keep them, all reporting 17.0.0, examples
@@ -20154,7 +20154,7 @@ gaps      any other step tmc/mls lacks is named in the artifact as a gap; mlswg 
 
 **D-TEST-14 (proposed).** Every search schedule checks its results against `SearchOracle` (22.4), which shares no index code: a desktop's text-verified hits equal its set, every device's candidates include its covered set, and each uncovered document is found from local text or reported not yet searchable; the index schedules also search from a fresh cache after the purge has taken every replaced index version. *Why:* completeness needs extraction, masking, coverage and roll-ups all correct, and an oracle sharing their code shares their bugs; a warm cache or an uncollected version can hide a lost diff base or tombstone.
 
-**D-TEST-15 (proposed).** testdata/index/ fixes vectors with plaintext hashes (normalization, trigram sets, deltas, head files, seals, merges, roll-ups, doc and tombstone tables, a merge keeping a head's base, a roll-up removing an older newer-bucket entry) that every test.sh reproduces byte for byte on every leg, js/wasm and gomobile included; decoders accept only canonical encodings; every leg builds with one Go toolchain, since x/text picks its Unicode 15.0.0 or 17.0.0 tables by toolchain (.gomodcache/golang.org/x/text@v0.43.0/unicode/norm/tables15.0.0.go:3, `//go:build !go1.27`; connect/go.mod:3 and sdk/go.mod:3, `go 1.27.3`), and the vectors check the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` and x/text's module version (`IndexFileHeader` field 14), and include examples of the 19,960 two-rune strings that v0.40.0's and v0.41.0's NFC compose wrongly under go1.27.3: the four Hebrew pairs (U+05D2 U+0307, U+05DA U+0307, U+FB32 U+0307, U+FB3A U+0307) and a supplementary letter, U+10044 U+0307, which v0.40.0 composes to U+1E0A (§4.7); v0.40.0, which connect/go.mod:33 requires, keys recomposition on runes clipped to 16 bits (.gomodcache/golang.org/x/text@v0.40.0/unicode/norm/forminfo.go:217; tables17.0.0.go:8070-8071 map 0x05D20307 to U+105C9 and 0x05DA0307 to U+105E4), while v0.43.0, which server/go.mod:59 requires, keys full runes (forminfo.go:217), and both report Unicode 17.0.0. *Why:* convergent roll-ups, local reproduction and the indexer's checks rest on determinism (FI-22), which map order, a toolchain or x/text's tables and code break silently.
+**D-TEST-15 (proposed).** testdata/index/ fixes vectors with plaintext hashes (normalization, trigram sets, deltas, head files, seals, merges, roll-ups, doc and tombstone tables, a merge keeping a head's base, a roll-up removing an older newer-bucket entry) that every test.sh reproduces byte for byte on every leg, js/wasm and gomobile included; decoders accept only canonical encodings; every leg builds with one Go toolchain, since x/text picks its Unicode 15.0.0 or 17.0.0 tables by toolchain (.gomodcache/golang.org/x/text@v0.43.0/unicode/norm/tables15.0.0.go:3, `//go:build !go1.27`; connect/go.mod:3 and sdk/go.mod:3, `go 1.27.4`), and the vectors check the linked `norm.Version`, `cases.UnicodeVersion` and `unicode.Version` and x/text's module version (`IndexFileHeader` field 14), and include examples of the 19,960 two-rune strings that v0.40.0's and v0.41.0's NFC compose wrongly under go1.27.3: the four Hebrew pairs (U+05D2 U+0307, U+05DA U+0307, U+FB32 U+0307, U+FB3A U+0307) and a supplementary letter, U+10044 U+0307, which v0.40.0 composes to U+1E0A (§4.7); v0.40.0, which connect/go.mod:33 requires, keys recomposition on runes clipped to 16 bits (.gomodcache/golang.org/x/text@v0.40.0/unicode/norm/forminfo.go:217; tables17.0.0.go:8070-8071 map 0x05D20307 to U+105C9 and 0x05DA0307 to U+105E4), while v0.43.0, which server/go.mod:59 requires, keys full runes (forminfo.go:217), and both report Unicode 17.0.0. *Why:* convergent roll-ups, local reproduction and the indexer's checks rest on determinism (FI-22), which map order, a toolchain or x/text's tables and code break silently.
 
 **D-TEST-16 (proposed).** Remote search is checked against `SearchOracle` as local search is, and its privacy by a relay capture: one frame-size sequence per kind whatever the query, results or post-parse failure, and equal evs request logs on both devices with and without it (FS-83, FI-24). Its stored accounting is checked by FS-125's sweep: a window's reports are the same for zero to five exchanges over every background within its allowance, both directions, across its contracts. *Why:* fixed sizes and evs's blindness are [owner decision 175](#od-175)'s whole privacy claim, and one optimization would break either silently: an early short reply, or a sync before answering. [Owner decision 176](#od-176)'s claim fails just as silently when a fixture's background sits far from a multiple of 128 KiB (meta review F18).
 

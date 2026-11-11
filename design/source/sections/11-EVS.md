@@ -2229,7 +2229,7 @@ text      invalid UTF-8 -> U+FFFD; NFKC; full case folding; accents: NFD, nonspa
           each side, fields joined in field order
 tables    golang.org/x/text links Unicode 15.0.0 tables under Go < 1.27 and 17.0.0 under Go 1.27
           (.gomodcache/golang.org/x/text@v0.43.0/unicode/norm/tables15.0.0.go:3, tables17.0.0.go:3; cases/ alike),
-          and connect and sdk declare go 1.27.3 (connect/go.mod:3, sdk/go.mod:3): normalizer 1 is Unicode 17.0.0
+          and connect and sdk declare go 1.27.4 (connect/go.mod:3, sdk/go.mod:3): normalizer 1 is Unicode 17.0.0
           from one x/text module version, at least v0.43.0, linked by every leg with one toolchain, since one
           norm.Version does not fix NFC: v0.40.0 and v0.41.0 compose U+05D2 U+0307 to U+105C9 and U+05DA U+0307 to
           U+105E4 (U+FB32 and U+FB3A alike), where v0.42.0 and v0.43.0 keep them, all reporting 17.0.0, examples

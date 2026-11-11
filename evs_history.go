@@ -12,6 +12,8 @@
 // asks again naming that statement's epoch (evs_epoch_read.go), one more round per epoch boundary the walk crosses.
 //
 // Format 1's versions are all kept, so each reads state kept; collected, drop_pending and dropped are format 2's.
+// Each version carries the slot ids its entry names, read from the verified entry without opening a key, so an
+// erasing device names every retained version's slot keys from History even once some are gone (§11.12).
 //
 // On every leg. Safe for concurrent use.
 
@@ -84,6 +86,14 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			return nil, fmt.Errorf("%w: a version its successor does not name", ErrEvsEntryRefused)
 		}
 		info := evsFileInfoOf(refId, result.head, verified)
+		slotIds := []Id{}
+		for _, slotIdBytes := range entry.GetSlotIds() {
+			slotId, err := IdFromBytes(slotIdBytes)
+			if err != nil {
+				return nil, fmt.Errorf("%w: a slot id of %d bytes", ErrEvsEntryRefused, len(slotIdBytes))
+			}
+			slotIds = append(slotIds, slotId)
+		}
 		history.Versions = append(history.Versions, &EvsHistoryVersion{
 			Version:         entry.GetVersion(),
 			CommitVersion:   verified.CommitVersion,
@@ -93,6 +103,7 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			Time:            info.Time,
 			Versioning:      entry.GetVersioning(),
 			State:           "kept",
+			SlotIds:         slotIds,
 		})
 		if len(entry.GetPrevPushId()) == 0 || entry.GetVersion() <= 1 {
 			break
