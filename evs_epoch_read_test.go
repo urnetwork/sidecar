@@ -336,6 +336,7 @@ func TestEvsRetokenOfAPushInParts(t *testing.T) {
 		writer.server.know(path)
 		writes = append(writes, &EvsPathWrite{Path: path, Content: bytes.NewReader([]byte(path))})
 	}
+	writer.seed(t)
 	writer.cutOverAtPushes(2)
 	result, err := writer.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: writes})
 	if err != nil {
@@ -501,4 +502,51 @@ func slicesContains(values []uint64, value uint64) bool {
 		}
 	}
 	return false
+}
+
+// DESIGN-DETAILS 9.2.3's first push (QD-632): a device holding a REMOVE generation creates a ref in that generation's
+// epoch. Its read of the ref with no head names no token, its push names epoch 2 and every token it shows evs is of
+// epoch 2, none a holder the removal dropped could test, and the head starts in epoch 2.
+func TestEvsFirstPushNamesTheNewestRemovalItHolds(t *testing.T) {
+	writer, below := evsFirstPushCapture(t)
+	if 0 < len(below) {
+		t.Fatalf("tokens below the removal's epoch: %v", below)
+	}
+	writer.world.stateLock.Lock()
+	defer writer.world.stateLock.Unlock()
+	if head := writer.world.headSummaryWithLock(); head.GetVersion() != 1 || head.GetPathEpoch().GetCurrent() != 2 {
+		t.Fatalf("the head after the first push: %v", head)
+	}
+}
+
+// PathEpochTwin-NewRefAtOne (DESIGN-DETAILS 9.6): a creator that names epoch 1 whatever it holds shows evs its new names
+// under the epoch a dropped holder can test, which the same capture catches.
+func TestEvsFirstPushCaptureCatchesTheNewRefAtOneTwin(t *testing.T) {
+	evsFirstEpochHook = func(generation uint64) uint64 { return 1 }
+	defer func() { evsFirstEpochHook = nil }()
+	if _, below := evsFirstPushCapture(t); len(below) == 0 {
+		t.Fatal("the twin's first push named no token below the removal's epoch")
+	}
+}
+
+// One device holding generation 2, a REMOVE, writes docs/a.md to a ref with no head; every token path the run showed
+// evs under an epoch below 2.
+func evsFirstPushCapture(t *testing.T) (*evsTestWriter, []string) {
+	t.Helper()
+	writer := newEvsTestWriter(t)
+	writer.gkm.newest = 2
+	writer.gkm.causes[2] = GkmCauseRemove
+	if _, err := writer.write(t, "docs/a.md", []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	world := writer.world
+	world.stateLock.Lock()
+	defer world.stateLock.Unlock()
+	below := []string{}
+	for _, captured := range world.captured {
+		if 0 < len(captured.tokenPath) && max(1, captured.epoch) < 2 {
+			below = append(below, fmt.Sprintf("a token path of %d tokens in epoch %d", len(captured.tokenPath), max(1, captured.epoch)))
+		}
+	}
+	return writer, below
 }
