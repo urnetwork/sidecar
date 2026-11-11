@@ -31,8 +31,8 @@
 //	         sidecar no record names, which its owner removes with git push --delete (ur status)
 //
 // The import holds one publish lock at a time, P_d around each push to d and no longer, so a sub-import runs with no
-// lock of the ref above it held (8.2.9's order). Replay, settle and the ref locks are the sync engine's (EVS1-M2-35),
-// reached through EvsGitSync; until a sync engine is registered with the mount registry, Import refuses. A push that
+// lock of the ref above it held (8.2.9's order). Replay, settle and the ref locks are the mount's sync engine's
+// (evs_local_sync.go), reached through EvsGitSync. A push that
 // carries no commit, its tip held through its sources, signs no EvsImport. Not built here: the journal's kind-3
 // entries for an import's pushes (EVS1-M2-36); the push-size bounds that need content sizes or a measured upload
 // rate, ImportPushByteCount, ImportPostTime, ImportStepPostTime and ImportStepUploadTime, the commit-count estimate
@@ -101,6 +101,8 @@ type EvsGitRefState struct {
 	Deleted bool
 	// An overlay's base, nil for none.
 	Base *protocol.EvsOverlay
+	// The version a replaying check refused, 0 for none: the ref takes nothing but a DELETE until one (8.5).
+	StuckAt uint64
 }
 
 // An import's record (8.2.2's import row): its arguments and its helper refs, so a rerun resumes it. Oids are hex.
@@ -159,7 +161,8 @@ const (
 	evsImportBarrierCleanDeleted   = "evs.local.import.clean_deleted"
 )
 
-// Registers the sync engine imports run through (EVS1-M2-35's); nil removes it.
+// Registers a sync engine every mount's imports run through in place of the mount's own, as a test's stand-in does;
+// nil removes it, and each mount's own engine serves.
 func (self *EvsMounts) SetSync(sync EvsGitSync) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -180,8 +183,11 @@ func (self *EvsMounts) importRepo(ctx context.Context, repo *EvsRepo, args *EvsI
 		return nil, fmt.Errorf("%w: an import into a repo no mount serves", ErrEvsImportRefused)
 	}
 	sync := self.gitSync()
+	if sync == nil && mount.sync != nil {
+		sync = mount.sync
+	}
 	if sync == nil {
-		return nil, fmt.Errorf("%w: an import runs through the sync engine (EVS1-M2-35)", ErrEvsNotBuilt)
+		return nil, fmt.Errorf("%w: an import runs through the mount's sync engine", ErrEvsNotBuilt)
 	}
 	importer := &evsImporter{
 		mount: mount, repo: repo, sync: sync, settings: repo.client.settings, store: repo.client.args.Store,
@@ -698,10 +704,19 @@ func (self *evsImporter) publish(ctx context.Context, name []byte, refId Id, new
 	if err != nil {
 		return err
 	}
+	if state.StuckAt != 0 && new != nil {
+		return fmt.Errorf("%w: the ref is stopped at a refused version %d and takes only a deletion", ErrEvsImportRefused, state.StuckAt)
+	}
+	var onAttempt func(attempt *EvsGitPublishAttempt) error
+	if receiver := self.mount.receiver; receiver != nil {
+		onAttempt = func(attempt *EvsGitPublishAttempt) error {
+			return receiver.journalImportAttempt(ctx, refId, name, attempt)
+		}
+	}
 	result, err := EvsLocalPublish(ctx, &EvsLocalPublishArgs{
 		Mount: self.mount, Repo: self.repo, RefName: name, Old: state.Tip, New: new, BaseVersion: state.Version,
 		BaseChain: state.Chain, Deleted: state.Deleted, LastTip: state.LastTip, Base: state.Base, Import: new != nil,
-		State: self.sync,
+		State: self.sync, OnAttempt: onAttempt,
 	})
 	if err != nil {
 		return err
@@ -858,6 +873,9 @@ func (self *EvsMounts) ImportStatus(ctx context.Context, repoId Id) (*EvsImportS
 	status := &EvsImportStatus{}
 	named := map[EvsImportId]bool{}
 	sync := self.gitSync()
+	if sync == nil && mount.sync != nil {
+		sync = mount.sync
+	}
 	repo := self.client.Repo(repoId)
 	for _, record := range records {
 		importId, err := ParseEvsImportId(record.ImportId)

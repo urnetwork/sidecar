@@ -77,6 +77,40 @@ type EvsSettings struct {
 	GitCommandTimeout time.Duration
 	// How long a per-ref daemon lock waits before it gives up: 3 min, the hook's own bound (§11.11's journal row).
 	RefLockTimeout time.Duration
+
+	// DESIGN-DETAILS 8.2.2's receive and sync settings (evs_local_receive.go, evs_local_sync.go). The time an update
+	// may spend waiting on evs to take what it refused for now (GATE_CLOSED, 429, PATH_EPOCH_DUE, a lease), and on
+	// P_r, before git hears `ng <ref> busy` or `remote outcome pending`: 3 min, the hook's own bound.
+	ReceiveWaitTimeout time.Duration
+	// The time an update may spend building, uploading and posting before git hears `ng <ref> too slow`: 30 min, a
+	// statement's own bound for a push in parts.
+	ReceivePublishTimeout time.Duration
+	// Updates of one git push published at once: 4.
+	ReceiveRefCount int
+	// An owned ref's first push after a local update: 250 ms (§11.11's owned row).
+	QueueFirstDelay time.Duration
+	// Then at most one push per owned ref this often: 2 s.
+	QueueInterval time.Duration
+	// Added to an attempt's time bound (10 min, or 30 for a push in parts) before it is taken for dead without the
+	// head having moved: 15 min, past any clock skew a statement's bound allows.
+	JournalResolveMargin time.Duration
+	// A pending attempt's outcome is asked again this often, beside each hint: 1 min.
+	JournalResolveInterval time.Duration
+	// Versions replayed between two settles, each batch flushed before its ref moves: 64.
+	ReplayBatchVersionCount int
+	// Every followed ref is replayed this often, beside hints and pushes' answers: 1 h, as a hint is lossy.
+	SyncResyncInterval time.Duration
+	// Conflict branches a ref may have before its sync stops settling, its local ref left alone: 64 (QD-602).
+	ConflictBranchCount int
+	// Between two git gc runs of one mount: 24 h.
+	GcMinInterval time.Duration
+	// git gc runs once `git count-objects -v` shows more loose objects than this, 2,000, or more packs than
+	// GcPackCount, 50: a replay writes a pack each flush (DESIGN-DETAILS 8.2.11).
+	GcLooseObjectCount int
+	GcPackCount        int
+	// What git gc prunes: unreachable objects older than this, 14 days, so a push refused or a replay stopped can
+	// still be fetched again or resumed within it (DESIGN-DETAILS 8.2.11).
+	GcPruneAge time.Duration
 	// The largest file, and the largest base, a write diffs: 8 MiB, past which a file is chunks anyway (§11.7). A phone
 	// sets 1 MiB, since it never diffs a file over 1 MiB (§11.7's traps).
 	DiffMaxByteCount int64
@@ -204,6 +238,20 @@ func DefaultEvsSettings() *EvsSettings {
 		SegmentWholeByteCount:    256 * 1024,
 		GitCommandTimeout:        5 * time.Minute,
 		RefLockTimeout:           3 * time.Minute,
+		ReceiveWaitTimeout:       3 * time.Minute,
+		ReceivePublishTimeout:    30 * time.Minute,
+		ReceiveRefCount:          4,
+		QueueFirstDelay:          250 * time.Millisecond,
+		QueueInterval:            2 * time.Second,
+		JournalResolveMargin:     15 * time.Minute,
+		JournalResolveInterval:   time.Minute,
+		ReplayBatchVersionCount:  64,
+		SyncResyncInterval:       time.Hour,
+		ConflictBranchCount:      64,
+		GcMinInterval:            24 * time.Hour,
+		GcLooseObjectCount:       2000,
+		GcPackCount:              50,
+		GcPruneAge:               14 * 24 * time.Hour,
 		DiffMaxByteCount:         8 * 1024 * 1024,
 		UploadConcurrency:        4,
 		PartConcurrency:          4,

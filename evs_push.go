@@ -308,12 +308,12 @@ func evsCreationConflict(err error) bool {
 // posts it (above), and on 412 PATH_EPOCH re-tokenizes it and sends it again (the file header's retoken row).
 // rebuilds counts the write's rebuilds and retokens against PushRebuildCount.
 func (self *EvsRepo) sendSealed(ctx context.Context, sealed *EvsSealedWrite, rebuilds *int) (Id, *protocol.EvsPushReply, error) {
-	return self.sendSealedNoting(ctx, sealed, rebuilds, nil)
+	return self.sendSealedNoting(ctx, sealed, rebuilds, nil, nil)
 }
 
 // sendSealed, noting each push id before anything is sent under it, nil for none: what a git publish judges a moved
 // head by, since an attempt it sent may be in the history (DESIGN-DETAILS 8.2.5's 409 row).
-func (self *EvsRepo) sendSealedNoting(ctx context.Context, sealed *EvsSealedWrite, rebuilds *int, note func(pushId Id)) (Id, *protocol.EvsPushReply, error) {
+func (self *EvsRepo) sendSealedNoting(ctx context.Context, sealed *EvsSealedWrite, rebuilds *int, note func(pushId Id), beforePost func(attempt *evsPushAttempt) error) (Id, *protocol.EvsPushReply, error) {
 	for {
 		pushId := NewEvsPushId()
 		if note != nil {
@@ -325,6 +325,12 @@ func (self *EvsRepo) sendSealedNoting(ctx context.Context, sealed *EvsSealedWrit
 		attempt, err := self.buildPush(ctx, sealed, pushId)
 		if err != nil {
 			return pushId, nil, err
+		}
+		if beforePost != nil {
+			// the local tier journals the attempt here, durably, before its statement's first POST (8.2.8)
+			if err := beforePost(attempt); err != nil {
+				return pushId, nil, err
+			}
 		}
 		reply, err := self.sendPush(ctx, attempt)
 		if err == nil {
