@@ -1,0 +1,185 @@
+{
+  "$defs": {
+    "Annotations": {
+      "properties": {
+        "audience": {
+          "items": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "AudioContent": {
+      "properties": {
+        "annotations": {
+          "$ref": "#/$defs/Annotations"
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "type": {
+          "const": "audio",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "data",
+        "mimeType"
+      ],
+      "type": "object"
+    },
+    "BlobResourceContents": {
+      "properties": {
+        "blob": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "blob"
+      ],
+      "type": "object"
+    },
+    "EmbeddedResource": {
+      "properties": {
+        "annotations": {
+          "$ref": "#/$defs/Annotations"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextResourceContents"
+            },
+            {
+              "$ref": "#/$defs/BlobResourceContents"
+            }
+          ]
+        },
+        "type": {
+          "const": "resource",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "resource"
+      ],
+      "type": "object"
+    },
+    "ImageContent": {
+      "properties": {
+        "annotations": {
+          "$ref": "#/$defs/Annotations"
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "type": {
+          "const": "image",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "data",
+        "mimeType"
+      ],
+      "type": "object"
+    },
+    "TextContent": {
+      "properties": {
+        "annotations": {
+          "$ref": "#/$defs/Annotations"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "type": "object"
+    },
+    "TextResourceContents": {
+      "properties": {
+        "mimeType": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "_meta": {
+      "additionalProperties": {},
+      "type": "object"
+    },
+    "content": {
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TextContent"
+          },
+          {
+            "$ref": "#/$defs/ImageContent"
+          },
+          {
+            "$ref": "#/$defs/AudioContent"
+          },
+          {
+            "$ref": "#/$defs/EmbeddedResource"
+          }
+        ]
+      },
+      "type": "array"
+    },
+    "isError": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "content"
+  ],
+  "title": "CallToolResult at 2025-03-26",
+  "type": "object"
+}

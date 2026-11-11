@@ -676,6 +676,8 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		defer cancel()
 		ingest.Close(closeCtx)
 	}()
+	// §16.5's tools, each registered from its owner's file, their W calls recorded as tool_call entries through ingest
+	mcp.NewDaemonMcpCatalog(mcpServer, ingest).Install(mcpServer)
 	// ur hook's hook.event, which shares the server's run bindings (§16.7)
 	for _, method := range mcpServer.DaemonMethods() {
 		if err := daemon.RegisterMethod(method); err != nil {
