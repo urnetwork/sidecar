@@ -1880,10 +1880,13 @@ scan state: 24 bits, least significant first
  0-1    pos      0 inside a line; 1 the last octet was CR; 2 it was LF, so a line starts next;
                  3 it was "." at a line's start (body only)
  2      name     a field name is unfinished: a line that is no continuation has not reached its colon
- 3-9    run      that name's octets so far, 1 to 126, or 127 for more; 0 when name is 0
+ 3-9    run      octets so far of the line in progress, when it began in this record and is no continuation:
+                 1 to 126, or 127 for more; 127 for a line that began in an earlier record; 0 after a line's end
+                 and inside a continuation
  10-15  prefix   one bit for each of from:  message-id:  x-ur-ref:  feedback-id:  list-unsubscribe-post:  and the
-                 fixed signature's prefix: the name so far is that literal's first run octets (names without case,
-                 the prefix exactly)
+                 fixed signature's prefix: run is under that literal's length and the line so far is its first
+                 run octets (names without case, the prefix exactly). The prefix runs past its colon, which is
+                 why run counts the line and not the name
  16     single   the line that ended at the last octet is one of rule 4's or rule 6's single fields
  17-23  zero
 start = pos 2 and nothing else: before a header block's first octet, and before a body's
@@ -1899,11 +1902,11 @@ every header record
  H4  nameStart(i) = lineStart(i) and c[i] is neither SP nor HTAB; a name's first octet is neither ":" nor ".";
      from a nameStart, or from i = 0 when in.name, until the next ":", no octet is SP, HTAB or CR       rule 3
  H5  hit(L, i)  = nameStart(i) and c[i .. i+|L|) = L, with every octet of it inside the record
-     cross(L)   = in.name and in.prefix[L] and 1 <= in.run < |L| and c[0 .. |L| - in.run) = L[in.run ..)
+     cross(L)   = in.prefix[L] and c[0 .. |L| - in.run) = L[in.run ..)
  H6  in.single implies c[0] is neither SP nor HTAB                                                      rules 4, 6
  H7  out.pos = 1 if c[n-1] is CR, 2 if LF, else 0;  out.name = a name is unfinished after c[n-1];
-     out.run = that name's octets if it began in this record and has under 127, else 127; 0 without a name;
-     out.prefix[L] = out.name and out.run < |L| and c[n - out.run .. n) = L[0 .. out.run)
+     out.run = as the state defines it, for the line in progress after c[n-1];
+     out.prefix[L] = 1 <= out.run < |L| and c[n - out.run .. n) = L[0 .. out.run)
 the first record (shape msg): in = start
  H8  c[0] is neither SP nor HTAB                                                                        rule 3
  H9  sum over i of hit(L, i) = 1 for from:, message-id:, x-ur-ref:, feedback-id: and the fixed prefix;
@@ -1918,7 +1921,7 @@ the header block's last record
  H13 its last four octets are CR LF CR LF by its template, and Field is 0 on the last two               rule 2
 ```
 
-Each part asserts Com(T, U, in, sigma_in) = `CarryIn` (hdr) and Com(T, U, out, sigma_out) = `CarryOut` (msg, hdr). A prototype of H1 to H7 and H12 compiles to 819 constraints an octet under AES and 431 under ChaCha20, keystream included: 90 an octet beyond the keystream, where the first record's full scan is 178, because a later record reads no literal, runs no From positions and needs no local-part table.
+Each part asserts Com(T, U, in, sigma_in) = `CarryIn` (hdr) and Com(T, U, out, sigma_out) = `CarryOut` (msg, hdr). A prototype of H1 to H7 and H12 compiles to 819 constraints an octet under AES and 431 under ChaCha20, keystream included: 90 an octet beyond the keystream, where the first record's full scan is 178, because a later record reads no literal, runs no From positions and needs no local-part table. The prototype was compiled both with the run counted over the name and, as the state above has it, over the line: the same figures.
 
 **DATA's body by record.** A body is cut into records of the body shape's capacity, the last shorter.
 
@@ -2015,10 +2018,12 @@ VerifyPart(p):
   6  server range: coveredServer <= server_record_count <= records relayed; a part with no client record covers at
      least one more server record
   7  mode: part 2 names BDAT or DATA; every later part repeats it
-  8  roles, from the table: the part's kind is env, msg, hdr or body by what it opens, and it opens at most one header
-     record or one body record. header_record_count is on the part that opens header record 1, 1 to
-     HeaderRecordMaxCount, and absent elsewhere. BDAT's command is opened with header record 1. last is on the part
-     that opens QUIT
+  8  roles, from the table, and the part's kind by what it opens: MAIL, RCPT or DATA, or no record -> env;
+     header record 1 -> msg; a later header record -> hdr; a body record or the end mark -> body. A part opens
+     records of one kind, and at most one header record or one body record; QUIT rides the last part of any of the
+     three message kinds, and the end mark only a body part. BDAT's command is opened with header record 1 and by
+     no other part. header_record_count is on the part that opens header record 1, 1 to HeaderRecordMaxCount, and
+     absent elsewhere. last is on the part that opens QUIT, and on no other
   9  replies: part 2: reply_count = 1, it covers at least one server record, and it opens MAIL.
      Any other part: reply_count <= commandsCovered - repliesProven, and 0 if it covers no new server record.
      A part that opens the first message record: repliesProven + reply_count = 2 + R, or 3 + R in DATA mode
@@ -2029,7 +2034,8 @@ VerifyPart(p):
  12  shape: the first shape of the key set's catalog, of the part's kind and the suite's family, whose pools hold
      the part's records; none -> refuse
      statement := KeyCommitment C (part 1: p.key_commitment, with Z1's handshake inputs);
-                  CarryIn: the gate's carry, or the start constant for header record 1 and for the first body part;
+                  CarryIn (hdr and body shapes): the gate's carry, which is the start constant before the
+                  first body part; header record 1 starts from the same constant inside the msg circuit;
                   CarryOut p.carry;  ReplyCount p.reply_count;  EhloRule: index = 2;
                   RequireChunking: index = 2 and BDAT;
                   Last354: DATA and reply_count > 0 and repliesProven + reply_count = 3 + R;
@@ -2100,8 +2106,10 @@ a server record read after a part was built and before the send's last message r
 
 proving and submitting: parts are proven in index order, up to ProveConcurrency at once among parts whose statements
                         are complete (the msg, hdr and body parts are, once their records are sealed). A part is
-                        submitted when its proof is done and every part before it was answered OK. Its records go to
-                        the stream when its own answer is OK
+                        submitted when its proof is done and every part before it was answered OK, and takes its
+                        index then: no statement holds an index, so a part proven early keeps its proof when a
+                        part for a late server record goes in ahead of it. Its records go to the stream when its
+                        own answer is OK
 ```
 
 The sender knows every scan state and draws every blind before it proves the first message part, so hdr and body parts do not wait on one another.
@@ -2119,7 +2127,7 @@ units = 1                                              the key part
 
 send                                              AES-128-GCM (1.3 and 1.2)       ChaCha20
 up to 12 recipients, header block up to 831         3                             3  (up to 11 recipients, 1,215 octets)
-3 recipients, 2 KiB header block                    4                             4
+3 recipients, 2,000-octet header block              4                             4
 the gate: 10 recipients, 4,095-octet header block   6                             5
 50 recipients, 4,095                                9                             8
 100 recipients, 4,095                              13                            10
@@ -2148,7 +2156,7 @@ SPEC.md 10.2 and 10.3 stand: the edge runs the ceremony alone, because only the 
 ```
 
 - **The ceremony** is `RunSetup` as landed, with three changes: one phase 1 for the one domain size; `circuit_sha256` and every `byte_count` written; and `setup -extend <directory>`, which adds entries for catalog shapes a key set lacks, on its phase 1, and leaves every existing entry as it is. Extending makes a new id under which the old shapes keep their keys, so a host's cache of them stands. `smtpproof/setup` stays where reading 24 put it.
-- **Published** at `<SmtpProofKeysUrl>/<id in hex>/<name>`: `keyset.json`, the phase 1 and phase 2 contributions, the verifying keys. `SmtpProofKeysUrl` is an entry of §18.9's host table, which `cli/` fills (QD-119), so no host name sits in code. About 0.9 GiB for the eleven shapes by their encodings (a 2^20 phase 1 contribution is 192 MiB, a shape's phase 2 about 63 MiB); proving keys are not published, since each host derives its own.
+- **Published** at `<SmtpProofKeysUrl>/<id in hex>/<name>`: `keyset.json`, the phase 1 and phase 2 contributions, the verifying keys. `SmtpProofKeysUrl` comes from an entry of §18.9's host table (`api_hosts_v1.json`), which `cli/` fills (QD-119), so no host name sits in code beside that table. About 0.9 GiB for the eleven shapes by their encodings (a 2^20 phase 1 contribution is 192 MiB, a shape's phase 2 about 63 MiB); proving keys are not published, since each host derives its own.
 - **At the edge**: `config/<env>/smtpedge.yml` lists `proof_key_sets`, each an id, a directory holding its `keyset.json` and verifying keys, and an optional `not_after`. `NewVerifier` takes up to `VerifierSettings.KeySetMaxCount` sets, checks each file against `keyset.json` and `keyset.json` against its id, and drops a set past its `not_after` at start. A session uses the set its preamble names, for its whole life. Changing the list is a configuration change and a restart, which ends connections, as any deploy of smtpedge does.
 - **In the release**: `cli/smtp_prover.go`'s `smtpKeySetPins`, newest first, replaces the single pin. The newest is the set this build's circuits were set up for. An older one stays listed only while this build compiles the same circuits for it (a re-run ceremony), which the host checks by digest, not by trust.
 
@@ -2247,7 +2255,7 @@ sidecar.SmtpSenderSettings       as landed, and:
 - **S1, the keys are the MX's (9.2, once).** The key part's circuit derives ck, civ, sk, siv from a witness that 9.2 shows is the MX's secret, and asserts C = Com of exactly those wires. So C commits to the MX's keys.
 - **S2, every part uses them.** A later part's statement has the gate's C as a public input (step 12), never a value the part carries. Its circuit asserts Com(its key wires, its rho) = C. If those wires differ from the MX's keys, the two openings of C give a discrete-log relation among G_j and H. So every keystream in every part is the MX's, which is what 9.3 needs of each part.
 - **S3, a verified part is fixed.** Step 12 builds the statement from the gate's state and step 14 commits only if no part landed since (`commits`), so the C, the carry, the counts and the ranges a proof was verified against are the gate's at the moment it lands. No step replaces a part.
-- **S4, the header block across records.** Let the header block be c_1 .. c_k, every record but the last at least 128 octets, the last at least 4, and let each record's part verify with `CarryIn` the commitment the gate kept. By binding, the state a part opens is the state the part before published, and H2 and H7 make that the true state of the block's scan at the boundary, by induction from `start`. Then Z5 holds of the concatenation: rules 1 to 3 are H1 to H4 at every octet, with `pos` and `name` standing for the octet and the name across a boundary, and H13 at the end. For rules 4 to 6, every line start of the block is a `nameStart` in exactly one record, and a literal L at it either lies inside that record, a `hit`, or runs past its end. In the second case it ends in the next record, since L has at most 99 octets and the record at least 128, and there `cross(L)` is true, because `run` and `prefix[L]` say exactly that the name so far is L's beginning. H9 counts one hit of each L in the first record, and H12 allows no hit and no crossing after it. So each single field and the fixed prefix begin exactly one line of the block, that line is in the first record, H10 reads its literal form there, and H11 with H6 let no continuation follow it. That is Z5, with the added fact of where those lines sit.
+- **S4, the header block across records.** Let the header block be c_1 .. c_k, every record but the last at least 128 octets, the last at least 4, and let each record's part verify with `CarryIn` the commitment the gate kept. By binding, the state a part opens is the state the part before published, and H2 and H7 make that the true state of the block's scan at the boundary, by induction from `start`. Then Z5 holds of the concatenation: rules 1 to 3 are H1 to H4 at every octet, with `pos` and `name` standing for the octet and the name across a boundary, and H13 at the end. For rules 4 to 6, every line start of the block is a `nameStart` in exactly one record, and a literal L at it either lies inside that record, a `hit`, or runs past its end. In the second case it ends in the next record, since L has at most 99 octets and the record at least 128, and there `cross(L)` is true, because `run` and `prefix[L]` say exactly that the line so far is L's beginning. H9 counts one hit of each L in the first record, and H12 allows no hit and no crossing after it. So each single field and the fixed prefix begin exactly one line of the block, that line is in the first record, H10 reads its literal form there, and H11 with H6 let no continuation follow it. That is Z5, with the added fact of where those lines sit.
 - **S5, DATA's body across records.** The same induction over B1 to B3: `pos` is the true state, B1 pairs every CR with an LF across boundaries, and B2 with `pos` 3 refuses a line that is exactly "." wherever a boundary falls in it. The last record ends in LF, so the end mark starts a line. That is SPEC.md's Z6 over the concatenation, and 9.6 follows.
 - **S6, the replies.** A part's server records are contiguous from the last covered record (step 6) and parse from a reply's start to a reply's end as exactly `reply_count` replies, each accepting, the last a 354 where `Last354` (Z8). So the verified parts' counts sum to the number of replies in the covered records, each proven. Step 9 lets the first message record be covered only when that sum is 2 + R (3 + R), and step 16 releases a message record only when every relayed server record is covered. The honest MX answers commands in order (9.1), so at that moment it has accepted EHLO, MAIL and exactly R recipients, has said 354 in DATA mode, and has said nothing since: 9.4's premise.
 - **S7.** With S1 to S6, 9.3 gives the MX's input as the concatenation of proven contents, 9.5 and 9.6 are unchanged, and 9.7 concludes.
@@ -2322,7 +2330,7 @@ By the count the send is 15% smaller under AES; by the domain, which is what SPE
 send                                             units AES / ChaCha20   M1 (8 GB), projected   m5.large at 41,000/s    by domain
 the key part (D-SMTP-16's π1 row)                    1 / 1               2 to 3 s               20 s / 18 s             20 s
 up to 12 recipients, an 831-octet header block       3 / 3               8 to 11 s              70 s / 68 s             59 s
-3 recipients, 2 KiB                                  4 / 4               10 to 14 s             95 s / 92 s             78 s
+3 recipients, 2,000 octets                           4 / 4               10 to 14 s             95 s / 92 s             78 s
 the gate: 10 recipients, 4,095 octets                6 / 5               15 to 21 s / 13 to 18 s  144 s / 116 s         118 s / 98 s
 100 recipients, 4,095                               13 / 10              33 to 46 s / 25 to 35 s  319 s / 239 s         255 s / 196 s
 100 recipients, 16,383                              23 / 15              58 to 81 s / 38 to 53 s  567 s / 361 s         451 s / 294 s
@@ -2527,7 +2535,7 @@ Five questions are filed. The section is built on each recommendation.
 - *What it adds to trust.* For confidentiality: that the blind is drawn uniformly and kept, from the same source as the TLS keys and the proof's own randomness. If that failed completely, C would be a test for a guess of all 448 key bits, which each record's tag already is. For soundness: discrete logs on a second curve, about 2^125, above BN254's own margin. For review: one gadget of about 150 lines, measured at 3,261 constraints, and 3.3's argument.
 - *What it buys.* Z1 once: 1.9M constraints become 0.7M. Every circuit in one 2^20 domain: the gate's send goes from 11 units to 6, 216 s to 118 s on an m5.large by domain (170 s to 144 s by the count), and by projection from 28 to 39 s to 15 to 21 s on the M1. One proof's memory from 1.7 to 7.0 GiB to 1.3 GiB. Eleven shapes and one domain size where there are 22 and four. Any recipient count on one connection. The earlier estimate priced the commitment as 1.4M constraints saved; it did not price the domain, which is where the time is.
 
-Options. (1) A Pedersen commitment as 3.2.2 has it. (2) A hash commitment, SHA-256 over the keys and a 256-bit blind with the module's existing gadget: computationally hiding only, and two or three compressions, 53,000 to 79,000 constraints, in every part, 5 to 8% of each unit. (3) No commitment. Then every part keeps Z1, a part cannot be smaller than Z1's 708,498 constraints with room to open anything, and the landed 22 shapes stand: 11 units for the gate, the 8 GB M1 unable to hold TLS 1.2's π3, recipients past a shape's pool by splitting the send over connections at a unit each. Carries would still be allowed, since they commit to no key, but there would be little to carry. (4) Recursion or folding. Not available here: gnark verifies Groth16 over BN254 inside a circuit only over a second curve and at millions of constraints a proof, and no folding scheme has a Go implementation under §4.7's licenses. Lookups for AES reopen SPEC.md 10.1 and gnark's version, and would halve AES at best. **Recommendation: (1).** If the answer is (3): SMTP-M9-36 and -37 are dropped; SMTP-M9-38 and -39 lose the key commitment and keep parts with no client record and immutable parts; SMTP-M9-08 gains the split of a domain's recipients; SMTP-M9-40 and the fifth failure's fix stand as written; and the five held tasks build the same seam with `key_commitment` unused.
+Options. (1) A Pedersen commitment as 3.2.2 has it. (2) A hash commitment, SHA-256 over the keys and a 256-bit blind with the module's existing gadget: computationally hiding only, and two or three compressions, 53,000 to 79,000 constraints, in every part, 5 to 8% of each unit. (3) No commitment. Then every part keeps Z1, a part cannot be smaller than Z1's 708,498 constraints with room to open anything, and the landed 22 shapes stand: 11 units for the gate, the 8 GB M1 unable to hold TLS 1.2's π3, recipients past a shape's pool by splitting the send over connections at a unit each. Carries would still be allowed, since they commit to no key, but there would be little to carry. (4) Recursion or folding. Not available here: gnark verifies a Groth16 proof inside a circuit only by emulating the pairing's field or over a second curve, at millions of constraints a proof, more than the Z1 it would save, and from `std/`, which this module does not import; and no folding scheme is among the modules this run may use. Lookups for AES reopen SPEC.md 10.1 and gnark's version, and would halve AES at best. **Recommendation: (1).** If the answer is (3): SMTP-M9-36 and -37 are dropped; SMTP-M9-38 and -39 lose the key commitment and keep parts with no client record and immutable parts; SMTP-M9-08 gains the split of a domain's recipients; SMTP-M9-40 and the fifth failure's fix stand as written; and the five held tasks build the same seam with `key_commitment` unused.
 
 **2. `details-3-speed-bar`: what do D-SMTP-16's m5.large rows become?** No relation over these circuits meets 60 s there for the gate's send (3.1 A, 3.4): the revised one projects to 118 to 144 s under AES and 98 to 116 s under ChaCha20, and DATA's 100 KiB to 27 to 34 min under AES. QD-144 already answers a confirmed miss: relax the row to the measured number. Options: (1) that, with the rows stated in units and the m5.large's left to SMTP-M9-32's bench, about 150 s and 35 min until then; (2) keep 60 s on the m5.large for a smaller send, three units (up to 12 recipients and an 831-octet header block), and state larger sends by units; (3) drop the m5.large as a prover class, so such hosts only queue for the member's other hosts; (4) reopen SPEC.md 10.1 for lookups. **Recommendation: (1).** 3.8's Speed text is written to it.
 
@@ -2548,7 +2556,7 @@ Options. (1) A Pedersen commitment as 3.2.2 has it. (2) A hash commitment, SHA-2
 
 **Readings taken.** Each changes no D- item beyond what question 1 covers, and each is listed so it can be overruled.
 
-1. *The header block's order.* The single fields come first and both signatures after them, where the landed assembler writes the signatures first. RFC 6376 §5.4 has a signer prepend its signature as a matter of SHOULD; a verifier takes signed fields by name from the bottom up wherever the signature sits. D-SMTP-16's interop run is where this is confirmed. If a receiver objects, the fallback is a msg shape with a larger head and no server blocks, one unit more a send.
+1. *The header block's order.* The single fields come first and both signatures after them, where the landed assembler writes the signatures first. RFC 6376 §5.6 asks only that a new signature go before any other DKIM-Signature field, and notes the top of the header block as the easiest place to do that; a verifier takes signed fields by name from the bottom up (§5.4.2) wherever the signature sits. D-SMTP-16's interop run is where this is confirmed. If a receiver objects, the fallback is a msg shape with a larger head and no server blocks, one unit more a send.
 2. *The fixed signature's prefix is still counted over the whole header block,* exactly once, as Z5.5 has it, though nothing rests on a second such line being absent. That keeps Z5 word for word, at 12 constraints an octet in later records.
 3. *DATA's records are cut by length,* replacing reading 3's whole lines. The edge then sees the body's length and no line end.
 4. *No part is proven again.* §14.5's "the same part proven again" becomes a later part with no client record. The cost is the same, one proof, and a verified part's published state can no longer change.
