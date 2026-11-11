@@ -11,8 +11,9 @@
 // EvsStatementBuilder is the client's half: from what a push carries it builds the statement and its payload, or its
 // parts when the push passes 1 MiB or 1,024 entry writes, and signs through the caller's identity key. The sections no
 // change carries spill into the parts' room beside the changes, and what still does not fit goes in changeless parts
-// after them (DESIGN-DETAILS 8.2.2's parts row), which carry no changes_root and are no leaf of the statement's root.
-// ParseEvsStatement is evs's and readers' half, holding a statement to format 1's shape before any check that needs the
+// after them (DESIGN-DETAILS 8.2.2's parts row), which carry no changes_root and are no leaf of the statement's root;
+// a push with no change past 1 MiB is every part changeless, under the root of zero parts with changes, a count of 0
+// and no prefix (QD-658). ParseEvsStatement is evs's and readers' half, holding a statement to format 1's shape before any check that needs the
 // head.
 //
 // Format 2 (EVS-FORMAT.md's format 2 chapter) parses through ParseEvsStatementFormat2 and builds through BuildFormat2,
@@ -224,8 +225,16 @@ func (self *EvsStatement) checkShape(format2 bool) error {
 		return fmt.Errorf("%w: changed_prefixes of %d bytes", ErrEvsPushInvalid, prefixByteCount)
 	}
 	if len(push.GetChangesRoot()) != 0 {
-		if len(push.GetChanges()) != 0 || push.GetChangeCount() == 0 || len(push.GetChangedPrefixes()) == 0 {
-			return fmt.Errorf("%w: changes_root beside inline changes, or without a count or prefixes", ErrEvsPushInvalid)
+		emptyRoot := sha256.Sum256(nil)
+		switch {
+		case len(push.GetChanges()) != 0:
+			return fmt.Errorf("%w: changes_root beside inline changes", ErrEvsPushInvalid)
+		case push.GetChangeCount() == 0 && len(push.GetChangedPrefixes()) == 0 && partCount != 0 &&
+			bytes.Equal(push.GetChangesRoot(), emptyRoot[:]):
+			// a push in parts with no change, every part changeless: the root of zero parts with changes and no
+			// prefix (QD-658)
+		case push.GetChangeCount() == 0 || len(push.GetChangedPrefixes()) == 0:
+			return fmt.Errorf("%w: changes_root without a count or prefixes", ErrEvsPushInvalid)
 		}
 		return nil
 	}
@@ -620,13 +629,15 @@ var evsSpilledSections = []protocol.EvsPayloadSection{
 // A push in parts: changes split into contiguous runs within 1,024 entry writes and 1 MiB, each with its entry
 // versions, source paths and proofs to its own root; then the sealed metadata and the other sections spread over the
 // parts' room in order, each slice anywhere, and what is left over in changeless parts after them (DESIGN-DETAILS
-// 8.2.2's parts row). A push with no change has no root to state, so one past 1 MiB has no shape: ErrEvsPushInvalid.
+// 8.2.2's parts row). A push with no change past 1 MiB, a tag over a long unheld history or an update whose tip tree
+// stands, is every part changeless, its statement the root of zero parts with changes, a count of 0 and no prefix
+// (QD-658).
 func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*evsBuildChange, common *EvsPayload, sourcesSection []byte, format2 bool) (*EvsBuiltPush, error) {
-	if len(changes) == 0 {
-		return nil, fmt.Errorf("%w: a push past 1 MiB with no change, which no statement can root", ErrEvsPushInvalid)
-	}
 	pathLength := bits.Len(uint(len(changes)))
-	parts := []*evsBuildPart{{sections: &EvsPayload{}}}
+	parts := []*evsBuildPart{}
+	if 0 < len(changes) {
+		parts = append(parts, &evsBuildPart{sections: &EvsPayload{}})
+	}
 	entryWrites := 0
 	for _, change := range changes {
 		changeByteCount := evsChangePartByteCount(change, pathLength)
@@ -703,8 +714,8 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 		parts = append(parts, changeless)
 	}
 	if len(parts) < evsMinPartCount {
-		// one change and every section fitting beside it in a push past 1 MiB, by the proofs' room: the last slice's
-		// tail goes to a changeless part, which a slice may split anywhere to do
+		// one change, or none, and every section fitting in one part in a push past 1 MiB, by the proofs' room: the
+		// last slice's tail goes to a changeless part, which a slice may split anywhere to do
 		first := parts[0]
 		var last protocol.EvsPayloadSection
 		for _, sectionType := range evsSpilledSections {
@@ -774,7 +785,10 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 	push.PartCount = uint32(len(parts))
 	partsDigest := sha256.Sum256(partHashes)
 	push.PartsSha256 = partsDigest[:]
-	if err := evsStateChangeRoot(push, tree.Root(), len(changes), paths); err != nil {
+	if len(changes) == 0 {
+		root := tree.Root()
+		push.Changes, push.ChangesRoot, push.ChangeCount, push.ChangedPrefixes = nil, bytes.Clone(root[:]), 0, nil
+	} else if err := evsStateChangeRoot(push, tree.Root(), len(changes), paths); err != nil {
 		return nil, err
 	}
 	statement, err := self.signStatementOf(push, format2)

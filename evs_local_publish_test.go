@@ -1099,3 +1099,36 @@ func TestEvsLocalPublishAFileAddedAndRemovedInsideAPush(t *testing.T) {
 		t.Fatalf("the passing file %q", content)
 	}
 }
+
+// QD-658 end to end: a tag over a long history no ref holds carries commits past 1 MiB and no change, so it goes in
+// parts, every part changeless, and exports.
+func TestEvsLocalPublishATagOverALongUnheldHistoryGoesInParts(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	c1 := publisher.commit(map[string]string{"a.txt": "0\n"})
+	if _, err := publisher.publish("main", &c1); err != nil {
+		t.Fatal(err)
+	}
+	publisher.mount.history.messagePad = strings.Repeat("a long commit message\n", 1500)
+	tip := c1
+	for i := 1; i <= 40; i += 1 {
+		tip = publisher.commit(map[string]string{"a.txt": fmt.Sprint(i, "\n")}, tip)
+	}
+	result, err := publisher.publish("refs/tags/long", &tip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Commits) != 40 || result.Flags != uint32(protocol.EvsPushFlag_EVS_PUSH_IMMUTABLE) {
+		t.Fatalf("result %+v", result)
+	}
+	payload := publisher.payload("refs/tags/long", result.Version)
+	world := publisher.writer.server.worldOf(publisher.ref("refs/tags/long").refId)
+	world.stateLock.Lock()
+	statement := world.commits[result.Version-1].parsed
+	world.stateLock.Unlock()
+	if statement.Push.GetPartCount() < 2 || statement.Push.GetChangeCount() != 0 || len(payload.Changes) != 0 {
+		t.Fatalf("the tag's push: %d parts, count %d", statement.Push.GetPartCount(), statement.Push.GetChangeCount())
+	}
+	if _, exported := publisher.export("main", "refs/tags/long"); exported.Refs[1].Tip != tip {
+		t.Fatalf("exported %+v", exported.Refs)
+	}
+}

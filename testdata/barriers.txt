@@ -380,6 +380,8 @@ barrier smtpedge.report_accept.after smtpedgeservice/report_intake.go
 barrier smtpedge.report_accept.before smtpedgeservice/report_intake.go
 barrier smtpedge.report_insert.after smtpedgeservice/report_intake.go
 barrier smtpedge.report_insert.before smtpedgeservice/report_intake.go
+barrier socket.admission.replay.after socket_admission.go
+barrier socket.admission.replay.before socket_admission.go
 barrier socket.registrations.after socket_registrar.go
 barrier socket.registrations.before socket_registrar.go
 barrier sockets.probe.after socketsservice/service.go
