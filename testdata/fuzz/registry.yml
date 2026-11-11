@@ -131,6 +131,8 @@ rows:
       - {name: FuzzEvsGitTreeDecode, package: "."}
       - {name: FuzzEvsGitCommitDecode, package: "."}
       - {name: FuzzEvsGitIdentDecode, package: "."}
+      - {name: FuzzEvsGitTreeRead, package: ".", owner: EVS1-M2-49}
+      - {name: FuzzEvsGitCommitGraph, package: ".", owner: EVS1-M2-49}
       - {name: FuzzEvsGitTreeEqualsGoGit, package: mlsinterop, second: [github.com/go-git/go-git/v5]}
       - {name: FuzzEvsGitCommitEqualsGoGit, package: mlsinterop, second: [github.com/go-git/go-git/v5]}
       - {name: FuzzEvsGitDeltaApplyEqualsGoGit, package: mlsinterop, seeds: [../testdata/fuzz/evs_git_delta], second: [github.com/go-git/go-git/v5]}
