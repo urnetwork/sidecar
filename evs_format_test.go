@@ -1054,8 +1054,14 @@ func TestEvsAbsenceProofHoldsItsSizesToTheStatement(t *testing.T) {
 	if _, err := NewEvsPartedChangeTree([][][]byte{leaves[2:], leaves[:2]}); !errors.Is(err, ErrEvsMerkleInvalid) {
 		t.Errorf("parts out of order: %v", err)
 	}
-	if _, err := NewEvsPartedChangeTree([][][]byte{leaves}); !errors.Is(err, ErrEvsMerkleInvalid) {
+	// one part holding changes beside changeless ones is a tree of one part, two levels deep, so its root is not the
+	// one-part push's (DESIGN-DETAILS 8.2.2's parts row)
+	onePart, err := NewEvsPartedChangeTree([][][]byte{leaves})
+	if err != nil || onePart.PartCount() != 1 || onePart.Root() == root {
 		t.Errorf("one part as parts: %v", err)
+	}
+	if _, err := NewEvsPartedChangeTree([][][]byte{}); !errors.Is(err, ErrEvsMerkleInvalid) {
+		t.Errorf("no part: %v", err)
 	}
 	if _, err := NewEvsPartedChangeTree([][][]byte{leaves, {}}); !errors.Is(err, ErrEvsMerkleInvalid) {
 		t.Errorf("an empty part: %v", err)

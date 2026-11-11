@@ -360,19 +360,25 @@ func ParseEvsPartRecordBody(body []byte) ([]byte, []byte, [][]byte, uint64, erro
 	return items[0], items[1], items[2 : len(items)-1], binary.BigEndian.Uint64(items[len(items)-1]), nil
 }
 
-// One part as its seal's record names it: where its record is, its changes_root and its first token path.
+// One part as its seal's record names it: where its record is, its changes_root and its first token path, the root's
+// being empty. A changeless part (DESIGN-DETAILS 8.2.2's parts row) has neither, its item its place alone.
 type EvsSealPart struct {
 	Place          *protocol.EvsPlace
 	ChangesRoot    [sha256.Size]byte
 	FirstTokenPath EvsTokenPath
+	Changeless     bool
 }
 
 // A seal record's body: the statement, then an item per part.
 func EvsSealRecordBody(statement []byte, parts []*EvsSealPart) []byte {
 	items := [][]byte{statement}
 	for _, part := range parts {
-		item := append(EvsPackPlace(part.Place), part.ChangesRoot[:]...)
-		items = append(items, append(item, part.FirstTokenPath.Bytes()...))
+		item := EvsPackPlace(part.Place)
+		if !part.Changeless {
+			item = append(item, part.ChangesRoot[:]...)
+			item = append(item, part.FirstTokenPath.Bytes()...)
+		}
+		items = append(items, item)
 	}
 	return evsJoinItems(items)
 }
@@ -387,8 +393,20 @@ func ParseEvsSealRecordBody(body []byte) ([]byte, []*EvsSealPart, error) {
 		return nil, nil, fmt.Errorf("%w: a seal record of %d items", ErrEvsPushInvalid, len(items))
 	}
 	parts := []*EvsSealPart{}
+	changeless := false
 	for _, item := range items[1:] {
-		if len(item) < EvsPlaceByteCount+sha256.Size+EvsTokenByteCount || (len(item)-EvsPlaceByteCount-sha256.Size)%EvsTokenByteCount != 0 {
+		if len(item) == EvsPlaceByteCount {
+			// a changeless part, after every part with a change
+			place, err := EvsUnpackPlace(item)
+			if err != nil {
+				return nil, nil, err
+			}
+			parts = append(parts, &EvsSealPart{Place: place, Changeless: true})
+			changeless = true
+			continue
+		}
+		// the first token path may be the root's, empty (DESIGN-DETAILS 9.2.8)
+		if changeless || len(item) < EvsPlaceByteCount+sha256.Size || (len(item)-EvsPlaceByteCount-sha256.Size)%EvsTokenByteCount != 0 {
 			return nil, nil, fmt.Errorf("%w: a seal's part of %d bytes", ErrEvsPushInvalid, len(item))
 		}
 		place, err := EvsUnpackPlace(item[:EvsPlaceByteCount])

@@ -11,11 +11,11 @@
  {
   "num": 2,
   "code": "TRUST",
-  "words": 8978,
-  "code_words": 15017,
+  "words": 8989,
+  "code_words": 15131,
   "ceiling": 3000,
-  "over": 5978,
-  "over_pct": 199.3
+  "over": 5989,
+  "over_pct": 199.6
  },
  {
   "num": 3,
@@ -92,11 +92,11 @@
  {
   "num": 11,
   "code": "EVS",
-  "words": 21155,
-  "code_words": 37774,
+  "words": 21957,
+  "code_words": 39110,
   "ceiling": 5000,
-  "over": 16155,
-  "over_pct": 323.1
+  "over": 16957,
+  "over_pct": 339.1
  },
  {
   "num": 12,
@@ -137,11 +137,11 @@
  {
   "num": 16,
   "code": "MCP",
-  "words": 12366,
+  "words": 12456,
   "code_words": 16317,
   "ceiling": 3500,
-  "over": 8866,
-  "over_pct": 253.3
+  "over": 8956,
+  "over_pct": 255.9
  },
  {
   "num": 17,
@@ -174,7 +174,7 @@
   "num": 20,
   "code": "QUOTA",
   "words": 4603,
-  "code_words": 3902,
+  "code_words": 3919,
   "ceiling": 2500,
   "over": 2103,
   "over_pct": 84.1
@@ -191,19 +191,19 @@
  {
   "num": 22,
   "code": "TEST",
-  "words": 7181,
-  "code_words": 35275,
+  "words": 7194,
+  "code_words": 35304,
   "ceiling": 2500,
-  "over": 4681,
-  "over_pct": 187.2
+  "over": 4694,
+  "over_pct": 187.8
  },
  {
   "num": 23,
   "code": "PHASE",
-  "words": 6873,
+  "words": 6893,
   "code_words": 1136,
   "ceiling": 2500,
-  "over": 4373,
-  "over_pct": 174.9
+  "over": 4393,
+  "over_pct": 175.7
  }
 ]

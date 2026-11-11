@@ -1692,10 +1692,11 @@ FS-72  §11,7  format-1 code (M2) given each signed, well-formed format-2 constr
               version with versioning 1 or 2, a kind-5 locator, a staged mark, a kind-5                           the rest at
               header, a versionless receipt, a format-2 batch, a window entry with bit 4 or 5,                    M10-out
               an EvsPush with flag 256 or 512 or field 33 or 34, a read reply's drop_pending
-              or dropped state, repo/'s format 2, a push provenance's tainted bit, a write to
-              .ur-index/, ur/index or ur/lfs) refuses each entry, locator, push and state as
-              FORMAT_UNSUPPORTED {needs_format: 2}, ignores bits 4 and 5 and the tainted bit,
-              and on repo/'s format 2 refuses pushes and serves stored bytes, writing nothing
+              or dropped state, repo/'s format 2, a write to .ur-index/, ur/index or ur/lfs)
+              refuses each entry, locator, push and state as FORMAT_UNSUPPORTED
+              {needs_format: 2}, ignores bits 4 and 5, from M3 sets and honors a push
+              provenance's tainted bit (owner decision 245), and on repo/'s format 2 refuses
+              pushes and serves stored bytes, writing nothing
               and raising no fork, tamper or missing-segment alarm, while a malformed or
               unsigned construct still alarms; given a config head holding a VersioningRules
               record it applies nothing from the record and still applies the head, with no
@@ -2070,8 +2071,10 @@ FS-94  §11    a shared inline record: one push writes small X and Y, Y a copy o
               dropped: X's entry versions withheld after not_before, Y's served and verifying,
               the record's other entry versions keeping their hashes; a record-class twin: X's
               slot deleted (X unreadable at once), a slot Y also names kept; a general repo:
-              X's inline bytes stay in the pack, never served; compaction's stub test keeps
-              every byte Y needs
+              X's inline bytes stay in the pack, never served; compaction's stub test, of a
+              pure function that returns the bytes a live version needs from a record and
+              deletes nothing, since compaction is Later (owner decision 247), keeps every
+              byte Y needs
 FS-95  §11,8  refusals: config and mailcfg (409 DROP_KIND); git-mode and creates-only refs     FI-17,27    T2+T3  M10-out;
               (409 REF_MODE); the ur/index and ur/lfs refs, .ur-index/ and a path naming a                        format-1
               directory (409 DROP_PATH); a versionless head (409 VERSIONING); a locked repo,                      cases at
@@ -2642,7 +2645,7 @@ Beyond the schedules:
 
 ### 22.9 Conformance and platform budgets
 
-- **git** (2.34, Ubuntu 22.04's, https://ubuntuupdates.org/package/core/jammy/main/base/git; 2.43, Ubuntu 24.04's and Claude Code cloud's; latest; Windows, Xcode; go-git, JGit, libgit2; OpenSSH): through the local tier, and `git-remote-ur` without a prior mount, oids equal a reference; stock non-fast-forward errors, sibling pushes from one base giving one; `git push --atomic` fails before any write; a two-ref push reports per-ref statuses; a daemon killed between the remote commit and update-ref reconciles from its journal; foreign new commits refused, signed imports accepted.
+- **git** (2.34, Ubuntu 22.04's, https://ubuntuupdates.org/package/core/jammy/main/base/git; 2.43, Ubuntu 24.04's and Claude Code cloud's; latest; Windows, Xcode; go-git, JGit, libgit2; OpenSSH): through the local tier, and `git-remote-ur` without a prior mount, oids equal a reference; stock non-fast-forward errors, sibling pushes from one base giving one; `git push --atomic` fails before any write; a two-ref push reports per-ref statuses; a daemon killed between the remote commit and update-ref reconciles from its journal; foreign new commits refused, signed imports accepted; a sha256 repository refused, naming it, before any evs write (owner decision 249).
 - **git-lfs** (3.x as Ubuntu 22.04 and 24.04 ship it, and the latest; `lfs.standalonetransferagent`; `GIT_LFS_SKIP_SMUDGE`): FS-73's flows with stock clients, pointer files byte-exact and export's oids equal to git's, its tip check included over http, ssh and `git-remote-ur`, with no skip option set and with `--no-verify` and `GIT_LFS_SKIP_PUSH`.
 - **Restore** (darwin on APFS; linux on ext4, xfs and an NFS mount; windows on NTFS; a FAT volume on each; symlinks on each, Windows with and without the symlink privilege): FS-115's apply through each volume's no-replace rename, its hard-link fallback, and `unsupported` where it has neither, with Windows's in-use refusal.
 - **File clusters** (D-OPS-20's in-house MinIO build, every cluster, each build, upgrade and new cluster; D-OPS-4): stale conditions refused with a host or quorum lost (§11.3); §19.6's deadline and settle rules, by FS-114's late-drive cases: a request past its x-ur-deadline-ms refused where it takes its key's lock, no drive commit begun past it, and a PUT or DELETE whose drive commits are held after their checks past the 30 s drive timeout, its coordinator killed, taking effect before the next request on its key or never, the newer acknowledged state surviving release and a full heal, since a removal marker's collection deletes unconditionally (owner decision 148), as from v1 do the versionless purge's and the marker collection's kind-5 and slot DELETEs and a drop job's DELETEs; the lag from a cancel to a write's last drive answer, measured and reported, which no margin relies on; no heal resurrects a deleted object or spreads a version fewer than a read quorum of drives hold; read-after-write consistency, and a LIST answered whole or 503 (owner decision 226); checksums; ranged GET; Delete, and a DELETE naming its object's LastModified refused 412 for a newer one (owner decision 225); no lifecycle rule set on either bucket; one pool per cluster (FS-63).

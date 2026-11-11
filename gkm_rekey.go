@@ -26,9 +26,10 @@
 // What it cannot name it does not claim. A repo's refs are named by the caller, main when none is, since a head
 // stores no sealed ref name yet (questions/evs1-m2-01-ref-creation-fields.md), and a ref's root has no entry in
 // format 1 (questions/evs1-m2-24-root-directory-names.md), so a request naming no path asks List for the root,
-// which refuses, and the job ends having written nothing. A git-mode ref takes writes only through the local tier
-// and another sidecar's owned ref only from its owner: each is skipped and named in the progress, never counted as
-// done. Record-class repos refuse as their writes do (EVS1-M2-29, EVS1-M2-30). The scope a finished job covered is
+// which refuses, and the job ends having written nothing. A git-mode ref is rekeyed as any other, its pushes sealed
+// as the REKEY shape (DESIGN-DETAILS 8.2.10, question keys-m2-26-rekey-git-mode-refs): its own entries, an overlay's
+// held files and nothing it inherits, nothing on a tag ref. Another sidecar's owned ref takes writes only from its
+// owner: it is skipped and named in the progress, never counted as done. Record-class repos refuse as their writes do (EVS1-M2-29, EVS1-M2-30). The scope a finished job covered is
 // the refs and paths its progress names, nothing more.
 //
 // One job per repo at a time. Safe for concurrent use.
@@ -135,8 +136,8 @@ type GkmRekeyRequest struct {
 // A ref a job could not write, and why.
 type GkmRekeySkippedRef struct {
 	RefName []byte
-	// "git_mode": written only through the local tier. "not_owner": another sidecar's owned ref, or a ref kind
-	// that takes its own pushes.
+	// "not_owner": another sidecar's owned ref, or a ref kind that takes its own pushes. "git_mode" is no longer
+	// given: a git-mode ref is rekeyed through the REKEY shape.
 	Reason string
 }
 
@@ -655,9 +656,8 @@ func (self *gkmRekeyRun) namedKinds(ctx context.Context, refName []byte, paths [
 	}
 	defer result.objects.close()
 	writable := &EvsWritePlan{}
-	switch err := writable.setRef(result.head.Head, refName, self.rekey.args.Evs.args.Identity().SidecarId); {
-	case errors.Is(err, ErrEvsGitRef):
-		return nil, "git_mode", nil
+	// a rekey's writes are all rekey writes, which a git-mode ref takes (DESIGN-DETAILS 8.2.10)
+	switch err := writable.setRef(result.head.Head, refName, self.rekey.args.Evs.args.Identity().SidecarId, true); {
 	case errors.Is(err, ErrEvsWriteInvalid):
 		return nil, "not_owner", nil
 	case err != nil:
@@ -666,7 +666,8 @@ func (self *gkmRekeyRun) namedKinds(ctx context.Context, refName []byte, paths [
 	kinds := make([]protocol.EvsEntryKind, len(paths))
 	for i, verified := range result.replies {
 		if verified.Base != nil {
-			return nil, "", ErrEvsOverlayBase
+			// an overlay's path it holds no version of: its base ref's to rekey, so nothing here
+			continue
 		}
 		if verified.Entry != nil && verified.Removal == nil && !verified.Absent {
 			kinds[i] = protocol.EvsEntryKind(verified.Entry.GetKind())

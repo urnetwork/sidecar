@@ -1,4 +1,4 @@
-// The posture's offline checks (§7.9's keyless rule, §8.9, §17.8's device roles), with protocol/bridge's types alone.
+// The posture's offline checks (§7.9's keyless rule, §8.9, §17.8's forwarding roles), with protocol/bridge's types alone.
 //
 // Rows stream: one pass reads a ProjectionRows to its end, hashing every byte, with protobuf's wire format read field
 // by field, so memory holds one MemberRow or SidecarRow at a time and never the rows whole (§18.4's 1 MiB budget
@@ -7,8 +7,12 @@
 //
 // A base passes as bridge.VerifyBaseKeylessDigest says, signed by a config writer: an AdminSet member's member device,
 // standing and not read_only, by the rows in effect before it, or, for the first base a posture takes, by its own rows.
-// A statement this role applies passes on its header, its signer's identity key in the rows and its signer class; the
-// countersignature §7.9's presence row asks for is its sidecar role's to check, so such a statement is Covered.
+// A statement this role applies as a denial passes on its header, its signer's identity key in the rows and its
+// signer class; the countersignature §7.9's presence row asks for is the compile's to check, so such a statement is
+// Covered. A Delegation and a DelegationRevoke are config.proto's, which this package may not link (§4.4), so their
+// fields are read by wire, field by field, and only the ones a denial needs: a header, a revocation's delegation_id
+// and since_n, and a Delegation's field 7, which parses as bridge.ForwardScope. One that does not read so waits for
+// the compile (DESIGN-DETAILS 4.2.5).
 //
 // Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret. Package-level functions are safe for
 // concurrent use.
@@ -446,14 +450,110 @@ func parsePostureBase(entry *bridge.AuthEntry) (*bridge.Signed, *bridge.Projecti
 	return signed, header, [postureIdByteCount]byte(signed.GetSignerId()), nil
 }
 
-// The statements this role applies between states, each with its purpose (§6.11).
+// The statements this role applies as denials between states, each with its purpose (§6.11). A Delegation counts only
+// when its field 7 is set, a forwarding one, whose newer key supersedes its signer's older ones.
 var postureStatementPurposes = map[bridge.SignedType]string{
-	bridge.SignedType_SIGNED_SIDECAR_REVOKE:  bridge.SignedPurposeAuthority,
-	bridge.SignedType_SIGNED_MEMBER_REVOKE:   bridge.SignedPurposeAuthority,
-	bridge.SignedType_SIGNED_SUSPEND:         bridge.SignedPurposeAcl,
-	bridge.SignedType_SIGNED_UNSUSPEND:       bridge.SignedPurposeAcl,
-	bridge.SignedType_SIGNED_GRANT_REVOKE:    bridge.SignedPurposeAcl,
-	bridge.SignedType_SIGNED_BRIDGE_WITHDRAW: bridge.SignedPurposeBridge,
+	bridge.SignedType_SIGNED_SIDECAR_REVOKE:    bridge.SignedPurposeAuthority,
+	bridge.SignedType_SIGNED_MEMBER_REVOKE:     bridge.SignedPurposeAuthority,
+	bridge.SignedType_SIGNED_SUSPEND:           bridge.SignedPurposeAcl,
+	bridge.SignedType_SIGNED_GRANT_REVOKE:      bridge.SignedPurposeAcl,
+	bridge.SignedType_SIGNED_BRIDGE_WITHDRAW:   bridge.SignedPurposeBridge,
+	bridge.SignedType_SIGNED_DELEGATION_REVOKE: bridge.SignedPurposeAuthority,
+	bridge.SignedType_SIGNED_DELEGATION:        bridge.SignedPurposeAuthority,
+}
+
+// The statement types that may narrow reach and that this role never applies: each waits for a compile (DESIGN-DETAILS
+// 4.2.5's table). An Unsuspend, and every other type not here or above, is an opening or neutral.
+var postureWaitingTypes = map[bridge.SignedType]bool{
+	bridge.SignedType_SIGNED_AUTHORITY_PROPOSAL: true,
+	bridge.SignedType_SIGNED_AUTHORITY_COSIGN:   true,
+	bridge.SignedType_SIGNED_RECOVERY_REBIND:    true,
+	bridge.SignedType_SIGNED_ADMIN_SET:          true,
+	bridge.SignedType_SIGNED_BRIDGE_EGRESS:      true,
+}
+
+// config.proto's Delegation and DelegationRevoke fields this role reads (§7.9).
+const (
+	postureDelegationFieldHeader       protowire.Number = 1
+	postureDelegationFieldForward      protowire.Number = 7
+	postureDelegationRevokeFieldHeader protowire.Number = 1
+	postureDelegationRevokeFieldId     protowire.Number = 2
+	postureDelegationRevokeFieldSinceN protowire.Number = 3
+)
+
+// A delegation_id's size: a SHA-256.
+const postureDelegationIdByteCount = sha256.Size
+
+// One statement body's fields, read by wire as protobuf's decoder reads them: of the fields wanted, each at most once
+// and of its wire type, a bytes field's value and a varint field's; every other field skipped by its own wire type. A
+// wanted field given twice or of another type, or a field that runs past the end, is an error, which only a statement
+// no signer's encoder writes meets, so it waits for the compile.
+func readPostureWireFields(body []byte, wanted map[protowire.Number]protowire.Type) (map[protowire.Number][]byte, map[protowire.Number]uint64, error) {
+	bytesFields := map[protowire.Number][]byte{}
+	varintFields := map[protowire.Number]uint64{}
+	seen := map[protowire.Number]bool{}
+	for 0 < len(body) {
+		number, wireType, tagLength := protowire.ConsumeTag(body)
+		if tagLength < 0 {
+			return nil, nil, errors.New("a tag that does not decode")
+		}
+		body = body[tagLength:]
+		wantedType, isWanted := wanted[number]
+		if isWanted && (wireType != wantedType || seen[number]) {
+			return nil, nil, fmt.Errorf("field %d of wire type %d, or given twice", number, wireType)
+		}
+		seen[number] = true
+		switch {
+		case isWanted && wireType == protowire.BytesType:
+			value, length := protowire.ConsumeBytes(body)
+			if length < 0 {
+				return nil, nil, fmt.Errorf("field %d runs past the end", number)
+			}
+			bytesFields[number] = value
+			body = body[length:]
+		case isWanted && wireType == protowire.VarintType:
+			value, length := protowire.ConsumeVarint(body)
+			if length < 0 {
+				return nil, nil, fmt.Errorf("field %d runs past the end", number)
+			}
+			varintFields[number] = value
+			body = body[length:]
+		default:
+			length := protowire.ConsumeFieldValue(number, wireType, body)
+			if length < 0 {
+				return nil, nil, fmt.Errorf("field %d runs past the end", number)
+			}
+			body = body[length:]
+		}
+	}
+	return bytesFields, varintFields, nil
+}
+
+// A statement's header from its field's bytes: present and decoding as a StatementHeader.
+func parsePostureWireHeader(headerBytes []byte) (*bridge.StatementHeader, error) {
+	if headerBytes == nil {
+		return nil, errors.New("a statement with no header")
+	}
+	header := &bridge.StatementHeader{}
+	if err := proto.Unmarshal(headerBytes, header); err != nil {
+		return nil, errors.New("a statement header that does not decode")
+	}
+	return header, nil
+}
+
+// A DelegationRevoke as this role reads it.
+type postureDelegationRevoke struct {
+	header       *bridge.StatementHeader
+	delegationId []byte
+	sinceN       uint64
+}
+
+// A forwarding Delegation as this role reads it: its header, its ForwardScope, and its delegation_id, the SHA-256 of
+// its §6.9 signed bytes (§10.5's d).
+type postureForwardDelegation struct {
+	header       *bridge.StatementHeader
+	scope        *bridge.ForwardScope
+	delegationId [postureDelegationIdByteCount]byte
 }
 
 // One statement this role applies, parsed before its signature is checked.
@@ -463,37 +563,35 @@ type postureStatement struct {
 	signerId   [postureIdByteCount]byte
 	header     *bridge.StatementHeader
 	// exactly one of these, by signedType
-	sidecarRevoke  *bridge.SidecarRevoke
-	memberRevoke   *bridge.MemberRevoke
-	suspend        *bridge.Suspend
-	unsuspend      *bridge.Unsuspend
-	grantRevoke    *bridge.GrantRevoke
-	bridgeWithdraw *bridge.BridgeWithdraw
+	sidecarRevoke     *bridge.SidecarRevoke
+	memberRevoke      *bridge.MemberRevoke
+	suspend           *bridge.Suspend
+	grantRevoke       *bridge.GrantRevoke
+	bridgeWithdraw    *bridge.BridgeWithdraw
+	delegationRevoke  *postureDelegationRevoke
+	forwardDelegation *postureForwardDelegation
 }
 
-// The statement a STATEMENT entry carries, nil when it is of a type this role does not apply, which it follows by its
-// chain alone. An error for one of the six that is malformed. Its body is read as its type registers, never a
-// re-marshal; the signature over it is checked later, against its signer's key.
-func parsePostureStatement(entry *bridge.AuthEntry) (*postureStatement, error) {
+// The statement a STATEMENT entry carries, with its type. Nil for a type this role does not apply, or a Delegation
+// that is not a forwarding one, which it follows by its chain alone, and SIGNED_TYPE_NONE with nil for a body that is
+// no Signed. An error for one of the kinds it applies that is malformed. Its body is read as its type registers, or by
+// wire, never a re-marshal; the signature over it is checked later, against its signer's key.
+func parsePostureStatement(entry *bridge.AuthEntry) (*postureStatement, bridge.SignedType, error) {
 	signed := &bridge.Signed{}
 	if err := proto.Unmarshal(entry.GetBody(), signed); err != nil {
 		// a statement this role does not read may be any shape the type allows, so only its chain counts
-		return nil, nil
+		return nil, bridge.SignedType_SIGNED_TYPE_NONE, nil
 	}
 	signedType := bridge.SignedType(signed.GetType())
 	if _, applies := postureStatementPurposes[signedType]; !applies {
-		return nil, nil
+		return nil, signedType, nil
 	}
 	malformed := func(what string) error {
 		return fmt.Errorf("%w: %s", ErrPostureRefused, what)
 	}
-	if len(signed.GetSignerId()) != postureIdByteCount || len(signed.GetKeyId()) != 0 {
-		return nil, malformed("a statement signed by other than an identity key")
-	}
 	statement := &postureStatement{
 		signed:     signed,
 		signedType: signedType,
-		signerId:   [postureIdByteCount]byte(signed.GetSignerId()),
 	}
 	var message interface {
 		proto.Message
@@ -509,24 +607,71 @@ func parsePostureStatement(entry *bridge.AuthEntry) (*postureStatement, error) {
 	case bridge.SignedType_SIGNED_SUSPEND:
 		statement.suspend = &bridge.Suspend{}
 		message = statement.suspend
-	case bridge.SignedType_SIGNED_UNSUSPEND:
-		statement.unsuspend = &bridge.Unsuspend{}
-		message = statement.unsuspend
 	case bridge.SignedType_SIGNED_GRANT_REVOKE:
 		statement.grantRevoke = &bridge.GrantRevoke{}
 		message = statement.grantRevoke
 	case bridge.SignedType_SIGNED_BRIDGE_WITHDRAW:
 		statement.bridgeWithdraw = &bridge.BridgeWithdraw{}
 		message = statement.bridgeWithdraw
+	case bridge.SignedType_SIGNED_DELEGATION:
+		fields, _, err := readPostureWireFields(signed.GetBody(), map[protowire.Number]protowire.Type{
+			postureDelegationFieldHeader: protowire.BytesType, postureDelegationFieldForward: protowire.BytesType,
+		})
+		if err != nil {
+			return nil, signedType, malformed("a Delegation that does not read by wire")
+		}
+		forward, forwards := fields[postureDelegationFieldForward]
+		if !forwards {
+			// not a forwarding one: an opening, which only a compile judges
+			return nil, signedType, nil
+		}
+		scope := &bridge.ForwardScope{}
+		if err := proto.Unmarshal(forward, scope); err != nil {
+			return nil, signedType, malformed("a forwarding Delegation whose forward does not decode")
+		}
+		header, err := parsePostureWireHeader(fields[postureDelegationFieldHeader])
+		if err != nil {
+			return nil, signedType, malformed(err.Error())
+		}
+		statement.forwardDelegation = &postureForwardDelegation{
+			header:       header,
+			scope:        scope,
+			delegationId: bridge.SignedBytesSha256(bridge.SignedPurposeAuthority, signedType, signed.GetBody()),
+		}
+		statement.header = header
+	case bridge.SignedType_SIGNED_DELEGATION_REVOKE:
+		fields, varints, err := readPostureWireFields(signed.GetBody(), map[protowire.Number]protowire.Type{
+			postureDelegationRevokeFieldHeader: protowire.BytesType, postureDelegationRevokeFieldId: protowire.BytesType,
+			postureDelegationRevokeFieldSinceN: protowire.VarintType,
+		})
+		if err != nil {
+			return nil, signedType, malformed("a DelegationRevoke that does not read by wire")
+		}
+		header, err := parsePostureWireHeader(fields[postureDelegationRevokeFieldHeader])
+		if err != nil {
+			return nil, signedType, malformed(err.Error())
+		}
+		statement.delegationRevoke = &postureDelegationRevoke{
+			header:       header,
+			delegationId: bytes.Clone(fields[postureDelegationRevokeFieldId]),
+			sinceN:       varints[postureDelegationRevokeFieldSinceN],
+		}
+		statement.header = header
 	}
-	if err := proto.Unmarshal(signed.GetBody(), message); err != nil {
-		return nil, malformed("a statement body that does not decode")
+	if message != nil {
+		if err := proto.Unmarshal(signed.GetBody(), message); err != nil {
+			return nil, signedType, malformed("a statement body that does not decode")
+		}
+		statement.header = message.GetHeader()
+		if statement.header == nil {
+			return nil, signedType, malformed("a statement with no header")
+		}
 	}
-	statement.header = message.GetHeader()
-	if statement.header == nil {
-		return nil, malformed("a statement with no header")
+	if len(signed.GetSignerId()) != postureIdByteCount || len(signed.GetKeyId()) != 0 {
+		return nil, signedType, malformed("a statement signed by other than an identity key")
 	}
-	return statement, nil
+	statement.signerId = [postureIdByteCount]byte(signed.GetSignerId())
+	return statement, signedType, nil
 }
 
 // The ids a statement's signer check needs rows for: its signer, and the sidecar it is about where its class turns
@@ -539,8 +684,6 @@ func (self *postureStatement) rowIds() [][postureIdByteCount]byte {
 		subject = self.sidecarRevoke.GetSidecarId()
 	case self.suspend != nil:
 		subject = self.suspend.GetSubject()
-	case self.unsuspend != nil:
-		subject = self.unsuspend.GetSubject()
 	}
 	if len(subject) == postureIdByteCount {
 		ids = append(ids, [postureIdByteCount]byte(subject))
@@ -563,18 +706,20 @@ func (self *postureStatement) ownSignOut(networkId []byte, sidecarId []byte, ide
 		bridge.SignedKeyAlgEd25519, identityPublicKey) == nil
 }
 
-// A signer's class for Suspend and Unsuspend (§8.8): owner or sponsor below admin.
+// A Suspend signer's class (§8.8): owner or sponsor below admin.
 const (
 	posturePeerClassNone  = 0
 	posturePeerClassOwner = 1
 	posturePeerClassAdmin = 2
 )
 
-// What a statement's signer check reads: the rows it named, the AdminSet's members, and what the overlay revoked.
+// What a statement's signer check reads: the rows it named, the AdminSet's members, what the overlay revoked, and the
+// forwarding Delegations the state in force shows live, nil where no DelegationRevoke asked.
 type posturePeers struct {
-	rows             map[[postureIdByteCount]byte]*postureSidecarRow
-	adminMemberRoles map[[postureIdByteCount]byte]bridge.MemberRole
-	overlay          []PostureOverlayEntry
+	rows                 map[[postureIdByteCount]byte]*postureSidecarRow
+	adminMemberRoles     map[[postureIdByteCount]byte]bridge.MemberRole
+	overlay              []PostureOverlayEntry
+	forwardDelegationIds map[[postureDigestByteCount]byte]bool
 }
 
 // The row of a signer that may sign at timeMs: in the rows, standing, and not revoked since by the overlay, itself or
@@ -648,12 +793,11 @@ func (self *posturePeers) classOver(signer *postureSidecarRow, subject []byte) i
 	return posturePeerClassNone
 }
 
-// What one verified statement does: an overlay entry to add, or an overlay Suspend to lift.
+// What one verified statement does: an overlay entry to add, a denial; or, wait, nothing until a compile judges it,
+// since this role cannot tell what it narrows. Nothing a statement does here lifts or opens.
 type postureEffect struct {
-	add         *PostureOverlayEntry
-	liftSubject []byte
-	liftId      []byte
-	liftClass   int
+	add  *PostureOverlayEntry
+	wait bool
 }
 
 // Checks a statement carried at position n and time timeMs for networkId: its header, its signer's identity key and
@@ -731,23 +875,8 @@ func verifyPostureStatement(statement *postureStatement, n uint64, timeMs int64,
 		}
 		return &postureEffect{add: &PostureOverlayEntry{
 			Kind: PostureOverlaySuspend, N: n, Id: bytes.Clone(subject), SuspendId: bytes.Clone(suspendId),
-			Covered: !isSigner(subject), suspendClass: class,
+			Covered: !isSigner(subject),
 		}}, nil
-
-	case statement.unsuspend != nil:
-		subject, suspendId := statement.unsuspend.GetSubject(), statement.unsuspend.GetSuspendId()
-		if len(subject) == 0 || len(suspendId) == 0 {
-			return nil, refused("an Unsuspend naming no subject or suspend_id")
-		}
-		// never the subject itself (§8.8)
-		if isSigner(subject) {
-			return nil, refused("an Unsuspend by its own subject")
-		}
-		class := peers.classOver(signer, subject)
-		if class == posturePeerClassNone {
-			return nil, refused("an Unsuspend by no admin, owner or sponsor")
-		}
-		return &postureEffect{liftSubject: bytes.Clone(subject), liftId: bytes.Clone(suspendId), liftClass: class}, nil
 
 	case statement.grantRevoke != nil:
 		grantId := statement.grantRevoke.GetGrantId()
@@ -766,6 +895,33 @@ func verifyPostureStatement(statement *postureStatement, n uint64, timeMs int64,
 		// the rule's signer or an admin: as for a grant, the next state judges the signer
 		return &postureEffect{add: &PostureOverlayEntry{
 			Kind: PostureOverlayBridgeWithdraw, N: n, Id: bytes.Clone(ruleId), WithdrawMode: statement.bridgeWithdraw.GetMode(),
+		}}, nil
+
+	case statement.delegationRevoke != nil:
+		delegationId := statement.delegationRevoke.delegationId
+		if len(delegationId) != postureDelegationIdByteCount {
+			return nil, refused("a DelegationRevoke naming no delegation")
+		}
+		// a forwarding Delegation's own sidecar, one allowed to revoke it or an admin (§7.9): denying only, it needs a
+		// standing signer, and the compile judges the class. Only the state in force says a delegation_id is a
+		// forwarding key's, so one it does not show waits for the compile, as a revocation of an agent's does.
+		if !peers.forwardDelegationIds[[postureDelegationIdByteCount]byte(delegationId)] {
+			return &postureEffect{wait: true}, nil
+		}
+		// since_n > 0 parks others, which §7.9's presence row covers (owner decision 192)
+		return &postureEffect{add: &PostureOverlayEntry{
+			Kind: PostureOverlayDelegationRevoke, N: n, Id: bytes.Clone(delegationId), Covered: 0 < statement.delegationRevoke.sinceN,
+		}}, nil
+
+	case statement.forwardDelegation != nil:
+		// a forwarding one only by the sidecar it names (§7.9's forwarding row): its newer key supersedes the older
+		// ones at its position, and itself opens only at the state that judged it
+		if !bytes.Equal(statement.forwardDelegation.scope.GetForwardSidecarId(), statement.signerId[:]) {
+			return nil, refused("a forwarding Delegation for another sidecar than its signer")
+		}
+		return &postureEffect{add: &PostureOverlayEntry{
+			Kind: PostureOverlayForwardSupersede, N: n, Id: bytes.Clone(statement.signerId[:]),
+			DelegationId: bytes.Clone(statement.forwardDelegation.delegationId[:]),
 		}}, nil
 	}
 	return nil, refused("a statement of no type this role applies")

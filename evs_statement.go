@@ -9,8 +9,11 @@
 // EvsStatement keeps them, and C_v, the window's prefix and statement_sha256 come from them.
 //
 // EvsStatementBuilder is the client's half: from what a push carries it builds the statement and its payload, or its
-// parts when the push passes 1 MiB or 1,024 entry writes, and signs through the caller's identity key. ParseEvsStatement
-// is evs's and readers' half, holding a statement to format 1's shape before any check that needs the head.
+// parts when the push passes 1 MiB or 1,024 entry writes, and signs through the caller's identity key. The sections no
+// change carries spill into the parts' room beside the changes, and what still does not fit goes in changeless parts
+// after them (DESIGN-DETAILS 8.2.2's parts row), which carry no changes_root and are no leaf of the statement's root.
+// ParseEvsStatement is evs's and readers' half, holding a statement to format 1's shape before any check that needs the
+// head.
 //
 // Format 2 (EVS-FORMAT.md's format 2 chapter) parses through ParseEvsStatementFormat2 and builds through BuildFormat2,
 // which take flags 256 DROP and 512 CUT and fields 33 and 34: a DROP sets flag 256 alone, drop_sha256 over its body
@@ -297,6 +300,10 @@ type EvsPushPlan struct {
 	// a PATH_EPOCH push's tail: each EvsPathMove's bytes
 	TailMoves [][]byte
 	ReuseList []*EvsReuse
+	// a creating push's payload sections 15 and 16 (DESIGN-DETAILS 8.2.2): its sealed ref name (EvsSealRefName) and an
+	// overlay's base, which the sealed metadata repeats under the signature
+	RefName []byte
+	Base    *protocol.EvsOverlay
 	// format 2, a DROP's: its EvsDropHistory bytes, section 9, which drop_sha256 is set over, and its lists, section 10
 	// (EvsBuildDropLists)
 	DropBody  []byte
@@ -470,6 +477,14 @@ func (self *EvsStatementBuilder) build(plan *EvsPushPlan, format2 bool) (*EvsBui
 		reuseItems = append(reuseItems, reuse.encode())
 	}
 	common.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_REUSE_LIST, evsJoinItems(reuseItems))
+	common.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_REF_NAME, plan.RefName)
+	if plan.Base != nil {
+		baseBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(plan.Base)
+		if err != nil {
+			return nil, fmt.Errorf("evs: overlay base: %w", err)
+		}
+		common.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_OVERLAY_BASE, baseBytes)
+	}
 
 	push := plan.basePush()
 	statePayloadHashes := func(sources []byte) {
@@ -593,12 +608,22 @@ type evsBuildPart struct {
 	sections  *EvsPayload
 }
 
+// The sections no change carries, in the order they spill into the parts' room.
+var evsSpilledSections = []protocol.EvsPayloadSection{
+	protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA, protocol.EvsPayloadSection_EVS_PAYLOAD_NEW_OBJECTS,
+	protocol.EvsPayloadSection_EVS_PAYLOAD_SLOT_BODIES, protocol.EvsPayloadSection_EVS_PAYLOAD_ERASED_LIST,
+	protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY, protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS,
+	protocol.EvsPayloadSection_EVS_PAYLOAD_TAIL_MOVES, protocol.EvsPayloadSection_EVS_PAYLOAD_REUSE_LIST,
+	protocol.EvsPayloadSection_EVS_PAYLOAD_REF_NAME, protocol.EvsPayloadSection_EVS_PAYLOAD_OVERLAY_BASE,
+}
+
 // A push in parts: changes split into contiguous runs within 1,024 entry writes and 1 MiB, each with its entry
 // versions, source paths and proofs to its own root; then the sealed metadata and the other sections spread over the
-// parts' room in order, each slice anywhere.
+// parts' room in order, each slice anywhere, and what is left over in changeless parts after them (DESIGN-DETAILS
+// 8.2.2's parts row). A push with no change has no root to state, so one past 1 MiB has no shape: ErrEvsPushInvalid.
 func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*evsBuildChange, common *EvsPayload, sourcesSection []byte, format2 bool) (*EvsBuiltPush, error) {
-	if len(changes) < evsMinPartCount {
-		return nil, fmt.Errorf("%w: a push in parts needs a change for each of at least two parts", ErrEvsPushInvalid)
+	if len(changes) == 0 {
+		return nil, fmt.Errorf("%w: a push past 1 MiB with no change, which no statement can root", ErrEvsPushInvalid)
 	}
 	pathLength := bits.Len(uint(len(changes)))
 	parts := []*evsBuildPart{{sections: &EvsPayload{}}}
@@ -619,21 +644,11 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 		current.byteCount += changeByteCount
 		entryWrites += writes
 	}
-	if len(parts) < evsMinPartCount {
-		// a push past 1 MiB only by its other sections still goes in two parts
-		last := parts[0]
-		half := len(last.changes) / 2
-		parts = []*evsBuildPart{{changes: last.changes[:half], sections: &EvsPayload{}}, {changes: last.changes[half:], sections: &EvsPayload{}}}
-		for _, part := range parts {
-			for _, change := range part.changes {
-				part.byteCount += evsChangePartByteCount(change, pathLength)
-			}
-		}
-	}
 	if EvsMaxPartCount < len(parts) {
 		return nil, fmt.Errorf("%w: %d parts", ErrEvsPushInvalid, len(parts))
 	}
-	partLeaves := make([][][]byte, len(parts))
+	changefulCount := len(parts)
+	partLeaves := make([][][]byte, changefulCount)
 	for i, part := range parts {
 		for _, change := range part.changes {
 			partLeaves[i] = append(partLeaves[i], change.leaf)
@@ -644,54 +659,86 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 		return nil, err
 	}
 
-	// spill the sections no change carries into the parts' room, in section order
-	spill := []struct {
+	// spill the sections no change carries into the parts' room, in section order, then into changeless parts
+	type evsSpilledSection struct {
 		sectionType protocol.EvsPayloadSection
 		remaining   []byte
-	}{}
-	for _, sectionType := range []protocol.EvsPayloadSection{
-		protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA, protocol.EvsPayloadSection_EVS_PAYLOAD_NEW_OBJECTS,
-		protocol.EvsPayloadSection_EVS_PAYLOAD_SLOT_BODIES, protocol.EvsPayloadSection_EVS_PAYLOAD_ERASED_LIST,
-		protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY, protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS,
-		protocol.EvsPayloadSection_EVS_PAYLOAD_TAIL_MOVES, protocol.EvsPayloadSection_EVS_PAYLOAD_REUSE_LIST,
-	} {
+	}
+	spill := []*evsSpilledSection{}
+	for _, sectionType := range evsSpilledSections {
 		if sectionBytes := common.Section(sectionType); len(sectionBytes) != 0 {
-			spill = append(spill, struct {
-				sectionType protocol.EvsPayloadSection
-				remaining   []byte
-			}{sectionType: sectionType, remaining: sectionBytes})
+			spill = append(spill, &evsSpilledSection{sectionType: sectionType, remaining: sectionBytes})
 		}
 	}
-	for _, part := range parts {
-		room := EvsPartMaxByteCount - evsPartFieldsByteCount - part.byteCount
-		for i := range spill {
-			if room <= evsPayloadSectionHeaderByteCount || len(spill[i].remaining) == 0 {
+	setSlice := func(part *evsBuildPart, sectionType protocol.EvsPayloadSection, slice []byte) {
+		if sectionType == protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA {
+			part.metadata = slice
+		} else {
+			part.sections.SetSection(sectionType, slice)
+		}
+	}
+	fill := func(part *evsBuildPart, room int) {
+		for _, pending := range spill {
+			if room <= evsPayloadSectionHeaderByteCount || len(pending.remaining) == 0 {
 				continue
 			}
-			take := min(len(spill[i].remaining), room-evsPayloadSectionHeaderByteCount)
-			slice := spill[i].remaining[:take]
-			spill[i].remaining = spill[i].remaining[take:]
-			if spill[i].sectionType == protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA {
-				part.metadata = slice
-			} else {
-				part.sections.SetSection(spill[i].sectionType, slice)
-			}
+			take := min(len(pending.remaining), room-evsPayloadSectionHeaderByteCount)
+			setSlice(part, pending.sectionType, pending.remaining[:take])
+			pending.remaining = pending.remaining[take:]
 			room -= take + evsPayloadSectionHeaderByteCount
 		}
 	}
-	for _, pending := range spill {
-		if len(pending.remaining) != 0 {
-			return nil, fmt.Errorf("%w: section %d does not fit beside the changes; a draft builder adds no part for it", ErrEvsPushInvalid, pending.sectionType)
+	left := func() bool {
+		return slices.ContainsFunc(spill, func(pending *evsSpilledSection) bool { return 0 < len(pending.remaining) })
+	}
+	for _, part := range parts {
+		fill(part, EvsPartMaxByteCount-evsPartFieldsByteCount-part.byteCount)
+	}
+	for left() {
+		if EvsMaxPartCount <= len(parts) {
+			return nil, fmt.Errorf("%w: more than %d parts", ErrEvsPushInvalid, EvsMaxPartCount)
 		}
+		changeless := &evsBuildPart{sections: &EvsPayload{}}
+		fill(changeless, EvsPartMaxByteCount-evsPartFieldsByteCount)
+		parts = append(parts, changeless)
+	}
+	if len(parts) < evsMinPartCount {
+		// one change and every section fitting beside it in a push past 1 MiB, by the proofs' room: the last slice's
+		// tail goes to a changeless part, which a slice may split anywhere to do
+		first := parts[0]
+		var last protocol.EvsPayloadSection
+		for _, sectionType := range evsSpilledSections {
+			if sectionType == protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA && 0 < len(first.metadata) ||
+				0 < len(first.sections.Section(sectionType)) {
+				last = sectionType
+			}
+		}
+		if last == protocol.EvsPayloadSection_EVS_PAYLOAD_SECTION_UNSPECIFIED {
+			return nil, fmt.Errorf("%w: a push in parts with one change and nothing to put beside it", ErrEvsPushInvalid)
+		}
+		slice := first.metadata
+		if last != protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA {
+			slice = first.sections.Section(last)
+		}
+		half := len(slice) / 2
+		changeless := &evsBuildPart{sections: &EvsPayload{}}
+		setSlice(changeless, last, slice[half:])
+		if half == 0 {
+			setSlice(first, last, nil)
+		} else {
+			setSlice(first, last, slice[:half])
+		}
+		parts = append(parts, changeless)
 	}
 
 	built := &EvsBuiltPush{ChangeTree: tree}
 	partHashes := []byte{}
 	paths := make([]EvsTokenPath, 0, len(changes))
 	for i, part := range parts {
-		partRoot, _ := tree.PartRoot(i)
-		message := &protocol.EvsPushPart{
-			PushId: push.GetPushId(), Part: uint32(i + 1), SealedMetadata: part.metadata, ChangesRoot: partRoot[:],
+		message := &protocol.EvsPushPart{PushId: push.GetPushId(), Part: uint32(i + 1), SealedMetadata: part.metadata}
+		if i < changefulCount {
+			partRoot, _ := tree.PartRoot(i)
+			message.ChangesRoot = partRoot[:]
 		}
 		sourceItems := [][]byte{}
 		for _, change := range part.changes {
@@ -702,14 +749,16 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 				message.EntryVersions = append(message.EntryVersions, change.planned.EntryVersion)
 			}
 		}
-		proofs, err := evsEntryProofs(tree, i, part.changes)
-		if err != nil {
-			return nil, err
+		if i < changefulCount {
+			proofs, err := evsEntryProofs(tree, i, part.changes)
+			if err != nil {
+				return nil, err
+			}
+			if 0 < len(sourcesSection) {
+				part.sections.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_SOURCE_PATHS, evsJoinItems(sourceItems))
+			}
+			part.sections.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_MERKLE_PROOFS, evsJoinItems(proofs))
 		}
-		if 0 < len(sourcesSection) {
-			part.sections.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_SOURCE_PATHS, evsJoinItems(sourceItems))
-		}
-		part.sections.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_MERKLE_PROOFS, evsJoinItems(proofs))
 		message.Sections = part.sections.Encode()
 		partBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
 		if err != nil {

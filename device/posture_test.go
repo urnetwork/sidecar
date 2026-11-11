@@ -209,11 +209,23 @@ func TestPostureTransitions(t *testing.T) {
 			wantAlarm: PostureAlarmAnchor,
 		},
 		{
-			name: "enforcing{doc}, a verified base with no document above the latch: enforcing{nodoc}",
+			name: "enforcing{doc}, a verified base with no document above the latch as a delta: enforcing{doc} until a state",
 			run: func(fixture *postureFixture, store *memoryPostureStore) (PostureDecision, error) {
 				posture := fixture.enforcing(store, true)
 				n := fixture.base(fixture.ownerPhone, false)
 				return posture.ApplyDeltas(fixture.log(n, n))
+			},
+			wantState: PostureEnforcingDocument,
+		},
+		{
+			name: "enforcing{doc}, a state on a verified base with no document above the latch: enforcing{nodoc}",
+			run: func(fixture *postureFixture, store *memoryPostureStore) (PostureDecision, error) {
+				posture := fixture.enforcing(store, true)
+				n := fixture.base(fixture.ownerPhone, false)
+				if _, err := posture.ApplyDeltas(fixture.log(n, n)); err != nil {
+					return PostureDecision{}, err
+				}
+				return posture.SetState(fixture.state(n, false), nil)
 			},
 			wantState: PostureEnforcingNoDocument,
 		},
@@ -237,14 +249,12 @@ func TestPostureTransitions(t *testing.T) {
 			wantAlarm: PostureAlarmDocument,
 		},
 		{
-			name: "enforcing, a state below the last one: refused, enforcing",
+			name: "enforcing, a state below the last one: dropped, enforcing",
 			run: func(fixture *postureFixture, store *memoryPostureStore) (PostureDecision, error) {
 				posture := fixture.enforcing(store, true)
 				return posture.SetState(fixture.state(fixture.tip()-1, true), nil)
 			},
 			wantState: PostureEnforcingDocument,
-			wantErr:   ErrPostureRefused,
-			wantAlarm: PostureAlarmLowerPin,
 		},
 		{
 			name: "enforcing, a later state chained from the pin: enforcing",
@@ -333,7 +343,8 @@ func TestUnsignedHasDocumentIgnored(t *testing.T) {
 	}
 }
 
-// A state below the last, and a delta below the pin, are refused, alarm, and change nothing.
+// A state below the last is dropped, the race of two compiles it is, and a delta below the pin is refused and alarms;
+// neither changes anything.
 func TestLowerPinRefused(t *testing.T) {
 	fixture := newPostureFixture(t)
 	store := newMemoryPostureStore()
@@ -344,8 +355,8 @@ func TestLowerPinRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	decision, err := posture.SetState(fixture.state(n-1, true), nil)
-	if !errors.Is(err, ErrPostureRefused) || !postureAlarmed(decision, PostureAlarmLowerPin) {
-		t.Errorf("a lower state: %v, %v", err, decision.Alarms)
+	if err != nil || len(decision.Alarms) != 0 || decision.Changed || decision.BridgeState.GetAuth().GetVersion() != n {
+		t.Errorf("a lower state: %v, %v, changed %v", err, decision.Alarms, decision.Changed)
 	}
 	decision, err = posture.ApplyDeltas(fixture.log(n, n))
 	if !errors.Is(err, ErrPostureRefused) || !postureAlarmed(decision, PostureAlarmLowerPin) {
@@ -492,8 +503,9 @@ func TestRestoredBeforeFirstPacket(t *testing.T) {
 	}
 }
 
-// doc to nodoc only on a verified base above the latch: a stored base saying no document at or below the latch
-// restores enforcing{doc}, and one above it enforcing{nodoc}.
+// doc to nodoc only on a state on a verified base above the latch: a base saying no document between states keeps
+// enforcing{doc} until a state on it, and a stored base saying no document at or below the latch restores
+// enforcing{doc}, one above it enforcing{nodoc}.
 func TestDocToNodocNeedsBaseAboveLatch(t *testing.T) {
 	fixture := newPostureFixture(t)
 	store := newMemoryPostureStore()
@@ -503,8 +515,12 @@ func TestDocToNodocNeedsBaseAboveLatch(t *testing.T) {
 	}
 	n := fixture.base(fixture.ownerPhone, false)
 	decision, err := posture.ApplyDeltas(fixture.log(n, n))
+	if err != nil || decision.State != PostureEnforcingDocument {
+		t.Fatalf("a base between states: %v, %v", err, decision.State)
+	}
+	decision, err = posture.SetState(fixture.state(n, false), nil)
 	if err != nil || decision.State != PostureEnforcingNoDocument {
-		t.Fatalf("%v, %v", err, decision.State)
+		t.Fatalf("a state on it: %v, %v", err, decision.State)
 	}
 	// the latch raised to the base's position, as a store written past it would hold: doc again
 	manifest, err := decodePostureManifest(store.record(postureManifestName))
