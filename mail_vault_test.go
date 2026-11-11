@@ -259,6 +259,47 @@ func (self *mailVaultTestAuthority) set(sidecarId Id, memberId Id, consented boo
 	self.consented[[2]Id{sidecarId, memberId}] = consented
 }
 
+// A Logger keeping every line at every level, on every leg the root's tests run on, so a test reads what reached the
+// log. Safe for concurrent use.
+type mailVaultTestLogger struct {
+	stateLock sync.Mutex
+	lines     []string
+}
+
+func (self *mailVaultTestLogger) add(line string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.lines = append(self.lines, line)
+}
+
+func (self *mailVaultTestLogger) Info(args ...any) { self.add(fmt.Sprint(args...)) }
+func (self *mailVaultTestLogger) Infof(format string, args ...any) {
+	self.add(fmt.Sprintf(format, args...))
+}
+func (self *mailVaultTestLogger) Warningf(format string, args ...any) {
+	self.add(fmt.Sprintf(format, args...))
+}
+func (self *mailVaultTestLogger) Errorf(format string, args ...any) {
+	self.add(fmt.Sprintf(format, args...))
+}
+func (self *mailVaultTestLogger) V(level int32) Verbose { return mailVaultTestVerbose{log: self} }
+
+// Every line, joined.
+func (self *mailVaultTestLogger) text() string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return strings.Join(self.lines, "\n")
+}
+
+// Every level enabled.
+type mailVaultTestVerbose struct {
+	log *mailVaultTestLogger
+}
+
+func (self mailVaultTestVerbose) Enabled() bool                    { return true }
+func (self mailVaultTestVerbose) Info(args ...any)                 { self.log.Info(args...) }
+func (self mailVaultTestVerbose) Infof(format string, args ...any) { self.log.Infof(format, args...) }
+
 // The owner and devices of the tests' mailbox.
 var (
 	testMailVaultOwnerId  = evsTestId("vault owner")
@@ -271,7 +312,7 @@ type mailVaultTestDevice struct {
 	vault     *MailVault
 	store     *mailVaultTestStore
 	clock     *mailTestClock
-	log       *testLineLogger
+	log       *mailVaultTestLogger
 	authority *mailVaultTestAuthority
 }
 
@@ -282,7 +323,7 @@ func newMailVaultTestDevice(t *testing.T, store *mailVaultTestStore, sidecarId I
 		mutate(settings)
 	}
 	clock := &mailTestClock{now: time.UnixMilli(1793923200000)}
-	log := &testLineLogger{}
+	log := &mailVaultTestLogger{}
 	authority := newMailVaultTestAuthority(sidecarId, testMailVaultOwnerId)
 	vault := newMailVault(store, testMailVaultOwnerId, sidecarId, authority, clock, log, settings)
 	return &mailVaultTestDevice{vault: vault, store: store, clock: clock, log: log, authority: authority}
