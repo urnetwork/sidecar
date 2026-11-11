@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -382,17 +381,6 @@ func (self *recordingGkmServiceLog) last() *GkmServiceLogEntry {
 	return self.entries[len(self.entries)-1]
 }
 
-// Whether a FakeBlobs violation is §10.6's <ref>.claim beside its <ref>, which the fake's byte-prefix reading of
-// §11.8's keys row reports and MinIO stores as sibling directories: question keys-m2-13-claim-key-prefix. Any other
-// report still fails the test.
-func gkmClaimBesideItsRef(violation string) bool {
-	var shorter, longer string
-	if _, err := fmt.Sscanf(violation, "key %q prefixes key %q", &shorter, &longer); err != nil {
-		return false
-	}
-	return strings.HasPrefix(shorter, gkmKeyPackageKeyPrefix) && longer == shorter+gkmKeyPackageClaimKeySuffix
-}
-
 // One engine on one fake host with two metadata clusters, its network admitted by the gkm gate.
 type gkmFixture struct {
 	t          *testing.T
@@ -416,11 +404,9 @@ func newGkmFixtureWith(t *testing.T, adjust func(settings *GkmServiceSettings, d
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	hostSettings := sidecartest.DefaultFakeHostSettings()
 	hostSettings.Blobs.MetadataClusterIds = []string{"meta-1", "meta-2"}
-	hostSettings.Blobs.Report = func(violation string) {
-		if !gkmClaimBesideItsRef(violation) {
-			t.Errorf("blobs: %s", violation)
-		}
-	}
+	// every report fails the test: §10.6's <ref>.claim beside its <ref> is a byte prefix and no path prefix
+	// (owner decision 234), so the fake reports none
+	hostSettings.Blobs.Report = func(violation string) { t.Errorf("blobs: %s", violation) }
 	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, hostSettings)
 	networkId := connect.Id(testId("network-a"))
 	host.Gates.OpenService(sidecar.ServiceGateGkm, networkId)
