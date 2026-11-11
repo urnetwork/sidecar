@@ -202,7 +202,7 @@ func testSlotOfLength(t testing.TB, byteCount int) *indexSlot {
 		return &indexEntry{kind: indexEntryFull, key: testIndexId("fill", index), version: uint64(index + 1), timeSeconds: 1800000000, row: row, keys: keys}
 	}
 	length := func() int {
-		file, err := indexEncodeSlot(slot, false)
+		file, err := indexEncodeSlot(slot, false, DefaultIndexFormatSettings())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -257,7 +257,7 @@ func testSlotCases(t testing.TB) []testSlotCase {
 	return []testSlotCase{
 		{name: "head-on-ur-index", companion: true, slot: &indexSlot{header: head, entries: entries}},
 		{name: "empty", slot: &indexSlot{header: testSlotHeader(indexFileSlot)}},
-		{name: "full-16208", slot: testSlotOfLength(t, indexSlotMaxByteCount)},
+		{name: "full-16208", slot: testSlotOfLength(t, DefaultIndexFormatSettings().SlotMaxByteCount)},
 		{name: "closure-padded", slot: padded},
 		{name: "large", slot: large},
 	}
@@ -378,7 +378,7 @@ func TestSlotVectors(t *testing.T) {
 	built := []testCodecVector{}
 	cases := testSlotCases(t)
 	for _, c := range cases {
-		file, err := indexEncodeSlot(c.slot, c.companion)
+		file, err := indexEncodeSlot(c.slot, c.companion, DefaultIndexFormatSettings())
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -395,7 +395,7 @@ func TestSlotVectors(t *testing.T) {
 			t.Fatal(err)
 		}
 		sum := sha256.Sum256(file)
-		slot, err := indexDecodeSlot(file, sum[:], c.companion)
+		slot, err := indexDecodeSlot(file, sum[:], c.companion, DefaultIndexFormatSettings())
 		if err != nil {
 			t.Errorf("%s: %v", c.name, err)
 			continue
@@ -403,12 +403,12 @@ func TestSlotVectors(t *testing.T) {
 		if len(slot.entries) != len(c.slot.entries) || slot.padByteCount != c.slot.padByteCount {
 			t.Errorf("%s: %d entries and %d pad", c.name, len(slot.entries), slot.padByteCount)
 		}
-		again, err := indexEncodeSlot(slot, c.companion)
+		again, err := indexEncodeSlot(slot, c.companion, DefaultIndexFormatSettings())
 		if err != nil || !bytes.Equal(again, file) {
 			t.Errorf("%s re-encoded differently: %v", c.name, err)
 		}
 	}
-	if full := vectors["full-16208"]; len(full.Hex) != 2*indexSlotMaxByteCount {
+	if full := vectors["full-16208"]; len(full.Hex) != 2*DefaultIndexFormatSettings().SlotMaxByteCount {
 		t.Errorf("the full slot is %d bytes", len(full.Hex)/2)
 	}
 }
@@ -1089,7 +1089,7 @@ func testFilledHeader(fileType uint32, count int, body []byte) *protocol.IndexFi
 // Decodes under the file's true hash.
 func testDecodeFile(file []byte, companion bool) (*indexSlot, error) {
 	sum := sha256.Sum256(file)
-	return indexDecodeSlot(file, sum[:], companion)
+	return indexDecodeSlot(file, sum[:], companion, DefaultIndexFormatSettings())
 }
 
 // Two tombstones' bytes, ordered as asked.
@@ -1233,7 +1233,7 @@ func TestSlotBytesDependOnlyOnItsEntries(t *testing.T) {
 	entries = append(entries, &indexEntry{kind: indexEntryTombstone, key: testIndexId("doc", 9), version: 1})
 	entries = append(entries, &indexEntry{kind: indexEntryRefTombstone, key: [indexIdByteCount]byte{}, version: 1})
 	entries = append(entries, &indexEntry{kind: indexEntryRefTombstone, key: [indexIdByteCount]byte{0xFF}, version: 1})
-	want, err := indexEncodeSlot(&indexSlot{header: testSlotHeader(indexFileSlot), entries: entries}, true)
+	want, err := indexEncodeSlot(&indexSlot{header: testSlotHeader(indexFileSlot), entries: entries}, true, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1241,7 +1241,7 @@ func TestSlotBytesDependOnlyOnItsEntries(t *testing.T) {
 	for range 20 {
 		shuffled := slices.Clone(entries)
 		rng.Shuffle(len(shuffled), func(i int, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
-		got, err := indexEncodeSlot(&indexSlot{header: testSlotHeader(indexFileSlot), entries: shuffled}, true)
+		got, err := indexEncodeSlot(&indexSlot{header: testSlotHeader(indexFileSlot), entries: shuffled}, true, DefaultIndexFormatSettings())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1271,13 +1271,13 @@ func TestEncoderKeepsOneEntryAKey(t *testing.T) {
 	tombstone := &indexEntry{kind: indexEntryTombstone, key: testIndexId("doc", 1), version: 1}
 	newer := &indexEntry{kind: indexEntryTombstone, key: testIndexId("doc", 1), version: 2}
 	slot := &indexSlot{header: testSlotHeader(indexFileSlot), entries: []*indexEntry{tombstone, newer}}
-	if file, err := indexEncodeSlot(slot, false); !errors.Is(err, errIndexMalformed) {
+	if file, err := indexEncodeSlot(slot, false, DefaultIndexFormatSettings()); !errors.Is(err, errIndexMalformed) {
 		t.Errorf("encoded to %d bytes", len(file))
 	}
 	// plan-SEARCH-index-format-bytes#2's one entry a key holds across kinds, a ref_id equal to a doc_key included
 	ref := &indexEntry{kind: indexEntryRefTombstone, key: testIndexId("doc", 1), version: 3}
 	slot.entries = []*indexEntry{ref, tombstone}
-	file, err := indexEncodeSlot(slot, true)
+	file, err := indexEncodeSlot(slot, true, DefaultIndexFormatSettings())
 	if !errors.Is(err, errIndexMalformed) {
 		t.Errorf("encoded to %d bytes", len(file))
 	}
@@ -1301,7 +1301,7 @@ func TestEncoderSortsCoverage(t *testing.T) {
 		a, b = b, a
 	}
 	header.Coverage = []*protocol.IndexCoverage{{RefId: b, Version: 2}, {RefId: a, Version: 1, Horizon: true}}
-	file, err := indexEncodeSlot(&indexSlot{header: header}, false)
+	file, err := indexEncodeSlot(&indexSlot{header: header}, false, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1319,19 +1319,19 @@ func TestEncoderSortsCoverage(t *testing.T) {
 
 // The 16,208th byte is the slot's last, by entries or by pad.
 func TestSlotCap(t *testing.T) {
-	full := testSlotOfLength(t, indexSlotMaxByteCount)
-	file, err := indexEncodeSlot(full, false)
+	full := testSlotOfLength(t, DefaultIndexFormatSettings().SlotMaxByteCount)
+	file, err := indexEncodeSlot(full, false, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(file) != indexSlotMaxByteCount {
+	if len(file) != DefaultIndexFormatSettings().SlotMaxByteCount {
 		t.Fatalf("%d bytes", len(file))
 	}
 	if _, err := testDecodeFile(file, false); err != nil {
 		t.Error(err)
 	}
 	full.padByteCount = 1
-	if file, err := indexEncodeSlot(full, false); !errors.Is(err, errIndexMalformed) {
+	if file, err := indexEncodeSlot(full, false, DefaultIndexFormatSettings()); !errors.Is(err, errIndexMalformed) {
 		t.Errorf("one past encoded to %d bytes", len(file))
 	}
 	if slot, err := testDecodeFile(append(slices.Clone(file), 0), false); !errors.Is(err, errIndexMalformed) {
@@ -1357,38 +1357,38 @@ func TestEntrySizeDecidesItsFile(t *testing.T) {
 			count += byteCount - len(encoded)
 		}
 	}
-	inSlot := &indexSlot{header: testSlotHeader(indexFileSlot), entries: []*indexEntry{entryOf(indexSlotEntryMaxByteCount)}}
-	if _, err := indexEncodeSlot(inSlot, false); err != nil {
+	inSlot := &indexSlot{header: testSlotHeader(indexFileSlot), entries: []*indexEntry{entryOf(DefaultIndexFormatSettings().SlotEntryMaxByteCount)}}
+	if _, err := indexEncodeSlot(inSlot, false, DefaultIndexFormatSettings()); err != nil {
 		t.Errorf("8 KiB in a slot: %v", err)
 	}
-	inSlot.entries = []*indexEntry{entryOf(indexSlotEntryMaxByteCount + 1)}
-	if _, err := indexEncodeSlot(inSlot, false); !errors.Is(err, errIndexMalformed) {
+	inSlot.entries = []*indexEntry{entryOf(DefaultIndexFormatSettings().SlotEntryMaxByteCount + 1)}
+	if _, err := indexEncodeSlot(inSlot, false, DefaultIndexFormatSettings()); !errors.Is(err, errIndexMalformed) {
 		t.Errorf("past 8 KiB in a slot: %v", err)
 	}
-	large := &indexSlot{header: testSlotHeader(indexFileLargeEntry), entries: []*indexEntry{entryOf(indexSlotEntryMaxByteCount + 1)}}
-	file, err := indexEncodeSlot(large, false)
+	large := &indexSlot{header: testSlotHeader(indexFileLargeEntry), entries: []*indexEntry{entryOf(DefaultIndexFormatSettings().SlotEntryMaxByteCount + 1)}}
+	file, err := indexEncodeSlot(large, false, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatalf("past 8 KiB alone: %v", err)
 	}
 	if _, err := testDecodeFile(file, false); err != nil {
 		t.Errorf("past 8 KiB alone: %v", err)
 	}
-	large.entries = []*indexEntry{entryOf(indexSlotEntryMaxByteCount)}
-	if _, err := indexEncodeSlot(large, false); !errors.Is(err, errIndexMalformed) {
+	large.entries = []*indexEntry{entryOf(DefaultIndexFormatSettings().SlotEntryMaxByteCount)}
+	if _, err := indexEncodeSlot(large, false, DefaultIndexFormatSettings()); !errors.Is(err, errIndexMalformed) {
 		t.Errorf("8 KiB alone: %v", err)
 	}
 	large.entries = []*indexEntry{}
-	if _, err := indexEncodeSlot(large, false); !errors.Is(err, errIndexMalformed) {
+	if _, err := indexEncodeSlot(large, false, DefaultIndexFormatSettings()); !errors.Is(err, errIndexMalformed) {
 		t.Errorf("no entry: %v", err)
 	}
-	other := *entryOf(indexSlotEntryMaxByteCount + 1)
+	other := *entryOf(DefaultIndexFormatSettings().SlotEntryMaxByteCount + 1)
 	other.key = testIndexId("size", 2)
-	large.entries = []*indexEntry{entryOf(indexSlotEntryMaxByteCount + 1), &other}
-	if _, err := indexEncodeSlot(large, false); !errors.Is(err, errIndexMalformed) {
+	large.entries = []*indexEntry{entryOf(DefaultIndexFormatSettings().SlotEntryMaxByteCount + 1), &other}
+	if _, err := indexEncodeSlot(large, false, DefaultIndexFormatSettings()); !errors.Is(err, errIndexMalformed) {
 		t.Errorf("two entries: %v", err)
 	}
 	// the same bytes by hand, since the encoder refusing proves nothing about the decoder
-	one, err := entryOf(indexSlotEntryMaxByteCount+1).appendEncoded(nil, false)
+	one, err := entryOf(DefaultIndexFormatSettings().SlotEntryMaxByteCount+1).appendEncoded(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1411,16 +1411,16 @@ func TestEntrySizeDecidesItsFile(t *testing.T) {
 // §11.14's large row, and a CLOSURE's pad may reach it too but not pass it.
 func TestLargeEntryCap(t *testing.T) {
 	large := &indexSlot{header: testSlotHeader(indexFileLargeEntry), entries: []*indexEntry{testLargeEntry()}}
-	file, err := indexEncodeSlot(large, false)
+	file, err := indexEncodeSlot(large, false, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
-	large.padByteCount = indexLargeMaxByteCount - len(file)
-	file, err = indexEncodeSlot(large, false)
+	large.padByteCount = DefaultIndexFormatSettings().LargeMaxByteCount - len(file)
+	file, err = indexEncodeSlot(large, false, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(file) != indexLargeMaxByteCount {
+	if len(file) != DefaultIndexFormatSettings().LargeMaxByteCount {
 		t.Fatalf("%d bytes", len(file))
 	}
 	if _, err := testDecodeFile(file, false); err != nil {
@@ -1435,7 +1435,7 @@ func TestLargeEntryCap(t *testing.T) {
 func TestPaddedSlotReencodes(t *testing.T) {
 	slot := testSlotOfLength(t, 3000)
 	slot.padByteCount = 777
-	file, err := indexEncodeSlot(slot, false)
+	file, err := indexEncodeSlot(slot, false, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1446,7 +1446,7 @@ func TestPaddedSlotReencodes(t *testing.T) {
 	if decoded.padByteCount != 777 {
 		t.Errorf("pad %d", decoded.padByteCount)
 	}
-	again, err := indexEncodeSlot(decoded, false)
+	again, err := indexEncodeSlot(decoded, false, DefaultIndexFormatSettings())
 	if err != nil || !bytes.Equal(again, file) {
 		t.Errorf("re-encoded differently: %v", err)
 	}
@@ -1455,7 +1455,7 @@ func TestPaddedSlotReencodes(t *testing.T) {
 // A rewrite that outgrew what it replaces has no pad to give, so its caller's sum arrives negative and is refused.
 func TestNegativePadIsRefused(t *testing.T) {
 	slot := &indexSlot{header: testSlotHeader(indexFileSlot), padByteCount: -1}
-	if file, err := indexEncodeSlot(slot, false); !errors.Is(err, errIndexMalformed) {
+	if file, err := indexEncodeSlot(slot, false, DefaultIndexFormatSettings()); !errors.Is(err, errIndexMalformed) {
 		t.Errorf("encoded to %d bytes", len(file))
 	}
 }
@@ -1463,25 +1463,25 @@ func TestNegativePadIsRefused(t *testing.T) {
 // §22.6: tampering is caught by the plaintext hash before anything parses, so every single-bit flip of a file is
 // refused as a hash mismatch, and a wrong or missing hash refuses a good file.
 func TestTamperingFailsThePlaintextHash(t *testing.T) {
-	file, err := indexEncodeSlot(testSlotCases(t)[0].slot, true)
+	file, err := indexEncodeSlot(testSlotCases(t)[0].slot, true, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(file)
-	if _, err := indexDecodeSlot(file, sum[:], true); err != nil {
+	if _, err := indexDecodeSlot(file, sum[:], true, DefaultIndexFormatSettings()); err != nil {
 		t.Fatal(err)
 	}
 	for index := range file {
 		for bit := range 8 {
 			tampered := slices.Clone(file)
 			tampered[index] ^= 1 << bit
-			if slot, err := indexDecodeSlot(tampered, sum[:], true); !errors.Is(err, errIndexMalformed) || !strings.Contains(err.Error(), "hash") {
+			if slot, err := indexDecodeSlot(tampered, sum[:], true, DefaultIndexFormatSettings()); !errors.Is(err, errIndexMalformed) || !strings.Contains(err.Error(), "hash") {
 				t.Fatalf("byte %d bit %d: %+v, %v", index, bit, slot, err)
 			}
 		}
 	}
 	for _, hash := range [][]byte{nil, {}, sum[:31], make([]byte, 32)} {
-		if slot, err := indexDecodeSlot(file, hash, true); !errors.Is(err, errIndexMalformed) {
+		if slot, err := indexDecodeSlot(file, hash, true, DefaultIndexFormatSettings()); !errors.Is(err, errIndexMalformed) {
 			t.Errorf("%x decoded to %+v", hash, slot)
 		}
 	}
@@ -1490,14 +1490,14 @@ func TestTamperingFailsThePlaintextHash(t *testing.T) {
 // §11.14's root decides whether a row holds a ref_id, so a file read under the wrong root is refused, never misread.
 func TestWrongRootIsRefused(t *testing.T) {
 	cases := testSlotCases(t)
-	onIndex, err := indexEncodeSlot(cases[0].slot, true)
+	onIndex, err := indexEncodeSlot(cases[0].slot, true, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if slot, err := testDecodeFile(onIndex, false); !errors.Is(err, errIndexMalformed) {
 		t.Errorf("read off ur/index as %+v", slot)
 	}
-	inRef, err := indexEncodeSlot(cases[2].slot, false)
+	inRef, err := indexEncodeSlot(cases[2].slot, false, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}

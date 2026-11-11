@@ -17,7 +17,7 @@ import (
 func testSlotSeeds(t testing.TB) map[string][]byte {
 	seeds := map[string][]byte{}
 	for _, c := range testSlotCases(t) {
-		file, err := indexEncodeSlot(c.slot, c.companion)
+		file, err := indexEncodeSlot(c.slot, c.companion, DefaultIndexFormatSettings())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,11 +73,11 @@ func TestCodecSeedFilesAreCurrent(t *testing.T) {
 func FuzzIndexSlot(f *testing.F) {
 	f.Fuzz(func(t *testing.T, file []byte, companion bool) {
 		sum := sha256.Sum256(file)
-		slot, err := indexDecodeSlot(file, sum[:], companion)
+		slot, err := indexDecodeSlot(file, sum[:], companion, DefaultIndexFormatSettings())
 		if err != nil {
 			return
 		}
-		again, err := indexEncodeSlot(slot, companion)
+		again, err := indexEncodeSlot(slot, companion, DefaultIndexFormatSettings())
 		if err != nil {
 			t.Fatalf("what decoded does not encode: %v", err)
 		}

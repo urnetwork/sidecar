@@ -1,6 +1,7 @@
 // The framing every index file with a header shares, and slots and large entries on it (§11.14's slot and large rows;
-// protocol/INDEX-FORMAT.md). A slot is one writer's entries, at most 16,208 B so that its record is 16 KiB and rides
-// staged in its push's batch; a large entry is one entry over 8 KiB, alone. Both are read by devices that did not
+// protocol/INDEX-FORMAT.md). A slot is one writer's entries, at most IndexFormatSettings.SlotMaxByteCount, 16,208 B, so
+// that its record is 16 KiB and rides staged in its push's batch; a large entry is one full entry over
+// SlotEntryMaxByteCount, 8 KiB, alone. Both are read by devices that did not
 // write them, so a decoder takes the plaintext hash the file's entry version carries, checks it first, and then
 // accepts only the one canonical encoding.
 
@@ -32,14 +33,6 @@ const (
 	indexFileLargeEntry  = 2
 	indexFileBucketShard = 3
 	indexFileAllShard    = 4
-)
-
-// Sizes of §11.14's seal and large rows, facts of the format. A slot's cap leaves its record 11.6's 160 B header and
-// one 16 B frame tag inside 16 KiB.
-const (
-	indexSlotMaxByteCount      = 16208
-	indexSlotEntryMaxByteCount = 8 * 1024
-	indexLargeMaxByteCount     = 1024 * 1024
 )
 
 // A file in a newer format is no malformation: it is left unread, and search reads status update (§11.14's off row).
@@ -107,8 +100,8 @@ func (self *indexDecoder) fileHeader() *protocol.IndexFileHeader {
 	return header
 }
 
-// Refuses what a slot or large entry's header may not hold, for encoder and decoder alike. Coverage must be strictly
-// ascending, which also refuses a ref named twice.
+// Refuses what a slot or large entry's header may not hold, for encoder and decoder alike. Coverage ascends by ref_id,
+// then horizon false before true, with at most one row of each kind a ref (DESIGN-DETAILS 1.2.2; QD-689's reading 4).
 func indexCheckSlotHeader(header *protocol.IndexFileHeader) error {
 	if header.Format != indexFormatVersion {
 		return indexMalformed("a header with no format")
@@ -129,25 +122,39 @@ func indexCheckSlotHeader(header *protocol.IndexFileHeader) error {
 		if len(coverage.RefId) != indexIdByteCount {
 			return indexMalformed("coverage without a ref_id")
 		}
-		if 0 < index && bytes.Compare(header.Coverage[index-1].RefId, coverage.RefId) >= 0 {
+		if 0 < index && 0 <= indexCompareCoverage(header.Coverage[index-1], coverage) {
 			return indexMalformed("coverage out of order")
 		}
 	}
 	return nil
 }
 
-// The most a file of this type may hold, pad included.
-func indexSlotFileCap(fileType uint32) int {
-	if fileType == indexFileLargeEntry {
-		return indexLargeMaxByteCount
+// Coverage's order: by ref_id, then horizon false before true.
+func indexCompareCoverage(a *protocol.IndexCoverage, b *protocol.IndexCoverage) int {
+	if order := bytes.Compare(a.RefId, b.RefId); order != 0 {
+		return order
 	}
-	return indexSlotMaxByteCount
+	switch {
+	case a.Horizon == b.Horizon:
+		return 0
+	case !a.Horizon:
+		return -1
+	}
+	return 1
 }
 
-// Refuses an entry of encoded length byteCount in a file of this type: a slot's stay within 8 KiB, and a large entry's
-// one is over it.
-func indexCheckEntrySize(fileType uint32, byteCount int) error {
-	if (fileType == indexFileSlot) != (byteCount <= indexSlotEntryMaxByteCount) {
+// The most a file of this type may hold, pad included.
+func indexSlotFileCap(fileType uint32, settings *IndexFormatSettings) int {
+	if fileType == indexFileLargeEntry {
+		return settings.LargeMaxByteCount
+	}
+	return settings.SlotMaxByteCount
+}
+
+// Refuses an entry of encoded length byteCount in a file of this type: a slot's stay within SlotEntryMaxByteCount, and
+// a large entry's one is over it.
+func indexCheckEntrySize(fileType uint32, byteCount int, settings *IndexFormatSettings) error {
+	if (fileType == indexFileSlot) != (byteCount <= settings.SlotEntryMaxByteCount) {
 		return indexMalformed("an entry the wrong size for its file")
 	}
 	return nil
@@ -156,7 +163,7 @@ func indexCheckEntrySize(fileType uint32, byteCount int) error {
 // Writes a slot or large entry, entries in the format's order, whatever order slot holds them in. Two entries of one
 // key are refused, whatever their kinds: a head keeps one per doc_key, and replacing the older one is its writer's to
 // do. companion says whether the file is under ur/index's root.
-func indexEncodeSlot(slot *indexSlot, companion bool) ([]byte, error) {
+func indexEncodeSlot(slot *indexSlot, companion bool, settings *IndexFormatSettings) ([]byte, error) {
 	if slot.padByteCount < 0 {
 		return nil, indexMalformed("a rewrite longer than what it replaces")
 	}
@@ -172,19 +179,17 @@ func indexEncodeSlot(slot *indexSlot, companion bool) ([]byte, error) {
 		if body, err = entry.appendEncoded(body, companion); err != nil {
 			return nil, err
 		}
-		if err := indexCheckEntrySize(slot.header.Type, len(body)-start); err != nil {
+		if err := indexCheckEntrySize(slot.header.Type, len(body)-start, settings); err != nil {
 			return nil, err
 		}
 	}
-	if slot.header.Type == indexFileLargeEntry && len(entries) != 1 {
-		return nil, indexMalformed("a large entry not alone")
+	if slot.header.Type == indexFileLargeEntry && (len(entries) != 1 || entries[0].kind != indexEntryFull) {
+		return nil, indexMalformed("a large entry that is not one full entry")
 	}
 	header := proto.CloneOf(slot.header)
 	header.BodyLength = uint32(len(body))
 	header.Count = uint32(len(entries))
-	slices.SortFunc(header.Coverage, func(a *protocol.IndexCoverage, b *protocol.IndexCoverage) int {
-		return bytes.Compare(a.RefId, b.RefId)
-	})
+	slices.SortFunc(header.Coverage, indexCompareCoverage)
 	if err := indexCheckSlotHeader(header); err != nil {
 		return nil, err
 	}
@@ -197,7 +202,7 @@ func indexEncodeSlot(slot *indexSlot, companion bool) ([]byte, error) {
 	file = append(file, encoded...)
 	file = append(file, body...)
 	file = append(file, make([]byte, slot.padByteCount)...)
-	if indexSlotFileCap(slot.header.Type) < len(file) {
+	if indexSlotFileCap(slot.header.Type, settings) < len(file) {
 		return nil, indexMalformed("a file past its cap")
 	}
 	return file, nil
@@ -205,7 +210,7 @@ func indexEncodeSlot(slot *indexSlot, companion bool) ([]byte, error) {
 
 // Reads a slot or large entry. The hash comes first, so tampered bytes reach no parser; then the header, the entries
 // in order, and nothing after them but zeros. companion says whether the file is under ur/index's root.
-func indexDecodeSlot(file []byte, contentSha256 []byte, companion bool) (*indexSlot, error) {
+func indexDecodeSlot(file []byte, contentSha256 []byte, companion bool, settings *IndexFormatSettings) (*indexSlot, error) {
 	sum := sha256.Sum256(file)
 	if !bytes.Equal(sum[:], contentSha256) {
 		return nil, indexMalformed("plaintext hash mismatch")
@@ -218,7 +223,7 @@ func indexDecodeSlot(file []byte, contentSha256 []byte, companion bool) (*indexS
 	if err := indexCheckSlotHeader(header); err != nil {
 		return nil, err
 	}
-	if indexSlotFileCap(header.Type) < len(file) {
+	if indexSlotFileCap(header.Type, settings) < len(file) {
 		return nil, indexMalformed("a file past its cap")
 	}
 	body := indexDecoder{src: decoder.take(uint64(header.BodyLength))}
@@ -240,8 +245,12 @@ func indexDecodeSlot(file []byte, contentSha256 []byte, companion bool) (*indexS
 		if body.err != nil {
 			return nil, body.err
 		}
-		if err := indexCheckEntrySize(header.Type, start-body.remaining()); err != nil {
+		if err := indexCheckEntrySize(header.Type, start-body.remaining(), settings); err != nil {
 			return nil, err
+		}
+		if header.Type == indexFileLargeEntry && entry.kind != indexEntryFull {
+			// a diff stands only in a slot, and a large entry's one entry is full (DESIGN-DETAILS 1.2.2)
+			return nil, indexMalformed("a large entry that is not one full entry")
 		}
 		if count := len(slot.entries); 0 < count && 0 <= bytes.Compare(slot.entries[count-1].key[:], entry.key[:]) {
 			return nil, indexMalformed("entries out of order or repeated")

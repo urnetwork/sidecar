@@ -1,21 +1,30 @@
 //go:build !ios_extension
 
-// Writer heads (§11.14's slot, seal, large and version rows; D-EVS-46; SEARCH-M10-09): what one writer's push writes to
-// the index, as a pure function of the index at the push's base. Each writer appends to a head of its own, its slot
-// with the highest seq, never shared, so disjoint pushes never meet on one file. A head keeps one entry per doc_key, a
-// newer one replacing the writer's older one there. When the head cannot take an entry within 16,208 B, the head is
-// sealed as it stands and the next slot becomes the head: the lowest k whose seq the bucket's manifest shows absorbed,
-// else a new k up to 8; with none free the writer merges first or, unable to, takes up to 16 slots and alarms. An entry
-// over 8 KiB is a large entry, alone in a file of its own, and a push whose entries pass 256 KiB puts them straight
-// into the bucket's shards, a merge inside that push. Sealing happens only there, never on idle.
+// Writer heads (§11.14's slot, seal, large and version rows; D-EVS-46; DESIGN-DETAILS 1.2.3; SEARCH-M10-09 and
+// SEARCH-M10-45): what one writer's push writes to the index, a pure function of the writer's own files in each bucket
+// it writes, the bucket's manifest row for it, the erasure set, the bucket windows, the push's signed time and the
+// documents it carries. It reads no other writer's file and no shard of a bucket it writes.
+//
+// Each writer appends to a head of its own, its slot with the highest seq, never shared. A head keeps one entry per
+// doc_key, a newer one replacing the writer's older one there. When the head cannot take an entry within
+// SlotMaxByteCount, the head is sealed as it stands and the next slot becomes the head: the lowest k that is absorbed,
+// not the head and not kept, else the lowest unused k. A writer holds at most KeepSlotCount kept slots, for the diffs
+// that rest on them, and RingSlotCount others: at a ninth other slot it merges first, or, unable to, takes it and
+// alarms; with all 16 in use (the slot paths' k 0 to 15) nothing is written. An entry past SlotEntryMaxByteCount is a
+// large entry, alone in a file of its own, and a push whose entries pass PushDirectByteCount puts them straight into
+// the bucket's shards, a merge inside that push, and writes its head without them.
+//
+// The head rule (R2): every push that writes a file of a writer's in a bucket replaces that writer's head there at the
+// version the push's base showed, a head sealed as it stood written again with its own bytes, and a writer with no slot
+// there given slot 0, empty when every entry is a large entry. So a writer's pushes in a bucket commit one at a time,
+// and each finds every file of the writer's as it read them, which is what lets a diff rest on the writer's own files
+// (evs_index_dependency.go). The plan removes each of the writer's absorbed large entries that no diff rests on.
 //
 // One counter a writer a bucket numbers its slots and large entries, so the manifest's absorbed watermark reads as one
 // number; a push that numbers anything renumbers the head above it, so the head always holds its writer's highest seq
-// and no watermark a merge sets can cover a slot no merge read.
-//
-// Entries are chosen against the bucket at the push's base (evs_index_dependency.go), documents in doc_key order, so a
-// plan is a function of its inputs: two devices with one base and one set of documents write the same plaintext, and
-// a 409 replans against what it reread.
+// and no watermark a merge sets can cover a slot no merge read. Documents go in doc_key order, so a plan is a function
+// of its inputs: two devices with one base and one set of documents write the same plaintext, and a 409 replans
+// against what it reread.
 
 package sidecar
 
@@ -31,25 +40,18 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// A push's entries past this go straight into the bucket's shards (§11.14's seal row).
-const indexPushDirectByteCount = 256 * 1024
-
-// Slots a writer holds in a bucket before it must merge (§11.14's seal row); past them, a writer that cannot merge
-// takes up to indexWriterSlotCount and alarms.
-const indexWriterRingSlotCount = 8
-
 var (
 	// The ref's erasure set was written and does not read, so no builder can know what it may not write: nothing is
 	// written until it reads (§11.14's epoch row, fail closed).
 	errIndexErasureSetUnreadable = errors.New("index erasure set unreadable")
-	// A writer that may not merge holds all 16 of its slots in the bucket: its entries are not written, and its push
+	// A writer that may not merge holds every one of its slots in the bucket: its entries are not written, and its push
 	// stays unindexed until a backfill covers it (§11.14's coverage row).
 	errIndexNoFreeSlot = errors.New("index writer has no free slot")
 )
 
 // What one writer's push asks of its head.
 type indexHeadPlanArgs struct {
-	// The index at the push's base, and the root the push writes.
+	// The index at the push's base, and the root the push writes. The view's settings bound the plan.
 	view *indexView
 	root *indexViewRoot
 	// This writer.
@@ -82,14 +84,17 @@ type indexHeadPlanBucket struct {
 	window indexBucketWindow
 	// The push opens the bucket, as the first writer into a window does.
 	created bool
-	// The writer's head after the push, nil where the push leaves it as it was.
+	// The writer's head after the push.
 	head *indexPlannedFile
-	// Slots the push writes and leaves sealed: a head that took entries before it filled, and slots filled in between.
+	// Slots the push writes and leaves sealed: the head it sealed, written again, and slots filled in between.
 	sealed []*indexPlannedFile
-	// Every slot the push seals, by k, whether it rewrites it or a new head above it is all the seal writes.
+	// Every slot the push seals, by k.
 	sealedSlots []uint32
 	large       []*indexPlannedFile
-	// The entries a merge inside the push takes into the bucket's shards, when the plan's mergeInPush is set.
+	// The writer's absorbed large entries no diff rests on, which the push removes.
+	removed []*indexPushRemoval
+	// The entries a merge inside the push takes into the bucket's shards, as full entries, when the plan's
+	// mergeInPush is set.
 	direct []*indexEntry
 }
 
@@ -97,12 +102,12 @@ type indexHeadPlanBucket struct {
 type indexHeadPlan struct {
 	// By start day.
 	buckets []*indexHeadPlanBucket
-	// The push's entries pass 256 KiB: every one goes straight into its bucket's shards, a merge inside the push, and
-	// no slot is written.
+	// The push's entries pass PushDirectByteCount: every one goes straight into its bucket's shards as a full entry, a
+	// merge inside the push (SEARCH-M10-10's), and the writer's heads there are written without them.
 	mergeInPush bool
 	// The writer has no free slot and may merge: it merges first, then plans again. Nothing else is set.
 	mergeFirst bool
-	// The writer took a slot past its 8, unable to merge, which alarms.
+	// The writer took a slot past its RingSlotCount others, unable to merge, which alarms.
 	pastRing bool
 	// Documents the ref's erasure set lists at or above the version pending, left out.
 	erased [][indexIdByteCount]byte
@@ -126,10 +131,37 @@ func (self *indexHeadPlan) files() []*indexPushFile {
 	return files
 }
 
+// The files the push removes, in path order, each at the version its base showed.
+func (self *indexHeadPlan) removals() []*indexPushRemoval {
+	removals := []*indexPushRemoval{}
+	for _, bucket := range self.buckets {
+		removals = append(removals, bucket.removed...)
+	}
+	slices.SortFunc(removals, func(a *indexPushRemoval, b *indexPushRemoval) int {
+		return cmp.Compare(a.path, b.path)
+	})
+	return removals
+}
+
+// One bucket's share of a push: the writer's own files there and its keep set, the documents placed there, and their
+// entries as choose made them.
+type indexHeadBucketWork struct {
+	window  indexBucketWindow
+	created bool
+	bucket  *indexViewBucket
+	// The writer's files in the bucket at the base, nil for none, and its manifest watermark there.
+	writer   *indexViewWriter
+	absorbed uint32
+	keep     map[*indexViewSlot]bool
+	pending  []*indexPendingDocument
+	entries  []*indexEntry
+}
+
 // Plans what one writer's push writes to its root's index at the view's version. Documents the erasure set lists at or
 // above their version are left out; an index that is off plans nothing.
 func indexPlanHead(ctx context.Context, args *indexHeadPlanArgs) (*indexHeadPlan, error) {
 	view, root := args.view, args.root
+	settings := view.settings
 	if view.erasureSetUnreadable {
 		return nil, errIndexErasureSetUnreadable
 	}
@@ -151,8 +183,8 @@ func indexPlanHead(ctx context.Context, args *indexHeadPlanArgs) (*indexHeadPlan
 		}
 	}
 
-	// Buckets newer than the push's own, newest first, each with its documents: an entry of a document one of them
-	// holds goes to the newest of them.
+	// D-EVS-45's move: an entry of a document a newer bucket holds goes to the newest of them. No invariant needs it
+	// (DESIGN-DETAILS 1.3), so it reads only the newer buckets the view holds.
 	newer := []*indexBucketDocuments{}
 	for _, bucket := range slices.Backward(root.buckets) {
 		if bucket.window.startDay <= pushWindow.startDay {
@@ -164,14 +196,7 @@ func indexPlanHead(ctx context.Context, args *indexHeadPlanArgs) (*indexHeadPlan
 		}
 		newer = append(newer, documents)
 	}
-	type bucketWork struct {
-		window  indexBucketWindow
-		created bool
-		bucket  *indexViewBucket
-		pending []*indexPendingDocument
-		entries []*indexEntry
-	}
-	works := map[uint32]*bucketWork{}
+	works := map[uint32]*indexHeadBucketWork{}
 	for _, document := range pending {
 		if document.kind == indexEntryRefTombstone && !view.companion {
 			return nil, indexMalformed("a ref tombstone outside ur/index")
@@ -189,7 +214,11 @@ func indexPlanHead(ctx context.Context, args *indexHeadPlanArgs) (*indexHeadPlan
 		}
 		work := works[window.startDay]
 		if work == nil {
-			work = &bucketWork{window: window, created: windowCreated, bucket: root.bucket(window.startDay)}
+			work = &indexHeadBucketWork{window: window, created: windowCreated, bucket: root.bucket(window.startDay)}
+			if work.bucket != nil {
+				work.writer = work.bucket.writer(args.writer)
+				work.absorbed = work.bucket.absorbedSeq(args.writer)
+			}
 			works[window.startDay] = work
 		}
 		work.pending = append(work.pending, document)
@@ -200,25 +229,33 @@ func indexPlanHead(ctx context.Context, args *indexHeadPlanArgs) (*indexHeadPlan
 		starts = append(starts, start)
 	}
 	slices.Sort(starts)
-	newest := root.newestBucket()
 	totalByteCount := 0
 	for _, start := range starts {
 		work := works[start]
-		var documents *indexBucketDocuments
-		if work.bucket != nil {
-			var err error
-			if documents, err = view.bucketDocuments(ctx, work.bucket); err != nil {
-				return nil, err
-			}
+		// the keep set as this plan leaves the writer's unabsorbed slots: a head entry the push replaces, or the erasure
+		// set drops, no longer counts, and each diff chosen below adds its base
+		replaced := map[[indexIdByteCount]byte]bool{}
+		for _, document := range work.pending {
+			replaced[document.key] = true
 		}
-		current := work.created || (newest != nil && work.bucket == newest)
+		work.keep = map[*indexViewSlot]bool{}
+		if work.writer != nil {
+			head := work.writer.head()
+			work.keep = work.writer.kept(work.absorbed, func(slot *indexViewSlot, entry *indexEntry) bool {
+				return slot != head || !(replaced[entry.key] || view.erased(entry.key, entry.version))
+			})
+		}
 		for _, document := range work.pending {
 			entry := &indexEntry{kind: document.kind, key: document.key, version: document.version, timeSeconds: timeSeconds}
 			if document.kind == indexEntryFull {
 				entry.row = document.row
-				choice := indexChooseEntry(documents, current, args.writer, document, view.erased)
+				choice, err := indexChooseEntry(work.writer, work.keep, document, timeSeconds, view.companion, view.erased, settings)
+				if err != nil {
+					return nil, err
+				}
 				if choice.diff {
 					entry.kind, entry.baseVersion, entry.delta = indexEntryDiff, choice.baseVersion, choice.delta
+					work.keep[choice.baseFile] = true
 				} else {
 					entry.keys = document.keys
 				}
@@ -232,20 +269,55 @@ func indexPlanHead(ctx context.Context, args *indexHeadPlanArgs) (*indexHeadPlan
 		}
 	}
 
+	if settings.PushDirectByteCount < totalByteCount {
+		// the push merges its documents itself, as full entries, and writes each head it has without the keys it
+		// carried (1.2.3); the merge is SEARCH-M10-10's
+		plan.mergeInPush = true
+		for _, start := range starts {
+			work := works[start]
+			planned := &indexHeadPlanBucket{window: work.window, created: work.created}
+			plan.buckets = append(plan.buckets, planned)
+			for _, document := range work.pending {
+				entry := &indexEntry{kind: document.kind, key: document.key, version: document.version, timeSeconds: timeSeconds}
+				if document.kind == indexEntryFull {
+					entry.row, entry.keys = document.row, document.keys
+				}
+				planned.direct = append(planned.direct, entry)
+			}
+			if work.writer == nil || work.writer.head() == nil {
+				continue
+			}
+			head := work.writer.head()
+			carried := map[[indexIdByteCount]byte]bool{}
+			for _, document := range work.pending {
+				carried[document.key] = true
+			}
+			entries := []*indexEntry{}
+			for _, entry := range head.slot.entries {
+				if !carried[entry.key] && !view.erased(entry.key, entry.version) {
+					entries = append(entries, entry)
+				}
+			}
+			coverage := args.coverage
+			if coverage == nil {
+				coverage = head.slot.header.Coverage
+			}
+			header := proto.CloneOf(head.slot.header)
+			header.Coverage = coverage
+			file, err := indexEncodePlanned(&indexSlot{header: header, entries: entries}, view.companion, settings)
+			if err != nil {
+				return nil, err
+			}
+			planned.head = &indexPlannedFile{path: head.path, slot: file.slot, file: file.file, replaces: head.file.version}
+		}
+		return plan, nil
+	}
+
 	for _, start := range starts {
 		work := works[start]
 		planned := &indexHeadPlanBucket{window: work.window, created: work.created}
 		plan.buckets = append(plan.buckets, planned)
-		if indexPushDirectByteCount < totalByteCount {
-			plan.mergeInPush = true
-			planned.direct = work.entries
-			continue
-		}
-		var writer *indexViewWriter
-		if work.bucket != nil {
-			writer = work.bucket.writer(args.writer)
-		}
-		if err := indexPlaceEntries(args, root, work.bucket, writer, planned, work.entries, plan); err != nil {
+		if err := indexPlaceEntries(args, root, work, planned, plan); err != nil {
 			return nil, err
 		}
 		if plan.mergeFirst {
@@ -274,26 +346,28 @@ type indexOpenSlot struct {
 	entries []*indexEntry
 	// The entries' encoded bytes.
 	bodyByteCount int
-	// It took or lost entries in this push, so it is written.
+	// It took or lost entries in this push.
 	changed bool
 }
 
 // Places one bucket's entries: large entries alone, the rest into the writer's head in doc_key order, sealing the head
-// as it stands when the next does not fit and opening the next slot. Sets plan.mergeFirst, writing nothing, when no
-// slot is free and the writer may merge.
-func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, bucket *indexViewBucket, writer *indexViewWriter, planned *indexHeadPlanBucket, entries []*indexEntry, plan *indexHeadPlan) error {
+// as it stands when the next does not fit and opening the next slot, and the head rule over all of it. Sets
+// plan.mergeFirst, writing nothing, when no slot is free and the writer may merge.
+func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, work *indexHeadBucketWork, planned *indexHeadPlanBucket, plan *indexHeadPlan) error {
 	view := args.view
+	settings := view.settings
+	writer, keep := work.writer, work.keep
 	pushed := map[[indexIdByteCount]byte]bool{}
 	sizes := map[*indexEntry]int{}
 	small, large := []*indexEntry{}, []*indexEntry{}
-	for _, entry := range entries {
+	for _, entry := range work.entries {
 		pushed[entry.key] = true
 		encoded, err := entry.appendEncoded(nil, view.companion)
 		if err != nil {
 			return err
 		}
 		sizes[entry] = len(encoded)
-		if indexSlotEntryMaxByteCount < len(encoded) {
+		if settings.SlotEntryMaxByteCount < len(encoded) {
 			large = append(large, entry)
 		} else {
 			small = append(small, entry)
@@ -302,22 +376,30 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, bucket *ind
 
 	var head *indexViewSlot
 	nextSeq := uint32(1)
-	absorbed := uint32(0)
 	usedSlots := map[uint32]bool{}
 	reusable := []*indexViewSlot{}
+	// slots in use that no diff rests on, which the ring bounds
+	othersInUse := 0
 	if writer != nil {
 		head = writer.head()
 		nextSeq = writer.highestSeq() + 1
-		absorbed = bucket.absorbedSeq(args.writer)
 		for _, slot := range writer.slots {
 			usedSlots[slot.path.slotIndex] = true
-			if slot != head && slot.seq() <= absorbed {
+			if !keep[slot] {
+				othersInUse += 1
+			}
+			if slot != head && slot.seq() <= work.absorbed && !keep[slot] {
 				reusable = append(reusable, slot)
 			}
 		}
 		slices.SortFunc(reusable, func(a *indexViewSlot, b *indexViewSlot) int {
 			return cmp.Compare(a.path.slotIndex, b.path.slotIndex)
 		})
+		for _, file := range writer.large {
+			if file.seq() <= work.absorbed && !keep[file] {
+				planned.removed = append(planned.removed, &indexPushRemoval{path: file.path.String(), version: file.file.version})
+			}
+		}
 	}
 	takeSlot := func() (*indexOpenSlot, error) {
 		if 0 < len(reusable) {
@@ -329,7 +411,7 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, bucket *ind
 			if usedSlots[k] {
 				continue
 			}
-			if indexWriterRingSlotCount <= k {
+			if settings.RingSlotCount <= othersInUse {
 				if args.mayMerge {
 					plan.mergeFirst = true
 					return nil, nil
@@ -337,6 +419,7 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, bucket *ind
 				plan.pastRing = true
 			}
 			usedSlots[k] = true
+			othersInUse += 1
 			return &indexOpenSlot{k: k}, nil
 		}
 		if args.mayMerge {
@@ -351,7 +434,7 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, bucket *ind
 		coverage = head.slot.header.Coverage
 	}
 	// The widest seq this push can give, so a fill never passes the cap once the real seqs are set.
-	probeSeq := nextSeq + uint32(len(entries)) + indexWriterSlotCount
+	probeSeq := nextSeq + uint32(len(work.entries)) + indexWriterSlotCount
 	header := func(fileType uint32, seq uint32, coverage []*protocol.IndexCoverage) *protocol.IndexFileHeader {
 		header := indexNewFileHeader(fileType, args.tables)
 		header.BucketStartDay = planned.window.startDay
@@ -361,13 +444,13 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, bucket *ind
 		header.Coverage = coverage
 		return header
 	}
-	// Whether open takes entry within a slot's 16,208 B, its header at the widest seq the push can give.
+	// Whether open takes entry within a slot's cap, its header at the widest seq the push can give.
 	fits := func(open *indexOpenSlot, entry *indexEntry) (bool, error) {
 		byteCount, err := indexSlotByteCount(header(indexFileSlot, probeSeq, coverage), len(open.entries)+1, open.bodyByteCount+sizes[entry])
 		if err != nil {
 			return false, err
 		}
-		return byteCount <= indexSlotMaxByteCount, nil
+		return byteCount <= settings.SlotMaxByteCount, nil
 	}
 
 	var current *indexOpenSlot
@@ -411,16 +494,24 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, bucket *ind
 		current.bodyByteCount += sizes[entry]
 		current.changed = true
 	}
+	// the head rule: a writer with no slot in the bucket gets one, empty when every entry is a large entry
+	if current == nil {
+		opened, err := takeSlot()
+		if err != nil || opened == nil {
+			return err
+		}
+		current = opened
+	}
 
 	// Seqs: large entries, then slots sealed past the head, then the head above them all. A head the push does not
-	// fill keeps its seq unless the push numbers anything else.
+	// renumber keeps its seq.
 	seq := nextSeq
 	for _, entry := range large {
 		path, err := root.paths.largeEntry(planned.window.startDay, [indexIdByteCount]byte(args.writer), seq)
 		if err != nil {
 			return err
 		}
-		file, err := indexEncodePlanned(&indexSlot{header: header(indexFileLargeEntry, seq, nil), entries: []*indexEntry{entry}}, view.companion)
+		file, err := indexEncodePlanned(&indexSlot{header: header(indexFileLargeEntry, seq, nil), entries: []*indexEntry{entry}}, view.companion, settings)
 		if err != nil {
 			return err
 		}
@@ -433,7 +524,14 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, bucket *ind
 		if err != nil {
 			return nil, err
 		}
-		file, err := indexEncodePlanned(&indexSlot{header: header(indexFileSlot, seq, coverage), entries: open.entries}, view.companion)
+		var slot *indexSlot
+		if open.old != nil && !open.changed && seq == open.old.seq() && args.coverage == nil {
+			// sealed as it stood: its own bytes again, under its CAS (R2)
+			slot = &indexSlot{header: open.old.slot.header, entries: open.old.slot.entries, padByteCount: open.old.slot.padByteCount}
+		} else {
+			slot = &indexSlot{header: header(indexFileSlot, seq, coverage), entries: open.entries}
+		}
+		file, err := indexEncodePlanned(slot, view.companion, settings)
 		if err != nil {
 			return nil, err
 		}
@@ -442,10 +540,6 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, bucket *ind
 	}
 	for _, open := range sealed {
 		planned.sealedSlots = append(planned.sealedSlots, open.k)
-		if open.old != nil && !open.changed {
-			// Sealed as it stood: a new head above it is all sealing writes.
-			continue
-		}
 		openSeq := seq
 		if open.old != nil {
 			openSeq = open.old.seq()
@@ -458,13 +552,7 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, bucket *ind
 		}
 		planned.sealed = append(planned.sealed, file)
 	}
-	if current == nil {
-		return nil
-	}
-	renumbered := seq != nextSeq || len(sealed) != 0
-	if current.old != nil && !current.changed && !renumbered {
-		return nil
-	}
+	renumbered := seq != nextSeq || len(sealed) != 0 || current.old == nil
 	headSeq := seq
 	if current.old != nil && !renumbered {
 		headSeq = current.old.seq()
@@ -485,13 +573,13 @@ type indexEncodedSlot struct {
 
 // Encodes a planned slot and decodes it back, so a plan never writes what a reader would refuse, and a caller reads
 // the slot as written, its header's count and length set.
-func indexEncodePlanned(slot *indexSlot, companion bool) (*indexEncodedSlot, error) {
-	file, err := indexEncodeSlot(slot, companion)
+func indexEncodePlanned(slot *indexSlot, companion bool, settings *IndexFormatSettings) (*indexEncodedSlot, error) {
+	file, err := indexEncodeSlot(slot, companion, settings)
 	if err != nil {
 		return nil, err
 	}
 	sum := sha256.Sum256(file)
-	written, err := indexDecodeSlot(file, sum[:], companion)
+	written, err := indexDecodeSlot(file, sum[:], companion, settings)
 	if err != nil {
 		return nil, err
 	}

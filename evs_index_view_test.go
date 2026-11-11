@@ -182,7 +182,7 @@ func testViewSlotFile(t testing.TB, window indexBucketWindow, writer Id, seq uin
 	header.BucketDays = window.days
 	header.WriterSidecarId = writer.Bytes()
 	header.Seq = seq
-	file, err := indexEncodeSlot(&indexSlot{header: header, entries: entries}, false)
+	file, err := indexEncodeSlot(&indexSlot{header: header, entries: entries}, false, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,8 +211,14 @@ func testSmallFile(t testing.TB, message proto.Message) []byte {
 	return file
 }
 
-// A view of ref's file-mode index at its head, admins counted by admins.
+// A view of ref's file-mode index at its head, admins counted by admins, on the format's default settings.
 func testLoadView(t testing.TB, store indexRefStore, admins ...Id) *indexView {
+	t.Helper()
+	return testLoadViewWith(t, store, DefaultIndexFormatSettings(), admins...)
+}
+
+// testLoadView on settings.
+func testLoadViewWith(t testing.TB, store indexRefStore, settings *IndexFormatSettings, admins ...Id) *indexView {
 	t.Helper()
 	view, err := indexLoadView(context.Background(), &indexViewArgs{
 		store:    store,
@@ -222,6 +228,7 @@ func testLoadView(t testing.TB, store indexRefStore, admins ...Id) *indexView {
 		isAdmin: func(file *indexFileVersion) bool {
 			return slices.Contains(admins, file.signerSidecarId)
 		},
+		settings: settings,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -55,9 +55,6 @@ const (
 	indexMaxWindowDays     = 365
 )
 
-// An erasure set is staged, so at most a slot's 16,208 B (§11.14's files row).
-const indexErasureSetMaxByteCount = indexSlotMaxByteCount
-
 // What an index path names.
 type indexPathKind int
 
@@ -508,7 +505,7 @@ func indexCheckErasureSet(erasureSet *protocol.IndexErasureSet) error {
 }
 
 // Writes an erasure set, its repeated fields sorted first.
-func indexEncodeErasureSet(erasureSet *protocol.IndexErasureSet) ([]byte, error) {
+func indexEncodeErasureSet(erasureSet *protocol.IndexErasureSet, settings *IndexFormatSettings) ([]byte, error) {
 	sorted := proto.CloneOf(erasureSet)
 	slices.SortFunc(sorted.Erasures, func(a *protocol.IndexErasure, b *protocol.IndexErasure) int {
 		return bytes.Compare(a.ErasureId, b.ErasureId)
@@ -525,16 +522,16 @@ func indexEncodeErasureSet(erasureSet *protocol.IndexErasureSet) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	if indexErasureSetMaxByteCount < len(file) {
-		return nil, indexMalformed("an erasure set past 16,208 B")
+	if settings.SlotMaxByteCount < len(file) {
+		return nil, indexMalformed("an erasure set past a slot's cap")
 	}
 	return file, nil
 }
 
 // Reads an erasure set, its one canonical encoding only, within 16,208 B.
-func indexDecodeErasureSet(file []byte) (*protocol.IndexErasureSet, error) {
-	if indexErasureSetMaxByteCount < len(file) {
-		return nil, indexMalformed("an erasure set past 16,208 B")
+func indexDecodeErasureSet(file []byte, settings *IndexFormatSettings) (*protocol.IndexErasureSet, error) {
+	if settings.SlotMaxByteCount < len(file) {
+		return nil, indexMalformed("an erasure set past a slot's cap")
 	}
 	erasureSet := &protocol.IndexErasureSet{}
 	if err := indexUnmarshalSmall(file, erasureSet); err != nil {
@@ -556,10 +553,10 @@ type indexValidatedFile struct {
 }
 
 // The largest file each path may name: a slot's or erasure set's 16,208 B, and 1 MiB for the rest (D-EVS-48).
-func indexPathCap(kind indexPathKind) int {
+func indexPathCap(kind indexPathKind, settings *IndexFormatSettings) int {
 	switch kind {
 	case indexPathSlot, indexPathErasureSet:
-		return indexSlotMaxByteCount
+		return settings.SlotMaxByteCount
 	}
 	return indexShardPaddedMaxByteCount
 }
@@ -569,9 +566,9 @@ func indexPathCap(kind indexPathKind) int {
 // past 1 MiB, a dictionary out of order, a docid out of range, a tombstone table out of order or naming a key its doc
 // table holds, a tombstone in an all shard and any non-canonical encoding are refused: the reader drops the file and
 // raises index_malformed. A file in a newer format answers errIndexNewerFormat, which reads status update instead.
-func indexValidateFile(path indexPath, source indexFrameSource, contentSha256 []byte) (*indexValidatedFile, error) {
+func indexValidateFile(path indexPath, source indexFrameSource, contentSha256 []byte, settings *IndexFormatSettings) (*indexValidatedFile, error) {
 	length := source.indexLength()
-	if indexPathCap(path.kind) < length {
+	if indexPathCap(path.kind, settings) < length {
 		return nil, indexMalformed("a file past its cap")
 	}
 	cursor := indexNewFrameCursor(source)
@@ -614,7 +611,7 @@ func indexValidateFile(path indexPath, source indexFrameSource, contentSha256 []
 	var err error
 	switch path.kind {
 	case indexPathSlot, indexPathLargeEntry:
-		slot, err := indexDecodeSlot(file, contentSha256, path.companion)
+		slot, err := indexDecodeSlot(file, contentSha256, path.companion, settings)
 		if err != nil {
 			return nil, err
 		}
@@ -643,7 +640,7 @@ func indexValidateFile(path indexPath, source indexFrameSource, contentSha256 []
 		}
 		validated.message = manifest
 	case indexPathErasureSet:
-		validated.message, err = indexDecodeErasureSet(file)
+		validated.message, err = indexDecodeErasureSet(file, settings)
 	default:
 		err = indexMalformed("no index file")
 	}
