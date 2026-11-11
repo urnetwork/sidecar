@@ -48,6 +48,16 @@ func IsQuotaMeter(meter string) bool {
 	return false
 }
 
+// Whether a lease spends meter: tlsedge's, mxedge's and smtpedge's. A lease meter's bytes are debited only
+// through their lease's carves (DESIGN-DETAILS 13.2.2, QD-653); evs's draw when their batch applies.
+func IsQuotaLeaseMeter(meter string) bool {
+	switch meter {
+	case QuotaMeterTls, QuotaMeterMx, QuotaMeterSmtp:
+		return true
+	}
+	return false
+}
+
 // Producers (§20.6): UsageBatch.Producer names the process that sent it.
 const (
 	QuotaProducerEvs      = "evs"
