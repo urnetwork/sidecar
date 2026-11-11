@@ -1,0 +1,269 @@
+{
+  "$defs": {
+    "Annotations": {
+      "properties": {
+        "audience": {
+          "items": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "lastModified": {
+          "type": "string"
+        },
+        "priority": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "AudioContent": {
+      "properties": {
+        "annotations": {
+          "$ref": "#/$defs/Annotations"
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "type": {
+          "const": "audio",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "data",
+        "mimeType"
+      ],
+      "type": "object"
+    },
+    "BlobResourceContents": {
+      "properties": {
+        "blob": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "blob"
+      ],
+      "type": "object"
+    },
+    "EmbeddedResource": {
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "annotations": {
+          "$ref": "#/$defs/Annotations"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextResourceContents"
+            },
+            {
+              "$ref": "#/$defs/BlobResourceContents"
+            }
+          ]
+        },
+        "type": {
+          "const": "resource",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "resource"
+      ],
+      "type": "object"
+    },
+    "ImageContent": {
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "annotations": {
+          "$ref": "#/$defs/Annotations"
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "type": {
+          "const": "image",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "data",
+        "mimeType"
+      ],
+      "type": "object"
+    },
+    "ResourceLink": {
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "annotations": {
+          "$ref": "#/$defs/Annotations"
+        },
+        "description": {
+          "type": "string"
+        },
+        "icons": {
+          "items": {
+            "properties": {
+              "mimeType": {
+                "type": "string"
+              },
+              "sizes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "src": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "src"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "const": "resource_link",
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "uri",
+        "name"
+      ],
+      "type": "object"
+    },
+    "TextContent": {
+      "properties": {
+        "_meta": {
+          "additionalProperties": {},
+          "type": "object"
+        },
+        "annotations": {
+          "$ref": "#/$defs/Annotations"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "type": "object"
+    },
+    "TextResourceContents": {
+      "properties": {
+        "mimeType": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "_meta": {
+      "additionalProperties": {},
+      "type": "object"
+    },
+    "content": {
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TextContent"
+          },
+          {
+            "$ref": "#/$defs/ImageContent"
+          },
+          {
+            "$ref": "#/$defs/AudioContent"
+          },
+          {
+            "$ref": "#/$defs/ResourceLink"
+          },
+          {
+            "$ref": "#/$defs/EmbeddedResource"
+          }
+        ]
+      },
+      "type": "array"
+    },
+    "isError": {
+      "type": "boolean"
+    },
+    "structuredContent": {
+      "additionalProperties": {},
+      "type": "object"
+    }
+  },
+  "required": [
+    "content"
+  ],
+  "title": "CallToolResult at 2025-11-25",
+  "type": "object"
+}
