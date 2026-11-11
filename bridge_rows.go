@@ -5,8 +5,7 @@
 // The section is log-derived, as the owner's answer to plan-BRIDGE-egress-mode-at-gates has it: every verifier applies
 // each BridgeEgress entry's mode in log order over the rows it holds (bridgeRowsWithEgress, which the statement's
 // rule calls), and a base's rows carry the same value at the fold (CompileBridgeRows, which ACL's CompileAcl calls for
-// AclRows.bridge, C-05). Until BridgeEgress.mode lands no BridgeEgress takes effect (bridge_statement.go), so the
-// section stays as the rows before held it, which is empty.
+// AclRows.bridge, C-05). The mode shows in BridgeEgress.mode = 4 (QD-630), which every verifier reads without a key.
 //
 // One canonical encoding, so every reader hashes one rows_sha256: rows in subject order, one a subject, each mode
 // exits or none. A subject in auto has no row: auto is every subject's default.

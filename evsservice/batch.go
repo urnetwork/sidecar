@@ -309,7 +309,8 @@ func (self *BatchWriter) write(batch *pendingBatch) {
 	if err != nil {
 		batch.err = fmt.Errorf("%w: %w", ErrEvsBatchUnwritten, err)
 	}
-	close(batch.done)
+	// The slot is freed before the waiters hear: a waiter that appends again at once must see no write in flight,
+	// or its batch, not marked due, waits a window for a slot that is already free.
 	var started []*pendingBatch
 	func() {
 		self.stateLock.Lock()
@@ -318,6 +319,7 @@ func (self *BatchWriter) write(batch *pendingBatch) {
 		state.inFlightCount -= 1
 		started = self.startWritesWithLock(state)
 	}()
+	close(batch.done)
 	for _, startedBatch := range started {
 		go self.write(startedBatch)
 	}

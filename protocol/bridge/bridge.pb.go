@@ -1910,11 +1910,15 @@ func (x *BridgePortRange) GetLast() uint32 {
 }
 
 // None under a standing grant (17.7), or the I-8 decisions and this use's CanonicalAction (§16.8), which
-// readers verify as §8.8 does a GrantActivate's, the signer being every decision's requester.
+// readers verify as §8.8 does a GrantActivate's, the signer being every decision's requester. Under a multi-use
+// decision template_action carries the template every decision's payload_sha256 hashes, which this use's action must
+// match (ActionMatchesTemplate), so one decision files up to its uses rules; unset, the single-use reading stands
+// (owner decision 218, QD-631). It rides the sealed body, so no server sees it.
 type BridgeApproval struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
-	CanonicalAction []byte                 `protobuf:"bytes,1,opt,name=canonical_action,json=canonicalAction,proto3" json:"canonical_action,omitempty"` // as stored, which every decision's payload_sha256 hashes
+	CanonicalAction []byte                 `protobuf:"bytes,1,opt,name=canonical_action,json=canonicalAction,proto3" json:"canonical_action,omitempty"` // this use's action as stored: its effect_key derives the rule id
 	Decisions       []*Signed              `protobuf:"bytes,2,rep,name=decisions,proto3" json:"decisions,omitempty"`
+	TemplateAction  []byte                 `protobuf:"bytes,3,opt,name=template_action,json=templateAction,proto3" json:"template_action,omitempty"` // as stored; set, every decision hashes it, unset canonical_action
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1959,6 +1963,13 @@ func (x *BridgeApproval) GetCanonicalAction() []byte {
 func (x *BridgeApproval) GetDecisions() []*Signed {
 	if x != nil {
 		return x.Decisions
+	}
+	return nil
+}
+
+func (x *BridgeApproval) GetTemplateAction() []byte {
+	if x != nil {
+		return x.TemplateAction
 	}
 	return nil
 }
@@ -2465,13 +2476,15 @@ func (x *BridgeMapBody) GetApproval() *BridgeApproval {
 	return nil
 }
 
-// A gate holds no config key, so it learns a mode from BridgeRows at the next base (§8.10, §17.8): until a
-// writer folds this, a subject's new mode binds its readers and not the contract gate.
+// The mode shows at id level (§2.8's api-7, QD-630), so gates and api apply each entry's mode in log order over
+// BridgeRows.egress, as §8.9's entries after a base, and rows carry the same value at the fold (§8.10, §17.8). Only
+// exits seals a body: none and auto carry none, so they never wait on a seal.
 type BridgeEgress struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Header        *StatementHeader       `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
 	Subject       []byte                 `protobuf:"bytes,2,opt,name=subject,proto3" json:"subject,omitempty"`
-	SealedBody    []byte                 `protobuf:"bytes,3,opt,name=sealed_body,json=sealedBody,proto3" json:"sealed_body,omitempty"` // BridgeEgressBody
+	SealedBody    []byte                 `protobuf:"bytes,3,opt,name=sealed_body,json=sealedBody,proto3" json:"sealed_body,omitempty"` // BridgeEgressBody, under exits only
+	Mode          BridgeEgressMode       `protobuf:"varint,4,opt,name=mode,proto3,enum=urnetwork.sidecar.BridgeEgressMode" json:"mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2527,9 +2540,15 @@ func (x *BridgeEgress) GetSealedBody() []byte {
 	return nil
 }
 
+func (x *BridgeEgress) GetMode() BridgeEgressMode {
+	if x != nil {
+		return x.Mode
+	}
+	return BridgeEgressMode_BRIDGE_EGRESS_MODE_UNSPECIFIED
+}
+
 type BridgeEgressBody struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
-	Mode           BridgeEgressMode       `protobuf:"varint,1,opt,name=mode,proto3,enum=urnetwork.sidecar.BridgeEgressMode" json:"mode,omitempty"`
 	ExitSidecarIds [][]byte               `protobuf:"bytes,2,rep,name=exit_sidecar_ids,json=exitSidecarIds,proto3" json:"exit_sidecar_ids,omitempty"` // or exit_tag_id
 	ExitTagId      []byte                 `protobuf:"bytes,3,opt,name=exit_tag_id,json=exitTagId,proto3" json:"exit_tag_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields
@@ -2564,13 +2583,6 @@ func (x *BridgeEgressBody) ProtoReflect() protoreflect.Message {
 // Deprecated: Use BridgeEgressBody.ProtoReflect.Descriptor instead.
 func (*BridgeEgressBody) Descriptor() ([]byte, []int) {
 	return file_protocol_bridge_bridge_proto_rawDescGZIP(), []int{30}
-}
-
-func (x *BridgeEgressBody) GetMode() BridgeEgressMode {
-	if x != nil {
-		return x.Mode
-	}
-	return BridgeEgressMode_BRIDGE_EGRESS_MODE_UNSPECIFIED
 }
 
 func (x *BridgeEgressBody) GetExitSidecarIds() [][]byte {
@@ -2934,10 +2946,11 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\x06length\x18\x02 \x01(\rR\x06length\";\n" +
 	"\x0fBridgePortRange\x12\x14\n" +
 	"\x05first\x18\x01 \x01(\rR\x05first\x12\x12\n" +
-	"\x04last\x18\x02 \x01(\rR\x04last\"t\n" +
+	"\x04last\x18\x02 \x01(\rR\x04last\"\x9d\x01\n" +
 	"\x0eBridgeApproval\x12)\n" +
 	"\x10canonical_action\x18\x01 \x01(\fR\x0fcanonicalAction\x127\n" +
-	"\tdecisions\x18\x02 \x03(\v2\x19.urnetwork.sidecar.SignedR\tdecisions\"\xc2\x01\n" +
+	"\tdecisions\x18\x02 \x03(\v2\x19.urnetwork.sidecar.SignedR\tdecisions\x12'\n" +
+	"\x0ftemplate_action\x18\x03 \x01(\fR\x0etemplateAction\"\xc2\x01\n" +
 	"\vBridgeBlock\x12D\n" +
 	"\vipv4_prefix\x18\x01 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\n" +
 	"ipv4Prefix\x12L\n" +
@@ -2984,16 +2997,16 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\vtarget_port\x18\x05 \x01(\rR\n" +
 	"targetPort\x12#\n" +
 	"\rdrain_seconds\x18\x06 \x01(\rR\fdrainSeconds\x12=\n" +
-	"\bapproval\x18\a \x01(\v2!.urnetwork.sidecar.BridgeApprovalR\bapproval\"\x85\x01\n" +
+	"\bapproval\x18\a \x01(\v2!.urnetwork.sidecar.BridgeApprovalR\bapproval\"\xbe\x01\n" +
 	"\fBridgeEgress\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x18\n" +
 	"\asubject\x18\x02 \x01(\fR\asubject\x12\x1f\n" +
 	"\vsealed_body\x18\x03 \x01(\fR\n" +
-	"sealedBody\"\x95\x01\n" +
-	"\x10BridgeEgressBody\x127\n" +
-	"\x04mode\x18\x01 \x01(\x0e2#.urnetwork.sidecar.BridgeEgressModeR\x04mode\x12(\n" +
+	"sealedBody\x127\n" +
+	"\x04mode\x18\x04 \x01(\x0e2#.urnetwork.sidecar.BridgeEgressModeR\x04mode\"h\n" +
+	"\x10BridgeEgressBody\x12(\n" +
 	"\x10exit_sidecar_ids\x18\x02 \x03(\fR\x0eexitSidecarIds\x12\x1e\n" +
-	"\vexit_tag_id\x18\x03 \x01(\fR\texitTagId\"j\n" +
+	"\vexit_tag_id\x18\x03 \x01(\fR\texitTagIdJ\x04\b\x01\x10\x02R\x04mode\"j\n" +
 	"\vBridgeAlias\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x1f\n" +
 	"\vsealed_body\x18\x02 \x01(\fR\n" +
@@ -3130,7 +3143,7 @@ var file_protocol_bridge_bridge_proto_depIdxs = []int32{
 	24, // 41: urnetwork.sidecar.BridgeMapBody.ports:type_name -> urnetwork.sidecar.BridgePortRange
 	25, // 42: urnetwork.sidecar.BridgeMapBody.approval:type_name -> urnetwork.sidecar.BridgeApproval
 	41, // 43: urnetwork.sidecar.BridgeEgress.header:type_name -> urnetwork.sidecar.StatementHeader
-	2,  // 44: urnetwork.sidecar.BridgeEgressBody.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
+	2,  // 44: urnetwork.sidecar.BridgeEgress.mode:type_name -> urnetwork.sidecar.BridgeEgressMode
 	41, // 45: urnetwork.sidecar.BridgeAlias.header:type_name -> urnetwork.sidecar.StatementHeader
 	23, // 46: urnetwork.sidecar.BridgeAliasBody.alias_prefix:type_name -> urnetwork.sidecar.BridgeIpv4Prefix
 	41, // 47: urnetwork.sidecar.BridgeWithdraw.header:type_name -> urnetwork.sidecar.StatementHeader

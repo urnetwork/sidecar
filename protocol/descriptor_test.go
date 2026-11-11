@@ -706,7 +706,7 @@ func TestSealedStatementsShowOnlyIds(t *testing.T) {
 		{message: "BridgeAddress", fields: []string{"header", "sealed_body", "sidecar_id"}},
 		{message: "BridgeRoute", fields: []string{"advertiser", "header", "route_id", "route_rule_ids", "sealed_body"}},
 		{message: "BridgeMap", fields: []string{"expires", "header", "host", "map_id", "sealed_body"}},
-		{message: "BridgeEgress", fields: []string{"header", "sealed_body", "subject"}},
+		{message: "BridgeEgress", fields: []string{"header", "mode", "sealed_body", "subject"}},
 		{message: "BridgeAlias", fields: []string{"header", "sealed_body"}},
 		{message: "BridgeWithdraw", fields: []string{"header", "mode", "rule_id"}},
 		{message: "IndexerSet", fields: []string{"header", "retire", "scope", "sealed_services", "sidecar_id"}},
