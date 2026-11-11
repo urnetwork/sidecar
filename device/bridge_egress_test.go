@@ -500,7 +500,7 @@ func TestBridgeEgressSdkProviderSkipsRulesOneToThreeAndSix(t *testing.T) {
 // (bridge-m4-09-other-client-rows): under a document its exit rows pass it out under the zero subject's tag, while a
 // port no row holds, the LAN and the block stay denied and a revoked grant's row admits nothing; with no field it holds
 // none. A bound subject keeps its own rows, and a host never gives the untagged rows to a principal no row names.
-func TestBridgeEgressAnotherClientHoldsTheUntaggedRows(t *testing.T) {
+func TestOtherClientsHoldUntaggedRows(t *testing.T) {
 	sdkFlow := func(clientSeed byte, ipProtocol connect.IpProtocol, to string) *connect.EgressFlow {
 		flow := egressTestFlow(clientSeed, ipProtocol, to)
 		flow.Principal = nil
@@ -720,7 +720,7 @@ func TestBridgeRuleTagIsReadingElevens(t *testing.T) {
 
 // Rule 3's tag names the address the flow was sent to: a host with two addresses gives each its own tag, the same for
 // every port and protocol of it, and another subject's flows to the same address take that subject's.
-func TestBridgeEgressRuleThreeTagsNameTheHostedAddress(t *testing.T) {
+func TestBridgeEgressRuleThreeTagsSplitByAddress(t *testing.T) {
 	fixture := egressTestFixture()
 	fixture.Addresses = append(fixture.Addresses, "100.80.1.4")
 	test := newEgressTest(t, device.BridgePolicyProfileHost, device.PostureEnforcingDocument, fixture)
