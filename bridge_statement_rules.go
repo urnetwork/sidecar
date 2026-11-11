@@ -42,6 +42,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/netip"
 	"slices"
@@ -711,17 +712,17 @@ func (self *BridgeLedger) applyAddress(entry *BridgeLedgerEntry) error {
 // and its tombstone has run out at the claim's time, which frees them.
 func (self *BridgeLedger) hostBitsFree(hostBits uint32, statement *BridgeLogStatement) bool {
 	holder := self.byHostBits[hostBits]
-	if holder == nil {
-		return true
-	}
-	release := self.addressRelease(holder)
-	if release == nil || statement.N <= release.n {
+	return holder == nil || self.freeAt(holder, statement)
+}
+
+// Whether an address is a tombstone that ran out by statement's position and time, which then leaves the ledger: what
+// the fold whose time passes it drops, so a statement reads it alike whether a fold came between or not.
+func (self *BridgeLedger) freeAt(address *BridgeLedgerAddress, statement *BridgeLogStatement) bool {
+	release := self.addressRelease(address)
+	if release == nil || statement.N <= release.n || !release.timeMsKnown || statement.TimeMs < release.timeMs+BridgeAddressTombstoneMs {
 		return false
 	}
-	if !release.timeMsKnown || statement.TimeMs < release.timeMs+BridgeAddressTombstoneMs {
-		return false
-	}
-	self.dropAddress(holder)
+	self.dropAddress(address)
 	return true
 }
 
@@ -744,12 +745,7 @@ func (self *BridgeLedger) sweepLower(statement *BridgeLogStatement) {
 			// a later claim already freed it
 			return true
 		}
-		release := self.addressRelease(address)
-		if release != nil && release.n < statement.N && release.timeMsKnown && release.timeMs+BridgeAddressTombstoneMs <= statement.TimeMs {
-			self.dropAddress(address)
-			return true
-		}
-		return false
+		return self.freeAt(address, statement)
 	})
 }
 
@@ -780,6 +776,31 @@ func bridgeUpperRangeOf(wirePrefix *bridge.BridgeIpv4Prefix) (uint32, uint32, er
 	return first, first | (^bridgePrefixMask(prefix.length) & 0xffff), nil
 }
 
+// Whether any address, live or a tombstone still holding at statement's position and time, sits in [first, last]: a
+// tombstone that ran out by then leaves the ledger.
+func (self *BridgeLedger) hostInAt(first uint32, last uint32, statement *BridgeLogStatement) bool {
+	held := []*BridgeLedgerAddress{}
+	if int(last-first) < len(self.byHostBits) {
+		for hostBits := first; hostBits <= last; hostBits += 1 {
+			if address := self.byHostBits[hostBits]; address != nil {
+				held = append(held, address)
+			}
+		}
+	} else {
+		for _, hostBits := range slices.Sorted(maps.Keys(self.byHostBits)) {
+			if first <= hostBits && hostBits <= last {
+				held = append(held, self.byHostBits[hostBits])
+			}
+		}
+	}
+	for _, address := range held {
+		if !self.freeAt(address, statement) {
+			return true
+		}
+	}
+	return false
+}
+
 // Whether any address, live or a tombstone, sits in [first, last].
 func (self *BridgeLedger) hostIn(first uint32, last uint32) bool {
 	if int(last-first) < len(self.byHostBits) {
@@ -804,7 +825,7 @@ func (self *BridgeLedger) hostIn(first uint32, last uint32) bool {
 func (self *BridgeLedger) applyWithdraw(entry *BridgeLedgerEntry) error {
 	statement := entry.Statement
 	key := string(statement.RuleId)
-	rule := self.rules[key]
+	rule := self.heldRule(key, statement.TimeMs)
 	if rule == nil {
 		reserved := self.reserved[key]
 		switch {
@@ -851,6 +872,21 @@ func (self *BridgeLedger) dropUpperRange(rule *BridgeLedgerRule) {
 	}
 }
 
+// The rule held under key at a statement's time, nil for none. A withdrawn rule whose retention passed by then has left
+// the rows, with its count against its decision, as the fold whose time passes it drops the row: so a statement reads
+// the id alike whether a fold came between or not, and the id is free again.
+func (self *BridgeLedger) heldRule(key string, timeMs int64) *BridgeLedgerRule {
+	rule := self.rules[key]
+	if rule == nil || rule.Withdrawn == nil || timeMs <= rule.retainUntilMs() {
+		return rule
+	}
+	delete(self.rules, key)
+	if use := self.approvals[rule.ApprovalId]; use != nil && !rule.Standing {
+		delete(use.ruleIds, key)
+	}
+	return nil
+}
+
 // A rule's body with its approval cleared, as the rows keep it.
 func bridgeBodyWithoutApproval[T *bridge.BridgeRouteBody | *bridge.BridgeMapBody](body T) T {
 	switch typed := any(body).(type) {
@@ -873,13 +909,8 @@ func (self *BridgeLedger) applyRule(entry *BridgeLedgerEntry) error {
 	if reserved := self.reserved[key]; reserved != nil && reserved.binds(statement.Signer) {
 		return fmt.Errorf("a BridgeWithdraw at %d named this rule id", reserved.At)
 	}
-	if rule := self.rules[key]; rule != nil {
-		if rule.Withdrawn != nil && rule.retainUntilMs() < statement.TimeMs {
-			// the rows dropped the withdrawn id past its decision's not_after: the id is free again
-			delete(self.rules, key)
-		} else {
-			return self.applyHeldRule(entry, rule)
-		}
+	if rule := self.heldRule(key, statement.TimeMs); rule != nil {
+		return self.applyHeldRule(entry, rule)
 	}
 
 	rule := &BridgeLedgerRule{
@@ -1074,7 +1105,7 @@ func (self *BridgeLedger) checkRoute(rule *BridgeLedgerRule, body *bridge.Bridge
 		}
 		return nil, nil
 	}
-	if self.hostIn(first, last) {
+	if self.hostInAt(first, last, rule.Newest) {
 		return nil, errors.New("a host sits inside the exposed prefix")
 	}
 	return &bridgeUpperRange{first: first, last: last}, nil
@@ -1255,15 +1286,16 @@ func (self *BridgeLedger) applyAlias(entry *BridgeLedgerEntry) error {
 	if err := self.openBody(entry, body); err != nil {
 		return err
 	}
-	if err := self.holdAlias(body); err != nil {
+	if err := self.holdAlias(body, entry.Statement); err != nil {
 		return err
 	}
 	self.aliases = append(self.aliases, &BridgeLedgerAlias{Body: body, Signer: entry.Statement.Signer, At: entry.Statement.N, Statement: entry.Statement})
 	return nil
 }
 
-// Checks an alias's body against the ledger and holds its range.
-func (self *BridgeLedger) holdAlias(body *bridge.BridgeAliasBody) error {
+// Checks an alias's body against the ledger at statement's position and time, nil for a row the rows hold, and holds
+// its range.
+func (self *BridgeLedger) holdAlias(body *bridge.BridgeAliasBody, statement *BridgeLogStatement) error {
 	if len(body.GetShareId()) != len(Id{}) || len(body.GetHost()) != len(Id{}) {
 		return errors.New("an alias with a malformed share_id or host")
 	}
@@ -1279,7 +1311,7 @@ func (self *BridgeLedger) holdAlias(body *bridge.BridgeAliasBody) error {
 	if self.upperRangeHolding(first, last) != nil {
 		return errors.New("the alias overlaps another alias or an exposed prefix")
 	}
-	if self.hostIn(first, last) {
+	if (statement == nil && self.hostIn(first, last)) || (statement != nil && self.hostInAt(first, last, statement)) {
 		return errors.New("a host sits inside the alias")
 	}
 	self.upper = append(self.upper, bridgeUpperRange{first: first, last: last})

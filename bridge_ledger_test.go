@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"os"
 	"reflect"
@@ -1000,5 +1001,70 @@ func TestAFoldInTwoStepsIsTheFoldInOne(t *testing.T) {
 	}
 	if !reflect.DeepEqual(once.Files, second.Files) || len(once.Files) < 4 {
 		t.Fatalf("two steps fold other files than one: %d and %d files", len(second.Files), len(once.Files))
+	}
+}
+
+// A withdrawn id past its retention reads alike whether a fold came between or not: the fold whose time passes it drops
+// its row, and a statement whose time passes it finds it gone too, so a later withdrawal by a device that never filed
+// it reserves the id at a reader whose fold dropped the row and at one whose ledger still held it (regression: the
+// held rule voided the withdrawal at the second; FuzzBridgeLedgerFold's 16a1b8f49d60696f).
+func TestAWithdrawnIdPastItsRetentionReadsAlikeAcrossAFold(t *testing.T) {
+	for _, foldBetween := range []bool{true, false} {
+		net := newTestBridgeLedgerNet(t)
+		_, laptop, desktop := testBridgeCast(net.testConfigNet)
+		ruleId := testBridgeRuleId("retention")
+		net.mustPost(laptop, bridge.SignedType_SIGNED_BRIDGE_MAP, net.bridgeMap(laptop, ruleId, 0, testBridgeMapBody(testBridgeIpv4(100, 80, 3, 7), 8443, 443)))
+		net.mustPost(laptop, bridge.SignedType_SIGNED_BRIDGE_WITHDRAW, net.bridgeWithdraw(ruleId, bridge.BridgeWithdrawMode_BRIDGE_WITHDRAW_MODE_RESET))
+		net.foldLedger(net.n, nil)
+		// past the standing rule's retention, its newest filing's header no longer replayable
+		net.timeMs += 8 * testBridgeDayMs
+		if foldBetween {
+			net.mustPost(laptop, bridge.SignedType_SIGNED_BRIDGE_ADDRESS, net.bridgeAddress(laptop, testBridgeIpv4(100, 80, 3, 7)))
+			net.foldLedger(net.n, nil)
+			if net.ledgerOf(net.log).Rule(ruleId) != nil {
+				t.Fatal("the fold past the retention kept the withdrawn id")
+			}
+		}
+		later := net.mustPost(desktop, bridge.SignedType_SIGNED_BRIDGE_WITHDRAW, net.bridgeWithdraw(ruleId, bridge.BridgeWithdrawMode_BRIDGE_WITHDRAW_MODE_RESET))
+		ledger := net.ledgerOf(net.log)
+		testBridgeDisposition(t, ledger, later.Pin.GetVersion(), BridgeDispositionActive)
+		if reserved := ledger.Reserved(ruleId); reserved == nil || reserved.Signer != desktop.sidecarId || ledger.Rule(ruleId) != nil {
+			t.Fatalf("fold between %v: the later withdrawal reserved %+v", foldBetween, reserved)
+		}
+		// the rows the next fold writes hold the reservation and nothing else of the id
+		_, rules, _, _ := ledger.foldRows()
+		held := []protocol.BridgeLedgerDisposition{}
+		for _, row := range rules {
+			if bytes.Equal(row.GetRuleId(), ruleId) {
+				held = append(held, row.GetDisposition())
+			}
+		}
+		if !slices.Equal(held, []protocol.BridgeLedgerDisposition{protocol.BridgeLedgerDisposition_BRIDGE_LEDGER_DISPOSITION_RESERVED}) {
+			t.Fatalf("fold between %v: the id's rows %v", foldBetween, held)
+		}
+	}
+}
+
+// A tombstone in the upper /17 blocks an alias or an exposed prefix only while it holds at the filing's position and
+// time: one that ran out by then leaves the ledger, as the fold whose time passes it drops it, so the room reads alike
+// whether a fold came between or not.
+func TestAnExpiredTombstoneLeavesRoomForAnAlias(t *testing.T) {
+	releasedMs := testConfigStartMs
+	for _, c := range []struct {
+		timeMs int64
+		room   bool
+	}{{timeMs: releasedMs + BridgeAddressTombstoneMs - 1, room: false}, {timeMs: releasedMs + BridgeAddressTombstoneMs, room: true}} {
+		ledger := newBridgeLedger(&BridgeLedgerReader{}, math.MaxUint64, c.timeMs, false)
+		ledger.holdAddress(&BridgeLedgerAddress{
+			SidecarId: testConfigId("spilled"), HostBits: 0x8001, ClaimedAt: 3,
+			folded: &bridgeRelease{n: 5, timeMs: releasedMs, timeMsKnown: true},
+		})
+		alias := &BridgeLogStatement{N: 9, TimeMs: c.timeMs}
+		err := ledger.holdAlias(&bridge.BridgeAliasBody{
+			ShareId: testConfigId("share").Bytes(), AliasPrefix: testBridgePrefix(100, 80, 128, 0, 24), Host: testConfigId("far host").Bytes(),
+		}, alias)
+		if (err == nil) != c.room || ledger.HostBitsTaken(0x8001) == c.room {
+			t.Errorf("at %d: %v, the tombstone taken %v", c.timeMs, err, ledger.HostBitsTaken(0x8001))
+		}
 	}
 }

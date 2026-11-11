@@ -43,11 +43,15 @@ func FuzzBridgeLedgerFold(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// every entry's time, which the whole log's releases read: the reader under test keeps only its retained ones,
+		// and the folds froze the rest
+		entryTimes := map[uint64]int64{}
 		for _, entryBytes := range net.entries {
 			entry := &bridge.AuthEntry{}
 			if err := proto.Unmarshal(entryBytes, entry); err != nil {
 				t.Fatal(err)
 			}
+			entryTimes[entry.GetN()] = entry.GetTimeMs()
 			if entry.GetKind() == bridge.AuthEntryKindBase {
 				for _, statement := range reader.State().Bridge().Statements() {
 					if !slices.ContainsFunc(taken, func(held *BridgeLogStatement) bool { return held.StatementId == statement.StatementId }) {
@@ -61,7 +65,10 @@ func FuzzBridgeLedgerFold(f *testing.F) {
 		}
 		collect()
 		state := net.log.State()
-		whole := NewBridgeLog(taken).Open(&BridgeLedgerReader{State: state, RepoKeyAt: testConfigSealKeyAt(net.keys...), EntryTimeMs: net.log.EntryTimeMs})
+		whole := NewBridgeLog(taken).Open(&BridgeLedgerReader{State: state, RepoKeyAt: testConfigSealKeyAt(net.keys...), EntryTimeMs: func(n uint64) (int64, bool) {
+			timeMs, ok := entryTimes[n]
+			return timeMs, ok
+		}})
 		if got, want := testBridgeLedgerBytes(t, net.ledgerOf(net.log)), testBridgeLedgerBytes(t, whole); !bytes.Equal(got, want) {
 			t.Fatalf("the folded ledger is not the whole log's:\n%x\n%x", got, want)
 		}

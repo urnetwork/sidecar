@@ -720,7 +720,7 @@ func (self *BridgeLedger) loadAliasRow(row *protocol.BridgeLedgerAliasRow) error
 	if row.GetAt() == 0 || row.GetReleasedAt() != 0 || row.GetReleasedMs() != 0 || row.GetBody() == nil {
 		return errors.New("an alias out of place, or released, which this build cannot read")
 	}
-	if err := self.holdAlias(row.GetBody()); err != nil {
+	if err := self.holdAlias(row.GetBody(), nil); err != nil {
 		return err
 	}
 	self.aliases = append(self.aliases, &BridgeLedgerAlias{Body: row.GetBody(), Signer: signer, At: row.GetAt()})
