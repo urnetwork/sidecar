@@ -8,9 +8,14 @@
 // and on server's Quota, so the two cannot drift apart unseen.
 //
 // What a real Quota reads from pro.yml, Postgres and the nightly count, a test sets by hand: limits,
-// balances and the storage refusal. Money moves as §20.6 has it: a lease reserves and spends with no
-// I/O, the batches of the lease's process carve its spent bytes into debits, evs's bytes debit when
-// their batch applies, and a reservation no lease rolls lapses after ReservationLifetime with no debit.
+// balances and the storage refusal. Money moves as §20.6 and DESIGN-DETAILS 13.2.2 have it (QD-653): a
+// lease reserves and spends with no I/O, the batches of the lease's process carve its spent bytes into
+// debits, evs's bytes debit when their batch applies, and a lease's reservation lives while its process
+// does, as the real lease extends its tokens, and lapses LeaseTokenLifetime after a killed process was
+// last seen alive, with no debit. No lease byte is debited without a live reservation: a carve's bytes
+// whose reservation lapsed or was lost with Redis, and a lease meter's bytes past what its process's
+// leases spent, are counted unbilled, never debited at apply. A carve debits at once here, where the real
+// one holds its bytes in a carved token for the flush, so the carved token's 24 h is not seen.
 //
 // A lease belongs to its caller's process: the actor its ctx carries, or none outside a schedule. One
 // process shares one lease per network and meter, the last handle's Close settling it
@@ -41,10 +46,10 @@ type FakeQuotaSettings struct {
 	CommunityLeaseDrawByteCount int64
 	// The fraction of a draw spent before a lease reserves the next: §20.6's 75%.
 	LeaseRenewFraction float64
-	// How long a reservation lasts unless its lease rolls it, as its renewals and its process's batches
-	// do: escrow's 24 h (server/model/subscription_redis_admission.go:38). A killed process's
-	// reservations come back after it with no debit (FS-46).
-	ReservationLifetime time.Duration
+	// How long a lease's own reservation lasts once its process stops extending it: QD-653's 15 min. A
+	// live process's lease keeps its reservations, as the real lease extends its tokens every 5 min; a
+	// killed process's come back this long after the fake last saw it alive, with no debit (FS-46).
+	LeaseTokenLifetime time.Duration
 	// How long a debit id answers its first result: §20.7's 48 h keys.
 	DebitIdLifetime time.Duration
 	// How long an applied batch's id is remembered: service_usage_batch's 24 h (§20.14).
@@ -56,7 +61,7 @@ func DefaultFakeQuotaSettings() *FakeQuotaSettings {
 		LeaseDrawByteCount:          64 * 1024 * 1024,
 		CommunityLeaseDrawByteCount: 16 * 1024 * 1024,
 		LeaseRenewFraction:          0.75,
-		ReservationLifetime:         24 * time.Hour,
+		LeaseTokenLifetime:          15 * time.Minute,
 		DebitIdLifetime:             48 * time.Hour,
 		BatchIdLifetime:             24 * time.Hour,
 	}
@@ -519,22 +524,48 @@ func (self *fakeQuotaLeaseEntry) spentWithLock() int64 {
 	return self.drawnByteCount - self.available.Load()
 }
 
-// Keeps the lease's live reservations from lapsing, as a real lease rolls its tokens.
+// Keeps the lease's live reservations from lapsing, as a real lease extends its tokens.
 func (self *fakeQuotaLeaseEntry) rollWithLock(now time.Time) {
 	for _, draw := range self.draws {
-		if draw.redisEpoch == self.quota.redisEpoch && now.Before(draw.expireTime) {
-			draw.expireTime = now.Add(self.quota.settings.ReservationLifetime)
+		if self.drawLiveWithLock(draw, now) {
+			draw.expireTime = now.Add(self.quota.settings.LeaseTokenLifetime)
+		}
+	}
+}
+
+// Whether the entry's process lives: one a schedule killed stops extending its lease's tokens.
+func (self *fakeQuotaLeaseEntry) processLives() bool {
+	return self.actor == nil || !self.actor.Killed()
+}
+
+// Whether a draw's reservation is still held: Redis has not lost it, and it has not lapsed. An open lease
+// of a live process extends its draws however long nobody looks, as the real lease's goroutine does; a
+// closed one's last LeaseTokenLifetime past its close or its last carve, as the real lease's do until it
+// gives up what no batch carved; a killed process's lapse that long after the fake last saw it alive.
+func (self *fakeQuotaLeaseEntry) drawLiveWithLock(draw *fakeQuotaDraw, now time.Time) bool {
+	if draw.redisEpoch != self.quota.redisEpoch {
+		return false
+	}
+	return (!self.closed && self.processLives()) || now.Before(draw.expireTime)
+}
+
+// Rolls every live process's leases, as their goroutines extend them while they run. Under the lock.
+func (self *FakeQuota) rollLiveLeasesWithLock(now time.Time) {
+	for _, entry := range self.leaseEntries {
+		if entry.processLives() {
+			entry.rollWithLock(now)
 		}
 	}
 }
 
 // What every live reservation holds of each balance: the part of each draw not yet carved or given back.
 func (self *FakeQuota) reservedByBalanceWithLock(now time.Time) map[*QuotaBalance]int64 {
+	self.rollLiveLeasesWithLock(now)
 	reserved := map[*QuotaBalance]int64{}
 	for _, entry := range self.leaseEntries {
 		end := entry.reservedEndWithLock()
 		for _, draw := range entry.draws {
-			if draw.redisEpoch != self.redisEpoch || !now.Before(draw.expireTime) {
+			if !entry.drawLiveWithLock(draw, now) {
 				continue
 			}
 			from := max(entry.carvedByteCount, draw.offset)
@@ -569,7 +600,7 @@ func (self *FakeQuota) drawWithLock(entry *fakeQuotaLeaseEntry, now time.Time) i
 			offset:     entry.drawnByteCount,
 			byteCount:  take,
 			redisEpoch: self.redisEpoch,
-			expireTime: now.Add(self.settings.ReservationLifetime),
+			expireTime: now.Add(self.settings.LeaseTokenLifetime),
 		})
 		entry.drawnByteCount += take
 		entry.available.Add(take)
@@ -603,8 +634,9 @@ func (self *FakeQuota) Lease(ctx context.Context, networkId connect.Id, meter st
 	if err := checkQuotaId("network", networkId); err != nil {
 		return nil, nil, err
 	}
-	if !sidecar.IsQuotaMeter(meter) {
-		return nil, nil, fmt.Errorf("no meter %q", meter)
+	if !sidecar.IsQuotaLeaseMeter(meter) {
+		// evs's and relay's bytes draw at apply: no lease spends them
+		return nil, nil, fmt.Errorf("no lease spends meter %q", meter)
 	}
 	var lease *fakeQuotaLease
 	var refusal *sidecar.QuotaRefusal
@@ -651,20 +683,27 @@ func (self *FakeQuota) Lease(ctx context.Context, networkId connect.Id, meter st
 	return lease, nil, nil
 }
 
-// Moves up to byteCount of entry's spent bytes into debits, in draw order, answering how many.
+// Moves up to byteCount of entry's spent bytes into debits, in draw order, answering how many it took.
+// Only bytes a live reservation holds are debited: a draw that lapsed or was lost with Redis gives its
+// bytes up, counted unbilled (QD-653).
 func (self *FakeQuota) carveWithLock(entry *fakeQuotaLeaseEntry, byteCount int64, now time.Time) int64 {
+	self.rollLiveLeasesWithLock(now)
 	carve := min(byteCount, entry.spentWithLock()-entry.carvedByteCount)
 	if carve <= 0 {
 		return 0
 	}
 	from := entry.carvedByteCount
 	to := from + carve
+	network := self.networkWithLock(entry.networkId)
 	for _, draw := range entry.draws {
 		partFrom := max(from, draw.offset)
 		partTo := min(to, draw.offset+draw.byteCount)
 		if partFrom < partTo {
-			// the debit lands in Postgres whether or not Redis still holds the reservation
-			draw.balance.ByteCount -= partTo - partFrom
+			if entry.drawLiveWithLock(draw, now) {
+				draw.balance.ByteCount -= partTo - partFrom
+			} else {
+				network.unbilledByteCount += partTo - partFrom
+			}
 		}
 	}
 	entry.carvedByteCount = to
@@ -672,7 +711,7 @@ func (self *FakeQuota) carveWithLock(entry *fakeQuotaLeaseEntry, byteCount int64
 	return carve
 }
 
-// evs's bytes and a lease's excess, debited when their batch applies, in draw order. Past every
+// evs's bytes, debited when their batch applies, in draw order. Past every
 // balance's room they overdraw the last in-window balance; with none at all they go unbilled; either
 // way the network is spent (plan-QUOTA-small-readings reading 5).
 func (self *FakeQuota) debitAtApplyWithLock(network *fakeQuotaNetwork, meter string, byteCount int64, now time.Time) {
@@ -725,7 +764,7 @@ func checkUsageBatch(batch *sidecar.UsageBatch) error {
 }
 
 // A batch from a process carves that process's leases on each event's network and meter first, oldest
-// first, and debits the rest at once, as evs's bytes are.
+// first; the rest of evs's bytes debit at once, and the rest of a lease meter's are unbilled (QD-653).
 func (self *FakeQuota) ReportUsage(ctx context.Context, batch *sidecar.UsageBatch) error {
 	if batch == nil {
 		return errors.New("no batch")
@@ -758,7 +797,12 @@ func (self *FakeQuota) ReportUsage(ctx context.Context, batch *sidecar.UsageBatc
 				}
 			}
 			if 0 < remaining {
-				self.debitAtApplyWithLock(network, event.Meter, remaining, now)
+				if sidecar.IsQuotaLeaseMeter(event.Meter) {
+					// bytes no lease of the process spent: no carve covers them, so nothing debits them
+					network.unbilledByteCount += remaining
+				} else {
+					self.debitAtApplyWithLock(network, event.Meter, remaining, now)
+				}
 			}
 		}
 		self.forgetSettledLeasesWithLock()
@@ -870,6 +914,8 @@ func (self *fakeQuotaLease) Close() {
 	if 0 < entry.handleCount {
 		return
 	}
+	// its tokens are extended to the close, and then lapse unless a batch carves them
+	entry.rollWithLock(quota.clock.Now())
 	entry.closed = true
 	rest := entry.available.Swap(0)
 	entry.closedSpentByteCount = entry.drawnByteCount - rest

@@ -71,8 +71,9 @@ func TestFakeQuotaBatchIdsLapseAfterTheirLifetime(t *testing.T) {
 	}
 }
 
-// FS-46's clause: an edge killed with a lease out debits nothing, and its reservation comes back after
-// escrow's 24 h.
+// FS-46's clause at 15 min (QD-653): an edge killed with a lease out debits nothing, and its reservation
+// comes back LeaseTokenLifetime after the kill, where a live process's lease keeps its reservation however
+// long it waits.
 func TestFakeQuotaAKilledProcessReservationLapsesWithNoDebit(t *testing.T) {
 	quota, clock, _ := newQuotaFixture(t)
 	driver := NewBarrierDriver(nil)
@@ -89,20 +90,79 @@ func TestFakeQuotaAKilledProcessReservationLapsesWithNoDebit(t *testing.T) {
 	if !lease.Spend(300) {
 		t.Fatal("spend refused")
 	}
+	// a live process keeps its lease's reservation past a token's lifetime, as its extends run
+	clock.Advance(time.Hour)
+	if got := quota.Balances(networkId)[0].ReservedByteCount; got != 1000 {
+		t.Fatalf("a live lease after an hour: reserved %d", got)
+	}
 	edge.Kill()
 	balances := quota.Balances(networkId)
 	if balances[0].ByteCount != 1000 || balances[0].ReservedByteCount != 1000 {
 		t.Fatalf("after the kill: %+v", balances[0])
 	}
-	clock.Advance(24*time.Hour - time.Millisecond)
+	clock.Advance(15*time.Minute - time.Millisecond)
 	if got := quota.Balances(networkId)[0].ReservedByteCount; got != 1000 {
-		t.Errorf("before 24 h: reserved %d", got)
+		t.Errorf("before 15 min: reserved %d", got)
 	}
 	clock.Advance(time.Millisecond)
 	balances = quota.Balances(networkId)
 	if balances[0].ByteCount != 1000 || balances[0].ReservedByteCount != 0 {
-		t.Errorf("after 24 h: %+v", balances[0])
+		t.Errorf("after 15 min: %+v", balances[0])
 	}
+}
+
+// QD-653: no lease byte is debited without a live reservation. Bytes a lease spent under a reservation Redis
+// then lost are not billed when its batch reports them, and a lease meter's bytes past what the process's
+// leases spent are unbilled, never debited at apply as evs's are.
+func TestFakeQuotaLeaseBytesWithNoReservationAreUnbilled(t *testing.T) {
+	quota, clock, _ := newQuotaFixture(t)
+	driver := NewBarrierDriver(nil)
+	t.Cleanup(driver.Close)
+	table := NewActorTable(clock, driver)
+	networkId := connect.NewId()
+	quota.SetBalances(networkId, []*QuotaBalance{{BalanceId: connect.NewId(), ByteCount: 1000}})
+	edge := table.Actor(t.Context(), "tlsedge1")
+	lease, refusal, err := quota.Lease(edge.Context(), networkId, sidecar.QuotaMeterTls)
+	if err != nil || refusal != nil {
+		t.Fatalf("refusal %+v, %v", refusal, err)
+	}
+	if !lease.Spend(300) {
+		t.Fatal("spend refused")
+	}
+	quota.LoseRedis()
+	batch := func(byteCount int64, meter string) *sidecar.UsageBatch {
+		return &sidecar.UsageBatch{
+			BatchId:  connect.NewId(),
+			Producer: sidecar.QuotaProducerTlsEdge,
+			Events:   []*sidecar.UsageEvent{{NetworkId: networkId, Meter: meter, TransferByteCount: byteCount}},
+		}
+	}
+	if err := quota.ReportUsage(edge.Context(), batch(300, sidecar.QuotaMeterTls)); err != nil {
+		t.Fatal(err)
+	}
+	if got := quota.Balances(networkId)[0].ByteCount; got != 1000 {
+		t.Errorf("a lost reservation's bytes debited: %d left", got)
+	}
+	if got := quota.UnbilledByteCount(networkId); got != 300 {
+		t.Errorf("unbilled %d", got)
+	}
+	// tls bytes no lease spent: unbilled; evs's: debited at apply
+	if err := quota.ReportUsage(t.Context(), batch(50, sidecar.QuotaMeterTls)); err != nil {
+		t.Fatal(err)
+	}
+	if err := quota.ReportUsage(t.Context(), batch(20, sidecar.QuotaMeterEvs)); err != nil {
+		t.Fatal(err)
+	}
+	if got := quota.Balances(networkId)[0].ByteCount; got != 980 {
+		t.Errorf("after the evs batch: %d left", got)
+	}
+	if got := quota.UnbilledByteCount(networkId); got != 350 {
+		t.Errorf("unbilled %d", got)
+	}
+	if _, _, err := quota.Lease(t.Context(), networkId, sidecar.QuotaMeterEvs); err == nil {
+		t.Error("a lease on evs's meter")
+	}
+	lease.Close()
 }
 
 // One process, one lease per network and meter; a restarted process is another, and its batches carve
@@ -151,7 +211,8 @@ func TestFakeQuotaLeasesBelongToTheirProcess(t *testing.T) {
 	secondLease.Close()
 }
 
-// §20.15: Redis lost over-admits at most what live leases hold, and the debits still land.
+// §20.15: Redis lost over-admits at most what live leases hold. A lease whose reservation Redis lost bills
+// nothing for what it spent then, counted unbilled (QD-653), while one drawn after the loss debits.
 func TestFakeQuotaLosingRedisOverAdmitsAtMostTheLease(t *testing.T) {
 	settings := DefaultFakeQuotaSettings()
 	settings.CommunityLeaseDrawByteCount = 100
@@ -193,8 +254,11 @@ func TestFakeQuotaLosingRedisOverAdmitsAtMostTheLease(t *testing.T) {
 			t.Fatalf("edge %d: %v", index, err)
 		}
 	}
-	if got := quota.Balances(networkId)[0].ByteCount; got != -100 {
+	if got := quota.Balances(networkId)[0].ByteCount; got != 0 {
 		t.Errorf("debits after the loss: %d left", got)
+	}
+	if got := quota.UnbilledByteCount(networkId); got != 100 {
+		t.Errorf("unbilled after the loss: %d", got)
 	}
 }
 

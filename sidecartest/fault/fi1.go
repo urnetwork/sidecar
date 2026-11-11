@@ -134,6 +134,24 @@ func (self *evsOracleMemory) authorizationView(networkId sidecar.Id) sidecar.Gkm
 	return self.authorizationViews[networkId]
 }
 
+// The refs of the repo whose heads an earlier check saw, from headVersions' keys.
+func (self *evsOracleMemory) seenRefIds(repoId sidecar.Id) []sidecar.Id {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	prefix := repoId.String() + "/"
+	refIds := []sidecar.Id{}
+	for key := range self.headVersions {
+		refText, ok := strings.CutPrefix(key, prefix)
+		if !ok {
+			continue
+		}
+		if refId, err := sidecar.ParseId(refText); err == nil {
+			refIds = append(refIds, refId)
+		}
+	}
+	return refIds
+}
+
 // An object decoded once, by cluster, key and ETag: immutable families never change under one ETag.
 func (self *evsOracleMemory) decodedObject(object *StoreObject, decode func(body []byte) (any, error)) (any, error) {
 	cacheKey := object.ClusterId + "\x00" + object.Key + "\x00" + object.Etag
@@ -487,6 +505,28 @@ func (self *evsStoreWalker) walkRepo(repoId sidecar.Id) *evsStoreRepo {
 		repo.fail("heads: %v", err)
 		return repo
 	}
+	// On stock MinIO a LIST can leave out a key whose overwrite is in flight, every drive online, where a GET of the
+	// key does not (question evs1-m2-41-list-drops-overwritten-key), and a reader reads a ref it knows by its key. So
+	// a head an earlier check saw and this LIST left out is read by its key, and only one its key no longer holds is
+	// gone.
+	listedKeys := map[string]bool{}
+	for _, head := range heads {
+		listedKeys[head.Key] = true
+	}
+	for _, refId := range self.memory.seenRefIds(repoId) {
+		if listedKeys[evsOracleRepoPrefix("head/", repoId)+sidecar.EvsKeyId(refId)] {
+			continue
+		}
+		head, err := self.view.Head(self.ctx, repoId, refId)
+		if err != nil {
+			repo.fail("the head of ref %s: %v", refId, err)
+			continue
+		}
+		if head != nil {
+			heads = append(heads, head)
+		}
+	}
+	slices.SortFunc(heads, func(a *StoreHead, b *StoreHead) int { return strings.Compare(a.Key, b.Key) })
 	for _, head := range heads {
 		refId, err := sidecar.IdFromBytes(head.RefId)
 		if err != nil {
@@ -1065,20 +1105,22 @@ func fi1CheckContent(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, se
 
 func fi1CheckSlot(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, slotId []byte, erased map[string]bool) []error {
 	key := evsOracleSlotKey(repo.repoId, slotId)
-	if repo.slotInfos[key] == nil {
-		return []error{fmt.Errorf("repo %s: %s, which a committed version names, is gone", repo.repoId, key)}
-	}
 	introduction := repo.slotIntroductions[hex.EncodeToString(slotId)]
-	if introduction == nil {
+	if repo.slotInfos[key] != nil && introduction == nil {
 		// a slot no committed push in the walk introduced: its presence is all that is known of it
 		return nil
 	}
+	// read by its key, so a slot the LIST left out is gone only when its key holds nothing: an ERASE rewrites a slot in
+	// place, and a LIST can leave out a key whose overwrite is in flight (walkRepo)
 	object, err := oracle.View.Object(ctx, repo.clusterId, key)
 	if err != nil {
 		return []error{err}
 	}
 	if object == nil {
 		return []error{fmt.Errorf("repo %s: %s, which a committed version names, is gone", repo.repoId, key)}
+	}
+	if introduction == nil {
+		return nil
 	}
 	slot, err := sidecar.EvsDecodeSlotObject(object.Body)
 	if err != nil {
