@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // A ref of a repo of its own.
@@ -79,6 +80,7 @@ func TestHistoryKeepsAMalformedOperationAndNamesIt(t *testing.T) {
 		{Kind: OperationPush, Actor: "writerA", Instance: "evs2", Ref: ref, PushId: pushId, Call: 3, Outcome: OutcomeUnknown},
 		{Kind: OperationPush, Actor: "writerA", Instance: "evs2", Ref: ref, PushId: pushId, Call: 3, Return: 4, Outcome: OutcomeUnknown},
 		{Kind: OperationPush, Actor: "writerB", Ref: ref, PushId: sidecar.NewId(), Call: 5, Return: 5, Outcome: OutcomeAborted},
+		{Kind: OperationPush, Actor: "writerB", Ref: ref, PushId: sidecar.NewId(), Call: 5, Return: 6, Outcome: OutcomeAborted, Code: protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING},
 		{Kind: OperationRead, Actor: "reader", Ref: ref, Call: 6, Return: 7, Outcome: OutcomeCommitted},
 		{Kind: OperationRead, Actor: "reader", Ref: ref, PushId: pushId, Call: 6, Return: 7, Outcome: OutcomeCommitted, Version: 1},
 		{Kind: OperationRead, Actor: "reader", Ref: ref, Call: 8, Outcome: OutcomeUnknown},
@@ -107,6 +109,8 @@ func TestHistoryKeepsAMalformedOperationAndNamesIt(t *testing.T) {
 		{operation: &Operation{Kind: OperationPush, Ref: ref, PushId: pushId, Return: 2, Outcome: OutcomeCommitted, Version: 1}, problem: "before the history's clock starts"},
 		{operation: &Operation{Kind: OperationPush, Ref: ref, PushId: pushId, Call: 1, Outcome: OutcomeCommitted, Version: 1}, problem: "only an unknown outcome may lack"},
 		{operation: &Operation{Kind: OperationPush, Ref: ref, PushId: pushId, Call: 4, Return: 3, Outcome: OutcomeAborted}, problem: "before its call"},
+		{operation: &Operation{Kind: OperationPush, Ref: ref, PushId: pushId, Call: 1, Return: 2, Outcome: OutcomeCommitted, Version: 1, Code: protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING}, problem: "a push that was not refused"},
+		{operation: &Operation{Kind: OperationRead, Ref: ref, Call: 1, Return: 2, Outcome: OutcomeCommitted, Code: protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING}, problem: "a refusal code, EVS_REFUSAL_SHREDDING, on a read"},
 	}
 	history := NewHistory("malformed")
 	for _, operation := range valid {

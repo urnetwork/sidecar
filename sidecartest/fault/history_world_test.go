@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -164,7 +165,7 @@ func TestEvsWorldHistoryOfARefusal(t *testing.T) {
 			continue
 		}
 		abortedCount += 1
-		if operation.PushId != refused.PushId || operation.Actor != "writerA" || operation.Instance != "evs1" || !strings.Contains(operation.Answer, "PATH_CONFLICT") {
+		if operation.PushId != refused.PushId || operation.Actor != "writerA" || operation.Instance != "evs1" || operation.Code != protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT || !strings.Contains(operation.Answer, "PATH_CONFLICT") {
 			t.Errorf("an aborted operation other than A's refusal: %s", operation)
 		}
 	}

@@ -116,6 +116,10 @@ type Operation struct {
 	Outcome Outcome
 	// A commit's version, or the version a read was served, 0 naming the ref absent. 0 for any other outcome.
 	Version uint64
+	// An aborted push's refusal code, as evs answered it, or zero where the recorder does not know it. SHREDDING binds
+	// less than the rest: FI-2 lets an attempt validated before its repo's shred began commit after another's
+	// SHREDDING refusal, since the shred destroys what it commits (I-EVS-3).
+	Code protocol.EvsRefusalCode
 	// What answered it, for a person reading a failing check: "evs2 200 v63".
 	Answer string
 }
@@ -140,7 +144,13 @@ func (self *Operation) Validate() error {
 		default:
 			problems = append(problems, fmt.Sprintf("no outcome (%v)", self.Outcome))
 		}
+		if self.Code != protocol.EvsRefusalCode(0) && self.Outcome != OutcomeAborted {
+			problems = append(problems, fmt.Sprintf("a refusal code, %s, on a push that was not refused", self.Code))
+		}
 	case OperationRead:
+		if self.Code != protocol.EvsRefusalCode(0) {
+			problems = append(problems, fmt.Sprintf("a refusal code, %s, on a read", self.Code))
+		}
 		switch self.Outcome {
 		case OutcomeCommitted:
 			if self.Version == 0 && self.PushId != (sidecar.Id{}) {
@@ -314,6 +324,7 @@ func (self *EvsWorld) History(name string) *History {
 			operation.Answer = answer.String()
 		case answer.Refuses() && answer.Code != protocol.EvsRefusalCode_EVS_REFUSAL_PARTS_MISSING:
 			operation.Outcome = OutcomeAborted
+			operation.Code = answer.Code
 			operation.Answer = answer.String()
 		default:
 			continue
