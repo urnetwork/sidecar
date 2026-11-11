@@ -85,13 +85,15 @@ func TestEvsOneChangeWithLargeSectionsGoesInParts(t *testing.T) {
 	}
 }
 
-// A push with no change has no root a statement can state, so one past 1 MiB has no shape and is refused before
-// anything is signed.
-func TestEvsPushPastOneMiBWithNoChangeIsRefused(t *testing.T) {
+// A push with no change past 1 MiB goes in parts, every part changeless, under the root of zero parts with changes
+// (QD-658), and the seal check takes its parts back whole: what was refused before signing until the question was
+// answered.
+func TestEvsPushPastOneMiBWithNoChangeGoesInParts(t *testing.T) {
 	signer := newEvsTestSigner("writer")
 	plan := evsTestChangelessPlan(t, signer, 0, 1536*1024)
-	if _, err := NewEvsStatementBuilder(signer.sign).Build(plan); !errors.Is(err, ErrEvsPushInvalid) {
-		t.Errorf("a push past 1 MiB with no change: %v", err)
+	built, checked := evsTestBuildAndCheck(t, signer, plan)
+	if built.Statement.Push.GetPartCount() < 2 || len(checked.Changes) != 0 {
+		t.Errorf("a push past 1 MiB with no change: %d parts, %d changes", built.Statement.Push.GetPartCount(), len(checked.Changes))
 	}
 }
 

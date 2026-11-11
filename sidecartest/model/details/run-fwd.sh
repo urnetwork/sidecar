@@ -17,7 +17,7 @@ ROOT=/Users/builder/urnetwork-sidecar
 track=$1
 shift
 designs="Fwd Fwd-Rollback Fwd-Live"
-twins="FwdTwin-NoDelegationOverlay FwdTwin-OverlayLifts FwdTwin-OverlayOpens FwdTwin-StateDropsOverlay FwdTwin-LowerStateAccepted FwdTwin-NoFloor"
+twins="FwdTwin-NoDelegationOverlay FwdTwin-OverlayLifts FwdTwin-OverlayOpens FwdTwin-StateDropsOverlay FwdTwin-LowerStateAccepted FwdTwin-NoFloor FwdTwin-RepeatsOnly"
 reaches="FwdReach-NoCompile FwdReach-NoCompileLive"
 case "${1:-all}" in
   all) set -- $designs $twins $reaches ;;

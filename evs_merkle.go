@@ -244,12 +244,17 @@ func NewEvsChangeTree(changes [][]byte) (*EvsChangeTree, error) {
 	return &EvsChangeTree{runs: runs}, nil
 }
 
-// The trees of a push in parts, over the parts that hold changes, in part order: 1 to 1,024 of them, none empty,
+// The trees of a push in parts, over the parts that hold changes, in part order: up to 1,024 of them, none empty,
 // their changes ascending across all of them. A changeless part is no leaf (DESIGN-DETAILS 8.2.2's parts row), so a
-// push whose changes fit one part and whose other sections did not is a tree of one part.
+// push whose changes fit one part and whose other sections did not is a tree of one part, and a push with no change,
+// every part changeless, a tree of none whose root is SHA-256 of no bytes (QD-658).
 func NewEvsPartedChangeTree(parts [][][]byte) (*EvsChangeTree, error) {
-	if len(parts) < 1 || EvsMaxPartCount < len(parts) {
+	if EvsMaxPartCount < len(parts) {
 		return nil, fmt.Errorf("%w: %d parts", ErrEvsMerkleInvalid, len(parts))
+	}
+	if len(parts) == 0 {
+		// a push in parts with no change (QD-658): the root of zero parts with changes, SHA-256 of no bytes
+		return &EvsChangeTree{partTree: NewEvsMerkleTree(nil)}, nil
 	}
 	runs, err := newEvsChangeRuns(parts)
 	if err != nil {
@@ -364,6 +369,10 @@ func (self *EvsChangeTree) position(tokenPath EvsTokenPath) (int, int, bool) {
 // The adjacent leaves around tokenPath with their proofs, refused when the push changed tokenPath itself. One
 // absence proof speaks for one path: a reader asks it for the path and for each prefix EvsAbsencePaths names.
 func (self *EvsChangeTree) AbsenceProof(tokenPath EvsTokenPath) (*protocol.EvsAbsenceProof, error) {
+	if len(self.runs) == 0 {
+		// a push of no change has no leaf to stand beside: its changed_prefixes reach no path, so no reader asks
+		return nil, fmt.Errorf("%w: an absence in a push of no change", ErrEvsMerkleInvalid)
+	}
 	part, index, present := self.position(tokenPath)
 	if present {
 		return nil, fmt.Errorf("%w: the push changed the path", ErrEvsMerkleInvalid)
