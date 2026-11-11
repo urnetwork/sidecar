@@ -671,13 +671,46 @@ func (self *EvsWorld) buildInstance(ctx context.Context, host *sidecar.ServiceHo
 		deps.Hdd.RetryAfter = self.settings.HddInterval
 		deps.Hdd.PutReportTtl = 3 * self.settings.HddInterval
 	}
+	var built EvsTierHost
 	if tier := evsTierOf(self.net); tier != nil && tier.NewHost != nil {
-		return tier.NewHost(ctx, host, settings, deps)
+		tierHost, err := tier.NewHost(ctx, host, settings, deps)
+		if err != nil {
+			return nil, err
+		}
+		built = tierHost
+	} else {
+		if self.settings.Capture {
+			deps.Log = self.net.Capture().Logger("evs " + instance)
+		}
+		worldHost, err := newEvsWorldHost(ctx, host, settings, deps)
+		if err != nil {
+			return nil, err
+		}
+		built = worldHost
 	}
-	if self.settings.Capture {
-		deps.Log = self.net.Capture().Logger("evs " + instance)
+	// serving before the step that starts it ends: its readiness probe runs on a goroutine of its own, and a request
+	// it took first would answer 503 however long the schedule waited
+	if err := self.awaitReady(built); err != nil {
+		built.Close()
+		return nil, fmt.Errorf("evs instance %s: %w", instance, err)
 	}
-	return newEvsWorldHost(ctx, host, settings, deps)
+	return built, nil
+}
+
+// The engine's first probe answered and it is ready. Real time bounds the wait only to fail it.
+func (self *EvsWorld) awaitReady(host EvsTierHost) error {
+	guard := time.After(self.settings.StepEightTimeout)
+	for {
+		count, changed := host.Engine().Probes()
+		if 0 < count && host.Ready() {
+			return nil
+		}
+		select {
+		case <-changed:
+		case <-guard:
+			return errors.New("never ready")
+		}
+	}
 }
 
 // T2's block: evsservice's engine with the segment route's parts as server/cli/evs builds them (evshost.NewHost).
