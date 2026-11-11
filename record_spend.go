@@ -53,6 +53,8 @@ import (
 	"slices"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
@@ -98,6 +100,8 @@ const (
 	SpendRefusalGateField SpendRefusalCode = "gate_field"
 	// The inputs or the state cannot be judged: none given, or a state that holds no keys.
 	SpendRefusalState SpendRefusalCode = "state"
+	// An ApprovalCancel that names another approval, or does not parse.
+	SpendRefusalCancel SpendRefusalCode = "cancel"
 )
 
 // One refusal: its code and what did not hold, ids and positions only (I-13).
@@ -384,6 +388,86 @@ func spendUnderRule(decision *StoredApprovalDecision, rule SpendRule) *SpendRefu
 	}
 	if !slices.Contains(evidence, protocol.ApprovalChannel(body.GetChannel())) {
 		return spendRefuse(SpendRefusalEvidence, nil)
+	}
+	return nil
+}
+
+// The ApprovalCancel a server gate (POST /approval/cancel) or the requesting daemon takes for decision (§16.6's cancel
+// row): the decision verifies under its signer as the spend check resolves it, and the cancel is §6.9's Signed of type
+// SIGNED_APPROVAL_CANCEL under purpose approval, naming the decision's approval_id, signed by its approver, an
+// approval-capable device of d.approver_member_id at P or a presence key registered to that member. A cancel only takes
+// uses away, so neither expiry, the pin nor the approver's eligibility bars one. nil, or a *SpendRefusal.
+func CheckApprovalCancel(cancel *bridge.Signed, decision *StoredApprovalDecision, state SpendState) error {
+	if cancel == nil || decision == nil || decision.Decision == nil || decision.Signed == nil || state == nil {
+		return spendRefuse(SpendRefusalState, errors.New("nothing to judge"))
+	}
+	if refusal := spendVerifyDecision(decision, state); refusal != nil {
+		return refusal
+	}
+	if cancel.GetType() != uint32(bridge.SignedType_SIGNED_APPROVAL_CANCEL) {
+		return spendRefuse(SpendRefusalCancel, fmt.Errorf("a Signed of type %#x", cancel.GetType()))
+	}
+	body := &protocol.ApprovalCancel{}
+	if err := proto.Unmarshal(cancel.GetBody(), body); err != nil || len(body.ProtoReflect().GetUnknown()) != 0 {
+		return spendRefuse(SpendRefusalCancel, errors.New("a cancel that does not parse"))
+	}
+	if !bytes.Equal(body.GetApprovalId(), decision.Decision.GetApprovalId()) {
+		return spendRefuse(SpendRefusalCancel, errors.New("a cancel of another approval"))
+	}
+	approver := recordIdOf(decision.Decision.GetApproverMemberId())
+	if len(cancel.GetKeyId()) != 0 {
+		key := state.PresenceKey(cancel.GetKeyId(), approver)
+		if key == nil {
+			return spendRefuse(SpendRefusalSigner, fmt.Errorf("no live presence key of member %s under its key_id", approver))
+		}
+		if err := VerifyPresenceUse(cancel, ApprovalPurpose, bridge.SignedType_SIGNED_APPROVAL_CANCEL, key, nil); err != nil {
+			return spendRefuse(SpendRefusalSignature, err)
+		}
+		return nil
+	}
+	signerId, err := IdFromBytes(cancel.GetSignerId())
+	if err != nil {
+		return spendRefuse(SpendRefusalSigner, errors.New("no sidecar's identity key signs the cancel"))
+	}
+	if !state.ApprovalCapable(signerId, approver) {
+		return spendRefuse(SpendRefusalSigner, fmt.Errorf("sidecar %s is no approval-capable device of member %s", signerId, approver))
+	}
+	identityKey := state.IdentityKey(signerId)
+	if identityKey == nil {
+		return spendRefuse(SpendRefusalSigner, fmt.Errorf("sidecar %s has no identity key at P", signerId))
+	}
+	if err := bridge.VerifySigned(cancel, ApprovalPurpose, bridge.SignedType_SIGNED_APPROVAL_CANCEL, bridge.SignedKeyAlgEd25519, identityKey); err != nil {
+		return spendRefuse(SpendRefusalSignature, err)
+	}
+	return nil
+}
+
+// That a decision verifies under the key its channel names, as spendDecision resolves it, nothing more.
+func spendVerifyDecision(decision *StoredApprovalDecision, state SpendState) *SpendRefusal {
+	signed := decision.Signed
+	switch protocol.ApprovalChannel(decision.Decision.GetChannel()) {
+	case protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE, protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS:
+		signerId, err := IdFromBytes(signed.GetSignerId())
+		if err != nil || len(signed.GetKeyId()) != 0 {
+			return spendRefuse(SpendRefusalSigner, errors.New("no sidecar's identity key signs it"))
+		}
+		identityKey := state.IdentityKey(signerId)
+		if identityKey == nil {
+			return spendRefuse(SpendRefusalSigner, fmt.Errorf("sidecar %s has no identity key at P", signerId))
+		}
+		if err := decision.Verify(bridge.SignedKeyAlgEd25519, identityKey); err != nil {
+			return spendRefuse(SpendRefusalSignature, err)
+		}
+	case protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE:
+		key := state.PresenceKey(signed.GetKeyId(), recordIdOf(decision.Decision.GetApproverMemberId()))
+		if key == nil {
+			return spendRefuse(SpendRefusalSigner, errors.New("no live presence key of the approver under its key_id"))
+		}
+		if err := VerifyPresenceUse(signed, ApprovalPurpose, bridge.SignedType_SIGNED_APPROVAL_DECISION, key, nil); err != nil {
+			return spendRefuse(SpendRefusalSignature, err)
+		}
+	default:
+		return spendRefuse(SpendRefusalSigner, fmt.Errorf("channel %d", decision.Decision.GetChannel()))
 	}
 	return nil
 }

@@ -1286,3 +1286,38 @@ func TestSpendVectors(t *testing.T) {
 		testSpendExpect(t, vector.name, testSpendRun(t, vector), vector.refusal)
 	}
 }
+
+// CheckApprovalCancel: the approver's device or presence key cancels its decision, whatever the decision's expiry; a
+// cancel another member's device signed, one naming another approval, one over a decision whose signature fails, and
+// one of another type are refused.
+func TestApprovalCancelIsTheApprovers(t *testing.T) {
+	net := newTestSpendNet(t)
+	key := newTestPresenceKey(t, "spend cancel presence", bridge.KeyAlg_KEY_ALG_ECDSA_P256_SHA256)
+	net.registerPresenceKey(net.phone, key)
+	state := net.spendState(false, spendAllChannels)
+	action := testSpendDnsAction(t, "192.0.2.70")
+	approvalId := NewId()
+	body := testSpendDecisionBody(action, approvalId, net.member, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE, net.laptop.sidecarId,
+		net.log.State().Pin(), net.timeMs-testConfigHourMs)
+	decision := testSpendParse(t, testSpendSignedBy(t, net.phone.sidecarId, net.phone.key, body))
+	cancelBody := func(id Id) *protocol.ApprovalCancel { return &protocol.ApprovalCancel{ApprovalId: id.Bytes()} }
+	signCancel := func(device testConfigDevice, id Id) *bridge.Signed {
+		bodyBytes := testConfigMarshal(t, cancelBody(id))
+		return &bridge.Signed{
+			Body: bodyBytes, SignerId: device.sidecarId.Bytes(), Type: uint32(bridge.SignedType_SIGNED_APPROVAL_CANCEL),
+			Signature: ed25519.Sign(device.key, bridge.SignedBytes(ApprovalPurpose, bridge.SignedType_SIGNED_APPROVAL_CANCEL, bodyBytes)),
+		}
+	}
+	testSpendExpect(t, "the approver's device, past the decision's expiry", CheckApprovalCancel(signCancel(net.phone, approvalId), decision, state), "")
+	presenceCancel := key.sign(t, testGoodPresenceAssertion(), ApprovalPurpose, bridge.SignedType_SIGNED_APPROVAL_CANCEL, testConfigMarshal(t, cancelBody(approvalId)))
+	testSpendExpect(t, "the approver's presence key", CheckApprovalCancel(presenceCancel, decision, state), "")
+	testSpendExpect(t, "another member's device", CheckApprovalCancel(signCancel(net.otherDevice, approvalId), decision, state), SpendRefusalSigner)
+	testSpendExpect(t, "another approval", CheckApprovalCancel(signCancel(net.phone, NewId()), decision, state), SpendRefusalCancel)
+	asDecision := signCancel(net.phone, approvalId)
+	asDecision.Type = uint32(bridge.SignedType_SIGNED_APPROVAL_DECISION)
+	testSpendExpect(t, "a cancel of another type", CheckApprovalCancel(asDecision, decision, state), SpendRefusalCancel)
+	forged := testSpendParse(t, testSpendSignedBy(t, net.phone.sidecarId, net.phone.key, body))
+	forged.Signed.Signature = bytes.Repeat([]byte{1}, 64)
+	testSpendExpect(t, "a decision whose signature fails", CheckApprovalCancel(signCancel(net.phone, approvalId), forged, state), SpendRefusalSignature)
+	testSpendExpect(t, "nothing", CheckApprovalCancel(nil, decision, state), SpendRefusalState)
+}
