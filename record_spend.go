@@ -487,7 +487,7 @@ func NewSpendCheck(settings *SpendSettings) *SpendCheck {
 	return &SpendCheck{settings: settings}
 }
 
-// Spendable on S(n-1) at the entry's time. A state over any view but a ConfigState holds no keys, so it refuses.
+// §16.6's check on S(n-1) at the entry's time. A state over any view but a ConfigState holds no keys, so it refuses.
 func (self *SpendCheck) Spendable(state *AclState, decision *StoredApprovalDecision, action *StoredCanonicalAction, spender Id, pin *bridge.AuthPin, now time.Time) error {
 	if state == nil {
 		return spendRefuse(SpendRefusalState, errors.New("no state"))

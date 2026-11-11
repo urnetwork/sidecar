@@ -49,6 +49,7 @@ type testSpendNet struct {
 	otherDevice testConfigDevice
 }
 
+// The network, each device checked approval-capable for its member.
 func newTestSpendNet(t *testing.T) *testSpendNet {
 	t.Helper()
 	net := newTestConfigNet(t)
@@ -719,27 +720,33 @@ type testSpendFixtureRule struct {
 	adminNeeded   bool
 }
 
+// The fixture's pin.
 func (self *testSpendFixtureState) Pin() *bridge.AuthPin {
 	return self.pin
 }
 
+// The fixture's retained digest at version.
 func (self *testSpendFixtureState) ChainAt(version uint64) ([sha256.Size]byte, bool) {
 	chain, ok := self.chains[version]
 	return chain, ok
 }
 
+// Whether the fixture says forked.
 func (self *testSpendFixtureState) Forked() bool {
 	return self.forked
 }
 
+// The fixture's key of the sidecar.
 func (self *testSpendFixtureState) IdentityKey(sidecarId Id) []byte {
 	return self.identityKeys[sidecarId]
 }
 
+// Whether the fixture lists the pair.
 func (self *testSpendFixtureState) ApprovalCapable(sidecarId Id, memberId Id) bool {
 	return self.approvalCapable[[2]Id{sidecarId, memberId}]
 }
 
+// The fixture's row of key_id when it is the member's.
 func (self *testSpendFixtureState) PresenceKey(keyId []byte, memberId Id) *bridge.KeyRow {
 	for _, key := range self.presenceKeys {
 		if bytes.Equal(key.GetKeyId(), keyId) && bytes.Equal(key.GetMemberId(), memberId.Bytes()) {
@@ -749,6 +756,7 @@ func (self *testSpendFixtureState) PresenceKey(keyId []byte, memberId Id) *bridg
 	return nil
 }
 
+// The fixture's rule, or a refusal where it says so.
 func (self *testSpendFixtureState) Govern(action *StoredCanonicalAction, spender Id, now time.Time) (SpendRule, error) {
 	if self.rule.refused {
 		return nil, ErrAclRequestNoMatch
@@ -756,18 +764,22 @@ func (self *testSpendFixtureState) Govern(action *StoredCanonicalAction, spender
 	return self.rule, nil
 }
 
+// The fixture's list and whether it is known.
 func (self *testSpendFixtureRule) Evidence() ([]protocol.ApprovalChannel, bool) {
 	return self.evidence, self.evidenceKnown
 }
 
+// The fixture's k.
 func (self *testSpendFixtureRule) ApproverCount() int {
 	return self.count
 }
 
+// Listed eligible, or an admin where the clause applies.
 func (self *testSpendFixtureRule) Eligible(memberId Id) bool {
 	return slices.Contains(self.eligible, memberId) || (self.adminNeeded && slices.Contains(self.admins, memberId))
 }
 
+// An admin among them where the clause applies.
 func (self *testSpendFixtureRule) AdminClauseMet(memberIds []Id) bool {
 	return !self.adminNeeded || slices.ContainsFunc(memberIds, func(memberId Id) bool { return slices.Contains(self.admins, memberId) })
 }
@@ -801,6 +813,7 @@ type testSpendWorld struct {
 	approvalId, otherApprovalId Id
 }
 
+// The world, its keys from fixed seeds.
 func newTestSpendWorld(t testing.TB) *testSpendWorld {
 	world := &testSpendWorld{
 		member:          testConfigId("spend vector member"),
@@ -1046,6 +1059,7 @@ type testSpendVectorFile struct {
 	Vectors []testSpendVectorJson `json:"vectors"`
 }
 
+// One vector in the file.
 type testSpendVectorJson struct {
 	Name      string             `json:"name"`
 	State     testSpendStateJson `json:"state"`
@@ -1058,6 +1072,7 @@ type testSpendVectorJson struct {
 	Refusal   string             `json:"refusal"`
 }
 
+// A vector's state in the file.
 type testSpendStateJson struct {
 	Pin             testSpendPinJson        `json:"pin"`
 	Chains          []testSpendPinJson      `json:"chains"`
@@ -1068,21 +1083,25 @@ type testSpendStateJson struct {
 	Rule            testSpendRuleJson       `json:"rule"`
 }
 
+// A pin or a retained digest in the file.
 type testSpendPinJson struct {
 	Version uint64 `json:"version"`
 	Chain   string `json:"chain"`
 }
 
+// An identity key in the file.
 type testSpendIdentityJson struct {
 	SidecarId string `json:"sidecar_id"`
 	PublicKey string `json:"public_key"`
 }
 
+// An approval-capable device of a member in the file.
 type testSpendDeviceJson struct {
 	SidecarId string `json:"sidecar_id"`
 	MemberId  string `json:"member_id"`
 }
 
+// The governing rule in the file.
 type testSpendRuleJson struct {
 	Refused       bool     `json:"refused"`
 	EvidenceKnown bool     `json:"evidence_known"`
