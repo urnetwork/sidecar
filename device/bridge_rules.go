@@ -203,7 +203,11 @@ func checkBridgeRules(rules *bridge.BridgeRules) error {
 	if err != nil {
 		return err
 	}
-	return checkBridgeRulesEgress(rules)
+	err = checkBridgeRulesEgress(rules)
+	if err != nil {
+		return err
+	}
+	return checkBridgeRulesUntagged(rules)
 }
 
 // A malformed-rules error at a row.
@@ -581,25 +585,62 @@ func checkBridgeRulesSubjects(rules *bridge.BridgeRules) error {
 			}
 			clientIds[string(clientId)] = true
 		}
-		reachRows := []struct {
-			name     string
-			rows     []*bridge.BridgeRuleReach
-			routeRow bool
-		}{
-			{name: "dial", rows: subject.GetDial()},
-			{name: "route", rows: subject.GetRoute(), routeRow: true},
-			{name: "exit", rows: subject.GetExit()},
+		err = checkBridgeRuleSubjectReach(row, subject)
+		if err != nil {
+			return err
 		}
-		for _, reachRow := range reachRows {
-			for j, reach := range reachRow.rows {
-				err := checkBridgeRuleReach(fmt.Sprintf("%s.%s[%d]", row, reachRow.name, j), reach, reachRow.routeRow)
-				if err != nil {
-					return err
-				}
+	}
+	return nil
+}
+
+// A subject's rows of reach: dial and exit rows with no prefix, route rows with one, each as checkBridgeRuleReach has
+// it.
+func checkBridgeRuleSubjectReach(row string, subject *bridge.BridgeRuleSubject) error {
+	reachRows := []struct {
+		name     string
+		rows     []*bridge.BridgeRuleReach
+		routeRow bool
+	}{
+		{name: "dial", rows: subject.GetDial()},
+		{name: "route", rows: subject.GetRoute(), routeRow: true},
+		{name: "exit", rows: subject.GetExit()},
+	}
+	for _, reachRow := range reachRows {
+		for j, reach := range reachRow.rows {
+			err := checkBridgeRuleReach(fmt.Sprintf("%s.%s[%d]", row, reachRow.name, j), reach, reachRow.routeRow)
+			if err != nil {
+				return err
 			}
 		}
 	}
 	return nil
+}
+
+// The rows autogroup:untagged holds at this host, which an sdk provider gives a sealed subject no row binds
+// (bridge-m4-09-other-client-rows, DESIGN-DETAILS 12.2.2): a subject's rows of reach that name no one, so no
+// sidecar_id, member_id or client_ids, and never tagged, since whatever holds them is untagged.
+func checkBridgeRulesUntagged(rules *bridge.BridgeRules) error {
+	untagged := rules.GetUntagged()
+	if untagged == nil {
+		return nil
+	}
+	ids := []struct {
+		name string
+		set  bool
+	}{
+		{name: "sidecar_id", set: 0 < len(untagged.GetSidecarId())},
+		{name: "member_id", set: 0 < len(untagged.GetMemberId())},
+		{name: "client_ids", set: 0 < len(untagged.GetClientIds())},
+	}
+	for _, id := range ids {
+		if id.set {
+			return bridgeRulesFault("untagged", "a %s on rows that name no one", id.name)
+		}
+	}
+	if untagged.GetTagged() {
+		return bridgeRulesFault("untagged", "tagged")
+	}
+	return checkBridgeRuleSubjectReach("untagged", untagged)
 }
 
 // The egress: a mode, and exits under exits alone.

@@ -291,7 +291,7 @@ func TestBridgeRouteRevokedEntryRejectsThenLeaves(t *testing.T) {
 	test := newRouteTest(t, routeTestFixture(), nil)
 	packet := routeTestUdp(routeTestSource, "192.0.2.10", 9)
 	test.awaitLink(packet)
-	if err := test.bridge.Revoke(bridge.SignedType_SIGNED_SIDECAR_REVOKE, sidecartest.BridgeFixtureSidecarId(7), 0); err != nil {
+	if err := test.bridge.Revoke(bridge.SignedType_SIGNED_SIDECAR_REVOKE, sidecartest.BridgeFixtureSidecarId(7), test.bridge.Status().PinN+1); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := test.bridge.Route(packet).(*device.BridgeRejectClient); !ok {
