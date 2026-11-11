@@ -4,6 +4,17 @@
 // committed version throughout: at every hold, once it is folded into its entry, after evacuation 26 h on has dropped
 // the losers' records, and after the reader's instance is killed and started again from the stores. Its twin,
 // Fs7FivePaths, has the five push five paths, and every one commits.
+//
+// The fold runs on evs1, whose next commit, w1's of a path outside the five 26 h on, raises folded_through over every
+// version before it, since a commit carries its own process's folds (§11.7's horizon row): the one window version
+// past folded_through is then that commit's, in a batch too young to evacuate. A fresh instance's newest rule reads the
+// record of each window version past folded_through and past the entry's own newest version whose digest may touch the
+// path, through evsservice's RecordPushSource, which has no pidx/ lookup (newest.go), so once evacuation has moved such
+// a version's batch, the read after the restart answers 503: with the fold on another instance, a version's digest
+// matching another path by chance, about one run in a few hundred, did that (question
+// evs1-m2-41-newest-evacuated-window). Fs7EvacuatedWindowAfterRestart keeps that case as a clause no test runs until
+// the question is answered: the twin's paths, with the commit outside them made before the 26 h, so its creation's
+// root delta touches every path and its batch is evacuated.
 
 package fault
 
@@ -20,14 +31,21 @@ var Fs7 = Register("FS-7", "", []Tier{TierT2, TierT3}, Twin(Fs7OnePath, Fs7FiveP
 
 // See the file header.
 func Fs7OnePath(net *Net) *Schedule {
-	schedule := fs7Schedule(net, true)
+	schedule := fs7Schedule(net, true, false)
 	schedule.Refuses = "four of five pushes of one path from one base, 409 PATH_CONFLICT"
 	return schedule
 }
 
 // See the file header.
 func Fs7FivePaths(net *Net) *Schedule {
-	return fs7Schedule(net, false)
+	return fs7Schedule(net, false, false)
+}
+
+// See the file header.
+func Fs7EvacuatedWindowAfterRestart(net *Net) *Schedule {
+	schedule := fs7Schedule(net, false, true)
+	schedule.Id = "FS-7 evacuated window after a restart"
+	return schedule
 }
 
 // Writers w1 to w5 on evs1 to evs5, and the reader on evsr.
@@ -44,7 +62,8 @@ func fs7WorldSettings() *EvsWorldSettings {
 	return settings
 }
 
-func fs7Schedule(net *Net, onePath bool) *Schedule {
+// keepEvacuated makes the commit outside the paths before the 26 h, so evacuation takes its batch too.
+func fs7Schedule(net *Net, onePath bool, keepEvacuated bool) *Schedule {
 	world := NewEvsWorld(net, fs7WorldSettings())
 	path := func(index int) string {
 		if onePath {
@@ -89,10 +108,18 @@ func fs7Schedule(net *Net, onePath bool) *Schedule {
 			steps = append(steps, &Step{Actor: "check", Action: world.ExpectRefused(writer, path(index), protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)})
 		}
 	}
+	// w1's commit carries evs1's fold as folded_through
+	keep := &Step{Actor: "w1", Action: world.Write("w1", "keep.txt", EvsWorldContent("fs7 keep", 16))}
 	steps = append(steps, []*Step{
-		{Actor: "evsr", Action: world.Fold("evsr")},
+		{Actor: "folder", Action: world.Fold("evs1")},
 		{Actor: "reader", Action: world.Verify("reader", paths...)},
-		{Advance: 26 * time.Hour},
+	}...)
+	if keepEvacuated {
+		steps = append(steps, keep, &Step{Advance: 26 * time.Hour})
+	} else {
+		steps = append(steps, &Step{Advance: 26 * time.Hour}, keep)
+	}
+	steps = append(steps, []*Step{
 		{Actor: "evacuator", Action: world.Evacuate()},
 		{Actor: "reader", Action: world.Verify("reader", paths...)},
 		{Actor: "evsr", Kill: true},

@@ -1067,6 +1067,175 @@ func TestFi1CatchesACommittedSlotDeleted(t *testing.T) {
 	fiRequireViolation(t, result, 1, "FI-6", "a committed object reclaimed")
 }
 
+// The Net's blob store with every cluster's LIST leaving out the keys drop names, as stock MinIO's LIST leaves out a
+// key whose overwrite is in flight with every drive online (question evs1-m2-41-list-drops-overwritten-key), and
+// every other request, a GET of such a key among them, served as the store serves it. Installed on the Net's host
+// before a run, so only the oracle, which reads the host's Blobs at each call, sees it; the hand world writes through
+// the cluster it took at its start.
+type fiListDropBlobs struct {
+	sidecar.BlobStore
+
+	stateLock   sync.Mutex
+	droppedKeys map[string]bool
+	// how many times a LIST left a key out
+	dropCount int
+}
+
+func newFiListDropBlobs(net *Net) *fiListDropBlobs {
+	blobs := &fiListDropBlobs{BlobStore: net.Host().Blobs, droppedKeys: map[string]bool{}}
+	net.Host().Blobs = blobs
+	return blobs
+}
+
+func (self *fiListDropBlobs) drop(keys ...string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for _, key := range keys {
+		self.droppedKeys[key] = true
+	}
+}
+
+// Whether a LIST leaves key out, counted when it does.
+func (self *fiListDropBlobs) leavesOut(key string) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.droppedKeys[key] {
+		self.dropCount += 1
+		return true
+	}
+	return false
+}
+
+func (self *fiListDropBlobs) drops() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.dropCount
+}
+
+func (self *fiListDropBlobs) wrap(cluster sidecar.BlobCluster, err error) (sidecar.BlobCluster, error) {
+	if err != nil {
+		return nil, err
+	}
+	return &fiListDropCluster{BlobCluster: cluster, blobs: self}, nil
+}
+
+func (self *fiListDropBlobs) Cluster(clusterId string) (sidecar.BlobCluster, error) {
+	return self.wrap(self.BlobStore.Cluster(clusterId))
+}
+
+func (self *fiListDropBlobs) FirstCluster() (sidecar.BlobCluster, error) {
+	return self.wrap(self.BlobStore.FirstCluster())
+}
+
+func (self *fiListDropBlobs) SegmentCluster() (sidecar.BlobCluster, error) {
+	return self.wrap(self.BlobStore.SegmentCluster())
+}
+
+type fiListDropCluster struct {
+	sidecar.BlobCluster
+	blobs *fiListDropBlobs
+}
+
+func (self *fiListDropCluster) List(ctx context.Context, keyPrefix string, startAfter string, limit int) ([]*sidecar.BlobInfo, bool, error) {
+	infos, more, err := self.BlobCluster.List(ctx, keyPrefix, startAfter, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	kept := []*sidecar.BlobInfo{}
+	for _, info := range infos {
+		if !self.blobs.leavesOut(info.Key) {
+			kept = append(kept, info)
+		}
+	}
+	return kept, more, nil
+}
+
+// main's head left out of every LIST from a step that writes the repo again, on another ref, and still read by its
+// key: FI-1 reads it by its key and holds. Taking the LIST at its word, it found main's head gone (FS-4's batched
+// epoch on T3, seed 43, while the mapper's block overwrote main's head).
+func TestFi1ReadsByKeyAHeadAListLeftOut(t *testing.T) {
+	fiRunListLeftOut(t, func(world *fiHandWorld, main sidecar.Id, slotId sidecar.Id) string {
+		return evsOracleRepoPrefix("head/", world.repoId) + sidecar.EvsKeyId(main)
+	})
+}
+
+// The slot main's push introduced, left out of every LIST as an ERASE's rewrite of it in flight would leave it out,
+// and still read by its key: FI-1 reads it by its key and holds.
+func TestFi1ReadsByKeyASlotAListLeftOut(t *testing.T) {
+	fiRunListLeftOut(t, func(world *fiHandWorld, main sidecar.Id, slotId sidecar.Id) string {
+		return evsOracleSlotKey(world.repoId, slotId.Bytes())
+	})
+}
+
+// A slot push on main, then the key left names left out of every LIST while a push on another ref writes the repo
+// again, so the check after it walks the repo anew: the run must pass, and the LIST must have left the key out.
+func fiRunListLeftOut(t *testing.T, left func(world *fiHandWorld, main sidecar.Id, slotId sidecar.Id) string) {
+	t.Helper()
+	world := newFiHandWorld(t)
+	blobs := newFiListDropBlobs(world.net)
+	main := sidecar.NewId()
+	var slotId sidecar.Id
+	steps := []*Step{
+		{Actor: "writerA", Action: func(ctx context.Context, net *Net) error {
+			var err error
+			slotId, _, err = world.slotPush(ctx, main, false)
+			return err
+		}},
+		{Actor: "writerA", Action: func(ctx context.Context, net *Net) error {
+			blobs.drop(left(world, main, slotId))
+			_, _, err := world.slotPush(ctx, sidecar.NewId(), false)
+			return err
+		}},
+	}
+	result := Run(t.Context(), &Schedule{Id: "fi1-list-left-out", Steps: steps, Check: fiChecks()}, world.net)
+	fiRequirePass(t, result)
+	if blobs.drops() == 0 {
+		t.Fatal("no LIST left the key out, so the run read nothing by key")
+	}
+}
+
+// The twin: main's head deleted, and left out of every LIST as well. Its key holds nothing, so it is gone.
+func TestFi1CatchesAHeadDeletedThatAListLeftOut(t *testing.T) {
+	world := newFiHandWorld(t)
+	blobs := newFiListDropBlobs(world.net)
+	main := sidecar.NewId()
+	headKey := evsOracleRepoPrefix("head/", world.repoId) + sidecar.EvsKeyId(main)
+	steps := []*Step{
+		{Actor: "writerA", Action: func(ctx context.Context, net *Net) error {
+			_, _, err := world.slotPush(ctx, main, false)
+			return err
+		}},
+		{Actor: "evs", Action: func(ctx context.Context, net *Net) error {
+			blobs.drop(headKey)
+			return world.cluster.Delete(ctx, headKey)
+		}},
+	}
+	result := Run(t.Context(), &Schedule{Id: "fi1-head-deleted", Steps: steps, Check: fiChecks()}, world.net)
+	fiRequireViolation(t, result, 1, "FI-1", "its head at version 1 is gone")
+}
+
+// The slot's twin: a slot a committed push introduced, deleted and left out of every LIST, is gone.
+func TestFi1CatchesASlotDeletedThatAListLeftOut(t *testing.T) {
+	world := newFiHandWorld(t)
+	blobs := newFiListDropBlobs(world.net)
+	var slotId sidecar.Id
+	main := sidecar.NewId()
+	steps := []*Step{
+		{Actor: "writerA", Action: func(ctx context.Context, net *Net) error {
+			var err error
+			slotId, _, err = world.slotPush(ctx, main, false)
+			return err
+		}},
+		{Actor: "evacuator", Action: func(ctx context.Context, net *Net) error {
+			key := evsOracleSlotKey(world.repoId, slotId.Bytes())
+			blobs.drop(key)
+			return world.cluster.Delete(ctx, key)
+		}},
+	}
+	result := Run(t.Context(), &Schedule{Id: "fi1-slot-deleted-left-out", Steps: steps, Check: fiChecks()}, world.net)
+	fiRequireViolation(t, result, 1, "FI-1", "which a committed version names, is gone")
+}
+
 // A committed PATH_EPOCH's map part deleted: FI-1 finds the map, which the ref's history needs, gone.
 func TestFi1CatchesACommittedMapPartDeleted(t *testing.T) {
 	world := newFiHandWorld(t)
