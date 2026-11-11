@@ -117,20 +117,38 @@ func (self *EvsGitRunner) environment() []string {
 // Runs git with args in dir (none: no -C), bounded by GitCommandTimeout, answering its standard output. A failure is
 // ErrEvsGitFailed with the exit status, never git's own text.
 func (self *EvsGitRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return self.RunWith(ctx, &EvsGitRunArgs{Dir: dir, Args: args})
+}
+
+// One git command beyond Run's: its standard input, and variables added to the clean environment.
+type EvsGitRunArgs struct {
+	// Absolute, or empty for no -C.
+	Dir  string
+	Args []string
+	// What `git update-ref --stdin` and `git index-pack --stdin` read; nil for none.
+	Input io.Reader
+	// NAME=value pairs beside environment()'s, such as a quarantine's object directories. Never a credential.
+	Env []string
+}
+
+// Runs one command as Run does, with its input and added variables. The exit status of a failure is in
+// EvsGitExitError, which ErrEvsGitFailed wraps.
+func (self *EvsGitRunner) RunWith(ctx context.Context, args *EvsGitRunArgs) ([]byte, error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := self.clock.AfterFunc(self.settings.GitCommandTimeout, cancel)
 	defer stop()
-	fullArgs := args
-	if dir != "" {
-		if !filepath.IsAbs(dir) {
+	fullArgs := args.Args
+	if args.Dir != "" {
+		if !filepath.IsAbs(args.Dir) {
 			return nil, fmt.Errorf("%w: a git directory by a relative path", errInvalidSettings)
 		}
-		fullArgs = append([]string{"-C", dir}, args...)
+		fullArgs = append([]string{"-C", args.Dir}, args.Args...)
 	}
 	command := exec.CommandContext(runCtx, self.gitPath, fullArgs...)
-	command.Env = self.environment()
+	command.Env = append(self.environment(), args.Env...)
 	command.Dir = self.home
+	command.Stdin = args.Input
 	stdout := &bytes.Buffer{}
 	command.Stdout = stdout
 	command.Stderr = &bytes.Buffer{}
@@ -143,9 +161,45 @@ func (self *EvsGitRunner) Run(ctx context.Context, dir string, args ...string) (
 		if errors.As(err, &exitError) {
 			exitCode = exitError.ExitCode()
 		}
-		return nil, fmt.Errorf("%w: %s exited %d", ErrEvsGitFailed, firstWordOf(args), exitCode)
+		return nil, &EvsGitExitError{Command: firstWordOf(args.Args), Code: exitCode}
 	}
 	return stdout.Bytes(), nil
+}
+
+// A git command that exited other than 0: its subcommand and exit code, never git's own text, which may name paths.
+type EvsGitExitError struct {
+	Command string
+	Code    int
+}
+
+// The subcommand and code.
+func (self *EvsGitExitError) Error() string {
+	return fmt.Sprintf("%s: %s exited %d", ErrEvsGitFailed, self.Command, self.Code)
+}
+
+// ErrEvsGitFailed.
+func (self *EvsGitExitError) Unwrap() error {
+	return ErrEvsGitFailed
+}
+
+// The exit code of a git command's failure, false for an error that is no exit.
+func EvsGitExitCode(err error) (int, bool) {
+	var exitError *EvsGitExitError
+	if errors.As(err, &exitError) {
+		return exitError.Code, true
+	}
+	return 0, false
+}
+
+// The absolute path of the git it runs.
+func (self *EvsGitRunner) Path() string {
+	return self.gitPath
+}
+
+// The environment git runs in, for a command the caller starts itself, such as git-receive-pack behind a front,
+// with extra added: nothing of the daemon's own.
+func (self *EvsGitRunner) Environment(extra ...string) []string {
+	return append(self.environment(), extra...)
 }
 
 // The git subcommand, for an error that names no path.
@@ -168,12 +222,17 @@ type EvsGitProcess struct {
 
 // Starts git with args in dir, which must be absolute.
 func (self *EvsGitRunner) Start(ctx context.Context, dir string, args ...string) (*EvsGitProcess, error) {
+	return self.StartWith(ctx, dir, nil, args...)
+}
+
+// Starts git as Start does, env added to the clean environment: a hook's quarantine.
+func (self *EvsGitRunner) StartWith(ctx context.Context, dir string, env []string, args ...string) (*EvsGitProcess, error) {
 	if !filepath.IsAbs(dir) {
 		return nil, fmt.Errorf("%w: a git directory by a relative path", errInvalidSettings)
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	command := exec.CommandContext(runCtx, self.gitPath, append([]string{"-C", dir}, args...)...)
-	command.Env = self.environment()
+	command.Env = append(self.environment(), env...)
 	command.Dir = self.home
 	command.Stderr = io.Discard
 	stdin, err := command.StdinPipe()

@@ -269,7 +269,8 @@ func TestInstanceFlagIsGlobal(t *testing.T) {
 	}
 }
 
-// Run as git-remote-ur, ur goes to that entry, which §11's track registers; until then it refuses.
+// Run as git-remote-ur, ur goes to that entry, which §11's track registers (git_remote_ur.go): a remote that is no
+// ur://<net>/<repo> is refused there.
 func TestGitRemoteUrDispatches(t *testing.T) {
 	cli, _, stderr := newTestUrCli("unused")
 	if code := cli.main(context.Background(), []string{"/usr/local/bin/git-remote-ur", "origin", "ur://x"}); code != urExitFailed {
@@ -285,12 +286,12 @@ func TestGitRemoteUrDispatches(t *testing.T) {
 func TestGitRemoteUrDispatchesOnItsWindowsNames(t *testing.T) {
 	for _, name := range []string{"/u/git-remote-ur.exe", "/u/GIT-REMOTE-UR.EXE", "/u/Git-Remote-Ur.Exe", "git-remote-ur"} {
 		cli, _, stderr := newTestUrCli("unused")
-		if code := cli.main(context.Background(), []string{name, "origin", "ur://x"}); code != urExitFailed || !strings.Contains(stderr.String(), "git remote helper") {
+		if code := cli.main(context.Background(), []string{name, "origin", "ur://x"}); code != urExitFailed || !strings.Contains(stderr.String(), "a remote is ur://<net>/<repo>") {
 			t.Errorf("%s: exit %d, %q", name, code, stderr.String())
 		}
 	}
 	cli, _, stderr := newTestUrCli("unused")
-	if code := cli.main(context.Background(), []string{"/u/git-remote-ur-other", "origin"}); code == urExitFailed && strings.Contains(stderr.String(), "git remote helper") {
+	if code := cli.main(context.Background(), []string{"/u/git-remote-ur-other", "origin"}); code == urExitFailed && strings.Contains(stderr.String(), "a remote is ur://<net>/<repo>") {
 		t.Errorf("another name reached the git remote helper")
 	}
 }

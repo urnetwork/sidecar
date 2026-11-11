@@ -382,10 +382,14 @@ func (self *EvsRepo) exportFileRef(ctx context.Context, writer *evsGitObjectWrit
 			if len(pathNames) == 0 || bytes.Equal(pathNames[0], []byte(evsExportSkippedDirectory)) {
 				continue
 			}
-			oid, err := self.exportBlob(ctx, writer, head, keys, statement, change)
+			file, err := self.exportBlob(ctx, writer, head, keys, statement, change)
 			if err != nil {
 				return nil, nil, err
 			}
+			if file == nil {
+				return nil, nil, fmt.Errorf("%w: a file-mode change of no file", ErrEvsExport)
+			}
+			oid := &file.oid
 			fields, err := EvsOpenFields(fieldsKey, entry.GetSealedFields())
 			if err != nil {
 				self.client.alarm(self.repoId, head.RefId, SidecarEvsAlarmTamper, "", nil)

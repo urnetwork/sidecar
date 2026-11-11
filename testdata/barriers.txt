@@ -140,11 +140,18 @@ barrier evs.head.read.after evsservice/head.go
 barrier evs.head.read.before evsservice/head.go
 barrier evs.lease.cas.after evsservice/push_lease.go
 barrier evs.lease.cas.before evsservice/push_lease.go
+barrier evs.local.apply.done evs_local_apply.go
+barrier evs.local.apply.ref evs_local_apply.go
+barrier evs.local.apply.state evs_local_sync.go
 barrier evs.local.import.clean_deleted evs_local_import.go
 barrier evs.local.import.helper_done evs_local_import.go
 barrier evs.local.import.helper_pushed evs_local_import.go
 barrier evs.local.import.helper_recorded evs_local_import.go
 barrier evs.local.import.step_sent evs_local_import.go
+barrier evs.local.publish.answer evs_local_receive.go
+barrier evs.local.publish.sent evs_local_receive.go
+barrier evs.local.queue.send evs_local_receive.go
+barrier evs.local.receive.local evs_local_receive.go
 barrier evs.log_page.put.after evsservice/logpage.go
 barrier evs.log_page.put.before evsservice/logpage.go
 barrier evs.migrate.raise.after evsservice/repo_format.go
@@ -481,6 +488,8 @@ secret dns_zsk dnsservice/keyset.go
 secret edge_server_handshake_iv smtpproof/edge.go
 secret edge_server_handshake_key smtpproof/edge.go
 secret edge_shts smtpproof/edge.go
+secret evs_git_ssh_host_key evs_local_ssh.go
+secret evs_git_tls_key evs_local_http.go
 secret evs_receipt_key evsservice/upload_keys.go
 secret forward_store_record_key device/posture_seal.go
 secret forward_store_root_key device/posture_seal.go
