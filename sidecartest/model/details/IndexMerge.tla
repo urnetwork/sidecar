@@ -16,7 +16,7 @@
 (*                        that writer's head as the push's base showed it   *)
 (*   Supersede = "content" a journaled entry is dropped when its content    *)
 (*                        ref, read after the index, holds its document at  *)
-(*                        a higher version (1.2.7)                          *)
+(*                        a higher version (1.2.6)                          *)
 (*   Step4 = "promote"    a roll-up moves a version or tombstone that a     *)
 (*                        newer bucket holds only older entries of into     *)
 (*                        that bucket's shards, replacing its manifest      *)
@@ -31,9 +31,9 @@
 (*   Step4 = "inplace"    a roll-up rewrites a newer bucket's files in      *)
 (*                        place, replacing only those (RollupFence "files") *)
 (* KeepBase "any", MergeCompose "composable" and RollupFence "manifests"    *)
-(* are the four questions' first options, kept so the patched rules can be  *)
-(* run beside the design; MergeCompose "covered" widens the second to a     *)
-(* head entry at the same version, which the first patched run asks for.    *)
+(* are three of the questions' first options, kept so the patched rules can *)
+(* be run beside the design; MergeCompose "covered" widens the second to a  *)
+(* head entry at the same version. Both patched pairs fail too (1.1 E).     *)
 (*                                                                          *)
 (* Documents: d2 is edited four times and its edits may be diffs; d3 is     *)
 (* created and deleted. A full entry of a document in BigDocs is past 8 KiB *)
@@ -280,7 +280,7 @@ DiffBaseWritten(w, b, d, v) ==
 Windows == IF Skew /\ Early /\ Now > 1 THEN {Now, Now - 1} ELSE {Now}
 
 \* A push lands only within minutes of its build: at its own clock, or, built late in a window, early in the
-\* next (1.2.9's lifetime). Life "long" is a client that sends a push it built long before.
+\* next (1.2.6's life). Life "long" is a client that sends a push it built long before.
 Alive(P) == Life = "long" \/ P.t = clock \/ (P.t + 1 = clock /\ P.t % 2 = 0)
 
 \* The versions of d below v that w's other files in b hold full: what a diff of d at v may rest on.
@@ -323,7 +323,7 @@ SealSlot(b, w, S) ==
 \* What w's sealed, unabsorbed slots in b hold.
 SealedEnts(b, w) == EntsAt(Sealed(b) \cap SlotPaths(b, w))
 \* The large entries of w in b that a push may remove when it leaves w's unabsorbed slots holding S: those the
-\* manifest shows absorbed that no diff in S names (1.2.4).
+\* manifest shows absorbed that no diff in S names (1.2.3).
 Removable(b, w, S) ==
     {l \in large[b][w] :
         /\ l.seq <= man[b].abs[w]
@@ -383,7 +383,7 @@ JournalBuild ==
                    indexed, rollCommits, fenceBad, broken>>
 
 \* A content version no index entry reaches yet, which the backfiller indexes into its own head from the
-\* content as it stands (1.2.7).
+\* content as it stands (1.2.6).
 BackfillBuild ==
     /\ "backfill" \notin Still
     /\ wpend[Backfiller] = None
@@ -622,6 +622,7 @@ RollBuild(r) ==
                                    [shard |-> file[ShardPath(nb)].ver, man |-> man[nb].ver, ent |-> PromoEnt(nb)]],
                     rewrites |-> [p \in Rewrites |-> [ver |-> file[p].ver, ent |-> file[p].ent \ Stale(p)]],
                     fenced |-> [b \in Fenced |-> man[b].ver],
+                    live |-> \E d \in Docs : Promoted(d) /\ ~TombAt(RollIn, d, Carried(d)),
                     rows |-> NewAll, t |-> clock]]
             /\ broken' = (broken \/ RollBroken)
             /\ UNCHANGED rphase
@@ -665,7 +666,8 @@ RollCommit(r) ==
                 /\ lock' = [ver |-> lock.ver + 1, holder |-> NoRoller, lapsed |-> FALSE]
                 /\ rollCommits' = rollCommits + 1
                 /\ fenceBad' = (fenceBad \/ lock.ver # P.lock)
-                /\ reached' = Mark({"rolled"} \cup (IF DOMAIN P.promos # {} THEN {"promoted"} ELSE {}))
+                /\ reached' = Mark({"rolled"} \cup (IF DOMAIN P.promos # {} THEN {"promoted"} ELSE {})
+                                     \cup (IF P.live THEN {"promotedLive"} ELSE {}))
                 /\ rphase' = [rphase EXCEPT ![r] = IF @ = "crashed" THEN @ ELSE "done"]
                 /\ UNCHANGED rheld
            ELSE /\ IF lock.ver # P.lock
@@ -816,6 +818,7 @@ RollsOnce == rollCommits <= 1 /\ ~fenceBad
 
 NeverRolled == "rolled" \notin reached
 NeverPromoted == "promoted" \notin reached
+NeverPromotedLive == "promotedLive" \notin reached
 NeverComposed == "composed" \notin reached
 NeverDropped == "dropped" \notin reached
 \* A head holds a diff whose base sits in a file a merge has absorbed and its writer still keeps.

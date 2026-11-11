@@ -9,11 +9,12 @@
 #   run-indexmerge.sh <track> [all | design | written | twins | reach | <Config>...]
 #
 # Bounds: the disk is shared with the build lanes, so every run is bounded on disk and in time. A config whose
-# first lines hold "\* tlc: <flags>" runs with those flags: the wide configs run by TLC's random simulation (a
-# fixed number of traces of a fixed depth from a fixed seed), which keeps no state set on disk and shows only
-# that the behaviors it drew kept every invariant. Every other config is breadth-first over its whole state
-# graph. A run whose state directory passes TLC_DISK_CAP_MB (8,192 MB) or that runs past TLC_TIME_CAP_S
-# (3,600 s) is stopped and reported as FAIL (bounded), and every run's state directory is deleted when it ends.
+# first lines hold "\* tlc: <flags>" runs with those flags: the wide config runs by TLC's random simulation (a
+# fixed number of traces a worker, of a fixed depth, from a fixed seed), which keeps no state set on disk and
+# shows only that the behaviors it drew kept every invariant. Every other config is breadth-first over its
+# whole state graph. A run whose state directory passes TLC_DISK_CAP_MB (8,192 MB) or that runs past
+# TLC_TIME_CAP_S (3,600 s) is stopped and reported as FAIL (bounded), and every run's state directory is
+# deleted when it ends.
 # Each invocation names its own state directories, so two may run at once. TLC_FLAGS adds flags to any run in
 # place of its config's, TLC_WORKERS sets its workers and TLC_HEAP its heap.
 #
@@ -65,7 +66,9 @@ main() {
     out=$(mktemp "${TMPDIR:-/tmp}/indexmerge.XXXXXX")
     flags=${TLC_FLAGS:-}
     [ -z "$flags" ] && flags=$(sed -n '1,4s/^\\\* tlc: \(.*\)$/\1/p' "$here/$config.cfg" | head -1)
-    (cd "$here" && exec "$ROOT/.stack/tools/tlc" "$run" -config "$config.cfg" -workers "${TLC_WORKERS:-auto}" $flags IndexMerge.tla) > "$out" 2>&1 &
+    workers="-workers ${TLC_WORKERS:-auto}"
+    case " $flags " in *" -workers "*) workers= ;; esac
+    (cd "$here" && exec "$ROOT/.stack/tools/tlc" "$run" -config "$config.cfg" $workers $flags IndexMerge.tla) > "$out" 2>&1 &
     runner=$!
     bounded=0
     peak=0
