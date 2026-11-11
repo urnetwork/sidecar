@@ -123,6 +123,11 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 	}
 	parts := make([]*sidecar.EvsSealPart, len(checkedParts))
 	for i, checkedPart := range checkedParts {
+		if !checkedPart.HoldsChanges() {
+			// a changeless part, which the record names by its place alone (DESIGN-DETAILS 8.2.2's parts row)
+			parts[i] = &sidecar.EvsSealPart{Place: places[i], Changeless: true}
+			continue
+		}
 		parts[i] = &sidecar.EvsSealPart{Place: places[i], ChangesRoot: checkedPart.Root, FirstTokenPath: checkedPart.FirstTokenPath()}
 	}
 	self.payload = payload

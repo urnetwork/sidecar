@@ -154,17 +154,33 @@ type evsPushVector struct {
 var evsPushVectorCases = []struct {
 	name        string
 	changeCount int
+	// what the case adds to evsTestPlan's push
+	edit func(plan *EvsPushPlan)
 }{
 	{name: "inline", changeCount: 2},
 	{name: "under changes_root", changeCount: 60},
 	{name: "in parts", changeCount: 1100},
+	// DESIGN-DETAILS 8.2.2's parts row: sealed metadata past the room beside 30 changes, its rest in a changeless part
+	{name: "a changeless part", changeCount: 30, edit: func(plan *EvsPushPlan) {
+		plan.SealedMetadata = bytes.Repeat(evsTestBytes("long sealed metadata", 32), 48*1024)
+	}},
+	// 8.2.2's sections row: a creating git-mode push's sealed ref name and overlay base, sections 15 and 16
+	{name: "a creating push", changeCount: 2, edit: func(plan *EvsPushPlan) {
+		plan.RefMode = protocol.EvsRefMode_EVS_REF_GIT
+		plan.RefName = append(evsTestBytes("sealed ref name", 32), evsTestBytes("sealed ref name tail", 30)...)
+		plan.Base = &protocol.EvsOverlay{RefId: evsTestId("ref base").Bytes(), Version: 3}
+	}},
 }
 
 func computeEvsPushVectors(t *testing.T) *evsPushVectors {
 	signer := newEvsTestSigner("writer")
 	vectors := &evsPushVectors{SignerPublicKey: signer.publicKey()}
 	for _, pushCase := range evsPushVectorCases {
-		built, _ := evsTestBuildAndCheck(t, signer, evsTestPlan(t, signer, pushCase.name, pushCase.changeCount))
+		plan := evsTestPlan(t, signer, pushCase.name, pushCase.changeCount)
+		if pushCase.edit != nil {
+			pushCase.edit(plan)
+		}
+		built, _ := evsTestBuildAndCheck(t, signer, plan)
 		vector := &evsPushVector{
 			Name: pushCase.name, ChangeCount: pushCase.changeCount, Statement: built.Statement.Bytes,
 			ChangesRoot: built.Statement.Push.GetChangesRoot(), PartCount: built.Statement.Push.GetPartCount(),
@@ -230,6 +246,18 @@ func TestEvsPushVectors(t *testing.T) {
 			}()...)
 			if digest := sha256.Sum256(partHashes); !bytes.Equal(digest[:], statement.Push.GetPartsSha256()) {
 				t.Error("in parts: parts_sha256 is not over the parts' hashes")
+			}
+		case "a changeless part":
+			if vector.PartCount != 2 || statement.Push.GetChangeCount() != uint32(vector.ChangeCount) {
+				t.Errorf("a changeless part: %d parts, count %d", vector.PartCount, statement.Push.GetChangeCount())
+			}
+		case "a creating push":
+			if vector.Payload == nil || statement.Push.GetRefMode() != uint32(protocol.EvsRefMode_EVS_REF_GIT) {
+				t.Fatal("a creating push: no payload stored, or not git mode")
+			}
+			checked, err := EvsCheckPayload(statement, vector.Payload)
+			if err != nil || len(checked.RefName) == 0 || checked.Base.GetVersion() != 3 {
+				t.Errorf("a creating push: the stored payload's sections: %v", err)
 			}
 		}
 	}
@@ -528,11 +556,11 @@ func TestEvsPayloadRefusesWhatFormatOneDoesNotCarry(t *testing.T) {
 		"a kind-5 locator": func(entry *protocol.EvsEntryVersion) {
 			entry.Chain[0].Kind = uint32(protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT)
 		},
-		"a staged locator":     func(entry *protocol.EvsEntryVersion) { entry.Chain[0].Staged = true },
-		"a kind-3 locator":     func(entry *protocol.EvsEntryVersion) { entry.Chain[0].Kind = 3 },
-		"layout 1":             func(entry *protocol.EvsEntryVersion) { entry.Layout = 1 },
-		"another push's":       func(entry *protocol.EvsEntryVersion) { entry.PushId = evsTestId("other push").Bytes() },
-		"a file with no chain": func(entry *protocol.EvsEntryVersion) { entry.Chain = nil },
+		"a staged locator":      func(entry *protocol.EvsEntryVersion) { entry.Chain[0].Staged = true },
+		"a kind-3 locator":      func(entry *protocol.EvsEntryVersion) { entry.Chain[0].Kind = 3 },
+		"layout 1":              func(entry *protocol.EvsEntryVersion) { entry.Layout = 1 },
+		"another push's":        func(entry *protocol.EvsEntryVersion) { entry.PushId = evsTestId("other push").Bytes() },
+		"a file with no fields": func(entry *protocol.EvsEntryVersion) { entry.SealedFields = nil },
 	}
 	for label, mutate := range entries {
 		entry := &protocol.EvsEntryVersion{}

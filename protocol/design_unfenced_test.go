@@ -520,7 +520,12 @@ enum EvsPayloadSection {
   EVS_PAYLOAD_NEW_OBJECTS = 6; EVS_PAYLOAD_SLOT_BODIES = 7; EVS_PAYLOAD_ERASED_LIST = 8; EVS_PAYLOAD_DROP_BODY = 9;
   EVS_PAYLOAD_DROP_LISTS = 10; EVS_PAYLOAD_TAIL_MOVES = 11; EVS_PAYLOAD_SOURCE_PATHS = 12;
   EVS_PAYLOAD_REUSE_LIST = 13; EVS_PAYLOAD_MERKLE_PROOFS = 14;
+  // DESIGN-DETAILS 8.2.2's sections row: a creating push's sealed ref name and overlay base (question
+  // evs1-m2-01-ref-creation-fields, option 1)
+  EVS_PAYLOAD_REF_NAME = 15; EVS_PAYLOAD_OVERLAY_BASE = 16;
 }
+// DESIGN-DETAILS 8.2.2's git update shapes.
+enum EvsGitShape { EVS_GIT_SHAPE_UNSPECIFIED = 0; EVS_GIT_UPDATE = 1; EVS_GIT_DELETE = 2; EVS_GIT_REKEY = 3; }
 enum EvsNewObjectKind {
   EVS_NEW_OBJECT_KIND_UNSPECIFIED = 0; EVS_NEW_OBJECT_SEGMENT = 1; EVS_NEW_OBJECT_STAGED_SEGMENT = 2;
   EVS_NEW_OBJECT_SLOT = 3;
@@ -600,9 +605,22 @@ message EvsSealedFields {
 }
 message EvsSealedMetadata {
   GroupHead group = 1; EvsProvenance provenance = 2; repeated EvsSealedCommit commits = 3; bytes signed_import = 4;
+  // DESIGN-DETAILS 8.2.2: a git-mode push's update, and a creating push's signed copies of payload sections 15
+  // and 16
+  EvsGitUpdate git = 5; bytes ref_name = 6; EvsOverlay base = 7;
 }
+message EvsGitUpdate {
+  EvsGitShape shape = 1; bytes old_tip = 2; bytes new_tip = 3; repeated bytes tags = 4;
+  repeated EvsOverlay sources = 5; repeated bytes segment_ids = 6; repeated EvsSealedBlob blobs = 7;
+}
+message EvsSealedBlob {
+  bytes git_oid = 1; uint64 size = 2; bytes base_oid = 3; bytes file_id = 4; repeated EvsHistoryLocator records = 5;
+}
+message EvsHistoryLocator { uint32 segment = 1; uint32 offset = 2; uint32 length = 3; }
 message EvsProvenance { bytes agent_id = 1; bool tainted = 2; }
-message EvsSealedCommit { bytes object = 1; repeated EvsSealedChange changes = 2; }
+// DESIGN-DETAILS 8.2.2 adds trees: a commit's trees that do not rebuild from names, modes and oids.
+message EvsSealedCommit { bytes object = 1; repeated EvsSealedChange changes = 2; repeated EvsSealedTree trees = 3; }
+message EvsSealedTree { repeated bytes path = 1; bytes object = 2; }
 message EvsSealedChange { repeated bytes path = 1; uint32 mode = 2; bytes git_oid = 3; }
 // 11.8's push, parts, seal and lease rows and 11.20's refusals, by plan-EVS1-format-bytes#8, with
 // plan-EVS1-deposit-head's and plan-RECORD-depositor-spool's deposit head and §20.7's QuotaRefusal.

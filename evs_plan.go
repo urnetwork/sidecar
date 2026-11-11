@@ -36,6 +36,11 @@
 // format 1's inline record carries its own key block (EVS-FORMAT.md), which a slot-keyed chain must not, so a
 // slot-keyed inline record is left to a format change and every chain goes in slot-keyed segments.
 //
+// A git-mode ref takes a write here only as a rekey (DESIGN-DETAILS 8.2.10; question keys-m2-26-rekey-git-mode-refs):
+// every write a forced checkpoint held to the version it read, none a removal, each new blob the standing version's
+// with its mode, a gitlink's empty chain re-sealed as it stands; the sender seals the REKEY shape. Any other write to a
+// git-mode ref is ErrEvsGitRef, as the local tier makes those.
+//
 // Not built here, and failing closed: rename and copy, which keep a file's chain under another path through the
 // reuse list.
 //
@@ -77,6 +82,9 @@ var (
 	ErrEvsWriteNotBuilt = errors.New("evs: write not built")
 	// A write held to an entry version (EvsPathWrite.IfVersion) the path no longer stands at.
 	ErrEvsPathMoved = errors.New("evs: the path moved past the version the write was made on")
+	// A rekey write to a git-mode ref whose new blob, or mode, is not the standing version's: a rekey changes no tree
+	// (DESIGN-DETAILS 8.2.10).
+	ErrEvsRekeyChanged = errors.New("evs: a rekey write that changes a git-mode file's oid or mode")
 	// A plan whose read batches met two path epochs: the write plans again from a fresh read.
 	errEvsPlanEpochMoved = errors.New("evs: the path epoch moved while the plan read")
 )
@@ -145,6 +153,8 @@ type EvsWritePlan struct {
 	Flags  uint32
 	Erased []*EvsErasedKey
 	scope  string
+	// a git-mode push's update, which the sender seals as EvsSealedMetadata.git: a rekey's REKEY shape, set by setRef
+	gitUpdate *protocol.EvsGitUpdate
 	// the repo keeps its object keys in slots, a record-class repo's (see the file header)
 	slotKeyed bool
 }
@@ -249,6 +259,11 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 	if err != nil {
 		return nil, err
 	}
+	// every write a rekey write: the one write a git-mode ref takes here (DESIGN-DETAILS 8.2.10)
+	rekeyOnly := true
+	for _, write := range args.Writes {
+		rekeyOnly = rekeyOnly && write.ForceCheckpoint && write.IfVersion != 0 && !write.Remove
+	}
 	writePaths := map[string]bool{}
 	readPaths := []string{}
 	for _, write := range args.Writes {
@@ -300,7 +315,7 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 					Generation: args.Generation, keys: result.keys, floors: map[string]uint64{},
 					slotKeyed: EvsRepoKindRecordClass(repoKind),
 				}
-				if err := plan.setRef(head, args.RefName, self.client.args.Identity().SidecarId); err != nil {
+				if err := plan.setRef(head, args.RefName, self.client.args.Identity().SidecarId, rekeyOnly); err != nil {
 					return err
 				}
 				if plan.pathKey, err = result.keys.path(ctx, plan.PathEpoch); err != nil {
@@ -376,9 +391,9 @@ func (self *EvsRepo) repoKind() (protocol.RepoKind, error) {
 }
 
 // The ref's kind, mode and owner: the head's once a push set them, else a file-mode ref named by refName, owned for
-// ur/<this sidecar>/..., shared otherwise. A git-mode ref is ErrEvsGitRef; another sidecar's owned ref, a deposit or the
-// erasure ref take no Write.
-func (self *EvsWritePlan) setRef(head *protocol.EvsHeadSummary, refName []byte, sidecarId Id) error {
+// ur/<this sidecar>/..., shared otherwise. A git-mode ref is ErrEvsGitRef but for a rekey's writes, rekeyOnly, which
+// seal the REKEY shape; another sidecar's owned ref, a deposit or the erasure ref take no Write.
+func (self *EvsWritePlan) setRef(head *protocol.EvsHeadSummary, refName []byte, sidecarId Id, rekeyOnly bool) error {
 	self.RefKind = head.GetRefKind()
 	self.RefMode = head.GetRefMode()
 	if self.RefKind == protocol.EvsRefKind_EVS_REF_KIND_UNSPECIFIED {
@@ -396,7 +411,10 @@ func (self *EvsWritePlan) setRef(head *protocol.EvsHeadSummary, refName []byte, 
 		self.OwnerSidecarId = &ownerId
 	}
 	if self.RefMode == protocol.EvsRefMode_EVS_REF_GIT {
-		return ErrEvsGitRef
+		if !rekeyOnly {
+			return ErrEvsGitRef
+		}
+		self.gitUpdate = &protocol.EvsGitUpdate{Shape: protocol.EvsGitShape_EVS_GIT_REKEY}
 	}
 	switch self.RefKind {
 	case protocol.EvsRefKind_EVS_REF_SHARED:
@@ -498,6 +516,24 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 		previous, previousContent, previousKeys = state, content, keys
 		planned.Fields.FileId = fields.GetFileId()
 		planned.Fields.Mode = fields.GetMode()
+		if plan.RefMode == protocol.EvsRefMode_EVS_REF_GIT {
+			// a rekey: the standing blob and mode again under the plan's generation (DESIGN-DETAILS 8.2.10)
+			if write.Mode != 0 && write.Mode != fields.GetMode() {
+				return nil, fmt.Errorf("%w: mode %o over %o", ErrEvsRekeyChanged, write.Mode, fields.GetMode())
+			}
+			if fields.GetMode() == EvsGitModeGitlink {
+				// a gitlink has no content: its fields are sealed again with its empty chain
+				if write.Content.Size() != 0 {
+					return nil, fmt.Errorf("%w: content for a gitlink", ErrEvsRekeyChanged)
+				}
+				planned.Fields = proto.Clone(fields).(*protocol.EvsSealedFields)
+				planned.Checkpoint = EvsCheckpointForced
+				return planned, nil
+			}
+			if !bytes.Equal(oid[:], fields.GetGitOid()) {
+				return nil, fmt.Errorf("%w: a new blob over the standing one", ErrEvsRekeyChanged)
+			}
+		}
 	}
 	if write.Mode != 0 {
 		planned.Fields.Mode = write.Mode
