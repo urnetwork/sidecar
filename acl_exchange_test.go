@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The exchange's repo scope table on TEAM's log (FS-19's scope rows, §7.8): each scope judged alone against the newest
 // verified state, a read_only sidecar held to r and the receipt deposit, an ephemeral one to the config's r at both
 // audiences, gkm's config rw for member devices, an owner-bound reader's receipt deposit, a forward_only client held to

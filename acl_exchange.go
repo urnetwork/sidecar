@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // The token exchange's repo scopes (§7.8, owner decision 2): which repo:<id>:deposit|r|rw|admin capabilities api's
 // exchange grants a sidecar for an evs or gkm token, from §8's rows in the newest verified projection. TEAM's exchange
 // (TEAM-M2-15, TEAM-M6-10) calls this as its ExchangeScopeSource, adds §7.8's own refusals and its recovery: scope,
@@ -21,7 +23,7 @@
 // exchange judges §7.8's other scopes before it asks. A subject that is no sidecar holds no repo scope. A scope's id may
 // be in either of ParseId's forms; a granted scope is returned as it was asked.
 //
-// On every leg: root Id, no connect type. Pure: nothing here does I/O or reads a clock.
+// Not on the ios_extension leg, whose forwarding role mints no token. Pure: nothing here does I/O or reads a clock.
 
 package sidecar
 
