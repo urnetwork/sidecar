@@ -4,7 +4,9 @@
    time: an own one first, a second own one in parallel when the first is slow (the hedge), then, in
    mode on and only once the person has answered that member's notice, one other member's. An indexer
    answers page 0 serving some of the repos and refusing others, or does not answer, or is revoked or
-   retired in p's config while the search runs. A repo no indexer answers falls back to the download.
+   retired in p's config while the search runs. Of a hedge's two legs the first to serve a repo wins it;
+   the other, having answered, may be asked again if the winner fails. A repo no indexer answers falls
+   back to the download.
 
    Eligibility is the design's predicate over what the config says of each device: its member, the
    scopes its search designation holds at, whether it is a consented device of that member, and the
@@ -160,16 +162,22 @@ Hedge(d, e) ==
     /\ UNCHANGED <<mode, notice, gone, skip, rs, by, plan>>
 
 (* Page 0 arrives from d, serving some of its repos and refusing the rest. A repo another leg already
-   serves stays with that leg: the first answer wins, and the later one is dropped for it. *)
+   serves stays with that leg: the first answer wins, and the later one is dropped for it. A leg that
+   wins nothing is ended. *)
 Reply(d, served) ==
     /\ leg[d].st = "sent" /\ served \subseteq leg[d].repos
     /\ LET won == {r \in served : rs[r] = "asking"}
            lost == {r \in leg[d].repos \ served : rs[r] = "asking" /\ Asking(r) = {d}}
-       IN  /\ leg' = [leg EXCEPT ![d] = IF won = {} THEN [leg[d] EXCEPT !.st = "lost"]
-                                                    ELSE [leg[d] EXCEPT !.st = "live", !.repos = won]]
+           beaten == served \ won
+       IN  /\ leg' = [leg EXCEPT ![d] = IF won # {} THEN [leg[d] EXCEPT !.st = "live", !.repos = won]
+                                        ELSE IF served # {} THEN NoLeg
+                                        ELSE [leg[d] EXCEPT !.st = "lost"]]
            /\ rs' = [r \in Repos |-> IF r \in won THEN "served" ELSE IF r \in lost THEN "todo" ELSE rs[r]]
            /\ by' = [r \in Repos |-> IF r \in won THEN d ELSE by[r]]
-    /\ UNCHANGED <<mode, notice, gone, skip, tried, plan, sent>>
+           \* an indexer that answered and lost a repo to the other leg did not fail it: it may be asked
+           \* for that repo again in this search
+           /\ tried' = [r \in Repos |-> IF r \in beaten THEN tried[r] \ {d} ELSE tried[r]]
+    /\ UNCHANGED <<mode, notice, gone, skip, plan, sent>>
 
 (* What becomes of repo r when d's leg ends: a repo d was asking or serving waits for the hedge's other
    leg while that one still asks for it, and else returns to the plan. *)
