@@ -1,0 +1,5 @@
+go test fuzz v1
+byte('K')
+[]byte("\x12\x10\xfb_\xc6H\x14Y\xa9<\xdc\x05\x7ft\xa2\xed H")
+[]byte("0")
+uint16(32)

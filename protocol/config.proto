@@ -18,6 +18,7 @@ syntax = "proto3";
 package urnetwork.sidecar;
 
 import "protocol/bridge/auth.proto";
+import "protocol/bridge/bridge.proto";
 import "protocol/bridge/signed.proto";
 
 option go_package = "github.com/urnetwork/sidecar/protocol";
@@ -355,4 +356,99 @@ message ConfigNetworkResolution {
 message ConfigClientResolution {
   bytes client_id = 1;
   bytes sidecar_id = 2;                // the sidecar a verified SidecarIdentityBinding names; empty for none
+}
+
+// The bridge ledger's fold (DESIGN-DETAILS 12.2.2, QD-667): files of the config head beside fold/<d>/<i>, which evs
+// holds as ciphertext, so no server reads them. At each fold a writer writes the body-level verdict it holds for every
+// folded bridge statement (§17.8): addresses and tombstones, each rule's body and disposition, each subject's egress
+// spec, each alias; every full reader standing under the previous base computes the same files and forks on a
+// difference, and a device that starts at the base takes them. Every writer on every leg encodes them alike, since
+// the manifest hashes each: protobuf's deterministic marshal; rows sorted by their key's bytes, host_bits as a
+// number; no empty file; bodies as their messages with approval cleared; times as the log's time_ms.
+message BridgeLedgerManifest {           // bridge/ledger/manifest; absent only where the fold holds no bridge statement
+  uint32 format = 1;                     // 1
+  uint64 folded_through = 2;             // the head's fold: the rows hold every bridge statement at or below it
+  int64  time_ms = 3;                    // the time of the newest folded record: the fold's time, never a clock
+  uint32 rule_shard_bits = 4;            // 8, or 16 from the fold at which the rows hold more than 262,144 rules
+  repeated BridgeLedgerFile files = 5;   // every other ledger file the head holds, in path order
+}
+
+message BridgeLedgerFile {
+  string path = 1;
+  bytes  sha256 = 2;                     // of the file's plaintext as the head holds it
+  uint64 row_count = 3;
+}
+
+message BridgeLedgerAddresses {          // bridge/ledger/addresses, by host_bits
+  repeated BridgeLedgerAddressRow rows = 1;
+}
+
+message BridgeLedgerAddressRow {
+  uint32 host_bits = 1;                  // the low 16 bits of the IPv4 (§17.4: kept across block changes)
+  bytes  sidecar_id = 2;
+  uint64 claimed_at = 3;                 // the BridgeAddress's entry
+  uint64 released_at = 4;                // the entry that released it, its holder's revocation or removal; 0 live
+  int64  released_ms = 5;                // that entry's time; the tombstone holds 30 days from it (I-14)
+}
+
+message BridgeLedgerRules {              // bridge/ledger/rules/<xx>, or rules/<xx>/<yy> at 16 bits, by rule_id
+  repeated BridgeLedgerRuleRow rows = 1;
+}
+
+message BridgeLedgerRuleRow {
+  bytes  rule_id = 1;
+  uint32 signed_type = 2;                // 0x1903 a route, 0x1904 a map
+  bytes  owner = 3;                      // the advertiser or host, which signed the first filing
+  uint64 first_at = 4;                   // the first filing's entry and time
+  int64  first_ms = 5;
+  uint64 newest_at = 6;                  // the newest filing of the held id
+  int64  newest_ms = 7;
+  BridgeLedgerDisposition disposition = 8;
+  BridgeRouteBody route = 9;             // the body in force, its approval cleared: the first filing's, with the
+  BridgeMapBody   map = 10;              //   newest filing's weight, site_id and drain_seconds; neither when void
+  repeated bytes route_rule_ids = 11;
+  int64  expires = 12;                   // a map's
+  bool   standing = 13;                  // filed with no approval: active only where a standing grant covers it
+  bytes  approval_id = 14;               // 16 B, with approval_not_after_ms and uses, when filed under a decision
+  int64  approval_not_after_ms = 15;
+  uint32 approval_uses = 16;             // the decision's budget, which counts every row that names approval_id
+  uint64 withdrawn_at = 17;
+  int64  withdrawn_ms = 18;
+  BridgeWithdrawMode withdraw_mode = 19;
+  bytes  withdrawn_by = 20;              // the withdrawal's signer
+  bool   withdrawn_by_admin = 21;
+  int64  retain_until_ms = 22;           // when a withdrawn id leaves the rows; 0 keeps it for the network's life
+}
+
+enum BridgeLedgerDisposition {
+  BRIDGE_LEDGER_DISPOSITION_UNSPECIFIED = 0;
+  BRIDGE_LEDGER_DISPOSITION_ACTIVE = 1;      // the body is in force, subject to the compile's standing-grant check
+  BRIDGE_LEDGER_DISPOSITION_VOID = 2;        // the body did not open or broke its rule: the id is held, nothing else
+  BRIDGE_LEDGER_DISPOSITION_WITHDRAWN = 3;   // a BridgeWithdraw bound it; draining until withdrawn_ms + its drain
+  BRIDGE_LEDGER_DISPOSITION_RESERVED = 4;    // a withdrawal ahead of the id's first filing: it binds withdrawn_by's
+                                             //   filings, or anyone's when withdrawn_by_admin
+}
+
+message BridgeLedgerEgressSpecs {        // bridge/ledger/egress, by subject
+  repeated BridgeLedgerEgressRow rows = 1;
+}
+
+message BridgeLedgerEgressRow {
+  bytes  subject = 1;                    // a sidecar_id or a keyed atom
+  BridgeEgressMode mode = 2;             // the newest BridgeEgress's clear mode (QD-630)
+  repeated bytes exit_sidecar_ids = 3;   // under exits, from its body; none when the body is void
+  bytes  exit_tag_id = 4;
+  uint64 at = 5;
+}
+
+message BridgeLedgerAliases {            // bridge/ledger/aliases, by (share_id, target_index)
+  repeated BridgeLedgerAliasRow rows = 1;
+}
+
+message BridgeLedgerAliasRow {
+  BridgeAliasBody body = 1;
+  bytes  signer = 2;
+  uint64 at = 3;
+  uint64 released_at = 4;                // a release: draining until released_ms + its drain
+  int64  released_ms = 5;
 }

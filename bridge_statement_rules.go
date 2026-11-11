@@ -1,40 +1,39 @@
-//go:build !ios_extension
-
 // §17.8's statements at body level: what a reader that holds the config's generations makes of the bridge statements
-// the log took at id level (bridge_statement.go). BridgeLog.Open opens each sealed body (OpenConfigBody) in log order
-// and runs the rules no keyless verifier can:
+// the log took at id level (bridge_statement.go). A BridgeLedger starts from the config head's ledger rows, the verdicts
+// a fold froze (bridge_ledger.go), and runs the rules no keyless verifier can over each unfolded statement in log order,
+// each route and map by the verdict its judge reached where its entry landed:
 //
-//	pending   the body is sealed to a generation the reader lacks: the entry keeps its id-level effect, its id held
-//	          and nothing active, and opens once RK_g arrives (plan-TEAM-sealed-field-format); a bodiless
-//	          BridgeWithdraw never waits
-//	void      the AEAD or the padding fails, which is the reader's alarm, or the body breaks its rule below: the
-//	          id-level effect stands and the sealed effect is nothing
+//	pending   the body is sealed to a generation the reader lacks, or a route's or map's approval was not judged where
+//	          it landed (Unopened, or no judge): the entry keeps its id-level effect, its id held and nothing active,
+//	          and opens once RK_g arrives (plan-TEAM-sealed-field-format); a bodiless BridgeWithdraw never waits
+//	void      the AEAD or the padding fails, which is the reader's alarm, the approval was Refused, or the body breaks
+//	          its rule below: the id-level effect stands and the sealed effect is nothing
 //	address   the first BridgeAddress in log order wins a host's bits; a second for an addressed host is void; a
 //	          released address is a tombstone for 30 days by the log's time (I-14); the upper /17 takes a host only
 //	          once the lower is full, and never inside an alias or an exposed prefix (§17.4, D-BRIDGE-20)
 //	route     D-BRIDGE-8: an identical prefix is an HA replica, the same non-empty site_id, or a remap, one of the two
 //	          carrying an exposed_prefix; nesting is allowed; anything else is void
-//	held id   a filing of a held id changes only weight, site_id and drain_seconds and activates nothing
-//	withdraw  an id a BridgeWithdraw named is void while the fold keeps it: until its decision's not_after, or for a
-//	          rule under a standing grant until its last filing's header could no longer be replayed
-//	approval  none under a standing grant, which BRIDGE-M4-16's compiler holds to §8's rules; else the I-8 decisions,
-//	          verified as §8.8 does a GrantActivate's with the signer every decision's requester, the rule id the one
-//	          §17.8 derives from the use's effect_key, and a decision's ids at most its uses, a retry adding none
+//	held id   a filing of a held id changes only weight, site_id and drain_seconds and activates nothing; the bodies
+//	          are compared with their approvals cleared, as the rows keep them
+//	withdraw  an id a BridgeWithdraw named is void while the rows keep it: until its decision's not_after, or for a
+//	          rule under a standing grant until its last filing's header could no longer be replayed; a withdrawal
+//	          ahead of the id's first filing reserves it for its signer's filings, or anyone's for an admin's
+//	approval  none under a standing grant, which BRIDGE-M4-16's compiler holds to §8's rules; else the verdict: the
+//	          rule id the one §17.8 derives from the use's effect_key, and a decision's ids at most its uses over the
+//	          rows and the entries alike, a retry adding none
+//	alias     its signer an admin's device where it landed (SignerAdmin), one alias a share's target, and room in the
+//	          upper /17
 //
 // An address is bound by its host bits, the low 16 of the IPv4 a BridgeAddress carries, since hosts keep their host
 // bits across a block change (§17.4): the ledger never reads the upper 16, and ValidateBridgeAddress (BRIDGE-M4-15)
 // holds a new claim to the block at filing.
-//
-// A ledger is a pure function of the log, the keys and what the reader passes, so a reader that gains a generation
-// opens the log again from its start. It covers the statements the BridgeLog holds: a ConfigState's holds the unfolded
-// tail, and a full reader joins the config head's history ahead of it (JoinBridgeLogs; BRIDGE-M4-16).
 //
 // CheckBridgeBlock is D-BRIDGE-16's check where a head is read: a BridgeBlock rides a config head, signed by an admin,
 // and a reader keeps the previous block and alarms on one outside 100.64.0.0/10 and RFC 1918, since a CLI check binds
 // no other signing tool.
 //
 // testHookSecret runs where a body's key derives, inside OpenConfigBody. A ledger is immutable once built. On every
-// leg, with no connect import.
+// leg, the ios_extension legs' included (the forwarding role compiles with it), with no connect import.
 
 package sidecar
 
@@ -43,6 +42,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/netip"
 	"slices"
@@ -80,9 +80,6 @@ var (
 	ErrBridgeBlockRefused = errors.New("bridge block refused")
 	// A statement's sealed effect is void: its body does not open or breaks its rule. Its id-level effect stands.
 	ErrBridgeVoid = errors.New("bridge statement void")
-	// A rule's approval cannot be verified here: the state its entry landed on is no longer retained and the reader
-	// passed no other check. The rule is void at this reader.
-	ErrBridgeApprovalUnverifiable = fmt.Errorf("%w: approval unverifiable", ErrBridgeVoid)
 )
 
 // One IPv4 prefix, its address masked to its length.
@@ -232,13 +229,14 @@ const (
 	BridgeDispositionActive BridgeDisposition = iota + 1
 	// A filing of a held id: it activated nothing, and changed at most weight, site_id and drain_seconds.
 	BridgeDispositionHeld
-	// Its body is sealed to a generation the reader lacks: its id-level effect holds, and it opens once RK_g arrives.
+	// Its body is sealed to a generation the reader lacks, or its approval was not judged where it landed: its
+	// id-level effect holds, and it opens once RK_g arrives and its judge runs.
 	BridgeDispositionPending
 	// Its body does not open or breaks its rule: its id-level effect holds and nothing else.
 	BridgeDispositionVoid
 )
 
-// One statement of the log with what a reader made of it.
+// One unfolded statement with what a reader made of it.
 type BridgeLedgerEntry struct {
 	Statement   *BridgeLogStatement
 	Disposition BridgeDisposition
@@ -259,42 +257,43 @@ type BridgeApprovalFacts struct {
 	NotAfterMs int64
 }
 
-// Verifies the BridgeApproval a rule's body carries, for the statement that filed it and its opened body, a
-// *bridge.BridgeRouteBody or *bridge.BridgeMapBody. An error voids the rule.
-type BridgeApprovalCheck func(statement *BridgeLogStatement, body proto.Message, approval *bridge.BridgeApproval) (*BridgeApprovalFacts, error)
-
-// What a reader opens a BridgeLog with.
+// What a reader opens a ledger with.
 type BridgeLedgerReader struct {
-	// S(n), the state whose log this is: its rows say which sidecars' addresses are released, and by default its
-	// history verifies approvals. Nil releases nothing and verifies no approval.
+	// S(n), the state whose unfolded statements the ledger takes: its rows say which sidecars' addresses are released.
+	// Nil releases nothing.
 	State *ConfigState
 	// The generation keys the reader holds: nil for one it lacks, which leaves that generation's bodies pending. Nil
 	// holds none.
 	RepoKeyAt func(generation uint64) *EvsRepoKey
-	// How approvals verify. Nil is State.CheckBridgeApproval, which answers ErrBridgeApprovalUnverifiable for a rule
-	// filed before the history the state retains; a reader that keeps its own verdicts passes them here.
-	Approvals BridgeApprovalCheck
-	// The time an entry was sequenced at, for a release older than the state's history; false when unknown, which
-	// keeps that address a tombstone. Nil asks the state alone. A full reader answers from the config head's records.
+	// The time an entry was sequenced at, for a release past the state's StateAt window; false when unknown, which
+	// keeps that address a tombstone at an open and gives it the fold's time at a fold. Nil asks the state alone. A
+	// log's reader answers from its kept entries (ConfigLog.EntryTimeMs).
 	EntryTimeMs func(n uint64) (int64, bool)
 	// The log's time the ledger reads tombstones and retention at. 0 is State's.
 	TimeMs int64
+	// Nil is the defaults.
+	Settings *BridgeLedgerSettings
 }
 
-// One live overlay address.
+// One overlay address, live or a tombstone.
 type BridgeLedgerAddress struct {
 	SidecarId Id
 	// The low 16 bits of its IPv4, which it keeps across block changes.
 	HostBits uint32
-	// The claim that won it.
+	// The claim that won it: its entry, and the statement for one past the fold, nil for a row the fold holds.
+	ClaimedAt uint64
 	Statement *BridgeLogStatement
+	// the release a folded tombstone carries, nil for an address live at the fold
+	folded *bridgeRelease
 }
 
 // One released address no new holder may take yet.
 type BridgeLedgerTombstone struct {
 	SidecarId Id
 	HostBits  uint32
-	// When the log released it, and whether the reader knows: an unknown time never ends the tombstone.
+	// The entry that released it, when the log released it, and whether the reader knows: an unknown time never ends
+	// the tombstone.
+	ReleasedAt      uint64
 	ReleasedMs      int64
 	ReleasedMsKnown bool
 }
@@ -304,6 +303,32 @@ func (self *BridgeLedgerTombstone) Holds(timeMs int64) bool {
 	return !self.ReleasedMsKnown || timeMs < self.ReleasedMs+BridgeAddressTombstoneMs
 }
 
+// One BridgeWithdraw that binds a rule, or reserves an id no filing holds yet.
+type BridgeLedgerWithdrawal struct {
+	// Its entry and time.
+	At     uint64
+	TimeMs int64
+	Mode   bridge.BridgeWithdrawMode
+	// Its signer, and whether the signer was an admin's device where it landed, which binds any filer.
+	Signer      Id
+	SignerAdmin bool
+	// The statement for one past the fold, nil for a row the fold holds.
+	Statement *BridgeLogStatement
+}
+
+// The withdrawal a statement makes.
+func bridgeLedgerWithdrawalOf(statement *BridgeLogStatement) *BridgeLedgerWithdrawal {
+	return &BridgeLedgerWithdrawal{
+		At: statement.N, TimeMs: statement.TimeMs, Mode: statement.WithdrawMode, Signer: statement.Signer,
+		SignerAdmin: statement.SignerAdmin, Statement: statement,
+	}
+}
+
+// Whether a withdrawal binds a rule its filer signs: an admin's binds any filer's, and anyone else's only its own.
+func (self *BridgeLedgerWithdrawal) binds(filer Id) bool {
+	return self.SignerAdmin || self.Signer == filer
+}
+
 // One rule the ledger holds: a route or a map, by its id.
 type BridgeLedgerRule struct {
 	RuleId []byte
@@ -311,11 +336,16 @@ type BridgeLedgerRule struct {
 	SignedType bridge.SignedType
 	// Its advertiser or host.
 	Owner Id
-	// Its first filing, and its newest.
+	// Its first filing's entry and time, and its newest filing's.
+	FirstAt  uint64
+	FirstMs  int64
+	NewestAt uint64
+	NewestMs int64
+	// The filings past the fold, nil where the fold holds them.
 	First  *BridgeLogStatement
 	Newest *BridgeLogStatement
-	// The body in force: the first filing's, with the weight, site_id and drain_seconds of the newest filing of the
-	// held id. Exactly one is set, and none while the rule is pending or void.
+	// The body in force, its approval cleared: the first filing's, with the weight, site_id and drain_seconds of the
+	// newest filing of the held id. Exactly one is set, and none while the rule is pending or void.
 	Route *bridge.BridgeRouteBody
 	Map   *bridge.BridgeMapBody
 	// A route's route_rule_ids and a map's expires, from the first filing.
@@ -324,12 +354,14 @@ type BridgeLedgerRule struct {
 	// Whether it was filed with no approval: active only where a standing grant covers it, which the compiler holds
 	// to §8's rules (§17.7).
 	Standing bool
-	// Its approval, when it carries one.
+	// Its approval, when it carries one: the decision and the budget its rules share.
 	ApprovalId         Id
 	ApprovalNotAfterMs int64
+	ApprovalUses       uint32
 	// The withdrawal that binds it, nil for none.
-	Withdrawn *BridgeLogStatement
-	// Whether its first filing waits for a generation, or is void: either way the id is held and nothing is active.
+	Withdrawn *BridgeLedgerWithdrawal
+	// Whether its first filing waits for a generation or its judge, or is void: either way the id is held and nothing
+	// is active.
 	Pending bool
 	Void    bool
 }
@@ -339,15 +371,15 @@ func (self *BridgeLedgerRule) Active() bool {
 	return !self.Pending && !self.Void && self.Withdrawn == nil
 }
 
-// How long the fold keeps a withdrawn id: until its decision's not_after and §8.6's skew, or for a rule under a
-// standing grant until its newest filing's header could no longer be replayed. A rule whose approval the reader never
-// read is kept for good.
+// How long the rows keep a withdrawn id: until its decision's not_after and §8.6's skew, or for a rule under a
+// standing grant until its newest filing's header could no longer be replayed. A void or pending rule is kept for
+// good, math.MaxInt64.
 func (self *BridgeLedgerRule) retainUntilMs() int64 {
 	switch {
 	case self.Pending || self.Void:
 		return math.MaxInt64
 	case self.Standing:
-		return self.Newest.TimeMs + configStatementMaxLifetimeMs
+		return self.NewestMs + configStatementMaxLifetimeMs
 	}
 	return self.ApprovalNotAfterMs + aclDecisionSkewMs
 }
@@ -360,12 +392,18 @@ type BridgeLedgerEgress struct {
 	// subject no exit.
 	ExitSidecarIds []Id
 	ExitTagId      []byte
-	Statement      *BridgeLogStatement
+	// The entry that set it, and the statement for one past the fold.
+	At        uint64
+	Statement *BridgeLogStatement
 }
 
 // One alias a share's accepting sidecar filed (§17.9).
 type BridgeLedgerAlias struct {
-	Body      *bridge.BridgeAliasBody
+	Body *bridge.BridgeAliasBody
+	// The sidecar that filed it, and its entry.
+	Signer Id
+	At     uint64
+	// The statement for one past the fold, nil for a row the fold holds.
 	Statement *BridgeLogStatement
 }
 
@@ -377,12 +415,20 @@ type bridgeUpperRange struct {
 	rule *BridgeLedgerRule
 }
 
-// What a reader holding keys makes of a BridgeLog. Immutable once built.
+// What a reader holding keys makes of the rows and the unfolded statements. Immutable once built.
 type BridgeLedger struct {
-	timeMs  int64
-	entries []*BridgeLedgerEntry
+	timeMs int64
+	// the newest position the ledger reads releases at: the state's, or a fold's
+	cutoffN uint64
+	// whether this is a fold's ledger, which gives an unknown release its own time
+	folding bool
+	// the position the rows hold every statement through
+	foldedThrough uint64
+	entries       []*BridgeLedgerEntry
 
-	rules      map[string]*BridgeLedgerRule
+	rules map[string]*BridgeLedgerRule
+	// withdrawals ahead of their rule's first filing, by the rule id they name
+	reserved   map[string]*BridgeLedgerWithdrawal
 	approvals  map[Id]*bridgeApprovalUse
 	egress     map[Id]*BridgeLedgerEgress
 	aliases    []*BridgeLedgerAlias
@@ -390,15 +436,18 @@ type BridgeLedger struct {
 	byHostBits map[uint32]*BridgeLedgerAddress
 	bySidecar  map[Id]*BridgeLedgerAddress
 	lowerCount int
-	// every binding withdrawal seen for a rule id not filed yet
-	withdrawals map[string][]*BridgeLogStatement
-	tombstones  []*BridgeLedgerTombstone
+	tombstones []*BridgeLedgerTombstone
 	// each sidecar's release as the reader answered it once, nil for one that holds its addresses
 	releases map[Id]*bridgeRelease
-	// the lower /17 addresses whose holder the reader says is released at some entry: the only ones a sweep can free
+	// the lower /17 addresses that are or may become tombstones: the only ones a sweep can free
 	releasing []*BridgeLedgerAddress
+	// the opened bodies' bytes, against UnfoldedBodyMaxByteCount
+	openedByteCount int
+	// what keeps a fold from writing these rows, nil for nothing
+	foldError error
 
-	reader *BridgeLedgerReader
+	reader   *BridgeLedgerReader
+	settings *BridgeLedgerSettings
 }
 
 // One decision's budget as the ledger counts it.
@@ -409,97 +458,176 @@ type bridgeApprovalUse struct {
 
 // When a sidecar's addresses were released, as the reader knows it.
 type bridgeRelease struct {
-	// the entry that released it; every statement at or after it finds the sidecar gone
+	// the entry that released it; every statement after it finds the sidecar gone
 	n           uint64
 	timeMs      int64
 	timeMsKnown bool
 }
 
-// The release of a sidecar's addresses, nil while it holds them: its revocation's entry and time where its row carries
-// one, else, for a sidecar the rows no longer hold or whose member is gone, the state's own position at a time nobody
-// knows, so every earlier statement finds it live and its address stays a tombstone.
-func (self *BridgeLedgerReader) release(sidecarId Id) *bridgeRelease {
-	state := self.State
-	if state == nil {
-		return nil
+// An empty ledger for reader at cutoffN and timeMs.
+func newBridgeLedger(reader *BridgeLedgerReader, cutoffN uint64, timeMs int64, folding bool) *BridgeLedger {
+	return &BridgeLedger{
+		timeMs:     timeMs,
+		cutoffN:    cutoffN,
+		folding:    folding,
+		rules:      map[string]*BridgeLedgerRule{},
+		reserved:   map[string]*BridgeLedgerWithdrawal{},
+		approvals:  map[Id]*bridgeApprovalUse{},
+		egress:     map[Id]*BridgeLedgerEgress{},
+		byHostBits: map[uint32]*BridgeLedgerAddress{},
+		bySidecar:  map[Id]*BridgeLedgerAddress{},
+		releases:   map[Id]*bridgeRelease{},
+		reader:     reader,
+		settings:   bridgeLedgerSettingsOrDefault(reader.Settings),
 	}
-	row := state.sidecars[sidecarId]
-	if row != nil && row.GetRevokedAt() == 0 {
-		if memberId, untagged := configRowMember(row); !untagged || state.members[memberId] != nil {
-			return nil
-		}
-	}
-	if row == nil || row.GetRevokedAt() == 0 {
-		return &bridgeRelease{n: state.n}
-	}
-	release := &bridgeRelease{n: row.GetRevokedAt()}
-	if self.EntryTimeMs != nil {
-		release.timeMs, release.timeMsKnown = self.EntryTimeMs(release.n)
-	}
-	if !release.timeMsKnown {
-		release.timeMs, release.timeMsKnown = state.aclTimeAt(release.n)
-	}
-	return release
 }
 
-// Opens the log's sealed bodies and runs §17.8's body-level rules over it, as the top of this file says. reader nil
-// holds no key and no state, so every sealed statement is pending.
+// The reader's state's position and time, or what it passes.
+func bridgeLedgerReaderAt(reader *BridgeLedgerReader) (uint64, int64) {
+	cutoffN, timeMs := uint64(math.MaxUint64), reader.TimeMs
+	if reader.State != nil {
+		cutoffN = reader.State.n
+		if timeMs == 0 {
+			timeMs = reader.State.TimeMs()
+		}
+	}
+	return cutoffN, timeMs
+}
+
+// DESIGN-DETAILS 12.2.3's open: the ledger at the reader's state, S(n), from rows, the ledger files of the
+// head its newest base names, and the state's unfolded statements past the rows' fold, in log order. rows nil is the
+// empty ledger before any fold. An error is rows that are no ledger, rows folded below the state's base (which would
+// miss statements), or bodies past the unfolded budget.
+func OpenBridgeLedger(rows BridgeLedgerRows, reader *BridgeLedgerReader) (*BridgeLedger, error) {
+	if reader == nil || reader.State == nil {
+		return nil, errors.New("bridge ledger: no state to open at")
+	}
+	cutoffN, timeMs := bridgeLedgerReaderAt(reader)
+	if base := reader.State.Base(); base != nil && rows != nil && rows.FoldedThrough() < base.GetFoldedThrough() {
+		return nil, fmt.Errorf("%w: rows through %d under a base folded through %d", ErrBridgeLedgerMalformed, rows.FoldedThrough(), base.GetFoldedThrough())
+	}
+	return openBridgeLedger(rows, reader.State.Bridge().Statements(), reader, cutoffN, timeMs, false)
+}
+
+// Opens the rows and every statement past their fold at or below cutoffN, at timeMs.
+func openBridgeLedger(rows BridgeLedgerRows, statements []*BridgeLogStatement, reader *BridgeLedgerReader, cutoffN uint64, timeMs int64, folding bool) (*BridgeLedger, error) {
+	ledger := newBridgeLedger(reader, cutoffN, timeMs, folding)
+	if rows != nil {
+		ledger.foldedThrough = rows.FoldedThrough()
+		if err := ledger.loadRows(rows); err != nil {
+			return nil, err
+		}
+	}
+	for _, statement := range statements {
+		if statement.N <= ledger.foldedThrough || cutoffN < statement.N {
+			continue
+		}
+		ledger.apply(statement)
+		if 0 < ledger.settings.UnfoldedBodyMaxByteCount && ledger.settings.UnfoldedBodyMaxByteCount < ledger.openedByteCount {
+			return nil, fmt.Errorf("%w: the unfolded bodies pass %d bytes", ErrBridgeLedgerOverBudget, ledger.settings.UnfoldedBodyMaxByteCount)
+		}
+	}
+	ledger.releaseAddresses()
+	return ledger, nil
+}
+
+// The ledger of the log's statements alone, over no rows, as statements handed in directly read: tests, and a listing
+// of the unfolded tail. reader nil holds no key and no state, so every sealed statement is pending.
 func (self *BridgeLog) Open(reader *BridgeLedgerReader) *BridgeLedger {
 	if reader == nil {
 		reader = &BridgeLedgerReader{}
 	}
-	ledger := &BridgeLedger{
-		timeMs:      reader.TimeMs,
-		rules:       map[string]*BridgeLedgerRule{},
-		approvals:   map[Id]*bridgeApprovalUse{},
-		egress:      map[Id]*BridgeLedgerEgress{},
-		byHostBits:  map[uint32]*BridgeLedgerAddress{},
-		bySidecar:   map[Id]*BridgeLedgerAddress{},
-		withdrawals: map[string][]*BridgeLogStatement{},
-		releases:    map[Id]*bridgeRelease{},
-		reader:      reader,
-	}
-	if ledger.timeMs == 0 && reader.State != nil {
-		ledger.timeMs = reader.State.TimeMs()
-	}
-	for _, statement := range self.Statements() {
-		entry := &BridgeLedgerEntry{Statement: statement, Disposition: BridgeDispositionActive}
-		ledger.entries = append(ledger.entries, entry)
-		var err error
-		switch statement.SignedType {
-		case bridge.SignedType_SIGNED_BRIDGE_ADDRESS:
-			err = ledger.applyAddress(entry)
-		case bridge.SignedType_SIGNED_BRIDGE_ROUTE, bridge.SignedType_SIGNED_BRIDGE_MAP:
-			err = ledger.applyRule(entry)
-		case bridge.SignedType_SIGNED_BRIDGE_EGRESS:
-			err = ledger.applyEgress(entry)
-		case bridge.SignedType_SIGNED_BRIDGE_ALIAS:
-			err = ledger.applyAlias(entry)
-		case bridge.SignedType_SIGNED_BRIDGE_WITHDRAW:
-			err = ledger.applyWithdraw(entry)
-		default:
-			err = fmt.Errorf("%s is no bridge statement of the log", statement.SignedType)
-		}
-		if err != nil && entry.Disposition != BridgeDispositionPending {
-			entry.Disposition = BridgeDispositionVoid
-			entry.Reason = fmt.Errorf("%w: %w", ErrBridgeVoid, err)
-		}
-	}
-	ledger.releaseAddresses()
+	cutoffN, timeMs := bridgeLedgerReaderAt(reader)
+	unbounded := *bridgeLedgerSettingsOrDefault(reader.Settings)
+	unbounded.UnfoldedBodyMaxByteCount = 0
+	bounded := *reader
+	bounded.Settings = &unbounded
+	ledger, _ := openBridgeLedger(nil, self.Statements(), &bounded, cutoffN, timeMs, false)
 	return ledger
 }
 
-// The reader's answer for one sidecar's release, asked once: a ledger reads one state, so the answer never changes.
+// One statement at body level.
+func (self *BridgeLedger) apply(statement *BridgeLogStatement) {
+	entry := &BridgeLedgerEntry{Statement: statement, Disposition: BridgeDispositionActive}
+	self.entries = append(self.entries, entry)
+	var err error
+	switch statement.SignedType {
+	case bridge.SignedType_SIGNED_BRIDGE_ADDRESS:
+		err = self.applyAddress(entry)
+	case bridge.SignedType_SIGNED_BRIDGE_ROUTE, bridge.SignedType_SIGNED_BRIDGE_MAP:
+		err = self.applyRule(entry)
+	case bridge.SignedType_SIGNED_BRIDGE_EGRESS:
+		err = self.applyEgress(entry)
+	case bridge.SignedType_SIGNED_BRIDGE_ALIAS:
+		err = self.applyAlias(entry)
+	case bridge.SignedType_SIGNED_BRIDGE_WITHDRAW:
+		err = self.applyWithdraw(entry)
+	default:
+		err = fmt.Errorf("%s is no bridge statement of the log", statement.SignedType)
+	}
+	if err != nil && entry.Disposition != BridgeDispositionPending {
+		entry.Disposition = BridgeDispositionVoid
+		entry.Reason = fmt.Errorf("%w: %w", ErrBridgeVoid, err)
+	}
+}
+
+// The release of a sidecar's addresses at or below the ledger's cutoff, nil while it holds them: its revocation's entry
+// and time where its row carries one. A sidecar the rows no longer hold, or whose member is gone, was released at no
+// position this ledger knows: at an open its address is a tombstone that never ends, which every earlier statement
+// finds live, and a fold releases nothing for it, so a fold writes one row whatever position it folds through. A fold
+// that cannot read a revocation's time folds nothing (foldError), since a guessed time would fork the readers that
+// know it. Asked once a sidecar: a ledger reads one state.
 func (self *BridgeLedger) release(sidecarId Id) *bridgeRelease {
 	release, asked := self.releases[sidecarId]
-	if !asked {
-		release = self.reader.release(sidecarId)
-		self.releases[sidecarId] = release
+	if asked {
+		return release
 	}
+	release = func() *bridgeRelease {
+		state := self.reader.State
+		if state == nil {
+			return nil
+		}
+		row := state.sidecars[sidecarId]
+		if row != nil && row.GetRevokedAt() == 0 {
+			if memberId, untagged := configRowMember(row); !untagged || state.members[memberId] != nil {
+				return nil
+			}
+		}
+		if row == nil || row.GetRevokedAt() == 0 {
+			if self.folding {
+				return nil
+			}
+			return &bridgeRelease{n: state.n}
+		}
+		if self.cutoffN < row.GetRevokedAt() {
+			// released after the fold: live in its rows
+			return nil
+		}
+		release := &bridgeRelease{n: row.GetRevokedAt()}
+		if self.reader.EntryTimeMs != nil {
+			release.timeMs, release.timeMsKnown = self.reader.EntryTimeMs(release.n)
+		}
+		if !release.timeMsKnown {
+			release.timeMs, release.timeMsKnown = state.aclTimeAt(release.n)
+		}
+		if !release.timeMsKnown && self.folding && self.foldError == nil {
+			self.foldError = fmt.Errorf("the time of entry %d, which released %s, is not held", release.n, sidecarId)
+		}
+		return release
+	}()
+	self.releases[sidecarId] = release
 	return release
 }
 
-// errBridgePending marks a body whose generation the reader lacks.
+// An address's release: a folded tombstone's own, else its sidecar's.
+func (self *BridgeLedger) addressRelease(address *BridgeLedgerAddress) *bridgeRelease {
+	if address.folded != nil {
+		return address.folded
+	}
+	return self.release(address.SidecarId)
+}
+
+// errBridgePending marks a body whose generation the reader lacks, or an approval no judge ran on.
 var errBridgePending = errors.New("bridge body pending")
 
 // Opens an entry's sealed body into body. A generation the reader lacks marks the entry pending and answers
@@ -521,6 +649,7 @@ func (self *BridgeLedger) openBody(entry *BridgeLedgerEntry, body proto.Message)
 		// a newer signer's field may narrow what the rule opens, so a body this build cannot read whole opens nothing
 		return errors.New("the body carries a field this build cannot name")
 	}
+	self.openedByteCount += proto.Size(body)
 	return nil
 }
 
@@ -528,6 +657,20 @@ func (self *BridgeLedger) openBody(entry *BridgeLedgerEntry, body proto.Message)
 func bridgeHostBitsValid(hostBits uint32) bool {
 	lastOctet := hostBits & 0xff
 	return hostBits <= 0xffff && 0xff < hostBits && lastOctet != 0 && lastOctet != 255
+}
+
+// Takes an address into the maps, live or a tombstone.
+func (self *BridgeLedger) holdAddress(address *BridgeLedgerAddress) {
+	self.byHostBits[address.HostBits] = address
+	if address.folded == nil {
+		self.bySidecar[address.SidecarId] = address
+	}
+	if address.HostBits < bridgeUpperHostBits {
+		self.lowerCount += 1
+		if address.folded != nil || self.release(address.SidecarId) != nil {
+			self.releasing = append(self.releasing, address)
+		}
+	}
 }
 
 // A BridgeAddress at body level.
@@ -561,14 +704,7 @@ func (self *BridgeLedger) applyAddress(entry *BridgeLedgerEntry) error {
 			return errors.New("an address inside an alias or an exposed prefix")
 		}
 	}
-	address := &BridgeLedgerAddress{SidecarId: statement.Subject, HostBits: hostBits, Statement: statement}
-	self.byHostBits[hostBits], self.bySidecar[statement.Subject] = address, address
-	if hostBits < bridgeUpperHostBits {
-		self.lowerCount += 1
-		if self.release(statement.Subject) != nil {
-			self.releasing = append(self.releasing, address)
-		}
-	}
+	self.holdAddress(&BridgeLedgerAddress{SidecarId: statement.Subject, HostBits: hostBits, ClaimedAt: statement.N, Statement: statement})
 	return nil
 }
 
@@ -576,17 +712,17 @@ func (self *BridgeLedger) applyAddress(entry *BridgeLedgerEntry) error {
 // and its tombstone has run out at the claim's time, which frees them.
 func (self *BridgeLedger) hostBitsFree(hostBits uint32, statement *BridgeLogStatement) bool {
 	holder := self.byHostBits[hostBits]
-	if holder == nil {
-		return true
-	}
-	release := self.release(holder.SidecarId)
-	if release == nil || statement.N <= release.n {
+	return holder == nil || self.freeAt(holder, statement)
+}
+
+// Whether an address is a tombstone that ran out by statement's position and time, which then leaves the ledger: what
+// the fold whose time passes it drops, so a statement reads it alike whether a fold came between or not.
+func (self *BridgeLedger) freeAt(address *BridgeLedgerAddress, statement *BridgeLogStatement) bool {
+	release := self.addressRelease(address)
+	if release == nil || statement.N <= release.n || !release.timeMsKnown || statement.TimeMs < release.timeMs+BridgeAddressTombstoneMs {
 		return false
 	}
-	if !release.timeMsKnown || statement.TimeMs < release.timeMs+BridgeAddressTombstoneMs {
-		return false
-	}
-	self.dropAddress(holder)
+	self.dropAddress(address)
 	return true
 }
 
@@ -609,12 +745,7 @@ func (self *BridgeLedger) sweepLower(statement *BridgeLogStatement) {
 			// a later claim already freed it
 			return true
 		}
-		release := self.release(address.SidecarId)
-		if release.n < statement.N && release.timeMsKnown && release.timeMs+BridgeAddressTombstoneMs <= statement.TimeMs {
-			self.dropAddress(address)
-			return true
-		}
-		return false
+		return self.freeAt(address, statement)
 	})
 }
 
@@ -645,6 +776,31 @@ func bridgeUpperRangeOf(wirePrefix *bridge.BridgeIpv4Prefix) (uint32, uint32, er
 	return first, first | (^bridgePrefixMask(prefix.length) & 0xffff), nil
 }
 
+// Whether any address, live or a tombstone still holding at statement's position and time, sits in [first, last]: a
+// tombstone that ran out by then leaves the ledger.
+func (self *BridgeLedger) hostInAt(first uint32, last uint32, statement *BridgeLogStatement) bool {
+	held := []*BridgeLedgerAddress{}
+	if int(last-first) < len(self.byHostBits) {
+		for hostBits := first; hostBits <= last; hostBits += 1 {
+			if address := self.byHostBits[hostBits]; address != nil {
+				held = append(held, address)
+			}
+		}
+	} else {
+		for _, hostBits := range slices.Sorted(maps.Keys(self.byHostBits)) {
+			if first <= hostBits && hostBits <= last {
+				held = append(held, self.byHostBits[hostBits])
+			}
+		}
+	}
+	for _, address := range held {
+		if !self.freeAt(address, statement) {
+			return true
+		}
+	}
+	return false
+}
+
 // Whether any address, live or a tombstone, sits in [first, last].
 func (self *BridgeLedger) hostIn(first uint32, last uint32) bool {
 	if int(last-first) < len(self.byHostBits) {
@@ -663,21 +819,31 @@ func (self *BridgeLedger) hostIn(first uint32, last uint32) bool {
 	return false
 }
 
-// A BridgeWithdraw at body level: it binds the rule it names when its signer is that rule's or an admin, and a rule
-// not filed yet from its first filing on.
+// A BridgeWithdraw at body level: it binds the rule it names when its signer is that rule's or an admin, and reserves
+// an id no filing holds yet: its signer's filings, or anyone's for an admin's or for a second signer's, since one row
+// holds one reservation and the closed reading binds them all.
 func (self *BridgeLedger) applyWithdraw(entry *BridgeLedgerEntry) error {
 	statement := entry.Statement
 	key := string(statement.RuleId)
-	rule := self.rules[key]
+	rule := self.heldRule(key, statement.TimeMs)
 	if rule == nil {
-		self.withdrawals[key] = append(self.withdrawals[key], statement)
+		reserved := self.reserved[key]
+		switch {
+		case reserved == nil:
+			self.reserved[key] = bridgeLedgerWithdrawalOf(statement)
+		case !reserved.SignerAdmin && (statement.SignerAdmin || statement.Signer != reserved.Signer):
+			widened := *reserved
+			widened.SignerAdmin = true
+			self.reserved[key] = &widened
+		}
 		return nil
 	}
-	if !bridgeWithdrawalBinds(statement, rule.Owner) {
+	withdrawal := bridgeLedgerWithdrawalOf(statement)
+	if !withdrawal.binds(rule.Owner) {
 		return errors.New("a BridgeWithdraw by neither the rule's signer nor an admin")
 	}
 	if rule.Withdrawn == nil {
-		rule.Withdrawn = statement
+		rule.Withdrawn = withdrawal
 		self.dropUpperRange(rule)
 	}
 	return nil
@@ -706,35 +872,60 @@ func (self *BridgeLedger) dropUpperRange(rule *BridgeLedgerRule) {
 	}
 }
 
+// The rule held under key at a statement's time, nil for none. A withdrawn rule whose retention passed by then has left
+// the rows, with its count against its decision, as the fold whose time passes it drops the row: so a statement reads
+// the id alike whether a fold came between or not, and the id is free again.
+func (self *BridgeLedger) heldRule(key string, timeMs int64) *BridgeLedgerRule {
+	rule := self.rules[key]
+	if rule == nil || rule.Withdrawn == nil || timeMs <= rule.retainUntilMs() {
+		return rule
+	}
+	delete(self.rules, key)
+	if use := self.approvals[rule.ApprovalId]; use != nil && !rule.Standing {
+		delete(use.ruleIds, key)
+	}
+	return nil
+}
+
+// A rule's body with its approval cleared, as the rows keep it.
+func bridgeBodyWithoutApproval[T *bridge.BridgeRouteBody | *bridge.BridgeMapBody](body T) T {
+	switch typed := any(body).(type) {
+	case *bridge.BridgeRouteBody:
+		cleared := proto.Clone(typed).(*bridge.BridgeRouteBody)
+		cleared.Approval = nil
+		return any(cleared).(T)
+	case *bridge.BridgeMapBody:
+		cleared := proto.Clone(typed).(*bridge.BridgeMapBody)
+		cleared.Approval = nil
+		return any(cleared).(T)
+	}
+	return body
+}
+
 // A BridgeRoute or BridgeMap at body level.
 func (self *BridgeLedger) applyRule(entry *BridgeLedgerEntry) error {
 	statement := entry.Statement
 	key := string(statement.RuleId)
-	for _, withdrawal := range self.withdrawals[key] {
-		if bridgeWithdrawalBinds(withdrawal, statement.Signer) {
-			return fmt.Errorf("a BridgeWithdraw at %d named this rule id", withdrawal.N)
-		}
+	if reserved := self.reserved[key]; reserved != nil && reserved.binds(statement.Signer) {
+		return fmt.Errorf("a BridgeWithdraw at %d named this rule id", reserved.At)
 	}
-	if rule := self.rules[key]; rule != nil {
-		if rule.Withdrawn != nil && rule.retainUntilMs() < statement.TimeMs {
-			// the fold dropped the withdrawn id past its decision's not_after: the id is free again
-			delete(self.rules, key)
-		} else {
-			return self.applyHeldRule(entry, rule)
-		}
+	if rule := self.heldRule(key, statement.TimeMs); rule != nil {
+		return self.applyHeldRule(entry, rule)
 	}
 
 	rule := &BridgeLedgerRule{
-		RuleId: statement.RuleId, SignedType: statement.SignedType, Owner: statement.Signer, First: statement, Newest: statement,
-		RouteRuleIds: statement.RouteRuleIds, Expires: statement.Expires,
+		RuleId: statement.RuleId, SignedType: statement.SignedType, Owner: statement.Signer,
+		FirstAt: statement.N, FirstMs: statement.TimeMs, NewestAt: statement.N, NewestMs: statement.TimeMs,
+		First: statement, Newest: statement, RouteRuleIds: statement.RouteRuleIds, Expires: statement.Expires,
 	}
 	// the id is held from here whatever the body turns out to be
 	self.rules[key] = rule
 	var approval *bridge.BridgeApproval
-	var body proto.Message
 	var exposed *bridgeUpperRange
+	var routeBody *bridge.BridgeRouteBody
+	var mapBody *bridge.BridgeMapBody
 	if statement.SignedType == bridge.SignedType_SIGNED_BRIDGE_ROUTE {
-		routeBody := &bridge.BridgeRouteBody{}
+		routeBody = &bridge.BridgeRouteBody{}
 		if err := self.openBody(entry, routeBody); err != nil {
 			rule.Pending, rule.Void = entry.Disposition == BridgeDispositionPending, entry.Disposition != BridgeDispositionPending
 			return err
@@ -744,9 +935,9 @@ func (self *BridgeLedger) applyRule(entry *BridgeLedgerEntry) error {
 			rule.Void = true
 			return err
 		}
-		approval, body = routeBody.GetApproval(), routeBody
+		approval = routeBody.GetApproval()
 	} else {
-		mapBody := &bridge.BridgeMapBody{}
+		mapBody = &bridge.BridgeMapBody{}
 		if err := self.openBody(entry, mapBody); err != nil {
 			rule.Pending, rule.Void = entry.Disposition == BridgeDispositionPending, entry.Disposition != BridgeDispositionPending
 			return err
@@ -755,33 +946,37 @@ func (self *BridgeLedger) applyRule(entry *BridgeLedgerEntry) error {
 			rule.Void = true
 			return err
 		}
-		approval, body = mapBody.GetApproval(), mapBody
+		approval = mapBody.GetApproval()
 	}
 	if approval == nil {
 		rule.Standing = true
-	} else if err := self.spendApproval(rule, body, approval); err != nil {
-		rule.Void = true
+	} else if err := self.spendApproval(entry, rule); err != nil {
+		if entry.Disposition == BridgeDispositionPending {
+			rule.Pending = true
+		} else {
+			rule.Void = true
+		}
 		return err
 	}
-	if routeBody, ok := body.(*bridge.BridgeRouteBody); ok {
-		rule.Route = routeBody
+	if routeBody != nil {
+		rule.Route = bridgeBodyWithoutApproval(routeBody)
 		if exposed != nil {
 			exposed.rule = rule
 			self.upper = append(self.upper, *exposed)
 		}
 	} else {
-		rule.Map = body.(*bridge.BridgeMapBody)
+		rule.Map = bridgeBodyWithoutApproval(mapBody)
 	}
 	return nil
 }
 
 // A filing of a held id: the same kind by the same signer, changing only weight, site_id and drain_seconds, and
-// activating nothing.
+// activating nothing. Bodies compare with their approvals cleared, so a filing reads alike before a fold and after it.
 func (self *BridgeLedger) applyHeldRule(entry *BridgeLedgerEntry, rule *BridgeLedgerRule) error {
 	statement := entry.Statement
 	switch {
 	case rule.Withdrawn != nil:
-		return fmt.Errorf("a BridgeWithdraw at %d named this rule id", rule.Withdrawn.N)
+		return fmt.Errorf("a BridgeWithdraw at %d named this rule id", rule.Withdrawn.At)
 	case rule.SignedType != statement.SignedType || rule.Owner != statement.Signer:
 		return errors.New("the rule id is held by another kind or signer")
 	case rule.Void:
@@ -789,8 +984,10 @@ func (self *BridgeLedger) applyHeldRule(entry *BridgeLedgerEntry, rule *BridgeLe
 	case rule.Pending:
 		// what the first filing sealed is unknown here, so what this one changes is too
 		entry.Disposition, entry.Generation = BridgeDispositionPending, 0
-		if generation, err := ConfigSealedGeneration(rule.First.SealedBody); err == nil {
-			entry.Generation = generation
+		if rule.First != nil {
+			if generation, err := ConfigSealedGeneration(rule.First.SealedBody); err == nil {
+				entry.Generation = generation
+			}
 		}
 		return errBridgePending
 	case rule.Expires != statement.Expires || !slices.EqualFunc(rule.RouteRuleIds, statement.RouteRuleIds, bytes.Equal):
@@ -804,6 +1001,7 @@ func (self *BridgeLedger) applyHeldRule(entry *BridgeLedgerEntry, rule *BridgeLe
 		if err := bridgeCheckRouteBody(body); err != nil {
 			return err
 		}
+		body = bridgeBodyWithoutApproval(body)
 		kept := proto.Clone(rule.Route).(*bridge.BridgeRouteBody)
 		kept.Weight, kept.SiteId, kept.DrainSeconds = body.GetWeight(), body.GetSiteId(), body.GetDrainSeconds()
 		if !proto.Equal(kept, body) {
@@ -823,6 +1021,7 @@ func (self *BridgeLedger) applyHeldRule(entry *BridgeLedgerEntry, rule *BridgeLe
 		if err := bridgeCheckMapBody(body); err != nil {
 			return err
 		}
+		body = bridgeBodyWithoutApproval(body)
 		kept := proto.Clone(rule.Map).(*bridge.BridgeMapBody)
 		kept.DrainSeconds = body.GetDrainSeconds()
 		if !proto.Equal(kept, body) {
@@ -830,7 +1029,7 @@ func (self *BridgeLedger) applyHeldRule(entry *BridgeLedgerEntry, rule *BridgeLe
 		}
 		rule.Map = body
 	}
-	rule.Newest = statement
+	rule.Newest, rule.NewestAt, rule.NewestMs = statement, statement.N, statement.TimeMs
 	entry.Disposition = BridgeDispositionHeld
 	return nil
 }
@@ -906,7 +1105,7 @@ func (self *BridgeLedger) checkRoute(rule *BridgeLedgerRule, body *bridge.Bridge
 		}
 		return nil, nil
 	}
-	if self.hostIn(first, last) {
+	if self.hostInAt(first, last, rule.Newest) {
 		return nil, errors.New("a host sits inside the exposed prefix")
 	}
 	return &bridgeUpperRange{first: first, last: last}, nil
@@ -984,43 +1183,68 @@ func bridgeCheckMapBody(body *bridge.BridgeMapBody) error {
 	return nil
 }
 
-// Verifies a new rule's approval and counts it against its decision: the rule id the one the approval fixes, and the
-// decision's ids at most its uses.
-func (self *BridgeLedger) spendApproval(rule *BridgeLedgerRule, body proto.Message, approval *bridge.BridgeApproval) error {
-	check := self.reader.Approvals
-	if check == nil {
-		if self.reader.State == nil {
-			return ErrBridgeApprovalUnverifiable
+// A new rule's approval by the verdict its judge reached where its entry landed, counted against its decision: the
+// rule id the one the approval fixes, and the decision's ids at most its uses, over the rows and the entries alike. No
+// verdict, or an Unopened one, leaves the rule pending; a Refused one voids it.
+func (self *BridgeLedger) spendApproval(entry *BridgeLedgerEntry, rule *BridgeLedgerRule) error {
+	verdict := entry.Statement.Approval
+	if verdict == nil || verdict.Kind == BridgeBodyUnopened {
+		entry.Disposition = BridgeDispositionPending
+		if generation, err := ConfigSealedGeneration(entry.Statement.SealedBody); err == nil {
+			entry.Generation = generation
 		}
-		check = self.reader.State.CheckBridgeApproval
+		if verdict != nil {
+			entry.Generation = verdict.Generation
+		}
+		return errBridgePending
 	}
-	facts, err := check(rule.First, body, approval)
-	if err != nil {
-		return err
+	switch verdict.Kind {
+	case BridgeBodyRefused:
+		if verdict.Reason == nil {
+			return errors.New("the approval was refused where its entry landed")
+		}
+		return verdict.Reason
+	case BridgeBodyApproved:
+	default:
+		return errors.New("an approval its judge did not verify")
 	}
+	facts := verdict.Facts
 	if facts == nil || !bytes.Equal(facts.RuleId, rule.RuleId) {
 		return errors.New("a rule id its approval does not fix")
 	}
-	use := self.approvals[facts.ApprovalId]
-	if use == nil {
-		use = &bridgeApprovalUse{uses: max(1, facts.Uses), ruleIds: map[string]bool{}}
-		self.approvals[facts.ApprovalId] = use
+	if err := self.countApproval(facts.ApprovalId, facts.Uses, rule.RuleId); err != nil {
+		return err
 	}
-	use.uses = min(use.uses, max(1, facts.Uses))
-	if !use.ruleIds[string(rule.RuleId)] {
-		if int(use.uses) <= len(use.ruleIds) {
-			return fmt.Errorf("a decision's rule past its %d uses", use.uses)
-		}
-		use.ruleIds[string(rule.RuleId)] = true
-	}
-	rule.ApprovalId, rule.ApprovalNotAfterMs = facts.ApprovalId, facts.NotAfterMs
+	rule.ApprovalId, rule.ApprovalNotAfterMs, rule.ApprovalUses = facts.ApprovalId, facts.NotAfterMs, max(1, facts.Uses)
 	return nil
 }
 
-// A BridgeEgress at body level: none and auto carry no body; exits lists its exit sidecars or names their tag.
+// Counts a rule under a decision of uses, refusing one past the budget; a rule already counted adds nothing.
+func (self *BridgeLedger) countApproval(approvalId Id, uses uint32, ruleId []byte) error {
+	use := self.approvals[approvalId]
+	if use == nil {
+		use = &bridgeApprovalUse{uses: max(1, uses), ruleIds: map[string]bool{}}
+		self.approvals[approvalId] = use
+	}
+	use.uses = min(use.uses, max(1, uses))
+	if !use.ruleIds[string(ruleId)] {
+		if int(use.uses) <= len(use.ruleIds) {
+			return fmt.Errorf("a decision's rule past its %d uses", use.uses)
+		}
+		use.ruleIds[string(ruleId)] = true
+	}
+	return nil
+}
+
+// A BridgeEgress at body level: none and auto carry no body; exits lists its exit sidecars or names their tag. auto
+// is every subject's default, so it leaves no spec.
 func (self *BridgeLedger) applyEgress(entry *BridgeLedgerEntry) error {
 	statement := entry.Statement
-	egress := &BridgeLedgerEgress{Subject: statement.Subject, Mode: statement.EgressMode, Statement: statement}
+	if statement.EgressMode == bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO {
+		delete(self.egress, statement.Subject)
+		return nil
+	}
+	egress := &BridgeLedgerEgress{Subject: statement.Subject, Mode: statement.EgressMode, At: statement.N, Statement: statement}
 	// the mode binds at id level whatever the body turns out to be: exits with no exit read is no exit at all
 	self.egress[statement.Subject] = egress
 	if statement.EgressMode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS {
@@ -1051,13 +1275,27 @@ func (self *BridgeLedger) applyEgress(entry *BridgeLedgerEntry) error {
 	return nil
 }
 
-// A BridgeAlias at body level: its ids, and room in the upper /17 for its prefix. What the share itself allows, its
-// preflight and its keys, is BRIDGE-M6-03's to check on what this holds.
+// A BridgeAlias at body level: its signer an admin's device where it landed (DESIGN-DETAILS 12.2.3), its ids, one alias
+// a share's target, and room in the upper /17 for its prefix. What the share itself allows, its preflight and its
+// keys, and an alias's release, are BRIDGE-M6-03's, on what this holds.
 func (self *BridgeLedger) applyAlias(entry *BridgeLedgerEntry) error {
+	if !entry.Statement.SignerAdmin {
+		return errors.New("an alias its signer filed as no admin's device")
+	}
 	body := &bridge.BridgeAliasBody{}
 	if err := self.openBody(entry, body); err != nil {
 		return err
 	}
+	if err := self.holdAlias(body, entry.Statement); err != nil {
+		return err
+	}
+	self.aliases = append(self.aliases, &BridgeLedgerAlias{Body: body, Signer: entry.Statement.Signer, At: entry.Statement.N, Statement: entry.Statement})
+	return nil
+}
+
+// Checks an alias's body against the ledger at statement's position and time, nil for a row the rows hold, and holds
+// its range.
+func (self *BridgeLedger) holdAlias(body *bridge.BridgeAliasBody, statement *BridgeLogStatement) error {
 	if len(body.GetShareId()) != len(Id{}) || len(body.GetHost()) != len(Id{}) {
 		return errors.New("an alias with a malformed share_id or host")
 	}
@@ -1073,26 +1311,33 @@ func (self *BridgeLedger) applyAlias(entry *BridgeLedgerEntry) error {
 	if self.upperRangeHolding(first, last) != nil {
 		return errors.New("the alias overlaps another alias or an exposed prefix")
 	}
-	if self.hostIn(first, last) {
+	if (statement == nil && self.hostIn(first, last)) || (statement != nil && self.hostInAt(first, last, statement)) {
 		return errors.New("a host sits inside the alias")
 	}
 	self.upper = append(self.upper, bridgeUpperRange{first: first, last: last})
-	self.aliases = append(self.aliases, &BridgeLedgerAlias{Body: body, Statement: entry.Statement})
 	return nil
 }
 
-// Moves every address whose sidecar the reader's state released to a tombstone, dropping one that ran out by the
-// ledger's time.
+// Moves every address whose sidecar the reader's state released to a tombstone, and drops each tombstone, released
+// now or folded, that ran out by the ledger's time.
 func (self *BridgeLedger) releaseAddresses() {
-	for _, address := range self.Addresses() {
-		release := self.release(address.SidecarId)
+	addresses := make([]*BridgeLedgerAddress, 0, len(self.byHostBits))
+	for _, address := range self.byHostBits {
+		addresses = append(addresses, address)
+	}
+	slices.SortFunc(addresses, func(a *BridgeLedgerAddress, b *BridgeLedgerAddress) int { return cmp.Compare(a.HostBits, b.HostBits) })
+	for _, address := range addresses {
+		release := self.addressRelease(address)
 		if release == nil {
 			continue
 		}
 		tombstone := &BridgeLedgerTombstone{
-			SidecarId: address.SidecarId, HostBits: address.HostBits, ReleasedMs: release.timeMs, ReleasedMsKnown: release.timeMsKnown,
+			SidecarId: address.SidecarId, HostBits: address.HostBits, ReleasedAt: release.n, ReleasedMs: release.timeMs,
+			ReleasedMsKnown: release.timeMsKnown,
 		}
-		delete(self.bySidecar, address.SidecarId)
+		if self.bySidecar[address.SidecarId] == address {
+			delete(self.bySidecar, address.SidecarId)
+		}
 		if !tombstone.Holds(self.timeMs) {
 			self.dropAddress(address)
 			continue
@@ -1106,12 +1351,17 @@ func (self *BridgeLedger) TimeMs() int64 {
 	return self.timeMs
 }
 
-// Every statement of the log with what the reader made of it, in log order. The caller must not change them.
+// The position the ledger's rows hold every statement through, 0 for a ledger over no rows.
+func (self *BridgeLedger) FoldedThrough() uint64 {
+	return self.foldedThrough
+}
+
+// Every unfolded statement with what the reader made of it, in log order. The caller must not change them.
 func (self *BridgeLedger) Entries() []*BridgeLedgerEntry {
 	return self.entries
 }
 
-// The entries waiting for a generation.
+// The entries waiting for a generation or a judge.
 func (self *BridgeLedger) Pending() []*BridgeLedgerEntry {
 	pending := []*BridgeLedgerEntry{}
 	for _, entry := range self.entries {
@@ -1178,7 +1428,7 @@ func (self *BridgeLedger) UpperRanges() [][2]uint32 {
 }
 
 // Every rule the ledger holds of one kind, SIGNED_BRIDGE_ROUTE or SIGNED_BRIDGE_MAP, in rule id order: in force,
-// withdrawn, pending and void alike, each saying which. A withdrawn id the fold has dropped by the ledger's time is
+// withdrawn, pending and void alike, each saying which. A withdrawn id the rows have dropped by the ledger's time is
 // left out.
 func (self *BridgeLedger) Rules(signedType bridge.SignedType) []*BridgeLedgerRule {
 	rules := []*BridgeLedgerRule{}
@@ -1197,6 +1447,11 @@ func (self *BridgeLedger) Rule(ruleId []byte) *BridgeLedgerRule {
 	return self.rules[string(ruleId)]
 }
 
+// The withdrawal that reserves an id no filing holds, nil for none.
+func (self *BridgeLedger) Reserved(ruleId []byte) *BridgeLedgerWithdrawal {
+	return self.reserved[string(ruleId)]
+}
+
 // Each subject's egress spec, in subject order.
 func (self *BridgeLedger) Egress() []*BridgeLedgerEgress {
 	egress := make([]*BridgeLedgerEgress, 0, len(self.egress))
@@ -1207,13 +1462,14 @@ func (self *BridgeLedger) Egress() []*BridgeLedgerEgress {
 	return egress
 }
 
-// The aliases in force, in log order.
+// The aliases in force, in the order the rows and the log gave them.
 func (self *BridgeLedger) Aliases() []*BridgeLedgerAlias {
 	return slices.Clone(self.aliases)
 }
 
-// Verifies a rule's BridgeApproval as §8.8 does a GrantActivate's (CheckGrantActivate), on S(n-1), the state the
-// statement's entry landed on, which this state's log must still retain:
+// Verifies a rule's BridgeApproval as §8.8 does a GrantActivate's (CheckGrantActivate), on this state, the one the
+// statement's entry lands on: S(n-1) where the log judges it, R_b(n-1) where a base re-applies it (the judge,
+// bridge_ledger.go), so every reader at one pin reaches one verdict:
 //
 //	action    this use's stored CanonicalAction parses, is a single bridge_expose and names the statement's signer as
 //	          its target; a route's prefixes each lie inside one of its cidrs, and a map's target_port and expires are
@@ -1224,25 +1480,14 @@ func (self *BridgeLedger) Aliases() []*BridgeLedgerAlias {
 //	match     every decision approves, hashes the action it binds, the template or else the use, names the signer as
 //	          its requester, and they share one approval_id and request_sha256
 //	quorum    every decision is from a distinct approver, unexpired at the entry's time within §8.6's skew, and
-//	          passes §16.6's spend check; a decision that does not voids the rule
+//	          passes §16.6's spend check at this state's pin; a decision that does not voids the rule
 //	rule id   SHA-256("urnetwork-sidecar-v1/bridge-rule" || effect_key) of this approval and this use's action
 //
 // The budget is the smallest uses and the expiry the earliest not_after, which the ledger's count binds. Without a
 // template every filing under one approval names the one use its decisions hash, so it fixes one rule id whatever
 // their uses say: the single-use reading.
 func (self *ConfigState) CheckBridgeApproval(statement *BridgeLogStatement, body proto.Message, approval *bridge.BridgeApproval) (*BridgeApprovalFacts, error) {
-	if statement.N == 0 {
-		return nil, ErrBridgeApprovalUnverifiable
-	}
-	chain, ok := self.chainAt(statement.N - 1)
-	if !ok {
-		return nil, ErrBridgeApprovalUnverifiable
-	}
-	before, err := self.StateAt(&bridge.AuthPin{Version: statement.N - 1, Chain: chain[:]})
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrBridgeApprovalUnverifiable, err)
-	}
-	acl, err := before.Acl()
+	acl, err := self.Acl()
 	if err != nil {
 		return nil, err
 	}
@@ -1275,7 +1520,7 @@ func (self *ConfigState) CheckBridgeApproval(statement *BridgeLogStatement, body
 		return nil, errors.New("an approval with no decision")
 	}
 	payloadSha256 := bound.PayloadSha256()
-	spendCheck := before.aclSpendCheck()
+	spendCheck := self.aclSpendCheck()
 	facts := &BridgeApprovalFacts{Uses: math.MaxUint32, NotAfterMs: math.MaxInt64}
 	approvers := []Id{}
 	var first *protocol.ApprovalDecision
@@ -1302,7 +1547,7 @@ func (self *ConfigState) CheckBridgeApproval(statement *BridgeLogStatement, body
 		case decisionBody.GetNotAfterMillis()+aclDecisionSkewMs < statement.TimeMs:
 			return nil, errors.New("a decision expired before the entry")
 		}
-		if err := spendCheck.Spendable(acl, decision, bound, statement.Signer, before.Pin(), aclTime(statement.TimeMs)); err != nil {
+		if err := spendCheck.Spendable(acl, decision, bound, statement.Signer, self.Pin(), aclTime(statement.TimeMs)); err != nil {
 			return nil, err
 		}
 		if first == nil {
