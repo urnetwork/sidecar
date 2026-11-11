@@ -26,6 +26,22 @@ type SidecarMcpSettings struct {
 	// How long a run's file stays once its Coverage entry is sealed: 30 days (§16.6's retention row),
 	// for restore (§16.7). A later Coverage starts it again.
 	RunFileRetention time.Duration
+	// What Sidecar.SecretMatcher matches a tool result against (I-7; record_secret_match.go).
+	SecretMatch *SecretMatchSettings
+}
+
+// A SecretMatcher's bounds (record_secret_match.go).
+type SecretMatchSettings struct {
+	// A credential shorter than this is not matched: 16 bytes, under every key and token the daemon
+	// holds (32-byte seeds, JWTs of hundreds), so a short value can never match ordinary text.
+	CredentialMinByteCount int
+}
+
+// A fresh value each call.
+func DefaultSecretMatchSettings() *SecretMatchSettings {
+	return &SecretMatchSettings{
+		CredentialMinByteCount: 16,
+	}
 }
 
 // §16.7's capture bounds. Every cut, missed event or changed config is a coverage gap.
@@ -152,6 +168,7 @@ func defaultSidecarMcpSettings() *SidecarMcpSettings {
 		CallTimeout:           30 * time.Second,
 		ApprovalFileRetention: 30 * 24 * time.Hour,
 		RunFileRetention:      30 * 24 * time.Hour,
+		SecretMatch:           DefaultSecretMatchSettings(),
 	}
 }
 
