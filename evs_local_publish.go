@@ -17,7 +17,8 @@
 //	           checkpoint, or chunks past 8 MiB; each in a history segment of 8 MiB, Padmé-padded, uploaded with the
 //	           push's own segments under ?push=P and named by the sealed update's segment_ids
 //	5 metadata commits, git {shape, old_tip, new_tip, tags, sources, segment_ids, blobs}, an import's EvsImport over
-//	           this push's own commits signed by this admin (QD-603), and on a creating push the ref name and base,
+//	           this push's own commits signed by this admin (QD-603), none when it carries none, and on a creating
+//	           push the ref name and base,
 //	           with payload sections 15 and 16 beside them
 //	6 send     the landed sender: one part, or parts under the seal lease taken again as it lapses, and the seal
 //	7 answers  200 is the caller's to apply and settle (EVS1-M2-35's replay). A head past b, found by the plan or
@@ -326,9 +327,6 @@ func newEvsGitPublishUpdate(ctx context.Context, args *EvsLocalPublishArgs, refI
 		self.commits = append(self.commits, sealed)
 		self.commitOids = append(self.commitOids, oid)
 	}
-	if args.Import && len(self.commits) == 0 {
-		return nil, fmt.Errorf("%w: an import push that carries no commit", ErrEvsGitUpdateInvalid)
-	}
 	if !self.tagRef {
 		nextTree, err := evsGitTreeOf(ctx, objects, peeled)
 		if err != nil {
@@ -443,7 +441,9 @@ func (self *evsGitPublishUpdate) publishOnce(ctx context.Context, baseVersion ui
 	if err != nil {
 		return nil, err
 	}
-	if self.args.Import {
+	if self.args.Import && 0 < len(self.commits) {
+		// an import push that carries no commit, its tip held through its sources, signs nothing: an EvsImport
+		// covers a push's own commits and none
 		signedImport, err := self.signImport(git)
 		if err != nil {
 			return nil, err

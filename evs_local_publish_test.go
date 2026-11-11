@@ -1042,3 +1042,60 @@ func TestEvsGitCheckLimitsRefusesNamesAndDepth(t *testing.T) {
 		t.Fatalf("a path of 33 components: %v", err)
 	}
 }
+
+// A merge of main into a branch: the file main changed is cited whole from main's standing entry, a reuse item naming
+// it, so nothing is uploaded for it, and the push names main as its source and carries the merge alone.
+func TestEvsLocalPublishCitesAMergedFileFromItsSource(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	big := strings.Repeat("main's large file, in a segment\n", 1024)
+	m1 := publisher.commit(map[string]string{"shared.txt": "shared one\n", "other.txt": "o\n"})
+	if _, err := publisher.publish("main", &m1); err != nil {
+		t.Fatal(err)
+	}
+	f1 := publisher.commit(map[string]string{"shared.txt": "shared one\n", "other.txt": "o\n", "mine.txt": "mine\n"}, m1)
+	if _, err := publisher.publish("feature", &f1); err != nil {
+		t.Fatal(err)
+	}
+	m2 := publisher.commit(map[string]string{"shared.txt": big, "other.txt": "o\n"}, m1)
+	if _, err := publisher.publish("main", &m2); err != nil {
+		t.Fatal(err)
+	}
+	uploads := len(publisher.writer.server.uploads)
+	merge := publisher.commit(map[string]string{"shared.txt": big, "other.txt": "o\n", "mine.txt": "mine\n"}, f1, m2)
+	result, err := publisher.publish("feature", &merge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Commits) != 1 || len(result.Sources) != 1 || Id(result.Sources[0].GetRefId()) != publisher.ref("main").refId {
+		t.Fatalf("the merge %+v", result)
+	}
+	payload := publisher.payload("feature", result.Version)
+	if len(payload.ReuseList) != 1 || payload.ReuseList[0].RefId != publisher.ref("main").refId {
+		t.Fatalf("reuse %d", len(payload.ReuseList))
+	}
+	if len(publisher.writer.server.uploads) != uploads {
+		t.Fatalf("a cited file uploaded %d segments", len(publisher.writer.server.uploads)-uploads)
+	}
+	if _, exported := publisher.export("main", "feature"); exported.Refs[1].Tip != merge {
+		t.Fatalf("exported %+v", exported.Refs)
+	}
+}
+
+// A file added and removed inside one push is in no net change, so its blob is a history blob.
+func TestEvsLocalPublishAFileAddedAndRemovedInsideAPush(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	c1 := publisher.commit(map[string]string{"keep.txt": "k\n"})
+	if _, err := publisher.publish("main", &c1); err != nil {
+		t.Fatal(err)
+	}
+	c2 := publisher.commit(map[string]string{"keep.txt": "k\n", "scratch.txt": "a passing thought\n"}, c1)
+	c3 := publisher.commit(map[string]string{"keep.txt": "k2\n"}, c2)
+	result, err := publisher.publish("main", &c3)
+	if err != nil || result.HistoryBlobCount != 1 {
+		t.Fatalf("%+v %v", result, err)
+	}
+	dir, _ := publisher.export("main")
+	if content := evsTestGit(t, dir, "cat-file", "-p", hex.EncodeToString(c2[:])+":scratch.txt"); content != "a passing thought\n" {
+		t.Fatalf("the passing file %q", content)
+	}
+}

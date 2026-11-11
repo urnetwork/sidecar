@@ -397,13 +397,11 @@ func (self *evsTestPushServer) worldOf(refId Id) *evsTestWorld {
 	if refId == self.world.refId {
 		return self.world
 	}
-	self.world.stateLock.Lock()
-	defer self.world.stateLock.Unlock()
-	other := self.world.others[refId]
-	if other == nil {
-		self.t.Fatalf("a push to a ref the test did not make")
+	if other := self.world.otherOfId(refId); other != nil {
+		return other
 	}
-	return other
+	self.t.Fatalf("a push to a ref the test did not make")
+	return nil
 }
 
 // Commits a checked push into its ref's world after 5f's base and 5g's CAS on each file path, or answers their 409.

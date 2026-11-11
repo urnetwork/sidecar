@@ -167,6 +167,8 @@ type evsTestWorld struct {
 	base          *protocol.EvsOverlay
 	deleted       bool
 	immutable     bool
+	// a ref a request names that the world never made is made empty on first use, as helper refs an import names
+	autoRefs bool
 	// the next push's flags, and the new objects it introduces beside its entries' segments
 	nextFlags      uint32
 	nextNewObjects []*EvsNewObject
@@ -963,8 +965,9 @@ func (self *evsTestWorld) otherRef(refName []byte) *evsTestWorld {
 func (self *evsTestWorld) otherOf(request *http.Request) *evsTestWorld {
 	self.stateLock.Lock()
 	others := self.others
+	autoRefs := self.autoRefs
 	self.stateLock.Unlock()
-	if len(others) == 0 {
+	if len(others) == 0 && !autoRefs {
 		return nil
 	}
 	switch {
@@ -979,7 +982,7 @@ func (self *evsTestWorld) otherOf(request *http.Request) *evsTestWorld {
 		if err != nil {
 			return nil
 		}
-		return others[refId]
+		return self.otherOfId(refId)
 	case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/log"):
 		for refId, other := range others {
 			if request.URL.Query().Get("ref") == evsUrlId(refId) {
@@ -988,4 +991,27 @@ func (self *evsTestWorld) otherOf(request *http.Request) *evsTestWorld {
 		}
 	}
 	return nil
+}
+
+// The other ref of refId, nil for the world's own; with autoRefs, one the world never saw is made empty, as a ref a
+// push will create reads at evs.
+func (self *evsTestWorld) otherOfId(refId Id) *evsTestWorld {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if refId == self.refId {
+		return nil
+	}
+	if other := self.others[refId]; other != nil || !self.autoRefs {
+		return other
+	}
+	if self.others == nil {
+		self.others = map[Id]*evsTestWorld{}
+	}
+	other := &evsTestWorld{
+		t: self.t, repoId: self.repoId, refId: refId, signer: self.signer, config: self.config, gkm: self.gkm,
+		generation: self.generation, paths: map[string]*evsTestPath{}, segments: self.segments, window: self.window,
+		serveVersion: map[string]uint64{}, mode: self.mode, gitState: map[string]EvsGitOid{},
+	}
+	self.others[refId] = other
+	return other
 }

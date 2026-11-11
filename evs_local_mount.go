@@ -100,6 +100,8 @@ type EvsMounts struct {
 
 	stateLock    sync.Mutex
 	repoIdMounts map[Id]*EvsLocalRepo
+	// the sync engine imports run through, nil until one is registered (EVS1-M2-35's)
+	sync EvsGitSync
 }
 
 // The registry of client's mounts, its bare repositories in the plaintext git tree of client's network under state,
