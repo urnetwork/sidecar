@@ -97,6 +97,16 @@ func (self *testConfigNet) bridgeWithdraw(ruleId []byte, mode bridge.BridgeWithd
 	return &bridge.BridgeWithdraw{Header: self.header(), RuleId: ruleId, Mode: mode}
 }
 
+// A BridgeEgress of subject's mode in the clear, its body, when there is one, sealed to generation 1.
+func (self *testConfigNet) bridgeEgress(subject Id, mode bridge.BridgeEgressMode, body *bridge.BridgeEgressBody) *bridge.BridgeEgress {
+	header := self.header()
+	egress := &bridge.BridgeEgress{Header: header, Subject: subject.Bytes(), Mode: mode}
+	if body != nil {
+		egress.SealedBody = self.bridgeSeal(bridge.SignedType_SIGNED_BRIDGE_EGRESS, header, body, 1)
+	}
+	return egress
+}
+
 // A BridgeAlias sealed to generation 1.
 func (self *testConfigNet) bridgeAlias(body *bridge.BridgeAliasBody) *bridge.BridgeAlias {
 	header := self.header()
@@ -161,7 +171,8 @@ func testBridgeCast(net *testConfigNet) (Id, testConfigDevice, testConfigDevice)
 
 // §17.8's signer table at id level, at every reader, the keyless gate's included: each statement from the one class
 // that may sign it, and refused alone from the nearest other; ids of the wrong size, a missing body, an expired map
-// and an unknown withdraw mode refused as the rule's; and a BridgeEgress refused until its mode shows.
+// and an unknown withdraw mode refused as the rule's; and a BridgeEgress whose clear mode is unspecified, outside the
+// enum or at odds with its body refused, each beside the filing that passes.
 func TestBridgeStatementsTakeTheirSignersAlone(t *testing.T) {
 	net := newTestConfigNet(t)
 	_, laptop, desktop := testBridgeCast(net)
@@ -215,16 +226,22 @@ func TestBridgeStatementsTakeTheirSignersAlone(t *testing.T) {
 	unsealedAlias.SealedBody = nil
 	net.mustRefuse(laptop, alias, unsealedAlias, ErrConfigRule)
 
-	// BridgeEgress shows no mode at id level yet, so no signer's takes effect, an admin's included
-	egress := &bridge.BridgeEgress{Header: net.header(), Subject: laptop.sidecarId.Bytes()}
-	net.mustRefuse(net.owner, bridge.SignedType_SIGNED_BRIDGE_EGRESS, egress, ErrConfigRuleMissing)
+	// BridgeEgress: an admin, a device of the subject's own member, or a sponsor's, its mode in the clear
+	egressType, none, exits := bridge.SignedType_SIGNED_BRIDGE_EGRESS, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
+	net.mustRefuse(otherLaptop, egressType, net.bridgeEgress(laptop.sidecarId, none, nil), ErrConfigAuthority)
+	net.mustPost(desktop, egressType, net.bridgeEgress(laptop.sidecarId, none, nil))
+	net.mustPost(net.owner, egressType, net.bridgeEgress(laptop.sidecarId, exits, &bridge.BridgeEgressBody{ExitSidecarIds: [][]byte{desktop.sidecarId.Bytes()}}))
+	net.mustRefuse(net.owner, egressType, net.bridgeEgress(laptop.sidecarId, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_UNSPECIFIED, nil), ErrConfigRule)
+	net.mustRefuse(net.owner, egressType, net.bridgeEgress(laptop.sidecarId, bridge.BridgeEgressMode(9), nil), ErrConfigRule)
+	net.mustRefuse(net.owner, egressType, net.bridgeEgress(laptop.sidecarId, exits, nil), ErrConfigRule)
+	net.mustRefuse(net.owner, egressType, net.bridgeEgress(laptop.sidecarId, none, &bridge.BridgeEgressBody{ExitSidecarIds: [][]byte{desktop.sidecarId.Bytes()}}), ErrConfigRule)
 
 	// a BridgeBlock rides a head and never the log
 	block := &bridge.BridgeBlock{Ipv4Prefix: testBridgePrefix(100, 80, 0, 0, 16)}
 	net.mustRefuse(net.owner, bridge.SignedType_SIGNED_BRIDGE_BLOCK, block, ErrConfigRule)
 
-	if got := net.log.State().Bridge().Len(); got != 7 {
-		t.Errorf("the fold holds %d statements, want the 7 that took effect", got)
+	if got := net.log.State().Bridge().Len(); got != 9 {
+		t.Errorf("the fold holds %d statements, want the 9 that took effect", got)
 	}
 	net.everyReaderAgrees()
 }
@@ -243,7 +260,7 @@ func TestAReadOnlyOrRevokedDeviceFilesNoBridgeStatement(t *testing.T) {
 	net.mustRefuse(page, bridge.SignedType_SIGNED_BRIDGE_MAP, net.bridgeMap(page, testBridgeRuleId("page map"), 0, testBridgeMapBody(1, 80, 80)), ErrConfigReadOnly)
 	net.mustRefuse(page, bridge.SignedType_SIGNED_BRIDGE_WITHDRAW, net.bridgeWithdraw(testBridgeRuleId("page route"), reset), ErrConfigReadOnly)
 	net.mustRefuse(page, bridge.SignedType_SIGNED_BRIDGE_ALIAS, net.bridgeAlias(&bridge.BridgeAliasBody{}), ErrConfigReadOnly)
-	net.mustRefuse(page, bridge.SignedType_SIGNED_BRIDGE_EGRESS, &bridge.BridgeEgress{Header: net.header(), Subject: page.sidecarId.Bytes()}, ErrConfigReadOnly)
+	net.mustRefuse(page, bridge.SignedType_SIGNED_BRIDGE_EGRESS, net.bridgeEgress(page.sidecarId, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE, nil), ErrConfigReadOnly)
 	// the positive twin: the same route from a device that is not read_only
 	net.mustPost(desktop, bridge.SignedType_SIGNED_BRIDGE_ROUTE, net.bridgeRoute(desktop, testBridgeRuleId("page route"), body))
 
@@ -563,6 +580,136 @@ func TestABridgeApprovalVerifiesAsAGrantActivateDoes(t *testing.T) {
 	net.timeMs = notAfter + aclDecisionSkewMs
 	late := net.mustPost(laptop, route, net.bridgeRoute(laptop, lateId, lateBody))
 	testBridgeDisposition(t, net.bridgeLedger(), late.Pin.GetVersion(), BridgeDispositionVoid)
+}
+
+// One device decision by approver for requester under label's approval_id: it approves the action stored as decided,
+// with uses.
+func testBridgeDecision(t *testing.T, label string, decided []byte, uses uint32, requester Id, approver Id, notAfterMs int64) *bridge.Signed {
+	approvalId := testConfigId("expose approval " + label)
+	payload, requestSha := sha256.Sum256(decided), sha256.Sum256([]byte("expose request"))
+	decision := &protocol.ApprovalDecision{
+		ApprovalId: approvalId.Bytes(), RequestSha256: requestSha[:], PayloadSha256: payload[:],
+		Decision: uint32(protocol.ApprovalVerdict_APPROVAL_VERDICT_APPROVE), Uses: uses, NotAfterMillis: notAfterMs,
+		ApproverMemberId: approver.Bytes(), Channel: uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE), RequesterSidecarId: requester.Bytes(),
+		AuthPin: &bridge.AuthPin{Version: 1, Chain: make([]byte, 32)}, Version: 1,
+	}
+	return &bridge.Signed{Body: testConfigMarshal(t, decision), Signature: make([]byte, 64), Type: uint32(bridge.SignedType_SIGNED_APPROVAL_DECISION)}
+}
+
+// A bridge_expose use of target over cidrs, as stored.
+func testBridgeExposeUse(t *testing.T, target Id, cidrs ...string) []byte {
+	return testConfigMarshal(t, &protocol.CanonicalAction{
+		Kind: uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EXPOSE), Version: 1, TargetSidecarId: target.Bytes(), Cidrs: cidrs,
+	})
+}
+
+// The template of a multi-use bridge_expose for target, as stored: scope set, every use's cidrs its own.
+func testBridgeExposeTemplate(t *testing.T, target Id) []byte {
+	return testConfigMarshal(t, &protocol.CanonicalAction{
+		Kind: uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_EXPOSE), Version: 1, Scope: true, TargetSidecarId: target.Bytes(),
+	})
+}
+
+// The rule id §17.8 derives from a use under label's approval.
+func testBridgeUseRuleId(label string, use []byte) []byte {
+	approvalId := testConfigId("expose approval " + label)
+	ruleId := BridgeRuleId(ApprovalEffectKey(approvalId, ApprovalActionId(approvalId, use)))
+	return ruleId[:]
+}
+
+// A subnet route over one prefix carrying approval.
+func testBridgeApprovedSubnet(prefix *bridge.BridgeIpv4Prefix, approval *bridge.BridgeApproval) *bridge.BridgeRouteBody {
+	body := testBridgeSubnet(prefix, "site")
+	body.Approval = approval
+	return body
+}
+
+// A multi-use decision (owner decision 218): with template_action set, a decision of 3 uses over the template files
+// three rules, each under the id its own use fixes, and a fourth is void; a retry of a held use adds none. Without a
+// template the same decision fixes one rule id, whatever its uses say.
+func TestAMultiUseBridgeDecisionFilesUpToItsUses(t *testing.T) {
+	net := newTestConfigNet(t)
+	member, laptop, _ := testBridgeCast(net)
+	net.log.settings.AclSpendCheck = testBridgeSpendCheck{}
+	route := bridge.SignedType_SIGNED_BRIDGE_ROUTE
+	notAfter := net.timeMs + testBridgeDayMs
+	template := testBridgeExposeTemplate(t, laptop.sidecarId)
+	decision := testBridgeDecision(t, "three uses", template, 3, laptop.sidecarId, member, notAfter)
+	verdicts := []ConfigVerdict{}
+	ruleIds := [][]byte{}
+	for _, a := range []byte{1, 2, 3, 4} {
+		use := testBridgeExposeUse(t, laptop.sidecarId, "192.168."+string(rune('0'+a))+".0/24")
+		approval := &bridge.BridgeApproval{CanonicalAction: use, TemplateAction: template, Decisions: []*bridge.Signed{decision}}
+		ruleId := testBridgeUseRuleId("three uses", use)
+		ruleIds = append(ruleIds, ruleId)
+		verdicts = append(verdicts, net.mustPost(laptop, route, net.bridgeRoute(laptop, ruleId, testBridgeApprovedSubnet(testBridgePrefix(192, 168, a, 0, 24), approval))))
+	}
+	// a retry of the first use files its held id again
+	firstUse := testBridgeExposeUse(t, laptop.sidecarId, "192.168.1.0/24")
+	retryApproval := &bridge.BridgeApproval{CanonicalAction: firstUse, TemplateAction: template, Decisions: []*bridge.Signed{decision}}
+	retry := net.mustPost(laptop, route, net.bridgeRoute(laptop, ruleIds[0], testBridgeApprovedSubnet(testBridgePrefix(192, 168, 1, 0, 24), retryApproval)))
+
+	ledger := net.bridgeLedger()
+	for i, verdict := range verdicts[:3] {
+		testBridgeDisposition(t, ledger, verdict.Pin.GetVersion(), BridgeDispositionActive)
+		if rule := ledger.Rule(ruleIds[i]); rule == nil || !rule.Active() || rule.ApprovalId != testConfigId("expose approval three uses") {
+			t.Fatalf("use %d: %+v", i, rule)
+		}
+	}
+	testBridgeDisposition(t, ledger, verdicts[3].Pin.GetVersion(), BridgeDispositionVoid)
+	testBridgeDisposition(t, ledger, retry.Pin.GetVersion(), BridgeDispositionHeld)
+
+	// the same decision over a use, with no template: one action, so one rule id
+	single := testBridgeExposeUse(t, laptop.sidecarId, "10.9.0.0/16")
+	singleDecision := testBridgeDecision(t, "no template", single, 3, laptop.sidecarId, member, notAfter)
+	singleApproval := &bridge.BridgeApproval{CanonicalAction: single, Decisions: []*bridge.Signed{singleDecision}}
+	singleId := testBridgeUseRuleId("no template", single)
+	first := net.mustPost(laptop, route, net.bridgeRoute(laptop, singleId, testBridgeApprovedSubnet(testBridgePrefix(10, 9, 1, 0, 24), singleApproval)))
+	other := net.mustPost(laptop, route, net.bridgeRoute(laptop, testBridgeRuleId("a second id"), testBridgeApprovedSubnet(testBridgePrefix(10, 9, 2, 0, 24), singleApproval)))
+	ledger = net.bridgeLedger()
+	testBridgeDisposition(t, ledger, first.Pin.GetVersion(), BridgeDispositionActive)
+	testBridgeDisposition(t, ledger, other.Pin.GetVersion(), BridgeDispositionVoid)
+}
+
+// A template binds its uses, each refusal beside the approval that holds: a use that does not match its template (a
+// field the template fills that the use does not equal), a template that is no scope action, one that does not parse
+// as a stored action, a template the decisions do not hash, and a template under a single-use decision are each void.
+func TestABridgeApprovalHoldsAUseToItsTemplate(t *testing.T) {
+	net := newTestConfigNet(t)
+	member, laptop, desktop := testBridgeCast(net)
+	net.log.settings.AclSpendCheck = testBridgeSpendCheck{}
+	route := bridge.SignedType_SIGNED_BRIDGE_ROUTE
+	notAfter := net.timeMs + testBridgeDayMs
+	template := testBridgeExposeTemplate(t, laptop.sidecarId)
+	file := func(label string, a byte, templateAction []byte, decided []byte, uses uint32) ConfigVerdict {
+		t.Helper()
+		use := testBridgeExposeUse(t, laptop.sidecarId, "172.16."+string(rune('0'+a))+".0/24")
+		approval := &bridge.BridgeApproval{
+			CanonicalAction: use, TemplateAction: templateAction,
+			Decisions: []*bridge.Signed{testBridgeDecision(t, label, decided, uses, laptop.sidecarId, member, notAfter)},
+		}
+		return net.mustPost(laptop, route, net.bridgeRoute(laptop, testBridgeUseRuleId(label, use), testBridgeApprovedSubnet(testBridgePrefix(172, 16, a, 0, 24), approval)))
+	}
+	good := file("good", 1, template, template, 2)
+	otherTarget := testBridgeExposeTemplate(t, desktop.sidecarId)
+	mismatch := file("mismatch", 2, otherTarget, otherTarget, 2)
+	unscoped := testBridgeExposeUse(t, laptop.sidecarId)
+	noScope := file("no scope", 3, unscoped, unscoped, 2)
+	unparsed := []byte{0xff, 0xff, 0xff}
+	notParsed := file("not parsed", 4, unparsed, unparsed, 2)
+	notHashed := file("not hashed", 5, template, testBridgeExposeUse(t, laptop.sidecarId, "172.16.5.0/24"), 2)
+	singleUse := file("single use", 6, template, template, 1)
+
+	ledger := net.bridgeLedger()
+	testBridgeDisposition(t, ledger, good.Pin.GetVersion(), BridgeDispositionActive)
+	for name, verdict := range map[string]ConfigVerdict{
+		"a use outside its template": mismatch, "a template with no scope": noScope, "a template that does not parse": notParsed,
+		"a template the decisions do not hash": notHashed, "a template under a single-use decision": singleUse,
+	} {
+		if entry := testBridgeEntryAt(t, ledger, verdict.Pin.GetVersion()); entry.Disposition != BridgeDispositionVoid || !errors.Is(entry.Reason, ErrBridgeVoid) {
+			t.Errorf("%s: disposition %d, %v", name, entry.Disposition, entry.Reason)
+		}
+	}
 }
 
 // FS-14's shape for §17.8: a base's rows carry no bridge statement, so the base's tail re-applies the ones past its
@@ -978,8 +1125,14 @@ func TestABridgeCanaryAppearsOnlyInsideSealedBodies(t *testing.T) {
 	net.mustPost(laptop, bridge.SignedType_SIGNED_BRIDGE_ALIAS, net.bridgeAlias(&bridge.BridgeAliasBody{
 		ShareId: testConfigId("canary share").Bytes(), AliasPrefix: testBridgePrefix(100, 93, 201, 0, 24), Host: testConfigId("canary host").Bytes(),
 	}))
+	canaryExit := testConfigId("canary exit")
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_BRIDGE_EGRESS, net.bridgeEgress(laptop.sidecarId, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS,
+		&bridge.BridgeEgressBody{ExitSidecarIds: [][]byte{canaryExit.Bytes()}}))
 
-	needles := map[string][]byte{"the canary site": []byte("canary site"), "the map's target": canaryTarget, "the alias's host": testConfigId("canary host").Bytes()}
+	needles := map[string][]byte{
+		"the canary site": []byte("canary site"), "the map's target": canaryTarget, "the alias's host": testConfigId("canary host").Bytes(),
+		"the exit": canaryExit.Bytes(),
+	}
 	for name, value := range map[string]uint32{"the address": canaryAddress, "the prefix": canaryPrefix.GetAddress(), "the alias prefix": testBridgeIpv4(100, 93, 201, 0)} {
 		needles[name+", big-endian"] = binary.BigEndian.AppendUint32(nil, value)
 		needles[name+", as fixed32"] = binary.LittleEndian.AppendUint32(nil, value)
@@ -1027,6 +1180,9 @@ func TestABridgeCanaryAppearsOnlyInsideSealedBodies(t *testing.T) {
 	if aliases := ledger.Aliases(); len(aliases) != 1 || aliases[0].Body.GetAliasPrefix().GetAddress() != testBridgeIpv4(100, 93, 201, 0) {
 		t.Errorf("the reader's aliases: %v", aliases)
 	}
+	if egress := ledger.Egress(); len(egress) != 1 || len(egress[0].ExitSidecarIds) != 1 || egress[0].ExitSidecarIds[0] != canaryExit {
+		t.Errorf("the reader's egress: %+v", egress)
+	}
 }
 
 // Aliases and exposed prefixes hold the upper /17 apart: an alias over another, one in the lower /17 or wider than
@@ -1056,47 +1212,95 @@ func TestBridgeAliasesHoldTheUpperHalfApart(t *testing.T) {
 	}
 }
 
-// The fold over statements handed in directly, as a full reader folds a config head's: a BridgeEgress's mode binds at
-// id level, exits reads its exits from the body, and a body naming both exits and a tag leaves the subject no exit.
-// No log carries one yet, so this is the only path that reaches it.
+// A BridgeEgress's clear mode folds into BridgeRows at every reader, the keyless gate's included, and a reader with the
+// key reads exits' exits from the body: none and exits write the subject's row and auto removes it; a body naming both
+// exits and a tag leaves the subject in exits with no exit; and a statement whose mode is unspecified is refused at a
+// full reader and at the gate alike, the rows unchanged.
 func TestABridgeEgressFoldsItsModeAndExits(t *testing.T) {
 	net := newTestConfigNet(t)
-	subject, exit := testConfigId("agent"), testConfigId("exit")
-	statement := func(n uint64, mode bridge.BridgeEgressMode, body *bridge.BridgeEgressBody) *BridgeLogStatement {
-		header := net.header()
-		logStatement := &BridgeLogStatement{
-			SignedType: bridge.SignedType_SIGNED_BRIDGE_EGRESS, N: n, TimeMs: net.timeMs, Signer: net.owner.sidecarId, SignerAdmin: true,
-			Seal: NewConfigSealContext(bridge.SignedType_SIGNED_BRIDGE_EGRESS, header), Subject: subject, EgressMode: mode,
+	_, laptop, desktop := testBridgeCast(net)
+	egressType := bridge.SignedType_SIGNED_BRIDGE_EGRESS
+	exits, none, auto := bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO
+	modes := func() (bridge.BridgeEgressMode, bridge.BridgeEgressMode) {
+		t.Helper()
+		rows, err := net.log.State().BridgeRows()
+		if err != nil {
+			t.Fatal(err)
 		}
-		logStatement.StatementId[0] = byte(n)
-		if body != nil {
-			logStatement.SealedBody = net.bridgeSeal(bridge.SignedType_SIGNED_BRIDGE_EGRESS, header, body, 1)
-		}
-		return logStatement
+		return BridgeRowsEgressMode(rows, laptop.sidecarId), BridgeRowsEgressMode(rows, desktop.sidecarId)
 	}
-	exits := bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS
-	reader := &BridgeLedgerReader{RepoKeyAt: testConfigSealKeyAt(testConfigSealKey(1))}
-	log := NewBridgeLog([]*BridgeLogStatement{statement(1, exits, &bridge.BridgeEgressBody{ExitSidecarIds: [][]byte{exit.Bytes()}})})
-	ledger := log.Open(reader)
-	if egress := ledger.Egress(); len(egress) != 1 || egress[0].Mode != exits || len(egress[0].ExitSidecarIds) != 1 || egress[0].ExitSidecarIds[0] != exit {
+
+	net.mustPost(net.owner, egressType, net.bridgeEgress(laptop.sidecarId, exits, &bridge.BridgeEgressBody{ExitSidecarIds: [][]byte{desktop.sidecarId.Bytes()}}))
+	if laptopMode, desktopMode := modes(); laptopMode != exits || desktopMode != auto {
+		t.Fatalf("after exits: %s and %s", laptopMode, desktopMode)
+	}
+	egress := net.bridgeLedger().Egress()
+	if len(egress) != 1 || egress[0].Mode != exits || len(egress[0].ExitSidecarIds) != 1 || egress[0].ExitSidecarIds[0] != desktop.sidecarId {
 		t.Fatalf("exits: %+v", egress)
 	}
-	both := log.With(statement(2, exits, &bridge.BridgeEgressBody{ExitSidecarIds: [][]byte{exit.Bytes()}, ExitTagId: testConfigId("tag").Bytes()}))
-	ledger = both.Open(reader)
-	testBridgeDisposition(t, ledger, 2, BridgeDispositionVoid)
+
+	// no mode shows: the gate refuses it before it sequences, and every reader at its position
+	unspecified := net.sign(net.owner, egressType, net.bridgeEgress(laptop.sidecarId, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_UNSPECIFIED, nil))
+	if verdict := net.apiAtTip().Check(unspecified, net.timeMs+1000); verdict.Accepted() || !errors.Is(verdict.Refusal, ErrConfigRule) {
+		t.Fatalf("the gate on a mode unspecified: %v", verdict.Refusal)
+	}
+	if verdict := net.push(net.makeEntry(bridge.AuthEntryKindStatement, unspecified)); verdict.Accepted() || !errors.Is(verdict.Refusal, ErrConfigRule) {
+		t.Fatalf("a reader on a mode unspecified: %v", verdict.Refusal)
+	}
+	if laptopMode, _ := modes(); laptopMode != exits {
+		t.Fatalf("a refused statement moved the rows: %s", laptopMode)
+	}
+
+	both := net.mustPost(net.owner, egressType, net.bridgeEgress(laptop.sidecarId, exits, &bridge.BridgeEgressBody{
+		ExitSidecarIds: [][]byte{desktop.sidecarId.Bytes()}, ExitTagId: testConfigId("tag").Bytes(),
+	}))
+	ledger := net.bridgeLedger()
+	testBridgeDisposition(t, ledger, both.Pin.GetVersion(), BridgeDispositionVoid)
 	if egress := ledger.Egress(); len(egress) != 1 || egress[0].Mode != exits || len(egress[0].ExitSidecarIds) != 0 {
 		t.Fatalf("a void exits body leaves the mode and no exit: %+v", egress)
 	}
-	none := both.With(statement(3, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE, nil))
-	if egress := none.Open(reader).Egress(); len(egress) != 1 || egress[0].Mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE {
-		t.Fatalf("none: %+v", egress)
+
+	net.mustPost(desktop, egressType, net.bridgeEgress(desktop.sidecarId, none, nil))
+	if laptopMode, desktopMode := modes(); laptopMode != exits || desktopMode != none {
+		t.Fatalf("after none: %s and %s", laptopMode, desktopMode)
 	}
-	if log.Len() != 1 || both.Len() != 2 || none.Len() != 3 {
-		t.Error("With changed a log it was called on")
+	net.mustPost(laptop, egressType, net.bridgeEgress(laptop.sidecarId, auto, nil))
+	if laptopMode, desktopMode := modes(); laptopMode != auto || desktopMode != none {
+		t.Fatalf("after auto: %s and %s", laptopMode, desktopMode)
 	}
-	if joined := JoinBridgeLogs(both, none); joined.Len() != 3 {
-		t.Errorf("a join took a statement twice: %d", joined.Len())
+	net.everyReaderAgrees()
+}
+
+// BridgeRows across a fold: a base folding through BridgeEgress entries carries their modes in its rows, and the tail
+// past its folded_through re-applies over them, so a new device, a restored reader and the keyless gate hold the
+// long-running reader's rows, and an entry past the base applies at each alike.
+func TestBridgeRowsAreEqualAcrossAFoldOfBridgeEgress(t *testing.T) {
+	net := newTestConfigNet(t)
+	_, laptop, desktop := testBridgeCast(net)
+	egressType := bridge.SignedType_SIGNED_BRIDGE_EGRESS
+	exits, none := bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE
+	net.mustPost(net.owner, egressType, net.bridgeEgress(laptop.sidecarId, none, nil))
+	net.mustPost(net.owner, egressType, net.bridgeEgress(desktop.sidecarId, exits, &bridge.BridgeEgressBody{ExitSidecarIds: [][]byte{laptop.sidecarId.Bytes()}}))
+	foldedThrough := net.n
+	net.mustPost(desktop, egressType, net.bridgeEgress(desktop.sidecarId, none, nil))
+	before := net.log.State().aclRows.GetBridge()
+
+	net.fold(net.owner, foldedThrough, 2)
+	folded := net.statesAt[foldedThrough].aclRows.GetBridge()
+	if after := net.log.State().aclRows.GetBridge(); !bytes.Equal(after, before) || bytes.Equal(folded, before) {
+		t.Fatalf("the rows across the fold: %x before, %x after, %x at the fold", before, after, folded)
 	}
+	for i, reader := range net.everyReader() {
+		if got := reader.State().aclRows.GetBridge(); !bytes.Equal(got, before) {
+			t.Errorf("reader %d holds %x, the long-running reader %x", i, got, before)
+		}
+	}
+	net.mustPost(net.owner, egressType, net.bridgeEgress(laptop.sidecarId, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO, nil))
+	rows, err := net.log.State().BridgeRows()
+	if err != nil || len(rows.GetEgress()) != 1 || BridgeRowsEgressMode(rows, desktop.sidecarId) != none {
+		t.Fatalf("past the fold: %v, %v", rows, err)
+	}
+	net.everyReaderAgrees()
 }
 
 // §22.6 at the log: a BridgeRoute and a BridgeMap can encode alike, so a body that parses says nothing of what it is.

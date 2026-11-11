@@ -3,6 +3,7 @@ package evsservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -272,6 +273,25 @@ func TestBatchPutAppliedAndItsResponseDroppedIsWritten(t *testing.T) {
 	}
 	if _, err := fixture.writer.Append(fixture.paidCtx, "meta-1", testRecord("push-2", 100)); err != nil {
 		t.Errorf("after a lost send: %v", err)
+	}
+}
+
+// A waiter is answered only once its batch's slot is free, so an append made the moment the last one returns
+// finds no write in flight: tip-check at 381ba67 hung for the whole test timeout when the waiter heard first.
+func TestBatchAppendReturnsWithItsSlotFree(t *testing.T) {
+	fixture := newBatchFixture(t, nil)
+	for i := 0; i < 200; i++ {
+		// each append light, so its batch goes at once rather than at a flush the fake clock never reaches
+		fixture.clock.Advance(fixture.settings.BatchLightLoadWindow + time.Millisecond)
+		if _, err := fixture.writer.Append(fixture.paidCtx, "meta-1", testRecord(fmt.Sprintf("push-%d", i), 100)); err != nil {
+			t.Fatal(err)
+		}
+		fixture.writer.stateLock.Lock()
+		inFlight := fixture.writer.clusterStateWithLock("meta-1").inFlightCount
+		fixture.writer.stateLock.Unlock()
+		if inFlight != 0 {
+			t.Fatalf("append %d returned with %d writes in flight", i, inFlight)
+		}
 	}
 }
 

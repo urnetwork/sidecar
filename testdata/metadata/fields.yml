@@ -619,6 +619,7 @@ fields:
   BridgeEgress.header: api-7
   BridgeEgress.subject: api-7
   BridgeEgress.sealed_body: api-7
+  BridgeEgress.mode: api-7
   BridgeAlias.header: api-7
   BridgeAlias.sealed_body: api-7
   BridgeWithdraw.header: api-7
