@@ -697,7 +697,7 @@ func (self *Sidecar) PlanAclPolicy(ctx context.Context, source []byte) (*AclSave
 	if err != nil {
 		return nil, err
 	}
-	return PlanAclSave(ctx, &AclSaveInput{Policy: source, Head: head, State: state, Now: time.Now()})
+	return PlanAclSave(ctx, &AclSaveInput{Policy: source, Head: head, State: state, Now: self.clock.Now()})
 }
 
 // Saves a policy as the person confirmed its preview (D-CORE-13): never from MCP, a hook or an unconfirmed call, and
@@ -710,7 +710,7 @@ func (self *Sidecar) SaveAclPolicy(ctx context.Context, source []byte, digest [s
 	if err != nil {
 		return nil, err
 	}
-	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: source, Head: head, State: state, Now: time.Now()})
+	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: source, Head: head, State: state, Now: self.clock.Now()})
 	if err != nil {
 		return nil, err
 	}
@@ -725,7 +725,7 @@ func (self *Sidecar) SaveAclPolicy(ctx context.Context, source []byte, digest [s
 // over the state; and with neither, the document's own world (AclPolicyTestOver). Reading only.
 func (self *Sidecar) TestAclPolicy(ctx context.Context, source []byte) (*AclPolicyTestReport, error) {
 	if _, state, head, err := self.aclSaveContext(ctx); err == nil {
-		plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: source, Head: head, State: state, Now: time.Now()})
+		plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: source, Head: head, State: state, Now: self.clock.Now()})
 		if err != nil {
 			return nil, err
 		}
@@ -733,7 +733,7 @@ func (self *Sidecar) TestAclPolicy(ctx context.Context, source []byte) (*AclPoli
 	}
 	authority, ok := self.authority().(*ConfigAuthority)
 	if !ok {
-		return AclPolicyTestOver(source, nil, nil, time.Now())
+		return AclPolicyTestOver(source, nil, nil, self.clock.Now())
 	}
 	state := authority.client.State()
 	var head *ConfigHead
@@ -742,7 +742,7 @@ func (self *Sidecar) TestAclPolicy(ctx context.Context, source []byte) (*AclPoli
 			head = read
 		}
 	}
-	return AclPolicyTestOver(source, head, state, time.Now())
+	return AclPolicyTestOver(source, head, state, self.clock.Now())
 }
 
 // The change audit over this device's verified log (QD-555).
@@ -916,7 +916,7 @@ func (self *Sidecar) SaveAclTeamStart(ctx context.Context, limits *AclLimits, or
 	if head.File(ConfigHeadPolicyPath) != nil {
 		return nil, ErrAclTeamStartHasDocument
 	}
-	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: limits, Now: time.Now()})
+	plan, err := PlanAclSave(ctx, &AclSaveInput{Policy: AclTeamStartDocument(), Head: head, State: state, Limits: limits, Now: self.clock.Now()})
 	if err != nil {
 		return nil, err
 	}
