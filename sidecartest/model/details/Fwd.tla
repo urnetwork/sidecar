@@ -8,8 +8,12 @@
    compiled state at or past it says otherwise, and no entry opens anything. A denial the posture cannot check
    at all (seen = FALSE: its signer is not in the rows the posture holds) waits for a compile. The posture
    goes on admitting by its last compiled state meanwhile, however long that is: once the entry has waited
-   past the deadline it raises an alarm, again while the entry waits, and does nothing else (Tick marks the
-   waiting entries overdue; question details-4-compile-deadline, option 2, QD-621).
+   past the deadline it raises an alarm and does nothing else (Tick marks the waiting entries overdue;
+   question details-4-compile-deadline, option 2, QD-621). While the condition lasts the alarm is raised
+   again at doubling intervals, up to once a day, and at once for each further entry that becomes overdue
+   (Repeat is a point of that schedule; question details-4-overdue-alarm-repeat, option 1, QD-696). The
+   intervals are time, which the model leaves out: a point may come at any step, or never, so what is checked
+   is that no entry's alarm waits for one (EachOverdueRaised).
 
    What is checked. Safety: a host admits a window delegation under key k only while k is S's live forwarding
    key at the highest log position the host ever applied, or while a revocation of k that it could not check
@@ -28,6 +32,8 @@
      StateDropsOverlay    a compiled state clears the whole overlay, the entries after its pin included
      LowerStateAccepted   a compile that finishes below the state's pin replaces it
      NoFloor              a rolled-back store is taken as it stands, with no pin kept in the key store
+     RepeatsOnly          a further entry that becomes overdue while the condition stands raises nothing of
+                          its own and waits for the schedule's next point, up to a day away
 
    Left out: the delegation's other fields, share signers, the window client's strict_exp, the cascade's void
    (an S revocation here) and every other subject. Positions are the clock, but for the one deadline. *)
@@ -49,9 +55,10 @@ VARIABLES
     comp,     \* per slot, the pin a running compile captured, or NoComp
     floor,    \* the highest pin ever committed, kept in the key store
     snap,     \* a copy of the store an attacker holds
-    old       \* positions whose compile deadline has passed: the alarm is raised for them
+    old,      \* positions whose compile deadline has passed: the condition the status shows
+    told      \* positions an alarm has named: raised when they became overdue, or at a later point
 
-vars == <<log, hPin, sPin, sKey, overlay, comp, floor, snap, old>>
+vars == <<log, hPin, sPin, sKey, overlay, comp, floor, snap, old, told>>
 
 NoComp == MaxN + 1
 NoSnap == [h |-> NoComp, s |-> 0, k |-> 0, o |-> {}]
@@ -99,8 +106,8 @@ Denied(k) == \E q \in overlay : DenialFor(q, k)
 (* Entries the posture could not check, which only a compile resolves. *)
 Waiting == {q \in overlay : ~log[q].seen}
 
-(* The alarm stands: an entry the posture could not check has waited past its deadline. It changes nothing the
-   host admits. *)
+(* The condition stands, and the status shows it: an entry the posture could not check has waited past its
+   deadline. It changes nothing the host admits. *)
 Alarmed == Waiting \cap old # {}
 
 Current == Twin = "NoFloor" \/ hPin >= floor
@@ -114,12 +121,13 @@ Init ==
     /\ floor = 0
     /\ snap = NoSnap
     /\ old = {}
+    /\ told = {}
 
 Sequence(e) ==
     /\ Len(log) < MaxN
     /\ e.kind = "deleg" => \A q \in 1..Len(log) : ~(log[q].kind = "deleg" /\ log[q].key = e.key)
     /\ log' = Append(log, e)
-    /\ UNCHANGED <<hPin, sPin, sKey, overlay, comp, floor, snap, old>>
+    /\ UNCHANGED <<hPin, sPin, sKey, overlay, comp, floor, snap, old, told>>
 
 Fetch ==
     /\ hPin < Len(log)
@@ -127,13 +135,13 @@ Fetch ==
     /\ overlay' = overlay \cup {hPin + 1}
     /\ floor' = IF hPin + 1 > floor THEN hPin + 1 ELSE floor
     /\ sKey' = IF Twin = "OverlayOpens" /\ log[hPin + 1].kind = "deleg" THEN log[hPin + 1].key ELSE sKey
-    /\ UNCHANGED <<log, sPin, comp, snap, old>>
+    /\ UNCHANGED <<log, sPin, comp, snap, old, told>>
 
 StartCompile(i) ==
     /\ comp[i] = NoComp
     /\ hPin >= floor
     /\ comp' = [comp EXCEPT ![i] = hPin]
-    /\ UNCHANGED <<log, hPin, sPin, sKey, overlay, floor, snap, old>>
+    /\ UNCHANGED <<log, hPin, sPin, sKey, overlay, floor, snap, old, told>>
 
 FinishCompile(i) ==
     /\ comp[i] # NoComp
@@ -142,35 +150,45 @@ FinishCompile(i) ==
     /\ sKey' = Live(comp[i])
     /\ overlay' = IF Twin = "StateDropsOverlay" THEN {} ELSE {q \in overlay : q > comp[i]}
     /\ comp' = [comp EXCEPT ![i] = NoComp]
-    /\ UNCHANGED <<log, hPin, floor, snap, old>>
+    /\ UNCHANGED <<log, hPin, floor, snap, old, told>>
 
 DropCompile(i) ==
     /\ comp[i] # NoComp
     /\ comp[i] < sPin
     /\ comp' = [comp EXCEPT ![i] = NoComp]
-    /\ UNCHANGED <<log, hPin, sPin, sKey, overlay, floor, snap, old>>
+    /\ UNCHANGED <<log, hPin, sPin, sKey, overlay, floor, snap, old, told>>
 
 Restart ==
     /\ \E i \in 1..Slots : comp[i] # NoComp
     /\ comp' = [i \in 1..Slots |-> NoComp]
-    /\ UNCHANGED <<log, hPin, sPin, sKey, overlay, floor, snap, old>>
+    /\ UNCHANGED <<log, hPin, sPin, sKey, overlay, floor, snap, old, told>>
 
 Snapshot ==
     /\ Rollbacks
     /\ snap' = [h |-> hPin, s |-> sPin, k |-> sKey, o |-> overlay]
-    /\ UNCHANGED <<log, hPin, sPin, sKey, overlay, comp, floor, old>>
+    /\ UNCHANGED <<log, hPin, sPin, sKey, overlay, comp, floor, old, told>>
 
 Rollback ==
     /\ Rollbacks
     /\ snap # NoSnap
     /\ hPin' = snap.h /\ sPin' = snap.s /\ sKey' = snap.k /\ overlay' = snap.o
     /\ comp' = [i \in 1..Slots |-> NoComp]
-    /\ UNCHANGED <<log, floor, snap, old>>
+    /\ UNCHANGED <<log, floor, snap, old, told>>
 
+(* Entries pass their deadline. The alarm is raised at once for each that does, whether it opens the
+   condition or joins one that stands (QD-696). *)
 Tick ==
     /\ Waiting \ old # {}
     /\ old' = old \cup Waiting
+    /\ told' = IF Twin = "RepeatsOnly" /\ Alarmed THEN told ELSE told \cup Waiting
     /\ UNCHANGED <<log, hPin, sPin, sKey, overlay, comp, floor, snap>>
+
+(* A point of the alarm's schedule while the condition stands: 20 minutes after the first raise, then at
+   doubling intervals up to a day. It raises the alarm again, which names what is then overdue. *)
+Repeat ==
+    /\ Alarmed
+    /\ told' = told \cup (Waiting \cap old)
+    /\ UNCHANGED <<log, hPin, sPin, sKey, overlay, comp, floor, snap, old>>
 
 Next ==
     \/ \E e \in Entries : Sequence(e)
@@ -180,6 +198,7 @@ Next ==
     \/ Snapshot
     \/ Rollback
     \/ Tick
+    \/ Repeat
 
 Spec == Init /\ [][Next]_vars
 
@@ -206,9 +225,13 @@ EventuallyRefused == <>[](\A k \in Keys : Admits(k) => Live(Len(log)) = k)
 RefusedByDeadline ==
     \A k \in Keys : Admits(k) => (Live(floor) = k \/ \E q \in Waiting : q \notin old)
 
-(* While that trace stands, the alarm stands with it. *)
+(* While that trace stands, the condition stands with it. *)
 StaleIsAlarmed ==
     \A k \in Keys : (Admits(k) /\ Live(floor) # k /\ Waiting \subseteq old) => Alarmed
+
+(* Every entry waiting past its deadline has had the alarm raised for it, however far off the schedule's next
+   point is: the repeats back off to once a day, so a further entry never waits for one (QD-696). *)
+EachOverdueRaised == (Waiting \cap old) \subseteq told
 
 (* The overlay holds only entries after the state's pin, up to the posture's. *)
 OverlayAfterState == \A q \in overlay : sPin < q /\ q <= hPin
