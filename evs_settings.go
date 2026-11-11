@@ -138,6 +138,10 @@ type EvsSettings struct {
 	// A git-mode push's seal lease, which it takes after its segments and before its parts: 120 s, the most evs grants
 	// (§11.8's lease row).
 	SealLeaseDuration time.Duration
+	// How long a git-mode push in parts holds its seal lease before it takes it again, before its next part and before
+	// its seal, so a push whose parts post past one lease keeps it (DESIGN-DETAILS 8.2.5's step 7; evs answers 200 for
+	// a live lease of the push's own): 60 s, half of SealLeaseDuration. Non-positive takes it once.
+	SealLeaseRenewInterval time.Duration
 	// A deposit whose drop key the depositor rule does not take yet (ErrGkmWait: no newer rotation has reached this
 	// device, or the newest lapsed) asks again after DropKeyWait, 30 s, at most DropKeyWaitCount times, 20, before
 	// the caller gets ErrGkmWait (§11.12's deposits row: it waits for a newer rotation).
@@ -227,6 +231,7 @@ func DefaultEvsSettings() *EvsSettings {
 		GroupFormWait:            10 * time.Second,
 		GroupFormWaitCount:       12,
 		SealLeaseDuration:        120 * time.Second,
+		SealLeaseRenewInterval:   60 * time.Second,
 		SubscribeRereadDelay:     5 * time.Second,
 		SubscribeRenewAge:        24 * time.Hour,
 		SubscribeRenewWindow:     time.Hour,
