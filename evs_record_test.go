@@ -600,7 +600,7 @@ func TestEvsRecordWriterRefusesWhatItCannotWrite(t *testing.T) {
 		case 1:
 			header.BaseRecordId = evsTestId("base")
 		case 2:
-			header.Kind = protocol.EvsRecordKind_EVS_RECORD_DIFF
+			header.Kind = 9
 		case 3:
 			header.SlotId = evsTestId("slot")
 		case 4:
@@ -618,6 +618,13 @@ func TestEvsRecordWriterRefusesWhatItCannotWrite(t *testing.T) {
 		if err := NewEvsRecordWriter().Begin(io.Discard, keys.manifest, objectKey, Id{}, header); !errors.Is(err, ErrEvsRecordInvalid) {
 			t.Errorf("header %d: %v", i, err)
 		}
+	}
+	// a diff with no base record is a history diff, whose base the sealed metadata names by oid (DESIGN-DETAILS
+	// 8.2.2): taken here, and refused in an entry's chain by the chain's walk
+	history := evsTestHeader("history diff", protocol.EvsRecordKind_EVS_RECORD_DIFF, 10)
+	history.BaseRecordId = Id{}
+	if err := NewEvsRecordWriter().Begin(io.Discard, keys.manifest, objectKey, Id{}, history); err != nil {
+		t.Errorf("a history diff: %v", err)
 	}
 }
 

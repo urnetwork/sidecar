@@ -130,7 +130,7 @@ A **record** is a 160 B header, then its body in 64 KiB STREAM frames under its 
 | Bytes | Field |
 |---|---|
 | 0-15 | record_id |
-| 16-31 | base_record_id, zero unless a diff |
+| 16-31 | base_record_id, zero unless a diff in an entry's chain; a history diff's is zero (DESIGN-DETAILS 8.2.2) |
 | 32-63 | oid; SHA-1 left-aligned and zero-filled |
 | 64-79 | slot_id, zero unless key_ref_kind 1 |
 | 80-87 | generation, u64 |

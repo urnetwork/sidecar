@@ -41,6 +41,12 @@ type EvsSettings struct {
 	DeltaBaseMemoryByteCount int64
 	// The most versions one History walks: 1,000, a page of the log's.
 	HistoryVersionCount int
+	// The trees a replay's tree builder keeps decoded, least recently used out: 64 MiB (DESIGN-DETAILS 8.2.2's
+	// settings), which with the sink's pending chunk and one commit's changes is all a replay holds in memory.
+	TreeCacheByteCount int64
+	// The objects a replay's pack sink writes between two packs: 64 MiB (8.2.2), each pack then indexed into the bare
+	// repository; export writes loose objects and has no chunk.
+	ObjectSinkChunkByteCount int64
 	// The most of a segment a read fetches whole: 256 KiB (§11.9's rounds row); a larger one is read by
 	// 64 KiB-aligned ranges.
 	SegmentWholeByteCount int64
@@ -150,6 +156,8 @@ func DefaultEvsSettings() *EvsSettings {
 		HeadReadRecordCount:      16384,
 		DeltaBaseMemoryByteCount: 1024 * 1024,
 		HistoryVersionCount:      1000,
+		TreeCacheByteCount:       64 * 1024 * 1024,
+		ObjectSinkChunkByteCount: 64 * 1024 * 1024,
 		SegmentWholeByteCount:    256 * 1024,
 		GitCommandTimeout:        5 * time.Minute,
 		RefLockTimeout:           3 * time.Minute,
