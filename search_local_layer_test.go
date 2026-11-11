@@ -201,6 +201,34 @@ func TestSearchLocalLayerBound(t *testing.T) {
 	if layer.Uncovered() == 0 || 600 < layer.byteCount || len(layer.entries)+layer.Uncovered() != 6 {
 		t.Errorf("%d held in %d B, %d left out", len(layer.entries), layer.byteCount, layer.Uncovered())
 	}
+
+	// a newer version of a held document that does not fit takes its older version out with it: the layer never offers
+	// a version it knows is not the newest, and the document reads not yet searchable
+	heldPath := ""
+	var heldKey [indexIdByteCount]byte
+	for index := range 6 {
+		key, err := indexDocKey(testSearchRefKey("bound"), refId, []byte(fmt.Sprintf("b/%d.md", index)), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, ok := layer.newest(key); ok && heldPath == "" {
+			heldPath, heldKey = fmt.Sprintf("b/%d.md", index), key
+		}
+	}
+	if heldPath == "" {
+		t.Fatal("the layer holds nothing")
+	}
+	words := []string{}
+	for word := range 120 {
+		words = append(words, fmt.Sprintf("v%d", word))
+	}
+	uncovered := layer.Uncovered()
+	if err := layer.Index(normalizer, testSearchLocalVersion(t, refId, heldPath, "# Bound\n"+strings.Join(words, " ")+"\n", 3, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := layer.newest(heldKey); ok || layer.Uncovered() != uncovered+1 || 600 < layer.byteCount {
+		t.Errorf("the older version stayed, %d left out, %d B", layer.Uncovered(), layer.byteCount)
+	}
 }
 
 // A journal of the device's own committed documents.

@@ -153,7 +153,8 @@ func (self *SearchLocalLayer) entriesOf(normalizer *indexNormalizer, version *Se
 }
 
 // Indexes one version from this host's text. An entry below one the layer holds for its key is left out; one past the
-// layer's memory bound is counted and reads not yet searchable.
+// layer's memory bound is counted and reads not yet searchable, and the older entry of its key it would have replaced
+// goes, so the layer never offers a version it knows is not the newest.
 func (self *SearchLocalLayer) Index(normalizer *indexNormalizer, version *SearchLocalVersion) error {
 	entries, err := self.entriesOf(normalizer, version)
 	if err != nil {
@@ -178,6 +179,10 @@ func (self *SearchLocalLayer) Index(normalizer *indexNormalizer, version *Search
 		}
 		if self.args.Settings.LocalLayerByteCount < self.byteCount-heldByteCount+int64(len(encoded[index])) {
 			self.uncoveredCount += 1
+			if ok {
+				self.byteCount -= heldByteCount
+				delete(self.entries, entry.key)
+			}
 			continue
 		}
 		self.entries[entry.key] = entry
