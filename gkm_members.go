@@ -896,3 +896,84 @@ func (self *gkmGroupManager) processInFlow(ctx context.Context, state GkmAuthVie
 	// removed: it keeps every RK_g it holds and reads on by wraps if it is still a holder
 	return errors.Is(adoptErr, ErrMlsNotMember), nil
 }
+
+// What a member device's state says of a repo a sidecar with no leaf, a tagged or ephemeral one, created
+// (QD-638): Form when this device forms its group, KF1's steps 2 to 4 as the group's creator; a Verdict that refuses
+// when the repo's RepoCreate cannot stand at this state, which leaves it keying with an alarm; neither when the repo
+// is another device's to form, or no agent's.
+type GkmAgentRepo struct {
+	// The RepoCreate's signer: the repo's first admin, whose row signs itself in (owner decision 8).
+	CreatorId Id
+	Form      bool
+	Verdict   GkmVerdict
+}
+
+// QD-638's member side as a pure function of a state: whether sidecarId forms the group of repoId, created by a
+// sidecar with no leaf, at view and now. The device judges the RepoCreate first: its signer, the repo's first admin,
+// is an admitted sidecar that holds no leaf, standing at this state, and the kind one §8.8 lets it create, a
+// general or record repo. Then whether this device may form the group: a member device, standing and not read_only,
+// §10.6's GroupForm signer (GkmFormSignerAllowed), and a holder of the repo's key at view and now, since epoch 0's
+// tree is its own leaf and every epoch's tree lies within the holders (R3). A repo a member device created, one
+// deleted, and one with no first admin are no agent's to form here.
+func GkmFormsAgentRepo(view GkmAuthView, repoId Id, sidecarId Id, now time.Time) (*GkmAgentRepo, error) {
+	if view == nil {
+		return nil, fmt.Errorf("%w: no verified state", ErrGkmUnavailable)
+	}
+	repo := view.Repo(repoId)
+	if repo == nil {
+		return nil, fmt.Errorf("%w: repo %s", ErrGkmNoRepo, repoId)
+	}
+	agentRepo := &GkmAgentRepo{}
+	if repo.GetDeletion() != nil {
+		return agentRepo, nil
+	}
+	// the RepoCreate's admin row: the earliest one its own sidecar signed
+	var creatorRow *protocol.AclRepoAdminRow
+	for _, admin := range repo.GetAdmins() {
+		if bytes.Equal(admin.GetSidecarId(), admin.GetSigner()) && (creatorRow == nil || admin.GetAt() < creatorRow.GetAt()) {
+			creatorRow = admin
+		}
+	}
+	if creatorRow == nil {
+		return agentRepo, nil
+	}
+	creatorId, err := IdFromBytes(creatorRow.GetSidecarId())
+	if err != nil {
+		return nil, fmt.Errorf("%w: a repo's admin", ErrGkmMalformed)
+	}
+	agentRepo.CreatorId = creatorId
+	creator := view.SidecarRow(creatorId)
+	switch {
+	case creator == nil:
+		agentRepo.Verdict = gkmRefuse(GkmRefusalSigner, "the RepoCreate's signer has no admission at this state")
+		return agentRepo, nil
+	case gkmRowMemberDevice(creator):
+		// a member device forms its own repo's group (KF1)
+		return agentRepo, nil
+	case !gkmRowStanding(creator):
+		agentRepo.Verdict = gkmRefuse(GkmRefusalSigner, "the RepoCreate's signer is revoked or parked")
+		return agentRepo, nil
+	}
+	switch repo.GetKind() {
+	case protocol.RepoKind_REPO_KIND_GENERAL, protocol.RepoKind_REPO_KIND_RECORD:
+	default:
+		agentRepo.Verdict = gkmRefuse(GkmRefusalSigner, "a sidecar with no leaf created a repo of kind %s", repo.GetKind())
+		return agentRepo, nil
+	}
+	self := view.SidecarRow(sidecarId)
+	if !gkmRowStanding(self) || !gkmRowMemberDevice(self) || gkmRowReadOnly(self) {
+		return agentRepo, nil
+	}
+	if err := GkmFormSignerAllowed(view, repoId, sidecarId); err != nil {
+		if errors.Is(err, ErrGkmNotWriter) {
+			return agentRepo, nil
+		}
+		return nil, err
+	}
+	holders, err := KeyHolders(view, repoId, now)
+	if err != nil {
+		return nil, err
+	}
+	agentRepo.Form = holders.Contains(GkmHolderLeaf, sidecarId.Bytes())
+	return agentRepo, nil
+}

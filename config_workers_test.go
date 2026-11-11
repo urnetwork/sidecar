@@ -1,10 +1,11 @@
-// TEAM-M4-01 on the test network: a member's page Workers with their admission positions, what config_admissions
-// counts, and §7.10's cleanup list from 90% of the cap, the same at every kind of reader at one pin and never judging a
-// Worker by its age; then the ordinary rules a stale or cleanup revocation of a page Worker passes (D-TEAM-29): by the
-// member's consented device or an admin's, never another member's or a page Worker's, under the presence row with the
-// admission it rides beside, and for an AdminSet member's Worker at k = 2 only by a proposal of its own, which expires
-// short of k and is proposed again beside the next admission. FS-97's schedule on CORE-M4-02's act is
-// sidecartest/fault/fs97_test.go's.
+// TEAM-M4-01 on the test network: a member's page Workers with their admission positions and times, what
+// config_admissions counts, and §7.10's cleanup list from 90% of the cap, the same at every kind of reader at one pin
+// and never judging a Worker by its age; each admission's time the entry's it took effect at, its SidecarAdmit's, the
+// completing cosign's or the activating tick's, equal at every reader across folds (QD-646); then the ordinary rules a
+// stale or cleanup revocation of a page Worker passes (D-TEAM-29): by the member's consented device or an admin's,
+// never another member's or a page Worker's, under the presence row with the admission it rides beside, and for an
+// AdminSet member's Worker at k = 2 only by a proposal of its own, which expires short of k and is proposed again beside
+// the next admission. FS-97's schedule on CORE-M4-02's act is sidecartest/fault/fs97_test.go's.
 
 package sidecar
 
@@ -15,6 +16,9 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -48,9 +52,23 @@ func (self *testConfigTeam) admitWorkerByProposal(proposer testConfigDevice, cos
 	return worker, completed.Pin.GetVersion()
 }
 
-// A page Worker as PageWorkers answers it.
-func testConfigPageWorker(worker testConfigDevice, admittedAt uint64) ConfigPageWorker {
-	return ConfigPageWorker{SidecarId: worker.sidecarId, AdmittedAt: admittedAt}
+// The time the net's sequencer gave the entry at position n.
+func (self *testConfigNet) entryTimeMs(n uint64) int64 {
+	self.t.Helper()
+	if n == 0 || uint64(len(self.entries)) < n {
+		self.t.Fatalf("no entry at %d", n)
+	}
+	entry := &bridge.AuthEntry{}
+	if err := proto.Unmarshal(self.entries[n-1], entry); err != nil || entry.GetN() != n {
+		self.t.Fatalf("the entry at %d: %v", n, err)
+	}
+	return entry.GetTimeMs()
+}
+
+// A page Worker as PageWorkers answers it: its admission's position and that entry's time.
+func (self *testConfigNet) pageWorker(worker testConfigDevice, admittedAt uint64) ConfigPageWorker {
+	self.t.Helper()
+	return ConfigPageWorker{SidecarId: worker.sidecarId, AdmittedAt: admittedAt, AdmittedTime: time.UnixMilli(self.entryTimeMs(admittedAt)).UTC()}
 }
 
 // Whether two cleanup lists are the same list.
@@ -75,11 +93,11 @@ func TestPageWorkersAreAMembersReadOnlyDevicesOldestFirst(t *testing.T) {
 	net.mustPost(laptop, bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(burner, nil, true, net.timeMs+testConfigHourMs, testConfigReadOnly))
 	second, secondAt := net.admitWorker(phone, "m worker 2", member)
 
-	want := []ConfigPageWorker{testConfigPageWorker(first, firstAt), testConfigPageWorker(second, secondAt)}
+	want := []ConfigPageWorker{net.pageWorker(first, firstAt), net.pageWorker(second, secondAt)}
 	if got := net.log.State().PageWorkers(member); !slices.Equal(got, want) {
 		t.Fatalf("page Workers %v, want %v", got, want)
 	}
-	if got := net.log.State().PageWorkers(other); !slices.Equal(got, []ConfigPageWorker{testConfigPageWorker(otherWorker, otherAt)}) {
+	if got := net.log.State().PageWorkers(other); !slices.Equal(got, []ConfigPageWorker{net.pageWorker(otherWorker, otherAt)}) {
 		t.Errorf("the other member's page Workers %v", got)
 	}
 
@@ -190,8 +208,8 @@ func TestCleanupListFromNinetyPercentOfTheCap(t *testing.T) {
 		}
 	}
 	want := []ConfigCleanupMember{
-		{MemberId: memberM, Workers: []ConfigPageWorker{testConfigPageWorker(m1, m1At), testConfigPageWorker(m2, m2At)}},
-		{MemberId: memberN, Workers: []ConfigPageWorker{testConfigPageWorker(n1, n1At)}},
+		{MemberId: memberM, Workers: []ConfigPageWorker{net.pageWorker(m1, m1At), net.pageWorker(m2, m2At)}},
+		{MemberId: memberN, Workers: []ConfigPageWorker{net.pageWorker(n1, n1At)}},
 	}
 	slices.SortFunc(want, func(a ConfigCleanupMember, b ConfigCleanupMember) int { return a.MemberId.Cmp(b.MemberId) })
 	for _, admissionCap := range []int{10, 9, 5} {
@@ -277,7 +295,7 @@ func TestThePageWorkersAreNeverJudgedByAge(t *testing.T) {
 	net.wait(400 * 24 * testConfigHourMs)
 	recent, recentAt := net.admitWorker(laptop, "m worker recent", member)
 	newest, newestAt := net.admitWorker(laptop, "m worker newest", member)
-	want := []ConfigPageWorker{testConfigPageWorker(old, oldAt), testConfigPageWorker(recent, recentAt), testConfigPageWorker(newest, newestAt)}
+	want := []ConfigPageWorker{net.pageWorker(old, oldAt), net.pageWorker(recent, recentAt), net.pageWorker(newest, newestAt)}
 	admissionCap := net.log.State().AdmissionCount()
 	before := CleanupList(net.log.State(), admissionCap)
 	if len(before) != 1 || !slices.Equal(before[0].Workers, want[:2]) {
@@ -364,7 +382,7 @@ func TestAnAdminSetMembersStaleWorkerGoesOnlyByItsOwnProposal(t *testing.T) {
 	removed := bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_REMOVED
 	stale, staleAt := team.admitWorkerByProposal(team.adminB, team.owner, "b worker stale")
 	other, otherAt := team.admitWorkerByProposal(team.adminB, team.owner, "b worker other")
-	if got := team.log.State().PageWorkers(team.adminB.memberId); !slices.Equal(got, []ConfigPageWorker{testConfigPageWorker(stale, staleAt), testConfigPageWorker(other, otherAt)}) {
+	if got := team.log.State().PageWorkers(team.adminB.memberId); !slices.Equal(got, []ConfigPageWorker{team.pageWorker(stale, staleAt), team.pageWorker(other, otherAt)}) {
 		t.Fatalf("page Workers %v", got)
 	}
 
@@ -461,5 +479,135 @@ func TestConfigAuthorityAnswersThePageWorkersAtTheNewestState(t *testing.T) {
 	}
 	if got := authority.CleanupList(4); len(got) != 1 || !testConfigCleanupListsEqual(got, CleanupList(state, 4)) {
 		t.Errorf("cleanup list %v", got)
+	}
+}
+
+// QD-646: an admission's row carries the time of the entry it took effect at, never another's: a member device's
+// SidecarAdmit its own entry's; an AdminSet member's Worker at k = 2 its completing cosign's, an hour after the
+// proposal; a recovery key's proposal of a device the activating tick's, 72 h on. A base whose tail holds the cosign
+// and the tick has a new device and a rows-only gate compute those two from the tail; two bases more leave every
+// admission's entry below the retention point, so a new device holds none of them and still shows each time from the
+// rows; and a Worker admitted after the last base each reader computes from its own entry. Every reader holds the same
+// rows throughout, and the cleanup list shows position and time alike at each.
+func TestAnAdmissionsTimeIsItsEntrysAtEveryReaderAcrossAFold(t *testing.T) {
+	team := newTestConfigTeam(t)
+	member, laptop := team.consentedMember("m")
+	byEntry, byEntryAt := team.admitWorker(laptop, "m worker by entry", member)
+	team.fold(team.owner, team.n, 2)
+	tailFrom := team.log.State().Base()
+
+	// at k = 2 the completing cosign admits, an hour after the proposal
+	byCosign := team.device("b worker by cosign", team.adminB.memberId)
+	proposal := team.post(team.adminB, bridge.SignedType_SIGNED_AUTHORITY_PROPOSAL, team.longProposal(bridge.SignedType_SIGNED_SIDECAR_ADMIT, team.admission(byCosign, nil, false, 0, testConfigReadOnly)))
+	if !proposal.Accepted() || proposal.CompletedProposalId != nil {
+		t.Fatalf("the Worker's admission proposal: %v", proposal.Refusal)
+	}
+	proposalId := proposal.StatementId[:]
+	team.wait(testConfigHourMs)
+	completed := team.cosign(team.owner, proposalId)
+	if !completed.Accepted() || !bytes.Equal(completed.CompletedProposalId, proposalId) {
+		t.Fatalf("the cosign: %v", completed.Refusal)
+	}
+
+	// b's recovery key proposes b's phone, which the tick 72 h after its newest recovery signature admits
+	keyB := testConfigRecovery(team.adminB.memberId, "b")
+	_, bindId := team.propose(team.adminB, bridge.SignedType_SIGNED_RECOVERY_BIND, team.recoveryBind(keyB))
+	team.cosign(team.adminC, bindId)
+	byTick := team.device("b phone by tick", team.adminB.memberId)
+	recoveryProposal := team.postByRecovery(keyB, bridge.SignedType_SIGNED_AUTHORITY_PROPOSAL, team.longProposal(bridge.SignedType_SIGNED_SIDECAR_ADMIT, team.admission(byTick, nil, false, 0, 0)))
+	if !recoveryProposal.Accepted() {
+		t.Fatal(recoveryProposal.Refusal)
+	}
+	if cosigned := team.cosign(team.adminC, recoveryProposal.StatementId[:]); !cosigned.Accepted() || cosigned.CompletedProposalId != nil {
+		t.Fatalf("the cosign completed a recovery proposal: %v", cosigned.Refusal)
+	}
+	team.wait(72 * testConfigHourMs)
+	activated := team.activate(recoveryProposal.StatementId[:])
+	if !activated.Accepted() {
+		t.Fatalf("the activation: %v", activated.Refusal)
+	}
+
+	wantTimes := map[Id]int64{
+		byEntry.sidecarId:  team.entryTimeMs(byEntryAt),
+		byCosign.sidecarId: team.entryTimeMs(completed.Pin.GetVersion()),
+		byTick.sidecarId:   team.entryTimeMs(activated.Pin.GetVersion()),
+	}
+	if wantTimes[byCosign.sidecarId] == team.entryTimeMs(proposal.Pin.GetVersion()) || wantTimes[byTick.sidecarId] == team.entryTimeMs(recoveryProposal.Pin.GetVersion()) {
+		t.Fatal("the test's proposals and their completions share a time")
+	}
+	check := func(stage string) {
+		t.Helper()
+		team.everyReaderAgrees()
+		for i, reader := range append(team.everyReader(), team.log) {
+			state := reader.State()
+			for sidecarId, want := range wantTimes {
+				if row := state.SidecarRow(sidecarId); row == nil || row.GetAdmittedTimeMs() != want {
+					t.Errorf("%s: reader %d: %s's admission time %d, want %d", stage, i, sidecarId, row.GetAdmittedTimeMs(), want)
+				}
+			}
+			if row := state.SidecarRow(team.owner.sidecarId); row.GetAdmittedTimeMs() != 0 {
+				t.Errorf("%s: reader %d: the genesis device's admission time %d", stage, i, row.GetAdmittedTimeMs())
+			}
+		}
+	}
+
+	// the cosign and the tick ride the tail of a base that keeps the fold, which a new device and a gate re-apply
+	team.pushBase(team.owner, team.log.baseRowsOf(t, tailFrom), tailFrom.GetFoldedThrough(), 3, team.log.State().threshold)
+	if base := team.log.State().Base(); base.GetFoldedThrough() >= completed.Pin.GetVersion() {
+		t.Fatalf("the base folds through %d, past the cosign at %d", base.GetFoldedThrough(), completed.Pin.GetVersion())
+	}
+	check("over a tail")
+
+	// two folds through the tip: every admission's entry is below the retention point
+	team.fold(team.owner, team.n, 4)
+	team.mustPost(team.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, team.memberAdmitStatement("a later member"))
+	team.fold(team.owner, team.n, 5)
+	if point := team.log.State().RetentionPoint(); point <= activated.Pin.GetVersion() {
+		t.Fatalf("the retention point %d is not past the activation at %d", point, activated.Pin.GetVersion())
+	}
+	check("past the retention point")
+	restored, err := RestoreConfigLog(testConfigLogSettings(), team.log.Retained(), team.source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []uint64{byEntryAt, completed.Pin.GetVersion(), activated.Pin.GetVersion()} {
+		if restored.keptEntry(n) != nil {
+			t.Fatalf("the new device holds the entry at %d", n)
+		}
+	}
+
+	// a Worker after the last base, which every reader admits from its own entry
+	last, lastAt := team.admitWorker(laptop, "m worker last", member)
+	wantTimes[last.sidecarId] = team.entryTimeMs(lastAt)
+	check("after the last base")
+
+	// m's Workers but its newest; b's one Worker is left out
+	wantList := []ConfigCleanupMember{{MemberId: member, Workers: []ConfigPageWorker{team.pageWorker(byEntry, byEntryAt)}}}
+	admissionCap := team.log.State().AdmissionCount()
+	for i, reader := range append(team.everyReader(), team.log) {
+		state := reader.State()
+		if got := CleanupList(state, admissionCap); !testConfigCleanupListsEqual(got, wantList) {
+			t.Errorf("reader %d lists %v, want %v", i, got, wantList)
+		}
+		if got := state.PageWorkers(team.adminB.memberId); !slices.Equal(got, []ConfigPageWorker{team.pageWorker(byCosign, completed.Pin.GetVersion())}) {
+			t.Errorf("reader %d: b's page Workers %v", i, got)
+		}
+		if got := state.PageWorkers(member); len(got) != 2 || got[0].AdmittedTime.UnixMilli() != wantTimes[byEntry.sidecarId] || got[1].AdmittedTime.UnixMilli() != wantTimes[last.sidecarId] {
+			t.Errorf("reader %d: m's page Workers %v", i, got)
+		}
+	}
+}
+
+// A row that carries no admission time, the Genesis's device's or a hand-made row's, gives a page Worker no time: the
+// zero time, never the epoch.
+func TestAPageWorkerOfARowWithNoTimeHasTheZeroTime(t *testing.T) {
+	sidecarId := testConfigId("a worker with no time")
+	worker := configPageWorkerOf(sidecarId, &bridge.SidecarRow{SidecarId: sidecarId.Bytes(), AdmittedAt: 7})
+	if !worker.AdmittedTime.IsZero() || worker.AdmittedAt != 7 || worker.SidecarId != sidecarId {
+		t.Errorf("worker %v", worker)
+	}
+	timed := configPageWorkerOf(sidecarId, &bridge.SidecarRow{SidecarId: sidecarId.Bytes(), AdmittedAt: 7, AdmittedTimeMs: testConfigStartMs})
+	if timed.AdmittedTime.UnixMilli() != testConfigStartMs || timed.AdmittedTime.Location() != time.UTC {
+		t.Errorf("timed %v", timed)
 	}
 }

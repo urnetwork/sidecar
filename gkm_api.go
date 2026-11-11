@@ -52,6 +52,9 @@ const gkmHttpContentType = "application/octet-stream"
 // §10.14's bound on one POST /gkm/reader-keys (QD-066).
 const gkmReaderKeysBatchCount = 256
 
+// The bound on one POST /gkm/delegation-keys (QD-637), reader-keys' own.
+const gkmDelegationKeysBatchCount = 256
+
 // The roles of a gkm repo scope (§7.8).
 const (
 	GkmScopeRoleRead    = "r"
@@ -557,6 +560,57 @@ func (self *GkmApi) DelegationKey(ctx context.Context, configRepoId Id, delegati
 		return nil, fmt.Errorf("%w: GET /gkm/delegation-keys: a key of %d bytes", ErrGkmReplyInvalid, len(body))
 	}
 	return body, nil
+}
+
+// POST /gkm/delegation-keys (QD-637): the reader keys gkm holds for forwarding Delegations, unchecked, in the order
+// asked, nil for one with none stored, in requests of at most 256 under the scopes of configRepoId, the network's
+// config repo, whose readers alone may read them. A request gkm answers 404 names no forwarding Delegation its state
+// holds, so each of its entries is nil. An entry is passed on as gkm sent it, whatever its size: a sealer holds each
+// key to its Delegation's row before it seals to it (GkmForwardingReaderKey), so one bad entry costs one holder its
+// wrap and fails nothing else.
+func (self *GkmApi) DelegationKeys(ctx context.Context, configRepoId Id, delegationIds [][]byte) ([][]byte, error) {
+	for _, delegationId := range delegationIds {
+		if len(delegationId) != gkmDelegationIdByteCount {
+			return nil, fmt.Errorf("%w: a delegation id of %d bytes", ErrGkmMalformed, len(delegationId))
+		}
+	}
+	scopes, err := self.scopesFor(&configRepoId, GkmScopeRoleRead)
+	if err != nil {
+		return nil, err
+	}
+	readerKeys := make([][]byte, 0, len(delegationIds))
+	for start := 0; start < len(delegationIds); start += gkmDelegationKeysBatchCount {
+		request := &protocol.GkmDelegationKeysRequest{}
+		for _, delegationId := range delegationIds[start:min(len(delegationIds), start+gkmDelegationKeysBatchCount)] {
+			request.DelegationIds = append(request.DelegationIds, bytes.Clone(delegationId))
+		}
+		body, err := gkmBody(request)
+		if err != nil {
+			return nil, err
+		}
+		reply := &protocol.GkmDelegationKeysReply{}
+		call := &gkmCall{route: "POST /gkm/delegation-keys", method: http.MethodPost, path: "/gkm/delegation-keys", scopes: scopes, body: body, retry: true}
+		err = self.callMessage(ctx, call, reply)
+		if IsGkmStatus(err, http.StatusNotFound) {
+			for range request.DelegationIds {
+				readerKeys = append(readerKeys, nil)
+			}
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(reply.GetReaderKeys()) != len(request.DelegationIds) {
+			return nil, fmt.Errorf("%w: POST /gkm/delegation-keys: %d answers for %d Delegations", ErrGkmReplyInvalid, len(reply.GetReaderKeys()), len(request.DelegationIds))
+		}
+		for _, readerKey := range reply.GetReaderKeys() {
+			if len(readerKey) == 0 {
+				readerKey = nil
+			}
+			readerKeys = append(readerKeys, readerKey)
+		}
+	}
+	return readerKeys, nil
 }
 
 // POST /gkm/groups (KF1): the GroupForm, epoch 0 and generation 1 of repoId's group.

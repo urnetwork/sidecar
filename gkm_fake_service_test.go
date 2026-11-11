@@ -589,6 +589,23 @@ func (self *gkmFakeApi) DelegationKey(ctx context.Context, configRepoId sidecar.
 	return key, err
 }
 
+// The objects a test planted for the Delegations, in order, nil for none, one call per 256 as GkmApi makes them.
+func (self *gkmFakeApi) DelegationKeys(ctx context.Context, configRepoId sidecar.Id, delegationIds [][]byte) ([][]byte, error) {
+	keys := [][]byte{}
+	for start := 0; start < len(delegationIds); start += 256 {
+		err := self.call("DelegationKeys", func() error {
+			for _, delegationId := range delegationIds[start:min(len(delegationIds), start+256)] {
+				keys = append(keys, bytes.Clone(self.store.delegationKeys[string(delegationId)]))
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return keys, nil
+}
+
 func (self *gkmFakeApi) ClaimKeyPackage(ctx context.Context, repoId sidecar.Id, groupId sidecar.Id, target sidecar.Id) (*protocol.GkmKeyPackageClaimReply, error) {
 	reply := &protocol.GkmKeyPackageClaimReply{}
 	err := self.call("ClaimKeyPackage", func() error {

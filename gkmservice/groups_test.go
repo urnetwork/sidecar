@@ -52,10 +52,16 @@ func newGkmGroupWorld(t *testing.T) *gkmGroupWorld {
 	return world
 }
 
-// A Signed GroupForm of the world's repo by signer.
+// A Signed GroupForm of the world's repo by signer, signed at the fake log's position 10.
 func (self *gkmGroupWorld) form(signer *gkmTestSidecar, groupId sidecar.Id, previousGroupId *sidecar.Id, generation uint64) *bridge.Signed {
 	self.t.Helper()
-	body := &protocol.GroupForm{RepoId: self.repoId.Bytes(), GroupId: groupId.Bytes(), Generation: generation}
+	return self.formAt(signer, groupId, previousGroupId, generation, fakeGkmPin(10))
+}
+
+// A Signed GroupForm of the world's repo by signer, carrying auth as the signer's state (QD-643).
+func (self *gkmGroupWorld) formAt(signer *gkmTestSidecar, groupId sidecar.Id, previousGroupId *sidecar.Id, generation uint64, auth *bridge.AuthPin) *bridge.Signed {
+	self.t.Helper()
+	body := &protocol.GroupForm{RepoId: self.repoId.Bytes(), GroupId: groupId.Bytes(), Generation: generation, Auth: auth}
 	if previousGroupId != nil {
 		body.PreviousGroupId = previousGroupId.Bytes()
 	}
@@ -372,7 +378,7 @@ func TestAGroupBelongsToOneRepo(t *testing.T) {
 		t.Fatalf("the owner's creation resumed: %d", recorder.Code)
 	}
 	// a form of the other repo naming the group, written past gkm's checks, resolves nothing
-	formBody := fixture.marshal(&protocol.GroupForm{RepoId: otherRepoId.Bytes(), GroupId: world.groupId.Bytes(), Generation: 1})
+	formBody := fixture.marshal(&protocol.GroupForm{RepoId: otherRepoId.Bytes(), GroupId: world.groupId.Bytes(), Generation: 1, Auth: fakeGkmPin(10)})
 	fixture.put("meta-2", GkmFormKey(otherRepoId, 1), fixture.marshal(&bridge.Signed{
 		Body: formBody, SignerId: world.admin.sidecarId.Bytes(), Signature: make([]byte, 64), Type: uint32(bridge.SignedType_SIGNED_GROUP_FORM),
 	}))
@@ -503,5 +509,68 @@ func TestGkmReformFilesTheNextFormAndAPinlessEpochZero(t *testing.T) {
 	staged := world.stageSelfUpdate(1, fakeGkmPin(10))
 	if recorder := world.postEpoch(world.adminToken, 1, gkmTestEpochRequest(staged.Message(), 1, false)); recorder.Code != http.StatusForbidden {
 		t.Errorf("a commit onto the pinless epoch 0: %d", recorder.Code)
+	}
+}
+
+// QD-643 at gkm (KEYS-M2-32): a GroupForm's auth pin, the signer's state when it signed, is held to gkm's newest
+// state as a claim's is, at a creation and at a re-form: a pin off gkm's chain, and one before its previous base,
+// answer 403; one past its state 503; a form with none 400; nothing of a refused request is written; and the twin, a
+// pin on the chain, files the form.
+func TestGkmFormPinIsHeldToGkmsChainAsAClaimsIs(t *testing.T) {
+	world := newGkmGroupWorld(t)
+	fixture := world.fixture
+	fixture.auth.advanceLog(10, 4)
+	offChain := &bridge.AuthPin{Version: 8, Chain: fakeGkmChain(80)}
+	for _, c := range []struct {
+		name   string
+		auth   *bridge.AuthPin
+		status int
+	}{
+		{name: "a pin off gkm's chain", auth: offChain, status: http.StatusForbidden},
+		{name: "a pin before gkm's previous base", auth: fakeGkmPin(3), status: http.StatusForbidden},
+		{name: "a pin past gkm's state", auth: fakeGkmPin(11), status: http.StatusServiceUnavailable},
+		{name: "no pin", auth: nil, status: http.StatusBadRequest},
+	} {
+		request := world.createRequest(world.groupId)
+		request.Form = world.formAt(world.admin, world.groupId, nil, 1, c.auth)
+		if recorder := world.postCreate(request); recorder.Code != c.status {
+			t.Errorf("a creation's form with %s: %d, want %d", c.name, recorder.Code, c.status)
+		}
+		if fixture.object("meta-2", GkmFormKey(world.repoId, 1)) != nil || fixture.object("meta-2", GkmGroupOwnerKey(world.groupId)) != nil {
+			t.Fatalf("a creation refused for %s wrote its form or marker", c.name)
+		}
+	}
+	// the twin: the form at gkm's newest position, and one at an older position on its chain
+	request := world.createRequest(world.groupId)
+	request.Form = world.formAt(world.admin, world.groupId, nil, 1, fakeGkmPin(6))
+	if recorder := world.postCreate(request); recorder.Code != http.StatusOK {
+		t.Fatalf("a creation's form at a pin on gkm's chain: %d", recorder.Code)
+	}
+
+	// a re-form's form, held the same way
+	reform := newGkmReformWorld(t, 10)
+	reform.fixture.auth.advanceLog(12, 4)
+	post := func(groupId sidecar.Id, auth *bridge.AuthPin) int {
+		request := &protocol.GkmGroupReformRequest{
+			Form:            reform.formAt(reform.admin, groupId, &reform.groupId, 2, auth),
+			GenWrap:         bytes.Repeat([]byte{5}, gkmSealedKeyByteCount),
+			SealedGroupInfo: []byte("sealed group info of a second re-form's epoch 0"),
+			CipherSuite:     gkmCipherSuiteXWing,
+		}
+		path := "/gkm/repos/" + sidecar.EvsKeyId(reform.repoId) + "/forms"
+		return reform.fixture.serve(http.MethodPost, path, reform.adminToken, reform.fixture.marshal(request)).Code
+	}
+	secondGroupId := testId("group-reformed-again")
+	if status := post(secondGroupId, offChain); status != http.StatusForbidden {
+		t.Errorf("a re-form's form off gkm's chain: %d", status)
+	}
+	if status := post(secondGroupId, fakeGkmPin(13)); status != http.StatusServiceUnavailable {
+		t.Errorf("a re-form's form past gkm's state: %d", status)
+	}
+	if reform.fixture.object("meta-2", GkmGroupOwnerKey(secondGroupId)) != nil {
+		t.Fatal("a refused re-form wrote its marker")
+	}
+	if status := post(secondGroupId, fakeGkmPin(12)); status != http.StatusOK {
+		t.Errorf("a re-form's form at gkm's newest position: %d", status)
 	}
 }

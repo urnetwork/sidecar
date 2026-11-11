@@ -66,6 +66,7 @@ var gkmMatrixAllowed = map[string][]gkmMatrixClass{
 
 	"PUT /gkm/delegation-keys/{delegation_id}": {gkmClassRead, gkmClassWrite, gkmClassAdmin, gkmClassReadOnly},
 	"GET /gkm/delegation-keys/{delegation_id}": {gkmClassRead, gkmClassWrite, gkmClassAdmin, gkmClassReadOnly},
+	"POST /gkm/delegation-keys":                {gkmClassRead, gkmClassWrite, gkmClassAdmin, gkmClassReadOnly},
 }
 
 // The matrix's world: one repo on the second cluster whose GroupForm names one group, one member, and a sidecar of

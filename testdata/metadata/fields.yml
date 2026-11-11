@@ -720,6 +720,9 @@ open:
   ProjectionHeader.config_version: {row: api-7, question: metadata-list-unnamed-fields.md, until: M2}
   ProjectionHeader.rows_byte_count: {row: api-7, question: metadata-list-unnamed-fields.md, until: M2}
   BridgeWithdraw.mode: {row: api-7, question: metadata-list-unnamed-fields.md, until: M2}
+  # Answered (QD-646): api-7's words gain each admission's time, which its entry's time already shows, so it adds no
+  # exposure; the text is design-records', and the field stays open until it lands.
+  SidecarRow.admitted_time_ms: {row: api-7, question: team-m4-01-cleanup-admission-time.md, until: M2}
   CanonicalAction.kind: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
   CanonicalAction.version: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
   CanonicalAction.scope: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}

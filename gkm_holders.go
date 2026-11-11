@@ -388,18 +388,11 @@ type GkmForwardingStatementView interface {
 // counts it, and a late one goes once the object stands (§10.5's dwraps). gkm's bytes that are not the row's key,
 // which its upload check refuses, are ErrGkmKeyMissing too, and ErrGkmReplyInvalid besides.
 func GkmForwardingReaderKey(ctx context.Context, view GkmAuthView, holder GkmHolder, fetch GkmDelegationKeyFetch) ([]byte, error) {
-	if holder.Kind != GkmHolderForwarding || len(holder.ForwardDelegationId) != gkmDelegationIdByteCount ||
-		len(holder.ForwardReaderKeySha256) != gkmDigestByteCount {
+	if !gkmForwardingHolderWellFormed(holder) {
 		return nil, fmt.Errorf("%w: not a forwarding holder", ErrGkmMalformed)
 	}
-	named := func(key []byte) bool {
-		digest := sha256.Sum256(key)
-		return len(key) == gkmXWingPublicKeyByteCount && bytes.Equal(digest[:], holder.ForwardReaderKeySha256)
-	}
-	if statements, ok := view.(GkmForwardingStatementView); ok {
-		if key, found := statements.ForwardingStatementReaderKey(holder.ForwardDelegationId); found && named(key) {
-			return key, nil
-		}
+	if key, found := gkmForwardingStatementKey(view, holder); found {
+		return key, nil
 	}
 	if fetch == nil {
 		return nil, fmt.Errorf("%w: no entry or object of a forwarding Delegation's reader key", ErrGkmKeyMissing)
@@ -411,10 +404,84 @@ func GkmForwardingReaderKey(ctx context.Context, view GkmAuthView, holder GkmHol
 	if key == nil {
 		return nil, fmt.Errorf("%w: gkm holds no reader key of the forwarding Delegation", ErrGkmKeyMissing)
 	}
-	if !named(key) {
+	if !gkmForwardingKeyNamed(holder, key) {
 		return nil, fmt.Errorf("%w: gkm's reader key is not the one the row names: %w", ErrGkmKeyMissing, ErrGkmReplyInvalid)
 	}
 	return bytes.Clone(key), nil
+}
+
+// Whether holder is a forwarding holder with a delegation_id and a row digest of their sizes.
+func gkmForwardingHolderWellFormed(holder GkmHolder) bool {
+	return holder.Kind == GkmHolderForwarding && len(holder.ForwardDelegationId) == gkmDelegationIdByteCount &&
+		len(holder.ForwardReaderKeySha256) == gkmDigestByteCount
+}
+
+// Whether key is an X-Wing public key whose SHA-256 is holder's row digest, the only key sealed to for it.
+func gkmForwardingKeyNamed(holder GkmHolder, key []byte) bool {
+	digest := sha256.Sum256(key)
+	return len(key) == gkmXWingPublicKeyByteCount && bytes.Equal(digest[:], holder.ForwardReaderKeySha256)
+}
+
+// The key the statement that filed holder's Delegation names, where view keeps that entry and the key is the row's.
+func gkmForwardingStatementKey(view GkmAuthView, holder GkmHolder) ([]byte, bool) {
+	statements, ok := view.(GkmForwardingStatementView)
+	if !ok {
+		return nil, false
+	}
+	key, found := statements.ForwardingStatementReaderKey(holder.ForwardDelegationId)
+	if !found || !gkmForwardingKeyNamed(holder, key) {
+		return nil, false
+	}
+	return key, true
+}
+
+// Where a sealer reads many forwarding Delegations' reader keys at gkm at once, GkmApi.DelegationKeys' shape: the
+// bytes gkm holds for each id, unchecked, in the order asked, nil for none.
+type GkmDelegationKeysFetch func(ctx context.Context, delegationIds [][]byte) ([][]byte, error)
+
+// GkmForwardingReaderKey's fetch for every forwarding holder among holders, read in one batched call before any of
+// them is sealed to (QD-637): each holder whose key view's log does not give is asked of gkm through fetch, which
+// GkmApi.DelegationKeys splits into requests of 256, and the fetch returned answers from those results alone, so a
+// rotation at Team scale makes about 13 requests where it made one per forwarding Delegation. Each key is still held
+// to its own holder's row digest by GkmForwardingReaderKey, one at a time, so a key gkm has none of, or one off its
+// digest, costs that holder its wrap and no other. A nil fetch reads nothing, and every holder the log does not give
+// is then ErrGkmKeyMissing. An error of fetch's refuses the whole read, as a GET's error refused its rotation.
+func GkmForwardingReaderKeysFetched(ctx context.Context, view GkmAuthView, holders GkmHolders, fetch GkmDelegationKeysFetch) (GkmDelegationKeyFetch, error) {
+	delegationIds := [][]byte{}
+	asked := map[string]bool{}
+	for _, holder := range holders {
+		if !gkmForwardingHolderWellFormed(holder) || asked[string(holder.ForwardDelegationId)] {
+			continue
+		}
+		if _, found := gkmForwardingStatementKey(view, holder); found {
+			// the log names it: GkmForwardingReaderKey takes it from there
+			continue
+		}
+		asked[string(holder.ForwardDelegationId)] = true
+		delegationIds = append(delegationIds, bytes.Clone(holder.ForwardDelegationId))
+	}
+	if fetch == nil {
+		return nil, nil
+	}
+	delegationIdKeys := map[string][]byte{}
+	if 0 < len(delegationIds) {
+		readerKeys, err := fetch(ctx, delegationIds)
+		if err != nil {
+			return nil, err
+		}
+		if len(readerKeys) != len(delegationIds) {
+			return nil, fmt.Errorf("%w: %d reader keys for %d forwarding Delegations", ErrGkmReplyInvalid, len(readerKeys), len(delegationIds))
+		}
+		for i, delegationId := range delegationIds {
+			if readerKeys[i] != nil {
+				delegationIdKeys[string(delegationId)] = readerKeys[i]
+			}
+		}
+	}
+	return func(ctx context.Context, delegationId []byte) ([]byte, error) {
+		// nil for an id gkm gave nothing for, or one this read never asked: GkmForwardingReaderKey's none
+		return delegationIdKeys[string(delegationId)], nil
+	}, nil
 }
 
 // The reader key named by the statement that filed a forwarding Delegation of this state, where the state's log still
