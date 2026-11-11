@@ -138,6 +138,9 @@ barrier evs.head.read.after evsservice/head.go
 barrier evs.head.read.before evsservice/head.go
 barrier evs.lease.cas.after evsservice/push_lease.go
 barrier evs.lease.cas.before evsservice/push_lease.go
+barrier evs.local.apply.done evs_local_apply.go
+barrier evs.local.apply.ref evs_local_apply.go
+barrier evs.local.apply.state evs_local_sync.go
 barrier evs.local.import.clean_deleted evs_local_import.go
 barrier evs.local.import.helper_done evs_local_import.go
 barrier evs.local.import.helper_pushed evs_local_import.go

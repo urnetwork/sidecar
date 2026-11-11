@@ -347,8 +347,15 @@ func newEvsGitPublishUpdate(ctx context.Context, args *EvsLocalPublishArgs, refI
 			return nil, err
 		}
 	}
+	if evsLocalPublishUpdateHook != nil {
+		evsLocalPublishUpdateHook(self)
+	}
 	return self, nil
 }
+
+// A test's hook on an update once its carried set and net change are fixed, before any attempt: what a test breaks a
+// rule of 8.2.7's check with, to see replaying readers refuse it. Nil outside tests.
+var evsLocalPublishUpdateHook func(update *evsGitPublishUpdate)
 
 // Marks each file write whose chain another ref's standing entry may serve (8.2.4's reuse row): a source whose tip's
 // tree holds the new blob at the path, cited whole; else, on an overlay, the base, whose entry of the blob that stood
