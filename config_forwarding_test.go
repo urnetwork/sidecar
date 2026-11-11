@@ -919,8 +919,8 @@ func TestAForwardingRowLeavesByPositionAlone(t *testing.T) {
 // rows while the base's retention point is short of the later of their positions by a single position, and leave at the
 // base whose point passes it by 4,096, whether that base moves the fold or keeps it. Every reader holds the same rows
 // at each base: a full reader checking each base's compile against its own fold rows, another walking from the
-// genesis, a new device and a rows-only gate. Live forwarding rows, older than any of them, stay, and so does an auth
-// key's ended Delegation. After the drop, a DelegationRevoke naming a dropped id is refused as unknown and the
+// genesis, a new device and a rows-only gate. Live forwarding rows filed among them, past 4,096 positions old by the
+// last base, stay, and so does an auth key's ended Delegation. After the drop, a DelegationRevoke naming a dropped id is refused as unknown and the
 // dropped Delegation's own Signed bytes as a replay, while one naming a live row takes effect.
 func TestAForwardingRowLeavesAtRetentionPlus4096AtEveryReader(t *testing.T) {
 	net, ci, _ := newTestConfigTagNet(t)
@@ -1000,7 +1000,7 @@ func TestAForwardingRowLeavesAtRetentionPlus4096AtEveryReader(t *testing.T) {
 		testConfigStatesEqual(t, compilingState, net.log.State())
 	}
 
-	// a dropped id is unknown; its own Signed bytes are a replay; a live row older than every dropped one stays and its
+	// a dropped id is unknown; its own Signed bytes are a replay; a live row as old as the dropped ones stays, and its
 	// revocation takes effect
 	net.mustRefuse(phone, bridge.SignedType_SIGNED_DELEGATION_REVOKE, net.delegationRevoke(p1.id, 0), ErrConfigRule)
 	net.mustRefuse(net.owner, bridge.SignedType_SIGNED_DELEGATION_REVOKE, net.delegationRevoke(l1.id, 0), ErrConfigRule)
