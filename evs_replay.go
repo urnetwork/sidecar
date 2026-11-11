@@ -13,6 +13,9 @@
 // that starts above version 0 cannot see a removal before it, and holds a creation only to at least b + 1. Removals
 // of a directory reach its children through their own markers, which evs folds, so a child's m here is its own.
 //
+// A git-mode ref (NewEvsReplayPathsOfMode) holds a creation to exactly b + 1, its effective base being its own base
+// under TIP, and takes a creation over a standing path of the other kind (DESIGN-DETAILS 8.2.2's kinds row).
+//
 // A failure raises evs_alarm version_rule, and the walk is refused.
 //
 // On every leg. EvsReplayPaths is not safe for concurrent use; the functions are.
@@ -110,6 +113,8 @@ type evsReplayPath struct {
 	// its newest version, a removal's included
 	version uint64
 	removed bool
+	// a directory's entry, else a file's
+	directory bool
 }
 
 // The per-path version rules of a replaying reader over one ref, fed each committed push with its entry versions in
@@ -117,12 +122,23 @@ type evsReplayPath struct {
 type EvsReplayPaths struct {
 	// the replay started at version 0, so every removal is in view
 	complete bool
-	paths    map[string]*evsReplayPath
+	// a git-mode ref (DESIGN-DETAILS 8.2.2's kinds and versions rows): TIP makes every push's effective base its own
+	// base b, so a creation is at exactly b + 1 whatever the replay saw before it, and a creation of the other kind
+	// over a standing path is a path changing kind, not a conflict
+	gitMode bool
+	paths   map[string]*evsReplayPath
 }
 
-// A replay of the statements after fromVersion.
+// A replay of a file-mode ref's statements after fromVersion.
 func NewEvsReplayPaths(fromVersion uint64) *EvsReplayPaths {
-	return &EvsReplayPaths{complete: fromVersion == 0, paths: map[string]*evsReplayPath{}}
+	return NewEvsReplayPathsOfMode(fromVersion, protocol.EvsRefMode_EVS_REF_FILE)
+}
+
+// A replay of the statements after fromVersion of a ref of mode: a git-mode ref takes 8.2.2's kinds and versions rows.
+func NewEvsReplayPathsOfMode(fromVersion uint64, mode protocol.EvsRefMode) *EvsReplayPaths {
+	return &EvsReplayPaths{
+		complete: fromVersion == 0, gitMode: mode == protocol.EvsRefMode_EVS_REF_GIT, paths: map[string]*evsReplayPath{},
+	}
 }
 
 // Applies one verified push with the entry versions its changes name, by their entry_sha256: holds each change to
@@ -139,7 +155,9 @@ func (self *EvsReplayPaths) Apply(statement *EvsVerifiedStatement, changes []*Ev
 			return fmt.Errorf("%w: a change whose entry is missing or unasked", ErrEvsEntryRefused)
 		}
 		var version uint64
+		directory := false
 		if writes {
+			directory = evsEntryVersionIsDirectory(entryBytes)
 			digest := sha256.Sum256(entryBytes)
 			if !bytes.Equal(digest[:], change.Change.GetEntrySha256()) {
 				return fmt.Errorf("%w: an entry that does not hash to its change", ErrEvsEntryRefused)
@@ -166,7 +184,7 @@ func (self *EvsReplayPaths) Apply(statement *EvsVerifiedStatement, changes []*Ev
 			if !writes {
 				return fmt.Errorf("%w: a removal of an absent path", ErrEvsVersionRule)
 			}
-			if held != nil && !held.removed {
+			if held != nil && !held.removed && (!self.gitMode || held.directory == directory) {
 				return fmt.Errorf("%w: a creation of a path that stands", ErrEvsVersionRule)
 			}
 			standing := uint64(0)
@@ -174,11 +192,16 @@ func (self *EvsReplayPaths) Apply(statement *EvsVerifiedStatement, changes []*Ev
 				standing = held.version
 			}
 			least := max(push.GetBaseVersion(), standing) + 1
-			if version < least || (self.complete && version != least) {
+			if self.gitMode {
+				// every earlier version is at most b, so TIP makes max(b, m) + 1 exactly b + 1
+				if version != push.GetBaseVersion()+1 {
+					return fmt.Errorf("%w: a git-mode creation not at b + 1", ErrEvsVersionRule)
+				}
+			} else if version < least || (self.complete && version != least) {
 				return fmt.Errorf("%w: a creation not at max(b, m) + 1", ErrEvsVersionRule)
 			}
 		}
-		self.paths[key] = &evsReplayPath{version: version, removed: !writes}
+		self.paths[key] = &evsReplayPath{version: version, removed: !writes, directory: directory}
 	}
 	return nil
 }
