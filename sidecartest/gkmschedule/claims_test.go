@@ -22,3 +22,19 @@ func TestFsKeysClaimsALostAnswerAndAKilledClaimEachEndInOneGeneration(t *testing
 func TestFsKeysClaimsACommitBelowItsPredecessorsGenerationIsRefused(t *testing.T) {
 	FsKeysScheduleCommitBelowItsPredecessor(t, FsKeysT2(t))
 }
+
+func TestFsKeysClaimsADeliveryToANonHolderMakesMembersAlarmAndRotate(t *testing.T) {
+	FsKeysScheduleDeliveryToANonHolder(t, FsKeysT2(t))
+}
+
+func TestFsKeysClaimsAClaimAtAStaleTipIsRefused(t *testing.T) {
+	FsKeysScheduleStaleTipClaimRefused(t, FsKeysT2(t))
+}
+
+func TestFsKeysClaimsALastResortKeyPackageServesTwoGroups(t *testing.T) {
+	FsKeysScheduleLastResortInTwoGroups(t, FsKeysT2(t))
+}
+
+func TestFsKeysClaimsAKillAroundTheWrapGenAndEpochWritesResumes(t *testing.T) {
+	FsKeysScheduleKillsBetweenWrites(t, FsKeysT2(t))
+}

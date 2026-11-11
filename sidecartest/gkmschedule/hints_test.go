@@ -22,3 +22,11 @@ func TestFsKeysHintsALateAskIsToldWrapPendingAndAnswered(t *testing.T) {
 func TestFsKeysHintsLostAcksDeleteNoEpochForThirtyDays(t *testing.T) {
 	FsKeysScheduleLostAcks(t, FsKeysT2(t))
 }
+
+func TestFsKeysHintsPendingRepeatsWhileADroppedLeafStandsAndStopsPastIt(t *testing.T) {
+	FsKeysScheduleDroppedHolderHint(t, FsKeysT2(t))
+}
+
+func TestFsKeysHintsAWaitingLeafsWantRaisesWrapPending(t *testing.T) {
+	FsKeysScheduleWaitingLeafWant(t, FsKeysT2(t))
+}
