@@ -11,6 +11,10 @@
 // refused before any gate sees it. share/ is `ur share add`'s alone (SOCK-M5-15), ur/ the platform's (SOCK-M9-01), and a
 // reserved name has no owner: each is refused here. A <net> must be this sidecar's own network.
 //
+// smtp/ is a receiver's (§15.5; SOCK-M7-01): smtp/25/mx, or a Team scope's smtp/25/mx.<scope>, protocol smtp-starttls,
+// 16 streams unless the settings say otherwise. A receiver listens not serving, so its lease takes no ticket until §15
+// has published its mail host key and calls SetServing(true): the closed direction until it can terminate TLS.
+//
 // What a listener does with its streams. An admitted stream counts in flight until its conn is closed or aborted, a
 // reset ends it, or the listener resets it; the count goes to the registrar's load reports. A stream ends at its
 // ticket's grant_expire_time_millis, and PolicyChanged re-derives each stream's grant (D-SOCK-14), resetting with
@@ -34,6 +38,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -49,8 +54,8 @@ import (
 // as a socket's bind does, since §9.9's six values have none for it (a reading).
 var errSocketNameTaken error = &socketErrorValue{text: "socket name taken", errno: syscall.EADDRINUSE}
 
-// §9.9's listen settings, defaults as §9.5 gives them: protocol "tcp" ("tls" on tls/), weight 100, max_streams 256,
-// app_mode "http" on tls/.
+// §9.9's listen settings, defaults as §9.5 gives them: protocol "tcp" ("tls" on tls/, "smtp-starttls" on smtp/), weight
+// 100, max_streams 256 (16 on smtp/, §15.5), app_mode "http" on tls/.
 type SocketListenSettings struct {
 	Protocol string
 	Version  int
@@ -60,7 +65,7 @@ type SocketListenSettings struct {
 	AppMode string
 	// 1 to 1000. 0 takes 100.
 	Weight int
-	// At least 1. 0 takes 256.
+	// At least 1. 0 takes 256, or 16 on smtp/.
 	MaxStreams int
 	Exclusive  bool
 	Affinity   bool
@@ -72,8 +77,10 @@ type SocketListenSettings struct {
 const (
 	socketListenDefaultProtocol    = "tcp"
 	socketListenTlsProtocol        = "tls"
+	socketListenSmtpProtocol       = "smtp-starttls"
 	socketListenDefaultWeight      = 100
 	socketListenDefaultMaxStreams  = 256
+	socketListenSmtpMaxStreams     = 16
 	socketListenDefaultTlsAppMode  = "http"
 	socketListenTlsAppModeRaw      = "raw"
 	socketListenNoAppMode          = ""
@@ -673,8 +680,11 @@ func socketListenArgs(name string, namespace SocketNamespace, settings *SocketLi
 	}
 	if args.Protocol == "" {
 		args.Protocol = socketListenDefaultProtocol
-		if namespace == SocketNamespaceTls {
+		switch namespace {
+		case SocketNamespaceTls:
 			args.Protocol = socketListenTlsProtocol
+		case SocketNamespaceSmtp:
+			args.Protocol = socketListenSmtpProtocol
 		}
 	}
 	if args.Weight == 0 {
@@ -682,6 +692,18 @@ func socketListenArgs(name string, namespace SocketNamespace, settings *SocketLi
 	}
 	if args.MaxStreams == 0 {
 		args.MaxStreams = socketListenDefaultMaxStreams
+		if namespace == SocketNamespaceSmtp {
+			args.MaxStreams = socketListenSmtpMaxStreams
+		}
+	}
+	if namespace == SocketNamespaceSmtp {
+		// only a receiver listens on smtp/: mx or mx.<scope>, speaking smtp-starttls (§15.5)
+		host := name[strings.LastIndexByte(name, '/')+1:]
+		if label, _, _ := strings.Cut(host, "."); label != "mx" || args.Protocol != socketListenSmtpProtocol {
+			return nil, fmt.Errorf("%w: smtp/ takes a receiver's mx host and smtp-starttls", errSocketRegistrationInvalid)
+		}
+		// a receiver takes no ticket until §15 has published its key and calls SetServing
+		args.NotServing = true
 	}
 	if namespace == SocketNamespaceTls {
 		if args.AppMode == "" {
@@ -766,7 +788,7 @@ func (self *SocketComponent) listen(ctx context.Context, address *SocketAddress,
 		target:         labels.Label + ":" + name,
 		accepted:       make(chan *SocketConn, args.MaxStreams),
 		closed:         make(chan struct{}),
-		serving:        true,
+		serving:        !args.NotServing,
 		attachments:    map[uint64]*socketListenerAttachment{},
 		streams:        map[*socketListenerStream]bool{},
 		streamsChanged: make(chan struct{}),

@@ -1,0 +1,23 @@
+// Team's starting document (D-ACL-2, D-ACL-23, R-ACL-3; owner decisions 74, 179, 180; plan-ACL-team-grant1-src):
+// the first Owner's device saves it as the network's first document after team-create, so has_document holds from
+// then on. A Team narrows any rule, gives one two approvers or removes it, as its own document.
+{
+  "tagOwners": { "tag:recurd": ["autogroup:member"] },
+  "grants": [
+    // §8.5's grant 1: a member's own devices and apps reach each other
+    { "src": ["autogroup:member", "autogroup:untagged"], "dst": ["autogroup:self"], "allow": ["dial", "route"] },
+    // R-ACL-3's default: a recURd agent reaches its owner's or sponsor's devices on 443
+    { "src": ["tag:recurd"], "dst": ["autogroup:self"], "allow": ["dial"], "ip": ["tcp:443"] },
+  ],
+  "requests": [
+    // the team directory's reach requests (§16.11), the implicit document's last rule
+    { "src": ["autogroup:member", "autogroup:tagged"],
+      "dst": ["autogroup:member", "autogroup:tagged", "sock:*"], "allow": ["dial"],
+      "approver": ["autogroup:dst-owner"], "evidence": ["device", "presence"], "maxExpiry": "30d" },
+  ],
+  "tests": [
+    { "src": "autogroup:member", "accept": ["autogroup:self#dial", "autogroup:self#route"],
+      "deny": ["autogroup:member#dial", "autogroup:tagged#dial"] },
+    { "src": "tag:recurd", "deny": ["autogroup:member#dial", "autogroup:tagged#dial"] },
+  ],
+}

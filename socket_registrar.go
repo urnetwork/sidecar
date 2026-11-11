@@ -104,6 +104,9 @@ type socketRegistrationArgs struct {
 	MaxStreams int
 	Exclusive  bool
 	Affinity   bool
+	// The entry starts not serving, so its lease takes no ticket until SetServing: an smtp/ receiver's until its key
+	// is published (§15.5).
+	NotServing bool
 	// Called on the registrar's goroutine once the service ends an entry it had taken: the entry has left the set,
 	// and the listener closes it with its streams (§9.5). Never for the first verdict, which verdict answers. Must
 	// not block. nil: nothing to tell.
@@ -203,7 +206,7 @@ func newSocketRegistrarEntry(args *socketRegistrationArgs) (*socketRegistrarEntr
 		maxStreams: args.MaxStreams,
 		exclusive:  args.Exclusive,
 		affinity:   args.Affinity,
-		serving:    true,
+		serving:    !args.NotServing,
 	}, nil
 }
 
