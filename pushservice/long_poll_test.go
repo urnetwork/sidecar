@@ -202,14 +202,14 @@ func TestLongPollExpiredCursorResets(t *testing.T) {
 func TestLongPollResetIsOnePart(t *testing.T) {
 	env := newTestLongPollEnv(t, nil)
 	clientId := connect.NewId()
-	for range pushservice.MaxResetVersionCount + 2 {
+	for range pushservice.DefaultPushFormatSettings().ResetPartVersionCount + 2 {
 		env.hint(t, clientId, sidecar.PushTopicEvs(sidecar.NewId()), 7)
 	}
 	response, err := env.longPoll.Poll(t.Context(), clientId, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Reset_.Complete || len(response.Reset_.Versions) != pushservice.MaxResetVersionCount {
+	if response.Reset_.Complete || len(response.Reset_.Versions) != pushservice.DefaultPushFormatSettings().ResetPartVersionCount {
 		t.Fatalf("reset of %d complete %t", len(response.Reset_.Versions), response.Reset_.Complete)
 	}
 	body, err := proto.Marshal(&protocol.Envelope{Body: mustMarshal(t, response.Reset_)})
@@ -358,7 +358,7 @@ func TestVersionsPages(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(response.Hints) != 0 || response.Reset_ == nil || len(response.Reset_.Versions) > pushservice.MaxResetVersionCount {
+		if len(response.Hints) != 0 || response.Reset_ == nil || len(response.Reset_.Versions) > pushservice.DefaultPushFormatSettings().ResetPartVersionCount {
 			t.Fatalf("page %d: %v", page, response)
 		}
 		if page == 0 {

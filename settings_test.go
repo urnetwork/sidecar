@@ -228,11 +228,19 @@ func TestDefaultProtocolSettingsMatchDesign(t *testing.T) {
 		PeerSilenceTimeout:               45 * time.Second,
 		HeadCheckInterval:                1 * time.Hour,
 		HeadCheckRoundPeerCount:          4,
+		HeadCheckRoundOtherMemberCount:   2,
 		HeadCheckTimeout:                 10 * time.Second,
 		HeadCheckFetchTimeout:            10 * time.Minute,
 		HeadCheckUnwitnessedInterval:     10 * time.Minute,
 		WakeInterval:                     1 * time.Hour,
 		SyncRefetchInterval:              1 * time.Hour,
+		// §6.5's StreamOpen budget (QD-702: protocol limits are settings)
+		StreamTargetMaxByteCount:   128,
+		StreamMetadataMaxByteCount: 1024,
+		StreamTicketMaxByteCount:   512,
+		StreamOpenMaxByteCount:     3800,
+		// D-PROTO-10: relay-only until the owner's call on FS-126
+		EnablePeerP2p: false,
 	}
 	// SEARCH's wire values, §6.5's and DESIGN-DETAILS 11.2.9's
 	want.Search = SearchWireSettings{

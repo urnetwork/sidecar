@@ -64,6 +64,12 @@ type HeadCheckEnv struct {
 	Identity func(ctx context.Context, sidecarId Id) (*SidecarIdentityRecord, error)
 	// Draws a round's picks, uniform in [0, n). Nil draws from crypto/rand; a test passes a seeded one.
 	Random func(n int) int
+	// §6.4's Bound from M8: POST /sidecar/wake for a silent own app host (SidecarApi.WakeSidecar,
+	// rpc_headcheck_wake.go). Nil summons no one.
+	Wake func(ctx context.Context, sidecarId Id) error
+	// Whether an own pick is an app host, which a wake may summon: never a desktop. Nil names none, so with
+	// no source of it no one is summoned, the closed default.
+	AppHost func(sidecarId Id) bool
 }
 
 // Refuses an env missing a field.
@@ -104,6 +110,9 @@ type headCheckTransport struct {
 	exchangeCount *MonitorValue[uint64]
 	// rounds finished
 	roundCount *MonitorValue[uint64]
+	// summonses of silent own app hosts finished, either way (rpc_headcheck_wake.go)
+	wakeCount *MonitorValue[uint64]
+	wakes     headCheckWakes
 
 	stateLock sync.Mutex
 	// where each peer's lists rotate from
@@ -151,6 +160,7 @@ func (self *Subprotocol) AttachHeadCheck(env *HeadCheckEnv) (detach func(), err 
 		roundRequests:        make(chan struct{}, 1),
 		exchangeCount:        NewMonitorValue[uint64](0),
 		roundCount:           NewMonitorValue[uint64](0),
+		wakeCount:            NewMonitorValue[uint64](0),
 		peerRotations:        map[Id]*headCheckRotation{},
 		peerExchangeTimes:    map[Id]time.Time{},
 		peerExchangesRunning: map[Id]bool{},

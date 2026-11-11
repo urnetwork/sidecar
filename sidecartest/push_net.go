@@ -460,8 +460,8 @@ func pushFrameReason(frame *connectprotocol.Frame) string {
 	if unknownFields(envelope.ProtoReflect()) || unknownFields(message.ProtoReflect()) {
 		return "a ControlId push carrying fields no hint has"
 	}
-	if hint, ok := message.(*protocol.PushHint); ok && pushservice.MaxHintByteCount < len(hint.Hint) {
-		return fmt.Sprintf("a ControlId hint of %d bytes, past %d", len(hint.Hint), pushservice.MaxHintByteCount)
+	if hint, ok := message.(*protocol.PushHint); ok && pushservice.DefaultPushFormatSettings().MaxHintByteCount < len(hint.Hint) {
+		return fmt.Sprintf("a ControlId hint of %d bytes, past %d", len(hint.Hint), pushservice.DefaultPushFormatSettings().MaxHintByteCount)
 	}
 	return ""
 }

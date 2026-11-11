@@ -380,14 +380,14 @@ func TestCaptureHoldsControlIdToHintFields(t *testing.T) {
 		frame []byte
 		pass  bool
 	}{
-		{name: "hint", frame: transferFrame(t, pushFrame(t, protocol.MessageType_PUSH_HINT, &protocol.PushHint{Seq: 1, Topic: sidecar.PushTopicTeam, Version: 2, Kind: 0x0201, Hint: make([]byte, pushservice.MaxHintByteCount)})), pass: true},
+		{name: "hint", frame: transferFrame(t, pushFrame(t, protocol.MessageType_PUSH_HINT, &protocol.PushHint{Seq: 1, Topic: sidecar.PushTopicTeam, Version: 2, Kind: 0x0201, Hint: make([]byte, pushservice.DefaultPushFormatSettings().MaxHintByteCount)})), pass: true},
 		{name: "reset", frame: transferFrame(t, pushFrame(t, protocol.MessageType_PUSH_RESET, &protocol.PushReset{Epoch: 3, Versions: []*protocol.TopicVersion{{Topic: sidecar.PushTopicTeam, Version: 2}}, Complete: true})), pass: true},
 		{name: "ack", frame: ack, pass: true},
 		{name: "a connect message", frame: transferFrame(t, simple), pass: false},
 		{name: "a peer's type", frame: transferFrame(t, envelopeFrame(t, &protocol.Envelope{Version: sidecar.WireVersionMajor, Type: uint32(protocol.MessageType_HELLO), Flags: sidecar.EnvelopeFlagNoReply})), pass: false},
 		{name: "a push asking a reply", frame: transferFrame(t, envelopeFrame(t, &protocol.Envelope{Version: sidecar.WireVersionMajor, Type: uint32(protocol.MessageType_PUSH_HINT), Body: hintBody})), pass: false},
 		{name: "a hint's unknown field", frame: transferFrame(t, envelopeFrame(t, &protocol.Envelope{Version: sidecar.WireVersionMajor, Type: uint32(protocol.MessageType_PUSH_HINT), Flags: sidecar.EnvelopeFlagNoReply, Body: unknownHintBody})), pass: false},
-		{name: "a hint past 256 B", frame: transferFrame(t, pushFrame(t, protocol.MessageType_PUSH_HINT, &protocol.PushHint{Seq: 1, Topic: sidecar.PushTopicTeam, Version: 2, Hint: make([]byte, pushservice.MaxHintByteCount+1)})), pass: false},
+		{name: "a hint past 256 B", frame: transferFrame(t, pushFrame(t, protocol.MessageType_PUSH_HINT, &protocol.PushHint{Seq: 1, Topic: sidecar.PushTopicTeam, Version: 2, Hint: make([]byte, pushservice.DefaultPushFormatSettings().MaxHintByteCount+1)})), pass: false},
 	}
 	for _, c := range cases {
 		capture := NewPrivacyCapture()

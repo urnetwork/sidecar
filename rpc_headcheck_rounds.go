@@ -10,12 +10,13 @@
 //     start a second. HeadCheck's own messages and Hello do not count.
 //   - Each HeadCheckInterval, and at each start: a round of up to HeadCheckRoundPeerCount admitted
 //     sidecars, at random, those sharing a repo with this device first, else any: up to
-//     HeadCheckRoundOtherMemberCount of other members (their devices or the agents they sponsor), the
+//     SidecarProtocolSettings.HeadCheckRoundOtherMemberCount of other members (their devices or the agents they sponsor), the
 //     rest this member's own devices and agents. A round with fewer candidates picks fewer. Each pick's
 //     client comes from its standing Hello or from api's binding, checked against its admission before
 //     dialing; its Hello runs first, and a pick that fails it is skipped this round. Each call waits
-//     HeadCheckTimeout. The round first runs HeadStopState's round step, which asks claimants api is
-//     past due for and retries the highest UNVERIFIED pin.
+//     HeadCheckTimeout, and an own app host that leaves it unanswered is summoned through POST
+//     /sidecar/wake, once a WakeInterval (rpc_headcheck_wake.go). The round first runs HeadStopState's
+//     round step, which asks claimants api is past due for and retries the highest UNVERIFIED pin.
 //   - At once when HeadStopState asks (RequestRound: the revoker's retries), but never closer than
 //     HeadCheckTimeout after the last round, so a burst of asks is one round.
 //
@@ -36,10 +37,6 @@ import (
 
 	"github.com/urnetwork/sidecar/protocol"
 )
-
-// §6.4's round row: of a round's picks, at most this many are other members' devices or agents, the rest
-// this member's own. A protocol value beside HeadCheckRoundPeerCount, which is the setting.
-const HeadCheckRoundOtherMemberCount = 2
 
 // One sidecar a round may pick, as this device's verified state holds it. TEAM-M2-10's ConfigClient and
 // the repo sources it reads say which.
@@ -67,16 +64,16 @@ func cryptoRandomInt(n int) int {
 }
 
 // Picks a round's peers from candidates: those not standing, or suspended, left out; up to count in
-// all, at most HeadCheckRoundOtherMemberCount of other members, the rest own; within each, those
-// sharing a repo first, each group in a random order random draws. selfId is never picked.
-func headCheckRoundPicks(candidates []HeadCheckCandidate, peers HeadCheckPeerState, selfId Id, count int, random func(n int) int) []Id {
-	return headCheckRoundPicksWith(candidates, peers, selfId, count, random, nil)
+// all, at most otherCount of other members, the rest own; within each, those sharing a repo first, each
+// group in a random order random draws. selfId is never picked.
+func headCheckRoundPicks(candidates []HeadCheckCandidate, peers HeadCheckPeerState, selfId Id, count int, otherCount int, random func(n int) int) []Id {
+	return headCheckRoundPicksWith(candidates, peers, selfId, count, otherCount, random, nil)
 }
 
 // headCheckRoundPicks, with firstOwn, an own candidate counted first among the own picks when it stands:
 // an app host's first-choice search indexer in the foreground (D-SDK-27), the other picks staying
 // random.
-func headCheckRoundPicksWith(candidates []HeadCheckCandidate, peers HeadCheckPeerState, selfId Id, count int, random func(n int) int, firstOwn *Id) []Id {
+func headCheckRoundPicksWith(candidates []HeadCheckCandidate, peers HeadCheckPeerState, selfId Id, count int, otherCount int, random func(n int) int, firstOwn *Id) []Id {
 	shuffle := func(ids []Id) {
 		for i := len(ids) - 1; 0 < i; i -= 1 {
 			j := random(i + 1)
@@ -114,7 +111,7 @@ func headCheckRoundPicksWith(candidates []HeadCheckCandidate, peers HeadCheckPee
 	}
 	picks := []Id{}
 	for _, sidecarId := range others {
-		if HeadCheckRoundOtherMemberCount <= len(picks) || count <= len(picks) {
+		if otherCount <= len(picks) || count <= len(picks) {
 			break
 		}
 		picks = append(picks, sidecarId)
@@ -175,6 +172,7 @@ func (self *headCheckTransport) round(ctx context.Context) {
 	step := self.stop.round()
 	self.runActs(ctx, step.acts)
 	self.prune()
+	self.pruneWakes()
 	// in the foreground, the first-choice search indexer counts among the own picks (D-SDK-27)
 	var firstOwn *Id
 	if peerId, ok := self.subprotocol.foregroundSearchPeer(); ok {
@@ -182,7 +180,14 @@ func (self *headCheckTransport) round(ctx context.Context) {
 			firstOwn = &peer.SidecarId
 		}
 	}
-	picks := headCheckRoundPicksWith(self.env.Candidates(), self.sources.Peers, self.stop.env.SidecarId, self.settings.HeadCheckRoundPeerCount, self.random, firstOwn)
+	candidates := self.env.Candidates()
+	ownIds := map[Id]bool{}
+	for _, candidate := range candidates {
+		if candidate.Own {
+			ownIds[candidate.SidecarId] = true
+		}
+	}
+	picks := headCheckRoundPicksWith(candidates, self.sources.Peers, self.stop.env.SidecarId, self.settings.HeadCheckRoundPeerCount, self.settings.HeadCheckRoundOtherMemberCount, self.random, firstOwn)
 	var wait sync.WaitGroup
 	for _, sidecarId := range picks {
 		wait.Add(1)
@@ -195,8 +200,12 @@ func (self *headCheckTransport) round(ctx context.Context) {
 				}
 				return
 			}
-			if _, err := self.exchange(ctx, clientId, true); err != nil && self.subprotocol.log.V(1).Enabled() {
-				self.subprotocol.log.Infof("[headcheck]round with %s: %s\n", sidecarId, err)
+			if _, err := self.exchange(ctx, clientId, true); err != nil {
+				if self.subprotocol.log.V(1).Enabled() {
+					self.subprotocol.log.Infof("[headcheck]round with %s: %s\n", sidecarId, err)
+				}
+				// a silent own app host is summoned (M8)
+				self.wakeIfSilent(sidecarId, ownIds[sidecarId], err)
 			}
 		}()
 	}

@@ -31,6 +31,9 @@ func runUrStatus(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	callErr := cli.callDaemon(ctx, urMethodStatus, &urStatusParams{Stats: stats}, false, reply)
 	if callErr == nil {
 		printUrStatus(cli, reply)
+		for _, section := range urStatusSections {
+			section(ctx, cli)
+		}
 	}
 	// §18.9's probes run whether or not a daemon answered, since a host out of reach is often why none did
 	list, err := cli.hostList()

@@ -17,7 +17,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
@@ -25,9 +24,6 @@ import (
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
-
-// How long AddSubprotocolSidecars waits, in real time, for a sidecar's first dispatcher.
-const subprotocolAttachTimeout = 30 * time.Second
 
 // One sidecar on the Net with its dispatcher in reach.
 type SubprotocolSidecar struct {
@@ -84,10 +80,21 @@ func (self *subprotocolComponent) Close() {
 // dispatcher. Answers the sidecars, in order, and the authority, which a test moves to revoke, park or
 // admit more.
 func (self *Net) AddSubprotocolSidecars(names ...string) ([]*SubprotocolSidecar, *FakeAuthority, error) {
+	return self.AddSubprotocolSidecarsWith(nil, names...)
+}
+
+// AddSubprotocolSidecars, each sidecar on the settings settings makes for it, nil making the defaults, which the
+// Net fills as AddSidecar does: how a test turns on what a release leaves off, SidecarProtocolSettings.EnablePeerP2p
+// among them.
+func (self *Net) AddSubprotocolSidecarsWith(settings func() *sidecar.SidecarSettings, names ...string) ([]*SubprotocolSidecar, *FakeAuthority, error) {
 	authority := NewFakeAuthority()
 	sidecars := []*SubprotocolSidecar{}
 	for _, name := range names {
-		testSidecar, err := self.AddSidecar(name, nil)
+		var sidecarSettings *sidecar.SidecarSettings
+		if settings != nil {
+			sidecarSettings = settings()
+		}
+		testSidecar, err := self.AddSidecar(name, sidecarSettings)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -113,7 +120,12 @@ func (self *Net) AddSubprotocolSidecars(names ...string) ([]*SubprotocolSidecar,
 			return nil, nil, err
 		}
 	}
-	ctx, cancel := context.WithTimeout(self.ctx, subprotocolAttachTimeout)
+	attachTimeout := self.settings.SubprotocolAttachTimeout
+	if attachTimeout <= 0 {
+		// a NetSettings built before the field, as T3's are
+		attachTimeout = DefaultNetSettings().SubprotocolAttachTimeout
+	}
+	ctx, cancel := context.WithTimeout(self.ctx, attachTimeout)
 	defer cancel()
 	for _, subprotocolSidecar := range sidecars {
 		select {
@@ -140,6 +152,32 @@ func (self *Net) SetContractClass(a connect.Id, b connect.Id, class connectproto
 	for _, key := range []netLinkKey{{source: a, destination: b}, {source: b, destination: a}} {
 		exchange.contractClasses[key] = class
 	}
+}
+
+// Gives every contract the issuer creates from source to destination from now on provideMode, as CreateContract
+// decides a pair's relationship: FriendsAndFamily for a share's (§6.10.1 item 4), which the destination must provide
+// (Subprotocol.HoldProvideMode). The default is Network. One direction only, since a share's two directions are its
+// dialer's forward contract and the destination's companion. A Net on a platform takes its contracts from the
+// platform's controller, so a mode set there is kept as unapplied (Net.Unapplied).
+func (self *Net) SetContractProvideMode(source connect.Id, destination connect.Id, provideMode connectprotocol.ProvideMode) {
+	exchange := self.exchange
+	if self.OnPlatform() {
+		exchange.refuseOnPlatform(fmt.Sprintf("SetContractProvideMode %s %s %s: the platform's controller decides each contract's mode itself", source, destination, provideMode))
+		return
+	}
+	exchange.stateLock.Lock()
+	defer exchange.stateLock.Unlock()
+	exchange.contractProvideModes[netLinkKey{source: source, destination: destination}] = provideMode
+}
+
+// The provide mode the issuer gives a contract from source to destination.
+func (self *netExchange) contractProvideMode(source connect.Id, destination connect.Id) connectprotocol.ProvideMode {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if provideMode, ok := self.contractProvideModes[netLinkKey{source: source, destination: destination}]; ok {
+		return provideMode
+	}
+	return connectprotocol.ProvideMode_Network
 }
 
 // The class the issuer seals into a contract from source to destination.

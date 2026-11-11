@@ -50,7 +50,7 @@ func TestHeadCheckFirstExchangePerIntervalTriggersOnce(t *testing.T) {
 	}
 }
 
-// Rounds pick at most HeadCheckRoundOtherMemberCount of other members and fill the rest with own
+// Rounds pick at most HeadCheckRoundOtherMemberCount (a setting) of other members and fill the rest with own
 // devices, those sharing a repo first; fewer candidates make fewer picks; a seed repeats its picks; and
 // a peer not standing or suspended is never picked.
 func TestHeadCheckRoundPicks(t *testing.T) {
@@ -75,7 +75,7 @@ func TestHeadCheckRoundPicks(t *testing.T) {
 	peerState := testHeadCheckPeerMap(peers)
 
 	random := testSeededRandom(1)
-	picks := headCheckRoundPicks(candidates, peerState, selfId, 4, random)
+	picks := headCheckRoundPicks(candidates, peerState, selfId, 4, DefaultSidecarProtocolSettings().HeadCheckRoundOtherMemberCount, random)
 	if len(picks) != 4 {
 		t.Fatalf("%d picks", len(picks))
 	}
@@ -88,17 +88,17 @@ func TestHeadCheckRoundPicks(t *testing.T) {
 			t.Errorf("picked %s", pick)
 		}
 	}
-	if repeat := headCheckRoundPicks(candidates, peerState, selfId, 4, testSeededRandom(1)); !slices.Equal(repeat, picks) {
+	if repeat := headCheckRoundPicks(candidates, peerState, selfId, 4, DefaultSidecarProtocolSettings().HeadCheckRoundOtherMemberCount, testSeededRandom(1)); !slices.Equal(repeat, picks) {
 		t.Errorf("a seed repeated %v as %v", picks, repeat)
 	}
 	// fewer candidates than picks
 	few := []HeadCheckCandidate{candidates[0], candidates[4]}
-	if picks := headCheckRoundPicks(few, peerState, selfId, 4, random); len(picks) != 2 {
+	if picks := headCheckRoundPicks(few, peerState, selfId, 4, DefaultSidecarProtocolSettings().HeadCheckRoundOtherMemberCount, random); len(picks) != 2 {
 		t.Errorf("%d picks of two candidates", len(picks))
 	}
 	// others alone: at most two
 	others := candidates[:3]
-	if picks := headCheckRoundPicks(others, peerState, selfId, 4, random); len(picks) != HeadCheckRoundOtherMemberCount {
+	if picks := headCheckRoundPicks(others, peerState, selfId, 4, DefaultSidecarProtocolSettings().HeadCheckRoundOtherMemberCount, random); len(picks) != DefaultSidecarProtocolSettings().HeadCheckRoundOtherMemberCount {
 		t.Errorf("%d picks of other members only", len(picks))
 	}
 }

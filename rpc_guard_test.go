@@ -150,9 +150,9 @@ func TestGuardDropsWhatComesFromTheWrongSide(t *testing.T) {
 	}
 }
 
-// Step 4: Network, and Service for what an edge sends (PROTO-M5-02), until PROTO-M6-01 adds
-// FriendsAndFamily. Another mode is dropped before the gate, unanswered, even from a verified peer, and
-// so is a Service-mode source's Hello, HeadCheck or SEARCH, which only sidecars of one network exchange.
+// Step 4: Network, and Service for what an edge sends (PROTO-M5-02); a share's FriendsAndFamily carries IP
+// alone (rpc_guard_share_test.go). Another mode is dropped before the gate, unanswered, even from a verified
+// peer, and so is a Service-mode source's Hello, HeadCheck or SEARCH, which only sidecars of one network exchange.
 func TestProvideModeNetworkAndEdgeService(t *testing.T) {
 	fixture := newTestSubprotocol(t, nil)
 	peerId := connect.NewId()
