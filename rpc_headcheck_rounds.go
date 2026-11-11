@@ -14,8 +14,9 @@
 //     rest this member's own devices and agents. A round with fewer candidates picks fewer. Each pick's
 //     client comes from its standing Hello or from api's binding, checked against its admission before
 //     dialing; its Hello runs first, and a pick that fails it is skipped this round. Each call waits
-//     HeadCheckTimeout. The round first runs HeadStopState's round step, which asks claimants api is
-//     past due for and retries the highest UNVERIFIED pin.
+//     HeadCheckTimeout, and an own app host that leaves it unanswered is summoned through POST
+//     /sidecar/wake, once a WakeInterval (rpc_headcheck_wake.go). The round first runs HeadStopState's
+//     round step, which asks claimants api is past due for and retries the highest UNVERIFIED pin.
 //   - At once when HeadStopState asks (RequestRound: the revoker's retries), but never closer than
 //     HeadCheckTimeout after the last round, so a burst of asks is one round.
 //
@@ -175,6 +176,7 @@ func (self *headCheckTransport) round(ctx context.Context) {
 	step := self.stop.round()
 	self.runActs(ctx, step.acts)
 	self.prune()
+	self.pruneWakes()
 	// in the foreground, the first-choice search indexer counts among the own picks (D-SDK-27)
 	var firstOwn *Id
 	if peerId, ok := self.subprotocol.foregroundSearchPeer(); ok {
@@ -182,7 +184,14 @@ func (self *headCheckTransport) round(ctx context.Context) {
 			firstOwn = &peer.SidecarId
 		}
 	}
-	picks := headCheckRoundPicksWith(self.env.Candidates(), self.sources.Peers, self.stop.env.SidecarId, self.settings.HeadCheckRoundPeerCount, self.random, firstOwn)
+	candidates := self.env.Candidates()
+	ownIds := map[Id]bool{}
+	for _, candidate := range candidates {
+		if candidate.Own {
+			ownIds[candidate.SidecarId] = true
+		}
+	}
+	picks := headCheckRoundPicksWith(candidates, self.sources.Peers, self.stop.env.SidecarId, self.settings.HeadCheckRoundPeerCount, self.random, firstOwn)
 	var wait sync.WaitGroup
 	for _, sidecarId := range picks {
 		wait.Add(1)
@@ -195,8 +204,12 @@ func (self *headCheckTransport) round(ctx context.Context) {
 				}
 				return
 			}
-			if _, err := self.exchange(ctx, clientId, true); err != nil && self.subprotocol.log.V(1).Enabled() {
-				self.subprotocol.log.Infof("[headcheck]round with %s: %s\n", sidecarId, err)
+			if _, err := self.exchange(ctx, clientId, true); err != nil {
+				if self.subprotocol.log.V(1).Enabled() {
+					self.subprotocol.log.Infof("[headcheck]round with %s: %s\n", sidecarId, err)
+				}
+				// a silent own app host is summoned (M8)
+				self.wakeIfSilent(sidecarId, ownIds[sidecarId], err)
 			}
 		}()
 	}
