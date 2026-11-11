@@ -6,6 +6,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -432,16 +433,19 @@ func TestGkmApiMapsAnswers(t *testing.T) {
 	}
 }
 
-// GET /gkm/welcomes answers per token, so the client asks with each batch and takes each Welcome once.
+// GET /gkm/welcomes answers per token, so the client asks with each batch and takes each Welcome once, by its
+// pointer's group and epoch.
 func TestGkmApiWelcomesAskWithEachToken(t *testing.T) {
 	transport := &gkmTestTransport{}
 	tokens := newGkmTestTokens()
 	scopes := gkmTestScopes(70, GkmScopeRoleRead)
+	sharedGroupId := NewId()
 	transport.serve = func(request *gkmTestRequest) (int, http.Header, []byte) {
 		// each token's answer: its batch's own Welcome, and one both batches reach
+		ownGroupId := sha256.Sum256([]byte(request.token))
 		reply := &protocol.GkmWelcomesReply{Welcomes: []*protocol.GkmWelcomeEntry{
-			{KeyPackageRef: []byte("shared"), Welcome: []byte("w")},
-			{KeyPackageRef: []byte(request.token), Welcome: []byte("w")},
+			{KeyPackageRef: []byte("shared"), Pointer: &protocol.GkmWelcomePointer{GroupId: sharedGroupId.Bytes(), Epoch: 1}, Welcome: []byte("w")},
+			{KeyPackageRef: []byte(request.token), Pointer: &protocol.GkmWelcomePointer{GroupId: ownGroupId[:16], Epoch: 1}, Welcome: []byte("w")},
 		}}
 		body, _ := proto.Marshal(reply)
 		return http.StatusOK, nil, body
@@ -454,6 +458,32 @@ func TestGkmApiWelcomesAskWithEachToken(t *testing.T) {
 	}
 	if len(transport.taken()) != 2 || len(welcomes) != 3 {
 		t.Errorf("%d calls and %d Welcomes, want 2 and 3", len(transport.taken()), len(welcomes))
+	}
+}
+
+// DESIGN-DETAILS 6.2.2's pointer row: one last-resort KeyPackage served Adds in two groups, so two Welcomes carry one
+// KeyPackageRef, and the client takes both; one group's Welcome a second token also reaches is taken once.
+func TestGkmApiWelcomesKeepOneKeyPackagesWelcomesInTwoGroups(t *testing.T) {
+	transport := &gkmTestTransport{}
+	tokens := newGkmTestTokens()
+	scopes := gkmTestScopes(70, GkmScopeRoleRead)
+	firstGroupId, secondGroupId := NewId(), NewId()
+	transport.serve = func(request *gkmTestRequest) (int, http.Header, []byte) {
+		reply := &protocol.GkmWelcomesReply{Welcomes: []*protocol.GkmWelcomeEntry{
+			{KeyPackageRef: []byte("last-resort"), Pointer: &protocol.GkmWelcomePointer{GroupId: firstGroupId.Bytes(), Epoch: 1}, Welcome: []byte("w1")},
+			{KeyPackageRef: []byte("last-resort"), Pointer: &protocol.GkmWelcomePointer{GroupId: secondGroupId.Bytes(), Epoch: 4}, Welcome: []byte("w2")},
+		}}
+		body, _ := proto.Marshal(reply)
+		return http.StatusOK, nil, body
+	}
+	api := newGkmTestApi(t, transport, tokens, nil)
+	api.SetRepoScopes(scopes)
+	welcomes, err := api.Welcomes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(welcomes) != 2 || string(welcomes[0].GetWelcome()) != "w1" || string(welcomes[1].GetWelcome()) != "w2" {
+		t.Errorf("the Welcomes of one KeyPackage in two groups: %d", len(welcomes))
 	}
 }
 

@@ -8,7 +8,7 @@
 //	Deposit, Consume, ReadDeposits  EVS1-M2-29 (evs_deposit.go, evs_consume.go), the receipt gate (evs_receipt_gate.go)
 //	Subscribe                       EVS1-M2-27 (evs_subscribe.go, evs_hint.go)
 //	Erasures, Erase, Closure        EVS1-M2-30 (evs_erase.go, evs_closure.go)
-//	Import                          EVS1-M2-34
+//	Import                          EVS1-M2-34 (evs_local_import.go), on desktop legs with a sync engine
 //	Export                          EVS1-M2-32 (evs_export.go)
 //	Mount                           EVS1-M2-33 (evs_local_mount.go), on desktop legs only
 //	Delete, Restore, Shred          here
@@ -123,6 +123,10 @@ type EvsHistoryVersion struct {
 	Versioning uint32
 	// kept (format 1's only state); collected, drop_pending and dropped are format 2's (§11.9).
 	State string
+	// The slots the version's records name, as its entry lists them: in a record-class repo each chain's key slot,
+	// what an erasure names to destroy the version (§11.12's closure row: "each retained version's slot keys"). None
+	// for a general repo's version, whose keys ride its segments, and for a removal.
+	SlotIds []Id
 }
 
 // What Write changes (EVS1-M2-25, EVS1-M2-26).
@@ -175,16 +179,35 @@ type EvsConsumeResult struct {
 	Version uint64
 }
 
-// What Import brings in (§11.11's import row; EVS1-M2-34).
+// What Import brings in (§11.11's import row; DESIGN-DETAILS 8.2.6; EVS1-M2-34).
 type EvsImportArgs struct {
-	// A git repository's directory.
-	Dir     string
-	RefName []byte
+	// The git repository whose history is imported, by its absolute directory: a SHA-1 repository.
+	Dir string
+	// Its ref whose history is imported, a git ref name: HEAD when empty.
+	Ref string
+	// The evs ref the history ends at, its name bytes: main when nil.
+	Target []byte
+	// Commits of the target's first-parent line a push ends at, where a later branch forks.
+	Cuts []EvsGitOid
+	// Lets the first push move an owned target to a tip that does not descend from its own.
+	Force bool
+	// Ends the unfinished import of Dir, Ref and Target: its helper refs deleted, its record and source ref dropped,
+	// the target left at the cut it reached.
+	Abandon bool
 }
 
-// A committed import.
+// What an import did: its id, the pushes it sent, the target's tip at its end, and each helper ref it made, in the
+// order first needed, every one deleted by its end.
 type EvsImportResult struct {
-	PushIds []Id
+	ImportId EvsImportId
+	PushIds  []Id
+	Tip      EvsGitOid
+	Helpers  [][]byte
+}
+
+// The local tier's import, which a desktop leg's mount registry serves (evs_local_import.go).
+type evsLocalImporter interface {
+	importRepo(ctx context.Context, repo *EvsRepo, args *EvsImportArgs) (*EvsImportResult, error)
 }
 
 // What Export writes (§11.12's export row).
@@ -234,9 +257,19 @@ type EvsMountInfo struct {
 	BareDir string
 }
 
-// Imports a git repository's history under a signed EvsImport. EVS1-M2-34 builds it.
+// Imports a git repository's history as descending pushes, each under its own signed EvsImport (DESIGN-DETAILS
+// 8.2.6), through the mount registry's local tier: a client with none, head mode's among them, refuses.
 func (self *EvsRepo) Import(ctx context.Context, args *EvsImportArgs) (*EvsImportResult, error) {
-	return nil, fmt.Errorf("%w: Import is EVS1-M2-34's", ErrEvsNotBuilt)
+	importer := func() evsLocalImporter {
+		self.client.stateLock.Lock()
+		defer self.client.stateLock.Unlock()
+		importer, _ := self.client.localTier.(evsLocalImporter)
+		return importer
+	}()
+	if importer == nil {
+		return nil, fmt.Errorf("%w: this client has no mount registry to import through", ErrEvsNotBuilt)
+	}
+	return importer.importRepo(ctx, self, args)
 }
 
 // The newest re-pin of a ref past §11.9's catch-up budget, zero when nothing was skipped

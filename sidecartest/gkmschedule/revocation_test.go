@@ -11,9 +11,15 @@ package gkmschedule
 //     ReaderKeys, however much of the store it fetches;
 //   - members refuse a commit that omits a Remove the projection needs, and one that adds a non-reader, each made on
 //     the real subset by a hostile leaf past every client check and taken by gkm, which cannot see proposals: the
-//     refusal names the committer and poisons the generation the commit carried.
+//     refusal names the committer and poisons the generation the commit carried;
+//   - X's tokens, once rev/ voids them, reach no route of gkm (401), and X's external commit, its leaf lost, is
+//     refused (403) as X's revocation stands in gkm's state, before and after rev/;
+//   - a covered agent's Suspend and a DelegationRevoke are delegation.go's schedules (FS-18), each a REMOVE
+//     generation that the agent's keys and the Delegation's seed open nothing of.
 
 import (
+	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -145,5 +151,52 @@ func TestRevocationSuiteKeysMembersRefuseACommitThatOmitsARemoveOrAddsANonReader
 		if group.Epoch() != epoch {
 			t.Errorf("the member moved to epoch %d past the hostile commit (adds %v)", group.Epoch(), adds)
 		}
+	}
+}
+
+// X revoked keeps its tokens and its local state. While gkm's state trails the revocation, X's writes still pass the
+// standing check, as the twin's KeyPackage upload shows, until api's rev/ voids X's tokens: gkm reads rev/ before
+// every write and answers 401 for X's next upload. Once gkm's state holds the revocation, X's reads and its external
+// commit, its MLS state lost, are refused (403), and its commit stands nowhere.
+func TestRevocationSuiteKeysARevokedDevicesTokensAndExternalCommitAreRefused(t *testing.T) {
+	world := NewFsKeysWorld(t, protocol.RepoKind_REPO_KIND_GENERAL)
+	a := world.AddMember("a", false)
+	x := world.AddMember("x", false)
+	world.Grant(true, a, x)
+	world.Admin(a)
+	world.Advance()
+	world.Publish()
+	world.Create(a)
+	world.AddPending(a)
+	keyPackage := func() [][]byte {
+		created, err := x.Mls.CreateKeyPackage(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return [][]byte{created.Encoded}
+	}
+	world.Revoke(x)
+	world.GkmBehind = 1
+	world.Advance()
+	if err := x.Api.UploadKeyPackages(world.Ctx, keyPackage()); err != nil {
+		t.Fatalf("the twin: X's write while gkm's state trails its revocation and no rev/ voids it: %v", err)
+	}
+	world.VoidTokens(x)
+	if err := x.Api.UploadKeyPackages(world.Ctx, keyPackage()); !errors.Is(err, sidecar.ErrGkmTokenRefused) {
+		t.Errorf("a write under a token rev/ voids, not the 401 of a refused token: %v", err)
+	}
+	// gkm's state reaches the revocation: X's read and its external commit are refused
+	world.GkmBehind = 0
+	if _, err := x.Api.Epochs(world.Ctx, world.RepoId, world.GroupId, 0); !sidecar.IsGkmStatus(err, http.StatusForbidden) {
+		t.Errorf("a revoked device's read: %v", err)
+	}
+	x.LoseMlsState()
+	x.Take(world.Log.Tip())
+	epoch := world.NewestEpoch()
+	if status := world.InjectGenerationZeroJoin(x); status != http.StatusForbidden && status != http.StatusUnauthorized {
+		t.Errorf("a revoked device's external commit: %d", status)
+	}
+	if world.NewestEpoch() != epoch {
+		t.Fatalf("the revoked device's external commit stands")
 	}
 }
