@@ -87,6 +87,24 @@ type EvsLocalPublishArgs struct {
 	// Whether a client is this sidecar's, whose commits a push may carry as new (owner decision 81): nil takes this
 	// client alone.
 	OwnClient func(clientId Id) bool
+	// Called with each attempt before its statement's first POST, its segments uploaded: what the receive path, the
+	// queue and the import journal SENT (DESIGN-DETAILS 8.2.8). An error stops the publish with nothing posted. Nil
+	// for none.
+	OnAttempt func(attempt *EvsGitPublishAttempt) error
+}
+
+// One attempt of a publish, as the journal records it before its first POST.
+type EvsGitPublishAttempt struct {
+	PushId          Id
+	StatementSha256 [sha256.Size]byte
+	// The version and chain it is built on, and the update's tips.
+	BaseVersion uint64
+	BaseChain   [sha256.Size]byte
+	Old         *EvsGitOid
+	New         *EvsGitOid
+	// The statement's time_ms, and whether it seals in parts.
+	TimeMs int64
+	Parts  bool
 }
 
 // What a committed publish did.
@@ -457,7 +475,22 @@ func (self *evsGitPublishUpdate) publishOnce(ctx context.Context, baseVersion ui
 		}
 		plan.gitExtras.signedImport = signedImport
 	}
-	pushId, reply, err := repo.sendSealedNoting(ctx, sealed, rebuilds, func(pushId Id) { self.pushIds[pushId] = true })
+	var beforePost func(attempt *evsPushAttempt) error
+	if onAttempt := self.args.OnAttempt; onAttempt != nil {
+		beforePost = func(attempt *evsPushAttempt) error {
+			push := attempt.built.Statement.Push
+			baseChain, _ := EvsChainFromBytes(push.GetBaseChain())
+			if push.GetBaseVersion() == 0 {
+				baseChain = EvsChainStart(repo.repoId, self.refId)
+			}
+			return onAttempt(&EvsGitPublishAttempt{
+				PushId: attempt.pushId, StatementSha256: attempt.built.Statement.Sha256, BaseVersion: push.GetBaseVersion(),
+				BaseChain: baseChain, Old: self.args.Old, New: self.args.New, TimeMs: push.GetTimeMs(),
+				Parts: 0 < push.GetPartCount(),
+			})
+		}
+	}
+	pushId, reply, err := repo.sendSealedNoting(ctx, sealed, rebuilds, func(pushId Id) { self.pushIds[pushId] = true }, beforePost)
 	if err != nil {
 		return nil, err
 	}

@@ -303,7 +303,10 @@ func (self *evsGitRefRecord) ref() (*EvsGitRef, error) {
 	for _, field := range []struct {
 		text string
 		oid  **EvsGitOid
-	}{{self.Tip, &ref.Tip}, {self.Peeled, &ref.Peeled}, {self.AppliedTip, &ref.AppliedTip}, {self.LastTip, &ref.LastTip}} {
+	}{
+		{text: self.Tip, oid: &ref.Tip}, {text: self.Peeled, oid: &ref.Peeled}, {text: self.AppliedTip, oid: &ref.AppliedTip},
+		{text: self.LastTip, oid: &ref.LastTip},
+	} {
 		if *field.oid, err = evsOidOfText(field.text); err != nil {
 			return nil, invalid
 		}
@@ -621,18 +624,22 @@ func (self *evsLocalReplayStore) WriteGitObject(kind string, content []byte) (Ev
 	return self.sink.WriteGitObject(kind, content)
 }
 
+// A blob streamed into the pack sink.
 func (self *evsLocalReplayStore) WriteGitObjectFrom(kind string, content io.Reader, size int64) (EvsGitOid, error) {
 	return self.sink.WriteGitObjectFrom(kind, content, size)
 }
 
+// Pending in the sink, or present in the bare repository.
 func (self *evsLocalReplayStore) HasGitObject(oid EvsGitOid) bool {
 	return self.sink.HasGitObject(oid)
 }
 
+// A pending tree, commit or tag.
 func (self *evsLocalReplayStore) PendingGitObject(oid EvsGitOid) (string, []byte, bool) {
 	return self.sink.PendingGitObject(oid)
 }
 
+// The pending pack indexed into the bare repository.
 func (self *evsLocalReplayStore) Flush(ctx context.Context) error {
 	return self.sink.Flush(ctx)
 }

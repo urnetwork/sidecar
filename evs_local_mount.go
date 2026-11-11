@@ -79,8 +79,10 @@ type EvsLocalRepo struct {
 	Mirror *EvsMirrorStore
 	locks  *EvsRefLocks
 	git    *EvsGitRunner
-	// the mount's sync engine (evs_local_sync.go), nil for a mount a test builds by hand
-	sync *EvsGitSyncEngine
+	// the mount's sync engine (evs_local_sync.go) and receive path (evs_local_receive.go), nil for a mount a test
+	// builds by hand
+	sync     *EvsGitSyncEngine
+	receiver *EvsGitReceiver
 	// the per-mount secret git's http front takes as Basic's password (plan-EVS1-git-http-credential), nil for none
 	httpSecret []byte
 }
@@ -123,8 +125,29 @@ type EvsMounts struct {
 
 	stateLock    sync.Mutex
 	repoIdMounts map[Id]*EvsLocalRepo
-	// the sync engine imports run through, nil until one is registered (EVS1-M2-35's)
+	// a test's stand-in sync engine imports run through in place of each mount's own (evs_local_import.go)
 	sync EvsGitSync
+	// the receive sessions open, by id (evs_local_hook.go)
+	sessions map[string]*EvsGitReceiveSession
+	// what each hook file execs, its name appended, and what git-receive-pack runs with beside a session's id
+	hookCommand     []string
+	hookEnvironment []string
+	// this sidecar's client ids, Sidecar.ClientIds, nil for this client alone
+	ownClientIds func() ([]Id, error)
+}
+
+// Sets where this sidecar's client ids come from, Sidecar.ClientIds: whose commits the hook and a push take as new.
+func (self *EvsMounts) SetOwnClients(clientIds func() ([]Id, error)) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.ownClientIds = clientIds
+}
+
+// See SetOwnClients.
+func (self *EvsMounts) ownClients() func() ([]Id, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.ownClientIds
 }
 
 // The registry of client's mounts, its bare repositories in the plaintext git tree of client's network under state,
@@ -215,6 +238,7 @@ func (self *EvsMounts) localRepo(repoId Id, record *evsMountRecord) (*EvsLocalRe
 		httpSecret: record.HttpSecret,
 	}
 	mount.sync = newEvsGitSyncEngine(self.client, mount)
+	mount.receiver = newEvsGitReceiver(self, mount)
 	return mount, nil
 }
 
@@ -265,12 +289,20 @@ func (self *EvsMounts) Add(ctx context.Context, repoId Id, args *EvsMountArgs) (
 		{"config", "receive.denyNonFastForwards", "false"},
 		{"config", "receive.denyDeletes", "false"},
 		{"config", "core.logAllRefUpdates", "false"},
+		// evs's main is the repo's default branch, which a clone checks out
+		{"symbolic-ref", "HEAD", evsGitBranchPrefix + string(EvsMainRefName)},
 	} {
 		if _, err := self.git.Run(ctx, mount.BareDir, setting...); err != nil {
 			return nil, err
 		}
 	}
 	if err := os.MkdirAll(filepath.Join(mount.BareDir, filepath.FromSlash(evsLocalDaemonRefPrefix)), 0o700); err != nil {
+		return nil, err
+	}
+	self.stateLock.Lock()
+	hookCommand := self.hookCommand
+	self.stateLock.Unlock()
+	if err := mount.writeHooks(hookCommand); err != nil {
 		return nil, err
 	}
 	if args.Dir != "" {
@@ -303,8 +335,8 @@ func (self *EvsMounts) Add(ctx context.Context, repoId Id, args *EvsMountArgs) (
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if held := self.repoIdMounts[repoId]; held != nil {
-		// the same mount again: its locks and its engine, which may be mid-replay, stay
-		mount.locks, mount.sync = held.locks, held.sync
+		// the same mount again: its locks, its engine, which may be mid-replay, and its receive path stay
+		mount.locks, mount.sync, mount.receiver = held.locks, held.sync, held.receiver
 	}
 	self.repoIdMounts[repoId] = mount
 	return mount, nil

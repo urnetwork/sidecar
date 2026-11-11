@@ -168,8 +168,8 @@ func (self *Daemon) RegisterMethod(method *DaemonMethod) error {
 
 // Adds the handler of a mode the daemon does not speak itself, mcp or git. control and hook are the daemon's own.
 func (self *Daemon) RegisterMode(mode string, handler DaemonModeHandler) error {
-	if (mode != DaemonModeMcp && mode != DaemonModeGit) || handler == nil {
-		return fmt.Errorf("%w: only mcp and git take a handler", ErrDaemonRegistration)
+	if (mode != DaemonModeMcp && mode != DaemonModeGit && mode != DaemonModeGitHook) || handler == nil {
+		return fmt.Errorf("%w: only mcp, git and git-hook take a handler", ErrDaemonRegistration)
 	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -364,7 +364,7 @@ func (self *Daemon) serve(conn net.Conn) {
 	}
 	answer := &daemonHelloAnswer{UrLocal: daemonLocalProtocol, Version: self.settings.Version, Error: code}
 	var handler DaemonModeHandler
-	if err == nil && (hello.Mode == DaemonModeMcp || hello.Mode == DaemonModeGit) {
+	if err == nil && (hello.Mode == DaemonModeMcp || hello.Mode == DaemonModeGit || hello.Mode == DaemonModeGitHook) {
 		var ok bool
 		handler, ok = self.mode(hello.Mode)
 		if !ok {

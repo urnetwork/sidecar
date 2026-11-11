@@ -704,10 +704,19 @@ func (self *evsImporter) publish(ctx context.Context, name []byte, refId Id, new
 	if err != nil {
 		return err
 	}
+	if state.StuckAt != 0 && new != nil {
+		return fmt.Errorf("%w: the ref is stopped at a refused version %d and takes only a deletion", ErrEvsImportRefused, state.StuckAt)
+	}
+	var onAttempt func(attempt *EvsGitPublishAttempt) error
+	if receiver := self.mount.receiver; receiver != nil {
+		onAttempt = func(attempt *EvsGitPublishAttempt) error {
+			return receiver.journalImportAttempt(ctx, refId, name, attempt)
+		}
+	}
 	result, err := EvsLocalPublish(ctx, &EvsLocalPublishArgs{
 		Mount: self.mount, Repo: self.repo, RefName: name, Old: state.Tip, New: new, BaseVersion: state.Version,
 		BaseChain: state.Chain, Deleted: state.Deleted, LastTip: state.LastTip, Base: state.Base, Import: new != nil,
-		State: self.sync,
+		State: self.sync, OnAttempt: onAttempt,
 	})
 	if err != nil {
 		return err

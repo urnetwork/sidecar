@@ -222,12 +222,17 @@ type EvsGitProcess struct {
 
 // Starts git with args in dir, which must be absolute.
 func (self *EvsGitRunner) Start(ctx context.Context, dir string, args ...string) (*EvsGitProcess, error) {
+	return self.StartWith(ctx, dir, nil, args...)
+}
+
+// Starts git as Start does, env added to the clean environment: a hook's quarantine.
+func (self *EvsGitRunner) StartWith(ctx context.Context, dir string, env []string, args ...string) (*EvsGitProcess, error) {
 	if !filepath.IsAbs(dir) {
 		return nil, fmt.Errorf("%w: a git directory by a relative path", errInvalidSettings)
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	command := exec.CommandContext(runCtx, self.gitPath, append([]string{"-C", dir}, args...)...)
-	command.Env = self.environment()
+	command.Env = append(self.environment(), env...)
 	command.Dir = self.home
 	command.Stderr = io.Discard
 	stdin, err := command.StdinPipe()

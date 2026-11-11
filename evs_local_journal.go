@@ -33,10 +33,12 @@
 package sidecar
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -91,8 +93,11 @@ type EvsJournalAttempt struct {
 	PushId          Id     `json:"push_id"`
 	StatementSha256 string `json:"statement_sha256"`
 	BaseVersion     uint64 `json:"base_version"`
-	Old             string `json:"old,omitempty"`
-	New             string `json:"new,omitempty"`
+	// C at the base version, which resolve walks the statement at base + 1 from: local state beside 8.2.8's
+	// fields, so the walk is the verifier's.
+	BaseChain string `json:"base_chain"`
+	Old       string `json:"old,omitempty"`
+	New       string `json:"new,omitempty"`
 	// The statement's time, and whether it seals (30 min) or posts (10 min).
 	TimeMs int64 `json:"time_ms"`
 	Parts  bool  `json:"parts,omitempty"`
@@ -219,4 +224,182 @@ func (self *EvsJournalRef) queued(local *EvsGitOid) bool {
 // The statement hash of a built push, as an attempt records it.
 func evsStatementHashText(digest [sha256.Size]byte) string {
 	return hex.EncodeToString(digest[:])
+}
+
+// A statement's own time bounds, §11.8's: a push posts within 10 minutes of its time_ms, and one in parts seals within
+// 30. Format values every evs process applies, not tunables.
+const (
+	evsStatementPostBound = 10 * time.Minute
+	evsStatementSealBound = 30 * time.Minute
+)
+
+// What resolve found of one attempt.
+type evsJournalOutcome int
+
+const (
+	evsJournalPending evsJournalOutcome = iota
+	evsJournalCommitted
+	evsJournalDead
+)
+
+// resolve(r) (see the file header): the ref replayed to its head from the cluster, then each attempt judged by the
+// history alone. A git-mode push on base b can commit only at b + 1 (TIP), so the statement at b + 1, walked from the
+// attempt's base chain, says whether it did: its push id the attempt's is committed (another statement hash under it
+// alarms), any other is dead; a head still at b is pending until the attempt's time bound and JournalResolveMargin
+// have passed and a head read after that still shows none.
+func (self *EvsGitReceiver) resolve(ctx context.Context, refId Id) error {
+	journal, err := self.engine.state.journal(refId)
+	if err != nil || len(journal.Attempts) == 0 {
+		return err
+	}
+	if err := self.engine.Replay(ctx, refId); err != nil {
+		return err
+	}
+	head, err := self.repo.pinnedHead(ctx, refId)
+	if err != nil {
+		return err
+	}
+	outcomes := map[Id]evsJournalOutcome{}
+	now := self.clock.Now()
+	for _, attempt := range journal.Attempts {
+		outcome, err := self.judgeAttempt(ctx, refId, head, attempt, now)
+		if err != nil {
+			return err
+		}
+		outcomes[attempt.PushId] = outcome
+	}
+	return self.withApply(ctx, refId, func() error {
+		journal, err := self.engine.state.journal(refId)
+		if err != nil {
+			return err
+		}
+		committed, pending := false, false
+		kept := []*EvsJournalAttempt{}
+		for _, attempt := range journal.Attempts {
+			outcome, judged := outcomes[attempt.PushId]
+			switch {
+			case !judged, outcome == evsJournalPending:
+				pending = true
+				kept = append(kept, attempt)
+			case outcome == evsJournalCommitted:
+				committed = true
+			}
+		}
+		journal.Attempts = kept
+		_, owned := EvsOwnedRefOwner(journal.RefName)
+		switch {
+		case committed:
+			// the version applied through the replay above; what settle has not covered goes too
+			ref, err := self.engine.state.gitRef(refId)
+			if err != nil {
+				return err
+			}
+			if err := self.engine.dropCoveredWithLock(ctx, ref, journal); err != nil {
+				return err
+			}
+			for _, update := range slices.Clone(journal.Updates) {
+				if update.State == EvsJournalSent && !owned {
+					journal.deleteUpdate(update.Seq)
+				}
+			}
+		case !pending:
+			// dead: TIP lets none of them commit, ever
+			for _, update := range slices.Clone(journal.Updates) {
+				if update.State != EvsJournalSent {
+					continue
+				}
+				if owned {
+					update.State = EvsJournalLocal
+				} else {
+					journal.deleteUpdate(update.Seq)
+				}
+			}
+		}
+		return self.engine.state.writeJournal(refId, journal)
+	})
+}
+
+// One attempt's outcome against the verified head.
+func (self *EvsGitReceiver) judgeAttempt(ctx context.Context, refId Id, head *EvsVerifiedHead, attempt *EvsJournalAttempt, now time.Time) (evsJournalOutcome, error) {
+	if head.Version <= attempt.BaseVersion {
+		bound := evsStatementPostBound
+		if attempt.Parts {
+			bound = evsStatementSealBound
+		}
+		if now.After(time.UnixMilli(attempt.TimeMs).Add(bound + self.settings.JournalResolveMargin)) {
+			// this head was read after the bound passed, and shows none
+			return evsJournalDead, nil
+		}
+		return evsJournalPending, nil
+	}
+	chainBytes, err := hex.DecodeString(attempt.BaseChain)
+	if err != nil || len(chainBytes) != 32 {
+		return evsJournalPending, fmt.Errorf("%w: an attempt's base chain", ErrEvsJournalInvalid)
+	}
+	version := attempt.BaseVersion + 1
+	statements, err := self.client.readLog(ctx, self.mount.RepoId, refId, version, version)
+	if err != nil {
+		return evsJournalPending, err
+	}
+	walked, err := self.client.verifier.walk(self.mount.RepoId, refId, attempt.BaseVersion, [32]byte(chainBytes), statements, version)
+	if err != nil {
+		return evsJournalPending, err
+	}
+	statement := walked[0].Statement
+	if Id(statement.Push.GetPushId()) != attempt.PushId {
+		return evsJournalDead, nil
+	}
+	if evsStatementHashText(statement.Sha256) != attempt.StatementSha256 {
+		// a statement under this device's push id that is not the one it journaled: one push id signed twice
+		self.client.alarm(self.mount.RepoId, refId, SidecarEvsAlarmTamper, "", nil)
+	}
+	return evsJournalCommitted, nil
+}
+
+// resolve for every ref with an attempt open: the queue's each JournalResolveInterval, and each hint's.
+func (self *EvsGitReceiver) resolveAll(ctx context.Context) {
+	refIds, err := self.engine.state.journalRefIds()
+	if err != nil {
+		return
+	}
+	for _, refId := range refIds {
+		if err := self.resolve(ctx, refId); err != nil && self.client.log.V(1).Enabled() {
+			self.client.log.Infof("[evs]resolve of repo %s ref %s: %v", self.mount.RepoId, refId, err)
+		}
+	}
+}
+
+// One ref's open work as `ur status` shows it: its pending outcomes, LOCAL updates and hold.
+type EvsJournalStatus struct {
+	RefId   Id
+	RefName []byte
+	// An attempt whose outcome is unknown: "remote outcome pending".
+	Pending bool
+	// Updates the queue has not published.
+	Queued int
+	// A final refusal holding an owned ref's queue: its code, empty for none.
+	HoldCode string
+}
+
+// Every ref's open work in the mount's journals.
+func (self *EvsGitReceiver) JournalStatus() ([]*EvsJournalStatus, error) {
+	refIds, err := self.engine.state.journalRefIds()
+	if err != nil {
+		return nil, err
+	}
+	statuses := []*EvsJournalStatus{}
+	for _, refId := range refIds {
+		journal, err := self.engine.state.journal(refId)
+		if err != nil {
+			return nil, err
+		}
+		status := &EvsJournalStatus{RefId: refId, RefName: journal.RefName, Pending: 0 < len(journal.Attempts), HoldCode: journal.HoldCode}
+		for _, update := range journal.Updates {
+			if update.State == EvsJournalLocal {
+				status.Queued += 1
+			}
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses, nil
 }
