@@ -153,6 +153,32 @@ func (self *Net) SetContractClass(a connect.Id, b connect.Id, class connectproto
 	}
 }
 
+// Gives every contract the issuer creates from source to destination from now on provideMode, as CreateContract
+// decides a pair's relationship: FriendsAndFamily for a share's (§6.10.1 item 4), which the destination must provide
+// (Subprotocol.HoldProvideMode). The default is Network. One direction only, since a share's two directions are its
+// dialer's forward contract and the destination's companion. A Net on a platform takes its contracts from the
+// platform's controller, so a mode set there is kept as unapplied (Net.Unapplied).
+func (self *Net) SetContractProvideMode(source connect.Id, destination connect.Id, provideMode connectprotocol.ProvideMode) {
+	exchange := self.exchange
+	if self.OnPlatform() {
+		exchange.refuseOnPlatform(fmt.Sprintf("SetContractProvideMode %s %s %s: the platform's controller decides each contract's mode itself", source, destination, provideMode))
+		return
+	}
+	exchange.stateLock.Lock()
+	defer exchange.stateLock.Unlock()
+	exchange.contractProvideModes[netLinkKey{source: source, destination: destination}] = provideMode
+}
+
+// The provide mode the issuer gives a contract from source to destination.
+func (self *netExchange) contractProvideMode(source connect.Id, destination connect.Id) connectprotocol.ProvideMode {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if provideMode, ok := self.contractProvideModes[netLinkKey{source: source, destination: destination}]; ok {
+		return provideMode
+	}
+	return connectprotocol.ProvideMode_Network
+}
+
 // The class the issuer seals into a contract from source to destination.
 func (self *netExchange) contractClass(source connect.Id, destination connect.Id) connectprotocol.ContractClass {
 	self.stateLock.Lock()
