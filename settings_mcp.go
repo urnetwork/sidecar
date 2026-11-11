@@ -23,6 +23,17 @@ type SidecarMcpSettings struct {
 	// How long an approval's ledger file stays past its not_after: 30 days (§16.6's retention row),
 	// long after a local use stops completing at not_after + 10 min.
 	ApprovalFileRetention time.Duration
+	// How long an ApprovalRequest waits for a decision, its not_after_millis from its filing: 24 h, MCP.md's
+	// reading 3, since §16.8 states no default. An action's own expiry wins where it is sooner, since a decision
+	// past it could activate nothing.
+	ApprovalRequestTimeout time.Duration
+	// How long past not_after a local use reserved before it may still complete its effect under its effect_key:
+	// 10 min (§16.6's expiry row). Past it a retry only reconciles, by the kind's Lookup.
+	ApprovalCompleteTimeout time.Duration
+	// How often the requester's inbox asks the approval log for the decisions of its pending requests, the poll
+	// behind ur://approval/{id} until the record's hints reach the inbox: 30 s, a reading, since §16.8 names
+	// hints and no poll.
+	ApprovalPollInterval time.Duration
 	// How long a run's file stays once its Coverage entry is sealed: 30 days (§16.6's retention row),
 	// for restore (§16.7). A later Coverage starts it again.
 	RunFileRetention time.Duration
@@ -162,13 +173,16 @@ type SidecarRecordSettings struct {
 // A fresh value each call, as DefaultSidecarSettings's is.
 func defaultSidecarMcpSettings() *SidecarMcpSettings {
 	return &SidecarMcpSettings{
-		SessionCallCount:      8,
-		SessionWriteRate:      SidecarRate{Count: 20, Burst: 20, Interval: 1 * time.Second},
-		ResultByteCount:       256 * 1024,
-		CallTimeout:           30 * time.Second,
-		ApprovalFileRetention: 30 * 24 * time.Hour,
-		RunFileRetention:      30 * 24 * time.Hour,
-		SecretMatch:           DefaultSecretMatchSettings(),
+		SessionCallCount:        8,
+		SessionWriteRate:        SidecarRate{Count: 20, Burst: 20, Interval: 1 * time.Second},
+		ResultByteCount:         256 * 1024,
+		CallTimeout:             30 * time.Second,
+		ApprovalFileRetention:   30 * 24 * time.Hour,
+		ApprovalRequestTimeout:  24 * time.Hour,
+		ApprovalCompleteTimeout: 10 * time.Minute,
+		ApprovalPollInterval:    30 * time.Second,
+		RunFileRetention:        30 * 24 * time.Hour,
+		SecretMatch:             DefaultSecretMatchSettings(),
 	}
 }
 
