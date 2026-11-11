@@ -65,6 +65,10 @@ type ConfigLogSettings struct {
 	// §16.6's spend check, which each decision a GrantActivate carries must pass at every reader and at api (ACL-M2-07).
 	// Nil refuses every decision, so no GrantActivate takes effect until MCP-M3-03's check is installed here.
 	AclSpendCheck AclSpendCheck
+	// What judges a bridge route's or map's sealed body where its entry lands, and checks a base's bridge ledger
+	// (bridge_ledger.go, DESIGN-DETAILS 12.2.3). Nil at every keyless verifier, which judges no body and checks no
+	// ledger.
+	BridgeBodyJudge *BridgeBodyJudge
 }
 
 // §7.9's values.

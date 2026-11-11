@@ -290,6 +290,13 @@ rows:
     targets:
       - {name: FuzzVerifySidecarIdentityBinding, package: "."}
 
+  - id: bridge-ledger
+    spec: "BRIDGE-M4-23's Tests line (DESIGN-DETAILS 12.6): a fold of a random log equals the ledger of that log opened whole"
+    owner: BRIDGE-M4-23
+    milestone: M4
+    targets:
+      - {name: FuzzBridgeLedgerFold, package: ".", seeds: [testdata/fuzz/FuzzBridgeLedgerFold]}
+
   - id: auth-key
     spec: "TEAM-M1-05's Tests line: FuzzAuthKeyString, no panic and the bearer never holding the bundle"
     owner: TEAM-M1-05
