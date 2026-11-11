@@ -271,6 +271,12 @@ barrier mail.index.write.after mail_index_segment.go
 barrier mail.index.write.before mail_index_segment.go
 barrier mail.spam.teach.after mail_spam.go
 barrier mail.spam.teach.before mail_spam.go
+barrier mail.vault.erase.after mail_vault.go
+barrier mail.vault.erase.before mail_vault.go
+barrier mail.vault.remove.after mail_vault.go
+barrier mail.vault.remove.before mail_vault.go
+barrier mail.vault.write.after mail_vault.go
+barrier mail.vault.write.before mail_vault.go
 barrier mxedge.closed_handshake_read.after mxedgeservice/closed_handshake.go
 barrier mxedge.closed_handshake_read.before mxedgeservice/closed_handshake.go
 barrier mxedge.closed_handshake_write.after mxedgeservice/closed_handshake.go
@@ -503,3 +509,6 @@ secret tls_ecdhe_shared smtpproof/tls_client.go
 secret tls_visitor_cap tlsedgeservice/visitor_key.go
 secret tls_visitor_daily tlsedgeservice/visitor_key.go
 secret tls_visitor_record tlsedgeservice/visitor_key.go
+secret vault_password mail_vault.go
+secret vault_totp_secret mail_totp.go
+secret vault_totp_secret mail_vault.go

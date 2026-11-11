@@ -123,6 +123,10 @@ type EvsHistoryVersion struct {
 	Versioning uint32
 	// kept (format 1's only state); collected, drop_pending and dropped are format 2's (§11.9).
 	State string
+	// The slots the version's records name, as its entry lists them: in a record-class repo each chain's key slot,
+	// what an erasure names to destroy the version (§11.12's closure row: "each retained version's slot keys"). None
+	// for a general repo's version, whose keys ride its segments, and for a removal.
+	SlotIds []Id
 }
 
 // What Write changes (EVS1-M2-25, EVS1-M2-26).
