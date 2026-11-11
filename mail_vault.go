@@ -49,6 +49,7 @@ package sidecar
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	cryptorand "crypto/rand"
 	"errors"
@@ -252,7 +253,7 @@ func (self *MailVault) VaultEntries(ctx context.Context) ([]*protocol.VaultEntry
 	}
 	slices.SortFunc(entries, func(a *protocol.VaultEntry, b *protocol.VaultEntry) int {
 		if a.GetCreated() != b.GetCreated() {
-			return mailCompareUint64(a.GetCreated(), b.GetCreated())
+			return cmp.Compare(a.GetCreated(), b.GetCreated())
 		}
 		return bytes.Compare(a.GetEntryId(), b.GetEntryId())
 	})
@@ -286,7 +287,7 @@ func (self *MailVault) UsedAt(ctx context.Context, entryId Id) ([]*protocol.Vaul
 	}
 	slices.SortFunc(usedAts, func(a *protocol.VaultUsedAt, b *protocol.VaultUsedAt) int {
 		if a.GetLast() != b.GetLast() {
-			return mailCompareUint64(b.GetLast(), a.GetLast())
+			return cmp.Compare(b.GetLast(), a.GetLast())
 		}
 		return strings.Compare(a.GetRegistrableDomain(), b.GetRegistrableDomain())
 	})
@@ -910,17 +911,6 @@ func mailVaultHookSecrets(entry *protocol.VaultEntry) {
 	if secret := entry.GetTotp().GetSecret(); len(secret) != 0 {
 		testHookSecret("vault_totp_secret", secret)
 	}
-}
-
-// -1, 0 or 1 as a is below, at or above b.
-func mailCompareUint64(a uint64, b uint64) int {
-	switch {
-	case a < b:
-		return -1
-	case b < a:
-		return 1
-	}
-	return 0
 }
 
 // The vault's store over the mailbox's EvsRepo: see the file header. Safe for concurrent use.
