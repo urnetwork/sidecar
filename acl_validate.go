@@ -23,6 +23,9 @@
 //	              (D-DNS-2); with no resolver, before §12's labels, every network: but the shares wildcard
 //	tier          group:, network: and two approvers where the tier's acl_* keys turn them off
 //	sockets       a sock: name in the ur/ or a reserved namespace, which no policy names (§9.4)
+//	scope hosts   a dns: host or a tls/ or smtp/ socket's host <label>.<scope> whose scope the network's Team scopes do
+//	              not hold, or is a glob (Q-TLS-3, ACL-M6-01); with no scopes injected, before M6's, every scope host,
+//	              so a scope label never stands for a client name (§7.7)
 //
 // Row sizes are AclRowsCheckLimits', on the compiled rows. Limits judge new heads only: after a downgrade a head that
 // fit stands and keeps evaluating, and the next must fit (§20.7).
@@ -82,6 +85,9 @@ type AclValidateInput struct {
 	// §12's ResolveNetworkLabel, label or alias and never a legacy name (D-DNS-2), injected. nil before M5's labels,
 	// and then every network: selector but the shares wildcard refuses.
 	ResolveNetworkLabel func(text string) (Id, bool)
+	// The network's Team scopes by label (§13.8, Q-TLS-3), from TEAM's scope rows, injected. nil before M6's scopes,
+	// and then every scope host refuses.
+	ResolveScope func(label string) (AclScope, bool)
 }
 
 // Refuses exactly §8.8's Saving list, every refusal at once.
@@ -332,10 +338,16 @@ func (self *aclValidator) resource(rule string, field string, resource AclResour
 			return
 		}
 		switch socketFirstSegmentNamespace(first) {
-		case SocketNamespaceApplication, SocketNamespaceShare, SocketNamespaceTls, SocketNamespaceSmtp:
+		case SocketNamespaceApplication, SocketNamespaceShare:
+		case SocketNamespaceTls, SocketNamespaceSmtp:
+			if host, ok := aclSocketHost(resource.Name); ok {
+				self.scopeHost(rule, field, host)
+			}
 		default:
 			self.refuse(rule, field, "a socket in a namespace no policy names (§9.4)")
 		}
+	case AclResourceDns:
+		self.scopeHost(rule, field, resource.Name)
 	case AclResourceRepo:
 		if strings.ContainsAny(resource.Name, `/\`) {
 			self.refuse(rule, field, "a path, which an evs: resource never is (X2)")
@@ -348,6 +360,26 @@ func (self *aclValidator) resource(rule string, field string, resource AclResour
 			}
 			self.repoKind(rule, field, kind, actions)
 		}
+	}
+}
+
+// A host's Team scope, when it names one: a scope the network's Team scopes hold, one label and never a glob, so never
+// a client name, which no scope takes (§7.7, §13.8).
+func (self *aclValidator) scopeHost(rule string, field string, host string) {
+	scope, scoped := aclScopeOfHost(host)
+	if !scoped {
+		return
+	}
+	if strings.Contains(scope, "*") {
+		self.refuse(rule, field, "a scope host's scope is one label, never a glob (Q-TLS-3)")
+		return
+	}
+	if self.input.ResolveScope == nil {
+		self.refuse(rule, field, "a scope host, which names a Team scope only once the network's scopes resolve (Q-TLS-3)")
+		return
+	}
+	if _, found := self.input.ResolveScope(scope); !found {
+		self.refuse(rule, field, "a scope the network's Team scopes do not hold (Q-TLS-3)")
 	}
 }
 
