@@ -272,6 +272,13 @@ func TestSocketsSettingsRefuseWhatIsNotPositive(t *testing.T) {
 		func(settings *socketsservice.SocketsSettings) { settings.StoreTimeout = -time.Second },
 		func(settings *socketsservice.SocketsSettings) { settings.Bound = nil },
 		func(settings *socketsservice.SocketsSettings) { settings.Store = nil },
+		func(settings *socketsservice.SocketsSettings) { settings.Format = nil },
+		func(settings *socketsservice.SocketsSettings) { settings.Format.TicketMaxByteCount = 0 },
+		func(settings *socketsservice.SocketsSettings) { settings.Format.DefaultWeight = settings.Format.MaxWeight + 1 },
+		func(settings *socketsservice.SocketsSettings) { settings.Format.AlpnMaxCount = -1 },
+		func(settings *socketsservice.SocketsSettings) { settings.RegistrationsMaxBodyByteCount = 0 },
+		func(settings *socketsservice.SocketsSettings) { settings.FindMaxBodyByteCount = 0 },
+		func(settings *socketsservice.SocketsSettings) { settings.FindMaxClientIdCount = 0 },
 	} {
 		settings := socketsservice.DefaultSocketsSettings()
 		mutate(settings)

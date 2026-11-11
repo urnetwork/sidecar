@@ -402,6 +402,8 @@ barrier sockets.find.recheck.before socketsservice/find.go
 barrier sockets.find.remove.after socketsservice/find.go
 barrier sockets.find.remove.before socketsservice/find.go
 barrier sockets.find.sign.before socketsservice/tickets.go
+barrier sockets.pairs.remove.after socketsservice/find.go
+barrier sockets.pairs.remove.before socketsservice/find.go
 barrier sockets.probe.after socketsservice/service.go
 barrier sockets.probe.before socketsservice/service.go
 barrier sockets.registrations.apply.after socketsservice/registrations.go

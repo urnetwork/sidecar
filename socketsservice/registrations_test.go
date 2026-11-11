@@ -153,6 +153,45 @@ func TestSocketRegistrationsRefuseAMalformedOrOlderPage(t *testing.T) {
 	}
 }
 
+// QD-702: a page's sizes and defaults are the process's settings, never constants. A process whose Format holds a
+// claim to fewer bytes refuses, as invalid and unwritten, a page the defaults pass; one with other defaults stores
+// an entry's zero weight and max_streams as those.
+func TestSocketRegistrationsReadTheirSizesFromSettings(t *testing.T) {
+	world := newTestSocketWorld(t)
+	strict := world.newProcess(func(settings *socketsservice.SocketsSettings) {
+		settings.Format.ClaimMaxByteCount = 16
+	})
+	listener := testSocketEnrolledListener(world, strict)
+	code, result := strict.register(listener.token, &sidecar.SocketRegistrationsArgs{
+		SetVersion:    1,
+		Registrations: []*sidecar.SocketRegistration{listener.blindedRegistration(t, testSocketTokenPath(t, 1))},
+	})
+	if code != http.StatusOK || result.Error == nil || result.Error.Code != sidecar.SocketErrorCodeInvalid {
+		t.Fatalf("a claim past the process's size answered %d, %+v", code, result)
+	}
+	if count := world.fakeStore.OpCount("ApplyPage"); count != 0 {
+		t.Fatalf("%d pages reached the store", count)
+	}
+
+	defaults := world.newProcess(func(settings *socketsservice.SocketsSettings) {
+		settings.Format.DefaultWeight = 7
+		settings.Format.DefaultMaxStreams = 9
+	})
+	other := testSocketEnrolledListener(world, defaults)
+	nameToken := testSocketTokenPath(t, 1)
+	registration := other.blindedRegistration(t, nameToken)
+	registration.Weight = 0
+	registration.MaxStreams = 0
+	defaults.registerOk(other, 1, registration)
+	listeners, err := world.fakeStore.ListListeners(world.ctx, other.networkId, nameToken)
+	if err != nil || len(listeners) != 1 {
+		t.Fatalf("%d listeners, %v", len(listeners), err)
+	}
+	if stored := listeners[0].Registration; stored.Weight != 7 || stored.MaxStreams != 9 {
+		t.Fatalf("stored a weight of %d and max_streams of %d", stored.Weight, stored.MaxStreams)
+	}
+}
+
 // §22.5: after a store wipe, one interval of the client's pages rebuilds its set.
 func TestSocketRegistrationsRebuildAfterAStoreWipe(t *testing.T) {
 	world := newTestSocketWorld(t)

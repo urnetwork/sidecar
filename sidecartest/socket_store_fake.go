@@ -1027,6 +1027,10 @@ func (self *FakeSocketStore) RemoveEntries(ctx context.Context, networkId connec
 			}
 			removals = append(removals, removal)
 		}
+		// each answer reads its listener's set once every ref is done, as the set script runs after the dels
+		for index, ref := range refs {
+			removals[index].EdgeEntriesRemain = fakeSocketSetHoldsPairName(self.liveClientSetWithLock(ref.ListenerClientId, nowMillis))
+		}
 		return nil
 	})
 	if err != nil {
