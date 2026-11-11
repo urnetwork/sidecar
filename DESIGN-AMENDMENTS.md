@@ -4695,3 +4695,354 @@ The fence, which waits: §17.8's `Pending` fence takes `bytes sidecar_id = 3; by
 Changes: §17.8 Pending's fence; protocol/design_unfenced_test.go's testFenceAdditions.
 
 Questions: `plan-SDK-pending-sidecar-id.md`.
+
+### QD-658: How does a git-mode push with no change at all go in parts, when its sealed metadata passes 1 MiB?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A statement in parts may state an empty change list: change_count 0, changes_root the root of zero parts with changes (SHA-256 of the empty string, RFC 9162's empty tree), no changed_prefixes, and every part changeless. A git-mode push whose net change is empty but whose carried commits and history blobs pass one part (a tag over a long unheld history, or an UPDATE whose tip tree is unchanged) then goes in parts. §11.6's statement shape and the seal's root for zero changeful parts change before M2's freeze; every parser and the seal check take it. EVS1-M2-48 builds it; until then the builder refuses such a push before anything is sent.
+
+Changes: §11.6 statement and parts rows (design-records); EVS1-M2-48: statement shape, ParseEvsStatement, the seal's root, the builder.
+
+Questions: `evs1-m2-48-changeless-push-in-parts.md`.
+
+### QD-659: Which member device may form the group of a repo an agent creates, when no config writer reads that repo or holds its admin scope?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
+
+QD-638's former stays as built for M2: a config writer forms the group of a repo an agent creates only when it is a key holder of the repo (R3) and holds admin on it at gkm, which §8.5's implicit document always gives every member device. An agent's repo needs a member device that reads and administers it; under a narrower ACL document with none, the repo stays keying (fails closed, nothing leaks). Revisit when Team policies can narrow member devices' evs rights (M6), with the first acting config writer filing RepoGrant{reader} and RepoAdmin{add} for itself as the candidate.
+
+Changes: KF1 §10.7 and §8.8 RepoCreate notes (design-records); M6 revisit noted on TEAM/ACL policy tasks.
+
+Questions: `keys-m2-32-agent-repo-former-rights.md`.
+
+### QD-660: Should a push attempt read evs's newest authorization state again when it reruns steps 4 and 5, instead of judging 5d against the gate view it bound at arrival?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A push attempt reads GateViews.View(network) again at each run of step 4, the first and every rerun (after step 7's 5 s window passes or after a 412), and judges 5d's gate predicate against that newest view; bind's read at arrival stays for 5b's identity check only. One map read per rerun, no I/O. This is §11.8's timing row ('against the newest authorization state evs holds'). The fix is in evsservice/push.go and push_step4.go (EVS1-M2-12's code, the data lane); then TestFs3StepSevenPastFiveSeconds runs beside TestFs3 under FS-3's rules.
+
+Changes: data-lane follow-up: evsservice/push.go and push_step4.go re-read the gate view per step 4 run; TestFs3StepSevenPastFiveSeconds added beside TestFs3.
+
+Questions: `evs1-m2-40-gate-view-rerun.md`.
+
+### QD-661: Should a seal record's part item accept the root's empty token path, which a push in parts that creates a top-level name names as its first part's?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+ParseEvsSealRecordBody accepts a part item of exactly 52 bytes (place 20 B + changes_root 32 B, no token bytes) as the root's empty first token path, which EvsSealRecordBody already writes for a push in parts whose first change is the root's delta (EVS1-M2-46). EVS-FORMAT.md says so, with a round-trip test. Every other parser of token paths in records (evs_batch.go and its siblings, EVS1-M2-04/12's code) is checked for the same gap. FS-9 can then create its directory at the top level.
+
+Changes: data-lane follow-up: evs_batch.go's ParseEvsSealRecordBody and other record token-path parsers; EVS-FORMAT.md; round-trip test; FS-9 un-nests its directory.
+
+Questions: `evs1-m2-40-seal-root-part.md`.
+
+### QD-662: How should evs's read reply carry a directory at its 448 KiB bound whose rows are still in unfolded deltas spread over a push's parts, when one path frame cannot hold them?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+evs's read reply carries a path's unfolded directory deltas across frames, a delta per frame with its proofs beside it, so any directory within its 448 KiB bound lists in any fold state, and the frame bound (1 MiB + 64 KiB) stays. A frame that cannot be encoded is logged and the stream ends with an error frame, never silently. EVS-FORMAT.md states the frame contents. The read route's owner (EVS1-M2-14's code, evsservice/read_frame.go, the data lane) builds it; FS-9's unfolded listing then runs.
+
+Changes: data-lane follow-up: evsservice/read_frame.go splits deltas across frames, logs and ends a stream that cannot encode; EVS-FORMAT.md read frames; FS-9 unfolded half.
+
+Questions: `evs1-m2-40-unfolded-listing-frame.md`.
+
+### QD-663: A LIST on the local stack's MinIO leaves out a key whose overwrite is in flight, with every drive online, so section 2.2.2's whole LIST does not hold for keys evs rewrites in place: should the fork make such a LIST whole, or should evs stop deciding on one?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+The in-house MinIO build makes a LIST whole for a key whose overwrite is in flight too: a key some asked drive holds but whose xl.meta read failed other than not-found is read again under the key's lock, or the LIST answers 503 rather than leave it out (an EVSB-M2-22 rule, with the probes in .stack/scratch/evs1-m2-40/minio-probe/ as its T3 test). DESIGN-DETAILS 2.2.2's 'a LIST that is whole' then holds as written, and evs's listers need nothing. Until the fork's rule lands, the fold's markBelow (evsservice/marker.go), the one site found that decides on what a LIST leaves out, lists twice and takes the union. FI-1 keeps reading known heads and slots by key.
+
+Changes: EVSB follow-up in the minio fork: whole LIST for keys mid-overwrite (cmd/metacache-walk.go, metacache-set.go, metacache-entries.go) with the probe as test; data-lane interim: markBelow lists twice and unions; DESIGN-DETAILS 2.2.2 stands.
+
+Questions: `evs1-m2-41-list-drops-overwritten-key.md`.
+
+### QD-664: Should evs's newest rule find a window version's record through pidx/ once evacuation has moved its batch, as a read's statements already do?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+RecordPushSource falls back to RecordLocator.ReadRecord (pidx/) on ErrEvsRecordEvacuated and caches the record, as read_proof.go's readRecordAt already does (§11.13: a batch's records are found through pidx/ once it is gone). Every caller of NewRecordPushSource (the newest rule in evsservice/newest.go, fold, purge, collect, push step 4 and the log route) gains the fallback. No new head write. The data lane's follow-up (EVS1-M2-09's code); then TestFs7EvacuatedWindowAfterRestart runs beside TestFs7.
+
+Changes: data-lane follow-up: RecordPushSource's pidx/ fallback with cache (evsservice/newest.go and record source); TestFs7EvacuatedWindowAfterRestart added.
+
+Questions: `evs1-m2-41-newest-evacuated-window.md`.
+
+### QD-665: Should evs's read routes refuse a deleted repo 409 REPO_DELETED and a shredding or shredded one 409 SHREDDING, as §11.12's refused row closes every route but restore and DELETE with now?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+The read, refs and log routes in evsservice/read.go and POST/GET/DELETE /evs/v1/subscriptions in subscribe.go set RefuseDeleted: a deleted repo answers 409 REPO_DELETED, a shredding or shredded one 409 SHREDDING, as §11.12's refused row closes every route but restore and DELETE with now. One repo/ read per request, from the 5 s repo cache the upload route uses. The data lane's follow-up (EVS1-M2-14's and EVS1-M2-15's code); then TestFs6ReadsRefusedWhileDeleted runs the clause.
+
+Changes: data-lane follow-up: RefuseDeleted on evsservice/read.go's three routes and subscribe.go's routes, with tests; TestFs6ReadsRefusedWhileDeleted added.
+
+Questions: `evs1-m2-41-reads-of-deleted-repo.md`.
+
+### QD-666: Why does a reader fail to open a file a PATH_EPOCH's tail carried, created in the source epoch by a push of a newer generation, until evs's copy has run?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A reader opens each sealed name or record of an unfolded version with the key of the generation its statement names (the push's own generation), not the epoch's or the tail move's p_new, per DESIGN-DETAILS 9.2.4 and 9.2.5, so a generation-ahead creation carried by a PATH_EPOCH tail reads through its source before evs's copy runs. Every committed version stays readable across any cut-over (9.1, P2). The data lane's follow-up in EVS1-M2-28's read path (evs_epoch_read.go, evs_proof.go), or EVS1-M2-26's sealing rule if 9.2's text puts the key choice there; then TestFs4BatchedEpochReadBeforeCopy runs the clause.
+
+Changes: data-lane follow-up: the read path opens sealed values with the statement's generation (evs_epoch_read.go, evs_proof.go); TestFs4BatchedEpochReadBeforeCopy added.
+
+Questions: `evs1-m2-41-tail-creation-read.md`.
+
+### QD-667: Should the config head carry a bridge ledger, the frozen body-level state of every folded bridge statement, checked by every full reader as rows are?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
+
+The config head carries a bridge ledger: files of rows by kind (bridge/ledger/addresses with tombstones, rules/<xx> shards by id with their bodies and dispositions, egress, aliases) and a manifest of their hashes. A writer writes them at each fold from the verdicts it holds; every full reader standing under the previous base computes the same files and forks on a difference; a device that starts at the base, and a VPN component, take them. The files are ciphertext at evs, so no §2.8 row; about 600 KB at 5,000 devices. This carries section 5's rule (a verdict judged once by the verifiers present, taken from the base after) to bodies the server cannot read, and bounds every compile. DESIGN-DETAILS.md section 12 is built on it; BRIDGE-M4-23 builds it with seams in TEAM's writer and head check.
+
+Changes: DESIGN-DETAILS.md section 12 stands as written; BRIDGE-M4-23 and BRIDGE-M4-16 build it; §17.8 and §7.9 text (design-records).
+
+Questions: `details-12-ledger-in-head.md`.
+
+### QD-668: What judges a bridge filing's approval after a base that did not fold it: the new base's rows, or a verdict carried from the entry's own position?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
+
+A bridge filing in a base's tail is judged by every reader that holds its body's key on the new base's rows with the tail re-applied (section 5), as BRIDGE-M2-01 already judges a signer; the writer freezes the verdict into the head's bridge ledger when it folds the entry, and writers fold through their tip whenever a bridge statement is unfolded. The one case that differs from a verdict at the entry's own position (a head landing within seconds of an approved filing whose policy disqualifies that approval) turns the verdict at every reader alike and fails closed; the requester files again under a new decision. No format beyond the ledger (QD-667). DESIGN-DETAILS.md section 12 is built on it.
+
+Changes: DESIGN-DETAILS.md section 12 stands as written; BRIDGE-M4-23 builds it.
+
+Questions: `details-12-unfolded-verdicts.md`.
+
+### QD-669: After a restart, should a daemon host serve bridge flows before its judge has replayed the denials it had applied?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
+
+At a daemon's start, and at each new client generation, the bridge provider is built only after every entry above the restored state that the ConfigClient holds has been replayed to the bridge (and a compile at the tip has run if one can), from local stores alone, given section 12's rule that an entry is in the ConfigClient's store before any entry callback runs. If the client's store is behind the posture's pin, the provider waits for the follow to reach it, with bridge_alarm after 30 s. A host whose config store lagged its posture at a crash serves no bridge flow until it reaches api again. Nothing a restart does lowers enforcement. An app's VPN component has no resident judge and is unchanged (section 4; QD-621). BRIDGE-M4-17 builds it; until the core lane reverses ConfigClient.publish's order, the gate's wait for the follow covers that gap.
+
+Changes: DESIGN-DETAILS.md section 12 stands as written; BRIDGE-M4-17 builds the start gate; core-lane follow-up: ConfigClient.publish stores entries before running entry callbacks.
+
+Questions: `details-12-start-gate.md`.
+
+### QD-670: How do the sharing network's hosts trust the accepting network's alias table: by a hash their approving admin pinned, or by the seal alone?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
+
+X's approving admin pins the accepting network's alias table as QD-077 pins the target table: BridgeShareGrant gains the accepting network's id and each table's hash and version (fields 6 to 9), written in the act that files the share's GrantActivate. A host compiles a share only from tables that hash to the pins. The alias table holds each alias's host bits (the low 16 bits) and length, and X's host matches a destination's low 16 bits, so a block change in Y changes nothing X pinned. If Y ever re-aliases a share, X's admin activates again. The fields join QD-077's message before bridge.proto declares it. DESIGN-DETAILS.md section 12 is built on it; BRIDGE-M6-03 builds it.
+
+Changes: DESIGN-DETAILS.md section 12 stands as written; BRIDGE-M6-03 builds it (bridge.proto BridgeShareGrant 6 to 9); §17.9 share pins (design-records).
+
+Questions: `details-12-alias-table-pin.md`.
+
+### QD-671: When does a host store a share's raised config generation: before it admits the contract that carried it, or after?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
+
+When a share-link contract's ShareCert names a generation above the host's ratchet for that share, the host commits the raise to §17.8's persisted posture store and then admits the contract. One store commit per share per rotation of Y, a few milliseconds, in that one contract's VerifyPrincipal sequence before the dial, never a packet's, a flow's or a later contract's; R-BRIDGE-9's no-I/O-per-packet rule is untouched. A removed sidecar stays refused after a host restart, as FS-38 asks. DESIGN-DETAILS.md section 12 is built on it; BRIDGE-M6-04 builds it.
+
+Changes: DESIGN-DETAILS.md section 12 stands as written; BRIDGE-M6-04 builds it; §17.9 admit row (design-records).
+
+Questions: `details-12-ratchet-commit.md`.
+
+### QD-672: Should evs serve a removed path's earlier versions by number, so History of a removed path walks them rather than repeating its removal?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+evsservice serves path.version < newest.RemovalVersion by number from the entry's folded versions, as it does for a standing path (read.go's pathReply), so History of a removed path walks its earlier versions and §11.12's closure can list each retained version's slot keys. EvsRepo.History stops a walk that does not descend and raises an alarm, since a server repeating itself is this bug or a tamper. EVS1's code (read.go, evs_history.go) with tests in read_test.go and evs_history's; a data-lane follow-up. Until it lands MAIL-M8-02 keeps its fail-closed rules: a vault delete commits its ERASE before its removal, and a delete of a vault path removed without an ERASE refuses with ErrMailVaultNotShreddable.
+
+Changes: data-lane follow-up: evsservice/read.go serves a removed path's older versions by number; evs_history.go stops a non-descending walk with an alarm; MAIL-M8-02's interim rules stand.
+
+Questions: `mail-m8-02-history-of-a-removed-path.md`.
+
+### QD-673: What keeps a mailbox's EvsShare subjects and audit reader out of its vault entries, which only the owner's consented devices may read?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §15 The local email server, inbound mail, and burner email.*
+
+Vault entries are narrowed by rule. §16.6's refused-from-MCP list and MCP-M3-12's McpGuard add every evs tool, search tool and ur://evs resource on a mailbox's vault/ family, and evs_list omits it, so an agent holding an EvsShare of the mailbox reaches vault entries by no path. §15.8 and §2.18 state the residual: a mailbox's EvsShare subjects and a Team's audit reader hold the keys that open vault entries, and clients (MailVault refusing every device but the owner's consented ones) enforce the narrower readership. A second seal to an owner-only vault key stays the option if the readership must later hold against a holder of the mailbox's keys.
+
+Changes: §16.6 refused list and McpGuard row for a mailbox's vault/ family (edge lane, MCP-M3-12's code); §15.8 and §2.18 residual sentences (design-records).
+
+Questions: `mail-m8-02-vault-readers.md`.
+
+### QD-674: Should every repo move from Go 1.27.3 to 1.27.4 for GO-2026-6859, which now fails make check's govulncheck rule, and may sidecar tracks land meanwhile?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
+
+Every repo moves from Go 1.27.3 to go1.27.4 for GO-2026-6859 (an HTTP/1 server crash in net/http) in one coordinated ops-lane change: the go directive in every go.mod of connect, sidecar, sdk, server and sn, any toolchain line, the build images' Go base, any check/ rule that names the version, and R-REPO-6's and §4.9's pin. D-TEST-15's one-toolchain rule holds (x/text chooses tables by go1.27, which a patch release does not change). The go1.27.4 toolchain comes through the module proxy, checked against the checksum database (QD-025), as lowgo already uses it; check/ accepts no advisory. The host's /usr/local/go is the owner's to update; the run does not touch it, and lowgo keeps go1.27.4 first on PATH until then.
+
+Changes: ops-lane track go-1-27-4: go.mod go directives in connect, sidecar, sdk, server and sn; build images; check/ rules naming the version; R-REPO-6 and §4.9 pin to 1.27.4.
+
+Questions: `team-m2-21-govulncheck-go-1-27-4.md`.
+
+### QD-675: When a forwarding Delegation's row leaves the rows before gkm's reconciler deleted its reader key object, what deletes gkm/dkey/<delegation_id> within its published ttl?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
+
+gkm's reconciler keeps a tracked end of a forwarding Delegation after its row leaves the rows (QD-648) and deletes gkm/dkey/<delegation_id> on schedule, DelegationKeyRetention (24 h) after the end. After a restart, a sweep of the network's gkm/dkey/ prefix, now and then, deletes at once any object whose id no forwarding row in the state's rows names: its row is gone, so its retention has passed by at least 4,096 positions and nothing a rotator seals still needs it. §2.8's published ttl then holds at any entry rate and across restarts; no row or format changes. A KEYS-lane change in sidecar/gkmservice/reconciler.go (core lane).
+
+Changes: core-lane follow-up (KEYS): gkmservice/reconciler.go keeps tracked ends past their rows and sweeps gkm/dkey/ for unnamed ids; §2.8's gkm ttl text stands.
+
+Questions: `team-m2-21-dropped-forwarding-key-objects.md`.
+
+### QD-676: What should a VPN component's posture do once its overlay is full and no compile has run to clear it?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
+
+A VPN component's posture overlay moves to the component's sealed store in the review phase, streamed and indexed with only an index and a cache in RAM, as QD-641 directs for bulk state (DESIGN-DETAILS 4.2.4's storage-backed compile is the same move for rows), so its only bound is storage's and the host's per-flow check reads the index. Until it lands, the interim as built stands: past PostureSettings.OverlayMaxCount (4,096) a denial the posture verified and cannot hold sets PostureDecision.OverlayFullThroughN (manifest field 23), the decision is pending until a state at or past it, the posture keeps following the chain, and it alarms malformed once a call. A posture that can no longer hold a denial it can check denies rather than silently stops applying them; QD-621's accepted cost covers only revocations the posture cannot check.
+
+Changes: review-phase task: storage-backed overlay in device/ (QD-641); interim in device/posture_apply.go stands.
+
+Questions: `sdk-m8-17-overlay-bound-without-compiles.md`.
+
+### QD-677: How should the soak count orphan objects by orphan GC's own definition, when evsservice has no count that deletes nothing?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §22 Testing and verification.*
+
+EVSB adds a dry form to evsservice/gc_orphans.go: OrphanGc.CountRepo(ctx, repo *OrphanGcRepo) (*OrphanGcResult, error) runs steps 0 to 4 and step 5's selection, issues no DELETE, and reports CandidateCount and the count of those no pidx/ entry introduces, sharing orphan GC's one definition. The soak (server/local/sidecar-soak) implements its orphanCounter through it per repo over the nightly pass's listings and compares what GC would judge orphan, past the horizon, at the baseline and at the end. Until it lands the orphan signal reads open, as built. A data-lane follow-up of about forty lines.
+
+Changes: data-lane follow-up: OrphanGc.CountRepo in evsservice/gc_orphans.go; server/local/sidecar-soak's orphanCounter wired to it.
+
+Questions: `test-m2-03-soak-orphan-count.md`.
+
+### QD-678: Should the lb leave X-Frame-Options off the key origin, sidecar.ur.io, when today it adds `SAMEORIGIN` to every service host's responses?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
+
+warp's services.yml gains a list of exact hosts the lb sends no X-Frame-Options for, shaped like no_access_log and checked the same way (an exact host the lb serves); warp/services/sidecar-blocks/mmm.yml adds sidecar.ur.io to it. warpctl's addSecurityHeaders skips the header for a listed host, and a warp config test asserts the key origin's server block has no X-Frame-Options while every other host keeps SAMEORIGIN. The key origin's framing then rests on mmm's CSP frame-ancestors https://ur.io alone, as SDK-M4-06's trap says, and ur.io keeps its own protection. An ops-lane change to warp's addServiceBlocks; it lands before the owner applies mmm.yml.
+
+Changes: ops-lane follow-up: warp services.yml no-frame-options host list, warpctl/config.go addSecurityHeaders, config test; mmm.yml fragment line for sidecar.ur.io.
+
+Questions: `ops-m4-01-lb-frame-options.md`.
+
+### QD-679: Are these readings of §8.8's compile right, where CompileAcl had to fix a form the answers name without bytes?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §8 Access control.*
+
+The seven readings of §8.8's compile stand as written in acl-m2-04-compile-readings.md and as the code on sidecar does them: (1) the config head's tags, groups, rules, labels and resolve files are protocol/config.proto's ConfigAtomTable, ConfigRuleTable, ConfigLabelTable and ConfigResolution, none server-visible, so no §2.8 row; (2) a rule's canonical form is RFC 8785 JCS of one JSON object per rule with lists sorted as strings and id and note left out, a request writing its effective evidence, expires_default and max_expiry so a change of the document's defaults is a change of meaning (FS-14); (3) the implicit document's rule i counts its grants then its requests, and §8.5's tag:mail kind-default rules take ids from SHA-256("urnetwork-sidecar-v1/acl-kind-rule" || 0x00 || u32be(i)), i 0 the read and 1 the deposit; (4) network:* compiles to a derived atom of kind 4 over the one byte '*', naming no subject until §8.11's shares (ACL-M6-03); (5) compile drops an activated grant whose expiry is at or before the head's newest record time, and a member the log's rows no longer hold expands to nothing; (6) a grant allowing route adds its via subjects to its targets (QD-004); (7) AclEngine honors a rule until AclEngineSettings.ClockSkew (60 s) past its expiry by the local clock. design-records names readings 1 to 4 in §8.8 and §7.9's file list. No code change.
+
+Changes: §8.8 and §7.9's file list name readings 1 to 4 (design-records); no code change.
+
+Questions: `acl-m2-04-compile-readings.md`.
+
+### QD-680: Which task builds api's end of `/internal/gate/` (the projection and rows routes and their per-caller bearer check), and what body does the projection route answer?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §8 Access control.*
+
+A new ACL task builds api's end of QD-055's internal gate surface: GET /internal/gate/projection/<network_id>?after=<n> answering the Client route's body (TEAM-M2-13's NetworkConfigProjectionResult: {genesis, entries, rows, tip: {n, chain}, more}, each message verbatim in base64, paged, from the retention point when after is before it) as a thin wrap of model.ConfigLogSequencer.Read, and GET /internal/gate/rows/<network_id>/<rows_sha256> answering the ProjectionRows bytes verbatim (application/octet-stream), which the client holds to their hash; both behind a per-caller bearer verified by SHA-256 in constant time as QD-027 words it, with one caller-class vault file per gate service (connect first; the owner creates the files), the routes in server/api/api.go and route_authz.go, and the lb's refusal of the /internal/gate/ prefix from outside (W8's allow list). The listen-facts and over-limit routes join when SOCK and QUOTA need them. One encoding then serves devices and gates.
+
+Changes: new task ACL-M4-02: api's /internal/gate/ projection and rows handlers, bearer check, routes, lb prefix refusal; owner: one vault file per gate caller class, connect first.
+
+Questions: `acl-m4-01-internal-gate-routes.md`.
+
+### QD-681: How does a reader verify a directory delta in a walked statement whose change list is under changes_root, when the read reply has no place for its inclusion proof?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+EvsReadPathReply gains repeated EvsDeltaProof delta_proofs = 19, one per entry of deltas in order, with message EvsDeltaProof { repeated EvsMerkleProof proof = 1; }, empty for an inline statement; EvsAbsenceProof gains EvsMerkleProof present = 5: for a prefix among a walked statement's changes, that change's inclusion proof in place of below and above, which the reader accepts only for a strict prefix whose change writes an entry (a delta) and refuses for the path itself or a removal. §11.9's reply row reads 'that neither the path nor a removal of a prefix holding it is among its changes, with the inclusion proof of a prefix's delta that is'. evs's read.go and read_proof.go build both from the push record they already read, and evs_proof.go checks them. Two proto fields before M2's freeze; no new server-visible data. The data lane's follow-up; the code track declares the fields and lists them in protocol/design_unfenced_test.go's testFenceAdditions, and design-records then writes them into DESIGN.md's evs.proto fence and drops those lines (QD-684).
+
+Changes: data-lane follow-up: evs.proto EvsReadPathReply.delta_proofs = 19, EvsDeltaProof, EvsAbsenceProof.present = 5, listed in testFenceAdditions until design-records folds the fence; evsservice read.go, read_proof.go; evs_proof.go; §11.9 reply row.
+
+Questions: `evs1-m2-28-rooted-delta-proofs.md`.
+
+### QD-682: Where does an ERASE's and a CLOSURE's sealed note go, and what are its bytes?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+An ERASE's and a CLOSURE's note go in a new EvsSealedMetadata.erasure_note (bytes), sealed with the push's metadata: erasure id 16 B | complete u8 (1 when this push ends the erasure) | the caller's note bytes (RECORD's SealedNote, MAIL's documents); a CLOSURE's note holds its erasure id and no caller bytes. The ERASE then creates nothing on the erasure ref (evs takes a creates-only push of no change, which the landed checks allow), and reconcile resumes an erasure from evs's state as §11.12 says. EVS-FORMAT.md states the layout; evs-6's words in §2.8 and metadata_list.yml name the field if they list sealed metadata's contents. The data lane's follow-up in EVS1-M2-30's code (record_seam.go's RecordStreamErase and the ERASE and CLOSURE builders), with the new field listed in protocol/design_unfenced_test.go's testFenceAdditions until design-records writes it into DESIGN.md's evs.proto fence (QD-684).
+
+Changes: data-lane follow-up: EvsSealedMetadata.erasure_note, ERASE and CLOSURE builders, reconcile reads it; EVS-FORMAT.md layout; testFenceAdditions until design-records folds the fence; §11.12 push and rekey rows.
+
+Questions: `evs1-m2-30-erasure-note-format.md`.
+
+### QD-683: May a design-records track add the code-side line a new design id needs, a new §2.8 row's `rows:` line in testdata/metadata/fields.yml or a new §4 id's line in check/repo_matrix_test.go, since each guard needs both in one commit?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §2 Trust model and threat model.*
+
+A design-records track that adds a new §2.8 row or a new §4 id adds the code-side line its guard needs in the same commit: the row's planned line in testdata/metadata/fields.yml's rows: section (ext-11 for Cloudflare terminating https://ur.io, QD-012, and ext-12 for the abuse and legal-request mailboxes' provider, QD-030, each planned at the milestone that first serves its value), and a new id's repoMatrix entry in check/repo_matrix_test.go (Q-REPO-6 for QD-023's apt upgrade item, mapped to a path or rule that holds the install path as Q-REPO-4 and Q-REPO-5 are). One line of test data or test code per id, outside the design files otherwise; the row and its planned line are one fact. The design-records brief allows exactly these lines.
+
+Changes: design-records brief: may add a new id's fields.yml rows: line and repoMatrix entry in the same commit; follow-up design-records track: ext-11, ext-12 and Q-REPO-6.
+
+Questions: `dr-s2-s3-new-metadata-rows.md`.
+
+### QD-684: May a design-records track drop a field's line from protocol's fence additions in the commit that writes that field into its DESIGN.md fence, since the fence test fails until both change together?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
+
+A design-records track that writes a field into its DESIGN.md proto fence drops that field's line from protocol/design_unfenced_test.go's testFenceAdditions or testFenceValueAdditions in the same commit, touching only those list entries. The list carries a field the code declares until design-records folds it, so dropping its line is the fold's other half; the fence rule stands (never move a fence ahead of the code). First use: §17.8's Pending fence takes sidecar_id = 3 and identity_public_key = 4 (QD-211); Pending.forward_delegation_id = 5 and BridgeIdentity's fields 6 and 7 (DESIGN-DETAILS 4.2.2) follow when section 4 is folded. Answered with dr-s2-s3-new-metadata-rows (QD-683); the design-records brief allows exactly these edits.
+
+Changes: design-records brief: may drop a folded field's line from protocol/design_unfenced_test.go's additions lists in the same commit; follow-up design-records track: §17.8 Pending fence for QD-211.
+
+Questions: `dr-s17-s18-fence-additions.md`.
+
+### QD-685: Should a search-index diff rest only on a full entry in its own writer's files, which that writer keeps, so that no merge or other device's push can take a base from under it?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A search-index diff rests on a full entry of its document in another file of its own writer in its own bucket, a slot that is not the head or a large entry, and on nothing else. The writer keeps that file while a diff of its unabsorbed slots rests on it: it does not reuse such a slot or remove such a large entry. Every push that writes a writer's file replaces that writer's head at the version read, so a writer's pushes commit one at a time. A merge reads no head and removes no writer's file. No cross-device dependency is left to race (IndexMerge.tla passes with every writer push free to land across any merge, and each rule has a twin that fails without it). Costs accepted: a writer's first entry of a document in a bucket is full until the head holding it seals; a writer keeps up to 8 slots (128 KiB) a bucket past their absorption; an absorbed large entry waits for its writer's next push there or the bucket's roll-up. This supersedes the questions search-m10-07-keep-base-full-copy and search-m10-07-merge-stale-diff. DESIGN-DETAILS.md section 1 is built on it; SEARCH-M10-45, SEARCH-M10-10 and SEARCH-M10-11 carry it.
+
+Changes: DESIGN-DETAILS.md section 1 stands as written; SEARCH-M10-45, SEARCH-M10-10, SEARCH-M10-11; §11.14 slot, entry, dependency, seal and merges rows (design-records).
+
+Questions: `details-1-own-bases.md`.
+
+### QD-686: Should a roll-up move a version or tombstone that a newer bucket holds only older entries of into that bucket's shards, instead of rewriting the newer bucket's files in place?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A roll-up writes a carried version or tombstone into the shards of the newest bucket holding an entry of its document, in the roll-up's push, which replaces or creates that bucket's manifest. Nothing is removed from the newer bucket: reads mask its older entries by version, its merges drop them, and its own roll-up carries the promoted entry on; a promoted tombstone still takes all's row. No in-place rewrite and no writer's file touched; a merge of the target conflicts on its manifest CAS. I-EVS-11's last clause and FI-20 gain 'or a newer bucket's shards', and §11.14's 'every all row is older than each bucket entry of its key' becomes 'no all row is newer than the newest bucket entry of its key'. This supersedes the question search-m10-07-rollup-merge-race. DESIGN-DETAILS.md section 1 is built on it; SEARCH-M10-11 carries it.
+
+Changes: DESIGN-DETAILS.md section 1 stands as written; SEARCH-M10-11; §11.14 roll-up rows, I-EVS-11 and FI-20 wording (design-records).
+
+Questions: `details-1-promotion.md`.
+
+### QD-687: What keeps an index entry that trails its content from landing below a tombstone a roll-up has already dropped: the content pin and a push lifetime on the client, or a counter evs enforces?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+An index push's builder takes its signed time, reads the index head, then reads each content ref's head from evs, and drops an entry whose document that pin holds at a higher version or removed. It sends the push only within 5 min of its signed time (25 min for a push in parts) and never sends a stored push again after 429 TIME_AHEAD. A merge names no expired bucket and a roll-up only an expired one, both judged at the push's signed time. Hosts with the text check each live entry against its path and backfill a missing tombstone. No server change; the argument rests on evs's 10 min time check and on clients not sending stored pushes. The accepted residual: a device whose clock ran about a week fast when it built, that stalls that long and then sends the stored bytes; a host with the text then repairs the index and names the signer. If the review phase wants the residual closed, evs's head counter moved at every roll-up (refusing an index push built before it) is the named fallback. This supersedes the question search-m10-07-late-journal-tombstone. DESIGN-DETAILS.md section 1 is built on it; SEARCH-M10-14 and SEARCH-M10-12 carry it.
+
+Changes: DESIGN-DETAILS.md section 1 stands as written; SEARCH-M10-14, SEARCH-M10-12; §11.14 companion, coverage and roll-up rows (design-records); review phase: evs roll-up counter named as the fallback.
+
+Questions: `details-1-late-entries.md`.
+
+### QD-688: Should a merge keep rewriting every shard that holds an older version of a document it carries, or leave superseded rows in place until their shard is half dead?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A merge keeps §11.14's rule: it appends new rows to the youngest shard and drops a document's older version from the shard holding it, so a bucket's shards hold one version per document (I-EVS-11); an eraser finds a document in one shard of each partition, and reads mask across partitions only. The cost for an edited repository (DESIGN-DETAILS 1.4's figures) is accepted for now. In the review phase, before M10's exit freezes the bytes, the lazy alternative (a merge leaves superseded rows masked by version, rewrites a shard under half current, and a roll-up carries winners only) is measured on FS-76's corpus, since it reaches into the erasure's bounds (owner decision 146), which section 1 does not own.
+
+Changes: DESIGN-DETAILS.md section 1 stands as written; review phase: measure lazy superseded rows on FS-76's corpus before M10's exit.
+
+Questions: `details-1-superseded-rows.md`.
+
+### QD-689: Are these fourteen readings of §11.14 right, where section 1 of DESIGN-DETAILS.md had to choose and no D- item is changed?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+The fourteen readings of §11.14 in details-1-small-readings.md stand as DESIGN-DETAILS.md section 1 writes them: (1) a bucket's expiry is judged at the push's signed time, never the device's clock; (2) a slot other than the head, or a large entry, at or below its writer's absorbed seq holds nothing for search, merges and roll-ups, only a diff's base; (3) a manifest may exist with no shard, and absorbed holds a row only for a watermark above 0; (4) IndexFileHeader.coverage sorts by ref_id then horizon false before true, at most one row of each kind a ref (protocol/INDEX-FORMAT.md's 'strictly ascending by ref_id' is corrected); (5) an entry's time is its content push's signed time and its bucket follows the index push's; (6) a merge's tie order at one version is a tombstone, the shards' own entry, then the full entry from the lowest writer id and the lowest seq; (7) the youngest shard fills by section 1.2.4's fixed binary search; (8) a merge with nothing to add still commits its manifest; (9) a push past 256 KiB of entries also writes its writer's head; (10) the lock renews at half its term; (11) a companion push that only raises coverage is sent; (12) a writer replacing a multi-chunk text file without its text writes no index entry, and the push is backfilled; (13) a roll-up's runner writes horizon rows at indexed_through into its own head in the newest bucket for each content ref the removed slots named; (14) a journaled unit at or below its ref's horizon at the companion push's base is dropped. design-records folds them with section 1's text.
+
+Changes: DESIGN-DETAILS.md section 1 stands as written; protocol/INDEX-FORMAT.md coverage order (with SEARCH-M10-45); §11.14 rows (design-records).
+
+Questions: `details-1-small-readings.md`.
+
+### QD-690: Should extractor 1 define its own base64, quoted-printable, character-reference, header and whitespace rules, so that no standard-library parser's behavior is part of the index format?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+Extractor 1 defines its own base64, quoted-printable, HTML character-reference, header and whitespace rules: every such reading is a rule of the index format, written in DESIGN-DETAILS.md 11.2 and protocol/INDEX-FORMAT.md, with HTML's reference table in the repository (testdata/index/conformance/entities.json) and 372 conformance vectors holding both implementations (the index's extractor and SearchOracle's) to it. No standard-library parser's behavior is part of the format, so a Go release can no longer change an index, and no text is lost at a long quoted-printable line, a control byte or a missing pad. It replaces three sentences of QD-474: references are the format's rule and not html.UnescapeString; a charset label is read as bytes; labels of the replacement encoding pass as bytes. About 400 lines in each implementation and some 32 KB of table on the legs that index. DESIGN-DETAILS.md section 11 is built on it; SEARCH-M10-42 and SEARCH-M10-43 carry it.
+
+Changes: DESIGN-DETAILS.md section 11 stands as written; SEARCH-M10-42, SEARCH-M10-43; INDEX-FORMAT.md Extractor 1; QD-474's three sentences replaced.
+
+Questions: `details-11-own-decoders.md`.
+
+### QD-691: Should extractor 1 cut a header value at 16,384 B and read a delimiter line or soft line break past 1,024 B as text, so that a phone can extract any message in one pass and fixed memory?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+Extractor 1 cuts a logical header line, and the joined values of one header name, at HeaderMax 16,384 B, and reads a multipart delimiter line or a quoted-printable soft line break whose trailing blank run passes LineWindow 1,024 B as text. Extraction then runs in one pass in at most 150 KiB beyond the normalizer, whatever the message, so a phone extracts any message in fixed memory (§11.15's working set; QD-641). Both limits are format bytes, far above RFC 5322's 998 B line and RFC 2046's 70 B boundary; a header value's tail past 16 KiB is not indexed, where fields 1 to 3 keep only 1,024 normalized bytes anyway. DESIGN-DETAILS.md section 11 is built on it; SEARCH-M10-42, SEARCH-M10-43 and SEARCH-M10-44 carry it.
+
+Changes: DESIGN-DETAILS.md section 11 stands as written; SEARCH-M10-42, SEARCH-M10-43, SEARCH-M10-44; INDEX-FORMAT.md Extractor 1 limits.
+
+Questions: `details-11-extraction-bounds.md`.
+
+### QD-692: Should a remote-search body that is not the one deterministic encoding of its message, or that holds a field its receiver does not know, be refused?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A remote-search receiver accepts a body only if it holds no field the receiver does not know, at any depth, and marshaling the parsed message deterministically gives the same bytes; then it checks that pad is zeros. A request that fails is INVALID and a reply that fails is no reply. The version is judged first, so a later version's request is UNSUPPORTED_VERSION, not INVALID. A message then has one body, so the size rule, the pad rule, the size tests and the fuzz target all speak of one encoding. A later requester must raise search_version to send a new field (SearchRequest's reserved 13 and 14 included), and falls back to version 1's fields for an indexer that answers a lower range. One more marshal and a comparison per body. DESIGN-DETAILS.md section 11 is built on it; SEARCH-M10-31 carries it.
+
+Changes: DESIGN-DETAILS.md section 11 stands as written; SEARCH-M10-31; §11.14 status row (design-records).
+
+Questions: `details-11-body-encoding.md`.
+
+### QD-693: Are these thirteen readings of extractor 1 and of the search body caps right, where §11.14 and protocol/INDEX-FORMAT.md are silent and the two landed implementations differ or lean on a library?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+The thirteen readings of extractor 1 and the search body caps in details-11-small-readings.md stand as DESIGN-DETAILS.md section 11 writes them, each pinned by a vector in sidecar/testdata/index/conformance/: (1) a file's UTF-8 byte-order mark is dropped (S3); (2) names compare by ASCII case and only ASCII whitespace is trimmed (11.2.1); (3) an unterminated multipart's last part keeps its last line break (B4); (4) of two RFC 2231 pieces of one name, kind and section the first counts, and sections that join to nothing fall through to the extended piece and then the plain one (P3, P5); (5) a section number is 1 to 9 digits (P3); (6) base64 decodes a last partial group and inside an encoded word skips nothing (T2, W3); (7) quoted-printable passes control bytes, has no line limit and keeps a line's trailing blanks, and a soft line break may hold blanks before its line end (T3); (8) a numeric character reference needs one digit, &#x; is text, a number past U+10FFFF is U+FFFD, and all 2,231 of HTML's names decode (E1, E2); (9) SearchHit.correction is at most 256 B and SearchCoverage.chain at most 32 B (Z4); (10) extractor 1 keeps its number; (11) a part directly inside a multipart/digest with no Content-Type is message/rfc822 and not entered (M1); (12) the block-tag list stays QD-474's 44 names (X4); (13) format=flowed is not read (11.5).
+
+Changes: DESIGN-DETAILS.md section 11 stands as written; INDEX-FORMAT.md Extractor 1 (with SEARCH-M10-42 and SEARCH-M10-43); §11.14 extract, sniff and sizes rows (design-records).
+
+Questions: `details-11-small-readings.md`.
+
+### QD-694: Should MAIL-M7-11's message parser call extractor 1's HTML and charset functions once SEARCH-M10-42 lands, so that an i/ snippet keeps saying what search indexes?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §15 The local email server, inbound mail, and burner email.*
+
+Once SEARCH-M10-42 has landed, MAIL-M7-11's message parser calls extractor 1's functions: mailHtmlText calls indexStripHtml and mailDecodeCharset calls indexDecodeCharset, and the mail lane's copies (its tag scanner, html.UnescapeString and htmlindex.Get) go, so an i/ snippet reads HTML and charsets as search indexes them. Encoded words, transfer encodings and the walk stay the mail lane's own readings: they feed MAIL-FORMAT.md's fields, which no other device rebuilds. An edge-lane change of a few lines in sidecar/mail_parse.go and mail_parse_text.go, after SEARCH-M10-42.
+
+Changes: edge-lane follow-up after SEARCH-M10-42: mail_parse.go and mail_parse_text.go call indexStripHtml and indexDecodeCharset.
+
+Questions: `details-11-mail-snippet-reading.md`.
+
+### QD-695: Should section 6 accept the window in which a wrapped writer, or a leaf whose seal races a poisoned commit, seals to the generation the commit carried until the refusing member's REMOVE rotation reaches it?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
+
+Section 6's window stands as accepted: after a compromised leaf's commit whose tree holds a party dropped at the commit's own header, a wrapped writer (which reads no commit), and a leaf whose seal races the injection, may seal to the generation the commit carried until the refusing member's REMOVE rotation reaches it. The commit needs a compromised leaf, which already holds that generation's key and could hand the dropped party the same content or the key itself, so the window adds no reach the attacker lacks; the refuser's rotation at once ends it. No rule, format or model change; DESIGN-DETAILS.md 6.3's text stands.
+
+Changes: DESIGN-DETAILS.md section 6 stands as written; §10.9 notes the accepted window (design-records).
+
+Questions: `details-6-poison-window.md`.
+
+### QD-696: Should a VPN component's narrowing_overdue alarm back off while a narrowing entry keeps waiting for a compile that never runs, instead of repeating every 10 minutes forever?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
+
+A VPN component raises bridge_alarm narrowing_overdue when a narrowing entry has waited NarrowingOverdueTimeout (10 min) for a compile, then again at doubling intervals (20 min, 40 min, and so on) up to once a day while the condition lasts, and at once again whenever a further narrowing entry becomes overdue; the condition (the oldest overdue position and its age) stays visible in the posture's status throughout, and the first compile that runs clears it. DESIGN-DETAILS 4.2.5 and 4.3's StalenessBound read 'raised for it, and again at doubling intervals to once a day and for each newly overdue entry', and Fwd.tla's alarm clause follows (the design agent's section 4 amendment); SDK-M8-17's code (device/posture.go and its timer) follows in the core lane. QD-621's accepted cost is unchanged.
+
+Changes: design agent: section 4 amendment, 4.2.5 and 4.3 StalenessBound wording, Fwd.tla alarm clause; core-lane follow-up: device/ posture alarm timer backs off (SDK-M8-17's code).
+
+Questions: `details-4-overdue-alarm-repeat.md`.
