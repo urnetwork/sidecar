@@ -9,8 +9,10 @@
 //     offset clock has that offset here;
 //   - a parked write lands before the next request on its key or never (D-OPS-20), unless it has not
 //     reached the store (DelayInNetwork);
-//   - no key may prefix another (§11.8's keys row): a write that breaks this is recorded and, through
-//     settings.Report, fails the test. A real store takes it, so only this fake can catch it early.
+//   - no key may be a path prefix of another (§11.8's keys row; owner decision 234): a write that breaks
+//     this is recorded and, through settings.Report, fails the test. A real store takes it and then lists
+//     the shorter key as one object without descending, so only this fake can catch it early. A byte
+//     prefix that is no path prefix, as §10.6's <ref>.claim beside <ref>, stands.
 //
 // Faults come from the shared FaultQueue. Safe for concurrent use.
 
@@ -541,16 +543,23 @@ func (self *fakeBlobCluster) writeWithLock(key string, body []byte, options *sid
 	return blob.etag
 }
 
-// §11.8's keys row. Any key prefixing this one is one of its own prefixes, and a key this one prefixes
-// sorts right after it, so neither check walks the bucket.
+// §11.8's keys row, as a path prefix: an existing key equal to this one cut before one of its / bytes, or
+// an existing key that begins with this one and a /, which is what MinIO's directory-object listing needs
+// (§11.3). The first is a lookup per /, and the keys under this one sort from key + "/", so neither check
+// walks the bucket. The second looks at the first key at or after key + "/" and not at the key that sorts
+// next, since a sibling such as a.claim sorts between a and a/b.
 func (self *fakeBlobCluster) checkPrefixWithLock(key string) {
-	for length := 1; length < len(key); length += 1 {
-		if _, exists := self.objects[key[:length]]; exists {
-			self.store.violate(fmt.Sprintf("key %q prefixes key %q", key[:length], key))
+	for index := 1; index < len(key); index += 1 {
+		if key[index] != '/' {
+			continue
+		}
+		if _, exists := self.objects[key[:index]]; exists {
+			self.store.violate(fmt.Sprintf("key %q prefixes key %q", key[:index], key))
 		}
 	}
-	index := sort.SearchStrings(self.sortedKeys, key)
-	if index < len(self.sortedKeys) && strings.HasPrefix(self.sortedKeys[index], key) {
+	children := key + "/"
+	index := sort.SearchStrings(self.sortedKeys, children)
+	if index < len(self.sortedKeys) && strings.HasPrefix(self.sortedKeys[index], children) {
 		self.store.violate(fmt.Sprintf("key %q prefixes key %q", key, self.sortedKeys[index]))
 	}
 }
