@@ -76,9 +76,23 @@ func stateTestIdentities(fixture *sidecartest.BridgeRulesFixture) []*bridge.Brid
 // A bridge enforcing fixture's rules on a base saying hasDocument.
 func newStateTest(t *testing.T, fixture *sidecartest.BridgeRulesFixture, hasDocument bool) *stateTest {
 	t.Helper()
+	return newStateTestWithSettings(t, fixture, hasDocument, nil)
+}
+
+// The same, its settings adjusted by edit first.
+func newStateTestWithSettings(
+	t *testing.T,
+	fixture *sidecartest.BridgeRulesFixture,
+	hasDocument bool,
+	edit func(settings *device.BridgeSettings),
+) *stateTest {
+	t.Helper()
 	clock := sidecartest.NewFakeClock(time.UnixMilli(egressTestTimeMs))
 	settings := device.DefaultBridgeSettings()
 	settings.Clock = clock
+	if edit != nil {
+		edit(settings)
+	}
 	log := device.NewBridgeLogFixtureForTest(t)
 	log.Base(hasDocument)
 	log.Tick()
@@ -384,7 +398,7 @@ func TestBridgeRevokeNarrowsUntilAStatePassesIt(t *testing.T) {
 	}
 	tags, generations := test.closer.take()
 	if !slices.Contains(tags, egressTestTag(egressTestUntagged, []byte{device.BridgeRuleExit})) ||
-		slices.Contains(tags, egressTestTag(egressTestTagged, []byte{device.BridgeRuleHosted})) {
+		slices.Contains(tags, egressTestHostedTag(egressTestTagged, "100.80.1.2")) {
 		t.Fatalf("closed %v", tags)
 	}
 	// every close ran after the swap
@@ -406,6 +420,7 @@ func TestBridgeRevokeNarrowsUntilAStatePassesIt(t *testing.T) {
 		t.Fatal("a state at the revocation's position")
 	}
 
+	// each refusal beside its twin, which differs only where the refusal does
 	refusals := []struct {
 		statementType bridge.SignedType
 		id            []byte
@@ -415,9 +430,76 @@ func TestBridgeRevokeNarrowsUntilAStatePassesIt(t *testing.T) {
 		{statementType: bridge.SignedType_SIGNED_SUSPEND, id: make([]byte, 65)},
 	}
 	for _, refusal := range refusals {
-		if err := test.bridge.Revoke(refusal.statementType, refusal.id, 0); !errors.Is(err, device.ErrBridgeRevocationRefused) {
+		if err := test.bridge.Revoke(refusal.statementType, refusal.id, test.log.Tip()+1); !errors.Is(err, device.ErrBridgeRevocationRefused) {
 			t.Errorf("%v: %v", refusal.statementType, err)
 		}
+	}
+	twins := []struct {
+		statementType bridge.SignedType
+		id            []byte
+	}{
+		{statementType: bridge.SignedType_SIGNED_GRANT_REVOKE, id: sidecartest.BridgeFixtureGrantId(1)},
+		{statementType: bridge.SignedType_SIGNED_SUSPEND, id: make([]byte, 64)},
+	}
+	for _, twin := range twins {
+		if err := test.bridge.Revoke(twin.statementType, twin.id, test.log.Tip()+1); err != nil {
+			t.Errorf("the twin %v: %v", twin.statementType, err)
+		}
+	}
+}
+
+// A denial is held at its own position (DESIGN-DETAILS 12.2.5): Revoke at 0, which the bridge once read as the state's
+// pin plus one, is refused and narrows, publishes and closes nothing, and its twin at a real position narrows at once.
+func TestBridgeRevokeRefusesPositionZero(t *testing.T) {
+	test := newStateTest(t, egressTestFixture(), true)
+	exit := test.flow(egressTestUntagged, connect.IpProtocolTcp, "203.0.113.9:443")
+	generation := test.bridge.Status().PolicyGeneration
+	err := test.bridge.Revoke(bridge.SignedType_SIGNED_SIDECAR_REVOKE, sidecartest.BridgeFixtureSidecarId(egressTestUntagged), 0)
+	if !errors.Is(err, device.ErrBridgeRevocationRefused) {
+		t.Fatalf("at 0: %v", err)
+	}
+	if test.verdict(exit) != connect.EgressVerdictPass || test.bridge.Status().PolicyGeneration != generation {
+		t.Fatal("a revocation refused at 0 narrowed or published")
+	}
+	if tags, _ := test.closer.take(); 0 < len(tags) {
+		t.Fatalf("a revocation refused at 0 closed %v", tags)
+	}
+	n := test.bridge.Status().PinN + 1
+	if err := test.bridge.Revoke(bridge.SignedType_SIGNED_SIDECAR_REVOKE, sidecartest.BridgeFixtureSidecarId(egressTestUntagged), n); err != nil {
+		t.Fatal(err)
+	}
+	if test.verdict(exit) != connect.EgressVerdictDeny {
+		t.Fatal("the twin at its own position")
+	}
+}
+
+// DenialsOutlive (DESIGN-DETAILS 12.3): a denial applied at n stands across the timer's publishes and a state compiled
+// below n that arrives after it, as a late compile's does, and only a state at n takes it over.
+func TestBridgeRevokeOutlivesTimersAndALateState(t *testing.T) {
+	start := time.UnixMilli(egressTestTimeMs)
+	fixture := egressTestFixture()
+	fixture.Maps[0].Expires = egressTestTimeMs + 10_000
+	test := newStateTest(t, fixture, true)
+	exit := test.flow(egressTestUntagged, connect.IpProtocolTcp, "203.0.113.9:443")
+	// the entry the judge decided lands two past the state in force; the compile before it captured one past
+	n := test.log.Tip() + 2
+	if err := test.bridge.Revoke(bridge.SignedType_SIGNED_SIDECAR_REVOKE, sidecartest.BridgeFixtureSidecarId(egressTestUntagged), n); err != nil {
+		t.Fatal(err)
+	}
+	// the map's expiry publishes on the timer
+	test.advanceTo(start.Add(10 * time.Second))
+	if test.verdict(exit) != connect.EgressVerdictDeny {
+		t.Fatal("a timer's publish dropped the denial")
+	}
+	test.log.Tick()
+	test.setState(fixture, true)
+	if test.verdict(exit) != connect.EgressVerdictDeny {
+		t.Fatal("a state compiled below the denial dropped it")
+	}
+	test.log.Tick()
+	test.setState(fixture, true)
+	if test.verdict(exit) != connect.EgressVerdictPass {
+		t.Fatal("a state at the denial's position, which does not revoke, did not take it over")
 	}
 }
 
@@ -433,16 +515,18 @@ func TestBridgeRevokeRefusesPastItsBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(bridgeBridge.Close)
+	// pending has no state, so any position stands above it
+	const revokedAt = 5
 	for seed := byte(1); seed <= 2; seed += 1 {
-		if err := bridgeBridge.Revoke(bridge.SignedType_SIGNED_GRANT_REVOKE, sidecartest.BridgeFixtureGrantId(seed), 0); err != nil {
+		if err := bridgeBridge.Revoke(bridge.SignedType_SIGNED_GRANT_REVOKE, sidecartest.BridgeFixtureGrantId(seed), revokedAt); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// the same one again is held already
-	if err := bridgeBridge.Revoke(bridge.SignedType_SIGNED_GRANT_REVOKE, sidecartest.BridgeFixtureGrantId(2), 0); err != nil {
+	if err := bridgeBridge.Revoke(bridge.SignedType_SIGNED_GRANT_REVOKE, sidecartest.BridgeFixtureGrantId(2), revokedAt); err != nil {
 		t.Fatal(err)
 	}
-	if err := bridgeBridge.Revoke(bridge.SignedType_SIGNED_GRANT_REVOKE, sidecartest.BridgeFixtureGrantId(3), 0); !errors.Is(err, device.ErrBridgeRevocationRefused) {
+	if err := bridgeBridge.Revoke(bridge.SignedType_SIGNED_GRANT_REVOKE, sidecartest.BridgeFixtureGrantId(3), revokedAt); !errors.Is(err, device.ErrBridgeRevocationRefused) {
 		t.Fatalf("past the bound: %v", err)
 	}
 }
@@ -455,7 +539,8 @@ func TestBridgeHookBindsTheNatsItIsInstalledOn(t *testing.T) {
 	}
 	second := &stateTestCloser{hook: test.bridge.EgressHook()}
 	unbind := test.bridge.EgressHook().(connect.EgressHookBinder).BindFlowCloser(second)
-	if err := test.bridge.Revoke(bridge.SignedType_SIGNED_SIDECAR_REVOKE, sidecartest.BridgeFixtureSidecarId(egressTestUntagged), 0); err != nil {
+	n := test.bridge.Status().PinN + 1
+	if err := test.bridge.Revoke(bridge.SignedType_SIGNED_SIDECAR_REVOKE, sidecartest.BridgeFixtureSidecarId(egressTestUntagged), n); err != nil {
 		t.Fatal(err)
 	}
 	first, _ := test.closer.take()
@@ -464,7 +549,7 @@ func TestBridgeHookBindsTheNatsItIsInstalledOn(t *testing.T) {
 		t.Fatalf("closers heard %v and %v", first, both)
 	}
 	unbind()
-	if err := test.bridge.Revoke(bridge.SignedType_SIGNED_SIDECAR_REVOKE, sidecartest.BridgeFixtureSidecarId(egressTestTagged), 0); err != nil {
+	if err := test.bridge.Revoke(bridge.SignedType_SIGNED_SIDECAR_REVOKE, sidecartest.BridgeFixtureSidecarId(egressTestTagged), n); err != nil {
 		t.Fatal(err)
 	}
 	if tags, _ := second.take(); 0 < len(tags) {
@@ -482,7 +567,7 @@ func TestBridgeChangeCallbacksRunAfterEachPublish(t *testing.T) {
 	remove := test.bridge.AddChangeCallback(func() {
 		count += 1
 	})
-	if err := test.bridge.Revoke(bridge.SignedType_SIGNED_GRANT_REVOKE, sidecartest.BridgeFixtureGrantId(1), 0); err != nil {
+	if err := test.bridge.Revoke(bridge.SignedType_SIGNED_GRANT_REVOKE, sidecartest.BridgeFixtureGrantId(1), test.bridge.Status().PinN+1); err != nil {
 		t.Fatal(err)
 	}
 	test.log.Tick()

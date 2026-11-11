@@ -28,6 +28,9 @@
 // opened and admits no new one; a served route draining, and a hosted address or remap in the previous block, admits
 // until its drain ends (§17.8's disposition). A withdraw between states resets at once, or under drain stops a map and
 // leaves a route admitting, its drain timed by the next state, since a drain starts at a log time, never a device's.
+//
+// Tags (BridgeRuleTag): a map's flows carry (subject, map_id), a served route's or remap's (subject, route_id), rule
+// 3's (subject, 3 and the hosted address the flow was sent to), and rules 4 and 7 (subject, 4) and (subject, 7).
 
 package device
 
@@ -137,7 +140,8 @@ type bridgePolicyState struct {
 
 	subjectBySidecarId map[connect.Id]*bridgePolicySubject
 	subjectByClientId  map[connect.Id]*bridgePolicySubject
-	// another client at an sdk provider: untagged, admitted, no rows, the zero id
+	// another client at an sdk provider: untagged, admitted, the zero id, holding BridgeRules.untagged's rows, none
+	// when the rules carry no such field
 	otherClient *bridgePolicySubject
 
 	// rule 0
@@ -322,6 +326,13 @@ func newBridgePolicyState(input *BridgePolicyInput, generation uint64, settings 
 		for _, clientId := range ruleSubject.GetClientIds() {
 			self.subjectByClientId[connect.Id(clientId)] = subject
 		}
+	}
+	// autogroup:untagged's rows, which another client takes (bridge-m4-09-other-client-rows): no sidecar or member for
+	// the overlay to narrow, and a revoked grant's rows admit nothing, as any subject's
+	if untagged := rules.GetUntagged(); untagged != nil {
+		self.otherClient.dial = reach(untagged.GetDial())
+		self.otherClient.route = reach(untagged.GetRoute())
+		self.otherClient.exit = reach(untagged.GetExit())
 	}
 
 	for _, listener := range input.BridgeState.GetDaemonListeners() {
@@ -709,7 +720,7 @@ func (self *bridgePolicyState) resolve(
 		if !hosted && self.inBlock(addr) {
 			return deny
 		}
-		// rule 3
+		// rule 3, tagged by the hosted address the flow was sent to
 		if hosted {
 			if !allowAll && !subject.allowDial(protocolNumber, port, now) {
 				return deny
@@ -717,7 +728,8 @@ func (self *bridgePolicyState) resolve(
 			if self.daemonListener(bridgeHostedTarget, port) {
 				return deny
 			}
-			return admit(connect.EgressVerdictMap, netip.AddrPortFrom(bridgeHostedTarget, port), []byte{BridgeRuleHosted})
+			ruleId := bridgeHostedRuleId(addr)
+			return admit(connect.EgressVerdictMap, netip.AddrPortFrom(bridgeHostedTarget, port), ruleId[:])
 		}
 	} else if self.inBlock(addr) {
 		// the block deny, in place of rules 1 to 3
