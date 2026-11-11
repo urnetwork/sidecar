@@ -8,7 +8,6 @@ package gkmschedule
 
 import (
 	"bytes"
-	"testing"
 	"time"
 
 	"github.com/urnetwork/sidecar"
@@ -18,7 +17,7 @@ import (
 
 // A world past KF1 and the first Adds, with the reconciler running: a, its creator and admin, and b, writer leaves;
 // the agent d reading by its ReaderWrap.
-func newFsKeysHintWorld(t testing.TB, newWorld FsKeysNewWorld) (*FsKeysWorld, *gkmservice.GkmReconciler, *FsKeysDevice, *FsKeysDevice, *FsKeysDevice) {
+func newFsKeysHintWorld(t FsKeysT, newWorld FsKeysNewWorld) (*FsKeysWorld, *gkmservice.GkmReconciler, *FsKeysDevice, *FsKeysDevice, *FsKeysDevice) {
 	world := newWorld(protocol.RepoKind_REPO_KIND_GENERAL)
 	a := world.AddMember("a", false)
 	b := world.AddMember("b", false)
@@ -46,7 +45,7 @@ func (self *FsKeysWorld) pendingHint(hint *FsKeysHint) bool {
 // writers pending, on their per-client topic, naming the group at an unchanged epoch; the writer that acts adds it
 // at once, by the clock the hint went at; after Redis is lost, the next holder change is hinted the same way, its
 // version above every earlier one, and done the same way.
-func FsKeysScheduleIdleWriterHint(t testing.TB, newWorld FsKeysNewWorld) {
+func FsKeysScheduleIdleWriterHint(t FsKeysT, newWorld FsKeysNewWorld) {
 	world, reconciler, a, b, _ := newFsKeysHintWorld(t, newWorld)
 	epoch := world.NewestEpoch()
 	e := world.AddMember("e", false)
@@ -95,7 +94,7 @@ func FsKeysScheduleIdleWriterHint(t testing.TB, newWorld FsKeysNewWorld) {
 
 // FS-24 and D-KEYS-19: the agent's rotation, which commits nothing, raises gkm:<group_id> to the repo's readers, a
 // version above the newest epoch's, so a reader learns of a generation no commit announced.
-func FsKeysScheduleRotationGroupHint(t testing.TB, newWorld FsKeysNewWorld) {
+func FsKeysScheduleRotationGroupHint(t FsKeysT, newWorld FsKeysNewWorld) {
 	world, _, a, b, d := newFsKeysHintWorld(t, newWorld)
 	topic := sidecar.PushTopicGkmGroup(world.GroupId)
 	groupHint := func(generation uint64) func(hint *FsKeysHint) bool {
@@ -127,7 +126,7 @@ func FsKeysScheduleRotationGroupHint(t testing.TB, newWorld FsKeysNewWorld) {
 // FS-24 and §10.6's late wraps row: the agent replaces its ReaderKey and asks for the newest generation under the new
 // key's k8: gkm tells the writers wrap-pending naming it, a writer delivers late at the new key, and the agent opens
 // the generation with that key.
-func FsKeysScheduleLateAsk(t testing.TB, newWorld FsKeysNewWorld) {
+func FsKeysScheduleLateAsk(t FsKeysT, newWorld FsKeysNewWorld) {
 	world, _, a, _, d := newFsKeysHintWorld(t, newWorld)
 	if _, err := a.Client.RotateRepo(world.Ctx, world.RepoId); err != nil {
 		t.Fatal(err)
@@ -194,7 +193,7 @@ func (self *FsKeysWorld) EpochCount() int {
 // deletes nothing until the ack family a leaf's next ack makes again has existed 30 days, however old the epochs are,
 // where the twin, its family never lost, deletes every epoch past 30 days that every recent ack passed, never the
 // newest.
-func FsKeysScheduleLostAcks(t testing.TB, newWorld FsKeysNewWorld) {
+func FsKeysScheduleLostAcks(t FsKeysT, newWorld FsKeysNewWorld) {
 	for _, lost := range []bool{false, true} {
 		world, reconciler, a, b, _ := newFsKeysHintWorld(t, newWorld)
 		for _, device := range []*FsKeysDevice{a, b} {

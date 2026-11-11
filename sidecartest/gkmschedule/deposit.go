@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"testing"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -25,7 +24,7 @@ import (
 
 // The team record's world: a and b its readers and writers, a its creator and admin, and the depositor, an agent
 // that only deposits.
-func newFsKeysDepositWorld(t testing.TB, newWorld FsKeysNewWorld) (*FsKeysWorld, *FsKeysDevice, *FsKeysDevice, *FsKeysDevice) {
+func newFsKeysDepositWorld(t FsKeysT, newWorld FsKeysNewWorld) (*FsKeysWorld, *FsKeysDevice, *FsKeysDevice, *FsKeysDevice) {
 	world := newWorld(protocol.RepoKind_REPO_KIND_TEAM_RECORD)
 	a := world.AddMember("a", false)
 	b := world.AddMember("b", false)
@@ -42,7 +41,7 @@ func newFsKeysDepositWorld(t testing.TB, newWorld FsKeysNewWorld) (*FsKeysWorld,
 
 // FS-23: the depositor takes generation 1's drop key, then generation 2's after a rotation; every read route refuses
 // its deposit scope.
-func FsKeysScheduleDepositor(t testing.TB, newWorld FsKeysNewWorld) {
+func FsKeysScheduleDepositor(t FsKeysT, newWorld FsKeysNewWorld) {
 	world, a, _, depositor := newFsKeysDepositWorld(t, newWorld)
 	dropKey, err := depositor.Client.DropKey(world.Ctx, world.RepoId)
 	if err != nil || dropKey.Generation != 1 || len(dropKey.PublicKey) == 0 {
@@ -92,7 +91,7 @@ func FsKeysScheduleDepositor(t testing.TB, newWorld FsKeysNewWorld) {
 // unexpired GenRotates is refused by the depositor, which does not seal to a drop key that does not cover the shrink
 // its own state shows; the honest answer is taken; and once it holds generation 3's, a replay of the older one is
 // below its pin and refused.
-func FsKeysScheduleDepositorReplay(t testing.TB, newWorld FsKeysNewWorld) {
+func FsKeysScheduleDepositorReplay(t FsKeysT, newWorld FsKeysNewWorld) {
 	world, a, b, depositor := newFsKeysDepositWorld(t, newWorld)
 	if _, err := a.Client.RotateRepo(world.Ctx, world.RepoId); err != nil {
 		t.Fatal(err)

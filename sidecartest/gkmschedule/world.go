@@ -3,16 +3,23 @@ package gkmschedule
 // The world KEYS-M2-27's and KEYS-M2-28's schedules run in (§22.8's rules; C-18: one builder, a T2 and a T3 test):
 // gkm's group client on the real MLS subset, never FakeMls, every device its own engine, identity key, keychain and
 // store, against gkmservice's engine on a host whose stores the caller gives, the fake host's on T2, both reading one
-// log of fixture states at its tip as a gate's state reads §8.9's cache. One repo, its group formed by KF1.
+// log of fixture states at its tip as a gate's state reads §8.9's cache. The repo, its group formed by KF1, and once
+// ConfigWriters names some, the network's config repo, whose group CreateConfig forms the same way.
 //
 // What it models of §7.9 and §8.6: member devices of one member and tagged agents; each device's reading, writing and
 // repo admin right, as the next position's rows hold them; a revocation as a tombstone that reads and writes nothing,
-// with the repo's holders_shrunk_at moved; read_only leaves. What it leaves out: Delegations, recovery bindings,
-// owner-bound kinds and the config and directory groups' leaves rule, which KEYS-M2-28's schedules add as they need.
+// with each repo it read shrinking there; read_only leaves; the member's recovery bindings, a RecoveryBind and each
+// RecoveryRebind, newest first, a compromise one shrinking every repo the member reads, and a device the member's
+// recovery key admits, unadmitted until AdmitRecovered; Delegations, with the agents they admit and cover, a Suspend
+// dropping the Delegation's key, an Unsuspend, a DelegationRevoke ending it and a reap. What it leaves out:
+// owner-bound kinds, cascades (CascadeVoids answers false) and the config and directory groups' leaves rule past
+// their first 1,000 member devices.
 //
 // Interleavings are made at each device's transport, which holds a request while another device runs, loses an
-// answer gkm gave, or fails a request before gkm takes it; nothing sleeps or depends on the scheduler. A device that
-// is Offline takes no state, as one whose app is closed. Not safe for concurrent use: one schedule drives it.
+// answer gkm gave, or fails a request before gkm takes it, and at gkm's store, whose writes BlobWrite may fail or lose
+// the answer of, as a kill between two of gkm's writes does; nothing sleeps or depends on the scheduler. A device
+// that is Offline takes no state, as one whose app is closed. Not safe for concurrent use: one schedule drives it, or
+// fault's driver, whose actors run one at a time (sidecartest/fault's fs_keys.go).
 
 import (
 	"bytes"
@@ -43,7 +50,20 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
-// What a device's transport does with one request.
+// What a schedule fails and ends through: the part of testing.TB the world calls, so a T2 or T3 test passes its own
+// testing.TB, and fault's driver a failer that ends the step it runs in.
+type FsKeysT interface {
+	Helper()
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
+	Errorf(format string, args ...any)
+	Context() context.Context
+	Cleanup(cleanup func())
+}
+
+var _ FsKeysT = (testing.TB)(nil)
+
+// What a device's transport does with one request, and what BlobWrite does with one of gkm's store writes.
 type FsKeysFault int
 
 const (
@@ -51,12 +71,15 @@ const (
 	FsKeysFaultNone FsKeysFault = iota
 	// Serves it and loses the answer, which the caller sees as a transport error: §22.8's unknown rule.
 	FsKeysFaultDropAnswer
-	// Fails it before gkm takes it, as a kill as it leaves does.
+	// Fails it before it is taken, as a kill as it leaves does.
 	FsKeysFaultFailBefore
 )
 
 // The error a lost or failed request answers its caller.
 var errFsKeysTransport = errors.New("fs keys: the request's answer was lost")
+
+// The error a lost or failed store write answers gkm.
+var errFsKeysStore = errors.New("fs keys: the store write's answer was lost")
 
 // One device's transport to the world's gkm engine, the one standing now, so a restarted engine takes the next
 // request. Before, when set, sees each request first and says what becomes of it; it may run another device's flow
@@ -96,6 +119,12 @@ func FsKeysGenerationClaim(path string, generation uint64) bool {
 	return len(parts) == 6 && parts[1] == "gkm" && parts[2] == "groups" && parts[4] == "gen" && parts[5] == strconv.FormatUint(generation, 10)
 }
 
+// Whether a request commits an epoch, POST /gkm/groups/<id>/epochs/<n>.
+func FsKeysEpochCommit(request *http.Request) bool {
+	parts := strings.Split(request.URL.Path, "/")
+	return request.Method == http.MethodPost && len(parts) == 6 && parts[2] == "groups" && parts[4] == "epochs"
+}
+
 // One device of the world.
 type FsKeysDevice struct {
 	Label  string
@@ -122,6 +151,8 @@ type FsKeysDevice struct {
 	ClientId connect.Id
 	// whether Publish has uploaded its first keys
 	published bool
+	// a device the member's recovery key admits stands in no state until AdmitRecovered
+	unadmitted bool
 	// the newest state it took, which its engine's credential check reads
 	state  sidecar.GkmAuthView
 	Alarms []*sidecar.GkmAlarm
@@ -139,7 +170,7 @@ func (self *FsKeysDevice) member() bool {
 
 // The world.
 type FsKeysWorld struct {
-	t         testing.TB
+	t         FsKeysT
 	Ctx       context.Context
 	Clock     *sidecartest.FakeClock
 	Host      *sidecartest.FakeHost
@@ -158,19 +189,31 @@ type FsKeysWorld struct {
 	admins         []sidecar.Id
 	depositors     []sidecar.Id
 	readerExpiries map[sidecar.Id]time.Time
+	suspended      map[sidecar.Id]bool
 	// the RepoCreate's signer, the repo's first admin, and the config's writers, whose config repo the rows hold
 	// only once ConfigWriters names some
-	creator         *sidecar.Id
-	configWriters   []sidecar.Id
-	ConfigRepoId    sidecar.Id
-	holdersShrunkAt uint64
-	engineSettings  *gkmservice.GkmServiceSettings
+	creator       *sidecar.Id
+	configWriters []sidecar.Id
+	ConfigRepoId  sidecar.Id
+	// the config repo's group, once CreateConfig formed it
+	ConfigGroupId sidecar.Id
+	// each repo's holders_shrunk_at, by repo
+	shrunkAt map[sidecar.Id]uint64
+	// the member's recovery bindings, newest first
+	bindings []*FsKeysRecoveryBinding
+	// every Delegation, in the order added
+	delegations    []*FsKeysDelegation
+	engineSettings *gkmservice.GkmServiceSettings
 	// how many hint calls the host's push has taken, which a schedule waits on
 	hintCount *sidecar.MonitorValue[int]
 	// the reconciler's watch, once StartReconciler started one
 	reconcilerChanged func(change *gkmservice.GkmStateChange)
 	// how many positions gkm's state trails the log's tip: a gate cache that has not read the newest yet
 	GkmBehind int
+	// When set, sees each write gkm's engine sends its store, a PUT or a DELETE, and says what becomes of it, as a
+	// kill between two of gkm's writes does. The world's own writes pass it too, so a schedule sets it only around
+	// the engine's work it faults.
+	BlobWrite func(op string, key string) FsKeysFault
 	// every position Advance appended, by version - 1
 	views []*sidecartest.FakeGkmAuthView
 	// what the services' host takes in place of the fake host's own stores
@@ -181,7 +224,7 @@ type FsKeysWorld struct {
 type FsKeysNewWorld func(kind protocol.RepoKind) *FsKeysWorld
 
 // T2's worlds for t: each NewFsKeysWorld's.
-func FsKeysT2(t testing.TB) FsKeysNewWorld {
+func FsKeysT2(t FsKeysT) FsKeysNewWorld {
 	return func(kind protocol.RepoKind) *FsKeysWorld {
 		return NewFsKeysWorld(t, kind)
 	}
@@ -189,7 +232,7 @@ func FsKeysT2(t testing.TB) FsKeysNewWorld {
 
 // A world with one repo of kind and no device, its engine on a fresh fake host. Its engine reads place/, repo/, the
 // forms and group-info from the store each time, with no cache, so a schedule sees each write at once.
-func NewFsKeysWorld(t testing.TB, kind protocol.RepoKind) *FsKeysWorld {
+func NewFsKeysWorld(t FsKeysT, kind protocol.RepoKind) *FsKeysWorld {
 	ctx := t.Context()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
@@ -197,9 +240,10 @@ func NewFsKeysWorld(t testing.TB, kind protocol.RepoKind) *FsKeysWorld {
 }
 
 // A world with one repo of kind on host, the services' host adjusted by adjust, which a T3 test gives its real
-// clusters and Redis; nil keeps the fake host's own. The world reads and writes its objects through the adjusted
-// host's stores too.
-func NewFsKeysWorldOn(t testing.TB, kind protocol.RepoKind, clock *sidecartest.FakeClock, host *sidecartest.FakeHost, adjust func(host *sidecar.ServiceHost)) *FsKeysWorld {
+// clusters and Redis, and fault's driver its Net's; nil keeps the fake host's own. The world reads and writes its
+// objects through the adjusted host's stores too. Its engine reads place/, repo/, the forms and group-info from the
+// store each time.
+func NewFsKeysWorldOn(t FsKeysT, kind protocol.RepoKind, clock *sidecartest.FakeClock, host *sidecartest.FakeHost, adjust func(host *sidecar.ServiceHost)) *FsKeysWorld {
 	world := &FsKeysWorld{
 		t:         t,
 		Ctx:       t.Context(),
@@ -210,19 +254,21 @@ func NewFsKeysWorldOn(t testing.TB, kind protocol.RepoKind, clock *sidecartest.F
 		MemberId:  sidecar.NewId(),
 		RepoId:    sidecar.NewId(),
 		Kind:      kind,
+		suspended: map[sidecar.Id]bool{},
+		shrunkAt:  map[sidecar.Id]uint64{},
 		hintCount: sidecar.NewMonitorValue(0),
 		adjust:    adjust,
 	}
 	host.Gates.OpenService(sidecar.ServiceGateGkm, world.NetworkId)
-	settings := gkmservice.DefaultGkmServiceSettings()
-	settings.RepoCacheTtl = 0
-	settings.FormCacheTtl = 0
-	settings.GroupInfoCacheTtl = 0
+	engineSettings := gkmservice.DefaultGkmServiceSettings()
+	engineSettings.RepoCacheTtl = 0
+	engineSettings.FormCacheTtl = 0
+	engineSettings.GroupInfoCacheTtl = 0
 	// a placement is read again each time, its 404 kept for nothing, so a repo placed after a read is found
-	place := *settings.Place
+	place := *engineSettings.Place
 	place.NotFoundTtl = 0
-	settings.Place = &place
-	world.engineSettings = settings
+	engineSettings.Place = &place
+	world.engineSettings = engineSettings
 	world.RestartEngine()
 	return world
 }
@@ -242,25 +288,38 @@ func (self *FsKeysWorld) RestartEngine() {
 	self.Engine = engine
 }
 
-// The host the world's services run on: the fake host's, its push counting each hint it takes.
+// gkm's settings changed by change, on a new instance over the same stores: a schedule that pages epochs at a smaller
+// bound, say.
+func (self *FsKeysWorld) Reconfigure(change func(settings *gkmservice.GkmServiceSettings)) {
+	change(self.engineSettings)
+	self.RestartEngine()
+}
+
+// The host the world's services run on: the fake host's, or what adjust gives, its push counting each hint it takes
+// and its store's writes passing BlobWrite.
 func (self *FsKeysWorld) serviceHost() *sidecar.ServiceHost {
 	serviceHost := self.Host.ServiceHost()
 	if self.adjust != nil {
 		self.adjust(serviceHost)
 	}
 	serviceHost.Push = &fsKeysPush{inner: self.Host.Push, count: self.hintCount}
+	serviceHost.Blobs = &fsKeysBlobs{inner: serviceHost.Blobs, world: self}
 	return serviceHost
 }
 
-// gkm's soft state of the world's group in Redis is lost (owner decisions 2, 136): the fake host's whole Redis, or on
-// real stores the group's {gka_} family, the one family gkm keeps there.
+// gkm's soft state of the world's groups in Redis is lost (owner decisions 2, 136): the fake host's whole Redis, or on
+// real stores each group's {gka_} family, the one family gkm keeps there.
 func (self *FsKeysWorld) LoseRedis() {
 	self.t.Helper()
 	if self.adjust == nil {
 		self.Host.Redis.LoseEverything()
 		return
 	}
-	if err := self.serviceHost().Redis.Delete(self.Ctx, []string{gkmservice.GkmAckRedisKey(self.GroupId)}); err != nil {
+	keys := []string{gkmservice.GkmAckRedisKey(self.GroupId)}
+	if self.ConfigGroupId != (sidecar.Id{}) {
+		keys = append(keys, gkmservice.GkmAckRedisKey(self.ConfigGroupId))
+	}
+	if err := self.serviceHost().Redis.Delete(self.Ctx, keys); err != nil {
 		self.t.Fatalf("the loss of {gka_}: %v", err)
 	}
 }
@@ -279,6 +338,86 @@ func (self *fsKeysPush) Hint(ctx context.Context, clientIds []connect.Id, hint *
 func (self *fsKeysPush) HintSidecars(ctx context.Context, sidecarIds []connect.Id, hint *sidecar.ClientHint) error {
 	defer self.count.Update(func(count int) int { return count + 1 })
 	return self.inner.HintSidecars(ctx, sidecarIds, hint)
+}
+
+// The services' store, each cluster's writes passing the world's BlobWrite.
+type fsKeysBlobs struct {
+	inner sidecar.BlobStore
+	world *FsKeysWorld
+}
+
+func (self *fsKeysBlobs) Cluster(clusterId string) (sidecar.BlobCluster, error) {
+	cluster, err := self.inner.Cluster(clusterId)
+	if err != nil {
+		return nil, err
+	}
+	return &fsKeysCluster{BlobCluster: cluster, world: self.world}, nil
+}
+
+func (self *fsKeysBlobs) FirstCluster() (sidecar.BlobCluster, error) {
+	cluster, err := self.inner.FirstCluster()
+	if err != nil {
+		return nil, err
+	}
+	return &fsKeysCluster{BlobCluster: cluster, world: self.world}, nil
+}
+
+func (self *fsKeysBlobs) SegmentCluster() (sidecar.BlobCluster, error) {
+	return self.inner.SegmentCluster()
+}
+
+func (self *fsKeysBlobs) MetadataClusterIds() []string {
+	return self.inner.MetadataClusterIds()
+}
+
+func (self *fsKeysBlobs) NewRepoClusterId() string {
+	return self.inner.NewRepoClusterId()
+}
+
+// One cluster whose PUTs and DELETEs pass the world's BlobWrite; its reads are the cluster's own.
+type fsKeysCluster struct {
+	sidecar.BlobCluster
+	world *FsKeysWorld
+}
+
+// Runs one write under the world's BlobWrite.
+func (self *fsKeysCluster) write(op string, key string, apply func() error) error {
+	fault := FsKeysFaultNone
+	if self.world.BlobWrite != nil {
+		fault = self.world.BlobWrite(op, key)
+	}
+	if fault == FsKeysFaultFailBefore {
+		return errFsKeysStore
+	}
+	if err := apply(); err != nil {
+		return err
+	}
+	if fault == FsKeysFaultDropAnswer {
+		return errFsKeysStore
+	}
+	return nil
+}
+
+func (self *fsKeysCluster) PutIfNoneMatch(ctx context.Context, key string, body []byte, options *sidecar.BlobPutOptions) (newEtag string, err error) {
+	err = self.write(http.MethodPut, key, func() error {
+		newEtag, err = self.BlobCluster.PutIfNoneMatch(ctx, key, body, options)
+		return err
+	})
+	return newEtag, err
+}
+
+func (self *fsKeysCluster) PutIfMatch(ctx context.Context, key string, etag string, body []byte, options *sidecar.BlobPutOptions) (newEtag string, err error) {
+	err = self.write(http.MethodPut, key, func() error {
+		newEtag, err = self.BlobCluster.PutIfMatch(ctx, key, etag, body, options)
+		return err
+	})
+	return newEtag, err
+}
+
+func (self *fsKeysCluster) Delete(ctx context.Context, key string) error {
+	return self.write(http.MethodDelete, key, func() error {
+		return self.BlobCluster.Delete(ctx, key)
+	})
 }
 
 // The gkm hints the device's client was told, each with its topic, in order.
@@ -355,7 +494,7 @@ func (self *FsKeysWorld) AwaitPass(reconciler *gkmservice.GkmReconciler, run fun
 	}
 }
 
-// The reconciler's view of the world's log: one network, one repo.
+// The reconciler's view of the world's log: one network, its repo and its config repo.
 type fsKeysReconcilerState struct {
 	world *FsKeysWorld
 }
@@ -374,11 +513,7 @@ func (self *fsKeysReconcilerState) State(ctx context.Context, networkId sidecar.
 	if tip == nil || networkId != sidecar.Id(self.world.NetworkId) {
 		return nil, errors.New("fs keys: no state of the network")
 	}
-	repoIds := []sidecar.Id{self.world.RepoId}
-	if self.world.ConfigRepoId != (sidecar.Id{}) {
-		repoIds = append(repoIds, self.world.ConfigRepoId)
-	}
-	return &gkmservice.GkmNetworkState{View: tip, RepoIds: repoIds}, nil
+	return &gkmservice.GkmNetworkState{View: tip, RepoIds: self.world.repoIds()}, nil
 }
 
 func (self *fsKeysReconcilerState) SidecarStanding(ctx context.Context, sidecarId sidecar.Id) (sidecar.Id, bool, bool, error) {
@@ -391,6 +526,15 @@ func (self *fsKeysReconcilerState) SidecarStanding(ctx context.Context, sidecarI
 		return sidecar.Id{}, false, false, nil
 	}
 	return sidecar.Id(self.world.NetworkId), row.GetRevokedAt() != 0, true, nil
+}
+
+// The world's repo, and its config repo once the rows hold one.
+func (self *FsKeysWorld) repoIds() []sidecar.Id {
+	repoIds := []sidecar.Id{self.RepoId}
+	if self.ConfigRepoId != (sidecar.Id{}) {
+		repoIds = append(repoIds, self.ConfigRepoId)
+	}
+	return repoIds
 }
 
 // Admits a member device of the world's member, read_only with readOnly, with its real MLS engine. It reads and
@@ -419,7 +563,7 @@ func (self *FsKeysWorld) AddAgent(label string) *FsKeysDevice {
 func (self *FsKeysWorld) admit(label string) *FsKeysDevice {
 	signer := sidecartest.NewFakeGkmSigner()
 	admission := sha256.Sum256([]byte("fs keys admission of " + label))
-	position := uint64(len(self.Devices) + 1)
+	position := self.nextPosition()
 	device := &FsKeysDevice{
 		Label:  label,
 		world:  self,
@@ -503,7 +647,8 @@ func (self *FsKeysDevice) Restart() {
 			return privateKey, nil
 		},
 		ReaderKeySha256: func() []byte { return bytes.Clone(self.readerKeySha256) },
-		ReaderRepoIds:   func() []sidecar.Id { return []sidecar.Id{world.RepoId} },
+		RecoveryKey:     world.recoveryKey,
+		ReaderRepoIds:   world.repoIds,
 		Alarm:           func(alarm *sidecar.GkmAlarm) { self.Alarms = append(self.Alarms, alarm) },
 		Jitter:          func(max time.Duration) time.Duration { return 0 },
 		Settings:        settings,
@@ -516,6 +661,13 @@ func (self *FsKeysDevice) Restart() {
 	if self.state != nil {
 		client.AuthAdvanced(self.state)
 	}
+}
+
+// The device's MLS state is lost, its keychain kept: a new process over a new, empty store, as a device whose
+// group state did not survive is.
+func (self *FsKeysDevice) LoseMlsState() {
+	self.store = sidecartest.NewFakeStore()
+	self.Restart()
 }
 
 // Lets devices read the repo, and write it too with write. Their tokens' scopes follow at their next restart, and at
@@ -560,7 +712,16 @@ func (self *FsKeysWorld) Drop(device *FsKeysDevice) {
 	self.readers = drop(self.readers)
 	self.writers = drop(self.writers)
 	self.admins = drop(self.admins)
-	self.holdersShrunkAt = self.nextPosition()
+	self.shrink(self.nextPosition(), self.RepoId)
+}
+
+// Moves holders_shrunk_at of repoIds to at; the config repo's only once the rows hold one.
+func (self *FsKeysWorld) shrink(at uint64, repoIds ...sidecar.Id) {
+	for _, repoId := range repoIds {
+		if repoId != (sidecar.Id{}) {
+			self.shrunkAt[repoId] = at
+		}
+	}
 }
 
 // A raw request of method to path through gkm, under a fresh token of device's holding scopes: gkm's status, for a
@@ -606,8 +767,9 @@ func (self *FsKeysWorld) Creator(device *FsKeysDevice) {
 	self.Admin(device)
 }
 
-// Makes devices the network's config writers: the rows hold a config repo, which every device reads and these write,
-// and gkm's pending hint about a repo with no group goes to them (QD-638).
+// Makes devices the network's config writers and admins: the rows hold a config repo, which every standing device
+// reads and these write, and gkm's pending hint about a repo with no group goes to them (QD-638). Member devices also
+// hold gkm's rw in the config group (§7.8), so they claim KeyPackages and write its Welcomes.
 func (self *FsKeysWorld) ConfigWriters(devices ...*FsKeysDevice) {
 	if self.ConfigRepoId == (sidecar.Id{}) {
 		self.ConfigRepoId = sidecar.NewId()
@@ -616,6 +778,9 @@ func (self *FsKeysWorld) ConfigWriters(devices ...*FsKeysDevice) {
 		if !slices.Contains(self.configWriters, device.SidecarId()) {
 			self.configWriters = append(self.configWriters, device.SidecarId())
 		}
+	}
+	for _, device := range self.Devices {
+		device.rescope()
 	}
 }
 
@@ -651,7 +816,8 @@ func (self *FsKeysWorld) Admin(device *FsKeysDevice) {
 	device.rescope()
 }
 
-// The device's token scopes, as its reading, writing and admin right stand.
+// The device's token scopes, as its reading, writing and admin right stand: on the repo, and on the config repo
+// once the rows hold one, admin for a config writer, rw for any other member device and r for an agent.
 func (self *FsKeysDevice) rescope() {
 	world := self.world
 	role := sidecar.GkmScopeRoleRead
@@ -663,13 +829,25 @@ func (self *FsKeysDevice) rescope() {
 	case slices.Contains(world.depositors, self.SidecarId()) && !slices.Contains(world.readers, self.SidecarId()):
 		role = sidecar.GkmScopeRoleDeposit
 	}
+	scopes := []sidecar.GkmRepoScope{{RepoId: world.RepoId, Role: role}}
+	if world.ConfigRepoId != (sidecar.Id{}) {
+		configRole := sidecar.GkmScopeRoleRead
+		switch {
+		case slices.Contains(world.configWriters, self.SidecarId()):
+			configRole = sidecar.GkmScopeRoleAdmin
+		case self.member():
+			configRole = sidecar.GkmScopeRoleWrite
+		}
+		scopes = append(scopes, sidecar.GkmRepoScope{RepoId: world.ConfigRepoId, Role: configRole})
+	}
 	if self.Api != nil {
-		self.Api.SetRepoScopes([]sidecar.GkmRepoScope{{RepoId: world.RepoId, Role: role}})
+		self.Api.SetRepoScopes(scopes)
 	}
 }
 
-// Revokes a device at the next position: its row a tombstone that reads and writes nothing, and a shrink of the repo
-// there (§7.9). The repo's admin rows keep it, as access logs keep their history; a tombstone stands for nothing.
+// Revokes a device at the next position: its row a tombstone that reads and writes nothing, and a shrink there of
+// the repo and the config repo, which it read (§7.9). The repo's admin rows keep it, as access logs keep their
+// history; a tombstone stands for nothing.
 func (self *FsKeysWorld) Revoke(device *FsKeysDevice) {
 	at := self.nextPosition()
 	device.row.RevokedAt = at
@@ -678,7 +856,8 @@ func (self *FsKeysWorld) Revoke(device *FsKeysDevice) {
 	}
 	self.readers = drop(self.readers)
 	self.writers = drop(self.writers)
-	self.holdersShrunkAt = at
+	self.configWriters = drop(self.configWriters)
+	self.shrink(at, self.RepoId, self.ConfigRepoId)
 }
 
 // The position the next state takes.
@@ -687,6 +866,11 @@ func (self *FsKeysWorld) nextPosition() uint64 {
 		return tip.Pin().GetVersion() + 1
 	}
 	return 1
+}
+
+// Whether a device reads at the next position: admitted, and not revoked, parked or suspended.
+func (self *FsKeysWorld) standing(device *FsKeysDevice) bool {
+	return !device.unadmitted && device.row.GetRevokedAt() == 0 && device.row.GetParkedAt() == 0 && !self.suspended[device.SidecarId()]
 }
 
 // Appends the world as it stands as the log's next position, which every device that is not Offline takes.
@@ -704,20 +888,39 @@ func (self *FsKeysWorld) Advance() *sidecartest.FakeGkmAuthView {
 			admins = append(admins, &protocol.AclRepoAdminRow{SidecarId: adminId.Bytes(), Signer: self.creator.Bytes(), At: 2})
 		}
 	}
-	repos := []*protocol.AclRepo{{RepoId: self.RepoId.Bytes(), Kind: self.Kind, Admins: admins, HoldersShrunkAt: self.holdersShrunkAt}}
+	repos := []*protocol.AclRepo{{RepoId: self.RepoId.Bytes(), Kind: self.Kind, Admins: admins, HoldersShrunkAt: self.shrunkAt[self.RepoId]}}
 	if self.ConfigRepoId != (sidecar.Id{}) {
-		repos = append(repos, &protocol.AclRepo{RepoId: self.ConfigRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG})
+		configAdmins := []*protocol.AclRepoAdminRow{}
+		for _, writerId := range self.configWriters {
+			configAdmins = append(configAdmins, &protocol.AclRepoAdminRow{SidecarId: writerId.Bytes(), Signer: writerId.Bytes(), At: 1})
+		}
+		repos = append(repos, &protocol.AclRepo{
+			RepoId: self.ConfigRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG, Admins: configAdmins, HoldersShrunkAt: self.shrunkAt[self.ConfigRepoId],
+		})
 	}
 	acl, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.AclRows{Repos: repos})
 	if err != nil {
 		self.t.Fatal(err)
 	}
+	member := &bridge.MemberRow{MemberId: self.MemberId.Bytes(), Role: bridge.MemberRole_MEMBER_ROLE_OWNER}
+	if 0 < len(self.bindings) {
+		member.RecoveryKeySha256 = bytes.Clone(self.bindings[0].KeySha256)
+		for _, binding := range self.bindings {
+			member.Bindings = append(member.Bindings, binding.row())
+		}
+	}
 	rows := &bridge.ProjectionRows{
 		Acl:     acl,
-		Members: []*bridge.MemberRow{{MemberId: self.MemberId.Bytes(), Role: bridge.MemberRole_MEMBER_ROLE_OWNER}},
+		Members: []*bridge.MemberRow{member},
+	}
+	for _, delegation := range self.delegations {
+		rows.Delegations = append(rows.Delegations, proto.Clone(delegation.row).(*bridge.DelegationRow))
 	}
 	identityKeys := map[sidecar.Id][]byte{}
 	for _, device := range self.Devices {
+		if device.unadmitted {
+			continue
+		}
 		rows.Sidecars = append(rows.Sidecars, proto.Clone(device.row).(*bridge.SidecarRow))
 		identityKeys[device.SidecarId()] = device.signer.PublicKey()
 	}
@@ -725,17 +928,31 @@ func (self *FsKeysWorld) Advance() *sidecartest.FakeGkmAuthView {
 	for sidecarId, at := range self.readerExpiries {
 		expiries[sidecarId] = at
 	}
-	repoReaders := map[sidecar.Id][]sidecar.Id{self.RepoId: slices.Clone(self.readers)}
-	repoWriters := map[sidecar.Id][]sidecar.Id{self.RepoId: slices.Clone(self.writers)}
+	// a suspended or unadmitted device reads and writes nothing, its grants kept for its Unsuspend
+	reading := func(ids []sidecar.Id) []sidecar.Id {
+		reading := []sidecar.Id{}
+		for _, id := range ids {
+			if device := self.device(id); device == nil || self.standing(device) {
+				reading = append(reading, id)
+			}
+		}
+		return reading
+	}
+	repoReaders := map[sidecar.Id][]sidecar.Id{self.RepoId: reading(self.readers)}
+	repoWriters := map[sidecar.Id][]sidecar.Id{self.RepoId: reading(self.writers)}
+	atomRepos := map[sidecar.Id][]sidecar.Id{}
+	for _, delegation := range self.delegations {
+		atomRepos[delegation.atom] = []sidecar.Id{self.RepoId}
+	}
 	if self.ConfigRepoId != (sidecar.Id{}) {
 		configReaders := []sidecar.Id{}
 		for _, device := range self.Devices {
-			if device.row.GetRevokedAt() == 0 {
+			if self.standing(device) {
 				configReaders = append(configReaders, device.SidecarId())
 			}
 		}
 		repoReaders[self.ConfigRepoId] = configReaders
-		repoWriters[self.ConfigRepoId] = slices.Clone(self.configWriters)
+		repoWriters[self.ConfigRepoId] = reading(self.configWriters)
 	}
 	view := self.Log.Append(&sidecartest.FakeGkmAuthFixture{
 		Rows:               rows,
@@ -743,6 +960,7 @@ func (self *FsKeysWorld) Advance() *sidecartest.FakeGkmAuthView {
 		RepoReaders:        repoReaders,
 		RepoWriters:        repoWriters,
 		RepoReaderExpiries: map[sidecar.Id]map[sidecar.Id]time.Time{self.RepoId: expiries},
+		AtomRepos:          atomRepos,
 	})
 	self.views = append(self.views, view)
 	for _, device := range self.Devices {
@@ -756,6 +974,16 @@ func (self *FsKeysWorld) Advance() *sidecartest.FakeGkmAuthView {
 	return view
 }
 
+// The world's device with this sidecar, nil for none.
+func (self *FsKeysWorld) device(sidecarId sidecar.Id) *FsKeysDevice {
+	for _, device := range self.Devices {
+		if device.SidecarId() == sidecarId {
+			return device
+		}
+	}
+	return nil
+}
+
 // The device takes a state, as its log applier hands it one.
 func (self *FsKeysDevice) Take(view sidecar.GkmAuthView) {
 	self.state = view
@@ -763,15 +991,15 @@ func (self *FsKeysDevice) Take(view sidecar.GkmAuthView) {
 }
 
 // Each device's first ReaderKey, valid 6 days, and each member device's first KeyPackages, three one-time ones and
-// its last-resort one, as upkeep uploads them, for every device that has published none yet.
+// its last-resort one, as upkeep uploads them, for every standing device that has published none yet.
 func (self *FsKeysWorld) Publish() {
 	self.t.Helper()
 	for _, device := range self.Devices {
-		if device.row.GetRevokedAt() != 0 || device.published {
+		if !self.standing(device) || device.published {
 			continue
 		}
 		device.published = true
-		if !slices.Contains(self.readers, device.SidecarId()) {
+		if !slices.Contains(self.readers, device.SidecarId()) && self.ConfigRepoId == (sidecar.Id{}) {
 			// a deposit-only principal reads nothing, and its scope reaches the drop-key route alone (QD-177)
 			continue
 		}
@@ -779,17 +1007,24 @@ func (self *FsKeysWorld) Publish() {
 		if device.Mls == nil {
 			continue
 		}
-		keyPackages := [][]byte{}
-		for i := range 4 {
-			keyPackage, err := device.Mls.CreateKeyPackage(i == 3)
-			if err != nil {
-				self.t.Fatal(err)
-			}
-			keyPackages = append(keyPackages, keyPackage.Encoded)
+		device.PublishKeyPackages()
+	}
+}
+
+// Three one-time KeyPackages and a last-resort one, uploaded, as upkeep refills them.
+func (self *FsKeysDevice) PublishKeyPackages() {
+	world := self.world
+	world.t.Helper()
+	keyPackages := [][]byte{}
+	for i := range 4 {
+		keyPackage, err := self.Mls.CreateKeyPackage(i == 3)
+		if err != nil {
+			world.t.Fatal(err)
 		}
-		if err := device.Api.UploadKeyPackages(self.Ctx, keyPackages); err != nil {
-			self.t.Fatalf("%s's KeyPackages: %v", device.Label, err)
-		}
+		keyPackages = append(keyPackages, keyPackage.Encoded)
+	}
+	if err := self.Api.UploadKeyPackages(world.Ctx, keyPackages); err != nil {
+		world.t.Fatalf("%s's KeyPackages: %v", self.Label, err)
 	}
 }
 
@@ -811,7 +1046,7 @@ func (self *FsKeysDevice) PublishReaderKey() {
 	}
 }
 
-// The first cluster, where the world's repo is placed.
+// The first cluster, where the world's repos are placed.
 func (self *FsKeysWorld) cluster() sidecar.BlobCluster {
 	self.t.Helper()
 	cluster, err := self.serviceHost().Blobs.FirstCluster()
@@ -833,26 +1068,36 @@ func (self *FsKeysWorld) marshal(message proto.Message) []byte {
 
 // Places the repo as evs's PUT does, keying, on the first cluster, by creator.
 func (self *FsKeysWorld) Place(creator *FsKeysDevice) {
+	self.placeRepo(self.RepoId, self.Kind, creator)
+}
+
+// Places a repo of kind, keying, on the first cluster, by creator.
+func (self *FsKeysWorld) placeRepo(repoId sidecar.Id, kind protocol.RepoKind, creator *FsKeysDevice) {
 	self.t.Helper()
 	cluster := self.cluster()
 	place, err := (&sidecar.EvsRepoPlace{ClusterId: cluster.ClusterId(), CreatorSidecarId: creator.SidecarId()}).Marshal()
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	if _, err := cluster.PutIfNoneMatch(self.Ctx, sidecar.EvsPlaceKey(self.RepoId), place, nil); err != nil {
+	if _, err := cluster.PutIfNoneMatch(self.Ctx, sidecar.EvsPlaceKey(repoId), place, nil); err != nil {
 		self.t.Fatal(err)
 	}
-	self.putRepoState(protocol.EvsRepoState_EVS_REPO_KEYING)
+	self.putRepoStateOf(repoId, kind, protocol.EvsRepoState_EVS_REPO_KEYING)
 }
 
-// Writes repo/ in state, over what stands, as evs's routes move it.
+// Writes the repo's repo/ in state, over what stands, as evs's routes move it.
 func (self *FsKeysWorld) putRepoState(state protocol.EvsRepoState) {
+	self.putRepoStateOf(self.RepoId, self.Kind, state)
+}
+
+// Writes a repo's repo/ in state, over what stands.
+func (self *FsKeysWorld) putRepoStateOf(repoId sidecar.Id, kind protocol.RepoKind, state protocol.EvsRepoState) {
 	self.t.Helper()
 	cluster := self.cluster()
 	body := self.marshal(&protocol.EvsRepoObject{
-		RepoId: self.RepoId.Bytes(), Kind: self.Kind, State: state, Format: 1, NetworkId: sidecar.Id(self.NetworkId).Bytes(),
+		RepoId: repoId.Bytes(), Kind: kind, State: state, Format: 1, NetworkId: sidecar.Id(self.NetworkId).Bytes(),
 	})
-	key := gkmservice.GkmEvsRepoKey(self.RepoId)
+	key := gkmservice.GkmEvsRepoKey(repoId)
 	info, err := cluster.Head(self.Ctx, key)
 	switch {
 	case errors.Is(err, sidecar.ErrBlobNotFound):
@@ -884,15 +1129,39 @@ func (self *FsKeysWorld) Create(creator *FsKeysDevice) *sidecar.EvsRepoKey {
 	return key
 }
 
+// KF1 of the config repo by creator, a config writer, as §7.9's genesis forms it: created keying, its group,
+// epoch 0 and generation 1 with every holder's delivery, then active (KEYS plan reading 6).
+func (self *FsKeysWorld) CreateConfig(creator *FsKeysDevice) *sidecar.EvsRepoKey {
+	self.t.Helper()
+	if self.ConfigRepoId == (sidecar.Id{}) {
+		self.t.Fatal("no config repo: ConfigWriters names its writers first")
+	}
+	self.placeRepo(self.ConfigRepoId, protocol.RepoKind_REPO_KIND_CONFIG, creator)
+	key, err := creator.Client.CreateGroup(self.Ctx, &sidecar.GkmCreateGroupArgs{
+		NetworkId: sidecar.Id(self.NetworkId), RepoId: self.ConfigRepoId, Kind: protocol.RepoKind_REPO_KIND_CONFIG,
+	})
+	if err != nil {
+		self.t.Fatalf("the config repo's KF1: %v", err)
+	}
+	self.ConfigGroupId = key.GroupId()
+	self.putRepoStateOf(self.ConfigRepoId, protocol.RepoKind_REPO_KIND_CONFIG, protocol.EvsRepoState_EVS_REPO_ACTIVE)
+	return key
+}
+
 // KF2 for every member device with a KeyPackage: committer's pending run commits the Adds, and every other member
 // device that is not Offline joins by its Welcome.
 func (self *FsKeysWorld) AddPending(committer *FsKeysDevice) {
+	self.AddPendingIn(committer, self.RepoId)
+}
+
+// AddPending in the repo repoId names, the world's repo or its config repo.
+func (self *FsKeysWorld) AddPendingIn(committer *FsKeysDevice, repoId sidecar.Id) {
 	self.t.Helper()
-	if err := committer.Client.RunPending(self.Ctx, self.RepoId); err != nil {
+	if err := committer.Client.RunPending(self.Ctx, repoId); err != nil {
 		self.t.Fatalf("%s's pending run: %v", committer.Label, err)
 	}
 	for _, device := range self.Devices {
-		if device == committer || device.Mls == nil || device.Offline || device.row.GetRevokedAt() != 0 {
+		if device == committer || device.Mls == nil || device.Offline || !self.standing(device) {
 			continue
 		}
 		if _, err := device.Client.JoinWelcomes(self.Ctx); err != nil {
@@ -914,6 +1183,10 @@ func (self *FsKeysWorld) objects(prefix string) map[string][]byte {
 		}
 		for _, info := range infos {
 			object, err := cluster.Get(self.Ctx, info.Key)
+			if errors.Is(err, sidecar.ErrBlobNotFound) {
+				startAfter = info.Key
+				continue
+			}
 			if err != nil {
 				self.t.Fatal(err)
 			}
@@ -933,14 +1206,24 @@ func (self *FsKeysWorld) objects(prefix string) map[string][]byte {
 
 // How many generations gkm holds of the group.
 func (self *FsKeysWorld) GenerationCount() int {
-	return len(self.objects(gkmservice.GkmGenerationPrefix(self.GroupId)))
+	return self.GenerationCountIn(self.GroupId)
+}
+
+// How many generations gkm holds of groupId.
+func (self *FsKeysWorld) GenerationCountIn(groupId sidecar.Id) int {
+	return len(self.objects(gkmservice.GkmGenerationPrefix(groupId)))
 }
 
 // gen/<generation> as gkm holds it, parsed under the log's identity keys.
 func (self *FsKeysWorld) Generation(generation uint64) *sidecar.GkmGeneration {
+	return self.GenerationIn(self.GroupId, generation)
+}
+
+// gen/<generation> of groupId as gkm holds it, parsed under the log's identity keys.
+func (self *FsKeysWorld) GenerationIn(groupId sidecar.Id, generation uint64) *sidecar.GkmGeneration {
 	self.t.Helper()
 	cluster := self.cluster()
-	object, err := cluster.Get(self.Ctx, gkmservice.GkmGenerationKey(self.GroupId, generation))
+	object, err := cluster.Get(self.Ctx, gkmservice.GkmGenerationKey(groupId, generation))
 	if err != nil {
 		self.t.Fatalf("gen/%d: %v", generation, err)
 	}
@@ -949,7 +1232,7 @@ func (self *FsKeysWorld) Generation(generation uint64) *sidecar.GkmGeneration {
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	parsed, err := sidecar.ParseGenRotate(body, self.GroupId, generation, sidecar.GkmIdentityKeys(self.Log.Tip()))
+	parsed, err := sidecar.ParseGenRotate(body, groupId, generation, sidecar.GkmIdentityKeys(self.Log.Tip()))
 	if err != nil {
 		self.t.Fatalf("gen/%d: %v", generation, err)
 	}
@@ -968,21 +1251,32 @@ func (self *FsKeysDevice) CopyReaderKeys() []hpke.PrivateKey {
 // Whether any of keys opens a ReaderWrap gkm holds of generation to device.
 func (self *FsKeysWorld) OpensWrapOf(device *FsKeysDevice, generation uint64, keys []hpke.PrivateKey) bool {
 	self.t.Helper()
-	parsed := self.Generation(generation)
-	for key, body := range self.objects(gkmservice.GkmWrapGenerationPrefix(self.GroupId, generation)) {
-		if !strings.Contains(key, "/"+fsKeysRecipient(device.SidecarId())+"/") {
+	return self.opensDelivery(self.GroupId, generation, sidecar.GkmWrapTypeReader, device.SidecarId().Bytes(), keys)
+}
+
+// Whether any of keys opens a delivery gkm holds of groupId's generation to recipient, a sidecar's ReaderWrap or a
+// Delegation's DelegationWrap.
+func (self *FsKeysWorld) opensDelivery(groupId sidecar.Id, generation uint64, wrapType sidecar.GkmWrapType, recipient []byte, keys []hpke.PrivateKey) bool {
+	self.t.Helper()
+	if uint64(self.GenerationCountIn(groupId)) < generation {
+		return false
+	}
+	parsed := self.GenerationIn(groupId, generation)
+	recipientPath := "/" + fsKeysRecipientPath(wrapType, recipient) + "/"
+	for key, body := range self.objects(gkmservice.GkmWrapGenerationPrefix(groupId, generation)) {
+		if !strings.Contains(key, recipientPath) {
 			continue
 		}
 		signed := &bridge.Signed{}
 		if err := proto.Unmarshal(body, signed); err != nil {
 			continue
 		}
-		delivery, err := sidecar.ParseGkmDelivery(signed, sidecar.GkmWrapTypeReader, sidecar.GkmIdentityKeys(self.Log.Tip()))
+		delivery, err := sidecar.ParseGkmDelivery(signed, wrapType, sidecar.GkmIdentityKeys(self.Log.Tip()))
 		if err != nil {
 			continue
 		}
 		for _, privateKey := range keys {
-			if _, err := sidecar.OpenGkmDelivery(delivery, parsed, device.SidecarId().Bytes(), privateKey); err == nil {
+			if _, err := sidecar.OpenGkmDelivery(delivery, parsed, recipient, privateKey); err == nil {
 				return true
 			}
 		}
@@ -997,8 +1291,13 @@ func (self *FsKeysWorld) GenerationTime(generation *sidecar.GkmGeneration) time.
 
 // The sidecars gkm holds a ReaderWrap of generation to, staged or late.
 func (self *FsKeysWorld) WrapRecipients(generation uint64) map[sidecar.Id]bool {
+	return self.WrapRecipientsIn(self.GroupId, generation)
+}
+
+// The sidecars gkm holds a ReaderWrap of groupId's generation to, staged or late.
+func (self *FsKeysWorld) WrapRecipientsIn(groupId sidecar.Id, generation uint64) map[sidecar.Id]bool {
 	self.t.Helper()
-	prefix := gkmservice.GkmWrapGenerationPrefix(self.GroupId, generation)
+	prefix := gkmservice.GkmWrapGenerationPrefix(groupId, generation)
 	recipients := map[sidecar.Id]bool{}
 	for key := range self.objects(prefix) {
 		parts := strings.Split(strings.TrimPrefix(key, prefix), "/")
@@ -1018,21 +1317,49 @@ func (self *FsKeysWorld) WrapRecipients(generation uint64) map[sidecar.Id]bool {
 	return recipients
 }
 
+// The Delegations, by delegation_id in hex, gkm holds a DelegationWrap of the group's generation to.
+func (self *FsKeysWorld) DelegationRecipients(generation uint64) map[string]bool {
+	self.t.Helper()
+	prefix := gkmservice.GkmWrapGenerationPrefix(self.GroupId, generation)
+	recipients := map[string]bool{}
+	for key := range self.objects(prefix) {
+		parts := strings.Split(strings.TrimPrefix(key, prefix), "/")
+		if len(parts) == 3 && strings.HasPrefix(parts[1], "d:") {
+			recipients[strings.TrimPrefix(parts[1], "d:")] = true
+		}
+	}
+	return recipients
+}
+
 // The newest epoch gkm holds of the group.
 func (self *FsKeysWorld) NewestEpoch() uint64 {
+	return self.NewestEpochIn(self.GroupId)
+}
+
+// The newest epoch gkm holds of groupId.
+func (self *FsKeysWorld) NewestEpochIn(groupId sidecar.Id) uint64 {
 	self.t.Helper()
 	newest := uint64(0)
-	for epoch := uint64(0); self.EpochObject(epoch) != nil; epoch += 1 {
-		newest = epoch
+	for key := range self.objects(gkmservice.GkmEpochPrefix(groupId)) {
+		epoch, err := strconv.ParseUint(key[strings.LastIndex(key, "/")+1:], 10, 64)
+		if err != nil {
+			self.t.Fatalf("an epoch key %s: %v", key, err)
+		}
+		newest = max(newest, epoch)
 	}
 	return newest
 }
 
 // epoch/<epoch> as gkm holds it, nil for none.
 func (self *FsKeysWorld) EpochObject(epoch uint64) *protocol.GkmEpochObject {
+	return self.EpochObjectIn(self.GroupId, epoch)
+}
+
+// epoch/<epoch> of groupId as gkm holds it, nil for none.
+func (self *FsKeysWorld) EpochObjectIn(groupId sidecar.Id, epoch uint64) *protocol.GkmEpochObject {
 	self.t.Helper()
 	cluster := self.cluster()
-	object, err := cluster.Get(self.Ctx, gkmservice.GkmEpochKey(self.GroupId, epoch))
+	object, err := cluster.Get(self.Ctx, gkmservice.GkmEpochKey(groupId, epoch))
 	if errors.Is(err, sidecar.ErrBlobNotFound) {
 		return nil
 	}
@@ -1053,8 +1380,13 @@ func (self *FsKeysWorld) EpochObject(epoch uint64) *protocol.GkmEpochObject {
 
 // The labels of the leaves of the epoch device holds, sorted and joined.
 func (self *FsKeysWorld) Roster(device *FsKeysDevice) string {
+	return self.RosterIn(device, self.GroupId)
+}
+
+// The labels of the leaves of groupId's epoch device holds, sorted and joined.
+func (self *FsKeysWorld) RosterIn(device *FsKeysDevice, groupId sidecar.Id) string {
 	self.t.Helper()
-	group, err := device.Mls.LoadGroup(self.GroupId)
+	group, err := device.Mls.LoadGroup(groupId)
 	if err != nil {
 		self.t.Fatalf("%s's group: %v", device.Label, err)
 	}
@@ -1073,9 +1405,15 @@ func (self *FsKeysWorld) Roster(device *FsKeysDevice) string {
 // The devices hold one epoch and one epoch_authenticator.
 func (self *FsKeysWorld) AgreeOnEpoch(devices ...*FsKeysDevice) {
 	self.t.Helper()
+	self.AgreeOnEpochIn(self.GroupId, devices...)
+}
+
+// The devices hold one epoch of groupId and one epoch_authenticator.
+func (self *FsKeysWorld) AgreeOnEpochIn(groupId sidecar.Id, devices ...*FsKeysDevice) {
+	self.t.Helper()
 	var first sidecar.MlsGroup
 	for _, device := range devices {
-		group, err := device.Mls.LoadGroup(self.GroupId)
+		group, err := device.Mls.LoadGroup(groupId)
 		if err != nil {
 			self.t.Fatalf("%s's group: %v", device.Label, err)
 		}
@@ -1093,6 +1431,11 @@ func (self *FsKeysWorld) AgreeOnEpoch(devices ...*FsKeysDevice) {
 // every epoch its own MLS state can follow from the one it last held, each GenWrap under that epoch's KEK, and every
 // delivery gkm holds to it under each key it kept. The ladder opens only downward, so this bounds what it reads.
 func (self *FsKeysWorld) RemovedReach(device *FsKeysDevice) uint64 {
+	return self.RemovedReachIn(device, self.RepoId, self.GroupId)
+}
+
+// RemovedReach in repoId's group, groupId.
+func (self *FsKeysWorld) RemovedReachIn(device *FsKeysDevice, repoId sidecar.Id, groupId sidecar.Id) uint64 {
 	self.t.Helper()
 	reach := uint64(0)
 	open := func(epoch uint64, exporter sidecar.MlsExporter, object *protocol.GkmEpochObject) {
@@ -1100,22 +1443,22 @@ func (self *FsKeysWorld) RemovedReach(device *FsKeysDevice) uint64 {
 		if generation == 0 || len(object.GetGenWrap()) == 0 {
 			return
 		}
-		kek, err := sidecar.MlsKek(exporter, self.RepoId)
+		kek, err := sidecar.MlsKek(exporter, repoId)
 		if err != nil {
 			return
 		}
-		if _, err := sidecar.OpenGkmGenWrap(self.Generation(generation), self.GroupId, epoch, kek, object.GetGenWrap()); err == nil && reach < generation {
+		if _, err := sidecar.OpenGkmGenWrap(self.GenerationIn(groupId, generation), groupId, epoch, kek, object.GetGenWrap()); err == nil && reach < generation {
 			reach = generation
 		}
 	}
 	if device.Mls != nil {
-		if group, err := device.Mls.LoadGroup(self.GroupId); err == nil {
+		if group, err := device.Mls.LoadGroup(groupId); err == nil {
 			epoch := group.Epoch()
-			if object := self.EpochObject(epoch); object != nil {
+			if object := self.EpochObjectIn(groupId, epoch); object != nil {
 				open(epoch, group, object)
 			}
 			for next := epoch + 1; ; next += 1 {
-				object := self.EpochObject(next)
+				object := self.EpochObjectIn(groupId, next)
 				if object == nil {
 					break
 				}
@@ -1132,25 +1475,10 @@ func (self *FsKeysWorld) RemovedReach(device *FsKeysDevice) uint64 {
 			}
 		}
 	}
-	for generation := uint64(1); generation <= uint64(self.GenerationCount()); generation += 1 {
-		prefix := gkmservice.GkmWrapGenerationPrefix(self.GroupId, generation)
-		for key, body := range self.objects(prefix) {
-			if !strings.Contains(key, "/"+fsKeysRecipient(device.SidecarId())+"/") {
-				continue
-			}
-			signed := &bridge.Signed{}
-			if err := proto.Unmarshal(body, signed); err != nil {
-				continue
-			}
-			delivery, err := sidecar.ParseGkmDelivery(signed, sidecar.GkmWrapTypeReader, sidecar.GkmIdentityKeys(self.Log.Tip()))
-			if err != nil {
-				continue
-			}
-			for _, privateKey := range device.readerPrivateKeys {
-				if _, err := sidecar.OpenGkmDelivery(delivery, self.Generation(generation), device.SidecarId().Bytes(), privateKey); err == nil && reach < generation {
-					reach = generation
-				}
-			}
+	keys := device.CopyReaderKeys()
+	for generation := uint64(1); generation <= uint64(self.GenerationCountIn(groupId)); generation += 1 {
+		if reach < generation && self.opensDelivery(groupId, generation, sidecar.GkmWrapTypeReader, device.SidecarId().Bytes(), keys) {
+			reach = generation
 		}
 	}
 	return reach
@@ -1242,13 +1570,39 @@ func (self *fsKeysWorldState) Sidecar(principal *sidecar.Principal, sidecarId si
 		IdentityPublicKey: view.IdentityKey(sidecarId),
 		Revoked:           row.GetRevokedAt() != 0,
 		Parked:            row.GetParkedAt() != 0,
+		Suspended:         self.world.suspended[sidecarId],
 		ReadOnly:          row.GetCapabilities()&uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY) != 0,
 		MemberDevice:      len(row.GetTagIds()) == 0 && len(row.GetMemberId()) != 0 && !row.GetEphemeral(),
+		RecoveryAdmitted:  fsKeysRecoveryAdmitted(view, row),
 	}
 	if memberId, err := sidecar.IdFromBytes(row.GetMemberId()); err == nil && len(row.GetMemberId()) != 0 {
 		facts.MemberId = &memberId
 	}
+	if delegationId := row.GetDelegationId(); 0 < len(delegationId) {
+		for _, delegation := range view.Delegations() {
+			if bytes.Equal(delegation.GetDelegationId(), delegationId) && sidecar.GkmDelegationLive(view, delegation, self.world.Clock.Now()) {
+				facts.CoveringDelegationId = bytes.Clone(delegationId)
+			}
+		}
+	}
 	return facts, gkmservice.GkmAuthAllowed
+}
+
+// Whether a member device's admission was signed by one of its member's recovery bindings (§10.8).
+func fsKeysRecoveryAdmitted(view sidecar.GkmAuthView, row *bridge.SidecarRow) bool {
+	memberId, err := sidecar.IdFromBytes(row.GetMemberId())
+	if err != nil || len(row.GetTagIds()) != 0 || row.GetEphemeral() {
+		return false
+	}
+	member := view.Member(memberId)
+	for _, signer := range row.GetAdmissionSigners() {
+		for _, binding := range member.GetBindings() {
+			if bytes.Equal(signer, binding.GetKeySha256()) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // The answer of a test of membership.
@@ -1262,6 +1616,14 @@ func fsKeysAnswer(allowed bool) gkmservice.GkmAuthAnswer {
 func (self *fsKeysWorldState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, right sidecar.AclEvsRights, now time.Time) gkmservice.GkmAuthAnswer {
 	view := self.tip()
 	sidecarId := sidecar.Id(*principal.SidecarId)
+	world := self.world
+	if repoId == world.ConfigRepoId && repoId != (sidecar.Id{}) && right == sidecar.AclEvsWrite {
+		// §7.8: the config gives its member devices gkm's rw, read_only ones aside
+		row := view.SidecarRow(sidecarId)
+		memberDevice := row != nil && len(row.GetTagIds()) == 0 && len(row.GetMemberId()) != 0 && !row.GetEphemeral() &&
+			row.GetCapabilities()&uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY) == 0
+		return fsKeysAnswer(memberDevice && slices.Contains(view.RepoReadersAt(repoId, now), sidecarId))
+	}
 	switch right {
 	case sidecar.AclEvsRead:
 		return fsKeysAnswer(slices.Contains(view.RepoReadersAt(repoId, now), sidecarId))
@@ -1273,7 +1635,7 @@ func (self *fsKeysWorldState) HonorScope(principal *sidecar.Principal, repoId si
 			return bytes.Equal(admin.GetSidecarId(), sidecarId.Bytes())
 		}))
 	case sidecar.AclEvsDeposit:
-		return fsKeysAnswer(slices.Contains(self.world.depositors, sidecarId) || slices.Contains(view.RepoReadersAt(repoId, now), sidecarId))
+		return fsKeysAnswer(slices.Contains(world.depositors, sidecarId) || slices.Contains(view.RepoReadersAt(repoId, now), sidecarId))
 	}
 	return gkmservice.GkmAuthDenied
 }
@@ -1284,11 +1646,13 @@ func (self *fsKeysWorldState) Reads(principal *sidecar.Principal, repoId sidecar
 
 func (self *fsKeysWorldState) PendingTargets(principal *sidecar.Principal, sidecarId sidecar.Id, now time.Time) ([]*gkmservice.GkmPendingTarget, gkmservice.GkmAuthAnswer) {
 	view := self.tip()
-	repoId := self.world.RepoId
-	if !slices.Contains(view.RepoReadersAt(repoId, now), sidecarId) {
-		return nil, gkmservice.GkmAuthAllowed
+	targets := []*gkmservice.GkmPendingTarget{}
+	for _, repoId := range self.world.repoIds() {
+		if slices.Contains(view.RepoReadersAt(repoId, now), sidecarId) {
+			targets = append(targets, &gkmservice.GkmPendingTarget{RepoId: repoId, SidecarIds: view.RepoWriters(repoId)})
+		}
 	}
-	return []*gkmservice.GkmPendingTarget{{RepoId: repoId, SidecarIds: view.RepoWriters(repoId)}}, gkmservice.GkmAuthAllowed
+	return targets, gkmservice.GkmAuthAllowed
 }
 
 func (self *fsKeysWorldState) RepoReaders(principal *sidecar.Principal, repoId sidecar.Id, now time.Time) ([]sidecar.Id, gkmservice.GkmAuthAnswer) {
@@ -1315,8 +1679,18 @@ func (self *fsKeysWorldState) DelegationReads(principal *sidecar.Principal, repo
 	return fsKeysAnswer(holds)
 }
 
-// No forwarding Delegation in this world.
+// A Delegation's reader key digest, from its row: no Delegation of this world forwards.
 func (self *fsKeysWorldState) DelegationKey(principal *sidecar.Principal, delegationId []byte) (*gkmservice.GkmDelegationKeyFacts, gkmservice.GkmAuthAnswer) {
+	for _, row := range self.tip().Delegations() {
+		if !bytes.Equal(row.GetDelegationId(), delegationId) {
+			continue
+		}
+		keySha256, ok := sidecar.GkmDelegationKeySha256(row)
+		if !ok {
+			return nil, gkmservice.GkmAuthDenied
+		}
+		return &gkmservice.GkmDelegationKeyFacts{ReaderKeySha256: keySha256, ConfigRepoId: self.world.ConfigRepoId}, gkmservice.GkmAuthAllowed
+	}
 	return nil, gkmservice.GkmAuthDenied
 }
 
@@ -1355,6 +1729,15 @@ func (self *FsKeysDevice) HoldsRotateDraft() bool {
 // A sidecar as a wrap path and a late ask name it: s:<sidecar_id in hex>.
 func fsKeysRecipient(sidecarId sidecar.Id) string {
 	return "s:" + hex.EncodeToString(sidecarId.Bytes())
+}
+
+// A delivery's recipient as its wrap path names it: s:<sidecar_id> for a ReaderWrap, d:<delegation_id> for a
+// DelegationWrap, in hex.
+func fsKeysRecipientPath(wrapType sidecar.GkmWrapType, recipient []byte) string {
+	if wrapType == sidecar.GkmWrapTypeDelegation {
+		return "d:" + hex.EncodeToString(recipient)
+	}
+	return "s:" + hex.EncodeToString(recipient)
 }
 
 // keychain.ur's namespace for gkm in memory, a device's keychain, which survives its restarts.

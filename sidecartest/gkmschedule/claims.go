@@ -22,7 +22,6 @@ package gkmschedule
 import (
 	"bytes"
 	"net/http"
-	"testing"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -31,7 +30,7 @@ import (
 // FS-15: an agent's ReaderWraps reopen the gate while every leaf is offline; the read_only leaf's self-update waits
 // under R3 until the returning writer leaf's Remove, which carries the newest GenWrap; the removed leaf opens nothing
 // of the REMOVE generation.
-func FsKeysScheduleWrappedRotation(t testing.TB, newWorld FsKeysNewWorld) {
+func FsKeysScheduleWrappedRotation(t FsKeysT, newWorld FsKeysNewWorld) {
 	world := newWorld(protocol.RepoKind_REPO_KIND_GENERAL)
 	a := world.AddMember("a", false)
 	b := world.AddMember("b", false)
@@ -146,7 +145,7 @@ func FsKeysScheduleWrappedRotation(t testing.TB, newWorld FsKeysNewWorld) {
 // FS-15: a leaf's rotation and the agent's race for gen/2, the leaf's claim landing while the agent's is on its way:
 // one gen/2, the agent's 412 judged and adopted, since it covers what the agent rotated for, and every holder
 // converging on it.
-func FsKeysScheduleRotationRace(t testing.TB, newWorld FsKeysNewWorld) {
+func FsKeysScheduleRotationRace(t FsKeysT, newWorld FsKeysNewWorld) {
 	world := newWorld(protocol.RepoKind_REPO_KIND_GENERAL)
 	a := world.AddMember("a", false)
 	b := world.AddMember("b", false)
@@ -205,7 +204,7 @@ func FsKeysScheduleRotationRace(t testing.TB, newWorld FsKeysNewWorld) {
 // FS-15: a claim gkm takes whose answer is lost is sent again, and the retry is one success with the same
 // commitment; a rotation killed before its claim leaves its draft in the keychain, and its device's restart, whose
 // client reaches another gkm instance over the same stores, claims with the same bytes.
-func FsKeysScheduleLostAndKilledClaims(t testing.TB, newWorld FsKeysNewWorld) {
+func FsKeysScheduleLostAndKilledClaims(t FsKeysT, newWorld FsKeysNewWorld) {
 	world := newWorld(protocol.RepoKind_REPO_KIND_GENERAL)
 	a := world.AddMember("a", false)
 	b := world.AddMember("b", false)
@@ -280,7 +279,7 @@ func FsKeysScheduleLostAndKilledClaims(t testing.TB, newWorld FsKeysNewWorld) {
 
 // FS-15: a commit whose header carries a generation below its predecessor's, made on the real subset past every
 // client check, is refused by gkm and stands nowhere; the twin at the newest generation is taken.
-func FsKeysScheduleCommitBelowItsPredecessor(t testing.TB, newWorld FsKeysNewWorld) {
+func FsKeysScheduleCommitBelowItsPredecessor(t FsKeysT, newWorld FsKeysNewWorld) {
 	world := newWorld(protocol.RepoKind_REPO_KIND_GENERAL)
 	a := world.AddMember("a", false)
 	b := world.AddMember("b", false)
