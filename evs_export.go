@@ -162,11 +162,28 @@ func (self *EvsRepo) verifiedHistory(ctx context.Context, head *EvsVerifiedHead)
 	return verified, nil
 }
 
+// Where a git-mode replay holds and writes its objects: export's loose objects (evsGitObjectWriter), or a mount's bare
+// repository through cat-file and packs (the local tier's sync engine, evs_local_apply.go).
+type evsGitReplayStore interface {
+	EvsGitObjectSource
+	EvsGitObjectSink
+}
+
+// One file a version's entry rebuilt: its sealed mode and blob oid, which the local tier holds to the tree (G4).
+type evsGitWrittenFile struct {
+	mode uint32
+	oid  EvsGitOid
+}
+
 // One export's git-mode replays: its repository, the tree builder over it, and each ref replayed so far, sources
-// included. Not safe for concurrent use.
+// included. The local tier's sync engine runs applyUpdate on one over its own store, with no writer. Not safe for
+// concurrent use.
 type evsGitExport struct {
-	repo    *EvsRepo
-	writer  *evsGitObjectWriter
+	repo *EvsRepo
+	// export's repository, for its refs and notes; nil in the local tier
+	writer *evsGitObjectWriter
+	// where objects are read and written
+	objects evsGitReplayStore
 	builder *EvsGitTreeBuilder
 	keys    *evsReadKeys
 	// a committer check for when the client gives none: the push's own client, with no lookup
@@ -290,10 +307,18 @@ func (self *evsGitExport) finish(ctx context.Context, ref *evsGitExportRef) erro
 
 // An export's replays into writer's repository, its tree cache bounded by the client's TreeCacheByteCount.
 func newEvsGitExport(repo *EvsRepo, writer *evsGitObjectWriter) *evsGitExport {
+	export := newEvsGitReplayer(repo, writer)
+	export.writer = writer
+	return export
+}
+
+// A replay's object work over objects, its tree cache bounded by the client's TreeCacheByteCount: export's, or the
+// local tier's over a mount's bare repository.
+func newEvsGitReplayer(repo *EvsRepo, objects evsGitReplayStore) *evsGitExport {
 	return &evsGitExport{
 		repo:      repo,
-		writer:    writer,
-		builder:   NewEvsGitTreeBuilder(writer, writer, repo.client.settings.TreeCacheByteCount),
+		objects:   objects,
+		builder:   NewEvsGitTreeBuilder(objects, objects, repo.client.settings.TreeCacheByteCount),
 		keys:      newEvsReadKeys(repo),
 		ownClient: NewSidecarCommitter(&SidecarCommitterArgs{NetworkId: repo.client.args.NetworkId}),
 		refs:      map[Id]*evsGitExportRef{},
@@ -448,7 +473,7 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 			}
 			return nil
 		},
-		Held:      self.writer.has,
+		Held:      self.objects.HasGitObject,
 		Committer: self.committer,
 		Import: func(ctx context.Context, signed []byte, push *protocol.EvsPush) (*protocol.EvsImport, error) {
 			return self.repo.client.verifier.verifyImport(signed, self.repo.repoId, push)
@@ -472,7 +497,7 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 	case protocol.EvsGitShape_EVS_GIT_REKEY:
 		return nil
 	}
-	if err := self.applyUpdate(ctx, ref, statement, payload, metadata, checked); err != nil {
+	if _, err := self.applyUpdate(ctx, ref.head, statement, payload, metadata, checked); err != nil {
 		if evsExportRefusesVersion(err) {
 			return self.refuse(ref, statement, err)
 		}
@@ -489,23 +514,28 @@ func (self *evsGitExport) apply(ctx context.Context, ref *evsGitExportRef, state
 }
 
 // An UPDATE's objects, its sources replayed by the check: its blobs, its tags, then each commit's tree rebuilt and the
-// commit written.
-func (self *evsGitExport) applyUpdate(ctx context.Context, ref *evsGitExportRef, statement *EvsVerifiedStatement, payload *EvsCheckedPayload, metadata *protocol.EvsSealedMetadata, checked *EvsGitCheckedUpdate) error {
+// commit written. It answers each file entry's sealed mode and oid by its change's token path key.
+func (self *evsGitExport) applyUpdate(ctx context.Context, head *EvsVerifiedHead, statement *EvsVerifiedStatement, payload *EvsCheckedPayload, metadata *protocol.EvsSealedMetadata, checked *EvsGitCheckedUpdate) (map[string]*evsGitWrittenFile, error) {
 	git := metadata.GetGit()
+	written := map[string]*evsGitWrittenFile{}
 	for _, change := range payload.Changes {
 		if !change.WritesEntry() {
 			continue
 		}
-		if _, err := self.repo.exportBlob(ctx, self.writer, ref.head, self.keys, statement, change); err != nil {
-			return err
+		file, err := self.repo.exportBlob(ctx, self.objects, head, self.keys, statement, change)
+		if err != nil {
+			return nil, err
+		}
+		if file != nil {
+			written[change.TokenPath.KeyString()] = file
 		}
 	}
-	if err := self.historyBlobs(ctx, ref.head, statement, git); err != nil {
-		return err
+	if err := self.historyBlobs(ctx, head, statement, git); err != nil {
+		return nil, err
 	}
 	for i, tag := range checked.Tags {
-		if oid, err := self.writer.write(evsGitTagKind, tag); err != nil || oid != checked.TagOids[i] {
-			return errors.Join(err, fmt.Errorf("%w: a tag that is not its oid", ErrEvsGitUpdateRefused))
+		if oid, err := self.objects.WriteGitObject(evsGitTagKind, tag); err != nil || oid != checked.TagOids[i] {
+			return nil, errors.Join(err, fmt.Errorf("%w: a tag that is not its oid", ErrEvsGitUpdateRefused))
 		}
 	}
 	for _, commit := range checked.Commits {
@@ -514,34 +544,34 @@ func (self *evsGitExport) applyUpdate(ctx context.Context, ref *evsGitExportRef,
 		}
 		var parentTree *EvsGitOid
 		if 0 < len(commit.ParentOids) {
-			kind, parentObject, err := self.writer.ReadGitObject(ctx, commit.ParentOids[0])
+			kind, parentObject, err := self.objects.ReadGitObject(ctx, commit.ParentOids[0])
 			if err != nil || kind != evsGitCommitKind {
-				return errors.Join(err, fmt.Errorf("%w: a commit whose first parent is not held", ErrEvsGitUpdateRefused))
+				return nil, errors.Join(err, fmt.Errorf("%w: a commit whose first parent is not held", ErrEvsGitUpdateRefused))
 			}
 			treeOid, _, err := EvsGitCommitGraph(parentObject)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			parentTree = &treeOid
 		}
 		for _, change := range commit.Sealed.GetChanges() {
-			if len(change.GetGitOid()) != 0 && change.GetMode() != EvsGitModeGitlink && !self.writer.has(EvsGitOid(change.GetGitOid())) {
-				return fmt.Errorf("%w: a commit naming a blob neither held nor carried", ErrEvsGitUpdateRefused)
+			if len(change.GetGitOid()) != 0 && change.GetMode() != EvsGitModeGitlink && !self.objects.HasGitObject(EvsGitOid(change.GetGitOid())) {
+				return nil, fmt.Errorf("%w: a commit naming a blob neither held nor carried", ErrEvsGitUpdateRefused)
 			}
 		}
 		treeOid, err := self.builder.Build(ctx, parentTree, commit.Sealed.GetChanges(), commit.Sealed.GetTrees())
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if treeOid != commit.TreeOid {
-			self.repo.client.alarm(self.repo.repoId, ref.refId, SidecarEvsAlarmTamper, "", nil)
-			return fmt.Errorf("%w: a commit's tree does not rebuild from its changes", ErrEvsGitUpdateRefused)
+			self.repo.client.alarm(self.repo.repoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
+			return nil, fmt.Errorf("%w: a commit's tree does not rebuild from its changes", ErrEvsGitUpdateRefused)
 		}
-		if _, err := self.writer.write(evsGitCommitKind, commit.Sealed.GetObject()); err != nil {
-			return err
+		if _, err := self.objects.WriteGitObject(evsGitCommitKind, commit.Sealed.GetObject()); err != nil {
+			return nil, err
 		}
 	}
-	return nil
+	return written, nil
 }
 
 // A source a push names, replayed to the version it names, whose tip there must exist: a source with no such version,
@@ -610,7 +640,7 @@ func (self *evsGitExport) committer(ctx context.Context, committer *EvsGitIdent,
 
 // A held commit's parents, read back from the repository.
 func (self *evsGitExport) parents(ctx context.Context, oid EvsGitOid) ([]EvsGitOid, error) {
-	kind, object, err := self.writer.ReadGitObject(ctx, oid)
+	kind, object, err := self.objects.ReadGitObject(ctx, oid)
 	if err != nil {
 		return nil, err
 	}
@@ -637,7 +667,7 @@ func (self *evsGitExport) historyBlobs(ctx context.Context, head *EvsVerifiedHea
 		spans := map[uint32][2]uint64{}
 		order := []uint32{}
 		for _, blob := range blobs[start:end] {
-			if self.writer.has(EvsGitOid(blob.GetGitOid())) {
+			if self.objects.HasGitObject(EvsGitOid(blob.GetGitOid())) {
 				continue
 			}
 			for _, record := range blob.GetRecords() {
@@ -686,7 +716,7 @@ func (self *evsGitExport) historyBlobs(ctx context.Context, head *EvsVerifiedHea
 // blob written. One held already is skipped.
 func (self *evsGitExport) historyBlob(ctx context.Context, result *evsReadResult, statement *EvsVerifiedStatement, git *protocol.EvsGitUpdate, blob *protocol.EvsSealedBlob) error {
 	oid := EvsGitOid(blob.GetGitOid())
-	if self.writer.has(oid) {
+	if self.objects.HasGitObject(oid) {
 		return nil
 	}
 	fileId, err := IdFromBytes(blob.GetFileId())
@@ -718,7 +748,7 @@ func (self *evsGitExport) historyBlob(ctx context.Context, result *evsReadResult
 		}
 		switch {
 		case len(blob.GetBaseOid()) != 0 && header.Kind == protocol.EvsRecordKind_EVS_RECORD_DIFF && header.BaseRecordId == (Id{}):
-			kind, baseObject, err := self.writer.ReadGitObject(ctx, EvsGitOid(blob.GetBaseOid()))
+			kind, baseObject, err := self.objects.ReadGitObject(ctx, EvsGitOid(blob.GetBaseOid()))
 			if err != nil || kind != evsGitBlobKind {
 				return errors.Join(err, fmt.Errorf("%w: a history diff whose base blob is not held", ErrEvsGitUpdateRefused))
 			}
@@ -737,7 +767,7 @@ func (self *evsGitExport) historyBlob(ctx context.Context, result *evsReadResult
 	if uint64(content.Size()) != blob.GetSize() {
 		return fmt.Errorf("%w: a history blob of another size", ErrEvsSealInvalid)
 	}
-	written, err := self.writer.writeFrom(evsGitBlobKind, content.reader(), content.Size())
+	written, err := self.objects.WriteGitObjectFrom(evsGitBlobKind, content.reader(), content.Size())
 	if err != nil {
 		return err
 	}
@@ -839,9 +869,10 @@ func (self *EvsRepo) pushPayload(ctx context.Context, head *EvsVerifiedHead, sta
 	return EvsCheckPayload(statement.Statement, payload)
 }
 
-// One entry of a push reconstructed into a blob, its oid checked by reconstruction, and the blob's oid; nil for an
-// entry that is no file's, and for a gitlink, whose oid names a commit and which has no content.
-func (self *EvsRepo) exportBlob(ctx context.Context, writer *evsGitObjectWriter, head *EvsVerifiedHead, keys *evsReadKeys, statement *EvsVerifiedStatement, change *EvsCheckedChange) (*EvsGitOid, error) {
+// One entry of a push reconstructed into a blob written to sink, its oid checked by reconstruction, and the file's
+// sealed mode and oid; nil for an entry that is no file's. A gitlink, whose oid names a commit and which has no
+// content, writes nothing and answers its mode and oid.
+func (self *EvsRepo) exportBlob(ctx context.Context, sink EvsGitObjectSink, head *EvsVerifiedHead, keys *evsReadKeys, statement *EvsVerifiedStatement, change *EvsCheckedChange) (*evsGitWrittenFile, error) {
 	entry := &protocol.EvsEntryVersion{}
 	if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
 		return nil, fmt.Errorf("%w: an entry that does not parse", ErrEvsEntryRefused)
@@ -859,11 +890,11 @@ func (self *EvsRepo) exportBlob(ctx context.Context, writer *evsGitObjectWriter,
 		return nil, err
 	}
 	if info.Mode == EvsGitModeGitlink {
-		return nil, nil
+		return &evsGitWrittenFile{mode: info.Mode, oid: info.GitOid}, nil
 	}
-	oid, err := writer.writeFrom(evsGitBlobKind, spill.reader(), spill.Size())
+	oid, err := sink.WriteGitObjectFrom(evsGitBlobKind, spill.reader(), spill.Size())
 	if err != nil {
 		return nil, err
 	}
-	return &oid, nil
+	return &evsGitWrittenFile{mode: info.Mode, oid: oid}, nil
 }

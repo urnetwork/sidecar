@@ -27,9 +27,14 @@ const (
 	DaemonModeControl = "control"
 	DaemonModeHook    = "hook"
 	DaemonModeGit     = "git"
+	// A mount's git hook relayed by ur git-hook (DESIGN-DETAILS 8.2.8): service names the hook.
+	DaemonModeGitHook = "git-hook"
 	// git's services.
 	daemonGitUploadPack  = "git-upload-pack"
 	daemonGitReceivePack = "git-receive-pack"
+	// git-hook's hooks.
+	daemonGitHookPreReceive  = "pre-receive"
+	daemonGitHookProcReceive = "proc-receive"
 	// The longest hello line read before the session closes: far past any real one, which a cwd of a few hundred
 	// bytes bounds, and far below the request bound, so a hello cannot hold memory.
 	daemonHelloMaxByteCount = 16 * 1024
@@ -107,6 +112,10 @@ func parseDaemonHello(line []byte, version string) (*DaemonHello, string, error)
 		}
 		if hello.Service != daemonGitUploadPack && hello.Service != daemonGitReceivePack {
 			return nil, DaemonHelloErrorMalformed, fmt.Errorf("%w: git's service", ErrDaemonHello)
+		}
+	case DaemonModeGitHook:
+		if hello.Repo != "" || (hello.Service != daemonGitHookPreReceive && hello.Service != daemonGitHookProcReceive) {
+			return nil, DaemonHelloErrorMalformed, fmt.Errorf("%w: git-hook's hook", ErrDaemonHello)
 		}
 	default:
 		return nil, DaemonHelloErrorMode, fmt.Errorf("%w: no such mode", ErrDaemonHello)
