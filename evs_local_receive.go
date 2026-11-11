@@ -968,7 +968,7 @@ func (self *EvsLocalRepo) Run(ctx context.Context) error {
 	go func() {
 		queued <- self.receiver.runQueue(ctx)
 	}()
-	err := self.sync.Run(ctx)
+	err := self.sync.run(ctx)
 	<-queued
 	self.sync.unregisterIndexes()
 	return err
