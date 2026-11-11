@@ -111,6 +111,8 @@ type GkmServiceSettings struct {
 	ReaderKeyUploadInterval time.Duration
 	// Reads that one POST /gkm/reader-keys issues at once.
 	ReaderKeysReadConcurrency int
+	// Reads that one POST /gkm/delegation-keys issues at once, the same bound for the same shape of batch (QD-637).
+	DelegationKeysReadConcurrency int
 	// The most Welcomes one GET /gkm/welcomes answers. The client asks again once it has joined or acked them.
 	WelcomesReplyMaxCount int
 
@@ -217,6 +219,8 @@ func DefaultGkmServiceSettings() *GkmServiceSettings {
 		ReaderKeysReadConcurrency: 16,
 		WelcomesReplyMaxCount:     1024,
 
+		DelegationKeysReadConcurrency: 16,
+
 		EpochsReplyMaxCount:        256,
 		EpochsReplyMaxByteCount:    8 * 1024 * 1024,
 		EpochGroupInfoMaxByteCount: 64 * 1024,
@@ -285,6 +289,7 @@ func (self *GkmServiceSettings) Validate() error {
 		{name: "KeyPackageMaxLifetime", value: int64(self.KeyPackageMaxLifetime)},
 		{name: "ReaderKeyUploadInterval", value: int64(self.ReaderKeyUploadInterval)},
 		{name: "ReaderKeysReadConcurrency", value: int64(self.ReaderKeysReadConcurrency)},
+		{name: "DelegationKeysReadConcurrency", value: int64(self.DelegationKeysReadConcurrency)},
 		{name: "WelcomesReplyMaxCount", value: int64(self.WelcomesReplyMaxCount)},
 		{name: "EpochsReplyMaxCount", value: int64(self.EpochsReplyMaxCount)},
 		{name: "EpochsReplyMaxByteCount", value: self.EpochsReplyMaxByteCount},

@@ -223,7 +223,8 @@ enum VersioningMode { VERSIONING_MODE_UNSPECIFIED = 0; VERSIONING_MODE_ON = 1; V
 
 // sidecar/protocol/bridge/auth.proto
 // §7.9's rows, as ProjectionRows' comments list them, with what protos-bridge-row-fields #1 and #2 add:
-// SidecarRow's fields 16 to 20 and DelegationRow's 9 to 11, decided by the owner with their numbers.
+// SidecarRow's fields 16 to 20 and DelegationRow's 9 to 11, decided by the owner with their numbers; and
+// SidecarRow's admitted_time_ms, 23, which the owner gave its number in QD-646.
 message MemberRow {
   bytes member_id = 1; MemberRole role = 2; bytes recovery_key_sha256 = 3;
   repeated RecoveryBindingRow bindings = 4;
@@ -238,6 +239,7 @@ message SidecarRow {
   uint32 capabilities = 12; bytes delegation_id = 13; uint64 live_since = 14; int64 not_after = 15;
   bytes identity_public_key = 16; string identity_alg = 17; bytes member_id = 18; repeated bytes tag_ids = 19;
   bool ephemeral = 20; repeated ConfirmationRow confirmations = 21; repeated CascadeSpanRow cascades = 22;
+  int64 admitted_time_ms = 23;
 }
 // DESIGN-DETAILS 5.2.2's rows, its proto block's own numbers (complete 2026-11-09, pending its fold into §7.9 and the
 // owner's details-5-settings-in-rows), with the cascade's spans and the indexer rows that questions
@@ -411,8 +413,8 @@ enum BridgeRuleEntryKind {
 // sidecar/protocol/gkm.proto
 // §10.5's list; not_after holds ms, so it stays 64 bits.
 message ReaderKey { bytes sidecar_id = 1; bytes xwing_public_key = 2; int64 not_after = 3; }
-// §2.8's gkm-1; its signer is Signed's.
-message GroupForm { bytes repo_id = 1; bytes group_id = 2; bytes previous_group_id = 3; uint64 generation = 4; }
+// §2.8's gkm-1 with QD-643's pin, the signer's state when it signs; its signer is Signed's.
+message GroupForm { bytes repo_id = 1; bytes group_id = 2; bytes previous_group_id = 3; uint64 generation = 4; AuthPin auth = 5; }
 // §10.14's list and kinds.
 message GkmHint { bytes group_id = 1; uint64 epoch = 2; GkmHintKind kind = 3; bytes recipient = 4; }
 enum GkmHintKind {
@@ -455,6 +457,9 @@ message GkmFormsReply { repeated Signed forms = 1; }
 message GkmLadderRequest { repeated Signed generations = 1; }
 message GkmReaderKeysRequest { repeated bytes sidecar_ids = 1; }
 message GkmReaderKeysReply { repeated Signed reader_keys = 1; }
+// POST /gkm/delegation-keys (QD-637), a config rotator's batches of forwarding Delegations' reader keys.
+message GkmDelegationKeysRequest { repeated bytes delegation_ids = 1; }
+message GkmDelegationKeysReply { repeated bytes reader_keys = 1; }
 // §10.14's POST .../wraps/<g>/<c8>, batched, and GET .../wraps/<g>; POST .../welcome/<n>, for gkm-5's recipients, and
 // GET /gkm/welcomes; POST .../ack, for gkm-10; GET and POST /gkm/recovery/<member_id>/wraps, for gkm-8; and POST
 // .../recovery-wraps/<g>/<c8>, a rotator's batches.

@@ -252,9 +252,16 @@ func (self *ConfigState) RetentionPoint() uint64 {
 	if self.base == nil {
 		return 0
 	}
-	point := self.base.header.GetFoldedThrough() + 1
-	if self.previousBase != nil && self.previousBase.n < point {
-		point = self.previousBase.n
+	return configRetentionPointAt(self.previousBase, self.base.header.GetFoldedThrough())
+}
+
+// The retention point a base folding through foldedThrough sets, previous the base before it, nil for none:
+// min(previous, foldedThrough + 1), or foldedThrough + 1 for the first base. What a state on that base reports, and
+// what the base compile drops forwarding rows by (config_base.go's foldRows).
+func configRetentionPointAt(previous *configBase, foldedThrough uint64) uint64 {
+	point := foldedThrough + 1
+	if previous != nil && previous.n < point {
+		point = previous.n
 	}
 	return point
 }

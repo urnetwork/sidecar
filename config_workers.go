@@ -1,7 +1,8 @@
 //go:build !ios_extension
 
 // §7.10's stale and cleanup rows as the log answers them (TEAM-M4-01, D-TEAM-29, FS-97): a member's page Workers with
-// their admission positions, what config_admissions counts, and the list every admin device shows from 90% of the cap.
+// their admission positions and times, what config_admissions counts, and the list every admin device shows from 90%
+// of the cap.
 // The device act that revokes stale Workers in an admission is CORE-M4-02's (identity_act_stale.go), and the cleanup
 // prompt CORE-M6-04's; this file supplies what both read from the log.
 //
@@ -31,6 +32,7 @@ package sidecar
 import (
 	"cmp"
 	"slices"
+	"time"
 
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
@@ -41,6 +43,18 @@ type ConfigPageWorker struct {
 	// The position its admission took effect at (SidecarRow.admitted_at): its SidecarAdmit's entry, or the cosign or
 	// tick that completed its proposal.
 	AdmittedAt uint64
+	// That entry's time, api's when it sequenced it (SidecarRow.admitted_time_ms, QD-646), in UTC; zero for a row that
+	// carries none. From the rows, so every device at one pin shows the same, whatever entries it retains.
+	AdmittedTime time.Time
+}
+
+// A page Worker as a row gives it.
+func configPageWorkerOf(sidecarId Id, row *bridge.SidecarRow) ConfigPageWorker {
+	worker := ConfigPageWorker{SidecarId: sidecarId, AdmittedAt: row.GetAdmittedAt()}
+	if admittedTimeMs := row.GetAdmittedTimeMs(); admittedTimeMs != 0 {
+		worker.AdmittedTime = time.UnixMilli(admittedTimeMs).UTC()
+	}
+	return worker
 }
 
 // One member's part of §7.10's cleanup list.
@@ -109,7 +123,7 @@ func (self *ConfigState) PageWorkers(memberId Id) []ConfigPageWorker {
 	workers := []ConfigPageWorker{}
 	for sidecarId, row := range self.sidecars {
 		if rowMemberId, ok := configPageWorkerMember(row, self.timeMs); ok && rowMemberId == memberId {
-			workers = append(workers, ConfigPageWorker{SidecarId: sidecarId, AdmittedAt: row.GetAdmittedAt()})
+			workers = append(workers, configPageWorkerOf(sidecarId, row))
 		}
 	}
 	configSortPageWorkers(workers)
@@ -141,8 +155,8 @@ func (self *ConfigState) AdmissionCountAt(timeMs int64) int {
 // (QD-250), which no reader can derive from the log; non-positive lists nothing. Members come in id order, and a member
 // with one Worker or none is left out. Whether this device is an admin's, and each Worker's leaf's last change where a
 // group of this device shows one, are the caller's to add (CORE-M6-04): the list is the log's alone, so every admin
-// device at one pin shows the same. Each Worker carries its admission position; rows hold no admission time, which the
-// row also asks to show (question team-m4-01-cleanup-admission-time).
+// device at one pin shows the same. Each Worker carries its admission position and its admission time, both from its
+// row (SidecarRow.admitted_time_ms, QD-646), so a device shows a Worker's time whatever entries it retains.
 func CleanupList(state *ConfigState, admissionCap int) []ConfigCleanupMember {
 	members := []ConfigCleanupMember{}
 	if state == nil || !configAdmissionsNearCap(state.AdmissionCount(), admissionCap) {
@@ -151,7 +165,7 @@ func CleanupList(state *ConfigState, admissionCap int) []ConfigCleanupMember {
 	workersByMember := map[Id][]ConfigPageWorker{}
 	for sidecarId, row := range state.sidecars {
 		if memberId, ok := configPageWorkerMember(row, state.timeMs); ok {
-			workersByMember[memberId] = append(workersByMember[memberId], ConfigPageWorker{SidecarId: sidecarId, AdmittedAt: row.GetAdmittedAt()})
+			workersByMember[memberId] = append(workersByMember[memberId], configPageWorkerOf(sidecarId, row))
 		}
 	}
 	memberIds := make([]Id, 0, len(workersByMember))
