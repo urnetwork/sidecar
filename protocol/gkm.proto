@@ -82,6 +82,9 @@ message GroupForm {              // §6 Signed, purpose group-form, at gkm/repo/
   bytes group_id = 2;
   bytes previous_group_id = 3;   // the group this one re-forms, or empty
   uint64 generation = 4;
+  AuthPin auth = 5;              // the signer's state when it signs (QD-643): members judge the signer by 10.6's rule
+                                 //   at this pin where their retained log reaches it, and gkm holds it to its newest
+                                 //   state as it holds a claim's, on the chain and not ahead
 }
 
 // commit rides gkm:<group_id>, and the rest the per-client gkm topic (10.14).

@@ -54,6 +54,7 @@ GroupForm.repo_id: {number: 1, type: bytes, row: gkm-1, sees: "GroupForm chain (
 GroupForm.group_id: {number: 2, type: bytes, row: gkm-1, sees: "group_id"}
 GroupForm.previous_group_id: {number: 3, type: bytes, row: gkm-1, sees: "previous group"}
 GroupForm.generation: {number: 4, type: uint64, row: gkm-1, sees: "previous group, generation"}
+GroupForm.auth: {number: 5, type: AuthPin, row: gkm-1, pending: "QD-643: members judge a form's signer at the pin it signed at, and gkm holds the pin to its chain; gkm-1 names the chain's fields and signer, not this pin (design-records)"}
 
 GkmHint.group_id: {number: 1, type: bytes, row: connect-4, sees: "server-held ids, kinds and versions"}
 GkmHint.epoch: {number: 2, type: uint64, row: connect-4, sees: "server-held ids, kinds and versions"}

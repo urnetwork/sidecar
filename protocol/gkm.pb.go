@@ -709,10 +709,11 @@ func (x *ReaderKey) GetNotAfter() int64 {
 type GroupForm struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	//   its signer Signed's
-	RepoId          []byte `protobuf:"bytes,1,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
-	GroupId         []byte `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
-	PreviousGroupId []byte `protobuf:"bytes,3,opt,name=previous_group_id,json=previousGroupId,proto3" json:"previous_group_id,omitempty"` // the group this one re-forms, or empty
-	Generation      uint64 `protobuf:"varint,4,opt,name=generation,proto3" json:"generation,omitempty"`
+	RepoId          []byte          `protobuf:"bytes,1,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
+	GroupId         []byte          `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	PreviousGroupId []byte          `protobuf:"bytes,3,opt,name=previous_group_id,json=previousGroupId,proto3" json:"previous_group_id,omitempty"` // the group this one re-forms, or empty
+	Generation      uint64          `protobuf:"varint,4,opt,name=generation,proto3" json:"generation,omitempty"`
+	Auth            *bridge.AuthPin `protobuf:"bytes,5,opt,name=auth,proto3" json:"auth,omitempty"` // the signer's state when it signs (QD-643): members judge the signer by 10.6's rule
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -773,6 +774,13 @@ func (x *GroupForm) GetGeneration() uint64 {
 		return x.Generation
 	}
 	return 0
+}
+
+func (x *GroupForm) GetAuth() *bridge.AuthPin {
+	if x != nil {
+		return x.Auth
+	}
+	return nil
 }
 
 type GkmHint struct {
@@ -2772,14 +2780,15 @@ const file_protocol_gkm_proto_rawDesc = "" +
 	"\n" +
 	"sidecar_id\x18\x01 \x01(\fR\tsidecarId\x12(\n" +
 	"\x10xwing_public_key\x18\x02 \x01(\fR\x0exwingPublicKey\x12\x1b\n" +
-	"\tnot_after\x18\x03 \x01(\x03R\bnotAfter\"\x8b\x01\n" +
+	"\tnot_after\x18\x03 \x01(\x03R\bnotAfter\"\xbb\x01\n" +
 	"\tGroupForm\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\fR\x06repoId\x12\x19\n" +
 	"\bgroup_id\x18\x02 \x01(\fR\agroupId\x12*\n" +
 	"\x11previous_group_id\x18\x03 \x01(\fR\x0fpreviousGroupId\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x04 \x01(\x04R\n" +
-	"generation\"\x8c\x01\n" +
+	"generation\x12.\n" +
+	"\x04auth\x18\x05 \x01(\v2\x1a.urnetwork.sidecar.AuthPinR\x04auth\"\x8c\x01\n" +
 	"\aGkmHint\x12\x19\n" +
 	"\bgroup_id\x18\x01 \x01(\fR\agroupId\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\x122\n" +
@@ -2990,30 +2999,31 @@ var file_protocol_gkm_proto_depIdxs = []int32{
 	45, // 3: urnetwork.sidecar.KeyDelivery.auth:type_name -> urnetwork.sidecar.AuthPin
 	5,  // 4: urnetwork.sidecar.ReaderWrap.wrap:type_name -> urnetwork.sidecar.KeyDelivery
 	5,  // 5: urnetwork.sidecar.DelegationWrap.wrap:type_name -> urnetwork.sidecar.KeyDelivery
-	0,  // 6: urnetwork.sidecar.GkmHint.kind:type_name -> urnetwork.sidecar.GkmHintKind
-	1,  // 7: urnetwork.sidecar.GkmEpochObject.header:type_name -> urnetwork.sidecar.GkmCommitHeader
-	46, // 8: urnetwork.sidecar.GkmGroupCreateRequest.form:type_name -> urnetwork.sidecar.Signed
-	46, // 9: urnetwork.sidecar.GkmGroupCreateRequest.gen_rotate:type_name -> urnetwork.sidecar.Signed
-	46, // 10: urnetwork.sidecar.GkmGroupReformRequest.form:type_name -> urnetwork.sidecar.Signed
-	46, // 11: urnetwork.sidecar.GkmGroupReply.form:type_name -> urnetwork.sidecar.Signed
-	11, // 12: urnetwork.sidecar.GkmEpochEntry.object:type_name -> urnetwork.sidecar.GkmEpochObject
-	23, // 13: urnetwork.sidecar.GkmEpochsReply.epochs:type_name -> urnetwork.sidecar.GkmEpochEntry
-	46, // 14: urnetwork.sidecar.GkmGenerationsReply.generations:type_name -> urnetwork.sidecar.Signed
-	46, // 15: urnetwork.sidecar.GkmFormsReply.forms:type_name -> urnetwork.sidecar.Signed
-	46, // 16: urnetwork.sidecar.GkmLadderRequest.generations:type_name -> urnetwork.sidecar.Signed
-	46, // 17: urnetwork.sidecar.GkmReaderKeysReply.reader_keys:type_name -> urnetwork.sidecar.Signed
-	33, // 18: urnetwork.sidecar.GkmWrapBatchReply.results:type_name -> urnetwork.sidecar.GkmWrapResult
-	46, // 19: urnetwork.sidecar.GkmWrapsReply.wraps:type_name -> urnetwork.sidecar.Signed
-	36, // 20: urnetwork.sidecar.GkmWelcomeRequest.recipients:type_name -> urnetwork.sidecar.GkmWelcomeRecipient
-	13, // 21: urnetwork.sidecar.GkmWelcomeEntry.pointer:type_name -> urnetwork.sidecar.GkmWelcomePointer
-	38, // 22: urnetwork.sidecar.GkmWelcomesReply.welcomes:type_name -> urnetwork.sidecar.GkmWelcomeEntry
-	41, // 23: urnetwork.sidecar.GkmRecoveryWrapsReply.wraps:type_name -> urnetwork.sidecar.GkmRecoveryWrap
-	43, // 24: urnetwork.sidecar.GkmRecoveryWrapBatch.items:type_name -> urnetwork.sidecar.GkmRecoveryWrapItem
-	25, // [25:25] is the sub-list for method output_type
-	25, // [25:25] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	45, // 6: urnetwork.sidecar.GroupForm.auth:type_name -> urnetwork.sidecar.AuthPin
+	0,  // 7: urnetwork.sidecar.GkmHint.kind:type_name -> urnetwork.sidecar.GkmHintKind
+	1,  // 8: urnetwork.sidecar.GkmEpochObject.header:type_name -> urnetwork.sidecar.GkmCommitHeader
+	46, // 9: urnetwork.sidecar.GkmGroupCreateRequest.form:type_name -> urnetwork.sidecar.Signed
+	46, // 10: urnetwork.sidecar.GkmGroupCreateRequest.gen_rotate:type_name -> urnetwork.sidecar.Signed
+	46, // 11: urnetwork.sidecar.GkmGroupReformRequest.form:type_name -> urnetwork.sidecar.Signed
+	46, // 12: urnetwork.sidecar.GkmGroupReply.form:type_name -> urnetwork.sidecar.Signed
+	11, // 13: urnetwork.sidecar.GkmEpochEntry.object:type_name -> urnetwork.sidecar.GkmEpochObject
+	23, // 14: urnetwork.sidecar.GkmEpochsReply.epochs:type_name -> urnetwork.sidecar.GkmEpochEntry
+	46, // 15: urnetwork.sidecar.GkmGenerationsReply.generations:type_name -> urnetwork.sidecar.Signed
+	46, // 16: urnetwork.sidecar.GkmFormsReply.forms:type_name -> urnetwork.sidecar.Signed
+	46, // 17: urnetwork.sidecar.GkmLadderRequest.generations:type_name -> urnetwork.sidecar.Signed
+	46, // 18: urnetwork.sidecar.GkmReaderKeysReply.reader_keys:type_name -> urnetwork.sidecar.Signed
+	33, // 19: urnetwork.sidecar.GkmWrapBatchReply.results:type_name -> urnetwork.sidecar.GkmWrapResult
+	46, // 20: urnetwork.sidecar.GkmWrapsReply.wraps:type_name -> urnetwork.sidecar.Signed
+	36, // 21: urnetwork.sidecar.GkmWelcomeRequest.recipients:type_name -> urnetwork.sidecar.GkmWelcomeRecipient
+	13, // 22: urnetwork.sidecar.GkmWelcomeEntry.pointer:type_name -> urnetwork.sidecar.GkmWelcomePointer
+	38, // 23: urnetwork.sidecar.GkmWelcomesReply.welcomes:type_name -> urnetwork.sidecar.GkmWelcomeEntry
+	41, // 24: urnetwork.sidecar.GkmRecoveryWrapsReply.wraps:type_name -> urnetwork.sidecar.GkmRecoveryWrap
+	43, // 25: urnetwork.sidecar.GkmRecoveryWrapBatch.items:type_name -> urnetwork.sidecar.GkmRecoveryWrapItem
+	26, // [26:26] is the sub-list for method output_type
+	26, // [26:26] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_protocol_gkm_proto_init() }

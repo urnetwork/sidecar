@@ -190,7 +190,8 @@ func (self *gkmGroupManager) draftCreate(state GkmAuthView, args *GkmCreateGroup
 	if err != nil {
 		return nil, err
 	}
-	formBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GroupForm{RepoId: self.repoId.Bytes(), GroupId: groupId.Bytes(), Generation: 1})
+	// the form carries the state its signer's right is judged at (QD-643), the one gen/1's holders are counted at
+	formBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GroupForm{RepoId: self.repoId.Bytes(), GroupId: groupId.Bytes(), Generation: 1, Auth: state.Pin()})
 	if err != nil {
 		return nil, err
 	}

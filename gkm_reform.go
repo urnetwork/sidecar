@@ -24,7 +24,10 @@
 //	member     at each sync, and at a Welcome to a group of the repo other than its own, a device whose pinned group
 //	           is not the one the repo's newest GroupForm names follows the forms from its own group to the newest:
 //	           each a Signed GroupForm of the repo, verified under its signer's admitted key, its signer held to
-//	           §10.6's rule at this device's state; the new group's ladder must have reached the form's generation,
+//	           §10.6's rule at the auth pin the form carries (QD-643): at that state where this device's retained log
+//	           reaches it, waiting for one above its tip, judging nothing of one before its previous base, which
+//	           counts against no one, and refusing one off its chain as a fork; the new group's ladder must have
+//	           reached the form's generation,
 //	           chain from gen/1 by parent_commitment, and hold, byte for byte, every statement this device has
 //	           cached, its own generation pin (g, C_g) among them. A mismatch, or a form whose generation is below
 //	           this device's own pin, is alarmed and nothing is adopted: the pin never falls (I-16). Then its pins
@@ -45,17 +48,15 @@
 //
 // Readings, where the rule is not explicit. The re-former rotates before it adds: rule 9 says later rotations run
 // as usual, and a rotation is the one path that stages RecoveryWraps, which only the member's own device may write
-// otherwise, so "re-adds readers, ReaderWraps and RecoveryWraps" is that rotation and the engine's Adds. A form's
-// signer is judged at this device's newest state, since a GroupForm carries no auth pin. §10.6's "a network admin's"
+// otherwise, so "re-adds readers, ReaderWraps and RecoveryWraps" is that rotation and the engine's Adds. §10.6's "a network admin's"
 // is a member whose role is Owner or Admin, the roles the rest of this package treats as the network's admins. A
 // depositor's pin takes a new group id at a generation past its pin, along a chain it verified, where rule 8 speaks
 // of an equal (g, C_g), which a depositor, holding no group, never meets.
 //
 // Not built here, each failing closed: evs's resolution of gen/<g> through the newest GroupForm (rule 8) is evs's; a
 // member two re-forms behind, whose middle form a second site loss took, refuses the chain and alarms, and returns by
-// a re-add or its recovery code; a form's signer is judged at the member's newest state, so a member that follows the
-// form only after its signer's revocation refuses it (question keys-m2-25-groupform-signer-judged-at); and a re-form
-// keeps suite 0x0010, the one the subset speaks, until IANA's migration has another.
+// a re-add or its recovery code; and a re-form keeps suite 0x0010, the one the subset speaks, until IANA's migration
+// has another.
 //
 // Calls testHookSecret through the ladder's own functions at every key sealed.
 
@@ -171,6 +172,8 @@ type gkmVerifiedForm struct {
 	groupId         Id
 	previousGroupId Id
 	generation      uint64
+	// the signer's state when it signed (QD-643), at which its right to form the group is judged
+	auth *bridge.AuthPin
 }
 
 // A Signed GroupForm of the repo, verified under its signer's admitted key and held to its shape. Who may sign one
@@ -198,7 +201,7 @@ func gkmParseGroupForm(state GkmAuthView, repoId Id, signed *bridge.Signed) (*gk
 	if err != nil || groupId == (Id{}) || !bytes.Equal(body.GetRepoId(), repoId.Bytes()) || body.GetGeneration() == 0 {
 		return nil, fmt.Errorf("%w: a GroupForm of another repo, or of no group or generation", ErrGkmMalformed)
 	}
-	form := &gkmVerifiedForm{signerId: signerId, groupId: groupId, generation: body.GetGeneration()}
+	form := &gkmVerifiedForm{signerId: signerId, groupId: groupId, generation: body.GetGeneration(), auth: body.GetAuth()}
 	if previous := body.GetPreviousGroupId(); 0 < len(previous) {
 		form.previousGroupId, err = IdFromBytes(previous)
 		if err != nil || form.previousGroupId == (Id{}) || form.previousGroupId == groupId {
@@ -210,6 +213,40 @@ func gkmParseGroupForm(state GkmAuthView, repoId Id, signed *bridge.Signed) (*gk
 		return nil, err
 	}
 	return form, nil
+}
+
+// §10.6's GroupForm signer rule judged at the auth pin the form carries (QD-643; R1's judged row): at the state of
+// that pin where this device's retained log reaches it; ErrGkmAuthAhead, to wait on, for a pin above its tip; a
+// verdict that judges nothing for one before its previous base, which counts against no one; and a refusal with
+// Fork for one off its chain, as for any judged pin. A form with no pin is refused, and so is a signer the rule does
+// not allow at the pin, or whose pin's state does not hold the repo.
+func gkmJudgeFormSigner(state GkmAuthView, repoId Id, form *gkmVerifiedForm) (GkmVerdict, error) {
+	at, verdict, err := gkmJudgedView(state, form.auth)
+	if err != nil || verdict.Refused || verdict.NotJudged {
+		return verdict, err
+	}
+	err = GkmFormSignerAllowed(at, repoId, form.signerId)
+	switch {
+	case err == nil:
+		return GkmVerdict{}, nil
+	case errors.Is(err, ErrGkmNotWriter), errors.Is(err, ErrGkmNoRepo):
+		return gkmRefuse(GkmRefusalSigner, "a GroupForm by a device that may not form the group at its pin %d", form.auth.GetVersion()), nil
+	}
+	return GkmVerdict{}, err
+}
+
+// The error a refused form's verdict answers, its alarm raised: head_alarm for a pin off this device's chain, refused
+// for any other.
+func (self *GkmGroupClient) refuseForm(repoId Id, form *gkmVerifiedForm, verdict GkmVerdict) error {
+	kind := GkmAlarmRefused
+	if verdict.Fork {
+		kind = GkmAlarmHead
+	}
+	self.alarm(&GkmAlarm{
+		Kind: kind, RepoId: repoId, GroupId: form.groupId, Generation: form.generation, SidecarId: form.signerId,
+		Reason: verdict.Reason, Detail: verdict.Detail,
+	})
+	return fmt.Errorf("%w: %s", ErrGkmReformRefused, verdict.Detail)
 }
 
 // The keychain name of the GroupForm this device adopted for a repo's pinned group, kept only for a re-formed one.
@@ -267,8 +304,12 @@ func (self *GkmGroupClient) learnForm(ctx context.Context, state GkmAuthView, re
 		if form.previousGroupId == (Id{}) {
 			return nil, nil
 		}
-		if err := GkmFormSignerAllowed(state, repoId, form.signerId); err != nil {
+		verdict, err := gkmJudgeFormSigner(state, repoId, form)
+		if err != nil {
 			return nil, err
+		}
+		if verdict.Refused {
+			return nil, self.refuseForm(repoId, form, verdict)
 		}
 		if err := self.args.Secrets.Put(gkmFormRecordName(repoId), form.signedBytes); err != nil {
 			return nil, err
@@ -535,6 +576,8 @@ func (self *gkmGroupManager) draftReform(state GkmAuthView) (*gkmReformRecord, e
 	}
 	formBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.GroupForm{
 		RepoId: self.repoId.Bytes(), GroupId: groupId.Bytes(), PreviousGroupId: pins.groupId.Bytes(), Generation: generation,
+		// the state this device's right to re-form is judged at (QD-643)
+		Auth: state.Pin(),
 	})
 	if err != nil {
 		return nil, err
@@ -828,11 +871,13 @@ func (self *gkmGroupManager) adoptReformInFlow(ctx context.Context, state GkmAut
 			}
 			return false, err
 		}
-		if err := GkmFormSignerAllowed(state, self.repoId, form.signerId); err != nil {
-			if errors.Is(err, ErrGkmNotWriter) {
-				return refuse(GkmRefusalSigner, form.generation, form.signerId, "a GroupForm by a device that may not form the group")
-			}
+		verdict, err := gkmJudgeFormSigner(state, self.repoId, form)
+		if err != nil {
+			// a pin above this device's tip waits for the log
 			return false, err
+		}
+		if verdict.Refused {
+			return false, client.refuseForm(self.repoId, form, verdict)
 		}
 		if form.previousGroupId == (Id{}) {
 			break
