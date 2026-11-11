@@ -107,12 +107,15 @@ type SidecarProtocolSettings struct {
 	// How often a client resyncs its topics, so correctness never rests on a hint's delivery: 1 h
 	// (§6.8).
 	SyncRefetchInterval time.Duration
-	// §6.5's StreamOpen budget, protocol values both ends hold alike (QD-702): a target's most bytes, 128; its
-	// metadata's, 1,024; its ticket's, 512; and the whole message's, 3,800, so it fits one envelope.
-	StreamTargetMaxByteCount   int
+	// §6.5's StreamOpen budget, protocol values both ends hold alike (QD-702), beginning with a target's most
+	// bytes: 128, a <net>:<name> socket or a service target.
+	StreamTargetMaxByteCount int
+	// A StreamOpen's metadata's most bytes: 1,024, the target's own schema, such as §13.5's TlsEdgeOpen.
 	StreamMetadataMaxByteCount int
-	StreamTicketMaxByteCount   int
-	StreamOpenMaxByteCount     int
+	// A StreamOpen's ticket's most bytes: 512, §9's SignedSocketTicket.
+	StreamTicketMaxByteCount int
+	// The most a whole StreamOpen takes: 3,800 B, so it fits one envelope with its early data.
+	StreamOpenMaxByteCount int
 	// Whether this sidecar asks for P2P to a same-network sidecar peer whose Hello verified (D-PROTO-10;
 	// QD-045, QD-583): false, so every pair stays relay-only until the owner's call on FS-126 and its
 	// measurement. On, a send to such a peer rides connect's stream lane, which a P2P route may carry, and a
