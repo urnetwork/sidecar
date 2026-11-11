@@ -8,6 +8,12 @@
 // which also leaves no reading of a commit that this code and git could take differently. A refusal
 // names the fault and never the bytes, since an error may reach a log (I-13).
 //
+// Beside the strict codecs, which do not change, the lenient readers read any object as git itself reads it
+// (DESIGN-DETAILS 8.2.5, 8.2.6): EvsGitTreeRead takes a tree in whatever order and with whatever modes it holds, with
+// git's canon_mode beside each, EvsGitCommitGraph a commit's tree and parents by commit.c's rule, and EvsGitTagDecode an
+// annotated tag's object and type. Imported history and raw trees go through them; a new commit a sidecar makes is still
+// held to EvsGitCommitDecode.
+//
 // Oids are SHA-1, 20 B: what go-git and a default repository use. The owner's answer to
 // plan-EVS1-format-bytes#4 keeps v0 to SHA-1, head mode's codec and export included, so nothing here
 // decodes a sha256 repository's 32 B ids: ur mount add, ur evs import and git-remote-ur are to refuse
@@ -37,6 +43,7 @@ const (
 	evsGitBlobKind   = "blob"
 	evsGitTreeKind   = "tree"
 	evsGitCommitKind = "commit"
+	evsGitTagKind    = "tag"
 )
 
 // The modes a tree entry may hold: fsck.c's standard five, and the group-writable file early git
@@ -507,4 +514,161 @@ func EvsGitCommitDecode(encoded []byte) (*EvsGitCommit, error) {
 		return nil, refused("a commit is not in canonical form")
 	}
 	return commit, nil
+}
+
+// One entry of a tree as git reads it (tree-walk.c's decode_tree_entry), whatever form the tree holds it in: its
+// mode's octal digits as written, zero-padded or outside the six git writes, their value and git's canon_mode of it,
+// its name and its oid. What history stock git keeps holds such entries, and a raw tree keeps them (DESIGN-DETAILS
+// 8.2.5's tree reader).
+type EvsGitRawEntry struct {
+	ModeText  []byte
+	Mode      uint32
+	CanonMode uint32
+	Name      []byte
+	Oid       EvsGitOid
+}
+
+// git's canon_mode (cache.h): a regular file 100755 when its owner may execute it, else 100644; a symlink 120000; a
+// directory 40000; anything else a gitlink, 160000. 100664, which early git wrote and fsck takes, is kept, since
+// EvsGitTree.Encode writes it and a tree holding it rebuilds (DESIGN-DETAILS 8.2.2's changes row).
+func EvsGitCanonMode(mode uint32) uint32 {
+	const (
+		typeMask  = 0o170000
+		regular   = 0o100000
+		symlink   = 0o120000
+		directory = 0o040000
+		ownerExec = 0o100
+	)
+	if mode == EvsGitModeFileGroupWritable {
+		return mode
+	}
+	switch mode & typeMask {
+	case regular:
+		if mode&ownerExec != 0 {
+			return EvsGitModeExecutable
+		}
+		return EvsGitModeFile
+	case symlink:
+		return EvsGitModeSymlink
+	case directory:
+		return EvsGitModeDirectory
+	default:
+		return EvsGitModeGitlink
+	}
+}
+
+// A tree as git reads it (DESIGN-DETAILS 8.2.5): entries in the order the tree holds them, each octal digits, a
+// space, a name to the NUL and 20 B, the mode's value wrapping as git's unsigned arithmetic does. Refused as git
+// refuses them: a mode that is no octal number, a name that does not end, an oid cut short, an empty name. Refused
+// beyond git, since no path can name them: a name holding a slash, and two entries of one name. Names are copies.
+// EvsGitTreeDecode stays the strict codec, taking only what EvsGitTree.Encode gives.
+func EvsGitTreeRead(encoded []byte) ([]EvsGitRawEntry, error) {
+	refused := func(what string) error {
+		return fmt.Errorf("%w: %s", ErrEvsGitObjectInvalid, what)
+	}
+	entries := []EvsGitRawEntry{}
+	names := map[string]bool{}
+	for rest := encoded; 0 < len(rest); {
+		space := bytes.IndexByte(rest, ' ')
+		if space <= 0 {
+			return nil, refused("a tree entry has no mode")
+		}
+		modeText := rest[:space]
+		mode := uint32(0)
+		for _, digit := range modeText {
+			if digit < '0' || '7' < digit {
+				return nil, refused("a tree entry's mode is not octal")
+			}
+			mode = mode<<3 + uint32(digit-'0')
+		}
+		afterMode := rest[space+1:]
+		nul := bytes.IndexByte(afterMode, 0)
+		if nul < 0 {
+			return nil, refused("a tree entry's name does not end")
+		}
+		name := afterMode[:nul]
+		if len(name) == 0 || bytes.IndexByte(name, '/') != -1 {
+			return nil, refused("a tree entry's name is empty or holds a slash")
+		}
+		if names[string(name)] {
+			return nil, refused("a tree names one entry twice")
+		}
+		names[string(name)] = true
+		afterName := afterMode[nul+1:]
+		entry := EvsGitRawEntry{ModeText: bytes.Clone(modeText), Mode: mode, CanonMode: EvsGitCanonMode(mode), Name: bytes.Clone(name)}
+		if len(afterName) < len(entry.Oid) {
+			return nil, refused("a tree entry's oid is cut short")
+		}
+		copy(entry.Oid[:], afterName)
+		entries = append(entries, entry)
+		rest = afterName[len(entry.Oid):]
+	}
+	return entries, nil
+}
+
+// A commit's tree and parents by git's own rule (commit.c's parse_commit_buffer): a first line "tree <hex>", then each
+// line "parent <hex>" that follows it at once; what comes after is not read, so a late or repeated header, an ident
+// fsck refuses, a NUL in a header or no blank line leave the graph as git walks it. Refused as git refuses: no tree
+// line, nothing after it, and a parent line that is not one (DESIGN-DETAILS 8.2.6's carried-as-bytes row).
+func EvsGitCommitGraph(encoded []byte) (EvsGitOid, []EvsGitOid, error) {
+	const hexLength = 2 * len(EvsGitOid{})
+	treeLineLength := len("tree ") + hexLength
+	if len(encoded) <= treeLineLength+1 || !bytes.HasPrefix(encoded, []byte("tree ")) || encoded[treeLineLength] != '\n' {
+		return EvsGitOid{}, nil, fmt.Errorf("%w: a commit with no tree line", ErrEvsGitObjectInvalid)
+	}
+	treeOid, err := evsGitOidDecodeHex(encoded[len("tree "):treeLineLength])
+	if err != nil {
+		return EvsGitOid{}, nil, err
+	}
+	parentOids := []EvsGitOid{}
+	parentLineLength := len("parent ") + hexLength
+	for rest := encoded[treeLineLength+1:]; parentLineLength < len(rest) && bytes.HasPrefix(rest, []byte("parent ")); {
+		if len(rest) <= parentLineLength+1 || rest[parentLineLength] != '\n' {
+			return EvsGitOid{}, nil, fmt.Errorf("%w: a commit's parent line is not one", ErrEvsGitObjectInvalid)
+		}
+		parentOid, err := evsGitOidDecodeHex(rest[len("parent "):parentLineLength])
+		if err != nil {
+			return EvsGitOid{}, nil, err
+		}
+		parentOids = append(parentOids, parentOid)
+		rest = rest[parentLineLength+1:]
+	}
+	return treeOid, parentOids, nil
+}
+
+// An annotated tag's object and type lines (tag.c's parse_tag_buffer): the oid and kind of what it tags.
+type EvsGitTag struct {
+	ObjectOid  EvsGitOid
+	ObjectKind string
+}
+
+// A tag's object and type, read as git reads them: "object <hex>\n" first, then "type <kind>\n", the kind one of
+// blob, tree, commit and tag; what follows is not read. Refused where git refuses.
+func EvsGitTagDecode(encoded []byte) (*EvsGitTag, error) {
+	const hexLength = 2 * len(EvsGitOid{})
+	refused := func(what string) error {
+		return fmt.Errorf("%w: %s", ErrEvsGitObjectInvalid, what)
+	}
+	objectLineLength := len("object ") + hexLength
+	if len(encoded) < hexLength+24 || !bytes.HasPrefix(encoded, []byte("object ")) || encoded[objectLineLength] != '\n' {
+		return nil, refused("a tag with no object line")
+	}
+	objectOid, err := evsGitOidDecodeHex(encoded[len("object "):objectLineLength])
+	if err != nil {
+		return nil, err
+	}
+	rest := encoded[objectLineLength+1:]
+	if !bytes.HasPrefix(rest, []byte("type ")) {
+		return nil, refused("a tag with no type line")
+	}
+	kind, _, found := bytes.Cut(rest[len("type "):], []byte{'\n'})
+	if !found {
+		return nil, refused("a tag's type line does not end")
+	}
+	switch string(kind) {
+	case evsGitBlobKind, evsGitTreeKind, evsGitCommitKind, evsGitTagKind:
+	default:
+		return nil, refused("a tag of an unknown kind")
+	}
+	return &EvsGitTag{ObjectOid: objectOid, ObjectKind: string(kind)}, nil
 }
