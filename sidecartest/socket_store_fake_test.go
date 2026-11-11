@@ -8,14 +8,79 @@ import (
 	"testing"
 	"time"
 
+	"github.com/urnetwork/connect"
+
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/socketsservice"
 )
 
+// The fake on clock with settings.
+func newTestFakeSocketStore(clock sidecar.Clock, settings *socketsservice.SocketStoreSettings) socketsservice.SocketStore {
+	return NewFakeSocketStore(clock, settings, nil)
+}
+
 func TestFakeSocketStorePassesItsSuite(t *testing.T) {
-	RunSocketStoreSuite(t, func(clock sidecar.Clock, settings *socketsservice.SocketStoreSettings) socketsservice.SocketStore {
-		return NewFakeSocketStore(clock, settings, nil)
-	})
+	RunSocketStoreSuite(t, newTestFakeSocketStore)
+}
+
+// DESIGN-DETAILS 13.6's twins of SockRegTwin-NoTombstone, -NoPairFloor and -NoSetVersion: each fails when
+// the store's rule is taken out.
+func TestRemovalLeavesATombstone(t *testing.T) {
+	RunSocketStoreSuiteCase(t, SocketSuiteCaseRemovalLeavesATombstone, newTestFakeSocketStore)
+}
+
+func TestPairWriteBelowFloorRefused(t *testing.T) {
+	RunSocketStoreSuiteCase(t, SocketSuiteCasePairWriteBelowFloor, newTestFakeSocketStore)
+}
+
+func TestOlderPageIsStale(t *testing.T) {
+	RunSocketStoreSuiteCase(t, SocketSuiteCaseOlderPageIsStale, newTestFakeSocketStore)
+}
+
+// QD-656: a touch gives a pair the lesser of its grant's remaining life and EdgePairTtl, lengthening a
+// short one and never passing the grant, on the store's clock.
+func TestFakeSocketPairTouchLivesToItsGrant(t *testing.T) {
+	ctx := context.Background()
+	clock := NewFakeClock(DefaultClockStart())
+	settings := socketsservice.DefaultSocketStoreSettings()
+	store := NewFakeSocketStore(clock, settings, nil)
+	listenerId := socketSuiteId()
+	shortGrant := socketSuiteId()
+	longGrant := socketSuiteId()
+	nowMillis := uint64(clock.Now().UnixMilli())
+	if _, _, err := store.SetServicePair(ctx, listenerId, shortGrant, nowMillis+uint64((5*time.Minute).Milliseconds()), time.Minute, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.SetServicePair(ctx, listenerId, longGrant, nowMillis+uint64((24*time.Hour).Milliseconds()), time.Minute, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.TouchServicePairs(ctx, listenerId); err != nil {
+		t.Fatal(err)
+	}
+	found := func(dialerId connect.Id) bool {
+		_, found, err := store.GetServicePair(ctx, listenerId, dialerId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+	// past the minute each was written for
+	clock.Advance(5*time.Minute - time.Millisecond)
+	if !found(shortGrant) || !found(longGrant) {
+		t.Fatal("a touched pair ended at its first ttl")
+	}
+	clock.Advance(time.Millisecond)
+	if found(shortGrant) {
+		t.Fatal("a touched pair outlived its grant")
+	}
+	clock.Advance(settings.EdgePairTtl - 5*time.Minute - time.Millisecond)
+	if !found(longGrant) {
+		t.Fatal("a touched pair ended before EdgePairTtl")
+	}
+	clock.Advance(time.Millisecond)
+	if found(longGrant) {
+		t.Fatal("a touched pair outlived EdgePairTtl")
+	}
 }
 
 // §9.6: a pair lives its ttl on the store's clock, rounded up to the millisecond HPEXPIRE keeps.
@@ -25,7 +90,7 @@ func TestFakeSocketPairEndsAtItsTtl(t *testing.T) {
 	store := NewFakeSocketStore(clock, nil, nil)
 	listenerId := socketSuiteId()
 	dialerId := socketSuiteId()
-	if err := store.SetServicePair(ctx, listenerId, dialerId, 99, 1500*time.Microsecond); err != nil {
+	if _, _, err := store.SetServicePair(ctx, listenerId, dialerId, 99, 1500*time.Microsecond, 0); err != nil {
 		t.Fatal(err)
 	}
 	clock.Advance(time.Millisecond)
