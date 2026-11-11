@@ -194,6 +194,7 @@ type AclRepoVersioningFiler struct {
 	repoKey func(ctx context.Context, repoId Id) (*EvsRepoKey, error)
 }
 
+// A filer for the Sidecar's RepoVersioning statements, sealing rules with the keys repoKey answers.
 func NewAclRepoVersioningFiler(sidecar *Sidecar, repoKey func(ctx context.Context, repoId Id) (*EvsRepoKey, error)) *AclRepoVersioningFiler {
 	return &AclRepoVersioningFiler{sidecar: sidecar, repoKey: repoKey}
 }

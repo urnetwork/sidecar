@@ -502,6 +502,7 @@ type aclTestProbeView struct {
 	order    []Id
 }
 
+// A probe view over base holding no probe yet.
 func newAclTestProbeView(base AclAuthView) *aclTestProbeView {
 	return &aclTestProbeView{base: base, sidecars: map[Id]*AclSidecar{}, members: map[Id]*bridge.MemberRow{}}
 }
@@ -564,18 +565,22 @@ func (self *aclTestProbeView) tagged(label string, tagIds []Id) AclSubject {
 	return AclSidecarSubject(sidecarId)
 }
 
+// The base's pin: probes add no entry, so the state stands where the writer's does.
 func (self *aclTestProbeView) Pin() *bridge.AuthPin {
 	return self.base.Pin()
 }
 
+// The base's genesis, its owner and config repo unchanged by any probe.
 func (self *aclTestProbeView) Genesis() *bridge.Genesis {
 	return self.base.Genesis()
 }
 
+// Every admission the base holds, then each probe in the order a test added it.
 func (self *aclTestProbeView) SidecarIds() []Id {
 	return slices.Concat(self.base.SidecarIds(), self.order)
 }
 
+// A probe's admission, or the base's when sidecarId names no probe.
 func (self *aclTestProbeView) Sidecar(sidecarId Id) *AclSidecar {
 	if probe := self.sidecars[sidecarId]; probe != nil {
 		return probe
@@ -583,6 +588,7 @@ func (self *aclTestProbeView) Sidecar(sidecarId Id) *AclSidecar {
 	return self.base.Sidecar(sidecarId)
 }
 
+// A probe's new member, or the base's when memberId names none.
 func (self *aclTestProbeView) Member(memberId Id) *bridge.MemberRow {
 	if probe := self.members[memberId]; probe != nil {
 		return probe
@@ -590,14 +596,17 @@ func (self *aclTestProbeView) Member(memberId Id) *bridge.MemberRow {
 	return self.base.Member(memberId)
 }
 
+// Whether the base counts the sidecar a config writer; a probe never is one.
 func (self *aclTestProbeView) IsConfigWriter(sidecarId Id) bool {
 	return self.sidecars[sidecarId] == nil && self.base.IsConfigWriter(sidecarId)
 }
 
+// Whether a cascade parks the sidecar in the base; a probe is never parked.
 func (self *aclTestProbeView) Parked(sidecarId Id) bool {
 	return self.sidecars[sidecarId] == nil && self.base.Parked(sidecarId)
 }
 
+// A tagged sidecar's live sponsor in the base; a probe has none, so autogroup:admin stands in for a tagged one.
 func (self *aclTestProbeView) Sponsor(sidecarId Id) (Id, bool) {
 	if self.sidecars[sidecarId] != nil {
 		return Id{}, false
@@ -605,6 +614,7 @@ func (self *aclTestProbeView) Sponsor(sidecarId Id) (Id, bool) {
 	return self.base.Sponsor(sidecarId)
 }
 
+// The base's cascade judgment of what signer signed at at; probes sign nothing.
 func (self *aclTestProbeView) CascadeVoids(signer []byte, at uint64) bool {
 	return self.base.CascadeVoids(signer, at)
 }

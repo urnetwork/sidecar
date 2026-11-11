@@ -886,17 +886,50 @@ type aclDocumentTestView struct {
 	members map[Id]*bridge.MemberRow
 }
 
+// A pin at version 0 over a zero chain: the document alone stands before any entry.
 func (self *aclDocumentTestView) Pin() *bridge.AuthPin {
 	return &bridge.AuthPin{Version: 0, Chain: make([]byte, sha256.Size)}
 }
-func (self *aclDocumentTestView) Genesis() *bridge.Genesis                   { return nil }
-func (self *aclDocumentTestView) SidecarIds() []Id                           { return nil }
-func (self *aclDocumentTestView) Sidecar(sidecarId Id) *AclSidecar           { return nil }
-func (self *aclDocumentTestView) Member(memberId Id) *bridge.MemberRow       { return self.members[memberId] }
-func (self *aclDocumentTestView) IsConfigWriter(sidecarId Id) bool           { return false }
-func (self *aclDocumentTestView) Parked(sidecarId Id) bool                   { return false }
-func (self *aclDocumentTestView) Sponsor(sidecarId Id) (Id, bool)            { return Id{}, false }
-func (self *aclDocumentTestView) CascadeVoids(signer []byte, at uint64) bool { return false }
+
+// No genesis: the document alone names no owner device.
+func (self *aclDocumentTestView) Genesis() *bridge.Genesis {
+	return nil
+}
+
+// No admission: the probes a test adds are the only sidecars.
+func (self *aclDocumentTestView) SidecarIds() []Id {
+	return nil
+}
+
+// No admission of any sidecar.
+func (self *aclDocumentTestView) Sidecar(sidecarId Id) *AclSidecar {
+	return nil
+}
+
+// The member the document names for a user, a plain member, or nil.
+func (self *aclDocumentTestView) Member(memberId Id) *bridge.MemberRow {
+	return self.members[memberId]
+}
+
+// No config writer: the document alone holds no AdminSet.
+func (self *aclDocumentTestView) IsConfigWriter(sidecarId Id) bool {
+	return false
+}
+
+// No cascade, so nothing parked.
+func (self *aclDocumentTestView) Parked(sidecarId Id) bool {
+	return false
+}
+
+// No sponsor, so autogroup:admin stands in for a tagged probe.
+func (self *aclDocumentTestView) Sponsor(sidecarId Id) (Id, bool) {
+	return Id{}, false
+}
+
+// No cascade voids anything.
+func (self *aclDocumentTestView) CascadeVoids(signer []byte, at uint64) bool {
+	return false
+}
 
 // The network already holds a document: Team's starting one is saved only as a network's first.
 var ErrAclTeamStartHasDocument = errors.New("acl: the network holds a document, so no starting document is saved")
