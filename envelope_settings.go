@@ -123,6 +123,9 @@ type SidecarProtocolSettings struct {
 	// is not an identity, and push still comes only over platform carriers (D-PROTO-8), whatever this says.
 	// Before any network turns it on, §2.8's connect rows and §2.10 say what P2P shows (QD-045).
 	EnablePeerP2p bool
+	// SEARCH's wire values, which its envelope rules and remote search's builders and parsers read here
+	// (envelope_search_settings.go). A value, so these settings compare.
+	Search SearchWireSettings
 }
 
 // The one source of §6.6's defaults, the desktop's. A fresh value each call, as DefaultSidecarSettings's
@@ -167,6 +170,7 @@ func DefaultSidecarProtocolSettings() *SidecarProtocolSettings {
 		StreamTicketMaxByteCount:         512,
 		StreamOpenMaxByteCount:           3800,
 		EnablePeerP2p:                    false,
+		Search:                           *DefaultSearchWireSettings(),
 	}
 }
 
@@ -193,6 +197,9 @@ func (self *SidecarProtocolSettings) validate() error {
 	}
 	if MaxReassemblyBodyByteCount < self.ReassemblyMaxBodyByteCount {
 		return fmt.Errorf("%w: ProtocolSettings.ReassemblyMaxBodyByteCount is past the protocol's maximum", errInvalidSettings)
+	}
+	if self.Search.RequestByteCount <= 0 || self.Search.StepByteCount <= 0 || self.Search.MaxStepCount <= 0 {
+		return fmt.Errorf("%w: ProtocolSettings.Search is unset", errInvalidSettings)
 	}
 	return nil
 }

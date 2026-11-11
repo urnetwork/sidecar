@@ -1,8 +1,8 @@
 //go:build !js
 
 // §22.6's targets for extractor 1: extraction is total and bounded on any message or file, and no byte of an
-// attachment reaches a field however the message around it is built. Seeds sit in testdata/fuzz/ and run in every go
-// test.
+// attachment reaches a field however the message around it is built. Seeds sit in testdata/fuzz/, and every
+// conformance vector of testdata/index/conformance/ is a seed besides (DESIGN-DETAILS 11.6); both run in every go test.
 
 package sidecar
 
@@ -43,9 +43,24 @@ func TestExtractSeedFilesAreCurrent(t *testing.T) {
 	testCheckCorpusFile(t, "FuzzIndexExtractAttachment", "text-attachment", fmt.Sprintf("string(%q)", "<p>hello</p>"), fmt.Sprintf("[]byte(%q)", "plain words"), fmt.Sprintf("string(%q)", "=?UTF-8?Q?n=C3=A9.txt?="), "uint8(5)")
 }
 
+// Every conformance vector's input, mail and files.
+func testConformanceSeeds(f *testing.F) [][]byte {
+	seeds := [][]byte{}
+	for _, path := range []string{testConformanceMailPath, testConformanceFilePath} {
+		for _, vector := range testConformanceVectors(f, path, indexExtractorId) {
+			_, input := vector.pathAndInput(f)
+			seeds = append(seeds, input)
+		}
+	}
+	return seeds
+}
+
 func FuzzIndexExtractMail(f *testing.F) {
+	for _, seed := range testConformanceSeeds(f) {
+		f.Add(seed)
+	}
 	f.Fuzz(func(t *testing.T, content []byte) {
-		documents := indexExtractMail([]byte("m/202611/00/1"), content)
+		documents := indexExtractMail([]byte("m/202611/00/1"), content, DefaultIndexFormatSettings())
 		if len(documents) == 0 {
 			t.Fatal("a message gave no document")
 		}
@@ -59,7 +74,7 @@ func FuzzIndexExtractMail(f *testing.F) {
 					t.Fatalf("field %d holds %d B of a %d B message", number, len(field), len(content))
 				}
 			}
-			if indexChunkByteCount+indexOverlapByteCount < len(document.Fields[indexFieldBody]) {
+			if DefaultIndexFormatSettings().ChunkByteCount+DefaultIndexFormatSettings().OverlapByteCount < len(document.Fields[indexFieldBody]) {
 				t.Fatalf("a chunk of %d B", len(document.Fields[indexFieldBody]))
 			}
 			if err := document.check(); err != nil {
@@ -70,17 +85,20 @@ func FuzzIndexExtractMail(f *testing.F) {
 }
 
 func FuzzIndexExtractFile(f *testing.F) {
+	for _, seed := range testConformanceSeeds(f) {
+		f.Add(seed)
+	}
 	f.Fuzz(func(t *testing.T, content []byte) {
-		documents, ok := indexExtractFile([]byte("notes/f.txt"), content)
+		documents, ok := indexExtractFile([]byte("notes/f.txt"), content, DefaultIndexFormatSettings())
 		if !ok {
 			return
 		}
 		bound := testExtractBound(content)
 		for chunk, document := range documents {
-			if document.Chunk != uint32(chunk) || indexTitleMaxByteCount < len(document.Fields[indexFieldTitle]) {
+			if document.Chunk != uint32(chunk) || DefaultIndexFormatSettings().TitleMaxByteCount < len(document.Fields[indexFieldTitle]) {
 				t.Fatalf("chunk %d numbered %d, titled %d B", chunk, document.Chunk, len(document.Fields[indexFieldTitle]))
 			}
-			if bound < len(document.Fields[indexFieldBody]) || indexChunkByteCount+indexOverlapByteCount < len(document.Fields[indexFieldBody]) {
+			if bound < len(document.Fields[indexFieldBody]) || DefaultIndexFormatSettings().ChunkByteCount+DefaultIndexFormatSettings().OverlapByteCount < len(document.Fields[indexFieldBody]) {
 				t.Fatalf("a chunk of %d B", len(document.Fields[indexFieldBody]))
 			}
 		}
@@ -91,6 +109,9 @@ func FuzzIndexExtractFile(f *testing.F) {
 // reach no field. The same message without the canary is extracted first, so a canary the text or name spelled, or a
 // name that opened a part of its own, is the input's and not a leak.
 func FuzzIndexExtractAttachment(f *testing.F) {
+	for index, seed := range testConformanceSeeds(f) {
+		f.Add("see the sheet", seed, "seed.bin", uint8(index))
+	}
 	f.Fuzz(func(t *testing.T, text string, attachment []byte, name string, shape uint8) {
 		// A line break in the name, or the boundary anywhere, lays out other parts than these two, which is the
 		// input's choice and no leak.
@@ -117,7 +138,7 @@ func FuzzIndexExtractAttachment(f *testing.F) {
 				"--zz-boundary-zz\nContent-Type: text/plain\n\n"+text+"\n--zz-boundary-zz\nContent-Type: "+mediaType+"\nContent-Disposition: "+disposition+"\nContent-Transfer-Encoding: "+encoding+"\n\n"+body+"\n--zz-boundary-zz--\n")
 		}
 		holdsCanary := func(message []byte) bool {
-			for _, document := range indexExtractMail([]byte("m/202611/00/1"), message) {
+			for _, document := range indexExtractMail([]byte("m/202611/00/1"), message, DefaultIndexFormatSettings()) {
 				for _, field := range document.Fields {
 					if bytes.Contains(bytes.ToLower(field), canary) {
 						return true

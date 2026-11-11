@@ -1,12 +1,15 @@
 //go:build !ios_extension
 
-// Matching (§11.14's plan and chains rows; R-EVS-14; D-EVS-44; FS-107; SEARCH-M10-23): one partition's candidates
-// for a query. Per shard the query's trigrams are looked up rarest first, a term with an absent trigram matching
-// nothing there and a group none of whose terms is present ending that shard; only the query's lists are decoded, read
-// through the shard's frames, and intersected rarest first (search_intersect.go). Heads and slots no merge absorbed are
-// scanned per document, a full entry's key set or a diff's composed chain (search_chains.go) holding every trigram of a
-// term in each group. A diff below its key's newest entry is no candidate and alarms nothing; a current one whose
-// chain breaks the format reads not yet searchable and names its signer.
+// Matching (§11.14's plan and chains rows, as DESIGN-DETAILS 1.2.9 rewrites them; R-EVS-14; D-EVS-44; FS-107;
+// SEARCH-M10-23 and SEARCH-M10-45): one partition's candidates for a query. Per shard the query's trigrams are looked
+// up rarest first, a term with an absent trigram matching nothing there and a group none of whose terms is present
+// ending that shard; only the query's lists are decoded, read through the shard's frames, and intersected rarest first
+// (search_intersect.go). Heads, sealed slots and unabsorbed large entries are scanned per document, a full entry's key
+// set or a diff's set resolved in one step from its own writer's files (search_chains.go) holding every trigram of a
+// term in each group. A slot or large entry at or below its writer's watermark is not scanned: it is read only as a
+// diff's base. An unabsorbed diff whose base its writer's files do not hold reads not yet searchable and names its
+// signer, whatever its document's newest version, since under own bases no honest writer leaves one; the erasure set's
+// documents are left out before anything is resolved. A resolved diff below its key's newest version is no candidate.
 //
 // A candidate is where a document's row sits and its n_d, nothing more: masking, confirmation and ranking read its row
 // lazily in rank order (SEARCH-M10-24), so a partition's candidates cost a few words each, and past
@@ -32,10 +35,10 @@ type searchSlotSource struct {
 	slot   *indexSlot
 	writer Id
 	seq    uint32
-	// The writer's head: never a chain's base.
+	// The writer's head: never a diff's base.
 	head bool
-	// A sealed slot or large entry the bucket's manifest shows absorbed: its entries are in the shards, or superseded,
-	// so it holds no candidate, though a chain may still resolve in it.
+	// A slot or large entry at or below its writer's watermark, other than its head: what it held is in the shards, so
+	// it holds no candidate and is read only as a diff's base (1.2.1).
 	absorbed bool
 	// Its file's path and its version's signer, which an alarm names.
 	path   string
@@ -91,6 +94,9 @@ type searchMatchArgs struct {
 	// The newest version of a key over every partition this device holds: §5.9's version table (CORE-M10-02's Probe),
 	// nil until it lands, when only the partition's own slots and large entries say.
 	newest func(key [indexIdByteCount]byte) (uint64, bool)
+	// Whether the ref's erasure set lists a key at or above a version: such a diff is left out before it is resolved,
+	// since a CLOSURE takes a listed document's base and its diffs in separate pushes. Nil lists nothing.
+	erased func(key [indexIdByteCount]byte, version uint64) bool
 	// Search.TooBroadCandidateCount.
 	maxCandidateCount int
 }
@@ -122,17 +128,7 @@ func searchMatch(args *searchMatchArgs) (*searchPartitionResult, error) {
 		}
 	}
 
-	shardReaders := []*indexShardReader{}
-	for _, shard := range args.source.shards {
-		shardReaders = append(shardReaders, shard.reader)
-	}
-	sealed := []*indexSlot{}
-	for _, slot := range args.source.slots {
-		if !slot.head {
-			sealed = append(sealed, slot.slot)
-		}
-	}
-	sources := searchNewChainSources(shardReaders, sealed)
+	sources := searchNewChainSources(args.source.slots)
 	newest := args.newest
 	if newest == nil {
 		newest = searchLocalNewest(args.source.slots)
@@ -148,26 +144,18 @@ func searchMatch(args *searchMatchArgs) (*searchPartitionResult, error) {
 					add(&searchCandidate{slot: slot, entry: entry, trigramCount: len(entry.keys)})
 				}
 			case indexEntryDiff:
-				if version, ok := newest(entry.key); ok && entry.version < version {
+				if args.erased != nil && args.erased(entry.key, entry.version) {
 					continue
 				}
-				chain, err := searchResolveChain(sources, entry)
+				chain, err := searchResolveChain(sources, slot, entry)
 				if err != nil {
 					if !isIndexMalformed(err) {
 						return nil, err
 					}
-					// Without the version table, a shard holding a newer version shows the diff stale: a merge kept
-					// that version and dropped the diff's base, which alarms nothing.
-					if args.newest == nil {
-						newer, err := searchShardsHoldNewer(shardReaders, entry.key, entry.version)
-						if err != nil {
-							return nil, err
-						}
-						if newer {
-							continue
-						}
-					}
 					result.unresolved = append(result.unresolved, &searchUnresolved{key: entry.key, version: entry.version, path: slot.path, signer: slot.signer})
+					continue
+				}
+				if version, ok := newest(entry.key); ok && entry.version < version {
 					continue
 				}
 				holds := query.Empty()
@@ -183,29 +171,6 @@ func searchMatch(args *searchMatchArgs) (*searchPartitionResult, error) {
 		}
 	}
 	return result, nil
-}
-
-// Whether a shard holds key at a version above version, a row or a tombstone.
-func searchShardsHoldNewer(shards []*indexShardReader, key [indexIdByteCount]byte, version uint64) (bool, error) {
-	for _, shard := range shards {
-		_, shardVersion, found, err := searchShardFind(shard, key)
-		if err != nil {
-			return false, err
-		}
-		if found && version < shardVersion {
-			return true, nil
-		}
-		newer := false
-		err = shard.walkTombstones(func(tombstone *indexShardTombstone) {
-			if tombstone.key == key && version < tombstone.version {
-				newer = true
-			}
-		})
-		if err != nil || newer {
-			return newer, err
-		}
-	}
-	return false, nil
 }
 
 // Whether err says an index file broke its format.

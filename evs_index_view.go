@@ -29,6 +29,9 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
+// A view loaded without the format's settings, which every read and plan needs.
+var errIndexViewSettings = errors.New("index view without its format settings")
+
 // What loading a view reads.
 type indexViewArgs struct {
 	store    indexRefStore
@@ -42,6 +45,8 @@ type indexViewArgs struct {
 	// Whether a settings version's signer was one of the repo's admins (§8.8) when it signed. Nil counts no version,
 	// so only the defaults hold.
 	isAdmin func(file *indexFileVersion) bool
+	// The format's limits the view reads its files under, and that a plan from it writes under. Required.
+	settings *IndexFormatSettings
 }
 
 // Why a view alarmed.
@@ -81,6 +86,8 @@ type indexView struct {
 	// A file in a newer format: search reads status update for the ref.
 	newerFormat bool
 	alarms      []*indexViewAlarm
+	// What the view was loaded under.
+	settings *IndexFormatSettings
 }
 
 // One index root, i<n>.
@@ -146,6 +153,9 @@ func (self *indexViewSlot) seq() uint32 {
 // every bucket's slots and large entries. A store's failure fails the load; a file that breaks its format is dropped
 // and alarmed instead.
 func indexLoadView(ctx context.Context, args *indexViewArgs) (*indexView, error) {
+	if args.settings == nil {
+		return nil, errIndexViewSettings
+	}
 	listing, err := args.store.List(ctx, args.refVersion)
 	if err != nil {
 		return nil, err
@@ -157,6 +167,7 @@ func indexLoadView(ctx context.Context, args *indexViewArgs) (*indexView, error)
 		repoKind:  args.repoKind,
 		companion: args.companion,
 		head:      listing.head,
+		settings:  args.settings,
 	}
 	refVersion := listing.head.version
 
@@ -282,7 +293,7 @@ func (self *indexView) readValidated(ctx context.Context, file *indexFileVersion
 	if err != nil {
 		return nil, err
 	}
-	validated, err := indexValidateFile(path, indexBytesFrames(plaintext), file.contentSha256[:])
+	validated, err := indexValidateFile(path, indexBytesFrames(plaintext), file.contentSha256[:], self.settings)
 	switch {
 	case errors.Is(err, errIndexNewerFormat):
 		self.newerFormat = true
@@ -604,6 +615,45 @@ func (self *indexViewWriter) slotAt(k uint32) *indexViewSlot {
 		}
 	}
 	return nil
+}
+
+// The writer's unabsorbed files (DESIGN-DETAILS 1.2.1): its head, and every other slot and large entry whose seq is
+// above absorbed, the bucket's manifest watermark for it.
+func (self *indexViewWriter) unabsorbed(absorbed uint32) []*indexViewSlot {
+	head := self.head()
+	files := []*indexViewSlot{}
+	for _, slot := range self.slots {
+		if slot == head || absorbed < slot.seq() {
+			files = append(files, slot)
+		}
+	}
+	for _, large := range self.large {
+		if absorbed < large.seq() {
+			files = append(files, large)
+		}
+	}
+	return files
+}
+
+// The writer's kept files (1.2.1): each file but its head that holds the base of a diff in one of its unabsorbed
+// slots, which the writer neither reuses nor removes. counts says whether a diff counts, which a plan uses to leave out
+// the head entries its push replaces; nil counts every one.
+func (self *indexViewWriter) kept(absorbed uint32, counts func(slot *indexViewSlot, entry *indexEntry) bool) map[*indexViewSlot]bool {
+	kept := map[*indexViewSlot]bool{}
+	for _, file := range self.unabsorbed(absorbed) {
+		if file.path.kind != indexPathSlot {
+			continue
+		}
+		for _, entry := range file.slot.entries {
+			if entry.kind != indexEntryDiff || (counts != nil && !counts(file, entry)) {
+				continue
+			}
+			if baseFile, _ := indexResolveBase(self, entry.key, entry.baseVersion, file); baseFile != nil {
+				kept[baseFile] = true
+			}
+		}
+	}
+	return kept
 }
 
 // The highest seq of the writer's slots and large entries in the bucket, 0 for none: its next file takes one more.
