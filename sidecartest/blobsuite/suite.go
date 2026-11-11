@@ -78,31 +78,53 @@ func newRunId() string {
 	return hex.EncodeToString(random[:])
 }
 
-// Runs every case on target, each under a prefix of its own.
+// One case's outcome, for a runner that is not go test: server/cli/filecluster-suite, which runs the same cases on
+// a new cluster and after each upgrade (§22.9) and reports each by name.
+type CaseResult struct {
+	Name string
+	// The case's first failure, nil for a pass.
+	Err error
+	// The case did not run: a settle case on a target with no Settle. It never counts as a pass.
+	Waits   bool
+	Elapsed time.Duration
+}
+
+// Runs every case on target, each under a prefix of its own, and answers each one's outcome in a fixed order: the
+// cases every store runs, then the settle build's, which wait on a target with no Settle. A failure in one does not
+// stop the next.
+func RunCases(ctx context.Context, target *Target) []*CaseResult {
+	runId := newRunId()
+	results := []*CaseResult{}
+	runCase := func(c *suiteCase) {
+		keys := &keySpace{prefix: fmt.Sprintf("blobsuite/%s/%s/", runId, c.name)}
+		started := time.Now()
+		err := c.run(ctx, target, keys)
+		results = append(results, &CaseResult{Name: c.name, Err: err, Elapsed: time.Since(started)})
+		cleanup(ctx, target.Cluster, keys.prefix)
+	}
+	for _, c := range cases() {
+		runCase(c)
+	}
+	for _, c := range append(settleCases(), namedDeleteCases()...) {
+		if target.Settle == nil {
+			results = append(results, &CaseResult{Name: c.name, Waits: true})
+			continue
+		}
+		runCase(c)
+	}
+	return results
+}
+
+// Runs every case on target as RunCases does, each failure a test error and each waiting case named in the log.
 func Run(t *testing.T, target *Target) {
 	t.Helper()
-	ctx := t.Context()
-	runId := newRunId()
-	for _, c := range cases() {
-		keys := &keySpace{prefix: fmt.Sprintf("blobsuite/%s/%s/", runId, c.name)}
-		if err := c.run(ctx, target, keys); err != nil {
-			t.Errorf("%s: %v", c.name, err)
+	for _, result := range RunCases(t.Context(), target) {
+		switch {
+		case result.Waits:
+			t.Logf("waits for D-OPS-20's build: %s", result.Name)
+		case result.Err != nil:
+			t.Errorf("%s: %v", result.Name, result.Err)
 		}
-		cleanup(ctx, target.Cluster, keys.prefix)
-	}
-	settleBuildCases := append(settleCases(), namedDeleteCases()...)
-	if target.Settle == nil {
-		for _, c := range settleBuildCases {
-			t.Logf("waits for D-OPS-20's build: %s", c.name)
-		}
-		return
-	}
-	for _, c := range settleBuildCases {
-		keys := &keySpace{prefix: fmt.Sprintf("blobsuite/%s/%s/", runId, c.name)}
-		if err := c.run(ctx, target, keys); err != nil {
-			t.Errorf("%s: %v", c.name, err)
-		}
-		cleanup(ctx, target.Cluster, keys.prefix)
 	}
 }
 
