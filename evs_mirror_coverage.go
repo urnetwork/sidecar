@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A mirror's coverage, which mirrors this device keeps, and `ur status`'s coverage lines (§11.13's status row,
 // D-EVS-17, R-EVS-17, owner decision 150; EVSB-M2-19).
 //

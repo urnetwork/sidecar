@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // A full mirror of one repo (§11.13's durability rows, D-EVS-17, R-EVS-17, owner decisions 90, 94, 150; EVSB-M2-19):
 // every record and object a committed push names, held in the repo's sealed mirror (evs_mirror_layout.go) as the
 // customer's own copy, since no operator copy of the file clusters exists and slots live only on the cluster and here
@@ -284,6 +286,10 @@ func (self *EvsMirror) Sync(ctx context.Context) (*EvsMirrorSyncResult, error) {
 		staleSlotIds:   staleSlotIds,
 		keyGenerations: keyGenerations,
 		erasedThrough:  state.ErasedThrough,
+	}
+	// a generation gkm gave no key for at an earlier sync is asked again, so a key still missing stays named
+	for _, generation := range state.KeyGenerationsMissing {
+		run.noteGeneration(ctx, generation)
 	}
 	refStates := []*EvsMirrorRefState{}
 	for _, head := range heads {

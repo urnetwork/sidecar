@@ -9,10 +9,14 @@ package sidecartest
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/evsservice"
@@ -372,4 +376,77 @@ func readAllAndClose(object *sidecar.BlobObject) ([]byte, error) {
 	buffer := &bytes.Buffer{}
 	_, err := buffer.ReadFrom(object.Body)
 	return buffer.Bytes(), err
+}
+
+// A gkm client that gives no key for one generation while refusing is set.
+type mirrorRefusingGkm struct {
+	sidecar.GkmClient
+	generation uint64
+	refusing   *bool
+}
+
+func (self *mirrorRefusingGkm) RepoKey(ctx context.Context, repoId sidecar.Id, generation uint64) (*sidecar.EvsRepoKey, error) {
+	if *self.refusing && generation == self.generation {
+		return nil, errors.New("no key for this generation")
+	}
+	return self.GkmClient.RepoKey(ctx, repoId, generation)
+}
+
+// The RK ladder is §11.13's: a generation gkm gives no key for leaves the mirror partial, at the sync that found it
+// and at every later one until gkm gives it, though no new version names it again.
+func TestEvsMirrorNamesAMissingKeyUntilGkmGivesIt(t *testing.T) {
+	world, _, _ := newMirrorWorld(t)
+	reader := world.device("r", nil)
+	refusing := true
+	gkm := &mirrorRefusingGkm{GkmClient: reader.gkm, generation: 1, refusing: &refusing}
+	identity := &sidecar.SidecarIdentity{
+		NetworkId: world.networkId, SidecarId: reader.signer.SidecarId, ClientId: world.clientId, Generation: 1, IdentityPublicKey: reader.signer.PublicKey(),
+	}
+	client, err := sidecar.NewEvsClient(&sidecar.EvsClientArgs{
+		NetworkId: world.networkId,
+		EvsUrl:    "https://evs.example",
+		Transport: &epochTransport{world: world, device: reader},
+		ServiceToken: func(ctx context.Context, resource string, scopes []string) (string, error) {
+			connectSidecarId := connect.Id(reader.signer.SidecarId)
+			return world.host.Authenticator.Issue(&sidecar.Principal{
+				NetworkId: connect.Id(world.networkId), ClientId: connect.Id(world.clientId), SidecarId: &connectSidecarId,
+				Audience: evsservice.EvsAudience, Scopes: scopes, IssuedAt: world.clock.Now(), ExpiresAt: world.clock.Now().Add(15 * time.Minute),
+			}), nil
+		},
+		Sign:     sidecar.EvsSignFunction(reader.signer.Sign),
+		Identity: func() *sidecar.SidecarIdentity { return identity },
+		Gkm:      gkm,
+		Store:    NewFakeStore().Root(),
+		Config:   func() sidecar.GkmAuthView { return world.currentView() },
+		Clock:    &epochDeviceClock{clock: world.clock},
+		Log:      sidecar.NewNoopLogger(),
+		Settings: sidecar.DefaultEvsSettings(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	mirror, err := sidecar.NewEvsMirror(client, world.repoId, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for sync := range 2 {
+		if _, err := mirror.Sync(world.ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := mirror.Check(world.ctx); err != nil {
+			t.Fatal(err)
+		}
+		coverage, err := mirror.Coverage(world.ctx)
+		if err != nil || coverage.Full || len(coverage.KeyGenerationsMissing) != 1 {
+			t.Fatalf("sync %d with generation 1's key withheld: %+v %v", sync, coverage, err)
+		}
+	}
+	refusing = false
+	if _, err := mirror.Sync(world.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if coverage, err := mirror.Coverage(world.ctx); err != nil || !coverage.Full {
+		t.Fatalf("once gkm gives the key: %+v %v", coverage, err)
+	}
 }
