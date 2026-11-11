@@ -122,7 +122,7 @@ func defaultCheckSettings() *checkSettings {
 			iosExtensionSizeGate:      true,
 			sidecarHttpSizeGate:       true,
 		},
-		goVersion:                 "1.27.3",
+		goVersion:                 "1.27.4",
 		protocGenGoTool:           "google.golang.org/protobuf/cmd/protoc-gen-go",
 		normalizerOneXTextVersion: "v0.43.0",
 		allowedLicenses: []string{

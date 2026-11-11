@@ -728,7 +728,7 @@ func TestEachSwitchGovernsItsRow(t *testing.T) {
 		{
 			item: "from M10, a leg selecting a golang.org/x/text other than normalizer 1's",
 			plant: func(fixture *fixture) {
-				fixture.writeSibling("sdk/js/go.mod", "module @sdk@/js\n\ngo 1.27.3\n\nrequire golang.org/x/text v0.41.0\n")
+				fixture.writeSibling("sdk/js/go.mod", "module @sdk@/js\n\ngo 1.27.4\n\nrequire golang.org/x/text v0.41.0\n")
 			},
 			legs: []string{"root linux/amd64"},
 		},

@@ -221,7 +221,7 @@ func plantIosExtensionLibrary(t *testing.T, constraintLine string, planted ...pl
 		fixture.writeSibling(path.Join(library.sibling, library.directory, library.packageName+".go"), "package "+library.packageName+"\n")
 		if !required[library.modulePath] {
 			required[library.modulePath] = true
-			fixture.writeSibling(library.sibling+"/go.mod", "module "+library.modulePath+"\n\ngo 1.27.3\n")
+			fixture.writeSibling(library.sibling+"/go.mod", "module "+library.modulePath+"\n\ngo 1.27.4\n")
 			fixture.requireLocal(library.modulePath, library.version, library.sibling)
 		}
 	}
@@ -259,7 +259,7 @@ func TestLegsAllowsARefusedModuleConnectAlreadyLinks(t *testing.T) {
 	brotli := plantedIosExtensionRefusedLibraries[brotliIndex]
 	fixture := newFixture(t)
 	fixture.keepLegs(iosExtensionLegName)
-	fixture.writeSibling(brotli.sibling+"/go.mod", "module "+brotli.modulePath+"\n\ngo 1.27.3\n")
+	fixture.writeSibling(brotli.sibling+"/go.mod", "module "+brotli.modulePath+"\n\ngo 1.27.4\n")
 	fixture.writeSibling(path.Join(brotli.sibling, brotli.directory, brotli.packageName+".go"), "package "+brotli.packageName+"\n")
 	fixture.writeSibling("connect/go.mod", fixtureFiles["connect/go.mod"]+"\nrequire "+brotli.modulePath+" "+brotli.version+"\n\nreplace "+brotli.modulePath+" => ../"+brotli.sibling+"\n")
 	fixture.writeSibling("connect/connect.go", "package connect\n\nimport (\n\t_ \"@glog@\"\n\t_ \""+brotli.importPath()+
@@ -380,7 +380,7 @@ func plantMailLibrary(t *testing.T, planted plantedMailLibrary, constraintLine s
 	t.Helper()
 	fixture := newFixture(t)
 	fixture.keepLegs(sidecarHttpLegName)
-	fixture.writeSibling(planted.sibling+"/go.mod", "module "+planted.modulePath+"\n\ngo 1.27.3\n")
+	fixture.writeSibling(planted.sibling+"/go.mod", "module "+planted.modulePath+"\n\ngo 1.27.4\n")
 	fixture.writeSibling(planted.sibling+"/"+planted.packageName+"/"+planted.packageName+".go", "package "+planted.packageName+"\n")
 	fixture.requireLocal(planted.modulePath, planted.version, planted.sibling)
 	fixture.write("mail_planted.go", "//go:build "+constraintLine+"\n\npackage sidecar\n\nimport _ \""+planted.importPath+"\"\n")
@@ -653,7 +653,7 @@ func TestLegsReadTheirOwnBuildConfiguration(t *testing.T) {
 	t.Setenv("GOOS", "plan9")
 	t.Setenv("GOFLAGS", "-tags=sdk_mobile_bind")
 	fixture := newFixture(t)
-	fixture.writeSibling("marks/go.mod", "module example.com/marks\n\ngo 1.27.3\n")
+	fixture.writeSibling("marks/go.mod", "module example.com/marks\n\ngo 1.27.4\n")
 	for _, mark := range []string{"browser", "mobile", "native", "testonly"} {
 		fixture.writeSibling("marks/"+mark+"/"+mark+".go", "package "+mark+"\n")
 	}
@@ -697,7 +697,7 @@ func TestLegsReadNoGoEnvFile(t *testing.T) {
 	t.Setenv("GOENV", goEnvPath)
 	fixture := newFixture(t)
 	fixture.keepLegs("root linux/amd64")
-	fixture.writeSibling("marks/go.mod", "module example.com/marks\n\ngo 1.27.3\n")
+	fixture.writeSibling("marks/go.mod", "module example.com/marks\n\ngo 1.27.4\n")
 	for _, mark := range []string{"experiment", "level"} {
 		fixture.writeSibling("marks/"+mark+"/"+mark+".go", "package "+mark+"\n")
 	}

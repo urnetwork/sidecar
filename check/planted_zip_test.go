@@ -51,7 +51,7 @@ func TestHygieneFailsOnATrailingDot(t *testing.T) {
 func TestHygieneFailsOnAPathInANestedModule(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.write("smtpproof/testdata/aux.txt", "a vector\n")
-	fixture.write("testdata/consumer/go.mod", "module consumer.example/m\n\ngo 1.27.3\n")
+	fixture.write("testdata/consumer/go.mod", "module consumer.example/m\n\ngo 1.27.4\n")
 	fixture.write("testdata/consumer/lpt1", "a vector\n")
 	wantFindings(t, fixture.open().moduleZipFindings(t),
 		"smtpproof/testdata/aux.txt: a module zip may not hold this path: its element \"aux.txt\" is AUX",
@@ -114,7 +114,7 @@ func TestHygieneAllowsThePathsAModuleZipTakes(t *testing.T) {
 func writePlantedModuleZip(t *testing.T, proxyDirectory string, version string, names []string) {
 	t.Helper()
 	const modulePath = "zip.example/check"
-	goMod := "module " + modulePath + "\n\ngo 1.27.3\n"
+	goMod := "module " + modulePath + "\n\ngo 1.27.4\n"
 	versions := filepath.Join(proxyDirectory, filepath.FromSlash(modulePath), "@v")
 	if err := os.MkdirAll(versions, 0o700); err != nil {
 		t.Fatal(err)

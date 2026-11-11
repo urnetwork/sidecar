@@ -36,7 +36,7 @@ func (self *repository) mcpSdkLegFindings(t testing.TB) []string {
 func TestDepsFailsOnGoSdkInAClientLeg(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.keepLegs("root linux/amd64", "cli linux/amd64")
-	fixture.writeSibling("gosdk/go.mod", "module "+mcpSdkModulePath+"\n\ngo 1.27.3\n")
+	fixture.writeSibling("gosdk/go.mod", "module "+mcpSdkModulePath+"\n\ngo 1.27.4\n")
 	fixture.writeSibling("gosdk/mcp/mcp.go", "package mcp\n")
 	fixture.requireLocal(mcpSdkModulePath, "v1.7.0", "gosdk")
 	fixture.write("planted.go", "package sidecar\n\nimport _ \""+mcpSdkModulePath+"/mcp\"\n")
