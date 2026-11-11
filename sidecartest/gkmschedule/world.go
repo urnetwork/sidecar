@@ -1431,8 +1431,9 @@ func (self *FsKeysWorld) AgreeOnEpochIn(groupId sidecar.Id, devices ...*FsKeysDe
 }
 
 // The newest generation a removed device opens from everything gkm stores, as the model's Reach computes it (6.3):
-// every epoch its own MLS state can follow from the one it last held, each GenWrap under that epoch's KEK, and every
-// delivery gkm holds to it under each key it kept. The ladder opens only downward, so this bounds what it reads.
+// every epoch its own MLS state can follow from the one it last held, each GenWrap and each generation's leaf_wrap
+// under that epoch's KEK, and every delivery gkm holds to it under each key it kept. The ladder opens only downward,
+// so this bounds what it reads.
 func (self *FsKeysWorld) RemovedReach(device *FsKeysDevice) uint64 {
 	return self.RemovedReachIn(device, self.RepoId, self.GroupId)
 }
@@ -1441,13 +1442,16 @@ func (self *FsKeysWorld) RemovedReach(device *FsKeysDevice) uint64 {
 func (self *FsKeysWorld) RemovedReachIn(device *FsKeysDevice, repoId sidecar.Id, groupId sidecar.Id) uint64 {
 	self.t.Helper()
 	reach := uint64(0)
+	// the KEK of each epoch the device's MLS state reaches, which a GenWrap or a leaf_wrap of that epoch opens under
+	epochKeks := map[uint64][]byte{}
 	open := func(epoch uint64, exporter sidecar.MlsExporter, object *protocol.GkmEpochObject) {
-		generation := object.GetHeader().GetGeneration()
-		if generation == 0 || len(object.GetGenWrap()) == 0 {
-			return
-		}
 		kek, err := sidecar.MlsKek(exporter, repoId)
 		if err != nil {
+			return
+		}
+		epochKeks[epoch] = kek
+		generation := object.GetHeader().GetGeneration()
+		if generation == 0 || len(object.GetGenWrap()) == 0 {
 			return
 		}
 		if _, err := sidecar.OpenGkmGenWrap(self.GenerationIn(groupId, generation), groupId, epoch, kek, object.GetGenWrap()); err == nil && reach < generation {
@@ -1482,6 +1486,14 @@ func (self *FsKeysWorld) RemovedReachIn(device *FsKeysDevice, repoId sidecar.Id,
 	for generation := uint64(1); generation <= uint64(self.GenerationCountIn(groupId)); generation += 1 {
 		if reach < generation && self.opensDelivery(groupId, generation, sidecar.GkmWrapTypeReader, device.SidecarId().Bytes(), keys) {
 			reach = generation
+		}
+		parsed := self.GenerationIn(groupId, generation)
+		if leafWrap := parsed.Rotate.GetLeafWrap(); leafWrap != nil && reach < generation {
+			if kek, ok := epochKeks[leafWrap.GetEpoch()]; ok {
+				if _, err := sidecar.OpenGkmLeafWrap(parsed, kek); err == nil {
+					reach = generation
+				}
+			}
 		}
 	}
 	return reach

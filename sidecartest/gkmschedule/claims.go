@@ -17,14 +17,22 @@ package gkmschedule
 //   - a rotation killed before its claim resumes from its keychain draft with the same bytes after a restart, which
 //     reaches another gkm instance over the same stores;
 //   - a commit whose header generation is below its predecessor's, made with the real subset past the client's own
-//     checks, is refused by gkm.
+//     checks, is refused by gkm;
+//   - a delivery to a non-holder: a hostile leaf claims a generation whose leaf_wrap lies under an epoch whose tree
+//     still holds a revoked leaf, which gkm, seeing no tree, takes; every member judging it poisons it, alarms
+//     naming the hostile leaf, and rotates REMOVE past it, the revoked leaf reaching nothing of that rotation;
+//   - 6.6's added rows: a rotator at a stale tip refuses to claim past a generation pinned above its state, and gkm
+//     refuses a claim whose auth is below gen/<g>'s; one device's last-resort KeyPackage serves two Adds in two
+//     groups, and it joins both.
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // FS-15: an agent's ReaderWraps reopen the gate while every leaf is offline; the read_only leaf's self-update waits
@@ -309,5 +317,223 @@ func FsKeysScheduleCommitBelowItsPredecessor(t FsKeysT, newWorld FsKeysNewWorld)
 	}
 	if status := world.InjectPathCommit(a, 2); status != http.StatusOK {
 		t.Errorf("the twin at the newest generation: %d", status)
+	}
+}
+
+// Claims the repo's next generation as device, past every check its client makes, as a hostile leaf would: cause
+// REMOVE at its own state, its holders counted there, and one leaf_wrap under the KEK of the epoch it holds, whatever
+// that epoch's tree holds. gkm's answer.
+func (self *FsKeysWorld) InjectLeafWrapRotation(device *FsKeysDevice) int {
+	self.t.Helper()
+	return self.InjectRotation(device, device.state.Pin(), sidecar.GkmCauseRemove, true)
+}
+
+// Claims the repo's next generation as device, past every check its client makes: of cause, at pin, its holders
+// counted at the state pin names, with one leaf_wrap under the KEK of the epoch device holds when leafWrap says so.
+// gkm's answer.
+func (self *FsKeysWorld) InjectRotation(device *FsKeysDevice, pin *bridge.AuthPin, cause sidecar.GkmCause, leafWrap bool) int {
+	self.t.Helper()
+	newest := uint64(self.GenerationCount())
+	key, err := device.Client.RepoKey(self.Ctx, self.RepoId, newest)
+	if err != nil {
+		self.t.Fatalf("%s's generation %d: %v", device.Label, newest, err)
+	}
+	now := self.Clock.Now()
+	state, err := self.Log.Tip().At(pin)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	holders, err := sidecar.KeyHolders(state, self.RepoId, now)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	args := &sidecar.GkmGenerationArgs{Cause: cause, Auth: pin, Time: now, HoldersSha256: holders.Sha256()}
+	if leafWrap {
+		group, err := device.Mls.LoadGroup(self.GroupId)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		if args.LeafWrapKek, err = sidecar.MlsKek(group, self.RepoId); err != nil {
+			self.t.Fatal(err)
+		}
+		args.LeafWrapEpoch = group.Epoch()
+	}
+	_, rotate, err := key.NextGeneration(args)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	signed, err := sidecar.SignGenRotate(rotate, device.signer.Sign)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	err = device.Api.ClaimGeneration(self.Ctx, self.RepoId, self.GroupId, newest+1, signed)
+	if err == nil {
+		return http.StatusOK
+	}
+	if gkmError, ok := sidecar.GkmErrorOf(err); ok {
+		return gkmError.Status
+	}
+	self.t.Fatalf("the injected rotation: %v", err)
+	return 0
+}
+
+// Whether device raised a refusal naming committer.
+func (self *FsKeysDevice) RefusedBy(committer *FsKeysDevice) bool {
+	for _, alarm := range self.Alarms {
+		if alarm.Kind == sidecar.GkmAlarmRefused && alarm.SidecarId == committer.SidecarId() {
+			return true
+		}
+	}
+	return false
+}
+
+// FS-15: a delivery to a non-holder makes members alarm and rotate. x is revoked and no Remove has landed, so the
+// tree still holds x's leaf; the hostile leaf h claims generation 2 with a leaf_wrap under the KEK of that tree's
+// epoch, which x holds, and gkm, which reads no tree, takes it. a, judging generation 2, poisons it and alarms
+// naming h. A commit must carry gen/'s newest, the poisoned generation, so a's leaf waits and its EnsureWritable
+// rotates REMOVE past it by ReaderWraps to the leaves it holds as holders, wrapping nothing into the tree that holds
+// x; its pending run then commits the Remove carrying that generation. x reaches the poisoned generation, as h
+// meant, and nothing of the one past it.
+func FsKeysScheduleDeliveryToANonHolder(t FsKeysT, newWorld FsKeysNewWorld) {
+	world := newWorld(protocol.RepoKind_REPO_KIND_GENERAL)
+	a := world.AddMember("a", false)
+	h := world.AddMember("h", false)
+	x := world.AddMember("x", false)
+	world.Grant(true, a, h, x)
+	world.Admin(a)
+	world.Advance()
+	world.Publish()
+	world.Create(a)
+	world.AddPending(a)
+	world.Revoke(x)
+	world.Advance()
+	if status := world.InjectLeafWrapRotation(h); status != http.StatusOK {
+		t.Fatalf("gkm refused the hostile rotation, which it cannot judge: %d", status)
+	}
+	// the sync takes the poisoned generation as refused, whatever it answers
+	a.Client.SyncRepo(world.Ctx, world.RepoId)
+	if !a.RefusedBy(h) {
+		t.Errorf("a raised no refusal naming the hostile leaf: %+v", a.Alarms)
+	}
+	key, err := a.Client.EnsureWritable(world.Ctx, world.RepoId)
+	if err != nil {
+		t.Fatalf("a's EnsureWritable past the poisoned generation: %v", err)
+	}
+	if key.Generation() != 3 || key.Cause() != sidecar.GkmCauseRemove {
+		t.Fatalf("a seals to generation %d, cause %d", key.Generation(), key.Cause())
+	}
+	if world.Generation(3).Rotate.GetLeafWrap() != nil {
+		t.Errorf("generation 3 carries a leaf_wrap while the tree holds the revoked leaf")
+	}
+	recipients := world.WrapRecipients(3)
+	if !recipients[h.SidecarId()] || recipients[x.SidecarId()] {
+		t.Errorf("generation 3's ReaderWraps: to h %v, to x %v", recipients[h.SidecarId()], recipients[x.SidecarId()])
+	}
+	if err := a.Client.RunPending(world.Ctx, world.RepoId); err != nil {
+		t.Fatalf("a's Remove: %v", err)
+	}
+	if labels := world.Roster(a); labels != "ah" {
+		t.Errorf("the tree past the Remove: %s", labels)
+	}
+	if header := world.EpochObject(world.NewestEpoch()).GetHeader(); header.GetGeneration() != 3 {
+		t.Errorf("the Remove carries generation %d", header.GetGeneration())
+	}
+	if reached := world.RemovedReach(x); reached != 2 {
+		t.Errorf("the revoked leaf reaches generation %d, not the poisoned 2 alone", reached)
+	}
+}
+
+// FS-15, 6.6's stale tip: b, its state left behind while a rotates at a newer one, refuses to claim past gen/2, whose
+// pin is above its tip (ErrGkmAuthAhead); gkm refuses a claim of gen/3 pinned below gen/2's auth; and once b takes
+// the newest state it takes gen/2 and its next rotation lands.
+func FsKeysScheduleStaleTipClaimRefused(t FsKeysT, newWorld FsKeysNewWorld) {
+	world := newWorld(protocol.RepoKind_REPO_KIND_GENERAL)
+	a := world.AddMember("a", false)
+	b := world.AddMember("b", false)
+	world.Grant(true, a, b)
+	world.Admin(a)
+	world.Advance()
+	world.Publish()
+	world.Create(a)
+	world.AddPending(a)
+	stale := world.Log.Tip()
+	b.Offline = true
+	c := world.AddAgent("c")
+	world.Grant(false, c)
+	world.Advance()
+	world.Publish()
+	if key, err := a.Client.RotateRepo(world.Ctx, world.RepoId); err != nil || key.Generation() != 2 {
+		t.Fatalf("a's rotation at the newer state: %v", err)
+	}
+	b.Offline = false
+	if _, err := b.Client.RotateRepo(world.Ctx, world.RepoId); !errors.Is(err, sidecar.ErrGkmAuthAhead) {
+		t.Errorf("a rotation at a stale tip: %v", err)
+	}
+	if world.GenerationCount() != 2 {
+		t.Fatalf("a stale rotator claimed: %d generations", world.GenerationCount())
+	}
+	if status := world.InjectRotation(a, stale.Pin(), sidecar.GkmCauseRequest, false); status != http.StatusForbidden {
+		t.Errorf("a claim pinned below gen/2's auth: %d", status)
+	}
+	if world.GenerationCount() != 2 {
+		t.Fatalf("the refused claim stands")
+	}
+	// at the newest state b takes gen/2, newer and covering, and claims nothing; its next rotation claims gen/3
+	b.Take(world.Log.Tip())
+	if key, err := b.Client.RotateRepo(world.Ctx, world.RepoId); err != nil || key.Generation() != 2 || world.GenerationCount() != 2 {
+		t.Errorf("b's first rotation at the newest state: %v", err)
+	}
+	if key, err := b.Client.RotateRepo(world.Ctx, world.RepoId); err != nil || key.Generation() != 3 {
+		t.Errorf("b's rotation at the newest state: %v", err)
+	}
+}
+
+// One last-resort KeyPackage and nothing else, uploaded with the device's ReaderKey: a device whose one-time ones
+// are spent.
+func (self *FsKeysDevice) PublishLastResortOnly() {
+	world := self.world
+	world.t.Helper()
+	self.published = true
+	self.PublishReaderKey()
+	keyPackage, err := self.Mls.CreateKeyPackage(true)
+	if err != nil {
+		world.t.Fatal(err)
+	}
+	world.Again(self.Label+"'s last-resort KeyPackage", func() error { return self.Api.UploadKeyPackages(world.Ctx, [][]byte{keyPackage.Encoded}) })
+}
+
+// FS-15, 6.6's last-resort row: c's one KeyPackage is its last-resort one, which serves the Adds of both the config
+// group and the repo's; c joins both, each Welcome found by its pointer, keyed by group and epoch, and notes the
+// last-resort join it owes a path for.
+func FsKeysScheduleLastResortInTwoGroups(t FsKeysT, newWorld FsKeysNewWorld) {
+	world := newWorld(protocol.RepoKind_REPO_KIND_GENERAL)
+	a := world.AddMember("a", false)
+	c := world.AddMember("c", false)
+	world.Grant(true, a)
+	world.Grant(false, c)
+	world.Admin(a)
+	world.ConfigWriters(a)
+	world.Advance()
+	c.PublishLastResortOnly()
+	world.Publish()
+	world.CreateConfig(a)
+	world.Create(a)
+	world.Again("a's pending run in the config group", func() error { return a.Client.RunPending(world.Ctx, world.ConfigRepoId) })
+	world.Again("a's pending run in the repo's group", func() error { return a.Client.RunPending(world.Ctx, world.RepoId) })
+	joined, err := c.Client.JoinWelcomes(world.Ctx)
+	if err != nil {
+		t.Fatalf("c's joins: %v", err)
+	}
+	if len(joined) != 2 {
+		t.Errorf("c joined %d groups through its last-resort KeyPackage", len(joined))
+	}
+	for _, groupId := range world.groupIds() {
+		if labels := world.RosterIn(c, groupId); labels != "ac" {
+			t.Errorf("group %s's tree as c holds it: %s", groupId, labels)
+		}
+		world.AgreeOnEpochIn(groupId, a, c)
+	}
+	if c.Client.LastResortJoinedAt().IsZero() {
+		t.Errorf("c noted no last-resort join")
 	}
 }
