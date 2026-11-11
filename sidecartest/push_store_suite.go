@@ -371,7 +371,7 @@ func casePushNotCanonicalRefused(env *pushSuiteEnv) error {
 		{Topic: sidecar.PushTopicSock, Version: 0},
 		{Topic: "sockets", Version: 1},
 		{Topic: "evs:not-an-id", Version: 1},
-		{Topic: sidecar.PushTopicSock, Version: 1, Body: make([]byte, pushservice.MaxHintByteCount+1)},
+		{Topic: sidecar.PushTopicSock, Version: 1, Body: make([]byte, pushservice.DefaultPushFormatSettings().MaxHintByteCount+1)},
 	} {
 		if _, err := env.writer.HintClient(env.ctx, clientId, hint); !errors.Is(err, pushservice.ErrHintInvalid) {
 			return fmt.Errorf("the writer took %q at %d: %v", hint.Topic, hint.Version, err)

@@ -17,7 +17,6 @@ package sidecartest
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -64,6 +63,8 @@ type netExchange struct {
 	links     map[netLinkKey]*LinkConditions
 	// the class the issuer seals into a pair's contracts, data where none is set (subprotocol_net.go)
 	contractClasses map[netLinkKey]protocol.ContractClass
+	// the provide mode the issuer gives a pair's contracts, by source and destination, Network when unset
+	contractProvideModes map[netLinkKey]protocol.ProvideMode
 	// each client's resident, by the client it serves (push_net.go)
 	residents map[connect.Id]*NetResident
 	// the clients the platform opened, which close ends
@@ -78,14 +79,15 @@ type netExchange struct {
 func newNetExchange(ctx context.Context, net *Net) *netExchange {
 	cancelCtx, cancel := context.WithCancel(ctx)
 	return &netExchange{
-		net:             net,
-		ctx:             cancelCtx,
-		cancel:          cancel,
-		random:          rand.New(rand.NewPCG(uint64(net.settings.LinkSeed), 0x11e7)),
-		clients:         map[connect.Id]*NetClient{},
-		links:           map[netLinkKey]*LinkConditions{},
-		contractClasses: map[netLinkKey]protocol.ContractClass{},
-		residents:       map[connect.Id]*NetResident{},
+		net:                  net,
+		ctx:                  cancelCtx,
+		cancel:               cancel,
+		random:               rand.New(rand.NewPCG(uint64(net.settings.LinkSeed), 0x11e7)),
+		clients:              map[connect.Id]*NetClient{},
+		links:                map[netLinkKey]*LinkConditions{},
+		contractClasses:      map[netLinkKey]protocol.ContractClass{},
+		contractProvideModes: map[netLinkKey]protocol.ProvideMode{},
+		residents:            map[connect.Id]*NetResident{},
 	}
 }
 
@@ -212,9 +214,10 @@ func (self *netContractIssuer) issue(createContract *protocol.CreateContract) (*
 	if destination == nil {
 		return nil, fmt.Errorf("no client %s", destinationId)
 	}
-	secretKey, ok := destination.Client.ContractManager().GetProvideSecretKey(protocol.ProvideMode_Network)
+	provideMode := self.exchange.contractProvideMode(self.sourceId, destinationId)
+	secretKey, ok := destination.Client.ContractManager().GetProvideSecretKey(provideMode)
 	if !ok {
-		return nil, errors.New("the destination provides nothing")
+		return nil, fmt.Errorf("the destination does not provide %s", provideMode)
 	}
 	storedContractBytes, err := connect.ProtoMarshal(&protocol.StoredContract{
 		ContractId:                 connect.NewId().Bytes(),
@@ -233,7 +236,7 @@ func (self *netContractIssuer) issue(createContract *protocol.CreateContract) (*
 		Contract: &protocol.Contract{
 			StoredContractBytes: storedContractBytes,
 			StoredContractHmac:  connect.SignStoredContract(self.settings, secretKey, storedContractBytes),
-			ProvideMode:         protocol.ProvideMode_Network,
+			ProvideMode:         provideMode,
 		},
 	}, connect.DefaultProtocolVersion)
 }

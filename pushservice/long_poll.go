@@ -43,10 +43,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// The most versions one PushReset part carries, which one envelope holds (§6.5's budget). A protocol
-// value.
-const MaxResetVersionCount = 48
-
 var (
 	// The process holds as many polls as its settings allow: answer 503 with Retry-After.
 	ErrLongPollBusy = errors.New("long-poll: too many held polls")
@@ -84,6 +80,8 @@ type LongPollSettings struct {
 	// How long the poll marker {scp_<C>}hb lives, so LeaseTouch runs at most once in it while Redis
 	// answers: 300 s (§6.16, §18.8).
 	LeaseTimeout time.Duration
+	// §6.8's wire limits: a reset here is one part of at most ResetPartVersionCount versions.
+	Format PushFormatSettings
 }
 
 // The defaults, the hold §6.6's.
@@ -94,12 +92,16 @@ func DefaultLongPollSettings() *LongPollSettings {
 		BusyRetryAfter:   5 * time.Second,
 		HintCount:        256,
 		LeaseTimeout:     300 * time.Second,
+		Format:           *DefaultPushFormatSettings(),
 	}
 }
 
 func (self *LongPollSettings) validate() error {
 	if self.HoldTimeout <= 0 || self.MaxHeldPollCount <= 0 || self.BusyRetryAfter <= 0 || self.HintCount <= 0 || self.LeaseTimeout < time.Second {
 		return errors.New("long-poll: every setting must be positive, the lease a second or more")
+	}
+	if err := self.Format.validate(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -398,9 +400,9 @@ func (self *LongPoll) read(ctx context.Context, clientId connect.Id, position lo
 	return response, nil
 }
 
-// One reset part from ver: its topics in name order, at most MaxResetVersionCount, complete only when
-// that is all of them, under an epoch drawn for this answer alone, since a poll's reset is a run of one
-// part (plan-PROTO-small-readings reading 5).
+// One reset part from ver: its topics in name order, at most the format's ResetPartVersionCount,
+// complete only when that is all of them, under an epoch drawn for this answer alone, since a poll's
+// reset is a run of one part (plan-PROTO-small-readings reading 5).
 func (self *LongPoll) reset(ctx context.Context, clientId connect.Id) (*protocol.PushReset, error) {
 	fieldValues, err := self.redis.HashGetAll(ctx, HintVersionsKey(clientId))
 	if err != nil {
@@ -414,9 +416,10 @@ func (self *LongPoll) reset(ctx context.Context, clientId connect.Id) (*protocol
 			}
 		}
 	})
-	complete := len(topics) <= MaxResetVersionCount
+	partVersionCount := self.settings.Format.ResetPartVersionCount
+	complete := len(topics) <= partVersionCount
 	if !complete {
-		topics = topics[:MaxResetVersionCount]
+		topics = topics[:partVersionCount]
 	}
 	versions := make([]*protocol.TopicVersion, 0, len(topics))
 	for _, topic := range topics {
@@ -459,12 +462,20 @@ var (
 	ErrVersionsCursor = errors.New("sync versions: cursor malformed")
 )
 
+// VersionsPageWithFormat on the protocol's limits.
+func VersionsPage(topicVersions map[string]uint64, cursor []byte) (*protocol.PollResponse, error) {
+	return VersionsPageWithFormat(DefaultPushFormatSettings(), topicVersions, cursor)
+}
+
 // One page of GET /sidecar/sync/versions?cursor= (plan-PROTO-sync-routes-durable-versions): a 200
 // PollResponse with reset set and no hints, the topics after the cursor's in name order, at most
-// MaxResetVersionCount, complete only on the last page, which alone carries no cursor. Every page of
-// one run carries the run's epoch, which the first page draws. topicVersions is what api answers for
-// the client: its ver hash, with what api holds of its own durable topics put over it.
-func VersionsPage(topicVersions map[string]uint64, cursor []byte) (*protocol.PollResponse, error) {
+// format's ResetPartVersionCount, complete only on the last page, which alone carries no cursor. Every
+// page of one run carries the run's epoch, which the first page draws. topicVersions is what api answers
+// for the client: its ver hash, with what api holds of its own durable topics put over it.
+func VersionsPageWithFormat(format *PushFormatSettings, topicVersions map[string]uint64, cursor []byte) (*protocol.PollResponse, error) {
+	if err := format.validate(); err != nil {
+		return nil, err
+	}
 	epoch := uint64(0)
 	afterTopic := ""
 	if 0 < len(cursor) {
@@ -495,9 +506,9 @@ func VersionsPage(topicVersions map[string]uint64, cursor []byte) (*protocol.Pol
 		}
 	}
 	slices.Sort(topics)
-	complete := len(topics) <= MaxResetVersionCount
+	complete := len(topics) <= format.ResetPartVersionCount
 	if !complete {
-		topics = topics[:MaxResetVersionCount]
+		topics = topics[:format.ResetPartVersionCount]
 	}
 	versions := make([]*protocol.TopicVersion, 0, len(topics))
 	for _, topic := range topics {

@@ -5,10 +5,13 @@
 //
 // A hint is lossy state sync, not a mailbox: a client that misses one resyncs at its next reconnect or
 // hourly refetch, so a failed hint costs latency, and the writer counts it and goes on. What it carries
-// is ids, kinds and versions, never content (R-PROTO-8), at most 256 B of it.
+// is ids, kinds and versions, never content (R-PROTO-8), at most the format's 256 B of it.
 //
-// §18.7's step 2, the wake enqueue that follows a hint for a client holding a token, is PROTO-M8-01's:
-// the script already returns tok and live, so owners never recode, and nothing enqueues until then.
+// A writer made with a WakeEnqueuer follows each script with §18.7's step 2 (wake_enqueue.go): for a
+// wake-class hint to a client the script found holding a token, a separate XADD to the wake queue, due
+// now when the hint is Forced or no resident is live. The enqueue never fails the hint: a lost wake
+// leaves the hint state as the script wrote it. A writer with none writes hints alone, as gkm's does,
+// whose topics wake no one.
 //
 // Safe for concurrent use.
 
@@ -26,9 +29,6 @@ import (
 
 	"github.com/urnetwork/sidecar"
 )
-
-// The most a hint's bytes may hold (§6.8): ids, kinds and versions, never content. A protocol value.
-const MaxHintByteCount = 256
 
 var (
 	// A hint whose topic §6.8's registry does not hold, or whose version is 0.
@@ -52,6 +52,8 @@ type HintWriterSettings struct {
 	StreamMaxLength int64
 	// How long ack lives from each raise: 1 h (§18.7). Whole seconds.
 	AckTimeout time.Duration
+	// §6.8's wire limits: a hint's bytes at most MaxHintByteCount.
+	Format PushFormatSettings
 }
 
 // The defaults: connect-4's hour and 256 entries, and §18.7's hour for ack.
@@ -60,6 +62,7 @@ func DefaultHintWriterSettings() *HintWriterSettings {
 		KeyTimeout:      1 * time.Hour,
 		StreamMaxLength: 256,
 		AckTimeout:      1 * time.Hour,
+		Format:          *DefaultPushFormatSettings(),
 	}
 }
 
@@ -68,6 +71,9 @@ func DefaultHintWriterSettings() *HintWriterSettings {
 func (self *HintWriterSettings) validate() error {
 	if self.KeyTimeout < time.Second || self.AckTimeout < time.Second || self.StreamMaxLength <= 0 {
 		return fmt.Errorf("%w: ttls must be whole seconds and the stream length positive", ErrHintInvalid)
+	}
+	if err := self.Format.validate(); err != nil {
+		return fmt.Errorf("%w: %w", ErrHintInvalid, err)
 	}
 	return nil
 }
@@ -90,10 +96,12 @@ type PushHintResult struct {
 	Version uint64
 	// n's value, the hint's seq.
 	Seq uint64
-	// {scp_<C>}tok, §18.7's wake token projection, nil while absent, which is always until M8.
+	// {scp_<C>}tok, §18.7's wake token projection, nil while absent.
 	Token []byte
-	// Whether {scp_<C>}live exists: the client's resident is up. False until M8's publishers write it.
+	// Whether {scp_<C>}live exists: the client's resident is up, its publisher writing it.
 	Live bool
+	// What §18.7's step 2 did after the script: WakeEnqueueNone for a writer with no WakeEnqueuer.
+	Wake WakeEnqueueOutcome
 }
 
 // Running totals, for a host's stats.
@@ -120,19 +128,27 @@ const (
 	hintResultUnresolved = "unresolved"
 )
 
-// Writes hints. NewHintWriter makes one.
+// Writes hints. NewHintWriter makes one, and NewWakingHintWriter one that enqueues wakes.
 type HintWriter struct {
 	redis    HintRedis
 	settings *HintWriterSettings
 	resolver PushClientResolver
+	// nil: hints alone
+	wake *WakeEnqueuer
 	// nil when the host gave no Metrics
 	hintCounter sidecar.MetricsCounter
 	stats       hintWriterStats
 }
 
-// A writer on redis. A nil settings takes the defaults. resolver may be nil until the host has one, and
-// then HintSidecars refuses (ErrHintSidecarsUnresolved). metrics may be nil.
+// A writer on redis that enqueues no wakes. A nil settings takes the defaults. resolver may be nil until
+// the host has one, and then HintSidecars refuses (ErrHintSidecarsUnresolved). metrics may be nil.
 func NewHintWriter(redis HintRedis, settings *HintWriterSettings, resolver PushClientResolver, metrics sidecar.Metrics) (*HintWriter, error) {
+	return NewWakingHintWriter(redis, settings, resolver, metrics, nil)
+}
+
+// NewHintWriter's writer, which follows each script with wake's §18.7 step 2: the writer of an owning
+// service whose topics wake, api's (core, team), evs's and mail's. A nil wake enqueues nothing.
+func NewWakingHintWriter(redis HintRedis, settings *HintWriterSettings, resolver PushClientResolver, metrics sidecar.Metrics, wake *WakeEnqueuer) (*HintWriter, error) {
 	if redis == nil {
 		return nil, fmt.Errorf("%w: no Redis", ErrHintInvalid)
 	}
@@ -146,6 +162,7 @@ func NewHintWriter(redis HintRedis, settings *HintWriterSettings, resolver PushC
 		redis:    redis,
 		settings: settings,
 		resolver: resolver,
+		wake:     wake,
 	}
 	if metrics != nil {
 		self.hintCounter = metrics.Counter("urnetwork_push_hint_total", "push hints by result", "result")
@@ -172,13 +189,14 @@ func (self *HintWriter) count(counter *atomic.Uint64, result string, count int) 
 	}
 }
 
-// Whether hint is one the script may write: a registry topic, a version above 0 and at most 256 B.
-func checkClientHint(hint *sidecar.ClientHint) error {
+// Whether hint is one the script may write: a registry topic, a version above 0 and at most the format's
+// MaxHintByteCount.
+func (self *HintWriter) checkClientHint(hint *sidecar.ClientHint) error {
 	if hint == nil || sidecar.PushTopicClassOf(hint.Topic) == sidecar.PushTopicUnknown || hint.Version == 0 {
 		return ErrHintInvalid
 	}
-	if MaxHintByteCount < len(hint.Body) {
-		return fmt.Errorf("%w: %d bytes past %d", ErrHintInvalid, len(hint.Body), MaxHintByteCount)
+	if maxHintByteCount := self.settings.Format.MaxHintByteCount; maxHintByteCount < len(hint.Body) {
+		return fmt.Errorf("%w: %d bytes past %d", ErrHintInvalid, len(hint.Body), maxHintByteCount)
 	}
 	return nil
 }
@@ -186,7 +204,7 @@ func checkClientHint(hint *sidecar.ClientHint) error {
 // See sidecar.Push. Runs each client's script in turn, every one whatever the others did, and answers
 // the failures joined, so one client's error says nothing of another's hint.
 func (self *HintWriter) Hint(ctx context.Context, clientIds []connect.Id, hint *sidecar.ClientHint) error {
-	if err := checkClientHint(hint); err != nil {
+	if err := self.checkClientHint(hint); err != nil {
 		self.count(&self.stats.failedCount, hintResultFailed, len(clientIds))
 		return err
 	}
@@ -204,7 +222,7 @@ func (self *HintWriter) Hint(ctx context.Context, clientIds []connect.Id, hint *
 // is no error: a device mid-change resyncs within the hour. With no resolver, every hint here is lost,
 // counted and refused (plan-KEYS-hint-addressing's interim).
 func (self *HintWriter) HintSidecars(ctx context.Context, sidecarIds []connect.Id, hint *sidecar.ClientHint) error {
-	if err := checkClientHint(hint); err != nil {
+	if err := self.checkClientHint(hint); err != nil {
 		self.count(&self.stats.failedCount, hintResultFailed, len(sidecarIds))
 		return err
 	}
@@ -230,17 +248,18 @@ func (self *HintWriter) HintSidecars(ctx context.Context, sidecarIds []connect.I
 	return self.Hint(ctx, clientIds, hint)
 }
 
-// One client's script, answering §18.7's {h, tok, live} for the wake step that follows it.
+// One client's script, answering §18.7's {h, tok, live} and what the wake step that follows it did.
 func (self *HintWriter) HintClient(ctx context.Context, clientId connect.Id, hint *sidecar.ClientHint) (*PushHintResult, error) {
-	if err := checkClientHint(hint); err != nil {
+	if err := self.checkClientHint(hint); err != nil {
 		self.count(&self.stats.failedCount, hintResultFailed, 1)
 		return nil, err
 	}
 	return self.hintClient(ctx, clientId, hint)
 }
 
-// The script for one client, hint already checked. The script is the linearization point: its barrier
-// key is the client id, opaque (I-13).
+// The script for one client, hint already checked, then §18.7's step 2 when the writer enqueues wakes:
+// a separate command on the wake queue's own slot, after the script has answered. The script is the
+// linearization point: its barrier key is the client id, opaque (I-13).
 func (self *HintWriter) hintClient(ctx context.Context, clientId connect.Id, hint *sidecar.ClientHint) (*PushHintResult, error) {
 	raise := "0"
 	if sidecar.PushTopicRaisesClock(hint.Topic) {
@@ -276,6 +295,9 @@ func (self *HintWriter) hintClient(ctx context.Context, clientId connect.Id, hin
 		return nil, err
 	}
 	self.count(&self.stats.hintedCount, hintResultOk, 1)
+	if self.wake != nil {
+		result.Wake = self.wake.Enqueue(ctx, clientId, hint, result)
+	}
 	return result, nil
 }
 

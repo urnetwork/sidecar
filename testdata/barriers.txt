@@ -309,10 +309,14 @@ barrier pushservice.hint.before pushservice/hint_writer.go
 barrier pushservice.long_poll.hold pushservice/long_poll.go
 barrier pushservice.publisher.ack.after pushservice/publisher.go
 barrier pushservice.publisher.ack.before pushservice/publisher.go
+barrier pushservice.publisher.live.after pushservice/publisher.go
+barrier pushservice.publisher.live.before pushservice/publisher.go
 barrier pushservice.publisher.read.after pushservice/publisher.go
 barrier pushservice.publisher.read.before pushservice/publisher.go
 barrier pushservice.publisher.tail.after pushservice/publisher.go
 barrier pushservice.publisher.tail.before pushservice/publisher.go
+barrier pushservice.wake.after pushservice/wake_enqueue.go
+barrier pushservice.wake.before pushservice/wake_enqueue.go
 barrier quota.usage_report.after host_quota_batcher.go
 barrier quota.usage_report.before host_quota_batcher.go
 barrier record.chain.fsync.after record_chain.go
@@ -357,6 +361,8 @@ barrier rpc.head_check.after rpc_headcheck.go
 barrier rpc.head_check.before rpc_headcheck.go
 barrier rpc.head_check_round.after rpc_headcheck_rounds.go
 barrier rpc.head_check_round.before rpc_headcheck_rounds.go
+barrier rpc.head_check_wake.after rpc_headcheck_wake.go
+barrier rpc.head_check_wake.before rpc_headcheck_wake.go
 barrier rpc.head_proof_verified rpc_headcheck_proof.go
 barrier rpc.hello_catch_up.after rpc_admission.go
 barrier rpc.hello_catch_up.before rpc_admission.go
