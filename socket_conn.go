@@ -48,6 +48,9 @@ type SocketConn struct {
 	localAddr  *SocketAddr
 	remoteAddr *SocketAddr
 	ticket     *protocol.SocketTicket
+	// StreamOpen.ticket's bytes as received, the service's signature over the ticket: a listener's reach evidence
+	// for §16's ReachReceipt. Empty on a dialer's conn.
+	signedTicket []byte
 	// StreamOpen.metadata as the stream opened, which an edge fills (§13.5, C-07).
 	openMetadata []byte
 }
@@ -162,6 +165,12 @@ func (self *SocketConn) Ticket() *protocol.SocketTicket {
 		return nil
 	}
 	return proto.Clone(self.ticket).(*protocol.SocketTicket)
+}
+
+// A copy of the signed ticket a listener admitted this connection on, as received: the service's signature over
+// Ticket, which §16's ReachReceipt keeps as reach evidence (§9.6's step 7). Empty on a dialer's connection.
+func (self *SocketConn) SignedTicket() []byte {
+	return append([]byte(nil), self.signedTicket...)
 }
 
 // A copy of StreamOpen.metadata as the stream opened: an edge's open metadata, such as TlsEdgeOpen

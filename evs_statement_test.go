@@ -164,6 +164,10 @@ var evsPushVectorCases = []struct {
 	{name: "a changeless part", changeCount: 30, edit: func(plan *EvsPushPlan) {
 		plan.SealedMetadata = bytes.Repeat(evsTestBytes("long sealed metadata", 32), 48*1024)
 	}},
+	// QD-658: a push with no change past 1 MiB, every part changeless, under the root of zero parts with changes
+	{name: "no change in parts", changeCount: 0, edit: func(plan *EvsPushPlan) {
+		plan.SealedMetadata = bytes.Repeat(evsTestBytes("long sealed metadata", 32), 48*1024)
+	}},
 	// 8.2.2's sections row: a creating git-mode push's sealed ref name and overlay base, sections 15 and 16
 	{name: "a creating push", changeCount: 2, edit: func(plan *EvsPushPlan) {
 		plan.RefMode = protocol.EvsRefMode_EVS_REF_GIT
@@ -250,6 +254,11 @@ func TestEvsPushVectors(t *testing.T) {
 		case "a changeless part":
 			if vector.PartCount != 2 || statement.Push.GetChangeCount() != uint32(vector.ChangeCount) {
 				t.Errorf("a changeless part: %d parts, count %d", vector.PartCount, statement.Push.GetChangeCount())
+			}
+		case "no change in parts":
+			emptyRoot := sha256.Sum256(nil)
+			if vector.PartCount < 2 || statement.Push.GetChangeCount() != 0 || !bytes.Equal(vector.ChangesRoot, emptyRoot[:]) {
+				t.Errorf("no change in parts: %d parts, count %d", vector.PartCount, statement.Push.GetChangeCount())
 			}
 		case "a creating push":
 			if vector.Payload == nil || statement.Push.GetRefMode() != uint32(protocol.EvsRefMode_EVS_REF_GIT) {
@@ -729,5 +738,43 @@ func TestEvsPushFuzzSeeds(t *testing.T) {
 	fixture := newEvsFuzzPushFixture(t)
 	for _, seed := range evsFuzzSeedFiles(t, "testdata/fuzz/evs_push") {
 		checkEvsPushTampering(t, fixture, seed)
+	}
+}
+
+// QD-658 (question evs1-m2-48-changeless-push-in-parts): a push with no change past 1 MiB goes in parts, every part
+// changeless, its statement stating change_count 0, no prefix and the root of zero parts with changes, SHA-256 of no
+// bytes, which the seal check takes; changes_root with a count of 0 is refused on a statement not in parts, under
+// another root, or beside a prefix.
+func TestEvsPushWithNoChangeGoesInParts(t *testing.T) {
+	signer := newEvsTestSigner("writer")
+	plan := evsTestPlan(t, signer, "no change", 0)
+	plan.SealedMetadata = evsTestContent("long sealed metadata", 1536*1024)
+	built, checked := evsTestBuildAndCheck(t, signer, plan)
+	push := built.Statement.Push
+	emptyRoot := sha256.Sum256(nil)
+	if push.GetPartCount() < 2 || push.GetChangeCount() != 0 || len(push.GetChangedPrefixes()) != 0 || !bytes.Equal(push.GetChangesRoot(), emptyRoot[:]) {
+		t.Fatalf("the statement: %d parts, count %d, %d prefixes", push.GetPartCount(), push.GetChangeCount(), len(push.GetChangedPrefixes()))
+	}
+	if len(checked.Changes) != 0 || !bytes.Equal(checked.SealedMetadata, plan.SealedMetadata) {
+		t.Fatalf("the joined payload: %d changes, %d bytes of metadata", len(checked.Changes), len(checked.SealedMetadata))
+	}
+	resign := func(push *protocol.EvsPush) []byte {
+		body, _ := proto.MarshalOptions{Deterministic: true}.Marshal(push)
+		signed, _ := signer.sign(evsPushPurpose, bridge.SignedType_SIGNED_EVS_PUSH, body, nil)
+		statementBytes, _ := proto.Marshal(signed)
+		return statementBytes
+	}
+	for name, mutate := range map[string]func(push *protocol.EvsPush){
+		"not in parts": func(push *protocol.EvsPush) { push.PartCount, push.PartsSha256 = 0, nil },
+		"another root": func(push *protocol.EvsPush) { push.ChangesRoot = evsTestBytes("another root", 32) },
+		"a prefix": func(push *protocol.EvsPush) {
+			push.ChangedPrefixes = []*protocol.EvsTokenPath{{Token: [][]byte{evsTestBytes("a token", EvsTokenByteCount)}}}
+		},
+	} {
+		mutated := proto.Clone(push).(*protocol.EvsPush)
+		mutate(mutated)
+		if _, err := ParseEvsStatement(resign(mutated)); !errors.Is(err, ErrEvsPushInvalid) {
+			t.Errorf("count 0 under changes_root %s: %v", name, err)
+		}
 	}
 }

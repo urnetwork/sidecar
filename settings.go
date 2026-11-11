@@ -496,6 +496,26 @@ type SidecarSocketSettings struct {
 	// a client's set 5 min after its last call, so a longer wait gains nothing that starting over does not, and a
 	// bogus hint cannot silence the registrar for days.
 	RetryAfterMaxWait time.Duration
+	// How long one ticket's open waits for its listener's accept, Hello included, when a Dial names none: 5 s (§9.6,
+	// D-SOCK-6), after which the next ticket is tried.
+	DialAcceptTimeout time.Duration
+	// The most Finds one Dial sends, the first included: 3 (§9.6, D-SOCK-6).
+	DialFindCount int
+	// The wait before a Find after one whose tickets or answer were busy: 250 ms, a reading, doubling with each busy
+	// Find, drawn within ±Jitter, and never less than the service's retry_after_ms.
+	DialBusyBackoff time.Duration
+	// Where that doubling stops: 2 s, a reading, so three Finds stay well inside a caller's patience.
+	DialBusyBackoffMax time.Duration
+	// The longest quota retry_after_ms a dialer waits out before its next ticket: 30 s, a reading, so a listener's
+	// answer cannot hold a Dial for longer than a person would wait.
+	DialQuotaMaxWait time.Duration
+	// How long Drain waits for a listener's in-flight streams to end before it resets the rest with RST_DRAINING:
+	// 30 s (§9.5, cloudflared's default), unless the caller's ctx ends first.
+	ListenDrainTimeout time.Duration
+	// How long admission waits for this device's verified state to reach a ticket's log position before it answers
+	// retry (§9.6's step 6): 2 s, a reading, inside the dialer's 5 s accept timeout so the dialer still has time for
+	// its backup.
+	ListenPositionWait time.Duration
 }
 
 // The desktop daemon's registrar settings, the only source of their defaults.
@@ -510,6 +530,13 @@ func DefaultSidecarSocketSettings() *SidecarSocketSettings {
 		RetryInterval:           1 * time.Second,
 		RetryMaxInterval:        15 * time.Second,
 		RetryAfterMaxWait:       5 * time.Minute,
+		DialAcceptTimeout:       5 * time.Second,
+		DialFindCount:           3,
+		DialBusyBackoff:         250 * time.Millisecond,
+		DialBusyBackoffMax:      2 * time.Second,
+		DialQuotaMaxWait:        30 * time.Second,
+		ListenDrainTimeout:      30 * time.Second,
+		ListenPositionWait:      2 * time.Second,
 	}
 }
 
@@ -523,6 +550,8 @@ func (self *SidecarSocketSettings) validate() error {
 		return fmt.Errorf("%w: Sockets.EagerReportMoveFraction is past 1", errInvalidSettings)
 	case self.RetryMaxInterval < self.RetryInterval:
 		return fmt.Errorf("%w: Sockets.RetryInterval is past RetryMaxInterval", errInvalidSettings)
+	case self.DialBusyBackoffMax < self.DialBusyBackoff:
+		return fmt.Errorf("%w: Sockets.DialBusyBackoff is past DialBusyBackoffMax", errInvalidSettings)
 	}
 	return nil
 }

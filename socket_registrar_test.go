@@ -938,8 +938,8 @@ func TestSocketRegistrarDropsAnswersOfAnEndedGeneration(t *testing.T) {
 	}
 }
 
-// §9.5's numbers, and the readings beside them, as DefaultSidecarSettings gives them; validate refuses what would
-// make a wait zero or the eager amount past the whole.
+// §9.5's and §9.6's numbers, and the readings beside them, as DefaultSidecarSettings gives them; validate refuses
+// what would make a wait zero or the eager amount past the whole.
 func TestDefaultSocketSettingsMatchDesign(t *testing.T) {
 	want := SidecarSocketSettings{
 		HeartbeatInterval:       15 * time.Second,
@@ -951,6 +951,13 @@ func TestDefaultSocketSettingsMatchDesign(t *testing.T) {
 		RetryInterval:           1 * time.Second,
 		RetryMaxInterval:        15 * time.Second,
 		RetryAfterMaxWait:       5 * time.Minute,
+		DialAcceptTimeout:       5 * time.Second,
+		DialFindCount:           3,
+		DialBusyBackoff:         250 * time.Millisecond,
+		DialBusyBackoffMax:      2 * time.Second,
+		DialQuotaMaxWait:        30 * time.Second,
+		ListenDrainTimeout:      30 * time.Second,
+		ListenPositionWait:      2 * time.Second,
 	}
 	if got := *DefaultSidecarSettings().Sockets; got != want {
 		t.Errorf("%+v, want %+v", got, want)
@@ -964,6 +971,9 @@ func TestDefaultSocketSettingsMatchDesign(t *testing.T) {
 		{name: "RetryInterval", adjust: func(settings *SidecarSocketSettings) { settings.RetryInterval = 16 * time.Second }},
 		{name: "HeartbeatInterval", adjust: func(settings *SidecarSocketSettings) { settings.HeartbeatInterval = 0 }},
 		{name: "EagerReportMinMove", adjust: func(settings *SidecarSocketSettings) { settings.EagerReportMinMove = -1 }},
+		{name: "DialBusyBackoff", adjust: func(settings *SidecarSocketSettings) { settings.DialBusyBackoff = 3 * time.Second }},
+		{name: "DialFindCount", adjust: func(settings *SidecarSocketSettings) { settings.DialFindCount = 0 }},
+		{name: "ListenDrainTimeout", adjust: func(settings *SidecarSocketSettings) { settings.ListenDrainTimeout = 0 }},
 	} {
 		settings := validSidecarSettings()
 		c.adjust(settings.Sockets)
