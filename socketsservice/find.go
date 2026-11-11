@@ -49,20 +49,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// A Find's sizes, which a well-formed dialer never passes.
-const (
-	// Two failed tickets of 512 B, K client ids and the rest, in base64 and JSON, many times over.
-	socketFindMaxBodyByteCount = 64 * 1024
-	// A dialer reports the tickets of its last Find, which returned at most two (§9.6).
-	socketFindMaxFailedTicketCount = 2
-	// A signed ticket's bytes (§9.6).
-	socketFindMaxTicketByteCount = 512
-	// An edge process's K clients (§13.6's 4 by default), with room.
-	socketFindMaxClientIdCount = 64
-	// tlsedge's keyed hash of the visitor's /24 or /48 (§9.7).
-	socketFindMaxAffinityKeyByteCount = 64
-)
-
 // What the listener check made of one picked listener.
 type socketListenerCheck int
 
@@ -129,10 +115,10 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 		return nil, refusal
 	}
 	args := &sidecar.SocketFindArgs{}
-	if err := readSocketJson(r, socketFindMaxBodyByteCount, args); err != nil {
+	if err := readSocketJson(r, int64(self.settings.FindMaxBodyByteCount), args); err != nil {
 		return nil, socketRefusalOf(sidecar.SocketErrorCodeInvalid, 0)
 	}
-	name, edgeClientIds, ok := socketFindFormed(caller, args)
+	name, edgeClientIds, ok := socketFindFormed(caller, args, self.settings)
 	if !ok {
 		return nil, socketRefusalOf(sidecar.SocketErrorCodeInvalid, 0)
 	}
@@ -272,10 +258,10 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 	return result, nil
 }
 
-// Step 1's shape: one network, exactly one of an edge name in canonical form and a token path, at most two
-// failed tickets each whole, an affinity key within its size, and client ids from an urnetwork-edge caller
-// alone, which must send at least one. The name, and an edge's K ids in their order.
-func socketFindFormed(caller *socketCaller, args *sidecar.SocketFindArgs) (*socketParsedName, []connect.Id, bool) {
+// Step 1's shape, each size settings': one network, exactly one of an edge name in canonical form and a token
+// path, at most two failed tickets each whole, an affinity key within its size, and client ids from an
+// urnetwork-edge caller alone, which must send at least one. The name, and an edge's K ids in their order.
+func socketFindFormed(caller *socketCaller, args *sidecar.SocketFindArgs, settings *SocketsSettings) (*socketParsedName, []connect.Id, bool) {
 	if args.NetworkId == nil || *args.NetworkId == (connect.Id{}) {
 		return nil, nil, false
 	}
@@ -283,11 +269,11 @@ func socketFindFormed(caller *socketCaller, args *sidecar.SocketFindArgs) (*sock
 	if !ok {
 		return nil, nil, false
 	}
-	if socketFindMaxFailedTicketCount < len(args.FailedTickets) || socketFindMaxAffinityKeyByteCount < len(args.AffinityKey) {
+	if settings.Format.FailedTicketMaxCount < len(args.FailedTickets) || settings.Format.AffinityKeyMaxByteCount < len(args.AffinityKey) {
 		return nil, nil, false
 	}
 	for _, failed := range args.FailedTickets {
-		if failed == nil || len(failed.Ticket) == 0 || socketFindMaxTicketByteCount < len(failed.Ticket) ||
+		if failed == nil || len(failed.Ticket) == 0 || settings.Format.TicketMaxByteCount < len(failed.Ticket) ||
 			(failed.Reason != sidecar.SocketFailedReasonTimeout && failed.Reason != sidecar.SocketFailedReasonRefused) {
 			return nil, nil, false
 		}
@@ -295,7 +281,7 @@ func socketFindFormed(caller *socketCaller, args *sidecar.SocketFindArgs) (*sock
 	if !caller.edge {
 		return name, nil, len(args.ClientIds) == 0
 	}
-	if len(args.ClientIds) == 0 || socketFindMaxClientIdCount < len(args.ClientIds) {
+	if len(args.ClientIds) == 0 || settings.FindMaxClientIdCount < len(args.ClientIds) {
 		return nil, nil, false
 	}
 	edgeClientIds := make([]connect.Id, 0, len(args.ClientIds))

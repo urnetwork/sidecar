@@ -492,6 +492,38 @@ func TestSocketFindDeniesWhatItsCallerCannotReach(t *testing.T) {
 	}
 }
 
+// QD-702: a Find's sizes are the process's settings, never constants. A process that takes fewer edge clients or
+// failed tickets than a Find carries refuses it as invalid, before any group is read.
+func TestSocketFindReadsItsSizesFromSettings(t *testing.T) {
+	world := newTestSocketWorld(t)
+	process := world.newProcess(func(settings *socketsservice.SocketsSettings) {
+		settings.FindMaxClientIdCount = 2
+		settings.Format.FailedTicketMaxCount = 1
+	})
+	networkId := testSocketId()
+	edge := world.newEdge(3)
+	dialer := world.newSidecar(networkId)
+	failedTickets := []*sidecar.SocketFailedTicket{
+		{Ticket: []byte("first"), Reason: sidecar.SocketFailedReasonTimeout},
+		{Ticket: []byte("second"), Reason: sidecar.SocketFailedReasonTimeout},
+	}
+	for index, call := range []struct {
+		token string
+		args  *sidecar.SocketFindArgs
+	}{
+		{token: edge.token, args: &sidecar.SocketFindArgs{Name: "tls/443/blog", NetworkId: &networkId, ClientIds: edge.clientIdArgs()}},
+		{token: dialer.token, args: &sidecar.SocketFindArgs{NameToken: testSocketTokenPath(t, 1), NetworkId: &networkId, FailedTickets: failedTickets}},
+	} {
+		code, result := process.find(call.token, call.args)
+		if code != http.StatusOK || result.Error == nil || result.Error.Code != sidecar.SocketErrorCodeInvalid {
+			t.Errorf("call %d answered %d, %+v", index, code, result)
+		}
+	}
+	if count := world.fakeStore.OpCount("Pick"); count != 0 {
+		t.Fatalf("%d picks", count)
+	}
+}
+
 // The kill set refuses a tls/ name before anything is read (§13.9).
 func TestSocketFindRefusesAKilledName(t *testing.T) {
 	world := newTestSocketWorld(t)
