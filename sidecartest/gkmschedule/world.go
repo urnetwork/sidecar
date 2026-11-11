@@ -183,6 +183,8 @@ type FsKeysWorld struct {
 	// the repo's group, once KF1 formed it
 	GroupId sidecar.Id
 	Devices []*FsKeysDevice
+	// processes that hold another device's identity key and keychain, which take states but stand in no row
+	clones []*FsKeysDevice
 	// what the next position holds
 	readers        []sidecar.Id
 	writers        []sidecar.Id
@@ -190,6 +192,8 @@ type FsKeysWorld struct {
 	depositors     []sidecar.Id
 	readerExpiries map[sidecar.Id]time.Time
 	suspended      map[sidecar.Id]bool
+	// the sidecars a rev/ object voids every token of (§7.8), which gkm reads before each request
+	voided map[sidecar.Id]bool
 	// the RepoCreate's signer, the repo's first admin, and the config's writers, whose config repo the rows hold
 	// only once ConfigWriters names some
 	creator       *sidecar.Id
@@ -257,6 +261,7 @@ func NewFsKeysWorldOn(t FsKeysT, kind protocol.RepoKind, clock *sidecartest.Fake
 		RepoId:    sidecar.NewId(),
 		Kind:      kind,
 		suspended: map[sidecar.Id]bool{},
+		voided:    map[sidecar.Id]bool{},
 		shrunkAt:  map[sidecar.Id]uint64{},
 		hintCount: sidecar.NewMonitorValue(0),
 		adjust:    adjust,
@@ -677,6 +682,46 @@ func (self *FsKeysDevice) Restart() {
 	}
 }
 
+// An active clone of device (§2.10's copied keychain row): another process holding its identity key, and copies of
+// its keychain and its ReaderKeys' private halves as they stand now, under its sidecar's row, as one who copied the
+// device runs it. Its MLS store starts empty. It takes the states device takes and stands in no row of its own.
+func (self *FsKeysWorld) Clone(device *FsKeysDevice, label string) *FsKeysDevice {
+	self.t.Helper()
+	clone := &FsKeysDevice{
+		Label:             label,
+		world:             self,
+		signer:            device.signer,
+		row:               device.row,
+		admissionSha256:   device.admissionSha256,
+		readerPrivateKeys: map[string]hpke.PrivateKey{},
+		readerKeySha256:   bytes.Clone(device.readerKeySha256),
+		ReaderKey:         device.ReaderKey,
+		secrets:           &fsKeysKeychain{nameValues: map[string][]byte{}},
+		store:             sidecartest.NewFakeStore(),
+		ClientId:          connect.NewId(),
+		published:         true,
+		state:             device.state,
+	}
+	for keySha256, privateKey := range device.readerPrivateKeys {
+		clone.readerPrivateKeys[keySha256] = privateKey
+	}
+	names, err := device.secrets.List("")
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	for _, name := range names {
+		value, err := device.secrets.Get(name)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		clone.secrets.Put(name, value)
+	}
+	clone.Transport = &FsKeysTransport{world: self}
+	clone.Restart()
+	self.clones = append(self.clones, clone)
+	return clone
+}
+
 // The device's MLS state is lost, its keychain kept: a new process over a new, empty store, as a device whose
 // group state did not survive is.
 func (self *FsKeysDevice) LoseMlsState() {
@@ -874,6 +919,12 @@ func (self *FsKeysWorld) Revoke(device *FsKeysDevice) {
 	self.shrink(at, self.RepoId, self.ConfigRepoId)
 }
 
+// api's rev/ object for device's revocation (§7.8): gkm refuses every token of its sidecar from now, whatever its
+// state shows yet. A schedule whose revoked device must still reach gkm while gkm's state trails leaves this out.
+func (self *FsKeysWorld) VoidTokens(device *FsKeysDevice) {
+	self.voided[device.SidecarId()] = true
+}
+
 // The position the next state takes.
 func (self *FsKeysWorld) nextPosition() uint64 {
 	if tip := self.Log.Tip(); tip != nil {
@@ -977,7 +1028,7 @@ func (self *FsKeysWorld) Advance() *sidecartest.FakeGkmAuthView {
 		AtomRepos:          atomRepos,
 	})
 	self.views = append(self.views, view)
-	for _, device := range self.Devices {
+	for _, device := range append(slices.Clone(self.Devices), self.clones...) {
 		if !device.Offline {
 			device.Take(view)
 		}
@@ -1569,6 +1620,9 @@ func (self *fsKeysWorldState) tip() *sidecartest.FakeGkmAuthView {
 }
 
 func (self *fsKeysWorldState) CheckRevocation(ctx context.Context, principal *sidecar.Principal) error {
+	if principal.SidecarId != nil && self.world.voided[sidecar.Id(*principal.SidecarId)] {
+		return gkmservice.ErrGkmTokenRevoked
+	}
 	return nil
 }
 

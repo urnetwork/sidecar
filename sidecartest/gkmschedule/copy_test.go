@@ -13,3 +13,7 @@ func TestFsKeysCopyACopiedAgentKeychainOpensNothingPastItsBound(t *testing.T) {
 func TestFsKeysCopyAnAdvertisementValidPastSevenDaysIsRefused(t *testing.T) {
 	FsKeysScheduleLongAdvertisement(t, FsKeysT2(t))
 }
+
+func TestFsKeysCopyAnActiveCloneReadsUntilItsDevicesCompromiseRevocation(t *testing.T) {
+	FsKeysScheduleActiveClone(t, FsKeysT2(t))
+}
