@@ -44,9 +44,6 @@ var bridgeRevocationKinds = map[bridge.SignedType]PostureOverlayKind{
 	bridge.SignedType_SIGNED_BRIDGE_WITHDRAW: PostureOverlayBridgeWithdraw,
 }
 
-// The longest id a revocation names: a grant's or a rule's 32 bytes, with room for an atom's.
-const bridgeRevocationIdMaxByteCount = 64
-
 // The hook a host or an sdk provider installs on its provider NATs: the bridge's policy, with a binder that keeps each
 // NAT's closer, so a revocation ends flows on every NAT the hook is on, overlapping client generations included.
 type bridgeEgressHook struct {
@@ -111,21 +108,23 @@ func (self *Bridge) ApplyDeltas(log *PostureLog) error {
 // applying, then publishes and ends the flows it closes, as a verified entry between states does. statementType names
 // what id is: a sidecar_id for SIGNED_SIDECAR_REVOKE, a member_id for SIGNED_MEMBER_REVOKE, a subject for
 // SIGNED_SUSPEND, a grant_id for SIGNED_GRANT_REVOKE and a rule_id, reset, for SIGNED_BRIDGE_WITHDRAW. n is the
-// revocation's log position: it holds until a state at or past n confirms or reverses it, and 0 holds it until the next
-// state past the one in force. It only narrows, so it needs no signature here, and it never widens what a state allows.
+// revocation's own log position: it holds until a state at or past n confirms or reverses it, so no state compiled
+// before the entry, however late it finishes, no timer and no lower state removes it (DESIGN-DETAILS 12.2.5, 12.3's
+// DenialsOutlive). 0 is refused: read as the state's pin plus one, it would be dropped by a state compiled below n that
+// finishes after it. It only narrows, so it needs no signature here, and it never widens what a state allows.
 func (self *Bridge) Revoke(statementType bridge.SignedType, id []byte, n uint64) error {
 	kind, ok := bridgeRevocationKinds[statementType]
 	if !ok {
 		return fmt.Errorf("%w: type %#x revokes nothing here", ErrBridgeRevocationRefused, int32(statementType))
 	}
-	if len(id) == 0 || bridgeRevocationIdMaxByteCount < len(id) {
+	if len(id) == 0 || self.settings.RevocationIdMaxByteCount < len(id) {
 		return fmt.Errorf("%w: an id of %d bytes", ErrBridgeRevocationRefused, len(id))
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: position 0, where a denial is held at its own", ErrBridgeRevocationRefused)
 	}
 	return self.apply(func() (PostureDecision, bool, error) {
 		decision := self.posture.Decision()
-		if n == 0 {
-			n = bridgeDecisionPinN(decision) + 1
-		}
 		entry := PostureOverlayEntry{Kind: kind, N: n, Id: bytes.Clone(id)}
 		if kind == PostureOverlayBridgeWithdraw {
 			entry.WithdrawMode = bridge.BridgeWithdrawMode_BRIDGE_WITHDRAW_MODE_RESET

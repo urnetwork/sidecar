@@ -308,7 +308,7 @@ func (self *SocketsService) registrations(r *http.Request) (*sidecar.SocketRegis
 	return answer, nil
 }
 
-// Step 3: the page's shape and every field's size, before anything is judged, each size format's.
+// Step 3: the page's shape, and every field within format's sizes, before anything is judged.
 func socketPageFormed(args *sidecar.SocketRegistrationsArgs, format *sidecar.SocketFormatSettings) bool {
 	if sidecar.SocketRegistrationPageMaxEntryCount < len(args.Registrations) ||
 		socketNameKeyMaxByteCount < len(args.KeyStart) || socketNameKeyMaxByteCount < len(args.KeyEnd) {

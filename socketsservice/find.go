@@ -258,9 +258,10 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 	return result, nil
 }
 
-// Step 1's shape, each size settings': one network, exactly one of an edge name in canonical form and a token
-// path, at most two failed tickets each whole, an affinity key within its size, and client ids from an
-// urnetwork-edge caller alone, which must send at least one. The name, and an edge's K ids in their order.
+// Step 1's shape, every size read from settings: one network, exactly one of an edge name in canonical form and
+// a token path, failed tickets each whole and no more than a Find reports, an affinity key within its size, and
+// client ids from an urnetwork-edge caller alone, which must send at least one. The name, and an edge's K ids in
+// their order.
 func socketFindFormed(caller *socketCaller, args *sidecar.SocketFindArgs, settings *SocketsSettings) (*socketParsedName, []connect.Id, bool) {
 	if args.NetworkId == nil || *args.NetworkId == (connect.Id{}) {
 		return nil, nil, false

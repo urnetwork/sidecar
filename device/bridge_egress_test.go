@@ -149,6 +149,13 @@ func egressTestTag(subjectSeed byte, ruleId []byte) uint64 {
 	return device.BridgeRuleTag(connect.Id(sidecartest.BridgeFixtureSidecarId(subjectSeed)), ruleId)
 }
 
+// The tag of the subject's rule 3 flows to a hosted address: rule 3's byte, then the address's four
+// (DESIGN-DETAILS 12.2.2).
+func egressTestHostedTag(subjectSeed byte, address string) uint64 {
+	octets := netip.MustParseAddr(address).As4()
+	return egressTestTag(subjectSeed, append([]byte{device.BridgeRuleHosted}, octets[:]...))
+}
+
 // Fails unless the flow is denied, with nothing else set but the generation.
 func (self *egressTest) expectDeny(name string, flow *connect.EgressFlow) {
 	self.t.Helper()
@@ -200,7 +207,7 @@ func TestBridgeEgressRuleZeroHoldsEveryMapTarget(t *testing.T) {
 	test.expectMap("a map onto another loopback port", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:5432"),
 		"127.0.0.1:5432", egressTestTag(egressTestUntagged, sidecartest.BridgeFixtureMapId(1)))
 	test.expectMap("rule 3 onto another loopback port", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:8444"),
-		"127.0.0.1:8444", egressTestTag(egressTestUntagged, []byte{device.BridgeRuleHosted}))
+		"127.0.0.1:8444", egressTestHostedTag(egressTestUntagged, "100.80.1.2"))
 }
 
 // Rule 0 before this device has named its addresses: a listener's port is refused on every address, the stricter.
@@ -256,18 +263,18 @@ func TestBridgeEgressRuleTwoNeverDialsAnotherHostsAddress(t *testing.T) {
 	test.expectDeny("another host", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.3:22"))
 	test.expectDeny("the block's services", egressTestFlow(egressTestUntagged, connect.IpProtocolUdp, "100.80.0.53:53"))
 	test.expectMap("this host", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:22"), "127.0.0.1:22",
-		egressTestTag(egressTestUntagged, []byte{device.BridgeRuleHosted}))
+		egressTestHostedTag(egressTestUntagged, "100.80.1.2"))
 }
 
 // Rule 3: a hosted address maps to loopback with AllowDial, or with no document for an untagged subject; a tagged
 // subject with no row is denied either way.
 func TestBridgeEgressRuleThreeMapsAHostedAddressToLoopback(t *testing.T) {
-	hosted := egressTestTag(egressTestUntagged, []byte{device.BridgeRuleHosted})
+	hosted := egressTestHostedTag(egressTestUntagged, "100.80.1.2")
 	document := newEgressTest(t, device.BridgePolicyProfileHost, device.PostureEnforcingDocument, egressTestFixture())
 	document.expectMap("a dial row", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:22"), "127.0.0.1:22", hosted)
 	document.expectDeny("no dial row", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:2222"))
 	document.expectMap("the tagged subject's row", egressTestFlow(egressTestTagged, connect.IpProtocolTcp, "100.80.1.2:443"),
-		"127.0.0.1:443", egressTestTag(egressTestTagged, []byte{device.BridgeRuleHosted}))
+		"127.0.0.1:443", egressTestHostedTag(egressTestTagged, "100.80.1.2"))
 
 	noDocument := newEgressTest(t, device.BridgePolicyProfileHost, device.PostureEnforcingNoDocument, egressTestFixture())
 	noDocument.expectMap("untagged, no row", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:2222"), "127.0.0.1:2222", hosted)
@@ -418,7 +425,7 @@ func TestBridgeEgressNeedsAVerifiedPrincipalAndASealedSource(t *testing.T) {
 		test.expectDeny("narrowed between states", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, to))
 		// a sibling subject is untouched
 		test.expectMap("the sibling", egressTestFlow(egressTestTagged, connect.IpProtocolTcp, "100.80.1.2:443"), "127.0.0.1:443",
-			egressTestTag(egressTestTagged, []byte{device.BridgeRuleHosted}))
+			egressTestHostedTag(egressTestTagged, "100.80.1.2"))
 	}
 	test.input.Overlay = nil
 	test.republish()
@@ -489,6 +496,48 @@ func TestBridgeEgressSdkProviderSkipsRulesOneToThreeAndSix(t *testing.T) {
 	}
 }
 
+// Another client at an sdk provider, a sealed subject no row binds, holds BridgeRules.untagged's rows
+// (bridge-m4-09-other-client-rows): under a document its exit rows pass it out under the zero subject's tag, while a
+// port no row holds, the LAN and the block stay denied and a revoked grant's row admits nothing; with no field it holds
+// none. A bound subject keeps its own rows, and a host never gives the untagged rows to a principal no row names.
+func TestOtherClientsHoldUntaggedRows(t *testing.T) {
+	sdkFlow := func(clientSeed byte, ipProtocol connect.IpProtocol, to string) *connect.EgressFlow {
+		flow := egressTestFlow(clientSeed, ipProtocol, to)
+		flow.Principal = nil
+		flow.Sealed = false
+		return flow
+	}
+	const otherClient byte = 0x7F
+	exit := device.BridgeRuleTag(connect.Id{}, []byte{device.BridgeRuleExit})
+	fixture := egressTestFixture()
+	fixture.Untagged = &sidecartest.BridgeRulesFixtureUntagged{
+		Dial:  []sidecartest.BridgeRulesFixtureReach{{Ports: "*"}},
+		Route: []sidecartest.BridgeRulesFixtureReach{{Prefix: "192.168.50.0/24", Ports: "*"}},
+		Exit:  []sidecartest.BridgeRulesFixtureReach{{Ports: "tcp:443", Grant: 2}, {Ports: "udp:53"}},
+	}
+	document := newEgressTest(t, device.BridgePolicyProfileSdkProvider, device.PostureEnforcingDocument, fixture)
+	document.expectPass("an exit row", sdkFlow(otherClient, connect.IpProtocolTcp, "203.0.113.9:443"), exit)
+	document.expectPass("another exit row", sdkFlow(otherClient, connect.IpProtocolUdp, "203.0.113.9:53"), exit)
+	document.expectDeny("a port no row holds", sdkFlow(otherClient, connect.IpProtocolTcp, "203.0.113.9:80"))
+	// rules 1 to 3 and 6 do not run here, so the dial and route rows open nothing
+	document.expectDeny("a served LAN", sdkFlow(otherClient, connect.IpProtocolTcp, "192.168.50.9:443"))
+	document.expectDeny("a hosted address", sdkFlow(otherClient, connect.IpProtocolTcp, "100.80.1.2:443"))
+	document.expectDeny("the tagged subject, which has no exit row", sdkFlow(egressTestTagged, connect.IpProtocolTcp, "203.0.113.9:443"))
+	document.input.Overlay = []device.PostureOverlayEntry{{Kind: device.PostureOverlayGrantRevoke, Id: sidecartest.BridgeFixtureGrantId(2)}}
+	document.republish()
+	document.expectDeny("the revoked grant's row", sdkFlow(otherClient, connect.IpProtocolTcp, "203.0.113.9:443"))
+	document.expectPass("the row of no grant", sdkFlow(otherClient, connect.IpProtocolUdp, "203.0.113.9:53"), exit)
+
+	none := newEgressTest(t, device.BridgePolicyProfileSdkProvider, device.PostureEnforcingDocument, egressTestFixture())
+	none.expectDeny("no field", sdkFlow(otherClient, connect.IpProtocolTcp, "203.0.113.9:443"))
+	none.expectDeny("no field, another exit", sdkFlow(otherClient, connect.IpProtocolUdp, "203.0.113.9:53"))
+
+	host := newEgressTest(t, device.BridgePolicyProfileHost, device.PostureEnforcingDocument, fixture)
+	unknown := egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "203.0.113.9:443")
+	unknown.Principal.Subject = connect.Id(sidecartest.BridgeFixtureSidecarId(otherClient))
+	host.expectDeny("a principal no row names, at a host", unknown)
+}
+
 // §22.7's S8 at unit level: with a document only a rule opens the LAN; without one the LAN stays open to untagged
 // sources, but never the provider's own 127.0.0.1 daemon ports, while an unrelated loopback service passes.
 func TestBridgeEgressS8(t *testing.T) {
@@ -536,11 +585,11 @@ func TestBridgeEgressIcmpHasNoPort(t *testing.T) {
 	test := newEgressTest(t, device.BridgePolicyProfileHost, device.PostureEnforcingDocument, fixture)
 	test.expectDeny("ports only", egressTestFlow(egressTestTagged, connect.IpProtocolIcmp, "100.80.1.2:0"))
 	test.expectMap("an icmp row", egressTestFlow(egressTestUntagged, connect.IpProtocolIcmp, "100.80.1.2:0"), "127.0.0.1:0",
-		egressTestTag(egressTestUntagged, []byte{device.BridgeRuleHosted}))
+		egressTestHostedTag(egressTestUntagged, "100.80.1.2"))
 	fixture.Subjects[1].Dial = []sidecartest.BridgeRulesFixtureReach{{Ports: "*"}}
 	everything := newEgressTest(t, device.BridgePolicyProfileHost, device.PostureEnforcingDocument, fixture)
 	everything.expectMap("every protocol", egressTestFlow(egressTestTagged, connect.IpProtocolIcmp, "100.80.1.2:0"), "127.0.0.1:0",
-		egressTestTag(egressTestTagged, []byte{device.BridgeRuleHosted}))
+		egressTestHostedTag(egressTestTagged, "100.80.1.2"))
 }
 
 // Time: a row or map past its expiry admits nothing; a draining served prefix admits until its drain's end, no sooner
@@ -563,11 +612,11 @@ func TestBridgeEgressReadsTimes(t *testing.T) {
 		egressTestTag(egressTestUntagged, sidecartest.BridgeFixtureMapId(1)))
 	// a draining map takes no new flow, which falls to rule 3's loopback, never the map's target
 	test.expectMap("a draining map", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:8005"), "127.0.0.1:8005",
-		egressTestTag(egressTestUntagged, []byte{device.BridgeRuleHosted}))
+		egressTestHostedTag(egressTestUntagged, "100.80.1.2"))
 	test.expectPass("a draining route admits", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "192.168.50.20:443"),
 		egressTestTag(egressTestUntagged, sidecartest.BridgeFixtureRouteId(1)))
 	test.expectMap("the previous block's address", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.81.1.2:22"), "127.0.0.1:22",
-		egressTestTag(egressTestUntagged, []byte{device.BridgeRuleHosted}))
+		egressTestHostedTag(egressTestUntagged, "100.81.1.2"))
 
 	// its drain_until passed, the route still admits until 600 s from its start
 	test.clock.now = time.UnixMilli(egressTestTimeMs + 300_000)
@@ -584,7 +633,7 @@ func TestBridgeEgressReadsTimes(t *testing.T) {
 	}
 	// the map expired, so the hosted address falls to rule 3, whose dial row maps it to loopback all the same
 	test.expectMap("the expired map's port, by rule 3", late("100.80.1.2:5432"), "127.0.0.1:5432",
-		egressTestTag(egressTestUntagged, []byte{device.BridgeRuleHosted}))
+		egressTestHostedTag(egressTestUntagged, "100.80.1.2"))
 	test.expectDeny("the exit row expired", late("203.0.113.9:443"))
 	test.expectDeny("the previous block drained", late("100.81.1.2:22"))
 	test.expectDeny("the principal lapsed", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:22"))
@@ -604,9 +653,9 @@ func TestBridgeEgressAppliesWithdrawsAndGrantRevokes(t *testing.T) {
 	}
 	test.republish()
 	test.expectMap("a reset map falls to rule 3", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:5432"), "127.0.0.1:5432",
-		egressTestTag(egressTestUntagged, []byte{device.BridgeRuleHosted}))
+		egressTestHostedTag(egressTestUntagged, "100.80.1.2"))
 	test.expectMap("a drained map takes no new flow, which falls to rule 3", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp,
-		"100.80.1.2:8005"), "127.0.0.1:8005", egressTestTag(egressTestUntagged, []byte{device.BridgeRuleHosted}))
+		"100.80.1.2:8005"), "127.0.0.1:8005", egressTestHostedTag(egressTestUntagged, "100.80.1.2"))
 	test.expectPass("a drained route admits", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "192.168.50.20:443"), routed)
 	test.input.Overlay = []device.PostureOverlayEntry{
 		{Kind: device.PostureOverlayBridgeWithdraw, Id: sidecartest.BridgeFixtureRouteId(1)},
@@ -641,14 +690,18 @@ func TestBridgeEgressPublishRaisesTheGeneration(t *testing.T) {
 }
 
 // The tag of reading 11: the first 8 bytes of SHA-256(subject_id || rule_id), big-endian; pseudo rules hash their one
-// byte, so they never equal a 32-byte rule id's tag.
+// byte, and rule 3 that byte and the hosted address's four (DESIGN-DETAILS 12.2.2), so none equals a 32-byte rule id's
+// tag.
 func TestBridgeRuleTagIsReadingElevens(t *testing.T) {
 	subjectId := connect.Id(sidecartest.BridgeFixtureSidecarId(egressTestUntagged))
 	mapId := sidecartest.BridgeFixtureMapId(1)
 	if device.BridgeRuleTag(subjectId, mapId) != egressReferenceTag(subjectId, mapId) {
 		t.Fatal("a map's tag")
 	}
-	if device.BridgeRuleTag(subjectId, []byte{device.BridgeRuleHosted}) != egressReferenceTag(subjectId, []byte{3}) {
+	if device.BridgeRuleTag(subjectId, []byte{device.BridgeRuleExit}) != egressReferenceTag(subjectId, []byte{7}) {
+		t.Fatal("rule 7's tag")
+	}
+	if egressTestHostedTag(egressTestUntagged, "100.80.1.2") != egressReferenceTag(subjectId, []byte{3, 100, 80, 1, 2}) {
 		t.Fatal("rule 3's tag")
 	}
 	long := make([]byte, 40)
@@ -658,13 +711,38 @@ func TestBridgeRuleTagIsReadingElevens(t *testing.T) {
 	if device.BridgeRuleTag(subjectId, mapId) == device.BridgeRuleTag(connect.Id(sidecartest.BridgeFixtureSidecarId(egressTestTagged)), mapId) {
 		t.Fatal("two subjects share a tag")
 	}
+	// rule 3's tags split by address, and none is the tag of the rule's bare number
+	if egressTestHostedTag(egressTestUntagged, "100.80.1.2") == egressTestHostedTag(egressTestUntagged, "100.81.1.2") ||
+		egressTestHostedTag(egressTestUntagged, "100.80.1.2") == egressTestTag(egressTestUntagged, []byte{device.BridgeRuleHosted}) {
+		t.Fatal("two hosted addresses, or an address and none, share a tag")
+	}
 }
 
-// The hot path allocates nothing, for each verdict.
+// Rule 3's tag names the address the flow was sent to: a host with two addresses gives each its own tag, the same for
+// every port and protocol of it, and another subject's flows to the same address take that subject's.
+func TestBridgeEgressRuleThreeTagsSplitByAddress(t *testing.T) {
+	fixture := egressTestFixture()
+	fixture.Addresses = append(fixture.Addresses, "100.80.1.4")
+	test := newEgressTest(t, device.BridgePolicyProfileHost, device.PostureEnforcingDocument, fixture)
+	first := egressTestHostedTag(egressTestUntagged, "100.80.1.2")
+	second := egressTestHostedTag(egressTestUntagged, "100.80.1.4")
+	test.expectMap("the first address", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:22"), "127.0.0.1:22", first)
+	test.expectMap("the first address, ICMP", egressTestFlow(egressTestUntagged, connect.IpProtocolIcmp, "100.80.1.2:0"), "127.0.0.1:0", first)
+	test.expectMap("the second address", egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.4:22"), "127.0.0.1:22", second)
+	test.expectMap("another subject at the second", egressTestFlow(egressTestTagged, connect.IpProtocolTcp, "100.80.1.4:443"),
+		"127.0.0.1:443", egressTestHostedTag(egressTestTagged, "100.80.1.4"))
+	if first == second {
+		t.Fatal("two addresses share a tag")
+	}
+}
+
+// The hot path allocates nothing, for each verdict: a map, rule 3's tag by address, a pass, a deny and a remap at a
+// host, and another client's exit by the untagged rows at an sdk provider.
 func TestBridgeEgressResolveAllocatesNothing(t *testing.T) {
 	test := newEgressTest(t, device.BridgePolicyProfileHost, device.PostureEnforcingNoDocument, egressTestFixture())
 	flows := []*connect.EgressFlow{
 		egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:5432"),
+		egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.1.2:22"),
 		egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "192.168.77.20:443"),
 		egressTestFlow(egressTestTagged, connect.IpProtocolTcp, "192.168.77.20:443"),
 		egressTestFlow(egressTestUntagged, connect.IpProtocolTcp, "100.80.200.9:443"),
@@ -673,6 +751,14 @@ func TestBridgeEgressResolveAllocatesNothing(t *testing.T) {
 		if allocations := testing.AllocsPerRun(100, func() { test.policy.ResolveEgress(flow) }); allocations != 0 {
 			t.Errorf("%v: %v allocations", flow.To, allocations)
 		}
+	}
+	fixture := egressTestFixture()
+	fixture.Untagged = &sidecartest.BridgeRulesFixtureUntagged{Exit: []sidecartest.BridgeRulesFixtureReach{{Ports: "tcp:443"}}}
+	sdk := newEgressTest(t, device.BridgePolicyProfileSdkProvider, device.PostureEnforcingDocument, fixture)
+	other := egressTestFlow(0x7F, connect.IpProtocolTcp, "203.0.113.9:443")
+	other.Principal = nil
+	if allocations := testing.AllocsPerRun(100, func() { sdk.policy.ResolveEgress(other) }); allocations != 0 {
+		t.Errorf("another client's exit: %v allocations", allocations)
 	}
 }
 
