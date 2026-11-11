@@ -7,8 +7,9 @@
 //	readers   only the owner's consented devices (§8.5) read or write an entry or its Used at: every call first asks
 //	          the authority whether this sidecar is consented for the mailbox's owner (SidecarAuthority.Consented,
 //	          ACL's one predicate) and refuses otherwise, an absent authority included; no daemon method, ur command
-//	          or MCP tool reaches a MailVault, so agents reach entries by no path here (question
-//	          mail-m8-02-vault-readers holds what keeps a mailbox's other readers out)
+//	          or MCP tool reaches a MailVault, so agents reach entries by no path here; the narrower readership is a
+//	          rule, not a key (QD-673, question mail-m8-02-vault-readers): MCP's guard refuses every evs tool on a
+//	          mailbox's vault/, while the mailbox's EvsShare subjects and audit reader hold keys that open entries
 //	slots     the mailbox is record-class, so each chain of an entry's file keeps its key in a slot of its own
 //	          (evs_plan.go): a diff seals under its chain's slot key and a checkpoint draws a new slot, whose one key
 //	          sits at index 0 (evs_upload.go)
@@ -27,7 +28,8 @@
 //	          first, so a crash between leaves no version openable and only the removal to finish, which
 //	          ResumeVaultDeletions, or the delete called again, finishes from evs's erasures on any of the owner's
 //	          devices (§11.12's reconcile row); a path no slot or walk reaches, a general repo's or one removed
-//	          without this ERASE (question mail-m8-02-history-of-a-removed-path), is refused, never answered shredded
+//	          without this ERASE, which History cannot walk until evs serves a removed path's versions (QD-672,
+//	          question mail-m8-02-history-of-a-removed-path), is refused, never answered shredded
 //	erased    an entry a committed vault ERASE names is never read again, since a version whose slot key is gone
 //	          reads as tamper; its id never takes a new entry
 //	never     no index covers vault/ (D-MAIL-16, D-EVS-43), since a mailbox's other readers may not read it, and this
@@ -950,7 +952,8 @@ func (self *mailVaultEvsStore) Write(ctx context.Context, writes []*mailStoreWri
 // History's walk, page after page of HistoryVersionCount, to the path's first version, each version below the one
 // before it. A walk that stops descending ends there: evs answers a read by number of a removed path's older version
 // with the removal again, so History of a removed path repeats its removal and reaches none of the versions before
-// it (question mail-m8-02-history-of-a-removed-path), which shred then refuses unless the vault erased them first.
+// it, until evs serves them by number and History stops such a walk itself (QD-672, question
+// mail-m8-02-history-of-a-removed-path); shred then refuses unless the vault erased them first.
 func (self *mailVaultEvsStore) Versions(ctx context.Context, path string) ([]*EvsHistoryVersion, error) {
 	versions := []*EvsHistoryVersion{}
 	pageCount := self.repo.client.settings.HistoryVersionCount
