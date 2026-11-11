@@ -20,18 +20,23 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// A record repo with a small and a large entry, each of whose chains keeps its key in a slot of its own.
-func newMirrorWorld(t *testing.T) (*epochWorld, *epochDevice) {
+// A record repo with a small and a large entry, each of whose chains keeps its key in a slot of its own, and the small
+// entry's slot: slot ids are random, so the cluster's sorted keys do not say which is whose.
+func newMirrorWorld(t *testing.T) (*epochWorld, *epochDevice, sidecar.Id) {
 	t.Helper()
 	world := newEpochWorldOf(t, protocol.RepoKind_REPO_KIND_RECORD)
 	writer := world.device("w", nil)
 	if _, err := writer.write("ledger/a", bytes.Repeat([]byte("an entry of the ledger; "), 300)); err != nil {
 		t.Fatalf("the small entry: %v", err)
 	}
+	smallSlots := epochNewSlots(nil, world.slotKeys())
+	if len(smallSlots) != 1 {
+		t.Fatalf("%d slots after the small entry", len(smallSlots))
+	}
 	if _, err := writer.write("ledger/b", bytes.Repeat([]byte("a larger entry; "), 20000)); err != nil {
 		t.Fatalf("the large entry: %v", err)
 	}
-	return world, writer
+	return world, writer, smallSlots[0]
 }
 
 func newWorldMirror(t *testing.T, world *epochWorld, device *epochDevice) *sidecar.EvsMirror {
@@ -54,7 +59,7 @@ func mirrorKeys(t *testing.T, mirror *sidecar.EvsMirror, family sidecar.EvsMirro
 }
 
 func TestEvsMirrorHoldsEveryObjectAPushNames(t *testing.T) {
-	world, _ := newMirrorWorld(t)
+	world, _, _ := newMirrorWorld(t)
 	reader := world.device("r", nil)
 	mirror := newWorldMirror(t, world, reader)
 	result, err := mirror.Sync(world.ctx)
@@ -124,7 +129,7 @@ func TestEvsMirrorHoldsEveryObjectAPushNames(t *testing.T) {
 
 // §11.13's status row on the fake clock: a ref an hour behind, and a check a week old, read partial.
 func TestEvsMirrorCoverageStatesOnAFakeClock(t *testing.T) {
-	world, writer := newMirrorWorld(t)
+	world, writer, _ := newMirrorWorld(t)
 	reader := world.device("r", nil)
 	mirror := newWorldMirror(t, world, reader)
 	if _, err := mirror.Sync(world.ctx); err != nil {
@@ -176,15 +181,14 @@ func TestEvsMirrorCoverageStatesOnAFakeClock(t *testing.T) {
 // §11.13's erasure row: an ERASE the next sync takes, from the erasure ref before any other ref, removes the slot copy
 // it covers; evs emptied that slot, so it counts as erased and the mirror stays full.
 func TestEvsMirrorAppliesAnErasureBeforeTheNextSync(t *testing.T) {
-	world, writer := newMirrorWorld(t)
+	world, writer, smallSlot := newMirrorWorld(t)
 	mirrorWorldAdmin(world, "w")
 	reader := world.device("r", nil)
 	mirror := newWorldMirror(t, world, reader)
-	before := world.slotKeys()
 	if _, err := mirror.Sync(world.ctx); err != nil {
 		t.Fatal(err)
 	}
-	oldSlot := epochNewSlots(nil, before[:1])[0]
+	oldSlot := smallSlot
 	if held, err := mirror.Store().Has(sidecar.EvsMirrorSlotKey(oldSlot.Bytes())); err != nil || !held {
 		t.Fatalf("the slot before its erasure: %v %v", held, err)
 	}
@@ -235,7 +239,7 @@ func TestEvsMirrorAppliesAnErasureBeforeTheNextSync(t *testing.T) {
 // A slot evs no longer serves, with no ERASE behind it, leaves the mirror partial and the ref below the push naming
 // it; once it is back, the next sync holds it and the ref reaches its head.
 func TestEvsMirrorReportsAMissingSlotPartial(t *testing.T) {
-	world, _ := newMirrorWorld(t)
+	world, _, _ := newMirrorWorld(t)
 	keys := world.slotKeys()
 	lost := keys[len(keys)-1]
 	object, err := world.cluster.Get(world.ctx, lost)
@@ -286,7 +290,7 @@ func TestEvsMirrorReportsAMissingSlotPartial(t *testing.T) {
 
 // A mirrored segment whose bytes rotted on disk fails the next hash check and reads partial.
 func TestEvsMirrorCheckFindsARottedSegment(t *testing.T) {
-	world, _ := newMirrorWorld(t)
+	world, _, _ := newMirrorWorld(t)
 	reader := world.device("r", nil)
 	mirror := newWorldMirror(t, world, reader)
 	if _, err := mirror.Sync(world.ctx); err != nil {
