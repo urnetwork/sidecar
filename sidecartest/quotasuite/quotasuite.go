@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ type Target struct {
 	ReadBalances func(networkId connect.Id) ([]*sidecartest.QuotaBalance, error)
 	// Applies what the store leaves for later, as T3's debit flush. nil where debits apply at once.
 	Settle func() error
-	// Forgets every rate counter, debit id, pacing slot and reservation, as a Redis failover does.
+	// Forgets every rate counter, debit id, pacing seat and reservation, as a Redis failover does.
 	LoseRedis func() error
 	// Makes the Quota's Redis fail, or work again.
 	SetRedisFailing func(failing bool) error
@@ -73,7 +74,7 @@ func RunLimits(t *testing.T, newTarget NewTarget) {
 	runCases(t, newTarget, limitCases())
 }
 
-// CountRate: windows, debit ids, allowances, the floor and the pacing.
+// CountRate: windows, debit ids, allowances, the floor and the pacing by seat.
 func RunRates(t *testing.T, newTarget NewTarget) {
 	t.Helper()
 	runCases(t, newTarget, rateCases())
@@ -114,7 +115,7 @@ func rateCases() []*suiteCase {
 		{name: "caller-bugs-are-errors", run: caseRateCallerBugsAreErrors},
 		{name: "count-rate-is-all-or-none", run: caseCountRateIsAllOrNone},
 		{name: "a-debit-counts-once-across-a-lost-response", run: caseADebitCountsOnce},
-		{name: "a-replayed-debit-answers-its-first-result", run: caseAReplayAnswersItsFirstResult},
+		{name: "a-passed-debit-replays-and-a-refused-one-is-judged-afresh", run: caseAReplayIsJudgedByItsPass},
 		{name: "minute-windows-turn-on-the-clock", run: caseMinuteWindowsTurn},
 		{name: "day-windows-turn-at-utc-midnight", run: caseDayWindowsTurn},
 		{name: "an-erasers-allowance-is-its-own", run: caseAnErasersAllowanceIsItsOwn},
@@ -122,7 +123,9 @@ func rateCases() []*suiteCase {
 		{name: "an-eraser-past-its-minute-leaves-another-passing", run: caseAnEraserPastItsMinute},
 		{name: "the-pacing-gives-equal-turns", run: casePacingGivesEqualTurns},
 		{name: "a-waiting-eraser-keeps-its-place", run: caseAWaitingEraserKeepsItsPlace},
-		{name: "erasers-returning-together-take-r-a-second", run: caseErasersReturningTogether},
+		{name: "erasers-returning-together-take-their-seats", run: caseErasersReturningTogether},
+		{name: "an-upload-refused-for-its-turn-asks-again-under-its-id", run: caseARefusedUploadAsksAgain},
+		{name: "an-eraser-its-allowance-refuses-holds-no-seat", run: caseAnAllowanceRefusalHoldsNoSeat},
 		{name: "redis-lost-or-failing-opens-the-rates", run: caseRedisLostOrFailing},
 	}
 }
@@ -374,9 +377,9 @@ func caseADebitCountsOnce(ctx context.Context, target *Target) error {
 	return expectRefusal("a new debit past the limit", answered(countOnce(ctx, target, networkId, sidecar.QuotaRateKeyDrop, 1)), limitKeyDropsPerDay)
 }
 
-// QUOTA-M2-03: a replay of a debit id answers its first result, a refusal included, whatever the
-// window says now; a later ask takes a new id.
-func caseAReplayAnswersItsFirstResult(ctx context.Context, target *Target) error {
+// DESIGN-DETAILS 13.2.1: a debit id that passed answers pass again and counts nothing; one that was refused
+// recorded nothing, so asked again it is judged afresh, and once it passes it too replays as passed.
+func caseAReplayIsJudgedByItsPass(ctx context.Context, target *Target) error {
 	networkId, err := newNetwork(target, "free", map[string]int64{limitKeyDropsPerDay: 1})
 	if err != nil {
 		return err
@@ -386,23 +389,29 @@ func caseAReplayAnswersItsFirstResult(ctx context.Context, target *Target) error
 	if err := expectNoRefusal("the day's drop", answered(target.Quota.CountRate(ctx, networkId, keyAmounts, passedId))); err != nil {
 		return err
 	}
+	if err := expectNoRefusal("the passed debit replayed", answered(target.Quota.CountRate(ctx, networkId, keyAmounts, passedId))); err != nil {
+		return err
+	}
 	refusedId := connect.NewId()
 	first, err := target.Quota.CountRate(ctx, networkId, keyAmounts, refusedId)
 	if err := expectRefusal("a second drop", answered(first, err), limitKeyDropsPerDay); err != nil {
 		return err
 	}
+	if err := expectRefusal("the refused debit asked again the same day", answered(target.Quota.CountRate(ctx, networkId, keyAmounts, refusedId)), limitKeyDropsPerDay); err != nil {
+		return err
+	}
 	target.Clock.Advance(retryAfter(first))
-	replayed, err := target.Quota.CountRate(ctx, networkId, keyAmounts, refusedId)
-	if err != nil {
+	if err := expectNoRefusal("the refused debit on the next day", answered(target.Quota.CountRate(ctx, networkId, keyAmounts, refusedId))); err != nil {
 		return err
 	}
-	if replayed == nil || *replayed != *first {
-		return fmt.Errorf("the replay answered %+v, want %+v", replayed, first)
-	}
-	if err := expectNoRefusal("the passed debit replayed", answered(target.Quota.CountRate(ctx, networkId, keyAmounts, passedId))); err != nil {
+	if err := expectNoRefusal("its pass replayed", answered(target.Quota.CountRate(ctx, networkId, keyAmounts, refusedId))); err != nil {
 		return err
 	}
-	return expectNoRefusal("the next day's drop", answered(countOnce(ctx, target, networkId, sidecar.QuotaRateKeyDrop, 1)))
+	if err := expectNoRefusal("yesterday's pass replayed", answered(target.Quota.CountRate(ctx, networkId, keyAmounts, passedId))); err != nil {
+		return err
+	}
+	// the day's one drop is the refused debit's, counted once
+	return expectRefusal("a new drop", answered(countOnce(ctx, target, networkId, sidecar.QuotaRateKeyDrop, 1)), limitKeyDropsPerDay)
 }
 
 // The network's 60 ERASE, CUT and CLOSURE pushes a minute, whose refusal only classes: it lifts at the
@@ -643,8 +652,10 @@ func caseAWaitingEraserKeepsItsPlace(ctx context.Context, target *Target) error 
 	return expectNoRefusal("the waiter at its turn", answered(countOnce(ctx, target, networkId, sidecar.QuotaRateKeyClosureUpload(waiterId), 1)))
 }
 
-// Erasers whose turns all passed while they were away come back at once: R take that second, and the
-// rest wait for the next.
+// Twelve erasers whose seats lapsed while they were away ask at one instant, the top of a second, in a fixed
+// order that puts the last seated first, then each obeys every answer (DESIGN-DETAILS 13.6). The second takes
+// R uploads, two by the first asker, whose next seat is the cell behind its own; each asker past the first R - 1
+// is told an instant in a later second; and all twelve have taken three times within 10 s.
 func caseErasersReturningTogether(ctx context.Context, target *Target) error {
 	networkId, err := newNetwork(target, "free", nil)
 	if err != nil {
@@ -655,6 +666,7 @@ func caseErasersReturningTogether(ctx context.Context, target *Target) error {
 		return err
 	}
 	perS := sidecar.QuotaClosurePacingPerS(limits)
+	cell := time.Second / time.Duration(perS)
 	eraserIds := []connect.Id{}
 	for range 3 * perS {
 		eraserId := connect.NewId()
@@ -663,28 +675,162 @@ func caseErasersReturningTogether(ctx context.Context, target *Target) error {
 			return err
 		}
 	}
-	// back at the top of a second, well past every turn and within the slots' horizon
+	slices.Reverse(eraserIds)
 	now := target.Clock.Now()
 	target.Clock.AdvanceTo(time.Unix(now.Unix()+10, 0))
 	back := target.Clock.Now()
-	taken := int64(0)
-	for _, eraserId := range eraserIds {
+	backSecond := back.Unix()
+	eraserAskTimes := map[connect.Id]time.Time{}
+	for index, eraserId := range eraserIds {
 		refusal, err := countOnce(ctx, target, networkId, sidecar.QuotaRateKeyClosureUpload(eraserId), 1)
 		if err != nil {
 			return err
 		}
-		if refusal == nil {
-			taken += 1
-			continue
-		}
-		if refusal.LimitKey != limitKeyClosureUploadsPerS || refusal.RetryAfterMs != 1000 {
-			return fmt.Errorf("refused %+v", refusal)
+		switch {
+		case index == 0 && refusal != nil:
+			return fmt.Errorf("the first asker was refused %+v", refusal)
+		case index == 0:
+			eraserAskTimes[eraserId] = back.Add(cell)
+		case refusal == nil || refusal.LimitKey != limitKeyClosureUploadsPerS:
+			return fmt.Errorf("asker %d answered %+v", index, refusal)
+		default:
+			askTime := back.Add(retryAfter(refusal))
+			if want := back.Add(time.Duration(index+1) * cell); !askTime.Equal(want) {
+				return fmt.Errorf("asker %d told %s, want %s", index, askTime.Sub(back), want.Sub(back))
+			}
+			if int64(index) >= perS-1 && askTime.Unix() == backSecond {
+				return fmt.Errorf("asker %d told %s, in the second they came back in", index, askTime.Sub(back))
+			}
+			eraserAskTimes[eraserId] = askTime
 		}
 	}
-	if taken != perS {
-		return fmt.Errorf("%d took in the second from %s, want %d", taken, back, perS)
+	eraserTakeCounts := map[connect.Id]int{eraserIds[0]: 1}
+	secondTakeCounts := map[int64]int64{backSecond: 1}
+	firstAskerTakes := 1
+	for range 1000 {
+		var next time.Time
+		for _, eraserId := range eraserIds {
+			if askTime, ok := eraserAskTimes[eraserId]; ok && (next.IsZero() || askTime.Before(next)) {
+				next = askTime
+			}
+		}
+		if next.IsZero() {
+			break
+		}
+		target.Clock.AdvanceTo(next)
+		for _, eraserId := range eraserIds {
+			if askTime, ok := eraserAskTimes[eraserId]; !ok || !askTime.Equal(next) {
+				continue
+			}
+			refusal, err := countOnce(ctx, target, networkId, sidecar.QuotaRateKeyClosureUpload(eraserId), 1)
+			if err != nil {
+				return err
+			}
+			if refusal != nil {
+				return fmt.Errorf("an eraser asking at its seat %s was refused %+v", next.Sub(back), refusal)
+			}
+			secondTakeCounts[next.Unix()] += 1
+			eraserTakeCounts[eraserId] += 1
+			if eraserId == eraserIds[0] && next.Unix() == backSecond {
+				firstAskerTakes += 1
+			}
+			delete(eraserAskTimes, eraserId)
+			if eraserTakeCounts[eraserId] == 3 {
+				continue
+			}
+			// its next upload asks at once and is told its seat
+			refusal, err = countOnce(ctx, target, networkId, sidecar.QuotaRateKeyClosureUpload(eraserId), 1)
+			if err := expectRefusal("the next upload", answered(refusal, err), limitKeyClosureUploadsPerS); err != nil {
+				return err
+			}
+			eraserAskTimes[eraserId] = next.Add(retryAfter(refusal))
+		}
+	}
+	for second, count := range secondTakeCounts {
+		if perS < count {
+			return fmt.Errorf("second %d took %d", second, count)
+		}
+	}
+	if secondTakeCounts[backSecond] != perS || firstAskerTakes != 2 {
+		return fmt.Errorf("the second they came back in took %d, %d by the first asker", secondTakeCounts[backSecond], firstAskerTakes)
+	}
+	for index, eraserId := range eraserIds {
+		if eraserTakeCounts[eraserId] != 3 {
+			return fmt.Errorf("eraser %d took %d times", index, eraserTakeCounts[eraserId])
+		}
+	}
+	if done := target.Clock.Now(); back.Add(10 * time.Second).Before(done) {
+		return fmt.Errorf("the last took %s after they came back", done.Sub(back))
 	}
 	return nil
+}
+
+// An upload refused for its turn keeps its debit id: asked again at its retry_after_ms under the same id it
+// takes, and the replay of that pass counts nothing (the upload route's one debit id an upload).
+func caseARefusedUploadAsksAgain(ctx context.Context, target *Target) error {
+	networkId, err := newNetwork(target, "free", nil)
+	if err != nil {
+		return err
+	}
+	if err := expectNoRefusal("the first eraser", answered(countOnce(ctx, target, networkId, sidecar.QuotaRateKeyClosureUpload(connect.NewId()), 1))); err != nil {
+		return err
+	}
+	eraserId := connect.NewId()
+	keyAmounts := map[string]int64{
+		sidecar.QuotaRateKeyClosureUpload(eraserId): 1,
+		sidecar.QuotaRateKeyClosureBytes(eraserId):  1024,
+	}
+	debitId := connect.NewId()
+	refusal, err := target.Quota.CountRate(ctx, networkId, keyAmounts, debitId)
+	if err := expectRefusal("the second eraser", answered(refusal, err), limitKeyClosureUploadsPerS); err != nil {
+		return err
+	}
+	target.Clock.Advance(retryAfter(refusal))
+	if err := expectNoRefusal("asked again under its id", answered(target.Quota.CountRate(ctx, networkId, keyAmounts, debitId))); err != nil {
+		return err
+	}
+	if err := expectNoRefusal("its pass replayed", answered(target.Quota.CountRate(ctx, networkId, keyAmounts, debitId))); err != nil {
+		return err
+	}
+	// the bytes counted once: the rest of the allowance still fits
+	limits, err := target.Quota.Limits(ctx, networkId)
+	if err != nil {
+		return err
+	}
+	rule, err := sidecar.ParseQuotaRateKey(sidecar.QuotaRateKeyClosureBytes(eraserId))
+	if err != nil {
+		return err
+	}
+	return expectNoRefusal("the allowance's rest", answered(countOnce(ctx, target, networkId, sidecar.QuotaRateKeyClosureBytes(eraserId), rule.Limit(limits)-1024)))
+}
+
+// An eraser its own allowance refuses is given no seat, so the next eraser at the same instant takes the cell
+// it would have held.
+func caseAnAllowanceRefusalHoldsNoSeat(ctx context.Context, target *Target) error {
+	networkId, err := newNetwork(target, "free", nil)
+	if err != nil {
+		return err
+	}
+	limits, err := target.Quota.Limits(ctx, networkId)
+	if err != nil {
+		return err
+	}
+	spentId := connect.NewId()
+	rule, err := sidecar.ParseQuotaRateKey(sidecar.QuotaRateKeyClosureBytes(spentId))
+	if err != nil {
+		return err
+	}
+	if err := expectNoRefusal("the allowance", answered(countOnce(ctx, target, networkId, sidecar.QuotaRateKeyClosureBytes(spentId), rule.Limit(limits)))); err != nil {
+		return err
+	}
+	refusal, err := target.Quota.CountRate(ctx, networkId, map[string]int64{
+		sidecar.QuotaRateKeyClosureUpload(spentId): 1,
+		sidecar.QuotaRateKeyClosureBytes(spentId):  1,
+	}, connect.NewId())
+	if err := expectRefusal("past the allowance", answered(refusal, err), limitKeyClosureBytesPerDay); err != nil {
+		return err
+	}
+	return expectNoRefusal("the next eraser at the same instant", answered(countOnce(ctx, target, networkId, sidecar.QuotaRateKeyClosureUpload(connect.NewId()), 1)))
 }
 
 // A lost Redis forgets its counts, and a failing one answers nil: open, never shut (§20.7).

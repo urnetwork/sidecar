@@ -12,9 +12,14 @@
 //	sidecar.<domain>                          -key-origin's /v1/ only, as mmm's server block serves the key origin
 //	                                         (SDK-M4-06): every answer, a 404 too, with its CSP exactly, frame-ancestors
 //	                                         the listed page origin, and no X-Frame-Options
-//	api.<domain>, auth.<domain>               sidecartest's FakeApi, api's and the issuer's origins, with CORS for the
-//	                                         key origin alone, DPoP among its headers (SDK-M4-06's warp lists)
-//	127.0.0.1                                 /healthz, which a harness polls before it starts
+//	api.<domain>, auth.<domain>               sidecartest's FakeApi, api's and the issuer's origins
+//	evs.<domain>, gkm.<domain>                evsservice's and gkmservice's engines on the Net's host, over the
+//	                                         fixture network's state (fixture.go), whose owner's vault holds a record
+//	127.0.0.1                                 /healthz, which a harness polls before it starts, and /fixture.json, the
+//	                                         fixture's ids, which a harness reads; no browser is proxied here
+//
+// Every service answers CORS for the key origin alone, with the lb's lists (warp's cors_origins block, SDK-M4-06), and
+// the key origin's CSP names exactly api, auth, evs and gkm in its connect-src, as production's does.
 //
 // The proxy takes CONNECT to those names at the TLS port and nothing else, so a browser's request for any other host,
 // its own updates included, is refused here and never leaves the machine.
@@ -23,8 +28,8 @@
 // a secret. The fakes run on the Net's fake clock, moved with real time, so the tokens it mints and the DPoP proofs a
 // browser makes read as now.
 //
-// It prints "pagestack ready <page url>" once both listeners are up, and ends at SIGINT or SIGTERM. The listeners bind
-// 127.0.0.1 above port 50000 only, as the brief bounds what a test starts.
+// It prints "pagestack ready <page url>" once both listeners are up and the fixture's record is committed, and ends
+// at SIGINT or SIGTERM. The listeners bind 127.0.0.1 above port 50000 only, as the brief bounds what a test starts.
 package main
 
 import (
@@ -36,6 +41,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -55,6 +61,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -69,6 +76,21 @@ var pagestackKeyOriginFiles = map[string]string{
 	"/v1/worker.js":    "text/javascript; charset=utf-8",
 	"/v1/sidecar.wasm": "application/wasm",
 }
+
+// The fixture names under the domain: the page's two origins, the key origin, and the services the key origin's
+// connect-src lists, in its order.
+var (
+	pagestackPageNames    = []string{"ur", "other"}
+	pagestackServiceNames = []string{"api", "auth", "evs", "gkm"}
+)
+
+// The lb's CORS lists for a service whose cors_origins name an origin (warp's addCorsHeaders): what the page Worker
+// sends and reads cross-origin, a DPoP proof, If-Match and If-None-Match, Range, ETag and Retry-After among them.
+const (
+	pagestackCorsAllowMethods  = "GET, POST, PUT, DELETE, OPTIONS"
+	pagestackCorsAllowHeaders  = "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,X-Client-Version,X-UR-ClientInfo,X-UR-Intended-Network-Id,Authorization,Accept,Mcp-Session-Id,MCP-Protocol-Version,Last-Event-ID,DPoP,If-Match,If-None-Match"
+	pagestackCorsExposeHeaders = "Content-Length,Content-Range,Accept,Mcp-Session-Id,MCP-Protocol-Version,Last-Event-ID,ETag,Retry-After"
+)
 
 // What a run takes, its flags' defaults from defaultPagestackSettings.
 type pagestackSettings struct {
@@ -91,21 +113,33 @@ type pagestackSettings struct {
 	certificateLifetime time.Duration
 	// How long before now it is good from: an hour, for a browser's clock a little behind.
 	certificateBackdate time.Duration
+	// How long a browser may keep a preflight's answer: 20 days, the lb's Access-Control-Max-Age.
+	corsMaxAge time.Duration
+	// How long a fixture device's service token lasts: 15 min, the exchange's (§7.8).
+	serviceTokenLifetime time.Duration
+	// How long a fixture device's ReaderKey is good for: the most a ReaderKey may run (D-KEYS-25), past any run.
+	readerKeyLifetime time.Duration
+	// The fixture network's quota balance, in bytes: 1 TiB, so no fixture write meets a limit.
+	fixtureBalanceByteCount int64
 }
 
 // The defaults: the ports the harness uses, above 50000, and the fixture domain.
 func defaultPagestackSettings() *pagestackSettings {
 	return &pagestackSettings{
-		listen:              "127.0.0.1:58443",
-		proxy:               "127.0.0.1:58080",
-		domain:              "sidecartest.example",
-		clockInterval:       200 * time.Millisecond,
-		tunnelIdleTimeout:   5 * time.Minute,
-		readHeaderTimeout:   30 * time.Second,
-		dialTimeout:         10 * time.Second,
-		shutdownTimeout:     5 * time.Second,
-		certificateLifetime: 24 * time.Hour,
-		certificateBackdate: time.Hour,
+		listen:                  "127.0.0.1:58443",
+		proxy:                   "127.0.0.1:58080",
+		domain:                  "sidecartest.example",
+		clockInterval:           200 * time.Millisecond,
+		tunnelIdleTimeout:       5 * time.Minute,
+		readHeaderTimeout:       30 * time.Second,
+		dialTimeout:             10 * time.Second,
+		shutdownTimeout:         5 * time.Second,
+		certificateLifetime:     24 * time.Hour,
+		certificateBackdate:     time.Hour,
+		corsMaxAge:              20 * 24 * time.Hour,
+		serviceTokenLifetime:    15 * time.Minute,
+		readerKeyLifetime:       sidecar.GkmReaderKeyLifetime,
+		fixtureBalanceByteCount: 1024 * 1024 * 1024 * 1024,
 	}
 }
 
@@ -136,9 +170,9 @@ func loopbackPort(address string) (int, error) {
 	return int(addrPort.Port()), nil
 }
 
-func run(settings *pagestackSettings) error {
-	port, err := loopbackPort(settings.listen)
-	if err != nil {
+// Checks the settings a run binds and reads: loopback ports above 50000, an .example domain, and both directories.
+func checkPagestackSettings(settings *pagestackSettings) error {
+	if _, err := loopbackPort(settings.listen); err != nil {
 		return err
 	}
 	if _, err := loopbackPort(settings.proxy); err != nil {
@@ -152,86 +186,184 @@ func run(settings *pagestackSettings) error {
 			return fmt.Errorf("%q is not a directory", directory)
 		}
 	}
+	return nil
+}
+
+func run(settings *pagestackSettings) error {
+	if err := checkPagestackSettings(settings); err != nil {
+		return err
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-
-	origin := func(name string) string {
-		return fmt.Sprintf("https://%s.%s:%d", name, settings.domain, port)
-	}
-	netSettings := sidecartest.DefaultNetSettings()
-	netSettings.ClockStart = time.Now()
-	world := sidecartest.NewNet(ctx, netSettings)
-	defer world.Close()
-	apiSettings := sidecartest.DefaultFakeApiSettings()
-	apiSettings.Origin = origin("api")
-	apiSettings.AuthOrigin = origin("auth")
-	apiSettings.ServiceDomain = settings.domain
-	api, err := world.AddApi(apiSettings)
+	listener, err := net.Listen("tcp", settings.listen)
 	if err != nil {
 		return err
 	}
-	// the fakes' clock follows real time, since a browser's tokens and proofs carry it
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(settings.clockInterval):
-			}
-			if now := time.Now(); world.Clock().Now().Before(now) {
-				world.Clock().AdvanceTo(now)
-			}
-		}
-	}()
-
-	names := []string{}
-	for _, name := range []string{"ur", "other", "sidecar", "api", "auth"} {
-		names = append(names, name+"."+settings.domain)
-	}
-	certificate, err := pagestackCertificate(append(copiedNames(names), "localhost"), settings)
-	if err != nil {
-		return err
-	}
-	handler := &pagestackHandler{
-		settings:   settings,
-		api:        api,
-		pageOrigin: origin("ur"),
-		keyOrigin:  origin("sidecar"),
-		csp: fmt.Sprintf("default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' %s %s; frame-ancestors %s",
-			origin("api"), origin("auth"), origin("ur")),
-	}
-	listener, err := tls.Listen("tcp", settings.listen, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12})
-	if err != nil {
-		return err
-	}
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: settings.readHeaderTimeout}
 	proxyListener, err := net.Listen("tcp", settings.proxy)
 	if err != nil {
 		listener.Close()
 		return err
 	}
-	proxy := &pagestackProxy{
-		target:   settings.listen,
-		port:     strconv.Itoa(port),
-		names:    append(copiedNames(names), "localhost"),
+	stack, err := newPagestack(ctx, settings, listener, proxyListener)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("pagestack ready %s\n", stack.pageUrl())
+	<-ctx.Done()
+	return stack.close()
+}
+
+// One running stack (the file's comment): the Net and its fakes, the fixture network, the TLS listener's server and
+// the proxy.
+type pagestack struct {
+	settings    *pagestackSettings
+	port        int
+	cancel      context.CancelFunc
+	world       *sidecartest.Net
+	fixture     *pagestackFixture
+	certificate tls.Certificate
+	handler     *pagestackHandler
+	server      *http.Server
+	proxy       *pagestackProxy
+
+	proxyListener net.Listener
+	serving       sync.WaitGroup
+	closeOnce     sync.Once
+	closeErr      error
+}
+
+// Starts a stack serving TLS on listener and its proxy on proxyListener, which it owns from here and closes, on a
+// failure too. It answers once the fixture's record is committed.
+func newPagestack(ctx context.Context, settings *pagestackSettings, listener net.Listener, proxyListener net.Listener) (stack *pagestack, returnErr error) {
+	stackCtx, cancel := context.WithCancel(ctx)
+	stack = &pagestack{settings: settings, cancel: cancel, proxyListener: proxyListener}
+	defer func() {
+		if returnErr != nil {
+			listener.Close()
+			stack.close()
+		}
+	}()
+	address, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		return nil, fmt.Errorf("the listener at %s is not TCP", listener.Addr())
+	}
+	stack.port = address.Port
+
+	netSettings := sidecartest.DefaultNetSettings()
+	netSettings.ClockStart = time.Now()
+	stack.world = sidecartest.NewNet(stackCtx, netSettings)
+	apiSettings := sidecartest.DefaultFakeApiSettings()
+	apiSettings.Origin = stack.origin("api")
+	apiSettings.AuthOrigin = stack.origin("auth")
+	apiSettings.ServiceDomain = settings.domain
+	api, err := stack.world.AddApi(apiSettings)
+	if err != nil {
+		return nil, err
+	}
+	// the fakes' clock follows real time, since a browser's tokens and proofs carry it
+	stack.serving.Add(1)
+	go func() {
+		defer stack.serving.Done()
+		for {
+			select {
+			case <-stackCtx.Done():
+				return
+			case <-time.After(settings.clockInterval):
+			}
+			if now := time.Now(); stack.world.Clock().Now().Before(now) {
+				stack.world.Clock().AdvanceTo(now)
+			}
+		}
+	}()
+	stack.fixture, err = newPagestackFixture(stackCtx, stack.world, settings)
+	if err != nil {
+		return nil, fmt.Errorf("the fixture network: %w", err)
+	}
+
+	names := stack.names()
+	stack.certificate, err = pagestackCertificate(names, settings)
+	if err != nil {
+		return nil, err
+	}
+	connectOrigins := []string{}
+	for _, name := range pagestackServiceNames {
+		connectOrigins = append(connectOrigins, stack.origin(name))
+	}
+	stack.handler = &pagestackHandler{
+		settings:   settings,
+		api:        api,
+		evs:        stack.fixture.evs.Handler(),
+		gkm:        stack.fixture.gkm.Handler(),
+		fixture:    stack.fixture,
+		pageOrigin: stack.origin("ur"),
+		keyOrigin:  stack.origin("sidecar"),
+		csp: fmt.Sprintf("default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' %s; frame-ancestors %s",
+			strings.Join(connectOrigins, " "), stack.origin("ur")),
+	}
+	stack.server = &http.Server{Handler: stack.handler, ReadHeaderTimeout: settings.readHeaderTimeout}
+	tlsListener := tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{stack.certificate}, MinVersion: tls.VersionTLS12})
+	stack.proxy = &pagestackProxy{
+		target:   listener.Addr().String(),
+		port:     strconv.Itoa(stack.port),
+		names:    names,
 		settings: settings,
 	}
-	go server.Serve(listener)
-	go proxy.serve(ctx, proxyListener)
-	fmt.Printf("pagestack ready %s/fixture-page.html\n", origin("ur"))
-	<-ctx.Done()
-	proxyListener.Close()
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), settings.shutdownTimeout)
-	defer shutdownCancel()
-	return server.Shutdown(shutdownCtx)
+	stack.serving.Add(2)
+	go func() {
+		defer stack.serving.Done()
+		stack.server.Serve(tlsListener)
+	}()
+	go func() {
+		defer stack.serving.Done()
+		stack.proxy.serve(stackCtx, proxyListener)
+	}()
+	return stack, nil
 }
 
-// A copy of names, so appending to it never writes into names.
-func copiedNames(names []string) []string {
-	return append([]string(nil), names...)
+// The origin of a fixture name at the TLS port.
+func (self *pagestack) origin(name string) string {
+	return fmt.Sprintf("https://%s.%s:%d", name, self.settings.domain, self.port)
 }
 
-// A self-signed certificate for names, made now and good for the settings' lifetime.
+// The fixture page at the listed page origin.
+func (self *pagestack) pageUrl() string {
+	return self.origin("ur") + "/fixture-page.html"
+}
+
+// Every name the certificate holds and the proxy tunnels: each fixture name under the domain, and localhost.
+func (self *pagestack) names() []string {
+	names := []string{}
+	for _, name := range append(append(append([]string{}, pagestackPageNames...), "sidecar"), pagestackServiceNames...) {
+		names = append(names, name+"."+self.settings.domain)
+	}
+	return append(names, "localhost")
+}
+
+// Stops the listeners, waits for requests in flight up to the settings' bound, and ends the fixture and the Net.
+// Safe to call again.
+func (self *pagestack) close() error {
+	self.closeOnce.Do(func() {
+		if self.proxyListener != nil {
+			self.proxyListener.Close()
+		}
+		if self.server != nil {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), self.settings.shutdownTimeout)
+			self.closeErr = self.server.Shutdown(shutdownCtx)
+			shutdownCancel()
+		}
+		self.cancel()
+		self.serving.Wait()
+		if self.fixture != nil {
+			self.fixture.close()
+		}
+		if self.world != nil {
+			self.world.Close()
+		}
+	})
+	return self.closeErr
+}
+
+// A self-signed certificate for names and 127.0.0.1, made now and good for the settings' lifetime.
 func pagestackCertificate(names []string, settings *pagestackSettings) (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -257,13 +389,20 @@ func pagestackCertificate(names []string, settings *pagestackSettings) (tls.Cert
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, nil
 }
 
 // Routes each request by its Host (the file's comment).
 type pagestackHandler struct {
 	settings   *pagestackSettings
 	api        http.Handler
+	evs        http.Handler
+	gkm        http.Handler
+	fixture    *pagestackFixture
 	pageOrigin string
 	keyOrigin  string
 	csp        string
@@ -282,16 +421,38 @@ func (self *pagestackHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	case "sidecar." + domain:
 		self.serveKeyOrigin(writer, request)
 	case "api." + domain, "auth." + domain:
-		self.serveApi(writer, request)
+		self.serveService(writer, request, self.api)
+	case "evs." + domain:
+		self.serveService(writer, request, self.evs)
+	case "gkm." + domain:
+		self.serveService(writer, request, self.gkm)
 	case "127.0.0.1":
-		if request.URL.Path == "/healthz" {
-			writer.WriteHeader(http.StatusOK)
-			io.WriteString(writer, "ok\n")
-			return
-		}
-		http.NotFound(writer, request)
+		self.serveHarness(writer, request)
 	default:
 		http.Error(writer, "no such fixture host", http.StatusMisdirectedRequest)
+	}
+}
+
+// What the harness itself reads: /healthz, and the fixture's ids.
+func (self *pagestackHandler) serveHarness(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(writer, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	switch request.URL.Path {
+	case "/healthz":
+		writer.WriteHeader(http.StatusOK)
+		io.WriteString(writer, "ok\n")
+	case "/fixture.json":
+		if self.fixture == nil {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Cache-Control", "no-store")
+		json.NewEncoder(writer).Encode(self.fixture.view())
+	default:
+		http.NotFound(writer, request)
 	}
 }
 
@@ -344,22 +505,24 @@ func (self *pagestackHandler) serveKeyOrigin(writer http.ResponseWriter, request
 	writer.Write(content)
 }
 
-// The fake api, with CORS for the key origin alone, as the lb's lists give it (SDK-M4-06).
-func (self *pagestackHandler) serveApi(writer http.ResponseWriter, request *http.Request) {
+// A service, with CORS for the key origin alone, as the lb's cors_origins give it to api, auth, evs and gkm
+// (SDK-M4-06): a preflight from the key origin answers 204 with the lb's lists, and an answer to it carries its
+// origin; any other origin, or none, gets no CORS header, so a browser refuses that page the answer.
+func (self *pagestackHandler) serveService(writer http.ResponseWriter, request *http.Request, service http.Handler) {
 	if request.Header.Get("Origin") == self.keyOrigin {
 		header := writer.Header()
 		header.Set("Access-Control-Allow-Origin", self.keyOrigin)
 		header.Set("Vary", "Origin")
-		header.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, DPoP, If-Match, If-None-Match")
-		header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		header.Set("Access-Control-Expose-Headers", "ETag, Retry-After")
-		header.Set("Access-Control-Max-Age", "600")
+		header.Set("Access-Control-Allow-Methods", pagestackCorsAllowMethods)
+		header.Set("Access-Control-Allow-Headers", pagestackCorsAllowHeaders)
+		header.Set("Access-Control-Expose-Headers", pagestackCorsExposeHeaders)
 		if request.Method == http.MethodOptions {
+			header.Set("Access-Control-Max-Age", strconv.FormatInt(int64(self.settings.corsMaxAge/time.Second), 10))
 			writer.WriteHeader(http.StatusNoContent)
 			return
 		}
 	}
-	self.api.ServeHTTP(writer, request)
+	service.ServeHTTP(writer, request)
 }
 
 // The CONNECT proxy browsers reach the fixture names through: to those names at the TLS port it tunnels to the TLS

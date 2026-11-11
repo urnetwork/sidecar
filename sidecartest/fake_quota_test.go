@@ -4,6 +4,7 @@
 package sidecartest
 
 import (
+	"math/rand/v2"
 	"testing"
 	"time"
 
@@ -17,7 +18,8 @@ func newQuotaFixture(t *testing.T) (*FakeQuota, *FakeClock, *FaultQueue) {
 	return NewFakeQuota(clock, faults, nil), clock, faults
 }
 
-// §20.7's 48 h keys: within them a debit id answers its first result, past them it counts anew.
+// §20.7's 48 h keys: within them a debit id that passed answers pass and counts nothing, past them it counts
+// anew.
 func TestFakeQuotaDebitIdsLapseAfterTheirLifetime(t *testing.T) {
 	quota, clock, _ := newQuotaFixture(t)
 	networkId := connect.NewId()
@@ -312,5 +314,121 @@ func TestFaultQuotaDropsAWrappedQuotasAnswer(t *testing.T) {
 	}
 	if got := inner.Balances(networkId)[0].ReservedByteCount; got != 0 {
 		t.Errorf("a lease failed before it applied reserved %d", got)
+	}
+}
+
+// The fake's pacing is sidecar.QuotaClosurePacing behind the call's own counters: on a fixed-seed run of
+// paced uploads, each eraser's 60 a minute judged first, every answer is the reference's, which server's
+// {sq_} script is held to in turn (quota_rate_pacing_test.go).
+func TestFakeQuotaPacingFollowsTheReference(t *testing.T) {
+	for _, perS := range []int64{4, 7} {
+		quota, clock, _ := newQuotaFixture(t)
+		networkId := connect.NewId()
+		quota.SetLimits(networkId, &sidecar.QuotaLimits{Tier: "free", Limits: map[string]int64{"evs_closure_uploads_per_s": perS}})
+		reference := sidecar.NewQuotaClosurePacing()
+		eraserMinuteTakes := map[connect.Id]map[int64]int64{}
+		random := rand.New(rand.NewPCG(uint64(perS), 652))
+		eraserIds := []connect.Id{}
+		for range 6 {
+			eraserIds = append(eraserIds, connect.NewId())
+			eraserMinuteTakes[eraserIds[len(eraserIds)-1]] = map[int64]int64{}
+		}
+		for step := range 3000 {
+			clock.Advance(time.Duration(random.IntN(120*1000)) * time.Microsecond)
+			now := clock.Now()
+			eraserId := eraserIds[random.IntN(len(eraserIds))]
+			refusal, err := quota.CountRate(t.Context(), networkId, map[string]int64{sidecar.QuotaRateKeyClosureUpload(eraserId): 1}, connect.NewId())
+			if err != nil {
+				t.Fatal(err)
+			}
+			minute := sidecar.QuotaRateWindowMinute.Index(now)
+			var want *sidecar.QuotaRefusal
+			if 60 <= eraserMinuteTakes[eraserId][minute] {
+				want = &sidecar.QuotaRefusal{LimitKey: "evs_closure_uploads_per_min", Limit: 60, Used: 60, RetryAfterMs: sidecar.QuotaRetryAfterMs(now, sidecar.QuotaRateWindowMinute.End(minute))}
+			} else if ok, seatTime, taken := reference.Ask(eraserId, now, perS); !ok {
+				want = sidecar.QuotaClosurePacingRefusal(&sidecar.QuotaLimits{Limits: map[string]int64{"evs_closure_uploads_per_s": perS}}, taken, reference.Clock(), seatTime)
+			} else {
+				reference.Take(eraserId, now, perS)
+				eraserMinuteTakes[eraserId][minute] += 1
+			}
+			if (refusal == nil) != (want == nil) || (refusal != nil && *refusal != *want) {
+				t.Fatalf("R = %d, step %d: %+v, want %+v", perS, step, refusal, want)
+			}
+		}
+	}
+}
+
+// An upload refused for its turn records nothing under its debit id, so asked again at its seat under the
+// same id it is judged afresh and takes; a replay of that pass counts nothing and takes no second seat.
+func TestFakeQuotaJudgesARefusedDebitAfresh(t *testing.T) {
+	quota, clock, _ := newQuotaFixture(t)
+	networkId := connect.NewId()
+	firstId := connect.NewId()
+	secondId := connect.NewId()
+	upload := func(eraserId connect.Id, debitId connect.Id) *sidecar.QuotaRefusal {
+		refusal, err := quota.CountRate(t.Context(), networkId, map[string]int64{
+			sidecar.QuotaRateKeyClosureUpload(eraserId): 1,
+			sidecar.QuotaRateKeyClosureBytes(eraserId):  1024,
+		}, debitId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return refusal
+	}
+	if refusal := upload(firstId, connect.NewId()); refusal != nil {
+		t.Fatalf("the first upload: %+v", refusal)
+	}
+	debitId := connect.NewId()
+	refused := upload(secondId, debitId)
+	if refused == nil || refused.LimitKey != "evs_closure_uploads_per_s" {
+		t.Fatalf("the second eraser's upload: %+v", refused)
+	}
+	clock.Advance(time.Duration(refused.RetryAfterMs) * time.Millisecond)
+	if refusal := upload(secondId, debitId); refusal != nil {
+		t.Fatalf("asked again at its seat under its id: %+v", refusal)
+	}
+	// the replay passes, counts no bytes and leaves the seat its take gave it
+	if refusal := upload(secondId, debitId); refusal != nil {
+		t.Fatalf("the replay of the pass: %+v", refusal)
+	}
+	// one cell behind its take, not two: the replay took no seat
+	next := upload(secondId, connect.NewId())
+	if next == nil || next.LimitKey != "evs_closure_uploads_per_s" || next.RetryAfterMs != 250 {
+		t.Fatalf("a new upload past the replayed one: %+v", next)
+	}
+	rule, err := sidecar.ParseQuotaRateKey(sidecar.QuotaRateKeyClosureBytes(secondId))
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowance := rule.Limit(&sidecar.QuotaLimits{Tier: "free"})
+	if refusal, err := quota.CountRate(t.Context(), networkId, map[string]int64{sidecar.QuotaRateKeyClosureBytes(secondId): allowance - 1024}, connect.NewId()); err != nil || refusal != nil {
+		t.Errorf("the allowance less one upload's bytes: %+v, %v", refusal, err)
+	}
+}
+
+// An eraser its own allowance refuses is given no seat: an eraser asking after it at the same instant takes
+// the cell it would have held.
+func TestFakeQuotaGivesNoSeatToAnAskItsAllowanceRefuses(t *testing.T) {
+	quota, _, _ := newQuotaFixture(t)
+	networkId := connect.NewId()
+	spentId := connect.NewId()
+	rule, err := sidecar.ParseQuotaRateKey(sidecar.QuotaRateKeyClosureBytes(spentId))
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowance := rule.Limit(&sidecar.QuotaLimits{Tier: "free"})
+	if refusal, err := quota.CountRate(t.Context(), networkId, map[string]int64{sidecar.QuotaRateKeyClosureBytes(spentId): allowance}, connect.NewId()); err != nil || refusal != nil {
+		t.Fatalf("the allowance: %+v, %v", refusal, err)
+	}
+	refusal, err := quota.CountRate(t.Context(), networkId, map[string]int64{
+		sidecar.QuotaRateKeyClosureUpload(spentId): 1,
+		sidecar.QuotaRateKeyClosureBytes(spentId):  1,
+	}, connect.NewId())
+	if err != nil || refusal == nil || refusal.LimitKey != "evs_closure_bytes_per_day" {
+		t.Fatalf("past the allowance: %+v, %v", refusal, err)
+	}
+	otherId := connect.NewId()
+	if refusal, err := quota.CountRate(t.Context(), networkId, map[string]int64{sidecar.QuotaRateKeyClosureUpload(otherId): 1}, connect.NewId()); err != nil || refusal != nil {
+		t.Errorf("the next eraser at the same instant: %+v, %v", refusal, err)
 	}
 }

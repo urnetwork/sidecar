@@ -100,9 +100,10 @@ func NewDropUsageBatchId(scanId connect.Id, cursorFrom []byte, cursorTo []byte) 
 
 // CountRate's keys for evs (§20.7's counters; §11.7, §11.12, §11.13), counted on the network's
 // {sq_<network_id>}. A key is its family, then ':' and the id it names when it names one. The window a
-// count lands in is the Quota's to tell from its clock, so no key carries a time. A replayed debit id
-// answers its first result, a refusal included (QUOTA-M2-03), so a caller asking again after a refusal's
-// retry_after_ms takes a new debit id.
+// count lands in is the Quota's to tell from its clock, so no key carries a time. A debit id that passed
+// answers pass again and counts nothing; one that was refused recorded nothing and is judged afresh
+// (DESIGN-DETAILS 13.2.1, QD-652), so a caller asking again after a refusal's retry_after_ms keeps its
+// debit id, and an upload whose answer was lost is charged once.
 const (
 	// The network's ERASE, CUT and CLOSURE pushes, 60 a minute. A refusal only classes the push: past
 	// the rate it queues as P1 and still commits (§11.12's push row). Count it in a call of its own, since
@@ -403,21 +404,30 @@ func QuotaClosurePacingPerS(limits *QuotaLimits) int64 {
 	return max(quotaLimitsValue(limits, quotaLimitKeyClosureUploadsPerS), quotaClosurePacingMinPerS)
 }
 
-// One network's closure pacing (§20.7's closure row; plan-QUOTA-small-readings reading 19), the state a
-// Quota keeps under {sq_<network_id>}: each asking eraser holds one slot on a tail spaced 1/R apart; a
-// refused ask keeps its slot, so an eraser that waits out a long retry_after_ms keeps its place against
-// erasers asking every second; a taken turn takes a new slot at the tail; a slot lapses horizon past
-// its turn; and a bucket of R a second bounds the network when erasers whose turns have passed come
-// back together, as at 00:00 UTC. With k erasers asking, each takes one upload every k/R s, and none
-// starves. Not safe for concurrent use: its Quota runs it under one lock or one script per network.
+// One network's closure pacing (§20.7's closure row, as DESIGN-DETAILS 13.2.1 and QD-652 give it), the state a
+// Quota keeps under {sq_<network_id>}. Each asking eraser holds one seat: a cell 1/R s wide, rounded up to the
+// microsecond, at the tail of the network's seats, good from its instant to the end of its calendar second and
+// lapsing with it. A seat is handed out only in a second that still has a free cell, its seats plus what it has
+// taken if it is the current one being fewer than R; else at the start of the next second, which is empty,
+// since no seat lies past the tail. An eraser whose seat is due takes and nothing else is checked, so the order
+// asks arrive in decides only the order seatless erasers are seated in. The network takes at most R uploads in
+// any second (P1), an eraser that asks at its seat's instant takes then whatever the others do (P3), a seat
+// nobody uses costs its one cell (P4), and with k erasers asking each takes one upload every k/R s.
+//
+// Time is the network's clock, the latest any call brought, which never runs back: a caller behind it is judged
+// as arriving at it. Every instant is kept in whole microseconds, as server's {sq_} script keeps them, so the
+// two agree on any sequence of asks. Not safe for concurrent use: its Quota runs it under one lock or one script
+// per network.
 type QuotaClosurePacing struct {
-	// the latest slot handed out
+	// the latest seat handed out
 	tail time.Time
-	// each asking eraser's slot: when its next turn comes
+	// each asking eraser's seat
 	eraserTurns map[connect.Id]time.Time
 	// uploads taken in the second numbered secondIndex since the epoch
 	secondIndex int64
 	secondCount int64
+	// the latest time any call brought
+	clock time.Time
 }
 
 // A network's pacing with no eraser asking, as after a Redis loss.
@@ -427,68 +437,98 @@ func NewQuotaClosurePacing() *QuotaClosurePacing {
 	}
 }
 
-// The time between slots at perS uploads a second.
+// One cell at perS uploads a second: 10^6 / perS µs, rounded up, so R cells never fit in less than a second.
+// A perS below 1 reads as 1.
 func quotaClosurePacingSpacing(perS int64) time.Duration {
-	return time.Second / time.Duration(max(perS, 1))
+	perS = max(perS, 1)
+	return time.Duration((1000*1000+perS-1)/perS) * time.Microsecond
 }
 
-// Whether eraserId may take an upload at now. An eraser with no slot, or one whose slot lapsed, takes
-// one at the tail first. False: the upload waits until liftTime, its turn or the next second, and
-// keeps its slot. The answer counts nothing: Take does, once every other count of the call passes.
-func (self *QuotaClosurePacing) Ask(eraserId connect.Id, now time.Time, perS int64, horizon time.Duration) (ok bool, liftTime time.Time, takenThisSecond int64) {
-	for otherId, turnTime := range self.eraserTurns {
-		if turnTime.Add(horizon).Before(now) {
-			delete(self.eraserTurns, otherId)
+// Moves the network's clock to now, in whole microseconds, when now is later; turns the second; and drops the
+// seats of earlier seconds, which have lapsed. It answers the clock, which every rule reads as now.
+func (self *QuotaClosurePacing) advance(now time.Time) time.Time {
+	now = now.UTC().Truncate(time.Microsecond)
+	if now.Before(self.clock) {
+		now = self.clock
+	}
+	self.clock = now
+	second := now.Unix()
+	if self.secondIndex != second {
+		self.secondIndex = second
+		self.secondCount = 0
+	}
+	secondStart := time.Unix(second, 0).UTC()
+	for eraserId, seat := range self.eraserTurns {
+		if seat.Before(secondStart) {
+			delete(self.eraserTurns, eraserId)
 		}
 	}
-	turnTime, holds := self.eraserTurns[eraserId]
+	return now
+}
+
+// Whether eraserId's seat is due at now (13.2.1's Ask). An eraser with no seat, or whose seat lapsed with its
+// second, is seated first. False: the upload waits for seatTime, the refusal's retry_after_ms running to it from
+// Clock, and the seat holds until its second ends. The answer counts nothing: Take does, once every other
+// counter of the call passed. A Quota asks only when none refused, so an eraser its own rate or allowance
+// refuses is given no seat.
+func (self *QuotaClosurePacing) Ask(eraserId connect.Id, now time.Time, perS int64) (ok bool, seatTime time.Time, takenThisSecond int64) {
+	now = self.advance(now)
+	seat, holds := self.eraserTurns[eraserId]
 	if !holds {
-		turnTime = self.nextSlot(now, perS)
-		self.eraserTurns[eraserId] = turnTime
+		seat = self.NextSeat(now, perS)
+		self.eraserTurns[eraserId] = seat
 	}
-	second := now.Unix()
-	if self.secondIndex != second {
-		self.secondIndex = second
-		self.secondCount = 0
-	}
-	if now.Before(turnTime) {
-		return false, turnTime, self.secondCount
-	}
-	if perS <= self.secondCount {
-		return false, time.Unix(second+1, 0).UTC(), self.secondCount
-	}
-	return true, time.Time{}, self.secondCount
+	return !now.Before(seat), seat, self.secondCount
 }
 
-// Takes the turn Ask allowed: counts the upload in its second and gives the eraser its next slot, at
-// the tail.
+// Takes the turn Ask allowed at now: counts the upload in its second and seats the eraser again at the tail,
+// its seat removed before the new seat's second is counted, so the second's sum stays as it was (P2).
 func (self *QuotaClosurePacing) Take(eraserId connect.Id, now time.Time, perS int64) {
-	second := now.Unix()
-	if self.secondIndex != second {
-		self.secondIndex = second
-		self.secondCount = 0
-	}
+	now = self.advance(now)
 	self.secondCount += 1
-	self.eraserTurns[eraserId] = self.nextSlot(now, perS)
+	delete(self.eraserTurns, eraserId)
+	self.eraserTurns[eraserId] = self.NextSeat(now, perS)
 }
 
-// A new slot at the tail: 1/R after the latest, and never before now.
-func (self *QuotaClosurePacing) nextSlot(now time.Time, perS int64) time.Time {
-	slot := self.tail.Add(quotaClosurePacingSpacing(perS))
-	if slot.Before(now) {
-		slot = now
+// A seat at the tail (13.2.1's NextSeat): a cell after the latest seat and never before now, moved to the start
+// of the next second when its own second has no free cell. It moves the tail there and answers it. Ask and Take
+// are the only callers that give the seat to an eraser; called alone, it spends a cell nobody holds.
+func (self *QuotaClosurePacing) NextSeat(now time.Time, perS int64) time.Time {
+	now = self.advance(now)
+	perS = max(perS, 1)
+	seat := self.tail.Add(quotaClosurePacingSpacing(perS))
+	if seat.Before(now) {
+		seat = now
 	}
-	self.tail = slot
-	return slot
+	second := seat.Unix()
+	used := int64(0)
+	for _, other := range self.eraserTurns {
+		if other.Unix() == second {
+			used += 1
+		}
+	}
+	if second == now.Unix() {
+		used += self.secondCount
+	}
+	if perS <= used {
+		seat = time.Unix(second+1, 0).UTC()
+	}
+	self.tail = seat
+	return seat
 }
 
-// How many erasers hold a slot: k, while each asks.
+// How many erasers hold a seat, lapsed ones included until the next call drops them: k, while each asks.
 func (self *QuotaClosurePacing) EraserCount() int {
 	return len(self.eraserTurns)
 }
 
-// The refusal for an upload asking before its turn, or past R this second: it lifts at liftTime.
-// takenThisSecond is what the network took in the second of now.
+// The network's clock: the latest time any call brought, which Ask judged at.
+func (self *QuotaClosurePacing) Clock() time.Time {
+	return self.clock
+}
+
+// The refusal for an upload asking before its seat: it lifts at liftTime, the seat, and now is the pacing's
+// Clock. takenThisSecond is what the network took in the second of now.
 func QuotaClosurePacingRefusal(limits *QuotaLimits, takenThisSecond int64, now time.Time, liftTime time.Time) *QuotaRefusal {
 	return &QuotaRefusal{
 		LimitKey:     quotaLimitKeyClosureUploadsPerS,

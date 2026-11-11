@@ -58,7 +58,8 @@ type Quota interface {
 	// The network's effective limits.
 	Limits(ctx context.Context, networkId connect.Id) (*QuotaLimits, error)
 	// Counts keyAmounts against the network's rates in one all-or-none script on {sq_<network_id>},
-	// once per debitId, so a retry counts nothing twice. A non-nil refusal counted nothing. Fails
+	// once per debitId, so a retry of a pass counts nothing twice. A non-nil refusal counted and
+	// recorded nothing, so the same debitId asked again is judged afresh (DESIGN-DETAILS 13.2.1). Fails
 	// open for one window if Redis is lost (§20.7).
 	CountRate(ctx context.Context, networkId connect.Id, keyAmounts map[string]int64, debitId connect.Id) (*QuotaRefusal, error)
 	// A lease for one edge process on one network and meter, drawing on escrow's per-balance
