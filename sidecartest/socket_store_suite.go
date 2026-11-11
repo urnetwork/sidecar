@@ -3,10 +3,15 @@
 // Every case runs through the interface alone, on a clock of its own and ids no other case shares, so one
 // Redis serves the whole run and a shared database's other keys change no verdict.
 //
-// Leases, shares and reports live by the store's injected clock, which each case moves; a store's
-// backing ttls run on real time and are never what a case reads. A case is a plain function returning
-// its first failure, and RunSocketStoreSuite loops over them, since one store's cases are homogeneous
-// variations (connect/CODESTYLE.md:216). A failure in one does not stop the next.
+// Leases, shares, reports, tombstones, floors and claims live by the store's injected clock, which each
+// case moves; a store's backing ttls run on real time and are never what a case reads, so no case moves
+// the clock past a pair's own ttl and then reads the pair. A case is a plain function returning its first
+// failure, and RunSocketStoreSuite loops over them, since one store's cases are homogeneous variations
+// (connect/CODESTYLE.md:216). A failure in one does not stop the next.
+//
+// The fence cases (DESIGN-DETAILS 13.6's socket_store_suite row) reach the paths a race reaches in Redis
+// through the interface and one hook, SocketStoreSuiteHooks.LapseClientSet: a client set ended before a
+// lease or a tombstone stands for the page whose set check a newer page had not yet raised.
 
 package sidecartest
 
@@ -42,6 +47,8 @@ type socketSuiteEnv struct {
 type socketSuiteCase struct {
 	name string
 	run  func(env *socketSuiteEnv) error
+	// Changes the defaults before the case's store is made, or nil.
+	settings func(settings *socketsservice.SocketStoreSettings)
 }
 
 // Makes a store for one case on clock with settings. Each case makes its own.
@@ -52,17 +59,61 @@ type SocketStoreFactory func(clock sidecar.Clock, settings *socketsservice.Socke
 func RunSocketStoreSuite(t testing.TB, newStore SocketStoreFactory) {
 	t.Helper()
 	for _, suiteCase := range socketSuiteCases() {
-		func() {
-			ctx, cancel := context.WithTimeout(context.Background(), socketSuiteCaseTimeout)
-			defer cancel()
-			clock := NewFakeClock(DefaultClockStart())
-			settings := socketsservice.DefaultSocketStoreSettings()
-			env := &socketSuiteEnv{ctx: ctx, clock: clock, settings: settings, store: newStore(clock, settings)}
-			if err := suiteCase.run(env); err != nil {
+		if err := runSocketSuiteCase(suiteCase, newStore); err != nil {
+			t.Errorf("%s: %v", suiteCase.name, err)
+		}
+	}
+}
+
+// One case on a store of its own.
+func runSocketSuiteCase(suiteCase socketSuiteCase, newStore SocketStoreFactory) error {
+	ctx, cancel := context.WithTimeout(context.Background(), socketSuiteCaseTimeout)
+	defer cancel()
+	clock := NewFakeClock(DefaultClockStart())
+	settings := socketsservice.DefaultSocketStoreSettings()
+	if suiteCase.settings != nil {
+		suiteCase.settings(settings)
+	}
+	env := &socketSuiteEnv{ctx: ctx, clock: clock, settings: settings, store: newStore(clock, settings)}
+	return suiteCase.run(env)
+}
+
+// Runs the one case named name, for a test named after the rule it holds (DESIGN-DETAILS 13.6's model
+// twins), which fails when the rule is taken out.
+func RunSocketStoreSuiteCase(t testing.TB, name string, newStore SocketStoreFactory) {
+	t.Helper()
+	for _, suiteCase := range socketSuiteCases() {
+		if suiteCase.name == name {
+			if err := runSocketSuiteCase(suiteCase, newStore); err != nil {
 				t.Errorf("%s: %v", suiteCase.name, err)
 			}
-		}()
+			return
+		}
 	}
+	t.Fatalf("no case %q", name)
+}
+
+// The names of the cases DESIGN-DETAILS 13.6 names a twin for.
+const (
+	SocketSuiteCaseRemovalLeavesATombstone = "a removal for cause leaves a tombstone that fences a put admitted below it"
+	SocketSuiteCasePairWriteBelowFloor     = "a pair write below the floor a removal left is refused"
+	SocketSuiteCaseOlderPageIsStale        = "a page of an older set writes no lease a newer page wrote or unlistened"
+)
+
+// What a store under the suite offers beside SocketStore, so a case can stand for a race its scripts
+// meet in Redis: a client's set ending, as its ttl ends it, before a page whose set check a newer page had
+// not yet raised. Both stores' suite runs offer it.
+type SocketStoreSuiteHooks interface {
+	LapseClientSet(ctx context.Context, clientId connect.Id) error
+}
+
+// Ends clientId's set through the store's hook.
+func (self *socketSuiteEnv) lapseSet(clientId connect.Id) error {
+	hooks, ok := self.store.(SocketStoreSuiteHooks)
+	if !ok {
+		return errors.New("the store offers no SocketStoreSuiteHooks")
+	}
+	return hooks.LapseClientSet(self.ctx, clientId)
 }
 
 func socketSuiteCases() []socketSuiteCase {
@@ -90,6 +141,20 @@ func socketSuiteCases() []socketSuiteCase {
 		{name: "first and last listeners are reported on explicit transitions", run: caseSocketFirstAndLastListener},
 		{name: "one name in two networks is two groups", run: caseSocketNetworksIsolated},
 		{name: "a group past the sample size still picks", run: caseSocketSampledGroupPicks},
+		{name: SocketSuiteCaseRemovalLeavesATombstone, run: caseSocketRemovalLeavesATombstone},
+		{name: "a put at or above a tombstone clears it, and a lease keeps its highest position", run: caseSocketPutClearsTombstone},
+		{name: "a lease admitted above a removal's position is kept", run: caseSocketRemovalKeptAboveItsPosition},
+		{name: "a page's refused entries are removed for cause at its position", run: caseSocketPageRefusedEntries},
+		{name: SocketSuiteCaseOlderPageIsStale, run: caseSocketOlderPageIsStale},
+		{name: "an unlisten older than the lease is kept", run: caseSocketOlderUnlistenKept},
+		{name: "tombstones lapse at their ttls on the store's clock", run: caseSocketTombstoneTtls},
+		{name: "a lease written before positions were kept reads as position 0", run: caseSocketLeaseCarriesItsSubject},
+		{name: SocketSuiteCasePairWriteBelowFloor, run: caseSocketPairWriteBelowFloor},
+		{name: "a pair removal keeps the higher floor, which lapses at its ttl", run: caseSocketPairFloorKept},
+		{name: "a pair touch never lengthens a pair past its grant", run: caseSocketPairTouch},
+		{name: "a client's removal works its set in batches and fences every lease", run: caseSocketRemoveClientInBatches, settings: func(settings *socketsservice.SocketStoreSettings) { settings.RemoveClientBatchCount = 3 }},
+		{name: "a sweep is claimed once per position, renewed by its holder, and never listed", run: caseSocketClaimSweep},
+		{name: "a page says whether the client's set still holds an edge name", run: caseSocketEdgeEntriesRemain},
 	}
 }
 
@@ -149,6 +214,35 @@ func (self *socketSuiteEnv) applyWhole(networkId connect.Id, clientId connect.Id
 		SetVersion:       setVersion,
 		Registrations:    socketSuiteSorted(registrations),
 	})
+}
+
+// One unbounded page judged at policyVersion, from sidecarId, with refused name keys.
+func (self *socketSuiteEnv) applyAt(networkId connect.Id, clientId connect.Id, setVersion uint64, policyVersion uint64, refusedNameKeys [][]byte, registrations ...*sidecar.SocketRegistration) (*socketsservice.SocketStorePageResult, error) {
+	sortedRefused := slices.Clone(refusedNameKeys)
+	slices.SortFunc(sortedRefused, bytes.Compare)
+	return self.store.ApplyPage(self.ctx, &socketsservice.SocketStorePage{
+		NetworkId:        networkId,
+		ListenerClientId: clientId,
+		SetVersion:       setVersion,
+		PolicyVersion:    policyVersion,
+		SidecarId:        &clientId,
+		Registrations:    socketSuiteSorted(registrations),
+		RefusedNameKeys:  sortedRefused,
+	})
+}
+
+// The client's lease on nameKey, or nil.
+func (self *socketSuiteEnv) lease(networkId connect.Id, clientId connect.Id, nameKey []byte) (*socketsservice.SocketStoreListener, error) {
+	listeners, err := self.store.ListListeners(self.ctx, networkId, nameKey)
+	if err != nil {
+		return nil, err
+	}
+	for _, listener := range listeners {
+		if listener.Candidate.ListenerClientId == clientId {
+			return listener, nil
+		}
+	}
+	return nil, nil
 }
 
 // Applies and requires every entry to hold a lease.
@@ -1087,8 +1181,8 @@ func caseSocketServicePairs(env *socketSuiteEnv) error {
 	if _, found, err := env.store.GetServicePair(env.ctx, listenerId, dialerId); err != nil || found {
 		return fmt.Errorf("an unset pair: %v %v", found, err)
 	}
-	if err := env.store.SetServicePair(env.ctx, listenerId, dialerId, 12345, time.Hour); err != nil {
-		return err
+	if wrote, _, err := env.store.SetServicePair(env.ctx, listenerId, dialerId, 12345, time.Hour, 0); err != nil || !wrote {
+		return fmt.Errorf("a first pair: %v %v", wrote, err)
 	}
 	if value, found, err := env.store.GetServicePair(env.ctx, listenerId, dialerId); err != nil || !found || value != 12345 {
 		return fmt.Errorf("a set pair: %d %v %v", value, found, err)
@@ -1096,16 +1190,16 @@ func caseSocketServicePairs(env *socketSuiteEnv) error {
 	if _, found, err := env.store.GetServicePair(env.ctx, listenerId, socketSuiteId()); err != nil || found {
 		return fmt.Errorf("another dialer's pair: %v %v", found, err)
 	}
-	if err := env.store.SetServicePair(env.ctx, listenerId, dialerId, 0, time.Hour); err != nil {
-		return err
+	if wrote, _, err := env.store.SetServicePair(env.ctx, listenerId, dialerId, 0, time.Hour, 0); err != nil || !wrote {
+		return fmt.Errorf("a second pair: %v %v", wrote, err)
 	}
 	if value, found, err := env.store.GetServicePair(env.ctx, listenerId, dialerId); err != nil || !found || value != 0 {
 		return fmt.Errorf("a replaced pair: %d %v %v", value, found, err)
 	}
-	if err := env.store.SetServicePair(env.ctx, listenerId, dialerId, 1, 0); err == nil {
+	if _, _, err := env.store.SetServicePair(env.ctx, listenerId, dialerId, 1, 0, 0); err == nil {
 		return errors.New("a pair with no ttl was set")
 	}
-	if err := env.store.RemoveServicePairs(env.ctx, listenerId); err != nil {
+	if err := env.store.RemoveServicePairs(env.ctx, listenerId, 0); err != nil {
 		return err
 	}
 	if _, found, err := env.store.GetServicePair(env.ctx, listenerId, dialerId); err != nil || found {
@@ -1128,7 +1222,7 @@ func caseSocketRemoveClient(env *socketSuiteEnv) error {
 	if err := env.mustApplyWhole(networkId, socketSuiteId(), 1, otherShared); err != nil {
 		return err
 	}
-	if err := env.store.SetServicePair(env.ctx, clientId, socketSuiteId(), 0, time.Hour); err != nil {
+	if _, _, err := env.store.SetServicePair(env.ctx, clientId, socketSuiteId(), 0, time.Hour, 0); err != nil {
 		return err
 	}
 	removed, err := env.store.RemoveClient(env.ctx, clientId)
@@ -1164,13 +1258,20 @@ func caseSocketRemoveClient(env *socketSuiteEnv) error {
 	if err != nil || len(removed) != 0 {
 		return fmt.Errorf("a second removal: %d, %v", len(removed), err)
 	}
-	// its set went with it, so a new page is no one's retry
-	result, err := env.applyWhole(networkId, clientId, 0, registrations[0])
+	// its set went with it, so a new page is no one's retry, and its leases are fenced at every position
+	result, err := env.applyAt(networkId, clientId, 0, 1<<62, nil, registrations[0])
 	if err != nil {
 		return err
 	}
 	if result.Stale {
 		return errors.New("a removed client's set survived")
+	}
+	if outcome := result.Outcomes[0]; !outcome.Fenced || outcome.FenceCause != socketsservice.SocketRemoveClientRemoved {
+		return fmt.Errorf("a removed client's lease written again: %+v", outcome)
+	}
+	// and its pairs at every position
+	if wrote, floor, err := env.store.SetServicePair(env.ctx, clientId, socketSuiteId(), 0, time.Hour, 1<<62); err != nil || wrote || floor != socketsservice.SocketRemovedClientPosition {
+		return fmt.Errorf("a removed client's pair written again: %v %d %v", wrote, floor, err)
 	}
 	return nil
 }
@@ -1189,22 +1290,34 @@ func caseSocketRemoveEntries(env *socketSuiteEnv) error {
 	if err := env.mustApplyWhole(networkId, secondId, 1, second); err != nil {
 		return err
 	}
-	removed, err := env.store.RemoveEntries(env.ctx, networkId, []*socketsservice.SocketStoreEntryRef{{ListenerClientId: firstId, NameKey: shared.NameKey()}})
+	removals, err := env.store.RemoveEntries(env.ctx, networkId, socketsservice.SocketRemoveRefused, 1, []*socketsservice.SocketStoreEntryRef{{ListenerClientId: firstId, NameKey: shared.NameKey()}})
 	if err != nil {
 		return err
 	}
-	if len(removed) != 1 || removed[0].LastListener {
-		return fmt.Errorf("the first removal: %+v", removed)
+	if len(removals) != 1 || removals[0].Removed == nil || removals[0].Kept || removals[0].Removed.LastListener {
+		return fmt.Errorf("the first removal: %+v", removals)
 	}
-	removed, err = env.store.RemoveEntries(env.ctx, networkId, []*socketsservice.SocketStoreEntryRef{
+	removals, err = env.store.RemoveEntries(env.ctx, networkId, socketsservice.SocketRemoveRefused, 1, []*socketsservice.SocketStoreEntryRef{
 		{ListenerClientId: firstId, NameKey: shared.NameKey()},
 		{ListenerClientId: secondId, NameKey: shared.NameKey()},
 	})
 	if err != nil {
 		return err
 	}
-	if len(removed) != 1 || !removed[0].LastListener || removed[0].ListenerClientId != secondId {
-		return fmt.Errorf("the second removal: %+v", removed)
+	if len(removals) != 2 || removals[0].Removed != nil || removals[0].Kept ||
+		removals[1].Removed == nil || !removals[1].Removed.LastListener || removals[1].Removed.ListenerClientId != secondId {
+		return fmt.Errorf("the second removal: %+v", removals)
+	}
+	for _, refused := range []struct {
+		cause    socketsservice.SocketRemoveCause
+		position uint64
+	}{
+		{cause: socketsservice.SocketRemoveUnlisten, position: 1},
+		{cause: socketsservice.SocketRemoveClientRemoved, position: 1},
+	} {
+		if _, err := env.store.RemoveEntries(env.ctx, networkId, refused.cause, refused.position, []*socketsservice.SocketStoreEntryRef{{ListenerClientId: firstId, NameKey: shared.NameKey()}}); !errors.Is(err, socketsservice.ErrSocketStoreRequest) {
+			return fmt.Errorf("a removal of cause %d at %d: %v", refused.cause, refused.position, err)
+		}
 	}
 	// the set forgot it, so the client's next page does not unlisten it again
 	result, err := env.applyWhole(networkId, firstId, 2)
@@ -1329,6 +1442,577 @@ func caseSocketSampledGroupPicks(env *socketSuiteEnv) error {
 			!listenerIds[pick.Primary.Candidate.ListenerClientId] || !listenerIds[pick.Backup.Candidate.ListenerClientId] {
 			return fmt.Errorf("a sampled group's pick: %+v", pick)
 		}
+	}
+	return nil
+}
+
+// 13.3's S2, the NoTombstone twin: a lease removed for cause at x leaves a tombstone, in a group it was the
+// last listener of, and a page judged below x writes nothing in its place and names the fence.
+func caseSocketRemovalLeavesATombstone(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	clientId := socketSuiteId()
+	registration := socketSuiteRegistration("")
+	if result, err := env.applyAt(networkId, clientId, 1, 5, nil, registration); err != nil || result.Outcomes[0].Fenced {
+		return fmt.Errorf("the first page: %v", err)
+	}
+	removals, err := env.store.RemoveEntries(env.ctx, networkId, socketsservice.SocketRemoveRefused, 7, []*socketsservice.SocketStoreEntryRef{{ListenerClientId: clientId, NameKey: registration.NameKey()}})
+	if err != nil {
+		return err
+	}
+	if len(removals) != 1 || removals[0].Removed == nil || !removals[0].Removed.LastListener {
+		return fmt.Errorf("the removal: %+v", removals)
+	}
+	// a page judged at 6, as a stale process's in flight across the removal would be
+	result, err := env.applyAt(networkId, clientId, 2, 6, nil, registration)
+	if err != nil {
+		return err
+	}
+	outcome := result.Outcomes[0]
+	if !outcome.Fenced || outcome.FencePolicyVersion != 7 || outcome.FenceCause != socketsservice.SocketRemoveRefused || outcome.FirstListener {
+		return fmt.Errorf("a put below the tombstone: %+v", outcome)
+	}
+	if lease, err := env.lease(networkId, clientId, registration.NameKey()); err != nil || lease != nil {
+		return fmt.Errorf("a fenced put wrote: %v", err)
+	}
+	if pick, err := env.pick(networkId, registration.NameKey(), socketSuiteId(), 0, 0); err != nil || pick.Outcome != socketsservice.SocketPickNoListener {
+		return fmt.Errorf("a fenced put picks: %+v %v", pick, err)
+	}
+	// the fence stands at every lower position, heartbeat after heartbeat
+	for setVersion := uint64(3); setVersion < 6; setVersion += 1 {
+		result, err := env.applyAt(networkId, clientId, setVersion, setVersion, nil, registration)
+		if err != nil {
+			return err
+		}
+		if !result.Outcomes[0].Fenced {
+			return fmt.Errorf("a put at %d passed a tombstone at 7", setVersion)
+		}
+	}
+	return nil
+}
+
+func caseSocketPutClearsTombstone(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	clientId := socketSuiteId()
+	registration := socketSuiteRegistration(socketSuiteEdgeName())
+	if _, err := env.applyAt(networkId, clientId, 1, 5, nil, registration); err != nil {
+		return err
+	}
+	if _, err := env.store.RemoveEntries(env.ctx, networkId, socketsservice.SocketRemoveRefused, 7, []*socketsservice.SocketStoreEntryRef{{ListenerClientId: clientId, NameKey: registration.NameKey()}}); err != nil {
+		return err
+	}
+	// granted again at 7: the put passes and clears the tombstone
+	result, err := env.applyAt(networkId, clientId, 2, 7, nil, registration)
+	if err != nil {
+		return err
+	}
+	if outcome := result.Outcomes[0]; outcome.Fenced || outcome.Stale || outcome.Taken || !outcome.FirstListener || outcome.PriorPolicyVersion != 0 {
+		return fmt.Errorf("a put at the tombstone's position: %+v", outcome)
+	}
+	// a heartbeat a staler process judged at 6 now writes, and the lease keeps 7
+	result, err = env.applyAt(networkId, clientId, 3, 6, nil, registration)
+	if err != nil {
+		return err
+	}
+	if outcome := result.Outcomes[0]; outcome.Fenced || outcome.PriorPolicyVersion != 7 {
+		return fmt.Errorf("a put below a cleared tombstone: %+v", outcome)
+	}
+	lease, err := env.lease(networkId, clientId, registration.NameKey())
+	if err != nil {
+		return err
+	}
+	if lease == nil || lease.PolicyVersion != 7 || lease.SetVersion != 3 || lease.SidecarId == nil || *lease.SidecarId != clientId {
+		return fmt.Errorf("the lease: %+v", lease)
+	}
+	// a pick carries the same
+	pick, err := env.pick(networkId, registration.NameKey(), socketSuiteId(), 0, 0)
+	if err != nil {
+		return err
+	}
+	if pick.Outcome != socketsservice.SocketPickFound || pick.Primary.PolicyVersion != 7 || pick.Primary.SetVersion != 3 ||
+		pick.Primary.SidecarId == nil || *pick.Primary.SidecarId != clientId {
+		return fmt.Errorf("the pick: %+v", pick.Primary)
+	}
+	return nil
+}
+
+func caseSocketRemovalKeptAboveItsPosition(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	clientId := socketSuiteId()
+	registration := socketSuiteRegistration("")
+	if _, err := env.applyAt(networkId, clientId, 1, 9, nil, registration); err != nil {
+		return err
+	}
+	// a sweep or a Find at 7, behind the process that admitted the lease at 9
+	removals, err := env.store.RemoveEntries(env.ctx, networkId, socketsservice.SocketRemoveRefused, 7, []*socketsservice.SocketStoreEntryRef{{ListenerClientId: clientId, NameKey: registration.NameKey()}})
+	if err != nil {
+		return err
+	}
+	if len(removals) != 1 || !removals[0].Kept || removals[0].PolicyVersion != 9 || removals[0].Removed != nil {
+		return fmt.Errorf("a removal below the lease's position: %+v", removals)
+	}
+	if lease, err := env.lease(networkId, clientId, registration.NameKey()); err != nil || lease == nil {
+		return fmt.Errorf("a kept lease went: %v", err)
+	}
+	// the client's set still holds it, so its next page that lacks it unlistens it
+	result, err := env.applyAt(networkId, clientId, 2, 9, nil)
+	if err != nil {
+		return err
+	}
+	if len(result.Removed) != 1 || !result.Removed[0].LastListener {
+		return fmt.Errorf("the unlisten after a kept removal: %+v", result.Removed)
+	}
+	// at the lease's own position it goes
+	if _, err := env.applyAt(networkId, clientId, 3, 9, nil, registration); err != nil {
+		return err
+	}
+	removals, err = env.store.RemoveEntries(env.ctx, networkId, socketsservice.SocketRemoveRefused, 9, []*socketsservice.SocketStoreEntryRef{{ListenerClientId: clientId, NameKey: registration.NameKey()}})
+	if err != nil {
+		return err
+	}
+	if len(removals) != 1 || removals[0].Removed == nil {
+		return fmt.Errorf("a removal at the lease's position: %+v", removals)
+	}
+	return nil
+}
+
+func caseSocketPageRefusedEntries(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	clientId := socketSuiteId()
+	// roles by name key order, so newer's page can hold its own range
+	sorted := socketSuiteSorted([]*sidecar.SocketRegistration{
+		socketSuiteRegistration(""), socketSuiteRegistration(""), socketSuiteRegistration(""), socketSuiteRegistration(""),
+	})
+	refused, kept, newer, never := sorted[0], sorted[1], sorted[2], sorted[3]
+	if _, err := env.applyAt(networkId, clientId, 1, 4, nil, refused, kept); err != nil {
+		return err
+	}
+	// another process at 8 admitted newer's lease, on a page of its own range
+	if _, err := env.store.ApplyPage(env.ctx, &socketsservice.SocketStorePage{
+		NetworkId:        networkId,
+		ListenerClientId: clientId,
+		SetVersion:       2,
+		PolicyVersion:    8,
+		SidecarId:        &clientId,
+		KeyStart:         newer.NameKey(),
+		Registrations:    []*sidecar.SocketRegistration{newer},
+	}); err != nil {
+		return err
+	}
+	// a process at 6 refuses refused, newer and never: refused goes, newer stands, never held nothing
+	result, err := env.applyAt(networkId, clientId, 3, 6, [][]byte{refused.NameKey(), newer.NameKey(), never.NameKey()}, kept)
+	if err != nil {
+		return err
+	}
+	if len(result.RefusedOutcomes) != 3 {
+		return fmt.Errorf("%d refused outcomes", len(result.RefusedOutcomes))
+	}
+	if removal := result.RefusedOutcomes[0]; removal.Removed == nil || removal.Kept || !removal.Removed.LastListener {
+		return fmt.Errorf("the refused lease: %+v", removal)
+	}
+	if removal := result.RefusedOutcomes[1]; removal.Removed != nil || !removal.Kept || removal.PolicyVersion != 8 {
+		return fmt.Errorf("the newer lease: %+v", removal)
+	}
+	if removal := result.RefusedOutcomes[2]; removal.Removed != nil || removal.Kept {
+		return fmt.Errorf("a refused entry that held nothing: %+v", removal)
+	}
+	if len(result.Removed) != 1 || !bytes.Equal(result.Removed[0].NameKey, refused.NameKey()) {
+		return fmt.Errorf("removed %+v", result.Removed)
+	}
+	if lease, err := env.lease(networkId, clientId, refused.NameKey()); err != nil || lease != nil {
+		return fmt.Errorf("a refused lease stayed: %v", err)
+	}
+	if lease, err := env.lease(networkId, clientId, newer.NameKey()); err != nil || lease == nil || lease.PolicyVersion != 8 {
+		return fmt.Errorf("the newer lease: %+v %v", lease, err)
+	}
+	// the refused entry is fenced below 6, and the others are not
+	result, err = env.applyAt(networkId, clientId, 4, 5, nil, refused, kept, newer, never)
+	if err != nil {
+		return err
+	}
+	for index, outcome := range result.Outcomes {
+		if want := index == 0; outcome.Fenced != want || (want && outcome.FencePolicyVersion != 6) {
+			return fmt.Errorf("entry %d: %+v", index, outcome)
+		}
+	}
+	if outcome := result.Outcomes[2]; outcome.PriorPolicyVersion != 8 {
+		return fmt.Errorf("the newer entry's prior position: %+v", outcome)
+	}
+	// a page refusing what overlaps its own entries is no page the engine sends
+	if _, err := env.applyAt(networkId, clientId, 5, 9, [][]byte{kept.NameKey()}, kept); !errors.Is(err, socketsservice.ErrSocketStoreRequest) {
+		return fmt.Errorf("an entry both allowed and refused: %v", err)
+	}
+	return nil
+}
+
+// 13.3's S3, the NoSetVersion twin: a page of an older set, its set check passed, writes no lease that a
+// newer page of the client wrote, nor one a newer page unlistened.
+func caseSocketOlderPageIsStale(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	clientId := socketSuiteId()
+	written := socketSuiteRegistration("")
+	unlistened := socketSuiteRegistration("")
+	if _, err := env.applyAt(networkId, clientId, 10, 1, nil, written, unlistened); err != nil {
+		return err
+	}
+	// the newer set lacks unlistened
+	result, err := env.applyAt(networkId, clientId, 11, 1, nil, written)
+	if err != nil {
+		return err
+	}
+	if len(result.Removed) != 1 || !bytes.Equal(result.Removed[0].NameKey, unlistened.NameKey()) {
+		return fmt.Errorf("the newer set's unlisten: %+v", result.Removed)
+	}
+	// the set lapses, as a set check that ran before the newer page's commit does not see it
+	if err := env.lapseSet(clientId); err != nil {
+		return err
+	}
+	result, err = env.applyAt(networkId, clientId, 10, 1, nil, written, unlistened)
+	if err != nil {
+		return err
+	}
+	if result.Stale {
+		return errors.New("the set check saw the lapsed set")
+	}
+	for index, registration := range socketSuiteSorted([]*sidecar.SocketRegistration{written, unlistened}) {
+		outcome := result.Outcomes[index]
+		if bytes.Equal(registration.NameKey(), written.NameKey()) {
+			if !outcome.Stale || outcome.Fenced {
+				return fmt.Errorf("an older put over a newer lease: %+v", outcome)
+			}
+		} else if !outcome.Fenced || outcome.FenceCause != socketsservice.SocketRemoveUnlisten {
+			return fmt.Errorf("an older put over a newer unlisten: %+v", outcome)
+		}
+	}
+	lease, err := env.lease(networkId, clientId, written.NameKey())
+	if err != nil {
+		return err
+	}
+	if lease == nil || lease.SetVersion != 11 {
+		return fmt.Errorf("the newer lease: %+v", lease)
+	}
+	if lease, err := env.lease(networkId, clientId, unlistened.NameKey()); err != nil || lease != nil {
+		return fmt.Errorf("an unlistened lease came back: %v", err)
+	}
+	return nil
+}
+
+func caseSocketOlderUnlistenKept(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	clientId := socketSuiteId()
+	registration := socketSuiteRegistration("")
+	if _, err := env.applyAt(networkId, clientId, 10, 1, nil, registration); err != nil {
+		return err
+	}
+	if err := env.lapseSet(clientId); err != nil {
+		return err
+	}
+	// an older page's put stands against the newer lease and leaves the set naming it
+	result, err := env.applyAt(networkId, clientId, 9, 1, nil, registration)
+	if err != nil {
+		return err
+	}
+	if !result.Outcomes[0].Stale {
+		return fmt.Errorf("an older put: %+v", result.Outcomes[0])
+	}
+	// an older page that lacks it is kept from unlistening the newer lease
+	result, err = env.applyAt(networkId, clientId, 9, 1, nil)
+	if err != nil {
+		return err
+	}
+	if len(result.Removed) != 0 {
+		return fmt.Errorf("an older unlisten removed %+v", result.Removed)
+	}
+	if lease, err := env.lease(networkId, clientId, registration.NameKey()); err != nil || lease == nil || lease.SetVersion != 10 {
+		return fmt.Errorf("the newer lease: %+v %v", lease, err)
+	}
+	// a page of its own set unlistens it
+	if _, err := env.applyAt(networkId, clientId, 10, 1, nil, registration); err != nil {
+		return err
+	}
+	result, err = env.applyAt(networkId, clientId, 10, 1, nil)
+	if err != nil {
+		return err
+	}
+	if len(result.Removed) != 1 || !result.Removed[0].LastListener {
+		return fmt.Errorf("an unlisten of the same set: %+v", result.Removed)
+	}
+	return nil
+}
+
+func caseSocketTombstoneTtls(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	clientId := socketSuiteId()
+	refused := socketSuiteRegistration("")
+	unlistened := socketSuiteRegistration("")
+	if _, err := env.applyAt(networkId, clientId, 10, 5, nil, refused, unlistened); err != nil {
+		return err
+	}
+	if _, err := env.store.RemoveEntries(env.ctx, networkId, socketsservice.SocketRemoveRefused, 7, []*socketsservice.SocketStoreEntryRef{{ListenerClientId: clientId, NameKey: refused.NameKey()}}); err != nil {
+		return err
+	}
+	if _, err := env.applyAt(networkId, clientId, 11, 5, nil); err != nil {
+		return err
+	}
+	// the set lapses, so each check's page reaches the groups: none of them is older than the one before
+	if err := env.lapseSet(clientId); err != nil {
+		return err
+	}
+	fenced := func(registration *sidecar.SocketRegistration, setVersion uint64) (bool, error) {
+		result, err := env.applyAt(networkId, clientId, setVersion, 6, nil, registration)
+		if err != nil {
+			return false, err
+		}
+		if result.Stale {
+			return false, errors.New("a page refused at its set check")
+		}
+		return result.Outcomes[0].Fenced, nil
+	}
+	env.clock.Advance(env.settings.UnlistenFenceTtl - time.Millisecond)
+	if isFenced, err := fenced(unlistened, 10); err != nil || !isFenced {
+		return fmt.Errorf("an unlisten's fence a millisecond before its ttl: %v %v", isFenced, err)
+	}
+	env.clock.Advance(time.Millisecond)
+	if isFenced, err := fenced(unlistened, 10); err != nil || isFenced {
+		return fmt.Errorf("an unlisten's fence at its ttl: %v %v", isFenced, err)
+	}
+	env.clock.Advance(env.settings.TombstoneTtl - env.settings.UnlistenFenceTtl - time.Millisecond)
+	if isFenced, err := fenced(refused, 100); err != nil || !isFenced {
+		return fmt.Errorf("a removal's tombstone a millisecond before its ttl: %v %v", isFenced, err)
+	}
+	env.clock.Advance(time.Millisecond)
+	if isFenced, err := fenced(refused, 200); err != nil || isFenced {
+		return fmt.Errorf("a removal's tombstone at its ttl: %v %v", isFenced, err)
+	}
+	return nil
+}
+
+func caseSocketLeaseCarriesItsSubject(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	clientId := socketSuiteId()
+	edge := socketSuiteRegistration("ur/smtpedge")
+	// a ur/ listener has no sidecar
+	if _, err := env.store.ApplyPage(env.ctx, &socketsservice.SocketStorePage{
+		NetworkId:        networkId,
+		ListenerClientId: clientId,
+		SetVersion:       uint64(1) << 63,
+		PolicyVersion:    socketsservice.SocketRemovedClientPosition - 1,
+		Registrations:    []*sidecar.SocketRegistration{edge},
+	}); err != nil {
+		return err
+	}
+	lease, err := env.lease(networkId, clientId, edge.NameKey())
+	if err != nil {
+		return err
+	}
+	// the largest numbers survive the round trip exactly
+	if lease == nil || lease.SidecarId != nil || lease.PolicyVersion != socketsservice.SocketRemovedClientPosition-1 || lease.SetVersion != uint64(1)<<63 {
+		return fmt.Errorf("the lease: %+v", lease)
+	}
+	return nil
+}
+
+// 13.3's S4, the NoPairFloor twin: once a listener's pairs were removed at x, no pair written below x stands.
+func caseSocketPairWriteBelowFloor(env *socketSuiteEnv) error {
+	listenerId := socketSuiteId()
+	dialerId := socketSuiteId()
+	if wrote, floor, err := env.store.SetServicePair(env.ctx, listenerId, dialerId, 0, time.Hour, 5); err != nil || !wrote || floor != 0 {
+		return fmt.Errorf("a first pair: %v %d %v", wrote, floor, err)
+	}
+	if err := env.store.RemoveServicePairs(env.ctx, listenerId, 7); err != nil {
+		return err
+	}
+	// a Find that picked before the removal and signs after it, at 6
+	wrote, floor, err := env.store.SetServicePair(env.ctx, listenerId, dialerId, 0, time.Hour, 6)
+	if err != nil {
+		return err
+	}
+	if wrote || floor != 7 {
+		return fmt.Errorf("a pair below the floor: %v %d", wrote, floor)
+	}
+	if _, found, err := env.store.GetServicePair(env.ctx, listenerId, dialerId); err != nil || found {
+		return fmt.Errorf("a refused pair reads: %v %v", found, err)
+	}
+	// at the floor it is written
+	if wrote, floor, err := env.store.SetServicePair(env.ctx, listenerId, dialerId, 0, time.Hour, 7); err != nil || !wrote || floor != 7 {
+		return fmt.Errorf("a pair at the floor: %v %d %v", wrote, floor, err)
+	}
+	if _, found, err := env.store.GetServicePair(env.ctx, listenerId, dialerId); err != nil || !found {
+		return fmt.Errorf("a pair at the floor reads: %v %v", found, err)
+	}
+	return nil
+}
+
+func caseSocketPairFloorKept(env *socketSuiteEnv) error {
+	listenerId := socketSuiteId()
+	dialerId := socketSuiteId()
+	if err := env.store.RemoveServicePairs(env.ctx, listenerId, 9); err != nil {
+		return err
+	}
+	// a staler removal keeps the higher floor
+	if err := env.store.RemoveServicePairs(env.ctx, listenerId, 4); err != nil {
+		return err
+	}
+	if wrote, floor, err := env.store.SetServicePair(env.ctx, listenerId, dialerId, 0, time.Hour, 8); err != nil || wrote || floor != 9 {
+		return fmt.Errorf("below the higher floor: %v %d %v", wrote, floor, err)
+	}
+	env.clock.Advance(env.settings.TombstoneTtl - time.Millisecond)
+	if wrote, _, err := env.store.SetServicePair(env.ctx, listenerId, dialerId, 0, time.Hour, 8); err != nil || wrote {
+		return fmt.Errorf("a millisecond before the floor's ttl: %v %v", wrote, err)
+	}
+	env.clock.Advance(time.Millisecond)
+	if wrote, floor, err := env.store.SetServicePair(env.ctx, listenerId, dialerId, 0, time.Hour, 8); err != nil || !wrote || floor != 0 {
+		return fmt.Errorf("at the floor's ttl: %v %d %v", wrote, floor, err)
+	}
+	return nil
+}
+
+func caseSocketPairTouch(env *socketSuiteEnv) error {
+	listenerId := socketSuiteId()
+	ended := socketSuiteId()
+	far := socketSuiteId()
+	unbounded := socketSuiteId()
+	nowMillis := uint64(env.clock.Now().UnixMilli())
+	for _, pair := range []struct {
+		dialerId          connect.Id
+		grantExpireMillis uint64
+	}{
+		{dialerId: ended, grantExpireMillis: nowMillis + uint64(time.Minute.Milliseconds())},
+		{dialerId: far, grantExpireMillis: nowMillis + uint64(time.Hour.Milliseconds())},
+		{dialerId: unbounded, grantExpireMillis: 0},
+	} {
+		if wrote, _, err := env.store.SetServicePair(env.ctx, listenerId, pair.dialerId, pair.grantExpireMillis, time.Hour, 1); err != nil || !wrote {
+			return fmt.Errorf("a pair: %v %v", wrote, err)
+		}
+	}
+	// within every pair's own ttl, past the first one's grant
+	env.clock.Advance(2 * time.Minute)
+	if err := env.store.TouchServicePairs(env.ctx, listenerId); err != nil {
+		return err
+	}
+	for _, check := range []struct {
+		dialerId connect.Id
+		want     bool
+	}{
+		{dialerId: ended, want: false},
+		{dialerId: far, want: true},
+		{dialerId: unbounded, want: true},
+	} {
+		if _, found, err := env.store.GetServicePair(env.ctx, listenerId, check.dialerId); err != nil || found != check.want {
+			return fmt.Errorf("after a touch: %v, want %v: %v", found, check.want, err)
+		}
+	}
+	// a touch of a listener with no pairs is no error
+	return env.store.TouchServicePairs(env.ctx, socketSuiteId())
+}
+
+func caseSocketRemoveClientInBatches(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	clientId := socketSuiteId()
+	registrations := []*sidecar.SocketRegistration{}
+	for range 8 {
+		registrations = append(registrations, socketSuiteRegistration(""))
+	}
+	if _, err := env.applyAt(networkId, clientId, 1, 3, nil, registrations...); err != nil {
+		return err
+	}
+	removed, err := env.store.RemoveClient(env.ctx, clientId)
+	if err != nil {
+		return err
+	}
+	if len(removed) != len(registrations) {
+		return fmt.Errorf("%d of %d removed", len(removed), len(registrations))
+	}
+	// every lease fenced, so a page in flight across the removal writes none
+	result, err := env.applyAt(networkId, clientId, 2, 1<<62, nil, registrations...)
+	if err != nil {
+		return err
+	}
+	for index, outcome := range result.Outcomes {
+		if !outcome.Fenced || outcome.FenceCause != socketsservice.SocketRemoveClientRemoved || outcome.FencePolicyVersion != socketsservice.SocketRemovedClientPosition {
+			return fmt.Errorf("entry %d after the removal: %+v", index, outcome)
+		}
+	}
+	names, err := env.listAll(networkId, 100)
+	if err != nil || len(names) != 0 {
+		return fmt.Errorf("%d names after the removal: %v", len(names), err)
+	}
+	return nil
+}
+
+func caseSocketClaimSweep(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	ttl := 30 * time.Second
+	registration := socketSuiteRegistration("")
+	if err := env.mustApplyWhole(networkId, socketSuiteId(), 1, registration); err != nil {
+		return err
+	}
+	first, claimed, err := env.store.ClaimSweep(env.ctx, networkId, 5, ttl, nil)
+	if err != nil || !claimed || first.PolicyVersion != 5 || first.UntilMillis != env.clock.Now().UnixMilli()+ttl.Milliseconds() {
+		return fmt.Errorf("a first claim: %+v %v %v", first, claimed, err)
+	}
+	// another process at the same position, or a lower one, is refused and told the claim
+	for _, position := range []uint64{5, 4} {
+		standing, claimed, err := env.store.ClaimSweep(env.ctx, networkId, position, ttl, nil)
+		if err != nil || claimed || *standing != *first {
+			return fmt.Errorf("a second claim at %d: %+v %v %v", position, standing, claimed, err)
+		}
+	}
+	// its holder renews it
+	env.clock.Advance(10 * time.Second)
+	renewed, claimed, err := env.store.ClaimSweep(env.ctx, networkId, 5, ttl, first)
+	if err != nil || !claimed || renewed.UntilMillis != env.clock.Now().UnixMilli()+ttl.Milliseconds() {
+		return fmt.Errorf("a renewal: %+v %v %v", renewed, claimed, err)
+	}
+	// a stale holder's renewal is refused
+	if _, claimed, err := env.store.ClaimSweep(env.ctx, networkId, 5, ttl, first); err != nil || claimed {
+		return fmt.Errorf("a renewal of a claim that moved on: %v %v", claimed, err)
+	}
+	// a newer position takes it over
+	newer, claimed, err := env.store.ClaimSweep(env.ctx, networkId, 6, ttl, nil)
+	if err != nil || !claimed || newer.PolicyVersion != 6 {
+		return fmt.Errorf("a newer position: %+v %v %v", newer, claimed, err)
+	}
+	// and once it lapses anyone may take it
+	env.clock.Advance(ttl)
+	if _, claimed, err := env.store.ClaimSweep(env.ctx, networkId, 6, ttl, nil); err != nil || !claimed {
+		return fmt.Errorf("a lapsed claim: %v %v", claimed, err)
+	}
+	if _, _, err := env.store.ClaimSweep(env.ctx, networkId, 7, 0, nil); err == nil {
+		return errors.New("a claim with no ttl was taken")
+	}
+	// the claim is never listed; the lease has lapsed, so nothing is
+	if err := env.mustApplyWhole(networkId, socketSuiteId(), 1, registration); err != nil {
+		return err
+	}
+	for _, count := range []int{1, 10} {
+		names, err := env.listAll(networkId, count)
+		if err != nil {
+			return err
+		}
+		if len(names) != 1 || !bytes.Equal(names[0].NameToken, registration.NameToken) {
+			return fmt.Errorf("a listing of %d beside a claim: %+v", count, names)
+		}
+	}
+	return nil
+}
+
+func caseSocketEdgeEntriesRemain(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	clientId := socketSuiteId()
+	edge := socketSuiteRegistration(socketSuiteEdgeName())
+	mail := socketSuiteRegistration("smtp/25/mx")
+	blinded := socketSuiteRegistration("")
+	result, err := env.applyAt(networkId, clientId, 1, 1, nil, edge, mail, blinded)
+	if err != nil || !result.EdgeEntriesRemain {
+		return fmt.Errorf("with edge names: %+v %v", result, err)
+	}
+	result, err = env.applyAt(networkId, clientId, 2, 1, nil, mail, blinded)
+	if err != nil || !result.EdgeEntriesRemain {
+		return fmt.Errorf("with one left: %+v %v", result, err)
+	}
+	result, err = env.applyAt(networkId, clientId, 3, 1, [][]byte{mail.NameKey()}, blinded)
+	if err != nil || result.EdgeEntriesRemain {
+		return fmt.Errorf("with none left: %+v %v", result, err)
 	}
 	return nil
 }
