@@ -111,7 +111,7 @@ func fs7Schedule(net *Net, onePath bool, keepEvacuated bool) *Schedule {
 	// w1's commit carries evs1's fold as folded_through
 	keep := &Step{Actor: "w1", Action: world.Write("w1", "keep.txt", EvsWorldContent("fs7 keep", 16))}
 	steps = append(steps, []*Step{
-		{Actor: "evs1", Action: world.Fold("evs1")},
+		{Actor: "folder", Action: world.Fold("evs1")},
 		{Actor: "reader", Action: world.Verify("reader", paths...)},
 	}...)
 	if keepEvacuated {

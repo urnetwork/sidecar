@@ -42,6 +42,7 @@ import (
 	"net/http/httptest"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -155,6 +156,9 @@ type EvsWorldDeviceSettings struct {
 	Instances []string
 	// Whether it writes the repo. Every device reads it.
 	Writer bool
+	// Its own configuration and gkm client say it writes the repo while the world's, which evs and every other device
+	// read, list it as a reader: FS-10's forger (fs10.go).
+	ForgesWriter bool
 }
 
 // Two writers, each with an instance of its own and a second the lb re-sends to, and a reader on an instance no
@@ -296,6 +300,19 @@ type EvsWorld struct {
 	// every attempt an instance took, in the order each began, and the logical clock their times are read from
 	attempts     []*EvsWorldAttempt
 	attemptClock int64
+	// the repo's RepoDeletes as the access log took them, in order, each holder's projection where a schedule held
+	// it, each device's delete and restore ends, and each shred pass's outcome (evs_world_lifecycle.go)
+	deletions       []*evsWorldDeletion
+	heldProjections map[string]*evsWorldProjection
+	lifecycleEnds   map[string][]error
+	shredOutcomes   []evsservice.EvsShredOutcome
+	// each device's subscription (evs_world_hints.go)
+	subscribers map[string]*evsWorldSubscriber
+	// the idx/ objects a forged schedule saved (fs10.go)
+	savedEntries map[string][]byte
+	// by device, when its read of the repo ends (ExpireReader), and how many path-epoch blocks the lb carried
+	readerExpiries    map[string]time.Time
+	blockRequestCount int
 }
 
 // One attempt of a push as an instance took it, for a history check of §11.8's commit rule (Porcupine, EVS1-M2-42):
@@ -334,6 +351,9 @@ func NewEvsWorld(net *Net, settings *EvsWorldSettings) *EvsWorld {
 		placeStatuses:  map[string]int{},
 		versionPushIds: map[uint64]sidecar.Id{},
 		pushIdVersions: map[sidecar.Id]uint64{},
+		heldProjections: map[string]*evsWorldProjection{},
+		lifecycleEnds:   map[string][]error{},
+		readerExpiries:  map[string]time.Time{},
 	}
 	for _, deviceSettings := range settings.Devices {
 		device := &EvsWorldDevice{
@@ -516,7 +536,8 @@ func (self *EvsWorld) Setup(ctx context.Context, net *Net) error {
 }
 
 // Appends a position at which every device but a dropped one reads the repo and writers write it, with the holders
-// shrunk where the newest drop was, and gives it to evs and every device.
+// shrunk where the newest drop was and the newest RepoDelete as the access log holds it, and gives it to evs, every
+// device and FI-1's excuses.
 func (self *EvsWorld) appendView() *sidecartest.FakeGkmAuthView {
 	self.stateLock.Lock()
 	droppedReaders := map[string]bool{}
@@ -524,14 +545,20 @@ func (self *EvsWorld) appendView() *sidecartest.FakeGkmAuthView {
 		droppedReaders[name] = dropped
 	}
 	shrunkAt := self.shrunkAt
+	deletionRow := self.deletionRowWithLock()
+	readerExpiries := map[string]time.Time{}
+	for name, at := range self.readerExpiries {
+		readerExpiries[name] = at
+	}
 	self.stateLock.Unlock()
 	fixture := &sidecartest.FakeGkmAuthFixture{
 		Rows: sidecartest.FakeGkmAuthRows(&protocol.AclRepo{
-			RepoId: self.RepoId.Bytes(), Kind: self.settings.Kind, HoldersShrunkAt: shrunkAt,
+			RepoId: self.RepoId.Bytes(), Kind: self.settings.Kind, HoldersShrunkAt: shrunkAt, Deletion: deletionRow,
 		}),
 		IdentityKeys: map[sidecar.Id][]byte{},
 		RepoReaders:  map[sidecar.Id][]sidecar.Id{},
 		RepoWriters:  map[sidecar.Id][]sidecar.Id{},
+		RepoReaderExpiries: map[sidecar.Id]map[sidecar.Id]time.Time{},
 	}
 	sidecarIds := []sidecar.Id{}
 	for _, name := range self.deviceNames {
@@ -542,6 +569,12 @@ func (self *EvsWorld) appendView() *sidecartest.FakeGkmAuthView {
 			continue
 		}
 		fixture.RepoReaders[self.RepoId] = append(fixture.RepoReaders[self.RepoId], device.Signer.SidecarId)
+		if at, ok := readerExpiries[name]; ok {
+			if fixture.RepoReaderExpiries[self.RepoId] == nil {
+				fixture.RepoReaderExpiries[self.RepoId] = map[sidecar.Id]time.Time{}
+			}
+			fixture.RepoReaderExpiries[self.RepoId][device.Signer.SidecarId] = at
+		}
 		if device.settings.Writer {
 			fixture.RepoWriters[self.RepoId] = append(fixture.RepoWriters[self.RepoId], device.Signer.SidecarId)
 		}
@@ -554,12 +587,46 @@ func (self *EvsWorld) appendView() *sidecartest.FakeGkmAuthView {
 	self.view = view
 	self.viewCount += 1
 	self.stateLock.Unlock()
+	SetAuthorizationView(self.net, self.NetworkId, view)
 	for _, name := range self.deviceNames {
-		if gkm := self.devices[name].Gkm; gkm != nil {
-			gkm.AuthAdvanced(view)
+		device := self.devices[name]
+		if gkm := device.Gkm; gkm != nil {
+			gkm.AuthAdvanced(self.viewOf(device, view))
 		}
 	}
 	return view
+}
+
+// view as device holds it: the world's, or for a forger one that lists it among the repo's writers.
+func (self *EvsWorld) viewOf(device *EvsWorldDevice, view sidecar.GkmAuthView) sidecar.GkmAuthView {
+	if view == nil || !device.settings.ForgesWriter {
+		return view
+	}
+	return &evsWorldForgedView{GkmAuthView: view, repoId: self.RepoId, forger: device.Signer.SidecarId}
+}
+
+// A view of the authorization state that lists a forger among a repo's writers where the view it wraps lists it as a
+// reader alone: what FS-10's forger's own configuration and gkm client hold (fs10.go).
+type evsWorldForgedView struct {
+	sidecar.GkmAuthView
+	repoId sidecar.Id
+	forger sidecar.Id
+}
+
+func (self *evsWorldForgedView) RepoWriters(repoId sidecar.Id) []sidecar.Id {
+	writers := self.GkmAuthView.RepoWriters(repoId)
+	if repoId == self.repoId && !slices.Contains(writers, self.forger) {
+		writers = append(slices.Clone(writers), self.forger)
+	}
+	return writers
+}
+
+func (self *evsWorldForgedView) At(pin *bridge.AuthPin) (sidecar.GkmAuthView, error) {
+	view, err := self.GkmAuthView.At(pin)
+	if err != nil {
+		return nil, err
+	}
+	return &evsWorldForgedView{GkmAuthView: view, repoId: self.repoId, forger: self.forger}, nil
 }
 
 // The store as the world's fake gkm writes its generations to it: every request under an inspecting context, so an evs
@@ -793,8 +860,14 @@ func (self *evsWorldHost) Close() {
 	self.closers = nil
 }
 
-// The running block of an instance, or nil while it is killed or never started.
+// The running block of an instance, or nil while it is killed, crashed or never started. A crash point (CrashAfterApply
+// and its kin) kills the instance's actor and leaves its block registered until a Kill step drops it, and the actor
+// table would give the next request a new incarnation of that name, so the dead block would serve it: a process that
+// died serves nothing.
 func (self *EvsWorld) instanceHost(instance string) EvsTierHost {
+	if actor := self.net.Actors().Lookup(instance); actor != nil && actor.Killed() {
+		return nil
+	}
 	host, _ := self.net.Process(instance).(EvsTierHost)
 	return host
 }
@@ -822,7 +895,7 @@ func (self *EvsWorld) startDevice(device *EvsWorldDevice, view *sidecartest.Fake
 	gkm := self.gkm
 	self.stateLock.Unlock()
 	device.Gkm = gkm.Client(device.Signer.SidecarId, device.Signer.Sign)
-	device.Gkm.AuthAdvanced(view)
+	device.Gkm.AuthAdvanced(self.viewOf(device, view))
 	identity := &sidecar.SidecarIdentity{
 		NetworkId: self.NetworkId, SidecarId: device.Signer.SidecarId, ClientId: device.ClientId, Generation: 1,
 		IdentityPublicKey: device.Signer.PublicKey(),
@@ -845,11 +918,11 @@ func (self *EvsWorld) startDevice(device *EvsWorldDevice, view *sidecartest.Fake
 		Identity: func() *sidecar.SidecarIdentity { return identity },
 		Gkm:      device.Gkm,
 		Store:    sidecartest.NewFakeStore().Root(),
-		Config:   func() sidecar.GkmAuthView { return self.currentView() },
+		Config:   func() sidecar.GkmAuthView { return self.viewOf(device, self.currentView()) },
 		// the world's projection already holds the repo's RepoCreate, which a create resumes (CreateRepo); a device
-		// files nothing else
+		// files a RepoDelete or a RepoRestore and nothing else (evs_world_lifecycle.go)
 		FileStatement: func(ctx context.Context, signedType bridge.SignedType, statement proto.Message) error {
-			return fmt.Errorf("the evs world files no %s", signedType)
+			return self.fileStatement(device, signedType, statement)
 		},
 		Emit: func(event sidecar.SidecarEvent) {
 			if event.Kind != sidecar.SidecarEventEvsAlarm {
@@ -940,7 +1013,9 @@ func (self *evsWorldAuthState) Repo(principal *sidecar.Principal, repoId sidecar
 	if repoId != self.world.RepoId {
 		return nil, evsservice.EvsAuthDenied
 	}
-	return &evsservice.EvsRepoFacts{Kind: self.world.settings.Kind, NetworkId: self.world.NetworkId}, evsservice.EvsAuthAllowed
+	return &evsservice.EvsRepoFacts{
+		Kind: self.world.settings.Kind, NetworkId: self.world.NetworkId, Deletion: self.world.deletionFacts(self.instance),
+	}, evsservice.EvsAuthAllowed
 }
 
 // The gate views of one instance: the world's newest position, or the one a schedule holds it at (HoldView).
@@ -999,6 +1074,11 @@ func (self *EvsWorld) roundTrip(device *EvsWorldDevice, request *http.Request) (
 		if err != nil {
 			return nil, err
 		}
+	}
+	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/path-epoch/block") {
+		self.stateLock.Lock()
+		self.blockRequestCount += 1
+		self.stateLock.Unlock()
 	}
 	pushId, isPush := evsWorldPushIdOf(request, body)
 	if isPush {
@@ -1623,8 +1703,10 @@ func (self *EvsWorld) Checks(invariants ...Invariant) []Invariant {
 // fs_team.go's agreement does for FI-2 and FI-3: every committed version of main names one push id, which commits
 // once and never moves; every 200 an instance or the lb answered names its push id's committed version (a retry
 // returns the original result); no push id a refusal answered ever commits (I-EVS-3); and no evs instance issued a
-// DELETE, since no answer deletes anything (I-EVS-2). The window is read after every step, so a schedule pages out
-// at most 64 versions in one step.
+// DELETE, since no answer deletes anything (I-EVS-2), but for an index entry of an epoch below main's current one,
+// the source copy a fold deletes once it has written the path's current entry (DESIGN-DETAILS 9.2.6), which a
+// PATH_EPOCH's fold does inside its request. The window is read after every step, so a schedule pages out at most
+// 64 versions in one step.
 func (self *EvsWorld) Outcomes() Invariant {
 	return NewInvariant("FI-2/outcomes", func(ctx context.Context, oracle *Oracle) error {
 		self.stateLock.Lock()
@@ -1634,14 +1716,24 @@ func (self *EvsWorld) Outcomes() Invariant {
 		if !setUp {
 			return nil
 		}
-		for _, entry := range oracle.Changed() {
-			if entry.Op == sidecartest.BlobHistoryDelete && slices.Contains(self.settings.Instances, entry.Actor) {
-				return fmt.Errorf("evs instance %s deleted %s: no answer deletes anything (I-EVS-2)", entry.Actor, entry.Key)
-			}
-		}
 		heads, err := oracle.View.Heads(ctx, self.RepoId)
 		if err != nil {
 			return err
+		}
+		currentEpoch := uint64(1)
+		for _, stored := range heads {
+			if sidecar.Id(stored.RefId) == refId {
+				currentEpoch = evsservice.EvsHeadCurrentEpoch(stored.Head)
+			}
+		}
+		for _, entry := range oracle.Changed() {
+			if entry.Op != sidecartest.BlobHistoryDelete || !slices.Contains(self.settings.Instances, entry.Actor) {
+				continue
+			}
+			if epoch, ok := self.entryEpochOf(entry.Key, refId); ok && epoch < currentEpoch {
+				continue
+			}
+			return fmt.Errorf("evs instance %s deleted %s: no answer deletes anything (I-EVS-2)", entry.Actor, entry.Key)
 		}
 		for _, stored := range heads {
 			if sidecar.Id(stored.RefId) != refId {
@@ -1683,6 +1775,20 @@ func (self *EvsWorld) Outcomes() Invariant {
 		}
 		return nil
 	})
+}
+
+// The path epoch of main's index entry key, false for a key that is no index entry of main's: idx/<repo>/<ref>/<epoch>
+// then / and the token path, or .e for the root's table.
+func (self *EvsWorld) entryEpochOf(key string, refId sidecar.Id) (uint64, bool) {
+	rest, ok := strings.CutPrefix(key, "idx/"+sidecar.EvsKeyId(self.RepoId)+"/"+sidecar.EvsKeyId(refId)+"/")
+	if !ok || len(rest) < 20 {
+		return 0, false
+	}
+	epoch, err := strconv.ParseUint(rest[:20], 10, 64)
+	if err != nil || (len(rest) > 20 && rest[20] != '/' && rest[20:] != ".e") {
+		return 0, false
+	}
+	return epoch, true
 }
 
 // Whether a push id is in main's committed history as the outcome check has read it, and at which version.
