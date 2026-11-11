@@ -78,6 +78,7 @@ type socketShareRecord struct {
 	ExpireMillis int64 `json:"expire_millis"`
 }
 
+// See socketShareRowBody.
 func (self *socketShareRecord) socketShareRowKind() socketShareRowKind {
 	return socketShareRowShare
 }
@@ -92,6 +93,7 @@ type socketShareReserve struct {
 	Millis          int64 `json:"millis"`
 }
 
+// See socketShareRowBody.
 func (self *socketShareReserve) socketShareRowKind() socketShareRowKind {
 	return socketShareRowReserve
 }
@@ -102,6 +104,7 @@ type socketShareDoneRow struct {
 	Millis int64 `json:"millis"`
 }
 
+// See socketShareRowBody.
 func (self *socketShareDoneRow) socketShareRowKind() socketShareRowKind {
 	return socketShareRowDone
 }
@@ -111,6 +114,7 @@ type socketShareRemove struct {
 	Millis int64 `json:"millis"`
 }
 
+// See socketShareRowBody.
 func (self *socketShareRemove) socketShareRowKind() socketShareRowKind {
 	return socketShareRowRemove
 }

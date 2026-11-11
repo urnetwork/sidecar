@@ -226,6 +226,7 @@ func (self *sidecarSocketBackend) component() (*SocketComponent, error) {
 	return component, nil
 }
 
+// See daemonSocketBackend: the component's listen, share/ let through for a share.
 func (self *sidecarSocketBackend) listen(ctx context.Context, address *SocketAddress, settings *SocketListenSettings, share bool) (daemonSocketListener, error) {
 	component, err := self.component()
 	if err != nil {
@@ -234,6 +235,7 @@ func (self *sidecarSocketBackend) listen(ctx context.Context, address *SocketAdd
 	return component.listen(ctx, address, settings, share)
 }
 
+// See daemonSocketBackend: the component's dial, or its share dial holding the listener's sidecar.
 func (self *sidecarSocketBackend) dial(ctx context.Context, address *SocketAddress, listenerSidecarId *Id) (*SocketConn, error) {
 	component, err := self.component()
 	if err != nil {
@@ -245,6 +247,7 @@ func (self *sidecarSocketBackend) dial(ctx context.Context, address *SocketAddre
 	return component.dial(ctx, address, nil, false)
 }
 
+// See daemonSocketBackend: GET /socket/list on the attached generation's token, unavailable between generations.
 func (self *sidecarSocketBackend) listPage(ctx context.Context, cursor string) (*SocketListResult, error) {
 	component, err := self.component()
 	if err != nil {
@@ -257,6 +260,7 @@ func (self *sidecarSocketBackend) listPage(ctx context.Context, cursor string) (
 	return generation.sidecarApi.SocketList(ctx, cursor)
 }
 
+// See daemonSocketBackend.
 func (self *sidecarSocketBackend) keyRing() *SocketKeyRing {
 	component, err := self.component()
 	if err != nil {
@@ -265,6 +269,7 @@ func (self *sidecarSocketBackend) keyRing() *SocketKeyRing {
 	return component.currentKeyRing()
 }
 
+// See daemonSocketBackend.
 func (self *sidecarSocketBackend) label() string {
 	component, err := self.component()
 	if err != nil {
@@ -277,6 +282,7 @@ func (self *sidecarSocketBackend) label() string {
 	return labels.Label
 }
 
+// See daemonSocketBackend.
 func (self *sidecarSocketBackend) sidecarId() *Id {
 	identity := self.sidecar.Identity()
 	if identity == nil {
@@ -285,10 +291,12 @@ func (self *sidecarSocketBackend) sidecarId() *Id {
 	return &identity.SidecarId
 }
 
+// See daemonSocketBackend.
 func (self *sidecarSocketBackend) localStore() SidecarStore {
 	return self.sidecar.LocalStore()
 }
 
+// See daemonSocketBackend.
 func (self *sidecarSocketBackend) settings() *SidecarSocketSettings {
 	return self.sidecar.settings.Sockets
 }
@@ -1330,22 +1338,27 @@ type daemonSocketConnEnd struct {
 	conn *SocketConn
 }
 
+// See daemonSpliceEnd.
 func (self *daemonSocketConnEnd) Read(b []byte) (int, error) {
 	return self.conn.Read(b)
 }
 
+// See daemonSpliceEnd.
 func (self *daemonSocketConnEnd) Write(b []byte) (int, error) {
 	return self.conn.Write(b)
 }
 
+// See daemonSpliceEnd: the stream's FIN.
 func (self *daemonSocketConnEnd) CloseWrite() error {
 	return self.conn.CloseWrite()
 }
 
+// See daemonSpliceEnd.
 func (self *daemonSocketConnEnd) Close() error {
 	return self.conn.Close()
 }
 
+// See daemonSpliceEnd: RST_CANCELLED.
 func (self *daemonSocketConnEnd) Abort() {
 	self.conn.Abort()
 }
@@ -1355,14 +1368,17 @@ type daemonSocketTcpEnd struct {
 	conn net.Conn
 }
 
+// See daemonSpliceEnd.
 func (self *daemonSocketTcpEnd) Read(b []byte) (int, error) {
 	return self.conn.Read(b)
 }
 
+// See daemonSpliceEnd.
 func (self *daemonSocketTcpEnd) Write(b []byte) (int, error) {
 	return self.conn.Write(b)
 }
 
+// See daemonSpliceEnd: TCP's FIN.
 func (self *daemonSocketTcpEnd) CloseWrite() error {
 	halves, ok := self.conn.(interface{ CloseWrite() error })
 	if !ok {
@@ -1371,10 +1387,12 @@ func (self *daemonSocketTcpEnd) CloseWrite() error {
 	return halves.CloseWrite()
 }
 
+// See daemonSpliceEnd.
 func (self *daemonSocketTcpEnd) Close() error {
 	return self.conn.Close()
 }
 
+// See daemonSpliceEnd: a close with no linger, which sends a reset.
 func (self *daemonSocketTcpEnd) Abort() {
 	if tcpConn, ok := self.conn.(*net.TCPConn); ok {
 		tcpConn.SetLinger(0)
@@ -1388,14 +1406,17 @@ type daemonSocketSessionEnd struct {
 	stream io.ReadWriter
 }
 
+// See daemonSpliceEnd.
 func (self *daemonSocketSessionEnd) Read(b []byte) (int, error) {
 	return self.stream.Read(b)
 }
 
+// See daemonSpliceEnd.
 func (self *daemonSocketSessionEnd) Write(b []byte) (int, error) {
 	return self.stream.Write(b)
 }
 
+// See daemonSpliceEnd: the session's write half, where its connection has one.
 func (self *daemonSocketSessionEnd) CloseWrite() error {
 	halves, ok := self.stream.(interface{ CloseWrite() error })
 	if !ok {
@@ -1404,10 +1425,12 @@ func (self *daemonSocketSessionEnd) CloseWrite() error {
 	return halves.CloseWrite()
 }
 
+// See daemonSpliceEnd: nothing, since the daemon closes the session once its handler returns.
 func (self *daemonSocketSessionEnd) Close() error {
 	return nil
 }
 
+// See daemonSpliceEnd: the session closed now, so its ur sees the stream end.
 func (self *daemonSocketSessionEnd) Abort() {
 	if closer, ok := self.stream.(io.Closer); ok {
 		closer.Close()
