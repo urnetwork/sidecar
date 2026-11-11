@@ -1060,8 +1060,16 @@ func TestEvsAbsenceProofHoldsItsSizesToTheStatement(t *testing.T) {
 	if err != nil || onePart.PartCount() != 1 || onePart.Root() == root {
 		t.Errorf("one part as parts: %v", err)
 	}
-	if _, err := NewEvsPartedChangeTree([][][]byte{}); !errors.Is(err, ErrEvsMerkleInvalid) {
+	// a push in parts with no change is a tree of no part, its root SHA-256 of no bytes, beside which no absence
+	// stands (QD-658)
+	empty, err := NewEvsPartedChangeTree([][][]byte{})
+	if err != nil || empty.Root() != sha256.Sum256(nil) || empty.ChangeCount() != 0 || empty.PartCount() != 0 {
 		t.Errorf("no part: %v", err)
+	}
+	if empty != nil {
+		if _, err := empty.AbsenceProof(paths[5]); !errors.Is(err, ErrEvsMerkleInvalid) {
+			t.Errorf("an absence in a tree of no change: %v", err)
+		}
 	}
 	if _, err := NewEvsPartedChangeTree([][][]byte{leaves, {}}); !errors.Is(err, ErrEvsMerkleInvalid) {
 		t.Errorf("an empty part: %v", err)
