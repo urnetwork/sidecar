@@ -286,10 +286,11 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 		writer.Write(reply)
 		return
 	}
-	self.world.stateLock.Lock()
-	current := max(1, self.world.currentEpoch)
-	headVersion := uint64(len(self.world.commits))
-	self.world.stateLock.Unlock()
+	world := self.worldOf(Id(statement.Push.GetRefId()))
+	world.stateLock.Lock()
+	current := max(1, world.currentEpoch)
+	headVersion := uint64(len(world.commits))
+	world.stateLock.Unlock()
 	epoch := statement.Push.GetPathEpoch()
 	switch {
 	case 0 < headVersion && statement.Push.GetBaseVersion() == 0:
@@ -311,9 +312,9 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 	self.stateLock.Lock()
 	var checked *EvsCheckedPayload
 	var tree *EvsChangeTree
+	parts := [][]byte{}
 	if 0 < len(pushRequest.GetPartPlaces()) {
 		held := self.parts[evsUrlId(pushId)]
-		parts := [][]byte{}
 		for _, place := range pushRequest.GetPartPlaces() {
 			partBytes, ok := held[place.GetSeq()]
 			if !ok {
@@ -351,7 +352,7 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	version, refusal := self.commit(statement, pushRequest.GetPayload(), checked, tree)
+	version, refusal := self.commit(world, statement, pushRequest.GetPayload(), parts, checked, tree)
 	if refusal != nil {
 		refusal.reply.PushId = pushId.Bytes()
 		evsTestRefuse(writer, refusal)
@@ -391,8 +392,25 @@ func (self *evsTestPushServer) pathOf(tokenPath EvsTokenPath, epoch uint64) (str
 	return "", false
 }
 
-// Commits a checked push into the world after 5f's base and 5g's CAS on each file path, or answers their 409.
-func (self *evsTestPushServer) commit(statement *EvsStatement, payload []byte, checked *EvsCheckedPayload, tree *EvsChangeTree) (uint64, *evsTestRefusal) {
+// The world of the ref a push names: the world's own, or another ref the test made (otherRef).
+func (self *evsTestPushServer) worldOf(refId Id) *evsTestWorld {
+	if refId == self.world.refId {
+		return self.world
+	}
+	self.world.stateLock.Lock()
+	defer self.world.stateLock.Unlock()
+	other := self.world.others[refId]
+	if other == nil {
+		self.t.Fatalf("a push to a ref the test did not make")
+	}
+	return other
+}
+
+// Commits a checked push into its ref's world after 5f's base and 5g's CAS on each file path, or answers their 409.
+// A git-mode push commits only on the head (TIP, else 409 NON_FAST_FORWARD), takes a creation over a standing path
+// of the other kind, and copies a creating push's sections 15 and 16 into the head; a DELETE marks the head deleted
+// and an IMMUTABLE ref takes nothing but a DELETE (§11.8's refs table).
+func (self *evsTestPushServer) commit(world *evsTestWorld, statement *EvsStatement, payload []byte, parts [][]byte, checked *EvsCheckedPayload, tree *EvsChangeTree) (uint64, *evsTestRefusal) {
 	paths := make([]string, len(checked.Changes))
 	for i, change := range checked.Changes {
 		path, ok := self.pathOf(change.TokenPath, statement.Push.GetPathEpoch())
@@ -401,11 +419,11 @@ func (self *evsTestPushServer) commit(statement *EvsStatement, payload []byte, c
 		}
 		paths[i] = path
 	}
-	world := self.world
 	world.stateLock.Lock()
 	defer world.stateLock.Unlock()
 	push := statement.Push
 	head := uint64(len(world.commits))
+	gitMode := protocol.EvsRefMode(push.GetRefMode()) == protocol.EvsRefMode_EVS_REF_GIT
 	baseChain := EvsChainStart(world.repoId, world.refId)
 	if 0 < push.GetBaseVersion() && push.GetBaseVersion() <= head {
 		baseChain = world.commits[push.GetBaseVersion()-1].chain
@@ -413,9 +431,26 @@ func (self *evsTestPushServer) commit(statement *EvsStatement, payload []byte, c
 	if head < push.GetBaseVersion() || push.GetBaseVersion()+63 < head || !bytes.Equal(push.GetBaseChain(), baseChain[:]) {
 		return 0, &evsTestRefusal{status: http.StatusConflict, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE}}
 	}
+	flags := push.GetFlags()
+	if gitMode {
+		if push.GetBaseVersion() != head {
+			return 0, &evsTestRefusal{status: http.StatusConflict, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_NON_FAST_FORWARD}}
+		}
+		if world.immutable && flags&uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE) == 0 {
+			return 0, &evsTestRefusal{status: http.StatusConflict, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE}}
+		}
+		creating := head == 0 || world.deleted
+		if (len(checked.RefName) != 0 || checked.Base != nil) && !creating {
+			return 0, &evsTestRefusal{status: http.StatusConflict, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE}}
+		}
+		if creating && len(checked.RefName) != 0 {
+			world.sealedRefName, world.base = bytes.Clone(checked.RefName), checked.Base
+		}
+	}
 	if head == 0 {
-		// step 7 starts the ref's head in the epoch its first push names
+		// step 7 starts the ref's head in the epoch its first push names, in the mode its first push states
 		world.currentEpoch = max(1, push.GetPathEpoch())
+		world.mode = protocol.EvsRefMode(push.GetRefMode())
 	}
 	current := world.currentWithLock()
 	// what the push showed evs: each change's token path, source paths and delta rows
@@ -453,6 +488,14 @@ func (self *evsTestPushServer) commit(statement *EvsStatement, payload []byte, c
 		if directory && change.Change.GetBaseEntryVersion() != 0 {
 			continue
 		}
+		if gitMode && change.Change.GetBaseEntryVersion() == 0 && change.WritesEntry() && 0 < newest {
+			// a creation over a standing path of the other kind (DESIGN-DETAILS 8.2.2's kinds row)
+			entry := &protocol.EvsEntryVersion{}
+			proto.Unmarshal(change.EntryVersion, entry)
+			if (entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY)) != directory {
+				continue
+			}
+		}
 		if change.Change.GetBaseEntryVersion() != newest {
 			conflicts = append(conflicts, change.TokenPath.Proto())
 		}
@@ -467,8 +510,17 @@ func (self *evsTestPushServer) commit(statement *EvsStatement, payload []byte, c
 	}
 	world.commits = append(world.commits, &evsTestCommit{
 		statement: statement.Bytes, parsed: statement, chain: chain,
-		built: &EvsBuiltPush{Statement: statement, Payload: payload, ChangeTree: tree},
+		built: &EvsBuiltPush{Statement: statement, Payload: payload, Parts: parts, ChangeTree: tree},
 	})
+	if gitMode {
+		world.deleted = flags&uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE) != 0
+		if flags&uint32(protocol.EvsPushFlag_EVS_PUSH_IMMUTABLE) != 0 {
+			world.immutable = true
+		}
+		if world.deleted {
+			world.immutable = false
+		}
+	}
 	for i, change := range checked.Changes {
 		state := world.paths[paths[i]]
 		if state == nil {

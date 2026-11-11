@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -86,6 +87,9 @@ type evsPushAttempt struct {
 	refId        Id
 	// the token scope it posts under
 	scope string
+	// a git-mode push in parts: when it last took its seal lease, which renewLease takes again
+	leaseLock sync.Mutex
+	leaseAt   time.Time
 }
 
 // Builds sealed's push under pushId, its segments' receipts in hand.
@@ -120,6 +124,18 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 			return nil, fmt.Errorf("%w: a git-mode push with no update", ErrEvsGitRef)
 		}
 		metadata.Git = plan.gitUpdate
+		if extras := plan.gitExtras; extras != nil {
+			metadata.Commits, metadata.SignedImport = extras.commits, extras.signedImport
+			if extras.creating {
+				// payload sections 15 and 16, which evs copies into the head, and their sealed copies (8.2.2)
+				metadata.RefName, metadata.Base = extras.refName, extras.base
+				if pushPlan.RefName, err = EvsSealRefName(manifest, plan.RefId, extras.refName); err != nil {
+					return nil, err
+				}
+				pushPlan.Base = extras.base
+			}
+			pushPlan.ReuseList = extras.reuse
+		}
 	}
 	if self.client.args.GroupHead != nil {
 		if groupHead, ok := self.client.args.GroupHead(repoKey.GroupId()); ok {
@@ -162,6 +178,7 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 		return nil, err
 	}
 	attempt.built = built
+	partNamed := map[string]bool{}
 	for _, partBytes := range built.Parts {
 		checked, err := EvsCheckPart(built.Statement, partBytes)
 		if err != nil {
@@ -173,13 +190,36 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 			for _, segmentId := range evsEntrySegmentIds(change.EntryVersion) {
 				if receipt := segmentIdReceipts[segmentId]; receipt != nil && !named[segmentId] {
 					named[segmentId] = true
+					partNamed[segmentId] = true
 					receipts = append(receipts, receipt)
 				}
 			}
 		}
 		attempt.partReceipts = append(attempt.partReceipts, receipts)
 	}
+	if 0 < len(attempt.partReceipts) {
+		// a segment no entry names, a git-mode push's history segment, rides the first part's receipts, which the seal
+		// joins with every part's for 5h's new-objects check
+		for _, segment := range sealed.Segments {
+			if !partNamed[string(segment.Id[:])] {
+				attempt.partReceipts[0] = append(attempt.partReceipts[0], segment.Receipt)
+			}
+		}
+	}
 	return attempt, nil
+}
+
+// What a git-mode push seals beside its update (DESIGN-DETAILS 8.2.2; 8.2.5's step 5): its carried commits and its
+// signed import; on a push that creates its ref, or is the first after a DELETE, the ref's name and an overlay's base,
+// which payload sections 15 and 16 carry beside their sealed copies; and its reuse list. Its history segments are the
+// sealed write's own, introduced and uploaded with the entries' segments.
+type evsGitPushExtras struct {
+	commits      []*protocol.EvsSealedCommit
+	signedImport []byte
+	creating     bool
+	refName      []byte
+	base         *protocol.EvsOverlay
+	reuse        []*EvsReuse
 }
 
 // The segment ids an entry version's chain names.
@@ -281,8 +321,17 @@ func evsCreationConflict(err error) bool {
 // posts it (above), and on 412 PATH_EPOCH re-tokenizes it and sends it again (the file header's retoken row).
 // rebuilds counts the write's rebuilds and retokens against PushRebuildCount.
 func (self *EvsRepo) sendSealed(ctx context.Context, sealed *EvsSealedWrite, rebuilds *int) (Id, *protocol.EvsPushReply, error) {
+	return self.sendSealedNoting(ctx, sealed, rebuilds, nil)
+}
+
+// sendSealed, noting each push id before anything is sent under it, nil for none: what a git publish judges a moved
+// head by, since an attempt it sent may be in the history (DESIGN-DETAILS 8.2.5's 409 row).
+func (self *EvsRepo) sendSealedNoting(ctx context.Context, sealed *EvsSealedWrite, rebuilds *int, note func(pushId Id)) (Id, *protocol.EvsPushReply, error) {
 	for {
 		pushId := NewEvsPushId()
+		if note != nil {
+			note(pushId)
+		}
 		if err := self.uploadSegments(ctx, sealed, pushId); err != nil {
 			return pushId, nil, err
 		}

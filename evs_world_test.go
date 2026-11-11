@@ -161,6 +161,12 @@ type evsTestWorld struct {
 	// the next push's payload sections 15 and 16, a creating push's sealed ref name and base
 	nextRefName []byte
 	nextBase    *protocol.EvsOverlay
+	// a git-mode head's copies of its creating push's sections 15 and 16, whether a DELETE stands, and whether its
+	// creation set IMMUTABLE, as the stand-in's commits keep them
+	sealedRefName []byte
+	base          *protocol.EvsOverlay
+	deleted       bool
+	immutable     bool
 	// the next push's flags, and the new objects it introduces beside its entries' segments
 	nextFlags      uint32
 	nextNewObjects []*EvsNewObject
@@ -582,7 +588,8 @@ func (self *evsTestWorld) headSummaryWithLock() *protocol.EvsHeadSummary {
 	head := &protocol.EvsHeadSummary{
 		RefId: self.refId.Bytes(), RefKind: protocol.EvsRefKind_EVS_REF_SHARED, RefMode: self.mode,
 		GroupId: evsTestId("world group").Bytes(), Generation: self.generation,
-		PathEpoch: &protocol.EvsPathEpoch{Current: max(1, self.currentEpoch)},
+		PathEpoch:     &protocol.EvsPathEpoch{Current: max(1, self.currentEpoch)},
+		SealedRefName: self.sealedRefName, Base: self.base, Deleted: self.deleted,
 	}
 	for _, source := range self.sourceEpochs {
 		head.PathEpoch.Sources = append(head.PathEpoch.Sources, &protocol.EvsEpochSource{Epoch: source})

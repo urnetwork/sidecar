@@ -38,13 +38,14 @@
 // format 1's inline record carries its own key block (EVS-FORMAT.md), which a slot-keyed chain must not, so a
 // slot-keyed inline record is left to a format change and every chain goes in slot-keyed segments.
 //
-// A git-mode ref takes a write here only as a rekey (DESIGN-DETAILS 8.2.10; question keys-m2-26-rekey-git-mode-refs):
-// every write a forced checkpoint held to the version it read, none a removal, each new blob the standing version's
-// with its mode, a gitlink's empty chain re-sealed as it stands; the sender seals the REKEY shape. Any other write to a
-// git-mode ref is ErrEvsGitRef, as the local tier makes those.
+// A git-mode ref takes a write through PlanWrite only as a rekey (DESIGN-DETAILS 8.2.10; question
+// keys-m2-26-rekey-git-mode-refs): every write a forced checkpoint held to the version it read, none a removal, each new
+// blob the standing version's with its mode, a gitlink's empty chain re-sealed as it stands; the sender seals the
+// REKEY shape. Any other write to a git-mode ref is ErrEvsGitRef: the local tier plans a git ref update through
+// PlanGitUpdate (below), sharing the chain rules, with a rename keeping its file's chain.
 //
-// Not built here, and failing closed: rename and copy, which keep a file's chain under another path through the
-// reuse list.
+// Not built here, and failing closed: a file-mode rename or copy, which would keep a file's chain under another path
+// through the reuse list.
 //
 // On every leg. Not safe for concurrent use: one plan at a time per write.
 
@@ -162,6 +163,11 @@ type EvsWritePlan struct {
 	firstPush bool
 	// the repo keeps its object keys in slots, a record-class repo's (see the file header)
 	slotKeyed bool
+	// a git plan's: where its writes' bytes come from, the spills they are held in until sealed, and what the push
+	// seals beside its update (evs_push.go's evsGitPushExtras)
+	blobs     EvsGitBlobSource
+	contents  []*evsSpill
+	gitExtras *evsGitPushExtras
 }
 
 // One path's part of a push.
@@ -930,4 +936,570 @@ func (self *EvsRepo) planEpochs(ctx context.Context, plan *EvsWritePlan) error {
 		planned.SourcePaths = sourcePaths
 	}
 	return nil
+}
+
+// A git update whose net change does not match what evs's entries say the tree the path state stands at is: a path
+// the old tree holds that evs does not, or the reverse. The update is refused before any evs write; a replaying reader
+// holds every version to its tree (DESIGN-DETAILS 8.2.7's G4), so this is a fault, never a race.
+var ErrEvsGitStateDiffers = errors.New("evs: a git update's tree and the ref's entries differ")
+
+// A git update past §11.19's directory bounds on its new tree, or past a push's entry writes: refused before any evs
+// write, naming the path (DESIGN-DETAILS 8.2.4's limits row, `ng <ref> DIRECTORY_FULL <path>`).
+var ErrEvsDirectoryFull = errors.New("evs: DIRECTORY_FULL")
+
+// The most entries one push writes: 1,024 parts of 1,024 entry writes (§11.8's parts row).
+const EvsPushMaxEntryWriteCount = EvsMaxPartCount * EvsPartMaxEntryWriteCount
+
+// A git plan's read found the ref's head past the version the update is built on (DESIGN-DETAILS 8.2.5's 409 row):
+// the caller judges the versions between, a PATH_EPOCH or a rekey alone leaving the tip where it was, before it
+// builds again.
+type EvsGitHeadMovedError struct {
+	// The head the read verified.
+	Head *EvsVerifiedHead
+	// The version the update was built on.
+	BaseVersion uint64
+}
+
+func (self *EvsGitHeadMovedError) Error() string {
+	return fmt.Sprintf("evs: the ref's head is at %d, past the update's base %d", self.Head.Version, self.BaseVersion)
+}
+
+// One path of a git ref update's net change (DESIGN-DETAILS 8.2.4), what PlanGitUpdate plans: a file written or
+// removed, a directory created, given a delta or removed, and a path that changes kind created as its new kind. The
+// local tier makes these from its trees with the tree reader (evs_local_publish.go). A path's kind, mode and oids are
+// the trees', which evs cannot see: the plan holds evs's entries to them and refuses a mismatch.
+type EvsGitPathChange struct {
+	// Raw names joined by /, never normalized; "" is the root.
+	Path string
+	// What the tree the path state stands at held there, and what the new tree holds: a file, a directory, or
+	// UNSPECIFIED for nothing. A removal holds nothing; a path whose two kinds differ is a creation of the new one
+	// over the old (8.2.2's kinds row). The root is read from evs, whose root stands once any push created it.
+	Stood protocol.EvsEntryKind
+	Kind  protocol.EvsEntryKind
+	// A file's canon mode and blob oid in the new tree; for one that stood, its blob there, which a rename pairs by.
+	Mode     uint32
+	Oid      EvsGitOid
+	StoodOid EvsGitOid
+	// A directory in the new tree: every child it has, which its creation lists, and the children its delta adds,
+	// new or of another kind, and the names it removes.
+	Children []*EvsGitChild
+	Added    []*EvsGitChild
+	Removed  [][]byte
+}
+
+// A directory's child in a tree: its raw name and its kind.
+type EvsGitChild struct {
+	Name []byte
+	Kind protocol.EvsEntryKind
+}
+
+// Whether the change removes its path.
+func (self *EvsGitPathChange) removes() bool {
+	return self.Kind == protocol.EvsEntryKind_EVS_ENTRY_KIND_UNSPECIFIED
+}
+
+// Where a git plan reads a write's bytes: an object store that checks each blob against its oid as it streams it, the
+// mount's bare repository (EvsLocalObjects).
+type EvsGitBlobSource interface {
+	CopyBlob(ctx context.Context, oid EvsGitOid, out io.Writer) (int64, error)
+}
+
+// What PlanGitUpdate plans against.
+type EvsGitPlanArgs struct {
+	// The ref's name bytes, and its id.
+	RefName []byte
+	RefId   Id
+	// The update the push seals as its sealed metadata's git (8.2.3), and the net change its changes state, every
+	// path once. A tag ref's and a DELETE's are empty.
+	Update  *protocol.EvsGitUpdate
+	Changes []*EvsGitPathChange
+	// The version the update is built on, whose tip is the update's old one: a head past it is EvsGitHeadMovedError.
+	BaseVersion uint64
+	// A creating push's overlay base, payload section 16, nil for none.
+	Base *protocol.EvsOverlay
+	// Each write's new bytes, by its oid.
+	Blobs EvsGitBlobSource
+	// The generation this push seals to, from GkmClient.EnsureWritable.
+	Generation uint64
+	// Reads the cluster's head, not evs's cache.
+	Fresh bool
+}
+
+// Plans a git ref update on its ref (DESIGN-DETAILS 8.2.4's planner, beside PlanWrite and sharing its chain rules):
+//
+//	reads      each changed path's standing entry read from evs, 64 a request, under section 9's floors, every batch
+//	           on the one head the first read verified, which must be the update's base; a ref with no head reads
+//	           nothing, so every change is a creation at version b + 1
+//	content    a write's new bytes from Blobs by its oid, hashed as they are read; its previous version's, which a
+//	           diff applies to, reconstructed from evs and checked against its own oid
+//	chain      the planner's rules unchanged: a diff on the path's previous version, else a checkpoint by rules (1)
+//	           to (4); past 8 MiB in chunks; an inline chain to 16 KiB
+//	kinds      a path that changes kind is a creation of the new kind over the standing entry, base_entry_version 0,
+//	           and a removed directory takes no delta of its own, its paths removed by their own changes
+//	rename     a removed file and a created file with one blob oid, in one push: the created path takes the removed
+//	           one's file_id and, where the checkpoint rules let a diff stand, its chain whole, so nothing is
+//	           uploaded; several candidates pair in path order
+//	gitlink    mode 160000: its sealed fields and an empty chain
+//	versions   versioning 0 on every entry: git mode is never versionless
+//	limits     32 components a path, 4,096 children and 448 KiB of names a directory of the new tree, 1,048,576
+//	           entry writes a push, all before any evs write (ErrEvsDirectoryFull)
+//	epochs     a creation on a blocking ref under immediate pressure waits (ErrEvsPathEpochDue); while sources stand
+//	           each change names its source paths by its floor, as PlanWrite's do; a ref's first push moves whole to
+//	           the epoch it starts in (firstEpoch: an overlay's is its base ref's current one, read fresh)
+//
+// Not built here, and failing closed: an overlay's paths (ErrEvsOverlayBase), which read through the base ref, and
+// the reuse list, which cites a base's or a source's standing chain.
+func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*EvsWritePlan, error) {
+	for _, reserved := range evsReservedRefNames {
+		if bytes.Equal(args.RefName, reserved) {
+			return nil, fmt.Errorf("%w: a format-2 or v1 ref", ErrEvsReservedPath)
+		}
+	}
+	if args.Update == nil || args.Blobs == nil {
+		return nil, fmt.Errorf("%w: a git plan with no update or no blobs", ErrEvsWriteInvalid)
+	}
+	if err := evsGitCheckLimits(args.Changes); err != nil {
+		return nil, err
+	}
+	repoKind, err := self.repoKind()
+	if err != nil {
+		return nil, err
+	}
+	if EvsRepoKindRecordClass(repoKind) {
+		return nil, fmt.Errorf("%w: a git-mode ref in a slot-keyed repo", ErrEvsWriteNotBuilt)
+	}
+	changes := map[string]*EvsGitPathChange{}
+	for _, change := range args.Changes {
+		if changes[change.Path] != nil {
+			return nil, fmt.Errorf("%w: a path changed twice", ErrEvsWriteInvalid)
+		}
+		changes[change.Path] = change
+	}
+	renames := evsGitRenames(args.Changes)
+	plan := (*EvsWritePlan)(nil)
+	planned := map[string]*EvsPlannedPath{}
+	contents := []*evsSpill{}
+	keep := false
+	defer func() {
+		if !keep {
+			for _, content := range contents {
+				content.close()
+			}
+		}
+	}()
+	readBatch := func(batch []string, fresh bool) error {
+		result, err := self.read(ctx, args.RefId, batch, 0, fresh)
+		if err != nil {
+			return err
+		}
+		defer result.objects.close()
+		head := result.head.Head
+		if plan == nil {
+			if result.head.Version != args.BaseVersion {
+				return &EvsGitHeadMovedError{Head: result.head, BaseVersion: args.BaseVersion}
+			}
+			plan = &EvsWritePlan{
+				RepoId: self.repoId, RefId: args.RefId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
+				Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
+				Generation: args.Generation, keys: result.keys, floors: map[string]uint64{}, gitUpdate: args.Update,
+				blobs: args.Blobs,
+			}
+			if err := plan.setGitRef(head, args.RefName, self.client.args.Identity().SidecarId); err != nil {
+				return err
+			}
+			plan.firstPush = result.head.Version == 0
+			if plan.pathKey, err = result.keys.path(ctx, plan.PathEpoch); err != nil {
+				return err
+			}
+			if plan.nameKey, err = result.keys.manifest(ctx, plan.PathEpoch); err != nil {
+				return err
+			}
+		} else if result.head.Version != plan.BaseVersion {
+			return &EvsGitHeadMovedError{Head: result.head, BaseVersion: plan.BaseVersion}
+		} else if !evsSamePathEpoch(head.GetPathEpoch(), plan.Head.GetPathEpoch()) {
+			return errEvsPlanEpochMoved
+		}
+		verifieds := map[string]*EvsVerifiedPath{}
+		for i, readPath := range result.paths {
+			if readPath.path != "" {
+				plan.floors[readPath.path] = evsLowerFloor(plan.floors[readPath.path], readPath.floor)
+			}
+			verifieds[readPath.path] = result.replies[i]
+		}
+		for i, readPath := range result.paths {
+			var from *evsGitRenameSource
+			if source, ok := renames[readPath.path]; ok {
+				from = &evsGitRenameSource{path: source, verified: verifieds[source]}
+			}
+			path, err := self.planGitPath(ctx, plan, result, readPath, result.replies[i], changes[readPath.path], from, &contents)
+			if err != nil {
+				return err
+			}
+			planned[readPath.path] = path
+		}
+		return nil
+	}
+	batches := evsGitReadBatches(args.Changes, renames)
+	if len(batches) == 0 {
+		// an update that changes no path, a tag's, a DELETE's or a branch's at a tree it holds: the head alone
+		batches = [][]string{nil}
+	}
+	for i, batch := range batches {
+		if err := readBatch(batch, args.Fresh || 0 < i); err != nil {
+			return nil, err
+		}
+	}
+	for _, change := range args.Changes {
+		if path := planned[change.Path]; path != nil {
+			plan.Paths = append(plan.Paths, path)
+		}
+	}
+	if err := self.planEpochs(ctx, plan); err != nil {
+		return nil, err
+	}
+	for _, path := range plan.Paths {
+		if path.Kind == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY && !path.Remove {
+			if err := plan.directoryRows(ctx, path); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if plan.firstPush {
+		epoch, err := self.firstEpoch(ctx, plan.RefKind, args.Base, args.Generation)
+		if err != nil {
+			return nil, err
+		}
+		if err := plan.tokenizeIn(ctx, epoch); err != nil {
+			return nil, err
+		}
+	}
+	plan.contents = contents
+	keep = true
+	return plan, nil
+}
+
+// The ref's kind, mode and owner for a git update: the head's once a push set them, which must be git mode, else a
+// git-mode ref named by refName, owned for ur/<this sidecar>/..., shared otherwise. Another sidecar's owned ref, a
+// deposit and the erasure ref take no git update.
+func (self *EvsWritePlan) setGitRef(head *protocol.EvsHeadSummary, refName []byte, sidecarId Id) error {
+	self.RefKind = head.GetRefKind()
+	self.RefMode = head.GetRefMode()
+	if self.RefKind == protocol.EvsRefKind_EVS_REF_KIND_UNSPECIFIED {
+		self.RefKind = protocol.EvsRefKind_EVS_REF_SHARED
+		self.RefMode = protocol.EvsRefMode_EVS_REF_GIT
+		if ownerId, ok := EvsOwnedRefOwner(refName); ok {
+			self.RefKind = protocol.EvsRefKind_EVS_REF_OWNED
+			self.OwnerSidecarId = &ownerId
+		}
+	} else if 0 < len(head.GetOwnerSidecarId()) {
+		ownerId, err := IdFromBytes(head.GetOwnerSidecarId())
+		if err != nil {
+			return fmt.Errorf("%w: the head's owner", ErrEvsReplyInvalid)
+		}
+		self.OwnerSidecarId = &ownerId
+	}
+	if self.RefMode != protocol.EvsRefMode_EVS_REF_GIT {
+		return fmt.Errorf("%w: a git update of a file-mode ref", ErrEvsWriteInvalid)
+	}
+	switch self.RefKind {
+	case protocol.EvsRefKind_EVS_REF_SHARED:
+	case protocol.EvsRefKind_EVS_REF_OWNED:
+		if self.OwnerSidecarId == nil || *self.OwnerSidecarId != sidecarId {
+			return fmt.Errorf("%w: another sidecar's owned ref", ErrEvsWriteInvalid)
+		}
+	default:
+		return fmt.Errorf("%w: a %s ref takes no git update", ErrEvsWriteInvalid, self.RefKind)
+	}
+	return nil
+}
+
+// Closes the spills a git plan holds its writes' bytes in, once they are sealed.
+func (self *EvsWritePlan) closeContents() {
+	for _, content := range self.contents {
+		content.close()
+	}
+	self.contents = nil
+}
+
+// The removed file a created file takes its file_id and chain from, as its batch read it.
+type evsGitRenameSource struct {
+	path     string
+	verified *EvsVerifiedPath
+}
+
+// Each created file whose blob a removed file of the update held, mapped to that removed file: candidates of one oid
+// pair in path order (DESIGN-DETAILS 8.2.4's rename row). A gitlink has no content and takes no rename.
+func evsGitRenames(changes []*EvsGitPathChange) map[string]string {
+	oidRemoved := map[EvsGitOid][]string{}
+	for _, change := range changes {
+		if change.removes() && change.Stood == protocol.EvsEntryKind_EVS_ENTRY_FILE && change.Path != "" {
+			oidRemoved[change.StoodOid] = append(oidRemoved[change.StoodOid], change.Path)
+		}
+	}
+	renames := map[string]string{}
+	if len(oidRemoved) == 0 {
+		return renames
+	}
+	created := []*EvsGitPathChange{}
+	for _, change := range changes {
+		if change.Kind == protocol.EvsEntryKind_EVS_ENTRY_FILE && change.Stood == protocol.EvsEntryKind_EVS_ENTRY_KIND_UNSPECIFIED &&
+			change.Mode != EvsGitModeGitlink {
+			created = append(created, change)
+		}
+	}
+	slices.SortFunc(created, func(a *EvsGitPathChange, b *EvsGitPathChange) int { return strings.Compare(a.Path, b.Path) })
+	for removed := range oidRemoved {
+		slices.Sort(oidRemoved[removed])
+	}
+	for _, change := range created {
+		candidates := oidRemoved[change.Oid]
+		if len(candidates) == 0 {
+			continue
+		}
+		renames[change.Path] = candidates[0]
+		oidRemoved[change.Oid] = candidates[1:]
+	}
+	return renames
+}
+
+// The changes' paths in read batches of at most 64, a rename's removed path in the batch of the path created from it,
+// so one read serves both.
+func evsGitReadBatches(changes []*EvsGitPathChange, renames map[string]string) [][]string {
+	sourceTargets := map[string]string{}
+	for target, source := range renames {
+		sourceTargets[source] = target
+	}
+	batches := [][]string{}
+	batch := []string{}
+	add := func(paths ...string) {
+		if EvsReadMaxPathCount < len(batch)+len(paths) {
+			batches = append(batches, batch)
+			batch = []string{}
+		}
+		batch = append(batch, paths...)
+	}
+	for _, change := range changes {
+		switch {
+		case renames[change.Path] != "":
+			add(renames[change.Path], change.Path)
+		case sourceTargets[change.Path] != "":
+			// read with its target
+		default:
+			add(change.Path)
+		}
+	}
+	if 0 < len(batch) {
+		batches = append(batches, batch)
+	}
+	return batches
+}
+
+// §11.19's bounds on the new tree, checked on every directory the update changes, and the push's entry writes.
+func evsGitCheckLimits(changes []*EvsGitPathChange) error {
+	if EvsPushMaxEntryWriteCount < len(changes) {
+		return fmt.Errorf("%w: %d entry writes in one update", ErrEvsDirectoryFull, len(changes))
+	}
+	for _, change := range changes {
+		if change.Path != "" {
+			names, err := evsPathNames(change.Path)
+			if err != nil {
+				return err
+			}
+			if EvsTokenPathMaxLength < len(names) {
+				return fmt.Errorf("%w: %s holds %d components", ErrEvsDirectoryFull, change.Path, len(names))
+			}
+		}
+		if change.Kind != protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
+			continue
+		}
+		if EvsDirectoryMaxChildCount < len(change.Children) {
+			return fmt.Errorf("%w: %q holds %d children", ErrEvsDirectoryFull, change.Path, len(change.Children))
+		}
+		boundByteCount := 0
+		for _, child := range change.Children {
+			boundByteCount += evsNameRowBoundByteCount(child.Name, child.Kind)
+		}
+		if EvsNameTableMaxBoundByteCount < boundByteCount {
+			return fmt.Errorf("%w: %q holds %d bytes of names", ErrEvsDirectoryFull, change.Path, boundByteCount)
+		}
+	}
+	return nil
+}
+
+// What one child's row counts against a table's 448 KiB, as EvsNameTableBoundByteCount counts it once sealed: its
+// token, its kind and its name padded and sealed (EvsNameSeal).
+func evsNameRowBoundByteCount(name []byte, kind protocol.EvsEntryKind) int {
+	paddedLength := (len(name)/evsNamePadByteCount + 1) * evsNamePadByteCount
+	row := &protocol.EvsName{Token: make([]byte, EvsTokenByteCount), Kind: uint32(kind), SealedName: make([]byte, paddedLength+evsSealOverhead)}
+	rowByteCount := proto.Size(row)
+	return 1 + evsVarintByteCount(uint64(rowByteCount)) + rowByteCount
+}
+
+// One changed path's plan from its read on the ref: see PlanGitUpdate. from is a created file's rename source, nil for
+// none. A write's bytes are spilled into contents, which the plan closes once they are sealed.
+func (self *EvsRepo) planGitPath(ctx context.Context, plan *EvsWritePlan, result *evsReadResult, readPath *evsReadPath, verified *EvsVerifiedPath, change *EvsGitPathChange, from *evsGitRenameSource, contents *[]*evsSpill) (*EvsPlannedPath, error) {
+	if verified.Base != nil {
+		return nil, ErrEvsOverlayBase
+	}
+	planned := &EvsPlannedPath{Path: change.Path, TokenPath: readPath.current, Kind: change.Kind, names: readPath.names}
+	stood := protocol.EvsEntryKind_EVS_ENTRY_KIND_UNSPECIFIED
+	if verified.Entry != nil {
+		stood = protocol.EvsEntryKind(verified.Entry.GetKind())
+		planned.PrevPushId = verified.Statement.Push.GetPushId()
+		planned.PrevCommitVersion = verified.CommitVersion
+	}
+	if change.Path != "" && stood != change.Stood {
+		return nil, fmt.Errorf("%w: %q stands as kind %d where the tree has %d", ErrEvsGitStateDiffers, change.Path, stood, change.Stood)
+	}
+	// a write on the standing entry of its own kind, else a creation over what stands, or over nothing
+	writesOver := stood != protocol.EvsEntryKind_EVS_ENTRY_KIND_UNSPECIFIED && stood == change.Kind
+	if change.removes() {
+		if stood == protocol.EvsEntryKind_EVS_ENTRY_KIND_UNSPECIFIED {
+			return nil, fmt.Errorf("%w: a removal of %q, which does not stand", ErrEvsGitStateDiffers, change.Path)
+		}
+		planned.Remove = true
+		planned.Kind = stood
+		planned.BaseEntryVersion = evsVerifiedNewestVersion(verified)
+		return planned, nil
+	}
+	if writesOver {
+		planned.BaseEntryVersion = evsVerifiedNewestVersion(verified)
+		planned.Version = planned.BaseEntryVersion + 1
+	} else {
+		if verified.Removal != nil {
+			planned.removalVersion = verified.Removal.GetPathVersion()
+		}
+		planned.Version = max(plan.BaseVersion, planned.removalVersion) + 1
+	}
+	if change.Kind == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
+		children := change.Children
+		removed := [][]byte{}
+		if writesOver {
+			children, removed = change.Added, change.Removed
+		}
+		parentPath := change.Path
+		for _, child := range children {
+			planned.children = append(planned.children, &evsChildChange{path: evsGitJoin(parentPath, child.Name), name: child.Name, kind: child.Kind})
+		}
+		for _, name := range removed {
+			planned.children = append(planned.children, &evsChildChange{path: evsGitJoin(parentPath, name), name: name, removed: true})
+		}
+		return planned, nil
+	}
+	if change.Kind != protocol.EvsEntryKind_EVS_ENTRY_FILE || !evsFileModeValid(change.Mode) {
+		return nil, fmt.Errorf("%w: %q of kind %d, mode %o", ErrEvsWriteInvalid, change.Path, change.Kind, change.Mode)
+	}
+	if change.Mode == EvsGitModeGitlink {
+		// a gitlink has no content: its sealed fields and an empty chain (DESIGN-DETAILS 8.2.2's gitlink row)
+		planned.Fields = &protocol.EvsSealedFields{
+			FileId: NewEvsSlotId().Bytes(), Mode: EvsGitModeGitlink, GitOid: bytes.Clone(change.Oid[:]), OidKind: protocol.EvsOidKind_EVS_OID_SHA1,
+		}
+		if writesOver {
+			fields, err := self.openStandingFields(ctx, result, verified)
+			if err != nil {
+				return nil, err
+			}
+			planned.Fields.FileId = fields.GetFileId()
+		}
+		planned.Checkpoint = EvsCheckpointNewFile
+		return planned, nil
+	}
+	content := newEvsSpill(self.client.args.Store, self.client.settings.DeltaBaseMemoryByteCount)
+	*contents = append(*contents, content)
+	size, err := self.copyGitBlob(ctx, plan, change.Oid, content)
+	if err != nil {
+		return nil, err
+	}
+	if EvsFileMaxByteCount < size {
+		return nil, fmt.Errorf("%w: %d bytes", ErrEvsFileTooLarge, size)
+	}
+	write := &EvsPathWrite{Path: change.Path, Content: content, Mode: change.Mode}
+	planned.Fields = &protocol.EvsSealedFields{
+		FileId: NewEvsSlotId().Bytes(), Mode: change.Mode, GitOid: bytes.Clone(change.Oid[:]), OidKind: protocol.EvsOidKind_EVS_OID_SHA1,
+		Size: uint64(size),
+	}
+	var previous *EvsChainState
+	var previousContent *evsSpill
+	var previousVerified *EvsVerifiedPath
+	switch {
+	case writesOver:
+		previousVerified = verified
+	case from != nil && from.verified != nil && from.verified.Entry != nil &&
+		from.verified.Entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE):
+		// a rename: the removed file's file_id, and its chain where the rules let a diff stand on it
+		previousVerified = from.verified
+	}
+	if previousVerified != nil {
+		previousBytes, state, _, fields, err := self.readBaseKeys(ctx, result, previousVerified)
+		if err != nil {
+			return nil, err
+		}
+		defer previousBytes.close()
+		previous, previousContent = state, previousBytes
+		planned.Fields.FileId = fields.GetFileId()
+		if !writesOver {
+			// a rename: its chain whole where the rules let it stand, else a checkpoint under the kept file_id
+			kept, err := self.planGitRename(ctx, plan, planned, previousVerified, state, fields)
+			if err != nil || kept {
+				return planned, err
+			}
+			previous, previousContent, previousVerified = nil, nil, nil
+		}
+	}
+	if err := self.planChain(ctx, plan, planned, write, previousVerified, previous, previousContent, nil, change.Oid); err != nil {
+		return nil, err
+	}
+	return planned, nil
+}
+
+// A renamed file's chain, the removed path's whole, when checkpoint rules (1) to (4) let a diff stand on it: the
+// created path keeps its file_id and its own mode, and uploads nothing; kept answers whether it did. An inline chain
+// sealed under another generation, which a reader opens under the push's own, and a chain a rule would checkpoint are
+// not kept, and the caller plans a checkpoint of the same content under the kept file_id.
+func (self *EvsRepo) planGitRename(ctx context.Context, plan *EvsWritePlan, planned *EvsPlannedPath, removed *EvsVerifiedPath, state *EvsChainState, fields *protocol.EvsSealedFields) (bool, error) {
+	removeSince, err := evsRemoveGenerationSince(ctx, self.client.args.Gkm, self.repoId, state.KeyGeneration, plan.Generation)
+	if err != nil {
+		return false, err
+	}
+	reason := EvsCheckpointBefore(&EvsCheckpointArgs{
+		Previous: state, Size: planned.Fields.GetSize(), RemoveSince: removeSince, Generation: plan.Generation,
+		DiffMaxByteCount: uint64(self.client.settings.DiffMaxByteCount),
+	})
+	if state.Inline && state.InlineGeneration != plan.Generation {
+		return false, nil
+	}
+	if reason != EvsCheckpointNone && !(reason == EvsCheckpointChunked && state.Chunked) {
+		return false, nil
+	}
+	for _, locator := range removed.Entry.GetChain() {
+		planned.Chain = append(planned.Chain, &EvsPlannedLink{Kept: locator})
+	}
+	planned.Inline = state.Inline
+	planned.Fields.Size = fields.GetSize()
+	return true, nil
+}
+
+// Streams oid's blob from the plan's source into out, its oid checked by the source, and answers its size.
+func (self *EvsRepo) copyGitBlob(ctx context.Context, plan *EvsWritePlan, oid EvsGitOid, out io.Writer) (int64, error) {
+	if plan.blobs == nil {
+		return 0, fmt.Errorf("%w: a git plan with no blob source", ErrEvsWriteInvalid)
+	}
+	return plan.blobs.CopyBlob(ctx, oid, out)
+}
+
+// A standing file's sealed fields, opened under the manifest key of the generation its push sealed to.
+func (self *EvsRepo) openStandingFields(ctx context.Context, result *evsReadResult, verified *EvsVerifiedPath) (*protocol.EvsSealedFields, error) {
+	manifest, err := result.keys.manifest(ctx, verified.Statement.Push.GetGeneration())
+	if err != nil {
+		return nil, err
+	}
+	return EvsOpenFields(manifest, verified.Entry.GetSealedFields())
+}
+
+// A path's child path: parent "" is the root.
+func evsGitJoin(parent string, name []byte) string {
+	if parent == "" {
+		return string(name)
+	}
+	return parent + "/" + string(name)
 }

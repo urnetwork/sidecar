@@ -13,14 +13,18 @@ package sidecar
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // A mount's objects, read through one git cat-file --batch (EvsGitObjectSource).
@@ -161,4 +165,255 @@ type evsByteAppender struct {
 func (self *evsByteAppender) Write(p []byte) (int, error) {
 	self.bytes = append(self.bytes, p...)
 	return len(p), nil
+}
+
+// A tree's entries as git reads them, sorted by name bytes, nil for none: the empty tree's, or a tree absent here.
+func evsGitSortedEntries(ctx context.Context, source EvsGitObjectSource, oid *EvsGitOid) ([]EvsGitRawEntry, error) {
+	if oid == nil || *oid == EvsGitEmptyTreeOid {
+		return nil, nil
+	}
+	kind, encoded, err := source.ReadGitObject(ctx, *oid)
+	if err != nil {
+		return nil, fmt.Errorf("tree %x: %w", oid[:], err)
+	}
+	if kind != evsGitTreeKind {
+		return nil, fmt.Errorf("%w: object %x is a %s, not a tree", ErrEvsGitObjectInvalid, oid[:], kind)
+	}
+	entries, err := EvsGitTreeRead(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("tree %x: %w", oid[:], err)
+	}
+	slices.SortFunc(entries, func(a EvsGitRawEntry, b EvsGitRawEntry) int { return bytes.Compare(a.Name, b.Name) })
+	return entries, nil
+}
+
+// An entry's kind on evs: a directory, or a file, which a symlink and a gitlink are too.
+func evsGitEntryKind(entry EvsGitRawEntry) protocol.EvsEntryKind {
+	if entry.CanonMode == EvsGitModeDirectory {
+		return protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY
+	}
+	return protocol.EvsEntryKind_EVS_ENTRY_FILE
+}
+
+// The net change of a branch's path state from the tree stood to the tree next (DESIGN-DETAILS 8.2.4), by the tree
+// reader: a file in next and not in stood, or of another mode or oid, written; a file in stood and not in next
+// removed; a directory whose children's names or kinds differ given a delta, created with every child when it is new;
+// a directory gone removed, with every path below it; a path whose kind changes created as its new kind over the old
+// (8.2.2's kinds row), what stood below a replaced directory removed. The root takes a delta when a top-level name
+// comes, goes or changes kind; stood nil is the empty tree. It descends only where oids differ.
+func evsGitNetChange(ctx context.Context, source EvsGitObjectSource, stood *EvsGitOid, next EvsGitOid) ([]*EvsGitPathChange, error) {
+	walk := &evsGitNetWalk{ctx: ctx, source: source}
+	if stood != nil && *stood == next {
+		return nil, nil
+	}
+	if err := walk.directory("", stood, &next, true); err != nil {
+		return nil, err
+	}
+	return walk.changes, nil
+}
+
+// One net change's walk.
+type evsGitNetWalk struct {
+	ctx     context.Context
+	source  EvsGitObjectSource
+	changes []*EvsGitPathChange
+}
+
+// The children of a and b, both directories at path or either nil for none there: the directory's own change when its
+// children differ (always for one created, which root says to emit even when it is the root), then each child's.
+func (self *evsGitNetWalk) directory(path string, a *EvsGitOid, b *EvsGitOid, root bool) error {
+	if err := self.ctx.Err(); err != nil {
+		return err
+	}
+	aEntries, err := evsGitSortedEntries(self.ctx, self.source, a)
+	if err != nil {
+		return err
+	}
+	bEntries, err := evsGitSortedEntries(self.ctx, self.source, b)
+	if err != nil {
+		return err
+	}
+	if b != nil {
+		change := &EvsGitPathChange{Path: path, Kind: protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY}
+		if a != nil {
+			change.Stood = protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY
+		}
+		for _, entry := range bEntries {
+			change.Children = append(change.Children, &EvsGitChild{Name: entry.Name, Kind: evsGitEntryKind(entry)})
+		}
+		aKinds := map[string]protocol.EvsEntryKind{}
+		for _, entry := range aEntries {
+			aKinds[string(entry.Name)] = evsGitEntryKind(entry)
+		}
+		bNames := map[string]bool{}
+		for _, entry := range bEntries {
+			bNames[string(entry.Name)] = true
+			if kind, ok := aKinds[string(entry.Name)]; !ok || kind != evsGitEntryKind(entry) {
+				change.Added = append(change.Added, &EvsGitChild{Name: entry.Name, Kind: evsGitEntryKind(entry)})
+			}
+		}
+		for _, entry := range aEntries {
+			if !bNames[string(entry.Name)] {
+				change.Removed = append(change.Removed, entry.Name)
+			}
+		}
+		// a directory created holds its every child (one with none, an empty tree, is no path); one standing takes
+		// a delta when a name comes, goes or changes kind; the root is read from evs, so it says both
+		created := a == nil && 0 < len(bEntries)
+		if root {
+			created = len(change.Added) != 0 || len(change.Removed) != 0
+		}
+		if created || (a != nil && (len(change.Added) != 0 || len(change.Removed) != 0)) {
+			if root {
+				change.Stood = protocol.EvsEntryKind_EVS_ENTRY_KIND_UNSPECIFIED
+			}
+			self.changes = append(self.changes, change)
+		}
+	}
+	for i, j := 0, 0; i < len(aEntries) || j < len(bEntries); {
+		switch {
+		case j == len(bEntries) || (i < len(aEntries) && bytes.Compare(aEntries[i].Name, bEntries[j].Name) < 0):
+			if err := self.gone(evsGitJoin(path, aEntries[i].Name), aEntries[i]); err != nil {
+				return err
+			}
+			i += 1
+		case i == len(aEntries) || bytes.Compare(bEntries[j].Name, aEntries[i].Name) < 0:
+			if err := self.come(evsGitJoin(path, bEntries[j].Name), bEntries[j], protocol.EvsEntryKind_EVS_ENTRY_KIND_UNSPECIFIED); err != nil {
+				return err
+			}
+			j += 1
+		default:
+			if err := self.both(evsGitJoin(path, aEntries[i].Name), aEntries[i], bEntries[j]); err != nil {
+				return err
+			}
+			i += 1
+			j += 1
+		}
+	}
+	return nil
+}
+
+// What stood at path and is gone: a file's removal, or a directory's with every path below it.
+func (self *evsGitNetWalk) gone(path string, entry EvsGitRawEntry) error {
+	if entry.CanonMode == EvsGitModeDirectory {
+		self.changes = append(self.changes, &EvsGitPathChange{Path: path, Stood: protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY})
+		return self.directory(path, &entry.Oid, nil, false)
+	}
+	self.changes = append(self.changes, &EvsGitPathChange{Path: path, Stood: protocol.EvsEntryKind_EVS_ENTRY_FILE, StoodOid: entry.Oid})
+	return nil
+}
+
+// What comes at path over stood, nothing or a path of the other kind: a file written, or a directory created with
+// every path below it.
+func (self *evsGitNetWalk) come(path string, entry EvsGitRawEntry, stood protocol.EvsEntryKind) error {
+	if entry.CanonMode == EvsGitModeDirectory {
+		before := len(self.changes)
+		if err := self.directory(path, nil, &entry.Oid, false); err != nil {
+			return err
+		}
+		if before < len(self.changes) && self.changes[before].Path == path {
+			self.changes[before].Stood = stood
+		}
+		return nil
+	}
+	self.changes = append(self.changes, &EvsGitPathChange{
+		Path: path, Stood: stood, Kind: protocol.EvsEntryKind_EVS_ENTRY_FILE, Mode: entry.CanonMode, Oid: entry.Oid,
+	})
+	return nil
+}
+
+// A name both trees hold: nothing when its canon mode and oid stand; a walk down two directories; a file written over
+// a file; else the new kind created over the old, with what stood below a directory removed.
+func (self *evsGitNetWalk) both(path string, a EvsGitRawEntry, b EvsGitRawEntry) error {
+	aDirectory, bDirectory := a.CanonMode == EvsGitModeDirectory, b.CanonMode == EvsGitModeDirectory
+	switch {
+	case a.CanonMode == b.CanonMode && a.Oid == b.Oid:
+		return nil
+	case aDirectory && bDirectory:
+		return self.directory(path, &a.Oid, &b.Oid, false)
+	case !aDirectory && !bDirectory:
+		self.changes = append(self.changes, &EvsGitPathChange{
+			Path: path, Stood: protocol.EvsEntryKind_EVS_ENTRY_FILE, Kind: protocol.EvsEntryKind_EVS_ENTRY_FILE,
+			Mode: b.CanonMode, Oid: b.Oid, StoodOid: a.Oid,
+		})
+		return nil
+	case aDirectory:
+		// a file over a directory: the file created, and every path below the directory removed by its own change
+		if err := self.come(path, b, protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY); err != nil {
+			return err
+		}
+		return self.directory(path, &a.Oid, nil, false)
+	default:
+		// a directory over a file: the directory created with every child, which its paths' creations follow
+		return self.come(path, b, protocol.EvsEntryKind_EVS_ENTRY_FILE)
+	}
+}
+
+// The commit an object peels to and the annotated tags on the way, outermost first, each one's object the next one's
+// oid: a commit peels to itself. A tag of a tree or a blob is refused (DESIGN-DETAILS 8.2.3's tags row), naming it.
+func evsGitPeel(ctx context.Context, source EvsGitObjectSource, oid EvsGitOid) (EvsGitOid, [][]byte, error) {
+	tags := [][]byte{}
+	for {
+		kind, object, err := source.ReadGitObject(ctx, oid)
+		if err != nil {
+			return EvsGitOid{}, nil, err
+		}
+		switch kind {
+		case evsGitCommitKind:
+			return oid, tags, nil
+		case evsGitTagKind:
+			tag, err := EvsGitTagDecode(object)
+			if err != nil {
+				return EvsGitOid{}, nil, fmt.Errorf("tag %x: %w", oid[:], err)
+			}
+			if tag.ObjectKind != evsGitTagKind && tag.ObjectKind != evsGitCommitKind {
+				return EvsGitOid{}, nil, fmt.Errorf("%w: tag %x of a %s", ErrEvsGitUpdateInvalid, oid[:], tag.ObjectKind)
+			}
+			tags = append(tags, object)
+			oid = tag.ObjectOid
+		default:
+			return EvsGitOid{}, nil, fmt.Errorf("%w: object %x is a %s, which no ref points at", ErrEvsGitUpdateInvalid, oid[:], kind)
+		}
+	}
+}
+
+// A commit's tree.
+func evsGitTreeOf(ctx context.Context, source EvsGitObjectSource, commit EvsGitOid) (EvsGitOid, error) {
+	kind, object, err := source.ReadGitObject(ctx, commit)
+	if err != nil {
+		return EvsGitOid{}, err
+	}
+	if kind != evsGitCommitKind {
+		return EvsGitOid{}, fmt.Errorf("%w: object %x is a %s, not a commit", ErrEvsGitObjectInvalid, commit[:], kind)
+	}
+	tree, _, err := EvsGitCommitGraph(object)
+	if err != nil {
+		return EvsGitOid{}, fmt.Errorf("commit %x: %w", commit[:], err)
+	}
+	return tree, nil
+}
+
+// The file entry at names below tree, false when none stands there or what stands is a directory.
+func evsGitFileAt(ctx context.Context, source EvsGitObjectSource, tree EvsGitOid, names [][]byte) (EvsGitRawEntry, bool, error) {
+	at := tree
+	for depth, name := range names {
+		entries, err := evsGitSortedEntries(ctx, source, &at)
+		if err != nil {
+			return EvsGitRawEntry{}, false, err
+		}
+		index, found := slices.BinarySearchFunc(entries, name, func(entry EvsGitRawEntry, name []byte) int { return bytes.Compare(entry.Name, name) })
+		if !found {
+			return EvsGitRawEntry{}, false, nil
+		}
+		entry := entries[index]
+		last := depth == len(names)-1
+		switch {
+		case last && entry.CanonMode != EvsGitModeDirectory:
+			return entry, true, nil
+		case last || entry.CanonMode != EvsGitModeDirectory:
+			return EvsGitRawEntry{}, false, nil
+		}
+		at = entry.Oid
+	}
+	return EvsGitRawEntry{}, false, nil
 }
