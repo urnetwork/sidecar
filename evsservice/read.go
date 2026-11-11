@@ -34,10 +34,12 @@
 //	history  an older version by number from the entry's folded versions by their leaf places, or with
 //	         commit_version from that push's record by the path's token path in its epoch
 //
-// When evs can locate a version's change by neither, an inline list of an epoch the request names no token path in
-// or a place left unrecorded, it answers the path with the statement alone, as 9.2.4's history does: the reader,
-// finding its own token path in it, may name that epoch and ask again (question evs1-m2-45-inline-leaf-place). An
-// elided version in an inline list is restored from the one write of its push whose bytes elide to its own. Window
+// A leaf place is recorded for an inline list as for a rooted one, part 0 and the change's index plus 1 (QD-633), so
+// a version an inline push of an older epoch wrote is found by it in one round. When evs can locate a version's change
+// by neither, a place left unrecorded by a fold before QD-633 in an epoch the request names no token path in, it
+// answers the path with the statement alone, as 9.2.4's history does: the reader, finding its own token path in it,
+// may name that epoch and ask again (question evs1-m2-45-inline-leaf-place). An elided version in an inline list whose
+// place is unrecorded is restored from the one write of its push whose bytes elide to its own. Window
 // versions after folded_through are all the current epoch's (9.3's W1) and keep the current token path. evs never
 // asks a client for a token.
 //
@@ -699,7 +701,8 @@ func (self *readAttempt) locate(push *readPush, path *readPath, place evsLeafPla
 		}
 		return change, part, index, err
 	}
-	if push.rooted() && place.index != 0 {
+	if place.index != 0 {
+		// the place its fold recorded, under changes_root or in an inline list (QD-633)
 		change, part, index, err := self.pushes.changeAt(push, place)
 		if err == nil && removal == change.WritesEntry() {
 			err = fmt.Errorf("%w: version %d's change at the place recorded is not what the entry holds", ErrEvsIndexEntryInvalid, push.version)

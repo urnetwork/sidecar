@@ -1124,9 +1124,9 @@ func TestParseLogPageRefusesTamperedPages(t *testing.T) {
 }
 
 // DESIGN-DETAILS 9.2.2's leaf row: a fold records where each folded change sits in its statement's list, and the read
-// finds that same change by it: a sealed push's part from 1, a one-part push's list under changes_root part 0, and
-// nothing for an inline list; a removal's marker takes its removing change's place, and a directory's table its
-// delta's; a carry into the current epoch and an elided version keep them.
+// finds that same change by it: a sealed push's part from 1, a one-part push's list under changes_root part 0, and an
+// inline list's part 0 and the change's index plus 1 (QD-633); a removal's marker takes its removing change's place,
+// and a directory's table its delta's; a carry into the current epoch and an elided version keep them.
 func TestFoldRecordsLeafPlacesTheReadFindsTheChangeBy(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	token := fixture.token(fixture.check.signerId)
@@ -1160,8 +1160,10 @@ func TestFoldRecordsLeafPlacesTheReadFindsTheChangeBy(t *testing.T) {
 			t.Fatalf("%s's place %+v finds another change: %v", label, place, err)
 		}
 	}
-	if place := evsLeafPlaceOfVersion(fixture.entryAt(1, "inline").Entry.GetVersions()[0]); place != (evsLeafPlace{}) {
+	if place := evsLeafPlaceOfVersion(fixture.entryAt(1, "inline").Entry.GetVersions()[0]); place != (evsLeafPlace{index: 1}) {
 		t.Fatalf("an inline list's version has place %+v", place)
+	} else {
+		requireFound("inline", 1, place, false)
 	}
 	parts := map[uint32]int{}
 	for i := 0; i < 1100; i += 1 {

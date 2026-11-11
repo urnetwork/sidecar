@@ -398,9 +398,10 @@ type foldEvent struct {
 }
 
 // Where a change sits in its statement's list (DESIGN-DETAILS 9.2.2's leaf row; question details-9-index-leaf): under
-// changes_root, its part, 0 for a one-part push, and its index in that part's list plus 1; both 0 for an inline list,
-// which the statement holds. A fold records it beside each folded version, marker and table, and a carry keeps it, so
-// evs finds a change of an older path epoch, whose token it is never sent, by its place (read.go).
+// changes_root, its part, 0 for a one-part push, and its index in that part's list plus 1; in an inline list, part 0
+// and its index there plus 1 (QD-633). A fold records it beside each folded version, marker and table, and a carry
+// keeps it, so evs finds a change of an older path epoch, whose token it is never sent, by its place (read.go); both 0
+// is a place no fold recorded.
 type evsLeafPlace struct {
 	part  uint32
 	index uint32
@@ -1148,10 +1149,8 @@ func (self *RecordPushSource) leafPlacesAt(ctx context.Context, version uint64, 
 		return nil, err
 	}
 	leaves := make([]evsLeafPlace, len(changes))
-	if len(push.statement.Push.GetChangesRoot()) == 0 {
-		return leaves, nil
-	}
-	if !push.sealed {
+	if len(push.statement.Push.GetChangesRoot()) == 0 || !push.sealed {
+		// an inline list's places, as a one-part push's: part 0 and the change's index plus 1 (QD-633)
 		for i := range changes {
 			leaves[i] = evsLeafPlace{index: uint32(i + 1)}
 		}
