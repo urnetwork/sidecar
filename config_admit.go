@@ -496,6 +496,11 @@ func configSignedByDelegation(signers []ConfigSigner) bool {
 // A SidecarAdmit's effect: the device's row, admitted here, its signers kept for the cascade, a tagged one's
 // admitting member its sponsor, and a member device live from here (§7.9's leaves row). A Delegation's admission
 // counts against its max_admits for its life, names it, and takes as sponsor the member whose device signed it.
+//
+// The row's admission position and time are the entry's the admission takes effect at, statement.n and
+// statement.timeMs: its SidecarAdmit's own, or for a proposal the completing cosign's or the activating tick's, which
+// the proposed statement carries (QD-646). Both come from the entry, never a reader's clock, so every reader writes
+// the same row, a rows-only gate and a base's re-application included.
 func configApplySidecarAdmit(next *configStateBuilder, statement *configStatement) error {
 	admit := statement.body.(*protocol.SidecarAdmit)
 	admission, err := configSidecarAdmission(admit)
@@ -509,6 +514,7 @@ func configApplySidecarAdmit(next *configStateBuilder, statement *configStatemen
 		SidecarId:         admission.sidecarId.Bytes(),
 		AdmissionSha256:   bytes.Clone(statement.id[:]),
 		AdmittedAt:        statement.n,
+		AdmittedTimeMs:    statement.timeMs,
 		Capabilities:      admit.GetCapabilities(),
 		NotAfter:          admit.GetNotAfter(),
 		IdentityPublicKey: bytes.Clone(admit.GetIdentityPublicKey()),

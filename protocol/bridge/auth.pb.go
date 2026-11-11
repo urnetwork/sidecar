@@ -1477,9 +1477,10 @@ type SidecarRow struct {
 	Confirmations      []*ConfirmationRow     `protobuf:"bytes,21,rep,name=confirmations,proto3" json:"confirmations,omitempty"` // every AdmissionConfirm and OwnerConfirm that took effect, in
 	//   position order, for the sidecar's life; 5-8 the newest of each
 	//   (DESIGN-DETAILS 5.2.2)
-	Cascades      []*CascadeSpanRow `protobuf:"bytes,22,rep,name=cascades,proto3" json:"cascades,omitempty"` // each compromise cascade that held it in P, in position order
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Cascades       []*CascadeSpanRow `protobuf:"bytes,22,rep,name=cascades,proto3" json:"cascades,omitempty"`                                      // each compromise cascade that held it in P, in position order
+	AdmittedTimeMs int64             `protobuf:"varint,23,opt,name=admitted_time_ms,json=admittedTimeMs,proto3" json:"admitted_time_ms,omitempty"` // ms since the epoch: time_ms of the entry its admission took effect
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SidecarRow) Reset() {
@@ -1666,6 +1667,13 @@ func (x *SidecarRow) GetCascades() []*CascadeSpanRow {
 	return nil
 }
 
+func (x *SidecarRow) GetAdmittedTimeMs() int64 {
+	if x != nil {
+		return x.AdmittedTimeMs
+	}
+	return 0
+}
+
 // The fields §7.9 lists, then the Delegation's signing and reader public keys and max_admits, which api-7
 // shows and protos-bridge-row-fields #2 numbers.
 type DelegationRow struct {
@@ -1682,7 +1690,9 @@ type DelegationRow struct {
 	ReaderXwingPublicKey []byte                 `protobuf:"bytes,10,opt,name=reader_xwing_public_key,json=readerXwingPublicKey,proto3" json:"reader_xwing_public_key,omitempty"` // §10.5; empty on a forwarding Delegation's row, its digest in 16
 	MaxAdmits            uint32                 `protobuf:"varint,11,opt,name=max_admits,json=maxAdmits,proto3" json:"max_admits,omitempty"`
 	// A forwarding Delegation's row (D-TEAM-33, owner decision 197; DESIGN-DETAILS 4.2.2): tag_atoms empty,
-	// not_after 0, max_admits 0, admissions 0. Each is empty or 0 on any other Delegation's row.
+	// not_after 0, max_admits 0, admissions 0. Each is empty or 0 on any other Delegation's row. Once superseded or
+	// ended it leaves the rows at the first base whose retention point passes the later of superseded_at and
+	// ended_at by 4,096 positions (QD-648).
 	ForwardSidecarId    []byte `protobuf:"bytes,12,opt,name=forward_sidecar_id,json=forwardSidecarId,proto3" json:"forward_sidecar_id,omitempty"` // S, its signer
 	HostClientId        []byte `protobuf:"bytes,13,opt,name=host_client_id,json=hostClientId,proto3" json:"host_client_id,omitempty"`
 	HostClientPublicKey []byte `protobuf:"bytes,14,opt,name=host_client_public_key,json=hostClientPublicKey,proto3" json:"host_client_public_key,omitempty"`
@@ -2697,7 +2707,7 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"key_sha256\x18\x01 \x01(\fR\tkeySha256\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
 	"\x02at\x18\x03 \x01(\x04R\x02at\x12?\n" +
-	"\x06reason\x18\x04 \x01(\x0e2'.urnetwork.sidecar.RecoveryRebindReasonR\x06reason\"\xd9\x06\n" +
+	"\x06reason\x18\x04 \x01(\x0e2'.urnetwork.sidecar.RecoveryRebindReasonR\x06reason\"\x83\a\n" +
 	"\n" +
 	"SidecarRow\x12\x1d\n" +
 	"\n" +
@@ -2726,7 +2736,8 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\atag_ids\x18\x13 \x03(\fR\x06tagIds\x12\x1c\n" +
 	"\tephemeral\x18\x14 \x01(\bR\tephemeral\x12H\n" +
 	"\rconfirmations\x18\x15 \x03(\v2\".urnetwork.sidecar.ConfirmationRowR\rconfirmations\x12=\n" +
-	"\bcascades\x18\x16 \x03(\v2!.urnetwork.sidecar.CascadeSpanRowR\bcascades\"\xbf\x04\n" +
+	"\bcascades\x18\x16 \x03(\v2!.urnetwork.sidecar.CascadeSpanRowR\bcascades\x12(\n" +
+	"\x10admitted_time_ms\x18\x17 \x01(\x03R\x0eadmittedTimeMs\"\xbf\x04\n" +
 	"\rDelegationRow\x12#\n" +
 	"\rdelegation_id\x18\x01 \x01(\fR\fdelegationId\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
