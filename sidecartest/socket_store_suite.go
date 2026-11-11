@@ -155,6 +155,7 @@ func socketSuiteCases() []socketSuiteCase {
 		{name: "a client's removal works its set in batches and fences every lease", run: caseSocketRemoveClientInBatches, settings: func(settings *socketsservice.SocketStoreSettings) { settings.RemoveClientBatchCount = 3 }},
 		{name: "a sweep is claimed once per position, renewed by its holder, and never listed", run: caseSocketClaimSweep},
 		{name: "a page says whether the client's set still holds an edge name", run: caseSocketEdgeEntriesRemain},
+		{name: "a removal says whether each listener's set still holds an edge name", run: caseSocketRemovalSaysWhetherEdgeEntriesRemain},
 	}
 }
 
@@ -2013,6 +2014,65 @@ func caseSocketEdgeEntriesRemain(env *socketSuiteEnv) error {
 	result, err = env.applyAt(networkId, clientId, 3, 1, [][]byte{mail.NameKey()}, blinded)
 	if err != nil || result.EdgeEntriesRemain {
 		return fmt.Errorf("with none left: %+v %v", result, err)
+	}
+	return nil
+}
+
+func caseSocketRemovalSaysWhetherEdgeEntriesRemain(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	firstId := socketSuiteId()
+	secondId := socketSuiteId()
+	thirdId := socketSuiteId()
+	edge := socketSuiteRegistration(socketSuiteEdgeName())
+	mail := socketSuiteRegistration("smtp/25/mx")
+	blinded := socketSuiteRegistration("")
+	// first holds two edge names and a blinded one, second the one edge name alone, and third an edge name
+	// admitted at 9, above the removal's 7
+	if _, err := env.applyAt(networkId, firstId, 1, 1, nil, edge, mail, blinded); err != nil {
+		return err
+	}
+	secondEdge := copySocketRegistration(edge)
+	secondListenId := socketSuiteId()
+	secondEdge.ListenId = &secondListenId
+	if _, err := env.applyAt(networkId, secondId, 1, 1, nil, secondEdge); err != nil {
+		return err
+	}
+	thirdEdge := socketSuiteRegistration(socketSuiteEdgeName())
+	if _, err := env.applyAt(networkId, thirdId, 1, 9, nil, thirdEdge); err != nil {
+		return err
+	}
+	removals, err := env.store.RemoveEntries(env.ctx, networkId, socketsservice.SocketRemoveRefused, 7, []*socketsservice.SocketStoreEntryRef{
+		{ListenerClientId: firstId, NameKey: edge.NameKey()},
+		{ListenerClientId: secondId, NameKey: edge.NameKey()},
+		{ListenerClientId: thirdId, NameKey: thirdEdge.NameKey()},
+		{ListenerClientId: socketSuiteId(), NameKey: edge.NameKey()},
+	})
+	if err != nil {
+		return err
+	}
+	switch {
+	case len(removals) != 4:
+		return fmt.Errorf("%d answers for 4 refs", len(removals))
+	case removals[0].Removed == nil || !removals[0].EdgeEntriesRemain:
+		return fmt.Errorf("one edge name of two removed: %+v", removals[0])
+	case removals[1].Removed == nil || removals[1].EdgeEntriesRemain:
+		return fmt.Errorf("the only edge name removed: %+v", removals[1])
+	case !removals[2].Kept || !removals[2].EdgeEntriesRemain:
+		return fmt.Errorf("a kept edge lease: %+v", removals[2])
+	case removals[3].Removed != nil || removals[3].Kept || removals[3].EdgeEntriesRemain:
+		return fmt.Errorf("a client holding nothing: %+v", removals[3])
+	}
+	// every ref of one listener reads the set once the call is done, the edge name's removal after the blinded
+	// one's included
+	removals, err = env.store.RemoveEntries(env.ctx, networkId, socketsservice.SocketRemoveRefused, 7, []*socketsservice.SocketStoreEntryRef{
+		{ListenerClientId: firstId, NameKey: blinded.NameKey()},
+		{ListenerClientId: firstId, NameKey: mail.NameKey()},
+	})
+	if err != nil {
+		return err
+	}
+	if len(removals) != 2 || removals[0].Removed == nil || removals[0].EdgeEntriesRemain || removals[1].Removed == nil || removals[1].EdgeEntriesRemain {
+		return fmt.Errorf("the last edge name and a blinded one in one call: %+v", removals)
 	}
 	return nil
 }

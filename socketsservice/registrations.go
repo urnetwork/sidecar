@@ -640,15 +640,7 @@ func (self *SocketsService) keepPairs(clientId connect.Id, position uint64, allo
 		}
 	}
 	if edgeRemoved && !result.EdgeEntriesRemain {
-		err := func() error {
-			ctx, done := self.storeContext()
-			defer done()
-			return self.store.RemoveServicePairs(ctx, clientId, position)
-		}()
-		if err == nil {
-			self.pairWrites.forgetListener(clientId)
-			self.pairTouches.forget(clientId)
-		}
+		self.removePairs(clientId, position)
 		return
 	}
 	if edgeAccepted && self.pairTouches.due(clientId, now) {

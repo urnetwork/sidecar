@@ -17,7 +17,8 @@
 //  6. one Pick: no_listener, busy, or a primary and a backup, each with its stored lease
 //  7. the newest view S', and if it moved, step 3's verdicts again on S'. Then the listener check on each
 //     picked listener (checkListener). A refused listener is removed for cause at S''s position, which leaves
-//     its tombstone, and hinted SOCKET_HINT_REVOKED. If the primary got no ticket the backup, if it passed,
+//     its tombstone, with its {svc_} pairs at that position when it holds no other edge name, and hinted
+//     SOCKET_HINT_REVOKED. If the primary got no ticket the backup, if it passed,
 //     is the primary; if every picked listener was refused, one more Pick, then no_listener; if no picked
 //     listener could be judged, unavailable for BehindRetryAfter, by when this process has loaded
 //  8. for an edge Find, the {svc_} pair of each listener of the answer, at S''s position, for the lesser of
@@ -456,9 +457,10 @@ func (self *SocketsService) checkListener(view SocketGateView, networkId connect
 }
 
 // Removes refused listeners' leases of name for cause at position (one RemoveEntries), which leaves each a
-// tombstone, and hints each removed client SOCKET_HINT_REVOKED for its listen. A removal the store keeps for a
-// newer admission is evidence. Their pairs are left to EdgePairTtl: the store does not say whether a listener
-// holds another edge name, whose pairs a removal here would take too.
+// tombstone, and hints each removed client SOCKET_HINT_REVOKED for its listen. A listener whose last edge name
+// this removed loses its {svc_} pairs at position too, leaving their floor, as registration's step 9 removes
+// them: its pairs stand for its edge grants, and it holds no edge name now. A removal the store keeps for a
+// newer admission is evidence.
 func (self *SocketsService) removeRefused(networkId connect.Id, position uint64, name *socketParsedName, refused []*SocketStoreListener, now time.Time) {
 	refs := make([]*SocketStoreEntryRef, 0, len(refused))
 	for _, listener := range refused {
@@ -478,11 +480,33 @@ func (self *SocketsService) removeRefused(networkId connect.Id, position uint64,
 	for index, removal := range removals {
 		switch {
 		case removal.Removed != nil:
+			if SocketPairNameKey(removal.Removed.NameKey) && !removal.EdgeEntriesRemain {
+				self.removePairs(removal.Removed.ListenerClientId, position)
+			}
 			self.hintRevoked(refused[index], now)
 		case removal.Kept && position < removal.PolicyVersion:
 			self.gate.Observe(networkId, removal.PolicyVersion)
 		}
 	}
+}
+
+// Removes listenerClientId's {svc_} pairs at position, leaving their floor, once it holds no edge name (QD-656;
+// DESIGN-DETAILS 13.2.3's registration step 9 and find step 7), and forgets this process's memos of them, so
+// the next Find writes them again and the next accepted edge registration renews them. A failed call leaves
+// the pairs to EdgePairTtl, which ends them within 15 minutes whatever happens here.
+func (self *SocketsService) removePairs(listenerClientId connect.Id, position uint64) {
+	err := func() error {
+		ctx, done := self.storeContext()
+		defer done()
+		testHookBarrier("sockets.pairs.remove.before", "")
+		defer testHookBarrier("sockets.pairs.remove.after", "")
+		return self.store.RemoveServicePairs(ctx, listenerClientId, position)
+	}()
+	if err != nil {
+		return
+	}
+	self.pairWrites.forgetListener(listenerClientId)
+	self.pairTouches.forget(listenerClientId)
 }
 
 // SOCKET_HINT_REVOKED for listener's listen (§9.5): its client calls registrations at once, and that answer
