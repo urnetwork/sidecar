@@ -38,6 +38,12 @@
 // that a revocation the posture cannot check does not apply on a device that cannot compile (QD-621). Verification is
 // offline: it reads the anchor, the store and what it is given, never a network, and the clock only for Waiting.
 //
+// The overlay holds OverlayMaxCount entries, and a device that never compiles can fill it. A denial the posture
+// verified and cannot hold then makes it pending, persisted, until a state at or past the newest such denial, rather
+// than leave a revocation it could check unapplied: the closed direction, which question
+// sdk-m8-17-overlay-bound-without-compiles keeps until the owner answers it (its option 3 keeps the overlay in the
+// store instead, as QD-641 directs for bulk state).
+//
 // Rows reach 4 MiB, so rows stream to the store, hashed as they pass, and only has_document and the config writers'
 // keys stay in memory; another signer is found by reading the stored rows again.
 //
@@ -216,6 +222,9 @@ type PostureDecision struct {
 	// The sidecar role, a full reader, found a base that does not compile from its head (SetFork): pending until it
 	// says otherwise.
 	Fork bool
+	// The newest position of a denial the posture verified and could not hold past OverlayMaxCount, 0 for none:
+	// pending until a state at or past it (the file's comment).
+	OverlayFullThroughN uint64
 	// Whether this call took an entry it did not apply as a denial, an opening, a neutral or a waiting one, which only
 	// a compile can judge.
 	CompileWanted bool
@@ -266,7 +275,8 @@ type PostureSettings struct {
 	ManifestMaxByteCount int
 	// The bytes the stored BridgeState may take.
 	StateMaxByteCount int
-	// The overlay entries a posture holds between states. Past this a delta is refused until the next state.
+	// The overlay entries a posture holds between states, 4,096. Past this a denial it verified and cannot hold makes it
+	// pending until a state at or past that denial, which only a compile brings (the file's comment).
 	OverlayMaxCount int
 	// The share certificates a posture keeps.
 	ShareCertMaxCount int

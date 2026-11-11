@@ -5,7 +5,10 @@ package sidecar
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
+	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -311,15 +314,15 @@ func TestQuotaClosurePacingPerSNeverReadsBelowFour(t *testing.T) {
 	}
 }
 
-// A pacing run: each eraser in askerIds asks every step, in order, and takes its turn whenever Ask
-// allows. It answers each eraser's take times and the takes in each aligned second.
+// A pacing run: each eraser in askerIds asks every step, in order, and takes its turn whenever Ask allows. It
+// answers each eraser's take times and the takes in each aligned second.
 func runQuotaClosurePacing(pacing *QuotaClosurePacing, askerIds []connect.Id, start time.Time, step time.Duration, steps int, perS int64) (map[connect.Id][]time.Time, map[int64]int) {
 	eraserTakeTimes := map[connect.Id][]time.Time{}
 	secondTakeCounts := map[int64]int{}
 	for i := range steps {
 		now := start.Add(time.Duration(i) * step)
 		for _, eraserId := range askerIds {
-			if ok, _, _ := pacing.Ask(eraserId, now, perS, 5*time.Minute); ok {
+			if ok, _, _ := pacing.Ask(eraserId, now, perS); ok {
 				pacing.Take(eraserId, now, perS)
 				eraserTakeTimes[eraserId] = append(eraserTakeTimes[eraserId], now)
 				secondTakeCounts[now.Unix()] += 1
@@ -329,8 +332,31 @@ func runQuotaClosurePacing(pacing *QuotaClosurePacing, askerIds []connect.Id, st
 	return eraserTakeTimes, secondTakeCounts
 }
 
-// k erasers asking at once each take one upload every k/R s, none starved, the network at most R a
-// second (FS-47's pacing clause).
+// P2 (DESIGN-DETAILS 13.3): from the clock's second on, each second's seats, plus what it took if it is the
+// current one, are at most perS.
+func checkQuotaClosurePacingCells(pacing *QuotaClosurePacing, perS int64) error {
+	secondSeatCounts := map[int64]int64{}
+	for _, seat := range pacing.eraserTurns {
+		secondSeatCounts[seat.Unix()] += 1
+	}
+	current := pacing.clock.Unix()
+	secondSeatCounts[current] += 0
+	for second, count := range secondSeatCounts {
+		if second < current {
+			return fmt.Errorf("a seat of second %d outlived it at %d", second, current)
+		}
+		if second == current {
+			count += pacing.secondCount
+		}
+		if perS < count {
+			return fmt.Errorf("second %d holds %d", second, count)
+		}
+	}
+	return nil
+}
+
+// k erasers asking at once each take one upload every k/R s, none starved, the network at most R a second
+// (FS-47's pacing clause).
 func TestQuotaClosurePacingGivesEqualTurns(t *testing.T) {
 	start := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	perS := int64(4)
@@ -367,8 +393,8 @@ func TestQuotaClosurePacingGivesEqualTurns(t *testing.T) {
 	}
 }
 
-// An eraser that waits out a retry_after_ms over a minute keeps its place against erasers asking all
-// the while: the slot, not the ask, holds it.
+// An eraser that waits out a retry_after_ms over a minute keeps its place against erasers asking all the
+// while: its seat, not its asking, holds it.
 func TestQuotaClosurePacingKeepsAWaitingErasersPlace(t *testing.T) {
 	start := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	perS := int64(4)
@@ -378,12 +404,12 @@ func TestQuotaClosurePacingKeepsAWaitingErasersPlace(t *testing.T) {
 		askerIds = append(askerIds, connect.NewId())
 	}
 	for _, askerId := range askerIds {
-		if ok, _, _ := pacing.Ask(askerId, start, perS, 5*time.Minute); ok {
+		if ok, _, _ := pacing.Ask(askerId, start, perS); ok {
 			pacing.Take(askerId, start, perS)
 		}
 	}
 	waiterId := connect.NewId()
-	ok, turnTime, _ := pacing.Ask(waiterId, start, perS, 5*time.Minute)
+	ok, turnTime, _ := pacing.Ask(waiterId, start, perS)
 	if ok {
 		t.Fatal("the waiter went ahead of 250 erasers")
 	}
@@ -393,88 +419,406 @@ func TestQuotaClosurePacingKeepsAWaitingErasersPlace(t *testing.T) {
 	// the others ask every 250 ms until the waiter's turn, taking theirs as they come
 	steps := int(turnTime.Sub(start) / (250 * time.Millisecond))
 	runQuotaClosurePacing(pacing, askerIds, start.Add(250*time.Millisecond), 250*time.Millisecond, steps-1, perS)
-	if ok, liftTime, _ := pacing.Ask(waiterId, turnTime.Add(-time.Millisecond), perS, 5*time.Minute); ok || !liftTime.Equal(turnTime) {
+	if ok, liftTime, _ := pacing.Ask(waiterId, turnTime.Add(-time.Millisecond), perS); ok || !liftTime.Equal(turnTime) {
 		t.Errorf("before its turn: %v, lift %s", ok, liftTime)
 	}
-	if ok, _, _ := pacing.Ask(waiterId, turnTime, perS, 5*time.Minute); !ok {
+	if ok, _, _ := pacing.Ask(waiterId, turnTime, perS); !ok {
 		t.Error("the waiter lost its turn to erasers that kept asking")
 	}
 }
 
-// Erasers whose turns all passed while they were away come back at once, as allowances reset at
-// 00:00 UTC: at most R take in that second, and the rest wait for the next.
-func TestQuotaClosurePacingBoundsErasersReturningTogether(t *testing.T) {
-	start := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+// A second with a free cell seats an asker in it, a cell behind the tail, never before now.
+func TestQuotaClosurePacingSeatsInASecondWithAFreeCell(t *testing.T) {
+	second := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	perS := int64(4)
+	pacing := NewQuotaClosurePacing()
+	now := second.Add(100 * time.Millisecond)
+	// four cells of 250 ms fit from 100 ms on, the fifth is the next second's
+	for index, want := range []time.Duration{100, 350, 600, 850, 1100} {
+		ok, seatTime, taken := pacing.Ask(connect.NewId(), now, perS)
+		if !seatTime.Equal(second.Add(want*time.Millisecond)) || ok != (index == 0) || taken != 0 {
+			t.Errorf("asker %d: %v, seat %s, taken %d", index, ok, seatTime.Sub(second), taken)
+		}
+	}
+	if err := checkQuotaClosurePacingCells(pacing, perS); err != nil {
+		t.Error(err)
+	}
+}
+
+// A second with no free cell seats no one: the seat goes to the next second's start, which is empty. Seats
+// are a cell apart, so only a second filled at a higher R, as a tightened limit leaves it, has no free cell
+// short of its end.
+func TestQuotaClosurePacingPushesASeatOutOfAFullSecond(t *testing.T) {
+	second := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	pacing := NewQuotaClosurePacing()
+	// at R = 8 five erasers hold seats from 0 to 500 ms
+	for index := range 5 {
+		ok, seatTime, _ := pacing.Ask(connect.NewId(), second, 8)
+		if !seatTime.Equal(second.Add(time.Duration(index)*125*time.Millisecond)) || ok != (index == 0) {
+			t.Fatalf("asker %d at R = 8: %v, seat %s", index, ok, seatTime.Sub(second))
+		}
+	}
+	// at R = 4 the next cell, 750 ms, lies in a second already holding five
+	ok, seatTime, _ := pacing.Ask(connect.NewId(), second, 4)
+	if ok || !seatTime.Equal(second.Add(time.Second)) {
+		t.Errorf("pushed: %v, seat %s", ok, seatTime.Sub(second))
+	}
+	ok, seatTime, _ = pacing.Ask(connect.NewId(), second, 4)
+	if ok || !seatTime.Equal(second.Add(time.Second+250*time.Millisecond)) {
+		t.Errorf("behind the pushed seat: %v, seat %s", ok, seatTime.Sub(second))
+	}
+}
+
+// A seat is good to its second's end and lapses with it: an eraser late within the second takes, one late
+// past it is a newcomer, seated behind every seat since handed out.
+func TestQuotaClosurePacingSeatLapsesWithItsSecond(t *testing.T) {
+	second := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	perS := int64(4)
+	pacing := NewQuotaClosurePacing()
+	eraserIds := []connect.Id{}
+	for range 8 {
+		eraserId := connect.NewId()
+		eraserIds = append(eraserIds, eraserId)
+		if ok, _, _ := pacing.Ask(eraserId, second, perS); ok {
+			pacing.Take(eraserId, second, perS)
+		}
+	}
+	// seats: the first eraser at 250 ms after its take, the others at 500 ms, 750 ms, then 1 s to 2.25 s
+	lateId := eraserIds[1]
+	goneId := eraserIds[2]
+	if ok, seatTime, _ := pacing.Ask(lateId, second.Add(time.Second-time.Microsecond), perS); !ok || !seatTime.Equal(second.Add(500*time.Millisecond)) {
+		t.Errorf("late within its second: %v, seat %s", ok, seatTime.Sub(second))
+	}
+	ok, seatTime, _ := pacing.Ask(goneId, second.Add(time.Second), perS)
+	// the tail was the last eraser's 1.75 s, and the late eraser's take put another seat at 2 s
+	if ok || !seatTime.Equal(second.Add(2*time.Second+250*time.Millisecond)) {
+		t.Errorf("late past its second: %v, seat %s", ok, seatTime.Sub(second))
+	}
+	if err := checkQuotaClosurePacingCells(pacing, perS); err != nil {
+		t.Error(err)
+	}
+}
+
+// An eraser whose seat lapsed is seated again like a newcomer: in the current second while it has a free
+// cell, at the tail when it has none.
+func TestQuotaClosurePacingReseatsALapsedEraser(t *testing.T) {
+	second := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	perS := int64(4)
+	pacing := NewQuotaClosurePacing()
+	quietId := connect.NewId()
+	if ok, _, _ := pacing.Ask(quietId, second, perS); !ok {
+		t.Fatal("a lone eraser waited")
+	}
+	pacing.Take(quietId, second, perS)
+	// the seat at 250 ms goes unused; a minute on the network is quiet, so the current second has cells
+	back := second.Add(time.Minute + 600*time.Millisecond)
+	ok, seatTime, taken := pacing.Ask(quietId, back, perS)
+	if !ok || !seatTime.Equal(back) || taken != 0 {
+		t.Errorf("back in a quiet second: %v, seat %s, taken %d", ok, seatTime.Sub(back), taken)
+	}
+	// a busy network: eight erasers hold the seats of the next two seconds
+	busy := back.Add(time.Minute).Truncate(time.Second)
+	for range 8 {
+		pacing.Ask(connect.NewId(), busy, perS)
+	}
+	ok, seatTime, _ = pacing.Ask(quietId, busy.Add(time.Second), perS)
+	if ok || !seatTime.Equal(busy.Add(2*time.Second)) {
+		t.Errorf("back in a full second: %v, seat %s", ok, seatTime.Sub(busy))
+	}
+}
+
+// Two callers' clocks: the network's is the latest either brought, so a caller behind it is judged at it,
+// the second does not turn back and its takes are not forgotten.
+func TestQuotaClosurePacingClockNeverRunsBack(t *testing.T) {
+	second := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	perS := int64(4)
+	pacing := NewQuotaClosurePacing()
+	ahead := func(now time.Time) time.Time { return now }
+	behind := func(now time.Time) time.Time { return now.Add(-3 * time.Millisecond) }
+	eraserIds := []connect.Id{}
+	for range 6 {
+		eraserIds = append(eraserIds, connect.NewId())
+	}
+	secondTakeCounts := map[int64]int64{}
+	for step := range 400 {
+		now := second.Add(time.Duration(step) * 10 * time.Millisecond)
+		for index, eraserId := range eraserIds {
+			callerNow := ahead(now)
+			if index%2 == 1 {
+				callerNow = behind(now)
+			}
+			ok, seatTime, _ := pacing.Ask(eraserId, callerNow, perS)
+			if pacing.Clock().Before(now) {
+				t.Fatalf("the clock %s fell behind the latest caller %s", pacing.Clock(), now)
+			}
+			if ok {
+				pacing.Take(eraserId, callerNow, perS)
+				secondTakeCounts[pacing.Clock().Unix()] += 1
+			} else if retry := QuotaRetryAfterMs(pacing.Clock(), seatTime); time.Duration(retry)*time.Millisecond > 2*time.Second {
+				t.Fatalf("eraser %d told %d ms", index, retry)
+			}
+			if err := checkQuotaClosurePacingCells(pacing, perS); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for secondIndex, count := range secondTakeCounts {
+		if perS < count {
+			t.Errorf("second %d took %d", secondIndex, count)
+		}
+	}
+	// the caller behind is told the wait from the network's clock, not its own
+	lateId := connect.NewId()
+	now := second.Add(time.Hour)
+	pacing.Ask(connect.NewId(), now, perS)
+	ok, seatTime, _ := pacing.Ask(lateId, behind(now), perS)
+	if ok || !pacing.Clock().Equal(now) || QuotaRetryAfterMs(pacing.Clock(), seatTime) != uint32(seatTime.Sub(now).Milliseconds()) {
+		t.Errorf("the caller behind: %v, seat %s, clock %s", ok, seatTime.Sub(now), pacing.Clock().Sub(now))
+	}
+}
+
+// R not dividing 10^6 rounds a cell up to the microsecond, so R cells never fit in less than a second: P1
+// and P2 hold for R = 3, 4 and 7 over a random run of asks, takes, obedient returns and lapses from a
+// fixed seed.
+func TestQuotaClosurePacingKeepsRateAndCellsForAnyR(t *testing.T) {
+	for _, perS := range []int64{3, 4, 7} {
+		random := rand.New(rand.NewPCG(uint64(perS), 146))
+		pacing := NewQuotaClosurePacing()
+		eraserIds := []connect.Id{}
+		for range 9 {
+			eraserIds = append(eraserIds, connect.NewId())
+		}
+		eraserAskTimes := map[connect.Id]time.Time{}
+		secondTakeCounts := map[int64]int64{}
+		now := time.Date(2026, time.January, 2, 3, 4, 5, 123456*1000, time.UTC)
+		for range 20000 {
+			now = now.Add(time.Duration(random.IntN(90*1000)) * time.Microsecond)
+			eraserId := eraserIds[random.IntN(len(eraserIds))]
+			// most asks obey the last answer, the rest come whenever
+			if askTime, ok := eraserAskTimes[eraserId]; ok && random.IntN(4) != 0 {
+				if now.Before(askTime) {
+					now = askTime
+				}
+			}
+			ok, seatTime, _ := pacing.Ask(eraserId, now, perS)
+			if ok {
+				pacing.Take(eraserId, now, perS)
+				secondTakeCounts[pacing.Clock().Unix()] += 1
+				delete(eraserAskTimes, eraserId)
+			} else {
+				eraserAskTimes[eraserId] = seatTime
+			}
+			if err := checkQuotaClosurePacingCells(pacing, perS); err != nil {
+				t.Fatalf("R = %d: %v", perS, err)
+			}
+		}
+		for second, count := range secondTakeCounts {
+			if perS < count {
+				t.Errorf("R = %d: second %d took %d", perS, second, count)
+			}
+		}
+		if len(secondTakeCounts) == 0 {
+			t.Errorf("R = %d: nothing took", perS)
+		}
+	}
+}
+
+// Fixed vectors of the seat arithmetic, cells rounded up to the microsecond, which server's {sq_} script must
+// give for the same asks (quota_rate_pacing_test.go holds it to this type).
+func TestQuotaClosurePacingVectors(t *testing.T) {
+	second := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	type step struct {
+		eraser int
+		at     time.Duration
+		ok     bool
+		seat   time.Duration
+		taken  int64
+	}
+	cases := []struct {
+		perS  int64
+		steps []step
+	}{
+		{
+			// a cell of 333,334 µs
+			perS: 3,
+			steps: []step{
+				{eraser: 0, at: 0, ok: true, seat: 0, taken: 0},
+				{eraser: 1, at: 0, ok: false, seat: 666668 * time.Microsecond, taken: 1},
+				{eraser: 2, at: 0, ok: false, seat: 1000002 * time.Microsecond, taken: 1},
+				{eraser: 0, at: 333334 * time.Microsecond, ok: true, seat: 333334 * time.Microsecond, taken: 1},
+				{eraser: 1, at: 666668 * time.Microsecond, ok: true, seat: 666668 * time.Microsecond, taken: 2},
+				{eraser: 2, at: 1000002 * time.Microsecond, ok: true, seat: 1000002 * time.Microsecond, taken: 0},
+				// the takes put the first eraser at 1,333,336 µs and the second at 1,666,670 µs
+				{eraser: 0, at: 1000002 * time.Microsecond, ok: false, seat: 1333336 * time.Microsecond, taken: 1},
+				{eraser: 1, at: 1999999 * time.Microsecond, ok: true, seat: 1666670 * time.Microsecond, taken: 1},
+				// the first eraser's seat lapsed at 2 s: seated a cell behind the second's new 2,333,338 µs
+				{eraser: 0, at: 2000000 * time.Microsecond, ok: false, seat: 2666672 * time.Microsecond, taken: 0},
+			},
+		},
+		{
+			// a cell of 142,858 µs; a caller 2 ms behind is judged at the network's clock
+			perS: 7,
+			steps: []step{
+				{eraser: 0, at: 500 * time.Millisecond, ok: true, seat: 500 * time.Millisecond, taken: 0},
+				{eraser: 1, at: 498 * time.Millisecond, ok: false, seat: 785716 * time.Microsecond, taken: 1},
+				{eraser: 2, at: 500 * time.Millisecond, ok: false, seat: 928574 * time.Microsecond, taken: 1},
+				{eraser: 3, at: 500 * time.Millisecond, ok: false, seat: 1071432 * time.Microsecond, taken: 1},
+				{eraser: 0, at: 642858 * time.Microsecond, ok: true, seat: 642858 * time.Microsecond, taken: 1},
+				{eraser: 1, at: 900 * time.Millisecond, ok: true, seat: 785716 * time.Microsecond, taken: 2},
+				{eraser: 3, at: 999999 * time.Microsecond, ok: false, seat: 1071432 * time.Microsecond, taken: 3},
+			},
+		},
+	}
+	for _, c := range cases {
+		pacing := NewQuotaClosurePacing()
+		eraserIds := []connect.Id{}
+		for range 4 {
+			eraserIds = append(eraserIds, connect.NewId())
+		}
+		for index, s := range c.steps {
+			now := second.Add(s.at)
+			ok, seatTime, taken := pacing.Ask(eraserIds[s.eraser], now, c.perS)
+			if ok != s.ok || !seatTime.Equal(second.Add(s.seat)) || taken != s.taken {
+				t.Fatalf("R = %d, step %d: %v, seat %d µs, taken %d", c.perS, index, ok, seatTime.Sub(second).Microseconds(), taken)
+			}
+			if ok {
+				pacing.Take(eraserIds[s.eraser], now, c.perS)
+			}
+		}
+	}
+}
+
+// Erasers run against one pacing until end, each asking at its own next instant, those due at one instant in
+// the fixed order of eraserIds. An obedient eraser asks next at the seat it was told, and after a take a moment
+// later, for its next upload; a late one asks at the start of every second whatever it was told. It answers
+// each eraser's take times, and fails at an obedient eraser refused at the seat it was told, or the network
+// past perS in a second.
+func runQuotaClosurePacingSchedule(t *testing.T, pacing *QuotaClosurePacing, eraserIds []connect.Id, lateIds map[connect.Id]bool, start time.Time, end time.Time, perS int64) map[connect.Id][]time.Time {
+	t.Helper()
+	eraserAskTimes := map[connect.Id]time.Time{}
+	eraserTold := map[connect.Id]bool{}
+	for _, eraserId := range eraserIds {
+		eraserAskTimes[eraserId] = start
+	}
+	eraserTakeTimes := map[connect.Id][]time.Time{}
+	secondTakeCounts := map[int64]int64{}
+	for {
+		var now time.Time
+		for _, eraserId := range eraserIds {
+			if askTime := eraserAskTimes[eraserId]; now.IsZero() || askTime.Before(now) {
+				now = askTime
+			}
+		}
+		if !now.Before(end) {
+			return eraserTakeTimes
+		}
+		for _, eraserId := range eraserIds {
+			if !eraserAskTimes[eraserId].Equal(now) {
+				continue
+			}
+			ok, seatTime, _ := pacing.Ask(eraserId, now, perS)
+			nextSecond := time.Unix(now.Unix()+1, 0).UTC()
+			if !ok {
+				if eraserTold[eraserId] && !lateIds[eraserId] {
+					t.Fatalf("an obedient eraser was refused at the seat it was told, %s", now)
+				}
+				eraserTold[eraserId] = true
+				eraserAskTimes[eraserId] = seatTime
+				if lateIds[eraserId] {
+					eraserAskTimes[eraserId] = nextSecond
+				}
+				continue
+			}
+			pacing.Take(eraserId, now, perS)
+			eraserTakeTimes[eraserId] = append(eraserTakeTimes[eraserId], now)
+			secondTakeCounts[now.Unix()] += 1
+			if perS < secondTakeCounts[now.Unix()] {
+				t.Fatalf("second %d took %d", now.Unix(), secondTakeCounts[now.Unix()])
+			}
+			eraserTold[eraserId] = false
+			eraserAskTimes[eraserId] = now.Add(time.Microsecond)
+			if lateIds[eraserId] {
+				eraserAskTimes[eraserId] = nextSecond
+			}
+		}
+	}
+}
+
+// P3 (DESIGN-DETAILS 13.3): from its first ask on, an eraser that asks when told takes within bound of each ask
+// and of each take after it.
+func checkQuotaClosurePacingTurns(start time.Time, end time.Time, takeTimes []time.Time, bound time.Duration) error {
+	last := start
+	for _, takeTime := range append(slices.Clone(takeTimes), end) {
+		if wait := takeTime.Sub(last); bound < wait {
+			return fmt.Errorf("a wait of %s from %s, past %s", wait, last, bound)
+		}
+		last = takeTime
+	}
+	return nil
+}
+
+// Twin PacingTwin-Arrival (DESIGN-DETAILS 13.1 A.1): twelve erasers that last asked at 23:59:30 come back at
+// 00:00:00 UTC together and ask in the same order every time, each obeying every answer. Seats serve every one
+// within P3's bound of (live seats + 2R) cells; a bucket that admits by arrival, once every slot was past due,
+// let the first four take every turn and kept the other eight out.
+func TestPacingAdmitsBySeatNotArrival(t *testing.T) {
+	perS := int64(4)
+	cell := quotaClosurePacingSpacing(perS)
+	midnight := time.Date(2026, time.January, 3, 0, 0, 0, 0, time.UTC)
 	pacing := NewQuotaClosurePacing()
 	eraserIds := []connect.Id{}
 	for range 12 {
 		eraserId := connect.NewId()
 		eraserIds = append(eraserIds, eraserId)
-		if ok, _, _ := pacing.Ask(eraserId, start, perS, 5*time.Minute); ok {
-			pacing.Take(eraserId, start, perS)
-		}
+		pacing.Ask(eraserId, midnight.Add(-30*time.Second), perS)
 	}
-	back := start.Add(10 * time.Second)
-	taken := 0
-	for _, eraserId := range eraserIds {
-		ok, liftTime, takenThisSecond := pacing.Ask(eraserId, back, perS, 5*time.Minute)
-		if ok {
-			pacing.Take(eraserId, back, perS)
-			taken += 1
-			continue
+	end := midnight.Add(30 * time.Second)
+	eraserTakeTimes := runQuotaClosurePacingSchedule(t, pacing, eraserIds, nil, midnight, end, perS)
+	bound := time.Duration(int64(len(eraserIds))+2*perS) * cell
+	for index, eraserId := range eraserIds {
+		if err := checkQuotaClosurePacingTurns(midnight, end, eraserTakeTimes[eraserId], bound); err != nil {
+			t.Errorf("eraser %d: %v", index, err)
 		}
-		if takenThisSecond != perS || !liftTime.Equal(back.Add(time.Second)) {
-			t.Errorf("refused with %d taken, lift %s", takenThisSecond, liftTime)
+		// a turn every 12 cells, 3 s
+		if count := len(eraserTakeTimes[eraserId]); count < 9 {
+			t.Errorf("eraser %d took %d turns in 30 s", index, count)
 		}
-		refusal := QuotaClosurePacingRefusal(&QuotaLimits{}, takenThisSecond, back, liftTime)
-		if refusal.LimitKey != "evs_closure_uploads_per_s" || refusal.Limit != 4 || refusal.RetryAfterMs != 1000 || refusal.Upgrade {
-			t.Errorf("refusal %+v", refusal)
-		}
-	}
-	if int64(taken) != perS {
-		t.Errorf("%d took in one second", taken)
 	}
 }
 
-// A slot lapses its horizon past its turn: an eraser that went away asks again from the tail.
-func TestQuotaClosurePacingLapsesAStaleSlot(t *testing.T) {
-	start := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+// Twin PacingTwin-Tail (DESIGN-DETAILS 13.1 A.2): two erasers that ask at the start of every second, never at
+// their seats, cannot take a second's cells from the obedient erasers whose seats lie inside it, so each obedient
+// eraser takes at every seat it is told and keeps P3's bound. A bucket refusal sent to the tail lost an obedient
+// eraser its place each time the late ones came first.
+func TestPacingBucketRefusalKeepsThePlace(t *testing.T) {
 	perS := int64(4)
-	horizon := 5 * time.Minute
+	cell := quotaClosurePacingSpacing(perS)
+	start := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	pacing := NewQuotaClosurePacing()
-	takerId := connect.NewId()
-	goneId := connect.NewId()
-	if ok, _, _ := pacing.Ask(takerId, start, perS, horizon); !ok {
-		t.Fatal("the first eraser waited")
+	lateIds := map[connect.Id]bool{}
+	eraserIds := []connect.Id{}
+	// the late two first in every instant's order, the order least kind to the obedient
+	for range 2 {
+		lateId := connect.NewId()
+		lateIds[lateId] = true
+		eraserIds = append(eraserIds, lateId)
 	}
-	pacing.Take(takerId, start, perS)
-	ok, goneTurnTime, _ := pacing.Ask(goneId, start, perS, horizon)
-	if ok {
-		t.Fatal("the second eraser went at once")
+	obedientIds := []connect.Id{}
+	for range 4 {
+		obedientId := connect.NewId()
+		obedientIds = append(obedientIds, obedientId)
+		eraserIds = append(eraserIds, obedientId)
 	}
-	// within its horizon the slot holds: back late, it goes at once
-	within := goneTurnTime.Add(horizon)
-	held := NewQuotaClosurePacing()
-	*held = *pacing
-	held.eraserTurns = map[connect.Id]time.Time{}
-	for eraserId, turnTime := range pacing.eraserTurns {
-		held.eraserTurns[eraserId] = turnTime
-	}
-	if ok, _, _ := held.Ask(goneId, within, perS, horizon); !ok {
-		t.Error("a slot within its horizon did not hold")
-	}
-	// past it, the slot is gone, and a newcomer's ask sweeps it
-	later := within.Add(time.Millisecond)
-	newcomerId := connect.NewId()
-	if ok, _, _ := pacing.Ask(newcomerId, later, perS, horizon); !ok {
-		t.Fatal("the newcomer waited for slots that lapsed")
-	}
-	pacing.Take(newcomerId, later, perS)
-	if count := pacing.EraserCount(); count != 1 {
-		t.Errorf("%d erasers hold slots after the lapse", count)
-	}
-	if ok, liftTime, _ := pacing.Ask(goneId, later, perS, horizon); ok || !liftTime.After(later) {
-		t.Errorf("the lapsed eraser kept its place: %v, lift %s", ok, liftTime)
+	end := start.Add(30 * time.Second)
+	eraserTakeTimes := runQuotaClosurePacingSchedule(t, pacing, eraserIds, lateIds, start, end, perS)
+	bound := time.Duration(int64(len(eraserIds))+2*perS) * cell
+	for index, obedientId := range obedientIds {
+		if err := checkQuotaClosurePacingTurns(start, end, eraserTakeTimes[obedientId], bound); err != nil {
+			t.Errorf("obedient eraser %d: %v", index, err)
+		}
+		// at most one turn every six cells, 1.5 s
+		if count := len(eraserTakeTimes[obedientId]); count < 15 {
+			t.Errorf("obedient eraser %d took %d turns in 30 s", index, count)
+		}
 	}
 }
