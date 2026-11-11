@@ -5,7 +5,8 @@
 //
 //	build    choose push_id P; render each entry version under P (evs_plan.go's planned paths, sealed); the new
 //	         segments with the upload day their receipts give; sealed metadata under manifest_g with the §10 group
-//	         head the writer pins, when the client knows one; the statement on the head the plan read (v = b, C_b), its
+//	         head the writer pins, when the client knows one, and on a git-mode ref the plan's update (a rekey's REKEY
+//	         shape, DESIGN-DETAILS 8.2.10), which a git-mode plan with none refuses; the statement on the head the plan read (v = b, C_b), its
 //	         time fresh per statement, signed only by §5's identity key, naming sidecar_id and client_id (D-EVS-5)
 //	send     a one-part push posts {statement, payload, receipts} once every upload answered 200; a push over 1 MiB or
 //	         1,024 entry writes goes in parts (evs_push_parts.go), git mode taking its seal lease first
@@ -110,6 +111,13 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 		return nil, err
 	}
 	metadata := &protocol.EvsSealedMetadata{Provenance: &protocol.EvsProvenance{}}
+	if plan.RefMode == protocol.EvsRefMode_EVS_REF_GIT {
+		// a git-mode push states its update (DESIGN-DETAILS 8.2.3): what readers check its changes against
+		if plan.gitUpdate == nil {
+			return nil, fmt.Errorf("%w: a git-mode push with no update", ErrEvsGitRef)
+		}
+		metadata.Git = plan.gitUpdate
+	}
 	if self.client.args.GroupHead != nil {
 		if groupHead, ok := self.client.args.GroupHead(repoKey.GroupId()); ok {
 			metadata.Group = groupHead

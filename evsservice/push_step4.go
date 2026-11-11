@@ -37,6 +37,8 @@ type pushReads struct {
 	// gen/<g> of the push's group and generation; nil when gkm holds none
 	generation          *protocol.GenRotate
 	overlayBaseVersions []uint64
+	// the head of the ref a creating push's section 16 names, nil for none (DESIGN-DETAILS 8.2.2)
+	overlayBase *protocol.EvsHead
 	// each changed path's entry, by its token path's KeyString
 	entries map[string]*EvsPathRead
 	reuses  []*ReuseRead
@@ -100,7 +102,13 @@ func (self *pushAttempt) readStep4(cached bool) (*pushOutcome, bool) {
 	}()
 	go func() {
 		defer waitGroup.Done()
-		reads.overlayBaseVersions, overlayErr = engine.overlays.BaseVersions(self.ctx, self.cluster, self.repoId, self.refId, head)
+		if self.payload == nil || self.payload.Base == nil || (!head.Absent() && head.Head.GetVersion() != 0 && !head.Head.GetDeleted()) {
+			reads.overlayBaseVersions, overlayErr = engine.overlays.BaseVersions(self.ctx, self.cluster, self.repoId, self.refId, head)
+			return
+		}
+		// a creating push of an overlay: its chain starts at the base section 16 names, whose head is read here for
+		// 5c's base rule and for the chain past it
+		reads.overlayBase, reads.overlayBaseVersions, overlayErr = self.readOverlayBase(self.payload.Base)
 	}()
 	var entryLock sync.Mutex
 	entryErrs := []error{}
@@ -213,6 +221,29 @@ func evsPathTokensOf(change *sidecar.EvsCheckedChange) (*EvsPathTokens, error) {
 	return tokens, nil
 }
 
+// A creating push's overlay base: the head of the ref section 16 names, at least at the version it names when it has
+// one, and the base versions of the chain from it, k first then the base ref's own chain. A base ref with no head
+// answers a placeholder and no chain, which 5c refuses.
+func (self *pushAttempt) readOverlayBase(base *protocol.EvsOverlay) (*protocol.EvsHead, []uint64, error) {
+	engine := self.engine
+	baseRefId, err := sidecar.IdFromBytes(base.GetRefId())
+	if err != nil {
+		return nil, nil, err
+	}
+	baseHead, err := engine.heads.ReadCached(self.ctx, self.cluster, self.repoId, baseRefId, base.GetVersion(), false)
+	if err != nil {
+		return nil, nil, err
+	}
+	if baseHead.Absent() {
+		return &protocol.EvsHead{}, nil, nil
+	}
+	chain, err := engine.overlays.BaseVersions(self.ctx, self.cluster, self.repoId, baseRefId, baseHead)
+	if err != nil {
+		return nil, nil, err
+	}
+	return baseHead.Head, append([]uint64{base.GetVersion()}, chain...), nil
+}
+
 // One reuse source: its ref's head, then the version committed in that ref's entry or, with its statement, in its
 // window (§11.8 step 4's reuse). A ref or version step 4 finds none of leaves EntryVersion nil, which 5h refuses.
 func (self *pushAttempt) readReuse(reuse *sidecar.EvsReuse) (*ReuseRead, error) {
@@ -286,6 +317,7 @@ func (self *pushAttempt) buildView() (*pushOutcome, bool) {
 		Generation:          reads.generation,
 		Paths:               map[string]*PathRead{},
 		OverlayBaseVersions: reads.overlayBaseVersions,
+		OverlayBase:         reads.overlayBase,
 		Receipts:            self.receipts,
 		Reuses:              reads.reuses,
 		NetworkId:           self.networkId,

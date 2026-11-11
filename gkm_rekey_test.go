@@ -587,8 +587,8 @@ func TestEvsRekeyRetriesAPathConflictAndThenStops(t *testing.T) {
 
 // What the job cannot list or write it does not claim: a request naming no path walks the ref from its root, which
 // lists its top-level names since EVS1-M2-46 (question evs1-m2-24-root-directory-names, option 1); a git-mode ref is
-// skipped by name; a malformed path is refused; and a repo runs one job at a time.
-func TestEvsRekeyRefusesTheRootAndSkipsAGitModeRef(t *testing.T) {
+// rekeyed as the REKEY shape (EVS1-M2-48); a malformed path is refused; and a repo runs one job at a time.
+func TestEvsRekeyRefusesTheRootAndRekeysAGitModeRef(t *testing.T) {
 	root := newRekeyTest(t)
 	rootPaths := root.writeFiles("r", 3)
 	root.rotate(2, GkmCauseRemove)
@@ -627,19 +627,36 @@ func TestEvsRekeyRefusesTheRootAndSkipsAGitModeRef(t *testing.T) {
 	}
 	test.requireRekeyed(2, paths...)
 
+	// a git-mode ref, from this head-mode client: rekeyed through the REKEY shape, its tree unchanged (DESIGN-DETAILS
+	// 8.2.10, question keys-m2-26-rekey-git-mode-refs)
 	git := newRekeyTest(t)
 	git.writer.world.mode = protocol.EvsRefMode_EVS_REF_GIT
 	git.writer.world.push(&evsTestChange{path: "tree.txt", content: []byte("tree")})
 	git.writer.server.know("tree.txt")
+	git.contents["tree.txt"] = []byte("tree")
+	git.versions["tree.txt"] = 1
 	git.rotate(2, GkmCauseRemove)
 	posted := git.posted()
 	progress, err = git.rekey().Run(context.Background(), &GkmRekeyRequest{RepoId: git.writer.world.repoId, Paths: []string{"tree.txt"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if progress.State != GkmRekeyStateDone || progress.RewrittenCount != 0 || len(progress.SkippedRefs) != 1 ||
-		progress.SkippedRefs[0].Reason != "git_mode" || !bytes.Equal(progress.SkippedRefs[0].RefName, EvsMainRefName) || git.posted() != posted {
+	if progress.State != GkmRekeyStateDone || progress.RewrittenCount != 1 || len(progress.SkippedRefs) != 0 || git.posted() != posted+1 {
 		t.Errorf("a git-mode ref: %+v", progress)
+	}
+	git.requireRekeyed(2, "tree.txt")
+	commit := git.writer.world.commits[len(git.writer.world.commits)-1]
+	payload, err := ParseEvsPayload(commit.built.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := EvsOpenMetadata(evsTestKeys(t, git.writer.world.repoId, 2).manifest, payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.GetGit().GetShape() != protocol.EvsGitShape_EVS_GIT_REKEY || len(metadata.GetCommits()) != 0 ||
+		len(metadata.GetGit().GetNewTip()) != 0 || commit.parsed.Push.GetFlags() != 0 {
+		t.Errorf("the rekey's update: %v, flags %d", metadata.GetGit(), commit.parsed.Push.GetFlags())
 	}
 }
 

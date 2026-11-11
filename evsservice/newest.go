@@ -429,6 +429,10 @@ func touching(changes []*EvsCommittedChange, tokenPath sidecar.EvsTokenPath) []*
 func sealPartHolding(parts []*sidecar.EvsSealPart, tokenPath sidecar.EvsTokenPath) int {
 	index := -1
 	for i, part := range parts {
+		// a changeless part holds no change, and comes after every part that does
+		if part.Changeless {
+			break
+		}
 		if part.FirstTokenPath.Compare(tokenPath) <= 0 {
 			index = i
 		}

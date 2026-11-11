@@ -15,7 +15,12 @@
 //	5g  each changed file's newest committed version (§11.7's newest rule, which step 4 ran) equals its
 //	    base_entry_version, 0 naming it absent, and each new version follows the versions rule: base + 1, or for a
 //	    creation max(b, m) + 1 with b the effective base version (I-EVS-8); a file over a standing directory, or a
-//	    directory over a standing file, conflicts. Directory deltas merge without a CAS, but for §11.7's two-way
+//	    directory over a standing file, conflicts on a file-mode ref, and on a git-mode ref is a creation of the new
+//	    kind, base 0 and the creation's version, the push removing what stood below a replaced directory by its own
+//	    changes, which only a replaying reader can check (DESIGN-DETAILS 8.2.2's kinds row). A part of a push on a ref
+//	    with no head defers a creation's version to the seal, which runs 5g again over the joined payload: only the
+//	    seal holds the overlay base section 16 names, which the effective base version counts. Directory deltas merge
+//	    without a CAS, but for §11.7's two-way
 //	    check: a push removing D conflicts if a delta to D committed after its base, and a push changing D conflicts
 //	    if D's removal, its own or a prefix's, committed after its base. A directory's creation is a CAS like a file's,
 //	    since it starts its table again. Every conflict is final, 409 naming every conflicting path; then each
@@ -128,6 +133,9 @@ func baseStale(view *PushView, detail string) *EvsCheckRefusal {
 func CheckPaths(view *PushView) *EvsCheckRefusal {
 	push := view.Statement.Push
 	effectiveBaseVersion := EffectiveBaseVersion(push.GetBaseVersion(), view.OverlayBaseVersions)
+	gitMode := protocol.EvsRefMode(push.GetRefMode()) == protocol.EvsRefMode_EVS_REF_GIT
+	// a part on a ref with no head cannot know the overlay base its seal's section 16 names
+	deferVersions := view.Stage == PushStagePart && !view.headExists()
 	var conflict *EvsCheckRefusal
 	conflicted := func(reason EvsCheckReason, change *sidecar.EvsCheckedChange, detail string) {
 		if conflict == nil {
@@ -163,12 +171,13 @@ func CheckPaths(view *PushView) *EvsCheckRefusal {
 		}
 		if protocol.EvsEntryKind(entry.GetKind()) == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
 			switch {
-			case baseEntryVersion == 0 && newest.Exists:
+			case baseEntryVersion == 0 && newest.Exists && !(gitMode && !newest.Directory):
 				conflicted(EvsCheckReasonPathConflict, change, "a directory created over a standing path")
 				continue
 			case baseEntryVersion == 0:
+				// absent, or on a git-mode ref a standing file the directory replaces
 				expected := ExpectedEntryVersion(0, effectiveBaseVersion, newest.RemovalVersion)
-				if entry.GetVersion() != expected {
+				if entry.GetVersion() != expected && !deferVersions {
 					conflicted(EvsCheckReasonVersionRule, change, fmt.Sprintf("version %d, the rule's %d", entry.GetVersion(), expected))
 					continue
 				}
@@ -183,10 +192,21 @@ func CheckPaths(view *PushView) *EvsCheckRefusal {
 			continue
 		}
 		if newest.Exists && newest.Directory {
-			conflicted(EvsCheckReasonPathConflict, change, "a file written over a standing directory")
+			if !gitMode || baseEntryVersion != 0 {
+				conflicted(EvsCheckReasonPathConflict, change, "a file written over a standing directory")
+				continue
+			}
+			// git mode: a creation of a file where the directory stood
+			expected := ExpectedEntryVersion(0, effectiveBaseVersion, newest.RemovalVersion)
+			if entry.GetVersion() != expected && !deferVersions {
+				conflicted(EvsCheckReasonVersionRule, change, fmt.Sprintf("version %d, the rule's %d", entry.GetVersion(), expected))
+			}
 			continue
 		}
 		err = CheckPathVersion(newest, baseEntryVersion, entry.GetVersion(), false, effectiveBaseVersion)
+		if deferVersions && baseEntryVersion == 0 && errors.Is(err, ErrEvsVersionRule) {
+			err = nil
+		}
 		switch {
 		case errors.Is(err, ErrEvsVersionRule):
 			conflicted(EvsCheckReasonVersionRule, change, err.Error())

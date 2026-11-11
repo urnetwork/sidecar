@@ -1441,3 +1441,119 @@ func TestCheckPathsHoldsTheRootToTheDirectoryBound(t *testing.T) {
 	requireCheckRefusal(t, "the root past 4,096 children", CheckPaths(viewWith(sidecar.EvsDirectoryMaxChildCount)), EvsCheckReasonDirectoryFull)
 	requireCheckPass(t, "the root at 4,096 children", CheckPaths(viewWith(sidecar.EvsDirectoryMaxChildCount-1)))
 }
+
+// worldView's view of a push in mode.
+func (self *checkFixture) worldViewIn(world *evsWorld, base uint64, mode protocol.EvsRefMode, changes func(plan *sidecar.EvsPushPlan) []*sidecar.EvsPlannedChange) *PushView {
+	plan := self.plan()
+	plan.RefMode = mode
+	plan.BaseVersion = base
+	plan.Changes = changes(plan)
+	view := self.view(plan)
+	for _, change := range view.Payload.Changes {
+		newest, err := world.newest(change.TokenPath)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		read := &PathRead{Newest: newest}
+		if newest.Directory {
+			read.Listing = world.listing(change.TokenPath)
+		}
+		view.Paths[change.TokenPath.KeyString()] = read
+	}
+	return view
+}
+
+// DESIGN-DETAILS 8.2.2's kinds row at 5g: on a git-mode ref a file written where a directory stands and a directory
+// created where a file stands are creations, base 0 and the creation's version, max(b, m) + 1; on a file-mode ref both
+// conflict. A kind change that is no creation, or off the creation's version, is refused either way.
+func TestCheckPathsTakesAKindChangeOnAGitModeRef(t *testing.T) {
+	fixture := newCheckFixture(t)
+	world := newEvsWorld(t)
+	file, directory := worldPath("f"), worldPath("d")
+	world.push(&worldChange{path: file, version: 1})
+	world.push(&worldChange{path: directory, version: 2, directory: true, names: []sidecar.EvsToken{worldToken("n")}})
+	rows := []*protocol.EvsName{{Token: worldToken("m").Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: []byte("sealed m")}}
+	fileOverDirectory := func(version uint64, base uint64) func(plan *sidecar.EvsPushPlan) []*sidecar.EvsPlannedChange {
+		return func(plan *sidecar.EvsPushPlan) []*sidecar.EvsPlannedChange {
+			return []*sidecar.EvsPlannedChange{{TokenPath: directory, BaseEntryVersion: base, EntryVersion: fixture.fileEntry(plan, version, nil)}}
+		}
+	}
+	directoryOverFile := func(version uint64) func(plan *sidecar.EvsPushPlan) []*sidecar.EvsPlannedChange {
+		return func(plan *sidecar.EvsPushPlan) []*sidecar.EvsPlannedChange {
+			return []*sidecar.EvsPlannedChange{{TokenPath: file, EntryVersion: fixture.directoryEntry(plan, version, rows, nil)}}
+		}
+	}
+	git, fileMode := protocol.EvsRefMode_EVS_REF_GIT, protocol.EvsRefMode_EVS_REF_FILE
+	requireCheckPass(t, "git mode: a file where a directory stands", CheckPaths(fixture.worldViewIn(world, 2, git, fileOverDirectory(3, 0))))
+	requireCheckPass(t, "git mode: a directory where a file stands", CheckPaths(fixture.worldViewIn(world, 2, git, directoryOverFile(3))))
+	requireCheckRefusal(t, "file mode: a file where a directory stands", CheckPaths(fixture.worldViewIn(world, 2, fileMode, fileOverDirectory(3, 0))), EvsCheckReasonPathConflict)
+	requireCheckRefusal(t, "file mode: a directory where a file stands", CheckPaths(fixture.worldViewIn(world, 2, fileMode, directoryOverFile(3))), EvsCheckReasonPathConflict)
+	requireCheckRefusal(t, "git mode: a file over a directory off the creation's version", CheckPaths(fixture.worldViewIn(world, 2, git, fileOverDirectory(4, 0))), EvsCheckReasonVersionRule)
+	requireCheckRefusal(t, "git mode: a directory over a file off the creation's version", CheckPaths(fixture.worldViewIn(world, 2, git, directoryOverFile(5))), EvsCheckReasonVersionRule)
+	requireCheckRefusal(t, "git mode: a file over a directory based on its version", CheckPaths(fixture.worldViewIn(world, 2, git, fileOverDirectory(3, 2))), EvsCheckReasonPathConflict)
+}
+
+// 5c's creating sections (DESIGN-DETAILS 8.2.2, question evs1-m2-01-ref-creation-fields): a ref name and an overlay
+// base only on a push that creates its ref, the base only in git mode, naming a git-mode ref at a version it has, and
+// on the first push after a DELETE the head's own base; each else 409 REF_MODE, final.
+func TestCheckRefsHoldsTheCreatingSections(t *testing.T) {
+	fixture := newCheckFixture(t)
+	sealedName := bytes.Repeat([]byte("n"), 48)
+	baseRefId := testId("base ref")
+	base := &protocol.EvsOverlay{RefId: baseRefId.Bytes(), Version: 2}
+	baseHead := &protocol.EvsHead{Version: 3, RefKind: uint32(protocol.EvsRefKind_EVS_REF_SHARED), RefMode: uint32(protocol.EvsRefMode_EVS_REF_GIT)}
+	type creatingCase struct {
+		name     string
+		mode     protocol.EvsRefMode
+		refName  []byte
+		base     *protocol.EvsOverlay
+		head     func(view *PushView) *protocol.EvsHead
+		baseHead *protocol.EvsHead
+		reason   EvsCheckReason
+	}
+	committed := func(view *PushView) *protocol.EvsHead { return checkTestHead(view, 1) }
+	deleted := func(withBase *protocol.EvsOverlay) func(view *PushView) *protocol.EvsHead {
+		return func(view *PushView) *protocol.EvsHead {
+			head := checkTestHead(view, 1)
+			head.Deleted = true
+			head.Base = withBase
+			return head
+		}
+	}
+	git, fileMode := protocol.EvsRefMode_EVS_REF_GIT, protocol.EvsRefMode_EVS_REF_FILE
+	otherBase := &protocol.EvsOverlay{RefId: testId("other base").Bytes(), Version: 2}
+	cases := []*creatingCase{
+		{name: "a creating overlay", mode: git, refName: sealedName, base: base, baseHead: baseHead},
+		{name: "a creating branch with a name and no base", mode: git, refName: sealedName},
+		{name: "a creating file-mode ref with a name", mode: fileMode, refName: sealedName},
+		{name: "a name on a second push", mode: git, refName: sealedName, head: committed, reason: EvsCheckReasonRefRule},
+		{name: "a base on a second push", mode: git, base: base, head: committed, baseHead: baseHead, reason: EvsCheckReasonRefRule},
+		{name: "a base on a file-mode push", mode: fileMode, base: base, baseHead: baseHead, reason: EvsCheckReasonRefRule},
+		{name: "a base naming a ref that is not there", mode: git, base: base, baseHead: &protocol.EvsHead{}, reason: EvsCheckReasonRefRule},
+		{name: "a base past its ref's version", mode: git, base: &protocol.EvsOverlay{RefId: baseRefId.Bytes(), Version: 4}, baseHead: baseHead, reason: EvsCheckReasonRefRule},
+		{name: "a base naming a file-mode ref", mode: git, base: base, baseHead: &protocol.EvsHead{Version: 3, RefMode: uint32(protocol.EvsRefMode_EVS_REF_FILE)}, reason: EvsCheckReasonRefRule},
+		{name: "a base step 4 did not read", mode: git, base: base, reason: EvsCheckReasonUnchecked},
+		{name: "after a DELETE, the head's base again", mode: git, refName: sealedName, base: base, head: deleted(base)},
+		{name: "after a DELETE, no base where the head has none", mode: git, head: deleted(nil)},
+		{name: "after a DELETE, another base", mode: git, base: otherBase, head: deleted(base), baseHead: baseHead, reason: EvsCheckReasonRefRule},
+		{name: "after a DELETE, no base where the head has one", mode: git, head: deleted(base), reason: EvsCheckReasonRefRule},
+	}
+	for _, c := range cases {
+		plan := fixture.plan()
+		plan.RefMode = c.mode
+		plan.RefName = c.refName
+		plan.Base = c.base
+		plan.Changes = []*sidecar.EvsPlannedChange{fixture.change(plan, checkTestPath("x"), 0, 1)}
+		view := fixture.view(plan)
+		if c.head != nil {
+			view.Head = c.head(view)
+		}
+		view.OverlayBase = c.baseHead
+		refusal := CheckRefs(view)
+		if c.reason == 0 {
+			requireCheckPass(t, c.name, refusal)
+			continue
+		}
+		requireCheckRefusal(t, c.name, refusal, c.reason)
+	}
+}

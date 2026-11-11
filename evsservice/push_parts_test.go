@@ -379,3 +379,126 @@ func TestSealReadsTheClusterHead(t *testing.T) {
 		t.Errorf("%d PUTs for the seal, want its batch's and its head's", got)
 	}
 }
+
+// DESIGN-DETAILS 8.2.2's parts row through the engine: a push whose sealed metadata passes the room beside its 30
+// changes commits in two parts, the second changeless; the seal record names that part by its place alone, a read
+// proves each change through a part tree of one part, and the fold records the change's place in part 1.
+func TestPartsSealCommitsAChangelessPart(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId)
+	plan := fixture.partsPlan(protocol.EvsRefMode_EVS_REF_FILE, 30)
+	plan.SealedMetadata = bytes.Repeat([]byte{0x5a}, 1536*1024)
+	built := fixture.built(plan)
+	if len(built.Parts) != 2 {
+		t.Fatalf("%d parts, want 2", len(built.Parts))
+	}
+	checked, err := sidecar.EvsCheckPart(built.Statement, built.Parts[1])
+	if err != nil || checked.HoldsChanges() {
+		t.Fatalf("the second part: %v, holds changes %t", err, checked != nil && checked.HoldsChanges())
+	}
+	places := fixture.postParts(token, built)
+	fixture.requireCommitted(fixture.seal(token, built, places), 1)
+	fixture.awaitStepEights()
+	head := fixture.head()
+	window, err := EvsHeadWindow(head.Head)
+	if err != nil || len(window) != 1 {
+		t.Fatalf("window %v %v", window, err)
+	}
+	record, err := fixture.engine.readRecordAt(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, window[0].Place)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sealParts, err := sidecar.ParseEvsSealRecordBody(record.Body)
+	if err != nil || len(sealParts) != 2 || sealParts[0].Changeless || !sealParts[1].Changeless {
+		t.Fatalf("the seal's parts %v: %v", sealParts, err)
+	}
+	for _, label := range []string{"file-00000", "file-00029"} {
+		path := checkTestPath(label)
+		reply := fixture.readPath(token, 0, false, path)
+		pathReply := reply.paths[0]
+		if len(pathReply.GetProof()) != 2 || pathReply.GetProof()[1].GetSize() != 1 {
+			t.Fatalf("%s: proofs %v", label, pathReply.GetProof())
+		}
+		requireVersionProven(t, reply, pathReply, path)
+	}
+	// the fold, which counts only the parts with changes, places every change in part 1
+	if _, err := fixture.engine.folder.FoldAll(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, head, fixture.clock.Now(), fixture.clock.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := ReadEntry(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, 1, checkTestPath("file-00029"), 0)
+	if err != nil || len(entry.Entry.GetVersions()) != 1 || entry.Entry.GetVersions()[0].GetLeafPart() != 1 || entry.Entry.GetVersions()[0].GetLeafIndex() != 30 {
+		t.Fatalf("the folded entry %v: %v", entry, err)
+	}
+}
+
+// A git-mode plan on refId at the head it has, creating label at version.
+func (self *pushFixture) gitPlanOn(refId sidecar.Id, label string, version uint64) *sidecar.EvsPushPlan {
+	plan := self.plan()
+	plan.RefId = refId
+	plan.RefMode = protocol.EvsRefMode_EVS_REF_GIT
+	plan.BaseVersion, plan.BaseChain = 0, sidecar.EvsChainStart(self.check.repoId, refId)
+	if head := self.headOf(refId); !head.Absent() && 0 < head.Version() {
+		plan.BaseVersion, plan.BaseChain = head.Version(), [32]byte(head.Head.GetChain())
+	}
+	plan.Changes = append(plan.Changes, self.check.change(plan, checkTestPath(label), 0, version))
+	return plan
+}
+
+// DESIGN-DETAILS 8.2.2's sections row through the engine: an overlay's creating push puts its sealed ref name and
+// base into the head, which a read's summary carries, its creations at the effective base version's max(b, m) + 1;
+// a base or a name on a second push, a base on a file-mode push and a base naming a ref that is not there are 409
+// REF_MODE; the first push after a DELETE repeating the head's base re-creates the ref with it.
+func TestPushCreatingSectionsReachTheHead(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	// the DELETE below needs admin on a shared ref
+	fixture.auth.grant(fixture.check.signerId, fixture.check.repoId, sidecar.AclEvsAdmin)
+	token := fixture.token(fixture.check.signerId, "admin")
+	baseRefId, overlayRefId := testId("base ref"), testId("overlay ref")
+	fixture.requireCommitted(fixture.push(fixture.gitPlanOn(baseRefId, "base-file", 1)), 1)
+	fixture.awaitStepEights()
+	sealedName := bytes.Repeat([]byte{0x6e}, 50)
+	base := &protocol.EvsOverlay{RefId: baseRefId.Bytes(), Version: 1}
+
+	// a creation on the overlay at b_eff + 1 = 0 + 1 + 1
+	creating := fixture.gitPlanOn(overlayRefId, "overlay-file", 2)
+	creating.RefName, creating.Base = sealedName, base
+	fixture.requireCommitted(fixture.post(token, fixture.body(creating)), 1)
+	fixture.awaitStepEights()
+	head := fixture.headOf(overlayRefId)
+	if !bytes.Equal(head.Head.GetSealedRefName(), sealedName) || !proto.Equal(head.Head.GetBase(), base) {
+		t.Fatalf("the head's name %x and base %v", head.Head.GetSealedRefName(), head.Head.GetBase())
+	}
+	reply := fixture.read(token, &protocol.EvsReadRequest{RefId: overlayRefId.Bytes()})
+	if !bytes.Equal(reply.head.GetSealedRefName(), sealedName) || !proto.Equal(reply.head.GetBase(), base) {
+		t.Fatalf("the read's summary %v", reply.head)
+	}
+
+	second := fixture.gitPlanOn(overlayRefId, "second-file", 3)
+	second.Base = base
+	requireRefusal(t, fixture.post(token, fixture.body(second)), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE)
+	named := fixture.gitPlanOn(overlayRefId, "named-file", 3)
+	named.RefName = sealedName
+	requireRefusal(t, fixture.post(token, fixture.body(named)), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE)
+	fileMode := fixture.gitPlanOn(testId("file ref"), "file-file", 2)
+	fileMode.RefMode = protocol.EvsRefMode_EVS_REF_FILE
+	fileMode.Base = base
+	requireRefusal(t, fixture.post(token, fixture.body(fileMode)), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE)
+	missing := fixture.gitPlanOn(testId("orphan ref"), "orphan-file", 2)
+	missing.Base = &protocol.EvsOverlay{RefId: testId("no such ref").Bytes(), Version: 1}
+	requireRefusal(t, fixture.post(token, fixture.body(missing)), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE)
+
+	// DELETE, then the push that creates it again, repeating the head's base
+	deletion := fixture.gitPlanOn(overlayRefId, "unused", 0)
+	deletion.Changes = nil
+	deletion.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE)
+	fixture.requireCommitted(fixture.post(token, fixture.body(deletion)), 2)
+	fixture.awaitStepEights()
+	again := fixture.gitPlanOn(overlayRefId, "again-file", 4)
+	again.Base = base
+	fixture.requireCommitted(fixture.post(token, fixture.body(again)), 3)
+	fixture.awaitStepEights()
+	head = fixture.headOf(overlayRefId)
+	if head.Head.GetDeleted() || !proto.Equal(head.Head.GetBase(), base) || !bytes.Equal(head.Head.GetSealedRefName(), sealedName) {
+		t.Fatalf("the re-created head: deleted %t, base %v", head.Head.GetDeleted(), head.Head.GetBase())
+	}
+}

@@ -276,6 +276,14 @@ enum EvsRefMode {
   EVS_REF_FILE = 2;
 }
 
+// EvsGitUpdate.shape: what a git-mode push does to its ref's tip (DESIGN-DETAILS 8.2.3). A PATH_EPOCH carries none.
+enum EvsGitShape {
+  EVS_GIT_SHAPE_UNSPECIFIED = 0;
+  EVS_GIT_UPDATE = 1;                   // old_tip -> new_tip, FORCE when new does not descend from old
+  EVS_GIT_DELETE = 2;                   // old_tip -> none: no commit and no change
+  EVS_GIT_REKEY = 3;                    // the tip unchanged: file entries re-checkpointed, each mode and oid kept
+}
+
 // EvsEntryVersion.kind and EvsName.kind.
 enum EvsEntryKind {
   EVS_ENTRY_KIND_UNSPECIFIED = 0;
@@ -337,6 +345,8 @@ enum EvsPayloadSection {
   EVS_PAYLOAD_SOURCE_PATHS = 12;
   EVS_PAYLOAD_REUSE_LIST = 13;
   EVS_PAYLOAD_MERKLE_PROOFS = 14;
+  EVS_PAYLOAD_REF_NAME = 15;            // a creating push's sealed ref name (DESIGN-DETAILS 8.2.2's sections row)
+  EVS_PAYLOAD_OVERLAY_BASE = 16;        // a creating push's overlay base, an EvsOverlay's bytes
 }
 
 // A new-objects item's kind (11.6's payload row). A staged segment is format 2's.
@@ -525,8 +535,34 @@ message EvsSealedMetadata {             // what a push's sealed metadata opens t
                                         // hashes the sealed bytes
   GroupHead group = 1;                  // §10's (group_id, epoch, epoch_authenticator) the writer pins
   EvsProvenance provenance = 2;
-  repeated EvsSealedCommit commits = 3; // git mode: every commit of this update, oldest first
-  bytes signed_import = 4;              // a Signed EvsImport, as signed (11.11)
+  repeated EvsSealedCommit commits = 3; // git mode: the carried commits, parents before children (DESIGN-DETAILS 8.2.3)
+  bytes signed_import = 4;              // a Signed EvsImport, as signed, over this push's own commits (8.2.6)
+  EvsGitUpdate git = 5;                 // git mode, every push but a PATH_EPOCH: what the update is (8.2.3)
+  bytes ref_name = 6;                   // a creating push: the ref name's bytes, the signed copy of payload section 15
+  EvsOverlay base = 7;                  // a creating push of an overlay: the signed copy of payload section 16
+}
+message EvsGitUpdate {                  // a git-mode push's update (DESIGN-DETAILS 8.2.2, 8.2.3)
+  EvsGitShape shape = 1;
+  bytes old_tip = 2;                    // the ref's value before: 20 B, or empty for none (never created, or deleted)
+  bytes new_tip = 3;                    // its value after: 20 B, or empty for a DELETE; a REKEY sets neither
+  repeated bytes tags = 4;              // new_tip's annotated tag objects, outermost first, each one's `object` the
+                                        // next one's oid and the last one's a commit; none when new_tip is a commit
+  repeated EvsOverlay sources = 5;      // committed versions of other refs whose tips this push's readers hold; <= 16
+  repeated bytes segment_ids = 6;       // the segments holding this push's history blobs, each among its new objects
+  repeated EvsSealedBlob blobs = 7;     // history blobs, each after the blob it is a diff of
+}
+message EvsSealedBlob {                 // one history blob: a blob the commits name that no entry version carries
+  bytes git_oid = 1;
+  uint64 size = 2;
+  bytes base_oid = 3;                   // empty: one checkpoint record, or chunk records; else the blob its one diff
+                                        // record applies to, which its readers hold by then
+  bytes file_id = 4;                    // 16 random bytes, the records' AAD; one history blob, one file_id
+  repeated EvsHistoryLocator records = 5;
+}
+message EvsHistoryLocator {             // a history record: a range of one of EvsGitUpdate.segment_ids
+  uint32 segment = 1;                   // index into segment_ids
+  uint32 offset = 2;
+  uint32 length = 3;
 }
 message EvsProvenance {                 // 11.6's records row
   bytes agent_id = 1;                   // §5.5's; absent reads agent_asserted
@@ -534,7 +570,14 @@ message EvsProvenance {                 // 11.6's records row
 }
 message EvsSealedCommit {
   bytes object = 1;                     // the git commit object, which hashes to its oid
-  repeated EvsSealedChange changes = 2; // against its first parent, so export rebuilds every original oid (11.7)
+  repeated EvsSealedChange changes = 2; // against its first parent, sorted by path, so export rebuilds every original
+                                        // oid (11.7)
+  repeated EvsSealedTree trees = 3;     // each tree of this commit that differs from its first parent's at that path
+                                        // and does not rebuild from its children's names, modes and oids
+}
+message EvsSealedTree {                 // a tree object carried as its bytes (DESIGN-DETAILS 8.2.2's trees row)
+  repeated bytes path = 1;              // the directory's names, none for the root
+  bytes object = 2;                     // its bytes, which hash to the oid its parent names
 }
 message EvsSealedChange {
   repeated bytes path = 1;              // each component's raw name, as git stores it

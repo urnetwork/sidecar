@@ -177,14 +177,15 @@ func TestPostureManifestDecodesStrictly(t *testing.T) {
 			{N: 8, ThroughN: 8, FirstSeen: time.UnixMilli(1_800_000_000_000)},
 			{N: 9, ThroughN: 12, FirstSeen: time.UnixMilli(1_800_000_060_000)},
 		},
-		fork: true,
+		fork:                true,
+		overlayFullThroughN: 9,
 	}
 	encoded := manifest.encode()
 	decoded, err := decodePostureManifest(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(decoded.encode()) != string(encoded) || !decoded.overlay[0].Covered || !decoded.fork ||
+	if string(decoded.encode()) != string(encoded) || !decoded.overlay[0].Covered || !decoded.fork || decoded.overlayFullThroughN != 9 ||
 		!bytes.Equal(decoded.overlay[3].DelegationId, manifest.overlay[3].DelegationId) || len(decoded.waiting) != 2 ||
 		decoded.waiting[1].ThroughN != 12 || !decoded.waiting[1].FirstSeen.Equal(manifest.waiting[1].FirstSeen) {
 		t.Errorf("round trip lost something: %+v", decoded)
@@ -198,7 +199,7 @@ func TestPostureManifestDecodesStrictly(t *testing.T) {
 		"another version":      append([]byte{0x08, 0x02}, encoded[2:]...),
 		"no version":           encoded[2:],
 		"a field out of order": append(append([]byte{}, encoded...), 0x10, 0x01),
-		"an unknown field":     append(append([]byte{}, encoded...), 0xb8, 0x01, 0x01),
+		"an unknown field":     append(append([]byte{}, encoded...), 0xc0, 0x01, 0x01),
 		"a record outside":     (&postureManifest{rowsRecord: "../rows"}).encode(),
 		"a truncated field":    encoded[:len(encoded)-1],
 		// field 20: kind 0, n 1
@@ -224,6 +225,10 @@ func TestPostureManifestDecodesStrictly(t *testing.T) {
 		"a waiting entry of another wire type": onto(0xaa, 0x01, 0x03, 0x0a, 0x01, 0x05),
 		// field 22: 2
 		"a fork of 2": onto(0xb0, 0x01, 0x02),
+		// field 23: 0, which is never written
+		"a full overlay's position of 0": onto(0xb8, 0x01, 0x00),
+		// field 23: as bytes
+		"a full overlay's position of another wire type": onto(0xba, 0x01, 0x01, 0x05),
 		// field 19: a share id and no certificate
 		"a share with no cert": onto(0x9a, 0x01, 0x03, 0x0a, 0x01, 0x01),
 		// field 19: the share id twice

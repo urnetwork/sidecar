@@ -244,9 +244,11 @@ func NewEvsChangeTree(changes [][]byte) (*EvsChangeTree, error) {
 	return &EvsChangeTree{runs: runs}, nil
 }
 
-// The trees of a push in parts: 2 to 1,024 parts, none empty, their changes ascending across all of them.
+// The trees of a push in parts, over the parts that hold changes, in part order: 1 to 1,024 of them, none empty,
+// their changes ascending across all of them. A changeless part is no leaf (DESIGN-DETAILS 8.2.2's parts row), so a
+// push whose changes fit one part and whose other sections did not is a tree of one part.
 func NewEvsPartedChangeTree(parts [][][]byte) (*EvsChangeTree, error) {
-	if len(parts) < evsMinPartCount || EvsMaxPartCount < len(parts) {
+	if len(parts) < 1 || EvsMaxPartCount < len(parts) {
 		return nil, fmt.Errorf("%w: %d parts", ErrEvsMerkleInvalid, len(parts))
 	}
 	runs, err := newEvsChangeRuns(parts)
@@ -295,7 +297,7 @@ func (self *EvsChangeTree) Root() [sha256.Size]byte {
 	return self.partTree.Root()
 }
 
-// The number of parts: 0 for a one-part push, as part_count says.
+// The number of parts that hold changes: 0 for a one-part push. part_count also counts changeless parts.
 func (self *EvsChangeTree) PartCount() uint32 {
 	if self.partTree == nil {
 		return 0
@@ -398,10 +400,14 @@ type evsProvenChange struct {
 	index     uint64
 	// the claimed size of its part, or of the list for one part
 	size uint64
+	// the claimed number of parts that hold changes, 0 for one part
+	partTreeSize uint64
 }
 
 // Walks proofs, part level last, to changesRoot: one proof for one part, whose size is changeCount, and two for
-// partCount parts.
+// partCount parts, the part level's size the parts that hold changes, 1 to partCount (DESIGN-DETAILS 8.2.2's parts
+// row): changeless parts follow them and are no leaf, and no field signs how many there are, so EvsVerifyChangeAbsence
+// holds both sides of an absence to one size.
 func verifyEvsChangeProofs(changesRoot []byte, partCount uint32, changeCount uint64, proofs []*protocol.EvsMerkleProof) (*evsProvenChange, error) {
 	if partCount != 0 && (partCount < evsMinPartCount || EvsMaxPartCount < partCount) {
 		return nil, fmt.Errorf("%w: a part count of %d", ErrEvsMerkleInvalid, partCount)
@@ -436,13 +442,14 @@ func verifyEvsChangeProofs(changesRoot []byte, partCount uint32, changeCount uin
 	if !bytes.Equal(partProof.GetLeaf(), leafRoot[:]) {
 		return nil, fmt.Errorf("%w: the part proof is of another part root", ErrEvsMerkleInvalid)
 	}
-	if partProof.GetSize() != uint64(partCount) {
-		return nil, fmt.Errorf("%w: %d parts, not the %d signed", ErrEvsMerkleInvalid, partProof.GetSize(), partCount)
+	if partProof.GetSize() == 0 || uint64(partCount) < partProof.GetSize() {
+		return nil, fmt.Errorf("%w: %d parts with changes, of the %d signed", ErrEvsMerkleInvalid, partProof.GetSize(), partCount)
 	}
 	if err := EvsVerifyMerkleProof(changesRoot, partProof); err != nil {
 		return nil, err
 	}
 	proven.part = partProof.GetIndex()
+	proven.partTreeSize = partProof.GetSize()
 	return proven, nil
 }
 
@@ -484,14 +491,18 @@ func EvsVerifyChangeAbsence(changesRoot []byte, partCount uint32, changeCount ui
 			return fmt.Errorf("%w: the leaf above does not sort above the path", ErrEvsMerkleInvalid)
 		}
 	}
-	lastPart := uint64(0)
-	if partCount != 0 {
-		lastPart = uint64(partCount) - 1
+	if below != nil && above != nil && below.partTreeSize != above.partTreeSize {
+		return fmt.Errorf("%w: the leaves claim trees of %d and %d parts", ErrEvsMerkleInvalid, below.partTreeSize, above.partTreeSize)
 	}
 	isFirst := func(proven *evsProvenChange) bool {
 		return proven.part == 0 && proven.index == 0
 	}
+	// the last part with changes: its proof's own claim, which an all-right path pins to the tree's real last leaf
 	isLast := func(proven *evsProvenChange) bool {
+		lastPart := uint64(0)
+		if 0 < proven.partTreeSize {
+			lastPart = proven.partTreeSize - 1
+		}
 		return proven.part == lastPart && proven.index == proven.size-1
 	}
 	switch {
