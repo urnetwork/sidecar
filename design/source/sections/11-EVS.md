@@ -720,7 +720,8 @@ fold      for a ref's window versions (f, u]: read their statements and entry ve
           past the version its entry holds, applied in version order, since a newer delta never replaces an older
           one; GET each entry (404: create it, once a cluster read of the ref's head in this fold succeeds, 11.13's
           skip rule), merge (a file's folded versions, the newest four kept; a creation, or a DROP's written version,
-          replaces what the entry held, carrying nothing, the DROP's setting the entry's drop mark {drop_id,
+          replaces what the entry held, carrying nothing, a marker's carried ids first put in an orphan marker
+          (orphan, below), the DROP's setting the entry's drop mark {drop_id,
           through_version}), PUT If-Match (If-None-Match to create), on 412 read again and merge; an entry that
           already holds a version is not written, and a marker takes only a newer one (collect, below); while
           sources stand, once the current entry holds a path's change the fold deletes each listed source copy its
@@ -896,9 +897,10 @@ cache     idx/: If-Match (owner decision 2), written only by folds of committed 
           also in its push record, and deleted only by a copy (its sources), 11.7's collection or a shred; none
           decides an outcome
 fences    repo/ (lifecycle CAS, 11.12), slot/ (created If-None-Match, equal bytes on 412 success, from M2 only on an
-          object under 23 h old, step 6; rewritten only to drop erased keys; a versionless path's deleted by the
-          purge or a marker's collection, 11.7, 11.13; deleted by a drop's job when only listed versions name it),
-          drops/ (the drop job's state, If-Match, 11.13)
+          object under 23 h old, step 6, and on a re-seed bytes compared after stripping erased keys, 11.13;
+          rewritten only to drop erased keys; a versionless path's deleted by the purge or a marker's collection,
+          11.7, 11.13; deleted by a drop's job when only listed versions name it), drops/ (the drop job's state,
+          If-Match, 11.13)
 keys      no key is a path prefix of another, an existing key followed by / at the new key's next byte or the
           reverse, which MinIO's directory-object listing needs (11.3; owner decision 234), so a byte prefix such
           as §10.6's gkm/kp/<sidecar_id>/<ref>.claim beside gkm/kp/<sidecar_id>/<ref> stands: entries end in .e
@@ -2396,9 +2398,9 @@ extract   mail: MIME-decoded (RFC 2045-2047, 2231): From, To, Cc and Subject val
           parts with tags, scripts and styles stripped, and attachment names; never transport headers, attachment
           bytes or base64; files: title = the first heading or line (at most 80 B), indexed with the path, body =
           the text; records: §16.8's mapping of an entry's sealed body; the extractor's id is in every file header
-charsets  extractor 1 decodes a MIME part, RFC 2047 word or RFC 2231 value through golang.org/x/text/encoding/htmlindex
-          from the pinned module; no charset or an unknown label is read as UTF-8, and invalid bytes go to U+FFFD at
-          normalization
+charsets  extractor 1 decodes a MIME part, RFC 2047 word or RFC 2231 value through
+          golang.org/x/text/encoding/htmlindex from the pinned module; no charset or an unknown label is read as
+          UTF-8, and invalid bytes go to U+FFFD at normalization
 html      extractor 1's own scanner on the decoded text, no parser library: <script> and <style> go with their
           content, up to the matching end tag, case-insensitive; comments, <!...> and <?...> go; a tag is <, then a
           letter or /, to the next > outside quotes; a tag in the block list (address, article, aside, blockquote,
