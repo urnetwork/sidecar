@@ -154,9 +154,9 @@ func FuzzBridgeStatement(f *testing.F) {
 			t.Fatalf("%s: a refusal outside the log's classes: %v", signedType, verdict.Refusal)
 		}
 		if egress, ok := statement.(*bridge.BridgeEgress); ok && verdict.Accepted() {
-			// what the gate folds is the mode it read in the clear
+			// what the gate folds is the mode it read in the clear, for the subject the statement names
 			rows, err := net.log.State().BridgeRows()
-			if err != nil || BridgeRowsEgressMode(rows, laptop.sidecarId) != egress.GetMode() {
+			if err != nil || BridgeRowsEgressMode(rows, Id(egress.GetSubject())) != egress.GetMode() {
 				t.Fatalf("a BridgeEgress of mode %s took effect and the rows hold %v, %v", egress.GetMode(), rows, err)
 			}
 		}
