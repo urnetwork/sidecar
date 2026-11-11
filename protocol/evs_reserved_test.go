@@ -192,6 +192,11 @@ func TestEvsListHoldsTheDecidedReservations(t *testing.T) {
 			t.Errorf("the design reserves %s 2, and the list gives %d", layout, list.Layouts[layout])
 		}
 	}
+	// a head's index_epoch is read past in its summary and carried in the head (question
+	// evs1-m2-39-head-index-epoch, option 1; QD-640)
+	if !slices.Contains(list.Ignored, "EvsHeadSummary.index_epoch") || !slices.Contains(list.Kept, "EvsHead.index_epoch") {
+		t.Error("EvsHeadSummary.index_epoch is to be ignored and EvsHead.index_epoch kept (QD-640)")
+	}
 	seen := map[string]string{}
 	for section, entries := range map[string][]string{"ignored": list.Ignored, "kept": list.Kept} {
 		for _, entry := range entries {

@@ -288,8 +288,20 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 	}
 	self.world.stateLock.Lock()
 	current := max(1, self.world.currentEpoch)
+	headVersion := uint64(len(self.world.commits))
 	self.world.stateLock.Unlock()
-	if epoch := statement.Push.GetPathEpoch(); epoch != current {
+	epoch := statement.Push.GetPathEpoch()
+	switch {
+	case 0 < headVersion && statement.Push.GetBaseVersion() == 0:
+		// 5e's once line: a push planned on no head commits only as the push that creates the ref (DESIGN-DETAILS
+		// 9.2.6), before its epoch is compared
+		evsTestRefuse(writer, &evsTestRefusal{status: http.StatusConflict, reply: &protocol.EvsRefusalReply{
+			PushId: pushId.Bytes(), Code: protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE,
+		}})
+		return
+	case headVersion == 0 && epoch != 0 && epoch <= statement.Push.GetGeneration():
+		// a ref's first push names the epoch it starts in
+	case headVersion == 0 || epoch != current:
 		// 5e: final for the statement, which can never commit
 		evsTestRefuse(writer, &evsTestRefusal{status: http.StatusPreconditionFailed, reply: &protocol.EvsRefusalReply{
 			PushId: pushId.Bytes(), Code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH,
@@ -400,6 +412,10 @@ func (self *evsTestPushServer) commit(statement *EvsStatement, payload []byte, c
 	}
 	if head < push.GetBaseVersion() || push.GetBaseVersion()+63 < head || !bytes.Equal(push.GetBaseChain(), baseChain[:]) {
 		return 0, &evsTestRefusal{status: http.StatusConflict, reply: &protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_BASE_STALE}}
+	}
+	if head == 0 {
+		// step 7 starts the ref's head in the epoch its first push names
+		world.currentEpoch = max(1, push.GetPathEpoch())
 	}
 	current := world.currentWithLock()
 	// what the push showed evs: each change's token path, source paths and delta rows

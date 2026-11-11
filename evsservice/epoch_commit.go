@@ -91,6 +91,11 @@ func (self *pushAttempt) pathEpochDueOver(head *protocol.EvsHead) (*pathEpochDue
 		return nil, nil
 	}
 	from := max(head.GetGeneration(), EvsHeadCurrentEpoch(head))
+	if head.GetVersion() == 0 {
+		// a ref with no head starts in the epoch its first push names, its crossing counted from there (DESIGN-DETAILS
+		// 9.2.6's first push)
+		from = max(1, push.GetPathEpoch())
+	}
 	to := push.GetGeneration()
 	if to <= from {
 		return nil, nil

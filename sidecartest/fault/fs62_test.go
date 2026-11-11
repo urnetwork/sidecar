@@ -1,7 +1,8 @@
 //go:build sidecar_testhooks
 
-// FS-62 on T2 (EVS1-M2-41): the registered case under every rule §22.8 gives the row. The schedules run the evs
-// world's instances under the barrier driver, so they need the sidecar_testhooks tag.
+// FS-62 on T2 (EVS1-M2-41): the registered case under every rule §22.8 gives the row, and the lease holder's resync
+// (fs62.go) under the same rules. The schedules run the evs world's instances under the barrier driver, and the
+// resync's subscriber rounds through the root's seam, so they need the sidecar_testhooks tag.
 
 package fault
 
@@ -11,4 +12,8 @@ import (
 
 func TestFs62(t *testing.T) {
 	RunRow(t, "FS-62", "", nil)
+}
+
+func TestFs62LeaseHolderResync(t *testing.T) {
+	RunClause(t, "FS-62", "lease holder resync", Fs62LeaseHolderResync, nil)
 }

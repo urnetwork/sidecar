@@ -644,8 +644,9 @@ func TestReadAnswersStaleEpoch(t *testing.T) {
 
 // DESIGN-DETAILS 9.2.4: a directory's table served from the source a reader names says so in entry_epoch, its delta
 // at names_through, an inline push's, found by the request's token path in that epoch; once the copy carried it, a
-// reader naming only the current epoch gets the statement alone, since an inline list records no leaf place
-// (question evs1-m2-45-inline-leaf-place).
+// reader naming only the current epoch is served it in the same round by the leaf place its fold recorded, an inline
+// list's (QD-633), naming no token path of the older epoch; and an entry folded with no place is answered with the
+// statement alone, which the reader asks again from.
 func TestReadServesATableFromItsSourceWithItsEntryEpoch(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	token := fixture.token(fixture.check.signerId)
@@ -674,10 +675,62 @@ func TestReadServesATableFromItsSourceWithItsEntryEpoch(t *testing.T) {
 	}
 	reply = fixture.readNamed(token, 0, map[uint64]sidecar.EvsTokenPath{2: newPath})
 	pathReply = reply.paths[0]
+	if pathReply.GetEntryEpoch() != 0 || pathReply.GetNamesThrough() != created || len(pathReply.GetNames().GetNames()) != 2 ||
+		pathReply.GetVersion().GetLeafIndex() == 0 {
+		t.Fatalf("the carried table by its place: %v", pathReply)
+	}
+	requireVersionProven(t, reply, pathReply, oldPath)
+
+	// an entry folded before places were recorded for an inline list: the statement alone, as before QD-633
+	carried := fixture.entryAt(2, "epoch 2", "d")
+	unplaced := proto.Clone(carried.Entry).(*protocol.EvsIndexEntry)
+	unplaced.NamesLeafPart, unplaced.NamesLeafIndex = 0, 0
+	for _, version := range unplaced.GetVersions() {
+		version.LeafPart, version.LeafIndex = 0, 0
+	}
+	if _, err := PutEntry(fixture.ctx, fixture.cluster, fixture.check.repoId, fixture.check.refId, 2, epochPath(2, "d"), carried, unplaced, carried.State); err != nil {
+		t.Fatal(err)
+	}
+	reply = fixture.readNamed(token, 0, map[uint64]sidecar.EvsTokenPath{2: newPath})
+	pathReply = reply.paths[0]
 	statement, err := sidecar.ParseEvsStatement(pathReply.GetStatement())
 	if err != nil || pathReply.GetVersion() != nil || pathReply.GetNames() != nil || statement.Push.GetPathEpoch() != 1 ||
 		!bytes.Equal(statement.Push.GetPushId(), plan.PushId.Bytes()) {
 		t.Fatalf("the statement alone: %v %v", pathReply, err)
+	}
+}
+
+// DESIGN-DETAILS 9.2.4 and QD-633: after a cut-over and its copy, a file's version and a removal's marker that inline
+// pushes wrote in epoch 1 are each served in one round to a reader naming only the current epoch, found in their
+// statements by the leaf places their folds recorded, with no token path of epoch 1 named, and each verifies under the
+// path's own token path in epoch 1 as the reader computes it.
+func TestReadServesAnInlinePushsVersionAndRemovalByTheirPlaces(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId)
+	commitment := fixture.crossRemove(false)
+	// a removal of b, an inline push of epoch 1
+	created := fixture.planAtTwo(commitment)
+	fixture.create(created, "b")
+	createdVersion := fixture.requireCommitted(fixture.push(created), 3).GetVersion()
+	removal := fixture.planAtTwo(commitment)
+	removal.Changes = append(removal.Changes, fixture.check.change(removal, checkTestPath("b"), createdVersion, 0))
+	removedAt := fixture.requireCommitted(fixture.push(removal), 4).GetVersion()
+	fixture.awaitStepEights()
+	fixture.cutOverToEpochTwo(commitment, pathEpochTestMoveAt(2, []uint64{1}, "a"), pathEpochTestMoveAt(2, []uint64{1}, "b"))
+	if _, err := RunPathEpochCopy(fixture.ctx, fixture.host.ServiceHost(), nil, fixture.copyArgs(2)); err != nil {
+		t.Fatal(err)
+	}
+	// a, written by crossRemove's inline pushes of epoch 1
+	reply := fixture.readNamed(token, 0, map[uint64]sidecar.EvsTokenPath{2: epochPath(2, "a")})
+	pathReply := reply.paths[0]
+	if pathReply.GetVersion() == nil || pathReply.GetVersion().GetLeafIndex() == 0 {
+		t.Fatalf("a's version by its place: %v", pathReply)
+	}
+	requireVersionProven(t, reply, pathReply, checkTestPath("a"))
+	reply = fixture.readNamed(token, 0, map[uint64]sidecar.EvsTokenPath{2: epochPath(2, "b")})
+	pathReply = reply.paths[0]
+	if removal := pathReply.GetRemoval(); removal == nil || removal.GetRemovalVersion() != removedAt || removal.GetLeafIndex() == 0 {
+		t.Fatalf("b's removal by its place: %v", pathReply)
 	}
 }
 

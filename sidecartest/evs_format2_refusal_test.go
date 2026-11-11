@@ -1449,6 +1449,7 @@ var format2ReaderDrivers = map[string]func(world *format2World) *format2ReaderCa
 	"read-removal-marker-ids":    format2ReadRemovalMarkerIds,
 	"read-provenance-tainted":    format2ReadProvenanceTainted,
 	"read-window-bits-4-5":       format2ReadWindowBits,
+	"read-head-index-epoch":      format2ReadHeadIndexEpoch,
 	"read-batch-record-format-2": format2ReadBatchRecordFormat2,
 	"read-state-collected": format2ReaderState(func(reply *protocol.EvsReadPathReply) {
 		reply.State = protocol.EvsReadPathState_EVS_READ_PATH_COLLECTED
@@ -1713,6 +1714,23 @@ func format2ReadWindowBits(world *format2World) *format2ReaderCase {
 		world.rewriteHead(func(head *protocol.EvsHead) { setWindowFlags(head, 64) })
 	}}
 
+}
+
+// A head whose index_epoch a CUT set (QD-640): a format-1 evs commits on it, carrying it, and serves it in the head's
+// summary, which a format-1 reader reads past; its twin, an entry that does not hash to its statement's.
+func format2ReadHeadIndexEpoch(world *format2World) *format2ReaderCase {
+	world.rewriteHead(func(head *protocol.EvsHead) { head.IndexEpoch = 2 })
+	world.serve(world.format1)
+	writer := world.device(world.writer)
+	if err := writer.write("after.txt", []byte("after")); err != nil {
+		world.t.Fatalf("a push on a head carrying index_epoch: %v", err)
+	}
+	world.awaitStepEights(world.format1)
+	if indexEpoch := world.head().Head.GetIndexEpoch(); indexEpoch != 2 {
+		world.t.Fatalf("a format-1 commit left index_epoch %d", indexEpoch)
+	}
+	return &format2ReaderCase{path: "kept.txt", content: format2KeptContent, sibling: "after.txt", siblingContent: []byte("after"),
+		twinRewrite: world.tamperEntry("kept.txt")}
 }
 
 // A push a format-2 evs stored as a format-2 record; its twin, a record of no format.

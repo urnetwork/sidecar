@@ -5,7 +5,8 @@
 // and fields 33 and 34, EvsHead.index_epoch, EvsEntryVersion.versioning, EvsLocator.staged and kind 5,
 // EvsUploadReceipt.versionless, window bits 4 and 5, the read states and the rest of
 // testdata/evs/reserved_numbers.yml. Format-1 code refuses each in use as FORMAT_UNSUPPORTED {needs_format: 2}, never
-// as a fork, tampering or a missing segment, and ignores the window bits and the tainted bit (§11.6, D-PHASE-9).
+// as a fork, tampering or a missing segment, and ignores the window bits and the tainted bit (§11.6, D-PHASE-9), and a
+// head's index_epoch, which a format-1 commit carries and a reader reads past (QD-640).
 // EvsEntryVersion has no field 15, and no number serves keep-last-n (owner decisions 165, 167).
 //
 // The design's fences come first, with three fields the owner's answers added before design-records folds them in:
@@ -4332,7 +4333,7 @@ type EvsIndexVersion struct {
 	Elided        bool                   `protobuf:"varint,4,opt,name=elided,proto3" json:"elided,omitempty"`                                    // its inline bodies are cut, as for all but the newest; evs restores them
 	// from its push record before serving it
 	LeafPart      uint32 `protobuf:"varint,5,opt,name=leaf_part,json=leafPart,proto3" json:"leaf_part,omitempty"`    // where its change sits in its statement's list: the part, 0 for a one-part
-	LeafIndex     uint32 `protobuf:"varint,6,opt,name=leaf_index,json=leafIndex,proto3" json:"leaf_index,omitempty"` // push, and the change's index in that part's list plus 1; 0 when the list
+	LeafIndex     uint32 `protobuf:"varint,6,opt,name=leaf_index,json=leafIndex,proto3" json:"leaf_index,omitempty"` // push or an inline list, and the change's index in that part's list, or in
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
