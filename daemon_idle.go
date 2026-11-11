@@ -2,8 +2,8 @@
 
 // The idle rule and indexer retirement (§5.8, §7.9, D-CORE-9, D-TEAM-27, owner decision 150; CORE-M2-09). An
 // auto-spawned daemon exits once idle, unless something keeps it up: a hosted Sidecar's component that serves, mail,
-// sockets or bridge, which it asks through the optional SidecarActiveComponent, never a list of names, or a hosted
-// device the network stands as an indexer (§7.9's IndexerSet). An indexer runs from its unit, which `ur indexer add`
+// sockets or bridge, which it asks through the optional SidecarActiveComponent, never a list of names, a socket forward
+// or a live share the daemon holds itself, or a hosted device the network stands as an indexer (§7.9's IndexerSet). An indexer runs from its unit, which `ur indexer add`
 // installs if absent, and a unit-run daemon never idles out at all.
 //
 // uninstall-daemon first retires the device's designations: IndexerSet{retire} for each, which the subject itself
@@ -106,13 +106,16 @@ func (self *Daemon) idleWait() (time.Duration, bool) {
 	return timeout - self.clock.Now().Sub(self.lastActivity), true
 }
 
-// Whether something keeps the daemon up: a hosted Sidecar's active component or indexer designation, or the host's
-// own rule.
+// Whether something keeps the daemon up: a hosted Sidecar's active component or indexer designation, a socket forward
+// or a live share the daemon holds (daemon_socket.go), or the host's own rule.
 func (self *Daemon) busy() bool {
 	for _, network := range self.Sidecars() {
 		if network.Sidecar.Busy() {
 			return true
 		}
+	}
+	if self.socketsActive() {
+		return true
 	}
 	return self.settings.Busy != nil && self.settings.Busy()
 }

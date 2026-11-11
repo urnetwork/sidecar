@@ -2,7 +2,8 @@
 
 // §9's routes at the sockets service that this sidecar calls with its own client token (§9.15; Client class, on §7.4's
 // strict_exp allowlist, plan-SOCK-client-auth): POST /socket/registrations, which the registrar alone calls
-// (socket_registrar.go), and POST /socket/find, which the dialer's find client sends (socket_find_client.go). They carry
+// (socket_registrar.go), POST /socket/find, which the dialer's find client sends (socket_find_client.go), and
+// GET /socket/list, which `ur socket ls` pages through and unseals here (daemon_socket.go). They carry
 // §9's route bodies, which name connect.Id, so they stay off the sidecar_http leg, which registers and dials nothing
 // (§18.10).
 //
@@ -15,12 +16,14 @@ package sidecar
 import (
 	"context"
 	"fmt"
+	"net/url"
 )
 
 // The routes as errors name them.
 const (
 	socketRegistrationsRoute = "POST /socket/registrations"
 	socketFindRoute          = "POST /socket/find"
+	socketListRoute          = "GET /socket/list"
 )
 
 // POST /socket/registrations (§9.5): one page of the client's set. An answer that refuses nothing must carry one
@@ -66,6 +69,30 @@ func (self *SidecarApi) SocketFind(ctx context.Context, args *SocketFindArgs) (*
 	}
 	if result.Error == nil && (result.Primary == nil || len(result.Primary.Ticket) == 0) {
 		return nil, fmt.Errorf("sidecar api %s: %w: no primary ticket", socketFindRoute, ErrSidecarApiReply)
+	}
+	return result, nil
+}
+
+// GET /socket/list (§9.15): one page of this sidecar's own network's names, from cursor, "" for the first. A page's
+// refusal is a 200 whose body holds error, handed back as it came; an answer that refuses nothing must carry a list.
+func (self *SidecarApi) SocketList(ctx context.Context, cursor string) (*SocketListResult, error) {
+	listUrl := self.settings.SocketsUrl + "/socket/list"
+	if cursor != "" {
+		listUrl += "?" + url.Values{"cursor": []string{cursor}}.Encode()
+	}
+	result := &SocketListResult{}
+	err := self.sendJson(ctx, &sidecarApiRequest{
+		route:     socketListRoute,
+		operation: "socket_list",
+		method:    "GET",
+		url:       listUrl,
+		bearer:    true,
+	}, nil, result)
+	if err != nil {
+		return nil, err
+	}
+	if result.Error == nil && result.Names == nil {
+		return nil, fmt.Errorf("sidecar api %s: %w: no names", socketListRoute, ErrSidecarApiReply)
 	}
 	return result, nil
 }

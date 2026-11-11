@@ -7,6 +7,13 @@
 // The daemon answers one line of its own, {"ur_local":1,"version":<its version>}, with "error" set when it refuses
 // the session; §5.8 writes no answer, so this one is a reading, kept to what a client needs to tell a refusal from a
 // session and to restart a daemon of another version.
+//
+// The socket mode (SOCK.md reading 13) is `ur socket dial`'s relay for `ssh -o ProxyCommand` and `ur share get`'s
+// transfer: {mode: socket, version, socket: [<net>:]<name>, cwd, pid}, and socket_sidecar_id for `ur share get`, after
+// which the session carries one status line and then raw bytes of one §9 stream (daemon_socket.go). Like git's, it
+// selects a protocol and grants nothing: the dial it asks for passes every check a Dial does.
+//
+// How long a hello line may be is SidecarLocalSettings.HelloByteCount, which both ends read (QD-702).
 
 package sidecar
 
@@ -32,12 +39,11 @@ const (
 	// git's services.
 	daemonGitUploadPack  = "git-upload-pack"
 	daemonGitReceivePack = "git-receive-pack"
+	// A §9 stream's raw bytes past one status line: ur socket dial's stdio relay and ur share get (daemon_socket.go).
+	DaemonModeSocket = "socket"
 	// git-hook's hooks.
 	daemonGitHookPreReceive  = "pre-receive"
 	daemonGitHookProcReceive = "proc-receive"
-	// The longest hello line read before the session closes: far past any real one, which a cwd of a few hundred
-	// bytes bounds, and far below the request bound, so a hello cannot hold memory.
-	daemonHelloMaxByteCount = 16 * 1024
 )
 
 // The daemon's refusals of a hello, in its answer's error.
@@ -53,7 +59,7 @@ var ErrDaemonHello = errors.New("daemon hello refused")
 // §5.8's hello, as a session opens with it.
 type DaemonHello struct {
 	UrLocal int `json:"ur_local"`
-	// mcp, control, hook or git.
+	// mcp, control, hook, git, git-hook or socket.
 	Mode string `json:"mode"`
 	// The ur's version, which must be the daemon's.
 	Version string `json:"version"`
@@ -67,6 +73,12 @@ type DaemonHello struct {
 	// git: <net>/<repo> and the service.
 	Repo    string `json:"repo,omitempty"`
 	Service string `json:"service,omitempty"`
+	// socket: the address the session dials, [<net>:]<name> (§9.4). It names a socket in the clear, so it is never
+	// logged (I-13).
+	Socket string `json:"socket,omitempty"`
+	// socket, for ur share get: the sharer's sidecar_id from the link, which the dial holds the listener's verified
+	// Hello to before OPEN (§9.9). A share/ address needs it, and only a share/ address takes it.
+	SocketSidecarId *Id `json:"socket_sidecar_id,omitempty"`
 	// The process at the session's other end, as the system reports it: the daemon fills it, never the line, so the
 	// ancestry rules (§16.7) read a pid the caller cannot choose. 0 where the system names none.
 	PeerPid int64 `json:"-"`
@@ -79,10 +91,11 @@ type daemonHelloAnswer struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// Decodes and checks one hello line against version: exactly one JSON object with ur_local 1, a known mode with the
-// fields it takes, and version equal to the daemon's. A refusal names its error code, never the line.
-func parseDaemonHello(line []byte, version string) (*DaemonHello, string, error) {
-	if daemonHelloMaxByteCount < len(line) {
+// Decodes and checks one hello line against version: exactly one JSON object of at most maxByteCount bytes
+// (SidecarLocalSettings.HelloByteCount) with ur_local 1, a known mode with the fields it takes, and version equal to
+// the daemon's. A refusal names its error code, never the line.
+func parseDaemonHello(line []byte, version string, maxByteCount int64) (*DaemonHello, string, error) {
+	if maxByteCount < int64(len(line)) {
 		return nil, DaemonHelloErrorMalformed, fmt.Errorf("%w: too long", ErrDaemonHello)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(line))
@@ -100,6 +113,9 @@ func parseDaemonHello(line []byte, version string) (*DaemonHello, string, error)
 	if hello.Version != version {
 		return nil, DaemonHelloErrorVersionSkew, fmt.Errorf("%w: another version", ErrDaemonHello)
 	}
+	if hello.Mode != DaemonModeSocket && (hello.Socket != "" || hello.SocketSidecarId != nil) {
+		return nil, DaemonHelloErrorMalformed, fmt.Errorf("%w: socket fields in mode %s", ErrDaemonHello, hello.Mode)
+	}
 	switch hello.Mode {
 	case DaemonModeMcp, DaemonModeControl, DaemonModeHook:
 		if hello.Repo != "" || hello.Service != "" {
@@ -116,6 +132,19 @@ func parseDaemonHello(line []byte, version string) (*DaemonHello, string, error)
 	case DaemonModeGitHook:
 		if hello.Repo != "" || (hello.Service != daemonGitHookPreReceive && hello.Service != daemonGitHookProcReceive) {
 			return nil, DaemonHelloErrorMalformed, fmt.Errorf("%w: git-hook's hook", ErrDaemonHello)
+		}
+	case DaemonModeSocket:
+		if hello.Repo != "" || hello.Service != "" {
+			return nil, DaemonHelloErrorMalformed, fmt.Errorf("%w: git fields in mode %s", ErrDaemonHello, hello.Mode)
+		}
+		_, name, err := parseSocketAddressText(hello.Socket)
+		if err != nil {
+			return nil, DaemonHelloErrorMalformed, fmt.Errorf("%w: socket's address", ErrDaemonHello)
+		}
+		_, namespace, err := ParseSocketName(name)
+		// a share/ dial is ur share get's, which always names the sharer; nothing else names one
+		if err != nil || (namespace == SocketNamespaceShare) != (hello.SocketSidecarId != nil) {
+			return nil, DaemonHelloErrorMalformed, fmt.Errorf("%w: socket's sidecar_id", ErrDaemonHello)
 		}
 	default:
 		return nil, DaemonHelloErrorMode, fmt.Errorf("%w: no such mode", ErrDaemonHello)

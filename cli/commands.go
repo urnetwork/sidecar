@@ -9,8 +9,9 @@
 //
 // Nothing here writes a log to stdout, which an MCP relay owns: a command's output is for the person and its logs go
 // to stderr. Nothing here takes a secret from argv, the environment or stdin: a pass comes only from the terminal
-// (tty.go), and the one credential argv carries, `ur connect --token`, is a single-use auth key spent by the
-// enrollment it starts.
+// (tty.go), and the credentials argv carries are two: `ur connect --token`, a single-use auth key spent by the
+// enrollment it starts, and `ur share get`'s link, whose fragment is a share's secret, as §9.9 spells the command
+// (question sock-m5-14-share-link-argv).
 
 package main
 
@@ -153,6 +154,9 @@ type urCli struct {
 	unitRunner func(cli *urCli) unitRunner
 	// <state> of an instance
 	stateDirectory func(instance string) (string, error)
+	// a socket session past its status line, the daemon's dial answered (cmd_socket.go): socketSession, unless a test
+	// stands a stream in
+	openSocketSession func(ctx context.Context, hello *sidecar.DaemonHello) (sidecar.DaemonSessionStream, func(), error)
 	// a process's environment, for UR_INSTANCE and HTTPS_PROXY
 	getenv func(name string) string
 	// the working directory and pid a hello names
@@ -162,7 +166,7 @@ type urCli struct {
 
 // This process's ur.
 func newUrCli() *urCli {
-	return &urCli{
+	cli := &urCli{
 		settings:        defaultUrSettings(),
 		stdin:           os.Stdin,
 		stdout:          os.Stdout,
@@ -185,6 +189,8 @@ func newUrCli() *urCli {
 		cwd:             os.Getwd,
 		pid:             os.Getpid(),
 	}
+	cli.openSocketSession = cli.socketSession
+	return cli
 }
 
 // The ur-cli login TEAM-M1-08 registers (urcli_login.go). Nil, `ur login` refuses (C-14).

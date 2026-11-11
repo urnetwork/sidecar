@@ -79,25 +79,45 @@ func (self *DaemonHelloRefusal) Error() string {
 	return "daemon refused the hello: " + self.Code
 }
 
-// The longest answer line a client reads: far past any result a control method answers, which the daemon bounds
-// no tighter, so a broken daemon cannot make a client hold more.
-const daemonClientMaxLineByteCount = 64 * 1024 * 1024
+// What a DaemonClient reads with (QD-702): the bounds of the lines it takes from the daemon.
+type DaemonClientSettings struct {
+	// The longest hello answer it reads: the daemon's own bound on a hello line, SidecarLocalSettings.HelloByteCount,
+	// which both ends share.
+	HelloByteCount int64
+	// The longest answer line it reads: 64 MiB, far past any result a control method answers, which the daemon bounds
+	// no tighter, so a broken daemon cannot make a client hold more.
+	AnswerByteCount int64
+}
+
+// The defaults, a fresh value each call, the hello's bound read from the daemon's own settings so it has one default.
+func DefaultDaemonClientSettings() *DaemonClientSettings {
+	return &DaemonClientSettings{
+		HelloByteCount:  DefaultSidecarSettings().LocalSettings.HelloByteCount,
+		AnswerByteCount: 64 * 1024 * 1024,
+	}
+}
 
 // A session with the local daemon.
 type DaemonClient struct {
-	conn   net.Conn
-	reader *bufio.Reader
-	nextId int64
+	settings *DaemonClientSettings
+	conn     net.Conn
+	reader   *bufio.Reader
+	nextId   int64
 }
 
-// Dials socketPath (DaemonSocketPath's for an instance), sends hello and reads the daemon's answer. A refusal is a
-// *DaemonHelloRefusal; a daemon that is not there is the dial's error.
+// Dials socketPath (DaemonSocketPath's for an instance), sends hello and reads the daemon's answer, on
+// DefaultDaemonClientSettings. A refusal is a *DaemonHelloRefusal; a daemon that is not there is the dial's error.
 func DialDaemon(ctx context.Context, socketPath string, hello *DaemonHello) (*DaemonClient, error) {
+	return DialDaemonWithSettings(ctx, socketPath, hello, DefaultDaemonClientSettings())
+}
+
+// DialDaemon on settings.
+func DialDaemonWithSettings(ctx context.Context, socketPath string, hello *DaemonHello, settings *DaemonClientSettings) (*DaemonClient, error) {
 	conn, err := dialDaemon(ctx, socketPath)
 	if err != nil {
 		return nil, err
 	}
-	client, err := startDaemonClient(conn, hello)
+	client, err := startDaemonClient(conn, hello, settings)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -106,7 +126,7 @@ func DialDaemon(ctx context.Context, socketPath string, hello *DaemonHello) (*Da
 }
 
 // Sends hello on conn and reads the answer.
-func startDaemonClient(conn net.Conn, hello *DaemonHello) (*DaemonClient, error) {
+func startDaemonClient(conn net.Conn, hello *DaemonHello, settings *DaemonClientSettings) (*DaemonClient, error) {
 	encoded, err := encodeDaemonHello(hello)
 	if err != nil {
 		return nil, err
@@ -115,7 +135,7 @@ func startDaemonClient(conn net.Conn, hello *DaemonHello) (*DaemonClient, error)
 		return nil, err
 	}
 	reader := bufio.NewReader(conn)
-	line, err := readDaemonLine(reader, daemonHelloMaxByteCount)
+	line, err := readDaemonLine(reader, settings.HelloByteCount)
 	if err != nil {
 		return nil, fmt.Errorf("daemon hello: %w", err)
 	}
@@ -126,7 +146,7 @@ func startDaemonClient(conn net.Conn, hello *DaemonHello) (*DaemonClient, error)
 	if answer.Error != "" {
 		return nil, &DaemonHelloRefusal{Code: answer.Error, Version: answer.Version}
 	}
-	return &DaemonClient{conn: conn, reader: reader}, nil
+	return &DaemonClient{settings: settings, conn: conn, reader: reader}, nil
 }
 
 // Calls method with params, JSON-encoded, and decodes the result into result when it is not nil. confirmed says the
@@ -154,7 +174,7 @@ func (self *DaemonClient) Call(ctx context.Context, method string, params any, c
 	if _, err := self.conn.Write(append(encoded, '\n')); err != nil {
 		return err
 	}
-	line, err := readDaemonLine(self.reader, daemonClientMaxLineByteCount)
+	line, err := readDaemonLine(self.reader, self.settings.AnswerByteCount)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -176,11 +196,22 @@ func (self *DaemonClient) Call(ctx context.Context, method string, params any, c
 	return nil
 }
 
-// The session's stream after the hello, for a relay of an mcp or git session: reads continue past what the hello's
-// answer left buffered.
-func (self *DaemonClient) Stream() io.ReadWriter {
+// The session's stream after the hello, for a relay of an mcp, git or socket session: reads continue past what the
+// hello's answer left buffered. Its CloseWrite ends this side's half (DaemonSessionStream).
+func (self *DaemonClient) Stream() DaemonSessionStream {
 	return &daemonSessionStream{reader: self.reader, conn: self.conn}
 }
+
+// A session's stream past its hello, with the half-close a socket session's relay needs: CloseWrite ends what this
+// side sends while it reads on, where the connection has halves (a Unix socket); elsewhere it answers
+// ErrDaemonNoHalfClose and the relay ends the session whole.
+type DaemonSessionStream interface {
+	io.ReadWriter
+	CloseWrite() error
+}
+
+// The connection has no halves to close one of: a Windows pipe.
+var ErrDaemonNoHalfClose = errors.New("the daemon session cannot close one half")
 
 // Ends the session.
 func (self *DaemonClient) Close() error {
@@ -201,6 +232,20 @@ func (self *daemonSessionStream) Read(p []byte) (int, error) {
 // Writes to the session's connection.
 func (self *daemonSessionStream) Write(p []byte) (int, error) {
 	return self.conn.Write(p)
+}
+
+// Ends the session's connection, both ways.
+func (self *daemonSessionStream) Close() error {
+	return self.conn.Close()
+}
+
+// Ends what this side writes, reads going on, where the connection has halves.
+func (self *daemonSessionStream) CloseWrite() error {
+	halves, ok := self.conn.(interface{ CloseWrite() error })
+	if !ok {
+		return ErrDaemonNoHalfClose
+	}
+	return halves.CloseWrite()
 }
 
 // A line past its bound: the session closes, since what follows cannot be framed.

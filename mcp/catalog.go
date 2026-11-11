@@ -193,7 +193,6 @@ var mcpCatalogDesign = []mcpCatalogDesignTool{
 var mcpCatalogUnbuilt = []string{
 	"evs_repos", "evs_list", "evs_history", "evs_read", "evs_drop_preview", "evs_write", "evs_delete",
 	"mail_list", "mail_read", "mail_send", "mail_aliases", "mail_alias_create", "mail_alias_delete",
-	"socket_list", "socket_status", "socket_listen", "socket_unlisten",
 	"tls_publish", "tls_unpublish",
 	"bridge_list", "bridge_forward", "bridge_expose", "bridge_close",
 	"dns_records", "dns_set", "dns_delete",

@@ -15,7 +15,8 @@
 // checks the ticket's claim, a §6 Signed of purpose socket-registration, under the identity key that Hello verified,
 // so a claim the listener's sidecar did not sign is never opened, and that the claim names the dialed network and
 // name, the ticket's listen and, when the Dial asks one, the protocol. The listener's sidecar must then hold a listen
-// grant on the name in this device's own evaluation of its config. The ticket's own signature is the listener's to
+// grant on the name in this device's own evaluation of its config. `ur share get` dials a share/ name holding the
+// link's sidecar_id (dialShare), and a listener whose verified Hello names another sidecar is refused here (§9.9). The ticket's own signature is the listener's to
 // check (admission step 1); the dialer reads its fields only to know whom to open to, and a forged one fails the claim
 // check against the client it names. Any failure here is the ticket's, reported as refused.
 //
@@ -120,6 +121,8 @@ type socketDialer struct {
 	find          *socketFindClient
 	opener        socketStreamOpener
 	policy        SocketPolicy
+	// ur share get's: the sidecar whose listener alone this Dial opens to, nil for any (§9.9)
+	listenerSidecarId *Id
 }
 
 // How one ticket ended.
@@ -304,6 +307,10 @@ func (self *socketDialer) attempt(ctx context.Context, target *socketDialTarget,
 		if timedOut() {
 			return &socketAttempt{kind: socketAttemptTimeout}
 		}
+		return &socketAttempt{kind: socketAttemptRefused}
+	}
+	// a share's getter opens only to the sharer the link names, whose Hello verified (§9.9)
+	if self.listenerSidecarId != nil && identity.SidecarId != *self.listenerSidecarId {
 		return &socketAttempt{kind: socketAttemptRefused}
 	}
 	if err := checkSocketClaim(findTicket.Claim, identity, target, ticket, settings.Protocol); err != nil {
@@ -516,6 +523,17 @@ func (self *SocketComponent) dial(ctx context.Context, address *SocketAddress, s
 		return nil, err
 	}
 	return dialer.dial(ctx, address, settings, allowShare)
+}
+
+// `ur share get`'s Dial (SOCK-M5-15): share/ let through, and a listener whose verified sidecar_id is not
+// listenerSidecarId, the link's, refused before OPEN as a failed ticket (§9.9).
+func (self *SocketComponent) dialShare(ctx context.Context, address *SocketAddress, listenerSidecarId Id) (*SocketConn, error) {
+	dialer, err := self.dialer()
+	if err != nil {
+		return nil, err
+	}
+	dialer.listenerSidecarId = &listenerSidecarId
+	return dialer.dial(ctx, address, nil, true)
 }
 
 // §9.9's Dial: a stream to one listener of address in this sidecar's network (§9.6). Errors are *net.OpError with Net

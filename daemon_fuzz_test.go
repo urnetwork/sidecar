@@ -16,10 +16,12 @@ func FuzzDaemonHello(f *testing.F) {
 	f.Add([]byte(`{"ur_local":1,"mode":"control","version":"synthetic-version"}`))
 	f.Add([]byte(`{"ur_local":1,"mode":"git","version":"synthetic-version","repo":"k7q2m9/repo","service":"git-upload-pack"}`))
 	f.Add([]byte(`{"ur_local":1,"mode":"mcp","version":"synthetic-version","cwd":"synthetic-canary-cwd"}`))
+	f.Add([]byte(`{"ur_local":1,"mode":"socket","version":"synthetic-version","socket":"k7q2m9:db/primary"}`))
 	f.Add([]byte(`{"ur_local":1}`))
 	f.Add([]byte(``))
+	helloByteCount := DefaultSidecarSettings().LocalSettings.HelloByteCount
 	f.Fuzz(func(t *testing.T, line []byte) {
-		hello, code, err := parseDaemonHello(line, "synthetic-version")
+		hello, code, err := parseDaemonHello(line, "synthetic-version", helloByteCount)
 		if err != nil {
 			if hello != nil || code == "" {
 				t.Fatal("a refusal with a hello or without a code")
@@ -33,7 +35,7 @@ func FuzzDaemonHello(f *testing.F) {
 			return
 		}
 		switch hello.Mode {
-		case DaemonModeMcp, DaemonModeControl, DaemonModeHook, DaemonModeGit:
+		case DaemonModeMcp, DaemonModeControl, DaemonModeHook, DaemonModeGit, DaemonModeGitHook, DaemonModeSocket:
 		default:
 			t.Fatalf("accepted mode %q", hello.Mode)
 		}
