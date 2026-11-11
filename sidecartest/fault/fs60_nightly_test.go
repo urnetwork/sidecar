@@ -4,15 +4,26 @@ package fault
 // fs60_test.go. A small repo no push brings back to evacuation has its parcels packed by the pass as they near 7 d,
 // the replacement killed between the pack's entries and the parcel's delete and finished by the next night, a
 // reader finding every record at each step and taking the pack's entry over the parcel's; and the pass's count is
-// the LIST sizes plus the batch-resident record lengths, less the containers it deleted. T3's run on the real store
-// is EVSB-M2-17's suite.
+// the LIST sizes plus the batch-resident record lengths, less the containers it deleted, which with shards the
+// closing job writes once every shard has reported (EVSB-M2-26; owner decision 198). T3's run on the real store is
+// EVSB-M2-17's suite.
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"fmt"
+	"maps"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/evsservice"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -108,5 +119,148 @@ func TestFs60NightlyCountIsListSizesPlusBatchRecords(t *testing.T) {
 	}
 	if stored.BatchRecordByteCount != int64(second.place.GetLength()) || first.place.GetLength() == 0 {
 		t.Fatalf("batch-resident %d", stored.BatchRecordByteCount)
+	}
+}
+
+// T2's count store for the closing job: each network's count, as network_quota_state holds it. Safe for concurrent
+// use.
+type fs60Counts struct {
+	stateLock sync.Mutex
+	counts    map[sidecar.Id]int64
+}
+
+func (self *fs60Counts) SetStoredByteCount(ctx context.Context, networkId sidecar.Id, storedByteCount int64) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.counts[networkId] = storedByteCount
+	return nil
+}
+
+func (self *fs60Counts) NetworkIdsWithStoredByteCount(ctx context.Context, after *sidecar.Id, limit int) ([]sidecar.Id, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	networkIds := []sidecar.Id{}
+	for _, networkId := range slices.SortedFunc(maps.Keys(self.counts), func(a sidecar.Id, b sidecar.Id) int { return bytes.Compare(a[:], b[:]) }) {
+		if self.counts[networkId] <= 0 || (after != nil && bytes.Compare(networkId[:], after[:]) <= 0) {
+			continue
+		}
+		if len(networkIds) == limit {
+			break
+		}
+		networkIds = append(networkIds, networkId)
+	}
+	return networkIds, nil
+}
+
+func (self *fs60Counts) count(networkId sidecar.Id) (int64, bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	count, ok := self.counts[networkId]
+	return count, ok
+}
+
+// Another repo of the world's network on meta-1, in another shard of 16 than the world's repo, holding one segment.
+func (self *evacuationWorld) putOtherRepo() sidecar.Id {
+	self.t.Helper()
+	shard := sidecar.EvsKeyId(self.repoId)[:1]
+	var repoId sidecar.Id
+	for index := 0; ; index += 1 {
+		repoId = evacuationId(fmt.Sprintf("other repo %d", index))
+		if sidecar.EvsKeyId(repoId)[:1] != shard {
+			break
+		}
+	}
+	placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: "meta-1", CreatorSidecarId: self.signerId}).Marshal()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if _, err := self.cluster.PutIfNoneMatch(self.ctx, sidecar.EvsPlaceKey(repoId), placeBytes, nil); err != nil {
+		self.t.Fatal(err)
+	}
+	repoBytes, err := proto.Marshal(&protocol.EvsRepoObject{
+		RepoId: repoId.Bytes(), Kind: self.repoKind, State: protocol.EvsRepoState_EVS_REPO_ACTIVE, Format: 1, NetworkId: self.networkId.Bytes(),
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if _, err := self.cluster.PutIfNoneMatch(self.ctx, evsservice.RepoKey(repoId), repoBytes, nil); err != nil {
+		self.t.Fatal(err)
+	}
+	segmentCluster, err := self.host.Blobs.SegmentCluster()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	body := []byte("the other repo's one segment")
+	if _, err := segmentCluster.PutIfNoneMatch(self.ctx, evsservice.SegmentKey(repoId, sha256.Sum256(body)), body, nil); err != nil {
+		self.t.Fatal(err)
+	}
+	return repoId
+}
+
+// FS-60's nightly count with shards (FI-13 (c); owner decision 198): the pass run as its jobs, sixteen shards of the
+// one metadata cluster, the network's two repos in two of them. No shard's run writes the count; the closing job,
+// once every shard has reported, writes it once, the LIST sizes of seg/, pack/ and hp/ over both repos plus the
+// batch-resident record's length.
+func TestFs60NightlyCountCombinesTheShards(t *testing.T) {
+	world := newEvacuationWorld(t)
+	world.commit()
+	world.age()
+	world.mustRun()
+	second := world.commit()
+	world.putOtherRepo()
+
+	settings := evsservice.DefaultNightlyPassSettings()
+	settings.ShardHexDigitCount = 1
+	counts := &fs60Counts{counts: map[sidecar.Id]int64{}}
+	host := world.host.ServiceHost()
+	passDeps := &evsservice.NightlyPassDeps{
+		Settings:           settings,
+		Evacuator:          world.settings,
+		SegmentClusterBusy: func(ctx context.Context, clusterId string) bool { return false },
+	}
+	world.host.Tasks.Register(evsservice.EvsNightlyTaskName, func(ctx context.Context, args []byte) error {
+		_, err := evsservice.RunNightlyPass(ctx, host, passDeps, args)
+		return err
+	})
+	world.host.Tasks.Register(evsservice.EvsNightlyCloseTaskName, func(ctx context.Context, args []byte) error {
+		_, err := evsservice.RunNightlyClose(ctx, host, &evsservice.NightlyCloseDeps{Counts: counts, Settings: settings}, args)
+		return err
+	})
+	if err := world.host.Tasks.Schedule(world.ctx, evsservice.EvsNightlyStartTaskRequest(world.clock.Now())); err != nil {
+		t.Fatal(err)
+	}
+	// the start, then each shard's run
+	ran, err := world.host.Tasks.RunDue(world.ctx)
+	if err != nil || ran != 1+16 {
+		t.Fatalf("ran %d: %v", ran, err)
+	}
+	if _, written := counts.count(world.networkId); written {
+		t.Fatal("a shard's run wrote the count")
+	}
+	world.clock.Advance(settings.NightlyCloseRetryInterval)
+	if ran, err := world.host.Tasks.RunDue(world.ctx); err != nil || ran != 1 {
+		t.Fatalf("the closing job: ran %d: %v", ran, err)
+	}
+
+	listed := int64(0)
+	for _, family := range []struct{ clusterId, prefix string }{{"seg-1", "seg/"}, {"seg-1", "pack/"}, {"meta-1", "hp/"}} {
+		cluster, err := world.host.Blobs.Cluster(family.clusterId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range world.keys(family.clusterId, family.prefix) {
+			info, err := cluster.Head(sidecartest.InspectContext(world.ctx), key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed += info.ByteCount
+		}
+	}
+	want := listed + int64(second.place.GetLength())
+	if count, written := counts.count(world.networkId); !written || count != want {
+		t.Fatalf("count %d (written %t), want %d: listed %d and the batch-resident record's %d", count, written, want, listed, second.place.GetLength())
+	}
+	if world.host.Tasks.RunCount(evsservice.EvsNightlyCloseTaskName) != 1 {
+		t.Fatalf("closing runs %d", world.host.Tasks.RunCount(evsservice.EvsNightlyCloseTaskName))
 	}
 }

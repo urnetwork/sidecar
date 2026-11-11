@@ -24,6 +24,12 @@ const (
 	evsBudgetLeaseReleaseScriptName = "evs_budget_lease_release"
 )
 
+// The nightly count's scripts' Names (evsservice/nightly_sums.go).
+const (
+	evsNightlySumsWriteScriptName   = "evs_nightly_sums_write"
+	evsNightlySumsMissingScriptName = "evs_nightly_sums_missing"
+)
+
 // Registers every evs twin on redis. Call it once per fake.
 func RegisterEvsTwins(redis *FakeRedis) {
 	redis.RegisterScript(evsHeadCachePutScriptName, evsHeadCachePutTwin)
@@ -33,6 +39,42 @@ func RegisterEvsTwins(redis *FakeRedis) {
 	redis.RegisterScript(evsLeasePutScriptName, evsLeasePutTwin)
 	redis.RegisterScript(evsLeaseDeleteScriptName, evsLeaseDeleteTwin)
 	redis.RegisterScript(evsLeaseSweepScriptName, evsLeaseSweepTwin)
+	redis.RegisterScript(evsNightlySumsWriteScriptName, evsNightlySumsWriteTwin)
+	redis.RegisterScript(evsNightlySumsMissingScriptName, evsNightlySumsMissingTwin)
+}
+
+// One field of a night written whole, and the night's key given its ttl while it has none (PEXPIRE NX). KEYS[1]
+// {evsn_<night>}; ARGV the field, its value, the ttl in ms. 1.
+func evsNightlySumsWriteTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
+	key := call.Keys[0]
+	field, value, ttlText := call.Args[0], call.Args[1], call.Args[2]
+	if err := call.HashSet(key, map[string][]byte{field: []byte(value)}); err != nil {
+		return nil, err
+	}
+	ttlMs, err := strconv.ParseInt(ttlText, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := call.ExpireIfNone(key, time.Duration(ttlMs)*time.Millisecond); err != nil {
+		return nil, err
+	}
+	return RedisIntegerReply(1), nil
+}
+
+// The fields of ARGV the night's key lacks, in ARGV's order, as HEXISTS finds them. KEYS[1] {evsn_<night>}.
+func evsNightlySumsMissingTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
+	key := call.Keys[0]
+	missing := []*sidecar.RedisReply{}
+	for _, field := range call.Args {
+		_, found, err := call.HashGet(key, field)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			missing = append(missing, RedisBulkReply([]byte(field)))
+		}
+	}
+	return RedisArrayReply(missing...), nil
 }
 
 // A lease field taken or renewed: set to the holder while absent or already the holder's, with its own ttl.
