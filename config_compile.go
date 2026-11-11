@@ -5,7 +5,9 @@
 //
 // §7's rows, members, sidecars, Delegations and registered keys, with the proposals open there and the replay ring, are
 // what the log gives at the head's folded_through, L(ft), so the caller passes them: a writer from its state at its fold
-// or the previous base's rows, a reader from its own log alike (ConfigCompileRows; DESIGN-DETAILS 5.2.2). The settings
+// or the previous base's rows, a reader from its own log alike (ConfigCompileRows; DESIGN-DETAILS 5.2.2), each less the
+// superseded or ended forwarding Delegations' rows that leave at this base, which needs the base's retention point and
+// so is the fold rows' to drop (config_base.go's foldRows, QD-648). The settings
 // are the head's: its ServiceSettings' self_admit and scim_signer, always present, the zero value for none. The acl
 // part is §8's, from the head's policy, tags, groups and files beside the log's acl statements, and ACL's CompileAcl
 // gives it (ACL-M2-04). C-05 has this task declare the seam and ACL register the compile: until one is registered,
