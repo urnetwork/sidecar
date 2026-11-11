@@ -89,6 +89,9 @@ type SidecarProtocolSettings struct {
 	// Peers a round checks: 4: up to 2 of other members, the rest own devices and agents (§6.4; owner
 	// decision 129).
 	HeadCheckRoundPeerCount int
+	// Of a round's picks, the most that are other members' devices or agents: 2 (§6.4's round row), the rest this
+	// member's own. A protocol value, read from here (QD-702).
+	HeadCheckRoundOtherMemberCount int
 	// How long a scheduled HeadCheck call waits: 10 s; silent own app hosts get a wake (M8).
 	HeadCheckTimeout time.Duration
 	// How long api gets to serve a peer's newer entries, before asking the peer for a HeadCheckProof:
@@ -104,6 +107,12 @@ type SidecarProtocolSettings struct {
 	// How often a client resyncs its topics, so correctness never rests on a hint's delivery: 1 h
 	// (§6.8).
 	SyncRefetchInterval time.Duration
+	// §6.5's StreamOpen budget, protocol values both ends hold alike (QD-702): a target's most bytes, 128; its
+	// metadata's, 1,024; its ticket's, 512; and the whole message's, 3,800, so it fits one envelope.
+	StreamTargetMaxByteCount   int
+	StreamMetadataMaxByteCount int
+	StreamTicketMaxByteCount   int
+	StreamOpenMaxByteCount     int
 	// Whether this sidecar asks for P2P to a same-network sidecar peer whose Hello verified (D-PROTO-10;
 	// QD-045, QD-583): false, so every pair stays relay-only until the owner's call on FS-126 and its
 	// measurement. On, a send to such a peer rides connect's stream lane, which a P2P route may carry, and a
@@ -144,11 +153,16 @@ func DefaultSidecarProtocolSettings() *SidecarProtocolSettings {
 		PeerSilenceTimeout:               45 * time.Second,
 		HeadCheckInterval:                1 * time.Hour,
 		HeadCheckRoundPeerCount:          4,
+		HeadCheckRoundOtherMemberCount:   2,
 		HeadCheckTimeout:                 10 * time.Second,
 		HeadCheckFetchTimeout:            10 * time.Minute,
 		HeadCheckUnwitnessedInterval:     10 * time.Minute,
 		WakeInterval:                     1 * time.Hour,
 		SyncRefetchInterval:              1 * time.Hour,
+		StreamTargetMaxByteCount:         128,
+		StreamMetadataMaxByteCount:       1024,
+		StreamTicketMaxByteCount:         512,
+		StreamOpenMaxByteCount:           3800,
 		EnablePeerP2p:                    false,
 	}
 }

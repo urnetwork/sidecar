@@ -32,6 +32,9 @@ type NetSettings struct {
 	LinkSeed int64
 	// How long, in real time, NetClient.Send and the exchange give a connect client to take a frame.
 	SendTimeout time.Duration
+	// How long, in real time, AddSubprotocolSidecars waits for each sidecar's dispatcher to attach: 30 s, only a
+	// failure's bound.
+	SubprotocolAttachTimeout time.Duration
 	// Builds the host engines run on, once the clock, fault queue, barriers and fakes exist: nil keeps
 	// the fakes' (T2). Server's T3 (sidecart3) gives one on its real stores, wrapped so the Net's fault
 	// plans reach them, with what closes it at the Net's end, after the engines close. An error panics
@@ -63,11 +66,12 @@ type PostgresReader interface {
 
 func DefaultNetSettings() *NetSettings {
 	return &NetSettings{
-		ClockStart:  DefaultClockStart(),
-		Barriers:    DefaultBarrierDriverSettings(),
-		Host:        DefaultFakeHostSettings(),
-		LinkSeed:    1,
-		SendTimeout: 30 * time.Second,
+		ClockStart:               DefaultClockStart(),
+		Barriers:                 DefaultBarrierDriverSettings(),
+		Host:                     DefaultFakeHostSettings(),
+		LinkSeed:                 1,
+		SendTimeout:              30 * time.Second,
+		SubprotocolAttachTimeout: 30 * time.Second,
 	}
 }
 

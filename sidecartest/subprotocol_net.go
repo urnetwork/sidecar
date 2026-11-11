@@ -17,7 +17,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/urnetwork/connect"
 	connectprotocol "github.com/urnetwork/connect/protocol"
@@ -25,9 +24,6 @@ import (
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
-
-// How long AddSubprotocolSidecars waits, in real time, for a sidecar's first dispatcher.
-const subprotocolAttachTimeout = 30 * time.Second
 
 // One sidecar on the Net with its dispatcher in reach.
 type SubprotocolSidecar struct {
@@ -124,7 +120,12 @@ func (self *Net) AddSubprotocolSidecarsWith(settings func() *sidecar.SidecarSett
 			return nil, nil, err
 		}
 	}
-	ctx, cancel := context.WithTimeout(self.ctx, subprotocolAttachTimeout)
+	attachTimeout := self.settings.SubprotocolAttachTimeout
+	if attachTimeout <= 0 {
+		// a NetSettings built before the field, as T3's are
+		attachTimeout = DefaultNetSettings().SubprotocolAttachTimeout
+	}
+	ctx, cancel := context.WithTimeout(self.ctx, attachTimeout)
 	defer cancel()
 	for _, subprotocolSidecar := range sidecars {
 		select {

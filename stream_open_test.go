@@ -249,9 +249,9 @@ func TestStreamOpenRefusedPastItsBudget(t *testing.T) {
 	testStreamAccepting(t, a, testStreamTarget)
 	for _, request := range []*StreamOpenRequest{
 		{Target: testStreamTarget, EarlyData: make([]byte, 16*1024+1)},
-		{Target: string(make([]byte, MaxStreamTargetByteCount+1))},
-		{Target: testStreamTarget, Metadata: make([]byte, MaxStreamMetadataByteCount+1)},
-		{Target: testStreamTarget, Ticket: make([]byte, MaxStreamTicketByteCount+1)},
+		{Target: string(make([]byte, DefaultSidecarProtocolSettings().StreamTargetMaxByteCount+1))},
+		{Target: testStreamTarget, Metadata: make([]byte, DefaultSidecarProtocolSettings().StreamMetadataMaxByteCount+1)},
+		{Target: testStreamTarget, Ticket: make([]byte, DefaultSidecarProtocolSettings().StreamTicketMaxByteCount+1)},
 	} {
 		if _, err := b.subprotocol.OpenStream(t.Context(), Id(a.clientId), request); err == nil {
 			t.Errorf("an open past its budget went: %d B early", len(request.EarlyData))
@@ -265,15 +265,15 @@ func TestStreamOpenRefusedPastItsBudget(t *testing.T) {
 	testStreamsSettled(t, b)
 	// every field at its most fits the 3,800 B budget and goes
 	full := &StreamOpenRequest{
-		Target:    string(bytes.Repeat([]byte{'t'}, MaxStreamTargetByteCount)),
-		Metadata:  make([]byte, MaxStreamMetadataByteCount),
-		Ticket:    make([]byte, MaxStreamTicketByteCount),
+		Target:    string(bytes.Repeat([]byte{'t'}, DefaultSidecarProtocolSettings().StreamTargetMaxByteCount)),
+		Metadata:  make([]byte, DefaultSidecarProtocolSettings().StreamMetadataMaxByteCount),
+		Ticket:    make([]byte, DefaultSidecarProtocolSettings().StreamTicketMaxByteCount),
 		EarlyData: make([]byte, MaxStreamEarlyDataByteCount),
 	}
 	incomings := testStreamAccepting(t, a, full.Target)
 	stream, accepted := testStreamOpen(t, b, a, incomings, full)
 	for _, envelope := range b.sent() {
-		if envelope.Type == uint32(protocol.MessageType_STREAM_OPEN) && (MaxStreamOpenByteCount < len(envelope.Body) || MaxEnvelopeByteCount < proto.Size(envelope)) {
+		if envelope.Type == uint32(protocol.MessageType_STREAM_OPEN) && (DefaultSidecarProtocolSettings().StreamOpenMaxByteCount < len(envelope.Body) || MaxEnvelopeByteCount < proto.Size(envelope)) {
 			t.Errorf("an open of %d B in an envelope of %d B", len(envelope.Body), proto.Size(envelope))
 		}
 	}

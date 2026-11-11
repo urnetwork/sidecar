@@ -29,14 +29,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// §6.5's StreamOpen budget: each field's most, and the message's.
-const (
-	MaxStreamTargetByteCount   = 128
-	MaxStreamMetadataByteCount = 1024
-	MaxStreamTicketByteCount   = 512
-	MaxStreamOpenByteCount     = 3800
-)
-
 // What OpenStream sends.
 type StreamOpenRequest struct {
 	// A <net>:<name> socket (§9) or a service target (§13, §15).
@@ -64,8 +56,8 @@ func (self *Subprotocol) OpenStream(ctx context.Context, clientId Id, request *S
 	if request == nil {
 		request = &StreamOpenRequest{}
 	}
-	if MaxStreamTargetByteCount < len(request.Target) || MaxStreamMetadataByteCount < len(request.Metadata) ||
-		MaxStreamTicketByteCount < len(request.Ticket) {
+	if self.settings.StreamTargetMaxByteCount < len(request.Target) || self.settings.StreamMetadataMaxByteCount < len(request.Metadata) ||
+		self.settings.StreamTicketMaxByteCount < len(request.Ticket) {
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "a stream open past §6.5's budget"}
 	}
 	peerId := connect.Id(clientId)
@@ -150,7 +142,7 @@ func (self *Subprotocol) OpenStream(ctx context.Context, clientId Id, request *S
 		return nil, err
 	}
 	body, err := proto.Marshal(open)
-	if err != nil || MaxStreamOpenByteCount < len(body) {
+	if err != nil || self.settings.StreamOpenMaxByteCount < len(body) {
 		stream.endLocal(protocol.StreamResetCode_RST_CANCELLED)
 		return nil, &SubprotocolError{Code: protocol.ErrorCode_ERR_INVALID_ARGUMENT, Message: "a stream open past §6.5's budget"}
 	}
