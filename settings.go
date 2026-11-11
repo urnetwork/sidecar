@@ -248,6 +248,23 @@ type SidecarSearchSettings struct {
 	RemoteRequesterRate SidecarRate
 	// How long an owner's indexer keeps 5.9's served records: 30 d (D-CORE-17).
 	ServedRecordTimeout time.Duration
+	// The most served records an owner's indexer keeps a network, the oldest going first: 8,192, a reading, since the
+	// design bounds them only by ServedRecordTimeout and RemoteRequesterRate, which would let one reader grow search.state
+	// past StateByteCount (state_search_state.go).
+	ServedRecordCount int
+	// How long the asker remembers which repos each indexer served, in search.state: 24 h (DESIGN-DETAILS 7.2.1's
+	// RemoteServedTimeout, §5.9's state row).
+	RemoteServedTimeout time.Duration
+	// The most search.state may hold: 4 MiB, a reading, above ServedRecordCount's records and a phone's served memory
+	// of a few thousand repos. A file past it reads as failed, and a change that would pass it is refused.
+	StateByteCount int64
+	// Hits a page when a request names none: 50 (§5.4's SearchRequest.PageSize, §11.14's confirm row).
+	PageHitCount int
+	// Whether this host runs remote search's requester side (§18.4): true on app hosts, false on daemon hosts, the
+	// default, whose remote-mode apps reach them and whose own searches stay local, and on page Workers, whose
+	// requesters are Later (§5.4). A host without it lists no indexers and refuses SetSearchRemote and
+	// AcknowledgeSearchIndexer (§18.7's control row), a reading: §5.4 sets no such field.
+	RemoteAsk bool
 }
 
 // Count per Interval, bursting to Burst. All three must be positive, as every number here is, so a
@@ -620,6 +637,10 @@ func DefaultSidecarSettings() *SidecarSettings {
 			RemoteCursorCount:      64,
 			RemoteRequesterRate:    SidecarRate{Count: 30, Burst: 10, Interval: 1 * time.Minute},
 			ServedRecordTimeout:    30 * 24 * time.Hour,
+			ServedRecordCount:      8192,
+			RemoteServedTimeout:    24 * time.Hour,
+			StateByteCount:         4 * 1024 * 1024,
+			PageHitCount:           50,
 		},
 		Directory: &SidecarDirectorySettings{
 			SessionSyncInterval:   15 * time.Minute,
