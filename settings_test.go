@@ -61,6 +61,8 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				// §16.6's retention row
 				ApprovalFileRetention: 30 * 24 * time.Hour,
 				RunFileRetention:      30 * 24 * time.Hour,
+				// I-7's matcher (record_secret_match.go)
+				SecretMatch: &SecretMatchSettings{CredentialMinByteCount: 16},
 			},
 		},
 		// §16.7
