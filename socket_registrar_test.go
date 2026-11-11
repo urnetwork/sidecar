@@ -959,8 +959,32 @@ func TestDefaultSocketSettingsMatchDesign(t *testing.T) {
 		ListenDrainTimeout:      30 * time.Second,
 		ListenPositionWait:      2 * time.Second,
 	}
-	if got := *DefaultSidecarSettings().Sockets; got != want {
+	got := *DefaultSidecarSettings().Sockets
+	forward, share := got.Forward, got.Share
+	got.Forward, got.Share = nil, nil
+	if got != want {
 		t.Errorf("%+v, want %+v", got, want)
+	}
+	// the daemon's forwards and ur share: §9.9's 24 h and owner decision 74's 30 days, and readings beside them
+	wantForward := SidecarSocketForwardSettings{
+		TargetDialTimeout:     2 * time.Second,
+		TargetProbeInterval:   2 * time.Second,
+		ListPageMaxCount:      1024,
+		SpliceBufferByteCount: 32 * 1024,
+	}
+	if forward == nil || *forward != wantForward {
+		t.Errorf("forward %+v, want %+v", forward, wantForward)
+	}
+	wantShare := SidecarShareSettings{
+		ExpiresDefault: 24 * time.Hour,
+		ExpiresMax:     30 * 24 * time.Hour,
+		HeaderTimeout:  10 * time.Second,
+		DoneTimeout:    30 * time.Second,
+		ChunkByteCount: 64 * 1024,
+		ResumeInterval: 30 * time.Second,
+	}
+	if share == nil || *share != wantShare {
+		t.Errorf("share %+v, want %+v", share, wantShare)
 	}
 	for _, c := range []struct {
 		name   string
@@ -974,6 +998,8 @@ func TestDefaultSocketSettingsMatchDesign(t *testing.T) {
 		{name: "DialBusyBackoff", adjust: func(settings *SidecarSocketSettings) { settings.DialBusyBackoff = 3 * time.Second }},
 		{name: "DialFindCount", adjust: func(settings *SidecarSocketSettings) { settings.DialFindCount = 0 }},
 		{name: "ListenDrainTimeout", adjust: func(settings *SidecarSocketSettings) { settings.ListenDrainTimeout = 0 }},
+		{name: "ExpiresDefault", adjust: func(settings *SidecarSocketSettings) { settings.Share.ExpiresDefault = 31 * 24 * time.Hour }},
+		{name: "Forward", adjust: func(settings *SidecarSocketSettings) { settings.Forward = nil }},
 	} {
 		settings := validSidecarSettings()
 		c.adjust(settings.Sockets)

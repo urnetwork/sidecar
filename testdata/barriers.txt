@@ -393,6 +393,8 @@ barrier socket.admission.replay.after socket_admission.go
 barrier socket.admission.replay.before socket_admission.go
 barrier socket.registrations.after socket_registrar.go
 barrier socket.registrations.before socket_registrar.go
+barrier socket.share.reserve.after socket_share.go
+barrier socket.share.reserve.before socket_share.go
 barrier sockets.find.pair.after socketsservice/find.go
 barrier sockets.find.pair.before socketsservice/find.go
 barrier sockets.find.pick.after socketsservice/find.go
@@ -509,6 +511,7 @@ secret recovery_code keys_recovery.go
 secret recovery_ed25519_seed keys_recovery.go
 secret recovery_xwing_seed keys_recovery.go
 secret service_token api_routes_core.go
+secret share_secret socket_share.go
 secret spool_private_key record_spool.go
 secret spool_private_key record_spool_locked.go
 secret spool_public_key record_spool.go
