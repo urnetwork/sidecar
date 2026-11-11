@@ -141,23 +141,3 @@ func (self *AclGateSnapshot) RepoDeletion(repoId Id) *AclRepoDeletion {
 	}
 	return deletion
 }
-
-// The entry the state's log keeps at position n, nil when its window holds none there or holds an entry of another
-// chain. The window is the log's immutable view, so this reads with no lock.
-func (self *ConfigState) keptEntryAt(n uint64) *configKeptEntry {
-	if self == nil || self.history == nil || n == 0 || self.n < n {
-		return nil
-	}
-	view := self.history.view.Load()
-	if view == nil || n < view.from || view.from+uint64(len(view.entries)) <= n {
-		return nil
-	}
-	kept := view.entries[n-view.from]
-	if kept == nil {
-		return nil
-	}
-	if chain, ok := self.chainAt(n); !ok || chain != kept.chain {
-		return nil
-	}
-	return kept
-}
