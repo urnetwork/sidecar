@@ -36,12 +36,14 @@ func TestBridgeRevocationPublishesBeforeCloseFlows(t *testing.T) {
 		t.Fatalf("before: %+v", registered)
 	}
 
+	// the revocation's own position, just past the state in force
+	n := test.bridge.Status().PinN + 1
 	site := sidecartest.BarrierSite("bridge_state.close.before", "")
 	if err := driver.Arm(site, "", 0); err != nil {
 		t.Fatal(err)
 	}
 	run := driver.Start(actors.Actor(t.Context(), "revoker"), func() error {
-		return test.bridge.Revoke(bridge.SignedType_SIGNED_SIDECAR_REVOKE, sidecartest.BridgeFixtureSidecarId(egressTestUntagged), 0)
+		return test.bridge.Revoke(bridge.SignedType_SIGNED_SIDECAR_REVOKE, sidecartest.BridgeFixtureSidecarId(egressTestUntagged), n)
 	})
 	if err := driver.AwaitHeld(t.Context(), site, ""); err != nil {
 		t.Fatal(err)

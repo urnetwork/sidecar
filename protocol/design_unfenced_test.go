@@ -409,11 +409,13 @@ enum BridgeWithdrawMode {
 
 // sidecar/protocol/bridge/bridge.proto
 // §17.8's opaque BridgeState.rules as BridgeRules and its rows, numbered as BRIDGE-M4-06 first wrote them
-// (plan-BRIDGE-small-readings #2). They never reach a server, so no §2.8 row.
+// (plan-BRIDGE-small-readings #2), and untagged as DESIGN-DETAILS 12.2.2 writes it (bridge-m4-09-other-client-rows).
+// They never reach a server, so no §2.8 row.
 message BridgeRules {
   BridgeIpv4Prefix block = 1; BridgeIpv4Prefix previous_block = 2; int64 previous_block_drain_until = 3;
   repeated fixed32 addresses = 4; repeated BridgeRuleEntry entries = 5; repeated BridgeRuleMap maps = 6;
   repeated BridgeRuleServed served = 7; repeated BridgeRuleSubject subjects = 8; BridgeRuleEgress egress = 9;
+  BridgeRuleSubject untagged = 10;
 }
 message BridgeRuleEntry {
   BridgeIpv4Prefix prefix = 1; BridgeRuleEntryKind kind = 2; repeated BridgeRuleLink links = 3;

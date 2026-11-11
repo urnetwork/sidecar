@@ -27,7 +27,7 @@ const (
 
 // Every kind of row, once or more: a block draining its predecessor, this host's addresses in both, the sender's
 // entries of each kind with HA links, one draining, maps of TCP and ICMP, a remapped subnet and an exit, an untagged
-// subject with dial, route and exit rows and a tagged one with two clients, and exits.
+// subject with dial, route and exit rows and a tagged one with two clients, exits, and autogroup:untagged's rows.
 func bridgeRulesTestFixture() *sidecartest.BridgeRulesFixture {
 	return &sidecartest.BridgeRulesFixture{
 		Block:                   "100.80.0.0/16",
@@ -68,6 +68,11 @@ func bridgeRulesTestFixture() *sidecartest.BridgeRulesFixture {
 			Mode:  bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS,
 			Exits: []sidecartest.BridgeRulesFixtureLink{{Target: 9, Route: 4}},
 		},
+		Untagged: &sidecartest.BridgeRulesFixtureUntagged{
+			Dial:  []sidecartest.BridgeRulesFixtureReach{{Ports: "tcp:22"}},
+			Route: []sidecartest.BridgeRulesFixtureReach{{Prefix: "198.51.100.0/25", Ports: "tcp:443", Grant: 2}},
+			Exit:  []sidecartest.BridgeRulesFixtureReach{{Ports: "*", Expires: bridgeRulesTestTimeMs + bridgeRulesTestHourMs}},
+		},
 	}
 }
 
@@ -91,6 +96,22 @@ func TestParseBridgeRulesTakesEveryKindOfRow(t *testing.T) {
 		len(rules.GetSubjects()) != 2 || len(rules.GetEgress().GetExits()) != 1 {
 		t.Fatalf("parsed %d entries, %d maps, %d served, %d subjects", len(rules.GetEntries()), len(rules.GetMaps()),
 			len(rules.GetServed()), len(rules.GetSubjects()))
+	}
+	untagged := rules.GetUntagged()
+	if len(untagged.GetDial()) != 1 || len(untagged.GetRoute()) != 1 || len(untagged.GetExit()) != 1 {
+		t.Fatalf("parsed untagged rows %v", untagged)
+	}
+	// without the field, rules hold no untagged rows
+	fixture.Untagged = nil
+	rules, err = device.ParseBridgeRules(fixture.Bytes(), nil)
+	if err != nil || rules.GetUntagged() != nil {
+		t.Fatalf("no field: %v, %v", rules.GetUntagged(), err)
+	}
+	// and with the field and no rows, an empty set
+	fixture.Untagged = &sidecartest.BridgeRulesFixtureUntagged{}
+	rules, err = device.ParseBridgeRules(fixture.Bytes(), nil)
+	if err != nil || rules.GetUntagged() == nil {
+		t.Fatalf("an empty field: %v, %v", rules.GetUntagged(), err)
 	}
 }
 
@@ -291,6 +312,20 @@ func TestParseBridgeRulesRefusesEachMalformedRow(t *testing.T) {
 		{"an exit twice", func(rules *bridge.BridgeRules) {
 			rules.Egress.Exits = append(rules.Egress.Exits, proto.Clone(rules.Egress.Exits[0]).(*bridge.BridgeRuleLink))
 		}},
+		{"untagged rows naming a sidecar", func(rules *bridge.BridgeRules) { rules.Untagged.SidecarId = sidecartest.BridgeFixtureSidecarId(9) }},
+		{"untagged rows naming a member", func(rules *bridge.BridgeRules) { rules.Untagged.MemberId = sidecartest.BridgeFixtureMemberId(9) }},
+		{"untagged rows naming a client", func(rules *bridge.BridgeRules) {
+			clientId := sidecartest.BridgeFixtureClientId(9)
+			rules.Untagged.ClientIds = [][]byte{clientId[:]}
+		}},
+		{"untagged rows tagged", func(rules *bridge.BridgeRules) { rules.Untagged.Tagged = true }},
+		{"an untagged route row with no prefix", func(rules *bridge.BridgeRules) { rules.Untagged.Route[0].Prefix = nil }},
+		{"an untagged dial row with a prefix", func(rules *bridge.BridgeRules) { rules.Untagged.Dial[0].Prefix = prefix(0xC6336400, 24) }},
+		{"ports on an untagged row of every protocol", func(rules *bridge.BridgeRules) {
+			rules.Untagged.Exit[0].Ports = rules.Untagged.Dial[0].Ports
+		}},
+		{"an untagged row's grant id short", func(rules *bridge.BridgeRules) { rules.Untagged.Route[0].GrantId = []byte{2} }},
+		{"an untagged row expiring before the epoch", func(rules *bridge.BridgeRules) { rules.Untagged.Exit[0].Expires = -1 }},
 	}
 	for _, c := range cases {
 		rules := bridgeRulesTestFixture().Rules()
@@ -363,6 +398,14 @@ func FuzzParseBridgeRules(f *testing.F) {
 	f.Add(protowire.AppendVarint(protowire.AppendTag(nil, 99, protowire.VarintType), 1))
 	small := &sidecartest.BridgeRulesFixture{Block: "10.20.0.0/16", Addresses: []string{"10.20.1.1"}}
 	f.Add(small.Bytes())
+	// autogroup:untagged's rows alone, and rows that name a sidecar, which are refused
+	untagged := &sidecartest.BridgeRulesFixture{Untagged: &sidecartest.BridgeRulesFixtureUntagged{
+		Exit: []sidecartest.BridgeRulesFixtureReach{{Ports: "tcp:443", Grant: 1}},
+	}}
+	f.Add(untagged.Bytes())
+	named := untagged.Rules()
+	named.Untagged.SidecarId = sidecartest.BridgeFixtureSidecarId(1)
+	f.Add(bridgeRulesTestBytes(f, named))
 	settings := device.DefaultBridgeSettings()
 	settings.RulesMaxByteCount = 64 * 1024
 	settings.RulesMaxFieldCount = 4 * 1024

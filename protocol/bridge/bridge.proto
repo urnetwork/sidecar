@@ -107,6 +107,10 @@ message BridgeRules {
   repeated BridgeRuleServed served = 7;    // the subnets and exit this host serves (rules 6 and 7)
   repeated BridgeRuleSubject subjects = 8; // who may reach this host and how (rules 1, 3, 4, 6 and 7)
   BridgeRuleEgress egress = 9;             // this device's own default route; unset keeps today's
+  BridgeRuleSubject untagged = 10;         // the rows autogroup:untagged holds at this host, with no sidecar_id,
+                                           //   member_id or client_ids: what an sdk provider before C16 gives a
+                                           //   sealed subject no row binds; unset, such a subject holds no rows
+                                           //   (bridge-m4-09-other-client-rows, DESIGN-DETAILS 12.2.2)
 }
 
 enum BridgeRuleEntryKind {
