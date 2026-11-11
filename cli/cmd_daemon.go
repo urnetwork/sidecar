@@ -81,6 +81,9 @@ type urStatusReply struct {
 	Networks []urNetworkStatus `json:"networks,omitempty"`
 	// The local services' listeners, those the LAN reaches marked (§22.5).
 	LocalListeners []sidecar.DaemonLocalListenerStatus `json:"local_listeners,omitempty"`
+	// The sockets and live shares the daemon holds, each keeping it up (§5.8, §9.9).
+	Sockets    int `json:"sockets,omitempty"`
+	LiveShares int `json:"live_shares,omitempty"`
 }
 
 // One hosted network in status: ids and its state, nothing secret.
@@ -391,6 +394,9 @@ func urDaemonCoreMethods(instance string, target urDaemonTarget, keyStoreKind os
 				if networks, ok := target.(urNetworksTarget); ok {
 					reply.Networks = networks.networkStatuses()
 					reply.LocalListeners = networks.localListeners()
+				}
+				if sockets, ok := target.(urSocketsTarget); ok {
+					reply.Sockets, reply.LiveShares = sockets.socketCounts()
 				}
 				if params.Stats {
 					stats := target.stats()

@@ -149,9 +149,9 @@ type DaemonShareStatus struct {
 // share.list's reply.
 type DaemonShareListReply struct {
 	Shares []*DaemonShareStatus `json:"shares"`
-	// Records on a network that did not read, served to nobody until a person looks (D-CORE-15): ur share rm takes
+	// The tokens of records that did not read, served to nobody until a person looks (D-CORE-15): ur share rm takes
 	// one away.
-	FailedCount int `json:"failed_count,omitempty"`
+	FailedTokens []string `json:"failed_tokens,omitempty"`
 }
 
 // share.rm's params.
@@ -804,23 +804,28 @@ func (self *socketShares) remove(token string) (bool, error) {
 	return removed, nil
 }
 
-// Each live share's status, by token.
-func (self *socketShares) list() ([]*DaemonShareStatus, int) {
-	shares, failedCount := func() ([]*socketShare, int) {
+// Each live share's status, by token, and the tokens of records that did not read.
+func (self *socketShares) list() ([]*DaemonShareStatus, []string) {
+	shares, failedTokens := func() ([]*socketShare, []string) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		shares := make([]*socketShare, 0, len(self.tokenShares))
 		for _, share := range self.tokenShares {
 			shares = append(shares, share)
 		}
-		return shares, len(self.failedTokens)
+		failedTokens := make([]string, 0, len(self.failedTokens))
+		for token := range self.failedTokens {
+			failedTokens = append(failedTokens, token)
+		}
+		return shares, failedTokens
 	}()
 	statuses := make([]*DaemonShareStatus, 0, len(shares))
 	for _, share := range shares {
 		statuses = append(statuses, share.status())
 	}
 	slices.SortFunc(statuses, func(a *DaemonShareStatus, b *DaemonShareStatus) int { return strings.Compare(a.Token, b.Token) })
-	return statuses, failedCount
+	slices.Sort(failedTokens)
+	return statuses, failedTokens
 }
 
 // Listens exclusive on share/<token> once, taking gets on the listener. A listen already held or under way is left be.
@@ -866,7 +871,9 @@ func (self *socketShare) listenOnce(ctx context.Context) error {
 	return nil
 }
 
-// Listens when the share serves and has no listener, as a resume does. A failure waits for the next resume.
+// Listens when the share serves and has no listener, as a resume does, waiting at most ResumeInterval for the
+// service's first answer, so a registrar that cannot reach the service holds no resume past its round. A failure
+// waits for the next resume.
 func (self *socketShare) listen(ctx context.Context) {
 	idle := func() bool {
 		self.holdLock.Lock()
@@ -876,9 +883,14 @@ func (self *socketShare) listen(ctx context.Context) {
 		defer self.stateLock.Unlock()
 		return !ended && self.listener == nil
 	}()
-	if idle {
-		self.listenOnce(ctx)
+	if !idle {
+		return
 	}
+	listenCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := self.shares.clock.AfterFunc(self.shares.settings.ResumeInterval, cancel)
+	defer stop()
+	self.listenOnce(listenCtx)
 }
 
 // Takes each admitted conn until listener closes, then drops it so a resume listens again.
@@ -1193,10 +1205,11 @@ func (self *DaemonSockets) shareMethods() []*DaemonMethod {
 					if err != nil {
 						continue
 					}
-					shares.load()
-					statuses, failedCount := shares.list()
+					// records read now, listens left to the resume, so the call waits on no registration
+					shares.read()
+					statuses, failedTokens := shares.list()
 					reply.Shares = append(reply.Shares, statuses...)
-					reply.FailedCount += failedCount
+					reply.FailedTokens = append(reply.FailedTokens, failedTokens...)
 				}
 				return reply, nil
 			},
@@ -1213,7 +1226,7 @@ func (self *DaemonSockets) shareMethods() []*DaemonMethod {
 				if err != nil {
 					return nil, err
 				}
-				shares.load()
+				shares.read()
 				removed, err := shares.remove(params.Token)
 				if err != nil {
 					return nil, err

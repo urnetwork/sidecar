@@ -153,6 +153,9 @@ type urCli struct {
 	unitRunner func(cli *urCli) unitRunner
 	// <state> of an instance
 	stateDirectory func(instance string) (string, error)
+	// a socket session past its status line, the daemon's dial answered (cmd_socket.go): socketSession, unless a test
+	// stands a stream in
+	openSocketSession func(ctx context.Context, hello *sidecar.DaemonHello) (sidecar.DaemonSessionStream, func(), error)
 	// a process's environment, for UR_INSTANCE and HTTPS_PROXY
 	getenv func(name string) string
 	// the working directory and pid a hello names
@@ -162,7 +165,7 @@ type urCli struct {
 
 // This process's ur.
 func newUrCli() *urCli {
-	return &urCli{
+	cli := &urCli{
 		settings:        defaultUrSettings(),
 		stdin:           os.Stdin,
 		stdout:          os.Stdout,
@@ -185,6 +188,8 @@ func newUrCli() *urCli {
 		cwd:             os.Getwd,
 		pid:             os.Getpid(),
 	}
+	cli.openSocketSession = cli.socketSession
+	return cli
 }
 
 // The ur-cli login TEAM-M1-08 registers (urcli_login.go). Nil, `ur login` refuses (C-14).
