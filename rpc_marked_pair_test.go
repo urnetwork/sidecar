@@ -606,14 +606,14 @@ func TestHeadCheckRoundCountsTheIndexer(t *testing.T) {
 		peers[sidecarId] = HeadCheckPeer{Admitted: true}
 	}
 	for seed := uint64(1); seed <= 20; seed += 1 {
-		picks := headCheckRoundPicksWith(candidates, peers, Id{}, 4, testSeededRandom(seed), &indexerId)
+		picks := headCheckRoundPicksWith(candidates, peers, Id{}, 4, DefaultSidecarProtocolSettings().HeadCheckRoundOtherMemberCount, testSeededRandom(seed), &indexerId)
 		if len(picks) != 4 || picks[0] != indexerId {
 			t.Errorf("seed %d: picks %v", seed, picks)
 		}
 	}
 	// without it, the indexer shares no repo and loses to six that do
 	for seed := uint64(1); seed <= 20; seed += 1 {
-		if picks := headCheckRoundPicksWith(candidates, peers, Id{}, 4, testSeededRandom(seed), nil); slices.Contains(picks, indexerId) {
+		if picks := headCheckRoundPicksWith(candidates, peers, Id{}, 4, DefaultSidecarProtocolSettings().HeadCheckRoundOtherMemberCount, testSeededRandom(seed), nil); slices.Contains(picks, indexerId) {
 			t.Errorf("seed %d: the indexer picked in the background", seed)
 		}
 	}

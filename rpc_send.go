@@ -42,7 +42,7 @@ type subprotocolSendFunction func(destinationId connect.Id, envelope *protocol.E
 type subprotocolReply struct {
 	// the request's source
 	destinationId connect.Id
-	// the request's peer.TransferKey, which replyTransferKey turns into the reply's send option
+	// the request's peer.TransferKey, which replyLane turns into the reply's send option
 	transferKey connect.TransferKey
 	// ERROR, PONG or HELLO_RESULT
 	messageType protocol.MessageType
@@ -137,7 +137,7 @@ func (self *Subprotocol) sendReply(reply subprotocolReply) {
 		envelope.Flags |= EnvelopeFlagError
 		envelope.Body = body
 	}
-	if err := self.sendEnvelopeAcked(reply.destinationId, envelope, ignoreSubprotocolAck, 0, replyTransferKey(reply.transferKey)); err != nil {
+	if err := self.sendEnvelopeAcked(reply.destinationId, envelope, ignoreSubprotocolAck, 0, self.replyLane(reply.transferKey)); err != nil {
 		self.stats.replyFailedCount.Add(1)
 		if self.log.V(1).Enabled() {
 			self.log.Infof("[subprotocol]reply to %s = %s\n", reply.destinationId, err)
@@ -145,16 +145,6 @@ func (self *Subprotocol) sendReply(reply subprotocolReply) {
 		return
 	}
 	self.stats.replySentCount.Add(1)
-}
-
-// The send option a reply rides: the request's own lane and encryption session, as connect's reply
-// rule has it (connect/CODESTYLE.md, routing keys), on a contract that is no companion, since a
-// same-network reply rides the reach rules like any other send (plan-ACL-network-reply-contracts),
-// and that asks for no stream, since a sidecar never requests P2P (D-PROTO-10).
-func replyTransferKey(transferKey connect.TransferKey) connect.TransferKey {
-	transferKey.CompanionContract = false
-	transferKey.ForceStream = false
-	return transferKey
 }
 
 // The one place this layer hands connect an envelope: to destinationId, waiting at most timeout for
@@ -168,6 +158,10 @@ func (self *Subprotocol) sendEnvelope(destinationId connect.Id, envelope *protoc
 // success and returns on failure, so envelope and its body stay the caller's either way. A refusal
 // comes back as connect's error, or errSubprotocolSendRefused when connect gave none.
 func (self *Subprotocol) sendEnvelopeAcked(destinationId connect.Id, envelope *protocol.Envelope, ack connect.AckFunction, timeout time.Duration, opts ...any) error {
+	if len(opts) == 0 {
+		// an initiated send: the peer's lane (rpc_subprotocol.go's peerLaneOpts)
+		opts = self.peerLaneOpts(destinationId)
+	}
 	sent, err := self.send(destinationId, envelope, ack, timeout, opts...)
 	if err != nil {
 		return err

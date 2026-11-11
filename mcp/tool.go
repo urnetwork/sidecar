@@ -11,13 +11,15 @@
 //	guard    McpGuard on what the call would touch (spec.Targets)
 //	allow    §8's local allow for the session's subject, the sidecar every in-daemon agent shares (owner decision 6;
 //	         §5.5), on each McpAccess the call needs (spec.Access)
-//	rate     a W tool's call takes one of the session's W tokens (§16.4)
+//	cover    an O tool's covering grant, allowed by §8's local evaluation, runs the call as W (spec.Covering)
+//	rate     a W tool's call, or a covered O tool's, takes one of the session's W tokens (§16.4)
 //	handler  under a metered-bytes counter (McpMeter); any error it returns becomes an McpError, since go-sdk embeds a
 //	         returned error's text in the result
 //	tags     the result's trust and source, fenced text only from a tainted run (result.go)
 //	secret   a result holding a credential or a token form is refused, and so is an error whose text holds one (I-7)
 //	shape    past ResultByteCount, a link to the result's resource, by the session's version (D-MCP-13)
-//	sink     a W call's arguments, result and outcome to McpCallSink, a tool_call entry, source observed (MCP-M3-19)
+//	sink     a W call's arguments, result and outcome to McpCallSink, a tool_call entry, source observed (MCP-M3-19),
+//	         a covered O call's among them
 //
 // Tier hints: R sets readOnlyHint; O, and a W tool that may run an outward action (spec.MayAct), set openWorldHint;
 // every other tool sets openWorldHint false, since the protocol's default is true. A description is the spec's
@@ -82,6 +84,11 @@ type McpToolSpec[In any] struct {
 	// The grants the call needs from §8's local evaluation, every one allowed or the call is refused. Required: a tool
 	// that needs none returns none.
 	Access func(call *McpCall, in *In) ([]McpAccess, error)
+	// An O tool's covering grant (§16.5's "O, or W under a covering grant", socket_listen's): the grant that, allowed
+	// by §8's local evaluation for this sidecar, runs the call as W, its W token taken and the call recorded as a W
+	// call is, with no approval; the handler reads McpCoveringGrant to know. Nil, or a nil grant, leaves the call O.
+	// Only an O tool takes one.
+	Covering func(call *McpCall, in *In) (*McpAccess, error)
 }
 
 // A tool's handler: the decoded input, the call, and the result it tags; its output is the result's data.
@@ -96,6 +103,9 @@ func AddTool[In, Out any](catalog *McpCatalog, spec *McpToolSpec[In], handler Mc
 	}
 	if spec.Tier < McpTierRead || McpTierOutward < spec.Tier {
 		panic(fmt.Sprintf("mcp.AddTool %q: tier %d", spec.Name, spec.Tier))
+	}
+	if spec.Covering != nil && spec.Tier != McpTierOutward {
+		panic(fmt.Sprintf("mcp.AddTool %q: only an O tool takes a covering grant", spec.Name))
 	}
 	inSchema, err := jsonschema.For[In](nil)
 	if err != nil {
@@ -138,8 +148,8 @@ func AddTool[In, Out any](catalog *McpCatalog, spec *McpToolSpec[In], handler Mc
 		call := McpCallOf(ctx)
 		started := catalog.clock.Now()
 		arguments := mcpArgumentsOf(request)
-		result, resultBytes, err := mcpRunTool(ctx, catalog, spec, handler, inResolved, call, request, arguments)
-		if spec.Tier == McpTierWrite && call != nil && catalog.sink != nil {
+		result, resultBytes, covered, err := mcpRunTool(ctx, catalog, spec, handler, inResolved, call, request, arguments)
+		if (spec.Tier == McpTierWrite || covered) && call != nil && catalog.sink != nil {
 			catalog.sink.RecordMcpCall(ctx, call, spec.Name, arguments, resultBytes, started.UnixMilli(), catalog.clock.Now().UnixMilli(), err)
 		}
 		if err != nil {
@@ -176,7 +186,8 @@ func mcpArgumentsOf(request *gomcp.CallToolRequest) []byte {
 	return request.Params.Arguments
 }
 
-// One call through every step but the sink: the result to send and its structured bytes, or the refusal.
+// One call through every step but the sink: the result to send and its structured bytes, or the refusal, and
+// whether a covering grant ran an O call as W.
 func mcpRunTool[In, Out any](
 	ctx context.Context,
 	catalog *McpCatalog,
@@ -186,82 +197,121 @@ func mcpRunTool[In, Out any](
 	call *McpCall,
 	request *gomcp.CallToolRequest,
 	arguments []byte,
-) (*gomcp.CallToolResult, []byte, error) {
+) (*gomcp.CallToolResult, []byte, bool, error) {
 	if call == nil {
-		return nil, nil, errMcpNoCall
+		return nil, nil, false, errMcpNoCall
 	}
 	network, ok := mcpToolNetworkOf(call)
 	if !ok {
-		return nil, nil, errMcpNoToolNetwork
+		return nil, nil, false, errMcpNoToolNetwork
 	}
 	now := catalog.clock.Now()
 	// a call whose network has no policy installed is refused, whatever it would touch
 	if network.Identity() == nil || !network.PolicyInstalled() {
-		return nil, nil, errMcpNoPolicy
+		return nil, nil, false, errMcpNoPolicy
 	}
 
 	in, err := mcpDecodeInput[In](inResolved, arguments)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if spec.Targets != nil {
 		targets, err := spec.Targets(call, in)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		if refusal := McpGuard(targets); refusal != nil {
-			return nil, nil, refusal
+			return nil, nil, false, refusal
 		}
 	}
 	accesses, err := spec.Access(call, in)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	for _, access := range accesses {
 		check, installed := network.Allow(access.Action, access.Resource, now)
 		if !installed {
-			return nil, nil, errMcpNoPolicy
+			return nil, nil, false, errMcpNoPolicy
 		}
 		if !check.Allowed {
-			return nil, nil, errMcpNotAllowed
+			return nil, nil, false, errMcpNotAllowed
 		}
 	}
-	if spec.Tier == McpTierWrite {
+	covering := &mcpCovering{}
+	if spec.Covering != nil {
+		access, err := spec.Covering(call, in)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		if access != nil {
+			check, installed := network.Allow(access.Action, access.Resource, now)
+			if !installed {
+				return nil, nil, false, errMcpNoPolicy
+			}
+			covering.covered = check.Allowed
+			covering.grantId = check.GrantId
+		}
+	}
+	if spec.Tier == McpTierWrite || covering.covered {
 		if err := call.Session.AdmitWrite(); err != nil {
-			return nil, nil, err
+			return nil, nil, covering.covered, err
 		}
 	}
 
 	meter := &mcpMeter{}
 	result := newMcpResult(call)
-	out, err := handler(withMcpMeter(ctx, meter), call, in, result)
+	out, err := handler(withMcpCovering(withMcpMeter(ctx, meter), covering), call, in, result)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, covering.covered, err
 	}
 	data, err := json.Marshal(out)
 	if err != nil {
-		return nil, nil, errMcpFailed
+		return nil, nil, covering.covered, errMcpFailed
 	}
 	envelope, err := result.envelope(json.RawMessage(data), meter.byteCount.Load())
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, covering.covered, err
 	}
 	matcher, err := network.SecretMatcher()
 	if err != nil {
-		return nil, nil, errMcpMatcher
+		return nil, nil, covering.covered, errMcpMatcher
 	}
 	if matcher.Matches(data) || matcher.Matches([]byte(envelope.Source)) {
-		return nil, nil, errMcpResultSecret
+		return nil, nil, covering.covered, errMcpResultSecret
 	}
 	resource := result.resourceUri()
 	if matcher.Matches([]byte(resource)) {
-		return nil, nil, errMcpResultSecret
+		return nil, nil, covering.covered, errMcpResultSecret
 	}
 	shaped, shapedBytes, err := mcpShapeResult(envelope, mcpProtocolVersion(request), catalog.settings.ResultByteCount, resource)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, covering.covered, err
 	}
-	return shaped, shapedBytes, nil
+	return shaped, shapedBytes, covering.covered, nil
+}
+
+// Whether a covering grant ran an O call as W, and that grant's id.
+type mcpCovering struct {
+	covered bool
+	grantId []byte
+}
+
+// The context key of a call's covering grant.
+type mcpCoveringContextKey struct{}
+
+// ctx carrying covering.
+func withMcpCovering(ctx context.Context, covering *mcpCovering) context.Context {
+	return context.WithValue(ctx, mcpCoveringContextKey{}, covering)
+}
+
+// Whether the O call ctx runs runs as W under a covering grant (McpToolSpec.Covering), and the grant's id, which a
+// handler names in its result. False outside a covered call.
+func McpCoveringGrant(ctx context.Context) ([]byte, bool) {
+	covering, _ := ctx.Value(mcpCoveringContextKey{}).(*mcpCovering)
+	if covering == nil || !covering.covered {
+		return nil, false
+	}
+	return covering.grantId, true
 }
 
 // arguments decoded into In: valid against the input schema, which refuses a key it does not name, then decoded

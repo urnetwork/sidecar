@@ -203,7 +203,7 @@ type subprotocolDispatchFunction func(ctx context.Context, message *subprotocolM
 type subprotocolMessage struct {
 	// the authenticated source; ControlId for a push
 	sourceId connect.Id
-	// the source's peer.TransferKey, which a reply passes through replyTransferKey
+	// the source's peer.TransferKey, which a reply passes through replyLane
 	transferKey connect.TransferKey
 	// C15's key on the frame that completed the message, which Hello's check compares (PROTO-M1-04)
 	clientPublicKey    [ed25519.PublicKeySize]byte
@@ -291,8 +291,9 @@ func (self *Subprotocol) Stats() SidecarSubprotocolStats {
 // The settings a sidecar's connect client runs on, set here and nowhere else (D-PROTO-6, D-PROTO-10):
 // Required, never Opportunistic or Off, so a peer that cannot seal gets no application data (I-3); C15's
 // verified key exposed on every Peer, which Hello's identity check compares (D-PROTO-13); no P2P stream
-// asked for, so pairs stay relay-only until P2P is tested (FS-126); and 21842 the one id a Service-mode
-// source reaches it on (C9). CORE-M1-08's client
+// asked for by default, so pairs stay relay-only until P2P is tested (FS-126), the dispatcher asking for
+// one per peer only under SidecarProtocolSettings.EnablePeerP2p (peerLaneOpts); and 21842 the one id a
+// Service-mode source reaches it on (C9). CORE-M1-08's client
 // generations and the edges' platform clients call it on the settings they build a client from. A nil
 // EncryptionSettings gets connect's defaults first.
 func ApplySidecarClientSettings(clientSettings *connect.ClientSettings) {
@@ -305,6 +306,34 @@ func ApplySidecarClientSettings(clientSettings *connect.ClientSettings) {
 	// a Service-mode source reaches this client on id 21842 alone, and nothing else of it, IP included,
 	// gets in (C9; stream_edge.go); connect names no id, so the owner lists its own
 	clientSettings.ServiceSubprotocolIds = []connect.SubprotocolId{SubprotocolId}
+}
+
+// The send options an initiated send to destinationId rides (D-PROTO-10; FS-126): connect's stream lane, which a
+// P2P route may carry, while SidecarProtocolSettings.EnablePeerP2p is on, this is a sidecar's dispatcher and the peer
+// is a sidecar whose Hello verified, so a same-network admitted one; none otherwise, so the pair stays relay-only.
+// An edge says no Hello and never gets the lane, nor does the Hello a peer's identity waits on. A stream takes its
+// lane once, at its open (stream_open.go), so none of its frames reorders across lanes. Push is unaffected:
+// ControlId's frames are taken only over platform carriers (D-PROTO-8), whatever lane a peer rides.
+func (self *Subprotocol) peerLaneOpts(destinationId connect.Id) []any {
+	if !self.settings.EnablePeerP2p || self.role != SubprotocolRoleSidecar || destinationId == connect.ControlId {
+		return nil
+	}
+	if _, verified := self.PeerIdentity(Id(destinationId)); !verified {
+		return nil
+	}
+	return []any{connect.ForceStream()}
+}
+
+// The send option a reply rides: the request's own lane and encryption session, as connect's reply rule has it
+// (connect/CODESTYLE.md, routing keys), on a contract that is no companion, since a same-network reply rides the
+// reach rules like any other send (plan-ACL-network-reply-contracts). The stream lane stays only while
+// EnablePeerP2p is on: off, a sidecar asks for no stream (D-PROTO-10), so a forcing peer moves only its own sends.
+func (self *Subprotocol) replyLane(transferKey connect.TransferKey) connect.TransferKey {
+	transferKey.CompanionContract = false
+	if !self.settings.EnablePeerP2p {
+		transferKey.ForceStream = false
+	}
+	return transferKey
 }
 
 // What internal tests put in place of connect's side of the dispatcher: how a frame's C15 key is read,

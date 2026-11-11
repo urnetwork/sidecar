@@ -72,7 +72,7 @@ type streamListener struct {
 // Hands every open of target to accept from now on, until remove is called; opens already handed on are
 // answered as accept answers them. One function a target.
 func (self *Subprotocol) Listen(target string, accept StreamAcceptFunction) (remove func(), err error) {
-	if accept == nil || target == "" || MaxStreamTargetByteCount < len(target) {
+	if accept == nil || target == "" || self.settings.StreamTargetMaxByteCount < len(target) {
 		return nil, errStreamListenTarget
 	}
 	listener := &streamListener{target: target, accept: accept}
@@ -111,8 +111,8 @@ func (self *Subprotocol) receiveStreamOpen(
 		self.offerReply(streamRejectReply(sourceId, peer.TransferKey, envelope.StreamId, code))
 	}
 	open := &protocol.StreamOpen{}
-	if err := proto.Unmarshal(envelope.Body, open); err != nil || MaxStreamTargetByteCount < len(open.Target) ||
-		MaxStreamMetadataByteCount < len(open.Metadata) || MaxStreamTicketByteCount < len(open.Ticket) {
+	if err := proto.Unmarshal(envelope.Body, open); err != nil || self.settings.StreamTargetMaxByteCount < len(open.Target) ||
+		self.settings.StreamMetadataMaxByteCount < len(open.Metadata) || self.settings.StreamTicketMaxByteCount < len(open.Ticket) {
 		reject(protocol.StreamRejectCode_SR_INVALID)
 		return
 	}
@@ -127,7 +127,7 @@ func (self *Subprotocol) receiveStreamOpen(
 			return
 		}
 	}
-	opts := []any{replyTransferKey(peer.TransferKey)}
+	opts := []any{self.replyLane(peer.TransferKey)}
 
 	var stream *SubprotocolStream
 	var listener *streamListener

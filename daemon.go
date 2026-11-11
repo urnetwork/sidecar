@@ -3,8 +3,9 @@
 // The daemon's local IPC (§5.8, D-CORE-9): one ur daemon per instance, kept single by a flock on <state>/lock, serving
 // a Unix socket in a 0700 directory, or on Windows a named pipe whose DACL admits the user's SID alone, to callers of
 // its own uid (owner decision 84). Each session opens with §5.8's hello, then speaks JSON-RPC 2.0 for control and hook
-// (daemon_rpc.go), or hands its stream to the mode's DaemonModeHandler: mcp (§16's go-sdk, which cli/ injects, since
-// the root never imports mcp/) and git (§11.11). The mode selects a protocol, never a privilege.
+// (daemon_rpc.go), carries one §9 stream for socket (daemon_socket.go), or hands its stream to the mode's
+// DaemonModeHandler: mcp (§16's go-sdk, which cli/ injects, since the root never imports mcp/) and git (§11.11). The
+// mode selects a protocol, never a privilege.
 //
 // Nothing here writes to stdout, which the MCP relay owns: logs go to settings' Log. A line past the request bound
 // closes its session. An auto-spawned daemon exits once no session is open and none has made a request for
@@ -98,6 +99,8 @@ type Daemon struct {
 	localListeners map[*DaemonLocalListener]bool
 	// the Sidecar of each network hosted (daemon_networks.go)
 	networkIdSidecars map[Id]*Sidecar
+	// the sockets and shares the daemon holds (daemon_socket.go), made on first use
+	sockets *DaemonSockets
 }
 
 // Takes the instance's lock and listens on its socket or pipe. ErrDaemonRunning when another daemon holds the lock.
@@ -256,6 +259,14 @@ func (self *Daemon) shutdown() {
 	for _, conn := range conns {
 		conn.Close()
 	}
+	sockets := func() *DaemonSockets {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.sockets
+	}()
+	if sockets != nil {
+		sockets.close()
+	}
 	self.lock.Close()
 }
 
@@ -353,12 +364,12 @@ func (self *Daemon) serve(conn net.Conn) {
 		self.log.Warningf("[daemon]refused a session: %s", err)
 		return
 	}
-	reader := bufio.NewReaderSize(conn, 4096)
-	line, err := readDaemonLine(reader, daemonHelloMaxByteCount)
+	reader := bufio.NewReaderSize(conn, self.settings.Local.SessionBufferByteCount)
+	line, err := readDaemonLine(reader, self.settings.Local.HelloByteCount)
 	if err != nil {
 		return
 	}
-	hello, code, err := parseDaemonHello(line, self.settings.Version)
+	hello, code, err := parseDaemonHello(line, self.settings.Version, self.settings.Local.HelloByteCount)
 	if err == nil {
 		hello.PeerPid = int64(daemonPeerPid(conn))
 	}
@@ -370,6 +381,10 @@ func (self *Daemon) serve(conn net.Conn) {
 		if !ok {
 			answer.Error = DaemonHelloErrorMode
 		}
+	}
+	if err == nil && hello.Mode == DaemonModeSocket {
+		// the daemon's own, as control and hook are: its sockets live here
+		handler = self.Sockets().serveSession
 	}
 	encoded, _ := json.Marshal(answer)
 	if _, err := conn.Write(append(encoded, '\n')); err != nil || answer.Error != "" {

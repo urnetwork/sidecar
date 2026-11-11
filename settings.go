@@ -180,6 +180,13 @@ type SidecarLocalSettings struct {
 	// it, and a second instance on one host passes its own. Zero lets the OS choose each service's port, as a test
 	// does.
 	FirstPort int `settings:"zero"`
+	// The longest hello line either end reads, the daemon's hello and its answer (§5.8): 16 KiB, far past any real
+	// one, which a cwd of a few hundred bytes bounds, and far below RequestByteCount, so a hello cannot hold memory.
+	// DaemonClientSettings carries the same value for a client.
+	HelloByteCount int64
+	// The read buffer of one local session: 4 KiB, a hello's size and a request line's usual one; a longer line
+	// reads through it in pieces.
+	SessionBufferByteCount int
 }
 
 // §16.10's limits, 5.9's cache and §11.14's remote search. A daemon designated for search (§7.9)
@@ -516,6 +523,46 @@ type SidecarSocketSettings struct {
 	// retry (§9.6's step 6): 2 s, a reading, inside the dialer's 5 s accept timeout so the dialer still has time for
 	// its backup.
 	ListenPositionWait time.Duration
+	// The daemon's forwards: ur socket listen and ur socket dial (§9.9; daemon_socket.go).
+	Forward *SidecarSocketForwardSettings
+	// ur share (§9.9, D-SOCK-16; socket_share.go).
+	Share *SidecarShareSettings
+}
+
+// The daemon's socket forwards (§9.9; daemon_socket.go): a listen forward's local target, which sets serving, and the
+// listings `ur socket ls` reads. Every value is a reading: §9.9 names the behavior and no number.
+type SidecarSocketForwardSettings struct {
+	// How long one dial of a listen forward's local target may take before it counts as refusing: 2 s, a local
+	// connect, which answers at once or not at all.
+	TargetDialTimeout time.Duration
+	// How often a listen forward whose local target refused dials it again, to take tickets once it answers: 2 s, as
+	// often as §9.5's eager report may tell the service.
+	TargetProbeInterval time.Duration
+	// The most GET /socket/list pages one listing reads: 1,024 pages of the service's 1,024 names, each page one
+	// token of the caller's bucket, after which the listing says it stopped short.
+	ListPageMaxCount int
+	// The bytes one splice copies at a time in each direction: 32 KiB, io.Copy's own buffer.
+	SpliceBufferByteCount int
+}
+
+// ur share (§9.9, D-SOCK-16; socket_share.go): what a share may be asked for, and the sharer's waits on a getter.
+type SidecarShareSettings struct {
+	// --expires when a share names none: 24 h (§9.9).
+	ExpiresDefault time.Duration
+	// The longest --expires a share takes: 30 days, the longest ordinary grant (owner decision 74), so every share
+	// ends. Longer is refused.
+	ExpiresMax time.Duration
+	// How long a sharer waits for a getter's header once its stream is admitted: 10 s, a reading, so a stream that
+	// never speaks holds nothing.
+	HeaderTimeout time.Duration
+	// How long a sharer waits for a getter's done once the last byte is sent: 30 s, a reading, past a slow getter's
+	// whole-file SHA-256.
+	DoneTimeout time.Duration
+	// The bytes a sharer reads of the file and a getter hashes at a time: 64 KiB, a reading.
+	ChunkByteCount int
+	// How long the daemon waits before it tries again to load and serve a network's shares while its store is locked
+	// or its sockets cannot listen: 30 s, a reading, so a share comes back soon after an unlock or a reconnect.
+	ResumeInterval time.Duration
 }
 
 // The desktop daemon's registrar settings, the only source of their defaults.
@@ -537,6 +584,20 @@ func DefaultSidecarSocketSettings() *SidecarSocketSettings {
 		DialQuotaMaxWait:        30 * time.Second,
 		ListenDrainTimeout:      30 * time.Second,
 		ListenPositionWait:      2 * time.Second,
+		Forward: &SidecarSocketForwardSettings{
+			TargetDialTimeout:     2 * time.Second,
+			TargetProbeInterval:   2 * time.Second,
+			ListPageMaxCount:      1024,
+			SpliceBufferByteCount: 32 * 1024,
+		},
+		Share: &SidecarShareSettings{
+			ExpiresDefault: 24 * time.Hour,
+			ExpiresMax:     30 * 24 * time.Hour,
+			HeaderTimeout:  10 * time.Second,
+			DoneTimeout:    30 * time.Second,
+			ChunkByteCount: 64 * 1024,
+			ResumeInterval: 30 * time.Second,
+		},
 	}
 }
 
@@ -552,6 +613,8 @@ func (self *SidecarSocketSettings) validate() error {
 		return fmt.Errorf("%w: Sockets.RetryInterval is past RetryMaxInterval", errInvalidSettings)
 	case self.DialBusyBackoffMax < self.DialBusyBackoff:
 		return fmt.Errorf("%w: Sockets.DialBusyBackoff is past DialBusyBackoffMax", errInvalidSettings)
+	case self.Share != nil && self.Share.ExpiresMax < self.Share.ExpiresDefault:
+		return fmt.Errorf("%w: Sockets.Share.ExpiresDefault is past ExpiresMax", errInvalidSettings)
 	}
 	return nil
 }
@@ -583,10 +646,12 @@ func DefaultSidecarSettings() *SidecarSettings {
 			AutoLockTimeout:     10 * time.Minute,
 		},
 		LocalSettings: &SidecarLocalSettings{
-			IdleExitTimeout:  10 * time.Minute,
-			RequestByteCount: 4 * 1024 * 1024,
-			RequestTimeout:   30 * time.Second,
-			FirstPort:        17000,
+			IdleExitTimeout:        10 * time.Minute,
+			RequestByteCount:       4 * 1024 * 1024,
+			RequestTimeout:         30 * time.Second,
+			FirstPort:              17000,
+			HelloByteCount:         16 * 1024,
+			SessionBufferByteCount: 4 * 1024,
 		},
 		Mcp:    defaultSidecarMcpSettings(),
 		Ingest: defaultSidecarIngestSettings(),

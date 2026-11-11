@@ -313,6 +313,13 @@ rows:
       - {name: FuzzParseSocketAddress, package: ".", seeds: [testdata/fuzz/FuzzParseSocketAddress]}
       - {name: FuzzSocketTicket, package: ".", owner: SOCK-M5-01, milestone: M5}
 
+  - id: socket-share
+    spec: "SOCK-M5-15's Tests line: FuzzShareHeader, the fixed-width share header refusing malformed input without state change"
+    owner: SOCK-M5-15
+    milestone: M5
+    targets:
+      - {name: FuzzShareHeader, package: "."}
+
   - id: name-screen
     spec: "ABUSE-M5-01's Tests line: the name screen"
     owner: ABUSE-M5-01
