@@ -113,27 +113,46 @@ NoDriveLock            NoStaleQuorum        $small Quiet=deletes+heal+cancel
 EOF
 }
 
-# IndexRollup's twins run by seeded simulation over the whole story, where breadth-first search does
-# not reach their violations in time. MergeDropsBase and DiffOnHeadDiff need the journaler's
-# consecutive diffs and a backfilled copy between them, so they run with the roll-up and the erasure
-# held still. Its four design findings are not twins but constants: Supersede="index",
-# RollupFence="files", MergeCompose="newest" and KeepBase="all" are §11.14 as written, which TLC
-# refuses (questions search-m10-07-late-journal-tombstone, -rollup-merge-race, -merge-stale-diff and
-# -keep-base-full-copy), and the cfg runs their candidate rules.
+# IndexRollup's twins run breadth-first, each on the smallest ground that reaches what its rule
+# protects, one roller unless the rule is the lock's, and the processes its rule never reaches held
+# still. The erasure's run on d1's story. Section 1's (NoOwnCas, ReusePinned, CleanupReferenced,
+# MergeRemovesLarge, NoPromote, PromoteBlind, and IndexSupersede and LongLife for R5's pin and life)
+# run on the grounds DESIGN-DETAILS.md section 1.3 ran them on in details/IndexMerge.tla, with the
+# erasure held still, and NoPromoteLive on the ground its live promotion was reached on there.
+# CutVersion="read" is not a twin but a finding: a CUT listing what its eraser read
+# lets a CLOSURE take the base of a diff that landed before the CUT at a version it does not list, which
+# TLC refuses with ChainsResolve violated on DiffOnListed's ground (question
+# search-m10-46-erased-base-of-a-live-diff), and the cfg runs "commit".
 twins_IndexRollup() {
-  local sim="Simulate=140 Seed=1"
+  local one="Rollers={r1} MaxCrashes=0 MaxLapses=0 MaxRestarts=0 ForeignCuts=0 BigDocs={}"
+  local d1="$one Documents={\"d1\"} Skew=FALSE"
+  local d12="$one Documents={\"d1\",\"d2\"} Events=2 Skew=FALSE"
+  local d2="$one Documents={\"d2\"} Skew=FALSE"
+  local d3="$one Documents={\"d3\"} Events=2 Skew=TRUE Still={\"erase\"}"
+  local quiet='Still={"rollup","tick","backfill","merge"}'
   cat <<EOF
-NoEpochCheck           CutFences            $sim
-BuildIgnoresSet        CutFences            $sim
-MergeDropsTombstone    ResultsHold          $sim
-NoStep4                BucketsExact         $sim
-EraseLiveFirst         ResultsHold          $sim
-EarlyComplete          ErasedUnreadable     $sim
-ClosureNoCas           ResultsHold          $sim
-ReuseUnabsorbed        ResultsHold          $sim
-RollupForgetsHeads     ResultsHold          $sim
-MergeDropsBase         ChainsResolve        $sim Still={"erase","rollup"} ForeignCuts=0
-DiffOnHeadDiff         ChainsResolve        $sim Still={"erase","rollup"} ForeignCuts=0
+NoEpochCheck           CutFences            $d1 Events=1 $quiet
+BuildIgnoresSet        CutFences            $d1 Events=1 $quiet
+EraseLiveFirst         ResultsHold          $d12 $quiet
+EarlyComplete          ErasedUnreadable     $d1 Events=1 $quiet
+ClosureNoCas           ResultsHold          $d12 $quiet
+DiffOnListed           ChainsResolve        $d1 Events=2 $quiet
+EraseSkipsAbsorbed     ErasedUnreadable     $d1 Events=1 Still={"rollup","tick","backfill"}
+MergeIgnoresEpoch      EpochHolds           $d1 Events=1 Still={"rollup","tick","backfill"}
+MergeDropsTombstone    ResultsHold          $d3
+ReuseUnabsorbed        ResultsHold          $one Documents={"d2","d3"} Events=2 Skew=FALSE Still={"rollup","erase","tick","bfdiff"}
+RollupForgetsHeads     ResultsHold          $d3
+MergeKeepsOld          OneVersionEach       $d2 Events=2 Still={"rollup","erase","tick","backfill"}
+NoLockFence            RollsOnce            $one Rollers={r1,r2} MaxLapses=1 Documents={"d3"} Events=1 Skew=FALSE Still={"erase","backfill","merge"}
+NoOwnCas               ChainsResolve        $d2 Events=3 MaxRestarts=1 Still={"backfill","rollup","erase","tick"}
+ReusePinned            ChainsResolve        $d2 Events=4 Still={"rollup","erase","tick","bfdiff"}
+CleanupReferenced      ChainsResolve        $d2 Events=4 BigDocs={"d2"} Still={"rollup","erase","tick","bfdiff"}
+MergeRemovesLarge      ChainsResolve        $d2 Events=4 BigDocs={"d2"} Still={"rollup","erase","tick","bfdiff"}
+NoPromote              ResultsHold          $d3
+NoPromoteLive          BucketsExact         $one Documents={"d2"} Events=3 Skew=TRUE Still={"backfill","erase"}
+PromoteBlind          ResultsHold          $one Documents={"d2","d3"} Events=3 Skew=TRUE Still={"erase"}
+IndexSupersede         ResultsHold          $d3
+LongLife               ResultsHold          $d3
 EOF
 }
 
