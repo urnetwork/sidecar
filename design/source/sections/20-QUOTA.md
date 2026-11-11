@@ -171,7 +171,8 @@ purge    from format 2, a replaced versionless version's content leaves once del
 drop     from format 2, taskworker's drop job subtracts each seg/ object it deletes or moves to held at its stored
          size, within 60 s and once: its batch ids derive from (scan id, cursor range), not from its instance and
          window, and a held object's DELETE after its hold reports nothing; slots, outside the count, report
-         nothing, and inline records and packed segments count until compaction (20.7, §11.13)
+         nothing, and inline records and packed segments count until a later compaction, unscheduled (20.7, §11.13;
+         owner decision 247)
 apply    api inserts service_usage_batch(batch_id) with the batch's service_debit_journal rows and
          network_quota_state deltas in one transaction, the linearization point; a batch_id already present is
          a no-op answering 200
@@ -231,18 +232,18 @@ cost     one Redis script per relayed contract (one per 1-256 MiB moved); no Pos
 
 ```text
 stored   a repo's stored bytes are the sizes of its seg/, pack/ and hp/ objects as LIST returns them, plus the
-         record lengths its head windows and log pages give for versions still in shared batches (no payload
-         reads), minus objects only a hold keeps (owner decision 133) and any pack or parcel whose every record a
-         newer container's pidx/ entry names, which the nightly pass deletes unless held (§11.13): ciphertext as
-         stored, padding and history included, the search index's files too (§11.14), in GiB (20.4); a deleted
-         repo counts until shredded (§11.12), group mail once (§15.7), and a replaced versionless version's
-         content only until the purge deletes it, a minute after its replacement, or while its batch lives when
-         staged (at most 26 h; §11.13), the purge moving the count by usage batches, the nightly pass for what
-         only its sweep frees (20.6; owner decision 165); a drop's listed content counts through its window until
-         its job deletes it, the objects only a hold keeps leaving the count as above, so a held drop reads and
-         bills as finished (owner decision 184), and its inline records and packed segments count until
-         compaction (§11.13); the team directory counts like any repo, and its reads debit transfer (20.6), with
-         no exemption (owner decision 10)
+         record lengths its head windows and log pages give for versions still in shared batches (no payload reads),
+         minus objects only a hold keeps (owner decision 133) and any pack or parcel whose every record a newer
+         container's pidx/ entry names, which the nightly pass deletes unless held (§11.13): ciphertext as stored,
+         padding and history included, the search index's files too (§11.14), in GiB (20.4); a deleted repo counts
+         until shredded (§11.12), group mail once (§15.7), and a replaced versionless version's content only until
+         the purge deletes it, a minute after its replacement, or while its batch lives when staged (at most 26 h;
+         §11.13), the purge moving the count by usage batches, the nightly pass for what only its sweep frees (20.6;
+         owner decision 165); a drop's listed content counts through its window until its job deletes it, the
+         objects only a hold keeps leaving the count as above, so a held drop reads and bills as finished (owner
+         decision 184), and its inline records and packed segments count until a later compaction, unscheduled
+         (§11.13; owner decision 247); the team directory counts like any repo, and its reads debit transfer (20.6),
+         with no exemption (owner decision 10)
 count    taskworker's nightly pass over each repo's prefixes on its metadata cluster (the one its place/ names,
          owner decision 145) and on the segment cluster is the one segment GC makes (§11.13), so one LIST of each
          prefix serves both; a version counts from head windows and log pages while its batch exists, then from
@@ -270,7 +271,8 @@ limit    at the storage limit (Team: past storage_overage_max, or past storage w
          their batch, and a DROP push that uploads no segment (its written checkpoints inline within §11.12's
          rekey bound, chunk sets re-cited, or boundaries removed) is accepted as maintenance, its index rewrites
          waiting as merges do, while one whose written checkpoint needs an upload gets QuotaRefusal and a cancel,
-         adding no payload, is accepted (§11.13); other ciphertext stays until v1's compaction (§11.12)
+         adding no payload, is accepted (§11.13); other ciphertext stays until a later compaction, unscheduled
+         (§11.12; owner decision 247)
 closure  at the limit and while spent, §11.12's rekey row takes an eraser's ?closure=1 uploads, each at most
          1,088 KiB, one padded §15.7 i/ segment or §11.14 index file (else QuotaRefusal), only within its own 60 a
          minute, which {sq_} counts per eraser (the erasing sidecar, its token's ur_sidecar_id, §11.8), and within
