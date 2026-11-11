@@ -20,9 +20,10 @@
 //
 // The sdk provider skips the principal and Sealed rows and rules 1 to 3 and 6 until C16, keeping rules 0, 4, 5, 7 and 8
 // and the block deny (§17.6's sdk exit NAT). Its subject is C13's sealed client id resolved through
-// BridgeRuleSubject.client_ids; one no row binds is another client (§8.4), untagged, which holds no rows here, since
-// BridgeRules carries none for autogroup:untagged (question bridge-m4-09-other-client-rows), and every such client
-// shares the zero subject id in its rule tags, so the bridge can end their flows together.
+// BridgeRuleSubject.client_ids; one no row binds is another client (§8.4), untagged, which holds the rows
+// autogroup:untagged holds here, BridgeRules.untagged, and none when the rules carry no such field
+// (bridge-m4-09-other-client-rows, DESIGN-DETAILS 12.2.2). Every such client shares the zero subject id in its rule
+// tags, so the bridge can end their flows together.
 //
 // A Deny is never an Incident. A Pass or Map of a flow with a principal holds the flow for the link's idles, 600 s for
 // TCP and 5 min otherwise (§17.5's idle row), and every other flow keeps its NAT's.
@@ -65,8 +66,9 @@ func (self BridgePolicyProfile) String() string {
 	}
 }
 
-// The rules a tag names that carry no rule id: one byte holding the rule's number, which no rule id, 32 bytes, can
-// equal (plan-BRIDGE-small-readings #11).
+// The rules a tag names that carry no rule id: one byte holding the rule's number (plan-BRIDGE-small-readings #11),
+// which for rule 3 the hosted address follows (bridgeHostedRuleId). Each pseudo rule id is shorter than a rule id's 32
+// bytes, so none can equal one.
 const (
 	// Rule 3: a hosted address.
 	BridgeRuleHosted byte = 3
@@ -76,10 +78,23 @@ const (
 	BridgeRuleExit byte = 7
 )
 
+// Rule 3's rule id for a hosted address: BridgeRuleHosted, then the address's four bytes, most significant first, so
+// the (subject, 3) pairs split by address and an old address's drain end closes that address's flows alone
+// (bridge-m4-11-rule-three-tags, DESIGN-DETAILS 12.2.2). A hosted address is IPv4; any other leaves the four bytes zero.
+func bridgeHostedRuleId(addr netip.Addr) [5]byte {
+	ruleId := [5]byte{BridgeRuleHosted}
+	if addr.Is4() {
+		octets := addr.As4()
+		copy(ruleId[1:], octets[:])
+	}
+	return ruleId
+}
+
 // The tag of a (subject, rule) pair (plan-BRIDGE-small-readings #11): the big-endian uint64 of the first 8 bytes of
-// SHA-256(subject_id || rule_id), a rule id being a map's or route's 32 bytes, or for rules 3, 4 and 7 one byte holding
-// the rule's number. The engine enumerates a subject's or a rule's tags from these without tracking issued flows.
-// Allocates nothing for a rule id of up to 32 bytes.
+// SHA-256(subject_id || rule_id), a rule id being a map's or route's 32 bytes, for rules 4 and 7 one byte holding the
+// rule's number, and for rule 3 that byte and the hosted address's four (DESIGN-DETAILS 12.2.2). The engine enumerates
+// a subject's or a rule's tags from these without tracking issued flows. Allocates nothing for a rule id of up to 32
+// bytes.
 func BridgeRuleTag(subjectId connect.Id, ruleId []byte) uint64 {
 	if bridgeRuleRuleIdByteCount < len(ruleId) {
 		digest := sha256.Sum256(append(subjectId[:], ruleId...))

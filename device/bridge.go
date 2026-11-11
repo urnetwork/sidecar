@@ -341,13 +341,18 @@ func scanBridgeRulesTimes(rules *bridge.BridgeRules, now time.Time, settings *Br
 	for _, served := range rules.GetServed() {
 		drains(served.GetDrainingSince(), served.GetDrainUntil())
 	}
-	for _, subject := range rules.GetSubjects() {
+	reachExpires := func(subject *bridge.BridgeRuleSubject) {
 		for _, rows := range [][]*bridge.BridgeRuleReach{subject.GetDial(), subject.GetRoute(), subject.GetExit()} {
 			for _, reach := range rows {
 				expires(reach.GetExpires())
 			}
 		}
 	}
+	for _, subject := range rules.GetSubjects() {
+		reachExpires(subject)
+	}
+	// autogroup:untagged's rows, which another client holds at an sdk provider; none when the rules carry no such field
+	reachExpires(rules.GetUntagged())
 	if egress := rules.GetEgress(); egress != nil {
 		for _, link := range egress.GetExits() {
 			drains(link.GetDrainingSince(), link.GetDrainUntil())

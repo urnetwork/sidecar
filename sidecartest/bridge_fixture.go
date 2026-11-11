@@ -95,6 +95,16 @@ type BridgeRulesFixture struct {
 	Subjects  []BridgeRulesFixtureSubject
 	// Nil leaves the egress unset.
 	Egress *BridgeRulesFixtureEgress
+	// The rows autogroup:untagged holds at this host (BridgeRules.untagged), which an sdk provider gives another
+	// client. Nil leaves the field unset, so another client holds no rows.
+	Untagged *BridgeRulesFixtureUntagged
+}
+
+// autogroup:untagged's rows: a subject's, with no ids, since they name no one.
+type BridgeRulesFixtureUntagged struct {
+	Dial  []BridgeRulesFixtureReach
+	Route []BridgeRulesFixtureReach
+	Exit  []BridgeRulesFixtureReach
 }
 
 // A sender entry: a prefix, its kind, zero for a link entry, and its links.
@@ -251,6 +261,13 @@ func (self *BridgeRulesFixture) Rules() *bridge.BridgeRules {
 		rules.Egress = &bridge.BridgeRuleEgress{Mode: self.Egress.Mode}
 		for _, link := range self.Egress.Exits {
 			rules.Egress.Exits = append(rules.Egress.Exits, link.rule())
+		}
+	}
+	if self.Untagged != nil {
+		rules.Untagged = &bridge.BridgeRuleSubject{
+			Dial:  bridgeFixtureReach(self.Untagged.Dial),
+			Route: bridgeFixtureReach(self.Untagged.Route),
+			Exit:  bridgeFixtureReach(self.Untagged.Exit),
 		}
 	}
 	return rules

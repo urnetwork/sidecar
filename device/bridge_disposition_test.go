@@ -23,11 +23,11 @@ func dispositionTestFixture() *sidecartest.BridgeRulesFixture {
 	return fixture
 }
 
-// The tags a subject's flows carry under a document in the disposition fixture: every map, rule 3, the routes its rows
-// meet, and the exit for the subject that has exit rows.
+// The tags a subject's flows carry under a document in the disposition fixture: every map, rule 3 at the one hosted
+// address, the routes its rows meet, and the exit for the subject that has exit rows.
 func dispositionTestTags(subjectSeed byte) []uint64 {
 	fixture := dispositionTestFixture()
-	tags := []uint64{egressTestTag(subjectSeed, []byte{device.BridgeRuleHosted})}
+	tags := []uint64{egressTestHostedTag(subjectSeed, "100.80.1.2")}
 	for _, fixtureMap := range fixture.Maps {
 		tags = append(tags, egressTestTag(subjectSeed, sidecartest.BridgeFixtureMapId(fixtureMap.Map)))
 	}
@@ -196,14 +196,118 @@ func TestBridgeDocumentEndsTheAllowAll(t *testing.T) {
 	tags, _ := test.closer.take()
 	for _, want := range []uint64{
 		egressTestTag(egressTestUntagged, []byte{device.BridgeRuleAllowAll}),
-		egressTestTag(egressTestUntagged, []byte{device.BridgeRuleHosted}),
+		egressTestHostedTag(egressTestUntagged, "100.80.1.2"),
 		egressTestTag(egressTestUntagged, sidecartest.BridgeFixtureRouteId(2)),
 	} {
 		if !slices.Contains(tags, want) {
 			t.Errorf("closed %v, missing %d", tags, want)
 		}
 	}
-	if slices.Contains(tags, egressTestTag(egressTestTagged, []byte{device.BridgeRuleHosted})) {
+	if slices.Contains(tags, egressTestHostedTag(egressTestTagged, "100.80.1.2")) {
 		t.Errorf("closed the tagged subject's rule 3, which never stood on the allow-all")
+	}
+}
+
+// A block cycle keeps a host's bits (§17.4), so the host holds its new address and, until the previous block's drain
+// ends, its old one. Rule 3's tag names the address (bridge-m4-11-rule-three-tags), so the cycle closes nothing, and the
+// drain's end closes the old address's flows of each subject and none to the new address (D-BRIDGE-7).
+func TestRuleThreeTagsNameTheAddress(t *testing.T) {
+	start := time.UnixMilli(egressTestTimeMs)
+	subjects := []sidecartest.BridgeRulesFixtureSubject{
+		{Sidecar: egressTestUntagged, Dial: []sidecartest.BridgeRulesFixtureReach{{Ports: "tcp:22"}}},
+		{Sidecar: egressTestTagged, Tagged: true, Dial: []sidecartest.BridgeRulesFixtureReach{{Ports: "tcp:22"}}},
+	}
+	before := &sidecartest.BridgeRulesFixture{Block: "100.80.0.0/16", Addresses: []string{"100.80.1.2"}, Subjects: subjects}
+	cycled := &sidecartest.BridgeRulesFixture{
+		Block:                   "100.82.0.0/16",
+		PreviousBlock:           "100.80.0.0/16",
+		PreviousBlockDrainUntil: egressTestTimeMs + egressTestHourMs,
+		Addresses:               []string{"100.82.1.2", "100.80.1.2"},
+		Subjects:                subjects,
+	}
+	test := newStateTest(t, before, true)
+	test.log.Tick()
+	test.setState(cycled, true)
+	if tags, _ := test.closer.take(); 0 < len(tags) {
+		t.Fatalf("the cycle closed %v at once", tags)
+	}
+	hook := test.bridge.EgressHook()
+	for _, subjectSeed := range []byte{egressTestUntagged, egressTestTagged} {
+		for _, address := range []string{"100.80.1.2", "100.82.1.2"} {
+			decision := hook.ResolveEgress(test.flow(subjectSeed, connect.IpProtocolTcp, address+":22"))
+			if decision.Verdict != connect.EgressVerdictMap || decision.RuleTag != egressTestHostedTag(subjectSeed, address) {
+				t.Fatalf("subject %d to %s while the old block drains: %+v", subjectSeed, address, decision)
+			}
+		}
+	}
+
+	test.advanceTo(start.Add(time.Hour))
+	want := []uint64{egressTestHostedTag(egressTestUntagged, "100.80.1.2"), egressTestHostedTag(egressTestTagged, "100.80.1.2")}
+	slices.Sort(want)
+	if tags, _ := test.closer.take(); !slices.Equal(tags, want) {
+		t.Fatalf("the drain's end closed %v, want the old address's %v", tags, want)
+	}
+	for _, subjectSeed := range []byte{egressTestUntagged, egressTestTagged} {
+		if test.verdict(test.flow(subjectSeed, connect.IpProtocolTcp, "100.80.1.2:22")) != connect.EgressVerdictDeny {
+			t.Errorf("subject %d: the old address after its drain", subjectSeed)
+		}
+		decision := hook.ResolveEgress(test.flow(subjectSeed, connect.IpProtocolTcp, "100.82.1.2:22"))
+		if decision.Verdict != connect.EgressVerdictMap || decision.RuleTag != egressTestHostedTag(subjectSeed, "100.82.1.2") {
+			t.Errorf("subject %d: the new address after the old one's drain: %+v", subjectSeed, decision)
+		}
+	}
+}
+
+// At an sdk provider another client holds autogroup:untagged's rows under the zero subject's tags
+// (bridge-m4-09-other-client-rows): a GrantRevoke of one of those rows between states closes its exit tag, and so does
+// a row's expiry, which the bridge's timer reaches. A bound subject's flows stay.
+func TestBridgeUntaggedRowsEndingCloseAnotherClientsFlows(t *testing.T) {
+	start := time.UnixMilli(egressTestTimeMs)
+	fixture := egressTestFixture()
+	fixture.Untagged = &sidecartest.BridgeRulesFixtureUntagged{
+		Exit: []sidecartest.BridgeRulesFixtureReach{
+			{Ports: "tcp:443", Grant: 2},
+			{Ports: "udp:53", Expires: egressTestTimeMs + 10_000},
+		},
+	}
+	test := newStateTestWithSettings(t, fixture, true, func(settings *device.BridgeSettings) {
+		settings.PolicyProfile = device.BridgePolicyProfileSdkProvider
+	})
+	otherExit := device.BridgeRuleTag(connect.Id{}, []byte{device.BridgeRuleExit})
+	other := func(ipProtocol connect.IpProtocol, to string) *connect.EgressFlow {
+		flow := test.flow(0x7F, ipProtocol, to)
+		flow.Principal = nil
+		return flow
+	}
+	bound := test.flow(egressTestUntagged, connect.IpProtocolTcp, "203.0.113.9:443")
+	bound.Principal = nil
+	for _, flow := range []*connect.EgressFlow{other(connect.IpProtocolTcp, "203.0.113.9:443"), other(connect.IpProtocolUdp, "203.0.113.9:53")} {
+		if decision := test.bridge.EgressHook().ResolveEgress(flow); decision.Verdict != connect.EgressVerdictPass || decision.RuleTag != otherExit {
+			t.Fatalf("another client to %v before: %+v", flow.To, decision)
+		}
+	}
+
+	pin := test.log.Tip()
+	n := test.log.GrantRevoke(sidecartest.BridgeFixtureGrantId(2))
+	if err := test.bridge.ApplyDeltas(test.log.Deltas(pin+1, n)); err != nil {
+		t.Fatal(err)
+	}
+	if tags, _ := test.closer.take(); !slices.Equal(tags, []uint64{otherExit}) {
+		t.Fatalf("the GrantRevoke closed %v, want another client's exit", tags)
+	}
+	if test.verdict(other(connect.IpProtocolTcp, "203.0.113.9:443")) != connect.EgressVerdictDeny ||
+		test.verdict(other(connect.IpProtocolUdp, "203.0.113.9:53")) != connect.EgressVerdictPass {
+		t.Fatal("after the GrantRevoke")
+	}
+
+	test.advanceTo(start.Add(10 * time.Second))
+	if tags, _ := test.closer.take(); !slices.Equal(tags, []uint64{otherExit}) {
+		t.Fatalf("the row's expiry closed %v, want another client's exit", tags)
+	}
+	if test.verdict(other(connect.IpProtocolUdp, "203.0.113.9:53")) != connect.EgressVerdictDeny {
+		t.Fatal("an expired row still admits")
+	}
+	if test.verdict(bound) != connect.EgressVerdictPass {
+		t.Fatal("the bound subject's exit row")
 	}
 }

@@ -5064,3 +5064,120 @@ Server's competition evaluator (server/connect/sim-latency's image digest, GOVER
 Changes: no change to the two harnesses; before sidecar merges to main: re-qualify both on go1.27.4.
 
 Questions: `go-1-27-4-harnesses.md`.
+
+### QD-699: Does a head reader decide whether a version is listed from the DROP's signed body alone, or does listed_sha256 become a Merkle root with proofs?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A head reader decides whether a version was dropped from the DROP's signed body alone, checked against the name and version it asked for (DESIGN-DETAILS 10.2.3's H0 to H7); listed_sha256 stays one flat SHA-256 over the listed entry hashes and no reader is sent a list or a proof. What a DROP drops is fixed by its body and the ref's history (10.3's L1); a drop whose list disagrees with its body never executes, so for every drop that deletes anything, listed and covered by the body are the same set. A head reader fetches at most 257.1 KiB a drop, once, typically 1.4 KiB. The one case where readers differ, a DROP whose signer's own list disagrees with its own body, is invalid to a replaying reader, taken by its body at a head reader, and refused by the job either way. No format change and no proof code.
+
+Changes: none: DESIGN-DETAILS section 10, EVS2-M10-10 and EVS2-M10-22 are built on this option.
+
+Questions: `details-10-list-commitment.md`.
+
+### QD-700: Should a DROP's body be held to 256 KiB and its lists to 1,048,576 values in all, a larger drop going in several pushes?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A DROP's body (EvsDropHistory) is at most 262,144 B and the counts of a DROP's paths at most 1,048,576 in all; evs refuses past either (400 INVALID, 409 DROP_LIST). The client cuts a larger drop into several DROP pushes at lineage boundaries, each previewed, confirmed once as one command; one lineage that alone passes a bound (1,725 epochs at depth 8, 449 at depth 32) is refused locally. A --recursive drop of 1,024 files fits one push while a lineage averages 256 B, takes 3 pushes at depth 32 and about 200 in a repository 300 epochs old, each counted by evs_drops_per_day. If that push count ever bites in an old repository, counting the pushes of one command as one drop is D-QUOTA-12's owner's to decide then.
+
+Changes: none: DESIGN-DETAILS section 10, EVS2-M10-36, EVS2-M10-09 and EVS2-M10-20 are built on this option.
+
+Questions: `details-10-drop-bounds.md`.
+
+### QD-701: Should the drop job wait until evacuation's horizon has passed the time evs saw each drop committed by 12 min, not 2, since a reuse source's head may be 10 min stale?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+This amends QD-626's 2 min. The drop job takes its mark only once evacuation's horizon has passed each covered drop's seen_ms by 12 min (10 min of head cache, 5 s of step 7's window, the clocks, and slack). The drop table's entry gains seen_ms, the appender's clock read after the answer that showed it the commit, so the job holds a time no earlier than the commit. The head cache stamps an entry with its committed head's own written_ms, never later than the clock, so a process paused between a commit and its put cannot stretch a stale head past 10 min. This closes the hole TLC found (DropJobWritten-CachedHead): a push validated after the commit on a cached head, creating its ref, whose head write stalls, landing after the job's deletes. A now drop's deletes start 25 h 12 min to 26 h 12 min after it, 10 min later than QD-626 had them; a 7-day drop is unaffected. The push path (step 4's cached reuse read, FS-91 (c)) stays as it is.
+
+Changes: QD-626's 2 min becomes 12 min, counted from seen_ms; the drop table's entry gains seen_ms (EVSB-M10-03); the landed head cache stamps an entry with its head's written_ms (EVS2-M10-36).
+
+Questions: `details-10-cite-bound.md`.
+
+### QD-702: Do protocol and format limits also live in settings objects, or only tunables, now that the owner wants configuration objects for all settings and no global constants?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §6 The sidecar subprotocol.*
+
+Every value that sets a limit, size, count, time, interval, threshold, retry or budget is a field of its owning component's settings object, set only by that object's Default...Settings() constructor and read from the instance where it is used; no package-level const or var holds one, and no such literal is written into logic. This includes protocol and format limits (the 4,080 B chunk, a DROP's 256 KiB body and 1,048,576 list values, the 1 MiB part, maximum call timeouts): their defaults are the protocol's values, and changing one is a protocol change, so a deployment does not change it on one side alone, but code and tests read it from settings. Only identifiers stay named constants: enum values, proto field numbers, error, type and statement codes, version numbers, magic strings, and cryptographic constants (such as the empty tree's SHA-256). connect/CODESTYLE.md's 'Exceptions are facts, not tunables' bullet and D-PROTO-16 narrow to identifiers, and every section that calls a limit a constant reads as a settings field. Scope: all code the sidecar run wrote, in every repo, moves now; upstream code that predates the run moves when a change touches it (CODESTYLE's 'Migrate when you touch it'); vendored third_party code stays as its upstream wrote it. Tests may still use literals to configure settings.
+
+Changes: connect/CODESTYLE.md: the exceptions bullet narrows to identifiers; D-PROTO-16 and every section naming a limit as a constant (design-records); BRIEF.md: every track follows the rule from 2026-11-11; a settings sweep of the code the run wrote, per area, scheduled in the lanes.
+
+Questions: `owner-settings-objects.md`.
+
+### QD-703: Should a drop delete a candidate only once evacuation's horizon has passed its LastModified + 24 h + 2 min, in place of "over 25 h old"?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A drop's candidate is young, and kept for a later round, until the round's evacuation horizon has passed its LastModified + 24 h + 2 min, the rule owner decision 203 chose for orphans, in place of §11.13's 'under 25 h old at V'; I-EVS-15 and FI-27 (4) take those words. It closes the hole TLC found (DropJobWritten-YoungAdopter): a push that creates its ref, adopts the receipt just before 24 h and stalls its head write was seen by no scan. Nothing changes for a drop with the 7-day window, whose candidates are over a week old; a now drop of a version uploaded an hour before it keeps that version's segments until about 49 h after their upload, where §11.13 said 25 h. With QD-702, the 24 h and 2 min are settings fields whose defaults are those values.
+
+Changes: none: DESIGN-DETAILS section 10, EVSB-M10-06 and EVSB-M10-03's dry run are built on this option.
+
+Questions: `details-10-young-horizon.md`.
+
+### QD-704: Should a drop job keep its listed versions' entry hashes for the repo's life, so evs finds a listed version by its entry hash?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+The drop job's resolve, which enumerates the exact listed set anyway, writes it sorted by entry hash to dropscan/<repo>/<job id>/list-<n>, with a small index and a bloom filter, kept for the repo's life; evs finds a listed version by its entry hash, which it holds wherever it serves a version, and answers dropped for it, never serving an inline record of its chain. This holds after the drop table forgets an executed drop at 30 d (QD-179), for a path dropped at a removed boundary, for a marked path later removed, and for a record read by push id in an older epoch. It costs 36.5 B a listed version on the segment cluster (36.5 MiB at 2^20), outside any network's stored bytes. §11.8's dropscan/ row and §2.8's evs-28 ttl change for this one file kind; marker collection and the path-epoch copy are untouched, and the drop mark stays the fence's, gaining only a removed boundary's mark on its marker entry (DESIGN-DETAILS 10.2.7).
+
+Changes: none: DESIGN-DETAILS section 10, EVSB-M10-04 (writes the files) and EVS2-M10-10 (reads them) are built on this option; §2.8's evs-28 ttl and §11.8's dropscan/ row (design-records).
+
+Questions: `details-10-listed-index.md`.
+
+### QD-705: Should a head-mode device sign a drop only for a history it walked itself, within 4 MiB, a longer one going to a device that mirrors the repo?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A head-mode device builds a DROP's list only by walking the path's versions through §11.9's history reads, each statement verified, within a 4 MiB fetch budget (HeadDropFetchByteCount, a settings field under QD-702; about 4,000 to 8,000 versions across the drop's lineages). A longer history answers ErrEvsDropTooLarge (EVS_DROP_TOO_LARGE), naming ur history drop on a device that mirrors the repo. It takes only map_parts from the dry run, on which nothing but the job's own read cost rests, so the signed list stays the signer's own enumeration that FI-27 (1) checks against evs's. A phone cannot drop a path with more versions than that; DropHistory stays on the SDK's surface (§18.5).
+
+Changes: none: DESIGN-DETAILS section 10, EVS2-M10-20 and EVS2-M10-21 are built on this option.
+
+Questions: `details-10-head-signer.md`.
+
+### QD-706: When does the sweep that moves the drafted code's constant tunables into settings objects (QD-702) run?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §23 Phasing, milestones, and rollout.*
+
+The sweep that moves the drafted code's constant tunables and limits into settings objects (QD-702) runs in the review phase, area by area as the review reads each area, not during the draft phase. Until then new code follows QD-702 and every track moves the constants in the files it touches (BRIEF.md); the remaining constants stay in drafted code. The 2026-11-11 scan (.stack/scratch/settings-sweep-scan-2026-11-11.json) lists about 801 constants in 351 sidecar files that no remaining task names; the review phase also sweeps the run's code in server, connect and sdk.
+
+Changes: review phase: one settings sweep per area, from the 2026-11-11 scan.
+
+Questions: `owner-settings-sweep-timing.md`.
+
+### QD-707: When is a second own search indexer asked beside the first, since §11.14 has own indexers "hedged in parallel" and gives no delay?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A remote search asks the first two own search indexers at once, for the repos each may answer, and both own pairs are kept warm from each foreground (the foreground Hello and its keepalive hold two own pairs). No contract opens at a search on either own pair, and the tail is the faster of the two; the first page 0 to serve a repo wins it and the other reply is dropped. Every search costs two exchanges and two indexers' CPU, and the foreground costs a second own pair's window floor, 512 KiB of transfer balance an hour more. There is no hedge delay: Search.RemoteHedgeDelay does not exist. Other members' indexers are still asked one at a time, after their notice, as section 7 has them.
+
+Changes: DESIGN-DETAILS section 7 is amended from option 1 to this (7.2.3, 7.2.4, 7.2.8's costs, 7.6's tests, 7.7's task notes, 7.8's DESIGN.md text), including how two own warm pairs and another member's warm pair combine; PROTO-M10-06's warm pairs and SEARCH-M10-33's ask change scope; both are held until the amendment lands; §11.14's order row and §18.4's remote row and targets (design-records).
+
+Questions: `details-7-hedge.md`.
+
+### QD-708: Should a verified or confirmed claim outrank a possible one at any version when a phone merges remote search results, since "the higher version wins" contradicts "the phone's own confirmed hits always stay"?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+When a phone merges remote search pages with its own hits, each (repo, ref, doc_key) row is its strongest claim by class first: a verified or confirmed claim before a possible one before a near one; then the higher version; then verified before confirmed; then an indexer's claim before the phone's. The phone's own confirmed hits stay matches, as §11.14's merge row's second sentence says, and no indexer can demote what another source claimed as a match by claiming a higher version in a weaker state (RemoteMergeTwin-VersionFirst). A claim verified at an older version can be shown above a newer possible claim of the same document; opening it reads the newest version and judges that, with no alarm.
+
+Changes: none: DESIGN-DETAILS section 7 and SEARCH-M10-34 are built on this option; §11.14's merge row (design-records).
+
+Questions: `details-7-match-first.md`.
+
+### QD-709: Should a phone fold its own possible matches only where it can show the indexer saw their push (its own pin no higher than the indexer's, or a time more than 40 min below the pinned push's), and raise an omission alarm only at equal pins?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A phone folds a local possible or near hit that no page returned only when the index rides the content ref and the phone's own pin of it is at or below the leg's pinned version, or the hit's time is more than 40 min below ref_time_ms (the only test for a companion index, whose entries trail their content); the 40 min is evs's 10 min clock bound plus 30 min for a push in parts (§11.8's 5b), and with QD-702 it is a settings field (SkewGuard). It raises search_alarm {omission} only when the index rides the content ref, the leg's pinned (version, chain) equals the phone's own pin, the confirming field is not cut at its cap, and the repo's uncovered is 0. When the phone is ahead of the indexer, its possible matches from the 40 min before the indexer's pin stay possible instead of folding; an omission between unequal pins raises nothing, and the phone's confirmed row stays on screen either way. Carrying each index entry's ref version (option 3) stays a review-phase option if the unfolded window matters on FS-76's corpus.
+
+Changes: none: DESIGN-DETAILS section 7 and SEARCH-M10-34 are built on this option; §11.14's merge and ranking rows (design-records); review phase: weigh option 3 on FS-76's corpus.
+
+Questions: `details-7-fold-guard.md`.
+
+### QD-710: Should a device stop searching a cached all that is older than a roll-up once it no longer holds that roll-up's bucket as the roll-up read it, where §11.14's retained row keeps searching it?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A device searches its cached all only while it is usable: its pin is the snapshot's, or every roll-up between the two pins is bridged by the rolled bucket, held as the roll-up read it (which the device knows from the statements it replayed). When a bridge is lost or cannot be vouched for (an ERASE, two windows passed, a roll-up slept through, or a bucket copy older than the roll-up's input), the device searches its buckets only, reports its coverage from the oldest bucket, and fetches all's changed files (a/m and the youngest shards, usually a few MiB) at its next window or at search more, which fetches before it answers. No deleted document is found again (IndexSyncTwin-StaleAllSearched, IndexSyncTwin-RetainStale); a phone that loses a bridge loses its instant coverage past the buckets until that fetch.
+
+Changes: none: DESIGN-DETAILS section 7 and SEARCH-M10-19 are built on this option; §11.14's retained and roll-up rows (design-records).
+
+Questions: `details-7-stale-all.md`.
+
+### QD-711: Are these eleven readings of §11.14, §18.4 and §7.9 right, where section 7 of DESIGN-DETAILS.md had to choose and no D- item is changed?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+The eleven readings in DESIGN-DETAILS section 7 stand: (1) a personal network, for eligibility, is a config state with one member (7.2.2's E5); (2) candidates run newest first over every partition, all's shards read only when the order reaches all's newest row; (3) a read lost mid-cursor ends the cursor, CURSOR_EXPIRED on the next page and a refusal in the reopened search's coverage; (4) a reopened search resumes by narrowing until_ms to the last checked_through_ms, with no new field; (5) an indexer remembers an ended search_id for CursorTimeout and answers every page of it CURSOR_EXPIRED; (6) a losing reply is dropped, not merged, which now covers QD-707's two own indexers asked at once; (7) the first own choice is the own indexer that answered last within 10 min, then the rendezvous order; (8) another member's indexer is sticky over the search's whole scope for 24 h; (9) a refused repo is not asked of that indexer for 10 min and a failed indexer is skipped 2 min, both in RAM only; (10) is replaced by QD-707: both own pairs are kept warm, and section 7's amendment settles how another member's warm pair fits; (11) a/m, the erasure set and the settings file are in the latest set every searching device keeps. With QD-702 every time and count here is a settings field.
+
+Changes: none beyond QD-707's amendment of section 7.
+
+Questions: `details-7-small-readings.md`.
