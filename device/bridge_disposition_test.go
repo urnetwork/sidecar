@@ -211,7 +211,7 @@ func TestBridgeDocumentEndsTheAllowAll(t *testing.T) {
 // A block cycle keeps a host's bits (§17.4), so the host holds its new address and, until the previous block's drain
 // ends, its old one. Rule 3's tag names the address (bridge-m4-11-rule-three-tags), so the cycle closes nothing, and the
 // drain's end closes the old address's flows of each subject and none to the new address (D-BRIDGE-7).
-func TestBridgeOldAddressDrainEndClosesNoneOfTheNewAddresssFlows(t *testing.T) {
+func TestBridgeOldAddressDrainEndClosesOnlyItsOwnFlows(t *testing.T) {
 	start := time.UnixMilli(egressTestTimeMs)
 	subjects := []sidecartest.BridgeRulesFixtureSubject{
 		{Sidecar: egressTestUntagged, Dial: []sidecartest.BridgeRulesFixtureReach{{Ports: "tcp:22"}}},
