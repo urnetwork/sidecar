@@ -26,16 +26,20 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// Posts attempt's parts, then its seal, git mode's lease first.
+// Posts attempt's parts, then its seal, git mode's lease first and taken again each SealLeaseRenewInterval.
 func (self *EvsRepo) sendParts(ctx context.Context, attempt *evsPushAttempt) (*protocol.EvsPushReply, error) {
 	if attempt.refMode == protocol.EvsRefMode_EVS_REF_GIT {
 		if err := self.takeLease(ctx, attempt); err != nil {
 			return nil, err
 		}
+		attempt.leaseAt = self.client.clock.Now()
 	}
 	for tries := 0; ; tries += 1 {
 		places, err := self.postParts(ctx, attempt)
 		if err != nil {
+			return nil, err
+		}
+		if err := self.renewLease(ctx, attempt); err != nil {
 			return nil, err
 		}
 		reply, err := self.postPushAs(ctx, attempt.pushId, &protocol.EvsPushRequest{Statement: attempt.built.Statement.Bytes, PartPlaces: places}, attempt.scope)
@@ -97,8 +101,30 @@ func (self *EvsRepo) postParts(ctx context.Context, attempt *evsPushAttempt) ([]
 	return places, nil
 }
 
+// Takes a git-mode push's seal lease again once it has held it SealLeaseRenewInterval, one taker at a time: a push
+// whose parts take longer than one lease keeps it, and a lease that lapsed meanwhile costs only a refused seal.
+func (self *EvsRepo) renewLease(ctx context.Context, attempt *evsPushAttempt) error {
+	interval := self.client.settings.SealLeaseRenewInterval
+	if attempt.refMode != protocol.EvsRefMode_EVS_REF_GIT || interval <= 0 {
+		return nil
+	}
+	attempt.leaseLock.Lock()
+	defer attempt.leaseLock.Unlock()
+	if self.client.clock.Now().Sub(attempt.leaseAt) < interval {
+		return nil
+	}
+	if err := self.takeLease(ctx, attempt); err != nil {
+		return err
+	}
+	attempt.leaseAt = self.client.clock.Now()
+	return nil
+}
+
 // POST .../push/<P>/<k> for part index (k = index + 1), retried as a push is.
 func (self *EvsRepo) postPart(ctx context.Context, attempt *evsPushAttempt, index int) (*protocol.EvsPlace, error) {
+	if err := self.renewLease(ctx, attempt); err != nil {
+		return nil, err
+	}
 	call := &evsCall{
 		route:  "POST /evs/v1/repos/{repo_id}/push/{push_id}/{part}",
 		method: http.MethodPost,
