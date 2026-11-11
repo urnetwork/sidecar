@@ -228,10 +228,14 @@ message BridgePortRange {
 }
 
 // None under a standing grant (17.7), or the I-8 decisions and this use's CanonicalAction (§16.8), which
-// readers verify as §8.8 does a GrantActivate's, the signer being every decision's requester.
+// readers verify as §8.8 does a GrantActivate's, the signer being every decision's requester. Under a multi-use
+// decision template_action carries the template every decision's payload_sha256 hashes, which this use's action must
+// match (ActionMatchesTemplate), so one decision files up to its uses rules; unset, the single-use reading stands
+// (owner decision 218, QD-631). It rides the sealed body, so no server sees it.
 message BridgeApproval {
-  bytes canonical_action = 1;          // as stored, which every decision's payload_sha256 hashes
+  bytes canonical_action = 1;          // this use's action as stored: its effect_key derives the rule id
   repeated Signed decisions = 2;
+  bytes template_action = 3;           // as stored; set, every decision hashes it, unset canonical_action
 }
 
 // §6.9 Signed, purpose bridge, SignedType 0x1901 to 0x1907 in this order. BridgeBlock rides a head, so it
@@ -301,16 +305,19 @@ enum BridgeEgressMode {
   BRIDGE_EGRESS_MODE_NONE = 3;
 }
 
-// A gate holds no config key, so it learns a mode from BridgeRows at the next base (§8.10, §17.8): until a
-// writer folds this, a subject's new mode binds its readers and not the contract gate.
+// The mode shows at id level (§2.8's api-7, QD-630), so gates and api apply each entry's mode in log order over
+// BridgeRows.egress, as §8.9's entries after a base, and rows carry the same value at the fold (§8.10, §17.8). Only
+// exits seals a body: none and auto carry none, so they never wait on a seal.
 message BridgeEgress {                 // an admin, owner or sponsor
   StatementHeader header = 1;
   bytes subject = 2;
-  bytes sealed_body = 3;               // BridgeEgressBody
+  bytes sealed_body = 3;               // BridgeEgressBody, under exits only
+  BridgeEgressMode mode = 4;
 }
 
 message BridgeEgressBody {
-  BridgeEgressMode mode = 1;
+  reserved 1;                          // the mode, which BridgeEgress.mode = 4 carries in the clear
+  reserved "mode";
   repeated bytes exit_sidecar_ids = 2; // or exit_tag_id
   bytes exit_tag_id = 3;
 }
