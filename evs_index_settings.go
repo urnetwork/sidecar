@@ -1,11 +1,9 @@
-//go:build !ios_extension
-
 // The index format's limits (protocol/INDEX-FORMAT.md; DESIGN-DETAILS 11.2.1 and 1.2.1): extractor 1's bounds, which
 // make it one pass in fixed memory, how a text is cut into documents, and what a writer's files hold. They are format
 // bytes, and changing one is another format or extractor, so no device sets them on its own; this one object holds them
 // and its defaults stay here (QD-702).
 // Every function that extracts, plans a head or reads a slot reads the instance it is given; a view carries the one it
-// was loaded with.
+// was loaded with. It links on every leg, since the slot codec does, and imports nothing.
 
 package sidecar
 
