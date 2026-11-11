@@ -35,7 +35,9 @@ func storeKeyNumber(number uint64) string {
 	return fmt.Sprintf("%020d", number)
 }
 
-// Every ref's head of a repo, on the cluster place/ names, decoded.
+// Every ref's head of a repo, on the cluster place/ names, decoded: the heads a LIST of head/<repo>/ names. On stock
+// MinIO that LIST can leave out a head whose overwrite is in flight, every drive online (question
+// evs1-m2-41-list-drops-overwritten-key), so a caller that already knows a ref reads its head with Head.
 func (self *StoreView) Heads(ctx context.Context, repoId sidecar.Id) ([]*StoreHead, error) {
 	clusterId, err := self.RepoClusterId(ctx, repoId)
 	if err != nil {
@@ -48,17 +50,40 @@ func (self *StoreView) Heads(ctx context.Context, repoId sidecar.Id) ([]*StoreHe
 	}
 	heads := []*StoreHead{}
 	for _, object := range objects {
-		refId, err := hex.DecodeString(strings.TrimPrefix(object.Key, prefix))
-		if err != nil || len(refId) != 16 {
-			return nil, fmt.Errorf("%s names no ref id", object.Key)
+		head, err := decodeStoreHead(prefix, object)
+		if err != nil {
+			return nil, err
 		}
-		head := &protocol.EvsHead{}
-		if err := proto.Unmarshal(object.Body, head); err != nil {
-			return nil, fmt.Errorf("%s: %w", object.Key, err)
-		}
-		heads = append(heads, &StoreHead{ClusterId: clusterId, Key: object.Key, RefId: refId, Etag: object.Etag, Head: head})
+		heads = append(heads, head)
 	}
 	return heads, nil
+}
+
+// One ref's head, read by its key as a reader reads it, decoded; nil with no error when the key holds none.
+func (self *StoreView) Head(ctx context.Context, repoId sidecar.Id, refId sidecar.Id) (*StoreHead, error) {
+	clusterId, err := self.RepoClusterId(ctx, repoId)
+	if err != nil {
+		return nil, err
+	}
+	prefix := "head/" + sidecar.EvsKeyId(repoId) + "/"
+	object, err := self.Object(ctx, clusterId, prefix+sidecar.EvsKeyId(refId))
+	if err != nil || object == nil {
+		return nil, err
+	}
+	return decodeStoreHead(prefix, object)
+}
+
+// A head/<repo>/<ref> object, prefix its repo's, decoded.
+func decodeStoreHead(prefix string, object *StoreObject) (*StoreHead, error) {
+	refId, err := hex.DecodeString(strings.TrimPrefix(object.Key, prefix))
+	if err != nil || len(refId) != 16 {
+		return nil, fmt.Errorf("%s names no ref id", object.Key)
+	}
+	head := &protocol.EvsHead{}
+	if err := proto.Unmarshal(object.Body, head); err != nil {
+		return nil, fmt.Errorf("%s: %w", object.Key, err)
+	}
+	return &StoreHead{ClusterId: object.ClusterId, Key: object.Key, RefId: refId, Etag: object.Etag, Head: head}, nil
 }
 
 // A ref's log pages, log/<repo>/<ref>/<n>, in page order, decoded.
