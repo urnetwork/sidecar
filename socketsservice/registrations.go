@@ -4,14 +4,17 @@
 //
 //  1. authenticate: the caller's client, network and sidecar_id; none outside urnetwork-edge is denied, and
 //     a removed client answers 401 (request.go); §19.11's sockets gate for the caller's network
-//  2. one token of the caller's bucket, then a turn in the fair queue: unavailable with retry_after_ms
+//  2. one token of the caller's bucket, then a turn in the fair queue: unavailable with retry_after_ms. The body
+//     is read between the two, so a slow upload holds no running call's place
 //  3. the page's shape, whole, before anything is judged: at most 1,024 entries, sorted by name key, each
 //     inside the range, each field within §9.5's sizes. A page that fails is invalid and writes nothing
 //  4. the network's view S, taken once for the page: unloaded or behind answers unavailable
 //  5. per entry, in memory: the entry's own values (invalid, and never passed to the store); the namespace,
 //     plaintext only for tls/, smtp/ and ur/; the kill set; MayListen for the caller's subject; the claim
 //     under the caller's sidecar's identity key in S, verified once per (client, claim bytes, key) and then
-//     remembered; the namespace's ValidateListen, where an undecided one makes the page unavailable
+//     remembered; the namespace's ValidateListen, where an undecided one makes the page unavailable. Every
+//     refusal is the same refusal, so the checks run cheapest first and the signature check after the gate's,
+//     which changes no verdict; ValidateListen stays last, so a refused entry never makes a page unavailable
 //  6. one ApplyPage: the allowed entries with defaults applied, S's position, the page's set_version, the
 //     caller's sidecar_id, and the refused entries' name keys, whose leases end for cause at S's position
 //  7. each entry's status from what the store did: ok, taken, revoked (refused, and its lease ended now) or
@@ -172,10 +175,12 @@ func (self *SocketsService) registrations(r *http.Request) (*sidecar.SocketRegis
 	}
 	answer := self.registrationAnswer(&networkId)
 
-	// 2
+	// 2, the body read between the token and the turn, so a slow upload holds no running call's place
 	if refusal := self.chargeRefusal(caller); refusal != nil {
 		return answer, refusal
 	}
+	args := &sidecar.SocketRegistrationsArgs{}
+	readErr := readSocketJson(r, socketRegistrationsMaxBodyByteCount, args)
 	release, refusal := self.queueTurn(r.Context(), networkId)
 	if refusal != nil {
 		return answer, refusal
@@ -183,8 +188,7 @@ func (self *SocketsService) registrations(r *http.Request) (*sidecar.SocketRegis
 	defer release()
 
 	// 3
-	args := &sidecar.SocketRegistrationsArgs{}
-	if err := readSocketJson(r, socketRegistrationsMaxBodyByteCount, args); err != nil || !socketPageFormed(args) {
+	if readErr != nil || !socketPageFormed(args) {
 		return answer, socketRefusalOf(sidecar.SocketErrorCodeInvalid, 0)
 	}
 
