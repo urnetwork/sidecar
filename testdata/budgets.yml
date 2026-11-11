@@ -192,9 +192,9 @@ budgets:
     package: "."
     name: BenchmarkSubprotocolReceive
     settings: "envelopeCodec and the real handler, production settings"
-    limits: {}
+    limits: {allocs_per_op: 19}
     reviewed: ""
-    note: "the gate is no regression from PROTO-M1-11's recorded baseline; until PROTO-M5-05 writes that number here, the row reads missing"
+    note: "the gate is no regression from PROTO-M1-11's recorded baseline, 18 a request by testing.AllocsPerRun's least of three (testdata/receive_allocs.json, which TestReceiveAllocsHoldTheBaseline holds); this benchmark's one 100-iteration run counts the process's allocations, the fixture's background goroutines' among them, and reads 19 run after run, so 19 is that baseline here (PROTO-M5-05, 2026-11-11)"
   - id: ios-extension-device-role
     spec: "DESIGN-DETAILS 4.2.3 (§18.10, D-SDK-20, Q-SDK-7): what the forwarding leg, device and protocol/bridge with the root and protocol files on check/testdata/ios_extension_leg.txt, adds to the ios_extension leg, 6 MiB stripped"
     kind: size
