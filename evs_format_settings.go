@@ -53,6 +53,9 @@ type EvsFormatSettings struct {
 	// 4 MiB, past which a stream answers more with its next version (EVS1-M6-01).
 	ReadStreamMaxRefCount  int
 	ReadStreamMaxByteCount int64
+	// The overlays a git-mode ref's base chain holds at most: 16, past which a chain is refused (evsservice's
+	// overlay chains; DESIGN-DETAILS 8.2.4).
+	OverlayMaxDepth int
 }
 
 // The protocol's values, the only source of their defaults.
@@ -75,6 +78,7 @@ func DefaultEvsFormatSettings() *EvsFormatSettings {
 		DropListPartValueCount:      32000,
 		ReadStreamMaxRefCount:       64,
 		ReadStreamMaxByteCount:      4 * 1024 * 1024,
+		OverlayMaxDepth:             16,
 	}
 }
 
