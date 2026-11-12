@@ -874,8 +874,9 @@ func TestEvsLocalPublishJudgesAHeadPastItsBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	// a rekey of a.txt from a head-mode device: version 2, the tip still c1
+	rekeyed := uint64(1)
 	if _, err := publisher.writer.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
-		Path: "a.txt", Content: bytes.NewReader([]byte("a\n")), ForceCheckpoint: true, IfVersion: 1,
+		Path: "a.txt", Content: bytes.NewReader([]byte("a\n")), ForceCheckpoint: true, IfVersion: &rekeyed,
 	}}}); err != nil {
 		t.Fatal(err)
 	}
