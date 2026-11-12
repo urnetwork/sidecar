@@ -262,6 +262,12 @@ func (self *SocketProjectionGate) Stats() sidecar.AclGateStats {
 	return self.cache.Stats()
 }
 
+// Over-limit reads finished, and a channel that closes at the next: what a host's test waits on before it asks
+// Ready.
+func (self *SocketProjectionGate) OverLimitReads() (count int, changed chan struct{}) {
+	return self.overLimit.readCount.Get()
+}
+
 // The network's state, made on first use.
 func (self *SocketProjectionGate) networkWithLock(networkId connect.Id) *socketGateNetwork {
 	network := self.networks[networkId]

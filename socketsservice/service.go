@@ -186,6 +186,18 @@ func (self *SocketsService) storeContext() (context.Context, func()) {
 	}
 }
 
+// Probes finished, and a channel that closes at the next: what a host's test waits on before it asks Ready.
+func (self *SocketsService) Probes() (count int, changed chan struct{}) {
+	return self.probeCount.Get()
+}
+
+// Lays config/<env>/sidecar.yml's sockets_control_qps over the control bound's sidecar rate and burst
+// (§19.11): the host calls it each time it rereads the file. A rate or burst that is not positive changes
+// nothing.
+func (self *SocketsService) SetControlRate(callsPerSecond int, burst int) {
+	self.bound.SetRate(callsPerSecond, burst)
+}
+
 // Sets the keys tickets are signed and verified with: SOCK-M5-08's host calls this once its key file
 // loads, and again on each rotation. nil takes them away, and the engine turns not ready.
 func (self *SocketsService) SetTicketKeys(ticketKeys SocketTicketKeys) {
