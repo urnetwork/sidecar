@@ -432,6 +432,8 @@ barrier stream.keepalive_reset.after stream_keepalive.go
 barrier stream.keepalive_reset.before stream_keepalive.go
 barrier stream.open.after stream_open.go
 barrier stream.open.before stream_open.go
+barrier team_directory.file.after config_directory.go
+barrier team_directory.file.before config_directory.go
 barrier tls.device_key_put.after tls_key.go
 barrier tls.device_key_put.before tls_key.go
 barrier tls.handshake.after smtpproof/tls_client.go
