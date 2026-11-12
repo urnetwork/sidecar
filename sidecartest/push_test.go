@@ -372,9 +372,9 @@ func TestPushPartialResetAppliesNothingUntilVersionsRefetched(t *testing.T) {
 	testPushPartialReset(t, net, laptop, resident, notices)
 }
 
-// The same reset while the push waits out its retry of a refused versions refetch: the hint's ask for
-// versions waits with it, on the Net's clock, until the test moves the clock to the retry, whose page is
-// then what the client holds, and still nothing of the part.
+// The same reset while the push waits out its retry of a refused versions refetch, on the Net's clock:
+// the test moves the clock to the retry, so a refetch after the run comes whether or not the hint's ask
+// for versions ends the wait, and its page is what the client then holds, still with nothing of the part.
 func TestPushPartialResetAppliesNothingThroughARefetchRetry(t *testing.T) {
 	net, laptop, resident, notices := newTestPushSidecarRefetchRefused(t, sidecar.PushTopicTeam, sidecar.PushTopicMail)
 	testPushPartialReset(t, net, laptop, resident, notices)
