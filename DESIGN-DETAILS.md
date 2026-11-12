@@ -21,7 +21,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10) |
 | 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11) |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
-| 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | in progress |
+| 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
 
@@ -11293,7 +11293,7 @@ Questions this section builds on, with the option taken: plan-QUOTA-lease-debits
 
 ## 14. Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13)
 
-Status: in progress. Written: all of 14.1 to 14.9, the model and the questions. Left: the model's design runs are being recorded in 14.3.
+Status: complete (2026-11-12)
 
 Tasks held until complete: none. The fix returns to landed code as two fix tracks (14.7), the first an interim that stops the loss before the rest is built. EVS2-M10-12 and EVS2-M10-16 build against the slot rules as they stand, and 14.7 says what each must keep.
 
@@ -11494,10 +11494,80 @@ It abstracts: bytes are equal throughout (a statement with other bytes is refuse
 Runs, by `run-slot.sh` on TLC master `d8fb231`, 2026-11-12, breadth-first, each complete at its bounds:
 
 ```text
-(being recorded)
+                                       result                                              distinct states depth        time
+EvsSlot.tla, the design (Twin none)
+EvsSlot                                two statements, 1 evacuation run, a window of 1, 1 other commit, 1 PATH_EPOCH commit, 1 stalled
+                                       head write, 1 killed run, 1 version removed with its slot, 1 ERASE rewrite, 2 ticks
+                                       pass, every invariant                                     6,048,416    38  4 min 18 s
+EvsSlot-Zombie                         two statements, a stalled evacuation run beside its successor, 1 other commit, 1 PATH_EPOCH
+                                       commit, 1 version removed, 2 ticks
+                                       pass, every invariant                                     8,951,410    45 10 min 14 s
+EvsSlot-Window                         two statements, a window of 2, 1 other commit, 1 PATH_EPOCH commit, 1 stalled head write, 1
+                                       version removed, 3 ticks
+                                       pass, every invariant                                     3,210,617    37  2 min 10 s
+EvsSlot-Three                          three statements, so two may take over one refused statement's slot at once; 1 PATH_EPOCH
+                                       commit, 2 ticks
+                                       pass, every invariant                                     3,227,506    44   4 min 1 s
+EvsSlot-Live                           RecordsLeave under weak fairness, no symmetry: two statements, 1 PATH_EPOCH commit, 1
+                                       stalled head write, 2 ticks
+                                       pass, the property                                          274,387    32  5 min 19 s
+EvsSlot.tla, the interim (evacuation keeps every dead record's slots, step 6 as landed)
+EvsSlotInterim                         two statements, 1 other commit, 1 PATH_EPOCH commit, 1 stalled head write, 1 killed run, 1
+                                       ERASE rewrite, no version removed; ClosureHolds, StampHasRecord and DeadIsFinal
+                                       pass, those three                                         5,169,822    35  4 min 16 s
+EvsSlotInterimOpen-Consume             a second introducer commits and is removed (C)
+                                       ConsumeKeeps violated, a trace of 11 states                   6,786    11         3 s
+EvsSlot.tla, the code as landed
+EvsSlotLanded-Retoken                  a push takes a dead statement's slot and commits; the dead record is evacuated (A)
+                                       AdopterKept violated, a trace of 14 states                   40,960    14         6 s
+EvsSlotLanded-Relist                   a statement lists a committed push's slot and dies; its record is evacuated (B)
+                                       CreatorKept violated, a trace of 12 states                   12,928    12         4 s
+EvsSlotLanded-Consume                  a statement lists a committed push's slot and commits; its version is removed (C)
+                                       ConsumeKeeps violated, a trace of 11 states                   1,983    11         3 s
+EvsSlot.tla, one rule of the design broken
+EvsSlotTwin-TakesForeign               step 6 takes another statement's object as it stands; evacuation checks the origin
+                                       AdopterKept violated, a trace of 14 states                   41,777    14         7 s
+EvsSlotTwin-TakesForeign-Consume       the same, with a version removed
+                                       OneIntroducer violated, a trace of 10 states                  1,239    10         2 s
+EvsSlotTwin-TakesLive                  a takeover of a statement in the same path epoch
+                                       DeadIsFinal violated, a trace of 10 states                      401    10         2 s
+EvsSlotTwin-TakesCommitted             a takeover that does not look for the statement in the head
+                                       ClosureHolds violated, a trace of 12 states                   4,122    12         2 s
+EvsSlotTwin-TakesUnsettled             a takeover that does not wait out the settle age; three statements
+                                       OriginStands violated, a trace of 17 states                 189,872    17        26 s
+EvsSlotTwin-NoOriginAtDelete           evacuation deletes a dead record's slot whatever its origin
+                                       CreatorKept violated, a trace of 12 states                   12,775    12         3 s
+EvsSlotTwin-UnconditionalDelete        evacuation's DELETE names no LastModified; two runs
+                                       ClosureHolds violated, a trace of 18 states                 134,516    18        17 s
+EvsSlotTwin-NoSettle                   evacuation deletes an unsettled slot; two runs
+                                       ClosureHolds violated, a trace of 18 states                 149,578    18        17 s
+EvsSlotTwin-StampBeforeRecord          the slots before the record
+                                       StampHasRecord violated, a trace of 4 states                      7     4         2 s
+EvsSlotTwin-DeadUnfenced               a pending record taken for dead with no fence (2.2.3)
+                                       ClosureHolds violated, a trace of 10 states                     100    10         3 s
+EvsSlot.tla, a rule the design does not rest on, broken
+EvsSlotProbe-RewriteDropsOrigin        an ERASE rewrite that drops the origin, at EvsSlot's bounds; every invariant but
+                                       OriginStands
+                                       pass, those four                                          6,063,424    38  4 min 38 s
+EvsSlot.tla, states the design must reach, each stated as an invariant that says it never does
+EvsSlotReach-Takes                     a retoken takes over its refused statement's slot and commits
+                                       NeverTakes violated, a trace of 13 states                     7,266    13         6 s
+EvsSlotReach-Deletes                   evacuation deletes a dead statement's own slot
+                                       NeverDeletes violated, a trace of 10 states                   1,319    10         4 s
+EvsSlotReach-Refuses                   a statement that lists another's slot is refused 409 SLOT_STALE
+                                       NeverRefuses violated, a trace of 8 states                      271     8         4 s
+EvsSlotReach-Young                     a dead statement's unsettled slot is kept
+                                       NeverYoung violated, a trace of 9 states                        822     9         4 s
+EvsSlotReach-SecondLife                after evacuation deleted a dead statement's slot, a later statement creates the id
+                                       again and commits
+                                       NeverSecondLife violated, a trace of 14 states               11,024    14         5 s
+EvsSlotReach-Leaks                     a slot stored late outlives its statement's record
+                                       NeverLeaks violated, a trace of 13 states                       729    13         3 s
 ```
 
-The first three are the brief's requirement in the negative: the code as landed loses a committed version's slot to a retoken's dead record (A), to a re-lister's dead record (B) and to the removal of a second introducer (C). `EvsSlotInterimOpen-Consume` shows that keeping dead records' slots leaves C. Each twin removes one rule and loses a slot or the property that rule carries: taking another's object as it stands, a takeover of a statement in the same epoch or of one not looked for in the head or of an unsettled object, evacuation's delete without the origin, without the condition or without the settle age, the record after the slots, and a dead verdict without the fence. D is not in the model: it is a missing check at 5h, not a schedule.
+Every design run, the interim's and the probe pass, and every landed, open, twin and reach run ends on the one invariant its configuration names. The seven runs that pass used four workers and the others one, on a shared host; the largest state directory was 363 MB. `EvsSlot-Live` runs at smaller bounds than the safety runs, since a liveness run takes no symmetry: it has no other push's commit, no killed run and no removed version.
+
+The three runs of the code as landed are the brief's requirement in the negative: the code as landed loses a committed version's slot to a retoken's dead record (A), to a re-lister's dead record (B) and to the removal of a second introducer (C). `EvsSlotInterimOpen-Consume` shows that keeping dead records' slots leaves C. Each twin removes one rule and loses a slot or the property that rule carries: taking another's object as it stands, a takeover of a statement in the same epoch or of one not looked for in the head or of an unsettled object, evacuation's delete without the origin, without the condition or without the settle age, the record after the slots, and a dead verdict without the fence. D is not in the model: it is a missing check at 5h, not a schedule.
 
 ### 14.4 Cost
 
@@ -11534,7 +11604,7 @@ The first three are the brief's requirement in the negative: the code as landed 
 - an object with no origin: one written before the fix, or by the interim's evs;
 - every dead record's slots, while the interim stands.
 
-A later pass over slot/ can remove all but the held ones by the origin alone: an object whose origin's statement Resolve finds dead, once the horizon (2.2.4) has passed the minute its record could lie in. It is not designed here; nothing rests on it.
+A later pass over slot/ can remove those that carry an origin and no hold: an object whose origin's statement Resolve finds dead, once the horizon (2.2.4) has passed the minute its record could lie in. It is not designed here; nothing rests on it.
 
 **A hostile client.** Listing another statement's slot costs it a refusal and deletes nothing: its record is dead and the object is not its own. It cannot take over a slot that a committed version names (14.2.4's 3), nor one on a deposit or erasure ref (2), nor one of a statement that can still commit. It can take over the slots of its own refused statements, which are its own. It cannot hold an id against the writer that drew it, since an id is seen by no one else until a commit names it, and from then its object is the committed statement's. The refusal does not depend on the bytes it sends, so it learns nothing from it.
 
