@@ -6,7 +6,7 @@
 // subkeys stay off every server (§11.5) and nothing evs checks changes.
 //
 //	sign     a push made for an agent (EvsWritePathsArgs.AgentId) names it, and where the host signs provenance
-//	         (EvsClientArgs.SignProvenance, Sidecar.SignProvenance) the agent's subkey signs, under purpose evs-push,
+//	         (EvsClientArgs.SignProvenance, Sidecar.SignProvenance) the agent's subkey signs, under purpose evs-agent,
 //	         EvsAgentProvenanceMessage: repo_id || ref_id || push_id || i64be(time_ms) || u32be(n) || the push's n
 //	         carried commits' oids in its order. The push id commits at most once (I-EVS-3) and the statement that
 //	         names it is the identity key's, so the signature speaks for this push alone and, in git mode, for its
@@ -32,8 +32,10 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// The purpose an agent subkey signs a push's provenance under, one of identity_agent.go's provenance purposes.
-const AgentProvenancePurposeEvsPush = "evs-push"
+// The purpose an agent subkey signs a push's provenance under, one of identity_agent.go's provenance purposes: never
+// "evs-push", which the identity key signs the statement itself under, so a subkey's bytes are never a statement's
+// (D-CORE-6), as record-agent stands beside record-entry.
+const AgentProvenancePurposeEvsAgent = "evs-agent"
 
 // What an agent subkey signs of a push: see the file header.
 func EvsAgentProvenanceMessage(repoId Id, refId Id, pushId Id, timeMs int64, commitOids []EvsGitOid) []byte {
@@ -66,7 +68,7 @@ func evsSignPushProvenance(provenance *protocol.EvsProvenance, sign EvsSignProve
 	if sign == nil {
 		return nil
 	}
-	signature, err := sign(agentId, AgentProvenancePurposeEvsPush, message)
+	signature, err := sign(agentId, AgentProvenancePurposeEvsAgent, message)
 	if errors.Is(err, ErrAgentSubkeyRevoked) {
 		return nil
 	}
@@ -160,7 +162,7 @@ func EvsCheckPushProvenance(check *EvsPushProvenanceCheck) (*EvsPushProvenance, 
 	verdict, err := VerifyAgentProvenance(&AgentProvenanceCheck{
 		SidecarId: signerId, IdentityPublicKey: check.IdentityPublicKey, EntryTime: evsTime(push.GetTimeMs()),
 		AgentId: agentId, Cert: provenance.GetAgentCert(), KeyId: provenance.GetAgentKeyId(),
-		Signature: provenance.GetAgentSignature(), Purpose: AgentProvenancePurposeEvsPush, Message: message,
+		Signature: provenance.GetAgentSignature(), Purpose: AgentProvenancePurposeEvsAgent, Message: message,
 		Settings: settings,
 	})
 	if err != nil {

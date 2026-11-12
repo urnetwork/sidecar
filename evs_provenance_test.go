@@ -206,7 +206,11 @@ func TestEvsAgentProvenanceMessageBindsThePush(t *testing.T) {
 	if len(message) != 16*3+8+4+2*20 {
 		t.Errorf("a message of %d bytes", len(message))
 	}
-	if !agentProvenancePurposeKnown(AgentProvenancePurposeEvsPush) {
+	if !agentProvenancePurposeKnown(AgentProvenancePurposeEvsAgent) {
 		t.Error("the push purpose is no provenance purpose")
+	}
+	// a subkey's purpose is never one the identity key signs a statement under (D-CORE-6)
+	if purpose, _ := sidecarIdentitySignedPurpose(bridge.SignedType_SIGNED_EVS_PUSH); purpose == AgentProvenancePurposeEvsAgent {
+		t.Error("the agent purpose is the statement's")
 	}
 }

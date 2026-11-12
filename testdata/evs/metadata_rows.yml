@@ -188,6 +188,7 @@ EvsReadObject.missing: {number: 6, type: bool, row: evs-7, sees: "status"}
 EvsRefsReply.format: {number: 1, type: uint32, row: evs-1, sees: "object format"}
 EvsRefsReply.push_sequence: {number: 2, type: uint64, row: evs-24, sees: "each repo's push sequence"}
 EvsRefsReply.refs: {number: 3, type: repeated EvsHeadSummary, row: evs-2, sees: "ref ids"}
+EvsRefsReply.all: {number: 4, type: bool, row: evs-24, sees: "the sequence value each ref's last commit raised, which GET .../refs?moved_after= reads"}
 EvsLogReply.statements: {number: 1, type: repeated EvsReadStatement, row: evs-14, sees: "their Signed EvsPush statements"}
 EvsLogReply.next_version: {number: 2, type: uint64, row: evs-14, sees: "versions 64n to 64n+63"}
 

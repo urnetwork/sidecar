@@ -56,7 +56,7 @@ const AgentProvenancePurposeRecord = "record-agent"
 
 // The provenance purposes a subkey signs, and nothing else: each names sealed bytes its format defines, a record
 // entry's and §11.6's push metadata's (evs_provenance.go, EVS1-M6-02).
-var agentProvenancePurposes = []string{AgentProvenancePurposeRecord, AgentProvenancePurposeEvsPush}
+var agentProvenancePurposes = []string{AgentProvenancePurposeRecord, AgentProvenancePurposeEvsAgent}
 
 // What every provenance signature's bytes begin with, as §6.9's signed bytes do.
 const agentProvenanceSignedPrefix = "urnetwork-sidecar-v1/"
