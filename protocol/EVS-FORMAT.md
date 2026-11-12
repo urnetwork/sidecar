@@ -158,6 +158,7 @@ A deposit's slot key is HPKE in base mode with §10.6's wraps' suite, X-Wing (`M
 - A name (§11.7's name row) is sealed alone: the name, then 0x80 and zeros to the next multiple of 64 B, under a random 24 B nonce with a 16 B tag, AAD repo_id || u64be(p) || parent token || child token, p the path epoch whose tokens the row uses, under manifest_p. The key's generation and the AAD's widths are this file's reading, for EVS1-M2-04's vectors to pin.
   The padding is exactly one step: a reader refuses a marker outside the last 64 B, or a non-zero byte after it, and then recomputes the child's token from the parent's and the name, refusing a mismatch. A carried row (`EvsName.epoch`) opens under its source epoch's manifest and path keys and its directory's token in that epoch, an epoch older than its table's. A table that lists a token twice, or a kind other than file and directory, is refused whole. The 448 KiB bound counts each row as the table encodes it with its epoch cleared.
 - A file's sealed fields hold a 16 B `file_id`, a git file mode (100644, 100664, 100755, 120000 or 160000; a directory is no file) and a SHA-1 oid; format 1 refuses `content_sha256` as FORMAT_UNSUPPORTED.
+- **Erasure notes** (§11.12's push and rekey rows; QD-682; question evs1-m2-30-erasure-note-format). An ERASE's and a CLOSURE's note is `EvsSealedMetadata.erasure_note`, sealed with the rest of the push's metadata under manifest_g. An ERASE's is erasure id 16 B | complete u8, 1 when this ERASE ends the erasure and 0 otherwise | the caller's note bytes of what the keys covered (RECORD's sealed note, MAIL's documents), which may be none: 17 B at least. A CLOSURE's is its erasure's id alone, exactly 16 B, no caller bytes. An ERASE changes no path, so it creates nothing on the erasure ref, which evs takes as a creates-only push of no change. A reader refuses an ERASE that changes a path, or whose note is under 17 B or has another complete byte, and a CLOSURE whose note is not 16 B. No other push carries one.
 - A creating push's ref name (payload section 15) is sealed alone under manifest_g, g the push's generation, AAD "UR evs 1.0 ref name" || repo_id || ref_id, its plaintext the ref name's bytes unpadded (DESIGN-DETAILS 8.2.2). A reader opens `EvsHeadSummary.sealed_ref_name` so and compares it with the creating push's `EvsSealedMetadata.ref_name`.
 
 ## Statements and payloads
@@ -341,7 +342,7 @@ For design-records, each is a reading that changes no D- item:
 | Payload items | Sections 7, 8, 12, 13 and 14 as tabled above |
 | Batch record bodies | Items in §11.8's order, each u32 length \| bytes |
 | `log/` | `EvsLogPage` |
-| `EvsSealedMetadata` | `GroupHead`, provenance, commits with their changes, the signed import |
+| `EvsSealedMetadata` | `GroupHead`, provenance, commits with their changes, the signed import, an ERASE's or a CLOSURE's erasure note (QD-682) |
 | Read reply | `EvsReadRequest`, `EvsReadFrame`, `EvsHeadSummary`, `EvsReadPathReply`, the three proof messages and `EvsReadObject` as `evs.proto` writes them |
 | Listings | `EvsRefsReply` with the repo's format and push sequence; `EvsLogReply` with the next version |
 | Path components | Empty, slash and NUL refused, as git's tree format refuses them; nothing else |

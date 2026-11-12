@@ -208,11 +208,15 @@ func newEpochWorldOf(t *testing.T, kind protocol.RepoKind) *epochWorld {
 	return world
 }
 
-// Appends a position at which readers read the repo and w, v and m write it, holders_shrunk_at at shrunkAt, with the
-// reader expiries given, and gives it to evs and every device.
+// Appends a position at which readers read the repo and w, v and m write it, w its admin, as its CLOSUREs and ERASEs
+// need a reader to find it, holders_shrunk_at at shrunkAt, with the reader expiries given, and gives it to evs and
+// every device.
 func (self *epochWorld) advance(readers []string, shrunkAt uint64, expiries map[string]time.Time) *FakeGkmAuthView {
 	fixture := &FakeGkmAuthFixture{
-		Rows:               FakeGkmAuthRows(&protocol.AclRepo{RepoId: self.repoId.Bytes(), Kind: self.kind, HoldersShrunkAt: shrunkAt}),
+		Rows: FakeGkmAuthRows(&protocol.AclRepo{
+			RepoId: self.repoId.Bytes(), Kind: self.kind, HoldersShrunkAt: shrunkAt,
+			Admins: []*protocol.AclRepoAdminRow{{SidecarId: self.signers["w"].SidecarId.Bytes()}},
+		}),
 		IdentityKeys:       map[sidecar.Id][]byte{},
 		RepoReaders:        map[sidecar.Id][]sidecar.Id{},
 		RepoWriters:        map[sidecar.Id][]sidecar.Id{},
@@ -944,17 +948,43 @@ func TestEvsRecordClassWritesSlotKeyedEndToEnd(t *testing.T) {
 	oldSlot := epochNewSlots(nil, afterSmall)[0]
 	erased := []*sidecar.EvsErasedKey{{SlotId: oldSlot, KeyIndex: 0}}
 	closed := []byte("the ledger with the entry gone")
-	if _, err := w.repo.Closure(world.ctx, &sidecar.EvsClosureArgs{
-		Writes: []*sidecar.EvsPathWrite{{Path: "ledger/a", Content: bytes.NewReader(closed)}}, Erased: erased,
-	}); err != nil {
+	erasureId := sidecar.NewId()
+	closure, err := w.repo.Closure(world.ctx, &sidecar.EvsClosureArgs{
+		ErasureId: erasureId, Writes: []*sidecar.EvsPathWrite{{Path: "ledger/a", Content: bytes.NewReader(closed)}}, Erased: erased,
+	})
+	if err != nil {
 		t.Fatalf("the CLOSURE: %v", err)
 	}
 	afterClosure := world.slotKeys()
 	if len(epochNewSlots(afterLarge, afterClosure)) != 1 {
 		t.Fatalf("%d slots after the CLOSURE", len(afterClosure))
 	}
-	if _, err := w.repo.Erase(world.ctx, &sidecar.EvsEraseArgs{ErasureId: sidecar.NewId(), Keys: erased, Complete: true}); err != nil {
+	// the CLOSURE's sealed note names its erasure, and its payload the keys the ERASE after it lists: what another
+	// device resuming the erasure reads before any ERASE of it committed (§11.12's reconcile row; QD-682)
+	closures, err := world.device("v", nil).repo.ReadClosures(world.ctx, nil, 0)
+	if err != nil || len(closures) != 1 || closures[0].ErasureId != erasureId || closures[0].Version != closure.Version ||
+		len(closures[0].Keys) != 1 || closures[0].Keys[0].SlotId != oldSlot || closures[0].Keys[0].KeyIndex != 0 {
+		t.Fatalf("the CLOSURE read back: %v %v", closures, err)
+	}
+	if erasures, err := w.repo.Erasures(world.ctx); err != nil || len(erasures) != 0 {
+		t.Fatalf("erasures before the ERASE: %v %v", erasures, err)
+	}
+	if _, err := w.repo.Erase(world.ctx, &sidecar.EvsEraseArgs{ErasureId: erasureId, Keys: erased, Complete: true, Note: []byte("ledger/a's entry")}); err != nil {
 		t.Fatalf("the ERASE: %v", err)
+	}
+	// the ERASE creates nothing on the erasure ref: its note rides its sealed metadata, where a reader opens it
+	erasures, err := world.device("v", nil).repo.ReadErasures(world.ctx, 0)
+	if err != nil || len(erasures) != 1 || erasures[0].ErasureId != erasureId || !erasures[0].Complete ||
+		string(erasures[0].Note) != "ledger/a's entry" || len(erasures[0].Keys) != 1 || erasures[0].Keys[0].SlotId != oldSlot {
+		t.Fatalf("the ERASE read back: %v %v", erasures, err)
+	}
+	erasureHead := world.head(sidecar.EvsErasureRefId(world.repoId))
+	window, err := evsservice.EvsHeadWindow(erasureHead)
+	if err != nil || erasureHead.GetVersion() != 1 || len(window) != 1 {
+		t.Fatalf("the erasure ref's head: version %d, %d window entries, %v", erasureHead.GetVersion(), len(window), err)
+	}
+	if changeCount := window[0].Flags >> 16; changeCount != 0 || window[0].Flags&uint32(protocol.EvsWindowFlag_EVS_WINDOW_CREATES_PATH) != 0 {
+		t.Fatalf("the ERASE committed %d changes, flags %#x", changeCount, window[0].Flags)
 	}
 	fresh := world.device("r", nil)
 	if content, _, err := fresh.read("ledger/a"); err != nil || !bytes.Equal(content, closed) {
@@ -1051,8 +1081,9 @@ func TestEvsRecordClassClosureAcrossACutOverKeepsItsSlotEndToEnd(t *testing.T) {
 	})
 	closed := []byte("the ledger, the entry gone")
 	_, err := w.repo.Closure(world.ctx, &sidecar.EvsClosureArgs{
-		Writes: []*sidecar.EvsPathWrite{{Path: "ledger/a", Content: bytes.NewReader(closed)}},
-		Erased: []*sidecar.EvsErasedKey{{SlotId: oldSlot, KeyIndex: 0}},
+		ErasureId: sidecar.NewId(),
+		Writes:    []*sidecar.EvsPathWrite{{Path: "ledger/a", Content: bytes.NewReader(closed)}},
+		Erased:    []*sidecar.EvsErasedKey{{SlotId: oldSlot, KeyIndex: 0}},
 	})
 	world.setIntercept(nil)
 	if interceptErr != nil {
