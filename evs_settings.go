@@ -209,6 +209,13 @@ type EvsSettings struct {
 	// Whether this host is a background daemon, which waits out SubscribeResetMaxWait after an incomplete reset: the
 	// desktop daemon is; an app in the foreground is not.
 	SubscribeBackground bool
+
+	// §16.2's evs_write on a git-mode ref (owner decision 141; EVS1-M3-01): how many tips WriteAtTip commits on
+	// while the path stays at its base version, a moved tip building the commit again on the newer one: 3.
+	WriteAtTipTryCount int
+	// How many of a path's versions Lookup walks back from its newest for the first after an action's base_version
+	// (§16.6's evs row): 10,000. Past it Lookup answers ErrEvsLookupUnknown, which leaves the use uncertain.
+	LookupVersionCount int
 }
 
 // The desktop daemon's evs settings.
@@ -289,5 +296,7 @@ func DefaultEvsSettings() *EvsSettings {
 		SubscribeRetryMaxWait:    5 * time.Minute,
 		SubscribeRetryCount:      8,
 		SubscribeBackground:      true,
+		WriteAtTipTryCount:       3,
+		LookupVersionCount:       10000,
 	}
 }
