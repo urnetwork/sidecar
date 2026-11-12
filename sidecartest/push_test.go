@@ -6,9 +6,17 @@ package sidecartest
 // frame over h1 is kept, while nothing but a push is taken from ControlId even over h1 (D-PROTO-8); push
 // resyncs after a resident restart, a reset of the owners' versions and then hints whose seq only rises
 // (D-PROTO-5); a reset left incomplete by a dropped tail applies nothing until versions are refetched
-// (D-PROTO-20); and what the capture holds from ControlId is acks and hint fields alone (R-PROTO-8).
-// Connect's own timers run in real time, as net_connect.go says; a publisher's window runs on a fake
-// clock of its own, which the test steps.
+// (D-PROTO-20), also while the push waits out a refused versions refetch; and what the capture holds
+// from ControlId is acks and hint fields alone (R-PROTO-8). Connect's own timers run in real time, as
+// net_connect.go says; a publisher's window runs on a fake clock of its own, which the test steps.
+//
+// The sidecar's push runs on the Net's clock, which only a test moves, and fetches versions at its start
+// on a goroutine of its own, so a test that took that refetch as done would race it: one still in flight
+// lands its page wherever it lands, between a reset's part and the hint after it included, and one that
+// fails waits out its retry until the clock moves. So the api refuses each test's start refetch, and the
+// test moves the clock to the retry and hears it apply before anything else, once its subscribers are in
+// place, or runs its rows during the retry wait. Past that a test moves the clock only to a refused
+// refetch's retry, never to the hourly refetch, so a refetch comes only when an input asks for one.
 
 import (
 	"context"
@@ -32,10 +40,17 @@ import (
 const testPushTimeout = 45 * time.Second
 
 // One admitted sidecar of the Net's default network, its client's resident, and every notice its push
-// gives for the topics named, in order.
-func newTestPushSidecar(t *testing.T, topics ...string) (*Net, *SubprotocolSidecar, *NetResident, chan sidecar.PushNotice) {
+// gives for the topics named, in order, with the push's first versions refetch refused at the Net's api:
+// nothing the push fetches has applied, and it waits out its retry, RetryMinInterval on the Net's clock,
+// which is set when this returns and ends only when the test moves the clock there.
+func newTestPushSidecarRefetchRefused(t *testing.T, topics ...string) (*Net, *SubprotocolSidecar, *NetResident, chan sidecar.PushNotice) {
 	t.Helper()
 	net := newTestNet(t)
+	// armed before the sidecar starts, so it is the start's refetch the api refuses
+	refused, err := net.Faults().Add(&FaultPlan{Op: FaultOpHttp, KeyPrefix: "/sidecar/sync/versions", Result: FailBeforeApply})
+	if err != nil {
+		t.Fatal(err)
+	}
 	sidecars, _, err := net.AddSubprotocolSidecars("laptop")
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +73,76 @@ func newTestPushSidecar(t *testing.T, topics ...string) (*Net, *SubprotocolSidec
 	if err != nil {
 		t.Fatal(err)
 	}
+	guard := time.After(testPushTimeout)
+	select {
+	case <-refused:
+	case <-guard:
+		t.Fatal("the push's start refetch never reached the api")
+	}
+	// the clock stands where it stood at the refusal, so the retry's timer is at a time known here
+	clock := net.Clock()
+	retryTime := clock.Now().Add(sidecar.DefaultPushClientSettings().RetryMinInterval)
+	for {
+		pending, added := clock.WatchTimers()
+		if slices.ContainsFunc(pending, retryTime.Equal) {
+			return net, laptop, resident, notices
+		}
+		select {
+		case <-added:
+		case <-guard:
+			t.Fatalf("the push set no retry at %s: %v", retryTime, pending)
+		}
+	}
+}
+
+// newTestPushSidecarRefetchRefused's sidecar once the push's retry has applied: the test moves the Net's
+// clock to the retry and hears its core notice, which every applied refetch gives (push_state.go), so the
+// push applied a page fetched after the test's subscribers were in place, and has no refetch in flight.
+// It refetches again only when an input asks, or at SyncRefetchInterval, which no test here reaches.
+func newTestPushSidecar(t *testing.T, topics ...string) (*Net, *SubprotocolSidecar, *NetResident, chan sidecar.PushNotice) {
+	t.Helper()
+	net, laptop, resident, notices := newTestPushSidecarRefetchRefused(t, topics...)
+	cores := make(chan sidecar.PushNotice, 16)
+	removeCore, err := laptop.Subprotocol().Subscribe(sidecar.PushTopicCore, func(notice sidecar.PushNotice) {
+		select {
+		case cores <- notice:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer removeCore()
+	if notice := awaitNoticeSteppingRetries(t, cores, "the retried refetch's core", net.Clock()); !notice.Resync {
+		t.Fatalf("core's first notice is no refetch's: %+v", notice)
+	}
 	return net, laptop, resident, notices
+}
+
+// The next notice, moving clock, the Net's, to each of its timers due within RetryMaxInterval of the time
+// the wait began: a refused versions refetch's retry, the nearest timer a push test's sidecar sets, the
+// others, its hourly refetch among them, being an hour or more out. The hourly refetch is never reached,
+// so a refetch comes only when an input asks for one or a refused one is retried.
+func awaitNoticeSteppingRetries(t *testing.T, notices <-chan sidecar.PushNotice, what string, clock *FakeClock) sidecar.PushNotice {
+	t.Helper()
+	stepLimit := clock.Now().Add(sidecar.DefaultPushClientSettings().RetryMaxInterval)
+	guard := time.After(testPushTimeout)
+	for {
+		pending, added := clock.WatchTimers()
+		// nearest first
+		if 0 < len(pending) && !pending[0].After(stepLimit) {
+			clock.AdvanceTo(pending[0])
+			continue
+		}
+		select {
+		case notice := <-notices:
+			return notice
+		case <-added:
+		case <-guard:
+			t.Fatalf("no notice of %s", what)
+			return sidecar.PushNotice{}
+		}
+	}
 }
 
 // The next notice, waiting at most testPushTimeout.
@@ -281,9 +365,26 @@ func TestPushResyncsAfterAResidentRestart(t *testing.T) {
 // hint that comes next abandons the run and sends the client to GET /sidecar/sync/versions, whose page,
 // the owners' versions, is what the client then holds. The part names a team version no owner wrote, so
 // a part applied would show as that version, and team is durable, so the owners' lower one would then
-// alarm rather than apply.
+// alarm rather than apply. The push has no refetch in flight when the part comes, so the only refetch
+// after the run is the one the hint asks for.
 func TestPushPartialResetAppliesNothingUntilVersionsRefetched(t *testing.T) {
 	net, laptop, resident, notices := newTestPushSidecar(t, sidecar.PushTopicTeam, sidecar.PushTopicMail)
+	testPushPartialReset(t, net, laptop, resident, notices)
+}
+
+// The same reset while the push waits out its retry of a refused versions refetch: the hint's ask for
+// versions waits with it, on the Net's clock, until the test moves the clock to the retry, whose page is
+// then what the client holds, and still nothing of the part.
+func TestPushPartialResetAppliesNothingThroughARefetchRetry(t *testing.T) {
+	net, laptop, resident, notices := newTestPushSidecarRefetchRefused(t, sidecar.PushTopicTeam, sidecar.PushTopicMail)
+	testPushPartialReset(t, net, laptop, resident, notices)
+}
+
+// The partial reset tests' rows on a push set up for them: the owners write team 9 and mail 4, a
+// reset's first part names team 50 and its tail never comes, a hint abandons the run, and the client
+// ends on the owners' versions, fetched after the run, never having shown team 50.
+func testPushPartialReset(t *testing.T, net *Net, laptop *SubprotocolSidecar, resident *NetResident, notices chan sidecar.PushNotice) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), testPushTimeout)
 	defer cancel()
 	clientId := laptop.ClientId()
@@ -316,7 +417,7 @@ func TestPushPartialResetAppliesNothingUntilVersionsRefetched(t *testing.T) {
 	}
 	held := map[string]uint64{}
 	for held[sidecar.PushTopicTeam] != 9 || held[sidecar.PushTopicMail] != 4 {
-		notice := awaitNotice(t, notices, "team 9 and mail 4")
+		notice := awaitNoticeSteppingRetries(t, notices, "team 9 and mail 4", net.Clock())
 		if notice.Topic == sidecar.PushTopicTeam && notice.Version != 9 {
 			t.Fatalf("team moved to %d, which only the incomplete reset named", notice.Version)
 		}
