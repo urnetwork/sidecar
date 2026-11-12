@@ -51,10 +51,12 @@ type searchVersionCursor struct {
 // A min-heap of cursors by their next record's key, then their order, so ties pop in input order.
 type searchVersionHeap []*searchVersionCursor
 
+// heap.Interface: the cursors still holding a record.
 func (self searchVersionHeap) Len() int {
 	return len(self)
 }
 
+// heap.Interface: by the cursors' next keys, then their order.
 func (self searchVersionHeap) Less(i int, j int) bool {
 	if compare := compareSearchVersionRecords(&self[i].record, &self[j].record); compare != 0 {
 		return compare < 0
@@ -62,14 +64,17 @@ func (self searchVersionHeap) Less(i int, j int) bool {
 	return self[i].index < self[j].index
 }
 
+// heap.Interface.
 func (self searchVersionHeap) Swap(i int, j int) {
 	self[i], self[j] = self[j], self[i]
 }
 
+// heap.Interface: adds a cursor.
 func (self *searchVersionHeap) Push(value any) {
 	*self = append(*self, value.(*searchVersionCursor))
 }
 
+// heap.Interface: takes the last cursor off.
 func (self *searchVersionHeap) Pop() any {
 	old := *self
 	cursor := old[len(old)-1]
@@ -453,6 +458,7 @@ type searchVersionRunSource struct {
 	runId SearchVersionRunId
 }
 
+// The run's records, a data page at a time. See SearchVersionSource.
 func (self *searchVersionRunSource) Open() (SearchVersionInput, error) {
 	run, err := self.table.openRun(self.runId)
 	if err != nil {
@@ -470,6 +476,7 @@ type searchVersionRunInput struct {
 	consumed int
 }
 
+// The next record, reading the next data page when one runs out. See SearchVersionInput.
 func (self *searchVersionRunInput) Next() (SearchVersionRecord, bool, error) {
 	for self.consumed == len(self.pending) {
 		if self.run.meta.Pages <= self.next {
@@ -517,6 +524,7 @@ func (self *searchVersionRunInput) ByteCount() int64 {
 	return int64(2 * self.table.settings.VersionPageByteCount)
 }
 
+// Holds nothing to close: pages are read through the cache. See SearchVersionInput.
 func (self *searchVersionRunInput) Close() {}
 
 // Records a caller lists, sorted in memory, in place, at each Open: a slot's entries, an erasure's keys. Records of one
@@ -524,6 +532,7 @@ func (self *searchVersionRunInput) Close() {}
 // the merge counts nothing for it but its cursor.
 type SearchVersionRecordsSource []SearchVersionRecord
 
+// Sorts the list in place and reads it. See SearchVersionSource.
 func (self SearchVersionRecordsSource) Open() (SearchVersionInput, error) {
 	slices.SortStableFunc(self, func(a SearchVersionRecord, b SearchVersionRecord) int {
 		return compareSearchVersionRecords(&a, &b)
@@ -537,6 +546,7 @@ type searchVersionListInput struct {
 	next    int
 }
 
+// The next key's record, the one superseding the rest of that key. See SearchVersionInput.
 func (self *searchVersionListInput) Next() (SearchVersionRecord, bool, error) {
 	if len(self.records) <= self.next {
 		return SearchVersionRecord{}, false, nil
@@ -557,6 +567,7 @@ func (self *searchVersionListInput) ByteCount() int64 {
 	return 0
 }
 
+// Holds nothing to close. See SearchVersionInput.
 func (self *searchVersionListInput) Close() {}
 
 // The records of an index slot, head or large entry's entries (§11.14's entry row), sorted in memory, since a slot's
@@ -585,6 +596,7 @@ type searchVersionShardSource struct {
 	file   SearchVersionFile
 }
 
+// Reads the shard's tombstone table and starts at its first document. See SearchVersionSource.
 func (self *searchVersionShardSource) Open() (SearchVersionInput, error) {
 	input := &searchVersionShardInput{reader: self.reader, file: self.file}
 	if err := input.readTombstones(); err != nil {
@@ -623,6 +635,7 @@ func (self *searchVersionShardInput) readTombstones() error {
 	return indexCheckTombstoneOrder(self.tombstones, self.reader.companion)
 }
 
+// The next of the shard's documents and tombstones in key order. See SearchVersionInput.
 func (self *searchVersionShardInput) Next() (SearchVersionRecord, bool, error) {
 	if self.document == nil && int(self.docId) < self.reader.documentCount() {
 		document, err := self.reader.document(self.docId)
@@ -659,4 +672,5 @@ func (self *searchVersionShardInput) ByteCount() int64 {
 	return int64(EvsRecordFrameByteCount) + int64(len(self.tombstones))*int64(indexTombstoneMaxByteCount+16)
 }
 
+// Holds nothing to close: the reader is the caller's. See SearchVersionInput.
 func (self *searchVersionShardInput) Close() {}

@@ -70,6 +70,7 @@ type searchServeComponent struct {
 	serve   *DaemonSearchServe
 }
 
+// The search-serve component of sidecar, serving with serve.
 func newSearchServeComponent(sidecar *Sidecar, serve *DaemonSearchServe) *searchServeComponent {
 	return &searchServeComponent{sidecar: sidecar, serve: serve}
 }
