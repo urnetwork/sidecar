@@ -15,8 +15,8 @@ import (
 
 // Numbers as the design writes them, or for 0x10xx, 0x13xx and 0x14xx as §6.11's list orders them, with §10's two and
 // §11.6's two more statements after it, 0x11xx and 0x12xx as §8.8's and §7.9's rows do, and 0x15xx as
-// plan-TLS-small-readings#2 numbers §13.8's attestation. Values are permanent once released, so a change here is a
-// change to the wire.
+// plan-TLS-small-readings#2 numbers §13.8's attestation and QD-134 the link token, 0x1502 left for M6's edge login.
+// Values are permanent once released, so a change here is a change to the wire.
 func TestSignedTypeNumbersStable(t *testing.T) {
 	cases := []struct {
 		signedType SignedType
@@ -76,6 +76,7 @@ func TestSignedTypeNumbersStable(t *testing.T) {
 		{signedType: SignedType_SIGNED_EVS_IMPORT, number: 0x1404},
 
 		{signedType: SignedType_SIGNED_TLS_KEY_ATTESTATION, number: 0x1501},
+		{signedType: SignedType_SIGNED_TLS_LINK, number: 0x1503},
 
 		{signedType: SignedType_SIGNED_RECORD_HEADER, number: 0x1801},
 		{signedType: SignedType_SIGNED_APPROVAL_DECISION, number: 0x1802},
