@@ -11,6 +11,10 @@ barrier acl_engine.install.before acl_engine.go
 barrier acl_gate.install acl_gate.go
 barrier acl_gate.install.after acl_gate.go
 barrier acl_gate.install.before acl_gate.go
+barrier acl_grant_file.activate.after acl_grant_file.go
+barrier acl_grant_file.activate.before acl_grant_file.go
+barrier acl_share_read.deposit.after acl_share_read.go
+barrier acl_share_read.deposit.before acl_share_read.go
 barrier acl_suspend.aliases acl_suspend.go
 barrier acl_suspend.flows acl_suspend.go
 barrier acl_suspend.streams acl_suspend.go
