@@ -18,10 +18,11 @@
 // deletes nothing.
 //
 // §11.12's refused row closes every route but restore and DELETE with now while a repo is deleted, and every route
-// while it is shredding, but evs's read routes check neither (question evs1-m2-41-reads-of-deleted-repo): a reader of
-// a deleted repo is still served its files. So the schedules above read nothing between the delete and the end, and
-// Fs6ReadsRefusedWhileDeleted, a clause no test runs until the question is answered, holds the reads to 409
-// REPO_DELETED and then SHREDDING.
+// while it is shredding, the read, refs and log routes included (QD-665, answering evs1-m2-41-reads-of-deleted-repo).
+// The schedules above read nothing between the delete and the end; the clause Fs6ReadsRefusedWhileDeleted holds the
+// reader's reads to 409 REPO_DELETED while the repo is deleted, then SHREDDING once a --now delete claims it, and,
+// past the tombstone, its GET .../refs to SHREDDING: the shred deleted the group's keys, so the reader can no longer
+// name a path, and refs names none. Its twin is Fs6RestoredBeforeTheStart's, every file reading as before.
 //
 // FS-6's further clauses (a push validated just before the CAS removed by step 6's final pass; a fold, an evacuation,
 // a gkm commit and a delayed ack held across a --now shred re-creating nothing; a --now shred under a hold, its
@@ -34,8 +35,15 @@
 package fault
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/evsservice"
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/sidecartest"
@@ -243,10 +251,42 @@ func Fs6ReadsRefusedWhileDeleted(net *Net) *Schedule {
 		{Actor: "reader", Action: world.ExpectReadRefused("reader", "a.txt", protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING)},
 	}...)
 	steps = append(steps, fs6ShredToTheEnd(world)...)
-	steps = append(steps, &Step{Actor: "reader", Action: world.ExpectReadRefused("reader", "d/b.txt", protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING)})
+	steps = append(steps, &Step{Actor: "reader", Action: fs6ExpectRefsRefused(world, "reader", protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING)})
 	return &Schedule{
 		Id: "FS-6 reads refused while deleted", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3},
 		Refuses: "reads of a deleted repo, 409 REPO_DELETED, and of a shredding or shredded one, 409 SHREDDING",
 		Twin:    Fs6RestoredBeforeTheStart,
+	}
+}
+
+// A step action: device's GET .../refs through the lb under its own read token is refused with code. The route names
+// no path, so it needs none of the repo's keys, which a shred deletes.
+func fs6ExpectRefsRefused(world *EvsWorld, device string, code protocol.EvsRefusalCode) func(ctx context.Context, net *Net) error {
+	return func(ctx context.Context, net *Net) error {
+		worldDevice := world.Device(device)
+		token, err := world.issueToken(worldDevice, []string{"repo:" + world.RepoId.String() + ":r"})
+		if err != nil {
+			return err
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://evs.example/evs/v1/repos/"+sidecar.EvsKeyId(world.RepoId)+"/refs", nil)
+		if err != nil {
+			return err
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		response, err := worldDevice.transport.RoundTrip(request)
+		if err != nil {
+			return fmt.Errorf("%s's GET .../refs: %w", device, err)
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			return err
+		}
+		reply := &protocol.EvsRefusalReply{}
+		status, _ := sidecar.EvsRefusalStatus(code)
+		if response.StatusCode != status || proto.Unmarshal(body, reply) != nil || reply.GetCode() != code {
+			return fmt.Errorf("%s's GET .../refs answered %d %s, not refused %s", device, response.StatusCode, reply.GetCode(), code)
+		}
+		return nil
 	}
 }

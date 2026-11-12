@@ -47,6 +47,11 @@
 // at the guard (FS-23). The {refs} streams form and moved_after are M6's (EVS1-M6-01) and answer 400 until then.
 // A request whose reads fail before the first frame answers 503; one that fails after it ends the stream short,
 // which the client reads as invalid and retries.
+//
+// The read, GET .../refs and GET .../log take §11.12's refused row at the guard (EvsRoute.RefuseDeleted; QD-665): a
+// deleted repo answers 409 REPO_DELETED and a shredding or shredded one 409 SHREDDING before anything is read, from
+// repo/ cached at most 5 s, so a member told to stop syncing is not served, and a read after the shred's deletes
+// meets SHREDDING rather than missing objects.
 
 package evsservice
 
@@ -71,13 +76,14 @@ const (
 // Every read route takes r, which rw and admin imply; deposit alone is refused.
 const evsReadRights = sidecar.AclEvsRead | sidecar.AclEvsWrite | sidecar.AclEvsAdmin
 
-// The read routes: the read, GET .../refs (refs.go) and GET .../log (log.go).
+// The read routes: the read, GET .../refs (refs.go) and GET .../log (log.go), each refused while the repo is deleted,
+// shredding or shredded (see the file header).
 func (self *EvsEngine) readRoutes() []*EvsRoute {
 	pattern := evsRoutePrefix + "repos/{" + evsRepoIdPathValue + "}"
 	return []*EvsRoute{
-		{Method: http.MethodPost, Pattern: pattern + "/read", Name: evsReadRouteTemplate, Rights: evsReadRights, Placed: true, Serve: self.serveRead},
-		{Method: http.MethodGet, Pattern: pattern + "/refs", Name: evsRefsRouteTemplate, Rights: evsReadRights, Placed: true, Serve: self.serveRefs},
-		{Method: http.MethodGet, Pattern: pattern + "/log", Name: evsLogRouteTemplate, Rights: evsReadRights, Placed: true, Serve: self.serveLog},
+		{Method: http.MethodPost, Pattern: pattern + "/read", Name: evsReadRouteTemplate, Rights: evsReadRights, Placed: true, RefuseDeleted: true, Serve: self.serveRead},
+		{Method: http.MethodGet, Pattern: pattern + "/refs", Name: evsRefsRouteTemplate, Rights: evsReadRights, Placed: true, RefuseDeleted: true, Serve: self.serveRefs},
+		{Method: http.MethodGet, Pattern: pattern + "/log", Name: evsLogRouteTemplate, Rights: evsReadRights, Placed: true, RefuseDeleted: true, Serve: self.serveLog},
 	}
 }
 
