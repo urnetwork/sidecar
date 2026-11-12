@@ -5,6 +5,8 @@ package fault
 
 import (
 	"testing"
+
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 func TestFs19ConfigRead(t *testing.T) {
@@ -33,4 +35,35 @@ func TestFs14AclForkedReadersReportBothChains(t *testing.T) {
 
 func TestFs62AclGateReadsProjWhenTheCacheDoesNotServe(t *testing.T) {
 	RunClause(t, "FS-62", "acl gate", Fs62AclGate, nil)
+}
+
+// One schedule fixed on a Net of its own, failing t with the trace if it fails: §22.5's and §22.7's acl rows, which no
+// FS row registers.
+func aclRun(t *testing.T, builder Builder) {
+	t.Helper()
+	net := sidecartest.NewNet(t.Context(), nil)
+	defer net.Close()
+	if result := Run(t.Context(), builder(net), net); result.Err != nil {
+		t.Fatalf("%s", result)
+	}
+}
+
+func TestAclReadersRowsEqualTheWritersCompile(t *testing.T) {
+	aclRun(t, AclRowsEqualTheWriters)
+}
+
+func TestAclLowerAndForkedVersionsRefused(t *testing.T) {
+	aclRun(t, AclVersionsRefused)
+}
+
+func TestAclNoDocumentRulesAtEveryReader(t *testing.T) {
+	aclRun(t, AclNoDocumentRules)
+}
+
+func TestAclRemovedMembersTaggedAgentsKeepTheirTagsGrants(t *testing.T) {
+	aclRun(t, AclRevocationTaggedAgents)
+}
+
+func TestAclRowsALyingWriterForksEveryFullReader(t *testing.T) {
+	aclRun(t, AclRowsALyingWriter)
 }

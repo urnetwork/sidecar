@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -1096,4 +1097,460 @@ func Fs62AclGate(net *Net) *Schedule {
 		}),
 	}
 	return fsTeamSchedule("FS-62 acl gate", world.fsTeamWorld, steps...)
+}
+
+// §22.5's §8 row and §22.7's revocation suite's acl clauses, as schedules on the same world, which the T2 tests run
+// fixed (fs_acl_test.go): no FS row holds them, so none registers.
+
+// Deterministic bytes of an AclRows, for comparing two.
+func aclRowsBytes(rows *protocol.AclRows) []byte {
+	encoded, err := protoMarshal(rows)
+	if err != nil {
+		panic(fsTeamFailure{err: err})
+	}
+	return encoded
+}
+
+// Fails unless every reader's acl rows are the writer's compile, byte for byte.
+func aclExpectWritersRows(net *sidecartest.AdmissionNet, plan *sidecar.AclSavePlan) error {
+	want := aclRowsBytes(plan.Rows)
+	net.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
+		if got := aclRowsBytes(acl.Rows()); string(got) != string(want) {
+			return fmt.Errorf("acl rows of %d bytes, the writer's compile %d", len(got), len(want))
+		}
+		return nil
+	})
+	return nil
+}
+
+// The member the §8 row's documents name, and a resolver for it.
+func aclRowMember(net *sidecartest.AdmissionNet, world *fsTeamWorld) sidecartest.AclSaveMembers {
+	return sidecartest.AclSaveMembers{"m@acme.example": world.devices["m first"].MemberId}
+}
+
+// §22.5's §8 row, "readers' AclRows equal the writer's" (§8.8, D-ACL-15, R-ACL-12): a document naming a group, a tag,
+// a request and evs:* is saved on the writer's device; every reader's rows, the reference's, each new device's and
+// gate's at the base, and the writer's follower's, are the writer's compile byte for byte; a second save keeps the
+// ids of the rules it did not change and every reader again holds its compile. AclRowsALyingWriter is the alarm half.
+func AclRowsEqualTheWriters(net *Net) *Schedule {
+	world := newFsTeamWorld()
+	first := `{
+		"groups": { "group:eng": ["m@acme.example"] },
+		"tagOwners": { "tag:ci": ["group:eng"] },
+		"grants": [
+			{ "src": ["autogroup:member"], "dst": ["evs:*"], "allow": ["write"] },
+			{ "src": ["group:eng"], "dst": ["tag:ci"], "allow": ["dial"] },
+			{ "src": ["tag:ci"], "dst": ["autogroup:self"], "allow": ["dial"], "ip": ["tcp:443"] },
+		],
+		"requests": [
+			{ "src": ["tag:ci"], "dst": ["autogroup:member"], "allow": ["route"], "approver": ["autogroup:sponsor"], "maxExpiry": "7d" },
+		],
+	}`
+	second := `{
+		"groups": { "group:eng": ["m@acme.example"] },
+		"tagOwners": { "tag:ci": ["group:eng"] },
+		"grants": [
+			{ "src": ["autogroup:member"], "dst": ["evs:*"], "allow": ["write"] },
+			{ "src": ["tag:ci"], "dst": ["autogroup:self"], "allow": ["dial"], "ip": ["tcp:443"] },
+		],
+	}`
+	return fsTeamSchedule("§8 rows equal the writer's", world,
+		aclSetup(world, func(net *sidecartest.AdmissionNet) error {
+			_, device := net.ConsentedMember("m")
+			world.devices["m first"] = device
+			net.Fold(true)
+			return nil
+		}),
+		fsTeamDo("writer", world, func(net *sidecartest.AdmissionNet) error {
+			plan, _ := net.SaveAclPolicy([]byte(first), aclRowMember(net, world))
+			if !plan.Rows.GetHasDocument() || len(plan.Rows.GetRequests()) != 1 {
+				return fmt.Errorf("the compile: has_document %t, %d requests", plan.Rows.GetHasDocument(), len(plan.Rows.GetRequests()))
+			}
+			if err := aclExpectWritersRows(net, plan); err != nil {
+				return err
+			}
+			world.ids["first rules"] = aclRuleIds(plan.Rows)
+			return nil
+		}),
+		fsTeamDo("writer", world, func(net *sidecartest.AdmissionNet) error {
+			plan, _ := net.SaveAclPolicy([]byte(second), aclRowMember(net, world))
+			if err := aclExpectWritersRows(net, plan); err != nil {
+				return err
+			}
+			// the evs:* write and the tagged dial keep their ids; the dropped dial's leaves with it
+			kept := 0
+			for _, ruleId := range aclRuleIdList(plan.Rows) {
+				if slices.Contains(aclRuleIdList(&protocol.AclRows{Rules: aclRulesOf(world.ids["first rules"])}), ruleId) {
+					kept += 1
+				}
+			}
+			if want := len(plan.Rows.GetRules()); kept != want {
+				return fmt.Errorf("%d of the second save's %d rules kept the first's ids", kept, want)
+			}
+			return nil
+		}),
+	)
+}
+
+// §8.8's alarm half of "readers recompile rows": a writer whose base names rows that are not its head's compile, one
+// rule more, granting tagged sidecars every general repo's admin, is taken by api, which sees ids alone, and forked off
+// by every full reader that judges it, each recompiling the head, while every gate takes the rows it cannot check, for
+// HeadCheck between them and a full reader to settle (§6.4). The gates then stand where the reference does not, so the
+// schedule leaves out the world's agreement check, which every entry before the base still ran inside the world.
+func AclRowsALyingWriter(net *Net) *Schedule {
+	world := newFsTeamWorld()
+	return &Schedule{Id: "§8 rows a lying writer", Steps: []*Step{
+		aclSetup(world, func(net *sidecartest.AdmissionNet) error {
+			_, device := net.ConsentedMember("m")
+			world.devices["m first"] = device
+			net.Fold(true)
+			net.SaveAclPolicy([]byte(`{
+				"grants": [ { "src": ["autogroup:member"], "dst": ["evs:*"], "allow": ["write"] } ],
+			}`), nil)
+			return nil
+		}),
+		fsTeamDo("writer", world, func(net *sidecartest.AdmissionNet) error {
+			// a writer signing rows that are not its head's compile: one more rule, granting tagged sidecars every general
+			// repo's admin
+			_, rowsBytes := net.BaseKeepingTheFold(net.WriterDevice(), nil)
+			projection := &bridge.ProjectionRows{}
+			if err := proto.Unmarshal(rowsBytes, projection); err != nil {
+				return err
+			}
+			aclRows := &protocol.AclRows{}
+			if err := proto.Unmarshal(projection.GetAcl(), aclRows); err != nil {
+				return err
+			}
+			aclRows.Rules = append(aclRows.Rules, &protocol.AclRule{
+				RuleId:   net.Id("a rule no head holds").Bytes(),
+				SrcAtoms: [][]byte{sidecar.AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_TAGGED).Bytes()},
+				Targets:  []*protocol.AclTarget{{RepoId: make([]byte, 16)}},
+				Actions:  []uint32{uint32(protocol.AclAction_ACL_ACTION_ADMIN)},
+			})
+			slices.SortFunc(aclRows.Rules, func(a *protocol.AclRule, b *protocol.AclRule) int {
+				return compareBytes(a.GetRuleId(), b.GetRuleId())
+			})
+			projection.Acl = aclRowsBytes(aclRows)
+			forged, err := protoMarshal(projection)
+			if err != nil {
+				return err
+			}
+			forgedSha256 := sha256Sum(forged)
+			signedHeader, _ := net.BaseKeepingTheFold(net.WriterDevice(), func(header *bridge.ProjectionHeader) {
+				header.RowsSha256 = forgedSha256[:]
+				header.RowsByteCount = uint32(len(forged))
+			})
+			net.AllowForks()
+			pin, err := net.AppendBase(signedHeader, forged)
+			if err != nil {
+				return fmt.Errorf("api, which sees ids alone, refused the rows: %w", err)
+			}
+			forks := net.Forks()
+			if _, forked := forks["the reference"]; !forked {
+				return fmt.Errorf("the reference took rows its head does not compile: %v", forks)
+			}
+			for name, n := range forks {
+				if n != pin.GetVersion() || strings.HasPrefix(name, "a gate") {
+					return fmt.Errorf("%s forked at %d, the base at %d", name, n, pin.GetVersion())
+				}
+			}
+			// every full reader that judged the base refused it; each gate took it, holding rows it cannot open a head
+			// for, which HeadCheck between them and a full reader settles (§6.4)
+			gates := 0
+			for _, reader := range net.ReaderStates() {
+				atBase := reader.Config.Pin().GetVersion() == pin.GetVersion()
+				isGate := strings.HasPrefix(reader.Name, "a gate")
+				if atBase != isGate {
+					return fmt.Errorf("%s stands at %d, the forged base at %d", reader.Name, reader.Config.Pin().GetVersion(), pin.GetVersion())
+				}
+				if isGate {
+					gates += 1
+				}
+			}
+			if gates == 0 {
+				return errors.New("no gate ran")
+			}
+			return nil
+		}),
+		fsTeamClose(world),
+	}}
+}
+
+// A rows' rule ids, joined, for a world's ids map, and back.
+func aclRuleIds(rows *protocol.AclRows) []byte {
+	joined := []byte{}
+	for _, rule := range rows.GetRules() {
+		joined = append(joined, rule.GetRuleId()...)
+	}
+	return joined
+}
+
+func aclRulesOf(joined []byte) []*protocol.AclRule {
+	rules := []*protocol.AclRule{}
+	for i := 0; i+16 <= len(joined); i += 16 {
+		rules = append(rules, &protocol.AclRule{RuleId: joined[i : i+16]})
+	}
+	return rules
+}
+
+func aclRuleIdList(rows *protocol.AclRows) []string {
+	ids := []string{}
+	for _, rule := range rows.GetRules() {
+		ids = append(ids, string(rule.GetRuleId()))
+	}
+	return ids
+}
+
+func compareBytes(a []byte, b []byte) int {
+	return strings.Compare(string(a), string(b))
+}
+
+// The states an AclEngine reads pushes' pins at: a reader's, by ConfigState.StateAt.
+type aclEngineStates struct {
+	state *sidecar.ConfigState
+}
+
+func (self aclEngineStates) AclStateAt(pin *bridge.AuthPin) (*sidecar.AclState, error) {
+	state, err := self.state.StateAt(pin)
+	if err != nil {
+		return nil, err
+	}
+	return state.Acl()
+}
+
+// §22.5's §8 row, "lower or forked versions refused" (I-16, §8.9): a device's AclEngine takes its follower's state at
+// each position and refuses a lower one and a second A_n at the n it holds, alarming and keeping what it held; and a
+// push whose pin is off the engine's chain gets no head signer.
+func AclVersionsRefused(net *Net) *Schedule {
+	world := newFsTeamWorld()
+	var engine *sidecar.AclEngine
+	alarms := []sidecar.AclEngineAlarm{}
+	return fsTeamSchedule("§8 lower or forked versions refused", world,
+		fs14AclStart(world),
+		fsTeamDo("device", world, func(net *sidecartest.AdmissionNet) error {
+			first, notes := world.devices["m first"], sidecar.Id(world.ids["notes"])
+			engine = sidecar.NewAclEngine(first.SidecarId, aclEngineStates{state: net.State()}, func(alarm sidecar.AclEngineAlarm) {
+				alarms = append(alarms, alarm)
+			}, nil)
+			older, err := net.State().Acl()
+			if err != nil {
+				return err
+			}
+			if err := engine.Install(older, nil); err != nil {
+				return err
+			}
+			// a server forking this device's view at the next position, before api sequences the honest entry there
+			forked := net.ForkedReader(false)
+			honest := net.MustLand(net.Sign(net.Owner(), bridge.SignedType_SIGNED_MEMBER_ADMIT,
+				net.MemberAdmit(net.Id("honest member"), bridge.MemberRole_MEMBER_ROLE_MEMBER)))
+			if _, err := net.ServeEntry(forked, net.ForkEntryAt(honest.Pin.GetVersion(), net.Sign(net.Owner(),
+				bridge.SignedType_SIGNED_MEMBER_ADMIT, net.MemberAdmit(net.Id("forked member"), bridge.MemberRole_MEMBER_ROLE_MEMBER)))); err != nil {
+				return fmt.Errorf("the forked view's entry: %w", err)
+			}
+			current, err := net.State().Acl()
+			if err != nil {
+				return err
+			}
+			if err := engine.Install(current, nil); err != nil {
+				return fmt.Errorf("the next state: %w", err)
+			}
+			if err := engine.Install(older, nil); !errors.Is(err, sidecar.ErrAclEnginePinLower) {
+				return fmt.Errorf("a lower state: %v", err)
+			}
+			forkedAcl, err := forked.State().Acl()
+			if err != nil {
+				return err
+			}
+			if err := engine.Install(forkedAcl, nil); !errors.Is(err, sidecar.ErrAclEngineFork) {
+				return fmt.Errorf("a second A_%d: %v", honest.Pin.GetVersion(), err)
+			}
+			if !proto.Equal(engine.Pin(), honest.Pin) {
+				return fmt.Errorf("the engine holds %d, not the honest %d", engine.Pin().GetVersion(), honest.Pin.GetVersion())
+			}
+			if len(alarms) != 2 || alarms[0].Kind != sidecar.AclEngineAlarmPinLower || alarms[1].Kind != sidecar.AclEngineAlarmFork {
+				return fmt.Errorf("alarms %v", alarms)
+			}
+			// heads only from writers, at a pin on this device's chain
+			engine = sidecar.NewAclEngine(first.SidecarId, aclEngineStates{state: net.State()}, nil, nil)
+			if err := engine.Install(current, nil); err != nil {
+				return err
+			}
+			now := net.Clock().Now()
+			if err := engine.VerifyHeadSigner(notes, first.SidecarId, honest.Pin, now); err != nil {
+				return fmt.Errorf("the repo's admin's head at an honest pin: %w", err)
+			}
+			if err := engine.VerifyHeadSigner(notes, first.SidecarId, forked.Pin(), now); err == nil {
+				return errors.New("a head at a forked pin passed")
+			}
+			return nil
+		}),
+	)
+}
+
+// §22.5's §8 row, "§8.5's no-document rules" (owner decisions 50, 105, 120; D-ACL-20): with no document every reader
+// compiles the implicit one: member devices and app devices keep today's reach, legacy clients too, member devices
+// write and administer general repos, no one holds a standing publish or tls/ listen, and the implicit requests rules
+// stand with their approvers, evidence and expiries.
+func AclNoDocumentRules(net *Net) *Schedule {
+	world := newFsTeamWorld()
+	return fsTeamSchedule("§8 no-document rules", world,
+		fs14AclStart(world),
+		fsTeamDo("check", world, func(net *sidecartest.AdmissionNet) error {
+			first, phone, notes := world.devices["m first"], world.devices["m phone"], sidecar.Id(world.ids["notes"])
+			laptop := sidecar.AclSidecarSubject(net.Owner().SidecarId)
+			appDevice := sidecar.AclClientSubject(net.Id("m app client"), first.MemberId, nil, "")
+			legacy := sidecar.AclClientSubject(net.Id("legacy client"), sidecar.Id{}, nil, "")
+			now := net.Clock().Now()
+			net.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
+				if acl.HasDocument() {
+					return errors.New("has_document with no document")
+				}
+				for _, reach := range []struct {
+					what                string
+					source, destination sidecar.AclSubject
+				}{
+					{what: "a member device to another member's", source: sidecar.AclSidecarSubject(phone.SidecarId), destination: laptop},
+					{what: "a member device to its member's app device", source: sidecar.AclSidecarSubject(first.SidecarId), destination: appDevice},
+					{what: "an app device to a member device", source: appDevice, destination: laptop},
+					{what: "a legacy client to a member device", source: legacy, destination: laptop},
+					{what: "a member device to a legacy client", source: laptop, destination: legacy},
+				} {
+					if decision := acl.Reach(reach.source, reach.destination, now); !decision.Allowed {
+						return fmt.Errorf("%s: %s", reach.what, decision.Reason)
+					}
+				}
+				if rights := aclRights(net, acl, phone.SidecarId, notes, sidecar.AclTokenAudienceEvs); !rights.Has(sidecar.AclEvsAdmin | sidecar.AclEvsWrite) {
+					return fmt.Errorf("a member device's rights on a general repo: %04b", rights)
+				}
+				if decision := acl.MayListen(laptop, sidecar.AclSocketName{PublicName: "tls/443/blog"}, now); decision.Allowed {
+					return errors.New("a standing tls/ listen with no document")
+				}
+				if decision := acl.MayPublish(laptop, "blog", now); decision.Allowed {
+					return errors.New("a standing publish with no document")
+				}
+				// the implicit document's four requests rules: publish and listen by an admin for 7 days, a tagged
+				// sidecar's own asks by its owner or sponsor for 30, shares by an admin for 30, the directory's reach by
+				// the destination's owner on a device or presence key for 30
+				requests := acl.Rows().GetRequests()
+				if len(requests) != 4 {
+					return fmt.Errorf("%d requests rules", len(requests))
+				}
+				want := []struct {
+					approver  protocol.AclAutogroup
+					maxExpiry time.Duration
+				}{
+					{approver: protocol.AclAutogroup_ACL_AUTOGROUP_ADMIN, maxExpiry: 7 * 24 * time.Hour},
+					{approver: protocol.AclAutogroup_ACL_AUTOGROUP_SELF, maxExpiry: 30 * 24 * time.Hour},
+					{approver: protocol.AclAutogroup_ACL_AUTOGROUP_ADMIN, maxExpiry: 30 * 24 * time.Hour},
+					{approver: protocol.AclAutogroup_ACL_AUTOGROUP_DST_OWNER, maxExpiry: 30 * 24 * time.Hour},
+				}
+				for _, rule := range want {
+					if !slices.ContainsFunc(requests, func(request *protocol.AclRequestRule) bool {
+						return len(request.GetApproverAtoms()) == 1 && sidecar.Id(request.GetApproverAtoms()[0]) == sidecar.AclAutogroupAtom(rule.approver) &&
+							request.GetMaxExpirySeconds() == int64(rule.maxExpiry/time.Second) && request.GetDefaultExpirySeconds() == int64(time.Hour/time.Second)
+					}) {
+						return fmt.Errorf("no requests rule approved by %s for %s", rule.approver, rule.maxExpiry)
+					}
+				}
+				directory := slices.IndexFunc(requests, func(request *protocol.AclRequestRule) bool {
+					return sidecar.Id(request.GetApproverAtoms()[0]) == sidecar.AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_DST_OWNER)
+				})
+				evidence := requests[directory].GetEvidence()
+				if !slices.Equal(evidence, []uint32{uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE), uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE)}) {
+					return fmt.Errorf("the directory's reach requests take evidence %v", evidence)
+				}
+				return nil
+			})
+			return nil
+		}),
+	)
+}
+
+// §22.7's revocation suite's acl clause (owner decision 83): a member's tagged agent keeps its tag's grants once the
+// member is removed, its rule's reach and its RepoGrant alike, and the requests rule's autogroup:sponsor, which named
+// the member, resolves to autogroup:admin until an admin's SponsorSet names another, at every reader.
+func AclRevocationTaggedAgents(net *Net) *Schedule {
+	world := newFsTeamWorld()
+	return fsTeamSchedule("§22.7 a removed member's tagged agents", world,
+		aclSetup(world, func(net *sidecartest.AdmissionNet) error {
+			_, first := net.ConsentedMember("m")
+			world.devices["m first"] = first
+			_, other := net.ConsentedMember("n")
+			world.devices["n first"] = other
+			net.Fold(true)
+			plan, _ := net.SaveAclPolicy([]byte(`{
+				"tagOwners": { "tag:ci": ["autogroup:member"] },
+				"grants": [
+					{ "src": ["autogroup:member", "autogroup:untagged"], "dst": ["*"], "allow": ["*"] },
+					{ "src": ["tag:ci"], "dst": ["autogroup:member"], "allow": ["dial"] },
+				],
+				"requests": [
+					{ "src": ["tag:ci"], "dst": ["autogroup:member"], "allow": ["route"], "approver": ["autogroup:sponsor"] },
+				],
+			}`), nil)
+			tagId, found := sidecartest.AclTagAtom(plan, "ci")
+			if !found {
+				return errors.New("the saved head names no tag:ci")
+			}
+			world.ids["tag ci"] = tagId.Bytes()
+			world.ids["ci notes"] = aclCreateRepo(net, net.Owner(), "ci notes", protocol.RepoKind_REPO_KIND_GENERAL).Bytes()
+			net.MustLand(aclRepoGrant(net, net.Owner(), sidecar.Id(world.ids["ci notes"]), tagId, protocol.RepoGrantRole_REPO_GRANT_ROLE_WRITER))
+			agent := net.Device("m ci agent", sidecar.Id{})
+			world.devices["agent"] = agent
+			net.MustLand(net.Sign(first, bridge.SignedType_SIGNED_SIDECAR_ADMIT,
+				net.Admission(agent, []sidecar.Id{tagId}, false, net.Clock().Now().Add(7*24*time.Hour).UnixMilli(), 0)))
+			return aclExpectTaggedAgent(net, world, first.MemberId)
+		}),
+		fsTeamDo("owner", world, func(net *sidecartest.AdmissionNet) error {
+			net.MustLand(net.Sign(net.Owner(), bridge.SignedType_SIGNED_MEMBER_REVOKE, net.MemberRevoke(world.devices["m first"].MemberId)))
+			if !net.Admitted(world.devices["agent"]) {
+				return errors.New("the member's removal removed its tagged agent")
+			}
+			return aclExpectTaggedAgent(net, world, sidecar.Id{})
+		}),
+		fsTeamDo("owner", world, func(net *sidecartest.AdmissionNet) error {
+			agent, other := world.devices["agent"], world.devices["n first"]
+			net.MustLand(net.Sign(net.Owner(), bridge.SignedType_SIGNED_SPONSOR_SET, &protocol.SponsorSet{
+				Header: net.Header(), SidecarId: agent.SidecarId.Bytes(), SponsorMemberId: other.MemberId.Bytes(),
+			}))
+			return aclExpectTaggedAgent(net, world, other.MemberId)
+		}),
+	)
+}
+
+// Fails unless, at every reader, the tagged agent dials the owner's laptop by its tag's rule and writes the repo its
+// tag's RepoGrant names, and the requests rule's sponsor resolves to sponsor, or with none to autogroup:admin.
+func aclExpectTaggedAgent(net *sidecartest.AdmissionNet, world *fsTeamWorld, sponsor sidecar.Id) error {
+	agent, tagId, notes := world.devices["agent"], sidecar.Id(world.ids["tag ci"]), sidecar.Id(world.ids["ci notes"])
+	now := net.Clock().Now()
+	net.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
+		if decision := acl.MayDial(sidecar.AclSidecarSubject(agent.SidecarId), sidecar.AclSidecarSubject(net.Owner().SidecarId), now); !decision.Allowed {
+			return fmt.Errorf("the agent's tag rule: %s", decision.Reason)
+		}
+		if rights := aclRights(net, acl, agent.SidecarId, notes, sidecar.AclTokenAudienceEvs); !rights.Has(sidecar.AclEvsWrite) {
+			return fmt.Errorf("the agent's tag's RepoGrant: %04b", rights)
+		}
+		requests := acl.Rows().GetRequests()
+		index := slices.IndexFunc(requests, func(request *protocol.AclRequestRule) bool {
+			return slices.ContainsFunc(request.GetSrcAtoms(), func(atom []byte) bool { return sidecar.Id(atom) == tagId })
+		})
+		if index < 0 {
+			return errors.New("no requests rule from tag:ci")
+		}
+		approvers := acl.ResolveApprovers(requests[index].GetApproverAtoms(), sidecar.AclSidecarSubject(agent.SidecarId), nil, now)
+		if sponsor == (sidecar.Id{}) {
+			if !approvers.HasAutogroup(protocol.AclAutogroup_ACL_AUTOGROUP_ADMIN) || 0 < len(approvers.MemberIds) {
+				return fmt.Errorf("with its sponsor removed, the approvers are %v and autogroups %b", approvers.MemberIds, approvers.Autogroups)
+			}
+			if !acl.Approves(approvers, net.Owner().MemberId) || acl.Approves(approvers, world.devices["n first"].MemberId) {
+				return errors.New("autogroup:admin approves another than the Owner")
+			}
+			return nil
+		}
+		if approvers.HasAutogroup(protocol.AclAutogroup_ACL_AUTOGROUP_ADMIN) || !slices.Equal(approvers.MemberIds, []sidecar.Id{sponsor}) {
+			return fmt.Errorf("the approvers are %v and autogroups %b, want the sponsor %s", approvers.MemberIds, approvers.Autogroups, sponsor)
+		}
+		return nil
+	})
+	return nil
 }

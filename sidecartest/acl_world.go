@@ -22,6 +22,7 @@ package sidecartest
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"fmt"
@@ -71,6 +72,25 @@ func (self *AdmissionNet) SaveAclPolicy(source []byte, resolver sidecar.AclSaveR
 	})
 	return plan, pin
 }
+
+// What a save resolves a document's user: selectors by, as the writer's invite records and GET /network/members do
+// (plan-ACL-selector-resolution): each email's member. No network or client resolves.
+type AclSaveMembers map[string]sidecar.Id
+
+func (self AclSaveMembers) ResolveMember(ctx context.Context, email string) (sidecar.Id, bool, error) {
+	memberId, found := self[email]
+	return memberId, found, nil
+}
+
+func (self AclSaveMembers) ResolveNetwork(ctx context.Context, text string) (sidecar.Id, bool, error) {
+	return sidecar.Id{}, false, nil
+}
+
+func (self AclSaveMembers) ResolveClient(ctx context.Context, clientId sidecar.Id) (sidecar.Id, bool, error) {
+	return sidecar.Id{}, false, nil
+}
+
+var _ sidecar.AclSaveResolver = AclSaveMembers(nil)
 
 // The atom id a saved head's tags table holds for a tag, its name without "tag:", false for none.
 func AclTagAtom(plan *sidecar.AclSavePlan, name string) (sidecar.Id, bool) {
@@ -185,6 +205,23 @@ func (self *AdmissionNet) NextEntry(signedBytes []byte) []byte {
 		NetworkId: self.networkId.Bytes(),
 		N:         self.applied + 1,
 		PrevChain: bytes.Clone(self.Tip().GetChain()),
+		Kind:      bridge.AuthEntryKindStatement,
+		TimeMs:    self.clock.Now().UnixMilli(),
+		Body:      signedBytes,
+	})
+}
+
+// The AuthEntry a server would sequence at position n for a statement, chained onto A_{n-1} as the reference holds it,
+// at the clock's time: a second entry at a position api may have filled, for a view the server forks there.
+func (self *AdmissionNet) ForkEntryAt(n uint64, signedBytes []byte) []byte {
+	self.t.Helper()
+	if n == 0 || self.applied+1 < n {
+		self.t.Fatalf("no position %d to fork at, the tip %d", n, self.applied)
+	}
+	return self.marshal(&bridge.AuthEntry{
+		NetworkId: self.networkId.Bytes(),
+		N:         n,
+		PrevChain: bytes.Clone(self.VerdictAt(n - 1).Pin.GetChain()),
 		Kind:      bridge.AuthEntryKindStatement,
 		TimeMs:    self.clock.Now().UnixMilli(),
 		Body:      signedBytes,
