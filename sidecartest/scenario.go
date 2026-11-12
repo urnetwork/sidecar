@@ -239,13 +239,23 @@ func RegisterScenario(scenarioId string, clause string, tier string, test *Scena
 }
 
 // The parts this task composes (TEST-M2-11): S3a's and S4a's, one builder each in sidecartest/scenarios, on T2 here
-// and on T3 in server's sidecart3, their remaining parts missing until composed; and S1's code-create clause on T3,
-// its other two waiting on a T3 sidecar's enrollment through server's api.
+// and on T3 in server's sidecart3, their remaining parts missing until composed; and S1's three clauses on T3 alone,
+// each its own test in server's sidecart3, on sidecars enrolled through server's own api (scenario_sidecar.go there).
 var (
-	_ = registerScenarioParts("S3a", []string{"readerkey-valid-over-7-days-refused", "adds-and-wraps-only-for-readers"}, "TestScenarioS3a")
+	_ = registerScenarioParts("S3a", []string{
+		"forged-admission-refused", "forged-keypackage-refused", "forged-readerkey-refused", "readerkey-past-its-not-after-refused",
+		"readerkey-valid-over-7-days-refused", "adds-and-wraps-only-for-readers",
+	}, "TestScenarioS3a")
 	_ = registerScenarioParts("S4a", []string{"writers-seal-nothing-to-x", "next-generation-fails-under-xs-keys"}, "TestScenarioS4a")
-	_ = RegisterScenario("S1", "code-create-403", ScenarioTierT3, &ScenarioTest{Repo: "server", Package: "github.com/urnetwork/server/sidecart3", Name: "TestScenarioS1CodeCreateOnT3", Tags: "sidecar_testhooks,sidecar_pending,sidecar_localstack"})
+	_ = registerScenarioT3("S1", "code-create-403", "TestScenarioS1CodeCreateOnT3")
+	_ = registerScenarioT3("S1", "token-never-in-mcp-env-or-logs", "TestScenarioS1TokenOnT3")
+	_ = registerScenarioT3("S1", "genesis-other-than-the-invites-refused", "TestScenarioS1GenesisOnT3")
 )
+
+// Registers clause of scenarioId on T3 alone, to name in server's sidecart3.
+func registerScenarioT3(scenarioId string, clause string, name string) *ScenarioTest {
+	return RegisterScenario(scenarioId, clause, ScenarioTierT3, &ScenarioTest{Repo: "server", Package: "github.com/urnetwork/server/sidecart3", Name: name, Tags: "sidecar_testhooks,sidecar_pending,sidecar_localstack"})
+}
 
 // Registers clauses of scenarioId on T2, to name in sidecartest, and on T3, to name plus "OnT3" in server's sidecart3.
 func registerScenarioParts(scenarioId string, clauses []string, name string) bool {

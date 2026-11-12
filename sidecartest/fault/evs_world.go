@@ -140,6 +140,22 @@ type EvsWorldSettings struct {
 	// Advance, so the count of a run's Redis writes, which §22.8's unknown rule loses one at a time, would differ from
 	// run to run. Non-positive takes the share's own 5 s.
 	HddInterval time.Duration
+	// The HDD share's put report ttl on each instance while HddInterval is positive: 30,000 h, three of its
+	// intervals, as the share's own 15 s is three of its 5 s, so a report outlives the passes that read it.
+	HddPutReportTtl time.Duration
+	// The balance Setup gives the world's network in the fake Quota: 1 TiB, past what any schedule writes, so no
+	// push meets a spent balance its schedule did not plan.
+	QuotaBalanceByteCount int64
+	// How long before Setup the world's receipt MAC key took effect, on the Net's clock: 48 h, so it is the current
+	// key from the first step on.
+	ReceiptKeyAge time.Duration
+	// A device's service token's lifetime from its issue, on the Net's clock: §7.8's 15 min.
+	TokenLifetime time.Duration
+	// The bytes of content WriteMany writes to each path: 40.
+	WriteManyByteCount int
+	// How long a Fold step's fold may run, on the Net's clock: 15 s. The clock stands still within a step, so this
+	// bounds nothing a schedule orders.
+	FoldDeadline time.Duration
 	// The engine settings of an instance past the world's own, nil for none.
 	AdjustEngine func(instance string, settings *evsservice.EvsSettings)
 	// A device's client settings past the defaults, nil for none.
@@ -172,10 +188,16 @@ func DefaultEvsWorldSettings() *EvsWorldSettings {
 			{Name: "writerB", Instances: []string{"evs3", "evs2"}, Writer: true},
 			{Name: "reader", Instances: []string{"evsr"}},
 		},
-		LbTries:          2,
-		LbReadTimeout:    30 * time.Second,
-		StepEightTimeout: 10 * time.Second,
-		HddInterval:      10000 * time.Hour,
+		LbTries:               2,
+		LbReadTimeout:         30 * time.Second,
+		StepEightTimeout:      10 * time.Second,
+		HddInterval:           10000 * time.Hour,
+		HddPutReportTtl:       30000 * time.Hour,
+		QuotaBalanceByteCount: 1024 * 1024 * 1024 * 1024,
+		ReceiptKeyAge:         48 * time.Hour,
+		TokenLifetime:         15 * time.Minute,
+		WriteManyByteCount:    40,
+		FoldDeadline:          15 * time.Second,
 	}
 }
 
@@ -451,14 +473,14 @@ func (self *EvsWorld) Setup(ctx context.Context, net *Net) error {
 	if err := fakes.Gates.Set(fmt.Sprintf("sidecar:\n  evs: {enabled: true, networks: [%q]}\n", network)); err != nil {
 		return err
 	}
-	fakes.Quota.SetBalance(connect.Id(self.NetworkId), 1024*1024*1024*1024)
+	fakes.Quota.SetBalance(connect.Id(self.NetworkId), self.settings.QuotaBalanceByteCount)
 	sidecartest.RegisterEvsTwins(fakes.Redis)
 	view := self.appendView()
 	SetAuthorizationView(net, self.NetworkId, view)
 
 	receiptKey := sha256.Sum256([]byte("evs world receipt key " + sidecar.EvsKeyId(self.RepoId)))
 	receiptKeys, err := evsservice.NewReceiptKeys([]*evsservice.ReceiptKey{
-		{KeyId: 1, Key: receiptKey[:], IssueFrom: net.Clock().Now().Add(-48 * time.Hour)},
+		{KeyId: 1, Key: receiptKey[:], IssueFrom: net.Clock().Now().Add(-self.settings.ReceiptKeyAge)},
 	}, nil)
 	if err != nil {
 		return err
@@ -738,7 +760,7 @@ func (self *EvsWorld) buildInstance(ctx context.Context, host *sidecar.ServiceHo
 	if 0 < self.settings.HddInterval {
 		deps.Hdd.Interval = self.settings.HddInterval
 		deps.Hdd.RetryAfter = self.settings.HddInterval
-		deps.Hdd.PutReportTtl = 3 * self.settings.HddInterval
+		deps.Hdd.PutReportTtl = self.settings.HddPutReportTtl
 	}
 	var built EvsTierHost
 	if tier := evsTierOf(self.net); tier != nil && tier.NewHost != nil {
@@ -757,8 +779,9 @@ func (self *EvsWorld) buildInstance(ctx context.Context, host *sidecar.ServiceHo
 		}
 		built = worldHost
 	}
-	// serving before the step that starts it ends: its readiness probe runs on a goroutine of its own, and a request
-	// it took first would answer 503 however long the schedule waited
+	// ready before the step that starts it ends, as warp sends a block nothing until its /status reads ready (§19.4),
+	// with the probe's first LIST, on a goroutine no actor owns, done before the next step's requests. The engine's
+	// routes do not read readiness, so a 503 after a restart is never this wait's (fs7.go's header)
 	if err := self.awaitReady(built); err != nil {
 		built.Close()
 		return nil, fmt.Errorf("evs instance %s: %w", instance, err)
@@ -957,7 +980,7 @@ func (self *EvsWorld) issueToken(device *EvsWorldDevice, scopes []string) (strin
 		Audience:  evsservice.EvsAudience,
 		Scopes:    scopes,
 		IssuedAt:  now,
-		ExpiresAt: now.Add(15 * time.Minute),
+		ExpiresAt: now.Add(self.settings.TokenLifetime),
 	}
 	if tier := evsTierOf(self.net); tier != nil && tier.IssueToken != nil {
 		return tier.IssueToken(principal)
@@ -1452,7 +1475,7 @@ func (self *EvsWorld) WriteMany(device string, pattern string, first int, count 
 	return func(ctx context.Context, net *Net) error {
 		for index := first; index < first+count; index += 1 {
 			path := fmt.Sprintf(pattern, index)
-			if err := self.Write(device, path, EvsWorldContent(path, 40))(ctx, net); err != nil {
+			if err := self.Write(device, path, EvsWorldContent(path, self.settings.WriteManyByteCount))(ctx, net); err != nil {
 				return err
 			}
 		}
@@ -1638,7 +1661,7 @@ func (self *EvsWorld) Fold(instance string) func(ctx context.Context, net *Net) 
 			return err
 		}
 		now := net.Clock().Now()
-		if _, err := engine.Folder().FoldAll(ctx, first, self.RepoId, self.RefId(), head, now, now.Add(15*time.Second)); err != nil {
+		if _, err := engine.Folder().FoldAll(ctx, first, self.RepoId, self.RefId(), head, now, now.Add(self.settings.FoldDeadline)); err != nil {
 			return err
 		}
 		return self.awaitStepEights(engine)

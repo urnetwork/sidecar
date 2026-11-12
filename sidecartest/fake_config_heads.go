@@ -74,11 +74,19 @@ func (self *FakeConfigHeads) For(sidecarId sidecar.Id, key ed25519.PrivateKey) *
 	return &FakeConfigHeadRef{heads: self, sidecarId: sidecarId, key: key}
 }
 
+// The ref as one device writes it, signing its pushes through sign, as a running Sidecar's Sign does for a device whose
+// identity key never leaves its keychain (server's T3 sidecars).
+func (self *FakeConfigHeads) ForSigner(sidecarId sidecar.Id, sign sidecar.ConfigSignFunction) *FakeConfigHeadRef {
+	return &FakeConfigHeadRef{heads: self, sidecarId: sidecarId, sign: sign}
+}
+
 // One device's sidecar.ConfigHeadRef over the shared ref.
 type FakeConfigHeadRef struct {
 	heads     *FakeConfigHeads
 	sidecarId sidecar.Id
 	key       ed25519.PrivateKey
+	// signs in key's place when set
+	sign sidecar.ConfigSignFunction
 }
 
 // The newest head, version and C_v.
@@ -113,12 +121,20 @@ func (self *FakeConfigHeadRef) PrepareConfigHead(ctx context.Context, head *side
 	if err != nil {
 		return nil, err
 	}
-	signedPush, err := proto.MarshalOptions{Deterministic: true}.Marshal(&bridge.Signed{
-		Body:      body,
-		SignerId:  self.sidecarId.Bytes(),
-		Signature: ed25519.Sign(self.key, bridge.SignedBytes("evs-push", bridge.SignedType_SIGNED_EVS_PUSH, body)),
-		Type:      uint32(bridge.SignedType_SIGNED_EVS_PUSH),
-	})
+	signed := &bridge.Signed{
+		Body:     body,
+		SignerId: self.sidecarId.Bytes(),
+		Type:     uint32(bridge.SignedType_SIGNED_EVS_PUSH),
+	}
+	if self.sign != nil {
+		signed, err = self.sign("evs-push", bridge.SignedType_SIGNED_EVS_PUSH, body)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		signed.Signature = ed25519.Sign(self.key, bridge.SignedBytes("evs-push", bridge.SignedType_SIGNED_EVS_PUSH, body))
+	}
+	signedPush, err := proto.MarshalOptions{Deterministic: true}.Marshal(signed)
 	if err != nil {
 		return nil, err
 	}
