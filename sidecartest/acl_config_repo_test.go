@@ -11,8 +11,8 @@
 //	           scope, and no other sidecar's; GET honors a member device's and an ephemeral sidecar's r, and a
 //	           revocation closes it at the gate's next load
 //	gkm        AclGateCache.HonorScope for the gkm audience, the answer gkm's guard reads: a member device's rw in the
-//	           config group, never a read_only or ephemeral one's. gkmservice's own GkmAuthState over the cache is a
-//	           KEYS task (QD-718), so no gkm engine runs here
+//	           config group, never a read_only or ephemeral one's. gkm's engine over its own GkmAuthState on this
+//	           cache (QD-718) runs in gkm_auth_state_acl_test.go
 //
 // No sleeps: each load is awaited by the cache's OnLoad, and the clock is the Net's.
 
