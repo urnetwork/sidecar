@@ -4,8 +4,12 @@
 // SOCK-M5-06's. request.go holds the steps they share, and refusals.go what they refuse from memory.
 //
 // The engine turns ready only when everything a route needs is present: a store that answers its probe,
-// a gate that has loaded, and a ticket key that signs (§19.4's column for sockets: Redis, ticket key,
+// a gate that is ready, and a ticket key that signs (§19.4's column for sockets: Redis, ticket key,
 // projection loaded). A host that has none of these, or only ClosedSocketGate, serves nothing.
+//
+// Beside its probe the engine runs the workers sweep.go describes: the revocation sweep, a removed client's
+// store work and the kill set's reader, each fed by what the host's key-event subscriber calls, and each
+// joined by Close.
 //
 // Every wait is on the host's sidecar.Clock, so a schedule moves them. Safe for concurrent use.
 
@@ -52,9 +56,14 @@ type SocketsService struct {
 	fairQueue  *SocketFairQueue
 	namespaces *socketNamespaceRegistry
 
-	// What the routes refuse from memory (refusals.go), which SOCK-M5-07's ClientRemoved and KillChanged fill.
+	// What the routes refuse from memory (refusals.go), which ClientRemoved and the kills reader fill (sweep.go).
 	removedClients *socketRemovedClients
 	killSet        *socketKillSet
+	// The revocation sweep's queue and the removed clients awaiting their store work (sweep.go), and what joins
+	// every worker the engine starts beside its probe.
+	sweeps   *socketSweeps
+	removals *socketRemovals
+	workers  sync.WaitGroup
 	// Claims seen to pass (registrations.go), pair renewals and pair writes this process made (find.go), and
 	// the registrations gauge's count.
 	claimMemo    *socketClaimMemo
@@ -117,6 +126,8 @@ func NewSocketsService(
 		namespaces:     newSocketNamespaceRegistry(),
 		removedClients: newSocketRemovedClients(settings.RemovedClientTtl),
 		killSet:        newSocketKillSet(),
+		sweeps:         newSocketSweeps(settings.SweepMinInterval),
+		removals:       newSocketRemovals(settings.ClientRemovedQueueCount, settings.ClientRemovedConcurrency),
 		claimMemo:      newSocketClaimMemo(settings.ClaimMemoCount),
 		pairTouches:    newSocketPairTouches(settings.EdgePairTouchInterval),
 		pairWrites:     newSocketPairWrites(settings.PairWriteInterval),
@@ -125,6 +136,15 @@ func NewSocketsService(
 		storeReachable: sidecar.NewMonitorValue(false),
 		probeCount:     sidecar.NewMonitorValue(0),
 		released:       make(chan struct{}),
+	}
+	if follower, ok := gate.(SocketGateFollower); ok {
+		follower.OnNarrowed(self.queueSweep)
+	}
+	self.workers.Add(2 + settings.ClientRemovedConcurrency)
+	go self.runSweeps()
+	go self.runKills()
+	for range settings.ClientRemovedConcurrency {
+		go self.runRemovals()
 	}
 	go self.run()
 	return self, nil
@@ -226,10 +246,12 @@ func (self *SocketsService) Drain() {
 	self.draining = true
 }
 
-// See sidecar.Engine.
+// See sidecar.Engine. Joins the probe and every worker: sweeps, removals and the kills reader. The gate is the
+// host's to close.
 func (self *SocketsService) Close() {
 	self.cancel()
 	<-self.released
+	self.workers.Wait()
 }
 
 // See sidecar.HttpEngine. Built once: §9.15's four routes, each served from its own file, and any other
