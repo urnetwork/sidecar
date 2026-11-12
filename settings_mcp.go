@@ -34,6 +34,10 @@ type SidecarMcpSettings struct {
 	// behind ur://approval/{id} until the record's hints reach the inbox: 30 s, a reading, since §16.8 names
 	// hints and no poll.
 	ApprovalPollInterval time.Duration
+	// How long a presence key ur keys add-presence or ur login registers lasts, its KeyRegister's not_after from now:
+	// 365 days, a reading, since §7.9 requires a not_after and states no value. A key past it countersigns nothing and
+	// is registered again.
+	PresenceKeyLifetime time.Duration
 	// How long a run's file stays once its Coverage entry is sealed: 30 days (§16.6's retention row),
 	// for restore (§16.7). A later Coverage starts it again.
 	RunFileRetention time.Duration
@@ -75,6 +79,9 @@ type SidecarIngestSettings struct {
 	TranscriptTailInterval time.Duration
 	// `ur hook` passes its stdin to the daemon and exits 0 within this: 300 ms.
 	HookExitTimeout time.Duration
+	// How long the daemon's presence prompt may wait for the person, and ur hook on a PermissionRequest it answers by
+	// one, past which the hook gives no decision and the call returns pending: 60 s (plan-MCP-presence-hook-timing).
+	PresencePromptTimeout time.Duration
 	// How long `ur hook` waits on a PreToolUse until the daemon holds the paths it names, past which it exits 0 and
 	// those paths' before is unknown (§16.7): 10 s, a reading, far under a harness's own hook timeout.
 	HookPathTimeout time.Duration
@@ -181,6 +188,7 @@ func defaultSidecarMcpSettings() *SidecarMcpSettings {
 		ApprovalRequestTimeout:  24 * time.Hour,
 		ApprovalCompleteTimeout: 10 * time.Minute,
 		ApprovalPollInterval:    30 * time.Second,
+		PresenceKeyLifetime:     365 * 24 * time.Hour,
 		RunFileRetention:        30 * 24 * time.Hour,
 		SecretMatch:             DefaultSecretMatchSettings(),
 	}
@@ -197,6 +205,7 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		SpoolCursorRecordCount: 64,
 		TranscriptTailInterval: 30 * time.Second,
 		HookExitTimeout:        300 * time.Millisecond,
+		PresencePromptTimeout:  60 * time.Second,
 		HookPathTimeout:        10 * time.Second,
 		HookLapseTimeout:       60 * time.Second,
 		ConfigCheckInterval:    5 * time.Minute,
