@@ -1,7 +1,7 @@
 // SidecarStats, what `ur status --stats` shows (§5.10): running totals since NewSidecar, on this device only. No
-// telemetry carries them anywhere, and none is labeled by a requester, repo or query (I-13): a component's name is
-// the one label, and it names code, not data. Nothing here names a connect type, so it builds on every leg; the
-// connect legs add the subprotocol's counters (sidecar_new_connect.go).
+// telemetry carries them anywhere, and none is labeled by a requester, repo or query (I-13): a component's name and an
+// error code are the only labels, and they name code, not data. Nothing here names a connect type, so it builds on
+// every leg; the connect legs add the subprotocol's counters (sidecar_new_connect.go).
 
 package sidecar
 
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // What Stats answers.
@@ -22,6 +23,8 @@ type SidecarStats struct {
 	Components []SidecarComponentStats
 	// The current generation's dispatcher, zero with none running and on the sidecar_http leg.
 	Subprotocol SidecarSubprotocolStats
+	// On a search indexer, its remote serving (§5.10, D-CORE-17); zero elsewhere.
+	RemoteSearch SidecarRemoteSearchStats
 }
 
 // One component's queue (D-CORE-3), across its generations.
@@ -57,13 +60,41 @@ type SidecarSubprotocolStats struct {
 	ReplySentCount    uint64
 }
 
+// A search indexer's remote serving (D-CORE-17; daemon_search_serve.go, daemon_search_budget.go): pages served,
+// refusals by code, CPU and queue waits, with no requester, repo or query label (I-13).
+type SidecarRemoteSearchStats struct {
+	// SEARCH requests answered with a reply.
+	PageCount uint64
+	// SEARCH requests answered with an Error instead, by its code, sorted by code.
+	Refusals []SidecarRemoteRefusalStats
+	// Compute slot time given back, the budget's measure of CPU.
+	Cpu time.Duration
+	// Requests that waited for a compute slot, and how long they waited in all.
+	QueueWaitCount uint64
+	QueueWait      time.Duration
+}
+
+// One error code's refusals.
+type SidecarRemoteRefusalStats struct {
+	// §6.6's ErrorCode name, such as ERR_RESOURCE_EXHAUSTED.
+	Code  string
+	Count uint64
+}
+
 // The Sidecar's own counters, beside the leg's.
 type sidecarStats struct {
 	generationCount atomic.Uint64
 	coreHintCount   atomic.Uint64
+	// remote serving's (SidecarRemoteSearchStats)
+	remotePageCount      atomic.Uint64
+	remoteCpuNanos       atomic.Int64
+	remoteQueueWaitCount atomic.Uint64
+	remoteQueueWaitNanos atomic.Int64
 
 	stateLock         sync.Mutex
 	componentCounters map[string]*sidecarQueueCounters
+	// remote serving's refusals, by error code name
+	remoteRefusalCounts map[string]uint64
 }
 
 // The counters of the component named, made on first use, so they outlive each generation's queue.
@@ -81,11 +112,27 @@ func (self *sidecarStats) componentQueueCounters(name string) *sidecarQueueCount
 	return counters
 }
 
-// A copy of every counter, components sorted by name.
+// Counts one remote search request refused with an Error, by its code's name.
+func (self *sidecarStats) remoteRefused(code string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.remoteRefusalCounts == nil {
+		self.remoteRefusalCounts = map[string]uint64{}
+	}
+	self.remoteRefusalCounts[code] += 1
+}
+
+// A copy of every counter, components and refusals sorted by name.
 func (self *sidecarStats) snapshot() SidecarStats {
 	stats := SidecarStats{
 		GenerationCount: self.generationCount.Load(),
 		CoreHintCount:   self.coreHintCount.Load(),
+		RemoteSearch: SidecarRemoteSearchStats{
+			PageCount:      self.remotePageCount.Load(),
+			Cpu:            time.Duration(self.remoteCpuNanos.Load()),
+			QueueWaitCount: self.remoteQueueWaitCount.Load(),
+			QueueWait:      time.Duration(self.remoteQueueWaitNanos.Load()),
+		},
 	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -101,6 +148,12 @@ func (self *sidecarStats) snapshot() SidecarStats {
 	}
 	slices.SortFunc(stats.Components, func(a SidecarComponentStats, b SidecarComponentStats) int {
 		return strings.Compare(a.Name, b.Name)
+	})
+	for code, count := range self.remoteRefusalCounts {
+		stats.RemoteSearch.Refusals = append(stats.RemoteSearch.Refusals, SidecarRemoteRefusalStats{Code: code, Count: count})
+	}
+	slices.SortFunc(stats.RemoteSearch.Refusals, func(a SidecarRemoteRefusalStats, b SidecarRemoteRefusalStats) int {
+		return strings.Compare(a.Code, b.Code)
 	})
 	return stats
 }

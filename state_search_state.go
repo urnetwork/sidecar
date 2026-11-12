@@ -110,7 +110,8 @@ type SidecarSearchState struct {
 	stateLock sync.Mutex
 	// the file as last read or written, nil until loaded and after a lock
 	wire *searchStateWire
-	// the file failed AEAD or decoding, and the alarm went
+	// the file was found failed and the alarm went: it is read again at each call, so a medium that recovers is
+	// read again, and alarms once more only after it has read well
 	failed bool
 }
 
@@ -199,16 +200,13 @@ func (self *SidecarSearchState) current() (*searchStateWire, error) {
 		}()
 		return nil, err
 	}
-	wire, failed := func() (*searchStateWire, bool) {
+	wire := func() *searchStateWire {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		return self.wire, self.failed
+		return self.wire
 	}()
 	if wire != nil {
 		return wire, nil
-	}
-	if failed {
-		return nil, ErrSidecarStoreFailed
 	}
 	wire, err := self.read()
 	if errors.Is(err, ErrSidecarStoreFailed) {
@@ -233,6 +231,7 @@ func (self *SidecarSearchState) current() (*searchStateWire, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.wire = wire
+	self.failed = false
 	return wire, nil
 }
 
