@@ -243,7 +243,9 @@ func (self *evsTestPushServer) servePush(writer http.ResponseWriter, request *ht
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	if err := statement.Verify(self.world.signer.publicKey()); err != nil {
+	// any signer the world's config holds, as evs's projection would take it (EVS1-M3-01's second writer)
+	signerId, _ := IdFromBytes(statement.Push.GetSignerSidecarId())
+	if err := statement.Verify(self.world.config.IdentityKey(signerId)); err != nil {
 		self.t.Errorf("a push whose signature does not verify: %v", err)
 		writer.WriteHeader(http.StatusBadRequest)
 		return
