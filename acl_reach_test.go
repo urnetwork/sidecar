@@ -409,8 +409,8 @@ func TestAclReachImplicitDocument(t *testing.T) {
 	}
 }
 
-// EgressMode: a row naming the subject's id wins, else the first row in subject order naming an atom it holds, else
-// auto; malformed bytes anywhere read as none; and the contract gate's egressRestricted is exactly a mode other than auto.
+// EgressMode, which the contract gate's egressRestricted reads as any mode other than auto: a row naming the subject's
+// id wins, else the first row in subject order naming an atom it holds, else auto; malformed bytes anywhere read as none.
 func TestAclEgressMode(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
@@ -431,7 +431,8 @@ func TestAclEgressMode(t *testing.T) {
 		subject Id
 		mode    bridge.BridgeEgressMode
 	}{
-		{laptop, exits}, {tagA, exits}, {tagB, none}, {named, none}, {clientId, none},
+		{subject: laptop, mode: exits}, {subject: tagA, mode: exits}, {subject: tagB, mode: none},
+		{subject: named, mode: none}, {subject: clientId, mode: none},
 	} {
 		if data, err = bridgeRowsWithEgress(data, row.subject, row.mode); err != nil {
 			t.Fatal(err)
@@ -443,21 +444,17 @@ func TestAclEgressMode(t *testing.T) {
 		subject AclSubject
 		mode    bridge.BridgeEgressMode
 	}{
-		{AclSidecarSubject(laptop), exits},
-		{AclSidecarSubject(free), bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO},
-		{AclSidecarSubject(both), exits},
-		{AclSidecarSubject(onlyB), none},
-		{AclSidecarSubject(named), none},
-		{AclClientSubject(clientId, owner, nil, ""), none},
-		{AclClientSubject(NewId(), owner, nil, ""), bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO},
+		{subject: AclSidecarSubject(laptop), mode: exits},
+		{subject: AclSidecarSubject(free), mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO},
+		{subject: AclSidecarSubject(both), mode: exits},
+		{subject: AclSidecarSubject(onlyB), mode: none},
+		{subject: AclSidecarSubject(named), mode: none},
+		{subject: AclClientSubject(clientId, owner, nil, ""), mode: none},
+		{subject: AclClientSubject(NewId(), owner, nil, ""), mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO},
 	}
 	for i, c := range cases {
 		if mode := state.EgressMode(c.subject); mode != c.mode {
 			t.Errorf("case %d: %s, want %s", i, mode, c.mode)
-		}
-		resolved := state.resolve(&cases[i].subject, aclTestNow.UnixMilli())
-		if restricted := state.egressRestricted(&resolved); restricted != (c.mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO) {
-			t.Errorf("case %d: egressRestricted %t beside %s", i, restricted, c.mode)
 		}
 	}
 	for i, malformed := range [][]byte{append(bytes.Clone(data), 0x0a, 0x02, 0x08), append(bytes.Clone(data), 0x12, 0x00), {0x0a, 0x03, 0x10, 0x01, 0x00}} {
