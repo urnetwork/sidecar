@@ -179,7 +179,13 @@ func TestTlsEdgeConnSpentLeaseResetsWithQuota(t *testing.T) {
 	world := newTestPathWorld(t, nil)
 	world.host.Quota.SetBalance(connect.Id(world.networkId), 4096)
 	conn, stream, _ := world.open(t, "blog")
-	_, idleStream, _ := world.open(t, "shop")
+	idleConn, idleStream, _ := world.open(t, "shop")
+	// a byte back on each: both splices run, so both hold the network's one lease before it runs out. A
+	// connection still setting up when the first ended would take a lease of its own from what was left.
+	stream.listenerWrite(t, []byte{1})
+	testVisitorRead(t, conn, 1)
+	idleStream.listenerWrite(t, []byte{1})
+	testVisitorRead(t, idleConn, 1)
 
 	if _, err := conn.Write(bytes.Repeat([]byte{0x5a}, 8192)); err != nil {
 		t.Fatal(err)
