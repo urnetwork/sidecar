@@ -538,7 +538,7 @@ func TestAclStandingCoversUnderADocument(t *testing.T) {
 	}{
 		{name: "a nested prefix", rule: aclStandingTestRoute(router, []Id{viaRoute}, subnet, "10.1.0.0/16"), covered: true},
 		{name: "the grant's own prefix", rule: aclStandingTestRoute(router, []Id{viaRoute}, subnet, "10.0.0.0/8"), covered: true},
-		{name: "a prefix outside", rule: aclStandingTestRoute(router, []Id{viaRoute}, subnet, "11.0.0.0/8")},
+		{name: "a prefix outside", rule: aclStandingTestRoute(router, []Id{viaRoute}, subnet, "203.0.113.0/24")},
 		{name: "one prefix of two outside", rule: aclStandingTestRoute(router, []Id{viaRoute}, subnet, "10.1.0.0/16", "172.16.0.0/12")},
 		{name: "a wider prefix", rule: aclStandingTestRoute(router, []Id{viaRoute}, subnet, "10.0.0.0/7")},
 		{name: "no rule named", rule: aclStandingTestRoute(router, nil, subnet, "10.1.0.0/16")},
