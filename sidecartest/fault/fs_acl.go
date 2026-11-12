@@ -31,6 +31,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -126,7 +128,7 @@ func aclExpectHolder(view sidecar.GkmAuthView, repoId sidecar.Id, at time.Time, 
 // What FS-19's config read makes in its first step and checks after: the Owner's laptop, the burner, and the repos.
 type fs19World struct {
 	*fsTeamWorld
-	burner                                                     *sidecartest.AdmissionDevice
+	burner                                                    *sidecartest.AdmissionDevice
 	notesId, recordId, vaultId, mailboxId, secretId, configId sidecar.Id
 }
 
@@ -859,4 +861,239 @@ func protoMarshal(message proto.Message) ([]byte, error) {
 // SHA-256 of data.
 func sha256Sum(data []byte) [sha256.Size]byte {
 	return sha256.Sum256(data)
+}
+
+// A gate's store, its reads counted: what tells a load from {acl_}e from one from proj/.
+type fs62AclCountingBlobs struct {
+	sidecar.BlobStore
+	reads *atomic.Int64
+}
+
+func (self fs62AclCountingBlobs) FirstCluster() (sidecar.BlobCluster, error) {
+	cluster, err := self.BlobStore.FirstCluster()
+	if err != nil {
+		return nil, err
+	}
+	return fs62AclCountingCluster{BlobCluster: cluster, reads: self.reads}, nil
+}
+
+type fs62AclCountingCluster struct {
+	sidecar.BlobCluster
+	reads *atomic.Int64
+}
+
+func (self fs62AclCountingCluster) Get(ctx context.Context, key string) (*sidecar.BlobObject, error) {
+	self.reads.Add(1)
+	return self.BlobCluster.Get(ctx, key)
+}
+
+func (self fs62AclCountingCluster) List(ctx context.Context, keyPrefix string, startAfter string, limit int) ([]*sidecar.BlobInfo, bool, error) {
+	self.reads.Add(1)
+	return self.BlobCluster.List(ctx, keyPrefix, startAfter, limit)
+}
+
+// One process's gate cache over the direct source, api's, evs's or gkm's, its store reads counted and each load's
+// outcome sent on loads.
+type fs62AclGate struct {
+	name  string
+	cache *sidecar.AclGateCache
+	reads atomic.Int64
+	loads chan *bridge.AuthPin
+}
+
+// FS-62's gate case's world: the admission world, and the gates.
+type fs62AclWorld struct {
+	*fsTeamWorld
+	gates []*fs62AclGate
+}
+
+// What api's one script does after the entry at n (TEAM-M2-14's, server/model/config_log_redis.go), on the Net's
+// Redis: with write, {acl_}e gains the entry and the tip, with the newest base's position, and records the value
+// {acl_}v is raised to; then the INCR, whose event reaches every gate. Without write, the INCR alone, as when the
+// hash was lost or its write never landed.
+func fs62AclScript(ctx context.Context, net *Net, admission *sidecartest.AdmissionNet, n uint64, write bool) error {
+	redis := net.Host().Redis
+	networkId := admission.NetworkId()
+	if write {
+		current, _, err := redis.Get(ctx, sidecar.AclVersionKey(networkId))
+		if err != nil {
+			return err
+		}
+		version := int64(0)
+		if 0 < len(current) {
+			if version, err = strconv.ParseInt(string(current), 10, 64); err != nil {
+				return err
+			}
+		}
+		entryBytes := admission.Entry(n)
+		if entryBytes == nil {
+			return fmt.Errorf("no entry at %d", n)
+		}
+		if err := redis.HashSet(ctx, sidecar.AclEntryCacheKey(networkId), map[string][]byte{
+			sidecar.AclEntryCacheField(n):     entryBytes,
+			sidecar.AclEntryCacheFieldBase:    []byte(strconv.FormatUint(admission.State().Base().GetVersion(), 10)),
+			sidecar.AclEntryCacheFieldTip:     []byte(strconv.FormatUint(n, 10)),
+			sidecar.AclEntryCacheFieldVersion: []byte(strconv.FormatInt(version+1, 10)),
+		}); err != nil {
+			return err
+		}
+	}
+	_, err := redis.Increment(ctx, sidecar.AclVersionKey(networkId), 48*time.Hour)
+	return err
+}
+
+// Appends a member admit through api, then api's script with or without the hash write; each gate told, as its
+// subscriber's event tells it, and waited for. The new tip.
+func fs62AclAppend(ctx context.Context, net *Net, world *fs62AclWorld, label string, write bool) (uint64, error) {
+	admission := world.net
+	verdict := admission.MustLand(admission.Sign(admission.Owner(), bridge.SignedType_SIGNED_MEMBER_ADMIT,
+		admission.MemberAdmit(admission.Id("fs62 member "+label), bridge.MemberRole_MEMBER_ROLE_MEMBER)))
+	n := verdict.Pin.GetVersion()
+	if err := fs62AclScript(ctx, net, admission, n, write); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// Tells every gate the network changed and waits for each one's load: none may land below the pin it held, every one
+// must reach want, and each one's store reads must be some exactly when fromStore says.
+func fs62AclLoad(world *fs62AclWorld, want uint64, fromStore bool) error {
+	networkId := world.net.NetworkId()
+	for _, gate := range world.gates {
+		before, _ := gate.cache.State(networkId)
+		readsBefore := gate.reads.Load()
+		gate.cache.Changed(networkId)
+		select {
+		case <-gate.loads:
+		case <-time.After(30 * time.Second):
+			return fmt.Errorf("%s: no load finished", gate.name)
+		}
+		snapshot, status := gate.cache.State(networkId)
+		if status != sidecar.AclGateLoaded || snapshot == nil || snapshot.Pin.GetVersion() != want {
+			held := uint64(0)
+			if snapshot != nil {
+				held = snapshot.Pin.GetVersion()
+			}
+			return fmt.Errorf("%s holds %d (status %d), want %d", gate.name, held, status, want)
+		}
+		if before != nil && snapshot.Pin.GetVersion() < before.Pin.GetVersion() {
+			return fmt.Errorf("%s fell from %d to %d", gate.name, before.Pin.GetVersion(), snapshot.Pin.GetVersion())
+		}
+		if !proto.Equal(snapshot.Pin, world.net.VerdictAt(want).Pin) {
+			return fmt.Errorf("%s holds another A_%d than api's", gate.name, want)
+		}
+		if readStore := gate.reads.Load() != readsBefore; readStore != fromStore {
+			return fmt.Errorf("%s read the store: %t, want %t", gate.name, readStore, fromStore)
+		}
+	}
+	return nil
+}
+
+// FS-62's {acl_}e case (§7.9's read cache, §8.9, owner decision 136): api's, evs's and gkm's gate caches, each over
+// AclGateDirectSource on the Net's Redis and first metadata cluster, load the log's tip from {acl_}e while it records
+// {acl_}v's current value and holds every position they need, with no read of proj/; with the hash lost, then stale
+// (recording an older {acl_}v and an older tip), then short of a position, each reads proj/ instead and reaches api's
+// tip; and a hash that is current but holds a tip below a gate's pin moves no gate down. T2 and T3: on T3 the Redis is
+// server's and the store the local stack's MinIO, while api's script is the schedule's own until sidecart3's sequencer
+// installs model.NewConfigLogRedisEntryCache.
+func Fs62AclGate(net *Net) *Schedule {
+	world := &fs62AclWorld{fsTeamWorld: newFsTeamWorld()}
+	steps := []*Step{
+		aclSetup(world.fsTeamWorld, func(admission *sidecartest.AdmissionNet) error {
+			for _, name := range []string{"api", "evs", "gkm"} {
+				gate := &fs62AclGate{name: name, loads: make(chan *bridge.AuthPin, 64)}
+				settings := sidecar.DefaultAclGateSettings()
+				settings.Log = sidecar.NewNoopLogger()
+				settings.PollInterval = 0
+				settings.FailureBackoff = 0
+				settings.OnLoad = func(networkId sidecar.Id, pin *bridge.AuthPin, err error) {
+					gate.loads <- pin
+				}
+				blobs := fs62AclCountingBlobs{BlobStore: net.Host().Blobs, reads: &gate.reads}
+				gate.cache = sidecar.NewAclGateCache(admission.Context(), sidecar.NewAclGateDirectSource(net.Host().Redis, blobs, settings), net.Clock(), settings)
+				world.gates = append(world.gates, gate)
+			}
+			// a cold start reads proj/ from position 1
+			return fs62AclLoad(world, admission.Tip().GetVersion(), true)
+		}),
+		fsTeamDo("api", world.fsTeamWorld, func(admission *sidecartest.AdmissionNet) error {
+			// current: two appends load from {acl_}e alone
+			for _, label := range []string{"one", "two"} {
+				n, err := fs62AclAppend(admission.Context(), net, world, label, true)
+				if err != nil {
+					return err
+				}
+				if err := fs62AclLoad(world, n, false); err != nil {
+					return fmt.Errorf("{acl_}e current: %w", err)
+				}
+			}
+			return nil
+		}),
+		fsTeamDo("api", world.fsTeamWorld, func(admission *sidecartest.AdmissionNet) error {
+			// lost: {acl_}e gone, and the next append's script writes no hash
+			if err := net.Host().Redis.Delete(admission.Context(), []string{sidecar.AclEntryCacheKey(admission.NetworkId())}); err != nil {
+				return err
+			}
+			n, err := fs62AclAppend(admission.Context(), net, world, "lost", false)
+			if err != nil {
+				return err
+			}
+			if err := fs62AclLoad(world, n, true); err != nil {
+				return fmt.Errorf("{acl_}e lost: %w", err)
+			}
+			// written again for the next, so it serves
+			n, err = fs62AclAppend(admission.Context(), net, world, "again", true)
+			if err != nil {
+				return err
+			}
+			if err := fs62AclLoad(world, n, false); err != nil {
+				return fmt.Errorf("{acl_}e current again: %w", err)
+			}
+			// stale: {acl_}v raised past what the hash records, the hash's tip an older one
+			n, err = fs62AclAppend(admission.Context(), net, world, "stale", false)
+			if err != nil {
+				return err
+			}
+			if err := fs62AclLoad(world, n, true); err != nil {
+				return fmt.Errorf("{acl_}e stale: %w", err)
+			}
+			return nil
+		}),
+		fsTeamDo("api", world.fsTeamWorld, func(admission *sidecartest.AdmissionNet) error {
+			networkId := admission.NetworkId()
+			redis := net.Host().Redis
+			// short of a position: current, but missing one the gates need
+			first, err := fs62AclAppend(admission.Context(), net, world, "short one", true)
+			if err != nil {
+				return err
+			}
+			second, err := fs62AclAppend(admission.Context(), net, world, "short two", true)
+			if err != nil {
+				return err
+			}
+			if err := redis.HashDelete(admission.Context(), sidecar.AclEntryCacheKey(networkId), []string{sidecar.AclEntryCacheField(first)}); err != nil {
+				return err
+			}
+			if err := fs62AclLoad(world, second, true); err != nil {
+				return fmt.Errorf("{acl_}e short of %d: %w", first, err)
+			}
+			// current but holding a tip below every gate's pin, as a hash some older write left: no gate moves down,
+			// and none reads the store for what the hash claims it holds
+			current, _, err := redis.Get(admission.Context(), sidecar.AclVersionKey(networkId))
+			if err != nil {
+				return err
+			}
+			if err := redis.HashSet(admission.Context(), sidecar.AclEntryCacheKey(networkId), map[string][]byte{
+				sidecar.AclEntryCacheFieldTip:     []byte(strconv.FormatUint(first-1, 10)),
+				sidecar.AclEntryCacheFieldVersion: current,
+			}); err != nil {
+				return err
+			}
+			if err := fs62AclLoad(world, second, false); err != nil {
+				return fmt.Errorf("{acl_}e below the gates' pin: %w", err)
+			}
+			return nil
+		}),
+	}
+	return fsTeamSchedule("FS-62 acl gate", world.fsTeamWorld, steps...)
 }

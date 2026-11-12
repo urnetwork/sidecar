@@ -30,3 +30,7 @@ func TestFs14AclRotationCoveringOneOfTwoRemovals(t *testing.T) {
 func TestFs14AclForkedReadersReportBothChains(t *testing.T) {
 	RunClause(t, "FS-14", "acl forked readers", Fs14AclForkedReaders, nil)
 }
+
+func TestFs62AclGateReadsProjWhenTheCacheDoesNotServe(t *testing.T) {
+	RunClause(t, "FS-62", "acl gate", Fs62AclGate, nil)
+}
