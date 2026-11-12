@@ -157,7 +157,7 @@ func AddTool[In, Out any](catalog *McpCatalog, spec *McpToolSpec[In], handler Mc
 		}
 		return result, nil
 	}
-	catalog.add(&mcpCatalogTool{tool: tool, tier: spec.Tier, mayAct: spec.MayAct, handler: wrapped})
+	catalog.add(&mcpCatalogTool{tool: tool, tier: spec.Tier, mayAct: spec.MayAct, targeted: spec.Targets != nil, handler: wrapped})
 }
 
 // The outputSchema every tool declares: the envelope, its data the handler's output, either form validating
