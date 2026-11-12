@@ -34,10 +34,12 @@ type modelledFile struct {
 
 // One model: what it keeps, the code that implements that, and its recorded runs.
 type modelledModel struct {
-	Spec       string         `yaml:"spec"`
-	Owners     []string       `yaml:"owners"`
-	Milestones []string       `yaml:"milestones"`
-	Objects    string         `yaml:"objects"`
+	Spec       string   `yaml:"spec"`
+	Owners     []string `yaml:"owners"`
+	Milestones []string `yaml:"milestones"`
+	Objects    string   `yaml:"objects"`
+	// models of the same objects under details/, each run by its own script there
+	Companions []string       `yaml:"companions"`
 	Sources    []string       `yaml:"sources"`
 	Exclude    []string       `yaml:"exclude"`
 	Runs       []*modelledRun `yaml:"runs"`
@@ -252,6 +254,27 @@ func TestModelledNamesEachModelsSources(t *testing.T) {
 		for _, file := range []string{model.Spec + ".tla", model.Spec + ".cfg", "run-tlc.sh"} {
 			if !slices.Contains(model.Sources, "sidecar/sidecartest/model/"+file) {
 				t.Errorf("%s's sources leave out %s, whose change needs a rerun too", model.Spec, file)
+			}
+		}
+		// a companion's spec, its cfgs and its run script are sources too, so a change to either model
+		// reruns the spec at a gate
+		for _, companion := range model.Companions {
+			if !strings.HasPrefix(companion, "details/") || slices.Contains(modelSpecs, companion) {
+				t.Errorf("%s's companion %s is not a model under details/", model.Spec, companion)
+			}
+			if _, err := os.Stat(companion + ".tla"); err != nil {
+				t.Errorf("%s's companion %s has no spec: %v", model.Spec, companion, err)
+			}
+			for _, pattern := range []string{companion + ".tla", companion + "*.cfg"} {
+				if !slices.Contains(model.Sources, "sidecar/sidecartest/model/"+pattern) {
+					t.Errorf("%s's sources leave out its companion's %s, whose change needs a rerun too", model.Spec, pattern)
+				}
+			}
+			companionScript := slices.ContainsFunc(model.Sources, func(source string) bool {
+				return strings.HasPrefix(source, "sidecar/sidecartest/model/details/run-") && strings.HasSuffix(source, ".sh")
+			})
+			if !companionScript {
+				t.Errorf("%s's sources name no run script for its companion %s", model.Spec, companion)
 			}
 		}
 		sources, err := modelSources(root, model)
