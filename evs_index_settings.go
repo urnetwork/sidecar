@@ -59,10 +59,9 @@ type IndexFormatSettings struct {
 	// (LockGrace), evs's bound on a push's time, so two honest runners never both hold it.
 	LockGrace time.Duration
 	// From an index push's signed time, taken before its first read, to the last moment it may be sent, on the
-	// monotonic and the wall clock both: 5 min (IndexPushLife; R5). A push past it is built again, never sent.
+	// monotonic and the wall clock both: 5 min (IndexPushLife; R5). A push past it is built again, never sent. A push
+	// in parts (11.8) lives 25 min, which its builder adds when parts land.
 	PushLife time.Duration
-	// PushLife for a push in parts (11.8): 25 min.
-	PartsPushLife time.Duration
 }
 
 // DESIGN-DETAILS 11.2.1's and 1.2.1's values, the only source of their defaults. A fresh value each call, sharing nothing
@@ -87,6 +86,5 @@ func DefaultIndexFormatSettings() *IndexFormatSettings {
 		LockTerm:              30 * time.Minute,
 		LockGrace:             10 * time.Minute,
 		PushLife:              5 * time.Minute,
-		PartsPushLife:         25 * time.Minute,
 	}
 }

@@ -65,7 +65,8 @@ type indexHeadPlanArgs struct {
 	// Whether the writer may merge now: desktops, the daemon and indexers; phones only on Wi-Fi while charging
 	// (§11.14's devices row).
 	mayMerge bool
-	// What every slot the push writes carries as coverage: a companion head's or a backfill's. Nil keeps the head's.
+	// What every slot the push writes carries as coverage: a companion head's, a backfill's or a roll-up runner's. Nil
+	// keeps the head's. With no document pending, the head is written for it alone.
 	coverage []*protocol.IndexCoverage
 }
 
@@ -222,6 +223,18 @@ func indexPlanHead(ctx context.Context, args *indexHeadPlanArgs) (*indexHeadPlan
 			works[window.startDay] = work
 		}
 		work.pending = append(work.pending, document)
+	}
+	// A push with no document that carries coverage writes its writer's head in the bucket of its signed time alone:
+	// a roll-up's carried horizon rows (DESIGN-DETAILS 1.2.5's step 5) and a companion push that only raises coverage
+	// (QD-689's reading 11). The head is written again with its entries and the push's coverage, or slot 0 opens where
+	// the writer has none there.
+	if len(pending) == 0 && args.coverage != nil {
+		work := &indexHeadBucketWork{window: pushWindow, created: created, bucket: root.bucket(pushWindow.startDay)}
+		if work.bucket != nil {
+			work.writer = work.bucket.writer(args.writer)
+			work.absorbed = work.bucket.absorbedSeq(args.writer)
+		}
+		works[pushWindow.startDay] = work
 	}
 
 	starts := []uint32{}
