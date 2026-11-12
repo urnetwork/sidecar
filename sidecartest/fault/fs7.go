@@ -9,12 +9,14 @@
 // version before it, since a commit carries its own process's folds (§11.7's horizon row): the one window version
 // past folded_through is then that commit's, in a batch too young to evacuate. A fresh instance's newest rule reads the
 // record of each window version past folded_through and past the entry's own newest version whose digest may touch the
-// path, through evsservice's RecordPushSource, which has no pidx/ lookup (newest.go), so once evacuation has moved such
-// a version's batch, the read after the restart answers 503: with the fold on another instance, a version's digest
-// matching another path by chance, about one run in a few hundred, did that (question
-// evs1-m2-41-newest-evacuated-window). Fs7EvacuatedWindowAfterRestart keeps that case as a clause no test runs until
-// the question is answered: the twin's paths, with the commit outside them made before the 26 h, so its creation's
-// root delta touches every path and its batch is evacuated.
+// path (newest.go), and finds it through pidx/ once evacuation has moved its batch (QD-664). Before that fallback such
+// a read answered 503 on every try: with the fold on the reader's own instance and no commit after it, a later
+// version's digest matching a path by chance (64 bits, k = 2, over each run's own path keys) failed about one twin run
+// in 55 at the read after the restart, which no replay repeats, the keys being drawn anew. It was never the restart's
+// readiness, which no route reads. Fs7EvacuatedWindowAfterRestart, which TestFs7EvacuatedWindowAfterRestart runs,
+// reads such a record every run: the twin's paths, with the commit outside them made before the 26 h, so its
+// creation's root delta touches every path and its batch is evacuated before the reader's instance first reads it,
+// then again after the restart.
 
 package fault
 
