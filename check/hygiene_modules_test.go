@@ -28,13 +28,6 @@ var siblingReplaces = map[string]string{
 	gvisorBasePath:  "../gvisor",
 }
 
-// The siblings sidecarctl alone may replace beside those, from the root's own directory as
-// siblingReplaces gives them: C-23 lets the operations binary read warp's configuration through
-// warp's own packages.
-var sidecarctlSiblingReplaces = map[string]string{
-	warpBasePath: "../warp",
-}
-
 // The modules of this repository a nested module may replace, and what they are relative to it.
 var repositoryReplaces = map[string]string{
 	sidecarBasePath:                "..",
@@ -98,12 +91,6 @@ func replaceFindingsDevelopment(module *repositoryModule) []string {
 		delete(targets, old)
 	}
 	for old, got := range targets {
-		if target, ok := sidecarctlSiblingReplaces[old]; ok && module.relativeName == "sidecarctl" {
-			if got != "../"+target {
-				findings = append(findings, findingf("%s: replace %s => %s, and C-23's is ../%s", module.relativeName, old, got, target))
-			}
-			continue
-		}
 		target, own := repositoryReplaces[old]
 		if !own || module.relativeName == "." {
 			findings = append(findings, findingf("%s: replace %s => %s is not one of §4.7's", module.relativeName, old, got))
@@ -142,9 +129,7 @@ func replaceFindingsRelease(module *repositoryModule) []string {
 		}
 		_, sibling := siblingReplaces[old]
 		_, own := repositoryReplaces[old]
-		sidecarctlTarget, sidecarctlSibling := sidecarctlSiblingReplaces[old]
-		sidecarctlSibling = sidecarctlSibling && module.relativeName == "sidecarctl"
-		if !sibling && !own && !sidecarctlSibling {
+		if !sibling && !own {
 			findings = append(findings, findingf("%s: replace %s => %s is not one of §4.7's", module.relativeName, replace.Old.Path, newPath))
 			continue
 		}
@@ -155,11 +140,8 @@ func replaceFindingsRelease(module *repositoryModule) []string {
 			findings = append(findings, findingf("%s: replace %s => %s %s is not a rebased local path", module.relativeName, replace.Old.Path, newPath, replace.New.Version))
 			continue
 		}
-		if sibling || sidecarctlSibling {
+		if sibling {
 			want := strings.TrimPrefix(siblingReplaces[old], "../")
-			if sidecarctlSibling {
-				want = strings.TrimPrefix(sidecarctlTarget, "../")
-			}
 			target := versionElementSuffixPattern.ReplaceAllString(path.Clean(newPath), "")
 			if !strings.HasSuffix(target, "/"+want) {
 				findings = append(findings, findingf("%s: replace %s => %s does not end at %s", module.relativeName, replace.Old.Path, newPath, want))
@@ -222,15 +204,14 @@ func (self *repository) workFileFindings(t testing.TB) []string {
 	return findings
 }
 
-// The modules a release leaves unversioned in place, never tagged (§4.9), sidecarctl among them
-// (C-23).
-var untaggedModuleNames = []string{"cli", "mlsinterop", "sidecarctl"}
+// The modules a release leaves unversioned in place, never tagged (§4.9).
+var untaggedModuleNames = []string{"cli", "mlsinterop"}
 
 // A quoted path of this repository, as the release's rewrite finds one, up to what ends a path: a
 // Makefile's go install path@version, say, or a second word in the quotes.
 var quotedRepositoryPathPattern = regexp.MustCompile(`"(` + regexp.QuoteMeta(sidecarBasePath) + `[^"\s@]*)`)
 
-// cli, mlsinterop and sidecarctl each stay one package, and no file names one by its path. The release
+// cli and mlsinterop each stay one package, and no file names one by its path. The release
 // rewrites every quoted path under the root's to .../sidecar/v2026 in every .go file and Makefile
 // (build/all/run.sh's go_edit_require_subpackages, which sidecar_release_edit runs), and these modules
 // keep their unversioned paths. So a package beside a module's own is one the rewrite would import

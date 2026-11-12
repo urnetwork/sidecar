@@ -17,8 +17,10 @@
 //	         among those returned, its Merkle proof when the list is not inline, and the adjacent-leaf proofs of
 //	         each later statement whose list is not inline and whose prefixes reach the path; a removed path its
 //	         removal's push id, version and path version from its marker or the window; an overlay's path it holds
-//	         no version of `base`; a directory its folded table, names_through and the deltas after it; then the
-//	         objects (read_frame.go)
+//	         no version of `base`; a directory its folded table as its entry holds it, names_through and the deltas
+//	         after it, or with no table that stands (none folded, or a removal or creation in the window since) no
+//	         table and the deltas since the window's last creation of it, each delta in a frame of its own after the
+//	         path's (QD-662); then the objects (read_frame.go)
 //
 // Path epochs (DESIGN-DETAILS 9.2.4; EVS1-M2-45). A path names its token path in each epoch it names, at most 8, one
 // an epoch, and evs matches them to the head by their epoch field, never by position: the head's current epoch's
@@ -563,7 +565,9 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 			return reply, self.statementAlone(reply, newest.CommitVersion)
 		}
 		if listing := path.listing; listing != nil {
-			reply.Names = &protocol.EvsNameTable{Names: listing.Names}
+			// the folded table alone, which the reader opens under entry_epoch, and the deltas each under its own
+			// statement's: the rows the deltas add never ride twice, nor under a table's epoch that is not theirs
+			reply.Names = listing.Table
 			reply.NamesThrough = listing.TableThrough
 			for _, deltaVersion := range listing.DeltaVersions {
 				deltaVersions[deltaVersion] = true

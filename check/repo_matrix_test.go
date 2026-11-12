@@ -79,7 +79,7 @@ var repoMatrix = map[string][]repoEvidence{
 		{rule: "protocol beyond std, protobuf and protocol/bridge, or protocol/bridge beyond std and protobuf"},
 		{rule: "device beyond connect and protocol/bridge (§4.4, D-SDK-20)"},
 		{rule: "the root module requiring any module of this repository"},
-		{rule: "a package beside cli's, mlsinterop's or sidecarctl's own, or a file naming one, which the release's rewrite would break (§4.9)"},
+		{rule: "a package beside cli's or mlsinterop's own, or a file naming one, which the release's rewrite would break (§4.9)"},
 	},
 	"D-REPO-3": {
 		{path: "host_service.go"},

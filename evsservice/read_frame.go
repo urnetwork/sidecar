@@ -9,8 +9,16 @@
 //	ranges    a segment through SegmentLocator: up to 256 KiB read whole from offset 0, larger ones in 64 KiB-aligned
 //	          ranges covering what was asked, each range over frames past 1 MiB, offset naming each frame's first byte
 //
-// The status is 200 once the first frame is written, so a read that fails afterwards ends the stream short of its
-// last frame, which the client reads as ErrEvsReplyInvalid and retries; the service log keeps the failure's note.
+// A path goes in one frame, but for a directory's deltas, which follow its path frame one a frame, each a path frame
+// of the same token path with continues set, carrying that delta alone, with its proofs beside it once the reply
+// carries a delta's (QD-662; question evs1-m2-40-unfolded-listing-frame): so a directory at its 448 KiB bound lists in
+// any fold state, its rows spread over a push's parts never in one frame, and the frame bound, 1 MiB + 64 KiB, stays.
+// A reader folds them back into the path (sidecar.EvsReadFrames).
+//
+// The status is 200 once the first frame is written, so a read that fails afterwards cannot answer a refusal: a frame
+// that cannot be encoded, or a store read that fails, is noted, logged, and ends the stream with an error frame in
+// place of the end frame, its refusal UNAVAILABLE, never silently (QD-662); the client answers it as that refusal. Only
+// a write that fails, the client gone, ends the stream with nothing more.
 
 package evsservice
 
@@ -19,10 +27,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
+
+// The note of a frame that cannot be encoded, which alarms.
+const evsReadFrameUnencodable = "frame_unencodable"
 
 // The reply's frames on their way out.
 type readStream struct {
@@ -56,7 +68,7 @@ func (self *readAttempt) stream(reply *readReply) {
 		return
 	}
 	for _, path := range reply.paths {
-		if !stream.frame(&protocol.EvsReadFrame{Path: path}) {
+		if !stream.path(path) {
 			return
 		}
 	}
@@ -66,16 +78,38 @@ func (self *readAttempt) stream(reply *readReply) {
 	stream.frame(&protocol.EvsReadFrame{End: true})
 }
 
+// A path's frame, then each of its directory deltas in a frame of its own (see the file header).
+func (self *readStream) path(path *protocol.EvsReadPathReply) bool {
+	deltas := path.GetDeltas()
+	path.Deltas = nil
+	if !self.frame(&protocol.EvsReadFrame{Path: path}) {
+		return false
+	}
+	for _, delta := range deltas {
+		deltaFrame := &protocol.EvsReadPathReply{
+			TokenPath: path.GetTokenPath(), Deltas: []*protocol.EvsIndexVersion{delta}, Continues: true,
+		}
+		if !self.frame(&protocol.EvsReadFrame{Path: deltaFrame}) {
+			return false
+		}
+	}
+	return true
+}
+
 // One frame, flushed. false once the stream has failed, after which nothing more is written.
 func (self *readStream) frame(frame *protocol.EvsReadFrame) bool {
 	if self.failed {
 		return false
 	}
 	frameBytes, err := sidecar.EncodeEvsReadFrame(frame)
-	if err == nil {
-		_, err = self.request.Writer.Write(frameBytes)
-	}
 	if err != nil {
+		// a reply part past the frame's bound is a store object past its own, or this build's fault
+		self.request.engine.metrics.alarms.Add(1, "read_frame")
+		self.fail(evsReadFrameUnencodable, err)
+		return false
+	}
+	if _, err := self.request.Writer.Write(frameBytes); err != nil {
+		// the client is gone: nothing more reaches it
 		self.failed = true
 		self.request.Note("stream_failed")
 		return false
@@ -85,6 +119,48 @@ func (self *readStream) frame(frame *protocol.EvsReadFrame) bool {
 		self.flusher.Flush()
 	}
 	return true
+}
+
+// Ends the stream short of its end frame (see the file header): notes and logs why, by the request's opaque ids, and
+// writes the error frame in the end frame's place. The service log's line carries the refusal's code.
+func (self *readStream) fail(note string, err error) {
+	if self.failed {
+		return
+	}
+	self.failed = true
+	request := self.request
+	engine := request.engine
+	request.Note(note)
+	request.code = protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE
+	if note == evsReadFrameUnencodable {
+		engine.log.Errorf("[evs] alarm read %s: repo %s refs %v: %v", note, sidecar.EvsKeyId(request.RepoId), evsKeyIds(request.refIds), err)
+	} else {
+		engine.log.Warningf("[evs] read %s: repo %s refs %v: %v", note, sidecar.EvsKeyId(request.RepoId), evsKeyIds(request.refIds), err)
+	}
+	refusal := &protocol.EvsRefusalReply{
+		Code:         protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE,
+		RetryAfterMs: uint32(max(time.Second, engine.settings.UnavailableRetryAfter).Milliseconds()),
+	}
+	frameBytes, err := sidecar.EncodeEvsReadFrame(&protocol.EvsReadFrame{Error: refusal})
+	if err != nil {
+		return
+	}
+	if _, err := request.Writer.Write(frameBytes); err != nil {
+		return
+	}
+	request.replyByteCount += int64(len(frameBytes))
+	if self.flusher != nil {
+		self.flusher.Flush()
+	}
+}
+
+// Ids as their key forms, for a log line (I-13).
+func evsKeyIds(ids []sidecar.Id) []string {
+	keyIds := make([]string, len(ids))
+	for i, id := range ids {
+		keyIds[i] = sidecar.EvsKeyId(id)
+	}
+	return keyIds
 }
 
 // An object's bytes, over frames of at most ReadFrameByteCount, from offset.
@@ -111,8 +187,7 @@ func (self *readStream) object(settings *EvsSettings, kind protocol.EvsReadObjec
 			}
 			return true
 		default:
-			self.failed = true
-			self.request.Note("object_read_failed")
+			self.fail("object_read_failed", err)
 			return false
 		}
 	}
@@ -147,8 +222,7 @@ func (self *readAttempt) streamObjects(stream *readStream) bool {
 				return false
 			}
 		case err != nil:
-			stream.failed = true
-			self.request.Note("log_page_read_failed")
+			stream.fail("log_page_read_failed", err)
 			return false
 		default:
 			if !stream.object(self.settings, protocol.EvsReadObjectKind_EVS_READ_OBJECT_LOG_PAGE, nil, page, 0, bytes.NewReader(logPage.Bytes)) {
@@ -175,8 +249,7 @@ func (self *readAttempt) streamObject(stream *readStream, kind protocol.EvsReadO
 	case errors.Is(err, sidecar.ErrBlobNotFound):
 		return stream.missing(kind, id, number)
 	case err != nil:
-		stream.failed = true
-		self.request.Note("object_read_failed")
+		stream.fail("object_read_failed", err)
 		return false
 	}
 	defer object.Body.Close()
@@ -205,8 +278,7 @@ func (self *readAttempt) streamPushRecord(stream *readStream, readPush *protocol
 	case errors.Is(err, ErrEvsRecordEvacuated), errors.Is(err, sidecar.ErrBlobNotFound):
 		return stream.missing(kind, pushId, number)
 	case err != nil:
-		stream.failed = true
-		self.request.Note("record_read_failed")
+		stream.fail("record_read_failed", err)
 		return false
 	}
 	return stream.object(self.settings, kind, pushId, number, 0, bytes.NewReader(recordBytes))
@@ -230,8 +302,7 @@ func (self *readAttempt) streamRange(stream *readStream, readRange *protocol.Evs
 	case errors.Is(err, sidecar.ErrBlobNotFound), errors.Is(err, sidecar.ErrBlobRange):
 		return stream.missing(kind, segmentId[:], 0)
 	case err != nil:
-		stream.failed = true
-		self.request.Note("segment_read_failed")
+		stream.fail("segment_read_failed", err)
 		return false
 	}
 	defer object.Body.Close()

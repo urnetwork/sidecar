@@ -236,9 +236,6 @@ func testHookBarrier(name string, key string) {
 
 	"sidecar/mlsinterop/go.mod": "module @module@/mlsinterop\n\ngo 1.27.4\n\nreplace @module@ => ..\n" + fixtureNestedReplaces,
 	"sidecar/mlsinterop/doc.go": "package mlsinterop\n",
-
-	"sidecar/sidecarctl/go.mod":  "module @module@/sidecarctl\n\ngo 1.27.4\n" + fixtureNestedReplaces,
-	"sidecar/sidecarctl/main.go": "package main\n\nfunc main() {}\n",
 }
 
 // A fixture on disk, with what a test can do to it.
