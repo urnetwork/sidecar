@@ -171,21 +171,41 @@ func (self *testSocketNet) dial(name string) (*SocketConn, error) {
 
 // A dial of name by sidecarId's sidecar.
 func (self *testSocketNet) dialAs(name string, sidecarId Id) (*SocketConn, error) {
+	conn, _, err := self.dialServed(name, sidecarId)
+	return conn, err
+}
+
+// dialAs's dial, with a channel closed once the listener's side closes its conn: what a server does last, past
+// whatever it does after the dialer's half has ended, so a test waits on it to read that work's result.
+func (self *testSocketNet) dialServed(name string, sidecarId Id) (*SocketConn, <-chan struct{}, error) {
 	self.stateLock.Lock()
 	listener := self.listeners[name]
 	self.stateLock.Unlock()
 	if listener == nil {
-		return nil, &SocketCodeError{Err: ErrSocketNoListener}
+		return nil, nil, &SocketCodeError{Err: ErrSocketNoListener}
 	}
 	dialerEnd, listenerEnd := newSocketStreamPipe(64 * 1024)
-	listenerConn := newSocketConn(listenerEnd, &SocketAddr{}, &SocketAddr{}, nil, nil)
+	served := &testSocketServedStream{socketStream: listenerEnd, served: make(chan struct{})}
+	listenerConn := newSocketConn(served, &SocketAddr{}, &SocketAddr{}, nil, nil)
 	self.stateLock.Lock()
 	self.sidecars[listenerConn] = sidecarId
 	self.stateLock.Unlock()
 	if !listener.deliver(listenerConn) {
-		return nil, &SocketCodeError{Err: ErrSocketNoListener}
+		return nil, nil, &SocketCodeError{Err: ErrSocketNoListener}
 	}
-	return newSocketConn(dialerEnd, &SocketAddr{}, &SocketAddr{}, nil, nil), nil
+	return newSocketConn(dialerEnd, &SocketAddr{}, &SocketAddr{}, nil, nil), served.served, nil
+}
+
+// A listener's end of a test dial that closes served at its first Close.
+type testSocketServedStream struct {
+	socketStream
+	once   sync.Once
+	served chan struct{}
+}
+
+func (self *testSocketServedStream) Close() error {
+	defer self.once.Do(func() { close(self.served) })
+	return self.socketStream.Close()
 }
 
 // Whether a listener holds name now.

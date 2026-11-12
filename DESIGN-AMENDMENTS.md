@@ -5181,3 +5181,48 @@ The eleven readings in DESIGN-DETAILS section 7 stand: (1) a personal network, f
 Changes: none beyond QD-707's amendment of section 7.
 
 Questions: `details-7-small-readings.md`.
+
+### QD-712: May one perfectly hiding commitment to a mail session's keys be public, so that the TLS key schedule is proven once a connection and not in every proof part?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §14 The SMTP edge.*
+
+This reverses QD-144's keeping of D-SMTP-22 as written. Part 1 proves the TLS key schedule (Z1) once per connection and publishes one perfectly hiding Pedersen commitment C, over the curve embedded in BN254's scalar field, to both directions' keys and IVs, plus one such commitment per header or DATA body record after the first to the scan's state between records; every later part opens C (3,261 constraints against Z1's 708,498). C is a uniformly random group element whatever the keys are, so the edge learns nothing from it even with unbounded computation or the setup's trapdoor: D-SMTP-22's purpose, that the edge holds nothing that helps open application data (D-SMTP-21, §2.8 smtp-2), holds in full, and its sentence changes to allow these commitments. Its secrecy rests on a 251-bit blind drawn uniformly from the same source as the TLS keys; soundness (abuse control only) on discrete logs on the embedded curve, about 2^125. It makes one 2^20 domain for every circuit, eleven shapes in two families in place of 22 over four sizes, about 1.3 GiB a proof measured, and any recipient count on one connection with no recipient class (DESIGN-DETAILS 3.2.2, 3.3).
+
+Changes: D-SMTP-22's sentence and §14.5's relation (design-records); SMTP-M9-36 to -39 build the commitment, the unit shapes, the gate and the prover; released from their hold.
+
+Questions: `details-3-key-commitment.md`.
+
+### QD-713: What do D-SMTP-16's m5.large rows become, given that no relation over these circuits proves the gate's send there in 60 s?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §14 The SMTP edge.*
+
+D-SMTP-16's rows are stated in proof units; the M1's numbers stay (met by projection: 2 to 3 s for the first part, 15 to 21 s for the send, about 4 min for DATA); the m5.large's become what SMTP-M9-32's bench measures, about 150 s for the gate's send and 35 min for 100 KiB of DATA by projection until then, as QD-144's rule for a confirmed miss says. No relation over these circuits meets 60 s there: the AES keystream for a 4 KiB header block alone is 2.99M constraints, 73 s at 41,000 a second. A 2 vCPU host takes about two minutes to send to an AES MX and still sends; the client offers ChaCha20 first, five units where the MX follows. With QD-702 the targets are settings with these defaults.
+
+Changes: D-SMTP-16's Speed text (DESIGN-DETAILS 3.8; design-records); SMTP-M9-32's bench sets the m5.large numbers.
+
+Questions: `details-3-speed-bar.md`.
+
+### QD-714: Are many recipients at one domain sent in envelope groups on one connection, each group's replies proven with the next, rather than by a recipient class or by splitting the send?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §14 The SMTP edge.*
+
+Many recipients at one domain go as envelope groups on one connection: the sidecar sends a group of commands (MAIL and 12 RCPT, then 13 a group, under AES; 18 and then 19 under ChaCha20), waits for the group's replies, and proves them with the next group. A send costs one quota unit and is one transaction at the MX, and each further 12 to 19 recipients add one proof part; `smtp_recipients_per_message` caps the connection, as §20.4's comment reads. The sender does not split a domain's recipients over connections, and there is no recipient class of larger shapes: with the key schedule proven once (QD-712) a part is small, which removes the premise of `smtp-m9-22-recipient-classes`. With QD-702 the group sizes are settings with these defaults.
+
+Changes: SMTP-M9-39 builds the envelope groups; SMTP-M9-08 builds no split; no recipient-class shapes (DESIGN-DETAILS 3.1 B, 3.2.4, 3.2.6, 3.9; design-records).
+
+Questions: `details-3-recipient-groups.md`, `smtp-m9-22-recipient-classes.md`.
+
+### QD-715: When is the proofs' setup ceremony run again over unchanged circuits?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §14 The SMTP edge.*
+
+The proofs' Groth16 setup ceremony runs again, and a new key set replaces the old, only when a circuit changes, when the shape catalog changes, or when the ceremony host is suspected exposed; a key set over unchanged circuits is not rotated on a schedule or with each release. A key set may still gain shapes without replacing the rest (DESIGN-DETAILS.md 3.2.7). A leaked ceremony secret lets its holder forge proof parts under that set, which defeats abuse control for forged sends (§14.8's DKIM joins still attribute them) and exposes no mail; prover hosts check every key against the setup's transcript, so a sidecar's privacy does not rest on the ceremony. Who runs the production ceremony, and on which host, stays an external action outside this run.
+
+Changes: DESIGN-DETAILS.md 3.2.7, 3.5 and 3.9 stand as written (design-records).
+
+Questions: `details-3-key-rotation.md`.
+
+### QD-716: Can §2.8's smtp-2 row be amended and a smtp-7 row added for what section 3's proofs and key fetch show a server?
+*Decided by the owner on 2026-11-11, asked one question at a time. Folds into §2 Trust model and threat model.*
+
+§2.8's metadata list, in its next version, amends smtp-2 and adds smtp-7 as DESIGN-DETAILS.md 3.8 writes them. smtp-2 (smtpedge, connection memory only) lists the id of the key set the sidecar proves under; a proof per part (the key part, one per envelope group, one per header record and, in DATA mode, one per body record), each with its reply count and, once, the header block's record count; and the key commitment and scan-state commitments the sidecar publishes, uniformly random group elements that depend on no key and no plaintext. smtp-7 is new: the key set path on ur.io, where per fetch the origin sees the client's address and time, the key set's id and the file names fetched, which mark the address as a mail prover host, on which key set and with which TLS families prepared; the request carries no account, token, cookie or sidecar id. Its ttl reads "as ur.io's other static downloads (§4.10)", which the ops owner confirms against how ur.io serves and logs its static files (EX7). The key set fetch stays off until smtp-7 has landed (I-18). Key sets are fetched, not bundled in the `ur` package, as QD-123 decided.
+
+Changes: §2.8 smtp-2 amended and smtp-7 added (DESIGN-DETAILS 3.8; design-records); SMTP-M9-35's proto fields and SMTP-M9-40's fetch may reach a release once smtp-7 has landed; the ops owner confirms smtp-7's ttl line (EX7).
+
+Questions: `details-3-metadata-rows.md`.
