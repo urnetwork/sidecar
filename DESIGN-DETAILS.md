@@ -1687,6 +1687,8 @@ This section is designed on the recommendation of each of the first three; the f
 
 **Questions this section answers.** `evs-models-gc-unfenced-new-ref`: none of its options as stated; GC fences nothing, and the fence of a ref with no head is evacuation's placeholder (its option 1's write, made by evacuation). `evs1-m2-12-first-commit-gc-fence`: its option 1, the push route as it is. `evsb-m2-11-pending-record-no-head`: its option 1. `evs-models-settle-stalled-deletes`: its option 1, with the stamp for C, which it did not have; that option is the owner's too, since it changes FI-30's last clause and D-OPS-20's cost (2.4, 2.8). `evsb-m2-11-dead-record-shared-slot` is not answered here; its option 3 can take 2.2.4's horizon in place of reading batch-resident records, and a DELETE naming the slot's LastModified, when it is decided.
 
+Section 14 answers `evsb-m2-11-dead-record-shared-slot` (14.9), with none of its options as stated.
+
 ## 3. Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5)
 
 Status: complete (2026-11-11)
