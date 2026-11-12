@@ -299,7 +299,7 @@ func NewEvacuator(host *sidecar.ServiceHost, deps *EvacuatorDeps) (*Evacuator, e
 	}
 	self.newest = deps.Newest
 	if self.newest == nil {
-		self.newest = &headPurgeNewest{heads: self.heads, records: NewRecordCache(evsSettings)}
+		self.newest = &headPurgeNewest{heads: self.heads, records: NewRecordCache(evsSettings), locator: self.locator}
 	}
 	sweep, err := NewSweep(host, &SweepDeps{
 		Format2:     deps.Format2,

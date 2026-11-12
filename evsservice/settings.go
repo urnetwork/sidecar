@@ -259,6 +259,12 @@ type EvsSettings struct {
 	// gen/<g>'s bound: a Signed GenRotate with its GenLink and leaf wrap, 16 KiB, well under a metadata object's
 	// 4 KiB block count. Positive.
 	GenerationRecordMaxByteCount int64
+	// §11.12's push row: how many times an ERASE's slot rewrite reads and writes one slot again after a 412 or a lost
+	// answer before it leaves the slot to the reconciler, 8. Non-negative.
+	SlotRewriteRetryCount int
+	// How long after an ERASE whose rewrites could not finish taskworker's evs.erasure_finish runs for its repo, 1
+	// min; the client's retry finishes them too. Positive.
+	ErasureFinishDelay time.Duration
 }
 
 // The design's values, and 4 KiB blocks until the nvme run.
@@ -345,6 +351,8 @@ func DefaultEvsSettings() *EvsSettings {
 		SlotMaxByteCount:             8 * 1024,
 		SlotExistingMaxAge:           23 * time.Hour,
 		GenerationRecordMaxByteCount: 16 * 1024,
+		SlotRewriteRetryCount:        8,
+		ErasureFinishDelay:           time.Minute,
 	}
 }
 
@@ -355,6 +363,9 @@ func (self *EvsSettings) Validate() error {
 	}
 	if self.PushTimeBound <= 0 || self.SealTimeBound <= 0 || self.SlotMaxByteCount <= 0 || self.SlotExistingMaxAge <= 0 || self.GenerationRecordMaxByteCount <= 0 {
 		return fmt.Errorf("%w: a push's time bound, a slot's bound or age, or gen/<g>'s bound not positive", ErrEvsSettings)
+	}
+	if self.SlotRewriteRetryCount < 0 || self.ErasureFinishDelay <= 0 {
+		return fmt.Errorf("%w: a slot rewrite's retries negative or the erasure reconciler's delay not positive", ErrEvsSettings)
 	}
 	if self.InstanceFormat != sidecar.EvsRepoFormat1 && self.InstanceFormat != sidecar.EvsRepoFormat2 {
 		return fmt.Errorf("%w: instance format %d is neither 1 nor 2", ErrEvsSettings, self.InstanceFormat)

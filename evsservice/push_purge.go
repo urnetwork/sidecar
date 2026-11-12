@@ -275,7 +275,7 @@ func (self *pushAttempt) readReplacedVersion(ctx context.Context, pathEpoch uint
 		return nil, err
 	}
 	first := EvsHeadWindowFirstVersion(head.Head)
-	pushes := NewRecordPushSource(self.engine.records, self.cluster, self.repoId, self.refId).WithLocator(self.engine.locator)
+	pushes := NewRecordPushSource(self.engine.records, self.engine.locator, self.cluster, self.repoId, self.refId)
 	for i := len(window) - 1; 0 <= i; i -= 1 {
 		version := first + uint64(i)
 		if commitVersion <= version || !window[i].PathsDigest.MayChange(tokenPath) {
