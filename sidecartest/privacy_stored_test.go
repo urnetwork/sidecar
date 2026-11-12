@@ -154,8 +154,12 @@ func TestAGkmCommitHeaderCarriesOnlyTheGenerationAndThePin(t *testing.T) {
 	}
 	findings := fixture.check(t, true)
 	if len(findings) != 2 ||
-		!slices.ContainsFunc(findings, func(finding string) bool { return strings.Contains(finding, commitKey) && strings.Contains(finding, "commit's GkmCommitHeader") }) ||
-		!slices.ContainsFunc(findings, func(finding string) bool { return strings.Contains(finding, objectKey) && strings.Contains(finding, "its GkmCommitHeader carries") }) {
+		!slices.ContainsFunc(findings, func(finding string) bool {
+			return strings.Contains(finding, commitKey) && strings.Contains(finding, "commit's GkmCommitHeader")
+		}) ||
+		!slices.ContainsFunc(findings, func(finding string) bool {
+			return strings.Contains(finding, objectKey) && strings.Contains(finding, "its GkmCommitHeader carries")
+		}) {
 		t.Errorf("findings %q", findings)
 	}
 }
