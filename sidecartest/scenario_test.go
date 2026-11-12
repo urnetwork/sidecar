@@ -229,3 +229,40 @@ func TestScenarioRowsFollowTheFlowMap(t *testing.T) {
 		}
 	}
 }
+
+// What the default registry reads at M2-out for this task's rows (TEST-M2-11): S1's three clauses each have their T3
+// test, and S3a's only missing part on either tier is each late wrap judged at its own pin, FS-104's, which waits on
+// KEYS-M2-29's oracle; S4a's revocation-suite parts read missing until TEST-M2-12 composes them.
+func TestTheDefaultRegistryReadsWhatThisTaskBuilt(t *testing.T) {
+	registry := DefaultScenarioRegistry()
+	missingOf := func(scenarioId string, tier string) []string {
+		out := []string{}
+		for _, part := range registry.Missing("M2-out", tier) {
+			if part.Row.Id == scenarioId {
+				out = append(out, part.Clause)
+			}
+		}
+		return out
+	}
+	if missing := missingOf("S1", ScenarioTierT3); len(missing) != 0 {
+		t.Errorf("S1 reads missing on T3: %q", missing)
+	}
+	for _, tier := range []string{ScenarioTierT2, ScenarioTierT3} {
+		if missing := missingOf("S3a", tier); !slices.Equal(missing, []string{"late-wrap-judged-at-its-pin"}) {
+			t.Errorf("S3a's missing parts on %s: %q", tier, missing)
+		}
+		missing := missingOf("S4a", tier)
+		for _, want := range []string{"gates-closed-until-a-covering-generation", "members-refuse-a-bad-commit", "tokens-fail-in-their-windows", "path-epoch-and-checkpoint"} {
+			if !slices.Contains(missing, want) {
+				t.Errorf("S4a's %s does not read missing on %s: %q", want, tier, missing)
+			}
+		}
+		if slices.Contains(missing, "writers-seal-nothing-to-x") || slices.Contains(missing, "next-generation-fails-under-xs-keys") {
+			t.Errorf("S4a's composed parts read missing on %s: %q", tier, missing)
+		}
+	}
+	tests := registry.Tests("S1", "genesis-other-than-the-invites-refused", ScenarioTierT3)
+	if len(tests) != 1 || tests[0].Repo != "server" || tests[0].Name != "TestScenarioS1GenesisOnT3" {
+		t.Errorf("S1's genesis clause is registered to %v", tests)
+	}
+}
