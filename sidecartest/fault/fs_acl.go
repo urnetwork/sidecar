@@ -964,10 +964,11 @@ func fs62AclLoad(world *fs62AclWorld, want uint64, fromStore bool) error {
 		before, _ := gate.cache.State(networkId)
 		readsBefore := gate.reads.Load()
 		gate.cache.Changed(networkId)
+		// the world's context ends at the suite's RowTimeout, a failure's bound only
 		select {
 		case <-gate.loads:
-		case <-time.After(30 * time.Second):
-			return fmt.Errorf("%s: no load finished", gate.name)
+		case <-world.net.Context().Done():
+			return fmt.Errorf("%s: no load finished: %w", gate.name, world.net.Context().Err())
 		}
 		snapshot, status := gate.cache.State(networkId)
 		if status != sidecar.AclGateLoaded || snapshot == nil || snapshot.Pin.GetVersion() != want {
