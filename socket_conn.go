@@ -121,6 +121,15 @@ func (self *SocketConn) Abort() error {
 	return nil
 }
 
+// Resets the stream with code (§6.7): how a component that took the conn refuses it with the reason, as the TLS
+// front answers RST_IDENTITY to an open it does not trust (§13.5) and RST_PEER_TIMEOUT to a slow visitor (§13.7).
+func (self *SocketConn) reset(code protocol.StreamResetCode) error {
+	if err := self.stream.Reset(code); err != nil {
+		return self.opError("abort", err)
+	}
+	return nil
+}
+
 // This end's network and client.
 func (self *SocketConn) LocalAddr() net.Addr {
 	return self.localAddr
