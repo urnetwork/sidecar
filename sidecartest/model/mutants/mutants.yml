@@ -46,11 +46,11 @@ models:
   - spec: IndexRollup
     invariants:
       - {invariant: TypeOk, none: "the type invariant, which every mutant's run checks before its own and none can break alone"}
-      - {invariant: ResultsHold, mutants: [MergeDropsTombstone, EraseLiveFirst, ClosureNoCas, ReuseUnabsorbed, RollupForgetsHeads]}
-      - {invariant: BucketsExact, mutants: [NoStep4]}
-      - {invariant: ChainsResolve, mutants: [MergeDropsBase, DiffOnHeadDiff]}
-      - {invariant: OneVersionEach, none: "no twin breaks it yet; SEARCH-M10-02, the model's owner, adds one"}
-      - {invariant: RollsOnce, none: "no twin breaks it yet; SEARCH-M10-02 adds one (two rollers both committing a bucket)"}
-      - {invariant: EpochHolds, none: "no twin breaks it yet; SEARCH-M10-02 adds one"}
+      - {invariant: ResultsHold, mutants: [EraseLiveFirst, ClosureNoCas, MergeDropsTombstone, ReuseUnabsorbed, RollupForgetsHeads, NoPromote, PromoteBlind, IndexSupersede, LongLife]}
+      - {invariant: BucketsExact, mutants: [NoPromoteLive]}
+      - {invariant: ChainsResolve, mutants: [DiffOnListed, NoOwnCas, ReusePinned, CleanupReferenced, MergeRemovesLarge]}
+      - {invariant: OneVersionEach, mutants: [MergeKeepsOld]}
+      - {invariant: RollsOnce, mutants: [NoLockFence]}
+      - {invariant: EpochHolds, mutants: [MergeIgnoresEpoch]}
       - {invariant: CutFences, mutants: [NoEpochCheck, BuildIgnoresSet]}
-      - {invariant: ErasedUnreadable, mutants: [EarlyComplete]}
+      - {invariant: ErasedUnreadable, mutants: [EarlyComplete, EraseSkipsAbsorbed]}
