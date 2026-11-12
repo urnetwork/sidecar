@@ -12,7 +12,8 @@
 //	         slots, maps, log pages, push records and segment ranges the request names
 //	reply    the head summary; every statement after pin_version, or `behind` with the first missing version when
 //	         the pin is older than the window, beside those the window holds; per path the newest version by the
-//	         newest rule (an older one by number from its entry or the window), the statement that wrote it when not
+//	         newest rule (an older one by number from its entry or the window, a removed path's below its removal's
+//	         path version as a standing path's, QD-672), the statement that wrote it when not
 //	         among those returned, its Merkle proof when the list is not inline, and the adjacent-leaf proofs of
 //	         each later statement whose list is not inline and whose prefixes reach the path; a removed path its
 //	         removal's push id, version and path version from its marker or the window; an overlay's path it holds
@@ -535,8 +536,12 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 	since := uint64(0)
 	deltaVersions := map[uint64]bool{}
 	switch {
-	case newest.Exists && !newest.Directory && path.version != 0 && newest.Version != path.version:
-		// an older version by number: from its entry's folded versions, each of which its own push committed
+	case path.version != 0 && ((newest.Exists && !newest.Directory && newest.Version != path.version) ||
+		(!newest.Exists && path.version < newest.RemovalVersion)):
+		// an older version by number: from its entry's folded versions, each of which its own push committed. A
+		// removed path's versions below its removal are served so as a standing path's are, so History walks a
+		// removed path's life rather than meeting its removal again (QD-672); the removal's own path version and any
+		// past it still answer the removal
 		if err := self.olderVersion(path, reply); err != nil {
 			return nil, err
 		}

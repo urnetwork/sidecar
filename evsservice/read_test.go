@@ -320,6 +320,61 @@ func TestReadAnswersAnOlderVersionByNumber(t *testing.T) {
 	}
 }
 
+// A removed path's versions below its removal answer by number as a standing path's do (QD-672; question
+// mail-m8-02-history-of-a-removed-path): each with its own statement and proof, from the window while the removal is
+// unfolded and from the entry's folded versions once it is, elided ones restored from their pushes, so History walks
+// the removed life. The removal's own path version, and any past it, still answer the removal, as the newest does.
+func TestReadServesARemovedPathsEarlierVersionsByNumber(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId)
+	path := checkTestPath("a")
+	fixture.commitOne(protocol.EvsRefMode_EVS_REF_FILE, "a")
+	for version := uint64(2); version <= 3; version += 1 {
+		write := fixture.plan()
+		write.Changes = append(write.Changes, fixture.check.change(write, path, version-1, version))
+		fixture.requireCommitted(fixture.push(write), version)
+		fixture.awaitStepEights()
+	}
+	remove := fixture.plan()
+	remove.Changes = append(remove.Changes, fixture.check.change(remove, path, 3, 0))
+	fixture.requireCommitted(fixture.push(remove), 4)
+	fixture.awaitStepEights()
+	readVersion := func(version uint64) (*readTestReply, *protocol.EvsReadPathReply) {
+		reply := fixture.read(token, &protocol.EvsReadRequest{
+			RefId: fixture.check.refId.Bytes(),
+			Paths: []*protocol.EvsReadPath{{TokenPaths: []*protocol.EvsSourcePath{{Epoch: 1, TokenPath: path.Components()}}, Version: version}},
+		})
+		return reply, reply.paths[0]
+	}
+	check := func(label string) {
+		for version := uint64(1); version <= 3; version += 1 {
+			reply, pathReply := readVersion(version)
+			if pathReply.GetRemoval() != nil || pathReply.GetVersion().GetCommitVersion() != version {
+				t.Fatalf("%s: version %d answered %v", label, version, pathReply)
+			}
+			requireVersionProven(t, reply, pathReply, path)
+			entry := &protocol.EvsEntryVersion{}
+			if err := proto.Unmarshal(pathReply.GetVersion().GetEntryVersion(), entry); err != nil || entry.GetVersion() != version {
+				t.Fatalf("%s: version %d's entry %v %v", label, version, entry, err)
+			}
+		}
+		for _, version := range []uint64{0, 4, 5} {
+			_, pathReply := readVersion(version)
+			removal := pathReply.GetRemoval()
+			if removal == nil || removal.GetPathVersion() != 4 || removal.GetRemovalVersion() != 4 || pathReply.GetVersion() != nil {
+				t.Fatalf("%s: version %d answered %v", label, version, pathReply)
+			}
+		}
+	}
+	check("unfolded")
+	fixture.foldRef()
+	read := fixture.entryAt(1, "a")
+	if read.Entry.GetMarker() == nil || len(read.Entry.GetVersions()) != 3 {
+		t.Fatalf("the folded entry %v", read.Entry)
+	}
+	check("folded")
+}
+
 // FS-62's cache cases: a cached head is never served below a reader's pin, nor on fresh, and a pin the window no
 // longer reaches answers behind.
 func TestReadCacheNeverServesBelowAPinOrOnFresh(t *testing.T) {

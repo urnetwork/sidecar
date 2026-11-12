@@ -187,6 +187,8 @@ type evsTestWorld struct {
 	statementAloneUnnamed bool
 	// the due the head records, nil for none: its generation, block and due_by_ms
 	due *protocol.EvsPathEpoch
+	// a removed path answers its removal whatever version a read asks for by number, as evs did before QD-672
+	repeatRemoval bool
 }
 
 // One token path a request showed evs, by the epoch it named it in, with the current epoch then.
@@ -691,7 +693,7 @@ func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, versi
 	if served, ok := self.serveVersion[key]; ok && version == 0 {
 		version = served
 	}
-	if state.removal != nil && version == 0 {
+	if state.removal != nil && (version == 0 || self.repeatRemoval) {
 		reply.Removal = state.removal
 		commitVersion = state.removal.GetRemovalVersion()
 	} else {
