@@ -354,14 +354,6 @@ func defaultCheckSettings() *checkSettings {
 				since: "2026-11-09",
 				why:   "§16.6's presence profile fixes ur.io as the WebAuthn relying party id, a format constant",
 			},
-			"sidecarctl/cmd_certs_renew_test.go 1.1.1.1": {
-				since: "2026-11-09",
-				why:   "a public resolver as an operator passes lego's --dns.resolvers, checked as an argument and never dialed; TLS's owner may move it to documentation space",
-			},
-			"sidecarctl/cmd_certs_renew_test.go acme-v02.api.letsencrypt.org": {
-				since: "2026-11-09",
-				why:   "Let's Encrypt's directory as the renew command passes it, checked as an argument and never dialed",
-			},
 			"sidecartest/localstack/blobs_sign_test.go examplebucket.s3.amazonaws.com": {
 				since: "2026-11-09",
 				why:   "AWS's published Signature Version 4 example, whose host is part of the signed vector",

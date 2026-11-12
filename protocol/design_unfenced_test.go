@@ -1066,6 +1066,16 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "indexers", number: 10, typeName: "IndexerRow", repeated: true},
 		question: "team-m2-07-indexer-rows",
 	},
+	{
+		message:  "EvsReadFrame",
+		field:    testFenceField{name: "error", number: 8, typeName: "EvsRefusalReply"},
+		question: "evs1-m2-40-unfolded-listing-frame",
+	},
+	{
+		message:  "EvsReadPathReply",
+		field:    testFenceField{name: "continues", number: 20, typeName: "bool"},
+		question: "evs1-m2-40-unfolded-listing-frame",
+	},
 }
 
 // One value an owner's answer adds to an enum the design fences.

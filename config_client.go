@@ -148,6 +148,8 @@ type ConfigClient struct {
 	wake chan struct{}
 	// serializes follows: the log has one applying goroutine at a time
 	followLock sync.Mutex
+	// a write to authlog/ failed, so the store is behind the log until the next follow writes it; under followLock
+	saveDue bool
 
 	configLog atomic.Pointer[ConfigLog]
 	// the newest applied position, which WaitFor watches
@@ -333,7 +335,8 @@ func (self *ConfigClient) requestFollow() {
 	}
 }
 
-// Calls callback with each entry applied from now on, in log order, on the follower's goroutine; the answer removes it.
+// Calls callback with each entry applied from now on, in log order, on the follower's goroutine, after the entry is
+// kept in authlog/ (publish); the answer removes it.
 func (self *ConfigClient) AddEntryCallback(callback SidecarAuthorityEntryFunction) func() {
 	callbackId := self.callbacks.Add(callback)
 	var once sync.Once
@@ -380,6 +383,24 @@ func (self *ConfigClient) follow(ctx context.Context) error {
 	if fork := self.Fork(); fork != nil {
 		return fork
 	}
+	var saveErr error
+	if self.saveDue {
+		// an earlier write to authlog/ failed: the store catches up before more is applied where it can, and the
+		// follow goes on either way, so a store that stays broken never stops the log
+		if saveErr = self.save(); saveErr == nil {
+			self.saveDue = false
+		}
+	}
+	err := self.followPages(ctx)
+	if err == nil && self.saveDue {
+		// nothing new was applied and kept since: the follower tries again at its retry interval
+		err = saveErr
+	}
+	return err
+}
+
+// follow's pages, under followLock.
+func (self *ConfigClient) followPages(ctx context.Context) error {
 	for range max(self.settings.MaxPagesPerFollow, 1) {
 		log := self.configLog.Load()
 		after := uint64(0)
@@ -453,8 +474,7 @@ func (self *ConfigClient) applyProjection(ctx context.Context, log *ConfigLog, p
 		if started == nil {
 			return false, nil
 		}
-		self.publish(started, nil, nil)
-		err = self.save()
+		err = self.publish(started, nil, nil)
 		self.position.Set(started.Pin().GetVersion())
 		return projection.More, err
 	}
@@ -464,9 +484,9 @@ func (self *ConfigClient) applyProjection(ctx context.Context, log *ConfigLog, p
 	}
 	before := log.State()
 	verdicts, err := log.ApplyRun(projection.Entries, source)
-	self.publish(log, before, verdicts)
-	// kept before WaitFor hears of it, so whoever waited on a position finds it kept across a restart
-	if saveErr := self.save(); saveErr != nil && err == nil {
+	// kept before a callback or WaitFor hears of it, so whoever acted on an entry or waited on a position finds it
+	// kept across a restart
+	if saveErr := self.publish(log, before, verdicts); saveErr != nil && err == nil {
 		err = saveErr
 	}
 	self.position.Set(log.Pin().GetVersion())
@@ -547,9 +567,15 @@ func (self *ConfigClient) start(log *ConfigLog, projection *ConfigProjection, so
 	return started, nil
 }
 
-// Installs log as the one this client follows, after it applied verdicts on before: each verdict's entry callbacks and
-// KEYS's AuthAdvanced, in order. Its caller then keeps it and moves the position WaitFor watches.
-func (self *ConfigClient) publish(log *ConfigLog, before *ConfigState, verdicts []ConfigVerdict) {
+// Installs log as the one this client follows, after it applied verdicts on before: the log is kept in authlog/
+// first, so an entry is in this client's store before any entry callback runs (DESIGN-DETAILS 12.2.5's rule, which
+// the bridge's start gate replays from; QD-669), then each verdict's entry callbacks and KEYS's AuthAdvanced, in
+// order. Its caller then moves the position WaitFor watches.
+//
+// Answers the store's error. A write that failed holds no callback back, since a judge that never heard of a
+// revocation would enforce less than one whose store lags, and a lagging store only delays a restart's gate: the
+// next follow writes it again (saveDue).
+func (self *ConfigClient) publish(log *ConfigLog, before *ConfigState, verdicts []ConfigVerdict) error {
 	self.configLog.Store(log)
 	state := log.State()
 	func() {
@@ -557,6 +583,11 @@ func (self *ConfigClient) publish(log *ConfigLog, before *ConfigState, verdicts 
 		defer self.stateLock.Unlock()
 		self.floor = state.Pin()
 	}()
+	saveErr := self.save()
+	self.saveDue = saveErr != nil
+	if saveErr != nil {
+		self.log.Warningf("[config]%s the log through %d was not kept: %v", self.args.NetworkId, state.Pin().GetVersion(), saveErr)
+	}
 	previous := before
 	for _, verdict := range verdicts {
 		after, err := state.StateAt(verdict.Pin)
@@ -577,6 +608,7 @@ func (self *ConfigClient) publish(log *ConfigLog, before *ConfigState, verdicts 
 	if len(verdicts) == 0 && self.args.Gkm != nil {
 		self.args.Gkm.AuthAdvanced(state)
 	}
+	return saveErr
 }
 
 // A fork or a refused run stops here: head_alarm with both pins, and the fork reported to HeadStopState.
