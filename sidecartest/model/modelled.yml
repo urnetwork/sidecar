@@ -74,3 +74,4 @@ models:
     exclude: []
     runs:
       - {at: 2026-11-09, commit: c9e4cdea7ad12d7d4085b5ff7df0ca8a30187b9a, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: d009e271be94e34cb43dfdc846845a2f65b481ddbd6721982a9027a3f266eef6, states: 531540, depth: 0, seconds: 36}
+      - {at: 2026-11-11, commit: 48cdcc3b1187664bb2742c1c2aab86e39cbfa85f, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 8e853774f013ed753b55a86a16f6fdc37a37c8ed8ed6993be4fab42567cbd7dc, states: 1481149, depth: 20, seconds: 1103}
