@@ -25,8 +25,10 @@
 //
 //   - FS-14's acl cases (forged row, T2): Suspend and Unsuspend in both orders with a stale suspend_id a no-op, a config
 //     writer's standing RepoRevoke, an OwnerConfirm, a rotation covering one of two removals in one base's tail, and
-//     two readers a server forks at n+1 with a socket GrantRevoke and a KeyRegister. HeadCheck's exchange between the
-//     forked readers is not run here: each reader's refusal names both A_{n+1}, which is what HeadCheck's FORK carries.
+//     two readers a server forks at n+1 with a socket GrantRevoke and a KeyRegister, each refusing the other's entry
+//     as a fork, while HeadCheck between two device followers forked the same way reports a fork with both A_{n+1} and
+//     refreshes no witnessed_at, under FI-10. Its dispatchers' Hello alone is not on the forked log: the admission
+//     world's devices are fixtures with no dispatcher, so the HeadCheck sidecars stand on the Net's default network.
 //   - FS-62's gate case (T2+T3): api's, evs's and gkm's gate caches over AclGateDirectSource with {acl_}e current, lost,
 //     stale and short.
 //
@@ -770,99 +772,316 @@ func fs14AclExpectCovers(net *sidecartest.AdmissionNet, world *fsTeamWorld) erro
 	return nil
 }
 
-// FS-14's two readers forked at n+1 (§7.9's statement and fork rows, FI-10): a server serves two full readers, restored
-// at one base, different statements at the next position, a socket GrantRevoke to one and a KeyRegister to the other,
-// and a gate the first; each takes its own as it would from an honest api, so their pins differ at n+1; served the
-// other's entry, each refuses it as a fork naming both A_{n+1}, and the gate refuses it as a second A_n at one n,
-// keeping the pin it held. The socket grant's id is one no activation carries, since no process installs §16.6's spend
-// check yet, so an admin revokes it ahead (§8.8's GrantRevoke row). Forged, so T2 alone.
-func Fs14AclForkedReaders(net *Net) *Schedule {
-	world := newFsTeamWorld()
-	return fsTeamSchedule("FS-14 acl forked readers", world,
-		fs14AclStart(world),
-		fsTeamDo("server", world, func(net *sidecartest.AdmissionNet) error {
-			first := world.devices["m first"]
-			n := net.Tip().GetVersion()
-			readerOne, readerTwo, gate := net.ForkedReader(false), net.ForkedReader(false), net.ForkedReader(true)
-			// a socket dial's grant, as a requested grant's CanonicalAction names it (§16.8, plan-ACL-folded-grant-state
-			// #2: a sock: grant_dst holds §9.4's token path in hex)
-			action, err := protoMarshal(&protocol.CanonicalAction{
-				RuleId:     net.Id("socket rule").Bytes(),
-				Subject:    first.SidecarId.Bytes(),
-				GrantDst:   []string{"sock:" + fmt.Sprintf("%x", net.Id("socket db").Bytes())},
-				GrantAllow: []string{"dial"},
-			})
-			if err != nil {
-				return err
-			}
-			grantId := sidecar.AclGrantId(net.Id("socket approval"), sha256Sum(action))
-			revoke := net.NextEntry(net.Sign(net.Owner(), bridge.SignedType_SIGNED_GRANT_REVOKE, &bridge.GrantRevoke{Header: net.Header(), GrantId: grantId[:]}))
-			register := net.NextEntry(net.PresenceKeyRegister(first, sidecartest.NewFixturePresenceKey("fs14 fork key", bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)))
+// FS-14's forked readers' world: the admission world, the two device followers HeadCheck compares, the HeadCheck
+// sidecars over them, one and two, api's tip where the views part, and when the followers witnessed each other there.
+type fs14ForkWorld struct {
+	*fsTeamWorld
+	clients     []*sidecar.ConfigClient
+	headCheck   *sidecartest.HeadCheckNet
+	parted      *bridge.AuthPin
+	witnessedAt time.Time
+}
 
-			for _, served := range []struct {
-				name  string
-				log   *sidecar.ConfigLog
-				entry []byte
-			}{
-				{name: "the first reader", log: readerOne, entry: revoke},
-				{name: "the second reader", log: readerTwo, entry: register},
-				{name: "the gate", log: gate, entry: revoke},
-			} {
-				verdict, err := net.ServeEntry(served.log, served.entry)
-				if err != nil || !verdict.Accepted() {
-					return fmt.Errorf("%s's own entry at %d: %v, %v", served.name, n+1, err, verdict.Refusal)
-				}
+// A step of a forked readers' schedule, given both the Net, where HeadCheck's sidecars run, and the admission world.
+func fs14ForkDo(actor string, world *fs14ForkWorld, body func(ctx context.Context, net *Net, admission *sidecartest.AdmissionNet) error) *Step {
+	return &Step{Actor: actor, Action: func(ctx context.Context, net *Net) error {
+		return fsTeamCatch(func() error {
+			return body(ctx, net, world.net)
+		})
+	}}
+}
+
+// The HeadCheck sidecars over the two followers, one's then two's, each with the other as its peer.
+func (self *fs14ForkWorld) pairs() [][2]*sidecartest.HeadCheckSidecar {
+	one, two := self.headCheck.Sidecar("one"), self.headCheck.Sidecar("two")
+	return [][2]*sidecartest.HeadCheckSidecar{{one, two}, {two, one}}
+}
+
+// The second step: the followers clients makes at api's tip, and the HeadCheck sidecars comparing them.
+func fs14AclFollowersAtTheTip(world *fs14ForkWorld, clients func(admission *sidecartest.AdmissionNet) []*sidecar.ConfigClient) *Step {
+	return fs14ForkDo("setup", world, func(ctx context.Context, net *Net, admission *sidecartest.AdmissionNet) error {
+		world.parted = admission.Tip()
+		world.clients = clients(admission)
+		headCheck, err := net.AddHeadCheckSidecarsOver(admission.NetworkId(),
+			[]sidecar.HeadCheckAuthSource{world.clients[0], world.clients[1]}, "one", "two")
+		if err != nil {
+			return err
+		}
+		world.headCheck = headCheck
+		return nil
+	})
+}
+
+// Each runs one exchange with the other, one first, each counting it as a witness exactly when witnessed says.
+func fs14AclExchanges(ctx context.Context, world *fs14ForkWorld, witnessed bool) error {
+	for _, pair := range world.pairs() {
+		counted, err := pair[0].HeadCheckWith(ctx, pair[1])
+		if err != nil || counted != witnessed {
+			return fmt.Errorf("%s's exchange with %s counted %t, want %t: %v", pair[0].Name, pair[1].Name, counted, witnessed, err)
+		}
+	}
+	return nil
+}
+
+// The third step: on one base at api's tip, each counts the other, one as the first exchange's initiator, two as the
+// second's, so both have witnessed api's tip now.
+func fs14AclWitnessTheTip(world *fs14ForkWorld) *Step {
+	return fs14ForkDo("one", world, func(ctx context.Context, net *Net, admission *sidecartest.AdmissionNet) error {
+		if err := fs14AclExchanges(ctx, world, true); err != nil {
+			return err
+		}
+		world.witnessedAt = admission.Clock().Now()
+		return fs14AclExpectWitnessed(world, world.parted, world.witnessedAt)
+	})
+}
+
+// Fails unless each HeadCheck sidecar's newest consistent witness compared pin, at witnessedAt.
+func fs14AclExpectWitnessed(world *fs14ForkWorld, pin *bridge.AuthPin, witnessedAt time.Time) error {
+	for _, side := range world.headCheck.Sidecars() {
+		if !side.Stop.WitnessedAt().Equal(witnessedAt) || !proto.Equal(side.Stop.WitnessedPin(), pin) {
+			return fmt.Errorf("%s witnessed %d at %s, want %d at %s", side.Name, side.Stop.WitnessedPin().GetVersion(),
+				side.Stop.WitnessedAt(), pin.GetVersion(), witnessedAt)
+		}
+	}
+	return nil
+}
+
+// A socket dial's grant, as a requested grant's CanonicalAction names it (§16.8, plan-ACL-folded-grant-state #2: a
+// sock: grant_dst holds §9.4's token path in hex), revoked by an admin ahead of any activation (§8.8's GrantRevoke
+// row): the GrantRevoke's Signed bytes, and the grant_id.
+func fs14AclSocketGrantRevoke(net *sidecartest.AdmissionNet, world *fsTeamWorld) ([]byte, [sha256.Size]byte, error) {
+	action, err := protoMarshal(&protocol.CanonicalAction{
+		RuleId:     net.Id("socket rule").Bytes(),
+		Subject:    world.devices["m first"].SidecarId.Bytes(),
+		GrantDst:   []string{"sock:" + fmt.Sprintf("%x", net.Id("socket db").Bytes())},
+		GrantAllow: []string{"dial"},
+	})
+	if err != nil {
+		return nil, [sha256.Size]byte{}, err
+	}
+	grantId := sidecar.AclGrantId(net.Id("socket approval"), sha256Sum(action))
+	return net.Sign(net.Owner(), bridge.SignedType_SIGNED_GRANT_REVOKE, &bridge.GrantRevoke{Header: net.Header(), GrantId: grantId[:]}), grantId, nil
+}
+
+// FS-14's two readers forked at n+1 (§7.9's statement and fork rows, §6.4's auth, fork and witness rows, FI-10): two
+// device followers, TEAM-M2-10's ConfigClients, read api's entries to its tip n and stand on one base, and HeadCheck
+// sidecars comparing them each count the other as a witness there. A server then serves two full readers restored at
+// that base, the two followers and a gate different statements at n+1, a socket GrantRevoke to the first reader, the
+// first follower and the gate, and a KeyRegister to the others; each takes its own as it would from an honest api, so
+// the pins differ at n+1. Served the other's entry, each reader refuses it as a fork naming both A_{n+1}, and the gate
+// refuses it as a second A_n at one n, keeping the pin it held. Connected, a minute on, both ways, HeadCheck reports
+// a fork on each side with both A_{n+1}, its own first, naming the other, stops sealing in every shared group, and
+// refreshes no witnessed_at, which stays the witness at api's tip once every responder's work has ended. The socket
+// grant's id is one no activation carries, since no process installs §16.6's spend check yet, so an admin revokes it
+// ahead. Forged, so T2 alone; its twin, Fs14AclConnectedReaders, is the honest server's. FI-10 reads both HeadCheck
+// sidecars after every step.
+func Fs14AclForkedReaders(net *Net) *Schedule {
+	world := &fs14ForkWorld{fsTeamWorld: newFsTeamWorld()}
+	followers := []*sidecartest.AdmissionForkedFollower{}
+	connected := fs14ForkDo("one", world, func(ctx context.Context, net *Net, admission *sidecartest.AdmissionNet) error {
+		if err := fs14AclExchanges(ctx, world, false); err != nil {
+			return fmt.Errorf("across the fork: %w", err)
+		}
+		// every exchange and act either side still runs, a responder's witness among them, ends here
+		for _, pair := range world.pairs() {
+			pair[0].Detach()
+		}
+		pins := map[sidecar.Id]*bridge.AuthPin{}
+		for i, pair := range world.pairs() {
+			pins[pair[0].SidecarId] = world.clients[i].Pin()
+		}
+		for _, pair := range world.pairs() {
+			side, peer := pair[0], pair[1]
+			alarms := side.Alarms(sidecar.SidecarHeadAlarmFork)
+			if len(alarms) != 1 {
+				return fmt.Errorf("%s raised %d fork alarms, want one", side.Name, len(alarms))
 			}
-			pinOne, pinTwo := readerOne.Pin(), readerTwo.Pin()
-			if pinOne.GetVersion() != n+1 || pinTwo.GetVersion() != n+1 || string(pinOne.GetChain()) == string(pinTwo.GetChain()) {
-				return fmt.Errorf("the readers stand at %d and %d, chains equal %t", pinOne.GetVersion(), pinTwo.GetVersion(),
-					string(pinOne.GetChain()) == string(pinTwo.GetChain()))
+			alarm := alarms[0]
+			if alarm.SidecarId == nil || *alarm.SidecarId != peer.SidecarId {
+				return fmt.Errorf("%s's fork alarm names %v, not %s", side.Name, alarm.SidecarId, peer.Name)
 			}
-			// the revoke took effect where it landed: the id is spent, for the network's life, as no activation carried it
-			acl, err := readerOne.State().Acl()
+			local, remote := &bridge.AuthPin{}, &bridge.AuthPin{}
+			if proto.Unmarshal(alarm.Evidence[0], local) != nil || proto.Unmarshal(alarm.Evidence[1], remote) != nil {
+				return fmt.Errorf("%s's fork alarm carries no pins", side.Name)
+			}
+			if !proto.Equal(local, pins[side.SidecarId]) || !proto.Equal(remote, pins[peer.SidecarId]) {
+				return fmt.Errorf("%s's fork alarm carries %d and %d, not its own A_%d and %s's", side.Name, local.GetVersion(),
+					remote.GetVersion(), world.parted.GetVersion()+1, peer.Name)
+			}
+			// an auth fork stops sealing at once in every shared group, which every group is here (§6.4's fork row)
+			stopped := &sidecar.HeadStopError{}
+			if err := side.Stop.SealAllowed(admission.Id("a shared group")); !errors.As(err, &stopped) || stopped.Cause != sidecar.HeadStopFork {
+				return fmt.Errorf("%s seals after the fork: %v", side.Name, err)
+			}
+		}
+		// the witness at api's tip stands, a minute old: no exchange across the fork refreshed it
+		if now := admission.Clock().Now(); !world.witnessedAt.Before(now) {
+			return fmt.Errorf("the clock stands at %s, the witness at %s", now, world.witnessedAt)
+		}
+		return fs14AclExpectWitnessed(world, world.parted, world.witnessedAt)
+	})
+	// a minute on, once both followers stand at n+1, so a responder's witness still running from the exchanges at api's
+	// tip writes that witness again, while a refresh across the fork would show
+	connected.Advance = time.Minute
+	schedule := fsTeamSchedule("FS-14 acl forked readers", world.fsTeamWorld,
+		fs14AclStart(world.fsTeamWorld),
+		fs14AclFollowersAtTheTip(world, func(admission *sidecartest.AdmissionNet) []*sidecar.ConfigClient {
+			followers = []*sidecartest.AdmissionForkedFollower{admission.ForkedFollower(), admission.ForkedFollower()}
+			return []*sidecar.ConfigClient{followers[0].Client, followers[1].Client}
+		}),
+		fs14AclWitnessTheTip(world),
+		fs14ForkDo("server", world, func(ctx context.Context, net *Net, admission *sidecartest.AdmissionNet) error {
+			return fs14AclServeTheFork(admission, world, followers)
+		}),
+		connected,
+	)
+	schedule.Check = append(schedule.Check, FI(10))
+	schedule.Refuses = "each reader the other's entry at n+1, the gate a second A_{n+1}, and each follower's HeadCheck its peer's pin, as a fork naming both A_{n+1}"
+	schedule.Twin = Fs14AclConnectedReaders
+	return schedule
+}
+
+// The forked readers' twin, the honest server's (§22.8's twins): the same followers on api's own projection witness
+// each other at its tip; api sequences the socket GrantRevoke at n+1, both followers read it, and connected, a minute
+// on, both ways, each counts the other at n+1, raising no fork alarm, sealing allowed, witnessed_at refreshed to now at
+// api's new tip. It carries T3 by §22.8's cadence rule.
+func Fs14AclConnectedReaders(net *Net) *Schedule {
+	world := &fs14ForkWorld{fsTeamWorld: newFsTeamWorld()}
+	var tip *bridge.AuthPin
+	connected := fs14ForkDo("one", world, func(ctx context.Context, net *Net, admission *sidecartest.AdmissionNet) error {
+		if err := fs14AclExchanges(ctx, world, true); err != nil {
+			return fmt.Errorf("at api's tip %d: %w", tip.GetVersion(), err)
+		}
+		for _, pair := range world.pairs() {
+			pair[0].Detach()
+		}
+		for _, pair := range world.pairs() {
+			side := pair[0]
+			if alarms := side.Alarms(sidecar.SidecarHeadAlarmFork); len(alarms) != 0 {
+				return fmt.Errorf("%s raised %d fork alarms on one history", side.Name, len(alarms))
+			}
+			if err := side.Stop.SealAllowed(admission.Id("a shared group")); err != nil {
+				return fmt.Errorf("%s may not seal: %w", side.Name, err)
+			}
+		}
+		return fs14AclExpectWitnessed(world, tip, admission.Clock().Now())
+	})
+	connected.Advance = time.Minute
+	schedule := fsTeamSchedule("FS-14 acl connected readers", world.fsTeamWorld,
+		fs14AclStart(world.fsTeamWorld),
+		fs14AclFollowersAtTheTip(world, func(admission *sidecartest.AdmissionNet) []*sidecar.ConfigClient {
+			return []*sidecar.ConfigClient{admission.Follower(), admission.Follower()}
+		}),
+		fs14AclWitnessTheTip(world),
+		fs14ForkDo("server", world, func(ctx context.Context, net *Net, admission *sidecartest.AdmissionNet) error {
+			revoke, _, err := fs14AclSocketGrantRevoke(admission, world.fsTeamWorld)
 			if err != nil {
 				return err
 			}
-			if !slices.ContainsFunc(acl.Rows().GetSpentGrants(), func(spent *protocol.AclSpentGrant) bool {
-				return string(spent.GetGrantId()) == string(grantId[:]) && spent.GetRetainUntilMs() == 0
-			}) {
-				return errors.New("the first reader holds the revoked grant_id unspent")
-			}
-			// connected, each is shown the other's n+1, and refuses it as a fork naming both digests
-			for _, crossed := range []struct {
-				name   string
-				log    *sidecar.ConfigLog
-				entry  []byte
-				local  []byte
-				remote []byte
-			}{
-				{name: "the first reader", log: readerOne, entry: register, local: pinOne.GetChain(), remote: pinTwo.GetChain()},
-				{name: "the second reader", log: readerTwo, entry: revoke, local: pinTwo.GetChain(), remote: pinOne.GetChain()},
-			} {
-				_, err := net.ServeEntry(crossed.log, crossed.entry)
-				fork := &sidecar.ConfigForkError{}
-				if !errors.As(err, &fork) || fork.N != n+1 || !fork.HasLocalChain ||
-					string(fork.LocalChain[:]) != string(crossed.local) || string(fork.RemoteChain[:]) != string(crossed.remote) {
-					return fmt.Errorf("%s served the other's entry: %v", crossed.name, err)
+			tip = admission.MustLand(revoke).Pin
+			for i, client := range world.clients {
+				if _, err := client.WaitFor(ctx, tip.GetVersion()); err != nil {
+					return fmt.Errorf("follower %d at %d: %w", i+1, tip.GetVersion(), err)
 				}
-				if crossed.log.Fork() == nil {
-					return fmt.Errorf("%s stood on after the fork", crossed.name)
+				if !proto.Equal(client.Pin(), tip) {
+					return fmt.Errorf("follower %d stands at %d, not api's tip %d", i+1, client.Pin().GetVersion(), tip.GetVersion())
 				}
-			}
-			gatePin := gate.Pin()
-			if _, err := net.ServeEntry(gate, register); !errors.Is(err, sidecar.ErrConfigFork) && !errors.Is(err, sidecar.ErrConfigRunRefused) {
-				return fmt.Errorf("the gate served a second A_%d: %v", n+1, err)
-			}
-			if gate.Pin().GetVersion() != gatePin.GetVersion() || string(gate.Pin().GetChain()) != string(gatePin.GetChain()) {
-				return fmt.Errorf("the gate moved from %d to %d", gatePin.GetVersion(), gate.Pin().GetVersion())
-			}
-			// the honest api sequenced neither
-			if net.Tip().GetVersion() != n {
-				return fmt.Errorf("api's tip moved to %d", net.Tip().GetVersion())
 			}
 			return nil
 		}),
+		connected,
 	)
+	schedule.Check = append(schedule.Check, FI(10))
+	schedule.Tiers = []Tier{TierT2, TierT3}
+	return schedule
+}
+
+// The server's half of the forked readers' schedule: the statements at n+1, each reader, follower and the gate served
+// its own, and each reader shown the other's.
+func fs14AclServeTheFork(net *sidecartest.AdmissionNet, world *fs14ForkWorld, followers []*sidecartest.AdmissionForkedFollower) error {
+	n := net.Tip().GetVersion()
+	readerOne, readerTwo, gate := net.ForkedReader(false), net.ForkedReader(false), net.ForkedReader(true)
+	signedRevoke, grantId, err := fs14AclSocketGrantRevoke(net, world.fsTeamWorld)
+	if err != nil {
+		return err
+	}
+	revoke := net.NextEntry(signedRevoke)
+	register := net.NextEntry(net.PresenceKeyRegister(world.devices["m first"], sidecartest.NewFixturePresenceKey("fs14 fork key", bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)))
+
+	for _, served := range []struct {
+		name  string
+		log   *sidecar.ConfigLog
+		entry []byte
+	}{
+		{name: "the first reader", log: readerOne, entry: revoke},
+		{name: "the second reader", log: readerTwo, entry: register},
+		{name: "the gate", log: gate, entry: revoke},
+	} {
+		verdict, err := net.ServeEntry(served.log, served.entry)
+		if err != nil || !verdict.Accepted() {
+			return fmt.Errorf("%s's own entry at %d: %v, %v", served.name, n+1, err, verdict.Refusal)
+		}
+	}
+	pinOne, pinTwo := readerOne.Pin(), readerTwo.Pin()
+	if pinOne.GetVersion() != n+1 || pinTwo.GetVersion() != n+1 || string(pinOne.GetChain()) == string(pinTwo.GetChain()) {
+		return fmt.Errorf("the readers stand at %d and %d, chains equal %t", pinOne.GetVersion(), pinTwo.GetVersion(),
+			string(pinOne.GetChain()) == string(pinTwo.GetChain()))
+	}
+	// each follower, served the same entry as the reader beside it, takes it and stands on the same A_{n+1}
+	for i, served := range []struct {
+		entry []byte
+		pin   *bridge.AuthPin
+	}{
+		{entry: revoke, pin: pinOne},
+		{entry: register, pin: pinTwo},
+	} {
+		if pin := followers[i].Fork(served.entry); !proto.Equal(pin, served.pin) {
+			return fmt.Errorf("follower %d stands at %d on another A_%d than its reader", i+1, pin.GetVersion(), n+1)
+		}
+	}
+	// the revoke took effect where it landed: the id is spent, for the network's life, as no activation carried it
+	acl, err := readerOne.State().Acl()
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(acl.Rows().GetSpentGrants(), func(spent *protocol.AclSpentGrant) bool {
+		return string(spent.GetGrantId()) == string(grantId[:]) && spent.GetRetainUntilMs() == 0
+	}) {
+		return errors.New("the first reader holds the revoked grant_id unspent")
+	}
+	// shown the other's n+1, each reader refuses it as a fork naming both digests
+	for _, crossed := range []struct {
+		name   string
+		log    *sidecar.ConfigLog
+		entry  []byte
+		local  []byte
+		remote []byte
+	}{
+		{name: "the first reader", log: readerOne, entry: register, local: pinOne.GetChain(), remote: pinTwo.GetChain()},
+		{name: "the second reader", log: readerTwo, entry: revoke, local: pinTwo.GetChain(), remote: pinOne.GetChain()},
+	} {
+		_, err := net.ServeEntry(crossed.log, crossed.entry)
+		fork := &sidecar.ConfigForkError{}
+		if !errors.As(err, &fork) || fork.N != n+1 || !fork.HasLocalChain ||
+			string(fork.LocalChain[:]) != string(crossed.local) || string(fork.RemoteChain[:]) != string(crossed.remote) {
+			return fmt.Errorf("%s served the other's entry: %v", crossed.name, err)
+		}
+		if crossed.log.Fork() == nil {
+			return fmt.Errorf("%s stood on after the fork", crossed.name)
+		}
+	}
+	gatePin := gate.Pin()
+	if _, err := net.ServeEntry(gate, register); !errors.Is(err, sidecar.ErrConfigFork) && !errors.Is(err, sidecar.ErrConfigRunRefused) {
+		return fmt.Errorf("the gate served a second A_%d: %v", n+1, err)
+	}
+	if gate.Pin().GetVersion() != gatePin.GetVersion() || string(gate.Pin().GetChain()) != string(gatePin.GetChain()) {
+		return fmt.Errorf("the gate moved from %d to %d", gatePin.GetVersion(), gate.Pin().GetVersion())
+	}
+	// the honest api sequenced neither
+	if net.Tip().GetVersion() != n {
+		return fmt.Errorf("api's tip moved to %d", net.Tip().GetVersion())
+	}
+	return nil
 }
 
 // Deterministic bytes of a message.

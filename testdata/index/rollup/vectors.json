@@ -1,0 +1,101 @@
+[
+ {
+  "name": "into-an-empty-all",
+  "files": [
+   {
+    "path": ".ur-index/i1/a/0",
+    "replaces": 0,
+    "sha256": "8044ec858b66c1e27bd05808bac5812a75d721bf30d6fcd42527d92ee7c1774c",
+    "byte_count": 81292
+   },
+   {
+    "path": ".ur-index/i1/a/m",
+    "replaces": 0,
+    "sha256": "ffe9b51e37e860c890133983f73d5285dae9f6989ee0e5dab6ff0dbf6948290d",
+    "byte_count": 16
+   }
+  ],
+  "removals": [
+   ".ur-index/i1/b/20340/m",
+   ".ur-index/i1/b/20340/s/0",
+   ".ur-index/i1/b/20340/w/10/10f15d2aa9c81bf5a214e4a22cdb7b8f/0",
+   ".ur-index/i1/b/20340/w/10/10f15d2aa9c81bf5a214e4a22cdb7b8f/1"
+  ]
+ },
+ {
+  "name": "over-all-rows-and-a-tombstone",
+  "files": [
+   {
+    "path": ".ur-index/i1/a/0",
+    "replaces": 16,
+    "sha256": "4c51c1bae3c178dc70193be65a56145e04adaeca029c9257b8984335ae1ab217",
+    "byte_count": 80558
+   },
+   {
+    "path": ".ur-index/i1/a/m",
+    "replaces": 16,
+    "sha256": "fca5eafc6de67a89518215a5906a6c2d8401486c4e1caa47373515a5ab0461fe",
+    "byte_count": 16
+   }
+  ],
+  "removals": [
+   ".ur-index/i1/b/20370/w/10/10f15d2aa9c81bf5a214e4a22cdb7b8f/0"
+  ]
+ },
+ {
+  "name": "promotions",
+  "files": [
+   {
+    "path": ".ur-index/i1/a/0",
+    "replaces": 0,
+    "sha256": "8044ec858b66c1e27bd05808bac5812a75d721bf30d6fcd42527d92ee7c1774c",
+    "byte_count": 81292
+   },
+   {
+    "path": ".ur-index/i1/a/m",
+    "replaces": 0,
+    "sha256": "ffe9b51e37e860c890133983f73d5285dae9f6989ee0e5dab6ff0dbf6948290d",
+    "byte_count": 16
+   },
+   {
+    "path": ".ur-index/i1/b/20370/m",
+    "replaces": 0,
+    "sha256": "e706884d205b403413c2949957c1788fe7e8f1f9c792abd9fe7f1d22128ae616",
+    "byte_count": 18
+   },
+   {
+    "path": ".ur-index/i1/b/20370/s/0",
+    "replaces": 0,
+    "sha256": "29884bdb77534e70c2d1f4601b040ec6411d5467b31e33967360a4a01f9df370",
+    "byte_count": 1177
+   }
+  ],
+  "removals": [
+   ".ur-index/i1/b/20340/m",
+   ".ur-index/i1/b/20340/s/0",
+   ".ur-index/i1/b/20340/w/0e/0ef19612f07f163c4b505f48376b191c/0",
+   ".ur-index/i1/b/20340/w/10/10f15d2aa9c81bf5a214e4a22cdb7b8f/0",
+   ".ur-index/i1/b/20340/w/10/10f15d2aa9c81bf5a214e4a22cdb7b8f/1"
+  ]
+ },
+ {
+  "name": "ref-tombstone",
+  "files": [
+   {
+    "path": "i1/a/0",
+    "replaces": 1,
+    "sha256": "53eccb0e0b6b36bcb6d7b4a1842d15882aac9f728da071dfdc7f38a4f1cbae08",
+    "byte_count": 3391
+   },
+   {
+    "path": "i1/a/m",
+    "replaces": 1,
+    "sha256": "95e73276a5b32c023380d4a77cafb8c8337118110df370b789c1f8c6b169999c",
+    "byte_count": 16
+   }
+  ],
+  "removals": [
+   "i1/b/20340/w/10/10f15d2aa9c81bf5a214e4a22cdb7b8f/0"
+  ]
+ }
+]
