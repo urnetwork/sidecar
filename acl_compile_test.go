@@ -43,6 +43,8 @@ type aclCompileWorld struct {
 	statements *protocol.AclRows
 	headTimeMs int64
 	position   uint64
+	// The config repo a test names in the view's Genesis, zero for none: no rows hold its row (QD-719).
+	configRepoId Id
 }
 
 func newAclCompileWorld(label string) *aclCompileWorld {
@@ -202,9 +204,23 @@ func (self *aclCompileWorld) compile(t testing.TB) *protocol.AclRows {
 	return rows
 }
 
+// Names the network's config repo, which the view's Genesis then carries with strangers as its signer and its member,
+// so the state adds its row (QD-719).
+func (self *aclCompileWorld) configRepo() Id {
+	self.configRepoId = self.id("repo config")
+	return self.configRepoId
+}
+
 // The state's view over the world's members and sidecars, for AclState on the compiled rows.
 func (self *aclCompileWorld) view() *aclTestView {
 	view := newAclTestFixture().view
+	if self.configRepoId != (Id{}) {
+		view.genesis = &bridge.Genesis{
+			ConfigRepoId:   self.configRepoId.Bytes(),
+			OwnerSidecarId: self.id("genesis owner sidecar").Bytes(),
+			OwnerMemberId:  self.id("genesis owner member").Bytes(),
+		}
+	}
 	for _, member := range self.members {
 		view.members[Id(member.MemberId)] = member
 	}
