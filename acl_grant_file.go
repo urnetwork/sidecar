@@ -38,6 +38,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -52,10 +53,12 @@ var ErrAclGrantFile = errors.New("acl grant filing refused")
 var _ ApprovalStandingGrants = (*AclEngine)(nil)
 
 // Whether an active grant covers the action for the spender at now: the action's grant fields (QD-064's 8, 10, 11,
-// 28, 29) name the spender as subject, and every action it asks on every destination is allowed by a rule or activated
-// grant in force until now plus the clock skew, ports matching where the grant names one. An action with no grant
-// fields, a route (whose prefix rides sealed_detail, which this build does not read) or another network's destination
-// is covered by nothing. Reads the installed state with no lock.
+// 28, 29) name the spender as subject, and each action it asks is allowed on each destination of a kind the action
+// applies to (§8.4: publish on a dns host and listen on its tls/ socket, as one publish's grant asks both) by a rule or
+// activated grant in force until now plus the clock skew, ports matching where the grant names one; a destination no
+// asked action applies to, or an action that applies to no destination, is covered by nothing. So is an action with no
+// grant fields, a route (whose prefix rides sealed_detail, which this build does not read) and another network's
+// destination. Reads the installed state with no lock.
 func (self *AclEngine) ActiveGrant(action *StoredCanonicalAction, spender Id, now time.Time) bool {
 	installed := self.installed.Load()
 	if installed == nil || action == nil || action.Action == nil {
@@ -68,14 +71,43 @@ func (self *AclEngine) ActiveGrant(action *StoredCanonicalAction, spender Id, no
 	// a use is reserved only until the skew before its grant ends (§16.6)
 	nowMs := now.UnixMilli() + max(0, self.settings.ClockSkew.Milliseconds())
 	subject := AclSidecarSubject(spender)
+	appliedActions := map[protocol.AclAction]bool{}
 	for _, target := range ask.Dst {
+		applied := false
 		for _, allow := range ask.Allow {
+			if !aclGrantActionApplies(target, allow) {
+				continue
+			}
+			applied = true
+			appliedActions[allow] = true
 			if !installed.covers(subject, target, allow, ask.Ports, nowMs) {
 				return false
 			}
 		}
+		if !applied {
+			return false
+		}
 	}
-	return true
+	return len(appliedActions) == len(ask.Allow)
+}
+
+// Whether an action applies to a grant destination's kind (§8.4's resources): dial and route to a subject, dial and
+// listen to a socket, publish and admin to a dns host, an evs action to a repo, send to mail.
+func aclGrantActionApplies(target *protocol.AclTarget, action protocol.AclAction) bool {
+	switch {
+	case len(target.GetSidecarId()) != 0 || len(target.GetClientId()) != 0 || len(target.GetNetworkId()) != 0 || len(target.GetAtom()) != 0:
+		return action == protocol.AclAction_ACL_ACTION_DIAL || action == protocol.AclAction_ACL_ACTION_ROUTE
+	case len(target.GetSocketTokens()) != 0 || target.GetSocketPrefix() || strings.Contains(target.GetPublicName(), "/"):
+		return action == protocol.AclAction_ACL_ACTION_DIAL || action == protocol.AclAction_ACL_ACTION_LISTEN
+	case target.GetPublicName() != "":
+		return action == protocol.AclAction_ACL_ACTION_PUBLISH || action == protocol.AclAction_ACL_ACTION_ADMIN
+	case len(target.GetRepoId()) != 0:
+		return action == protocol.AclAction_ACL_ACTION_READ || action == protocol.AclAction_ACL_ACTION_WRITE ||
+			action == protocol.AclAction_ACL_ACTION_ADMIN || action == protocol.AclAction_ACL_ACTION_DEPOSIT
+	case target.GetMailSend():
+		return action == protocol.AclAction_ACL_ACTION_SEND
+	}
+	return false
 }
 
 // Whether a rule in force at nowMs allows the subject one action on one grant destination.
@@ -109,6 +141,13 @@ func (self *aclEngineInstall) covers(subject AclSubject, target *protocol.AclTar
 		return state.MayListen(subject, AclSocketName{PublicName: target.GetPublicName()}, at).Allowed
 	case target.GetPublicName() != "" && action == protocol.AclAction_ACL_ACTION_PUBLISH:
 		return state.MayPublish(subject, target.GetPublicName(), at).Allowed
+	case target.GetPublicName() != "" && action == protocol.AclAction_ACL_ACTION_ADMIN:
+		// dns:<host>'s admin, a host's zone records (§12.8)
+		return state.resourceDecision(subject, nowMs, protocol.AclAction_ACL_ACTION_ADMIN, func(rule *aclRule) bool {
+			return slices.ContainsFunc(rule.publicNames, func(pattern string) bool {
+				return !strings.Contains(pattern, "/") && aclDnsHostCovers(pattern, target.GetPublicName())
+			})
+		}).Allowed
 	case target.GetMailSend() && action == protocol.AclAction_ACL_ACTION_SEND:
 		return state.MaySend(subject, at).Allowed
 	case len(target.GetRepoId()) != 0:

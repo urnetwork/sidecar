@@ -200,3 +200,32 @@ func TestAclGrantFilerActionFailsClosed(t *testing.T) {
 		t.Errorf("a malformed grant id: %v", err)
 	}
 }
+
+// Each asked action is held to the destinations it applies to: one publish's grant asks publish on the dns host and
+// listen on its tls/ socket, and is covered; a destination no asked action applies to, or an action that applies to no
+// destination, is not.
+func TestAclActiveGrantHoldsEachActionToItsDestinations(t *testing.T) {
+	world := newAclGrantFileWorld(t)
+	fixture := world.cast.fixture
+	fixture.rule([]Id{fixture.sidecarAtom(world.cast.laptop)}, []*protocol.AclTarget{{PublicName: "app"}, {PublicName: "tls/443/app"}},
+		protocol.AclAction_ACL_ACTION_PUBLISH, protocol.AclAction_ACL_ACTION_LISTEN)
+	world.install(t)
+	laptop := world.cast.laptop
+	cases := []struct {
+		name   string
+		dst    []string
+		allow  []string
+		active bool
+	}{
+		{name: "a publish's host and socket", dst: []string{"dns:app", "sock:tls/443/app"}, allow: []string{"publish", "listen"}, active: true},
+		{name: "the socket alone", dst: []string{"sock:tls/443/app"}, allow: []string{"listen"}, active: true},
+		{name: "a listen on the host", dst: []string{"dns:app"}, allow: []string{"listen"}},
+		{name: "a socket no asked action applies to", dst: []string{"dns:app", "sock:tls/443/app"}, allow: []string{"publish"}},
+		{name: "another host", dst: []string{"dns:other", "sock:tls/443/other"}, allow: []string{"publish", "listen"}},
+	}
+	for _, c := range cases {
+		if active := world.engine.ActiveGrant(world.action(t, laptop, c.dst, c.allow), laptop, aclTestNow); active != c.active {
+			t.Errorf("%s: active %t", c.name, active)
+		}
+	}
+}
