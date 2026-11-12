@@ -10,6 +10,10 @@
 //	                  come out alike (EveryAcl)
 //	ForkedReader      a full reader or a gate restored at the newest base, which a schedule then serves an entry
 //	                  api never sequenced, as a server forking its readers serves one of them (FS-14)
+//	ForkedFollower    a device follower, TEAM-M2-10's ConfigClient, reading a server's view of its own: api's
+//	                  entries through the tip, then once Fork serves one, an entry api never sequenced; the auth
+//	                  source a device's HeadCheck compares, so a schedule connects two such views (FS-14), and
+//	                  Follower, one reading api's own, for the honest twin
 //	AclConfigRowView  a reader's state with the config repo's AclRepo row that every option of question
 //	                  team-m2-15-config-repo-acl-row gives it: no compile writes that row yet, so the config's read,
 //	                  its key holders and its head signers are judged on this view until the question is answered,
@@ -27,6 +31,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -196,6 +201,143 @@ func (self *AdmissionNet) ForkedReader(rowsOnly bool) *sidecar.ConfigLog {
 	}
 	return log
 }
+
+// A device follower a server forks (FS-14): a ConfigClient on the world's clock and context reading a view of its
+// own, api's entries through the tip n it was made at and, once Fork serves one, an entry at n+1 api never sequenced,
+// as a server serving its readers two views serves each its own. It is no reader the world compares; it ends with the
+// world.
+type AdmissionForkedFollower struct {
+	// TEAM-M2-10's device follower: what a device's HeadCheck compares as its auth source.
+	Client *sidecar.ConfigClient
+	net    *AdmissionNet
+	// api's tip when the follower was made, where its view parts from api's, and its pin
+	n    uint64
+	nPin *bridge.AuthPin
+
+	stateLock sync.Mutex
+	// the entry at n+1 and (n+1, A_{n+1}), nil until Fork
+	entry []byte
+	pin   *bridge.AuthPin
+}
+
+// A follower standing at the tip, read from api's entries: what a server shows it until Fork. Fails the row unless
+// it reaches the tip.
+func (self *AdmissionNet) ForkedFollower() *AdmissionForkedFollower {
+	self.t.Helper()
+	follower := &AdmissionForkedFollower{net: self, n: self.applied, nPin: proto.CloneOf(self.Tip())}
+	follower.Client = self.followerOf(follower)
+	return follower
+}
+
+// A device follower of api's own projection, an honest server's view, standing at the tip: a ConfigClient on the
+// world's clock and context, which a forked follower's twin compares. It is no reader the world compares; it ends
+// with the world. Fails the row unless it reaches the tip.
+func (self *AdmissionNet) Follower() *sidecar.ConfigClient {
+	self.t.Helper()
+	return self.followerOf(self.projection())
+}
+
+// A ConfigClient on projection, waited for until it stands at the tip.
+func (self *AdmissionNet) followerOf(projection sidecar.ConfigProjectionReader) *sidecar.ConfigClient {
+	self.t.Helper()
+	clientSettings := sidecar.DefaultConfigClientSettings()
+	clientSettings.Log = sidecar.NewNoopLogger()
+	clientSettings.LogSettings = admissionLogSettings()
+	client, err := sidecar.NewConfigClient(self.ctx, &sidecar.ConfigClientArgs{
+		NetworkId:    self.networkId,
+		GenesisChain: self.genesisChain,
+		Projection:   projection,
+		Heads:        self.heads,
+		Clock:        self.clock,
+		Settings:     clientSettings,
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if _, err := client.WaitFor(self.ctx, self.applied); err != nil {
+		self.t.Fatalf("a follower at %d: %v", self.applied, err)
+	}
+	if !proto.Equal(client.Pin(), self.Tip()) {
+		self.t.Fatalf("a follower stands at %d, not the tip %d", client.Pin().GetVersion(), self.applied)
+	}
+	return client
+}
+
+// Serves entryBytes at n+1 from now on, the server's view for this follower, and waits for the follower to apply
+// it: (n+1, A_{n+1}), where it then stands. Fails the row unless the entry chains onto the tip and the follower takes
+// it without a fork.
+func (self *AdmissionForkedFollower) Fork(entryBytes []byte) *bridge.AuthPin {
+	net := self.net
+	net.t.Helper()
+	entry := &bridge.AuthEntry{}
+	if err := proto.Unmarshal(entryBytes, entry); err != nil {
+		net.t.Fatal(err)
+	}
+	if entry.GetN() != self.n+1 || !bytes.Equal(entry.GetPrevChain(), self.nPin.GetChain()) {
+		net.t.Fatalf("a fork's entry at %d does not chain onto the tip %d", entry.GetN(), self.n)
+	}
+	chain, err := bridge.AuthChainDigest(entry.GetN(), entry.GetPrevChain(), entry.GetKind(), entry.GetTimeMs(), entry.GetBody())
+	if err != nil {
+		net.t.Fatal(err)
+	}
+	pin := &bridge.AuthPin{Version: entry.GetN(), Chain: bytes.Clone(chain[:])}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.entry = bytes.Clone(entryBytes)
+		self.pin = proto.CloneOf(pin)
+	}()
+	if _, err := self.Client.WaitFor(net.ctx, self.n+1); err != nil {
+		net.t.Fatalf("a forked follower served its entry at %d: %v", self.n+1, err)
+	}
+	if !proto.Equal(self.Client.Pin(), pin) || self.Client.Fork() != nil {
+		net.t.Fatalf("a forked follower stands at %d, forked %t, not on its entry at %d", self.Client.Pin().GetVersion(),
+			self.Client.Fork() != nil, self.n+1)
+	}
+	return pin
+}
+
+// The view's GET /network/config/projection: api's entries after after through n, a page api serves past n cut
+// there, then the fork's entry once served, which is the view's tip.
+func (self *AdmissionForkedFollower) ReadConfigProjection(ctx context.Context, after uint64) (*sidecar.ConfigProjection, error) {
+	entry, pin := func() ([]byte, *bridge.AuthPin) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.entry, self.pin
+	}()
+	tip := self.nPin
+	if entry != nil {
+		tip = pin
+	}
+	if self.n < after {
+		return &sidecar.ConfigProjection{Tip: proto.CloneOf(tip)}, nil
+	}
+	projection, err := self.net.api.ReadConfigProjection(ctx, self.net.networkId, after)
+	if err != nil {
+		return nil, err
+	}
+	for i, entryBytes := range projection.Entries {
+		served := &bridge.AuthEntry{}
+		if err := proto.Unmarshal(entryBytes, served); err != nil {
+			return nil, err
+		}
+		if self.n < served.GetN() {
+			projection.Entries = projection.Entries[:i]
+			projection.More = false
+			break
+		}
+	}
+	if projection.More {
+		return projection, nil
+	}
+	if entry != nil {
+		projection.Entries = append(projection.Entries, bytes.Clone(entry))
+	}
+	projection.Tip = proto.CloneOf(tip)
+	return projection, nil
+}
+
+var _ sidecar.ConfigProjectionReader = (*AdmissionForkedFollower)(nil)
 
 // The AuthEntry a server would sequence at the tip's next position for a statement, chained onto the tip, at the
 // clock's time: an entry api may never have appended.

@@ -11,6 +11,12 @@
 // The peer states are each device's own (FakeHeadCheckPeers), apart from the authority Hello reads:
 // RevokePeer moves both, as a revocation applied everywhere would, and SetPeer moves one device's view
 // alone.
+//
+// AddHeadCheckSidecarsOver gives each sidecar a real auth source instead of the fake, a device follower
+// of another network's log (TEAM-M2-10's ConfigClient), so a schedule connects readers a server served
+// two views (FS-14). Its dispatchers still stand on the Net's default network under the FakeAuthority,
+// so Hello is the one part of such an exchange not on that log. Detach joins what a sidecar's HeadCheck
+// still runs, a responder's acts and witness among them, so a schedule's last check reads them final.
 
 package sidecartest
 
@@ -45,13 +51,19 @@ type HeadCheckNet struct {
 	notes map[sidecar.Id]*HeadCheckNote
 }
 
-// One sidecar with HeadCheck attached: its dispatcher, its fakes, its stops and its alarms.
+// One sidecar with HeadCheck attached: its dispatcher, its sources, its stops and its alarms.
 type HeadCheckSidecar struct {
 	*SubprotocolSidecar
 	SidecarId sidecar.Id
+	// Its fakes: the generation, epoch and ref pins, the peer state, and the auth source, which is nil
+	// when AddHeadCheckSidecarsOver gave it another (AuthSource).
 	Device    *FakeHeadCheckDevice
 	Stop      *sidecar.HeadStopState
 	headCheck *HeadCheckNet
+	// the auth source AddHeadCheckSidecarsOver gave it, nil for Device.Auth
+	auth sidecar.HeadCheckAuthSource
+	// detaches HeadCheck from the dispatcher, joining what it still runs; once
+	detach func()
 
 	stateLock sync.Mutex
 	alarms    []sidecar.SidecarEvent
@@ -75,6 +87,23 @@ type HeadCheckNote struct {
 // device of its own on one api at genesis, every device admitting every other. A witness bound of 0
 // reads as unset, so 72 h, as the config's default.
 func (self *Net) AddHeadCheckSidecars(names ...string) (*HeadCheckNet, error) {
+	return self.addHeadCheckSidecars(nil, nil, names)
+}
+
+// AddHeadCheckSidecars with each sidecar's HeadCheck comparing auths' source at its name's index, a real
+// follower of networkId's log, in place of the fake on the api: how a schedule connects readers a
+// server served two views (FS-14). Each sidecar's stops are of networkId, its other pins fakes holding
+// none, and each admits every other, as AddHeadCheckSidecars admits them.
+func (self *Net) AddHeadCheckSidecarsOver(networkId sidecar.Id, auths []sidecar.HeadCheckAuthSource, names ...string) (*HeadCheckNet, error) {
+	if len(auths) != len(names) || slices.Contains(auths, nil) {
+		return nil, fmt.Errorf("head check net: %d auth sources for %d sidecars", len(auths), len(names))
+	}
+	return self.addHeadCheckSidecars(&networkId, auths, names)
+}
+
+// The sidecars of names with HeadCheck: on networkId's stops, else the sidecars' own network's, each
+// comparing auths' source at its index, else its fake's.
+func (self *Net) addHeadCheckSidecars(networkId *sidecar.Id, auths []sidecar.HeadCheckAuthSource, names []string) (*HeadCheckNet, error) {
 	subprotocolSidecars, authority, err := self.AddSubprotocolSidecars(names...)
 	if err != nil {
 		return nil, err
@@ -82,25 +111,33 @@ func (self *Net) AddHeadCheckSidecars(names ...string) (*HeadCheckNet, error) {
 	if len(subprotocolSidecars) == 0 {
 		return nil, errors.New("head check net: no sidecars")
 	}
-	networkId := subprotocolSidecars[0].NetworkId()
+	stopNetworkId := subprotocolSidecars[0].NetworkId()
+	if networkId != nil {
+		stopNetworkId = *networkId
+	}
 	headCheck := &HeadCheckNet{
 		net:       self,
-		Api:       NewFakeHeadCheckApi(networkId),
+		Api:       NewFakeHeadCheckApi(stopNetworkId),
 		Authority: authority,
 		notes:     map[sidecar.Id]*HeadCheckNote{},
 	}
-	for _, subprotocolSidecar := range subprotocolSidecars {
+	for i, subprotocolSidecar := range subprotocolSidecars {
 		identity := subprotocolSidecar.Sidecar().Identity()
 		if identity == nil {
 			return nil, fmt.Errorf("%s has no identity", subprotocolSidecar.Name)
 		}
-		headCheck.sidecars = append(headCheck.sidecars, &HeadCheckSidecar{
+		side := &HeadCheckSidecar{
 			SubprotocolSidecar: subprotocolSidecar,
 			SidecarId:          identity.SidecarId,
 			Device:             NewFakeHeadCheckDevice(identity.SidecarId, headCheck.Api),
 			headCheck:          headCheck,
 			alarmCount:         sidecar.NewMonitorValue(0),
-		})
+		}
+		if auths != nil {
+			side.auth = auths[i]
+			side.Device.Auth = nil
+		}
+		headCheck.sidecars = append(headCheck.sidecars, side)
 	}
 	for _, side := range headCheck.sidecars {
 		for _, other := range headCheck.sidecars {
@@ -124,11 +161,17 @@ func (self *HeadCheckNet) attach(side *HeadCheckSidecar) error {
 	stop, err := sidecar.NewHeadStopState(net.ctx, &sidecar.HeadStopStateEnv{
 		SidecarId: side.SidecarId,
 		NetworkId: self.Api.NetworkId(),
-		Sources:   side.Device.Sources(),
-		Store:     NewFakeStore().Root(),
-		Settings:  sidecar.DefaultSidecarProtocolSettings(),
-		Clock:     net.clock,
-		Log:       sidecar.NewNoopLogger(),
+		Sources: &sidecar.HeadCheckSources{
+			Auth:   side.AuthSource(),
+			Gens:   side.Device.Heads,
+			Groups: side.Device.Heads,
+			Refs:   side.Device.Heads,
+			Peers:  side.Device.Peers,
+		},
+		Store:    NewFakeStore().Root(),
+		Settings: sidecar.DefaultSidecarProtocolSettings(),
+		Clock:    net.clock,
+		Log:      sidecar.NewNoopLogger(),
 		WitnessBoundHours: func() (uint32, bool) {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
@@ -164,12 +207,32 @@ func (self *HeadCheckNet) attach(side *HeadCheckSidecar) error {
 		return err
 	}
 	side.Stop = stop
+	side.detach = detach
 	go func() {
 		<-net.ctx.Done()
 		detach()
 		stop.Close()
 	}()
 	return nil
+}
+
+// The auth source its HeadCheck compares, which FI-10's oracle reads: the one AddHeadCheckSidecarsOver
+// gave it, else Device.Auth.
+func (self *HeadCheckSidecar) AuthSource() sidecar.HeadCheckAuthSource {
+	if self.auth != nil {
+		return self.auth
+	}
+	return self.Device.Auth
+}
+
+// Detaches HeadCheck from the sidecar's dispatcher and joins every exchange and act it still runs, a
+// responder's acts and witness among them, so its stops, alarms and witnessed_at are final: what a
+// schedule's last check reads. It runs no exchange after. Its HeadStopState stays, read as before,
+// until the Net closes. A sidecar never attached has nothing to join.
+func (self *HeadCheckSidecar) Detach() {
+	if self.detach != nil {
+		self.detach()
+	}
 }
 
 // Every network of sidecars with HeadCheck the Net holds, for FI-10's oracle.
