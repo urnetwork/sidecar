@@ -35,12 +35,19 @@ type testListenService struct {
 	pages         chan *SocketRegistrationsArgs
 	stateLock     sync.Mutex
 	status        SocketRegistrationStatus
+	// the service's clock, nil for testSocketNow (socket_listen_skew_test.go's skewed listeners)
+	serverTime func() time.Time
 }
 
 func (self *testListenService) registrations(ctx context.Context, args *SocketRegistrationsArgs) (*SocketRegistrationsResult, error) {
 	self.stateLock.Lock()
 	status := self.status
+	serverTime := self.serverTime
 	self.stateLock.Unlock()
+	serverNow := testSocketNow
+	if serverTime != nil {
+		serverNow = serverTime()
+	}
 	select {
 	case self.pages <- args:
 	default:
@@ -53,7 +60,7 @@ func (self *testListenService) registrations(ctx context.Context, args *SocketRe
 	return &SocketRegistrationsResult{
 		Statuses:         statuses,
 		SetVersion:       args.SetVersion,
-		ServerTimeMillis: uint64(testSocketNow.UnixMilli()),
+		ServerTimeMillis: uint64(serverNow.UnixMilli()),
 		TicketKeys: []*SocketTicketKey{{
 			KeyId:            testAdmissionKeyId,
 			PublicKey:        testAdmissionKey.Public().(ed25519.PublicKey),
