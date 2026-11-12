@@ -1,3 +1,5 @@
+//go:build !sidecar_http
+
 // RECORD-M3-12 on T2: sidecar.RecordEvsStreams, EvsRepo.BuildStreamPush and RecordVault.Ensure against an
 // evsservice.EvsEngine over sidecartest's FakeHost, FakeGkm and a FakeGkmAuthLog, every device its own EvsClient. The
 // world grants scopes as §7.8's tokens would: evs honors a right only where the world's grant gives it, so a refusal

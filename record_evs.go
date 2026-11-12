@@ -78,6 +78,9 @@ const (
 	recordEvsJournalErase     = "erase"
 	// a stream's ref name: ur/<sidecar_id as 32 lowercase hex>/record (plan-RECORD-stream-names#1)
 	recordStreamRefNameRest = "/record"
+	// the repo/ format whose streams this binding reads, format 1's (§11.6's format row); repo/'s own constant lives
+	// off the sidecar_http leg
+	evsRecordStreamsFormat = 1
 	// the digests' labels
 	recordEvsPushDigestLabel    = "urnetwork-sidecar-v1/record-stream-push\x00"
 	recordEvsDepositDigestLabel = "urnetwork-sidecar-v1/record-stream-deposit\x00"
@@ -479,8 +482,8 @@ func (self *RecordEvsStreams) listHeads(ctx context.Context, repoId Id) ([]*prot
 	if err != nil {
 		return nil, recordEvsRefusal(err)
 	}
-	if reply.GetFormat() == EvsRepoFormat2 {
-		return nil, fmt.Errorf("%w: a format-2 log's streams are M10's", ErrEvsFormatUnsupported)
+	if evsRecordStreamsFormat < reply.GetFormat() {
+		return nil, fmt.Errorf("%w: a format-%d log's streams are M10's", ErrEvsFormatUnsupported, reply.GetFormat())
 	}
 	return reply.GetRefs(), nil
 }

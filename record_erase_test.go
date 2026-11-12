@@ -1,3 +1,5 @@
+//go:build !sidecar_http
+
 // RECORD-M3-06's erasure of entries on sidecartest's fakes (§22.5's §11 erasure case for an entry, FS-47's client
 // rows): the world is record_writer_test.go's vault, its eraser a consented device that is an admin of it.
 
@@ -330,5 +332,24 @@ func TestRecordEraserRefusesWhatAPersonDidNotConfirm(t *testing.T) {
 	}
 	if len(plan.Items) != 1 || plan.Items[0].EntryId != first.EntryId || len(plan.Missing) != 1 || !slices.ContainsFunc(plan.Items, func(item *sidecar.RecordErasePlanItem) bool { return 0 < item.CopyCount }) {
 		t.Fatalf("the plan answered %+v", plan)
+	}
+}
+
+// The largest erasure the defaults take, a revocation's request id among it, still has a note that rides inline in
+// its ERASE, as evs_erase.go's note plan and the binding's one-part ERASE need.
+func TestRecordEraserNoteRidesInline(t *testing.T) {
+	settings := sidecar.DefaultRecordEraserSettings()
+	body := &protocol.ErasureBody{ErasureId: sidecar.NewId().Bytes(), Reason: uint32(sidecar.RecordErasureReasonRevocation), RequestId: sidecar.NewId().Bytes()}
+	for range settings.EntryCount {
+		body.EntryIds = append(body.EntryIds, sidecar.NewId().Bytes())
+	}
+	note, err := proto.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// evs_erase.go's note: erasure id, complete, then the caller's bytes
+	noteByteCount := uint64(16 + 1 + len(note))
+	if sidecar.EvsInlineMaxByteCount < sidecar.EvsPadme(sidecar.EvsWrappedKeyByteCount+sidecar.EvsRecordByteCount(noteByteCount)) {
+		t.Fatalf("a note of %d entries, %d bytes, does not ride inline", settings.EntryCount, noteByteCount)
 	}
 }

@@ -1,4 +1,4 @@
-//go:build !ios_extension
+//go:build !sidecar_http && !ios_extension
 
 // The bridge record_evs_test.go's row codec reaches evs's object-key wrap through: a 32 B row wrapped under fek_g and
 // opened as one of evs's object keys, the width evs's slot format holds while RECORD.md's 64 B rows wait on question

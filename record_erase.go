@@ -86,17 +86,18 @@ var (
 
 // What the eraser runs by.
 type RecordEraserSettings struct {
-	// The entries one erasure names: ErasureBody.entry_ids' bound, 1,024 (record.proto); a larger erasure is several.
-	// A format value.
+	// The entries one erasure names, within ErasureBody.entry_ids' 1,024 (record.proto): each of its ERASEs carries
+	// the erasure's ErasureBody as its note, and an ERASE's note rides inline, at most 16 KiB with its record
+	// (EvsInlineMaxByteCount), which about 850 entry ids fill, so 512 leaves room. A larger erasure is several.
 	EntryCount int
-	// The keys one ERASE names. Its note rides inline beside them, so a push stays within one part.
+	// The keys one ERASE names, so its push stays within one part beside its inline note.
 	EraseKeyCount int
 }
 
-// 1,024 entries an erasure and 512 keys an ERASE.
+// 512 entries an erasure and 512 keys an ERASE.
 func DefaultRecordEraserSettings() *RecordEraserSettings {
 	return &RecordEraserSettings{
-		EntryCount:    1024,
+		EntryCount:    512,
 		EraseKeyCount: 512,
 	}
 }
