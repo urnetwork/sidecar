@@ -297,8 +297,14 @@ func (self *SidecarRecord) tend(ctx context.Context) {
 }
 
 // Carries journaled entries to evs, ingests this device's vault's deposits and mirrors queued events until ctx ends:
-// one client generation's loop. A second Run waits for the first to return.
+// one client generation's loop, which first resumes, beside it, any erasure a kill cut short (record_erase.go). A
+// second Run waits for the first to return.
 func (self *SidecarRecord) Run(ctx context.Context) {
+	go func() {
+		if err := self.Eraser().Resume(ctx); err != nil {
+			self.writer.log.Warningf("[record]an erasure did not resume: %s", err)
+		}
+	}()
 	self.markIngestDue()
 	unsubscribes := []func(){}
 	for _, logId := range self.ingestedLogs() {
