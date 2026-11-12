@@ -1023,6 +1023,41 @@ CutFences == ~leaked
 ErasedUnreadable == complete => ErasedKeys \subseteq destroyed
 
 (***************************************************************************)
+(* Reach: states the joined rules must reach, so that a passing run on a    *)
+(* ground is not vacuous there. A run naming one as its only invariant must *)
+(* end with it violated, the trace being the witness. Section 1's own       *)
+(* reach states are details/IndexMerge.tla's.                               *)
+(***************************************************************************)
+
+\* A CUT takes d1's base and a diff resting on it in separate CLOSUREs: between them the listed diff
+\* waits with no base, which readers mask and I1 excepts.
+NeverListedOrphan ==
+    ~\E b \in Buckets \ gone : \E p \in Sealed(b) \cup Heads(b) :
+        \E e \in file[p].ent : Masked(e.d, e.v) /\ Orphan(p, e)
+
+\* A CLOSURE rewrites, under a fresh key, a slot a merge has absorbed: the eraser lists kept slots.
+NeverAbsorbedClosure ==
+    ~\E b \in Buckets \ gone : \E p \in BucketSlots(b) :
+        Exists(p) /\ p \notin Heads(b) /\ IsAbsorbed(p) /\ file[p].gen > 1
+
+\* A CLOSURE rewrites, under a fresh key, a kept slot: absorbed, and holding the base of a diff in its
+\* writer's unabsorbed slots, which the rewrite keeps.
+NeverKeptClosure ==
+    ~\E b \in Buckets \ gone : \E w \in Writers : \E p \in WriterSlots(b, w) :
+        /\ p # HeadOf(b, w)
+        /\ IsAbsorbed(p)
+        /\ file[p].gen > 1
+        /\ p \in PinnedSlots(b, w, EntsAt((Sealed(b) \cap SlotPaths(b, w)) \cup {HeadOf(b, w)}))
+
+\* An edit of d1 made after its CUT is indexed full by a writer whose other file holds the listed
+\* version below it, the base R1 refuses it.
+NeverFullAfterCut ==
+    ~\E b \in Buckets \ gone : \E w \in Writers :
+        /\ x.listed
+        /\ x.upto \in BaseVersions(b, w, Erased)
+        /\ \E e \in EntsAt(WriterSlots(b, w)) : e.d = Erased /\ e.v > x.upto /\ e.k = "full"
+
+(***************************************************************************)
 (* Weak fairness: the two liveness checks, in their own run.               *)
 (***************************************************************************)
 
