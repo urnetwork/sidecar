@@ -238,6 +238,17 @@ func TestWiderClaimsNeedConfirmation(t *testing.T) {
 		t.Fatalf("after the confirmation: %+v", resolution)
 	}
 
+	// a team that changes its default after the choice is judged afresh too: the choice was made over off
+	world.teamDefault(protocol.DirectoryRunsMode_DIRECTORY_RUNS_MODE_PROMPT)
+	if resolution := world.daemon.ResolveClaims(ctx, world.hello(DaemonModeMcp), world.networkId); resolution.Claims != SidecarClaimsPrompt ||
+		resolution.Pending != SidecarClaimsAuto {
+		t.Fatalf("a team default changed after the choice: %+v", resolution)
+	}
+	world.teamDefault(protocol.DirectoryRunsMode_DIRECTORY_RUNS_MODE_OFF)
+	if resolution := world.daemon.ResolveClaims(ctx, world.hello(DaemonModeMcp), world.networkId); resolution.Claims != SidecarClaimsAuto {
+		t.Fatalf("the team default back where the choice was made: %+v", resolution)
+	}
+
 	// a changed .ur is judged afresh: the confirmation was of auto, and prompt is wider than the team's off
 	world.commit("prompt")
 	if resolution := world.daemon.ResolveClaims(ctx, world.hello(DaemonModeMcp), world.networkId); resolution.Claims != SidecarClaimsOff ||

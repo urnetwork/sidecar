@@ -296,6 +296,18 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 	return nil
 }
 
+// Whether this sidecar's client is a child of a device client, paired or an sdk host's: sidecar.json's mark, which a
+// confirmed rejection reads as parent_lost (plan-CORE-parent-lost-signal) and which lets ur login unpair it while it
+// runs (identity_pair.go).
+func (self *Sidecar) Paired() bool {
+	networkId := self.enrolledNetworkId()
+	if self.instance == nil || networkId == nil {
+		return false
+	}
+	_, child, ok := self.networkRecordOf(*networkId)
+	return ok && child
+}
+
 // Why this sidecar cannot enroll now, or nil. Runs under enrollLock.
 func (self *Sidecar) checkEnrollable(credential *SidecarEnrollCredential) error {
 	if self.isClosed() {
@@ -314,7 +326,11 @@ func (self *Sidecar) checkEnrollable(credential *SidecarEnrollCredential) error 
 	case SidecarStateRevoked:
 		return ErrSidecarRevoked
 	case SidecarStateOnline, SidecarStateOffline:
-		return ErrSidecarEnrolled
+		// a paired sidecar re-enrolls while it runs: ur login unpairs it, a top-level client as the next generation,
+		// and a host re-pairs it (§5.8's unpair row, CORE-M8-02)
+		if !self.Paired() {
+			return ErrSidecarEnrolled
+		}
 	case SidecarStateLocked:
 		return ErrSidecarStoreLocked
 	}

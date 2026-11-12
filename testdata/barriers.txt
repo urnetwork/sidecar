@@ -247,6 +247,10 @@ barrier identity.logout.remove.after identity_logout.go
 barrier identity.logout.remove.before identity_logout.go
 barrier identity.logout.sign_out.after identity_revoke_self.go
 barrier identity.logout.sign_out.before identity_revoke_self.go
+barrier identity.pair.bind.after identity_pair.go
+barrier identity.pair.bind.before identity_pair.go
+barrier identity.pair.record.after identity_pair.go
+barrier identity.pair.record.before identity_pair.go
 barrier identity.persist.after identity_keys.go
 barrier identity.persist.before identity_keys.go
 barrier identity.post.after identity_pending.go
@@ -496,6 +500,8 @@ secret auth_key config_authkey.go
 secret by_client_jwt api_client.go
 secret by_client_jwt api_routes_core.go
 secret by_client_jwt api_token_manager.go
+secret by_client_jwt daemon_pair.go
+secret by_client_jwt identity_pair.go
 secret by_jwt api_token_source.go
 secret close api_routes_core.go
 secret commit_secret mls_treekem.go
