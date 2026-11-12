@@ -114,6 +114,10 @@ type ApprovalReserve struct {
 	// §16.6's effect_key, under which the effect is idempotent and Lookup finds it.
 	EffectKey      []byte `json:"effect_key"`
 	ReservedMillis int64  `json:"reserved_millis"`
+	// The use's CanonicalAction as stored, whose SHA-256 is PayloadSha256, so a restart runs its kind's Lookup with
+	// no caller alive: a template's use is not the request's own action. Empty in a row written before it was kept,
+	// whose use is the request's action.
+	Canonical []byte `json:"canonical,omitempty"`
 }
 
 // See ApprovalLedgerRowBody.
@@ -204,6 +208,11 @@ func (self *ApprovalLedgerState) checkReserve(reserve *ApprovalReserve) error {
 	if len(reserve.ActionId) != sha256.Size || len(reserve.PayloadSha256) != sha256.Size ||
 		len(reserve.EffectKey) != sha256.Size || reserve.UseIndex != uint32(len(self.Reserves)) {
 		return errApprovalLedgerRow
+	}
+	if len(reserve.Canonical) != 0 {
+		if payloadSha256 := sha256.Sum256(reserve.Canonical); !bytes.Equal(payloadSha256[:], reserve.PayloadSha256) {
+			return errApprovalLedgerRow
+		}
 	}
 	if self.FindReserve(reserve.ActionId) != nil {
 		return errApprovalLedgerRow
@@ -499,8 +508,19 @@ func (self *ApprovalHold) State() (*ApprovalLedgerState, error) {
 // use. After an error the Reserve may be in the file, as after a kill, so the caller runs no effect and the use stays
 // consumed. Expiry and taint are the caller's to check first, from the clock and the run file.
 func (self *ApprovalHold) Reserve(actionId []byte, payloadSha256 []byte, effectKey []byte, uses uint32) (*ApprovalReserve, bool, error) {
+	return self.ReserveUse(nil, actionId, payloadSha256, effectKey, uses)
+}
+
+// Reserve, keeping canonical, the use's CanonicalAction as stored, in the row (ApprovalReserve.Canonical), whose
+// SHA-256 must be payloadSha256. nil keeps none.
+func (self *ApprovalHold) ReserveUse(canonical []byte, actionId []byte, payloadSha256 []byte, effectKey []byte, uses uint32) (*ApprovalReserve, bool, error) {
 	if len(actionId) != sha256.Size || len(payloadSha256) != sha256.Size || len(effectKey) != sha256.Size {
 		return nil, false, errors.New("a reserve needs three 32-byte hashes")
+	}
+	if canonical != nil {
+		if canonicalSha256 := sha256.Sum256(canonical); !bytes.Equal(canonicalSha256[:], payloadSha256) {
+			return nil, false, errors.New("a reserve's action is not its payload_sha256's")
+		}
 	}
 	state, err := self.State()
 	if err != nil {
@@ -521,6 +541,7 @@ func (self *ApprovalHold) Reserve(actionId []byte, payloadSha256 []byte, effectK
 		PayloadSha256:  bytes.Clone(payloadSha256),
 		EffectKey:      bytes.Clone(effectKey),
 		ReservedMillis: self.ledger.clock.Now().UnixMilli(),
+		Canonical:      bytes.Clone(canonical),
 	}
 	if err := self.ledger.appendRow(self.approvalId, reserve); err != nil {
 		return nil, false, err
@@ -651,6 +672,14 @@ type sidecarRecords struct {
 	record *SidecarRecord
 	// the team directory's client (RECORD-M6-13), built by Sidecar.DirectoryClient
 	directory *DirectoryClient
+	// each kind's Lookup, which its component registers (Sidecar.RegisterEffectLookup, record_effect.go); kept
+	// across forNetworkWithLock, since a component's lookup is not a network's state
+	effectLookups map[SidecarActionKind]*sidecarEffectLookupEntry
+}
+
+// One registered Lookup, compared by its entry so a stale removal leaves a newer one.
+type sidecarEffectLookupEntry struct {
+	lookup SidecarEffectLookup
 }
 
 // The network's sealed local state, net/<network_id>/ (§5.9): Directory(name, class) reaches §16's approvals/, runs/

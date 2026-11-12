@@ -5,7 +5,8 @@
 // spend check passes, the use reserved durably before the effect (D-MCP-11), or writes an ApprovalRequest and answers
 // *ApprovalPendingError, which Authorize announces as approval_pending.
 //
-// Fail closed: until §16's track installs a gate, sidecarGateDeny refuses every action, and a nil gate never passes.
+// Fail closed: until the host installs §16's gate (Sidecar.InstallApprovalGate, record_gate.go), sidecarGateDeny
+// refuses every action, and a nil gate never passes.
 // The run binding (RunId, AgentId) and the decision pass through unchanged, so §16's gate judges a tainted run's
 // fresh decision and the requests rule's harness evidence (TS1, owner decision 142); a server-visible action carries
 // the decision on to §8.10's gate in its effect. sidecarGateKinds is §5.4's whole list, held equal to record.proto's

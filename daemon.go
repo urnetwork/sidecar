@@ -101,6 +101,8 @@ type Daemon struct {
 	networkIdSidecars map[Id]*Sidecar
 	// the sockets and shares the daemon holds (daemon_socket.go), made on first use
 	sockets *DaemonSockets
+	// the host's platform authenticator, which the daemon's presence prompt asks (daemon_presence.go); nil for none
+	presenceProvider PresenceProvider
 }
 
 // Takes the instance's lock and listens on its socket or pipe. ErrDaemonRunning when another daemon holds the lock.

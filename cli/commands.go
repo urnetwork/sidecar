@@ -139,7 +139,7 @@ type urCli struct {
 	login urLoginFunction
 	// §16.7's hook bounds, which ur hook reads
 	ingest *sidecar.SidecarIngestSettings
-	// §16's offer to register a presence key after a login, nil until it lands
+	// §16's offer to register a presence key after a login (cmd_keys_presence.go)
 	offerPresenceKey func(ctx context.Context, cli *urCli) error
 	// fills a daemon's service urls from §18.9's host table (cmd_daemon.go)
 	serviceUrls func(settings *sidecar.SidecarSettings) error
@@ -178,16 +178,18 @@ func newUrCli() *urCli {
 		spawnDaemon:     spawnDetachedDaemon,
 		login:           urcliLoginEntry,
 		ingest:          sidecar.DefaultSidecarSettings().Ingest,
-		serviceUrls:     urServiceUrlsFromHostTable,
-		hostList:        sidecar.SidecarHostListV1,
-		hostProber:      newUrHostProber(),
-		nativeHostIds:   embeddedNativeHostIds,
-		unitEnv:         hostUnitEnv,
-		unitRunner:      execUnitRunner,
-		stateDirectory:  sidecar.SidecarStateDirectory,
-		getenv:          os.Getenv,
-		cwd:             os.Getwd,
-		pid:             os.Getpid(),
+		// §16.6's first run row (cmd_keys_presence.go)
+		offerPresenceKey: urOfferPresenceKey,
+		serviceUrls:      urServiceUrlsFromHostTable,
+		hostList:         sidecar.SidecarHostListV1,
+		hostProber:       newUrHostProber(),
+		nativeHostIds:    embeddedNativeHostIds,
+		unitEnv:          hostUnitEnv,
+		unitRunner:       execUnitRunner,
+		stateDirectory:   sidecar.SidecarStateDirectory,
+		getenv:           os.Getenv,
+		cwd:              os.Getwd,
+		pid:              os.Getpid(),
 	}
 	cli.openSocketSession = cli.socketSession
 	return cli

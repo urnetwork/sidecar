@@ -209,7 +209,7 @@ func TestDesignatedDaemonHolds16GiB(t *testing.T) {
 		t.Errorf("bound %d", bound)
 	}
 	world.cache.SetDesignated(true, nil)
-	if bound := world.cache.bound(); bound != SearchDesignatedCacheByteCount {
+	if bound := world.cache.bound(); bound != world.settings.DesignatedCacheByteCount {
 		t.Errorf("designated bound %d", bound)
 	}
 	world.cache.SetDesignated(false, []Id{NewId()})

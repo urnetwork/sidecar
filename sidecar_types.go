@@ -7,6 +7,7 @@ package sidecar
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -174,7 +175,44 @@ type SidecarAction struct {
 	// each once (D-MCP-11).
 	RunId   *Id
 	AgentId *Id
+	// The agent's own words about the action, filed as ApprovalRequest.summary and shown to an approver as
+	// untrusted text, never as the action (D-MCP-17). Empty for none.
+	Summary string
+	// The component's effect, live and set by the caller, which Authorize runs once its use is reserved, or at
+	// once under a standing grant (plan-MCP-effect-seam). The gate refuses an action without one.
+	Effect SidecarEffect
+	// What the effect came to, set by Authorize when it answers nil. A retry of the same action finds the recorded
+	// outcome here without the effect running again, unless that outcome is uncertain (AU4).
+	Outcome *SidecarOutcome
 }
+
+// One O tool's effect, which §16.6's spend step 5 runs (plan-MCP-effect-seam). A mail body or a file's bytes are not
+// in CanonicalAction, so the effect comes in with the action rather than being rebuilt from it.
+type SidecarEffect interface {
+	// Runs the effect, idempotent per effectKey: a second run under one key finds the first's effect and answers its
+	// reference. The key is empty under a standing grant, which keeps no ledger row. An error wrapping
+	// ErrSidecarEffectNotDone proves no effect happened; any other error leaves the use uncertain.
+	Run(ctx context.Context, effectKey []byte) (effectRef []byte, err error)
+}
+
+// What a use's effect came to (§16.6's Outcome).
+type SidecarOutcome struct {
+	// done, not_done or uncertain.
+	State ApprovalOutcomeState
+	// The component's reference to what it did, opaque to the gate. Empty unless done.
+	EffectRef []byte
+	// The effect's error in this call; nil on a retry that found a recorded outcome. Never stored.
+	Err error
+}
+
+// A kind's Lookup (§16.6's spend step 5): from the stored action and its effect key alone, so a restart reconciles a
+// reserved use with no caller alive, whether the effect happened. done and not_done are the component's proof;
+// uncertain, or an error, leaves the use uncertain.
+type SidecarEffectLookup func(ctx context.Context, canonical []byte, effectKey []byte) (*SidecarOutcome, error)
+
+// An effect's error proving no effect happened, which records the use's Outcome not_done; the use stays consumed.
+// A server gate's refusal proves that only at an action's first presentation (§16.6's spend step 5).
+var ErrSidecarEffectNotDone = errors.New("the effect did not happen")
 
 // What Authorize answers while an action waits for a person's decision.
 type ApprovalPendingError struct {

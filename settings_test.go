@@ -61,6 +61,12 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				// §16.6's retention row
 				ApprovalFileRetention: 30 * 24 * time.Hour,
 				RunFileRetention:      30 * 24 * time.Hour,
+				// MCP.md's reading 3, §16.6's expiry row, and MCP-M3-05's poll, a reading
+				ApprovalRequestTimeout:  24 * time.Hour,
+				ApprovalCompleteTimeout: 10 * time.Minute,
+				ApprovalPollInterval:    30 * time.Second,
+				// MCP-M3-09's reading: §7.9 requires a presence key's not_after and states none
+				PresenceKeyLifetime: 365 * 24 * time.Hour,
 				// I-7's matcher (record_secret_match.go)
 				SecretMatch: &SecretMatchSettings{CredentialMinByteCount: 16},
 			},
@@ -78,6 +84,8 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				SpoolCursorRecordCount: 64,
 				TranscriptTailInterval: 30 * time.Second,
 				HookExitTimeout:        300 * time.Millisecond,
+				// plan-MCP-presence-hook-timing: the presence prompt's bound
+				PresencePromptTimeout: 60 * time.Second,
 				// MCP.md's MCP-M3-15 readings: a PreToolUse's wait for its paths, and the ancestry walk's bound
 				HookPathTimeout: 10 * time.Second,
 				// §16.6's taint row: 60 s either side of a call, and a config check every 5 min
@@ -167,6 +175,15 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				RemoteServedTimeout:    24 * time.Hour,
 				StateByteCount:         4 * 1024 * 1024,
 				PageHitCount:           50,
+
+				RemoteCpuWindow:                 1 * time.Minute,
+				RemoteSearchMemoryByteCount:     8 * 1024 * 1024,
+				ServeRecheckInterval:            10 * time.Minute,
+				DesignatedCacheByteCount:        16 * 1024 * 1024 * 1024,
+				DesignatedMemoryBudgetByteCount: 192 * 1024 * 1024,
+				VersionPageByteCount:            4 * 1024,
+				VersionMergeInputCount:          16,
+				VersionMergeByteCount:           1024 * 1024,
 			},
 		},
 		// §5.4's directory settings
