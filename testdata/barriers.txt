@@ -432,8 +432,14 @@ barrier stream.keepalive_reset.after stream_keepalive.go
 barrier stream.keepalive_reset.before stream_keepalive.go
 barrier stream.open.after stream_open.go
 barrier stream.open.before stream_open.go
+barrier team_directory.file.after config_directory.go
+barrier team_directory.file.before config_directory.go
 barrier tls.device_key_put.after tls_key.go
 barrier tls.device_key_put.before tls_key.go
+barrier tls.front_audience.after tls_audience.go
+barrier tls.front_audience.before tls_audience.go
+barrier tls.front_target.after tls_front.go
+barrier tls.front_target.before tls_front.go
 barrier tls.handshake.after smtpproof/tls_client.go
 barrier tls.handshake.before smtpproof/tls_client.go
 barrier tlsedge.kill_publish.after tlsedgeservice/kill_set.go
@@ -501,6 +507,7 @@ secret forward_store_record_key device/posture_seal.go
 secret forward_store_root_key device/posture_seal.go
 secret identity_key identity_keys.go
 secret init_secret mls_keyschedule.go
+secret invite_join_secret config_invite.go
 secret joiner_secret mls_welcome.go
 secret measure_client_iv smtpproof/prover_measure.go
 secret measure_client_key smtpproof/prover_measure.go
@@ -508,6 +515,7 @@ secret measure_handshake_secret smtpproof/prover_measure.go
 secret measure_master_secret smtpproof/prover_measure.go
 secret measure_server_iv smtpproof/prover_measure.go
 secret measure_server_key smtpproof/prover_measure.go
+secret member_invite config_invite.go
 secret object_key evs_slot.go
 secret path_secret mls_welcome.go
 secret record_entry_key record_chain.go
@@ -544,9 +552,13 @@ secret tls13_server_handshake_key smtpproof/tls_client.go
 secret tls13_server_iv smtpproof/tls_client.go
 secret tls13_server_key smtpproof/tls_client.go
 secret tls13_shts smtpproof/tls_client.go
+secret tls_alpn_challenge_key tls_alpn_responder.go
 secret tls_device_key tls_key.go
 secret tls_ecdhe_private smtpproof/tls_client.go
 secret tls_ecdhe_shared smtpproof/tls_client.go
+secret tls_front_pre_login_key tls_session.go
+secret tls_front_session_key tls_session.go
+secret tls_front_session_root tls_session.go
 secret tls_visitor_cap tlsedgeservice/visitor_key.go
 secret tls_visitor_daily tlsedgeservice/visitor_key.go
 secret tls_visitor_record tlsedgeservice/visitor_key.go
