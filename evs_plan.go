@@ -92,9 +92,6 @@ var (
 	errEvsPlanEpochMoved = errors.New("evs: the path epoch moved while the plan read")
 )
 
-// The most paths one read names (§11.9's request row).
-const EvsReadMaxPathCount = 64
-
 // What one path's write asks.
 type EvsPathWrite struct {
 	// Raw names joined by /, never normalized (§11.6).
@@ -110,6 +107,9 @@ type EvsPathWrite struct {
 	// version, as ur evs rekey's does, is refused with ErrEvsPathMoved once another write or a removal landed
 	// between, rather than putting the older content back; evs then holds the push to the version the plan read (5g).
 	IfVersion uint64
+	// The version's versioning, EvsVersioningFor's answer (evs_versioning.go): 0 keeps every version, 1 and 2 are
+	// versionless, format 2's (evs_plan_versionless.go). The planner never picks one of its own.
+	Versioning uint32
 }
 
 // What a plan is made against.
@@ -122,6 +122,8 @@ type EvsPlanArgs struct {
 	Generation uint64
 	// Reads the cluster's head, not evs's cache.
 	Fresh bool
+	// The writing run's tainted bit (§16.6), which a format-2 push's provenance carries; format 1 ignores it.
+	Tainted bool
 }
 
 // A planned push. See the file header.
@@ -143,6 +145,8 @@ type EvsWritePlan struct {
 	Sources    []uint64
 	Generation uint64
 	Paths      []*EvsPlannedPath
+	// The writing run's tainted bit, which the push's provenance carries (EvsPlanArgs.Tainted).
+	Tainted bool
 	// The changes' token paths, in the head's current epoch, and manifest_p of that epoch, which seals a delta's rows.
 	pathKey *EvsPathKey
 	nameKey *EvsManifestKey
@@ -205,6 +209,10 @@ type EvsPlannedPath struct {
 	Chain      []*EvsPlannedLink
 	// Whether the chain rides inline.
 	Inline bool
+	// The version's versioning (format 2: evs_plan_versionless.go), and in a slot-keyed repo whether a versionless
+	// version seals its new records under its path's one slot key, chainKey's, rather than a fresh one.
+	Versioning   uint32
+	ReuseSlotKey bool
 	// A directory's delta: the rows it adds, each sealed, and the child tokens it removes.
 	Names         []*protocol.EvsName
 	RemovedTokens [][]byte
@@ -241,6 +249,10 @@ func (self *EvsPlannedPath) creates() bool {
 type EvsPlannedLink struct {
 	Kept   *protocol.EvsLocator
 	Record *EvsPlannedRecord
+	// Format 2 (evs_plan_transition.go): the kind the new version names it as, a kept locator relabeled or a record
+	// written, 0 for format 1's own; and whether a written kind-5 record stages in the push instead of uploading.
+	Kind   protocol.EvsLocatorKind
+	Staged bool
 }
 
 // A record this push writes: its kind, its id and a diff's base, the file's oid, and its body's plaintext.
@@ -339,7 +351,7 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 					RepoId: self.repoId, RefId: args.RefId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
 					Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
 					Generation: args.Generation, keys: result.keys, floors: map[string]uint64{},
-					slotKeyed: EvsRepoKindRecordClass(repoKind),
+					slotKeyed: EvsRepoKindRecordClass(repoKind), Tainted: args.Tainted,
 				}
 				if err := plan.setRef(head, args.RefName, self.client.args.Identity().SidecarId, rekeyOnly); err != nil {
 					return err
@@ -376,8 +388,8 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 			return nil
 		}()
 	}
-	for start := 0; start < len(readPaths); start += EvsReadMaxPathCount {
-		batch := readPaths[start:min(len(readPaths), start+EvsReadMaxPathCount)]
+	for start := 0; start < len(readPaths); start += DefaultEvsFormatSettings().ReadMaxPathCount {
+		batch := readPaths[start:min(len(readPaths), start+DefaultEvsFormatSettings().ReadMaxPathCount)]
 		if err := readBatch(batch, args.Fresh || 0 < start); err != nil {
 			return nil, err
 		}
@@ -546,13 +558,14 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	var previous *EvsChainState
 	var previousContent *evsSpill
 	var previousKeys *evsChainKeys
+	var previousFields *protocol.EvsSealedFields
 	if stands {
 		content, state, keys, fields, err := self.readBaseKeys(ctx, result, verified)
 		if err != nil {
 			return nil, err
 		}
 		defer content.close()
-		previous, previousContent, previousKeys = state, content, keys
+		previous, previousContent, previousKeys, previousFields = state, content, keys, fields
 		planned.Fields.FileId = fields.GetFileId()
 		planned.Fields.Mode = fields.GetMode()
 		if plan.RefMode == protocol.EvsRefMode_EVS_REF_GIT {
@@ -579,6 +592,13 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	}
 	if !evsFileModeValid(planned.Fields.GetMode()) {
 		return nil, fmt.Errorf("%w: mode %o is no file's", ErrEvsWriteInvalid, planned.Fields.GetMode())
+	}
+	if evsPlanIsFormat2(write, verified) {
+		// a versionless version, or one over versionless content (EVS2-M10-15)
+		if err := self.planFormat2Chain(ctx, plan, planned, write, verified, previous, previousContent, previousKeys, previousFields, oid); err != nil {
+			return nil, err
+		}
+		return planned, nil
 	}
 	if err := self.planChain(ctx, plan, planned, write, verified, previous, previousContent, previousKeys, oid); err != nil {
 		return nil, err
@@ -1320,7 +1340,7 @@ func evsGitReadBatches(changes []*EvsGitPathChange, renames map[string]string) [
 	batches := [][]string{}
 	batch := []string{}
 	add := func(paths ...string) {
-		if EvsReadMaxPathCount < len(batch)+len(paths) {
+		if DefaultEvsFormatSettings().ReadMaxPathCount < len(batch)+len(paths) {
 			batches = append(batches, batch)
 			batch = []string{}
 		}
@@ -1635,8 +1655,8 @@ func (self *EvsRepo) planGitReuses(ctx context.Context, plan *EvsWritePlan, pend
 	}
 	for _, refId := range refIds {
 		group := refIdPendings[refId]
-		for start := 0; start < len(group); start += EvsReadMaxPathCount {
-			batch := group[start:min(len(group), start+EvsReadMaxPathCount)]
+		for start := 0; start < len(group); start += DefaultEvsFormatSettings().ReadMaxPathCount {
+			batch := group[start:min(len(group), start+DefaultEvsFormatSettings().ReadMaxPathCount)]
 			paths := make([]string, len(batch))
 			for i, pending := range batch {
 				paths[i] = pending.change.Path

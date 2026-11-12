@@ -134,6 +134,8 @@ evs_padme.go
 evs_payload.go
 evs_pin_store.go
 evs_plan.go
+evs_plan_transition.go
+evs_plan_versionless.go
 evs_proof.go
 evs_read.go
 evs_reconstruct.go

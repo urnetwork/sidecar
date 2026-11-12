@@ -117,7 +117,8 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 	if err != nil {
 		return nil, err
 	}
-	metadata := &protocol.EvsSealedMetadata{Provenance: &protocol.EvsProvenance{}}
+	// the run's tainted bit rides a format-2 push's provenance (§16.6, EVS2-M10-15); format 1 ignores it
+	metadata := &protocol.EvsSealedMetadata{Provenance: &protocol.EvsProvenance{Tainted: plan.Tainted}}
 	if plan.RefMode == protocol.EvsRefMode_EVS_REF_GIT {
 		// a git-mode push states its update (DESIGN-DETAILS 8.2.3): what readers check its changes against
 		if plan.gitUpdate == nil {
