@@ -157,7 +157,15 @@ func (self *FaultPlan) validate() error {
 		if self.Op != FaultOpPut && self.Op != FaultOpGet && self.Op != FaultOpDelete {
 			return fmt.Errorf("fault plan %s: only a request on a key is held", self)
 		}
-	case QuorumLoss, DriveMiss:
+	case QuorumLoss:
+		if self.Op != FaultOpPut && self.Op != FaultOpGet && self.Op != FaultOpList && self.Op != FaultOpDelete {
+			return fmt.Errorf("fault plan %s: only a store request loses a quorum", self)
+		}
+		return fmt.Errorf("fault plan %s: %w", self, ErrFaultNeedsRealStore)
+	case DriveMiss:
+		if self.Op != FaultOpPut {
+			return fmt.Errorf("fault plan %s: only a PUT misses a drive", self)
+		}
 		return fmt.Errorf("fault plan %s: %w", self, ErrFaultNeedsRealStore)
 	default:
 		return fmt.Errorf("fault plan %s: no such result", self)
@@ -183,6 +191,9 @@ type FaultQueue struct {
 	onFire    func(plan *FaultPlan)
 	// what the stores behind the queue cannot carry out, beside validate's rules: nil on T2
 	check func(plan *FaultPlan) error
+	// whether the stores behind the queue carry out a result only a real store can: nil on T2, where every
+	// such plan is ErrFaultNeedsRealStore
+	realStore func(plan *FaultPlan) error
 	// By operation, each one that reached the queue in order, with the result it was given, zero for
 	// none.
 	opResults map[string][]FaultResult
@@ -211,14 +222,32 @@ func (self *FaultQueue) SetCheck(check func(plan *FaultPlan) error) {
 	self.check = check
 }
 
+// Lets the stores behind this queue take QuorumLoss and DriveMiss, which a fake refuses as
+// ErrFaultNeedsRealStore: admit says whether they can carry out one such plan, and its error refuses the plan
+// at Add. Server's T3 sets it on a Net over its 4-host file-cluster layouts (sidecart3/cluster_faults.go),
+// where a host goes down for real, and one MinIO process refuses both, having no host to lose. nil, as on
+// T2, refuses every such plan.
+func (self *FaultQueue) SetRealStore(admit func(plan *FaultPlan) error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.realStore = admit
+}
+
 // Arms plan. A plan a fake cannot carry out is an error here, so a schedule fails where it was
 // written. The returned channel closes when the plan first fires.
 func (self *FaultQueue) Add(plan *FaultPlan) (fired <-chan struct{}, err error) {
-	if err := plan.validate(); err != nil {
-		return nil, err
-	}
+	validateErr := plan.validate()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if validateErr != nil {
+		// a result only a real store carries out is the real store's to take or refuse
+		if !errors.Is(validateErr, ErrFaultNeedsRealStore) || self.realStore == nil {
+			return nil, validateErr
+		}
+		if err := self.realStore(plan); err != nil {
+			return nil, fmt.Errorf("fault plan %s: %w", plan, err)
+		}
+	}
 	if self.check != nil {
 		if err := self.check(plan); err != nil {
 			return nil, fmt.Errorf("fault plan %s: %w", plan, err)

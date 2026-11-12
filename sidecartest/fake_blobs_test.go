@@ -197,6 +197,47 @@ func TestFakeRefusesWhatOnlyARealStoreCanDo(t *testing.T) {
 	}
 }
 
+// A queue whose stores are real takes QuorumLoss and DriveMiss when they admit the plan, and refuses one they
+// do not, while a plan no store could carry out stays refused before they are asked.
+func TestARealStoreTakesWhatItAdmits(t *testing.T) {
+	faults := NewFaultQueue()
+	asked := []*FaultPlan{}
+	faults.SetRealStore(func(plan *FaultPlan) error {
+		asked = append(asked, plan)
+		if plan.ClusterId == "" {
+			return errors.New("names no cluster")
+		}
+		return nil
+	})
+	for _, plan := range []*FaultPlan{
+		{Op: FaultOpPut, Result: QuorumLoss, ClusterId: "meta-1"},
+		{Op: FaultOpGet, Result: QuorumLoss, ClusterId: "meta-1"},
+		{Op: FaultOpPut, Result: DriveMiss, ClusterId: "seg-1"},
+	} {
+		if _, err := faults.Add(plan); err != nil {
+			t.Errorf("%s: %v", plan, err)
+		}
+	}
+	if _, err := faults.Add(&FaultPlan{Op: FaultOpPut, Result: QuorumLoss}); err == nil || !strings.Contains(err.Error(), "names no cluster") {
+		t.Errorf("a plan the store refused: %v", err)
+	}
+	for _, plan := range []*FaultPlan{
+		{Op: FaultOpGet, Result: DriveMiss, ClusterId: "meta-1"},
+		{Op: FaultOpRedis, Result: QuorumLoss, ClusterId: "meta-1"},
+	} {
+		if _, err := faults.Add(plan); err == nil || errors.Is(err, ErrFaultNeedsRealStore) {
+			t.Errorf("%s: %v", plan, err)
+		}
+	}
+	if len(asked) != 4 {
+		t.Errorf("the store was asked %d times", len(asked))
+	}
+	faults.SetRealStore(nil)
+	if _, err := faults.Add(&FaultPlan{Op: FaultOpPut, Result: QuorumLoss, ClusterId: "meta-1"}); !errors.Is(err, ErrFaultNeedsRealStore) {
+		t.Errorf("with no real store: %v", err)
+	}
+}
+
 func TestFaultPlansThatMakeNoSenseFailWhereWritten(t *testing.T) {
 	cases := []*FaultPlan{
 		{Op: "put-ish", Result: FailBeforeApply},
