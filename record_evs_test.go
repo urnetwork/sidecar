@@ -1,0 +1,1087 @@
+// RECORD-M3-12 on T2: sidecar.RecordEvsStreams, EvsRepo.BuildStreamPush and RecordVault.Ensure against an
+// evsservice.EvsEngine over sidecartest's FakeHost, FakeGkm and a FakeGkmAuthLog, every device its own EvsClient. The
+// world grants scopes as §7.8's tokens would: evs honors a right only where the world's grant gives it, so a refusal
+// is evs's own. Its slot rows are 32 B, each wrapped as one of evs's object keys, since RECORD.md's 64 B rows wait on
+// question record-m2-01-slot-row-salt; the production codec's refusal is tested apart.
+
+package sidecar_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/connect"
+
+	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/evsservice"
+	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
+	"github.com/urnetwork/sidecar/sidecartest"
+)
+
+// The world's test codec: a row is 32 B, wrapped under fek_g as an object key, so evs's slot format holds it as it
+// stands.
+type recordEvsTestCodec struct{}
+
+const recordEvsTestRowByteCount = 32
+
+func (self recordEvsTestCodec) Check(rows []*sidecar.RecordSlotRow) error {
+	for i, row := range rows {
+		if len(row.Row) != recordEvsTestRowByteCount || (0 < i && row.KeyIndex <= rows[i-1].KeyIndex) {
+			return fmt.Errorf("a test row of %d bytes or out of order", len(row.Row))
+		}
+	}
+	return nil
+}
+
+func (self recordEvsTestCodec) Wrap(fek *sidecar.EvsFekKey, rows []*sidecar.RecordSlotRow) ([]*protocol.EvsSlotKey, error) {
+	keys := []*protocol.EvsSlotKey{}
+	for _, row := range rows {
+		wrapped, err := sidecar.EvsWrapTestObjectKey(fek, row.Row)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, &protocol.EvsSlotKey{KeyIndex: row.KeyIndex, Generation: fek.Generation(), Wrapped: wrapped})
+	}
+	return keys, nil
+}
+
+func (self recordEvsTestCodec) Open(slot *protocol.EvsSlotObject, fekOf func(generation uint64) (*sidecar.EvsFekKey, error)) ([]*sidecar.RecordSlotRow, error) {
+	rows := []*sidecar.RecordSlotRow{}
+	for _, key := range slot.GetKeys() {
+		fek, err := fekOf(key.GetGeneration())
+		if err != nil {
+			return nil, err
+		}
+		row, err := sidecar.EvsUnwrapTestObjectKey(fek, key.GetWrapped())
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, &sidecar.RecordSlotRow{KeyIndex: key.GetKeyIndex(), Row: row})
+	}
+	return rows, nil
+}
+
+// A device's clock: the world's time, a wait moving the world's clock on by its timeout, so a retry's backoff
+// holds no test and evs sees the time pass, as a fence's or a refusal's retry_after needs.
+type recordEvsWorldClock struct {
+	clock *sidecartest.FakeClock
+}
+
+func (self *recordEvsWorldClock) Now() time.Time {
+	return self.clock.Now()
+}
+
+func (self *recordEvsWorldClock) After(timeout time.Duration) <-chan time.Time {
+	if 0 < timeout {
+		self.clock.Advance(timeout)
+	}
+	fired := make(chan time.Time, 1)
+	fired <- self.clock.Now()
+	return fired
+}
+
+func (self *recordEvsWorldClock) AfterFunc(timeout time.Duration, function func()) func() bool {
+	return self.clock.AfterFunc(timeout, function)
+}
+
+// One repo of the world: its kind and owner, the grants on it, its admins, and its deletion.
+type recordEvsWorldRepo struct {
+	kind     protocol.RepoKind
+	grants   map[sidecar.Id]sidecartest.RecordStreamsScope
+	admins   []sidecar.Id
+	shrunkAt uint64
+	deletion *evsservice.EvsRepoDeletionFacts
+}
+
+// The world: one member, its devices, and the repos they share.
+type recordEvsWorld struct {
+	t         *testing.T
+	ctx       context.Context
+	clock     *sidecartest.FakeClock
+	host      *sidecartest.FakeHost
+	cluster   sidecar.BlobCluster
+	networkId sidecar.Id
+	clientId  sidecar.Id
+	memberId  sidecar.Id
+	gkm       *sidecartest.FakeGkm
+	authLog   *sidecartest.FakeGkmAuthLog
+	engine    *evsservice.EvsEngine
+
+	stateLock sync.Mutex
+	// the gate's view, and the one devices read: two while a gate is held closed
+	evsView    *sidecartest.FakeGkmAuthView
+	deviceView *sidecartest.FakeGkmAuthView
+	// repos in the order their RepoCreate landed
+	repoIds    []sidecar.Id
+	repos      map[sidecar.Id]*recordEvsWorldRepo
+	signers    map[sidecar.Id]*sidecartest.FakeGkmSigner
+	gkmClients map[sidecar.Id]sidecar.GkmClient
+	clients    map[sidecar.Id]*sidecar.EvsClient
+	streams    map[sidecar.Id]*sidecar.RecordEvsStreams
+	// the sidecars filed as not member devices, a tagged sidecar's place
+	tagged map[sidecar.Id]bool
+	// the device that holds each repo's group from its creation
+	ownerId sidecar.Id
+	// run before a filed statement lands, nil for none
+	beforeLand func(signerId sidecar.Id, signedType bridge.SignedType, body proto.Message)
+	// called after a request is served, before its answer goes back: an error loses the answer, as a crash would
+	afterServe func(request *http.Request) error
+	// every request a device sent, its route alone
+	requests []string
+}
+
+// evs's view of the world: a token's rights are what its sidecar's grant gives.
+type recordEvsWorldAuthState struct {
+	world *recordEvsWorld
+}
+
+func (self *recordEvsWorldAuthState) CheckRevocation(ctx context.Context, principal *sidecar.Principal) error {
+	return nil
+}
+
+func (self *recordEvsWorldAuthState) MatchBinding(principal *sidecar.Principal) evsservice.EvsAuthAnswer {
+	return evsservice.EvsAuthAllowed
+}
+
+func (self *recordEvsWorldAuthState) HonorScope(principal *sidecar.Principal, repoId sidecar.Id, rights sidecar.AclEvsRights, now time.Time) evsservice.EvsAuthAnswer {
+	world := self.world
+	world.stateLock.Lock()
+	defer world.stateLock.Unlock()
+	repo := world.repos[repoId]
+	if repo == nil || principal.SidecarId == nil {
+		return evsservice.EvsAuthDenied
+	}
+	scope := repo.grants[sidecar.Id(*principal.SidecarId)]
+	granted := sidecar.AclEvsRights(0)
+	if scope.Read || scope.Write || scope.Admin || scope.ReceiptOnly {
+		granted |= sidecar.AclEvsRead
+	}
+	if scope.Write || scope.Admin {
+		granted |= sidecar.AclEvsWrite
+	}
+	if scope.Admin {
+		granted |= sidecar.AclEvsAdmin
+	}
+	if scope.Deposit || scope.ReceiptOnly {
+		granted |= sidecar.AclEvsDeposit
+	}
+	if rights&^granted != 0 {
+		return evsservice.EvsAuthDenied
+	}
+	return evsservice.EvsAuthAllowed
+}
+
+func (self *recordEvsWorldAuthState) Repo(principal *sidecar.Principal, repoId sidecar.Id) (*evsservice.EvsRepoFacts, evsservice.EvsAuthAnswer) {
+	world := self.world
+	world.stateLock.Lock()
+	defer world.stateLock.Unlock()
+	repo := world.repos[repoId]
+	if repo == nil {
+		return nil, evsservice.EvsAuthDenied
+	}
+	return &evsservice.EvsRepoFacts{Kind: repo.kind, OwnerMemberId: world.memberId, NetworkId: world.networkId, Deletion: repo.deletion}, evsservice.EvsAuthAllowed
+}
+
+// The gate's view.
+func (self *recordEvsWorldAuthState) View(networkId sidecar.Id) (sidecar.GkmAuthView, evsservice.EvsAuthAnswer) {
+	world := self.world
+	world.stateLock.Lock()
+	defer world.stateLock.Unlock()
+	if networkId != world.networkId || world.evsView == nil {
+		return nil, evsservice.EvsAuthUnknown
+	}
+	return world.evsView, evsservice.EvsAuthAllowed
+}
+
+func newRecordEvsWorld(t *testing.T) *recordEvsWorld {
+	t.Helper()
+	ctx := t.Context()
+	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
+	hostSettings := sidecartest.DefaultFakeHostSettings()
+	hostSettings.Blobs.MetadataClusterIds = []string{"meta-1"}
+	hostSettings.Blobs.Report = func(violation string) { t.Errorf("blobs: %s", violation) }
+	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, hostSettings)
+	sidecartest.RegisterEvsTwins(host.Redis)
+	world := &recordEvsWorld{
+		t: t, ctx: ctx, clock: clock, host: host,
+		networkId: sidecar.NewId(), clientId: sidecar.NewId(), memberId: sidecar.NewId(),
+		authLog:    sidecartest.NewFakeGkmAuthLog(),
+		repos:      map[sidecar.Id]*recordEvsWorldRepo{},
+		signers:    map[sidecar.Id]*sidecartest.FakeGkmSigner{},
+		gkmClients: map[sidecar.Id]sidecar.GkmClient{},
+		clients:    map[sidecar.Id]*sidecar.EvsClient{},
+		streams:    map[sidecar.Id]*sidecar.RecordEvsStreams{},
+		tagged:     map[sidecar.Id]bool{},
+	}
+	network := connect.Id(world.networkId).String()
+	if err := host.Gates.Set(fmt.Sprintf("sidecar:\n  evs: {enabled: true, networks: [%q]}\n", network)); err != nil {
+		t.Fatal(err)
+	}
+	host.Quota.SetBalance(connect.Id(world.networkId), 1024*1024*1024*1024)
+	// §11.12's receipt budget, which pro.yml sets per tier
+	host.Quota.SetLimits(connect.Id(world.networkId), &sidecar.QuotaLimits{Limits: map[string]int64{"evs_read_receipts_per_repo_day": 256}})
+	cluster, err := host.Blobs.Cluster("meta-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.cluster = cluster
+	world.gkm = sidecartest.NewFakeGkm(clock, host.Blobs, nil)
+	world.ownerId = sidecar.NewId()
+	world.signerWithLock(world.ownerId)
+	world.publishWithLock(true)
+	usage, err := evsservice.NewUsageBatcher(ctx, host.ServiceHost(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(usage.Close)
+	quota, err := evsservice.NewQuotaGate(ctx, host.ServiceHost(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(quota.Close)
+	receiptKey := sha256.Sum256([]byte("record evs world receipt key"))
+	receiptKeys, err := evsservice.NewReceiptKeys([]*evsservice.ReceiptKey{{KeyId: 1, Key: receiptKey[:], IssueFrom: clock.Now().Add(-48 * time.Hour)}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := evsservice.DefaultEvsSettings()
+	settings.BatchFlushDelay = 0
+	settings.PushUnknownRereadInterval = 0
+	settings.RepoCacheTtl = 0
+	authState := &recordEvsWorldAuthState{world: world}
+	world.engine, err = evsservice.NewEvsEngine(ctx, host.ServiceHost(), settings, &evsservice.EvsEngineDeps{
+		AuthState: authState,
+		Uploads:   &evsservice.EvsUploadDeps{Keys: receiptKeys, Quota: quota, Usage: usage},
+		GateViews: authState,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(world.engine.Close)
+	return world
+}
+
+// The signer of sidecarId, made a member device of the world's member on first use.
+func (self *recordEvsWorld) signerWithLock(sidecarId sidecar.Id) *sidecartest.FakeGkmSigner {
+	signer := self.signers[sidecarId]
+	if signer == nil {
+		_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			self.t.Fatal(err)
+		}
+		signer = &sidecartest.FakeGkmSigner{SidecarId: sidecarId, PrivateKey: privateKey}
+		self.signers[sidecarId] = signer
+	}
+	return signer
+}
+
+// Appends the world's state as the log's next position: every repo's row, readers, writers and admins. devices
+// moves the devices' view too, else only the gate's.
+func (self *recordEvsWorld) publishWithLock(devices bool) {
+	repoRows := []*protocol.AclRepo{}
+	readers := map[sidecar.Id][]sidecar.Id{}
+	writers := map[sidecar.Id][]sidecar.Id{}
+	for _, repoId := range self.repoIds {
+		repo := self.repos[repoId]
+		row := &protocol.AclRepo{RepoId: repoId.Bytes(), Kind: repo.kind, OwnerMemberId: self.memberId.Bytes(), HoldersShrunkAt: repo.shrunkAt}
+		for _, adminId := range repo.admins {
+			row.Admins = append(row.Admins, &protocol.AclRepoAdminRow{SidecarId: adminId.Bytes()})
+		}
+		repoRows = append(repoRows, row)
+		for sidecarId, scope := range repo.grants {
+			if scope.Read || scope.Write || scope.Admin || scope.ReceiptOnly {
+				readers[repoId] = append(readers[repoId], sidecarId)
+			}
+			if scope.Write || scope.Admin {
+				writers[repoId] = append(writers[repoId], sidecarId)
+			}
+		}
+		slices.SortFunc(readers[repoId], sidecar.Id.Cmp)
+		slices.SortFunc(writers[repoId], sidecar.Id.Cmp)
+	}
+	rows := sidecartest.FakeGkmAuthRows(repoRows...)
+	memberDevices := []sidecar.Id{}
+	identityKeys := map[sidecar.Id][]byte{}
+	for sidecarId, signer := range self.signers {
+		identityKeys[sidecarId] = signer.PublicKey()
+		if !self.tagged[sidecarId] {
+			memberDevices = append(memberDevices, sidecarId)
+		}
+	}
+	slices.SortFunc(memberDevices, sidecar.Id.Cmp)
+	sidecarRows, member := sidecartest.FakeGkmAuthMemberDevices(self.memberId, memberDevices...)
+	rows.Sidecars = sidecarRows
+	rows.Members = []*bridge.MemberRow{member}
+	view := self.authLog.Append(&sidecartest.FakeGkmAuthFixture{Rows: rows, IdentityKeys: identityKeys, RepoReaders: readers, RepoWriters: writers})
+	self.evsView = view
+	if devices || self.deviceView == nil {
+		self.deviceView = view
+		for _, gkmClient := range self.gkmClients {
+			gkmClient.AuthAdvanced(view)
+		}
+	}
+}
+
+// The devices' verified state.
+func (self *recordEvsWorld) view() sidecar.GkmAuthView {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.deviceView
+}
+
+// A fresh vault of the world's member, its group held by the world's owner device: what the suite's NewRepo is.
+func (self *recordEvsWorld) NewRepo(ctx context.Context) (sidecar.Id, error) {
+	repoId := sidecar.NewId()
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.repoIds = append(self.repoIds, repoId)
+		self.repos[repoId] = &recordEvsWorldRepo{
+			kind:   protocol.RepoKind_REPO_KIND_VAULT,
+			grants: map[sidecar.Id]sidecartest.RecordStreamsScope{self.ownerId: {Read: true, Write: true, Admin: true}},
+			admins: []sidecar.Id{self.ownerId},
+		}
+		self.publishWithLock(true)
+	}()
+	memberId := self.memberId
+	if _, err := self.gkmClient(self.ownerId).CreateGroup(ctx, &sidecar.GkmCreateGroupArgs{RepoId: repoId, Kind: protocol.RepoKind_REPO_KIND_VAULT, OwnerMemberId: &memberId}); err != nil {
+		return sidecar.Id{}, err
+	}
+	placeBytes, err := (&sidecar.EvsRepoPlace{ClusterId: "meta-1", CreatorSidecarId: self.ownerId}).Marshal()
+	if err != nil {
+		return sidecar.Id{}, err
+	}
+	if _, err := self.cluster.PutIfNoneMatch(ctx, sidecar.EvsPlaceKey(repoId), placeBytes, nil); err != nil {
+		return sidecar.Id{}, err
+	}
+	repoBytes, err := proto.Marshal(&protocol.EvsRepoObject{
+		RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_VAULT, State: protocol.EvsRepoState_EVS_REPO_ACTIVE,
+		Format: sidecar.EvsRepoFormat1, NetworkId: self.networkId.Bytes(), OwnerMemberId: memberId.Bytes(),
+	})
+	if err != nil {
+		return sidecar.Id{}, err
+	}
+	if _, err := self.cluster.PutIfNoneMatch(ctx, evsservice.RepoKey(repoId), repoBytes, nil); err != nil {
+		return sidecar.Id{}, err
+	}
+	return repoId, nil
+}
+
+// Gives sidecarId scope on repoId: a reader of the log reads, a writer or admin writes too, and an admin is a repo
+// admin; a receipt-only depositor reads and does not write, as an owner-bound repo's other readers do.
+func (self *recordEvsWorld) Grant(repoId sidecar.Id, sidecarId sidecar.Id, scope sidecartest.RecordStreamsScope) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	repo := self.repos[repoId]
+	if repo == nil {
+		return fmt.Errorf("no repo %s", repoId)
+	}
+	self.signerWithLock(sidecarId)
+	repo.grants[sidecarId] = scope
+	if scope.Admin && !slices.Contains(repo.admins, sidecarId) {
+		repo.admins = append(repo.admins, sidecarId)
+	}
+	self.publishWithLock(true)
+	return nil
+}
+
+// Closes repoId's gate as a holder's removal does: the repo's holders shrink at a position the gate's view holds and
+// the devices' does not, so a push sealed to the generation the devices hold is 412 GATE_CLOSED; opening it moves the
+// devices to that position, whose EnsureWritable rotates past the shrink.
+func (self *recordEvsWorld) SetGateClosed(repoId sidecar.Id, closed bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if !closed {
+		self.publishWithLock(true)
+		return
+	}
+	self.repos[repoId].shrunkAt = self.evsView.Pin().GetVersion() + 1
+	self.publishWithLock(false)
+}
+
+func (self *recordEvsWorld) Advance(duration time.Duration) {
+	self.clock.Advance(duration)
+}
+
+func (self *recordEvsWorld) RowByteCount() int {
+	return recordEvsTestRowByteCount
+}
+
+// The devices' newest pin, which a push of the suite declares.
+func (self *recordEvsWorld) Pin() *bridge.AuthPin {
+	return self.view().Pin()
+}
+
+// A device's gkm client that, beside FakeGkm's group, writes the GroupForm gkm would at gkm/repo/<repo_id>/, which
+// FakeGkm does not and evs's activation reads.
+type recordEvsWorldGkm struct {
+	sidecar.GkmClient
+	world *recordEvsWorld
+}
+
+func (self *recordEvsWorldGkm) CreateGroup(ctx context.Context, args *sidecar.GkmCreateGroupArgs) (*sidecar.EvsRepoKey, error) {
+	key, err := self.GkmClient.CreateGroup(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	form, err := proto.Marshal(&protocol.GroupForm{RepoId: args.RepoId.Bytes(), GroupId: key.GroupId().Bytes(), Generation: 1})
+	if err != nil {
+		return nil, err
+	}
+	signed, err := proto.Marshal(&bridge.Signed{Type: uint32(bridge.SignedType_SIGNED_GROUP_FORM), Body: form})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := self.world.cluster.PutIfNoneMatch(ctx, "gkm/repo/"+sidecar.EvsKeyId(args.RepoId)+"/00000000000000000001", signed, nil); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+// The gkm client of sidecarId, made on first use at the devices' view.
+func (self *recordEvsWorld) gkmClient(sidecarId sidecar.Id) sidecar.GkmClient {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.gkmClientWithLock(sidecarId)
+}
+
+func (self *recordEvsWorld) gkmClientWithLock(sidecarId sidecar.Id) sidecar.GkmClient {
+	gkmClient := self.gkmClients[sidecarId]
+	if gkmClient == nil {
+		signer := self.signerWithLock(sidecarId)
+		gkmClient = &recordEvsWorldGkm{GkmClient: self.gkm.Client(sidecarId, signer.Sign), world: self}
+		gkmClient.AuthAdvanced(self.deviceView)
+		self.gkmClients[sidecarId] = gkmClient
+	}
+	return gkmClient
+}
+
+// The devices' transport: the engine's handler, its step 8s waited out after each push.
+func (self *recordEvsWorld) RoundTrip(request *http.Request) (*http.Response, error) {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.requests = append(self.requests, request.Method+" "+request.URL.Path)
+	}()
+	recorder := httptest.NewRecorder()
+	self.engine.Handler().ServeHTTP(recorder, request)
+	if strings.HasSuffix(request.URL.Path, "/push") || strings.HasSuffix(request.URL.Path, "/slots/delete") {
+		for {
+			started, finished, changed := self.engine.StepEights()
+			if started == finished {
+				break
+			}
+			<-changed
+		}
+	}
+	afterServe := func() func(request *http.Request) error {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.afterServe
+	}()
+	if afterServe != nil {
+		if err := afterServe(request); err != nil {
+			return nil, err
+		}
+	}
+	return recorder.Result(), nil
+}
+
+// Every request the devices sent, as method and path.
+func (self *recordEvsWorld) sent() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.requests)
+}
+
+// Files a device's statement as the core's poster lands it: a RepoCreate of a vault the world's next repo, a
+// RepoDelete its deletion, each at the log's next position.
+func (self *recordEvsWorld) fileStatement(signerId sidecar.Id) sidecar.EvsFileStatementFunction {
+	return func(ctx context.Context, signedType bridge.SignedType, body proto.Message) error {
+		beforeLand := func() func(signerId sidecar.Id, signedType bridge.SignedType, body proto.Message) {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return self.beforeLand
+		}()
+		if beforeLand != nil {
+			beforeLand(signerId, signedType, body)
+		}
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		switch statement := body.(type) {
+		case *protocol.RepoCreate:
+			repoId, err := sidecar.IdFromBytes(statement.GetRepoId())
+			if err != nil || self.repos[repoId] != nil {
+				return fmt.Errorf("a RepoCreate the log refuses")
+			}
+			self.repoIds = append(self.repoIds, repoId)
+			self.repos[repoId] = &recordEvsWorldRepo{
+				kind:   statement.GetKind(),
+				grants: map[sidecar.Id]sidecartest.RecordStreamsScope{signerId: {Read: true, Write: true, Admin: true}},
+				admins: []sidecar.Id{signerId},
+			}
+			for sidecarId := range self.signers {
+				if !self.tagged[sidecarId] && sidecarId != signerId && sidecarId != self.ownerId {
+					self.repos[repoId].grants[sidecarId] = sidecartest.RecordStreamsScope{Read: true, Write: true}
+				}
+			}
+		case *protocol.RepoDelete:
+			repoId, err := sidecar.IdFromBytes(statement.GetRepoId())
+			repo := self.repos[repoId]
+			if err != nil || repo == nil {
+				return fmt.Errorf("a RepoDelete the log refuses")
+			}
+			deletionId, _ := sidecar.IdFromBytes(statement.GetDeletionId())
+			repo.deletion = &evsservice.EvsRepoDeletionFacts{DeletionId: deletionId, Now: statement.GetNow(), Time: self.clock.Now(), SignerSidecarId: signerId}
+		default:
+			return fmt.Errorf("a statement the world does not file")
+		}
+		self.publishWithLock(true)
+		return nil
+	}
+}
+
+// What sidecarId reaches: its own evs client over the world, on a store of its own, with the test codec.
+func (self *recordEvsWorld) For(sidecarId sidecar.Id) sidecar.RecordStreams {
+	self.stateLock.Lock()
+	streams := self.streams[sidecarId]
+	self.stateLock.Unlock()
+	if streams != nil {
+		return streams
+	}
+	return self.streamsOn(sidecarId, self.newClient(sidecarId, sidecartest.NewFakeStore().Root()), sidecartest.NewFakeStore().Root(), recordEvsTestCodec{})
+}
+
+// A binding of sidecarId on client and store with codec, kept as its For.
+func (self *recordEvsWorld) streamsOn(sidecarId sidecar.Id, client *sidecar.EvsClient, store sidecar.SidecarStore, codec sidecar.RecordSlotRowCodec) *sidecar.RecordEvsStreams {
+	streams, err := sidecar.NewRecordEvsStreams(&sidecar.RecordEvsStreamsArgs{Client: client, Store: store, RowCodec: codec})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.streams[sidecarId] = streams
+	return streams
+}
+
+// A device of sidecarId on store, its tokens carrying what it asks for, which evs honors as its grants say.
+func (self *recordEvsWorld) newClient(sidecarId sidecar.Id, store sidecar.SidecarStore) *sidecar.EvsClient {
+	self.t.Helper()
+	signer, gkmClient := func() (*sidecartest.FakeGkmSigner, sidecar.GkmClient) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		signer := self.signerWithLock(sidecarId)
+		self.publishWithLock(true)
+		return signer, self.gkmClientWithLock(sidecarId)
+	}()
+	identity := &sidecar.SidecarIdentity{NetworkId: self.networkId, SidecarId: sidecarId, ClientId: self.clientId, Generation: 1, IdentityPublicKey: signer.PublicKey()}
+	client, err := sidecar.NewEvsClient(&sidecar.EvsClientArgs{
+		NetworkId: self.networkId,
+		EvsUrl:    "https://evs.example",
+		Transport: self,
+		ServiceToken: func(ctx context.Context, resource string, scopes []string) (string, error) {
+			connectSidecarId := connect.Id(sidecarId)
+			return self.host.Authenticator.Issue(&sidecar.Principal{
+				NetworkId: connect.Id(self.networkId), ClientId: connect.Id(self.clientId), SidecarId: &connectSidecarId,
+				Audience: evsservice.EvsAudience, Scopes: scopes, IssuedAt: self.clock.Now(), ExpiresAt: self.clock.Now().Add(15 * time.Minute),
+			}), nil
+		},
+		Sign:          sidecar.EvsSignFunction(signer.Sign),
+		Identity:      func() *sidecar.SidecarIdentity { return identity },
+		Gkm:           gkmClient,
+		Store:         store,
+		Config:        self.view,
+		FileStatement: self.fileStatement(sidecarId),
+		Clock:         &recordEvsWorldClock{clock: self.clock},
+		Log:           sidecar.NewNoopLogger(),
+		Settings:      sidecar.DefaultEvsSettings(),
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.t.Cleanup(client.Close)
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.clients[sidecarId] = client
+	return client
+}
+
+// RECORD-M2-03's conformance suite on T2: the binding over the real engine keeps every rule the fake keeps.
+func TestRecordEvsStreamsConformance(t *testing.T) {
+	sidecartest.RunRecordStreamsSuite(t, newRecordEvsWorld(t))
+}
+
+// A push of one entry a path, the test codec's rows, at the world's pin.
+func recordEvsWorldPush(world *recordEvsWorld, writerId sidecar.Id, paths ...string) *sidecar.RecordStreamPush {
+	push := &sidecar.RecordStreamPush{PushId: sidecar.NewEvsPushId(), WriterSidecarId: writerId, SlotId: sidecar.NewEvsSlotId(), AuthPin: world.Pin()}
+	for index, path := range paths {
+		row := make([]byte, recordEvsTestRowByteCount)
+		if _, err := rand.Read(row); err != nil {
+			world.t.Fatal(err)
+		}
+		push.SlotRows = append(push.SlotRows, &sidecar.RecordSlotRow{KeyIndex: uint32(index), Row: row})
+		push.Entries = append(push.Entries, &sidecar.RecordStreamEntry{Path: path, Entry: []byte("entry " + path)})
+	}
+	return push
+}
+
+// The routes of sent that write: uploads, pushes and slot deletions.
+func recordEvsWrites(sent []string) []string {
+	writes := []string{}
+	for _, request := range sent {
+		if strings.HasPrefix(request, http.MethodPut) || strings.HasSuffix(request, "/push") || strings.HasSuffix(request, "/slots/delete") {
+			writes = append(writes, request)
+		}
+	}
+	return writes
+}
+
+// The production codec while question record-m2-01-slot-row-salt is open: a push of RECORD.md's rows is refused
+// before anything reaches evs, and a row slot opens nothing, while a deposit, whose key and salt ride in its batch,
+// goes as it would.
+func TestRecordEvsStreamsRowsWaitOnTheirQuestion(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerId := sidecar.NewId()
+	if err := world.Grant(repoId, writerId, sidecartest.RecordStreamsScope{Read: true, Write: true, Deposit: true}); err != nil {
+		t.Fatal(err)
+	}
+	unsettled := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), sidecartest.NewFakeStore().Root(), nil)
+	push := recordEvsWorldPush(world, writerId, "e/0/0/1")
+	for _, row := range push.SlotRows {
+		row.Row = append(row.Row, make([]byte, sidecar.RecordSlotRowByteCount-recordEvsTestRowByteCount)...)
+	}
+	before := len(world.sent())
+	if _, err := unsettled.Append(t.Context(), repoId, push); !errors.Is(err, sidecar.ErrRecordSlotRowUnsettled) {
+		t.Fatalf("a push of RECORD.md's rows: %v", err)
+	}
+	if sent := world.sent()[before:]; len(sent) != 0 {
+		t.Fatalf("a refused push sent %v", sent)
+	}
+	// a slot the test codec wrote, which the production codec does not open
+	tested := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), sidecartest.NewFakeStore().Root(), recordEvsTestCodec{})
+	written := recordEvsWorldPush(world, writerId, "e/0/0/1")
+	if _, err := tested.Append(t.Context(), repoId, written); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unsettled.ReadSlot(t.Context(), repoId, written.SlotId); !errors.Is(err, sidecar.ErrRecordSlotRowUnsettled) {
+		t.Fatalf("a row slot opened: %v", err)
+	}
+	deposit := &sidecar.RecordStreamDeposit{PushId: sidecar.NewEvsPushId(), DepositorSidecarId: writerId, DepositId: sidecar.Id(sidecar.NewEvsRandomToken()), Batch: []byte("a batch"), AuthPin: world.Pin()}
+	if _, err := unsettled.Deposit(t.Context(), repoId, deposit); err != nil {
+		t.Fatalf("a deposit: %v", err)
+	}
+}
+
+// 412 GATE_CLOSED, recorded: the refused push id keeps its refusal, and the writer's rebuilt push, under a new push
+// id and new slot ids, commits after the rotation, its slot the new one with the rows it carried.
+func TestRecordEvsStreamsGateClosedRebuildsWithNewSlotIds(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerId := sidecar.NewId()
+	if err := world.Grant(repoId, writerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
+	streams := world.For(writerId)
+	push := recordEvsWorldPush(world, writerId, "e/0/0/1", "e/0/0/2")
+	world.SetGateClosed(repoId, true)
+	_, err = streams.Append(t.Context(), repoId, push)
+	if code, ok := sidecar.RecordStreamRefusalCode(err); !ok || code != protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED {
+		t.Fatalf("a push past the closed gate: %v", err)
+	}
+	world.SetGateClosed(repoId, false)
+	if _, err := streams.Append(t.Context(), repoId, push); err == nil {
+		t.Fatal("the refused push id committed after the gate opened")
+	}
+	rebuilt := *push
+	rebuilt.PushId = sidecar.NewEvsPushId()
+	rebuilt.SlotId = sidecar.NewEvsSlotId()
+	rebuilt.AuthPin = world.Pin()
+	commit, err := streams.Append(t.Context(), repoId, &rebuilt)
+	if err != nil {
+		t.Fatalf("the rebuilt push: %v", err)
+	}
+	versions, err := streams.ReadStream(t.Context(), repoId, writerId, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 1 || versions[0].Version != commit.Version || versions[0].PushId != rebuilt.PushId || versions[0].SlotId != rebuilt.SlotId {
+		t.Fatalf("the stream reads %+v", versions)
+	}
+	slot, err := streams.ReadSlot(t.Context(), repoId, rebuilt.SlotId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(slot.Rows) != 2 || !bytes.Equal(slot.Rows[1].Row, rebuilt.SlotRows[1].Row) {
+		t.Fatal("the rebuilt push's slot does not hold its rows")
+	}
+}
+
+// A writer that lost its local state reads its stream's counter back from evs: the newest push holds the highest, each
+// entry's path found from its tokens, in the push's order.
+func TestRecordEvsStreamsRestartResumesTheCounter(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerId := sidecar.NewId()
+	if err := world.Grant(repoId, writerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := world.For(writerId).Append(t.Context(), repoId, recordEvsWorldPush(world, writerId, "e/0/0/1", "e/0/0/2", "e/0/0/3")); err != nil {
+		t.Fatal(err)
+	}
+	restarted := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), sidecartest.NewFakeStore().Root(), recordEvsTestCodec{})
+	counter, err := sidecar.RecordStreamCounter(t.Context(), restarted, repoId, writerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counter != 3 {
+		t.Fatalf("the counter read back as %d", counter)
+	}
+	versions, err := restarted.ReadStream(t.Context(), repoId, writerId, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{}
+	for _, entry := range versions[0].Entries {
+		paths = append(paths, entry.Path)
+	}
+	if !slices.Equal(paths, []string{"e/0/0/1", "e/0/0/2", "e/0/0/3"}) {
+		t.Fatalf("the stream's paths read back as %v", paths)
+	}
+}
+
+// A push whose every answer was lost, as a crash loses it: the device restarted on the same store sends the journaled
+// statement again, which evs answers as the commit it made, so the stream holds the entries once; the same push id
+// with other entries is PUSH_ID_REUSED.
+func TestRecordEvsStreamsRetryAfterALostAnswerSendsTheSameStatement(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerId := sidecar.NewId()
+	if err := world.Grant(repoId, writerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
+	store := sidecartest.NewFakeStore().Root()
+	streams := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), store, recordEvsTestCodec{})
+	push := recordEvsWorldPush(world, writerId, "e/0/0/1", "e/0/0/2")
+	lost := errors.New("the answer was lost")
+	func() {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		world.afterServe = func(request *http.Request) error {
+			if strings.HasSuffix(request.URL.Path, "/push") {
+				return lost
+			}
+			return nil
+		}
+	}()
+	if _, err := streams.Append(t.Context(), repoId, push); err == nil {
+		t.Fatal("a push whose every answer was lost answered")
+	}
+	func() {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		world.afterServe = nil
+	}()
+	restarted := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), store, recordEvsTestCodec{})
+	commit, err := restarted.Append(t.Context(), repoId, push)
+	if err != nil {
+		t.Fatalf("the retry after the restart: %v", err)
+	}
+	versions, err := restarted.ReadStream(t.Context(), repoId, writerId, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 1 || versions[0].PushId != push.PushId || versions[0].Version != commit.Version || versions[0].TimeMillis != commit.TimeMillis {
+		t.Fatalf("the stream after the retry reads %+v", versions)
+	}
+	other := *push
+	other.Entries = []*sidecar.RecordStreamEntry{{Path: "e/0/0/3", Entry: []byte("another entry")}}
+	_, err = restarted.Append(t.Context(), repoId, &other)
+	if code, ok := sidecar.RecordStreamRefusalCode(err); !ok || code != protocol.EvsRefusalCode_EVS_REFUSAL_PUSH_ID_REUSED {
+		t.Fatalf("another statement under the push id: %v", err)
+	}
+}
+
+// evs's creates-only rule refuses a delta of a directory that stands, which §16.8's 2,048-entry directories need: a
+// stream's second push into a leaf directory is refused before it uploads anything, pending question
+// record-m3-12-stream-directory-rows, and the stream stays as its first push left it.
+func TestRecordEvsStreamsSecondPushIntoADirectoryWaitsOnItsQuestion(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerId := sidecar.NewId()
+	if err := world.Grant(repoId, writerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
+	streams := world.For(writerId)
+	if _, err := streams.Append(t.Context(), repoId, recordEvsWorldPush(world, writerId, "e/0/0/1")); err != nil {
+		t.Fatal(err)
+	}
+	before := len(recordEvsWrites(world.sent()))
+	if _, err := streams.Append(t.Context(), repoId, recordEvsWorldPush(world, writerId, "e/0/0/2")); !errors.Is(err, sidecar.ErrEvsStreamDirectoryDelta) {
+		t.Fatalf("a second push into e/0/0: %v", err)
+	}
+	if writes := recordEvsWrites(world.sent())[before:]; len(writes) != 0 {
+		t.Fatalf("the refused push wrote %v", writes)
+	}
+	versions, err := streams.ReadStream(t.Context(), repoId, writerId, 0)
+	if err != nil || len(versions) != 1 {
+		t.Fatalf("the stream reads %d versions: %v", len(versions), err)
+	}
+}
+
+// The world's verified state as the record reads it, for the vault rule: the world's member, and its vault the live
+// vault repo whose RepoCreate landed first.
+type recordEvsWorldAuth struct {
+	sidecar.RecordAuthUnavailable
+	world *recordEvsWorld
+}
+
+func (self recordEvsWorldAuth) Member(sidecarId sidecar.Id) (sidecar.Id, bool) {
+	self.world.stateLock.Lock()
+	defer self.world.stateLock.Unlock()
+	if self.world.tagged[sidecarId] {
+		return sidecar.Id{}, false
+	}
+	return self.world.memberId, true
+}
+
+func (self recordEvsWorldAuth) Vault(memberId sidecar.Id) (sidecar.Id, bool) {
+	self.world.stateLock.Lock()
+	defer self.world.stateLock.Unlock()
+	for _, repoId := range self.world.repoIds {
+		repo := self.world.repos[repoId]
+		if repo.kind == protocol.RepoKind_REPO_KIND_VAULT && repo.deletion == nil && memberId == self.world.memberId {
+			return repoId, true
+		}
+	}
+	return sidecar.Id{}, false
+}
+
+// Every member device of the world is a consented one that is not read_only; a tagged sidecar is none.
+type recordEvsWorldVaultAuthority struct {
+	world *recordEvsWorld
+}
+
+func (self recordEvsWorldVaultAuthority) VaultCreator(sidecarId sidecar.Id, memberId sidecar.Id) bool {
+	self.world.stateLock.Lock()
+	defer self.world.stateLock.Unlock()
+	return !self.world.tagged[sidecarId] && memberId == self.world.memberId
+}
+
+// A RecordVault of sidecarId on its own client and store, its waits the world's.
+func (self *recordEvsWorld) vault(sidecarId sidecar.Id, store sidecar.SidecarStore) *sidecar.RecordVault {
+	client := self.newClient(sidecarId, sidecartest.NewFakeStore().Root())
+	vault, err := sidecar.NewRecordVault(&sidecar.RecordVaultArgs{
+		SidecarId: sidecarId, Client: client, Auth: func() sidecar.RecordAuthView { return recordEvsWorldAuth{world: self} },
+		Authority: recordEvsWorldVaultAuthority{world: self}, Store: store, Clock: &recordEvsWorldClock{clock: self.clock},
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return vault
+}
+
+// The world's live vault repos, in the order their RepoCreate landed.
+func (self *recordEvsWorld) liveVaults() []sidecar.Id {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	live := []sidecar.Id{}
+	for _, repoId := range self.repoIds {
+		if repo := self.repos[repoId]; repo.kind == protocol.RepoKind_REPO_KIND_VAULT && repo.deletion == nil {
+			live = append(live, repoId)
+		}
+	}
+	return live
+}
+
+// Two devices of one member race to make its vault: the second files its RepoCreate while the first's is on its way,
+// and lands first. Each runs §11.12's creation and then reads the rule: the first to land is the vault, the other
+// device files RepoDelete{now} for its own empty repo, and both answer the one vault left.
+func TestRecordVaultEnsureLeavesOneVault(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	firstId := sidecar.NewId()
+	secondId := sidecar.NewId()
+	first := world.vault(firstId, sidecartest.NewFakeStore().Root())
+	second := world.vault(secondId, sidecartest.NewFakeStore().Root())
+	var secondVaultId sidecar.Id
+	var secondErr error
+	raced := false
+	func() {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		world.beforeLand = func(signerId sidecar.Id, signedType bridge.SignedType, body proto.Message) {
+			if signerId != firstId || signedType != bridge.SignedType_SIGNED_REPO_CREATE || raced {
+				return
+			}
+			raced = true
+			// the second device's whole Ensure lands ahead of the first's RepoCreate
+			secondVaultId, secondErr = second.Ensure(t.Context())
+		}
+	}()
+	firstVaultId, err := first.Ensure(t.Context())
+	if err != nil {
+		t.Fatalf("the first device: %v", err)
+	}
+	if secondErr != nil {
+		t.Fatalf("the second device: %v", secondErr)
+	}
+	live := world.liveVaults()
+	if len(live) != 1 || live[0] != secondVaultId || firstVaultId != secondVaultId {
+		t.Fatalf("the vaults left %v, the devices answer %s and %s", live, firstVaultId, secondVaultId)
+	}
+	deleted := func() []*recordEvsWorldRepo {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		deleted := []*recordEvsWorldRepo{}
+		for _, repoId := range world.repoIds {
+			if repo := world.repos[repoId]; repo.deletion != nil {
+				deleted = append(deleted, repo)
+			}
+		}
+		return deleted
+	}()
+	if len(deleted) != 1 || !deleted[0].deletion.Now || deleted[0].deletion.SignerSidecarId != firstId {
+		t.Fatal("the losing vault's RepoDelete{now} is not the first device's")
+	}
+	// a later Ensure answers the vault and files nothing
+	statements := len(world.authLog.Tip().Pin().GetChain())
+	if again, err := first.Ensure(t.Context()); err != nil || again != secondVaultId {
+		t.Fatalf("a later Ensure: %s, %v", again, err)
+	}
+	if statements != len(world.authLog.Tip().Pin().GetChain()) {
+		t.Fatal("a later Ensure filed again")
+	}
+}
+
+// Only a consented, not read_only device of its member files the vault: a tagged sidecar files nothing.
+func TestRecordVaultEnsureRefusesANonCreator(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	taggedId := sidecar.NewId()
+	func() {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		world.tagged[taggedId] = true
+	}()
+	vault := world.vault(taggedId, sidecartest.NewFakeStore().Root())
+	if _, err := vault.Ensure(t.Context()); !errors.Is(err, sidecar.ErrRecordVaultNotCreator) {
+		t.Fatalf("a tagged sidecar's Ensure: %v", err)
+	}
+	if live := world.liveVaults(); len(live) != 0 {
+		t.Fatalf("a tagged sidecar filed %v", live)
+	}
+}
+
+// A device killed after its RepoCreate landed and before the creation finished resumes from its journal: it files no
+// second RepoCreate, finishes the repo, and answers it as the vault.
+func TestRecordVaultEnsureResumesFromItsJournal(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	deviceId := sidecar.NewId()
+	store := sidecartest.NewFakeStore().Root()
+	cut := errors.New("killed before the repo was placed")
+	func() {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		world.afterServe = func(request *http.Request) error {
+			if request.Method == http.MethodPut && strings.HasPrefix(request.URL.Path, "/evs/v1/repos/") && !strings.Contains(request.URL.Path, "/segments/") {
+				return cut
+			}
+			return nil
+		}
+	}()
+	if _, err := world.vault(deviceId, store).Ensure(t.Context()); err == nil {
+		t.Fatal("an Ensure whose creation was cut short answered")
+	}
+	func() {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		world.afterServe = nil
+	}()
+	filed := world.liveVaults()
+	if len(filed) != 1 {
+		t.Fatalf("%d vaults filed before the kill", len(filed))
+	}
+	vaultId, err := world.vault(deviceId, store).Ensure(t.Context())
+	if err != nil {
+		t.Fatalf("the resumed Ensure: %v", err)
+	}
+	if live := world.liveVaults(); len(live) != 1 || vaultId != filed[0] {
+		t.Fatalf("the resumed Ensure answers %s with %v live", vaultId, live)
+	}
+}
+
+// evs takes an ERASE under a preservation hold of the repo (owner decision 133): holds pause sweeps and GC, never a
+// person's shredding, so the key goes and the ERASE reads back while the hold stands.
+func TestRecordEvsStreamsEraseUnderAHold(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminId := sidecar.NewId()
+	if err := world.Grant(repoId, adminId, sidecartest.RecordStreamsScope{Read: true, Write: true, Admin: true}); err != nil {
+		t.Fatal(err)
+	}
+	streams := world.For(adminId)
+	push := recordEvsWorldPush(world, adminId, "e/0/0/1", "e/0/0/2")
+	if _, err := streams.Append(t.Context(), repoId, push); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := sidecar.EncodeHoldRecord(&sidecar.HoldRecord{
+		NetworkId: world.networkId, CaseId: sidecar.NewId(), Kind: sidecar.HoldKindPreserve2703f,
+		Scope: sidecar.HoldScope{RepoIds: []sidecar.Id{repoId}}, PlaceTime: world.clock.Now(), ExpireTime: world.clock.Now().Add(90 * 24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := world.cluster.PutIfNoneMatch(t.Context(), sidecar.HoldObjectKey(world.networkId, sidecar.NewId()), hold, nil); err != nil {
+		t.Fatal(err)
+	}
+	erase := &sidecar.RecordStreamErase{
+		PushId: sidecar.NewEvsPushId(), ErasureId: sidecar.NewId(), Complete: true,
+		Keys: []*sidecar.RecordSlotKey{{SlotId: push.SlotId, KeyIndex: 0}}, SealedNote: []byte("an erasure's note"),
+	}
+	if _, err := streams.Erase(t.Context(), repoId, erase); err != nil {
+		t.Fatalf("an ERASE under a hold: %v", err)
+	}
+	slot, err := streams.ReadSlot(t.Context(), repoId, push.SlotId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(slot.Rows) != 1 || slot.Rows[0].KeyIndex != 1 {
+		t.Fatalf("under the hold the slot holds %d rows", len(slot.Rows))
+	}
+	erasures, err := streams.ReadErasures(t.Context(), repoId, 0)
+	if err != nil || len(erasures) != 1 || erasures[0].ErasureId != erase.ErasureId || !bytes.Equal(erasures[0].SealedNote, erase.SealedNote) {
+		t.Fatalf("the ERASE reads back as %v: %v", erasures, err)
+	}
+}

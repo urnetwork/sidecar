@@ -2,11 +2,16 @@
 // test reaches through For, carrying the scope Grant gave it. It keeps §11.8's refs table and §11.12 rather than
 // echoing what it is given:
 //
-//   - a stream takes pushes from its own sidecar alone, at rw, and only creates paths: 409 REF_MODE otherwise;
-//   - a deposit goes only to its depositor's own ref, at deposit, creating its id, and a receipt-only depositor's
-//     stays within §11.12's 4 KiB and 256 a UTC day per repo, else 429 RESOURCE_EXHAUSTED;
-//   - reads of streams, slots and erasures take read, reads of deposits and CONSUME take rw, and an ERASE takes admin,
-//     each else 403 SCOPE;
+//   - a stream takes pushes from its own sidecar alone, at rw, 409 REF_MODE otherwise, and only creates paths: a path
+//     that stands is 409 PATH_CONFLICT, as evs's creates-only rule answers (5c's change shape), and a push naming a
+//     path twice is INVALID;
+//   - a deposit goes only to its depositor's own ref, at deposit, 409 REF_MODE otherwise, creating its id, 409
+//     PATH_CONFLICT for an id that stands, and a receipt-only depositor's stays within §11.12's 4 KiB and 256 a UTC
+//     day per repo, else 429 RESOURCE_EXHAUSTED (evs answers the size cap 403 QUOTA_LIMIT);
+//   - reads of streams, slots, deposits and erasures take read, a CONSUME takes rw, and an ERASE takes admin, each
+//     else 403 SCOPE, as evs's routes do: any reader opens a deposit, since the drop key derives from RK_g;
+//   - a CONSUME removes the deposits that stand and leaves out those gone, as EvsRepo.Consume reads first, and one
+//     naming none that stands is 409 PATH_CONFLICT;
 //   - an ERASE takes its keys out of their slots, so a slot read returns no erased row, and one naming no key a slot
 //     still holds is 409 NOTHING_TO_ERASE, recorded;
 //   - a push id keeps its outcome: a retry of the same statement answers the commit it made, or the refusal recorded
@@ -23,10 +28,11 @@
 //   - RemoveStreamEntries takes entry files out of a stream as a committed BASE does (§11.8), leaving its versions.
 //
 // It holds no format code: entries, slot rows, batches and notes are the caller's bytes, kept and returned as they
-// came, and nothing is sealed, tokenized or verified. What it does not keep: the pins a push declares, beyond
-// GATE_CLOSED on demand; statements and their replay; segments and padding; the storage limit and DIRECTORY_FULL;
-// BASE's own statements, beyond RemoveStreamEntries' effect on a stream; drop keys; and deposit slots, which the
-// binding keeps beside each deposit.
+// came, and nothing is sealed, tokenized or verified. A deposit's slot holds one key at index 0 with no bytes, which an
+// ERASE takes as any key and a CONSUME deletes with its deposit; a deposit whose key an ERASE took still reads, where
+// evs's would no longer open. What it does not keep: the pins a push declares, beyond GATE_CLOSED on demand;
+// statements and their replay; segments and padding; the storage limit and DIRECTORY_FULL; BASE's own statements,
+// beyond RemoveStreamEntries' effect on a stream; and drop keys.
 //
 // Safe for concurrent use. Barriers and subscribers run with no lock held.
 
@@ -505,11 +511,16 @@ func (self *fakeRecordStreamsClient) Append(ctx context.Context, repoId sidecar.
 		}
 		created := map[string]bool{}
 		for _, entry := range push.Entries {
-			if entry.Path == "" || stream.paths[entry.Path] || created[entry.Path] {
-				// creates only (§11.8's refs table)
-				return nil, repo.refuseWithLock(push.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE)
+			if entry.Path == "" || created[entry.Path] {
+				return nil, repo.refuseWithLock(push.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 			}
 			created[entry.Path] = true
+		}
+		for _, entry := range push.Entries {
+			if stream.paths[entry.Path] {
+				// creates only (§11.8's refs table), as evs's 5c answers a write of a path that stands
+				return nil, repo.refuseWithLock(push.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)
+			}
 		}
 		repo.streams[self.sidecarId] = stream
 		stream.version += 1
@@ -656,8 +667,8 @@ func (self *fakeRecordStreamsClient) Deposit(ctx context.Context, repoId sidecar
 			repo.deposits[self.sidecarId] = ref
 		}
 		if ref.depositIds[deposit.DepositId] {
-			// creates only (§11.8's refs table)
-			return nil, repo.refuseWithLock(deposit.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE)
+			// creates only (§11.8's refs table), as evs's 5g answers a creation of an id that stands
+			return nil, repo.refuseWithLock(deposit.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)
 		}
 		ref.depositIds[deposit.DepositId] = true
 		ref.version += 1
@@ -665,6 +676,9 @@ func (self *fakeRecordStreamsClient) Deposit(ctx context.Context, repoId sidecar
 			repo.receiptCounts[receiptDay] += 1
 		}
 		commit := &sidecar.RecordStreamCommit{Version: ref.version, TimeMillis: now.UnixMilli()}
+		// the deposit's one key, at index 0 of a slot of its own, which an ERASE or the CONSUME takes
+		slotId := sidecar.NewEvsSlotId()
+		repo.slots[slotId] = map[uint32][]byte{0: nil}
 		ref.deposits = append(ref.deposits, &sidecar.RecordStreamDepositVersion{
 			Version:    commit.Version,
 			PushId:     deposit.PushId,
@@ -672,6 +686,7 @@ func (self *fakeRecordStreamsClient) Deposit(ctx context.Context, repoId sidecar
 			AuthPin:    fakeRecordClonePin(deposit.AuthPin),
 			DepositId:  deposit.DepositId,
 			Batch:      bytes.Clone(deposit.Batch),
+			SlotId:     slotId,
 		})
 		repo.raiseWithLock(FakeRecordRef{Kind: FakeRecordRefDeposit, SidecarId: self.sidecarId})
 		return repo.commitWithLock(deposit.PushId, statement, commit), nil
@@ -681,7 +696,7 @@ func (self *fakeRecordStreamsClient) Deposit(ctx context.Context, repoId sidecar
 func (self *fakeRecordStreamsClient) DepositRefs(ctx context.Context, repoId sidecar.Id) ([]*sidecar.RecordStreamHead, error) {
 	heads := []*sidecar.RecordStreamHead{}
 	err := self.read("deposit_refs", repoId, func(repo *fakeRecordRepo, scope RecordStreamsScope) error {
-		if !scope.Write {
+		if !scope.Read && !scope.Write {
 			return fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
 		}
 		for depositorId, ref := range repo.deposits {
@@ -699,7 +714,7 @@ func (self *fakeRecordStreamsClient) DepositRefs(ctx context.Context, repoId sid
 func (self *fakeRecordStreamsClient) ReadDeposits(ctx context.Context, repoId sidecar.Id, depositorSidecarId sidecar.Id) ([]*sidecar.RecordStreamDepositVersion, error) {
 	deposits := []*sidecar.RecordStreamDepositVersion{}
 	err := self.read("read_deposits", repoId, func(repo *fakeRecordRepo, scope RecordStreamsScope) error {
-		if !scope.Write {
+		if !scope.Read && !scope.Write {
 			return fakeRecordReadRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
 		}
 		ref := repo.deposits[depositorSidecarId]
@@ -747,16 +762,19 @@ func (self *fakeRecordStreamsClient) Consume(ctx context.Context, repoId sidecar
 		if ref == nil {
 			return nil, repo.refuseWithLock(consume.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)
 		}
-		for _, depositId := range consume.DepositIds {
-			held := slices.ContainsFunc(ref.deposits, func(deposit *sidecar.RecordStreamDepositVersion) bool {
-				return deposit.DepositId == depositId
-			})
-			if !held {
-				return nil, repo.refuseWithLock(consume.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)
-			}
+		standing := slices.ContainsFunc(ref.deposits, func(deposit *sidecar.RecordStreamDepositVersion) bool {
+			return slices.Contains(consume.DepositIds, deposit.DepositId)
+		})
+		if !standing {
+			return nil, repo.refuseWithLock(consume.PushId, statement, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)
 		}
 		ref.deposits = slices.DeleteFunc(ref.deposits, func(deposit *sidecar.RecordStreamDepositVersion) bool {
-			return slices.Contains(consume.DepositIds, deposit.DepositId)
+			consumed := slices.Contains(consume.DepositIds, deposit.DepositId)
+			if consumed {
+				// evs deletes a consumed deposit's slot (§11.12)
+				delete(repo.slots, deposit.SlotId)
+			}
+			return consumed
 		})
 		ref.version += 1
 		commit := &sidecar.RecordStreamCommit{Version: ref.version, TimeMillis: self.world.clock.Now().UnixMilli()}
@@ -774,7 +792,11 @@ func (self *fakeRecordStreamsClient) Erase(ctx context.Context, repoId sidecar.I
 		if erase == nil {
 			return nil, fakeRecordRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		}
-		parts := [][]byte{[]byte("erase"), erase.SealedNote}
+		complete := []byte{0}
+		if erase.Complete {
+			complete[0] = 1
+		}
+		parts := [][]byte{[]byte("erase"), erase.ErasureId[:], complete, erase.SealedNote}
 		for _, key := range erase.Keys {
 			parts = append(parts, key.SlotId[:], binary.BigEndian.AppendUint32(nil, key.KeyIndex))
 		}
@@ -802,6 +824,8 @@ func (self *fakeRecordStreamsClient) Erase(ctx context.Context, repoId sidecar.I
 			PushId:          erase.PushId,
 			TimeMillis:      self.world.clock.Now().UnixMilli(),
 			EraserSidecarId: self.sidecarId,
+			ErasureId:       erase.ErasureId,
+			Complete:        erase.Complete,
 			SealedNote:      bytes.Clone(erase.SealedNote),
 		}
 		for _, key := range erase.Keys {

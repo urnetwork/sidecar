@@ -23,7 +23,7 @@ import (
 )
 
 // What the suite needs of a world of RecordStreams: fresh repos, scopes to grant on them, the gate, evs's clock, and
-// each sidecar's view. FakeRecordStreams is one; RECORD-M3-12's harness on T2 is the other.
+// each sidecar's view. FakeRecordStreams is one; RECORD-M3-12's harness on T2 is the other (record_evs_test.go).
 type RecordStreamsWorld interface {
 	// A fresh record-class repo, its refs empty and no scope granted.
 	NewRepo(ctx context.Context) (sidecar.Id, error)
@@ -35,6 +35,13 @@ type RecordStreamsWorld interface {
 	Advance(duration time.Duration)
 	// What sidecarId reaches, carrying its scope.
 	For(sidecarId sidecar.Id) sidecar.RecordStreams
+}
+
+// A world whose slot rows are another width than RECORD.md section 5.2's 64 B: the T2 harness's, whose row codec wraps
+// a row as one of evs's 32 B object keys while RECORD.md's rows wait on question record-m2-01-slot-row-salt. A world
+// that does not implement it takes 64 B rows.
+type RecordStreamsWorldRows interface {
+	RowByteCount() int
 }
 
 // How long one case may wait on the world before it fails with what it was waiting for. Real time, so only ever a
@@ -81,34 +88,49 @@ func recordStreamsSuiteCases() []recordStreamsSuiteCase {
 	}
 }
 
+// A world whose pushes must declare a pin of its own chain, as evs's gate and a binding's verified state hold them
+// to: the T2 harness's. A world that does not implement it takes the suite's own.
+type RecordStreamsWorldPin interface {
+	Pin() *bridge.AuthPin
+}
+
 // A pin the suite's pushes declare.
-func recordStreamsSuitePin() *bridge.AuthPin {
+func recordStreamsSuitePin(world RecordStreamsWorld) *bridge.AuthPin {
+	if pins, ok := world.(RecordStreamsWorldPin); ok {
+		return pins.Pin()
+	}
 	return &bridge.AuthPin{Version: 7, Chain: bytes.Repeat([]byte{0x07}, 32)}
 }
 
-// A push of one entry a path, each keyed by a row of a fresh slot at its index.
-func recordStreamsSuitePush(writerId sidecar.Id, paths ...string) *sidecar.RecordStreamPush {
+// A push of one entry a path, each keyed by a row of a fresh slot at its index, the world's row width. Push, slot and
+// deposit ids are random, as the record's writer draws them: an Id's first 8 bytes repeat within a millisecond, and
+// evs knows a refused push by its push id's first 8 bytes (§11.8's refusal row).
+func recordStreamsSuitePush(world RecordStreamsWorld, writerId sidecar.Id, paths ...string) *sidecar.RecordStreamPush {
+	rowByteCount := sidecar.RecordSlotRowByteCount
+	if rows, ok := world.(RecordStreamsWorldRows); ok {
+		rowByteCount = rows.RowByteCount()
+	}
 	push := &sidecar.RecordStreamPush{
-		PushId:          sidecar.NewId(),
+		PushId:          sidecar.NewEvsPushId(),
 		WriterSidecarId: writerId,
-		SlotId:          sidecar.NewId(),
-		AuthPin:         recordStreamsSuitePin(),
+		SlotId:          sidecar.NewEvsSlotId(),
+		AuthPin:         recordStreamsSuitePin(world),
 	}
 	for index, path := range paths {
-		push.SlotRows = append(push.SlotRows, &sidecar.RecordSlotRow{KeyIndex: uint32(index), Row: bytes.Repeat([]byte{byte(index + 1)}, 64)})
+		push.SlotRows = append(push.SlotRows, &sidecar.RecordSlotRow{KeyIndex: uint32(index), Row: bytes.Repeat([]byte{byte(index + 1)}, rowByteCount)})
 		push.Entries = append(push.Entries, &sidecar.RecordStreamEntry{Path: path, Entry: []byte("entry " + path)})
 	}
 	return push
 }
 
 // A deposit of a batch of byteCount bytes.
-func recordStreamsSuiteDeposit(depositorId sidecar.Id, byteCount int) *sidecar.RecordStreamDeposit {
+func recordStreamsSuiteDeposit(world RecordStreamsWorld, depositorId sidecar.Id, byteCount int) *sidecar.RecordStreamDeposit {
 	return &sidecar.RecordStreamDeposit{
-		PushId:             sidecar.NewId(),
+		PushId:             sidecar.NewEvsPushId(),
 		DepositorSidecarId: depositorId,
-		DepositId:          sidecar.NewId(),
+		DepositId:          sidecar.Id(sidecar.NewEvsRandomToken()),
 		Batch:              bytes.Repeat([]byte{0x5a}, byteCount),
-		AuthPin:            recordStreamsSuitePin(),
+		AuthPin:            recordStreamsSuitePin(world),
 	}
 }
 
@@ -151,7 +173,7 @@ func caseRecordStreamsPushReadsBack(ctx context.Context, world RecordStreamsWorl
 		return err
 	}
 	streams := world.For(writerId)
-	push := recordStreamsSuitePush(writerId, "e/0/0/1", "e/0/0/2")
+	push := recordStreamsSuitePush(world, writerId, "e/0/0/1", "e/0/0/2")
 	commit, err := streams.Append(ctx, repoId, push)
 	if err != nil {
 		return err
@@ -173,7 +195,9 @@ func caseRecordStreamsPushReadsBack(ctx context.Context, world RecordStreamsWorl
 	if version.Version != 1 || version.PushId != push.PushId || version.SlotId != push.SlotId || version.TimeMillis != commit.TimeMillis {
 		return fmt.Errorf("the push read back as %+v", version)
 	}
-	if version.AuthPin.GetVersion() != push.AuthPin.GetVersion() || !bytes.Equal(version.AuthPin.GetChain(), push.AuthPin.GetChain()) {
+	// the pin the push declared at least: a binding may declare its newer verified state's
+	if version.AuthPin.GetVersion() < push.AuthPin.GetVersion() ||
+		(version.AuthPin.GetVersion() == push.AuthPin.GetVersion() && !bytes.Equal(version.AuthPin.GetChain(), push.AuthPin.GetChain())) {
 		return errors.New("the push's pin did not read back")
 	}
 	if len(version.Entries) != len(push.Entries) {
@@ -213,16 +237,16 @@ func caseRecordStreamsCreatesOnly(ctx context.Context, world RecordStreamsWorld,
 		return err
 	}
 	streams := world.For(writerId)
-	if _, err := streams.Append(ctx, repoId, recordStreamsSuitePush(writerId, "e/0/0/1", "e/0/0/2")); err != nil {
+	if _, err := streams.Append(ctx, repoId, recordStreamsSuitePush(world, writerId, "e/0/0/1", "e/0/0/2")); err != nil {
 		return err
 	}
-	rewrite := recordStreamsSuitePush(writerId, "e/0/0/2", "e/0/0/3")
-	if err := wantRecordStreamRefusal("a push rewriting a path", errOf(streams.Append(ctx, repoId, rewrite)), protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE); err != nil {
+	rewrite := recordStreamsSuitePush(world, writerId, "e/0/0/2", "e/0/0/3")
+	if err := wantRecordStreamRefusal("a push rewriting a path", errOf(streams.Append(ctx, repoId, rewrite)), protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT); err != nil {
 		return err
 	}
-	twice := recordStreamsSuitePush(writerId, "e/0/0/4", "e/0/0/4")
-	if err := wantRecordStreamRefusal("a push creating a path twice", errOf(streams.Append(ctx, repoId, twice)), protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE); err != nil {
-		return err
+	twice := recordStreamsSuitePush(world, writerId, "e/0/0/4", "e/0/0/4")
+	if _, err := streams.Append(ctx, repoId, twice); err == nil {
+		return errors.New("a push creating a path twice committed")
 	}
 	if version, err := recordStreamVersion(ctx, streams, repoId, writerId); err != nil || version != 1 {
 		return fmt.Errorf("a refused push moved the stream to %d: %v", version, err)
@@ -240,17 +264,17 @@ func caseRecordStreamsOwnStreamOnly(ctx context.Context, world RecordStreamsWorl
 	if err != nil {
 		return err
 	}
-	if _, err := world.For(writerId).Append(ctx, repoId, recordStreamsSuitePush(writerId, "e/0/0/1")); err != nil {
+	if _, err := world.For(writerId).Append(ctx, repoId, recordStreamsSuitePush(world, writerId, "e/0/0/1")); err != nil {
 		return err
 	}
-	forged := recordStreamsSuitePush(writerId, "e/0/0/2")
+	forged := recordStreamsSuitePush(world, writerId, "e/0/0/2")
 	if err := wantRecordStreamRefusal("another writer's push", errOf(world.For(otherId).Append(ctx, repoId, forged)), protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE); err != nil {
 		return err
 	}
 	if version, err := recordStreamVersion(ctx, world.For(writerId), repoId, writerId); err != nil || version != 1 {
 		return fmt.Errorf("another writer moved the stream to %d: %v", version, err)
 	}
-	forgedDeposit := recordStreamsSuiteDeposit(writerId, 512)
+	forgedDeposit := recordStreamsSuiteDeposit(world, writerId, 512)
 	return wantRecordStreamRefusal("a deposit to another's ref", errOf(world.For(otherId).Deposit(ctx, repoId, forgedDeposit)), protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE)
 }
 
@@ -262,30 +286,42 @@ func caseRecordStreamsScopes(ctx context.Context, world RecordStreamsWorld, repo
 	}
 	none := world.For(noneId)
 	reader := world.For(readerId)
-	checks := []struct {
+	// a sidecar with no scope, and a reader's push, CONSUME and ERASE, may be refused before evs is asked, by the
+	// binding's key holder, which seals for writers alone, so any refusal answers; a reader's deposit reaches evs,
+	// which refuses it 403 SCOPE
+	refusedChecks := []struct {
 		what string
 		err  error
 	}{
-		{what: "a push with no scope", err: errOf(none.Append(ctx, repoId, recordStreamsSuitePush(noneId, "e/0/0/1")))},
-		{what: "a push at read", err: errOf(reader.Append(ctx, repoId, recordStreamsSuitePush(readerId, "e/0/0/1")))},
+		{what: "a push with no scope", err: errOf(none.Append(ctx, repoId, recordStreamsSuitePush(world, noneId, "e/0/0/1")))},
 		{what: "a stream list with no scope", err: errOf(none.Streams(ctx, repoId))},
 		{what: "a stream read with no scope", err: errOf(none.ReadStream(ctx, repoId, readerId, 0))},
 		{what: "an erasure read with no scope", err: errOf(none.ReadErasures(ctx, repoId, 0))},
-		{what: "a deposit at read", err: errOf(reader.Deposit(ctx, repoId, recordStreamsSuiteDeposit(readerId, 512)))},
-		{what: "a deposit list at read", err: errOf(reader.DepositRefs(ctx, repoId))},
-		{what: "a deposit read at read", err: errOf(reader.ReadDeposits(ctx, repoId, noneId))},
+		{what: "a deposit list with no scope", err: errOf(none.DepositRefs(ctx, repoId))},
+		{what: "a push at read", err: errOf(reader.Append(ctx, repoId, recordStreamsSuitePush(world, readerId, "e/0/0/1")))},
 		{
 			what: "a CONSUME at read",
 			err: errOf(reader.Consume(ctx, repoId, &sidecar.RecordStreamConsume{
-				PushId: sidecar.NewId(), DepositorSidecarId: noneId, DepositIds: []sidecar.Id{sidecar.NewId()},
+				PushId: sidecar.NewEvsPushId(), DepositorSidecarId: noneId, DepositIds: []sidecar.Id{sidecar.NewId()},
 			})),
 		},
 		{
 			what: "an ERASE at read",
 			err: errOf(reader.Erase(ctx, repoId, &sidecar.RecordStreamErase{
-				PushId: sidecar.NewId(), Keys: []*sidecar.RecordSlotKey{{SlotId: sidecar.NewId(), KeyIndex: 0}},
+				PushId: sidecar.NewEvsPushId(), Keys: []*sidecar.RecordSlotKey{{SlotId: sidecar.NewId(), KeyIndex: 0}},
 			})),
 		},
+	}
+	for _, check := range refusedChecks {
+		if check.err == nil {
+			return fmt.Errorf("%s: not refused", check.what)
+		}
+	}
+	checks := []struct {
+		what string
+		err  error
+	}{
+		{what: "a deposit at read", err: errOf(reader.Deposit(ctx, repoId, recordStreamsSuiteDeposit(world, readerId, 512)))},
 	}
 	for _, check := range checks {
 		if err := wantRecordStreamRefusal(check.what, check.err, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE); err != nil {
@@ -301,7 +337,7 @@ func caseRecordStreamsRetryKeepsSlotIds(ctx context.Context, world RecordStreams
 		return err
 	}
 	streams := world.For(writerId)
-	push := recordStreamsSuitePush(writerId, "e/0/0/1")
+	push := recordStreamsSuitePush(world, writerId, "e/0/0/1")
 	commit, err := streams.Append(ctx, repoId, push)
 	if err != nil {
 		return err
@@ -314,7 +350,7 @@ func caseRecordStreamsRetryKeepsSlotIds(ctx context.Context, world RecordStreams
 		return fmt.Errorf("a retry answered %+v, the push %+v", retried, commit)
 	}
 	reslotted := *push
-	reslotted.SlotId = sidecar.NewId()
+	reslotted.SlotId = sidecar.NewEvsSlotId()
 	if err := wantRecordStreamRefusal("a retry with new slot ids", errOf(streams.Append(ctx, repoId, &reslotted)), protocol.EvsRefusalCode_EVS_REFUSAL_PUSH_ID_REUSED); err != nil {
 		return err
 	}
@@ -330,7 +366,7 @@ func caseRecordStreamsGateClosed(ctx context.Context, world RecordStreamsWorld, 
 		return err
 	}
 	streams := world.For(writerId)
-	push := recordStreamsSuitePush(writerId, "e/0/0/1")
+	push := recordStreamsSuitePush(world, writerId, "e/0/0/1")
 	world.SetGateClosed(repoId, true)
 	_, err := streams.Append(ctx, repoId, push)
 	if err := wantRecordStreamRefusal("a push past a closed gate", err, protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED); err != nil {
@@ -346,8 +382,8 @@ func caseRecordStreamsGateClosed(ctx context.Context, world RecordStreamsWorld, 
 		return err
 	}
 	rebuilt := *push
-	rebuilt.PushId = sidecar.NewId()
-	rebuilt.SlotId = sidecar.NewId()
+	rebuilt.PushId = sidecar.NewEvsPushId()
+	rebuilt.SlotId = sidecar.NewEvsSlotId()
 	commit, err := streams.Append(ctx, repoId, &rebuilt)
 	if err != nil {
 		return fmt.Errorf("a rebuilt push: %v", err)
@@ -369,23 +405,27 @@ func caseRecordStreamsReceiptBudget(ctx context.Context, world RecordStreamsWorl
 		return err
 	}
 	receipts := world.For(receiptId)
-	if err := wantRecordStreamRefusal("a 5 KiB receipt", errOf(receipts.Deposit(ctx, repoId, recordStreamsSuiteDeposit(receiptId, 5*1024))), protocol.EvsRefusalCode_EVS_REFUSAL_RESOURCE_EXHAUSTED); err != nil {
-		return err
+	// past 4 KiB: evs answers its size cap 403 QUOTA_LIMIT where §11.12 says 429, so either answers
+	oversize := errOf(receipts.Deposit(ctx, repoId, recordStreamsSuiteDeposit(world, receiptId, 5*1024)))
+	if wantRecordStreamRefusal("a 5 KiB receipt", oversize, protocol.EvsRefusalCode_EVS_REFUSAL_QUOTA_LIMIT) != nil {
+		if err := wantRecordStreamRefusal("a 5 KiB receipt", oversize, protocol.EvsRefusalCode_EVS_REFUSAL_RESOURCE_EXHAUSTED); err != nil {
+			return err
+		}
 	}
 	for count := 1; count <= 256; count += 1 {
-		if _, err := receipts.Deposit(ctx, repoId, recordStreamsSuiteDeposit(receiptId, 1024)); err != nil {
+		if _, err := receipts.Deposit(ctx, repoId, recordStreamsSuiteDeposit(world, receiptId, 1024)); err != nil {
 			return fmt.Errorf("receipt %d: %v", count, err)
 		}
 	}
-	if err := wantRecordStreamRefusal("receipt 257", errOf(receipts.Deposit(ctx, repoId, recordStreamsSuiteDeposit(receiptId, 1024))), protocol.EvsRefusalCode_EVS_REFUSAL_RESOURCE_EXHAUSTED); err != nil {
+	if err := wantRecordStreamRefusal("receipt 257", errOf(receipts.Deposit(ctx, repoId, recordStreamsSuiteDeposit(world, receiptId, 1024))), protocol.EvsRefusalCode_EVS_REFUSAL_RESOURCE_EXHAUSTED); err != nil {
 		return err
 	}
 	// Another depositor is not a receipt-only one: no such cap.
-	if _, err := world.For(depositorId).Deposit(ctx, repoId, recordStreamsSuiteDeposit(depositorId, 5*1024)); err != nil {
+	if _, err := world.For(depositorId).Deposit(ctx, repoId, recordStreamsSuiteDeposit(world, depositorId, 5*1024)); err != nil {
 		return fmt.Errorf("a 5 KiB deposit from a writer's depositor: %v", err)
 	}
 	world.Advance(24 * time.Hour)
-	if _, err := receipts.Deposit(ctx, repoId, recordStreamsSuiteDeposit(receiptId, 1024)); err != nil {
+	if _, err := receipts.Deposit(ctx, repoId, recordStreamsSuiteDeposit(world, receiptId, 1024)); err != nil {
 		return fmt.Errorf("a receipt the next day: %v", err)
 	}
 	return nil
@@ -403,16 +443,16 @@ func caseRecordStreamsDepositConsume(ctx context.Context, world RecordStreamsWor
 	}
 	depositor := world.For(depositorId)
 	ingester := world.For(ingesterId)
-	first := recordStreamsSuiteDeposit(depositorId, 512)
-	second := recordStreamsSuiteDeposit(depositorId, 768)
+	first := recordStreamsSuiteDeposit(world, depositorId, 512)
+	second := recordStreamsSuiteDeposit(world, depositorId, 768)
 	for _, deposit := range []*sidecar.RecordStreamDeposit{first, second} {
 		if _, err := depositor.Deposit(ctx, repoId, deposit); err != nil {
 			return err
 		}
 	}
-	again := recordStreamsSuiteDeposit(depositorId, 512)
+	again := recordStreamsSuiteDeposit(world, depositorId, 512)
 	again.DepositId = first.DepositId
-	if err := wantRecordStreamRefusal("a deposit reusing an id", errOf(depositor.Deposit(ctx, repoId, again)), protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE); err != nil {
+	if err := wantRecordStreamRefusal("a deposit reusing an id", errOf(depositor.Deposit(ctx, repoId, again)), protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT); err != nil {
 		return err
 	}
 	refs, err := ingester.DepositRefs(ctx, repoId)
@@ -430,7 +470,7 @@ func caseRecordStreamsDepositConsume(ctx context.Context, world RecordStreamsWor
 		deposits[0].Version >= deposits[1].Version || !bytes.Equal(deposits[1].Batch, second.Batch) {
 		return errors.New("the deposits did not read back in version order")
 	}
-	consume := &sidecar.RecordStreamConsume{PushId: sidecar.NewId(), DepositorSidecarId: depositorId, DepositIds: []sidecar.Id{first.DepositId}}
+	consume := &sidecar.RecordStreamConsume{PushId: sidecar.NewEvsPushId(), DepositorSidecarId: depositorId, DepositIds: []sidecar.Id{first.DepositId}}
 	if _, err := ingester.Consume(ctx, repoId, consume); err != nil {
 		return err
 	}
@@ -442,7 +482,7 @@ func caseRecordStreamsDepositConsume(ctx context.Context, world RecordStreamsWor
 		return fmt.Errorf("%d deposits after a CONSUME", len(deposits))
 	}
 	// A second ingester's CONSUME of what is gone: the deposit reads as consumed either way.
-	late := &sidecar.RecordStreamConsume{PushId: sidecar.NewId(), DepositorSidecarId: depositorId, DepositIds: []sidecar.Id{first.DepositId}}
+	late := &sidecar.RecordStreamConsume{PushId: sidecar.NewEvsPushId(), DepositorSidecarId: depositorId, DepositIds: []sidecar.Id{first.DepositId}}
 	return wantRecordStreamRefusal("a CONSUME of a consumed deposit", errOf(ingester.Consume(ctx, repoId, late)), protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT)
 }
 
@@ -456,13 +496,15 @@ func caseRecordStreamsEraseRemovesKey(ctx context.Context, world RecordStreamsWo
 	if err != nil {
 		return err
 	}
-	push := recordStreamsSuitePush(writerId, "e/0/0/1", "e/0/0/2", "e/0/0/3")
+	push := recordStreamsSuitePush(world, writerId, "e/0/0/1", "e/0/0/2", "e/0/0/3")
 	if _, err := world.For(writerId).Append(ctx, repoId, push); err != nil {
 		return err
 	}
 	admin := world.For(adminId)
 	erase := &sidecar.RecordStreamErase{
-		PushId:     sidecar.NewId(),
+		PushId:     sidecar.NewEvsPushId(),
+		ErasureId:  sidecar.NewId(),
+		Complete:   true,
 		Keys:       []*sidecar.RecordSlotKey{{SlotId: push.SlotId, KeyIndex: 1}},
 		SealedNote: []byte("sealed note"),
 	}
@@ -486,6 +528,7 @@ func caseRecordStreamsEraseRemovesKey(ctx context.Context, world RecordStreamsWo
 		return err
 	}
 	if len(erasures) != 1 || erasures[0].PushId != erase.PushId || erasures[0].EraserSidecarId != adminId ||
+		erasures[0].ErasureId != erase.ErasureId || !erasures[0].Complete ||
 		!bytes.Equal(erasures[0].SealedNote, erase.SealedNote) || len(erasures[0].Keys) != 1 ||
 		*erasures[0].Keys[0] != *erase.Keys[0] {
 		return errors.New("the ERASE did not read back")
@@ -511,16 +554,16 @@ func caseRecordStreamsNothingToErase(ctx context.Context, world RecordStreamsWor
 	if err != nil {
 		return err
 	}
-	push := recordStreamsSuitePush(writerId, "e/0/0/1")
+	push := recordStreamsSuitePush(world, writerId, "e/0/0/1")
 	if _, err := world.For(writerId).Append(ctx, repoId, push); err != nil {
 		return err
 	}
 	admin := world.For(adminId)
 	key := &sidecar.RecordSlotKey{SlotId: push.SlotId, KeyIndex: 0}
-	if _, err := admin.Erase(ctx, repoId, &sidecar.RecordStreamErase{PushId: sidecar.NewId(), Keys: []*sidecar.RecordSlotKey{key}}); err != nil {
+	if _, err := admin.Erase(ctx, repoId, &sidecar.RecordStreamErase{PushId: sidecar.NewEvsPushId(), Keys: []*sidecar.RecordSlotKey{key}}); err != nil {
 		return err
 	}
-	again := &sidecar.RecordStreamErase{PushId: sidecar.NewId(), Keys: []*sidecar.RecordSlotKey{key}}
+	again := &sidecar.RecordStreamErase{PushId: sidecar.NewEvsPushId(), Keys: []*sidecar.RecordSlotKey{key}}
 	_, err = admin.Erase(ctx, repoId, again)
 	if err := wantRecordStreamRefusal("an ERASE of an erased key", err, protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE); err != nil {
 		return err
@@ -532,7 +575,7 @@ func caseRecordStreamsNothingToErase(ctx context.Context, world RecordStreamsWor
 	if err := wantRecordStreamRefusal("its retry", errOf(admin.Erase(ctx, repoId, again)), protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE); err != nil {
 		return err
 	}
-	unknown := &sidecar.RecordStreamErase{PushId: sidecar.NewId(), Keys: []*sidecar.RecordSlotKey{{SlotId: sidecar.NewId(), KeyIndex: 3}}}
+	unknown := &sidecar.RecordStreamErase{PushId: sidecar.NewEvsPushId(), Keys: []*sidecar.RecordSlotKey{{SlotId: sidecar.NewId(), KeyIndex: 3}}}
 	if err := wantRecordStreamRefusal("an ERASE of no slot", errOf(admin.Erase(ctx, repoId, unknown)), protocol.EvsRefusalCode_EVS_REFUSAL_NOTHING_TO_ERASE); err != nil {
 		return err
 	}
@@ -560,7 +603,7 @@ func caseRecordStreamsSubscribe(ctx context.Context, world RecordStreamsWorld, r
 		}
 	})
 	defer unsubscribe()
-	if _, err := streams.Append(ctx, repoId, recordStreamsSuitePush(writerId, "e/0/0/1")); err != nil {
+	if _, err := streams.Append(ctx, repoId, recordStreamsSuitePush(world, writerId, "e/0/0/1")); err != nil {
 		return err
 	}
 	select {
