@@ -164,7 +164,7 @@ func TestTlsAudienceRefusesAStaleOrForeignSession(t *testing.T) {
 		fixture.policy.members[memberId] = true
 	})
 	session := fixture.sealSession(t, memberId)
-	foreign, err := fixture.front.sessions.sealSession(tlsFrontTestOtherName, &tlsSession{
+	foreign, err := fixture.front.sessions.sealSession("https://"+tlsFrontTestOtherName, &tlsSession{
 		memberId: memberId, issueTime: fixture.clock.Now(), expireTime: fixture.clock.Now().Add(time.Hour),
 	})
 	if err != nil {
@@ -187,6 +187,29 @@ func TestTlsAudienceRefusesAStaleOrForeignSession(t *testing.T) {
 	fixture.clock.advance(fixture.settings.SessionLifetime)
 	if status := fetch(session); status != http.StatusUnauthorized {
 		t.Errorf("a session past its life: %d", status)
+	}
+	if dials, _ := fixture.backend.counts(); dials != 0 {
+		t.Errorf("%d dials", dials)
+	}
+}
+
+// D-TEAM-15's one origin: a session the host's 443 front sealed does not count on an 8443 endpoint of the same host
+// and network, though the browser sends it there, since cookies do not tell ports apart.
+func TestTlsAudienceSessionCountsOnItsOwnOriginAlone(t *testing.T) {
+	memberId := NewId()
+	fixture := newTlsFrontFixture(t, func(fixture *tlsFrontFixture) {
+		fixture.target.Name = "tls/8443/app"
+		fixture.policy.setGrant(protocol.AclAudience_ACL_AUDIENCE_MEMBERS, protocol.AclAppMode_ACL_APP_MODE_HTTP, nil)
+		fixture.policy.members[memberId] = true
+	})
+	request, err := http.NewRequest(http.MethodGet, "https://"+tlsFrontTestServerName+":8443/api", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set(tlsHttpHeaderFetchSite, tlsFetchSiteSameOrigin)
+	request.AddCookie(&http.Cookie{Name: tlsSessionCookieName, Value: fixture.sealSession(t, memberId)})
+	if response, _ := tlsFrontTestDo(t, fixture.httpClient(tlsAlpnHttp11), request); response.StatusCode != http.StatusUnauthorized {
+		t.Errorf("443's session on 8443: %d", response.StatusCode)
 	}
 	if dials, _ := fixture.backend.counts(); dials != 0 {
 		t.Errorf("%d dials", dials)

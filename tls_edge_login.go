@@ -37,6 +37,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,9 +95,15 @@ func newTlsEdgeLogin(front *TlsFront, issuerUrl string, client *http.Client) *tl
 	}
 }
 
-// The origin a connection's visitors are at, the issuer's client_id and the ID token's aud.
+// The origin a connection's visitors are at: the issuer's client_id, the ID token's aud, and what its sessions and
+// pending logins are sealed to, so a session counts on its own origin alone (D-TEAM-15), never on another port of the
+// host, though cookies do not tell ports apart.
 func tlsEdgeLoginOrigin(conn *TlsFrontConn) string {
-	return "https://" + conn.ServerName()
+	origin := "https://" + conn.ServerName()
+	if port := conn.front.target.port(); port != tlsEdgeLoginPort {
+		origin += ":" + strconv.Itoa(int(port))
+	}
+	return origin
 }
 
 // Where the visitor returns after login: the request's own path and query, unless it is too long, not a plain path,
@@ -131,7 +138,8 @@ func (self *tlsEdgeLogin) start(w http.ResponseWriter, r *http.Request, conn *Tl
 			return
 		}
 	}
-	value, err := self.front.sessions.sealPreLogin(conn.ServerName(), preLogin)
+	origin := tlsEdgeLoginOrigin(conn)
+	value, err := self.front.sessions.sealPreLogin(origin, preLogin)
 	if err != nil {
 		tlsHttpAnswer(w, http.StatusServiceUnavailable)
 		return
@@ -142,7 +150,6 @@ func (self *tlsEdgeLogin) start(w http.ResponseWriter, r *http.Request, conn *Tl
 	challenge := sha256.Sum256([]byte(verifier))
 	self.addPending(state, preLogin.expireTime, now)
 
-	origin := tlsEdgeLoginOrigin(conn)
 	query := url.Values{
 		"response_type":         {"code"},
 		"client_id":             {origin},
@@ -216,8 +223,8 @@ func (self *tlsEdgeLogin) callback(w http.ResponseWriter, r *http.Request, conn 
 		tlsHttpAnswer(w, http.StatusNotFound)
 		return
 	}
-	host := conn.ServerName()
-	preLogin := self.front.sessions.openPreLogin(view.preLogin, host, now)
+	origin := tlsEdgeLoginOrigin(conn)
+	preLogin := self.front.sessions.openPreLogin(view.preLogin, origin, now)
 	query := r.URL.Query()
 	state := query.Get("state")
 	if preLogin == nil || subtle.ConstantTimeCompare([]byte(state), []byte(base64.RawURLEncoding.EncodeToString(preLogin.state[:]))) != 1 ||
@@ -232,7 +239,6 @@ func (self *tlsEdgeLogin) callback(w http.ResponseWriter, r *http.Request, conn 
 		tlsHttpAnswer(w, http.StatusForbidden)
 		return
 	}
-	origin := tlsEdgeLoginOrigin(conn)
 	idToken, err := self.redeem(r.Context(), origin, code, base64.RawURLEncoding.EncodeToString(preLogin.verifier[:]))
 	if err != nil {
 		tlsHttpAnswer(w, http.StatusBadGateway)
@@ -248,7 +254,7 @@ func (self *tlsEdgeLogin) callback(w http.ResponseWriter, r *http.Request, conn 
 		tlsHttpAnswer(w, http.StatusServiceUnavailable)
 		return
 	}
-	value, err := self.front.sessions.sealSession(host, session)
+	value, err := self.front.sessions.sealSession(origin, session)
 	if err != nil {
 		tlsHttpAnswer(w, http.StatusServiceUnavailable)
 		return

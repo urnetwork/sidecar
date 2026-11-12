@@ -3,8 +3,9 @@
 // The front's sealed cookies (§7.8, §13.7): __Host-ur-session, a members session, and __Host-ur-pre, a pending edge
 // login's state, nonce and PKCE verifier. Each is XChaCha20-Poly1305 under a key derived from one 32-byte root in
 // this network's keychain.ur, tls namespace (§5.9), so a session survives a daemon restart, no server ever holds a
-// key that opens one, and a cookie read on another host, another network or as the other cookie fails to open: the
-// additional data binds the cookie's name, the network and the host.
+// key that opens one, and a cookie read on another origin, another network or as the other cookie fails to open: the
+// additional data binds the cookie's name, the network and the origin, https://<sni> with its port where it is not
+// 443, so a session counts on its own origin alone, though cookies do not tell ports apart.
 //
 //	cookie   base64url, no padding, of version || nonce (24 B) || ciphertext and tag
 //	session  session_id (16 B) || member_id (16 B) || issue ms (8 B) || expire ms (8 B), big endian
@@ -52,7 +53,7 @@ const (
 	tlsNoticeCookieName   = "__Host-ur-notice"
 )
 
-// A cookie that does not open here: malformed, sealed for another name, network or host, or expired.
+// A cookie that does not open here: malformed, sealed for another name, network or origin, or expired.
 var errTlsCookie = errors.New("tls front cookie refused")
 
 // Serializes making the root, so two fronts of one network starting at once never each write their own.
@@ -141,55 +142,55 @@ func loadOrCreateTlsFrontSessionRoot(secrets SidecarSecrets) ([]byte, error) {
 	return root, nil
 }
 
-// What the additional data binds: the cookie's name, the network and the host.
-func (self *tlsSessionSealer) additionalData(cookieName string, host string) []byte {
-	data := make([]byte, 0, len(cookieName)+1+len(Id{})+len(host))
+// What the additional data binds: the cookie's name, the network and the origin.
+func (self *tlsSessionSealer) additionalData(cookieName string, origin string) []byte {
+	data := make([]byte, 0, len(cookieName)+1+len(Id{})+len(origin))
 	data = append(data, cookieName...)
 	data = append(data, 0)
 	data = append(data, self.networkId.Bytes()...)
-	return append(data, host...)
+	return append(data, origin...)
 }
 
-// plaintext sealed under aead as cookieName's value for host.
-func (self *tlsSessionSealer) seal(aead cipher.AEAD, cookieName string, host string, plaintext []byte) (string, error) {
+// plaintext sealed under aead as cookieName's value for origin.
+func (self *tlsSessionSealer) seal(aead cipher.AEAD, cookieName string, origin string, plaintext []byte) (string, error) {
 	sealed := make([]byte, 1+aead.NonceSize(), 1+aead.NonceSize()+len(plaintext)+aead.Overhead())
 	sealed[0] = tlsFrontCookieVersion
 	if _, err := cryptorand.Read(sealed[1:]); err != nil {
 		return "", err
 	}
-	sealed = aead.Seal(sealed, sealed[1:1+aead.NonceSize()], plaintext, self.additionalData(cookieName, host))
+	sealed = aead.Seal(sealed, sealed[1:1+aead.NonceSize()], plaintext, self.additionalData(cookieName, origin))
 	return base64.RawURLEncoding.EncodeToString(sealed), nil
 }
 
-// The plaintext of cookieName's value for host, or errTlsCookie.
-func (self *tlsSessionSealer) open(aead cipher.AEAD, cookieName string, host string, value string) ([]byte, error) {
+// The plaintext of cookieName's value for origin, or errTlsCookie.
+func (self *tlsSessionSealer) open(aead cipher.AEAD, cookieName string, origin string, value string) ([]byte, error) {
 	sealed, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil || len(sealed) < 1+aead.NonceSize()+aead.Overhead() || sealed[0] != tlsFrontCookieVersion {
 		return nil, errTlsCookie
 	}
-	plaintext, err := aead.Open(nil, sealed[1:1+aead.NonceSize()], sealed[1+aead.NonceSize():], self.additionalData(cookieName, host))
+	plaintext, err := aead.Open(nil, sealed[1:1+aead.NonceSize()], sealed[1+aead.NonceSize():], self.additionalData(cookieName, origin))
 	if err != nil {
 		return nil, errTlsCookie
 	}
 	return plaintext, nil
 }
 
-// session as host's __Host-ur-session value.
-func (self *tlsSessionSealer) sealSession(host string, session *tlsSession) (string, error) {
+// session as origin's __Host-ur-session value.
+func (self *tlsSessionSealer) sealSession(origin string, session *tlsSession) (string, error) {
 	plaintext := make([]byte, 0, tlsSessionPlaintextByteCount)
 	plaintext = append(plaintext, session.sessionId[:]...)
 	plaintext = append(plaintext, session.memberId.Bytes()...)
 	plaintext = binary.BigEndian.AppendUint64(plaintext, uint64(session.issueTime.UnixMilli()))
 	plaintext = binary.BigEndian.AppendUint64(plaintext, uint64(session.expireTime.UnixMilli()))
-	return self.seal(self.session, tlsSessionCookieName, host, plaintext)
+	return self.seal(self.session, tlsSessionCookieName, origin, plaintext)
 }
 
-// The session host's __Host-ur-session value holds while it is live at now, nil for any other value.
-func (self *tlsSessionSealer) openSession(value string, host string, now time.Time) *tlsSession {
+// The session origin's __Host-ur-session value holds while it is live at now, nil for any other value.
+func (self *tlsSessionSealer) openSession(value string, origin string, now time.Time) *tlsSession {
 	if value == "" {
 		return nil
 	}
-	plaintext, err := self.open(self.session, tlsSessionCookieName, host, value)
+	plaintext, err := self.open(self.session, tlsSessionCookieName, origin, value)
 	if err != nil || len(plaintext) != tlsSessionPlaintextByteCount {
 		return nil
 	}
@@ -207,25 +208,25 @@ func (self *tlsSessionSealer) openSession(value string, host string, now time.Ti
 	return session
 }
 
-// preLogin as host's __Host-ur-pre value.
-func (self *tlsSessionSealer) sealPreLogin(host string, preLogin *tlsPreLogin) (string, error) {
+// preLogin as origin's __Host-ur-pre value.
+func (self *tlsSessionSealer) sealPreLogin(origin string, preLogin *tlsPreLogin) (string, error) {
 	plaintext := make([]byte, 0, tlsPreLoginFixedByteCount+len(preLogin.returnPath))
 	plaintext = append(plaintext, preLogin.state[:]...)
 	plaintext = append(plaintext, preLogin.nonce[:]...)
 	plaintext = append(plaintext, preLogin.verifier[:]...)
 	plaintext = binary.BigEndian.AppendUint64(plaintext, uint64(preLogin.expireTime.UnixMilli()))
 	plaintext = append(plaintext, preLogin.returnPath...)
-	value, err := self.seal(self.preLogin, tlsPreLoginCookieName, host, plaintext)
+	value, err := self.seal(self.preLogin, tlsPreLoginCookieName, origin, plaintext)
 	clear(plaintext)
 	return value, err
 }
 
-// The pending login host's __Host-ur-pre value holds while it is live at now, nil for any other value.
-func (self *tlsSessionSealer) openPreLogin(value string, host string, now time.Time) *tlsPreLogin {
+// The pending login origin's __Host-ur-pre value holds while it is live at now, nil for any other value.
+func (self *tlsSessionSealer) openPreLogin(value string, origin string, now time.Time) *tlsPreLogin {
 	if value == "" {
 		return nil
 	}
-	plaintext, err := self.open(self.preLogin, tlsPreLoginCookieName, host, value)
+	plaintext, err := self.open(self.preLogin, tlsPreLoginCookieName, origin, value)
 	if err != nil || len(plaintext) < tlsPreLoginFixedByteCount {
 		return nil
 	}

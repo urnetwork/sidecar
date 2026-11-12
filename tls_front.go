@@ -526,8 +526,10 @@ func (self *TlsFront) Close() error {
 	return err
 }
 
-// Accepts until the listener closes or the front does.
+// Accepts until the listener closes, the front does or its context ends, and then closes the front, so an end from
+// outside stops the probe and the HTTP front too.
 func (self *TlsFront) run() {
+	defer self.Close()
 	for {
 		socketConn, err := self.listener.AcceptSocket(self.ctx)
 		if err != nil {

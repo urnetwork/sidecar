@@ -132,7 +132,8 @@ func (self *tlsFrontConfigPolicy) IdentityKey(sidecarId Id) []byte {
 	if state == nil {
 		return nil
 	}
-	if row := state.SidecarRow(sidecarId); row == nil || row.GetRevokedAt() != 0 {
+	// a revoked row signs nothing; with no row only the genesis owner has a key (ConfigState.IdentityKey)
+	if row := state.SidecarRow(sidecarId); row != nil && row.GetRevokedAt() != 0 {
 		return nil
 	}
 	return bytes.Clone(state.IdentityKey(sidecarId))
@@ -328,7 +329,7 @@ func (self *tlsAudienceCheck) checkHttp(r *http.Request, conn *TlsFrontConn, vie
 	case protocol.AclAudience_ACL_AUDIENCE_PUBLIC:
 		return &tlsAudienceVerdict{outcome: tlsAudiencePassed, grant: grant, pass: &tlsAudiencePass{conn: conn, audience: grant.Audience}}
 	case protocol.AclAudience_ACL_AUDIENCE_MEMBERS:
-		session := self.front.sessions.openSession(view.session, conn.ServerName(), now)
+		session := self.front.sessions.openSession(view.session, tlsEdgeLoginOrigin(conn), now)
 		if session != nil && self.front.policy.MemberActive(session.memberId, now) {
 			return &tlsAudienceVerdict{outcome: tlsAudiencePassed, grant: grant, pass: &tlsAudiencePass{
 				conn:     conn,

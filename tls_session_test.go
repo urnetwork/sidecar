@@ -10,11 +10,14 @@ import (
 	"time"
 )
 
+// The fixture endpoint's origin, which its sessions are sealed to.
+const tlsFrontTestOrigin = "https://" + tlsFrontTestServerName
+
 // A session for memberId on the fixture's front, as its callback would set it, live for SessionLifetime.
 func (self *tlsFrontFixture) sealSession(t *testing.T, memberId Id) string {
 	t.Helper()
 	now := self.clock.Now()
-	value, err := self.front.sessions.sealSession(tlsFrontTestServerName, &tlsSession{
+	value, err := self.front.sessions.sealSession(tlsFrontTestOrigin, &tlsSession{
 		memberId:   memberId,
 		issueTime:  now,
 		expireTime: now.Add(self.settings.SessionLifetime),

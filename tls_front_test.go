@@ -1012,6 +1012,19 @@ func TestTlsFrontVisitorAddressOptions(t *testing.T) {
 	}
 }
 
+// A front whose listener closes from outside closes itself: its HTTP front and its connections end too.
+func TestTlsFrontEndsWithItsListener(t *testing.T) {
+	fixture := newTlsFrontFixture(t, nil)
+	conn, err := fixture.dialTls(tlsFrontTestClientConfig(tlsAlpnHttp11), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.listener.Close()
+	if _, err := conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("a connection outlived its listener")
+	}
+}
+
 // Closing the front ends the listener and every connection it holds.
 func TestTlsFrontCloseEndsItsConnections(t *testing.T) {
 	fixture := newTlsFrontFixture(t, nil)
