@@ -22,6 +22,11 @@ import (
 	"time"
 )
 
+// What a store's Read answers, or wraps, for a version the ref no longer keeps: a versionless path's replaced version,
+// collected as evs's purge leaves it (§11.9). A builder that meets it restarts on the new head, since the file it read
+// at its base has moved on (DESIGN-DETAILS 1.2.4's fences).
+var errIndexCollected = errors.New("index file version collected")
+
 // A ref's head as the index reads it.
 type indexRefHead struct {
 	version uint64
@@ -113,7 +118,8 @@ type indexRefStore interface {
 	// One path's versions at refVersion, newest first: the history <root>/settings keeps, or a versionless path's
 	// one readable version.
 	History(ctx context.Context, path string, refVersion uint64) ([]*indexFileVersion, error)
-	// The plaintext of one version, checked against its content_sha256 before it is returned.
+	// The plaintext of one version, checked against its content_sha256 before it is returned; errIndexCollected, or
+	// an error wrapping it, for a version the ref no longer keeps.
 	Read(ctx context.Context, file *indexFileVersion) ([]byte, error)
 	// Commits push, or refuses it with an *indexRefusal.
 	Commit(ctx context.Context, push *indexPush) (*indexCommitted, error)

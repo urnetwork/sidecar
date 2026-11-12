@@ -1,11 +1,16 @@
 // The index format's limits (protocol/INDEX-FORMAT.md; DESIGN-DETAILS 11.2.1 and 1.2.1): extractor 1's bounds, which
-// make it one pass in fixed memory, how a text is cut into documents, and what a writer's files hold. They are format
-// bytes, and changing one is another format or extractor, so no device sets them on its own; this one object holds them
-// and its defaults stay here (QD-702).
+// make it one pass in fixed memory, how a text is cut into documents, what a writer's files hold, how a merge lays out
+// a partition's shards, and the times every index builder and the roll-up's lock keep. They are format bytes and
+// protocol values, and changing one is another format or extractor, so no device sets them on its own; this one object
+// holds them and its defaults stay here (QD-702).
 // Every function that extracts, plans a head or reads a slot reads the instance it is given; a view carries the one it
 // was loaded with. It links on every leg, since the slot codec does, and imports nothing.
 
 package sidecar
+
+import (
+	"time"
+)
 
 // What extractor 1 holds at most, and how it cuts a text into documents.
 type IndexFormatSettings struct {
@@ -41,10 +46,27 @@ type IndexFormatSettings struct {
 	// Slots a writer keeps in a bucket for the diffs of its unabsorbed slots that rest on them: 8 (KeepSlots). A diff
 	// that would keep a ninth is written full.
 	KeepSlotCount int
+	// Two adjacent shards of a partition that come to fewer bytes than this before their pads become one under the
+	// lower n: 524,288 B (ShardJoin). It decides a merge's and a roll-up's bytes, so every device lays out alike.
+	ShardJoinByteCount int
+	// A bucket's sealed slots and unabsorbed large entries, in plaintext bytes, at which a merge is due: 131,072 B
+	// (MergeBytes).
+	MergeDueByteCount int
+	// A roll-up lock's term, from the taking push's signed time: 30 min (LockTerm). Its holder renews it at half the
+	// term while it works.
+	LockTerm time.Duration
+	// How far past a held lock's until_ms a taker's signed time must be before the lock is free to take: 10 min
+	// (LockGrace), evs's bound on a push's time, so two honest runners never both hold it.
+	LockGrace time.Duration
+	// From an index push's signed time, taken before its first read, to the last moment it may be sent, on the
+	// monotonic and the wall clock both: 5 min (IndexPushLife; R5). A push past it is built again, never sent.
+	PushLife time.Duration
+	// PushLife for a push in parts (11.8): 25 min.
+	PartsPushLife time.Duration
 }
 
-// DESIGN-DETAILS 11.2.1's values, the only source of their defaults. A fresh value each call, sharing nothing mutable
-// with any other.
+// DESIGN-DETAILS 11.2.1's and 1.2.1's values, the only source of their defaults. A fresh value each call, sharing nothing
+// mutable with any other.
 func DefaultIndexFormatSettings() *IndexFormatSettings {
 	return &IndexFormatSettings{
 		HeaderMaxByteCount:    16 * 1024,
@@ -60,5 +82,11 @@ func DefaultIndexFormatSettings() *IndexFormatSettings {
 		PushDirectByteCount:   256 * 1024,
 		RingSlotCount:         8,
 		KeepSlotCount:         8,
+		ShardJoinByteCount:    512 * 1024,
+		MergeDueByteCount:     128 * 1024,
+		LockTerm:              30 * time.Minute,
+		LockGrace:             10 * time.Minute,
+		PushLife:              5 * time.Minute,
+		PartsPushLife:         25 * time.Minute,
 	}
 }

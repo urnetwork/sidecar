@@ -136,6 +136,10 @@ type AdmissionTier struct {
 	Clock *FakeClock
 	// What the network's followers and writer run under, a Net's, so they end with it; nil for the background.
 	Context context.Context
+	// The acl compile every base of the network compiles with (C-05), from its bootstrap on: nil for the suite's
+	// stand-in, admissionAclCompile; AclAdmissionCompile, ACL's own CompileAcl, for a world whose rows are the policy
+	// itself (ACL-M2-16, acl_world.go).
+	AclCompile sidecar.ConfigAclCompiler
 }
 
 // What a world fails through: a testing.TB, or a fault schedule's step, which turns a failure into the step's error.
@@ -310,7 +314,11 @@ func NewAdmissionNet(t AdmissionT, tier *AdmissionTier) *AdmissionNet {
 		everyBase:    true,
 		everyEntry:   true,
 	}
-	self.restoreAcl = sidecar.RegisterConfigAclCompiler(admissionAclCompile)
+	aclCompile := tier.AclCompile
+	if aclCompile == nil {
+		aclCompile = admissionAclCompile
+	}
+	self.restoreAcl = sidecar.RegisterConfigAclCompiler(aclCompile)
 	self.heads = NewFakeConfigHeads(self.configRepoId)
 	ownerMemberId := self.Id("owner member")
 	self.owner = self.Device("owner laptop", ownerMemberId)

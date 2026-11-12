@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -21,7 +22,7 @@ import (
 )
 
 // A read of a version the ref no longer keeps: a versionless path's replaced version, evs's collected (§11.9).
-var errTestIndexCollected = errors.New("test index store: version collected")
+var errTestIndexCollected = fmt.Errorf("test index store: %w", errIndexCollected)
 
 // One ref's index, shared by every handle. Safe for concurrent use.
 type testIndexRef struct {

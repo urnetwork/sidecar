@@ -1,0 +1,141 @@
+[
+ {
+  "name": "composed-diffs",
+  "files": [
+   {
+    "path": ".ur-index/i1/b/20340/m",
+    "replaces": 0,
+    "sha256": "1126a6637f49825119fba64dc38feb18e1812b6a7562d3f1a03d896b6562c501",
+    "byte_count": 40
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/0",
+    "replaces": 0,
+    "sha256": "a47119c8b9a3dbfa5afe8e3d0da239e03ee4a61d0f7c4f46c08bf764e981b7b4",
+    "byte_count": 204433
+   }
+  ]
+ },
+ {
+  "name": "tie-order",
+  "files": [
+   {
+    "path": ".ur-index/i1/b/20340/m",
+    "replaces": 25,
+    "sha256": "7dbb7dce7f235fb365a2b00b0015af54fd4033fe6039bc3812081bf123d2aa19",
+    "byte_count": 62
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/0",
+    "replaces": 25,
+    "sha256": "1ec06d0208398ff63bdc60dfbd3b40d9a2c49a03b7dbbd5353b4ee0a499199fe",
+    "byte_count": 306312
+   }
+  ]
+ },
+ {
+  "name": "tombstone-over-a-row",
+  "files": [
+   {
+    "path": ".ur-index/i1/b/20340/m",
+    "replaces": 26,
+    "sha256": "1c3c4be5371a423734d1d9727d9c970f7733bf94456bc812ffa9c643bd051609",
+    "byte_count": 62
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/0",
+    "replaces": 26,
+    "sha256": "f1a963960a0be47dcfd561faebee4ec379d21233ef7235674fc174a90635be4a",
+    "byte_count": 377463
+   }
+  ]
+ },
+ {
+  "name": "manifest-only",
+  "files": [
+   {
+    "path": ".ur-index/i1/b/20340/m",
+    "replaces": 13,
+    "sha256": "acd8851f5c39470cd983db9aa4aeb8340d98f75873035a496ed9addd6b734e1a",
+    "byte_count": 62
+   }
+  ]
+ },
+ {
+  "name": "ref-tombstone",
+  "files": [
+   {
+    "path": "i1/b/20340/m",
+    "replaces": 2,
+    "sha256": "b5599afbf7d18a50daa7837b5bdf8d658187cd518cbe09afc2005ab82fca9d1e",
+    "byte_count": 40
+   },
+   {
+    "path": "i1/b/20340/s/0",
+    "replaces": 3,
+    "sha256": "971c9c78f805c9e7d2d1e3c76913446329e9db7b6997546cdcf674fc7ec8ef57",
+    "byte_count": 2396
+   }
+  ]
+ },
+ {
+  "name": "erased-left-out",
+  "files": [
+   {
+    "path": ".ur-index/i1/b/20340/m",
+    "replaces": 0,
+    "sha256": "f8d5c555d044fff0a4790458ae9aebb2c61508ff2d2d9a210049dceced907aff",
+    "byte_count": 40
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/0",
+    "replaces": 0,
+    "sha256": "aebe14c06ea8d3f753c735876a35b1ceb1af9259d4598c7347d53cff4f97e16b",
+    "byte_count": 73138
+   }
+  ]
+ },
+ {
+  "name": "take-at-the-cap-with-extra",
+  "files": [
+   {
+    "path": ".ur-index/i1/b/20340/m",
+    "replaces": 0,
+    "sha256": "135abaebc6d1d95459da83bc9379ffc4451608633e1d11d21a9c3bdf017d8b94",
+    "byte_count": 34
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/0",
+    "replaces": 0,
+    "sha256": "ff09ef3eb2870e3527ca1d804840bd57ad54d8e75911cdc63f9bb8f927261aae",
+    "byte_count": 1042221
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/1",
+    "replaces": 0,
+    "sha256": "9c4b7b265ef4436ee911d9693f768c08c5f9a889bf37d257b1bfd768fa28007f",
+    "byte_count": 560049
+   }
+  ]
+ },
+ {
+  "name": "join",
+  "files": [
+   {
+    "path": ".ur-index/i1/b/20340/m",
+    "replaces": 0,
+    "sha256": "9ba815a8ab956371ab390eb469a1cf3d0f9acae6908a4174917cc60200339c13",
+    "byte_count": 18
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/0",
+    "replaces": 1,
+    "sha256": "1fa469066f0ee7e8bdd3fea6055ef36b5a8df3f306629f47db6e629e1d77af1c",
+    "byte_count": 2045
+   }
+  ],
+  "removals": [
+   ".ur-index/i1/b/20340/s/3"
+  ]
+ }
+]
