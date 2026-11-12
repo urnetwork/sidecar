@@ -882,3 +882,13 @@ func (self *RecordReader) HoldsIn(logId Id, streamId Id, leaf [sha256.Size]byte)
 	entry, held := log.leafEntries[leaf]
 	return held && slices.ContainsFunc(entry.Copies, func(entryCopy *RecordEntryCopy) bool { return entryCopy.StreamSidecarId == streamId })
 }
+
+// An ERASE's note as an erasure's (record_erase.go writes it): its ErasureBody, holding the erasure id the ERASE
+// carries, or false for a note of another kind's, a mailbox's paths, say.
+func recordErasureNoteBody(erasure *RecordStreamErasure) (*protocol.ErasureBody, bool) {
+	body := &protocol.ErasureBody{}
+	if len(erasure.SealedNote) == 0 || proto.Unmarshal(erasure.SealedNote, body) != nil || !bytes.Equal(body.GetErasureId(), erasure.ErasureId[:]) {
+		return nil, false
+	}
+	return body, true
+}

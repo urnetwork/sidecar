@@ -1,3 +1,5 @@
+//go:build !ios_extension
+
 // RecordEraser (proposed; RECORD-M3-06; §16.8's Erasure, §11.12's closure row, RECORD.md section 8; R-MCP-8,
 // R-EVS-11, D-EVS-26, FS-47): a log admin's erasure of entries of one log by key destruction, on every leg the record
 // writes from.
@@ -27,7 +29,8 @@
 //	reach     an erasure names entries of one log: a copy or twin in another log is not reached, and the result names
 //	          the log it reached
 //
-// Not here: format 2's CUT and CLOSUREs of search and run cards (RECORD-M10-01), expiry's erasures (RECORD-M6-03), and
+// Off the ios_extension legs, which link the record's other files but none of its erasures. Not here: format 2's CUT
+// and CLOSUREs of search and run cards (RECORD-M10-01), expiry's erasures (RECORD-M6-03), and
 // the search and ur://record caches' own deletes, which are their components'. Safe for concurrent use: one erasure at
 // a time.
 
@@ -41,8 +44,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strings"
-	"sync"
 
 	"google.golang.org/protobuf/proto"
 
@@ -161,23 +162,17 @@ type recordEraseJournalConsume struct {
 	DepositIds  []Id `json:"deposit_ids"`
 }
 
-// The eraser of a record.
+// The eraser of a record. Its erasures run one at a time, under the record's own lock, whichever eraser of the record
+// runs them.
 type RecordEraser struct {
 	record   *SidecarRecord
 	store    SidecarStore
 	settings *RecordEraserSettings
-
-	eraseLock sync.Mutex
 }
 
-// The record's eraser, made on first use.
+// The record's eraser.
 func (self *SidecarRecord) Eraser() *RecordEraser {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if self.eraser == nil {
-		self.eraser = &RecordEraser{record: self, store: self.writer.store, settings: DefaultRecordEraserSettings()}
-	}
-	return self.eraser
+	return &RecordEraser{record: self, store: self.writer.store, settings: DefaultRecordEraserSettings()}
 }
 
 // The journal's file of erasureId.
@@ -254,8 +249,8 @@ func (self *RecordEraser) Erase(ctx context.Context, args *RecordEraseArgs) (*Re
 	if (args.Reason == RecordErasureReasonPerson || args.Reason == RecordErasureReasonModeration) && (!args.Confirmed || args.HarnessAncestor) {
 		return nil, ErrRecordEraseUnconfirmed
 	}
-	self.eraseLock.Lock()
-	defer self.eraseLock.Unlock()
+	self.record.eraseLock.Lock()
+	defer self.record.eraseLock.Unlock()
 	writer := self.record.writer
 	reader := self.record.reader
 	if err := recordEraseAdmin(writer.auth(), writer.sidecarId, args.LogId); err != nil {
@@ -300,8 +295,8 @@ func recordEraseAdmin(auth RecordAuthView, sidecarId Id, logId Id) error {
 // Goes on with every journaled erasure from where it stopped: what a restart runs. The first failure stops it, the
 // rest left for the next.
 func (self *RecordEraser) Resume(ctx context.Context) error {
-	self.eraseLock.Lock()
-	defer self.eraseLock.Unlock()
+	self.record.eraseLock.Lock()
+	defer self.record.eraseLock.Unlock()
 	journals, err := self.readJournals()
 	if err != nil {
 		return err
@@ -540,14 +535,4 @@ type RecordErasePlanItem struct {
 	// The copies whose keys the ERASE names, and whether an erasure took them already.
 	CopyCount int
 	Erased    bool
-}
-
-// The ERASE's note as an erasure's: its ErasureBody, holding the erasure id the ERASE carries, or false for a note
-// of another kind's, a mailbox's paths, say.
-func recordErasureNoteBody(erasure *RecordStreamErasure) (*protocol.ErasureBody, bool) {
-	body := &protocol.ErasureBody{}
-	if len(erasure.SealedNote) == 0 || proto.Unmarshal(erasure.SealedNote, body) != nil || !strings.EqualFold(hex.EncodeToString(body.GetErasureId()), hex.EncodeToString(erasure.ErasureId[:])) {
-		return nil, false
-	}
-	return body, true
 }
