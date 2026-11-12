@@ -573,3 +573,146 @@ func TestGkmReconcilerDeletesAForwardingKeyObjectADayAfterItsEnd(t *testing.T) {
 		t.Errorf("the live forwarding Delegation's object was deleted")
 	}
 }
+
+// How many forwarding Delegations' ends the reconciler tracks for the world's network.
+func (self *gkmReconcilerWorld) trackedDelegationKeyEnds() int {
+	self.reconciler.stateLock.Lock()
+	defer self.reconciler.stateLock.Unlock()
+	return len(self.reconciler.delegationKeyEnds[self.networkId])
+}
+
+// QD-675: a forwarding Delegation's row leaves the rows once retention passes its end by 4,096 positions (QD-648),
+// which a busy network reaches before the key object's day has run. The end the reconciler saw stays tracked, so the
+// object stands until DelegationKeyRetention after the end and goes then, with no row left to name it; the live
+// Delegation's object stays, and once the object is gone and its row has left nothing is tracked for it.
+func TestGkmReconcilerDeletesAForwardingKeyObjectWhoseRowLeftBeforeItsDay(t *testing.T) {
+	world := newGkmReconcilerWorld(t)
+	fixture := world.fixture
+	settings := world.reconciler.settings
+	appSidecarId, laptopSidecarId := testId("sc-app"), testId("sc-laptop")
+	ended := newGkmTestForwardingKey(t, "ended")
+	live := newGkmTestForwardingKey(t, "live")
+	for _, key := range []*gkmTestForwardingKey{ended, live} {
+		objectKey, err := GkmDelegationKeyKey(key.delegationId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.put("meta-1", objectKey, key.publicKey)
+	}
+	now := fixture.clock.Now()
+	endedRow := gkmTestForwardingRow(ended, laptopSidecarId, 2)
+	endedRow.EndedAt = 3
+	liveRow := gkmTestForwardingRow(live, appSidecarId, 4)
+	// the end is 22 hours old: its object's day ends in two hours
+	positionTimes := map[uint64]time.Time{3: now.Add(-settings.DelegationKeyRetention + 2*time.Hour)}
+	view := world.appendDelegations([]*bridge.DelegationRow{endedRow, liveRow})
+	world.awaitState(view, func() { world.setWithTimes(view, positionTimes) })
+	if world.trackedDelegationKeyEnds() != 1 {
+		t.Fatalf("%d ends tracked, not the one", world.trackedDelegationKeyEnds())
+	}
+
+	// the network sequences past the row's 4,096 positions within the hour, and a base drops the row: the host no
+	// longer tells its position's time either
+	world.awaitPass(func() { fixture.clock.Advance(time.Hour) })
+	leftView := world.appendDelegations([]*bridge.DelegationRow{liveRow})
+	world.awaitState(leftView, func() { world.setWithTimes(leftView, nil) })
+	if finished, _ := world.reconciler.DelegationKeyDeletes(); finished != 0 {
+		t.Fatalf("%d deletions before the object's day ended", finished)
+	}
+	if fixture.delegationKeyObject(ended.delegationId) == nil {
+		t.Fatalf("an object deleted before its day, when its row left")
+	}
+	if world.trackedDelegationKeyEnds() != 1 {
+		t.Fatalf("the end was forgotten when its row left: %d tracked", world.trackedDelegationKeyEnds())
+	}
+
+	// its day ends in another hour: the wake the earlier pass set deletes it then, with no row to name it
+	world.awaitPass(func() { fixture.clock.Advance(time.Hour) })
+	world.awaitDelegationKeyDeletes(1)
+	if fixture.delegationKeyObject(ended.delegationId) != nil {
+		t.Errorf("an object whose row left stands a day after its Delegation ended")
+	}
+	if fixture.delegationKeyObject(live.delegationId) == nil {
+		t.Errorf("the live forwarding Delegation's object was deleted")
+	}
+
+	// the network's next pass, at the retry's wake, finds the object gone and no row naming it, and forgets the end
+	world.awaitPass(func() { fixture.clock.Advance(settings.DelegationKeyRetryInterval) })
+	if world.trackedDelegationKeyEnds() != 0 {
+		t.Errorf("%d ends tracked after the object went and its row left", world.trackedDelegationKeyEnds())
+	}
+	if finished, _ := world.reconciler.DelegationKeyDeletes(); finished != 1 {
+		t.Errorf("%d deletions for one object", finished)
+	}
+}
+
+// A restart forgets every tracked end. The process that starts after it finds an ended row its network's rows still
+// hold and deletes that object at its time by the host's position times, so the restart does not start its day
+// again. An object no row of the networks it has read names is kept: gkm/dkey/<delegation_id> names no network, so
+// it may be a live Delegation's in a network this process has not read as well as one whose row left while no
+// process tracked it, and every doubt keeps the object (QD-675's sweep waits on question
+// core-owner-fixes-dkey-sweep-network).
+func TestGkmReconcilerAfterARestartDeletesByTheRowsAndKeepsAnObjectNoRowNames(t *testing.T) {
+	world := newGkmReconcilerWorld(t)
+	fixture := world.fixture
+	settings := world.reconciler.settings
+	appSidecarId, laptopSidecarId := testId("sc-app"), testId("sc-laptop")
+	ended := newGkmTestForwardingKey(t, "ended")
+	live := newGkmTestForwardingKey(t, "live")
+	unnamed := newGkmTestForwardingKey(t, "unnamed")
+	for _, key := range []*gkmTestForwardingKey{ended, live, unnamed} {
+		objectKey, err := GkmDelegationKeyKey(key.delegationId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.put("meta-1", objectKey, key.publicKey)
+	}
+	now := fixture.clock.Now()
+	endedRow := gkmTestForwardingRow(ended, laptopSidecarId, 2)
+	endedRow.EndedAt = 3
+	liveRow := gkmTestForwardingRow(live, appSidecarId, 4)
+	positionTimes := map[uint64]time.Time{3: now.Add(-settings.DelegationKeyRetention + 2*time.Hour)}
+	view := world.appendDelegations([]*bridge.DelegationRow{endedRow, liveRow})
+	world.awaitState(view, func() { world.setWithTimes(view, positionTimes) })
+	world.awaitPass(func() { fixture.clock.Advance(time.Hour) })
+
+	// the restart: the first process ends with the end tracked and not yet due, and a new one starts with no table
+	world.reconciler.Close()
+	restarted, err := NewGkmReconciler(fixture.ctx, fixture.host.ServiceHost(), DefaultGkmReconcilerSettings(), &GkmReconcilerDeps{State: world.state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restarted.Close)
+	world.reconciler = restarted
+	if world.trackedDelegationKeyEnds() != 0 {
+		t.Fatalf("a new reconciler tracks %d ends", world.trackedDelegationKeyEnds())
+	}
+	restartedView := world.appendDelegations([]*bridge.DelegationRow{endedRow, liveRow})
+	world.awaitState(restartedView, func() { world.setWithTimes(restartedView, positionTimes) })
+	if finished, _ := restarted.DelegationKeyDeletes(); finished != 0 {
+		t.Fatalf("%d deletions before the object's day ended", finished)
+	}
+	if fixture.delegationKeyObject(ended.delegationId) == nil {
+		t.Fatalf("an object deleted before its day, after a restart")
+	}
+
+	// the day the first process counted ends in an hour, not a day after the restart
+	world.awaitPass(func() { fixture.clock.Advance(time.Hour) })
+	world.awaitDelegationKeyDeletes(1)
+	if fixture.delegationKeyObject(ended.delegationId) != nil {
+		t.Errorf("an ended Delegation's object stands a day after its end, a restart between")
+	}
+	if fixture.delegationKeyObject(live.delegationId) == nil {
+		t.Errorf("the live forwarding Delegation's object was deleted")
+	}
+
+	// long after, the object no row names still stands, and nothing was tried on it
+	world.awaitPass(func() { fixture.clock.Advance(settings.DelegationKeyRetryInterval) })
+	world.awaitPass(func() { fixture.clock.Advance(2 * settings.DelegationKeyRetention) })
+	if fixture.delegationKeyObject(unnamed.delegationId) == nil {
+		t.Errorf("an object no row names was deleted, though nothing tells its network")
+	}
+	if finished, _ := restarted.DelegationKeyDeletes(); finished != 1 {
+		t.Errorf("%d deletions, not the ended row's one", finished)
+	}
+}
