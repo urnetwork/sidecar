@@ -67,3 +67,11 @@ func TestAclRemovedMembersTaggedAgentsKeepTheirTagsGrants(t *testing.T) {
 func TestAclRowsALyingWriterForksEveryFullReader(t *testing.T) {
 	aclRun(t, AclRowsALyingWriter)
 }
+
+func TestAclS3aAddsAndWrapsOnlyForReaders(t *testing.T) {
+	aclRun(t, AclAddsOnlyForReaders)
+}
+
+func TestAclS4aRemovalDropsEveryRightAtEveryReader(t *testing.T) {
+	aclRun(t, AclRemovalDropsEveryRight)
+}

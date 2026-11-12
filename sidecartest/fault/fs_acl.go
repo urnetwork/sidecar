@@ -1554,3 +1554,186 @@ func aclExpectTaggedAgent(net *sidecartest.AdmissionNet, world *fsTeamWorld, spo
 	})
 	return nil
 }
+
+// S3a's acl checks (§22.7's S3, F3; R-ACL-7, §10.9, §8.12): who a commit or a wrap may add to a repo's key holders,
+// judged by every reader on the state as the log built it, so a breached server can neither admit a ghost nor grant a
+// reader. A member device reads a general repo and takes a leaf, an ephemeral sidecar neither until a repo admin's
+// RepoGrant names it, and then a wrap only; a device an admin admitted under a member takes no part of the member's
+// vault until the member's OwnerConfirm; a sidecar the log never admitted takes nothing; no tree passes 1,000
+// leaves; and on T2 a malicious api's RepoGrant by a sidecar that is no repo admin is refused at its position by
+// every reader, so it adds no reader.
+func AclAddsOnlyForReaders(net *Net) *Schedule {
+	world := newFsTeamWorld()
+	return fsTeamSchedule("S3a's acl checks", world,
+		fs14AclStart(world),
+		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+			first := world.devices["m first"]
+			burner := net.Device("m burner", first.MemberId)
+			world.devices["m burner"] = burner
+			net.MustLand(net.Sign(first, bridge.SignedType_SIGNED_SIDECAR_ADMIT,
+				net.Admission(burner, nil, true, net.Clock().Now().Add(24*time.Hour).UnixMilli(), 0)))
+			world.ids["vault"] = aclCreateRepo(net, first, "m vault", protocol.RepoKind_REPO_KIND_VAULT).Bytes()
+			tablet := net.Device("m tablet", first.MemberId)
+			world.devices["m tablet"] = tablet
+			net.AdmitDevice(net.Owner(), tablet, 0)
+			return aclExpectMembers(net, world, false, false)
+		}),
+		fsTeamDo("server", world, func(net *sidecartest.AdmissionNet) error {
+			burner, notes := world.devices["m burner"], sidecar.Id(world.ids["notes"])
+			// the phone is no admin of the repo: api refuses its grant, and on T2 a malicious api lands it anyway, which
+			// every reader refuses at its position
+			grant := aclRepoGrant(net, world.devices["m phone"], notes, burner.SidecarId, protocol.RepoGrantRole_REPO_GRANT_ROLE_READER)
+			net.MustRefuse(grant, sidecar.ErrConfigAuthority)
+			if net.ForgedAppends() {
+				pin := net.SequenceAnyway(bridge.AuthEntryKindStatement, grant)
+				if verdict := net.VerdictAt(pin.GetVersion()); verdict.Accepted() || !errors.Is(verdict.Refusal, sidecar.ErrConfigAuthority) {
+					return fmt.Errorf("the forged grant at %d: %v", pin.GetVersion(), verdict.Refusal)
+				}
+			}
+			return aclExpectMembers(net, world, false, false)
+		}),
+		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+			first, burner, tablet := world.devices["m first"], world.devices["m burner"], world.devices["m tablet"]
+			net.MustLand(aclRepoGrant(net, first, sidecar.Id(world.ids["notes"]), burner.SidecarId, protocol.RepoGrantRole_REPO_GRANT_ROLE_READER))
+			net.MustLand(net.Sign(first, bridge.SignedType_SIGNED_OWNER_CONFIRM, net.OwnerConfirm(tablet)))
+			if err := aclExpectMembers(net, world, true, true); err != nil {
+				return err
+			}
+			aclBaseKeepingTheFold(net, 48)
+			return aclExpectMembers(net, world, true, true)
+		}),
+	)
+}
+
+// Fails unless every reader judges S3a's Adds and wraps as granted and confirmed say.
+func aclExpectMembers(net *sidecartest.AdmissionNet, world *fsTeamWorld, granted bool, confirmed bool) error {
+	first, phone, burner, tablet := world.devices["m first"], world.devices["m phone"], world.devices["m burner"], world.devices["m tablet"]
+	notes, vault := sidecar.Id(world.ids["notes"]), sidecar.Id(world.ids["vault"])
+	now := net.Clock().Now()
+	leaf := func(sidecarId sidecar.Id, count int) sidecar.AclRepoMember {
+		return sidecar.AclRepoMember{SidecarId: sidecarId, Form: sidecar.AclRepoMemberLeaf, LeafCount: count}
+	}
+	wrap := func(sidecarId sidecar.Id) sidecar.AclRepoMember {
+		return sidecar.AclRepoMember{SidecarId: sidecarId, Form: sidecar.AclRepoMemberWrap}
+	}
+	net.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
+		for _, check := range []struct {
+			what   string
+			repoId sidecar.Id
+			member sidecar.AclRepoMember
+			allow  bool
+			reason sidecar.AclReason
+		}{
+			{what: "the phone's leaf", repoId: notes, member: leaf(phone.SidecarId, 2), allow: true},
+			{what: "the phone's leaf past 1,000", repoId: notes, member: leaf(phone.SidecarId, 1001), reason: sidecar.AclReasonSeatsFull},
+			{what: "a ghost's wrap", repoId: notes, member: wrap(net.Id("ghost")), reason: sidecar.AclReasonUnadmitted},
+			{what: "the burner's wrap", repoId: notes, member: wrap(burner.SidecarId), allow: granted},
+			{what: "the burner's leaf", repoId: notes, member: leaf(burner.SidecarId, 3)},
+			{what: "the burner's vault wrap, a depositor's", repoId: vault, member: wrap(burner.SidecarId)},
+			{what: "the first device's vault leaf", repoId: vault, member: leaf(first.SidecarId, 1), allow: true},
+			{what: "the tablet's vault leaf", repoId: vault, member: leaf(tablet.SidecarId, 2), allow: confirmed},
+		} {
+			decision := acl.CheckRepoMember(check.repoId, check.member, now)
+			if decision.Allowed != check.allow || (check.reason != 0 && decision.Reason != check.reason) {
+				return fmt.Errorf("%s: allowed %t (%s), want %t", check.what, decision.Allowed, decision.Reason, check.allow)
+			}
+		}
+		// a holder the projection no longer gives read is named for a Remove before a writer seals
+		want := []sidecar.Id{}
+		if !granted {
+			want = append(want, burner.SidecarId)
+		}
+		nonReaders := []sidecar.Id{}
+		for _, nonReader := range acl.NonReaders(notes, []sidecar.Id{first.SidecarId, phone.SidecarId, burner.SidecarId}, now) {
+			nonReaders = append(nonReaders, nonReader.SidecarId)
+		}
+		if !slices.Equal(nonReaders, want) {
+			return fmt.Errorf("non-readers %v, want %v", nonReaders, want)
+		}
+		return nil
+	})
+	return nil
+}
+
+// S4a's acl checks (§22.7's S4, F9, the revocation suite's first rows; I-15, D-ACL-21, §7.9's shrink and expiry
+// rows): the phone, a member device reading a general repo, is revoked by its member's consented device, and the
+// burner's RepoGrant expires: at every reader each loses every right and scope at once, is named a non-reader, and
+// leaves the repo's key holders, and the gate refuses a write under a generation from before the revocation, while
+// the expiry is found at its own time with no entry.
+func AclRemovalDropsEveryRight(net *Net) *Schedule {
+	world := newFsTeamWorld()
+	return fsTeamSchedule("S4a's acl checks", world,
+		fs14AclStart(world),
+		fsTeamDo("m first", world, func(net *sidecartest.AdmissionNet) error {
+			first, notes := world.devices["m first"], sidecar.Id(world.ids["notes"])
+			burner := net.Device("m burner", first.MemberId)
+			world.devices["m burner"] = burner
+			net.MustLand(net.Sign(first, bridge.SignedType_SIGNED_SIDECAR_ADMIT,
+				net.Admission(burner, nil, true, net.Clock().Now().Add(24*time.Hour).UnixMilli(), 0)))
+			expires := net.Clock().Now().Add(time.Hour).UnixMilli()
+			net.MustLand(net.Sign(first, bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoGrant{
+				Header: net.Header(), RepoId: notes.Bytes(), Subject: burner.SidecarId.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_READER, Expires: expires,
+			}))
+			world.positions["grant expires"] = uint64(expires)
+			before := net.Tip()
+			world.positions["before"], world.signed["before"] = before.GetVersion(), before.GetChain()
+			verdict := net.MustLand(net.Sign(first, bridge.SignedType_SIGNED_SIDECAR_REVOKE,
+				net.Revocation(world.devices["m phone"], bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, 0)))
+			world.positions["revoke"], world.signed["revoke"] = verdict.Pin.GetVersion(), verdict.Pin.GetChain()
+			return aclExpectRemoved(net, world, world.devices["m phone"], sidecar.AclReasonRevoked)
+		}),
+		fsTeamDo("clock", world, func(net *sidecartest.AdmissionNet) error {
+			notes := sidecar.Id(world.ids["notes"])
+			expires := time.UnixMilli(int64(world.positions["grant expires"]))
+			after := net.Clock().Now()
+			// the expiry is found at its time, with no entry, by every reader
+			net.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
+				at, found, err := state.ExpiriesFor(notes, after, expires.Add(time.Minute))
+				if err != nil || !found || at.After(expires) || at.Before(after) {
+					return fmt.Errorf("the grant's expiry: %v at %s, %v", found, at, err)
+				}
+				return nil
+			})
+			net.Wait(time.Hour + time.Minute)
+			return aclExpectRemoved(net, world, world.devices["m burner"], sidecar.AclReasonNoGrant)
+		}),
+	)
+}
+
+// Fails unless, at every reader, removed holds no right and no scope on the general repo, is a non-reader of it, holds
+// no key of it, and the repo's gate refuses a generation from before the revocation and takes one at it.
+func aclExpectRemoved(net *sidecartest.AdmissionNet, world *fsTeamWorld, removed *sidecartest.AdmissionDevice, reason sidecar.AclReason) error {
+	notes := sidecar.Id(world.ids["notes"])
+	now := net.Clock().Now()
+	before := &bridge.AuthPin{Version: world.positions["before"], Chain: world.signed["before"]}
+	revoke := &bridge.AuthPin{Version: world.positions["revoke"], Chain: world.signed["revoke"]}
+	net.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
+		if rights := aclRights(net, acl, removed.SidecarId, notes, sidecar.AclTokenAudienceEvs); rights != 0 {
+			return fmt.Errorf("%s keeps rights %04b", removed.Name, rights)
+		}
+		scopes := []string{aclScope(notes, "r"), aclScope(notes, "rw"), aclScope(notes, "deposit")}
+		for _, audience := range []sidecar.AclTokenAudience{sidecar.AclTokenAudienceEvs, sidecar.AclTokenAudienceGkm} {
+			if err := aclExpectScopes(net, state, removed.SidecarId, audience, scopes, []string{}); err != nil {
+				return fmt.Errorf("%s's: %w", removed.Name, err)
+			}
+		}
+		nonReaders := acl.NonReaders(notes, []sidecar.Id{removed.SidecarId, world.devices["m first"].SidecarId}, now)
+		if len(nonReaders) != 1 || nonReaders[0].SidecarId != removed.SidecarId || nonReaders[0].Reason != reason {
+			return fmt.Errorf("non-readers %+v, want %s for %s", nonReaders, reason, removed.Name)
+		}
+		if err := aclExpectHolder(state, notes, now, removed.SidecarId, false, sidecar.GkmHolderLeaf, sidecar.GkmHolderAgent); err != nil {
+			return err
+		}
+		if shrunkAt := state.ShrunkAt(notes); shrunkAt < revoke.GetVersion() {
+			return fmt.Errorf("holders_shrunk_at %d, below the revocation's %d", shrunkAt, revoke.GetVersion())
+		}
+		if err := sidecar.GkmGateCheck(state, notes, before, now, now); !errors.Is(err, sidecar.ErrGkmGateClosed) {
+			return fmt.Errorf("a generation from before the revocation: %v", err)
+		}
+		if err := sidecar.GkmGateCheck(state, notes, revoke, now, now); err != nil {
+			return fmt.Errorf("a generation at the revocation: %w", err)
+		}
+		return nil
+	})
+	return nil
+}
