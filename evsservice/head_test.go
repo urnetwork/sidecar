@@ -384,6 +384,73 @@ func TestHeadCacheServesWithinTenMinutesOfItsOwnCacheTime(t *testing.T) {
 	}
 }
 
+// DESIGN-DETAILS 10.2.7's cache stamp (QD-701): CacheCommit stamps an entry with its head's written_ms, so a put by a
+// process paused 20 min between its commit and its put serves nothing, and one 11 min late is never served, while a
+// put on time serves until written_ms + 10 min; a written_ms past the clock is stamped at the clock.
+func TestHeadCacheStampsTheHeadsWrittenMs(t *testing.T) {
+	fixture := newHeadFixture(t)
+	absent, _ := fixture.heads.ReadCluster(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId)
+	stored, err := fixture.heads.Commit(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId, absent, testHead(4, 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Head.GetWrittenMs() != fixture.clock.Now().UnixMilli() {
+		t.Fatalf("the commit stamped written_ms %d", stored.Head.GetWrittenMs())
+	}
+	// paused 20 min between the commit and the put
+	fixture.clock.Advance(20 * time.Minute)
+	fixture.heads.CacheCommit(fixture.ctx, fixture.repoId, fixture.refId, stored, 7)
+	if _, ok := fixture.heads.Cache().Read(fixture.ctx, fixture.repoId, fixture.refId, 0); ok {
+		t.Error("a put 20 min after its head's write served")
+	}
+	if read, _ := fixture.heads.ReadCached(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId, 0, false); read.Cached {
+		t.Error("a late put served a cached head")
+	}
+
+	// 11 min late: never served, whatever the clock does next
+	next := CloneEvsHead(stored.Head)
+	next.Version = 5
+	next.Window = testHead(5, 5).Window
+	v5, err := fixture.heads.Commit(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId, stored, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.clock.Advance(11 * time.Minute)
+	fixture.heads.CacheCommit(fixture.ctx, fixture.repoId, fixture.refId, v5, 8)
+	if _, ok := fixture.heads.Cache().Read(fixture.ctx, fixture.repoId, fixture.refId, 0); ok {
+		t.Error("a put 11 min after its head's write served")
+	}
+
+	// on time: served until written_ms + 10 min, and not past it
+	next = CloneEvsHead(v5.Head)
+	next.Version = 6
+	next.Window = testHead(6, 6).Window
+	v6, err := fixture.heads.Commit(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId, v5, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.clock.Advance(3 * time.Minute)
+	fixture.heads.CacheCommit(fixture.ctx, fixture.repoId, fixture.refId, v6, 9)
+	fixture.clock.Advance(6 * time.Minute)
+	if cached, ok := fixture.heads.Cache().Read(fixture.ctx, fixture.repoId, fixture.refId, 0); !ok || cached.Version() != 6 {
+		t.Error("a put on time was not served 9 min after its head's write")
+	}
+	fixture.clock.Advance(time.Minute)
+	if _, ok := fixture.heads.Cache().Read(fixture.ctx, fixture.repoId, fixture.refId, 0); ok {
+		t.Error("an entry served 10 min after its head's write")
+	}
+
+	// a written_ms past the clock is stamped at the clock, never later
+	ahead := CloneEvsHead(v6.Head)
+	ahead.WrittenMs = fixture.clock.Now().Add(time.Hour).UnixMilli()
+	if stamp := headCacheStampMs(ahead, fixture.clock.Now()); stamp != fixture.clock.Now().UnixMilli() {
+		t.Errorf("a head written ahead of the clock was stamped %d", stamp)
+	}
+	if stamp := headCacheStampMs(&protocol.EvsHead{Version: 3}, fixture.clock.Now()); stamp != 0 {
+		t.Errorf("a head with no written_ms was stamped %d", stamp)
+	}
+}
+
 func TestHeadCacheIsWrittenOnlyIfTheVersionRises(t *testing.T) {
 	fixture := newHeadFixture(t)
 	absent, _ := fixture.heads.ReadCluster(fixture.ctx, fixture.cluster, fixture.repoId, fixture.refId)

@@ -7,9 +7,11 @@
 
 EvsReadPathReply.drop_statement: {number: 15, type: bytes, row: evs-14, sees: "DROP pushes and their cancels included"}
 EvsReadPathReply.drop_body: {number: 16, type: bytes, row: evs-12, sees: "DROP payload bodies"}
+EvsReadRequest.held_drops: {number: 11, type: repeated uint64, row: evs-28, until: M10, pending: "DESIGN-DETAILS 10.2.3's held drops: a read names the ref versions of the DROPs whose bodies its reader holds; evs-28's words are the drop table's, and 10.8 gives evs-14 no reader-sent drop version"}
 
 EvsPurgeList.candidates: {number: 1, type: repeated EvsPurgeCandidate, row: evs-12, sees: "each record's purge candidates (segment and slot ids, derived by evs)"}
 EvsPurgeList.marked: {number: 2, type: bool, row: evs-12, until: M10, pending: "11.13's purge row writes a mark past 2,048 ids, from which the sweep recomputes the candidates; evs-12 names the candidates and not the mark"}
+EvsPurgeList.replaced: {number: 3, type: bool, row: evs-12, until: M10, pending: "DESIGN-DETAILS 10.2.6: a part's record lists what its versions replaced, whole; 10.8 gives evs-12 'or for a part what its versions replaced', which design-records folds in"}
 EvsPurgeCandidate.token_path: {number: 1, type: repeated bytes, row: evs-12, sees: "changes of token path"}
 EvsPurgeCandidate.replaced_version: {number: 2, type: uint64, row: evs-12, sees: "base entry version"}
 EvsPurgeCandidate.segment_ids: {number: 3, type: repeated bytes, row: evs-12, sees: "segment and slot ids, derived by evs"}
@@ -46,3 +48,5 @@ EvsDropPreviewReply.snapshot_version: {number: 11, type: uint64, row: evs-28, se
 EvsDropPreviewReply.snapshot_ms: {number: 12, type: int64, row: evs-28, sees: "its snapshot"}
 EvsDropPreviewPath.list_match: {number: 1, type: bool, row: evs-28, until: M10, pending: "11.13's preview row reports list_match per path against the client's count and listed_sha256; evs-28 names the lists a dry run was asked about and not that answer"}
 EvsDropPreviewPath.count: {number: 2, type: uint32, row: evs-28, until: M10, pending: "as EvsDropPreviewPath.list_match: the resolved list's version count"}
+EvsDropPreviewPath.map_parts: {number: 3, type: repeated uint32, row: evs-28, until: M10, pending: "DESIGN-DETAILS 10.2.4: the dry run answers the map parts that link a lineage; 10.8 gives evs-28 'by which map parts', which design-records folds in"}
+EvsDropPreviewPath.linked: {number: 4, type: bool, row: evs-28, until: M10, pending: "DESIGN-DETAILS 10.2.4: whether a lineage is linked; 10.8 gives evs-28 'whether its lineage is linked', which design-records folds in"}

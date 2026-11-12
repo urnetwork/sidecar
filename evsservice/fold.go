@@ -366,6 +366,8 @@ type foldRun struct {
 	paths     map[string]*foldPath
 	removals  []*foldRemoval
 	sortedIds []string
+	// the drop marks a DROP in the range sets on its removed boundaries' marker entries (fold_format2.go)
+	removedMarks []*foldRemovedMark
 
 	result *EvsFoldResult
 }
@@ -541,6 +543,10 @@ func (self *foldRun) planRange() error {
 		if err != nil {
 			return err
 		}
+		// a DROP's removed boundaries write no change, so their marks are planned before a changeless version is passed
+		if err := self.planRemovedMarks(version, windowEntry, statement); err != nil {
+			return err
+		}
 		if len(changes) == 0 {
 			continue
 		}
@@ -706,6 +712,9 @@ func (self *foldRun) writeRange() error {
 			return err
 		}
 	}
+	if err := self.writeRemovedMarks(); err != nil {
+		return err
+	}
 	for _, removal := range self.removals {
 		if removal.file {
 			continue
@@ -847,6 +856,11 @@ func (self *foldRun) sourceEntry(path *foldPath) (*protocol.EvsIndexEntry, uint6
 // One entry write, paid for: If-None-Match where the read found none, else If-Match its ETag, with the stale rule's
 // deadline.
 func (self *foldRun) put(tokenPath sidecar.EvsTokenPath, read *EvsEntryRead, entry *protocol.EvsIndexEntry, state EvsEntryStateValue) error {
+	return self.putAt(self.epoch, tokenPath, read, entry, state)
+}
+
+// put's write in epoch, the current one or, for a removed boundary's drop mark, a source the head lists.
+func (self *foldRun) putAt(epoch uint64, tokenPath sidecar.EvsTokenPath, read *EvsEntryRead, entry *protocol.EvsIndexEntry, state EvsEntryStateValue) error {
 	operation := WriteOperation{Kind: WriteOperationOverwrite, ObjectByteCount: int64(proto.Size(entry)), Count: 1}
 	if read.Absent() {
 		operation.Kind = WriteOperationCreate
@@ -866,10 +880,10 @@ func (self *foldRun) put(tokenPath sidecar.EvsTokenPath, read *EvsEntryRead, ent
 		writeCtx = sidecar.WithBlobDeadline(writeCtx, self.request.Deadline)
 	}
 	if hook := self.folder.beforeEntryWrite; hook != nil {
-		hook(IndexEntryKey(self.request.RepoId, self.request.RefId, self.epoch, tokenPath))
+		hook(IndexEntryKey(self.request.RepoId, self.request.RefId, epoch, tokenPath))
 	}
 	testHookBarrier(BarrierFoldEntryWriteBefore, self.barrierKey)
-	_, err = PutEntry(writeCtx, self.cluster, self.request.RepoId, self.request.RefId, self.epoch, tokenPath, read, entry, state)
+	_, err = PutEntry(writeCtx, self.cluster, self.request.RepoId, self.request.RefId, epoch, tokenPath, read, entry, state)
 	testHookBarrier(BarrierFoldEntryWriteAfter, self.barrierKey)
 	if errors.Is(err, ErrEvsIndexEntryInvalid) {
 		return fmt.Errorf("%w: %v", ErrEvsFoldInvalid, err)

@@ -342,7 +342,7 @@ func TestSweepRecomputesAMarkedListFromTheReplacedVersions(t *testing.T) {
 func TestSweepRecomputeReadsTheFoldedEntryAndKeepsWhatItCannotFind(t *testing.T) {
 	fixture := newEvacuateFixture(t, nil)
 	history := newRecomputeHistory(fixture, 2)
-	sweep := fixture.recomputeSweep(history.newest(), &SweepSettings{ListLimit: 1000, RecomputeVersionCount: 2})
+	sweep := fixture.recomputeSweep(history.newest(), &SweepSettings{ListLimit: 1000, RecomputeVersionCount: 2, HoldEndLead: DefaultSweepSettings().HoldEndLead})
 	list := &protocol.EvsPurgeList{Marked: true}
 	target := history.ref.target(history.u, history.ref.records[history.u-1], list)
 

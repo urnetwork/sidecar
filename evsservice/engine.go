@@ -105,9 +105,8 @@ type EvsEngineDeps struct {
 	GateViews EvsGateViews
 	// Step 8's push sequence and hints. nil takes the engine's own over the host's Redis and Push (hint.go).
 	CommitNotifier EvsCommitNotifier
-	// EVS2-M10-06's rules of a format-2 push inside §19.11's format2 gate: the citation rule, staging, uploads and
-	// candidates (PushView.Format2Rules). nil refuses every such push 503, so nothing commits unchecked, and a
-	// format-1 repo is never raised.
+	// A stand-in for EVS2-M10-06's rules of a format-2 push inside §19.11's format2 gate (PushView.Format2Rules): a
+	// test's. nil runs check_versioning.go's and check_citation.go's.
 	Format2Rules func(view *PushView) *EvsCheckRefusal
 	// EVSB-M10-01's purge (purge.go), which EVS2-M10-06's step 7 hands each certain commit's candidates. nil queues
 	// nothing, which is safe: evacuation's sweep takes every list.

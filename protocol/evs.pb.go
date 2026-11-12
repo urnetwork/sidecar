@@ -1367,6 +1367,7 @@ const (
 	EvsDropPhase_EVS_DROP_MARK              EvsDropPhase = 2
 	EvsDropPhase_EVS_DROP_VERIFY            EvsDropPhase = 3
 	EvsDropPhase_EVS_DROP_DELETE            EvsDropPhase = 4
+	EvsDropPhase_EVS_DROP_HORIZON           EvsDropPhase = 5 // resolved, or between rounds: waiting for evacuation's horizon
 )
 
 // Enum value maps for EvsDropPhase.
@@ -1377,6 +1378,7 @@ var (
 		2: "EVS_DROP_MARK",
 		3: "EVS_DROP_VERIFY",
 		4: "EVS_DROP_DELETE",
+		5: "EVS_DROP_HORIZON",
 	}
 	EvsDropPhase_value = map[string]int32{
 		"EVS_DROP_PHASE_UNSPECIFIED": 0,
@@ -1384,6 +1386,7 @@ var (
 		"EVS_DROP_MARK":              2,
 		"EVS_DROP_VERIFY":            3,
 		"EVS_DROP_DELETE":            4,
+		"EVS_DROP_HORIZON":           5,
 	}
 )
 
@@ -6065,8 +6068,9 @@ type EvsReadRequest struct {
 	SlotIds       [][]byte               `protobuf:"bytes,6,rep,name=slot_ids,json=slotIds,proto3" json:"slot_ids,omitempty"`
 	Maps          []*EvsReadMap          `protobuf:"bytes,7,rep,name=maps,proto3" json:"maps,omitempty"`
 	LogPages      []uint64               `protobuf:"varint,8,rep,packed,name=log_pages,json=logPages,proto3" json:"log_pages,omitempty"`
-	Pushes        []*EvsReadPush         `protobuf:"bytes,9,rep,name=pushes,proto3" json:"pushes,omitempty"` // push records and parts
-	Refs          []*EvsReadRef          `protobuf:"bytes,10,rep,name=refs,proto3" json:"refs,omitempty"`    // a streams read's, alone in its request: at most 64 (11.9's streams row)
+	Pushes        []*EvsReadPush         `protobuf:"bytes,9,rep,name=pushes,proto3" json:"pushes,omitempty"`                                 // push records and parts
+	Refs          []*EvsReadRef          `protobuf:"bytes,10,rep,name=refs,proto3" json:"refs,omitempty"`                                    // a streams read's, alone in its request: at most 64 (11.9's streams row)
+	HeldDrops     []uint64               `protobuf:"varint,11,rep,packed,name=held_drops,json=heldDrops,proto3" json:"held_drops,omitempty"` // format 2: DROP pushes of this ref, by ref version, whose body the reader
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6167,6 +6171,13 @@ func (x *EvsReadRequest) GetPushes() []*EvsReadPush {
 func (x *EvsReadRequest) GetRefs() []*EvsReadRef {
 	if x != nil {
 		return x.Refs
+	}
+	return nil
+}
+
+func (x *EvsReadRequest) GetHeldDrops() []uint64 {
+	if x != nil {
+		return x.HeldDrops
 	}
 	return nil
 }
@@ -7301,8 +7312,10 @@ func (x *EvsLogReply) GetNextVersion() uint64 {
 type EvsPurgeList struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// since it says only what the push's own entries and their bases show
-	Candidates    []*EvsPurgeCandidate `protobuf:"bytes,1,rep,name=candidates,proto3" json:"candidates,omitempty"` // per versionless version the push replaces, in change order
-	Marked        bool                 `protobuf:"varint,2,opt,name=marked,proto3" json:"marked,omitempty"`        // past 2,048 ids or the record's 1 MiB: none listed, and evacuation's sweep
+	Candidates []*EvsPurgeCandidate `protobuf:"bytes,1,rep,name=candidates,proto3" json:"candidates,omitempty"` // per versionless version the push replaces, in change order
+	Marked     bool                 `protobuf:"varint,2,opt,name=marked,proto3" json:"marked,omitempty"`        // past 2,048 ids or the record's 1 MiB: none listed, and evacuation's sweep
+	// recomputes them from the replaced versions (11.13)
+	Replaced      bool `protobuf:"varint,3,opt,name=replaced,proto3" json:"replaced,omitempty"` // a part's record alone: each replaced version's ids whole, nothing
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7347,6 +7360,13 @@ func (x *EvsPurgeList) GetCandidates() []*EvsPurgeCandidate {
 func (x *EvsPurgeList) GetMarked() bool {
 	if x != nil {
 		return x.Marked
+	}
+	return false
+}
+
+func (x *EvsPurgeList) GetReplaced() bool {
+	if x != nil {
+		return x.Replaced
 	}
 	return false
 }
@@ -7788,9 +7808,12 @@ func (x *EvsDropPreviewReply) GetSnapshotMs() int64 {
 }
 
 type EvsDropPreviewPath struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ListMatch     bool                   `protobuf:"varint,1,opt,name=list_match,json=listMatch,proto3" json:"list_match,omitempty"` // the client's count and listed_sha256 equal the resolved list's
-	Count         uint32                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`                          // the resolved list's versions
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ListMatch bool                   `protobuf:"varint,1,opt,name=list_match,json=listMatch,proto3" json:"list_match,omitempty"`     // the client's count and listed_sha256 equal the resolved list's
+	Count     uint32                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`                              // the resolved list's versions
+	MapParts  []uint32               `protobuf:"varint,3,rep,packed,name=map_parts,json=mapParts,proto3" json:"map_parts,omitempty"` // per older lineage entry of the request's path, the map part holding its
+	// move, 0 the tail, as the dry run found them (DESIGN-DETAILS 10.2.4)
+	Linked        bool `protobuf:"varint,4,opt,name=linked,proto3" json:"linked,omitempty"` // every older entry is a source of the one before it; false: map_parts
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7837,6 +7860,20 @@ func (x *EvsDropPreviewPath) GetCount() uint32 {
 		return x.Count
 	}
 	return 0
+}
+
+func (x *EvsDropPreviewPath) GetMapParts() []uint32 {
+	if x != nil {
+		return x.MapParts
+	}
+	return nil
+}
+
+func (x *EvsDropPreviewPath) GetLinked() bool {
+	if x != nil {
+		return x.Linked
+	}
+	return false
 }
 
 var File_protocol_evs_proto protoreflect.FileDescriptor
@@ -8266,7 +8303,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x0eEvsDepositHead\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x14\n" +
 	"\x05chain\x18\x02 \x01(\fR\x05chain\x12)\n" +
-	"\x10consumed_through\x18\x03 \x01(\x04R\x0fconsumedThrough\"\xa3\x03\n" +
+	"\x10consumed_through\x18\x03 \x01(\x04R\x0fconsumedThrough\"\xc2\x03\n" +
 	"\x0eEvsReadRequest\x12\x15\n" +
 	"\x06ref_id\x18\x01 \x01(\fR\x05refId\x12\x1f\n" +
 	"\vpin_version\x18\x02 \x01(\x04R\n" +
@@ -8279,7 +8316,9 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\tlog_pages\x18\b \x03(\x04R\blogPages\x126\n" +
 	"\x06pushes\x18\t \x03(\v2\x1e.urnetwork.sidecar.EvsReadPushR\x06pushes\x121\n" +
 	"\x04refs\x18\n" +
-	" \x03(\v2\x1d.urnetwork.sidecar.EvsReadRefR\x04refs\"\x91\x01\n" +
+	" \x03(\v2\x1d.urnetwork.sidecar.EvsReadRefR\x04refs\x12\x1d\n" +
+	"\n" +
+	"held_drops\x18\v \x03(\x04R\theldDrops\"\x91\x01\n" +
 	"\vEvsReadPath\x12A\n" +
 	"\vtoken_paths\x18\x01 \x03(\v2 .urnetwork.sidecar.EvsSourcePathR\n" +
 	"tokenPaths\x12\x18\n" +
@@ -8389,12 +8428,13 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\n" +
 	"statements\x18\x01 \x03(\v2#.urnetwork.sidecar.EvsReadStatementR\n" +
 	"statements\x12!\n" +
-	"\fnext_version\x18\x02 \x01(\x04R\vnextVersion\"l\n" +
+	"\fnext_version\x18\x02 \x01(\x04R\vnextVersion\"\x88\x01\n" +
 	"\fEvsPurgeList\x12D\n" +
 	"\n" +
 	"candidates\x18\x01 \x03(\v2$.urnetwork.sidecar.EvsPurgeCandidateR\n" +
 	"candidates\x12\x16\n" +
-	"\x06marked\x18\x02 \x01(\bR\x06marked\"\xc7\x01\n" +
+	"\x06marked\x18\x02 \x01(\bR\x06marked\x12\x1a\n" +
+	"\breplaced\x18\x03 \x01(\bR\breplaced\"\xc7\x01\n" +
 	"\x11EvsPurgeCandidate\x12\x1d\n" +
 	"\n" +
 	"token_path\x18\x01 \x03(\fR\ttokenPath\x12)\n" +
@@ -8441,11 +8481,13 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"youngBytes\x12)\n" +
 	"\x10snapshot_version\x18\v \x01(\x04R\x0fsnapshotVersion\x12\x1f\n" +
 	"\vsnapshot_ms\x18\f \x01(\x03R\n" +
-	"snapshotMs\"I\n" +
+	"snapshotMs\"~\n" +
 	"\x12EvsDropPreviewPath\x12\x1d\n" +
 	"\n" +
 	"list_match\x18\x01 \x01(\bR\tlistMatch\x12\x14\n" +
-	"\x05count\x18\x02 \x01(\rR\x05count*\xfa\x01\n" +
+	"\x05count\x18\x02 \x01(\rR\x05count\x12\x1b\n" +
+	"\tmap_parts\x18\x03 \x03(\rR\bmapParts\x12\x16\n" +
+	"\x06linked\x18\x04 \x01(\bR\x06linked*\xfa\x01\n" +
 	"\vEvsPushFlag\x12\x16\n" +
 	"\x12EVS_PUSH_FLAG_NONE\x10\x00\x12\x12\n" +
 	"\x0eEVS_PUSH_FORCE\x10\x01\x12\x13\n" +
@@ -8622,13 +8664,14 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x12EVS_DROP_EXECUTING\x10\x03\x12\x11\n" +
 	"\rEVS_DROP_DONE\x10\x04\x12\x14\n" +
 	"\x10EVS_DROP_REFUSED\x10\x05\x12\x15\n" +
-	"\x11EVS_DROP_OBSERVED\x10\x06*\x81\x01\n" +
+	"\x11EVS_DROP_OBSERVED\x10\x06*\x97\x01\n" +
 	"\fEvsDropPhase\x12\x1e\n" +
 	"\x1aEVS_DROP_PHASE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10EVS_DROP_RESOLVE\x10\x01\x12\x11\n" +
 	"\rEVS_DROP_MARK\x10\x02\x12\x13\n" +
 	"\x0fEVS_DROP_VERIFY\x10\x03\x12\x13\n" +
-	"\x0fEVS_DROP_DELETE\x10\x04*\x8b\x01\n" +
+	"\x0fEVS_DROP_DELETE\x10\x04\x12\x14\n" +
+	"\x10EVS_DROP_HORIZON\x10\x05*\x8b\x01\n" +
 	"\x0eEvsDropRefusal\x12 \n" +
 	"\x1cEVS_DROP_REFUSAL_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17EVS_DROP_REFUSAL_LOCKED\x10\x01\x12\x1d\n" +

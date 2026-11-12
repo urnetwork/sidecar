@@ -229,7 +229,7 @@ func (self *evsWorld) format2Plan(push *format2Push) (*sidecar.EvsPushPlan, []*w
 	if push.drop != nil {
 		history := proto.Clone(push.drop).(*protocol.EvsDropHistory)
 		if history.GetAction() == 1 && history.GetNotBeforeMs() == 0 {
-			history.NotBeforeMs = plan.TimeMs + sidecar.EvsDropWindowMs
+			history.NotBeforeMs = plan.TimeMs + sidecar.DefaultEvsFormatSettings().DropWindowMs()
 		}
 		lists := []byte{}
 		if 0 < len(history.GetPaths()) {
@@ -687,10 +687,11 @@ func TestFormat2DropIsNeverSkippedForALaterWindowVersion(t *testing.T) {
 	world.requireNewest(x)
 }
 
-// A removed-boundary lineage writes no version, so no fold touches its path, and a cancel writes nothing and lifts
-// no mark (§11.7's boundary and fence rows): a DROP writing x through its next version and naming y's standing
-// removal marks x alone, y's marker staying as it was; its cancel folds to no write.
-func TestFormat2DropRemovedBoundaryAndCancelWriteNothing(t *testing.T) {
+// A removed-boundary lineage writes no version, but its DROP's fold sets the mark on the marker's entry while it holds
+// folded versions (DESIGN-DETAILS 10.2.7's removed row), and a cancel writes nothing and lifts no mark (§11.7's
+// boundary and fence rows): a DROP writing x through its next version and naming y's standing removal marks x's
+// written version and y's marker entry, through the removal's version; its cancel folds to no write.
+func TestFormat2DropRemovedBoundaryMarksAndCancelWritesNothing(t *testing.T) {
 	world, lines := newFormat2World(t)
 	x, y := worldPath("x"), worldPath("y")
 	world.pushFormat2(&format2Push{changes: []*format2Change{versioned(&worldChange{path: x, version: 1}), versioned(&worldChange{path: y, version: 1})}})
@@ -706,8 +707,10 @@ func TestFormat2DropRemovedBoundaryAndCancelWriteNothing(t *testing.T) {
 	if entry := world.entryOf(x).Entry; !hasDropMark(entry, dropId, 2) {
 		t.Fatalf("x after the drop: %v", entry)
 	}
-	if after := world.entryOf(y); after.Etag != removedBefore.Etag || after.Entry.GetDropMark() != nil {
-		t.Fatalf("a removed boundary's path was written: %v", after.Entry)
+	after := world.entryOf(y)
+	if !hasDropMark(after.Entry, dropId, 2) || after.Entry.GetMarker().GetPathVersion() != 2 ||
+		len(after.Entry.GetVersions()) != len(removedBefore.Entry.GetVersions()) {
+		t.Fatalf("a removed boundary's marker entry after the drop: %v", after.Entry)
 	}
 	cancel := world.pushFormat2(&format2Push{
 		flags: uint32(protocol.EvsPushFlag_EVS_PUSH_DROP),
@@ -724,6 +727,68 @@ func TestFormat2DropRemovedBoundaryAndCancelWriteNothing(t *testing.T) {
 	world.requireNewest(x)
 	world.requireNewest(y)
 	if lines.count("fold_drop") != 0 {
+		t.Fatalf("an honest drop alarmed:\n%s", lines)
+	}
+}
+
+// DESIGN-DETAILS 10.2.7's removed row: a removed boundary's mark stands on its marker's entry before the DROP leaves
+// the window, never skipped for a later window version that re-creates the path, and the re-creation keeps it; a
+// lineage whose entry is absent (404) and one whose marker stands alone are left unwritten; a rerun writes nothing.
+func TestFormat2RemovedBoundaryMarkIsNeverSkippedAndLeavesWhatHoldsNothing(t *testing.T) {
+	world, lines := newFormat2World(t)
+	y, z, w := worldPath("y"), worldPath("z"), worldPath("w")
+	world.pushFormat2(&format2Push{changes: []*format2Change{versioned(&worldChange{path: y, version: 1}), versioned(&worldChange{path: z, version: 1})}})
+	world.pushFormat2(&format2Push{changes: []*format2Change{versioned(&worldChange{path: y, base: 1, version: 2})}})
+	world.pushFormat2(&format2Push{changes: []*format2Change{versioned(&worldChange{path: y, base: 2}), versioned(&worldChange{path: z, base: 1})}})
+	world.fold(3)
+	// z's marker alone: its folded version taken away, as a marker past its four versions keeps none
+	zRead := world.entryOf(z)
+	alone := proto.Clone(zRead.Entry).(*protocol.EvsIndexEntry)
+	alone.Versions = nil
+	if _, err := PutEntry(world.ctx, world.cluster, world.repoId, world.refId, EvsHeadCurrentEpoch(world.head.Head), z, zRead, alone, zRead.State); err != nil {
+		t.Fatal(err)
+	}
+	zBefore := world.entryOf(z)
+
+	dropId := testId("drop")
+	push := &format2Push{
+		flags: uint32(protocol.EvsPushFlag_EVS_PUSH_DROP),
+		drop: &protocol.EvsDropHistory{DropId: dropId.Bytes(), Action: 1, Paths: []*protocol.EvsDropPath{
+			format2DropPath(w, 1, 2, evsDropBoundaryRemoved),
+			format2DropPath(y, 1, 3, evsDropBoundaryRemoved),
+			format2DropPath(z, 1, 2, evsDropBoundaryRemoved),
+		}},
+		listed: [][][]byte{format2Listed("w", 1), format2Listed("y", 2), format2Listed("z", 1)},
+	}
+	// paths ascending by their newest token path, as the body's shape asks
+	slices.SortFunc(push.drop.Paths, func(a *protocol.EvsDropPath, b *protocol.EvsDropPath) int {
+		return bytes.Compare(bytes.Join(a.GetLineage()[0].GetTokenPath(), nil), bytes.Join(b.GetLineage()[0].GetTokenPath(), nil))
+	})
+	listedOf := map[string][][]byte{string(bytes.Join(w.Components(), nil)): format2Listed("w", 1), string(bytes.Join(y.Components(), nil)): format2Listed("y", 2), string(bytes.Join(z.Components(), nil)): format2Listed("z", 1)}
+	push.listed = nil
+	for _, path := range push.drop.Paths {
+		push.listed = append(push.listed, listedOf[string(bytes.Join(path.GetLineage()[0].GetTokenPath(), nil))])
+	}
+	dropped := world.pushFormat2(push)
+	creation := ExpectedEntryVersion(0, world.head.Version(), 3)
+	recreated := world.pushFormat2(&format2Push{changes: []*format2Change{versioned(&worldChange{path: y, version: creation})}})
+	world.fold(dropped)
+	entry := world.entryOf(y).Entry
+	if !hasDropMark(entry, dropId, 3) || entry.GetMarker().GetPathVersion() != 3 || len(entry.GetVersions()) == 0 {
+		t.Fatalf("y's marker entry through the DROP: %v", entry)
+	}
+	if after := world.entryOf(z); after.Etag != zBefore.Etag || after.Entry.GetDropMark() != nil {
+		t.Fatalf("a marker alone was written: %v", after.Entry)
+	}
+	if after := world.entryOf(w); !after.Absent() {
+		t.Fatalf("an absent lineage's entry was written: %v", after.Entry)
+	}
+	world.fold(recreated)
+	if entry := world.entryOf(y).Entry; entry.GetMarker() != nil || !hasDropMark(entry, dropId, 3) {
+		t.Fatalf("the re-creation after the drop left %v", entry)
+	}
+	world.requireNewest(y)
+	if lines.count("fold_drop") != 0 || lines.count("fold_invalid") != 0 {
 		t.Fatalf("an honest drop alarmed:\n%s", lines)
 	}
 }
@@ -1072,7 +1137,9 @@ func TestFormat2IndexEntryShapes(t *testing.T) {
 		{"a mark of a short drop id", withMark(file(0), make([]byte, 15), 3), false},
 		{"a mark through no version", withMark(file(0), testId("drop").Bytes(), 0), false},
 		{"a mark past the newest version", withMark(file(0), testId("drop").Bytes(), 4), false},
-		{"a mark at its marker's version", withMark(&protocol.EvsIndexEntry{Marker: marker(nil, nil)}, testId("drop").Bytes(), 4), false},
+		{"a mark at its marker's version, a removed boundary's", withMark(&protocol.EvsIndexEntry{Marker: marker(nil, nil)}, testId("drop").Bytes(), 4), true},
+		{"a removed boundary's mark beside folded versions", withMark(removed(), testId("drop").Bytes(), 4), true},
+		{"a mark past its marker's version", withMark(removed(), testId("drop").Bytes(), 5), false},
 	} {
 		entryBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(c.entry)
 		if err != nil {

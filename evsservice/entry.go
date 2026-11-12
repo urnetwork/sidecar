@@ -195,10 +195,11 @@ func ParseEvsIndexEntry(entryBytes []byte) (*protocol.EvsIndexEntry, error) {
 		switch {
 		case len(dropMark.GetDropId()) != 16 || throughVersion == 0:
 			return refuse("a drop mark of a %d B drop id through version %d", len(dropMark.GetDropId()), throughVersion)
-		case 0 < len(versions) && newestPathVersion(versions) < throughVersion:
+		case entry.GetMarker() == nil && 0 < len(versions) && newestPathVersion(versions) < throughVersion:
 			return refuse("a drop mark through version %d past the path's newest", throughVersion)
-		case entry.GetMarker() != nil && entry.GetMarker().GetPathVersion() <= throughVersion:
-			return refuse("a drop mark through version %d at or past its marker's", throughVersion)
+		case entry.GetMarker() != nil && entry.GetMarker().GetPathVersion() < throughVersion:
+			// a removed boundary's mark equals its marker's version, the standing removal's (DESIGN-DETAILS 10.2.7)
+			return refuse("a drop mark through version %d past its marker's", throughVersion)
 		}
 	}
 	return entry, nil

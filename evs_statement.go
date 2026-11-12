@@ -46,9 +46,6 @@ const evsPushPurpose = "evs-push"
 // What a one-part push's payload passing 1 MiB tells the builder: build parts instead.
 var errEvsPayloadTooLarge = errors.New("evs payload past 1 MiB")
 
-// Room kept in each part for its fixed fields and their framing, past its changes and slices.
-const evsPartFieldsByteCount = 4 * 1024
-
 // The flag bits format 1 writes, and format 2's, which it refuses as needing that format.
 const (
 	evsFormat1PushFlags = uint32(protocol.EvsPushFlag_EVS_PUSH_FORCE) | uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE) |
@@ -103,7 +100,7 @@ func ParseEvsStatementFormat2(statementBytes []byte) (*EvsStatement, error) {
 
 // A statement's bytes held to its format's shape.
 func parseEvsStatement(statementBytes []byte, format2 bool) (*EvsStatement, error) {
-	if EvsStatementMaxByteCount < len(statementBytes) {
+	if DefaultEvsFormatSettings().StatementMaxByteCount < len(statementBytes) {
 		return nil, fmt.Errorf("%w: a statement of %d bytes, past 1 KiB", ErrEvsPushInvalid, len(statementBytes))
 	}
 	signed := &bridge.Signed{}
@@ -221,7 +218,7 @@ func (self *EvsStatement) checkShape(format2 bool) error {
 		prefixByteCount += len(tokenPath) * EvsTokenByteCount
 		self.ChangedPrefixes = append(self.ChangedPrefixes, tokenPath)
 	}
-	if EvsChangedPrefixesMaxByteCount < prefixByteCount {
+	if DefaultEvsFormatSettings().ChangedPrefixesMaxByteCount < prefixByteCount {
 		return fmt.Errorf("%w: changed_prefixes of %d bytes", ErrEvsPushInvalid, prefixByteCount)
 	}
 	if len(push.GetChangesRoot()) != 0 {
@@ -328,14 +325,15 @@ type EvsBuiltPush struct {
 	ChangeTree *EvsChangeTree
 }
 
-// Builds pushes' statements and payloads and signs them through sign.
+// Builds pushes' statements and payloads and signs them through sign, within format's bounds.
 type EvsStatementBuilder struct {
-	sign EvsSignFunction
+	sign   EvsSignFunction
+	format *EvsFormatSettings
 }
 
-// A builder signing through sign, which signs as the sidecar's identity key.
+// A builder signing through sign, which signs as the sidecar's identity key, within the protocol's bounds.
 func NewEvsStatementBuilder(sign EvsSignFunction) *EvsStatementBuilder {
-	return &EvsStatementBuilder{sign: sign}
+	return &EvsStatementBuilder{sign: sign, format: DefaultEvsFormatSettings()}
 }
 
 // A planned change as the push carries it: its message and its leaf bytes.
@@ -401,14 +399,14 @@ func evsStateChangeRoot(push *protocol.EvsPush, root [sha256.Size]byte, changeCo
 	push.ChangeCount = uint32(changeCount)
 	for depth := EvsTokenPathMaxLength; 0 <= depth; depth -= 1 {
 		cover, byteCount := evsCoveringPrefixes(paths, depth)
-		if EvsChangedPrefixesMaxByteCount < byteCount {
+		if DefaultEvsFormatSettings().ChangedPrefixesMaxByteCount < byteCount {
 			continue
 		}
 		push.ChangedPrefixes = make([]*protocol.EvsTokenPath, len(cover))
 		for i, prefix := range cover {
 			push.ChangedPrefixes[i] = prefix.Proto()
 		}
-		if evsSignedStatementSize(push) <= EvsStatementMaxByteCount {
+		if evsSignedStatementSize(push) <= DefaultEvsFormatSettings().StatementMaxByteCount {
 			return nil
 		}
 	}
@@ -426,8 +424,18 @@ func (self *EvsStatementBuilder) Build(plan *EvsPushPlan) (*EvsBuiltPush, error)
 
 // Builds a format-2 push as Build builds a format-1 one, a DROP's body and lists among its sections, drop_sha256 set
 // over its body, and its statement parsed back as format 2. Its staged bytes are the caller's (EvsEncodeStaged), which
-// a part's bound must count beside the part (plan-EVS2-small-readings#13).
+// a part's bound must count beside the part (plan-EVS2-small-readings#13). A DROP in parts is laid out as DESIGN-DETAILS
+// 10.2.5 has it (buildParts); a DROP whose body or lists pass one DROP push's bounds is ErrEvsDropTooLarge before
+// anything is signed, which the client's drop engine cuts at lineage boundaries.
 func (self *EvsStatementBuilder) BuildFormat2(plan *EvsPushPlan) (*EvsBuiltPush, error) {
+	if len(plan.DropBody) != 0 {
+		if self.format.DropMaxBodyByteCount < len(plan.DropBody) {
+			return nil, fmt.Errorf("%w: a body of %d bytes", ErrEvsDropTooLarge, len(plan.DropBody))
+		}
+		if self.format.DropMaxListedCount*sha256.Size < len(plan.DropLists) {
+			return nil, fmt.Errorf("%w: lists of %d bytes", ErrEvsDropTooLarge, len(plan.DropLists))
+		}
+	}
 	return self.build(plan, true)
 }
 
@@ -521,7 +529,7 @@ func (self *EvsStatementBuilder) build(plan *EvsPushPlan, format2 bool) (*EvsBui
 	}
 	statePayloadHashes(sourcesSection)
 
-	if entryWriteCount <= EvsPartMaxEntryWriteCount {
+	if entryWriteCount <= self.format.PartMaxEntryWriteCount {
 		built, err := self.buildOnePart(push, changes, common, sourcesSection, format2)
 		if err == nil || !errors.Is(err, errEvsPayloadTooLarge) {
 			return built, err
@@ -558,7 +566,7 @@ func (self *EvsStatementBuilder) buildOnePart(push *protocol.EvsPush, changes []
 	listed.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_CHANGE_LIST, evsJoinItems(leaves))
 	listed.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_MERKLE_PROOFS, evsJoinItems(proofs))
 	listedBytes := listed.Encode()
-	if EvsPayloadMaxByteCount < len(listedBytes) {
+	if self.format.PayloadMaxByteCount < len(listedBytes) {
 		return nil, errEvsPayloadTooLarge
 	}
 
@@ -567,7 +575,7 @@ func (self *EvsStatementBuilder) buildOnePart(push *protocol.EvsPush, changes []
 		push.Changes[i] = change.message
 	}
 	built := &EvsBuiltPush{Payload: payload.Encode()}
-	if EvsStatementMaxByteCount < evsSignedStatementSize(push) {
+	if self.format.StatementMaxByteCount < evsSignedStatementSize(push) {
 		if err := evsStateChangeRoot(push, tree.Root(), len(changes), paths); err != nil {
 			return nil, err
 		}
@@ -632,7 +640,26 @@ var evsSpilledSections = []protocol.EvsPayloadSection{
 // 8.2.2's parts row). A push with no change past 1 MiB, a tag over a long unheld history or an update whose tip tree
 // stands, is every part changeless, its statement the root of zero parts with changes, a count of 0 and no prefix
 // (QD-658).
+//
+// A DROP lays out as DESIGN-DETAILS 10.2.5 has it: part 1 takes section 9, its body, whole, its run of changes cut to
+// leave it room (a first part with no change when the DROP has none); section 10's values fill each part's room
+// left in part order from part 1 on, a value never split; then parts with no change take at most
+// DropListPartValueCount values each until the lists end.
 func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*evsBuildChange, common *EvsPayload, sourcesSection []byte, format2 bool) (*EvsBuiltPush, error) {
+	format := self.format
+	dropBody := common.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY)
+	// the room part 1 keeps for the body, whole (10.2.5's step 2)
+	dropReserve := 0
+	if len(dropBody) != 0 {
+		dropReserve = len(dropBody) + evsPayloadSectionHeaderByteCount
+	}
+	partRoom := func(index int) int {
+		room := format.PartMaxByteCount - format.PartFieldsByteCount
+		if index == 0 {
+			room -= dropReserve
+		}
+		return room
+	}
 	pathLength := bits.Len(uint(len(changes)))
 	parts := []*evsBuildPart{}
 	if 0 < len(changes) {
@@ -646,7 +673,7 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 		if change.planned.EntryVersion != nil {
 			writes = 1
 		}
-		if 0 < len(current.changes) && (EvsPartMaxEntryWriteCount < entryWrites+writes || EvsPartMaxByteCount-evsPartFieldsByteCount < current.byteCount+changeByteCount) {
+		if 0 < len(current.changes) && (format.PartMaxEntryWriteCount < entryWrites+writes || partRoom(len(parts)-1) < current.byteCount+changeByteCount) {
 			current = &evsBuildPart{sections: &EvsPayload{}}
 			parts = append(parts, current)
 			entryWrites = 0
@@ -677,6 +704,10 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 	}
 	spill := []*evsSpilledSection{}
 	for _, sectionType := range evsSpilledSections {
+		if sectionType == protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY {
+			// part 1's, whole, below
+			continue
+		}
 		if sectionBytes := common.Section(sectionType); len(sectionBytes) != 0 {
 			spill = append(spill, &evsSpilledSection{sectionType: sectionType, remaining: sectionBytes})
 		}
@@ -694,6 +725,16 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 				continue
 			}
 			take := min(len(pending.remaining), room-evsPayloadSectionHeaderByteCount)
+			if pending.sectionType == protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS {
+				// whole values, and at most DropListPartValueCount in a part with no change (10.2.5's step 3)
+				if len(part.changes) == 0 {
+					take = min(take, format.DropListPartValueCount*sha256.Size)
+				}
+				take -= take % sha256.Size
+				if take == 0 {
+					continue
+				}
+			}
 			setSlice(part, pending.sectionType, pending.remaining[:take])
 			pending.remaining = pending.remaining[take:]
 			room -= take + evsPayloadSectionHeaderByteCount
@@ -702,15 +743,22 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 	left := func() bool {
 		return slices.ContainsFunc(spill, func(pending *evsSpilledSection) bool { return 0 < len(pending.remaining) })
 	}
-	for _, part := range parts {
-		fill(part, EvsPartMaxByteCount-evsPartFieldsByteCount-part.byteCount)
+	if len(dropBody) != 0 {
+		// section 9 rides whole in part 1, which a DROP with no change makes changeless (10.2.5's steps 2 and 4)
+		if len(parts) == 0 {
+			parts = append(parts, &evsBuildPart{sections: &EvsPayload{}})
+		}
+		parts[0].sections.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY, dropBody)
+	}
+	for i, part := range parts {
+		fill(part, partRoom(i)-part.byteCount)
 	}
 	for left() {
 		if EvsMaxPartCount <= len(parts) {
 			return nil, fmt.Errorf("%w: more than %d parts", ErrEvsPushInvalid, EvsMaxPartCount)
 		}
 		changeless := &evsBuildPart{sections: &EvsPayload{}}
-		fill(changeless, EvsPartMaxByteCount-evsPartFieldsByteCount)
+		fill(changeless, partRoom(len(parts)))
 		parts = append(parts, changeless)
 	}
 	if len(parts) < evsMinPartCount {
@@ -724,7 +772,8 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 				last = sectionType
 			}
 		}
-		if last == protocol.EvsPayloadSection_EVS_PAYLOAD_SECTION_UNSPECIFIED {
+		if last == protocol.EvsPayloadSection_EVS_PAYLOAD_SECTION_UNSPECIFIED || last == protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY {
+			// a DROP's body never splits (10.2.5), and a DROP with lists has them after it
 			return nil, fmt.Errorf("%w: a push in parts with one change and nothing to put beside it", ErrEvsPushInvalid)
 		}
 		slice := first.metadata
@@ -732,6 +781,10 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 			slice = first.sections.Section(last)
 		}
 		half := len(slice) / 2
+		if last == protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS {
+			// a value never split
+			half -= half % sha256.Size
+		}
 		changeless := &evsBuildPart{sections: &EvsPayload{}}
 		setSlice(changeless, last, slice[half:])
 		if half == 0 {
@@ -775,7 +828,7 @@ func (self *EvsStatementBuilder) buildParts(push *protocol.EvsPush, changes []*e
 		if err != nil {
 			return nil, fmt.Errorf("evs: part: %w", err)
 		}
-		if EvsPartMaxByteCount < len(partBytes) {
+		if format.PartMaxByteCount < len(partBytes) {
 			return nil, fmt.Errorf("%w: part %d of %d bytes", ErrEvsPushInvalid, i+1, len(partBytes))
 		}
 		digest := sha256.Sum256(partBytes)

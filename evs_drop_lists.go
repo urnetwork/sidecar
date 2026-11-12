@@ -33,7 +33,7 @@ type EvsDropLists struct {
 // The lists of the DROP push states: body must hash to its drop_sha256 and hold its shape and not_before_ms, as
 // EvsCheckDropPayload's body checks hold them; a cancel's lists hold nothing.
 func NewEvsDropLists(push *protocol.EvsPush, body []byte) (*EvsDropLists, error) {
-	history, err := evsCheckDropBody(push, body)
+	history, err := evsCheckDropBody(DefaultEvsFormatSettings(), push, body)
 	if err != nil {
 		return nil, err
 	}

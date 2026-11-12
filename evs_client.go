@@ -134,6 +134,9 @@ type EvsClient struct {
 	repoIdMirrors map[Id]*EvsMirrorStore
 	// where M10's index writer joins each write's plan (evs_plan.go), nil until then
 	writeHook EvsWritePlanHook
+	// whether the network is in §19.11's format2 gate, from the composition's core state (evs_format_client.go); nil
+	// answers false
+	format2Source func() bool
 	// subscriptions and catch-up (evs_subscribe.go), with its own lock
 	subscriber *evsSubscriber
 }

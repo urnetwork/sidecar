@@ -106,7 +106,7 @@ const (
 func (self EvsMirrorFamily) maxByteCount() int64 {
 	switch self {
 	case EvsMirrorStatements:
-		return EvsStatementMaxByteCount
+		return int64(DefaultEvsFormatSettings().StatementMaxByteCount)
 	case EvsMirrorLogPages:
 		return EvsLogPageMaxByteCount
 	case EvsMirrorRecords:
@@ -116,7 +116,7 @@ func (self EvsMirrorFamily) maxByteCount() int64 {
 	case EvsMirrorSlots:
 		return evsSlotMaxByteCount
 	case EvsMirrorMapParts:
-		return EvsPathMapMaxByteCount
+		return int64(DefaultEvsFormatSettings().PathMapMaxByteCount)
 	}
 	return 0
 }

@@ -57,7 +57,7 @@ func (self *pushFixture) slotIndexes(slotId sidecar.Id) []uint32 {
 	if err != nil {
 		return nil
 	}
-	objectBytes, _ := readAllLimited(object, evsSlotMaxByteCount)
+	objectBytes, _ := readAllLimited(object, DefaultEvsSettings().SlotMaxByteCount)
 	object.Body.Close()
 	slot, err := sidecar.EvsDecodeSlotObject(objectBytes)
 	if err != nil {

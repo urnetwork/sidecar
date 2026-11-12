@@ -91,7 +91,7 @@ type GkmRekeySettings struct {
 // The defaults, a fresh value each call.
 func DefaultGkmRekeySettings() *GkmRekeySettings {
 	return &GkmRekeySettings{
-		PushEntryWriteCount: EvsPartMaxEntryWriteCount,
+		PushEntryWriteCount: DefaultEvsFormatSettings().PartMaxEntryWriteCount,
 		FileRate:            SidecarRate{Count: 50, Burst: 1, Interval: 1 * time.Second},
 		PushByteCount:       64 * 1024 * 1024,
 		MovedRetryCount:     3,
@@ -103,7 +103,7 @@ func (self *GkmRekeySettings) validate() error {
 	if err := checkSettingsNumbers("GkmRekeySettings", reflect.ValueOf(self).Elem(), false); err != nil {
 		return err
 	}
-	if EvsPartMaxEntryWriteCount < self.PushEntryWriteCount {
+	if DefaultEvsFormatSettings().PartMaxEntryWriteCount < self.PushEntryWriteCount {
 		return fmt.Errorf("%w: GkmRekeySettings.PushEntryWriteCount past §10.16's 1,024", errInvalidSettings)
 	}
 	return nil
@@ -628,8 +628,8 @@ func (self *gkmRekeyRun) walkRef(ctx context.Context, refName []byte) (skipReaso
 			}
 		}
 	} else {
-		for start := 0; start < len(paths); start += EvsReadMaxPathCount {
-			named := paths[start:min(len(paths), start+EvsReadMaxPathCount)]
+		for start := 0; start < len(paths); start += DefaultEvsFormatSettings().ReadMaxPathCount {
+			named := paths[start:min(len(paths), start+DefaultEvsFormatSettings().ReadMaxPathCount)]
 			kinds, reason, err := self.namedKinds(ctx, refName, named)
 			if err != nil || reason != "" {
 				return reason, err
@@ -693,7 +693,7 @@ func (self *gkmRekeyRun) walkEntry(ctx context.Context, path string, kind protoc
 			return nil
 		}
 		self.listedPaths = append(self.listedPaths, path)
-		if EvsReadMaxPathCount <= len(self.listedPaths) {
+		if DefaultEvsFormatSettings().ReadMaxPathCount <= len(self.listedPaths) {
 			return self.readListed(ctx)
 		}
 		return nil
@@ -822,8 +822,8 @@ func (self *gkmRekeyRun) pushBatch(ctx context.Context) error {
 		}
 		self.batch = nil
 		self.batchByteCount = 0
-		for start := 0; start < len(paths); start += EvsReadMaxPathCount {
-			if err := self.readFiles(ctx, paths[start:min(len(paths), start+EvsReadMaxPathCount)], false); err != nil {
+		for start := 0; start < len(paths); start += DefaultEvsFormatSettings().ReadMaxPathCount {
+			if err := self.readFiles(ctx, paths[start:min(len(paths), start+DefaultEvsFormatSettings().ReadMaxPathCount)], false); err != nil {
 				return err
 			}
 		}

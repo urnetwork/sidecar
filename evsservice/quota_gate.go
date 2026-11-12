@@ -6,7 +6,8 @@
 //
 //   - CheckUpload, a segment upload (EVSB-M2-09): refused while the network is over its limit or spent, a
 //     re-seed upload excepted. A ?closure=1 upload goes to ChargeClosure instead.
-//   - CheckPush, step 5c (EVS1-M2-11): a push naming a new segment or inline record is refused; maintenance,
+//   - CheckPush, step 5c (EVS1-M2-11): a push naming a new segment, a staged segment (format 2's, EVS2-M10-06) or
+//     an inline record is refused, so a push that only removes versionless files, adding none, passes; maintenance,
 //     which adds no payload (CONSUME, BASE, ERASE, PATH_EPOCH and its maps, DELETE, a repo's deletion and
 //     restore, EvsReseed), a CUT, an erasure's CLOSURE, a DROP that uploads no segment, a cancel, and config and
 //     mailcfg pushes, which §7.9's own limits bound, are accepted.
@@ -77,9 +78,10 @@ type QuotaPush struct {
 	Authorization bool
 	// The push deletes or restores the repo (repo/ lifecycle), or is an EvsReseed's.
 	Lifecycle bool
-	// The segments the push introduces and the inline records it adds.
-	NewSegmentCount   int
-	InlineRecordCount int
+	// The segments the push introduces, the staged segments it carries (format 2) and the inline records it adds.
+	NewSegmentCount    int
+	StagedSegmentCount int
+	InlineRecordCount  int
 }
 
 // See the file header.
@@ -224,11 +226,11 @@ func QuotaRefusesAtLimit(push *QuotaPush) bool {
 		// a drop or its cancel, or a CUT whose one staged record replaces its ref's erasure set: accepted
 		// while it uploads no segment
 		return push.NewSegmentCount != 0
-	case push.Flags&quotaMaintenanceFlags != 0 && push.NewSegmentCount == 0 && push.InlineRecordCount == 0:
+	case push.Flags&quotaMaintenanceFlags != 0 && push.NewSegmentCount == 0 && push.StagedSegmentCount == 0 && push.InlineRecordCount == 0:
 		return false
 	}
-	// a push that adds no payload passes whatever its flags
-	return push.NewSegmentCount != 0 || push.InlineRecordCount != 0
+	// a push that adds no payload passes whatever its flags: one that only removes versionless files among them
+	return push.NewSegmentCount != 0 || push.StagedSegmentCount != 0 || push.InlineRecordCount != 0
 }
 
 // A ?closure=1 upload of byteCount by eraserId, the token's sidecar, to a repo of the network. Below the limit

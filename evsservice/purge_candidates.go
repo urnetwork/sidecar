@@ -38,7 +38,7 @@ type PurgeReplaced struct {
 // carries no list for.
 func PurgeCandidates(replaced []*PurgeReplaced, pushVersions []*protocol.EvsEntryVersion, roomByteCount int) *protocol.EvsPurgeList {
 	list, idCount := purgeCandidateList(replaced, pushVersions)
-	if sidecar.EvsPurgeListMaxIdCount < idCount || roomByteCount < proto.Size(list) {
+	if sidecar.DefaultEvsFormatSettings().PurgeListMaxIdCount < idCount || roomByteCount < proto.Size(list) {
 		return &protocol.EvsPurgeList{Marked: true}
 	}
 	return list
