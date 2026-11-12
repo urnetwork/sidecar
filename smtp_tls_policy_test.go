@@ -5,8 +5,10 @@
 // handshake under the authentication's VerifyPeer. Each level is reached; a malicious edge that strips
 // TLSA under a TL1 pin, or names a host of its own, is refused inside the handshake, so the MX sees no
 // command after it; PKIX for the wrong name is no authentication; TL4 is refused with a DSN reason
-// until a message's own approval lets it through, labeled; pins rise, hold 90 days, lapse and survive
-// a restart. The TLS-level checks then run on their own against a fake DoH for the lookups' edges.
+// until a message's own approval, or the domain's allowance, lets it through, labeled; the allowance is
+// its own action through the gate (QD-729), for its domain alone, until it ends, and no approval of a
+// mail_send stands in for it; pins rise, hold 90 days, lapse and survive a restart. The TLS-level
+// checks then run on their own against a fake DoH for the lookups' edges.
 //
 // Names are .example and addresses RFC 5737's. The web PKI is a synthetic root of the test's own.
 
@@ -15,12 +17,14 @@ package sidecar_test
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +32,7 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
@@ -79,6 +84,85 @@ type testTlsWorld struct {
 	store    *sidecartest.FakeStore
 	settings *sidecar.SmtpSenderSettings
 	anchors  *sidecar.SmtpDnssecAnchors
+	gate     *testTlsGate
+}
+
+// §5.4's gate as far as an allowance meets it, in place of Sidecar.Authorize: an action whose stored
+// bytes a person approved runs its effect once under a key of its own and answers its outcome; any
+// other waits, as *ApprovalPendingError. The real gate's ledger and spend are record_gate_test.go's
+// and smtp_tls_allowance_test.go's.
+type testTlsGate struct {
+	stateLock sync.Mutex
+	// SHA-256 of each stored action a person approved
+	approved map[[sha256.Size]byte]bool
+	// each action asked, in order
+	asked []*sidecar.SidecarAction
+	// effects run
+	runCount int
+}
+
+func newTestTlsGate() *testTlsGate {
+	return &testTlsGate{approved: map[[sha256.Size]byte]bool{}}
+}
+
+func (self *testTlsGate) Authorize(ctx context.Context, action *sidecar.SidecarAction, decision *bridge.Signed) error {
+	payloadSha256 := action.PayloadSha256()
+	approved := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.asked = append(self.asked, action)
+		if self.approved[payloadSha256] {
+			self.runCount += 1
+			return true
+		}
+		return false
+	}()
+	if !approved {
+		return &sidecar.ApprovalPendingError{ApprovalId: sidecar.Id(payloadSha256[:16])}
+	}
+	effectKey := sha256.Sum256(append([]byte("test tls gate effect "), payloadSha256[:]...))
+	effectRef, err := action.Effect.Run(ctx, effectKey[:])
+	switch {
+	case err == nil:
+		action.Outcome = &sidecar.SidecarOutcome{State: sidecar.ApprovalOutcomeDone, EffectRef: effectRef}
+	case errors.Is(err, sidecar.ErrSidecarEffectNotDone):
+		action.Outcome = &sidecar.SidecarOutcome{State: sidecar.ApprovalOutcomeNotDone, Err: err}
+	default:
+		action.Outcome = &sidecar.SidecarOutcome{State: sidecar.ApprovalOutcomeUncertain, Err: err}
+	}
+	return nil
+}
+
+// A person approves the last action asked.
+func (self *testTlsGate) approveLast(t *testing.T) {
+	t.Helper()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if len(self.asked) == 0 {
+		t.Fatal("nothing was asked")
+	}
+	self.approved[self.asked[len(self.asked)-1].PayloadSha256()] = true
+}
+
+// The last action asked, parsed as an approver reads it.
+func (self *testTlsGate) lastAsked(t *testing.T) *protocol.CanonicalAction {
+	t.Helper()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if len(self.asked) == 0 {
+		t.Fatal("nothing was asked")
+	}
+	stored, err := sidecar.ParseStoredCanonicalAction(self.asked[len(self.asked)-1].Canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stored.Action
+}
+
+func (self *testTlsGate) counts() (askedCount int, runCount int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return len(self.asked), self.runCount
 }
 
 func newTestTlsWorld(t *testing.T, options *sidecartest.MxWorldZoneOptions) *testTlsWorld {
@@ -109,6 +193,7 @@ func newTestTlsWorld(t *testing.T, options *sidecartest.MxWorldZoneOptions) *tes
 		store:    sidecartest.NewFakeStore(),
 		settings: sidecar.DefaultSmtpSenderSettings(),
 		anchors:  testDnssecAnchors(t, world),
+		gate:     newTestTlsGate(),
 	}
 }
 
@@ -142,7 +227,22 @@ func (self *testTlsWorld) policy() *sidecar.SmtpTlsPolicy {
 	pins := sidecar.NewSmtpPinStore(self.store.Root(), self.settings, self.clock)
 	mtaSts := sidecar.NewSmtpMtaSts(self.zone, self.world.MtaStsTransport(), self.store.Root(), self.settings, self.clock)
 	dane := sidecar.NewSmtpDane(self.anchors, self.clock, nil)
-	return sidecar.NewSmtpTlsPolicy(dane, mtaSts, pins, self.zone, self.pki.roots, self.settings, self.clock)
+	allowances := sidecar.NewSmtpTlsAllowanceStore(self.store.Root(), self.settings, self.clock)
+	return sidecar.NewSmtpTlsPolicy(dane, mtaSts, pins, allowances, self.gate, self.zone, self.pki.roots, self.settings, self.clock)
+}
+
+// Asks for the domain's allowance, which must wait for a person, has the person approve it, and asks
+// again, which must keep it.
+func (self *testTlsWorld) allow(t *testing.T, policy *sidecar.SmtpTlsPolicy, recipientDomain string, expireTime time.Time) {
+	t.Helper()
+	pending := &sidecar.ApprovalPendingError{}
+	if err := policy.AllowUnauthenticated(context.Background(), recipientDomain, expireTime, nil); !errors.As(err, &pending) {
+		t.Fatalf("an allowance no one approved: %v", err)
+	}
+	self.gate.approveLast(t)
+	if err := policy.AllowUnauthenticated(context.Background(), recipientDomain, expireTime, nil); err != nil {
+		t.Fatalf("an approved allowance: %v", err)
+	}
 }
 
 // An honest edge, which resolves, dials and sends its dnssec_chain.
@@ -361,8 +461,9 @@ func TestSmtpTlsReachesTl3ByTheDevicesOwnMxLookup(t *testing.T) {
 	}
 }
 
-// TL4 is refused with a DSN reason; AllowUnauthenticated cannot yet allow it, holding on its question;
-// and the message's own approval, from a verified outbox entry, lets it go, labeled EX4 (I-11).
+// TL4 is refused with a DSN reason, and the message's own approval, from a verified outbox entry, lets
+// it go, labeled EX4 (I-11), for that message alone: the next one is refused again, and nothing was
+// kept in the store.
 func TestSmtpTlsReachesTl4OnlyByAnApproval(t *testing.T) {
 	world := newTestTlsWorld(t, &sidecartest.MxWorldZoneOptions{Unsigned: true})
 	mx := world.addMx(t, testTlsHost, testTlsAddress, nil)
@@ -385,13 +486,6 @@ func TestSmtpTlsReachesTl4OnlyByAnApproval(t *testing.T) {
 		t.Errorf("the error names a name: %q", refusal.Error())
 	}
 
-	err := policy.AllowUnauthenticated(context.Background(), testTlsDomain, nil)
-	if !errors.Is(err, sidecar.ErrSmtpTlsAllowanceHeld) || !strings.Contains(err.Error(), "smtp-m9-06-tl4-allowance-action") {
-		t.Errorf("the allowance: %v", err)
-	}
-	send = world.send(t, world.edge(nil), policy, 0)
-	testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalUnauthenticated, mx, 0)
-
 	send = world.send(t, world.edge(nil), policy, 0, "other.example", "MAIL.example.")
 	testTlsExpectSent(t, send, sidecar.SmtpTlsLevelUnauthenticated)
 	if label := send.authentication.Level().Label(); label != "readable by an active URnetwork edge" {
@@ -400,6 +494,238 @@ func TestSmtpTlsReachesTl4OnlyByAnApproval(t *testing.T) {
 	if _, transactions := testTlsMxSaw(mx); transactions != 1 {
 		t.Errorf("%d transactions", transactions)
 	}
+	secure, _ := testTlsMxSaw(mx)
+	send = world.send(t, world.edge(nil), policy, 0)
+	testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalUnauthenticated, mx, secure)
+	if allowance, err := policy.UnauthenticatedAllowance(testTlsDomain); err != nil || allowance != nil {
+		t.Errorf("a message's approval was kept as the domain's: %+v %v", allowance, err)
+	}
+	if askedCount, _ := world.gate.counts(); askedCount != 0 {
+		t.Errorf("%d actions reached the gate", askedCount)
+	}
+}
+
+// The desktop's allowance (QD-729): asking for it builds mail_tls_unauthenticated from the domain in
+// its one form and waits for a person, and until they approve TL4 stays refused; once they do the
+// store keeps the allowance, mail to that domain goes at TL4, labeled, and still does after a restart.
+func TestSmtpTlsAllowanceLetsTl4Through(t *testing.T) {
+	world := newTestTlsWorld(t, &sidecartest.MxWorldZoneOptions{Unsigned: true})
+	mx := world.addMx(t, testTlsHost, testTlsAddress, nil)
+	policy := world.policy()
+
+	pending := &sidecar.ApprovalPendingError{}
+	if err := policy.AllowUnauthenticated(context.Background(), "MAIL.example.", time.Time{}, nil); !errors.As(err, &pending) {
+		t.Fatalf("an allowance no one approved: %v", err)
+	}
+	asked := world.gate.lastAsked(t)
+	if sidecar.SidecarActionKind(asked.GetKind()) != sidecar.SidecarActionMailTlsUnauthenticated || asked.GetHost() != testTlsDomain ||
+		asked.GetExpiresMillis() != 0 || asked.GetScope() || len(asked.GetRecipients()) != 0 || asked.GetPreview() != "" {
+		t.Errorf("the action asked: %+v", asked)
+	}
+	if allowance, err := policy.UnauthenticatedAllowance(testTlsDomain); err != nil || allowance != nil {
+		t.Errorf("a waiting allowance was kept: %+v %v", allowance, err)
+	}
+	send := world.send(t, world.edge(nil), policy, 0)
+	testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalUnauthenticated, mx, 0)
+
+	world.gate.approveLast(t)
+	if err := policy.AllowUnauthenticated(context.Background(), testTlsDomain, time.Time{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	allowance, err := policy.UnauthenticatedAllowance(testTlsDomain)
+	if err != nil || allowance == nil || allowance.RecipientDomain != testTlsDomain || !allowance.ExpireTime.IsZero() || !allowance.AllowTime.Equal(testTlsStart) {
+		t.Fatalf("the allowance: %+v %v", allowance, err)
+	}
+	send = world.send(t, world.edge(nil), policy, 0)
+	testTlsExpectSent(t, send, sidecar.SmtpTlsLevelUnauthenticated)
+	if label := send.authentication.Level().Label(); label != "readable by an active URnetwork edge" {
+		t.Errorf("label %q", label)
+	}
+	// asking again is the same action: its effect is found under its key, and nothing is written twice
+	if err := policy.AllowUnauthenticated(context.Background(), testTlsDomain, time.Time{}, nil); err != nil {
+		t.Errorf("the same allowance again: %v", err)
+	}
+	if again, err := policy.UnauthenticatedAllowance(testTlsDomain); err != nil || again == nil || !again.AllowTime.Equal(allowance.AllowTime) {
+		t.Errorf("the allowance after asking again: %+v %v", again, err)
+	}
+
+	// a restart
+	send = world.send(t, world.edge(nil), world.policy(), 0)
+	testTlsExpectSent(t, send, sidecar.SmtpTlsLevelUnauthenticated)
+	if _, transactions := testTlsMxSaw(mx); transactions != 2 {
+		t.Errorf("%d transactions", transactions)
+	}
+	// REQUIRETLS takes TL1 or TL2 whatever was allowed
+	secure, _ := testTlsMxSaw(mx)
+	send = world.send(t, world.edge(nil), world.policy(), sidecar.SmtpFlagRequireTls)
+	testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalRequireTls, mx, secure)
+}
+
+// An allowance is for its recipient domain alone: one for another domain lets nothing through here.
+func TestSmtpTlsAllowanceIsForItsDomainAlone(t *testing.T) {
+	world := newTestTlsWorld(t, &sidecartest.MxWorldZoneOptions{Unsigned: true})
+	mx := world.addMx(t, testTlsHost, testTlsAddress, nil)
+	policy := world.policy()
+
+	world.allow(t, policy, testTlsOtherZone, time.Time{})
+	world.allow(t, policy, "sub."+testTlsDomain, time.Time{})
+	if allowance, err := policy.UnauthenticatedAllowance(testTlsOtherZone); err != nil || allowance == nil {
+		t.Fatalf("the other domain's allowance: %+v %v", allowance, err)
+	}
+	if allowance, err := policy.UnauthenticatedAllowance(testTlsDomain); err != nil || allowance != nil {
+		t.Errorf("another domain's allowance covers this one: %+v %v", allowance, err)
+	}
+	send := world.send(t, world.edge(nil), policy, 0)
+	testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalUnauthenticated, mx, 0)
+
+	world.allow(t, policy, testTlsDomain, time.Time{})
+	send = world.send(t, world.edge(nil), policy, 0)
+	testTlsExpectSent(t, send, sidecar.SmtpTlsLevelUnauthenticated)
+}
+
+// An allowance that ends lets mail through until its expiry and nothing from then on, across a restart
+// too; one asked for with an expiry that is not ahead reaches no gate.
+func TestSmtpTlsExpiredAllowanceIsRefused(t *testing.T) {
+	world := newTestTlsWorld(t, &sidecartest.MxWorldZoneOptions{Unsigned: true})
+	mx := world.addMx(t, testTlsHost, testTlsAddress, nil)
+	policy := world.policy()
+
+	expireTime := testTlsStart.Add(time.Hour)
+	world.allow(t, policy, testTlsDomain, expireTime)
+	if asked := world.gate.lastAsked(t); asked.GetExpiresMillis() != expireTime.UnixMilli() || asked.GetHost() != testTlsDomain {
+		t.Errorf("the action asked: %+v", asked)
+	}
+	allowance, err := policy.UnauthenticatedAllowance(testTlsDomain)
+	if err != nil || allowance == nil || !allowance.ExpireTime.Equal(expireTime) {
+		t.Fatalf("the allowance: %+v %v", allowance, err)
+	}
+	world.clock.Advance(time.Hour - time.Millisecond)
+	send := world.send(t, world.edge(nil), policy, 0)
+	testTlsExpectSent(t, send, sidecar.SmtpTlsLevelUnauthenticated)
+
+	world.clock.Advance(time.Millisecond)
+	secure, _ := testTlsMxSaw(mx)
+	for _, policy := range []*sidecar.SmtpTlsPolicy{policy, world.policy()} {
+		send = world.send(t, world.edge(nil), policy, 0)
+		testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalUnauthenticated, mx, secure)
+		if allowance, err := policy.UnauthenticatedAllowance(testTlsDomain); err != nil || allowance != nil {
+			t.Errorf("an ended allowance holds: %+v %v", allowance, err)
+		}
+	}
+	// the ended allowance asked for again, or any expiry that is not ahead, reaches no gate
+	askedCount, _ := world.gate.counts()
+	for _, expireTime := range []time.Time{expireTime, world.clock.Now(), world.clock.Now().Add(-time.Hour), time.UnixMilli(0), time.UnixMilli(-5)} {
+		if err := policy.AllowUnauthenticated(context.Background(), testTlsDomain, expireTime, nil); !errors.Is(err, sidecar.ErrSmtpTlsAllowanceEnded) {
+			t.Errorf("an expiry of %s: %v", expireTime, err)
+		}
+	}
+	if after, _ := world.gate.counts(); after != askedCount {
+		t.Errorf("%d actions reached the gate for allowances that had ended", after-askedCount)
+	}
+	// a new expiry is a new action, which waits for its own approval
+	pending := &sidecar.ApprovalPendingError{}
+	if err := policy.AllowUnauthenticated(context.Background(), testTlsDomain, world.clock.Now().Add(time.Hour), nil); !errors.As(err, &pending) {
+		t.Errorf("a renewal no one approved: %v", err)
+	}
+}
+
+// An approval of a mail_send to a recipient at the domain is consent to that message, never to TL4: the
+// send is still refused, and the allowance still waits for its own approval.
+func TestSmtpTlsMailSendApprovalIsNoTl4Consent(t *testing.T) {
+	world := newTestTlsWorld(t, &sidecartest.MxWorldZoneOptions{Unsigned: true})
+	mx := world.addMx(t, testTlsHost, testTlsAddress, nil)
+	policy := world.policy()
+
+	bodySha256 := sha256.Sum256([]byte("a message to the domain"))
+	mail, err := sidecar.NewCanonicalAction(&protocol.CanonicalAction{
+		Kind:       uint32(sidecar.SidecarActionMail),
+		Recipients: []string{"someone@" + testTlsDomain},
+		BodySha256: bodySha256[:],
+		Alias:      "me",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailAction, err := sidecar.NewSidecarAction(mail, sidecar.SidecarRiskNormal, sidecar.SidecarRiskUnspecified, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailAction.Effect = testTlsNoEffect{}
+	pending := &sidecar.ApprovalPendingError{}
+	if err := world.gate.Authorize(context.Background(), mailAction, nil); !errors.As(err, &pending) {
+		t.Fatal(err)
+	}
+	world.gate.approveLast(t)
+	if err := world.gate.Authorize(context.Background(), mailAction, nil); err != nil || mailAction.Outcome.State != sidecar.ApprovalOutcomeDone {
+		t.Fatalf("the approved mail_send: %v %+v", err, mailAction.Outcome)
+	}
+
+	send := world.send(t, world.edge(nil), policy, 0)
+	testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalUnauthenticated, mx, 0)
+	if err := policy.AllowUnauthenticated(context.Background(), testTlsDomain, time.Time{}, nil); !errors.As(err, &pending) {
+		t.Errorf("the allowance beside an approved mail_send: %v", err)
+	}
+	if asked := world.gate.lastAsked(t); sidecar.SidecarActionKind(asked.GetKind()) != sidecar.SidecarActionMailTlsUnauthenticated {
+		t.Errorf("the allowance asked as kind %d", asked.GetKind())
+	}
+	if allowance, err := policy.UnauthenticatedAllowance(testTlsDomain); err != nil || allowance != nil {
+		t.Errorf("a mail_send approval kept an allowance: %+v %v", allowance, err)
+	}
+	send = world.send(t, world.edge(nil), policy, 0)
+	testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalUnauthenticated, mx, 0)
+}
+
+// An effect that does nothing, for an action the allowance tests only need approved.
+type testTlsNoEffect struct{}
+
+func (self testTlsNoEffect) Run(ctx context.Context, effectKey []byte) ([]byte, error) {
+	return []byte("sent"), nil
+}
+
+// With no gate every allowance is refused (I-8), and a gate that answers nil without running the effect
+// is not taken on its word: nothing is in the store, so nothing is allowed.
+func TestSmtpTlsAllowanceNeedsTheGateAndItsEffect(t *testing.T) {
+	world := newTestTlsWorld(t, &sidecartest.MxWorldZoneOptions{Unsigned: true})
+	mx := world.addMx(t, testTlsHost, testTlsAddress, nil)
+	pins := sidecar.NewSmtpPinStore(world.store.Root(), world.settings, world.clock)
+	mtaSts := sidecar.NewSmtpMtaSts(world.zone, world.world.MtaStsTransport(), world.store.Root(), world.settings, world.clock)
+	dane := sidecar.NewSmtpDane(world.anchors, world.clock, nil)
+	allowances := sidecar.NewSmtpTlsAllowanceStore(world.store.Root(), world.settings, world.clock)
+
+	ungated := sidecar.NewSmtpTlsPolicy(dane, mtaSts, pins, allowances, nil, world.zone, world.pki.roots, world.settings, world.clock)
+	if err := ungated.AllowUnauthenticated(context.Background(), testTlsDomain, time.Time{}, nil); !errors.Is(err, sidecar.ErrSidecarGateDenied) {
+		t.Errorf("no gate: %v", err)
+	}
+	lax := sidecar.NewSmtpTlsPolicy(dane, mtaSts, pins, allowances, testTlsLaxGate{}, world.zone, world.pki.roots, world.settings, world.clock)
+	if err := lax.AllowUnauthenticated(context.Background(), testTlsDomain, time.Time{}, nil); !errors.Is(err, sidecar.ErrSmtpTlsAllowanceNotKept) {
+		t.Errorf("a gate that ran no effect: %v", err)
+	}
+	for _, policy := range []*sidecar.SmtpTlsPolicy{ungated, lax} {
+		send := world.send(t, world.edge(nil), policy, 0)
+		testTlsExpectRefused(t, send, sidecar.SmtpTlsRefusalUnauthenticated, mx, 0)
+	}
+	// an effect whose write fails leaves the use uncertain, and nothing allowed
+	policy := world.policy()
+	pending := &sidecar.ApprovalPendingError{}
+	if err := policy.AllowUnauthenticated(context.Background(), testTlsDomain, time.Time{}, nil); !errors.As(err, &pending) {
+		t.Fatal(err)
+	}
+	world.gate.approveLast(t)
+	world.store.FailWritesAfter(0)
+	err := policy.AllowUnauthenticated(context.Background(), testTlsDomain, time.Time{}, nil)
+	if !errors.Is(err, sidecar.ErrSmtpTlsAllowanceNotKept) || !errors.Is(err, sidecartest.ErrFakeStoreWriteFailed) {
+		t.Errorf("an allowance whose write failed: %v", err)
+	}
+	if allowance, err := policy.UnauthenticatedAllowance(testTlsDomain); err != nil || allowance != nil {
+		t.Errorf("a failed write kept an allowance: %+v %v", allowance, err)
+	}
+}
+
+// A gate that passes everything and runs nothing.
+type testTlsLaxGate struct{}
+
+func (self testTlsLaxGate) Authorize(ctx context.Context, action *sidecar.SidecarAction, decision *bridge.Signed) error {
+	return nil
 }
 
 // A malicious edge strips TLSA from a host pinned at TL1. The device still reaches TL3, PKIX holding, but
@@ -537,7 +863,8 @@ func newTestTlsCheck(t *testing.T, world *testTlsWorld, doh sidecar.SmtpDohForwa
 	t.Helper()
 	pins := sidecar.NewSmtpPinStore(world.store.Root(), world.settings, world.clock)
 	mtaSts := sidecar.NewSmtpMtaSts(doh, world.world.MtaStsTransport(), world.store.Root(), world.settings, world.clock)
-	policy := sidecar.NewSmtpTlsPolicy(sidecar.NewSmtpDane(world.anchors, world.clock, nil), mtaSts, pins, doh, world.pki.roots, world.settings, world.clock)
+	allowances := sidecar.NewSmtpTlsAllowanceStore(world.store.Root(), world.settings, world.clock)
+	policy := sidecar.NewSmtpTlsPolicy(sidecar.NewSmtpDane(world.anchors, world.clock, nil), mtaSts, pins, allowances, world.gate, doh, world.pki.roots, world.settings, world.clock)
 	authentication, err := policy.Authenticate(context.Background(), &sidecar.SmtpTlsRequest{RecipientDomain: testTlsDomain, MxHost: mxHost})
 	if err != nil {
 		t.Fatal(err)
@@ -717,6 +1044,33 @@ func TestSmtpTlsStoreThatCannotAnswerHoldsTheSend(t *testing.T) {
 	if authentication.Level() != sidecar.SmtpTlsLevelUnreached || authentication.Refusal() != nil {
 		t.Errorf("level %d, refusal %v", authentication.Level(), authentication.Refusal())
 	}
+
+	// an allowance file that does not parse is neither an allowance nor none: at TL4 the send is held
+	world = newTestTlsWorld(t, &sidecartest.MxWorldZoneOptions{Unsigned: true})
+	mx := world.addMx(t, testTlsHost, testTlsAddress, nil)
+	writer, err = world.store.Root().Create("tls-allowances")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Write([]byte("not json"))
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	policy := world.policy()
+	send := world.send(t, world.edge(nil), policy, 0)
+	if !errors.Is(send.err, sidecar.ErrSidecarStoreFailed) || errors.Is(send.err, sidecar.ErrSmtpTlsRefused) ||
+		send.authentication.Level() != sidecar.SmtpTlsLevelUnreached || send.authentication.Refusal() != nil {
+		t.Errorf("an allowance file that does not parse: %v, level %d, refusal %v", send.err, send.authentication.Level(), send.authentication.Refusal())
+	}
+	if secure, _ := testTlsMxSaw(mx); secure != 0 {
+		t.Errorf("%d commands reached the MX inside TLS", secure)
+	}
+	if err := policy.AllowUnauthenticated(context.Background(), testTlsDomain, time.Time{}, nil); !errors.Is(err, sidecar.ErrSidecarStoreFailed) {
+		t.Errorf("an allowance over a file that does not parse: %v", err)
+	}
+	if askedCount, _ := world.gate.counts(); askedCount != 0 {
+		t.Errorf("%d actions reached the gate over a store that cannot answer", askedCount)
+	}
 }
 
 // A connection's peer is checked once; a second call is refused and changes nothing.
@@ -750,8 +1104,13 @@ func TestSmtpTlsRequestIsHeldToItsForm(t *testing.T) {
 			t.Errorf("%+v: %v", request, err)
 		}
 	}
-	if err := policy.AllowUnauthenticated(context.Background(), "not a domain", nil); !errors.Is(err, sidecar.ErrSmtpTlsRequest) {
-		t.Errorf("%v", err)
+	for _, domain := range []string{"not a domain", "", "mail..example", "mail.example/25", "someone@mail.example"} {
+		if err := policy.AllowUnauthenticated(context.Background(), domain, time.Time{}, nil); !errors.Is(err, sidecar.ErrSmtpTlsRequest) {
+			t.Errorf("%q: %v", domain, err)
+		}
+	}
+	if askedCount, _ := world.gate.counts(); askedCount != 0 {
+		t.Errorf("%d malformed allowances reached the gate", askedCount)
 	}
 }
 

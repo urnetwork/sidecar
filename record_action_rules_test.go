@@ -162,7 +162,7 @@ func TestCanonicalActionFieldThirtySevenOnlyAtVersionTwo(t *testing.T) {
 func TestCanonicalActionRefusesWhatNoVersionHolds(t *testing.T) {
 	cases := map[string]func(action *protocol.CanonicalAction){
 		"kind 0":     func(action *protocol.CanonicalAction) { action.Kind = 0 },
-		"kind 18":    func(action *protocol.CanonicalAction) { action.Kind = 18 },
+		"kind 19":    func(action *protocol.CanonicalAction) { action.Kind = 19 },
 		"kind 2^31":  func(action *protocol.CanonicalAction) { action.Kind = 1 << 31 },
 		"preview":    func(action *protocol.CanonicalAction) { action.Preview = string(bytes.Repeat([]byte("p"), 2*1024+1)) },
 		"audience 9": func(action *protocol.CanonicalAction) { action.Audience = 9 },

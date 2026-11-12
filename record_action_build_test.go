@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -71,6 +72,11 @@ func testBuildableActions() map[string]*protocol.CanonicalAction {
 			RestoreRunId:     bytes.Repeat([]byte{0x44}, 16),
 			RestorePaths:     []string{"scripts/deploy.sh"},
 			RestorePreviewId: bytes.Repeat([]byte{0x45}, 32),
+		},
+		"mail_tls_unauthenticated": {
+			Kind:          uint32(SidecarActionMailTlsUnauthenticated),
+			Host:          "mail.example",
+			ExpiresMillis: 1762387200000,
 		},
 	}
 }
@@ -159,12 +165,64 @@ func TestRequiredFieldMissingRefused(t *testing.T) {
 			if _, err := NewCanonicalAction(missing); !errors.Is(err, ErrCanonicalActionInvalid) {
 				t.Errorf("%s without field %d answered %v", name, number, err)
 			}
-			// a template may leave it empty: an empty field matches anything
+			// a template may leave it empty: an empty field matches anything, unless the row has a template fill it
 			missing.Scope = true
-			if _, err := NewCanonicalAction(missing); err != nil {
+			_, err := NewCanonicalAction(missing)
+			if slices.Contains(row.TemplateRequired, number) {
+				if !errors.Is(err, ErrCanonicalActionInvalid) {
+					t.Errorf("%s template without field %d answered %v", name, number, err)
+				}
+			} else if err != nil {
 				t.Errorf("%s template without field %d: %v", name, number, err)
 			}
 		}
+	}
+}
+
+// QD-729's row: mail_tls_unauthenticated's host is the recipient domain in its one form, so a trailing dot, a
+// capital, or anything that is not dot-separated LDH labels is refused rather than folded; the expiry is optional; a
+// template names its domain too, so none matches every domain; and no server path takes the kind.
+func TestTlsAllowanceHostIsHeldToItsForm(t *testing.T) {
+	for _, host := range []string{
+		"mail.example.", "Mail.example", "MAIL.EXAMPLE", "mail.Example", "mail..example", ".mail.example", "-mail.example",
+		"mail-.example", "mail example", "mail.example/25", "user@mail.example", "mail.exämple", "mail.example\n", ".",
+	} {
+		action := &protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Host: host}
+		if _, err := NewCanonicalAction(action); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("host %q answered %v", host, err)
+		}
+		action.Scope = true
+		if _, err := NewCanonicalAction(action); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("a template of host %q answered %v", host, err)
+		}
+	}
+	for _, host := range []string{"mail.example", "example", "a-b.c1.example", "xn--mnchen-3ya.example"} {
+		stored, err := NewCanonicalAction(&protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Host: host})
+		if err != nil {
+			t.Errorf("host %q: %v", host, err)
+			continue
+		}
+		if stored.Action.GetHost() != host || stored.Action.GetExpiresMillis() != 0 || stored.Action.GetVersion() != 1 {
+			t.Errorf("host %q built %+v", host, stored.Action)
+		}
+		if err := CheckCanonicalActionForServer(stored); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("a server path took the allowance: %v", err)
+		}
+	}
+	if _, err := NewCanonicalAction(&protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Scope: true}); !errors.Is(err, ErrCanonicalActionInvalid) {
+		t.Errorf("a template of every domain answered %v", err)
+	}
+	// the error names no domain, since a log may carry it (I-13)
+	_, err := NewCanonicalAction(&protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Host: "Secret.example"})
+	if err == nil || strings.Contains(strings.ToLower(err.Error()), "secret.example") {
+		t.Errorf("the refusal: %v", err)
+	}
+	// two domains are two actions, and one domain's two expiries are two
+	first := buildTestAction(t, &protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Host: "mail.example"})
+	other := buildTestAction(t, &protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Host: "other.example"})
+	ending := buildTestAction(t, &protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Host: "mail.example", ExpiresMillis: 1762387200000})
+	if bytes.Equal(first.Bytes, other.Bytes) || bytes.Equal(first.Bytes, ending.Bytes) {
+		t.Error("two allowances share their bytes")
 	}
 }
 
