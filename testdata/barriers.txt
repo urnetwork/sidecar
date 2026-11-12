@@ -503,6 +503,7 @@ secret forward_store_record_key device/posture_seal.go
 secret forward_store_root_key device/posture_seal.go
 secret identity_key identity_keys.go
 secret init_secret mls_keyschedule.go
+secret invite_join_secret config_invite.go
 secret joiner_secret mls_welcome.go
 secret measure_client_iv smtpproof/prover_measure.go
 secret measure_client_key smtpproof/prover_measure.go
@@ -510,6 +511,7 @@ secret measure_handshake_secret smtpproof/prover_measure.go
 secret measure_master_secret smtpproof/prover_measure.go
 secret measure_server_iv smtpproof/prover_measure.go
 secret measure_server_key smtpproof/prover_measure.go
+secret member_invite config_invite.go
 secret object_key evs_slot.go
 secret path_secret mls_welcome.go
 secret record_entry_key record_chain.go
