@@ -11,7 +11,9 @@
 // listing taking them.
 //
 // The clause beside it, Fs9UnfoldedListing, writes D at its bound in one push in parts and lists it and adds a child
-// before the fold, FS-9's unfolded half.
+// before the fold, FS-9's unfolded half: D's 448 KiB of rows sit in the push's unfolded delta, which the read reply
+// carries in a frame of its own after D's path frame (QD-662; question evs1-m2-40-unfolded-listing-frame), for the
+// listing and for the creation's own read of D alike, so neither passes the frame's 1 MiB and 64 KiB.
 //
 // D is top-level (QD-661; question evs1-m2-40-seal-root-part): the push that creates it changes the root's table, and
 // the clause's push in parts names the root's empty token path as its first part's, which its seal record's 52-byte

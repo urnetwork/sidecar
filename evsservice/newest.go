@@ -267,11 +267,15 @@ func newestOfChange(version uint64, pushId sidecar.Id, change *EvsCommittedChang
 type EvsListing struct {
 	// Whether the directory stands at the head.
 	Exists bool
-	// Its rows, by token.
+	// Its rows, by token: the table's and its deltas', applied in order.
 	Names []*protocol.EvsName
-	// The ref version its folded table was folded through, 0 when the window re-created it.
+	// Its folded table as its entry holds it, nil when none was folded or the window removed or re-created the
+	// directory since.
+	Table *protocol.EvsNameTable
+	// The ref version its folded table was folded through, 0 when no table stands.
 	TableThrough uint64
-	// The window versions whose deltas it applied, ascending.
+	// The window versions whose deltas it applied, ascending, since the table, or since the window last removed or
+	// created the directory, which drops what came before: the deltas a reader applies after the table to list it.
 	DeltaVersions []uint64
 }
 
@@ -291,14 +295,16 @@ func Listing(ctx context.Context, read *EvsEntryRead, head *protocol.EvsHead, pu
 	path := read.TokenPath
 	tokenNames := map[sidecar.EvsToken]*protocol.EvsName{}
 	tableThrough := uint64(0)
+	var table *protocol.EvsNameTable
 	if entry := read.Entry; entry != nil && entry.GetNames() != nil && entry.GetMarker() == nil {
+		table = entry.GetNames()
 		tableThrough = entry.GetNamesThrough()
-		for _, name := range entry.GetNames().GetNames() {
+		for _, name := range table.GetNames() {
 			tokenNames[sidecar.EvsToken(name.GetToken())] = name
 		}
 	}
 	from := max(read.FoldedThrough, tableThrough)
-	listing := &EvsListing{Exists: true, TableThrough: tableThrough}
+	listing := &EvsListing{Exists: true, Table: table, TableThrough: tableThrough}
 	for version := from + 1; version <= head.GetVersion(); version += 1 {
 		windowEntry := scan.window[version-scan.firstVersion]
 		if !windowEntry.PathsDigest.MayChange(path) {
@@ -311,18 +317,20 @@ func Listing(ctx context.Context, read *EvsEntryRead, head *protocol.EvsHead, pu
 		for _, change := range changes {
 			switch {
 			case change.TokenPath.Equal(path) && change.Removes(), !change.TokenPath.Equal(path) && change.Removes():
-				// the directory, or a prefix holding it, removed: what was listed is gone
+				// the directory, or a prefix holding it, removed: what was listed is gone, the deltas before with it
 				clear(tokenNames)
-				listing.TableThrough = 0
+				listing.Table, listing.TableThrough = nil, 0
+				listing.DeltaVersions = nil
 			case change.TokenPath.Equal(path):
 				entryVersion, err := parseEvsEntryVersion(change.EntryVersion)
 				if err != nil {
 					return nil, fmt.Errorf("%w: version %d: %v", ErrEvsStatementMismatch, version, err)
 				}
 				if change.BaseEntryVersion == 0 {
-					// a creation replaces what was held, carrying nothing
+					// a creation replaces what was held, carrying nothing, the deltas before it among it
 					clear(tokenNames)
-					listing.TableThrough = 0
+					listing.Table, listing.TableThrough = nil, 0
+					listing.DeltaVersions = nil
 				}
 				for _, removed := range entryVersion.GetNames().GetRemovedTokens() {
 					if len(removed) == sidecar.EvsTokenByteCount {
