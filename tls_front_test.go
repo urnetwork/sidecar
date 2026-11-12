@@ -240,7 +240,8 @@ func (self *tlsFrontTestListener) waitServing(t *testing.T, count int) bool {
 	}
 }
 
-// A policy a test sets: this sidecar's grant, signers' grants, members and identity keys.
+// A policy a test sets: this sidecar's grant, signers' grants, members and identity keys, whatever name it is asked
+// for, since a fixture's front serves one endpoint.
 type tlsFrontTestPolicy struct {
 	stateLock    sync.Mutex
 	grant        *TlsPublishGrant
@@ -269,7 +270,7 @@ func (self *tlsFrontTestPolicy) setGrant(audience protocol.AclAudience, appMode 
 func (self *tlsFrontTestPolicy) PublishGrant(name string, host string, now time.Time) *TlsPublishGrant {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	if self.grant == nil || name != tlsFrontTestName || host != "app" || (!self.grant.Expires.IsZero() && !now.Before(self.grant.Expires)) {
+	if self.grant == nil || (!self.grant.Expires.IsZero() && !now.Before(self.grant.Expires)) {
 		return nil
 	}
 	copied := *self.grant
@@ -281,8 +282,7 @@ func (self *tlsFrontTestPolicy) PublishGrantOf(signerId Id, grantId []byte, name
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	grant := self.signerGrants[signerId]
-	if grant == nil || !grant.holds(grantId) || name != tlsFrontTestName || host != "app" ||
-		(!grant.Expires.IsZero() && !now.Before(grant.Expires)) {
+	if grant == nil || !grant.holds(grantId) || (!grant.Expires.IsZero() && !now.Before(grant.Expires)) {
 		return nil
 	}
 	copied := *grant
@@ -553,6 +553,8 @@ type tlsFrontFixture struct {
 	alpnChanges   chan struct{}
 	// runs inside each handshake, after dispatch has read the grant, when set before the front starts
 	onCertificate func()
+	issuerUrl     string
+	log           Logger
 	edgeNetworkId Id
 	networkId     Id
 	sidecarId     Id
@@ -596,6 +598,7 @@ func newTlsFrontFixture(t *testing.T, configure func(fixture *tlsFrontFixture)) 
 			LocalAddress: "127.0.0.1:8080",
 		},
 		grantExpireMillis: uint64(clock.Now().Add(24 * time.Hour).UnixMilli()),
+		issuerUrl:         tlsFrontTestIssuer,
 	}
 	fixture.listener = newTlsFrontTestListener(fixture.edgeNetworkId)
 	fixture.policy.setGrant(protocol.AclAudience_ACL_AUDIENCE_PUBLIC, protocol.AclAppMode_ACL_APP_MODE_HTTP, nil)
@@ -620,7 +623,7 @@ func newTlsFrontFixture(t *testing.T, configure func(fixture *tlsFrontFixture)) 
 			return fixture.certificate, nil
 		},
 		Secrets:      fixture.secrets,
-		IssuerUrl:    tlsFrontTestIssuer,
+		IssuerUrl:    fixture.issuerUrl,
 		IssuerClient: fixture.issuerClient,
 		Limits:       fixture.limits,
 		DialTarget:   fixture.backend.dial,
@@ -628,6 +631,7 @@ func newTlsFrontFixture(t *testing.T, configure func(fixture *tlsFrontFixture)) 
 			fixture.alpnChanges <- struct{}{}
 		},
 		Clock: clock,
+		Log:   fixture.log,
 	})
 	if err != nil {
 		t.Fatal(err)
