@@ -178,6 +178,8 @@ type testSearchRun struct {
 	settings   *SearchResultSettings
 	search     *SidecarSearchSettings
 	order      searchRankOrder
+	// Tier 2 newest first.
+	possibleNewestFirst bool
 }
 
 // A run of query on this build's normalizer.
@@ -223,7 +225,7 @@ func (self *testSearchRun) inputs(source *searchRankSource, partitions ...*searc
 // Every hit of one phase over inputs, near hits settled as none, and the phase's last counts.
 func (self *testSearchRun) all(inputs []*searchRankInput) ([]*searchRankedHit, searchRankCounts) {
 	self.t.Helper()
-	ranker, err := newSearchRanker(&searchRankerArgs{settings: self.settings, search: self.search, order: self.order, query: self.query})
+	ranker, err := newSearchRanker(&searchRankerArgs{settings: self.settings, search: self.search, order: self.order, possibleNewestFirst: self.possibleNewestFirst, query: self.query})
 	if err != nil {
 		self.t.Fatal(err)
 	}

@@ -374,14 +374,14 @@ func (self *searchConfirmer) confirmByFields(texts *searchRowTexts, display *Sea
 // padded and joined as the index's writer joined them, holds each unscoped term, and its row, or its own field where
 // the row's was cut, each scoped one.
 func (self *searchConfirmer) verify(document *IndexDocument, texts *searchRowTexts) (*searchConfirmation, error) {
-	whole := &bytes.Buffer{}
-	if err := self.normalizer.writeDocument(whole, document.textFields()); err != nil {
+	sink := searchNewNeedleSink(self.query)
+	if err := self.normalizer.writeDocument(sink, document.textFields()); err != nil {
 		return nil, err
 	}
 	confirmation := &searchConfirmation{}
 	state, err := searchJudge(self.query, func(term *SearchTerm) (searchTermResult, error) {
 		if term.Field == 0 && term.FieldName == "" {
-			if bytes.Contains(whole.Bytes(), []byte(term.needle())) {
+			if 0 < sink.counts[term.needle()] {
 				return searchTermHolds, nil
 			}
 			return searchTermAbsent, nil
@@ -411,10 +411,12 @@ func (self *searchConfirmer) verify(document *IndexDocument, texts *searchRowTex
 	matchCount := 0
 	for _, group := range self.query.Groups {
 		for _, term := range group {
-			matchCount += bytes.Count(whole.Bytes(), []byte(term.needle()))
+			if term.Field == 0 && term.FieldName == "" {
+				matchCount += sink.counts[term.needle()]
+			}
 		}
 	}
-	confirmation.density = float64(matchCount) * 1024 / float64(max(1, whole.Len()))
+	confirmation.density = float64(matchCount) * 1024 / float64(max(1, sink.byteCount))
 	snippet, inHeader, err := self.snippetOf(document)
 	if err != nil {
 		return nil, err
@@ -526,6 +528,56 @@ func (self *searchConfirmer) snippetIn(original []byte, needle string) (string, 
 		return indexRowText(string(indexCutUtf8(block, windowByteCount))), nil
 	}
 	return indexRowText(string(indexCutUtf8(block[windowStart:windowEnd], windowByteCount))), nil
+}
+
+// Finds a query's unscoped needles in a document's normalized text as it streams past, counting where each occurs and
+// holding only the longest needle's length of what came before, so a verification holds a buffer of the text, never
+// all of it: normalizer 1 can expand a 1 MiB chunk many times (U+FDFA alone 11 times).
+type searchNeedleSink struct {
+	needles []string
+	counts  map[string]int
+	// The last longest-needle-less-one bytes written, where a needle the next write ends may start.
+	tail         []byte
+	tailMaxCount int
+	byteCount    int
+}
+
+// A sink for the query's unscoped needles, each once.
+func searchNewNeedleSink(query *SearchQuery) *searchNeedleSink {
+	sink := &searchNeedleSink{counts: map[string]int{}}
+	for _, terms := range append(slices.Clone(query.Groups), query.Excluded) {
+		for _, term := range terms {
+			needle := term.needle()
+			if term.Field != 0 || term.FieldName != "" {
+				continue
+			}
+			if _, ok := sink.counts[needle]; !ok {
+				sink.counts[needle] = 0
+				sink.needles = append(sink.needles, needle)
+				sink.tailMaxCount = max(sink.tailMaxCount, len(needle)-1)
+			}
+		}
+	}
+	return sink
+}
+
+// Counts each needle's occurrences that end in text, then keeps text's end as the tail.
+func (self *searchNeedleSink) Write(text []byte) (int, error) {
+	window := append(self.tail, text...)
+	for _, needle := range self.needles {
+		// an occurrence ending in text starts past the tail less the needle's length
+		for start := max(0, len(self.tail)-len(needle)+1); start < len(window); {
+			index := bytes.Index(window[start:], []byte(needle))
+			if index < 0 {
+				break
+			}
+			self.counts[needle] += 1
+			start += index + 1
+		}
+	}
+	self.byteCount += len(text)
+	self.tail = append(self.tail[:0], window[max(0, len(window)-self.tailMaxCount):]...)
+	return len(text), nil
 }
 
 // The start of the code point at or before index in text, so a window never splits one.
