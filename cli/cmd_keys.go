@@ -1,8 +1,12 @@
 // ur keys (§10.5, §16.16): the command word several areas build. This file registers it and its rotate part
 // (KEYS-M2-26); §16's tracks add add-presence, add-ssh, ls and rm as their own cmd_keys_<part>.go, each with its usage
-// line and its case here.
+// line and its case here: add-presence, ls and rm are cmd_keys_presence.go's (MCP-M3-09); add-ssh waits on SSHSIGs,
+// which the owner dropped from every milestone until a customer asks (plan-MCP-risk-classifier#1).
 //
 //	ur keys rotate <repo_id>    a new key generation for the repo now (§10.5's Rotate, cause request)
+//	ur keys add-presence        a presence key on this host's authenticator (cmd_keys_presence.go)
+//	ur keys rm <key_id>         one of the member's keys revoked
+//	ur keys ls                  the member's live presence keys
 //
 // rotate asks the daemon's key client for GkmClient.RotateRepo and nothing else: the client claims the generation
 // with cause request, or with cause remove when a key holder left or lapsed since the generation before and none
@@ -40,8 +44,11 @@ func init() {
 		name: "keys",
 		usage: strings.Join([]string{
 			"  ur keys rotate <repo_id>",
+			"  ur keys add-presence",
+			"  ur keys rm <key_id>",
+			"  ur keys ls",
 		}, "\n"),
-		summary: "a repo's keys: rotate starts a new key generation now",
+		summary: "keys: rotate a repo's generation, or add, remove and list presence keys",
 		run:     runUrKeys,
 	})
 	urDaemonMethodExtensions = append(urDaemonMethodExtensions, urKeysMethods)
@@ -52,8 +59,14 @@ func runUrKeys(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	switch {
 	case urOptionBool(options, "rotate"):
 		return runUrKeysRotate(ctx, cli, options)
+	case urOptionBool(options, "add-presence"):
+		return runUrKeysAddPresence(ctx, cli)
+	case urOptionBool(options, "rm"):
+		return runUrKeysRemove(ctx, cli, options)
+	case urOptionBool(options, "ls"):
+		return runUrKeysList(ctx, cli)
 	}
-	return errors.New("ur keys takes rotate")
+	return errors.New("ur keys takes rotate, add-presence, rm or ls")
 }
 
 // What the keys methods act on: a target hosting a Sidecar with a key client.

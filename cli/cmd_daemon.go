@@ -580,6 +580,8 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		}
 		return err
 	}
+	// §16.6's presence prompt: the host's authenticator, nil where it has none (presence.go)
+	daemon.SetPresenceProvider(urPlatformPresenceProvider(stateDirectory, settings.Ingest, log))
 	instance, err := sidecar.NewSidecarInstance(ctx, &sidecar.SidecarInstanceArgs{
 		Backend:   backend,
 		KeyStore:  keyStore,
