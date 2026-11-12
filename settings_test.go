@@ -171,6 +171,10 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				RemoteCursorCount:      64,
 				RemoteRequesterRate:    SidecarRate{Count: 30, Burst: 10, Interval: 1 * time.Minute},
 				ServedRecordTimeout:    30 * 24 * time.Hour,
+				ServedRecordCount:      8192,
+				RemoteServedTimeout:    24 * time.Hour,
+				StateByteCount:         4 * 1024 * 1024,
+				PageHitCount:           50,
 			},
 		},
 		// §5.4's directory settings

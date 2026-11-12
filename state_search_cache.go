@@ -805,6 +805,42 @@ func (self *SearchCache) DropRepo(repoId Id) error {
 	return nil
 }
 
+// Drops everything the cache holds of every repo: `ur search sync --evict` and DropSearchCache with no repo. search.state
+// is not in the cache's directory, so it stays (§5.9's state row).
+func (self *SearchCache) DropAll() error {
+	self.operationLock.Lock()
+	defer self.operationLock.Unlock()
+	entries, err := self.store.List("")
+	if err != nil {
+		return err
+	}
+	// metas first, so no reader takes a part for whole
+	slices.SortStableFunc(entries, func(a SidecarStoreEntry, b SidecarStoreEntry) int {
+		aMeta := strings.HasSuffix(a.Name, "/"+searchCacheMetaName)
+		bMeta := strings.HasSuffix(b.Name, "/"+searchCacheMetaName)
+		switch {
+		case aMeta && !bMeta:
+			return -1
+		case bMeta && !aMeta:
+			return 1
+		}
+		return 0
+	})
+	yield := newSidecarYield(self.clock)
+	for _, entry := range entries {
+		if err := self.removeSized(entry.Name, entry.ByteCount); err != nil {
+			return err
+		}
+		yield.step()
+	}
+	self.decoded.drop()
+	self.versionPages.drop()
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	clear(self.refs)
+	return nil
+}
+
 // A kept record's frames, read one at a time (§5.9's bounds row): the sealed header as fetched, which the reader opens
 // under its manifest key, and each frame, opened under the object key it names, so one 64 KiB frame is decrypted at a
 // time and nothing of the record is decrypted at rest.
