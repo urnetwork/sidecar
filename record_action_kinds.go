@@ -13,12 +13,18 @@
 // and 16 have no O tool and no row, so they are refused until their owners name their fields
 // (plan-MCP-wire-enum-numbers).
 //
+// Kind 18, mail_tls_unauthenticated, is the owner's answer to smtp-m9-06-tl4-allowance-action (QD-729): §14.4's TL4
+// allowance for one recipient domain, host, in the one form a domain has here, lowercase with no trailing dot, so a
+// domain has one action; and expires_millis for an allowance that ends. Its host is filled even by a template, since
+// D-SMTP-2's consent is per recipient domain and an empty host would match them all.
+//
 // Package-level functions are safe for concurrent use: the table never changes.
 
 package sidecar
 
 import (
 	"slices"
+	"strings"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -57,6 +63,11 @@ type CanonicalActionKindFields struct {
 	Server []protoreflect.FieldNumber
 	// The open question that keeps the builder refusing the kind, empty when none does.
 	Held string
+	// String fields that hold a domain name, which the builder holds to its one form where filled
+	// (canonicalActionDomainForm).
+	Domains []protoreflect.FieldNumber
+	// Required fields a template fills too, so no template of the kind matches every value of them.
+	TemplateRequired []protoreflect.FieldNumber
 }
 
 // The rows, one a kind with an O tool, in SidecarActionKind's order.
@@ -167,6 +178,16 @@ var canonicalActionKindRows = []*CanonicalActionKindFields{
 		Optional: []protoreflect.FieldNumber{31},
 		Versions: []uint32{1},
 	},
+	{
+		// §14.4's TL4 allowance (QD-729): the recipient domain as host, and when the allowance ends, 0 for never. No
+		// server path takes it: the allowance lives in the desktop's store
+		Kind:             SidecarActionMailTlsUnauthenticated,
+		Required:         []protoreflect.FieldNumber{5},
+		Optional:         []protoreflect.FieldNumber{8},
+		Versions:         []uint32{1},
+		Domains:          []protoreflect.FieldNumber{5},
+		TemplateRequired: []protoreflect.FieldNumber{5},
+	},
 }
 
 // A kind's row: what it must and may fill. False for a kind with no row, which no builder or server takes.
@@ -183,6 +204,19 @@ func CanonicalActionFields(kind SidecarActionKind) (*CanonicalActionKindFields, 
 func (self *CanonicalActionKindFields) allows(field protoreflect.FieldNumber, version uint32) bool {
 	return slices.Contains(canonicalActionCommonFields, field) || slices.Contains(self.Required, field) ||
 		slices.Contains(self.Optional, field) || (version == 2 && slices.Contains(self.Version2, field))
+}
+
+// Whether name is a domain in the one form a row's Domains fields take: dot-separated labels of 1 to 63 lowercase
+// letters, digits and inner hyphens, with no trailing dot. Capitals and a trailing dot are refused rather than
+// folded, so the bytes an approver hashes name one domain one way. The whole name's length is its component's to
+// bound, under its own settings: the sender's holds a recipient domain to RFC 5321's Domain before it builds one.
+func canonicalActionDomainForm(name string) bool {
+	for label := range strings.SplitSeq(name, ".") {
+		if !isDnsLowerLdhLabel(label) {
+			return false
+		}
+	}
+	return true
 }
 
 // Whether a server path takes this kind, and may see field on it.

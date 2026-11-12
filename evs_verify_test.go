@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -549,6 +550,265 @@ func TestEvsDirectoryDeltaBelowThePin(t *testing.T) {
 	}
 	if _, err := reader.client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: "d"}); err == nil {
 		t.Errorf("a file's entry as a directory's delta")
+	}
+}
+
+// A directory's deltas in statements whose lists are under changes_root, walked after the reader's pin, are each
+// verified by their own proof (QD-681; question evs1-m2-28-rooted-delta-proofs): the reply's delta_proofs, one a
+// delta in order. With none, with another delta's, or with a count that is not the deltas', the read is refused.
+func TestEvsRootedDirectoryDeltasVerifyByTheirProofs(t *testing.T) {
+	world := newEvsTestWorld(t)
+	world.push(&evsTestChange{path: "d", children: []string{"a"}}, &evsTestChange{path: "d/a", content: []byte("a")})
+	reader := world.reader(t, evsTestId("reader"))
+	if _, err := reader.client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: "d"}); err != nil {
+		t.Fatal(err)
+	}
+	// two pushes of 12 files into d, each past the inline bound, each changing d by a delta
+	for _, prefix := range []string{"m", "n"} {
+		directory := &evsTestChange{path: "d"}
+		changes := []*evsTestChange{directory}
+		for i := range 12 {
+			name := fmt.Sprint(prefix, i)
+			directory.children = append(directory.children, name)
+			changes = append(changes, &evsTestChange{path: "d/" + name, content: []byte(name)})
+		}
+		world.push(changes...)
+	}
+	if world.commits[1].built.ChangeTree == nil || world.commits[2].built.ChangeTree == nil {
+		t.Fatalf("the 12-file pushes' changes are inline")
+	}
+	state := world.paths["d"]
+	directoryPath := world.tokensAt("d", 1)
+	delta := func(pathVersion uint64) (*protocol.EvsIndexVersion, *protocol.EvsDeltaProof) {
+		held := state.versions[pathVersion]
+		tree := world.commits[held.commitVersion-1].built.ChangeTree
+		part, index, present := evsTestTreePosition(tree, directoryPath)
+		if !present {
+			t.Fatalf("version %d does not change d", held.commitVersion)
+		}
+		proofs, err := tree.InclusionProof(part, index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &protocol.EvsIndexVersion{PushId: held.pushId, CommitVersion: held.commitVersion, EntryVersion: held.entryBytes}, &protocol.EvsDeltaProof{Proof: proofs}
+	}
+	// evs answers d unfolded: its newest delta as the version, the table as of its first version, and both later
+	// deltas after it, each with its proof
+	shape := func(proofs func(second *protocol.EvsDeltaProof, third *protocol.EvsDeltaProof) []*protocol.EvsDeltaProof) {
+		world.mutatePath = func(reply *protocol.EvsReadPathReply) {
+			if reply.Names == nil {
+				return
+			}
+			second, secondProof := delta(2)
+			third, thirdProof := delta(3)
+			reply.Names = &protocol.EvsNameTable{Names: state.rows[:1]}
+			reply.NamesThrough = state.versions[1].commitVersion
+			reply.Deltas = []*protocol.EvsIndexVersion{second, third}
+			reply.DeltaProofs = proofs(secondProof, thirdProof)
+		}
+	}
+	list := func() (int, error) {
+		listing, err := reader.client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: "d"})
+		if err != nil {
+			return 0, err
+		}
+		return len(listing.Entries), nil
+	}
+	refused := map[string]func(second *protocol.EvsDeltaProof, third *protocol.EvsDeltaProof) []*protocol.EvsDeltaProof{
+		"no delta proofs": func(second *protocol.EvsDeltaProof, third *protocol.EvsDeltaProof) []*protocol.EvsDeltaProof {
+			return nil
+		},
+		"an empty proof for a rooted delta": func(second *protocol.EvsDeltaProof, third *protocol.EvsDeltaProof) []*protocol.EvsDeltaProof {
+			return []*protocol.EvsDeltaProof{{}, third}
+		},
+		"another delta's proof": func(second *protocol.EvsDeltaProof, third *protocol.EvsDeltaProof) []*protocol.EvsDeltaProof {
+			return []*protocol.EvsDeltaProof{third, second}
+		},
+		"one proof for two deltas": func(second *protocol.EvsDeltaProof, third *protocol.EvsDeltaProof) []*protocol.EvsDeltaProof {
+			return []*protocol.EvsDeltaProof{second}
+		},
+	}
+	for label, proofs := range refused {
+		shape(proofs)
+		if _, err := list(); !errors.Is(err, ErrEvsEntryRefused) {
+			t.Errorf("%s: %v", label, err)
+		}
+	}
+	shape(func(second *protocol.EvsDeltaProof, third *protocol.EvsDeltaProof) []*protocol.EvsDeltaProof {
+		return []*protocol.EvsDeltaProof{second, third}
+	})
+	count, err := list()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 25 {
+		t.Errorf("listed %d of 25", count)
+	}
+}
+
+// A push past the inline bound that adds files to a directory changes the directory by a delta, which does not end a
+// file already there (§11.7's newest row): a reader pinned below it verifies the file by the adjacent-leaf proof of
+// the file and the inclusion proof of the directory's delta, in the absence's present (QD-681); with present dropped
+// the read is refused, as it was before the reply could carry it.
+func TestEvsPrefixDeltaInARootedPushLeavesThePathStanding(t *testing.T) {
+	world := newEvsTestWorld(t)
+	world.push(&evsTestChange{path: "d", children: []string{"keep.txt"}}, &evsTestChange{path: "d/keep.txt", content: []byte("kept")})
+	reader := world.reader(t, evsTestId("reader"))
+	if _, _, err := evsTestRead(t, reader, world, "d/keep.txt"); err != nil {
+		t.Fatal(err)
+	}
+	directory := &evsTestChange{path: "d"}
+	changes := []*evsTestChange{directory}
+	for i := range 12 {
+		name := fmt.Sprint("many", i)
+		directory.children = append(directory.children, name)
+		changes = append(changes, &evsTestChange{path: "d/" + name, content: []byte("m")})
+	}
+	world.push(changes...)
+	if world.commits[1].built.ChangeTree == nil {
+		t.Fatalf("the 12-file push's changes are inline")
+	}
+	presents := 0
+	world.mutatePath = func(reply *protocol.EvsReadPathReply) {
+		for _, absence := range reply.GetAbsences() {
+			if len(absence.GetPresent()) != 0 {
+				presents += 1
+				absence.Present = nil
+			}
+		}
+	}
+	if _, _, err := evsTestRead(t, reader, world, "d/keep.txt"); !errors.Is(err, ErrEvsEntryRefused) {
+		t.Errorf("the directory's delta with no proof: %v", err)
+	}
+	if presents != 1 {
+		t.Fatalf("%d present proofs served, want the directory's one", presents)
+	}
+	world.mutatePath = nil
+	content, _, err := evsTestRead(t, reader, world, "d/keep.txt")
+	if err != nil || string(content) != "kept" {
+		t.Fatalf("with the delta's proof: %q %v", content, err)
+	}
+}
+
+// A name never written in a directory reads as absent across a rooted push that added other names there, by the
+// name's adjacent leaves and the directory's delta in present (QD-681): what a writer's plan of a second push into
+// the directory reads for each new name. With present dropped it is refused.
+func TestEvsAbsentNameInADirectoryARootedPushChanged(t *testing.T) {
+	world := newEvsTestWorld(t)
+	world.push(&evsTestChange{path: "d", children: []string{"keep.txt"}}, &evsTestChange{path: "d/keep.txt", content: []byte("kept")})
+	reader := world.reader(t, evsTestId("reader"))
+	if _, _, err := evsTestRead(t, reader, world, "d/keep.txt"); err != nil {
+		t.Fatal(err)
+	}
+	directory := &evsTestChange{path: "d"}
+	changes := []*evsTestChange{directory}
+	for i := range 12 {
+		name := fmt.Sprint("many", i)
+		directory.children = append(directory.children, name)
+		changes = append(changes, &evsTestChange{path: "d/" + name, content: []byte("m")})
+	}
+	world.push(changes...)
+	if world.commits[1].built.ChangeTree == nil {
+		t.Fatalf("the 12-file push's changes are inline")
+	}
+	world.mutatePath = func(reply *protocol.EvsReadPathReply) {
+		for _, absence := range reply.GetAbsences() {
+			absence.Present = nil
+		}
+	}
+	if _, _, err := evsTestRead(t, reader, world, "d/next0"); !errors.Is(err, ErrEvsEntryRefused) {
+		t.Errorf("the directory's delta with no proof: %v", err)
+	}
+	world.mutatePath = nil
+	if _, _, err := evsTestRead(t, reader, world, "d/next0"); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Errorf("a name never written: %v", err)
+	}
+}
+
+// An absence's present stands only for a strict prefix whose change writes an entry (QD-681): the path's own change,
+// a prefix's removal, a proof of another path, a proof to another root, and one beside adjacent leaves are refused.
+func TestEvsPresentIsRefusedForThePathItselfOrARemoval(t *testing.T) {
+	directory := EvsTokenPath{evsTestToken("d")}
+	file := EvsTokenPath{evsTestToken("d"), evsTestToken("keep")}
+	sibling := EvsTokenPath{evsTestToken("d"), evsTestToken("new")}
+	other := EvsTokenPath{evsTestToken("e")}
+	leaf := func(tokenPath EvsTokenPath, writes bool) []byte {
+		change := &protocol.EvsChange{TokenPath: tokenPath.Components(), BaseEntryVersion: 1}
+		if writes {
+			change.EntrySha256 = evsTestBytes("entry", 32)
+		}
+		leafBytes, err := proto.Marshal(change)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return leafBytes
+	}
+	// a list in token path order, with what each of the named paths' changes does
+	build := func(writes map[string]bool, tokenPaths ...EvsTokenPath) (*protocol.EvsPush, func(tokenPath EvsTokenPath) *protocol.EvsAbsenceProof) {
+		slices.SortFunc(tokenPaths, func(a EvsTokenPath, b EvsTokenPath) int { return a.Compare(b) })
+		leaves := [][]byte{}
+		for _, tokenPath := range tokenPaths {
+			leaves = append(leaves, leaf(tokenPath, writes[string(tokenPath.Bytes())]))
+		}
+		tree, err := NewEvsChangeTree(leaves)
+		if err != nil {
+			t.Fatal(err)
+		}
+		root := tree.Root()
+		push := &protocol.EvsPush{ChangesRoot: root[:], ChangeCount: uint32(len(leaves))}
+		present := func(tokenPath EvsTokenPath) *protocol.EvsAbsenceProof {
+			part, index, found := evsTestTreePosition(tree, tokenPath)
+			if !found {
+				t.Fatalf("no change of the path in the list")
+			}
+			proofs, err := tree.InclusionProof(part, index)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return &protocol.EvsAbsenceProof{Version: 2, TokenPath: tokenPath.Components(), Present: proofs}
+		}
+		return push, present
+	}
+	written := func(tokenPaths ...EvsTokenPath) map[string]bool {
+		writes := map[string]bool{}
+		for _, tokenPath := range tokenPaths {
+			writes[string(tokenPath.Bytes())] = true
+		}
+		return writes
+	}
+
+	push, present := build(written(directory, sibling, other), directory, sibling, other)
+	if err := evsVerifyPrefixDelta(push, file, directory, present(directory)); err != nil {
+		t.Fatalf("a strict prefix's delta: %v", err)
+	}
+	// a proof of another path's change where the prefix's is asked
+	if err := evsVerifyPrefixDelta(push, file, directory, present(other)); !errors.Is(err, ErrEvsEntryRefused) {
+		t.Errorf("another path's change: %v", err)
+	}
+	// beside adjacent leaves
+	both := present(directory)
+	both.Above = both.GetPresent()
+	if err := evsVerifyPrefixDelta(push, file, directory, both); !errors.Is(err, ErrEvsEntryRefused) {
+		t.Errorf("present beside a leaf above: %v", err)
+	}
+	// to another statement's root
+	elsewhere, _ := build(written(directory), directory, other)
+	if err := evsVerifyPrefixDelta(elsewhere, file, directory, present(directory)); !errors.Is(err, ErrEvsEntryRefused) {
+		t.Errorf("a proof to another root: %v", err)
+	}
+	// the path itself, written again by the statement
+	push, present = build(written(directory, file), directory, file)
+	if err := evsVerifyPrefixDelta(push, file, file, present(file)); !errors.Is(err, ErrEvsEntryRefused) {
+		t.Errorf("the path's own change: %v", err)
+	}
+	// a path that is no prefix of the one read
+	if err := evsVerifyPrefixDelta(push, other, directory, present(directory)); !errors.Is(err, ErrEvsEntryRefused) {
+		t.Errorf("a change of a path that holds nothing of the one read: %v", err)
+	}
+	// the prefix's removal, which ends every path below it
+	push, present = build(written(other), directory, other)
+	if err := evsVerifyPrefixDelta(push, file, directory, present(directory)); !errors.Is(err, ErrEvsEntryRefused) {
+		t.Errorf("a prefix's removal: %v", err)
 	}
 }
 

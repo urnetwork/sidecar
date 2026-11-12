@@ -7,6 +7,10 @@
 // bytes and refused a version this build does not know (RecordApprovals.Pending), so nothing is shown that was not
 // checked.
 //
+// A kind whose fields alone do not say what approving it gives up also shows a sentence built around those fields,
+// never from an agent's text: mail_tls_unauthenticated's names its domain and that an active URnetwork edge could read
+// the mail (QD-729, §2.8 EX4).
+//
 // Every string shown passes ApprovalPrintable, which drops C0 and C1 controls and the bidi controls, so a value cannot
 // move the terminal's cursor, end a line early or reorder what follows it (§16.6's ur approve row). Bytes show as
 // lowercase hex, numbers in decimal, and an audience or app mode by its record.proto name beside its number.
@@ -53,6 +57,9 @@ type ApprovalRender struct {
 	Version  uint32
 	// A multi-use template: each use's action equals its non-empty fields, its recipients among those listed.
 	Template bool
+	// What approving the action allows, in words around its daemon-built fields, for a kind whose fields alone do
+	// not say it; empty for the rest. Printable.
+	Meaning string
 	// Each field the action sets, in field order, kind, version, scope and preview aside: the action the person
 	// approves.
 	Fields []*ApprovalRenderField
@@ -111,6 +118,17 @@ func approvalKindName(kind SidecarActionKind) string {
 	return strings.ToLower(strings.TrimPrefix(name, "SIDECAR_ACTION_KIND_"))
 }
 
+// What approving action allows, in words around its daemon-built fields: mail_tls_unauthenticated's sentence
+// (QD-729), and empty for a kind whose fields say it themselves.
+func approvalRenderMeaning(action *protocol.CanonicalAction) string {
+	switch SidecarActionKind(action.GetKind()) {
+	case SidecarActionMailTlsUnauthenticated:
+		return fmt.Sprintf("Send mail to %s through a mail server that cannot be authenticated: an active URnetwork edge could read it",
+			ApprovalPrintable(action.GetHost()))
+	}
+	return ""
+}
+
 // One field's value, printable.
 func approvalRenderValue(field protoreflect.FieldDescriptor, value protoreflect.Value) string {
 	scalar := func(value protoreflect.Value) string {
@@ -158,6 +176,7 @@ func RenderApprovalRequest(request *StoredApprovalRequest) *ApprovalRender {
 		KindName:           approvalKindName(SidecarActionKind(action.GetKind())),
 		Version:            action.GetVersion(),
 		Template:           action.GetScope(),
+		Meaning:            approvalRenderMeaning(action),
 		Summary:            ApprovalPrintable(request.Request.GetSummary()),
 		Preview:            ApprovalPrintable(action.GetPreview()),
 		RequesterSidecarId: recordIdOf(request.Request.GetRequesterSidecarId()),
@@ -185,13 +204,16 @@ func RenderApprovalRequest(request *StoredApprovalRequest) *ApprovalRender {
 	return render
 }
 
-// What ur approve prints: the action's fields, then who asks, then the untrusted text under its own heading. Every
-// line is printable.
+// What ur approve prints: the kind and what approving it allows where the render says, the action's fields, then who
+// asks, then the untrusted text under its own heading. Every line is printable.
 func (self *ApprovalRender) Text() string {
 	lines := []string{}
 	heading := fmt.Sprintf("request %s: %s", self.ApprovalId, self.KindName)
 	if self.Template {
 		heading += ", a template each use must match"
+	}
+	if self.Meaning != "" {
+		heading += ". " + self.Meaning
 	}
 	lines = append(lines, heading+". The action, as this daemon built it:")
 	for _, field := range self.Fields {

@@ -418,6 +418,8 @@ barrier smtp.mta_sts_write.after smtp_mtasts.go
 barrier smtp.mta_sts_write.before smtp_mtasts.go
 barrier smtp.pin_write.after smtp_pins.go
 barrier smtp.pin_write.before smtp_pins.go
+barrier smtp.tls_allowance_write.after smtp_tls_allowance.go
+barrier smtp.tls_allowance_write.before smtp_tls_allowance.go
 barrier smtpedge.probe.after smtpedgeservice/service.go
 barrier smtpedge.probe.before smtpedgeservice/service.go
 barrier smtpedge.report_accept.after smtpedgeservice/report_intake.go

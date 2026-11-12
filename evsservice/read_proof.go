@@ -2,8 +2,10 @@
 // EVS1-M2-14): the statement that wrote it, when the reply does not carry it among those after the pin; its Merkle
 // proof to changes_root, part level last, when the change list is not inline; and for each later statement whose
 // list is not inline and whose covering prefixes reach the path or a prefix holding it, the adjacent-leaf proofs
-// that it is not among the changes (§11.6's merkle row). A removal is proven by its own change, or by the change
-// removing the prefix that ended the path. A change of an older path epoch is found by the leaf place its fold
+// that it is not among the changes (§11.6's merkle row), or, for a prefix the statement changed by a delta, which
+// does not end the path, that delta's inclusion proof in the absence's present; a directory's deltas after its table
+// each carry their own proof (QD-681). A removal is proven by its own change, or by the change removing the prefix
+// that ended the path. A change of an older path epoch is found by the leaf place its fold
 // recorded (changeAt), since evs is never sent that epoch's token of a path it did not hold (read.go).
 //
 // Pushes are read by version: a window version's record at the place its entry names, an older one's statement
@@ -358,16 +360,6 @@ func (self *readPushes) inlineEntryVersionEliding(push *readPush, elided *protoc
 	return found, nil
 }
 
-// The change's EvsEntryVersion bytes as the push's payload or part carried them (its entry_sha256's preimage); nil
-// when the push does not write the path.
-func (self *readPushes) entryVersionOf(push *readPush, tokenPath sidecar.EvsTokenPath) ([]byte, error) {
-	change, _, _, err := self.changeOf(push, tokenPath)
-	if err != nil || change == nil {
-		return nil, err
-	}
-	return change.EntryVersion, nil
-}
-
 // The proofs of the change at (part, index) to changes_root, part level last; nil for an inline list.
 func (self *readPushes) inclusionProof(push *readPush, part int, index int) ([]*protocol.EvsMerkleProof, error) {
 	if !push.rooted() {
@@ -460,4 +452,22 @@ func (self *readPushes) absenceProof(push *readPush, tokenPath sidecar.EvsTokenP
 		}
 	}
 	return absence, nil
+}
+
+// For a prefix of a path a reply speaks for that the push changed by a delta, which does not end the path (§11.7's
+// newest row): that change's inclusion proof in an absence's present, in place of below and above (QD-681). nil when
+// the push did not change prefix or removed it, and nil for an inline list.
+func (self *readPushes) presentProof(push *readPush, prefix sidecar.EvsTokenPath) (*protocol.EvsAbsenceProof, error) {
+	if !push.rooted() {
+		return nil, nil
+	}
+	change, part, index, err := self.changeOf(push, prefix)
+	if err != nil || change == nil || !change.WritesEntry() {
+		return nil, err
+	}
+	present, err := self.inclusionProof(push, part, index)
+	if err != nil {
+		return nil, err
+	}
+	return &protocol.EvsAbsenceProof{Version: push.version, TokenPath: prefix.Components(), Present: present}, nil
 }

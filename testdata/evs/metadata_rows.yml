@@ -172,6 +172,8 @@ EvsReadPathReply.drop_version: {number: 14, type: uint64, row: evs-28, until: M1
 EvsReadPathReply.entry_epoch: {number: 17, type: uint64, row: evs-11, pending: "DESIGN-DETAILS 9.2.2: the epoch whose copy served a path, which evs-11's entry states (carried from the source it names) imply and a reply does not name"}
 EvsReadPathReply.stale_epoch: {number: 18, type: bool, row: evs-7, pending: "DESIGN-DETAILS 9.2.4: a read naming no token path in the head's current epoch, answered with nothing read; evs-7 names each answer's status and not this one"}
 EvsReadPathReply.continues: {number: 20, type: bool, row: evs-7, pending: "QD-662: a directory's next delta in a frame of its own after its path frame; evs-7 names each answer's status and not the framing"}
+EvsReadPathReply.delta_proofs: {number: 19, type: repeated EvsDeltaProof, row: evs-12, sees: "a Merkle root and count over the changes"}
+EvsDeltaProof.proof: {number: 1, type: repeated EvsMerkleProof, row: evs-12, sees: "a Merkle root and count over the changes"}
 EvsMerkleProof.leaf: {number: 1, type: bytes, row: evs-12, sees: "changes of token path, base entry version and entry hash"}
 EvsMerkleProof.index: {number: 2, type: uint64, row: evs-12, sees: "a Merkle root and count over the changes"}
 EvsMerkleProof.size: {number: 3, type: uint64, row: evs-12, sees: "a Merkle root and count over the changes"}
@@ -180,6 +182,7 @@ EvsAbsenceProof.version: {number: 1, type: uint64, row: evs-3, sees: "version v"
 EvsAbsenceProof.token_path: {number: 2, type: repeated bytes, row: evs-11, sees: "tokens t_i"}
 EvsAbsenceProof.below: {number: 3, type: repeated EvsMerkleProof, row: evs-12, sees: "a Merkle root and count over the changes"}
 EvsAbsenceProof.above: {number: 4, type: repeated EvsMerkleProof, row: evs-12, sees: "a Merkle root and count over the changes"}
+EvsAbsenceProof.present: {number: 5, type: repeated EvsMerkleProof, row: evs-12, sees: "a Merkle root and count over the changes"}
 EvsReadObject.kind: {number: 1, type: EvsReadObjectKind, row: evs-7, sees: "ranges and slots read"}
 EvsReadObject.id: {number: 2, type: bytes, row: evs-7, sees: "ranges and slots read"}
 EvsReadObject.number: {number: 3, type: uint64, row: evs-7, sees: "ranges and slots read"}

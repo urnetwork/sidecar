@@ -26,8 +26,9 @@
 //	consume   EvsRepo.Consume, whose own journal sends a CONSUME again after a kill: its push id is the client's, not
 //	          the caller's, it consumes the deposits that stand, and one naming none that stands is PATH_CONFLICT
 //	erase     an ERASE under the caller's push id through POST .../slots/delete (evs_erase.go's buildErase), its note
-//	          the erasure id, whether it completes the erasure, and the caller's bytes; NOTHING_TO_ERASE is evs's
-//	          recorded answer
+//	          the erasure id, whether it completes the erasure, and the caller's bytes, sealed with the push's
+//	          metadata (QD-682), the ERASE creating nothing on the erasure ref; NOTHING_TO_ERASE is evs's recorded
+//	          answer
 //	read      a stream's statements walked and verified from its first; each push's payload read for its changes and
 //	          new slots, each entry file rebuilt and checked against its sealed fields, and its path found from its
 //	          tokens (below); the push's slot object is the one new slot that no entry's chain names. A version that
@@ -963,7 +964,7 @@ func (self *RecordEvsStreams) Erase(ctx context.Context, repoId Id, erase *Recor
 			return nil, recordEvsRefusal(err)
 		}
 		if 0 < len(attempt.built.Parts) || 0 < len(attempt.receipts) {
-			return nil, fmt.Errorf("%w: an ERASE whose note is past one inline part", ErrRecordDraftInvalid)
+			return nil, fmt.Errorf("%w: an ERASE whose note is past one part", ErrRecordDraftInvalid)
 		}
 		journal = &recordEvsJournal{
 			Kind: recordEvsJournalErase, PushId: erase.PushId, Digest: digest, RefId: EvsErasureRefId(repoId),

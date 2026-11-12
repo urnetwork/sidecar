@@ -110,8 +110,9 @@ type Sidecar struct {
 // and refused, so a value left unset never reads as one.
 //
 // §5.4 lists these in prose with no numbers, and the numbers here are §5.4's order with §16.7's
-// restore appended, as plan-MCP-wire-enum-numbers.md fills them. record.proto's SidecarActionKind
-// holds the same values, which record_kind_test.go checks, and they freeze with it at M3.
+// restore appended, as plan-MCP-wire-enum-numbers.md fills them, and then §14.4's TL4 allowance
+// (QD-729). record.proto's SidecarActionKind holds the same values, which record_kind_test.go
+// checks, and they freeze with it at M3.
 type SidecarActionKind uint32
 
 const (
@@ -151,6 +152,9 @@ const (
 	SidecarActionPayment SidecarActionKind = 16
 	// A run_restore apply, which puts a run's files back (§16.7).
 	SidecarActionRestore SidecarActionKind = 17
+	// The allowance to send one recipient domain's mail through an MX that cannot be authenticated, §14.4's TL4,
+	// which an active URnetwork edge could read (owner decision 38, QD-729).
+	SidecarActionMailTlsUnauthenticated SidecarActionKind = 18
 )
 
 // How much an outward action could cost, the larger of policy's and the daemon's classifier's

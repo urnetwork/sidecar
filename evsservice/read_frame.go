@@ -10,8 +10,8 @@
 //	          ranges covering what was asked, each range over frames past 1 MiB, offset naming each frame's first byte
 //
 // A path goes in one frame, but for a directory's deltas, which follow its path frame one a frame, each a path frame
-// of the same token path with continues set, carrying that delta alone, with its proofs beside it once the reply
-// carries a delta's (QD-662; question evs1-m2-40-unfolded-listing-frame): so a directory at its 448 KiB bound lists in
+// of the same token path with continues set, carrying that delta alone with its delta_proofs entry beside it (QD-662,
+// QD-681; question evs1-m2-40-unfolded-listing-frame): so a directory at its 448 KiB bound lists in
 // any fold state, its rows spread over a push's parts never in one frame, and the frame bound, 1 MiB + 64 KiB, stays.
 // A reader folds them back into the path (sidecar.EvsReadFrames).
 //
@@ -80,14 +80,17 @@ func (self *readAttempt) stream(reply *readReply) {
 
 // A path's frame, then each of its directory deltas in a frame of its own (see the file header).
 func (self *readStream) path(path *protocol.EvsReadPathReply) bool {
-	deltas := path.GetDeltas()
-	path.Deltas = nil
+	deltas, deltaProofs := path.GetDeltas(), path.GetDeltaProofs()
+	path.Deltas, path.DeltaProofs = nil, nil
 	if !self.frame(&protocol.EvsReadFrame{Path: path}) {
 		return false
 	}
-	for _, delta := range deltas {
+	for i, delta := range deltas {
 		deltaFrame := &protocol.EvsReadPathReply{
 			TokenPath: path.GetTokenPath(), Deltas: []*protocol.EvsIndexVersion{delta}, Continues: true,
+		}
+		if i < len(deltaProofs) {
+			deltaFrame.DeltaProofs = []*protocol.EvsDeltaProof{deltaProofs[i]}
 		}
 		if !self.frame(&protocol.EvsReadFrame{Path: deltaFrame}) {
 			return false
