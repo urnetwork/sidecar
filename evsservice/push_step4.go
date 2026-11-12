@@ -2,18 +2,22 @@
 //
 //	head    the verified cache entry when its version is at least the push's base, else a cluster GET; a refusal on
 //	        a cached head runs step 4 again from the cluster (push.go)
+//	state   the authorization state: the gate view of the repo's network, read from memory again at the start of
+//	        each run, before the head, so step 7, issued within PushStepSevenWindow of step 4's reads, is within it
+//	        of the state it validated against (§11.8's timing row; QD-660); bind's read at arrival judges only
+//	        bind's own 5b
 //	round   one round on the repo's cluster after it, issued together: repo/ (cached at most 5 s), the generation
-//	        record, every changed path's entry by §11.6's read rule (its source copies included while the head
-//	        lists sources), each reuse source's ref head and entry, and the records of the window versions after
-//	        folded_through whose digest may touch a changed path, which the newest rule then reads from this
-//	        process's cache; the authorization state is the gate view the attempt took from memory
+//	        record, its signer's key from that state, every changed path's entry by §11.6's read rule (its source
+//	        copies included while the head lists sources), each reuse source's ref head and entry, and the records
+//	        of the window versions after folded_through whose digest may touch a changed path, which the newest rule
+//	        then reads from this process's cache
 //	view    §11.7's newest per changed path, each entry combined only with the head read before it; a directory's
 //	        listing where the push writes its table; the flags of the head's push (IMMUTABLE); C at the push's base
 //
-// After a 412 (outcome.go) the entries stay as read, keeping the folded_through they were read after, and only the
-// view is built again on the reread head: an entry the reread head's window no longer reaches past is read again
-// after that head (ErrEvsEntryBehindWindow), and an entry holding a version past the head sends the attempt back to
-// step 4 (ErrEvsEntryAheadOfHead).
+// After a 412 (outcome.go) the entries stay as read, keeping the folded_through they were read after, and the gate
+// view is read again and the view built again on the reread head: an entry the reread head's window no longer
+// reaches past is read again after that head (ErrEvsEntryBehindWindow), and an entry holding a version past the head
+// sends the attempt back to step 4 (ErrEvsEntryAheadOfHead).
 
 package evsservice
 
@@ -67,6 +71,9 @@ func (self *pushAttempt) readStep4(cached bool) (*pushOutcome, bool) {
 	engine := self.engine
 	push := self.statement.Push
 	readAt := engine.clock.Now()
+	if outcome := self.readGateView(); outcome != nil {
+		return outcome, false
+	}
 	var head *EvsStoredHead
 	var err error
 	switch {
@@ -178,6 +185,23 @@ func (self *pushAttempt) readStep4(cached bool) (*pushOutcome, bool) {
 	}
 	self.reads = reads
 	return self.buildView()
+}
+
+// The newest gate view of the repo's network into self.gateView, at each run of step 4 and at each rerun of 5 (b-h)
+// on a head a 412 or a lost answer made the attempt reread (QD-660): what 5 judges, 5d's predicate above all, so a
+// rerun after step 7's window passed meets the removals evs has learned since. One map read, no I/O. A state no
+// longer loaded answers 503, refusing nothing.
+func (self *pushAttempt) readGateView() *pushOutcome {
+	views := self.engine.deps.GateViews
+	if views == nil {
+		return self.unavailable()
+	}
+	view, answer := views.View(self.networkId)
+	if answer != EvsAuthAllowed || view == nil {
+		return self.unavailable()
+	}
+	self.gateView = view
+	return nil
 }
 
 // The places of the window versions after the head's folded_through whose digest may touch a changed path or a

@@ -1,7 +1,7 @@
 // SocketGate: what the newest verified projection allows, which is the only thing the service consults
-// before it writes a lease or signs a ticket (§9.10, D-SOCK-14, X3). SOCK-M5-07's production gate wraps
-// ACL-M2-13's AclGateCache, as C-09 has it, and reads §8's evaluator alone; until it lands a host has
-// only ClosedSocketGate, which allows nothing and is never ready, and tests use a fake.
+// before it writes a lease or signs a ticket (§9.10, D-SOCK-14, X3). SocketProjectionGate
+// (gate_projection.go) is the production gate: it wraps ACL-M2-13's AclGateCache, as C-09 has it, and reads
+// §8's evaluator alone. ClosedSocketGate allows nothing and is never ready, and tests use a fake.
 //
 // Every answer comes from memory: a gate never reads a store or Postgres on a call (I-12), and a network
 // it has not loaded answers ErrSocketGateUnloaded, which the engine turns into unavailable, never an
@@ -13,7 +13,7 @@
 // answers only while the network is fresh: once the gate has had evidence for GateBehindGrace that the log
 // passed what it holds, and has not verified the new entries, View answers ErrSocketGateBehind for that
 // network alone (QD-655). Observe is how the engine hands the gate evidence it met in the store: a fence, a
-// lease or a pair floor at a position above the view's. SOCK-M5-07's gate times the grace and loads; the
+// lease or a pair floor at a position above the view's. SocketProjectionGate times the grace and loads; the
 // interface and ClosedSocketGate's closed answers are here so the routes build on them.
 
 package socketsservice
@@ -107,9 +107,25 @@ type SocketGate interface {
 	Observe(networkId connect.Id, position uint64)
 }
 
-// What a host has until SOCK-M5-07's gate lands: never ready, allowing nothing, every network
-// unloaded, and every network spent. It is the closed direction of every check, so an engine built on
-// it serves no lease and signs no ticket.
+// What a gate that follows the authorization log takes beside SocketGate (DESIGN-DETAILS 13.2.3): the host's
+// one key-event subscriber reaches it through the engine's ProjectionChanged and ProjectionsResync, and the
+// engine gives it the revocation sweep's queue. SocketProjectionGate implements it; a gate that does not is
+// told nothing, and the engine sweeps nothing. Safe for concurrent use.
+type SocketGateFollower interface {
+	// The {acl_<networkId>}v key event: evidence that the network's log moved, for a network this process
+	// serves. Never blocks and does no I/O, so the subscriber's callback may call it.
+	Changed(networkId connect.Id)
+	// The subscriber resubscribed, so events in the gap are gone: the gate checks each loaded network's
+	// {acl_}v on a worker of its own and takes a differing one as evidence. Never blocks.
+	Resync()
+	// What the gate calls, on its own goroutine, once a load raised a network's position past an entry that
+	// may narrow a socket verdict (socketEntryMayNarrow): the revocation sweep's queue, which must not block.
+	OnNarrowed(callback func(networkId connect.Id, position uint64))
+}
+
+// What a host has with no projection source: never ready, allowing nothing, every network unloaded, and every
+// network spent. It is the closed direction of every check, so an engine built on it serves no lease and signs
+// no ticket.
 type ClosedSocketGate struct{}
 
 var _ SocketGate = ClosedSocketGate{}

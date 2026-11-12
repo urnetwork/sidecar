@@ -5,9 +5,9 @@
 //	fence    an attempt that reads a head whose fence_ms is later than its arrival less 100 ms ends 503 {push_id,
 //	         outcome: unknown}, issuing no further step 7: only evacuation and GC fences set fence_ms (push_step4.go)
 //	412      reread the head from the cluster; committed, recorded or fenced settle it; otherwise, since an ETag never
-//	         repeats, the old PUT can never apply, so 5 (b-h) runs again on the reread head, the entries keeping the
-//	         folded_through they were read after, and step 7 goes again on its ETag, at most PushConflictRetryCount
-//	         times before 429 BUSY (push_commit.go counts)
+//	         repeats, the old PUT can never apply, so 5 (b-h) runs again on the reread head against the gate view read
+//	         again (QD-660), the entries keeping the folded_through they were read after, and step 7 goes again on its
+//	         ETag, at most PushConflictRetryCount times before 429 BUSY (push_commit.go counts)
 //	unknown  a timeout, EOF or 5xx on step 7 deletes nothing: the head is reread from the cluster up to
 //	         PushUnknownRereadCount times, PushUnknownRereadInterval apart, a read the settle rule orders after the
 //	         PUT; committed or recorded settle it; the ETag step 7 named means the PUT never landed, so it is issued
@@ -88,6 +88,9 @@ func (self *pushAttempt) recheck(reread *EvsStoredHead) (*pushOutcome, bool) {
 		return self.unknown(), false
 	}
 	self.head = reread
+	if outcome := self.readGateView(); outcome != nil {
+		return outcome, false
+	}
 	if outcome, again := self.buildView(); outcome != nil || again {
 		return outcome, again
 	}
