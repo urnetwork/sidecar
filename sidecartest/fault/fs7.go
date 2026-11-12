@@ -9,12 +9,20 @@
 // version before it, since a commit carries its own process's folds (§11.7's horizon row): the one window version
 // past folded_through is then that commit's, in a batch too young to evacuate. A fresh instance's newest rule reads the
 // record of each window version past folded_through and past the entry's own newest version whose digest may touch the
-// path, through evsservice's RecordPushSource, which has no pidx/ lookup (newest.go), so once evacuation has moved such
-// a version's batch, the read after the restart answers 503: with the fold on another instance, a version's digest
-// matching another path by chance, about one run in a few hundred, did that (question
-// evs1-m2-41-newest-evacuated-window). Fs7EvacuatedWindowAfterRestart keeps that case as a clause no test runs until
-// the question is answered: the twin's paths, with the commit outside them made before the 26 h, so its creation's
-// root delta touches every path and its batch is evacuated.
+// path (newest.go), and finds it through pidx/ once evacuation has moved its batch (QD-664); before that fallback such a
+// read answered 503 on every try. Two clauses, on the twin's paths, read past a fold after the restart:
+//
+//	evacuated window  Fs7EvacuatedWindowAfterRestart: the commit outside the paths made before the 26 h, so its
+//	                  creation's root delta touches every path and evacuation moves its batch before the reader's
+//	                  instance first reads it; every run reads that moved record, then again after the restart
+//	fold lost         Fs7FoldLostWithItsInstance, the twin as EVS1-M2-40 wrote it: the fold on the reader's own instance
+//	                  and nothing committed after it, so folded_through stays below the fold and the restart loses its
+//	                  horizon; each read takes its entry and every later window version whose digest may touch the path.
+//	                  A digest matching by chance (64 bits, k = 2, over the run's own path keys) sends a read to a moved
+//	                  record in about one run in 55, which failed tip-check at f2134f8 before the fallback
+//
+// Neither was ever the restart's readiness, which no route reads, and since the fold-lost failure turned on the keys a
+// run drew, no replay of its trace repeats it.
 
 package fault
 
@@ -31,20 +39,27 @@ var Fs7 = Register("FS-7", "", []Tier{TierT2, TierT3}, Twin(Fs7OnePath, Fs7FiveP
 
 // See the file header.
 func Fs7OnePath(net *Net) *Schedule {
-	schedule := fs7Schedule(net, true, false)
+	schedule := fs7Schedule(net, true, fs7FoldCommitted)
 	schedule.Refuses = "four of five pushes of one path from one base, 409 PATH_CONFLICT"
 	return schedule
 }
 
 // See the file header.
 func Fs7FivePaths(net *Net) *Schedule {
-	return fs7Schedule(net, false, false)
+	return fs7Schedule(net, false, fs7FoldCommitted)
 }
 
 // See the file header.
 func Fs7EvacuatedWindowAfterRestart(net *Net) *Schedule {
-	schedule := fs7Schedule(net, false, true)
+	schedule := fs7Schedule(net, false, fs7FoldCommittedEvacuated)
 	schedule.Id = "FS-7 evacuated window after a restart"
+	return schedule
+}
+
+// See the file header.
+func Fs7FoldLostWithItsInstance(net *Net) *Schedule {
+	schedule := fs7Schedule(net, false, fs7FoldLost)
+	schedule.Id = "FS-7 fold lost with its instance"
 	return schedule
 }
 
@@ -62,8 +77,21 @@ func fs7WorldSettings() *EvsWorldSettings {
 	return settings
 }
 
-// keepEvacuated makes the commit outside the paths before the 26 h, so evacuation takes its batch too.
-func fs7Schedule(net *Net, onePath bool, keepEvacuated bool) *Schedule {
+// Where the fold after the five pushes runs, and what commits after it.
+type fs7Fold int
+
+const (
+	// on evs1, whose commit of keep.txt 26 h on raises folded_through over the five paths' versions
+	fs7FoldCommitted fs7Fold = iota + 1
+	// on evs1, keep.txt committed before the 26 h, so evacuation moves keep's batch too
+	fs7FoldCommittedEvacuated
+	// on evsr, the reader's own instance, with nothing committed after it, so folded_through stays below the fold
+	// and the restart loses its horizon with the process
+	fs7FoldLost
+)
+
+// See the file header.
+func fs7Schedule(net *Net, onePath bool, fold fs7Fold) *Schedule {
 	world := NewEvsWorld(net, fs7WorldSettings())
 	path := func(index int) string {
 		if onePath {
@@ -110,14 +138,27 @@ func fs7Schedule(net *Net, onePath bool, keepEvacuated bool) *Schedule {
 	}
 	// w1's commit carries evs1's fold as folded_through
 	keep := &Step{Actor: "w1", Action: world.Write("w1", "keep.txt", EvsWorldContent("fs7 keep", 16))}
-	steps = append(steps, []*Step{
-		{Actor: "folder", Action: world.Fold("evs1")},
-		{Actor: "reader", Action: world.Verify("reader", paths...)},
-	}...)
-	if keepEvacuated {
-		steps = append(steps, keep, &Step{Advance: 26 * time.Hour})
-	} else {
-		steps = append(steps, &Step{Advance: 26 * time.Hour}, keep)
+	switch fold {
+	case fs7FoldLost:
+		steps = append(steps, []*Step{
+			{Actor: "folder", Action: world.Fold("evsr")},
+			{Actor: "reader", Action: world.Verify("reader", paths...)},
+			{Advance: 26 * time.Hour},
+		}...)
+	case fs7FoldCommittedEvacuated:
+		steps = append(steps, []*Step{
+			{Actor: "folder", Action: world.Fold("evs1")},
+			{Actor: "reader", Action: world.Verify("reader", paths...)},
+			keep,
+			{Advance: 26 * time.Hour},
+		}...)
+	default:
+		steps = append(steps, []*Step{
+			{Actor: "folder", Action: world.Fold("evs1")},
+			{Actor: "reader", Action: world.Verify("reader", paths...)},
+			{Advance: 26 * time.Hour},
+			keep,
+		}...)
 	}
 	steps = append(steps, []*Step{
 		{Actor: "evacuator", Action: world.Evacuate()},

@@ -12,9 +12,10 @@ import (
 	"github.com/urnetwork/sidecar/sidecartest"
 )
 
-// An instance started again serves the step after its start: the world waits out its readiness probe, which runs on
-// a goroutine of its own, so a read the reader sends at once is served, never answered 503 (FS-7's twin, seed 4, met
-// it under load before the wait).
+// An instance started again is ready at the step after its start, and serves a read sent at once: the world waits out
+// its readiness probe, which runs on a goroutine of its own, before the start's step ends, as warp sends a block
+// nothing until it reads ready (§19.4). The engine answers whether or not it is ready, so this holds the world to
+// warp's order; the 503s FS-7's twin met after its restart were the newest rule's (fs7.go's header).
 func TestEvsWorldRestartedInstanceServesAtOnce(t *testing.T) {
 	net := sidecartest.NewNet(t.Context(), nil)
 	defer net.Close()
