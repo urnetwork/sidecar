@@ -21,6 +21,7 @@ var daemonAppGroupIdentifiers = []string{
 	"6BGU69Q742.group.com.bringyour.urnetwork",
 }
 
+// Sets the app-group paths daemon_pair.go serves to macOS's containers.
 func init() {
 	daemonAppGroupSocketPathsOf = darwinAppGroupSocketPaths
 }
