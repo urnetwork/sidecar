@@ -3,8 +3,9 @@
 // McpGuard: §16.6's "refused from MCP" table as one data-driven function (D-MCP-17, R-MCP-9, I-7, I-8). A tool says
 // what a call would touch as McpTargets, before its handler runs, and the guard refuses the call at the first target
 // a row refuses. No tool signs any of these, so the guard is a second line, which MCP-M3-26's actions suite tests
-// through every tool. A listing tool asks McpGuardAdmits of each item and omits what it refuses, as evs_repos omits
-// secret repos.
+// through every tool, and every evs and search tool reports its targets, which the catalog's check holds it to. A
+// listing passes what it would name through McpGuardOmit, which leaves out each item a row refuses: evs_repos and
+// search_status a secret repo, evs_list and a search's hits a mailbox's vault/ family.
 //
 //	secret          every evs tool, search tool and ur://evs resource on a repo of kind secret, naming it included
 //	config          every evs tool and ur://evs resource on the config repo but evs_repos naming it (QD-205)
@@ -13,7 +14,10 @@
 //	directory       every evs tool and ur://evs resource on the team directory but evs_repos naming it (16.11)
 //	writes          evs_write and evs_delete on repos of kind config, mailcfg, secret and directory
 //	harness config  evs_write and evs_delete on a vault's harness/ path (QD-104)
-//	mailbox vault   every evs tool, search tool and ur://evs resource on a mailbox's vault/ family (QD-673)
+//	mailbox vault   every evs tool, search tool and ur://evs resource on a mailbox's vault/ family, its directory and
+//	                shards as well as its entries, on any ref, so a listing names none of it and an agent holding an
+//	                EvsShare of the mailbox, whose keys open the entries, reaches them by no path (QD-673; §15.7,
+//	                §15.8): only the owner's consented devices read them, through MailVault
 //	statements      every authority statement, admissions, KeyRegister and IndexerSet included; approval statements
 //	                but the daemon's own harness decisions; acl and bridge statements but the own-resource filings
 //	                16.5's tools make about this sidecar's own resources, which the tool has checked are its own:
@@ -60,9 +64,9 @@ const (
 type McpRepoOperation int
 
 const (
-	// evs_repos naming the repo, its contents untouched.
+	// evs_repos or search_status naming the repo, its contents untouched.
 	McpRepoName McpRepoOperation = iota + 1
-	// evs_list naming paths.
+	// evs_list naming paths: the path or prefix it lists, and each path it would name.
 	McpRepoList
 	// evs_read, evs_history or evs_drop_preview reading, or a ur://evs read or subscription.
 	McpRepoRead
@@ -70,7 +74,7 @@ const (
 	McpRepoWrite
 	// evs_delete.
 	McpRepoDelete
-	// A search tool's.
+	// A search tool's: the repo it searches under its path_prefix filter, and each hit it would name.
 	McpRepoSearch
 )
 
@@ -79,7 +83,9 @@ type McpTarget struct {
 	Kind McpTargetKind
 
 	// McpTargetRepo's: the repo's kind at the call's state, the operation, the ref and the path, "" for the repo as a
-	// whole. A repo the state does not hold has kind UNSPECIFIED, which every row refuses but naming.
+	// whole. A repo the state does not hold has kind UNSPECIFIED, which every row refuses but naming. Path is the
+	// whole path from the ref's root as evs names it, its names joined by "/": a listing's item carries the prefix it
+	// was listed under, never just its last name.
 	RepoKind  protocol.RepoKind
 	Operation McpRepoOperation
 	Ref       string
@@ -101,8 +107,8 @@ const (
 	mcpIndexRefName         = "ur/index"
 	// a vault's harness config (QD-104)
 	mcpVaultHarnessPrefix = "harness/"
-	// a mailbox's vault entries (QD-673)
-	mcpMailboxVaultPrefix = "vault/"
+	// a mailbox's vault entries' family, vault/<h>/<entry_id> (§15.7; QD-673)
+	mcpMailboxVaultFamily = "vault"
 )
 
 // The own-resource filings a tool may make from MCP, under its tier (§16.6).
@@ -135,6 +141,13 @@ func (self *McpTarget) repoWrite() bool {
 // Whether a repo target is on the search index's files.
 func (self *McpTarget) onIndex() bool {
 	return self.Ref == mcpIndexRefName || strings.HasPrefix(self.Path, mcpIndexDirectoryPrefix)
+}
+
+// Whether a repo target is on a mailbox's vault/ family: the family's directory, one of its shards or an entry. evs
+// takes no path with an empty name (evs_token.go), so "vault" or a path under "vault/" is the only spelling.
+func (self *McpTarget) onMailboxVault() bool {
+	return self.RepoKind == protocol.RepoKind_REPO_KIND_MAILBOX &&
+		(self.Path == mcpMailboxVaultFamily || strings.HasPrefix(self.Path, mcpMailboxVaultFamily+"/"))
 }
 
 // §16.6's table, in its order.
@@ -187,8 +200,7 @@ var mcpGuardRows = []mcpGuardRow{
 	{
 		refusal: NewMcpError(McpCodeRefused, "MCP never reaches a mailbox's vault entries", false),
 		refuses: func(target *McpTarget) bool {
-			return target.Kind == McpTargetRepo && target.RepoKind == protocol.RepoKind_REPO_KIND_MAILBOX &&
-				strings.HasPrefix(target.Path, mcpMailboxVaultPrefix)
+			return target.Kind == McpTargetRepo && target.onMailboxVault()
 		},
 	},
 	{
@@ -256,6 +268,21 @@ func McpGuard(targets []McpTarget) *McpError {
 // Whether one target passes: what a listing asks of each item it would name.
 func McpGuardAdmits(target McpTarget) bool {
 	return mcpGuardRefusal(&target) == nil
+}
+
+// The items a listing would name that the guard admits, in their order, each judged by the target targetOf gives it:
+// its repo's kind, the listing's operation and ref, and its whole path. evs_repos and search_status name repos with
+// McpRepoName, evs_list each path with McpRepoList and a search each hit with McpRepoSearch, so none names a secret
+// repo or anything of a mailbox's vault/ family (QD-673). An item a row refuses is left out, never named, the listing
+// otherwise whole; the call itself passed McpGuard on the path or prefix it lists.
+func McpGuardOmit[T any](items []T, targetOf func(item T) McpTarget) []T {
+	kept := make([]T, 0, len(items))
+	for _, item := range items {
+		if McpGuardAdmits(targetOf(item)) {
+			kept = append(kept, item)
+		}
+	}
+	return kept
 }
 
 // The first row's refusal of one target, nil when none refuses.

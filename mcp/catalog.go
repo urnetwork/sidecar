@@ -10,7 +10,8 @@
 // it (MCP.md's "who builds which tool"). mcpCatalogUnbuilt names the ones whose owners have not landed: the catalog
 // test fails when a design name is neither registered nor listed there, or registered while still listed, so a gap
 // between plans shows as a failing test, never as a missing tool. An owner that lands its tools removes them from
-// the list in the same change.
+// the list in the same change. A registered evs or search tool that reports nothing to McpGuard fails it as well
+// (mcpCatalogGuarded), since §16.6's repo rows judge only what a tool reports.
 //
 // Safe for concurrent use; registration happens before serving.
 
@@ -29,10 +30,12 @@ import (
 
 // One registered tool: its go-sdk definition and the wrapped handler.
 type mcpCatalogTool struct {
-	tool    *gomcp.Tool
-	tier    McpTier
-	mayAct  bool
-	handler gomcp.ToolHandler
+	tool   *gomcp.Tool
+	tier   McpTier
+	mayAct bool
+	// whether it reports what a call reaches to McpGuard (McpToolSpec.Targets)
+	targeted bool
+	handler  gomcp.ToolHandler
 }
 
 // The tools a daemon serves.
@@ -203,8 +206,16 @@ var mcpCatalogUnbuilt = []string{
 	"search", "search_agents", "search_status",
 }
 
-// Holds a catalog to §16.5: every registered tool a design name with its tier and hints, and every design name
-// registered or still unbuilt, never both. The catalog test runs it on the daemon's catalog.
+// Whether a §16.5 tool is an evs or a search tool, the classes §16.6's refused table names: each reports what a call
+// reaches (McpToolSpec.Targets), so no repo row, a mailbox's vault/ family's among them (QD-673), rests on a tool
+// remembering to ask. A Targets that reaches no repo for a call naming none, as evs_repos', is one; a nil one is not.
+func mcpCatalogGuarded(name string) bool {
+	return strings.HasPrefix(name, "evs_") || name == "search" || strings.HasPrefix(name, "search_")
+}
+
+// Holds a catalog to §16.5: every registered tool a design name with its tier and hints, every evs and search tool
+// reporting its targets to McpGuard, and every design name registered or still unbuilt, never both. The catalog test
+// runs it on the daemon's catalog.
 func checkMcpCatalog(catalog *McpCatalog) error {
 	registered := map[string]*mcpCatalogTool{}
 	for _, tool := range catalog.sorted() {
@@ -221,13 +232,19 @@ func checkMcpCatalog(catalog *McpCatalog) error {
 			errs = append(errs, fmt.Sprintf("%s is registered and still listed unbuilt", design.name))
 		case !isRegistered && !unbuilt:
 			errs = append(errs, fmt.Sprintf("%s (%s) is neither registered nor listed unbuilt", design.name, design.owner))
-		case isRegistered:
-			openWorld := design.tier == McpTierOutward || design.mayAct
-			annotations := tool.tool.Annotations
-			if tool.tier != design.tier || tool.mayAct != design.mayAct || annotations == nil ||
-				annotations.ReadOnlyHint != (design.tier == McpTierRead) || annotations.OpenWorldHint == nil || *annotations.OpenWorldHint != openWorld {
-				errs = append(errs, fmt.Sprintf("%s is not %s with its hints", design.name, design.tier))
-			}
+		}
+		if !isRegistered {
+			continue
+		}
+		// a registered tool is held to its row whether or not it is still listed
+		openWorld := design.tier == McpTierOutward || design.mayAct
+		annotations := tool.tool.Annotations
+		if tool.tier != design.tier || tool.mayAct != design.mayAct || annotations == nil ||
+			annotations.ReadOnlyHint != (design.tier == McpTierRead) || annotations.OpenWorldHint == nil || *annotations.OpenWorldHint != openWorld {
+			errs = append(errs, fmt.Sprintf("%s is not %s with its hints", design.name, design.tier))
+		}
+		if mcpCatalogGuarded(design.name) && !tool.targeted {
+			errs = append(errs, fmt.Sprintf("%s reports nothing to the guard", design.name))
 		}
 	}
 	for name := range registered {
