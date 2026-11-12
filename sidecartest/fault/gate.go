@@ -68,6 +68,9 @@ type GateRow struct {
 	Tests    []*GateTest    `yaml:"tests,omitempty"`
 	Commands []*GateCommand `yaml:"commands,omitempty"`
 	External string         `yaml:"external,omitempty"`
+	// The case's T3 run reads LastModified and ttls that T3's store clock translates onto the schedule's clock
+	// (catalog.yml's store_clock, QD-264), which the tool's report says beside its outcome.
+	StoreClock bool `yaml:"store_clock,omitempty"`
 }
 
 // One gate's sweep: the tests that show a case in place of the convention, keyed by Case.String(), and its
@@ -235,10 +238,11 @@ func GateRows(catalog *Catalog, gate string) []*GateRow {
 				tests = named
 			}
 			rows = append(rows, &GateRow{
-				Row:      testCase.Row.Id,
-				Case:     testCase.Name,
-				Tests:    tests,
-				External: gateCaseExternal(testCase, catalogGate),
+				Row:        testCase.Row.Id,
+				Case:       testCase.Name,
+				Tests:      tests,
+				External:   gateCaseExternal(testCase, catalogGate),
+				StoreClock: testCase.StoreClock,
 			})
 		}
 	}
@@ -267,8 +271,9 @@ const gateFileHeader = `# §23.8's gate sweeps (TEST-M1-11; OPS-M1-07's tool): g
 # and pass on exit 0, or read the outcome a last "sidecar-gate outcome: <outcome>" line names, a nonzero exit still
 # failing. A row with nothing to run is missing. external says what outside the build (hardware,
 # production, people) the row also waits on, or the later gate a later-of case passes at, and reads open.
-# A case's T2 test is TestFs<n><Case> in sidecar's sidecartest/fault and its T3 test TestFs<n><Case>OnT3 in
-# server's sidecart3, by convention, so this file does not change as rows land.
+# store_clock: true says the case's T3 run reads stored ages through T3's store clock (QD-264), which the report
+# names beside its outcome. A case's T2 test is TestFs<n><Case> in sidecar's sidecartest/fault and its T3 test
+# TestFs<n><Case>OnT3 in server's sidecart3, by convention, so this file does not change as rows land.
 `
 
 // gates.yml's bytes for catalog: every gate in review order, each with its rows.
