@@ -1,6 +1,6 @@
 // The real states' closed directions, on a stand-in gate that holds no loaded state: every answer of AclGkmAuthState
-// is Unknown, which gkm answers 503, a network the cache has not heard of is told to it, and AclGkmReconcilerState
-// gives no state and no standing. The answers of a loaded state run on T2 over the real cache and TEAM's log
+// is Unknown, which gkm answers 503, a network with no loaded state is asked for, and AclGkmReconcilerState gives no
+// state and no standing. The answers of a loaded state run on T2 over the real cache and TEAM's log
 // (sidecartest/gkm_auth_state_acl_test.go).
 
 package gkmservice
@@ -80,17 +80,17 @@ func coldGkmAclAnswers(state *AclGkmAuthState, principal *sidecar.Principal) map
 }
 
 // Cold state is no pass: with no gate, a network the cache holds nothing of, or one it holds with nothing loaded,
-// every answer is Unknown, and only the network the cache had not heard of is told to it.
+// every answer is Unknown, and the cache is asked for that network and no other, so one it never heard of, one whose
+// first load failed and one it evicted all load again.
 func TestAclGkmAuthStateAnswersUnknownWithoutALoadedState(t *testing.T) {
 	networkId, sidecarId := connect.NewId(), connect.NewId()
 	principal := &sidecar.Principal{NetworkId: networkId, ClientId: connect.NewId(), SidecarId: &sidecarId}
 	cases := []struct {
-		name   string
-		gate   *coldGkmAclGate
-		asking bool
+		name string
+		gate *coldGkmAclGate
 	}{
 		{name: "no gate"},
-		{name: "a network the cache holds nothing of", gate: &coldGkmAclGate{status: sidecar.AclGateUnknown}, asking: true},
+		{name: "a network the cache holds nothing of", gate: &coldGkmAclGate{status: sidecar.AclGateUnknown}},
 		{name: "a network with nothing loaded", gate: &coldGkmAclGate{status: sidecar.AclGateNotLoaded}},
 	}
 	for _, c := range cases {
@@ -114,8 +114,8 @@ func TestAclGkmAuthStateAnswersUnknownWithoutALoadedState(t *testing.T) {
 			continue
 		}
 		changed := c.gate.changed()
-		if c.asking != (0 < len(changed)) {
-			t.Errorf("%s: the cache was told %d times", c.name, len(changed))
+		if len(changed) == 0 {
+			t.Errorf("%s: the cache was not asked for the network", c.name)
 		}
 		for _, changedId := range changed {
 			if changedId != sidecar.Id(networkId) {

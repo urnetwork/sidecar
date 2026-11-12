@@ -21,9 +21,13 @@
 // The gkm-only answers are KEYS's own functions over the snapshot's ConfigState, which is the GkmAuthView every
 // member reads, so gkm and the members apply one rule to one state.
 //
-// Every doubt answers GkmAuthUnknown, which gkm answers 503: a network the cache holds nothing of (which is told to
-// it, so its load starts) or holds with nothing loaded, no gate, and a state whose holders cannot be computed. Only a
-// loaded state allows or denies. CheckRevocation with no rev/ reader is an error that is not ErrGkmTokenRevoked, 503.
+// Every doubt answers GkmAuthUnknown, which gkm answers 503: a network the cache holds nothing of or holds with
+// nothing loaded, no gate, and a state whose holders cannot be computed. Only a loaded state allows or denies. A
+// network with no loaded state is asked for at each request's standing check, the first a guard makes: that starts
+// the load of one the cache had not heard of, and of one whose first load failed or whose state the cache's byte
+// budget evicted, which no event or poll would load again; while a load runs it costs one more, of nothing new, and
+// a source that keeps failing is read once a FailureBackoff. CheckRevocation with no rev/ reader is an error that is
+// not ErrGkmTokenRevoked, 503.
 //
 // Safe for concurrent use. CheckRevocation does I/O under ctx; the rest answer from memory. HonorScope and Reads
 // allocate nothing on a loaded network; the lists and the holder answers walk the network's sidecars, on routes that
@@ -76,20 +80,16 @@ func NewAclGkmAuthState(gate GkmAclGate, revocations GkmRevocationReader, clock 
 
 var _ GkmAuthState = (*AclGkmAuthState)(nil)
 
-// The snapshot of the token's network, Unknown while it is not loaded; a network the cache has not heard of is told
-// to it.
+// The snapshot of the token's network, Unknown while it is not loaded, when the cache is asked for it (the file
+// header).
 func (self *AclGkmAuthState) snapshot(principal *sidecar.Principal) (*sidecar.AclGateSnapshot, GkmAuthAnswer) {
 	if self.gate == nil || principal == nil {
 		return nil, GkmAuthUnknown
 	}
 	networkId := sidecar.Id(principal.NetworkId)
 	snapshot, status := self.gate.State(networkId)
-	switch status {
-	case sidecar.AclGateLoaded:
-	case sidecar.AclGateUnknown:
+	if status != sidecar.AclGateLoaded {
 		self.gate.Changed(networkId)
-		return nil, GkmAuthUnknown
-	default:
 		return nil, GkmAuthUnknown
 	}
 	if snapshot == nil || snapshot.Acl == nil || snapshot.Config == nil {

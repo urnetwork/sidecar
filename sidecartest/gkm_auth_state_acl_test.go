@@ -437,13 +437,9 @@ func TestGkmAuthStateJudgesATokenByTheGatesState(t *testing.T) {
 		t.Errorf("a late ask naming nothing: %d", answer)
 	}
 
-	// dropped holders: none since the tip; the config's row carries no shrinks yet, so any older pin reads as one
-	// (QD-719's closed direction); no pin cannot be told
+	// dropped holders: none since the tip; no pin, and a repo the state does not hold, cannot be told
 	if answer := world.state.HoldersDropped(world.principal(owner), world.configId, tip, now(), now()); answer != denied {
 		t.Errorf("holders dropped since the tip: %d", answer)
-	}
-	if answer := world.state.HoldersDropped(world.principal(owner), world.configId, &bridge.AuthPin{Version: tip.GetVersion() - 1}, now(), now()); answer != allowed {
-		t.Errorf("holders dropped since an older pin: %d", answer)
 	}
 	if answer := world.state.HoldersDropped(world.principal(owner), world.configId, nil, now(), now()); answer != gkmservice.GkmAuthUnknown {
 		t.Errorf("holders dropped since no pin: %d", answer)
@@ -490,6 +486,7 @@ func TestGkmAuthStateJudgesATokenByTheGatesState(t *testing.T) {
 	}
 
 	// a revocation closes the sidecar's routes at the gate's next load, and no one else's
+	beforeRevocation := admission.Tip()
 	admission.MustLand(admission.Sign(owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, admission.Revocation(phone, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, 0)))
 	if status := world.serve(http.MethodGet, forms, phone, configR); status != http.StatusOK {
 		t.Fatalf("the phone's read before the gate loaded its revocation: %d", status)
@@ -506,6 +503,13 @@ func TestGkmAuthStateJudgesATokenByTheGatesState(t *testing.T) {
 	}
 	if status := world.serve(http.MethodGet, forms, secondPhone, configR); status != http.StatusOK {
 		t.Errorf("another device's read after the revocation: %d", status)
+	}
+	// the revocation dropped a key holder of the config: a shrink since the pin before it, none since the tip
+	if answer := world.state.HoldersDropped(world.principal(owner), world.configId, beforeRevocation, now(), now()); answer != allowed {
+		t.Errorf("holders dropped since the pin before the revocation: %d", answer)
+	}
+	if answer := world.state.HoldersDropped(world.principal(owner), world.configId, admission.Tip(), now(), now()); answer != denied {
+		t.Errorf("holders dropped since the revocation's own pin: %d", answer)
 	}
 
 	// rev/, read on every write (§7.8), voids a token whatever the state gives its sidecar, and no other sidecar's:
