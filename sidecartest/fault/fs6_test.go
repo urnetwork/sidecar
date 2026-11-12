@@ -24,3 +24,9 @@ func TestFs6KilledAtEachPhase(t *testing.T) {
 func TestFs6StaleJob(t *testing.T) {
 	RunClause(t, "FS-6", "stale job", Fs6StaleJob, nil)
 }
+
+// §11.12's refused row on the read path (QD-665): the reader's read of a deleted repo answers 409 REPO_DELETED, and
+// of a shredding and then a shredded one 409 SHREDDING.
+func TestFs6ReadsRefusedWhileDeleted(t *testing.T) {
+	RunClause(t, "FS-6", "reads refused while deleted", Fs6ReadsRefusedWhileDeleted, nil)
+}

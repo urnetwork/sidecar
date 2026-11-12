@@ -385,6 +385,64 @@ func TestReadRefusesADepositOnlyPrincipal(t *testing.T) {
 		http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 }
 
+// §11.12's refused row on the read routes (QD-665): while repo/ is deleted the read, GET .../refs and GET .../log
+// answer 409 REPO_DELETED, and while it is shredding or shredded 409 SHREDDING, reading nothing past repo/; keying
+// and active are served, and a repo active again reads as before.
+func TestReadRoutesRefuseADeletedOrShreddingRepo(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId, "r")
+	fixture.commitOne(protocol.EvsRefMode_EVS_REF_FILE, "a")
+	routes := []struct {
+		method string
+		path   string
+		body   proto.Message
+	}{
+		{method: http.MethodPost, path: "/read", body: &protocol.EvsReadRequest{RefId: fixture.check.refId.Bytes(), Fresh: true}},
+		{method: http.MethodGet, path: "/refs"},
+		{method: http.MethodGet, path: "/log?ref=" + sidecar.EvsKeyId(fixture.check.refId) + "&since=1"},
+	}
+	states := []struct {
+		state protocol.EvsRepoState
+		// the refusal, or none for a state that is served
+		code protocol.EvsRefusalCode
+	}{
+		{state: protocol.EvsRepoState_EVS_REPO_ACTIVE},
+		{state: protocol.EvsRepoState_EVS_REPO_DELETED, code: protocol.EvsRefusalCode_EVS_REFUSAL_REPO_DELETED},
+		{state: protocol.EvsRepoState_EVS_REPO_SHREDDING, code: protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING},
+		{state: protocol.EvsRepoState_EVS_REPO_SHREDDED, code: protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING},
+		{state: protocol.EvsRepoState_EVS_REPO_KEYING},
+		{state: protocol.EvsRepoState_EVS_REPO_ACTIVE},
+	}
+	for _, c := range states {
+		fixture.putRepo(protocol.RepoKind_REPO_KIND_GENERAL, c.state)
+		gets := fixture.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpGet)
+		lists := fixture.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpList)
+		for _, route := range routes {
+			recorder := fixture.call(token, route.method, route.path, route.body)
+			switch {
+			case c.code == protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED && recorder.Code != http.StatusOK:
+				t.Errorf("%s %s with repo/ %s: %d (%s), want 200", route.method, route.path, c.state, recorder.Code, refusalOf(t, recorder).GetCode())
+			case c.code != protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED && (recorder.Code != http.StatusConflict || refusalOf(t, recorder).GetCode() != c.code):
+				t.Errorf("%s %s with repo/ %s: %d, want 409 %s", route.method, route.path, c.state, recorder.Code, c.code)
+			}
+		}
+		if c.code == protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED {
+			continue
+		}
+		// repo/ from the cluster once, the cache serving the next two, and no head, entry or LIST
+		if got := fixture.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpGet) - gets; got != 1 {
+			t.Errorf("with repo/ %s the refusals read %d objects, want repo/ alone", c.state, got)
+		}
+		if got := fixture.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpList) - lists; got != 0 {
+			t.Errorf("with repo/ %s the refusals listed %d times", c.state, got)
+		}
+	}
+	reply := fixture.readPath(token, 0, true, checkTestPath("a"))
+	if reply.head.GetVersion() != 1 || len(reply.paths) != 1 || reply.paths[0].GetVersion() == nil {
+		t.Fatalf("the active repo's read after the refusals: head %v paths %v", reply.head, reply.paths)
+	}
+}
+
 // GET .../refs lists each committed ref's head, the repo's format and push sequence, and no placeholder.
 func TestRefsListsCommittedHeads(t *testing.T) {
 	fixture := newPushFixture(t, nil)
