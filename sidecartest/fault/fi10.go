@@ -1,5 +1,6 @@
 // FI-10, witnesses (§22.8; §2, §6; D-PROTO-14, D-PROTO-17, D-TRUST-10): read after every step from every
-// device with HeadCheck the Net holds (sidecartest/headcheck_net.go).
+// device with HeadCheck the Net holds (sidecartest/headcheck_net.go), its auth pins from the source its
+// HeadCheck compares, a fake's or a real follower's.
 //
 //   - a witness names exactly the state it compared: witnessed_at is never past the clock, and the pin a
 //     device witnessed is one its own log holds, A_n as it keeps it at n;
@@ -42,7 +43,7 @@ var _ = RegisterInvariant(10, func(ctx context.Context, oracle *Oracle) error {
 				if pin == nil {
 					return fmt.Errorf("%s witnessed at %s and names no pin", side.Name, witnessedAt)
 				}
-				if chain, kept := side.Device.Auth.ChainAt(pin.GetVersion()); kept && !bytes.Equal(chain, pin.GetChain()) {
+				if chain, kept := side.AuthSource().ChainAt(pin.GetVersion()); kept && !bytes.Equal(chain, pin.GetChain()) {
 					return fmt.Errorf("%s witnessed a pin at %d its own log does not hold", side.Name, pin.GetVersion())
 				}
 			}
@@ -98,11 +99,11 @@ func fi10Withheld(side *sidecartest.HeadCheckSidecar) bool {
 // The first conflict between two devices' pins at one position, or empty: §6.4's auth, gens, groups and
 // refs rows, each read as the FORK row reads it.
 func fi10Conflict(a *sidecartest.HeadCheckSidecar, b *sidecartest.HeadCheckSidecar) string {
-	pinA := a.Device.Auth.Pin()
-	pinB := b.Device.Auth.Pin()
+	pinA := a.AuthSource().Pin()
+	pinB := b.AuthSource().Pin()
 	if version := min(pinA.GetVersion(), pinB.GetVersion()); 0 < version {
-		chainA, keptA := a.Device.Auth.ChainAt(version)
-		chainB, keptB := b.Device.Auth.ChainAt(version)
+		chainA, keptA := a.AuthSource().ChainAt(version)
+		chainB, keptB := b.AuthSource().ChainAt(version)
 		if keptA && keptB && !bytes.Equal(chainA, chainB) {
 			return fmt.Sprintf("an auth fork at %d", version)
 		}

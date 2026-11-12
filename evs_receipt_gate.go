@@ -8,7 +8,20 @@
 //
 // The receipt itself is the record's: its entry, its seq in the reader's log, its journal and its day's budget are
 // RecordReceipts' (record_receipt.go), which deposits through its RecordStreams, which RECORD-M3-12 binds to
-// EvsRepo.Deposit. This file is evs's side alone: which reads need one, and that none decrypts before it lands.
+// EvsRepo.Deposit. This file is evs's side: which reads need one, that none decrypts before it lands, and the binding
+// that opens the gate (EVS1-M3-01; owner-bound shares open at M3, §8.19): NewEvsRecordReceiptDepositor puts each read's
+// objects to RecordReceipts.Deposit as §16.8's RecordHeader kind read, source observed, ReadBody{object ids, at most 64
+// a receipt, purpose}, and the read decrypts only once evs answered 200 for every receipt it needs.
+//
+//	purpose  the read's purpose and the run it serves ride its context (WithEvsReadContext): §16.5's evs_read and
+//	         ur://evs read, search's more, export and disclosure set theirs; a read whose context names none is purpose
+//	         read, bound to no run and no session, whose receipt seals tainted by section 5.3's unbound row, the
+//	         closed side
+//	re-reads a receipt committed for an object this UTC day covers every later read of it for that purpose
+//	         (RecordReceipts' day), so a re-read deposits nothing; this client keeps no plaintext, and whatever caches
+//	         decrypted bytes (§5.9's caches) reads them without reaching the gate again
+//	objects  what the read decrypts: each chain's segments and slots; a listing names none, since a name table is no
+//	         object a receipt can name, and passes with no receipt (EVS1-M2-29's reading)
 //
 // On every leg. Safe for concurrent use as its depositor is.
 
@@ -59,4 +72,52 @@ func (self *EvsClient) needsReceipt(repoId Id) (bool, error) {
 		return false, fmt.Errorf("%w: a repo the state does not hold", ErrEvsNoConfig)
 	}
 	return aclRepoKindOwnerBound(repo.GetKind()) && !slices.Contains(state.RepoWriters(repoId), self.args.Identity().SidecarId), nil
+}
+
+// What a read's receipt says of it beside its objects: §16.8's ReadBody purpose, and the run whose taint the receipt
+// takes (RecordReceiptRequest's RunId and NoSession).
+type EvsReadContext struct {
+	Purpose   RecordReadPurpose
+	RunId     *Id
+	NoSession bool
+}
+
+// The context key of an EvsReadContext.
+type evsReadContextKey struct{}
+
+// ctx carrying read, a copy: what the receipt gate deposits a read under.
+func WithEvsReadContext(ctx context.Context, read *EvsReadContext) context.Context {
+	copied := *read
+	if read.RunId != nil {
+		runId := *read.RunId
+		copied.RunId = &runId
+	}
+	return context.WithValue(ctx, evsReadContextKey{}, &copied)
+}
+
+// The read's context, or purpose read bound to no run and no session.
+func evsReadContextOf(ctx context.Context) *EvsReadContext {
+	if read, ok := ctx.Value(evsReadContextKey{}).(*EvsReadContext); ok && read != nil {
+		return read
+	}
+	return &EvsReadContext{Purpose: RecordReadPurposeRead}
+}
+
+// The receipt gate's depositor over the record's receipts: see the file header. A nil receipts gives a nil depositor,
+// which keeps the gate refusing.
+func NewEvsRecordReceiptDepositor(receipts *RecordReceipts) EvsReceiptDepositFunction {
+	if receipts == nil {
+		return nil
+	}
+	return func(ctx context.Context, repoId Id, refId Id, objectIds [][]byte) error {
+		read := evsReadContextOf(ctx)
+		return receipts.Deposit(ctx, &RecordReceiptRequest{
+			RepoId: repoId, Purpose: read.Purpose, ObjectIds: objectIds, RunId: read.RunId, NoSession: read.NoSession,
+		})
+	}
+}
+
+// Opens §8.19's owner-bound shares on this client: its receipt gate deposits through receipts (SetReceiptDepositor).
+func (self *EvsClient) SetRecordReceipts(receipts *RecordReceipts) {
+	self.SetReceiptDepositor(NewEvsRecordReceiptDepositor(receipts))
 }

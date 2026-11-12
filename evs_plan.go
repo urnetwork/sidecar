@@ -107,6 +107,11 @@ type EvsPathWrite struct {
 	// version, as ur evs rekey's does, is refused with ErrEvsPathMoved once another write or a removal landed
 	// between, rather than putting the older content back; evs then holds the push to the version the plan read (5g).
 	IfVersion uint64
+	// §16.2's base_version, the path version the write was made on, nil for no check: the path's newest version, a
+	// standing file's or a removal's, 0 for a path evs shows nothing of, must be it, else ErrEvsPathMoved. Unlike
+	// IfVersion it lets a removed path be written again, on the removal's version, as an agent's evs_write over a
+	// removal it read may (EVS1-M3-01); evs holds the push to the version the plan read all the same (5g).
+	IfBaseVersion *uint64
 	// The version's versioning, EvsVersioningFor's answer (evs_versioning.go): 0 keeps every version, 1 and 2 are
 	// versionless, format 2's (evs_plan_versionless.go). The planner never picks one of its own.
 	Versioning uint32
@@ -525,6 +530,18 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 	}
 	if write.IfVersion != 0 && (!stands || evsVerifiedNewestVersion(verified) != write.IfVersion) {
 		return nil, ErrEvsPathMoved
+	}
+	if base := write.IfBaseVersion; base != nil {
+		newest := uint64(0)
+		switch {
+		case stands:
+			newest = evsVerifiedNewestVersion(verified)
+		case verified.Removal != nil:
+			newest = verified.Removal.GetPathVersion()
+		}
+		if newest != *base {
+			return nil, ErrEvsPathMoved
+		}
 	}
 	if write.Remove {
 		if !stands {

@@ -234,6 +234,7 @@ rows:
       - {name: FuzzIndexExtractMail, package: ".", owner: SEARCH-M10-06, seeds: [testdata/fuzz/FuzzIndexExtractMail]}
       - {name: FuzzIndexExtractFile, package: ".", owner: SEARCH-M10-06, seeds: [testdata/fuzz/FuzzIndexExtractFile]}
       - {name: FuzzIndexExtractAttachment, package: ".", owner: SEARCH-M10-06, seeds: [testdata/fuzz/FuzzIndexExtractAttachment]}
+      - {name: FuzzIndexExtractStreamEqualsWhole, package: ".", owner: SEARCH-M10-44}
 
   - id: search-arguments
     bullet: "Search arguments and cursors"

@@ -149,6 +149,10 @@ barrier evs.head.read.before evsservice/head.go
 barrier evs.index.merge.built evs_index_merge_runner.go
 barrier evs.index.merge.pushed evs_index_merge_runner.go
 barrier evs.index.merge.uploaded evs_index_merge_runner.go
+barrier evs.index.rollup.built evs_index_rollup_runner.go
+barrier evs.index.rollup.locked evs_index_rollup_runner.go
+barrier evs.index.rollup.pushed evs_index_rollup_runner.go
+barrier evs.index.rollup.uploaded evs_index_rollup_runner.go
 barrier evs.lease.cas.after evsservice/push_lease.go
 barrier evs.lease.cas.before evsservice/push_lease.go
 barrier evs.local.apply.done evs_local_apply.go
