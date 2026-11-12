@@ -639,6 +639,79 @@ func TestEvsPathEpochCutOverEndToEnd(t *testing.T) {
 	}
 }
 
+// QD-681 end to end (question evs1-m2-28-rooted-delta-proofs): a writer's second 12-file push into one directory
+// plans, each new name's read walking the first push, whose list is under changes_root and changed the directory by a
+// delta; a device pinned below both pushes reads a file that was there before them and one each push created, and
+// lists the directory while both deltas stand unfolded, each verified by its own proof; and a third push by another
+// writer, pinned below them, lands the same way.
+func TestEvsSecondRootedPushIntoADirectoryPlansAndReadsEndToEnd(t *testing.T) {
+	world := newEpochWorld(t)
+	w := world.device("w", nil)
+	pinned := world.device("r", nil)
+	other := world.device("v", nil)
+	if _, err := w.write("bulk/keep", epochContent("bulk/keep", 1)); err != nil {
+		t.Fatal(err)
+	}
+	for _, device := range []*epochDevice{pinned, other} {
+		if content, _, err := device.read("bulk/keep"); err != nil || !bytes.Equal(content, epochContent("bulk/keep", 1)) {
+			t.Fatalf("bulk/keep before the pushes: %q %v", content, err)
+		}
+		if names, err := device.list("bulk"); err != nil || !slices.Equal(names, []string{"keep"}) {
+			t.Fatalf("the listing before the pushes: %v %v", names, err)
+		}
+	}
+	batch := func(label string) map[string][]byte {
+		files := map[string][]byte{}
+		for i := range 12 {
+			path := fmt.Sprintf("bulk/%s%02d", label, i)
+			files[path] = epochContent(path, 1)
+		}
+		return files
+	}
+	first, second, third := batch("a"), batch("b"), batch("c")
+	if _, err := w.writePaths(first); err != nil {
+		t.Fatalf("the first 12-file push: %v", err)
+	}
+	if _, err := w.writePaths(second); err != nil {
+		t.Fatalf("the second 12-file push into the directory: %v", err)
+	}
+	refId := world.mainRefId(w)
+	if head := world.head(refId); head.GetFoldedThrough() != 0 && head.GetVersion() <= head.GetFoldedThrough() {
+		t.Fatalf("the pushes are folded at %d of %d: nothing unfolded is read", head.GetFoldedThrough(), head.GetVersion())
+	}
+	want := []string{"keep"}
+	for _, files := range []map[string][]byte{first, second} {
+		for path := range files {
+			want = append(want, strings.TrimPrefix(path, "bulk/"))
+		}
+	}
+	slices.Sort(want)
+	if content, _, err := pinned.read("bulk/keep"); err != nil || !bytes.Equal(content, epochContent("bulk/keep", 1)) {
+		t.Fatalf("bulk/keep across both pushes: %q %v", content, err)
+	}
+	for _, path := range []string{"bulk/a03", "bulk/b07"} {
+		if content, _, err := pinned.read(path); err != nil || !bytes.Equal(content, epochContent(path, 1)) {
+			t.Fatalf("%s: %q %v", path, content, err)
+		}
+	}
+	if names, err := pinned.list("bulk"); err != nil || !slices.Equal(names, want) {
+		t.Fatalf("the listing with both deltas unfolded: %v %v", names, err)
+	}
+	// another writer, pinned below both pushes, plans its own 12 files into the directory
+	if _, err := other.writePaths(third); err != nil {
+		t.Fatalf("a third 12-file push by a writer pinned below the first two: %v", err)
+	}
+	for path := range third {
+		want = append(want, strings.TrimPrefix(path, "bulk/"))
+	}
+	slices.Sort(want)
+	for _, device := range []*epochDevice{pinned, w, other} {
+		if names, err := device.list("bulk"); err != nil || !slices.Equal(names, want) {
+			t.Fatalf("%s's listing after the third push: %v %v", device.label, names, err)
+		}
+	}
+}
+
 // Whether request is a one-part push, POST .../push.
 func epochIsPush(request *http.Request) bool {
 	return request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/push")

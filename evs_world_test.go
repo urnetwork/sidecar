@@ -619,6 +619,35 @@ func evsTestTreePosition(tree *EvsChangeTree, tokenPath EvsTokenPath) (int, int,
 	return tree.position(tokenPath)
 }
 
+// What the statement at version, its list under changes_root, gives a reader to show it left tokenPath alone, as evs
+// does: the adjacent leaves around the path and around each prefix its covering prefixes reach, or, for a strict
+// prefix it changed by a delta, that delta's inclusion proof in present (QD-681). The path's own change and a
+// prefix's removal get nothing.
+func evsTestAbsences(tree *EvsChangeTree, changedPrefixes []EvsTokenPath, version uint64, tokenPath EvsTokenPath) []*protocol.EvsAbsenceProof {
+	absences := []*protocol.EvsAbsenceProof{}
+	for _, absentPath := range EvsAbsencePaths(changedPrefixes, tokenPath) {
+		absence, err := tree.AbsenceProof(absentPath)
+		if err != nil {
+			part, index, present := tree.position(absentPath)
+			if !present || len(tokenPath) <= len(absentPath) {
+				continue
+			}
+			change, _, err := parseEvsChangeLeaf(tree.runs[part].leaves[index])
+			if err != nil || len(change.GetEntrySha256()) == 0 {
+				continue
+			}
+			proofs, err := tree.InclusionProof(part, index)
+			if err != nil {
+				continue
+			}
+			absence = &protocol.EvsAbsenceProof{TokenPath: absentPath.Components(), Present: proofs}
+		}
+		absence.Version = version
+		absences = append(absences, absence)
+	}
+	return absences
+}
+
 // The reply for one path at its newest version, or version, with the proofs a reader needs from pin on: named holds
 // the token path the request names in each epoch, the current one's among them, and each statement's change is found
 // under the path's token path in that statement's epoch (see the file header).
@@ -677,14 +706,10 @@ func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, versi
 			if tree == nil || laterPath == nil {
 				continue
 			}
-			for _, absentPath := range EvsAbsencePaths(self.commits[later-1].parsed.ChangedPrefixes, laterPath) {
-				absence, err := tree.AbsenceProof(absentPath)
-				if err != nil {
-					continue
-				}
-				absence.Version = later
-				reply.Absences = append(reply.Absences, absence)
-			}
+			reply.Absences = append(reply.Absences, evsTestAbsences(tree, self.commits[later-1].parsed.ChangedPrefixes, later, laterPath)...)
+		}
+		if self.mutatePath != nil {
+			self.mutatePath(reply)
 		}
 		return reply, nil, nil
 	}
@@ -745,14 +770,7 @@ func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, versi
 		if tree == nil || laterPath == nil {
 			continue
 		}
-		for _, absentPath := range EvsAbsencePaths(self.commits[later-1].parsed.ChangedPrefixes, laterPath) {
-			absence, err := tree.AbsenceProof(absentPath)
-			if err != nil {
-				continue
-			}
-			absence.Version = later
-			reply.Absences = append(reply.Absences, absence)
-		}
+		reply.Absences = append(reply.Absences, evsTestAbsences(tree, self.commits[later-1].parsed.ChangedPrefixes, later, laterPath)...)
 	}
 	if self.mutatePath != nil {
 		self.mutatePath(reply)
