@@ -49,10 +49,15 @@ func FuzzDaemonHello(f *testing.F) {
 var dotUrRefusalForm = regexp.MustCompile(`^\.ur is not the flat form ur reads(: line [0-9]+)?$`)
 
 // §22.6 and §5.8: a committed .ur is hostile input. No file panics the parser, a refusal is its sentence and a line
-// number and echoes nothing, and an accepted file holds only values of its keys' forms.
+// number and echoes nothing, and an accepted file holds only values of its keys' forms. D-CORE-18 on what it holds: its
+// claims never widens a session past the member's value without a confirmation, a narrower one applies at once, and
+// its project is the label the project's runs announce.
 func FuzzDotUr(f *testing.F) {
 	f.Add([]byte("network = \"k7q2m9\"\nagent = \"api-refactor\"\n"))
 	f.Add([]byte("# comment\nnetwork = \"k7q2m9\" # trailing\r\nclaims = \"prompt\"\nproject = \"billing-api\"\n"))
+	f.Add([]byte("claims = \"auto\"\n"))
+	f.Add([]byte("claims = \"off\"\nproject = \"billing-api\"\n"))
+	f.Add([]byte("claims = \"wide\"\n"))
 	f.Add([]byte("network = 'k7q2m9'\n"))
 	f.Add([]byte("[table]\nsecret = \"synthetic-canary\"\n"))
 	f.Add([]byte("network = \"\\u006b\"\n"))
@@ -80,6 +85,28 @@ func FuzzDotUr(f *testing.F) {
 		case "", "off", "prompt", "auto":
 		default:
 			t.Fatal("accepted a claims value of another form")
+		}
+		committed := SidecarClaims(0)
+		if project.Claims != "" {
+			var err error
+			if committed, err = ParseSidecarClaims(project.Claims); err != nil {
+				t.Fatal("an accepted claims value does not parse")
+			}
+		}
+		for _, base := range []SidecarClaims{SidecarClaimsOff, SidecarClaimsPrompt, SidecarClaimsAuto} {
+			resolution := ResolveSidecarClaims(&SidecarClaimsInputs{Team: true, TeamDefault: base, Committed: committed})
+			if base < resolution.Claims {
+				t.Fatalf(".ur's %s widened %s unconfirmed to %s", committed, base, resolution.Claims)
+			}
+			if committed.Known() && committed <= base && resolution.Claims != committed {
+				t.Fatalf(".ur's narrower %s did not apply over %s", committed, base)
+			}
+			if (resolution.Pending != 0) != (committed.Known() && base < committed) {
+				t.Fatalf(".ur's %s over %s pending %s", committed, base, resolution.Pending)
+			}
+		}
+		if label := project.ProjectLabel(&SidecarProjectTree{TopLevel: "/synthetic/work"}); project.Project != "" && label != project.Project {
+			t.Fatal("the label is not .ur's project")
 		}
 		if bytes.Contains(content, []byte("synthetic-canary")) && strings.Contains(project.Network+project.Agent+project.Project, "synthetic-canary") {
 			t.Fatal("a key outside the form was read")
