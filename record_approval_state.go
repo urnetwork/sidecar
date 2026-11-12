@@ -607,35 +607,53 @@ func (self *ApprovalInbox) Receive(ctx context.Context, storedSigned []byte) (Id
 	return approvalId, nil
 }
 
-// Checks and keeps one decision under the intake lock, answering whether a new row was written.
+// Checks and keeps one decision, answering whether a new row was written: the request and the binding read, and the
+// row appended, under the intake lock; the decision verified between, outside it, since a presence key's counter
+// passes its own barriers, which hold no lock (testhook.go). A duplicate verified meanwhile is caught again under the
+// lock, and a duplicate presence decision fails its counter instead.
 func (self *ApprovalInbox) intake(decision *StoredApprovalDecision, storedSigned []byte) (bool, error) {
-	self.intakeLock.Lock()
-	defer self.intakeLock.Unlock()
 	approvalId := recordIdOf(decision.Decision.GetApprovalId())
-	state, err := self.args.Ledger.State(approvalId)
-	if err != nil {
-		return false, err
-	}
-	if state.Request == nil {
-		return false, fmt.Errorf("%w: %s", ErrApprovalUnknown, approvalId)
-	}
-	request, err := ParseStoredApprovalRequest(state.Request)
-	if err != nil {
-		return false, err
-	}
-	if !decision.Binds(request) {
-		return false, fmt.Errorf("%w: a decision that does not name its request's stored bytes", ErrApprovalRefused)
-	}
-	for _, keptSigned := range state.Decisions {
-		if kept, err := ParseStoredApprovalDecision(keptSigned); err == nil && bytes.Equal(kept.Bytes, decision.Bytes) {
-			return false, nil
+	// whether the decision binds a request this ledger holds, and is not kept already
+	checkWithLock := func() (bool, error) {
+		state, err := self.args.Ledger.State(approvalId)
+		if err != nil {
+			return false, err
 		}
+		if state.Request == nil {
+			return false, fmt.Errorf("%w: %s", ErrApprovalUnknown, approvalId)
+		}
+		request, err := ParseStoredApprovalRequest(state.Request)
+		if err != nil {
+			return false, err
+		}
+		if !decision.Binds(request) {
+			return false, fmt.Errorf("%w: a decision that does not name its request's stored bytes", ErrApprovalRefused)
+		}
+		for _, keptSigned := range state.Decisions {
+			if kept, err := ParseStoredApprovalDecision(keptSigned); err == nil && bytes.Equal(kept.Bytes, decision.Bytes) {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+	fresh, err := func() (bool, error) {
+		self.intakeLock.Lock()
+		defer self.intakeLock.Unlock()
+		return checkWithLock()
+	}()
+	if err != nil || !fresh {
+		return false, err
 	}
 	states, err := self.args.states()
 	if err != nil {
 		return false, err
 	}
 	if err := approvalVerifyDecision(decision, states, self.args.SidecarId, self.args.Counter); err != nil {
+		return false, err
+	}
+	self.intakeLock.Lock()
+	defer self.intakeLock.Unlock()
+	if fresh, err := checkWithLock(); err != nil || !fresh {
 		return false, err
 	}
 	if err := self.args.Ledger.Append(approvalId, &ApprovalDecisionRow{Decision: bytes.Clone(storedSigned)}); err != nil {
@@ -699,9 +717,8 @@ func (self *ApprovalInbox) ReceiveCancel(ctx context.Context, storedSigned []byt
 		return Id{}, fmt.Errorf("%w: a cancel's body", ErrApprovalRefused)
 	}
 	approvalId := recordIdOf(cancel.GetApprovalId())
+	// the approval's hold serializes cancels, and its barrier must see no lock of the inbox's held
 	written, err := func() (bool, error) {
-		self.intakeLock.Lock()
-		defer self.intakeLock.Unlock()
 		state, err := self.args.Ledger.State(approvalId)
 		if err != nil {
 			return false, err

@@ -221,7 +221,11 @@ func (self *ApprovalGate) candidate(action *StoredCanonicalAction, sidecarAction
 	candidates := self.inbox.candidates(action, sidecarAction.RunId, sidecarAction.AgentId)
 	approved := []Id{}
 	approvedTaintMatch := []Id{}
-	var refusal error
+	// the newest decided request for exactly this action, of the run's taint and of the other: a denial or a cancel
+	// there refuses ahead of an approval of the other taint, which would only be stale and ask again
+	var refusal, refusalTaintMatch error
+	decidedTaintMatch := false
+	decidedOther := false
 	for _, candidate := range candidates {
 		approvalId := candidate.request.ApprovalId()
 		actionId := ApprovalActionId(approvalId, action.Bytes)
@@ -238,27 +242,37 @@ func (self *ApprovalGate) candidate(action *StoredCanonicalAction, sidecarAction
 			continue
 		}
 		logCancelled := self.inbox.logCancelled(approvalId)
+		taintMatch := candidate.request.Request.GetTainted() == tainted
 		if approvalUsable(state, logCancelled, now) {
 			approved = append(approved, approvalId)
-			if candidate.request.Request.GetTainted() == tainted {
+			if taintMatch {
 				approvedTaintMatch = append(approvedTaintMatch, approvalId)
 			}
+		}
+		if !bytesEqualAction(candidate.request.Action, action) {
 			continue
 		}
+		var answer error
 		switch approvalStatusOf(state, candidate.request, logCancelled, now).State {
 		case ApprovalStatusDenied:
-			if refusal == nil && len(approved) == 0 && bytesEqualAction(candidate.request.Action, action) {
-				refusal = fmt.Errorf("%w: approval %s", ErrApprovalDenied, approvalId)
-			}
+			answer = fmt.Errorf("%w: approval %s", ErrApprovalDenied, approvalId)
 		case ApprovalStatusCancelled:
-			if refusal == nil && len(approved) == 0 && bytesEqualAction(candidate.request.Action, action) {
-				refusal = fmt.Errorf("%w: approval %s", ErrApprovalCancelled, approvalId)
-			}
+			answer = fmt.Errorf("%w: approval %s", ErrApprovalCancelled, approvalId)
+		}
+		// only the newest decided request of each taint speaks for it
+		if taintMatch && !decidedTaintMatch {
+			decidedTaintMatch = true
+			refusalTaintMatch = answer
+		} else if !taintMatch && !decidedOther {
+			decidedOther = true
+			refusal = answer
 		}
 	}
 	switch {
 	case 0 < len(approvedTaintMatch):
 		return approvedTaintMatch[0], true, nil
+	case refusalTaintMatch != nil:
+		return Id{}, false, refusalTaintMatch
 	case 0 < len(approved):
 		return approved[0], true, nil
 	case refusal != nil:

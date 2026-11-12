@@ -549,3 +549,27 @@ func TestCancelReachesRequesterThroughThePoll(t *testing.T) {
 		t.Errorf("%d requests filed", world.log.filedCount())
 	}
 }
+
+// A person's denial of the tainted request a stale approval led to refuses the action, and no older untainted approval
+// asks again around it.
+func TestDenialInATaintedRunRefuses(t *testing.T) {
+	world := newTestApprovalWorld(t)
+	stored := world.mailAction("someone@example.com")
+	world.approved(stored)
+	if err := world.runs.Taint(t.Context(), world.runId, RunTaintUntrustedData); err != nil {
+		t.Fatal(err)
+	}
+	tainted := world.pendingRequest(world.gate.Authorize(t.Context(), world.action(stored), nil))
+	world.log.putDecision(tainted.ApprovalId(), world.decision(tainted, world.spend.phone, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE,
+		protocol.ApprovalVerdict_APPROVAL_VERDICT_DENY, 0))
+	if err := world.inbox.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	filed := world.log.filedCount()
+	if err := world.gate.Authorize(t.Context(), world.action(stored), nil); !errors.Is(err, ErrApprovalDenied) {
+		t.Errorf("after the denial: %v", err)
+	}
+	if world.log.filedCount() != filed {
+		t.Errorf("a request was filed again around the denial: %d, then %d", filed, world.log.filedCount())
+	}
+}
