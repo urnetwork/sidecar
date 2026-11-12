@@ -220,6 +220,7 @@ sealed_messages:
   EvsImport: "a Signed EvsImport rides as bytes in EvsSealedMetadata.signed_import, inside a push's sealed metadata (§11.6, §11.11)"
   AuthKeyBundle: "client-only: a pre-approved auth key's #<bundle>, never sent, logged or passed to MCP, and no request has a field for it (§7.8, D-TEAM-22)"
   TlsLinkToken: "a link audience's token, between a guest and the publishing device's front alone, in a URL and a cookie inside TLS, which tlsedge carries as records it cannot read (QD-134, X1)"
+  AgentCert: "an agent subkey's certificate, riding only inside the sealed provenance it vouches for, RECORD.md 5.3's AgentSignedBody and a push's sealed metadata, never a statement or record a server reads (QD-159, D-CORE-6)"
 
 sealed_files:
   protocol/directory.proto: "plaintext inside the directory's sealed files and entries (§16.11)"

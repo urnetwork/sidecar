@@ -799,12 +799,14 @@ message SocketRegistrationClaim {
 }
 
 // sidecar/protocol/core.proto
-// plan-CORE-core-hint-body #1's CoreHint and its kinds, PushHint.hint's body on topic core.
+// plan-CORE-core-hint-body #1's CoreHint and its kinds, PushHint.hint's body on topic core, and QD-159's agent subkey
+// certificate, its fields in the order the owner's answer lists them.
 message CoreHint { CoreHintKind kind = 1; bytes sidecar_id = 2; uint32 min_secure_version = 3; }
 enum CoreHintKind {
   CORE_HINT_KIND_UNSPECIFIED = 0; CORE_HINT_KIND_REVOCATION = 1; CORE_HINT_KIND_RESYNC = 2; CORE_HINT_KIND_WAKE = 3;
   CORE_HINT_KIND_MIN_SECURE = 4; CORE_HINT_KIND_GATES = 5;
 }
+message AgentCert { bytes sidecar_id = 1; bytes agent_id = 2; bytes public_key = 3; int64 not_after_ms = 4; }
 
 // sidecar/protocol/tls.proto
 // plan-TLS-small-readings#1's TlsHint and its kinds, the shape of SocketHint, #2's attestation body, and #8's link

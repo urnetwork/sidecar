@@ -73,7 +73,7 @@ func TestDotUrForm(t *testing.T) {
 	for _, content := range [][]byte{
 		[]byte("\xef\xbb\xbfnetwork = \"k7q2m9\"\n"),
 		[]byte("network = \"\xff\"\n"),
-		[]byte(strings.Repeat("#", sidecarProjectMaxByteCount+1)),
+		[]byte(strings.Repeat("#", DefaultSidecarProjectSettings().MaxByteCount+1)),
 	} {
 		if _, err := ParseSidecarProject(content); !errors.Is(err, ErrSidecarProjectMalformed) {
 			t.Errorf("%q: %v", content, err)

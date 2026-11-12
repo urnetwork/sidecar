@@ -1,6 +1,9 @@
-// The core topic's hint (§5.6, §6.8; plan-CORE-core-hint-body #1): PushHint.kind CORE_HINT, its body this message, under
-// 256 B. No field carries authority (§5.6): a revocation is one only once a SidecarRevoke verifies against the config,
-// and an unknown kind or a dropped body is a bare resync. No oneof, as in push.proto.
+// §5's own messages. The core topic's hint (§5.6, §6.8; plan-CORE-core-hint-body #1): PushHint.kind CORE_HINT, its body
+// CoreHint, under 256 B. No field carries authority (§5.6): a revocation is one only once a SidecarRevoke verifies
+// against the config, and an unknown kind or a dropped body is a bare resync. No oneof, as in push.proto. An agent
+// subkey's certificate (§5.5, QD-159): AgentCert, the body of a Signed by the sidecar's identity key, purpose
+// agent-cert, type SIGNED_AGENT_CERT, carried only inside the sealed provenance it vouches for, so no server sees an
+// agent id (D-CORE-6).
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -20,4 +23,11 @@ enum CoreHintKind {
   CORE_HINT_KIND_WAKE = 3;
   CORE_HINT_KIND_MIN_SECURE = 4;
   CORE_HINT_KIND_GATES = 5;
+}
+
+message AgentCert {
+  bytes sidecar_id = 1;     // the sidecar whose identity key signs this, and whose entries carry it
+  bytes agent_id = 2;       // the agent's registration in that sidecar (§5.5)
+  bytes public_key = 3;     // the subkey's Ed25519 public key, 32 B; a signature's key_id is its SHA-256
+  int64 not_after_ms = 4;   // at most 30 days after signing; a reader attributes no entry dated at or past it
 }

@@ -396,6 +396,7 @@
         {"number":5123,"name":"SIGNED_EVS_PATH_MAP"},
         {"number":5124,"name":"SIGNED_EVS_IMPORT"},
         {"number":5377,"name":"SIGNED_TLS_KEY_ATTESTATION"},
+        {"number":5379,"name":"SIGNED_TLS_LINK"},
         {"number":6145,"name":"SIGNED_RECORD_HEADER"},
         {"number":6146,"name":"SIGNED_APPROVAL_DECISION"},
         {"number":6147,"name":"SIGNED_APPROVAL_CANCEL"},
@@ -411,7 +412,8 @@
         {"number":6407,"name":"SIGNED_BRIDGE_WITHDRAW"},
         {"number":6408,"name":"SIGNED_WINDOW_DELEGATION"},
         {"number":6409,"name":"SIGNED_SHARE_CERT"},
-        {"number":6657,"name":"SIGNED_SIDECAR_BINDING"}
+        {"number":6657,"name":"SIGNED_SIDECAR_BINDING"},
+        {"number":6658,"name":"SIGNED_AGENT_CERT"}
       ]
     }
   ]

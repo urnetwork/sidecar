@@ -217,6 +217,8 @@ func TestEverySignedTypeHasAnIdentityPurposeOrIsRefused(t *testing.T) {
 		bridge.SignedType_SIGNED_SOCKET_TICKET:   true,
 		bridge.SignedType_SIGNED_SHARE_CERT:      true,
 		bridge.SignedType_SIGNED_SIDECAR_BINDING: true,
+		// the identity key signs it only through AgentSubkey, never for Sign's callers (identity_agent.go)
+		bridge.SignedType_SIGNED_AGENT_CERT: true,
 	}
 	for number := range bridge.SignedType_name {
 		signedType := bridge.SignedType(number)

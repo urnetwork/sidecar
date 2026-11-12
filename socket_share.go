@@ -893,13 +893,23 @@ func (self *socketShare) listen(ctx context.Context) {
 	self.listenOnce(listenCtx)
 }
 
-// Takes each admitted conn until listener closes, then drops it so a resume listens again.
+// Takes each admitted conn until listener closes or the shares' context ends, then drops it so a resume listens
+// again. A listener still the share's at the loop's end is closed here: a stop's cancel can end the loop before its
+// unlisten runs, which then finds no listener to close, and an open one would hold share/<token> so that no later
+// listen took it.
 func (self *socketShare) accept(listener daemonSocketListener) {
 	defer func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		if self.listener == listener {
+		held := func() bool {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			if self.listener != listener {
+				return false
+			}
 			self.listener = nil
+			return true
+		}()
+		if held {
+			listener.Close()
 		}
 	}()
 	for {

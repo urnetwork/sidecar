@@ -5,7 +5,9 @@
 //
 // The ClientKey signs only the binding and §7.4's DPoP proofs (D-CORE-6), so nothing here reaches it: Sign reads
 // the identity seed alone, and the binding's purposes are refused, since NewSidecarIdentityBinding signs those with
-// both keys at once. Agent subkeys sign only sealed provenance, and until CORE-M6-03 an agent id selects no key.
+// both keys at once. Agent subkeys sign only sealed provenance (identity_agent.go's SignProvenance), so an agent id
+// here selects no key: the identity key signs every statement whatever agent it names, and agent ids stay off the server
+// (D-CORE-6).
 //
 // Nothing here names a connect type, so it builds on every leg.
 
@@ -100,8 +102,8 @@ func sidecarIdentitySignedPurpose(signedType bridge.SignedType) (string, bool) {
 // device, a statement verifiers refuse from one (ErrSidecarSignReadOnly); on a device recovering by code, anything but
 // its ReaderKey and its sign-out until its recovery anchor passes (ErrSidecarRecoveryUnanchored); answers a clean
 // error wrapping ErrSidecarStoreLocked while Locked, and ErrSidecarNoIdentity before enrollment. agentId is the
-// caller's provenance label (source = agent_asserted, §5.5): until CORE-M6-03's subkeys it selects no key, so the
-// identity key signs whatever it names. body is copied.
+// caller's provenance label (source = agent_asserted, §5.5) and selects no key: an agent's subkey signs only sealed
+// provenance (SignProvenance), never a statement, so the identity key signs whatever it names. body is copied.
 func (self *Sidecar) Sign(purpose string, signedType bridge.SignedType, body []byte, agentId *Id) (*bridge.Signed, error) {
 	expectedPurpose, ok := sidecarIdentitySignedPurpose(signedType)
 	if !ok {
