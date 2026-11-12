@@ -20,8 +20,8 @@
 // fixed constants with no row; the policy's grants and requests, then §8.5's kind-default rules that need the head
 // (acl_kind.go), then the log's activated grants whose requests rule this head still holds (FS-14); the log's repos,
 // suspensions and spent grant ids, a spent id dropped once its retention is below the head's newest record time; and
-// BridgeRows from BRIDGE's CompileBridgeRows. The audit block stays empty until ACL-M6-02, so a head whose policy
-// holds one refuses: no AuditOptIn can stand before then. Kind defaults themselves are the binary's (acl_kind.go):
+// BridgeRows from BRIDGE's CompileBridgeRows; and the audit block, which counts only under the k-of-n AuditOptIn record
+// the log's rows hold (acl_audit.go), so a block with none names no reader. Kind defaults themselves are the binary's (acl_kind.go):
 // documents add to them and never narrow them, and nothing here can.
 //
 // What rows drop on purpose stays on the device as AclLocalPolicy, which CompileAclLocal gives from the same input and
@@ -284,10 +284,6 @@ func newAclCompiler(input *AclCompileInput) (*aclCompiler, error) {
 	self, err := newAclCompilerTables(input)
 	if err != nil {
 		return nil, err
-	}
-	if self.policy.Audit != nil {
-		// no AuditOptIn stands before ACL-M6-02, and the block counts only under one (§8.5)
-		return nil, aclCompileRefusal("an audit block, which counts only under an AuditOptIn (ACL-M6-02)")
 	}
 	if err := self.compile(); err != nil {
 		return nil, err
@@ -572,6 +568,10 @@ func (self *aclCompiler) compile() error {
 		rows.SpentGrants = append(rows.SpentGrants, proto.Clone(spent).(*protocol.AclSpentGrant))
 	}
 	rows.Bridge = bytes.Clone(self.input.Bridge)
+	// owner decision 63's reader, under the opt-in record the log's rows hold (acl_audit.go)
+	if rows.Audit, err = self.compileAudit(); err != nil {
+		return err
+	}
 
 	for _, atom := range self.atoms {
 		aclSortAtom(atom)

@@ -243,8 +243,8 @@ func aclEncodeRows(t testing.TB, rows *protocol.AclRows) []byte {
 	return encoded
 }
 
-// §8.5's worked example, its audit block left out: no AuditOptIn stands before ACL-M6-02, so a head holding one
-// refuses (TestCompileAclRefusesWhatTheHeadDoesNotHold).
+// §8.5's worked example, its audit block left out: it names a reader only under a k-of-n AuditOptIn, which
+// acl_audit_test.go's tests stand.
 const aclWorkedExampleSource = `{
   "groups":    { "group:eng": ["dana@acme.example", "amir@acme.example"] },
   "tagOwners": { "tag:recurd": ["group:eng"], "tag:db": ["autogroup:admin"],
@@ -589,7 +589,10 @@ func TestCompileAclRefusesWhatTheHeadDoesNotHold(t *testing.T) {
 		{name: "a rule with no rules row", policy: `{"grants": [{"src": ["autogroup:member"], "dst": ["*"], "allow": ["dial"]}]}`, edit: func(world *aclCompileWorld) {
 			world.rules.Rules = nil
 		}},
-		{name: "an audit block", policy: `{"tagOwners": {"tag:audit": ["autogroup:admin"]}, "audit": {"reader": "tag:audit", "repos": ["kind:vault"]}}`},
+		{name: "an AuditOptIn record that does not parse", policy: `{"tagOwners": {"tag:audit": ["autogroup:admin"]}, "audit": {"reader": "tag:audit", "repos": ["kind:vault"]}}`,
+			edit: func(world *aclCompileWorld) {
+				world.statements.Audit = &protocol.AclAudit{AuditOptIn: []byte{0xff}}
+			}},
 		{name: "a policy that does not parse", policy: `{"grants": [{"src": ["autogroup:member"]}]}`},
 	}
 	for _, c := range cases {

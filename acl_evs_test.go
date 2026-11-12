@@ -426,7 +426,7 @@ func TestAclAuditBlock(t *testing.T) {
 		recordId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
 		fixture.rows.Audit = &protocol.AclAudit{ReaderAtoms: [][]byte{auditTag.Bytes()}, RepoKinds: []uint32{uint32(protocol.RepoKind_REPO_KIND_VAULT)}}
 		if optedIn {
-			fixture.rows.Audit.AuditOptIn = []byte{1}
+			fixture.rows.Audit.AuditOptIn = aclTestAuditOptInRecord(t, aclTestNow.Add(time.Hour), auditTag)
 		}
 		state := fixture.state(t)
 		if rights := aclTestRights(state, auditor, vaultId, AclTokenAudienceEvs); rights.Has(AclEvsRead) != optedIn {

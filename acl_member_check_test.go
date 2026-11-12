@@ -327,7 +327,7 @@ func TestCheckRepoMemberTakesTheAuditReaderOnlyWithItsOptIn(t *testing.T) {
 	if decision := fixture.state(t).CheckRepoMember(vaultId, aclTestWrap(auditor), aclTestNow); decision.Allowed {
 		t.Errorf("without its opt-in: %+v", decision)
 	}
-	fixture.rows.Audit.AuditOptIn = []byte("a k-of-n AuditOptIn the compile verified")
+	fixture.rows.Audit.AuditOptIn = aclTestAuditOptInRecord(t, aclTestNow.Add(time.Hour), auditTag)
 	state := fixture.state(t)
 	if decision := state.CheckRepoMember(vaultId, aclTestWrap(auditor), aclTestNow); !decision.Allowed || decision.Reason != AclReasonAudit {
 		t.Errorf("the audit reader's wrap: %+v", decision)

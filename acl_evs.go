@@ -225,7 +225,7 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 	if aclRepoKindTakesGrants(repo.kind) {
 		self.addAccessLogRights(&accumulator, sidecar, repo, nowMs)
 	}
-	self.addAuditRights(&accumulator, sidecar, repoId, repo)
+	self.addAuditRights(&accumulator, sidecar, repoId, repo, nowMs)
 
 	rights := accumulator.rights
 	if rights.Has(AclEvsAdmin) {
@@ -399,12 +399,12 @@ func (self *AclState) addAccessLogRights(accumulator *aclEvsAccumulator, sidecar
 	}
 }
 
-// The audit block's read and receipt deposit, while its AuditOptIn stands, for a sidecar holding a reader
-// atom, on the kinds and repos the block names (owner decision 63). The compile writes the block only with
-// a verified opt-in (ACL-M6-02), so rows with none read nothing here.
-func (self *AclState) addAuditRights(accumulator *aclEvsAccumulator, sidecar *aclSidecarState, repoId Id, repo *aclRepoState) {
+// The audit block's read and receipt deposit, while its AuditOptIn stands at nowMs, for a sidecar holding a
+// reader atom, on the kinds and repos the block names (owner decision 63). Rows hold a block only with a verified
+// opt-in's record (acl_audit.go), and past its not_after the reader drops as an expiry (§7.9).
+func (self *AclState) addAuditRights(accumulator *aclEvsAccumulator, sidecar *aclSidecarState, repoId Id, repo *aclRepoState, nowMs int64) {
 	audit := self.rows.GetAudit()
-	if audit == nil || len(audit.GetAuditOptIn()) == 0 {
+	if audit == nil || !self.auditStands(nowMs) {
 		return
 	}
 	named := slices.Contains(audit.GetRepoKinds(), uint32(repo.kind)) ||

@@ -773,7 +773,7 @@ func TestAclStatementShapeRefusals(t *testing.T) {
 	}{
 		{name: "a body of another type", statement: cast.fixture.statement(bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoRevoke{}, cast.laptop), refusal: ErrConfigRule},
 		{name: "k of n on a RepoGrant", statement: cast.fixture.authorityStatement(bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoGrant{}, cast.laptop, cast.ownerDevice), refusal: ErrConfigRule},
-		{name: "AuditOptIn", statement: cast.fixture.statement(bridge.SignedType_SIGNED_AUDIT_OPT_IN, &protocol.AuditOptIn{}, cast.ownerDevice), refusal: ErrConfigRuleMissing},
+		{name: "one signer's AuditOptIn", statement: cast.fixture.statement(bridge.SignedType_SIGNED_AUDIT_OPT_IN, &protocol.AuditOptIn{}, cast.ownerDevice), refusal: ErrConfigAuthority},
 		{name: "two signers on one statement", statement: &AclStatement{Type: bridge.SignedType_SIGNED_REPO_GRANT, Body: &protocol.RepoGrant{},
 			Signers: []ConfigSigner{{Kind: ConfigSignerSidecar, SidecarId: cast.laptop}, {Kind: ConfigSignerSidecar, SidecarId: cast.phone}}}, refusal: ErrConfigRule},
 		{name: "a recovery key's signature", statement: &AclStatement{Type: bridge.SignedType_SIGNED_REPO_GRANT, Body: &protocol.RepoGrant{},
