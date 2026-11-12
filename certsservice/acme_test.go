@@ -3,20 +3,29 @@
 // rollover between orders, a 429's Retry-After reaching the policy's hold, and a fallback to a CA that
 // needs EAB. Pebble and acmez run on real time over loopback, so a test waits for an order's answer
 // with a guard and never sleeps; Pebble's validation sleeps are off.
+//
+// Pebble v2.10.1 cannot find the order behind about 1 in 255 of its own certificates when a new order
+// names one in replaces (see testOrderReplaceable), so a test that replaces a certificate takes one
+// Pebble can find, and what certs sends as replaces is read from the request itself, for every shape
+// of serial, whatever Pebble answers.
 
 package certsservice_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
-	"encoding/asn1"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
+	"net/http"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -93,6 +102,12 @@ func testAcmeSettings(pebble *sidecartest.Pebble, gts *sidecartest.Pebble) *cert
 // An ACME client on pebble with files' accounts.
 func testAcme(t *testing.T, settings *certsservice.CertsSettings, pebble *sidecartest.Pebble, files ...[]byte) *certsservice.CertsAcmeClient {
 	t.Helper()
+	return testAcmeOver(t, settings, pebble, pebble.HttpClient, files...)
+}
+
+// An ACME client on pebble with files' accounts, reaching it through httpClient.
+func testAcmeOver(t *testing.T, settings *certsservice.CertsSettings, pebble *sidecartest.Pebble, httpClient *http.Client, files ...[]byte) *certsservice.CertsAcmeClient {
+	t.Helper()
 	accounts, err := certsservice.NewCertsAccountSet(files)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +116,7 @@ func testAcme(t *testing.T, settings *certsservice.CertsSettings, pebble *sideca
 		Accounts:   accounts,
 		Dns:        pebble.Dns,
 		Clock:      sidecar.RealClock{},
-		HttpClient: pebble.HttpClient,
+		HttpClient: httpClient,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -109,15 +124,101 @@ func testAcme(t *testing.T, settings *certsservice.CertsSettings, pebble *sideca
 	return client
 }
 
-// RFC 9773's certificate id of leaf: base64url of its authority key id, a dot, and base64url of its
-// serial's DER content octets.
+// Keeps the replaces of every newOrder on its way to the CA, read from the request's JWS payload, so a
+// test sees what certs sent whatever the CA answers. A newOrder posted again, after a bad nonce or a
+// 5xx, is kept again.
+type testReplacesRecorder struct {
+	base http.RoundTripper
+
+	stateLock sync.Mutex
+	replaces  []string
+}
+
+// pebble's HTTP client with a recorder under it.
+func newTestReplacesRecorder(pebble *sidecartest.Pebble) (*testReplacesRecorder, *http.Client) {
+	recorder := &testReplacesRecorder{base: pebble.HttpClient.Transport}
+	httpClient := *pebble.HttpClient
+	httpClient.Transport = recorder
+	return recorder, &httpClient
+}
+
+func (self *testReplacesRecorder) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.Method != http.MethodPost || request.Body == nil {
+		return self.base.RoundTrip(request)
+	}
+	body, err := io.ReadAll(request.Body)
+	request.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	// only a newOrder's payload holds identifiers (RFC 8555 §7.4)
+	var jws struct {
+		Payload string `json:"payload"`
+	}
+	var newOrder struct {
+		Identifiers []json.RawMessage `json:"identifiers"`
+		Replaces    string            `json:"replaces"`
+	}
+	if json.Unmarshal(body, &jws) == nil {
+		if payload, err := base64.RawURLEncoding.DecodeString(jws.Payload); err == nil && json.Unmarshal(payload, &newOrder) == nil && 0 < len(newOrder.Identifiers) {
+			func() {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				self.replaces = append(self.replaces, newOrder.Replaces)
+			}()
+		}
+	}
+	forwarded := request.Clone(request.Context())
+	forwarded.Body = io.NopCloser(bytes.NewReader(body))
+	return self.base.RoundTrip(forwarded)
+}
+
+// The replaces of each newOrder since the last take.
+func (self *testReplacesRecorder) take() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	replaces := self.replaces
+	self.replaces = nil
+	return replaces
+}
+
+// RFC 9773's certificate id of leaf.
 func testLeafAriId(t *testing.T, leaf *x509.Certificate) string {
 	t.Helper()
-	serialDer, err := asn1.Marshal(leaf.SerialNumber)
-	if err != nil {
-		t.Fatal(err)
+	return testCertificateId(leaf.AuthorityKeyId, leaf.SerialNumber)
+}
+
+// Orders csr's certificate at LE's Pebble for a test that goes on to replace it, and returns it with
+// its verified leaf.
+//
+// Pebble v2.10.1 files an issued order under its certificate's serial as the hex of the serial's bare
+// unsigned octets, and looks a replaces up under the hex of the certificate id's serial octets, which
+// are DER's and lead with a zero octet when the serial's top bit is set. So it answers a newOrder that
+// replaces such a certificate with a 500, "could not find an order for the given certificate", though
+// its own ARI finds it. Its serials are random below 2^63, so that is the 1 in 256 of 7 octets with the
+// top bit set and the few shorter ones (question certs-ari-flake-pebble-replaces-serial). The id certs
+// sends for such a certificate is right, which TestCertsAcmeReplacesNamesTheCertificateIdOnTheWire
+// holds; Pebble is a fetched module and is not patched, so this orders again until Pebble issues a
+// certificate it can find. It tries four times: each order writes its name's challenges twice, and the
+// DNS routes take 10 writes a name an hour (D-DNS-8), so a set has five orders in a test, these and
+// the one that replaces.
+func testOrderReplaceable(t *testing.T, client *certsservice.CertsAcmeClient, pebble *sidecartest.Pebble, csr []byte, names []string) (*certsservice.CertsAcmeIssued, *x509.Certificate) {
+	t.Helper()
+	ctx := testAcmeContext(t)
+	for range 4 {
+		issued, err := client.Order(ctx, &certsservice.CertsAcmeOrder{Ca: certsservice.CertsCaLetsEncrypt, Csr: csr})
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf := testVerifyChain(t, pebble, issued.Chain, names)
+		// the top bit of the serial's first octet is set exactly when its bit length fills its octets
+		if leaf.SerialNumber.BitLen()%8 != 0 {
+			return issued, leaf
+		}
+		t.Logf("Pebble cannot replace its certificate with serial %s; ordering another", certsservice.CertsSerialText(leaf.SerialNumber))
 	}
-	return base64.RawURLEncoding.EncodeToString(leaf.AuthorityKeyId) + "." + base64.RawURLEncoding.EncodeToString(serialDer[2:])
+	t.Fatal("Pebble issued no certificate it can replace")
+	return nil, nil
 }
 
 // Verifies chain under pebble's roots for its names, and returns its leaf.
@@ -198,16 +299,16 @@ func TestCertsAcmeOrderToChain(t *testing.T) {
 func TestCertsAcmeAriAndOfflineRenewal(t *testing.T) {
 	pebble := sidecartest.StartPebble(t, nil)
 	settings := testAcmeSettings(pebble, nil)
-	client := testAcme(t, settings, pebble, testAccountFile(t, certsservice.CertsCaLetsEncrypt, time.Now(), "", ""))
+	recorder, httpClient := newTestReplacesRecorder(pebble)
+	client := testAcmeOver(t, settings, pebble, httpClient, testAccountFile(t, certsservice.CertsCaLetsEncrypt, time.Now(), "", ""))
 	device := newTestDevice(t, "k6renew001")
 	storedCsr := testCsr(t, device.tlsKey, device.identifierSet)
 	ctx := testAcmeContext(t)
 
-	first, err := client.Order(ctx, &certsservice.CertsAcmeOrder{Ca: certsservice.CertsCaLetsEncrypt, Csr: storedCsr})
-	if err != nil {
-		t.Fatal(err)
+	first, leaf := testOrderReplaceable(t, client, pebble, storedCsr, device.identifierSet)
+	if sent := recorder.take(); len(sent) == 0 || slices.ContainsFunc(sent, func(replaces string) bool { return replaces != "" }) {
+		t.Fatalf("a first order sent replaces %q", sent)
 	}
-	leaf := testVerifyChain(t, pebble, first.Chain, device.identifierSet)
 	windowStart, windowEnd, err := client.RenewalInfo(ctx, certsservice.CertsCaLetsEncrypt, first.Chain[0])
 	if err != nil {
 		t.Fatal(err)
@@ -229,6 +330,62 @@ func TestCertsAcmeAriAndOfflineRenewal(t *testing.T) {
 	renewed := testVerifyChain(t, pebble, second.Chain, device.identifierSet)
 	if renewed.SerialNumber.Cmp(leaf.SerialNumber) == 0 {
 		t.Fatal("the renewal returned the old certificate")
+	}
+	// every newOrder of the renewal named the first certificate: none fell back to an order without it
+	leafId := testLeafAriId(t, leaf)
+	if sent := recorder.take(); len(sent) == 0 || slices.ContainsFunc(sent, func(replaces string) bool { return replaces != leafId }) {
+		t.Fatalf("the renewal sent replaces %q, not %q", sent, leafId)
+	}
+}
+
+// What a renewal names to the CA is RFC 9773's certificate id of the certificate it replaces, octet for
+// octet, whatever its serial's shape: top bit clear; top bit set, where DER's content octets lead with
+// a zero octet that the serial's bare unsigned octets lack; one octet; 20 octets. An id whose serial
+// octets are not a DER integer's, bare unsigned octets with the top bit set or padded with zeros, goes
+// out as the DER of the same positive serial. Read from each newOrder on its way to Pebble, whose
+// answer about a certificate it never issued is not what is tested here.
+func TestCertsAcmeReplacesNamesTheCertificateIdOnTheWire(t *testing.T) {
+	pebble := sidecartest.StartPebble(t, nil)
+	settings := testAcmeSettings(pebble, nil)
+	recorder, httpClient := newTestReplacesRecorder(pebble)
+	client := testAcmeOver(t, settings, pebble, httpClient, testAccountFile(t, certsservice.CertsCaLetsEncrypt, time.Now(), "", ""))
+	device := newTestDevice(t, "k6wire0001")
+	storedCsr := testCsr(t, device.tlsKey, device.identifierSet)
+	ctx := testAcmeContext(t)
+
+	for _, shape := range []struct {
+		// the id an order names
+		replaces string
+		// the id its newOrder carries
+		sent string
+	}{
+		// RFC 9773 §4.1's example: serial 00:87:65:43:21
+		{"aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE", "aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE"},
+		{testAriIdOfOctets("7f223344556677"), testAriIdOfOctets("7f223344556677")},
+		{testAriIdOfOctets("0080223344556677"), testAriIdOfOctets("0080223344556677")},
+		{testAriIdOfOctets("00ff223344556677"), testAriIdOfOctets("00ff223344556677")},
+		{testAriIdOfOctets("01"), testAriIdOfOctets("01")},
+		{testAriIdOfOctets("0080"), testAriIdOfOctets("0080")},
+		{testAriIdOfOctets("7f65432187654321876543218765432187654321"), testAriIdOfOctets("7f65432187654321876543218765432187654321")},
+		{testAriIdOfOctets("008765432187654321876543218765432187654321"), testAriIdOfOctets("008765432187654321876543218765432187654321")},
+		{testAriIdOfOctets("80223344556677"), testAriIdOfOctets("0080223344556677")},
+		{testAriIdOfOctets("00007f2233"), testAriIdOfOctets("7f2233")},
+	} {
+		// Pebble knows none of these certificates and says so one way or another
+		_, _ = client.Order(ctx, &certsservice.CertsAcmeOrder{Ca: certsservice.CertsCaLetsEncrypt, Csr: storedCsr, Replaces: shape.replaces})
+		if sent := recorder.take(); len(sent) == 0 || slices.ContainsFunc(sent, func(replaces string) bool { return replaces != shape.sent }) {
+			t.Fatalf("replaces %q sent %q, not %q", shape.replaces, sent, shape.sent)
+		}
+	}
+
+	// an id that is not one reaches no CA
+	for _, replaces := range []string{"not an ARI id", "aYhba4dGQEHhs3uEe6CuLN4ByNQ.", "aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdl=yE", "a+b.AIdlQyE"} {
+		if _, err := client.Order(ctx, &certsservice.CertsAcmeOrder{Ca: certsservice.CertsCaLetsEncrypt, Csr: storedCsr, Replaces: replaces}); err == nil {
+			t.Fatalf("replaces %q ordered", replaces)
+		}
+		if sent := recorder.take(); 0 < len(sent) {
+			t.Fatalf("replaces %q sent %q", replaces, sent)
+		}
 	}
 }
 
@@ -268,10 +425,7 @@ func TestCertsAcmeRolloverBetweenOrders(t *testing.T) {
 	storedCsr := testCsr(t, device.tlsKey, device.identifierSet)
 	ctx := testAcmeContext(t)
 
-	first, err := client.Order(ctx, &certsservice.CertsAcmeOrder{Ca: certsservice.CertsCaLetsEncrypt, Csr: storedCsr})
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, leaf := testOrderReplaceable(t, client, pebble, storedCsr, device.identifierSet)
 	uriBefore, err := client.AccountUri(ctx, certsservice.CertsCaLetsEncrypt)
 	if err != nil {
 		t.Fatal(err)
@@ -282,10 +436,6 @@ func TestCertsAcmeRolloverBetweenOrders(t *testing.T) {
 	uriAfter, err := client.AccountUri(ctx, certsservice.CertsCaLetsEncrypt)
 	if err != nil || uriAfter != uriBefore {
 		t.Fatalf("the rollover moved the account: %q to %q, %v", uriBefore, uriAfter, err)
-	}
-	leaf, err := x509.ParseCertificate(first.Chain[0])
-	if err != nil {
-		t.Fatal(err)
 	}
 	if _, err := client.Order(ctx, &certsservice.CertsAcmeOrder{Ca: certsservice.CertsCaLetsEncrypt, Csr: storedCsr, Replaces: testLeafAriId(t, leaf)}); err != nil {
 		t.Fatalf("an order after the rollover: %v", err)
