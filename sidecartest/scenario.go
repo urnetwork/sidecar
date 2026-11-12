@@ -238,21 +238,23 @@ func RegisterScenario(scenarioId string, clause string, tier string, test *Scena
 	return test
 }
 
-// The parts this task composes (TEST-M2-11): S3a's and S4a's on T2 here, their remaining parts missing until composed
-// (scenario_s3a_test.go, scenario_s4a_test.go), and S1's code-create clause on T3 in server's sidecart3, its other
-// two waiting on a T3 sidecar's enrollment through server's api.
+// The parts this task composes (TEST-M2-11): S3a's and S4a's, one builder each in sidecartest/scenarios, on T2 here
+// and on T3 in server's sidecart3, their remaining parts missing until composed; and S1's code-create clause on T3,
+// its other two waiting on a T3 sidecar's enrollment through server's api.
 var (
-	_ = RegisterScenario("S3a", "readerkey-valid-over-7-days-refused", ScenarioTierT2, scenarioS3aTest)
-	_ = RegisterScenario("S3a", "adds-and-wraps-only-for-readers", ScenarioTierT2, scenarioS3aTest)
-	_ = RegisterScenario("S4a", "writers-seal-nothing-to-x", ScenarioTierT2, scenarioS4aTest)
-	_ = RegisterScenario("S4a", "next-generation-fails-under-xs-keys", ScenarioTierT2, scenarioS4aTest)
+	_ = registerScenarioParts("S3a", []string{"readerkey-valid-over-7-days-refused", "adds-and-wraps-only-for-readers"}, "TestScenarioS3a")
+	_ = registerScenarioParts("S4a", []string{"writers-seal-nothing-to-x", "next-generation-fails-under-xs-keys"}, "TestScenarioS4a")
 	_ = RegisterScenario("S1", "code-create-403", ScenarioTierT3, &ScenarioTest{Repo: "server", Package: "github.com/urnetwork/server/sidecart3", Name: "TestScenarioS1CodeCreateOnT3", Tags: "sidecar_testhooks,sidecar_pending,sidecar_localstack"})
 )
 
-var (
-	scenarioS3aTest = &ScenarioTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestScenarioS3a", Tags: "sidecar_testhooks"}
-	scenarioS4aTest = &ScenarioTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestScenarioS4a", Tags: "sidecar_testhooks"}
-)
+// Registers clauses of scenarioId on T2, to name in sidecartest, and on T3, to name plus "OnT3" in server's sidecart3.
+func registerScenarioParts(scenarioId string, clauses []string, name string) bool {
+	for _, clause := range clauses {
+		RegisterScenario(scenarioId, clause, ScenarioTierT2, &ScenarioTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: name, Tags: "sidecar_testhooks"})
+		RegisterScenario(scenarioId, clause, ScenarioTierT3, &ScenarioTest{Repo: "server", Package: "github.com/urnetwork/server/sidecart3", Name: name + "OnT3", Tags: "sidecar_testhooks,sidecar_pending,sidecar_localstack"})
+	}
+	return true
+}
 
 // One route a strict_exp bearer reaches: its method, "" for any, and its path.
 type sidecarRoute struct {
