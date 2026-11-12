@@ -74,6 +74,7 @@ type MemberInviteSettings struct {
 	MaxByteCount int
 }
 
+// The format's bounds.
 func DefaultMemberInviteSettings() *MemberInviteSettings {
 	return &MemberInviteSettings{
 		MaxByteCount: 1024,
