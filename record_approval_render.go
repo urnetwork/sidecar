@@ -7,6 +7,13 @@
 // bytes and refused a version this build does not know (RecordApprovals.Pending), so nothing is shown that was not
 // checked.
 //
+// Two more sets of daemon-built values show as the action, by QD-740. The request's local_port, weight and alpn, which
+// left CanonicalAction for the ApprovalRequest and which request_sha256 covers, show by those names after the
+// action's fields. A dial or route grant's sealed_detail never shows as its ciphertext: the approver's device opens it
+// (CanonicalActionDetailOpener) and RenderApprovalRequestDetail shows what it holds, each field named
+// sealed_detail.<name>; a render of an action whose detail was not opened says so, and such a request takes no
+// approval (record_approval_decide.go), so a prefix or a port is never approved unseen.
+//
 // A kind whose fields alone do not say what approving it gives up also shows a sentence built around those fields,
 // never from an agent's text: mail_tls_unauthenticated's names its domain and that an active URnetwork edge could read
 // the mail (QD-729, §2.8 EX4).
@@ -40,6 +47,9 @@ const (
 	approvalRenderAppModeField  protoreflect.FieldNumber = 33
 )
 
+// What names a field an opened sealed_detail holds, ahead of its record.proto name.
+const approvalRenderSealedPrefix = "sealed_detail."
+
 // One daemon-built field of a request's action.
 type ApprovalRenderField struct {
 	// record.proto's name for it, such as dns_value.
@@ -60,9 +70,14 @@ type ApprovalRender struct {
 	// What approving the action allows, in words around its daemon-built fields, for a kind whose fields alone do
 	// not say it; empty for the rest. Printable.
 	Meaning string
-	// Each field the action sets, in field order, kind, version, scope and preview aside: the action the person
-	// approves.
+	// Each field the action sets, in field order, kind, version, scope, preview and sealed_detail aside, then the
+	// request's local_port, weight and alpn where set, then what an opened sealed_detail holds, each named
+	// sealed_detail.<name>: the action the person approves.
 	Fields []*ApprovalRenderField
+	// The action carries a sealed_detail, and whether Fields holds what it opened to. Sealed and not opened, the
+	// device shows the rest and takes no approval.
+	Sealed bool
+	Opened bool
 	// The agent's own words and the daemon's preview, untrusted, printable.
 	Summary string
 	Preview string
@@ -154,6 +169,9 @@ func approvalRenderValue(field protoreflect.FieldDescriptor, value protoreflect.
 		return strings.Join(values, ", ")
 	}
 	text := scalar(value)
+	if field.ContainingMessage().Name() != "CanonicalAction" {
+		return text
+	}
 	switch field.Number() {
 	case approvalRenderAudienceField:
 		if name, ok := protocol.AclAudience_name[int32(value.Uint())]; ok {
@@ -167,8 +185,15 @@ func approvalRenderValue(field protoreflect.FieldDescriptor, value protoreflect.
 	return text
 }
 
-// The render of a request as Pending parsed it.
+// The render of a request as Pending parsed it, its action's sealed_detail, where it carries one, not opened.
 func RenderApprovalRequest(request *StoredApprovalRequest) *ApprovalRender {
+	return RenderApprovalRequestDetail(request, nil)
+}
+
+// The render of a request as Pending parsed it, with what its action's sealed_detail opened to on this device
+// (OpenCanonicalActionDetail, which held it to the action); nil for an action that carries none, or one this device
+// could not open.
+func RenderApprovalRequestDetail(request *StoredApprovalRequest, detail *protocol.CanonicalActionDetail) *ApprovalRender {
 	action := request.Action.Action
 	render := &ApprovalRender{
 		ApprovalId:         request.ApprovalId(),
@@ -194,12 +219,38 @@ func RenderApprovalRequest(request *StoredApprovalRequest) *ApprovalRender {
 		switch number {
 		case canonicalActionFieldKind, canonicalActionFieldVersion, canonicalActionFieldScope, approvalRenderPreviewField:
 			continue
+		case canonicalActionFieldSealedDetail:
+			// ciphertext says nothing to a person: its opened fields follow, or the render says it stayed sealed
+			render.Sealed = true
+			continue
 		}
 		field := message.Descriptor().Fields().ByNumber(number)
 		render.Fields = append(render.Fields, &ApprovalRenderField{
 			Name:  string(field.Name()),
 			Value: approvalRenderValue(field, message.Get(field)),
 		})
+	}
+	// the request's own daemon-built fields, which the parse held to the action's kind
+	requestMessage := request.Request.ProtoReflect()
+	for _, number := range approvalRequestDetailFields {
+		field := requestMessage.Descriptor().Fields().ByNumber(number)
+		if requestMessage.Has(field) {
+			render.Fields = append(render.Fields, &ApprovalRenderField{
+				Name:  string(field.Name()),
+				Value: approvalRenderValue(field, requestMessage.Get(field)),
+			})
+		}
+	}
+	if render.Sealed && detail != nil {
+		render.Opened = true
+		detailMessage := detail.ProtoReflect()
+		for _, number := range setFieldNumbers(detailMessage) {
+			field := detailMessage.Descriptor().Fields().ByNumber(number)
+			render.Fields = append(render.Fields, &ApprovalRenderField{
+				Name:  approvalRenderSealedPrefix + string(field.Name()),
+				Value: approvalRenderValue(field, detailMessage.Get(field)),
+			})
+		}
 	}
 	return render
 }
@@ -218,6 +269,9 @@ func (self *ApprovalRender) Text() string {
 	lines = append(lines, heading+". The action, as this daemon built it:")
 	for _, field := range self.Fields {
 		lines = append(lines, fmt.Sprintf("  %s: %s", field.Name, field.Value))
+	}
+	if self.Sealed && !self.Opened {
+		lines = append(lines, "  sealed_detail: its prefixes and ports did not open on this device, so it takes no approval here")
 	}
 	asked := fmt.Sprintf("asked by sidecar %s", self.RequesterSidecarId)
 	if self.RunId != (Id{}) {
