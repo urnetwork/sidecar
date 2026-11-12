@@ -242,7 +242,10 @@ func RegisterScenario(scenarioId string, clause string, tier string, test *Scena
 // and on T3 in server's sidecart3, their remaining parts missing until composed; and S1's code-create clause on T3,
 // its other two waiting on a T3 sidecar's enrollment through server's api.
 var (
-	_ = registerScenarioParts("S3a", []string{"readerkey-valid-over-7-days-refused", "adds-and-wraps-only-for-readers"}, "TestScenarioS3a")
+	_ = registerScenarioParts("S3a", []string{
+		"forged-admission-refused", "forged-keypackage-refused", "forged-readerkey-refused", "readerkey-past-its-not-after-refused",
+		"readerkey-valid-over-7-days-refused", "adds-and-wraps-only-for-readers",
+	}, "TestScenarioS3a")
 	_ = registerScenarioParts("S4a", []string{"writers-seal-nothing-to-x", "next-generation-fails-under-xs-keys"}, "TestScenarioS4a")
 	_ = RegisterScenario("S1", "code-create-403", ScenarioTierT3, &ScenarioTest{Repo: "server", Package: "github.com/urnetwork/server/sidecart3", Name: "TestScenarioS1CodeCreateOnT3", Tags: "sidecar_testhooks,sidecar_pending,sidecar_localstack"})
 )
