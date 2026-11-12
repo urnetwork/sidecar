@@ -1,7 +1,8 @@
 // The program around §22.8's TLA+ models (TEST-M2-08; D-TEST-10, D-PHASE-7, FI-30), the part that needs
 // no TLC: modelled.yml's sources and the digest a gate compares, the rule that decides a gate's rerun,
-// and mutants/mutants.yml held to run-tlc.sh's twin tables and each cfg's invariants. model_test.go,
-// under sidecar_tlc, runs TLC itself.
+// mutants/mutants.yml held to run-tlc.sh's twin tables and each cfg's invariants, and IndexRollup's
+// design grounds held to its spec's reach states and its cfg. model_test.go, under sidecar_tlc, runs TLC
+// itself.
 
 package model
 
@@ -15,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -474,5 +476,142 @@ func TestEveryInvariantNamesItsMutants(t *testing.T) {
 	}
 	if !slices.Equal(specs, modelSpecs) {
 		t.Errorf("mutants.yml names %v, want %v", specs, modelSpecs)
+	}
+}
+
+// The words run-tlc.sh takes beside a cfg's constants to shape a run (with_constants there).
+var runShapingWords = []string{"Quiet", "Simulate", "Traces", "Seed", "Script"}
+
+// A spec's reach states: each Never... operator denies a state the design must reach, so a ground that
+// passes is shown not to pass vacuously there.
+var reachStatePattern = regexp.MustCompile(`(?m)^(Never[A-Za-z0-9]+) ==`)
+
+// One row of run-tlc.sh's design grounds: how its run must end and the constants it sets.
+type modelGround struct {
+	name   string
+	expect string
+	bounds []string
+}
+
+// run-tlc.sh's design grounds for spec, as its list-grounds mode prints them.
+func groundTable(t *testing.T, spec string) []*modelGround {
+	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skipf("not run: this leg cannot run run-tlc.sh: %v", err)
+	}
+	output, err := exec.Command("bash", "run-tlc.sh", "list-grounds", spec).Output()
+	if err != nil {
+		t.Fatalf("run-tlc.sh list-grounds %s: %v", spec, err)
+	}
+	grounds := []*modelGround{}
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			t.Fatalf("run-tlc.sh list-grounds %s: %q", spec, line)
+		}
+		grounds = append(grounds, &modelGround{name: fields[0], expect: fields[1], bounds: fields[2:]})
+	}
+	return grounds
+}
+
+// What the grounds rule finds wrong with spec's design grounds: two rows of one name, a row that ends as
+// no ground can (a pass, liveness holding, or an invariant its cfg checks or one of the spec's reach
+// states violated), a constant its cfg lacks, a reach state no row checks, or no passing or liveness row.
+func groundFindings(spec string, grounds []*modelGround, reachStates []string, invariants []string, constants map[string]string) []string {
+	findings := []string{}
+	named := map[string]bool{}
+	reached := map[string]bool{}
+	passes := 0
+	lives := 0
+	for _, ground := range grounds {
+		if named[ground.name] {
+			findings = append(findings, fmt.Sprintf("%s has two grounds named %s", spec, ground.name))
+		}
+		named[ground.name] = true
+		switch {
+		case ground.expect == "pass":
+			passes += 1
+		case ground.expect == "live":
+			lives += 1
+		case slices.Contains(reachStates, ground.expect):
+			reached[ground.expect] = true
+		case slices.Contains(invariants, ground.expect):
+		default:
+			findings = append(findings, fmt.Sprintf("%s's ground %s must end with %s, which is no pass, live, cfg invariant or reach state", spec, ground.name, ground.expect))
+		}
+		for _, bound := range ground.bounds {
+			name, _, found := strings.Cut(bound, "=")
+			if !found {
+				findings = append(findings, fmt.Sprintf("%s's ground %s sets %q, which is no Name=value", spec, ground.name, bound))
+			} else if _, set := constants[name]; !set && !slices.Contains(runShapingWords, name) {
+				findings = append(findings, fmt.Sprintf("%s's ground %s sets %s, which its cfg has no constant of", spec, ground.name, name))
+			}
+		}
+	}
+	for _, state := range reachStates {
+		if !reached[state] {
+			findings = append(findings, fmt.Sprintf("%s's reach state %s is no ground's check, so no run shows the design reaches it", spec, state))
+		}
+	}
+	if passes == 0 || lives == 0 {
+		findings = append(findings, fmt.Sprintf("%s's grounds hold %d passing and %d liveness rows: want both", spec, passes, lives))
+	}
+	return findings
+}
+
+// IndexRollup's cfg bounds do not finish breadth-first on a shared host, so run-tlc.sh's design grounds
+// carry its passing runs, and they reach every reach state its spec defines.
+func TestIndexRollupGroundsReachEveryState(t *testing.T) {
+	spec := "IndexRollup"
+	data, err := os.ReadFile(spec + ".tla")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reachStates := []string{}
+	for _, match := range reachStatePattern.FindAllStringSubmatch(string(data), -1) {
+		reachStates = append(reachStates, match[1])
+	}
+	if len(reachStates) == 0 {
+		t.Fatalf("%s.tla defines no reach state", spec)
+	}
+	grounds := groundTable(t, spec)
+	for _, finding := range groundFindings(spec, grounds, reachStates, cfgInvariants(t, spec), cfgConstants(t, spec)) {
+		t.Error(finding)
+	}
+	t.Logf("%s: %d grounds, reach states %v", spec, len(grounds), reachStates)
+}
+
+// The grounds rule catches a reach state no row checks, a constant the cfg lacks, two rows of one name, a
+// row that ends as no ground can and a table with no liveness row, and passes a table with none of them.
+func TestGroundsRuleCatchesAnUncheckedReachState(t *testing.T) {
+	reachStates := []string{"NeverRolled", "NeverPromoted"}
+	invariants := []string{"ResultsHold"}
+	constants := map[string]string{"Events": "8", "Still": "{}"}
+	good := []*modelGround{
+		{name: "rolls", expect: "pass", bounds: []string{"Events=2", "Still={\"erase\"}"}},
+		{name: "rolls-live", expect: "live", bounds: []string{"Events=1", "Simulate=40"}},
+		{name: "reach-rolled", expect: "NeverRolled", bounds: []string{"Events=1"}},
+		{name: "reach-promoted", expect: "NeverPromoted", bounds: nil},
+		{name: "finding", expect: "ResultsHold", bounds: []string{"Events=3"}},
+	}
+	if findings := groundFindings("Toy", good, reachStates, invariants, constants); len(findings) != 0 {
+		t.Errorf("a whole table drew findings: %v", findings)
+	}
+	bad := []*modelGround{
+		{name: "rolls", expect: "pass", bounds: []string{"Evnets=2"}},
+		{name: "rolls", expect: "NeverRolled", bounds: []string{"Events"}},
+		{name: "sometimes", expect: "Eventually", bounds: nil},
+	}
+	findings := groundFindings("Toy", bad, reachStates, invariants, constants)
+	wants := []string{
+		"Toy's ground rolls sets Evnets, which its cfg has no constant of",
+		"Toy has two grounds named rolls",
+		"Toy's ground rolls sets \"Events\", which is no Name=value",
+		"Toy's ground sometimes must end with Eventually, which is no pass, live, cfg invariant or reach state",
+		"Toy's reach state NeverPromoted is no ground's check, so no run shows the design reaches it",
+		"Toy's grounds hold 1 passing and 0 liveness rows: want both",
+	}
+	if !slices.Equal(findings, wants) {
+		t.Errorf("findings:\n%s\nwant:\n%s", strings.Join(findings, "\n"), strings.Join(wants, "\n"))
 	}
 }

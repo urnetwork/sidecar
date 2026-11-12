@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs §22.8's model checks (D-TEST-10) with TLC: a model at its .cfg's bounds, which must pass;
 # each twin, which breaks one rule of the design and must make TLC report the invariant that rule
-# protects; and the liveness properties under weak fairness.
+# protects; the liveness properties under weak fairness; and, for a model whose cfg's bounds do not
+# finish breadth-first on a shared host, the design grounds that do, each ending as its row says.
 #
 #   run-tlc.sh model <Spec> [Name=value ...]          the model, at its cfg's bounds or these
 #   run-tlc.sh twins <Spec> [Name=value ...]          every twin of the model, in turn
@@ -9,7 +10,10 @@
 #   run-tlc.sh control <Spec> <Twin> [Name=value ...] the model at that twin's bounds, to pass
 #   run-tlc.sh live <Spec> [Name=value ...]           liveness, without symmetry or view
 #   run-tlc.sh stories <Spec> [Name=value ...]        EvsCommit's M10 stories, each at its bounds
+#   run-tlc.sh grounds <Spec> [Name=value ...]        IndexRollup's design grounds, each as it must end
+#   run-tlc.sh ground <Spec> <Ground> [Name=value ...] one of them
 #   run-tlc.sh list <Spec>                            the twins and the invariant each must break
+#   run-tlc.sh list-grounds <Spec>                    the grounds and what each must show
 #
 # <Spec> is EvsCommit, StoreSettle or IndexRollup. A Name=value replaces a constant of the spec's
 # cfg; Quiet=a+b leaves the named processes out (quiet_EvsCommit below; IndexRollup holds its
@@ -26,7 +30,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 
 usage() {
-  sed -n '6,12p' "$0" | sed 's/^# //' >&2
+  sed -n '6,15p' "$0" | sed 's/^# //' >&2
   exit 64
 }
 
@@ -153,6 +157,46 @@ NoPromoteLive          BucketsExact         $one Documents={"d2"} Events=3 Skew=
 PromoteBlind           ResultsHold          $one Documents={"d2","d3"} Events=3 Skew=TRUE Still={"erase"}
 IndexSupersede         ResultsHold          $d3
 LongLife               ResultsHold          $d3
+EOF
+}
+
+# IndexRollup's design grounds. Its cfg's bounds do not finish breadth-first on a shared host, so the
+# design is also checked on narrower grounds, each holding still what it leaves out, and each must end
+# as its row says: "pass", every invariant of the cfg holding; "live", BucketRolls and ErasureFinishes
+# holding under weak fairness, without symmetry; or a predicate violated, its trace the witness. Those
+# predicates are the spec's reach states (Never...), which the joined rules must reach so that a ground
+# passing there is not vacuous, and ChainsResolve for CutVersion="read", the finding above. Each
+# twin's ground runs as its control (control mode). Smallest first: the reach states and the finding;
+# the erasure's narrow grounds (a writer restart beside merges, d1's base and d2's sharing slots, d1
+# unedited across three windows, the eraser's crash and a foreign CUT beside the backfiller); the
+# liveness grounds; two rollers with a crash, a lapse and a foreign CUT; then the widest, which take
+# longest: the erasure's crash and restart grounds with merges and the backfiller together,
+# DESIGN-DETAILS section 1.3's two that did not finish on details/IndexMerge.tla (d2 edited three times
+# by both writers, with a restart, and across three windows), and d1 edited across three windows.
+grounds_IndexRollup() {
+  local one="Rollers={r1} MaxCrashes=0 MaxLapses=0 MaxRestarts=0 ForeignCuts=0 BigDocs={}"
+  local d1="$one Documents={\"d1\"}"
+  local rollers="Rollers={r1,r2} MaxCrashes=1 MaxLapses=1 MaxRestarts=0 ForeignCuts=1 BigDocs={} Documents={\"d3\"}"
+  local quiet='Still={"rollup","tick","backfill","merge"}'
+  cat <<EOF
+reach-listed-orphan     NeverListedOrphan     $d1 Events=2 Skew=FALSE $quiet
+reach-absorbed-closure  NeverAbsorbedClosure  $d1 Events=1 Skew=FALSE Still={"rollup","tick","backfill"}
+reach-full-after-cut    NeverFullAfterCut     $d1 Events=2 Skew=FALSE $quiet
+reach-kept-closure      NeverKeptClosure      $one Documents={"d1","d2"} Events=3 Skew=FALSE Still={"rollup","tick","backfill"}
+cut-read                ChainsResolve         $d1 Events=2 Skew=FALSE $quiet CutVersion="read"
+erase-restart-merge     pass                  $d1 Events=2 Skew=FALSE MaxRestarts=1 Still={"rollup","tick","backfill"}
+erase-shared            pass                  $one Documents={"d1","d2"} Events=4 Skew=FALSE Still={"rollup","tick","backfill"}
+erase-windows-unedited  pass                  $d1 Events=1 Skew=TRUE Still={}
+erase-crash-backfill    pass                  $d1 Events=2 Skew=FALSE MaxCrashes=1 ForeignCuts=1 Still={"rollup","tick","merge"}
+live-rolls              live                  $rollers Events=1 Skew=FALSE Still={"erase","backfill"}
+live-erase              live                  $d1 Events=2 Skew=FALSE MaxCrashes=1 ForeignCuts=1 Still={"rollup","tick","backfill"}
+live-windows            live                  $d1 Events=1 Skew=TRUE Still={}
+rollers-epoch           pass                  $rollers Events=2 Skew=TRUE Still={"erase"}
+erase-crash             pass                  $d1 Events=2 Skew=FALSE MaxCrashes=1 ForeignCuts=1 Still={"rollup","tick"}
+erase-restart           pass                  $d1 Events=2 Skew=FALSE MaxRestarts=1 Still={"rollup","tick"}
+edits-restart           pass                  $one Documents={"d2"} Events=3 Skew=FALSE MaxRestarts=1 Still={"rollup","erase","tick"}
+edits-windows           pass                  $one Documents={"d2"} Events=3 Skew=TRUE Still={"erase"}
+erase-windows           pass                  $d1 Events=2 Skew=TRUE Still={}
 EOF
 }
 
@@ -342,6 +386,34 @@ run_twin() {
   check "twin-$twin" "$cfg" "$invariant"
 }
 
+# The cfg rewritten for liveness: no invariants, no symmetry or view, LiveSpec and the spec's
+# properties.
+live_cfg() {
+  local cfg=$1 props=properties_$spec prop
+  replace_invariants "$cfg" ""
+  {
+    grep -v '^SPECIFICATION\|^SYMMETRY\|^VIEW' "$cfg"
+    echo "SPECIFICATION LiveSpec"
+    echo "PROPERTY"
+    for prop in ${!props}; do echo "    $prop"; done
+  } > "$cfg.next" && mv "$cfg.next" "$cfg"
+}
+
+# One design ground at its bounds, ending as its row says: pass, live, or the named predicate violated.
+run_ground() {
+  local ground=$1 expect=$2 cfg
+  shift 2
+  quiet_parts="" sim_depth="" sim_traces="" sim_seed="" script=""
+  cfg=$work/ground-$ground.cfg
+  cp "$here/$spec.cfg" "$cfg"
+  with_constants "$cfg" "$@"
+  case $expect in
+    pass) check "ground-$ground" "$cfg" pass ;;
+    live) live_cfg "$cfg" && check "ground-$ground" "$cfg" pass ;;
+    *) replace_invariants "$cfg" "    $expect" && check "ground-$ground" "$cfg" "$expect" ;;
+  esac
+}
+
 # The whole body is parsed before it runs, so editing this file never reaches a run in progress.
 main() {
   [ $# -ge 2 ] || usage
@@ -351,6 +423,15 @@ main() {
   case $spec in EvsCommit|StoreSettle|IndexRollup) ;; *) usage ;; esac
   if [ "$mode" = list ]; then
     "twins_$spec"
+    exit 0
+  fi
+  case $mode in
+    list-grounds|grounds|ground)
+      declare -F "grounds_$spec" > /dev/null || { echo "run-tlc.sh: $spec has no design grounds" >&2; exit 64; }
+      ;;
+  esac
+  if [ "$mode" = list-grounds ]; then
+    "grounds_$spec"
     exit 0
   fi
   : "${TLC:?set TLC to a command that runs tlc2.TLC, as in TLC=\"java -cp tla2tools.jar tlc2.TLC\"}"
@@ -371,14 +452,7 @@ main() {
       cfg=$work/live.cfg
       cp "$here/$spec.cfg" "$cfg"
       with_constants "$cfg" "$@"
-      replace_invariants "$cfg" ""
-      props=properties_$spec
-      {
-        grep -v '^SPECIFICATION\|^SYMMETRY\|^VIEW' "$cfg"
-        echo "SPECIFICATION LiveSpec"
-        echo "PROPERTY"
-        for prop in ${!props}; do echo "    $prop"; done
-      } > "$cfg.next" && mv "$cfg.next" "$cfg"
+      live_cfg "$cfg"
       check live "$cfg" pass || failed=1
       ;;
     twin|control)
@@ -415,6 +489,19 @@ main() {
         # shellcheck disable=SC2086
         run_twin "$twin" "$invariant" $bounds "$@" || failed=1
       done < <("twins_$spec")
+      ;;
+    grounds|ground)
+      rows=$("grounds_$spec")
+      if [ "$mode" = ground ]; then
+        [ $# -ge 1 ] || usage
+        rows=$(awk -v g="$1" '$1 == g' <<< "$rows")
+        [ -n "$rows" ] || { echo "run-tlc.sh: $spec has no ground $1" >&2; exit 64; }
+        shift
+      fi
+      while read -r ground expect bounds; do
+        # shellcheck disable=SC2086
+        run_ground "$ground" "$expect" $bounds "$@" || failed=1
+      done <<< "$rows"
       ;;
     *)
       usage
