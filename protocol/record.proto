@@ -133,6 +133,7 @@ message RetentionPolicy {                   // Signed (purpose record-entry) by 
 // speaks of RecordHeader.kind alone.
 // CanonicalAction.kind: §5.4's SidecarActionKind in its order, one verb a value, 16.7's restore appended, and new
 // kinds append. publish and listen cover tls/ and smtp/ alike, since host and socket_name say which.
+// mail_tls_unauthenticated is §14.4's TL4 allowance for one recipient domain, host (QD-729).
 enum SidecarActionKind {
   SIDECAR_ACTION_KIND_UNSPECIFIED = 0;
   SIDECAR_ACTION_KIND_PUBLISH = 1; SIDECAR_ACTION_KIND_LISTEN = 2; SIDECAR_ACTION_KIND_FORWARD = 3;
@@ -141,6 +142,7 @@ enum SidecarActionKind {
   SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE = 10; SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE = 11;
   SIDECAR_ACTION_KIND_DNS_SET = 12; SIDECAR_ACTION_KIND_DNS_DELETE = 13; SIDECAR_ACTION_KIND_MAIL_SEND = 14;
   SIDECAR_ACTION_KIND_ACCESS_REQUEST = 15; SIDECAR_ACTION_KIND_PAYMENT = 16; SIDECAR_ACTION_KIND_RESTORE = 17;
+  SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED = 18;
 }
 // ApprovalRequest.risk: numeric order is the max §5.4 takes, and an agent may only raise it.
 enum SidecarRisk { SIDECAR_RISK_UNSPECIFIED = 0; SIDECAR_RISK_NORMAL = 1; SIDECAR_RISK_HIGH = 2; }

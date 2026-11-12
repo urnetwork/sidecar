@@ -44,27 +44,29 @@ const (
 // speaks of RecordHeader.kind alone.
 // CanonicalAction.kind: §5.4's SidecarActionKind in its order, one verb a value, 16.7's restore appended, and new
 // kinds append. publish and listen cover tls/ and smtp/ alike, since host and socket_name say which.
+// mail_tls_unauthenticated is §14.4's TL4 allowance for one recipient domain, host (QD-729).
 type SidecarActionKind int32
 
 const (
-	SidecarActionKind_SIDECAR_ACTION_KIND_UNSPECIFIED         SidecarActionKind = 0
-	SidecarActionKind_SIDECAR_ACTION_KIND_PUBLISH             SidecarActionKind = 1
-	SidecarActionKind_SIDECAR_ACTION_KIND_LISTEN              SidecarActionKind = 2
-	SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD             SidecarActionKind = 3
-	SidecarActionKind_SIDECAR_ACTION_KIND_EXPOSE              SidecarActionKind = 4
-	SidecarActionKind_SIDECAR_ACTION_KIND_EGRESS_CHANGE       SidecarActionKind = 5
-	SidecarActionKind_SIDECAR_ACTION_KIND_INVITE              SidecarActionKind = 6
-	SidecarActionKind_SIDECAR_ACTION_KIND_SHARE               SidecarActionKind = 7
-	SidecarActionKind_SIDECAR_ACTION_KIND_ALIAS_CREATE        SidecarActionKind = 8
-	SidecarActionKind_SIDECAR_ACTION_KIND_ALIAS_DELETE        SidecarActionKind = 9
-	SidecarActionKind_SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE  SidecarActionKind = 10
-	SidecarActionKind_SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE SidecarActionKind = 11
-	SidecarActionKind_SIDECAR_ACTION_KIND_DNS_SET             SidecarActionKind = 12
-	SidecarActionKind_SIDECAR_ACTION_KIND_DNS_DELETE          SidecarActionKind = 13
-	SidecarActionKind_SIDECAR_ACTION_KIND_MAIL_SEND           SidecarActionKind = 14
-	SidecarActionKind_SIDECAR_ACTION_KIND_ACCESS_REQUEST      SidecarActionKind = 15
-	SidecarActionKind_SIDECAR_ACTION_KIND_PAYMENT             SidecarActionKind = 16
-	SidecarActionKind_SIDECAR_ACTION_KIND_RESTORE             SidecarActionKind = 17
+	SidecarActionKind_SIDECAR_ACTION_KIND_UNSPECIFIED              SidecarActionKind = 0
+	SidecarActionKind_SIDECAR_ACTION_KIND_PUBLISH                  SidecarActionKind = 1
+	SidecarActionKind_SIDECAR_ACTION_KIND_LISTEN                   SidecarActionKind = 2
+	SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD                  SidecarActionKind = 3
+	SidecarActionKind_SIDECAR_ACTION_KIND_EXPOSE                   SidecarActionKind = 4
+	SidecarActionKind_SIDECAR_ACTION_KIND_EGRESS_CHANGE            SidecarActionKind = 5
+	SidecarActionKind_SIDECAR_ACTION_KIND_INVITE                   SidecarActionKind = 6
+	SidecarActionKind_SIDECAR_ACTION_KIND_SHARE                    SidecarActionKind = 7
+	SidecarActionKind_SIDECAR_ACTION_KIND_ALIAS_CREATE             SidecarActionKind = 8
+	SidecarActionKind_SIDECAR_ACTION_KIND_ALIAS_DELETE             SidecarActionKind = 9
+	SidecarActionKind_SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE       SidecarActionKind = 10
+	SidecarActionKind_SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE      SidecarActionKind = 11
+	SidecarActionKind_SIDECAR_ACTION_KIND_DNS_SET                  SidecarActionKind = 12
+	SidecarActionKind_SIDECAR_ACTION_KIND_DNS_DELETE               SidecarActionKind = 13
+	SidecarActionKind_SIDECAR_ACTION_KIND_MAIL_SEND                SidecarActionKind = 14
+	SidecarActionKind_SIDECAR_ACTION_KIND_ACCESS_REQUEST           SidecarActionKind = 15
+	SidecarActionKind_SIDECAR_ACTION_KIND_PAYMENT                  SidecarActionKind = 16
+	SidecarActionKind_SIDECAR_ACTION_KIND_RESTORE                  SidecarActionKind = 17
+	SidecarActionKind_SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED SidecarActionKind = 18
 )
 
 // Enum value maps for SidecarActionKind.
@@ -88,26 +90,28 @@ var (
 		15: "SIDECAR_ACTION_KIND_ACCESS_REQUEST",
 		16: "SIDECAR_ACTION_KIND_PAYMENT",
 		17: "SIDECAR_ACTION_KIND_RESTORE",
+		18: "SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED",
 	}
 	SidecarActionKind_value = map[string]int32{
-		"SIDECAR_ACTION_KIND_UNSPECIFIED":         0,
-		"SIDECAR_ACTION_KIND_PUBLISH":             1,
-		"SIDECAR_ACTION_KIND_LISTEN":              2,
-		"SIDECAR_ACTION_KIND_FORWARD":             3,
-		"SIDECAR_ACTION_KIND_EXPOSE":              4,
-		"SIDECAR_ACTION_KIND_EGRESS_CHANGE":       5,
-		"SIDECAR_ACTION_KIND_INVITE":              6,
-		"SIDECAR_ACTION_KIND_SHARE":               7,
-		"SIDECAR_ACTION_KIND_ALIAS_CREATE":        8,
-		"SIDECAR_ACTION_KIND_ALIAS_DELETE":        9,
-		"SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE":  10,
-		"SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE": 11,
-		"SIDECAR_ACTION_KIND_DNS_SET":             12,
-		"SIDECAR_ACTION_KIND_DNS_DELETE":          13,
-		"SIDECAR_ACTION_KIND_MAIL_SEND":           14,
-		"SIDECAR_ACTION_KIND_ACCESS_REQUEST":      15,
-		"SIDECAR_ACTION_KIND_PAYMENT":             16,
-		"SIDECAR_ACTION_KIND_RESTORE":             17,
+		"SIDECAR_ACTION_KIND_UNSPECIFIED":              0,
+		"SIDECAR_ACTION_KIND_PUBLISH":                  1,
+		"SIDECAR_ACTION_KIND_LISTEN":                   2,
+		"SIDECAR_ACTION_KIND_FORWARD":                  3,
+		"SIDECAR_ACTION_KIND_EXPOSE":                   4,
+		"SIDECAR_ACTION_KIND_EGRESS_CHANGE":            5,
+		"SIDECAR_ACTION_KIND_INVITE":                   6,
+		"SIDECAR_ACTION_KIND_SHARE":                    7,
+		"SIDECAR_ACTION_KIND_ALIAS_CREATE":             8,
+		"SIDECAR_ACTION_KIND_ALIAS_DELETE":             9,
+		"SIDECAR_ACTION_KIND_AGENT_CONFIG_WRITE":       10,
+		"SIDECAR_ACTION_KIND_AGENT_CONFIG_DELETE":      11,
+		"SIDECAR_ACTION_KIND_DNS_SET":                  12,
+		"SIDECAR_ACTION_KIND_DNS_DELETE":               13,
+		"SIDECAR_ACTION_KIND_MAIL_SEND":                14,
+		"SIDECAR_ACTION_KIND_ACCESS_REQUEST":           15,
+		"SIDECAR_ACTION_KIND_PAYMENT":                  16,
+		"SIDECAR_ACTION_KIND_RESTORE":                  17,
+		"SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED": 18,
 	}
 )
 
@@ -5569,7 +5573,7 @@ const file_protocol_record_proto_rawDesc = "" +
 	"\x12cache_write_tokens\x18\x05 \x01(\x04R\x10cacheWriteTokens\x12\x14\n" +
 	"\x05calls\x18\x06 \x01(\x04R\x05calls\x12,\n" +
 	"\x12reported_micro_usd\x18\a \x01(\x04R\x10reportedMicroUsd\x12\x1a\n" +
-	"\bcomplete\x18\b \x01(\bR\bcomplete*\x97\x05\n" +
+	"\bcomplete\x18\b \x01(\bR\bcomplete*\xc9\x05\n" +
 	"\x11SidecarActionKind\x12#\n" +
 	"\x1fSIDECAR_ACTION_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bSIDECAR_ACTION_KIND_PUBLISH\x10\x01\x12\x1e\n" +
@@ -5589,7 +5593,8 @@ const file_protocol_record_proto_rawDesc = "" +
 	"\x1dSIDECAR_ACTION_KIND_MAIL_SEND\x10\x0e\x12&\n" +
 	"\"SIDECAR_ACTION_KIND_ACCESS_REQUEST\x10\x0f\x12\x1f\n" +
 	"\x1bSIDECAR_ACTION_KIND_PAYMENT\x10\x10\x12\x1f\n" +
-	"\x1bSIDECAR_ACTION_KIND_RESTORE\x10\x11*[\n" +
+	"\x1bSIDECAR_ACTION_KIND_RESTORE\x10\x11\x120\n" +
+	",SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED\x10\x12*[\n" +
 	"\vSidecarRisk\x12\x1c\n" +
 	"\x18SIDECAR_RISK_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SIDECAR_RISK_NORMAL\x10\x01\x12\x15\n" +

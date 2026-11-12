@@ -1092,4 +1092,6 @@ type testFenceValueAddition struct {
 var testFenceValueAdditions = []testFenceValueAddition{
 	{enum: "MessageType", name: "SMTP_HANDSHAKE", number: 0x1607, question: "smtpproof-start-shts-wire"},
 	{enum: "MessageType", name: "SMTP_HANDSHAKE_RESULT", number: 0x1608, question: "smtpproof-start-shts-wire"},
+	// §14.4's TL4 allowance for a recipient domain (QD-729), appended to the enum testUnfencedFence writes
+	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED", number: 18, question: "smtp-m9-06-tl4-allowance-action"},
 }
