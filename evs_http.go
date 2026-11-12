@@ -15,7 +15,8 @@
 // (§11.8's retry id row).
 //
 // The read reply is a stream of u32be(length) | EvsReadFrame (plan-EVS1-format-bytes#8), which EvsReadFrames reads one
-// frame at a time, so a reply of 32 MiB of ranges is never held whole (R-EVS-14).
+// frame at a time, so a reply of 32 MiB of ranges is never held whole (R-EVS-14), a directory's delta frames folded
+// back into its path and an error frame answered as its refusal (QD-662).
 //
 // Safe for concurrent use.
 
@@ -40,14 +41,6 @@ import (
 
 // The body type of every evs request and answer but a segment PUT's raw bytes.
 const evsHttpContentType = "application/x-protobuf"
-
-// The most one read frame takes: an object's 1 MiB slice (EvsReadObject spans frames past it) and room for its
-// fields, or a path reply with its proofs, or a statement. A longer one is refused, so evs cannot make a reader
-// buffer more.
-const evsReadFrameMaxByteCount = 1024*1024 + 64*1024
-
-// The bound of one read frame, for evs's writer (evsservice).
-const EvsReadFrameMaxByteCount = evsReadFrameMaxByteCount
 
 // The audience prefix and roles of an evs capability scope (§7.8).
 const (
@@ -348,21 +341,93 @@ func evsErrorOfAnswer(response *http.Response, body []byte) *EvsError {
 	return evsError
 }
 
-// Reads a read reply's frames one at a time: u32be(length) | EvsReadFrame, each at most evsReadFrameMaxByteCount,
-// the last with end set. Not safe for concurrent use.
+// Reads a read reply's frames one at a time: u32be(length) | EvsReadFrame, each at most the format's
+// ReadFrameMaxByteCount, the last with end set. A directory's deltas come one a frame after its path frame, each a
+// path frame of its token path with continues set and that delta alone (QD-662), which Next folds back into the
+// path's deltas, at most ReadPathDeltaMaxCount of them, so a caller sees a path in one frame as before; a frame with
+// error set ends the reply as that refusal. Not safe for concurrent use.
 type EvsReadFrames struct {
-	in    io.Reader
-	ended bool
+	in     io.Reader
+	format *EvsFormatSettings
+	ended  bool
+	// the frame read past a path's last delta frame, or the error met reading it, which the next call returns
+	held    *protocol.EvsReadFrame
+	heldErr error
 }
 
-// Reads frames from in.
+// Reads frames from in, under the format's bounds.
 func NewEvsReadFrames(in io.Reader) *EvsReadFrames {
-	return &EvsReadFrames{in: in}
+	return &EvsReadFrames{in: in, format: DefaultEvsFormatSettings()}
 }
 
-// The next frame. io.EOF once the frame with end set has been read; a stream that stops before it, or a frame
-// that does not parse or passes its bound, is ErrEvsReplyInvalid.
+// The next frame, a path's delta frames folded into it. io.EOF once the frame with end set has been read; a stream
+// that stops before it, a frame that does not parse or passes its bound, or a delta frame that does not continue the
+// path before it, is ErrEvsReplyInvalid; an error frame is evs's *EvsError, UNAVAILABLE as evs sends it.
 func (self *EvsReadFrames) Next() (*protocol.EvsReadFrame, error) {
+	frame, err := self.nextFrame()
+	if err != nil || frame.GetPath() == nil {
+		return frame, err
+	}
+	path := frame.GetPath()
+	if path.GetContinues() {
+		return nil, fmt.Errorf("%w: a delta frame with no path before it", ErrEvsReplyInvalid)
+	}
+	for {
+		following, err := self.nextFrame()
+		if err != nil {
+			// the path stands as far as it came; the error ends the reply at the next call
+			self.heldErr = err
+			return frame, nil
+		}
+		if !following.GetPath().GetContinues() {
+			self.held = following
+			return frame, nil
+		}
+		delta := following.GetPath()
+		if !evsDeltaFrameContinues(path, following) {
+			return nil, fmt.Errorf("%w: a delta frame that does not continue the path before it", ErrEvsReplyInvalid)
+		}
+		if self.format.ReadPathDeltaMaxCount <= len(path.GetDeltas()) {
+			return nil, fmt.Errorf("%w: a path of more than %d deltas", ErrEvsReplyInvalid, self.format.ReadPathDeltaMaxCount)
+		}
+		path.Deltas = append(path.Deltas, delta.GetDeltas()...)
+	}
+}
+
+// Whether a delta frame continues path: its token path, one delta, and nothing else, so no part of a path but its
+// deltas is ever taken from a frame after its own.
+func evsDeltaFrameContinues(path *protocol.EvsReadPathReply, frame *protocol.EvsReadFrame) bool {
+	delta := frame.GetPath()
+	if frame.GetHead() != nil || frame.GetStatement() != nil || frame.GetBehind() != 0 || frame.GetMore() != 0 ||
+		frame.GetObject() != nil || frame.GetEnd() || frame.GetError() != nil {
+		return false
+	}
+	if len(delta.GetDeltas()) != 1 || len(delta.GetTokenPath()) != len(path.GetTokenPath()) {
+		return false
+	}
+	for i, token := range delta.GetTokenPath() {
+		if !bytes.Equal(token, path.GetTokenPath()[i]) {
+			return false
+		}
+	}
+	// what is left once its token path, its delta and continues are set aside, with no copy of the delta's bytes
+	tokenPath, deltas := delta.TokenPath, delta.Deltas
+	delta.TokenPath, delta.Deltas, delta.Continues = nil, nil, false
+	rest := proto.Size(delta)
+	delta.TokenPath, delta.Deltas, delta.Continues = tokenPath, deltas, true
+	return rest == 0
+}
+
+// The next frame as it came. A frame with error set ends the reply: its refusal, with nothing read after it.
+func (self *EvsReadFrames) nextFrame() (*protocol.EvsReadFrame, error) {
+	if held := self.held; held != nil {
+		self.held = nil
+		return held, nil
+	}
+	if err := self.heldErr; err != nil {
+		self.heldErr = nil
+		return nil, err
+	}
 	if self.ended {
 		return nil, io.EOF
 	}
@@ -371,7 +436,7 @@ func (self *EvsReadFrames) Next() (*protocol.EvsReadFrame, error) {
 		return nil, fmt.Errorf("%w: a read reply that ends before its last frame", ErrEvsReplyInvalid)
 	}
 	length := binary.BigEndian.Uint32(lengthBytes[:])
-	if evsReadFrameMaxByteCount < length {
+	if uint64(self.format.ReadFrameMaxByteCount) < uint64(length) {
 		return nil, fmt.Errorf("%w: a read frame of %d bytes", ErrEvsReplyInvalid, length)
 	}
 	frameBytes := make([]byte, length)
@@ -382,19 +447,38 @@ func (self *EvsReadFrames) Next() (*protocol.EvsReadFrame, error) {
 	if err := proto.Unmarshal(frameBytes, frame); err != nil {
 		return nil, fmt.Errorf("%w: a read frame that does not parse", ErrEvsReplyInvalid)
 	}
+	if refusal := frame.GetError(); refusal != nil {
+		self.ended = true
+		return nil, evsErrorOfReadFrame(refusal)
+	}
 	if frame.GetEnd() {
 		self.ended = true
 	}
 	return frame, nil
 }
 
-// One frame's bytes as a read reply carries it, for evs and for tests that stand in for it.
+// The *EvsError an error frame gives: its code where it is one a refusal answers, else UNAVAILABLE, a 503 either way
+// that refuses nothing, since the read changed nothing; and its retry delay.
+func evsErrorOfReadFrame(refusal *protocol.EvsRefusalReply) *EvsError {
+	evsError := &EvsError{
+		Status:     http.StatusServiceUnavailable,
+		Code:       protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE,
+		RetryAfter: time.Duration(refusal.GetRetryAfterMs()) * time.Millisecond,
+	}
+	if status, ok := EvsRefusalStatus(refusal.GetCode()); ok && status == http.StatusServiceUnavailable {
+		evsError.Code = refusal.GetCode()
+	}
+	return evsError
+}
+
+// One frame's bytes as a read reply carries it, for evs and for tests that stand in for it: at most the format's
+// ReadFrameMaxByteCount.
 func EncodeEvsReadFrame(frame *protocol.EvsReadFrame) ([]byte, error) {
 	frameBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(frame)
 	if err != nil {
 		return nil, err
 	}
-	if evsReadFrameMaxByteCount < len(frameBytes) {
+	if DefaultEvsFormatSettings().ReadFrameMaxByteCount < len(frameBytes) {
 		return nil, fmt.Errorf("%w: a read frame of %d bytes", ErrEvsReplyInvalid, len(frameBytes))
 	}
 	return append(binary.BigEndian.AppendUint32(nil, uint32(len(frameBytes))), frameBytes...), nil

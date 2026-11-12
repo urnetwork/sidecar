@@ -6484,9 +6484,10 @@ type EvsReadFrame struct {
 	Statement     *EvsReadStatement `protobuf:"bytes,2,opt,name=statement,proto3" json:"statement,omitempty"` // each version after the pin, in order
 	Behind        uint64            `protobuf:"varint,3,opt,name=behind,proto3" json:"behind,omitempty"`      // the pin is older than the window: the first missing version
 	More          uint64            `protobuf:"varint,4,opt,name=more,proto3" json:"more,omitempty"`          // a streams read stopped at its 4 MiB: this ref's next version
-	Path          *EvsReadPathReply `protobuf:"bytes,5,opt,name=path,proto3" json:"path,omitempty"`
+	Path          *EvsReadPathReply `protobuf:"bytes,5,opt,name=path,proto3" json:"path,omitempty"`           // a path's, then each of a directory's deltas in a frame of its own
 	Object        *EvsReadObject    `protobuf:"bytes,6,opt,name=object,proto3" json:"object,omitempty"`
 	End           bool              `protobuf:"varint,7,opt,name=end,proto3" json:"end,omitempty"`
+	Error         *EvsRefusalReply  `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"` // the reply could not be finished: the last frame in end's place, UNAVAILABLE,
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6568,6 +6569,13 @@ func (x *EvsReadFrame) GetEnd() bool {
 		return x.End
 	}
 	return false
+}
+
+func (x *EvsReadFrame) GetError() *EvsRefusalReply {
+	if x != nil {
+		return x.Error
+	}
+	return nil
 }
 
 type EvsHeadSummary struct {
@@ -6816,7 +6824,9 @@ type EvsReadPathReply struct {
 	// path of this reply naming the drop (format 2)
 	EntryEpoch uint64 `protobuf:"varint,17,opt,name=entry_epoch,json=entryEpoch,proto3" json:"entry_epoch,omitempty"` // the epoch whose idx/ copy served the version, table or marker; 0 the
 	// head's current one (DESIGN-DETAILS 9.2.2)
-	StaleEpoch    bool `protobuf:"varint,18,opt,name=stale_epoch,json=staleEpoch,proto3" json:"stale_epoch,omitempty"` // the request named no token path in the head's current epoch: nothing was
+	StaleEpoch bool `protobuf:"varint,18,opt,name=stale_epoch,json=staleEpoch,proto3" json:"stale_epoch,omitempty"` // the request named no token path in the head's current epoch: nothing was
+	// read for this path, and the reader asks again on this head
+	Continues     bool `protobuf:"varint,20,opt,name=continues,proto3" json:"continues,omitempty"` // the next of the deltas of the path in the frame before it, its token_path
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6973,6 +6983,13 @@ func (x *EvsReadPathReply) GetEntryEpoch() uint64 {
 func (x *EvsReadPathReply) GetStaleEpoch() bool {
 	if x != nil {
 		return x.StaleEpoch
+	}
+	return false
+}
+
+func (x *EvsReadPathReply) GetContinues() bool {
+	if x != nil {
+		return x.Continues
 	}
 	return false
 }
@@ -8344,7 +8361,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"EvsReadRef\x12\x15\n" +
 	"\x06ref_id\x18\x01 \x01(\fR\x05refId\x12\x1f\n" +
 	"\vpin_version\x18\x02 \x01(\x04R\n" +
-	"pinVersion\"\xb9\x02\n" +
+	"pinVersion\"\xf3\x02\n" +
 	"\fEvsReadFrame\x125\n" +
 	"\x04head\x18\x01 \x01(\v2!.urnetwork.sidecar.EvsHeadSummaryR\x04head\x12A\n" +
 	"\tstatement\x18\x02 \x01(\v2#.urnetwork.sidecar.EvsReadStatementR\tstatement\x12\x16\n" +
@@ -8352,7 +8369,8 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x04more\x18\x04 \x01(\x04R\x04more\x127\n" +
 	"\x04path\x18\x05 \x01(\v2#.urnetwork.sidecar.EvsReadPathReplyR\x04path\x128\n" +
 	"\x06object\x18\x06 \x01(\v2 .urnetwork.sidecar.EvsReadObjectR\x06object\x12\x10\n" +
-	"\x03end\x18\a \x01(\bR\x03end\"\xa9\x05\n" +
+	"\x03end\x18\a \x01(\bR\x03end\x128\n" +
+	"\x05error\x18\b \x01(\v2\".urnetwork.sidecar.EvsRefusalReplyR\x05error\"\xa9\x05\n" +
 	"\x0eEvsHeadSummary\x12\x15\n" +
 	"\x06ref_id\x18\x01 \x01(\fR\x05refId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x14\n" +
@@ -8378,7 +8396,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\rpush_sequence\x18\x11 \x01(\x04R\fpushSequence\"J\n" +
 	"\x10EvsReadStatement\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x1c\n" +
-	"\tstatement\x18\x02 \x01(\fR\tstatement\"\xb1\x06\n" +
+	"\tstatement\x18\x02 \x01(\fR\tstatement\"\xcf\x06\n" +
 	"\x10EvsReadPathReply\x12\x1d\n" +
 	"\n" +
 	"token_path\x18\x01 \x03(\fR\ttokenPath\x12<\n" +
@@ -8401,7 +8419,8 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\ventry_epoch\x18\x11 \x01(\x04R\n" +
 	"entryEpoch\x12\x1f\n" +
 	"\vstale_epoch\x18\x12 \x01(\bR\n" +
-	"staleEpoch\"b\n" +
+	"staleEpoch\x12\x1c\n" +
+	"\tcontinues\x18\x14 \x01(\bR\tcontinues\"b\n" +
 	"\x0eEvsMerkleProof\x12\x12\n" +
 	"\x04leaf\x18\x01 \x01(\fR\x04leaf\x12\x14\n" +
 	"\x05index\x18\x02 \x01(\x04R\x05index\x12\x12\n" +
@@ -8871,37 +8890,38 @@ var file_protocol_evs_proto_depIdxs = []int32{
 	89,  // 61: urnetwork.sidecar.EvsReadFrame.statement:type_name -> urnetwork.sidecar.EvsReadStatement
 	90,  // 62: urnetwork.sidecar.EvsReadFrame.path:type_name -> urnetwork.sidecar.EvsReadPathReply
 	93,  // 63: urnetwork.sidecar.EvsReadFrame.object:type_name -> urnetwork.sidecar.EvsReadObject
-	4,   // 64: urnetwork.sidecar.EvsHeadSummary.ref_kind:type_name -> urnetwork.sidecar.EvsRefKind
-	5,   // 65: urnetwork.sidecar.EvsHeadSummary.ref_mode:type_name -> urnetwork.sidecar.EvsRefMode
-	45,  // 66: urnetwork.sidecar.EvsHeadSummary.base:type_name -> urnetwork.sidecar.EvsOverlay
-	103, // 67: urnetwork.sidecar.EvsHeadSummary.auth:type_name -> urnetwork.sidecar.AuthPin
-	47,  // 68: urnetwork.sidecar.EvsHeadSummary.path_epoch:type_name -> urnetwork.sidecar.EvsPathEpoch
-	56,  // 69: urnetwork.sidecar.EvsReadPathReply.version:type_name -> urnetwork.sidecar.EvsIndexVersion
-	91,  // 70: urnetwork.sidecar.EvsReadPathReply.proof:type_name -> urnetwork.sidecar.EvsMerkleProof
-	92,  // 71: urnetwork.sidecar.EvsReadPathReply.absences:type_name -> urnetwork.sidecar.EvsAbsenceProof
-	57,  // 72: urnetwork.sidecar.EvsReadPathReply.removal:type_name -> urnetwork.sidecar.EvsRemovalMarker
-	45,  // 73: urnetwork.sidecar.EvsReadPathReply.base:type_name -> urnetwork.sidecar.EvsOverlay
-	29,  // 74: urnetwork.sidecar.EvsReadPathReply.names:type_name -> urnetwork.sidecar.EvsNameTable
-	56,  // 75: urnetwork.sidecar.EvsReadPathReply.deltas:type_name -> urnetwork.sidecar.EvsIndexVersion
-	18,  // 76: urnetwork.sidecar.EvsReadPathReply.state:type_name -> urnetwork.sidecar.EvsReadPathState
-	91,  // 77: urnetwork.sidecar.EvsAbsenceProof.below:type_name -> urnetwork.sidecar.EvsMerkleProof
-	91,  // 78: urnetwork.sidecar.EvsAbsenceProof.above:type_name -> urnetwork.sidecar.EvsMerkleProof
-	19,  // 79: urnetwork.sidecar.EvsReadObject.kind:type_name -> urnetwork.sidecar.EvsReadObjectKind
-	88,  // 80: urnetwork.sidecar.EvsRefsReply.refs:type_name -> urnetwork.sidecar.EvsHeadSummary
-	89,  // 81: urnetwork.sidecar.EvsLogReply.statements:type_name -> urnetwork.sidecar.EvsReadStatement
-	97,  // 82: urnetwork.sidecar.EvsPurgeList.candidates:type_name -> urnetwork.sidecar.EvsPurgeCandidate
-	20,  // 83: urnetwork.sidecar.EvsDropStatus.state:type_name -> urnetwork.sidecar.EvsDropState
-	21,  // 84: urnetwork.sidecar.EvsDropStatus.phase:type_name -> urnetwork.sidecar.EvsDropPhase
-	22,  // 85: urnetwork.sidecar.EvsDropStatus.reason:type_name -> urnetwork.sidecar.EvsDropRefusal
-	98,  // 86: urnetwork.sidecar.EvsDropsReply.drops:type_name -> urnetwork.sidecar.EvsDropStatus
-	38,  // 87: urnetwork.sidecar.EvsDropPreviewRequest.paths:type_name -> urnetwork.sidecar.EvsDropPath
-	23,  // 88: urnetwork.sidecar.EvsDropPreviewReply.state:type_name -> urnetwork.sidecar.EvsDropPreviewState
-	102, // 89: urnetwork.sidecar.EvsDropPreviewReply.paths:type_name -> urnetwork.sidecar.EvsDropPreviewPath
-	90,  // [90:90] is the sub-list for method output_type
-	90,  // [90:90] is the sub-list for method input_type
-	90,  // [90:90] is the sub-list for extension type_name
-	90,  // [90:90] is the sub-list for extension extendee
-	0,   // [0:90] is the sub-list for field type_name
+	78,  // 64: urnetwork.sidecar.EvsReadFrame.error:type_name -> urnetwork.sidecar.EvsRefusalReply
+	4,   // 65: urnetwork.sidecar.EvsHeadSummary.ref_kind:type_name -> urnetwork.sidecar.EvsRefKind
+	5,   // 66: urnetwork.sidecar.EvsHeadSummary.ref_mode:type_name -> urnetwork.sidecar.EvsRefMode
+	45,  // 67: urnetwork.sidecar.EvsHeadSummary.base:type_name -> urnetwork.sidecar.EvsOverlay
+	103, // 68: urnetwork.sidecar.EvsHeadSummary.auth:type_name -> urnetwork.sidecar.AuthPin
+	47,  // 69: urnetwork.sidecar.EvsHeadSummary.path_epoch:type_name -> urnetwork.sidecar.EvsPathEpoch
+	56,  // 70: urnetwork.sidecar.EvsReadPathReply.version:type_name -> urnetwork.sidecar.EvsIndexVersion
+	91,  // 71: urnetwork.sidecar.EvsReadPathReply.proof:type_name -> urnetwork.sidecar.EvsMerkleProof
+	92,  // 72: urnetwork.sidecar.EvsReadPathReply.absences:type_name -> urnetwork.sidecar.EvsAbsenceProof
+	57,  // 73: urnetwork.sidecar.EvsReadPathReply.removal:type_name -> urnetwork.sidecar.EvsRemovalMarker
+	45,  // 74: urnetwork.sidecar.EvsReadPathReply.base:type_name -> urnetwork.sidecar.EvsOverlay
+	29,  // 75: urnetwork.sidecar.EvsReadPathReply.names:type_name -> urnetwork.sidecar.EvsNameTable
+	56,  // 76: urnetwork.sidecar.EvsReadPathReply.deltas:type_name -> urnetwork.sidecar.EvsIndexVersion
+	18,  // 77: urnetwork.sidecar.EvsReadPathReply.state:type_name -> urnetwork.sidecar.EvsReadPathState
+	91,  // 78: urnetwork.sidecar.EvsAbsenceProof.below:type_name -> urnetwork.sidecar.EvsMerkleProof
+	91,  // 79: urnetwork.sidecar.EvsAbsenceProof.above:type_name -> urnetwork.sidecar.EvsMerkleProof
+	19,  // 80: urnetwork.sidecar.EvsReadObject.kind:type_name -> urnetwork.sidecar.EvsReadObjectKind
+	88,  // 81: urnetwork.sidecar.EvsRefsReply.refs:type_name -> urnetwork.sidecar.EvsHeadSummary
+	89,  // 82: urnetwork.sidecar.EvsLogReply.statements:type_name -> urnetwork.sidecar.EvsReadStatement
+	97,  // 83: urnetwork.sidecar.EvsPurgeList.candidates:type_name -> urnetwork.sidecar.EvsPurgeCandidate
+	20,  // 84: urnetwork.sidecar.EvsDropStatus.state:type_name -> urnetwork.sidecar.EvsDropState
+	21,  // 85: urnetwork.sidecar.EvsDropStatus.phase:type_name -> urnetwork.sidecar.EvsDropPhase
+	22,  // 86: urnetwork.sidecar.EvsDropStatus.reason:type_name -> urnetwork.sidecar.EvsDropRefusal
+	98,  // 87: urnetwork.sidecar.EvsDropsReply.drops:type_name -> urnetwork.sidecar.EvsDropStatus
+	38,  // 88: urnetwork.sidecar.EvsDropPreviewRequest.paths:type_name -> urnetwork.sidecar.EvsDropPath
+	23,  // 89: urnetwork.sidecar.EvsDropPreviewReply.state:type_name -> urnetwork.sidecar.EvsDropPreviewState
+	102, // 90: urnetwork.sidecar.EvsDropPreviewReply.paths:type_name -> urnetwork.sidecar.EvsDropPreviewPath
+	91,  // [91:91] is the sub-list for method output_type
+	91,  // [91:91] is the sub-list for method input_type
+	91,  // [91:91] is the sub-list for extension type_name
+	91,  // [91:91] is the sub-list for extension extendee
+	0,   // [0:91] is the sub-list for field type_name
 }
 
 func init() { file_protocol_evs_proto_init() }

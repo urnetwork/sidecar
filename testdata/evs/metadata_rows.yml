@@ -135,6 +135,7 @@ EvsReadFrame.more: {number: 4, type: uint64, row: evs-3, sees: "version v"}
 EvsReadFrame.path: {number: 5, type: EvsReadPathReply, row: evs-11, sees: "path index"}
 EvsReadFrame.object: {number: 6, type: EvsReadObject, row: evs-7, sees: "ranges and slots read"}
 EvsReadFrame.end: {number: 7, type: bool, row: evs-7, pending: "the framed reply's last frame; evs-7 names the status and not the framing"}
+EvsReadFrame.error: {number: 8, type: EvsRefusalReply, row: evs-7, pending: "QD-662: a framed reply evs could not finish ends with this refusal in its last frame's place; evs-7 names each answer's status and not the framing"}
 EvsHeadSummary.ref_id: {number: 1, type: bytes, row: evs-2, sees: "ref ids"}
 EvsHeadSummary.version: {number: 2, type: uint64, row: evs-3, sees: "version v"}
 EvsHeadSummary.chain: {number: 3, type: bytes, row: evs-3, sees: "chain C_v"}
@@ -170,6 +171,7 @@ EvsReadPathReply.not_before_ms: {number: 13, type: int64, row: evs-28, until: M1
 EvsReadPathReply.drop_version: {number: 14, type: uint64, row: evs-28, until: M10, pending: "as EvsReadPathReply.state"}
 EvsReadPathReply.entry_epoch: {number: 17, type: uint64, row: evs-11, pending: "DESIGN-DETAILS 9.2.2: the epoch whose copy served a path, which evs-11's entry states (carried from the source it names) imply and a reply does not name"}
 EvsReadPathReply.stale_epoch: {number: 18, type: bool, row: evs-7, pending: "DESIGN-DETAILS 9.2.4: a read naming no token path in the head's current epoch, answered with nothing read; evs-7 names each answer's status and not this one"}
+EvsReadPathReply.continues: {number: 20, type: bool, row: evs-7, pending: "QD-662: a directory's next delta in a frame of its own after its path frame; evs-7 names each answer's status and not the framing"}
 EvsMerkleProof.leaf: {number: 1, type: bytes, row: evs-12, sees: "changes of token path, base entry version and entry hash"}
 EvsMerkleProof.index: {number: 2, type: uint64, row: evs-12, sees: "a Merkle root and count over the changes"}
 EvsMerkleProof.size: {number: 3, type: uint64, row: evs-12, sees: "a Merkle root and count over the changes"}

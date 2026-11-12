@@ -425,8 +425,8 @@ func (self *EvsSettings) Validate() error {
 		self.ReadSegmentWholeByteCount <= 0 || self.ReadSegmentRangeAlign <= 0 || self.ReadHeadRetryCount <= 0 || self.RefsListPageCount <= 0 {
 		return fmt.Errorf("%w: a read's bounds, segment sizes, head retries and refs page must be positive", ErrEvsSettings)
 	}
-	if self.ReadFrameByteCount <= 0 || sidecar.EvsReadFrameMaxByteCount <= self.ReadFrameByteCount {
-		return fmt.Errorf("%w: a read frame's body %d, outside (0, %d)", ErrEvsSettings, self.ReadFrameByteCount, sidecar.EvsReadFrameMaxByteCount)
+	if frameMax := sidecar.DefaultEvsFormatSettings().ReadFrameMaxByteCount; self.ReadFrameByteCount <= 0 || frameMax <= self.ReadFrameByteCount {
+		return fmt.Errorf("%w: a read frame's body %d, outside (0, %d)", ErrEvsSettings, self.ReadFrameByteCount, frameMax)
 	}
 	if self.LogReplyStatementCount <= 0 || evsLogReplyMaxStatementCount < self.LogReplyStatementCount {
 		return fmt.Errorf("%w: a log page of %d statements, outside (0, %d]", ErrEvsSettings, self.LogReplyStatementCount, evsLogReplyMaxStatementCount)

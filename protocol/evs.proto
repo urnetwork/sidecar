@@ -707,9 +707,11 @@ message EvsReadFrame {                  // the read reply: frames, each u32be(le
   EvsReadStatement statement = 2;       // each version after the pin, in order
   uint64 behind = 3;                    // the pin is older than the window: the first missing version
   uint64 more = 4;                      // a streams read stopped at its 4 MiB: this ref's next version
-  EvsReadPathReply path = 5;
+  EvsReadPathReply path = 5;             // a path's, then each of a directory's deltas in a frame of its own
   EvsReadObject object = 6;
   bool end = 7;
+  EvsRefusalReply error = 8;            // the reply could not be finished: the last frame in end's place, UNAVAILABLE,
+                                        // which a reader answers as that refusal (QD-662)
 }
 message EvsHeadSummary {                // all a reader sees of a head (11.8's fill row, 11.9), and GET .../refs's rows
   bytes ref_id = 1;
@@ -757,6 +759,8 @@ message EvsReadPathReply {              // one path: its version, its listing, o
                                         // head's current one (DESIGN-DETAILS 9.2.2)
   bool stale_epoch = 18;                // the request named no token path in the head's current epoch: nothing was
                                         // read for this path, and the reader asks again on this head
+  bool continues = 20;                  // the next of the deltas of the path in the frame before it, its token_path
+                                        // and that one delta alone (QD-662)
 }
 message EvsMerkleProof {                // one RFC 9162 tree's inclusion proof (11.6's merkle row)
   bytes leaf = 1;                       // the bytes the leaf hashes: an EvsChange as listed, or a part's changes_root
