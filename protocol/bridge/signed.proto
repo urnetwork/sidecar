@@ -112,8 +112,11 @@ enum SignedType {
   // 0x16xx §14, 0x17xx §15, 0x1Bxx §12
 
   // 0x1Axx §5: the identity binding (plan-CORE-binding-wire #1), purposes binding-client by the ClientKey and
-  // binding-identity by the identity key over one SignedSidecarIdentityBinding's body.
+  // binding-identity by the identity key over one SignedSidecarIdentityBinding's body; then an agent subkey's
+  // certificate, purpose agent-cert by the identity key (QD-159), which rides only inside the sealed provenance it
+  // vouches for and never in a log statement or config record.
   SIGNED_SIDECAR_BINDING = 0x1A01;
+  SIGNED_AGENT_CERT = 0x1A02;
 
   // 0x18xx §16 records and approvals (§16.8), purpose record-entry but for the two approval messages,
   // purpose approval; §16.11's directory items, purpose directory, the last two, reserved for format 2.

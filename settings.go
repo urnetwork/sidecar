@@ -72,6 +72,9 @@ type SidecarSettings struct {
 	Gkm *GkmSettings
 	// §9.5's registrar: its heartbeats, eager load reports and waits after a refusal.
 	Sockets *SidecarSocketSettings
+	// §5.5's agent subkeys: how long each certificate runs, the bound every reader holds it to, and when a new one
+	// replaces it.
+	AgentSubkeys *SidecarAgentSubkeySettings
 
 	// Envelopes one component's queue holds. Complete envelopes wait here without blocking the
 	// inline handler, and a full queue drops and counts (§5.4; connect/CODESTYLE.md:119). Default
@@ -334,6 +337,30 @@ type SidecarTlsSettings struct {
 	// How far before its making a self-signed leaf's validity starts, so a peer whose clock runs
 	// behind accepts it: 1 h, a reading.
 	SelfSignedBackdate time.Duration
+}
+
+// §5.5's agent subkeys (identity_agent.go): each agent registration's Ed25519 subkey, which the daemon holds and
+// signs sealed provenance with, under a certificate its identity key signs (QD-159).
+type SidecarAgentSubkeySettings struct {
+	// How long a new subkey's certificate runs: 30 days, §5.5's v1 most. A value past MaxLifetime mints at
+	// MaxLifetime.
+	Lifetime time.Duration
+	// The format's bound, which signer and reader share: a certificate runs at most 30 days (§5.5), so a reader
+	// attributes nothing to one whose not_after lies further than this past the entry it rides in, whatever its
+	// signature (QD-159). Changing it is a format change, so no deployment changes it on one side alone.
+	MaxLifetime time.Duration
+	// A subkey with less than this left is replaced by a new one, under a new certificate, at its next use: 1 day, a
+	// reading, so a run that spans the old one's end never signs with it past its not_after.
+	RenewBefore time.Duration
+}
+
+// A fresh value each call.
+func DefaultSidecarAgentSubkeySettings() *SidecarAgentSubkeySettings {
+	return &SidecarAgentSubkeySettings{
+		Lifetime:    30 * 24 * time.Hour,
+		MaxLifetime: 30 * 24 * time.Hour,
+		RenewBefore: 24 * time.Hour,
+	}
 }
 
 // A fresh value each call.
@@ -747,6 +774,8 @@ func DefaultSidecarSettings() *SidecarSettings {
 		Tls:     DefaultSidecarTlsSettings(),
 		Gkm:     DefaultGkmSettings(),
 		Sockets: DefaultSidecarSocketSettings(),
+
+		AgentSubkeys: DefaultSidecarAgentSubkeySettings(),
 
 		ComponentQueueMessageCount: 256,
 		ComponentQueueByteCount:    1024 * 1024,

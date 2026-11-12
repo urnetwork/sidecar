@@ -54,6 +54,9 @@ type Sidecar struct {
 	hostStores func() []SidecarHostCredentialStore
 	// One enrollment at a time, held across its requests, so never stateLock (identity_enroll.go).
 	enrollLock sync.Mutex
+	// One agent subkey change at a time, a mint, a renewal or a revocation, so a revocation is never undone by a
+	// mint that read the record before it (identity_agent.go). Never held with stateLock.
+	agentSubkeyLock sync.Mutex
 	// §16's approval ledger and run store, under their own lock (record_ledger.go).
 	records sidecarRecords
 	// The network's verified config state, which admission, acts and alarms read (identity_authority.go).
