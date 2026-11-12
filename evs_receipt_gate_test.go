@@ -1,3 +1,5 @@
+//go:build !sidecar_http
+
 // EVS1-M3-01's opened read-receipt gate over the record's own receipts (§16.8, D-MCP-18; FS-30's evs side): the
 // depositor NewEvsRecordReceiptDepositor makes over an EvsShare reader's RecordReceipts lands one receipt in the
 // reader's deposit ref of the vault before it returns, the author offline, with the purpose and taint the read's
