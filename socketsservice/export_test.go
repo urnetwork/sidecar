@@ -11,6 +11,7 @@ import (
 	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // Waits until at least count probes have finished, each with its next wait armed.
@@ -71,14 +72,99 @@ func (self *SocketsService) SetDrawsForTest(draws ...uint32) {
 	}
 }
 
-// Adds clientId to the removed-client set at the engine's now, as SOCK-M5-07's ClientRemoved does first.
+// Adds clientId to the removed-client set at the engine's now, as ClientRemoved does first.
 func (self *SocketsService) NoteClientRemovedForTest(clientId connect.Id) {
 	self.removedClients.add(clientId, self.clock.Now())
 }
 
-// Replaces networkId's kills, as SOCK-M5-07's KillChanged does once it has read the network's {tes_} hash.
+// Replaces networkId's kills, as the kills reader does once it has read the network's {tes_} hash.
 func (self *SocketsService) SetKillsForTest(networkId connect.Id, entries []*sidecar.TlsKillEntry) {
 	self.killSet.set(networkId, entries)
+}
+
+// Queues a sweep of networkId at position, as the gate's OnNarrowed does.
+func (self *SocketsService) QueueSweepForTest(networkId connect.Id, position uint64) {
+	self.queueSweep(networkId, position)
+}
+
+// Waits until value reaches at least count.
+func awaitCount[T int | uint64](ctx context.Context, value *sidecar.MonitorValue[T], count T) error {
+	for {
+		current, update := value.Get()
+		if count <= current {
+			return nil
+		}
+		select {
+		case <-update:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// Waits until at least count sweeps have ended, each with its network free again.
+func (self *SocketsService) AwaitSweeps(ctx context.Context, count int) error {
+	return awaitCount(ctx, self.sweeps.doneCount, count)
+}
+
+// How many sweeps have ended.
+func (self *SocketsService) SweepCount() int {
+	return self.sweeps.doneCount.Value()
+}
+
+// Waits until at least count removed clients' store work has ended.
+func (self *SocketsService) AwaitRemovals(ctx context.Context, count int) error {
+	return awaitCount(ctx, self.removals.finishedClientIds, count)
+}
+
+// Waits until the kills reader has finished at least count rounds.
+func (self *SocketsService) AwaitKillReads(ctx context.Context, count int) error {
+	return awaitCount(ctx, self.killSet.readCount, count)
+}
+
+// How many rounds the kills reader has finished.
+func (self *SocketsService) KillReadCount() int {
+	return self.killSet.readCount.Value()
+}
+
+// Waits until the gate has taken in at least count loads.
+func (self *SocketProjectionGate) AwaitLoads(ctx context.Context, count uint64) error {
+	return awaitCount(ctx, self.loadCount, count)
+}
+
+// How many loads the gate has taken in.
+func (self *SocketProjectionGate) LoadCount() uint64 {
+	return self.loadCount.Value()
+}
+
+// Waits until at least count resubscription checks have finished.
+func (self *SocketProjectionGate) AwaitResyncs(ctx context.Context, count uint64) error {
+	return awaitCount(ctx, self.resyncCount, count)
+}
+
+// Waits until the over-limit poll has finished at least count reads, each with its next wait armed.
+func (self *SocketProjectionGate) AwaitOverLimitReads(ctx context.Context, count int) error {
+	return awaitCount(ctx, self.overLimit.readCount, count)
+}
+
+// How many reads the over-limit poll has finished.
+func (self *SocketProjectionGate) OverLimitReadCount() int {
+	return self.overLimit.readCount.Value()
+}
+
+// Waits until the key set has finished at least count reads of its file, each with its next wait armed.
+func (self *SocketTicketKeySet) AwaitReads(ctx context.Context, count int) error {
+	return awaitCount(ctx, self.readCount, count)
+}
+
+// Reads the key file now, as the reread does.
+func (self *SocketTicketKeySet) ReloadForTest() {
+	self.reload()
+}
+
+// Whether an entry may narrow, the sweep's table.
+func SocketEntryMayNarrowForTest(entry *bridge.AuthEntry) bool {
+	return socketEntryMayNarrow(entry)
 }
 
 // How many tickets the engine has signed.

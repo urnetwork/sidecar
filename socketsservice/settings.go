@@ -119,12 +119,81 @@ func DefaultSocketFairQueueSettings() *SocketFairQueueSettings {
 	}
 }
 
+// The production gate's tunables (gate_projection.go, over_limit.go; DESIGN-DETAILS 13.2.3). The host builds
+// SocketProjectionGate from SocketsSettings.Gate.
+type SocketGateSettings struct {
+	// How long evidence that a network's log passed what this process holds may go uncovered before the network
+	// answers unavailable here (13.2.3's GateBehindGrace, QD-655): 5 s, §8.9's target for server gates.
+	BehindGrace time.Duration
+	// How often a network whose evidence stays uncovered asks the cache for another load: 5 s, the cache's own
+	// FailureBackoff. A load that failed, or read a source still short of a position some process verified, is
+	// retried by nothing else before §8.9's 5-minute poll.
+	BehindReloadInterval time.Duration
+	// How many loaded networks one step of the resubscription check reads {acl_}v for: 1,000, 13.2.3's batch.
+	ResyncBatchCount int
+	// How many of a step's reads run at once: 64. Each is a GET on a slot of its own, since every network's key
+	// has its own hash tag and ServiceHost.Redis pipelines nothing across slots.
+	ResyncConcurrency int
+	// The bound on one {acl_}v read, at a load's start or in the resubscription check: 2 s.
+	VersionReadTimeout time.Duration
+	// How often §20.7's OverLimit is read again: 5 s (13.2.3's OverLimitInterval).
+	OverLimitInterval time.Duration
+	// The bound on one read: 2 s (OverLimitTimeout), inside the interval, so a stalled api never stacks reads.
+	OverLimitTimeout time.Duration
+	// The process's one AclGateCache (C-09): §8.9's 5-minute poll, its load bounds and its byte budget. Its OnLoad
+	// is the gate's, which calls any OnLoad set here after its own.
+	Cache *sidecar.AclGateSettings
+}
+
+// 13.2.3's values, on §8.9's cache.
+func DefaultSocketGateSettings() *SocketGateSettings {
+	return &SocketGateSettings{
+		BehindGrace:          5 * time.Second,
+		BehindReloadInterval: 5 * time.Second,
+		ResyncBatchCount:     1000,
+		ResyncConcurrency:    64,
+		VersionReadTimeout:   2 * time.Second,
+		OverLimitInterval:    5 * time.Second,
+		OverLimitTimeout:     2 * time.Second,
+		Cache:                sidecar.DefaultAclGateSettings(),
+	}
+}
+
+// Whether a gate can run on these. A refusal names the field.
+func (self *SocketGateSettings) Validate() error {
+	if self == nil {
+		return fmt.Errorf("%w: no gate settings", ErrSocketsSettingsRefused)
+	}
+	if self.Cache == nil {
+		return fmt.Errorf("%w: no gate cache settings", ErrSocketsSettingsRefused)
+	}
+	for _, check := range []struct {
+		name     string
+		positive bool
+	}{
+		{name: "gate.behind_grace", positive: 0 < self.BehindGrace},
+		{name: "gate.behind_reload_interval", positive: 0 < self.BehindReloadInterval},
+		{name: "gate.resync_batch_count", positive: 0 < self.ResyncBatchCount},
+		{name: "gate.resync_concurrency", positive: 0 < self.ResyncConcurrency},
+		{name: "gate.version_read_timeout", positive: 0 < self.VersionReadTimeout},
+		{name: "gate.over_limit_interval", positive: 0 < self.OverLimitInterval},
+		{name: "gate.over_limit_timeout", positive: 0 < self.OverLimitTimeout && self.OverLimitTimeout <= self.OverLimitInterval},
+	} {
+		if !check.positive {
+			return fmt.Errorf("%w: %s", ErrSocketsSettingsRefused, check.name)
+		}
+	}
+	return nil
+}
+
 // Everything the engine tunes. DefaultSocketsSettings makes one, and NewSocketsService refuses what
 // Validate refuses. Read concurrently once built, and never changed after.
 type SocketsSettings struct {
 	Store     *SocketStoreSettings
 	Bound     *SocketControlBoundSettings
 	FairQueue *SocketFairQueueSettings
+	// The production gate's, which the host builds SocketProjectionGate from; the engine reads none of it.
+	Gate *SocketGateSettings
 	// The longest a ur/ {svc_} pair lives past its last Find, whatever the grant says (§9.6,
 	// plan-SMTP-small-readings' per-service constant): 60 min. A tls/ or smtp/ pair takes the store's
 	// EdgePairTtl instead (QD-656).
@@ -176,6 +245,37 @@ type SocketsSettings struct {
 	FindMaxBodyByteCount int
 	// The most client ids an edge's Find names: 64, an edge process's K clients (§13.6's 4 by default) with room.
 	FindMaxClientIdCount int
+
+	// The revocation sweep (sweep.go; DESIGN-DETAILS 13.2.3). The least time between two sweeps of one network by
+	// this process: 10 s, so a run of revocations costs a network one sweep a period, always at its newest position.
+	SweepMinInterval time.Duration
+	// How long a sweep's claim on a network and position lives unrenewed: 30 s. The claimer renews it at each page,
+	// so a claimer that dies holds no network past it.
+	SweepClaimTtl time.Duration
+	// How many names one page of a sweep lists: 256, which bounds what one step examines however large the network.
+	SweepPageCount int
+	// How many networks this process sweeps at once: 4.
+	SweepConcurrency int
+	// The most refused leases one removal of a sweep takes: 1,024, a page's worth.
+	SweepRemoveBatchCount int
+	// How long one sweep's store call may take: 10 s, since a group's listener read and a batch's removal are each
+	// one call that may span many listeners.
+	SweepStoreTimeout time.Duration
+
+	// A removed client's store work (sweep.go, §9.8, D-SOCK-9). How many clients this process removes at once: 4.
+	ClientRemovedConcurrency int
+	// How many removed clients may wait for their store work: 65,536. Past it a removal does its memory half alone,
+	// which refuses the client here for RemovedClientTtl while its leases lapse in one lease's time.
+	ClientRemovedQueueCount int
+	// How many times one client's RemoveClient is tried: 3, each resuming where the work stands.
+	ClientRemovedAttemptCount int
+	// The wait between two tries: 1 s.
+	ClientRemovedRetryWait time.Duration
+	// How long one RemoveClient may take: 30 s, since it works through the client's whole set a batch at a time.
+	ClientRemovedTimeout time.Duration
+
+	// How long a network's kill read that failed waits before it is tried again (sweep.go, §13.9): 1 s.
+	KillRetryWait time.Duration
 }
 
 // §9's values.
@@ -184,6 +284,7 @@ func DefaultSocketsSettings() *SocketsSettings {
 		Store:                 DefaultSocketStoreSettings(),
 		Bound:                 DefaultSocketControlBoundSettings(),
 		FairQueue:             DefaultSocketFairQueueSettings(),
+		Gate:                  DefaultSocketGateSettings(),
 		PlatformPairTtlMax:    60 * time.Minute,
 		StoreTimeout:          2 * time.Second,
 		ProbeInterval:         5 * time.Second,
@@ -201,6 +302,21 @@ func DefaultSocketsSettings() *SocketsSettings {
 		RegistrationsMaxBodyByteCount: 4 * 1024 * 1024,
 		FindMaxBodyByteCount:          64 * 1024,
 		FindMaxClientIdCount:          64,
+
+		SweepMinInterval:      10 * time.Second,
+		SweepClaimTtl:         30 * time.Second,
+		SweepPageCount:        256,
+		SweepConcurrency:      4,
+		SweepRemoveBatchCount: 1024,
+		SweepStoreTimeout:     10 * time.Second,
+
+		ClientRemovedConcurrency:  4,
+		ClientRemovedQueueCount:   64 * 1024,
+		ClientRemovedAttemptCount: 3,
+		ClientRemovedRetryWait:    time.Second,
+		ClientRemovedTimeout:      30 * time.Second,
+
+		KillRetryWait: time.Second,
 	}
 }
 
@@ -270,6 +386,9 @@ func (self *SocketsSettings) Validate() error {
 	if self.Format == nil {
 		return fmt.Errorf("%w: no format settings", ErrSocketsSettingsRefused)
 	}
+	if err := self.Gate.Validate(); err != nil {
+		return err
+	}
 	for _, check := range []struct {
 		name     string
 		positive bool
@@ -308,6 +427,18 @@ func (self *SocketsSettings) Validate() error {
 		{name: "format.ticket_max_byte_count", positive: 0 < self.Format.TicketMaxByteCount},
 		{name: "format.failed_ticket_max_count", positive: 0 < self.Format.FailedTicketMaxCount},
 		{name: "format.affinity_key_max_byte_count", positive: 0 < self.Format.AffinityKeyMaxByteCount},
+		{name: "sweep_min_interval", positive: 0 < self.SweepMinInterval},
+		{name: "sweep_claim_ttl", positive: 0 < self.SweepClaimTtl},
+		{name: "sweep_page_count", positive: 0 < self.SweepPageCount},
+		{name: "sweep_concurrency", positive: 0 < self.SweepConcurrency},
+		{name: "sweep_remove_batch_count", positive: 0 < self.SweepRemoveBatchCount},
+		{name: "sweep_store_timeout", positive: 0 < self.SweepStoreTimeout},
+		{name: "client_removed_concurrency", positive: 0 < self.ClientRemovedConcurrency},
+		{name: "client_removed_queue_count", positive: 0 < self.ClientRemovedQueueCount},
+		{name: "client_removed_attempt_count", positive: 0 < self.ClientRemovedAttemptCount},
+		{name: "client_removed_retry_wait", positive: 0 < self.ClientRemovedRetryWait},
+		{name: "client_removed_timeout", positive: 0 < self.ClientRemovedTimeout},
+		{name: "kill_retry_wait", positive: 0 < self.KillRetryWait},
 	} {
 		if !check.positive {
 			return fmt.Errorf("%w: %s", ErrSocketsSettingsRefused, check.name)
