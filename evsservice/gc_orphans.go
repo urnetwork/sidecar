@@ -30,12 +30,21 @@
 // metadata cluster for a map's parts (2.4). GC killed anywhere has nothing to undo: it holds no fence, lease or
 // cursor, and the next night judges again.
 //
+// The dry form (QD-677), for a caller that measures what GC would judge orphan without changing the store it
+// measures, as the soak does (server/local/sidecar-soak):
+//
+//	count    CountRepo: steps 0 to 4 and step 5's selection, the code RunRepo runs, with no DELETE, no other write
+//	         and no alarm; OrphanCount is every candidate no pidx/ entry introduces
+//	list     ListRepo: a repo's seg/, pidx/ and pmap/ as the nightly pass lists them, after a horizon the caller
+//	         read first (NightlyPass.OrphanHorizon)
+//
 // Safe for concurrent use: a run keeps its own state, and the pace is shared under stateLock.
 
 package evsservice
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -48,15 +57,6 @@ import (
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
-
-// DESIGN-DETAILS 2.2.4's AdoptionBound, a floor no setting passes: the last minute directory that can hold a
-// record adopting a segment starts no later than its LastModified + 24 h + 2 min (a receipt's 24 h, 100 ms for its
-// stamp, step 7's 5 s, 50 ms for each of two clocks and a key's minute, with 54.8 s to spare).
-const evsOrphanMinAdoptionBound = 24*time.Hour + 2*time.Minute
-
-// How far before the oldest candidate's LastModified a pidx/ entry may have been written and still be one GC must
-// read: an hour (2.2.4's step 4).
-const evsOrphanIndexMargin = 1 * time.Hour
 
 // The series orphan GC exports per segment cluster, with no network or repo label (D-OPS-8).
 const orphanDeletesMetricName = "urnetwork_evs_orphan_deletes_total"
@@ -72,18 +72,29 @@ const (
 // The alarm an index past its bound raises.
 const orphanIndexBoundAlarm = "gc_orphan_index_bound"
 
+// The Skipped of a repo whose index passed PidxReadCount, on which a run raises orphanIndexBoundAlarm.
+const orphanSkippedIndexBound = "index bound"
+
 // Settings past 2.2.4's floor, or ones a run cannot work with.
 var ErrOrphanGcSettings = errors.New("evs orphan gc settings invalid")
 
 // Tunables of orphan GC (DESIGN-DETAILS 2.2.4).
 type OrphanGcSettings struct {
 	// How long after its LastModified a segment, or a map's oldest part, may still be adopted by a record in a
-	// batch: 24 h + 2 min, and never less.
+	// batch: 24 h + 2 min, and never less than AdoptionBoundFloor.
 	AdoptionBound time.Duration
+	// 2.2.4's floor under AdoptionBound: the last minute directory that can hold a record adopting a segment
+	// starts no later than its LastModified + 24 h + 2 min (a receipt's 24 h, 100 ms for its stamp, step 7's 5 s,
+	// 50 ms for each of two clocks and a key's minute, with 54.8 s to spare). The protocol's value: lowering it is a
+	// change to the receipt and commit rules it rests on, never a deployment's.
+	AdoptionBoundFloor time.Duration
 	// The pass keeps no cursor, so each night judges the objects whose bound the horizon passed within this long:
 	// 7 d, a segment about seven times. A pass that did not run for longer is followed by one run with it set to
 	// the gap.
 	Window time.Duration
+	// How far before the oldest candidate's LastModified a pidx/ entry may have been written and still be one GC
+	// must read: an hour (2.2.4's step 4), past any skew between the clusters' clocks. Must be positive.
+	IndexMargin time.Duration
 	// The most segments one run deletes for one repo: 1,024.
 	DeleteCount int
 	// The most DELETEs a second on a segment cluster: 10, as a drop job's.
@@ -99,23 +110,25 @@ type OrphanGcSettings struct {
 // 2.2.4's figures.
 func DefaultOrphanGcSettings() *OrphanGcSettings {
 	return &OrphanGcSettings{
-		AdoptionBound: evsOrphanMinAdoptionBound,
-		Window:        7 * 24 * time.Hour,
-		DeleteCount:   1024,
-		DeleteRate:    10,
-		PidxReadCount: 4096,
-		ListLimit:     1000,
-		BusyShare:     0.5,
+		AdoptionBound:      24*time.Hour + 2*time.Minute,
+		AdoptionBoundFloor: 24*time.Hour + 2*time.Minute,
+		Window:             7 * 24 * time.Hour,
+		IndexMargin:        1 * time.Hour,
+		DeleteCount:        1024,
+		DeleteRate:         10,
+		PidxReadCount:      4096,
+		ListLimit:          1000,
+		BusyShare:          0.5,
 	}
 }
 
 // ErrOrphanGcSettings for a bound under its floor or a value a run cannot work with.
 func (self *OrphanGcSettings) Validate() error {
 	switch {
-	case self.AdoptionBound < evsOrphanMinAdoptionBound:
-		return fmt.Errorf("%w: an adoption bound of %s, under %s", ErrOrphanGcSettings, self.AdoptionBound, evsOrphanMinAdoptionBound)
-	case self.Window <= 0 || self.DeleteCount <= 0 || self.DeleteRate <= 0 || self.PidxReadCount <= 0 || self.ListLimit <= 0 ||
-		self.BusyShare <= 0 || 1 < self.BusyShare:
+	case self.AdoptionBoundFloor <= 0 || self.AdoptionBound < self.AdoptionBoundFloor:
+		return fmt.Errorf("%w: an adoption bound of %s, under %s", ErrOrphanGcSettings, self.AdoptionBound, self.AdoptionBoundFloor)
+	case self.Window <= 0 || self.IndexMargin <= 0 || self.DeleteCount <= 0 || self.DeleteRate <= 0 || self.PidxReadCount <= 0 ||
+		self.ListLimit <= 0 || self.BusyShare <= 0 || 1 < self.BusyShare:
 		return fmt.Errorf("%w: a bound that is not positive", ErrOrphanGcSettings)
 	}
 	return nil
@@ -157,11 +170,14 @@ type OrphanGcRepo struct {
 	PathMapParts []*sidecar.BlobInfo
 }
 
-// What one repo's run did, in counts with no id (I-13).
+// What one repo's run did, or its count found, in counts with no id (I-13).
 type OrphanGcResult struct {
 	// Segments whose bound the horizon passed within the window, and pidx/ entries read for them.
 	CandidateCount int
 	PidxReadCount  int
+	// A count's (CountRepo): the candidates no pidx/ entry introduces, every one, which a run would delete oldest
+	// first, DeleteCount a night. A run leaves it zero and counts its DELETEs by outcome instead.
+	OrphanCount int
 	// Segment DELETEs by outcome.
 	DeletedCount  int
 	ReplacedCount int
@@ -169,9 +185,9 @@ type OrphanGcResult struct {
 	FailedCount   int
 	// Path map parts deleted, of maps above their ref's epoch.
 	MapPartDeletedCount int
-	// Why the run deleted nothing, or stopped: empty when it ran through.
+	// Why the run deleted nothing, or stopped, or the count counted nothing: empty when it ran through.
 	Skipped string
-	// Candidates remain past DeleteCount: a later night takes them.
+	// Candidates remain past DeleteCount: a later night takes them. A count leaves it false.
 	More bool
 }
 
@@ -304,27 +320,68 @@ func (self *OrphanGc) due(lastModified time.Time, horizon time.Time) bool {
 // One repo's run. A nil error with Skipped set means a gate or a doubt kept everything; an error is a read that
 // failed or a step a test stopped, and likewise deleted nothing more.
 func (self *OrphanGc) RunRepo(ctx context.Context, repo *OrphanGcRepo) (*OrphanGcResult, error) {
+	result, segmentCluster, orphans, err := self.judge(ctx, repo)
+	if err != nil {
+		return result, err
+	}
+	if result.Skipped == orphanSkippedIndexBound {
+		self.alarm(orphanIndexBoundAlarm, repo.RepoId, "over %d pidx/ entries to read: nothing of it is deleted in this run", self.settings.PidxReadCount)
+	}
+	if result.Skipped != "" {
+		return result, nil
+	}
+	if stop, err := self.deleteOrphans(ctx, repo, segmentCluster, orphans, result); err != nil || stop {
+		return result, err
+	}
+	return result, self.deleteMaps(ctx, repo, result)
+}
+
+// The dry form of RunRepo (QD-677): steps 0 to 4 and step 5's selection, the code a run runs, so a count shares
+// orphan GC's one definition, but it issues no DELETE, writes nothing and raises no alarm, which a run raises for
+// itself. OrphanCount is every candidate no pidx/ entry introduces, past DeleteCount too, so More stays false; the
+// segment cluster's busy pause, which holds only DELETEs, is not read. A gate or a doubt sets Skipped as a run's
+// would, and then nothing was counted: what GC would not judge tonight is never a count of zero. Uncommitted path
+// maps (2.2.5) are not counted.
+func (self *OrphanGc) CountRepo(ctx context.Context, repo *OrphanGcRepo) (*OrphanGcResult, error) {
+	result, _, orphans, err := self.judge(ctx, repo)
+	if err != nil || result.Skipped != "" {
+		return result, err
+	}
+	result.OrphanCount = len(orphans)
+	return result, nil
+}
+
+// A candidate no pidx/ entry introduces: what step 5 deletes.
+type orphanSegment struct {
+	object    *sidecar.BlobInfo
+	segmentId []byte
+}
+
+// Steps 0 to 4 and step 5's selection, which RunRepo and CountRepo share: the result with its candidates and
+// pidx/ reads counted, the segment cluster, and the candidates no entry introduces, oldest first. Skipped set, or an
+// error, selects none.
+func (self *OrphanGc) judge(ctx context.Context, repo *OrphanGcRepo) (*OrphanGcResult, sidecar.BlobCluster, []*orphanSegment, error) {
 	result := &OrphanGcResult{}
 	segmentCluster, err := self.host.Blobs.SegmentCluster()
 	if err != nil {
-		return result, err
+		return result, nil, nil, err
 	}
 	// step 0
 	switch {
 	case !self.clockSure():
 		result.Skipped = "clock unsure"
-		return result, nil
+		return result, segmentCluster, nil, nil
 	case !segmentCluster.SettlePassed() || !repo.MetadataCluster.SettlePassed():
 		result.Skipped = "settle not passed"
-		return result, nil
+		return result, segmentCluster, nil, nil
 	case repo.Horizon.IsZero():
 		result.Skipped = "no horizon"
-		return result, nil
+		return result, segmentCluster, nil, nil
 	}
 	// step 2
 	if why := self.repoWhy(ctx, repo); why != "" {
 		result.Skipped = why
-		return result, nil
+		return result, segmentCluster, nil, nil
 	}
 
 	// step 3, oldest first
@@ -338,28 +395,85 @@ func (self *OrphanGc) RunRepo(ctx context.Context, repo *OrphanGcRepo) (*OrphanG
 		return a.LastModified.Compare(b.LastModified)
 	})
 	result.CandidateCount = len(candidates)
+	if len(candidates) == 0 {
+		return result, segmentCluster, nil, nil
+	}
 
-	if 0 < len(candidates) {
-		introduced, why, err := self.introduced(ctx, repo, candidates[0].LastModified, result)
-		if err != nil {
-			return result, err
+	// step 4
+	introduced, why, err := self.introduced(ctx, repo, candidates[0].LastModified, result)
+	if err != nil {
+		return result, segmentCluster, nil, err
+	}
+	if why != "" {
+		result.Skipped = why
+		return result, segmentCluster, nil, nil
+	}
+
+	// step 5's selection: each candidate no entry introduces, oldest first
+	segmentPrefix := segmentKeyPrefix + sidecar.EvsKeyId(repo.RepoId) + "/"
+	orphans := []*orphanSegment{}
+	for _, segment := range candidates {
+		idHex, ok := strings.CutPrefix(segment.Key, segmentPrefix)
+		segmentId, hexErr := hex.DecodeString(idHex)
+		if !ok || hexErr != nil || len(segmentId) != sha256.Size {
+			// not a segment's key: nothing here judges it
+			continue
 		}
-		if why != "" {
-			result.Skipped = why
-			return result, nil
-		}
-		if stop, err := self.deleteOrphans(ctx, repo, segmentCluster, candidates, introduced, result); err != nil || stop {
-			return result, err
+		if !introduced[string(segmentId)] {
+			orphans = append(orphans, &orphanSegment{object: segment, segmentId: segmentId})
 		}
 	}
-	return result, self.deleteMaps(ctx, repo, result)
+	return result, segmentCluster, orphans, nil
 }
 
-// Step 4: the ids every pidx/ entry written since the oldest candidate, less an hour, lists as introduced. A why
-// that is not empty means nothing of the repo may be deleted in this run.
+// One repo's listings as the nightly pass takes them for RunRepo (nightly.go's runRepo), for a caller outside the
+// pass, such as CountRepo's: seg/<repo>/ on the segment cluster, then pidx/<repo>/ and pmap/<repo>/ on
+// metadataCluster, each paged by ListLimit. horizon is the cluster's, which the caller read before this call
+// (NightlyPass.OrphanHorizon), so every LIST here issues after it: step 1 before step 4 (twin GcReadsIndexFirst).
+func (self *OrphanGc) ListRepo(ctx context.Context, metadataCluster sidecar.BlobCluster, repoId sidecar.Id, horizon time.Time) (*OrphanGcRepo, error) {
+	segmentCluster, err := self.host.Blobs.SegmentCluster()
+	if err != nil {
+		return nil, err
+	}
+	repoHex := sidecar.EvsKeyId(repoId)
+	repo := &OrphanGcRepo{RepoId: repoId, MetadataCluster: metadataCluster, Horizon: horizon}
+	if repo.Segments, err = self.listAll(ctx, segmentCluster, segmentKeyPrefix+repoHex+"/"); err != nil {
+		return nil, err
+	}
+	if err := self.step(BarrierGcIndexBefore, barrierRepoKey(repoId)); err != nil {
+		return nil, err
+	}
+	if repo.PidxEntries, err = self.listAll(ctx, metadataCluster, pidxKeyPrefix+repoHex+"/"); err != nil {
+		return nil, err
+	}
+	if repo.PathMapParts, err = self.listAll(ctx, metadataCluster, pathMapKeyPrefix+repoHex+"/"); err != nil {
+		return nil, err
+	}
+	return repo, nil
+}
+
+// Every object under prefix, paged by ListLimit.
+func (self *OrphanGc) listAll(ctx context.Context, cluster sidecar.BlobCluster, prefix string) ([]*sidecar.BlobInfo, error) {
+	objects := []*sidecar.BlobInfo{}
+	startAfter := ""
+	for {
+		page, more, err := cluster.List(ctx, prefix, startAfter, self.settings.ListLimit)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, page...)
+		if !more || len(page) == 0 {
+			return objects, nil
+		}
+		startAfter = page[len(page)-1].Key
+	}
+}
+
+// Step 4: the ids every pidx/ entry written since the oldest candidate, less IndexMargin, lists as introduced. A
+// why that is not empty means nothing of the repo may be deleted in this run.
 func (self *OrphanGc) introduced(ctx context.Context, repo *OrphanGcRepo, oldest time.Time, result *OrphanGcResult) (map[string]bool, string, error) {
 	repoKey := barrierRepoKey(repo.RepoId)
-	since := oldest.Add(-evsOrphanIndexMargin)
+	since := oldest.Add(-self.settings.IndexMargin)
 	introduced := map[string]bool{}
 	readKeys := map[string]bool{}
 	read := func(key string) (found bool, err error) {
@@ -384,10 +498,10 @@ func (self *OrphanGc) introduced(ctx context.Context, repo *OrphanGcRepo, oldest
 		}
 		return true, nil
 	}
+	// past PidxReadCount: a run alarms on this why (RunRepo)
 	bound := func(err error) (map[string]bool, string, error) {
 		if errors.Is(err, errOrphanIndexBound) {
-			self.alarm(orphanIndexBoundAlarm, repo.RepoId, "over %d pidx/ entries to read: nothing of it is deleted in this run", self.settings.PidxReadCount)
-			return nil, "index bound", nil
+			return nil, orphanSkippedIndexBound, nil
 		}
 		return nil, "", err
 	}
@@ -549,21 +663,12 @@ func (self *OrphanGc) count(clusterId string, outcome string) {
 	}
 }
 
-// Step 5: each candidate no entry introduces, oldest first. stop is true when a gate ended the repo's run.
-func (self *OrphanGc) deleteOrphans(ctx context.Context, repo *OrphanGcRepo, segmentCluster sidecar.BlobCluster, candidates []*sidecar.BlobInfo, introduced map[string]bool, result *OrphanGcResult) (stop bool, err error) {
+// Step 5: each orphan judge selected, oldest first. stop is true when a gate ended the repo's run.
+func (self *OrphanGc) deleteOrphans(ctx context.Context, repo *OrphanGcRepo, segmentCluster sidecar.BlobCluster, orphans []*orphanSegment, result *OrphanGcResult) (stop bool, err error) {
 	clusterId := segmentCluster.ClusterId()
-	segmentPrefix := segmentKeyPrefix + sidecar.EvsKeyId(repo.RepoId) + "/"
 	issued := 0
-	for _, segment := range candidates {
-		idHex, ok := strings.CutPrefix(segment.Key, segmentPrefix)
-		segmentId, hexErr := hex.DecodeString(idHex)
-		if !ok || hexErr != nil || len(segmentId) != 32 {
-			// not a segment's key: nothing here judges it
-			continue
-		}
-		if introduced[string(segmentId)] {
-			continue
-		}
+	for _, orphan := range orphans {
+		segment, segmentId := orphan.object, orphan.segmentId
 		if self.settings.DeleteCount <= issued {
 			result.More = true
 			return false, nil
