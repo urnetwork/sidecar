@@ -24,6 +24,8 @@ type searchTestClock struct {
 	stateLock sync.Mutex
 	current   time.Time
 	timers    []*searchTestTimer
+	// closed and replaced each time a timer is armed, for a test waiting on one
+	armed chan struct{}
 }
 
 // A timer armed on a searchTestClock.
@@ -34,7 +36,7 @@ type searchTestTimer struct {
 }
 
 func newSearchTestClock() *searchTestClock {
-	return &searchTestClock{current: time.Now()}
+	return &searchTestClock{current: time.Now(), armed: make(chan struct{})}
 }
 
 func (self *searchTestClock) Now() time.Time {
@@ -55,6 +57,8 @@ func (self *searchTestClock) AfterFunc(timeout time.Duration, function func()) f
 	due := timeout <= 0
 	if !due {
 		self.timers = append(self.timers, timer)
+		close(self.armed)
+		self.armed = make(chan struct{})
 	} else {
 		timer.done = true
 	}
@@ -101,6 +105,10 @@ func (self *searchTestClock) advance(timeout time.Duration) {
 func (self *searchTestClock) pending() int {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	return self.pendingWithLock()
+}
+
+func (self *searchTestClock) pendingWithLock() int {
 	count := 0
 	for _, timer := range self.timers {
 		if !timer.done {
@@ -108,6 +116,26 @@ func (self *searchTestClock) pending() int {
 		}
 	}
 	return count
+}
+
+// Waits until count timers are pending, woken by each one armed, never by time passing.
+func (self *searchTestClock) awaitPending(t *testing.T, count int) {
+	t.Helper()
+	for {
+		armed, pending := func() (chan struct{}, int) {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return self.armed, self.pendingWithLock()
+		}()
+		if count <= pending {
+			return
+		}
+		select {
+		case <-armed:
+		case <-t.Context().Done():
+			t.Fatalf("%d timers never armed", count)
+		}
+	}
 }
 
 // One network of an open instance in memory, with its search state on a clock the test moves.
@@ -507,6 +535,24 @@ func TestSearchStateFailedIsNeverOverwritten(t *testing.T) {
 	}
 	if world.failed != 1 {
 		t.Errorf("%d alarms", world.failed)
+	}
+	// it is read again at each call: once the file reads well, the state works again, with no change lost
+	writer, err = store.Create(sidecarSearchStateName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte(`{"version":1,"mode":"own"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+	if mode, err := world.state.Mode(); err != nil || mode != SearchRemoteOwn {
+		t.Errorf("a mended file read %q %v", mode, err)
+	}
+	if world.failed != 1 {
+		t.Errorf("%d alarms after the mend", world.failed)
 	}
 }
 
