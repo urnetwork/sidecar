@@ -168,8 +168,10 @@ type MarkerCollector struct {
 	holds       *HoldCache
 	repos       *RepoCache
 	records     *RecordCache
-	logPages    *LogPageCache
-	priceTable  *PriceTable
+	// finds a scanned version's record once evacuation emptied its batch (QD-664)
+	locator    *RecordLocator
+	logPages   *LogPageCache
+	priceTable *PriceTable
 }
 
 // A collector on host, which needs Blobs and a write budget. Its ClockCheck is read before every write, nil reading
@@ -219,6 +221,7 @@ func NewMarkerCollector(host *sidecar.ServiceHost, deps *MarkerCollectorDeps) (*
 		holds:       holds,
 		repos:       NewRepoCache(clock, evsSettings),
 		records:     NewRecordCache(evsSettings),
+		locator:     NewRecordLocator(host.Blobs, nil),
 		logPages:    NewLogPageCache(evsSettings),
 		priceTable:  priceTable,
 	}, nil
@@ -495,7 +498,7 @@ func (self *MarkerCollector) removals(ctx context.Context, cluster sidecar.BlobC
 	}
 	windowFirst := EvsHeadWindowFirstVersion(head)
 	epoch := EvsHeadCurrentEpoch(head)
-	source := NewRecordPushSource(self.records, cluster, repoId, refId)
+	source := NewRecordPushSource(self.records, self.locator, cluster, repoId, refId)
 	removals := []*collectRemoval{}
 	for version := done + 1; version <= last; version += 1 {
 		var entry *sidecar.EvsWindowEntry

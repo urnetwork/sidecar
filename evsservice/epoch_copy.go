@@ -188,6 +188,7 @@ func RunPathEpochCopy(ctx context.Context, host *sidecar.ServiceHost, deps *EvsE
 		heads:      NewHeadStore(clock, host.ClockCheck, nil, settings, log),
 		repos:      NewRepoCache(clock, settings),
 		records:    NewRecordCache(settings),
+		locator:    NewRecordLocator(blobs, nil),
 		logPages:   NewLogPageCache(settings),
 		repoId:     repoId,
 		refId:      refId,
@@ -222,6 +223,8 @@ type copyRun struct {
 	heads      *HeadStore
 	repos      *RepoCache
 	records    *RecordCache
+	// finds a window record once evacuation emptied its batch (QD-664); nil reads batches alone
+	locator    *RecordLocator
 	logPages   *LogPageCache
 	repoId     sidecar.Id
 	refId      sidecar.Id
@@ -434,7 +437,7 @@ func (self *copyRun) tailMoves(mapSha256 []byte) ([][]byte, bool, error) {
 		if !entry.PathEpoch() {
 			return nil, false, nil
 		}
-		record, err := ReadRecord(self.ctx, self.records, self.cluster, entry.Place)
+		record, err := ReadRecordLocated(self.ctx, self.records, self.locator, self.cluster, self.repoId, self.refId, entry.Place)
 		if err != nil {
 			return nil, false, err
 		}
