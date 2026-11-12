@@ -206,6 +206,17 @@ func TestSearchRankTiersAndOverlap(t *testing.T) {
 	if hits[2].trigramCount != hits[3].trigramCount || hits[3].trigramCount >= hits[4].trigramCount {
 		t.Errorf("the possible tier's counts %d %d %d", hits[2].trigramCount, hits[3].trigramCount, hits[4].trigramCount)
 	}
+
+	// the app may switch the possible tier to newest first; matches stay first
+	run := newTestSearchRun(t, "budget")
+	run.possibleNewestFirst = true
+	repoId := evsTestId("rank repo")
+	table := testVersionTableOf(testSearchRecords(entries...))
+	source := run.source(repoId, refId, &searchMaskArgs{probe: table.probe, refId: refId}, nil, nil)
+	hits, _ = run.all(run.inputs(source, testSearchSlotPartition(searchPartitionCurrent, entries...)))
+	if locators := testHitLocators(hits); !slices.Equal(locators, []string{"x/b.md", "x/a.md", "y/d.md", "y/e.md", "y/c.md"}) {
+		t.Errorf("newest first: %v", locators)
+	}
 }
 
 // The walk is lazy: a page checks candidates only until it is full and reads "about n" while some wait; a page holds
@@ -485,6 +496,28 @@ func TestSearchConfirmFilters(t *testing.T) {
 	}
 	if !(&searchRowFilters{untilSeconds: 10}).timeHolds(10) || (&searchRowFilters{untilSeconds: 10}).timeHolds(11) {
 		t.Error("until is inclusive")
+	}
+}
+
+// Verification streams the text past the query's needles: a needle split across writes is found once, one wholly in
+// a write once, and only the longest needle's length less one is held between writes.
+func TestSearchNeedleSinkAcrossWrites(t *testing.T) {
+	query, err := ParseSearchQuery(`"red apple" go -pear`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := " a red apple and a red apple tree go pear "
+	for split := 0; split <= len(text); split += 1 {
+		sink := searchNewNeedleSink(query)
+		for _, part := range []string{text[:split/2], text[split/2 : split], text[split:]} {
+			sink.Write([]byte(part))
+			if sink.tailMaxCount < len(sink.tail) {
+				t.Fatalf("split %d: a tail of %d B", split, len(sink.tail))
+			}
+		}
+		if sink.counts["red apple"] != 2 || sink.counts[" go "] != 1 || sink.counts["pear"] != 1 || sink.byteCount != len(text) {
+			t.Fatalf("split %d: counts %v", split, sink.counts)
+		}
 	}
 }
 

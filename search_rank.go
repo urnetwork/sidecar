@@ -196,6 +196,8 @@ type searchRankedHit struct {
 	trigramCount int
 	inHeader     bool
 	density      float64
+	// Found by a scan of a ref with no index (search_no_index.go): no doc key, no partition, and "index off".
+	scanned bool
 }
 
 // §16.10's counts for a phase so far.
@@ -236,6 +238,8 @@ type searchRanker struct {
 	// Search.PageCandidateCount: candidates a page checks at most.
 	pageCandidateCount int
 	order              searchRankOrder
+	// Tier 2 newest first rather than by J, as the app may switch it (§11.14's rank row).
+	possibleNewestFirst bool
 	// |T(q)|, the query's distinct trigrams.
 	queryTrigramCount int
 
@@ -271,7 +275,9 @@ type searchRankerArgs struct {
 	settings *SearchResultSettings
 	search   *SidecarSearchSettings
 	order    searchRankOrder
-	query    *SearchQuery
+	// Tier 2 newest first rather than by J.
+	possibleNewestFirst bool
+	query               *SearchQuery
 }
 
 // A ranker for one search, before its first phase.
@@ -287,11 +293,12 @@ func newSearchRanker(args *searchRankerArgs) (*searchRanker, error) {
 		order = searchRankByTime
 	}
 	return &searchRanker{
-		settings:           args.settings,
-		pageCandidateCount: args.search.PageCandidateCount,
-		order:              order,
-		queryTrigramCount:  len(args.query.trigrams()),
-		seen:               map[searchSeenKey]bool{},
+		settings:            args.settings,
+		pageCandidateCount:  args.search.PageCandidateCount,
+		order:               order,
+		possibleNewestFirst: args.possibleNewestFirst,
+		queryTrigramCount:   len(args.query.trigrams()),
+		seen:                map[searchSeenKey]bool{},
 	}, nil
 }
 
@@ -492,6 +499,11 @@ func searchCompareOverlap(a *searchRankedHit, b *searchRankedHit) int {
 	)
 }
 
+// Hits newest first, as the walk found them.
+func searchCompareNewest(a *searchRankedHit, b *searchRankedHit) int {
+	return cmp.Or(cmp.Compare(b.timeSeconds, a.timeSeconds), compareIndexKeys(a.key, b.key))
+}
+
 // Tier 1 in the order asked, once the walk has found every match: by path, header matches first, or by density.
 func (self *searchRanker) sortMatches() {
 	switch self.order {
@@ -552,7 +564,11 @@ func (self *searchRanker) page(ctx context.Context, hitCount int) (*searchRankPa
 		}
 		if !self.sortedTiers {
 			self.sortMatches()
-			slices.SortStableFunc(self.possible, searchCompareOverlap)
+			if self.possibleNewestFirst {
+				slices.SortStableFunc(self.possible, searchCompareNewest)
+			} else {
+				slices.SortStableFunc(self.possible, searchCompareOverlap)
+			}
 			self.sortedTiers = true
 		}
 		give(&self.matches)

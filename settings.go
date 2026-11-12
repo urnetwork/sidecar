@@ -198,7 +198,7 @@ type SidecarSearchSettings struct {
 	// Decoded index state, inside MemoryBudgetByteCount: 64 MiB; app and page hosts set §18.4's
 	// smaller working sets.
 	MemoryByteCount int64
-	// 5.9's version-table pages a process, inside MemoryByteCount: 256 KiB, four 64 KiB frames.
+	// 5.9's version-table pages a process, inside MemoryByteCount: 256 KiB, 64 pages of VersionPageByteCount.
 	VersionCacheByteCount int64
 	// Sync downloads a day a network, since each debits the transfer balance: 1 GiB (§16.10).
 	BackgroundByteCount int64
@@ -272,6 +272,26 @@ type SidecarSearchSettings struct {
 	// requesters are Later (§5.4). A host without it lists no indexers and refuses SetSearchRemote and
 	// AcknowledgeSearchIndexer (§18.7's control row), a reading: §5.4 sets no such field.
 	RemoteAsk bool
+	// The window RemoteCpuPerMinute is spent over: 1 min, sliding (D-CORE-17).
+	RemoteCpuWindow time.Duration
+	// The most one computing remote search holds: 8 MiB (D-CORE-17, §11.14's limits row), inside MemoryBudgetByteCount.
+	RemoteSearchMemoryByteCount int64
+	// How often a designated daemon checks its designation besides at each config entry, for an authority installed
+	// after serving began: 10 min, a reading.
+	ServeRecheckInterval time.Duration
+	// A daemon designated for search's cache bound, which it holds while designated whatever CacheByteCount says: 16
+	// GiB (owner decision 175, D-CORE-17).
+	DesignatedCacheByteCount int64
+	// A daemon designated for search's process budget, which ApplySearchDesignatedSettings raises
+	// MemoryBudgetByteCount to: 192 MiB (owner decision 175).
+	DesignatedMemoryBudgetByteCount int64
+	// The version table's page (§5.9's versions row): 4 KiB, sealed one a file, so a probe decrypts one page.
+	VersionPageByteCount int
+	// The inputs one pass of the version table's merge holds open at once: 16 (§5.9's versions row).
+	VersionMergeInputCount int
+	// What one pass of the version table's merge holds in all, its inputs' buffers counted: 1 MiB (§5.9's versions
+	// row).
+	VersionMergeByteCount int64
 }
 
 // Count per Interval, bursting to Burst. All three must be positive, as every number here is, so a
@@ -706,6 +726,15 @@ func DefaultSidecarSettings() *SidecarSettings {
 			RemoteServedTimeout:    24 * time.Hour,
 			StateByteCount:         4 * 1024 * 1024,
 			PageHitCount:           50,
+
+			RemoteCpuWindow:                 1 * time.Minute,
+			RemoteSearchMemoryByteCount:     8 * 1024 * 1024,
+			ServeRecheckInterval:            10 * time.Minute,
+			DesignatedCacheByteCount:        16 * 1024 * 1024 * 1024,
+			DesignatedMemoryBudgetByteCount: 192 * 1024 * 1024,
+			VersionPageByteCount:            4 * 1024,
+			VersionMergeInputCount:          16,
+			VersionMergeByteCount:           1024 * 1024,
 		},
 		Directory: &SidecarDirectorySettings{
 			SessionSyncInterval:   15 * time.Minute,

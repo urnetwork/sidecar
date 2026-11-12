@@ -58,11 +58,9 @@ func (self *SearchCache) MarkSearched(repoId Id, refId Id, partition SearchCache
 	self.searched[searchCacheSearchedKey{repoId: repoId, refId: refId, all: partition.All}] = self.clock.Now()
 }
 
-// The bound of a daemon designated for search (§5.4's Search settings, owner decision 175).
-const SearchDesignatedCacheByteCount int64 = 16 * 1024 * 1024 * 1024
-
 // Sets whether this daemon is designated for search (§7.9's IndexerSet), and the repos it serves (D-CORE-17): while
-// designated its bound is at least 16 GiB, and it keeps the all of each served repo until every other all has gone.
+// designated its bound is at least Search.DesignatedCacheByteCount, 16 GiB, and it keeps the all of each served repo
+// until every other all has gone.
 func (self *SearchCache) SetDesignated(designated bool, servedRepoIds []Id) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -76,8 +74,8 @@ func (self *SearchCache) SetDesignated(designated bool, servedRepoIds []Id) {
 	}
 }
 
-// The bound eviction holds the cache to: Search.CacheByteCount, at least 16 GiB while designated, and, in memory,
-// Search.MemoryByteCount.
+// The bound eviction holds the cache to: Search.CacheByteCount, at least Search.DesignatedCacheByteCount while
+// designated, and, in memory, Search.MemoryByteCount.
 func (self *SearchCache) bound() int64 {
 	if self.memory {
 		return self.settings.MemoryByteCount
@@ -85,7 +83,7 @@ func (self *SearchCache) bound() int64 {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if self.designated {
-		return max(self.settings.CacheByteCount, SearchDesignatedCacheByteCount)
+		return max(self.settings.CacheByteCount, self.settings.DesignatedCacheByteCount)
 	}
 	return self.settings.CacheByteCount
 }
@@ -100,6 +98,24 @@ type searchCacheEvictable struct {
 	usedAt time.Time
 	files  []SearchCacheKey
 	bytes  int64
+}
+
+// The repos the cache holds a ref of, from the medium: what a designated daemon weighs for the repos it serves.
+func (self *SearchCache) HeldRepoIds() ([]Id, error) {
+	self.operationLock.Lock()
+	defer self.operationLock.Unlock()
+	refKeys, err := self.refKeysWithLock()
+	if err != nil {
+		return nil, err
+	}
+	repoIds := []Id{}
+	for _, refKey := range refKeys {
+		if !slices.Contains(repoIds, refKey[0]) {
+			repoIds = append(repoIds, refKey[0])
+		}
+	}
+	slices.SortFunc(repoIds, func(a Id, b Id) int { return a.Cmp(b) })
+	return repoIds, nil
 }
 
 // Every ref the store holds a record of, from the medium, so a ref not loaded yet counts too.

@@ -175,6 +175,15 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				RemoteServedTimeout:    24 * time.Hour,
 				StateByteCount:         4 * 1024 * 1024,
 				PageHitCount:           50,
+
+				RemoteCpuWindow:                 1 * time.Minute,
+				RemoteSearchMemoryByteCount:     8 * 1024 * 1024,
+				ServeRecheckInterval:            10 * time.Minute,
+				DesignatedCacheByteCount:        16 * 1024 * 1024 * 1024,
+				DesignatedMemoryBudgetByteCount: 192 * 1024 * 1024,
+				VersionPageByteCount:            4 * 1024,
+				VersionMergeInputCount:          16,
+				VersionMergeByteCount:           1024 * 1024,
 			},
 		},
 		// §5.4's directory settings
