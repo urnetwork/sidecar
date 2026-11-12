@@ -203,7 +203,7 @@ func (self *AclState) PublishGrant(subject AclSubject, socketName string, appMod
 	return grant, decision
 }
 
-// An audience with unspecified read as members, and an app mode with unspecified read as http (§8.4's defaults).
+// An audience with unspecified read as members (§8.4's default).
 func aclPublishAudience(audience protocol.AclAudience) protocol.AclAudience {
 	if audience == protocol.AclAudience_ACL_AUDIENCE_UNSPECIFIED {
 		return protocol.AclAudience_ACL_AUDIENCE_MEMBERS
@@ -211,6 +211,7 @@ func aclPublishAudience(audience protocol.AclAudience) protocol.AclAudience {
 	return audience
 }
 
+// An app mode with unspecified read as http (§8.4's default).
 func aclPublishAppMode(appMode protocol.AclAppMode) protocol.AclAppMode {
 	if appMode == protocol.AclAppMode_ACL_APP_MODE_UNSPECIFIED {
 		return protocol.AclAppMode_ACL_APP_MODE_HTTP
