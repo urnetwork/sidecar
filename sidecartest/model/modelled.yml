@@ -9,6 +9,10 @@
 #   owners      the tasks that write the model.
 #   milestones  the gates whose freeze needs it passing (§22.10).
 #   objects     what the model keeps, as §22.8 lists it.
+#   companions  models of the same objects under details/, as §22.8's row names them beside the spec,
+#               each run by its own script there: details/IndexMerge.tla is DESIGN-DETAILS.md section
+#               1's, holding its rules beside §11.14's as written. A companion's spec, its cfgs and its
+#               script count among the sources, so a change to either model reruns the spec at a gate.
 #   sources     globs from the monoroot, the directory holding this repository and its siblings, of the
 #               files that implement what the model keeps: a change to any forces a rerun at a gate.
 #               Test files never count. The spec, its cfg and run-tlc.sh count too.
@@ -53,16 +57,21 @@ models:
       - {at: 2026-11-09, commit: c9e4cdea7ad12d7d4085b5ff7df0ca8a30187b9a, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 9de0263e10f0907d8f503d0352f873592332aebc62ce827b66aee45012259a59, states: 697346, depth: 21, seconds: 10}
 
   - spec: IndexRollup
-    owners: [SEARCH-M10-02]
+    owners: [SEARCH-M10-02, SEARCH-M10-46]
     milestones: [M10]
-    objects: "one ref's head with its index_epoch and index files, its erasure set, current, previous and expired buckets, all, each writer's head and sealed slots, the roll-up lock, and each document's newest version and erasure state"
+    objects: "one ref's head with its index_epoch and index files, its erasure set, current, previous and expired buckets, all, each writer's head, sealed and kept slots and large entries on its own bases under the head rule, merges that read no head, the roll-up lock and its promotions, the journal's pin and push life, and each document's newest version and erasure state (DESIGN-DETAILS.md section 1); details/IndexMerge.tla keeps the same rules, without the erasure, beside §11.14's as written"
+    companions: [details/IndexMerge]
     sources:
       - sidecar/sidecartest/model/IndexRollup.tla
       - sidecar/sidecartest/model/IndexRollup.cfg
       - sidecar/sidecartest/model/run-tlc.sh
+      - sidecar/sidecartest/model/details/IndexMerge.tla
+      - sidecar/sidecartest/model/details/IndexMerge*.cfg
+      - sidecar/sidecartest/model/details/run-indexmerge.sh
       - sidecar/evs_index_*.go
       - sidecar/search_*.go
       - sidecar/indexer_*.go
     exclude: []
     runs:
       - {at: 2026-11-09, commit: c9e4cdea7ad12d7d4085b5ff7df0ca8a30187b9a, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: d009e271be94e34cb43dfdc846845a2f65b481ddbd6721982a9027a3f266eef6, states: 531540, depth: 0, seconds: 36}
+      - {at: 2026-11-11, commit: 48cdcc3b1187664bb2742c1c2aab86e39cbfa85f, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 8e853774f013ed753b55a86a16f6fdc37a37c8ed8ed6993be4fab42567cbd7dc, states: 1481149, depth: 20, seconds: 1103}
