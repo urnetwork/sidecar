@@ -423,17 +423,155 @@ func TestTlsEdgeLoginNeedsItsPreCookie(t *testing.T) {
 	}
 }
 
-// With no issuer set, or on a port no origin takes, a login answers 503 and reaches nothing.
+// With no issuer set a login answers 503 and reaches nothing, on any port.
 func TestTlsEdgeLoginWithoutAnIssuerIsUnavailable(t *testing.T) {
 	memberId := NewId()
-	for _, configure := range []func(fixture *tlsFrontFixture){
-		func(fixture *tlsFrontFixture) { fixture.issuerUrl = "" },
-		func(fixture *tlsFrontFixture) { fixture.target.Name = "tls/8443/app" },
-	} {
-		fixture, _ := newTlsEdgeLoginFixture(t, memberId, configure)
+	for _, name := range []string{"tls/443/app", "tls/8443/app"} {
+		fixture, _ := newTlsEdgeLoginFixture(t, memberId, func(fixture *tlsFrontFixture) {
+			fixture.issuerUrl = ""
+			fixture.target.Name = name
+		})
 		response, _ := tlsFrontTestDo(t, fixture.httpClient(tlsAlpnHttp11), tlsFrontTestNavigation(t, http.MethodGet, "/"))
 		if response.StatusCode != http.StatusServiceUnavailable || tlsEdgeTestCookie(response, tlsPreLoginCookieName) != nil {
-			t.Errorf("%s: %d", fixture.target.Name, response.StatusCode)
+			t.Errorf("%s: %d", name, response.StatusCode)
+		}
+	}
+}
+
+// QD-723: a members endpoint on each of tlsedge's other ports signs its visitors in as its own origin, the port
+// written in client_id and redirect_uri, and its session then reaches the service; 443's origin stays bare.
+func TestTlsEdgeLoginOnEveryPort(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		origin string
+	}{
+		{name: "tls/443/app", origin: "https://" + tlsFrontTestServerName},
+		{name: "tls/8443/app", origin: "https://" + tlsFrontTestServerName + ":8443"},
+		{name: "tls/8883/app", origin: "https://" + tlsFrontTestServerName + ":8883"},
+		{name: "tls/5671/app", origin: "https://" + tlsFrontTestServerName + ":5671"},
+	} {
+		memberId := NewId()
+		fixture, issuer := newTlsEdgeLoginFixture(t, memberId, func(fixture *tlsFrontFixture) { fixture.target.Name = c.name })
+		client := fixture.httpClient(tlsAlpnHttp11)
+		query, preCookie := tlsEdgeTestStart(t, client, "/private?x=1")
+		if query.Get("client_id") != c.origin || query.Get("redirect_uri") != c.origin+tlsEdgeLoginCallbackPath {
+			t.Fatalf("%s: client_id %q, redirect_uri %q", c.name, query.Get("client_id"), query.Get("redirect_uri"))
+		}
+		response := tlsEdgeTestCallback(t, client, issuer.grant(query, memberId, fixture.networkId), query.Get("state"), preCookie)
+		session := tlsEdgeTestCookie(response, tlsSessionCookieName)
+		if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/private?x=1" || session == nil {
+			t.Fatalf("%s: callback %d to %q", c.name, response.StatusCode, response.Header.Get("Location"))
+		}
+		if dials, _ := fixture.backend.counts(); dials != 0 {
+			t.Fatalf("%s: %d dials during the login", c.name, dials)
+		}
+		request := tlsFrontTestNavigation(t, http.MethodGet, "/private?x=1")
+		request.AddCookie(&http.Cookie{Name: session.Name, Value: session.Value})
+		if response, body := tlsFrontTestDo(t, client, request); response.StatusCode != http.StatusOK || body != "backend" {
+			t.Fatalf("%s: signed in: %d %q", c.name, response.StatusCode, body)
+		}
+	}
+}
+
+// Two fronts of one device, network and host, on 443 and on 8443, with one keychain and clock between them, as a
+// device publishing both runs them.
+func newTlsEdgeLoginPortFixtures(t *testing.T, memberId Id) (bare *tlsFrontFixture, bareIssuer *tlsEdgeTestIssuer, ported *tlsFrontFixture, portedIssuer *tlsEdgeTestIssuer) {
+	t.Helper()
+	bare, bareIssuer = newTlsEdgeLoginFixture(t, memberId, nil)
+	ported, portedIssuer = newTlsEdgeLoginFixture(t, memberId, func(fixture *tlsFrontFixture) {
+		fixture.target.Name = "tls/8443/app"
+		fixture.secrets = bare.secrets
+		fixture.networkId = bare.networkId
+		fixture.sidecarId = bare.sidecarId
+	})
+	return bare, bareIssuer, ported, portedIssuer
+}
+
+// D-TEAM-15's one origin across ports (QD-723): with both endpoints sealing under one keychain, a session either
+// front set counts on its own and not on the other, in both directions, though the browser sends it to both.
+func TestTlsEdgeLoginSessionStaysOnItsPort(t *testing.T) {
+	memberId := NewId()
+	bare, bareIssuer, ported, portedIssuer := newTlsEdgeLoginPortFixtures(t, memberId)
+	login := func(fixture *tlsFrontFixture, issuer *tlsEdgeTestIssuer) *http.Cookie {
+		client := fixture.httpClient(tlsAlpnHttp11)
+		query, preCookie := tlsEdgeTestStart(t, client, "/")
+		response := tlsEdgeTestCallback(t, client, issuer.grant(query, memberId, fixture.networkId), query.Get("state"), preCookie)
+		session := tlsEdgeTestCookie(response, tlsSessionCookieName)
+		if response.StatusCode != http.StatusFound || session == nil {
+			t.Fatalf("%s: login %d", fixture.target.Name, response.StatusCode)
+		}
+		return session
+	}
+	fetch := func(fixture *tlsFrontFixture, session *http.Cookie) int {
+		request := tlsFrontTestNavigation(t, http.MethodGet, "/api")
+		request.Header.Set(tlsHttpHeaderFetchSite, tlsFetchSiteSameOrigin)
+		request.Header.Set(tlsHttpHeaderFetchMode, "cors")
+		request.Header.Set(tlsHttpHeaderFetchDest, "empty")
+		request.AddCookie(&http.Cookie{Name: session.Name, Value: session.Value})
+		response, _ := tlsFrontTestDo(t, fixture.httpClient(tlsAlpnHttp11), request)
+		return response.StatusCode
+	}
+	bareSession, portedSession := login(bare, bareIssuer), login(ported, portedIssuer)
+	if status := fetch(bare, bareSession); status != http.StatusOK {
+		t.Errorf("443's session on 443: %d", status)
+	}
+	if status := fetch(ported, portedSession); status != http.StatusOK {
+		t.Errorf("8443's session on 8443: %d", status)
+	}
+	bareDials, _ := bare.backend.counts()
+	portedDials, _ := ported.backend.counts()
+	if status := fetch(ported, bareSession); status != http.StatusUnauthorized {
+		t.Errorf("443's session on 8443: %d", status)
+	}
+	if status := fetch(bare, portedSession); status != http.StatusUnauthorized {
+		t.Errorf("8443's session on 443: %d", status)
+	}
+	if dials, _ := bare.backend.counts(); dials != bareDials {
+		t.Errorf("443 dialed for 8443's session")
+	}
+	if dials, _ := ported.backend.counts(); dials != portedDials {
+		t.Errorf("8443 dialed for 443's session")
+	}
+}
+
+// A login begun on one port completes on no other (QD-723): its pre-cookie does not open there, before any
+// redemption, and an ID token whose aud is the host's other endpoint sets no session, in both directions.
+func TestTlsEdgeLoginTokenStaysOnItsPort(t *testing.T) {
+	memberId := NewId()
+	bare, bareIssuer, ported, portedIssuer := newTlsEdgeLoginPortFixtures(t, memberId)
+	bareOrigin, portedOrigin := "https://"+tlsFrontTestServerName, "https://"+tlsFrontTestServerName+":8443"
+	for _, c := range []struct {
+		name        string
+		fixture     *tlsFrontFixture
+		issuer      *tlsEdgeTestIssuer
+		other       *tlsFrontFixture
+		otherIssuer *tlsEdgeTestIssuer
+		otherOrigin string
+	}{
+		{name: "443's on 8443", fixture: bare, issuer: bareIssuer, other: ported, otherIssuer: portedIssuer, otherOrigin: bareOrigin},
+		{name: "8443's on 443", fixture: ported, issuer: portedIssuer, other: bare, otherIssuer: bareIssuer, otherOrigin: portedOrigin},
+	} {
+		// this port's pending login, carried whole to the other port's callback
+		query, preCookie := tlsEdgeTestStart(t, c.fixture.httpClient(tlsAlpnHttp11), "/")
+		otherClient := c.other.httpClient(tlsAlpnHttp11)
+		response := tlsEdgeTestCallback(t, otherClient, c.otherIssuer.grant(query, memberId, c.other.networkId), query.Get("state"), preCookie)
+		if response.StatusCode != http.StatusBadRequest || tlsEdgeTestCookie(response, tlsSessionCookieName) != nil {
+			t.Errorf("%s: a pending login: %d", c.name, response.StatusCode)
+		}
+		if calls := c.otherIssuer.calls(); calls != 0 {
+			t.Errorf("%s: %d redemptions", c.name, calls)
+		}
+		// the other port's own login, answered with a token for this port's origin
+		otherQuery, otherPreCookie := tlsEdgeTestStart(t, otherClient, "/")
+		c.otherIssuer.nextToken(func(header map[string]any, claims map[string]any) {
+			claims["aud"] = []string{c.otherOrigin}
+		}, nil)
+		response = tlsEdgeTestCallback(t, otherClient, c.otherIssuer.grant(otherQuery, memberId, c.other.networkId), otherQuery.Get("state"), otherPreCookie)
+		if response.StatusCode != http.StatusForbidden || tlsEdgeTestCookie(response, tlsSessionCookieName) != nil {
+			t.Errorf("%s: an ID token: %d", c.name, response.StatusCode)
+		}
+		if dials, _ := c.other.backend.counts(); dials != 0 {
+			t.Errorf("%s: %d dials", c.name, dials)
 		}
 	}
 }
