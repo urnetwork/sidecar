@@ -21,7 +21,18 @@
 // answered the schedule holds the ephemeral's config rights to a member device's on the rows as they are, and judges
 // the read, the key holders and the head writers on sidecartest.AclConfigRowView, the row every option gives.
 //
-// The other cases are named clauses a T2 test runs (fs_acl_test.go), and server's T3 tests where the row runs on T3.
+// Named clauses, each a T2 test in fs_acl_test.go and a T3 test in server's sidecart3 where its row runs on T3:
+//
+//   - FS-14's acl cases (forged row, T2): Suspend and Unsuspend in both orders with a stale suspend_id a no-op, a config
+//     writer's standing RepoRevoke, an OwnerConfirm, a rotation covering one of two removals in one base's tail, and
+//     two readers a server forks at n+1 with a socket GrantRevoke and a KeyRegister. HeadCheck's exchange between the
+//     forked readers is not run here: each reader's refusal names both A_{n+1}, which is what HeadCheck's FORK carries.
+//   - FS-62's gate case (T2+T3): api's, evs's and gkm's gate caches over AclGateDirectSource with {acl_}e current, lost,
+//     stale and short.
+//
+// And, holding no FS row, schedules for §22.5's §8 row (AclRowsEqualTheWriters, AclRowsALyingWriter,
+// AclVersionsRefused, AclNoDocumentRules), §22.7's revocation suite's acl clause (AclRevocationTaggedAgents), and S3a's
+// and S4a's acl checks (AclAddsOnlyForReaders, AclRemovalDropsEveryRight).
 
 package fault
 
