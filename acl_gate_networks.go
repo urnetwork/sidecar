@@ -83,6 +83,7 @@ type aclGateSidecarIndex struct {
 	sidecarIdNetworkIds map[Id][]Id
 }
 
+// An index holding no network.
 func newAclGateSidecarIndex() *aclGateSidecarIndex {
 	return &aclGateSidecarIndex{
 		networkIdSidecarIds: map[Id][]Id{},
