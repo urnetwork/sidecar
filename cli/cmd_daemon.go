@@ -24,7 +24,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/docopt/docopt-go"
 
@@ -267,7 +266,8 @@ func (self *urDaemonNetwork) enroll(ctx context.Context, credential *sidecar.Sid
 			return 0, err
 		}
 		target, _ = self.daemon.SidecarForNetwork(networkId)
-	case len(hosted) == 1 && hosted[0].Sidecar.Status().State == sidecar.SidecarStateUnenrolled:
+	case len(hosted) == 1 && (hosted[0].Sidecar.Status().State == sidecar.SidecarStateUnenrolled || hosted[0].Sidecar.Paired()):
+		// a paired sidecar's ur login unpairs it (§5.8's unpair row)
 		target = hosted[0].Sidecar
 	}
 	further := target == nil
@@ -295,6 +295,40 @@ func (self *urDaemonNetwork) enroll(ctx context.Context, credential *sidecar.Sid
 		self.stateLock.Unlock()
 	}
 	return target.Status().Generation, nil
+}
+
+// §5.8's pair (CORE-M8-02): the child's token goes to the hosted Sidecar of its network, else the unenrolled one, which
+// then joins the registry under that network, as an enrollment's does. The reply names no token.
+func (self *urDaemonNetwork) PairChild(ctx context.Context, childJwt string) (*sidecar.DaemonPairReply, error) {
+	self.enrollLock.Lock()
+	defer self.enrollLock.Unlock()
+	if self.daemon == nil {
+		return nil, fmt.Errorf("no sidecar runs: %s", self.noSidecar)
+	}
+	networkId, ok := sidecar.DaemonPairNetwork(childJwt)
+	if !ok {
+		return nil, sidecar.ErrSidecarPairToken
+	}
+	target, hosted := self.daemon.SidecarForNetwork(networkId)
+	if !hosted {
+		var err error
+		target, err = self.furtherSidecar()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := target.Pair(ctx, childJwt); err != nil {
+		return nil, err
+	}
+	if !hosted {
+		if err := self.daemon.AddSidecar(networkId, target); err != nil {
+			return nil, err
+		}
+		self.stateLock.Lock()
+		self.further = nil
+		self.stateLock.Unlock()
+	}
+	return &sidecar.DaemonPairReply{NetworkId: networkId, Generation: target.BoundGeneration()}, nil
 }
 
 // Logs networkId out (CORE-M2-07) and stops hosting it; the other networks run on.
@@ -356,8 +390,17 @@ func registerUrDaemonMethods(daemon *sidecar.Daemon, instance string, target urD
 }
 
 // Control methods another command's file adds over the same target, at init, so each command keeps to its own
-// cmd_<name>.go (C-21): ur approve's, among them.
-var urDaemonMethodExtensions []func(target urDaemonTarget) []*sidecar.DaemonMethod
+// cmd_<name>.go (C-21): ur approve's, among them, and pair's below.
+var urDaemonMethodExtensions = []func(target urDaemonTarget) []*sidecar.DaemonMethod{urPairMethods}
+
+// pair (§5.8, CORE-M8-02) over a target that hosts Sidecars.
+func urPairMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
+	pairs, ok := target.(sidecar.DaemonPairTarget)
+	if !ok {
+		return nil
+	}
+	return []*sidecar.DaemonMethod{sidecar.DaemonPairMethod(pairs)}
+}
 
 // The control methods ur's daemon serves, over target: what registerUrDaemonMethods registers, and what a test reads
 // to hold ur native-host to every Confirm method among them.
@@ -601,7 +644,7 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		runningLock.Lock()
 		delete(runningSidecars, running)
 		runningLock.Unlock()
-		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		closeCtx, cancel := context.WithTimeout(context.Background(), cli.settings.CloseTimeout)
 		defer cancel()
 		running.CloseAndWait(closeCtx)
 	}
@@ -680,7 +723,7 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		Record:  settings.Record,
 	})
 	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		closeCtx, cancel := context.WithTimeout(context.Background(), cli.settings.CloseTimeout)
 		defer cancel()
 		ingest.Close(closeCtx)
 	}()
@@ -696,6 +739,11 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	if err := registerUrDaemonMethods(daemon, cli.instance, network, keyStoreKind, sidecar.HostCredentialStores); err != nil {
 		daemon.Close()
 		return err
+	}
+	// a sandboxed macOS app pairs and calls through its app-group container's socket (§5.9; CORE-M8-02); the paths
+	// name the user's home, so only their count is logged
+	if listening := daemon.ServeAppGroupSockets(); 0 < len(listening) && log.V(1).Enabled() {
+		log.Infof("[ur]listening in %d app-group containers too", len(listening))
 	}
 	// an interrupt or a terminate ends the run, which Accept alone would not see
 	stopOnSignal := context.AfterFunc(ctx, daemon.Close)

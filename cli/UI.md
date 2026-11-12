@@ -54,3 +54,19 @@ ur share rm <token> [--network=<name>]
   resumes where it stopped and spends no second use. `<out>` must not exist. It refuses a sharer whose verified
   identity is not the link's.
 - `rm` ends a share at once: its live streams reset and its link redeems nothing more.
+
+## ur login --device (§5.6, §7.8; RFC 8628)
+
+For a host with no browser, or one whose browser cannot reach a loopback redirect: the same single-use, user-owned
+auth key of at most 5 minutes as `ur login`, got by the device authorization grant.
+
+```text
+ur login --device [--network=<name>] [--replace]
+```
+
+- ur prints a page to open on another device, the code to enter there, and a consent code. Approve only if the page
+  shows that consent code: an agent can drive a browser, so consent stays code-matched.
+- ur polls every 5 s, or the interval the issuer sets, slowing by 5 s each time it is asked to, and stops at the code's
+  expiry, a denial, or 15 min. The token and its DPoP key are dropped before the daemon is reached; the daemon gets the
+  key alone, and nothing ur prints holds the token or the device code.
+- An issuer that offers no device sign-in is refused, naming it.

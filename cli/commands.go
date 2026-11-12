@@ -96,6 +96,9 @@ type urSettings struct {
 	RelayAnswerByteCount int64
 	// How long `ur mcp` waits after a failed reconnect before it dials, and spawns, again: 1 s.
 	RelayReconnectInterval time.Duration
+	// How long ur daemon waits at its end for each Sidecar, and for the ingest, to close: 30 s, a generation's
+	// components joining and the ingest's last flush on a slow disk.
+	CloseTimeout time.Duration
 }
 
 // The defaults, a fresh value each call.
@@ -111,6 +114,7 @@ func defaultUrSettings() *urSettings {
 		RelayRequestByteCount:      sidecar.DefaultSidecarSettings().LocalSettings.RequestByteCount,
 		RelayAnswerByteCount:       64 * 1024 * 1024,
 		RelayReconnectInterval:     1 * time.Second,
+		CloseTimeout:               30 * time.Second,
 	}
 }
 

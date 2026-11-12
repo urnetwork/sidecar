@@ -167,7 +167,8 @@ type SidecarKeychainSettings struct {
 type SidecarLocalSettings struct {
 	// The control socket or pipe. Empty: §5.9's per-platform path for the instance.
 	SocketPath string
-	// A sandboxed desktop app's short-named socket in its app-group container (§5.9). Empty: none.
+	// One more app-group socket for a sandboxed desktop app (§5.9), served beside the ones the daemon finds in the
+	// app-group containers ur claims on macOS (daemon_pair.go): a host's own container path. Empty: none more.
 	AppGroupSocketPath string
 	// How long an auto-spawned daemon with nothing to serve waits before it exits: 10 min, so a run
 	// of `ur` commands reuses one daemon. Zero never exits. A unit-run daemon and one that mail,
