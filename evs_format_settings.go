@@ -18,6 +18,8 @@ import (
 type EvsFormatSettings struct {
 	// A signed statement, as received: 1,024 B (§11.6). A statement past it is refused, never trimmed.
 	StatementMaxByteCount int
+	// The paths one read names: 64 (§11.9's request row), past which a writer or a mirror reads in batches.
+	ReadMaxPathCount int
 	// A one-part push's payload: 1 MiB, past which a push goes in parts (§11.8's parts row).
 	PayloadMaxByteCount int
 	// One part of a push in parts, as sent: 1 MiB.
@@ -53,6 +55,7 @@ type EvsFormatSettings struct {
 func DefaultEvsFormatSettings() *EvsFormatSettings {
 	return &EvsFormatSettings{
 		StatementMaxByteCount:       1024,
+		ReadMaxPathCount:            64,
 		PayloadMaxByteCount:         1024 * 1024,
 		PartMaxByteCount:            1024 * 1024,
 		PartMaxEntryWriteCount:      1024,

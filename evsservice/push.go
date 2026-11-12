@@ -214,9 +214,9 @@ func (self *pushAttempt) stage() PushStage {
 // 5b's time bound for the stage: 10 min for a one-part push, 30 for a part or a seal.
 func (self *pushAttempt) timeBound() time.Duration {
 	if self.stage() == PushStageOnePart {
-		return evsPushTimeBound
+		return self.settings.PushTimeBound
 	}
-	return evsSealTimeBound
+	return self.settings.SealTimeBound
 }
 
 // An attempt's context: it runs past the client's leaving, within the engine's life and PushAttemptTimeout.
@@ -357,6 +357,7 @@ func (self *pushAttempt) bind() bool {
 		Auth:           view,
 		Stage:          self.stage(),
 		Now:            request.Now(),
+		TimeBound:      self.timeBound(),
 	}
 	if refusal := CheckSignature(identity); refusal != nil && refusal.Reason != EvsCheckReasonTimeStale && refusal.Reason != EvsCheckReasonTimeAhead {
 		request.Refuse(refusal.Reply(self.pushId))
@@ -595,7 +596,7 @@ func (self *GenerationRecords) Read(ctx context.Context, cluster sidecar.BlobClu
 		return nil, err
 	}
 	defer object.Body.Close()
-	objectBytes, err := readAllLimited(object, evsGenerationRecordMaxByteCount)
+	objectBytes, err := readAllLimited(object, self.settings.GenerationRecordMaxByteCount)
 	if err != nil {
 		return nil, err
 	}
@@ -622,9 +623,6 @@ func (self *GenerationRecords) Read(ctx context.Context, cluster sidecar.BlobClu
 	}
 	return generationRecord.Rotate, nil
 }
-
-// gen/<g>'s bound: a Signed GenRotate with its GenLink and leaf wrap, well under a metadata object's 4 KiB.
-const evsGenerationRecordMaxByteCount = 16 * 1024
 
 // An object's body, at most maxByteCount, else ErrEvsPushInvalid.
 func readAllLimited(object *sidecar.BlobObject, maxByteCount int64) ([]byte, error) {

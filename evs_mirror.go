@@ -90,7 +90,7 @@ func DefaultEvsMirrorSettings() *EvsMirrorSettings {
 	return &EvsMirrorSettings{
 		HeadLag:            1 * time.Hour,
 		CheckMaxAge:        7 * 24 * time.Hour,
-		ReadObjectCount:    EvsReadMaxPathCount,
+		ReadObjectCount:    DefaultEvsFormatSettings().ReadMaxPathCount,
 		ReadRangeCount:     EvsReadMaxRangeCount,
 		ReadRangeByteCount: EvsReadMaxRangeByteCount,
 		MissingNameCount:   256,

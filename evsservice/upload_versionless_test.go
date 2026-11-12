@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -53,9 +55,9 @@ func TestUploadVersionlessMarksAKind5SegmentOfItsPush(t *testing.T) {
 		t.Fatalf("the marked receipt does not verify: %v", err)
 	}
 	// the mark is inside the MAC: the receipt with the mark taken off does not verify
-	unmarked := *receipt
+	unmarked := proto.Clone(receipt).(*protocol.EvsUploadReceipt)
 	unmarked.Versionless = false
-	if err := CheckUploadReceipt(fixture.keys, &unmarked, fixture.repoId, fixture.writer, fixture.clock.Now()); err == nil {
+	if err := CheckUploadReceipt(fixture.keys, unmarked, fixture.repoId, fixture.writer, fixture.clock.Now()); err == nil {
 		t.Fatal("a versionless receipt verified with its mark taken off")
 	}
 	// an equal re-upload carries an equal header, so it takes the same mark

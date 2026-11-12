@@ -27,7 +27,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -36,13 +35,6 @@ import (
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
-
-// §11.8 step 6: a slot that exists with equal bytes is this push's only while under 23 h old (§11.22's M2 row), as
-// a re-uploaded segment is.
-const evsSlotExistingMaxAge = 23 * time.Hour
-
-// §11.6's slot: at most 8 KiB.
-const evsSlotMaxByteCount = 8 * 1024
 
 // What step 8 learns of a commit.
 type EvsCommitted struct {
@@ -298,7 +290,7 @@ func (self *pushAttempt) cost() (sidecar.WriteCost, error) {
 		Immediate: []WriteOperation{
 			{Kind: WriteOperationOverwrite, ObjectByteCount: headByteCount, Count: 1},
 			{Kind: WriteOperationCreate, ObjectByteCount: recordByteCount, Count: 1},
-			{Kind: WriteOperationCreate, ObjectByteCount: evsSlotMaxByteCount, Count: float64(slotCount)},
+			{Kind: WriteOperationCreate, ObjectByteCount: self.settings.SlotMaxByteCount, Count: float64(slotCount)},
 			{Kind: WriteOperationOverwrite, ObjectByteCount: sidecar.EvsRepoObjectMaxByteCount, Count: float64(raiseCount)},
 		},
 		Deferred: []WriteOperation{
@@ -395,14 +387,14 @@ func (self *pushAttempt) writeSlot(slotId sidecar.Id, body []byte) slotWriteResu
 			if getErr != nil {
 				return slotUnwritten
 			}
-			stored, readErr := readAllLimited(object, evsSlotMaxByteCount)
+			stored, readErr := readAllLimited(object, self.settings.SlotMaxByteCount)
 			object.Body.Close()
 			switch {
 			case readErr != nil:
 				return slotUnwritten
 			case !bytes.Equal(stored, body):
 				return slotOtherBytes
-			case evsSlotExistingMaxAge < self.engine.clock.Now().Sub(object.LastModified) && unknown == nil:
+			case self.settings.SlotExistingMaxAge < self.engine.clock.Now().Sub(object.LastModified) && unknown == nil:
 				return slotStale
 			}
 			return slotWritten

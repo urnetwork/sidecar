@@ -54,7 +54,7 @@ func TestFormat2RefusalCodesAnswerRecordedAtAFormat1Instance(t *testing.T) {
 	fixture.requireCommitted(fixture.push(first), 1)
 
 	token := fixture.token(fixture.check.signerId)
-	untilMs := fixture.clock.Now().Add(evsPushTimeBound).UnixMilli()
+	untilMs := fixture.clock.Now().Add(DefaultEvsSettings().PushTimeBound).UnixMilli()
 	bodies := map[protocol.EvsRefusalCode]*protocol.EvsPushRequest{}
 	refusals := []*sidecar.EvsRefusal{}
 	for i, c := range format2RefusalCodes {

@@ -38,12 +38,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// §11.8's 5b time bounds: a one-part push's time_ms within 10 min of evs's clock, a part's and a seal's within 30.
-const (
-	evsPushTimeBound = 10 * time.Minute
-	evsSealTimeBound = 30 * time.Minute
-)
-
 // Which request step 5 checks.
 type PushStage int
 
@@ -106,8 +100,10 @@ type PushView struct {
 	// window_base_chain, or C_0 at 0); nil when step 4 could not, which refuses 503.
 	BaseChain *[32]byte
 
-	// evs's clock at the check.
-	Now time.Time
+	// evs's clock at the check, and 5b's bound for the stage, EvsSettings.PushTimeBound or SealTimeBound: zero, a view
+	// built without one, takes the protocol's.
+	Now       time.Time
+	TimeBound time.Duration
 	// The newest verified authorization state evs holds for the repo's network; nil while it is not loaded.
 	Auth sidecar.GkmAuthView
 	// gen/<g>'s GenRotate for the push's group and generation, from evs's caches (§10); nil when evs holds none.
@@ -227,15 +223,19 @@ func CheckSignature(view *PushView) *EvsCheckRefusal {
 	if err := view.Statement.Verify(identityKey); err != nil {
 		return newEvsCheckRefusal(EvsCheckReasonSignature, "a signature that does not verify")
 	}
-	return checkTime(push.GetTimeMs(), view.Stage, view.Now)
+	bound := view.TimeBound
+	if bound <= 0 {
+		settings := DefaultEvsSettings()
+		bound = settings.PushTimeBound
+		if view.Stage != PushStageOnePart {
+			bound = settings.SealTimeBound
+		}
+	}
+	return checkTime(push.GetTimeMs(), bound, view.Now)
 }
 
-// 5b's time: within the stage's bound behind or ahead of now.
-func checkTime(timeMs int64, stage PushStage, now time.Time) *EvsCheckRefusal {
-	bound := evsPushTimeBound
-	if stage != PushStageOnePart {
-		bound = evsSealTimeBound
-	}
+// 5b's time: within bound behind or ahead of now.
+func checkTime(timeMs int64, bound time.Duration, now time.Time) *EvsCheckRefusal {
 	statementTime := time.UnixMilli(timeMs)
 	if statementTime.Before(now.Add(-bound)) {
 		return newEvsCheckRefusal(EvsCheckReasonTimeStale, fmt.Sprintf("time_ms %s behind", now.Sub(statementTime)))
