@@ -25,8 +25,13 @@
 #             case of a T2 row.
 #   open      what outside the build the case waits on: production, hardware or people. A gate reports
 #             it open, never pass and never missing.
-#   store_clock  a T3 clause whose time a wrapper translates (plan-TEST-clock-seam #2): gate reports
-#             say so. TEST-M2-07 sets it as it lands.
+#   store_clock  a T3 case whose stored state ages across a clock move, so its run reads LastModified or
+#             a Redis ttl that T3's store clock translates onto the schedule's clock (server/sidecart3/clock.go,
+#             plan-TEST-clock-seam #2): server's RunRow runs a flagged case with the store clock and only a
+#             flagged one, refuses FS-114 with it, and gate reports say "store clock translated". The cases
+#             flagged are TEST-M2-07's reading of each row's clauses: the §11.13 age rules (evacuation, packing,
+#             orphan GC, purges, the drop job's 25 h, a slot's 23 h), retention horizons and ttl'd soft state
+#             past an Advance. A row whose T3 test finds otherwise changes its flag here.
 # unknown     every write the row issues also runs with ApplyThenDrop (§22.8's unknown rule).
 # fake_issuer the row's peers run on sidecartest's fake contract issuer or ControlId sink, so it names
 #             T3 too, where a divergence from server's exchange fails (Q-TEST-1).
@@ -72,9 +77,9 @@ rows:
   - {id: FS-3, sections: [11, 8], checks: [FI-2, FI-3], tiers: [T2, T3], unknown: true, cases: [{gates: [M2-out]}]}
   - {id: FS-4, sections: [11], checks: [FI-1, FI-3, FI-6], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
   - {id: FS-5, sections: [11], checks: [FI-9], tiers: [T3], cases: [{gates: [M2-out]}]}
-  - {id: FS-6, sections: [11], checks: [FI-5], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-6, sections: [11], checks: [FI-5], tiers: [T2, T3], cases: [{gates: [M2-out], store_clock: true}]}
   - {id: FS-7, sections: [11], checks: [FI-6], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
-  - {id: FS-8, sections: [11], checks: [FI-6, FI-13c], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-8, sections: [11], checks: [FI-6, FI-13c], tiers: [T2, T3], cases: [{gates: [M2-out], store_clock: true}]}
   - {id: FS-9, sections: [11], checks: [FI-1], tiers: [T2], cases: [{gates: [M2-out]}]}
   - {id: FS-10, sections: [11], checks: [FI-3], tiers: [T2], forged: true, cases: [{gates: [M2-out]}]}
   - {id: FS-11, sections: [11], checks: [FI-1], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
@@ -200,15 +205,15 @@ rows:
       - {name: hosts-drill, gates: [M3-out], open: production}
   - {id: FS-51, sections: [20], checks: [D-QUOTA-6], tiers: [T2], cases: [{gates: [M6-out]}]}
   - {id: FS-52, sections: [19], checks: [Q-OPS-5], tiers: [T3], cases: [{gates: [M5-out]}]}
-  - {id: FS-53, sections: [19], checks: [FI-1], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-53, sections: [19], checks: [FI-1], tiers: [T2, T3], cases: [{gates: [M2-out], store_clock: true}]}
   - {id: FS-54, sections: [19], checks: [D-OPS-6], tiers: [T3], cases: [{gates: [M1-out]}]}
   - {id: FS-55, sections: [19], checks: [R-OPS-5], tiers: [T3], cases: [{gates: [every-out]}]}
   - {id: FS-56, sections: [17], checks: [FI-11], tiers: [T2, T3], cases: [{gates: [M4-out]}]}
   - {id: FS-57, sections: [11], checks: [FI-1, FI-2, FI-6], tiers: [T2, T3], unknown: true, cases: [{gates: [M2-out]}]}
   - {id: FS-58, sections: [11], checks: [FI-1, FI-6, FI-15], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
-  - {id: FS-59, sections: [11], checks: [FI-6], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
-  - {id: FS-60, sections: [11], checks: [FI-1, FI-13c], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
-  - {id: FS-61, sections: [11, 19], checks: [FI-14], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-59, sections: [11], checks: [FI-6], tiers: [T2, T3], cases: [{gates: [M2-out], store_clock: true}]}
+  - {id: FS-60, sections: [11], checks: [FI-1, FI-13c], tiers: [T2, T3], cases: [{gates: [M2-out], store_clock: true}]}
+  - {id: FS-61, sections: [11, 19], checks: [FI-14], tiers: [T2, T3], cases: [{gates: [M2-out], store_clock: true}]}
   - {id: FS-62, sections: [11, 10], checks: [FI-1, FI-2, FI-3, FI-10], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
   - id: FS-63
     sections: [11, 19]
@@ -231,7 +236,7 @@ rows:
   - {id: FS-68, sections: [11, 7], checks: [FI-1, FI-17], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
   - {id: FS-69, sections: [11, 21], checks: [FI-5, FI-16], tiers: [T2, T3], cases: [{gates: [M5-out, M10-out], later_of: true}]}
   - {id: FS-70, sections: [11, 19], checks: [FI-5, FI-12, FI-16], tiers: [T2], cases: [{gates: [M10-out]}]}
-  - {id: FS-71, sections: [11, 20], checks: [FI-13c, FI-16], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-71, sections: [11, 20], checks: [FI-13c, FI-16], tiers: [T2, T3], cases: [{gates: [M10-out], store_clock: true}]}
   - id: FS-72
     sections: [11, 7]
     checks: [FI-1, FI-2, FI-17]
@@ -241,7 +246,7 @@ rows:
       - {name: format-1, gates: [M2-out]}
       - {name: migration, gates: [M10-out]}
       - {name: rollback, gates: [M10-out]}
-  - {id: FS-73, sections: [11], checks: [FI-9, FI-16], tiers: [T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-73, sections: [11], checks: [FI-9, FI-16], tiers: [T3], cases: [{gates: [M10-out], store_clock: true}]}
   - {id: FS-74, sections: [11], checks: [FI-18, FI-20], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
   - {id: FS-75, sections: [11], checks: [FI-18, FI-19, FI-20], tiers: [T2, T3], unknown: true, cases: [{gates: [M10-out]}]}
   - id: FS-76
@@ -276,7 +281,7 @@ rows:
     cases:
       - {gates: [M10-out]}
       - {name: team-record, gates: [M6-out, M10-out], later_of: true}
-  - {id: FS-81, sections: [11, 19], checks: [FI-14], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-81, sections: [11, 19], checks: [FI-14], tiers: [T2, T3], cases: [{gates: [M10-out], store_clock: true}]}
   - id: FS-82
     sections: [7, 15]
     checks: [I-4]
@@ -313,8 +318,8 @@ rows:
     checks: [FI-14]
     tiers: [T2, T3]
     cases:
-      - {name: announce-entries, gates: [M6-out]}
-      - {name: cards, gates: [M6-out, M10-out], later_of: true}
+      - {name: announce-entries, gates: [M6-out], store_clock: true}
+      - {name: cards, gates: [M6-out, M10-out], later_of: true, store_clock: true}
   - id: FS-87
     sections: [7, 10, 16]
     checks: [FI-19, FI-25]
@@ -329,9 +334,9 @@ rows:
     cases:
       - {gates: [M6-out]}
       - {name: searches, gates: [M6-out, M10-out], later_of: true}
-  - {id: FS-89, sections: [11], checks: [FI-1, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-89, sections: [11], checks: [FI-1, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out], store_clock: true}]}
   - {id: FS-90, sections: [11], checks: [FI-2, FI-13a, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
-  - {id: FS-91, sections: [11], checks: [FI-2, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
+  - {id: FS-91, sections: [11], checks: [FI-2, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out], store_clock: true}]}
   - {id: FS-92, sections: [11, 21], checks: [FI-5, FI-13c, FI-27], tiers: [T2, T3], cases: [{gates: [M5-out, M10-out], later_of: true}]}
   - {id: FS-93, sections: [11], checks: [FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
   - {id: FS-94, sections: [11], checks: [FI-1, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
@@ -341,7 +346,7 @@ rows:
     tiers: [T2, T3]
     cases:
       - {gates: [M10-out]}
-      - {name: format-1, gates: [M2-out]}
+      - {name: format-1, gates: [M2-out], store_clock: true}
   - {id: FS-96, sections: [11, 19], checks: [FI-5, FI-13, FI-16, FI-19, FI-27], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
   - id: FS-97
     sections: [7, 18]
@@ -387,7 +392,7 @@ rows:
     cases:
       - {gates: [M2-out]}
       - {name: forged, gates: [M2-out], tiers: [T2], forged: true}
-  - {id: FS-103, sections: [10], checks: [FI-28], tiers: [T2, T3], cases: [{gates: [M2-out]}]}
+  - {id: FS-103, sections: [10], checks: [FI-28], tiers: [T2, T3], cases: [{gates: [M2-out], store_clock: true}]}
   - {id: FS-104, sections: [10], checks: [FI-28], tiers: [T2], forged: true, cases: [{gates: [M2-out]}]}
   - {id: FS-105, sections: [10, 2], checks: [FI-29], tiers: [T2], cases: [{gates: [M2-out]}]}
   - id: FS-106
@@ -395,8 +400,8 @@ rows:
     checks: [I-4, FI-2]
     tiers: [T2, T3]
     cases:
-      - {gates: [M2-out]}
-      - {name: page-worker, gates: [M4-out]}
+      - {gates: [M2-out], store_clock: true}
+      - {name: page-worker, gates: [M4-out], store_clock: true}
   - {id: FS-107, sections: [11], checks: [FI-18, FI-22], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
   - {id: FS-108, sections: [11], checks: [FI-18, FI-20, FI-22], tiers: [T2, T3], cases: [{gates: [M10-out]}]}
   - id: FS-109
@@ -418,9 +423,9 @@ rows:
     checks: [FI-2, FI-18, FI-19]
     tiers: [T2, T3]
     cases:
-      - {gates: [M10-out]}
-      - {name: mailbox, gates: [M7-out, M10-out], later_of: true}
-      - {name: team-record, gates: [M6-out, M10-out], later_of: true}
+      - {gates: [M10-out], store_clock: true}
+      - {name: mailbox, gates: [M7-out, M10-out], later_of: true, store_clock: true}
+      - {name: team-record, gates: [M6-out, M10-out], later_of: true, store_clock: true}
   - id: FS-112
     sections: [11, 15, 20]
     checks: [FI-13c, FI-19]

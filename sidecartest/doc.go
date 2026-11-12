@@ -16,7 +16,12 @@
 //     privacy_handler.go CC1 and the request log, privacy_frame.go CC2's rule and frame sizes,
 //     privacy_sources.go CC4 and the classes. leak.go and leak_enabled.go are its self-test's leaks,
 //     linked only under sidecar_leaktest. privacy_asserts.go is the assert block's registry, each clause
-//     with its gates, owners and registered tests, which a Gn-out sweep reads for what is missing.
+//     with its gates, owners and registered tests, which a Gn-out sweep reads for what is missing, and
+//     privacy_stored.go its two stored-state clauses: every stored commit a PrivateMessage or an external
+//     commit, and StoredWriters, which holds evs's and gkm's writes to their families as they write.
+//   - scenario.go, §22.7's scenarios: RunScenario holds a flow to the route allowlist, its canaries, a
+//     capture over its stores, the scan, the schema guard and the stored-state asserts, and the registry
+//     lists S1 to S13 by clause, tier and gate; scenarios/ holds the builders both tiers run (S3a, S4a).
 //   - metadata_list.go, §2.8's list and its strict reader, and schema_guard*.go, §22.7's guard over it,
 //     whose map is testdata/metadata/fields.yml.
 //   - fake_blobs*.go, fake_redis*.go and the other fake_ files, with abuse_gate_fake.go, a fake of every
