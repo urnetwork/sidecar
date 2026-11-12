@@ -10,6 +10,9 @@
 //	caps   the lease script counts the repo's distinct holders and refuses a new one at evs_subscribers_per_repo, or
 //	       in the team directory at the network's config_admissions (§20.4, plan-EVS1-subscription-caps#1), with
 //	       §20.7's QuotaRefusal naming the key; a limit this build does not know reads 0 and refuses
+//	refuse each of the three, once its repo is authorized, takes §11.12's refused row as the guard gives a placed
+//	       route (QD-665): the repo's place, then repo/ from the 5 s repo cache, a deleted repo answering 409
+//	       REPO_DELETED and a shredding or shredded one 409 SHREDDING, a repo never placed 404
 //	sweep  SweepLeases drops a repo's expired leases, for taskworker's daily sweep
 //
 // The fields of {evsl_<repo_id>}, holder|ref|epoch|prefix -> expiry ms in decimal: holder is the token's client and
@@ -39,19 +42,9 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// §11.10's lease row's bounds.
-const (
-	// prefixes a lease request names
-	evsLeaseMaxPrefixCount = 16
-	// a lease's life after its last write
-	evsLeaseLife = 7 * 24 * time.Hour
-	// the hash's own ttl, past every lease's life, so a repo nobody renews leaves nothing
-	evsLeaseKeyTtl = 8 * 24 * time.Hour
-)
-
 // §20.4's sidecar_abuse keys the caps read (plan-EVS1-subscription-caps#1).
 const (
-	evsSubscribersPerRepoLimitKey = "evs_subscribers_per_repo"
+	evsSubscribersPerRepoLimitKey  = "evs_subscribers_per_repo"
 	evsDirectoryAdmissionsLimitKey = "config_admissions"
 )
 
@@ -231,24 +224,35 @@ func parseEvsLease(field string, value []byte) (*EvsLease, bool) {
 	return lease, true
 }
 
-// The subscription routes. Each names its repo in its body or query, so each authorizes itself.
+// The subscription routes. Each names its repo in its body or query, so each authorizes itself and then takes the
+// refused row (refuseDeletedRepo).
 func (self *EvsEngine) subscriptionRoutes() []*EvsRoute {
 	pattern := evsRoutePrefix + "subscriptions"
 	return []*EvsRoute{
-		{Method: http.MethodPost, Pattern: pattern, Name: evsSubscriptionsPostTemplate, Serve: self.serveSubscribe},
-		{Method: http.MethodGet, Pattern: pattern, Name: evsSubscriptionsGetTemplate, Serve: self.serveSubscriptions},
-		{Method: http.MethodDelete, Pattern: pattern, Name: evsSubscriptionsDeleteTemplate, Serve: self.serveUnsubscribe},
+		{Method: http.MethodPost, Pattern: pattern, Name: evsSubscriptionsPostTemplate, RefuseDeleted: true, Serve: self.serveSubscribe},
+		{Method: http.MethodGet, Pattern: pattern, Name: evsSubscriptionsGetTemplate, RefuseDeleted: true, Serve: self.serveSubscriptions},
+		{Method: http.MethodDelete, Pattern: pattern, Name: evsSubscriptionsDeleteTemplate, RefuseDeleted: true, Serve: self.serveUnsubscribe},
 	}
 }
 
-// A lease request held to §11.10's shape, its repo authorized for r: the leases it names, or false once answered.
+// §11.12's refused row for a route on no one repo whose RefuseDeleted is set, once AuthorizeRepo passed: the guard's
+// step 8 and its refused check, which it cannot run before the body or query names the repo. false once answered.
+func (self *EvsEngine) refuseDeletedRepo(request *EvsRequest) bool {
+	if !request.route.RefuseDeleted {
+		return true
+	}
+	return request.resolvePlace() && request.refuseDeleted()
+}
+
+// A lease request held to §11.10's shape, its repo authorized for r and not refused by §11.12's refused row: the
+// leases it names, or false once answered.
 func (self *EvsEngine) leasesOf(request *EvsRequest, body *protocol.EvsSubscriptionRequest, expiresAt time.Time) (sidecar.Id, []*EvsLease, bool) {
 	repoId, err := sidecar.IdFromBytes(body.GetRepoId())
-	if err != nil || body.GetPathEpoch() == 0 || evsLeaseMaxPrefixCount < len(body.GetPrefixes()) {
+	if err != nil || body.GetPathEpoch() == 0 || self.settings.LeaseMaxPrefixCount < len(body.GetPrefixes()) {
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		return sidecar.Id{}, nil, false
 	}
-	if !request.AuthorizeRepo(repoId, sidecar.AclEvsRead) {
+	if !request.AuthorizeRepo(repoId, sidecar.AclEvsRead) || !self.refuseDeletedRepo(request) {
 		return sidecar.Id{}, nil, false
 	}
 	template := &EvsLease{
@@ -284,10 +288,10 @@ func (self *EvsEngine) leasesOf(request *EvsRequest, body *protocol.EvsSubscript
 // POST: see the file header.
 func (self *EvsEngine) serveSubscribe(request *EvsRequest) {
 	body := &protocol.EvsSubscriptionRequest{}
-	if !request.ReadMessage(body, evsSubscriptionRequestMaxByteCount) {
+	if !request.ReadMessage(body, self.settings.SubscriptionRequestMaxByteCount) {
 		return
 	}
-	repoId, leases, ok := self.leasesOf(request, body, request.Now().Add(evsLeaseLife))
+	repoId, leases, ok := self.leasesOf(request, body, request.Now().Add(self.settings.LeaseLife))
 	if !ok {
 		return
 	}
@@ -307,7 +311,7 @@ func (self *EvsEngine) serveSubscribe(request *EvsRequest) {
 		strconv.FormatInt(request.Now().UnixMilli(), 10),
 		evsLeaseHolder(sidecar.Id(request.Principal.ClientId), request.SidecarId),
 		strconv.FormatInt(limit, 10),
-		strconv.FormatInt(evsLeaseKeyTtl.Milliseconds(), 10),
+		strconv.FormatInt(self.settings.LeaseKeyTtl.Milliseconds(), 10),
 	}
 	for _, lease := range leases {
 		args = append(args, lease.field(), strconv.FormatInt(lease.ExpiresAt.UnixMilli(), 10))
@@ -329,7 +333,7 @@ func (self *EvsEngine) wholeRefLease(request *EvsRequest, body *protocol.EvsSubs
 		ClientId:  sidecar.Id(request.Principal.ClientId),
 		SidecarId: request.SidecarId,
 		PathEpoch: body.GetPathEpoch(),
-		ExpiresAt: request.Now().Add(evsLeaseLife),
+		ExpiresAt: request.Now().Add(self.settings.LeaseLife),
 	}
 	if len(body.GetRefId()) == 0 {
 		lease.EveryRef = true
@@ -371,7 +375,7 @@ func (self *EvsEngine) serveSubscriptions(request *EvsRequest) {
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		return
 	}
-	if !request.AuthorizeRepo(repoId, sidecar.AclEvsRead) {
+	if !request.AuthorizeRepo(repoId, sidecar.AclEvsRead) || !self.refuseDeletedRepo(request) {
 		return
 	}
 	if self.host.Redis == nil {
@@ -407,7 +411,7 @@ func (self *EvsEngine) serveSubscriptions(request *EvsRequest) {
 // DELETE: see the file header.
 func (self *EvsEngine) serveUnsubscribe(request *EvsRequest) {
 	body := &protocol.EvsSubscriptionRequest{}
-	if !request.ReadMessage(body, evsSubscriptionRequestMaxByteCount) {
+	if !request.ReadMessage(body, self.settings.SubscriptionRequestMaxByteCount) {
 		return
 	}
 	repoId, leases, ok := self.leasesOf(request, body, time.Time{})
@@ -439,9 +443,6 @@ func (self *EvsEngine) serveUnsubscribe(request *EvsRequest) {
 	request.Reply(nil)
 }
 
-// A lease request's bound: 16 prefixes of at most 32 tokens and the ids.
-const evsSubscriptionRequestMaxByteCount = 16 * 1024
-
 // Every lease the repo's hash holds, expired ones included, skipping a field that does not parse.
 func ReadLeases(ctx context.Context, redis sidecar.Redis, repoId sidecar.Id) ([]*EvsLease, error) {
 	fieldValues, err := redis.HashGetAll(ctx, LeaseKey(repoId))
@@ -472,7 +473,9 @@ func SweepLeases(ctx context.Context, redis sidecar.Redis, repoId sidecar.Id, no
 }
 
 // Every repo's expired leases dropped, for taskworker's daily sweep: each metadata cluster's repo/ objects listed,
-// each repo's hash swept. How many leases went. A host with no Redis has none to sweep.
+// LeaseSweepListPageCount keys a LIST, each repo's hash swept. How many leases went. A host with no Redis has none to
+// sweep. taskworker's job passes no settings, so the page is the defaults' until the review phase's settings sweep
+// threads its own through (QD-706).
 func SweepAllLeases(ctx context.Context, host *sidecar.ServiceHost, now time.Time) (int64, error) {
 	if host == nil || host.Blobs == nil {
 		return 0, errors.New("no host to sweep on")
@@ -480,6 +483,7 @@ func SweepAllLeases(ctx context.Context, host *sidecar.ServiceHost, now time.Tim
 	if host.Redis == nil {
 		return 0, nil
 	}
+	pageCount := DefaultEvsSettings().LeaseSweepListPageCount
 	removed := int64(0)
 	for _, clusterId := range host.Blobs.MetadataClusterIds() {
 		cluster, err := host.Blobs.Cluster(clusterId)
@@ -488,7 +492,7 @@ func SweepAllLeases(ctx context.Context, host *sidecar.ServiceHost, now time.Tim
 		}
 		startAfter := ""
 		for {
-			objects, more, err := cluster.List(ctx, repoKeyPrefix, startAfter, evsLeaseSweepListLimit)
+			objects, more, err := cluster.List(ctx, repoKeyPrefix, startAfter, pageCount)
 			if err != nil {
 				return removed, err
 			}
@@ -511,6 +515,3 @@ func SweepAllLeases(ctx context.Context, host *sidecar.ServiceHost, now time.Tim
 	}
 	return removed, nil
 }
-
-// The repo/ keys one LIST of the sweep reads.
-const evsLeaseSweepListLimit = 1000

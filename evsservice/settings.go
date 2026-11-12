@@ -204,6 +204,18 @@ type EvsSettings struct {
 	// GET .../refs: the keys one LIST of head/<repo>/ returns, 1,000. Positive.
 	RefsListPageCount int
 
+	// §11.10's lease row (EVS1-M2-15): the token prefixes one lease request names, 16, the protocol's value, which
+	// the client's Subscribe holds its paths to as well (evs_subscribe.go). Positive.
+	LeaseMaxPrefixCount int
+	// A lease's life after its last write, which a renewal repeats, 7 d; and {evsl_<repo_id>}'s own ttl, past every
+	// lease's life so that a repo nobody renews leaves nothing, 8 d. Both positive, the hash's the longer.
+	LeaseLife   time.Duration
+	LeaseKeyTtl time.Duration
+	// A lease request's body: 16 prefixes of at most 32 tokens, and the ids, 16 KiB. Positive.
+	SubscriptionRequestMaxByteCount int64
+	// The repo/ keys one LIST of the daily lease sweep returns, 1,000. Positive.
+	LeaseSweepListPageCount int
+
 	// §11.12's lifecycle: how many times a transition reads repo/ from the cluster again after another write came
 	// first or an answer was lost, before a route answers 429 BUSY or a job fails to be retried, 8. Positive.
 	RepoTransitionRetryCount int
@@ -309,6 +321,12 @@ func DefaultEvsSettings() *EvsSettings {
 		LogReplyStatementCount:    evsLogReplyMaxStatementCount,
 		RefsListPageCount:         1000,
 
+		LeaseMaxPrefixCount:             16,
+		LeaseLife:                       7 * 24 * time.Hour,
+		LeaseKeyTtl:                     8 * 24 * time.Hour,
+		SubscriptionRequestMaxByteCount: 16 * 1024,
+		LeaseSweepListPageCount:         1000,
+
 		RepoTransitionRetryCount: 8,
 		ShredListPageCount:       1000,
 		ShredHoldRecheckInterval: 24 * time.Hour,
@@ -401,6 +419,12 @@ func (self *EvsSettings) Validate() error {
 	}
 	if self.LogReplyStatementCount <= 0 || evsLogReplyMaxStatementCount < self.LogReplyStatementCount {
 		return fmt.Errorf("%w: a log page of %d statements, outside (0, %d]", ErrEvsSettings, self.LogReplyStatementCount, evsLogReplyMaxStatementCount)
+	}
+	if self.LeaseMaxPrefixCount <= 0 || self.LeaseLife <= 0 || self.SubscriptionRequestMaxByteCount <= 0 || self.LeaseSweepListPageCount <= 0 {
+		return fmt.Errorf("%w: a lease request's prefixes and body, a lease's life and the sweep's list page must be positive", ErrEvsSettings)
+	}
+	if self.LeaseKeyTtl <= self.LeaseLife {
+		return fmt.Errorf("%w: leases kept %s in a hash that lives %s", ErrEvsSettings, self.LeaseLife, self.LeaseKeyTtl)
 	}
 	if self.RepoTransitionRetryCount <= 0 || self.ShredListPageCount <= 0 || self.ShredHoldRecheckInterval <= 0 {
 		return fmt.Errorf("%w: a transition's retry count, a shred's list page and its hold recheck must be positive", ErrEvsSettings)

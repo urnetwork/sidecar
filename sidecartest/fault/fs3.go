@@ -12,9 +12,11 @@
 // The clause beside it, Fs3StepSevenPastFiveSeconds: A held after its step 6, before step 7's window, while the
 // reader leaves and 25 s pass, inside the lb's read timeout, with no other commit: its step 7 is past 5 s of its step
 // 4, so it reruns the checks, which must refuse it GATE_CLOSED against the newest state evs holds (§11.8's timing row),
-// and writerA's next push id commits under generation 2. On the landed engine it commits under generation 1 instead,
-// since an attempt binds its gate view once, at arrival (pushAttempt.bind), and its reruns judge 5d against that
-// view: question evs1-m2-40-gate-view-rerun, and no test runs it until that is answered.
+// and writerA's next push id commits under generation 2. Its twin, Fs3StepSevenGateOpen, is the same with nobody
+// leaving: A's rerun past the window commits under generation 1. An attempt reads its gate view again at each run of
+// step 4 (QD-660, answering evs1-m2-40-gate-view-rerun): with the view bound once at arrival, as the engine first had
+// it, the rerun judged 5d against a state from before the reader left and committed under generation 1.
+// TestFs3StepSevenPastFiveSeconds runs the clause under FS-3's rules.
 //
 // FS-3 also names A's PUT timing out after the gate closes, its fence and the 200 when its first PUT applied before
 // the fence, nothing committing under the old generation past §10.6's window (FI-3's clause, whose oracle, TEST-M2-05,
@@ -108,6 +110,18 @@ func fs3FirstPush(world *EvsWorld, drop bool) error {
 
 // See the file header.
 func Fs3StepSevenPastFiveSeconds(net *Net) *Schedule {
+	schedule := fs3StepSevenSchedule(net, true)
+	schedule.Refuses = "writerA's push of x.txt under generation 1, 412 GATE_CLOSED at its rerun past step 7's window after a reader left"
+	schedule.Twin = Fs3StepSevenGateOpen
+	return schedule
+}
+
+// See the file header.
+func Fs3StepSevenGateOpen(net *Net) *Schedule {
+	return fs3StepSevenSchedule(net, false)
+}
+
+func fs3StepSevenSchedule(net *Net, drop bool) *Schedule {
 	world := NewEvsWorld(net, fs3WorldSettings())
 	steps := []*Step{
 		{Actor: "writerA", Action: world.Setup},
@@ -115,15 +129,19 @@ func Fs3StepSevenPastFiveSeconds(net *Net) *Schedule {
 		{Actor: "writerA", Action: world.WriteAny("writerA", "x.txt", EvsWorldContent("fs3 x 2", 100)), Background: true},
 		// x.txt's creation passes
 		{Actor: "evs1", Await: evsservice.BarrierPushStep6After, AwaitSkip: 1},
-		{Actor: "admin", Action: world.DropReader("leaver")},
+	}
+	if drop {
+		steps = append(steps, &Step{Actor: "admin", Action: world.DropReader("leaver")})
+	}
+	steps = append(steps, []*Step{
 		{Advance: 25 * time.Second},
 		{Release: []string{evsservice.BarrierPushStep6After}},
 		{Actor: "writerA", Join: true},
 		{Actor: "check", Action: world.ExpectCommitted("writerA", "x.txt")},
 		{Actor: "check", Action: world.Expect("A's first push id", func(ctx context.Context) error {
-			return fs3FirstPush(world, true)
+			return fs3FirstPush(world, drop)
 		})},
 		{Actor: "reader", Action: world.Verify("reader", "x.txt")},
-	}
+	}...)
 	return &Schedule{Id: "FS-3 step 7 past 5 s", Steps: steps, Check: world.Checks(), Tiers: []Tier{TierT2, TierT3}}
 }

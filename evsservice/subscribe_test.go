@@ -198,7 +198,7 @@ func TestSubscriptionsSkipAHolderTheProjectionDrops(t *testing.T) {
 	}
 	// the projection's newest state reads the repo with no readers
 	view := fixture.check.authLog.Append(&sidecartest.FakeGkmAuthFixture{
-		Rows: sidecartest.FakeGkmAuthRows(&protocol.AclRepo{RepoId: fixture.check.repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL}),
+		Rows:         sidecartest.FakeGkmAuthRows(&protocol.AclRepo{RepoId: fixture.check.repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL}),
 		IdentityKeys: map[sidecar.Id][]byte{fixture.check.signerId: fixture.check.signingKey.Public().(ed25519.PublicKey)},
 	})
 	notifier := NewEvsHintNotifier(fixture.ctx, fixture.clock, fixture.host.Redis, fixture.host.Push, &fixedGateViews{networkId: fixture.check.networkId, view: view}, sidecar.NewNoopLogger())
@@ -249,7 +249,7 @@ func TestSubscriptionsCapHoldersPerRepo(t *testing.T) {
 	}
 	// more than 16 prefixes is refused
 	tooMany := fixture.leaseRequest()
-	for i := 0; i <= evsLeaseMaxPrefixCount; i += 1 {
+	for i := 0; i <= fixture.settings.LeaseMaxPrefixCount; i += 1 {
 		tooMany.Prefixes = append(tooMany.Prefixes, checkTestPath(fmt.Sprintf("p%d", i)).Proto())
 	}
 	requireRefusal(t, fixture.subscribe(http.MethodPost, fixture.check.signerId, tooMany), http.StatusBadRequest, protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
@@ -273,7 +273,7 @@ func TestSubscriptionsDeleteAndSweep(t *testing.T) {
 		t.Fatalf("%d leases after deleting the ref's", got)
 	}
 	fixture.subscribe(http.MethodPost, fixture.check.signerId, fixture.leaseRequest(checkTestPath("c")))
-	fixture.clock.Advance(evsLeaseLife + time.Second)
+	fixture.clock.Advance(fixture.settings.LeaseLife + time.Second)
 	if got := len(fixture.subscriptions(fixture.check.signerId)); got != 0 {
 		t.Fatalf("an expired lease listed: %d", got)
 	}
@@ -281,6 +281,60 @@ func TestSubscriptionsDeleteAndSweep(t *testing.T) {
 	if err != nil || removed != 1 {
 		t.Fatalf("swept %d %v", removed, err)
 	}
+}
+
+// §11.12's refused row on the subscription routes (QD-665): with repo/ deleted, POST, GET and DELETE answer 409
+// REPO_DELETED, and with it shredding or shredded 409 SHREDDING, changing no lease; keying and active are served;
+// a repo never placed answers 404.
+func TestSubscriptionsRefuseADeletedOrShreddingRepo(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	fixture.allowSubscribers(1000)
+	if recorder := fixture.subscribe(http.MethodPost, fixture.check.signerId, fixture.leaseRequest(checkTestPath("a"))); recorder.Code != http.StatusOK {
+		t.Fatalf("lease answered %d", recorder.Code)
+	}
+	list := func(repoId sidecar.Id, token string) *httptest.ResponseRecorder {
+		request := httptest.NewRequestWithContext(fixture.ctx, http.MethodGet, "/evs/v1/subscriptions?repo_id="+sidecar.EvsKeyId(repoId), nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		recorder := httptest.NewRecorder()
+		fixture.engine.Handler().ServeHTTP(recorder, request)
+		return recorder
+	}
+	states := []struct {
+		state protocol.EvsRepoState
+		code  protocol.EvsRefusalCode
+	}{
+		{state: protocol.EvsRepoState_EVS_REPO_DELETED, code: protocol.EvsRefusalCode_EVS_REFUSAL_REPO_DELETED},
+		{state: protocol.EvsRepoState_EVS_REPO_SHREDDING, code: protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING},
+		{state: protocol.EvsRepoState_EVS_REPO_SHREDDED, code: protocol.EvsRefusalCode_EVS_REFUSAL_SHREDDING},
+	}
+	for _, c := range states {
+		fixture.putRepo(protocol.RepoKind_REPO_KIND_GENERAL, c.state)
+		requireRefusal(t, fixture.subscribe(http.MethodPost, fixture.check.signerId, fixture.leaseRequest(checkTestPath("b"))), http.StatusConflict, c.code)
+		requireRefusal(t, list(fixture.check.repoId, fixture.token(fixture.check.signerId)), http.StatusConflict, c.code)
+		requireRefusal(t, fixture.subscribe(http.MethodDelete, fixture.check.signerId, fixture.leaseRequest(checkTestPath("a"))), http.StatusConflict, c.code)
+	}
+	if leases, err := ReadLeases(fixture.ctx, fixture.host.Redis, fixture.check.repoId); err != nil || len(leases) != 1 {
+		t.Fatalf("the refusals left leases %v %v", leases, err)
+	}
+	fixture.putRepo(protocol.RepoKind_REPO_KIND_GENERAL, protocol.EvsRepoState_EVS_REPO_KEYING)
+	if recorder := fixture.subscribe(http.MethodPost, fixture.check.signerId, fixture.leaseRequest(checkTestPath("b"))); recorder.Code != http.StatusOK {
+		t.Fatalf("a keying repo's lease answered %d", recorder.Code)
+	}
+	fixture.putRepo(protocol.RepoKind_REPO_KIND_GENERAL, protocol.EvsRepoState_EVS_REPO_ACTIVE)
+	if got := len(fixture.subscriptions(fixture.check.signerId)); got != 2 {
+		t.Fatalf("%d leases listed once active", got)
+	}
+
+	// a repo the token may read that was never placed
+	unplaced := testId("subscribe never placed")
+	fixture.auth.grant(fixture.check.signerId, unplaced, sidecar.AclEvsRead)
+	connectSidecarId := connect.Id(fixture.check.signerId)
+	token := fixture.host.Authenticator.Issue(&sidecar.Principal{
+		NetworkId: connect.Id(fixture.check.networkId), ClientId: connect.Id(fixture.check.clientId), SidecarId: &connectSidecarId,
+		Audience: EvsAudience, Scopes: []string{repoScope(unplaced, "r")},
+		IssuedAt: fixture.clock.Now(), ExpiresAt: fixture.clock.Now().Add(15 * time.Minute),
+	})
+	requireRefusal(t, list(unplaced, token), http.StatusNotFound, protocol.EvsRefusalCode_EVS_REFUSAL_NOT_FOUND)
 }
 
 // §11.10's hint row: hints coalesce to 10 a second a repo; a commit inside the interval waits for its end and goes
@@ -340,7 +394,7 @@ func TestSweepAllLeases(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	fixture.allowSubscribers(1000)
 	fixture.subscribe(http.MethodPost, fixture.check.signerId, fixture.leaseRequest(checkTestPath("a")))
-	fixture.clock.Advance(evsLeaseLife - time.Hour)
+	fixture.clock.Advance(fixture.settings.LeaseLife - time.Hour)
 	fixture.subscribe(http.MethodPost, fixture.check.otherId, fixture.leaseRequest(checkTestPath("b")))
 	fixture.clock.Advance(2 * time.Hour)
 	removed, err := SweepAllLeases(fixture.ctx, fixture.host.ServiceHost(), fixture.clock.Now())
