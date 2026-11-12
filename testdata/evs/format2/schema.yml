@@ -16,6 +16,7 @@ messages:
   EvsPurgeList:
     - 1 candidates repeated EvsPurgeCandidate
     - 2 marked bool
+    - 3 replaced bool
   EvsPurgeCandidate:
     - 1 token_path repeated bytes
     - 2 replaced_version uint64
@@ -56,6 +57,8 @@ messages:
   EvsDropPreviewPath:
     - 1 list_match bool
     - 2 count uint32
+    - 3 map_parts repeated uint32
+    - 4 linked bool
 
 enums:
   EvsDropState:
@@ -72,6 +75,7 @@ enums:
     - 2 EVS_DROP_MARK
     - 3 EVS_DROP_VERIFY
     - 4 EVS_DROP_DELETE
+    - 5 EVS_DROP_HORIZON
   EvsDropRefusal:
     - 0 EVS_DROP_REFUSAL_UNSPECIFIED
     - 1 EVS_DROP_REFUSAL_LOCKED
@@ -147,6 +151,7 @@ relies_on:
   EvsReadPathReply.drop_version: 14
   EvsReadPathReply.drop_statement: 15
   EvsReadPathReply.drop_body: 16
+  EvsReadRequest.held_drops: 11
   EvsPushFlag.EVS_PUSH_DROP: 256
   EvsPushFlag.EVS_PUSH_CUT: 512
   EvsLocatorKind.EVS_LOCATOR_SEGMENT: 1
@@ -189,6 +194,8 @@ layouts:
   purge list max ids: 2048
   drop max paths: 1024
   drop max listed versions: 1048576
+  drop max body bytes: 262144
+  drop list part values: 32000
   drop window ms: 604800000
   window bit versionless replaced: 4
   window bit drop: 5

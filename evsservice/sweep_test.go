@@ -224,3 +224,35 @@ func TestSweepPassesWalkTheReposRefs(t *testing.T) {
 		t.Fatalf("a pass on an unpassed build: %v", err)
 	}
 }
+
+// DESIGN-DETAILS 10.2.6: a part's record lists what its versions replaced, whole, with replaced set, and no sweep
+// deletes from it, marked or not: its seal's list, which subtracts every part's versions, is the one swept.
+func TestSweepIgnoresAPartRecordsList(t *testing.T) {
+	fixture := newSweepFixture(t)
+	path := checkTestPath("x")
+	kept := fixture.segment("a rename's target names it", 700)
+	slot := fixture.slot("kept slot")
+	partList := sweepTestList(path, [][]byte{kept}, nil, [][]byte{slot})
+	partList.Replaced = true
+	result, err := fixture.sweepList(partList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fixture.segmentStored(kept) || !fixture.slotStored(slot) {
+		t.Fatal("a part's replaced list deleted content")
+	}
+	if result.CandidateCount != 0 || result.DeletedCount != 0 || result.AbsentCount != 0 || result.RecomputedCount != 0 {
+		t.Fatalf("a part's list was swept: %+v", result)
+	}
+	// marked as well: never recomputed, since its seal's list is
+	result, err = fixture.sweepList(&protocol.EvsPurgeList{Marked: true, Replaced: true})
+	if err != nil || result.RecomputedCount != 0 || result.KeptCount != 0 {
+		t.Fatalf("a marked part list: %+v %v", result, err)
+	}
+	// the seal's list, the same ids less what the target names, deletes
+	sealList := sweepTestList(path, [][]byte{kept}, nil, nil)
+	result, err = fixture.sweepList(sealList)
+	if err != nil || result.DeletedCount != 1 || fixture.segmentStored(kept) {
+		t.Fatalf("the seal's list: %+v %v", result, err)
+	}
+}

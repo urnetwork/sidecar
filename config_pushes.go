@@ -72,7 +72,7 @@ func CheckConfigPushes(configRepoId Id, previous *bridge.ProjectionHeader, heade
 
 	var refId []byte
 	for i, pushBytes := range configPushes {
-		if EvsStatementMaxByteCount < len(pushBytes) {
+		if DefaultEvsFormatSettings().StatementMaxByteCount < len(pushBytes) {
 			return refuse("push %d of %d bytes, past an EvsPush statement's", i, len(pushBytes))
 		}
 		signed := &bridge.Signed{}

@@ -668,6 +668,9 @@ message EvsReadRequest {                // POST .../read (11.9)
   repeated uint64 log_pages = 8;
   repeated EvsReadPush pushes = 9;      // push records and parts
   repeated EvsReadRef refs = 10;        // a streams read's, alone in its request: at most 64 (11.9's streams row)
+  repeated uint64 held_drops = 11;      // format 2: DROP pushes of this ref, by ref version, whose body the reader
+                                        // holds and has checked, so evs sends none of them again; at most 64
+                                        // (DESIGN-DETAILS 10.2.3)
 }
 message EvsReadPath {
   repeated EvsSourcePath token_paths = 1;  // the path in the head's current epoch, and in any other epoch the reader
@@ -796,6 +799,9 @@ message EvsPurgeList {                  // a format-2 record's purge candidates,
   repeated EvsPurgeCandidate candidates = 1;  // per versionless version the push replaces, in change order
   bool marked = 2;                      // past 2,048 ids or the record's 1 MiB: none listed, and evacuation's sweep
                                         // recomputes them from the replaced versions (11.13)
+  bool replaced = 3;                    // a part's record alone: each replaced version's ids whole, nothing
+                                        // subtracted; no purger or sweep deletes from it, and the push's seal makes
+                                        // the candidates from every part's (DESIGN-DETAILS 10.2.6)
 }
 message EvsPurgeCandidate {             // what one replaced versionless version V leaves to the purge
   repeated bytes token_path = 1;        // V's path, in the push's path epoch, 16 B per component
@@ -823,6 +829,8 @@ enum EvsDropPhase {
   EVS_DROP_MARK = 2;
   EVS_DROP_VERIFY = 3;
   EVS_DROP_DELETE = 4;
+  EVS_DROP_HORIZON = 5;                 // resolved, or between rounds: waiting for evacuation's horizon
+                                        // (DESIGN-DETAILS 10.2.8)
 }
 
 // EvsDropStatus.reason for a refused drop (11.13's start, resolve and verify rows).
@@ -881,4 +889,8 @@ message EvsDropPreviewReply {           // the preview route's 202, preview_id a
 message EvsDropPreviewPath {             // one requested lineage's resolved list
   bool list_match = 1;                  // the client's count and listed_sha256 equal the resolved list's
   uint32 count = 2;                     // the resolved list's versions
+  repeated uint32 map_parts = 3;        // per older lineage entry of the request's path, the map part holding its
+                                        // move, 0 the tail, as the dry run found them (DESIGN-DETAILS 10.2.4)
+  bool linked = 4;                      // every older entry is a source of the one before it; false: map_parts
+                                        // stops at the first that is not
 }

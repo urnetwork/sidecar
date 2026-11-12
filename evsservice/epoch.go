@@ -112,7 +112,7 @@ func (self *EvsEngine) admitOne(request *EvsRequest, kind WriteOperationKind, ob
 // POST .../path-epoch: see the file header.
 func (self *EvsEngine) servePathMapPart(request *EvsRequest) {
 	body := &protocol.EvsPathMapRequest{}
-	if !request.ReadMessage(body, sidecar.EvsPathMapMaxByteCount+evsPathMapRequestOverhead) {
+	if !request.ReadMessage(body, int64(sidecar.DefaultEvsFormatSettings().PathMapMaxByteCount)+evsPathMapRequestOverhead) {
 		return
 	}
 	if len(body.GetPathMapSha256()) != 32 {

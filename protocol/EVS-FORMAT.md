@@ -420,8 +420,9 @@ Format-1 code refuses a batch of format 2 and a record whose byte 1 is 2 as FORM
 
 - `candidates`, one per versionless version V the push replaces or removes, in change order, an entry with no id left out: `token_path`, V's path in the push's path epoch; `replaced_version`, V's path version, its change's `base_entry_version`; `segment_ids` and `staged_segment_ids`, V's unstaged and staged kind-5 segment ids that no version of the push names, in V's chain order; `slot_ids`, V's slots that no version of the push names, in V's order.
 - `marked`, when the ids in all would pass 2,048 or the list would take the record past 1 MiB: then no candidate is listed, and evacuation's sweep recomputes them from the record's changes and their replaced versions (plan-EVS2-small-readings#13).
+- `replaced`, in a part's record alone (DESIGN-DETAILS 10.2.6): for each versionless version the part replaces or removes, its unstaged kind-5 segment ids, its staged ones and its slot ids, all of them, nothing subtracted, or `marked` past 2,048 ids or the record's 1 MiB. No purger or sweep deletes from it, whoever reads it: a part cannot know what another part's versions name. A list with `replaced` set in a push's or a seal's record is INVALID.
 
-A version of the push names an id through any locator, staged or not and of any kind, or its slot ids. `evsservice.PurgeCandidates` computes the list, the one implementation evs and the sweep share.
+A version of the push names an id through any locator, staged or not and of any kind, or its slot ids. `evsservice.PurgeCandidates` computes the list, the one implementation evs and the sweep share. A one-part push's record lists its candidates. A push in parts lists them in its seal's record, `replaced` unset: each part's candidates in part order, each less every id a kind-5 locator or a `slot_ids` entry of any part's entry versions names, an emptied candidate dropped, `marked` when any part was marked or the result would pass 2,048 ids or the record's 1 MiB; window bit 4 is set when any part listed a candidate or was marked. The committing process's purge is handed the seal's list alone, and the sweep reads candidates from push and seal records only, a marked seal recomputed over every part's versions. A seal that reruns 5g after the head moved refuses any part whose path changed, so each part's replaced version is still its path's newest when the seal commits.
 
 ## Window entries
 
@@ -436,7 +437,11 @@ A DROP's statement sets flag 256 and no other flag, and `drop_sha256`, the SHA-2
 | 9 | DROP body | the `EvsDropHistory` bytes, one value | `drop_sha256` |
 | 10 | DROP lists | per `EvsDropPath` in `paths` order, its `count` listed `entry_sha256` values, bare 32 B each and strictly ascending | each path's `listed_sha256`, over its values joined |
 
-A cancel carries section 9 and no section 10. In a push in parts both ride in `EvsPushPart.sections` slices, a slice splitting anywhere (plan-EVS2-drop-list-parts), and the seal runs the body and list checks over the slices in part order, streaming the lists, never joining them.
+A cancel carries section 9 and no section 10. In a push in parts both ride in `EvsPushPart.sections` slices (plan-EVS2-drop-list-parts), and the seal runs the body and list checks over the slices in part order, streaming the lists, never joining them.
+
+**Bounds** (DESIGN-DETAILS 10.2.2, QD-700). A body, `EvsDropHistory`'s bytes, is at most 262,144 B: a longer one is INVALID, checked on the received length before any hashing, as a body off `drop_sha256` is. The counts of a DROP's paths sum to at most 1,048,576 (409 DROP_LIST), so section 10 is at most 32 MiB; a path's own count keeps its bound, the same number. A client cuts a larger drop into several DROP pushes at lineage boundaries, each previewed, and refuses locally a lineage that alone passes either bound (`EVS_DROP_TOO_LARGE`). The bounds are `EvsFormatSettings`' fields, whose defaults are these values.
+
+**Parts** (DESIGN-DETAILS 10.2.5). A DROP goes in parts when its one-part payload would pass 1 MiB. Its parts that hold changes are cut as any push's, a DROP having at most 1,024 changes, one per written boundary; part 1's run is cut to leave room for section 9, which rides whole in part 1's `sections` slice; section 10's values fill each part's room left in part order from part 1 on, a value never split; then parts with no change take at most 32,000 values (1,024,000 B; `DropListPartValueCount`) each until the lists end, so a DROP is at most 51 parts. A DROP with no change at all, removed boundaries alone or a cancel, that passes one part states the empty change list of QD-658: `change_count` 0, `changes_root` the SHA-256 of the empty string, no `changed_prefixes`, every part changeless, part 1 holding section 9 and the first values. A checker takes a section-10 slice cut anywhere; a DROP in parts whose section 9 is not whole in part 1 is INVALID. A part runs no body or list check, which only the seal can, holding every part.
 
 The body's rules, which `EvsCheckDropPayload` runs before anything needs the head:
 
@@ -446,24 +451,24 @@ The body's rules, which `EvsCheckDropPayload` runs before anything needs the hea
 - An `EvsDropPath`: its `lineage` newest first, each entry's epoch strictly below the one before and at least 1, the newest at most the push's path epoch, each token path 1 to 32 components; one `map_parts` value per older entry (0 the PATH_EPOCH tail, else the map part, 1 to parts); `through_version` at least 2; `boundary` 1 written or 2 removed; `count` 1 to 1,048,576 and below `through_version`; `listed_sha256` 32 B.
 - A body that does not parse or breaks a rule above is INVALID, a body off `drop_sha256` too, being a payload hash; a list whose order, repeats, count or `listed_sha256` is wrong is 409 DROP_LIST. Kind, path, consent, boundary, the base step 4 read, the fence and the cancel's target are evs's (EVS2-M10-09).
 
-**Membership** (plan-EVS2-drop-list-proof): a ref's version V, committed in path epoch e at token path t, is listed by a DROP exactly when one of its paths' lineage holds (e, t), V is below that path's `through_version`, and V has an entry: a removal is never listed (plan-EVS2-small-readings#1). A head reader decides it from the signed body alone, through `EvsDropLists`; the listed set's equality with the lineage's versions is a replaying reader's and the job's resolve.
+**Membership** (plan-EVS2-drop-list-proof, QD-699; DESIGN-DETAILS 10.2.3): `Covers(B, e, t, k)`, for a body B of action 1, is true exactly when some path of B has (e, t) in its lineage and k is below its `through_version`; a ref's version V, committed in path epoch e at token path t at path version k, is listed by the DROP exactly when it has an entry and `Covers` holds: a removal is never listed (plan-EVS2-small-readings#1). A head reader decides it from the signed body alone, through `EvsDropLists`, checked against the name and version it asked for; `listed_sha256` stays one flat SHA-256, the listed set's equality with the lineage's versions being a replaying reader's, computed from its own history with no list byte fetched, and the job's resolve. No list byte is ever sent to a reader. A read reply carries, for a path whose requested version evs finds listed, its state, `drop_id` and `not_before_ms` or `drop_version`, and once per drop it names the DROP's statement, unless the reply's statements already hold it, and its body, unless the request's `held_drops` names that drop's ref version; evs sends at most `DropBodyReplyByteCount` of bodies in a reply, a path past that carrying its state with `drop_body` empty, and the reader reads that path again.
 
 ## Read states
 
 `EvsReadPathReply.state` (§11.9), each of which a format-1 reader refuses as FORMAT_UNSUPPORTED {needs_format: 2}:
 
 - 1 `collected`: a replaced versionless version from T, the end of the UTC minute of the replacing record's `EvsPlace` plus 60 s, whether or not its bytes remain, and any version whose kind-5 segment or staged range 404s (plan-EVS2-small-readings#5). The frame keeps the version's signed entry version and statement, and its content is not served.
-- 2 `drop_pending` {`drop_id`, `not_before_ms`} and 3 `dropped` {`drop_id`, `drop_version`}, each with the DROP's statement in `drop_statement` when the reply returns it nowhere else, and its body in `drop_body` on the first path of the reply naming that drop. No list range is served (plan-EVS2-drop-list-proof).
+- 2 `drop_pending` {`drop_id`, `not_before_ms`} and 3 `dropped` {`drop_id`, `drop_version`}, each with the DROP's statement in `drop_statement` when the reply returns it nowhere else, and its body in `drop_body` on the first path of the reply naming that drop, unless `EvsReadRequest.held_drops`, at most 64 ref versions of this ref's DROP pushes whose bodies the reader holds and has checked, names it (DESIGN-DETAILS 10.2.3). No list range is served (plan-EVS2-drop-list-proof).
 
 ## Drop routes
 
 | Route | Request | Answer |
 |---|---|---|
 | `POST .../drops/preview` (admin) | `EvsDropPreviewRequest`: `ref_id`, and `paths`, each an `EvsDropPath` whose `through_version` is the version a drop now would keep and whose `count` and `listed_sha256` are the client's | 202 `EvsDropPreviewReply` with `preview_id` alone; 429 past `evs_drop_previews_per_day`; one dry run at a time a repo |
-| `GET .../drops/preview/<preview_id>` (admin) | none | `EvsDropPreviewReply`: `state`, `progress` of `progress_total` versions, per requested path its `list_match` and resolved `count`, `freed_bytes`, `shared_bytes`, `inline_bytes`, `packed_bytes` and `young_bytes`, and the snapshot's ref version and time; 404 for a dry run evs holds no record of |
+| `GET .../drops/preview/<preview_id>` (admin) | none | `EvsDropPreviewReply`: `state`, `progress` of `progress_total` versions, per requested path its `list_match`, resolved `count`, `map_parts` (per older lineage entry the map part holding its move, 0 the tail) and `linked` (every older entry a source of the one before it; false, `map_parts` stopping at the first that is not), `freed_bytes`, `shared_bytes`, `inline_bytes`, `packed_bytes` and `young_bytes`, and the snapshot's ref version and time; 404 for a dry run evs holds no record of |
 | `GET .../drops` (r) | none | `EvsDropsReply`: each drop of `drops/<repo>/_` as an `EvsDropStatus`, oldest first |
 
-`EvsDropStatus` reports a held drop as done, its held bytes counted in `freed_bytes`, so no field, value or count shows a hold (owner decision 184). A void record (plan-EVS2-drop-table-bound) lists as its `drop_id` and state alone. DROP pushes and their cancels go through `POST .../push`.
+`EvsDropStatus` reports a held drop as done, its held bytes counted in `freed_bytes`, so no field, value or count shows a hold (owner decision 184). Its phase is `EVS_DROP_HORIZON` while a resolved job, or one between rounds, waits for evacuation's horizon (DESIGN-DETAILS 10.2.8). A preview request's `EvsDropPath.map_parts` may be empty, and a DROP copies the dry run's `map_parts`, on which nothing but the job's own read cost rests (DESIGN-DETAILS 10.2.4). A void record (plan-EVS2-drop-table-bound) lists as its `drop_id` and state alone. DROP pushes and their cancels go through `POST .../push`.
 
 ## Rules the format-2 codecs share
 
@@ -472,8 +477,6 @@ The body's rules, which `EvsCheckDropPayload` runs before anything needs the hea
 
 ## Not fixed here
 
-- **Purge candidates of a push in parts.** A part's candidates subtract only that part's versions, so a rename whose removal and target sit in two parts would list content the target still names. questions/evs2-m10-04-purge-across-parts.md asks how; until it is answered, `PurgeCandidates` subtracts every version its caller passes, and evs lists a push in parts' candidates only once it holds every part (EVS2-M10-06).
-- **A DROP's lists past what its changes' parts carry.** Format 1 holds every part to at least one change, and a drop of one heavily edited path, or of removed boundaries alone, has fewer changes than its lists need parts. questions/evs2-m10-03-drop-list-parts-without-changes.md asks how; until it is answered such a DROP cannot be formed, and nothing accepts a part with no change.
 - **Fields no §2.8 row names yet**, which `testdata/evs/format2/metadata_rows.yml` lists as pending until M10's exit and questions/evs2-m10-01-metadata-rows.md raises.
 
 ## What this chapter chose
@@ -493,7 +496,9 @@ For design-records, each a reading that changes no D- item:
 | DROP statement | Flag 256 alone, `index_epoch` 0 |
 | DROP paths' order | Strictly ascending by the newest lineage entry's token path bytes, then its epoch |
 | DROP shape | `through_version` at least 2, `count` below it; a cancel's `not_before_ms` 0 and no `preview_id`; the newest lineage epoch at most the push's |
-| DROP codes | Shape and `drop_sha256` INVALID; lists DROP_LIST; `not_before_ms` DROP_STATE |
+| DROP codes | Shape, `drop_sha256` and a body past 262,144 B INVALID; lists and counts past 1,048,576 in all DROP_LIST; `not_before_ms` DROP_STATE |
+| DROP in parts | Section 9 whole in part 1, section 10's values unsplit from part 1 on, 32,000 a changeless part, the empty change list for a DROP with no change (DESIGN-DETAILS 10.2.5) |
+| Purge list of a push in parts | A part's record lists its replaced versions' ids whole with `replaced` set; the seal's record lists the candidates over every part (DESIGN-DETAILS 10.2.6) |
 | The DROP on a read | `EvsReadPathReply.drop_statement` (15) and `drop_body` (16), each sent once a reply |
 | Drop listing | `EvsDropState` with observed and no held; a phase and its done and total counts; a refusal reason; held bytes counted as freed; a void record as its id and state |
 | Dry runs | `EvsDropPreviewState` with queued, running, done and failed; per path `list_match` and the resolved count; the snapshot's ref version and time |

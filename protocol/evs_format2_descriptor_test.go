@@ -218,7 +218,7 @@ func TestEvsFormat2NamesNoKeepLastN(t *testing.T) {
 
 // The format-2 fields of format-1 messages: those the reserved list holds that no format-1 file maps, which the
 // format-2 area file must map.
-var testFormat2AddedFields = []string{"EvsReadPathReply.drop_statement", "EvsReadPathReply.drop_body"}
+var testFormat2AddedFields = []string{"EvsReadPathReply.drop_statement", "EvsReadPathReply.drop_body", "EvsReadRequest.held_drops"}
 
 // metadata_rows.yml complete against the descriptor (I-18): every field of every format-2 message, and every format-2
 // field added to a format-1 message, has exactly one line, whose number and type are the descriptor's, naming a row
@@ -291,6 +291,7 @@ func TestEvsFormat2MessagesRoundTrip(t *testing.T) {
 			}},
 		},
 		&protocol.EvsPurgeList{Marked: true},
+		&protocol.EvsPurgeList{Marked: true, Replaced: true},
 		&protocol.EvsDropsReply{Drops: []*protocol.EvsDropStatus{{
 			DropId: id, RefId: id, PushId: id, Version: 12, NotBeforeMs: 1_700_000_000_000,
 			State: protocol.EvsDropState_EVS_DROP_EXECUTING, Phase: protocol.EvsDropPhase_EVS_DROP_MARK, Progress: 3,
@@ -299,7 +300,7 @@ func TestEvsFormat2MessagesRoundTrip(t *testing.T) {
 		&protocol.EvsDropPreviewRequest{RefId: id, Paths: []*protocol.EvsDropPath{dropPath, dropPath}},
 		&protocol.EvsDropPreviewReply{
 			PreviewId: id, State: protocol.EvsDropPreviewState_EVS_DROP_PREVIEW_DONE, Progress: 30, ProgressTotal: 30,
-			Paths:      []*protocol.EvsDropPreviewPath{{ListMatch: true, Count: 8}, {Count: 2}},
+			Paths:      []*protocol.EvsDropPreviewPath{{ListMatch: true, Count: 8, MapParts: []uint32{1, 0}, Linked: true}, {Count: 2, MapParts: []uint32{3}}},
 			FreedBytes: 1, SharedBytes: 2, InlineBytes: 3, PackedBytes: 4, YoungBytes: 5, SnapshotVersion: 40,
 			SnapshotMs: 1_700_000_000_000,
 		},
@@ -307,6 +308,7 @@ func TestEvsFormat2MessagesRoundTrip(t *testing.T) {
 			State: protocol.EvsReadPathState_EVS_READ_PATH_DROPPED, DropId: id, DropVersion: 9,
 			DropStatement: hash, DropBody: hash,
 		},
+		&protocol.EvsReadRequest{RefId: id, PinVersion: 7, HeldDrops: []uint64{3, 5}},
 	}
 	for _, message := range messages {
 		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)

@@ -155,7 +155,7 @@ func purgeCases(t testing.TB) []*purgeCaseVector {
 	k := purgeVersion(4, 1, []string{"k5:c1", "k5:c2", "k5:c3", "k5:c4", "k5:c5"})
 	k1 := purgeVersion(5, 1, []string{"k5:c1", "k5:n2", "k5:c3", "k5:n4", "k5:c5"})
 	manyChunks := []string{}
-	for i := range sidecar.EvsPurgeListMaxIdCount + 1 {
+	for i := range sidecar.DefaultEvsFormatSettings().PurgeListMaxIdCount + 1 {
 		manyChunks = append(manyChunks, fmt.Sprint("k5:many ", i))
 	}
 	tenChunks := []string{}

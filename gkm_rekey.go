@@ -91,7 +91,7 @@ type GkmRekeySettings struct {
 // The defaults, a fresh value each call.
 func DefaultGkmRekeySettings() *GkmRekeySettings {
 	return &GkmRekeySettings{
-		PushEntryWriteCount: EvsPartMaxEntryWriteCount,
+		PushEntryWriteCount: DefaultEvsFormatSettings().PartMaxEntryWriteCount,
 		FileRate:            SidecarRate{Count: 50, Burst: 1, Interval: 1 * time.Second},
 		PushByteCount:       64 * 1024 * 1024,
 		MovedRetryCount:     3,
@@ -103,7 +103,7 @@ func (self *GkmRekeySettings) validate() error {
 	if err := checkSettingsNumbers("GkmRekeySettings", reflect.ValueOf(self).Elem(), false); err != nil {
 		return err
 	}
-	if EvsPartMaxEntryWriteCount < self.PushEntryWriteCount {
+	if DefaultEvsFormatSettings().PartMaxEntryWriteCount < self.PushEntryWriteCount {
 		return fmt.Errorf("%w: GkmRekeySettings.PushEntryWriteCount past §10.16's 1,024", errInvalidSettings)
 	}
 	return nil

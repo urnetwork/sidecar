@@ -966,8 +966,10 @@ var ErrEvsGitStateDiffers = errors.New("evs: a git update's tree and the ref's e
 // write, naming the path (DESIGN-DETAILS 8.2.4's limits row, `ng <ref> DIRECTORY_FULL <path>`).
 var ErrEvsDirectoryFull = errors.New("evs: DIRECTORY_FULL")
 
-// The most entries one push writes: 1,024 parts of 1,024 entry writes (§11.8's parts row).
-const EvsPushMaxEntryWriteCount = EvsMaxPartCount * EvsPartMaxEntryWriteCount
+// The most entries one push writes: 1,024 parts of the format's entry writes a part (§11.8's parts row).
+func evsPushMaxEntryWriteCount(format *EvsFormatSettings) int {
+	return EvsMaxPartCount * format.PartMaxEntryWriteCount
+}
 
 // A git plan's read found the ref's head past the version the update is built on (DESIGN-DETAILS 8.2.5's 409 row):
 // the caller judges the versions between, a PATH_EPOCH or a rekey alone leaving the tip where it was, before it
@@ -1342,7 +1344,7 @@ func evsGitReadBatches(changes []*EvsGitPathChange, renames map[string]string) [
 
 // §11.19's bounds on the new tree, checked on every directory the update changes, and the push's entry writes.
 func evsGitCheckLimits(changes []*EvsGitPathChange) error {
-	if EvsPushMaxEntryWriteCount < len(changes) {
+	if evsPushMaxEntryWriteCount(DefaultEvsFormatSettings()) < len(changes) {
 		return fmt.Errorf("%w: %d entry writes in one update", ErrEvsDirectoryFull, len(changes))
 	}
 	for _, change := range changes {

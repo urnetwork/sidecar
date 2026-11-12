@@ -848,7 +848,7 @@ func TestEvsFormat2BatchBoundsAndRefusals(t *testing.T) {
 		t.Errorf("a seal staging a segment: %v", err)
 	}
 	manyIds := &protocol.EvsPurgeCandidate{TokenPath: EvsTokenPath{evsTestToken("x")}.Components(), ReplacedVersion: 1}
-	for i := range EvsPurgeListMaxIdCount + 1 {
+	for i := range DefaultEvsFormatSettings().PurgeListMaxIdCount + 1 {
 		manyIds.SegmentIds = append(manyIds.SegmentIds, evsTestBytes(fmt.Sprint("id ", i), 32))
 	}
 	for name, list := range map[string]*protocol.EvsPurgeList{
@@ -948,10 +948,12 @@ func TestEvsFormat2LayoutsMatchTheSchema(t *testing.T) {
 		"batch record format":             evsBatchRecordFormat2,
 		"batch record format byte":        evsBatchRecordFormatByte,
 		"batch record tail items":         evsBatchRecordTailItemCount,
-		"purge list max ids":              EvsPurgeListMaxIdCount,
-		"drop max paths":                  EvsDropMaxPathCount,
-		"drop max listed versions":        EvsDropMaxListedCount,
-		"drop window ms":                  EvsDropWindowMs,
+		"purge list max ids":              int64(DefaultEvsFormatSettings().PurgeListMaxIdCount),
+		"drop max paths":                  int64(DefaultEvsFormatSettings().DropMaxPathCount),
+		"drop max listed versions":        int64(DefaultEvsFormatSettings().DropMaxListedCount),
+		"drop max body bytes":             int64(DefaultEvsFormatSettings().DropMaxBodyByteCount),
+		"drop list part values":           int64(DefaultEvsFormatSettings().DropListPartValueCount),
+		"drop window ms":                  DefaultEvsFormatSettings().DropWindowMs(),
 		"window bit versionless replaced": 4,
 		"window bit drop":                 5,
 	}

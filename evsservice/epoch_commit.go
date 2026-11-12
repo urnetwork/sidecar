@@ -232,7 +232,7 @@ func (self *pushAttempt) pathMapPartsPresent(push *protocol.EvsPush) (bool, erro
 		}
 		return false, err
 	}
-	partBytes, err := readAllLimited(object, sidecar.EvsPathMapMaxByteCount)
+	partBytes, err := readAllLimited(object, int64(sidecar.DefaultEvsFormatSettings().PathMapMaxByteCount))
 	object.Body.Close()
 	if err != nil {
 		return false, err

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -117,7 +118,7 @@ func evsTestBuildAndCheck(t testing.TB, signer *evsTestSigner, plan *EvsPushPlan
 	if err := statement.Verify(signer.publicKey()); err != nil {
 		t.Fatal(err)
 	}
-	if len(statement.Bytes) > EvsStatementMaxByteCount {
+	if len(statement.Bytes) > DefaultEvsFormatSettings().StatementMaxByteCount {
 		t.Fatalf("a statement of %d bytes", len(statement.Bytes))
 	}
 	if statement.Push.GetPartCount() == 0 {
@@ -301,7 +302,7 @@ func TestEvsLargePushFallsBackToChangesRoot(t *testing.T) {
 	for _, prefix := range built.Statement.ChangedPrefixes {
 		prefixBytes += len(prefix) * EvsTokenByteCount
 	}
-	if EvsChangedPrefixesMaxByteCount < prefixBytes || !evsPrefixesCover(built.Statement.ChangedPrefixes, checked.Changes) {
+	if DefaultEvsFormatSettings().ChangedPrefixesMaxByteCount < prefixBytes || !evsPrefixesCover(built.Statement.ChangedPrefixes, checked.Changes) {
 		t.Errorf("covering prefixes of %d bytes", prefixBytes)
 	}
 	root := built.ChangeTree.Root()
@@ -325,7 +326,7 @@ func TestEvsDepthThirtyTwoOneChangeStatementFits(t *testing.T) {
 	}
 	plan.Changes = []*EvsPlannedChange{{TokenPath: tokenPath, EntryVersion: evsTestEntryVersion(t, plan, 0, 1)}}
 	built, checked := evsTestBuildAndCheck(t, signer, plan)
-	if len(built.Statement.Bytes) > EvsStatementMaxByteCount || len(checked.Changes) != 1 || !checked.Changes[0].TokenPath.Equal(tokenPath) {
+	if len(built.Statement.Bytes) > DefaultEvsFormatSettings().StatementMaxByteCount || len(checked.Changes) != 1 || !checked.Changes[0].TokenPath.Equal(tokenPath) {
 		t.Fatalf("a statement of %d bytes", len(built.Statement.Bytes))
 	}
 	t.Logf("depth 32: %d-byte statement, changes inline: %v", len(built.Statement.Bytes), len(built.Statement.Push.GetChanges()) == 1)
@@ -340,7 +341,7 @@ func TestEvsDepthThirtyTwoOneChangeStatementFits(t *testing.T) {
 	plan.MapSourceChain = evsTestBytes("map source", 32)
 	built, checked = evsTestBuildAndCheck(t, signer, plan)
 	push := built.Statement.Push
-	if len(built.Statement.Bytes) > EvsStatementMaxByteCount || len(push.GetChanges()) != 0 || push.GetChangeCount() != 1 ||
+	if len(built.Statement.Bytes) > DefaultEvsFormatSettings().StatementMaxByteCount || len(push.GetChanges()) != 0 || push.GetChangeCount() != 1 ||
 		len(built.Statement.ChangedPrefixes) != 1 || !tokenPath.HasPrefix(built.Statement.ChangedPrefixes[0]) {
 		t.Fatalf("the fallback: a %d-byte statement, %d inline", len(built.Statement.Bytes), len(push.GetChanges()))
 	}
@@ -436,7 +437,7 @@ func TestEvsStatementShapeRefusals(t *testing.T) {
 	long := proto.Clone(base).(*protocol.EvsPush)
 	long.SealedMetadataSha256 = nil
 	statementBytes := resign(long)
-	padded := append(bytes.Clone(statementBytes), make([]byte, EvsStatementMaxByteCount+1-len(statementBytes))...)
+	padded := append(bytes.Clone(statementBytes), make([]byte, DefaultEvsFormatSettings().StatementMaxByteCount+1-len(statementBytes))...)
 	if _, err := ParseEvsStatement(padded); !errors.Is(err, ErrEvsPushInvalid) {
 		t.Errorf("a statement past 1 KiB: %v", err)
 	}
@@ -776,5 +777,220 @@ func TestEvsPushWithNoChangeGoesInParts(t *testing.T) {
 		if _, err := ParseEvsStatement(resign(mutated)); !errors.Is(err, ErrEvsPushInvalid) {
 			t.Errorf("count 0 under changes_root %s: %v", name, err)
 		}
+	}
+}
+
+// DESIGN-DETAILS 10.2.5's layout, three ways: a DROP of one change and 100,000 listed values is 4 parts, the last 3
+// changeless; of no change and 40,000 values 2 changeless parts under the empty change list; of 1,024 changes with
+// 16 KiB kept heads and 2^20 values within 51 parts. Each time section 9 rides whole in part 1, no value is split,
+// a changeless part holds at most DropListPartValueCount values, and the slices joined in part order are the one-part
+// sections; the seal check takes each.
+func TestEvsStatementLaysOutADropInParts(t *testing.T) {
+	format := DefaultEvsFormatSettings()
+	signer := newEvsTestSigner("drop layout")
+	dropOf := func(t *testing.T, plan *EvsPushPlan, label string, count int) {
+		listed := evsTestDropListed(label, count)
+		paths := []*protocol.EvsDropPath{evsTestDropPath(label, uint64(count)+1, evsDropBoundaryWritten)}
+		if len(plan.Changes) == 0 {
+			paths[0].Boundary = evsDropBoundaryRemoved
+		}
+		lists, err := EvsBuildDropLists(paths, [][][]byte{listed})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.EvsDropHistory{
+			DropId: evsTestId("drop " + label).Bytes(), Action: evsDropActionDrop, NotBeforeMs: plan.TimeMs, Paths: paths,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan.PathEpoch = evsTestDropPathEpoch
+		plan.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_DROP)
+		plan.DropBody = body
+		plan.DropLists = lists
+		plan.NewObjects = nil
+	}
+	layOut := func(t *testing.T, plan *EvsPushPlan, check bool) (built *EvsBuiltPush, changeless int) {
+		t.Helper()
+		built, err := NewEvsStatementBuilder(signer.sign).BuildFormat2(plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodySlices, listSlices := [][]byte{}, [][]byte{}
+		for i, partBytes := range built.Parts {
+			part, _, err := parseEvsPushPart(partBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sections, err := parseEvsPayload(part.GetSections(), true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := sections.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY)
+			if (i == 0) != (len(body) != 0) {
+				t.Fatalf("part %d holds %d bytes of the body", i+1, len(body))
+			}
+			bodySlices = append(bodySlices, body)
+			list := sections.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS)
+			if len(list)%sha256.Size != 0 {
+				t.Fatalf("part %d cuts a value: %d bytes", i+1, len(list))
+			}
+			if len(part.GetChanges()) == 0 {
+				changeless += 1
+				if format.DropListPartValueCount < len(list)/sha256.Size {
+					t.Fatalf("changeless part %d holds %d values", i+1, len(list)/sha256.Size)
+				}
+			}
+			listSlices = append(listSlices, list)
+		}
+		if !bytes.Equal(bytes.Join(bodySlices, nil), plan.DropBody) || !bytes.Equal(bytes.Join(listSlices, nil), plan.DropLists) {
+			t.Fatal("the joined slices are not the one-part sections")
+		}
+		if check {
+			checked, _, err := EvsCheckSealFormat2(built.Statement, built.Parts, make([][]byte, len(built.Parts)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if checked.Drop == nil || !bytes.Equal(checked.Drop.Body, plan.DropBody) {
+				t.Fatal("the seal did not adopt the DROP")
+			}
+		}
+		return built, changeless
+	}
+
+	one := evsTestPlan(t, signer, "drop one change", 1)
+	dropOf(t, one, "one", 100000)
+	built, changeless := layOut(t, one, true)
+	if len(built.Parts) != 4 || changeless != 3 {
+		t.Errorf("one change and 100,000 values: %d parts, %d changeless", len(built.Parts), changeless)
+	}
+
+	none := evsTestPlan(t, signer, "drop no change", 0)
+	dropOf(t, none, "none", 40000)
+	built, changeless = layOut(t, none, true)
+	push := built.Statement.Push
+	if len(built.Parts) != 2 || changeless != 2 || push.GetChangeCount() != 0 || len(push.GetChangedPrefixes()) != 0 {
+		t.Errorf("no change and 40,000 values: %d parts, %d changeless, count %d", len(built.Parts), changeless, push.GetChangeCount())
+	}
+	if empty := sha256.Sum256(nil); !bytes.Equal(push.GetChangesRoot(), empty[:]) {
+		t.Error("a changeless DROP's root is not the empty change list's")
+	}
+
+	// 1,024 written boundaries, each with a kept head of 16 KiB inline in its entry version
+	big := evsTestPlan(t, signer, "drop big", 0)
+	pathKey := evsTestPathKey(t, big.RepoId, 2)
+	for k := range format.DropMaxPathCount {
+		tokenPath, err := EvsPathTokens(pathKey, [][]byte{[]byte(fmt.Sprint("d", k/50)), []byte(fmt.Sprint("f", k))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		big.Changes = append(big.Changes, &EvsPlannedChange{TokenPath: tokenPath, BaseEntryVersion: 1, EntryVersion: bytes.Repeat(evsTestBytes(fmt.Sprint("kept head ", k), 32), 16*1024/32)})
+	}
+	dropOf(t, big, "big", format.DropMaxListedCount)
+	built, _ = layOut(t, big, false)
+	if 51 < len(built.Parts) {
+		t.Errorf("1,024 changes and 2^20 values in %d parts", len(built.Parts))
+	}
+}
+
+// A DROP whose body rides in a part past part 1 is INVALID at the seal (DESIGN-DETAILS 10.2.5), whatever its hash.
+func TestEvsSealRefusesADropBodyOutsidePartOne(t *testing.T) {
+	signer := newEvsTestSigner("drop body moved")
+	plan := evsTestPlan(t, signer, "drop body moved", 0)
+	listed := evsTestDropListed("moved", 40000)
+	paths := []*protocol.EvsDropPath{evsTestDropPath("moved", 40001, evsDropBoundaryRemoved)}
+	lists, err := EvsBuildDropLists(paths, [][][]byte{listed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.EvsDropHistory{
+		DropId: evsTestId("drop moved").Bytes(), Action: evsDropActionDrop, NotBeforeMs: plan.TimeMs, Paths: paths,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.PathEpoch = evsTestDropPathEpoch
+	plan.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_DROP)
+	plan.DropBody, plan.DropLists, plan.NewObjects = body, lists, nil
+	built, err := NewEvsStatementBuilder(signer.sign).BuildFormat2(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// move the body from part 1 to part 2, re-signing parts_sha256 over the moved parts, as a modified client would
+	parts := make([]*protocol.EvsPushPart, len(built.Parts))
+	for i, partBytes := range built.Parts {
+		if parts[i], _, err = parseEvsPushPart(partBytes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := parseEvsPayload(parts[0].GetSections(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSections, err := parseEvsPayload(parts[1].GetSections(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSections.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY, first.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY))
+	first.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY, nil)
+	parts[0].Sections, parts[1].Sections = first.Encode(), secondSections.Encode()
+	partHashes := []byte{}
+	partBytes := make([][]byte, len(parts))
+	for i, part := range parts {
+		marshal := proto.MarshalOptions{Deterministic: true}
+		if partBytes[i], err = marshal.Marshal(part); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(partBytes[i])
+		partHashes = append(partHashes, digest[:]...)
+	}
+	push := proto.Clone(built.Statement.Push).(*protocol.EvsPush)
+	partsDigest := sha256.Sum256(partHashes)
+	push.PartsSha256 = partsDigest[:]
+	statement, err := NewEvsStatementBuilder(signer.sign).signStatementOf(push, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := EvsCheckSealFormat2(statement, partBytes, make([][]byte, len(partBytes))); !errors.Is(err, ErrEvsPushInvalid) || !strings.Contains(err.Error(), "part 1") {
+		t.Errorf("a DROP's body in part 2: %v", err)
+	}
+	if _, _, err := EvsCheckSealFormat2(built.Statement, built.Parts, make([][]byte, len(built.Parts))); err != nil {
+		t.Errorf("its twin with the body in part 1: %v", err)
+	}
+}
+
+// DESIGN-DETAILS 10.2.2's replaced row: a purge list with replaced set rides only in a part's record, as AddFormat2
+// writes it and ParseEvsBatchRecordFormat2 reads it; in a push's or a seal's record it is INVALID either way.
+func TestEvsRecordTailTakesReplacedOnlyInAPart(t *testing.T) {
+	list := &protocol.EvsPurgeList{Replaced: true, Candidates: []*protocol.EvsPurgeCandidate{{
+		TokenPath: EvsTokenPath{evsTestToken("x")}.Components(), ReplacedVersion: 3, SegmentIds: [][]byte{evsTestBytes("segment", 32)},
+	}}}
+	listBytes, err := EncodeEvsPurgeList(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := func(recordType protocol.EvsBatchRecordType) *EvsBatchRecord {
+		return &EvsBatchRecord{
+			Type: recordType, RepoId: evsTestId("repo"), RefId: evsTestId("ref"), PushId: evsTestId("push"),
+			SignerSidecarId: evsTestId("signer"), TimeMs: 1767225600000, Body: evsJoinItems([][]byte{evsTestBytes("statement", 32)}),
+		}
+	}
+	tail := &EvsBatchRecordTail{PurgeList: listBytes}
+	writer := NewEvsBatchWriter(0, 0, 0, 0)
+	if _, err := writer.AddFormat2(record(protocol.EvsBatchRecordType_EVS_BATCH_PART), tail); err != nil {
+		t.Errorf("a part's replaced list: %v", err)
+	}
+	for _, recordType := range []protocol.EvsBatchRecordType{protocol.EvsBatchRecordType_EVS_BATCH_PUSH, protocol.EvsBatchRecordType_EVS_BATCH_SEAL} {
+		if _, err := writer.AddFormat2(record(recordType), tail); !errors.Is(err, ErrEvsPushInvalid) {
+			t.Errorf("a %s record's replaced list was written: %v", recordType, err)
+		}
+		encoded := record(recordType).encodeFormat2(tail)
+		if _, _, err := ParseEvsBatchRecordFormat2(encoded); !errors.Is(err, ErrEvsPushInvalid) {
+			t.Errorf("a %s record's replaced list was read: %v", recordType, err)
+		}
+	}
+	encoded := record(protocol.EvsBatchRecordType_EVS_BATCH_PART).encodeFormat2(tail)
+	if _, read, err := ParseEvsBatchRecordFormat2(encoded); err != nil || !bytes.Equal(read.PurgeList, listBytes) {
+		t.Errorf("a part's replaced list as read: %v", err)
 	}
 }

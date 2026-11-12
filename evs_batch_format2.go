@@ -5,7 +5,9 @@
 // batch's header format is 2 exactly when it holds a format-2 record. So a record read alone at its place shows its own
 // format, and a place's offsets never move when a later record turns its batch to format 2.
 //
-// A seal or reseed record stages nothing. A record's bounds count its tail (plan-EVS2-small-readings#13). Format-1
+// A seal or reseed record stages nothing. A record's bounds count its tail (plan-EVS2-small-readings#13). A list with
+// replaced set, each replaced version's ids whole, rides only in a part's record; one in any other record is INVALID
+// (DESIGN-DETAILS 10.2.2's replaced row). Format-1
 // readers refuse a format-2 batch and a format-2 record as FORMAT_UNSUPPORTED; format-2 readers take both formats, and
 // an evacuator meeting a format it does not know leaves the batch, alarming.
 //
@@ -31,8 +33,6 @@ const (
 	evsBatchRecordFormat2    = 2
 	// the items a format-2 record's body ends with: its staged bytes and its purge list
 	evsBatchRecordTailItemCount = 2
-	// §11.13's purge row: past this many ids, a purge list is marked instead
-	EvsPurgeListMaxIdCount = 2048
 )
 
 // A format-2 record's tail: what rides after its format-1 items.
@@ -127,7 +127,7 @@ func checkEvsPurgeList(list *protocol.EvsPurgeList) error {
 		}
 		idCount += len(ids)
 	}
-	if EvsPurgeListMaxIdCount < idCount {
+	if DefaultEvsFormatSettings().PurgeListMaxIdCount < idCount {
 		return fmt.Errorf("%w: a purge list of %d ids, which must be marked", ErrEvsPushInvalid, idCount)
 	}
 	return nil
@@ -171,7 +171,7 @@ func (self *EvsBatchWriter) AddFormat2(record *EvsBatchRecord, tail *EvsBatchRec
 	if _, err := tail.StagedSegments(); err != nil {
 		return nil, err
 	}
-	if _, err := tail.PurgeListValue(); err != nil {
+	if err := checkEvsRecordPurgeList(record.Type, tail); err != nil {
 		return nil, err
 	}
 	encoded := record.encodeFormat2(tail)
@@ -236,10 +236,22 @@ func splitEvsBatchRecordTail(recordType protocol.EvsBatchRecordType, body []byte
 	if _, err := tail.StagedSegments(); err != nil {
 		return nil, nil, err
 	}
-	if _, err := tail.PurgeListValue(); err != nil {
+	if err := checkEvsRecordPurgeList(recordType, tail); err != nil {
 		return nil, nil, err
 	}
 	return body[:tailAt], tail, nil
+}
+
+// A tail's purge list held to its shape and to its record: replaced set only in a part's record.
+func checkEvsRecordPurgeList(recordType protocol.EvsBatchRecordType, tail *EvsBatchRecordTail) error {
+	list, err := tail.PurgeListValue()
+	if err != nil {
+		return err
+	}
+	if list.GetReplaced() && recordType != protocol.EvsBatchRecordType_EVS_BATCH_PART {
+		return fmt.Errorf("%w: a replaced list in a %s record, which only a part's record carries", ErrEvsPushInvalid, recordType)
+	}
+	return nil
 }
 
 // A batch of either format read whole and checked as ParseEvsBatch checks one, each record of either form, and each
