@@ -974,11 +974,11 @@ func TestRecordVaultEnsureLeavesOneVault(t *testing.T) {
 		t.Fatal("the losing vault's RepoDelete{now} is not the first device's")
 	}
 	// a later Ensure answers the vault and files nothing
-	statements := len(world.authLog.Tip().Pin().GetChain())
+	position := world.authLog.Tip().Pin().GetVersion()
 	if again, err := first.Ensure(t.Context()); err != nil || again != secondVaultId {
 		t.Fatalf("a later Ensure: %s, %v", again, err)
 	}
-	if statements != len(world.authLog.Tip().Pin().GetChain()) {
+	if position != world.authLog.Tip().Pin().GetVersion() {
 		t.Fatal("a later Ensure filed again")
 	}
 }
