@@ -55,7 +55,8 @@ func newAclDropWorld(t testing.TB) *aclDropWorld {
 	}
 	self.general = world.repo("general", protocol.RepoKind_REPO_KIND_GENERAL, Id{})
 	self.vault = world.repo("vault", protocol.RepoKind_REPO_KIND_VAULT, self.owner)
-	self.config = world.repo("config", protocol.RepoKind_REPO_KIND_CONFIG, Id{})
+	// the config's row is the state's own, from the Genesis (QD-719)
+	self.config = world.configRepo()
 	admins := func(sidecarIds ...Id) []*protocol.AclRepoAdminRow {
 		rows := []*protocol.AclRepoAdminRow{}
 		for _, sidecarId := range sidecarIds {

@@ -13,6 +13,15 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+// A repo of a kind as a state comes to hold one: the config from the Genesis, with no row (QD-719), any other as a row.
+func aclTestKindRepo(fixture *aclTestFixture, kind protocol.RepoKind, ownerId Id) Id {
+	if kind == protocol.RepoKind_REPO_KIND_CONFIG {
+		return fixture.configRepo(Id{}, Id{})
+	}
+	repoId, _ := fixture.repo(kind, ownerId)
+	return repoId
+}
+
 // The rights a sidecar holds on a repo now, at an audience.
 func aclTestRights(state *AclState, sidecarId Id, repoId Id, audience AclTokenAudience) AclEvsRights {
 	return state.EvsAccess(AclSidecarSubject(sidecarId), repoId, audience, aclTestNow).Rights
@@ -36,7 +45,8 @@ func TestAclEvsAccessConfigByAudience(t *testing.T) {
 	fixture.admission(ephemeralWriter).Ephemeral = true
 	fixture.view.configWriters[ephemeralWriter] = true
 	agent := fixture.agent(owner, tagId)
-	configId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_CONFIG, Id{})
+	// the config's row is the state's own, from the Genesis (QD-719)
+	configId := fixture.configRepo(Id{}, Id{})
 	// no rule reaches the config, whatever it names
 	fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_SIDECAR), []*protocol.AclTarget{aclRepoTarget(configId), aclWildcardRepoTarget()},
 		protocol.AclAction_ACL_ACTION_ADMIN)
@@ -62,6 +72,65 @@ func TestAclEvsAccessConfigByAudience(t *testing.T) {
 	fixture.view.parked[memberDevice] = true
 	if rights := aclTestRights(fixture.state(t), memberDevice, configId, AclTokenAudienceGkm); rights != 0 {
 		t.Errorf("parked device reads the config: %b", rights)
+	}
+}
+
+// §7.9's bootstrap: the Genesis's owner sidecar administers the config repo at both audiences while it stands as a
+// config writer, the scope the exchange gives it alone to create the repo, push its head and form its group. No other
+// config writer does, nor that sidecar once it is no config writer, read_only, parked or revoked.
+func TestAclEvsAccessConfigAdminIsTheBootstrapSidecars(t *testing.T) {
+	fixture := newAclTestFixture()
+	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	first := fixture.device(owner)
+	second := fixture.device(owner)
+	fixture.view.configWriters[first] = true
+	fixture.view.configWriters[second] = true
+	configId := fixture.configRepo(first, owner)
+	all := AclEvsRead | AclEvsWrite | AclEvsAdmin
+	state := fixture.state(t)
+	for _, audience := range []AclTokenAudience{AclTokenAudienceEvs, AclTokenAudienceGkm} {
+		if rights := aclTestRights(state, first, configId, audience); rights != all {
+			t.Errorf("the bootstrap sidecar at %d: %b", audience, rights)
+		}
+		if rights := aclTestRights(state, second, configId, audience); rights != AclEvsRead|AclEvsWrite {
+			t.Errorf("another config writer at %d: %b", audience, rights)
+		}
+	}
+	access := state.EvsAccess(AclSidecarSubject(first), configId, AclTokenAudienceEvs, aclTestNow)
+	if !access.Allowed || access.Reason != AclReasonKindDefault {
+		t.Errorf("the bootstrap sidecar's decision: %+v", access)
+	}
+
+	fixture.view.configWriters[first] = false
+	state = fixture.state(t)
+	if evs, gkm := aclTestRights(state, first, configId, AclTokenAudienceEvs), aclTestRights(state, first, configId, AclTokenAudienceGkm); evs != AclEvsRead || gkm != AclEvsRead|AclEvsWrite {
+		t.Errorf("no longer a config writer: evs %b gkm %b", evs, gkm)
+	}
+	fixture.view.configWriters[first] = true
+	fixture.admission(first).Row.Capabilities = uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY)
+	if rights := aclTestRights(fixture.state(t), first, configId, AclTokenAudienceEvs); rights != AclEvsRead|AclEvsDeposit {
+		t.Errorf("read_only: %b", rights)
+	}
+	fixture.admission(first).Row.Capabilities = 0
+	fixture.view.parked[first] = true
+	if rights := aclTestRights(fixture.state(t), first, configId, AclTokenAudienceEvs); rights != 0 {
+		t.Errorf("parked: %b", rights)
+	}
+	fixture.view.parked[first] = false
+	fixture.admission(first).Row.RevokedAt = fixture.next()
+	if rights := aclTestRights(fixture.state(t), first, configId, AclTokenAudienceGkm); rights != 0 {
+		t.Errorf("revoked: %b", rights)
+	}
+
+	// rows that hold the config's row by hand answer alike, and name no admin either
+	held := newAclTestFixture()
+	owner = held.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
+	first = held.device(owner)
+	held.view.configWriters[first] = true
+	configId = held.configRepo(first, owner)
+	held.rows.Repos = append(held.rows.Repos, &protocol.AclRepo{RepoId: configId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG})
+	if rights := aclTestRights(held.state(t), first, configId, AclTokenAudienceEvs); rights != all {
+		t.Errorf("with the row in the rows: %b", rights)
 	}
 }
 
@@ -204,7 +273,7 @@ func TestAclWildcardNeverReachesKindDefaults(t *testing.T) {
 	agent := fixture.agent(owner, tagId)
 	repoIds := map[protocol.RepoKind]Id{}
 	for kind := protocol.RepoKind_REPO_KIND_GENERAL; kind <= protocol.RepoKind_REPO_KIND_SECRET; kind += 1 {
-		repoIds[kind], _ = fixture.repo(kind, owner)
+		repoIds[kind] = aclTestKindRepo(fixture, kind, owner)
 	}
 	fixture.rule([]Id{tagId}, []*protocol.AclTarget{aclWildcardRepoTarget()}, protocol.AclAction_ACL_ACTION_READ)
 	state := fixture.state(t)
@@ -220,7 +289,7 @@ func TestAclWildcardNeverReachesKindDefaults(t *testing.T) {
 	tagId = explicit.tag(owner)
 	agent = explicit.agent(explicit.member(bridge.MemberRole_MEMBER_ROLE_MEMBER), tagId)
 	for kind := protocol.RepoKind_REPO_KIND_GENERAL; kind <= protocol.RepoKind_REPO_KIND_SECRET; kind += 1 {
-		repoIds[kind], _ = explicit.repo(kind, owner)
+		repoIds[kind] = aclTestKindRepo(explicit, kind, owner)
 		explicit.rule([]Id{tagId}, []*protocol.AclTarget{aclRepoTarget(repoIds[kind])}, protocol.AclAction_ACL_ACTION_READ, protocol.AclAction_ACL_ACTION_DEPOSIT)
 	}
 	state = explicit.state(t)
@@ -511,7 +580,7 @@ func TestAclReposGrantedToAtoms(t *testing.T) {
 	ciTag = wildcard.tag(owner)
 	general, _ := wildcard.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
 	record, _ := wildcard.repo(protocol.RepoKind_REPO_KIND_RECORD, Id{})
-	wildcard.repo(protocol.RepoKind_REPO_KIND_CONFIG, Id{})
+	wildcard.configRepo(Id{}, Id{})
 	wildcard.repo(protocol.RepoKind_REPO_KIND_TEAM_RECORD, Id{})
 	wildcard.rule([]Id{ciTag}, []*protocol.AclTarget{aclWildcardRepoTarget()}, protocol.AclAction_ACL_ACTION_READ)
 	if repos := wildcard.state(t).ReposGrantedToAtoms([]Id{ciTag, NewId()}, aclTestNow); !slices.Equal(repos, aclSortedIds(general, record)) {
