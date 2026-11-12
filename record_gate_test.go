@@ -517,3 +517,35 @@ func TestEveryKindReachesRealGate(t *testing.T) {
 		t.Error("restore is not on the gate's list")
 	}
 }
+
+// A cancel filed after its decision reaches the requester through the poll: kept once it checks against the kept
+// decision, the approval reads cancelled, and the same action is refused rather than filed again.
+func TestCancelReachesRequesterThroughThePoll(t *testing.T) {
+	world := newTestApprovalWorld(t)
+	stored := world.mailAction("someone@example.com")
+	request := world.approved(stored)
+	cancel, err := proto.Marshal(world.signedCancel(world.spend.phone, request.ApprovalId()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		world.log.stateLock.Lock()
+		defer world.log.stateLock.Unlock()
+		world.log.approvalIdCancels[request.ApprovalId()] = cancel
+	}()
+	if err := world.inbox.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if state := world.state(request.ApprovalId()); state.Cancel == nil || state.Cancel.SignerSidecarId != world.spend.phone {
+		t.Fatalf("the cancel row: %+v", state.Cancel)
+	}
+	if got := world.status(request.ApprovalId()); got != ApprovalStatusCancelled {
+		t.Errorf("status %s", got)
+	}
+	if err := world.gate.Authorize(t.Context(), world.action(stored), nil); !errors.Is(err, ErrApprovalCancelled) {
+		t.Errorf("the cancelled action: %v", err)
+	}
+	if world.log.filedCount() != 1 {
+		t.Errorf("%d requests filed", world.log.filedCount())
+	}
+}

@@ -17,9 +17,10 @@
 //	        is fsynced as a decision row and the update callbacks run, ur://approval/{id}'s resources/updated. A
 //	        decision for a request this ledger never held is ignored, never trusted, and one that does not verify is
 //	        not kept. Whether a kept decision spends is §16.6's spend check, at the gate.
-//	cancel  ReceiveCancel keeps an approver's ApprovalCancel once CheckApprovalCancel passes against a kept decision;
-//	        a cancel the log reports through Decision, which hands back no bytes to check, stops new uses without a
-//	        ledger row, the closed direction
+//	cancel  ReceiveCancel keeps an approver's ApprovalCancel once CheckApprovalCancel passes against a kept decision:
+//	        the poll asks the log for one on each approval it holds a decision for and that has a use left; a cancel
+//	        the log reports before any decision, which no kept decision checks, stops new uses without a ledger row,
+//	        the closed direction
 //	use     after each Outcome, FileUse: the approval_use entry carries the use's action_id, which links it to the
 //	        decision entry whose header names the channel, so a receipt names its evidence (R-MCP-7)
 //	status  pending, approved, denied, cancelled, expired, spent, uncertain (ApprovalStatus)
@@ -143,6 +144,9 @@ type ApprovalLog interface {
 	// The first decision on the approval in its request's log: ErrRecordApprovalPending while none is,
 	// ErrRecordApprovalCancelled once a cancel is, ErrRecordApprovalUndeliverable to a deposit-only requester.
 	Decision(ctx context.Context, approvalId Id) (*StoredApprovalDecision, error)
+	// The first cancel on the approval in its request's log, its Signed as stored, a decision before it or not:
+	// ErrRecordApprovalPending while none is.
+	Cancel(ctx context.Context, approvalId Id) ([]byte, error)
 	// Files one use's approval_use entry after its Outcome.
 	FileUse(use *protocol.ApprovalUseBody, runId *Id, actionId []byte) (*RecordEntryRef, error)
 }
@@ -366,6 +370,8 @@ type approvalIndexed struct {
 	filed bool
 	// whether a decision is kept for it, approving or denying
 	decided bool
+	// whether a Cancel row is kept for it
+	cancelled bool
 }
 
 // The index entry of a stored request, filed and decided as its rows say.
@@ -379,6 +385,7 @@ func newApprovalIndexed(request *StoredApprovalRequest, state *ApprovalLedgerSta
 	}
 	if state != nil {
 		indexed.decided = 0 < len(state.Decisions)
+		indexed.cancelled = state.Cancel != nil
 		for _, row := range state.Rows {
 			if row.Kind == ApprovalLedgerFiled {
 				indexed.filed = true
@@ -514,6 +521,15 @@ func (self *ApprovalInbox) markDecided(approvalId Id) {
 	defer self.stateLock.Unlock()
 	if indexed, ok := self.approvalIdRequests[approvalId]; ok {
 		indexed.decided = true
+	}
+}
+
+// Notes that a Cancel row is kept for the request.
+func (self *ApprovalInbox) markCancelled(approvalId Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if indexed, ok := self.approvalIdRequests[approvalId]; ok {
+		indexed.cancelled = true
 	}
 }
 
@@ -733,6 +749,7 @@ func (self *ApprovalInbox) ReceiveCancel(ctx context.Context, storedSigned []byt
 	if err != nil {
 		return approvalId, err
 	}
+	self.markCancelled(approvalId)
 	if written {
 		self.notify(approvalId)
 	}
@@ -740,25 +757,31 @@ func (self *ApprovalInbox) ReceiveCancel(ctx context.Context, storedSigned []byt
 }
 
 // Asks the approval family's log for the decision of each request still waiting, keeping each that checks, and notes
-// each the log reports cancelled. A request the log has no decision for, or will not deliver to a deposit-only
-// requester, stays pending. Answers the errors of the asks that failed, the rest having run.
+// each the log reports cancelled; and for a cancel on each approval with a decision kept and a use left, keeping one
+// that checks. A request the log has no decision for, or will not deliver to a deposit-only requester, stays pending.
+// Answers the errors of the asks that failed, the rest having run.
 func (self *ApprovalInbox) Poll(ctx context.Context) error {
 	if err := self.ensureLoaded(); err != nil {
 		return err
 	}
 	now := self.args.Clock.Now()
-	waiting := func() []Id {
+	waiting, decided := func() ([]Id, []Id) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		approvalIds := []Id{}
+		waiting := []Id{}
+		decided := []Id{}
 		for approvalId, indexed := range self.approvalIdRequests {
-			if !indexed.decided && !self.logCancelledApprovalIds[approvalId] &&
-				now.UnixMilli() < indexed.request.Request.GetNotAfterMillis() {
-				approvalIds = append(approvalIds, approvalId)
+			switch {
+			case indexed.cancelled || self.logCancelledApprovalIds[approvalId]:
+			case indexed.decided:
+				decided = append(decided, approvalId)
+			case now.UnixMilli() < indexed.request.Request.GetNotAfterMillis():
+				waiting = append(waiting, approvalId)
 			}
 		}
-		slices.SortFunc(approvalIds, Id.Cmp)
-		return approvalIds
+		slices.SortFunc(waiting, Id.Cmp)
+		slices.SortFunc(decided, Id.Cmp)
+		return waiting, decided
 	}()
 	errs := []error{}
 	for _, approvalId := range waiting {
@@ -769,7 +792,41 @@ func (self *ApprovalInbox) Poll(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
+	for _, approvalId := range decided {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := self.pollCancel(ctx, approvalId, now); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// Asks the log for a cancel on a decided approval with a use left, keeping one that checks.
+func (self *ApprovalInbox) pollCancel(ctx context.Context, approvalId Id, now time.Time) error {
+	state, err := self.args.Ledger.State(approvalId)
+	if err != nil {
+		return err
+	}
+	if !approvalUsable(state, false, now) {
+		return nil
+	}
+	storedSigned, err := self.args.Approvals.Cancel(ctx, approvalId)
+	switch {
+	case err == nil:
+		if _, err := self.ReceiveCancel(ctx, storedSigned); err != nil {
+			if errors.Is(err, ErrApprovalNoState) {
+				return err
+			}
+			self.log.Warningf("[approval]a cancel of approval %s was not kept: %s", approvalId, err)
+		}
+		return nil
+	case errors.Is(err, ErrRecordApprovalPending), errors.Is(err, ErrRecordApprovalUndeliverable),
+		errors.Is(err, ErrRecordApprovalUnknown), errors.Is(err, ErrRecordApprovalTeamRoute):
+		return nil
+	}
+	return err
 }
 
 // Asks the log for one approval's decision, as Poll does.

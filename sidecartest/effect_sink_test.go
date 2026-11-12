@@ -40,6 +40,10 @@ func (self *sinkTestLog) Decision(ctx context.Context, approvalId sidecar.Id) (*
 	return nil, sidecar.ErrRecordApprovalPending
 }
 
+func (self *sinkTestLog) Cancel(ctx context.Context, approvalId sidecar.Id) ([]byte, error) {
+	return nil, sidecar.ErrRecordApprovalPending
+}
+
 func (self *sinkTestLog) FileUse(use *protocol.ApprovalUseBody, runId *sidecar.Id, actionId []byte) (*sidecar.RecordEntryRef, error) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()

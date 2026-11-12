@@ -35,6 +35,7 @@ type testApprovalLog struct {
 	filed               []*StoredApprovalRequest
 	approvalIdDecisions map[Id][]byte
 	approvalIdCancelled map[Id]bool
+	approvalIdCancels   map[Id][]byte
 	uses                []*protocol.ApprovalUseBody
 	useActionIds        [][]byte
 	// what FileRequest answers, nil to take the request
@@ -42,7 +43,7 @@ type testApprovalLog struct {
 }
 
 func newTestApprovalLog() *testApprovalLog {
-	return &testApprovalLog{approvalIdDecisions: map[Id][]byte{}, approvalIdCancelled: map[Id]bool{}}
+	return &testApprovalLog{approvalIdDecisions: map[Id][]byte{}, approvalIdCancelled: map[Id]bool{}, approvalIdCancels: map[Id][]byte{}}
 }
 
 func (self *testApprovalLog) FileRequest(request *StoredApprovalRequest) (*RecordEntryRef, error) {
@@ -66,6 +67,15 @@ func (self *testApprovalLog) Decision(ctx context.Context, approvalId Id) (*Stor
 		return nil, ErrRecordApprovalPending
 	}
 	return ParseStoredApprovalDecision(storedSigned)
+}
+
+func (self *testApprovalLog) Cancel(ctx context.Context, approvalId Id) ([]byte, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if storedSigned, ok := self.approvalIdCancels[approvalId]; ok {
+		return bytes.Clone(storedSigned), nil
+	}
+	return nil, ErrRecordApprovalPending
 }
 
 func (self *testApprovalLog) FileUse(use *protocol.ApprovalUseBody, runId *Id, actionId []byte) (*RecordEntryRef, error) {
