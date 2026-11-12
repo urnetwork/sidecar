@@ -322,8 +322,12 @@ func checkStorageLimit(view *PushView) *EvsCheckRefusal {
 		Authorization: view.Repo.GetKind() == protocol.RepoKind_REPO_KIND_CONFIG || view.Repo.GetKind() == protocol.RepoKind_REPO_KIND_MAILCFG,
 	}
 	for _, object := range view.Payload.NewObjects {
-		if object.Kind == protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT {
+		switch object.Kind {
+		case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT:
 			quotaPush.NewSegmentCount += 1
+		case protocol.EvsNewObjectKind_EVS_NEW_OBJECT_STAGED_SEGMENT:
+			// format 2's staged segment is new payload (§11.13's limit row; EVS2-M10-06)
+			quotaPush.StagedSegmentCount += 1
 		}
 	}
 	for _, change := range view.Payload.Changes {

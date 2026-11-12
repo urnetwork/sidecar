@@ -46,6 +46,9 @@ func (self *pushAttempt) settle(stored *EvsStoredHead) *pushOutcome {
 		}
 		self.issued = false
 		outcome := committedOutcome(standing.Version, ownCommit)
+		if ownCommit == nil {
+			outcome.committedPlace = standing.Place
+		}
 		if self.ownDepositRef() {
 			// a 5a retry carries the current head (plan-EVS1-deposit-head)
 			outcome.depositHead = self.depositHeadOf(stored.Head)

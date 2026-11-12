@@ -45,86 +45,86 @@ func TestEvsVersioningForFollowsFs68sWriterRules(t *testing.T) {
 		mutate func(args *EvsVersioningArgs)
 		want   uint32
 	}{
-		{"65 MiB with no record: the platform rule", func(args *EvsVersioningArgs) { args.Path, args.Size = "big.iso", 65*mib }, 1},
-		{"63 MiB with no record", func(args *EvsVersioningArgs) { args.Path, args.Size = "big.iso", 63*mib }, 0},
-		{"64 MiB exactly is not above it", func(args *EvsVersioningArgs) { args.Path, args.Size = "big.iso", 64*mib }, 0},
-		{"a present record matching nothing leaves 65 MiB versioned", func(args *EvsVersioningArgs) {
+		{name: "65 MiB with no record: the platform rule", mutate: func(args *EvsVersioningArgs) { args.Path, args.Size = "big.iso", 65*mib }, want: 1},
+		{name: "63 MiB with no record", mutate: func(args *EvsVersioningArgs) { args.Path, args.Size = "big.iso", 63*mib }, want: 0},
+		{name: "64 MiB exactly is not above it", mutate: func(args *EvsVersioningArgs) { args.Path, args.Size = "big.iso", 64*mib }, want: 0},
+		{name: "a present record matching nothing leaves 65 MiB versioned", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.Rules = "big.iso", 65*mib, EvsConfigVersioningRules(withRecord, nil)
-		}, 0},
-		{"the network's record's rule", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "the network's record's rule", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.Rules = "logs/a/b.log", 1, EvsConfigVersioningRules(withRecord, nil)
-		}, 1},
-		{"the repo's own rules replace the network's", func(args *EvsVersioningArgs) {
+		}, want: 1},
+		{name: "the repo's own rules replace the network's", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.Rules = "logs/a/b.log", 1, EvsConfigVersioningRules(withRecord, repoRules)
-		}, 0},
-		{"the repo's own rule", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "the repo's own rule", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.Rules = "media/a.mov", 1, EvsConfigVersioningRules(withRecord, repoRules)
-		}, 1},
-		{"an edit moves no existing versioned path", func(args *EvsVersioningArgs) {
+		}, want: 1},
+		{name: "an edit moves no existing versioned path", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.Newest, args.Rules = "logs/a/b.log", 1, versioned, EvsConfigVersioningRules(withRecord, nil)
-		}, 0},
-		{"an edit moves no existing versionless path", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "an edit moves no existing versionless path", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.Newest = "small.txt", 1, versionless
-		}, 1},
-		{"an explicit off on a versioned path", func(args *EvsVersioningArgs) {
+		}, want: 1},
+		{name: "an explicit off on a versioned path", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Newest, args.Options = "a.txt", versioned, &EvsWriteOptions{Versioning: EvsVersioningOff}
-		}, 1},
-		{"an explicit on on a versionless path", func(args *EvsVersioningArgs) {
+		}, want: 1},
+		{name: "an explicit on on a versionless path", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Newest, args.Options = "a.txt", versionless, &EvsWriteOptions{Versioning: EvsVersioningOn}
-		}, 0},
-		{"a git-mode ref", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "a git-mode ref", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.RefMode, args.Options = "big.iso", 65*mib, protocol.EvsRefMode_EVS_REF_GIT, &EvsWriteOptions{Versioning: EvsVersioningOff}
-		}, 0},
-		{"a creates-only ref", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "a creates-only ref", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.CreatesOnly, args.Options = "big.iso", 65*mib, true, &EvsWriteOptions{Versioning: EvsVersioningOff}
-		}, 0},
-		{"a config repo", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "a config repo", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.RepoKind, args.Options = "big.iso", 65*mib, protocol.RepoKind_REPO_KIND_CONFIG, &EvsWriteOptions{Versioning: EvsVersioningOff}
-		}, 0},
-		{"a mailcfg repo", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "a mailcfg repo", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.RepoKind, args.Newest = "big.iso", 65*mib, protocol.RepoKind_REPO_KIND_MAILCFG, versionless
-		}, 0},
-		{"a lock turns 1 into 0", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "a lock turns 1 into 0", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.Locked = "big.iso", 65*mib, true
-		}, 0},
-		{"a lock turns an explicit off into 0", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "a lock turns an explicit off into 0", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Locked, args.Options = "a.txt", true, &EvsWriteOptions{Versioning: EvsVersioningOff}
-		}, 0},
-		{"a lock turns a versionless path's next version into 0", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "a lock turns a versionless path's next version into 0", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Locked, args.Newest = "a.txt", true, versionless
-		}, 0},
-		{"a lock keeps the index's 2", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "a lock keeps the index's 2", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Locked, args.Options = ".ur-index/b/1/m", true, &EvsWriteOptions{Reserved: EvsReservedIndex}
-		}, 2},
-		{"an index file keeps its 2", func(args *EvsVersioningArgs) { args.Path, args.Newest = ".ur-index/b/1/m", index }, 2},
-		{"the index writer beats the rules", func(args *EvsVersioningArgs) {
+		}, want: 2},
+		{name: "an index file keeps its 2", mutate: func(args *EvsVersioningArgs) { args.Path, args.Newest = ".ur-index/b/1/m", index }, want: 2},
+		{name: "the index writer beats the rules", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.Options = ".ur-index/a/m", 65*mib, &EvsWriteOptions{Reserved: EvsReservedIndex}
-		}, 2},
-		{"git-lfs's store beats a rule matching nothing", func(args *EvsVersioningArgs) {
+		}, want: 2},
+		{name: "git-lfs's store beats a rule matching nothing", mutate: func(args *EvsVersioningArgs) {
 			args.RefName, args.Path, args.Size, args.Options, args.Rules = []byte("ur/lfs"), "ab/cd/x", 1, &EvsWriteOptions{Reserved: EvsReservedLfs}, EvsConfigVersioningRules(withRecord, nil)
-		}, 1},
-		{"git-lfs's store under a lock", func(args *EvsVersioningArgs) {
+		}, want: 1},
+		{name: "git-lfs's store under a lock", mutate: func(args *EvsVersioningArgs) {
 			args.RefName, args.Path, args.Locked, args.Options = []byte("ur/lfs"), "ab/cd/x", true, &EvsWriteOptions{Reserved: EvsReservedLfs}
-		}, 0},
-		{"the mail component's s/model", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "the mail component's s/model", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Options = "s/model", &EvsWriteOptions{Reserved: EvsReservedMailModel}
-		}, 1},
-		{"the directory's d/ paths", func(args *EvsVersioningArgs) {
+		}, want: 1},
+		{name: "the directory's d/ paths", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Options = "d/card", &EvsWriteOptions{Reserved: EvsReservedDirectory}
-		}, 1},
-		{"no rule under .ur-index/ without its writer", func(args *EvsVersioningArgs) {
+		}, want: 1},
+		{name: "no rule under .ur-index/ without its writer", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size = ".ur-index/x", 65*mib
-		}, 0},
-		{"no rule on ur/lfs without its writer", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "no rule on ur/lfs without its writer", mutate: func(args *EvsVersioningArgs) {
 			args.RefName, args.Path, args.Size = []byte("ur/lfs"), "x", 65*mib
-		}, 0},
-		{"a network outside the gate writes 0", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "a network outside the gate writes 0", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Size, args.Format2Admitted, args.Options = "big.iso", 65*mib, false, &EvsWriteOptions{Versioning: EvsVersioningOff}
-		}, 0},
-		{"outside the gate a versionless path's next version is 0", func(args *EvsVersioningArgs) {
+		}, want: 0},
+		{name: "outside the gate a versionless path's next version is 0", mutate: func(args *EvsVersioningArgs) {
 			args.Path, args.Format2Admitted, args.Newest = "a.txt", false, versionless
-		}, 0},
-		{"no rules given: versioned", func(args *EvsVersioningArgs) { args.Path, args.Size, args.Rules = "big.iso", 65*mib, nil }, 0},
+		}, want: 0},
+		{name: "no rules given: versioned", mutate: func(args *EvsVersioningArgs) { args.Path, args.Size, args.Rules = "big.iso", 65*mib, nil }, want: 0},
 	} {
 		args := base()
 		c.mutate(args)

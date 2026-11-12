@@ -29,6 +29,8 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
@@ -58,6 +60,8 @@ type EvsCommitted struct {
 	// The record's bytes, which the batch stores until evacuation moves them, and the request's.
 	RecordByteCount  int64
 	RequestByteCount int64
+	// The record's purge list for the purge, nil when it lists none the purge takes (push_purge.go).
+	Purge *PurgeCommit
 }
 
 // Step 8's push sequence and hints (§11.10), which EVS1-M2-15 builds: raises {evsq_<repo_id>} and returns its new
@@ -169,11 +173,16 @@ func (self *pushAttempt) committed(written *EvsStoredHead) *pushOutcome {
 // Step 6, once per attempt: the budget, the record and the new slots. A rerun of step 7 on a reread head keeps all
 // three, since the record and the slots are this statement's whatever head it commits on.
 func (self *pushAttempt) step6() *pushOutcome {
+	// the tail first, so the push's price counts its purge list (push_staged.go)
+	tail, err := self.recordTail()
+	if err != nil {
+		return self.unavailableOn(err)
+	}
 	if outcome := self.admit(); outcome != nil {
 		return outcome
 	}
 	if self.place == nil {
-		place, err := self.engine.batches.Append(self.writeCtx, self.cluster.ClusterId(), self.batchRecord())
+		place, err := self.engine.batches.AppendFormat2(self.writeCtx, self.cluster.ClusterId(), self.batchRecord(), tail)
 		if err != nil {
 			// nothing this attempt carried reached a head
 			return self.unavailable()
@@ -208,9 +217,17 @@ func (self *pushAttempt) batchRecord() *sidecar.EvsBatchRecord {
 	return record
 }
 
-// The record's bytes as its batch holds them, for the cost and the usage count.
+// The record's bytes as its batch holds them, for the cost and the usage count: a format-2 record's tail included,
+// its purge list as bounded once computed (push_staged.go).
 func (self *pushAttempt) recordByteCount() int64 {
-	return int64(sidecar.EvsBatchRecordHeaderByteCount + len(self.batchRecord().Body))
+	byteCount := int64(sidecar.EvsBatchRecordHeaderByteCount + len(self.batchRecord().Body))
+	if 0 < len(self.staged) || (self.purge != nil && self.purge.list != nil) {
+		byteCount += 8 + int64(len(self.staged))
+		if self.purge != nil && self.purge.list != nil {
+			byteCount += int64(proto.Size(self.purge.list))
+		}
+	}
+	return byteCount
 }
 
 // The budget for the push's writes, once per attempt: AdmitP1 at its full price in the token network's queue.
@@ -491,6 +508,10 @@ func (self *pushAttempt) buildNextHead(pageOut *EvsPageOut) (*protocol.EvsHead, 
 		coveringPrefixes = self.statement.ChangedPrefixes
 	}
 	entry := sidecar.NewEvsWindowEntry(self.statement.Sha256, push, self.payload.ChangedPaths(), coveringPrefixes, self.payload.CreatesPath, self.place)
+	if self.purge != nil && self.purge.replacesVersionless {
+		// window bit 4: the push replaces or removes a versionless version (EVS2-M10-06)
+		entry.Flags |= uint32(protocol.EvsWindowFlag_EVS_WINDOW_VERSIONLESS_REPLACED)
+	}
 	next.Window = append(append([]byte{}, next.GetWindow()...), entry.Encode()...)
 	next.Lease = nil
 	next.Deleted = push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_DELETE) != 0
@@ -532,6 +553,7 @@ func (self *pushAttempt) newCommitted(head *EvsStoredHead) *EvsCommitted {
 		Payload:          self.payload,
 		RecordByteCount:  self.recordByteCount(),
 		RequestByteCount: self.request.requestByteCount,
+		Purge:            self.purgeCommit(head.Version()),
 	}
 }
 
@@ -562,6 +584,8 @@ func (self *EvsEngine) afterCommit(committed *EvsCommitted) {
 			// transfer is the router's to count, every request's and reply's bytes once (transfer_meter.go)
 		}
 		self.heads.CacheCommit(ctx, committed.RepoId, committed.RefId, committed.Head, pushSequence)
+		// a certain commit's candidates: the purge waits its 60 s from here (§11.13's who row)
+		self.handPurge(committed.Purge)
 		self.folder.NoteCommit(committed.ClusterId, committed.RepoId, committed.RefId, committed.Head.Head)
 		if push := committed.Statement.Push; push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0 {
 			self.queueEpochCopy(ctx, committed.RepoId, committed.RefId, push.GetPathEpoch())

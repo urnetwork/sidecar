@@ -11,8 +11,10 @@
 //     closure bounds as at the limit;
 //  4. the segment cluster's HDD share (hdd_admission.go): 503 with Retry-After past its line, an authorization or
 //     closure upload exempt;
-//  5. the 32 B public header: "URvs", format 1 with no flags, this repo and a generation; format 1 refuses a kind-5
-//     header FORMAT_UNSUPPORTED {needs_format: 2}, and format 2 adds 409 VERSIONING and the versionless mark at M10.
+//  5. the 32 B public header: "URvs", format 1 with no flags, this repo and a generation; a format-1 instance refuses
+//     a kind-5 header FORMAT_UNSUPPORTED {needs_format: 2}, and a format-2 one reads its push_id, answering 409
+//     VERSIONING for another push's or a network outside the format2 gate, and marks the receipt versionless
+//     (upload_versionless.go).
 //
 // A stored segment answers 200 {EvsUploadReceipt} (upload_receipt.go), adds its size to the repo network's stored
 // bytes through the usage batcher, counts toward the segment cluster's PUTs a second (HddAdmission.CountPut), and
@@ -133,7 +135,8 @@ func (self *EvsEngine) serveUploadSegment(request *EvsRequest) {
 		return
 	}
 	query := request.Http.URL.Query()
-	if _, err := parseEvsHexId(query.Get("push")); err != nil {
+	pushId, err := parseEvsHexId(query.Get("push"))
+	if err != nil {
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		return
 	}
@@ -218,13 +221,26 @@ func (self *EvsEngine) serveUploadSegment(request *EvsRequest) {
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		return
 	}
+	versionless := false
 	switch {
 	case string(header[0:4]) != evsSegmentHeaderMagic:
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		return
-	case header[4] == evsSegmentHeaderFormatKind5:
+	case header[4] == evsSegmentHeaderFormatKind5 && !self.format2Instance():
 		request.Refuse(&protocol.EvsRefusalReply{Code: protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED, NeedsFormat: 2})
 		return
+	case header[4] == evsSegmentHeaderFormatKind5:
+		if byteCount < evsSegmentHeaderByteCount+evsKind5HeaderTailByteCount {
+			request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+			return
+		}
+		headerTail, refusal := self.readUploadKind5Header(request.Http.Body, header, byteCount, request.RepoId, pushId, sidecar.Id(networkId))
+		if refusal != nil {
+			request.Refuse(refusal)
+			return
+		}
+		header = append(header, headerTail...)
+		versionless = true
 	case header[4] != evsSegmentHeaderFormat1 || header[5] != 0 || header[6] != 0 || header[7] != 0:
 		request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
 		return
@@ -271,7 +287,7 @@ func (self *EvsEngine) serveUploadSegment(request *EvsRequest) {
 		request.Unavailable(nil)
 		return
 	}
-	receipt, err := IssueUploadReceipt(deps.Keys, request.RepoId, segmentId, uint64(byteCount), uploadTime, request.SidecarId, false, request.Now())
+	receipt, err := IssueUploadReceipt(deps.Keys, request.RepoId, segmentId, uint64(byteCount), uploadTime, request.SidecarId, versionless, request.Now())
 	if err != nil {
 		request.Unavailable(nil)
 		return
