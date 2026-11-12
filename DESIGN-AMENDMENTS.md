@@ -5226,3 +5226,398 @@ Questions: `details-3-key-rotation.md`.
 Changes: §2.8 smtp-2 amended and smtp-7 added (DESIGN-DETAILS 3.8; design-records); SMTP-M9-35's proto fields and SMTP-M9-40's fetch may reach a release once smtp-7 has landed; the ops owner confirms smtp-7's ttl line (EX7).
 
 Questions: `details-3-metadata-rows.md`.
+
+### QD-717: How does evs match a token's ur_sidecar_id to §5's binding, when the authorization log carries no client ids and evs has no Postgres?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+evs takes a token's (ur_sidecar_id, ur_client_id) pair as §5's binding, as the exchange resolved it when it minted the token (exchangeClientSidecarId reads model.GetSidecarIdentityByClient), and checks in its own state only that ur_sidecar_id is an admitted, unrevoked sidecar of the token's network. A rebind's old client can read for at most a token's life (15 minutes); its writes are already voided by the rev/ object every write reads. No lookup route, cache or log field is added: a looked-up binding would be api's assertion just as the token is. §11.8's Authorization row reads "an admitted, unrevoked sidecar of the token's network, as the exchange bound it".
+
+Changes: §11.8's Authorization row (design-records); EvsBindingSource goes and the real EvsAuthState's MatchBinding checks admission and revocation in the token's network (evsservice/auth_state_acl.go, engine.go).
+
+Questions: `acl-m2-11-evs-binding-source.md`.
+
+### QD-718: Who builds gkm's authorization state over the gate cache, GkmAuthState for the gkm block and GkmReconcilerState for taskworker's reconciler, which no plan's Provides names?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
+
+A KEYS task after ACL-M2-14 builds both real seams in gkmservice over AclGateCache's exported API: GkmAuthState (a token's standing and honored scope through ACL-M2-14's HonorScope for the gkm audience, with the gkm-only answers KEYS defines: readers, writers, pins, Delegations, late holders and HoldersDropped over sidecar.GkmRemoveDue) and GkmReconcilerState (each network's moves, the networks the host holds, a network's newest state as a GkmAuthView, and a sidecar's network). ACL adds to AclGateCache, as a small separate change in its own files, the list of networks it holds, an index from a sidecar to the network that admits it, and a callback when a network's new state is installed, so a reconciler woken by a hint reads the new snapshot. Every gate check stays in ACL's one cache (C-09); until both land the gkm block and taskworker's reconciler stay failed closed as built.
+
+Changes: a KEYS task builds GkmAuthState and GkmReconcilerState in gkmservice; AclGateCache gains its network list, a sidecar-to-network index and an installed-state callback.
+
+Questions: `keys-m2-17-gkm-auth-state-owner.md`.
+
+### QD-719: Where does the config repo's own AclRepo row come from, since no RepoCreate files it and every gate reads it?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §8 Access control.*
+
+When a state's rows hold no AclRepo for the network's config repo, ACL's state build (NewAclState or ConfigState.Acl, acl_state.go) adds AclRepo{repo_id: Genesis.config_repo_id, kind: config} with no admins, so the kind's defaults answer it alike in every reader, gate and api, all of which hold the Genesis. No rows bytes change: base 1's compile stays empty and CompileAcl copies only the statements' repos, and a RepoCreate of kind config stays refused. The exchange's repo:<config_repo_id>:r and :rw, a forward_only client's config r (owner decision 197), evs's and gkm's HonorScope of config scopes, and evs's PUT of the config repo at bootstrap then answer from that row.
+
+Changes: ACL's state build adds the config repo's row from the Genesis (acl_state.go); the hand-built config rows in acl_evs_test.go's fixture and sidecartest/gkmschedule/world.go can go.
+
+Questions: `team-m2-15-config-repo-acl-row.md`.
+
+### QD-720: Where may api keep a team IdP sign-in's flow state (state, nonce, PKCE verifier, the user that began it) between its start and GET /auth/sso/callback, and under which §2.8 row?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+
+api keeps a team IdP sign-in's flow state (state, nonce, PKCE code_verifier, IdP, network, redirect, and the signed-in user that began it, for D-TEAM-23's JIT link) under a Redis key {sso_<state>} as JSON, set with a 10-minute ttl and taken with GETDEL, so a replayed state finds nothing. §2.8's api-3 gains "IdP sign-in flows in progress (state, nonce, PKCE verifier, IdP, network, the signed-in user that began one; 10 min, taken once)". The state is soft: a lost Redis only restarts sign-ins in flight, as §19.7 allows. No table and no cookie. The ttl is a settings field with 10 minutes as its default (QD-702).
+
+Changes: §2.8's api-3 row gains the sso flow line (metadata_list.yml; design-records folds DESIGN.md); TEAM-M6-05's NetworkSsoFlowStore gets its Redis implementation, installed in production.
+
+Questions: `team-m2-16-sso-flow-state-row.md`.
+
+### QD-721: Should EvsRepo's write take the path version its caller read, so a mail writer's append is a path CAS?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+EvsPathWrite gains IfVersion *uint64 (nil: as today), which planPath checks against what its read found (0: absent or removed; else the standing version), answering the same EvsError PATH_CONFLICT a racing commit gets when they differ; the push's base_entry_version then equals the caller's read, so §11.8's 5g CAS spans the caller's read to the commit. It gives §15.7's created-only-if-absent writes (addr/, burner/, o/, ingest's m/) their create-only form as IfVersion 0. mailEvsStore.Write maps each write to one EvsPathWrite and PATH_CONFLICT's token paths back to its own paths, and every mail writer reads again on a conflict, as MAIL-M7-06 built.
+
+Changes: EvsPathWrite.IfVersion and planPath's check (evs_plan.go, an EVS1 change); mailEvsStore.Write wired to it, so MAIL writes through evs (MAIL-M7-04, -06, -12, -15).
+
+Questions: `mail-m7-06-evs-path-precondition.md`.
+
+### QD-722: Does a record-class stream's creates-only rule take a directory delta that only adds names, so §16.8's 2,048-entry directories can grow, or does a stream carry no directory rows at all?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+On a record-class stream ref, evs's creates-only rule (5c's checkCreatesOnly and replaying readers' createsOnly in evsCheckRefRules) accepts a directory change whose delta only adds rows: no removed tokens, on the directory entry's newest version, the entry staying of kind directory. Every file change stays a creation. §16.8's storage row and RECORD.md section 5.2 stand as written (2,048 entries to a directory, its name table within 256 KiB), and §11.8's record-class row reads "creates only, a directory taking add-only deltas". Each push into a standing leaf rewrites that directory's folded index entry, up to 256 KiB, as §16.8 sized. RECORD-M3-12's binding needs no change once evs takes the delta.
+
+Changes: §11.8's record-class refs row (design-records); evsservice/check_refs.go's checkCreatesOnly and evs_verify.go's evsCheckRefRules take an add-only delta; RECORD-M3-12's local refusal (ErrEvsStreamDirectoryDelta) goes.
+
+Questions: `record-m3-12-stream-directory-rows.md`.
+
+### QD-723: How does a members endpoint on port 8443 sign its visitors in, when the issuer takes an edge origin only with no port?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+
+§7.8's edge login issuer (TEAM-M5-01's server/oauth/edge_login.go) accepts client_id https://<host>.<net>.<root>:<port> for the four tlsedge ports, 443 written bare, with redirect_uri on that same origin and the ID token's aud that origin, and checks the members publish grant for (host, port), which ACL-M5-01's PublishGrant(subject, host, port, now) already takes. Each endpoint stays its own origin and audience (D-TEAM-15's one origin), so a 443 session never counts on 8443 or the reverse, and the TLS front logs members in on every tlsedge port. §7.8's wording says the origin carries its port when it is not 443.
+
+Changes: §7.8's edge login wording (design-records); TEAM-M5-01's issuer accepts the tlsedge ports and checks the grant for (host, port); the TLS front's members login on non-443 ports (tls_edge_login.go) stops answering 503.
+
+Questions: `tls-m5-19-members-login-on-8443.md`.
+
+### QD-724: Where does api keep devices' re-seed uploads until two members agree, and how does it know a network's log has resumed?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+
+api keeps §7.9's site-loss re-seed uploads in a Redis soft-state family {acl_<networkId>}r: one hash field per uploading sidecar holding its newest upload, the key's ttl 24 h, and a resumed marker field set when the network's resume base lands. Uploads are soft state devices send again until their network resumes, which owner decision 136 lets Redis hold, so they adopt across api instances. §7.8's re-seed mode ends per network at the resumed marker, while sidecar.yml's reseed stays the switch that allows it at all. §2.8's api-7 gains the family's line. The ttl is a settings field with 24 h as its default (QD-702).
+
+Changes: §2.8's api-7 gains {acl_<networkId>}r (metadata_list.yml; design-records folds DESIGN.md); model.ConfigReseedUploads moves from process memory to the Redis family; re-seed mode ends per network at the resumed marker.
+
+Questions: `team-m3-02-reseed-upload-store.md`.
+
+### QD-725: What does `POST /evs/v1/repos/<id>/reseed` take, and which of a push's checks does a re-seeded push skip?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+POST /evs/v1/repos/<id>/reseed takes one message, EvsReseedRequest {statement = 1, payload = 2, parts = 3 (repeated EvsPushPart bytes, in order), slot_id = 4, slot = 5}, one push or one slot per call. evs runs the push route's steps 4 to 8 in a reseed mode that writes an EVS_BATCH_RESEED record per push, and per part beside the seal record for a push in parts. The mode skips the statement's time window and TIME_STALE, the 24 h receipt rule and the quota gate (QD-084 leaves re-seed uploads unbilled), and keeps the chain onto the current head (base_version and base_chain equal to it, so only versions past the head go), the signature at the statement's own auth pin, §11.8's refs table and 5h's slot rules. It takes segments only once PUT seg/ holds them (EVSB-M2-09), and a slot only once a re-seeded version names it, stripped by every ERASE evs holds (QD-096). Signed EvsReseed statements are kept at reseed/<repo>/<ref> and served with the head, which is how a reader's AcceptReseed gets them. §11.13's ordering and refusals stand as written. §2.8 gains the reseed/ object family's row.
+
+Changes: evs.proto's EvsReseedRequest (fenced by design-records); §2.8's row for reseed/<repo>/<ref> (metadata_list.yml); EVSB-M2-20's route, EvsRepo.Reseed, ur evs reseed and FS-41's storage clauses build on it.
+
+Questions: `evsb-m2-19-reseed-route-body.md`.
+
+### QD-726: What bytes does a sealed §21.10 record carry, and where in vault do its seal key and MAC key live?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §21 Abuse, safety, and legal process.*
+
+A §21.10 record is sealed with HPKE-XWing as smtpedge's sealed report copies are (QD-441: KEM 0x647a, HKDF-SHA256, AES-128-GCM, base mode), info "UR abuse 1.0 record", body u8(1) || enc (1,120 B) || ct, the record's canonical JSON with its HMAC-SHA-256 MAC (QD-078) inside the plaintext. Vault file abuse-mailbox.yml holds abuse_mailbox_mac_key (32 random bytes, base64) and abuse_mailbox_seal_public_key (1,216 B, base64), mounted on api and taskworker only; the private key is held offline beside §19.10's restore runbook and is reachable by no running service. The mail is a text/plain body of the base64, through api's and taskworker's SES path. The legal-request mailbox (QD-088) takes the same seal and key file.
+
+Changes: the production AbuseRecordMailer seals and sends (ABUSE-M5-03, -05); the owner creates abuse-mailbox.yml in vault and keeps the private key offline (an outward action).
+
+Questions: `abuse-m5-03-record-seal.md`.
+
+### QD-727: How does a verifier holding only rows check a decision's channel against evidenceDefault, for an action no requests rule governs?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §8 Access control.*
+
+AclRows gains repeated uint32 evidence_default = 10: the policy document's effective evidenceDefault (all three channels where the document names none), compiled at each base as each AclRequestRule's evidence list is (QD-396). Every verifier, the daemon, every server gate and every reader, checks a ruleless action's channel against it in §16.6's spendable: dns_set and dns_delete at POST /dns/records (§12.8) and bridge_expose approvals in ConfigState.CheckBridgeApproval. §2.8's api-7 names the field, since rows are server-visible (I-18); it shows api only which channels the network accepts by default, as each rule's row already does for grants. One spend check and one verdict everywhere (D-MCP-12), and a document's narrowing of evidenceDefault (to device alone, say) holds at the gates.
+
+Changes: AclRows.evidence_default = 10 (acl.proto; fenced by design-records); §2.8's api-7 names it (metadata_list.yml); SpendState reads it for a ruleless action, replacing SpendRefusalEvidenceUnknown's interim refusal.
+
+Questions: `mcp-m3-03-evidence-default-at-gates.md`.
+
+### QD-728: Which {svc_} key CreateContract reads for a ur/ stream, where the edge is the listener and the sidecar the dialer?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §6 The sidecar subprotocol.*
+
+§6.10.1 item 3's service pair is keyed by its non-edge end in every namespace: a ur/ Find (SOCK-M9-01, D-SOCK-11), where the edge listens as ur/<service> and a sidecar dials, writes field <edge listener client_id> of {svc_<sidecar dialer client_id>}, the roles swapped in the key and the ticket unchanged, so CreateContract's one Redis read is always field <edge> of {svc_<sidecar>} whichever end listens. Revocation and unlisten remove a ur/ pair from the dialer's key; the edge's last unlisten does not reach it, so a ur/ pair ends at its 60 min ttl. §6.10.1 item 3 and §2.8's sock-3 say so.
+
+Changes: §6.10.1 item 3 and §2.8's sock-3 (design-records); SOCK-M9-01's Find writes a ur/ pair under the sidecar dialer's key; CreateContract's decideServiceContract reads field <edge> of {svc_<sidecar>} for ur/ streams too.
+
+Questions: `proto-m5-04-ur-pair-key.md`.
+
+### QD-729: Which SidecarActionKind and CanonicalAction fields carry §14.4's TL4 allowance for a recipient domain?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §14 The SMTP edge.*
+
+§14.4's TL4 allowance for a recipient domain is its own outward action (I-8): SidecarActionKind 18, mail_tls_unauthenticated, appended to record.proto's enum, whose row in record_action_kinds.go requires host (5) holding the recipient domain, lowercase with no trailing dot, and takes expires_millis (8) for an allowance that ends. Approvers render it from daemon-built fields as "Send mail to <domain> through a mail server that cannot be authenticated: an active URnetwork edge could read it" (§2.8 EX4). The desktop keeps a granted allowance per recipient domain in its SidecarStore, and a phone's message carries the approval's id on its signed o/ entry's tl4_domains (plan-SMTP-small-readings #11). No ordinary mail_send approval counts as TL4 consent. §5.4's list and §16.8's table gain the kind.
+
+Changes: record.proto's SidecarActionKind 18 (fenced by design-records); §5.4's and §16.8's lists (design-records); SmtpTlsPolicy.AllowUnauthenticated authorizes through it.
+
+Questions: `smtp-m9-06-tl4-allowance-action.md`.
+
+### QD-730: What does `KeyRegister.attestation` hold, given that every attestation format but `none` signs the create ceremony's client data, which the attestation object does not carry?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
+
+KeyRegister.attestation holds a canonical CBOR map of two byte strings, {"attObj": the WebAuthn attestation object, "clientDataJSON": the create ceremony's client data}; a CTAP2 client (ur with a FIDO key) writes the JSON it hashed. The verifier (MCP-M3-08's VerifyPresenceAttestation) checks the client data's type is webauthn.create and its origin is on §16.6's table, checks each of packed, tpm, android-key and apple over SHA-256 of the client data against the roots the release pins, and leaves the challenge unchecked, since the credential key in authData, which must equal public_key, binds the attestation to the registration. fmt none and an empty attestation still label asserted. §16.6 gains the line, and api-7's words for what a key registration shows name the origin and the challenge. QD-137's interim (clients request none, no production roots) stands until roots ship.
+
+Changes: §16.6's registration row and §2.8's api-7 wording (design-records); VerifyPresenceAttestation reads the map and checks the four formats over the client data.
+
+Questions: `mcp-m2-01-attestation-client-data.md`.
+
+### QD-731: Should an AuthKeyBundle's delegation_id be the 32-byte SHA-256 of the Signed Delegation that the log names, rather than the 16-byte id TEAM-M1-05's parser reads?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+
+An AuthKeyBundle's delegation_id is the 32-byte delegation_id §10.5 defines, SHA-256 of the Signed Delegation (bridge.SignedBytesSha256 per QD-001), the one identifier ConfigState's DelegationRow, §6.9's signer table and the daemon's self-signed SidecarAdmit (signer_id the delegation_id, §5.6, C-03) already use. TEAM-M1-05's decodeAuthKeyBundle checks 32 bytes and keeps them as bytes, and the creating device's encoder writes them. §7.8's AuthKeyBundle line gives the width. No key has been minted, so nothing migrates.
+
+Changes: §7.8's AuthKeyBundle line names 32 bytes (design-records); TEAM-M1-05's decodeAuthKeyBundle and the creating device's encoder.
+
+Questions: `core-m2-01-bundle-delegation-id-width.md`.
+
+### QD-732: Where does the keyless device role get the base, rows and entries that verify a BridgeState, when §18.6's `SetState(state)` takes the state alone?
+*Decided by the owner on 2026-11-12, asked one question at a time, then withdrawn. Folds into §18 SDK, apps, and extension integration.*
+
+Withdrawn and corrected on 2026-11-12: DESIGN-DETAILS.md section 4 had answered this before it was asked, and the owner confirmed that section 4 stands. Under owner decision 197 the apps' VPN component is self-contained with its own forwarding key and never waits on the app, so it fetches the log itself: the newest base, its rows and the entries a BridgeState rests on are in its own store, and device.Posture.SetState(state, log) keeps the argument SDK-M4-01 built, filled in process. Nothing new crosses the app-to-component channel, and §18.6's SetState(state) and §17.8's persist row read as section 4 writes them. The answer first given (the log travelling with each state over SDK-M8-07's channel) does not stand.
+
+Changes: none; DESIGN-DETAILS section 4 stands as written.
+
+Questions: `sdk-m4-01-state-proof.md`.
+### QD-733: Where in BridgeRules do `autogroup:untagged`'s rows live, which an sdk provider gives a sealed subject that no row binds?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
+
+BridgeRules gains BridgeRuleSubject untagged = 10: the dial, route and exit rows autogroup:untagged holds at this host, with no sidecar_id, member_id or client_ids. An sdk provider before C16 gives those rows to any sealed subject no row binds (an other client, §8.4, untagged for rule 4 as owner decision 105 keeps for app devices), so under an ACL document an app device keeps the exits its policy grants the group. The compiler (BRIDGE-M4-16) fills it from §8.5's expansion; ParseBridgeRules checks it as a subject's rows. Per-subject rows stay as they are, and every such client still shares the zero subject id in its rule tags. BridgeRules is in-process, so no §2.8 row.
+
+Changes: bridge.proto's BridgeRules.untagged = 10 (fenced by design-records); BRIDGE-M4-06's parser and fixture, BRIDGE-M4-16's compiler and BRIDGE-M4-09's hook use it.
+
+
+DESIGN-DETAILS 12.9 had answered it on this option (BridgeRules.untagged = 10, filled by the compile's reach pass), and section 12's tasks built it; this confirms it.
+Questions: `bridge-m4-09-other-client-rows.md`.
+
+### QD-734: How does the push that creates a ref give evs the head's sealed ref name and, for an overlay, its base (ref, version)?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A push that creates its ref, or the first push after a DELETE, carries two payload sections: 15, the sealed ref name, and 16, the overlay base (an EvsOverlay {ref_id, version}). The same two values are repeated inside the push's sealed metadata, so the push's signature covers them through sealed_metadata_sha256. The sealed name uses manifest of the push's generation with AAD "UR evs 1.0 ref name" || repo_id || ref_id. evs copies the two cleartext sections into EvsHead's sealed_ref_name (7) and base (8) at step 7 and refuses them on any other push with 409 REF_MODE; a reader compares the head's cleartext copies with the sealed ones and alarms on a mismatch. §11.7's versions row reads the overlay chain from the head at creation. No fenced message changes; EVS-FORMAT.md states both sections.
+
+Changes: EVS-FORMAT.md's payload sections 15 and 16 and the sealed metadata's copies; evs's step 7 fills EvsHead.sealed_ref_name and base; readers check them; GET .../refs lists refs by name and overlays can be created.
+
+
+DESIGN-DETAILS section 8 had built on this option, and section 8's tasks built it (evs_ref.go's ref name AAD); this confirms it.
+Questions: `evs1-m2-01-ref-creation-fields.md`.
+
+### QD-735: Does an inline record travel inside its entry version's locator, or in the payload's inline-records section, or both?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+An inline record travels inside its entry version's kind-2 EvsLocator (inline = 5), so entry_sha256 covers its bytes and there is one copy. In format 1 the payload's inline-records section (3) and EvsPushPart.inline_records (5) stay empty: evs refuses a push or part that sets either as INVALID, and both are held for kind 3's push-payload range, which §11.6 reserves for a format readers learn first. idx/ keeps the newest version with its inline records and older ones with them elided, and evs restores them from the push record's entry versions before serving the signed bytes, as §11.7's holds row says; §11.9 serves a dropped version's entry only when its chain names no inline record. Nothing renumbers. EVS-FORMAT.md's interim already reads so.
+
+Changes: EVS-FORMAT.md's interim reading becomes the rule; EVS1-M2-05's codec, EVS1-M2-10's elision and restore, and EVS1-M2-11's 5h check of kind-2 locators build on it.
+
+Questions: `evs1-m2-01-inline-record-home.md`.
+
+### QD-736: Where does an open AuthorityProposal live once a base folds past it, given ProjectionRows has no field for one?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+
+ProjectionRows gains repeated ProposalRow proposals = 7: each AuthorityProposal still open at the base (proposal_id, the statement type, the proposed statement's bytes or its hash, each signer with its position, the proposal's not_after_ms, and for a recovery-signed proposal its p and o), compiled from the config head's fold records like every other row. A proposal folded under a base stays open in the rows and closes at its k-th counted cosign, its recovery window's ApiTick (72 h after its newest recovery signature) or its not_after (7 days), so api, the gates, a new device and a long-running reader hold the same S(n) after a fold (D-TEAM-19). §2.8's api-7 gains the line; proposals are log statements api already sees, so no value is new to it. Rows grow only by open proposals.
+
+
+Changes: none beyond DESIGN-DETAILS section 5 as built. DESIGN-DETAILS section 5 had answered it on this option (ProjectionRows.proposals = 7, ProposalRow), and TEAM-M2-05 built it; this confirms it.
+
+Questions: `team-m2-02-open-proposals-across-bases.md`.
+
+### QD-737: Which record lists a push in parts' purge candidates, when a rename's removal and its target can sit in different parts?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+For a push in parts, no part's record lists purge candidates; the seal's record lists the push's candidates: each part's replaced versions' kind-5 segments and, in slot-keyed repos, their slots, less every segment and slot any part's versions name. The seal computes them where every version is known, from its rerun of step 4 over the heads and entries (or from what the part records carry of each replaced version's kind-5 ids and slots), through evsservice.PurgeCandidates unchanged. A one-part push lists its candidates in its own record as before. §11.13's purge row says "in the record of the push, or for a push in parts of its seal". plan-EVS2-slot-rename's rule that a removed path's segment or slot is named by at most one new version, checked across parts at the seal, stands.
+
+Changes: §11.13's purge row (design-records); EVS2-M10-06 lists a push in parts' candidates at the seal, not per part.
+
+
+DESIGN-DETAILS 10.9 had answered it on this option, the part's record carrying what it replaced so the seal reads no entry again, which governs; EVS2-M10-06 built it.
+Questions: `evs2-m10-04-purge-across-parts.md`.
+
+### QD-738: How does a DROP whose lists need more parts than its changes fill span parts, when every part must hold a change?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+In format 2, a DROP push's parts after its last change may hold no change and only sections slices of its lists (plan-EVS2-drop-list-parts). Such a part has no changes_root field and joins no Merkle level; part_count counts it and parts_sha256 binds it; the statement's changes_root covers only the parts with changes, and the parted tree and absence proofs name changed parts only. Changeless parts come only after the last changed part, and only in a DROP. One DROP per action stands, as §11.7 writes it. It agrees with QD-658, under which a statement in parts may state an empty change list. EVS-FORMAT.md's parts row says so for format 2.
+
+Changes: EVS-FORMAT.md's format 2 parts and seal rules; EVS2's DROP builder and evs's part and seal checks.
+
+
+DESIGN-DETAILS 10.9 had answered it on this option, which QD-601 and QD-658 since made the rule for every push; 10.2.5 is the DROP's layout and EVS2-M10-36 built it.
+Questions: `evs2-m10-03-drop-list-parts-without-changes.md`.
+
+### QD-739: Where does a record entry's 32-byte salt live in its slot, when evs's slot format holds only 72-byte wrapped 32-byte keys?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+EVS-FORMAT.md adds a 104 B wrapped block for record-class slots: 24 B nonce, the 64 B row of the entry's 32 B key || its 256-bit salt, 16 B tag, wrapped under fek_g with its own AAD label ("UR evs 1.0 record slot row" || repo_id || u64be(g)). evs's checkEvsSlotObject accepts 72 B, 104 B or the deposit's HPKE length, one width per slot. The key and salt die together in one ERASE (owner decisions 61 and 90), and neither sits in the entry file. §16.8 and RECORD.md sections 5.1 and 5.2 stand as written; §11.8's slot/ row names both widths. evs still opens nothing (I-1).
+
+Changes: EVS-FORMAT.md's wrapped-key block gains the 104 B record row (before format 1 freezes); §11.8's slot/ row (design-records); evs_slot.go's checkEvsSlotObject and codecs accept it; RECORD-M3-01's sealing and RECORD-M3-12's binding write real slots.
+
+Questions: `record-m2-01-slot-row-salt.md`.
+
+### QD-740: How do protos-services-canonical-action's move of local_port, weight and alpn and plan-BRIDGE-gate-row-prefixes#2's sealed_detail combine in record.proto, and which CanonicalAction version does sealed_detail take?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
+
+QD-064 and QD-003 combine by field. local_port, weight and alpn leave CanonicalAction (24, 25 and 34 reserved) for sealed ApprovalRequest fields 14, 15 and 16, daemon-built and rendered by approvers, for every kind that has them (socket_listen, tls_publish, bridge_forward, bridge_expose), since none is a grant's prefix or port; publishes keep their other clear fields. sealed_detail = 38 belongs to dial and route grants, as CanonicalAction version 4: a new record.proto message CanonicalActionDetail { repeated string cidrs = 1; uint32 target_port = 2; repeated string grant_dst = 3; } under plan-TEAM-sealed-field-format's SealedBody, and those grants' clear fields then hold no prefix or port. A version-3 access_request to a worker's ports carries its port and sidecar:<id>:tcp:<port> text the same way in field 38, so version 3's clear set leaves 27 and port text out. CanonicalActionVersionKnown gains 4, and ParseStoredCanonicalAction names field 38. record.proto, MCP-M3-02's kind table and testdata/metadata/fields.yml change together once design-records writes §16.8's fence.
+
+Changes: §16.8's CanonicalAction fence: 24, 25, 34 reserved, sealed_detail = 38, version 4, CanonicalActionDetail (design-records); ApprovalRequest 14, 15, 16; MCP-M3-02's kind table and testdata/metadata/fields.yml.
+
+Questions: `record-m2-01-canonical-action-detail.md`.
+
+### QD-741: Does §2.8's cert-1 cover two values network_tls_cert must hold between steps: an issued chain, and a pending revocation's reason?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §2 Trust model and threat model.*
+
+§2.8's cert-1 sees gains "issued chains until 30 d after expiry or revocation, and a requested revocation's reason", a list version bump in §2.8 and metadata_list.yml. TLS-M5-16's store keeps a URnetwork-zone row's issued chain, which GET /tls/cert-order/<id> answers after a restart or to a device that was offline, and TLS-M5-16 and TLS-M5-17 carry a requested revocation's reason (keyCompromise from POST /tls/cert-revoke, cessationOfOperation for §21.6's takedowns) in the row until the sweep's revocation reaches the CA. Neither value adds anything a CT log (cert-2) or a CA's CRL does not already publish. The 30 d is a settings field with that default (QD-702).
+
+Changes: §2.8's cert-1 and metadata_list.yml (a list version bump); TLS-M5-16's store gains the chain and reason columns; TLS-M5-17's sweep revokes with the stored reason.
+
+Questions: `tls-m5-05-cert-row-values.md`.
+
+### QD-742: When does a revoked or failed network_tls_cert row's 30 days start, given cert-1 names no time for either?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §2 Trust model and threat model.*
+
+network_tls_cert gains state_time timestamp NOT NULL, set with every state change, in MG5's CREATE while the group is pending (so no running release sees a migration), and §2.8's cert-1 sees gains "the time of its latest state". cert-1's ttl reads "30 d after expiry, revocation or failure": CertsStore's purge (and TLS-M5-17's) reads not_after for an expired row and state_time for a revoked or failed one. §13.8's budget rebuild of a lost {tcb_} key may read an order's admission from it. If M5's Gn-out came first, it would list this open; it no longer needs to.
+
+Changes: §2.8's cert-1 sees and ttl (metadata_list.yml); network_tls_cert.state_time in MG5's CREATE; CertsStore.PurgeEnded and TLS-M5-17's purge read it.
+
+Questions: `tls-m5-14-cert-row-end-time.md`.
+
+### QD-743: Should AclRepo's folded access log carry the RepoDelete's entry time and each removed admin's position, which readers need once those entries leave retention?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §8 Access control.*
+
+AclRepoDeletionRow gains int64 deleted_time_ms = 5, the RepoDelete entry's time_ms, and AclRepoAdminRow gains uint64 removed_at = 4: a RepoAdmin{remove} keeps the admin's row stamped with the removal's position instead of deleting it, until the next base's compile drops rows past retention. Readers, evs and taskworker then judge from rows alone: a RepoRestore within 7 days of a RepoDelete without now (§8.8) on any day of the window, taskworker's shred at 7 d 10 min after the RepoDelete's entry (§11.12), and a removed admin's right at a position before its removal (AclState.RepoAdminAt). Both values are already server-visible as their entries' times and positions, so §2.8's api-7 changes only in wording. Two additive fields before acl.proto freezes at M2.
+
+Changes: acl.proto's two fields (fenced by design-records); §2.8's api-7 wording (metadata_list.yml); ACL-M2-06's RepoRestore judgment, AclState.RepoAdminAt and taskworker's shred timing read the rows.
+
+Questions: `acl-m2-06-access-log-positions.md`.
+
+### QD-744: Should §19.6's rule (3) hold a failed DELETE's key until every commit of it has answered and been reverted, since TLC finds two DELETEs on one key breaking FI-30 under the rule as written?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
+
+§19.6's rule (3) holds a failed DELETE's key until every one of its drive commits has answered and each that landed has been reverted, with no revert after release; a failed PUT keeps rule (3) as written (released once the drives that may still hold it number under N/2). Nothing of a failed DELETE then lands or reverts once another request can see the key, so FI-30's NoStaleQuorum holds for two DELETEs on one key, which §11.7's marker collection, v1's purge and the drop job rely on. The cost, a DELETE whose commit stalled on a frozen host holding its key until that host answers or its drives are replaced, is paid only by background jobs' unconditional DELETEs; D-OPS-20's Why and FI-30's last clause say so, with section 2's per-commit stamp (DESIGN-DETAILS 2.4, 2.8). The in-house MinIO build already holds a failed DELETE so (EVSB-M2-22, minio e7539a6e5).
+
+Changes: §19.6's rule (3), D-OPS-20's cost and FI-30's last clause (design-records, with DESIGN-DETAILS 2.8's text); StoreSettle.tla models the held DELETE and passes TLC with DELETEs in the run (M2's Gn-in).
+
+Questions: `evs-models-settle-stalled-deletes.md`.
+
+### QD-745: How should api's activation tick learn which recovery windows end, now that DESIGN-DETAILS.md section 5 moves open proposals into ProposalRow?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+
+api schedules an activation by a run-once task per proposal, as TEAM-M2-14's plan reads, on DESIGN-DETAILS section 5's ProposalRow (TEAM-M2-05): after each statement append, for each proposal whose window moved at that entry, RunOnce("config_log_activation", proposal_id) at its window_time_ms + 72 h; when it runs it checks the row at the tip (still open, its kind, its counted signatures, its window time) and appends an ApiTick naming the activation, which configCheckTick judges from the row at every reader. ConfigState exposes the open proposals with their kind and window_time_ms (5.7's PendingProposals and RecoveryWindow). One more taskworker target; nothing in the wire changes. No periodic sweep.
+
+Changes: TEAM-M2-14's activation ticks on ProposalRow; a config_log_activation run-once taskworker target; api's checkConfigLogTick and the sidecar verifier accept an activation judged from the row.
+
+Questions: `team-m1-04-activation-ticks.md`.
+
+### QD-746: How does every verifier learn that a base's own config head shrank a repo's key holders, when a new device and a cold gate start at that base?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+
+ProjectionHeader gains repeated bytes shrunk_repo_ids: the repos whose key holders the base's own config head change shrinks (KeyHolders(R, b-1, t_b) not a subset of KeyHolders(R, b, t_b)), computed by the writer from S(b-1) and S(b). A verifier present at b-1 recomputes it and forks on a difference, as with tail_verdicts; a new device or rows-only gate that starts at b (DESIGN-DETAILS 5.2.4's StartAtBase) takes it, so every verifier sets AclRepo.holders_shrunk_at = b for exactly those repos (D-TEAM-19). §2.8's api-7 gains the line. The interim fail-closed rule (a policy change at a base shrinks every repo) goes once the field lands.
+
+Changes: config.proto's ProjectionHeader.shrunk_repo_ids (fenced by design-records); §2.8's api-7 line (metadata_list.yml); TEAM-M2-17's holders_shrunk_at at a base reads it; the every-repo interim goes.
+
+Questions: `team-m2-09-base-shrinks.md`.
+
+### QD-747: How does a writer leaf other than the uploader learn that an epoch's Welcome was never written, so it can remove and re-add the joiner after 10 minutes?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
+
+gkm answers whether an epoch's Welcome stands: HEAD /gkm/groups/<group_id>/welcome/<n> under rw, 200 or 404 with no body. A writer leaf that adopted an Add at epoch n asks once after GkmSettings.WelcomeTimeout (10 minutes) and, on a 404, removes and re-adds the joiner in one commit (GkmPendingChanges' Unwelcomed, which CheckCommit accepts), so §10.6's re-add fires for any writer leaf, not only the epoch's uploader. It discloses nothing beyond gkm-5's Welcome objects, whose keys every reader can compute; a false 200 leaves the joiner waiting as today and a false 404 costs one Remove and Add. §11.20's or §10.6's route list gains the route.
+
+Changes: gkm's HEAD welcome route (§10.6 route list, design-records); the engine passes Unwelcomed leaves for epochs another leaf uploaded (KEYS-M2-21).
+
+Questions: `keys-m2-19-welcome-timeout-evidence.md`.
+
+### QD-748: When a repo is created with --private in a team network whose directory does not exist yet, how does it stay private once the directory appears?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
+
+A repo-creating command run with --private in a team network that has no directory refuses before filing the RepoCreate, naming the missing directory; where the device is a directory admin it files the directory first and then creates the repo with its private marker. So every private repo has its marker, and §16.11's predating rule stays as written: a general or record repo that predates the directory is announced by the first of its admins' devices to sync it (owner decision 181's every repo by default). RECORD-M6-15's interim, writing a private marker for every predating repo, goes once the refusal lands.
+
+Changes: §16.11's private row gains the refusal (design-records); the repo-creating commands refuse --private with no directory; RECORD-M6-15's predating rule announces again.
+
+Questions: `record-m6-14-private-before-directory.md`.
+
+### QD-749: May evs write {evsc_<client_id>} before §2.8's evs-8 row names the family, as plan-EVS1-subscription-caps#2 decided?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+QD-263's {evsc_<client_id>} lands row first: evs-8's store line in metadata_list.yml gains it in QD-263's words (a sorted set of a client's repo ids scored by last subscribe or renewal, soft state), with §19.7's tags, D-OPS-16's rdb filter and §11.10's slots row for design-records to fold into DESIGN.md; then evs builds the key and its script, checked before the lease script, so evs_repos_per_client's 500-repo cap applies on POST /evs/v1/subscriptions. The schema guard stays as it is (I-18).
+
+Changes: evs-8's store line in metadata_list.yml; §19.7's tags, D-OPS-16's rdb filter and §11.10's slots row (design-records); {evsc_} and its cap script in evs's subscriptions route.
+
+Questions: `evs1-m2-15-evsc-metadata-row.md`.
+
+### QD-750: Where does an operations command that reads Postgres live, given that sidecarctl, a module of the sidecar repo, cannot link any server package under §4.7's license and module rules?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
+
+sidecarctl moves from sidecar/sidecarctl to server/sidecarctl: still one binary for every operations command this build adds (C-23 and the owner's direction of 2026-11-07 keep their point; their path changes), beside the model code its commands call and under server's own dependency, license and layering rules, which let it link server's packages and the engine packages. The certs commands already landed in sidecar/sidecarctl move once, with their tests and check/'s sidecarctl rows. Then sidecarctl dns census is a thin command over model.CensusDnsNetworkNames behind server.RequirePgReadOnly(); sidecarctl evs purge-turn-on binds to server.CurrentSidecarConfig().Format2() and schedules evsservice.EvsSweepTurnOnTaskRequest() on the env's task queue (sidecarhost.NewTasks); dns restoring, dns restore and dns ceremony are short files over dnshost.NewRestoreStep and dnsservice's ceremony functions; and later commands that read the database (sidecar restore, network sidecar-limit, the abuse commands) go there too. OPS tasks write the commands, whichever lane runs them. Until the move lands, commands that need server or an engine stay refusing or unbuilt, as built.
+
+Changes: C-23's path and the brief's sidecarctl rule (server/sidecarctl); sidecar/sidecarctl moves to server/sidecarctl with its tests and check/'s rows; dns census, evs purge-turn-on, dns restoring, dns restore and dns ceremony are built there.
+
+Questions: `dns-m0-01-sidecarctl-server-link.md`, `ops-m10-01-purge-turn-on-links.md`, `dns-m5-15-dns-ops-commands.md`.
+
+### QD-751: Should certs renew stay on lego v4.35.2, the release certs issue runs, until someone checks lego v5's CLI, given that D-OPS-12 names v5 and v5 rejects the flags both commands pass?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
+
+sidecarctl certs renew and warpctl certs issue stay on goacme/lego v4.35.2, the release production runs, with certs issue's exact flags plus --server, held together by TestCertsRenewLegoArgsAreTheImagesCli and TestCertsRenewRunsTheLegoReleaseCertsIssueRuns; D-OPS-12's lego v5 is recorded as the target. The move to v5 is one change to both commands and both tests, made once someone allowed to fetch the image has read v5's --help or run one order against Let's Encrypt staging (an outward action outside this run). Meanwhile renewals send no RFC 9773 replaces, which costs the CA's rate-limit exemption for a renewal it asked for and does not change when a certificate renews; sidecarctl reads ARI itself.
+
+Changes: D-OPS-12 names v5 as the target, v4.35.2 as what runs (design-records); the v5 move is an owner or ops action outside this run.
+
+Questions: `ops-m5-07-lego-v5.md`.
+
+### QD-752: Where does QD-128's competition migration live on server's `sidecar` branch, and in how many steps?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
+
+QD-128's competition migration lands in two steps. The permissive step, replacing competition_v2_source_graph_valid and competition_v2_source_authorized so a source graph of ten keys, or of eleven with sidecar, passes, goes in MG0's pending part (db_migrations_sidecar_pending.go) and registers with MG0 at M0's Gn-out; with it land server's Go list of eleven, its digest and the evaluator scripts. The tightening step, requiring eleven, is a cleanup migration once every competition job runs a release that sends eleven, as connect/CODESTYLE.md's additive-then-cleanup order says. §19.7's MG0 row gains the competition entry, and TestSidecarGroupsAreAdditive admits a function replacement that only widens a guard. Evaluator images are rebuilt from the Gn-out's commit; that rebuild and the cleanup's deploy are outward steps outside this run.
+
+Changes: §19.7's MG0 row gains the competition entry (design-records); the permissive migration in MG0's pending part, with server's Go list, digest and evaluator scripts; TestSidecarGroupsAreAdditive admits a widening function replacement.
+
+Questions: `wire-consumers-competition-migration-home.md`.
+
+### QD-753: Who builds the two file-cluster signal sources monitor reads that no task owns: the minio fork's heal-debt export, and a scrape of each cluster's MinIO node metrics into Mimir?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
+
+Both file-cluster signal sources get builders. A minio task builds the fork's half of QD-035: er.addPartial sets SetIndex and PoolIndex, cmd/mrf.go exports per pool and set the partial-write queue's depth, its dropped entries and its unclean starts, and the fork exports a last-full-heal time per cluster, so §19.6's degraded and at_risk can end when a full heal ends; monitor exports them as urnetwork_filecluster_mrf_depth{cluster,set} and the two counters, and EVSB-M3-01's fileClusterStateProbe.healDebt reads the queue. An xops task grows EVSB-M2-04's playbook-file-clusters.yml with a fluent-bit prometheus_scrape of each cluster's MinIO node metrics (/minio/v2/metrics/node) with a bearer token from vault, add_label cluster <id> and job file_cluster_minio, which SIGNALS.md §29.3's contract and filecluster-settle read from Mimir. Until both land, the owner's interim stands: heal debt reads unknown, never zero.
+
+Changes: a minio task: the fork's partial-write queue export and last-full-heal time; an xops task: the node-metrics scrape in playbook-file-clusters.yml; monitor's queue reader in fileClusterStateProbe.healDebt.
+
+Questions: `evsb-m3-01-file-cluster-signal-sources.md`.
+
+### QD-754: How do §19.8's business-hours pages reach the rota, when the pager pages only at any hour?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
+
+§19.8's business row pages the rota in business hours: OPS-M3-01's pageClasses rows gain an hours field, any or business, and PagerAlertNotifier holds a business-hours page until the business calendar opens (model's AbuseCalendar, abuse.yml's review hours, or a pager-service schedule when one is chosen), then pages, and resolves it as usual, with the pager's dedup and retry unchanged. A page whose alert resolves before the calendar opens is dropped. The business rows join by a table row each: filecluster-drive-dwpd-business, filecluster-drive-rating-short, a cluster's projected exhaustion within its move tool's lead time or at its cohort limit, a segment cluster's hdd crossing (g0-recheck-0-hdd-trigger #1), and an NS failing an hour (plan-DNS-running-ns, DNS-M5-17's).
+
+Changes: OPS-M3-01's pageClasses rows gain hours; PagerAlertNotifier holds business pages until the calendar opens; the business rows move from Slack warns to pages.
+
+Questions: `evsb-m3-01-business-hours-pages.md`.
+
+### QD-755: MLS hands its 12-byte AEAD nonces to testHookSecret, which the privacy capture refuses as findings: should mls_* stop hooking nonces, or should the capture search a 12-byte secret?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §22 Testing and verification.*
+
+The MLS subset stops passing its 12-byte AEAD nonces to testHookSecret: mlsCipherSuite.expandWithLabel (mls_ciphersuite.go) takes a hook flag, false for the three nonce derivations RFC 9420 makes (ratchet_nonce in mls_secrettree.go, sender_data_nonce in mls_secrettree.go, welcome_nonce in mls_keyschedule.go), and every secret a nonce is derived from stays hooked. The privacy capture's rule stands: a secret under 16 bytes is refused as a finding, so no test passes on a value it could not search for (TEST-M1-05). §22.4's 'at every key creation, derivation and unwrap' reads keys, which a nonce is not.
+
+Changes: the MLS subset's nonce derivations unhooked (mls_ciphersuite.go, mls_secrettree.go, mls_keyschedule.go); TEST-M2-11's S3a and S4a run whole under sidecar_testhooks.
+
+Questions: `test-m2-11-mls-nonce-hooks.md`.
+
+### QD-756: On a one-process cluster, the minio fork's settle build takes a DELETE past its deadline and crashes in its stash sweep: is a one-process cluster in scope, and whose fix is it?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
+
+A one-process MinIO cluster is out of scope for production, since §19.6 builds every cluster from 4 hosts (owner decision 145's whole clusters): the in-house build refuses to start one in settle mode, naming the rule. Its nil lock server is fixed whatever the shape: (*localLocker).SettleRows and the stash sweep (settle-locks.go, settle-drive.go) never dereference a nil locker. T3's second metadata cluster, meta-2, becomes a 4 x 2 cluster like meta-1, so FS-63's second-cluster cases and EVSB-M2-17's suite run on a multi-host meta-2, and the suite's one-process path goes.
+
+Changes: §19.6 says a cluster in settle mode has at least 4 hosts (design-records); the minio fork refuses a one-process cluster in settle mode and never dereferences a nil locker; T3's meta-2 becomes 4 x 2 (server/local/file-cluster-t3).
+
+Questions: `evsb-m2-19-one-process-cluster-settle.md`.
+
+### QD-757: Must a sidecar whose clock is 10 min off still renew and exchange its tokens, given that §7.4 holds a DPoP proof's iat within ±60 s of the api's clock?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §7 Networks, teams, members, enrollment, and SSO.*
+
+A sidecar signs its DPoP proof's iat by the api's clock: it reads its offset from the Date header (or a server_time field) of its api answers, as §9.6's socket registrar reads the sockets service's, and signs iat at its own time plus that offset; a refusal for iat refreshes the offset once and retries. §7.4's ±60 s iat window and its replay ttl stay as they are, server-side and in sidecartest's fake api. §22.8's skew row's token clause then holds as written: a strict_exp sidecar 10 min fast or slow renews at GET /auth/refresh, POST /oauth/token's exchange and POST /network/auth-client. §7.4 gains the reading.
+
+Changes: §7.4's proof row gains the reading (design-records); the sidecar's api client keeps the api's clock offset and api_dpop.go signs iat by it; TEST-M2-15's skew row token clause.
+
+Questions: `test-m2-15-dpop-iat-under-skew.md`.
+
+### QD-758: Should evs's client retry a segment PUT that the lb answers 502 or 504, which is what nginx gives a streamed PUT whose upstream died?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+evs's client reads a 502 or 504 whose body is not an evs refusal as the lb's answer, no answer from evs at all: evsErrorOfAnswer (evs_http.go) marks it OutcomeUnknown, so EvsClient.retryRefusingNothing and the push sender send the same bytes again after ReadRetryWait, as they do for no answer, until §11.8's 200, 409 or 412. A streamed segment PUT cut by an lb drain then retries from the client and lands once, as §22.8's drain row says; the lb keeps streaming segment PUTs as OPS-M2-01 built it (no request buffering). The lb's own 502 after its two tries on a buffered path is retried the same way, which §11.8's retry row allows.
+
+Changes: evs_http.go's evsErrorOfAnswer reads a non-evs 502 or 504 as no answer (EVS1-M2-26's); TEST-M2-15's client half of §22.8's lb drain row.
+
+Questions: `test-m2-15-streamed-put-502-not-retried.md`.
+
+### QD-759: Must server's api answer a request whose Postgres connection a restart cut with 503 and Retry-After, rather than its fixed 500?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §19 Server services.*
+
+server's api answers a request whose Postgres connection a restart cut with 503 and Retry-After: 1, as it answers a lock timeout: RaiseHttpError (server/router/handler_utils.go) and the router's recover map the connection classes 08000, 08003, 08006, 57P01, 57P02 and 57P03 to 503, the cause staying in the log, so a client tells a restart from a failure that will repeat and §22.8's Postgres or PgBouncer restart row holds its retryable clause as written. A route whose effect may have committed before the cut keeps relying on its own idempotency (admin-token claims, sidecar push ids). Other internal failures keep the fixed 500.
+
+Changes: server/router answers Postgres connection-loss classes 503 with Retry-After; TEST-M2-15's retryable half of the Postgres restart row.
+
+Questions: `test-m2-15-postgres-restart-answer.md`.
