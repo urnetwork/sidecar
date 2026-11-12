@@ -332,12 +332,22 @@ func (self *AclState) listensOn(destination *aclResolved, dialRule *aclRule, now
 // takes, sockets expanding to their listeners when asked. accept is the client's narrowing: AclEngine's ports.
 func (self *AclState) findSubjectRule(source *aclResolved, destination *aclResolved, nowMs int64, actions uint32,
 	accept func(rule *aclRule) bool, expandSockets bool) *aclRule {
-	for w := 0; w < self.ruleWordCount; w += 1 {
+	return self.nextSubjectRule(source, destination, nowMs, actions, accept, expandSockets, 0)
+}
+
+// findSubjectRule's search from the rule index from on, so an enumerator (acl_reach.go) visits every rule the search
+// takes, in index order, and finds none exactly where findSubjectRule finds none.
+func (self *AclState) nextSubjectRule(source *aclResolved, destination *aclResolved, nowMs int64, actions uint32,
+	accept func(rule *aclRule) bool, expandSockets bool, from int32) *aclRule {
+	for w := int(from >> 6); w < self.ruleWordCount; w += 1 {
 		var word uint64
 		for action := protocol.AclAction_ACL_ACTION_DIAL; action <= aclActionMax; action += 1 {
 			if actions&(1<<uint32(action)) != 0 {
 				word |= self.actionRules[action][w]
 			}
+		}
+		if w == int(from>>6) {
+			word &= ^uint64(0) << (uint32(from) & 63)
 		}
 		if source.sidecar != nil {
 			word &= source.sidecar.srcRules[w]
@@ -415,9 +425,18 @@ func (self *AclState) mayDial(source AclSubject, destination AclSubject, nowMs i
 // The first rule in force allowing the action whose src holds the subject and whose resource targets pass
 // match.
 func (self *AclState) findResourceRule(resolved *aclResolved, nowMs int64, action protocol.AclAction, match func(rule *aclRule) bool) *aclRule {
+	return self.nextResourceRule(resolved, nowMs, action, match, 0)
+}
+
+// findResourceRule's search from the rule index from on, for the enumerators as nextSubjectRule is.
+func (self *AclState) nextResourceRule(resolved *aclResolved, nowMs int64, action protocol.AclAction, match func(rule *aclRule) bool,
+	from int32) *aclRule {
 	actionRules := self.actionRules[action]
-	for w := 0; w < self.ruleWordCount; w += 1 {
+	for w := int(from >> 6); w < self.ruleWordCount; w += 1 {
 		word := actionRules[w]
+		if w == int(from>>6) {
+			word &= ^uint64(0) << (uint32(from) & 63)
+		}
 		if resolved.sidecar != nil {
 			word &= resolved.sidecar.srcRules[w]
 		}
@@ -500,20 +519,27 @@ func (self *AclState) mayRoute(source AclSubject, address netip.Addr, via AclSub
 	if viaResolved.deny != 0 {
 		return aclDeny(viaResolved.deny)
 	}
-	address = address.Unmap()
+	public := aclAddressPublic(address.Unmap())
 	rule := self.findResourceRule(&sourceResolved, nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
 		if accept != nil && !accept(rule) {
 			return false
 		}
-		if rule.internetTarget && aclAddressPublic(address) {
-			return true
-		}
-		return rule.hasSubjectTargets() && self.targetsSubject(&sourceResolved, &viaResolved, rule)
+		return self.routeTakes(&sourceResolved, &viaResolved, public, rule)
 	})
 	if rule != nil {
 		return aclAllowRule(rule)
 	}
 	return aclDeny(AclReasonNoGrant)
+}
+
+// Whether a route rule in force from the source takes a route via a subject to a public address or to another one: its
+// autogroup:internet takes a public one through any via, and its via subjects, its subject targets, take any address
+// through a via they hold. MayRoute and the enumerators (acl_reach.go) decide by this one test.
+func (self *AclState) routeTakes(source *aclResolved, via *aclResolved, public bool, rule *aclRule) bool {
+	if rule.internetTarget && public {
+		return true
+	}
+	return rule.hasSubjectTargets() && self.targetsSubject(source, via, rule)
 }
 
 // Whether an address is a public destination, which autogroup:internet takes (§8.4).
