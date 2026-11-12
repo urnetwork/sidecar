@@ -1,6 +1,6 @@
 // The read reply's frames as a reader takes them (QD-662; question evs1-m2-40-unfolded-listing-frame): a directory's
-// delta frames folded back into its path in order, each refused unless it continues that path with one delta, and an
-// error frame answered as evs's refusal.
+// delta frames folded back into its path in order, each refused unless it continues that path with one delta, each
+// delta's proof folded with it (QD-681), and an error frame answered as evs's refusal.
 
 package sidecar
 
@@ -74,12 +74,14 @@ func TestEvsReadFramesFoldADirectorysDeltaFrames(t *testing.T) {
 	}
 
 	refused := map[string][]*protocol.EvsReadFrame{
-		"a delta frame first":           {head, deltaFrame(1), end},
-		"a delta of another path":       {head, pathFrame(), {Path: &protocol.EvsReadPathReply{TokenPath: other.GetPath().GetTokenPath(), Deltas: []*protocol.EvsIndexVersion{delta(1)}, Continues: true}}, end},
-		"a delta frame with a version":  {head, pathFrame(), {Path: &protocol.EvsReadPathReply{TokenPath: directory, Deltas: []*protocol.EvsIndexVersion{delta(1)}, Version: delta(1), Continues: true}}, end},
-		"a delta frame with names":      {head, pathFrame(), {Path: &protocol.EvsReadPathReply{TokenPath: directory, Deltas: []*protocol.EvsIndexVersion{delta(1)}, Names: &protocol.EvsNameTable{}, NamesThrough: 1, Continues: true}}, end},
-		"two deltas in one delta frame": {head, pathFrame(), {Path: &protocol.EvsReadPathReply{TokenPath: directory, Deltas: []*protocol.EvsIndexVersion{delta(1), delta(2)}, Continues: true}}, end},
-		"a delta frame after the end":   {head, pathFrame(), end, deltaFrame(1)},
+		"a delta frame first":               {head, deltaFrame(1), end},
+		"a delta of another path":           {head, pathFrame(), {Path: &protocol.EvsReadPathReply{TokenPath: other.GetPath().GetTokenPath(), Deltas: []*protocol.EvsIndexVersion{delta(1)}, Continues: true}}, end},
+		"a delta frame with a version":      {head, pathFrame(), {Path: &protocol.EvsReadPathReply{TokenPath: directory, Deltas: []*protocol.EvsIndexVersion{delta(1)}, Version: delta(1), Continues: true}}, end},
+		"a delta frame with names":          {head, pathFrame(), {Path: &protocol.EvsReadPathReply{TokenPath: directory, Deltas: []*protocol.EvsIndexVersion{delta(1)}, Names: &protocol.EvsNameTable{}, NamesThrough: 1, Continues: true}}, end},
+		"two deltas in one delta frame":     {head, pathFrame(), {Path: &protocol.EvsReadPathReply{TokenPath: directory, Deltas: []*protocol.EvsIndexVersion{delta(1), delta(2)}, Continues: true}}, end},
+		"a delta frame after the end":       {head, pathFrame(), end, deltaFrame(1)},
+		"two proofs in one delta frame":     {head, pathFrame(), {Path: &protocol.EvsReadPathReply{TokenPath: directory, Deltas: []*protocol.EvsIndexVersion{delta(1)}, DeltaProofs: []*protocol.EvsDeltaProof{{}, {}}, Continues: true}}, end},
+		"a path of more proofs than deltas": {head, {Path: &protocol.EvsReadPathReply{TokenPath: directory, Version: delta(3), DeltaProofs: []*protocol.EvsDeltaProof{{}}}}, deltaFrame(1), end},
 	}
 	tooMany := []*protocol.EvsReadFrame{head, pathFrame()}
 	for version := range DefaultEvsFormatSettings().ReadPathDeltaMaxCount + 1 {
@@ -102,6 +104,62 @@ func TestEvsReadFramesFoldADirectorysDeltaFrames(t *testing.T) {
 		if !errors.Is(err, ErrEvsReplyInvalid) {
 			t.Errorf("%s: %v", label, err)
 		}
+	}
+}
+
+// A delta frame carries its delta's proof beside it (QD-681): the reader folds the proofs into the path's
+// delta_proofs, one a delta in order, a frame with none standing as an empty proof, so each proof stays with its own
+// delta.
+func TestEvsReadFramesFoldEachDeltasProofWithIt(t *testing.T) {
+	directory := [][]byte{evsTestToken("d").Bytes()}
+	delta := func(version uint64) *protocol.EvsIndexVersion {
+		return &protocol.EvsIndexVersion{CommitVersion: version, EntryVersion: []byte(fmt.Sprintf("delta %d", version))}
+	}
+	proof := func(version uint64) *protocol.EvsDeltaProof {
+		return &protocol.EvsDeltaProof{Proof: []*protocol.EvsMerkleProof{{Leaf: []byte(fmt.Sprintf("leaf %d", version)), Index: version, Size: 9}}}
+	}
+	sent := []*protocol.EvsReadFrame{
+		{Head: &protocol.EvsHeadSummary{Version: 4}},
+		{Path: &protocol.EvsReadPathReply{TokenPath: directory, Version: delta(4)}},
+		{Path: &protocol.EvsReadPathReply{TokenPath: directory, Deltas: []*protocol.EvsIndexVersion{delta(1)}, DeltaProofs: []*protocol.EvsDeltaProof{proof(1)}, Continues: true}},
+		// an inline statement's delta, sent with an empty proof, and one sent with none
+		{Path: &protocol.EvsReadPathReply{TokenPath: directory, Deltas: []*protocol.EvsIndexVersion{delta(2)}, DeltaProofs: []*protocol.EvsDeltaProof{{}}, Continues: true}},
+		{Path: &protocol.EvsReadPathReply{TokenPath: directory, Deltas: []*protocol.EvsIndexVersion{delta(3)}, Continues: true}},
+		{Path: &protocol.EvsReadPathReply{TokenPath: directory, Deltas: []*protocol.EvsIndexVersion{delta(4)}, DeltaProofs: []*protocol.EvsDeltaProof{proof(4)}, Continues: true}},
+		{End: true},
+	}
+	encoded := []byte{}
+	for _, frame := range sent {
+		frameBytes, err := EncodeEvsReadFrame(frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded = append(encoded, frameBytes...)
+	}
+	frames := NewEvsReadFrames(bytes.NewReader(encoded))
+	if _, err := frames.Next(); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := frames.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	folded := frame.GetPath()
+	if len(folded.GetDeltas()) != 4 || len(folded.GetDeltaProofs()) != 4 {
+		t.Fatalf("%d deltas and %d proofs", len(folded.GetDeltas()), len(folded.GetDeltaProofs()))
+	}
+	for i, deltaProof := range folded.GetDeltaProofs() {
+		version := uint64(i + 1)
+		rooted := version == 1 || version == 4
+		if folded.GetDeltas()[i].GetCommitVersion() != version {
+			t.Errorf("delta %d: %v", i, folded.GetDeltas()[i])
+		}
+		if rooted != (len(deltaProof.GetProof()) == 1) || (rooted && deltaProof.GetProof()[0].GetIndex() != version) {
+			t.Errorf("delta %d's proof: %v", version, deltaProof)
+		}
+	}
+	if frame, err := frames.Next(); err != nil || !frame.GetEnd() {
+		t.Fatalf("the end frame: %v", err)
 	}
 }
 

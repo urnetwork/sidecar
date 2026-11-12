@@ -82,7 +82,8 @@ func (self *EvsRepo) WritePaths(ctx context.Context, args *EvsWritePathsArgs) (*
 	return self.writePaths(ctx, args, nil)
 }
 
-// WritePaths with what the push carries beside its changes, nil for none: a CLOSURE's flag, erased list and scope.
+// WritePaths with what the push carries beside its changes, nil for none: a CLOSURE's flag, erased list, scope and
+// note.
 func (self *EvsRepo) writePaths(ctx context.Context, args *EvsWritePathsArgs, extras *evsPushExtras) (*EvsWritePathsResult, error) {
 	refName := args.RefName
 	if refName == nil {
@@ -174,7 +175,7 @@ func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refN
 				}
 			}
 		}
-		plan.Flags, plan.Erased, plan.scope = extras.flags, extras.erased, extras.scope
+		plan.Flags, plan.Erased, plan.scope, plan.erasureNote = extras.flags, extras.erased, extras.scope, extras.erasureNote
 	}
 	sealed, err := self.client.sealWrite(ctx, plan, repoKey)
 	if err != nil {

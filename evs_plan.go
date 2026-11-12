@@ -165,6 +165,8 @@ type EvsWritePlan struct {
 	Flags  uint32
 	Erased []*EvsErasedKey
 	scope  string
+	// an ERASE's or a CLOSURE's note, which the sender seals as EvsSealedMetadata.erasure_note (QD-682; evs_erase.go)
+	erasureNote []byte
 	// a git-mode push's update, which the sender seals as EvsSealedMetadata.git: a rekey's REKEY shape, set by setRef
 	gitUpdate *protocol.EvsGitUpdate
 	// planned on a ref with no head, in the epoch firstEpoch gave: a refusal is answered by planning again, never by a
