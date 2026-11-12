@@ -15,12 +15,15 @@
 //	         newest rule (an older one by number from its entry or the window, a removed path's below its removal's
 //	         path version as a standing path's, QD-672), the statement that wrote it when not
 //	         among those returned, its Merkle proof when the list is not inline, and the adjacent-leaf proofs of
-//	         each later statement whose list is not inline and whose prefixes reach the path; a removed path its
+//	         each later statement whose list is not inline and whose prefixes reach the path, with the inclusion
+//	         proof of a prefix's delta in place of them where the statement changed that prefix so (QD-681); a
+//	         removed path its
 //	         removal's push id, version and path version from its marker or the window; an overlay's path it holds
 //	         no version of `base`; a directory its folded table as its entry holds it, names_through and the deltas
 //	         after it, or with no table that stands (none folded, or a removal or creation in the window since) no
 //	         table and the deltas since the window's last creation of it, each delta in a frame of its own after the
-//	         path's (QD-662); then the objects (read_frame.go)
+//	         path's (QD-662) with its proof to its own statement's changes_root beside it (delta_proofs; QD-681);
+//	         then the objects (read_frame.go)
 //
 // Path epochs (DESIGN-DETAILS 9.2.4; EVS1-M2-45). A path names its token path in each epoch it names, at most 8, one
 // an epoch, and evs matches them to the head by their epoch field, never by position: the head's current epoch's
@@ -33,7 +36,9 @@
 //	         for it (leaf_part, leaf_index), else by the path's token path in e(u) when the request names one; the
 //	         proof's leaf is the change itself, which the reader checks against its own token path in e(u)
 //	absent   each statement w after max(u, pin_version) whose list is under changes_root: the adjacent-leaf proofs
-//	         under the path's token path in e(w) when the request names one, nothing for w when it names none
+//	         under the path's token path in e(w) when the request names one, nothing for w when it names none; a
+//	         strict prefix w changed by a delta has no adjacent leaves, and its absence carries that delta's
+//	         inclusion proof in present, never the path's own change or a removal (QD-681)
 //	history  an older version by number from the entry's folded versions by their leaf places, or with
 //	         commit_version from that push's record by the path's token path in its epoch
 //
@@ -572,11 +577,12 @@ func (self *readAttempt) pathReply(path *readPath) (*protocol.EvsReadPathReply, 
 			for _, deltaVersion := range listing.DeltaVersions {
 				deltaVersions[deltaVersion] = true
 				// a delta after the table is an unfolded window version, of the current epoch (9.3's W1)
-				delta, err := self.deltaReply(deltaVersion, path.tokens.Current)
+				delta, deltaProof, err := self.deltaReply(deltaVersion, path.tokens.Current)
 				if err != nil {
 					return nil, err
 				}
 				reply.Deltas = append(reply.Deltas, delta)
+				reply.DeltaProofs = append(reply.DeltaProofs, deltaProof)
 			}
 		}
 	case newest.RemovalVersion != 0:
@@ -621,6 +627,7 @@ func (self *readAttempt) statementAlone(reply *protocol.EvsReadPathReply, commit
 	reply.Names = nil
 	reply.NamesThrough = 0
 	reply.Deltas = nil
+	reply.DeltaProofs = nil
 	reply.Absences = nil
 	reply.Statement = push.statement.Bytes
 	return nil
@@ -681,20 +688,26 @@ func (self *readAttempt) entryVersionIn(push *readPush, path *readPath, place ev
 	return self.pushes.inlineEntryVersionEliding(push, elided)
 }
 
-// A directory's delta at version: its entry version as its push carried it.
-func (self *readAttempt) deltaReply(version uint64, tokenPath sidecar.EvsTokenPath) (*protocol.EvsIndexVersion, error) {
+// A directory's delta at version: its entry version as its push carried it, and its proof to that push's
+// changes_root, part level last, which is empty for an inline list (QD-681).
+func (self *readAttempt) deltaReply(version uint64, tokenPath sidecar.EvsTokenPath) (*protocol.EvsIndexVersion, *protocol.EvsDeltaProof, error) {
 	push, err := self.pushes.at(version)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	entryVersion, err := self.pushes.entryVersionOf(push, tokenPath)
+	change, part, index, err := self.pushes.changeOf(push, tokenPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if len(entryVersion) == 0 {
-		return nil, fmt.Errorf("%w: version %d does not write the directory its listing names it for", ErrEvsStatementMismatch, version)
+	if change == nil || !change.WritesEntry() || len(change.EntryVersion) == 0 {
+		return nil, nil, fmt.Errorf("%w: version %d does not write the directory its listing names it for", ErrEvsStatementMismatch, version)
 	}
-	return &protocol.EvsIndexVersion{PushId: push.statement.Push.GetPushId(), CommitVersion: version, EntryVersion: entryVersion}, nil
+	proof, err := self.pushes.inclusionProof(push, part, index)
+	if err != nil {
+		return nil, nil, err
+	}
+	delta := &protocol.EvsIndexVersion{PushId: push.statement.Push.GetPushId(), CommitVersion: version, EntryVersion: change.EntryVersion}
+	return delta, &protocol.EvsDeltaProof{Proof: proof}, nil
 }
 
 // Where the change of the path a reply speaks for sits in push, worked in the push's own epoch (see the file header):
@@ -757,7 +770,9 @@ func (self *readAttempt) attachStatement(reply *protocol.EvsReadPathReply, path 
 // For each statement after since among those the reply returns whose list is not inline and whose covering
 // prefixes reach the path or a prefix holding it, the adjacent-leaf proofs for each such path the push did not
 // change, under the path's token path in that statement's epoch, and nothing for a statement of an epoch the request
-// names none in; a directory's own deltas are its reply's, and a prefix the push changed is shown by nothing here.
+// names none in; a directory's own deltas are its reply's. A strict prefix the push changed by a delta is shown by
+// that delta's inclusion proof in the absence's present (QD-681); the path's own change and a prefix's removal are
+// shown by nothing here, since either ends the version served.
 func (self *readAttempt) absences(path *readPath, since uint64, deltaVersions map[uint64]bool) ([]*protocol.EvsAbsenceProof, error) {
 	head := self.head.Head
 	current := EvsHeadCurrentEpoch(head)
@@ -788,6 +803,9 @@ func (self *readAttempt) absences(path *readPath, since uint64, deltaVersions ma
 		}
 		for _, absentPath := range sidecar.EvsAbsencePaths(push.statement.ChangedPrefixes, tokenPath) {
 			absence, err := self.pushes.absenceProof(push, absentPath)
+			if err == nil && absence == nil && len(absentPath) < len(tokenPath) {
+				absence, err = self.pushes.presentProof(push, absentPath)
+			}
 			if err != nil {
 				return nil, err
 			}

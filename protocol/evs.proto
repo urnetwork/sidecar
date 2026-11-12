@@ -541,6 +541,9 @@ message EvsSealedMetadata {             // what a push's sealed metadata opens t
   EvsGitUpdate git = 5;                 // git mode, every push but a PATH_EPOCH: what the update is (8.2.3)
   bytes ref_name = 6;                   // a creating push: the ref name's bytes, the signed copy of payload section 15
   EvsOverlay base = 7;                  // a creating push of an overlay: the signed copy of payload section 16
+  bytes erasure_note = 8;               // an ERASE's or a CLOSURE's note (11.12; QD-682): erasure id 16 B, and for an
+                                        // ERASE complete u8 (1 when this push ends the erasure) and the caller's note
+                                        // bytes; a CLOSURE's is its erasure id alone
 }
 message EvsGitUpdate {                  // a git-mode push's update (DESIGN-DETAILS 8.2.2, 8.2.3)
   EvsGitShape shape = 1;
@@ -759,8 +762,13 @@ message EvsReadPathReply {              // one path: its version, its listing, o
                                         // head's current one (DESIGN-DETAILS 9.2.2)
   bool stale_epoch = 18;                // the request named no token path in the head's current epoch: nothing was
                                         // read for this path, and the reader asks again on this head
-  bool continues = 20;                  // the next of the deltas of the path in the frame before it, its token_path
-                                        // and that one delta alone (QD-662)
+  repeated EvsDeltaProof delta_proofs = 19;  // one per entry of deltas, in order: that delta's proof to its own
+                                        // statement's changes_root (QD-681)
+  bool continues = 20;                  // the next of the deltas of the path in the frame before it, its token_path,
+                                        // that one delta and its delta_proofs entry alone (QD-662)
+}
+message EvsDeltaProof {                 // a directory delta's inclusion proof (QD-681)
+  repeated EvsMerkleProof proof = 1;    // to its statement's changes_root, part level last; empty when inline
 }
 message EvsMerkleProof {                // one RFC 9162 tree's inclusion proof (11.6's merkle row)
   bytes leaf = 1;                       // the bytes the leaf hashes: an EvsChange as listed, or a part's changes_root
@@ -773,6 +781,9 @@ message EvsAbsenceProof {               // two adjacent leaves with a path betwe
   repeated bytes token_path = 2;        // the path or the prefix shown absent
   repeated EvsMerkleProof below = 3;    // the leaf sorting just below it, part level last; empty when none does
   repeated EvsMerkleProof above = 4;    // the leaf sorting just above it, part level last; empty when none does
+  repeated EvsMerkleProof present = 5;  // in place of below and above, for a strict prefix the statement changes by
+                                        // a delta, which does not end the path: that change's inclusion proof, part
+                                        // level last; never the path itself or a removal (QD-681)
 }
 message EvsReadObject {                 // a stored object or a range of one; one past 1 MiB spans frames
   EvsReadObjectKind kind = 1;

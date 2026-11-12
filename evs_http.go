@@ -343,9 +343,10 @@ func evsErrorOfAnswer(response *http.Response, body []byte) *EvsError {
 
 // Reads a read reply's frames one at a time: u32be(length) | EvsReadFrame, each at most the format's
 // ReadFrameMaxByteCount, the last with end set. A directory's deltas come one a frame after its path frame, each a
-// path frame of its token path with continues set and that delta alone (QD-662), which Next folds back into the
-// path's deltas, at most ReadPathDeltaMaxCount of them, so a caller sees a path in one frame as before; a frame with
-// error set ends the reply as that refusal. Not safe for concurrent use.
+// path frame of its token path with continues set and that delta alone (QD-662), with its delta_proofs entry beside
+// it (QD-681), which Next folds back into the path's deltas and delta_proofs, one proof entry a delta, at most
+// ReadPathDeltaMaxCount of them, so a caller sees a path in one frame as before; a frame with error set ends the
+// reply as that refusal. Not safe for concurrent use.
 type EvsReadFrames struct {
 	in     io.Reader
 	format *EvsFormatSettings
@@ -390,19 +391,32 @@ func (self *EvsReadFrames) Next() (*protocol.EvsReadFrame, error) {
 		if self.format.ReadPathDeltaMaxCount <= len(path.GetDeltas()) {
 			return nil, fmt.Errorf("%w: a path of more than %d deltas", ErrEvsReplyInvalid, self.format.ReadPathDeltaMaxCount)
 		}
+		// one delta_proofs entry a delta, in order: an entry a frame left out is an empty proof, which stands only for
+		// an inline statement's delta (QD-681)
+		if len(path.GetDeltas()) < len(path.GetDeltaProofs()) {
+			return nil, fmt.Errorf("%w: a path of more delta proofs than deltas", ErrEvsReplyInvalid)
+		}
+		for len(path.GetDeltaProofs()) < len(path.GetDeltas()) {
+			path.DeltaProofs = append(path.DeltaProofs, &protocol.EvsDeltaProof{})
+		}
 		path.Deltas = append(path.Deltas, delta.GetDeltas()...)
+		if len(delta.GetDeltaProofs()) == 1 {
+			path.DeltaProofs = append(path.DeltaProofs, delta.GetDeltaProofs()[0])
+		} else {
+			path.DeltaProofs = append(path.DeltaProofs, &protocol.EvsDeltaProof{})
+		}
 	}
 }
 
-// Whether a delta frame continues path: its token path, one delta, and nothing else, so no part of a path but its
-// deltas is ever taken from a frame after its own.
+// Whether a delta frame continues path: its token path, one delta, at most that delta's one delta_proofs entry, and
+// nothing else, so no part of a path but its deltas and their proofs is ever taken from a frame after its own.
 func evsDeltaFrameContinues(path *protocol.EvsReadPathReply, frame *protocol.EvsReadFrame) bool {
 	delta := frame.GetPath()
 	if frame.GetHead() != nil || frame.GetStatement() != nil || frame.GetBehind() != 0 || frame.GetMore() != 0 ||
 		frame.GetObject() != nil || frame.GetEnd() || frame.GetError() != nil {
 		return false
 	}
-	if len(delta.GetDeltas()) != 1 || len(delta.GetTokenPath()) != len(path.GetTokenPath()) {
+	if len(delta.GetDeltas()) != 1 || 1 < len(delta.GetDeltaProofs()) || len(delta.GetTokenPath()) != len(path.GetTokenPath()) {
 		return false
 	}
 	for i, token := range delta.GetTokenPath() {
@@ -410,11 +424,12 @@ func evsDeltaFrameContinues(path *protocol.EvsReadPathReply, frame *protocol.Evs
 			return false
 		}
 	}
-	// what is left once its token path, its delta and continues are set aside, with no copy of the delta's bytes
-	tokenPath, deltas := delta.TokenPath, delta.Deltas
-	delta.TokenPath, delta.Deltas, delta.Continues = nil, nil, false
+	// what is left once its token path, its delta, that delta's proof and continues are set aside, with no copy of
+	// the delta's bytes
+	tokenPath, deltas, deltaProofs := delta.TokenPath, delta.Deltas, delta.DeltaProofs
+	delta.TokenPath, delta.Deltas, delta.DeltaProofs, delta.Continues = nil, nil, nil, false
 	rest := proto.Size(delta)
-	delta.TokenPath, delta.Deltas, delta.Continues = tokenPath, deltas, true
+	delta.TokenPath, delta.Deltas, delta.DeltaProofs, delta.Continues = tokenPath, deltas, deltaProofs, true
 	return rest == 0
 }
 

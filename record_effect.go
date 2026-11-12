@@ -11,6 +11,7 @@
 //	bridge     expose                                                 MCP-M4-01, on BridgeFiler.FindRule
 //	evs        agent_config_write and _delete, alias_create, _delete  EVS1-M3-01's EvsRepo.Lookup
 //	restore    restore                                                MCP-M3-22
+//	sender     mail_tls_unauthenticated                               SmtpTlsPolicy.Lookup, registered by SMTP-M9-07
 //
 // A kind with no registered Lookup is refused before its Reserve, so no use is taken that a restart could not
 // reconcile. A gate kind's effect is presented to §8.10's server gate, which consumes the use in the effect's own

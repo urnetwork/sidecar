@@ -726,6 +726,8 @@ message EvsReadPathReply {
   bytes drop_statement = 15; bytes drop_body = 16; uint64 entry_epoch = 17; bool stale_epoch = 18;
 }
 message EvsMerkleProof { bytes leaf = 1; uint64 index = 2; uint64 size = 3; repeated bytes path = 4; }
+// QD-681 (question evs1-m2-28-rooted-delta-proofs): a directory delta's proof to its own statement's changes_root.
+message EvsDeltaProof { repeated EvsMerkleProof proof = 1; }
 message EvsAbsenceProof {
   uint64 version = 1; repeated bytes token_path = 2; repeated EvsMerkleProof below = 3;
   repeated EvsMerkleProof above = 4;
@@ -1076,6 +1078,21 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "continues", number: 20, typeName: "bool"},
 		question: "evs1-m2-40-unfolded-listing-frame",
 	},
+	{
+		message:  "EvsReadPathReply",
+		field:    testFenceField{name: "delta_proofs", number: 19, typeName: "EvsDeltaProof", repeated: true},
+		question: "evs1-m2-28-rooted-delta-proofs",
+	},
+	{
+		message:  "EvsAbsenceProof",
+		field:    testFenceField{name: "present", number: 5, typeName: "EvsMerkleProof", repeated: true},
+		question: "evs1-m2-28-rooted-delta-proofs",
+	},
+	{
+		message:  "EvsSealedMetadata",
+		field:    testFenceField{name: "erasure_note", number: 8, typeName: "bytes"},
+		question: "evs1-m2-30-erasure-note-format",
+	},
 }
 
 // One value an owner's answer adds to an enum the design fences.
@@ -1092,4 +1109,6 @@ type testFenceValueAddition struct {
 var testFenceValueAdditions = []testFenceValueAddition{
 	{enum: "MessageType", name: "SMTP_HANDSHAKE", number: 0x1607, question: "smtpproof-start-shts-wire"},
 	{enum: "MessageType", name: "SMTP_HANDSHAKE_RESULT", number: 0x1608, question: "smtpproof-start-shts-wire"},
+	// §14.4's TL4 allowance for a recipient domain (QD-729), appended to the enum testUnfencedFence writes
+	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED", number: 18, question: "smtp-m9-06-tl4-allowance-action"},
 }

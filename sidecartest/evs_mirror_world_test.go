@@ -197,12 +197,13 @@ func TestEvsMirrorAppliesAnErasureBeforeTheNextSync(t *testing.T) {
 		t.Fatalf("the slot before its erasure: %v %v", held, err)
 	}
 	erased := []*sidecar.EvsErasedKey{{SlotId: oldSlot, KeyIndex: 0}}
+	erasureId := sidecar.NewId()
 	if _, err := writer.repo.Closure(world.ctx, &sidecar.EvsClosureArgs{
-		Writes: []*sidecar.EvsPathWrite{{Path: "ledger/a", Content: bytes.NewReader([]byte("the ledger with the entry gone"))}}, Erased: erased,
+		ErasureId: erasureId, Writes: []*sidecar.EvsPathWrite{{Path: "ledger/a", Content: bytes.NewReader([]byte("the ledger with the entry gone"))}}, Erased: erased,
 	}); err != nil {
 		t.Fatalf("the CLOSURE: %v", err)
 	}
-	if _, err := writer.repo.Erase(world.ctx, &sidecar.EvsEraseArgs{ErasureId: sidecar.NewId(), Keys: erased, Complete: true}); err != nil {
+	if _, err := writer.repo.Erase(world.ctx, &sidecar.EvsEraseArgs{ErasureId: erasureId, Keys: erased, Complete: true}); err != nil {
 		t.Fatalf("the ERASE: %v", err)
 	}
 	result, err := mirror.Sync(world.ctx)

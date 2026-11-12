@@ -48,7 +48,8 @@ func setFieldNumbers(message protoreflect.Message) []protoreflect.FieldNumber {
 }
 
 // The stored action for what action holds, held to its kind's row: no field outside the row, every required field
-// filled unless the action is a template (scope = true), hashes and ids at their sizes, the preview within 2 KiB, a
+// filled unless the action is a template (scope = true), which fills only the row's TemplateRequired, a domain field
+// in its one form, lowercase with no trailing dot, hashes and ids at their sizes, the preview within 2 KiB, a
 // version the kind takes (0 picks its default) and this build knows, and nothing the verifiers would refuse, since the
 // bytes go through ParseStoredCanonicalAction before they are answered. The caller's message is not changed. A kind
 // with no row, or one a question holds, is refused.
@@ -92,11 +93,19 @@ func NewCanonicalAction(action *protocol.CanonicalAction) (*StoredCanonicalActio
 			}
 		}
 	}
-	if !built.GetScope() {
-		for _, number := range row.Required {
-			if !message.Has(fields.ByNumber(number)) {
-				return nil, fmt.Errorf("%w: kind %d without field %d", ErrCanonicalActionInvalid, action.GetKind(), number)
-			}
+	required := row.Required
+	if built.GetScope() {
+		required = row.TemplateRequired
+	}
+	for _, number := range required {
+		if !message.Has(fields.ByNumber(number)) {
+			return nil, fmt.Errorf("%w: kind %d without field %d", ErrCanonicalActionInvalid, action.GetKind(), number)
+		}
+	}
+	for _, number := range row.Domains {
+		if field := fields.ByNumber(number); message.Has(field) && !canonicalActionDomainForm(message.Get(field).String()) {
+			// the name itself stays out of the error, which a log may carry (I-13)
+			return nil, fmt.Errorf("%w: field %d on kind %d is not a domain in lowercase with no trailing dot", ErrCanonicalActionInvalid, number, action.GetKind())
 		}
 	}
 	if slices.Contains(built.GetRecipients(), "") || slices.Contains(built.GetRestorePaths(), "") {
