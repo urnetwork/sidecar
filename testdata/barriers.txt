@@ -325,6 +325,8 @@ barrier record.chain.head.after record_chain.go
 barrier record.chain.head.before record_chain.go
 barrier record.consume.after record_ingest.go
 barrier record.consume.before record_ingest.go
+barrier record.effect.after record_gate_spend.go
+barrier record.effect.before record_gate_spend.go
 barrier record.log.entry.after record_log.go
 barrier record.log.entry.before record_log.go
 barrier record.log.file.after record_log.go
@@ -335,6 +337,8 @@ barrier record.log.sign.after record_log.go
 barrier record.log.sign.before record_log.go
 barrier record.log.witness.after record_log.go
 barrier record.log.witness.before record_log.go
+barrier record.outcome.after record_gate_spend.go
+barrier record.outcome.before record_gate_spend.go
 barrier record.plan.after record_slot.go
 barrier record.plan.before record_slot.go
 barrier record.presence_count.after record_presence.go
