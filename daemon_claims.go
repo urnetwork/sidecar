@@ -15,10 +15,12 @@
 //	          for the project, on /dev/tty or in an app and never through MCP, since a committed file must not widen
 //	          what a member shares (D-CORE-18). Until then the session runs the narrower value and names the wider one
 //	          pending
-//	confirm   the person's own choice for the project, made against the .ur value then committed, in the network's
-//	          sealed claims/ state (directory.claims and directory.claims.confirm, daemon_directory.go): it decides
-//	          while .ur still says the same, so a changed .ur is judged afresh; a choice wider than the session's value
-//	          is the person's act and takes the Confirm method, a narrower one needs none
+//	confirm   the person's own choice for the project, in the network's sealed claims/ state (directory.claims and
+//	          directory.claims.confirm, daemon_directory.go), made against the .ur value then committed and the
+//	          member's or team's value beneath it: it decides while both still say the same, so a changed .ur, or a
+//	          member or team that narrows after, is judged afresh and never overridden by an older choice kept on one
+//	          device; a choice wider than the session's value is the person's act and takes the Confirm method, a
+//	          narrower one needs none
 //	session   a session's value is resolved once, at its first ask, and kept: a later change to .ur, the harness
 //	          config, the team's default or a confirmation leaves an open session as it began (DaemonSessionClaims).
 //	          go-sdk's Instructions are per Server, so MCP-M6-01 picks a session's Server by its value at the session's
@@ -140,8 +142,10 @@ type SidecarClaimsConfig interface {
 // the .ur value committed then.
 type SidecarClaimsConfirmation struct {
 	ProjectKey string `json:"project_key"`
-	// .ur's value when the person chose, "" for none: the choice decides while .ur says the same.
+	// .ur's value when the person chose, "" for none, and the member's or team's value beneath it: the choice decides
+	// while both say the same.
 	Committed string `json:"committed"`
+	Base      string `json:"base"`
 	Claims    string `json:"claims"`
 	// When it was made, on the daemon's clock.
 	ConfirmedMillis int64 `json:"confirmed_millis"`
@@ -202,7 +206,7 @@ func ResolveSidecarClaims(inputs *SidecarClaimsInputs) *SidecarClaimsResolution 
 		}
 	}
 	if confirmation := inputs.Confirmation; confirmation != nil && confirmation.ProjectKey == inputs.ProjectKey &&
-		confirmation.Committed == inputs.Committed.String() {
+		confirmation.Committed == inputs.Committed.String() && confirmation.Base == base.String() {
 		if chosen, err := ParseSidecarClaims(confirmation.Claims); err == nil {
 			resolution.Claims = chosen
 			resolution.Source = SidecarClaimsSourceConfirmed
@@ -325,7 +329,7 @@ func (self *Daemon) claimsInputs(ctx context.Context, session *daemonSession, ne
 		if member, err := config.MemberClaims(ctx, networkId, label); err == nil {
 			inputs.Member = member
 		} else if self.log.V(1).Enabled() {
-			self.log.Infof("[daemon]the harness config's claims did not read, and the team's default stands: %s", err)
+			self.log.Infof("[daemon]the harness config's claims did not read, and the team's default stands")
 		}
 	}
 	if inputs.ProjectKey != "" {
@@ -357,26 +361,40 @@ type DaemonSessionClaims struct {
 	networkIdClaims map[Id]*SidecarClaimsResolution
 }
 
-// The claims of a session of hello's caller, resolved as its networks are first asked for.
+// The claims of a session of hello's caller, its `.ur` read now, at the session's start, and each network's value
+// resolved as it is first asked for.
 func (self *Daemon) SessionClaims(hello *DaemonHello) *DaemonSessionClaims {
+	session := &daemonSession{hello: hello}
+	// read once here, so later asks only read the session
+	self.sessionProject(session)
 	return &DaemonSessionClaims{
 		daemon:          self,
-		session:         &daemonSession{hello: hello},
+		session:         session,
 		networkIdClaims: map[Id]*SidecarClaimsResolution{},
 	}
 }
 
 // The value the session runs under in networkId: resolved at the first ask, then the same for the session's life,
-// whatever changes after.
+// whatever changes after. The resolution reads files and the harness config outside the lock; of two first asks at
+// once, the first to finish is the session's.
 func (self *DaemonSessionClaims) For(ctx context.Context, networkId Id) *SidecarClaimsResolution {
+	resolution, ok := func() (*SidecarClaimsResolution, bool) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		resolution, ok := self.networkIdClaims[networkId]
+		return resolution, ok
+	}()
+	if ok {
+		return resolution
+	}
+	resolved := self.daemon.resolveSessionClaims(ctx, self.session, networkId)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if resolution, ok := self.networkIdClaims[networkId]; ok {
 		return resolution
 	}
-	resolution := self.daemon.resolveSessionClaims(ctx, self.session, networkId)
-	self.networkIdClaims[networkId] = resolution
-	return resolution
+	self.networkIdClaims[networkId] = resolved
+	return resolved
 }
 
 // The value a session of hello's caller starts under in networkId, resolved now from its cwd's `.ur` and project, its
@@ -409,6 +427,10 @@ func (self *Daemon) ChooseClaims(ctx context.Context, hello *DaemonHello, networ
 	if current.Claims < value && !confirmed {
 		return nil, fmt.Errorf("%w: from %s to %s", ErrSidecarClaimsWider, current.Claims, value)
 	}
+	// the value beneath .ur, which the choice is made against
+	beneath := *inputs
+	beneath.Committed = 0
+	beneath.Confirmation = nil
 	store, err := sidecarClaimsStore(sidecar)
 	if err != nil {
 		return nil, err
@@ -416,6 +438,7 @@ func (self *Daemon) ChooseClaims(ctx context.Context, hello *DaemonHello, networ
 	confirmation := &SidecarClaimsConfirmation{
 		ProjectKey:      inputs.ProjectKey,
 		Committed:       inputs.Committed.String(),
+		Base:            ResolveSidecarClaims(&beneath).Claims.String(),
 		Claims:          value.String(),
 		ConfirmedMillis: self.clock.Now().UnixMilli(),
 	}
