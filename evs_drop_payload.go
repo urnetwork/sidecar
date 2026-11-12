@@ -6,11 +6,13 @@
 // sections slices, a slice splitting anywhere (plan-EVS2-drop-list-parts), and the seal checks them over the slices
 // in part order.
 //
-// EvsCheckDropPayload is pure: the body hashes to drop_sha256 and holds its action's shape (else INVALID);
-// not_before_ms is time_ms + 604,800,000 or time_ms (else ErrEvsDropState, 409 DROP_STATE; plan-EVS2-small-readings#2);
+// EvsCheckDropPayload is pure: the body is at most 262,144 B on its received length, before any hashing, and hashes to
+// drop_sha256 and holds its action's shape (else INVALID); not_before_ms is time_ms + 604,800,000 or time_ms (else
+// ErrEvsDropState, 409 DROP_STATE; plan-EVS2-small-readings#2); the paths' counts sum to at most 1,048,576 (QD-700)
 // and each list's count, order, repeats and hash hold (else ErrEvsDropList, 409 DROP_LIST). The lists stream through
 // a checker that holds one value and one hash at a time, so a check never holds a path's 32 MiB. Kind, path, consent,
-// the boundary, the base step 4 read, the fence and a cancel's target need the head, and are evs's (EVS2-M10-09).
+// the boundary, the base step 4 read, the fence and a cancel's target need the head, and are evs's (EVS2-M10-09). The
+// bounds are EvsFormatSettings' (DESIGN-DETAILS 10.2.2).
 //
 // On every leg. Package-level functions are safe for concurrent use; an evsDropListChecker is not.
 
@@ -29,12 +31,8 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// §11.6's and §11.7's DROP bounds and values (EVS-FORMAT.md).
+// §11.7's DROP actions and boundaries (EVS-FORMAT.md); its bounds and window are EvsFormatSettings'.
 const (
-	EvsDropMaxPathCount   = 1024
-	EvsDropMaxListedCount = 1024 * 1024
-	// a drop's window: not_before_ms is time_ms plus this, or time_ms with now (owner decision 183)
-	EvsDropWindowMs        = 7 * 24 * 60 * 60 * 1000
 	evsDropActionDrop      = 1
 	evsDropActionCancel    = 2
 	evsDropBoundaryWritten = 1
@@ -46,6 +44,10 @@ var (
 	ErrEvsDropList = errors.New("evs drop list refused")
 	// A drop whose not_before_ms is neither of its two values: 409 DROP_STATE (plan-EVS2-small-readings#2).
 	ErrEvsDropState = errors.New("evs drop state refused")
+	// A drop the client cannot form as one DROP push: a body past 256 KiB or lists past 2^20 values in all, which the
+	// client's drop engine cuts into several pushes at lineage boundaries, or one lineage that alone passes either
+	// bound, or a head-mode walk past its fetch budget (EVS_DROP_TOO_LARGE; DESIGN-DETAILS 10.2.4, QD-700, QD-705).
+	ErrEvsDropTooLarge = errors.New("evs: EVS_DROP_TOO_LARGE: a drop past one DROP push's bounds")
 )
 
 // A DROP's body and lists as checked: the body's bytes as received, which drop_sha256 covers, and what they parse to.
@@ -64,7 +66,8 @@ func (self *EvsCheckedDrop) Cancel() bool {
 // section, and one with it carries a body and, for a drop, lists. The body hashes to drop_sha256 and holds its shape,
 // else ErrEvsPushInvalid; not_before_ms holds, else ErrEvsDropState; each list holds, else ErrEvsDropList.
 func EvsCheckDropPayload(push *protocol.EvsPush, body []byte, listSlices [][]byte) (*EvsCheckedDrop, error) {
-	history, err := evsCheckDropBody(push, body)
+	format := DefaultEvsFormatSettings()
+	history, err := evsCheckDropBody(format, push, body)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +79,10 @@ func EvsCheckDropPayload(push *protocol.EvsPush, body []byte, listSlices [][]byt
 		}
 		return &EvsCheckedDrop{Body: body, History: history}, nil
 	}
-	checker := newEvsDropListChecker(history.GetPaths())
+	checker, err := newEvsDropListChecker(format, history.GetPaths())
+	if err != nil {
+		return nil, err
+	}
 	for _, slice := range listSlices {
 		if err := checker.write(slice); err != nil {
 			return nil, err
@@ -106,10 +112,15 @@ func evsCheckDropSlices(statement *EvsStatement, body []byte, listSlices [][]byt
 	return EvsCheckDropPayload(push, body, listSlices)
 }
 
-// The body's bytes held to drop_sha256 and to its action's shape, and not_before_ms to its two values.
-func evsCheckDropBody(push *protocol.EvsPush, body []byte) (*protocol.EvsDropHistory, error) {
+// The body's bytes held to their bound before any hashing, then to drop_sha256 and to its action's shape, and
+// not_before_ms to its two values.
+func evsCheckDropBody(format *EvsFormatSettings, push *protocol.EvsPush, body []byte) (*protocol.EvsDropHistory, error) {
 	if push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) == 0 || len(push.GetDropSha256()) != sha256.Size {
 		return nil, fmt.Errorf("%w: a DROP body under a statement with no flag 256 or drop_sha256", ErrEvsPushInvalid)
+	}
+	if format.DropMaxBodyByteCount < len(body) {
+		// on the received length, before any hashing (DESIGN-DETAILS 10.2.2's body row)
+		return nil, fmt.Errorf("%w: a DROP body of %d bytes, past %d", ErrEvsPushInvalid, len(body), format.DropMaxBodyByteCount)
 	}
 	digest := sha256.Sum256(body)
 	if len(body) == 0 || !bytes.Equal(digest[:], push.GetDropSha256()) {
@@ -119,12 +130,12 @@ func evsCheckDropBody(push *protocol.EvsPush, body []byte) (*protocol.EvsDropHis
 	if err := proto.Unmarshal(body, history); err != nil {
 		return nil, fmt.Errorf("%w: a DROP body that does not parse", ErrEvsPushInvalid)
 	}
-	if err := checkEvsDropHistoryShape(history, push.GetPathEpoch()); err != nil {
+	if err := checkEvsDropHistoryShape(format, history, push.GetPathEpoch()); err != nil {
 		return nil, err
 	}
 	if history.GetAction() == evsDropActionDrop {
 		notBeforeMs := history.GetNotBeforeMs()
-		if notBeforeMs != push.GetTimeMs() && notBeforeMs != push.GetTimeMs()+EvsDropWindowMs {
+		if notBeforeMs != push.GetTimeMs() && notBeforeMs != push.GetTimeMs()+format.DropWindowMs() {
 			return nil, fmt.Errorf("%w: not_before_ms %d for a statement of %d", ErrEvsDropState, notBeforeMs, push.GetTimeMs())
 		}
 	}
@@ -136,7 +147,7 @@ func evsCheckDropBody(push *protocol.EvsPush, body []byte) (*protocol.EvsDropHis
 // 16 B cancels_drop_id, a cancels_version, and no path, not_before_ms or preview id; each path's lineage newest first,
 // epochs strictly descending from at most pathEpoch to at least 1, a map part per older entry, a through_version of at
 // least 2, boundary 1 or 2 and a 32 B listed_sha256. A count off its bounds is the list's, ErrEvsDropList.
-func checkEvsDropHistoryShape(history *protocol.EvsDropHistory, pathEpoch uint64) error {
+func checkEvsDropHistoryShape(format *EvsFormatSettings, history *protocol.EvsDropHistory, pathEpoch uint64) error {
 	if len(history.GetDropId()) != 16 {
 		return fmt.Errorf("%w: a drop_id of %d bytes", ErrEvsPushInvalid, len(history.GetDropId()))
 	}
@@ -149,7 +160,7 @@ func checkEvsDropHistoryShape(history *protocol.EvsDropHistory, pathEpoch uint64
 			return fmt.Errorf("%w: a preview_id of %d bytes", ErrEvsPushInvalid, len(previewId))
 		}
 		paths := history.GetPaths()
-		if len(paths) == 0 || EvsDropMaxPathCount < len(paths) {
+		if len(paths) == 0 || format.DropMaxPathCount < len(paths) {
 			return fmt.Errorf("%w: a drop of %d paths", ErrEvsPushInvalid, len(paths))
 		}
 		var previous *protocol.EvsSourcePath
@@ -220,7 +231,8 @@ func evsCompareDropLineageEntries(a *protocol.EvsSourcePath, b *protocol.EvsSour
 // Streams a drop's lists, section 10, in slices split anywhere: per path in order, its count values, each strictly
 // above the one before, hashing to its listed_sha256. It holds one partial value and one hash.
 type evsDropListChecker struct {
-	paths []*protocol.EvsDropPath
+	format *EvsFormatSettings
+	paths  []*protocol.EvsDropPath
 	// the path whose values come next, and how many it has left
 	path      int
 	remaining uint32
@@ -232,9 +244,17 @@ type evsDropListChecker struct {
 	pending []byte
 }
 
-// A checker of paths' lists, before its first value.
-func newEvsDropListChecker(paths []*protocol.EvsDropPath) *evsDropListChecker {
-	return &evsDropListChecker{paths: paths, path: -1, digest: sha256.New(), pending: make([]byte, 0, sha256.Size)}
+// A checker of paths' lists, before its first value: ErrEvsDropList when their counts sum past
+// DropMaxListedCount (QD-700), which no list byte is read to find.
+func newEvsDropListChecker(format *EvsFormatSettings, paths []*protocol.EvsDropPath) (*evsDropListChecker, error) {
+	total := uint64(0)
+	for _, path := range paths {
+		total += uint64(path.GetCount())
+	}
+	if uint64(format.DropMaxListedCount) < total {
+		return nil, fmt.Errorf("%w: %d listed versions in all, past %d", ErrEvsDropList, total, format.DropMaxListedCount)
+	}
+	return &evsDropListChecker{format: format, paths: paths, path: -1, digest: sha256.New(), pending: make([]byte, 0, sha256.Size)}, nil
 }
 
 // Moves to the next path, checking its count's bounds.
@@ -244,7 +264,7 @@ func (self *evsDropListChecker) nextPath() error {
 		return nil
 	}
 	path := self.paths[self.path]
-	if path.GetCount() == 0 || EvsDropMaxListedCount < path.GetCount() || path.GetThroughVersion() <= uint64(path.GetCount()) {
+	if path.GetCount() == 0 || uint64(self.format.DropMaxListedCount) < uint64(path.GetCount()) || path.GetThroughVersion() <= uint64(path.GetCount()) {
 		return fmt.Errorf("%w: path %d lists %d versions below %d", ErrEvsDropList, self.path, path.GetCount(), path.GetThroughVersion())
 	}
 	self.remaining = path.GetCount()

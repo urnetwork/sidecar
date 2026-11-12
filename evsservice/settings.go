@@ -234,6 +234,19 @@ type EvsSettings struct {
 	// counted down from the one just below it, of which its check reads the one holding the source, a cached GET
 	// of at most 70 KiB: 1. Non-positive reads none, so only a source the window holds commits.
 	MapSourcePageCount int
+
+	// §11.8's 5b: a one-part push's time_ms within this of evs's clock, 10 min, and a part's and a seal's within
+	// SealTimeBound, 30 min; further ahead 429 TIME_AHEAD. Both positive.
+	PushTimeBound time.Duration
+	SealTimeBound time.Duration
+	// §11.6's slot: at most 8 KiB, which step 6's PUT and every read of one hold it to. Positive.
+	SlotMaxByteCount int64
+	// §11.8 step 6: a slot that exists with equal bytes is this push's only while under this old, 23 h (§11.22's M2
+	// row), as a re-uploaded segment is. Positive.
+	SlotExistingMaxAge time.Duration
+	// gen/<g>'s bound: a Signed GenRotate with its GenLink and leaf wrap, 16 KiB, well under a metadata object's
+	// 4 KiB block count. Positive.
+	GenerationRecordMaxByteCount int64
 }
 
 // The design's values, and 4 KiB blocks until the nvme run.
@@ -308,6 +321,12 @@ func DefaultEvsSettings() *EvsSettings {
 		CopyRunMoveCount:            10 * 1000,
 		CopyLogPageCount:            16,
 		MapSourcePageCount:          1,
+
+		PushTimeBound:                10 * time.Minute,
+		SealTimeBound:                30 * time.Minute,
+		SlotMaxByteCount:             8 * 1024,
+		SlotExistingMaxAge:           23 * time.Hour,
+		GenerationRecordMaxByteCount: 16 * 1024,
 	}
 }
 
@@ -315,6 +334,9 @@ func DefaultEvsSettings() *EvsSettings {
 func (self *EvsSettings) Validate() error {
 	if self.Place == nil {
 		return fmt.Errorf("%w: no place settings", ErrEvsSettings)
+	}
+	if self.PushTimeBound <= 0 || self.SealTimeBound <= 0 || self.SlotMaxByteCount <= 0 || self.SlotExistingMaxAge <= 0 || self.GenerationRecordMaxByteCount <= 0 {
+		return fmt.Errorf("%w: a push's time bound, a slot's bound or age, or gen/<g>'s bound not positive", ErrEvsSettings)
 	}
 	if self.InstanceFormat != sidecar.EvsRepoFormat1 && self.InstanceFormat != sidecar.EvsRepoFormat2 {
 		return fmt.Errorf("%w: instance format %d is neither 1 nor 2", ErrEvsSettings, self.InstanceFormat)

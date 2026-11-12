@@ -43,6 +43,9 @@ type sealReads struct {
 	parts []*sidecar.EvsSealPart
 	// The seal record's body.
 	body []byte
+	// Format 2: each part's purge list from its record's tail, nil for none, in part order: what the seal's list is
+	// made of (push_purge.go).
+	partLists []*protocol.EvsPurgeList
 }
 
 // The parts' round, once per attempt: the head from the cluster and every part at its place together, then 5a on
@@ -58,8 +61,10 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 		return nil
 	}
 	engine := self.engine
+	format2 := engine.format2Instance()
 	places := self.seal.places
 	records := make([]*sidecar.EvsBatchRecord, len(places))
+	tails := make([]*sidecar.EvsBatchRecordTail, len(places))
 	readErrs := make([]error, len(places))
 	var head *EvsStoredHead
 	var headErr error
@@ -73,7 +78,17 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			records[i], readErrs[i] = engine.readRecordAt(self.ctx, self.cluster, self.repoId, self.refId, place)
+			if !format2 {
+				records[i], readErrs[i] = engine.readRecordAt(self.ctx, self.cluster, self.repoId, self.refId, place)
+				return
+			}
+			// a format-2 part's record keeps its staged bytes and its replaced list in its tail
+			recordBytes, err := engine.readRecordBytesAt(self.ctx, self.cluster, self.repoId, self.refId, place)
+			if err != nil {
+				readErrs[i] = err
+				return
+			}
+			records[i], tails[i], readErrs[i] = sidecar.ParseEvsBatchRecordFormat2(recordBytes)
 		}()
 	}
 	waitGroup.Wait()
@@ -84,6 +99,8 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 		return outcome
 	}
 	partBytes := make([][]byte, len(places))
+	partStaged := make([][]byte, len(places))
+	partLists := make([]*protocol.EvsPurgeList, len(places))
 	receipts := []*protocol.EvsUploadReceipt{}
 	for i, record := range records {
 		err := readErrs[i]
@@ -102,15 +119,38 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 			return self.partsMissing()
 		}
 		for _, item := range receiptItems {
-			receipt, err := sidecar.DecodeEvsUploadReceipt(item)
+			decode := sidecar.DecodeEvsUploadReceipt
+			if format2 {
+				decode = sidecar.DecodeEvsUploadReceiptFormat2
+			}
+			receipt, err := decode(item)
 			if err != nil {
 				return refusedOutcome(EvsCheckRefusalOfCodec(err).Reply(self.pushId))
 			}
 			receipts = append(receipts, receipt)
 		}
 		partBytes[i] = part
+		if tail := tails[i]; !tail.Empty() {
+			partStaged[i] = tail.Staged
+			list, err := tail.PurgeListValue()
+			if err != nil || (list != nil && !list.GetReplaced()) {
+				// a part's record lists its replaced versions whole, or nothing (DESIGN-DETAILS 10.2.6)
+				return self.partsMissing()
+			}
+			partLists[i] = list
+		}
 	}
-	payload, checkedParts, err := sidecar.EvsCheckSeal(self.statement, partBytes)
+	var payload *sidecar.EvsCheckedPayload
+	var checkedParts []*sidecar.EvsCheckedPart
+	var err error
+	if format2 {
+		payload, checkedParts, err = sidecar.EvsCheckSealFormat2(self.statement, partBytes, partStaged)
+		if err == nil {
+			self.needsFormat2 = self.needsFormat2 || sidecar.EvsPushNeedsFormat2(self.statement, payload)
+		}
+	} else {
+		payload, checkedParts, err = sidecar.EvsCheckSeal(self.statement, partBytes)
+	}
 	if err != nil {
 		refusal := EvsCheckRefusalOfCodec(err)
 		if refusal.Reason != EvsCheckReasonFormatUnsupported {
@@ -134,6 +174,7 @@ func (self *pushAttempt) readSealParts() *pushOutcome {
 	self.receipts = receipts
 	self.seal.parts = parts
 	self.seal.body = sidecar.EvsSealRecordBody(self.statement.Bytes, parts)
+	self.seal.partLists = partLists
 	self.seal.head = head
 	self.seal.read = true
 	return nil

@@ -144,11 +144,23 @@ func (self *BatchWriter) WriteCount() int {
 // spent is ErrWriteUnbudgeted. A record no batch can hold, past 1 MiB with its framing, is sidecar.ErrEvsPushInvalid.
 // A record that would open a batch while this process's clock is unsure is ErrEvsClockUnsure, and joins nothing.
 func (self *BatchWriter) Append(ctx context.Context, clusterId string, record *sidecar.EvsBatchRecord) (*protocol.EvsPlace, error) {
+	return self.AppendFormat2(ctx, clusterId, record, nil)
+}
+
+// Append with a format-2 record's tail, its staged bytes and its purge list (EVS2-M10-06): a record whose tail
+// carries something is a format-2 record, which turns its batch to format 2, and every bound counts its tail; an
+// empty or nil tail appends format 1's form, as Append does.
+func (self *BatchWriter) AppendFormat2(ctx context.Context, clusterId string, record *sidecar.EvsBatchRecord, tail *sidecar.EvsBatchRecordTail) (*protocol.EvsPlace, error) {
 	if _, ok := sidecar.WriteClassOf(ctx); !ok {
 		return nil, ErrWriteUnbudgeted
 	}
-	if !sidecar.NewEvsBatchWriter(0, 0, 0, 0).Fits(len(record.Body)) {
-		return nil, fmt.Errorf("%w: a record of %d body bytes", sidecar.ErrEvsPushInvalid, len(record.Body))
+	bodyByteCount := len(record.Body)
+	if !tail.Empty() {
+		// the two tail items, each u32 length | bytes
+		bodyByteCount += 8 + len(tail.Staged) + len(tail.PurgeList)
+	}
+	if !sidecar.NewEvsBatchWriter(0, 0, 0, 0).Fits(bodyByteCount) {
+		return nil, fmt.Errorf("%w: a record of %d body bytes", sidecar.ErrEvsPushInvalid, bodyByteCount)
 	}
 	if record.Type < protocol.EvsBatchRecordType_EVS_BATCH_PUSH || protocol.EvsBatchRecordType_EVS_BATCH_RESEED < record.Type {
 		return nil, fmt.Errorf("%w: record type %d", sidecar.ErrEvsPushInvalid, record.Type)
@@ -163,7 +175,7 @@ func (self *BatchWriter) Append(ctx context.Context, clusterId string, record *s
 		state := self.clusterStateWithLock(clusterId)
 		now := self.clock.Now()
 		light := self.noteAppendWithLock(state, now)
-		if state.open != nil && !state.open.writer.Fits(len(record.Body)) {
+		if state.open != nil && !state.open.writer.Fits(bodyByteCount) {
 			self.closeOpenWithLock(state)
 		}
 		if state.open == nil {
@@ -176,7 +188,7 @@ func (self *BatchWriter) Append(ctx context.Context, clusterId string, record *s
 			state.open = self.openWithLock(ctx, state, clusterId, now)
 		}
 		batch = state.open
-		place, addErr = batch.writer.Add(record)
+		place, addErr = batch.writer.AddFormat2(record, tail)
 		if addErr != nil {
 			return
 		}

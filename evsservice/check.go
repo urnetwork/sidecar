@@ -21,7 +21,9 @@
 //
 // Rules other tasks own come through the view's seams, and a seam left nil refuses 503, refusing nothing: a
 // PATH_EPOCH push's map, tail and fold rules (EVS1-M2-16) and an ERASE's or CLOSURE's slot rules (EVS1-M2-20). So
-// nothing those rules guard commits on a check this file did not run.
+// nothing those rules guard commits on a check this file did not run. Format 2's own rules for a push that carries
+// format 2 run beside 5c (check_versioning.go: the versioning refusals, and 503 for a DROP or CUT whose rules are
+// EVS2-M10-09's and -11's) and after 5h (check_citation.go: the citation rule), EVS2-M10-06's.
 //
 // Package-level functions are safe for concurrent use; a PushView is read only.
 
@@ -34,12 +36,6 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
-)
-
-// §11.8's 5b time bounds: a one-part push's time_ms within 10 min of evs's clock, a part's and a seal's within 30.
-const (
-	evsPushTimeBound = 10 * time.Minute
-	evsSealTimeBound = 30 * time.Minute
 )
 
 // Which request step 5 checks.
@@ -104,8 +100,10 @@ type PushView struct {
 	// window_base_chain, or C_0 at 0); nil when step 4 could not, which refuses 503.
 	BaseChain *[32]byte
 
-	// evs's clock at the check.
-	Now time.Time
+	// evs's clock at the check, and 5b's bound for the stage, EvsSettings.PushTimeBound or SealTimeBound: zero, a view
+	// built without one, takes the protocol's.
+	Now       time.Time
+	TimeBound time.Duration
 	// The newest verified authorization state evs holds for the repo's network; nil while it is not loaded.
 	Auth sidecar.GkmAuthView
 	// gen/<g>'s GenRotate for the push's group and generation, from evs's caches (§10); nil when evs holds none.
@@ -153,21 +151,9 @@ type PushView struct {
 	InstanceFormat  uint32
 	NeedsFormat2    bool
 	Format2Admitted bool
-	// EVS2-M10-06's rules of a format-2 push inside the gate: the citation rule, staging, uploads and candidates
-	// (§11.7, §11.8's 5h). nil refuses every format-2 push 503, so nothing commits unchecked.
+	// A stand-in for format 2's rules of a push inside the gate, run at 5c in place of check_versioning.go's and
+	// check_citation.go's: a test's, to hold the gate to a push those rules would refuse. nil runs EVS2-M10-06's own.
 	Format2Rules func(view *PushView) *EvsCheckRefusal
-}
-
-// Format 2's rules for a push that carries format 2, after 5c admitted it: the seam's, or 503 while none is given.
-// A format-1 push passes.
-func checkFormat2Rules(view *PushView) *EvsCheckRefusal {
-	if !view.NeedsFormat2 {
-		return nil
-	}
-	if view.Format2Rules == nil {
-		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "format 2's rules are not supplied")
-	}
-	return view.Format2Rules(view)
 }
 
 // Whether the push's flags include flag.
@@ -193,9 +179,9 @@ func CheckPush(view *PushView) *EvsCheckRefusal {
 	if view == nil || view.Statement == nil || view.Payload == nil {
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "no statement or payload in the view")
 	}
-	// format 2's own rules run right after 5c's gate, so a format-2 push no rule yet checks answers 503 before a
-	// format-1 rule could record a refusal of it
-	checks := []func(view *PushView) *EvsCheckRefusal{CheckSignature, CheckRefs, checkFormat2Rules, CheckGate, CheckPathEpoch}
+	// format 2's 5c runs right after 5c's gate, so a format-2 push no rule yet checks answers 503 before a format-1
+	// rule could record a refusal of it; its 5h after format 1's
+	checks := []func(view *PushView) *EvsCheckRefusal{CheckSignature, CheckRefs, checkFormat2Refs, CheckGate, CheckPathEpoch}
 	switch view.Stage {
 	case PushStageOnePart:
 		checks = append(checks, CheckBase, CheckPaths, CheckObjects)
@@ -206,6 +192,7 @@ func CheckPush(view *PushView) *EvsCheckRefusal {
 	default:
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "a view of no stage")
 	}
+	checks = append(checks, checkFormat2Objects)
 	for _, check := range checks {
 		if refusal := check(view); refusal != nil {
 			return refusal
@@ -236,15 +223,19 @@ func CheckSignature(view *PushView) *EvsCheckRefusal {
 	if err := view.Statement.Verify(identityKey); err != nil {
 		return newEvsCheckRefusal(EvsCheckReasonSignature, "a signature that does not verify")
 	}
-	return checkTime(push.GetTimeMs(), view.Stage, view.Now)
+	bound := view.TimeBound
+	if bound <= 0 {
+		settings := DefaultEvsSettings()
+		bound = settings.PushTimeBound
+		if view.Stage != PushStageOnePart {
+			bound = settings.SealTimeBound
+		}
+	}
+	return checkTime(push.GetTimeMs(), bound, view.Now)
 }
 
-// 5b's time: within the stage's bound behind or ahead of now.
-func checkTime(timeMs int64, stage PushStage, now time.Time) *EvsCheckRefusal {
-	bound := evsPushTimeBound
-	if stage != PushStageOnePart {
-		bound = evsSealTimeBound
-	}
+// 5b's time: within bound behind or ahead of now.
+func checkTime(timeMs int64, bound time.Duration, now time.Time) *EvsCheckRefusal {
 	statementTime := time.UnixMilli(timeMs)
 	if statementTime.Before(now.Add(-bound)) {
 		return newEvsCheckRefusal(EvsCheckReasonTimeStale, fmt.Sprintf("time_ms %s behind", now.Sub(statementTime)))

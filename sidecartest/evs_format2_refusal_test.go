@@ -1023,7 +1023,7 @@ func (self *format2World) drop(plan *sidecar.EvsPushPlan) ([]byte, []byte) {
 		self.t.Fatal(err)
 	}
 	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.EvsDropHistory{
-		DropId: sidecar.NewId().Bytes(), Action: 1, NotBeforeMs: plan.TimeMs + sidecar.EvsDropWindowMs, Paths: paths,
+		DropId: sidecar.NewId().Bytes(), Action: 1, NotBeforeMs: plan.TimeMs + sidecar.DefaultEvsFormatSettings().DropWindowMs(), Paths: paths,
 	})
 	if err != nil {
 		self.t.Fatal(err)

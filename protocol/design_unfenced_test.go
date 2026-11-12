@@ -693,11 +693,13 @@ message EvsQuotaRefusal {
   string limit_key = 1; int64 limit = 2; int64 used = 3; uint32 retry_after_ms = 4; bool upgrade = 5;
 }
 message EvsDepositHead { uint64 version = 1; bytes chain = 2; uint64 consumed_through = 3; }
-// 11.9's request, streams and reply rows, by plan-EVS1-format-bytes#8 and protos-services-read-states.
+// 11.9's request, streams and reply rows, by plan-EVS1-format-bytes#8 and protos-services-read-states; held_drops is
+// DESIGN-DETAILS 10.2.2's.
 message EvsReadRequest {
   bytes ref_id = 1; uint64 pin_version = 2; bool fresh = 3; repeated EvsReadPath paths = 4;
   repeated EvsReadRange ranges = 5; repeated bytes slot_ids = 6; repeated EvsReadMap maps = 7;
   repeated uint64 log_pages = 8; repeated EvsReadPush pushes = 9; repeated EvsReadRef refs = 10;
+  repeated uint64 held_drops = 11;
 }
 // DESIGN-DETAILS 9.2.2: a read's commit_version, and a reply's entry_epoch and stale_epoch.
 message EvsReadPath { repeated EvsSourcePath token_paths = 1; uint64 version = 2; uint64 commit_version = 3; }
@@ -735,8 +737,9 @@ message EvsReadObject {
 message EvsRefsReply { uint32 format = 1; uint64 push_sequence = 2; repeated EvsHeadSummary refs = 3; }
 message EvsLogReply { repeated EvsReadStatement statements = 1; uint64 next_version = 2; }
 // Format 2's chapter (EVS-FORMAT.md, EVS2-M10-01): 11.13's purge row and 11.20's drop routes, with 11.9's dropped
-// row's DROP statement and body above, proposed until M10's entry review.
-message EvsPurgeList { repeated EvsPurgeCandidate candidates = 1; bool marked = 2; }
+// row's DROP statement and body above, proposed until M10's entry review; replaced, EVS_DROP_HORIZON, map_parts and
+// linked are DESIGN-DETAILS 10.2.2's.
+message EvsPurgeList { repeated EvsPurgeCandidate candidates = 1; bool marked = 2; bool replaced = 3; }
 message EvsPurgeCandidate {
   repeated bytes token_path = 1; uint64 replaced_version = 2; repeated bytes segment_ids = 3;
   repeated bytes staged_segment_ids = 4; repeated bytes slot_ids = 5;
@@ -747,6 +750,7 @@ enum EvsDropState {
 }
 enum EvsDropPhase {
   EVS_DROP_PHASE_UNSPECIFIED = 0; EVS_DROP_RESOLVE = 1; EVS_DROP_MARK = 2; EVS_DROP_VERIFY = 3; EVS_DROP_DELETE = 4;
+  EVS_DROP_HORIZON = 5;
 }
 enum EvsDropRefusal {
   EVS_DROP_REFUSAL_UNSPECIFIED = 0; EVS_DROP_REFUSAL_LOCKED = 1; EVS_DROP_REFUSAL_MISMATCH = 2;
@@ -768,7 +772,7 @@ message EvsDropPreviewReply {
   repeated EvsDropPreviewPath paths = 5; uint64 freed_bytes = 6; uint64 shared_bytes = 7; uint64 inline_bytes = 8;
   uint64 packed_bytes = 9; uint64 young_bytes = 10; uint64 snapshot_version = 11; int64 snapshot_ms = 12;
 }
-message EvsDropPreviewPath { bool list_match = 1; uint32 count = 2; }
+message EvsDropPreviewPath { bool list_match = 1; uint32 count = 2; repeated uint32 map_parts = 3; bool linked = 4; }
 
 // sidecar/protocol/smtp.proto
 // §6.11's edge codes, numbers as written.

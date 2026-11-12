@@ -537,7 +537,8 @@ func (self *evsImporter) count(ctx context.Context, args ...string) (int64, erro
 // The parts commitCount commits' sealed metadata takes by ImportCommitEstimate.
 func (self *evsImporter) estimatedParts(commitCount int64) int64 {
 	byteCount := commitCount * max(1, self.settings.ImportCommitEstimate)
-	return (byteCount + EvsPartMaxByteCount - 1) / EvsPartMaxByteCount
+	partByteCount := int64(DefaultEvsFormatSettings().PartMaxByteCount)
+	return (byteCount + partByteCount - 1) / partByteCount
 }
 
 // Whether a push of commitCount commits passes ImportPushPartCount.

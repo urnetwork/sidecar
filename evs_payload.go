@@ -42,18 +42,9 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// §11.6's and §11.8's payload, part and statement bounds.
+// The payload's fixed layouts: a section's header, the highest section type, and each new-objects and erased item's
+// size. Its bounds (§11.6's and §11.8's payload, part and statement bounds) are EvsFormatSettings'.
 const (
-	// a signed statement, as received
-	EvsStatementMaxByteCount = 1024
-	// a one-part push's payload, and a part: past either a push goes in parts
-	EvsPayloadMaxByteCount = 1024 * 1024
-	EvsPartMaxByteCount    = 1024 * 1024
-	// the entry writes one part, or a one-part push, carries
-	EvsPartMaxEntryWriteCount = 1024
-	// changed_prefixes' token bytes in all
-	EvsChangedPrefixesMaxByteCount = 512
-
 	evsPayloadSectionHeaderByteCount = 5
 	evsPayloadMaxSectionType         = 16
 	evsNewSegmentItemByteCount       = 1 + 32 + 8 + 4
@@ -806,7 +797,7 @@ func evsCheckPayloadOf(statement *EvsStatement, payloadBytes []byte, format2 boo
 	if push.GetPartCount() != 0 {
 		return nil, fmt.Errorf("%w: a push in parts has no one-part payload", ErrEvsPushInvalid)
 	}
-	if EvsPayloadMaxByteCount < len(payloadBytes) {
+	if DefaultEvsFormatSettings().PayloadMaxByteCount < len(payloadBytes) {
 		return nil, fmt.Errorf("%w: a payload of %d bytes", ErrEvsPushInvalid, len(payloadBytes))
 	}
 	payload, err := parseEvsPayload(payloadBytes, format2)
@@ -859,7 +850,7 @@ func evsCheckPayloadOf(statement *EvsStatement, payloadBytes []byte, format2 boo
 	if err != nil {
 		return nil, err
 	}
-	if EvsPartMaxEntryWriteCount < len(entryVersions) {
+	if DefaultEvsFormatSettings().PartMaxEntryWriteCount < len(entryVersions) {
 		return nil, fmt.Errorf("%w: %d entry writes in one part", ErrEvsPushInvalid, len(entryVersions))
 	}
 	if checked.CreatesPath, err = attachEvsEntryVersionsOf(push, checked.Changes, entryVersions, format2); err != nil {
@@ -965,7 +956,7 @@ func evsCheckPartOf(statement *EvsStatement, partBytes []byte, format2 bool) (*E
 	if push.GetPartCount() == 0 {
 		return nil, fmt.Errorf("%w: a part of a one-part push", ErrEvsPushInvalid)
 	}
-	if EvsPartMaxByteCount < len(partBytes) {
+	if DefaultEvsFormatSettings().PartMaxByteCount < len(partBytes) {
 		return nil, fmt.Errorf("%w: a part of %d bytes", ErrEvsPushInvalid, len(partBytes))
 	}
 	part, leaves, err := parseEvsPushPart(partBytes)
@@ -1010,7 +1001,7 @@ func evsCheckPartOf(statement *EvsStatement, partBytes []byte, format2 bool) (*E
 		}
 		checked.Changes = append(checked.Changes, &EvsCheckedChange{Change: change, Leaf: leaf, TokenPath: tokenPath})
 	}
-	if EvsPartMaxEntryWriteCount < len(part.GetEntryVersions()) {
+	if DefaultEvsFormatSettings().PartMaxEntryWriteCount < len(part.GetEntryVersions()) {
 		return nil, fmt.Errorf("%w: %d entry writes in a part", ErrEvsPushInvalid, len(part.GetEntryVersions()))
 	}
 	if checked.CreatesPath, err = attachEvsEntryVersionsOf(push, checked.Changes, part.GetEntryVersions(), format2); err != nil {
@@ -1160,8 +1151,13 @@ func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte
 	}
 	if format2 {
 		listSlices := [][]byte{}
-		for _, checkedPart := range checkedParts {
+		for i, checkedPart := range checkedParts {
 			listSlices = append(listSlices, checkedPart.sections.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_LISTS))
+			// a DROP's body rides whole in part 1 (DESIGN-DETAILS 10.2.5), so a head reader and the fence read it there
+			bodySlice := checkedPart.sections.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_DROP_BODY)
+			if push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_DROP) != 0 && (i == 0) != (len(bodySlice) != 0) {
+				return nil, nil, fmt.Errorf("%w: a DROP in parts whose body is not whole in part 1", ErrEvsPushInvalid)
+			}
 		}
 		if err := checkEvsSectionsOf(statement, joined, checked, partRoots, true); err != nil {
 			return nil, nil, err
@@ -1183,13 +1179,6 @@ func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte
 	}
 	return checked, checkedParts, nil
 }
-
-// A path map's bounds (§11.6's EvsPathMap; DESIGN-DETAILS 9.2.2's map row): a part at most 8 MiB signed, and a map
-// at most 1,024 parts.
-const (
-	EvsPathMapMaxByteCount = 8 * 1024 * 1024
-	EvsPathMapMaxPartCount = 1024
-)
 
 // An upload receipt's bytes as a push carries one back (§11.13), held to its shape: a repo and uploader id, a 32 B
 // segment id, a Padmé size within 8 MiB, an upload time and a 16 B MAC. The MAC itself is evs's to check with its
@@ -1226,7 +1215,7 @@ func decodeEvsUploadReceiptOf(receiptBytes []byte, format2 bool) (*protocol.EvsU
 // head, and moves each with a new token path, sources of older epochs and a sealed name. Its signature is the
 // caller's to check, and the moves' order across parts the copy's (DESIGN-DETAILS 9.2.6).
 func ParseEvsPathMap(signedBytes []byte) (*bridge.Signed, *protocol.EvsPathMap, error) {
-	if EvsPathMapMaxByteCount < len(signedBytes) {
+	if DefaultEvsFormatSettings().PathMapMaxByteCount < len(signedBytes) {
 		return nil, nil, fmt.Errorf("%w: a map part of %d bytes", ErrEvsPushInvalid, len(signedBytes))
 	}
 	signed := &bridge.Signed{}
@@ -1238,7 +1227,7 @@ func ParseEvsPathMap(signedBytes []byte) (*bridge.Signed, *protocol.EvsPathMap, 
 		return nil, nil, fmt.Errorf("%w: a path map that does not parse", ErrEvsPushInvalid)
 	}
 	if len(pathMap.GetRepoId()) != 16 || len(pathMap.GetRefId()) != 16 || pathMap.GetPathEpoch() < 2 ||
-		pathMap.GetPart() == 0 || pathMap.GetParts() < pathMap.GetPart() || EvsPathMapMaxPartCount < pathMap.GetParts() ||
+		pathMap.GetPart() == 0 || pathMap.GetParts() < pathMap.GetPart() || uint32(DefaultEvsFormatSettings().PathMapMaxPartCount) < pathMap.GetParts() ||
 		len(pathMap.GetSourceChain()) != sha256.Size {
 		return nil, nil, fmt.Errorf("%w: a path map out of shape", ErrEvsPushInvalid)
 	}

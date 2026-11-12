@@ -100,7 +100,7 @@ func (self *pushAttempt) readErasureSlots() error {
 		if err != nil {
 			return err
 		}
-		objectBytes, err := readAllLimited(object, evsSlotMaxByteCount)
+		objectBytes, err := readAllLimited(object, DefaultEvsSettings().SlotMaxByteCount)
 		object.Body.Close()
 		if err != nil {
 			return err
@@ -190,7 +190,7 @@ func (self *slotRewriter) rewriteSlot(ctx context.Context, cluster sidecar.BlobC
 		if err != nil {
 			return err
 		}
-		objectBytes, err := readAllLimited(object, evsSlotMaxByteCount)
+		objectBytes, err := readAllLimited(object, DefaultEvsSettings().SlotMaxByteCount)
 		object.Body.Close()
 		if err != nil {
 			return err

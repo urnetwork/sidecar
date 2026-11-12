@@ -586,8 +586,8 @@ func (self *EvsRepo) buildMap(ctx context.Context, refId Id, head *EvsVerifiedHe
 	partBytes := 0
 	writePart := func(parts uint32) error {
 		partCount += 1
-		if EvsPathMapMaxPartCount < partCount {
-			return fmt.Errorf("%w: a map past %d parts", ErrEvsWriteInvalid, EvsPathMapMaxPartCount)
+		if DefaultEvsFormatSettings().PathMapMaxPartCount < partCount {
+			return fmt.Errorf("%w: a map past %d parts", ErrEvsWriteInvalid, DefaultEvsFormatSettings().PathMapMaxPartCount)
 		}
 		pathMap := &protocol.EvsPathMap{
 			RepoId: self.repoId.Bytes(), RefId: refId.Bytes(), PathEpoch: pNew, Part: uint32(partCount), Parts: parts,
@@ -632,7 +632,7 @@ func (self *EvsRepo) buildMap(ctx context.Context, refId Id, head *EvsVerifiedHe
 	if err != nil {
 		return nil, err
 	}
-	if EvsPathMapMaxPartCount < parts {
+	if DefaultEvsFormatSettings().PathMapMaxPartCount < parts {
 		return nil, fmt.Errorf("%w: a map of %d parts", ErrEvsWriteInvalid, parts)
 	}
 	if err := sorter.merge(ctx, func(move *protocol.EvsPathMove, size int) error {
@@ -770,7 +770,7 @@ func (self *evsMapRunReader) advance() error {
 			}
 			return fmt.Errorf("%w: a map run cut short", ErrSidecarStoreFailed)
 		}
-		if EvsPathMapMaxByteCount < length {
+		if uint32(DefaultEvsFormatSettings().PathMapMaxByteCount) < length {
 			return fmt.Errorf("%w: a map run's field of %d bytes", ErrSidecarStoreFailed, length)
 		}
 		fields[i] = make([]byte, length)

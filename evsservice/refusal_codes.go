@@ -82,6 +82,17 @@ const (
 	// 5c: a push carrying a format-2 value from a network outside §19.11's format2 gate (§11.6's format row): 409
 	// VERSIONING, recorded, since a gate can change (plan-EVS2-small-readings#3).
 	EvsCheckReasonFormat2Gate
+	// 5c: versioning 1 or 2 in a config or mailcfg repo, on a git-mode ref or on a creates-only ref (§11.7's refused
+	// row): 409 VERSIONING, final, since repo kinds and ref modes never change (plan-EVS2-small-readings#3).
+	EvsCheckReasonVersioningRef
+	// 5c: versioning 1 in a repo whose lock stands in the authorization state evs validates against: 409 VERSIONING,
+	// recorded, since a lock can change.
+	EvsCheckReasonVersioningLocked
+	// 5h: §11.7's citation rule (sidecar.EvsCheckCitation): 409 VERSIONING, recorded (§11.8's refuse row).
+	EvsCheckReasonCitation
+	// The payload's own bytes: a staged segment whose kind-5 header names another push (EVS-FORMAT.md's staged row),
+	// 409 VERSIONING, final, since no attempt of the same bytes can pass.
+	EvsCheckReasonVersioningPayload
 
 	// 5d: §10.6's gate predicate fails against the newest state.
 	EvsCheckReasonGateClosed
@@ -175,6 +186,11 @@ var evsCheckReasonRows = map[EvsCheckReason]evsCheckReasonRow{
 	EvsCheckReasonQuotaRate:     {name: "quota_rate", code: protocol.EvsRefusalCode_EVS_REFUSAL_RESOURCE_EXHAUSTED, fate: EvsRefusalNothing},
 	EvsCheckReasonClusterFull:   {name: "cluster_full", code: protocol.EvsRefusalCode_EVS_REFUSAL_CLUSTER_FULL, fate: EvsRefusalRecorded},
 	EvsCheckReasonFormat2Gate:   {name: "format2_gate", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalRecorded},
+
+	EvsCheckReasonVersioningRef:     {name: "versioning_ref", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalFinal},
+	EvsCheckReasonVersioningLocked:  {name: "versioning_locked", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalRecorded},
+	EvsCheckReasonCitation:          {name: "citation", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalRecorded},
+	EvsCheckReasonVersioningPayload: {name: "versioning_payload", code: protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING, fate: EvsRefusalFinal},
 
 	EvsCheckReasonGateClosed:   {name: "gate_closed", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalRecorded},
 	EvsCheckReasonPinBelowHead: {name: "pin_below_head", code: protocol.EvsRefusalCode_EVS_REFUSAL_GATE_CLOSED, fate: EvsRefusalFinal},
@@ -299,10 +315,14 @@ func (self *EvsCheckRefusal) Reply(pushId sidecar.Id) *protocol.EvsRefusalReply 
 // The refusal a codec error from the root's parse and payload checks makes: FORMAT_UNSUPPORTED with needs_format 2
 // for a format-2 construct, else INVALID (EvsRefusalCodeOf's mapping).
 func EvsCheckRefusalOfCodec(err error) *EvsCheckRefusal {
-	if sidecar.EvsRefusalCodeOf(err) == protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED {
+	switch sidecar.EvsRefusalCodeOf(err) {
+	case protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED:
 		refusal := newEvsCheckRefusal(EvsCheckReasonFormatUnsupported, "a format-2 construct")
 		refusal.NeedsFormat = 2
 		return refusal
+	case protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING:
+		// format 2's payload checks: a staged segment naming another push (EVS2-M10-06)
+		return newEvsCheckRefusal(EvsCheckReasonVersioningPayload, "a staged segment of another push")
 	}
 	return newEvsCheckRefusal(EvsCheckReasonInvalid, "the statement or payload's shape")
 }

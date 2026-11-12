@@ -345,7 +345,7 @@ func (self *copyRun) loadMoves() error {
 		if err != nil {
 			return fmt.Errorf("the map's part %d: %w", part, err)
 		}
-		partBytes, err := readAllLimited(object, sidecar.EvsPathMapMaxByteCount)
+		partBytes, err := readAllLimited(object, int64(sidecar.DefaultEvsFormatSettings().PathMapMaxByteCount))
 		object.Body.Close()
 		if err != nil {
 			return err

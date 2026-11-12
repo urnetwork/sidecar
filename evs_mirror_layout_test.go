@@ -189,14 +189,14 @@ func TestEvsMirrorHoldsObjectsToTheirNames(t *testing.T) {
 	if err := mirror.Put(statementKey, bytes.NewReader(nil)); !errors.Is(err, ErrEvsMirrorObjectInvalid) {
 		t.Errorf("an empty statement: %v", err)
 	}
-	past := evsTestMirrorBody("statement ", EvsStatementMaxByteCount+1)
+	past := evsTestMirrorBody("statement ", DefaultEvsFormatSettings().StatementMaxByteCount+1)
 	if err := mirror.Put(statementKey, bytes.NewReader(past)); !errors.Is(err, ErrEvsMirrorObjectInvalid) {
 		t.Errorf("a statement past its bound: %v", err)
 	}
 	if held, err := mirror.Has(statementKey); err != nil || held {
 		t.Errorf("a refused statement held: %v %v", held, err)
 	}
-	if err := mirror.Put(statementKey, bytes.NewReader(past[:EvsStatementMaxByteCount])); err != nil {
+	if err := mirror.Put(statementKey, bytes.NewReader(past[:DefaultEvsFormatSettings().StatementMaxByteCount])); err != nil {
 		t.Errorf("a statement at its bound: %v", err)
 	}
 	slotPast := evsTestMirrorBody("slot ", evsSlotMaxByteCount+1)

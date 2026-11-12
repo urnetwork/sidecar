@@ -13,7 +13,10 @@
 //	report   nothing: the nightly pass counts what it frees
 //
 // A marked list names no ids, and the sweep recomputes it from the replaced versions (sweep_recompute.go); a path
-// whose replaced version it cannot find keeps its content, alarming. Nothing deletes while §19.11's purge mode is
+// whose replaced version it cannot find keeps its content, alarming. A list with replaced set is a part's record's,
+// each replaced version's ids whole with nothing subtracted (DESIGN-DETAILS 10.2.6): it is never a candidate list,
+// whoever reads it, so the sweep skips it, and a push in parts is swept by its seal's list, which subtracts every
+// part's versions. Nothing deletes while §19.11's purge mode is
 // observe, on a build that has not passed §19.6's settle cases, or for a repo whose repo/ names no network. A clock
 // unsure, a key held or a store that did not answer is a retry: the caller's minute waits.
 //
@@ -45,9 +48,6 @@ const (
 	versionlessSweepAbsent            = "absent"
 )
 
-// §11.13's hold-end window: a hold's pass rereads versions from this long before its placement.
-const evsSweepHoldLead = 26 * time.Hour
-
 // A sweep that must be tried again: a key held, a store that did not answer, a clock unsure. Nothing was decided on it.
 var ErrSweepRetry = errors.New("evs sweep: try again later")
 
@@ -62,19 +62,23 @@ type SweepSettings struct {
 	// own prev_commit_version nor the path's folded entry names: 4,096, 64 log pages. A version further back keeps
 	// its content, alarming. Must be positive.
 	RecomputeVersionCount int
+	// §11.13's hold-end window: a hold's pass rereads versions from this long before its placement, 26 h, a
+	// batch's longest life before evacuation. Must be positive.
+	HoldEndLead time.Duration
 }
 
-// A LIST page of 1,000 keys, and a walk of 64 log pages.
+// A LIST page of 1,000 keys, a walk of 64 log pages and §11.13's 26 h.
 func DefaultSweepSettings() *SweepSettings {
 	return &SweepSettings{
 		ListLimit:             1000,
 		RecomputeVersionCount: 4096,
+		HoldEndLead:           26 * time.Hour,
 	}
 }
 
 // ErrSweepSettings for a bound that is not positive.
 func (self *SweepSettings) Validate() error {
-	if self.ListLimit <= 0 || self.RecomputeVersionCount <= 0 {
+	if self.ListLimit <= 0 || self.RecomputeVersionCount <= 0 || self.HoldEndLead <= 0 {
 		return fmt.Errorf("%w: a bound that is not positive", ErrSweepSettings)
 	}
 	return nil
@@ -253,7 +257,8 @@ func (self *Sweep) clockSure() bool {
 func (self *Sweep) SweepList(ctx context.Context, cluster sidecar.BlobCluster, target *SweepTarget, rank sidecar.WriteP2Rank, funded bool, due time.Time) (*SweepResult, error) {
 	result := &SweepResult{}
 	list := target.List
-	if list == nil {
+	if list == nil || list.GetReplaced() {
+		// a part's list deletes nothing: its seal's lists the candidates (DESIGN-DETAILS 10.2.6)
 		return result, nil
 	}
 	refKey := barrierRefKey(target.RepoId, target.RefId)
@@ -468,7 +473,7 @@ func (self *Sweep) sweepSlot(ctx context.Context, cluster sidecar.BlobCluster, r
 // At a hold's end (§11.13's sweep row): the repo's versions flagged with window bit 4 whose minute falls from 26 h
 // before placeTime to endTime, each record's list swept again, deleting what the hold kept.
 func (self *Sweep) HoldEndPass(ctx context.Context, clusterId string, repoId sidecar.Id, placeTime time.Time, endTime time.Time) (*SweepResult, error) {
-	return self.pass(ctx, clusterId, repoId, placeTime.Add(-evsSweepHoldLead), endTime)
+	return self.pass(ctx, clusterId, repoId, placeTime.Add(-self.settings.HoldEndLead), endTime)
 }
 
 // When §19.11's purge turns on from observe: the repo's versions flagged with window bit 4 since its migration to
@@ -577,49 +582,38 @@ func (self *Sweep) pass(ctx context.Context, clusterId string, repoId sidecar.Id
 			if minute := entry.Place.GetMinute(); minute < fromMinute || toMinute < minute {
 				continue
 			}
-			// the version's record, and for a sealed push each of its parts', since a part lists what it replaced
-			places := []*protocol.EvsPlace{entry.Place}
-			for i := 0; i < len(places); i += 1 {
-				recordBytes, err := self.locator.ReadRecord(ctx, cluster, repoId, refId, places[i])
-				if err != nil {
-					return result, err
-				}
-				record, tail, err := sidecar.ParseEvsBatchRecordFormat2(recordBytes)
-				if err != nil {
-					return result, err
-				}
-				if record.PushId != entry.PushId {
-					return result, fmt.Errorf("%w: a flagged version's place holds another push's record", ErrEvsStatementMismatch)
-				}
-				if i == 0 && record.Type == protocol.EvsBatchRecordType_EVS_BATCH_SEAL {
-					_, parts, err := sidecar.ParseEvsSealRecordBody(record.Body)
-					if err != nil {
-						return result, err
-					}
-					for _, part := range parts {
-						places = append(places, part.Place)
-					}
-				}
-				if tail.Empty() {
-					continue
-				}
-				list, err := tail.PurgeListValue()
-				if err != nil || list == nil {
-					continue
-				}
-				statement, err := EvsBatchRecordStatement(record)
-				if err != nil {
-					return result, err
-				}
-				result.RecordCount += 1
-				swept, err := self.SweepList(ctx, cluster, &SweepTarget{
-					RepoId: repoId, RefId: refId, Repo: repoRead.Object, PathEpoch: statement.Push.GetPathEpoch(),
-					Record: record, CommitVersion: version, List: list,
-				}, sidecar.WriteP2RankGc, false, self.clock.Now())
-				result.add(swept)
-				if err != nil {
-					return result, err
-				}
+			// the version's push or seal record, which alone lists its candidates: a seal's over every part, a part's
+			// record only what its versions replaced (DESIGN-DETAILS 10.2.6), so no part is read
+			recordBytes, err := self.locator.ReadRecord(ctx, cluster, repoId, refId, entry.Place)
+			if err != nil {
+				return result, err
+			}
+			record, tail, err := sidecar.ParseEvsBatchRecordFormat2(recordBytes)
+			if err != nil {
+				return result, err
+			}
+			if record.PushId != entry.PushId {
+				return result, fmt.Errorf("%w: a flagged version's place holds another push's record", ErrEvsStatementMismatch)
+			}
+			if tail.Empty() {
+				continue
+			}
+			list, err := tail.PurgeListValue()
+			if err != nil || list == nil || list.GetReplaced() {
+				continue
+			}
+			statement, err := EvsBatchRecordStatement(record)
+			if err != nil {
+				return result, err
+			}
+			result.RecordCount += 1
+			swept, err := self.SweepList(ctx, cluster, &SweepTarget{
+				RepoId: repoId, RefId: refId, Repo: repoRead.Object, PathEpoch: statement.Push.GetPathEpoch(),
+				Record: record, CommitVersion: version, List: list,
+			}, sidecar.WriteP2RankGc, false, self.clock.Now())
+			result.add(swept)
+			if err != nil {
+				return result, err
 			}
 		}
 	}

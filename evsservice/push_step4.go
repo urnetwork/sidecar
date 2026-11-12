@@ -314,6 +314,7 @@ func (self *pushAttempt) buildView() (*pushOutcome, bool) {
 		Repo:                reads.repo.Object,
 		Head:                head.Head,
 		Now:                 engine.clock.Now(),
+		TimeBound:           self.timeBound(),
 		Auth:                self.gateView,
 		Generation:          reads.generation,
 		Paths:               map[string]*PathRead{},

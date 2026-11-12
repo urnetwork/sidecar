@@ -58,6 +58,9 @@ const (
 	EvsCheckpointInlineGeneration
 	// A diff that would take an inline chain past 16 KiB, which a chain in segments cannot carry on from.
 	EvsCheckpointInlineFull
+	// A versionless version, or the first versioned one over versionless content: never a diff (§11.7's content and
+	// on rows; EVS2-M10-15).
+	EvsCheckpointVersionless
 )
 
 // What the previous version's chain holds, as reconstructing it found it.

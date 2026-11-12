@@ -34,6 +34,11 @@ type uploadFixture struct {
 }
 
 func newUploadFixture(t *testing.T) *uploadFixture {
+	return newUploadFixtureWith(t, nil)
+}
+
+// An upload fixture whose engine runs on settings, nil for the defaults.
+func newUploadFixtureWith(t *testing.T, settings *EvsSettings) *uploadFixture {
 	ctx := t.Context()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	hostSettings := sidecartest.DefaultFakeHostSettings()
@@ -58,7 +63,7 @@ func newUploadFixture(t *testing.T) *uploadFixture {
 	}
 	t.Cleanup(usage.Close)
 	auth := newFakeAuthState()
-	engine, err := NewEvsEngine(ctx, host.ServiceHost(), nil, &EvsEngineDeps{
+	engine, err := NewEvsEngine(ctx, host.ServiceHost(), settings, &EvsEngineDeps{
 		AuthState:  auth,
 		ServiceLog: &recordingServiceLog{},
 		Uploads:    &EvsUploadDeps{Keys: keys, Quota: gate, Hdd: hdd, Usage: usage},
@@ -169,7 +174,8 @@ func TestUploadSegmentClosureTakesAdmin(t *testing.T) {
 }
 
 // The header is checked before the body moves, and the checksum by the store: another repo's header, a kind-5
-// header and bytes that are not their id write nothing.
+// header naming another push (upload_versionless_test.go holds the rest of format 2's) and bytes that are not their
+// id write nothing.
 func TestUploadSegmentRefusesABadHeaderOrChecksum(t *testing.T) {
 	fixture := newUploadFixture(t)
 	otherRepo := testSegment(testId("other repo"), 4096, 2)
@@ -178,10 +184,9 @@ func TestUploadSegmentRefusesABadHeaderOrChecksum(t *testing.T) {
 	kind5 := testSegment(fixture.repoId, 4096, 3)
 	kind5[4] = 2
 	kind5Id := sha256.Sum256(kind5)
-	recorder := fixture.upload(fixture.writer, "rw", kind5, kind5Id, false)
-	requireRefusal(t, recorder, http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_FORMAT_UNSUPPORTED)
-	if refusalOf(t, recorder).GetNeedsFormat() != 2 {
-		t.Fatal("a kind-5 header's refusal names no format")
+	requireRefusal(t, fixture.upload(fixture.writer, "rw", kind5, kind5Id, false), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING)
+	if fixture.object("seg-1", SegmentKey(fixture.repoId, kind5Id)) != nil {
+		t.Fatal("another push's kind-5 segment was stored")
 	}
 	segment := testSegment(fixture.repoId, 4096, 4)
 	wrongId := sha256.Sum256([]byte("not these bytes"))

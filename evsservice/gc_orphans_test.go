@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -537,12 +538,239 @@ func TestOrphanGcSettingsHoldTheAdoptionBound(t *testing.T) {
 	if err := settings.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if settings.AdoptionBound != 24*time.Hour+2*time.Minute || settings.Window != 7*24*time.Hour || settings.DeleteCount != 1024 || settings.DeleteRate != 10 || settings.PidxReadCount != 4096 {
+	if settings.AdoptionBound != 24*time.Hour+2*time.Minute || settings.AdoptionBoundFloor != 24*time.Hour+2*time.Minute ||
+		settings.Window != 7*24*time.Hour || settings.IndexMargin != time.Hour || settings.DeleteCount != 1024 || settings.DeleteRate != 10 ||
+		settings.PidxReadCount != 4096 {
 		t.Fatalf("defaults %+v", settings)
 	}
 	settings.AdoptionBound -= time.Second
 	if err := settings.Validate(); !errors.Is(err, ErrOrphanGcSettings) {
 		t.Fatalf("an adoption bound under its floor: %v", err)
+	}
+	settings = DefaultOrphanGcSettings()
+	settings.IndexMargin = 0
+	if err := settings.Validate(); !errors.Is(err, ErrOrphanGcSettings) {
+		t.Fatalf("no index margin: %v", err)
+	}
+}
+
+// An OrphanGc beside the pass, as a caller outside it builds one, on the fixture's settings, steps and pace.
+func (self *nightlyFixture) orphanGc(log sidecar.Logger) *OrphanGc {
+	self.t.Helper()
+	deps := self.deps()
+	gc, err := NewOrphanGc(self.host.ServiceHost(), &OrphanGcDeps{
+		Settings:           self.gcSettings,
+		EvsSettings:        deps.EvsSettings,
+		SegmentClusterBusy: deps.SegmentClusterBusy,
+		Log:                log,
+		atStep:             deps.atStep,
+		wait:               deps.wait,
+	})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return gc
+}
+
+// The repo as a caller outside the pass lists it: meta-1's horizon by the pass's OrphanHorizon, then ListRepo.
+func (self *nightlyFixture) listed(gc *OrphanGc) *OrphanGcRepo {
+	self.t.Helper()
+	horizon, err := self.pass().OrphanHorizon(self.ctx, self.cluster)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	repo, err := gc.ListRepo(self.ctx, self.cluster, self.check.repoId, horizon)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return repo
+}
+
+// QD-677's dry form: a count over a repo's listings finds the candidate no pidx/ entry introduces and deletes
+// nothing, past the horizon read first and before any DELETE's barrier; a run on the same listings then deletes
+// exactly what the count found.
+func TestOrphanGcCountRepoCountsWhatARunDeletes(t *testing.T) {
+	fixture := newNightlyFixture(t)
+	adopted, adoptedId, _ := fixture.putSegment("adopted")
+	orphan, _, _ := fixture.putSegment("orphan")
+	fixture.clock.Advance(26 * time.Hour)
+	fixture.putPidx("a", 1, adoptedId)
+	fixture.pastTheHorizon()
+	seg := fixture.segmentCluster()
+	gc := fixture.orphanGc(nil)
+	repo := fixture.listed(gc)
+
+	count, err := gc.CountRepo(fixture.ctx, repo)
+	if err != nil || count.Skipped != "" || count.CandidateCount != 2 || count.PidxReadCount != 1 || count.OrphanCount != 1 ||
+		count.DeletedCount != 0 || count.More {
+		t.Fatalf("count %+v, %v", count, err)
+	}
+	if deletes := fixture.host.Blobs.RequestCount(seg.ClusterId(), sidecartest.FaultOpDelete); deletes != 0 || !fixture.stands(seg, adopted) || !fixture.stands(seg, orphan) {
+		t.Fatalf("a count issued %d DELETEs", deletes)
+	}
+	want := []string{BarrierGcHorizonBefore, BarrierGcHorizonAfter, BarrierGcIndexBefore, BarrierGcIndexAfter}
+	if !slices.Equal(fixture.gcSteps, want) {
+		t.Fatalf("steps %v, want %v", fixture.gcSteps, want)
+	}
+
+	run, err := gc.RunRepo(fixture.ctx, repo)
+	if err != nil || run.DeletedCount != count.OrphanCount || run.OrphanCount != 0 || !fixture.stands(seg, adopted) || fixture.stands(seg, orphan) {
+		t.Fatalf("a run on the same listings: %+v, %v", run, err)
+	}
+}
+
+// A count stops at each gate a run stops at and counts nothing there, never a count of zero: a hold, a shredding
+// repo, either cluster's settle gate, an unsure clock and no horizon.
+func TestOrphanGcCountRepoCountsNothingAtAGate(t *testing.T) {
+	gates := map[string]func(fixture *nightlyFixture, repo *OrphanGcRepo){
+		"a hold": func(fixture *nightlyFixture, repo *OrphanGcRepo) {
+			err := sidecartest.PlaceHold(fixture.ctx, fixture.host.Blobs, &sidecar.HoldRecord{
+				NetworkId: fixture.check.networkId, CaseId: testId("hold case"), Kind: sidecar.HoldKindPreserve2703f,
+				Scope: sidecar.HoldScopeNetwork(), PlaceTime: fixture.clock.Now(), ExpireTime: fixture.clock.Now().Add(90 * 24 * time.Hour),
+			})
+			if err != nil {
+				fixture.t.Fatal(err)
+			}
+		},
+		"a shredding repo": func(fixture *nightlyFixture, repo *OrphanGcRepo) {
+			fixture.putRepo(protocol.RepoKind_REPO_KIND_GENERAL, protocol.EvsRepoState_EVS_REPO_SHREDDING)
+		},
+		"the segment cluster's settle gate": func(fixture *nightlyFixture, repo *OrphanGcRepo) {
+			fixture.host.Blobs.SetSettlePassed(fixture.segmentCluster().ClusterId(), false)
+		},
+		"the metadata cluster's settle gate": func(fixture *nightlyFixture, repo *OrphanGcRepo) {
+			fixture.host.Blobs.SetSettlePassed("meta-1", false)
+		},
+		"an unsure clock": func(fixture *nightlyFixture, repo *OrphanGcRepo) {
+			fixture.host.ClockCheck.SetUnknown()
+		},
+		"no horizon": func(fixture *nightlyFixture, repo *OrphanGcRepo) {
+			repo.Horizon = time.Time{}
+		},
+	}
+	for name, close := range gates {
+		fixture := newNightlyFixture(t)
+		fixture.putSegment("orphan")
+		fixture.pastTheHorizon()
+		gc := fixture.orphanGc(nil)
+		repo := fixture.listed(gc)
+		close(fixture, repo)
+		count, err := gc.CountRepo(fixture.ctx, repo)
+		if err != nil || count.Skipped == "" || count.OrphanCount != 0 {
+			t.Fatalf("%s: %+v, %v", name, count, err)
+		}
+	}
+}
+
+// Past PidxReadCount a count counts nothing, as a run deletes nothing, and raises no alarm: only the run does.
+func TestOrphanGcCountRepoPastItsIndexBoundRaisesNoAlarm(t *testing.T) {
+	fixture := newNightlyFixture(t)
+	fixture.gcSettings.PidxReadCount = 2
+	fixture.putSegment("orphan")
+	fixture.clock.Advance(26 * time.Hour)
+	for version := uint64(1); version <= 3; version += 1 {
+		fixture.putPidx("entry", version)
+	}
+	fixture.pastTheHorizon()
+	lines := []string{}
+	gc := fixture.orphanGc(&capturingLogger{lines: &lines})
+	repo := fixture.listed(gc)
+	count, err := gc.CountRepo(fixture.ctx, repo)
+	if err != nil || count.Skipped != orphanSkippedIndexBound || count.OrphanCount != 0 || len(lines) != 0 {
+		t.Fatalf("count %+v, %v, lines %q", count, err, lines)
+	}
+	run, err := gc.RunRepo(fixture.ctx, repo)
+	if err != nil || run.Skipped != orphanSkippedIndexBound || run.DeletedCount != 0 || len(lines) != 1 || !strings.Contains(lines[0], orphanIndexBoundAlarm) {
+		t.Fatalf("run %+v, %v, lines %q", run, err, lines)
+	}
+}
+
+// A count counts every orphan, past DeleteCount, and reads no busy pause, which holds only DELETEs; a run on a
+// quiet cluster deletes DeleteCount of them and leaves the rest for a later night.
+func TestOrphanGcCountRepoCountsPastDeleteCount(t *testing.T) {
+	fixture := newNightlyFixture(t)
+	fixture.gcSettings.DeleteCount = 2
+	for _, label := range []string{"a", "b", "c"} {
+		fixture.putSegment(label)
+		fixture.clock.Advance(time.Minute)
+	}
+	fixture.pastTheHorizon()
+	fixture.busy = true
+	gc := fixture.orphanGc(nil)
+	repo := fixture.listed(gc)
+	count, err := gc.CountRepo(fixture.ctx, repo)
+	if err != nil || count.Skipped != "" || count.OrphanCount != 3 || count.More {
+		t.Fatalf("count %+v, %v", count, err)
+	}
+	fixture.busy = false
+	run, err := gc.RunRepo(fixture.ctx, repo)
+	if err != nil || run.DeletedCount != 2 || !run.More {
+		t.Fatalf("run %+v, %v", run, err)
+	}
+}
+
+// ListRepo lists a repo's seg/, pidx/ and pmap/ whole, page by page, and nothing of another repo's; a count over it
+// finds what the nightly pass's own run then judges on its own listings.
+func TestOrphanGcListRepoListsAsTheNightlyPass(t *testing.T) {
+	fixture := newNightlyFixture(t)
+	fixture.gcSettings.ListLimit = 1
+	_, adoptedId, _ := fixture.putSegment("adopted")
+	fixture.putSegment("orphan one")
+	fixture.putSegment("orphan two")
+	otherKey := SegmentKey(testId("another repo"), sha256.Sum256([]byte("another repo's segment")))
+	if _, err := fixture.segmentCluster().PutIfNoneMatch(fixture.ctx, otherKey, []byte("another repo's segment"), nil); err != nil {
+		t.Fatal(err)
+	}
+	fixture.clock.Advance(26 * time.Hour)
+	fixture.putPidx("a", 1, adoptedId)
+	mapSha256 := sha256.Sum256([]byte("a map"))
+	mapKey := PathMapKey(fixture.check.repoId, fixture.check.refId, 7, mapSha256[:], 0)
+	if _, err := fixture.cluster.PutIfNoneMatch(fixture.ctx, mapKey, []byte("part"), nil); err != nil {
+		t.Fatal(err)
+	}
+	fixture.pastTheHorizon()
+	gc := fixture.orphanGc(nil)
+	repo := fixture.listed(gc)
+	keys := func(objects []*sidecar.BlobInfo) []string {
+		objectKeys := []string{}
+		for _, object := range objects {
+			objectKeys = append(objectKeys, object.Key)
+		}
+		return objectKeys
+	}
+	if len(repo.Segments) != 3 || slices.Contains(keys(repo.Segments), otherKey) || len(repo.PidxEntries) != 1 || !slices.Equal(keys(repo.PathMapParts), []string{mapKey}) {
+		t.Fatalf("listed %v, %v, %v", keys(repo.Segments), keys(repo.PidxEntries), keys(repo.PathMapParts))
+	}
+	count, err := gc.CountRepo(fixture.ctx, repo)
+	if err != nil || count.OrphanCount != 2 {
+		t.Fatalf("count %+v, %v", count, err)
+	}
+	result := fixture.runPass()
+	if result.Orphans.CandidateCount != count.CandidateCount || result.Orphans.DeletedCount != count.OrphanCount {
+		t.Fatalf("the pass judged %+v where the count found %+v", result.Orphans, count)
+	}
+}
+
+// A count deletes no part of an uncommitted path map, which a run deletes (2.2.5): maps are no count's.
+func TestOrphanGcCountRepoLeavesAnUncommittedPathMap(t *testing.T) {
+	fixture := newNightlyFixture(t)
+	fixture.commit("a")
+	current := fixture.head().Head.GetPathEpoch().GetCurrent()
+	above := sha256.Sum256([]byte("map above"))
+	key := PathMapKey(fixture.check.repoId, fixture.check.refId, current+1, above[:], 0)
+	if _, err := fixture.cluster.PutIfNoneMatch(fixture.ctx, key, []byte("part"), nil); err != nil {
+		t.Fatal(err)
+	}
+	fixture.age()
+	fixture.mustRun()
+	fixture.clock.Advance(25 * time.Hour)
+	gc := fixture.orphanGc(nil)
+	count, err := gc.CountRepo(fixture.ctx, fixture.listed(gc))
+	if err != nil || count.Skipped != "" || count.MapPartDeletedCount != 0 || !fixture.stands(fixture.cluster, key) {
+		t.Fatalf("count %+v, %v", count, err)
+	}
+	if result := fixture.runPass(); result.Orphans.MapPartDeletedCount != 1 || fixture.stands(fixture.cluster, key) {
+		t.Fatalf("the pass after the count: %+v", result.Orphans)
 	}
 }
 

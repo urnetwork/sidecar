@@ -4,9 +4,12 @@
 //
 //   - written after each commit, after step 8 raised the push sequence, and only if its version rises above the
 //     cached one, by one script on the repo's one hash tag, so a late writer never lowers it;
-//   - served within HeadCacheServeAge (10 min) of its own cache time, so a ref another ref's writes kept in the
-//     hash is still not served past its own 10 min (FS-62); the key's ttl, which any ref's write extends, only
-//     bounds memory;
+//   - stamped with its committed head's own written_ms (§11.8's EvsHead 21, evs's clock at that head's write), never
+//     later than the clock at the put, and served within HeadCacheServeAge (10 min) of that stamp, so a put that
+//     arrives late, from a process paused between its commit and its put, serves for less or not at all
+//     (DESIGN-DETAILS 10.2.7's cache stamp, QD-701), and a ref another ref's writes kept in the hash is still not
+//     served past its own 10 min (FS-62); a head with no written_ms is stamped 0 and never served; the key's ttl,
+//     which any ref's write extends, only bounds memory;
 //   - served only at or above the version asked (a reader's pin, a hinted version, a push's base), and never to a
 //     fresh read; a stale ETag costs a push one cluster read and one more PUT (§11.8's cache row).
 //
@@ -28,6 +31,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 )
 
 // The family's hash tag prefix.
@@ -148,8 +152,8 @@ func (self *HeadCache) Read(ctx context.Context, repoId sidecar.Id, refId sideca
 	}, true
 }
 
-// Writes the committed head as the ref's entry, cached now, if its version rises (the script decides). Failures
-// are logged and dropped.
+// Writes the committed head as the ref's entry, stamped with its own written_ms and never later than now, if its
+// version rises (the script decides). Failures are logged and dropped.
 func (self *HeadCache) Write(ctx context.Context, repoId sidecar.Id, refId sidecar.Id, committed *EvsStoredHead, pushSequence uint64) {
 	if self.redis == nil || committed.Absent() {
 		return
@@ -157,7 +161,7 @@ func (self *HeadCache) Write(ctx context.Context, repoId sidecar.Id, refId sidec
 	entry := &headCacheEntry{
 		version:      committed.Version(),
 		pushSequence: pushSequence,
-		cachedMs:     self.clock.Now().UnixMilli(),
+		cachedMs:     headCacheStampMs(committed.Head, self.clock.Now()),
 		etag:         committed.Etag,
 		headBytes:    committed.Bytes,
 	}
@@ -173,6 +177,12 @@ func (self *HeadCache) Write(ctx context.Context, repoId sidecar.Id, refId sidec
 	if err != nil {
 		self.log.Warningf("[evs] head cache write for repo %s failed: %v", sidecar.EvsKeyId(repoId), err)
 	}
+}
+
+// A cache entry's stamp (DESIGN-DETAILS 10.2.7): the head's written_ms, bounded above by now, so a head with a wrong
+// written_ms is never served longer; 0, never served, for a head with none.
+func headCacheStampMs(head *protocol.EvsHead, now time.Time) int64 {
+	return min(head.GetWrittenMs(), now.UnixMilli())
 }
 
 // Every ref's cached push sequence, for GET .../refs?moved_after= (§11.9's moved row): ref id to the sequence its

@@ -117,6 +117,9 @@ type pushOutcome struct {
 	ownCommit *EvsStoredHead
 	// The caller's own deposit ref's head (plan-EVS1-deposit-head), carried by a 200.
 	depositHead *protocol.EvsDepositHead
+	// Where the committed push's record is, when 5a or a reread found it committed: a 5a retry's purge list
+	// (push_purge.go).
+	committedPlace *protocol.EvsPlace
 	// A part's 200 {place}: where its record is (push_part.go).
 	partPlace *protocol.EvsPlace
 	// Otherwise the refusal, its code deciding its status.
@@ -161,6 +164,10 @@ type pushAttempt struct {
 	formatRefusal *EvsCheckRefusal
 	needsFormat2  bool
 	receipts      []*protocol.EvsUploadReceipt
+	// format 2: the request's staged bytes as received, which ride the record's tail outside every hash, and the
+	// record's purge list once computed at its first write, which a rerun keeps (push_staged.go, push_purge.go)
+	staged []byte
+	purge  *pushPurge
 	// the repo's network, whose state judges the push and whose storage counts it, and the token's, whose fair
 	// queue its writes wait in
 	gateView       sidecar.GkmAuthView
@@ -207,9 +214,9 @@ func (self *pushAttempt) stage() PushStage {
 // 5b's time bound for the stage: 10 min for a one-part push, 30 for a part or a seal.
 func (self *pushAttempt) timeBound() time.Duration {
 	if self.stage() == PushStageOnePart {
-		return evsPushTimeBound
+		return self.settings.PushTimeBound
 	}
-	return evsSealTimeBound
+	return self.settings.SealTimeBound
 }
 
 // An attempt's context: it runs past the client's leaving, within the engine's life and PushAttemptTimeout.
@@ -295,6 +302,7 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 			return nil, false
 		}
 		attempt.payload = payload
+		attempt.staged = body.GetStaged()
 		attempt.needsFormat2 = attempt.needsFormat2 || sidecar.EvsPushNeedsFormat2(statement, payload)
 	case attempt.formatRefusal == nil:
 		payload, err := sidecar.EvsCheckPayload(statement, body.GetPayload())
@@ -349,6 +357,7 @@ func (self *pushAttempt) bind() bool {
 		Auth:           view,
 		Stage:          self.stage(),
 		Now:            request.Now(),
+		TimeBound:      self.timeBound(),
 	}
 	if refusal := CheckSignature(identity); refusal != nil && refusal.Reason != EvsCheckReasonTimeStale && refusal.Reason != EvsCheckReasonTimeAhead {
 		request.Refuse(refusal.Reply(self.pushId))
@@ -367,6 +376,16 @@ func (self *pushAttempt) run() *pushOutcome {
 		}
 	}()
 	outcome := self.runSteps()
+	if outcome.committed && outcome.ownCommit == nil && outcome.committedPlace != nil && self.part == nil {
+		// a 5a retry or a reread found the push committed by another attempt: its record's list is the purge's
+		// (EVS2-M10-06), off the reply path
+		version, place := outcome.committedVersion, outcome.committedPlace
+		self.engine.stepEightCount.Update(func(count int) int { return count + 1 })
+		go func() {
+			defer self.engine.stepEightDoneCount.Update(func(count int) int { return count + 1 })
+			self.handRetriedPurge(version, place)
+		}()
+	}
 	if outcome.ownCommit != nil {
 		// the commit stands even when its post-commit work did not finish, so its step 8 runs
 		finished := self.afterCommitted(outcome)
@@ -457,13 +476,6 @@ func (self *pushAttempt) check() *EvsCheckRefusal {
 			return newEvsCheckRefusal(EvsCheckReasonFormat2Gate, "a format-2 part or seal from a network outside the format2 gate")
 		}
 		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "format 2's part and seal checks are not supplied")
-	}
-	if self.needsFormat2 && self.stage() != PushStageOnePart {
-		// a seal whose statement carries format 2 over parts format 1 read: EVS2-M10-06's
-		if !self.engine.format2.Admits(self.networkId) {
-			return newEvsCheckRefusal(EvsCheckReasonFormat2Gate, "a format-2 seal from a network outside the format2 gate")
-		}
-		return newEvsCheckRefusal(EvsCheckReasonUnchecked, "format 2's seal checks are not supplied")
 	}
 	refusal := CheckPush(self.reads.view)
 	if refusal == nil && self.seal != nil {
@@ -584,7 +596,7 @@ func (self *GenerationRecords) Read(ctx context.Context, cluster sidecar.BlobClu
 		return nil, err
 	}
 	defer object.Body.Close()
-	objectBytes, err := readAllLimited(object, evsGenerationRecordMaxByteCount)
+	objectBytes, err := readAllLimited(object, self.settings.GenerationRecordMaxByteCount)
 	if err != nil {
 		return nil, err
 	}
@@ -611,9 +623,6 @@ func (self *GenerationRecords) Read(ctx context.Context, cluster sidecar.BlobClu
 	}
 	return generationRecord.Rotate, nil
 }
-
-// gen/<g>'s bound: a Signed GenRotate with its GenLink and leaf wrap, well under a metadata object's 4 KiB.
-const evsGenerationRecordMaxByteCount = 16 * 1024
 
 // An object's body, at most maxByteCount, else ErrEvsPushInvalid.
 func readAllLimited(object *sidecar.BlobObject, maxByteCount int64) ([]byte, error) {

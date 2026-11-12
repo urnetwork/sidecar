@@ -400,7 +400,7 @@ func TestPushRecordsAtMostOneRefusalASecond(t *testing.T) {
 		t.Fatalf("%d records", count)
 	}
 	// an honest push still commits beside them, and once the records lapse its write drops them
-	fixture.clock.Advance(evsPushTimeBound + 2*time.Second)
+	fixture.clock.Advance(DefaultEvsSettings().PushTimeBound + 2*time.Second)
 	honest := fixture.plan()
 	fixture.create(honest, "honest")
 	fixture.requireCommitted(fixture.push(honest), 2)
@@ -677,7 +677,7 @@ func TestPushWritesItsNewSlots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored, _ := readAllLimited(object, evsSlotMaxByteCount)
+	stored, _ := readAllLimited(object, DefaultEvsSettings().SlotMaxByteCount)
 	object.Body.Close()
 	if !bytes.Equal(stored, slotBody) {
 		t.Fatal("the slot holds other bytes")

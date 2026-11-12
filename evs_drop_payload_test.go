@@ -16,8 +16,10 @@ import (
 	"maps"
 	mathrand "math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v3"
 
@@ -110,7 +112,7 @@ func evsTestDrop(t testing.TB, paths []*protocol.EvsDropPath, listed [][][]byte,
 		t.Fatal(err)
 	}
 	history := &protocol.EvsDropHistory{
-		DropId: evsTestId("drop").Bytes(), Action: evsDropActionDrop, NotBeforeMs: evsTestDropTimeMs + EvsDropWindowMs, Paths: paths,
+		DropId: evsTestId("drop").Bytes(), Action: evsDropActionDrop, NotBeforeMs: evsTestDropTimeMs + DefaultEvsFormatSettings().DropWindowMs(), Paths: paths,
 	}
 	if mutate != nil {
 		mutate(history)
@@ -197,18 +199,27 @@ func evsDropVectorCases(t testing.TB) []*evsDropVectorCase {
 	add("a repeat", push, body, repeated, nil, "DROP_LIST")
 	add("a list cut inside a value", push, body, lists[:len(lists)-1], nil, "DROP_LIST")
 
-	tooMany := evsTestDropPath("c", EvsDropMaxListedCount+5, evsDropBoundaryWritten)
+	tooMany := evsTestDropPath("c", uint64(DefaultEvsFormatSettings().DropMaxListedCount)+5, evsDropBoundaryWritten)
 	pushMany, bodyMany, _ := evsTestDrop(t, []*protocol.EvsDropPath{tooMany}, [][][]byte{evsTestDropListed("c", 1)}, func(history *protocol.EvsDropHistory) {
-		history.Paths[0].Count = EvsDropMaxListedCount + 1
+		history.Paths[0].Count = uint32(DefaultEvsFormatSettings().DropMaxListedCount) + 1
 	})
 	add("a count past 2^20", pushMany, bodyMany, evsTestDropListed("c", 1)[0], nil, "DROP_LIST")
+	// QD-700's total: two paths each within 2^20 whose counts pass it together, refused before a value is read
+	halfCount := uint32(DefaultEvsFormatSettings().DropMaxListedCount / 2)
+	totalA := evsTestDropPath("total a", uint64(halfCount)+1, evsDropBoundaryWritten)
+	totalB := evsTestDropPath("total b", uint64(halfCount)+2, evsDropBoundaryWritten)
+	pushTotal, bodyTotal, _ := evsTestDrop(t, []*protocol.EvsDropPath{totalA, totalB}, [][][]byte{evsTestDropListed("total a", 1), evsTestDropListed("total b", 1)}, func(history *protocol.EvsDropHistory) {
+		history.Paths[0].Count = halfCount
+		history.Paths[1].Count = halfCount + 1
+	})
+	add("counts past 2^20 in all", pushTotal, bodyTotal, nil, nil, "DROP_LIST")
 
 	pushNow, bodyNow, listsNow := evsTestDrop(t, []*protocol.EvsDropPath{evsTestDropPath("d", 3, evsDropBoundaryWritten)}, [][][]byte{evsTestDropListed("d", 2)}, func(history *protocol.EvsDropHistory) {
 		history.NotBeforeMs = evsTestDropTimeMs
 	})
 	add("now", pushNow, bodyNow, listsNow, nil, "ok")
 	pushLate, bodyLate, listsLate := evsTestDrop(t, []*protocol.EvsDropPath{evsTestDropPath("d", 3, evsDropBoundaryWritten)}, [][][]byte{evsTestDropListed("d", 2)}, func(history *protocol.EvsDropHistory) {
-		history.NotBeforeMs = evsTestDropTimeMs + EvsDropWindowMs + 1
+		history.NotBeforeMs = evsTestDropTimeMs + DefaultEvsFormatSettings().DropWindowMs() + 1
 	})
 	add("a not_before_ms off its values", pushLate, bodyLate, listsLate, nil, "DROP_STATE")
 
@@ -397,7 +408,7 @@ func TestEvsDropPayloadRefusals(t *testing.T) {
 		}, want: ErrEvsPushInvalid},
 		{name: "a path twice", mutate: func(history *protocol.EvsDropHistory) { history.Paths[1] = history.Paths[0] }, want: ErrEvsPushInvalid},
 		{name: "past 1,024 paths", mutate: func(history *protocol.EvsDropHistory) {
-			for len(history.Paths) <= EvsDropMaxPathCount {
+			for len(history.Paths) <= DefaultEvsFormatSettings().DropMaxPathCount {
 				history.Paths = append(history.Paths, history.Paths[0])
 			}
 		}, want: ErrEvsPushInvalid},
@@ -677,5 +688,163 @@ func TestEvsFormat2VectorFilesMatchTheSchema(t *testing.T) {
 		if !maps.EqualFunc(fields, keys, func(json.RawMessage, string) bool { return true }) {
 			t.Errorf("%s holds %v, and the schema names %v", path, slices.Sorted(maps.Keys(fields)), slices.Sorted(maps.Keys(keys)))
 		}
+	}
+}
+
+// DESIGN-DETAILS 10.2.2's bounds (QD-700): a body of 262,144 B passes and one of 262,145 B is INVALID, refused before
+// any hashing, so a body off its drop_sha256 at that length is INVALID for its length; counts summing to 1,048,576
+// over a DROP's paths pass the total, and one more is DROP_LIST before a list byte is read; the client's builder
+// refuses either past its bound as ErrEvsDropTooLarge before it signs.
+func TestEvsDropBounds(t *testing.T) {
+	format := DefaultEvsFormatSettings()
+	// a body padded to an exact length through its preview id's room: a single path, the rest in one unknown field
+	sized := func(target int) (*protocol.EvsPush, []byte) {
+		history := &protocol.EvsDropHistory{
+			DropId: evsTestId("drop").Bytes(), Action: evsDropActionDrop, NotBeforeMs: evsTestDropTimeMs,
+			Paths: []*protocol.EvsDropPath{evsTestDropPath("bound", 3, evsDropBoundaryWritten)},
+		}
+		history.Paths[0].Count = 2
+		history.Paths[0].ListedSha256 = make([]byte, 32)
+		body, err := proto.MarshalOptions{Deterministic: true}.Marshal(history)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// field 99, bytes, as an unknown field a newer writer could add: its tag and length then the filler
+		fillerLength := target - len(body)
+		for overhead := 2; overhead <= 6; overhead += 1 {
+			field := protowire.AppendTag(nil, 99, protowire.BytesType)
+			field = protowire.AppendVarint(field, uint64(fillerLength-overhead))
+			if len(field) == overhead {
+				body = append(append(body, field...), make([]byte, fillerLength-overhead)...)
+				break
+			}
+		}
+		if len(body) != target {
+			t.Fatalf("a body of %d bytes for %d", len(body), target)
+		}
+		return evsTestDropPush(body), body
+	}
+	lists := bytes.Join(evsTestDropListed("bound", 2), nil)
+
+	push, body := sized(format.DropMaxBodyByteCount)
+	if _, err := evsCheckDropBody(format, push, body); err != nil {
+		t.Errorf("a body of %d bytes: %v", len(body), err)
+	}
+	push, body = sized(format.DropMaxBodyByteCount + 1)
+	if _, err := evsCheckDropBody(format, push, body); !errors.Is(err, ErrEvsPushInvalid) || !strings.Contains(err.Error(), "past") {
+		t.Errorf("a body of %d bytes: %v", len(body), err)
+	}
+	// refused on its length before its hash: the same body under a wrong drop_sha256 still says its length
+	push.DropSha256 = make([]byte, 32)
+	if _, err := evsCheckDropBody(format, push, body); err == nil || !strings.Contains(err.Error(), "past") {
+		t.Errorf("a long body off its hash was judged by its hash: %v", err)
+	}
+
+	// the total over paths: two paths whose counts sum to the bound pass the checker's start, one more refuses
+	half := uint32(format.DropMaxListedCount / 2)
+	paths := []*protocol.EvsDropPath{evsTestDropPath("a", uint64(half)+1, evsDropBoundaryWritten), evsTestDropPath("b", uint64(half)+2, evsDropBoundaryWritten)}
+	paths[0].Count, paths[1].Count = half, half
+	if _, err := newEvsDropListChecker(format, paths); err != nil {
+		t.Errorf("counts summing to %d: %v", format.DropMaxListedCount, err)
+	}
+	paths[1].Count = half + 1
+	if _, err := newEvsDropListChecker(format, paths); !errors.Is(err, ErrEvsDropList) {
+		t.Errorf("counts summing to %d: %v", format.DropMaxListedCount+1, err)
+	}
+	// the payload check refuses the total before it reads a value
+	history := &protocol.EvsDropHistory{DropId: evsTestId("drop").Bytes(), Action: evsDropActionDrop, NotBeforeMs: evsTestDropTimeMs, Paths: paths}
+	for _, path := range history.Paths {
+		path.ListedSha256 = make([]byte, 32)
+	}
+	slices.SortFunc(history.Paths, func(a *protocol.EvsDropPath, b *protocol.EvsDropPath) int {
+		return evsCompareDropLineageEntries(a.GetLineage()[0], b.GetLineage()[0])
+	})
+	totalBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EvsCheckDropPayload(evsTestDropPush(totalBody), totalBody, nil); !errors.Is(err, ErrEvsDropList) {
+		t.Errorf("a DROP past 2^20 values in all: %v", err)
+	}
+
+	// the builder's bound: a body past 256 KiB, and lists past 2^20 values, are refused before signing
+	signer := newEvsTestSigner("drop bounds")
+	plan := evsTestPlan(t, signer, "drop bounds", 1)
+	plan.PathEpoch = evsTestDropPathEpoch
+	plan.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_DROP)
+	_, plan.DropBody = sized(format.DropMaxBodyByteCount + 1)
+	plan.DropLists = lists
+	if _, err := NewEvsStatementBuilder(signer.sign).BuildFormat2(plan); !errors.Is(err, ErrEvsDropTooLarge) {
+		t.Errorf("the builder took a body past its bound: %v", err)
+	}
+	_, plan.DropBody = sized(1024)
+	plan.DropLists = make([]byte, (format.DropMaxListedCount+1)*32)
+	if _, err := NewEvsStatementBuilder(signer.sign).BuildFormat2(plan); !errors.Is(err, ErrEvsDropTooLarge) {
+		t.Errorf("the builder took lists past their bound: %v", err)
+	}
+}
+
+// DESIGN-DETAILS 10.4's body table: a lineage at each depth and epoch count is no larger than the table gives, with
+// through_version under 2^35, map parts under 2^14 and the count at 2^20; 1,024 depth-8 lineages of one epoch make a
+// body within the bound, one push; and one lineage at 449 epochs and depth 32 passes the bound alone, which the client
+// refuses locally (ErrEvsDropTooLarge), as 1,725 epochs at depth 8 does.
+func TestEvsDropBodySizes(t *testing.T) {
+	format := DefaultEvsFormatSettings()
+	lineage := func(depth int, epochs int) *protocol.EvsDropPath {
+		path := &protocol.EvsDropPath{ThroughVersion: 1<<35 - 1, Boundary: evsDropBoundaryWritten, Count: 1 << 20, ListedSha256: make([]byte, 32)}
+		for e := 0; e < epochs; e += 1 {
+			tokenPath := make(EvsTokenPath, depth)
+			for i := range tokenPath {
+				tokenPath[i] = evsTestToken(fmt.Sprint("depth ", depth, " epoch ", e, " component ", i))
+			}
+			path.Lineage = append(path.Lineage, &protocol.EvsSourcePath{Epoch: uint64(epochs - e), TokenPath: tokenPath.Components()})
+			if 0 < e {
+				path.MapParts = append(path.MapParts, 1<<14-1)
+			}
+		}
+		return path
+	}
+	// 10.4's table, a lineage's bytes
+	for _, c := range []struct {
+		depth  int
+		epochs int
+		bytes  int
+	}{
+		{depth: 8, epochs: 1, bytes: 195},
+		{depth: 16, epochs: 1, bytes: 339},
+		{depth: 32, epochs: 1, bytes: 627},
+		{depth: 8, epochs: 4, bytes: 650},
+		{depth: 32, epochs: 4, bytes: 2378},
+		{depth: 8, epochs: 100, bytes: 15155},
+		{depth: 8, epochs: 300, bytes: 45568},
+	} {
+		if size := proto.Size(lineage(c.depth, c.epochs)); c.bytes < size {
+			t.Errorf("a lineage at depth %d over %d epochs is %d B, past the table's %d", c.depth, c.epochs, size, c.bytes)
+		}
+	}
+	body := func(paths []*protocol.EvsDropPath) []byte {
+		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.EvsDropHistory{
+			DropId: make([]byte, 16), Action: evsDropActionDrop, NotBeforeMs: evsTestDropTimeMs + format.DropWindowMs(), PreviewId: make([]byte, 16), Paths: paths,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	many := []*protocol.EvsDropPath{}
+	for range format.DropMaxPathCount {
+		many = append(many, lineage(8, 1))
+	}
+	if size := len(body(many)); format.DropMaxBodyByteCount < size {
+		t.Errorf("1,024 depth-8 lineages make a body of %d B, past the bound", size)
+	}
+	if size := len(body([]*protocol.EvsDropPath{lineage(32, 449)})); size <= format.DropMaxBodyByteCount {
+		t.Errorf("one lineage at depth 32 over 449 epochs is %d B, within the bound", size)
+	}
+	if size := len(body([]*protocol.EvsDropPath{lineage(32, 448)})); format.DropMaxBodyByteCount < size {
+		t.Errorf("one lineage at depth 32 over 448 epochs is %d B, past the bound", size)
+	}
+	if size := len(body([]*protocol.EvsDropPath{lineage(8, 1725)})); size <= format.DropMaxBodyByteCount {
+		t.Errorf("one lineage at depth 8 over 1,725 epochs is %d B, within the bound", size)
 	}
 }

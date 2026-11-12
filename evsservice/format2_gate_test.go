@@ -1,7 +1,7 @@
 // EVS2-M10-05's tests of §19.11's format2 gate as evs reads it and of 5c's answer: the gate's table over the host's
 // gates, its percent boundaries and its rereads; a push carrying format 2 from a network outside the gate refused
 // 409 VERSIONING, recorded, and its push id answering that record after the gate opens (I-EVS-3); a push inside the
-// gate with no format-2 rules supplied answering 503 and raising nothing; and a format-1 push untouched by the gate.
+// gate checked by EVS2-M10-06's own rules when no stand-in is set; and a format-1 push untouched by the gate.
 
 package evsservice
 
@@ -241,21 +241,23 @@ func TestPushOutsideTheFormat2GateIsRefusedVersioningAndRecorded(t *testing.T) {
 	}
 }
 
-// Inside the gate with no format-2 rules supplied, EVS2-M10-06's seam, a format-2 push answers 503: nothing commits
-// unchecked, nothing is recorded against the push, and the repo is not raised.
-func TestPushInTheGateWithoutFormat2RulesCommitsNothing(t *testing.T) {
+// Inside the gate with no stand-in for format 2's rules, EVS2-M10-06's own check the push: a versionless version
+// riding inline breaks the citation rule and answers 409 VERSIONING, recorded, nothing committing and the repo not
+// raised; and a DROP, whose rules are EVS2-M10-09's, answers 503, refusing nothing.
+func TestPushInTheGateIsCheckedByFormat2sOwnRules(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	fixture.openFormat2()
 	fixture.engine.deps.Format2Rules = nil
 	plan := fixture.plan()
 	fixture.createVersionless(plan, "a")
 	_, etag := fixture.repo()
-	requireRefusal(t, fixture.post(fixture.token(fixture.check.signerId), fixture.bodyFormat2(plan)), http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
-	if !fixture.head().Absent() {
-		t.Fatal("an unchecked format-2 push wrote the head")
+	recorder := fixture.post(fixture.token(fixture.check.signerId), fixture.bodyFormat2(plan))
+	requireRefusal(t, recorder, http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_VERSIONING)
+	if head := fixture.head(); head.Version() != 0 || len(head.Head.GetRefused()) != sidecar.EvsRefusalByteCount {
+		t.Fatalf("the citation rule's VERSIONING was not recorded, or the push committed: %v", head.Head)
 	}
 	if object, after := fixture.repo(); object.GetFormat() != sidecar.EvsRepoFormat1 || after != etag {
-		t.Fatal("an unchecked format-2 push raised the repo")
+		t.Fatal("a refused format-2 push raised the repo")
 	}
 }
 

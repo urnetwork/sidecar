@@ -184,7 +184,7 @@ func TestEvsSweepScansQueueTheReposTheyCover(t *testing.T) {
 	mine2 := putRepo("sweep mine 2", fixture.check.networkId, 2, protocol.EvsRepoState_EVS_REPO_ACTIVE)
 	theirs2 := putRepo("sweep theirs 2", other, 2, protocol.EvsRepoState_EVS_REPO_ACTIVE)
 	putRepo("sweep shredded 2", fixture.check.networkId, 2, protocol.EvsRepoState_EVS_REPO_SHREDDED)
-	deps := &SweepDeps{Format2: &testFormat2Gate{purge: sidecar.Format2On}, Settings: &SweepSettings{ListLimit: 1, RecomputeVersionCount: 1}}
+	deps := &SweepDeps{Format2: &testFormat2Gate{purge: sidecar.Format2On}, Settings: &SweepSettings{ListLimit: 1, RecomputeVersionCount: 1, HoldEndLead: DefaultSweepSettings().HoldEndLead}}
 	// the passes themselves are not this test's: only the queue
 	run := func(request *sidecar.TaskRequest) []string {
 		repoKeys := []string{}

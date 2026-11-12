@@ -9,7 +9,10 @@
 //   - a part posted twice is two records, and the seal names one; the rest is dead weight evacuation drops;
 //   - 5h takes the part's own receipts as its uploads, and leaves slots to the seal (check_objects.go);
 //   - git mode takes the seal lease first (push_lease.go), which 5f holds other pushes to; a part does not run 5f,
-//     so a part is taken whatever lease stands, and the seal decides.
+//     so a part is taken whatever lease stands, and the seal decides;
+//   - at a format-2 instance a part may carry format 2 (EVS2-M10-06): its statement and part are read by format 2's
+//     parsers, its staged segments ride its record's tail, and its record lists each versionless version it
+//     replaces, whole, with replaced set (DESIGN-DETAILS 10.2.6), which the seal subtracts every part's names from.
 
 package evsservice
 
@@ -105,7 +108,13 @@ func (self *EvsEngine) newPartAttempt(request *EvsRequest, body *protocol.EvsPar
 			attempt.cancel()
 		}
 	}()
+	format2 := self.format2Instance()
 	statement, err := sidecar.ParseEvsStatement(body.GetStatement())
+	if err != nil && format2 && EvsCheckRefusalOfCodec(err).Reason == EvsCheckReasonFormatUnsupported {
+		// a format-2 statement at a format-2 instance: the gate's question at 5c
+		statement, err = sidecar.ParseEvsStatementFormat2(body.GetStatement())
+		attempt.needsFormat2 = err == nil
+	}
 	if err != nil {
 		request.Refuse(EvsCheckRefusalOfCodec(err).Reply(pushId))
 		return nil, false
@@ -119,14 +128,19 @@ func (self *EvsEngine) newPartAttempt(request *EvsRequest, body *protocol.EvsPar
 		request.Refuse(newEvsCheckRefusal(EvsCheckReasonInvalid, "a part of another push than the path's").Reply(pushId))
 		return nil, false
 	}
-	if len(body.GetStaged()) != 0 {
+	if len(body.GetStaged()) != 0 && !format2 {
 		// staged segments are format 2's
 		refusal := newEvsCheckRefusal(EvsCheckReasonFormatUnsupported, "staged segments")
 		refusal.NeedsFormat = 2
 		request.Refuse(refusal.Reply(pushId))
 		return nil, false
 	}
-	checked, err := sidecar.EvsCheckPart(statement, body.GetPart())
+	var checked *sidecar.EvsCheckedPart
+	if format2 {
+		checked, err = sidecar.EvsCheckPartFormat2(statement, body.GetPart(), body.GetStaged())
+	} else {
+		checked, err = sidecar.EvsCheckPart(statement, body.GetPart())
+	}
 	if err != nil {
 		request.Refuse(EvsCheckRefusalOfCodec(err).Reply(pushId))
 		return nil, false
@@ -145,7 +159,11 @@ func (self *EvsEngine) newPartAttempt(request *EvsRequest, body *protocol.EvsPar
 		receiptItems[i] = item
 	}
 	attempt.part = &partReads{number: number, bytes: body.GetPart(), checked: checked, receiptItems: receiptItems}
-	attempt.payload = &sidecar.EvsCheckedPayload{Changes: checked.Changes, CreatesPath: checked.CreatesPath}
+	attempt.payload = &sidecar.EvsCheckedPayload{Changes: checked.Changes, CreatesPath: checked.CreatesPath, Staged: checked.Staged}
+	if format2 {
+		attempt.staged = body.GetStaged()
+		attempt.needsFormat2 = attempt.needsFormat2 || 0 < len(attempt.staged) || sidecar.EvsChangesNeedFormat2(checked.Changes)
+	}
 	if !attempt.bind() {
 		return nil, false
 	}
@@ -168,9 +186,19 @@ func (self *pushAttempt) appendPart() *pushOutcome {
 		TimeMs:          self.statement.Push.GetTimeMs(),
 		Body:            sidecar.EvsPartRecordBody(self.statement.Bytes, self.part.bytes, self.part.receiptItems, self.head.Version()),
 	}
+	var tail *sidecar.EvsBatchRecordTail
+	if self.engine.format2Instance() {
+		// its replaced versions' ids whole, and its staged segments (push_staged.go, push_purge.go)
+		base := sidecar.EvsBatchRecordHeaderByteCount + len(record.Body) + 4 + len(self.staged)
+		self.purge = evsPartPurge(self.reads.view, evsPurgeListRoom(base))
+		var err error
+		if tail, err = evsRecordTail(self.staged, self.purge); err != nil {
+			return self.unavailableOn(err)
+		}
+	}
 	barrierKey := barrierRefKey(self.repoId, self.refId)
 	testHookBarrier(BarrierPartAppendBefore, barrierKey)
-	place, err := self.engine.batches.Append(self.writeCtx, self.cluster.ClusterId(), record)
+	place, err := self.engine.batches.AppendFormat2(self.writeCtx, self.cluster.ClusterId(), record, tail)
 	testHookBarrier(BarrierPartAppendAfter, barrierKey)
 	if err != nil {
 		return self.unavailable()
