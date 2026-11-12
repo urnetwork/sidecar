@@ -187,6 +187,7 @@ type indexMergeWinners struct {
 	refs      map[[indexIdByteCount]byte]*indexMergeCandidate
 }
 
+// No candidate yet.
 func indexNewMergeWinners() *indexMergeWinners {
 	return &indexMergeWinners{documents: map[[indexIdByteCount]byte]*indexMergeCandidate{}, refs: map[[indexIdByteCount]byte]*indexMergeCandidate{}}
 }
