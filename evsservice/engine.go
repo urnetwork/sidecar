@@ -226,9 +226,9 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	self.records = NewRecordCache(settings)
 	self.batches = NewBatchWriter(cancelCtx, clock, host.ClockCheck, blobs, self.records, settings, log)
 	self.overlays = NewOverlayChains(self.heads, settings)
-	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.repos, priceTable, settings, log)
-	self.generations = NewGenerationRecords(settings)
 	self.locator = NewRecordLocator(blobs, nil)
+	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.locator, self.repos, priceTable, settings, log)
+	self.generations = NewGenerationRecords(settings)
 	self.segments = NewSegmentLocator(blobs)
 	self.notifier = deps.CommitNotifier
 	if self.notifier == nil {

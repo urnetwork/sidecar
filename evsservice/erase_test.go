@@ -142,7 +142,7 @@ func TestEraseRewriteFinishedByTheReconciler(t *testing.T) {
 	fixture.auth.grant(fixture.check.signerId, fixture.check.repoId, sidecar.AclEvsAdmin)
 	slotId := fixture.commitWithSlot("a", 2, "a")
 	if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{
-		Op: sidecartest.FaultOpPut, KeyPrefix: SlotKey(fixture.check.repoId, slotId), Result: sidecartest.FailBeforeApply, Repeat: evsSlotRewriteRetryCount,
+		Op: sidecartest.FaultOpPut, KeyPrefix: SlotKey(fixture.check.repoId, slotId), Result: sidecartest.FailBeforeApply, Repeat: DefaultEvsSettings().SlotRewriteRetryCount,
 	}); err != nil {
 		t.Fatal(err)
 	}

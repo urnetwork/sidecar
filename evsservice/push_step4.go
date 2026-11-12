@@ -296,7 +296,7 @@ func (self *pushAttempt) readReuse(reuse *sidecar.EvsReuse) (*ReuseRead, error) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEvsHeadInvalid, err)
 	}
-	pushes := NewRecordPushSource(engine.records, self.cluster, self.repoId, reuse.RefId)
+	pushes := NewRecordPushSource(engine.records, engine.locator, self.cluster, self.repoId, reuse.RefId)
 	first := EvsHeadWindowFirstVersion(refHead.Head)
 	for i := len(window) - 1; 0 <= i; i -= 1 {
 		if !window[i].PathsDigest.MayChange(reuse.TokenPath) {

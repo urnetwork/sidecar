@@ -212,7 +212,7 @@ func NewSweep(host *sidecar.ServiceHost, deps *SweepDeps) (*Sweep, error) {
 	heads := NewHeadStore(clock, host.ClockCheck, nil, evsSettings, log)
 	newest := deps.Newest
 	if newest == nil {
-		newest = &headPurgeNewest{heads: heads, records: NewRecordCache(evsSettings)}
+		newest = &headPurgeNewest{heads: heads, records: NewRecordCache(evsSettings), locator: NewRecordLocator(blobs, nil)}
 	}
 	self := &Sweep{
 		host:        host,
