@@ -103,7 +103,7 @@ func newEvsWorld(t *testing.T) *evsWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	world.folder = NewFolder(ctx, clock, host.ClockCheck, world.budgetedBlob, host.Budget, world.heads, NewRecordCache(settings),
+	world.folder = NewFolder(ctx, clock, host.ClockCheck, world.budgetedBlob, host.Budget, world.heads, NewRecordCache(settings), nil,
 		NewRepoCache(clock, settings), priceTable, settings, sidecar.NewNoopLogger())
 	world.putRepo(protocol.EvsRepoState_EVS_REPO_ACTIVE)
 	return world
@@ -393,7 +393,7 @@ func (self *evsWorld) newest(path sidecar.EvsTokenPath) (*EvsNewest, error) {
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	return Newest(self.ctx, read, head.Head, NewRecordPushSource(NewRecordCache(self.settings), self.cluster, self.repoId, self.refId))
+	return Newest(self.ctx, read, head.Head, NewRecordPushSource(NewRecordCache(self.settings), nil, self.cluster, self.repoId, self.refId))
 }
 
 // Asserts Newest against the brute force for path at the head.
@@ -454,7 +454,7 @@ func TestNewestEntryAboveTheServedHeadSendsToANewerHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = Newest(world.ctx, read, stale.Head, NewRecordPushSource(NewRecordCache(world.settings), world.cluster, world.repoId, world.refId))
+	_, err = Newest(world.ctx, read, stale.Head, NewRecordPushSource(NewRecordCache(world.settings), nil, world.cluster, world.repoId, world.refId))
 	if !errors.Is(err, ErrEvsEntryAheadOfHead) {
 		t.Errorf("an entry above the head: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestNewestRerunKeepsTheHorizonItsEntryWasReadAfter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newest, err := Newest(world.ctx, aRead, h2.Head, NewRecordPushSource(NewRecordCache(world.settings), world.cluster, world.repoId, world.refId))
+	newest, err := Newest(world.ctx, aRead, h2.Head, NewRecordPushSource(NewRecordCache(world.settings), nil, world.cluster, world.repoId, world.refId))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,14 +494,14 @@ func TestNewestRerunKeepsTheHorizonItsEntryWasReadAfter(t *testing.T) {
 	// with the window paged past A's horizon, A must read the entry again after the new head
 	world.pageOut(2)
 	h3, _ := world.heads.ReadCluster(world.ctx, world.cluster, world.repoId, world.refId)
-	if _, err := Newest(world.ctx, aRead, h3.Head, NewRecordPushSource(NewRecordCache(world.settings), world.cluster, world.repoId, world.refId)); !errors.Is(err, ErrEvsEntryBehindWindow) {
+	if _, err := Newest(world.ctx, aRead, h3.Head, NewRecordPushSource(NewRecordCache(world.settings), nil, world.cluster, world.repoId, world.refId)); !errors.Is(err, ErrEvsEntryBehindWindow) {
 		t.Errorf("a window past the horizon: %v", err)
 	}
 	reread, err := ReadEntry(world.ctx, world.cluster, world.repoId, world.refId, 1, file, h3.Head.GetFoldedThrough())
 	if err != nil {
 		t.Fatal(err)
 	}
-	newest, err = Newest(world.ctx, reread, h3.Head, NewRecordPushSource(NewRecordCache(world.settings), world.cluster, world.repoId, world.refId))
+	newest, err = Newest(world.ctx, reread, h3.Head, NewRecordPushSource(NewRecordCache(world.settings), nil, world.cluster, world.repoId, world.refId))
 	if err != nil || newest.Version != 2 {
 		t.Errorf("after the reread: %+v %v", newest, err)
 	}
@@ -551,7 +551,7 @@ func TestNewestReadsNoStatementTheDigestRulesOut(t *testing.T) {
 	head, _ := world.heads.ReadCluster(world.ctx, world.cluster, world.repoId, world.refId)
 	read, _ := ReadEntry(world.ctx, world.cluster, world.repoId, world.refId, 1, file, head.Head.GetFoldedThrough())
 	cache := NewRecordCache(world.settings)
-	newest, err := Newest(world.ctx, read, head.Head, NewRecordPushSource(cache, world.cluster, world.repoId, world.refId))
+	newest, err := Newest(world.ctx, read, head.Head, NewRecordPushSource(cache, nil, world.cluster, world.repoId, world.refId))
 	if err != nil || newest.Version != 1 {
 		t.Fatalf("%+v %v", newest, err)
 	}
@@ -573,7 +573,7 @@ func TestNewestRefusesARecordThatIsNotItsStatement(t *testing.T) {
 	window[1].Place = window[0].Place
 	head.Window = append(window[0].Encode(), window[1].Encode()...)
 	read, _ := ReadEntry(world.ctx, world.cluster, world.repoId, world.refId, 1, file, 0)
-	_, err := Newest(world.ctx, read, head, NewRecordPushSource(NewRecordCache(world.settings), world.cluster, world.repoId, world.refId))
+	_, err := Newest(world.ctx, read, head, NewRecordPushSource(NewRecordCache(world.settings), nil, world.cluster, world.repoId, world.refId))
 	if !errors.Is(err, ErrEvsStatementMismatch) {
 		t.Errorf("a mismatched record: %v", err)
 	}
@@ -590,7 +590,7 @@ func TestListingMergesTheFoldedTableAndTheWindowsDeltas(t *testing.T) {
 		&worldChange{path: worldPath("d", "a"), base: 1}, &worldChange{path: worldPath("d", "c"), version: 1})
 	head, _ := world.heads.ReadCluster(world.ctx, world.cluster, world.repoId, world.refId)
 	read, _ := ReadEntry(world.ctx, world.cluster, world.repoId, world.refId, 1, directory, head.Head.GetFoldedThrough())
-	listing, err := Listing(world.ctx, read, head.Head, NewRecordPushSource(NewRecordCache(world.settings), world.cluster, world.repoId, world.refId))
+	listing, err := Listing(world.ctx, read, head.Head, NewRecordPushSource(NewRecordCache(world.settings), nil, world.cluster, world.repoId, world.refId))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -613,7 +613,7 @@ func TestListingMergesTheFoldedTableAndTheWindowsDeltas(t *testing.T) {
 	// the directory removed: no listing
 	world.push(&worldChange{path: directory, base: 3})
 	head, _ = world.heads.ReadCluster(world.ctx, world.cluster, world.repoId, world.refId)
-	listing, err = Listing(world.ctx, read, head.Head, NewRecordPushSource(NewRecordCache(world.settings), world.cluster, world.repoId, world.refId))
+	listing, err = Listing(world.ctx, read, head.Head, NewRecordPushSource(NewRecordCache(world.settings), nil, world.cluster, world.repoId, world.refId))
 	if err != nil || listing.Exists {
 		t.Errorf("a removed directory listed: %+v %v", listing, err)
 	}
@@ -1010,7 +1010,7 @@ func TestNewestReadsASealedPushsPartHoldingThePath(t *testing.T) {
 	}
 	world.pushInParts(changes...)
 	cache := NewRecordCache(world.settings)
-	source := NewRecordPushSource(cache, world.cluster, world.repoId, world.refId)
+	source := NewRecordPushSource(cache, nil, world.cluster, world.repoId, world.refId)
 	head, _ := world.heads.ReadCluster(world.ctx, world.cluster, world.repoId, world.refId)
 	for _, label := range []string{"p0", "p1099", "p550"} {
 		path := worldPath(label)
@@ -1049,7 +1049,7 @@ func TestNewestReadsASealedPushsPartHoldingThePath(t *testing.T) {
 	window[1].Place = place
 	tampered.Window = append(window[0].Encode(), window[1].Encode()...)
 	read, _ := ReadEntry(world.ctx, world.cluster, world.repoId, world.refId, 1, worldPath("p0"), 0)
-	if _, err := Newest(world.ctx, read, tampered, NewRecordPushSource(NewRecordCache(world.settings), world.cluster, world.repoId, world.refId)); !errors.Is(err, ErrEvsStatementMismatch) {
+	if _, err := Newest(world.ctx, read, tampered, NewRecordPushSource(NewRecordCache(world.settings), nil, world.cluster, world.repoId, world.refId)); !errors.Is(err, ErrEvsStatementMismatch) {
 		t.Errorf("a seal naming another changes_root: %v", err)
 	}
 }

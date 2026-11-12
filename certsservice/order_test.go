@@ -12,6 +12,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"math/big"
 	"net"
@@ -208,13 +209,26 @@ func TestAcceptAgainAnswersTheOpenOrder(t *testing.T) {
 	}
 }
 
-// RFC 9773's certificate id for a serial, its authority key id synthetic.
+// A synthetic authority key id.
+var testAuthorityKeyId = []byte("synthetic aki")
+
+// RFC 9773's certificate id for a serial in hex, its authority key id synthetic.
 func testAriId(serial string) string {
 	serialInt, ok := new(big.Int).SetString(serial, 16)
 	if !ok {
 		panic(serial)
 	}
-	return base64.RawURLEncoding.EncodeToString([]byte("synthetic aki")) + "." + base64.RawURLEncoding.EncodeToString(serialInt.Bytes())
+	return testCertificateId(testAuthorityKeyId, serialInt)
+}
+
+// A certificate id whose serial part is exactly these octets, in hex, whether or not they are a DER
+// integer's.
+func testAriIdOfOctets(serialOctets string) string {
+	octets, err := hex.DecodeString(serialOctets)
+	if err != nil {
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(testAuthorityKeyId) + "." + base64.RawURLEncoding.EncodeToString(octets)
 }
 
 // A replaces naming a live certificate of the same sidecar and set links the new row as its successor;
@@ -252,5 +266,45 @@ func TestAcceptLinksAReplacedCertificate(t *testing.T) {
 	garbled.Args.Replaces = "not an ARI id"
 	if _, err := certs.service.Accept(certs.ctx, garbled); err != nil {
 		t.Fatalf("an unreadable replaces refused the order: %v", err)
+	}
+}
+
+// A replaces finds its certificate by serial whatever the serial's shape. The row holds the serial as
+// hex with no leading zeros and the id holds its DER content octets, which differ by a leading zero
+// octet when the serial's top bit is set; an id from a client that sent the serial's bare unsigned
+// octets, or padded them, names the same certificate.
+func TestAcceptReadsAReplacedSerialOfEveryShape(t *testing.T) {
+	for index, shape := range []struct {
+		// the row's serial
+		serial string
+		// the serial octets of the id that replaces it, in hex
+		idOctets string
+	}{
+		{"7f223344556677", "7f223344556677"},
+		{"80223344556677", "0080223344556677"},
+		{"ff223344556677", "00ff223344556677"},
+		{"80", "0080"},
+		{"1", "01"},
+		{"8765432187654321876543218765432187654321", "008765432187654321876543218765432187654321"},
+		{"80223344556677", "80223344556677"},
+		{"7f2233", "00007f2233"},
+	} {
+		certs := newTestCerts(t, nil)
+		device := newTestDevice(t, "shape"+string(rune('a'+index)))
+		firstId := certs.accept(device)
+		if report := certs.admit(); len(report.Admitted) != 1 {
+			t.Fatalf("admitted %+v", report)
+		}
+		certs.issue(firstId, shape.serial)
+		device.tlsKey, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		renewal := device.order(t)
+		renewal.Args.Replaces = testAriIdOfOctets(shape.idOctets)
+		result, err := certs.service.Accept(certs.ctx, renewal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if successor := certs.row(firstId).SuccessorCertId; successor != result.CertId {
+			t.Fatalf("serial %s by octets %s: the replaced row's successor is %s, not %s", shape.serial, shape.idOctets, successor, result.CertId)
+		}
 	}
 }
