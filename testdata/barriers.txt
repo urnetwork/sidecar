@@ -434,6 +434,10 @@ barrier stream.open.after stream_open.go
 barrier stream.open.before stream_open.go
 barrier tls.device_key_put.after tls_key.go
 barrier tls.device_key_put.before tls_key.go
+barrier tls.front_audience.after tls_audience.go
+barrier tls.front_audience.before tls_audience.go
+barrier tls.front_target.after tls_front.go
+barrier tls.front_target.before tls_front.go
 barrier tls.handshake.after smtpproof/tls_client.go
 barrier tls.handshake.before smtpproof/tls_client.go
 barrier tlsedge.kill_publish.after tlsedgeservice/kill_set.go
@@ -544,9 +548,13 @@ secret tls13_server_handshake_key smtpproof/tls_client.go
 secret tls13_server_iv smtpproof/tls_client.go
 secret tls13_server_key smtpproof/tls_client.go
 secret tls13_shts smtpproof/tls_client.go
+secret tls_alpn_challenge_key tls_alpn_responder.go
 secret tls_device_key tls_key.go
 secret tls_ecdhe_private smtpproof/tls_client.go
 secret tls_ecdhe_shared smtpproof/tls_client.go
+secret tls_front_pre_login_key tls_session.go
+secret tls_front_session_key tls_session.go
+secret tls_front_session_root tls_session.go
 secret tls_visitor_cap tlsedgeservice/visitor_key.go
 secret tls_visitor_daily tlsedgeservice/visitor_key.go
 secret tls_visitor_record tlsedgeservice/visitor_key.go
