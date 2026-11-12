@@ -2,40 +2,33 @@ package sidecartest
 
 // §22.7's privacy harness on the policy (ACL-M2-16; §8.7, owner decision 72, R-ACL-12, X2, I-13, I-18): a network's
 // writer saves a document whose policy text, tags, groups, repo labels and socket names are all canaries, as a person's
-// own names would be, and every base the writer publishes, every entry api sequences and api's read cache {acl_}e hold
-// none of them in any form, nor K_sock: servers see the reach graph and keyed ids only. T2 on the Net's fake stores,
-// which its capture reads (proj/ and projrows/ on its first metadata cluster, {acl_}e in its Redis); the network_acl_*
-// tables are Postgres's, which server's T3 test scans (server/api/sidecar_acl_t3_test.go). Under sidecar_leaktest, a
-// policy canary leaked into each store class through the class's own leak is found, so the clean scan is no blind one.
+// own names would be (AdmissionNet.SaveAclCanaryPolicy), and every base the writer publishes, every entry api sequences
+// and api's read cache {acl_}e hold none of them in any form, nor K_sock: servers see the reach graph and keyed ids
+// only. T2 on the Net's fake stores, which its capture reads (proj/ and projrows/ on its first metadata cluster,
+// {acl_}e in its Redis); server's T3 test runs the same document through server's sequencer, its read-cache script and
+// network_acl_head, and scans MinIO, Redis and the network_acl_* tables (server/api/sidecar_acl_t3_test.go). Under
+// sidecar_leaktest, a policy canary leaked into each store class through the class's own leak is found, so the clean
+// scan is no blind one.
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/urnetwork/sidecar"
-	"github.com/urnetwork/sidecar/protocol"
-	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// One policy world: a Net and the admission world on its first metadata cluster, with ACL's compile.
+// One policy world: a Net, the admission world on its first metadata cluster with ACL's compile, and the document.
 type aclPrivacyWorld struct {
 	net       *Net
 	admission *AdmissionNet
-	// the names the document uses, each a value no store may hold
-	tag, group, label, socket, note, comment string
-	socketKey                                []byte
-	plan                                     *sidecar.AclSavePlan
+	policy    *AclCanaryPolicy
 }
 
-// A world whose writer saved a document of canaries, and api's read cache written after every entry. The caller
-// closes it before it opens another: under sidecar_testhooks a Net holds the process's hooks.
+// A world whose writer saved a document of canaries, with api's read cache written after every entry as api's script
+// writes it. The caller closes it before it opens another: under sidecar_testhooks a Net holds the process's hooks.
 func newAclPrivacyWorld(t *testing.T) *aclPrivacyWorld {
 	net := NewNet(t.Context(), nil)
 	tier, err := net.AdmissionTier()
@@ -45,74 +38,11 @@ func newAclPrivacyWorld(t *testing.T) *aclPrivacyWorld {
 	}
 	tier.AclCompile = AclAdmissionCompile
 	admission := NewAdmissionNet(t, tier)
-	capture := net.Capture()
-
-	// a tag and a group hold 50 bytes at most, so each is a canary's first 40 characters behind a letter, forbidden in
-	// every form; a repo label and a socket segment hold a whole canary text
-	self := &aclPrivacyWorld{
-		net:       net,
-		admission: admission,
-		tag:       "t" + capture.CanaryText("acl tag")[:40],
-		group:     "g" + capture.CanaryText("acl group")[:40],
-		label:     capture.CanaryText("acl repo label"),
-		socket:    capture.CanaryText("acl socket name"),
-		note:      capture.CanaryText("acl policy note"),
-		comment:   capture.CanaryText("acl policy comment"),
-		socketKey: bytes.Repeat([]byte{0x6b}, 32),
-	}
-	capture.Forbid("acl tag", []byte(self.tag))
-	capture.Forbid("acl group", []byte(self.group))
-	capture.AddSecret("acl K_sock", self.socketKey)
-
-	memberId, first := admission.ConsentedMember("m")
-	repoId := admission.Id("labelled repo")
-	admission.MustLand(admission.Sign(first, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
-		Header: admission.Header(), RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
-	}))
-	// the head's labels file and K_sock, which a config writer's head carries beside the policy (§8.8's Placement)
-	labels, err := proto.Marshal(&protocol.ConfigLabelTable{Labels: []*protocol.ConfigRepoLabel{{Label: self.label, RepoId: repoId.Bytes()}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	socketKeyFile, err := proto.Marshal(&protocol.SocketKeyFile{CurrentKey: self.socketKey})
-	if err != nil {
-		t.Fatal(err)
-	}
-	admission.SaveHead(func(head *sidecar.ConfigHead) (*sidecar.ConfigHead, error) {
-		head, err := head.WithFile(sidecar.ConfigHeadLabelsPath, labels)
-		if err != nil {
-			return nil, err
-		}
-		return head.WithFile(sidecar.ConfigHeadSocketKeyPath, socketKeyFile)
-	})
-	source := fmt.Sprintf(`{
-		// %s
-		"groups": { "group:%s": ["m@acme.example"] },
-		"tagOwners": { "tag:%s": ["group:%s"] },
-		"grants": [
-			{ "src": ["group:%s"], "dst": ["evs:%s"], "allow": ["write"], "note": "%s" },
-			{ "src": ["group:%s"], "dst": ["sock:%s"], "allow": ["dial"] },
-			{ "src": ["tag:%s"], "dst": ["sock:%s"], "allow": ["listen"] },
-			{ "src": ["autogroup:member"], "dst": ["autogroup:self"], "allow": ["dial", "route"] },
-		],
-	}`, self.comment, self.group, self.tag, self.group, self.group, self.label, self.note, self.group, self.socket, self.tag, self.socket)
-	self.plan, _ = admission.SaveAclPolicy([]byte(source), AclSaveMembers{"m@acme.example": memberId})
-	// the document compiled to what it says: the labelled repo is written by the group, and the socket has a rule
-	if len(self.plan.Rows.GetRules()) < 4 {
-		t.Fatalf("the document compiled to %d rules", len(self.plan.Rows.GetRules()))
-	}
-	acl, err := admission.State().Acl()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rights := acl.EvsAccess(sidecar.AclSidecarSubject(first.SidecarId), repoId, sidecar.AclTokenAudienceEvs, admission.Clock().Now()).Rights; !rights.Has(sidecar.AclEvsWrite) {
-		t.Fatalf("the group's write on the labelled repo: %04b", rights)
-	}
-	// more entries after the base, so {acl_}e holds statements and a base
-	admission.AdmitMember(admission.Owner(), "after the policy", bridge.MemberRole_MEMBER_ROLE_MEMBER)
-	admission.Fold(true)
+	self := &aclPrivacyWorld{net: net, admission: admission}
+	self.policy = admission.SaveAclCanaryPolicy(net.Capture())
 	for n := uint64(1); n <= admission.Tip().GetVersion(); n += 1 {
 		if err := aclPrivacyCacheEntry(t.Context(), net.Host().Redis, admission, n); err != nil {
+			self.close()
 			t.Fatal(err)
 		}
 	}
@@ -174,13 +104,6 @@ func TestAclPolicyCanariesReachNoStore(t *testing.T) {
 	if _, found := world.net.Fakes().Redis.Dump()[sidecar.AclEntryCacheKey(world.admission.NetworkId())]; !found {
 		t.Fatal("{acl_}e holds nothing")
 	}
-	// the head the writer saved does hold them, so their absence below is the projection's doing
-	policy := world.plan.Head.File(sidecar.ConfigHeadPolicyPath)
-	for _, name := range []string{world.tag, world.group, world.label, world.socket, world.note, world.comment} {
-		if !bytes.Contains(policy, []byte(name)) {
-			t.Fatalf("the saved policy does not name %q", name)
-		}
-	}
 	for _, finding := range world.net.Capture().Scan() {
 		t.Errorf("%s", finding)
 	}
@@ -198,13 +121,12 @@ func TestAclPolicyCanaryLeakedIntoEachStoreClassIsCaught(t *testing.T) {
 			continue
 		}
 		func() {
-			// one world at a time: under sidecar_testhooks a Net holds the process's hooks
 			world := newAclPrivacyWorld(t)
 			defer world.close()
 			if findings := world.net.Capture().Scan(); len(findings) != 0 {
 				t.Fatalf("%s: findings before the leak: %v", class, findings)
 			}
-			leak.Put(t, world.net, []byte(world.note))
+			leak.Put(t, world.net, []byte(world.policy.Note))
 			caught := false
 			for _, finding := range world.net.Capture().Scan() {
 				if finding.Needle == "acl policy note" && finding.Class == class {

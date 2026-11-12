@@ -334,3 +334,89 @@ func AclHolds(holders sidecar.GkmHolders, sidecarId sidecar.Id, kinds ...sidecar
 		return holders.Contains(kind, sidecarId.Bytes())
 	})
 }
+
+// A document whose every name is a canary (§22.7's policy canaries; §8.7, owner decision 72), saved on a network's
+// writer: what no store may hold in any form, and the saved plan, whose head does hold them.
+type AclCanaryPolicy struct {
+	// a tag and a group hold 50 bytes at most, so each is a canary's first 40 characters behind a letter, forbidden
+	// in every form; a repo label, a socket segment, a note and a comment hold a whole canary text
+	Tag, Group, Label, Socket, Note, Comment string
+	// K_sock, which the head carries beside the policy (§8.8's Placement) and the capture looks for as a secret
+	SocketKey []byte
+	// the member the document's group names, its consented device, and the repo the label names
+	MemberDevice *AdmissionDevice
+	RepoId       sidecar.Id
+	Plan         *sidecar.AclSavePlan
+}
+
+// Saves on the network's writer a document whose policy text, tags, groups, repo labels and socket names are canaries
+// of capture, with the head's labels file and K_sock, then admits one more member and folds, so the log holds
+// statements and bases after it. Fails the row unless the document compiles to what it says.
+func (self *AdmissionNet) SaveAclCanaryPolicy(capture *PrivacyCapture) *AclCanaryPolicy {
+	self.t.Helper()
+	policy := &AclCanaryPolicy{
+		Tag:       "t" + capture.CanaryText("acl tag")[:40],
+		Group:     "g" + capture.CanaryText("acl group")[:40],
+		Label:     capture.CanaryText("acl repo label"),
+		Socket:    capture.CanaryText("acl socket name"),
+		Note:      capture.CanaryText("acl policy note"),
+		Comment:   capture.CanaryText("acl policy comment"),
+		SocketKey: bytes.Repeat([]byte{0x6b}, 32),
+	}
+	capture.Forbid("acl tag", []byte(policy.Tag))
+	capture.Forbid("acl group", []byte(policy.Group))
+	capture.AddSecret("acl K_sock", policy.SocketKey)
+
+	memberId, first := self.ConsentedMember("m")
+	policy.MemberDevice = first
+	policy.RepoId = self.Id("labelled repo")
+	self.MustLand(self.Sign(first, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
+		Header: self.Header(), RepoId: policy.RepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
+	}))
+	labels := self.marshal(&protocol.ConfigLabelTable{Labels: []*protocol.ConfigRepoLabel{{Label: policy.Label, RepoId: policy.RepoId.Bytes()}}})
+	socketKeyFile := self.marshal(&protocol.SocketKeyFile{CurrentKey: policy.SocketKey})
+	self.SaveHead(func(head *sidecar.ConfigHead) (*sidecar.ConfigHead, error) {
+		head, err := head.WithFile(sidecar.ConfigHeadLabelsPath, labels)
+		if err != nil {
+			return nil, err
+		}
+		return head.WithFile(sidecar.ConfigHeadSocketKeyPath, socketKeyFile)
+	})
+	source := fmt.Sprintf(`{
+		// %s
+		"groups": { "group:%s": ["m@acme.example"] },
+		"tagOwners": { "tag:%s": ["group:%s"] },
+		"grants": [
+			{ "src": ["group:%s"], "dst": ["evs:%s"], "allow": ["write"], "note": "%s" },
+			{ "src": ["group:%s"], "dst": ["sock:%s"], "allow": ["dial"] },
+			{ "src": ["tag:%s"], "dst": ["sock:%s"], "allow": ["listen"] },
+			{ "src": ["autogroup:member"], "dst": ["autogroup:self"], "allow": ["dial", "route"] },
+		],
+	}`, policy.Comment, policy.Group, policy.Tag, policy.Group, policy.Group, policy.Label, policy.Note, policy.Group,
+		policy.Socket, policy.Tag, policy.Socket)
+	policy.Plan, _ = self.SaveAclPolicy([]byte(source), AclSaveMembers{"m@acme.example": memberId})
+	if len(policy.Plan.Rows.GetRules()) < 4 {
+		self.t.Fatalf("the canary document compiled to %d rules", len(policy.Plan.Rows.GetRules()))
+	}
+	acl, err := self.State().Acl()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	if rights := acl.EvsAccess(sidecar.AclSidecarSubject(first.SidecarId), policy.RepoId, sidecar.AclTokenAudienceEvs, self.clock.Now()).Rights; !rights.Has(sidecar.AclEvsWrite) {
+		self.t.Fatalf("the group's write on the labelled repo: %04b", rights)
+	}
+	saved := policy.Source()
+	for _, name := range []string{policy.Tag, policy.Group, policy.Label, policy.Socket, policy.Note, policy.Comment} {
+		if !bytes.Contains(saved, []byte(name)) {
+			self.t.Fatalf("the saved policy does not name %q", name)
+		}
+	}
+	self.AdmitMember(self.Owner(), "after the canary policy", bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	self.Fold(true)
+	return policy
+}
+
+// The saved head's policy file, where the canaries stand.
+func (self *AclCanaryPolicy) Source() []byte {
+	return self.Plan.Head.File(sidecar.ConfigHeadPolicyPath)
+}
