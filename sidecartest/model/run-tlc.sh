@@ -119,9 +119,9 @@ EOF
 # MergeRemovesLarge, NoPromote, PromoteBlind, and IndexSupersede and LongLife for R5's pin and life)
 # run on the grounds DESIGN-DETAILS.md section 1.3 ran them on in details/IndexMerge.tla, with the
 # erasure held still, and NoPromoteLive on the ground its live promotion was reached on there.
-# CutVersion="read" is not a twin but a finding: a CUT listing what its eraser read
-# lets a CLOSURE take the base of a diff that landed before the CUT at a version it does not list, which
-# TLC refuses with ChainsResolve violated on DiffOnListed's ground (question
+# CutVersion="read" is not a twin but a finding: a CUT listing what its eraser read lets a CLOSURE
+# take the base of a diff that landed before the CUT at a version it does not list, which TLC refuses
+# with ChainsResolve violated on DiffOnListed's ground (question
 # search-m10-46-erased-base-of-a-live-diff), and the cfg runs "commit".
 twins_IndexRollup() {
   local one="Rollers={r1} MaxCrashes=0 MaxLapses=0 MaxRestarts=0 ForeignCuts=0 BigDocs={}"
@@ -150,7 +150,7 @@ CleanupReferenced      ChainsResolve        $d2 Events=4 BigDocs={"d2"} Still={"
 MergeRemovesLarge      ChainsResolve        $d2 Events=4 BigDocs={"d2"} Still={"rollup","erase","tick","bfdiff"}
 NoPromote              ResultsHold          $d3
 NoPromoteLive          BucketsExact         $one Documents={"d2"} Events=3 Skew=TRUE Still={"backfill","erase"}
-PromoteBlind          ResultsHold          $one Documents={"d2","d3"} Events=3 Skew=TRUE Still={"erase"}
+PromoteBlind           ResultsHold          $one Documents={"d2","d3"} Events=3 Skew=TRUE Still={"erase"}
 IndexSupersede         ResultsHold          $d3
 LongLife               ResultsHold          $d3
 EOF
