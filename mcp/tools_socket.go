@@ -13,10 +13,10 @@
 //   - socket_listen(name, local_port) listens an application name, forwarding each admitted stream to
 //     127.0.0.1:<local_port>, serving false while that port refuses. Under a covering grant, §8's local allow of listen
 //     on sock:<name> for this sidecar, it runs as W: rate-limited and recorded, its grant_id in the result. With none it
-//     is outward, §5.4's gate with a CanonicalAction of kind listen naming the socket: that kind's row waits on question
-//     record-m2-01-canonical-action-detail, since QD-064 moves local_port and weight into the sealed ApprovalRequest, so
-//     NewCanonicalAction refuses it and the tool answers that an approval cannot be asked for yet. tls/ is
-//     tls_publish's, smtp/ a receiver's, share/ ur share's and ur/ the platform's: each is refused here.
+//     is outward, §5.4's gate with a CanonicalAction of kind listen naming the socket and, beside it, the local port
+//     as the request's local_port (QD-740), which the approver renders and the decision binds: the tool listens on
+//     the port it asked for and no other. tls/ is tls_publish's, smtp/ a receiver's, share/ ur share's and ur/ the
+//     platform's: each is refused here.
 //   - socket_unlisten(name) ends the daemon's listen on name at once (§9.9's Close); streams accepted stay.
 //
 // No result holds a key, a seal, a token path or a credential (I-7), and the framework's matcher holds every result to
@@ -69,7 +69,7 @@ var (
 	errMcpSocketPort        = NewMcpError(McpCodeInvalidArguments, "local_port is a port from 1 to 65535", false)
 	errMcpSocketUnavailable = NewMcpError(McpCodeUnavailable, "this daemon holds no sockets for tools: run ur status in your own terminal", false)
 	errMcpSocketHeld        = NewMcpError(McpCodeRefused,
-		"no grant covers this listen, and the approval a listen needs cannot be asked for yet: a person may grant this sidecar listen on the name", false)
+		"no grant covers this listen, and no approval of it could be spent: a person may grant this sidecar listen on the name", false)
 	errMcpSocketTaken = NewMcpError(McpCodeFailedPrecondition, "this daemon already listens on that name: socket_unlisten it first", false)
 )
 
@@ -155,8 +155,8 @@ func mcpSocketTargetPort(target string) int {
 	return port
 }
 
-// The §5.4 action an uncovered socket_listen goes through Authorize as: kind listen naming the socket, which
-// NewCanonicalAction refuses while its row waits on record-m2-01-canonical-action-detail. A test replaces it.
+// The §5.4 action an uncovered socket_listen goes through Authorize as: kind listen naming the socket, built by
+// NewCanonicalAction. A test replaces it.
 type mcpSocketListenActionFunction func(call *McpCall, name string) (*sidecar.SidecarAction, error)
 
 // The production action: NewCanonicalAction, then NewSidecarAction bound to the call's run.
@@ -285,6 +285,8 @@ func addSocketTools(catalog *McpCatalog, sockets func() McpSockets, listenAction
 			if err != nil {
 				return nil, errMcpSocketHeld
 			}
+			// the port the listen below forwards to rides the request, so the approval is of this port
+			action.Detail = &sidecar.SidecarActionDetail{LocalPort: uint32(in.LocalPort)}
 			if err := authorizer.Authorize(ctx, action, nil); err != nil {
 				var pending *sidecar.ApprovalPendingError
 				if errors.As(err, &pending) {

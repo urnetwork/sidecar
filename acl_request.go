@@ -18,9 +18,11 @@
 //	dns:<host>                     a published name
 //	mail:*                         send, all a server sees of mail (D-ACL-12)
 //
-// An ip: prefix is refused: a dial or route grant's prefixes and ports move to sealed_detail
-// (plan-BRIDGE-gate-row-prefixes #2), which this build does not read, so such a grant fails closed. grant_allow holds
-// §8.4's action names.
+// An ip: prefix is refused: a dial or route grant's prefixes and ports ride its action's sealed_detail (owner
+// decision 220; QD-740), a CanonicalActionDetail no server opens, and its clear grant_dst names subjects alone. This
+// parse reads the clear fields, so a version-4 grant's ask names no port, and its fold is port-limited by its
+// sealed_detail's presence (acl_grant.go); reading the detail's ports on the device is ACL-M4-02's. grant_allow
+// holds §8.4's action names.
 //
 // On every leg, the sidecar_http page Worker's included: root Id, no connect type.
 
@@ -149,7 +151,7 @@ func ParseAclGrantDst(dst string) (*protocol.AclTarget, *protocol.AclPortRange, 
 		}
 		return &protocol.AclTarget{MailSend: true}, nil, nil
 	case "ip":
-		return nil, nil, fmt.Errorf("%w: a prefix rides sealed_detail (plan-BRIDGE-gate-row-prefixes #2)", ErrAclGrantFieldInvalid)
+		return nil, nil, fmt.Errorf("%w: a prefix rides sealed_detail (owner decision 220)", ErrAclGrantFieldInvalid)
 	}
 	return nil, nil, fmt.Errorf("%w: grant_dst kind %q", ErrAclGrantFieldInvalid, kind)
 }
