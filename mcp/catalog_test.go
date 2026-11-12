@@ -166,6 +166,7 @@ func addTestTools(catalog *McpCatalog) {
 			return []McpTarget{{Kind: McpTargetRepo, RepoKind: protocol.RepoKind_REPO_KIND_SECRET, Operation: McpRepoRead}}, nil
 		},
 	}, echo)
+	addTestRepoTools(catalog)
 }
 
 // The grant test_grant needs.
@@ -314,6 +315,20 @@ func TestCatalogMatchesDesign(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "evs_read is not W") && !strings.Contains(err.Error(), "evs_read is registered and still listed unbuilt") ||
 		!strings.Contains(err.Error(), "not_a_design_tool is no §16.5 tool") {
 		t.Errorf("a wrong catalog: %v", err)
+	}
+
+	// an evs or search tool that reports nothing to the guard fails, one whose Targets reaches no repo does not
+	unguarded := NewMcpCatalog(server.settings.Mcp, clock, nil)
+	AddTool(unguarded, &McpToolSpec[testToolIn]{Name: "evs_history", Tier: McpTierRead, Description: "reads", Access: none}, echo)
+	AddTool(unguarded, &McpToolSpec[testToolIn]{Name: "search_status", Tier: McpTierRead, Description: "reads", Access: none}, echo)
+	AddTool(unguarded, &McpToolSpec[testToolIn]{Name: "evs_repos", Tier: McpTierRead, Description: "names", Access: none,
+		Targets: func(call *McpCall, in *testToolIn) ([]McpTarget, error) { return nil, nil }}, echo)
+	AddTool(unguarded, &McpToolSpec[testToolIn]{Name: "team_members", Tier: McpTierRead, Description: "reads", Access: none}, echo)
+	err = checkMcpCatalog(unguarded)
+	if err == nil || !strings.Contains(err.Error(), "evs_history reports nothing to the guard") ||
+		!strings.Contains(err.Error(), "search_status reports nothing to the guard") ||
+		strings.Contains(err.Error(), "evs_repos reports nothing") || strings.Contains(err.Error(), "team_members reports nothing") {
+		t.Errorf("an unguarded catalog: %v", err)
 	}
 }
 
