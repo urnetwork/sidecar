@@ -7,8 +7,9 @@
 //	ur record open       the author's openings of its vault entries        (cmd_record_disclose.go)
 //	ur record verify     the offline verifier of a packet                  (cmd_record_disclose.go)
 //	ur record export     canonical lines, OCSF or OTel, to a file or stdout (cmd_record_export.go)
+//	ur record erase      a log admin's erasure of entries by key destruction (cmd_record_erase.go)
 //
-// None of it is an MCP tool. A part that discloses, opens or exports bodies runs only from a command a person
+// None of it is an MCP tool. A part that discloses, opens, exports or erases bodies runs only from a command a person
 // confirmed on the terminal, and its daemon method refuses a caller with a harness process among its ancestors.
 
 package main
@@ -62,7 +63,7 @@ func runUrRecord(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			return part.run(ctx, cli, options)
 		}
 	}
-	return errors.New("ur record takes a part: log, disclose, open, verify or export")
+	return errors.New("ur record takes a part: log, disclose, open, verify, export or erase")
 }
 
 // A docopt option's value, empty when absent.
