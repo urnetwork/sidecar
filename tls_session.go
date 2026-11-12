@@ -234,7 +234,7 @@ func (self *tlsSessionSealer) openPreLogin(value string, host string, now time.T
 	copy(preLogin.state[:], plaintext[0:tlsPreLoginRandomByteCount])
 	copy(preLogin.nonce[:], plaintext[tlsPreLoginRandomByteCount:2*tlsPreLoginRandomByteCount])
 	copy(preLogin.verifier[:], plaintext[2*tlsPreLoginRandomByteCount:3*tlsPreLoginRandomByteCount])
-	preLogin.expireTime = time.UnixMilli(int64(binary.BigEndian.Uint64(plaintext[3*tlsPreLoginRandomByteCount:tlsPreLoginFixedByteCount])))
+	preLogin.expireTime = time.UnixMilli(int64(binary.BigEndian.Uint64(plaintext[3*tlsPreLoginRandomByteCount : tlsPreLoginFixedByteCount])))
 	preLogin.returnPath = string(plaintext[tlsPreLoginFixedByteCount:])
 	if !now.Before(preLogin.expireTime) {
 		return nil

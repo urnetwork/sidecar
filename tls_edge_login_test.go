@@ -479,13 +479,19 @@ func (self *tlsFrontTestLogger) keep(line string) {
 func (self *tlsFrontTestLogger) Info(args ...any) { self.keep(fmt.Sprint(args...)) }
 
 // See Logger.
-func (self *tlsFrontTestLogger) Infof(format string, args ...any) { self.keep(fmt.Sprintf(format, args...)) }
+func (self *tlsFrontTestLogger) Infof(format string, args ...any) {
+	self.keep(fmt.Sprintf(format, args...))
+}
 
 // See Logger.
-func (self *tlsFrontTestLogger) Warningf(format string, args ...any) { self.keep(fmt.Sprintf(format, args...)) }
+func (self *tlsFrontTestLogger) Warningf(format string, args ...any) {
+	self.keep(fmt.Sprintf(format, args...))
+}
 
 // See Logger.
-func (self *tlsFrontTestLogger) Errorf(format string, args ...any) { self.keep(fmt.Sprintf(format, args...)) }
+func (self *tlsFrontTestLogger) Errorf(format string, args ...any) {
+	self.keep(fmt.Sprintf(format, args...))
+}
 
 // See Logger: every level is on, so nothing hides behind one.
 func (self *tlsFrontTestLogger) V(level int32) Verbose { return tlsFrontTestVerbose{logger: self} }

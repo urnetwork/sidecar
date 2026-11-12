@@ -539,18 +539,18 @@ func (self *tlsFrontTestBackendListener) Addr() net.Addr {
 
 // A front on fakes, and what a test needs to reach it as a visitor through the edge.
 type tlsFrontFixture struct {
-	t             *testing.T
-	clock         *tlsFrontTestClock
-	listener      *tlsFrontTestListener
-	policy        *tlsFrontTestPolicy
-	secrets       *tlsFrontTestSecrets
-	backend       *tlsFrontTestBackend
-	certificate   *tls.Certificate
-	settings      *TlsFrontSettings
-	target        *TlsFrontTarget
-	issuerClient  *http.Client
-	limits        func(ctx context.Context) (*QuotaLimits, error)
-	alpnChanges   chan struct{}
+	t            *testing.T
+	clock        *tlsFrontTestClock
+	listener     *tlsFrontTestListener
+	policy       *tlsFrontTestPolicy
+	secrets      *tlsFrontTestSecrets
+	backend      *tlsFrontTestBackend
+	certificate  *tls.Certificate
+	settings     *TlsFrontSettings
+	target       *TlsFrontTarget
+	issuerClient *http.Client
+	limits       func(ctx context.Context) (*QuotaLimits, error)
+	alpnChanges  chan struct{}
 	// runs inside each handshake, after dispatch has read the grant, when set before the front starts
 	onCertificate func()
 	issuerUrl     string
