@@ -203,6 +203,11 @@ type EvsSettings struct {
 	LogReplyStatementCount int
 	// GET .../refs: the keys one LIST of head/<repo>/ returns, 1,000. Positive.
 	RefsListPageCount int
+	// §11.9's streams row (EVS1-M6-01): the owned streams one POST .../read {refs} names, and the most its reply's
+	// frames hold, past which a stream answers more; a request serves at least one version whatever its size. The
+	// format's values (sidecar.EvsFormatSettings), which the client reads too. Positive.
+	ReadStreamRefMaxCount  int
+	ReadStreamMaxByteCount int64
 
 	// §11.12's lifecycle: how many times a transition reads repo/ from the cluster again after another write came
 	// first or an answer was lost, before a route answers 429 BUSY or a job fails to be retried, 8. Positive.
@@ -308,6 +313,8 @@ func DefaultEvsSettings() *EvsSettings {
 		ReadHeadRetryCount:        2,
 		LogReplyStatementCount:    evsLogReplyMaxStatementCount,
 		RefsListPageCount:         1000,
+		ReadStreamRefMaxCount:     sidecar.DefaultEvsFormatSettings().ReadStreamMaxRefCount,
+		ReadStreamMaxByteCount:    sidecar.DefaultEvsFormatSettings().ReadStreamMaxByteCount,
 
 		RepoTransitionRetryCount: 8,
 		ShredListPageCount:       1000,

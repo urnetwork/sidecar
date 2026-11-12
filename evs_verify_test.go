@@ -467,38 +467,48 @@ func TestEvsUnretainedStatePinRefusesQuietly(t *testing.T) {
 	}
 }
 
-// The refs table on a record-class owned stream: its owner creates only, a repo admin's BASE and CLOSURE pass, and
-// another sidecar's write does not.
+// The refs table on a record-class owned stream: its owner creates only, a repo admin's BASE of removals alone
+// (plan-EVS1-v1-unspecified#6) and CLOSURE pass, the owner's own BASE only while it is a repo admin, a BASE that
+// writes does not, and another sidecar's write does not.
 func TestEvsOwnedStreamRefRules(t *testing.T) {
 	repoId := evsTestId("record repo")
 	owner, admin, other := evsTestId("owner"), evsTestId("admin"), evsTestId("other")
+	adminOwner := evsTestId("admin owner")
 	config := &evsTestConfig{
-		writers: []Id{owner, admin, other},
+		writers: []Id{owner, admin, other, adminOwner},
 		repo: &protocol.AclRepo{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_RECORD,
-			Admins: []*protocol.AclRepoAdminRow{{SidecarId: admin.Bytes()}}},
+			Admins: []*protocol.AclRepoAdminRow{{SidecarId: admin.Bytes()}, {SidecarId: adminOwner.Bytes()}}},
 	}
 	refId := evsTestId("stream")
-	statement := func(signer Id, flags protocol.EvsPushFlag, baseEntryVersion uint64) *EvsStatement {
-		push := &protocol.EvsPush{RefKind: uint32(protocol.EvsRefKind_EVS_REF_OWNED), OwnerSidecarId: owner.Bytes(), Flags: uint32(flags)}
+	statement := func(signer Id, streamOwner Id, flags protocol.EvsPushFlag, baseEntryVersion uint64, removal bool) *EvsStatement {
+		push := &protocol.EvsPush{RefKind: uint32(protocol.EvsRefKind_EVS_REF_OWNED), OwnerSidecarId: streamOwner.Bytes(), Flags: uint32(flags)}
 		change := &protocol.EvsChange{BaseEntryVersion: baseEntryVersion, EntrySha256: evsTestBytes("entry", 32)}
+		if removal {
+			change.EntrySha256 = nil
+		}
 		return &EvsStatement{Push: push, Changes: []*EvsCheckedChange{{Change: change}}}
 	}
 	cases := []struct {
-		name   string
-		signer Id
-		flags  protocol.EvsPushFlag
-		base   uint64
-		ok     bool
+		name    string
+		signer  Id
+		owner   Id
+		flags   protocol.EvsPushFlag
+		base    uint64
+		removal bool
+		ok      bool
 	}{
-		{name: "owner creates", signer: owner, ok: true},
-		{name: "owner rewrites", signer: owner, base: 3, ok: false},
-		{name: "admin base", signer: admin, flags: protocol.EvsPushFlag_EVS_PUSH_BASE, ok: true},
-		{name: "admin closure", signer: admin, flags: protocol.EvsPushFlag_EVS_PUSH_CLOSURE, base: 3, ok: true},
-		{name: "other writes", signer: other, ok: false},
-		{name: "owner forces", signer: owner, flags: protocol.EvsPushFlag_EVS_PUSH_FORCE, ok: false},
+		{name: "owner creates", signer: owner, owner: owner, ok: true},
+		{name: "owner rewrites", signer: owner, owner: owner, base: 3, ok: false},
+		{name: "admin base", signer: admin, owner: owner, flags: protocol.EvsPushFlag_EVS_PUSH_BASE, base: 3, removal: true, ok: true},
+		{name: "admin base that writes", signer: admin, owner: owner, flags: protocol.EvsPushFlag_EVS_PUSH_BASE, ok: false},
+		{name: "owner's base below admin", signer: owner, owner: owner, flags: protocol.EvsPushFlag_EVS_PUSH_BASE, base: 3, removal: true, ok: false},
+		{name: "admin owner's base", signer: adminOwner, owner: adminOwner, flags: protocol.EvsPushFlag_EVS_PUSH_BASE, base: 3, removal: true, ok: true},
+		{name: "admin closure", signer: admin, owner: owner, flags: protocol.EvsPushFlag_EVS_PUSH_CLOSURE, base: 3, ok: true},
+		{name: "other writes", signer: other, owner: owner, ok: false},
+		{name: "owner forces", signer: owner, owner: owner, flags: protocol.EvsPushFlag_EVS_PUSH_FORCE, ok: false},
 	}
 	for _, c := range cases {
-		err := evsCheckRefRules(config, statement(c.signer, c.flags, c.base), repoId, refId, c.signer)
+		err := evsCheckRefRules(config, statement(c.signer, c.owner, c.flags, c.base, c.removal), repoId, refId, c.signer)
 		if c.ok != (err == nil) {
 			t.Errorf("%s: %v", c.name, err)
 		}

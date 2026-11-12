@@ -33,6 +33,8 @@ type EvsWritePathsArgs struct {
 	// The ref's name bytes: nil writes main.
 	RefName []byte
 	Writes  []*EvsPathWrite
+	// The agent the push is made for (EvsWriteArgs.AgentId), nil for none.
+	AgentId *Id
 }
 
 // What a committed WritePaths did.
@@ -69,7 +71,7 @@ func (self *EvsRepo) Write(ctx context.Context, args *EvsWriteArgs) (*EvsWriteRe
 		}
 		write.Content = spill
 	}
-	result, err := self.WritePaths(ctx, &EvsWritePathsArgs{RefName: args.RefName, Writes: []*EvsPathWrite{write}})
+	result, err := self.WritePaths(ctx, &EvsWritePathsArgs{RefName: args.RefName, Writes: []*EvsPathWrite{write}, AgentId: args.AgentId})
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +98,7 @@ func (self *EvsRepo) writePaths(ctx context.Context, args *EvsWritePathsArgs, ex
 	rebuilds := 0
 	dueWaits := 0
 	for attempt := 0; ; attempt += 1 {
-		result, plan, err := self.writeOnce(ctx, args.Writes, refName, refId, 0 < attempt, &rebuilds, extras)
+		result, plan, err := self.writeOnce(ctx, args.Writes, refName, refId, 0 < attempt, &rebuilds, extras, args.AgentId)
 		switch {
 		case err == nil:
 			return result, nil
@@ -126,7 +128,7 @@ func (self *EvsRepo) writePaths(ctx context.Context, args *EvsWritePathsArgs, ex
 				return nil, err
 			}
 			// read the removal the first read did not show, and plan once more, unless a creation now stands
-			retried, _, retryErr := self.writeOnce(ctx, args.Writes, refName, refId, true, &rebuilds, extras, creations)
+			retried, _, retryErr := self.writeOnce(ctx, args.Writes, refName, refId, true, &rebuilds, extras, args.AgentId, creations)
 			if retryErr == nil {
 				return retried, nil
 			}
@@ -145,7 +147,7 @@ var errEvsCreationStands = errors.New("evs: a path created concurrently")
 
 // One attempt: see the file header. creations, when given, are paths the last plan created, refused with
 // errEvsCreationStands if this plan finds one standing. rebuilds counts the write's rebuilds and retokens.
-func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refName []byte, refId Id, fresh bool, rebuilds *int, extras *evsPushExtras, creations ...map[string]bool) (*EvsWritePathsResult, *EvsWritePlan, error) {
+func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refName []byte, refId Id, fresh bool, rebuilds *int, extras *evsPushExtras, agentId *Id, creations ...map[string]bool) (*EvsWritePathsResult, *EvsWritePlan, error) {
 	repoKey, err := self.client.args.Gkm.EnsureWritable(ctx, self.repoId)
 	if err != nil {
 		return nil, nil, err
@@ -154,7 +156,7 @@ func (self *EvsRepo) writeOnce(ctx context.Context, writes []*EvsPathWrite, refN
 		// a newer generation, which may be a removal this device rotated to: its refs' mappers tick
 		self.client.NoteGeneration(self.repoId)
 	}
-	plan, err := self.PlanWrite(ctx, &EvsPlanArgs{RefName: refName, RefId: refId, Writes: writes, Generation: repoKey.Generation(), Fresh: fresh})
+	plan, err := self.PlanWrite(ctx, &EvsPlanArgs{RefName: refName, RefId: refId, Writes: writes, Generation: repoKey.Generation(), Fresh: fresh, AgentId: agentId})
 	if err != nil {
 		return nil, nil, err
 	}

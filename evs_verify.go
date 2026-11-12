@@ -211,6 +211,15 @@ func evsCheckRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, ref
 		}
 		return nil
 	}
+	// a BASE re-lists a stream's live set by removals alone (plan-EVS1-v1-unspecified#6)
+	baseRemovalsOnly := func() error {
+		for _, change := range statement.Changes {
+			if len(change.Change.GetEntrySha256()) != 0 {
+				return fmt.Errorf("%w: a BASE that writes", ErrEvsStatementRefused)
+			}
+		}
+		return nil
+	}
 	ownerId, ownerErr := IdFromBytes(push.GetOwnerSidecarId())
 	switch protocol.EvsRefKind(push.GetRefKind()) {
 	case protocol.EvsRefKind_EVS_REF_SHARED:
@@ -225,6 +234,9 @@ func evsCheckRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, ref
 			// a record-class stream takes its BASE and an erasure's CLOSURE from a repo admin (§11.8, §11.12)
 			adminPush := has(protocol.EvsPushFlag_EVS_PUSH_BASE) || has(protocol.EvsPushFlag_EVS_PUSH_CLOSURE)
 			if ownerErr == nil && adminPush && admin && EvsRepoKindRecordClass(repo.GetKind()) {
+				if has(protocol.EvsPushFlag_EVS_PUSH_BASE) {
+					return baseRemovalsOnly()
+				}
 				return nil
 			}
 			return fmt.Errorf("%w: an owned ref signed by another sidecar", ErrEvsStatementRefused)
@@ -235,6 +247,10 @@ func evsCheckRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, ref
 		if EvsRepoKindRecordClass(repo.GetKind()) {
 			if has(protocol.EvsPushFlag_EVS_PUSH_ERASE) || has(protocol.EvsPushFlag_EVS_PUSH_CLOSURE) {
 				return nil
+			}
+			if has(protocol.EvsPushFlag_EVS_PUSH_BASE) && admin {
+				// a stream's own writer that is a repo admin may BASE it too
+				return baseRemovalsOnly()
 			}
 			return createsOnly()
 		}

@@ -129,6 +129,8 @@ type EvsPlanArgs struct {
 	Fresh bool
 	// The writing run's tainted bit (§16.6), which a format-2 push's provenance carries; format 1 ignores it.
 	Tainted bool
+	// The agent the push is made for, which its sealed provenance names and its subkey signs, nil for none.
+	AgentId *Id
 }
 
 // A planned push. See the file header.
@@ -152,6 +154,8 @@ type EvsWritePlan struct {
 	Paths      []*EvsPlannedPath
 	// The writing run's tainted bit, which the push's provenance carries (EvsPlanArgs.Tainted).
 	Tainted bool
+	// The agent the push is made for (EvsPlanArgs.AgentId), nil for none.
+	AgentId *Id
 	// The changes' token paths, in the head's current epoch, and manifest_p of that epoch, which seals a delta's rows.
 	pathKey *EvsPathKey
 	nameKey *EvsManifestKey
@@ -356,7 +360,7 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 					RepoId: self.repoId, RefId: args.RefId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
 					Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
 					Generation: args.Generation, keys: result.keys, floors: map[string]uint64{},
-					slotKeyed: EvsRepoKindRecordClass(repoKind), Tainted: args.Tainted,
+					slotKeyed: EvsRepoKindRecordClass(repoKind), Tainted: args.Tainted, AgentId: args.AgentId,
 				}
 				if err := plan.setRef(head, args.RefName, self.client.args.Identity().SidecarId, rekeyOnly); err != nil {
 					return err

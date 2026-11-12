@@ -54,9 +54,9 @@ const AgentCertPurpose = "agent-cert"
 // RECORD.md 5.3's version-2 entry body: the subkey signs log_id || entry_id || body under this purpose.
 const AgentProvenancePurposeRecord = "record-agent"
 
-// The provenance purposes a subkey signs, and nothing else: each names sealed bytes its format defines. §11.6's push
-// metadata joins with the purpose EVS1-M6-02 gives its bytes.
-var agentProvenancePurposes = []string{AgentProvenancePurposeRecord}
+// The provenance purposes a subkey signs, and nothing else: each names sealed bytes its format defines, a record
+// entry's and §11.6's push metadata's (evs_provenance.go, EVS1-M6-02).
+var agentProvenancePurposes = []string{AgentProvenancePurposeRecord, AgentProvenancePurposeEvsPush}
 
 // What every provenance signature's bytes begin with, as §6.9's signed bytes do.
 const agentProvenanceSignedPrefix = "urnetwork-sidecar-v1/"

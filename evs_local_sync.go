@@ -561,6 +561,11 @@ func (self *evsGitReplayRun) apply(ctx context.Context, statement *EvsVerifiedSt
 		engine.client.alarm(engine.mount.RepoId, ref.RefId, SidecarEvsAlarmTamper, "", evsSignerOf(statement.Statement.Bytes))
 		return self.refuse(statement, payload, err)
 	}
+	// an agent's subkey signature that does not hold alarms and is never attributed; the version applies all the same
+	// (EVS1-M6-02)
+	if _, err := engine.client.checkPushProvenance(engine.mount.RepoId, ref.RefId, statement.Statement, metadata); err != nil && engine.client.log.V(1).Enabled() {
+		engine.client.log.Infof("[evs]provenance of repo %s ref %s: %v", engine.mount.RepoId, ref.RefId, err)
+	}
 	creating := ref.Tip == nil && flags&deleteFlag == 0
 	var sectionRefName []byte
 	if creating && len(payload.RefName) != 0 {

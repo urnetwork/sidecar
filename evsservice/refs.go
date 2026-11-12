@@ -1,8 +1,8 @@
 // GET /evs/v1/repos/<id>/refs (§11.9; EVS1-M2-14): the repo's refs as their heads stand, with repo/'s format and the
 // repo's push sequence. One LIST of head/<repo>/ pages the keys, each head read from the cluster together, a
 // placeholder head (version 0, no kind or mode) left out as absent, and each ref's push sequence from {evsh_}
-// where it holds one. The ?moved_after= form is M6's (EVS1-M6-01) and answers every ref until then, as §11.9's moved
-// row says a value the sequence cannot place does.
+// where it holds one. The ?moved_after= form keeps only the refs past the value, or every ref with all set where
+// the sequence cannot place it (refs_moved.go; EVS1-M6-01).
 
 package evsservice
 
@@ -19,19 +19,26 @@ func (self *EvsEngine) serveRefs(request *EvsRequest) {
 	ctx := request.Ctx
 	cluster := request.Cluster
 	repoId := request.RepoId
-	if request.Http.URL.Query().Has("moved_after") {
+	query := request.Http.URL.Query()
+	moved := query.Has(evsMovedAfterParameter)
+	if moved {
 		request.Note("moved_after")
+		if _, _, ok := movedRefs(query.Get(evsMovedAfterParameter), 0, false, nil, false, nil); !ok {
+			request.RefuseCode(protocol.EvsRefusalCode_EVS_REFUSAL_INVALID)
+			return
+		}
 	}
 	repo, err := self.repos.Read(ctx, cluster, repoId)
 	if !self.answerTransition(request, err) {
 		return
 	}
 	reply := &protocol.EvsRefsReply{Format: repo.Object.GetFormat()}
-	if sequence, err := ReadPushSequence(ctx, self.host.Redis, repoId); err == nil {
+	sequence, sequenceErr := ReadPushSequence(ctx, self.host.Redis, repoId)
+	if sequenceErr == nil {
 		reply.PushSequence = sequence
 	}
-	refSequences, err := self.heads.Cache().PushSequences(ctx, repoId)
-	if err != nil {
+	refSequences, refSequencesErr := self.heads.Cache().PushSequences(ctx, repoId)
+	if refSequencesErr != nil {
 		refSequences = map[sidecar.Id]uint64{}
 	}
 	prefix := HeadRepoPrefix(repoId)
@@ -79,6 +86,10 @@ func (self *EvsEngine) serveRefs(request *EvsRequest) {
 		summary := read.headSummary()
 		summary.PushSequence = refSequences[refId]
 		reply.Refs = append(reply.Refs, summary)
+	}
+	reply.All = true
+	if moved {
+		reply.Refs, reply.All, _ = movedRefs(query.Get(evsMovedAfterParameter), sequence, sequenceErr == nil, refSequences, refSequencesErr == nil, reply.Refs)
 	}
 	request.Reply(reply)
 }

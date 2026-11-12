@@ -210,7 +210,7 @@ func (self *recordEvsWorldAuthState) View(networkId sidecar.Id) (sidecar.GkmAuth
 	return world.evsView, evsservice.EvsAuthAllowed
 }
 
-func newRecordEvsWorld(t *testing.T) *recordEvsWorld {
+func newRecordEvsWorld(t *testing.T, adjust ...func(settings *evsservice.EvsSettings)) *recordEvsWorld {
 	t.Helper()
 	ctx := t.Context()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
@@ -265,6 +265,9 @@ func newRecordEvsWorld(t *testing.T) *recordEvsWorld {
 	settings.BatchFlushDelay = 0
 	settings.PushUnknownRereadInterval = 0
 	settings.RepoCacheTtl = 0
+	for _, f := range adjust {
+		f(settings)
+	}
 	authState := &recordEvsWorldAuthState{world: world}
 	world.engine, err = evsservice.NewEvsEngine(ctx, host.ServiceHost(), settings, &evsservice.EvsEngineDeps{
 		AuthState: authState,
