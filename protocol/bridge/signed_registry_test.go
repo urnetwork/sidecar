@@ -14,8 +14,9 @@ import (
 )
 
 // Numbers as the design writes them, or for 0x10xx, 0x13xx and 0x14xx as §6.11's list orders them, with §10's two and
-// §11.6's two more statements after it, 0x11xx and 0x12xx as §8.8's and §7.9's rows do, and 0x15xx as
-// plan-TLS-small-readings#2 numbers §13.8's attestation and QD-134 the link token, 0x1502 left for M6's edge login.
+// §11.6's two more statements after it, 0x11xx and 0x12xx as §8.8's and §7.9's rows do, 0x15xx as
+// plan-TLS-small-readings#2 numbers §13.8's attestation and QD-134 the link token, 0x1502 left for M6's edge login, and
+// 0x1Axx as plan-CORE-binding-wire #1 numbers the binding and QD-159 the agent certificate.
 // Values are permanent once released, so a change here is a change to the wire.
 func TestSignedTypeNumbersStable(t *testing.T) {
 	cases := []struct {
@@ -96,6 +97,7 @@ func TestSignedTypeNumbersStable(t *testing.T) {
 		{signedType: SignedType_SIGNED_SHARE_CERT, number: 0x1909},
 
 		{signedType: SignedType_SIGNED_SIDECAR_BINDING, number: 0x1A01},
+		{signedType: SignedType_SIGNED_AGENT_CERT, number: 0x1A02},
 	}
 	for _, c := range cases {
 		if int32(c.signedType) != c.number {

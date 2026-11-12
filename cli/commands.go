@@ -137,6 +137,8 @@ type urCli struct {
 	spawnDaemon func(args []string) error
 	// TEAM-M1-08's ur-cli login, nil until it lands
 	login urLoginFunction
+	// ur login --device's: the same login by RFC 8628's device grant (cmd_login_device.go)
+	loginDevice urLoginFunction
 	// §16.7's hook bounds, which ur hook reads
 	ingest *sidecar.SidecarIngestSettings
 	// §16's offer to register a presence key after a login (cmd_keys_presence.go)
@@ -177,6 +179,7 @@ func newUrCli() *urCli {
 		dialDaemon:      sidecar.DialDaemon,
 		spawnDaemon:     spawnDetachedDaemon,
 		login:           urcliLoginEntry,
+		loginDevice:     urcliDeviceLoginEntry,
 		ingest:          sidecar.DefaultSidecarSettings().Ingest,
 		// §16.6's first run row (cmd_keys_presence.go)
 		offerPresenceKey: urOfferPresenceKey,
@@ -197,6 +200,9 @@ func newUrCli() *urCli {
 
 // The ur-cli login TEAM-M1-08 registers (urcli_login.go). Nil, `ur login` refuses (C-14).
 var urcliLoginEntry urLoginFunction
+
+// The device-grant login CORE-M6-03 registers (cmd_login_device.go). Nil, `ur login --device` refuses.
+var urcliDeviceLoginEntry urLoginFunction
 
 // Runs one ur invocation, args as os.Args gives them, and answers the exit code.
 func (self *urCli) main(ctx context.Context, args []string) int {

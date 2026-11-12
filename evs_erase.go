@@ -81,41 +81,9 @@ const evsErasureStallAfter = 25 * time.Hour
 
 // Destroys args.Keys by an ERASE: see the file header.
 func (self *EvsRepo) Erase(ctx context.Context, args *EvsEraseArgs) (*EvsEraseResult, error) {
-	if args == nil || len(args.Keys) == 0 {
-		return nil, fmt.Errorf("%w: an ERASE of no key", ErrEvsWriteInvalid)
-	}
-	for _, key := range args.Keys {
-		if EvsSlotMaxKeyCount <= key.KeyIndex {
-			return nil, fmt.Errorf("%w: key index %d", ErrEvsWriteInvalid, key.KeyIndex)
-		}
-	}
-	refId := EvsErasureRefId(self.repoId)
-	note := append(append(args.ErasureId.Bytes(), 0), args.Note...)
-	if args.Complete {
-		note[16] = 1
-	}
 	for rebuild := 0; ; rebuild += 1 {
-		repoKey, err := self.client.args.Gkm.EnsureWritable(ctx, self.repoId)
-		if err != nil {
-			return nil, err
-		}
-		head, err := self.readHeadAlone(ctx, refId, 0 < rebuild)
-		if err != nil {
-			return nil, err
-		}
-		plan, err := self.notePlan(ctx, refId, protocol.EvsRefKind_EVS_REF_ERASURE, head, repoKey, note)
-		if err != nil {
-			return nil, err
-		}
-		plan.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE)
-		plan.Erased = args.Keys
-		sealed, err := self.client.sealWrite(ctx, plan, repoKey)
-		if err != nil {
-			return nil, err
-		}
 		pushId := NewEvsPushId()
-		attempt, err := self.buildPush(ctx, sealed, pushId)
-		sealed.Close()
+		attempt, err := self.buildErase(ctx, args, pushId, 0 < rebuild)
 		if err != nil {
 			return nil, err
 		}
@@ -130,6 +98,44 @@ func (self *EvsRepo) Erase(ctx context.Context, args *EvsEraseArgs) (*EvsEraseRe
 			return nil, err
 		}
 	}
+}
+
+// One ERASE of args under pushId, built and signed on the erasure ref's verified head, fresh when asked, and not
+// posted: what Erase sends, and what a caller that names its own push id keeps for its retries (record_evs.go).
+func (self *EvsRepo) buildErase(ctx context.Context, args *EvsEraseArgs, pushId Id, fresh bool) (*evsPushAttempt, error) {
+	if args == nil || len(args.Keys) == 0 {
+		return nil, fmt.Errorf("%w: an ERASE of no key", ErrEvsWriteInvalid)
+	}
+	for _, key := range args.Keys {
+		if EvsSlotMaxKeyCount <= key.KeyIndex {
+			return nil, fmt.Errorf("%w: key index %d", ErrEvsWriteInvalid, key.KeyIndex)
+		}
+	}
+	refId := EvsErasureRefId(self.repoId)
+	note := append(append(args.ErasureId.Bytes(), 0), args.Note...)
+	if args.Complete {
+		note[16] = 1
+	}
+	repoKey, err := self.client.args.Gkm.EnsureWritable(ctx, self.repoId)
+	if err != nil {
+		return nil, err
+	}
+	head, err := self.readHeadAlone(ctx, refId, fresh)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := self.notePlan(ctx, refId, protocol.EvsRefKind_EVS_REF_ERASURE, head, repoKey, note)
+	if err != nil {
+		return nil, err
+	}
+	plan.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE)
+	plan.Erased = args.Keys
+	sealed, err := self.client.sealWrite(ctx, plan, repoKey)
+	if err != nil {
+		return nil, err
+	}
+	defer sealed.Close()
+	return self.buildPush(ctx, sealed, pushId)
 }
 
 // A one-file plan on a ref that stays at epoch 1: the note as an inline checkpoint under a random id, created on head.

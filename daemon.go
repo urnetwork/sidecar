@@ -63,6 +63,12 @@ type DaemonSettings struct {
 	LabelRoot string
 	// $HOME, which bounds the search for `.ur` (§5.8). Empty: the OS's.
 	Home string
+	// `.ur`'s format limits and the bounds on reading a project's git config (daemon_project.go). Nil:
+	// DefaultSidecarProjectSettings().
+	Project *SidecarProjectSettings
+	// The member's claims setting from the harness config in the author's vault (daemon_claims.go). Nil reads none, so
+	// the team's default and `.ur` decide, as plan-MCP-harness-config-schema #3's interim reads no vault config.
+	Claims SidecarClaimsConfig
 	// Nil is real time.
 	Clock Clock
 	// Nil is no logging. Never stdout.

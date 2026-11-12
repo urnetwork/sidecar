@@ -173,6 +173,8 @@ type SidecarRecord struct {
 	export     *RecordExport
 
 	stateLock sync.Mutex
+	// one erasure at a time (record_erase.go, which no ios_extension leg links)
+	eraseLock sync.Mutex
 	// a deposit may wait in this device's vault: set at each loop's start, at a commit there and at a hint
 	ingestDue bool
 }

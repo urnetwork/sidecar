@@ -52,6 +52,10 @@ barrier config.bridge_rejudge config_state_at.go
 barrier config.bridge_rejudge.before config_state_at.go
 barrier config.restore config_replay.go
 barrier config.run.checked config_rows_only.go
+barrier daemon.claims.choose.after daemon_claims.go
+barrier daemon.claims.choose.before daemon_claims.go
+barrier daemon.directory.list.taint.after daemon_directory.go
+barrier daemon.directory.list.taint.before daemon_directory.go
 barrier directory.announce.after directory_repo.go
 barrier directory.announce.before directory_repo.go
 barrier directory.fold.after directory_fold.go
@@ -227,6 +231,10 @@ barrier gkm.wrap_put.before gkmservice/recovery.go
 barrier gkm.wrap_put.before gkmservice/wraps.go
 barrier hold.list.after host_hold.go
 barrier hold.list.before host_hold.go
+barrier identity.agent_subkey.mint.after identity_agent.go
+barrier identity.agent_subkey.mint.before identity_agent.go
+barrier identity.agent_subkey.revoke.after identity_agent.go
+barrier identity.agent_subkey.revoke.before identity_agent.go
 barrier identity.bind.after identity_enroll.go
 barrier identity.bind.after identity_enroll_child.go
 barrier identity.bind.before identity_enroll.go
@@ -327,6 +335,8 @@ barrier record.consume.after record_ingest.go
 barrier record.consume.before record_ingest.go
 barrier record.effect.after record_gate_spend.go
 barrier record.effect.before record_gate_spend.go
+barrier record.erase.after record_erase.go
+barrier record.erase.before record_erase.go
 barrier record.log.entry.after record_log.go
 barrier record.log.entry.before record_log.go
 barrier record.log.file.after record_log.go
@@ -480,6 +490,7 @@ secret U keys_unlock.go
 secret W keys_unlock.go
 secret acme_account_key certsservice/accounts.go
 secret acme_eab_mac_key certsservice/accounts.go
+secret agent_subkey identity_agent.go
 secret auth_key api_routes_core.go
 secret auth_key config_authkey.go
 secret by_client_jwt api_client.go

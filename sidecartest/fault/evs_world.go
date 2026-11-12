@@ -957,7 +957,7 @@ func (self *EvsWorld) startDevice(device *EvsWorldDevice, view *sidecartest.Fake
 			defer self.stateLock.Unlock()
 			self.deviceAlarms[device.Name] = append(self.deviceAlarms[device.Name], fmt.Sprintf("%s at %q", event.EvsAlarm, event.Path))
 		},
-		Clock:    &evsWorldDeviceClock{clock: self.net.Clock()},
+		Clock:    &evsWorldDeviceClock{clock: self.net.Clock(), actors: self.net.Actors(), device: device.Name},
 		Log:      sidecar.NewNoopLogger(),
 		Settings: settings,
 	})
@@ -988,12 +988,18 @@ func (self *EvsWorld) issueToken(device *EvsWorldDevice, scopes []string) (strin
 	return self.net.Fakes().Authenticator.Issue(principal), nil
 }
 
-// A device's clock: the Net's time, every wait answered at once, AfterFunc on the Net's clock.
+// A device's clock: the Net's time as the device's actor reads it, offset where a schedule sets one (§22.8's skew rows,
+// skew.go), every wait answered at once, AfterFunc on the Net's clock.
 type evsWorldDeviceClock struct {
-	clock *sidecartest.FakeClock
+	clock  *sidecartest.FakeClock
+	actors *sidecartest.ActorTable
+	device string
 }
 
 func (self *evsWorldDeviceClock) Now() time.Time {
+	if actor := self.actors.Lookup(self.device); actor != nil {
+		return actor.Clock().Now()
+	}
 	return self.clock.Now()
 }
 
