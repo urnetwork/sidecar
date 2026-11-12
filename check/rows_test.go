@@ -60,7 +60,7 @@ var failsOnRows = []failsOnRow{
 	{
 		row: "deps", item: "a first-party require §4.7's imports bullet does not name",
 		rule:         (*repository).firstPartyRequireFindings,
-		plantedTests: []string{"TestDepsFailsOnANestedModuleRequiringProxy", "TestDepsFailsOnARequireNoPackageReaches"},
+		plantedTests: []string{"TestDepsFailsOnANestedModuleRequiringProxy", "TestDepsFailsOnAModuleRequiringWarp", "TestDepsFailsOnARequireNoPackageReaches"},
 	},
 	{
 		row: "deps", item: "a module outside §4.7's table, or one no leg reads",
@@ -263,7 +263,7 @@ var failsOnRows = []failsOnRow{
 		row: "hygiene", item: "replaces other than §4.7's",
 		rule: (*repository).replaceFindings,
 		plantedTests: []string{
-			"TestHygieneFailsOnAnExtraReplace", "TestHygieneFailsOnAMovedReplace", "TestHygieneFailsOnAMissingReplace",
+			"TestHygieneFailsOnAnExtraReplace", "TestHygieneFailsOnAMovedReplace", "TestHygieneFailsOnAMissingReplace", "TestHygieneFailsOnAReplaceOfWarp",
 			"TestHygieneFailsOnANestedModuleNotRepeatingAReplace", "TestHygieneFailsOnAVersionedReplace",
 			"TestHygieneFailsOnAReleaseBranchExtraReplace", "TestHygieneFailsOnAMovedForkReplace",
 			"TestHygieneFailsOnAModuleLinkingAForkWithoutItsReplace",
