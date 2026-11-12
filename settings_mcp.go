@@ -23,6 +23,21 @@ type SidecarMcpSettings struct {
 	// How long an approval's ledger file stays past its not_after: 30 days (§16.6's retention row),
 	// long after a local use stops completing at not_after + 10 min.
 	ApprovalFileRetention time.Duration
+	// How long an ApprovalRequest waits for a decision, its not_after_millis from its filing: 24 h, MCP.md's
+	// reading 3, since §16.8 states no default. An action's own expiry wins where it is sooner, since a decision
+	// past it could activate nothing.
+	ApprovalRequestTimeout time.Duration
+	// How long past not_after a local use reserved before it may still complete its effect under its effect_key:
+	// 10 min (§16.6's expiry row). Past it a retry only reconciles, by the kind's Lookup.
+	ApprovalCompleteTimeout time.Duration
+	// How often the requester's inbox asks the approval log for the decisions of its pending requests, the poll
+	// behind ur://approval/{id} until the record's hints reach the inbox: 30 s, a reading, since §16.8 names
+	// hints and no poll.
+	ApprovalPollInterval time.Duration
+	// How long a presence key ur keys add-presence or ur login registers lasts, its KeyRegister's not_after from now:
+	// 365 days, a reading, since §7.9 requires a not_after and states no value. A key past it countersigns nothing and
+	// is registered again.
+	PresenceKeyLifetime time.Duration
 	// How long a run's file stays once its Coverage entry is sealed: 30 days (§16.6's retention row),
 	// for restore (§16.7). A later Coverage starts it again.
 	RunFileRetention time.Duration
@@ -64,6 +79,9 @@ type SidecarIngestSettings struct {
 	TranscriptTailInterval time.Duration
 	// `ur hook` passes its stdin to the daemon and exits 0 within this: 300 ms.
 	HookExitTimeout time.Duration
+	// How long the daemon's presence prompt may wait for the person, and ur hook on a PermissionRequest it answers by
+	// one, past which the hook gives no decision and the call returns pending: 60 s (plan-MCP-presence-hook-timing).
+	PresencePromptTimeout time.Duration
 	// How long `ur hook` waits on a PreToolUse until the daemon holds the paths it names, past which it exits 0 and
 	// those paths' before is unknown (§16.7): 10 s, a reading, far under a harness's own hook timeout.
 	HookPathTimeout time.Duration
@@ -162,13 +180,17 @@ type SidecarRecordSettings struct {
 // A fresh value each call, as DefaultSidecarSettings's is.
 func defaultSidecarMcpSettings() *SidecarMcpSettings {
 	return &SidecarMcpSettings{
-		SessionCallCount:      8,
-		SessionWriteRate:      SidecarRate{Count: 20, Burst: 20, Interval: 1 * time.Second},
-		ResultByteCount:       256 * 1024,
-		CallTimeout:           30 * time.Second,
-		ApprovalFileRetention: 30 * 24 * time.Hour,
-		RunFileRetention:      30 * 24 * time.Hour,
-		SecretMatch:           DefaultSecretMatchSettings(),
+		SessionCallCount:        8,
+		SessionWriteRate:        SidecarRate{Count: 20, Burst: 20, Interval: 1 * time.Second},
+		ResultByteCount:         256 * 1024,
+		CallTimeout:             30 * time.Second,
+		ApprovalFileRetention:   30 * 24 * time.Hour,
+		ApprovalRequestTimeout:  24 * time.Hour,
+		ApprovalCompleteTimeout: 10 * time.Minute,
+		ApprovalPollInterval:    30 * time.Second,
+		PresenceKeyLifetime:     365 * 24 * time.Hour,
+		RunFileRetention:        30 * 24 * time.Hour,
+		SecretMatch:             DefaultSecretMatchSettings(),
 	}
 }
 
@@ -183,6 +205,7 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		SpoolCursorRecordCount: 64,
 		TranscriptTailInterval: 30 * time.Second,
 		HookExitTimeout:        300 * time.Millisecond,
+		PresencePromptTimeout:  60 * time.Second,
 		HookPathTimeout:        10 * time.Second,
 		HookLapseTimeout:       60 * time.Second,
 		ConfigCheckInterval:    5 * time.Minute,

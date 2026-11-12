@@ -348,6 +348,34 @@ func recordAnswerApprovalId(entry *RecordReadEntry) (Id, bool) {
 // once a cancel is, and ErrRecordApprovalUndeliverable to a deposit-only requester. The decision's signature, signer
 // and channel are the spender's to check (§16.6's spendable, MCP-M3-05's inbox).
 func (self *RecordApprovals) Decision(ctx context.Context, approvalId Id) (*StoredApprovalDecision, error) {
+	logId, requestEntry, err := self.requestLog(ctx, approvalId)
+	if err != nil {
+		return nil, err
+	}
+	return self.decisionIn(logId, approvalId, requestEntry)
+}
+
+// The requester's poll for a cancel: the first ApprovalCancel on approvalId in its request's log, its Signed as stored,
+// whether or not a decision came before it, which Decision would answer instead. ErrRecordApprovalPending while none
+// is there, and Decision's other errors. That the cancel's signer is its approver's is the requester's to check
+// (§16.6's cancel row, MCP-M3-05's inbox).
+func (self *RecordApprovals) Cancel(ctx context.Context, approvalId Id) ([]byte, error) {
+	logId, _, err := self.requestLog(ctx, approvalId)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range self.reader.Entries(logId) {
+		if answered, ok := recordAnswerApprovalId(entry); ok && answered == approvalId && entry.Kind() == RecordKindApprovalCancel {
+			return bytes.Clone(entry.Body), nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %s", ErrRecordApprovalPending, approvalId)
+}
+
+// The log a requester's request of approvalId is in, synced, and its request entry: the author's vault, or the team
+// record where this device reads it. ErrRecordApprovalUndeliverable to a deposit-only requester and to one whose
+// request went to a team record it does not read, and ErrRecordApprovalUnknown where no read log holds it.
+func (self *RecordApprovals) requestLog(ctx context.Context, approvalId Id) (Id, *RecordReadEntry, error) {
 	auth := self.writer.auth()
 	teamRecordId, _ := recordTeamLogs(auth)
 	readsTeam := teamRecordId != nil && auth.Reads(*teamRecordId, self.writer.sidecarId)
@@ -357,29 +385,29 @@ func (self *RecordApprovals) Decision(ctx context.Context, approvalId Id) (*Stor
 	case err == nil && !route.deposit:
 		logIds = append(logIds, route.logId)
 	case err == nil && !readsTeam:
-		return nil, fmt.Errorf("%w: %s", ErrRecordApprovalUndeliverable, approvalId)
+		return Id{}, nil, fmt.Errorf("%w: %s", ErrRecordApprovalUndeliverable, approvalId)
 	case err != nil && (!errors.Is(err, ErrRecordApprovalTeamRoute) || teamRecordId == nil):
-		return nil, err
+		return Id{}, nil, err
 	case err != nil && !readsTeam:
 		// a tagged sidecar with no sponsor filed to the team record, which it does not read
-		return nil, fmt.Errorf("%w: %s", ErrRecordApprovalUndeliverable, approvalId)
+		return Id{}, nil, fmt.Errorf("%w: %s", ErrRecordApprovalUndeliverable, approvalId)
 	}
 	if readsTeam {
 		logIds = append(logIds, *teamRecordId)
 	}
 	for _, logId := range logIds {
 		if err := self.reader.Sync(ctx, logId); err != nil {
-			return nil, err
+			return Id{}, nil, err
 		}
 		if requestEntry, _, ok := self.requestEntry(logId, approvalId); ok {
-			return self.decisionIn(logId, approvalId, requestEntry)
+			return logId, requestEntry, nil
 		}
 	}
 	if teamRecordId != nil && !readsTeam {
 		// filed to the team record, which this device does not read: an admin's decision cannot reach it here
-		return nil, fmt.Errorf("%w: %s", ErrRecordApprovalUndeliverable, approvalId)
+		return Id{}, nil, fmt.Errorf("%w: %s", ErrRecordApprovalUndeliverable, approvalId)
 	}
-	return nil, fmt.Errorf("%w: %s", ErrRecordApprovalUnknown, approvalId)
+	return Id{}, nil, fmt.Errorf("%w: %s", ErrRecordApprovalUnknown, approvalId)
 }
 
 // The first decision on approvalId in logId, beside its request's entry.

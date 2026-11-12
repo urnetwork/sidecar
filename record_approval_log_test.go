@@ -9,6 +9,7 @@
 package sidecar_test
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"errors"
 	"testing"
@@ -273,5 +274,54 @@ func TestRecordApprovalsTaggedRequestersNonGrantActionStaysPending(t *testing.T)
 	}
 	if _, err := taggedRecord.Approvals().Decision(t.Context(), request.ApprovalId()); !errors.Is(err, sidecar.ErrRecordApprovalUndeliverable) {
 		t.Fatalf("the tagged requester's decision: %v", err)
+	}
+}
+
+// RECORD-M3-07's cancel reader, for the requester's inbox: a cancel the approver filed after its decision is found by
+// Cancel, its Signed as stored, while Decision still answers the decision before it.
+func TestRecordApprovalsCancelAfterDecision(t *testing.T) {
+	world := newTestRecordWorld(t)
+	requester := world.device(true)
+	approver := world.device(true)
+	requesterRecord := requester.open()
+	approverRecord := approver.open()
+	request := testRecordParsedRequest(t, world.approvalRequest(requester, testRecordDnsSet(t, "198.51.100.7").Bytes, "", nil))
+	if _, err := requesterRecord.Approvals().FileRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	if err := requesterRecord.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := requesterRecord.Approvals().Cancel(t.Context(), request.ApprovalId()); !errors.Is(err, sidecar.ErrRecordApprovalPending) {
+		t.Errorf("no cancel yet: %v", err)
+	}
+	if _, err := approverRecord.Approvals().FileDecision(t.Context(), world.vaultId, approver.decide(request), nil); err != nil {
+		t.Fatal(err)
+	}
+	cancelBody, err := proto.Marshal(&protocol.ApprovalCancel{ApprovalId: request.ApprovalId().Bytes()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel, err := proto.Marshal(&bridge.Signed{
+		Body:      cancelBody,
+		SignerId:  approver.sidecarId.Bytes(),
+		Signature: ed25519.Sign(approver.key, bridge.SignedBytes(sidecar.ApprovalPurpose, bridge.SignedType_SIGNED_APPROVAL_CANCEL, cancelBody)),
+		Type:      uint32(bridge.SignedType_SIGNED_APPROVAL_CANCEL),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := approverRecord.Approvals().FileCancel(t.Context(), world.vaultId, cancel); err != nil {
+		t.Fatal(err)
+	}
+	if err := approverRecord.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := requesterRecord.Approvals().Decision(t.Context(), request.ApprovalId()); err != nil {
+		t.Errorf("the decision before the cancel: %v", err)
+	}
+	found, err := requesterRecord.Approvals().Cancel(t.Context(), request.ApprovalId())
+	if err != nil || !bytes.Equal(found, cancel) {
+		t.Errorf("the cancel: %v", err)
 	}
 }
