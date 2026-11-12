@@ -5,10 +5,11 @@
 // not been given. While no key has settled, the oldest live one signs, which is a deployment's first key. A key
 // signs only while it outlives SignMargin, so no ticket outlives its key.
 //
-// Rotation, every RotationInterval (30 days): keygen (server/cli/sockets) adds a key to the file beside the ones
-// it holds, each expiring RotationInterval and KeyOverlap after its creation, and drops the expired. The new key
-// verifies at once and signs once settled, while the old one verifies through the overlap. A rotation never stops
-// the service: vault's file changes and the next reread takes it.
+// Rotation, every RotationInterval (30 days): SocketTicketKeyFileAdd adds a key to the file beside the ones it
+// holds, each expiring RotationInterval and KeyOverlap after its creation, and drops the expired; the operations
+// command that runs it is sidecarctl's to add (question sock-m5-07-ticket-keygen-command). The new key verifies at
+// once and signs once settled, while the old one verifies through the overlap. A rotation never stops the service:
+// vault's file changes and the next reread takes it.
 //
 // The file, YAML, the seed in standard base64:
 //
@@ -51,7 +52,7 @@ var ErrSocketTicketKeyFileRefused = errors.New("socket ticket key file refused")
 
 // The key set's tunables (§9.8's 30-day rotation with overlap).
 type SocketTicketKeySettings struct {
-	// How often a key file gets a new key: 30 days. keygen reads it.
+	// How often a key file gets a new key: 30 days, which SocketTicketKeyFileAdd's expiry follows.
 	RotationInterval time.Duration
 	// How long a key verifies past RotationInterval, so a ticket under it, and the listeners that hold it, outlive
 	// its successor's settling: 1 day.
@@ -186,7 +187,7 @@ func parseSocketTicketKeyFile(data []byte, settings *SocketTicketKeySettings) ([
 }
 
 // The key file with a new key created at now added, expiring RotationInterval and KeyOverlap after it, and every
-// key expired at now dropped: what keygen writes. existing may be empty for a first file, and a file that does not
+// key expired at now dropped: what a rotation writes. existing may be empty for a first file, and a file that does not
 // parse is refused rather than overwritten.
 func SocketTicketKeyFileAdd(existing []byte, now time.Time, settings *SocketTicketKeySettings) ([]byte, error) {
 	if settings == nil {
