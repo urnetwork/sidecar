@@ -13,10 +13,10 @@
 //	          is kept, verified and shown generically, never refused
 //
 // A failure at steps 1 to 3 ignores the entry and raises bad_entry; a pin this state has not reached stops that
-// stream's read at the push, to read again once it has. An ERASE read from the log's erasure ref, or an erasure entry
-// naming an entry, erases every copy of it: its body goes from memory and its header and chain still verify. Bodies
-// are held in memory only, so restarting reads the log again, and the pins (record_pins.go) say whether a stream wound
-// back meanwhile. The states expired, archived and lost wait on BASE, retention (M6) and the checkpoint log (M6);
+// stream's read at the push, to read again once it has. An ERASE read from the log's erasure ref, by a key it names or
+// by its note's entries (record_erase.go), or an erasure entry naming an entry, erases every copy of it: its body goes
+// from memory and its header and chain still verify. Bodies are held in memory only, so restarting reads the log
+// again, and the pins (record_pins.go) say whether a stream wound back meanwhile. The states expired, archived and lost wait on BASE, retention (M6) and the checkpoint log (M6);
 // nothing here sets them yet.
 //
 // Safe for concurrent use: one Sync a log at a time, and Entries any time. Barriers: record.read.before and .after
@@ -735,9 +735,22 @@ func (self *RecordReader) readErasures(ctx context.Context, streams RecordStream
 		for _, key := range erasure.Keys {
 			log.erasedKeys[*key] = true
 		}
+		// an erasure's note names its entries (record_erase.go), so the ERASE alone is its record until the erasure
+		// entry lands; a note of another kind's names none
+		if body, ok := recordErasureNoteBody(erasure); ok {
+			for _, entryId := range body.GetEntryIds() {
+				if len(entryId) == len(Id{}) {
+					log.erasedEntryIds[Id(entryId)] = true
+				}
+			}
+		}
 		log.erasureVersion = max(log.erasureVersion, erasure.Version)
 	}
 	for _, entry := range log.ordered {
+		if log.erasedEntryIds[entry.EntryId] {
+			recordEraseEntryWithLock(entry)
+			continue
+		}
 		for _, entryCopy := range entry.Copies {
 			if log.erasedKeys[RecordSlotKey{SlotId: entryCopy.SlotId, KeyIndex: entryCopy.KeyIndex}] {
 				recordEraseEntryWithLock(entry)
@@ -745,6 +758,25 @@ func (self *RecordReader) readErasures(ctx context.Context, streams RecordStream
 		}
 	}
 	return nil
+}
+
+// Takes an erasure this device runs before evs holds it: entryIds erased and keys refused here at once, so an ingest
+// pass refuses the entries from now and no decrypted copy outlives the ERASE (record_erase.go).
+func (self *RecordReader) noteErased(logId Id, entryIds []Id, keys []*RecordSlotKey) {
+	log := self.readLog(logId)
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for _, entryId := range entryIds {
+		log.erasedEntryIds[entryId] = true
+	}
+	for _, key := range keys {
+		log.erasedKeys[*key] = true
+	}
+	for _, entry := range log.ordered {
+		if log.erasedEntryIds[entry.EntryId] {
+			recordEraseEntryWithLock(entry)
+		}
+	}
 }
 
 // An erasure entry's named entries: erased here, and refused by an ingester (section 5.4's erased step).
