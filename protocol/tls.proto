@@ -1,7 +1,9 @@
-// What tlsedge tells a listener about a visitor (§13.5), what certs tells a device about its certificates (§13.6) and
-// what a device signs for its key (§13.8). TlsEdgeOpen rides sealed streams only, as StreamOpen.metadata, and a
-// listener trusts it only as §9.6's admission step 3 allows. §13 gives TlsHint and TlsKeyAttestation no field list,
-// so theirs are plan-TLS-small-readings' first two, every field inside connect-4 or cert-1.
+// What tlsedge tells a listener about a visitor (§13.5), what certs tells a device about its certificates (§13.6),
+// what a device signs for its key (§13.8) and what a publishing device signs for a link audience's guests (QD-134).
+// TlsEdgeOpen rides sealed streams only, as StreamOpen.metadata, and a listener trusts it only as §9.6's admission
+// step 3 allows. §13 gives TlsHint and TlsKeyAttestation no field list, so theirs are plan-TLS-small-readings' first
+// two, every field inside connect-4 or cert-1. TlsLinkToken reaches no server: it travels in a URL and a cookie
+// inside TLS, between the visitor and the front.
 //
 // No oneof: TlsHint rides PushHint.hint and TlsEdgeOpen StreamOpen.metadata (§6.11).
 
@@ -39,4 +41,13 @@ message TlsKeyAttestation {        // the body of a Signed, SIGNED_TLS_KEY_ATTES
   bytes spki_sha256 = 3;           // of the DER SubjectPublicKeyInfo
   bytes identifier_set_sha256 = 4; // TlsIdentifierSetHash
   uint64 issue_time_millis = 5;
+}
+
+message TlsLinkToken {             // the body of a Signed, SIGNED_TLS_LINK, purpose tls-link, by the publishing
+                                   // device's identity key (QD-134): a link audience's guest link, reusable until
+                                   // its grant ends
+  bytes grant_id = 1;              // the publish grant's rule_id
+  string host = 2;                 // the URL's host, which the front holds to the SNI
+  uint64 expire_time_millis = 3;   // at most the grant's expires
+  bytes nonce = 4;                 // 16 random B, so two links of one grant differ
 }

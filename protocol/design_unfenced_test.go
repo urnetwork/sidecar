@@ -807,13 +807,15 @@ enum CoreHintKind {
 }
 
 // sidecar/protocol/tls.proto
-// plan-TLS-small-readings#1's TlsHint and its kinds, the shape of SocketHint, and #2's attestation body.
+// plan-TLS-small-readings#1's TlsHint and its kinds, the shape of SocketHint, #2's attestation body, and #8's link
+// token as the owner decided it (QD-134), in its order.
 message TlsHint { TlsHintKind kind = 1; bytes cert_id = 2; }
 enum TlsHintKind { TLS_HINT_KIND_UNSPECIFIED = 0; TLS_HINT_ORDER = 1; TLS_HINT_ISSUED = 2; TLS_HINT_REVOKED = 3; }
 message TlsKeyAttestation {
   bytes network_id = 1; bytes sidecar_id = 2; bytes spki_sha256 = 3; bytes identifier_set_sha256 = 4;
   uint64 issue_time_millis = 5;
 }
+message TlsLinkToken { bytes grant_id = 1; string host = 2; uint64 expire_time_millis = 3; bytes nonce = 4; }
 
 // sidecar/protocol/mail.proto
 // MailAuthEvidence's comments, which name each result's fields in this order.
