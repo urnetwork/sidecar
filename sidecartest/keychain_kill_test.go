@@ -1,3 +1,5 @@
+//go:build !js && !ios_extension
+
 // §22.8's kills mid-keychain write (TEST-M2-16; §5.9): a running Sidecar whose state is files on disk, NewSidecarOsBackend's,
 // is killed at each step a keychain.ur write takes, CreateTemp, each Write of the sealed file, its fsync, its rename and
 // the directory's fsync, and comes up again on what the disk holds, where its keychain opens at the old state or the new
@@ -9,7 +11,8 @@
 // the root's keys_crash_test.go.
 //
 // A mutant backend that writes the file in place, truncating keychain.ur and writing it in two halves, must fail the
-// same check, which is how it is known to bite.
+// same check, which is how it is known to bite. The OS backend is on every leg with files: not js, not the iOS
+// network extension's.
 
 package sidecartest
 
