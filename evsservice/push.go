@@ -3,8 +3,8 @@
 //	4  the head first: the verified cache entry when its version is at least b, else a cluster GET; then one round
 //	   on the repo's cluster after it: repo/ (cached at most 5 s), every changed entry by §11.6's read rule, each
 //	   reuse source, and the statements of the window versions after folded_through that may touch a changed path,
-//	   which the newest rule combines with that head's folded_through; the authorization state and the generation
-//	   record from this process's caches (push_step4.go)
+//	   which the newest rule combines with that head's folded_through; the authorization state read again from this
+//	   process's gate cache at each run, and the generation record from its caches (push_step4.go)
 //	5a P committed in the window or the log pages of (b, b+64] answers 200 {its version}; another statement under
 //	   its id 409 PUSH_ID_REUSED; a refusal record answers its status with recorded: true (outcome.go)
 //	5  b to h as check.go's pure functions over what step 4 read; a refusal on a cached head runs step 4 again from
@@ -169,7 +169,9 @@ type pushAttempt struct {
 	staged []byte
 	purge  *pushPurge
 	// the repo's network, whose state judges the push and whose storage counts it, and the token's, whose fair
-	// queue its writes wait in
+	// queue its writes wait in. gateView is networkId's newest state, read again at each run of step 4 and at each
+	// rerun of 5 (b-h) on a reread head (readGateView, QD-660): what step 5 judges, the generation record's signer
+	// and the PATH_EPOCH and CLOSURE rules read. bind's read at arrival is not kept: it judges only bind's own 5b
 	gateView       sidecar.GkmAuthView
 	networkId      sidecar.Id
 	tokenNetworkId sidecar.Id
@@ -331,9 +333,11 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 	return attempt, true
 }
 
-// The attempt's gate view and 5b's identity, before any store read, for every stage: a statement the token's sidecar
-// did not sign costs evs nothing, and refuses nothing, since a refusal recorded for a replayed statement would block
-// its push (refusal_codes.go). false once the request has been answered.
+// 5b's identity, before any store read, for every stage, against the gate view as it stands at arrival: a statement
+// the token's sidecar did not sign costs evs nothing, and refuses nothing, since a refusal recorded for a replayed
+// statement would block its push (refusal_codes.go). That read judges this alone: steps 4 and 5 judge the view each
+// run of step 4 reads again, 5d's predicate above all (readGateView, QD-660). false once the request has been
+// answered.
 func (self *pushAttempt) bind() bool {
 	engine := self.engine
 	request := self.request
@@ -348,7 +352,6 @@ func (self *pushAttempt) bind() bool {
 		request.Unavailable(nil)
 		return false
 	}
-	self.gateView = view
 	identity := &PushView{
 		RepoId:         self.repoId,
 		Statement:      self.statement,
