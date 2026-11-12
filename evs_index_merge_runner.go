@@ -284,7 +284,7 @@ func indexMalformedEvents(view *indexView, malformed []*indexMalformedDiff) []Si
 func indexBucketExpiredAt(view *indexView, root *indexViewRoot, bucket *indexViewBucket, signedTimeMs int64) bool {
 	ages := indexBucketAges(root.bucketWindows(), root.windowDays(view.repoKind), signedTimeMs)
 	for index, held := range root.buckets {
-		if held == bucket {
+		if held.window.startDay == bucket.window.startDay {
 			return ages[index] == indexBucketExpired
 		}
 	}

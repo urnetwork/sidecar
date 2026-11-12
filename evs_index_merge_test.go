@@ -14,6 +14,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math/rand"
 	"os"
 	"slices"
 	"testing"
@@ -971,6 +973,125 @@ func TestIndexMergeIsAFunction(t *testing.T) {
 	for index := range results[0] {
 		if results[0][index].path != results[1][index].path || sha256.Sum256(results[0][index].plaintext) != sha256.Sum256(results[1][index].plaintext) {
 			t.Fatal("two builds of one merge wrote different plaintext")
+		}
+	}
+}
+
+// A merge removes no large entry, since a diff its writer's head holds may rest on one: after a merge absorbs two, the
+// writer's next push there removes the one no diff rests on and keeps the one its head's diff names (1.6; twin
+// MergeRemovesLarge).
+func TestIndexMergeLeavesLargeEntriesToTheirWriter(t *testing.T) {
+	world := testNewHeadWorld()
+	a := evsTestId("writer a")
+	kept, gone := testIndexKeys(0, 9000, 3), testIndexKeys(1, 9000, 3)
+	world.push(t, a, testLive("l", 1, 1, 0, kept), testLive("l", 2, 1, 0, gone))
+	world.fillUntilSealed(t, a, "f", 0)
+	edit := slices.Clone(kept)
+	edit[10] += 1
+	world.push(t, a, testLive("l", 1, 2, 1, edit))
+	outcome := world.merge(t, evsTestId("merger"))
+	for _, removal := range outcome.result.removedShards {
+		if path, _ := indexParsePath(removal.path, false); path.kind == indexPathLargeEntry {
+			t.Fatal("a merge removed a large entry")
+		}
+	}
+	writer := world.writer(t, a)
+	if len(writer.large) != 2 {
+		t.Fatalf("%d large entries after the merge", len(writer.large))
+	}
+	plan := world.push(t, a, testLive("l", 3, 1, 0, testHeadKeys(3, 0)))
+	if len(plan.buckets[0].removed) != 1 {
+		t.Fatalf("the writer's next push removed %d large entries", len(plan.buckets[0].removed))
+	}
+	writer = world.writer(t, a)
+	if len(writer.large) != 1 || writer.large[0].slot.entries[0].key != testIndexId("l", 1) {
+		t.Fatal("the writer removed the large entry its head's diff rests on")
+	}
+	if file, entry := indexResolveBase(writer, testIndexId("l", 1), 1, writer.head()); file == nil || entry == nil {
+		t.Fatal("the head's diff lost its base")
+	}
+}
+
+// A seeded walk of two writers' pushes, edits, removals, seals and merges (FI-18's and I1's ground, 1.3): after every
+// step each document's newest entry over the shards and every unabsorbed file, heads included, is the newest version
+// written, every unabsorbed diff has its base in its own writer's files, and the shards hold one version a key.
+func TestIndexMergeKeepsEveryNewestVersion(t *testing.T) {
+	for seed := range int64(6) {
+		random := rand.New(rand.NewSource(seed))
+		world := testNewHeadWorld()
+		writers := []Id{evsTestId("writer a"), evsTestId("writer b")}
+		type written struct {
+			version uint64
+			removed bool
+		}
+		newest := map[int]written{}
+		fill := 0
+		for step := range 40 {
+			writer := writers[random.Intn(len(writers))]
+			switch action := random.Intn(10); {
+			case action < 5:
+				document := random.Intn(4)
+				last := newest[document]
+				version := last.version + 1
+				if random.Intn(4) == 0 && last.version != 0 && !last.removed {
+					world.push(t, writer, testRemoved("w", document, version))
+					newest[document] = written{version: version, removed: true}
+				} else {
+					replaces := last.version
+					if last.removed {
+						replaces = 0
+					}
+					world.push(t, writer, testLive("w", document, version, replaces, testHeadKeys(document, int(version))))
+					newest[document] = written{version: version}
+				}
+			case action < 8:
+				fill = world.fillUntilSealed(t, writer, fmt.Sprintf("fill %d", seed), fill)
+			default:
+				view := world.view(t, writer)
+				if bucket := view.writeRoot().newestBucket(); bucket != nil && 0 < indexBucketSealedByteCount(bucket) {
+					world.merge(t, evsTestId("merger"))
+				}
+			}
+			view := world.view(t, evsTestId("reader"))
+			bucket := view.writeRoot().newestBucket()
+			if bucket == nil {
+				continue
+			}
+			shards, err := indexDecodeBucketShards(context.Background(), view, bucket.shards)
+			if err != nil {
+				t.Fatal(err)
+			}
+			winners, malformed, err := indexMergeCandidates(bucket, shards, nil, true, true, view.erased, map[Id]uint32{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(malformed) != 0 {
+				t.Fatalf("seed %d step %d: an unabsorbed diff with no base", seed, step)
+			}
+			seen := map[[indexIdByteCount]byte]bool{}
+			for _, shard := range shards {
+				for _, document := range shard.documents {
+					if seen[document.key] {
+						t.Fatalf("seed %d step %d: a key twice in the shards", seed, step)
+					}
+					seen[document.key] = true
+				}
+				for _, tombstone := range shard.tombstones {
+					if seen[tombstone.key] {
+						t.Fatalf("seed %d step %d: a key twice in the shards", seed, step)
+					}
+					seen[tombstone.key] = true
+				}
+			}
+			for document, want := range newest {
+				winner := winners.documents[testIndexId("w", document)]
+				if winner == nil || winner.version != want.version || (winner.kind != indexEntryFull) != want.removed {
+					t.Fatalf("seed %d step %d: document %d's newest %+v, written %+v", seed, step, document, winner, want)
+				}
+				if !want.removed && !slices.Equal(winner.keys, testHeadKeys(document, int(want.version))) {
+					t.Fatalf("seed %d step %d: document %d's keys composed wrong", seed, step, document)
+				}
+			}
 		}
 	}
 }
