@@ -42,11 +42,8 @@ package sidecar
 
 import (
 	"context"
-	"slices"
 	"sync/atomic"
 	"time"
-
-	"google.golang.org/protobuf/encoding/protowire"
 
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
@@ -574,80 +571,10 @@ func (self *AclState) contractWitnesses(a *AclSubject, b *AclSubject, nowMs int6
 	return aSidecar != nil && bSidecar != nil && aSidecar.hardDeny(nowMs) == 0 && bSidecar.hardDeny(nowMs) == 0
 }
 
-// Whether the rows' BridgeRows put the subject in exits or none (§17.8): a row naming its sidecar or client id, or an
-// atom it holds. Read from AclRows.bridge's bytes in place, so the check allocates nothing; bytes no verifier folded,
-// or a field this build cannot name, read as restricted, the closed direction ParseBridgeRows takes.
+// Whether the rows' BridgeRows put the subject in exits or none (§17.8): EgressMode's answer (acl_reach.go), read from
+// AclRows.bridge's bytes in place, so the check allocates nothing, and bytes no verifier folded read as none.
 func (self *AclState) egressRestricted(resolved *aclResolved) bool {
-	data := self.rows.GetBridge()
-	for 0 < len(data) {
-		number, wireType, n := protowire.ConsumeTag(data)
-		if n < 0 || number != 1 || wireType != protowire.BytesType {
-			return true
-		}
-		data = data[n:]
-		row, n := protowire.ConsumeBytes(data)
-		if n < 0 {
-			return true
-		}
-		data = data[n:]
-		subject, mode, ok := aclEgressRow(row)
-		if !ok || (mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS && mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE) {
-			return true
-		}
-		if self.egressNames(resolved, subject) {
-			return true
-		}
-	}
-	return false
-}
-
-// One BridgeEgressRow's subject and mode, false for bytes CompileBridgeRows never writes.
-func aclEgressRow(row []byte) (Id, bridge.BridgeEgressMode, bool) {
-	var subject Id
-	var mode bridge.BridgeEgressMode
-	subjectSet := false
-	for 0 < len(row) {
-		number, wireType, n := protowire.ConsumeTag(row)
-		if n < 0 {
-			return Id{}, 0, false
-		}
-		row = row[n:]
-		switch {
-		case number == 1 && wireType == protowire.BytesType:
-			value, n := protowire.ConsumeBytes(row)
-			if n < 0 || len(value) != len(Id{}) {
-				return Id{}, 0, false
-			}
-			subject, subjectSet = Id(value), true
-			row = row[n:]
-		case number == 2 && wireType == protowire.VarintType:
-			value, n := protowire.ConsumeVarint(row)
-			if n < 0 {
-				return Id{}, 0, false
-			}
-			mode = bridge.BridgeEgressMode(value)
-			row = row[n:]
-		default:
-			return Id{}, 0, false
-		}
-	}
-	return subject, mode, subjectSet
-}
-
-// Whether an egress row's subject, a sidecar_id, a client id or a keyed atom, names the resolved subject.
-func (self *AclState) egressNames(resolved *aclResolved, subject Id) bool {
-	if resolved.subject.Id == subject {
-		return true
-	}
-	index, found := self.atomIndexes[subject]
-	if !found {
-		return false
-	}
-	if resolved.sidecar != nil {
-		_, holds := slices.BinarySearch(resolved.sidecar.atoms, index)
-		return holds
-	}
-	return self.holdsAtom(resolved, index)
+	return self.egressMode(resolved) != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO
 }
 
 // Loads the heads now and then every HeadsInterval, until the gate closes.
