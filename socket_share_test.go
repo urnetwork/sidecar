@@ -118,19 +118,26 @@ func (self *testShareFixture) add(path string, uses uint32, expires time.Duratio
 	return link
 }
 
-// One whole get of link by getterId into out.
+// One whole get of link by getterId into out. A get that succeeds returns once the sharer is through with it: the
+// getter's half ends at the reset that a last use's end starts with, before that end has unlistened, deleted the
+// record and forgotten the share, and the sharer's serve closes its conn only after all of that.
 func (self *testShareFixture) get(link *ShareLink, getterId Id, out string) error {
+	self.t.Helper()
 	part, err := OpenSharePart(out, link.Token, 4096)
 	if err != nil {
 		return err
 	}
-	conn, err := self.net.dialAs(socketShareNamePrefix+link.Token, getterId)
+	conn, served, err := self.net.dialServed(socketShareNamePrefix+link.Token, getterId)
 	if err != nil {
 		part.Close()
 		return err
 	}
 	defer conn.Close()
-	return part.Get(conn, link)
+	if err := part.Get(conn, link); err != nil {
+		return err
+	}
+	testSocketAwait(self.t, served, "end of the sharer's serve")
+	return nil
 }
 
 // The share's folded record on disk, nil once it was deleted.
@@ -311,6 +318,30 @@ func TestShareSurvivesRestart(t *testing.T) {
 	}
 	if fixture.record(link.Token) != nil {
 		t.Error("two Dones of two uses left the record")
+	}
+}
+
+// A stop whose cancel ends the accept loop before its unlisten runs leaves no listener holding the share's name: the
+// loop closes the listener it held, so the restarted share listens again and serves.
+func TestShareStopClosesListenerWhenAcceptEndsFirst(t *testing.T) {
+	fixture := newTestShareFixture(t)
+	link := fixture.add(fixture.file("data.bin", testShareContent), 1, time.Hour)
+	name := socketShareNamePrefix + link.Token
+	fixture.net.stateLock.Lock()
+	listener := fixture.net.listeners[name]
+	fixture.net.stateLock.Unlock()
+	if listener == nil {
+		t.Fatal("the share is not listening")
+	}
+	// a stop's cancel alone, so the accept loop ends by its context with no unlisten yet
+	fixture.shares.cancel()
+	testSocketAwait(t, listener.closed, "close of the listener at the accept loop's end")
+	fixture.restart()
+	if !fixture.net.listening(name) {
+		t.Fatal("the restarted share did not listen")
+	}
+	if err := fixture.get(link, testSocketId("getter"), filepath.Join(fixture.directory, "got.bin")); err != nil {
+		t.Fatal(err)
 	}
 }
 
