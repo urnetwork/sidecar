@@ -208,6 +208,9 @@ type EvsSettings struct {
 	// format's values (sidecar.EvsFormatSettings), which the client reads too. Positive.
 	ReadStreamRefMaxCount  int
 	ReadStreamMaxByteCount int64
+	// What the streams read's budget counts a slot object as before reading it: 512 B, a handful of 72 B wrapped
+	// keys. Non-negative.
+	ReadStreamSlotEstimateByteCount int64
 
 	// §11.12's lifecycle: how many times a transition reads repo/ from the cluster again after another write came
 	// first or an answer was lost, before a route answers 429 BUSY or a job fails to be retried, 8. Positive.
@@ -303,18 +306,19 @@ func DefaultEvsSettings() *EvsSettings {
 		GenerationCacheCount:      100 * 1000,
 		LeaseMaxDuration:          evsLeaseMaxDuration,
 
-		ReadPathMaxCount:          64,
-		ReadRangeMaxCount:         64,
-		ReadRangeMaxByteCount:     32 * 1024 * 1024,
-		ReadObjectMaxCount:        64,
-		ReadFrameByteCount:        1024 * 1024,
-		ReadSegmentWholeByteCount: 256 * 1024,
-		ReadSegmentRangeAlign:     64 * 1024,
-		ReadHeadRetryCount:        2,
-		LogReplyStatementCount:    evsLogReplyMaxStatementCount,
-		RefsListPageCount:         1000,
-		ReadStreamRefMaxCount:     sidecar.DefaultEvsFormatSettings().ReadStreamMaxRefCount,
-		ReadStreamMaxByteCount:    sidecar.DefaultEvsFormatSettings().ReadStreamMaxByteCount,
+		ReadPathMaxCount:                64,
+		ReadRangeMaxCount:               64,
+		ReadRangeMaxByteCount:           32 * 1024 * 1024,
+		ReadObjectMaxCount:              64,
+		ReadFrameByteCount:              1024 * 1024,
+		ReadSegmentWholeByteCount:       256 * 1024,
+		ReadSegmentRangeAlign:           64 * 1024,
+		ReadHeadRetryCount:              2,
+		LogReplyStatementCount:          evsLogReplyMaxStatementCount,
+		RefsListPageCount:               1000,
+		ReadStreamRefMaxCount:           sidecar.DefaultEvsFormatSettings().ReadStreamMaxRefCount,
+		ReadStreamMaxByteCount:          sidecar.DefaultEvsFormatSettings().ReadStreamMaxByteCount,
+		ReadStreamSlotEstimateByteCount: 512,
 
 		RepoTransitionRetryCount: 8,
 		ShredListPageCount:       1000,

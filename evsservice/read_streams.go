@@ -175,6 +175,8 @@ type readStreamVersion struct {
 	// push name, each once
 	ranges  []*protocol.EvsReadRange
 	slotIds [][]byte
+	// what the budget counts a slot as before it is read (ReadStreamSlotEstimateByteCount)
+	slotEstimateByteCount int64
 }
 
 // What the version will cost the reply, its segment ranges and slots by their sizes, before any of it is read.
@@ -187,12 +189,9 @@ func (self *readStreamVersion) byteCount() int64 {
 		count += int64(readRange.GetLength())
 	}
 	// a slot object holds a few wrapped keys
-	count += int64(len(self.slotIds)) * evsSlotObjectEstimateByteCount
+	count += int64(len(self.slotIds)) * self.slotEstimateByteCount
 	return count
 }
-
-// A slot object's size as the budget counts it before reading it: a handful of wrapped 72 B keys.
-const evsSlotObjectEstimateByteCount = 512
 
 // The version's statement, records and the objects its entries name.
 func (self *readAttempt) streamVersionObjects(version uint64) (*readStreamVersion, error) {
@@ -209,6 +208,7 @@ func (self *readAttempt) streamVersionObjects(version uint64) (*readStreamVersio
 	}
 	objects := &readStreamVersion{
 		version: version, statement: push.statement.Bytes, pushId: push.statement.Push.GetPushId(), records: [][]byte{recordBytes},
+		slotEstimateByteCount: self.settings.ReadStreamSlotEstimateByteCount,
 	}
 	changes := []*sidecar.EvsCheckedChange{}
 	newObjects := []*sidecar.EvsNewObject{}

@@ -57,7 +57,7 @@ const HookSocketVariable = "UR_TEST_EVS_GIT_HOOK_SOCKET"
 // The daemon version every device's daemon and hook name.
 const daemonVersion = "synthetic-evs-git-world"
 
-// What a world is built with.
+// What a world is built with (DefaultWorldSettings).
 type WorldSettings struct {
 	// What each hook file execs, the hook's name appended: the test binary and a -test.run naming the test that calls
 	// HookHelper, then "--". Required.
@@ -70,6 +70,15 @@ type WorldSettings struct {
 	EngineSettings *evsservice.EvsSettings
 	// Each device's evs settings; nil takes the client's defaults.
 	ClientSettings *sidecar.EvsSettings
+	// The life of each service token a device's client is given: 15 min, §7.4's.
+	TokenLifetime time.Duration
+	// How long before the world's start its receipt key took effect, so every receipt it signs is current: 48 h.
+	ReceiptKeyAge time.Duration
+}
+
+// A world's defaults: the caller names its HookCommand.
+func DefaultWorldSettings() *WorldSettings {
+	return &WorldSettings{TokenLifetime: 15 * time.Minute, ReceiptKeyAge: 48 * time.Hour}
 }
 
 // An evs a T3 caller hosts: its handler, and a token that handler's Authenticator verifies.
@@ -233,7 +242,7 @@ func (self *World) hostEngine() {
 	}
 	t.Cleanup(quota.Close)
 	receiptKey := sha256.Sum256([]byte("evs git world receipt key"))
-	receiptKeys, err := evsservice.NewReceiptKeys([]*evsservice.ReceiptKey{{KeyId: 1, Key: receiptKey[:], IssueFrom: self.clock.Now().Add(-48 * time.Hour)}}, nil)
+	receiptKeys, err := evsservice.NewReceiptKeys([]*evsservice.ReceiptKey{{KeyId: 1, Key: receiptKey[:], IssueFrom: self.clock.Now().Add(-self.settings.ReceiptKeyAge)}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +431,7 @@ func (self *World) Device(label string, settings *DeviceSettings) *Device {
 			connectSidecarId := connect.Id(sidecarId)
 			return self.issue(&sidecar.Principal{
 				NetworkId: connect.Id(self.networkId), ClientId: connect.Id(device.ClientId), SidecarId: &connectSidecarId,
-				Audience: evsservice.EvsAudience, Scopes: scopes, IssuedAt: self.clock.Now(), ExpiresAt: self.clock.Now().Add(15 * time.Minute),
+				Audience: evsservice.EvsAudience, Scopes: scopes, IssuedAt: self.clock.Now(), ExpiresAt: self.clock.Now().Add(self.settings.TokenLifetime),
 			})
 		},
 		Sign:     sidecar.EvsSignFunction(signer.Sign),

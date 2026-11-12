@@ -48,7 +48,9 @@ func newEvsGitTwinWorld(t *testing.T) *evsgit.World {
 	settings.PushRetryCount = 2
 	settings.PushRetryMaxWait = 10 * time.Millisecond
 	settings.ReadRetryWait = 10 * time.Millisecond
-	return evsgit.NewWorld(t, &evsgit.WorldSettings{HookCommand: evsGitHookCommand(t), ClientSettings: settings})
+	worldSettings := evsgit.DefaultWorldSettings()
+	worldSettings.HookCommand, worldSettings.ClientSettings = evsGitHookCommand(t), settings
+	return evsgit.NewWorld(t, worldSettings)
 }
 
 // Loses the answer of the next n pushes the engine commits: the engine serves each, and its device hears nothing.

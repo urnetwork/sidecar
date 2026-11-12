@@ -40,7 +40,9 @@ func evsTwentyAgentsSettings(t *testing.T) (*load.EvsAgentsSettings, bool) {
 
 func TestEvsTwentyAgents(t *testing.T) {
 	settings, smoke := evsTwentyAgentsSettings(t)
-	world := evsgit.NewWorld(t, &evsgit.WorldSettings{HookCommand: evsGitHookCommand(t)})
+	worldSettings := evsgit.DefaultWorldSettings()
+	worldSettings.HookCommand = evsGitHookCommand(t)
+	world := evsgit.NewWorld(t, worldSettings)
 	result, err := load.RunEvsAgents(t.Context(), world, settings)
 	if err != nil {
 		t.Fatal(err)

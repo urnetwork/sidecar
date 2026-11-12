@@ -72,7 +72,9 @@ func evsGitClients(t *testing.T) []string {
 // A world whose clients run git at path, with a writer device a and a second device b.
 func newEvsGitConformanceWorld(t *testing.T, path string) (*evsgit.World, *evsgit.Device, *evsgit.Device) {
 	t.Helper()
-	world := evsgit.NewWorld(t, &evsgit.WorldSettings{HookCommand: evsGitHookCommand(t), ClientGit: path})
+	settings := evsgit.DefaultWorldSettings()
+	settings.HookCommand, settings.ClientGit = evsGitHookCommand(t), path
+	world := evsgit.NewWorld(t, settings)
 	return world, world.Device("device-a", nil), world.Device("device-b", nil)
 }
 

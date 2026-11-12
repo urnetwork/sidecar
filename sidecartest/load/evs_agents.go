@@ -52,18 +52,21 @@ type EvsAgentsSettings struct {
 	DrainTimeout time.Duration
 	// A merge's tries on non-fast-forward before it counts failed: 8.
 	MergeTryCount int
+	// How often the end looks again at a queue still draining: 100 ms.
+	DrainPollInterval time.Duration
 }
 
 // §22.8's run.
 func DefaultEvsAgentsSettings() *EvsAgentsSettings {
 	return &EvsAgentsSettings{
-		Agents:        20,
-		OwnedPushRate: 4,
-		MergeInterval: 60 * time.Second,
-		Duration:      time.Hour,
-		Warmup:        time.Minute,
-		DrainTimeout:  2 * time.Minute,
-		MergeTryCount: 8,
+		Agents:            20,
+		OwnedPushRate:     4,
+		MergeInterval:     60 * time.Second,
+		Duration:          time.Hour,
+		Warmup:            time.Minute,
+		DrainTimeout:      2 * time.Minute,
+		MergeTryCount:     8,
+		DrainPollInterval: 100 * time.Millisecond,
 	}
 }
 
@@ -260,7 +263,7 @@ func evsAgentsCheck(ctx context.Context, world *evsgit.World, agents []*evsAgent
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(100 * time.Millisecond):
+			case <-time.After(settings.DrainPollInterval):
 			}
 		}
 		branches, err := agent.device.Mount.Sync().ConflictBranches(ctx)
