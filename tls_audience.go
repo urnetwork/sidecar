@@ -16,10 +16,11 @@
 //
 // The issuer's ID token is checked against this config's members too (§2.8 EX8), never trusted alone.
 //
-// TlsFrontConfigPolicy is the production policy, over the verified ConfigState: a grant is the set of publish rules
-// that take the host for this sidecar, narrowed to those that also take the endpoint's tls/ name for listen where
-// any do, and refused when they disagree on audience, mode or pin, the closed direction. ACL-M5-01's
-// AclState.PublishGrant is meant to answer the same; until it lands this reads the rules itself.
+// NewTlsFrontConfigPolicy is the production policy, over the verified ConfigState: a grant is the set of this
+// sidecar's publish rules that take the host and the endpoint's tls/ name for listen, or where none does, those that
+// take the host and bind no socket at all, never one binding another port's name; rules that disagree on audience,
+// mode or pin give none, the closed direction. ACL-M5-01's AclState.PublishGrant is meant to answer the same; until
+// it lands this reads the rules itself.
 //
 // Each check sits between barriers, tls.front_audience.before and .after, keyed by the connection's id. Safe for
 // concurrent use.
@@ -163,7 +164,8 @@ func tlsPublishGrantOf(state *AclState, subject AclSubject, name string, host st
 	if resolved.deny != 0 {
 		return nil
 	}
-	hostRules := []*aclRule{}
+	// rules that bind this name, and rules that bind no socket at all; a rule binding another socket is neither
+	hostOnlyRules := []*aclRule{}
 	boundRules := []*aclRule{}
 	state.findResourceRule(&resolved, nowMs, protocol.AclAction_ACL_ACTION_PUBLISH, func(rule *aclRule) bool {
 		if grantId != nil && !bytes.Equal(rule.row.GetRuleId(), grantId) {
@@ -171,25 +173,28 @@ func tlsPublishGrantOf(state *AclState, subject AclSubject, name string, host st
 		}
 		coversHost := false
 		coversName := false
+		bindsSocket := false
 		for _, pattern := range rule.publicNames {
 			if strings.Contains(pattern, "/") {
+				bindsSocket = true
 				coversName = coversName || aclPublicSocketCovers(pattern, name)
 			} else {
 				coversHost = coversHost || aclDnsHostCovers(pattern, host)
 			}
 		}
-		if coversHost {
-			hostRules = append(hostRules, rule)
-			if coversName && rule.allows(protocol.AclAction_ACL_ACTION_LISTEN) {
-				boundRules = append(boundRules, rule)
-			}
+		switch {
+		case !coversHost:
+		case coversName && rule.allows(protocol.AclAction_ACL_ACTION_LISTEN):
+			boundRules = append(boundRules, rule)
+		case !bindsSocket:
+			hostOnlyRules = append(hostOnlyRules, rule)
 		}
 		// every rule is read, so the set is whole
 		return false
 	})
 	rules := boundRules
 	if len(rules) == 0 {
-		rules = hostRules
+		rules = hostOnlyRules
 	}
 	if len(rules) == 0 {
 		return nil
