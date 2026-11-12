@@ -25,8 +25,8 @@
 // PATH_CONFLICT, which reads as consumed. Two ingesters may each hold a copy of one entry, in their own streams under
 // their own rows with the same key and salt, and readers show one by leaf, every copy kept (record_reader.go).
 //
-// ERASE notes are sealed and their format is EVS1-M2-30's and RECORD-M3-06's: until those land, step 6 knows an
-// erasure by the erasure entries and erased copies this device's reader holds.
+// Step 6 knows an erasure by what this device's reader holds: erasure entries, an ERASE's note, which names its
+// entries (record_erase.go), the keys ERASEs took, and an erasure this device runs, from its start.
 //
 // Safe for concurrent use: one pass at a time.
 

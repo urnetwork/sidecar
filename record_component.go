@@ -33,12 +33,19 @@ func (self *recordComponent) Name() string {
 	return recordComponentName
 }
 
-// Starts the generation's push loop, which ends with env.Ctx.
+// Starts the generation's push loop, which ends with env.Ctx, and beside it resumes any erasure a kill cut short
+// (record_erase.go).
 func (self *recordComponent) Attach(env *SidecarEnv) error {
-	self.runs.Add(1)
+	self.runs.Add(2)
 	go func() {
 		defer self.runs.Done()
 		self.record.Run(env.Ctx)
+	}()
+	go func() {
+		defer self.runs.Done()
+		if err := self.record.Eraser().Resume(env.Ctx); err != nil {
+			self.record.writer.log.Warningf("[record]an erasure did not resume: %s", err)
+		}
 	}()
 	return nil
 }

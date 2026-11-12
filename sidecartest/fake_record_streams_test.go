@@ -43,7 +43,7 @@ func TestFakeRecordStreamsHoldsAPushAtItsCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := driver.Start(table.Actor(t.Context(), "writer"), func() error {
-		_, err := world.For(writerId).Append(context.Background(), repoId, recordStreamsSuitePush(writerId, "e/0/0/1"))
+		_, err := world.For(writerId).Append(context.Background(), repoId, recordStreamsSuitePush(world, writerId, "e/0/0/1"))
 		return err
 	})
 	if err := driver.AwaitHeld(t.Context(), site, ""); err != nil {
@@ -89,11 +89,11 @@ func TestFakeRecordStreamsReportsAReusedSlotId(t *testing.T) {
 		t.Fatal(err)
 	}
 	streams := world.For(writerId)
-	first := recordStreamsSuitePush(writerId, "e/0/0/1")
+	first := recordStreamsSuitePush(world, writerId, "e/0/0/1")
 	if _, err := streams.Append(t.Context(), repoId, first); err != nil {
 		t.Fatal(err)
 	}
-	second := recordStreamsSuitePush(writerId, "e/0/0/2")
+	second := recordStreamsSuitePush(world, writerId, "e/0/0/2")
 	second.SlotId = first.SlotId
 	if err := wantRecordStreamRefusal("a reused slot", errOf(streams.Append(t.Context(), repoId, second)), protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE); err != nil {
 		t.Error(err)
@@ -115,7 +115,7 @@ func TestFakeRecordStreamsSharesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	streams := world.For(writerId)
-	push := recordStreamsSuitePush(writerId, "e/0/0/1")
+	push := recordStreamsSuitePush(world, writerId, "e/0/0/1")
 	if _, err := streams.Append(t.Context(), repoId, push); err != nil {
 		t.Fatal(err)
 	}
@@ -248,12 +248,13 @@ func TestRecordSeamsFailClosedUnbound(t *testing.T) {
 	ctx := t.Context()
 	streams := sidecar.RecordStreamsUnavailable{}
 	repoId := sidecar.NewId()
+	world := NewFakeRecordStreams(nil, nil, nil)
 	errs := []error{
-		errOf(streams.Append(ctx, repoId, recordStreamsSuitePush(repoId, "e/0/0/1"))),
+		errOf(streams.Append(ctx, repoId, recordStreamsSuitePush(world, repoId, "e/0/0/1"))),
 		errOf(streams.Streams(ctx, repoId)),
 		errOf(streams.ReadStream(ctx, repoId, repoId, 0)),
 		errOf(streams.ReadSlot(ctx, repoId, repoId)),
-		errOf(streams.Deposit(ctx, repoId, recordStreamsSuiteDeposit(repoId, 1))),
+		errOf(streams.Deposit(ctx, repoId, recordStreamsSuiteDeposit(world, repoId, 1))),
 		errOf(streams.DepositRefs(ctx, repoId)),
 		errOf(streams.ReadDeposits(ctx, repoId, repoId)),
 		errOf(streams.Consume(ctx, repoId, &sidecar.RecordStreamConsume{})),

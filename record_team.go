@@ -218,7 +218,9 @@ func recordRoutesFor(auth RecordAuthView, sidecarId Id, kind RecordKind, teamOnl
 
 // Section 6.3's kinds whose row is the log they are about, which a draft names by RecordDraft.LogId.
 func recordKindNamesItsLog(kind RecordKind) bool {
-	return kind == RecordKindDisclosure
+	// a disclosure is of the log it discloses, and an erasure goes in the eraser's stream of the log it erased
+	// (§16.8's Erasure row)
+	return kind == RecordKindDisclosure || kind == RecordKindErasure
 }
 
 // The route of a draft that names its log (RecordDraft.LogId): the team record, by this sidecar's stream or its

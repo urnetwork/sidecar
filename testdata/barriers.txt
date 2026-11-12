@@ -339,6 +339,8 @@ barrier record.consume.after record_ingest.go
 barrier record.consume.before record_ingest.go
 barrier record.effect.after record_gate_spend.go
 barrier record.effect.before record_gate_spend.go
+barrier record.erase.after record_erase.go
+barrier record.erase.before record_erase.go
 barrier record.log.entry.after record_log.go
 barrier record.log.entry.before record_log.go
 barrier record.log.file.after record_log.go

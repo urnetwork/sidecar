@@ -1,8 +1,9 @@
 // The record's narrow surface of evs (§11), of §7.9's and §8's verified state, and of §16.6's run file, so the
 // record's M3 tasks build and test with none of them: RecordStreams stands in for EvsRepo, RecordAuthView for
-// ConfigState and AclState at a pin, and RecordRunView for the run file. RECORD-M3-12 binds RecordStreams to EvsRepo,
-// TEAM's ConfigState and ACL's AclState bind RecordAuthView, and MCP-M3-04's Sidecar.RunTainted fills RecordRunView;
-// sidecartest's fakes stand in until then, and each seam here has a value that fails closed while nothing is bound.
+// ConfigState and AclState at a pin, and RecordRunView for the run file. RECORD-M3-12 binds RecordStreams to EvsRepo
+// (record_evs.go's RecordEvsStreams), TEAM's ConfigState and ACL's AclState bind RecordAuthView, and MCP-M3-04's
+// Sidecar.RunTainted fills RecordRunView; sidecartest's fakes stand in until then, and each seam here has a value that
+// fails closed while nothing is bound.
 //
 // A seam, not a second evs: what crosses it is the record's own bytes, its entries with their bodies sealed already
 // and its slot rows and deposit batches as plaintext the binding seals, so nothing here encodes, seals or opens. A
@@ -89,7 +90,9 @@ type RecordStreamPush struct {
 	SlotRows []*RecordSlotRow
 	// In the push's order, each creating its path.
 	Entries []*RecordStreamEntry
-	// §7.9's pin the push declares, at which readers judge the writer's right (RECORD.md section 5.5's right step).
+	// §7.9's pin the push declares at least, at which readers judge the writer's right (RECORD.md section 5.5's right
+	// step): a binding may declare a newer pin of the same chain, its own newest verified state's, and refuses while
+	// that state is below this one, so no entry's policy_version passes the pin it is judged at.
 	AuthPin *bridge.AuthPin
 }
 
@@ -140,8 +143,8 @@ type RecordStreamDeposit struct {
 	// The deposit's random id in its ref, drawn as PushId is.
 	DepositId Id
 	Batch     []byte
-	// §7.9's pin the deposit's push declares, at which the ingester judges the depositor (RECORD.md section 5.4's
-	// right step).
+	// §7.9's pin the deposit's push declares at least, at which the ingester judges the depositor (RECORD.md section
+	// 5.4's right step), as RecordStreamPush's.
 	AuthPin *bridge.AuthPin
 }
 
@@ -153,6 +156,9 @@ type RecordStreamDepositVersion struct {
 	AuthPin    *bridge.AuthPin
 	DepositId  Id
 	Batch      []byte
+	// The slot whose one key, at index 0, opens the deposit: what an erasure names where ingest cannot take the
+	// deposit first (§11.12's closure row, RECORD.md section 8's every copy).
+	SlotId Id
 }
 
 // A CONSUME: deposits of one depositor's ref, ingested or refused, deleted with their slots (§11.12).
@@ -162,20 +168,28 @@ type RecordStreamConsume struct {
 	DepositIds         []Id
 }
 
-// An ERASE push on the repo's erasure ref (§11.12): the slot keys it destroys, and its note, which the caller seals.
+// An ERASE push on the repo's erasure ref (§11.12): the slot keys it destroys, and its note, which the binding seals.
 type RecordStreamErase struct {
 	PushId Id
-	Keys   []*RecordSlotKey
-	// §11.12's sealed note: the erasure's id and what the keys covered, opaque here.
+	// The erasure it belongs to (§11.12's reconcile row): one erasure may take several ERASEs, a copy found later
+	// erased under the same id (RECORD.md section 8's every copy).
+	ErasureId Id
+	// This ERASE ends the erasure: every key of every representation it names is gone with it.
+	Complete bool
+	Keys     []*RecordSlotKey
+	// §11.12's note of what the keys covered, which the binding seals under the eraser's generation and only readers
+	// open; opaque here.
 	SealedNote []byte
 }
 
-// One committed ERASE, as readers and later erasers read it.
+// One committed ERASE, as readers and later erasers read it, its note opened.
 type RecordStreamErasure struct {
 	Version         uint64
 	PushId          Id
 	TimeMillis      int64
 	EraserSidecarId Id
+	ErasureId       Id
+	Complete        bool
 	Keys            []*RecordSlotKey
 	SealedNote      []byte
 }

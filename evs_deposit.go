@@ -159,7 +159,7 @@ func (self *EvsRepo) Deposit(ctx context.Context, args *EvsDepositArgs) (*EvsDep
 		if err != nil {
 			return nil, err
 		}
-		push, err := self.sealDeposit(ctx, dropKey, refId, entryId, body, oid, head)
+		push, err := self.sealDeposit(ctx, dropKey, refId, entryId, body, oid, head, NewEvsPushId())
 		if err != nil {
 			return nil, err
 		}
@@ -207,9 +207,10 @@ func (self *EvsRepo) waitDropKey(ctx context.Context) (*GkmDropKey, error) {
 	}
 }
 
-// Seals one deposit on head: a fresh object key and slot, the body's records in slot-keyed segments, the entry and
-// the push's metadata under K_dep (see the file header).
-func (self *EvsRepo) sealDeposit(ctx context.Context, dropKey *GkmDropKey, refId Id, entryId EvsToken, body *evsSpill, oid EvsGitOid, head *protocol.EvsDepositHead) (*evsDepositPush, error) {
+// Seals one deposit on head under pushId: a fresh object key and slot, the body's records in slot-keyed segments, the
+// entry and the push's metadata under K_dep (see the file header). A caller that names its own push id, as the
+// record's binding does (record_evs.go), seals once under it and keeps the push for its retries.
+func (self *EvsRepo) sealDeposit(ctx context.Context, dropKey *GkmDropKey, refId Id, entryId EvsToken, body *evsSpill, oid EvsGitOid, head *protocol.EvsDepositHead, pushId Id) (*evsDepositPush, error) {
 	generation := dropKey.Generation
 	publicKey, err := hpke.MLKEM768X25519().NewPublicKey(dropKey.PublicKey)
 	if err != nil {
@@ -321,7 +322,6 @@ func (self *EvsRepo) sealDeposit(ctx context.Context, dropKey *GkmDropKey, refId
 	if err != nil {
 		return nil, err
 	}
-	pushId := NewEvsPushId()
 	if err := self.uploadSegments(ctx, sealed, pushId); err != nil {
 		return nil, err
 	}
