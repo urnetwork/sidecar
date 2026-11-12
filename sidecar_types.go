@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -74,6 +75,9 @@ type Sidecar struct {
 	revokeWatches sidecarRevokeWatches
 	// A code-only recovery's seams and its one-at-a-time lock (identity_recover.go).
 	recoveries sidecarRecoveries
+	// §5.9's search state, the index cache and §5.4's search seams (sidecar_search.go), made on first use. Held as any,
+	// so this file, which the forwarding leg links, names none of their types: that leg runs no search (§18.10).
+	search atomic.Value
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
