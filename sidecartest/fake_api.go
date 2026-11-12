@@ -143,8 +143,28 @@ type FakeApi struct {
 	sync fakeApiSyncState
 	// http_page.go's leases, connections and reaps
 	lease fakeApiLeaseState
+	// §7.4's allowlist, which a strict_exp bearer's request is held to when set (SetRouteGate), and each route it
+	// refused, as "METHOD /path"
+	routeGate     func(method string, path string) bool
+	refusedRoutes []string
 	// counts every client token minted, for a test waiting on one
 	mints *sidecar.MonitorValue[uint64]
+}
+
+// Holds every request a strict_exp bearer makes to allowed, as route_authz.go's fail-closed allowlist does: a route
+// it refuses answers 403 "A sidecar token cannot call this route.", never 401, so a sidecar does not sign out (§7.4).
+// §22.7's scenarios run with it on (sidecartest's scenario.go). nil turns it off.
+func (self *FakeApi) SetRouteGate(allowed func(method string, path string) bool) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.routeGate = allowed
+}
+
+// Each request the route gate refused, as "METHOD /path", in order.
+func (self *FakeApi) RefusedRoutes() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return append([]string{}, self.refusedRoutes...)
 }
 
 // An api on the first metadata cluster given, its clock, fault queue and barriers a test's or the Net's; barriers may
@@ -272,8 +292,28 @@ func (self *FakeApi) client(request *http.Request) *fakeApiClient {
 	return self.clientOfToken(bearer)
 }
 
-// Serves a request in process, as api's router would.
+// Serves a request in process, as api's router would, the route gate first.
 func (self *FakeApi) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	refused := func() bool {
+		self.stateLock.Lock()
+		gate := self.routeGate
+		self.stateLock.Unlock()
+		if gate == nil {
+			return false
+		}
+		client := self.client(request)
+		if client == nil || !client.strictExp || gate(request.Method, request.URL.Path) {
+			return false
+		}
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.refusedRoutes = append(self.refusedRoutes, request.Method+" "+request.URL.Path)
+		return true
+	}()
+	if refused {
+		http.Error(writer, fakeApiStrictExpRefusedText, http.StatusForbidden)
+		return
+	}
 	self.mux.ServeHTTP(writer, request)
 }
 
