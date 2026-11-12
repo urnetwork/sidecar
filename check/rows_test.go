@@ -280,10 +280,10 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{"TestHygieneFailsOnAGoWorkFile"},
 	},
 	{
-		row: "hygiene", item: "a package beside cli's, mlsinterop's or sidecarctl's own, or a file naming one, which the release's rewrite would break (§4.9)",
+		row: "hygiene", item: "a package beside cli's or mlsinterop's own, or a file naming one, which the release's rewrite would break (§4.9)",
 		rule: (*repository).untaggedSubpackageFindings,
 		plantedTests: []string{
-			"TestHygieneFailsOnASubpackageOfCli", "TestHygieneFailsOnASubpackageOfMlsinterop", "TestHygieneFailsOnASubpackageOfSidecarctl",
+			"TestHygieneFailsOnASubpackageOfCli", "TestHygieneFailsOnASubpackageOfMlsinterop",
 			"TestHygieneFailsOnAnExternalTestImportingMlsinterop", "TestHygieneFailsOnAQuotedPathOfCliOutsideAnImport",
 		},
 	},
