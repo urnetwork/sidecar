@@ -169,10 +169,12 @@ EOF
 # twin's ground runs as its control (control mode). Smallest first: the reach states and the finding;
 # the erasure's narrow grounds (a writer restart beside merges, d1's base and d2's sharing slots, d1
 # unedited across three windows, the eraser's crash and a foreign CUT beside the backfiller); the
-# liveness grounds; two rollers with a crash, a lapse and a foreign CUT; then the widest, which take
-# longest: the erasure's crash and restart grounds with merges and the backfiller together,
-# DESIGN-DETAILS section 1.3's two that did not finish on details/IndexMerge.tla (d2 edited three times
-# by both writers, with a restart, and across three windows), and d1 edited across three windows.
+# liveness grounds; two rollers with a crash, a lapse and a foreign CUT; the cfg's own bounds by seeded
+# simulation, which shows only that the behaviors it drew (Traces on each worker) kept every invariant;
+# then the widest, which take longest: the erasure's crash and restart grounds with merges and the
+# backfiller together, DESIGN-DETAILS section 1.3's two that did not finish on details/IndexMerge.tla
+# (d2 edited three times by both writers, with a restart, and across three windows), and d1 edited
+# across three windows.
 grounds_IndexRollup() {
   local one="Rollers={r1} MaxCrashes=0 MaxLapses=0 MaxRestarts=0 ForeignCuts=0 BigDocs={}"
   local d1="$one Documents={\"d1\"}"
@@ -192,6 +194,7 @@ live-rolls              live                  $rollers Events=1 Skew=FALSE Still
 live-erase              live                  $d1 Events=2 Skew=FALSE MaxCrashes=1 ForeignCuts=1 Still={"rollup","tick","backfill"}
 live-windows            live                  $d1 Events=1 Skew=TRUE Still={}
 rollers-epoch           pass                  $rollers Events=2 Skew=TRUE Still={"erase"}
+cfg-simulation          pass                  Simulate=150 Traces=2500 Seed=1
 erase-crash             pass                  $d1 Events=2 Skew=FALSE MaxCrashes=1 ForeignCuts=1 Still={"rollup","tick"}
 erase-restart           pass                  $d1 Events=2 Skew=FALSE MaxRestarts=1 Still={"rollup","tick"}
 edits-restart           pass                  $one Documents={"d2"} Events=3 Skew=FALSE MaxRestarts=1 Still={"rollup","erase","tick"}
