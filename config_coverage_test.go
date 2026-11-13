@@ -211,6 +211,7 @@ func (self *testConfigNet) editedBase(entryBytes []byte, edit func(header *bridg
 // A network where member devices a and b read repo a through one group and b reads repo b through another, on a base
 // whose policy says so: the two repos and the devices.
 func testConfigTwoGroupNet(t *testing.T) (*testConfigNet, Id, Id, testConfigDevice, testConfigDevice) {
+	t.Helper()
 	net := newTestConfigNet(t)
 	a, b := net.admitMemberDevice("a"), net.admitMemberDevice("b")
 	repoA, repoB := net.createRepo("a"), net.createRepo("b")
@@ -232,8 +233,9 @@ func testConfigTwoGroupNet(t *testing.T) (*testConfigNet, Id, Id, testConfigDevi
 
 // QD-746: a group edit at a base drops b's device from repo a's readers and not from repo b's. The base names repo a
 // alone; a long-running reader, a reader that applied every entry since genesis, a new device and a cold gate that start
-// at the base each hold its position as repo a's holders_shrunk_at and repo b's below it; and §10.6's gate refuses the
-// generation from before the edit on repo a at every one of them, passing it on repo b and passing one at the base.
+// at the base, and a warm gate present before it each hold its position as repo a's holders_shrunk_at and repo b's
+// below it; and §10.6's gate refuses the generation from before the edit on repo a at every one of them, passing it on
+// repo b and passing one at the base.
 func TestAGroupEditAtABaseShrinksOneRepoAtEveryReader(t *testing.T) {
 	net, repoA, repoB, a, b := testConfigTwoGroupNet(t)
 	rotatedAt := net.log.Pin()
@@ -247,7 +249,9 @@ func TestAGroupEditAtABaseShrinksOneRepoAtEveryReader(t *testing.T) {
 		t.Fatalf("the base names %x", header.GetShrunkRepoIds())
 	}
 	now := time.UnixMilli(net.timeMs)
-	readers := append([]*ConfigLog{net.log}, net.everyReader()...)
+	// the net's reader, one from genesis, a new device and a cold gate starting at the base, and a warm gate that was
+	// present before it, as api's and evs's and gkm's caches are once loaded
+	readers := append(append([]*ConfigLog{net.log}, net.everyReader()...), net.apiAtTip())
 	for i, reader := range readers {
 		state := reader.State()
 		if shrunk := state.ShrunkAt(repoA); shrunk != edited.Pin.GetVersion() {
@@ -426,7 +430,7 @@ func TestABaseKeepingAFoldBelowAShrinkKeepsItsPosition(t *testing.T) {
 		t.Fatalf("the later base folds through %d and names %x", header.GetFoldedThrough(), header.GetShrunkRepoIds())
 	}
 	now := time.UnixMilli(net.timeMs)
-	for i, reader := range append([]*ConfigLog{net.log}, net.everyReader()...) {
+	for i, reader := range append(append([]*ConfigLog{net.log}, net.everyReader()...), net.apiAtTip()) {
 		state := reader.State()
 		if shrunk := state.ShrunkAt(repoA); shrunk != edited.Pin.GetVersion() {
 			t.Errorf("reader %d: repo a's holders_shrunk_at %d after the later base, the edit at %d", i, shrunk, edited.Pin.GetVersion())
