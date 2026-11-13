@@ -301,13 +301,6 @@ func (self *sidecarSocketBackend) settings() *SidecarSocketSettings {
 	return self.sidecar.settings.Sockets
 }
 
-// The newest K_sock ring the registrar holds, nil before one is set.
-func (self *SocketComponent) currentKeyRing() *SocketKeyRing {
-	self.registrar.stateLock.Lock()
-	defer self.registrar.stateLock.Unlock()
-	return self.registrar.state.ring
-}
-
 // The daemon's sockets: every forward it holds, by network, and each network's shares (socket_share.go).
 type DaemonSockets struct {
 	daemon *Daemon

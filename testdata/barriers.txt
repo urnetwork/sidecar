@@ -27,6 +27,8 @@ barrier api.set_by_jwt.after api_client.go
 barrier api.set_by_jwt.before api_client.go
 barrier bridge.adopt.after device/bridge_state.go
 barrier bridge.adopt.before device/bridge_state.go
+barrier bridge_component.provide.before bridge_component.go
+barrier bridge_component.revoke.before bridge_component.go
 barrier bridge_egress.publish.after device/bridge_egress.go
 barrier bridge_egress.publish.before device/bridge_egress.go
 barrier bridge_link.close.after device/bridge_link.go
@@ -136,6 +138,10 @@ barrier evs.evacuate.parcel_delete.after evsservice/evacuate_move.go
 barrier evs.evacuate.parcel_delete.before evsservice/evacuate_move.go
 barrier evs.evacuate.pidx_put.after evsservice/evacuate_move.go
 barrier evs.evacuate.pidx_put.before evsservice/evacuate_move.go
+barrier evs.evacuate.slot_delete.after evsservice/evacuate.go
+barrier evs.evacuate.slot_delete.before evsservice/evacuate.go
+barrier evs.evacuate.slot_head.after evsservice/evacuate.go
+barrier evs.evacuate.slot_head.before evsservice/evacuate.go
 barrier evs.evacuate.staged.after evsservice/evacuate_staged.go
 barrier evs.evacuate.staged.before evsservice/evacuate_staged.go
 barrier evs.fold.acquire.after evsservice/fold.go
@@ -191,6 +197,8 @@ barrier evs.push.refuse.after evsservice/refuse.go
 barrier evs.push.refuse.before evsservice/refuse.go
 barrier evs.push.slot_put.after evsservice/push_commit.go
 barrier evs.push.slot_put.before evsservice/push_commit.go
+barrier evs.push.slot_take.after evsservice/push_commit.go
+barrier evs.push.slot_take.before evsservice/push_commit.go
 barrier evs.push.step4.after evsservice/push_step4.go
 barrier evs.push.step4.before evsservice/push_step4.go
 barrier evs.push.step6.after evsservice/push_commit.go

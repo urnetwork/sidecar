@@ -41,6 +41,9 @@ api_token_schedule.go
 api_token_source.go
 api_transport.go
 api_transport_connect.go
+bridge_compile.go
+bridge_compile_local.go
+bridge_compile_rows.go
 bridge_ledger.go
 bridge_ledger_fold.go
 bridge_rows.go
@@ -66,6 +69,7 @@ config_head.go
 config_indexer.go
 config_keys.go
 config_leaves.go
+config_names.go
 config_presence.go
 config_read_only.go
 config_records.go

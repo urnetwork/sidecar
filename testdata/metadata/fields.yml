@@ -653,7 +653,9 @@ fields:
   CanonicalAction.dns_type: dns-1
   CanonicalAction.dns_value: dns-1
   CanonicalAction.dns_ttl: dns-1
-  CanonicalAction.socket_name: api-7
+  # Answered (QD-772): socket_name left CanonicalAction for the sealed ApprovalRequest, 23 reserved, so it needs no
+  # line; a listen's action names its socket by grant_dst alone, a token path or a tls/ or smtp/ name, which api-7
+  # already shows.
   CanonicalAction.target_sidecar_id: api-7
   CanonicalAction.target_port: api-7
   CanonicalAction.rule_id: api-7
