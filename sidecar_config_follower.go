@@ -96,9 +96,10 @@ type SidecarConfigFollowerSettings struct {
 	AnchorRetryInterval    time.Duration
 	AnchorRetryMaxInterval time.Duration
 	// How long one read of api's genesis for first use may take: 60 s, a follow's (ConfigClientSettings.FollowTimeout).
+	// Must be positive.
 	AnchorReadTimeout time.Duration
 	// How long the key client may take to give one of the config repo's generation keys: 10 s. A key it does not give
-	// in time reads as one not held.
+	// in time reads as one not held. Must be positive.
 	RepoKeyTimeout time.Duration
 	// Whether a sidecar whose enrollment recorded no anchor trusts the first genesis api serves (§5.6's genesis row): a
 	// ur device's, from ur login or ur connect, which shows its SafetyNumber for its admitter to compare. False follows
@@ -180,8 +181,9 @@ func (self *Sidecar) FollowConfig(args *SidecarConfigFollowerArgs) (*SidecarConf
 	if settings == nil {
 		settings = DefaultSidecarConfigFollowerSettings()
 	}
-	if settings.AnchorRetryInterval <= 0 || settings.AnchorRetryMaxInterval < settings.AnchorRetryInterval {
-		return nil, fmt.Errorf("%w: the follower's anchor retry intervals", errInvalidSettings)
+	if settings.AnchorRetryInterval <= 0 || settings.AnchorRetryMaxInterval < settings.AnchorRetryInterval ||
+		settings.AnchorReadTimeout <= 0 || settings.RepoKeyTimeout <= 0 {
+		return nil, fmt.Errorf("%w: the follower's anchor intervals and timeouts", errInvalidSettings)
 	}
 	if self.ctx == nil {
 		return nil, ErrSidecarClosed
@@ -452,12 +454,15 @@ func (self *SidecarConfigFollower) moveTo(state SidecarConfigFollowerState, reas
 	return true
 }
 
-// Refuses the log for the follower's life: the client stops, so nothing is applied past what refused, and nothing
-// stands. Never blocks: a read of the client's calls it under the client's follow.
+// Refuses the log for the follower's life: the client stops, so nothing is applied past what refused, and whatever
+// stood comes down, the authority and the acl follower. Never blocks: a read of the client's calls it under the
+// client's follow.
 func (self *SidecarConfigFollower) refuse(err error) {
 	if !errors.Is(err, ErrSidecarConfigRefused) {
 		err = fmt.Errorf("%w: %w", ErrSidecarConfigRefused, err)
 	}
+	var aclFollower *AclFollower
+	var removeAuthority func()
 	refused := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -467,12 +472,20 @@ func (self *SidecarConfigFollower) refuse(err error) {
 		}
 		self.reason, self.refusal = err.Error(), err
 		self.state.Set(SidecarConfigFollowerRefused)
+		aclFollower, removeAuthority = self.aclFollower, self.removeAuthority
+		self.aclFollower, self.removeAuthority = nil, nil
 		return true
 	}()
 	if !refused {
 		return
 	}
 	self.log.Errorf("[config]the network's log is refused, and nothing on it is judged: %v", err)
+	if aclFollower != nil {
+		aclFollower.Close()
+	}
+	if removeAuthority != nil {
+		removeAuthority()
+	}
 	if client := self.followingClient(); client != nil {
 		client.Close()
 	}
@@ -655,6 +668,7 @@ func (self *SidecarConfigFollower) startClient(networkId Id, genesisChain [sha25
 // it. ErrSidecarConfigRefused for a fork below the head or another chain at it, with head_alarm fork.
 func (self *SidecarConfigFollower) awaitAnchoredHead(client *ConfigClient, anchor *SidecarAnchor) error {
 	through := max(anchor.Head.GetVersion(), 1)
+	self.moveTo(SidecarConfigFollowerCatchingUp, fmt.Sprintf("following the log to position %d", through))
 	state, err := client.WaitFor(self.ctx, through)
 	if err != nil {
 		fork := &ConfigForkError{}
@@ -790,6 +804,7 @@ type sidecarConfigFollowerProjection struct {
 	genesisChain [sha256.Size]byte
 }
 
+// The Sidecar api's read, its genesis checked first.
 func (self *sidecarConfigFollowerProjection) ReadConfigProjection(ctx context.Context, after uint64) (*ConfigProjection, error) {
 	projection, err := self.reader.ReadConfigProjection(ctx, after)
 	if err == nil && len(projection.SignedGenesis) != 0 {
@@ -807,6 +822,7 @@ type sidecarConfigFollowerGkm struct {
 	standing atomic.Bool
 }
 
+// The key client's, once the follower stands; nothing before.
 func (self *sidecarConfigFollowerGkm) AuthAdvanced(state GkmAuthView) {
 	if self.standing.Load() {
 		self.GkmClient.AuthAdvanced(state)
@@ -819,6 +835,7 @@ type sidecarConfigFollowerAclStates struct {
 	client *ConfigClient
 }
 
+// The acl part of the state at pin; ErrConfigPinAhead before the client holds a state.
 func (self *sidecarConfigFollowerAclStates) AclStateAt(pin *bridge.AuthPin) (*AclState, error) {
 	state := self.client.State()
 	if state == nil {
