@@ -2,8 +2,8 @@
 
 // MCP-M3-03's tests. On TEAM's real log: §22.7's decisions row (another requester's decision, an auth_pin off the
 // chain, an approver revoked after signing, k = 2), AD3, FS-29's unit form, a self-signed device decision, the
-// harness and presence channels, evidenceDefault only where it is held, and the spend check installed as
-// AclSpendCheck activating a GrantActivate. Then the gate's field comparison and clock, AD4 by reflection over the
+// harness and presence channels, the document's evidenceDefault as each base's rows carry it at the daemon, a gate and
+// a reader (QD-727), and the spend check installed as AclSpendCheck activating a GrantActivate. Then the gate's field comparison and clock, AD4 by reflection over the
 // gate's inputs, every refusal's code on a fixture state, and testdata/record/spend/vectors.json. Pure, on every leg but
 // the ios_extension legs.
 
@@ -85,10 +85,10 @@ func (self *testSpendNet) acl() *AclState {
 	return acl
 }
 
-// The tip's spend state, its evidenceDefault as given.
-func (self *testSpendNet) spendState(forked bool, evidenceDefault []protocol.ApprovalChannel) *ConfigSpendState {
+// The tip's spend state.
+func (self *testSpendNet) spendState(forked bool) *ConfigSpendState {
 	self.t.Helper()
-	state, err := NewConfigSpendState(self.log.State(), forked, evidenceDefault)
+	state, err := NewConfigSpendState(self.log.State(), forked)
 	if err != nil {
 		self.t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestSpendRefusesAnotherRequestersDecision(t *testing.T) {
 	net := newTestSpendNet(t)
 	action := testSpendDnsAction(t, "192.0.2.10")
 	decision := net.deviceDecision(net.phone, action, NewId(), net.member, net.laptop.sidecarId)
-	state := net.spendState(false, spendAllChannels)
+	state := net.spendState(false)
 
 	testSpendExpect(t, "S1", Spendable(decision, net.input(action, net.laptop.sidecarId), state, nil), "")
 	testSpendExpect(t, "S2 at the daemon", Spendable(decision, net.input(action, net.otherDevice.sidecarId), state, nil), SpendRefusalRequester)
@@ -260,7 +260,7 @@ func TestSpendRefusesAnotherRequestersDecision(t *testing.T) {
 func TestSpendRefusesAnAuthPinOffTheChain(t *testing.T) {
 	net := newTestSpendNet(t)
 	action := testSpendDnsAction(t, "192.0.2.11")
-	state := net.spendState(false, spendAllChannels)
+	state := net.spendState(false)
 	pin := net.log.State().Pin()
 	sign := func(decisionPin *bridge.AuthPin) *StoredApprovalDecision {
 		body := testSpendDecisionBody(action, NewId(), net.member, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE,
@@ -285,7 +285,7 @@ func TestSpendRefusesAnAuthPinOffTheChain(t *testing.T) {
 	earlyOff := sign(&bridge.AuthPin{Version: 2, Chain: offChain[:]})
 	net.fold(net.owner, net.n, 2)
 	net.fold(net.owner, net.n, 3)
-	later := net.spendState(false, spendAllChannels)
+	later := net.spendState(false)
 	if _, retained := later.ChainAt(2); retained {
 		t.Fatal("the later state still retains position 2")
 	}
@@ -300,9 +300,9 @@ func TestSpendApproverRevokedAfterSigningApprovesNothing(t *testing.T) {
 	net := newTestSpendNet(t)
 	action := testSpendDnsAction(t, "192.0.2.12")
 	decision := net.deviceDecision(net.phone, action, NewId(), net.member, net.laptop.sidecarId)
-	testSpendExpect(t, "before", Spendable(decision, net.input(action, net.laptop.sidecarId), net.spendState(false, spendAllChannels), nil), "")
+	testSpendExpect(t, "before", Spendable(decision, net.input(action, net.laptop.sidecarId), net.spendState(false), nil), "")
 	net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(net.phone, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
-	testSpendExpect(t, "its device revoked", Spendable(decision, net.input(action, net.laptop.sidecarId), net.spendState(false, spendAllChannels), nil), SpendRefusalSigner)
+	testSpendExpect(t, "its device revoked", Spendable(decision, net.input(action, net.laptop.sidecarId), net.spendState(false), nil), SpendRefusalSigner)
 
 	// a grant member N approved through the rule's group, N removed after
 	ruleId := testConfigId("spend group rule").Bytes()
@@ -310,9 +310,9 @@ func TestSpendApproverRevokedAfterSigningApprovesNothing(t *testing.T) {
 	net.withDialRule(ruleId, []Id{group}, 1, &protocol.AclAtom{Atom: group.Bytes(), MemberIds: [][]byte{net.other.Bytes()}})
 	grant := testSpendGrantAction(t, ruleId, net.laptop.sidecarId, aclTestDst(net.laptop.sidecarId)+":tcp:22")
 	otherDecision := net.deviceDecision(net.otherDevice, grant, NewId(), net.other, net.laptop.sidecarId)
-	testSpendExpect(t, "N's, before", Spendable(otherDecision, net.input(grant, net.laptop.sidecarId), net.spendState(false, nil), nil), "")
+	testSpendExpect(t, "N's, before", Spendable(otherDecision, net.input(grant, net.laptop.sidecarId), net.spendState(false), nil), "")
 	net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_REVOKE, &bridge.MemberRevoke{Header: net.header(), MemberId: net.other.Bytes()})
-	testSpendExpect(t, "N removed", Spendable(otherDecision, net.input(grant, net.laptop.sidecarId), net.spendState(false, nil), nil), SpendRefusalSigner)
+	testSpendExpect(t, "N removed", Spendable(otherDecision, net.input(grant, net.laptop.sidecarId), net.spendState(false), nil), SpendRefusalSigner)
 }
 
 // §22.7's decisions row at k = 2: one approver's and one non-eligible signer's decisions are refused, two eligible
@@ -324,7 +324,7 @@ func TestSpendNeedsTwoEligibleApproversAtTwo(t *testing.T) {
 	net.withDialRule(ruleId, []Id{group}, 2, &protocol.AclAtom{Atom: group.Bytes(), MemberIds: [][]byte{net.ownerMemberId.Bytes(), net.other.Bytes()}})
 	grant := testSpendGrantAction(t, ruleId, net.laptop.sidecarId, aclTestDst(net.phone.sidecarId)+":tcp:22")
 	approvalId := NewId()
-	state := net.spendState(false, nil)
+	state := net.spendState(false)
 	input := net.input(grant, net.laptop.sidecarId)
 	sign := func(device testConfigDevice, approver Id, uses uint32, notAfterMs int64) *StoredApprovalDecision {
 		body := testSpendDecisionBody(grant, approvalId, approver, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE,
@@ -365,7 +365,7 @@ func TestSpendAdminClauseOnTheLog(t *testing.T) {
 	net.withDialRuleTo(selfRule, protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER, []Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)}, 1)
 	grant := testSpendGrantAction(t, selfRule, net.laptop.sidecarId, aclTestDst(net.otherDevice.sidecarId))
 	approvalId := NewId()
-	state := net.spendState(false, nil)
+	state := net.spendState(false)
 	input := net.input(grant, net.laptop.sidecarId)
 	own := net.deviceDecision(net.phone, grant, approvalId, net.member, net.laptop.sidecarId)
 	owner := net.deviceDecision(net.owner, grant, approvalId, net.ownerMemberId, net.laptop.sidecarId)
@@ -379,7 +379,7 @@ func TestSpendAdminClauseOnTheLog(t *testing.T) {
 	net.withDialRuleTo(dstOwnerRule, protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER, []Id{AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_DST_OWNER)}, 1)
 	reach := testSpendGrantAction(t, dstOwnerRule, net.laptop.sidecarId, aclTestDst(net.otherDevice.sidecarId))
 	touched := net.deviceDecision(net.otherDevice, reach, NewId(), net.other, net.laptop.sidecarId)
-	_, err = SpendableSet([]*StoredApprovalDecision{touched}, net.input(reach, net.laptop.sidecarId), net.spendState(false, nil), nil)
+	_, err = SpendableSet([]*StoredApprovalDecision{touched}, net.input(reach, net.laptop.sidecarId), net.spendState(false), nil)
 	testSpendExpect(t, "the destination's owner as autogroup:dst-owner", err, "")
 }
 
@@ -388,11 +388,11 @@ func TestSpendRefusesOnAForkedProjection(t *testing.T) {
 	net := newTestSpendNet(t)
 	action := testSpendDnsAction(t, "192.0.2.13")
 	decision := net.deviceDecision(net.phone, action, NewId(), net.member, net.laptop.sidecarId)
-	testSpendExpect(t, "unforked", Spendable(decision, net.input(action, net.laptop.sidecarId), net.spendState(false, spendAllChannels), nil), "")
-	testSpendExpect(t, "forked", Spendable(decision, net.input(action, net.laptop.sidecarId), net.spendState(true, spendAllChannels), nil), SpendRefusalForked)
+	testSpendExpect(t, "unforked", Spendable(decision, net.input(action, net.laptop.sidecarId), net.spendState(false), nil), "")
+	testSpendExpect(t, "forked", Spendable(decision, net.input(action, net.laptop.sidecarId), net.spendState(true), nil), SpendRefusalForked)
 	other := net.deviceDecision(net.phone, action, NewId(), net.member, net.otherDevice.sidecarId)
-	testSpendExpect(t, "forked before another requester", Spendable(other, net.input(action, net.laptop.sidecarId), net.spendState(true, spendAllChannels), nil), SpendRefusalForked)
-	_, err := SpendableSet([]*StoredApprovalDecision{decision}, net.input(action, net.laptop.sidecarId), net.spendState(true, spendAllChannels), nil)
+	testSpendExpect(t, "forked before another requester", Spendable(other, net.input(action, net.laptop.sidecarId), net.spendState(true), nil), SpendRefusalForked)
+	_, err := SpendableSet([]*StoredApprovalDecision{decision}, net.input(action, net.laptop.sidecarId), net.spendState(true), nil)
 	testSpendExpect(t, "a forked set", err, SpendRefusalForked)
 }
 
@@ -406,16 +406,16 @@ func TestSpendApprovalUnderAPinThatDropsItsApprover(t *testing.T) {
 	net.withDialRule(ruleId, []Id{group}, 1, approvers)
 	grant := testSpendGrantAction(t, ruleId, net.laptop.sidecarId, aclTestDst(net.phone.sidecarId))
 	decision := net.deviceDecision(net.otherDevice, grant, NewId(), net.other, net.laptop.sidecarId)
-	testSpendExpect(t, "under P", Spendable(decision, net.input(grant, net.laptop.sidecarId), net.spendState(false, nil), nil), "")
+	testSpendExpect(t, "under P", Spendable(decision, net.input(grant, net.laptop.sidecarId), net.spendState(false), nil), "")
 
 	net.withDialRule(ruleId, []Id{group}, 1, &protocol.AclAtom{Atom: group.Bytes(), MemberIds: [][]byte{net.ownerMemberId.Bytes()}})
-	testSpendExpect(t, "under P'", Spendable(decision, net.input(grant, net.laptop.sidecarId), net.spendState(false, nil), nil), SpendRefusalApprover)
+	testSpendExpect(t, "under P'", Spendable(decision, net.input(grant, net.laptop.sidecarId), net.spendState(false), nil), SpendRefusalApprover)
 
 	// and a P'' whose head deleted the rule: no rule governs the grant
 	net.withAclRows(func(rows *protocol.AclRows) {
 		rows.Requests = nil
 	})
-	testSpendExpect(t, "the rule gone", Spendable(decision, net.input(grant, net.laptop.sidecarId), net.spendState(false, nil), nil), SpendRefusalRule)
+	testSpendExpect(t, "the rule gone", Spendable(decision, net.input(grant, net.laptop.sidecarId), net.spendState(false), nil), SpendRefusalRule)
 }
 
 // A device decision the spender signed itself is refused, as is one by a device of another member or a harness
@@ -423,7 +423,7 @@ func TestSpendApprovalUnderAPinThatDropsItsApprover(t *testing.T) {
 func TestSpendRefusesASelfSignedDeviceDecision(t *testing.T) {
 	net := newTestSpendNet(t)
 	action := testSpendDnsAction(t, "192.0.2.14")
-	state := net.spendState(false, spendAllChannels)
+	state := net.spendState(false)
 	input := net.input(action, net.laptop.sidecarId)
 	testSpendExpect(t, "self-signed", Spendable(net.deviceDecision(net.laptop, action, NewId(), net.member, net.laptop.sidecarId), input, state, nil), SpendRefusalSigner)
 	testSpendExpect(t, "another member's device", Spendable(net.deviceDecision(net.otherDevice, action, NewId(), net.member, net.laptop.sidecarId), input, state, nil), SpendRefusalSigner)
@@ -443,7 +443,7 @@ func TestSpendHarnessAndPresenceChannels(t *testing.T) {
 	net.registerPresenceKey(net.phone, key)
 	otherKey := newTestPresenceKey(t, "spend other presence", bridge.KeyAlg_KEY_ALG_ECDSA_P256_SHA256)
 	net.registerPresenceKey(net.otherDevice, otherKey)
-	state := net.spendState(false, spendAllChannels)
+	state := net.spendState(false)
 	input := net.input(action, net.laptop.sidecarId)
 	pin := net.log.State().Pin()
 	notAfter := net.timeMs + testConfigHourMs
@@ -462,29 +462,192 @@ func TestSpendHarnessAndPresenceChannels(t *testing.T) {
 	testSpendExpect(t, "presence over other bytes", Spendable(testSpendParse(t, forgedPresence), input, state, nil), SpendRefusalSignature)
 }
 
-// An action no requests rule names takes the document's evidenceDefault, which only a verifier holding the compiled
-// policy knows: a rows-only verifier refuses every channel, and a daemon's narrower default refuses what it omits.
-func TestSpendEvidenceDefaultOnlyWhereHeld(t *testing.T) {
-	net := newTestSpendNet(t)
-	action := testSpendDnsAction(t, "192.0.2.16")
-	device := net.deviceDecision(net.phone, action, NewId(), net.member, net.laptop.sidecarId)
-	harnessBody := testSpendDecisionBody(action, NewId(), net.member, protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS, net.laptop.sidecarId,
-		net.log.State().Pin(), net.timeMs+testConfigHourMs)
-	harness := testSpendParse(t, testSpendSignedBy(t, net.laptop.sidecarId, net.laptop.key, harnessBody))
-	input := net.input(action, net.laptop.sidecarId)
-
-	testSpendExpect(t, "rows only", Spendable(device, input, net.spendState(false, nil), nil), SpendRefusalEvidenceUnknown)
-	deviceOnly := net.spendState(false, []protocol.ApprovalChannel{protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE})
-	testSpendExpect(t, "device under a device default", Spendable(device, input, deviceOnly, nil), "")
-	testSpendExpect(t, "harness under a device default", Spendable(harness, input, deviceOnly, nil), SpendRefusalEvidence)
-	// another member is no approver of s's own action, whose approvers are its owner or sponsor (§8.6's default)
-	otherBody := testSpendDecisionBody(action, NewId(), net.other, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE, net.laptop.sidecarId,
-		net.log.State().Pin(), net.timeMs+testConfigHourMs)
-	other := testSpendParse(t, testSpendSignedBy(t, net.otherDevice.sidecarId, net.otherDevice.key, otherBody))
-	testSpendExpect(t, "another member approving", Spendable(other, input, deviceOnly, nil), SpendRefusalApprover)
-	if _, err := NewConfigSpendState(net.log.State(), false, []protocol.ApprovalChannel{protocol.ApprovalChannel_APPROVAL_CHANNEL_UNSPECIFIED}); !errors.Is(err, ErrSpendStateInvalid) {
-		t.Errorf("an unknown channel in evidenceDefault: %v", err)
+// A base whose head holds the policy source, as a writer publishes one: its rows are the compile of that head over the
+// log's fold rows, which the compiling reader recompiles and holds the base to, byte for byte.
+func (self *testSpendNet) foldDocument(compiling *testConfigCompilingReader, source string) {
+	self.t.Helper()
+	head, err := testConfigHead(self.t, self.testConfigNet).WithFile(ConfigHeadPolicyPath, []byte(source))
+	if err != nil {
+		self.t.Fatal(err)
 	}
+	compiling.source.head = head
+	self.writerFold(self.owner, head, self.n)
+	compiling.catchUp()
+}
+
+// A gate's rows-only log of the net (TEAM-M2-11), every entry so far applied, the spend check installed as api's is.
+func (self *testSpendNet) gateState() *ConfigState {
+	self.t.Helper()
+	settings := testConfigLogSettings()
+	settings.AclSpendCheck = NewSpendCheck(nil)
+	gate, err := NewConfigLogRowsOnly(settings, self.signedGenesis)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	for _, entryBytes := range self.entries {
+		if _, err := gate.Apply(entryBytes, self.rowsOnlySource()); err != nil {
+			self.t.Fatal(err)
+		}
+	}
+	return gate.State()
+}
+
+// The laptop's decisions for action at the tip, one a channel: its member's phone, its own harness prompt and its
+// member's presence key.
+func (self *testSpendNet) channelDecisions(action *StoredCanonicalAction, presenceKey *testPresenceKey) map[protocol.ApprovalChannel]*StoredApprovalDecision {
+	self.t.Helper()
+	pin := self.log.State().Pin()
+	notAfter := self.timeMs + testConfigHourMs
+	harness := testSpendDecisionBody(action, NewId(), self.member, protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS, self.laptop.sidecarId, pin, notAfter)
+	presence := testSpendDecisionBody(action, NewId(), self.member, protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE, self.laptop.sidecarId, pin, notAfter)
+	return map[protocol.ApprovalChannel]*StoredApprovalDecision{
+		protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE:   self.deviceDecision(self.phone, action, NewId(), self.member, self.laptop.sidecarId),
+		protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS:  testSpendParse(self.t, testSpendSignedBy(self.t, self.laptop.sidecarId, self.laptop.key, harness)),
+		protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE: testSpendParse(self.t, testSpendSignedByPresence(self.t, presenceKey, presence)),
+	}
+}
+
+// QD-727 on TEAM's log, through the base compile: an action no requests rule names is held to the document's
+// evidenceDefault as each base's rows carry it, so the daemon's state, a gate's rows-only state and a full reader that
+// recompiled the base give one verdict (D-MCP-12). Under the default document every channel spends a dns write at
+// POST /dns/records' check and approves a bridge_expose route at a reader; under one narrowed to device a harness and
+// a presence decision are refused at each, with the evidence code, and a device decision still passes.
+func TestSpendEvidenceDefaultIsTheRowsAtEveryVerifier(t *testing.T) {
+	net := newTestSpendNet(t)
+	net.log.settings.AclSpendCheck = NewSpendCheck(nil)
+	presenceKey := newTestPresenceKey(t, "spend default presence", bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+	net.registerPresenceKey(net.phone, presenceKey)
+	compiling := net.compilingReader(testConfigHead(t, net.testConfigNet))
+	compiling.log.settings.AclSpendCheck = NewSpendCheck(nil)
+	device := protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE
+	harness := protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS
+	presence := protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE
+	dnsFields := &SpendGateFields{Kind: SidecarActionDnsSet, DnsName: "www", DnsType: "A", DnsValue: "192.0.2.16", DnsTtl: 300}
+
+	// one document's verdicts at every verifier: want names the channels that spend
+	check := func(name string, wantDefault []uint32, want ...protocol.ApprovalChannel) {
+		t.Helper()
+		verifiers := []struct {
+			name  string
+			state *ConfigState
+		}{
+			{name: "the daemon", state: net.log.State()},
+			{name: "a gate", state: net.gateState()},
+			{name: "a reader", state: compiling.log.State()},
+		}
+		pin := net.log.State().Pin()
+		dns := testSpendDnsAction(t, "192.0.2.16")
+		dnsDecisions := net.channelDecisions(dns, presenceKey)
+		expose, err := ParseStoredCanonicalAction(testBridgeExposeUse(t, net.laptop.sidecarId, "192.168.0.0/16"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		exposeDecisions := net.channelDecisions(expose, presenceKey)
+		statement := &BridgeLogStatement{SignedType: bridge.SignedType_SIGNED_BRIDGE_ROUTE, N: net.n + 1, TimeMs: net.timeMs, Signer: net.laptop.sidecarId}
+		routeBody := testBridgeSubnet(testBridgePrefix(192, 168, 7, 0, 24), "site")
+		for _, verifier := range verifiers {
+			if !bytes.Equal(verifier.state.Pin().GetChain(), pin.GetChain()) || verifier.state.Pin().GetVersion() != pin.GetVersion() {
+				t.Fatalf("%s, %s: at pin %d, not the tip's", name, verifier.name, verifier.state.Pin().GetVersion())
+			}
+			if got := verifier.state.aclRows.GetEvidenceDefault(); !slices.Equal(got, wantDefault) {
+				t.Errorf("%s, %s: evidence_default %v, want %v", name, verifier.name, got, wantDefault)
+			}
+			spendState, err := NewConfigSpendState(verifier.state, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, channel := range spendAllChannels {
+				refusal := SpendRefusalEvidence
+				if slices.Contains(want, channel) {
+					refusal = ""
+				}
+				label := name + ", " + verifier.name + ", " + channel.String()
+				input := net.input(dns, net.laptop.sidecarId)
+				testSpendExpect(t, label+": spendable", Spendable(dnsDecisions[channel], input, spendState, nil), refusal)
+				_, err := SpendableAtGate([]*StoredApprovalDecision{dnsDecisions[channel]}, input, dnsFields, spendState)
+				testSpendExpect(t, label+": the dns gate", err, refusal)
+				approval := &bridge.BridgeApproval{CanonicalAction: expose.Bytes, Decisions: []*bridge.Signed{exposeDecisions[channel].Signed}}
+				_, err = verifier.state.CheckBridgeApproval(statement, routeBody, approval)
+				testSpendExpect(t, label+": a bridge_expose approval", err, refusal)
+			}
+		}
+	}
+
+	all := []uint32{uint32(device), uint32(presence), uint32(harness)}
+	net.foldDocument(compiling, `{}`)
+	check("the default document", all, device, presence, harness)
+	net.foldDocument(compiling, `{"evidenceDefault": ["device"]}`)
+	check("narrowed to device", []uint32{uint32(device)}, device)
+	net.foldDocument(compiling, `{"evidenceDefault": ["presence", "device"]}`)
+	check("device or presence", []uint32{uint32(device), uint32(presence)}, device, presence)
+	// a statement folded past the base keeps the base's default
+	net.tick(&bridge.ApiTick{})
+	_, tablet := net.consentedMember("spend later member")
+	if !net.acl().ApprovalCapable(tablet.sidecarId) {
+		t.Fatal("the later member's device is not approval-capable")
+	}
+	compiling.catchUp()
+	check("past the base", []uint32{uint32(device), uint32(presence)}, device, presence)
+	net.foldDocument(compiling, `{"evidenceDefault": ["harness", "presence", "device"]}`)
+	check("all three named", all, device, presence, harness)
+
+	// another member is no approver of s's own action, whose approvers are its owner or sponsor (§8.6's default)
+	dns := testSpendDnsAction(t, "192.0.2.16")
+	otherBody := testSpendDecisionBody(dns, NewId(), net.other, device, net.laptop.sidecarId, net.log.State().Pin(), net.timeMs+testConfigHourMs)
+	other := testSpendParse(t, testSpendSignedBy(t, net.otherDevice.sidecarId, net.otherDevice.key, otherBody))
+	testSpendExpect(t, "another member approving", Spendable(other, net.input(dns, net.laptop.sidecarId), net.spendState(false), nil), SpendRefusalApprover)
+}
+
+// A grant names its requests rule, whose row carries its own effective list (QD-396): the rows' evidence_default
+// never widens or narrows it. Rows that list no evidence_default, as a state before its first compiled base holds,
+// take the format's three channels.
+func TestSpendAGrantKeepsItsRulesEvidence(t *testing.T) {
+	net := newTestSpendNet(t)
+	device := uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE)
+	harness := uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS)
+	ruleId := testConfigId("spend evidence rule").Bytes()
+	selfAtom := AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)
+	setRows := func(evidenceDefault []uint32, ruleEvidence []uint32) {
+		net.withDialRule(ruleId, []Id{selfAtom}, 1)
+		net.withAclRows(func(rows *protocol.AclRows) {
+			rows.EvidenceDefault = evidenceDefault
+			for _, request := range rows.Requests {
+				if bytes.Equal(request.GetRuleId(), ruleId) {
+					request.Evidence = ruleEvidence
+				}
+			}
+		})
+	}
+	// the laptop's harness decision for its grant and for a dns write, at the tip
+	spend := func(name string, wantGrant SpendRefusalCode, wantDns SpendRefusalCode) {
+		t.Helper()
+		pin := net.log.State().Pin()
+		notAfter := net.timeMs + testConfigHourMs
+		grant := testSpendGrantAction(t, ruleId, net.laptop.sidecarId, aclTestDst(net.phone.sidecarId))
+		dns := testSpendDnsAction(t, "192.0.2.19")
+		for _, attempt := range []struct {
+			name   string
+			action *StoredCanonicalAction
+			want   SpendRefusalCode
+		}{{name: "the grant", action: grant, want: wantGrant}, {name: "the dns write", action: dns, want: wantDns}} {
+			body := testSpendDecisionBody(attempt.action, NewId(), net.member, protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS, net.laptop.sidecarId, pin, notAfter)
+			decision := testSpendParse(t, testSpendSignedBy(t, net.laptop.sidecarId, net.laptop.key, body))
+			err := Spendable(decision, net.input(attempt.action, net.laptop.sidecarId), net.spendState(false), nil)
+			testSpendExpect(t, name+": "+attempt.name, err, attempt.want)
+		}
+	}
+
+	setRows(nil, nil)
+	spend("rows listing neither", "", "")
+	setRows([]uint32{device}, []uint32{device, harness})
+	spend("a device default, a rule naming harness", "", SpendRefusalEvidence)
+	setRows([]uint32{device, harness}, []uint32{device})
+	spend("a default naming harness, a device rule", SpendRefusalEvidence, "")
+	setRows([]uint32{device}, []uint32{device})
+	spend("device in both", SpendRefusalEvidence, SpendRefusalEvidence)
+	// a channel value outside §16.6's three matches no decision
+	setRows([]uint32{7}, []uint32{device, harness})
+	spend("a default of an unknown channel", "", SpendRefusalEvidence)
 }
 
 // A use already reserved skips the expiry test (spend step 1), and the gate allows no skew past not_after while a
@@ -492,7 +655,7 @@ func TestSpendEvidenceDefaultOnlyWhereHeld(t *testing.T) {
 func TestSpendExpiryReservedAndAtTheGate(t *testing.T) {
 	net := newTestSpendNet(t)
 	action := testSpendDnsAction(t, "192.0.2.17")
-	state := net.spendState(false, spendAllChannels)
+	state := net.spendState(false)
 	body := testSpendDecisionBody(action, NewId(), net.member, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE, net.laptop.sidecarId,
 		net.log.State().Pin(), net.timeMs)
 	decision := testSpendParse(t, testSpendSignedBy(t, net.phone.sidecarId, net.phone.key, body))
@@ -711,13 +874,12 @@ type testSpendFixtureState struct {
 
 // The fixture's governing rule.
 type testSpendFixtureRule struct {
-	refused       bool
-	evidence      []protocol.ApprovalChannel
-	evidenceKnown bool
-	count         int
-	eligible      []Id
-	admins        []Id
-	adminNeeded   bool
+	refused     bool
+	evidence    []protocol.ApprovalChannel
+	count       int
+	eligible    []Id
+	admins      []Id
+	adminNeeded bool
 }
 
 // The fixture's pin.
@@ -764,9 +926,9 @@ func (self *testSpendFixtureState) Govern(action *StoredCanonicalAction, spender
 	return self.rule, nil
 }
 
-// The fixture's list and whether it is known.
-func (self *testSpendFixtureRule) Evidence() ([]protocol.ApprovalChannel, bool) {
-	return self.evidence, self.evidenceKnown
+// The fixture's list.
+func (self *testSpendFixtureRule) Evidence() []protocol.ApprovalChannel {
+	return self.evidence
 }
 
 // The fixture's k.
@@ -862,7 +1024,7 @@ func (self *testSpendWorld) state() *testSpendFixtureState {
 			PublicKey: bytes.Clone(self.presence.publicKey), Purpose: bridge.KeyPurpose_KEY_PURPOSE_PRESENCE,
 			Signer: self.phone.Bytes(), At: 6, NotAfter: self.nowMs + 24*testConfigHourMs,
 		}},
-		rule: &testSpendFixtureRule{evidence: slices.Clone(spendAllChannels), evidenceKnown: true, count: 1, eligible: []Id{self.member}},
+		rule: &testSpendFixtureRule{evidence: slices.Clone(spendAllChannels), count: 1, eligible: []Id{self.member}},
 	}
 	for sidecarId, key := range self.keys {
 		state.identityKeys[sidecarId] = key.Public().(ed25519.PublicKey)
@@ -971,9 +1133,9 @@ func testSpendVectorCases(t testing.TB) []*testSpendVectorCase {
 	deviceOutside := world.state()
 	deviceOutside.rule.evidence = []protocol.ApprovalChannel{presence}
 	cases = append(cases, one("channel outside the evidence", deviceOutside, phoneSigned, SpendRefusalEvidence))
-	unknown := world.state()
-	unknown.rule.evidence, unknown.rule.evidenceKnown = nil, false
-	cases = append(cases, one("evidence unknown", unknown, phoneSigned, SpendRefusalEvidenceUnknown))
+	noChannel := world.state()
+	noChannel.rule.evidence = nil
+	cases = append(cases, one("an empty evidence list", noChannel, phoneSigned, SpendRefusalEvidence))
 
 	// sets at k = 2, with the admin clause
 	quorum := world.state()
@@ -1038,7 +1200,7 @@ func TestSpendEachRefusalHasItsCode(t *testing.T) {
 	for _, code := range []SpendRefusalCode{
 		SpendRefusalForked, SpendRefusalSigner, SpendRefusalSignature, SpendRefusalVerdict, SpendRefusalRequester,
 		SpendRefusalPayload, SpendRefusalTemplate, SpendRefusalExpired, SpendRefusalPin, SpendRefusalRule,
-		SpendRefusalApprover, SpendRefusalEvidence, SpendRefusalEvidenceUnknown, SpendRefusalSet, SpendRefusalQuorum,
+		SpendRefusalApprover, SpendRefusalEvidence, SpendRefusalSet, SpendRefusalQuorum,
 	} {
 		if !codes[code] {
 			t.Errorf("no case ends in %s", code)
@@ -1103,13 +1265,12 @@ type testSpendDeviceJson struct {
 
 // The governing rule in the file.
 type testSpendRuleJson struct {
-	Refused       bool     `json:"refused"`
-	EvidenceKnown bool     `json:"evidence_known"`
-	Evidence      []uint32 `json:"evidence"`
-	Count         int      `json:"count"`
-	Eligible      []string `json:"eligible"`
-	Admins        []string `json:"admins"`
-	AdminNeeded   bool     `json:"admin_needed"`
+	Refused     bool     `json:"refused"`
+	Evidence    []uint32 `json:"evidence"`
+	Count       int      `json:"count"`
+	Eligible    []string `json:"eligible"`
+	Admins      []string `json:"admins"`
+	AdminNeeded bool     `json:"admin_needed"`
 }
 
 // Hex ids, sorted, for a deterministic file.
@@ -1129,7 +1290,7 @@ func testSpendVectorToJson(t testing.TB, vector *testSpendVectorCase) testSpendV
 		Pin:    testSpendPinJson{Version: state.pin.GetVersion(), Chain: hex.EncodeToString(state.pin.GetChain())},
 		Forked: state.forked,
 		Rule: testSpendRuleJson{
-			Refused: state.rule.refused, EvidenceKnown: state.rule.evidenceKnown, Count: state.rule.count,
+			Refused: state.rule.refused, Count: state.rule.count,
 			Eligible: testSpendHexIds(state.rule.eligible), Admins: testSpendHexIds(state.rule.admins), AdminNeeded: state.rule.adminNeeded,
 		},
 	}
@@ -1192,7 +1353,7 @@ func testSpendVectorFromJson(t testing.TB, vectorJson testSpendVectorJson) *test
 		identityKeys:    map[Id][]byte{},
 		approvalCapable: map[[2]Id]bool{},
 		rule: &testSpendFixtureRule{
-			refused: stateJson.Rule.Refused, evidenceKnown: stateJson.Rule.EvidenceKnown, count: stateJson.Rule.Count,
+			refused: stateJson.Rule.Refused, count: stateJson.Rule.Count,
 			adminNeeded: stateJson.Rule.AdminNeeded,
 		},
 	}
@@ -1294,7 +1455,7 @@ func TestApprovalCancelIsTheApprovers(t *testing.T) {
 	net := newTestSpendNet(t)
 	key := newTestPresenceKey(t, "spend cancel presence", bridge.KeyAlg_KEY_ALG_ECDSA_P256_SHA256)
 	net.registerPresenceKey(net.phone, key)
-	state := net.spendState(false, spendAllChannels)
+	state := net.spendState(false)
 	action := testSpendDnsAction(t, "192.0.2.70")
 	approvalId := NewId()
 	body := testSpendDecisionBody(action, approvalId, net.member, protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE, net.laptop.sidecarId,

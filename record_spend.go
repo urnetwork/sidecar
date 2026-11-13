@@ -27,7 +27,8 @@
 //	pin        d.auth_pin is 40 bytes' worth, its version <= P's, and its digest equals A_k wherever P retains k
 //	rule       a rule governs a: a grant's requests rule still takes it at P, its subject s (SpendState.Govern)
 //	approver   the approver is still eligible under P
-//	evidence   d.channel is in the governing evidence list, which the verifier must know
+//	evidence   d.channel is in the governing evidence list: the requests rule's, else the document's evidenceDefault,
+//	           both from P's rows (QD-727)
 //
 // SpendableSet adds §16.6's k approvers: decisions of one approval and one request_sha256 from distinct eligible
 // approvers, at least the rule's k and meeting §8.6's admin clause, the budget the smallest uses and the expiry the
@@ -90,8 +91,6 @@ const (
 	SpendRefusalApprover SpendRefusalCode = "approver"
 	// The channel is not in the governing evidence list.
 	SpendRefusalEvidence SpendRefusalCode = "evidence"
-	// This verifier does not know the governing evidence list, so no channel is in it.
-	SpendRefusalEvidenceUnknown SpendRefusalCode = "evidence_unknown"
 	// Decisions of more than one approval or request, or one approver twice.
 	SpendRefusalSet SpendRefusalCode = "set"
 	// Fewer distinct eligible approvers than the rule's k, or §8.6's admin clause unmet.
@@ -382,11 +381,7 @@ func spendUnderRule(decision *StoredApprovalDecision, rule SpendRule) *SpendRefu
 	if !rule.Eligible(recordIdOf(body.GetApproverMemberId())) {
 		return spendRefuse(SpendRefusalApprover, nil)
 	}
-	evidence, known := rule.Evidence()
-	if !known {
-		return spendRefuse(SpendRefusalEvidenceUnknown, nil)
-	}
-	if !slices.Contains(evidence, protocol.ApprovalChannel(body.GetChannel())) {
+	if !slices.Contains(rule.Evidence(), protocol.ApprovalChannel(body.GetChannel())) {
 		return spendRefuse(SpendRefusalEvidence, nil)
 	}
 	return nil
@@ -558,7 +553,8 @@ func SpendableAtGate(decisions []*StoredApprovalDecision, input *SpendInput, fie
 
 // §16.6's spend check as ACL-M2-07's AclSpendCheck, which api and every reader install in ConfigLogSettings: the
 // state is S(n-1), the state the entry lands on, its view TEAM's ConfigState, never forked, since a fork stops a log
-// before any entry applies, and holding no evidenceDefault, which rows do not carry. Immutable once made.
+// before any entry applies. An action no requests rule names, a bridge_expose approval's, is held to that state's
+// evidence_default, as a gate holds a dns write to its own (QD-727). Immutable once made.
 type SpendCheck struct {
 	settings *SpendSettings
 }
@@ -583,7 +579,7 @@ func (self *SpendCheck) Spendable(state *AclState, decision *StoredApprovalDecis
 	if pin == nil || config.n != pin.GetVersion() || !bytes.Equal(config.chain[:], pin.GetChain()) {
 		return spendRefuse(SpendRefusalState, errors.New("a pin other than the state's"))
 	}
-	spendState, err := NewConfigSpendState(config, false, nil)
+	spendState, err := NewConfigSpendState(config, false)
 	if err != nil {
 		return spendRefuse(SpendRefusalState, err)
 	}
