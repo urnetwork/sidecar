@@ -173,6 +173,7 @@ seals:
   RepoVersioning.sealed_rules: VersioningRules
   EvsPushPart.sealed_metadata: EvsSealedMetadata
   EvsEntryVersion.sealed_fields: EvsSealedFields
+  CanonicalAction.sealed_detail: CanonicalActionDetail
 
 sealed_messages:
   Hello: "peers only, over a Required session: an edge's opens need no Hello (§6.4)"
@@ -740,11 +741,11 @@ open:
   CanonicalAction.version: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
   CanonicalAction.scope: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
   ApprovalDecision.version: {row: api-10, question: metadata-list-unnamed-fields.md, until: M5}
-  # Answered since: these three leave CanonicalAction for sealed fields once §16.8's fence does, and
-  # record.proto follows that fence, so they stay open to M3's exit rather than gain the row asked for.
-  CanonicalAction.local_port: {row: api-7, question: protos-services-canonical-action.md, until: M3}
-  CanonicalAction.weight: {row: api-7, question: protos-services-canonical-action.md, until: M3}
-  CanonicalAction.alpn: {row: api-7, question: protos-services-canonical-action.md, until: M3}
+  # Answered (QD-740): local_port, weight and alpn left CanonicalAction for the sealed ApprovalRequest, so they
+  # need no line. A dial or route grant's sealed_detail, and a version-3 access request's, shows api its
+  # ciphertext beside the grant's clear fields; api-7's words for it are design-records', and the field stays
+  # open until they land.
+  CanonicalAction.sealed_detail: {row: api-7, question: record-m2-01-canonical-action-detail.md, until: M3}
 
 enum_values:
   EvsPushFlag.EVS_PUSH_FLAG_NONE: evs-12

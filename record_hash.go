@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 
 	"google.golang.org/protobuf/proto"
 
@@ -217,14 +218,22 @@ type StoredCanonicalAction struct {
 }
 
 // Parses a CanonicalAction as stored and holds it to record_action_rules.go's rules: a version this build knows, a
-// kind it knows, only the fields that version may set, and no field it cannot name. Approvers, spenders and gates
-// take an action only through here, so one they could not render is refused, never approved unseen (D-MCP-17).
+// kind it knows, only the fields that version may set, and no field it cannot name. It names sealed_detail, field 38,
+// which a version-3 or version-4 action carries (QD-740), and holds it to the sealed-body layout without opening it:
+// a server takes the action by its clear fields, and an approver or a reader opens the detail before it renders or
+// enforces it (OpenCanonicalActionDetail). Approvers, spenders and gates take an action only through here, so one
+// they could not render is refused, never approved unseen (D-MCP-17).
 func ParseStoredCanonicalAction(stored []byte) (*StoredCanonicalAction, error) {
+	return parseStoredCanonicalAction(stored, CanonicalActionVersionKnown)
+}
+
+// ParseStoredCanonicalAction, given which versions are known: CanonicalActionVersionKnown outside tests.
+func parseStoredCanonicalAction(stored []byte, known func(version uint32) bool) (*StoredCanonicalAction, error) {
 	action := &protocol.CanonicalAction{}
 	if err := proto.Unmarshal(stored, action); err != nil {
 		return nil, fmt.Errorf("%w: canonical action: %v", ErrRecordStoredInvalid, err)
 	}
-	if err := canonicalActionCheck(action, CanonicalActionVersionKnown); err != nil {
+	if err := canonicalActionCheck(action, known); err != nil {
 		return nil, err
 	}
 	return &StoredCanonicalAction{Action: action, Bytes: bytes.Clone(stored)}, nil
@@ -256,8 +265,10 @@ func approvalRequestVersionKnown(version uint32) bool {
 
 // Parses an ApprovalRequest as stored, for the approver's device and the spender: a version this build knows and no
 // field it cannot name; ids at their lengths; a risk SidecarRisk names; an expiry; payload_sha256 equal to SHA-256 of
-// the canonical_action bytes it carries and action_id equal to §16.6's formula over them (R-MCP-6); and that action
-// passing ParseStoredCanonicalAction. summary and preview stay untrusted text for the approver to show as such.
+// the canonical_action bytes it carries and action_id equal to §16.6's formula over them (R-MCP-6); that action
+// passing ParseStoredCanonicalAction; and local_port, weight and alpn set only where the action's kind binds them
+// (the kind table's request column; QD-740), a port one a listener can bind and no ALPN empty. summary and preview
+// stay untrusted text for the approver to show as such.
 func ParseStoredApprovalRequest(stored []byte) (*StoredApprovalRequest, error) {
 	request := &protocol.ApprovalRequest{}
 	if err := proto.Unmarshal(stored, request); err != nil {
@@ -303,7 +314,44 @@ func ParseStoredApprovalRequest(stored []byte) (*StoredApprovalRequest, error) {
 	if !bytes.Equal(request.GetActionId(), actionId[:]) {
 		return nil, fmt.Errorf("%w: action_id is not its action's", ErrRecordStoredInvalid)
 	}
+	if err := approvalRequestDetailCheck(request, action); err != nil {
+		return nil, err
+	}
 	return &StoredApprovalRequest{Request: request, Bytes: bytes.Clone(stored), Action: action}, nil
+}
+
+// Holds a request's daemon-built fields beside its action, local_port, weight and alpn, to its action's kind: one the
+// kind's row does not name is refused, so an approver renders none that binds nothing; a local port is a port; and no
+// ALPN is empty.
+func approvalRequestDetailCheck(request *protocol.ApprovalRequest, action *StoredCanonicalAction) error {
+	message := request.ProtoReflect()
+	fields := message.Descriptor().Fields()
+	row, _ := CanonicalActionFields(SidecarActionKind(action.Action.GetKind()))
+	for _, number := range approvalRequestDetailFields {
+		if message.Has(fields.ByNumber(number)) && (row == nil || !row.requestAllows(number)) {
+			return fmt.Errorf("%w: approval request field %d beside an action of kind %d", ErrRecordStoredInvalid, number, action.Action.GetKind())
+		}
+	}
+	if math.MaxUint16 < request.GetLocalPort() {
+		return fmt.Errorf("%w: local_port %d", ErrRecordStoredInvalid, request.GetLocalPort())
+	}
+	if slices.Contains(request.GetAlpn(), "") {
+		return fmt.Errorf("%w: an empty alpn", ErrRecordStoredInvalid)
+	}
+	return nil
+}
+
+// The request's daemon-built fields beside its action, nil where it sets none.
+func (self *StoredApprovalRequest) Detail() *SidecarActionDetail {
+	request := self.Request
+	if request.GetLocalPort() == 0 && request.GetWeight() == 0 && len(request.GetAlpn()) == 0 {
+		return nil
+	}
+	return &SidecarActionDetail{
+		LocalPort: request.GetLocalPort(),
+		Weight:    request.GetWeight(),
+		Alpn:      slices.Clone(request.GetAlpn()),
+	}
 }
 
 // request_sha256 over the stored bytes.

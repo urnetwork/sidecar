@@ -17,6 +17,10 @@
 //	         payload_sha256 over the stored bytes, not_after the request's, uses 1, or for a template the person's
 //	         choice of 2 or more, evidence_sha256 empty (QD-261)
 //	cancel   ApprovalCancel{approval_id} by the identity key, after the same confirmation, filed in the request's log
+//	sealed   a request whose action carries a sealed_detail, a dial or route grant's prefixes and ports (QD-740), is
+//	         rendered with what the detail opens to on this device (WithDetailOpener); where no opener is given or
+//	         the detail does not open, the render says so, the request lists deny alone, and an approval is refused,
+//	         so no prefix or port is approved unseen (D-MCP-17)
 //
 // The pass approves nothing (§5.9): only a confirmed call reaches here. A presence check that fails, is refused or does
 // not verify against a live presence key this device registered for its member signs nothing.
@@ -48,6 +52,8 @@ var (
 	ErrApprovalOwnRequest = errors.New("this sidecar's own request takes a presence key's evidence, never device")
 	// uses above 1 is for a template alone, and a template takes 2 or more.
 	ErrApprovalUses = errors.New("uses above 1 only for a template, and a template takes 2 or more")
+	// The action's sealed_detail did not open on this device, so it approves nothing it could not show (D-MCP-17).
+	ErrApprovalDetailSealed = errors.New("the action's sealed detail does not open on this device, so it is not approved here")
 )
 
 // The approval family's log as an approver's device uses it: RecordApprovals (RECORD-M3-07), or a test's.
@@ -88,15 +94,42 @@ type SidecarRequestDecision struct {
 	Uses uint32
 }
 
-// An approver's device's side of §16.6's requests: its sidecar, for its standing and keys, and its approval log.
+// An approver's device's side of §16.6's requests: its sidecar, for its standing and keys, its approval log, and what
+// opens an action's sealed_detail, nil where the device opens none.
 type ApprovalApprover struct {
 	sidecar *Sidecar
 	log     ApproverLog
+	details CanonicalActionDetailOpener
 }
 
 // The approver side of sidecar over log.
 func NewApprovalApprover(sidecar *Sidecar, log ApproverLog) *ApprovalApprover {
 	return &ApprovalApprover{sidecar: sidecar, log: log}
+}
+
+// The same approver side, opening each action's sealed_detail with opener before it renders or approves it. The
+// receiver is not changed.
+func (self *ApprovalApprover) WithDetailOpener(opener CanonicalActionDetailOpener) *ApprovalApprover {
+	return &ApprovalApprover{sidecar: self.sidecar, log: self.log, details: opener}
+}
+
+// What request's action's sealed_detail opens to on this device: nil with no error for an action that carries none,
+// and ErrApprovalDetailSealed for one this device has no opener for or cannot open.
+func (self *ApprovalApprover) openDetail(request *StoredApprovalRequest) (*protocol.CanonicalActionDetail, error) {
+	if len(request.Action.Action.GetSealedDetail()) == 0 {
+		return nil, nil
+	}
+	if self.details == nil {
+		return nil, ErrApprovalDetailSealed
+	}
+	detail, err := self.details.OpenActionDetail(request.Action)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrApprovalDetailSealed, err)
+	}
+	if detail == nil {
+		return nil, ErrApprovalDetailSealed
+	}
+	return detail, nil
 }
 
 // The approver side over this sidecar's record (Sidecar.Record's approvals).
@@ -168,9 +201,14 @@ func (self *ApprovalApprover) Pending(ctx context.Context) ([]*SidecarRequestIte
 			continue
 		}
 		item.ApprovalId = waiting.Request.ApprovalId()
-		item.Render = RenderApprovalRequest(waiting.Request)
+		detail, detailErr := self.openDetail(waiting.Request)
+		item.Render = RenderApprovalRequestDetail(waiting.Request, detail)
 		item.Render.Flagged = waiting.Flagged
 		item.Channel, item.Decisions = approverChannel(waiting.Request, identity, own)
+		if detailErr != nil && 0 < len(item.Decisions) {
+			// what it could not show it may only refuse
+			item.Decisions = []string{SidecarDecisionDeny}
+		}
 		items = append(items, item)
 	}
 	return items, nil
@@ -224,6 +262,9 @@ func (self *ApprovalApprover) Decide(ctx context.Context, approvalId Id, decisio
 		uses = 0
 	} else if (1 < uses) != request.Action.Action.GetScope() {
 		return ErrApprovalUses
+	} else if _, err := self.openDetail(request); err != nil {
+		// an approval signs only what this device opened and showed
+		return err
 	}
 	pin := authority.Pin()
 	if pin == nil {

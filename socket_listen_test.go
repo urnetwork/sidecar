@@ -5,7 +5,7 @@
 // replayed ticket, an unused edge ticket from another source and an edge-marked ticket for an application name are
 // refused while a valid edge splice is accepted; max_streams answers busy; drain with and without streams in flight;
 // a stream ends at its grant's expiry and at a revocation; Close unlistens and keeps accepted conns; tls/ goes through
-// Authorize, whose pending answer reaches the caller, and the production action is refused on its held question.
+// Authorize, whose pending answer reaches the caller, as the production action of kind listen with its weight beside it.
 
 package sidecar
 
@@ -381,16 +381,40 @@ func TestSocketListenRegistersAReceiverNotServingUntilItsKey(t *testing.T) {
 	}
 }
 
-// tls/ and smtp/ go through Authorize: its pending answer reaches the caller with nothing registered, and the
-// production action, whose row waits on a question, refuses the Listen before any gate.
+// tls/ and smtp/ go through Authorize: the production action reaches the gate as kind listen naming the socket, the
+// weight it registers with beside it as the request's and not in its bytes (QD-740), and a gate's pending answer
+// reaches the caller with nothing registered.
 func TestSocketListenAuthorizesOutwardNames(t *testing.T) {
 	fixture := newTestListenFixture(t)
 	parsed, _ := ParseSocketAddress("tls/443/blog")
-	if _, err := fixture.component.listen(t.Context(), parsed, nil, false); !errors.Is(err, ErrCanonicalActionInvalid) {
-		t.Errorf("the held action: %v", err)
+	refused := errors.New("the test's gate refuses")
+	fixture.generation.authorize = func(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error {
+		fixture.authorized = append(fixture.authorized, action)
+		return refused
 	}
-	if len(fixture.authorized) != 0 {
-		t.Error("a gate saw an action it could not render")
+	for _, c := range []struct {
+		settings *SocketListenSettings
+		weight   int32
+	}{
+		{settings: nil, weight: socketListenDefaultWeight},
+		{settings: &SocketListenSettings{Weight: 250}, weight: 250},
+	} {
+		fixture.authorized = nil
+		if _, err := fixture.component.listen(t.Context(), parsed, c.settings, false); !errors.Is(err, refused) {
+			t.Fatalf("a refusing gate: %v", err)
+		}
+		if len(fixture.authorized) != 1 {
+			t.Fatalf("the gate saw %d actions", len(fixture.authorized))
+		}
+		action := fixture.authorized[0]
+		stored, err := ParseStoredCanonicalAction(action.Canonical)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if action.Kind != SidecarActionListen || stored.Action.GetSocketName() != "tls/443/blog" ||
+			!action.Detail.Equal(&SidecarActionDetail{Weight: c.weight}) {
+			t.Errorf("the action: %+v, detail %+v", stored.Action, action.Detail)
+		}
 	}
 	approvalId := testSocketId("approval")
 	fixture.component.listenAction = func(name string, settings *SocketListenSettings) (*SidecarAction, error) {

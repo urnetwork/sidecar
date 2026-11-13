@@ -6,10 +6,10 @@
 //
 // Which names. An application name listens as its token paths, so it needs the K_sock ring (D-SOCK-13). tls/ and smtp/
 // are outward (I-8): Listen calls §5.4's Authorize first, which may answer *ApprovalPendingError, and holds the
-// dispatcher's Service mode only while the registration is held (§13.6), so edges' contracts reach it; today the
-// listen action's CanonicalAction row waits on question record-m2-01-canonical-action-detail, so such a Listen is
-// refused before any gate sees it. share/ is `ur share add`'s alone (SOCK-M5-15), ur/ the platform's (SOCK-M9-01), and a
-// reserved name has no owner: each is refused here. A <net> must be this sidecar's own network.
+// dispatcher's Service mode only while the registration is held (§13.6), so edges' contracts reach it; the action is
+// kind listen naming the socket, the weight it registers with riding the request beside it (QD-740). share/ is
+// `ur share add`'s alone (SOCK-M5-15), ur/ the platform's (SOCK-M9-01), and a reserved name has no owner: each is
+// refused here. A <net> must be this sidecar's own network.
 //
 // smtp/ is a receiver's (§15.5; SOCK-M7-01): smtp/25/mx, or a Team scope's smtp/25/mx.<scope>, protocol smtp-starttls,
 // 16 streams unless the settings say otherwise. A receiver listens not serving, so its lease takes no ticket until §15
@@ -651,9 +651,9 @@ func (self *SocketComponent) PolicyChanged() {
 	}
 }
 
-// The §5.4 action a tls/ or smtp/ listen goes through Authorize as: SidecarActionListen with its socket_name. The
-// kind's row waits on question record-m2-01-canonical-action-detail, so NewCanonicalAction refuses it and the Listen
-// with it, before any gate.
+// The §5.4 action a tls/ or smtp/ listen goes through Authorize as: SidecarActionListen with its socket_name, built
+// by NewCanonicalAction. The weight the listen registers with, §9.5's default for none, rides the request beside it
+// (QD-740). This listener accepts in process and binds no local port, so the request carries none.
 func socketListenAction(name string, settings *SocketListenSettings) (*SidecarAction, error) {
 	stored, err := NewCanonicalAction(&protocol.CanonicalAction{
 		Kind:       uint32(SidecarActionListen),
@@ -662,7 +662,14 @@ func socketListenAction(name string, settings *SocketListenSettings) (*SidecarAc
 	if err != nil {
 		return nil, err
 	}
-	return &SidecarAction{Kind: SidecarActionListen, Canonical: stored.Bytes, Risk: SidecarRiskNormal}, nil
+	weight := socketListenDefaultWeight
+	if settings != nil && settings.Weight != 0 {
+		weight = settings.Weight
+	}
+	return &SidecarAction{
+		Kind: SidecarActionListen, Canonical: stored.Bytes, Risk: SidecarRiskNormal,
+		Detail: &SidecarActionDetail{Weight: int32(weight)},
+	}, nil
 }
 
 // The registration args for name with settings' defaults applied and held to §9.5's bounds.

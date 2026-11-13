@@ -541,15 +541,16 @@ func (self *ApprovalInbox) logCancelled(approvalId Id) bool {
 }
 
 // The requests for this action in this run by this agent, newest first: the action itself, or a template
-// (scope = true) the action falls inside (§16.6's multi-use row).
-func (self *ApprovalInbox) candidates(action *StoredCanonicalAction, runId *Id, agentId *Id) []*approvalIndexed {
+// (scope = true) the action falls inside (§16.6's multi-use row), whose local_port, weight and alpn are the ones
+// detail binds, since a decision signs its request's and spends on no other (QD-740).
+func (self *ApprovalInbox) candidates(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id) []*approvalIndexed {
 	run := approvalIdOrZero(runId)
 	agent := approvalIdOrZero(agentId)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	candidates := []*approvalIndexed{}
 	for _, indexed := range self.approvalIdRequests {
-		if indexed.runId != run || indexed.agentId != agent {
+		if indexed.runId != run || indexed.agentId != agent || !indexed.request.Detail().Equal(detail) {
 			continue
 		}
 		requested := indexed.request.Action
@@ -566,10 +567,11 @@ func (self *ApprovalInbox) candidates(action *StoredCanonicalAction, runId *Id, 
 	return candidates
 }
 
-// The request for exactly this action, run and agent that still waits for a decision at now: filed tainted when the
-// run is tainted, since a decision on an untainted request spends nothing in a tainted run (TS1). Nil for none.
-func (self *ApprovalInbox) waitingFor(action *StoredCanonicalAction, runId *Id, agentId *Id, tainted bool, now time.Time) *approvalIndexed {
-	for _, candidate := range self.candidates(action, runId, agentId) {
+// The request for exactly this action, its detail, run and agent that still waits for a decision at now: filed
+// tainted when the run is tainted, since a decision on an untainted request spends nothing in a tainted run (TS1).
+// Nil for none.
+func (self *ApprovalInbox) waitingFor(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id, tainted bool, now time.Time) *approvalIndexed {
+	for _, candidate := range self.candidates(action, detail, runId, agentId) {
 		request := candidate.request
 		approvalId := request.ApprovalId()
 		if !bytes.Equal(request.Action.Bytes, action.Bytes) || candidate.decided || self.logCancelled(approvalId) ||
@@ -962,7 +964,7 @@ func (self *ApprovalRouter) findOrFile(ctx context.Context, action *SidecarActio
 	}
 	self.fileLock.Lock()
 	defer self.fileLock.Unlock()
-	if waiting := self.inbox.waitingFor(stored, action.RunId, action.AgentId, tainted, self.args.Clock.Now()); waiting != nil {
+	if waiting := self.inbox.waitingFor(stored, action.Detail, action.RunId, action.AgentId, tainted, self.args.Clock.Now()); waiting != nil {
 		if !waiting.filed {
 			self.fileToLog(waiting.request)
 		}
@@ -980,7 +982,8 @@ func (self *ApprovalRouter) findOrFile(ctx context.Context, action *SidecarActio
 	return request, nil
 }
 
-// A new ApprovalRequest for action, as stored: §16.8's fields, the approvers P names, not_after reading 3's.
+// A new ApprovalRequest for action, as stored: §16.8's fields, the approvers P names, not_after reading 3's, and the
+// action's daemon-built detail as local_port, weight and alpn (QD-740), which the parse holds to the action's kind.
 func (self *ApprovalRouter) newRequest(action *SidecarAction, stored *StoredCanonicalAction, tainted bool) (*StoredApprovalRequest, error) {
 	states, err := self.args.states()
 	if err != nil {
@@ -1018,6 +1021,11 @@ func (self *ApprovalRouter) newRequest(action *SidecarAction, stored *StoredCano
 	}
 	if action.AgentId != nil {
 		request.AgentId = action.AgentId.Bytes()
+	}
+	if detail := action.Detail; detail != nil {
+		request.LocalPort = detail.LocalPort
+		request.Weight = detail.Weight
+		request.Alpn = slices.Clone(detail.Alpn)
 	}
 	for _, approver := range approvers {
 		request.Approvers = append(request.Approvers, approver.Bytes())

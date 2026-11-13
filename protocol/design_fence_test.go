@@ -2,7 +2,8 @@
 // registers, so a wire that leaves the design fails here. testWireDifferences says exactly what is held. Whatever the
 // package declares beyond the fences is written out in testUnfencedFence, with where the design writes it, which is
 // where a reviewer reads what this repository added to the design's wire, and a field an owner's answer adds to a
-// fenced message before design-records folds it in is in testFenceAdditions, with the question that holds the answer.
+// fenced message before design-records folds it in is in testFenceAdditions, with the question that holds the answer,
+// as one it takes out, its number reserved, is in testFenceReservations.
 
 package protocol
 
@@ -282,9 +283,10 @@ func testParseFences(t *testing.T, fences *testFences, document []byte) int {
 }
 
 // Every fenced proto block in DESIGN.md and RECORD.md, then testUnfencedFence, read into one set of declarations,
-// with testFenceAdditions' fields and testFenceValueAdditions' values joining the fences they extend. A declaration
-// that later gains a fence is then written twice, which says to take it out of testUnfencedFence, and an added field
-// or value the design comes to write fails until its line leaves its list.
+// with testFenceAdditions' fields and testFenceValueAdditions' values joining the fences they extend and
+// testFenceReservations' fields leaving theirs. A declaration that later gains a fence is then written twice, which
+// says to take it out of testUnfencedFence, and an added field or value the design comes to write, or a reserved one
+// it comes to reserve, fails until its line leaves its list.
 func testReadFences(t *testing.T) *testFences {
 	fences := &testFences{messages: map[string]*testFenceMessage{}, enums: map[string]*testFenceEnum{}}
 	count := testParseFences(t, fences, testReadDesign(t))
@@ -316,7 +318,64 @@ func testReadFences(t *testing.T) *testFences {
 	for _, finding := range testApplyValueAdditions(fences, testFenceValueAdditions) {
 		t.Error(finding)
 	}
+	for _, finding := range testApplyReservations(fences, testFenceReservations) {
+		t.Error(finding)
+	}
 	return fences
+}
+
+// Takes each field out of the fence that writes it and reserves its number there, and says which cannot leave: a
+// message no fence writes, a field its fence no longer writes at that number, or a number the design now reserves
+// itself, whose line should leave the list.
+func testApplyReservations(fences *testFences, reservations []testFenceReservation) []string {
+	findings := []string{}
+	for _, reservation := range reservations {
+		message := fences.messages[reservation.message]
+		if message == nil {
+			findings = append(findings, fmt.Sprintf("%s loses %s by %s, and no fence writes that message", reservation.message, reservation.name, reservation.question))
+			continue
+		}
+		index := slices.IndexFunc(message.fields, func(field testFenceField) bool {
+			return field.name == reservation.name && field.number == reservation.number
+		})
+		if index < 0 || slices.Contains(message.reservedNumbers, reservation.number) {
+			findings = append(findings, fmt.Sprintf("the design no longer writes %s.%s at %d, or reserves it: drop its line from testFenceReservations (%s)", reservation.message, reservation.name, reservation.number, reservation.question))
+			continue
+		}
+		message.fields = slices.Delete(message.fields, index, index+1)
+		message.reservedNumbers = append(message.reservedNumbers, reservation.number)
+	}
+	return findings
+}
+
+// The reservation list's own checks, on fences planted for it: a written field leaves and its number is reserved, and
+// a field the fence does not write, a number it already reserves, or a message no fence writes is a finding.
+func TestFenceReservationsTakeOnlyWhatTheDesignWrites(t *testing.T) {
+	planted := func() *testFences {
+		return &testFences{enums: map[string]*testFenceEnum{}, messages: map[string]*testFenceMessage{
+			"Planted": {
+				path:            "protocol/types.proto",
+				fields:          []testFenceField{{name: "kept", number: 1, typeName: "uint32"}, {name: "leaving", number: 2, typeName: "uint32"}},
+				reservedNumbers: []int32{9},
+			},
+		}}
+	}
+	fences := planted()
+	findings := testApplyReservations(fences, []testFenceReservation{{message: "Planted", name: "leaving", number: 2, question: "q"}})
+	message := fences.messages["Planted"]
+	if len(findings) != 0 || len(message.fields) != 1 || message.fields[0].name != "kept" || !slices.Equal(message.reservedNumbers, []int32{9, 2}) {
+		t.Errorf("a written field: %v, %+v", findings, message)
+	}
+	for _, reservation := range []testFenceReservation{
+		{message: "Planted", name: "unwritten", number: 3, question: "q"},
+		{message: "Planted", name: "leaving", number: 4, question: "q"},
+		{message: "Planted", name: "kept", number: 9, question: "q"},
+		{message: "Unwritten", name: "leaving", number: 2, question: "q"},
+	} {
+		if findings := testApplyReservations(planted(), []testFenceReservation{reservation}); len(findings) != 1 {
+			t.Errorf("%s.%s at %d: %v", reservation.message, reservation.name, reservation.number, findings)
+		}
+	}
 }
 
 // Joins each value to the enum it extends, and says which cannot join: an enum no fence writes, or a

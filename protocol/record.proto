@@ -14,6 +14,12 @@
 //
 // CanonicalAction's field 37 is reserved in D-PHASE-9's sense: declared here, and set only in version 2, for
 // format 2's evs_write, so an approver that does not know that version refuses it (§16.8).
+//
+// The owner's answer to record-m2-01-canonical-action-detail (QD-740) is declared here ahead of §16.8's fence, which
+// design-records writes: local_port, weight and alpn leave CanonicalAction, 24, 25 and 34 reserved, for
+// ApprovalRequest's 14, 15 and 16, which ride sealed in the approval entry and never reach a server; and a dial or
+// route grant's prefixes and ports ride sealed_detail = 38, a CanonicalActionDetail under §7.9's sealed-body format
+// (owner decision 220), at version 4, as a version-3 access_request's port does. design_unfenced_test.go lists each.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -67,20 +73,33 @@ message CanonicalAction {                   // built by the daemon; hashed as st
   string host = 5; uint32 port = 6; uint32 audience = 7; int64 expires_millis = 8;
   repeated string cidrs = 9; repeated string grant_dst = 10; repeated string grant_allow = 11;
   uint32 version = 12;                      // 1; 2 with field 37; 3 for kind access_request (16.11), in fields 8,
-                                            // 10, 11, 14, 26, 27 and 29, which approvers that do not know it refuse
+                                            // 10, 11, 14, 26, 29 and 38; 4 for a dial or route grant, in fields 8,
+                                            // 10, 11, 28, 29 and 38; approvers that do not know a version refuse it
   bool scope = 13;                          // a multi-use template (16.6)
   bytes repo_id = 14; string path = 15; bytes content_sha256 = 16; uint64 base_version = 17;  // O-tier evs_write,
                                                         // evs_delete; mail_alias_delete's mailcfg record (16.6)
   string dns_name = 18; string dns_type = 19; string dns_value = 20; uint32 dns_ttl = 21;     // dns_set, dns_delete
   string alias = 22;                                                     // mail_alias_*; mail_send's from_alias
-  string socket_name = 23; uint32 local_port = 24; int32 weight = 25;                        // socket_listen
-  bytes target_sidecar_id = 26; uint32 target_port = 27;                                     // bridge_forward, _expose
+  reserved 24, 25, 34;                      // local_port, weight and alpn: ApprovalRequest's 14, 15 and 16 (QD-740)
+  string socket_name = 23;                                                                   // socket_listen
+  bytes target_sidecar_id = 26; uint32 target_port = 27;                                     // bridge_expose
   bytes rule_id = 28; bytes subject = 29;                // a grant (§8.8), with 8, 10 and 11; a publish's also 33, 35
   bytes restore_run_id = 30; repeated string restore_paths = 31; bytes restore_preview_id = 32; // run_restore
-  uint32 app_mode = 33; repeated string alpn = 34; bytes link_spki_sha256 = 35;              // tls_publish (§13.7)
+  uint32 app_mode = 33; bytes link_spki_sha256 = 35;                                         // tls_publish (§13.7)
   string alias_group = 36;                                                   // mail_alias_create's group (§15.8)
   uint32 versioning = 37;                   // O-tier evs_write: its version's setting, 0 on, 1 off (§11.7); set
                                             // only in version 2, which approvers that do not know it refuse
+  bytes sealed_detail = 38;                 // a dial or route grant's prefixes and ports, and a version-3 access
+                                            // request's: a CanonicalActionDetail in §7.9's sealed-body format, which
+                                            // approvers and readers open and no server does (owner decision 220);
+                                            // set only in versions 3 and 4
+}
+// What sealed_detail opens to: what a dial or route grant's clear fields may not hold (QD-740).
+message CanonicalActionDetail {
+  repeated string cidrs = 1;                // a route's prefixes
+  uint32 target_port = 2;                   // a forward's or an access request's port on its target
+  repeated string grant_dst = 3;            // the grant's destinations that name a port or a prefix, in §8.4's
+                                            // grammar: sidecar:<id>:tcp:<port>, ip:<cidr>
 }
 // Rendering (D-MCP-17): approver devices render only these daemon-built fields as the action, and
 // ApprovalRequest.summary and preview as untrusted text, so an agent cannot carry trusted rdata, an alias or a
@@ -92,6 +111,10 @@ message ApprovalRequest {                   // body of an approval entry
   uint32 risk = 8;                          // max(policy, classifier); agents may only raise it
   bytes requester_sidecar_id = 9; bool tainted = 10; repeated bytes approvers = 11; int64 not_after_millis = 12;
   uint32 version = 13;                      // 1
+  uint32 local_port = 14; int32 weight = 15; repeated string alpn = 16;  // daemon-built, as the action's fields
+                                            // are, and rendered by approvers: the local port a socket_listen,
+                                            // tls_publish, bridge_forward or bridge_expose binds, a listen's weight
+                                            // and a publish's ALPNs (QD-740); request_sha256 covers them
 }
 message ApprovalDecision {                  // inside §6 Signed, purpose approval; holds no run or agent id
   bytes approval_id = 1;
