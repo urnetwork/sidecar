@@ -18,8 +18,11 @@ barrier acl_share_read.deposit.before acl_share_read.go
 barrier acl_suspend.aliases acl_suspend.go
 barrier acl_suspend.flows acl_suspend.go
 barrier acl_suspend.streams acl_suspend.go
+barrier api.clock_offset.after api_client.go
+barrier api.clock_offset.before api_client.go
 barrier api.send.after api_client.go
 barrier api.send.before api_client.go
+barrier api.send.iat_retry api_client.go
 barrier api.set_by_jwt.after api_client.go
 barrier api.set_by_jwt.before api_client.go
 barrier bridge.adopt.after device/bridge_state.go

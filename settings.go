@@ -96,6 +96,15 @@ type SidecarSettings struct {
 	// §7's routes answer. A longer answer is refused, so api cannot make a sidecar buffer more. §5.4
 	// names no such bound, so this is a reading.
 	ApiResponseByteCount int64
+	// The longest round trip whose answer's Date a SidecarApi keeps as the api's clock (§7.4, QD-757): 30 s. The
+	// api read its clock somewhere inside the round trip, so a reading is off by at most half of it and a Date's
+	// whole second, 16 s here against §7.4's 60 s window; a longer answer leaves the reading before it standing.
+	ApiClockMaxRoundTrip time.Duration
+	// How far a refused DPoP proof's reading of the api's clock must lie from the one the refusal's own Date
+	// gives for the request to go once more, signed by the newer reading (§7.4, QD-757): 5 s. Past the 1 s a
+	// Date's whole seconds move a reading by, so a proof refused for anything but its iat is not sent again, and
+	// far inside §7.4's 60 s window, so one refused for its iat always is.
+	ApiClockRetryShift time.Duration
 	// How long a statement this sidecar signs may wait to land: its StatementHeader's not_after, and so how long a
 	// kill or a lost answer leaves it pending, retried with the same bytes (§5.6's sign row, §5.9). 7 days, §7.9's
 	// most, a reading: §5.6 sets none shorter, and a cosign at k > 1 needs the whole of it.
@@ -783,6 +792,8 @@ func DefaultSidecarSettings() *SidecarSettings {
 		MemoryBudgetByteCount:      128 * 1024 * 1024,
 		StreamChunkByteCount:       4000,
 		ApiResponseByteCount:       2 * 1024 * 1024,
+		ApiClockMaxRoundTrip:       30 * time.Second,
+		ApiClockRetryShift:         5 * time.Second,
 		StatementTimeout:           7 * 24 * time.Hour,
 	}
 }

@@ -118,7 +118,7 @@ func installTestDpopSigner(t *testing.T, api *SidecarApi) ed25519.PublicKey {
 	for i := range seed {
 		seed[i] = 0x42
 	}
-	signer, err := newDpopSigner(seed, func() time.Time { return testDpopNow }, cryptorand.Reader)
+	signer, err := newDpopSigner(seed, func() time.Time { return testDpopNow }, api.currentApiClockOffset, cryptorand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
