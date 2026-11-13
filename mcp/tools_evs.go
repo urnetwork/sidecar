@@ -12,14 +12,18 @@
 //	reads      over EvsRepo, the read's purpose and run in its context, so an owner-bound repo's reader that is not
 //	           its writer deposits its receipt and awaits evs's 200 before anything decrypts (EVS1-M3-01's gate,
 //	           D-MCP-18); a first read that cannot deposit is refused, the gate's own refusal
-//	trust      a version this sidecar signed is own; any other is untrusted until evs's reads give the push's
-//	           provenance, its tainted bit and EvsImport's label (plan-MCP-format1-tainted-files; EVS2's
-//	           provenance read), so a member's version taints the run before its bytes return, the closed reading of
-//	           §16.6's member row (D-MCP-16)
+//	trust      a version is this sidecar's own words only where this sidecar signed it in an untainted run and it
+//	           imported nothing, and a member's untainted version is member's, which the push's sealed provenance
+//	           says (QD-042, plan-MCP-format1-tainted-files). EvsRepo's writes do not set the tainted bit from the
+//	           writing run on format 1 yet, nor do its reads return the provenance, so no version can show either:
+//	           every version reads untrusted, this sidecar's own included, and taints the run before its bytes
+//	           return (D-MCP-16), the closed reading until they do (question mcp-m3-16-format1-tainted-bit-owner)
 //	writes     a push on either ref mode, this sidecar as committer (owner decision 81): a file-mode ref by path CAS on
 //	           base_version, a conflict answering FAILED_PRECONDITION; a git-mode ref through the local tier's
-//	           WriteAtTip, which rebuilds on a newer tip while the path is unchanged (owner decision 141), a daemon with
-//	           no local tier answering EVS_GIT_REF; versioning on alone, format 1's, off answering FAILED_PRECONDITION
+//	           WriteAtTip, which rebuilds on a newer tip while the path is unchanged, at most EvsSettings'
+//	           WriteAtTipTryCount tips (owner decision 141), the tool calling it once and its tries running out
+//	           answering a retryable failure; a daemon with no local tier answers EVS_GIT_REF; versioning on alone,
+//	           format 1's, off answering FAILED_PRECONDITION
 //	outward    a write or delete of Ingest.AgentConfigPaths in a shared repo goes through §5.4's gate with the evs
 //	           effect (EvsWriteEffect, EVS1-M3-01), which pushes only while its Lookup finds nothing and looks again
 //	           after a refusal, so a crash after the effect takes no second push; pending answers approval_pending
@@ -132,6 +136,11 @@ var (
 	errMcpEvsTooLarge    = NewMcpError(McpCodeFailed, "the file is past what a read through MCP holds: read it with ur evs in your own terminal", false)
 	errMcpEvsOutward     = NewMcpError(McpCodeRefused, "this write is outward and could not go through the gate: a person may approve it with ur approve", false)
 	errMcpEvsUncertain   = NewMcpError(McpCodeFailed, "the write's outcome is not known yet: send the same call again", true)
+	errMcpEvsReceipt     = NewMcpError(McpCodeRefused, "this repo's owner reads a receipt of every read first, and this daemon cannot deposit one: run ur status in your own terminal", true)
+	errMcpEvsTipMoved    = NewMcpError(McpCodeFailed, "the repo's tip moved on each of this daemon's tries while the path stood still: send the same call again", true)
+	errMcpEvsGitRefused  = NewMcpError(McpCodeFailed, "the repo's ref refused the commit: run ur evs in your own terminal to see why", false)
+	errMcpEvsUnchanged   = NewMcpError(McpCodeFailedPrecondition, "the write changes nothing: the path holds that content already, or a removal names a path the ref lacks", false)
+	errMcpEvsInvalid     = NewMcpError(McpCodeInvalidArguments, "the repo takes no such write: content past its file bound, or a name or label it cannot carry", false)
 )
 
 // The repo a call names, its id parsed.
@@ -216,7 +225,18 @@ func mcpEvsError(err error) error {
 	case errors.Is(err, sidecar.ErrEvsFormatUnsupported):
 		return errMcpEvsVersioning
 	case errors.Is(err, sidecar.ErrEvsReceiptGate):
-		return NewMcpError(McpCodeRefused, "this repo's owner reads a receipt of every read first, and this daemon cannot deposit one: run ur status in your own terminal", true)
+		return errMcpEvsReceipt
+	case errors.Is(err, sidecar.ErrEvsGitTipMoved):
+		// WriteAtTip's tries ran out on a tip that kept moving while the path stood at its base: the call may go again
+		return errMcpEvsTipMoved
+	case errors.Is(err, sidecar.ErrEvsGitOutcomePending):
+		return errMcpEvsUncertain
+	case errors.Is(err, sidecar.ErrEvsGitWriteRefused):
+		return errMcpEvsGitRefused
+	case errors.Is(err, sidecar.ErrEvsGitWriteUnchanged):
+		return errMcpEvsUnchanged
+	case errors.Is(err, sidecar.ErrEvsWriteInvalid):
+		return errMcpEvsInvalid
 	}
 	return err
 }
@@ -344,9 +364,9 @@ func mcpEvsEntryKindName(kind protocol.EvsEntryKind) string {
 	return strings.TrimPrefix(strings.ToLower(kind.String()), "evs_entry_")
 }
 
-// A read of one path's version into the result: its bytes held to the settings' bound, its trust by its signer, the
-// run tainted first where the version is not this sidecar's, and its content fenced then. The resource of the path
-// is named for an over-limit result.
+// A read of one path's version into the result: its bytes held to the settings' bound, the run tainted first, since no
+// version can show yet that an untainted run wrote it (the header's trust row), and its content fenced then. The
+// resource of the path is named for an over-limit result.
 func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpEvsRepo, path string, version uint64, result *McpResult) (*mcpEvsReadOut, error) {
 	network, ok := mcpToolNetworkOf(call)
 	if !ok {
@@ -386,14 +406,11 @@ func mcpEvsRead(ctx context.Context, call *McpCall, repoId sidecar.Id, repo McpE
 		out.Encoding = "base64"
 		text = base64.StdEncoding.EncodeToString(content.buffer.Bytes())
 	}
-	if info.SignerSidecarId != identity.SidecarId {
-		// taint before data: the run file is fsynced before these bytes leave the daemon (D-MCP-16)
-		if err := result.Untrusted(ctx); err != nil {
-			return nil, err
-		}
-		text = result.Fence(text)
+	// taint before data: the run file is fsynced before these bytes leave the daemon (D-MCP-16)
+	if err := result.Untrusted(ctx); err != nil {
+		return nil, err
 	}
-	out.Content = text
+	out.Content = result.Fence(text)
 	return out, nil
 }
 
@@ -661,7 +678,7 @@ func addEvsTools(catalog *McpCatalog) {
 	AddTool(catalog, &McpToolSpec[mcpEvsReadIn]{
 		Name:        "evs_read",
 		Tier:        McpTierRead,
-		Description: "Reads a file of a repo, its newest version or an older one; content another writer made comes back marked untrusted, and reading it taints the run.",
+		Description: "Reads a file of a repo, its newest version or an older one; content another writer made, or a tainted run wrote, comes back marked untrusted, and reading it taints the run.",
 		Targets: func(call *McpCall, in *mcpEvsReadIn) ([]McpTarget, error) {
 			repoId, err := mcpEvsRepoId(in.Repo)
 			if err != nil {
