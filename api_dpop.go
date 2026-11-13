@@ -10,7 +10,9 @@
 //	claims  {jti, htm, htu, iat, ath = SHA-256(token)}
 //
 // with a 128-bit random jti, iat in whole seconds, and htu the request's url with no query or
-// fragment. The header and claims are written here with their keys in sorted order, as RFC 8785 puts
+// fragment. iat is the api's clock as this device reads it, its own time plus the offset the api's
+// answers gave (§7.4, QD-757; api_client.go keeps it), since api holds iat within its window of its
+// own clock and a device's may run minutes off. The header and claims are written here with their keys in sorted order, as RFC 8785 puts
 // them, so a proof's bytes depend only on its inputs, and testdata/dpop/vectors.json holds the same
 // bytes on every leg. Verifiers decode the JSON, so they need not know the order.
 
@@ -128,13 +130,15 @@ func dpopSign(privateKey ed25519.PrivateKey, header []byte, claims []byte) strin
 
 // A signer of proofs by the ClientKey whose seed is clientKeySeed: 32 bytes, as
 // connect.ClientSettings.ClientKeySeed holds it. The seed is read here and not kept, so the caller
-// may zero it on return. now is iat's clock and random is the jti's source, which a test fixes; a
-// failed draw signs nothing.
+// may zero it on return. now is this device's clock and apiClockOffset the api's clock less it,
+// read at each proof, so iat is the api's time as this device knows it (SidecarApi's
+// currentApiClockOffset); nil is no offset, this device's clock alone. random is the jti's source.
+// A test fixes each; a failed draw signs nothing.
 //
 // The signer takes a request's method and url as the request carries them, and ath, dpopAth of the
 // token the request presents, and is SidecarApi's dpopSigner and the shape sdk's Api.SetDpopSigner
 // takes (§7.4). It is safe for concurrent use when random is, as crypto/rand.Reader is.
-func newDpopSigner(clientKeySeed []byte, now func() time.Time, random io.Reader) (func(method string, url string, ath string) (string, error), error) {
+func newDpopSigner(clientKeySeed []byte, now func() time.Time, apiClockOffset func() time.Duration, random io.Reader) (func(method string, url string, ath string) (string, error), error) {
 	if len(clientKeySeed) != ed25519.SeedSize {
 		return nil, fmt.Errorf("%w: a ClientKey seed is %d bytes", errDpopProof, ed25519.SeedSize)
 	}
@@ -158,7 +162,11 @@ func newDpopSigner(clientKeySeed []byte, now func() time.Time, random io.Reader)
 			return "", fmt.Errorf("%w: no jti: %w", errDpopProof, err)
 		}
 		jti := base64.RawURLEncoding.EncodeToString(jtiBytes)
-		claims := dpopClaims(ath, method, htu, now().Unix(), jti)
+		iat := now()
+		if apiClockOffset != nil {
+			iat = iat.Add(apiClockOffset())
+		}
+		claims := dpopClaims(ath, method, htu, iat.Unix(), jti)
 		return dpopSign(privateKey, header, claims), nil
 	}, nil
 }
