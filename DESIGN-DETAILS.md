@@ -8,7 +8,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 
 | # | Problem | Tasks held | Status |
 |---|---|---|---|
-| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10; amended 2026-11-12, QD-760) |
+| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10; amended 2026-11-12, QD-760 and QD-775) |
 | 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10) |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | complete (2026-11-11) |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
@@ -25,7 +25,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
 
-Status: complete (2026-11-10; amended 2026-11-12, QD-760: 1.2.2, 1.2.4, 1.2.9, 1.3, 1.5, 1.6, 1.7 and 1.8, each place marked)
+Status: complete (2026-11-10; amended 2026-11-12, QD-760: 1.2.2, 1.2.4, 1.2.9, 1.3, 1.5, 1.6, 1.7 and 1.8, each place marked; amended 2026-11-12, QD-775: 1.2.4, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8 and 1.9, each place marked)
 
 Tasks held until complete: SEARCH-M10-10, SEARCH-M10-11, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, SEARCH-M10-35, TEST-M10-02.
 
@@ -294,14 +294,21 @@ merge(N at base b, extra = none):
 layout(shards by ascending n, winners):
   1 C = the keys whose winner is not the shards' entry of the key. Remove from each shard its entry of
     each key in C, and each row a ref tombstone or the erasure set drops.
-  2 A = the winners of C, ascending by key. Y = the shard with the highest n, or shard 0 when there is none.
+    (amended 2026-11-12, QD-775) G = none. Each shard X that this step changed and that no longer encodes
+    within ShardBody gives up its highest entries: K = X's remaining rows and tombstones in A's order
+    (ascending by key, then kind); c = take(an empty shard, K), by step 2's search; X keeps K[0:c] and
+    K[c:] joins G. X keeps at least one and gives up at least one (below).
+  2 A = the winners of C, with G, ascending by key. Y = the shard with the highest n, or shard 0 when
+    there is none.
     take(Y, A): if Y with all of A encodes within ShardBody, all of A. Else the count c found by:
         lo = 0; hi = len(A); while lo < hi: mid = (lo + hi + 1) / 2;
             if Y with A[0:mid] encodes within ShardBody then lo = mid else hi = mid - 1; c = lo
     Y takes A[0:c]. While A has more: Y = a new shard, the highest n + 1, and take again. A new shard
     takes at least one: every document of A is one D6 kept (below; amended 2026-11-12, QD-760).
   3 scanning by ascending n: while a shard and the next one after it come to fewer than ShardJoin bytes
-    before their pads, the two become one under the lower n; the joined shard is tested again with its next.
+    before their pads and (amended 2026-11-12, QD-775) the two as one shard encode within ShardBody, the
+    two become one under the lower n; the joined shard is tested again with its next. A pair that fails
+    either test stays two shards, and the scan goes on from the second of them.
   4 a shard left with no row and no tombstone is removed.
   5 each changed shard is encoded in blocks of 64 and padded with the keyed pad at the merger's newest
     generation, which its header names. A shard nothing changed is not written.
@@ -317,7 +324,51 @@ layout(shards by ascending n, winners):
 
 So `take` on an empty shard returns at least 1, each pass of the loop places at least one member of A, and step 2 opens at most len(A) shards. `errIndexMergeUnplaceable` stays where it is, as a closed guard: an empty shard that takes nothing fails the merge, which writes nothing, and no input a decoder accepts reaches it. No model covers this: `IndexMerge.tla` leaves sizes out (1.3), so the argument is these three facts, each held by a test of 1.6.
 
-The rule closes step 2 and nothing else. Measuring it showed two other ways a layout's shard passes ShardBody, which the decision does not reach and this amendment does not change: step 3 joins two shards that come to under ShardJoin whose join does not encode within ShardBody (16 documents sharing 60,000 keys, 372,510 B, and 2,000 small ones, 119,795 B: lists that were two-byte bitsets become sixteen docids each), and step 1 can lengthen a full shard by removing a document, through the re-blocking (2,447 B on a built case). In both the encoder refuses, the merge writes nothing and its bucket stops merging, as it did for the document above. Question `details-amend-2-layout-past-the-cap` asks what a layout does there.
+The rule closes step 2 and nothing else. Measuring it showed two other ways a layout's shard passes ShardBody, which that decision does not reach: step 3 joined two shards that come to under ShardJoin whose join does not encode within ShardBody (16 documents sharing 60,000 keys, 372,510 B, and 2,000 small ones, 119,795 B: lists that were two-byte bitsets become sixteen docids each), and step 1 can lengthen a full shard by removing a document, through the re-blocking (2,447 B on a built case). In both the encoder refused, the merge wrote nothing and its bucket stopped merging, as it did for the document above. Question `details-amend-2-layout-past-the-cap` asked what a layout does there, and the owner answered it (amended 2026-11-12, QD-775): the next paragraphs.
+
+**A layout always writes** (amended 2026-11-12, QD-775; question details-amend-2-layout-past-the-cap, option 1). The two steps that built a shard without asking the encoder now ask it, as `take` does, and both read its answer past the cap as a test's result, never as a failure:
+
+```text
+step 1's give-up   after the removals, each shard X that step 1 changed is encoded as step 5 would encode it
+                   (blocks of 64, the layout's header). Within ShardBody: nothing more. Past it: K = X's
+                   remaining entries, rows and tombstones together, ascending by key and then kind, the order
+                   A has; c = the count take's search finds for an empty shard taking K
+                       lo = 0; hi = len(K); while lo < hi: mid = (lo + hi + 1) / 2;
+                           if K[0:mid] alone encodes within ShardBody then lo = mid else hi = mid - 1; c = lo
+                   X keeps K[0:c]. K[c:], the entries from X's highest key down, join G, and G joins step 2's
+                   A, which is sorted once with G in it. The shards are visited by ascending n, but the order
+                   decides nothing: each X is judged on its own entries, and G is sorted into A.
+step 3's test      a pair is joined only where both hold: the two lengths before their pads come to fewer than
+                   ShardJoin, and the union of their entries encodes within ShardBody. A shard's length in the
+                   sum is its encoding's where this layout changed it, and its stored bytes' before their pad
+                   where it did not, whatever partition those bytes keep (QD-173). The union is always encoded
+                   by blocks of 64. A pair that fails either test is left, and the scan moves to the next
+                   pair, so the second shard of a refused pair is still tried with the one after it.
+```
+
+The decision's words for the give-up are "rows from its highest doc_key down, by the search take runs". Tombstones ride with the rows in key order here, so that one search and one order serve both steps, as `take`'s A already mixes them; a tombstone that moves stays in its bucket's shards, once, which is all a tombstone's place means (1.2.2).
+
+Why every shard a layout writes then fits, by where it was last changed:
+
+- By step 1 alone. It was tested. If it gave up, it holds K[0:c], which the search found to encode within ShardBody: the search returns a count only after that count passed the test, or 0, and it does not return 0, because it tries mid = 1 before it settles on none and one entry alone always fits (the three facts above: every entry of a shard is a tombstone or a row D6 kept, either fits a shard of its own, and the search tries one before none). c is below len(K), since all of K is what failed. So X keeps at least one entry and gives up at least one.
+- By step 2. Y with A[0:c] passed `take`'s test where c is above 0. Where c is 0, Y is as step 1 left it, or untouched. A new shard takes at least one and what it takes passed the test (QD-760's rule, which G's members meet as the winners do).
+- By step 3. The joined shard passed step 3's test, and it is tested again each time it grows.
+- By nothing. It is not written (step 5), so its bytes are the ones a decoder accepted, at most ShardBody before their pad. A shard that a CLOSURE or a DROP rewrote on its replaced partition (QD-173) may be longer by blocks of 64 than as stored. That shows only when a layout changes it, and then one of the three tests above is run on its encoding by blocks of 64: a removal makes it give up entries, and `take` on it as Y, or a join with it, goes through only where its test passes, so it usually takes nothing and joins nothing.
+
+So step 5 encodes no shard past ShardBody, and with QD-760's rule a layout is a function of its inputs that always writes. The cap's two guards stay, closed, and the rules make both unreachable from inputs a decoder accepts:
+
+```text
+errIndexShardFull          the shard encoder's answer past ShardBody. In take, in step 1's test and in step
+                           3's test it is the answer "does not encode within", and the layout goes on. From
+                           step 5's encode, or from any other caller of the encoder, it fails the layout,
+                           and the merge, the push past DirectBytes or the roll-up writes nothing.
+errIndexMergeUnplaceable   an empty shard that takes nothing: in step 2 (QD-760), and in step 1 where a
+                           give-up's search returns 0. It fails the layout the same way.
+```
+
+What the rule keeps. A given-up entry leaves X and enters another shard of the same partition in the same push, so a partition's shards still hold one version a key (I2, I7, I-EVS-11) and an eraser still finds a document in one shard. The keys of G are not in C (their winner was their shard's own entry) and no two shards hold one key, so A has each key once. A reproducer runs the same steps on the same inputs and writes the same bytes (I8). No model covers it: sizes are left out of `IndexMerge.tla` (1.3), so the argument is the four cases above, each held by a test of 1.6.
+
+What it costs. Step 3's test is the encode the joined shard needs at step 5 anyway, run one step earlier, and a refused join costs that one encode. Step 1's test is an encode each changed shard already gets, at step 3 or at step 5. The give-up's search runs only when a removal leaves a shard past the cap, which needs a shard `take` filled and an unlucky re-blocking: as `take`'s, at most ⌈log2 n⌉ + 1 length computations for a shard of n entries.
 
 A merge whose winners are all the shards' own entries still commits: the manifest alone, so that the writers can reuse their slots.
 
@@ -566,7 +617,7 @@ I8 a function      every file a writer's push, a merge or a roll-up writes is a 
 
 **The model.** `IndexMerge.tla` holds one index ref over three windows: two writers' slots (two each, three in one configuration, with seqs), their large entries, a shard and a manifest a bucket, all, the lock, and the content of two documents, d2 edited four times and d3 created and then deleted by a commit that skips the index. The journaler's entries trail their content; the backfiller indexes what no entry reaches. A head push has four shapes (create, append, seal as the head stood, fill and open the next slot), an entry may be full or a diff where a base stands, and a push built in one step commits in another, with anything between. A writer's process may die with a push in flight that still lands. Merges, a roll-up under its lock with two rollers, crashes and lapses run beside them. A head push is refused only by its own files' CAS, never by a manifest (1.1 F). Constants switch each rule between the design and §11.14 as written, and `Twin` breaks one rule of the design.
 
-What it leaves out, and why that is safe. Sizes: KeepSlots and the delta bound only turn diffs into full entries, and the model lets either be chosen. D6's shard test is a size too (amended 2026-11-12, QD-760): a version it skips is a tombstone, which the model has, and that a new shard takes at least one is 1.2.4's argument, not a run's. Several shards a bucket: `layout` is a function of the winners, and the model's one shard makes the shard's CAS and the manifest's the same step, so `PromoteBlind` removes both. Ref tombstones follow a document tombstone's rule with a ref for a key. Pushes carry one entry; a push of several is some sequence of these with fewer states between. D-EVS-45's move is one of the placements the model already allows. Coverage rows are not modelled: what is indexed is a ghost, and a backfill is whatever the content holds that no entry reaches. The erasure's CUT, CLOSUREs and epoch are `IndexRollup.tla`'s, and SEARCH-M10-46 joins the two. A DROP's rewrite is not modelled: its rule (1.2.3) is argued under I1 and held by FS-107's case.
+What it leaves out, and why that is safe. Sizes: KeepSlots and the delta bound only turn diffs into full entries, and the model lets either be chosen. D6's shard test is a size too (amended 2026-11-12, QD-760): a version it skips is a tombstone, which the model has, and that a new shard takes at least one is 1.2.4's argument, not a run's. So are step 1's give-up and step 3's test (amended 2026-11-12, QD-775): they move rows between shards of one partition and change no winner, and that every shard a layout writes fits is 1.2.4's argument as well. Several shards a bucket: `layout` is a function of the winners, and the model's one shard makes the shard's CAS and the manifest's the same step, so `PromoteBlind` removes both. Ref tombstones follow a document tombstone's rule with a ref for a key. Pushes carry one entry; a push of several is some sequence of these with fewer states between. D-EVS-45's move is one of the placements the model already allows. Coverage rows are not modelled: what is indexed is a ghost, and a backfill is whatever the content holds that no entry reaches. The erasure's CUT, CLOSUREs and epoch are `IndexRollup.tla`'s, and SEARCH-M10-46 joins the two. A DROP's rewrite is not modelled: its rule (1.2.3) is argued under I1 and held by FS-107's case.
 
 **The runs**, on 2026-11-10 with TLC from tla2tools at d8fb231, through `run-indexmerge.sh`, on a host shared with the build lanes. Every run but one is breadth-first over its whole state graph. The one marked simulation draws 4,000 traces a worker from a fixed seed and shows only that those kept every invariant.
 
@@ -726,6 +777,9 @@ requests     one upload a changed shard and one push
 time         one encode a changed shard; at §11.14's speed 10 to 15 ms each, on the draft encoder about a second
 take         only when the youngest shard fills, once in about 19 merges: up to 12 length computations of a
              1 MiB shard
+join, give-up (amended 2026-11-12, QD-775) a join's test is the joined shard's own encode, taken before the
+             join and not after; a give-up runs take's search once, and only when a removal has left a
+             shard past the cap
 ```
 
 **A roll-up** of a bucket of n documents: one lock push; S's winners into all, n × 471 to 900 B, as ⌈that / 1 MiB⌉ + 1 uploads; a/m; the removal of b/<S>/, one entry a file (the manifest, the shards and every writer's slots and large entries); a promotion's shard and manifest when there is one, which needs two writers' clocks apart at the boundary or a trailing entry; and each all shard holding a row that a carried version or tombstone replaces.
@@ -841,6 +895,13 @@ a document past a shard        (amended 2026-11-12, QD-760) skipped at extractio
                                that composes to one is left out as a diff with no base is. Behind both,
                                errIndexMergeUnplaceable: an empty shard that takes nothing fails the merge,
                                which writes nothing.
+a shard past the cap           (amended 2026-11-12, QD-775) no layout writes one. A join that would not encode
+                               within ShardBody is not made, and its two shards stay. A shard that a removal
+                               leaves past ShardBody gives up its highest entries to the rows the layout
+                               appends (1.2.4). Neither is a failure, and neither raises anything. Behind both,
+                               errIndexShardFull out of step 5's encode fails the layout, and the merge, the
+                               push past DirectBytes or the roll-up writes nothing: a state no input a decoder
+                               accepts reaches.
 a runner that rolls early      a roll-up whose signed time is before its bucket's expiry is caught by every
                                reproducer: index_mismatch naming it. Its effect is a roll-up done early, which
                                breaks no invariant but R5's margin.
@@ -925,6 +986,41 @@ FuzzIndexLayoutTakes          any shards and any winners D6 kept: layout never r
 
 Mutants: a decoder without the bound fails `TestAnEntryPastAShardIsRefused`; a merge that composes without it fails the same test's diff case; a layout without the guard does not return from `TestAnUnplaceableLayoutWritesNothing`, which runs under a deadline.
 
+**A layout at the cap** (amended 2026-11-12, QD-775). The fix track's tests, top-level, in `evs_index_merge_test.go`. The first two are the cases measured on 2026-11-12 for question details-amend-2-layout-past-the-cap, built through the shard encoder as that measurement built them:
+
+```text
+merge/ vectors                a join refused at the cap, and a removal that gives up rows: the two cases
+                              below, each with its input shards and the output files' plaintext hashes
+TestAJoinPastTheCapIsNotMade  a bucket whose two adjacent shards hold 16 documents sharing 60,000 keys
+                              (372,510 B before its pad) and 2,000 small documents (119,795 B): they come to
+                              492,305 B, under ShardJoin, and as one shard do not encode within ShardBody,
+                              since each of the 60,000 lists grows from a 2 B bitset to 16 docids or more. A
+                              merge of the bucket commits; both shards stand under their own n with their own
+                              bytes; the manifest lists both. Again with a third shard of 100 small documents
+                              after them: the first pair is refused, and the second and third are joined
+TestARemovalPastTheCapGivesUpRows
+                              a shard that take filled to within one document of ShardBody, its keys in runs
+                              of 64 sharing two bytes and the first key held by one small document alone. A
+                              merge whose winner is that document's tombstone removes its row, and the shard
+                              as it then stands would encode 2,447 B longer, past ShardBody. The layout keeps
+                              the count take's search finds over the shard's remaining entries; the rest, from
+                              its highest doc_key down, join the tombstone among the appended rows; the shard,
+                              being the youngest, takes back what take's test allows and a next shard opens
+                              for the others; the merge commits; each shard decodes within ShardBody; every
+                              key stands once across the shards; a second run writes equal bytes. Again with
+                              the full shard not the youngest: its given-up rows go to the youngest
+TestALayoutKeepsAShardNothingChanged
+                              a shard a CLOSURE rewrote on its replaced partition, whose encoding by blocks of
+                              64 would pass ShardBody: a merge that changes nothing in it leaves its bytes; as
+                              the youngest shard it takes nothing and a next shard opens; one removal from it
+                              makes it give up rows
+FuzzIndexLayoutWrites         any shards a decoder accepts and any winners D6 kept: layout returns no error,
+                              every shard it writes is within ShardBody before its pad, and each key stands
+                              once. It takes FuzzIndexLayoutTakes's place
+```
+
+Mutants: a layout that joins on the sum alone returns errIndexShardFull from `TestAJoinPastTheCapIsNotMade`; one that skips the give-up returns it from `TestARemovalPastTheCapGivesUpRows`; one that gives up from the lowest key, or that leaves G unsorted, fails that test's vector.
+
 ### 1.7 Implementation notes, task by task
 
 Order: SEARCH-M10-45 first, since every other task plans on its `plan`. Then SEARCH-M10-10, then SEARCH-M10-11 and SEARCH-M10-12 together, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, and the schedules as their mechanisms land. SEARCH-M10-46 at any time. All are the evs lane's. Entries for the two new tasks are in `.stack/plan/proposals/details-1-tasks.md`.
@@ -976,6 +1072,27 @@ protocol/INDEX-FORMAT.md  1.8's two sentences
 ```
 
 Traps: the bound is computed on the row's bytes as the entry holds them, never on a row built again from fields, so a decoder and a writer cannot differ by a trimming; a merge must not skip a document itself, since a merge's output is only its inputs' newest versions (the question's option 3 was not taken), so it either places a winner or fails; `take` still asks the encoder for a length and never uses lone(d) in its place, since lone is an upper bound and the layout's bytes are the encoder's.
+
+**SEARCH-M10-10's fix track for QD-775** (amended 2026-11-12, QD-775). The layout's two tests, on the landed `indexLayout`; it follows or rides with the QD-760 fix track, since both touch the same function and its guards. Landed code that changes:
+
+```text
+evs_index_merge.go        indexLayout, after step 1's removals: each changed shard is asked for its length
+                          before its pad. Where the encoder answers errIndexShardFull, indexTake runs on an
+                          empty shard with the shard's remaining entries in append order (key, then kind);
+                          the shard keeps that count, the rest join the appended entries, and those are
+                          sorted again before step 2. A count of 0 returns errIndexMergeUnplaceable.
+                          Step 3's loop: where the two lengths come to under ShardJoinByteCount it asks
+                          the encoder for the union, and on errIndexShardFull leaves the pair and moves on
+                          by one. errIndexShardFull out of step 5's build still returns; the comments on
+                          both errors say that QD-760 and QD-775 make them unreachable and that they stay
+                          as closed guards
+evs_index_shard.go        errIndexShardFull's comment: a test's answer in take, step 1 and step 3
+evs_index_merge_test.go   1.6's four tests; FuzzIndexLayoutTakes becomes FuzzIndexLayoutWrites;
+                          testdata/index/merge/ gains its two vectors
+protocol/INDEX-FORMAT.md  1.8's Merges text
+```
+
+Traps: a give-up's entries are the shard's rows and tombstones together, in the appended entries' order, and the appended entries are sorted once with them in; the join's test is the union's encoding by blocks of 64 under the layout's header, never the sum of two lengths; an unchanged shard's length in the sum is its stored bytes before their pad, which the landed code already reads; a refused pair moves the scan on by one, so its second shard is tried with the next; the test of step 1 runs on shards step 1 changed and on no other, so a shard on a kept partition that nothing touches is never encoded again; the roll-up's layout of all and each promotion's merge are this function and need nothing of their own; a CLOSURE's and a DROP's `rewriteWithout` is not a layout and keeps QD-173's rule.
 
 **SEARCH-M10-11, roll-ups and the index lock** (held; L; its Build changes). Build 1.2.5. `indexRollup` is pure over S whole, all, and a lookup "the newest version of this key in the newer buckets", which the runner answers from §5.9's version table where CORE-M10-02 has landed and else from a key-to-version run built in storage from the newer buckets' doc tables and slots. Step 4's in-place rewrite leaves the task: the roll-up calls `indexMerge` with `extra` and `absorb` false for each promotion target. `rewriteWithout` (landed, SEARCH-M10-05) keeps its two other callers, a CLOSURE and a DROP. Expiry is judged at the push's signed time, for the trigger, the lock and the merge runner's "never on an expired bucket"; the lock renews at half its term. `indexer_search.go` schedules merges, roll-ups and backfills as planned. Step 5's coverage rows go into the runner's own head in the newest bucket through `indexPlanHead` with no document. Traps: read S, the newer buckets and all at one head version taken after the lock commits; a 409 that is not the lock's keeps the lock and reruns from the read; a promotion writes the target's manifest even when it had none; a/m's `rolled_through_day` and I-EVS-11 as 1.8 words them. Tests: 1.6's roll-up vectors (one with a promotion replaces "one removing an older newer-bucket entry"); FS-75's barriers; the promotion races.
 
@@ -1046,6 +1163,8 @@ Traps: the bound is computed on the row's bytes as the entry holds them, never o
 
 **Amended 2026-11-12, QD-760.** §11.14, Merges, the output row: after "a next one opening at the cap" add ", which takes at least one, since extraction skips a document that alone would not fit a shard (sniff row)". The sniff row's own words are section 11.8's. protocol/INDEX-FORMAT.md, in the fix track's change: Entries, for "A key set encodes to at most 512 KiB, since a chunk past that is skipped." read "A key set encodes to at most 512 KiB, and a full entry's row and key set pass D6's shard test, since a document past either is skipped; a decoder refuses an entry past either, and a diff whose composed set fails the test under its own row is malformed, as a diff with no base is." Shards, Merges, after "takes again from there": "A new shard takes at least one row, since D6 keeps no document that alone would not fit; an implementation whose empty shard takes nothing has met an input off the rules and writes nothing."
 
+**Amended 2026-11-12, QD-775.** §11.14, Merges, the output row: for "its older version dropped from the shard holding it" read "its older version dropped from the shard holding it, a shard that this leaves past the cap giving its highest entries to the appended ones"; for "adjacent shards under 512 KiB together are joined" read "adjacent shards under 512 KiB together are joined where the joined shard fits the cap". §11.14, Roll-up, the steps row, step 4: for "join adjacent shards under 512 KiB" read "join adjacent shards under 512 KiB where the joined shard fits the cap". protocol/INDEX-FORMAT.md, in the fix track's change, Shards, Merges. Before "A merge's new rows, ascending by key, go to the youngest shard Y": "A merge first drops from each shard the entries it no longer keeps: its entry of a key whose winner is not that entry, and each row a ref tombstone or the erasure set drops. A shard so changed that no longer encodes within 1,032,192 B keeps the first c of its remaining entries, rows and tombstones ascending by key and then kind, c being the count the search below finds for an empty shard taking them, and gives up the rest, which join the merge's new rows." For "A merge's new rows, ascending by key, go to" read "The new rows, with any given up, ascending by key and then kind, go to". For "Then, by ascending n, while a shard and the next come to fewer than 524,288 B before their pads, the two become one under the lower n, the joined shard tested again with its next" read "Then, by ascending n, while a shard and the next come to fewer than 524,288 B before their pads and the two as one shard encode within 1,032,192 B, the two become one under the lower n, the joined shard tested again with its next; a pair that fails either test stays two shards and the scan goes on from the second; a shard's length is its encoding's where the merge changed it and its stored bytes' before their pad where it did not". After "a shard left with no row and no tombstone is removed.": "So a merge writes no shard past 1,032,192 B, and an implementation whose encoder refuses one at the last step has met an input off the rules and writes nothing."
+
 Nothing server-visible changes: no column, key, object family or proto field (I-18), and §2.8's evs-26 keeps its words but for the shape row's phrase above.
 
 ### 1.9 Owner questions
@@ -1068,6 +1187,7 @@ Each is filed under `.stack/questions/`, and the design above is built on its re
 - `search-m10-07-merge-stale-diff`: none of its options. Under R1 and R2 a merge's inputs always compose (I2), so the question has no case left.
 - `search-m10-07-rollup-merge-race`: the fence of its option 1, the newer bucket's manifest, on a different step 4 (R4, the second question above).
 - `search-m10-07-late-journal-tombstone`: its option 1, made exact: the pin is read from evs after the index, in the push's own build, and the push has a life (R5, the third question above).
+- `details-amend-2-layout-past-the-cap` (amended 2026-11-12, QD-775): its option 1, as the owner decided it. 1.2.4's steps 1 and 3 carry the rule, with one reading: a give-up takes the shard's tombstones in key order with its rows.
 - `plan-SEARCH-no-document-pushes` (QD-209), `plan-SEARCH-shrink-claim` (QD-173), `plan-SEARCH-small-readings` #4 and #6 (QD-406, QD-511), `plan-SEARCH-index-format-bytes` (QD-300) and `plan-SEARCH-sync-before-search` (QD-048): stand. QD-173's partition-keeping rewrite loses one of its three callers, the roll-up's step 4. QD-477's slot order and QD-475's paths are used as they are.
 
 ## 2. Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6)

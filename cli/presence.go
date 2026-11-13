@@ -11,7 +11,8 @@
 // keys never leave the authenticator, so nothing here holds a private key. A webauthn-es256 assertion's client data is
 // a webauthn.get with challenge base64url(SHA-256(message)) and origin https://ur.io, what the root's origin table
 // holds for every host but Android (QD-073), and rp id ur.io. Registration asks for no attestation, since no release
-// ships roots yet (QD-137): every key labels asserted.
+// ships roots yet (QD-137), so every key labels asserted: a webauthn-es256 registration carries a fmt none attestation
+// object and the create ceremony's client data, KeyRegister.attestation's map (QD-730), and a Secure Enclave key none.
 
 package main
 

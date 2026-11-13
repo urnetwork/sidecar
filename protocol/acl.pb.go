@@ -517,18 +517,22 @@ func (RepoAdminChange) EnumDescriptor() ([]byte, []int) {
 }
 
 type AclRows struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	HasDocument   bool                   `protobuf:"varint,1,opt,name=has_document,json=hasDocument,proto3" json:"has_document,omitempty"` // owner decisions 50, 105
-	Atoms         []*AclAtom             `protobuf:"bytes,2,rep,name=atoms,proto3" json:"atoms,omitempty"`                                 // §7.9's keyed tag and group ids -> member_ids, sidecar_ids
-	Rules         []*AclRule             `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
-	Requests      []*AclRequestRule      `protobuf:"bytes,4,rep,name=requests,proto3" json:"requests,omitempty"`
-	Repos         []*AclRepo             `protobuf:"bytes,5,rep,name=repos,proto3" json:"repos,omitempty"`
-	Bridge        []byte                 `protobuf:"bytes,6,opt,name=bridge,proto3" json:"bridge,omitempty"`                              // §17's id-only section
-	Audit         *AclAudit              `protobuf:"bytes,7,opt,name=audit,proto3" json:"audit,omitempty"`                                // owner decision 63; Team only
-	Suspensions   []*AclSuspension       `protobuf:"bytes,8,rep,name=suspensions,proto3" json:"suspensions,omitempty"`                    // active Suspends a fold kept (plan-ACL-folded-grant-state #1)
-	SpentGrants   []*AclSpentGrant       `protobuf:"bytes,9,rep,name=spent_grants,json=spentGrants,proto3" json:"spent_grants,omitempty"` // activated and revoked grant ids (plan-ACL-folded-grant-state #3)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	HasDocument bool                   `protobuf:"varint,1,opt,name=has_document,json=hasDocument,proto3" json:"has_document,omitempty"` // owner decisions 50, 105
+	Atoms       []*AclAtom             `protobuf:"bytes,2,rep,name=atoms,proto3" json:"atoms,omitempty"`                                 // §7.9's keyed tag and group ids -> member_ids, sidecar_ids
+	Rules       []*AclRule             `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
+	Requests    []*AclRequestRule      `protobuf:"bytes,4,rep,name=requests,proto3" json:"requests,omitempty"`
+	Repos       []*AclRepo             `protobuf:"bytes,5,rep,name=repos,proto3" json:"repos,omitempty"`
+	Bridge      []byte                 `protobuf:"bytes,6,opt,name=bridge,proto3" json:"bridge,omitempty"`                              // §17's id-only section
+	Audit       *AclAudit              `protobuf:"bytes,7,opt,name=audit,proto3" json:"audit,omitempty"`                                // owner decision 63; Team only
+	Suspensions []*AclSuspension       `protobuf:"bytes,8,rep,name=suspensions,proto3" json:"suspensions,omitempty"`                    // active Suspends a fold kept (plan-ACL-folded-grant-state #1)
+	SpentGrants []*AclSpentGrant       `protobuf:"bytes,9,rep,name=spent_grants,json=spentGrants,proto3" json:"spent_grants,omitempty"` // activated and revoked grant ids (plan-ACL-folded-grant-state #3)
+	// The document's effective evidenceDefault, compiled at each base as each AclRequestRule's evidence is: the
+	// ApprovalDecision.channel values accepted for an action no requests rule names (dns_set, dns_delete,
+	// bridge_expose); default all three (QD-727)
+	EvidenceDefault []uint32 `protobuf:"varint,10,rep,packed,name=evidence_default,json=evidenceDefault,proto3" json:"evidence_default,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *AclRows) Reset() {
@@ -620,6 +624,13 @@ func (x *AclRows) GetSuspensions() []*AclSuspension {
 func (x *AclRows) GetSpentGrants() []*AclSpentGrant {
 	if x != nil {
 		return x.SpentGrants
+	}
+	return nil
+}
+
+func (x *AclRows) GetEvidenceDefault() []uint32 {
+	if x != nil {
+		return x.EvidenceDefault
 	}
 	return nil
 }
@@ -2549,7 +2560,7 @@ var File_protocol_acl_proto protoreflect.FileDescriptor
 
 const file_protocol_acl_proto_rawDesc = "" +
 	"\n" +
-	"\x12protocol/acl.proto\x12\x11urnetwork.sidecar\x1a\x1aprotocol/bridge/auth.proto\x1a\x1cprotocol/bridge/signed.proto\"\xd5\x03\n" +
+	"\x12protocol/acl.proto\x12\x11urnetwork.sidecar\x1a\x1aprotocol/bridge/auth.proto\x1a\x1cprotocol/bridge/signed.proto\"\x80\x04\n" +
 	"\aAclRows\x12!\n" +
 	"\fhas_document\x18\x01 \x01(\bR\vhasDocument\x120\n" +
 	"\x05atoms\x18\x02 \x03(\v2\x1a.urnetwork.sidecar.AclAtomR\x05atoms\x120\n" +
@@ -2559,7 +2570,9 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x06bridge\x18\x06 \x01(\fR\x06bridge\x121\n" +
 	"\x05audit\x18\a \x01(\v2\x1b.urnetwork.sidecar.AclAuditR\x05audit\x12B\n" +
 	"\vsuspensions\x18\b \x03(\v2 .urnetwork.sidecar.AclSuspensionR\vsuspensions\x12C\n" +
-	"\fspent_grants\x18\t \x03(\v2 .urnetwork.sidecar.AclSpentGrantR\vspentGrants\"\x80\x02\n" +
+	"\fspent_grants\x18\t \x03(\v2 .urnetwork.sidecar.AclSpentGrantR\vspentGrants\x12)\n" +
+	"\x10evidence_default\x18\n" +
+	" \x03(\rR\x0fevidenceDefault\"\x80\x02\n" +
 	"\aAclAtom\x12\x12\n" +
 	"\x04atom\x18\x01 \x01(\fR\x04atom\x12\x1d\n" +
 	"\n" +
