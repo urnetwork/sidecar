@@ -268,6 +268,8 @@ func aclRowsCopy(rows *protocol.AclRows) *protocol.AclRows {
 		Audit:       rows.GetAudit(),
 		Suspensions: rows.GetSuspensions(),
 		SpentGrants: rows.GetSpentGrants(),
+		// the base's compile, which no statement changes (QD-727)
+		EvidenceDefault: rows.GetEvidenceDefault(),
 	}
 	if unknown := rows.ProtoReflect().GetUnknown(); len(unknown) != 0 {
 		next.ProtoReflect().SetUnknown(unknown)

@@ -91,8 +91,8 @@ type sinkTestRule struct {
 	member sidecar.Id
 }
 
-func (self *sinkTestRule) Evidence() ([]protocol.ApprovalChannel, bool) {
-	return []protocol.ApprovalChannel{protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE}, true
+func (self *sinkTestRule) Evidence() []protocol.ApprovalChannel {
+	return []protocol.ApprovalChannel{protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE}
 }
 func (self *sinkTestRule) ApproverCount() int                         { return 1 }
 func (self *sinkTestRule) Eligible(memberId sidecar.Id) bool          { return memberId == self.member }

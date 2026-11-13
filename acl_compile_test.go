@@ -791,6 +791,69 @@ func TestCompileAclMailIndexerKindRules(t *testing.T) {
 	}
 }
 
+// QD-727: rows carry the document's effective evidenceDefault as channel values, sorted, all three where the document
+// names none and for the implicit document; a requests rule that names no evidence compiles to the same list, and one
+// that names its own keeps it (QD-396). The list is part of the bytes every reader compiles, in any order written.
+func TestCompileAclCarriesEvidenceDefault(t *testing.T) {
+	device := uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE)
+	presence := uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE)
+	harness := uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS)
+	all := []uint32{device, presence, harness}
+	compile := func(source string) *protocol.AclRows {
+		world := newAclCompileWorld("evidence default")
+		if source != "" {
+			world.setPolicy(t, source)
+		}
+		return world.compile(t)
+	}
+	if got := compile("").GetEvidenceDefault(); !slices.Equal(got, all) {
+		t.Errorf("the implicit document: %v", got)
+	}
+	if got := compile(`{}`).GetEvidenceDefault(); !slices.Equal(got, all) {
+		t.Errorf("a document naming none: %v", got)
+	}
+	if got := compile(`{"evidenceDefault": ["device"]}`).GetEvidenceDefault(); !slices.Equal(got, []uint32{device}) {
+		t.Errorf("a document naming device: %v", got)
+	}
+
+	requests := `"requests": [
+		{"src": ["autogroup:member"], "dst": ["autogroup:self"], "allow": ["dial"], "approver": ["autogroup:self"]},
+		{"src": ["autogroup:member"], "dst": ["autogroup:self"], "allow": ["route"], "approver": ["autogroup:self"], "evidence": ["presence"]}]`
+	narrowed := compile(`{"evidenceDefault": ["harness", "device"], ` + requests + `}`)
+	if got := narrowed.GetEvidenceDefault(); !slices.Equal(got, []uint32{device, harness}) {
+		t.Errorf("a document naming harness and device: %v", got)
+	}
+	if len(narrowed.GetRequests()) != 2 {
+		t.Fatalf("%d requests rows", len(narrowed.GetRequests()))
+	}
+	for i, request := range narrowed.GetRequests() {
+		want := []uint32{device, harness}
+		if slices.Contains(request.GetActions(), uint32(protocol.AclAction_ACL_ACTION_ROUTE)) {
+			want = []uint32{presence}
+		}
+		if !slices.Equal(request.GetEvidence(), want) {
+			t.Errorf("requests[%d]'s evidence %v, want %v", i, request.GetEvidence(), want)
+		}
+	}
+	// the list's order in the document does not reach the bytes
+	reordered := compile(`{` + requests + `, "evidenceDefault": ["device", "harness"]}`)
+	if !bytes.Equal(aclEncodeRows(t, reordered), aclEncodeRows(t, narrowed)) {
+		t.Error("the same default written in another order compiles to other bytes")
+	}
+	if bytes.Equal(aclEncodeRows(t, compile(`{`+requests+`}`)), aclEncodeRows(t, narrowed)) {
+		t.Error("a narrowed default compiles to the default document's bytes")
+	}
+
+	// a state folds statements over a base's rows without losing the default
+	state, err := NewAclState(narrowed, newAclCompileWorld("evidence default").view())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := aclRowsCopy(state.Rows()).GetEvidenceDefault(); !slices.Equal(got, []uint32{device, harness}) {
+		t.Errorf("a fold's copy of the rows: %v", got)
+	}
+}
+
 // A head compiles through §7.9's compile with CompileAcl registered (C-05), to the same rows CompileAcl gives.
 func TestCompileProjectionRowsRunsCompileAcl(t *testing.T) {
 	net := newTestConfigNet(t)

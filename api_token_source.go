@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"time"
 )
 
 // The DPoP signer a token source refreshes with: §7.4's proof over (method, url, ath) by the ClientKey.
@@ -124,7 +125,8 @@ func (self *Sidecar) followTokenSource(ctx context.Context, source SidecarTokenS
 }
 
 // The DPoP signer of this sidecar's current ClientKey (§7.4), for a host to install where it refreshes or mints with
-// the child's token (sdk's Api.SetDpopSigner). The seed never leaves the root: this is a signing function.
+// the child's token (sdk's Api.SetDpopSigner). The seed never leaves the root: this is a signing function. Its proofs
+// sign iat by the api's clock as this sidecar's own api client reads it (apiClockOffset).
 // ErrSidecarNoIdentity before enrollment, and the keychain's errors while it is locked or failed.
 func (self *Sidecar) DpopSigner() (SidecarDpopSigner, error) {
 	secrets := self.currentCoreSecrets()
@@ -138,11 +140,20 @@ func (self *Sidecar) DpopSigner() (SidecarDpopSigner, error) {
 	defer record.keys.erase()
 	seed := record.keys.clientKeySeedCopy()
 	defer clear(seed)
-	signer, err := newDpopSigner(seed, self.clock.Now, rand.Reader)
+	signer, err := newDpopSigner(seed, self.clock.Now, self.apiClockOffset, rand.Reader)
 	if err != nil {
 		return nil, err
 	}
 	return signer, nil
+}
+
+// The api's clock less this device's, as this sidecar's api client keeps it from api's answers: what its ClientKey's
+// proofs sign iat by (§7.4, QD-757). Zero where no answer has given one, which is this device's clock alone.
+func (self *Sidecar) apiClockOffset() time.Duration {
+	if self.sidecarApi == nil {
+		return 0
+	}
+	return self.sidecarApi.currentApiClockOffset()
 }
 
 // Posts this sidecar's newest binding again and re-registers each component's registrations (§5.6, §19.10): what a
