@@ -11,9 +11,11 @@
 // under §7.9's sealed-body format, so its clear grant_dst names subjects alone, never an ip: prefix or a port. Every
 // version-4 action carries one, a template's included, so no such grant reads as one to every port.
 // Version 3 is kind access_request alone, in fields 8, 10, 11, 14, 26 and 29 with its port and port text in field 38
-// the same way (16.11), 27 leaving its clear set. Field 38 is set in no other version. A version-1 bridge_forward,
-// the shape before the answer, still parses, since ACL's GrantActivate checks hold it until they read the detail;
-// NewCanonicalAction builds none.
+// the same way (16.11), 27 leaving its clear set. Field 38 is set in no other version, and bridge_forward takes no
+// other version than 4: the shape before the answer, a version-1 forward with its port in the clear, is refused by
+// every parser, as NewCanonicalAction builds none. At every version a clear grant_dst names its destination alone,
+// since a GrantActivate carries a prefix or a port only sealed (owner decision 220), so no parser admits what the
+// builder refuses.
 //
 // Which fields each other kind fills, and which of them a GrantActivate or a gate may carry, are MCP-M3-02's kind
 // table, and the per-path allowlist ACL's and the gates' (protos-services-canonical-action); this file holds what is
@@ -148,8 +150,9 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 	if accessRequest != (version == canonicalActionVersionAccessRequest) {
 		return fmt.Errorf("%w: kind %s at version %d", ErrCanonicalActionInvalid, kind, version)
 	}
-	if version == canonicalActionVersionSealedGrant && kind != protocol.SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD {
-		// the one kind whose grant is a dial or route grant
+	forward := kind == protocol.SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD
+	if forward != (version == canonicalActionVersionSealedGrant) {
+		// the one kind whose grant is a dial or route grant, and it takes no version that seals nothing
 		return fmt.Errorf("%w: kind %s at version %d", ErrCanonicalActionInvalid, kind, version)
 	}
 	sealedVersion := version == canonicalActionVersionAccessRequest || version == canonicalActionVersionSealedGrant
@@ -172,14 +175,16 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 			return fmt.Errorf("%w: field %d at version 4", ErrCanonicalActionInvalid, number)
 		}
 	}
-	if sealedVersion {
-		// the clear fields hold no prefix or port, and what rides sealed reads as a sealed body: an approver that
-		// cannot open it refuses the action rather than render it short (D-MCP-17)
-		for _, dst := range action.GetGrantDst() {
-			if !canonicalActionGrantDstClear(dst) {
-				return fmt.Errorf("%w: a clear grant_dst naming a prefix or a port at version %d", ErrCanonicalActionInvalid, version)
-			}
+	// at every version the clear fields hold no prefix or port (owner decision 220): the text stays out of the error,
+	// which a log may carry (I-13)
+	for _, dst := range action.GetGrantDst() {
+		if !canonicalActionGrantDstClear(dst) {
+			return fmt.Errorf("%w: a clear grant_dst naming a prefix or a port at version %d", ErrCanonicalActionInvalid, version)
 		}
+	}
+	if sealedVersion {
+		// what rides sealed reads as a sealed body: an approver that cannot open it refuses the action rather than
+		// render it short (D-MCP-17)
 		if sealed := action.GetSealedDetail(); len(sealed) != 0 && !canonicalActionSealedDetailLayout(sealed) {
 			return fmt.Errorf("%w: a sealed_detail of %d bytes", ErrCanonicalActionInvalid, len(sealed))
 		}
