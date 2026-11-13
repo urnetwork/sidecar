@@ -4,8 +4,9 @@
 // table's request column), are rendered by name, and bind the spend; a version-4 grant is rendered with its sealed
 // detail opened, approved, spent with its request's local port, and folds port-limited at a GrantActivate; a device
 // that cannot open a detail approves nothing; and a request with a field this build cannot name is still refused
-// (D-MCP-17). On the approver world of record_approval_decide_test.go, the approval world of
-// record_approval_state_test.go and ACL's statement cast. Synthetic values only.
+// (D-MCP-17). QD-771's production path: a sidecar seals and an approver opens with the device's installed config keys
+// under the context the action's own clear fields derive. On the approver world of record_approval_decide_test.go,
+// the approval world of record_approval_state_test.go and ACL's statement cast. Synthetic values only.
 
 package sidecar
 
@@ -111,24 +112,76 @@ func TestSealedGrantRenderedOpenedAndApproved(t *testing.T) {
 	}
 }
 
-// A device that cannot open a grant's sealed detail, with no opener, without the key's generation, or holding a
-// detail that is not the action's, shows the rest, says the detail stayed sealed, lists deny alone, and signs no
-// approval: a prefix or a port is never approved unseen (D-MCP-17). A denial is still signed.
+// The production path, with no test opener (QD-771): a daemon's sidecar seals a forward's detail under its installed
+// config key once the forward's clear fields are final (Sidecar.SealActionDetail), in its own network, and an
+// approver's device there opens it with its own installed keys (NewApprovalApprover's opener, Sidecar.OpenActionDetail),
+// renders what it holds and signs its approval. A sidecar with no config keys installed seals nothing.
+func TestSealedGrantOpensWithTheDevicesInstalledKeys(t *testing.T) {
+	world := newTestApproverWorld(t)
+	clear := proto.Clone(testBuildableActions()["bridge_forward"]).(*protocol.CanonicalAction)
+	clear.SealedDetail = nil
+	if _, err := world.sidecar.SealActionDetail(t.Context(), clear, testForwardDetail()); !errors.Is(err, ErrConfigSealGenerationMissing) {
+		t.Errorf("sealing with no config keys: %v", err)
+	}
+	t.Cleanup(world.sidecar.InstallConfigKeys(&testConfigKeys{key: testConfigSealKey(testActionDetailGeneration)}))
+	forward, err := world.sidecar.SealActionDetail(t.Context(), clear, testForwardDetail())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// sealed in the sidecar's own network, so a device in another opens nothing of it
+	if _, err := newTestActionDetailOpener(testActionDetailGeneration).OpenActionDetail(forward); !errors.Is(err, ErrConfigSealInvalid) {
+		t.Errorf("another network's device: %v", err)
+	}
+	if detail, err := world.sidecar.OpenActionDetail(forward); err != nil || !proto.Equal(detail, testForwardDetail()) {
+		t.Errorf("the sidecar's own open: %+v, %v", detail, err)
+	}
+	request := world.putDetail(world.requesterId, forward, &SidecarActionDetail{LocalPort: 18443})
+	item := world.item(request.ApprovalId())
+	if item.Refused != "" || len(item.Decisions) != 2 || !item.Render.Sealed || !item.Render.Opened {
+		t.Fatalf("the item: %+v", item)
+	}
+	if value, ok := testRenderField(item.Render, "sealed_detail.grant_dst"); !ok || value != testActionTargetDst+":tcp:8443" {
+		t.Errorf("sealed_detail.grant_dst renders %q (%t)", value, ok)
+	}
+	if err := world.approver.Decide(t.Context(), request.ApprovalId(), &SidecarRequestDecision{Decision: SidecarDecisionApprove}, SidecarActConfirmed, nil); err != nil {
+		t.Fatal(err)
+	}
+	if decision := world.lastDecision(); !decision.Binds(request) ||
+		decision.Decision.GetDecision() != uint32(protocol.ApprovalVerdict_APPROVAL_VERDICT_APPROVE) {
+		t.Errorf("the decision: %+v", decision.Decision)
+	}
+}
+
+// A device that cannot open a grant's sealed detail, with no config keys installed, with no opener, without the key's
+// generation, in another network, beside another action's clear fields, or holding a detail that is not the action's,
+// shows the rest, says the detail stayed sealed, lists deny alone, and signs no approval: a prefix or a port is never
+// approved unseen (D-MCP-17). A denial is still signed.
 func TestSealedGrantNotOpenedTakesNoApproval(t *testing.T) {
 	forward := testSealedForward(t)
-	stray := proto.Clone(testBuildableActions()["bridge_forward"]).(*protocol.CanonicalAction)
-	stray.SealedDetail = testSealActionDetail(&protocol.CanonicalActionDetail{GrantDst: []string{"sidecar:6162636465666768696a6b6c6d6e6f70:tcp:22"}})
+	// a detail sealed beside its own clear fields that names a sidecar they do not
+	stray := testWithSealedDetail(proto.Clone(testBuildableActions()["bridge_forward"]).(*protocol.CanonicalAction),
+		&protocol.CanonicalActionDetail{GrantDst: []string{"sidecar:6162636465666768696a6b6c6d6e6f70:tcp:22"}})
+	// the forward's detail beside another subject's clear fields
+	moved := proto.Clone(forward.Action).(*protocol.CanonicalAction)
+	moved.Subject = bytes.Repeat([]byte{0x58}, 16)
+	elsewhere := newTestActionDetailOpener(testActionDetailGeneration)
+	elsewhere.networkId = testConfigId("another network")
 	for name, c := range map[string]struct {
-		opener CanonicalActionDetailOpener
-		action *StoredCanonicalAction
+		// the world's own sidecar, which holds no config keys, where none is set
+		opener   CanonicalActionDetailOpener
+		noOpener bool
+		action   *StoredCanonicalAction
 	}{
-		"no opener":            {action: forward},
-		"no generation":        {opener: newTestActionDetailOpener(1, 2), action: forward},
-		"another action's":     {opener: newTestActionDetailOpener(testActionDetailGeneration), action: buildTestAction(t, stray)},
-		"an opener of nothing": {opener: testActionDetailOpenerOfNothing{}, action: forward},
+		"no config keys":            {action: forward},
+		"no opener":                 {noOpener: true, action: forward},
+		"no generation":             {opener: newTestActionDetailOpener(1, 2), action: forward},
+		"another network":           {opener: elsewhere, action: forward},
+		"another action's fields":   {opener: newTestActionDetailOpener(testActionDetailGeneration), action: buildTestAction(t, moved)},
+		"a detail not the action's": {opener: newTestActionDetailOpener(testActionDetailGeneration), action: buildTestAction(t, stray)},
+		"an opener of nothing":      {opener: testActionDetailOpenerOfNothing{}, action: forward},
 	} {
 		world := newTestApproverWorld(t)
-		if c.opener != nil {
+		if c.opener != nil || c.noOpener {
 			world.approver = world.approver.WithDetailOpener(c.opener)
 		}
 		request := world.putDetail(world.requesterId, c.action, &SidecarActionDetail{LocalPort: 18443})
@@ -330,7 +383,7 @@ func TestSealedGrantActivatesPortLimited(t *testing.T) {
 		Kind: uint32(SidecarActionForward), RuleId: selfRule, Subject: cast.laptop.Bytes(),
 		GrantDst: []string{phoneDst}, GrantAllow: []string{"dial"},
 	}, &protocol.CanonicalActionDetail{TargetPort: 22, GrantDst: []string{phoneDst + ":tcp:22"}},
-		testConfigSealKey(testActionDetailGeneration), testActionDetailContext(), nil)
+		testConfigSealKey(testActionDetailGeneration), testActionDetailNetworkId(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

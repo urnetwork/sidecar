@@ -200,8 +200,8 @@ func (self *GkmReconciler) sweepUnit(ctx context.Context, cluster sidecar.BlobCl
 		// forms live for the repo's life (gkm-1)
 		return gkmFormKeyPrefix + idText + "/" + gkmKeyPastSuffix, nil
 	case "dkey":
-		// forwarding Delegations' key objects, which the reconciler deletes from the state's rows (reconciler.go):
-		// passed in one unit
+		// forwarding Delegations' key objects, which the reconciler deletes from the state's rows and sweeps a
+		// network's prefix at a time (reconciler.go; QD-763): passed in one unit
 		return gkmDelegationKeyKeyPrefix + gkmKeyPastSuffix, nil
 	}
 	groupId, err := parseGkmHexId(family)

@@ -5703,3 +5703,139 @@ Changes: evsservice/check_objects.go: 5h's deposit-ref condition (DESIGN-DETAILS
 
 Questions: `details-14-deposit-cited-slots.md`.
 
+
+### QD-769: How do the competition's sealed evaluator programs and sim-latency's source ledger take sidecar: a new producer release, and under which identifiers?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §4 Repositories, code placement, branches, and build.*
+
+The competition's evaluator takes sidecar as an eleventh repository through new producer releases, as minimum-work and work-coverage were added: new program files with sidecar in their repository lists, new preparation programs pinning them, new dependency maps and a new selector in the round settings, with connect/sim-latency's list and ledger, run-main.sh and playbook.yml moved in the same change. The historical producers and their pins stay byte for byte. The owner names the identifiers and qualifies the release on the evaluator hosts together with the go1.27.4 re-qualification (QD-674). Until then the evaluator stays at ten repositories and fails closed on a server commit that needs sidecar, so server's main is not a competition epoch's source in between.
+
+Changes: connect/sim-latency/evaluator/container: new producer programs and preparation programs; controller/competition_round_baseline_preparation.go's dependency maps; the round settings' selector; connect/sim-latency's sourceRepositoryNames and ledger; run-main.sh and playbook.yml; owner steps outside the run: confirm the identifiers, build the evaluator images, qualify on the hosts with go1.27.4; decide whether launch/competition-production.yml.template's allowed patch paths gain sidecar/**.
+
+Questions: `competition-mg0-sealed-evaluator-producers.md`.
+
+### QD-770: What enumerates a network's active publish grants for `model.ListTlsPublishedNames`, and in which process?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §13 The TLS edge and certificates.*
+
+ACL adds a read-only AclState.PublishedNames(now): every rule allowing publish, grouped by host and port, with PublishGrant's agreement rule deciding audience and expiry and disagreeing rules listed as the closed audience. taskworker reads it through a gate cache and installs it as model.SetTlsPublishedNamesSource's source; a name's label and aliases come from network_edge_label and the verified domains. The abuse check's audience and expiry are then what the gates enforce, by one reading of the rules. A process with no source still answers unavailable, which the hourly check treats as a failed pass.
+
+Changes: sidecar: AclState.PublishedNames(now), sharing PublishGrant's agreement rule; server: taskworker hosts or reads a gate cache and installs the published-names source, joining network_edge_label and verified domains; ABUSE's §21.6 hourly check reads real names once the source is installed.
+
+Questions: `tls-m5-16-published-names-enumeration.md`.
+
+### QD-771: What is CanonicalAction.sealed_detail's seal bound to, given that an action has no StatementHeader?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
+
+CanonicalAction.sealed_detail's seal context is SignedType SIGNED_GRANT_ACTIVATE, the network id, and in the nonce's place the first 16 bytes of SHA-256 over the action's clear fields as stored with field 38 left out (kind, version, scope, 8, 10, 11, 28, 29; for version 3 also 14 and 26). A detail opens only beside the clear fields it was sealed with, in that network, so it cannot be moved to an action naming another subject, rule or destination. No new field and no new server-visible value; the seal is made after the clear fields are final.
+
+Changes: sidecar: one function derives the ConfigSealContext from an action; NewSealedCanonicalAction, OpenCanonicalActionDetail and their callers (the daemon's builders, the approver's render, the GrantActivate readers) use it; section 20 vectors; RECORD.md / the protocol document's CanonicalAction section states the derivation.
+
+Questions: `canonical-action-detail-seal-context.md`.
+
+### QD-772: May a socket_listen grant's GrantActivate carry the action's socket_name (field 23), or where else does an approver read the name?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
+
+A socket_listen's socket name moves from CanonicalAction field 23 to the sealed ApprovalRequest, a new field 17 beside local_port and weight. The action carries only the grant's fields (QD-064's server column stands as written), the approver renders the name from the request, and a server sees only grant_dst's sock: entry in the form it may already see. CanonicalAction.socket_name leaves api-7's mapping. A listen's grant can then be activated on every server path.
+
+Changes: record.proto: ApprovalRequest field 17 socket_name; CanonicalAction field 23 no longer set for socket_listen (reserved if no other kind uses it), listed in protocol/design_unfenced_test.go's testFenceAdditions; MCP-M3-02's socket_listen row, the request's binding, the approver's render, CheckCanonicalActionForServer's socket_listen case; testdata/metadata/fields.yml: CanonicalAction.socket_name leaves api-7; §16.8 and §2.8 text by design-records.
+
+Questions: `canonical-action-detail-listen-socket-name.md`.
+
+### QD-773: What does a reader that comes to hold a generation make of a bridge body sealed to it before it formed, once a fold has voided that body?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
+
+Completes QD-761. Every reader that holds keys refuses (void, no alarm) a bridge body whose generation's GenRotate time is more than GenerationFormGrace (a settings field, 1 h by default) after the entry that carries the body, so a generation claimed after a writer's void changes no reader's verdict and no device forks. UnformedVoidWait (a settings field, 24 h by default) runs from the filing's own entry in log time, not from when the writer came to hold every generation, and is raised to a floor of the grace plus 30 min. A writer voids only on a whole read of gkm made inside the plan that names G as newest while it holds keys 1..G; a checker never voids and, lacking the generation, takes the head's rows unchecked. The void at the fold and the readers' rule land together.
+
+Changes: DESIGN-DETAILS 12.2.3 stands as amended (commit 8526a95); details/BridgeVoid.tla and its 14 configurations; BridgeLedgerSettings: UnformedVoidWait, GenerationFormGrace; BridgeLedgerReader and BridgeBodyJudge: FormedThrough; Judge and openBody apply the grace test before opening the seal; BridgeLedgerFold gains Voided and Stopped becomes the first entry still waiting; bridgeFold logs config_key_void and names the filer (12.7); the gkm whole read is a few lines in a core-lane file: take G from the listing and test keys 1..G, since SyncRepo returns nil with a named generation unopened.
+
+Questions: `details-amend-2-late-generation.md`.
+
+### QD-774: Is it enough that a sidecar which keeps filing bridge bodies sealed to unformed generations holds the fold until it is revoked?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
+
+A member device that keeps filing bridge bodies sealed above every formed generation can hold the config fold for as long as it files; the design accepts this liveness bound. The remedy is revoking the filer, which is a statement and needs no base: the first plan whose tip is one UnformedVoidWait past the filer's last filing folds through. The writer's config_key_waiting line names the filer on every plan, and the wait is a settings field a network can lower. The id-level bound on the generation stays the complete answer if one is wanted later.
+
+Changes: DESIGN-DETAILS 12.2.3's 'What is left' stands as written; operations text: the alarm and the revocation as the remedy; BRIDGE-M4-23's fix track builds the log lines that name the filer.
+
+Questions: `details-amend-2-fold-holds.md`.
+
+### QD-775: What does a layout do when a join, or a re-block after a removal, leaves a shard past its cap?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+An index layout tests the result in the two steps that skipped it. Step 3 joins two adjacent shards only where the joined shard encodes within ShardBody, the encoder being asked as take asks it. A shard that step 1's removal left past ShardBody gives up rows from its highest doc_key down, by the search take runs, to the rows step 2 appends. With QD-760's skip at extraction, a layout is a function of its inputs that always writes.
+
+Changes: DESIGN-DETAILS 1.2.4's steps 1 and 3 and INDEX-FORMAT.md's Merges, before the index format freezes; the design agent amends 1.2.4 with section 15's pass over section 1; indexLayout's join and removal steps; errIndexShardFull and errIndexMergeUnplaceable stay as closed guards the rules make unreachable.
+
+Questions: `details-amend-2-layout-past-the-cap.md`.
+
+### QD-776: How does a page Worker read the api's clock for its DPoP iat, given that the lb exposes no Date header to a cross-origin fetch?
+*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §18 SDK, apps, and extension integration.*
+
+The load balancer's Access-Control-Expose-Headers list gains Date, so a page Worker reads the api's clock from its answers as every other leg does (QD-757) and signs its DPoP iat by it. §18.15's list, warp's addCorsHeaders and the pagestack fixture's list each gain the one word. No api shape changes and no new metadata row.
+
+Changes: warp/warpctl/config.go addCorsHeaders: Date in Access-Control-Expose-Headers, with its config test; sidecar's pagestack fixture list; TestSkewedSidecarApiWithNoDateStaysRefused keeps holding for an answer with no Date, and a page-leg test shows a skewed Worker renewing; §18.15's Services row text by design-records; the owner applies the lb change with warp's next deploy.
+
+Questions: `dpop-iat-offset-page-worker-date.md`.
+
+### QD-777: When an erasure's CUT lists a version that an edit's diff already rests on, should the eraser re-enter the edit from the index and then erase the diff as well as its base?
+*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+An index diff resting on an erased version is itself erased content. The eraser composes the surviving edit's version from the diff and its base, reading index files only, and enters it full in its own head by an ordinary index push before any CLOSURE of the base's or the diff's file. The erasure's file list takes in every slot holding such a diff, and a CLOSURE removes the diff with the listed entries. A merge or roll-up composes such a diff through its listed base while the base stands; a reader passes over a diff whose base is gone and listed, with no alarm. I1 excepts a diff by its base's version. This answers and replaces search-m10-46-erased-base-of-a-live-diff.
+
+Changes: DESIGN-DETAILS section 15 stands as written, with its amendments to section 1 (1.2.3 to 1.2.9, 1.3, 1.7, 1.8); details/IndexErase.tla; SEARCH-M10-17: the re-entry push, the wider file list, removal of resting diffs, the order rule, resume; fixes to landed evs_index_merge.go, search_match.go and search_mask.go; SEARCH-M10-16's Cut takes a through-epoch document; §11.12, §11.14 text by design-records from 15.8.
+
+Questions: `details-15-resting-diffs.md`.
+
+### QD-778: At the storage limit, should an erasure hold back the two files of an edit it could not re-enter, or destroy them and leave the edit out of search?
+*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+When evs refuses an eraser's re-entry push at the storage limit or with its allowance spent, only the slot holding the resting diff and the file holding its base wait, with their ERASEs, until evs takes the re-entry; every other object of the erasure is rewritten and destroyed on schedule. The base stays masked from search from the CUT. The eraser retries at each turn of its allowance and at least every IndexEraseSettings.ReentryRetryInterval (a settings field, 10 min), and the erasure's event shows waiting with the count.
+
+Changes: DESIGN-DETAILS section 15 stands as written; evs_index_wait.go in SEARCH-M10-17; §11.13's limit row and §11.14 text by design-records from 15.8.
+
+Questions: `details-15-reentry-at-the-limit.md`.
+
+### QD-779: Should a run card's version be the index epoch above the stream version of its run's newest entry, in place of the highest seq folded?
+*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
+
+A run card's version is E * 2^32 + c: E the index_epoch its push names, which only a CUT moves, and c the stream version at which the run last gained a source entry in that stream (IndexFormatSettings.CardVersionBitCount, 32). A CUT lists a card through its epoch, so every projection made before the CUT is listed and every one made after it is above the list. This replaces RECORD.md 7.4's 'highest seq'.
+
+Changes: DESIGN-DETAILS section 15 stands as written; SEARCH-M10-28's card version; SEARCH-M10-16's Cut takes a through-epoch document; RECORD.md 7.4 and §11.14's version row, §16.8, §16.10 text from 15.8.
+
+Questions: `details-15-card-version.md`.
+
+### QD-780: Should a run have one card for each stream that holds its entries, joined at display, in place of one card a log?
+*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
+
+A run card is one per run per stream: card (R, r) is the fold of what stream R holds of run r, under R's ref_id, written by R's writer in its companion push, so one push carries it and one coverage row counts it. §16.10's group row joins a run's cards by run_id: started the earliest, last activity the latest, title and fields from the card whose row time is newer.
+
+Changes: DESIGN-DETAILS section 15 stands as written; SEARCH-M10-28's card identity and fold; SEARCH-M10-12 and -14's card markers and backfills; §16.10's documents row and RECORD.md 7.1 text from 15.8.
+
+Questions: `details-15-card-per-stream.md`.
+
+### QD-781: Should a record erasure destroy the entry's body before its index CUT, where the plan has every caller CUT first?
+*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
+
+A record erasure ERASEs the entry bodies, re-reads the stream heads, then CUTs. A card builder reads the log's erasure ref at the first build it makes at a new epoch and applies every ERASE on it before it folds, so no card built after the CUT holds an erased entry; a builder that holds the ERASE before the CUT builds no card for that run and holds that stream's coverage pin. Mail keeps the CUT first. If the eraser dies between the two, another device resumes with the CUT (§11.12's reconcile row). SEARCH-M10-16's seam is unchanged; its plan entry's order line is narrowed to mail.
+
+Changes: DESIGN-DETAILS section 15 stands as written; RECORD-M10-01 and RECORD-M6-03: the erase order, the late copy, a BASE that removes only entries whose erasure is complete; §16.8's Erasure text from 15.8.
+
+Questions: `details-15-erase-before-cut.md`.
+
+### QD-782: When a run's context entry is erased, may the agent label and session ids it gave the run's other entry documents stay in their index rows?
+*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
+
+An erasure of a context entry lists that entry and the run's card, as §16.8 has it. Index rows of the run's other entry documents written before the erasure keep fields 9 (agent label) and 11 (session ids). From the erasure's CUT on, a builder reads those fields from the first context entry of the run that its stream holds and no erasure names; between the ERASE and the CUT a builder that holds the ERASE builds no entry document of that run. A person who wants the label or session id gone erases the run's other indexed entries too, and ur record erase says so when it lists what it will destroy.
+
+Changes: DESIGN-DETAILS 15.2.8 stands as written; SEARCH-M10-28's reading of fields 9 and 11; ur record erase's listing text (RECORD-M10-01); §16.8 and RECORD.md 7.1 text from 15.8; taking fields 9 and 11 out of entry rows stays the sound change if this is revisited.
+
+Questions: `details-15-context-fields.md`.
+
+### QD-783: Nine small readings section 15 took for index erasure and run cards: are they right?
+*Decided by the owner on 2026-11-13, asked one question at a time. Folds into §16 The local MCP server and record primitives.*
+
+Section 15's nine small readings stand as built: a reader masks a listed key at or below its listed version and applies an ERASE's whole-key mask only while no set version it holds lists the key; a record log's companion push runs on RecordSettings.CardInterval (5 min) with a build at a run's first source entry and at the coverage entry that ends it; source entries fold in (seq in their writer's chain, entry_id bytes) order; a run whose every source entry is erased has no card; a stream version or index epoch at or past 2^32 writes no card (IndexFormatSettings.CardVersionBitCount); each device that held the stream's entries when it applied the ERASE folds the card again BackfillAge after the CUT unless the index already holds it above the list; the daemon that ERASEs a copy ingested after the erasure calls the CUT again for it; the weekly BASE removes only entries whose erasure is complete; an eraser that does not mirror the log fetches at most IndexEraseSettings.CardFetchByteCount (16 MiB) a card.
+
+Changes: DESIGN-DETAILS section 15 stands as written; RECORD.md 7.4's cadence and 8's expiry row, from 15.8's proposed text.
+
+Questions: `details-15-small-readings.md`.
+

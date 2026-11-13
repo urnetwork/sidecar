@@ -43,6 +43,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -95,8 +96,10 @@ type socketGateNetwork struct {
 	// The highest position a load reported, and whether one has reported a state.
 	position uint64
 	loaded   bool
-	// When the gate last asked for a load because the network was behind.
+	// When the gate last asked for a load because the network was behind, and when a View served it or a load began,
+	// which tells a network the cache still holds without asking the cache, whose every State marks a read.
 	reloadTime time.Time
+	usedTime   time.Time
 	// The newest snapshot's view, so a View allocates once a position.
 	view *socketProjectionView
 }
@@ -119,8 +122,9 @@ func (self *socketGateNetwork) addPositionEvidenceWithLock(position uint64, now 
 	self.positionEvidence = max(self.positionEvidence, position)
 }
 
-// A load begins: every run so far closes into one, which a load without error covers. The count it covers.
-func (self *socketGateNetwork) beginLoadWithLock() uint64 {
+// A load begins at now: every run so far closes into one, which a load without error covers. The count it covers.
+func (self *socketGateNetwork) beginLoadWithLock(now time.Time) uint64 {
+	self.usedTime = now
 	self.beginSeq = self.evidenceSeq
 	if 1 < len(self.groups) {
 		self.groups = []socketEvidenceGroup{{lastSeq: self.groups[len(self.groups)-1].lastSeq, firstTime: self.groups[0].firstTime}}
@@ -268,6 +272,11 @@ func (self *SocketProjectionGate) OverLimitReads() (count int, changed chan stru
 	return self.overLimit.readCount.Get()
 }
 
+// Loads the gate has taken in, and a channel that closes at the next: what a test of the composition waits on.
+func (self *SocketProjectionGate) Loads() (count uint64, changed chan struct{}) {
+	return self.loadCount.Get()
+}
+
 // The network's state, made on first use.
 func (self *SocketProjectionGate) networkWithLock(networkId connect.Id) *socketGateNetwork {
 	network := self.networks[networkId]
@@ -317,6 +326,7 @@ func (self *SocketProjectionGate) View(networkId connect.Id) (SocketGateView, er
 	if since := network.behindSinceWithLock(); !since.IsZero() && self.settings.BehindGrace <= now.Sub(since) {
 		return nil, ErrSocketGateBehind
 	}
+	network.usedTime = now
 	if view := network.view; view != nil && view.snapshot == snapshot && view.edgeSet == edgeSet && view.edgeNetworkId == edgeNetworkId {
 		return view, nil
 	}
@@ -348,10 +358,11 @@ func (self *SocketProjectionGate) Observe(networkId connect.Id, position uint64)
 	self.cache.Changed(sidecar.Id(networkId))
 }
 
-// See SocketGateFollower. Dropped for a network this process has never asked the cache for.
+// See SocketGateFollower. Dropped for a network the cache holds nothing of: one this process was never asked for. A
+// network the gate let go of past MaxNetworkCount while the cache still holds it is taken up again.
 func (self *SocketProjectionGate) Changed(networkId connect.Id) {
 	now := self.clock.Now()
-	tracked := func() bool {
+	add := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		network := self.networks[networkId]
@@ -360,10 +371,18 @@ func (self *SocketProjectionGate) Changed(networkId connect.Id) {
 		}
 		network.addCountEvidenceWithLock(now)
 		return true
-	}()
-	if tracked {
-		self.cache.Changed(sidecar.Id(networkId))
 	}
+	if !add() {
+		if _, status := self.cache.State(sidecar.Id(networkId)); status == sidecar.AclGateUnknown {
+			return
+		}
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.networkWithLock(networkId).addCountEvidenceWithLock(now)
+		}()
+	}
+	self.cache.Changed(sidecar.Id(networkId))
 }
 
 // See SocketGateFollower.
@@ -420,9 +439,10 @@ func (self *SocketProjectionGate) IdentityKey(ctx context.Context, networkId con
 
 // A load begins for networkId: the evidence count it covers if it reads cleanly.
 func (self *SocketProjectionGate) beginLoad(networkId connect.Id) uint64 {
+	now := self.clock.Now()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	return self.networkWithLock(networkId).beginLoadWithLock()
+	return self.networkWithLock(networkId).beginLoadWithLock(now)
 }
 
 // Records what the running load's Entries read.
@@ -497,15 +517,17 @@ func (self *SocketProjectionGate) run() {
 	}
 }
 
-// Asks for another load of each network still behind whose last such ask is an interval old, and drops the state
-// of networks the cache has forgotten with no load running, so the gate holds about what the cache does.
+// Asks for another load of each network still behind whose last such ask is an interval old; and past
+// MaxNetworkCount lets go of the quiet networks served or loaded longest ago, which a later ask, load or event
+// takes up again. It asks the cache nothing but loads: a State would mark each network read and undo the cache's
+// eviction order.
 func (self *SocketProjectionGate) reloadBehind() {
 	now := self.clock.Now()
 	behindNetworkIds := []connect.Id{}
-	quietNetworkIds := []connect.Id{}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		quietNetworkIds := []connect.Id{}
 		for networkId, network := range self.networks {
 			if network.behindSinceWithLock().IsZero() {
 				if network.begin == nil {
@@ -519,37 +541,33 @@ func (self *SocketProjectionGate) reloadBehind() {
 			network.reloadTime = now
 			behindNetworkIds = append(behindNetworkIds, networkId)
 		}
+		if excess := len(self.networks) - self.settings.MaxNetworkCount; 0 < excess {
+			slices.SortFunc(quietNetworkIds, func(a connect.Id, b connect.Id) int {
+				return self.networks[a].usedTime.Compare(self.networks[b].usedTime)
+			})
+			for _, networkId := range quietNetworkIds[:min(excess, len(quietNetworkIds))] {
+				delete(self.networks, networkId)
+			}
+		}
 	}()
 	for _, networkId := range behindNetworkIds {
 		self.cache.Changed(sidecar.Id(networkId))
 	}
-	forgottenNetworkIds := []connect.Id{}
-	for _, networkId := range quietNetworkIds {
-		if _, status := self.cache.State(sidecar.Id(networkId)); status == sidecar.AclGateUnknown {
-			forgottenNetworkIds = append(forgottenNetworkIds, networkId)
-		}
-	}
-	if 0 < len(forgottenNetworkIds) {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		for _, networkId := range forgottenNetworkIds {
-			if network := self.networks[networkId]; network != nil && network.begin == nil && network.behindSinceWithLock().IsZero() {
-				delete(self.networks, networkId)
-			}
-		}
-	}
 }
 
-// 13.2.3's resubscription check: {acl_<N>}v for every loaded network, ResyncBatchCount at a time with at most
-// ResyncConcurrency reads at once, and only a value that differs from the one recorded with the state is evidence.
-// A read that fails is evidence too, since nothing can say the log stood still in the gap.
+// 13.2.3's resubscription check: {acl_<N>}v for every loaded network the cache still holds, one served or loaded
+// within ResyncUsedWithin, ResyncBatchCount at a time with at most ResyncConcurrency reads at once, and only a
+// value that differs from the one recorded with the state is evidence. A read that fails is evidence too, since
+// nothing can say the log stood still in the gap. A network the cache has evicted is left to its next ask, which
+// loads it from the tip, rather than reloaded by every resubscription.
 func (self *SocketProjectionGate) resyncCheck() {
+	now := self.clock.Now()
 	networkIds := func() []connect.Id {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		networkIds := make([]connect.Id, 0, len(self.networks))
 		for networkId, network := range self.networks {
-			if network.loaded {
+			if network.loaded && now.Sub(network.usedTime) < self.settings.ResyncUsedWithin {
 				networkIds = append(networkIds, networkId)
 			}
 		}

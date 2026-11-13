@@ -16,8 +16,8 @@ import (
 	"time"
 )
 
-// Where a row of network_tls_cert stands (§13.8). A row is written before its order, and it stays 30 days past expiry
-// or revocation. A reader treats a state it does not know as no certificate.
+// Where a row of network_tls_cert stands (§13.8). A row is written before its order, and it stays 30 days past expiry,
+// revocation or failure (cert-1). A reader treats a state it does not know as no certificate.
 type TlsCertState string
 
 const (
@@ -39,6 +39,17 @@ const (
 	TlsCertStateExpired TlsCertState = "expired"
 )
 
+// What a CA is told when it revokes a certificate, in RFC 5280 §5.3.1's names (§13.8). A row holds one only while its
+// revocation waits for its CA (cert-1). A reader treats a reason it does not know as none given.
+type TlsCertRevocationReason string
+
+const (
+	// The key is compromised, by its device's or an admin's word.
+	TlsCertRevocationReasonKeyCompromise TlsCertRevocationReason = "keyCompromise"
+	// The names stop being served: a removal, a deletion, a retired alias or §21.6's takedown.
+	TlsCertRevocationReasonCessationOfOperation TlsCertRevocationReason = "cessationOfOperation"
+)
+
 // POST /tls/cert-order's body. The token names the caller, never this body (§13.15).
 type TlsCertOrderArgs struct {
 	// A PKCS #10 request in DER, by the device's own P-256 key, for its TlsIdentifierSet.
@@ -58,9 +69,9 @@ type TlsCertOrderResult struct {
 	RetryAfterMs uint32 `json:"retry_after_ms,omitempty"`
 }
 
-// GET /tls/cert-order/<id>'s answer, for the caller's own order. §2.8's cert-1 names a chain only on a custom domain's
-// row, so where an issued chain waits for this answer is a question (tls-m5-05-cert-row-values), and nothing here
-// stores one.
+// GET /tls/cert-order/<id>'s answer, for the caller's own order. The chain is the row's, which keeps it until 30 days
+// past the certificate's expiry or revocation (cert-1), so a device that was offline, or asks after a restart, still
+// reads it.
 type TlsCertOrderStatus struct {
 	State TlsCertState `json:"state"`
 	// How long to wait before asking again, in milliseconds. Zero sets no wait.
@@ -100,10 +111,17 @@ type TlsCertRecord struct {
 	AriWindowStart time.Time    `json:"ari_window_start,omitzero"`
 	AriWindowEnd   time.Time    `json:"ari_window_end,omitzero"`
 	State          TlsCertState `json:"state"`
+	// When the row came to State: its writing for a queued row, and each change of state after. A revoked or failed
+	// row's 30 days count from it.
+	StateTime time.Time `json:"state_time,omitzero"`
 	// The row that took over from this one. Zero until one does.
 	SuccessorCertId Id `json:"successor_cert_id,omitzero"`
-	// A custom domain's registered chain: each certificate in DER, leaf first. Empty on any other row.
+	// The chain its CA issued, or a custom domain's registered one: each certificate in DER, leaf first. Empty until
+	// the row has one, and again 30 days past the certificate's expiry or revocation.
 	Chain [][]byte `json:"chain,omitempty"`
+	// What the CA is to be told, while State is revoking. Empty in any other state: the row drops it once the CA
+	// has taken the revocation.
+	RevocationReason TlsCertRevocationReason `json:"revocation_reason,omitempty"`
 }
 
 // GET /tls/certs's answer: its network's certificates and their attestations, for the CT watch (D-TLS-8) and for a
@@ -130,8 +148,8 @@ type TlsCertRegisterArgs struct {
 // POST /tls/cert-revoke's body.
 type TlsCertRevokeArgs struct {
 	CertId Id `json:"cert_id"`
-	// Revokes with reason keyCompromise (§13.8). The revocation chain runs after the request returns, so the reason
-	// waits in the row until the CA takes it, which cert-1 does not name yet (tls-m5-05-cert-row-values).
+	// Revokes with reason keyCompromise (§13.8); without it the CA is told cessationOfOperation. The revocation chain
+	// runs after the request returns, so the reason waits in the row until the CA takes it (cert-1).
 	KeyCompromise bool `json:"key_compromise,omitempty"`
 }
 

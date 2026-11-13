@@ -237,6 +237,7 @@ func (self *CertsService) Accept(ctx context.Context, request *CertsOrderRequest
 		Attestation:         bytes.Clone(request.Args.Attestation),
 		Csr:                 bytes.Clone(request.Args.Csr),
 		State:               sidecar.TlsCertStateQueued,
+		StateTime:           now,
 	}
 	testHookBarrier("certs.accept.write", row.CertId.String())
 	if err := self.store.InsertCert(callCtx, row); err != nil {
