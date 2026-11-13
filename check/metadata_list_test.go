@@ -100,6 +100,13 @@ var metadataListAdditions = []metadataListAddition{
 		list:     "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n# v12, updated 2026-11-12 for the owner's answers on certs' rows (QD-741, QD-742), adds cert-1's issued chains, a\n# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n",
 	},
 	{
+		// QD-743: api-7's folded access log names what its rows now keep, which were already visible as their
+		// entries' times and positions, so only the wording changes
+		question: "acl-m2-06-access-log-positions",
+		block:    "folded access log with its versioning lock (its rules stay sealed), each EvsShare's signer, position and expiry",
+		list:     "folded access log with its versioning lock (its rules stay sealed), each repo admin's add position and a removed one's removal position until a later base drops it, the newest RepoDelete's entry time, each EvsShare's signer, position and expiry",
+	},
+	{
 		// QD-763: gkm-1's forwarding reader keys are keyed by their network as well
 		question: "core-owner-fixes-dkey-sweep-network",
 		block:    "(metadata cluster); gkm/dkey/<delegation_id>\n",
