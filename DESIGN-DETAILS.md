@@ -23,7 +23,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 | 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
 | 15 | Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10) | 2 | complete (2026-11-12; §22.8 row added 2026-11-13) |
-| 16 | Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9) | 0 | complete (2026-11-13; amendments 16-A to 16-D written 2026-11-13, built on the recommendation of open question details-amend-3-pin-push-refs) |
+| 16 | Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9) | 0 | complete (2026-11-13; amendments 16-A to 16-D written 2026-11-13; amended 2026-11-13, QD-801 and QD-802; question details-amend-4-new-ref-stale-pin is open, and the text stays as ratified until its answer) |
 | 17 | Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8) | 1 | complete (2026-11-13; §22.8 row added 2026-11-13) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
@@ -13091,11 +13091,11 @@ Each is filed under `.stack/questions/` and the section is built on its recommen
 
 ## 16. Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9)
 
-Status: complete (2026-11-13; its amendments 16-A to 16-D were written into sections 5, 8 and 10 on 2026-11-13, as 16.7 lists)
+Status: complete (2026-11-13; its amendments 16-A to 16-D were written into sections 5, 8 and 10 on 2026-11-13, as 16.7 lists; amended 2026-11-13, QD-801: 16.2.4, 16.2.6, 16.2.7, 16.2.9, 16.2.13, 16.3, 16.4, 16.5, 16.6, 16.7, 16.8 and 16.9, each place marked)
 
 Tasks held until complete: none. ACL-M6-04's prefix half was never built, and 16.7 says what it and five new tasks build.
 
-Model: `sidecar/sidecartest/model/details/PrefixRules.tla`, its configurations (`PrefixRules.cfg`, `PrefixRules-*.cfg`, `PrefixRulesTwin-*.cfg`, `PrefixRulesReach-*.cfg`) and `run-prefixrules.sh` beside it. Questions filed: `.stack/questions/details-16-subject-atoms.md`, `details-16-admins-unbound.md`, `details-16-git-mode-stop.md`, `details-16-repair.md`, `details-16-small-readings.md`. The section is built on the recommendation of each, and on the recommendation of the open question `details-amend-2-late-generation`, whose grace rule 16.2.2 and 16.2.3 take as section 12 does. It specifies what the owner accepted in QD-212 (DESIGN-AMENDMENTS.md) and what RESOLUTIONS.md `plan-EVS1-v1-unspecified` #5 made the rule. It builds on section 5 (rows and verdicts across bases), section 8 (git and evs) and section 9 (path epochs), and changes no rule of any of them: it adds one line to 8.2.7's `check` and to 8.2.8's receive path, and one list to section 5's rows. Those additions were written into sections 5, 8 and 10 on 2026-11-13 (16.7's last paragraphs), with one more question, `details-amend-3-pin-push-refs`, on whose recommendation 8.2.10's pin push is built, and a second, `details-amend-3-new-shared-refs`, which is not built on its recommendation: it asks whether the rules should also bind the creation of a shared ref, and 8.2.7 stays as this section was ratified until it is answered.
+Model: `sidecar/sidecartest/model/details/PrefixRules.tla`, its configurations (`PrefixRules.cfg`, `PrefixRules-*.cfg`, `PrefixRulesTwin-*.cfg`, `PrefixRulesReach-*.cfg`) and `run-prefixrules.sh` beside it. Questions filed: `.stack/questions/details-16-subject-atoms.md`, `details-16-admins-unbound.md`, `details-16-git-mode-stop.md`, `details-16-repair.md`, `details-16-small-readings.md`. The section is built on the recommendation of each, and on the recommendation of the open question `details-amend-2-late-generation`, whose grace rule 16.2.2 and 16.2.3 take as section 12 does. It specifies what the owner accepted in QD-212 (DESIGN-AMENDMENTS.md) and what RESOLUTIONS.md `plan-EVS1-v1-unspecified` #5 made the rule. It builds on section 5 (rows and verdicts across bases), section 8 (git and evs) and section 9 (path epochs), and changes no rule of any of them: it adds one line to 8.2.7's `check` and to 8.2.8's receive path, and one list to section 5's rows. Those additions were written into sections 5, 8 and 10 on 2026-11-13 (16.7's last paragraphs), with one more question, `details-amend-3-pin-push-refs`, on whose recommendation 8.2.10's pin push is built, and a second, `details-amend-3-new-shared-refs`, which asked whether the rules should also bind the creation of a shared ref. Both are answered (amended 2026-11-13). QD-802 ratified the pin push as built. QD-801 chose the second question's option 2: a push that creates a shared ref is judged from a shared branch's tree, or from nothing. It is written into 8.2.3, 8.2.4, 8.2.5, 8.2.7 and 8.2.8 and into this section, each place marked "amended 2026-11-13, QD-801", and 8.2.7 is the text to build from. Writing it showed that nothing holds up the pin of a push that creates a ref, so the rule binds a writer that runs its own code only under the set at the pin it picks; question `details-amend-4-new-ref-stale-pin` is filed, and the section is not built on its recommendation, which would change evs's gate.
 
 ### 16.1 The problem
 
@@ -13287,6 +13287,10 @@ Line by line.
 
 The verdict on a push that carries no change is allowed. That is the pin push (16.2.9).
 
+*A push that creates a shared ref* (amended 2026-11-13, QD-801). The lines above judge a change. What a push changes on a git-mode ref is measured between two trees (8.2.7), and as this section was ratified the first tree could be one the rules never judged: the tree of the writer's own branch, for a new shared branch created over it, and no tree at all for a tag. QD-801 fixes the first tree. On the push that gives a shared branch its first tip it is the tree of the branch's base when the base is a shared branch, and the empty tree otherwise. A tag changes no file when its push names, among its sources, a shared branch version whose tip the tagged commit is or was; any other tag is measured from the empty tree. From the empty tree every file of the new tree is a change, so the push passes only where line 3 gives the signer a prefix over each of them: for a signer the set names for every path, always.
+
+Lines 1 to 3 are unchanged, and so is the pin they read: a creating push is judged under the set in force at its own pin, and 16.2.13 says what that leaves. 8.2.7 holds the rule in full, with the record that proves a past tip and why devices agree on it; 8.2.4 and 8.2.5 hold what a design device does so that its own push passes. A file-mode ref is not touched: it has no base and no tag, and each change of a new ref is judged by its own path, as on any ref. An owned ref stays outside by line 1, whatever it is created from.
+
 #### 16.2.5 File mode: the effective version
 
 On a file-mode ref the verdict is per change, and a push some of whose changes are ignored keeps the rest.
@@ -13359,6 +13363,12 @@ This gives a breaching writer nothing it did not hold: any writer of a git-mode 
 
 Head mode reads a git-mode ref one change at a time and never ran `check`. It applies 16.2.5's rule to the change it reads, so it does not show a breach's file, and it does not learn that the mounts refused the rest of that push.
 
+*A new shared ref* (amended 2026-11-13, QD-801). On the push that gives a shared ref its first tip, the line's "every file change of u" is measured from a shared branch's tree or from nothing: 16.2.4's last paragraphs, and 8.2.7 in full. A push that fails stops the ref at its first version on every mount, and no mount shows the name.
+
+*Head mode and an inherited file* (amended 2026-11-13, QD-801). Judging one change at a time covers every file a shared ref holds an entry for, a new ref's included: the entry's push is judged by its own signer and pin. A file that an overlay inherits has no entry on the ref. It stands under the shared name by no change at all, only by the push that created the ref and named its base. A head reader does not follow a base: a path the ref holds no entry for is answered as lying on the overlay's base (`ErrEvsOverlayBase`, from `ReadHead`, `List` and `History` alike), on every overlay, and no caller reads the base in its place. So head mode shows no inherited file under any shared name, and has nothing of a new ref to judge beyond its entries.
+
+That is a property to keep. On a shared ref whose base is not a shared branch, a head read that followed the base would show, under the shared name, a tree the mounts refused. Such a read is not built, and is not to be built without a rule beside it. The rule this section would take is the mounts' measure from nothing, one path at a time: an inherited path is judged as a file written by the ref's version 1 push, with that push's signer and pin. A tag ref holds no path, and head mode names none.
+
 #### 16.2.7 The writer
 
 `AclEngine.AllowPrefixWrite` is the same function turned around, at the engine's installed state, whose pin the push will carry:
@@ -13377,6 +13387,8 @@ It is called by the planner (`evs_plan.go`) for every path a file-mode write nam
 Because the push pins the state the check ran at, and readers judge at that pin, a design device's write is allowed by every reader (16.3's P2). A set that lands between the check and the commit does not reach back: the push is judged at its pin.
 
 *Written into 8.2.5 and 8.2.8* (2026-11-13, amendment 16-B). On a git-mode ref the call is in `publish`, between the net change and the planner, and not in the receive path alone, so an import into a shared ref and a push sealed again on a new pin pass it too; it asks about the files 8.2.7's line judges, and it runs again whenever the statement is signed on another state's pin, which is what keeps P2 true of a push that was rebuilt. A rekey of a git-mode ref is asked by the planner like a file-mode write (8.2.10). An owned ref asks nothing.
+
+*A new shared ref* (amended 2026-11-13, QD-801; 8.2.4, 8.2.5). `AllowPrefixWrite` decides a path as it did. Three things about how it is asked are fixed, so that `publish` can use it for a ref's first push. Its `paths` are a sequence the engine draws from, not a list, since a push measured from nothing asks about every file of a tree: the engine stops drawing at the first path it refuses, and where a rule with no path names this sidecar it allows the call before drawing any. Asked about the one path of no component, it answers whether such a rule exists, which is what *held* means in 8.2.4: allowed where the device is named for every path, where no set is in force and where the ref is outside the rules; refused, with no path to name, where the device is held. And the caller adds its own detail to a refusal, `base` or `tag`, beside the path (§18.5). `publish` asks the second at step 1, for an update that creates a shared branch or is a tag's, chooses the base or the proof as 8.2.4 has it, and asks about the files at step 3, measured from 8.2.7's J. The planner's call for a file-mode write is unchanged.
 
 *Writing over an ignored event.* The planner reads the path with `effective`. Where evs's newest event of the path is not the effective one, the write takes the **repair form**:
 
@@ -13443,7 +13455,9 @@ after the statement's 200:
 
 Any honest push does the same, since a design device pins its tip. Until one lands, a writer that sends an older pin can still write under the older set on that ref (`PrefixRulesReach-StalePin`); after it, none can (`Fence`). A widening needs no pin push: the writer it frees pins its own tip.
 
-*On a git-mode ref* (2026-11-13; 8.2.10 as amended). "Each shared ref" is each shared branch that has a tip and is not stopped on the filer's device. A tag ref takes no second push and holds no file. A ref with no tip takes no UPDATE: a deleted ref is bound from the push that re-creates it, and `show` lists it as unbound until then. A stopped ref is bound by its recovery, whose DELETE and re-creating push carry the admin's pin. This narrows the reading QD-795 ratified, as section 8's rules force for a tag ref and a stopped one; what binds a deleted ref is filed (`details-amend-3-pin-push-refs`).
+*On a git-mode ref* (2026-11-13; 8.2.10 as amended). "Each shared ref" is each shared branch that has a tip and is not stopped on the filer's device. A tag ref takes no second push and holds no file. A ref with no tip takes no UPDATE: a deleted ref is bound from the push that re-creates it, and `show` lists it as unbound until then. A stopped ref is bound by its recovery, whose DELETE and re-creating push carry the admin's pin. This narrows the reading QD-795 ratified, as section 8's rules force for a tag ref and a stopped one; what binds a deleted ref is filed (`details-amend-3-pin-push-refs`), and QD-802 ratified it as built (amended 2026-11-13).
+
+*A ref that does not exist yet* (amended 2026-11-13, QD-801) stands as a deleted one does, with one difference: a deleted ref's DELETE bounds the pin of the push that re-creates it, and a new name has nothing below it. It is bound from the push that creates it, under the set in force at whatever pin that push carries, and no pin push can be sent ahead of it. A design device pins its installed state, so its new ref is judged under the newest set it holds. A writer that runs its own code is judged under the set it picks a pin for (16.2.13; question `details-amend-4-new-ref-stale-pin`).
 
 #### 16.2.10 The alarm
 
@@ -13506,15 +13520,39 @@ directory                         rows can be filled with names nobody shows
 write the index                  `.ur-index/`, `ur/index` and `ur/lfs` are outside the rules; reproduction and
                                  index_mismatch are their guard (§11.14)
 stop a git-mode ref              as any writer can today (16.2.6)
-publish a tree under a new       (added 2026-11-13, with amendment 16-A) on a git-mode ref the rules judge what a
-shared name                      push changes in a shared branch's files, from the tree the branch or its base
-                                 stood at. A tag changes no file, and a new shared branch whose base is the
-                                 writer's own branch changes none against that base, so either can name a commit
-                                 whose tree holds anything; so can a commit in a branch's history that its tip
-                                 no longer shows. No file of a shared branch that exists changes outside the
-                                 writer's prefixes (question details-amend-3-new-shared-refs)
+create a shared name at a stale  (amended 2026-11-13, QD-801; this row read "publish a tree under a new shared
+pin                              name") a push that gives a shared ref its first tip is judged from a shared
+                                 branch's tree or from nothing (8.2.7), under the set in force at its pin, and
+                                 nothing holds that pin up: evs fences a pin against the head's, and a ref
+                                 that does not exist has none. A writer that pins below the set that holds it
+                                 creates a tag or a branch under the older set, and with any tree below the
+                                 repo's first set. A new file-mode ref is open the same way. Design devices
+                                 pin their newest state (question details-amend-4-new-ref-stale-pin)
+carry any tree in a commit no    the rules judge a branch's tips. A commit between two tips can hold anything;
+tip shows                        it is reached by its oid and by no shared name, since a tag of it is measured
+                                 from nothing
+create names every mount         a first push that fails the line leaves a ref stopped at version 1 on every
+refuses                          mount and shown by none, until an admin deletes it; the alarm names the signer
 read everything                  a rule is about writes; every writer holds the repo's keys
 ```
+
+**New shared names, exactly** (amended 2026-11-13, QD-801). Judged under a set that holds it to its prefixes, a writer can still:
+
+```text
+open a shared branch       over a shared branch's tip, current or past, with a tree that differs from that
+                           tip's under its prefixes only, or not at all
+                           over anything else, or with no base, only where every file of the tree lies
+                           under its prefixes
+tag a commit               that is, or was, a shared branch's tip at a version its push names: lightweight
+                           or annotated, of a live branch or a deleted one
+                           any other commit, only where every file of the commit's tree lies under its
+                           prefixes
+re-create a deleted name   a branch that held a tip, measured from the tree it held; a tag, as any tag
+create its own refs        ur/<its id>/... over any base and with any tree: outside the rules, and never
+                           the tree a shared name is measured from
+```
+
+It cannot: give a new shared branch a tree that differs from a shared branch's tip outside its prefixes; create a shared branch at a commit of its own branch, of a conflict branch or of an import's helper, where that tree holds a file outside them; tag a commit that the tag's own push carries, one that only an owned ref or another tag holds, or one of a shared branch's history that was never its tip; or re-create, from the base it chose, a name whose first push the mounts refused. A signer the set does not name can open a branch at a shared branch's tip and tag one, since neither changes a file, and can create nothing else. A signer the set names for every path is held by none of this. All of it is the verdict under the set in force at the push's pin, and for a name that does not exist yet the stale-pin row above leaves that pin to the writer.
 
 A team that needs a server to refuse the write keeps separate repos (D-ACL-11), which remains the only server-enforced boundary.
 
@@ -13550,6 +13588,16 @@ P7 what servers see  api: a set's repo, position, time, signer, generation numbe
 
 **P7.** The statement's clear fields are its header, the repo's id and a sealed blob whose length is 48 B plus a multiple of 256 B and whose first 8 B are a generation number; the row adds its signer and position. A pin push is an ordinary push of no change, and a repair an ordinary write; evs can see that one follows a config entry in time, as it can for any write a config change prompts. No request carries a rule, a prefix or a verdict, and no reader tells a server what it ignored.
 
+**A new shared ref** (amended 2026-11-13, QD-801). P1 and P2 hold of 8.2.7's rule, and P5 does not reach it.
+
+P1. Beyond the five things above, the verdict on a push that gives a shared ref its first tip reads the push's sealed base and sources, which its statement signs; the kind and the name of each ref they name, from that ref's own statements; the tip a named ref held at the named version; and the new tree. The tip is the row of the reader's tips log at that version. Every reader derives it from the named ref's history up to that version, by `check`, and that history does not change once it is committed. A device that has not replayed the ref that far has no verdict yet, and waits; it does not guess. So two devices that have a verdict have the same one, whatever base of the log each started at, whichever refs each follows and whenever each mounted. 8.2.7 gives the argument, and the one exception: a re-seed that lost the version.
+
+P2. A design device computes J from the base and the proof it chose from its own tips log and tip index (8.2.4), asks its own rules about the files measured from that J at the state it pins (8.2.5), and seals the base and the proof into the push. A reader computes J from those sealed fields and from its own replay of the same versions, which gives the rows the writer's replay gave.
+
+P5 is about one ref's pushes in order, and a ref's first push has none before it: the fence that makes the pins of a ref's pushes rise does not bound the first. So the set that judges a creating push is the one at the pin its writer chose. For a design device that is the newest it holds. For a device that runs its own code it is any set since that writer could first write (16.2.13).
+
+No model is added. `PrefixRules.tla` holds one file-mode ref, where a new ref's changes are judged like any. What QD-801 adds on a git-mode ref is a function of a named version of another ref's committed history, with no interleaving to explore: a reader holds that version or waits for it. 16.6's base-independence test for a proof carries it on the real code, over mounts that start at different times and follow different refs.
+
 **The model.** `PrefixRules.tla` holds one authorization log and one file-mode ref of one repo with two paths, one under the prefix that a set may name and one outside it. The log takes sets of three kinds (every path, the one path, nothing), bases, and under one twin a group's membership changes. The ref takes pushes by A, an admin's device that every set names for every path; by B, a design device the sets hold to their paths; and by W, which the sets hold as they hold B and which sends any change with any row under any pin evs takes. Each push is one change with its pin, the log's length when evs committed it, what it does to the path's content and to its row, and for a write its lineage: the versions whose bytes its record chain rests on. Readers are not variables: the long-running reader, a device started at each base, a mirror, and a head reader started at each version are functions of the log and the ref, which is the claim under test. Tokens, epochs, deltas' row rules, a set's four states and git mode are not in it.
 
 Every run below is TLC at the owner's jar (master d8fb231) through `.stack/tools/tlc`, breadth-first, by `run-prefixrules.sh details-16` from the track on 2026-11-13, on a host at a load average near 120; each run's state directory is deleted when it ends. A design run takes 4 workers and goes to the end of its graph. A run that must fail takes one worker and stops at its first violation, so its trace is a shortest one.
@@ -13580,7 +13628,7 @@ PrefixRulesReach-Tightened        a set takes a path that an earlier set gave   
 
 The design configurations check `TypeOK`, `Agreement`, `HonestStands`, `ShownAllowed`, `CleanLineage`, `Fence` and `ListingAfterRepair`. `PrefixRules` runs two log entries and two pushes with all three kinds of set and both design writers; `PrefixRules-Deep` three log entries, so that a set, a second set and a base can all precede a device's start; `PrefixRules-Long` four pushes on one path-naming set, so that an ignored event, a second, a repair and a later write can follow each other. Each twin and reach run is the smallest ground that shows its trace.
 
-**What the model does not show.** Git mode: 16.2.6 adds one line to a check whose refusal path is section 8's, modelled in `GitSync.tla`. The token arithmetic, the delta rule and a set's states: each is a pure function of bytes, and 16.6's unit tests carry them, the delta rule against a generated corpus. The walk's bound and an unavailable version: they change what a reader can return, never to something it ignores. Liveness: that a repair is sent is the runner's timer and its journal, not a property TLC was given. Two refs of one repo: a ref's pushes are judged alone, and the pin push is per ref.
+**What the model does not show.** Git mode: 16.2.6 adds one line to a check whose refusal path is section 8's, modelled in `GitSync.tla`. The token arithmetic, the delta rule and a set's states: each is a pure function of bytes, and 16.6's unit tests carry them, the delta rule against a generated corpus. The walk's bound and an unavailable version: they change what a reader can return, never to something it ignores. Liveness: that a repair is sent is the runner's timer and its journal, not a property TLC was given. Two refs of one repo: a ref's pushes are judged alone, and the pin push is per ref; the one push that reads another ref, the push that gives a shared git-mode ref its first tip, reads a named and committed version of it (amended 2026-11-13, QD-801; the paragraph above).
 
 ### 16.4 Cost
 
@@ -13609,6 +13657,11 @@ a repair           names: one delta, 128 to 194 B a row (§11.7's name row). A r
                    size. A versioned file: nothing until 8 ignored versions lie over it. At most 60 pushes an
                    hour and 1 GiB a day per repo and device
 a git-mode push    one verdict per file change inside check(u)
+                   (amended 2026-11-13, QD-801) a push that gives a shared ref its first tip from nothing: one
+                   walk of its tree, which passes a directory under a prefix whole and stops at the first file
+                   outside: at most the tree's entries, and none for a signer named for every path. A tag with
+                   a proof: one read of a tips log page. A held device's base search: at most
+                   OverlayBaseSearchCount commits read once, a tip index lookup each. Head mode: nothing
 servers            api: one rule-table row and one repeated field in AclRepo; no table, endpoint or migration.
                    evs, gkm, the gates: nothing
 ```
@@ -13654,6 +13707,17 @@ a repair's device is itself held to a      it repairs only paths under its prefi
 prefix                                     device
 a git-mode ref stops at a breach           8.5: an admin deletes the ref and pushes it again, the re-creating push
                                            writing or removing every tainted token path
+a writer creates a shared branch or tag    (amended 2026-11-13, QD-801) every mount refuses its first version and
+whose tree no shared branch held, with a   shows no such name; head mode ignores each entry the push wrote outside
+file outside its prefixes                  the signer's prefixes and reads no inherited file (16.2.6); an admin
+                                           deletes the ref and revokes the signer
+a held device is asked to open a shared    refused locally, EVS_PREFIX_RULE with detail base or tag, before any
+branch that descends from no shared        request to evs: the branch is opened from a shared branch's tip, the
+branch's tip, or to tag a commit that no   commit goes to a shared branch first, or an admin's device does it
+shared branch's tip was
+a writer that runs its own code creates a  judged under the older set, or under none (16.2.13); an admin deletes
+shared name at a pin below the set that    the ref and revokes the writer; nothing closes it before that (question
+holds it                                   details-amend-4-new-ref-stale-pin)
 a signer's row is gone                     a tagged or ephemeral sidecar's tombstone past its not_after, at a pin
                                            the reader does not retain: the reader cannot verify the signature at
                                            all, with or without rules; such a version is §11.9's trusts row's,
@@ -13682,6 +13746,10 @@ the local record is lost                   the next read walks again and alarms 
 - `evs_prefix_repair_test.go`. Each class of 16.2.8's table; the delay and the jitter on a fake clock; two runners, one push; the bounds; a device held to a prefix repairs only under it.
 - `evs_git_check_test.go`. `check(u)` refuses a push with one file change outside and accepts the same push by a signer the set names; a removal of the last file under a prefix, dropping the directories above it, passes; the alarm's reason is `prefix_rule`; receive answers `ng <ref> prefix rule: <path>` and sends nothing.
 - The alarm: one event per (repo, ref, signer) a minute with the count; `set_void` once per set.
+- New shared refs (amended 2026-11-13, QD-801), in `evs_git_check_test.go`, `evs_local_sync_test.go`, `evs_local_publish_test.go` and `evs_local_receive_test.go`: 8.6's three amended rows. The readers' half: a new shared branch measured from its shared base, from nothing over an owned base and from nothing with no base; a tag with a proof at a current tip, a past one, one a forced update dropped and a deleted branch's last, and each way a named source is no proof; a first push refused, deleted and pushed again. The writers' half: the held device's base found on a second-parent line, its tag's proof named first, the two refusals with their details and no request to evs, and a push's tags published after its branches.
+- Base independence for a new shared ref, on real code (amended 2026-11-13, QD-801): a generated history of branches, forced updates, deletions, tags and new branches under two sets; a long-running mount, a mount made after the last push, a mount that learns of a proof's ref only from the tag that names it, and a device whose `ConfigLog` was restored at a later base give one verdict for every tag and every new branch. Under a hook that looks the tagged commit up in the device's own tip index, in place of the version the push names, the mount that does not follow the branch disagrees, which the test asserts.
+- `evs_prefix_test.go`, head mode (amended 2026-11-13, QD-801): on a shared branch that a held signer created over its own branch, a path the ref holds an entry for is judged by that entry's push, so a file the creating push wrote outside the prefixes is ignored; a path it holds no entry for answers `ErrEvsOverlayBase` from `ReadHead`, `List` and `History`, with and without a set in force, and no read of the base ref follows.
+- `acl_prefix_test.go` (amended 2026-11-13, QD-801): `AllowPrefixWrite` draws no path for a sidecar that a rule names with no path, stops at the first refused path of a sequence, and for the path of no component is allowed exactly where such a rule names the sidecar, where no set is in force and where the ref is outside the rules.
 
 **Schedule rows**, for a design-records track to number, each on T2 with real evs and api:
 
@@ -13707,11 +13775,18 @@ local refusal                  a design device held to a prefix writes outside i
                                push: EVS_PREFIX_RULE each time, no request to evs
 git mode                       a breach on a git-mode ref: every mount stops at u with prefix_rule, a new mount
                                replaying from version 1 included; an admin deletes and re-pushes; all go on
+new shared names               (amended 2026-11-13, QD-801) a set holds tag ci to agents/build. A hand-built push
+                               by a ci sidecar creates `release` over its own branch with src/x changed, and a
+                               tag at that commit: every mount stops both at version 1 with prefix_rule, a mount
+                               made afterwards included, and a phone in head mode reads no src/x under `release`.
+                               The same sidecar's own daemon opens `feature` off main with a change under
+                               agents/build and tags a tip main held two versions ago: both land on every
+                               device. An admin's device tags the middle commit of a push: it lands
 a pending set                  a set sealed to a generation that does not exist: readers hold; a later entry past
                                the grace voids it everywhere; the set below is in force again
 ```
 
-**The model.** `run-prefixrules.sh <track>` at each change to 16.2.3, 16.2.4, 16.2.7, 16.2.8 or 16.2.9: the design configurations pass, each twin fails on the invariant its cfg names, each reach configuration reaches its state (16.3).
+**The model.** `run-prefixrules.sh <track>` at each change to 16.2.3, 16.2.4, 16.2.7, 16.2.8 or 16.2.9: the design configurations pass, each twin fails on the invariant its cfg names, each reach configuration reaches its state (16.3). The paragraphs QD-801 added to 16.2.4 and 16.2.7 (amended 2026-11-13) are about a git-mode ref's first push, which the model does not hold, and call for no run.
 
 ### 16.7 Implementation notes, task by task
 
@@ -13734,6 +13809,7 @@ One existing task changes and five are new. The ids are free in `.stack/plan`, t
 - Needs: ACL-M2-18; ACL-M2-02, -09, -13 as before. It no longer needs the question.
 - Tests: 16.6's second to seventh bullets.
 - Traps: the verdict takes no `ConfigState` at the pin and must never call `StateAt`; a test runs it with a log that retains nothing below its tip. A group's atom in a rule names nobody: do not resolve it through `atomIndexes`. `names` reads `member_id` only where the row carries no tag.
+- Amended 2026-11-13, QD-801 (16.2.7). `AllowPrefixWrite` takes its paths as a sequence it draws from, never a slice of a whole tree's paths; it allows the call before drawing any where a rule with no path names this sidecar, stops at the first path it refuses, and answers the path of no component as 16.2.7 says, which is how `publish` learns that a device is held. Tests: 16.6's `acl_prefix_test.go` bullet for it. Size unchanged.
 
 **EVS1-M6-04, readers of a ruled repo** (new; M6; L; sidecar).
 
@@ -13742,6 +13818,7 @@ One existing task changes and five are new. The ids are free in `.stack/plan`, t
 - Landed code that changes: `evs_verify.go` is not changed, and that is the point: `VerifyStatement` still answers whether a push is the repo's, and the prefix verdict is asked where a change is applied. `readRound` today returns the newest verified version; it calls `effective`. `List` today returns evs's table and the window's deltas unjudged.
 - Tests: `evs_prefix_test.go` as 16.6 lists.
 - Traps: the record's pin, floor and epoch move on every verified read, ignored or not (section 9's E1 to E4 are about what evs was shown). An ignored removal at a directory above the path is found by the removal's own token path being a prefix of the path's, as 9.2.4's `verifyPath` finds it. Never log a path (I-13).
+- Amended 2026-11-13, QD-801 (16.2.6's head-mode paragraph). No file changes, and size stays L. Head mode as landed follows no base: `evs_read.go`, `evs_list.go` and `evs_history.go` answer `ErrEvsOverlayBase` for a path an overlay holds no entry for. The task keeps that under a rule set and gains one test, 16.6's head-mode bullet. Trap: do not add a read that follows the base of a shared ref; 16.2.6 says what such a read would owe first.
 
 **EVS1-M6-05, writers, repair and the pin push** (new; M6; M; sidecar).
 
@@ -13750,6 +13827,7 @@ One existing task changes and five are new. The ids are free in `.stack/plan`, t
 - Tests: `evs_plan_test.go` and `evs_prefix_repair_test.go` as 16.6 lists.
 - Traps: a repair form's `base_entry_version` and `prev_push_id` are evs's newest, never the effective version's, or 5g refuses it and History's walk breaks. A repair never runs on a phone, an ephemeral sidecar or a device that does not mirror the ref. The pin push must carry the pin of a state at or above the set, so the filer waits for its own log to apply its statement before it sends one.
 - Amended 2026-11-13 (8.2.10, 8.2.4, 10.2.4 as amended). `AllowPrefixWrite` also covers `EvsRepo.WritePaths` on a shared git-mode ref, which is a rekey. `PinPush` on a git-mode ref is the UPDATE of one tip, under P_r, on branches that have a tip and are not stopped, and `ur evs rules show` lists the refs it could not bind. The repair form with no edit is callable for one path whatever `RepairDepth` says, for EVS2-M10-20's DROP builder.
+- Amended 2026-11-13, QD-801. Files and size are unchanged. The SDK's and MCP's mapping of `EVS_PREFIX_RULE` gains the details `base` and `tag` (8.2.8), and `ur status` shows a ref this device refused with them. `PinPush` sends nothing for a name that does not exist and `ur evs rules show` lists none: a new ref is judged at its creating push's pin (16.2.9). The planner's `AllowPrefixWrite` call is as it was, since a file-mode ref has no base and no tag and a new one's changes are judged by their paths. Tests: the mapping of the two details.
 
 **EVS1-M6-06, git mode** (new; M6; S; sidecar).
 
@@ -13757,8 +13835,9 @@ One existing task changes and five are new. The ids are free in `.stack/plan`, t
 - Needs: ACL-M6-04; EVS1-M2-35, -36, -49.
 - Trap: only file changes are judged; a directory's rows on a git-mode ref follow from the trees.
 - Amended 2026-11-13, with 16-A and 16-B written (8.2.5, 8.2.7, 8.2.8; 8.7's last paragraph). Its scope grows, and its size is M. Files gain `evs_local_publish.go`: the writer's call sits in `publish`'s step 3, so an import and a rebuilt push pass it, and it runs again before a statement signed on another pin. `evs_git_check.go` holds two tests: the early one above, on the file entries a push writes, and the full line with the `changes` row, on every file that differs between the two trees, a REKEY's entries and the tainted token paths. `evs_local_receive.go` also answers `prefix rule: pending`, `update` and `tainted paths`. Needs gain EVS1-M2-34. Tests: 8.6's three amended rows. Traps: a file can change with no change at its own token path (an overlay's table, a creation of the other kind over it), so neither test may read the change list alone; the refusal's reason is the first failing row's, in `check`'s order, on every device; an owned ref asks nothing.
+- Amended 2026-11-13, QD-801 (8.2.4, 8.2.5, 8.2.7, 8.2.8; 8.7's last item). The task was held for this text and builds to it. Its scope grows again, and its size is L. Files gain `evs_local_overlay.go` (the held device's candidates: shared branches only, on every parent line) and `evs_local_commits.go` (a tag's proof, first among the sources). `evs_local_publish.go`: step 1 asks whether the device is held; step 3 measures from J, drawing a tree's files through `evs_local_tree.go`'s reader for a push measured from nothing; the refusal carries detail `base` or `tag`. `evs_git_check.go` and `evs_local_sync.go`: J for a branch that has never held a tip (its `EvsGitRef` holds neither a tip nor a last tip), the proof test for a tag against `tipAt` of the named source with that ref's kind and name, and the walk from nothing; `EvsGitCheckUpdate` takes those as arguments beside the verdict, so export judges alike. `evs_local_receive.go`: the two `ng` lines, and a push's tag updates published after its branch updates are answered. Needs are unchanged. Tests: 8.6's three rows as amended for QD-801 and 16.6's two bullets for new shared refs, about thirty cases, most of them hand-built pushes. Traps: the proof is the version the push names, never a lookup in the reader's own tip index, which differs between mounts; a named version the reader has not replayed is a wait and not a refusal, and one inside a stopped span, at another tip or after a DELETE is no proof; "first tip" is read from what this reader applied, so a ref whose first push was refused is still new after its DELETE; J replaces S in the prefix test only, and the `changes` row still holds the push to the net change against S; a signer named for every path is passed before any tree is read; the proof excuses no carried commit; nothing reads an owned ref's tree as the measure of a shared name.
 
-**TEST-M6-03, prefix rules end to end** (new; M6; M). 16.6's schedule rows on T2; `run-prefixrules.sh` beside the other details models in the gate's model step; the hand-built breaching pushes as a `sidecartest` helper that signs with a real admitted sidecar's key and skips `AllowPrefixWrite`, which no release build can do.
+**TEST-M6-03, prefix rules end to end** (new; M6; M). 16.6's schedule rows on T2; `run-prefixrules.sh` beside the other details models in the gate's model step; the hand-built breaching pushes as a `sidecartest` helper that signs with a real admitted sidecar's key and skips `AllowPrefixWrite`, which no release build can do. Amended 2026-11-13, QD-801: 16.6's `new shared names` row, whose hand-built pushes create a shared branch over the signer's own and a tag with no proof.
 
 **Scope notes for tasks that are not held.** SEARCH-M10-24 (masks): a hit whose (path, version) `effective` ignores is masked. SEARCH-M10-12 and SEARCH-M10-14 (coverage, backfill, companion pushes): no ignored version is indexed, and an ignored push counts as indexed. EVS1-M2-49 (export): reports an ignored version as it reports a refused one. TEAM-M2-04 (`CascadePlan`): lists the `prefix_rules` rows whose signer is in P at the row's position. Each is one call to ACL-M6-04's verdict or one read of the row.
 
@@ -13768,8 +13847,9 @@ One existing task changes and five are new. The ids are free in `.stack/plan`, t
 - **16-B, written 2026-11-13.** 8.2.8's receive path answers `ng <ref> prefix rule: <path>`, and `pending`, `update` or `tainted paths` where there is no path to name. The call itself is in 8.2.5's `publish`, step 3, so an import into a shared ref and a push sealed again on a new pin pass it; 8.2.9's fence order names it. An owned ref asks nothing.
 - **16-C, written 2026-11-13.** 5.2.2's list of what rows carry gains `AclRepo.prefix_rules`, a rows-only input folded alike by `ApplyStatement`, by `Reapply` for a tail entry whose verdict is 1, and by a base's compile; 5.2.4 and 5.7 are marked where they follow.
 - **16-D, written 2026-11-13.** §11.7's checkpoint list holds six cases where 8.2.4's chain row and 10.2.4 read it. On a git-mode ref the sixth is a tainted token path's write. A DROP's kept head is never built on an ignored version: the builder repairs first or stops.
+- **QD-801, written 2026-11-13 (amendment 4), each place marked "(amended 2026-11-13, QD-801)".** A push that gives a shared ref its first tip is measured from a shared branch's tree, or from nothing. 8.2.7 holds the rule: J, a tag's proof, the record that proves a past tip (the row of the reader's tips log at the version the push names) and why every device agrees on it. 8.2.4 holds what a held device chooses: a shared branch as its new branch's base, found on any parent line, and its tag's proof. 8.2.5 holds the writer's check, measured from J, and 8.2.8 the two `ng` lines and the order of a push's tags after its branches. 8.2.3, 8.3, 8.5, 8.6 and 8.7 are marked where they follow.
 
-Three places beyond those four were amended because the four could not be written without them: 8.2.10's rekey (judged, so asked by the planner), 8.2.10's pin push on a git-mode ref (a commitless version; none on a tag ref, a ref with no tip or a stopped ref), and 10.2.4's DROP builder. Two questions are filed (16.9): the pin push's refs, built on its recommendation, and the creation of a shared ref, left as ratified. No model changes: `GitSync.tla` holds a commitless version as any version that moves no tip, `DropJob.tla` models evs's job and not the client's builder, and `PrefixRules.tla` is one file-mode ref of one-change pushes, whose verdict is the function 8.2.7's line calls for each file.
+Three places beyond those four were amended because the four could not be written without them: 8.2.10's rekey (judged, so asked by the planner), 8.2.10's pin push on a git-mode ref (a commitless version; none on a tag ref, a ref with no tip or a stopped ref), and 10.2.4's DROP builder. Two questions are filed (16.9): the pin push's refs, built on its recommendation, and the creation of a shared ref, left as ratified. No model changes: `GitSync.tla` holds a commitless version as any version that moves no tip, `DropJob.tla` models evs's job and not the client's builder, and `PrefixRules.tla` is one file-mode ref of one-change pushes, whose verdict is the function 8.2.7's line calls for each file. Both questions are answered (amended 2026-11-13): QD-802 ratified the first as built, and QD-801 chose the second's option 2, which the last item above writes. One question follows from it (16.9), `details-amend-4-new-ref-stale-pin`, and no model changes for QD-801 either (16.3).
 
 ### 16.8 Proposed DESIGN.md text
 
@@ -13828,19 +13908,21 @@ rules     11.9's checks, by the set in force at its push's auth pin: allowed whe
           writer with rw can still do to evs's own state is DESIGN-DETAILS 16.2.13's list
 ```
 
+Amended 2026-11-13, QD-801, add to the row after "the ref stops there (11.11)": "A push that gives a shared git-mode ref its first tip is measured from the tree of its base where that is a shared branch, and from nothing otherwise; a tag changes no file where its push names a shared branch's version whose tip it tags, and is measured from nothing otherwise; measured from nothing, every file of the tree is a change (DESIGN-DETAILS 8.2.7)."
+
 **§11.7, checkpoints.** Add case (6): "the path's newest version on evs is one the writer ignores under the repo's prefix rules".
 
 **§11.8, invariants.** Add: "I-EVS-19 every reader that holds a push's statement, the repo's rows and its signer's row reaches the same prefix verdict on each of its changes, whatever base it started at; a reader shows and builds on only versions that verdict allows; a change a device refused locally is the change readers ignore". I-EVS-14 is unchanged and runs first.
 
 **§11.9, the readers row.** After the signed statement and entry hash: "then §11.7's prefix rules: a version they do not allow is not returned, and the newest allowed one below it is". **The trusts row.** After "is evs's word": "; its prefix verdict is not: the reader computes it for the version it is served, from rows alone".
 
-**§11.11.** The mount's check gains the prefix line (DESIGN-DETAILS 8.2.7 and 16.2.6); receive answers `ng <ref> prefix rule` for a path its own device may not write. Amended 2026-11-13, with 16-A and 16-B written, add: "the line judges every file that differs between the push's two trees, a rekey's entries and a re-creating push's tainted token paths, and no directory change; a device asks its own rules before it builds any push for a shared ref, an import's and a rebuilt one included; a set's filer sends its push of no change to each shared branch that has a tip".
+**§11.11.** The mount's check gains the prefix line (DESIGN-DETAILS 8.2.7 and 16.2.6); receive answers `ng <ref> prefix rule` for a path its own device may not write. Amended 2026-11-13, with 16-A and 16-B written, add: "the line judges every file that differs between the push's two trees, a rekey's entries and a re-creating push's tainted token paths, and no directory change; a device asks its own rules before it builds any push for a shared ref, an import's and a rebuilt one included; a set's filer sends its push of no change to each shared branch that has a tip". Amended 2026-11-13, QD-801, add: "on the push that gives a shared ref its first tip the line measures from a shared branch's tree or from nothing (§11.7's prefix rules row); a device held to prefixes opens a shared branch over a shared branch's tip and names, for a tag, the shared branch's version whose tip it tags; receive answers `ng <ref> prefix rule: no shared base` and `not a shared branch's tip`, and publishes a push's tags after its branches".
 
 **§11.7, the boundary row.** 10.8's amended item: a DROP's kept head is a version its builder allows.
 
 **§11.22, v1.** For "Q-EVS-3's prefix rules" read "Q-EVS-3's prefix rules (§8.8, §11.7's prefix rules row; M6)".
 
-**§18.5.** Add `EVS_PREFIX_RULE` {path, detail: refused | pending | update | depth | unavailable}: a write this device's rules do not allow, or a read whose effective version it cannot reach.
+**§18.5.** Add `EVS_PREFIX_RULE` {path, detail: refused | pending | update | depth | unavailable}: a write this device's rules do not allow, or a read whose effective version it cannot reach. Amended 2026-11-13, QD-801: the details gain `base`, a new shared branch with no shared branch's tip to be measured from, and `tag`, a tag of a commit that no shared branch's tip was; each carries the first file outside the device's prefixes.
 
 **§22.8, §22.9.** The model row `details/PrefixRules` and 16.6's schedule rows, numbered by that track.
 
@@ -13848,7 +13930,7 @@ rules     11.9's checks, by the set in force at its push's auth pin: allowed whe
 
 ### 16.9 Owner questions
 
-Five are filed. The section is built on the recommendation of each, so none blocks a task.
+Five are filed. The section is built on the recommendation of each, so none blocks a task. Amended 2026-11-13: the two filed with the amendments are answered, and one more is filed with QD-801's text, which is not built on its recommendation; they are the last three below.
 
 **details-16-subject-atoms** (filed). Which subjects may a rule name? Options: (1) only what an admission fixes: a sidecar, a member's untagged devices, a tag, and the four class autogroups; a group is filed as its members' `user:` subjects (built). (2) Every §8.4 atom, judged in the state at the push's pin: a device that does not retain that state, which is every new device for most of a repo, takes the version unjudged. (3) Groups, expanded by the filing device at filing time and filed again by an admin's daemon when the group changes, on top of (1). Recommendation: 1. It is the only one under which a device started today and a device that watched the push must agree (16.3's P1; `PrefixRulesTwin-HeadAtoms`). Option 3 can be added later with no format change; it spends a repo's 256 sets on membership changes.
 
@@ -13860,9 +13942,11 @@ Five are filed. The section is built on the recommendation of each, so none bloc
 
 **details-16-small-readings** (filed). Eleven readings the section took where QD-212's sentence allows more than one; each is one line to change: (1) only a general repo takes a set, though QD-212 names owner-bound repos after RepoVersioning's pattern: every owner-bound kind is record-class and written only by its owner's devices; (2) a set binds every shared ref of its repo, with no rule per ref; (3) once a set is in force a signer it does not name writes nothing, pushes pinned below a repo's first set are unbound, and the rules are lifted by the one rule that names `autogroup:sidecar`; (4) a void set leaves the set below it in force; (5) `.ur-index/`, `ur/index` and `ur/lfs` are outside the rules; (6) pushes carrying an admin's flag are outside the rules; (7) a repo's rows hold at most 256 sets for its life, with no compaction; (8) a set binds a ref from the first push pinned at or above it, which the filer sends; (9) a compromise cascade voids no set; (10) a device older than M6 enforces nothing, and no row lets a filer list such devices; (11) the default numbers of 16.2.11. Recommendation: each as built.
 
-**details-amend-3-pin-push-refs** (filed 2026-11-13, with the amendments). Which git-mode refs get a set's pin push, and what binds a deleted one? QD-795 has the filer send a push of no change "to each shared ref"; section 8 leaves no such push for a tag ref (it takes only a DELETE), a ref with no tip (an UPDATE needs one) or a ref stopped on the filer's device. Options: (1) none is sent to those; a tag ref needs none, a stopped ref is bound by its recovery, and a deleted ref is bound from the push that re-creates it, listed as unbound by `ur evs rules show` until then (built). (2) The filer sends a deleted ref a second DELETE, which carries its pin: every filing then writes a version to every branch the repo ever deleted, and evs must take a DELETE of a deleted ref. Recommendation: 1. What it leaves open is a writer re-creating a deleted branch at a stale pin under the set in force there, which is the reach 16.2.9 already names, on a branch the admin had deleted.
+**details-amend-3-pin-push-refs** (filed 2026-11-13, with the amendments). Which git-mode refs get a set's pin push, and what binds a deleted one? QD-795 has the filer send a push of no change "to each shared ref"; section 8 leaves no such push for a tag ref (it takes only a DELETE), a ref with no tip (an UPDATE needs one) or a ref stopped on the filer's device. Options: (1) none is sent to those; a tag ref needs none, a stopped ref is bound by its recovery, and a deleted ref is bound from the push that re-creates it, listed as unbound by `ur evs rules show` until then (built). (2) The filer sends a deleted ref a second DELETE, which carries its pin: every filing then writes a version to every branch the repo ever deleted, and evs must take a DELETE of a deleted ref. Recommendation: 1. What it leaves open is a writer re-creating a deleted branch at a stale pin under the set in force there, which is the reach 16.2.9 already names, on a branch the admin had deleted. Answered 2026-11-13 (QD-802): option 1, as built.
 
-**details-amend-3-new-shared-refs** (filed 2026-11-13, with the amendments). May a writer held to a prefix create a shared ref whose tree was never judged? Writing 16.2.6's line into 8.2.7 showed that a tag, and a new shared branch whose base is the writer's own branch, change no file and so pass (16.2.13's row). Options: (1) as ratified: the rules judge changes to a shared branch's files and nothing about a new name (built). (2) A push that creates a shared ref is judged from the tree of a shared branch it names, its base for a branch and a source whose tip it tags for a tag, and from nothing otherwise, so a held writer creates a branch or tag only at a tree that differs from a shared branch's tip under its prefixes. (3) Under a set, only a signer the set names for every path creates a shared ref. Recommendation: 2. This one is not built on its recommendation: options 2 and 3 refuse pushes that the section the owner ratified allows, so the text stays as ratified until the answer, and either is a further amendment of 8.2.4, 8.2.5, 8.2.7 and 16.2.4 before EVS1-M6-06 builds.
+**details-amend-3-new-shared-refs** (filed 2026-11-13, with the amendments). May a writer held to a prefix create a shared ref whose tree was never judged? Writing 16.2.6's line into 8.2.7 showed that a tag, and a new shared branch whose base is the writer's own branch, change no file and so pass (16.2.13's row). Options: (1) as ratified: the rules judge changes to a shared branch's files and nothing about a new name (built). (2) A push that creates a shared ref is judged from the tree of a shared branch it names, its base for a branch and a source whose tip it tags for a tag, and from nothing otherwise, so a held writer creates a branch or tag only at a tree that differs from a shared branch's tip under its prefixes. (3) Under a set, only a signer the set names for every path creates a shared ref. Recommendation: 2. This one is not built on its recommendation: options 2 and 3 refuse pushes that the section the owner ratified allows, so the text stays as ratified until the answer, and either is a further amendment of 8.2.4, 8.2.5, 8.2.7 and 16.2.4 before EVS1-M6-06 builds. Answered 2026-11-13 (QD-801): option 2. It is written, each place marked, and 16.7's last amendment item lists the places. Three readings were taken in writing it, each where the answer's sentence allows more than one. "From nothing otherwise" refuses a push only where a file of its tree lies outside its signer's prefixes, so a signer the set names for every path creates any shared ref, an import's included, which is what makes option 2 wider than option 3. "Is or was a tip" is read as a tip a shared branch held at a version, never a commit of its history, since a push's middle commits are judged by nobody (16.2.13). And a branch whose first push the mounts refused is still a new name when it is pushed again.
+
+**details-amend-4-new-ref-stale-pin** (filed 2026-11-13, with QD-801's text). Should evs hold up the pin of a push that creates a ref? A push is judged under the set in force at its pin (QD-212), and D-EVS-18's fence holds a pin at or above the head's, so on a ref that exists a set binds once one push is pinned past it. A ref that does not exist has no head: `evsservice/check_gate.go` compares the pin with the head's only where there is one. A writer that runs its own code can therefore create a shared ref, in either mode, at a pin below the set that holds it, and QD-801's rule is then asked of the older set, or of none below the repo's first. Options: (1) leave it: 16.2.13 lists it, the alarm cannot see it since the push passes, and the remedy is to revoke the writer (as written). (2) evs's gate holds the pin of a push that creates or re-creates a ref at or above the position of the repo's newest `RepoPrefixRules` entry, which evs reads from the repo's `AclRepo` row once ACL-M2-18 folds it there (`evsservice/auth_state_acl.go` holds that row today): one clause in D-EVS-18's fence, answered 412 `GATE_CLOSED` so that an honest device behind on its log rebuilds as it does today, and it bounds the re-creation QD-802 left open too; it rests on evs enforcing it, as the fence does. (3) Readers alarm, and refuse nothing, when a creating push's signed time is more than 1 h past the entry time of a set it is pinned below. (4) Readers refuse on that test, which puts two clocks into a verdict (P2). Recommendation: 2. The text is not built on it: it changes what evs's gate checks, a D- item, and so needs the owner's word and a small task of its own in `evsservice/check_gate.go`, beside EVS1-M6-06 and blocking nothing there.
 
 ## 17. Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8)
 
