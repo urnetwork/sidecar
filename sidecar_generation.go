@@ -189,12 +189,12 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 			self.tokenRefused(refusedGeneration, reason)
 			self.generationRefused(refusedGeneration)
 		},
-		Restore: func(ctx context.Context) error {
+		Restore: func(ctx context.Context, install func(presentedByJwt string, byJwt string) error) error {
 			var restorers []SidecarRestorer
 			if self.leg != nil {
 				restorers = self.leg.restorers()
 			}
-			return self.restoreRegistrations(ctx, restorers)
+			return self.restoreRegistrations(ctx, restorers, install)
 		},
 	})
 	generation.tokenManager.Store(manager)

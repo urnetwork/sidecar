@@ -233,7 +233,8 @@ func TestEndedSessionUnenrollsAsSessionEnded(t *testing.T) {
 }
 
 // After a Postgres restore that lost the identity tables, refresh answers restore_required, which is no refusal: the
-// sidecar posts its newest binding again and refreshes, Online and at generation 1 throughout (§5.6, §19.10).
+// sidecar posts its newest binding again, takes the token bind re-mints, and refreshes, Online and at generation 1
+// throughout (§5.6, §19.10), the newest token still naming its sidecar (QD-797).
 func TestRestoreRequiredRebindsAndRefreshes(t *testing.T) {
 	net := newTestNet(t)
 	laptop := addCoreSidecar(t, net, "laptop")
@@ -254,6 +255,12 @@ func TestRestoreRequiredRebindsAndRefreshes(t *testing.T) {
 	}
 	if api.RouteCount("POST /sidecar/bind") != 2 || api.RouteCount("GET /auth/refresh") < 2 {
 		t.Errorf("bind %d, refresh %d", api.RouteCount("POST /sidecar/bind"), api.RouteCount("GET /auth/refresh"))
+	}
+	tokens := api.ClientTokens(record.ClientId)
+	for _, token := range tokens[count:] {
+		if claimed := fakeApiTestClaims(t, token)["sidecar_id"]; claimed != record.SidecarId.String() {
+			t.Errorf("a token after the restore names sidecar %v", claimed)
+		}
 	}
 	if status := laptop.Sidecar().Status(); status.State != sidecar.SidecarStateOnline || status.Generation != 1 {
 		t.Errorf("status %+v", status)
