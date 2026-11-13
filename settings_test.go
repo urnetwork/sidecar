@@ -322,6 +322,11 @@ func TestDefaultSettingsTheDesignLeavesOpen(t *testing.T) {
 	if settings.ApiResponseByteCount != 2*1024*1024 {
 		t.Errorf("ApiResponseByteCount %d", settings.ApiResponseByteCount)
 	}
+	// §7.4's reading (QD-757): a round trip's reading is good to half of it, and a retry's shift lies between a
+	// Date's whole second and §7.4's window
+	if settings.ApiClockMaxRoundTrip != 30*time.Second || settings.ApiClockRetryShift != 5*time.Second {
+		t.Errorf("ApiClockMaxRoundTrip %s ApiClockRetryShift %s", settings.ApiClockMaxRoundTrip, settings.ApiClockRetryShift)
+	}
 
 	// why those numbers hold together: a hook payload at its limit fits in one request with room for
 	// JSON's escaping, a local request gets a call's time, and a full queue of 4,080 B envelopes fits
