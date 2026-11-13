@@ -4,9 +4,10 @@
 // stop at every barrier, a seal evacuated a run after its parts, an unknown batch format, the job's chain, and
 // HoldCache. A reader here is a fresh RecordLocator, so nothing a process cached answers for the store.
 //
-// FS-8's evacuation clause reads as DESIGN-DETAILS 14.6 gives it while 14.2.8's interim stands (QD-766): evacuation
-// has dropped every dead record at 26 h, and its slots stay. evacuate_slot_test.go holds 14.6's schedules A and B
-// for the interim.
+// These run with EvacuatorSettings.DeleteDeadSlots off, its default in the release that brings slot origins, so
+// every slot a dead record lists stays, counted, as under 14.2.8's interim (QD-766). evacuate_slot_test.go holds
+// FS-8's clause as DESIGN-DETAILS 14.8 amends it, with the delete on: a dead record's own slots are gone at 26 h and
+// a slot it listed and did not create stands; and 14.6's evacuation rows and schedules for the origin (QD-765).
 
 package evsservice
 

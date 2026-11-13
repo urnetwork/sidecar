@@ -726,7 +726,7 @@ func TestResolvePush(t *testing.T) {
 		t.Fatalf("resolution %+v %v", resolution, err)
 	}
 	fenced := CloneEvsHead(head.Head)
-	fenced.FenceMs = time.UnixMilli(pending.TimeMs).Add(evsResolveStatementLife + time.Second).UnixMilli()
+	fenced.FenceMs = time.UnixMilli(pending.TimeMs).Add(fixture.settings.ResolveStatementLife + time.Second).UnixMilli()
 	resolution, err = fixture.engine.ResolvePush(fixture.ctx, fixture.cluster, pendingRecord, fenced)
 	if err != nil || resolution.State != EvsResolveDead {
 		t.Fatalf("resolution %+v %v", resolution, err)
