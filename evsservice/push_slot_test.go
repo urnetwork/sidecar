@@ -2,9 +2,10 @@
 // its statement's origin; a 412 on the statement's own origin with equal bytes is the attempt's under 23 h and 409
 // SLOT_STALE past it; its own origin with other bytes alarms and is refused; another statement's object is refused
 // whatever the bytes, and so are an object with no origin and a re-seeded one; a retoken takes over the slot its
-// refused statement left once the settle age has passed, waiting on the fake clock when it has not; and each of the
-// takeover's five conditions failing alone refuses it. 5h's deposit rule (14.2.6, QD-768), and schedules C and D, end
-// it. The rows whose schedule holds an attempt between two of its steps are push_slot_testhooks_test.go's.
+// refused statement left once the settle age has passed, waiting on the fake clock when it has not and answering 503
+// when that clock turns unsure; and each of the takeover's five conditions failing alone refuses it. Then the record
+// before every slot, an ERASE's rewrite keeping the origin (14.2.6), 5h's deposit rule (QD-768), and schedules C and
+// D. The rows whose schedule holds an attempt between two of its steps are push_slot_testhooks_test.go's.
 
 package evsservice
 
