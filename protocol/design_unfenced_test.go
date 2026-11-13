@@ -1148,6 +1148,12 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "socket_name", number: 17, typeName: "string"},
 		question: "canonical-action-detail-listen-socket-name",
 	},
+	// QD-799: an egress_change action's mode, beside its subject and, under exits, its exits in grant_dst
+	{
+		message:  "CanonicalAction",
+		field:    testFenceField{name: "egress_mode", number: 39, typeName: "uint32"},
+		question: "bridge-m4-19-egress-change-action",
+	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.

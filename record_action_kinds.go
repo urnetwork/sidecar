@@ -25,8 +25,16 @@
 // QD-064's grant column stands and a listen's grant activates there. Its request carries the name as socket_name,
 // which agrees with that entry: a parse holds what needs no key (approvalRequestDetailCheck), and an approver's
 // device the token path under its K_sock (ApprovalApprover). A template names its socket too, so no multi-use
-// decision covers every listen. Kinds 5, 6, 7 and 16 have no O tool and no row, so they are refused until their
-// owners name their fields (plan-MCP-wire-enum-numbers).
+// decision covers every listen. Kinds 6, 7 and 16 have no O tool and no row, so they are refused until their owners
+// name their fields (plan-MCP-wire-enum-numbers).
+//
+// Kind 5, egress_change, is the owner's answer to bridge-m4-19-egress-change-action (QD-799): §17.9's egress spec, an
+// outward act that only a person's confirmed command asks for. It names its subject and egress_mode, 39, a
+// BridgeEgressMode, and under exits its exits in grant_dst, sidecar:<id> entries or one tag:<id>, each id in
+// lowercase hex; auto and none name none, a shape every parser holds (checkEgressChangeAction). A template names its
+// subject and mode too, so no
+// multi-use decision sets every subject's route. No server path takes it: its BridgeEgress rides the log as its own
+// statement, which no GrantActivate or gate carries.
 //
 // Kind 18, mail_tls_unauthenticated, is the owner's answer to smtp-m9-06-tl4-allowance-action (QD-729): §14.4's TL4
 // allowance for one recipient domain, host, in the one form a domain has here, lowercase with no trailing dot, so a
@@ -155,6 +163,15 @@ var canonicalActionKindRows = []*CanonicalActionKindFields{
 		Optional: []protoreflect.FieldNumber{8, 9, 27},
 		Versions: []uint32{1},
 		Request:  []protoreflect.FieldNumber{approvalRequestFieldLocalPort},
+	},
+	{
+		// egress_change (QD-799): the subject and its mode, and under exits the exits in grant_dst; a template names
+		// the subject and the mode too. No server path takes it
+		Kind:             SidecarActionEgressChange,
+		Required:         []protoreflect.FieldNumber{29, canonicalActionFieldEgressMode},
+		Optional:         []protoreflect.FieldNumber{canonicalActionFieldGrantDst},
+		Versions:         []uint32{1},
+		TemplateRequired: []protoreflect.FieldNumber{29, canonicalActionFieldEgressMode},
 	},
 	{
 		// mail_alias_create(alias, group?) (§15.8)

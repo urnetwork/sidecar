@@ -691,6 +691,8 @@ unset:
   CanonicalAction.restore_preview_id: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.alias_group: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
   CanonicalAction.versioning: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
+  # Answered (QD-799): egress_change's mode, which no GrantActivate or gate carries, its kind taking no server path.
+  CanonicalAction.egress_mode: "AD4: a server-gated action's CanonicalAction holds only fields its gate already sees (§16.6)"
 
 open:
   EvsUploadReceipt.key_id: {row: evs-4, question: protos-services-metadata-rows.md, until: M2}

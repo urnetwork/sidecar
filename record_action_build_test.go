@@ -3,12 +3,13 @@
 // raising risk, every server path held to its column, and the descriptor lint that keeps the table and record.proto
 // in step. The kinds QD-740 opened build here too: a publish, a listen and an expose at version 1 with no local port,
 // weight or ALPN, a listen naming its socket by grant_dst alone (QD-772), and a forward at version 4 with its port
-// sealed.
+// sealed. QD-799's egress_change builds with its subject, mode and exits, and every parser holds its exits' shape.
 
 package sidecar
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"slices"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The sidecar a test's forward dials, as grant_dst names it.
@@ -164,6 +166,12 @@ func testBuildableActions() map[string]*protocol.CanonicalAction {
 			Kind:          uint32(SidecarActionMailTlsUnauthenticated),
 			Host:          "mail.example",
 			ExpiresMillis: 1762387200000,
+		},
+		"egress_change": {
+			Kind:       uint32(SidecarActionEgressChange),
+			Subject:    subject,
+			EgressMode: uint32(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS),
+			GrantDst:   []string{"sidecar:4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a", "sidecar:4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b"},
 		},
 	}
 }
@@ -317,8 +325,96 @@ func TestTlsAllowanceHostIsHeldToItsForm(t *testing.T) {
 	}
 }
 
-// A kind with no row builds nothing, and neither does a publish, a listen, a forward or an expose that fills none of
-// its row.
+// An egress change (QD-799) builds with its subject and mode, and under exits with its exits, and every parser holds
+// its shape: a mode bridge.proto names, exits only under exits, sidecar:<id> entries or one tag:<id> alone, each id in
+// lowercase hex and none twice, and egress_mode on no other kind. Its render names the mode beside its number and says
+// what the route becomes, with no id in an error.
+func TestEgressChangeHoldsItsShape(t *testing.T) {
+	subject := bytes.Repeat([]byte{0x47}, 16)
+	exitA := "sidecar:4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a"
+	exitB := "sidecar:4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b"
+	tag := "tag:5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+	egress := func(mode bridge.BridgeEgressMode, grantDst ...string) *protocol.CanonicalAction {
+		return &protocol.CanonicalAction{Kind: uint32(SidecarActionEgressChange), Subject: subject, EgressMode: uint32(mode), GrantDst: grantDst}
+	}
+	for name, action := range map[string]*protocol.CanonicalAction{
+		"auto":           egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO),
+		"none":           egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE),
+		"exits by id":    egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, exitA, exitB),
+		"exits by a tag": egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, tag),
+	} {
+		stored, err := NewCanonicalAction(action)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if stored.Action.GetVersion() != 1 || CheckCanonicalActionForServer(stored) == nil {
+			t.Errorf("%s: version %d, or a server path took it", name, stored.Action.GetVersion())
+		}
+	}
+	for name, action := range map[string]*protocol.CanonicalAction{
+		"no mode":                 egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_UNSPECIFIED),
+		"a mode no proto names":   egress(bridge.BridgeEgressMode(7)),
+		"auto naming an exit":     egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO, exitA),
+		"none naming a tag":       egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE, tag),
+		"exits naming none":       egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS),
+		"a tag beside an id":      egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, exitA, tag),
+		"two tags":                egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, tag, "tag:5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b"),
+		"an exit twice":           egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, exitA, exitA),
+		"an exit in capitals":     egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, "sidecar:4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A"),
+		"a short exit":            egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, "sidecar:4a4a"),
+		"an exit of another kind": egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, "client:4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a"),
+		"a short subject": {
+			Kind: uint32(SidecarActionEgressChange), Subject: subject[:8], EgressMode: uint32(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE),
+		},
+		"egress_mode on another kind": {Kind: uint32(SidecarActionDnsDelete), DnsName: "old", DnsType: "A", EgressMode: 1},
+	} {
+		if _, err := NewCanonicalAction(action); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("%s: the builder answered %v", name, err)
+		}
+		action.Version = 1
+		encoded, err := proto.Marshal(action)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = ParseStoredCanonicalAction(encoded)
+		if !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("%s: the parser answered %v", name, err)
+		}
+		if err != nil && (strings.Contains(err.Error(), "4a4a") || strings.Contains(err.Error(), "5a5a")) {
+			t.Errorf("%s: the refusal names an id: %v", name, err)
+		}
+	}
+
+	stored := buildTestAction(t, egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, exitA, exitB))
+	approvalId := Id(bytes.Repeat([]byte{0x51}, 16))
+	payloadSha256 := stored.PayloadSha256()
+	actionId := stored.ActionId(approvalId)
+	requestBytes, err := proto.Marshal(&protocol.ApprovalRequest{
+		ApprovalId: approvalId.Bytes(), ActionId: actionId[:], CanonicalAction: stored.Bytes, PayloadSha256: payloadSha256[:],
+		Risk: uint32(SidecarRiskNormal), RequesterSidecarId: subject, NotAfterMillis: 1762387200000, Version: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := ParseStoredApprovalRequest(requestBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	render := RenderApprovalRequest(request)
+	fields := map[string]string{}
+	for _, field := range render.Fields {
+		fields[field.Name] = field.Value
+	}
+	wantMeaning := "Send sidecar 47474747474747474747474747474747's internet traffic only through " + exitA + ", " + exitB + ", and refuse it public egress"
+	if render.KindName != "egress_change" || render.Meaning != wantMeaning || fields["egress_mode"] != "2 (exits)" ||
+		fields["subject"] != hex.EncodeToString(subject) || fields["grant_dst"] != exitA+", "+exitB || !strings.Contains(render.Text(), wantMeaning) {
+		t.Errorf("the render: %+v\n%s", render, render.Text())
+	}
+}
+
+// A kind with no row builds nothing, and neither does a publish, a listen, a forward, an expose or an egress change
+// that fills none of its row.
 func TestUnbuiltKindsRefused(t *testing.T) {
 	for _, kind := range []SidecarActionKind{
 		SidecarActionUnspecified, SidecarActionEgressChange, SidecarActionInvite, SidecarActionShare,
