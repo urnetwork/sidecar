@@ -789,10 +789,10 @@ func TestFakeApiMintsForwardingClients(t *testing.T) {
 		clientPublicKey []byte
 		want            string
 	}{
-		"no key":                  {true, nil, fakeApiForwardOnlyKeyMessage},
-		"a short key":             {true, forwardPublic[:31], fakeApiForwardOnlyKeyMessage},
-		"a key with no mark":      {false, forwardPublic, fakeApiClientPublicKeyMarkMessage},
-		"a key for a plain child": {false, otherPublic, fakeApiClientPublicKeyMarkMessage},
+		"no key":                  {forwardOnly: true, want: fakeApiForwardOnlyKeyMessage},
+		"a short key":             {forwardOnly: true, clientPublicKey: forwardPublic[:31], want: fakeApiForwardOnlyKeyMessage},
+		"a key with no mark":      {clientPublicKey: forwardPublic, want: fakeApiClientPublicKeyMarkMessage},
+		"a key for a plain child": {clientPublicKey: otherPublic, want: fakeApiClientPublicKeyMarkMessage},
 	} {
 		if _, refusal := mint(source, source.clientKey, refused.forwardOnly, refused.clientPublicKey); refusal != refused.want {
 			t.Errorf("%s: %q", name, refusal)

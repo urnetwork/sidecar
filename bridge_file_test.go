@@ -1520,11 +1520,11 @@ func TestBridgeAdminAssignsAnotherSidecarsAddress(t *testing.T) {
 		sidecarId Id
 		address   netip.Addr
 	}{
-		"this host":                   {world.hostId, netip.Addr{}},
-		"a sidecar never admitted":    {testConfigId("a sidecar never admitted"), netip.Addr{}},
-		"an address in the upper /17": {laptop, netip.MustParseAddr("100.80.200.7")},
-		"a services address":          {laptop, netip.MustParseAddr("100.80.0.53")},
-		"an address of another block": {laptop, netip.MustParseAddr("100.81.5.9")},
+		"this host":                   {sidecarId: world.hostId},
+		"a sidecar never admitted":    {sidecarId: testConfigId("a sidecar never admitted")},
+		"an address in the upper /17": {sidecarId: laptop, address: netip.MustParseAddr("100.80.200.7")},
+		"a services address":          {sidecarId: laptop, address: netip.MustParseAddr("100.80.0.53")},
+		"an address of another block": {sidecarId: laptop, address: netip.MustParseAddr("100.81.5.9")},
 	} {
 		if _, err := world.filer.AssignAddress(ctx, world.confirmed(), refused.sidecarId, refused.address); !errors.Is(err, ErrBridgeFileRefused) {
 			t.Errorf("%s: %v", name, err)
