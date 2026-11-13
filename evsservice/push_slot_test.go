@@ -363,6 +363,28 @@ func TestPushSlotTakeoverWaitsOutTheSettleAge(t *testing.T) {
 	fixture.requireSlotOrigin(takeover.slotId, takeover.slotBody, origin)
 }
 
+// A clock that stops being sure while a takeover waits out the settle age: the takeover answers 503 rather than wait
+// on a clock it cannot trust (14.5), sending no DELETE, and the refused statement's object stands.
+func TestPushSlotTakeoverOnAClockTurnedUnsureAnswers503(t *testing.T) {
+	takeover := newTakeoverCase(t, "unsure", false, nil)
+	fixture := takeover.fixture
+	_, _, storedAt, _ := fixture.slotObject(takeover.slotId)
+	body, _ := fixture.bodyAndOrigin(takeover.retoken("s"))
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	token := fixture.token(fixture.check.signerId)
+	go func() {
+		answered <- fixture.post(token, body)
+	}()
+	fixture.awaitTimerAt(storedAt.Add(fixture.settings.SlotSettleAge))
+	fixture.host.ClockCheck.SetUnknown()
+	requireRefusal(t, <-answered, http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+	fixture.host.ClockCheck.SetOffset(0)
+	fixture.requireSlotOrigin(takeover.slotId, takeover.slotBody, takeover.refused)
+	if head := fixture.head(); head.Version() != 3 {
+		t.Fatalf("the retoken committed at %d", head.Version())
+	}
+}
+
 // The takeover's conditions, each failing alone: the object of another ref's statement, another signer's, one in the
 // retoken's own epoch, and one holding other bytes are another statement's, refused 409 SLOT_STALE and left as they
 // were. The window, a log page and a hold are the next tests'.
