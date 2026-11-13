@@ -16,7 +16,9 @@
 //	the log's rows    members and sidecars the atoms expand over, and the acl statements' rows: activated grants,
 //	                  the folded access logs, suspensions, spent grant ids and BridgeRows
 //
-// What it writes: has_document; an AclAtom for every tag, group and derived atom the policy names, autogroups being
+// What it writes: has_document; evidence_default, the document's effective evidenceDefault as channel values, all
+// three where it names none, the implicit document's included, which every verifier reads for an action no requests
+// rule names (QD-727); an AclAtom for every tag, group and derived atom the policy names, autogroups being
 // fixed constants with no row; the policy's grants and requests, then §8.5's kind-default rules that need the head
 // (acl_kind.go), then the log's activated grants whose requests rule this head still holds (FS-14); the log's repos,
 // suspensions and spent grant ids, a spent id dropped once its retention is below the head's newest record time; and
@@ -472,7 +474,11 @@ func aclActionValues(actions []protocol.AclAction) []uint32 {
 
 // Builds both outputs.
 func (self *aclCompiler) compile() error {
-	rows := &protocol.AclRows{HasDocument: self.hasDocument}
+	rows := &protocol.AclRows{
+		HasDocument: self.hasDocument,
+		// the effective default, as each requests rule's row carries its effective list (QD-396, QD-727)
+		EvidenceDefault: aclEvidenceChannels(self.policy.EvidenceDefault),
+	}
 	self.local.HasDocument = self.hasDocument
 	keys, err := AclPolicyRuleKeys(self.policy)
 	if err != nil {
