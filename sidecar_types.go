@@ -324,6 +324,35 @@ const (
 	// SidecarId where one is known (plan-RECORD-alarm-kinds). A storage failure is evs_alarm's, and a head not
 	// extending a pin head_alarm's.
 	SidecarEventRecordAlarm SidecarEventKind = "record_alarm"
+	// The bridge found what it alarms on, named by BridgeAlarm (plan-BRIDGE-small-readings #17, DESIGN-DETAILS
+	// 12.2.2): the sidecar it concerns in SidecarId where one is named, never a prefix, an address or a name (I-13).
+	SidecarEventBridgeAlarm SidecarEventKind = "bridge_alarm"
+)
+
+// Why a bridge_alarm fired: QD-557's five, DESIGN-DETAILS 12.7's three and this build's map_refused.
+type SidecarBridgeAlarm string
+
+const (
+	// A block that collides with what the host's physical path needs, or a route prefix that collides with the
+	// table's own block entries (§17.4).
+	SidecarBridgeAlarmBlockConflict SidecarBridgeAlarm = "block_conflict"
+	// A share's ShareKey holder left Y's AdminSet or was revoked (§17.9).
+	SidecarBridgeAlarmShareHolderRemoved SidecarBridgeAlarm = "share_holder_removed"
+	// A client id a host refused names another sidecar or none (§17.9's verify).
+	SidecarBridgeAlarmPrincipalMismatch SidecarBridgeAlarm = "principal_mismatch"
+	// A ledger file or a sealed body that does not verify: the state in force stands (§17.8).
+	SidecarBridgeAlarmStateUnverified SidecarBridgeAlarm = "state_unverified"
+	// A head's BridgeBlock a reader refuses: it keeps the previous block (D-BRIDGE-16).
+	SidecarBridgeAlarmBlockRefused SidecarBridgeAlarm = "block_refused"
+	// The unfolded statements' opened bodies passed BridgeLedgerSettings.UnfoldedBodyMaxByteCount: the state stands.
+	SidecarBridgeAlarmLedgerOverBudget SidecarBridgeAlarm = "ledger_over_budget"
+	// A share's table hashes to other than its pin, or holds another version (DESIGN-DETAILS 12.2.7).
+	SidecarBridgeAlarmShareTableMismatch SidecarBridgeAlarm = "share_table_mismatch"
+	// A start's catch-up waited past BridgeComponentSettings.CatchUpAlarmTimeout for the config's follow to reach the
+	// posture's pin (DESIGN-DETAILS 12.2.5).
+	SidecarBridgeAlarmCatchUpWaiting SidecarBridgeAlarm = "catch_up_waiting"
+	// A map onto a block address or one of the daemon's listeners, which the compile voids (§17.6, D-BRIDGE-19).
+	SidecarBridgeAlarmMapRefused SidecarBridgeAlarm = "map_refused"
 )
 
 // Why a record_alarm fired (plan-RECORD-alarm-kinds): a closed set of 14.
@@ -467,6 +496,8 @@ type SidecarEvent struct {
 	VerifiedSince time.Time
 	// record_alarm.
 	RecordAlarm SidecarRecordAlarm
+	// bridge_alarm.
+	BridgeAlarm SidecarBridgeAlarm
 }
 
 // Called for each event, on whatever goroutine raised it. It must not block or call CloseAndWait

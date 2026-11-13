@@ -1,5 +1,3 @@
-//go:build !ios_extension
-
 // §7.7's client names: DNS labels keyed on the sidecar_id, from the config head's names file, duplicates taking -2, -3
 // in admission order (RA:948-971), from which private names derive (owner decision 85, §12.9). Signers and verifiers
 // refuse as a client name a reserved name or owner (§12.5, §12.7), a word-number label (§15.9) and a scope label
