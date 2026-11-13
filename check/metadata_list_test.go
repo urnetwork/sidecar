@@ -100,17 +100,35 @@ var metadataListAdditions = []metadataListAddition{
 		list:     "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n# v12, updated 2026-11-12 for the owner's answers on certs' rows (QD-741, QD-742), adds cert-1's issued chains, a\n# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n",
 	},
 	{
-		// QD-765: the list's version names the slot origin's change (DESIGN-DETAILS 14.8), after v12's
-		question: "details-14-slot-origin",
+		// QD-763: gkm-1's forwarding reader keys are keyed by their network as well
+		question: "core-owner-fixes-dkey-sweep-network",
+		block:    "(metadata cluster); gkm/dkey/<delegation_id>\n",
+		list:     "(metadata cluster); gkm/dkey/<network_id>/<delegation_id>\n",
+	},
+	{
+		// QD-763's list version bump, on the version the additions above give
+		question: "core-owner-fixes-dkey-sweep-network",
 		block:    "# metadata_list.yml v12;",
 		list:     "# metadata_list.yml v13;",
 	},
 	{
-		// QD-765: v13's line, after v12's
-		question: "details-14-slot-origin",
+		// and what the version adds, after v12's lines
+		question: "core-owner-fixes-dkey-sweep-network",
 		block:    "# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n",
-		list: "# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n" +
-			"# v13, updated 2026-11-12 for the slot fix (DESIGN-DETAILS 14; QD-765), adds evs-5's origin of each slot object, in\n" +
+		list:     "# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n# v13, updated 2026-11-13 for the owner's answer QD-763, keys gkm-1's forwarding reader keys by their network as\n# well, gkm/dkey/<network_id>/<delegation_id>, so gkm's reconciler sweeps one network's at a time (QD-675).\n",
+	},
+	{
+		// QD-765: the list's version names the slot origin's change (DESIGN-DETAILS 14.8), after v13's
+		question: "details-14-slot-origin",
+		block:    "# metadata_list.yml v13;",
+		list:     "# metadata_list.yml v14;",
+	},
+	{
+		// QD-765: v14's line, after v13's
+		question: "details-14-slot-origin",
+		block:    "# well, gkm/dkey/<network_id>/<delegation_id>, so gkm's reconciler sweeps one network's at a time (QD-675).\n",
+		list: "# well, gkm/dkey/<network_id>/<delegation_id>, so gkm's reconciler sweeps one network's at a time (QD-675).\n" +
+			"# v14, updated 2026-11-13 for the slot fix (DESIGN-DETAILS 14; QD-765), adds evs-5's origin of each slot object, in\n" +
 			"# object metadata, and narrows evs-5's ttl to a dead push's own slots; evs-10 names the object metadata evs writes.\n",
 	},
 	{

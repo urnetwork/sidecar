@@ -48,9 +48,9 @@ func testRecordAccessRequestDetail() *protocol.CanonicalActionDetail {
 	return &protocol.CanonicalActionDetail{TargetPort: 22, GrantDst: []string{testRecordWorkerDst + ":tcp:22"}}
 }
 
-// A version-3 access_request, using only its fields: its worker's port rides sealed_detail.
+// A version-3 access_request, using only its fields: its worker's port rides sealed_detail, sealed beside them.
 func testRecordAccessRequestAction() *protocol.CanonicalAction {
-	return &protocol.CanonicalAction{
+	return testWithSealedDetail(&protocol.CanonicalAction{
 		Kind:            uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_ACCESS_REQUEST),
 		ExpiresMillis:   1762387200000,
 		GrantDst:        []string{testRecordWorkerDst},
@@ -59,13 +59,12 @@ func testRecordAccessRequestAction() *protocol.CanonicalAction {
 		RepoId:          bytes.Repeat([]byte{0x31}, 16),
 		TargetSidecarId: bytes.Repeat([]byte{0x32}, 16),
 		Subject:         bytes.Repeat([]byte{0x33}, 16),
-		SealedDetail:    testSealActionDetail(testRecordAccessRequestDetail()),
-	}
+	}, testRecordAccessRequestDetail())
 }
 
-// A version-4 dial grant, kind bridge_forward's, using only its fields.
+// A version-4 dial grant, kind bridge_forward's, using only its fields, its detail sealed beside them.
 func testRecordSealedGrantAction() *protocol.CanonicalAction {
-	return &protocol.CanonicalAction{
+	return testWithSealedDetail(&protocol.CanonicalAction{
 		Kind:          uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD),
 		ExpiresMillis: 1762387200000,
 		GrantDst:      []string{testActionTargetDst},
@@ -73,8 +72,7 @@ func testRecordSealedGrantAction() *protocol.CanonicalAction {
 		Version:       4,
 		RuleId:        bytes.Repeat([]byte{0x36}, 16),
 		Subject:       bytes.Repeat([]byte{0x37}, 16),
-		SealedDetail:  testSealActionDetail(testForwardDetail()),
-	}
+	}, testForwardDetail())
 }
 
 // A known set for a test of a later version's rules.
@@ -250,8 +248,7 @@ func TestCanonicalActionVersionFourTakesOnlyItsFields(t *testing.T) {
 	if _, err := ParseStoredCanonicalAction(testRecordStored(t, earlier)); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("a sealed_detail at version 1: %v", err)
 	}
-	dns := testRecordDnsAction()
-	dns.SealedDetail = testSealActionDetail(testForwardDetail())
+	dns := testWithSealedDetail(testRecordDnsAction(), testForwardDetail())
 	if _, err := ParseStoredCanonicalAction(testRecordStored(t, dns)); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("a dns action with a sealed_detail: %v", err)
 	}

@@ -1,5 +1,6 @@
 // RECORD.md section 5.1's hashed bytes and §16.6's ids, with parsers that keep each message's stored bytes, on every
-// leg: ACL-M2-07's GrantActivate check, MCP's spend check and gate, the record's own readers and §17 share them.
+// leg: ACL-M2-07's GrantActivate check, MCP's spend check and gate, the record's own readers and §17 share them. So
+// does what a CanonicalAction's sealed_detail is sealed to (QD-771), a hash of the action's own stored bytes.
 //
 // Every value covers bytes as stored, never a re-encoding (§16.8's what freezes). protobuf's encoding is not
 // canonical, so each parser here returns its message with the bytes it came from, every later hash takes those bytes,
@@ -24,6 +25,7 @@ import (
 	"math"
 	"slices"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -92,6 +94,60 @@ func RecordBodyCommitment(salt []byte, body []byte) ([sha256.Size]byte, error) {
 // payload_sha256: SHA-256 of a CanonicalAction as stored (§16.8), never a re-encoding.
 func ApprovalPayloadSha256(storedAction []byte) [sha256.Size]byte {
 	return sha256.Sum256(storedAction)
+}
+
+// What a CanonicalAction's sealed_detail is sealed to (QD-771): config_seal.go's context, which a record takes from
+// its StatementHeader, taken from the action itself, since an action is built and approved before any GrantActivate
+// header carries it.
+//
+//	SignedType  SIGNED_GRANT_ACTIVATE, the record that carries an action to its readers
+//	NetworkId   networkId, the network the action is filed, approved and activated in
+//	Nonce       the first 16 bytes of SHA-256(clear)
+//	clear       storedAction with its field-38 record cut out, every other tag and value kept in its stored order
+//	            and encoding: the action's own bytes, the ones payload_sha256 covers, with sealed_detail absent
+//
+// clear is the action's clear fields as stored: kind, version and scope, and 8, 10, 11, 28 and 29 at version 4, 8,
+// 10, 11, 14, 26 and 29 at version 3, all a parser lets those versions set. For the builder's bytes, which
+// NewCanonicalAction writes once in field-number order, it is the deterministic encoding of the clear fields alone,
+// sealed_detail being the last field; and since it is cut from the bytes as stored, never re-encoded, any encoder's
+// action derives its own. storedAction may carry field 38 or not: a daemon derives from its clear bytes before it
+// seals, an approver and every reader from the stored bytes they open, and both find the same nonce. A detail then
+// opens beside the clear fields it was sealed with alone, in its network: carried by an action naming another subject,
+// rule, destination, expiry, scope, kind or version, or in another network, its AEAD refuses it. Nothing new is
+// stored, and a server sees no value it does not hold already. Bytes that do not read as protobuf's wire format, carry
+// field 38 more than once, or a zero network, derive nothing.
+func CanonicalActionDetailSealContext(networkId Id, storedAction []byte) (*ConfigSealContext, error) {
+	if networkId == (Id{}) {
+		return nil, fmt.Errorf("%w: a sealed_detail's context names no network", ErrCanonicalActionInvalid)
+	}
+	clear := make([]byte, 0, len(storedAction))
+	detailCount := 0
+	for rest := storedAction; 0 < len(rest); {
+		number, wireType, tagByteCount := protowire.ConsumeTag(rest)
+		if tagByteCount < 0 {
+			return nil, fmt.Errorf("%w: canonical action: %v", ErrCanonicalActionInvalid, protowire.ParseError(tagByteCount))
+		}
+		valueByteCount := protowire.ConsumeFieldValue(number, wireType, rest[tagByteCount:])
+		if valueByteCount < 0 {
+			return nil, fmt.Errorf("%w: canonical action: %v", ErrCanonicalActionInvalid, protowire.ParseError(valueByteCount))
+		}
+		if number == canonicalActionFieldSealedDetail {
+			detailCount += 1
+		} else {
+			clear = append(clear, rest[:tagByteCount+valueByteCount]...)
+		}
+		rest = rest[tagByteCount+valueByteCount:]
+	}
+	if 1 < detailCount {
+		// protobuf would read the last, and no builder writes two
+		return nil, fmt.Errorf("%w: sealed_detail stored %d times", ErrCanonicalActionInvalid, detailCount)
+	}
+	clearSha256 := sha256.Sum256(clear)
+	return &ConfigSealContext{
+		SignedType: bridge.SignedType_SIGNED_GRANT_ACTIVATE,
+		NetworkId:  networkId.Bytes(),
+		Nonce:      bytes.Clone(clearSha256[:configNonceByteCount]),
+	}, nil
 }
 
 // request_sha256: SHA-256 of an ApprovalRequest as stored (§16.8), which binds run_id, agent_id, approvers and

@@ -191,6 +191,17 @@ func (self *SocketsService) Probes() (count int, changed chan struct{}) {
 	return self.probeCount.Get()
 }
 
+// Revocation sweeps ended, and a channel that closes at the next: what a test of the composition waits on.
+func (self *SocketsService) Sweeps() (count int, changed chan struct{}) {
+	return self.sweeps.doneCount.Get()
+}
+
+// Removed clients whose store work has ended, and a channel that closes at the next: what a test of the composition
+// waits on.
+func (self *SocketsService) Removals() (count int, changed chan struct{}) {
+	return self.removals.finishedClientIds.Get()
+}
+
 // Lays config/<env>/sidecar.yml's sockets_control_qps over the control bound's sidecar rate and burst
 // (§19.11): the host calls it each time it rereads the file. A rate or burst that is not positive changes
 // nothing.

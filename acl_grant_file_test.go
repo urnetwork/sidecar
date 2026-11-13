@@ -4,13 +4,14 @@
 // and refuses another spender's, one past not_after less the skew and one it does not cover; Grants lists what rows
 // hold of it; the grant component's Lookup finds its grant_id once the log holds it and a revocation's spent id after;
 // the effect files nothing under a standing grant or for a grant the log holds; and the request half builds a
-// forward's action at version 4 around the sealed_detail its caller sealed, and refuses one that seals nothing, a
-// port or a prefix in the grant_dst it is asked, and a grant no rule takes.
+// forward's action at version 4 and seals its request's detail once the grant's fields are filled (QD-771), and
+// refuses one with no detail, one its caller sealed already, a port or a prefix in the grant_dst it is asked, and a
+// grant no rule takes.
 //
 // A forward's grant is a dial grant, so its action is version 4 and its activation folds port-limited (QD-740): until
-// a device reads a grant's ports from its sealed_detail (question canonical-action-detail-seal-context), no
-// activated forward stands for a later one, which is the closed direction, and only a rule that limits no ports
-// covers a forward. A publish's grant seals nothing, so it carries what an activated grant covers.
+// a device reads a grant's ports from its sealed_detail (ACL-M4-02's), no activated forward stands for a later one,
+// which is the closed direction, and only a rule that limits no ports covers a forward. A publish's grant seals
+// nothing, so it carries what an activated grant covers.
 
 package sidecar
 
@@ -21,6 +22,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
@@ -247,24 +250,34 @@ func TestAclGrantComponentLooksUpItsGrantId(t *testing.T) {
 	}
 }
 
-// The request half: a forward's action builds at version 4 around the sealed_detail its caller sealed, with the rule
-// MatchAclRequest finds and the rule's default lifetime, and shows a server its grant fields and the ciphertext alone;
-// a forward that seals nothing, one at version 1, and a grant_dst naming a port or a prefix are refused, and a grant
-// no requests rule takes is refused before any action is built.
-func TestAclGrantFilerActionBuildsSealedAndFailsClosed(t *testing.T) {
+// The request half: a forward's action builds at version 4 with the rule MatchAclRequest finds and the rule's default
+// lifetime, and only then seals the detail its request carries, beside those final fields (QD-771), so the detail
+// opens beside the action as built, and the action shows a server its grant fields and the ciphertext alone. A forward
+// with no detail, one at version 1, a base its caller sealed before the grant's fields were filled, a filer whose
+// device seals nothing and a grant_dst naming a port or a prefix are refused, and a grant no requests rule takes is
+// refused before any action is built.
+func TestAclGrantFilerActionSealsOnceFilledAndFailsClosed(t *testing.T) {
 	world := newAclGrantFileWorld(t)
+	ctx := context.Background()
 	filer := NewAclGrantFiler(nil, world.engine)
-	sealed := testSealActionDetail(&protocol.CanonicalActionDetail{TargetPort: aclTestForwardPort, GrantDst: []string{aclTestDst(world.cast.phone) + ":tcp:22"}})
-	base := &protocol.CanonicalAction{Kind: uint32(SidecarActionForward), SealedDetail: sealed}
-	request := &AclGrantRequest{Subject: world.cast.laptop, GrantDst: []string{aclTestDst(world.cast.phone)}, GrantAllow: []string{"dial"}}
-	action, err := filer.Action(base, request, aclTestNow)
+	filer.details = testActionDetailSealer{}
+	phone := aclTestDst(world.cast.phone)
+	detail := &protocol.CanonicalActionDetail{TargetPort: aclTestForwardPort, GrantDst: []string{phone + ":tcp:22"}}
+	base := &protocol.CanonicalAction{Kind: uint32(SidecarActionForward)}
+	request := &AclGrantRequest{Subject: world.cast.laptop, GrantDst: []string{phone}, GrantAllow: []string{"dial"}, Detail: detail}
+	action, err := filer.Action(ctx, base, request, aclTestNow)
 	if err != nil {
 		t.Fatal(err)
 	}
 	built := action.Action
-	if built.GetVersion() != canonicalActionVersionSealedGrant || !bytes.Equal(built.GetRuleId(), world.selfRule) || !bytes.Equal(built.GetSealedDetail(), sealed) ||
-		built.GetExpiresMillis() != aclTestNow.UnixMilli()+aclRequestDefaultExpiryMs || len(built.GetGrantDst()) != 1 || built.GetGrantDst()[0] != aclTestDst(world.cast.phone) {
+	if built.GetVersion() != canonicalActionVersionSealedGrant || !bytes.Equal(built.GetRuleId(), world.selfRule) || len(built.GetSealedDetail()) == 0 ||
+		built.GetExpiresMillis() != aclTestNow.UnixMilli()+aclRequestDefaultExpiryMs || len(built.GetGrantDst()) != 1 || built.GetGrantDst()[0] != phone {
 		t.Errorf("the forward as built: %+v", built)
+	}
+	// sealed beside the rule and the expiry the filer filled, so it opens beside the action as built
+	opened, err := OpenCanonicalActionDetail(action, testActionDetailNetworkId(), testConfigSealKeyAt(testConfigSealKey(testActionDetailGeneration)))
+	if err != nil || !proto.Equal(opened, detail) {
+		t.Errorf("the forward's detail opened to %+v: %v", opened, err)
 	}
 	if err := CheckCanonicalActionForServer(action); err != nil {
 		t.Errorf("the forward on a server path: %v", err)
@@ -273,27 +286,37 @@ func TestAclGrantFilerActionBuildsSealedAndFailsClosed(t *testing.T) {
 		t.Error("the forward's stored bytes show a port")
 	}
 
-	unsealed := &protocol.CanonicalAction{Kind: uint32(SidecarActionForward)}
-	if _, err := filer.Action(unsealed, request, aclTestNow); !errors.Is(err, ErrCanonicalActionInvalid) {
+	// a seal its caller made before the rule and expiry were filled binds neither, so the filer takes none
+	early := testWithSealedDetail(&protocol.CanonicalAction{
+		Kind: uint32(SidecarActionForward), GrantDst: []string{phone}, GrantAllow: []string{"dial"}, Subject: world.cast.laptop.Bytes(),
+	}, detail)
+	if _, err := filer.Action(ctx, early, request, aclTestNow); !errors.Is(err, ErrAclGrantFile) || !errors.Is(err, ErrCanonicalActionInvalid) {
+		t.Errorf("a base sealed before its grant's fields: %v", err)
+	}
+	noDetail := &AclGrantRequest{Subject: world.cast.laptop, GrantDst: []string{phone}, GrantAllow: []string{"dial"}}
+	if _, err := filer.Action(ctx, base, noDetail, aclTestNow); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("a forward that seals nothing: %v", err)
 	}
 	version1 := &protocol.CanonicalAction{Kind: uint32(SidecarActionForward), Version: 1}
-	if _, err := filer.Action(version1, request, aclTestNow); !errors.Is(err, ErrCanonicalActionInvalid) {
+	if _, err := filer.Action(ctx, version1, request, aclTestNow); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("a forward at version 1: %v", err)
 	}
-	ported := &AclGrantRequest{Subject: world.cast.laptop, GrantDst: []string{aclTestDst(world.cast.phone) + ":tcp:22"}, GrantAllow: []string{"dial"}}
-	if _, err := filer.Action(base, ported, aclTestNow); !errors.Is(err, ErrCanonicalActionInvalid) {
+	if _, err := NewAclGrantFiler(nil, world.engine).Action(ctx, base, request, aclTestNow); !errors.Is(err, ErrAclGrantFile) {
+		t.Errorf("a filer whose device seals nothing: %v", err)
+	}
+	ported := &AclGrantRequest{Subject: world.cast.laptop, GrantDst: []string{phone + ":tcp:22"}, GrantAllow: []string{"dial"}, Detail: detail}
+	if _, err := filer.Action(ctx, base, ported, aclTestNow); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("a grant_dst naming a port: %v", err)
 	}
-	prefixed := &AclGrantRequest{Subject: world.cast.laptop, GrantDst: []string{"ip:192.0.2.0/24"}, GrantAllow: []string{"route"}}
-	if _, err := filer.Action(base, prefixed, aclTestNow); !errors.Is(err, ErrAclGrantFieldInvalid) {
+	prefixed := &AclGrantRequest{Subject: world.cast.laptop, GrantDst: []string{"ip:192.0.2.0/24"}, GrantAllow: []string{"route"}, Detail: detail}
+	if _, err := filer.Action(ctx, base, prefixed, aclTestNow); !errors.Is(err, ErrAclGrantFieldInvalid) {
 		t.Errorf("a grant_dst naming a prefix: %v", err)
 	}
-	stranger := &AclGrantRequest{Subject: world.cast.laptop, GrantDst: []string{aclTestDst(world.cast.stranger)}, GrantAllow: []string{"dial"}}
-	if _, err := filer.Action(base, stranger, aclTestNow); !errors.Is(err, ErrAclRequestNoMatch) {
+	stranger := &AclGrantRequest{Subject: world.cast.laptop, GrantDst: []string{aclTestDst(world.cast.stranger)}, GrantAllow: []string{"dial"}, Detail: detail}
+	if _, err := filer.Action(ctx, base, stranger, aclTestNow); !errors.Is(err, ErrAclRequestNoMatch) {
 		t.Errorf("a grant no rule takes: %v", err)
 	}
-	if _, err := NewAclGrantFiler(nil, NewAclEngine(world.cast.laptop, nil, nil, nil)).Action(base, request, aclTestNow); !errors.Is(err, ErrAclGrantFile) {
+	if _, err := NewAclGrantFiler(nil, NewAclEngine(world.cast.laptop, nil, nil, nil)).Action(ctx, base, request, aclTestNow); !errors.Is(err, ErrAclGrantFile) {
 		t.Errorf("no state: %v", err)
 	}
 	if err := filer.Revoke(context.Background(), []byte{1}, SidecarActConfirmed, nil); !errors.Is(err, ErrAclGrantFile) {

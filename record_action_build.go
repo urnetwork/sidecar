@@ -11,9 +11,10 @@
 //
 // The builder takes both of QD-740's forms. A kind that binds a local port, a weight or ALPNs builds its action
 // without them: they are the request's, which the caller hands the gate as SidecarAction.Detail. A dial or route
-// grant, bridge_forward's at version 4, and an access request to a worker's port carry sealed_detail, which the caller
-// seals first (NewSealedCanonicalAction, record_action_detail.go): the builder holds it to the sealed-body layout and
-// holds every clear grant_dst to a subject alone, so no action it answers shows a server a prefix or a port.
+// grant, bridge_forward's at version 4, and an access request to a worker's port carry sealed_detail, which
+// NewSealedCanonicalAction (record_action_detail.go) seals once the clear fields are final, bound to them (QD-771;
+// canonicalActionClearBytes here): the builder holds it to the sealed-body layout and holds every clear grant_dst to a
+// subject alone, so no action it answers shows a server a prefix or a port.
 //
 // Package-level functions are safe for concurrent use.
 
@@ -77,10 +78,7 @@ func newCanonicalAction(action *protocol.CanonicalAction, known func(version uin
 	if len(built.ProtoReflect().GetUnknown()) != 0 {
 		return nil, fmt.Errorf("%w: a field this build cannot name", ErrCanonicalActionInvalid)
 	}
-	version := built.GetVersion()
-	if version == 0 {
-		version = row.Versions[0]
-	}
+	version := canonicalActionBuildVersion(built, row)
 	if !slices.Contains(row.Versions, version) {
 		return nil, fmt.Errorf("%w: kind %d at version %d", ErrCanonicalActionInvalid, action.GetKind(), version)
 	}
@@ -130,6 +128,33 @@ func newCanonicalAction(action *protocol.CanonicalAction, known func(version uin
 		return nil, fmt.Errorf("%w: %v", ErrCanonicalActionInvalid, err)
 	}
 	return parseStoredCanonicalAction(stored, known)
+}
+
+// The version an action of row's kind is built at: its own, or the kind's default, the row's first, where it sets
+// none (0).
+func canonicalActionBuildVersion(action *protocol.CanonicalAction, row *CanonicalActionKindFields) uint32 {
+	if version := action.GetVersion(); version != 0 || len(row.Versions) == 0 {
+		return version
+	}
+	return row.Versions[0]
+}
+
+// clear's bytes as the builder stores them, before its detail is sealed: sealed_detail left out and the version fixed
+// as NewCanonicalAction fixes it, deterministically encoded, field by field in number order. Field 38 being
+// CanonicalAction's last, the stored action is these bytes and its sealed_detail after them, so the context a detail
+// is sealed to here is the one its stored bytes derive (CanonicalActionDetailSealContext). The caller's message is
+// not changed.
+func canonicalActionClearBytes(clear *protocol.CanonicalAction) ([]byte, error) {
+	final := proto.Clone(clear).(*protocol.CanonicalAction)
+	final.SealedDetail = nil
+	if row, ok := CanonicalActionFields(SidecarActionKind(final.GetKind())); ok {
+		final.Version = canonicalActionBuildVersion(final, row)
+	}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(final)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCanonicalActionInvalid, err)
+	}
+	return encoded, nil
 }
 
 // Whether use falls inside template (§16.6's multi-use row): template is a scope = true action, use a full one of

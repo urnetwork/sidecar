@@ -1,4 +1,4 @@
-# metadata_list.yml v13; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v14; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -50,7 +50,9 @@
 # until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).
 # v12, updated 2026-11-12 for the owner's answers on certs' rows (QD-741, QD-742), adds cert-1's issued chains, a
 # requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.
-# v13, updated 2026-11-12 for the slot fix (DESIGN-DETAILS 14; QD-765), adds evs-5's origin of each slot object, in
+# v13, updated 2026-11-13 for the owner's answer QD-763, keys gkm-1's forwarding reader keys by their network as
+# well, gkm/dkey/<network_id>/<delegation_id>, so gkm's reconciler sweeps one network's at a time (QD-675).
+# v14, updated 2026-11-13 for the slot fix (DESIGN-DETAILS 14; QD-765), adds evs-5's origin of each slot object, in
 # object metadata, and narrows evs-5's ttl to a dead push's own slots; evs-10 names the object metadata evs writes.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
@@ -439,7 +441,7 @@ evs-28:
   owner: §11.13
 gkm-1:
   service: gkm
-  store: gkm/repo/<repo_id>/<seq>; gkm/<group_id>/owner and gkm/<group_id>/epoch/0 (metadata cluster); gkm/dkey/<delegation_id>
+  store: gkm/repo/<repo_id>/<seq>; gkm/<group_id>/owner and gkm/<group_id>/epoch/0 (metadata cluster); gkm/dkey/<network_id>/<delegation_id>
   sees: GroupForm chain (repo_id, group_id, previous group, generation, signer); epoch 0 (network_id, cipher suite 0x0010 (owner decision 44), creator); each group's owner marker (repo_id, network_id), written first at a creation or re-form, through which alone gkm resolves the group (owner decision 201); and each forwarding Delegation's reader public key, by delegation_id, which gkm and every rotator check against its row's digest (owner decision 202)
   why: one accepted commit per epoch; re-forming; one repo to a group; sealing to forwarding Delegations (§10.5)
   ttl: life of the repo, epoch 0 while epoch/0 exists; an owner marker until the repo's shred, a re-seed's form writing it again; a forwarding Delegation's reader key until 24 h after the Delegation ends or is superseded
