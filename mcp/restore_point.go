@@ -46,15 +46,14 @@ import (
 
 // §5.9's directory and file class, and the point's own file names: format values of its local state.
 const (
-	restoreDirectoryName    = "restore"
-	restoreClass            = "restore"
-	restoreManifestName     = "manifest"
-	restoreLedgerName       = "ledger"
-	restoreBaseCopyPrefix   = "base/"
-	restoreHoldCopyPrefix   = "hold/"
-	restoreManifestVersion  = 1
-	restoreLedgerVersion    = 1
-	restoreManifestMaxBytes = 64 * 1024 * 1024
+	restoreDirectoryName   = "restore"
+	restoreClass           = "restore"
+	restoreManifestName    = "manifest"
+	restoreLedgerName      = "ledger"
+	restoreBaseCopyPrefix  = "base/"
+	restoreHoldCopyPrefix  = "hold/"
+	restoreManifestVersion = 1
+	restoreLedgerVersion   = 1
 	// git's modes, as ChangedPath.mode carries them
 	restoreModeFile       = 0100644
 	restoreModeExecutable = 0100755
@@ -192,6 +191,13 @@ type RestorePoints struct {
 	nextSeq uint64
 	// a test seam, called with each path before the base walk reads it
 	walkHook func(path string)
+	// each worktree's apply lock, by its root (restore_apply.go)
+	rootApplyLocks map[string]*sync.Mutex
+	// the networks whose interrupted applies this process has recovered (restore_journal.go)
+	recoveredNetworkIds map[sidecar.Id]bool
+	recoverLock         sync.Mutex
+	// the OS calls an apply makes, which a test replaces
+	fs *restoreFs
 }
 
 // A (network, run) pair.
@@ -223,13 +229,16 @@ func NewRestorePoints(args *RestorePointsArgs) *RestorePoints {
 		settings = sidecar.DefaultSidecarSettings().Ingest
 	}
 	return &RestorePoints{
-		clock:          clock,
-		settings:       settings,
-		log:            log,
-		git:            git,
-		wallClock:      wallClock,
-		points:         map[restorePointKey]*RestorePoint{},
-		rootActivities: map[string][]*restoreActivity{},
+		clock:               clock,
+		settings:            settings,
+		log:                 log,
+		git:                 git,
+		wallClock:           wallClock,
+		points:              map[restorePointKey]*RestorePoint{},
+		rootActivities:      map[string][]*restoreActivity{},
+		rootApplyLocks:      map[string]*sync.Mutex{},
+		recoveredNetworkIds: map[sidecar.Id]bool{},
+		fs:                  defaultRestoreFs(),
 	}
 }
 
@@ -264,6 +273,10 @@ func (self *RestorePoints) Open(ctx context.Context, network McpNetwork, network
 		cwd:       cwd,
 		store:     store,
 		holds:     map[string]*restoreHold{},
+	}
+	// an apply a killed process left in a worktree goes back before anything reads it (restore_journal.go)
+	if err := self.recoverNetwork(ctx, network, networkId); err != nil {
+		return nil, err
 	}
 	loaded, err := point.load()
 	if err != nil {
@@ -352,7 +365,7 @@ func (self *RestorePoint) StartNs() int64 {
 // next scan foreign: the interval spans a restart.
 func (self *RestorePoint) load() (bool, error) {
 	manifest := &restoreManifest{}
-	found, err := readRestoreJson(self.store, restoreManifestName, manifest)
+	found, err := readRestoreJson(self.store, restoreManifestName, manifest, self.points.settings.RestoreManifestByteCount)
 	if err != nil || !found {
 		return false, err
 	}
@@ -363,7 +376,7 @@ func (self *RestorePoint) load() (bool, error) {
 		manifest.Files = map[string]*RestoreBaseFile{}
 	}
 	ledger := newRestoreLedgerState()
-	if _, err := readRestoreJson(self.store, restoreLedgerName, ledger); err != nil {
+	if _, err := readRestoreJson(self.store, restoreLedgerName, ledger, self.points.settings.RestoreManifestByteCount); err != nil {
 		return false, err
 	}
 	if ledger.Version != restoreLedgerVersion {
@@ -398,8 +411,8 @@ func (self *RestorePoint) load() (bool, error) {
 	return true, nil
 }
 
-// A JSON file of the point, false when absent.
-func readRestoreJson(store sidecar.SidecarStore, name string, value any) (bool, error) {
+// A JSON file of the point of at most byteCount bytes, false when absent.
+func readRestoreJson(store sidecar.SidecarStore, name string, value any, byteCount int64) (bool, error) {
 	reader, err := store.Open(name)
 	if errors.Is(err, sidecar.ErrSidecarStoreAbsent) {
 		return false, nil
@@ -408,11 +421,11 @@ func readRestoreJson(store sidecar.SidecarStore, name string, value any) (bool, 
 		return false, err
 	}
 	defer reader.Close()
-	encoded, err := io.ReadAll(io.LimitReader(reader, restoreManifestMaxBytes+1))
+	encoded, err := io.ReadAll(io.LimitReader(reader, byteCount+1))
 	if err != nil {
 		return false, err
 	}
-	if restoreManifestMaxBytes < len(encoded) {
+	if byteCount < int64(len(encoded)) {
 		return false, fmt.Errorf("%w: a restore file past its bound", sidecar.ErrSidecarStoreFailed)
 	}
 	if err := json.Unmarshal(encoded, value); err != nil {
@@ -514,7 +527,9 @@ func (self *RestorePoint) statusPaths(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return restoreStatusPaths(output), nil
+	// an apply's own hidden names, staged or moved aside for the moment, are no change of the worktree's
+	paths := restoreStatusPaths(output)
+	return slices.DeleteFunc(paths, restoreHiddenPath), nil
 }
 
 // The paths of a porcelain v2 listing with NUL terminators: ordinary and unmerged entries carry the path last,

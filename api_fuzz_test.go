@@ -179,9 +179,9 @@ func FuzzSidecarApiReplies(f *testing.F) {
 			t.Fatal("auth-client took an answer with no token")
 		}
 		took("POST /network/remove-client", api.RemoveClient(ctx, fuzzSidecarApiClientId))
-		generation, err := api.Bind(ctx, []byte("synthetic-binding"))
-		if took("POST /sidecar/bind", err) && generation < 1 {
-			t.Fatalf("bind took generation %d", generation)
+		bound, err := api.Bind(ctx, []byte("synthetic-binding"))
+		if took("POST /sidecar/bind", err) && (bound.Generation < 1 || bound.ByClientJwt == "" || bound.SidecarId == (Id{})) {
+			t.Fatalf("bind took %v", bound)
 		}
 		record, err := api.GetIdentity(ctx, fuzzSidecarApiSidecarId, 0)
 		if took("GET /sidecar/identity/<sidecar_id>", err) &&
