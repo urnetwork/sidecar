@@ -33,6 +33,8 @@ barrier bridge_egress.publish.after device/bridge_egress.go
 barrier bridge_egress.publish.before device/bridge_egress.go
 barrier bridge_file.address.after bridge_file.go
 barrier bridge_file.address.before bridge_file.go
+barrier bridge_file.egress.after bridge_file.go
+barrier bridge_file.egress.before bridge_file.go
 barrier bridge_file.rule.after bridge_file.go
 barrier bridge_file.rule.before bridge_file.go
 barrier bridge_forward_setup.step.after bridge_forward_setup.go

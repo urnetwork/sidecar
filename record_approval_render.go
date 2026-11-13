@@ -19,11 +19,11 @@
 //
 // A kind whose fields alone do not say what approving it gives up also shows a sentence built around those fields,
 // never from an agent's text: mail_tls_unauthenticated's names its domain and that an active URnetwork edge could read
-// the mail (QD-729, §2.8 EX4).
+// the mail (QD-729, §2.8 EX4), and egress_change's its subject's route, by its mode and exits (QD-799).
 //
 // Every string shown passes ApprovalPrintable, which drops C0 and C1 controls and the bidi controls, so a value cannot
 // move the terminal's cursor, end a line early or reorder what follows it (§16.6's ur approve row). Bytes show as
-// lowercase hex, numbers in decimal, and an audience or app mode by its record.proto name beside its number.
+// lowercase hex, numbers in decimal, and an audience, app mode or egress mode by its proto name beside its number.
 //
 // Package-level functions are safe for concurrent use; a render is a value nothing changes. On every leg but the
 // ios_extension legs.
@@ -41,6 +41,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // CanonicalAction's field numbers a render sets apart: what every action carries, and the preview it shows untrusted.
@@ -141,12 +142,23 @@ func approvalKindName(kind SidecarActionKind) string {
 }
 
 // What approving action allows, in words around its daemon-built fields: mail_tls_unauthenticated's sentence
-// (QD-729), and empty for a kind whose fields say it themselves.
+// (QD-729) and egress_change's (QD-799), and empty for a kind whose fields say it themselves.
 func approvalRenderMeaning(action *protocol.CanonicalAction) string {
 	switch SidecarActionKind(action.GetKind()) {
 	case SidecarActionMailTlsUnauthenticated:
 		return fmt.Sprintf("Send mail to %s through a mail server that cannot be authenticated: an active URnetwork edge could read it",
 			ApprovalPrintable(action.GetHost()))
+	case SidecarActionEgressChange:
+		subject := hex.EncodeToString(action.GetSubject())
+		switch bridge.BridgeEgressMode(action.GetEgressMode()) {
+		case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO:
+			return fmt.Sprintf("Let sidecar %s reach the internet through public egress again", subject)
+		case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS:
+			return fmt.Sprintf("Send sidecar %s's internet traffic only through %s, and refuse it public egress",
+				subject, ApprovalPrintable(strings.Join(action.GetGrantDst(), ", ")))
+		case bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE:
+			return fmt.Sprintf("Give sidecar %s no route to the internet", subject)
+		}
 	}
 	return ""
 }
@@ -187,6 +199,10 @@ func approvalRenderValue(field protoreflect.FieldDescriptor, value protoreflect.
 	case approvalRenderAppModeField:
 		if name, ok := protocol.AclAppMode_name[int32(value.Uint())]; ok {
 			text += " (" + strings.ToLower(strings.TrimPrefix(name, "ACL_APP_MODE_")) + ")"
+		}
+	case canonicalActionFieldEgressMode:
+		if name, ok := bridge.BridgeEgressMode_name[int32(value.Uint())]; ok {
+			text += " (" + strings.ToLower(strings.TrimPrefix(name, "BRIDGE_EGRESS_MODE_")) + ")"
 		}
 	}
 	return text

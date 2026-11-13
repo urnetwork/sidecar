@@ -7,7 +7,8 @@
 // BridgeAddress, then the map; what is not this sidecar's own is refused before any act, as the verifiers refuse it;
 // with no decision an exposure waits; a tainted run takes no standing grant and no stale decision; Close withdraws a
 // rule and revokes a forward's grant; a forward's grant ends with its window; SetBlock refuses a block outside the
-// ranges and a non-admin's; SetEgress fails closed at the gate; and each filing writes one route entry.
+// ranges and a non-admin's; SetEgress files under the gate as kind egress_change (QD-799) once per effect key; and
+// each filing writes one route entry.
 //
 // The gate here is §5.4's at the seam the filer meets, faithful to record_gate.go's steps: the real gate's own tests
 // are MCP's, and MCP-M4-01 runs these rows through it.
@@ -27,6 +28,7 @@ import (
 	mathrand "math/rand/v2"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -96,9 +98,10 @@ func (self *testBridgeFileAuthority) Pin() *bridge.AuthPin {
 }
 
 // POST /network/config/delta onto the net: each post sequenced and judged there, answered with its entry, or 403 for a
-// statement the log refused. A scripted answer "dropped" is a post that never applied and whose answer was lost, and
-// "lost" one that applied and whose answer was lost. POST /network/auth-client goes to authClient, which answers a
-// status and a body; nil refuses every mint.
+// statement the log refused, and a statement the log holds answered with its entry again (§7.9's retry identity). A
+// scripted answer "dropped" is a post that never applied and whose answer was lost, "lost" one that applied and whose
+// answer was lost, and "refused" one api refused unsequenced. POST /network/auth-client goes to authClient, which
+// answers a status and a body; nil refuses every mint.
 type testBridgeFileApi struct {
 	stateLock sync.Mutex
 	net       *testConfigNet
@@ -144,8 +147,19 @@ func (self *testBridgeFileApi) RoundTrip(request *http.Request) (*http.Response,
 		self.answers = self.answers[1:]
 		return answer
 	}()
-	if answer == "dropped" {
+	switch answer {
+	case "dropped":
 		return nil, errors.New("the post was lost")
+	case "refused":
+		return respond(http.StatusForbidden, map[string]any{"error": "The statement fails at the tip.", "code": "config_refused"}), nil
+	}
+	// §7.9's retry identity: a statement the log holds is answered with its entry, sequenced no second time
+	if statementId, err := bridgeSignedStatementId(wire.Signed); err == nil {
+		state := self.net.log.State()
+		if n, held := state.ringFind(state.Pin().GetVersion()+1, statementId); held {
+			chain, _ := state.chainAt(n)
+			return respond(http.StatusOK, &sidecarConfigPinReply{N: n, Chain: chain[:]}), nil
+		}
 	}
 	verdict := self.net.push(self.net.makeEntry(bridge.AuthEntryKindStatement, wire.Signed))
 	if answer == "lost" {
@@ -259,6 +273,85 @@ func (self *testBridgeFileRecords) routes(t *testing.T) []*RecordDraft {
 		routes = append(routes, draft)
 	}
 	return routes
+}
+
+// The filer's store in memory: whole files by name, each Create showing at its Commit.
+type testBridgeFileStore struct {
+	stateLock sync.Mutex
+	files     map[string][]byte
+}
+
+func newTestBridgeFileStore() *testBridgeFileStore {
+	return &testBridgeFileStore{files: map[string][]byte{}}
+}
+
+func (self *testBridgeFileStore) Open(name string) (io.ReadCloser, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	value, ok := self.files[name]
+	if !ok {
+		return nil, ErrSidecarStoreAbsent
+	}
+	return io.NopCloser(bytes.NewReader(bytes.Clone(value))), nil
+}
+
+func (self *testBridgeFileStore) Create(name string) (SidecarStoreWriter, error) {
+	return &testBridgeFileStoreWriter{store: self, name: name}, nil
+}
+
+func (self *testBridgeFileStore) Remove(name string) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	delete(self.files, name)
+	return nil
+}
+
+func (self *testBridgeFileStore) List(prefix string) ([]SidecarStoreEntry, error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	entries := []SidecarStoreEntry{}
+	for name, value := range self.files {
+		if strings.HasPrefix(name, prefix) {
+			entries = append(entries, SidecarStoreEntry{Name: name, ByteCount: int64(len(value))})
+		}
+	}
+	slices.SortFunc(entries, func(a SidecarStoreEntry, b SidecarStoreEntry) int { return strings.Compare(a.Name, b.Name) })
+	return entries, nil
+}
+
+func (self *testBridgeFileStore) Directory(name string, class string) (SidecarStore, error) {
+	return nil, errors.New("the filer's store holds no directory")
+}
+
+// The names kept under prefix.
+func (self *testBridgeFileStore) names(prefix string) []string {
+	entries, _ := self.List(prefix)
+	names := []string{}
+	for _, entry := range entries {
+		names = append(names, entry.Name)
+	}
+	return names
+}
+
+type testBridgeFileStoreWriter struct {
+	store  *testBridgeFileStore
+	name   string
+	buffer bytes.Buffer
+}
+
+func (self *testBridgeFileStoreWriter) Write(data []byte) (int, error) {
+	return self.buffer.Write(data)
+}
+
+func (self *testBridgeFileStoreWriter) Commit() error {
+	self.store.stateLock.Lock()
+	defer self.store.stateLock.Unlock()
+	self.store.files[self.name] = bytes.Clone(self.buffer.Bytes())
+	return nil
+}
+
+func (self *testBridgeFileStoreWriter) Close() error {
+	return nil
 }
 
 // One call the gate took.
@@ -393,6 +486,7 @@ type testBridgeFileWorld struct {
 	gate    *testBridgeFileGate
 	heads   *testBridgeFileHeads
 	records *testBridgeFileRecords
+	store   *testBridgeFileStore
 	engine  *AclEngine
 	filer   *BridgeFiler
 	runId   Id
@@ -453,25 +547,33 @@ func newTestBridgeFileWorld(t *testing.T, admin bool) *testBridgeFileWorld {
 	heads.block = net.sign(net.owner, bridge.SignedType_SIGNED_BRIDGE_BLOCK, &bridge.BridgeBlock{Ipv4Prefix: block})
 	world := &testBridgeFileWorld{
 		t: t, net: net, member: member, laptop: laptop, hostId: hostId, sidecar: sidecar, clock: clock, api: api, gate: gate,
-		heads: heads, records: &testBridgeFileRecords{}, engine: NewAclEngine(hostId, nil, nil, nil),
+		heads: heads, records: &testBridgeFileRecords{}, store: newTestBridgeFileStore(), engine: NewAclEngine(hostId, nil, nil, nil),
 		runId: testConfigId("bridge file run"), agentId: testConfigId("bridge file agent"),
 	}
 	world.install()
-	world.filer, err = NewBridgeFiler(&BridgeFilerArgs{
-		Sidecar:    sidecar,
-		Config:     testBridgeFileConfig{net: net},
-		Heads:      heads,
-		Grants:     NewAclGrantFiler(sidecar, world.engine),
-		HeadWriter: func() BridgeHeadWriter { return heads },
-		Records:    func() (RecordWriter, error) { return world.records, nil },
+	world.filer = world.newFiler()
+	return world
+}
+
+// A filer over the world, as a restart opens one again over the same store.
+func (self *testBridgeFileWorld) newFiler() *BridgeFiler {
+	self.t.Helper()
+	filer, err := NewBridgeFiler(&BridgeFilerArgs{
+		Sidecar:    self.sidecar,
+		Config:     testBridgeFileConfig{net: self.net},
+		Heads:      self.heads,
+		Grants:     NewAclGrantFiler(self.sidecar, self.engine),
+		HeadWriter: func() BridgeHeadWriter { return self.heads },
+		Records:    func() (RecordWriter, error) { return self.records, nil },
+		Store:      self.store,
 		Random:     mathrand.NewChaCha8([32]byte{0x19}),
-		Clock:      clock,
+		Clock:      self.clock,
 		Log:        NewNoopLogger(),
 	})
 	if err != nil {
-		t.Fatal(err)
+		self.t.Fatal(err)
 	}
-	return world
+	return filer
 }
 
 // Installs the net's acl state in the engine, as the host's follower does after an entry.
@@ -977,42 +1079,200 @@ func TestBridgeSetBlockRefusesABlockOutsideTheRanges(t *testing.T) {
 	}
 }
 
-// SetEgress fails closed at the gate, kind egress_change having no action yet: nothing reaches the gate or the log. Its
-// effect, run on a person's confirmation, files a BridgeEgress the verifier takes, its mode in the clear and exits
-// sealed; from MCP it files nothing.
-func TestBridgeSetEgressFailsClosedAtTheGate(t *testing.T) {
+// The BridgeEgress statements the log took, in log order.
+func (self *testBridgeFileWorld) egressFilings() []*BridgeLogStatement {
+	filings := []*BridgeLogStatement{}
+	for _, statement := range self.net.log.State().Bridge().Statements() {
+		if statement.SignedType == bridge.SignedType_SIGNED_BRIDGE_EGRESS {
+			filings = append(filings, statement)
+		}
+	}
+	return filings
+}
+
+// The gate's last call.
+func (self *testBridgeFileWorld) lastGateCall() testBridgeFileGateCall {
+	self.t.Helper()
+	calls := self.gate.seen()
+	if len(calls) == 0 {
+		self.t.Fatal("no call reached the gate")
+	}
+	return calls[len(calls)-1]
+}
+
+// SetEgress (QD-799): a person's confirmed command files its subject's BridgeEgress under §5.4's gate as kind
+// egress_change, the action naming the subject, the mode and the exits; the log takes the mode in the clear and the
+// exits sealed, auto leaving no spec; and the component's Lookup answers done with the statement's id. MCP, a hook and
+// an unconfirmed call are refused before the gate, as is a device that is no admin's and not the subject's owner's or
+// sponsor's, and shapes the readers would void; with no decision the change waits, filing nothing.
+func TestBridgeSetEgressFilesUnderTheGate(t *testing.T) {
 	world := newTestBridgeFileWorld(t, false)
 	ctx := context.Background()
-	request := &BridgeEgressRequest{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE}
-	if _, err := world.filer.SetEgress(ctx, world.confirmed(), request); !errors.Is(err, ErrBridgeFileRefused) || !errors.Is(err, ErrCanonicalActionInvalid) {
-		t.Fatalf("an egress change: %v", err)
+	none := &BridgeEgressRequest{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE}
+	for _, origin := range []*BridgeFileOrigin{world.mcp(), {Act: SidecarActHook}, {Act: SidecarActUnconfirmed}} {
+		if _, err := world.filer.SetEgress(ctx, origin, none); !errors.Is(err, ErrSidecarActMode) {
+			t.Errorf("origin %d: %v", origin.Act, err)
+		}
 	}
-	if world.api.postCount() != 0 || len(world.gate.seen()) != 0 {
-		t.Fatal("an egress change reached the gate or the log")
-	}
-	if _, err := (&bridgeEgressEffect{filer: world.filer, origin: world.mcp(), request: request}).Run(ctx, nil); !errors.Is(err, ErrSidecarActMode) {
-		t.Errorf("the effect from MCP: %v", err)
-	}
-	if _, err := (&bridgeEgressEffect{filer: world.filer, origin: world.confirmed(), request: request}).Run(ctx, nil); err != nil {
-		t.Fatal(err)
-	}
-	exits := &BridgeEgressRequest{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, ExitSidecarIds: []Id{world.laptop.sidecarId}}
-	if _, err := (&bridgeEgressEffect{filer: world.filer, origin: world.confirmed(), request: exits}).Run(ctx, nil); err != nil {
-		t.Fatal(err)
-	}
-	egress := world.ledger().Egress()
-	if len(egress) != 1 || egress[0].Mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS || len(egress[0].ExitSidecarIds) != 1 || egress[0].ExitSidecarIds[0] != world.laptop.sidecarId {
-		t.Fatalf("the egress spec: %+v", egress)
+	// the owner's device belongs to another member, and this host's member is no admin
+	if _, err := world.filer.SetEgress(ctx, world.confirmed(), &BridgeEgressRequest{Subject: world.net.owner.sidecarId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE}); !errors.Is(err, ErrBridgeFileRefused) {
+		t.Errorf("another member's sidecar: %v", err)
 	}
 	for _, refused := range []*BridgeEgressRequest{
 		{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS},
 		{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE, ExitSidecarIds: []Id{world.laptop.sidecarId}},
+		{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, ExitSidecarIds: []Id{world.laptop.sidecarId, world.laptop.sidecarId}},
+		{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, ExitSidecarIds: []Id{world.laptop.sidecarId}, ExitTagId: testConfigId("exit tag")},
 		{Subject: world.hostId},
 		{Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO},
 	} {
-		if _, _, err := bridgeEgressStatement(refused); !errors.Is(err, ErrBridgeFileRefused) {
+		if _, err := world.filer.SetEgress(ctx, world.confirmed(), refused); !errors.Is(err, ErrBridgeFileRefused) {
 			t.Errorf("%+v: %v", refused, err)
 		}
+	}
+	if world.api.postCount() != 0 || len(world.gate.seen()) != 0 {
+		t.Fatal("a refused egress change reached the gate or the log")
+	}
+	world.gate.approves = false
+	var pending *ApprovalPendingError
+	if _, err := world.filer.SetEgress(ctx, world.confirmed(), none); !errors.As(err, &pending) {
+		t.Fatalf("with no decision: %v", err)
+	}
+	if world.api.postCount() != 0 || len(world.store.names(bridgeFileEgressPrefix)) != 0 {
+		t.Fatal("a waiting egress change filed")
+	}
+	world.gate.approves = true
+
+	filing, err := world.filer.SetEgress(ctx, world.confirmed(), &BridgeEgressRequest{
+		Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, ExitSidecarIds: []Id{world.laptop.sidecarId},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := world.lastGateCall()
+	stored, err := ParseStoredCanonicalAction(call.canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := stored.Action
+	if call.kind != SidecarActionEgressChange || action.GetVersion() != 1 || !bytes.Equal(action.GetSubject(), world.hostId.Bytes()) ||
+		bridge.BridgeEgressMode(action.GetEgressMode()) != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS ||
+		len(action.GetGrantDst()) != 1 || action.GetGrantDst()[0] != "sidecar:"+hex.EncodeToString(world.laptop.sidecarId.Bytes()) {
+		t.Fatalf("the action: %v", action)
+	}
+	if filing.ApprovalId == (Id{}) || call.runId != nil {
+		t.Errorf("the filing %+v, the run %v", filing, call.runId)
+	}
+	egress := world.ledger().Egress()
+	if len(egress) != 1 || egress[0].Subject != world.hostId || egress[0].Mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS ||
+		len(egress[0].ExitSidecarIds) != 1 || egress[0].ExitSidecarIds[0] != world.laptop.sidecarId {
+		t.Fatalf("the egress spec: %+v", egress)
+	}
+	outcome, err := world.filer.LookupEgress(ctx, call.canonical, call.effectKey)
+	landed := world.egressFilings()
+	if err != nil || outcome.State != ApprovalOutcomeDone || len(landed) != 1 {
+		t.Fatalf("Lookup: %+v %v, %d filings", outcome, err, len(landed))
+	}
+	if statementId, _ := bridgeSignedStatementId(world.api.posts[0]); !bytes.Equal(outcome.EffectRef, statementId[:]) {
+		t.Error("Lookup answers another statement's id")
+	}
+
+	// none and then auto, bodiless, the last leaving no spec
+	if _, err := world.filer.SetEgress(ctx, world.confirmed(), none); err != nil {
+		t.Fatal(err)
+	}
+	if egress := world.ledger().Egress(); len(egress) != 1 || egress[0].Mode != bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE {
+		t.Fatalf("after none: %+v", egress)
+	}
+	if _, err := world.filer.SetEgress(ctx, world.confirmed(), &BridgeEgressRequest{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO}); err != nil {
+		t.Fatal(err)
+	}
+	if egress := world.ledger().Egress(); len(egress) != 0 || len(world.egressFilings()) != 3 {
+		t.Fatalf("after auto: %+v, %d filings", egress, len(world.egressFilings()))
+	}
+	if routes := world.records.routes(t); len(routes) != 0 {
+		t.Errorf("%d route entries for egress changes", len(routes))
+	}
+}
+
+// An egress change runs once per effect key. An answer lost after its statement applied reads uncertain, the retry
+// finds the statement by the bytes its marker keeps and posts nothing, and Lookup answers done; a post that never
+// applied leaves Lookup uncertain, and the retry posts the same bytes, which land once; bytes refused at that retry,
+// which never land, are signed anew under the same key; and a refusal before anything landed keeps no marker, so Lookup
+// answers not done.
+func TestBridgeSetEgressRetryFindsItsStatement(t *testing.T) {
+	ctx := context.Background()
+	none := func(world *testBridgeFileWorld) *BridgeEgressRequest {
+		return &BridgeEgressRequest{Subject: world.hostId, Mode: bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE}
+	}
+	lookup := func(world *testBridgeFileWorld, call testBridgeFileGateCall) ApprovalOutcomeState {
+		t.Helper()
+		outcome, err := world.filer.LookupEgress(ctx, call.canonical, call.effectKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return outcome.State
+	}
+
+	lost := newTestBridgeFileWorld(t, false)
+	lost.api.answers = []string{"lost"}
+	if _, err := lost.filer.SetEgress(ctx, lost.confirmed(), none(lost)); !errors.Is(err, ErrBridgeFileUncertain) {
+		t.Fatalf("a lost answer: %v", err)
+	}
+	call := lost.lastGateCall()
+	if state := lookup(lost, call); state != ApprovalOutcomeDone || len(lost.store.names(bridgeFileEgressPrefix)) != 1 {
+		t.Fatalf("Lookup after a lost answer: %v", state)
+	}
+	// a restart's filer, over the same store, retries the use
+	lost.filer = lost.newFiler()
+	if _, err := lost.filer.SetEgress(ctx, lost.confirmed(), none(lost)); err != nil {
+		t.Fatal(err)
+	}
+	if lost.api.postCount() != 1 || len(lost.egressFilings()) != 1 {
+		t.Fatalf("%d posts, %d filings after a retry of a statement that landed", lost.api.postCount(), len(lost.egressFilings()))
+	}
+
+	dropped := newTestBridgeFileWorld(t, false)
+	dropped.api.answers = []string{"dropped"}
+	if _, err := dropped.filer.SetEgress(ctx, dropped.confirmed(), none(dropped)); !errors.Is(err, ErrBridgeFileUncertain) {
+		t.Fatalf("a dropped post: %v", err)
+	}
+	call = dropped.lastGateCall()
+	if state := lookup(dropped, call); state != ApprovalOutcomeUncertain || len(dropped.egressFilings()) != 0 {
+		t.Fatalf("Lookup after a dropped post: %v", state)
+	}
+	if _, err := dropped.filer.SetEgress(ctx, dropped.confirmed(), none(dropped)); err != nil {
+		t.Fatal(err)
+	}
+	if dropped.api.postCount() != 2 || len(dropped.egressFilings()) != 1 || !bytes.Equal(dropped.api.posts[0], dropped.api.posts[1]) {
+		t.Fatalf("%d posts, %d filings: the retry did not post the same bytes once more", dropped.api.postCount(), len(dropped.egressFilings()))
+	}
+	if state := lookup(dropped, call); state != ApprovalOutcomeDone {
+		t.Errorf("Lookup once the retry landed: %v", state)
+	}
+
+	anew := newTestBridgeFileWorld(t, false)
+	anew.api.answers = []string{"dropped", "refused"}
+	if _, err := anew.filer.SetEgress(ctx, anew.confirmed(), none(anew)); !errors.Is(err, ErrBridgeFileUncertain) {
+		t.Fatalf("a dropped post: %v", err)
+	}
+	if _, err := anew.filer.SetEgress(ctx, anew.confirmed(), none(anew)); err != nil {
+		t.Fatal(err)
+	}
+	if anew.api.postCount() != 3 || len(anew.egressFilings()) != 1 || bytes.Equal(anew.api.posts[2], anew.api.posts[0]) {
+		t.Fatalf("%d posts, %d filings: refused bytes were not signed anew", anew.api.postCount(), len(anew.egressFilings()))
+	}
+	if state := lookup(anew, anew.lastGateCall()); state != ApprovalOutcomeDone {
+		t.Errorf("Lookup after signing anew: %v", state)
+	}
+
+	refused := newTestBridgeFileWorld(t, false)
+	refused.api.answers = []string{"refused"}
+	if _, err := refused.filer.SetEgress(ctx, refused.confirmed(), none(refused)); !errors.Is(err, ErrSidecarEffectNotDone) {
+		t.Fatalf("a refused post: %v", err)
+	}
+	if state := lookup(refused, refused.lastGateCall()); state != ApprovalOutcomeNotDone || len(refused.store.names(bridgeFileEgressPrefix)) != 0 {
+		t.Errorf("Lookup after a refusal: %v", state)
 	}
 }
 
@@ -1107,5 +1367,190 @@ func TestBridgeRouteNamesTheRouteRulesThatHoldIt(t *testing.T) {
 	world.filer.args.AclLocal = nil
 	if ruleIds := world.filer.routeRuleIds(view, route); len(ruleIds) != 0 {
 		t.Errorf("the implicit policy named rules: %x", ruleIds)
+	}
+}
+
+// Each route entry as event/kind/reason, in order.
+func (self *testBridgeFileWorld) routeShapes() []string {
+	self.t.Helper()
+	shapes := []string{}
+	for _, route := range self.records.routes(self.t) {
+		body := route.Body.(*protocol.RouteBody)
+		shapes = append(shapes, fmt.Sprintf("%d/%d/%d", body.GetEvent(), body.GetKind(), body.GetReason()))
+	}
+	return shapes
+}
+
+// A kill between a filing landing and its route entry leaves the entry owed. An exposure, a forward and a withdrawal
+// whose answers were lost append nothing; a restart's AppendOwedRoutes appends each once, with the run binding and ids
+// the filing had, and a second pass none; and the next filing appends what a kill left before its own. An owed entry
+// whose filing never lands is dropped after RouteOwedKeepTimeout, and a refused filing owes nothing.
+func TestBridgeRouteEntryOwedAcrossAKill(t *testing.T) {
+	world := newTestBridgeFileWorld(t, false)
+	ctx := context.Background()
+	owed := func() int {
+		return len(world.store.names(bridgeFileRoutePrefix))
+	}
+	// a restart's filer, over the same store, appends what is owed
+	restart := func(want []string) {
+		t.Helper()
+		world.filer = world.newFiler()
+		if err := world.filer.AppendOwedRoutes(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if shapes := world.routeShapes(); !slices.Equal(shapes, want) || owed() != 0 {
+			t.Fatalf("after the restart's pass: %v, want %v, %d owed", shapes, want, owed())
+		}
+		route := world.records.routes(t)[len(want)-1]
+		if route.RunId == nil || *route.RunId != world.runId || route.AgentId == nil || *route.AgentId != world.agentId {
+			t.Errorf("an owed entry lost its run binding: %+v", route)
+		}
+	}
+	exposed, err := world.filer.Expose(ctx, world.mcp(), &BridgeRouteRequest{Prefixes: []netip.Prefix{netip.MustParsePrefix("192.168.50.0/24")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.api.answers = []string{"lost"}
+	if _, err := world.filer.Expose(ctx, world.mcp(), &BridgeRouteRequest{Prefixes: []netip.Prefix{netip.MustParsePrefix("192.168.51.0/24")}}); !errors.Is(err, ErrBridgeFileUncertain) {
+		t.Fatalf("an exposure's lost answer: %v", err)
+	}
+	if shapes := world.routeShapes(); len(shapes) != 1 || owed() != 1 {
+		t.Fatalf("the entries %v, %d owed", shapes, owed())
+	}
+	restart([]string{"1/3/0", "1/3/0"})
+	if route := world.records.routes(t)[1]; len(route.Body.(*protocol.RouteBody).GetApprovalId()) == 0 || len(route.ActionId) != sha256.Size ||
+		!slices.Equal(route.Body.(*protocol.RouteBody).GetCidrs(), []string{"192.168.51.0/24"}) {
+		t.Errorf("the owed opening: %+v", route)
+	}
+
+	world.api.answers = []string{"lost"}
+	if _, err := world.filer.Forward(ctx, world.mcp(), &BridgeForwardRequest{Target: world.laptop.sidecarId, Port: 22}); !errors.Is(err, ErrBridgeFileUncertain) {
+		t.Fatalf("a forward's lost answer: %v", err)
+	}
+	restart([]string{"1/3/0", "1/3/0", "1/1/0"})
+	if route := world.records.routes(t)[2]; len(route.GrantId) != sha256.Size || route.Body.(*protocol.RouteBody).GetTargetPort() != 22 {
+		t.Errorf("the owed forward: %+v", route)
+	}
+
+	world.api.answers = []string{"lost"}
+	if _, err := world.filer.Close(ctx, world.mcp(), exposed.RuleId, false); !errors.Is(err, ErrBridgeFileUncertain) {
+		t.Fatalf("a withdrawal's lost answer: %v", err)
+	}
+	restart([]string{"1/3/0", "1/3/0", "1/1/0", "2/3/3"})
+	if err := world.filer.AppendOwedRoutes(ctx); err != nil || len(world.records.routes(t)) != 4 {
+		t.Fatalf("a second pass appended again: %v", err)
+	}
+
+	// the next filing appends an entry a kill left before its own
+	world.api.answers = []string{"lost"}
+	if _, err := world.filer.Expose(ctx, world.mcp(), &BridgeRouteRequest{Prefixes: []netip.Prefix{netip.MustParsePrefix("192.168.52.0/24")}}); !errors.Is(err, ErrBridgeFileUncertain) {
+		t.Fatalf("a lost answer: %v", err)
+	}
+	if _, err := world.filer.Expose(ctx, world.mcp(), &BridgeRouteRequest{Prefixes: []netip.Prefix{netip.MustParsePrefix("192.168.53.0/24")}}); err != nil {
+		t.Fatal(err)
+	}
+	routes := world.records.routes(t)
+	if len(routes) != 6 || !slices.Equal(routes[4].Body.(*protocol.RouteBody).GetCidrs(), []string{"192.168.52.0/24"}) ||
+		!slices.Equal(routes[5].Body.(*protocol.RouteBody).GetCidrs(), []string{"192.168.53.0/24"}) {
+		t.Fatalf("%d entries after the next filing", len(routes))
+	}
+
+	// a filing that never lands is owed until it can no longer land, then dropped with no entry
+	world.api.answers = []string{"dropped"}
+	if _, err := world.filer.Expose(ctx, world.mcp(), &BridgeRouteRequest{Prefixes: []netip.Prefix{netip.MustParsePrefix("192.168.54.0/24")}}); !errors.Is(err, ErrBridgeFileUncertain) {
+		t.Fatalf("a dropped post: %v", err)
+	}
+	keep := DefaultBridgeFilerSettings().RouteOwedKeepTimeout
+	world.clock.advance(keep - time.Millisecond)
+	if err := world.filer.AppendOwedRoutes(ctx); err != nil || len(world.store.names(bridgeFileRoutePrefix)) != 1 {
+		t.Fatalf("an owed entry dropped before its filing could no longer land: %v", err)
+	}
+	world.clock.advance(time.Millisecond)
+	if err := world.filer.AppendOwedRoutes(ctx); err != nil || len(world.store.names(bridgeFileRoutePrefix)) != 0 || len(world.records.routes(t)) != 6 {
+		t.Fatalf("after the keep: %v, %d owed", err, len(world.store.names(bridgeFileRoutePrefix)))
+	}
+
+	// a refused filing owes nothing
+	world.api.answers = []string{"refused"}
+	if _, err := world.filer.Expose(ctx, world.mcp(), &BridgeRouteRequest{Prefixes: []netip.Prefix{netip.MustParsePrefix("192.168.55.0/24")}}); !errors.Is(err, ErrSidecarEffectNotDone) {
+		t.Fatalf("a refused post: %v", err)
+	}
+	if len(world.store.names(bridgeFileRoutePrefix)) != 0 || len(world.records.routes(t)) != 6 {
+		t.Errorf("a refused filing left %d owed", len(world.store.names(bridgeFileRoutePrefix)))
+	}
+}
+
+// A record that does not take an entry leaves it owed, and the next pass appends it once.
+func TestBridgeRouteEntryOwedWhileTheRecordRefuses(t *testing.T) {
+	world := newTestBridgeFileWorld(t, false)
+	ctx := context.Background()
+	refusing := true
+	world.filer.args.Records = func() (RecordWriter, error) {
+		if refusing {
+			return nil, errors.New("the record is locked")
+		}
+		return world.records, nil
+	}
+	if _, err := world.filer.Expose(ctx, world.mcp(), &BridgeRouteRequest{Prefixes: []netip.Prefix{netip.MustParsePrefix("192.168.60.0/24")}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(world.records.routes(t)) != 0 || len(world.store.names(bridgeFileRoutePrefix)) != 1 {
+		t.Fatal("an entry the record refused is not owed")
+	}
+	refusing = false
+	if err := world.filer.AppendOwedRoutes(ctx); err != nil || len(world.records.routes(t)) != 1 || len(world.store.names(bridgeFileRoutePrefix)) != 0 {
+		t.Fatalf("the owed entry: %v", err)
+	}
+}
+
+// An admin's device assigns another admitted sidecar its overlay address on a person's confirmed command (§17.4,
+// §17.8's "the sidecar or an admin"): the log holds it for that sidecar at the address chosen, and a second is refused.
+// From MCP, a hook or an unconfirmed call, for this host itself, for a sidecar never admitted, at an address outside the
+// lower /17 or among the services', and from a member's device that is no admin's, nothing is filed.
+func TestBridgeAdminAssignsAnotherSidecarsAddress(t *testing.T) {
+	world := newTestBridgeFileWorld(t, true)
+	ctx := context.Background()
+	laptop := world.laptop.sidecarId
+	for _, origin := range []*BridgeFileOrigin{world.mcp(), {Act: SidecarActHook}, {Act: SidecarActUnconfirmed}} {
+		if _, err := world.filer.AssignAddress(ctx, origin, laptop, netip.Addr{}); !errors.Is(err, ErrSidecarActMode) {
+			t.Errorf("origin %d: %v", origin.Act, err)
+		}
+	}
+	for name, refused := range map[string]struct {
+		sidecarId Id
+		address   netip.Addr
+	}{
+		"this host":                   {sidecarId: world.hostId},
+		"a sidecar never admitted":    {sidecarId: testConfigId("a sidecar never admitted")},
+		"an address in the upper /17": {sidecarId: laptop, address: netip.MustParseAddr("100.80.200.7")},
+		"a services address":          {sidecarId: laptop, address: netip.MustParseAddr("100.80.0.53")},
+		"an address of another block": {sidecarId: laptop, address: netip.MustParseAddr("100.81.5.9")},
+	} {
+		if _, err := world.filer.AssignAddress(ctx, world.confirmed(), refused.sidecarId, refused.address); !errors.Is(err, ErrBridgeFileRefused) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if world.api.postCount() != 0 {
+		t.Fatal("a refused assignment filed")
+	}
+	filing, err := world.filer.AssignAddress(ctx, world.confirmed(), laptop, netip.MustParseAddr("100.80.5.9"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := world.ledger().Address(laptop)
+	if !filing.AddressFiled || filing.Address != netip.MustParseAddr("100.80.5.9") || held == nil || held.HostBits != 5<<8|9 {
+		t.Fatalf("the assignment: %+v, the ledger's %+v", filing, held)
+	}
+	signed := &bridge.Signed{}
+	if err := proto.Unmarshal(world.api.posts[0], signed); err != nil || Id(signed.GetSignerId()) != world.hostId {
+		t.Fatalf("the assignment's signer: %v", err)
+	}
+	if _, err := world.filer.AssignAddress(ctx, world.confirmed(), laptop, netip.Addr{}); !errors.Is(err, ErrBridgeFileRefused) || world.api.postCount() != 1 {
+		t.Errorf("a second assignment: %v", err)
+	}
+
+	member := newTestBridgeFileWorld(t, false)
+	if _, err := member.filer.AssignAddress(ctx, member.confirmed(), member.laptop.sidecarId, netip.Addr{}); !errors.Is(err, ErrBridgeFileRefused) || member.api.postCount() != 0 {
+		t.Errorf("a member's device: %v", err)
 	}
 }

@@ -667,7 +667,17 @@ type CanonicalAction struct {
 	AliasGroup       string   `protobuf:"bytes,36,opt,name=alias_group,json=aliasGroup,proto3" json:"alias_group,omitempty"`               // mail_alias_create's group (§15.8)
 	Versioning       uint32   `protobuf:"varint,37,opt,name=versioning,proto3" json:"versioning,omitempty"`                                // O-tier evs_write: its version's setting, 0 on, 1 off (§11.7); set
 	// only in version 2, which approvers that do not know it refuse
-	SealedDetail  []byte `protobuf:"bytes,38,opt,name=sealed_detail,json=sealedDetail,proto3" json:"sealed_detail,omitempty"` // a dial or route grant's prefixes and ports, and a version-3 access
+	SealedDetail []byte `protobuf:"bytes,38,opt,name=sealed_detail,json=sealedDetail,proto3" json:"sealed_detail,omitempty"` // a dial or route grant's prefixes and ports, and a version-3 access
+	// request's: a CanonicalActionDetail in §7.9's sealed-body format, which
+	// approvers and readers open and no server does (owner decision 220);
+	// set only in versions 3 and 4. Its aad takes the action's own clear
+	// identity for a header's (QD-771): SignedType SIGNED_GRANT_ACTIVATE,
+	// the network's id, and as the nonce the first 16 bytes of SHA-256 over
+	// this action as stored with its field-38 record cut out, every other
+	// tag and value in its stored order and encoding: for a builder's bytes,
+	// written once in field order, the clear fields' deterministic encoding.
+	// Sealed once those fields are final, it opens beside them alone
+	EgressMode    uint32 `protobuf:"varint,39,opt,name=egress_mode,json=egressMode,proto3" json:"egress_mode,omitempty"` // egress_change: the subject's BridgeEgressMode, auto, exits or none,
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -938,6 +948,13 @@ func (x *CanonicalAction) GetSealedDetail() []byte {
 		return x.SealedDetail
 	}
 	return nil
+}
+
+func (x *CanonicalAction) GetEgressMode() uint32 {
+	if x != nil {
+		return x.EgressMode
+	}
+	return 0
 }
 
 // What sealed_detail opens to: what a dial or route grant's clear fields may not hold (QD-740).
@@ -5211,7 +5228,7 @@ const file_protocol_record_proto_rawDesc = "" +
 	"sealedBody\x12\x1e\n" +
 	"\vkey_slot_id\x18\x03 \x01(\fR\tkeySlotId\x12\x18\n" +
 	"\aversion\x18\x04 \x01(\rR\aversion\x12\x1b\n" +
-	"\tkey_index\x18\x05 \x01(\rR\bkeyIndex\"\xa4\b\n" +
+	"\tkey_index\x18\x05 \x01(\rR\bkeyIndex\"\xc5\b\n" +
 	"\x0fCanonicalAction\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\rR\x04kind\x12\x1e\n" +
 	"\n" +
@@ -5255,7 +5272,9 @@ const file_protocol_record_proto_rawDesc = "" +
 	"\n" +
 	"versioning\x18% \x01(\rR\n" +
 	"versioning\x12#\n" +
-	"\rsealed_detail\x18& \x01(\fR\fsealedDetailJ\x04\b\x17\x10\x18J\x04\b\x18\x10\x19J\x04\b\x19\x10\x1aJ\x04\b\"\x10#\"k\n" +
+	"\rsealed_detail\x18& \x01(\fR\fsealedDetail\x12\x1f\n" +
+	"\vegress_mode\x18' \x01(\rR\n" +
+	"egressModeJ\x04\b\x17\x10\x18J\x04\b\x18\x10\x19J\x04\b\x19\x10\x1aJ\x04\b\"\x10#\"k\n" +
 	"\x15CanonicalActionDetail\x12\x14\n" +
 	"\x05cidrs\x18\x01 \x03(\tR\x05cidrs\x12\x1f\n" +
 	"\vtarget_port\x18\x02 \x01(\rR\n" +

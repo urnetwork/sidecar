@@ -141,10 +141,10 @@ func canonicalActionBuildVersion(action *protocol.CanonicalAction, row *Canonica
 }
 
 // clear's bytes as the builder stores them, before its detail is sealed: sealed_detail left out and the version fixed
-// as NewCanonicalAction fixes it, deterministically encoded, field by field in number order. Field 38 being
-// CanonicalAction's last, the stored action is these bytes and its sealed_detail after them, so the context a detail
-// is sealed to here is the one its stored bytes derive (CanonicalActionDetailSealContext). The caller's message is
-// not changed.
+// as NewCanonicalAction fixes it, deterministically encoded, field by field in number order. Field 38 being the last
+// an action that seals a detail sets (39, egress_mode, is a version-1 egress_change's alone), the stored action is
+// these bytes and its sealed_detail after them, so the context a detail is sealed to here is the one its stored bytes
+// derive (CanonicalActionDetailSealContext). The caller's message is not changed.
 func canonicalActionClearBytes(clear *protocol.CanonicalAction) ([]byte, error) {
 	final := proto.Clone(clear).(*protocol.CanonicalAction)
 	final.SealedDetail = nil

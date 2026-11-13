@@ -14,14 +14,18 @@
 //	ClaimAddress  this host's BridgeAddress at an address a person chose (ur tun ip <ip>) or the allocator's, for a
 //	              person's command alone: with no document a hosted address opens the device's loopback (rule 3), so
 //	              an agent gets one only with an approved map
-//	SetEgress     a subject's BridgeEgress, an outward act (§17.9) for a person's confirmation alone, under the gate;
-//	              kind egress_change has no CanonicalAction row yet, so it is refused there, failing closed (question
-//	              bridge-m4-19-egress-change-action)
+//	AssignAddress another admitted sidecar's BridgeAddress, an admin's assignment (§17.4), for a person's confirmed
+//	              command on an admin's device alone
+//	SetEgress     a subject's BridgeEgress, an outward act (§17.9) for a person's confirmation alone, under §5.4's gate
+//	              as kind egress_change, its subject, mode and exits (QD-799); once per effect key, by a marker that
+//	              keeps the statement's bytes, which the component's LookupEgress reads
 //	SetBlock      the network's BridgeBlock in a config head, an admin's, for a person's confirmation alone, through
 //	              this device's config writer: a /16 CheckBridgeBlock takes, or ChooseBridgeBlock's for cycle, the
 //	              block it replaces draining (D-BRIDGE-16)
 //	FindRule      a rule id as the authorization log holds it for this host, read through the ledger: what the
 //	              bridge component's Lookup answers by (§16.6's step 5)
+//
+// AppendOwedRoutes appends the route entries a kill left owed, for filings that have since landed (below).
 //
 // An exposure's rule id is §17.8's: under a decision SHA-256("urnetwork-sidecar-v1/bridge-rule" || effect_key) of the
 // use the gate reserved, its body carrying that spend's BridgeApproval, so a retry or a restart files one id; under a
@@ -32,15 +36,20 @@
 //
 // Every statement goes through sidecarAct (C-02), which signs only §5.8's own-resource filings for MCP, a hook or an
 // unconfirmed call. The filer refuses before that what is not this sidecar's own, as every verifier does after (§7.9,
-// §8.8, §17.8): a BridgeAddress for another sidecar_id or a second one for an addressed host, and a GrantRevoke or
-// BridgeWithdraw of another's grant or rule. A tainted run's binding reaches the gate unchanged, which takes only I-9's
-// evidence for it (owner decision 142).
+// §8.8, §17.8): a BridgeAddress for another sidecar_id, but an admin's on a person's confirmed command, or a second one
+// for an addressed host, and a GrantRevoke or BridgeWithdraw of another's grant or rule. A tainted run's binding reaches
+// the gate unchanged, which takes only I-9's evidence for it (owner decision 142).
 //
 // Once a rule or a grant lands, or is withdrawn or revoked, the filer appends RECORD.md's route entry (RouteBody) through
-// the sidecar's RecordWriter, opened or closed, written by the sidecar that files it. Errors and logs name opaque ids
-// alone, never a prefix, an address or a port (I-13).
+// the sidecar's RecordWriter, opened or closed, written by the sidecar that files it. The entry is owed first: kept in
+// the filer's store before the filing's act and dropped once appended, or once the filing proves nothing filed, so a
+// kill between a filing landing and its entry leaves it, and AppendOwedRoutes, which a host runs at start and each
+// filing runs first, appends it once the filing shows in the log; one whose filing has not landed after
+// RouteOwedKeepTimeout never will, and is dropped. Errors and logs name opaque ids alone, never a prefix, an address or
+// a port (I-13).
 //
-// Safe for concurrent use: a filer keeps no state of its own but its arguments.
+// Safe for concurrent use: a filer keeps its owed entries and egress markers in its store, and one lock across paying
+// an owed entry.
 
 package sidecar
 
@@ -50,11 +59,15 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -111,6 +124,14 @@ type BridgeFilerSettings struct {
 	// How many blocks cycle draws before it gives up finding one other than the block in force: 16, where one draw in
 	// 62 repeats it. Non-positive draws once.
 	BlockDrawAttemptCount int
+	// How long a route entry the filer owes waits for its filing to land before it is dropped: 8 days, past the 7 days
+	// a statement may wait to land (§7.9's not_after), so one dropped can no longer land. Non-positive drops an owed
+	// entry at the first pass that finds its filing not landed.
+	RouteOwedKeepTimeout time.Duration
+	// How long an egress change's marker is kept, by which a retry of its use finds the statement it signed and the
+	// component's Lookup answers: 32 days, past an approval's ledger file, kept 30 days past a not_after at most a day
+	// from its filing, so no use is reconciled past it. Non-positive keeps a marker only until the next egress change.
+	EgressMarkerKeepTimeout time.Duration
 	// The ledger the filer opens, nil its defaults.
 	Ledger *BridgeLedgerSettings
 }
@@ -122,8 +143,19 @@ func DefaultBridgeFilerSettings() *BridgeFilerSettings {
 		AddressClaimAttemptCount: 3,
 		BlockDrainTimeout:        600 * time.Second,
 		BlockDrawAttemptCount:    16,
+		RouteOwedKeepTimeout:     8 * 24 * time.Hour,
+		EgressMarkerKeepTimeout:  32 * 24 * time.Hour,
 	}
 }
+
+// The filer's own store: its directory and class, the names in it, and their records' version. Format values.
+const (
+	bridgeFileDirectory     = "bridge"
+	bridgeFileClass         = "bridge"
+	bridgeFileEgressPrefix  = "egress/"
+	bridgeFileRoutePrefix   = "route/"
+	bridgeFileRecordVersion = 1
+)
 
 // What a filer reads of the network's config: TEAM-M2-10's ConfigClient is one.
 type BridgeFilerConfig interface {
@@ -160,6 +192,9 @@ type BridgeFilerArgs struct {
 	HeadWriter func() BridgeHeadWriter
 	// Where route entries go; nil is the sidecar's record.
 	Records func() (RecordWriter, error)
+	// Where the filer keeps the route entries it owes and its egress changes' markers; nil is this sidecar's network
+	// store's bridge/ directory.
+	Store SidecarStore
 	// crypto/rand's reader when nil: a standing rule's id, an address's or a block's draw, a seal's nonce.
 	Random   io.Reader
 	Clock    Clock
@@ -206,6 +241,9 @@ type BridgeFiler struct {
 	clock    Clock
 	log      Logger
 	random   io.Reader
+
+	// held across appending an owed route entry and dropping it, so two passes append it once
+	owedLock sync.Mutex
 }
 
 // A filer over args, whose Sidecar and Config are required.
@@ -325,11 +363,27 @@ func (self *bridgeFileView) ownRule(ruleId []byte) (*BridgeLedgerRule, error) {
 
 // This host's overlay address in the block in force, invalid where it holds none or no block is known.
 func (self *bridgeFileView) address() netip.Addr {
-	held := self.ledger.Address(self.self)
+	return self.addressOf(self.self)
+}
+
+// A sidecar's overlay address in the block in force, invalid where it holds none or no block is known.
+func (self *bridgeFileView) addressOf(sidecarId Id) netip.Addr {
+	held := self.ledger.Address(sidecarId)
 	if held == nil || self.block == nil {
 		return netip.Addr{}
 	}
 	return bridgeAddressOf(self.block.GetIpv4Prefix().GetAddress() | held.HostBits)
+}
+
+// A statement this host signs alone, as the log's signer rules read one at the view's time.
+func (self *bridgeFileView) selfStatement() *configStatement {
+	return &configStatement{signers: []ConfigSigner{{Kind: ConfigSignerSidecar, SidecarId: self.self}}, timeMs: self.state.TimeMs()}
+}
+
+// Whether this host's own signature is an admin's device's at the view's state (bridgeSignerAdmin), as the log's
+// BridgeAddress and BridgeEgress rows read it.
+func (self *bridgeFileView) signerAdmin() bool {
+	return bridgeSignerAdmin(self.state, self.selfStatement())
 }
 
 // An IPv4 address as bridge.proto's fixed32 holds one.
@@ -440,6 +494,7 @@ func (self *BridgeFiler) Expose(ctx context.Context, origin *BridgeFileOrigin, r
 	if err != nil {
 		return nil, err
 	}
+	self.appendOwedRoutes(view)
 	route := &bridge.BridgeRouteBody{
 		SiteId: bytes.Clone(request.SiteId), Weight: max(1, request.Weight), DrainSeconds: request.DrainSeconds,
 		Kind: bridge.BridgeRouteKind_BRIDGE_ROUTE_KIND_SUBNET,
@@ -653,6 +708,7 @@ func (self *BridgeFiler) ExposeMap(ctx context.Context, origin *BridgeFileOrigin
 	if err != nil {
 		return nil, err
 	}
+	self.appendOwedRoutes(view)
 	if view.block == nil {
 		return nil, fmt.Errorf("%w: the network has no block yet", ErrBridgeFileNoState)
 	}
@@ -757,8 +813,9 @@ func (self *bridgeRuleEffect) Run(ctx context.Context, effectKey []byte) ([]byte
 			return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 		}
 		if held != nil {
-			// the filing landed before: a retry or a restart files no second one
+			// the filing landed before: a retry or a restart files no second one, and appends the entry a kill left owed
 			self.address = view.address()
+			filer.appendOwedRoutes(view)
 			return ruleId, nil
 		}
 	} else {
@@ -774,16 +831,22 @@ func (self *bridgeRuleEffect) Run(ctx context.Context, effectKey []byte) ([]byte
 
 	var statement proto.Message
 	var body proto.Message
-	record := &RecordRouteArgs{Event: bridgeRouteRecordOpened, RuleId: ruleId, TargetSidecarId: &view.self}
+	owed := newBridgeRouteOwed(self.origin, bridgeRouteRecordOpened)
+	owed.RuleId, owed.TargetSidecarId = ruleId, &view.self
+	if approval != nil {
+		approvalIdCopy := approvalId
+		actionId := self.action.ActionId(approvalId)
+		owed.ApprovalId, owed.ActionId = &approvalIdCopy, actionId[:]
+	}
 	switch self.signedType {
 	case bridge.SignedType_SIGNED_BRIDGE_ROUTE:
 		routeBody := proto.Clone(self.route).(*bridge.BridgeRouteBody)
 		routeBody.Approval = approval
 		statement = &bridge.BridgeRoute{RouteId: ruleId, Advertiser: view.self.Bytes(), RouteRuleIds: self.routeRuleIds}
 		body = routeBody
-		record.Kind = bridgeRouteRecordRoute
+		owed.Kind = bridgeRouteRecordRoute
 		for _, wirePrefix := range routeBody.GetPrefixes() {
-			record.Cidrs = append(record.Cidrs, bridgePrefix{address: wirePrefix.GetAddress(), length: wirePrefix.GetLength()}.String())
+			owed.Cidrs = append(owed.Cidrs, bridgePrefix{address: wirePrefix.GetAddress(), length: wirePrefix.GetLength()}.String())
 		}
 	case bridge.SignedType_SIGNED_BRIDGE_MAP:
 		address, err := self.hostAddress(ctx, view)
@@ -795,29 +858,25 @@ func (self *bridgeRuleEffect) Run(ctx context.Context, effectKey []byte) ([]byte
 		mapBody.Approval = approval
 		statement = &bridge.BridgeMap{MapId: ruleId, Host: view.self.Bytes(), Expires: self.mapPlan.expiresMs}
 		body = mapBody
-		record.Kind = bridgeRouteRecordMap
-		record.TargetPort = mapBody.GetTargetPort()
-		record.ExpiresMillis = self.mapPlan.expiresMs
+		owed.Kind = bridgeRouteRecordMap
+		owed.TargetPort = mapBody.GetTargetPort()
+		owed.ExpiresMillis = self.mapPlan.expiresMs
 	default:
 		return nil, fmt.Errorf("%w: %s is no exposure", ErrSidecarEffectNotDone, self.signedType)
+	}
+	// the entry is owed before the act, so a kill between the filing and its entry leaves it to pay
+	if err := filer.oweRoute(owed); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}
 	barrierKey := hex.EncodeToString(ruleId)
 	testHookBarrier("bridge_file.rule.before", barrierKey)
 	_, err = filer.fileSealed(ctx, self.origin, self.signedType, statement, body)
 	testHookBarrier("bridge_file.rule.after", barrierKey)
 	if err != nil {
+		filer.settleRoute(owed, err)
 		return nil, err
 	}
-	if approval != nil {
-		approvalIdCopy := approvalId
-		record.ApprovalId = &approvalIdCopy
-	}
-	var actionId []byte
-	if approval != nil {
-		id := self.action.ActionId(approvalId)
-		actionId = id[:]
-	}
-	filer.recordRoute(self.origin, actionId, nil, record)
+	filer.payRoute(owed)
 	return ruleId, nil
 }
 
@@ -888,13 +947,18 @@ func (self *bridgeRuleEffect) hostAddress(ctx context.Context, view *bridgeFileV
 	return netip.Addr{}, fmt.Errorf("%w: every address this host proposed was another's first", ErrSidecarEffectNotDone)
 }
 
-// Files sidecarId's BridgeAddress at ipv4 and answers the view once its entry applied. Only this host's own address is
-// filed here: one for another sidecar_id, or a second for a host the ledger addresses, is refused before any act, as
-// every verifier refuses it. ErrSidecarEffectNotDone wraps a refusal that proves nothing was filed.
+// Files sidecarId's BridgeAddress at ipv4 and answers the view once its entry applied. This host's own address, or,
+// on a person's confirmed command from an admin's device, another admitted sidecar's (§17.8's BridgeAddress row, "the
+// sidecar or an admin"): one for another sidecar_id from any other origin or device, for a sidecar no longer admitted,
+// or a second for a host the ledger addresses, is refused before any act, as every verifier refuses it from a device
+// that may not sign it. ErrSidecarEffectNotDone wraps a refusal that proves nothing was filed.
 func (self *BridgeFiler) claimAddress(ctx context.Context, origin *BridgeFileOrigin, view *bridgeFileView, sidecarId Id, ipv4 uint32) (*bridgeFileView, error) {
+	row := view.state.SidecarRow(sidecarId)
 	switch {
-	case sidecarId != view.self:
+	case sidecarId != view.self && (origin.Act != SidecarActConfirmed || !view.signerAdmin()):
 		return nil, fmt.Errorf("%w: %w: a BridgeAddress for another sidecar_id", ErrSidecarEffectNotDone, ErrBridgeFileRefused)
+	case sidecarId != view.self && (row == nil || row.GetRevokedAt() != 0):
+		return nil, fmt.Errorf("%w: %w: a BridgeAddress for no admitted sidecar", ErrSidecarEffectNotDone, ErrBridgeFileRefused)
 	case view.ledger.Address(sidecarId) != nil:
 		return nil, fmt.Errorf("%w: %w: a second BridgeAddress for an addressed host", ErrSidecarEffectNotDone, ErrBridgeFileRefused)
 	}
@@ -921,11 +985,27 @@ func (self *BridgeFiler) claimAddress(ctx context.Context, origin *BridgeFileOri
 // entries. A refusal before or at the post wraps ErrSidecarEffectNotDone, since nothing was sequenced; a lost answer
 // leaves the statement pending, the same bytes posting again.
 func (self *BridgeFiler) fileSealed(ctx context.Context, origin *BridgeFileOrigin, signedType bridge.SignedType, statement proto.Message, body proto.Message) ([]*bridge.AuthPin, error) {
-	repoKey, err := self.sealKey(ctx)
+	act, err := self.statementAct(ctx, origin, signedType, statement, body)
+	if err != nil {
+		return nil, err
+	}
+	return self.runAct(ctx, act, origin)
+}
+
+// One statement as origin's act, not yet run: its body, nil for a bodiless one, sealed to the config's current
+// generation. A refusal wraps ErrSidecarEffectNotDone, since nothing was signed.
+func (self *BridgeFiler) statementAct(ctx context.Context, origin *BridgeFileOrigin, signedType bridge.SignedType, statement proto.Message, body proto.Message) (*sidecarAct, error) {
+	act, err := self.args.Sidecar.newAct(origin.Act)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}
-	act, err := self.args.Sidecar.newAct(origin.Act)
+	if body == nil {
+		if err := act.Add(signedType, statement); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
+		}
+		return act, nil
+	}
+	repoKey, err := self.sealKey(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}
@@ -944,7 +1024,7 @@ func (self *BridgeFiler) fileSealed(ctx context.Context, origin *BridgeFileOrigi
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}
-	return self.runAct(ctx, act, origin)
+	return act, nil
 }
 
 // Runs an act and maps its answer: a refusal proves nothing was sequenced; a pending statement may still land.
@@ -959,31 +1039,198 @@ func (self *BridgeFiler) runAct(ctx context.Context, act *sidecarAct, origin *Br
 	return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 }
 
-// Appends RECORD.md's route entry for a filing that landed, as the sidecar that filed it saw it. A record that does not
-// take it is logged: the filing stands.
-func (self *BridgeFiler) recordRoute(origin *BridgeFileOrigin, actionId []byte, grantId []byte, args *RecordRouteArgs) {
-	body, err := NewRecordRouteBody(args)
+// What the filer owes RECORD.md for one filing (the file's comment): its route entry, as RecordRouteArgs holds one, and
+// the run binding and ids its header carries. JSON in the filer's store under route/<opened|closed>-<id in hex>, a
+// route's or map's rule id or a forward's grant id: kept before the filing's act, dropped once its entry is appended or
+// the filing proves nothing filed, so a kill between a filing landing and its entry leaves it for AppendOwedRoutes.
+type bridgeRouteOwed struct {
+	Version int `json:"version"`
+	// RecordRouteArgs's fields
+	Event           uint32   `json:"event"`
+	Kind            uint32   `json:"kind"`
+	RuleId          []byte   `json:"rule_id,omitempty"`
+	TargetSidecarId *Id      `json:"target_sidecar_id,omitempty"`
+	TargetPort      uint32   `json:"target_port,omitempty"`
+	Cidrs           []string `json:"cidrs,omitempty"`
+	ExpiresMillis   int64    `json:"expires_millis,omitempty"`
+	ApprovalId      *Id      `json:"approval_id,omitempty"`
+	Reason          uint32   `json:"reason,omitempty"`
+	// the entry's header
+	RunId    *Id    `json:"run_id,omitempty"`
+	AgentId  *Id    `json:"agent_id,omitempty"`
+	ActionId []byte `json:"action_id,omitempty"`
+	GrantId  []byte `json:"grant_id,omitempty"`
+	// when the filer kept it, before its filing's act
+	WrittenMs int64 `json:"written_ms"`
+}
+
+// An owed entry for event, bound to origin's run.
+func newBridgeRouteOwed(origin *BridgeFileOrigin, event uint32) *bridgeRouteOwed {
+	owed := &bridgeRouteOwed{Version: bridgeFileRecordVersion, Event: event}
+	if origin.RunId != nil {
+		runId := *origin.RunId
+		owed.RunId = &runId
+	}
+	if origin.AgentId != nil {
+		agentId := *origin.AgentId
+		owed.AgentId = &agentId
+	}
+	return owed
+}
+
+// Its name in the filer's store.
+func (self *bridgeRouteOwed) name() string {
+	event := "opened"
+	if self.Event == bridgeRouteRecordClosed {
+		event = "closed"
+	}
+	id := self.RuleId
+	if self.Kind == bridgeRouteRecordForward {
+		id = self.GrantId
+	}
+	return bridgeFileRoutePrefix + event + "-" + hex.EncodeToString(id)
+}
+
+// Whether owed's filing shows in view: for a route or a map, its rule held as this host's, and withdrawn for a closing;
+// for a forward, its grant held or spent, and no longer standing for a closing.
+func (self *bridgeFileView) routeLanded(owed *bridgeRouteOwed) bool {
+	switch owed.Kind {
+	case bridgeRouteRecordRoute, bridgeRouteRecordMap:
+		rule, err := self.ownRule(owed.RuleId)
+		if err != nil || rule == nil {
+			return false
+		}
+		return owed.Event == bridgeRouteRecordOpened || rule.Withdrawn != nil
+	case bridgeRouteRecordForward:
+		acl, err := self.state.Acl()
+		if err != nil {
+			return false
+		}
+		standing := acl.grantRule(owed.GrantId) != nil
+		if owed.Event == bridgeRouteRecordOpened {
+			return standing || acl.spentGrant(owed.GrantId) != nil
+		}
+		return !standing
+	}
+	return false
+}
+
+// Keeps owed in the filer's store before its filing's act. An error refuses the filing, since nothing was filed.
+func (self *BridgeFiler) oweRoute(owed *bridgeRouteOwed) error {
+	owed.WrittenMs = self.clock.Now().UnixMilli()
+	return self.saveRecord(owed.name(), owed)
+}
+
+// Appends the entry owed for a filing that landed and drops it, under owedLock so two passes append it once; one the
+// store no longer keeps was appended already. A record that does not take it leaves it owed, logged, and one that can
+// never be built is dropped, logged.
+func (self *BridgeFiler) payRoute(owed *bridgeRouteOwed) {
+	self.owedLock.Lock()
+	defer self.owedLock.Unlock()
+	name := owed.name()
+	kept := &bridgeRouteOwed{}
+	if found, err := self.loadRecord(name, kept); err != nil || !found {
+		if err != nil {
+			self.log.Warningf("[bridge]an owed route entry does not read, and stays owed: %v", err)
+		}
+		return
+	}
+	body, err := NewRecordRouteBody(&RecordRouteArgs{
+		Event: kept.Event, Kind: kept.Kind, RuleId: kept.RuleId, TargetSidecarId: kept.TargetSidecarId, TargetPort: kept.TargetPort,
+		Cidrs: kept.Cidrs, ExpiresMillis: kept.ExpiresMillis, ApprovalId: kept.ApprovalId, Reason: kept.Reason,
+	})
 	if err != nil {
-		self.log.Warningf("[bridge]a route entry was not built: %v", err)
+		self.log.Warningf("[bridge]a route entry was not built, and is dropped: %v", err)
+		self.dropRoute(name)
 		return
 	}
 	writer, err := self.records()
+	if err == nil {
+		_, err = writer.Append(&RecordDraft{
+			Kind:      RecordKindRoute,
+			Source:    RecordSourceObserved,
+			RunId:     kept.RunId,
+			NoSession: kept.RunId == nil,
+			AgentId:   kept.AgentId,
+			ActionId:  bytes.Clone(kept.ActionId),
+			GrantId:   bytes.Clone(kept.GrantId),
+			Body:      body,
+		})
+	}
 	if err != nil {
-		self.log.Warningf("[bridge]no record takes the route entry: %v", err)
+		self.log.Warningf("[bridge]the route entry was not appended, and stays owed: %v", err)
 		return
 	}
-	draft := &RecordDraft{
-		Kind:     RecordKindRoute,
-		Source:   RecordSourceObserved,
-		RunId:    origin.RunId,
-		AgentId:  origin.AgentId,
-		ActionId: bytes.Clone(actionId),
-		GrantId:  bytes.Clone(grantId),
-		Body:     body,
+	self.dropRoute(name)
+}
+
+// Settles owed after its filing failed: dropped where the error proves nothing was filed, kept while the filing may
+// still land.
+func (self *BridgeFiler) settleRoute(owed *bridgeRouteOwed, err error) {
+	if !errors.Is(err, ErrSidecarEffectNotDone) {
+		return
 	}
-	draft.NoSession = origin.RunId == nil
-	if _, err := writer.Append(draft); err != nil {
-		self.log.Warningf("[bridge]the route entry was not appended: %v", err)
+	self.owedLock.Lock()
+	defer self.owedLock.Unlock()
+	self.dropRoute(owed.name())
+}
+
+// Removes an owed entry under owedLock; a store that does not is logged, the entry appended again at worst.
+func (self *BridgeFiler) dropRoute(name string) {
+	if err := self.removeRecord(name); err != nil {
+		self.log.Warningf("[bridge]an owed route entry was not dropped: %v", err)
+	}
+}
+
+// Appends every route entry the filer owes whose filing shows in view, and drops each kept RouteOwedKeepTimeout or
+// longer whose filing does not, since it can no longer land. A store that fails leaves the entries owed, logged.
+func (self *BridgeFiler) appendOwedRoutes(view *bridgeFileView) {
+	names, err := self.recordNames(bridgeFileRoutePrefix)
+	if err != nil {
+		self.log.Warningf("[bridge]the owed route entries do not list: %v", err)
+		return
+	}
+	nowMs := self.clock.Now().UnixMilli()
+	for _, name := range names {
+		owed := &bridgeRouteOwed{}
+		found, err := self.loadRecord(name, owed)
+		if err != nil {
+			self.log.Warningf("[bridge]an owed route entry does not read: %v", err)
+			continue
+		}
+		switch {
+		case !found:
+		case view.routeLanded(owed):
+			self.payRoute(owed)
+		case self.settings.RouteOwedKeepTimeout.Milliseconds() <= nowMs-owed.WrittenMs:
+			func() {
+				self.owedLock.Lock()
+				defer self.owedLock.Unlock()
+				self.dropRoute(name)
+			}()
+		}
+	}
+}
+
+// Appends every route entry the filer owes for a filing that has since landed, what a kill between a filing landing and
+// its entry leaves, at the newest verified state (the file's comment). A host runs it at start, and each filing runs it
+// first. An error where no state reads, the entries left owed.
+func (self *BridgeFiler) AppendOwedRoutes(ctx context.Context) error {
+	view, err := self.view(ctx)
+	if err != nil {
+		return err
+	}
+	self.appendOwedRoutes(view)
+	return nil
+}
+
+// AppendOwedRoutes where the store keeps any, as each filing runs it first; a state that does not read leaves them.
+func (self *BridgeFiler) payOwedRoutes(ctx context.Context) {
+	if names, err := self.recordNames(bridgeFileRoutePrefix); err != nil || len(names) == 0 {
+		return
+	}
+	if err := self.AppendOwedRoutes(ctx); err != nil {
+		self.log.Warningf("[bridge]the owed route entries wait for a state: %v", err)
 	}
 }
 
@@ -1029,6 +1276,7 @@ func (self *BridgeFiler) Forward(ctx context.Context, origin *BridgeFileOrigin, 
 	if request == nil || request.Target == (Id{}) || request.Target == identity.SidecarId {
 		return nil, fmt.Errorf("%w: a forward names another sidecar", ErrBridgeFileRefused)
 	}
+	self.payOwedRoutes(ctx)
 	protocolName := map[uint32]string{0: "tcp", bridgeProtocolTcp: "tcp", bridgeProtocolUdp: "udp"}[request.Protocol]
 	if protocolName == "" || request.Port == 0 || 65535 < request.Port || 65535 < request.LocalPort {
 		return nil, fmt.Errorf("%w: a forward's protocol or port", ErrBridgeFileRefused)
@@ -1083,26 +1331,35 @@ type bridgeForwardEffect struct {
 	approvalId Id
 }
 
-// The grant component's Run, then the route entry for a grant it filed and the log did not hold before.
+// The grant component's Run, its route entry owed first for a grant the log does not hold yet and appended once it
+// lands; a retry of a grant that landed files nothing and appends the entry a kill left owed.
 func (self *bridgeForwardEffect) Run(ctx context.Context, effectKey []byte) ([]byte, error) {
 	spend, ok := ApprovalSpendFromContext(ctx)
 	if len(effectKey) == 0 || !ok {
 		return self.inner.Run(ctx, effectKey)
 	}
+	filer := self.filer
 	self.approvalId = spend.ApprovalId
 	grantId := AclGrantId(spend.ApprovalId, sha256.Sum256(spend.Action))
-	heldBefore := self.filer.args.Grants.held(grantId[:])
-	grantRef, err := self.inner.Run(ctx, effectKey)
-	if err != nil || heldBefore {
-		return grantRef, err
+	if filer.args.Grants.held(grantId[:]) {
+		filer.payOwedRoutes(ctx)
+		return self.inner.Run(ctx, effectKey)
 	}
 	approvalId := spend.ApprovalId
 	actionId := self.action.ActionId(approvalId)
 	target := self.request.Target
-	self.filer.recordRoute(self.origin, actionId[:], grantRef, &RecordRouteArgs{
-		Event: bridgeRouteRecordOpened, Kind: bridgeRouteRecordForward, TargetSidecarId: &target, TargetPort: self.request.Port,
-		ExpiresMillis: self.action.Action.GetExpiresMillis(), ApprovalId: &approvalId,
-	})
+	owed := newBridgeRouteOwed(self.origin, bridgeRouteRecordOpened)
+	owed.Kind, owed.GrantId, owed.TargetSidecarId, owed.TargetPort = bridgeRouteRecordForward, grantId[:], &target, self.request.Port
+	owed.ExpiresMillis, owed.ApprovalId, owed.ActionId = self.action.Action.GetExpiresMillis(), &approvalId, actionId[:]
+	if err := filer.oweRoute(owed); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
+	}
+	grantRef, err := self.inner.Run(ctx, effectKey)
+	if err != nil {
+		filer.settleRoute(owed, err)
+		return grantRef, err
+	}
+	filer.payRoute(owed)
 	return grantRef, nil
 }
 
@@ -1119,6 +1376,7 @@ func (self *BridgeFiler) Close(ctx context.Context, origin *BridgeFileOrigin, id
 	if err != nil {
 		return nil, err
 	}
+	self.appendOwedRoutes(view)
 	rule, err := view.ownRule(id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: a BridgeWithdraw of another sidecar's rule", ErrBridgeFileRefused)
@@ -1131,24 +1389,24 @@ func (self *BridgeFiler) Close(ctx context.Context, origin *BridgeFileOrigin, id
 		if reset {
 			mode = bridge.BridgeWithdrawMode_BRIDGE_WITHDRAW_MODE_RESET
 		}
-		act, err := self.args.Sidecar.newAct(origin.Act)
+		owed := newBridgeRouteOwed(origin, bridgeRouteRecordClosed)
+		owed.Kind, owed.RuleId, owed.TargetSidecarId, owed.Reason = bridgeRouteRecordRoute, bytes.Clone(id), &view.self, bridgeRouteRecordWithdrawn
+		if rule.SignedType == bridge.SignedType_SIGNED_BRIDGE_MAP {
+			owed.Kind = bridgeRouteRecordMap
+		}
+		// bodiless, so it never waits on a seal (§17.8)
+		act, err := self.statementAct(ctx, origin, bridge.SignedType_SIGNED_BRIDGE_WITHDRAW, &bridge.BridgeWithdraw{RuleId: bytes.Clone(id), Mode: mode}, nil)
 		if err != nil {
 			return nil, err
 		}
-		// bodiless, so it never waits on a seal (§17.8)
-		if err := act.Add(bridge.SignedType_SIGNED_BRIDGE_WITHDRAW, &bridge.BridgeWithdraw{RuleId: bytes.Clone(id), Mode: mode}); err != nil {
-			return nil, err
+		if err := self.oweRoute(owed); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrBridgeFileRefused, err)
 		}
 		if _, err := self.runAct(ctx, act, origin); err != nil {
+			self.settleRoute(owed, err)
 			return nil, err
 		}
-		kind := bridgeRouteRecordRoute
-		if rule.SignedType == bridge.SignedType_SIGNED_BRIDGE_MAP {
-			kind = bridgeRouteRecordMap
-		}
-		self.recordRoute(origin, nil, nil, &RecordRouteArgs{
-			Event: bridgeRouteRecordClosed, Kind: kind, RuleId: bytes.Clone(id), TargetSidecarId: &view.self, Reason: bridgeRouteRecordWithdrawn,
-		})
+		self.payRoute(owed)
 		return &BridgeFiling{RuleId: bytes.Clone(id)}, nil
 	}
 
@@ -1164,10 +1422,19 @@ func (self *BridgeFiler) Close(ctx context.Context, origin *BridgeFileOrigin, id
 	if self.args.Grants == nil {
 		return nil, fmt.Errorf("%w: no grant filer", ErrBridgeFileRefused)
 	}
+	owed := newBridgeRouteOwed(origin, bridgeRouteRecordClosed)
+	owed.Kind, owed.GrantId, owed.Reason = bridgeRouteRecordForward, bytes.Clone(id), bridgeRouteRecordRevoked
+	if err := self.oweRoute(owed); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBridgeFileRefused, err)
+	}
 	if err := self.args.Grants.Revoke(ctx, id, origin.Act, origin.Check); err != nil {
+		if !errors.Is(err, ErrSidecarActPending) {
+			// refused, or nothing signed: the revocation never lands
+			self.settleRoute(owed, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err))
+		}
 		return nil, err
 	}
-	self.recordRoute(origin, nil, id, &RecordRouteArgs{Event: bridgeRouteRecordClosed, Kind: bridgeRouteRecordForward, Reason: bridgeRouteRecordRevoked})
+	self.payRoute(owed)
 	return &BridgeFiling{GrantId: bytes.Clone(id)}, nil
 }
 
@@ -1181,6 +1448,38 @@ func (self *BridgeFiler) ClaimAddress(ctx context.Context, origin *BridgeFileOri
 	if origin.Act == SidecarActMcp || origin.Act == SidecarActHook {
 		return nil, fmt.Errorf("%w: %w: an address is claimed by a person's command", ErrBridgeFileRefused, ErrSidecarActMode)
 	}
+	identity := self.args.Sidecar.currentIdentity()
+	if identity == nil {
+		return nil, ErrSidecarNoIdentity
+	}
+	return self.fileAddress(ctx, origin, identity.SidecarId, address)
+}
+
+// Files another admitted sidecar's BridgeAddress as an admin (§17.4's assignment by an admin; §17.8's BridgeAddress row,
+// "the sidecar or an admin"): at address, in the block's lower /17 and free, or, invalid, at the allocator's draw. A
+// person's confirmed command on an admin's device alone: from MCP, a hook or an unconfirmed call, from a device that is
+// no admin's, for a sidecar that is not admitted, or for one the ledger addresses already, it is refused before any act.
+// This host's own address is ClaimAddress's.
+func (self *BridgeFiler) AssignAddress(ctx context.Context, origin *BridgeFileOrigin, sidecarId Id, address netip.Addr) (*BridgeFiling, error) {
+	if err := bridgeFileCheckOrigin(origin); err != nil {
+		return nil, err
+	}
+	if origin.Act != SidecarActConfirmed {
+		return nil, fmt.Errorf("%w: %w: an admin assigns an address by a person's confirmed command", ErrBridgeFileRefused, ErrSidecarActMode)
+	}
+	identity := self.args.Sidecar.currentIdentity()
+	if identity == nil {
+		return nil, ErrSidecarNoIdentity
+	}
+	if sidecarId == (Id{}) || sidecarId == identity.SidecarId {
+		return nil, fmt.Errorf("%w: an admin assigns another sidecar's address, and this host claims its own", ErrBridgeFileRefused)
+	}
+	return self.fileAddress(ctx, origin, sidecarId, address)
+}
+
+// Files sidecarId's BridgeAddress at address or the allocator's draw (ClaimAddress, AssignAddress), its rules
+// claimAddress's, and answers the address the ledger then holds for it.
+func (self *BridgeFiler) fileAddress(ctx context.Context, origin *BridgeFileOrigin, sidecarId Id, address netip.Addr) (*BridgeFiling, error) {
 	view, err := self.view(ctx)
 	if err != nil {
 		return nil, err
@@ -1192,8 +1491,8 @@ func (self *BridgeFiler) ClaimAddress(ctx context.Context, origin *BridgeFileOri
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBridgeFileNoState, err)
 	}
-	if view.ledger.Address(view.self) != nil {
-		return nil, fmt.Errorf("%w: this host holds an address already", ErrBridgeFileRefused)
+	if view.ledger.Address(sidecarId) != nil {
+		return nil, fmt.Errorf("%w: the host holds an address already", ErrBridgeFileRefused)
 	}
 	var ipv4 uint32
 	if address.IsValid() {
@@ -1207,13 +1506,13 @@ func (self *BridgeFiler) ClaimAddress(ctx context.Context, origin *BridgeFileOri
 	} else if ipv4, err = AllocateBridgeAddress(plan, self.random); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBridgeFileRefused, err)
 	}
-	next, err := self.claimAddress(ctx, origin, view, view.self, ipv4)
+	next, err := self.claimAddress(ctx, origin, view, sidecarId, ipv4)
 	if err != nil {
 		return nil, err
 	}
-	held := next.address()
+	held := next.addressOf(sidecarId)
 	if held != bridgeAddressOf(ipv4) {
-		// another host's claim came first in log order (§17.4)
+		// another claim came first in log order (§17.4)
 		return nil, fmt.Errorf("%w: %w", ErrBridgeFileRefused, ErrBridgeAddressTaken)
 	}
 	return &BridgeFiling{Address: held, AddressFiled: true}, nil
@@ -1228,7 +1527,9 @@ type BridgeEgressRequest struct {
 	ExitTagId      Id
 }
 
-// The statement and the body an egress spec files: the mode in the clear, and under exits only a sealed body.
+// The statement and the body an egress spec files: the mode in the clear, and under exits only a sealed body, nil
+// under auto and none, which never wait on a seal. Exits named twice, or an exit of zero, are refused, as the readers
+// void such a body.
 func bridgeEgressStatement(request *BridgeEgressRequest) (*bridge.BridgeEgress, *bridge.BridgeEgressBody, error) {
 	if request == nil || request.Subject == (Id{}) {
 		return nil, nil, fmt.Errorf("%w: an egress spec names its subject", ErrBridgeFileRefused)
@@ -1248,7 +1549,10 @@ func bridgeEgressStatement(request *BridgeEgressRequest) (*bridge.BridgeEgress, 
 			return nil, nil, fmt.Errorf("%w: %d exits", ErrBridgeFileRefused, len(request.ExitSidecarIds))
 		}
 		body := &bridge.BridgeEgressBody{}
-		for _, exitId := range request.ExitSidecarIds {
+		for i, exitId := range request.ExitSidecarIds {
+			if exitId == (Id{}) || slices.Contains(request.ExitSidecarIds[:i], exitId) {
+				return nil, nil, fmt.Errorf("%w: an exit of zero or named twice", ErrBridgeFileRefused)
+			}
 			body.ExitSidecarIds = append(body.ExitSidecarIds, exitId.Bytes())
 		}
 		if request.ExitTagId != (Id{}) {
@@ -1259,16 +1563,34 @@ func bridgeEgressStatement(request *BridgeEgressRequest) (*bridge.BridgeEgress, 
 	return nil, nil, fmt.Errorf("%w: egress mode %d", ErrBridgeFileRefused, request.Mode)
 }
 
-// The CanonicalAction an egress change asks for. Kind egress_change has no row in the kind table (QD-429), so
-// NewCanonicalAction refuses it until its fields are named (question bridge-m4-19-egress-change-action): every
-// SetEgress is refused at the gate meanwhile, the closed direction.
+// The CanonicalAction an egress change asks for (QD-799): its subject and mode, and under exits its exits in grant_dst,
+// sidecar:<id> entries in the request's order or one tag:<id>, which approvers render and every parser holds to that
+// shape (checkEgressChangeAction).
 func bridgeEgressAction(request *BridgeEgressRequest) (*StoredCanonicalAction, error) {
-	return NewCanonicalAction(&protocol.CanonicalAction{Kind: uint32(SidecarActionEgressChange), Subject: request.Subject.Bytes()})
+	action := &protocol.CanonicalAction{
+		Kind:       uint32(SidecarActionEgressChange),
+		Subject:    request.Subject.Bytes(),
+		EgressMode: uint32(request.Mode),
+	}
+	for _, exitId := range request.ExitSidecarIds {
+		action.GrantDst = append(action.GrantDst, "sidecar:"+hex.EncodeToString(exitId.Bytes()))
+	}
+	if request.ExitTagId != (Id{}) {
+		action.GrantDst = append(action.GrantDst, "tag:"+hex.EncodeToString(request.ExitTagId.Bytes()))
+	}
+	return NewCanonicalAction(action)
 }
 
-// Files a subject's egress spec (the file's SetEgress row): a person's confirmation and the gate's pass, which kind
-// egress_change cannot get yet, so it is refused there. The verifiers hold its signer to an admin, the subject's owner
-// or its sponsor.
+// Whether this host's own signature on a BridgeEgress for subject passes the log's signer rule at the view's state
+// (bridgeCheckSigner's egress row): this device is a standing device of an admin, or of the member that owns the
+// subject, an untagged sidecar, or sponsors it, a tagged one.
+func (self *bridgeFileView) egressSigner(subject Id) bool {
+	return self.signerAdmin() || bridgeEgressOwnerOrSponsor(self.state, self.selfStatement(), subject)
+}
+
+// Files a subject's egress spec (the file's SetEgress row): a person's confirmed command alone, and then §5.4's gate
+// (kind egress_change, QD-799), whose decision the effect spends. What the log's signer rule refuses, a device that is
+// no admin's and not the subject's owner's or sponsor's, is refused before any approval is asked.
 func (self *BridgeFiler) SetEgress(ctx context.Context, origin *BridgeFileOrigin, request *BridgeEgressRequest) (*BridgeFiling, error) {
 	if err := bridgeFileCheckOrigin(origin); err != nil {
 		return nil, err
@@ -1279,29 +1601,57 @@ func (self *BridgeFiler) SetEgress(ctx context.Context, origin *BridgeFileOrigin
 	if _, _, err := bridgeEgressStatement(request); err != nil {
 		return nil, err
 	}
+	view, err := self.view(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !view.egressSigner(request.Subject) {
+		return nil, fmt.Errorf("%w: this device is no admin's, nor its subject's owner's or sponsor's", ErrBridgeFileRefused)
+	}
 	stored, err := bridgeEgressAction(request)
 	if err != nil {
-		return nil, fmt.Errorf("%w: no approval can be asked for an egress change yet: %w", ErrBridgeFileRefused, err)
+		return nil, fmt.Errorf("%w: %w", ErrBridgeFileRefused, err)
 	}
-	action, err := self.newAction(origin, stored, &bridgeEgressEffect{filer: self, origin: origin, request: request}, nil)
+	effect := &bridgeEgressEffect{filer: self, origin: origin, request: request}
+	action, err := self.newAction(origin, stored, effect, nil)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := self.authorize(ctx, origin, action); err != nil {
 		return nil, err
 	}
-	return &BridgeFiling{}, nil
+	return &BridgeFiling{ApprovalId: effect.approvalId}, nil
 }
 
-// An egress change's effect: the BridgeEgress, as a person's confirmed act.
+// An egress change's effect: the BridgeEgress, as a person's confirmed act. Run once per call by the gate.
 type bridgeEgressEffect struct {
 	filer   *BridgeFiler
 	origin  *BridgeFileOrigin
 	request *BridgeEgressRequest
+
+	// the decision the run spent under, zero for none
+	approvalId Id
 }
 
-// Files the BridgeEgress; auto and none carry no body, so they never wait on a seal.
+// What an egress change's marker keeps (the store's egress/<effect key>), JSON, its bytes in base64.
+type bridgeEgressMarker struct {
+	Version int `json:"version"`
+	// The statement's Signed bytes once its act signed them; empty while the act runs.
+	Signed    []byte `json:"signed,omitempty"`
+	WrittenMs int64  `json:"written_ms"`
+}
+
+// The bytes of an egress change's statement never land: api refused them and the log does not hold them.
+var errBridgeEgressNeverLands = errors.New("the egress change's statement never lands")
+
+// Files the BridgeEgress (§16.6's step 5), once per effect key: its marker, written before the act signs, keeps the
+// statement's Signed bytes once signed, so a second run under the key posts those same bytes again, which api answers
+// with their entry where it holds them (§7.9's retry identity), or finds them in the log's replay ring, and signs anew
+// only where they never land. Under a standing grant, an empty key, it keeps no marker. Answers the statement's id, §7.9's
+// SHA-256 over its signed bytes. An error wrapping ErrSidecarEffectNotDone proves nothing was filed, and leaves no
+// marker.
 func (self *bridgeEgressEffect) Run(ctx context.Context, effectKey []byte) ([]byte, error) {
+	filer := self.filer
 	if self.origin.Act != SidecarActConfirmed {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, ErrSidecarActMode)
 	}
@@ -1309,19 +1659,289 @@ func (self *bridgeEgressEffect) Run(ctx context.Context, effectKey []byte) ([]by
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}
-	if body != nil {
-		_, err = self.filer.fileSealed(ctx, self.origin, bridge.SignedType_SIGNED_BRIDGE_EGRESS, statement, body)
+	if spend, ok := ApprovalSpendFromContext(ctx); ok {
+		self.approvalId = spend.ApprovalId
+	}
+	filer.pruneEgressMarkers()
+	markerName := ""
+	if len(effectKey) != 0 {
+		markerName = bridgeFileEgressPrefix + hex.EncodeToString(effectKey)
+		marker := &bridgeEgressMarker{}
+		found, err := filer.loadRecord(markerName, marker)
+		if err != nil {
+			return nil, fmt.Errorf("%w: the egress change's marker: %w", ErrBridgeFileUncertain, err)
+		}
+		if found && len(marker.Signed) != 0 {
+			statementId, err := filer.postAgain(ctx, marker.Signed)
+			if !errors.Is(err, errBridgeEgressNeverLands) {
+				return statementId, err
+			}
+			// those bytes never land, so this run signs anew under the same key
+		}
+		if err := filer.saveRecord(markerName, &bridgeEgressMarker{Version: bridgeFileRecordVersion, WrittenMs: filer.clock.Now().UnixMilli()}); err != nil {
+			return nil, fmt.Errorf("%w: the egress change's marker: %w", ErrSidecarEffectNotDone, err)
+		}
+	}
+	// nothing was signed: no marker stays, so a lookup proves the use not done
+	notDone := func(err error) ([]byte, error) {
+		if markerName != "" {
+			if removeErr := filer.removeRecord(markerName); removeErr != nil {
+				return nil, fmt.Errorf("%w: %w", ErrBridgeFileUncertain, errors.Join(err, removeErr))
+			}
+		}
 		return nil, err
 	}
-	act, err := self.filer.args.Sidecar.newAct(self.origin.Act)
+	var sealedBody proto.Message
+	if body != nil {
+		sealedBody = body
+	}
+	testHookBarrier("bridge_file.egress.before", markerName)
+	act, err := filer.statementAct(ctx, self.origin, bridge.SignedType_SIGNED_BRIDGE_EGRESS, statement, sealedBody)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
+		return notDone(err)
 	}
-	if err := act.Add(bridge.SignedType_SIGNED_BRIDGE_EGRESS, statement); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
+	_, runErr := filer.runAct(ctx, act, self.origin)
+	testHookBarrier("bridge_file.egress.after", markerName)
+	signed := act.Signed()
+	if errors.Is(runErr, ErrSidecarEffectNotDone) || len(signed) != 1 {
+		return notDone(errors.Join(runErr, ErrSidecarEffectNotDone))
 	}
-	_, err = self.filer.runAct(ctx, act, self.origin)
-	return nil, err
+	statementId, err := bridgeSignedStatementId(signed[0])
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBridgeFileUncertain, err)
+	}
+	if markerName != "" {
+		marker := &bridgeEgressMarker{Version: bridgeFileRecordVersion, Signed: signed[0], WrittenMs: filer.clock.Now().UnixMilli()}
+		if err := filer.saveRecord(markerName, marker); err != nil {
+			// the statement stands or is pending; with its bytes unkept a lookup answers uncertain
+			filer.log.Warningf("[bridge]an egress change's marker was not kept: %v", err)
+		}
+	}
+	if runErr != nil {
+		return nil, runErr
+	}
+	return statementId[:], nil
+}
+
+// §7.9's id of a statement from its Signed bytes: SHA-256 over its purpose, type and body.
+func bridgeSignedStatementId(signedBytes []byte) ([sha256.Size]byte, error) {
+	signed := &bridge.Signed{}
+	if err := proto.Unmarshal(signedBytes, signed); err != nil {
+		return [sha256.Size]byte{}, fmt.Errorf("a statement that is no Signed: %w", err)
+	}
+	signedType := bridge.SignedType(signed.GetType())
+	purpose, ok := sidecarIdentitySignedPurpose(signedType)
+	if !ok {
+		return [sha256.Size]byte{}, fmt.Errorf("a statement of type %#x", int32(signedType))
+	}
+	return bridge.SignedBytesSha256(purpose, signedType, signed.GetBody()), nil
+}
+
+// The pending statement whose Signed bytes are signed, nil where none is pending: it landed, was refused, or passed
+// its not_after. Here, on every leg the filer and forwarding's setup run on, both of which post a statement again.
+func (self *Sidecar) pendingStatement(signed []byte) (*sidecarPendingStatement, error) {
+	pendings, err := self.pendingStatements()
+	if err != nil {
+		return nil, err
+	}
+	for _, pending := range pendings {
+		if bytes.Equal(pending.signed, signed) {
+			return pending, nil
+		}
+	}
+	return nil, nil
+}
+
+// Posts a statement's Signed bytes again, as §7.9's retry identity takes them: through the pending records where they
+// are still kept there, which drops them once api answers, else straight to POST /network/config/delta. Answers the
+// entry api holds them at. ErrSidecarActRefused where api refuses them, the pending record dropped; any other error
+// leaves them as they were, their answer lost.
+func (self *Sidecar) postSignedAgain(ctx context.Context, signedBytes []byte) (*bridge.AuthPin, error) {
+	pending, err := self.pendingStatement(signedBytes)
+	if err != nil {
+		return nil, err
+	}
+	if pending != nil {
+		return self.postPendingInOrder(ctx, pending)
+	}
+	if self.sidecarApi == nil {
+		return nil, errors.New("no api to post the statement again")
+	}
+	pin, err := self.sidecarApi.PostConfigDelta(ctx, signedBytes)
+	if err != nil {
+		apiErr := &SidecarApiError{}
+		if errors.As(err, &apiErr) && (apiErr.Status == http.StatusForbidden || apiErr.Status == http.StatusConflict || apiErr.Status == http.StatusBadRequest) {
+			return nil, fmt.Errorf("%w: %w", ErrSidecarActRefused, err)
+		}
+		return nil, err
+	}
+	return pin, nil
+}
+
+// Whether the newest verified state's replay ring holds the statement: it took effect among the log's last 4,096
+// entries.
+func (self *BridgeFiler) logHolds(statementId [sha256.Size]byte) bool {
+	state := self.args.Config.State()
+	return state != nil && state.ringHolds(state.Pin().GetVersion()+1, statementId)
+}
+
+// Posts a statement's Signed bytes again (Sidecar.postSignedAgain): its id once the log holds it, by api's answer to
+// the same bytes or by the replay ring; errBridgeEgressNeverLands where api refuses them and the log does not hold them,
+// which they never will; any other error leaves the use uncertain.
+func (self *BridgeFiler) postAgain(ctx context.Context, signedBytes []byte) ([]byte, error) {
+	statementId, err := bridgeSignedStatementId(signedBytes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBridgeFileUncertain, err)
+	}
+	if self.logHolds(statementId) {
+		return statementId[:], nil
+	}
+	_, err = self.args.Sidecar.postSignedAgain(ctx, signedBytes)
+	switch {
+	case err == nil:
+		return statementId[:], nil
+	case errors.Is(err, ErrSidecarActRefused):
+		if self.logHolds(statementId) {
+			// a replay of bytes the log holds, which its replay row refuses
+			return statementId[:], nil
+		}
+		return nil, fmt.Errorf("%w: %w", errBridgeEgressNeverLands, err)
+	}
+	return nil, fmt.Errorf("%w: %w", ErrBridgeFileUncertain, err)
+}
+
+// The bridge component's Lookup for an egress change (§16.6's step 5), from its effect key's marker: done with the
+// statement's id once the log's replay ring holds the bytes the marker keeps; not done where no marker was kept, since
+// the effect writes one before it signs and removes it only where nothing was filed; else uncertain, since a pending
+// post may still land.
+func (self *BridgeFiler) LookupEgress(ctx context.Context, canonical []byte, effectKey []byte) (*SidecarOutcome, error) {
+	uncertain := &SidecarOutcome{State: ApprovalOutcomeUncertain}
+	if len(effectKey) != sha256.Size {
+		return uncertain, nil
+	}
+	marker := &bridgeEgressMarker{}
+	found, err := self.loadRecord(bridgeFileEgressPrefix+hex.EncodeToString(effectKey), marker)
+	switch {
+	case err != nil:
+		return uncertain, nil
+	case !found:
+		return &SidecarOutcome{State: ApprovalOutcomeNotDone}, nil
+	case len(marker.Signed) == 0:
+		return uncertain, nil
+	}
+	statementId, err := bridgeSignedStatementId(marker.Signed)
+	if err != nil || !self.logHolds(statementId) {
+		return uncertain, nil
+	}
+	return &SidecarOutcome{State: ApprovalOutcomeDone, EffectRef: statementId[:]}, nil
+}
+
+// Drops the egress markers older than EgressMarkerKeepTimeout, past which no use is reconciled. A store that does not
+// list or remove is logged: a marker kept longer answers no lookup wrongly.
+func (self *BridgeFiler) pruneEgressMarkers() {
+	names, err := self.recordNames(bridgeFileEgressPrefix)
+	if err != nil {
+		self.log.Warningf("[bridge]the egress markers do not list: %v", err)
+		return
+	}
+	nowMs := self.clock.Now().UnixMilli()
+	for _, name := range names {
+		marker := &bridgeEgressMarker{}
+		if found, err := self.loadRecord(name, marker); err != nil || !found {
+			continue
+		}
+		if nowMs-marker.WrittenMs < self.settings.EgressMarkerKeepTimeout.Milliseconds() {
+			continue
+		}
+		if err := self.removeRecord(name); err != nil {
+			self.log.Warningf("[bridge]an egress marker was not dropped: %v", err)
+		}
+	}
+}
+
+// The filer's store (BridgeFilerArgs.Store).
+func (self *BridgeFiler) store() (SidecarStore, error) {
+	if self.args.Store != nil {
+		return self.args.Store, nil
+	}
+	return self.args.Sidecar.LocalStore().Directory(bridgeFileDirectory, bridgeFileClass)
+}
+
+// Reads the record name into value, false where none is kept. A record of another version is an error.
+func (self *BridgeFiler) loadRecord(name string, value any) (bool, error) {
+	store, err := self.store()
+	if err != nil {
+		return false, err
+	}
+	reader, err := store.Open(name)
+	if errors.Is(err, ErrSidecarStoreAbsent) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer reader.Close()
+	encoded, err := io.ReadAll(reader)
+	if err != nil {
+		return false, err
+	}
+	version := &struct {
+		Version int `json:"version"`
+	}{}
+	if err := json.Unmarshal(encoded, version); err != nil || version.Version != bridgeFileRecordVersion {
+		return false, fmt.Errorf("the bridge record %s does not read at version %d", name, bridgeFileRecordVersion)
+	}
+	if err := json.Unmarshal(encoded, value); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Replaces the record name with value, whole, at once.
+func (self *BridgeFiler) saveRecord(name string, value any) error {
+	store, err := self.store()
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	writer, err := store.Create(name)
+	if err != nil {
+		return err
+	}
+	defer writer.Close()
+	if _, err := writer.Write(encoded); err != nil {
+		return err
+	}
+	return writer.Commit()
+}
+
+// Takes the record name away; nothing there is no error.
+func (self *BridgeFiler) removeRecord(name string) error {
+	store, err := self.store()
+	if err != nil {
+		return err
+	}
+	return store.Remove(name)
+}
+
+// The records under prefix, in name order.
+func (self *BridgeFiler) recordNames(prefix string) ([]string, error) {
+	store, err := self.store()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := store.List(prefix)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name)
+	}
+	return names, nil
 }
 
 // What SetBlock writes: a block drawn at random (cycle), or an admin's /16 of 100.64.0.0/10 or RFC 1918.
@@ -1435,8 +2055,14 @@ func (self *BridgeFiler) Lookup(ctx context.Context, canonical []byte, effectKey
 	return &SidecarOutcome{State: ApprovalOutcomeDone, EffectRef: ruleId[:]}, nil
 }
 
-// Registers Lookup for bridge_expose on the sidecar's gate, so the gate reserves an exposure's use; the answer removes
-// it. MCP-M4-01's bridge component may register its own in its place.
+// Registers the bridge component's Lookups on the sidecar's gate, Lookup for bridge_expose and LookupEgress for
+// egress_change, so the gate reserves their uses; the answer removes both. MCP-M4-01's bridge component may register
+// its own in their place.
 func (self *BridgeFiler) Register() func() {
-	return self.args.Sidecar.RegisterEffectLookup(SidecarActionExpose, self.Lookup)
+	expose := self.args.Sidecar.RegisterEffectLookup(SidecarActionExpose, self.Lookup)
+	egress := self.args.Sidecar.RegisterEffectLookup(SidecarActionEgressChange, self.LookupEgress)
+	return func() {
+		egress()
+		expose()
+	}
 }

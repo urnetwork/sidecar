@@ -193,9 +193,11 @@ type SidecarAuthClientResult struct {
 	// The client's id, or zero when api's answer did not name it.
 	ClientId Id
 	// The marks api confirmed. A sidecar keeps nothing of a client whose answer does not confirm
-	// admin_refused (§5.6).
+	// admin_refused (§5.6), nor hands on a forwarding client whose answer does not confirm forward_only
+	// (§7.4).
 	AdminRefused bool
 	StrictExp    bool
+	ForwardOnly  bool
 	// An ephemeral mint's close capability (§7.7), else empty.
 	Close string
 }
@@ -216,6 +218,7 @@ type sidecarAuthClientReply struct {
 	ClientId     *Id                    `json:"client_id"`
 	AdminRefused bool                   `json:"admin_refused"`
 	StrictExp    bool                   `json:"strict_exp"`
+	ForwardOnly  bool                   `json:"forward_only"`
 	Close        string                 `json:"close"`
 	Error        *sidecarApiResultError `json:"error"`
 }
@@ -265,6 +268,7 @@ func (self *SidecarApi) AuthClient(ctx context.Context, args *SidecarAuthClientA
 		ByClientJwt:  reply.ByClientJwt,
 		AdminRefused: reply.AdminRefused,
 		StrictExp:    reply.StrictExp,
+		ForwardOnly:  reply.ForwardOnly,
 		Close:        reply.Close,
 	}
 	if reply.ClientId != nil {
