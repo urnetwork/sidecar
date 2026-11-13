@@ -92,9 +92,10 @@ const (
 	SignedType_SIGNED_EVS_RESEED   SignedType = 5122
 	SignedType_SIGNED_EVS_PATH_MAP SignedType = 5123
 	SignedType_SIGNED_EVS_IMPORT   SignedType = 5124
-	// 0x15xx §13: a device key's attestation, purpose tls-key (§13.8), and a link audience's token, purpose tls-link
-	// (QD-134). 0x1502 waits for M6's edge-login statement (plan-TLS-small-readings#2).
+	// 0x15xx §13: a device key's attestation, purpose tls-key (§13.8), M6's members-device statement, purpose
+	// edge-login (§13.7, plan-TLS-small-readings#2), and a link audience's token, purpose tls-link (QD-134).
 	SignedType_SIGNED_TLS_KEY_ATTESTATION SignedType = 5377
+	SignedType_SIGNED_TLS_EDGE_LOGIN      SignedType = 5378
 	SignedType_SIGNED_TLS_LINK            SignedType = 5379
 	// 0x1Axx §5: the identity binding (plan-CORE-binding-wire #1), purposes binding-client by the ClientKey and
 	// binding-identity by the identity key over one SignedSidecarIdentityBinding's body; then an agent subkey's
@@ -176,6 +177,7 @@ var (
 		5123: "SIGNED_EVS_PATH_MAP",
 		5124: "SIGNED_EVS_IMPORT",
 		5377: "SIGNED_TLS_KEY_ATTESTATION",
+		5378: "SIGNED_TLS_EDGE_LOGIN",
 		5379: "SIGNED_TLS_LINK",
 		6657: "SIGNED_SIDECAR_BINDING",
 		6658: "SIGNED_AGENT_CERT",
@@ -246,6 +248,7 @@ var (
 		"SIGNED_EVS_PATH_MAP":        5123,
 		"SIGNED_EVS_IMPORT":          5124,
 		"SIGNED_TLS_KEY_ATTESTATION": 5377,
+		"SIGNED_TLS_EDGE_LOGIN":      5378,
 		"SIGNED_TLS_LINK":            5379,
 		"SIGNED_SIDECAR_BINDING":     6657,
 		"SIGNED_AGENT_CERT":          6658,
@@ -496,7 +499,7 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x19\n" +
 	"\bact_size\x18\x05 \x01(\rR\aactSize\x12\x1b\n" +
 	"\tact_index\x18\x06 \x01(\rR\bactIndex\x12\x19\n" +
-	"\bact_path\x18\a \x03(\fR\aactPath*\x9e\x0e\n" +
+	"\bact_path\x18\a \x03(\fR\aactPath*\xba\x0e\n" +
 	"\n" +
 	"SignedType\x12\x14\n" +
 	"\x10SIGNED_TYPE_NONE\x10\x00\x12\x1f\n" +
@@ -548,7 +551,8 @@ const file_protocol_bridge_signed_proto_rawDesc = "" +
 	"\x11SIGNED_EVS_RESEED\x10\x82(\x12\x18\n" +
 	"\x13SIGNED_EVS_PATH_MAP\x10\x83(\x12\x16\n" +
 	"\x11SIGNED_EVS_IMPORT\x10\x84(\x12\x1f\n" +
-	"\x1aSIGNED_TLS_KEY_ATTESTATION\x10\x81*\x12\x14\n" +
+	"\x1aSIGNED_TLS_KEY_ATTESTATION\x10\x81*\x12\x1a\n" +
+	"\x15SIGNED_TLS_EDGE_LOGIN\x10\x82*\x12\x14\n" +
 	"\x0fSIGNED_TLS_LINK\x10\x83*\x12\x1b\n" +
 	"\x16SIGNED_SIDECAR_BINDING\x10\x814\x12\x16\n" +
 	"\x11SIGNED_AGENT_CERT\x10\x824\x12\x19\n" +
