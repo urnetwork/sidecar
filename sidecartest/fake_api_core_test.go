@@ -8,6 +8,7 @@
 package sidecartest
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -707,5 +708,106 @@ func TestFakeApiEnrollRefusals(t *testing.T) {
 	world.clock.Advance(2 * time.Minute)
 	if status, code := enroll(expired); status != http.StatusUnauthorized || code != fakeApiCodeAuthKey {
 		t.Errorf("an expired key: %d %s", status, code)
+	}
+}
+
+// POST /network/auth-client with a fresh proof by key over the client's token: the answer, or its refusal's message.
+func (self *coreRouteClient) authClient(key ed25519.PrivateKey, args *fakeApiAuthClientArgs) (*fakeApiAuthClientResult, string) {
+	self.t.Helper()
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	request, err := http.NewRequestWithContext(self.world.ctx, http.MethodPost, self.world.api.Origin()+"/network/auth-client", bytes.NewReader(encoded))
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+self.token)
+	request.Header.Set("DPoP", self.proof(key, http.MethodPost, "/network/auth-client"))
+	response, err := self.world.api.Transport().RoundTrip(request)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != http.StatusOK {
+		self.t.Fatalf("auth-client: %d %s %v", response.StatusCode, body, err)
+	}
+	result := &fakeApiAuthClientResult{}
+	if err := json.Unmarshal(body, result); err != nil {
+		self.t.Fatal(err)
+	}
+	if result.Error != nil {
+		return nil, result.Error.Message
+	}
+	return result, ""
+}
+
+// §7.4's forwarding client on the fake's mint, as server's checkForwardOnlyMint answers it: a bound sidecar client
+// mints F under its key, the answer confirming forward_only with both other marks; a repeat for that key reissues the
+// same F and another key mints another; F's own proofs pass under its key, and its children inherit the mark and take
+// no key; an unbound source, a missing or short key, and a key with no forward_only are refused.
+func TestFakeApiMintsForwardingClients(t *testing.T) {
+	world := newFakeApiTestWorld(t)
+	networkId := sidecar.NewId()
+	source := newCoreRouteClient(t, world, networkId)
+	forwardPublic, forwardKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mint := func(client *coreRouteClient, key ed25519.PrivateKey, forwardOnly bool, clientPublicKey []byte) (*fakeApiAuthClientResult, string) {
+		t.Helper()
+		sourceClientId := client.clientId
+		return client.authClient(key, &fakeApiAuthClientArgs{
+			SourceClientId: &sourceClientId, Description: "forwarding", DeviceSpec: "sidecar forwarding", DeclaresNoEgress: true,
+			AdminRefused: true, StrictExp: true, ForwardOnly: forwardOnly, ClientPublicKey: clientPublicKey,
+		})
+	}
+	if _, refusal := mint(source, source.clientKey, true, forwardPublic); refusal != fakeApiForwardOnlyUnboundMessage {
+		t.Errorf("an unbound source: %q", refusal)
+	}
+	if status, code, _ := source.bind(source.binding(1)); status != http.StatusOK {
+		t.Fatalf("the bind: %d %s", status, code)
+	}
+	first, refusal := mint(source, source.clientKey, true, forwardPublic)
+	if refusal != "" || first.ClientId == nil || !first.ForwardOnly || !first.AdminRefused || !first.StrictExp || *first.ClientId == source.clientId {
+		t.Fatalf("F's mint: %+v %q", first, refusal)
+	}
+	again, refusal := mint(source, source.clientKey, true, forwardPublic)
+	if refusal != "" || *again.ClientId != *first.ClientId || again.ByClientJwt == first.ByClientJwt || !again.ForwardOnly {
+		t.Errorf("a repeat for the same key: %+v %q", again, refusal)
+	}
+	if other, refusal := mint(source, source.clientKey, true, otherPublic); refusal != "" || *other.ClientId == *first.ClientId {
+		t.Errorf("another key: %+v %q", other, refusal)
+	}
+	for name, refused := range map[string]struct {
+		forwardOnly     bool
+		clientPublicKey []byte
+		want            string
+	}{
+		"no key":                  {forwardOnly: true, want: fakeApiForwardOnlyKeyMessage},
+		"a short key":             {forwardOnly: true, clientPublicKey: forwardPublic[:31], want: fakeApiForwardOnlyKeyMessage},
+		"a key with no mark":      {clientPublicKey: forwardPublic, want: fakeApiClientPublicKeyMarkMessage},
+		"a key for a plain child": {clientPublicKey: otherPublic, want: fakeApiClientPublicKeyMarkMessage},
+	} {
+		if _, refusal := mint(source, source.clientKey, refused.forwardOnly, refused.clientPublicKey); refusal != refused.want {
+			t.Errorf("%s: %q", name, refusal)
+		}
+	}
+
+	forwarding := &coreRouteClient{t: t, world: world, networkId: networkId, clientId: *first.ClientId, token: again.ByClientJwt, clientKey: forwardKey}
+	window, refusal := mint(forwarding, forwardKey, true, nil)
+	if refusal != "" || !window.ForwardOnly || *window.ClientId == *first.ClientId {
+		t.Fatalf("F's window client: %+v %q", window, refusal)
+	}
+	if plain, refusal := mint(forwarding, forwardKey, false, nil); refusal != "" || !plain.ForwardOnly {
+		t.Errorf("F's plain child: %+v %q", plain, refusal)
+	}
+	if _, refusal := mint(forwarding, forwardKey, true, otherPublic); refusal != fakeApiClientPublicKeyMarkMessage {
+		t.Errorf("F's child with a key: %q", refusal)
 	}
 }

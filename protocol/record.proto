@@ -101,6 +101,10 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                             // tag and value in its stored order and encoding: for a builder's bytes,
                                             // written once in field order, the clear fields' deterministic encoding.
                                             // Sealed once those fields are final, it opens beside them alone
+  uint32 egress_mode = 39;                  // egress_change: the subject's BridgeEgressMode, auto, exits or none,
+                                            // beside its subject (29) and, under exits, its exits in grant_dst (10),
+                                            // sidecar:<id> entries or one tag:<id>; version 1 alone, so no action
+                                            // that seals a detail sets it, and no server path takes it (QD-799)
 }
 // What sealed_detail opens to: what a dial or route grant's clear fields may not hold (QD-740).
 message CanonicalActionDetail {

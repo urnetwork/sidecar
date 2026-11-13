@@ -105,9 +105,10 @@ type fakeApiClient struct {
 	// the token's device and session claims, which a refresh keeps
 	deviceId  sidecar.Id
 	sessionId sidecar.Id
-	// §7.4's marks, which a client's children inherit
+	// §7.4's marks, which a client's children inherit; forwardOnly a sidecar's forwarding client's, and its children's
 	strictExp    bool
 	adminRefused bool
+	forwardOnly  bool
 	// the parent of a child client, zero for a top-level one
 	sourceClientId sidecar.Id
 	// the token's create_time, which a refresh keeps (server's RenewSessionCredential)

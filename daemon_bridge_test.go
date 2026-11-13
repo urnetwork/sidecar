@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -75,6 +76,9 @@ func TestForwardingMethodsAnswerThePairedAppAlone(t *testing.T) {
 	if err := proto.Unmarshal(reply.(*DaemonForwardingSetupReply).HandOff, handOff); err != nil || handOff.GetForwardClientJwt() == "" ||
 		len(handOff.GetPending().GetForwardDelegationId()) == 0 {
 		t.Fatalf("the hand-off: %v %v", handOff, err)
+	}
+	if strings.Contains(world.logger.all(), handOff.GetForwardClientJwt()) {
+		t.Error("F's token reached a log line through the setup's method")
 	}
 	witnessReply, err := witness.Handler(ctx, call(DaemonModeControl, false, nil))
 	if err != nil {
