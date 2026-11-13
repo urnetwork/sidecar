@@ -13,7 +13,9 @@
 //	A      an honest push passes step 6 and is refused 412 PATH_EPOCH once a PATH_EPOCH commits; its retoken, a new
 //	       push id carrying the same slot id and bytes, waits out the settle age, takes the slot over and commits;
 //	       26 h on, evacuation drops the refused statement's record, finds the retoken's origin and keeps the slot;
-//	       again with a CLOSURE, whose retoken commits on its one closure upload's receipt
+//	       again with a CLOSURE at the storage limit, its chain uploaded through the closure route and counted on its
+//	       eraser's allowance once: its retoken commits on that upload's receipt, sent again the upload counts nothing,
+//	       and any other closure upload is past the allowance
 //	B      another writer lists a committed version's slot as new, with its bytes and with others, young and past
 //	       23 h: each is 409 SLOT_STALE at step 6; 26 h on, evacuation drops each record and keeps the slot, another
 //	       statement's
@@ -27,12 +29,16 @@ package evsservice
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -411,11 +417,14 @@ func TestEvacuationKeepsTheSlotARetokenTookOverFromItsRefusedStatement(t *testin
 	fixture.requireSlotReadBack(named, epochPath(2, "s"), slotId, slotBody)
 }
 
-// A again with a CLOSURE (14.6): an admin's CLOSURE re-checkpoints c, its new chain in one closure upload and its fresh
-// key in a new slot; it passes step 6, its attempt is cut short, a PATH_EPOCH commits, and its retry is refused 412
-// PATH_EPOCH. Its retoken keeps the upload's receipt, the slot id and the slot's bytes, so nothing is uploaded or
-// charged again: it waits out the settle age, takes the slot over and commits on that one receipt. 26 h on,
-// evacuation drops the refused CLOSURE's record and keeps the slot, the retoken's.
+// A again with a CLOSURE (14.6), at the storage limit: an admin's CLOSURE re-checkpoints c, its new chain in one
+// upload through the closure route, which counts on the eraser's own day's allowance, here exactly that upload's
+// bytes, and its fresh key in a new slot; it passes step 6, its attempt is cut short, a PATH_EPOCH commits, and its
+// retry is refused 412 PATH_EPOCH. Its retoken keeps the upload's receipt, the slot id and the slot's bytes, so
+// nothing is uploaded or charged again: it waits out the settle age, takes the slot over and commits on that one
+// receipt. The upload was counted once: sent again it counts nothing under its own debit and answers its first
+// time, and any other closure upload of the eraser's is past the allowance. 26 h on, evacuation drops the refused
+// CLOSURE's record and keeps the slot, the retoken's.
 func TestEvacuationKeepsTheSlotAClosureRetokenTookOver(t *testing.T) {
 	fixture := newSlotEvacuateFixture(t)
 	fixture.auth.grant(fixture.check.signerId, fixture.check.repoId, sidecar.AclEvsAdmin)
@@ -434,8 +443,50 @@ func TestEvacuationKeepsTheSlotAClosureRetokenTookOver(t *testing.T) {
 	fixture.requireCommitted(fixture.post(fixture.token(fixture.check.signerId), committedBody), 3)
 	fixture.awaitStepEights()
 
-	// the CLOSURE's one upload, and its new key's slot
-	uploadId, uploadObject, uploadReceipt := fixture.check.upload("closure upload", fixture.clock.Now(), fixture.check.signerId)
+	// the network at its storage limit, where a closure upload counts on its eraser's own day's allowance: here at
+	// its least, one largest closure upload's bytes, which the CLOSURE's one upload of that size spends
+	networkId := connect.Id(fixture.check.networkId)
+	segment := testSegment(fixture.check.repoId, sidecar.QuotaClosureUploadMaxByteCount, 0x5c)
+	fixture.check.quota.host.Quota.SetLimits(networkId, &sidecar.QuotaLimits{Tier: "pro", Limits: map[string]int64{
+		"evs_closure_uploads_per_s":   4,
+		"evs_closure_uploads_per_min": 60,
+		"evs_closure_bytes_per_day":   1,
+		"evs_closure_bytes_floor":     1,
+	}})
+	fixture.check.quota.atLimit(networkId)
+
+	// the CLOSURE's one upload, through the closure route as its eraser, which reads the repo's facts from the
+	// projection, and its new key's slot
+	fixture.auth.setRepo(fixture.check.repoId, &EvsRepoFacts{Kind: protocol.RepoKind_REPO_KIND_GENERAL, NetworkId: fixture.check.networkId})
+	admin := fixture.token(fixture.check.signerId, "admin")
+	closureUpload := func(pushId sidecar.Id, body []byte) *httptest.ResponseRecorder {
+		segmentId := sha256.Sum256(body)
+		path := "/evs/v1/repos/" + sidecar.EvsKeyId(fixture.check.repoId) + "/segments/" + hex.EncodeToString(segmentId[:]) +
+			"?push=" + sidecar.EvsKeyId(pushId) + "&closure=1"
+		request := httptest.NewRequestWithContext(fixture.ctx, http.MethodPut, path, bytes.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+admin)
+		recorder := httptest.NewRecorder()
+		fixture.engine.Handler().ServeHTTP(recorder, request)
+		return recorder
+	}
+	receiptOf := func(recorder *httptest.ResponseRecorder) *protocol.EvsUploadReceipt {
+		t.Helper()
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("the closure upload answered %d (%s)", recorder.Code, refusalOf(t, recorder).GetCode())
+		}
+		receipt := &protocol.EvsUploadReceipt{}
+		if err := proto.Unmarshal(recorder.Body.Bytes(), receipt); err != nil {
+			t.Fatal(err)
+		}
+		return receipt
+	}
+	refusedPlan := fixture.planAtTwo(commitment)
+	uploadReceipt := receiptOf(closureUpload(refusedPlan.PushId, segment))
+	uploadId := sha256.Sum256(segment)
+	uploadObject := &sidecar.EvsNewObject{
+		Kind: protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SEGMENT, Id: uploadId[:], PaddedSize: uploadReceipt.GetPaddedSize(),
+		UploadDay: uint32(uploadReceipt.GetUploadMs() / evsUploadDayMs),
+	}
 	slotId, slotObject, slotBody := checkTestSlot(t, "new key")
 	closure := func(plan *sidecar.EvsPushPlan, path sidecar.EvsTokenPath) *sidecar.EvsPushPlan {
 		plan.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_CLOSURE)
@@ -448,8 +499,7 @@ func TestEvacuationKeepsTheSlotAClosureRetokenTookOver(t *testing.T) {
 		plan.SlotBodies = append(plan.SlotBodies, slotBody)
 		return plan
 	}
-	admin := fixture.token(fixture.check.signerId, "admin")
-	refusedBody, refusedOrigin := fixture.bodyAndOrigin(closure(fixture.planAtTwo(commitment), checkTestPath("c")))
+	refusedBody, refusedOrigin := fixture.bodyAndOrigin(closure(refusedPlan, checkTestPath("c")))
 	refusedBody.Receipts = []*protocol.EvsUploadReceipt{uploadReceipt}
 	fixture.failHeadWrites()
 	requireRefusal(t, fixture.post(admin, refusedBody), http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
@@ -474,6 +524,17 @@ func TestEvacuationKeepsTheSlotAClosureRetokenTookOver(t *testing.T) {
 	fixture.requireCommitted(<-answered, 5)
 	fixture.awaitStepEights()
 	fixture.requireSlotOrigin(slotId, slotBody, retokenOrigin)
+
+	// the closure upload counted once: sent again it counts nothing under its own debit and answers its first time,
+	// and any other closure upload of the eraser's is past the day's allowance that one upload spent
+	if again := receiptOf(closureUpload(retoken.PushId, segment)); again.GetUploadMs() != uploadReceipt.GetUploadMs() {
+		t.Fatalf("the upload sent again answers %d, not its first time %d", again.GetUploadMs(), uploadReceipt.GetUploadMs())
+	}
+	past := closureUpload(retoken.PushId, testSegment(fixture.check.repoId, 64, 0x5d))
+	requireRefusal(t, past, http.StatusTooManyRequests, protocol.EvsRefusalCode_EVS_REFUSAL_RESOURCE_EXHAUSTED)
+	if limitKey := refusalOf(t, past).GetQuota().GetLimitKey(); limitKey != "evs_closure_bytes_per_day" {
+		t.Fatalf("another closure upload refused on %q, not the day's allowance", limitKey)
+	}
 
 	fixture.requireEvacuated(func(result *EvacuationResult) bool {
 		return result.DeadCount == 1 && result.SlotForeignCount == 1 && result.SlotDeletedCount == 0
