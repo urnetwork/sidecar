@@ -102,6 +102,13 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				RestorePointByteCount: 256 * 1024 * 1024,
 				RestoreHoldTimeout:    10 * time.Minute,
 				RestoreHoldByteCount:  8 * 1024 * 1024,
+				IngestStateByteCount:  1024 * 1024,
+				IngestBlobHashCount:   4096,
+				// MCP-M3-21's readings for the restore point's files, the apply's hidden names and its copies
+				RestoreManifestByteCount:   64 * 1024 * 1024,
+				RestorePreviewCount:        16,
+				RestoreHiddenNameByteCount: 16,
+				RestoreCopyNameCount:       1024,
 				// §16.6's modes whose evidence never counts, and MCP-M3-19's readings of §16.7's context and run card
 				BypassPermissionModes: []string{"bypassPermissions", "dontAsk", "auto"},
 				InstructionProjectFileNames: []string{
