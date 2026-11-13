@@ -316,10 +316,33 @@ func aclTestOwnedRepo(net *testConfigNet, repoId Id) {
 	})
 }
 
+// A network whose general repo's RepoDelete two bases have moved out of the log's retention, so no log dates its entry
+// (§7.9's retention point, min(the previous base, folded_through + 1), past it): the repo, the deletion, the entry's
+// time.
+func aclTestDeletedPastRetention(t *testing.T, net *testConfigNet, repoId Id, deletionId Id) int64 {
+	t.Helper()
+	aclTestOwnedRepo(net, repoId)
+	deletedAt := net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_DELETE, &protocol.RepoDelete{
+		Header: net.header(), RepoId: repoId.Bytes(), DeletionId: deletionId.Bytes(),
+	}).Pin.GetVersion()
+	deletedTimeMs := net.timeMs
+	net.fold(net.owner, deletedAt, 3)
+	firstBase := net.n
+	net.admitMember(net.owner, testConfigId("between member"), bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	net.fold(net.owner, firstBase+1, 4)
+	state := net.log.State()
+	if point := state.RetentionPoint(); point <= deletedAt {
+		t.Fatalf("the retention point %d has not passed the RepoDelete at %d", point, deletedAt)
+	}
+	if _, dated := state.aclTimeAt(deletedAt); dated {
+		t.Fatal("the log still dates the RepoDelete's entry")
+	}
+	return deletedTimeMs
+}
+
 // QD-743 on TEAM's log: a RepoRestore five days after its RepoDelete, whose entry two bases have since moved out of
 // the log's retention so no log dates it, is taken from the deletion row's own time at the long-running reader and at a
-// new device that starts from what that reader keeps; one eight days after is refused at both. The gate's snapshot
-// dates the deletion from the row as well, and knows no signer once the entry is gone.
+// new device that starts from what that reader keeps; one eight days after is refused at both.
 func TestAclRepoRestoreJudgedFromTheRowAfterItsEntryLeftRetention(t *testing.T) {
 	for _, c := range []struct {
 		days  int64
@@ -327,32 +350,7 @@ func TestAclRepoRestoreJudgedFromTheRowAfterItsEntryLeftRetention(t *testing.T) 
 	}{{days: 5, taken: true}, {days: 8}} {
 		net := newTestConfigNet(t)
 		repoId, deletionId := testConfigId("restored repo"), testConfigId("deletion")
-		aclTestOwnedRepo(net, repoId)
-		deletedAt := net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_DELETE, &protocol.RepoDelete{
-			Header: net.header(), RepoId: repoId.Bytes(), DeletionId: deletionId.Bytes(),
-		}).Pin.GetVersion()
-		deletedTimeMs := net.timeMs
-
-		// two bases move the retention point past the RepoDelete's entry: min(the previous base, folded_through + 1)
-		net.fold(net.owner, deletedAt, 3)
-		firstBase := net.n
-		net.admitMember(net.owner, testConfigId("between member"), bridge.MemberRole_MEMBER_ROLE_MEMBER)
-		net.fold(net.owner, firstBase+1, 4)
-		state := net.log.State()
-		if point := state.RetentionPoint(); point <= deletedAt {
-			t.Fatalf("%d days: the retention point %d has not passed the RepoDelete at %d", c.days, point, deletedAt)
-		}
-		if _, dated := state.aclTimeAt(deletedAt); dated {
-			t.Fatalf("%d days: the log still dates the RepoDelete's entry", c.days)
-		}
-		acl, err := state.Acl()
-		if err != nil {
-			t.Fatal(err)
-		}
-		snapshot := &AclGateSnapshot{Pin: state.Pin(), Config: state, Acl: acl}
-		if deletion := snapshot.RepoDeletion(repoId); deletion == nil || !deletion.Dated || deletion.TimeMs != deletedTimeMs || deletion.Signed {
-			t.Errorf("%d days: the gate's deletion %+v", c.days, deletion)
-		}
+		deletedTimeMs := aclTestDeletedPastRetention(t, net, repoId, deletionId)
 
 		newDevice, err := RestoreConfigLog(testConfigLogSettings(), net.log.Retained(), net.source)
 		if err != nil {

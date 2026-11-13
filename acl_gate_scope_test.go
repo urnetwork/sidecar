@@ -456,3 +456,22 @@ func TestAclGateSnapshotDatesARepoDeleteItKeeps(t *testing.T) {
 		t.Errorf("an unknown repo: %+v", deletion)
 	}
 }
+
+// QD-743 at the gate over TEAM's log: a RepoDelete whose entry two bases have moved out of the log's retention is
+// still dated by its row's time, and the gate no longer knows its signer, which only the entry names.
+func TestAclGateSnapshotDatesARepoDeletePastItsEntrysRetention(t *testing.T) {
+	net := newTestConfigNet(t)
+	repoId, deletionId := testConfigId("gate deleted repo"), testConfigId("gate deletion")
+	deletedTimeMs := aclTestDeletedPastRetention(t, net, repoId, deletionId)
+	state := net.log.State()
+	acl, err := state.Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &AclGateSnapshot{Pin: state.Pin(), Config: state, Acl: acl}
+	deletion := snapshot.RepoDeletion(repoId)
+	if deletion == nil || deletion.DeletionId != deletionId || !deletion.Dated || deletion.TimeMs != deletedTimeMs || deletion.Signed ||
+		deletion.SignerSidecarId != (Id{}) {
+		t.Errorf("the gate's deletion %+v", deletion)
+	}
+}
