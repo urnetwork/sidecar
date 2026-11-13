@@ -1,7 +1,9 @@
 // §16.6's registration rows and labels (MCP-M3-08; FS-124): each attestation format on fixture roots, labelled attested,
 // and the refusals §22.7's presence row names, another key's attestation and a software key as apple among them, none of
-// them ever downgraded to asserted; fmt none and a Secure Enclave key asserted; and the canonical CBOR reader refusing
-// every non-canonical form. Fixture roots and certificates are made here from fixed seeds, deterministically, and
+// them ever downgraded to asserted; fmt none and a Secure Enclave key asserted; KeyRegister.attestation's map of the
+// object and its create ceremony's client data (QD-730), with a wrong origin, type or credential key refused, the object
+// alone refused for every format but none, and a map that is not canonical refused; and the canonical CBOR reader
+// refusing every non-canonical form. Fixture roots and certificates are made here from fixed seeds, deterministically, and
 // testdata/presence/attestation/vectors.json holds the bytes they give, embedded for the Worker leg. A format change
 // regenerates it:
 //
@@ -18,11 +20,13 @@ import (
 	"crypto/x509/pkix"
 	_ "embed"
 	"encoding/asn1"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"math/big"
 	"os"
 	"slices"
@@ -63,6 +67,16 @@ var (
 func testAttestClientDataHash() []byte {
 	digest := sha256.Sum256(testAttestClientDataJson)
 	return digest[:]
+}
+
+// A create ceremony's client data of clientType from origin, as a platform writes one.
+func testAttestClientData(clientType string, origin string) []byte {
+	return fmt.Appendf(nil, `{"type":%q,"challenge":"c3ludGhldGlj","origin":%q,"crossOrigin":false}`, clientType, origin)
+}
+
+// The formats' bounds every check here runs under.
+func testAttestSettings() *PresenceAttestationSettings {
+	return DefaultPresenceAttestationSettings()
 }
 
 // A map for the test encoder, in any order: it sorts keys as canonical form does.
@@ -147,7 +161,7 @@ func TestPresenceCborReadsCanonicalForms(t *testing.T) {
 	}
 	for _, value := range values {
 		encoded := testCborEncode(value)
-		item, err := presenceCborDecodeAll(encoded)
+		item, err := presenceCborDecodeAll(encoded, testAttestSettings().CborMaxDepth)
 		if err != nil {
 			t.Errorf("%x: %v", encoded, err)
 			continue
@@ -162,7 +176,7 @@ func TestPresenceCborReadsCanonicalForms(t *testing.T) {
 		}
 	}
 	// the attestation object's keys come out in canonical order whatever order they went in
-	object, err := presenceCborDecodeAll(testCborEncode(values[19]))
+	object, err := presenceCborDecodeAll(testCborEncode(values[19]), testAttestSettings().CborMaxDepth)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +192,7 @@ func TestPresenceCborReadsCanonicalForms(t *testing.T) {
 // Decoders refuse non-canonical CBOR (MCP-M3-08's tests): every form that is not the one encoding of its value, and
 // what bounds work.
 func TestPresenceCborRefusesNonCanonicalForms(t *testing.T) {
-	nested := bytes.Repeat([]byte{0x81}, presenceCborMaxDepth)
+	nested := bytes.Repeat([]byte{0x81}, testAttestSettings().CborMaxDepth)
 	nested = append(nested, 0x00)
 	cases := []struct {
 		name    string
@@ -215,7 +229,7 @@ func TestPresenceCborRefusesNonCanonicalForms(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		if _, err := presenceCborDecodeAll(encoded); !errors.Is(err, ErrPresenceCbor) {
+		if _, err := presenceCborDecodeAll(encoded, testAttestSettings().CborMaxDepth); !errors.Is(err, ErrPresenceCbor) {
 			t.Errorf("%s: %v", c.name, err)
 		}
 	}
@@ -336,7 +350,9 @@ type testAttestation struct {
 	cas        *testAttestCas
 	credential *testPresenceKey
 	authData   []byte
-	// The client data hash the statement signs or embeds.
+	// The create ceremony's client data KeyRegister.attestation carries beside the object.
+	clientDataJson []byte
+	// The client data hash the statement signs or embeds: clientDataJson's, unless a test spoils it.
 	signedClientDataHash []byte
 	// Which CA issues the chain; nil is the format's own.
 	issuer *testAttestCa
@@ -365,6 +381,7 @@ func newTestAttestation(cas *testAttestCas, credential *testPresenceKey) *testAt
 		cas:                  cas,
 		credential:           credential,
 		authData:             testAttestAuthData(credential, testAttestFlags),
+		clientDataJson:       testAttestClientDataJson,
 		signedClientDataHash: testAttestClientDataHash(),
 		packedOu:             "Authenticator Attestation",
 		packedAaguid:         testAttestAaguid,
@@ -647,6 +664,24 @@ func (self *testAttestation) object(t testing.TB, format string) []byte {
 	return self.none()
 }
 
+// The ceremony's client data replaced, and what the statement signs with it.
+func (self *testAttestation) withClientData(clientDataJson []byte) *testAttestation {
+	digest := sha256.Sum256(clientDataJson)
+	self.clientDataJson = clientDataJson
+	self.signedClientDataHash = digest[:]
+	return self
+}
+
+// KeyRegister.attestation for the format: the map of its object and the ceremony's client data (QD-730).
+func (self *testAttestation) attestation(t testing.TB, format string) []byte {
+	return EncodePresenceAttestation(self.object(t, format), self.clientDataJson)
+}
+
+// KeyRegister.attestation with the object alone, no client data beside it.
+func testAttestObjectAlone(object []byte) []byte {
+	return testCborEncode(testCborMap{{key: presenceAttestationObjectKey, value: object}})
+}
+
 // The four formats that chain to a root.
 var testAttestChainedFormats = []string{"packed", "tpm", "android-key", "apple"}
 
@@ -662,7 +697,7 @@ func TestPresenceAttestationFormatsLabel(t *testing.T) {
 	credential, _ := testAttestCredentials(t)
 	for _, format := range append(slices.Clone(testAttestChainedFormats), "packed self", "none") {
 		object := newTestAttestation(cas, credential).object(t, format)
-		label, err := verifyPresenceAttestationObject(object, testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestAt)
+		label, err := verifyPresenceAttestationObject(object, testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
 		want := PresenceLabelAttested
 		if format == "packed self" || format == "none" {
 			want = PresenceLabelAsserted
@@ -679,7 +714,7 @@ func TestPresenceAttestationRefusesAnotherKeysAttestation(t *testing.T) {
 	credential, other := testAttestCredentials(t)
 	for _, format := range append(slices.Clone(testAttestChainedFormats), "packed self", "none") {
 		object := newTestAttestation(cas, other).object(t, format)
-		_, err := verifyPresenceAttestationObject(object, testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestAt)
+		_, err := verifyPresenceAttestationObject(object, testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
 		if !errors.Is(err, ErrPresenceAttestation) {
 			t.Errorf("%s: %v", format, err)
 		}
@@ -689,7 +724,7 @@ func TestPresenceAttestationRefusesAnotherKeysAttestation(t *testing.T) {
 		attestation := newTestAttestation(cas, credential)
 		attestation.certificateKey = other
 		_, err := verifyPresenceAttestationObject(
-			attestation.object(t, format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestAt)
+			attestation.object(t, format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
 		if !errors.Is(err, ErrPresenceAttestation) {
 			t.Errorf("%s with another key's certificate: %v", format, err)
 		}
@@ -698,7 +733,7 @@ func TestPresenceAttestationRefusesAnotherKeysAttestation(t *testing.T) {
 	attestation := newTestAttestation(cas, credential)
 	attestation.certificateKey = other
 	_, err := verifyPresenceAttestationObject(
-		attestation.object(t, "packed self"), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestAt)
+		attestation.object(t, "packed self"), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
 	if !errors.Is(err, ErrPresenceAttestation) {
 		t.Errorf("packed self by another key: %v", err)
 	}
@@ -713,13 +748,13 @@ func TestPresenceAttestationRefusesASoftwareKeyAsApple(t *testing.T) {
 		attestation := newTestAttestation(cas, credential)
 		attestation.issuer = cas.software
 		label, err := verifyPresenceAttestationObject(
-			attestation.object(t, format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestAt)
+			attestation.object(t, format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
 		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
 			t.Errorf("%s by a software CA: %s, %v", format, label, err)
 		}
 		object := newTestAttestation(cas, credential).object(t, format)
 		label, err = verifyPresenceAttestationObject(
-			object, testAttestClientDataHash(), credential.publicKey, presenceReleaseAttestationRoots(), testAttestAt)
+			object, testAttestClientDataHash(), credential.publicKey, presenceReleaseAttestationRoots(), testAttestSettings(), testAttestAt)
 		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
 			t.Errorf("%s against the release's roots: %s, %v", format, label, err)
 		}
@@ -735,7 +770,7 @@ func TestPresenceAttestationRefusesAnotherClientData(t *testing.T) {
 		attestation := newTestAttestation(cas, credential)
 		attestation.signedClientDataHash = otherHash[:]
 		_, err := verifyPresenceAttestationObject(
-			attestation.object(t, format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestAt)
+			attestation.object(t, format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
 		if !errors.Is(err, ErrPresenceAttestation) {
 			t.Errorf("%s: %v", format, err)
 		}
@@ -749,7 +784,7 @@ func TestPresenceAttestationRefusesAnExpiredChain(t *testing.T) {
 	for _, format := range testAttestChainedFormats {
 		object := newTestAttestation(cas, credential).object(t, format)
 		_, err := verifyPresenceAttestationObject(
-			object, testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestNotAfter.Add(time.Hour))
+			object, testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestNotAfter.Add(time.Hour))
 		if !errors.Is(err, ErrPresenceAttestation) {
 			t.Errorf("%s: %v", format, err)
 		}
@@ -786,7 +821,7 @@ func TestPresenceAttestationRefusesAuthData(t *testing.T) {
 	} {
 		attestation := newTestAttestation(cas, credential)
 		attestation.authData = c.authData
-		_, err := verifyPresenceAttestationObject(attestation.none(), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestAt)
+		_, err := verifyPresenceAttestationObject(attestation.none(), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
 		if !errors.Is(err, ErrPresenceAttestation) {
 			t.Errorf("%s: %v", c.name, err)
 		}
@@ -797,7 +832,7 @@ func TestPresenceAttestationRefusesAuthData(t *testing.T) {
 		testAttestAuthData(credential, testAttestFlags|presenceAuthFlagExtensionData),
 		testCborEncode(testCborMap{{key: "credProtect", value: 2}})...,
 	)
-	label, err := verifyPresenceAttestationObject(attestation.packed(t), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestAt)
+	label, err := verifyPresenceAttestationObject(attestation.packed(t), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
 	if err != nil || label != PresenceLabelAttested {
 		t.Errorf("with extensions: %s, %v", label, err)
 	}
@@ -837,7 +872,7 @@ func TestPresenceAttestationRefusesFormatRequirements(t *testing.T) {
 		attestation := newTestAttestation(cas, credential)
 		c.spoil(attestation)
 		label, err := verifyPresenceAttestationObject(
-			attestation.object(t, c.format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestAt)
+			attestation.object(t, c.format), testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
 		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
 			t.Errorf("%s: %s, %v", c.name, label, err)
 		}
@@ -869,21 +904,214 @@ func TestPresenceAttestationRefusesShapes(t *testing.T) {
 		{name: "packed with a certificate that is none", object: testAttestObject("packed", testCborMap{
 			{key: "alg", value: -7}, {key: "sig", value: []byte{1}}, {key: "x5c", value: []any{[]byte("not a certificate")}},
 		}, authData)},
-		{name: "too long", object: make([]byte, presenceAttestationMaxByteCount+1)},
+		{name: "too long", object: make([]byte, testAttestSettings().AttestationMaxByteCount+1)},
 	} {
-		_, err := verifyPresenceAttestationObject(c.object, testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestAt)
+		_, err := verifyPresenceAttestationObject(c.object, testAttestClientDataHash(), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
 		if !errors.Is(err, ErrPresenceAttestation) {
 			t.Errorf("%s: %v", c.name, err)
 		}
 	}
 }
 
-// Through a KeyRegister: fmt none and an empty attestation label a webauthn-es256 key asserted, an ecdsa-p256-sha256 key
-// is asserted and carries none, and every chained format is refused, since its client data is not carried (question
-// mcp-m2-01-attestation-client-data), and no production root ships besides.
-func TestVerifyPresenceAttestationFromAKeyRegister(t *testing.T) {
+// KeyRegister.attestation's map (QD-730): each format with its create ceremony's client data beside it labels as the
+// object does on its fixture root, and EncodePresenceAttestation writes the one canonical encoding of the map.
+func TestPresenceAttestationMapFormatsLabel(t *testing.T) {
 	cas := newTestAttestCas(t)
 	credential, _ := testAttestCredentials(t)
+	for _, format := range append(slices.Clone(testAttestChainedFormats), "packed self", "none") {
+		attestation := newTestAttestation(cas, credential)
+		encoded := attestation.attestation(t, format)
+		canonical := testCborEncode(testCborMap{
+			{key: presenceAttestationClientDataKey, value: attestation.clientDataJson},
+			{key: presenceAttestationObjectKey, value: attestation.object(t, format)},
+		})
+		if !bytes.Equal(encoded, canonical) {
+			t.Errorf("%s: the map is written as %x, canonical %x", format, encoded, canonical)
+		}
+		label, err := verifyPresenceAttestation(encoded, credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
+		want := PresenceLabelAttested
+		if format == "packed self" || format == "none" {
+			want = PresenceLabelAsserted
+		}
+		if err != nil || label != want {
+			t.Errorf("%s: %s, %v; want %s", format, label, err, want)
+		}
+	}
+}
+
+// The client data beside the object is the create ceremony's, from an origin on §16.6's table: an assertion's type and
+// an origin off the table are refused in every format, fmt none included, each statement validly made over the client
+// data it is refused for. The challenge is not read, so any passes.
+func TestPresenceAttestationMapRefusesAWrongTypeOrOrigin(t *testing.T) {
+	cas := newTestAttestCas(t)
+	credential, _ := testAttestCredentials(t)
+	androidHash := sha256.Sum256([]byte("a synthetic signing certificate"))
+	formats := append(slices.Clone(testAttestChainedFormats), "packed self", "none")
+	for _, c := range []struct {
+		name       string
+		clientData []byte
+	}{
+		{name: "an assertion's type", clientData: testAttestClientData("webauthn.get", testPresenceOrigin)},
+		{name: "no type", clientData: []byte(`{"challenge":"c3ludGhldGlj","origin":"https://ur.io"}`)},
+		{name: "a fixture origin", clientData: testAttestClientData("webauthn.create", "https://presence.example")},
+		{name: "a subdomain origin", clientData: testAttestClientData("webauthn.create", "https://app.ur.io")},
+		{name: "a port", clientData: testAttestClientData("webauthn.create", "https://ur.io:8443")},
+		{name: "plain http", clientData: testAttestClientData("webauthn.create", "http://ur.io")},
+		{name: "an android origin", clientData: testAttestClientData(
+			"webauthn.create", "android:apk-key-hash:"+base64.RawURLEncoding.EncodeToString(androidHash[:]))},
+		{name: "no origin", clientData: []byte(`{"type":"webauthn.create","challenge":"c3ludGhldGlj"}`)},
+		{name: "not json", clientData: []byte(`{"type":"webauthn.create"`)},
+		{name: "empty", clientData: []byte{}},
+	} {
+		for _, format := range formats {
+			attestation := newTestAttestation(cas, credential).withClientData(c.clientData)
+			label, err := verifyPresenceAttestation(
+				attestation.attestation(t, format), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
+			if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
+				t.Errorf("%s, %s: %s, %v", c.name, format, label, err)
+			}
+		}
+	}
+	// another challenge than any the registration names
+	otherChallenge := []byte(`{"type":"webauthn.create","challenge":"YW5vdGhlcg","origin":"https://ur.io"}`)
+	for _, format := range formats {
+		attestation := newTestAttestation(cas, credential).withClientData(otherChallenge)
+		if _, err := verifyPresenceAttestation(
+			attestation.attestation(t, format), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt); err != nil {
+			t.Errorf("another challenge, %s: %v", format, err)
+		}
+	}
+}
+
+// The credential key in the object's authenticator data must be the KeyRegister's public_key: another key's
+// attestation, valid as its own with its own client data, is refused in every format; and so is a statement made over
+// other client data than the map carries.
+func TestPresenceAttestationMapRefusesAnotherKeyOrClientData(t *testing.T) {
+	cas := newTestAttestCas(t)
+	credential, other := testAttestCredentials(t)
+	otherClientData := testAttestClientData("webauthn.create", testPresenceOrigin)
+	otherClientData = bytes.Replace(otherClientData, []byte("c3ludGhldGlj"), []byte("YW5vdGhlcg"), 1)
+	for _, format := range append(slices.Clone(testAttestChainedFormats), "packed self", "none") {
+		encoded := newTestAttestation(cas, other).attestation(t, format)
+		if label, err := verifyPresenceAttestation(encoded, other.publicKey, cas.roots(), testAttestSettings(), testAttestAt); err != nil {
+			t.Fatalf("%s for its own key: %s, %v", format, label, err)
+		}
+		label, err := verifyPresenceAttestation(encoded, credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
+		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
+			t.Errorf("%s for another key: %s, %v", format, label, err)
+		}
+		if format == "none" {
+			// nothing in fmt none signs the client data
+			continue
+		}
+		attestation := newTestAttestation(cas, credential)
+		swapped := EncodePresenceAttestation(attestation.object(t, format), otherClientData)
+		label, err = verifyPresenceAttestation(swapped, credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
+		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
+			t.Errorf("%s beside other client data: %s, %v", format, label, err)
+		}
+	}
+}
+
+// A map with the object alone carries no client data to check a statement against: refused for every format but none,
+// which signs none and labels asserted.
+func TestPresenceAttestationMapWithTheObjectAlone(t *testing.T) {
+	cas := newTestAttestCas(t)
+	credential, _ := testAttestCredentials(t)
+	for _, format := range append(slices.Clone(testAttestChainedFormats), "packed self") {
+		alone := testAttestObjectAlone(newTestAttestation(cas, credential).object(t, format))
+		label, err := verifyPresenceAttestation(alone, credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
+		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
+			t.Errorf("%s alone: %s, %v", format, label, err)
+		}
+	}
+	alone := testAttestObjectAlone(newTestAttestation(cas, credential).none())
+	label, err := verifyPresenceAttestation(alone, credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
+	if err != nil || label != PresenceLabelAsserted {
+		t.Errorf("none alone: %s, %v", label, err)
+	}
+}
+
+// Encodings of the map that are not its one canonical form, and maps of another shape, each around an object and client
+// data that verify: refused.
+func TestPresenceAttestationMapRefusesNonCanonicalAndOtherShapes(t *testing.T) {
+	cas := newTestAttestCas(t)
+	credential, _ := testAttestCredentials(t)
+	attestation := newTestAttestation(cas, credential)
+	object := attestation.packed(t)
+	clientData := attestation.clientDataJson
+	good := EncodePresenceAttestation(object, clientData)
+	if label, err := verifyPresenceAttestation(good, credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt); err != nil ||
+		label != PresenceLabelAttested {
+		t.Fatalf("the canonical map: %s, %v", label, err)
+	}
+	objectKey := testCborEncode(presenceAttestationObjectKey)
+	clientDataKey := testCborEncode(presenceAttestationClientDataKey)
+	objectValue := testCborEncode(object)
+	clientDataValue := testCborEncode(clientData)
+	// the client data's length, under 256 bytes, in a two-byte argument
+	longLength := slices.Concat([]byte{0x59, 0x00, byte(len(clientData))}, clientData)
+	if 0xff < len(clientData) || len(clientData) < 24 {
+		t.Fatalf("client data of %d bytes", len(clientData))
+	}
+	for _, c := range []struct {
+		name    string
+		encoded []byte
+	}{
+		{name: "keys out of canonical order", encoded: slices.Concat([]byte{0xa2}, clientDataKey, clientDataValue, objectKey, objectValue)},
+		{name: "a length not in its shortest form", encoded: slices.Concat([]byte{0xa2}, objectKey, objectValue, clientDataKey, longLength)},
+		{name: "an indefinite map", encoded: slices.Concat([]byte{0xbf}, objectKey, objectValue, clientDataKey, clientDataValue, []byte{0xff})},
+		{name: "a map count in a one-byte argument", encoded: slices.Concat([]byte{0xb8, 0x02}, objectKey, objectValue, clientDataKey, clientDataValue)},
+		{name: "a repeated key", encoded: slices.Concat([]byte{0xa3}, objectKey, objectValue, objectKey, objectValue, clientDataKey, clientDataValue)},
+		{name: "a tagged map", encoded: slices.Concat([]byte{0xc0}, good)},
+		{name: "a byte after the map", encoded: append(slices.Clone(good), 0x00)},
+		{name: "truncated", encoded: good[:len(good)-1]},
+		{name: "a third key", encoded: testCborEncode(testCborMap{
+			{key: presenceAttestationObjectKey, value: object}, {key: presenceAttestationClientDataKey, value: clientData}, {key: "transports", value: []any{"usb"}},
+		})},
+		{name: "the client data alone", encoded: testCborEncode(testCborMap{{key: presenceAttestationClientDataKey, value: clientData}})},
+		{name: "another key beside the object", encoded: testCborEncode(testCborMap{
+			{key: presenceAttestationObjectKey, value: object}, {key: "clientData", value: clientData},
+		})},
+		{name: "the object as a map, not bytes", encoded: slices.Concat([]byte{0xa2}, objectKey, object, clientDataKey, clientDataValue)},
+		{name: "the client data as text", encoded: testCborEncode(testCborMap{
+			{key: presenceAttestationObjectKey, value: object}, {key: presenceAttestationClientDataKey, value: string(clientData)},
+		})},
+		{name: "byte string keys", encoded: testCborEncode(testCborMap{
+			{key: []byte(presenceAttestationObjectKey), value: object}, {key: []byte(presenceAttestationClientDataKey), value: clientData},
+		})},
+		{name: "an array", encoded: testCborEncode([]any{object, clientData})},
+		{name: "the raw attestation object", encoded: object},
+		{name: "an empty map", encoded: testCborEncode(testCborMap{})},
+		{name: "too long", encoded: EncodePresenceAttestation(object, make([]byte, testAttestSettings().AttestationMaxByteCount))},
+	} {
+		label, err := verifyPresenceAttestation(c.encoded, credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
+		if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
+			t.Errorf("%s: %s, %v", c.name, label, err)
+		}
+	}
+	// the object inside a canonical map must be canonical too
+	nonCanonicalObject := slices.Concat(
+		[]byte{0xa3},
+		testCborEncode("authData"), testCborEncode(attestation.authData),
+		testCborEncode("fmt"), testCborEncode("none"),
+		testCborEncode("attStmt"), testCborEncode(testCborMap{}),
+	)
+	label, err := verifyPresenceAttestation(
+		EncodePresenceAttestation(nonCanonicalObject, clientData), credential.publicKey, cas.roots(), testAttestSettings(), testAttestAt)
+	if !errors.Is(err, ErrPresenceAttestation) || !errors.Is(err, ErrPresenceCbor) || label != 0 {
+		t.Errorf("an object with its keys out of order: %s, %v", label, err)
+	}
+}
+
+// Through a KeyRegister, against the release's roots: fmt none, with its client data or alone, an empty attestation and
+// packed self attestation label a webauthn-es256 key asserted, and an ecdsa-p256-sha256 key is asserted and carries
+// none. Every chained format is refused, never asserted, since no production root ships (QD-137); so are the raw
+// attestation object the field held before QD-730, a chained format without its client data, and client data from
+// another origin.
+func TestVerifyPresenceAttestationFromAKeyRegister(t *testing.T) {
+	cas := newTestAttestCas(t)
+	credential, other := testAttestCredentials(t)
 	register := func(alg bridge.KeyAlg, attestation []byte) *protocol.KeyRegister {
 		return &protocol.KeyRegister{
 			KeyId:       bytes.Clone(credential.keyId),
@@ -895,30 +1123,46 @@ func TestVerifyPresenceAttestationFromAKeyRegister(t *testing.T) {
 	}
 	atMillis := testAttestAt.UnixMilli()
 	asserted := []*protocol.KeyRegister{
-		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, credential).none()),
+		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, credential).attestation(t, "none")),
+		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, testAttestObjectAlone(newTestAttestation(cas, credential).none())),
+		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, credential).attestation(t, "packed self")),
 		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, nil),
 		register(bridge.KeyAlg_KEY_ALG_ECDSA_P256_SHA256, nil),
 	}
-	for _, keyRegister := range asserted {
+	for i, keyRegister := range asserted {
 		label, err := VerifyPresenceAttestation(keyRegister, atMillis)
 		if err != nil || label != PresenceLabelAsserted {
-			t.Errorf("%s with %d bytes: %s, %v", keyRegister.GetAlg(), len(keyRegister.GetAttestation()), label, err)
+			t.Errorf("asserted %d, %s with %d bytes: %s, %v", i, keyRegister.GetAlg(), len(keyRegister.GetAttestation()), label, err)
 		}
 	}
 	refused := []*protocol.KeyRegister{
 		nil,
-		register(bridge.KeyAlg_KEY_ALG_ECDSA_P256_SHA256, newTestAttestation(cas, credential).none()),
+		register(bridge.KeyAlg_KEY_ALG_ECDSA_P256_SHA256, newTestAttestation(cas, credential).attestation(t, "none")),
 		register(bridge.KeyAlg_KEY_ALG_SSH_ED25519, nil),
-		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, []byte("not an attestation object")),
+		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, []byte("not an attestation")),
+		// the raw object, the field's shape before QD-730
+		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, credential).none()),
+		// another key's
+		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, other).attestation(t, "none")),
+		// an origin off the release's table, and an assertion's client data
+		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, credential).
+			withClientData(testAttestClientData("webauthn.create", "https://presence.example")).attestation(t, "none")),
+		register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, credential).
+			withClientData(testAttestClientData("webauthn.get", testPresenceOrigin)).attestation(t, "none")),
 	}
 	sshsig := register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, nil)
 	sshsig.Purpose = bridge.KeyPurpose_KEY_PURPOSE_SSHSIG
 	refused = append(refused, sshsig)
-	// a format §16.6 does not name, refused as such before any client data is asked for
+	// a format §16.6 does not name
 	unknownFormat := testAttestObject("fido-u2f", testCborMap{}, testAttestAuthData(credential, testAttestFlags))
-	refused = append(refused, register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, unknownFormat))
+	refused = append(refused, register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, EncodePresenceAttestation(unknownFormat, testAttestClientDataJson)))
+	for _, format := range testAttestChainedFormats {
+		// nothing chains to the release's empty pools
+		refused = append(refused, register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, credential).attestation(t, format)))
+	}
 	for _, format := range append(slices.Clone(testAttestChainedFormats), "packed self") {
-		refused = append(refused, register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, newTestAttestation(cas, credential).object(t, format)))
+		alone := testAttestObjectAlone(newTestAttestation(cas, credential).object(t, format))
+		refused = append(refused, register(bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, alone))
 	}
 	for i, keyRegister := range refused {
 		label, err := VerifyPresenceAttestation(keyRegister, atMillis)
@@ -931,15 +1175,14 @@ func TestVerifyPresenceAttestationFromAKeyRegister(t *testing.T) {
 	}
 }
 
-// One attestation vector: the object, what it is checked against, and its label or refusal.
+// One attestation vector: KeyRegister.attestation's bytes, the key it registers, and its label or refusal.
 type presenceAttestationVector struct {
-	Name           string   `json:"name"`
-	Object         hexBytes `json:"object"`
-	ClientDataHash hexBytes `json:"client_data_hash"`
-	PublicKey      hexBytes `json:"public_key"`
-	Roots          string   `json:"roots"`
-	Label          string   `json:"label,omitempty"`
-	Refused        bool     `json:"refused,omitempty"`
+	Name        string   `json:"name"`
+	Attestation hexBytes `json:"attestation"`
+	PublicKey   hexBytes `json:"public_key"`
+	Roots       string   `json:"roots"`
+	Label       string   `json:"label,omitempty"`
+	Refused     bool     `json:"refused,omitempty"`
 }
 
 // The file's shape: the fixture roots by format, as DER, then the vectors.
@@ -957,10 +1200,12 @@ func testPresenceAttestationVectorFile(t *testing.T) *presenceAttestationVectorF
 	file := &presenceAttestationVectorFile{
 		Comment: "Fixed vectors for MCP-M3-08's attestation check (§16.6's registration rows and labels; D-MCP-19, FS-124). " +
 			"Every root, certificate and key is synthetic, made from fixed seeds by record_presence_attest_test.go, and " +
-			"signatures are RFC 6979 deterministic. A vector is checked against roots \"fixture\", each format's fixture root " +
-			"below, or \"release\", this build's empty pools (QD-137), with its client data hash, at at_ms. Bytes are " +
-			"lowercase hex. go test -run TestPresenceAttestationVectors -update-presence-attestation-vectors rewrites this " +
-			"file, which is a format change.",
+			"signatures are RFC 6979 deterministic. attestation is KeyRegister.attestation: the canonical CBOR map of attObj, " +
+			"the attestation object, and clientDataJSON, the create ceremony's client data (QD-730), whose origin is " +
+			"https://ur.io, QD-073's for every host but Android, which the release table holds. A vector is checked for " +
+			"public_key against roots \"fixture\", each format's fixture root below, or \"release\", this build's empty pools " +
+			"(QD-137), at at_ms. Bytes are lowercase hex. go test -run TestPresenceAttestationVectors " +
+			"-update-presence-attestation-vectors rewrites this file, which is a format change.",
 		AtMs: testAttestAt.UnixMilli(),
 		Roots: map[string]hexBytes{
 			"packed":      cas.packed.der,
@@ -969,13 +1214,12 @@ func testPresenceAttestationVectorFile(t *testing.T) *presenceAttestationVectorF
 			"apple":       cas.apple.der,
 		},
 	}
-	add := func(name string, object []byte, roots string, label PresenceLabel) {
+	add := func(name string, attestation []byte, roots string, label PresenceLabel) {
 		vector := &presenceAttestationVector{
-			Name:           name,
-			Object:         object,
-			ClientDataHash: testAttestClientDataHash(),
-			PublicKey:      credential.publicKey,
-			Roots:          roots,
+			Name:        name,
+			Attestation: attestation,
+			PublicKey:   credential.publicKey,
+			Roots:       roots,
 		}
 		if label == 0 {
 			vector.Refused = true
@@ -984,17 +1228,31 @@ func testPresenceAttestationVectorFile(t *testing.T) *presenceAttestationVectorF
 		}
 		file.Vectors = append(file.Vectors, vector)
 	}
+	otherOrigin := testAttestClientData("webauthn.create", "https://presence.example")
+	assertionType := testAttestClientData("webauthn.get", testPresenceOrigin)
 	for _, format := range testAttestChainedFormats {
-		add(format+" attested", newTestAttestation(cas, credential).object(t, format), "fixture", PresenceLabelAttested)
-		add(format+" without a pinned root", newTestAttestation(cas, credential).object(t, format), "release", 0)
-		add(format+" for another key", newTestAttestation(cas, other).object(t, format), "fixture", 0)
+		add(format+" attested", newTestAttestation(cas, credential).attestation(t, format), "fixture", PresenceLabelAttested)
+		add(format+" without a pinned root", newTestAttestation(cas, credential).attestation(t, format), "release", 0)
+		add(format+" for another key", newTestAttestation(cas, other).attestation(t, format), "fixture", 0)
 		bySoftware := newTestAttestation(cas, credential)
 		bySoftware.issuer = cas.software
-		add(format+" by a software key's CA", bySoftware.object(t, format), "fixture", 0)
+		add(format+" by a software key's CA", bySoftware.attestation(t, format), "fixture", 0)
+		add(format+" from an unlisted origin", newTestAttestation(cas, credential).withClientData(otherOrigin).attestation(t, format), "fixture", 0)
+		add(format+" with an assertion's client data", newTestAttestation(cas, credential).withClientData(assertionType).attestation(t, format), "fixture", 0)
+		add(format+" without its client data", testAttestObjectAlone(newTestAttestation(cas, credential).object(t, format)), "fixture", 0)
 	}
-	add("packed self asserted", newTestAttestation(cas, credential).packedSelf(t), "fixture", PresenceLabelAsserted)
-	add("none asserted", newTestAttestation(cas, credential).none(), "release", PresenceLabelAsserted)
-	add("none for another key", newTestAttestation(cas, other).none(), "release", 0)
+	add("packed self asserted", newTestAttestation(cas, credential).attestation(t, "packed self"), "fixture", PresenceLabelAsserted)
+	add("none asserted", newTestAttestation(cas, credential).attestation(t, "none"), "release", PresenceLabelAsserted)
+	add("none without client data asserted", testAttestObjectAlone(newTestAttestation(cas, credential).none()), "release", PresenceLabelAsserted)
+	add("none for another key", newTestAttestation(cas, other).attestation(t, "none"), "release", 0)
+	add("none from an unlisted origin", newTestAttestation(cas, credential).withClientData(otherOrigin).attestation(t, "none"), "release", 0)
+	none := newTestAttestation(cas, credential)
+	add("none with its map's keys out of canonical order", slices.Concat(
+		[]byte{0xa2},
+		testCborEncode(presenceAttestationClientDataKey), testCborEncode(none.clientDataJson),
+		testCborEncode(presenceAttestationObjectKey), testCborEncode(none.none()),
+	), "release", 0)
+	add("none as the raw attestation object", none.none(), "release", 0)
 	return file
 }
 
@@ -1035,6 +1293,27 @@ func testPresenceAttestationVectorRoots(t *testing.T, file *presenceAttestationV
 	}
 }
 
+// The format a vector's attestation names, where its map and object decode.
+func testPresenceAttestationVectorFormat(attestation []byte) (string, bool) {
+	container, err := presenceCborDecodeAll(attestation, testAttestSettings().CborMaxDepth)
+	if err != nil {
+		return "", false
+	}
+	attestationObject, ok := container.textKey(presenceAttestationObjectKey)
+	if !ok || attestationObject.kind != presenceCborBytes {
+		return "", false
+	}
+	object, err := presenceCborDecodeAll(attestationObject.content, testAttestSettings().CborMaxDepth)
+	if err != nil {
+		return "", false
+	}
+	format, ok := object.textKey("fmt")
+	if !ok {
+		return "", false
+	}
+	return string(format.content), true
+}
+
 // Each checked-in vector gets its label or refusal from its bytes and the file's roots alone.
 func TestPresenceAttestationVectorsVerify(t *testing.T) {
 	file := &presenceAttestationVectorFile{}
@@ -1052,7 +1331,7 @@ func TestPresenceAttestationVectorsVerify(t *testing.T) {
 		if vector.Roots == "release" {
 			roots = presenceReleaseAttestationRoots()
 		}
-		label, err := verifyPresenceAttestationObject(vector.Object, vector.ClientDataHash, vector.PublicKey, roots, at)
+		label, err := verifyPresenceAttestation(vector.Attestation, vector.PublicKey, roots, testAttestSettings(), at)
 		if vector.Refused {
 			if !errors.Is(err, ErrPresenceAttestation) || label != 0 {
 				t.Errorf("%s: %s, %v; want a refusal", vector.Name, label, err)
@@ -1062,12 +1341,11 @@ func TestPresenceAttestationVectorsVerify(t *testing.T) {
 		if err != nil || label.String() != vector.Label {
 			t.Errorf("%s: %s, %v; want %s", vector.Name, label, err, vector.Label)
 		}
-		object, err := presenceCborDecodeAll(vector.Object)
-		if err != nil {
-			t.Fatal(err)
+		format, ok := testPresenceAttestationVectorFormat(vector.Attestation)
+		if !ok {
+			t.Fatalf("%s: no format", vector.Name)
 		}
-		format, _ := object.textKey("fmt")
-		formats[string(format.content)] = true
+		formats[format] = true
 	}
 	for _, format := range append(slices.Clone(testAttestChainedFormats), "none") {
 		if !formats[format] {
