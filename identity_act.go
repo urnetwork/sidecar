@@ -126,6 +126,8 @@ type sidecarAct struct {
 	presence      bool
 	evidence      *bridge.WebAuthnEvidence
 	ran           bool
+	// each statement's Signed bytes once Run signed them, in act order
+	signed [][]byte
 }
 
 // A new act of origin's, at the installed authority's pin. ErrSidecarActNoAuthority with none installed and
@@ -444,6 +446,7 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 			notAfterMs: statement.notAfterMs,
 			act:        &sidecarPendingAct{actId: actId, index: uint32(index), stale: statement.stale},
 		})
+		self.signed = append(self.signed, bytes.Clone(signedBytes))
 	}
 	// every statement is kept before any is posted, so a kill between two posts retries the rest's same bytes
 	for _, pending := range signedStatements {
@@ -464,6 +467,17 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 		pins = append(pins, pin)
 	}
 	return pins, nil
+}
+
+// Each statement's Signed bytes as Run signed them, in act order, whether or not its post landed; nil before Run signed
+// them. What a caller that hands a statement on keeps, as forwarding's setup keeps its Delegation's (DESIGN-DETAILS
+// 4.2.6's S1). Copies.
+func (self *sidecarAct) Signed() [][]byte {
+	signed := make([][]byte, 0, len(self.signed))
+	for _, signedBytes := range self.signed {
+		signed = append(signed, bytes.Clone(signedBytes))
+	}
+	return signed
 }
 
 // A statement's not_after from now: at most §7.9's 7 days.
