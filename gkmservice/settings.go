@@ -1,8 +1,10 @@
 // What tunes the gkm engine (connect/CODESTYLE.md's settings rule): every timing, count and size that is policy
 // rather than format, each a field here and read where it is used. A bound the design's argument needs, such as
 // repo/'s 5 s cache (§10.6's checks row), is a ceiling Validate holds, so a setting can shorten it and never stretch
-// it. Format values stay constants beside their formats: a ReaderKey's 7 days and gkm's 10 minutes of clock skew
-// (gkm_delivery.go), a token's 64 repo scopes (§7.8), and a wrap batch's 256 and the drop-key route's 64 (§10.14).
+// it. Format limits move here as their files are touched, the protocol's value their default (QD-702): one POST
+// /gkm/delegation-keys' 256 ids so far. The rest still stand beside their formats until QD-706's sweep: a ReaderKey's
+// 7 days and gkm's 10 minutes of clock skew (gkm_delivery.go), a token's 64 repo scopes (§7.8), and a wrap batch's
+// 256, reader-keys' 256 and the drop-key route's 64 (§10.14).
 //
 // The rates are counted per process, in memory (plan-KEYS-rate-counters, decided): each limit is its rate times the
 // process count, and a restart forgets it. The 24 h ReaderKey rule is exact, read from the stored object.
@@ -113,6 +115,9 @@ type GkmServiceSettings struct {
 	ReaderKeysReadConcurrency int
 	// Reads that one POST /gkm/delegation-keys issues at once, the same bound for the same shape of batch (QD-637).
 	DelegationKeysReadConcurrency int
+	// §10.14's bound on one POST /gkm/delegation-keys (QD-637), as on reader-keys' (QD-066): 256 ids, a format value
+	// the client's batches keep too (gkm_api.go), so a deployment never changes it on one side alone.
+	DelegationKeysMaxCount int
 	// The most Welcomes one GET /gkm/welcomes answers. The client asks again once it has joined or acked them.
 	WelcomesReplyMaxCount int
 
@@ -220,6 +225,7 @@ func DefaultGkmServiceSettings() *GkmServiceSettings {
 		WelcomesReplyMaxCount:     1024,
 
 		DelegationKeysReadConcurrency: 16,
+		DelegationKeysMaxCount:        256,
 
 		EpochsReplyMaxCount:        256,
 		EpochsReplyMaxByteCount:    8 * 1024 * 1024,
@@ -290,6 +296,7 @@ func (self *GkmServiceSettings) Validate() error {
 		{name: "ReaderKeyUploadInterval", value: int64(self.ReaderKeyUploadInterval)},
 		{name: "ReaderKeysReadConcurrency", value: int64(self.ReaderKeysReadConcurrency)},
 		{name: "DelegationKeysReadConcurrency", value: int64(self.DelegationKeysReadConcurrency)},
+		{name: "DelegationKeysMaxCount", value: int64(self.DelegationKeysMaxCount)},
 		{name: "WelcomesReplyMaxCount", value: int64(self.WelcomesReplyMaxCount)},
 		{name: "EpochsReplyMaxCount", value: int64(self.EpochsReplyMaxCount)},
 		{name: "EpochsReplyMaxByteCount", value: self.EpochsReplyMaxByteCount},

@@ -2,9 +2,9 @@ package gkmservice
 
 // KEYS-M8-01 at gkm (DESIGN-DETAILS 4.2.2): a forwarding Delegation's reader key object, its upload held to the
 // Delegation's own sidecar and the row's digest, each refusal beside its twin; its read by the config's readers alone;
-// the wrap checks holding a DelegationWrap to the key its row names; a forwarding sidecar reading its own
-// Delegations' wraps; and the reconciler's deletion of the object a day after its Delegation ended or was superseded,
-// a hold keeping it.
+// the object under its token's network alone (QD-763); the wrap checks holding a DelegationWrap to the key its row
+// names; a forwarding sidecar reading its own Delegations' wraps; the reconciler's deletion of the object a day after
+// its Delegation ended or was superseded, a hold keeping it.
 
 import (
 	"bytes"
@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -51,14 +53,30 @@ func gkmTestDelegationKeyPath(delegationId []byte) string {
 	return "/gkm/delegation-keys/" + hex.EncodeToString(delegationId)
 }
 
-// The object a Delegation's key is stored at on the first cluster, nil for none.
+// The object a Delegation's key is stored at in the fixture's network on the first cluster, nil for none.
 func (self *gkmFixture) delegationKeyObject(delegationId []byte) []byte {
 	self.t.Helper()
-	key, err := GkmDelegationKeyKey(delegationId)
+	return self.networkDelegationKeyObject(sidecar.Id(self.networkId), delegationId)
+}
+
+// The object a Delegation's key is stored at in a network on the first cluster, nil for none.
+func (self *gkmFixture) networkDelegationKeyObject(networkId sidecar.Id, delegationId []byte) []byte {
+	self.t.Helper()
+	key, err := GkmDelegationKeyKey(networkId, delegationId)
 	if err != nil {
 		self.t.Fatal(err)
 	}
 	return self.object("meta-1", key)
+}
+
+// Stores a Delegation's key in a network on the first cluster, as an upload would have.
+func (self *gkmFixture) putDelegationKey(networkId sidecar.Id, key *gkmTestForwardingKey) {
+	self.t.Helper()
+	objectKey, err := GkmDelegationKeyKey(networkId, key.delegationId)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.put("meta-1", objectKey, key.publicKey)
 }
 
 // The format value holds X-Wing's public key size.
@@ -214,6 +232,107 @@ func TestGkmDelegationKeyReadIsTheConfigsReaders(t *testing.T) {
 	}
 }
 
+// QD-763: a forwarding Delegation's key object is its token's network's, gkm/dkey/<network_id>/<delegation_id>, at the
+// upload and at every read, and no request names a network. A path that names another network's id beside the
+// Delegation's reaches no route and stores or serves nothing, and a query naming one changes nothing; a token of
+// another network, whose state holds no row of the Delegation, has its upload answer 409 and its reads 404, and reaches
+// nothing of the first network's; and where both networks' states hold a row of one delegation_id, each network's
+// sidecar uploads to its own network's object and each token reads only its own.
+func TestGkmDelegationKeyObjectIsTheTokensNetworks(t *testing.T) {
+	fixture := newGkmFixture(t)
+	networkA, networkB := sidecar.Id(fixture.networkId), testId("network-b")
+	fixture.host.Gates.OpenService(sidecar.ServiceGateGkm, connect.Id(networkA), connect.Id(networkB))
+	memberId := testId("member-a")
+	configRepoA, configRepoB := testId("repo-config-a"), testId("repo-config-b")
+	fixture.placeRepo(configRepoA, "meta-2", protocol.EvsRepoState_EVS_REPO_ACTIVE)
+	fixture.placeRepo(configRepoB, "meta-2", protocol.EvsRepoState_EVS_REPO_ACTIVE)
+	forwardingA := fixture.newSidecar("sc-forward-a", memberDeviceFacts(memberId))
+	readerA := fixture.newSidecar("sc-reader-a", memberDeviceFacts(memberId))
+	forwardingB := fixture.newSidecar("sc-forward-b", memberDeviceFacts(memberId))
+	readerB := fixture.newSidecar("sc-reader-b", memberDeviceFacts(memberId))
+	for _, testSidecar := range []*gkmTestSidecar{forwardingA, readerA} {
+		fixture.auth.grant(testSidecar.sidecarId, configRepoA, sidecar.AclEvsRead)
+	}
+	for _, testSidecar := range []*gkmTestSidecar{forwardingB, readerB} {
+		fixture.auth.grant(testSidecar.sidecarId, configRepoB, sidecar.AclEvsRead)
+	}
+	forwardingAId, forwardingBId := forwardingA.sidecarId, forwardingB.sidecarId
+	forwardingTokenA := fixture.token(forwardingA.sidecarId, repoScope(configRepoA, "r"))
+	readerTokenA := fixture.token(readerA.sidecarId, repoScope(configRepoA, "r"))
+	forwardingTokenB := fixture.networkToken(networkB, forwardingB.sidecarId, repoScope(configRepoB, "r"))
+	readerTokenB := fixture.networkToken(networkB, readerB.sidecarId, repoScope(configRepoB, "r"))
+	key := newGkmTestForwardingKey(t, "a's")
+	fixture.auth.setDelegationKey(key.delegationId, &GkmDelegationKeyFacts{ReaderKeySha256: key.keySha256, ForwardSidecarId: &forwardingAId, ConfigRepoId: configRepoA})
+	path := gkmTestDelegationKeyPath(key.delegationId)
+
+	if recorder := fixture.serve(http.MethodPut, path, forwardingTokenA, key.publicKey); recorder.Code != http.StatusOK {
+		t.Fatalf("the upload: %d", recorder.Code)
+	}
+	if !bytes.Equal(fixture.networkDelegationKeyObject(networkA, key.delegationId), key.publicKey) {
+		t.Fatal("the key is not under its token's network")
+	}
+	if fixture.networkDelegationKeyObject(networkB, key.delegationId) != nil {
+		t.Fatal("an upload stored a key under a network its token is not of")
+	}
+
+	// a path naming the other network beside the Delegation reaches no route
+	namingB := "/gkm/delegation-keys/" + hex.EncodeToString(networkB[:]) + "/" + hex.EncodeToString(key.delegationId)
+	if recorder := fixture.serve(http.MethodPut, namingB, forwardingTokenA, key.publicKey); recorder.Code != http.StatusNotFound {
+		t.Errorf("an upload whose path names another network: %d", recorder.Code)
+	}
+	if recorder := fixture.serve(http.MethodGet, namingB, readerTokenA, nil); recorder.Code != http.StatusNotFound {
+		t.Errorf("a read whose path names another network: %d", recorder.Code)
+	}
+	// a query naming it is not read: the same bytes again land where they stand
+	if recorder := fixture.serve(http.MethodPut, path+"?network_id="+hex.EncodeToString(networkB[:]), forwardingTokenA, key.publicKey); recorder.Code != http.StatusOK {
+		t.Errorf("an upload with a query naming another network: %d", recorder.Code)
+	}
+	if fixture.networkDelegationKeyObject(networkB, key.delegationId) != nil {
+		t.Fatal("a request naming another network stored a key under it")
+	}
+
+	// the other network's tokens: its state holds no row of the Delegation
+	if recorder := fixture.serve(http.MethodGet, path, readerTokenB, nil); recorder.Code != http.StatusNotFound {
+		t.Errorf("another network's read: %d", recorder.Code)
+	}
+	if recorder := fixture.serve(http.MethodPost, "/gkm/delegation-keys", readerTokenB, fixture.delegationKeysBody(key.delegationId)); recorder.Code != http.StatusNotFound {
+		t.Errorf("another network's batch: %d", recorder.Code)
+	}
+	if recorder := fixture.serve(http.MethodPut, path, forwardingTokenB, key.publicKey); recorder.Code != http.StatusConflict {
+		t.Errorf("another network's upload: %d", recorder.Code)
+	}
+	if fixture.networkDelegationKeyObject(networkB, key.delegationId) != nil {
+		t.Fatal("another network's refused upload stored a key")
+	}
+
+	// both states hold a row of the one delegation_id, each with its own key: each network's object is its own
+	keyB := newGkmTestForwardingKey(t, "b's")
+	fixture.auth.setNetworkDelegationKey(networkB, key.delegationId, &GkmDelegationKeyFacts{ReaderKeySha256: keyB.keySha256, ForwardSidecarId: &forwardingBId, ConfigRepoId: configRepoB})
+	if recorder := fixture.serve(http.MethodPut, path, forwardingTokenB, key.publicKey); recorder.Code != http.StatusForbidden {
+		t.Errorf("the other network's sidecar uploading the first network's key: %d", recorder.Code)
+	}
+	if recorder := fixture.serve(http.MethodPut, path, forwardingTokenB, keyB.publicKey); recorder.Code != http.StatusOK {
+		t.Fatalf("the other network's upload of its own key: %d", recorder.Code)
+	}
+	if !bytes.Equal(fixture.networkDelegationKeyObject(networkB, key.delegationId), keyB.publicKey) {
+		t.Error("the other network's object does not hold its key")
+	}
+	if !bytes.Equal(fixture.networkDelegationKeyObject(networkA, key.delegationId), key.publicKey) {
+		t.Error("the first network's object changed")
+	}
+	if recorder := fixture.serve(http.MethodGet, path, readerTokenA, nil); recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), key.publicKey) {
+		t.Errorf("the first network's read: %d", recorder.Code)
+	}
+	if recorder := fixture.serve(http.MethodGet, path, readerTokenB, nil); recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), keyB.publicKey) {
+		t.Errorf("the other network's read: %d", recorder.Code)
+	}
+	recorder := fixture.serve(http.MethodPost, "/gkm/delegation-keys", readerTokenB, fixture.delegationKeysBody(key.delegationId))
+	reply := &protocol.GkmDelegationKeysReply{}
+	if recorder.Code != http.StatusOK || proto.Unmarshal(recorder.Body.Bytes(), reply) != nil || len(reply.GetReaderKeys()) != 1 || !bytes.Equal(reply.GetReaderKeys()[0], keyB.publicKey) {
+		t.Errorf("the other network's batch: %d", recorder.Code)
+	}
+}
+
 // A POST /gkm/delegation-keys body naming delegationIds.
 func (self *gkmFixture) delegationKeysBody(delegationIds ...[]byte) []byte {
 	return self.marshal(&protocol.GkmDelegationKeysRequest{DelegationIds: delegationIds})
@@ -276,16 +395,19 @@ func TestGkmDelegationKeysReadAnswersInOrderToTheConfigsReaders(t *testing.T) {
 		}
 	}
 
-	// the bound: 256 ids answered, 257 refused
+	// the bound: 256 ids answered, 257 refused, §10.14's value the default
+	if fixture.settings.DelegationKeysMaxCount != 256 {
+		t.Errorf("the default batch bound: %d", fixture.settings.DelegationKeysMaxCount)
+	}
 	full := [][]byte{}
-	for range gkmDelegationKeysMaxCount {
+	for range fixture.settings.DelegationKeysMaxCount {
 		full = append(full, stored[0].delegationId)
 	}
 	recorder = fixture.serve(http.MethodPost, "/gkm/delegation-keys", readerToken, fixture.delegationKeysBody(full...))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("a batch of %d: %d", len(full), recorder.Code)
 	}
-	if err := proto.Unmarshal(recorder.Body.Bytes(), reply); err != nil || len(reply.GetReaderKeys()) != gkmDelegationKeysMaxCount {
+	if err := proto.Unmarshal(recorder.Body.Bytes(), reply); err != nil || len(reply.GetReaderKeys()) != fixture.settings.DelegationKeysMaxCount {
 		t.Errorf("a batch of %d: %d answers, %v", len(full), len(reply.GetReaderKeys()), err)
 	}
 	for _, c := range []struct {
@@ -499,11 +621,7 @@ func TestGkmReconcilerDeletesAForwardingKeyObjectADayAfterItsEnd(t *testing.T) {
 	live := newGkmTestForwardingKey(t, "live")
 	revoked := newGkmTestForwardingKey(t, "revoked")
 	for _, key := range []*gkmTestForwardingKey{superseded, live, revoked} {
-		objectKey, err := GkmDelegationKeyKey(key.delegationId)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fixture.put("meta-1", objectKey, key.publicKey)
+		fixture.putDelegationKey(world.networkId, key)
 	}
 	now := fixture.clock.Now()
 	supersededRow := gkmTestForwardingRow(superseded, appSidecarId, 2)
@@ -549,8 +667,7 @@ func TestGkmReconcilerDeletesAForwardingKeyObjectADayAfterItsEnd(t *testing.T) {
 	// past the hold set's reread, as any reader of holds is
 	fixture.clock.Advance(sidecar.DefaultHoldSetSettings().RereadInterval)
 	held := newGkmTestForwardingKey(t, "held")
-	heldKey, _ := GkmDelegationKeyKey(held.delegationId)
-	fixture.put("meta-1", heldKey, held.publicKey)
+	fixture.putDelegationKey(world.networkId, held)
 	heldRow := gkmTestForwardingRow(held, laptopSidecarId, 6)
 	heldRow.EndedAt = 7
 	positionTimes[7] = fixture.clock.Now().Add(-2 * settings.DelegationKeyRetention)
@@ -593,11 +710,7 @@ func TestGkmReconcilerDeletesAForwardingKeyObjectWhoseRowLeftBeforeItsDay(t *tes
 	ended := newGkmTestForwardingKey(t, "ended")
 	live := newGkmTestForwardingKey(t, "live")
 	for _, key := range []*gkmTestForwardingKey{ended, live} {
-		objectKey, err := GkmDelegationKeyKey(key.delegationId)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fixture.put("meta-1", objectKey, key.publicKey)
+		fixture.putDelegationKey(world.networkId, key)
 	}
 	now := fixture.clock.Now()
 	endedRow := gkmTestForwardingRow(ended, laptopSidecarId, 2)
@@ -648,10 +761,8 @@ func TestGkmReconcilerDeletesAForwardingKeyObjectWhoseRowLeftBeforeItsDay(t *tes
 
 // A restart forgets every tracked end. The process that starts after it finds an ended row its network's rows still
 // hold and deletes that object at its time by the host's position times, so the restart does not start its day
-// again. An object no row of the networks it has read names is kept: gkm/dkey/<delegation_id> names no network, so
-// it may be a live Delegation's in a network this process has not read as well as one whose row left while no
-// process tracked it, and every doubt keeps the object (QD-675's sweep waits on question
-// core-owner-fixes-dkey-sweep-network).
+// again. An object no row of the networks it has read names is kept: QD-675's sweep of the network's
+// gkm/dkey/<network_id>/ prefix, which would find it, is not built yet, and every doubt keeps the object.
 func TestGkmReconcilerAfterARestartDeletesByTheRowsAndKeepsAnObjectNoRowNames(t *testing.T) {
 	world := newGkmReconcilerWorld(t)
 	fixture := world.fixture
@@ -661,11 +772,7 @@ func TestGkmReconcilerAfterARestartDeletesByTheRowsAndKeepsAnObjectNoRowNames(t 
 	live := newGkmTestForwardingKey(t, "live")
 	unnamed := newGkmTestForwardingKey(t, "unnamed")
 	for _, key := range []*gkmTestForwardingKey{ended, live, unnamed} {
-		objectKey, err := GkmDelegationKeyKey(key.delegationId)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fixture.put("meta-1", objectKey, key.publicKey)
+		fixture.putDelegationKey(world.networkId, key)
 	}
 	now := fixture.clock.Now()
 	endedRow := gkmTestForwardingRow(ended, laptopSidecarId, 2)
@@ -710,7 +817,7 @@ func TestGkmReconcilerAfterARestartDeletesByTheRowsAndKeepsAnObjectNoRowNames(t 
 	world.awaitPass(func() { fixture.clock.Advance(settings.DelegationKeyRetryInterval) })
 	world.awaitPass(func() { fixture.clock.Advance(2 * settings.DelegationKeyRetention) })
 	if fixture.delegationKeyObject(unnamed.delegationId) == nil {
-		t.Errorf("an object no row names was deleted, though nothing tells its network")
+		t.Errorf("an object no row names was deleted, though no sweep runs yet")
 	}
 	if finished, _ := restarted.DelegationKeyDeletes(); finished != 1 {
 		t.Errorf("%d deletions, not the ended row's one", finished)

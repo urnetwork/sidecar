@@ -74,6 +74,24 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "keyed by the address's peppered hash; no domain or address held)\n  why: sign-in, roles and SSO (§7.5, §7.6);",
 		list:     "keyed by the address's peppered hash; no domain or address held); IdP sign-in flows in progress (state, nonce, PKCE verifier, IdP, network, the signed-in user that began one; 10 min, taken once)\n  why: sign-in, roles and SSO (§7.5, §7.6);",
 	},
+	{
+		// QD-763: gkm-1's forwarding reader keys are keyed by their network as well
+		question: "core-owner-fixes-dkey-sweep-network",
+		block:    "(metadata cluster); gkm/dkey/<delegation_id>\n",
+		list:     "(metadata cluster); gkm/dkey/<network_id>/<delegation_id>\n",
+	},
+	{
+		// QD-763's list version bump: the first line's version
+		question: "core-owner-fixes-dkey-sweep-network",
+		block:    "# metadata_list.yml v11;",
+		list:     "# metadata_list.yml v12;",
+	},
+	{
+		// and what the version adds, after v11's lines
+		question: "core-owner-fixes-dkey-sweep-network",
+		block:    "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n",
+		list:     "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n# v12, updated 2026-11-12 for the owner's answer QD-763, keys gkm-1's forwarding reader keys by their network as\n# well, gkm/dkey/<network_id>/<delegation_id>, so gkm's reconciler sweeps one network's at a time (QD-675).\n",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.

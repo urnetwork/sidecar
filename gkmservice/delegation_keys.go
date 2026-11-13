@@ -1,8 +1,11 @@
 // A forwarding Delegation's reader key at gkm (KEYS-M8-01; D-KEYS-16, D-KEYS-24; owner decision 197; DESIGN-DETAILS
-// 4.2.2): PUT and GET /gkm/delegation-keys/<delegation_id>, over gkm/dkey/<delegation_id> on the first cluster, which
-// holds the Delegation's 1,216 B X-Wing public key as its statement names it. The Delegation's row carries the key's
-// SHA-256 alone, since 1,216 B a device would pass §8.8's 4 MiB of rows at about 2,600 app devices.
+// 4.2.2): PUT and GET /gkm/delegation-keys/<delegation_id>, over gkm/dkey/<network_id>/<delegation_id> on the first
+// cluster, which holds the Delegation's 1,216 B X-Wing public key as its statement names it. The Delegation's row
+// carries the key's SHA-256 alone, since 1,216 B a device would pass §8.8's 4 MiB of rows at about 2,600 app devices.
 //
+//   - The object's network is the token's, at the upload and at every read (QD-763): no request names one, so a
+//     token reaches only its own network's objects, and a network's objects stand under one prefix, which QD-675's
+//     sweep is to list and a network's shred or a hold finds them by.
 //   - An upload is the Delegation's own sidecar's: the row in gkm's newest verified state names the token's sidecar
 //     as the forwarding Delegation's, and the body's SHA-256 is the row's reader_key_sha256. Until that state holds
 //     the row the upload answers 409, which the signer's setup sends again once it does (DESIGN-DETAILS 4.2.6's S3).
@@ -35,9 +38,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// §10.14's bound on one POST /gkm/delegation-keys (QD-637), as on reader-keys' (QD-066): a format value.
-const gkmDelegationKeysMaxCount = 256
-
 // The object's bytes: an X-Wing public key (§10.6's sizes), a format value.
 const gkmDelegationKeyByteCount = 1216
 
@@ -64,6 +64,17 @@ func readGkmDelegationIdPath(request *GkmRequest) ([]byte, bool) {
 		return nil, false
 	}
 	return delegationId, true
+}
+
+// The key of a Delegation's object in the token's network, the only network a request reaches (QD-763). false once
+// it has answered 400.
+func readGkmDelegationKeyKey(request *GkmRequest, delegationId []byte) (string, bool) {
+	key, err := GkmDelegationKeyKey(sidecar.Id(request.Principal.NetworkId), delegationId)
+	if err != nil {
+		request.BadRequest()
+		return "", false
+	}
+	return key, true
 }
 
 // What gkm's newest state holds of the Delegation's reader key, answering Unknown with 503. ok false once it has
@@ -116,14 +127,13 @@ func (self *GkmEngine) serveDelegationKeyUpload(request *GkmRequest) {
 		request.Forbidden()
 		return
 	}
+	key, ok := readGkmDelegationKeyKey(request, delegationId)
+	if !ok {
+		return
+	}
 	cluster, err := self.firstCluster()
 	if err != nil {
 		request.Unavailable()
-		return
-	}
-	key, err := GkmDelegationKeyKey(delegationId)
-	if err != nil {
-		request.BadRequest()
 		return
 	}
 	// a delegation key is §11.13's P1, on the first cluster, as a ReaderKey is (budget.go)
@@ -166,14 +176,13 @@ func (self *GkmEngine) serveDelegationKeyRead(request *GkmRequest) {
 	if !request.AuthorizeRepo(facts.ConfigRepoId) {
 		return
 	}
+	key, ok := readGkmDelegationKeyKey(request, delegationId)
+	if !ok {
+		return
+	}
 	cluster, err := self.firstCluster()
 	if err != nil {
 		request.Unavailable()
-		return
-	}
-	key, err := GkmDelegationKeyKey(delegationId)
-	if err != nil {
-		request.BadRequest()
 		return
 	}
 	held, _, err := readGkmObject(request.Ctx, cluster, key, gkmDelegationKeyByteCount)
@@ -187,22 +196,23 @@ func (self *GkmEngine) serveDelegationKeyRead(request *GkmRequest) {
 	}
 }
 
-// POST /gkm/delegation-keys: a GkmDelegationKeysRequest of at most 256 forwarding Delegations, answered in order by a
-// GkmDelegationKeysReply, each stored key byte for byte, to a token that reads the network's config repo (QD-637). An
-// id with no object, one gkm's state holds no row of and one that does not forward each answer an empty entry, the
-// GET's 404 for it, so an empty entry means none stored and never fails the batch. A batch that names no forwarding
-// Delegation the state holds answers 404 whole, as the GET answers each of its ids, since there is no config repo
-// to authorize it on.
+// POST /gkm/delegation-keys: a GkmDelegationKeysRequest of at most DelegationKeysMaxCount (256) forwarding
+// Delegations, answered in order by a GkmDelegationKeysReply, each stored key byte for byte, to a token that reads
+// the network's config repo (QD-637), from the token's network's objects. An id with no object, one gkm's state holds
+// no row of and one that does not forward each answer an empty entry, the GET's 404 for it, so an empty entry means
+// none stored and never fails the batch. A batch that names no forwarding Delegation the state holds answers 404
+// whole, as the GET answers each of its ids, since there is no config repo to authorize it on.
 func (self *GkmEngine) serveDelegationKeysRead(request *GkmRequest) {
 	readRequest := &protocol.GkmDelegationKeysRequest{}
 	if !request.ReadMessage(readRequest, self.settings.RequestBodyMaxByteCount) {
 		return
 	}
 	delegationIds := readRequest.GetDelegationIds()
-	if len(delegationIds) == 0 || gkmDelegationKeysMaxCount < len(delegationIds) {
+	if len(delegationIds) == 0 || self.settings.DelegationKeysMaxCount < len(delegationIds) {
 		request.BadRequest()
 		return
 	}
+	networkId := sidecar.Id(request.Principal.NetworkId)
 	for _, delegationId := range delegationIds {
 		if len(delegationId) != gkmDelegationIdByteCount {
 			request.BadRequest()
@@ -260,7 +270,7 @@ func (self *GkmEngine) serveDelegationKeysRead(request *GkmRequest) {
 			go func() {
 				defer group.Done()
 				defer func() { <-slots }()
-				readerKeys[i], readErrs[i] = self.readDelegationKey(ctx, cluster, delegationId)
+				readerKeys[i], readErrs[i] = self.readDelegationKey(ctx, cluster, networkId, delegationId)
 			}()
 		}
 		group.Wait()
@@ -274,9 +284,9 @@ func (self *GkmEngine) serveDelegationKeysRead(request *GkmRequest) {
 	request.Reply(&protocol.GkmDelegationKeysReply{ReaderKeys: readerKeys})
 }
 
-// A forwarding Delegation's stored reader key, or empty bytes for none.
-func (self *GkmEngine) readDelegationKey(ctx context.Context, cluster sidecar.BlobCluster, delegationId []byte) ([]byte, error) {
-	key, err := GkmDelegationKeyKey(delegationId)
+// A forwarding Delegation's stored reader key in a network, or empty bytes for none.
+func (self *GkmEngine) readDelegationKey(ctx context.Context, cluster sidecar.BlobCluster, networkId sidecar.Id, delegationId []byte) ([]byte, error) {
+	key, err := GkmDelegationKeyKey(networkId, delegationId)
 	if err != nil {
 		return nil, err
 	}

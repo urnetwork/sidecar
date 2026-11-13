@@ -22,22 +22,19 @@
 //   - sweeps (retention.go): epoch retention by acks, staged-wrap GC and §2.8's TTLs, a page of groups, sidecars and
 //     members a run, from a cursor the task framework keeps between runs. A preservation hold pauses them.
 //   - ShredGroup (shred.go): §11.12's shred of a repo's gkm objects, which no hold pauses.
-//   - a forwarding Delegation's reader key object, dkey/<delegation_id> (delegation_keys.go), goes
-//     DelegationKeyRetention (24 h) after its Delegation ended or was superseded, which the state's rows show at a
-//     position: from the time the host gives that position (GkmNetworkState.PositionTime), else from when this process
-//     first saw the end. An end this process saw stays tracked after its row leaves the rows, which it does once
-//     retention passes it by 4,096 positions (QD-648) and a busy network reaches within the day, so its object still
-//     goes on schedule (QD-675). The network's pass finds each one due and sets its wake for the next; a deleter of
-//     its own deletes them one at a time, each as §11.13's unfunded P2 at rank retention, re-checking first whether a
-//     hold covers the network, which keeps the object for a later try.
+//   - a forwarding Delegation's reader key object, dkey/<network_id>/<delegation_id> (delegation_keys.go; QD-763),
+//     goes DelegationKeyRetention (24 h) after its Delegation ended or was superseded, which the state's rows show at
+//     a position: from the time the host gives that position (GkmNetworkState.PositionTime), else from when this
+//     process first saw the end. An end this process saw stays tracked after its row leaves the rows, which it does
+//     once retention passes it by 4,096 positions (QD-648) and a busy network reaches within the day, so its object
+//     still goes on schedule (QD-675). The network's pass finds each one due and sets its wake for the next; a deleter
+//     of its own deletes them one at a time, each as §11.13's unfunded P2 at rank retention, re-checking first whether
+//     a hold covers the network, which keeps the object for a later try.
 //
 //     Not yet here: an end whose row left the rows before this process first read its network, across a restart or
 //     for a network read late, is in no table, and its object stands. QD-675 gives those to a sweep of the network's
-//     gkm/dkey/ prefix that deletes each object no forwarding row names, but the family's key names no network
-//     (gkm/dkey/<delegation_id>, on the first cluster for every network), so nothing tells which network's rows an
-//     object answers to, and an object of a network this process has not read cannot be told from one whose row
-//     left. Until that is settled (question core-owner-fixes-dkey-sweep-network) no such sweep runs, and every doubt
-//     keeps the object, as retention.go's sweeps do.
+//     gkm/dkey/<network_id>/ prefix, which the key's network now gives (QD-763); until it lands every doubt keeps the
+//     object, as retention.go's sweeps do.
 //
 // The hint loop runs on the reconciler's own goroutine, started by its constructor, and the key objects' deleter on
 // another; hints go out through ServiceHost.Push.HintSidecars, lossy, a lost one covered by the next interval or the
@@ -759,7 +756,7 @@ func (self *GkmReconciler) deleteDelegationKey(networkId sidecar.Id, delegationI
 			end.retryAt = self.clock.Now().Add(self.settings.DelegationKeyRetryInterval)
 		}
 	}()
-	key, err := GkmDelegationKeyKey([]byte(delegationId))
+	key, err := GkmDelegationKeyKey(networkId, []byte(delegationId))
 	if err != nil {
 		// an id no object is keyed by
 		done = true

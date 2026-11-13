@@ -1,17 +1,19 @@
 // The keys of gkm's objects that a delivery or a generation names (§10.6), which client, gkm and evs build
 // alike, so they live here rather than in gkmservice: evs reads gen/<g> for its gate and cannot import it.
 // The encoding is QD-442's, as testdata/gkm/wrap_paths.json pins it: <g> is 20 decimal digits, zero-padded;
-// group_id, member_id and sidecar_id are 32 lowercase hex characters, a delegation_id 64; c8, k8 and b8 are 16,
-// the hex of a digest's first 8 bytes; s: and d: are literal. Every key here has a fixed length for its kind, so
-// none prefixes another (§11.8's keys row). Keys carry opaque ids only (I-13).
+// group_id, member_id, sidecar_id and network_id are 32 lowercase hex characters, a delegation_id 64; c8, k8 and b8
+// are 16, the hex of a digest's first 8 bytes; s: and d: are literal. Every key here has a fixed length for its
+// kind, so none prefixes another (§11.8's keys row). Keys carry opaque ids only (I-13).
 //
 // A Welcome pointer is keyed by its group and epoch, never by the KeyPackageRef its Add used, so two Adds through
 // one last-resort KeyPackage keep two pointers, and a group's owner marker is the first object of the group
 // (DESIGN-DETAILS 6.2.2).
 //
-// A forwarding Delegation's reader key, which its row names by digest alone, is gkm's object keyed by the
-// Delegation's id, gkm/dkey/<delegation_id> (DESIGN-DETAILS 4.2.2): the route's path id and the object's key take
-// one form, built here.
+// A forwarding Delegation's reader key, which its row names by digest alone, is gkm's object keyed by its network
+// and the Delegation's id, gkm/dkey/<network_id>/<delegation_id> (DESIGN-DETAILS 4.2.2; QD-763): the route's path
+// id and the object's last element take one form, built here. The network is the token's at the upload and the read,
+// never a request's, and gkm's reconciler sweeps one network's objects by its prefix (QD-675), as a network's shred
+// or a hold finds them.
 //
 // On every leg, with no connect import. Package-level functions are safe for concurrent use.
 
@@ -125,12 +127,22 @@ func GkmDelegationPathId(delegationId []byte) (string, error) {
 	return hex.EncodeToString(delegationId), nil
 }
 
-// gkm/dkey/<delegation_id>: a forwarding Delegation's reader key, its 1,216 B X-Wing public key as the Delegation's
-// statement names it, on the first cluster beside the per-sidecar objects (DESIGN-DETAILS 4.2.2).
-func GkmDelegationKeyPath(delegationId []byte) (string, error) {
+// gkm/dkey/<network_id>/: a network's forwarding Delegations' reader key objects, by LIST (QD-763).
+func GkmDelegationKeyNetworkPrefix(networkId Id) string {
+	return "gkm/dkey/" + gkmPathId(networkId) + "/"
+}
+
+// gkm/dkey/<network_id>/<delegation_id>: a forwarding Delegation's reader key, its 1,216 B X-Wing public key as the
+// Delegation's statement names it, on the first cluster beside the per-sidecar objects (DESIGN-DETAILS 4.2.2), under
+// the network whose log holds the Delegation (QD-763). An error for a delegation id of another size, or for the zero
+// network, which no token names.
+func GkmDelegationKeyPath(networkId Id, delegationId []byte) (string, error) {
+	if networkId == (Id{}) {
+		return "", fmt.Errorf("%w: a delegation key names no network", ErrGkmMalformed)
+	}
 	pathId, err := GkmDelegationPathId(delegationId)
 	if err != nil {
 		return "", err
 	}
-	return "gkm/dkey/" + pathId, nil
+	return GkmDelegationKeyNetworkPrefix(networkId) + pathId, nil
 }
