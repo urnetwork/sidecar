@@ -27,6 +27,8 @@ barrier api.set_by_jwt.after api_client.go
 barrier api.set_by_jwt.before api_client.go
 barrier bridge.adopt.after device/bridge_state.go
 barrier bridge.adopt.before device/bridge_state.go
+barrier bridge_component.provide.before bridge_component.go
+barrier bridge_component.revoke.before bridge_component.go
 barrier bridge_egress.publish.after device/bridge_egress.go
 barrier bridge_egress.publish.before device/bridge_egress.go
 barrier bridge_link.close.after device/bridge_link.go

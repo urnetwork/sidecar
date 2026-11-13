@@ -12,7 +12,8 @@
 //	       slot has it deleted by the statement it shares with the seal
 //	A      an honest push passes step 6 and is refused 412 PATH_EPOCH once a PATH_EPOCH commits; its retoken, a new
 //	       push id carrying the same slot id and bytes, waits out the settle age, takes the slot over and commits;
-//	       26 h on, evacuation drops the refused statement's record, finds the retoken's origin and keeps the slot
+//	       26 h on, evacuation drops the refused statement's record, finds the retoken's origin and keeps the slot;
+//	       again with a CLOSURE, whose retoken commits on its one closure upload's receipt
 //	B      another writer lists a committed version's slot as new, with its bytes and with others, young and past
 //	       23 h: each is 409 SLOT_STALE at step 6; 26 h on, evacuation drops each record and keeps the slot, another
 //	       statement's
@@ -408,6 +409,77 @@ func TestEvacuationKeepsTheSlotARetokenTookOverFromItsRefusedStatement(t *testin
 	})
 	fixture.requireSlotOrigin(slotId, slotBody, retokenOrigin)
 	fixture.requireSlotReadBack(named, epochPath(2, "s"), slotId, slotBody)
+}
+
+// A again with a CLOSURE (14.6): an admin's CLOSURE re-checkpoints c, its new chain in one closure upload and its fresh
+// key in a new slot; it passes step 6, its attempt is cut short, a PATH_EPOCH commits, and its retry is refused 412
+// PATH_EPOCH. Its retoken keeps the upload's receipt, the slot id and the slot's bytes, so nothing is uploaded or
+// charged again: it waits out the settle age, takes the slot over and commits on that one receipt. 26 h on,
+// evacuation drops the refused CLOSURE's record and keeps the slot, the retoken's.
+func TestEvacuationKeepsTheSlotAClosureRetokenTookOver(t *testing.T) {
+	fixture := newSlotEvacuateFixture(t)
+	fixture.auth.grant(fixture.check.signerId, fixture.check.repoId, sidecar.AclEvsAdmin)
+	commitment := fixture.crossRemove(false)
+	// c's version: one record of an upload, its key in a slot
+	keptId, keptObject, keptReceipt := fixture.check.upload("closure kept", fixture.clock.Now(), fixture.check.signerId)
+	oldSlotId, oldSlotObject, oldSlotBody := checkTestSlot(t, "old key")
+	committed := fixture.planAtTwo(commitment)
+	committed.Changes = append(committed.Changes, &sidecar.EvsPlannedChange{
+		TokenPath: checkTestPath("c"), EntryVersion: fixture.check.fileEntry(committed, 3, []*protocol.EvsLocator{checkTestSegmentLocator(keptId)}, oldSlotId),
+	})
+	committed.NewObjects = append(committed.NewObjects, keptObject, oldSlotObject)
+	committed.SlotBodies = append(committed.SlotBodies, oldSlotBody)
+	committedBody, _ := fixture.bodyAndOrigin(committed)
+	committedBody.Receipts = []*protocol.EvsUploadReceipt{keptReceipt}
+	fixture.requireCommitted(fixture.post(fixture.token(fixture.check.signerId), committedBody), 3)
+	fixture.awaitStepEights()
+
+	// the CLOSURE's one upload, and its new key's slot
+	uploadId, uploadObject, uploadReceipt := fixture.check.upload("closure upload", fixture.clock.Now(), fixture.check.signerId)
+	slotId, slotObject, slotBody := checkTestSlot(t, "new key")
+	closure := func(plan *sidecar.EvsPushPlan, path sidecar.EvsTokenPath) *sidecar.EvsPushPlan {
+		plan.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_CLOSURE)
+		plan.Erased = []*sidecar.EvsErasedKey{{SlotId: oldSlotId, KeyIndex: 0}}
+		plan.Changes = append(plan.Changes, &sidecar.EvsPlannedChange{
+			TokenPath: path, BaseEntryVersion: 3,
+			EntryVersion: fixture.check.fileEntry(plan, 4, []*protocol.EvsLocator{checkTestSegmentLocator(uploadId)}, slotId),
+		})
+		plan.NewObjects = append(plan.NewObjects, uploadObject, slotObject)
+		plan.SlotBodies = append(plan.SlotBodies, slotBody)
+		return plan
+	}
+	admin := fixture.token(fixture.check.signerId, "admin")
+	refusedBody, refusedOrigin := fixture.bodyAndOrigin(closure(fixture.planAtTwo(commitment), checkTestPath("c")))
+	refusedBody.Receipts = []*protocol.EvsUploadReceipt{uploadReceipt}
+	fixture.failHeadWrites()
+	requireRefusal(t, fixture.post(admin, refusedBody), http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+	fixture.host.Blobs.Faults().Clear()
+	fixture.requireSlotOrigin(slotId, slotBody, refusedOrigin)
+	_, _, storedAt, _ := fixture.slotObject(slotId)
+
+	fixture.cutOverToEpochTwo(commitment, pathEpochTestMoveAt(2, []uint64{1}, "a"))
+	requireRefusal(t, fixture.post(admin, refusedBody), http.StatusPreconditionFailed, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH)
+
+	retoken := closure(fixture.planOnHead(2, commitment), epochPath(2, "c"))
+	retoken.Changes[0].SourcePaths = [][]byte{epochSourcePath(t, 1, "c")}
+	retokenBody, retokenOrigin := fixture.bodyAndOrigin(retoken)
+	retokenBody.Receipts = []*protocol.EvsUploadReceipt{uploadReceipt}
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		answered <- fixture.post(admin, retokenBody)
+	}()
+	settledAt := storedAt.Add(fixture.settings2().SlotSettleAge)
+	fixture.awaitTimerAt(settledAt)
+	fixture.clock.AdvanceTo(settledAt)
+	fixture.requireCommitted(<-answered, 5)
+	fixture.awaitStepEights()
+	fixture.requireSlotOrigin(slotId, slotBody, retokenOrigin)
+
+	fixture.requireEvacuated(func(result *EvacuationResult) bool {
+		return result.DeadCount == 1 && result.SlotForeignCount == 1 && result.SlotDeletedCount == 0
+	})
+	fixture.requireSlotOrigin(slotId, slotBody, retokenOrigin)
+	fixture.requireSlotReadBack(map[uint64]sidecar.EvsTokenPath{2: epochPath(2, "c"), 1: checkTestPath("c")}, epochPath(2, "c"), slotId, slotBody)
 }
 
 // B: another writer lists a committed version's slot as new four times, young and past 23 h, with its bytes and with
