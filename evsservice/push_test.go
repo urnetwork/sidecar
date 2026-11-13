@@ -659,8 +659,9 @@ func TestPushRefusesAForeignSignatureBeforeAnyRead(t *testing.T) {
 	}
 }
 
-// §11.8 step 6's slots: a new slot is written If-None-Match before the head; its retry's equal bytes are success; a
-// slot past 23 h with equal bytes is 409 SLOT_STALE, recorded.
+// §11.8 step 6's slots: a new slot is written If-None-Match before the head; a later push listing it again with equal
+// bytes finds another statement's object and is 409 SLOT_STALE, recorded (DESIGN-DETAILS 14.2.3; push_slot_test.go
+// holds each row of the round).
 func TestPushWritesItsNewSlots(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	slotId, slotObject, slotBody := checkTestSlot(t, "slot a")
@@ -683,7 +684,7 @@ func TestPushWritesItsNewSlots(t *testing.T) {
 		t.Fatal("the slot holds other bytes")
 	}
 
-	// a second push introducing that slot id again a day later, with the same bytes: stale
+	// a second push introducing that slot id again a day later, with the same bytes: another statement's object
 	fixture.clock.Advance(24 * time.Hour)
 	again := fixture.plan()
 	again.Changes = append(again.Changes, &sidecar.EvsPlannedChange{
@@ -726,7 +727,7 @@ func TestResolvePush(t *testing.T) {
 		t.Fatalf("resolution %+v %v", resolution, err)
 	}
 	fenced := CloneEvsHead(head.Head)
-	fenced.FenceMs = time.UnixMilli(pending.TimeMs).Add(evsResolveStatementLife + time.Second).UnixMilli()
+	fenced.FenceMs = time.UnixMilli(pending.TimeMs).Add(fixture.settings.ResolveStatementLife + time.Second).UnixMilli()
 	resolution, err = fixture.engine.ResolvePush(fixture.ctx, fixture.cluster, pendingRecord, fenced)
 	if err != nil || resolution.State != EvsResolveDead {
 		t.Fatalf("resolution %+v %v", resolution, err)
