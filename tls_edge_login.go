@@ -12,7 +12,8 @@
 //	          at <issuer>/oauth/token for an ID token, which must verify under the issuer's id- key set (ES256),
 //	          with iss the issuer, aud the origin alone, the nonce the cookie's, network_id this network, a live
 //	          exp no further than IdTokenMaxLifetime past iat, and sub a member this config holds now; then
-//	          __Host-ur-session (HttpOnly, Secure, SameSite=Lax, 12 h), and 302 back to where the visitor began
+//	          __Host-ur-session (HttpOnly, Secure, SameSite=Lax, 12 h), and 302 back to where the visitor began, or
+//	          under members-device no session yet: the device step begins (tls_members_device.go)
 //
 // The login path and the callback are the front's (/.well-known/ur/), so neither reaches the local service. An origin
 // is https://<sni>, with :<port> where the endpoint's port is not 443 and never :443, which is how the issuer takes
@@ -210,7 +211,7 @@ func (self *tlsEdgeLogin) takePending(state string, now time.Time) bool {
 	return ok && now.Before(expireTime)
 }
 
-// GET /.well-known/ur/callback (see the file header), under a members grant alone.
+// GET /.well-known/ur/callback (see the file header), under a members or members-device grant alone.
 func (self *tlsEdgeLogin) callback(w http.ResponseWriter, r *http.Request, conn *TlsFrontConn, view *tlsHttpSessionView) {
 	if r.Method != http.MethodGet {
 		tlsHttpAnswer(w, http.StatusMethodNotAllowed)
@@ -221,7 +222,8 @@ func (self *tlsEdgeLogin) callback(w http.ResponseWriter, r *http.Request, conn 
 	header.Set("Referrer-Policy", "no-referrer")
 	now := self.front.clock.Now()
 	grant := self.front.audience.grant(protocol.AclAppMode_ACL_APP_MODE_HTTP, now)
-	if grant == nil || grant.Audience != protocol.AclAudience_ACL_AUDIENCE_MEMBERS || self.issuerUrl == "" {
+	if grant == nil || self.issuerUrl == "" || (grant.Audience != protocol.AclAudience_ACL_AUDIENCE_MEMBERS &&
+		grant.Audience != protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE) {
 		tlsHttpAnswer(w, http.StatusNotFound)
 		return
 	}
@@ -249,6 +251,11 @@ func (self *tlsEdgeLogin) callback(w http.ResponseWriter, r *http.Request, conn 
 	memberId, err := self.verify(r.Context(), idToken, origin, base64.RawURLEncoding.EncodeToString(preLogin.nonce[:]), now)
 	if err != nil || !self.front.policy.MemberActive(memberId, now) {
 		tlsHttpAnswer(w, http.StatusForbidden)
+		return
+	}
+	if grant.Audience == protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE {
+		// the member is known; the session waits for a consented device's statement
+		self.front.device.begin(w, origin, memberId, preLogin.returnPath, now)
 		return
 	}
 	session := &tlsSession{memberId: memberId, issueTime: now, expireTime: now.Add(self.front.settings.SessionLifetime)}

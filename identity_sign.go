@@ -76,6 +76,9 @@ func sidecarIdentitySignedPurpose(signedType bridge.SignedType) (string, bool) {
 
 	case bridge.SignedType_SIGNED_TLS_KEY_ATTESTATION:
 		return TlsKeyAttestationPurpose, true
+	case bridge.SignedType_SIGNED_TLS_EDGE_LOGIN:
+		// TlsEdgeLoginPurpose, which tls_members_device.go holds off this file's legs
+		return "edge-login", true
 	case bridge.SignedType_SIGNED_TLS_LINK:
 		// TlsLinkPurpose, which tls_link.go holds off this file's legs
 		return "tls-link", true

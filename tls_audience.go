@@ -12,7 +12,9 @@
 //	                navigation goes to edge login and anything else is refused (S5)
 //	link            http: a __Host-ur-link cookie holding a TlsLinkToken that verifies (tls_link.go); raw: the
 //	                handshake's client certificate hashing to the grant's pin over TLS 1.3
-//	members-device  refused: its device statement is M6's (§13.17), and until then nothing passes it
+//	members-device  members' edge login and then a consented device's edge-login statement (tls_members_device.go):
+//	                a session that names that device, which counts while the device stays consented for its member
+//	                and the member a member, checked on every request; without one, a navigation goes to edge login
 //
 // The issuer's ID token is checked against this config's members too (§2.8 EX8), never trusted alone.
 //
@@ -35,6 +37,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The tls/ name §13.9's system publish serves, and the receiver's listen grant that stands in for its grants.
@@ -56,6 +59,8 @@ type TlsPublishGrant struct {
 	LinkSpkiSha256 []byte
 	// When the last of the rules ends; zero for none.
 	Expires time.Time
+	// The config version the grant was read at, ConfigState.Pin's; 0 where the policy does not say.
+	PolicyVersion uint64
 }
 
 // Whether grantId is one of the grant's rules.
@@ -80,6 +85,9 @@ type TlsFrontPolicy interface {
 	MemberActive(memberId Id, now time.Time) bool
 	// An admitted, unrevoked sidecar's identity public key, nil for any other.
 	IdentityKey(sidecarId Id) []byte
+	// Whether sidecarId is a device of memberId consented now (§8.5's consented(d, M)), and neither read_only, whose
+	// statements every verifier refuses (§7.9), nor suspended: what may vouch for a members-device login.
+	DeviceConsented(sidecarId Id, memberId Id, now time.Time) bool
 }
 
 // The policy over this device's verified config: state answers the newest ConfigState its config client holds, nil
@@ -107,9 +115,21 @@ func (self *tlsFrontConfigPolicy) acl() *AclState {
 	return acl
 }
 
-// See TlsFrontPolicy.
+// See TlsFrontPolicy. The grant carries the version of the state it was read from.
 func (self *tlsFrontConfigPolicy) PublishGrant(name string, host string, now time.Time) *TlsPublishGrant {
-	return tlsPublishGrantOf(self.acl(), AclSidecarSubject(self.sidecarId), name, host, nil, now)
+	state := self.state()
+	if state == nil {
+		return nil
+	}
+	acl, err := state.Acl()
+	if err != nil {
+		return nil
+	}
+	grant := tlsPublishGrantOf(acl, AclSidecarSubject(self.sidecarId), name, host, nil, now)
+	if grant != nil {
+		grant.PolicyVersion = state.Pin().GetVersion()
+	}
+	return grant
 }
 
 // See TlsFrontPolicy.
@@ -124,6 +144,24 @@ func (self *tlsFrontConfigPolicy) PublishGrantOf(signerId Id, grantId []byte, na
 func (self *tlsFrontConfigPolicy) MemberActive(memberId Id, now time.Time) bool {
 	state := self.state()
 	return state != nil && state.Member(memberId) != nil
+}
+
+// See TlsFrontPolicy.
+func (self *tlsFrontConfigPolicy) DeviceConsented(sidecarId Id, memberId Id, now time.Time) bool {
+	state := self.state()
+	if state == nil {
+		return false
+	}
+	acl, err := state.Acl()
+	if err != nil {
+		return false
+	}
+	row := state.SidecarRow(sidecarId)
+	if row == nil || row.GetRevokedAt() != 0 || row.GetCapabilities()&uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY) != 0 ||
+		state.Suspended(sidecarId) {
+		return false
+	}
+	return acl.ConsentedFor(sidecarId, memberId)
 }
 
 // See TlsFrontPolicy.
@@ -245,7 +283,9 @@ func tlsGrantAppMode(appMode protocol.AclAppMode) protocol.AclAppMode {
 type tlsAudiencePass struct {
 	conn     *TlsFrontConn
 	audience protocol.AclAudience
-	// members: who the session names
+	// the grant the check passed under, which a reach receipt names (tls_reach_receipt.go)
+	grant *TlsPublishGrant
+	// members and members-device: who the session names
 	memberId Id
 }
 
@@ -313,7 +353,7 @@ func (self *tlsAudienceCheck) checkRaw(conn *TlsFrontConn) *tlsAudiencePass {
 	default:
 		return nil
 	}
-	return &tlsAudiencePass{conn: conn, audience: grant.Audience}
+	return &tlsAudiencePass{conn: conn, audience: grant.Audience, grant: grant}
 }
 
 // http: one request's check, on view's counted cookies (§13.7's other-origins row).
@@ -327,13 +367,19 @@ func (self *tlsAudienceCheck) checkHttp(r *http.Request, conn *TlsFrontConn, vie
 	}
 	switch grant.Audience {
 	case protocol.AclAudience_ACL_AUDIENCE_PUBLIC:
-		return &tlsAudienceVerdict{outcome: tlsAudiencePassed, grant: grant, pass: &tlsAudiencePass{conn: conn, audience: grant.Audience}}
-	case protocol.AclAudience_ACL_AUDIENCE_MEMBERS:
+		return &tlsAudienceVerdict{outcome: tlsAudiencePassed, grant: grant, pass: &tlsAudiencePass{conn: conn, audience: grant.Audience, grant: grant}}
+	case protocol.AclAudience_ACL_AUDIENCE_MEMBERS, protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE:
 		session := self.front.sessions.openSession(view.session, tlsEdgeLoginOrigin(conn), now)
-		if session != nil && self.front.policy.MemberActive(session.memberId, now) {
+		counts := session != nil && self.front.policy.MemberActive(session.memberId, now)
+		if counts && grant.Audience == protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE {
+			// a members session names no device, and a device that lost its standing vouches for nothing now
+			counts = session.deviceSidecarId != (Id{}) && self.front.policy.DeviceConsented(session.deviceSidecarId, session.memberId, now)
+		}
+		if counts {
 			return &tlsAudienceVerdict{outcome: tlsAudiencePassed, grant: grant, pass: &tlsAudiencePass{
 				conn:     conn,
 				audience: grant.Audience,
+				grant:    grant,
 				memberId: session.memberId,
 			}}
 		}
@@ -343,10 +389,10 @@ func (self *tlsAudienceCheck) checkHttp(r *http.Request, conn *TlsFrontConn, vie
 		return &tlsAudienceVerdict{outcome: tlsAudienceUnauthorized, grant: grant}
 	case protocol.AclAudience_ACL_AUDIENCE_LINK:
 		if _, err := self.verifyLink(view.link, conn, grant, now); err == nil {
-			return &tlsAudienceVerdict{outcome: tlsAudiencePassed, grant: grant, pass: &tlsAudiencePass{conn: conn, audience: grant.Audience}}
+			return &tlsAudienceVerdict{outcome: tlsAudiencePassed, grant: grant, pass: &tlsAudiencePass{conn: conn, audience: grant.Audience, grant: grant}}
 		}
 		return &tlsAudienceVerdict{outcome: tlsAudienceForbidden, grant: grant}
 	}
-	// members-device waits on M6's device statement, and nothing else is an audience
+	// nothing else is an audience
 	return &tlsAudienceVerdict{outcome: tlsAudienceForbidden, grant: grant}
 }
