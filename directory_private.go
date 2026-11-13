@@ -46,7 +46,8 @@ type directoryPrivateRepoArgs struct {
 
 // QD-748's check for a create of kind marked private, by client's device (see the file header): nil once the
 // network's directory stands, filed first by this device where it may; ErrDirectoryPrivateNeedsDirectory, naming
-// why, where it does not. Only a refusal before the repo's RepoCreate keeps nothing of the repo filed.
+// why, where it does not. A refusal files nothing of the repo, while a directory this device filed first stands
+// whatever refuses after it, and a retry finds it.
 func directoryReadyPrivateRepo(ctx context.Context, client *EvsClient, kind protocol.RepoKind, args *directoryPrivateRepoArgs) error {
 	if !aclRepoKindGeneral(kind) {
 		// announced only explicitly: nothing names it on its own
