@@ -64,7 +64,7 @@ type CertsTransition struct {
 
 type CertsStore interface {
 	// Writes a new row. A row with its id already is ErrCertsConflict, and one with no StateTime
-	// ErrCertsStateTime.
+	// ErrCertsStateTime. A reason is written only with a revoking row.
 	InsertCert(ctx context.Context, row *sidecar.TlsCertRecord) error
 	// The row, or ErrCertsNotFound.
 	GetCert(ctx context.Context, certId sidecar.Id) (*sidecar.TlsCertRecord, error)

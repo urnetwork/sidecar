@@ -116,7 +116,12 @@ func (self *FakeCertsStore) InsertCert(ctx context.Context, row *sidecar.TlsCert
 		if _, exists := self.rows[row.CertId]; exists {
 			return certsservice.ErrCertsConflict
 		}
-		self.rows[row.CertId] = certsFakeCopy(row)
+		stored := certsFakeCopy(row)
+		// a reason waits only in a revoking row
+		if stored.State != sidecar.TlsCertStateRevoking {
+			stored.RevocationReason = ""
+		}
+		self.rows[row.CertId] = stored
 		return nil
 	})
 }

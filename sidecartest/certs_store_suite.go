@@ -829,10 +829,14 @@ func caseCertsChainAndReason(ctx context.Context, store certsservice.CertsStore,
 			return err
 		}
 	}
-	// a row read in a list carries both too
+	// a row written with a reason and not revoking keeps none; a row read in a list carries both
 	listed := certsSuiteRow(sidecar.NewId(), base.Add(time.Minute))
+	listed.RevocationReason = sidecar.TlsCertRevocationReasonKeyCompromise
 	if err := store.InsertCert(ctx, listed); err != nil {
 		return err
+	}
+	if got, err := store.GetCert(ctx, listed.CertId); err != nil || got.RevocationReason != "" {
+		return fmt.Errorf("a queued row written with a reason: %+v, %v", got, err)
 	}
 	if err := certsSuiteIssue(ctx, store, listed, certsservice.CertsCaGts, fmt.Sprintf("%x", certsSuiteRandom(8)), base); err != nil {
 		return err
