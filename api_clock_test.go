@@ -427,8 +427,8 @@ func TestProofRefusalWithNoDateStands(t *testing.T) {
 }
 
 // The reading is the Date less the round trip's midpoint on the device's clock; a round trip past
-// ApiClockMaxRoundTrip, a Date that is no HTTP-date, and another service's answer each leave the reading
-// before standing.
+// ApiClockMaxRoundTrip and a Date that is no HTTP-date each leave the reading before standing, as another
+// service's answer does (api_clock_socket_test.go).
 func TestApiClockReadingsKeptAndLeft(t *testing.T) {
 	world := newTestApiClockWorld(t, 10*time.Minute)
 	ctx := context.Background()
@@ -468,21 +468,8 @@ func TestApiClockReadingsKeptAndLeft(t *testing.T) {
 		t.Errorf("a malformed Date moved the offset to %s", offset)
 	}
 
-	// the sockets service's answer gives its own clock, never api's
-	world.override = func(request *http.Request, requestIndex int) *http.Response {
-		if request.URL.Host != "sockets.example" {
-			return nil
-		}
-		return syntheticResponse(request, 200, `{"names":[]}`, world.date(http.Header{}, world.apiNow.Add(5*time.Minute)))
-	}
-	if _, err := world.api.SocketList(ctx, ""); err != nil {
-		t.Fatal(err)
-	}
-	if offset := world.api.currentApiClockOffset(); offset != kept {
-		t.Errorf("another service's answer moved the offset to %s", offset)
-	}
-
-	// and the auth origin's does give api's
+	// the auth origin's answer gives api's clock as the api origin's does
+	world.override = nil
 	world.setDeviceOffset(-10 * time.Minute)
 	if _, err := world.api.ExchangeToken(ctx, "https://evs.example", nil); err != nil {
 		t.Fatal(err)
