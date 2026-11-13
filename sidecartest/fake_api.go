@@ -292,8 +292,11 @@ func (self *FakeApi) client(request *http.Request) *fakeApiClient {
 	return self.clientOfToken(bearer)
 }
 
-// Serves a request in process, as api's router would, the route gate first.
+// Serves a request in process, as api's router would, the route gate first. Every answer carries the api's clock in
+// its Date header, as net/http's server stamps each of api's (RFC 9110 §6.6.1): what a sidecar signs its DPoP iat by
+// (§7.4, QD-757).
 func (self *FakeApi) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Date", self.clock.Now().UTC().Format(http.TimeFormat))
 	refused := func() bool {
 		self.stateLock.Lock()
 		gate := self.routeGate

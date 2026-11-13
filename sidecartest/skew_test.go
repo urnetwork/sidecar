@@ -2,19 +2,19 @@
 // true, against the Net's api on the shared clock. A service token is kept for at most ServiceTokenCacheTimeout of the
 // sidecar's own time and its expires_in, both lengths rather than times, so whichever way its clock runs it never
 // presents one its audience finds expired, and it trades for a new one at the end of each cache life. The exchange
-// proves the ClientKey by DPoP, whose iat §7.4 holds within ±60 s of the api's clock: a sidecar 10 min off is refused
-// there, explicitly, and gets no token at all. That bound and §22.8's ±10 min disagree, which question
-// test-m2-15-dpop-iat-under-skew carries; until it is answered the expiry clause runs on an api whose iat window takes
-// the skew, and the refusal under production's window is held as it stands.
+// and the client token's renewal prove the ClientKey by DPoP, whose iat §7.4 holds within ±60 s of the api's clock:
+// the sidecar signs iat by the api's clock, which each of api's answers gives it in its Date (QD-757), so a sidecar
+// 10 min off exchanges and renews under that window as the unskewed twin does. The window itself stands: a client
+// that cannot read the api's clock stays refused (the root's TestSkewedSidecarApiWithNoDateStaysRefused), and a proof
+// replayed is refused (TestSkewedSidecarApiExchangesWithTheFakeApi).
 //
-// A push's time bound runs on the evs world (fault/skew_test.go), and a ticket on the listener's registrar and
-// admission in the root (socket_listen_skew_test.go).
+// A push's time bound runs on the evs world (fault/skew_test.go), where the token clause's three routes also run as
+// one row, and a ticket on the listener's registrar and admission in the root (socket_listen_skew_test.go).
 
 package sidecartest
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -25,24 +25,15 @@ import (
 // are real (X9).
 const testSkewOnlineTimeout = 30 * time.Second
 
-// A Net whose api takes a DPoP iat within dpopIatWindow of its clock, and a sidecar enrolled on it at the shared clock
-// and then restarted on its pairing's clock, Online. The caller closes the Net, before the next pairing's, since a
-// sidecar_testhooks build holds one Net at a time.
-func newTestSkewSidecar(t *testing.T, pairing *ClockSkewPairing, dpopIatWindow time.Duration) (*Net, *TestSidecar) {
+// A Net whose api holds a DPoP iat within production's window, §7.4's 60 s, and a sidecar enrolled on it at the shared
+// clock and then restarted on its pairing's clock, Online. The caller closes the Net, before the next pairing's, since
+// a sidecar_testhooks build holds one Net at a time.
+func newTestSkewSidecar(t *testing.T, skew *ClockSkew, pairing *ClockSkewPairing) (*Net, *TestSidecar) {
 	t.Helper()
-	net := NewNet(t.Context(), nil)
-	apiSettings := DefaultFakeApiSettings()
-	apiSettings.DpopIatWindow = dpopIatWindow
-	api, err := net.AddApi(apiSettings)
-	if err != nil {
-		net.Close()
-		t.Fatal(err)
+	if window := DefaultFakeApiSettings().DpopIatWindow; skew.Skew() <= window {
+		t.Fatalf("a skew of %s fits the DPoP window of %s, so this pairing proves nothing", skew.Skew(), window)
 	}
-	func() {
-		net.stateLock.Lock()
-		defer net.stateLock.Unlock()
-		net.api = api
-	}()
+	net := NewNet(t.Context(), nil)
 	testSidecar, err := net.AddSidecar("laptop", nil)
 	if err != nil {
 		net.Close()
@@ -63,7 +54,8 @@ func newTestSkewSidecar(t *testing.T, pairing *ClockSkewPairing, dpopIatWindow t
 }
 
 // Whichever way the sidecar's clock runs, every service token it hands its components verifies at evs on the shared
-// clock, the cached one up to the end of its cache life, and the one after it is new.
+// clock, the cached one up to the end of its cache life, and the one after it is new: each exchange is taken under
+// the api's 60 s window.
 func TestClockSkewServiceTokenExpiryHolds(t *testing.T) {
 	skew, err := NewClockSkew(nil, "laptop")
 	if err != nil {
@@ -71,7 +63,7 @@ func TestClockSkewServiceTokenExpiryHolds(t *testing.T) {
 	}
 	for _, pairing := range skew.Pairings() {
 		func() {
-			net, testSidecar := newTestSkewSidecar(t, pairing, skew.Skew()+time.Minute)
+			net, testSidecar := newTestSkewSidecar(t, skew, pairing)
 			defer net.Close()
 			running := testSidecar.Sidecar()
 			cacheTimeout := testSidecar.Settings.TokenRefreshSettings.ServiceTokenCacheTimeout
@@ -105,38 +97,61 @@ func TestClockSkewServiceTokenExpiryHolds(t *testing.T) {
 	}
 }
 
-// Under production's window, ±60 s, a sidecar 10 min off is refused at the exchange and holds no token, while the
-// unskewed twin gets one: the refusal is the api's, never a stale token presented to a service.
-func TestClockSkewOutsideTheDpopWindowRefusesTheExchange(t *testing.T) {
+// Whichever way the sidecar's clock runs, it renews its client token at GET /auth/refresh under the api's 60 s
+// window, when connect reports its credential refused and again after: the api mints each one, the sidecar stays
+// Online on its generation, and the token it then exchanges with is the renewed one.
+func TestClockSkewClientTokenRenews(t *testing.T) {
 	skew, err := NewClockSkew(nil, "laptop")
 	if err != nil {
 		t.Fatal(err)
 	}
-	productionWindow := DefaultFakeApiSettings().DpopIatWindow
-	if skew.Skew() <= productionWindow {
-		t.Fatalf("a skew of %s fits the DPoP window of %s, so this pairing proves nothing", skew.Skew(), productionWindow)
-	}
 	for _, pairing := range skew.Pairings() {
 		func() {
-			net, testSidecar := newTestSkewSidecar(t, pairing, productionWindow)
+			net, testSidecar := newTestSkewSidecar(t, skew, pairing)
 			defer net.Close()
-			accessToken, err := testSidecar.Sidecar().ServiceToken(t.Context(), testSidecar.Settings.EvsUrl, nil)
-			switch {
-			case pairing.Unskewed() && err != nil:
-				t.Errorf("the unskewed twin got no token: %v", err)
-			case !pairing.Unskewed() && err == nil:
-				t.Errorf("pairing %s: a token %d bytes long, though its DPoP iat is %s off the api's clock", pairing, len(accessToken), pairing.Offset("laptop"))
-			case !pairing.Unskewed() && !testSkewNamesDpop(err):
-				t.Errorf("pairing %s: the exchange ended %v, not the api's refusal of its proof", pairing, err)
+			record, ok := testSidecar.NetworkRecord()
+			if !ok {
+				t.Fatalf("pairing %s: no network record", pairing)
+			}
+			api := testSidecar.Api
+			generation := testSidecar.Sidecar().Status().Generation
+			for i := range 2 {
+				net.Clock().Advance(time.Hour)
+				count := api.ClientTokenCount(record.ClientId)
+				testSidecar.CloseAuthorization()
+				if !testSkewAwaitClientTokenCount(api, record.ClientId, count+1) {
+					t.Errorf("pairing %s, renewal %d: the api minted %d tokens for the client, not %d", pairing, i, api.ClientTokenCount(record.ClientId), count+1)
+					return
+				}
+				if issuedAt, _, ok := api.NewestClientToken(record.ClientId); !ok || !issuedAt.Equal(net.Clock().Now()) {
+					t.Errorf("pairing %s, renewal %d: the newest token was issued at %s", pairing, i, issuedAt)
+				}
+			}
+			if status := testSidecar.Sidecar().Status(); status.State != sidecar.SidecarStateOnline || status.Generation != generation {
+				t.Errorf("pairing %s: status %+v after the renewals", pairing, status)
+			}
+			if _, err := testSidecar.Sidecar().ServiceToken(t.Context(), testSidecar.Settings.EvsUrl, nil); err != nil {
+				t.Errorf("pairing %s: the exchange after the renewals: %v", pairing, err)
 			}
 		}()
 	}
 }
 
-// Whether err carries the exchange's invalid_dpop_proof.
-func testSkewNamesDpop(err error) bool {
-	var apiError *sidecar.SidecarApiError
-	return errors.As(err, &apiError) && apiError.Code == "invalid_dpop_proof"
+// Waits until api has minted the client count tokens in all, false when it has not within testSkewOnlineTimeout.
+func testSkewAwaitClientTokenCount(api *FakeApi, clientId sidecar.Id, count int) bool {
+	deadline := time.After(testSkewOnlineTimeout)
+	for {
+		// subscribed before the read, so a mint between them wakes the wait
+		_, minted := api.Mints()
+		if count <= api.ClientTokenCount(clientId) {
+			return true
+		}
+		select {
+		case <-minted:
+		case <-deadline:
+			return false
+		}
+	}
 }
 
 // The pairings of a row: every actor at each of -skew, 0 and +skew, the unskewed twin first, and each pairing's clocks

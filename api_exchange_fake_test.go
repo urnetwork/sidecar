@@ -34,6 +34,12 @@ type exchangeFakeWorld struct {
 }
 
 func newExchangeFakeWorld(t *testing.T) *exchangeFakeWorld {
+	return newExchangeFakeWorldWith(t, 0, nil)
+}
+
+// The world with its client on a clock deviceOffset from the api's, and its requests going through wrap's transport
+// over the api's when wrap is not nil.
+func newExchangeFakeWorldWith(t *testing.T, deviceOffset time.Duration, wrap func(transport http.RoundTripper) http.RoundTripper) *exchangeFakeWorld {
 	ctx := context.Background()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	faults := sidecartest.NewFaultQueue()
@@ -59,7 +65,11 @@ func newExchangeFakeWorld(t *testing.T) *exchangeFakeWorld {
 	}
 	api.BindClientKey(clientId, ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey))
 	token := api.ClientToken(sidecar.NewId(), clientId, sidecarId)
-	client, err := sidecar.NewSidecarApiWithClientKey(settings, api.Transport(), token, seed, clock.Now)
+	transport := api.Transport()
+	if wrap != nil {
+		transport = wrap(transport)
+	}
+	client, err := sidecar.NewSidecarApiWithClientKey(settings, transport, token, seed, clock.WithOffset(deviceOffset).Now)
 	if err != nil {
 		t.Fatal(err)
 	}
