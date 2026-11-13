@@ -24,8 +24,9 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// The test network at base 2, whose acl rows hold the config repo as its bootstrap leaves it, with a member's laptop
-// and phone admitted and a general repo the phone reads.
+// The test network with a member's laptop and phone admitted and a general repo the phone reads. Its config repo is
+// the Genesis's, whose row the state adds while the rows hold none and the rows take at its first shrink (QD-719,
+// QD-762).
 type gkmForwardNet struct {
 	*testConfigNet
 	configId  Id
@@ -36,12 +37,7 @@ type gkmForwardNet struct {
 
 func newGkmForwardNet(t *testing.T) *gkmForwardNet {
 	net := newTestConfigNet(t)
-	configId := testConfigId("config repo")
-	rows := net.statesAt[net.n].Rows()
-	rows.Acl = testConfigMarshal(t, &protocol.AclRows{Repos: []*protocol.AclRepo{{RepoId: configId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG}}})
-	if verdict := net.pushBase(net.owner, rows, net.n, 2, 0); !verdict.Accepted() {
-		t.Fatalf("base 2: %v", verdict.Refusal)
-	}
+	configId := Id(net.log.State().Genesis().GetConfigRepoId())
 	member, laptop := net.consentedMember("m")
 	phone := net.device("m phone", member)
 	net.admitDevice(laptop, phone, 0)

@@ -21,8 +21,16 @@
 //	         no expiry: KeyHolders holds neither
 //
 // Only an entry that wrote a sidecar, member or Delegation row, or the acl rows, can shrink, so every other entry costs
-// nothing here; one that did is judged over every repo the rows hold, and so is every base. Bounding that by the repos
-// the entry's subject can reach is the review phase's.
+// nothing here; one that did is judged over every repo the rows hold and the config repo beside them, and so is every
+// base. Bounding that by the repos the entry's subject can reach is the review phase's.
+//
+// The config repo's row is ACL's state's own until the config's first shrink (QD-719): no RepoCreate files it, so the
+// rows hold none and the state adds AclRepo{repo_id: Genesis.config_repo_id, kind: config} with holders_shrunk_at 0.
+// Every admitted sidecar holds the config's key, so a SidecarRevoke, a park, a Suspend, a MemberRevoke or a
+// DelegationRevoke shrinks it; at the first entry or base that does, the row joins the rows, AclRepo{repo_id, kind:
+// config, holders_shrunk_at: n} sorted in with the rest, and advances there afterwards like any repo's, so bases carry
+// it and a base's shrunk_repo_ids may name it (QD-762). No rows bytes change at the row's creation, and the rows change
+// only when there is a shrink to record.
 //
 // Nothing here creates, derives or unwraps a key. On every leg.
 
@@ -134,9 +142,41 @@ func configEntryEffects(statement *configStatement, activations []configActivati
 	return effects
 }
 
+// The config repo a Genesis names, false for none: 16 bytes and not all zero, as ACL's state reads it.
+func configGenesisRepoId(genesis *bridge.Genesis) (Id, bool) {
+	configRepoId, err := IdFromBytes(genesis.GetConfigRepoId())
+	if err != nil || configRepoId == (Id{}) {
+		return Id{}, false
+	}
+	return configRepoId, true
+}
+
+// The repos a shrink is judged over at a state: each repo its rows hold, in their order, then the Genesis's config
+// repo while the rows hold no row of it, whose row ACL's state adds (QD-719, QD-762). A repo id that does not parse
+// names no repo.
+func configShrinkRepoIds(state *ConfigState) []Id {
+	configRepoId, configNamed := configGenesisRepoId(state.genesis)
+	configHeld := false
+	repoIds := make([]Id, 0, len(state.aclRows.GetRepos())+1)
+	for _, repo := range state.aclRows.GetRepos() {
+		repoId, err := IdFromBytes(repo.GetRepoId())
+		if err != nil {
+			continue
+		}
+		if configNamed && repoId == configRepoId {
+			configHeld = true
+		}
+		repoIds = append(repoIds, repoId)
+	}
+	if configNamed && !configHeld {
+		repoIds = append(repoIds, configRepoId)
+	}
+	return repoIds
+}
+
 // Advances holders_shrunk_at on next, the state at entry n being built from before, S(n-1), for each repo the entry
-// shrinks at its time (§7.9's shrink row). Called once an entry's effects are written, in Apply, in a base's
-// re-application and in StateAt's rebuild alike, so every verifier holds one value.
+// shrinks at its time (§7.9's shrink row), the config repo among them. Called once an entry's effects are written, in
+// Apply, in a base's re-application and in StateAt's rebuild alike, so every verifier holds one value.
 func configAdvanceShrinks(before *ConfigState, next *configStateBuilder, effects []*configStatement) {
 	touched := 0 < len(next.sidecarsCopied) || 0 < len(next.membersCopied) || 0 < len(next.delegationsCopied) ||
 		next.state.aclRows != before.aclRows
@@ -148,9 +188,8 @@ func configAdvanceShrinks(before *ConfigState, next *configStateBuilder, effects
 	after := configCopyState(next.state)
 	at := time.UnixMilli(next.state.timeMs)
 	shrunk := map[Id]bool{}
-	for _, repo := range after.aclRows.GetRepos() {
-		repoId, err := IdFromBytes(repo.GetRepoId())
-		if err != nil || before.Repo(repoId) == nil {
+	for _, repoId := range configShrinkRepoIds(after) {
+		if before.Repo(repoId) == nil {
 			// a repo the entry made has no holder to lose
 			continue
 		}
@@ -167,22 +206,50 @@ func configAdvanceShrinks(before *ConfigState, next *configStateBuilder, effects
 	configSetShrunkAt(next, func(repoId Id) bool { return shrunk[repoId] })
 }
 
-// Sets holders_shrunk_at to the builder's position for each repo shrink names, on a copy of its acl rows.
+// Sets holders_shrunk_at to the builder's position for each repo shrink names, on a copy of its acl rows. Where shrink
+// names the Genesis's config repo and the rows hold no row of it, its row joins them here (QD-762), before the first
+// repo whose id is greater, as a base's compile sorts them.
 func configSetShrunkAt(next *configStateBuilder, shrink func(repoId Id) bool) {
-	if next.state.aclRows == nil {
-		return
-	}
 	n := next.state.n
+	configRepoId, configNamed := configGenesisRepoId(next.state.genesis)
+	configHeld := false
 	var rows *protocol.AclRows
+	// the builder's rows, copied once
+	rowsForWrite := func() *protocol.AclRows {
+		if rows == nil {
+			rows = &protocol.AclRows{}
+			if next.state.aclRows != nil {
+				rows = proto.Clone(next.state.aclRows).(*protocol.AclRows)
+			}
+		}
+		return rows
+	}
 	for i, repo := range next.state.aclRows.GetRepos() {
 		repoId, err := IdFromBytes(repo.GetRepoId())
-		if err != nil || !shrink(repoId) || n <= repo.GetHoldersShrunkAt() {
+		if err != nil {
 			continue
 		}
-		if rows == nil {
-			rows = proto.Clone(next.state.aclRows).(*protocol.AclRows)
+		if configNamed && repoId == configRepoId {
+			configHeld = true
 		}
-		rows.Repos[i].HoldersShrunkAt = n
+		if !shrink(repoId) || n <= repo.GetHoldersShrunkAt() {
+			continue
+		}
+		rowsForWrite().Repos[i].HoldersShrunkAt = n
+	}
+	if configNamed && !configHeld && shrink(configRepoId) {
+		repos := rowsForWrite().Repos
+		index := slices.IndexFunc(repos, func(repo *protocol.AclRepo) bool {
+			return 0 < bytes.Compare(repo.GetRepoId(), configRepoId.Bytes())
+		})
+		if index < 0 {
+			index = len(repos)
+		}
+		rows.Repos = slices.Insert(repos, index, &protocol.AclRepo{
+			RepoId:          configRepoId.Bytes(),
+			Kind:            protocol.RepoKind_REPO_KIND_CONFIG,
+			HoldersShrunkAt: n,
+		})
 	}
 	if rows != nil {
 		next.setAclRows(rows)
@@ -190,15 +257,14 @@ func configSetShrunkAt(next *configStateBuilder, shrink func(repoId Id) bool) {
 }
 
 // The repos whose key holders a base's own change shrinks (QD-746), as its shrunk_repo_ids carries them: each repo of
-// after's rows, after being the base's state with its tail re-applied, that before, S(b-1), holds, and whose
-// KeyHolders at the time given lose a holder from before to after by Dropped, so an agent its Delegation covers in
-// after is no loss. Holders after's state cannot compute fail closed, as a shrink, as configAdvanceShrinks reads them.
-// Sorted by id bytes, each once.
+// after's rows, and the config repo beside them (QD-762), after being the base's state with its tail re-applied, that
+// before, S(b-1), holds, and whose KeyHolders at the time given lose a holder from before to after by Dropped, so an
+// agent its Delegation covers in after is no loss. Holders after's state cannot compute fail closed, as a shrink, as
+// configAdvanceShrinks reads them. Sorted by id bytes, each once.
 func configBaseShrunkRepoIds(before *ConfigState, after *ConfigState, at time.Time) [][]byte {
 	repoIds := []Id{}
-	for _, repo := range after.aclRows.GetRepos() {
-		repoId, err := IdFromBytes(repo.GetRepoId())
-		if err != nil || before.Repo(repoId) == nil {
+	for _, repoId := range configShrinkRepoIds(after) {
+		if before.Repo(repoId) == nil {
 			// a repo the base's state made has no holder to lose
 			continue
 		}
@@ -220,14 +286,13 @@ func configBaseShrunkRepoIds(before *ConfigState, after *ConfigState, at time.Ti
 	return repoIdBytes
 }
 
-// The repos a base's shrunk_repo_ids name, as a verifier takes them: each a 16-byte repo_id of after's rows, in
-// strictly ascending byte order. Else an error, which no honest writer's base gives.
+// The repos a base's shrunk_repo_ids name, as a verifier takes them: each a 16-byte repo_id of after's rows or the
+// Genesis's config repo, whose row the rows may not hold yet (QD-762), in strictly ascending byte order. Else an error,
+// which no honest writer's base gives.
 func configBaseShrunkRepoIdsOf(header *bridge.ProjectionHeader, after *ConfigState) (map[Id]bool, error) {
-	rowsRepoIds := map[Id]bool{}
-	for _, repo := range after.aclRows.GetRepos() {
-		if repoId, err := IdFromBytes(repo.GetRepoId()); err == nil {
-			rowsRepoIds[repoId] = true
-		}
+	heldRepoIds := map[Id]bool{}
+	for _, repoId := range configShrinkRepoIds(after) {
+		heldRepoIds[repoId] = true
 	}
 	shrunk := map[Id]bool{}
 	for i, repoIdBytes := range header.GetShrunkRepoIds() {
@@ -238,8 +303,8 @@ func configBaseShrunkRepoIdsOf(header *bridge.ProjectionHeader, after *ConfigSta
 		if 0 < i && 0 <= bytes.Compare(header.GetShrunkRepoIds()[i-1], repoIdBytes) {
 			return nil, fmt.Errorf("shrunk_repo_ids[%d] out of ascending order", i)
 		}
-		if !rowsRepoIds[repoId] {
-			return nil, fmt.Errorf("shrunk_repo_ids[%d] names a repo the rows do not hold", i)
+		if !heldRepoIds[repoId] {
+			return nil, fmt.Errorf("shrunk_repo_ids[%d] names a repo the state does not hold", i)
 		}
 		shrunk[repoId] = true
 	}
@@ -248,9 +313,10 @@ func configBaseShrunkRepoIdsOf(header *bridge.ProjectionHeader, after *ConfigSta
 
 // A base in a later base's tail, re-applied on next at its own position: its rows are superseded and it judges
 // nothing, but holders_shrunk_at advances again to its position for each repo of the rebuilt rows its shrunk_repo_ids
-// name, which every verifier at the later base holds alike, since it keeps the tail's entries. Its list was held to
-// what its change shrank where it landed (configApplyBaseShrinks); an id that does not parse names no repo here. An
-// entry that does not parse as a base is an error, a fork.
+// name, the config repo's row joining them there if they hold none, which every verifier at the later base holds
+// alike, since it keeps the tail's entries. Its list was held to what its change shrank where it landed
+// (configApplyBaseShrinks); an id that does not parse names no repo here. An entry that does not parse as a base is an
+// error, a fork.
 func configReapplyBaseShrinks(next *configStateBuilder, kept *configKeptEntry) error {
 	_, header, err := configParseBase(kept.entry)
 	if err != nil {
