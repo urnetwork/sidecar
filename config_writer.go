@@ -8,6 +8,8 @@
 //	compile  rows = compile(head, L(folded_through)), L the previous base's rows when the fold did not move, else this
 //	         device's state at folded_through, the open proposals and the replay ring with it
 //	verdicts tail_verdicts carries this device's own verdict at every tail position, which it held as a reader
+//	shrinks  shrunk_repo_ids the repos whose key holders the base's own change shrinks, from the tip's state and the
+//	         one the base gives, at this device's clock, computed again at every re-sign (QD-746)
 //	publish  POST /network/config/projection {Signed ProjectionHeader, rows, config_pushes}; on 409 the device catches
 //	         up and re-signs at the new tip, keeping its fold and its compile while folded_through stays within 1,024
 //	         of the tip and no other base landed, so a stream of statements never starves it; a base that landed
@@ -50,10 +52,10 @@ var (
 	ErrConfigWriterNotWriter = errors.New("config writer: not a config writer here")
 	// The config repo's ref moved since the head was read: read it again and save on top.
 	ErrConfigHeadConflict = errors.New("config head conflict")
-	// The base did not land within ConfigWriterSettings.PublishAttemptCount re-signs.
+	// The base did not land within ConfigWriterSettings.PublishAttemptCount re-signs: the tip kept moving, or api kept
+	// finding other shrinks at its time than this device's clock gave (QD-746).
 	ErrConfigWriterGaveUp = errors.New("config writer: the tip kept moving")
-	// A base would keep both the newest base's fold and its head: it says nothing new, and would carry rows without
-	// what that base itself shrank (config_coverage.go), so none is published.
+	// A base would keep both the newest base's fold and its head: it says nothing new, so none is published.
 	ErrConfigWriterNothing = errors.New("config writer: nothing new to publish")
 )
 
@@ -484,8 +486,8 @@ func configHeadsEqual(a *ConfigHead, b *ConfigHead) bool {
 	return true
 }
 
-// The plan's Signed ProjectionHeader at the client's tip: version tip+1, prev_chain A_tip, and the tail's verdicts
-// as this device holds them.
+// The plan's Signed ProjectionHeader at the client's tip: version tip+1, prev_chain A_tip, the tail's verdicts as this
+// device holds them, and the repos the base's own change shrinks at this device's clock.
 func (self *ConfigWriter) signBase(plan *configWriterPlan) ([]byte, error) {
 	var header *bridge.ProjectionHeader
 	err := func() error {
@@ -517,6 +519,13 @@ func (self *ConfigWriter) signBase(plan *configWriterPlan) ([]byte, error) {
 			Threshold:        plan.threshold,
 			TailVerdicts:     configEncodeTailVerdicts(verdicts),
 		}
+		// the repos the base's own change shrinks, from this tip and the state the base gives, at this device's clock:
+		// api stamps the entry's time and answers 409 when its own differ, and this re-signs (QD-746)
+		shrunkRepoIds, err := log.BaseShrunkRepoIds(header, plan.rows, self.clock.Now().UnixMilli())
+		if err != nil {
+			return fmt.Errorf("the base's own shrinks: %w", err)
+		}
+		header.ShrunkRepoIds = shrunkRepoIds
 		return nil
 	}()
 	if err != nil {

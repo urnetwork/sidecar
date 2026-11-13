@@ -1068,6 +1068,12 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "tail_verdicts", number: 10, typeName: "bytes"},
 		question: "DESIGN-DETAILS 5.2.2 (details-5-settings-in-rows)",
 	},
+	// QD-746: a base carries the repos its own change shrinks, which a verifier that starts at it cannot compute
+	{
+		message:  "ProjectionHeader",
+		field:    testFenceField{name: "shrunk_repo_ids", number: 11, typeName: "bytes", repeated: true},
+		question: "team-m2-09-base-shrinks",
+	},
 	{
 		message:  "ProjectionRows",
 		field:    testFenceField{name: "proposals", number: 7, typeName: "ProposalRow", repeated: true},
