@@ -23,6 +23,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 | 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
 | 15 | Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10) | 2 | complete (2026-11-12) |
+| 16 | Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9) | 0 | complete (2026-11-13) |
 | 17 | Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8) | 1 | complete (2026-11-13) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
@@ -12805,6 +12806,751 @@ Each is filed under `.stack/questions/` and the section is built on its recommen
 - **`details-15-erase-before-cut`**: a record erasure destroys the bodies before its CUT, where SEARCH-M10-16's plan entry has every caller CUT first. Recommendation: as built.
 - **`details-15-context-fields`**: an erased context entry's agent label and session ids stay in the rows of the run's other entry documents written before the erasure (15.2.8). Built: they stay, as names the run's other entries carry themselves. The other ways give every entry document a version with the epoch and fold each again, or take fields 9 and 11 out of entry rows. Recommendation: as built.
 - **`details-15-small-readings`**: nine readings an implementer would otherwise decide, each with what was built: the mask rule, a record log's companion interval, the fold's order, an empty fold, the 2^32 bound, which devices hold again units and when they build, the CUT for a late copy, a BASE waiting for its erasure, and the eraser's fetch bound.
+
+## 16. Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9)
+
+Status: complete (2026-11-13)
+
+Tasks held until complete: none. ACL-M6-04's prefix half was never built, and 16.7 says what it and five new tasks build.
+
+Model: `sidecar/sidecartest/model/details/PrefixRules.tla`, its configurations (`PrefixRules.cfg`, `PrefixRules-*.cfg`, `PrefixRulesTwin-*.cfg`, `PrefixRulesReach-*.cfg`) and `run-prefixrules.sh` beside it. Questions filed: `.stack/questions/details-16-subject-atoms.md`, `details-16-admins-unbound.md`, `details-16-git-mode-stop.md`, `details-16-repair.md`, `details-16-small-readings.md`. The section is built on the recommendation of each, and on the recommendation of the open question `details-amend-2-late-generation`, whose grace rule 16.2.2 and 16.2.3 take as section 12 does. It specifies what the owner accepted in QD-212 (DESIGN-AMENDMENTS.md) and what RESOLUTIONS.md `plan-EVS1-v1-unspecified` #5 made the rule. It builds on section 5 (rows and verdicts across bases), section 8 (git and evs) and section 9 (path epochs), and changes no rule of any of them: it adds one line to 8.2.7's `check` and to 8.2.8's receive path, and one list to section 5's rows.
+
+### 16.1 The problem
+
+A repo's writers are the sidecars that hold its `rw` right, and the right is whole: evs sees token paths, never names (I-1, X2), and §8.13 rules out a server that checks prefixes. So a team that wants an agent to write only under `agents/build/`, or a group's devices only under `docs/`, has one tool in v0, a repo per prefix (D-ACL-11). Q-EVS-3 closed on the v1 answer: prefix rules in the repo's sealed configuration, enforced by sidecars with an alarm. QD-212 fixed its shape: an access-log statement `RepoPrefixRules{repo_id, rules (sealed)}`, a rule being {subject atom, path prefix in whole components, write}, readers folding it at each push's auth pin, a version no rule allows ignored with `evs_alarm prefix_rule`. That is a sentence, and nine things stand between it and code. A and B are the brief's; C to I were found writing this.
+
+Terms. A *set* is one `RepoPrefixRules` statement's opened rules. A set *binds* every signer: one it names may write under the prefixes it names for it, and one it does not name may write nothing. A push that writes a path its signer's rules do not allow is a *breach*, and its signer runs code that is not this design's, since a design device refuses the write before it reaches evs. A reader that does not follow a change *ignores* it. The *effective* version of a path is the newest one a reader does not ignore.
+
+**A. Nothing is checked (`PrefixRulesTwin-NoCheck`, 3 states).** The repo holds `agents/build/` and `src/`. A set gives the tag `ci` the prefix `agents/build`. A CI agent's token is stolen, or its daemon is patched, and it pushes a new version of `src/main.go`. evs commits it: the signer holds `rw`. Every reader verifies the statement, finds a writer of the repo at its pin, and shows the file. No line of code reads a rule; `AllowPrefixWrite` appears nowhere.
+
+**B. The rows keep only the newest (`PrefixRulesTwin-NewestOnly`, 5 states).** "On RepoVersioning's pattern" keeps one value in `AclRepo`, the newest lock. A lock is read at the tip. A rule is read at a push's pin, which may be any position since the repo was created. A set at position 10 holds the agent to `agents/build`; it breaches at pin 12; an admin files a wider set at 20; a base lands at 30. A device that starts at that base holds one set, the one at 20, and by it the breach at pin 12 is allowed, or, reading "no set at or below 12", unbound. A device that was running at 12 ignored it. The two show different files, and each builds its next write on what it shows.
+
+**C. Judged at the reader's tip (`PrefixRulesTwin-JudgeAtTip`, 4 states).** The simpler rule, "the set in force now", re-judges history at every change of the rules: a version written under yesterday's wider set is ignored today by a device that reads it today and kept by one that read it yesterday. QD-212 says the pin; the model shows why nothing else agrees.
+
+**D. A subject whose members a head gives (`PrefixRulesTwin-HeadAtoms`, 4 states).** §8.4's atoms include groups, roles and the admin, owner and auditor autogroups, whose members are compiled from the config head and change. A reader holds S(k) only from its previous base to its tip (§7.9's retention row; `ConfigLog.StateAt`). Most of what a new device reads was pushed before that: the newest version of nearly every file is older than the previous base. For a signer's right the server stands behind an old version, since evs checked the scope at commit (§11.9's trusts row). For a prefix it does not: no server ever checked. A rule that names a group can be judged only by a device that held the state at the push's pin, so a new device either takes every old version unjudged or judges it by today's membership, which ignores an honest version whose writer has since left the group.
+
+**E. The server folds what readers ignore (`PrefixRulesReach-Hidden`, 3 states; `PrefixRulesTwin-RepairSkipsNames`, 4).** Ignoring is a reader's act. evs applies a breach like any push: the file's entry takes the new version, the parent's name table loses or gains a row, a versionless file's replaced content is purged a minute later (§11.7), a removal's marker is collected past the horizon. A head reader takes a directory's table from evs at its first pin (§11.9's trusts row) and walks only the deltas after it. So a device that starts after a breach removed `src/main.go`'s row lists no such file, while a mirror that ignored the delta lists it; a versionless file a breach replaced is gone from evs for every device that did not hold it.
+
+**F. The next writer must build on the breach (`PrefixRulesTwin-DiffOnNewest`, 4 states).** §11.8's 5g holds a change to `base_entry_version` = the path's newest version on evs, and that is the breach's. §11.7 writes a file's next record as a diff on its previous version's chain. An honest device that ignores version 2 and edits the file would send version 3 as a diff resting on version 2's records: a reader that shows 3 reconstructs it through bytes it refused, and if the breach's records are garbage, cannot.
+
+**G. A pin may be as old as the head's (`PrefixRulesReach-StalePin`, 3 states; `PrefixRulesTwin-NoHeadFence`, 4).** evs holds a push's auth pin at or above the head's and no higher (§11.8's fence row); the gate's other clause is about generations, and a rule change shrinks no holder. An admin tightens the rules at position 40. The agent pushes with pin 39, the head's, and readers judge the push at 39, under the old set, for as long as no other push raises the head's pin on that ref.
+
+**H. Rules are names and statements are tokens.** A rule's prefix is plaintext. A statement names a change by its token path in the push's path epoch (§11.6), a statement past 1 KiB carries a Merkle root and covering prefixes in place of its changes, a directory change is a delta whose rows are in its entry version, and section 9 keeps several epochs standing during a copy. A head reader holds one change and its proof. Nothing says which bytes a reader compares, or how a writer held to a prefix creates the directory that prefix names when a change at the directory above it is, read naively, outside the prefix.
+
+**I. Two modes.** A file-mode ref takes each change by itself. A git-mode ref takes a push whole: 8.2.7's `check` proves that a push's changes are exactly the net change between two trees, and a mount cannot apply half of one.
+
+**The requirement.** One verdict per change, the same at every device that verifies the push, whenever it started and whatever it retains, computed from the log's rows and the push's signed bytes and nothing else. No reader shows, builds on, indexes, exports or mirrors a version its rules do not allow, and none ever holds bytes of one inside a version it shows. A design device's own write is never ignored. A device that starts after a breach reads what a device that watched it reads, once any device that holds the effective state has written it back, and until then is wrong only about names and about content evs no longer serves. A tightened set binds a ref from a stated point that the filer controls. api learns that a repo has rule sets, when each was filed and by whom; evs and gkm learn nothing (I-18). Formats 1 and 2 of evs do not change.
+
+### 16.2 The design
+
+#### 16.2.1 The principle
+
+Three ideas carry the section.
+
+**The verdict is a function of rows that keep positions.** `AclRepo` gains the list of every rule set that took effect, each with its signer and position, for the repo's life. The set in force at a pin is the newest row at or below it. A rule's subject is a fact an admission fixes for a sidecar's life: its id, its member, a tag, its class. Every such fact is in the signer's `SidecarRow`, which a reader holds whenever it can verify the signature at all, since the row also holds the key. Nothing else is read: not a group, not a role, not the repo's admin rows, which QD-743 drops at the first base past retention after an admin is removed. So a device that starts at any base, and holds no state at the push's pin, computes what a device that was there computed (B, C, D). This is section 5's rule for a rows-only verifier applied to a reader: what a later reader needs is in the rows, with its position.
+
+**Readers ignore; evs is not told; devices that hold the effective state write it back.** There is no server-side flag, mark or message: evs commits a breach and folds it (§8.13, I-1). Each reader keeps, per path, the newest version it allows, and serves, bases and builds on that. The gap E describes is closed in the ref itself: the first design device to write a path after an event it ignored writes the effective state in full, as a checkpoint with the path's row stated again, and a device that mirrors the ref does that unasked after a delay. After it, evs's newest is an allowed version and every reader, new or old, agrees with no walk.
+
+**A write is refused where it is made.** The writer's device runs the same function on its own change at the state it pins, before any byte goes to evs. So a breach is never an accident of timing: it is a device that does not run this code, and the alarm names it.
+
+What does not change: every message of evs formats 1 and 2, the statement's fields, evs's checks, the gate, §11.9's read API, the signer check (I-EVS-14), which still runs first, and the refs table. Prefix rules sit after all of them and can only take a change away.
+
+#### 16.2.2 The statement and its bytes
+
+```proto
+// protocol/bridge/signed.proto, with the other 0x11xx access-log statements
+SIGNED_REPO_PREFIX_RULES = 0x1111;       // 0x1110 stays QD-013's ApprovalDelivery
+
+// protocol/acl.proto
+message RepoPrefixRules {                // purpose acl; an access-log statement (§8.8)
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes sealed_rules = 3;                // a PrefixRuleSet in config_seal's form, sealed to the repo's own generation
+}
+message PrefixRuleSet {                  // the plaintext; no server ever holds it
+  repeated PrefixRule rules = 1;         // ascending by (subject, path), no rule twice
+}
+message PrefixRule {
+  bytes subject = 1;                     // 16 B: a sidecar_id, a member_id, a tag id, or one of four autogroup atoms
+  repeated bytes path = 2;               // the prefix in whole components, §11.6's raw names; none: every path
+  PrefixAction action = 3;               // PREFIX_ACTION_WRITE, the only action
+}
+enum PrefixAction { PREFIX_ACTION_UNSPECIFIED = 0; PREFIX_ACTION_WRITE = 1; }
+
+message AclRepo {                        // ... fields 1 to 11 as they are
+  repeated AclRepoPrefixRulesRow prefix_rules = 12;   // every set that took effect, in position order, for its life
+}
+message AclRepoPrefixRulesRow { bytes signer = 1; uint64 at = 2; }
+```
+
+The id-level rule is one row of §7.9's rule table, judged alike by api, the gates and every device, none of which needs a key for it:
+
+```text
+signer   a repo admin at the entry's position, or a config writer: checkRepoVersioning's test
+repo     in the rows, of kind general, not deleted (16.9, small reading 1)
+body     sealed_rules is 48 B and a positive multiple of 256 B, at most SealedMaxByteCount (64 KiB): config_seal's
+         u64be(g), 24 B nonce, the padded plaintext and its 16 B tag
+count    the repo's rows hold fewer than SetMaxCount (256) sets; the next is refused naming the limit
+effect   {signer, at} appended to AclRepo.prefix_rules, and nothing else: no right, holder or key changes, so
+         holders_shrunk_at does not move and no generation is asked for
+```
+
+The seal is `SealConfigBody` with `ConfigSealContext{SIGNED_REPO_PREFIX_RULES, header}` and the repo's own `EvsRepoKey` at the filer's newest generation, as an owner-bound repo's `RepoVersioning` rules are sealed. The key is HKDF over RK_g with the repo's id as salt, and the aad binds the signed type and the header's network id and nonce, so a body opens in no other statement and under no other repo. Every reader of the repo opens it, through the ladder for an older generation (§10's ladder); a writer reads (§8.4), so every writer does; a config reader that does not read the repo learns only what api learns.
+
+What an opened body is, by rules every reader applies to the same bytes:
+
+```text
+opened   the AEAD and the padding pass; the message parses with no unknown field; every action is WRITE; at most
+         RuleMaxCount (256) rules, ascending by (subject bytes, then the path's components compared in order as
+         bytes, a shorter path first), none equal to its neighbour; each subject 16 B; each path at most the token
+         path's 32 components (EvsFormatSettings), each component a name §11.6 takes (not empty, no slash, no NUL)
+newer    it parses, and holds an unknown field or an action above WRITE: a later release's set (D-PHASE-9)
+void     anything else: the seal does not open under its generation's key, or a rule above fails; and a body whose
+         generation's GenRotate is signed more than GenerationFormGrace (1 h) after the entry that carries it
+         (12.2.3's readers' half, on the recommendation of details-amend-2-late-generation)
+pending  the reader does not hold the body's generation yet, or has not fetched the entry
+```
+
+A set with no rule is opened: it names nobody, so nobody may write. The set that restricts nobody is the one rule {`autogroup:sidecar`, no path}, which is how an admin lifts the rules.
+
+A rule's subject names a signer by its admission alone (question `details-16-subject-atoms`, option 1):
+
+```text
+names(subject, row):                       // row: the signer's SidecarRow, a tombstone included
+   subject = row.sidecar_id                                                              sidecar:<id>
+   subject = row.member_id, and the row carries no tag                                   user:<email>
+   subject ∈ row.tag_ids                                                                 tag:<name>
+   subject = AclAutogroupAtom(SIDECAR)                                                   every signer
+   subject = AclAutogroupAtom(TAGGED), and the row carries a tag
+   subject = AclAutogroupAtom(MEMBER), and the row carries no tag and is not ephemeral
+   subject = AclAutogroupAtom(EPHEMERAL), and the row carries no tag and is ephemeral
+   else no
+```
+
+`member_id`, `tag_ids` and `ephemeral` are set at admission and never change (`config_admit.go`), and a member id, a tag id and a sidecar id are drawn so that none takes the autogroup form (plan-ACL-atom-and-rule-ids). An atom of any other kind in a rule, a group's among them, names nobody: a reader cannot tell it from a random id, and no reader needs to. The command that files a set refuses to seal one (16.2.9).
+
+#### 16.2.3 The rows, and where a set's body comes from
+
+`FoldAclRepos` gains the case: clone the repo's row, append `{Signer: signer, At: at}`. It runs in `ApplyStatement`, in section 5's `Reapply` for a tail entry with verdict 1, and in a writer's compile over the statements a base folds, as every access-log statement does, so a rows-only verifier, a device started at a base and a long-running reader hold one list (5.2.3). The list is in position order because entries apply in position order. It is never shortened: a set stays in the list after a later set replaces it, since versions pinned in its span are judged by it for as long as they are read. A compromise cascade voids nothing here, as it voids no grant and no lock; the row keeps its signer so that TEAM-M2-04's `CascadePlan` can list the sets a device in P filed for an admin to replace (16.5).
+
+A row is 2 B of framing, 18 B of signer and 2 to 11 B of position, a tag and a varint: 24 B at positions below 2^21, at most 31 B. At the cap a repo's sets take 6 KiB so, and at most 7.75 KiB, of §8.8's 4 MiB of rows; `AclRowsCheckLimits` counts them with the rest. The cap exists because a row is for the repo's life. A team that would pass it moves to a new repo, which D-ACL-11's interim already describes.
+
+The body is not in the rows. A device that reads or writes the repo gets the entry at `at`:
+
+```text
+body(at):   the log's retained entry at `at` when the device holds it (at ≥ its retention point), else
+            ConfigHead.RecordsIn(at - 1, at): the fold record at that position, which the config head holds
+            verbatim for the network's life and which the chain the device recomputed at its anchor binds
+            (5.2.4; details-5-base-records-in-folds, QD-627)
+            the record's kind and body must be a Signed RepoPrefixRules for this repo; anything else is a base
+            whose rows do not compile from its head, section 5's alarm, and no set of this repo is judged
+opened sets are kept in the evs component's sealed store, prefix/<repo_id>: {at, state, the plaintext rules}
+            per row; a set never changes, so one is opened once per device; a pending one is tried again at each
+            generation the repo's key ring gains and at each entry the log applies
+```
+
+*Pending and newer.* A row whose set a reader holds pending or newer stops that reader from judging any push of the repo pinned at or above it: the verdict is `wait` (pending) or `update` (newer), and the reader shows what it accepted before (16.2.5). A pending set resolves: the generation arrives through the ladder, or it never forms and the grace rule voids it once the log holds an entry timed more than `GenerationFormGrace` plus `PendingVoidMargin` after the set's entry and the device's read of gkm's generation listing, taken after it applied that entry, is whole and names no such generation (12.2.3's argument, with its 10 min and 20 min clock bounds: a generation claimed later is signed past the grace, so a reader that gains it voids the set as well). Only a repo admin or a config writer can file a set that stays pending, and an honest filer seals to a generation it holds.
+
+*Void.* A void set changes nothing: the newest opened set below it stays in force, as `config_seal` has a sealed effect void and its id-level effect standing. Each reader raises `evs_alarm prefix_rule` with detail `set_void` once per set.
+
+`AclNewestRepoVersioning`'s pattern, a scan of every fold record from the genesis taking each record whatever its verdict, is not used: the row is the verdict, and its position is the lookup.
+
+#### 16.2.4 The verdict
+
+One pure function, in `sidecar/acl_prefix.go`. It reads the push's signed bytes, the repo's rows and the signer's row, and no state at the push's pin, so a reader computes it for every version it shows, one whose signer's right it takes on evs's word included (§11.9's trusts row). It runs after §11.9's checks; a push that fails those is refused as today and never reaches it.
+
+```text
+PrefixVerdict(row, rows, sets, u, c, entry, table) -> allowed | ignored | wait | update
+   row     the signer's SidecarRow, from the state the reader verified the push in or any later one: a tombstone
+           serves, since the three facts read never change
+   rows    the repo's AclRepo.prefix_rules in any state of this log at or above u.auth.version
+   sets    the repo's opened sets by position (16.2.3)
+   u       the verified push; c one of its changes; entry c's EvsEntryVersion where the reader holds it
+   table   for a directory delta outside every prefix: the table the reader is applying the delta to
+
+   1 scope     u.ref_kind is not shared; or the ref is `erasure`, `ur/index` or `ur/lfs`; or the repo's kind is
+               not general; or u.flags holds FORCE, DELETE, BASE, DROP, ERASE, CUT or CLOSURE  -> allowed (outside)
+   2 the set   the rows with at ≤ u.auth.version, newest first: a void set is passed over; a pending one -> wait;
+               a newer one -> update; the first opened one is the set in force; none        -> allowed (no set)
+   3 prefixes  A = { tp(rule.path, u.path_epoch) : rule in the set, names(rule.subject, row) }
+               tp is EvsPathTokens under K_path of the push's epoch; a rule with no path gives the empty token
+               path, a prefix of every path
+   4 index     a file-mode ref, and tp(".ur-index", u.path_epoch) is a prefix of c.token_path -> allowed (outside)
+   5 the change, T = c.token_path:
+       under(T)      some a in A is a prefix of T (equal counts)
+       a file's version or removal, a directory's creation or removal:   under(T) -> allowed, else ignored
+       a directory delta (entry.names):
+           under(T)                                                       -> allowed
+           else, each row it adds, child token t of kind k:  T+[t] is a prefix of some a in A; where it is a
+                 proper prefix, k is directory; and table holds no row for t, or holds one of kind directory
+                 each token it removes, t:                   T+[t] equals some a in A
+           every row passes -> allowed, else ignored
+```
+
+Line by line.
+
+*Scope.* Owned refs are their sidecar's (§11.8's refs table), deposit and erasure refs hold no path, record-class kinds are creates-only streams with their own writer rules, and the config, the directory and mailcfg are written by fixed sets (16.9, small reading 1). `ur/index`, `ur/lfs` and a file-mode ref's `.ur-index/` are written by every writer by design (§11.14: every writer of a ref writes its index) and are guarded by reproduction and `index_mismatch`, not by prefix; 16.2.5 says what search does with an ignored version. The seven flags are the pushes §11.8's refs table and 10.2.3's H1 hold to the admin right, which evs checks at commit against the token's scope, so the server stands behind them as it stands behind a signer's right. Each rewrites or removes what stands without changing what a reader may believe of a path's content (a CLOSURE replaces a version with its equal under a new key, a DROP and a BASE remove history, an ERASE destroys keys), and a reader that ignored one would keep citing bytes that are gone. The flag is in the signed statement, so this line too reads the same at every reader.
+
+*No admin is exempt.* A set binds every signer, a repo admin included, and an admin writes because the set names it: the command that files a set writes each standing admin into it as `sidecar:<id>` with no path (16.2.9). An exemption would be simpler to state and cannot be judged: it needs to know whether a signer was an admin at an old pin, and QD-743 keeps a removed admin's row only until the first base past retention, so a device that starts later would judge an old push of a since-removed admin as bound and ignore what its peers kept (B again). A name in a sealed set at a position is the same fact, kept for the repo's life. The question is filed (`details-16-admins-unbound`).
+
+*The set.* By position only. Pushes pinned below the first set are unbound, which is what "no statement" must mean for every version written before a team adopted rules.
+
+*Prefixes, in token space.* A token path is the HMAC chain of §11.6 under one epoch's path key, so a path lies under a prefix exactly when its token path begins with the prefix's token path in the same epoch, up to a 128-bit collision. The reader computes `tp(rule.path, e)` itself, from the name and the ladder, as section 9 has it compute every token path (9.2.4's reader). It compares with the change's own token path in the push's epoch, which the statement or the proof's leaf holds in the clear. Nothing is decrypted to judge a file change, and a head reader that holds one change and its inclusion proof has everything (H). Covering prefixes are not read: they bound absence proofs and say nothing a change does not.
+
+*Deltas.* A directory at or under a prefix is the writer's to change. A directory above a prefix is not, with one allowance, without which a writer held to a prefix could never create the directory it names: it may add the rows that lead to its prefix, each a directory row, and none replacing a row of another kind; and it may remove only the row of its prefix itself. It may not remove a row on the way: `agents/` may hold another writer's `agents/deploy/`, and a removed row hides a subtree from every listing. An added row that is already there changes nothing and is allowed. A reader judges a delta only when it applies one to a table it holds (a listing, a mirror), so it has the table.
+
+*Removals.* A removal at T removes everything below it (§11.7), all of which is under T, so the one test covers the subtree. A change's source paths (9.2.2's source row) are not judged: they name the same path in older epochs by the writer's claim, which evs cannot check and which a reader that replays checks against its own tokens as section 9 has it; 16.2.13 names what is left.
+
+*Nothing else is outside.* A REKEY's changes and a PATH_EPOCH's are judged like any: a writer re-checkpoints only under its prefixes, and a PATH_EPOCH push carries a map and no change.
+
+The verdict on a push that carries no change is allowed. That is the pin push (16.2.9).
+
+#### 16.2.5 File mode: the effective version
+
+On a file-mode ref the verdict is per change, and a push some of whose changes are ignored keeps the rest.
+
+```text
+effective(X):                                        // a head read, a mirror's apply, a planner's read
+   v = the newest event of X as §11.9 serves and verifies it: a version of X, or a removal at X or at a
+       directory above it
+   n = 0
+   loop:
+       PrefixVerdict(v's push, v's change):
+       allowed   return v                            // a version: its content. A removal: absent
+       wait      return the record's accepted version, state `held`; nothing above it is shown
+       update    the same, state `update`
+       ignored   alarm(v) once (16.2.10); n += 1
+                 n > WalkBackVersionCount (64):      EVS_PREFIX_RULE, detail depth
+                 v = the event v replaced: History's read at v's prev_commit_version with prev_push_id
+                     (9.2.4's history, E4), or for a removal the version below the one its marker names
+                 none: v created the path            return absent
+                 evs answers collected or dropped, or no marker stands:
+                     the record's accepted version where this device still holds its content, else
+                     EVS_PREFIX_RULE, detail unavailable
+```
+
+The head reader's record (`EvsReadRecord`) gains `Accepted {version, push id}` and `IgnoredThrough`, the newest version of the path this device ignored. A read whose newest version is at or below `IgnoredThrough` and whose accepted version stands returns from the record with no walk and no alarm. The record's pin, floor and epoch are section 9's and move as they do today, at every verified read, ignored or not: they describe what evs was shown, not what the reader believes.
+
+What each reader surface does with an ignored change:
+
+```text
+ReadHead, the SDK's and MCP's reads   effective(X): the accepted content and its version number; EvsFileInfo
+                                      gains IgnoredAbove, the count of ignored versions over it
+List                                  the folded table is evs's word, as it always is for a head reader, which
+                                      checks each name against its token and nothing about which rows a table
+                                      holds (§11.7); the deltas after it, which the reply carries, are judged and
+                                      an ignored one is not applied; a row whose path the record holds as
+                                      effectively absent is left out. The mirror is the reader that knows the
+                                      effective table, and 16.2.8 makes evs's table equal it
+History, `ur history`, `ur evs log`   every version, the ignored ones marked `ignored: prefix rule` with their
+                                      signer; a version nobody can judge is shown as evs has it
+change events (§11.10)                none for an ignored change: MCP sessions and SidecarRepoChangeListener hear
+                                      of the alarm, not of a change
+the file-mode mirror                  folds every statement from the ref's first version, each change judged, and
+                                      applies the allowed ones; an ignored event is journalled {ref, path,
+                                      version, kind} in the sealed store, which 16.2.8's repair consumes and
+                                      `ur status` lists
+export (EVS1-M2-49)                   effective versions; an ignored version is reported, as 8.5 reports a
+                                      refused one
+search (§11.14), from M10             a hit whose (path, version) the searching device ignores is masked, with the
+                                      masks of SEARCH-M10-24; a design device's companion push and its backfill
+                                      index no ignored version, and coverage counts an ignored push as indexed
+```
+
+A device shows the same file before and after a breach, and one line in `ur status`.
+
+#### 16.2.6 Git mode: a refused push
+
+On a git-mode ref the verdict is per push. 8.2.7's `check(u)` gains one line under `every shape`:
+
+```text
+prefix rules   u is outside the rules (16.2.4's line 1), or no set is in force at its pin, or every file change of
+               u (a write or a removal of a file's path) has its token path under a prefix the set gives the
+               signer; a set that is pending or newer leaves the replay waiting at u, as an unreachable source does
+```
+
+Directory changes are not judged here: a git-mode ref's directories follow from its files, `check` already holds the change list to the exact net change between two trees, and a tree cannot keep an empty directory, so a writer that removes its last file under `agents/build/` must be able to drop `agents/` with it. A push that fails the line is refused whole like any push that fails `check`: `evs_alarm` with reason `prefix_rule` in place of `version_rule`, `EvsGitRef.stuck_at = u`, nothing past u - 1 applied, the local ref left alone. Recovery is 8.5's and unchanged: an admin deletes the ref and pushes it again, and the push that re-creates it writes or removes every tainted token path. Every replaying device reaches the same verdict on u, a new one included (16.3's P1), so every mount stops at the same version.
+
+This gives a breaching writer nothing it did not hold: any writer of a git-mode ref can stop it today with one push whose tree does not hash. Skipping the push and going on would need every later push to rest on the tip before u while evs's entries hold u's changes, which is 8.5's taint rule on every push forever; the question is filed with the recommendation to stop (`details-16-git-mode-stop`).
+
+Head mode reads a git-mode ref one change at a time and never ran `check`. It applies 16.2.5's rule to the change it reads, so it does not show a breach's file, and it does not learn that the mounts refused the rest of that push.
+
+#### 16.2.7 The writer
+
+`AclEngine.AllowPrefixWrite` is the same function turned around, at the engine's installed state, whose pin the push will carry:
+
+```text
+AllowPrefixWrite(repo, ref kind and name, paths, sets) -> AclDecision
+   the lines 1 to 3 of PrefixVerdict with signer = this sidecar and pin = the installed state's
+   wait or update:  refuse, EVS_PREFIX_RULE detail pending or update: a device that cannot read the rules in
+                    force does not write under them
+   each path:       some rule's path that names this sidecar is a prefix of it, by components, in plaintext
+   a path refused:  AclDecision deny, reason prefix_rule, and the path; nothing is planned, sealed or sent
+```
+
+It is called by the planner (`evs_plan.go`) for every path a file-mode write names, before the first round trip, and by the receive path (8.2.8) for every file path of an update's net change before it builds the push: `ng <ref> prefix rule: <path>`. Directory rows are not asked about: a design planner adds rows on the way to a path it may write and removes none above its prefix. §18.5 gains the code `EVS_PREFIX_RULE`, which the SDK and MCP's write tools return with the path. The plaintext path is the caller's own and goes into no log (I-13).
+
+Because the push pins the state the check ran at, and readers judge at that pin, a design device's write is allowed by every reader (16.3's P2). A set that lands between the check and the commit does not reach back: the push is judged at its pin.
+
+*Writing over an ignored event.* The planner reads the path with `effective`. Where evs's newest event of the path is not the effective one, the write takes the **repair form**:
+
+```text
+condition   a caller's IfVersion or IfBaseVersion is compared with the effective version's number
+change      what evs's state needs: base_entry_version = evs's newest version of the path (5g's CAS is on evs's
+            state, and prev_push_id names it, so History's walk still passes through the ignored versions);
+            a creation where evs holds a removal the device ignores; a change over a file evs holds and the
+            device counts absent
+content     built from the effective version's content and nothing else: one checkpoint (chunks above 8 MiB),
+            never a diff, since a diff's chain would rest on the ignored version's records (F); the file's
+            file_id and versioning are the effective version's; a file whose effective state is absent is
+            removed
+names       the parent's delta states the path's row again: added where the effective state stands, removed
+            where it is absent, whatever evs's table shows; a directory the device counts standing and evs
+            removed is created again on the way
+metadata    the sealed metadata names the push ids it writes over, for `ur evs log`
+```
+
+The first allowed version after an ignored one is therefore a full copy, under the writer's own key, with its row. §11.7's checkpoint list gains this as its sixth case.
+
+#### 16.2.8 Repair
+
+A repair is the repair form with no edit: the effective state written back so that evs's newest is an allowed version again.
+
+```text
+who      a desktop or the daemon that mirrors the ref, holds rw, and is allowed every path the repair writes
+         (AllowPrefixWrite): an admin's device for any path, since the set names it for all, and any other
+         writer's for paths under its prefixes
+when     RepairDelay (5 min) after the device journalled the ignored event, plus a share of RepairJitter (5 min)
+         by SHA-256(sidecar_id || push id), so two candidates rarely send at once; one that loses 5g's CAS reads
+         again, finds the newest event allowed, and drops its journal unit
+what     names, always: one delta per directory, stating each dirty row
+         a path a breach created (effective: absent): its removal
+         a file or directory a breach removed: created again from the mirror's copy, the subtree with it
+         a versionless file a breach replaced: its accepted content again, from the mirror's copy
+         a versioned file a breach replaced: nothing at once, since every reader walks back one version;
+             a checkpoint once RepairDepth (8) ignored versions lie over it
+bounds   RepairPushCount (60) an hour and RepairByteCount (1 GiB) a day, per repo and device; past either the
+         journal units wait, `ur status` lists the dirty paths, and the alarm stands
+by hand  `ur evs repair <repo> [<path>]`: the same pushes at once, without the bounds, for a device that is allowed
+```
+
+A repair is an ordinary push: signed by its device, allowed by its rules, indexed and charged like any write. It asserts nothing about the breach, so a reader that could not judge the breach needs nothing from it but its content. The lasting remedy for a writer that keeps breaching is its revocation (`RepoRevoke`, `SidecarRevoke`, `Suspend`), which the alarm's signer field names; the bounds exist so that a breaching writer cannot spend the network's quota through honest devices.
+
+Whether repair is automatic is the owner's (`details-16-repair`); the section recommends this.
+
+#### 16.2.9 Filing, and when a set binds
+
+`ur evs rules <repo> show | allow <subject> <path>... | deny <subject> | set <file> | lift` on an admin's device, with the daemon's control method behind it and the apps' repo settings over that. `show` prints the set in force and, with `--history`, each row's position, signer and state. The others build the next set from the one in force, add a rule {`sidecar:<id>`, no path} for each standing admin of the repo that it lacks, sort it, and file one `RepoPrefixRules`; `set` with `--as-written` files the file's rules alone and says which admins it leaves unable to write. The command that adds a repo admin offers to file the set again with it. A subject is `sidecar:<id>`, `user:<email>`, `tag:<name>`, or `autogroup:sidecar`, `autogroup:member`, `autogroup:tagged` or `autogroup:ephemeral`; `group:<name>` is refused with the list of its members' `user:` subjects to file instead. `lift` files the set that binds nobody.
+
+A set is in the log from its entry. It binds a ref from the first push on that ref whose pin is at or above it, since readers judge at the pin and evs holds every later push's pin at or above the head's (G). The filer makes that push itself:
+
+```text
+after the statement's 200:
+   for each shared ref of the repo (GET .../refs, EVS1-M6-01; the mounts' refs until then):
+       a push of no change at the filer's tip, which is at or above the set: on a file-mode ref a statement with
+       no change; on a git-mode ref an UPDATE whose new tip is its old tip, with no commit and no change
+   a ref whose pin push fails is retried with the device's journal; `ur evs rules show` says which refs the set
+       binds yet, comparing each head's auth pin with the set's position
+```
+
+Any honest push does the same, since a design device pins its tip. Until one lands, a writer that sends an older pin can still write under the older set on that ref (`PrefixRulesReach-StalePin`); after it, none can (`Fence`). A widening needs no pin push: the writer it frees pins its own tip.
+
+#### 16.2.10 The alarm
+
+`SidecarEvent evs_alarm` with reason `prefix_rule` (`SidecarEvsAlarmPrefixRule`, landed) and:
+
+```text
+RepoId, RefId     the repo and ref
+Path              the path, this device's plaintext, shown to its user and in no log (I-13)
+Signer            the push's signer_sidecar_id
+Version, PushId   the ref version and the push
+Detail            ignored | refused (git mode) | set_void | set_newer | depth | unavailable
+Count             changes this event stands for
+```
+
+One event per (repo, ref, signer) in `AlarmInterval` (1 min), carrying the first path and the count, so a breach of a thousand files is one event; `ur status` lists every journalled path. `set_void` and `set_newer` are raised once per set per device and carry the row's signer and position in place of a push. The event goes where every `evs_alarm` goes (§5.4): the device's UI, MCP sessions, and an admin's notifier.
+
+#### 16.2.11 Settings
+
+`AclPrefixSettings` (root; `DefaultAclPrefixSettings()` fills them). No limit is a constant (QD-702). The first five are format limits that every verifier of the log or of a set holds alike, and change only with a release every device has:
+
+```text
+SealedMaxByteCount     65,536     the longest sealed_rules; id level
+SetMaxCount            256        rule sets in a repo's rows; id level
+RuleMaxCount           256        rules in a set, the admins' among them
+GenerationFormGrace    1 h        a set sealed to a generation signed later than this after its entry is void
+PendingVoidMargin      30 min     past the grace before a reader voids a set whose generation gkm does not name
+WalkBackVersionCount   64         ignored versions a read walks under before it answers EVS_PREFIX_RULE
+RepairDelay            5 min      from an ignored event to its repair
+RepairJitter           5 min      spread across candidates
+RepairDepth            8          ignored versions over a versioned file before its content is written again
+RepairPushCount        60 / h     per repo and device
+RepairByteCount        1 GiB / d  per repo and device
+AlarmInterval          1 min      one event per (repo, ref, signer)
+```
+
+A component's length and a path's depth are §11.6's, in `EvsFormatSettings`.
+
+#### 16.2.12 Releases that do not enforce
+
+The statement's number, the `AclRepo` field and the id-level rule land at M2 with the rule table (ACL-M2-18, 16.7), so that every verifier built from M2 on judges a `RepoPrefixRules` entry alike and folds its row, and no base forks on one (D-PHASE-9; QD-212's "reserve before M2's Gn-in"). A device built before M6 folds the row and enforces nothing: it reads the ref as evs has it. Rows carry no build, so the filer cannot list such devices; `ur evs rules` says once, at a repo's first set, that devices older than the release that carries this section do not follow the rules. evs formats 1 and 2 are untouched, and a repo of either takes rules.
+
+#### 16.2.13 What the rules do not stop
+
+Stated here so that no one reads more into "prefix rules" than a client can deliver. A writer that holds `rw` and runs its own code can still:
+
+```text
+write anywhere on evs            the bytes are stored and charged to the network's quota until an admin drops
+                                 them (§11.7's DROP) or the repo is deleted; readers do not show them
+destroy a versionless file       its replaced content is purged a minute later; devices that held it keep it and
+                                 one that is allowed writes it back (16.2.8); a device that never held it reads
+                                 EVS_PREFIX_RULE, detail unavailable, until then. A repo under RepoVersioning's
+                                 lock holds no versionless file but the index, so the lock closes this
+remove a path past the horizon   the same, once the removal's marker is collected (§11.7's collect row)
+hide or plant a name             for a head reader that starts after the delta and before the repair
+delete another path's source     while a path-epoch copy runs: a change's source paths are its writer's claim
+copy                             (9.2.2), so a breach can name another path's token in an older epoch and evs
+                                 deletes that copy; a mirror re-creates the path
+force retries and fill a          every writer of the path loses 5g's CAS once per breach; a directory's 4,096
+directory                         rows can be filled with names nobody shows
+write the index                  `.ur-index/`, `ur/index` and `ur/lfs` are outside the rules; reproduction and
+                                 index_mismatch are their guard (§11.14)
+stop a git-mode ref              as any writer can today (16.2.6)
+read everything                  a rule is about writes; every writer holds the repo's keys
+```
+
+A team that needs a server to refuse the write keeps separate repos (D-ACL-11), which remains the only server-enforced boundary.
+
+### 16.3 Invariants and why they hold
+
+```text
+P1 one verdict       two devices that hold a push's statement, the repo's rows at or above its pin and its signer's
+                     row reach one verdict on each of its changes, whatever base each started at, whatever state
+                     each retains, and whenever each reads it
+P2 honest stands     a change a design device sent is allowed by every reader
+P3 shown allowed     what a reader shows, serves, indexes, exports, mirrors or builds on for a path is a version
+                     its verdict allows, or absent
+P4 clean bytes       no record that a shown version's chain names was written by a push the reader ignores
+P5 the fence         on one ref a later push is never judged under an older set than an earlier push: once a
+                     push pinned at or above a set has committed, that set or a later one judges every push after
+P6 names converge    once a design device has written a path after the last event ignored there, a head reader
+                     whose table evs folded at any version lists the path as a mirror does
+P7 what servers see  api: a set's repo, position, time, signer, generation number and padded length. evs and gkm:
+                     nothing they did not see before (I-18)
+```
+
+**P1.** The verdict reads five things. The push's flags, ref kind, signer, pin, path epoch and the change's token path are signed bytes. The rows at or below the pin are a prefix of a list that only grows at its end, in position order, in every state at or above the pin, and section 5 gives every verifier the same rows at every position (5.3's Agreement), a device started at a base and a rows-only gate included. A set's state is a function of the entry's bytes and of the repo's generation ladder, which members hold alike (§10's ladder; section 6), with one time rule taken from section 12 that reads only signed times. The signer's `member_id`, `tag_ids` and `ephemeral` are written once at admission. The token paths of the rules are HMACs under a key every reader derives. Nothing is read at the reader's tip, from a head, or from a state at the pin. Model: `Agreement`, over the long-running reader and a device started at each base; twins `NewestOnly` (the rows keep one set), `JudgeAtTip` (the set in force now), `HeadAtoms` (a subject whose members a head gives).
+
+**P2.** A design device runs lines 1 to 3 on its own change at its installed state and stamps that state's pin into the push (16.2.7). A reader runs them at that pin, on the same rows, with the same row for the signer. The device compares plaintext components and the reader compares their tokens, which agree up to a collision of a 128-bit HMAC truncation. The delta rule cannot refuse what the planner sends: it adds only directory rows on the way to a path it may write, where no row of another kind stands (a file there is `ErrEvsPathKind` before any push), and removes no row above its prefix. Model: `HonestStands`, with a second design writer that the sets hold to one path while sets change beside it.
+
+**P3.** `effective` returns only a version whose verdict is allowed, the record's accepted version, which was returned by an earlier call, or absent; every surface of 16.2.5 calls it or applies only allowed changes, and 16.2.6's mount applies no push that fails `check`. Model: `ShownAllowed`; twin `NoCheck`; `PrefixRulesReach-Ignored` and `PrefixRulesReach-WalkedBack` show the walk is taken.
+
+**P4.** By induction over a path's allowed versions. An allowed version written by a design device over an allowed newest version rests on that version's chain, clean by induction. Written over an ignored event it is the repair form: one checkpoint built from the effective version's content, naming no earlier record (16.2.7). An allowed version written by any other code rests on whatever its signer chose, and the signer is allowed the path, so those bytes are its own to choose: P4 is about what a reader is made to take from a writer it ignores, and the only door is a design device's own next diff. Model: `CleanLineage`; twin `DiffOnNewest`.
+
+**P5.** evs commits a push only if its auth pin is not below the head's, atomically with the head (§11.8's fence row, clause 2; `CheckGate`), so the pins of a ref's pushes never fall, and the newest row at or below a pin is monotone in the pin. The filer's pin push carries a pin at or above its own set. Model: `Fence`; twin `NoHeadFence`; `PrefixRulesReach-StalePin` is the window before the pin push, and `PrefixRulesReach-Tightened` a set that takes a path away.
+
+**P6.** Let k be the last ignored event at a path and k' the first design write after it. k' is a repair form, so it states the path's row. Every event after k is allowed, so evs, a mirror and a head reader all apply every row from k' on, and k' fixed the row for all three. A head reader whose table was folded below k' applies k' itself, as an allowed delta. Model: `ListingAfterRepair`, over a head reader started at every version; twin `RepairSkipsNames`; `PrefixRulesReach-Hidden` is the state before the repair and `PrefixRulesReach-Repaired` the repair.
+
+**P7.** The statement's clear fields are its header, the repo's id and a sealed blob whose length is 48 B plus a multiple of 256 B and whose first 8 B are a generation number; the row adds its signer and position. A pin push is an ordinary push of no change, and a repair an ordinary write; evs can see that one follows a config entry in time, as it can for any write a config change prompts. No request carries a rule, a prefix or a verdict, and no reader tells a server what it ignored.
+
+**The model.** `PrefixRules.tla` holds one authorization log and one file-mode ref of one repo with two paths, one under the prefix that a set may name and one outside it. The log takes sets of three kinds (every path, the one path, nothing), bases, and under one twin a group's membership changes. The ref takes pushes by A, an admin's device that every set names for every path; by B, a design device the sets hold to their paths; and by W, which the sets hold as they hold B and which sends any change with any row under any pin evs takes. Each push is one change with its pin, the log's length when evs committed it, what it does to the path's content and to its row, and for a write its lineage: the versions whose bytes its record chain rests on. Readers are not variables: the long-running reader, a device started at each base, a mirror, and a head reader started at each version are functions of the log and the ref, which is the claim under test. Tokens, epochs, deltas' row rules, a set's four states and git mode are not in it.
+
+Every run below is TLC at the owner's jar (master d8fb231) through `.stack/tools/tlc`, breadth-first, by `run-prefixrules.sh details-16` from the track on 2026-11-13, on a host at a load average near 120; each run's state directory is deleted when it ends. A design run takes 4 workers and goes to the end of its graph. A run that must fail takes one worker and stops at its first violation, so its trace is a shortest one.
+
+```text
+design, must pass                 distinct states   depth   time
+PrefixRules                              53,718       5     7 s
+PrefixRules-Deep                        507,291       6     52 s
+PrefixRules-Long                        670,387       6     1 min 31 s
+
+must fail, with                   invariant violated     trace
+PrefixRulesTwin-NoCheck           ShownAllowed           3
+PrefixRulesTwin-NewestOnly        Agreement              5
+PrefixRulesTwin-JudgeAtTip        Agreement              4
+PrefixRulesTwin-HeadAtoms         Agreement              4
+PrefixRulesTwin-DiffOnNewest      CleanLineage           4
+PrefixRulesTwin-NoHeadFence       Fence                  4
+PrefixRulesTwin-RepairSkipsNames  ListingAfterRepair     4
+
+must reach                        the state                                                         trace
+PrefixRulesReach-Ignored          a push is ignored                                                 3
+PrefixRulesReach-WalkedBack       a path's effective version is not evs's newest                    3
+PrefixRulesReach-StalePin         W's push under an older pin is allowed against the set in force   3
+PrefixRulesReach-Hidden           a head reader and a mirror list a path differently                3
+PrefixRulesReach-Repaired         a design device writes a path after its last ignored event        4
+PrefixRulesReach-Tightened        a set takes a path that an earlier set gave                       4
+```
+
+The design configurations check `TypeOK`, `Agreement`, `HonestStands`, `ShownAllowed`, `CleanLineage`, `Fence` and `ListingAfterRepair`. `PrefixRules` runs two log entries and two pushes with all three kinds of set and both design writers; `PrefixRules-Deep` three log entries, so that a set, a second set and a base can all precede a device's start; `PrefixRules-Long` four pushes on one path-naming set, so that an ignored event, a second, a repair and a later write can follow each other. Each twin and reach run is the smallest ground that shows its trace.
+
+**What the model does not show.** Git mode: 16.2.6 adds one line to a check whose refusal path is section 8's, modelled in `GitSync.tla`. The token arithmetic, the delta rule and a set's states: each is a pure function of bytes, and 16.6's unit tests carry them, the delta rule against a generated corpus. The walk's bound and an unavailable version: they change what a reader can return, never to something it ignores. Liveness: that a repair is sent is the runner's timer and its journal, not a property TLC was given. Two refs of one repo: a ref's pushes are judged alone, and the pin push is per ref.
+
+### 16.4 Cost
+
+```text
+a rule change      one log entry: a statement of about 0.5 KiB for a set whose plaintext is under 256 B (six rules
+                   of two short components), 304 B of it the sealed set; 256 B more per 256 B of rules; at most
+                   64 KiB. One pin push per shared ref: a statement under 400 B and one head CAS
+rows               24 B a set at positions below 2^21 and at most 31 B, for the repo's life: 6 KiB a repo at the
+                   cap of 256 and at most 7.75 KiB, of §8.8's 4 MiB
+opening a set      one HKDF and one XChaCha20-Poly1305 over at most 64 KiB, once per set per device; the opened
+                   set is kept sealed on disk (QD-641), at most 16 MiB a repo at both caps, under 1 KiB typically
+a device's start   the fold records at the repo's set positions: a full reader holds them already (5.2.4's
+                   anchor); a phone reads each fold file that holds one, once
+token table        per (set, path epoch): one HMAC-SHA256 per component of each rule's path, at most 8,192, about
+                   4 ms on a desktop and 16 ms on a phone at the caps, under 50 µs for ten rules of two components;
+                   16 B a component in memory, at most 128 KiB at the caps, 320 B for ten rules; kept for the set
+                   in force in the current epoch and rebuilt for any other
+a verdict          a 16 B-wise prefix compare per rule that names the signer: no I/O, no decryption, under 1 µs
+a read             nothing more when evs's newest version is allowed. One History round (9.2.4) per ignored
+                   version above the effective one, once: the record then answers. At most 64
+a listing          nothing more
+a mirror           one verdict per change it replays
+a write            one plaintext prefix compare per path. Over an ignored event: one checkpoint of the file's size
+                   where a diff would have gone, once per breach per path
+a repair           names: one delta, 128 to 194 B a row (§11.7's name row). A re-created or versionless file: its
+                   size. A versioned file: nothing until 8 ignored versions lie over it. At most 60 pushes an
+                   hour and 1 GiB a day per repo and device
+a git-mode push    one verdict per file change inside check(u)
+servers            api: one rule-table row and one repeated field in AclRepo; no table, endpoint or migration.
+                   evs, gkm, the gates: nothing
+```
+
+What a breach costs the network: the bytes the breach itself stores, charged to the network's quota like any write until an admin drops them (16.2.13), and for each versionless or removed file the upload of its accepted content by one honest device, inside the repair bounds. One breach push under 1 KiB that removes a directory can therefore ask for up to 1 GiB of honest upload a day per repairing device, and no more.
+
+### 16.5 Failure modes and recovery
+
+```text
+a writer breaches                          every reader that holds the rules ignores the change and alarms with
+                                           the signer; a mirroring device that is allowed repairs after 5 min;
+                                           an admin revokes or suspends the signer, which the alarm names
+it breaches again and again                the repair bounds hold; journal units wait; `ur status` lists the dirty
+                                           paths; revocation is the remedy; `ur evs repair` after it
+a set does not open (void)                 the set below it stays in force; set_void at every reader, naming the
+                                           filer; an admin files again
+a set is sealed to a generation that       readers hold the repo's versions pinned at or above it (state `held`)
+never forms                                until the grace rule voids it, at the first log entry more than 1 h 30 min
+                                           after it; then as a void set
+a set from a later release (newer)         a device that cannot read it shows what it accepted and says `update`;
+                                           its writes to the repo are refused locally; no version is ignored or
+                                           shown on a guess
+the cap of 256 sets                        the 257th is refused at api and by every reader, naming the limit; the
+                                           set in force stands; a new repo, or a release that raises the limit
+a set that names no admin                  admins cannot write or repair until one files a set that names them,
+                                           which their admin right always allows; the filing command warns
+an admin's device is compromised           it can file any set. The cascade voids no set (as it voids no grant):
+                                           CascadePlan lists the sets it filed from since_n, and a clean admin
+                                           files the next. Versions judged under its set stay as judged; an
+                                           admin restores what it let through, by hand
+the pin push fails or the filer goes       the set binds the ref from the next honest push, which any design
+offline                                    device's write is; `ur evs rules show` names the refs not yet bound
+a base's rows hold a position whose         section 5's alarm for a base that does not compile from its head; no
+entry is not a RepoPrefixRules             set of the repo is judged by that device until it holds a good base
+the effective version is gone from evs     a versionless file's purged content, a removal collected past the
+                                           horizon, a dropped version: devices that hold it show it; others read
+                                           EVS_PREFIX_RULE, detail unavailable, until a repair
+more than 64 ignored versions over a       EVS_PREFIX_RULE, detail depth, on a device with no record of the path;
+path                                       a mirror repairs at 8
+two devices repair at once                 one wins 5g's CAS; the other reads an allowed newest version and drops
+                                           its unit; equal content either way
+a repair's device is itself held to a      it repairs only paths under its prefixes; the rest wait for an admin's
+prefix                                     device
+a git-mode ref stops at a breach           8.5: an admin deletes the ref and pushes it again, the re-creating push
+                                           writing or removing every tainted token path
+a signer's row is gone                     a tagged or ephemeral sidecar's tombstone past its not_after, at a pin
+                                           the reader does not retain: the reader cannot verify the signature at
+                                           all, with or without rules; such a version is §11.9's trusts row's,
+                                           evs's word, and unjudged here. A breach is at least 5 min of repair
+                                           delay old by then, against a not_after measured in days
+a device older than M6                     folds the row, enforces nothing, shows evs's newest (16.2.12)
+a restricted writer's daemon is honest     it never reaches evs with a refused path: EVS_PREFIX_RULE locally
+and its user asks for a path outside
+a set lands while a write is in flight     the push is judged at its pin, under the set its device checked (P2)
+the local record is lost                   the next read walks again and alarms again, once
+```
+
+### 16.6 The test plan
+
+**Unit (T1).**
+
+- `acl_prefix_test.go`. The statement's id-level rule, one case per row of 16.2.2's table and its positive twin: a signer that is neither, each refused kind, a deleted repo, a body of 47, 48, 303 and 304 B and one past the cap, the 256th and 257th set. The fold: a row per set in position order; `Reapply` over a tail gives the rows `ApplyStatement` gave; a compile over a base's statements gives them again; `AclRowsCheckLimits` counts them.
+- A set's states: opened; each void cause in turn (a wrong key, a flipped byte, bad padding, rules out of order, a rule twice, a 15 B subject, a 33-component path, an empty component, a slash, 257 rules, an action of 0); newer (an unknown field at each level, an action of 2); pending, then opened when the generation arrives, then void when its GenRotate is signed past the grace; a body sealed for another repo or another statement type does not open.
+- `names`: the table of the seven subject forms against a member device, an ephemeral one, a tagged one and a tombstone of each; a group's atom, a role's and `autogroup:admin` name nobody.
+- `PrefixVerdict`: each line of 16.2.4 with its twin. The set in force at pins below, at and above each of three sets with a void one between; pending and newer above an opened one. A file change at, under, beside and above a prefix; a prefix that names a file; the empty prefix; two rules for one signer. A removal of a directory under and above. Each flag of line 1; an owned, a deposit and an erasure ref; `.ur-index/` on a file-mode ref and the same name on a git-mode ref, where it is a path like any other.
+- The delta rule against a generated corpus: random trees, random sets, a design planner's deltas for random allowed writes are all allowed; each single mutation of one (a file row on the way, a row beside the way, a removal on the way, a row over a file's row) is ignored.
+- Tokens: `under` computed in plaintext equals `under` computed on token paths, for random paths and prefixes in two epochs; a change in epoch 2 is judged with epoch 2's table.
+- Base independence, on real code: a generated log with sets, bases and admissions; a `ConfigLog` restored at each base and a rows-only one give `PrefixVerdict` the same answer as the long-running log for every push pinned anywhere since the repo's creation. This is P1 on the implementation; under a hook that keeps only the newest row it fails, which the test asserts.
+- `evs_prefix_test.go` (readers). `effective` over a scripted evs: allowed newest; one, two and 65 ignored versions; a removal ignored at the path and at a directory above; a breach-created path; `collected` and `dropped` below an ignored version, with and without a local copy; `wait` and `update` return the record's version; a second read takes the record and raises no second alarm. `List` with an ignored window delta. `History` marks. No change event for an ignored change.
+- `evs_plan_test.go` (writers). `AllowPrefixWrite` refuses before any request (a counter on the fake transport). The repair form: a checkpoint and no diff over an ignored version; `base_entry_version` evs's newest; a creation over an ignored removal; the row stated again; `IfVersion` against the effective version. A hook that sends a diff makes the reader's reconstruction pass through the ignored record, which the test asserts.
+- `evs_prefix_repair_test.go`. Each class of 16.2.8's table; the delay and the jitter on a fake clock; two runners, one push; the bounds; a device held to a prefix repairs only under it.
+- `evs_git_check_test.go`. `check(u)` refuses a push with one file change outside and accepts the same push by a signer the set names; a removal of the last file under a prefix, dropping the directories above it, passes; the alarm's reason is `prefix_rule`; receive answers `ng <ref> prefix rule: <path>` and sends nothing.
+- The alarm: one event per (repo, ref, signer) a minute with the count; `set_void` once per set.
+
+**Schedule rows**, for a design-records track to number, each on T2 with real evs and api:
+
+```text
+a breach, three readers        a set holds tag ci to agents/build; a hand-built push by a ci sidecar writes src/x:
+                               a device that was running, one started at a later base and a phone in head mode
+                               all show the old src/x and raise prefix_rule naming the signer; evs holds the
+                               breach as the newest version
+rules change under history     three sets and two bases; a push pinned under each; a device started after the
+                               last base judges each as the long-running one did (P1)
+repair                         a breach removes a file and its row; a phone started after it lists no such file;
+                               a desktop repairs after the delay on the fake clock; the phone lists and reads it;
+                               evs's newest is the desktop's version
+versionless                    a breach replaces a versionless file; the purge runs; a mirror shows its copy, a new
+                               device reads `unavailable`; after the repair both read the accepted content
+writer over a breach           a design device edits a file whose newest version it ignores: one checkpoint, the
+                               row stated, History walking 3, 2 (ignored), 1; a reader reconstructs 3 without 2's
+                               records, which the test deletes from the fake store first
+the pin push                   a set tightens; a hand-built push with the head's older pin commits and is allowed;
+                               the filer's pin push lands; the same push with the older pin is 412 at evs, and
+                               with a new pin is ignored by every reader
+local refusal                  a design device held to a prefix writes outside it through the SDK, MCP and git
+                               push: EVS_PREFIX_RULE each time, no request to evs
+git mode                       a breach on a git-mode ref: every mount stops at u with prefix_rule, a new mount
+                               replaying from version 1 included; an admin deletes and re-pushes; all go on
+a pending set                  a set sealed to a generation that does not exist: readers hold; a later entry past
+                               the grace voids it everywhere; the set below is in force again
+```
+
+**The model.** `run-prefixrules.sh <track>` at each change to 16.2.3, 16.2.4, 16.2.7, 16.2.8 or 16.2.9: the design configurations pass, each twin fails on the invariant its cfg names, each reach configuration reaches its state (16.3).
+
+### 16.7 Implementation notes, task by task
+
+One existing task changes and five are new. The ids are free in `.stack/plan`, the questions and both design documents as of 2026-11-13; the orchestrator files them. Order: ACL-M2-18, then ACL-M6-04's prefix half, then EVS1-M6-04, then EVS1-M6-05 and EVS1-M6-06 beside each other, then TEST-M6-03.
+
+**ACL-M2-18, the statement, the rows and the fold** (new; M2; S; server and sidecar). It must land before M2's Gn-in, since it is what QD-212 reserves: from it on, every verifier judges a `RepoPrefixRules` entry alike and folds its row, and enforces nothing.
+
+- Files: `protocol/bridge/signed.proto` (`SIGNED_REPO_PREFIX_RULES = 0x1111`; leave 0x1110 unused for QD-013), `protocol/acl.proto` (16.2.2's five messages and `AclRepo.prefix_rules = 12`), `config_records.go` (the type table's row, purpose acl), `acl_statement.go` (the dispatch and the access-log list beside `RepoVersioning`), `acl_statement_repo.go` (`checkRepoPrefixRules`: 16.2.2's table), `acl_access_log.go` (the fold's case and the header's list), `acl_prefix_settings.go` (new: `AclPrefixSettings` with the two id-level limits; the other fields arrive with their tasks), and their tests. api takes the rule through the shared rule table (TEAM-M2-13); no server file changes but the generated protos.
+- Needs: ACL-M2-06 (the acl rules), TEAM-M2-04 (the rows). Waits on nothing.
+- Build: the check never opens `sealed_rules` and reads only its length. The fold appends and never removes. `Reapply` and the base compile run the same fold (5.2.3), which the test asserts on a generated log.
+- Tests: 16.6's first bullet; the base-independence test's rows half (a restored log and a rows-only log hold the long-running log's `prefix_rules`).
+- Trap: a format-1 device must not refuse the type as unknown, or it forks at the first set; that is why the row lands with M2 and not with M6.
+
+**ACL-M6-04, peer-list filtering and client-checked prefix writes** (existing; M; scope changed). The peer-list half is as its plan entry has it. The prefix half is no longer "unbuilt until plan-EVS1-v1-unspecified": that question's #5 is answered and this section is the rule. It keeps `sidecar/acl_prefix.go` and `acl_prefix_test.go` and provides, there:
+
+- `OpenPrefixRuleSet(sealed, context, repoKeyAt, genRotateTimeAt, entryTimeMs)` returning the set and its state (opened, void with its cause, newer, pending), and `SealPrefixRuleSet`, both on `config_seal.go`'s two functions; the canonical order and every check of 16.2.2 in one validator that the sealer runs too, so no design device files a void set.
+- `AclPrefixSets`, a repo's sets by position: it reads `AclState`'s rows, fetches each body (the log's entry, else `ConfigHead.RecordsIn`), opens it once and keeps it in the sealed store under `prefix/<repo_id>`; it takes the repo's keys through a small interface the evs client implements (`RepoKeyAt(generation)`, `PathKeyAt(epoch)`, `GenRotateTimeAt(generation)`), so `acl_prefix.go` imports nothing of evs's client.
+- `aclPrefixNames` (16.2.2's `names`), `PrefixVerdict` (16.2.4) as a pure function over rows, sets, a `bridge.SidecarRow` and the statement's fields, and `AclEngine.AllowPrefixWrite` (16.2.7).
+- `AclPrefixRulesFiler.File`, on `AclRepoVersioningFiler`'s pattern (`act.AddSealed`), which builds the next set, writes the standing admins in, and returns the set's position for the pin push.
+- Needs: ACL-M2-18; ACL-M2-02, -09, -13 as before. It no longer needs the question.
+- Tests: 16.6's second to seventh bullets.
+- Traps: the verdict takes no `ConfigState` at the pin and must never call `StateAt`; a test runs it with a log that retains nothing below its tip. A group's atom in a rule names nobody: do not resolve it through `atomIndexes`. `names` reads `member_id` only where the row carries no tag.
+
+**EVS1-M6-04, readers of a ruled repo** (new; M6; L; sidecar).
+
+- Files: `sidecar/evs_prefix.go` (new: the judge per repo, with its token tables per (set, epoch), `effective`, the alarm and its interval), `evs_read.go` and `evs_epoch_read.go` (a read returns `effective`'s version; `EvsFileInfo.IgnoredAbove`), `evs_list.go` (judged window deltas; rows the record holds absent), `evs_history.go` (`Ignored` on a version), `evs_pin_store.go` (`EvsReadRecord.Accepted`, `IgnoredThrough`; a record stored without them reads as none, which only walks again), `evs_subscribe.go` (no change event), `evs_mirror.go` (allowed changes only; the journal of ignored events), `evs_export.go` and `evs_export_file.go` (effective versions, ignored ones reported), `sidecar_types.go` (the alarm's detail values), and tests.
+- Needs: ACL-M6-04; EVS1-M2-23, -24, -27; section 9's read path as landed.
+- Landed code that changes: `evs_verify.go` is not changed, and that is the point: `VerifyStatement` still answers whether a push is the repo's, and the prefix verdict is asked where a change is applied. `readRound` today returns the newest verified version; it calls `effective`. `List` today returns evs's table and the window's deltas unjudged.
+- Tests: `evs_prefix_test.go` as 16.6 lists.
+- Traps: the record's pin, floor and epoch move on every verified read, ignored or not (section 9's E1 to E4 are about what evs was shown). An ignored removal at a directory above the path is found by the removal's own token path being a prefix of the path's, as 9.2.4's `verifyPath` finds it. Never log a path (I-13).
+
+**EVS1-M6-05, writers, repair and the pin push** (new; M6; M; sidecar).
+
+- Files: `evs_plan.go` and `evs_plan_remove.go` (`AllowPrefixWrite` before the first round; conditions against the effective version; the repair form), `evs_write.go` and `evs_checkpoint.go` (the sixth checkpoint case; the row stated again), `evs_prefix_repair.go` (new: the runner over the mirror's journal, the delay, the jitter and the bounds), `evs_push.go` (`EvsRepo.PinPush(ref)`, a push of no change at the installed pin), the `ur evs rules`, `ur evs repair` and `ur status` commands with the daemon's control methods, the SDK's and MCP's mapping of `EVS_PREFIX_RULE`, and tests.
+- Needs: EVS1-M6-04; ACL-M6-04; EVS1-M6-01 for the refs listing, the mounts' refs until it lands.
+- Tests: `evs_plan_test.go` and `evs_prefix_repair_test.go` as 16.6 lists.
+- Traps: a repair form's `base_entry_version` and `prev_push_id` are evs's newest, never the effective version's, or 5g refuses it and History's walk breaks. A repair never runs on a phone, an ephemeral sidecar or a device that does not mirror the ref. The pin push must carry the pin of a state at or above the set, so the filer waits for its own log to apply its statement before it sends one.
+
+**EVS1-M6-06, git mode** (new; M6; S; sidecar).
+
+- Files: `evs_git_check.go` (16.2.6's line under `every shape`, after the shape checks and before the commits are read, so a breach costs no object work), `evs_local_sync.go` (the alarm's reason; the wait on a pending or newer set), `evs_local_receive.go` (`ng <ref> prefix rule: <path>` from `AllowPrefixWrite` over the update's net change), and tests.
+- Needs: ACL-M6-04; EVS1-M2-35, -36, -49.
+- Trap: only file changes are judged; a directory's rows on a git-mode ref follow from the trees.
+
+**TEST-M6-03, prefix rules end to end** (new; M6; M). 16.6's schedule rows on T2; `run-prefixrules.sh` beside the other details models in the gate's model step; the hand-built breaching pushes as a `sidecartest` helper that signs with a real admitted sidecar's key and skips `AllowPrefixWrite`, which no release build can do.
+
+**Scope notes for tasks that are not held.** SEARCH-M10-24 (masks): a hit whose (path, version) `effective` ignores is masked. SEARCH-M10-12 and SEARCH-M10-14 (coverage, backfill, companion pushes): no ignored version is indexed, and an ignored push counts as indexed. EVS1-M2-49 (export): reports an ignored version as it reports a refused one. TEAM-M2-04 (`CascadePlan`): lists the `prefix_rules` rows whose signer is in P at the row's position. Each is one call to ACL-M6-04's verdict or one read of the row.
+
+**Amendments to other sections of this document**, stated here and not edited there: 8.2.7's `check` gains 16.2.6's line (16-A); 8.2.8's receive path gains 16.2.7's refusal (16-B); 5.2.2's list of what rows carry gains `AclRepo.prefix_rules` (16-C); §11.7's checkpoint list, as section 8 and section 10 read it, gains the repair form (16-D).
+
+### 16.8 Proposed DESIGN.md text
+
+For a design-records track; none of it is applied here.
+
+**§2.8, api-7.** Add: "for each general repo, every `RepoPrefixRules` entry: its position, time and signer, the generation its rules are sealed to and their padded length (48 B and a multiple of 256 B); never a rule, a subject or a prefix". `metadata_rows.yml` gains `RepoPrefixRules.sealed_rules` and `AclRepoPrefixRulesRow`. No evs or gkm row changes.
+
+**§5.4.** `evs_alarm`'s reason `prefix_rule` carries {repo, ref, path, signer, version, push id, detail: ignored | refused | set_void | set_newer | depth | unavailable, count}, at most one a minute per (repo, ref, signer).
+
+**§8.8, the access-log table.** After `RepoVersioning`'s row: "`RepoPrefixRules{repo_id, rules (sealed)}`; v1 (QD-212), see below | a repo admin or a config writer; only in a general repo". After the `RepoVersioning` block:
+
+```text
+RepoPrefixRules (§11.7):
+M2        acl.proto carries it and AclRepo's prefix_rules from M2: every verifier checks its signer, its repo's
+          kind, its body's length and the repo's count of sets, and folds {signer, at}; nothing is enforced
+          until M6 (D-PHASE-9)
+rows      every set that took effect, in position order, for the repo's life, at most 256; the body stays in
+          the log and the config head's fold records
+sealed    a PrefixRuleSet under the repo's own generation, in §7.9's sealed-field form: rules {subject, path
+          prefix in whole components, write}, sorted, at most 256 and 64 KiB; api and evs see that a set exists
+subjects  a sidecar, a member's untagged devices, a tag, or autogroup:sidecar, member, tagged or ephemeral:
+          facts an admission fixes, so a reader that holds no state at a push's pin still judges it; a group
+          or a role names nobody; the filing command writes the repo's admins in
+in force  at a push's auth pin: the newest opened set at or below it; none: no restriction; a set binds every
+          signer, and one it does not name writes nothing
+void      a set whose seal does not open, whose rules break the format, or whose generation was signed more
+          than 1 h after its entry leaves the set below it in force and alarms; a later release's set makes a
+          reader that cannot read it hold the repo's later versions and say `update`
+```
+
+**§8.8, `AclRows`.** `AclRepo` gains `repeated AclRepoPrefixRulesRow prefix_rules = 12`, with `AclRepoPrefixRulesRow {signer = 1, at = 2}`.
+
+**§8.12.** Add `AclEngine.AllowPrefixWrite(repo, ref, paths)`: the writer's own refusal, at the state its push pins, before anything is sent (`EVS_PREFIX_RULE`, §18.5).
+
+**§8.19, v1.** For "client-checked prefix writes (Q-EVS-3 (a))" read "client-checked prefix writes (Q-EVS-3 (a); §8.8's RepoPrefixRules, §11.7's prefix rules row)".
+
+**D-ACL-11.** Append: "From M6 a general repo may carry prefix rules, which every reader enforces and no server checks (§11.7); separate repos remain the only boundary a server enforces, and the only one that limits reads."
+
+**§11.7, a new row after `directory`.**
+
+```text
+prefix    (v1; §8.8's RepoPrefixRules) a reader judges each change of a shared ref of a general repo, after
+rules     11.9's checks, by the set in force at its push's auth pin: allowed when a rule that names the signer
+          has a prefix whose token path, in the push's path epoch, begins the change's token path; a directory
+          delta above every such prefix is allowed only to add the directory rows that lead to one and to remove
+          the row of the prefix itself; pushes flagged FORCE, DELETE, BASE, DROP, ERASE, CUT or CLOSURE, the
+          refs erasure, ur/index and ur/lfs, and .ur-index/ are outside the rules. On a file-mode ref a change
+          that is not allowed is ignored: the reader shows, serves, mirrors, indexes and exports the newest
+          allowed version below it (at most 64 back), marks the ignored ones in history, raises no change event,
+          and raises evs_alarm prefix_rule naming the signer. On a git-mode ref the push fails the mount's check
+          and the ref stops there (11.11). evs is told nothing and folds the push as any other. A device writes
+          a path whose newest version it ignores as one checkpoint built on the version it shows, with the path's
+          row stated again, its base_entry_version evs's newest; a device that mirrors the ref and is allowed
+          the path writes that back unasked after 5 min, within 60 pushes an hour and 1 GiB a day. A set binds a
+          ref from the first push pinned at or above it, which its filer sends as a push of no change. What a
+          writer with rw can still do to evs's own state is DESIGN-DETAILS 16.2.13's list
+```
+
+**§11.7, checkpoints.** Add case (6): "the path's newest version on evs is one the writer ignores under the repo's prefix rules".
+
+**§11.8, invariants.** Add: "I-EVS-19 every reader that holds a push's statement, the repo's rows and its signer's row reaches the same prefix verdict on each of its changes, whatever base it started at; a reader shows and builds on only versions that verdict allows; a change a device refused locally is the change readers ignore". I-EVS-14 is unchanged and runs first.
+
+**§11.9, the readers row.** After the signed statement and entry hash: "then §11.7's prefix rules: a version they do not allow is not returned, and the newest allowed one below it is". **The trusts row.** After "is evs's word": "; its prefix verdict is not: the reader computes it for the version it is served, from rows alone".
+
+**§11.11.** The mount's check gains the prefix line (DESIGN-DETAILS 8.2.7 and 16.2.6); receive answers `ng <ref> prefix rule` for a path its own device may not write.
+
+**§11.22, v1.** For "Q-EVS-3's prefix rules" read "Q-EVS-3's prefix rules (§8.8, §11.7's prefix rules row; M6)".
+
+**§18.5.** Add `EVS_PREFIX_RULE` {path, detail: refused | pending | update | depth | unavailable}: a write this device's rules do not allow, or a read whose effective version it cannot reach.
+
+**§22.8, §22.9.** The model row `details/PrefixRules` and 16.6's schedule rows, numbered by that track.
+
+**§23, D-PHASE-9.** The reservation list gains "acl.proto's `RepoPrefixRules` (SignedType 0x1111) and `AclRepo.prefix_rules`, which code from M2 verifies and folds and M6 enforces".
+
+### 16.9 Owner questions
+
+Five are filed. The section is built on the recommendation of each, so none blocks a task.
+
+**details-16-subject-atoms** (filed). Which subjects may a rule name? Options: (1) only what an admission fixes: a sidecar, a member's untagged devices, a tag, and the four class autogroups; a group is filed as its members' `user:` subjects (built). (2) Every §8.4 atom, judged in the state at the push's pin: a device that does not retain that state, which is every new device for most of a repo, takes the version unjudged. (3) Groups, expanded by the filing device at filing time and filed again by an admin's daemon when the group changes, on top of (1). Recommendation: 1. It is the only one under which a device started today and a device that watched the push must agree (16.3's P1; `PrefixRulesTwin-HeadAtoms`). Option 3 can be added later with no format change; it spends a repo's 256 sets on membership changes.
+
+**details-16-admins-unbound** (filed). Are a repo's admins held to its prefix rules? Options: (1) yes, like every signer, and the command that files a set writes each standing admin into it for every path (built). (2) No: a signer that is a repo admin at the push's pin is exempt. That needs each admin's spans kept in the rows for the repo's life, where QD-743 keeps a removed admin's row only until the first base past retention. Recommendation: 1. Both give admins the whole repo; only 1 is judged alike by a device that starts after an admin was removed.
+
+**details-16-git-mode-stop** (filed). What does a breach do to a git-mode ref? Options: (1) it is a push that fails the mount's check: every mount stops at it, and an admin deletes the ref and pushes it again, as for any forged or broken push (8.5; built). (2) Mounts skip it and go on: every later push rests on the tip before it and restores each path it touched. Recommendation: 1. Any writer of a git-mode ref can already stop it with one malformed push, so 2 takes nothing from a breaching writer, and it adds a second way for a ref's tip to be computed.
+
+**details-16-repair** (filed). Does a device write the effective state back without being asked? Options: (1) yes: a desktop or the daemon that mirrors the ref and is allowed the path, 5 min after it ignored an event, within 60 pushes an hour and 1 GiB a day; `ur evs repair` for the rest (built). (2) Never unasked: the alarm, `ur status` and `ur evs repair` only. (3) Unasked for names only, since a row costs under 200 B. Recommendation: 1. Until a repair, a device that starts after a breach lists what the breach left and cannot read a versionless file the breach replaced (16.2.13), and nothing tells it so; §16.11 already has a rightful writer reproduce its own paths unasked.
+
+**details-16-small-readings** (filed). Eleven readings the section took where QD-212's sentence allows more than one; each is one line to change: (1) only a general repo takes a set, though QD-212 names owner-bound repos after RepoVersioning's pattern: every owner-bound kind is record-class and written only by its owner's devices; (2) a set binds every shared ref of its repo, with no rule per ref; (3) once a set is in force a signer it does not name writes nothing, pushes pinned below a repo's first set are unbound, and the rules are lifted by the one rule that names `autogroup:sidecar`; (4) a void set leaves the set below it in force; (5) `.ur-index/`, `ur/index` and `ur/lfs` are outside the rules; (6) pushes carrying an admin's flag are outside the rules; (7) a repo's rows hold at most 256 sets for its life, with no compaction; (8) a set binds a ref from the first push pinned at or above it, which the filer sends; (9) a compromise cascade voids no set; (10) a device older than M6 enforces nothing, and no row lets a filer list such devices; (11) the default numbers of 16.2.11. Recommendation: each as built.
 
 ## 17. Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8)
 
