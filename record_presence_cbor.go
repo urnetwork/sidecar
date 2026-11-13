@@ -1,8 +1,10 @@
 //go:build !ios_extension
 
 // A small reader of CTAP2's canonical CBOR (CTAP 2.1 §8's "CTAP2 canonical CBOR encoding form"), for what §16.6's
-// registration reads: a WebAuthn attestation object, its attestation statement, and its authenticator data's credential
-// public key (COSE_Key) and extensions. The root links no CBOR module (MCP-M3-08), so this holds only what those need.
+// registration reads: KeyRegister.attestation's map of an attestation object and its create ceremony's client data
+// (QD-730), the WebAuthn attestation object, its attestation statement, and its authenticator data's credential public
+// key (COSE_Key) and extensions. The root links no CBOR module (MCP-M3-08), so this holds only what those need, and the
+// one thing a registering client writes: EncodePresenceAttestation's map.
 //
 // It refuses what is not canonical rather than reading it some way: an integer or a length not in its shortest form,
 // an indefinite length, a tag, a float, a simple value other than false, true and null, text that is not UTF-8, and map
@@ -10,7 +12,8 @@
 // reader that took two encodings of one value would let a relay rewrite an attestation it stores.
 //
 // Work and memory are bounded by the input: a declared count is checked against the bytes left before anything is
-// allocated for it, nesting stops at presenceCborMaxDepth, and every item holds slices of the input rather than copies.
+// allocated for it, nesting stops at the depth its caller's PresenceAttestationSettings gives, and every item holds
+// slices of the input rather than copies.
 //
 // Package-level functions are safe for concurrent use, and so are the items they return, which nothing changes.
 
@@ -24,9 +27,19 @@ import (
 	"unicode/utf8"
 )
 
-// The deepest nesting a WebAuthn attestation object has is the object, its statement, the x5c array and a
-// certificate, and the authenticator data's extensions under their own map; anything near this is no attestation.
-const presenceCborMaxDepth = 16
+// KeyRegister.attestation's keys (QD-730): the WebAuthn attestation object and the create ceremony's client data, each
+// a byte string, named as WebAuthn's own response names them.
+const (
+	presenceAttestationObjectKey     = "attObj"
+	presenceAttestationClientDataKey = "clientDataJSON"
+)
+
+// CBOR's major types this file writes (RFC 8949 §3.1).
+const (
+	presenceCborMajorBytes byte = 2
+	presenceCborMajorText  byte = 3
+	presenceCborMajorMap   byte = 5
+)
 
 // The input does not decode as canonical CBOR: malformed, not in canonical form, nested too deep or longer than its
 // item.
@@ -62,9 +75,9 @@ type presenceCborItem struct {
 	encoded []byte
 }
 
-// Decodes data as exactly one item, nothing after it.
-func presenceCborDecodeAll(data []byte) (*presenceCborItem, error) {
-	item, rest, err := presenceCborDecode(data)
+// Decodes data as exactly one item, nothing after it, nested no deeper than maxDepth.
+func presenceCborDecodeAll(data []byte, maxDepth int) (*presenceCborItem, error) {
+	item, rest, err := presenceCborDecode(data, maxDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -74,19 +87,19 @@ func presenceCborDecodeAll(data []byte) (*presenceCborItem, error) {
 	return item, nil
 }
 
-// Decodes the first item of data, returning it and the bytes after it.
-func presenceCborDecode(data []byte) (*presenceCborItem, []byte, error) {
-	item, size, err := presenceCborDecodeAt(data, 0)
+// Decodes the first item of data, nested no deeper than maxDepth, returning it and the bytes after it.
+func presenceCborDecode(data []byte, maxDepth int) (*presenceCborItem, []byte, error) {
+	item, size, err := presenceCborDecodeAt(data, 0, maxDepth)
 	if err != nil {
 		return nil, nil, err
 	}
 	return item, data[size:], nil
 }
 
-// The item at the start of data, nested depth deep, and its encoded size.
-func presenceCborDecodeAt(data []byte, depth int) (*presenceCborItem, int, error) {
-	if presenceCborMaxDepth <= depth {
-		return nil, 0, fmt.Errorf("%w: nested deeper than %d", ErrPresenceCbor, presenceCborMaxDepth)
+// The item at the start of data, nested depth deep of at most maxDepth, and its encoded size.
+func presenceCborDecodeAt(data []byte, depth int, maxDepth int) (*presenceCborItem, int, error) {
+	if maxDepth <= depth {
+		return nil, 0, fmt.Errorf("%w: nested deeper than %d", ErrPresenceCbor, maxDepth)
 	}
 	if len(data) == 0 {
 		return nil, 0, fmt.Errorf("%w: truncated", ErrPresenceCbor)
@@ -154,7 +167,7 @@ func presenceCborDecodeAt(data []byte, depth int) (*presenceCborItem, int, error
 		item.items = make([]*presenceCborItem, 0, argument)
 		size := headerSize
 		for range argument {
-			element, elementSize, err := presenceCborDecodeAt(data[size:], depth+1)
+			element, elementSize, err := presenceCborDecodeAt(data[size:], depth+1, maxDepth)
 			if err != nil {
 				return nil, 0, err
 			}
@@ -174,7 +187,7 @@ func presenceCborDecodeAt(data []byte, depth int) (*presenceCborItem, int, error
 		item.values = make([]*presenceCborItem, 0, argument)
 		size := headerSize
 		for i := range argument {
-			key, keySize, err := presenceCborDecodeAt(data[size:], depth+1)
+			key, keySize, err := presenceCborDecodeAt(data[size:], depth+1, maxDepth)
 			if err != nil {
 				return nil, 0, err
 			}
@@ -182,7 +195,7 @@ func presenceCborDecodeAt(data []byte, depth int) (*presenceCborItem, int, error
 				return nil, 0, fmt.Errorf("%w: map keys out of canonical order", ErrPresenceCbor)
 			}
 			size += keySize
-			value, valueSize, err := presenceCborDecodeAt(data[size:], depth+1)
+			value, valueSize, err := presenceCborDecodeAt(data[size:], depth+1, maxDepth)
 			if err != nil {
 				return nil, 0, err
 			}
@@ -230,6 +243,44 @@ func presenceCborArgument(data []byte) (uint64, int, error) {
 		return 0, 0, fmt.Errorf("%w: %d not in its shortest form", ErrPresenceCbor, argument)
 	}
 	return argument, 1 + followSize, nil
+}
+
+// A head of majorType and argument in its shortest form, appended to out.
+func presenceCborAppendHead(out []byte, majorType byte, argument uint64) []byte {
+	switch {
+	case argument < 24:
+		return append(out, majorType<<5|byte(argument))
+	case argument < 0x100:
+		return append(out, majorType<<5|24, byte(argument))
+	case argument < 0x10000:
+		return binary.BigEndian.AppendUint16(append(out, majorType<<5|25), uint16(argument))
+	case argument < 0x100000000:
+		return binary.BigEndian.AppendUint32(append(out, majorType<<5|26), uint32(argument))
+	}
+	return binary.BigEndian.AppendUint64(append(out, majorType<<5|27), argument)
+}
+
+// KeyRegister.attestation's bytes for a webauthn-es256 registration (QD-730): the canonical CBOR map of two byte
+// strings, attObj the WebAuthn attestation object and clientDataJSON the create ceremony's client data, both as the
+// ceremony gave them, byte for byte. A platform client passes the clientDataJSON its API returned, and a CTAP2 client,
+// which picks the client data hash itself, the JSON it hashed. The keys are written in canonical order, the shorter
+// first. Nothing is checked here: the registering device runs VerifyPresenceAttestation on the KeyRegister before it
+// signs it.
+func EncodePresenceAttestation(attestationObject []byte, clientDataJson []byte) []byte {
+	encoded := presenceCborAppendHead(nil, presenceCborMajorMap, 2)
+	for _, pair := range []struct {
+		key   string
+		value []byte
+	}{
+		{key: presenceAttestationObjectKey, value: attestationObject},
+		{key: presenceAttestationClientDataKey, value: clientDataJson},
+	} {
+		encoded = presenceCborAppendHead(encoded, presenceCborMajorText, uint64(len(pair.key)))
+		encoded = append(encoded, pair.key...)
+		encoded = presenceCborAppendHead(encoded, presenceCborMajorBytes, uint64(len(pair.value)))
+		encoded = append(encoded, pair.value...)
+	}
+	return encoded
 }
 
 // CTAP2's canonical key order: the lower major type first, then the shorter encoding, then the lower bytes. Strict, so a

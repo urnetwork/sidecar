@@ -93,10 +93,10 @@ type ConfigApprovalStates struct {
 	local *AclLocalPolicy
 }
 
-// The approval states of config: forked and evidenceDefault as NewConfigSpendState takes them, local the policy
-// compiled at config's head, nil for none, which names harness in no rule.
-func NewConfigApprovalStates(config *ConfigState, forked bool, evidenceDefault []protocol.ApprovalChannel, local *AclLocalPolicy) (*ConfigApprovalStates, error) {
-	spendState, err := NewConfigSpendState(config, forked, evidenceDefault)
+// The approval states of config: forked as NewConfigSpendState takes it, local the policy compiled at config's head,
+// nil for none, which names harness in no rule.
+func NewConfigApprovalStates(config *ConfigState, forked bool, local *AclLocalPolicy) (*ConfigApprovalStates, error) {
+	spendState, err := NewConfigSpendState(config, forked)
 	if err != nil {
 		return nil, err
 	}

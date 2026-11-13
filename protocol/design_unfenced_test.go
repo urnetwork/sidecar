@@ -1002,6 +1002,11 @@ var testFenceAdditions = []struct {
 		question: "plan-ACL-folded-grant-state",
 	},
 	{
+		message:  "AclRows",
+		field:    testFenceField{name: "evidence_default", number: 10, typeName: "uint32", repeated: true},
+		question: "mcp-m3-03-evidence-default-at-gates",
+	},
+	{
 		message:  "AclTarget",
 		field:    testFenceField{name: "client_id", number: 10, typeName: "bytes"},
 		question: "plan-ACL-nonsidecar-subjects",

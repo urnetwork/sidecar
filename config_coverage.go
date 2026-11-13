@@ -193,9 +193,9 @@ func configAdvanceBaseShrinks(next *configStateBuilder, previous *configBase, he
 	configSetShrunkAt(next, func(repoId Id) bool { return true })
 }
 
-// Whether two rows' acl parts compile the same policy: has_document, rules, requests, the bridge section, audit and
-// each atom's policy fields, leaving out what the log folds, repos, suspensions, spent grants and the sidecars carrying
-// a tag. False when either does not parse.
+// Whether two rows' acl parts compile the same policy: has_document, evidence_default, rules, requests, the bridge
+// section, audit and each atom's policy fields, leaving out what the log folds, repos, suspensions, spent grants and
+// the sidecars carrying a tag. False when either does not parse.
 func configPolicyRowsEqual(previousRowsBytes []byte, rows *bridge.ProjectionRows) bool {
 	previousRows := &bridge.ProjectionRows{}
 	if err := proto.Unmarshal(previousRowsBytes, previousRows); err != nil {
