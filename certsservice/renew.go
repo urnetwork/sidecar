@@ -74,6 +74,7 @@ func (self *CertsService) QueueRenewal(ctx context.Context, certId sidecar.Id) (
 		Attestation:         row.Attestation,
 		Csr:                 row.Csr,
 		State:               sidecar.TlsCertStateQueued,
+		StateTime:           now,
 	}
 	if err := self.store.InsertCert(callCtx, renewal); err != nil {
 		return nil, err
@@ -88,6 +89,7 @@ func (self *CertsService) QueueRenewal(ctx context.Context, certId sidecar.Id) (
 			CertId: renewal.CertId,
 			From:   []sidecar.TlsCertState{sidecar.TlsCertStateQueued},
 			To:     sidecar.TlsCertStateFailed,
+			At:     now,
 		}); err != nil {
 			return nil, err
 		}

@@ -328,9 +328,15 @@ func (self *testRun) hintKinds(device *testDevice, certId sidecar.Id) []protocol
 	return kinds
 }
 
-// A row of device's, issued at ca with a chain the CA made, as a row holds one once it keeps its
-// chain: written whole, since no pass writes a chain yet.
+// A row of device's, issued at ca with a chain the CA made, written whole, as an order pass leaves
+// one.
 func (self *testRun) issuedWithChain(device *testDevice, ca certsservice.CertsCa, serial *big.Int) *sidecar.TlsCertRecord {
+	self.t.Helper()
+	return self.issuedRow(device, ca, serial, true)
+}
+
+// As issuedWithChain, or with no chain: a row issued before rows kept theirs.
+func (self *testRun) issuedRow(device *testDevice, ca certsservice.CertsCa, serial *big.Int, chained bool) *sidecar.TlsCertRecord {
 	self.t.Helper()
 	now := self.clock.Now()
 	leaf := self.acme.leaf(device, serial, now)
@@ -355,7 +361,10 @@ func (self *testRun) issuedWithChain(device *testDevice, ca certsservice.CertsCa
 		NotBefore:           now,
 		NotAfter:            now.Add(45 * 24 * time.Hour),
 		State:               sidecar.TlsCertStateIssued,
-		Chain:               [][]byte{leaf, self.acme.issuer.Raw},
+		StateTime:           now,
+	}
+	if chained {
+		row.Chain = [][]byte{leaf, self.acme.issuer.Raw}
 	}
 	if err := self.store.InsertCert(self.ctx, row); err != nil {
 		self.t.Fatal(err)
@@ -566,8 +575,8 @@ func TestCertsRunOrdersFullOfResumedWorkAdmitsNothing(t *testing.T) {
 
 // A certificate renews from its stored CSR with its device away: due at two thirds of its life, its
 // renewal queues as its successor, and the order goes to its own CA past that CA's hold and a spent
-// budget, naming the certificate it replaces where its row keeps a chain. Past its validity the old row
-// is expired.
+// budget, naming the certificate it replaces from its row's chain. Past its validity the old row is
+// expired.
 func TestCertsRunRenewals(t *testing.T) {
 	settings := testSettings()
 	settings.Cas[certsservice.CertsCaLetsEncrypt].BudgetCap = 1
@@ -622,9 +631,26 @@ func TestCertsRunRenewals(t *testing.T) {
 	if orders := run.runOrders(); !slices.Equal(orders.Issued, second.Queued) || len(orders.Waiting) != 0 {
 		t.Fatalf("orders under a hold %+v", orders)
 	}
-	if last := run.acme.ordered()[2]; last.Ca != certsservice.CertsCaLetsEncrypt || last.Replaces != "" {
-		// the renewal's own row keeps no chain yet, so its renewal names nothing
-		t.Fatalf("the second renewal's order %+v", last)
+	// each of those rows kept the chain its order issued, so its renewal names it too
+	wantReplaces := []string{}
+	for _, certId := range []sidecar.Id{renewalId, otherId} {
+		leaf, err := x509.ParseCertificate(run.row(certId).Chain[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantReplaces = append(wantReplaces, testCertificateId(leaf.AuthorityKeyId, leaf.SerialNumber))
+	}
+	gotReplaces := []string{}
+	for _, order := range run.acme.ordered()[2:] {
+		if order.Ca != certsservice.CertsCaLetsEncrypt {
+			t.Fatalf("the second renewal's order %+v", order)
+		}
+		gotReplaces = append(gotReplaces, order.Replaces)
+	}
+	slices.Sort(wantReplaces)
+	slices.Sort(gotReplaces)
+	if !slices.Equal(gotReplaces, wantReplaces) {
+		t.Fatalf("the second renewals replace %v, want %v", gotReplaces, wantReplaces)
 	}
 	if kinds := run.hintKinds(device, renewalId); !slices.Equal(kinds, []protocol.TlsHintKind{
 		protocol.TlsHintKind_TLS_HINT_ORDER, protocol.TlsHintKind_TLS_HINT_ORDER, protocol.TlsHintKind_TLS_HINT_ISSUED,
@@ -728,7 +754,7 @@ func TestCertsRunRevocationsSweeps(t *testing.T) {
 	}
 }
 
-// A row marked by another path, a takedown's or the device's own request, goes to its CA with
+// A row marked with no reason, as one marked before rows kept theirs, goes to its CA with
 // cessationOfOperation and no source; a CA that will not take it leaves the row revoking for the next
 // pass; and a marked row whose validity ended is expired, never sent.
 func TestCertsRunRevocationsTakesMarkedRows(t *testing.T) {
@@ -739,7 +765,7 @@ func TestCertsRunRevocationsTakesMarkedRows(t *testing.T) {
 	ending := run.issuedWithChain(run.device("k9revoke05"), certsservice.CertsCaLetsEncrypt, big.NewInt(0x88bb05))
 	for _, certId := range []sidecar.Id{row.CertId, ending.CertId} {
 		if moved, err := run.store.TransitionCert(run.ctx, &certsservice.CertsTransition{
-			CertId: certId, From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateRevoking,
+			CertId: certId, From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateRevoking, At: run.clock.Now(),
 		}); err != nil || !moved {
 			t.Fatalf("marking: %v, %v", moved, err)
 		}
@@ -758,7 +784,7 @@ func TestCertsRunRevocationsTakesMarkedRows(t *testing.T) {
 
 	// the second certificate ends before the CA is back
 	if _, err := run.store.TransitionCert(run.ctx, &certsservice.CertsTransition{
-		CertId: ending.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateRevoking}, To: sidecar.TlsCertStateRevoking,
+		CertId: ending.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateRevoking}, To: sidecar.TlsCertStateRevoking, At: run.clock.Now(),
 		NotAfter: run.clock.Now().Add(time.Second),
 	}); err != nil {
 		t.Fatal(err)
@@ -776,13 +802,13 @@ func TestCertsRunRevocationsTakesMarkedRows(t *testing.T) {
 	}
 }
 
-// A marked row with no chain waits, since a CA revokes only a certificate it is shown; and a host with
-// no ACME client still marks what the sweep finds, and takes nothing to a CA.
+// A marked row with no chain, one issued before rows kept theirs, waits, since a CA revokes only a
+// certificate it is shown; and a host with no ACME client still marks what the sweep finds, and takes
+// nothing to a CA.
 func TestCertsRunRevocationsWaitsWithNoChainOrNoCa(t *testing.T) {
 	run := newTestRun(t, nil)
 	device := run.device("k9revoke06")
-	certId := run.accept(device)
-	run.runOrders()
+	certId := run.issuedRow(device, certsservice.CertsCaLetsEncrypt, big.NewInt(0x88bb06), false).CertId
 	source := newTestRevocationSource()
 	source.set(certId, certsservice.CertsRevocationCauseDeletion)
 	report := run.runRevocations(source)
@@ -865,5 +891,277 @@ func TestCertsRunOrdersCountsALostHint(t *testing.T) {
 	}
 	if kinds := run.hintKinds(device, certId); !slices.Equal(kinds, []protocol.TlsHintKind{protocol.TlsHintKind_TLS_HINT_ISSUED}) {
 		t.Fatalf("hints %v", kinds)
+	}
+}
+
+// An order's chain is written to its row with the issuance (cert-1; QD-741), so a device that asks
+// after certs restarted reads the certificate its CA issued, and only its own client does. The row's
+// state time is each move's.
+func TestCertsRunOrdersKeepsTheChainForARestart(t *testing.T) {
+	run := newTestRun(t, nil)
+	device := run.device("k9chain01")
+	acceptedAt := run.clock.Now()
+	certId := run.accept(device)
+	if row := run.row(certId); !row.StateTime.Equal(acceptedAt) || len(row.Chain) != 0 {
+		t.Fatalf("the queued row %+v", row)
+	}
+	status, err := run.service.OrderStatus(run.ctx, device.networkId, device.clientId, certId)
+	if err != nil || status.State != sidecar.TlsCertStateQueued || len(status.Chain) != 0 || status.RetryAfterMs == 0 {
+		t.Fatalf("before the order: %+v, %v", status, err)
+	}
+	run.clock.Advance(time.Minute)
+	issuedAt := run.clock.Now()
+	if report := run.runOrders(); !slices.Equal(report.Issued, []sidecar.Id{certId}) {
+		t.Fatalf("report %+v", report)
+	}
+	row := run.row(certId)
+	if len(row.Chain) != 2 || !slices.Equal(row.Chain[1], run.acme.issuer.Raw) || !row.StateTime.Equal(issuedAt) {
+		t.Fatalf("the issued row %+v", row)
+	}
+	leaf, err := x509.ParseCertificate(row.Chain[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if certsservice.CertsSerialText(leaf.SerialNumber) != row.Serial || !device.tlsKey.PublicKey.Equal(leaf.PublicKey) {
+		t.Fatal("the stored leaf is not the certificate the CA issued for the device's key")
+	}
+
+	// a restart: another engine, with no CA at hand, on the same rows
+	run.clock.Advance(time.Hour)
+	restarted, err := certsservice.NewCertsService(run.ctx, run.host.ServiceHost(), run.store, nil, nil, run.settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err = restarted.OrderStatus(run.ctx, device.networkId, device.clientId, certId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State != sidecar.TlsCertStateIssued || status.RetryAfterMs != 0 || len(status.Chain) != 2 ||
+		!slices.Equal(status.Chain[0], row.Chain[0]) || !slices.Equal(status.Chain[1], row.Chain[1]) {
+		t.Fatalf("after the restart: %+v", status)
+	}
+	if _, err := restarted.OrderStatus(run.ctx, device.networkId, sidecar.NewId(), certId); !errors.Is(err, certsservice.ErrCertsNotFound) {
+		t.Fatalf("another client's read: %v", err)
+	}
+
+	// the renewal names the certificate it replaces, read from the stored chain
+	run.clock.Advance(31 * 24 * time.Hour)
+	renewals := run.runRenewals()
+	if len(renewals.Queued) != 1 {
+		t.Fatalf("renewals %+v", renewals)
+	}
+	run.runOrders()
+	orders := run.acme.ordered()
+	if len(orders) != 2 || orders[1].Replaces != testCertificateId(leaf.AuthorityKeyId, leaf.SerialNumber) {
+		t.Fatalf("the renewal's order %+v", orders[len(orders)-1])
+	}
+}
+
+// A requested revocation's reason waits in its row (cert-1; QD-741): a row the route marked
+// keyCompromise is still revoking with that reason after a pass its CA refused and a restart of certs,
+// the CA is then told keyCompromise with no source to ask, and the row drops the reason once the CA
+// has taken it. A cause the sweep finds is stored the same way, so a later pass needs no source.
+func TestCertsRunRevocationsKeepsTheReasonUntilTheCaTakesIt(t *testing.T) {
+	run := newTestRun(t, nil)
+	compromised := run.issuedWithChain(run.device("k9reason01"), certsservice.CertsCaLetsEncrypt, big.NewInt(0x99cc01))
+	run.clock.Advance(time.Millisecond)
+	removed := run.issuedWithChain(run.device("k9reason02"), certsservice.CertsCaGts, big.NewInt(0x99cc02))
+	run.clock.Advance(time.Minute)
+	markedAt := run.clock.Now()
+	// POST /tls/cert-revoke with key_compromise, as the route writes it
+	if moved, err := run.store.TransitionCert(run.ctx, &certsservice.CertsTransition{
+		CertId: compromised.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateRevoking, At: markedAt,
+		RevocationReason: sidecar.TlsCertRevocationReasonKeyCompromise,
+	}); err != nil || !moved {
+		t.Fatalf("marking: %v, %v", moved, err)
+	}
+	source := newTestRevocationSource()
+	source.set(removed.CertId, certsservice.CertsRevocationCauseRemoval)
+
+	run.acme.stateLock.Lock()
+	run.acme.revokeErr = errors.New("the CA is down")
+	run.acme.stateLock.Unlock()
+	report := run.runRevocations(source)
+	if !slices.Equal(report.Marked, []sidecar.Id{removed.CertId}) || report.FailedCount != 2 || len(report.Revoked) != 0 {
+		t.Fatalf("report %+v", report)
+	}
+	for certId, want := range map[sidecar.Id]sidecar.TlsCertRevocationReason{
+		compromised.CertId: sidecar.TlsCertRevocationReasonKeyCompromise,
+		removed.CertId:     sidecar.TlsCertRevocationReasonCessationOfOperation,
+	} {
+		if row := run.row(certId); row.State != sidecar.TlsCertStateRevoking || row.RevocationReason != want || !row.StateTime.Equal(markedAt) {
+			t.Fatalf("a row its CA refused: %+v", row)
+		}
+	}
+
+	// certs restarts, the CA comes back, and the next pass has no source to read a cause from
+	run.acme.stateLock.Lock()
+	run.acme.revokeErr = nil
+	run.acme.stateLock.Unlock()
+	run.clock.Advance(time.Hour)
+	revokedAt := run.clock.Now()
+	restarted, err := certsservice.NewCertsService(run.ctx, run.host.ServiceHost(), run.store, nil, run.acme, run.settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err = restarted.RunRevocations(run.ctx, nil, nil)
+	if err != nil || !slices.Equal(report.Revoked, []sidecar.Id{compromised.CertId, removed.CertId}) || report.FailedCount != 0 {
+		t.Fatalf("after the restart: %+v, %v", report, err)
+	}
+	want := []testRevocation{
+		{ca: certsservice.CertsCaLetsEncrypt, serial: compromised.Serial, reason: certsservice.CertsRevocationKeyCompromise},
+		{ca: certsservice.CertsCaGts, serial: removed.Serial, reason: certsservice.CertsRevocationCessationOfOperation},
+	}
+	if got := run.acme.revocations(); !slices.Equal(got, want) {
+		t.Fatalf("revocations %+v", got)
+	}
+	for _, certId := range []sidecar.Id{compromised.CertId, removed.CertId} {
+		if row := run.row(certId); row.State != sidecar.TlsCertStateRevoked || row.RevocationReason != "" || !row.StateTime.Equal(revokedAt) || len(row.Chain) != 2 {
+			t.Fatalf("a revoked row: %+v", row)
+		}
+	}
+}
+
+// A reason this build does not know, as a later build may write one, still revokes its certificate,
+// with no reason given.
+func TestCertsRunRevocationsRevokesOnAnUnknownReason(t *testing.T) {
+	run := newTestRun(t, nil)
+	row := run.issuedWithChain(run.device("k9reason03"), certsservice.CertsCaLetsEncrypt, big.NewInt(0x99cc03))
+	if moved, err := run.store.TransitionCert(run.ctx, &certsservice.CertsTransition{
+		CertId: row.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateRevoking, At: run.clock.Now(),
+		RevocationReason: "aReasonOfALaterBuild",
+	}); err != nil || !moved {
+		t.Fatalf("marking: %v, %v", moved, err)
+	}
+	if report := run.runRevocations(nil); !slices.Equal(report.Revoked, []sidecar.Id{row.CertId}) {
+		t.Fatalf("report %+v", report)
+	}
+	if got := run.acme.revocations(); len(got) != 1 || got[0].reason != certsservice.CertsRevocationUnspecified {
+		t.Fatalf("revocations %+v", got)
+	}
+}
+
+// The purge on the engine's clock (cert-1; QD-741, QD-742): an expired row goes RowRetention after its
+// validity's end, a revoked one after its revocation however long its validity had left, and a failed
+// one, which has no validity, after its failure; none goes a moment sooner, and an order still on its
+// way never does. With the defaults a chain goes with its row at 30 days.
+func TestCertsPurgeCountsFromEachRowsEnd(t *testing.T) {
+	run := newTestRun(t, nil)
+	day := 24 * time.Hour
+	start := run.clock.Now()
+	expiring := run.issuedWithChain(run.device("k9purge01"), certsservice.CertsCaLetsEncrypt, big.NewInt(0xaadd01))
+	run.clock.Advance(time.Millisecond)
+	revoked := run.issuedWithChain(run.device("k9purge02"), certsservice.CertsCaLetsEncrypt, big.NewInt(0xaadd02))
+	run.clock.Advance(time.Millisecond)
+	failedId := run.accept(run.device("k9purge03"))
+	run.clock.Advance(time.Millisecond)
+	queuedId := run.accept(run.device("k9purge04"))
+
+	// day 5: one certificate is revoked and one order fails
+	run.clock.Advance(start.Add(5 * day).Sub(run.clock.Now()))
+	if moved, err := run.store.TransitionCert(run.ctx, &certsservice.CertsTransition{
+		CertId: revoked.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateRevoking, At: run.clock.Now(),
+		RevocationReason: sidecar.TlsCertRevocationReasonCessationOfOperation,
+	}); err != nil || !moved {
+		t.Fatalf("marking: %v, %v", moved, err)
+	}
+	if report := run.runRevocations(nil); !slices.Equal(report.Revoked, []sidecar.Id{revoked.CertId}) {
+		t.Fatalf("report %+v", report)
+	}
+	if moved, err := run.store.TransitionCert(run.ctx, &certsservice.CertsTransition{
+		CertId: failedId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateFailed, At: run.clock.Now(),
+	}); err != nil || !moved {
+		t.Fatalf("failing: %v, %v", moved, err)
+	}
+
+	purge := func() *certsservice.CertsPurgeReport {
+		t.Helper()
+		report, err := run.service.Purge(run.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return report
+	}
+	present := func(certId sidecar.Id) bool {
+		t.Helper()
+		_, err := run.store.GetCert(run.ctx, certId)
+		if err != nil && !errors.Is(err, certsservice.ErrCertsNotFound) {
+			t.Fatal(err)
+		}
+		return err == nil
+	}
+	// exactly 30 days after the revocation and the failure: nothing has been ended longer than that
+	run.clock.Advance(start.Add(35 * day).Sub(run.clock.Now()))
+	if report := purge(); report.RowCount != 0 || report.ChainCount != 0 || !present(revoked.CertId) || !present(failedId) {
+		t.Fatalf("at 30 days: %+v", report)
+	}
+	// a moment later both go, 40 days before the revoked certificate's validity would have ended
+	run.clock.Advance(time.Second)
+	if report := purge(); report.RowCount != 2 || present(revoked.CertId) || present(failedId) {
+		t.Fatalf("past 30 days: %+v", report)
+	}
+	if !present(expiring.CertId) || !present(queuedId) {
+		t.Fatal("a live certificate or a queued order was purged")
+	}
+	if _, err := run.service.OrderStatus(run.ctx, revoked.NetworkId, revoked.ClientId, revoked.CertId); !errors.Is(err, certsservice.ErrCertsNotFound) {
+		t.Fatalf("the purged row's chain: %v", err)
+	}
+
+	// the other certificate ends at day 45, and its row and chain go 30 days after that
+	run.clock.Advance(start.Add(75 * day).Sub(run.clock.Now()))
+	if report := purge(); report.RowCount != 0 || report.ChainCount != 0 || !present(expiring.CertId) {
+		t.Fatalf("at 30 days past expiry: %+v", report)
+	}
+	if status, err := run.service.OrderStatus(run.ctx, expiring.NetworkId, expiring.ClientId, expiring.CertId); err != nil || len(status.Chain) != 2 {
+		t.Fatalf("the chain inside its retention: %+v, %v", status, err)
+	}
+	run.clock.Advance(time.Second)
+	if report := purge(); report.RowCount != 1 || present(expiring.CertId) || !present(queuedId) {
+		t.Fatalf("past 30 days past expiry: %+v", report)
+	}
+}
+
+// A chain goes ChainRetention after its certificate's expiry or revocation where its row stays longer:
+// the row then answers its state with no chain.
+func TestCertsPurgeDropsAChainAfterItsRetention(t *testing.T) {
+	settings := testSettings()
+	if settings.ChainRetention != 30*24*time.Hour {
+		t.Fatalf("the default chain retention is %v", settings.ChainRetention)
+	}
+	settings.RowRetention = 90 * 24 * time.Hour
+	run := newTestRun(t, settings)
+	day := 24 * time.Hour
+	start := run.clock.Now()
+	expiring := run.issuedWithChain(run.device("k9purge05"), certsservice.CertsCaLetsEncrypt, big.NewInt(0xaadd05))
+	run.clock.Advance(time.Millisecond)
+	revoked := run.issuedWithChain(run.device("k9purge06"), certsservice.CertsCaLetsEncrypt, big.NewInt(0xaadd06))
+	run.clock.Advance(start.Add(5 * day).Sub(run.clock.Now()))
+	if err := run.service.RevokeIssued(run.ctx, revoked.CertId, revoked.Chain[0], certsservice.CertsRevocationKeyCompromise); err != nil {
+		t.Fatal(err)
+	}
+	chainLength := func(row *sidecar.TlsCertRecord) int {
+		t.Helper()
+		status, err := run.service.OrderStatus(run.ctx, row.NetworkId, row.ClientId, row.CertId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(status.Chain)
+	}
+
+	run.clock.Advance(start.Add(35 * day).Sub(run.clock.Now()))
+	if report, err := run.service.Purge(run.ctx); err != nil || report.ChainCount != 0 || chainLength(revoked) != 2 {
+		t.Fatalf("at 30 days past the revocation: %+v, %v", report, err)
+	}
+	run.clock.Advance(time.Second)
+	if report, err := run.service.Purge(run.ctx); err != nil || report.ChainCount != 1 || report.RowCount != 0 || chainLength(revoked) != 0 || chainLength(expiring) != 2 {
+		t.Fatalf("past 30 days past the revocation: %+v, %v", report, err)
+	}
+	if row := run.row(revoked.CertId); row.State != sidecar.TlsCertStateRevoked || row.Serial != revoked.Serial {
+		t.Fatalf("the row that lost its chain: %+v", row)
+	}
+
+	run.clock.Advance(start.Add(75 * day).Add(time.Second).Sub(run.clock.Now()))
+	if report, err := run.service.Purge(run.ctx); err != nil || report.ChainCount != 1 || report.RowCount != 0 || chainLength(expiring) != 0 {
+		t.Fatalf("past 30 days past the expiry: %+v, %v", report, err)
 	}
 }

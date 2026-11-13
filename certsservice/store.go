@@ -5,8 +5,14 @@
 //
 // A row is sidecar.TlsCertRecord, cert-1's fields and no other: an order's time is its cert_id's, which
 // certs mints on its own clock (certsNewId), and a row's kind is read from what it links to, never
-// stored. A store keeps no clock: every time comes from the caller. Every method is safe for
-// concurrent use, and none is called on a connection's path.
+// stored. A store keeps no clock: every time comes from the caller, the time of a row's state among
+// them (state_time), which a row is written with and each change of state sets. Every method is safe
+// for concurrent use, and none is called on a connection's path.
+//
+// Two values wait in a row between the steps that need them (cert-1; QD-741): the chain a CA issued,
+// from its issuance until ChainRetention past the certificate's expiry or revocation, which answers a
+// device's GET after a restart; and a requested revocation's reason, from the request until the CA
+// has taken it, which a store holds only while the row is revoking.
 
 package certsservice
 
@@ -23,30 +29,42 @@ var (
 	ErrCertsNotFound = errors.New("certificate not found")
 	// A row with that id exists already.
 	ErrCertsConflict = errors.New("certificate row exists")
+	// A row written, or a state changed, with no time: a store refuses it, since a revoked or failed
+	// row's 30 days count from that time and a zero would end them at once.
+	ErrCertsStateTime = errors.New("certificate row needs the time of its state")
 )
 
 // One state change of a row, applied only while the row is in one of From, so two passes cannot both
-// move it. Every other field is written when set: an empty string or a zero time leaves the column as
-// it is.
+// move it. Every other field is written when set: an empty string, a zero time or no chain leaves the
+// column as it is.
 type CertsTransition struct {
 	CertId sidecar.Id
 	From   []sidecar.TlsCertState
 	To     sidecar.TlsCertState
+	// The caller's clock, which becomes the row's state time when To is not the state it was in: a
+	// transition that keeps the state keeps its time. Required, or ErrCertsStateTime.
+	At time.Time
 	// Set when an order reaches its CA.
 	Ca         CertsCa
 	AccountUri string
 	Profile    string
-	// Set when it issues: lowercase hex, and the validity.
+	// Set when it issues: lowercase hex, the validity, and the chain, each certificate in DER, leaf
+	// first.
 	Serial    string
 	NotBefore time.Time
 	NotAfter  time.Time
+	Chain     [][]byte
 	// Set when the CA gives one (RFC 9773).
 	AriWindowStart time.Time
 	AriWindowEnd   time.Time
+	// What the CA is to be told, set with To revoking. A row keeps a reason only while it is revoking:
+	// a transition to any other state clears it, and one set with another To is not written.
+	RevocationReason sidecar.TlsCertRevocationReason
 }
 
 type CertsStore interface {
-	// Writes a new row. A row with its id already is ErrCertsConflict.
+	// Writes a new row. A row with its id already is ErrCertsConflict, and one with no StateTime
+	// ErrCertsStateTime.
 	InsertCert(ctx context.Context, row *sidecar.TlsCertRecord) error
 	// The row, or ErrCertsNotFound.
 	GetCert(ctx context.Context, certId sidecar.Id) (*sidecar.TlsCertRecord, error)
@@ -79,14 +97,18 @@ type CertsStore interface {
 	// over what is under way at a CA (ordering, waiting_dns), what is issued, and what waits for its CA
 	// to revoke it (revoking). No states, or a count that is not positive, reads nothing.
 	ListInStates(ctx context.Context, states []sidecar.TlsCertState, afterCertId sidecar.Id, count int) ([]*sidecar.TlsCertRecord, error)
-	// Applies transition while the row is in one of its From states. Returns whether it applied.
+	// Applies transition while the row is in one of its From states. Returns whether it applied. A
+	// transition with no At is ErrCertsStateTime.
 	TransitionCert(ctx context.Context, transition *CertsTransition) (bool, error)
 	// Links a row to the row that took over from it, unless it has a successor already. Returns whether
 	// it linked.
 	SetSuccessor(ctx context.Context, certId sidecar.Id, successorCertId sidecar.Id) (bool, error)
-	// Deletes the rows whose certificate's validity ended before before, in any state: an expired row 30
-	// days past its end (cert-1), and a revoked one no later. A failed row, and a revoked one whose
-	// validity has not ended, have no time here to count from and stay until
-	// tls-m5-14-cert-row-end-time gives them one. Returns how many went.
+	// Deletes the rows that ended before before (cert-1's ttl; QD-742): a revoked or failed row whose
+	// state time is before it, and a row in any other state whose certificate's validity ended before
+	// it. A row with neither, an order still on its way, stays. Returns how many went.
 	PurgeEnded(ctx context.Context, before time.Time) (int, error)
+	// Drops the chain of each row whose certificate ended before before, keeping the row: a revoked
+	// row whose state time is before it, and a row in any other state whose validity ended before it
+	// (cert-1's "issued chains until 30 d after expiry or revocation"). Returns how many rows lost one.
+	PurgeChains(ctx context.Context, before time.Time) (int, error)
 }
