@@ -119,10 +119,8 @@ func TestClockSkewClientTokenRenews(t *testing.T) {
 				net.Clock().Advance(time.Hour)
 				count := api.ClientTokenCount(record.ClientId)
 				testSidecar.CloseAuthorization()
-				if !testSkewAwaitClientTokenCount(api, record.ClientId, count+1) {
-					t.Errorf("pairing %s, renewal %d: the api minted %d tokens for the client, not %d", pairing, i, api.ClientTokenCount(record.ClientId), count+1)
-					return
-				}
+				// fails the test where the api mints none (fake_api_core_test.go)
+				awaitClientTokenCount(t, api, record.ClientId, count+1)
 				if issuedAt, _, ok := api.NewestClientToken(record.ClientId); !ok || !issuedAt.Equal(net.Clock().Now()) {
 					t.Errorf("pairing %s, renewal %d: the newest token was issued at %s", pairing, i, issuedAt)
 				}
@@ -134,23 +132,6 @@ func TestClockSkewClientTokenRenews(t *testing.T) {
 				t.Errorf("pairing %s: the exchange after the renewals: %v", pairing, err)
 			}
 		}()
-	}
-}
-
-// Waits until api has minted the client count tokens in all, false when it has not within testSkewOnlineTimeout.
-func testSkewAwaitClientTokenCount(api *FakeApi, clientId sidecar.Id, count int) bool {
-	deadline := time.After(testSkewOnlineTimeout)
-	for {
-		// subscribed before the read, so a mint between them wakes the wait
-		_, minted := api.Mints()
-		if count <= api.ClientTokenCount(clientId) {
-			return true
-		}
-		select {
-		case <-minted:
-		case <-deadline:
-			return false
-		}
 	}
 }
 
