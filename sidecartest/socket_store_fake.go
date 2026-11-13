@@ -629,6 +629,7 @@ func fakeSocketCandidate(listenerClientId connect.Id, listener *fakeSocketListen
 		MaxStreams:           listener.registration.MaxStreams,
 		Serving:              listener.registration.Serving,
 		Draining:             listener.registration.Draining,
+		Affinity:             listener.registration.Affinity,
 		LeaseExpireMillis:    listener.leaseExpireMillis,
 		ReportedInflight:     listener.reportedInflight,
 		ReportMillis:         listener.reportMillis,
@@ -732,7 +733,8 @@ func (self *FakeSocketStore) Pick(ctx context.Context, request *socketsservice.S
 		}
 
 		listenerClientIds := fakeSocketSortedListenerIds(group)
-		if self.settings.SampleCount < len(listenerClientIds) {
+		// a keyed pick reads the whole group, since a sample would move a key's listener (SOCK-M6-01)
+		if self.settings.SampleCount < len(listenerClientIds) && len(request.AffinityKey) == 0 {
 			random := rand.New(rand.NewPCG(uint64(request.SampleSeed), 0))
 			random.Shuffle(len(listenerClientIds), func(i int, j int) {
 				listenerClientIds[i], listenerClientIds[j] = listenerClientIds[j], listenerClientIds[i]
@@ -748,6 +750,7 @@ func (self *FakeSocketStore) Pick(ctx context.Context, request *socketsservice.S
 			Protocol:       request.Protocol,
 			MinVersion:     request.MinVersion,
 			Alpns:          request.Alpns,
+			AffinityKey:    request.AffinityKey,
 			NowMillis:      nowMillis,
 			FirstDraw:      request.FirstDraw,
 			SecondDraw:     request.SecondDraw,
@@ -943,7 +946,8 @@ func (self *FakeSocketStore) TouchServicePairs(ctx context.Context, listenerClie
 				delete(pairs, dialerClientId)
 				continue
 			}
-			pair.expireMillis = nowMillis + ttlMillis
+			// never shorter: a ur/ pair keyed by its sidecar dialer keeps its own longer life (QD-728)
+			pair.expireMillis = max(pair.expireMillis, nowMillis+ttlMillis)
 		}
 		return nil
 	})
