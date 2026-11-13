@@ -10,11 +10,13 @@
 //	            device client's child, that client and its key}, through sidecarAct as S's own confirmed act; its
 //	            Signed bytes recorded, which the act keeps pending until they land
 //	2 file      the act posts them, and the log is followed to their entry; a repeat finds the Delegation's row by its
-//	            id or posts the same bytes again, and a refusal at a moved tip (409) signs anew at the new pin
+//	            id or posts the same bytes again, which api answers with their entry where it holds them, and a
+//	            refusal at a moved tip (409) signs anew at the new pin
 //	3 key       the reader key's object at gkm (UploadDelegationKey), which gkm takes once its state holds the row
 //	4 wrap      the late DelegationWrap of the config's current generation to that key (DeliverDelegationWraps)
 //	5 mint      F, forward_only, a child of S's client under S's own token and DPoP proof, with the component's
-//	            client public key: api answers a repeat for the same key with F again, so a resume mints no second F
+//	            client public key, its answer confirming admin_refused, strict_exp and forward_only: api answers a
+//	            repeat for the same key with F again, so a resume mints no second F
 //	6 hand off  Pending, the key set, F's id, token and strict_exp, the config repo and group, the Signed Delegation
 //	            and the position that carried it
 //
@@ -473,9 +475,10 @@ func (self *Sidecar) SetUpForwarding(ctx context.Context, networkId Id, keys *br
 		return nil, fmt.Errorf("%w: the forwarding client: %w", ErrForwardingSetupIncomplete, err)
 	}
 	strictExp := sidecarJwtExpiration(minted.ByClientJwt)
-	if !minted.AdminRefused || !minted.StrictExp || minted.ClientId == (Id{}) || strictExp.IsZero() {
-		// a client whose answer does not confirm its marks is kept nowhere (§5.6)
-		return nil, fmt.Errorf("%w: api's forwarding client does not confirm admin_refused and strict_exp", ErrForwardingSetupIncomplete)
+	if !minted.AdminRefused || !minted.StrictExp || !minted.ForwardOnly || minted.ClientId == (Id{}) || strictExp.IsZero() {
+		// a client whose answer does not confirm its marks is kept nowhere and handed to no component (§5.6, §7.4): one
+		// without forward_only would pass more than the forwarding allowlist
+		return nil, fmt.Errorf("%w: api's forwarding client does not confirm admin_refused, strict_exp and forward_only", ErrForwardingSetupIncomplete)
 	}
 	if record.ForwardClientId != nil && *record.ForwardClientId != minted.ClientId && record.Step < 6 {
 		self.log.Warningf("[bridge]%s a resumed setup's forwarding client is not the one minted before", networkId)
@@ -520,11 +523,13 @@ func (self *Sidecar) advanceForwardingSetup(setup *sidecarForwardingSetup, recor
 
 // Steps 1 and 2: signs the Delegation where the record holds none, through sidecarAct, which keeps its bytes pending
 // until they land, and records them with the position api answered; then follows the log to that position. A repeat
-// finds the Delegation's row, or the position recorded, or posts its pending bytes once more for theirs; bytes that are
-// neither in the log nor pending were refused or passed their not_after, so it signs anew. A refusal at a moved tip
-// signs anew, up to FileAttemptCount; any other drops the bytes, so a repeat signs anew. Where the bytes landed while
-// their answer was lost and the follow has not applied them, a resume signs a second Delegation, which supersedes the
-// first: no reach is lost, and the record names the one handed off.
+// finds the Delegation's row, or the position recorded, or posts the recorded bytes again (DESIGN-DETAILS 4.2.6's kill
+// row), through the pending records where they are still kept there: api answers bytes it holds with their entry, and a
+// copy its replay row refuses is found in the followed state by its id. Bytes api refuses that the state does not hold
+// were refused or passed their not_after, so it signs anew, up to FileAttemptCount; so does a first post refused at a
+// moved tip, and any other refusal drops the bytes, so a repeat signs anew. Only where api refuses a copy it holds while
+// the follow lags behind it does a resume sign a second Delegation, which supersedes the first: no reach is lost, and
+// the record names the one handed off.
 func (self *Sidecar) fileForwardingDelegation(ctx context.Context, setup *sidecarForwardingSetup, record *forwardingSetupRecord,
 	keys *bridge.ForwardingKeys, identity *SidecarIdentity) error {
 	config := setup.sources.Config
@@ -593,31 +598,27 @@ func (self *Sidecar) fileForwardingDelegation(ctx context.Context, setup *sideca
 			record.DelegationAtN = row.GetAt()
 		}
 		if record.DelegationAtN == 0 {
-			// a repeat whose answer was lost: its pending bytes once more, for their position
-			pending, err := self.pendingStatement(record.SignedDelegation)
-			if err != nil {
-				return fmt.Errorf("%w: %w", ErrForwardingSetupIncomplete, err)
-			}
-			if pending == nil {
-				if err := drop(); err != nil {
-					return err
+			// a repeat whose answer was lost posts the recorded bytes again (DESIGN-DETAILS 4.2.6's kill row): api answers
+			// a statement it holds with its entry, and a copy its replay row refuses is found in the log by its id
+			pin, err := self.postSignedAgain(ctx, record.SignedDelegation)
+			if errors.Is(err, ErrSidecarActRefused) {
+				row := config.State().Delegation(record.DelegationId)
+				if row == nil {
+					// refused and not in the log: those bytes never land, so this pass signs anew while attempts remain
+					if dropErr := drop(); dropErr != nil {
+						return dropErr
+					}
+					if attempt+1 < max(1, setup.settings.FileAttemptCount) {
+						continue
+					}
+					return fmt.Errorf("%w: the forwarding Delegation never landed: %w", ErrForwardingSetupIncomplete, err)
 				}
-				if attempt+1 < max(1, setup.settings.FileAttemptCount) {
-					continue
-				}
-				return fmt.Errorf("%w: the forwarding Delegation never landed", ErrForwardingSetupIncomplete)
+				pin, err = &bridge.AuthPin{Version: row.GetAt()}, nil
 			}
-			pin, err := self.postPendingInOrder(ctx, pending)
 			switch {
-			case errors.Is(err, ErrSidecarActRefused):
-				again, err := refused(err, attempt)
-				if again {
-					continue
-				}
-				return err
 			case err != nil:
 				return fmt.Errorf("%w: the forwarding Delegation is pending: %w", ErrForwardingSetupIncomplete, err)
-			case pin == nil:
+			case pin == nil || pin.GetVersion() == 0:
 				return fmt.Errorf("%w: the forwarding Delegation's post answered no entry", ErrForwardingSetupIncomplete)
 			}
 			record.DelegationAtN = pin.GetVersion()

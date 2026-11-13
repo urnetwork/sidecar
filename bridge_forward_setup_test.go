@@ -80,6 +80,8 @@ type testForwardingWorld struct {
 	wrapFails   int
 	mints       []*sidecarAuthClientWire
 	mintFails   int
+	// api answers a mint without confirming forward_only, as one that kept no such mark would
+	mintUnmarked bool
 	// F by its client key, one a key as api keeps it
 	forwardClients map[string]Id
 }
@@ -150,7 +152,7 @@ func (self *testForwardingWorld) mint(wire *sidecarAuthClientWire) (int, any) {
 	}
 	return http.StatusOK, map[string]any{
 		"by_client_jwt": testForwardingJwt(clientId, self.clock.Now().Add(7*24*time.Hour)), "client_id": clientId,
-		"admin_refused": true, "strict_exp": true,
+		"admin_refused": true, "strict_exp": true, "forward_only": !self.mintUnmarked,
 	}
 }
 
@@ -386,13 +388,13 @@ func TestForwardingSetupIsDueAtANewGenerationAndAfterNinetyDays(t *testing.T) {
 	}
 }
 
-// A Delegation whose post was lost and whose pending bytes then left the store, refused at a retry or past their
-// not_after, never lands: the resume signs anew, and the setup ends with one Delegation, the one it handed off.
+// A Delegation whose post was lost and whose pending bytes then left the store never lands where api refuses them at
+// the resume's post: the resume signs anew, and the setup ends with one Delegation, the one it handed off.
 func TestForwardingSetupSignsAnewWhenItsBytesCanNeverLand(t *testing.T) {
 	world := newTestForwardingWorld(t)
 	ctx := context.Background()
 	keys := testForwardingKeys("lost")
-	world.api.answers = []string{"dropped"}
+	world.api.answers = []string{"dropped", "refused"}
 	if _, err := world.sidecar.SetUpForwarding(ctx, world.networkId(), keys); !errors.Is(err, ErrForwardingSetupIncomplete) {
 		t.Fatalf("a lost post: %v", err)
 	}
@@ -413,6 +415,139 @@ func TestForwardingSetupSignsAnewWhenItsBytesCanNeverLand(t *testing.T) {
 	}
 	if rows := world.forwardingRows(); len(rows) != 1 || !bytes.Equal(rows[0].GetDelegationId(), handOff.GetPending().GetForwardDelegationId()) {
 		t.Fatalf("%d forwarding Delegations", len(rows))
+	}
+}
+
+// A config whose follow trails the log at lagAt until a WaitFor asks for a later position, as a reader's follow trails
+// api's answer.
+type testForwardingLaggingConfig struct {
+	testForwardingConfig
+	lagAt  uint64
+	caught *bool
+}
+
+func (self testForwardingLaggingConfig) State() *ConfigState {
+	if !*self.caught {
+		return self.net.statesAt[self.lagAt]
+	}
+	return self.net.log.State()
+}
+
+func (self testForwardingLaggingConfig) WaitFor(ctx context.Context, n uint64) (*ConfigState, error) {
+	*self.caught = true
+	return self.testForwardingConfig.WaitFor(ctx, n)
+}
+
+// DESIGN-DETAILS 4.2.6's kill row: a Delegation that landed while its answer was lost, its bytes then gone from the
+// pending store as a daemon's start posting them would leave them, and the follow not yet past it, is found again by
+// posting the recorded bytes once more, which api answers with their entry: the resume signs nothing new, and the setup
+// ends with that one Delegation.
+func TestForwardingSetupFindsItsLandedDelegationAgain(t *testing.T) {
+	world := newTestForwardingWorld(t)
+	ctx := context.Background()
+	keys := testForwardingKeys("landed")
+	before := world.net.n
+	world.api.answers = []string{"lost"}
+	if _, err := world.sidecar.SetUpForwarding(ctx, world.networkId(), keys); !errors.Is(err, ErrForwardingSetupIncomplete) {
+		t.Fatalf("a lost answer: %v", err)
+	}
+	landed := world.record().SignedDelegation
+	pending, err := world.sidecar.pendingStatement(landed)
+	if err != nil || pending == nil || len(world.forwardingRows()) != 1 {
+		t.Fatalf("the landed bytes: pending %v, %v", pending, err)
+	}
+	if err := world.sidecar.dropPendingStatement(pending); err != nil {
+		t.Fatal(err)
+	}
+	caught := false
+	t.Cleanup(world.sidecar.InstallForwardingSetup(&ForwardingSetupSources{
+		Config:                 testForwardingLaggingConfig{testForwardingConfig: testForwardingConfig{testBridgeFileConfig: testBridgeFileConfig{net: world.net}}, lagAt: before, caught: &caught},
+		UploadDelegationKey:    world.upload,
+		DeliverDelegationWraps: world.wrap,
+		Store:                  world.store,
+	}))
+	handOff, err := world.sidecar.SetUpForwarding(ctx, world.networkId(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(handOff.GetSignedDelegation(), landed) {
+		t.Error("the resume signed a second Delegation")
+	}
+	if rows := world.forwardingRows(); len(rows) != 1 || rows[0].GetSupersededAt() != 0 || rows[0].GetAt() != handOff.GetDelegationAt().GetVersion() {
+		t.Fatalf("%d forwarding Delegations", len(rows))
+	}
+}
+
+// A mint whose answer does not confirm forward_only is handed to no component: the setup stops before its hand-off,
+// keeping no forwarding client, and resumes to one once api confirms the mark.
+func TestForwardingSetupHandsOnNoUnmarkedClient(t *testing.T) {
+	world := newTestForwardingWorld(t)
+	ctx := context.Background()
+	keys := testForwardingKeys("unmarked")
+	world.mintUnmarked = true
+	if handOff, err := world.sidecar.SetUpForwarding(ctx, world.networkId(), keys); !errors.Is(err, ErrForwardingSetupIncomplete) || handOff != nil {
+		t.Fatalf("an unmarked client: %v %v", handOff, err)
+	}
+	if record := world.record(); record.Step != 4 || record.ForwardClientId != nil {
+		t.Fatalf("the record at step %d, keeping %v", record.Step, record.ForwardClientId)
+	}
+	world.mintUnmarked = false
+	if _, err := world.sidecar.SetUpForwarding(ctx, world.networkId(), keys); err != nil {
+		t.Fatal(err)
+	}
+	if world.record().Step != 6 || len(world.forwardingRows()) != 1 {
+		t.Fatal("the resume did not hand off")
+	}
+}
+
+// Makes the world's sidecar a paired child (§5.8): its network's record says its client is a device client's child.
+func (self *testForwardingWorld) pair() {
+	self.t.Helper()
+	instance := newInstanceOn(self.t, NewSidecarMemoryBackend(), newFakeKeyStore())
+	if err := instance.Unlock(testPass); err != nil {
+		self.t.Fatal(err)
+	}
+	identity := self.sidecar.currentIdentity()
+	if err := instance.RecordNetwork(SidecarNetworkRecord{
+		NetworkId: identity.NetworkId, ClientId: identity.ClientId, SidecarId: identity.SidecarId, ConnectInstanceId: NewId(), Child: true,
+	}); err != nil {
+		self.t.Fatal(err)
+	}
+	self.sidecar.instance = instance
+	networkId := identity.NetworkId
+	self.sidecar.stateLock.Lock()
+	defer self.sidecar.stateLock.Unlock()
+	self.sidecar.networkId = &networkId
+}
+
+// A paired child's setup, at pairing, names the device client whose child its client is, and that client's key, in its
+// forwarding Delegation: the log's row holds them, and the hand-off's Delegation names them for the component's check.
+func TestForwardingSetupOfAPairedChildNamesItsHostClient(t *testing.T) {
+	world := newTestForwardingWorld(t)
+	world.pair()
+	if !world.sidecar.Paired() {
+		t.Fatal("the sidecar is no paired child")
+	}
+	keys := testForwardingKeys("paired")
+	hostClientId := testConfigId("the app's device client")
+	hostClientKey := testConfigDeviceKey("the app's device client").Public().(ed25519.PublicKey)
+	keys.HostClientId, keys.HostClientPublicKey = hostClientId.Bytes(), hostClientKey
+	handOff, err := world.sidecar.SetUpForwarding(context.Background(), world.networkId(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := world.net.log.State().ForwardingDelegation(world.hostId)
+	if live == nil || !bytes.Equal(live.GetHostClientId(), hostClientId.Bytes()) || !bytes.Equal(live.GetHostClientPublicKey(), hostClientKey) {
+		t.Fatalf("the live Delegation: %v", live)
+	}
+	signed := &bridge.Signed{}
+	delegation := &protocol.Delegation{}
+	if err := proto.Unmarshal(handOff.GetSignedDelegation(), signed); err != nil {
+		t.Fatal(err)
+	}
+	if err := proto.Unmarshal(signed.GetBody(), delegation); err != nil || !bytes.Equal(delegation.GetForward().GetHostClientId(), hostClientId.Bytes()) ||
+		!bytes.Equal(delegation.GetForward().GetHostClientPublicKey(), hostClientKey) {
+		t.Fatalf("the hand-off's Delegation: %v %v", delegation, err)
 	}
 }
 
