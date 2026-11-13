@@ -3,16 +3,20 @@
 // token by the log alone and api stays a carrier:
 //
 //	CheckRevocation  rev/ for the token's client, sidecar and member, each answer kept at most 5 s (§7.8's check row)
-//	MatchBinding     the token's ur_sidecar_id admitted and not revoked in the newest verified state, and §5's binding
-//	                 of its ur_client_id to that sidecar, which the log does not carry: an EvsBindingSource answers it
+//	MatchBinding     the token's ur_sidecar_id an admitted, unrevoked sidecar of the token's network in the newest
+//	                 verified state. The token's (ur_sidecar_id, ur_client_id) pair is §5's binding as the exchange
+//	                 bound it at the mint (QD-717): the log carries no client ids and evs keeps no Postgres, so evs
+//	                 looks no binding up, and a looked-up one would be api's assertion just as the token is
 //	HonorScope       AclGateCache.HonorScope for the evs audience (D-ACL-21, QD-070), so a subject a group edit, a
 //	                 Suspend or an expiry drops loses the scope within §8.9's 5 s, not at the token's 15 minutes
 //	Repo             the repo's AclRepo row in the token's network's state: its kind, owner and newest RepoDelete, with
 //	                 the RepoDelete's time and signer only while the gate's log keeps that entry
 //
-// Every doubt answers EvsAuthUnknown, which evs answers 503: a network not loaded, no rev/ reader, and no binding source.
-// With no EvsBindingSource every request answers 503, the closed direction, until a host supplies one (question
-// acl-m2-11-evs-binding-source). D-EVS-18's head-CAS check is §11's and reads the same cache through EvsGateViews.
+// A sidecar rebound to a new client leaves its old client's tokens reading for at most a token's life (15 minutes);
+// the old client's writes are voided by the rev/ object every write reads (CheckRevocation).
+//
+// Every doubt answers EvsAuthUnknown, which evs answers 503: a network not loaded and no rev/ reader. D-EVS-18's
+// head-CAS check is §11's and reads the same cache through EvsGateViews.
 //
 // Safe for concurrent use. CheckRevocation does I/O under ctx; the rest answer from memory and allocate nothing on a
 // loaded network.
@@ -36,12 +40,6 @@ type EvsAclGate interface {
 	Changed(networkId sidecar.Id)
 }
 
-// Where evs learns §5's binding of a client to a sidecar, which the authorization log does not carry: a host's cache
-// of api's binding lookups. It answers from memory, Unknown on a miss it has asked about, and never blocks.
-type EvsBindingSource interface {
-	MatchBinding(networkId sidecar.Id, clientId sidecar.Id, sidecarId sidecar.Id) EvsAuthAnswer
-}
-
 // The rev/ reader the real EvsAuthState uses: sidecar.RevocationChecker's Check, or a test's stand-in.
 type EvsRevocationReader interface {
 	Check(ctx context.Context, principal *sidecar.Principal) error
@@ -51,13 +49,12 @@ type EvsRevocationReader interface {
 type AclEvsAuthState struct {
 	gate        EvsAclGate
 	revocations EvsRevocationReader
-	bindings    EvsBindingSource
 }
 
-// The state over gate, reading rev/ through revocations and bindings through bindings. A nil gate or revocations
-// answers every check that needs it 503; a nil bindings answers every MatchBinding 503.
-func NewAclEvsAuthState(gate EvsAclGate, revocations EvsRevocationReader, bindings EvsBindingSource) *AclEvsAuthState {
-	return &AclEvsAuthState{gate: gate, revocations: revocations, bindings: bindings}
+// The state over gate, reading rev/ through revocations. A nil gate or revocations answers every check that needs
+// it 503.
+func NewAclEvsAuthState(gate EvsAclGate, revocations EvsRevocationReader) *AclEvsAuthState {
+	return &AclEvsAuthState{gate: gate, revocations: revocations}
 }
 
 var _ EvsAuthState = (*AclEvsAuthState)(nil)
@@ -96,7 +93,9 @@ func (self *AclEvsAuthState) CheckRevocation(ctx context.Context, principal *sid
 	return err
 }
 
-// See EvsAuthState and the file header.
+// See EvsAuthState and the file header: the snapshot is the token's network's, so a sidecar that network never
+// admitted, one it revoked and one another network admitted are all denied, and the token's client is taken as the
+// exchange bound it.
 func (self *AclEvsAuthState) MatchBinding(principal *sidecar.Principal) EvsAuthAnswer {
 	snapshot, answer := self.snapshot(principal)
 	if answer != EvsAuthAllowed {
@@ -105,14 +104,10 @@ func (self *AclEvsAuthState) MatchBinding(principal *sidecar.Principal) EvsAuthA
 	if principal.SidecarId == nil {
 		return EvsAuthDenied
 	}
-	sidecarId := sidecar.Id(*principal.SidecarId)
-	if !snapshot.Acl.Admitted(sidecarId) {
+	if !snapshot.Acl.Admitted(sidecar.Id(*principal.SidecarId)) {
 		return EvsAuthDenied
 	}
-	if self.bindings == nil {
-		return EvsAuthUnknown
-	}
-	return self.bindings.MatchBinding(sidecar.Id(principal.NetworkId), sidecar.Id(principal.ClientId), sidecarId)
+	return EvsAuthAllowed
 }
 
 // See EvsAuthState: AclGateCache.HonorScope's answer for the evs audience.

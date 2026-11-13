@@ -82,7 +82,8 @@ type GkmStateChange struct {
 }
 
 // What the reconciler reads of the authorization log and of sidecars' standing: §8.9's gate cache over
-// {acl_<networkId>}e and proj/, which taskworker supplies (KEYS-M2-17), and a fake in T2. Safe for concurrent use.
+// {acl_<networkId>}e and proj/, AclGkmReconcilerState (reconciler_state_acl.go; QD-718), which taskworker supplies
+// (KEYS-M2-17), and a fake in T2. Safe for concurrent use.
 type GkmReconcilerState interface {
 	// Calls changed for each move of a network's state, and with nil after a lost subscription, so every network is
 	// read again. changed never blocks. Returns the call that stops it.

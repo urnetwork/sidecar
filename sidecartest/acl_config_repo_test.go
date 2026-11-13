@@ -11,8 +11,8 @@
 //	           scope, and no other sidecar's; GET honors a member device's and an ephemeral sidecar's r, and a
 //	           revocation closes it at the gate's next load
 //	gkm        AclGateCache.HonorScope for the gkm audience, the answer gkm's guard reads: a member device's rw in the
-//	           config group, never a read_only or ephemeral one's. gkmservice's own GkmAuthState over the cache is a
-//	           KEYS task (QD-718), so no gkm engine runs here
+//	           config group, never a read_only or ephemeral one's. gkm's engine over its own GkmAuthState on this
+//	           cache (QD-718) runs in gkm_auth_state_acl_test.go
 //
 // No sleeps: each load is awaited by the cache's OnLoad, and the clock is the Net's.
 
@@ -27,7 +27,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -40,21 +39,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
-
-// §5's bindings as api made them: each sidecar's client.
-type aclConfigRepoBindings struct {
-	stateLock sync.Mutex
-	clientIds map[sidecar.Id]sidecar.Id
-}
-
-func (self *aclConfigRepoBindings) MatchBinding(networkId sidecar.Id, clientId sidecar.Id, sidecarId sidecar.Id) evsservice.EvsAuthAnswer {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if bound, ok := self.clientIds[sidecarId]; ok && bound == clientId {
-		return evsservice.EvsAuthAllowed
-	}
-	return evsservice.EvsAuthDenied
-}
 
 // rev/ holding no object.
 type aclConfigRepoRevocations struct{}
@@ -71,7 +55,6 @@ type aclConfigRepoWorld struct {
 	cache     *sidecar.AclGateCache
 	loads     chan *bridge.AuthPin
 	engine    *evsservice.EvsEngine
-	bindings  *aclConfigRepoBindings
 	configId  sidecar.Id
 }
 
@@ -87,7 +70,6 @@ func newAclConfigRepoWorld(t *testing.T) *aclConfigRepoWorld {
 	t.Cleanup(admission.Close)
 	world := &aclConfigRepoWorld{
 		t: t, net: net, admission: admission, loads: make(chan *bridge.AuthPin, 64),
-		bindings: &aclConfigRepoBindings{clientIds: map[sidecar.Id]sidecar.Id{}},
 		configId: admission.ConfigRepoId(),
 	}
 	host := net.Fakes()
@@ -111,7 +93,7 @@ func newAclConfigRepoWorld(t *testing.T) *aclConfigRepoWorld {
 	settings := evsservice.DefaultEvsSettings()
 	settings.RepoCacheTtl = 0
 	world.engine, err = evsservice.NewEvsEngine(t.Context(), net.Host(), settings, &evsservice.EvsEngineDeps{
-		AuthState: evsservice.NewAclEvsAuthState(world.cache, aclConfigRepoRevocations{}, world.bindings),
+		AuthState: evsservice.NewAclEvsAuthState(world.cache, aclConfigRepoRevocations{}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -140,16 +122,9 @@ func (self *aclConfigRepoWorld) load() {
 	}
 }
 
-// The client api bound to a device's sidecar.
+// The client api bound to a device's sidecar, which the exchange writes into its tokens (QD-717).
 func (self *aclConfigRepoWorld) clientOf(device *AdmissionDevice) sidecar.Id {
-	self.bindings.stateLock.Lock()
-	defer self.bindings.stateLock.Unlock()
-	clientId, ok := self.bindings.clientIds[device.SidecarId]
-	if !ok {
-		clientId = self.admission.Id("client of " + device.SidecarId.String())
-		self.bindings.clientIds[device.SidecarId] = clientId
-	}
-	return clientId
+	return self.admission.Id("client of " + device.SidecarId.String())
 }
 
 // An evs token of the device's sidecar carrying scopes, as the exchange would mint it.

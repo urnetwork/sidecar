@@ -23,6 +23,10 @@
 // Memory is bounded by ByteBudget over each network's retained entries and rows: past it, the networks read longest
 // ago lose their loaded state and keep their pins, up to UnloadedCount of them.
 //
+// What follows the cache rather than asking it (acl_gate_networks.go; QD-718): Networks lists the networks it holds
+// a loaded state of, SidecarNetwork answers which of them holds a sidecar's row, and AddInstallCallback's callbacks
+// run after each new snapshot is installed, so a follower woken by one reads the new state and never the one before.
+//
 // Safe for concurrent use. The install of a new snapshot is this cache's linearization point, between the
 // acl_gate.install barriers. Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret.
 
@@ -113,6 +117,11 @@ type AclGateCache struct {
 	// bounds loads across networks
 	loadSlots chan struct{}
 
+	// which loaded networks hold a row of each sidecar (acl_gate_networks.go)
+	sidecars *aclGateSidecarIndex
+	// what runs after each install: read with no lock, replaced whole under stateLock
+	installCallbacks atomic.Pointer[[]*aclGateInstallCallback]
+
 	// every network's byteCount, and how many tracked networks hold no log
 	byteTotal     atomic.Int64
 	unloadedCount atomic.Int64
@@ -141,9 +150,12 @@ func NewAclGateCache(ctx context.Context, source AclGateSource, clock Clock, set
 		settings:  settings,
 		log:       loggerOrDefault(settings.Log),
 		loadSlots: make(chan struct{}, max(1, settings.LoadConcurrency)),
+		sidecars:  newAclGateSidecarIndex(),
 	}
 	networks := map[Id]*aclGateNetwork{}
 	self.networks.Store(&networks)
+	installCallbacks := []*aclGateInstallCallback{}
+	self.installCallbacks.Store(&installCallbacks)
 	self.epoch.Store(1)
 	go self.run()
 	return self
@@ -377,7 +389,8 @@ func (self *AclGateCache) load(network *aclGateNetwork) error {
 	return loadErr
 }
 
-// Installs a state's snapshot, never one at or below what the network holds.
+// Installs a state's snapshot, never one at or below what the network holds, then the network's sidecars in the
+// index, and last tells the install callbacks, which so read the new snapshot and the new index.
 func (self *AclGateCache) install(network *aclGateNetwork, state *ConfigState) error {
 	acl, err := state.Acl()
 	if err != nil {
@@ -388,15 +401,20 @@ func (self *AclGateCache) install(network *aclGateNetwork, state *ConfigState) e
 		return nil
 	}
 	barrierKey := network.networkId.String()
+	snapshot := &AclGateSnapshot{Pin: pin, Config: state, Acl: acl}
 	testHookBarrier("acl_gate.install.before", barrierKey)
-	network.snapshot.Store(&AclGateSnapshot{Pin: pin, Config: state, Acl: acl})
+	network.snapshot.Store(snapshot)
 	testHookBarrier("acl_gate.install", barrierKey)
 	func() {
 		network.stateLock.Lock()
 		defer network.stateLock.Unlock()
 		network.floor = pin
 	}()
+	self.sidecars.install(network.networkId, state.SidecarIds())
 	testHookBarrier("acl_gate.install.after", barrierKey)
+	for _, installCallback := range *self.installCallbacks.Load() {
+		installCallback.callback(network.networkId, snapshot)
+	}
 	return nil
 }
 
@@ -418,8 +436,8 @@ func (self *AclGateCache) alarm(networkId Id, err error) error {
 var errAclGateNoSource = errors.New("no gate source")
 
 // Past ByteBudget, drops the loaded state of the networks read longest ago, never a loading one or the one just
-// loaded, keeping each one's pin; past UnloadedCount, forgets the longest unread unloaded networks. A load within both
-// bounds costs two atomic reads here.
+// loaded, keeping each one's pin and taking its sidecars out of the index; past UnloadedCount, forgets the longest
+// unread unloaded networks. A load within both bounds costs two atomic reads here.
 func (self *AclGateCache) evict(loaded *aclGateNetwork) {
 	overBytes := 0 < self.settings.ByteBudget && self.settings.ByteBudget < self.byteTotal.Load()
 	overUnloaded := int64(max(0, self.settings.UnloadedCount)) < self.unloadedCount.Load()
@@ -456,6 +474,7 @@ func (self *AclGateCache) evict(loaded *aclGateNetwork) {
 			network.log = nil
 			network.byteCount = 0
 			network.snapshot.Store(nil)
+			self.sidecars.remove(network.networkId)
 			self.unloadedCount.Add(1)
 			self.evictionCount.Add(1)
 		}()
