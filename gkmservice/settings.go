@@ -1,10 +1,11 @@
-// What tunes the gkm engine (connect/CODESTYLE.md's settings rule): every timing, count and size that is policy
-// rather than format, each a field here and read where it is used. A bound the design's argument needs, such as
-// repo/'s 5 s cache (§10.6's checks row), is a ceiling Validate holds, so a setting can shorten it and never stretch
-// it. Format limits move here as their files are touched, the protocol's value their default (QD-702): one POST
-// /gkm/delegation-keys' 256 ids so far. The rest still stand beside their formats until QD-706's sweep: a ReaderKey's
-// 7 days and gkm's 10 minutes of clock skew (gkm_delivery.go), a token's 64 repo scopes (§7.8), and a wrap batch's
-// 256, reader-keys' 256 and the drop-key route's 64 (§10.14).
+// What tunes the gkm engine (connect/CODESTYLE.md's settings rule): every timing, count and size, each a field here
+// and read where it is used. A bound the design's argument needs, such as repo/'s 5 s cache (§10.6's checks row), is
+// a field too, its default the design's value (QD-702), and a ceiling Validate holds the settings under it to, so a
+// deployment shortens those and raising the bound itself changes the design's argument. Format limits move here as
+// their files are touched, the protocol's value their default: one POST /gkm/delegation-keys' 256 ids so far. The
+// rest still stand beside their formats until QD-706's sweep: a ReaderKey's 7 days and gkm's 10 minutes of clock skew
+// (gkm_delivery.go), a token's 64 repo scopes (§7.8), and a wrap batch's 256, reader-keys' 256 and the drop-key
+// route's 64 (§10.14).
 //
 // The rates are counted per process, in memory (plan-KEYS-rate-counters, decided): each limit is its rate times the
 // process count, and a restart forgets it. The 24 h ReaderKey rule is exact, read from the stored object.
@@ -22,10 +23,6 @@ import (
 // A settings value outside what the design allows.
 var ErrGkmSettings = errors.New("gkm settings invalid")
 
-// §10.6's checks row: repo/ is "cached at most 5 s", the bound a write in flight at a shred relies on, and the most
-// RepoCacheTtl and FormCacheTtl may be.
-const gkmRepoCacheMaxTtl = 5 * time.Second
-
 // A limit of Count events per Interval, refilling evenly, so a quiet key may spend Count at once.
 type GkmRate struct {
 	Count    int
@@ -42,13 +39,17 @@ type GkmServiceSettings struct {
 	// place/'s resolution: a 404 cached 5 s, the placements a process keeps (§10.6's placement row).
 	Place *sidecar.EvsRepoPlaceSettings
 
-	// How long a repo/ read stays cached in a process: §10.6's "cached at most 5 s". At most 5 s; non-positive
-	// caches nothing, every check reading the cluster.
+	// §10.6's checks row: repo/ is "cached at most 5 s", the bound a write in flight at a shred relies on, and the
+	// most RepoCacheTtl, FormCacheTtl and GroupInfoCacheTtl may be. The design's value (QD-702): a deployment never
+	// raises it alone, since the shred's argument counts on it.
+	RepoCacheMaxTtl time.Duration
+	// How long a repo/ read stays cached in a process: §10.6's "cached at most 5 s". At most RepoCacheMaxTtl;
+	// non-positive caches nothing, every check reading the cluster.
 	RepoCacheTtl time.Duration
 	// The most repo/ objects one process caches; past it one is evicted. Non-positive caches none.
 	RepoCacheCount int
 	// How long a repo's GroupForms stay cached, so "the newest GroupForm names the group" reads as fresh as repo/
-	// does. At most 5 s; non-positive caches nothing.
+	// does. At most RepoCacheMaxTtl; non-positive caches nothing.
 	FormCacheTtl time.Duration
 	// The most repos whose GroupForms one process caches. Non-positive caches none.
 	FormCacheCount int
@@ -130,7 +131,7 @@ type GkmServiceSettings struct {
 	// under 50 KB (§10.6's sizes), so a larger one is refused, and above 16 leaves it goes to POST group-info.
 	EpochGroupInfoMaxByteCount int64
 	// How long a group-info read stays cached for an epoch PUT's pointer check: §10.6's store operations price it as
-	// a "5 s cache". At most 5 s; non-positive caches nothing.
+	// a "5 s cache". At most RepoCacheMaxTtl; non-positive caches nothing.
 	GroupInfoCacheTtl time.Duration
 	// The groups whose group-info read one process caches. Non-positive caches none.
 	GroupInfoCacheCount int
@@ -189,6 +190,7 @@ func DefaultGkmServiceSettings() *GkmServiceSettings {
 	return &GkmServiceSettings{
 		Place: sidecar.DefaultEvsRepoPlaceSettings(),
 
+		RepoCacheMaxTtl:          5 * time.Second,
 		RepoCacheTtl:             5 * time.Second,
 		RepoCacheCount:           100 * 1000,
 		FormCacheTtl:             5 * time.Second,
@@ -270,8 +272,11 @@ func (self *GkmServiceSettings) Validate() error {
 	if self.Place.NotFoundTtl < 0 {
 		return fmt.Errorf("%w: a negative place/ 404 ttl", ErrGkmSettings)
 	}
-	if gkmRepoCacheMaxTtl < self.RepoCacheTtl || gkmRepoCacheMaxTtl < self.FormCacheTtl || gkmRepoCacheMaxTtl < self.GroupInfoCacheTtl {
-		return fmt.Errorf("%w: repo/, GroupForms or group-info cached past §10.6's %s", ErrGkmSettings, gkmRepoCacheMaxTtl)
+	if self.RepoCacheMaxTtl <= 0 {
+		return fmt.Errorf("%w: RepoCacheMaxTtl must be positive", ErrGkmSettings)
+	}
+	if self.RepoCacheMaxTtl < self.RepoCacheTtl || self.RepoCacheMaxTtl < self.FormCacheTtl || self.RepoCacheMaxTtl < self.GroupInfoCacheTtl {
+		return fmt.Errorf("%w: repo/, GroupForms or group-info cached past §10.6's %s", ErrGkmSettings, self.RepoCacheMaxTtl)
 	}
 	if self.GroupInfoPointerLagCount == 0 {
 		return fmt.Errorf("%w: GroupInfoPointerLagCount must be positive", ErrGkmSettings)
