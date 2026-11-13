@@ -26,8 +26,8 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// A request of action by requester carrying detail as its local_port, weight and alpn, waiting in the vault. Not
-// parsed, so a test may put one the parse refuses.
+// A request of action by requester carrying detail as its socket_name, local_port, weight and alpn, waiting in the
+// vault. Not parsed, so a test may put one the parse refuses.
 func (self *testApproverWorld) storedRequest(requester Id, action *StoredCanonicalAction, detail *SidecarActionDetail) []byte {
 	self.t.Helper()
 	approvalId := NewId()
@@ -41,6 +41,7 @@ func (self *testApproverWorld) storedRequest(requester Id, action *StoredCanonic
 		NotAfterMillis: self.sidecar.clock.Now().Add(time.Hour).UnixMilli(), Version: 1,
 	}
 	if detail != nil {
+		request.SocketName = detail.SocketName
 		request.LocalPort, request.Weight, request.Alpn = detail.LocalPort, detail.Weight, detail.Alpn
 	}
 	return testRecordStored(self.t, request)
@@ -216,22 +217,28 @@ func (self testActionDetailOpenerOfNothing) OpenActionDetail(action *StoredCanon
 	return nil, nil
 }
 
-// A request's local_port, weight and alpn are its action's kind's alone (the kind table's request column): a publish
-// binds its local port and ALPNs, a listen its local port and weight, a forward and an expose their local port, and
-// every other field on every other kind is refused by the parse, as are a port past 65535 and an empty ALPN. What
-// parses is rendered by name after the action's fields.
+// A request's socket_name, local_port, weight and alpn are its action's kind's alone (the kind table's request
+// column): a publish binds its local port and ALPNs, a listen its name, local port and weight, its name always
+// (QD-772), a forward and an expose their local port, and every other field on every other kind is refused by the
+// parse, as are a port past 65535 and an empty ALPN. What parses is rendered by name after the action's fields.
 func TestRequestDetailIsItsKindsAlone(t *testing.T) {
 	world := newTestApproverWorld(t)
 	actions := testBuildableActions()
 	details := map[protoreflect.FieldNumber]*SidecarActionDetail{
-		approvalRequestFieldLocalPort: {LocalPort: 8080},
-		approvalRequestFieldWeight:    {Weight: 10},
-		approvalRequestFieldAlpn:      {Alpn: []string{"h2", "http/1.1"}},
+		approvalRequestFieldSocketName: {SocketName: "tls/443/blog"},
+		approvalRequestFieldLocalPort:  {LocalPort: 8080},
+		approvalRequestFieldWeight:     {Weight: 10},
+		approvalRequestFieldAlpn:       {Alpn: []string{"h2", "http/1.1"}},
 	}
 	for name, action := range actions {
 		stored := buildTestAction(t, action)
 		row, _ := CanonicalActionFields(SidecarActionKind(action.GetKind()))
 		for number, detail := range details {
+			detail = detail.clone()
+			if slices.Contains(row.RequestRequired, approvalRequestFieldSocketName) {
+				// a listen's request always names its socket, the one its grant_dst names
+				detail.SocketName = "tls/443/blog"
+			}
 			_, err := ParseStoredApprovalRequest(world.storedRequest(world.requesterId, stored, detail))
 			if row.requestAllows(number) {
 				if err != nil {
@@ -243,7 +250,7 @@ func TestRequestDetailIsItsKindsAlone(t *testing.T) {
 		}
 	}
 	wants := map[string][]protoreflect.FieldNumber{
-		"tls_publish": {14, 16}, "socket_listen": {14, 15}, "bridge_forward": {14}, "bridge_expose": {14},
+		"tls_publish": {14, 16}, "socket_listen": {17, 14, 15}, "bridge_forward": {14}, "bridge_expose": {14},
 	}
 	for name := range actions {
 		row, _ := CanonicalActionFields(SidecarActionKind(actions[name].GetKind()))
@@ -265,7 +272,7 @@ func TestRequestDetailIsItsKindsAlone(t *testing.T) {
 	if err := proto.Unmarshal(world.storedRequest(world.requesterId, publish, nil), unknown); err != nil {
 		t.Fatal(err)
 	}
-	unknown.ProtoReflect().SetUnknown(protowire.AppendVarint(protowire.AppendTag(nil, 17, protowire.VarintType), 1))
+	unknown.ProtoReflect().SetUnknown(protowire.AppendVarint(protowire.AppendTag(nil, 18, protowire.VarintType), 1))
 	if _, err := ParseStoredApprovalRequest(testRecordStored(t, unknown)); !errors.Is(err, ErrRecordStoredInvalid) {
 		t.Errorf("a request with an unknown field answered %v", err)
 	}
@@ -284,9 +291,13 @@ func TestRequestDetailIsItsKindsAlone(t *testing.T) {
 	if detail := request.Detail(); !detail.Equal(&SidecarActionDetail{LocalPort: 8080, Alpn: []string{"h2", "http/1.1\x1b[2J"}}) {
 		t.Errorf("the request's detail: %+v", detail)
 	}
-	listen := world.putDetail(world.requesterId, buildTestAction(t, actions["socket_listen"]), &SidecarActionDetail{LocalPort: 8443, Weight: -3})
-	if value, ok := testRenderField(world.item(listen.ApprovalId()).Render, "weight"); !ok || value != "-3" {
+	listen := world.putDetail(world.requesterId, buildTestAction(t, actions["socket_listen"]), &SidecarActionDetail{SocketName: "tls/443/blog", LocalPort: 8443, Weight: -3})
+	listenRender := world.item(listen.ApprovalId()).Render
+	if value, ok := testRenderField(listenRender, "weight"); !ok || value != "-3" {
 		t.Errorf("weight renders %q (%t)", value, ok)
+	}
+	if value, ok := testRenderField(listenRender, "socket_name"); !ok || value != "tls/443/blog" || listenRender.NameUnread {
+		t.Errorf("socket_name renders %q (%t), unread %t", value, ok, listenRender.NameUnread)
 	}
 	// a request with no detail has none, and nil equals it
 	bare := world.putDetail(world.requesterId, publish, nil)

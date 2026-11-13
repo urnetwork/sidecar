@@ -10,7 +10,8 @@
 // kind's column of the table (QD-064): CheckCanonicalActionForServer.
 //
 // The builder takes both of QD-740's forms. A kind that binds a local port, a weight or ALPNs builds its action
-// without them: they are the request's, which the caller hands the gate as SidecarAction.Detail. A dial or route
+// without them: they are the request's, which the caller hands the gate as SidecarAction.Detail, and so is a listen's
+// socket name (QD-772), its action naming the socket by grant_dst alone (SocketListenGrantDst). A dial or route
 // grant, bridge_forward's at version 4, and an access request to a worker's port carry sealed_detail, which
 // NewSealedCanonicalAction (record_action_detail.go) seals once the clear fields are final, bound to them (QD-771;
 // canonicalActionClearBytes here): the builder holds it to the sealed-body layout and holds every clear grant_dst to a
@@ -235,15 +236,19 @@ func CanonicalActionRisk(action *StoredCanonicalAction, policy SidecarRisk, agen
 
 // Holds an action a GrantActivate or a gate carries to its kind's server column (QD-064): kind, version, scope and
 // the column's fields, nothing more, so recipients, previews and paths never reach a server even from a builder that
-// filled them. A kind no server path takes is refused. api, every reader's GrantActivate check and each gate run this
-// on the stored bytes, after ParseStoredCanonicalAction.
+// filled them, nor a field this build cannot name, such as a listen's name at its old 23 (QD-772), whose listen
+// passes on the grant's fields alone. A kind no server path takes is refused. api, every reader's GrantActivate check
+// and each gate run this on the stored bytes, after ParseStoredCanonicalAction.
 func CheckCanonicalActionForServer(action *StoredCanonicalAction) error {
-	if action == nil {
+	if action == nil || action.Action == nil {
 		return fmt.Errorf("%w: no action", ErrCanonicalActionInvalid)
 	}
 	row, ok := CanonicalActionFields(SidecarActionKind(action.Action.GetKind()))
 	if !ok || len(row.Server) == 0 {
 		return fmt.Errorf("%w: kind %d takes no server path", ErrCanonicalActionInvalid, action.Action.GetKind())
+	}
+	if len(action.Action.ProtoReflect().GetUnknown()) != 0 {
+		return fmt.Errorf("%w: a field this build cannot name on a server path", ErrCanonicalActionInvalid)
 	}
 	for _, number := range setFieldNumbers(action.Action.ProtoReflect()) {
 		if !row.serverAllows(number) {

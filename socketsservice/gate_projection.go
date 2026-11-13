@@ -43,6 +43,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -57,6 +58,13 @@ import (
 
 var _ SocketGate = (*SocketProjectionGate)(nil)
 var _ SocketGateFollower = (*SocketProjectionGate)(nil)
+var _ SocketScopeConsent = (*SocketProjectionGate)(nil)
+
+// Where a gate reads a network's Team scopes in its verified state (§7.9, Q-TLS-3; owner decisions 40, 126;
+// SOCK-M6-01): the scope a label names in snapshot, false for a label it holds no scope for. ProjectionRows keeps field 6
+// for TeamScopeRow, which no state carries yet (protos-bridge-row-fields #3), so a host sets none, and every scope host
+// is refused, the closed direction, until the rows carry scopes and a source reads them.
+type SocketScopeSource func(snapshot *sidecar.AclGateSnapshot, label string) (sidecar.AclScope, bool)
 
 // A run of evidence that arrived between two loads' starts: the newest evidence in it by count, and when its first
 // came.
@@ -191,7 +199,9 @@ type SocketProjectionGate struct {
 	overLimit *socketOverLimit
 
 	onNarrowed atomic.Pointer[func(networkId connect.Id, position uint64)]
-	wake       chan struct{}
+	// Where Team scopes are read, nil refusing every scope host (SetScopeSource).
+	scopes atomic.Pointer[SocketScopeSource]
+	wake   chan struct{}
 	// Loads the cache reported, each counted once the gate has taken it in, so a test sees one land.
 	loadCount *sidecar.MonitorValue[uint64]
 	// Resubscription checks finished, for the same.
@@ -335,8 +345,41 @@ func (self *SocketProjectionGate) View(networkId connect.Id) (SocketGateView, er
 		position:      snapshot.Pin.GetVersion(),
 		edgeNetworkId: edgeNetworkId,
 		edgeSet:       edgeSet,
+		scopes:        &self.scopes,
 	}
 	return network.view, nil
+}
+
+// Sets where the gate reads Team scopes, nil refusing every scope host, which is what a gate does until it is set. The
+// host sets it before serving, once §7.9's rows carry scopes (SOCK-M6-01).
+func (self *SocketProjectionGate) SetScopeSource(source SocketScopeSource) {
+	if source == nil {
+		self.scopes.Store(nil)
+		return
+	}
+	self.scopes.Store(&source)
+}
+
+// See SocketScopeConsent: the scope stands in the network's verified state and, in a member scope, sidecarId is one of
+// its member's consented devices (§8.5, owner decision 126), on the state View serves. smtp/'s namespace asks this for
+// mx.<scope> (SOCK-M7-01); the gate's own listen and publish verdicts apply the same rule to every scope host.
+func (self *SocketProjectionGate) ConsentListen(networkId connect.Id, scope string, sidecarId *connect.Id) error {
+	view, err := self.View(networkId)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrSocketListenUnavailable, err)
+	}
+	projection, ok := view.(*socketProjectionView)
+	if !ok {
+		return fmt.Errorf("%w: no state there holds a scope", ErrSocketListenRefused)
+	}
+	resolved, found := projection.scopeOf(scope)
+	if !found {
+		return fmt.Errorf("%w: a scope the state does not hold", ErrSocketListenRefused)
+	}
+	if resolved.MemberId != (sidecar.Id{}) && (sidecarId == nil || !projection.snapshot.Acl.ConsentedFor(sidecar.Id(*sidecarId), resolved.MemberId)) {
+		return fmt.Errorf("%w: not a consented device of the scope's member", ErrSocketListenRefused)
+	}
+	return nil
 }
 
 // See SocketGate. A position at or below the state's is no evidence, and neither is
@@ -655,6 +698,37 @@ type socketProjectionView struct {
 	position      uint64
 	edgeNetworkId connect.Id
 	edgeSet       bool
+	// The gate's scope source as it stands when a check asks.
+	scopes *atomic.Pointer[SocketScopeSource]
+}
+
+// The Team scope label names in the snapshot, false for none or with no source.
+func (self *socketProjectionView) scopeOf(label string) (sidecar.AclScope, bool) {
+	if self.scopes == nil {
+		return sidecar.AclScope{}, false
+	}
+	source := self.scopes.Load()
+	if source == nil {
+		return sidecar.AclScope{}, false
+	}
+	return (*source)(self.snapshot, label)
+}
+
+// The scope label a tls/ or smtp/ name's host names, <label>.<scope> (§9.4), false for a host of no scope.
+func socketNameScope(name string) (string, bool) {
+	if !socketGatePublicName(name) {
+		return "", false
+	}
+	return socketHostScope(name[strings.LastIndexByte(name, '/')+1:])
+}
+
+// The scope label of host <label>.<scope>, false for a host of no scope.
+func socketHostScope(host string) (string, bool) {
+	label, scope, found := strings.Cut(host, ".")
+	if !found || label == "" || scope == "" || strings.Contains(scope, ".") {
+		return "", false
+	}
+	return scope, true
 }
 
 var _ SocketGateView = (*socketProjectionView)(nil)
@@ -697,6 +771,14 @@ func (self *socketProjectionView) MayListen(request *SocketGateRequest, now time
 			return &SocketGateVerdict{}
 		}
 		socket = sidecar.AclSocketName{PublicName: request.Name}
+		// a scope host stands only for a scope the state holds, a member scope's only on its member's consented devices
+		if label, scoped := socketNameScope(request.Name); scoped {
+			scope, found := self.scopeOf(label)
+			if !found {
+				return &SocketGateVerdict{}
+			}
+			return self.verdict(self.snapshot.Acl.MayListenInScope(subject, socket, scope, now))
+		}
 	}
 	return self.verdict(self.snapshot.Acl.MayListen(subject, socket, now))
 }
@@ -725,6 +807,13 @@ func (self *socketProjectionView) MayPublish(request *SocketGateRequest, now tim
 	subject, ok := socketGateSubject(request)
 	if !ok || host == "" {
 		return &SocketGateVerdict{}
+	}
+	if label, scoped := socketHostScope(host); scoped {
+		scope, found := self.scopeOf(label)
+		if !found {
+			return &SocketGateVerdict{}
+		}
+		return self.verdict(self.snapshot.Acl.MayPublishInScope(subject, host, scope, now))
 	}
 	return self.verdict(self.snapshot.Acl.MayPublish(subject, host, now))
 }
