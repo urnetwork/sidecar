@@ -350,11 +350,15 @@ modules:
     spdx: BSD-3-Clause
     reason: rate limits in pion and gVisor
     leg: [client, engine, cli, test]
-  - module: golang.zx2c4.com/wireguard
+  - module: golang.zx2c4.com/wintun
     spdx: MIT
-    reason: wireguard's tun for cli's OS tun (§17.10)
+    reason: through wireguard's tun on Windows, a loader of wintun.dll that holds no DLL; linked only once ur tun runs on Windows (BRIDGE-M6-06), which loads the DLL only after owner decision 222's checks; read from its LICENSE
     leg: [cli]
     planned: true
+  - module: golang.zx2c4.com/wireguard
+    spdx: MIT
+    reason: wireguard's tun for ur tun's OS tun on Linux (§17.10), its tun, conn and rwcancel packages, from cli's Linux files alone; read from its LICENSE
+    leg: [cli]
   - module: google.golang.org/protobuf
     spdx: BSD-3-Clause
     reason: wire types in protocol and protocol/bridge; v1.36.11 pins protoc-gen-go too (§4.9)

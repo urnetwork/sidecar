@@ -10,7 +10,10 @@
 //	HonorScope       AclGateCache.HonorScope for the evs audience (D-ACL-21, QD-070), so a subject a group edit, a
 //	                 Suspend or an expiry drops loses the scope within §8.9's 5 s, not at the token's 15 minutes
 //	Repo             the repo's AclRepo row in the token's network's state: its kind, owner and newest RepoDelete, with
-//	                 the RepoDelete's time and signer only while the gate's log keeps that entry
+//	                 the RepoDelete's time from its row (QD-743) and its signer only while the gate's log keeps that
+//	                 entry
+//	RepoDeletion     the same RepoDelete by network rather than by token, so the state is also taskworker's
+//	                 EvsRepoDeletionSource: §11.12's shred start and reconciler judge from rows alone
 //
 // A sidecar rebound to a new client leaves its old client's tokens reading for at most a token's life (15 minutes);
 // the old client's writes are voided by the rev/ object every write reads (CheckRevocation).
@@ -57,15 +60,25 @@ func NewAclEvsAuthState(gate EvsAclGate, revocations EvsRevocationReader) *AclEv
 	return &AclEvsAuthState{gate: gate, revocations: revocations}
 }
 
-var _ EvsAuthState = (*AclEvsAuthState)(nil)
+var (
+	_ EvsAuthState          = (*AclEvsAuthState)(nil)
+	_ EvsRepoDeletionSource = (*AclEvsAuthState)(nil)
+)
 
 // The snapshot of the token's network, Unknown while it is not loaded; a network the cache has not heard of is told
 // to it.
 func (self *AclEvsAuthState) snapshot(principal *sidecar.Principal) (*sidecar.AclGateSnapshot, EvsAuthAnswer) {
-	if self.gate == nil || principal == nil {
+	if principal == nil {
 		return nil, EvsAuthUnknown
 	}
-	networkId := sidecar.Id(principal.NetworkId)
+	return self.networkSnapshot(sidecar.Id(principal.NetworkId))
+}
+
+// The snapshot of a network, Unknown while it is not loaded; a network the cache has not heard of is told to it.
+func (self *AclEvsAuthState) networkSnapshot(networkId sidecar.Id) (*sidecar.AclGateSnapshot, EvsAuthAnswer) {
+	if self.gate == nil {
+		return nil, EvsAuthUnknown
+	}
 	snapshot, status := self.gate.State(networkId)
 	switch status {
 	case sidecar.AclGateLoaded:
@@ -128,9 +141,11 @@ func (self *AclEvsAuthState) HonorScope(principal *sidecar.Principal, repoId sid
 	return EvsAuthUnknown
 }
 
-// See EvsAuthState. A RepoDelete the gate's log no longer dates is left out of the facts, so DELETE and restore answer
-// 409 STATEMENT_MISSING for it, the closed direction, until the row carries its time (question
-// acl-m2-06-access-log-positions); a RepoDelete{now} needs no date.
+// See EvsAuthState. The newest RepoDelete comes dated by its row's own time on any day of its window (QD-743), and with
+// its signer only while the gate's log keeps its entry: restore needs neither, and DELETE without now refuses one whose
+// signer it lacks (decideDelete), the closed direction. A RepoDelete without now that its row does not date, which no
+// fold writes, is left out of the facts, so DELETE and restore answer 409 STATEMENT_MISSING for it; a RepoDelete{now}
+// needs no date.
 func (self *AclEvsAuthState) Repo(principal *sidecar.Principal, repoId sidecar.Id) (*EvsRepoFacts, EvsAuthAnswer) {
 	snapshot, answer := self.snapshot(principal)
 	if answer != EvsAuthAllowed {
@@ -148,16 +163,50 @@ func (self *AclEvsAuthState) Repo(principal *sidecar.Principal, repoId sidecar.I
 		}
 		facts.OwnerMemberId = ownerMemberId
 	}
-	if deletion := snapshot.RepoDeletion(repoId); deletion != nil && (deletion.Dated || deletion.Now) {
-		facts.Deletion = &EvsRepoDeletionFacts{
-			DeletionId: deletion.DeletionId,
-			Now:        deletion.Now,
-			Restored:   deletion.Restored,
-		}
-		if deletion.Dated {
-			facts.Deletion.Time = time.UnixMilli(deletion.TimeMs)
-			facts.Deletion.SignerSidecarId = deletion.SignerSidecarId
-		}
-	}
+	facts.Deletion = aclEvsDeletionFacts(snapshot.RepoDeletion(repoId))
 	return facts, EvsAuthAllowed
+}
+
+// A RepoDelete that cannot be judged from what the state holds: one without now whose row carries no time.
+var errAclEvsDeletionUndated = errors.New("the projection holds a RepoDelete it does not date")
+
+// The facts a gate's RepoDelete gives, nil for none and for one without now its row does not date.
+func aclEvsDeletionFacts(deletion *sidecar.AclRepoDeletion) *EvsRepoDeletionFacts {
+	if deletion == nil || !(deletion.Dated || deletion.Now) {
+		return nil
+	}
+	facts := &EvsRepoDeletionFacts{
+		DeletionId: deletion.DeletionId,
+		Now:        deletion.Now,
+		Restored:   deletion.Restored,
+	}
+	if deletion.Dated {
+		facts.Time = time.UnixMilli(deletion.TimeMs)
+	}
+	if deletion.Signed {
+		facts.SignerSidecarId = deletion.SignerSidecarId
+	}
+	return facts
+}
+
+// See EvsRepoDeletionSource: the repo's newest RepoDelete in networkId's newest verified state, for §11.12's shred start
+// and reconciler, judged from its rows alone, so a start 7 d 10 min after the entry finds the deletion dated and its
+// RepoRestore, if any, though the gate's log no longer keeps either entry (QD-743). nil when the state holds no
+// RepoDelete of the repo. An error, which leaves the repo as it is to be asked again, while the network's state is not
+// loaded (a network the cache has not heard of is told to it, which starts its load), and for a RepoDelete without now
+// that its row does not date, which neither a start nor the reconciler may take for no deletion.
+func (self *AclEvsAuthState) RepoDeletion(ctx context.Context, networkId sidecar.Id, repoId sidecar.Id) (*EvsRepoDeletionFacts, error) {
+	snapshot, answer := self.networkSnapshot(networkId)
+	if answer != EvsAuthAllowed {
+		return nil, fmt.Errorf("network %s's authorization state is not loaded", sidecar.EvsKeyId(networkId))
+	}
+	deletion := snapshot.RepoDeletion(repoId)
+	if deletion == nil {
+		return nil, nil
+	}
+	facts := aclEvsDeletionFacts(deletion)
+	if facts == nil {
+		return nil, errAclEvsDeletionUndated
+	}
+	return facts, nil
 }

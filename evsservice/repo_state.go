@@ -149,7 +149,9 @@ func decideActivate(groupReady func() (bool, error), at time.Time) repoDecide {
 // to its own now: an active repo goes to deleted{its id, its entry's time and signer}, or with now straight to
 // shredding{its id, at}; a deleted one under a newer RepoDelete{now} to shredding; the deletion repo/
 // already shows is done, a retry's answer; a keying repo refuses REPO_KEYING, a deleted one under any other RepoDelete
-// REPO_DELETED, and a repo shredding or shredded for another deletion SHREDDING.
+// REPO_DELETED, and a repo shredding or shredded for another deletion SHREDDING. An active repo's deleted state names
+// the entry's time and signer, so a projection that no longer tells either refuses STATEMENT_MISSING and writes no
+// guessed value: rows date a RepoDelete on any day (QD-743), and its signer only the entry names.
 func decideDelete(deletion *EvsRepoDeletionFacts, at time.Time) repoDecide {
 	return func(read *EvsRepoRead) (*protocol.EvsRepoObject, error) {
 		object := read.Object
@@ -166,6 +168,9 @@ func decideDelete(deletion *EvsRepoDeletionFacts, at time.Time) repoDecide {
 			if deletion.Now {
 				next.State = protocol.EvsRepoState_EVS_REPO_SHREDDING
 			} else {
+				if deletion.Time.IsZero() || deletion.SignerSidecarId == (sidecar.Id{}) {
+					return nil, newEvsRepoRefusal(protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING, "the projection no longer names the RepoDelete's time and signer")
+				}
 				next.State = protocol.EvsRepoState_EVS_REPO_DELETED
 				next.StateMs = deletion.Time.UnixMilli()
 				next.StateSigner = deletion.SignerSidecarId.Bytes()

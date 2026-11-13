@@ -718,6 +718,41 @@ func TestCompileAclCarriesTheLogsGrants(t *testing.T) {
 	}
 }
 
+// The log's folded access logs ride the rows whole (QD-743): a RepoDelete's entry time, and a removed admin's row with
+// its removal's position beside the standing ones, which the base compile's retention rule drops (aclRowsKeptAt), never
+// CompileAcl; and the bytes stay equal for equal input.
+func TestCompileAclCarriesTheAccessLogsTimesAndRemovals(t *testing.T) {
+	world := newAclCompileWorld("access log")
+	owner := world.member("owner@acme.example", bridge.MemberRole_MEMBER_ROLE_OWNER)
+	laptop := world.device("laptop", owner)
+	phone := world.device("phone", owner)
+	repoId := world.id("deleted repo")
+	world.statements.Repos = []*protocol.AclRepo{{
+		RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
+		Admins: []*protocol.AclRepoAdminRow{
+			{SidecarId: laptop.Bytes(), Signer: laptop.Bytes(), At: 3},
+			{SidecarId: phone.Bytes(), Signer: laptop.Bytes(), At: 4, RemovedAt: 6},
+		},
+		Deletion: &protocol.AclRepoDeletionRow{DeletionId: world.id("deletion").Bytes(), DeletedAt: 7, DeletedTimeMs: world.headTimeMs - 1000},
+	}}
+	given := proto.Clone(world.statements).(*protocol.AclRows)
+	rows := world.compile(t)
+	if !proto.Equal(world.statements, given) {
+		t.Error("the compile changed its input")
+	}
+	if len(rows.GetRepos()) != 1 || !proto.Equal(rows.GetRepos()[0], given.GetRepos()[0]) {
+		t.Fatalf("the repo rode as %v", rows.GetRepos())
+	}
+	again := world.compile(t)
+	if !bytes.Equal(aclEncodeRows(t, rows), aclEncodeRows(t, again)) {
+		t.Error("equal input compiled to other bytes")
+	}
+	state := world.state(t)
+	if !state.RepoAdminAt(repoId, phone, 5) || state.RepoAdminAt(repoId, phone, 6) {
+		t.Error("the compiled rows do not tell the removed admin's span")
+	}
+}
+
 // CompileAclLocal keeps what rows drop on purpose: ports, prefixes, exact socket globs, aliases, a rule's own naming of
 // harness, and names for previews.
 func TestCompileAclLocalKeepsWhatRowsDrop(t *testing.T) {

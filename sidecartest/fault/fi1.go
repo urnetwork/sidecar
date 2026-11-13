@@ -976,7 +976,7 @@ func fi1EraseAuthority(view sidecar.GkmAuthView, repo *evsStoreRepo, ref *evsSto
 			return errors.New("an erasure ref at another id")
 		}
 		for _, admin := range aclRepo.GetAdmins() {
-			if bytes.Equal(admin.GetSidecarId(), signerId.Bytes()) {
+			if sidecar.AclRepoAdminStands(admin) && bytes.Equal(admin.GetSidecarId(), signerId.Bytes()) {
 				return nil
 			}
 		}
