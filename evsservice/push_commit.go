@@ -5,10 +5,15 @@
 //	        the slots, the page-out and the head; a budget past its shed delay answers 429 RESOURCE_EXHAUSTED, which
 //	        refuses nothing
 //	6       the record joins this process's open batch for the repo's cluster and waits for its write (batch.go);
-//	        then, for a push with new slots, one more round PUTs each slot If-None-Match: equal bytes under 23 h old
-//	        are success, older ones 409 SLOT_STALE, recorded, and other bytes send the attempt to a cluster read of
-//	        the head, where 5a finds the push committed if an ERASE rewrote the slot, else an alarm and SLOT_STALE;
-//	        so the record names every slot written. A window about to pass 127 versions pages out first (logpage.go)
+//	        then, for a push with new slots, the slot round (DESIGN-DETAILS 14.2.3): each slot is created If-None-Match
+//	        with the statement as its origin (slot_origin.go), and on a 412 or a lost answer the object's origin
+//	        decides. The statement's own with equal bytes is success under 23 h old, older 409 SLOT_STALE, recorded;
+//	        its own with other bytes sends the attempt to a cluster read of the head, where 5a finds the push
+//	        committed if an ERASE rewrote the slot, else an alarm and SLOT_STALE. A retoken takes over the object of
+//	        the statement it replaces, which can never commit (14.2.4): a settled DELETE naming its LastModified, then
+//	        the create again. Any other object, one with no origin among them, is a cluster read of the head and 5a,
+//	        then SLOT_STALE, recorded. So the record names every slot written, and a slot object is held by one
+//	        statement. A window about to pass 127 versions pages out first (logpage.go)
 //	7       the head If-Match step 4's ETag (If-None-Match for a ref with none): version v+1, C_{v+1}, the push, its
 //	        pins, the window with the push's entry and without what was paged, folded_through as this process's
 //	        folds raise it, the lease cleared, deleted for a DELETE; issued only within PushStepSevenWindow of step
@@ -17,7 +22,8 @@
 //	        entry, which records the sequence the commit raised, and the fold trigger
 //
 // A record is committed only at the place its window entry names, so another attempt's copy of the same push is
-// dead weight evacuation drops (§11.8's bind row), and nothing here deletes anything.
+// dead weight evacuation drops (§11.8's bind row), and nothing here deletes anything but the slot object a takeover
+// takes from a statement that can never commit (DESIGN-DETAILS 14.2.4).
 
 package evsservice
 
@@ -27,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -303,7 +310,8 @@ func (self *pushAttempt) cost() (sidecar.WriteCost, error) {
 	})
 }
 
-// Step 6's new slots, one round: each PUT If-None-Match. See the file header.
+// Step 6's new slots, the slot round of DESIGN-DETAILS 14.2.3, once per attempt. The slots go in parallel, and a
+// takeover's wait is per slot. See the file header.
 func (self *pushAttempt) writeSlots() *pushOutcome {
 	if self.payload == nil {
 		return nil
@@ -320,13 +328,22 @@ func (self *pushAttempt) writeSlots() *pushOutcome {
 	if len(slotIds) != len(self.payload.SlotBodies) {
 		return refusedOutcome(newEvsCheckRefusal(EvsCheckReasonInvalid, "slot bodies unlike the new slots").Reply(self.pushId))
 	}
+	// the statement's origin, which every create carries and every 412 is read against
+	own, err := EvsSlotOriginOf(self.statement)
+	if err != nil {
+		return self.unavailableOn(err)
+	}
+	metadata, err := own.Metadata(self.settings.SlotOriginMaxByteCount)
+	if err != nil {
+		return self.unavailableOn(err)
+	}
 	results := make([]slotWriteResult, len(slotIds))
 	var waitGroup sync.WaitGroup
 	for i, slotId := range slotIds {
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			results[i] = self.writeSlot(slotId, self.payload.SlotBodies[i])
+			results[i] = self.writeSlot(slotId, self.payload.SlotBodies[i], own, metadata)
 		}()
 	}
 	waitGroup.Wait()
@@ -334,7 +351,7 @@ func (self *pushAttempt) writeSlots() *pushOutcome {
 		switch result {
 		case slotWritten:
 		case slotStale:
-			return self.refuse(newEvsCheckRefusal(EvsCheckReasonSlotStale, "a slot that exists past 23 h"))
+			return self.refuse(newEvsCheckRefusal(EvsCheckReasonSlotStale, "a slot of this statement's that exists past 23 h"))
 		case slotOtherBytes:
 			// §11.8 step 6: a cluster read of the head, where 5a finds the push committed if an ERASE rewrote its slot
 			head, err := self.engine.heads.ReadCluster(self.ctx, self.cluster, self.repoId, self.refId)
@@ -344,10 +361,24 @@ func (self *pushAttempt) writeSlots() *pushOutcome {
 			if outcome := self.settle(head); outcome != nil {
 				return outcome
 			}
-			self.engine.log.Errorf("[evs] alarm slot_mismatch: repo %s: a new slot's id holds another push's bytes", sidecar.EvsKeyId(self.repoId))
+			self.engine.log.Errorf("[evs] alarm slot_mismatch: repo %s: a new slot of this statement's holds other bytes", sidecar.EvsKeyId(self.repoId))
 			self.engine.metrics.alarms.Add(1, "slot_mismatch")
 			self.head = head
 			return self.refuse(newEvsCheckRefusal(EvsCheckReasonSlotStale, "a slot that holds other bytes"))
+		case slotForeign:
+			// 14.2.3's anything-else row: the cluster read and 5a first, so an attempt of a push that has committed is
+			// answered its 200 and never a refusal (I-EVS-3), its slot since deleted with its version and the id
+			// created again; then SLOT_STALE, whatever the bytes, and the client seals again with new ids
+			head, err := self.engine.heads.ReadCluster(self.ctx, self.cluster, self.repoId, self.refId)
+			if err != nil {
+				return self.unavailableOn(err)
+			}
+			if outcome := self.settle(head); outcome != nil {
+				return outcome
+			}
+			self.engine.metrics.slotForeign.Add(1)
+			self.head = head
+			return self.refuse(newEvsCheckRefusal(EvsCheckReasonSlotStale, "a slot another statement holds, or no statement"))
 		default:
 			return self.unavailable()
 		}
@@ -359,50 +390,152 @@ func (self *pushAttempt) writeSlots() *pushOutcome {
 type slotWriteResult int
 
 const (
+	// A store error, an unsure clock, a wait the attempt's context ended, or the rounds spent: 503.
 	slotUnwritten slotWriteResult = iota
+	// The object stands under this statement's origin.
 	slotWritten
+	// This statement's object with equal bytes, past SlotExistingMaxAge.
 	slotStale
+	// This statement's object with other bytes: an ERASE rewrote it, or a fault.
 	slotOtherBytes
+	// Another statement's object this attempt may not take over, a re-seeded one, or one with no origin.
+	slotForeign
 )
 
-// One new slot: If-None-Match; on 412 its bytes and age decide; an unknown outcome reads the key back, its bytes
-// meaning written and a 404 writing again.
-func (self *pushAttempt) writeSlot(slotId sidecar.Id, body []byte) slotWriteResult {
+// One new slot, at most SlotWriteRoundCount rounds (DESIGN-DETAILS 14.2.3): a create If-None-Match carrying own's
+// origin; on a 412 or an unknown outcome a GET, whose 404 is the create again and whose origin decides: own's is
+// written, under 23 h old with equal bytes, as before the origin; another statement's that this attempt takes over
+// (takeOver) is the create again once its DELETE was sent; anything else is foreign. Bytes are compared only for
+// own's object, since whose an object is decides, and a statement listing another's id gets one answer whatever it
+// sends.
+func (self *pushAttempt) writeSlot(slotId sidecar.Id, body []byte, own EvsSlotOrigin, metadata map[string]string) slotWriteResult {
 	key := SlotKey(self.repoId, slotId)
-	for attempt := 0; attempt < 2; attempt += 1 {
-		barrierKey := barrierRefKey(self.repoId, self.refId)
+	barrierKey := barrierRefKey(self.repoId, self.refId)
+	options := &sidecar.BlobPutOptions{Metadata: metadata}
+	for round := 0; round < self.settings.SlotWriteRoundCount; round += 1 {
 		testHookBarrier(BarrierPushSlotPutBefore, barrierKey)
-		_, err := self.cluster.PutIfNoneMatch(self.writeCtx, key, body, nil)
+		_, err := self.cluster.PutIfNoneMatch(self.writeCtx, key, body, options)
 		testHookBarrier(BarrierPushSlotPutAfter, barrierKey)
 		var unknown *sidecar.BlobUnknownError
 		switch {
 		case err == nil:
 			return slotWritten
 		case errors.Is(err, sidecar.ErrBlobPrecondition), errors.As(err, &unknown):
-			object, getErr := self.cluster.Get(self.ctx, key)
-			if errors.Is(getErr, sidecar.ErrBlobNotFound) && unknown != nil {
-				// the lost write never landed: the same bytes again
-				continue
-			}
-			if getErr != nil {
-				return slotUnwritten
-			}
-			stored, readErr := readAllLimited(object, self.settings.SlotMaxByteCount)
-			object.Body.Close()
+		default:
+			return slotUnwritten
+		}
+		object, err := self.cluster.Get(self.ctx, key)
+		if errors.Is(err, sidecar.ErrBlobNotFound) {
+			// deleted since the 412, or the lost create never landed and by the settle rule never will
+			continue
+		}
+		if err != nil {
+			return slotUnwritten
+		}
+		stored, err := readAllLimited(object, self.settings.SlotMaxByteCount)
+		object.Body.Close()
+		if err != nil {
+			return slotUnwritten
+		}
+		origin := ParseEvsSlotOrigin(object.Metadata, self.settings.SlotOriginMaxByteCount)
+		if origin.SameStatement(own) || evsSlotTwinBreaks(evsSlotTwinTakesForeign) {
 			switch {
-			case readErr != nil:
-				return slotUnwritten
 			case !bytes.Equal(stored, body):
 				return slotOtherBytes
 			case self.settings.SlotExistingMaxAge < self.engine.clock.Now().Sub(object.LastModified) && unknown == nil:
 				return slotStale
 			}
 			return slotWritten
-		default:
-			return slotUnwritten
 		}
+		if taken, result := self.takeOver(key, origin, stored, body, object.LastModified); !taken {
+			return result
+		}
+		// the DELETE went, whatever it answered: the create again decides, and one creator wins
 	}
 	return slotUnwritten
+}
+
+// DESIGN-DETAILS 14.2.4's takeover of another statement o's object: taken once the settled DELETE naming the
+// object's LastModified was sent, which sends the round to its create again; else slotForeign when o's object is not
+// this attempt's to take, and slotUnwritten when a read failed, the clock is unsure or the wait was cut short. It
+// takes over only when all of these hold:
+//
+//  1. o's origin is a push's, on this ref, by this statement's signer;
+//  2. o declared a lower path epoch than this statement, a push other than a PATH_EPOCH on a ref with a head, whose
+//     declared epoch step 5 found to be the current epoch of the head this attempt holds;
+//  3. EvsPushStandingIn on that head, for o's push id, statement prefix, base version and mode, finds o neither
+//     committed nor its push id under another statement;
+//  4. the object's bytes equal the body this statement carries;
+//  5. no hold covers the repo.
+//
+// 2 and 3 prove o can never commit: o commits only on a head whose current epoch is the one it declares, the ref's
+// epoch only rises, and a commit of o lies in (b, b+64] of its base b, below the first head of the higher epoch, so
+// the head this attempt holds or the log pages under it name it if it exists. Both facts are permanent. 1, 4 and 5
+// narrow it to 9.2.5's retoken. The epoch compared is the statement's own, which step 5 checked, never one read
+// from a head fetched since.
+//
+// The wait: the DELETE goes only once evs's checked clock is SlotSettleAge past the object's LastModified, so a
+// DELETE naming that LastModified can take no object another attempt created after it (the store's second of
+// slack and the clocks' error, 14.2.4). While the clock is unsure the takeover answers 503 rather than wait on it.
+func (self *pushAttempt) takeOver(key string, origin EvsSlotOrigin, stored []byte, body []byte, lastModified time.Time) (bool, slotWriteResult) {
+	push := self.statement.Push
+	switch {
+	case origin.Kind != EvsSlotOriginPush || origin.RefId != self.refId || origin.SignerSidecarId != sidecar.Id(push.GetSignerSidecarId()):
+		return false, slotForeign
+	case push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH) != 0 || self.head.Absent() || self.head.Version() == 0:
+		return false, slotForeign
+	case EvsHeadCurrentEpoch(self.head.Head) != push.GetPathEpoch():
+		return false, slotForeign
+	case push.GetPathEpoch() <= origin.PathEpoch && !evsSlotTwinBreaks(evsSlotTwinTakesLive):
+		return false, slotForeign
+	case !bytes.Equal(stored, body):
+		return false, slotForeign
+	}
+	standing, err := EvsPushStandingInPrefix(self.ctx, self.head.Head, origin.PushId, origin.StatementPrefix, origin.BaseVersion, origin.GitMode,
+		func(ctx context.Context, page uint64) (*LogPage, error) {
+			return self.engine.readLogPage(ctx, self.cluster, self.repoId, self.refId, page)
+		})
+	if err != nil {
+		return false, slotUnwritten
+	}
+	if (standing.Committed || standing.Reused) && !evsSlotTwinBreaks(evsSlotTwinTakesCommitted) {
+		return false, slotForeign
+	}
+	cover, err := self.engine.holds.CoveringRepo(self.ctx, self.repoId, self.reads.repo.Object)
+	if err != nil {
+		return false, slotUnwritten
+	}
+	if cover.Covered() {
+		// a hold keeps the object, as it keeps a dead record's slot, and the retoken is rebuilt
+		return false, slotForeign
+	}
+
+	clockCheck := self.engine.host.ClockCheck
+	if clockCheck == nil {
+		return false, slotUnwritten
+	}
+	unsure := clockCheck.UnsureChannel()
+	if !clockCheck.Sure() {
+		return false, slotUnwritten
+	}
+	if wait := lastModified.Add(self.settings.SlotSettleAge).Sub(self.engine.clock.Now()); 0 < wait && !evsSlotTwinBreaks(evsSlotTwinTakesUnsettled) {
+		select {
+		case <-self.engine.clock.After(wait):
+		case <-unsure:
+			return false, slotUnwritten
+		case <-self.ctx.Done():
+			return false, slotUnwritten
+		}
+	}
+	barrierKey := barrierRefKey(self.repoId, self.refId)
+	testHookBarrier(BarrierPushSlotTakeBefore, barrierKey)
+	// whatever it answers: a 412 is an object stored since, which the create's 412 and GET then judge, and an error
+	// leaves the key as it was or as the DELETE's settle leaves it
+	if err := self.cluster.Delete(sidecar.WithBlobUnmodified(self.writeCtx, lastModified), key); err != nil && self.engine.log.V(1).Enabled() {
+		self.engine.log.Infof("[evs] repo %s: a slot takeover's DELETE: %v", sidecar.EvsKeyId(self.repoId), err)
+	}
+	testHookBarrier(BarrierPushSlotTakeAfter, barrierKey)
+	return true, slotWritten
 }
 
 // Step 7's head over self.head: a page-out first when the window would pass 127 versions, then the commit's fields.

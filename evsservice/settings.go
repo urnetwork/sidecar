@@ -44,6 +44,11 @@ const evsPushMinFenceMargin = 100 * time.Millisecond
 // never stretch it.
 const evsCopyMaxHeadRereadInterval = 5 * time.Second
 
+// DESIGN-DETAILS 14.2.4's settle age, which the takeover's and evacuation's DELETE of a slot wait out: the store's
+// second, by which a DELETE naming a LastModified also takes an object stored within it (QD-624), and a second for
+// the clocks, which the design holds to 50 ms. A setting may lengthen it and never shorten it.
+const evsSlotMinSettleAge = sidecar.BlobUnmodifiedSlack + time.Second
+
 // The engine's settings. Every field is read where it is used, from one instance.
 type EvsSettings struct {
 	// place/'s resolution: a 404 cached 5 s, the placements a process keeps (§11.8's resolve row).
@@ -253,9 +258,24 @@ type EvsSettings struct {
 	SealTimeBound time.Duration
 	// §11.6's slot: at most 8 KiB, which step 6's PUT and every read of one hold it to. Positive.
 	SlotMaxByteCount int64
-	// §11.8 step 6: a slot that exists with equal bytes is this push's only while under this old, 23 h (§11.22's M2
-	// row), as a re-uploaded segment is. Positive.
+	// §11.8 step 6: a slot that exists with equal bytes under this statement's own origin is this push's only while
+	// under this old, 23 h (§11.22's M2 row), as a re-uploaded segment is. Positive.
 	SlotExistingMaxAge time.Duration
+	// DESIGN-DETAILS 14.2.3: step 6's rounds for one new slot, each a create If-None-Match and, on a 412 or a lost
+	// answer, a GET and maybe a takeover; past them the push answers 503: 4. Positive.
+	SlotWriteRoundCount int
+	// DESIGN-DETAILS 14.2.4 and 14.2.5: a slot object is deleted, by a takeover or by evacuation, only once evs's clock
+	// is this far past its LastModified, by a DELETE naming that LastModified, so the DELETE can take no object
+	// created after it: 2 s, the store's second and a second for the clocks. At least 2 s.
+	SlotSettleAge time.Duration
+	// DESIGN-DETAILS 14.2.2: the longest slot origin a create writes or a reader takes, 190 B; a longer value reads as
+	// no statement's. A format limit, so both the writer and every reader keep the protocol's value. At least the
+	// longest a version-1 origin can be.
+	SlotOriginMaxByteCount int
+	// §11.8's Resolve row: a statement can no longer pass 5b's time checks once its time_ms is this far past, 35
+	// min, the seal's 30 min bound with margin, so a pending record whose ref's fence_ms is later is dead. Past both
+	// PushTimeBound and SealTimeBound.
+	ResolveStatementLife time.Duration
 	// gen/<g>'s bound: a Signed GenRotate with its GenLink and leaf wrap, 16 KiB, well under a metadata object's
 	// 4 KiB block count. Positive.
 	GenerationRecordMaxByteCount int64
@@ -350,6 +370,10 @@ func DefaultEvsSettings() *EvsSettings {
 		SealTimeBound:                30 * time.Minute,
 		SlotMaxByteCount:             8 * 1024,
 		SlotExistingMaxAge:           23 * time.Hour,
+		SlotWriteRoundCount:          4,
+		SlotSettleAge:                2 * time.Second,
+		SlotOriginMaxByteCount:       190,
+		ResolveStatementLife:         35 * time.Minute,
 		GenerationRecordMaxByteCount: 16 * 1024,
 		SlotRewriteRetryCount:        8,
 		ErasureFinishDelay:           time.Minute,
@@ -366,6 +390,18 @@ func (self *EvsSettings) Validate() error {
 	}
 	if self.SlotRewriteRetryCount < 0 || self.ErasureFinishDelay <= 0 {
 		return fmt.Errorf("%w: a slot rewrite's retries negative or the erasure reconciler's delay not positive", ErrEvsSettings)
+	}
+	if self.SlotWriteRoundCount <= 0 {
+		return fmt.Errorf("%w: step 6's slot rounds not positive", ErrEvsSettings)
+	}
+	if self.SlotSettleAge < evsSlotMinSettleAge {
+		return fmt.Errorf("%w: a slot's settle age %s, below DESIGN-DETAILS 14.2.4's %s", ErrEvsSettings, self.SlotSettleAge, evsSlotMinSettleAge)
+	}
+	if longest := evsSlotOriginLongestByteCount(); self.SlotOriginMaxByteCount < longest {
+		return fmt.Errorf("%w: a slot origin bound of %d B, below the %d B a version-1 origin can take", ErrEvsSettings, self.SlotOriginMaxByteCount, longest)
+	}
+	if self.ResolveStatementLife <= self.SealTimeBound || self.ResolveStatementLife <= self.PushTimeBound {
+		return fmt.Errorf("%w: Resolve's statement life %s, not past the time checks' %s and %s", ErrEvsSettings, self.ResolveStatementLife, self.PushTimeBound, self.SealTimeBound)
 	}
 	if self.InstanceFormat != sidecar.EvsRepoFormat1 && self.InstanceFormat != sidecar.EvsRepoFormat2 {
 		return fmt.Errorf("%w: instance format %d is neither 1 nor 2", ErrEvsSettings, self.InstanceFormat)

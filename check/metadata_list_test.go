@@ -124,6 +124,46 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n",
 		list:     "# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n# v13, updated 2026-11-13 for the owner's answer QD-763, keys gkm-1's forwarding reader keys by their network as\n# well, gkm/dkey/<network_id>/<delegation_id>, so gkm's reconciler sweeps one network's at a time (QD-675).\n",
 	},
+	{
+		// QD-765: the list's version names the slot origin's change (DESIGN-DETAILS 14.8), after v13's
+		question: "details-14-slot-origin",
+		block:    "# metadata_list.yml v13;",
+		list:     "# metadata_list.yml v14;",
+	},
+	{
+		// QD-765: v14's line, after v13's
+		question: "details-14-slot-origin",
+		block:    "# well, gkm/dkey/<network_id>/<delegation_id>, so gkm's reconciler sweeps one network's at a time (QD-675).\n",
+		list: "# well, gkm/dkey/<network_id>/<delegation_id>, so gkm's reconciler sweeps one network's at a time (QD-675).\n" +
+			"# v14, updated 2026-11-13 for the slot fix (DESIGN-DETAILS 14; QD-765), adds evs-5's origin of each slot object, in\n" +
+			"# object metadata, and narrows evs-5's ttl to a dead push's own slots; evs-10 names the object metadata evs writes.\n",
+	},
+	{
+		// QD-765: evs-5's sees gains each slot's origin (DESIGN-DETAILS 14.8), whose colon and space quote the value,
+		// as every strict row's are
+		question: "details-14-slot-origin",
+		block:    "  sees: slot id, up to 64 wrapped object keys (ciphertext)",
+		list:     "  sees: \"slot id, up to 64 wrapped object keys (ciphertext)",
+	},
+	{
+		// QD-765: the origin itself, closing the quoted value
+		question: "details-14-slot-origin",
+		block:    "and their deletion by the drop's job (evs-28)\n  why: per-entry erasure for record-class repos and mail",
+		list:     "and their deletion by the drop's job (evs-28); each slot's origin, in object metadata: the push id, statement hash prefix, ref, signer sidecar, base version, path epoch and mode of the statement that created it, or a re-seed's mark; all of it also in that push's record (evs-12)\"\n  why: per-entry erasure for record-class repos and mail",
+	},
+	{
+		// QD-765: evs-5's ttl keeps a dead push's own slots only (DESIGN-DETAILS 14.8)
+		question: "details-14-slot-origin",
+		block:    "a refused or dead push's new slots until evacuation finds it dead, at most about 26 h after its batch",
+		list:     "a refused or dead push's own slots until evacuation finds it dead, at most about 26 h after its batch, a slot stored within 2 s of that or after it staying",
+	},
+	{
+		// QD-765: the MinIO row's object metadata, a slot/ object's origin beside QD-248's idx/ entry state
+		// (DESIGN-DETAILS 14.8's §19.6 text, carried to evs-10)
+		question: "details-14-slot-origin",
+		block:    "object key with its size, checksum, times and access pattern, on an NVMe metadata cluster",
+		list:     "object key with its size, checksum, times and access pattern, and no object metadata but an idx/ entry's state while its head lists sources (evs-11) and a slot/ object's origin (evs-5), on an NVMe metadata cluster",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
