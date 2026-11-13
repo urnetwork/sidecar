@@ -47,7 +47,11 @@ usage() {
 # source); and NoFenceRule and ResolveIgnoresPending, as at the model's hour marks a statement has
 # lapsed (5b) before its batch is old enough to evacuate, or its receipt or map is too old to pass
 # (5h, 5e) before GC or a map's reclaim acts, so every attempt a fence would end is refused anyway,
-# and a stalled one holds the key that Resolve's and the fence's head reads wait on.
+# and a stalled one holds the key that Resolve's and the fence's head reads wait on. The slot rules
+# of DESIGN-DETAILS 14.2 have their twins in details/EvsSlot.tla, this model's companion, run by
+# details/run-slot.sh: here every slot is its own statement's and a killed evacuation run sends
+# nothing, so no invariant here sees step 6 take another's object, or evacuation's origin, settle
+# age or named DELETE broken.
 seq_EvsCommit="Writers={w1} Instances={i1} Segments={s1} MaxAttempts=1 MaxFaults=0 MaxHour=0 MaxGeneration=1 MaxVersion=4"
 # The M10 part's twins run its stories (F2Run): a purge story on the committing instance alone, which
 # holds the purge's queue, and a drop story on two, whose late step 7s race the fence. PurgeUnseen

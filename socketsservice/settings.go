@@ -205,10 +205,9 @@ type SocketsSettings struct {
 	FairQueue *SocketFairQueueSettings
 	// The production gate's, which the host builds SocketProjectionGate from; the engine reads none of it.
 	Gate *SocketGateSettings
-	// The longest a ur/ {svc_} pair lives past its last Find, whatever the grant says (§9.6,
-	// plan-SMTP-small-readings' per-service constant): 60 min. A tls/ or smtp/ pair takes the store's
-	// EdgePairTtl instead (QD-656).
-	PlatformPairTtlMax time.Duration
+	// ur/'s services and their grants (namespace_ur.go; §9.6, QD-190): a ur/ ticket's grant and its {svc_} pair live a
+	// service's GrantLifetime, refreshed per Find. A tls/ or smtp/ pair takes the store's EdgePairTtl instead (QD-656).
+	Platform *SocketPlatformSettings
 	// How long one store call may take before it reads as unavailable: 2 s, inside a dialer's 5 s
 	// accept timeout.
 	StoreTimeout time.Duration
@@ -296,7 +295,7 @@ func DefaultSocketsSettings() *SocketsSettings {
 		Bound:                 DefaultSocketControlBoundSettings(),
 		FairQueue:             DefaultSocketFairQueueSettings(),
 		Gate:                  DefaultSocketGateSettings(),
-		PlatformPairTtlMax:    60 * time.Minute,
+		Platform:              DefaultSocketPlatformSettings(),
 		StoreTimeout:          2 * time.Second,
 		ProbeInterval:         5 * time.Second,
 		MaxRetryAfter:         time.Second,
@@ -372,6 +371,7 @@ func (self *SocketSchedulerSettings) Validate() error {
 		{name: "ejection_group_percent", positive: 0 < self.EjectionGroupPercent && self.EjectionGroupPercent <= 100},
 		{name: "reporter_window", positive: 0 < self.ReporterWindow},
 		{name: "reporter_network_count", positive: 0 < self.ReporterNetworkCount},
+		{name: "affinity_load_percent", positive: 100 <= self.AffinityLoadPercent},
 	} {
 		if !check.positive {
 			return fmt.Errorf("%w: %s", ErrSocketsSettingsRefused, check.name)
@@ -400,6 +400,9 @@ func (self *SocketsSettings) Validate() error {
 	if err := self.Gate.Validate(); err != nil {
 		return err
 	}
+	if err := self.Platform.Validate(); err != nil {
+		return err
+	}
 	for _, check := range []struct {
 		name     string
 		positive bool
@@ -412,7 +415,6 @@ func (self *SocketsSettings) Validate() error {
 		{name: "concurrency", positive: 0 < self.FairQueue.Concurrency},
 		{name: "queue_count", positive: 0 < self.FairQueue.QueueCount},
 		{name: "max_wait", positive: 0 < self.FairQueue.MaxWait},
-		{name: "platform_pair_ttl_max", positive: 0 < self.PlatformPairTtlMax},
 		{name: "store_timeout", positive: 0 < self.StoreTimeout},
 		{name: "probe_interval", positive: 0 < self.ProbeInterval},
 		{name: "max_retry_after", positive: 0 < self.MaxRetryAfter},
