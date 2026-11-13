@@ -937,7 +937,7 @@ func TestBridgeForwardsGrantEndsWithItsWindow(t *testing.T) {
 func TestBridgeSetBlockRefusesABlockOutsideTheRanges(t *testing.T) {
 	world := newTestBridgeFileWorld(t, true)
 	ctx := context.Background()
-	for _, refused := range []string{"8.8.0.0/16", "100.0.0.0/16", "10.20.0.0/15", "100.80.0.0/16"} {
+	for _, refused := range []string{"169.254.0.0/16", "198.18.0.0/16", "10.20.0.0/15", "100.80.0.0/16"} {
 		if _, err := world.filer.SetBlock(ctx, world.confirmed(), &BridgeBlockRequest{Prefix: netip.MustParsePrefix(refused)}); !errors.Is(err, ErrBridgeBlockRefused) {
 			t.Errorf("%s: %v", refused, err)
 		}

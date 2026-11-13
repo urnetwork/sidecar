@@ -1,4 +1,4 @@
-//go:build !ios_extension && !sidecar_http
+//go:build !ios_extension && !sidecar_http && !js
 
 // BRIDGE-M8-06's setup on the test network, through a real Sidecar's act posting to the net's log, gkm and api's mint
 // standing in: a setup hands off after its six steps, its Delegation live and verifying under the sidecar's identity
