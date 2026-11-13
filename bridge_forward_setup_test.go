@@ -386,6 +386,36 @@ func TestForwardingSetupIsDueAtANewGenerationAndAfterNinetyDays(t *testing.T) {
 	}
 }
 
+// A Delegation whose post was lost and whose pending bytes then left the store, refused at a retry or past their
+// not_after, never lands: the resume signs anew, and the setup ends with one Delegation, the one it handed off.
+func TestForwardingSetupSignsAnewWhenItsBytesCanNeverLand(t *testing.T) {
+	world := newTestForwardingWorld(t)
+	ctx := context.Background()
+	keys := testForwardingKeys("lost")
+	world.api.answers = []string{"dropped"}
+	if _, err := world.sidecar.SetUpForwarding(ctx, world.networkId(), keys); !errors.Is(err, ErrForwardingSetupIncomplete) {
+		t.Fatalf("a lost post: %v", err)
+	}
+	lost := world.record().SignedDelegation
+	pending, err := world.sidecar.pendingStatement(lost)
+	if err != nil || pending == nil {
+		t.Fatalf("the lost bytes are not pending: %v", err)
+	}
+	if err := world.sidecar.dropPendingStatement(pending); err != nil {
+		t.Fatal(err)
+	}
+	handOff, err := world.sidecar.SetUpForwarding(ctx, world.networkId(), keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(handOff.GetSignedDelegation(), lost) {
+		t.Error("the hand-off names the bytes that never landed")
+	}
+	if rows := world.forwardingRows(); len(rows) != 1 || !bytes.Equal(rows[0].GetDelegationId(), handOff.GetPending().GetForwardDelegationId()) {
+		t.Fatalf("%d forwarding Delegations", len(rows))
+	}
+}
+
 // Another signer's DelegationRevoke of the sidecar's forwarding Delegation holds the setup until the person confirms,
 // with nothing signed meanwhile; the sidecar's own revocation does not hold it.
 func TestForwardingSetupWaitsForConfirmAfterAForeignRevocation(t *testing.T) {

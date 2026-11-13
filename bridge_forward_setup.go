@@ -518,14 +518,32 @@ func (self *Sidecar) advanceForwardingSetup(setup *sidecarForwardingSetup, recor
 }
 
 // Steps 1 and 2: signs the Delegation where the record holds none, through sidecarAct, which keeps its bytes pending
-// until they land, and records them; then finds their entry, posting the same bytes again where the log holds no row
-// for them, and follows the log to it. A refusal at a moved tip signs anew, up to FileAttemptCount; any other drops
-// the bytes, so a repeat signs anew.
+// until they land, and records them with the position api answered; then follows the log to that position. A repeat
+// finds the Delegation's row, or the position recorded, or posts its pending bytes once more for theirs; bytes that are
+// neither in the log nor pending were refused or passed their not_after, so it signs anew. A refusal at a moved tip
+// signs anew, up to FileAttemptCount; any other drops the bytes, so a repeat signs anew. Where the bytes landed while
+// their answer was lost and the follow has not applied them, a resume signs a second Delegation, which supersedes the
+// first: no reach is lost, and the record names the one handed off.
 func (self *Sidecar) fileForwardingDelegation(ctx context.Context, setup *sidecarForwardingSetup, record *forwardingSetupRecord,
 	keys *bridge.ForwardingKeys, identity *SidecarIdentity) error {
 	config := setup.sources.Config
+	// drops the recorded bytes, which never land, so the next pass signs anew
+	drop := func() error {
+		record.SignedDelegation, record.DelegationId, record.DelegationAtN = nil, nil, 0
+		return self.advanceForwardingSetup(setup, record, 0)
+	}
+	// a refusal at a tip that moved past the bytes' pin signs anew while attempts remain
+	refused := func(err error, attempt int) (bool, error) {
+		if dropErr := drop(); dropErr != nil {
+			return false, dropErr
+		}
+		apiErr := &SidecarApiError{}
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict && attempt+1 < max(1, setup.settings.FileAttemptCount) {
+			return true, nil
+		}
+		return false, fmt.Errorf("%w: the forwarding Delegation: %w", ErrForwardingSetupRefused, err)
+	}
 	for attempt := 0; ; attempt += 1 {
-		var posted *bridge.AuthPin
 		if record.Step < 1 {
 			delegation := &protocol.Delegation{
 				Pubkey:               bytes.Clone(keys.GetForwardPublicKey()),
@@ -550,43 +568,61 @@ func (self *Sidecar) fileForwardingDelegation(ctx context.Context, setup *sideca
 					return err
 				}
 				record.SignedDelegation, record.DelegationId = signed[0], delegationId[:]
+				if runErr == nil && len(pins) == 1 && pins[0] != nil {
+					record.DelegationAtN = pins[0].GetVersion()
+				}
 				if err := self.advanceForwardingSetup(setup, record, 1); err != nil {
 					return err
 				}
 			}
 			switch {
-			case runErr == nil && len(pins) == 1:
-				posted = pins[0]
 			case errors.Is(runErr, ErrSidecarActRefused):
 				// dropped from the pending records: the bytes never land, so they are no step done
-				record.SignedDelegation, record.DelegationId = nil, nil
-				if err := self.advanceForwardingSetup(setup, record, 0); err != nil {
-					return err
-				}
-				apiErr := &SidecarApiError{}
-				if errors.As(runErr, &apiErr) && apiErr.Status == http.StatusConflict && attempt+1 < max(1, setup.settings.FileAttemptCount) {
+				again, err := refused(runErr, attempt)
+				if again {
 					continue
 				}
-				return fmt.Errorf("%w: the forwarding Delegation: %w", ErrForwardingSetupRefused, runErr)
+				return err
 			case runErr != nil:
-				return fmt.Errorf("%w: the forwarding Delegation is pending: %w", ErrForwardingSetupIncomplete, runErr)
+				// pending where it signed and its answer was lost, else nothing signed, which a repeat signs anew
+				return fmt.Errorf("%w: the forwarding Delegation has not landed: %w", ErrForwardingSetupIncomplete, runErr)
 			}
 		}
-		if posted == nil {
-			// a repeat: the row where the bytes landed, else the same bytes posted again
-			row := config.State().Delegation(record.DelegationId)
-			if row == nil {
-				if err := self.PostPendingStatements(ctx); err != nil {
-					return fmt.Errorf("%w: the forwarding Delegation is pending: %w", ErrForwardingSetupIncomplete, err)
-				}
-				if row = config.State().Delegation(record.DelegationId); row == nil {
-					return fmt.Errorf("%w: the forwarding Delegation has not landed", ErrForwardingSetupIncomplete)
-				}
+		if row := config.State().Delegation(record.DelegationId); row != nil {
+			record.DelegationAtN = row.GetAt()
+		}
+		if record.DelegationAtN == 0 {
+			// a repeat whose answer was lost: its pending bytes once more, for their position
+			pending, err := self.pendingStatement(record.SignedDelegation)
+			if err != nil {
+				return fmt.Errorf("%w: %w", ErrForwardingSetupIncomplete, err)
 			}
-			posted = &bridge.AuthPin{Version: row.GetAt()}
+			if pending == nil {
+				if err := drop(); err != nil {
+					return err
+				}
+				continue
+			}
+			pin, err := self.postPendingInOrder(ctx, pending)
+			switch {
+			case errors.Is(err, ErrSidecarActRefused):
+				again, err := refused(err, attempt)
+				if again {
+					continue
+				}
+				return err
+			case err != nil:
+				return fmt.Errorf("%w: the forwarding Delegation is pending: %w", ErrForwardingSetupIncomplete, err)
+			case pin == nil:
+				return fmt.Errorf("%w: the forwarding Delegation's post answered no entry", ErrForwardingSetupIncomplete)
+			}
+			record.DelegationAtN = pin.GetVersion()
+			if err := self.advanceForwardingSetup(setup, record, 1); err != nil {
+				return err
+			}
 		}
 		waitCtx, cancel := context.WithTimeout(ctx, setup.settings.LandTimeout)
-		state, err := config.WaitFor(waitCtx, posted.GetVersion())
+		state, err := config.WaitFor(waitCtx, record.DelegationAtN)
 		cancel()
 		if err != nil {
 			return fmt.Errorf("%w: the forwarding Delegation's entry has not applied: %w", ErrForwardingSetupIncomplete, err)
@@ -594,8 +630,7 @@ func (self *Sidecar) fileForwardingDelegation(ctx context.Context, setup *sideca
 		row := state.Delegation(record.DelegationId)
 		if row == nil {
 			// sequenced and refused by the rule, which every reader holds alike
-			record.SignedDelegation, record.DelegationId = nil, nil
-			if err := self.advanceForwardingSetup(setup, record, 0); err != nil {
+			if err := drop(); err != nil {
 				return err
 			}
 			return fmt.Errorf("%w: the log refused the forwarding Delegation", ErrForwardingSetupRefused)
@@ -604,6 +639,21 @@ func (self *Sidecar) fileForwardingDelegation(ctx context.Context, setup *sideca
 		record.DelegationAtN, record.DelegationAtChain = row.GetAt(), bytes.Clone(chain[:])
 		return self.advanceForwardingSetup(setup, record, 2)
 	}
+}
+
+// The pending statement whose Signed bytes are signed, nil where none is pending: it landed, was refused, or passed
+// its not_after.
+func (self *Sidecar) pendingStatement(signed []byte) (*sidecarPendingStatement, error) {
+	pendings, err := self.pendingStatements()
+	if err != nil {
+		return nil, err
+	}
+	for _, pending := range pendings {
+		if bytes.Equal(pending.signed, signed) {
+			return pending, nil
+		}
+	}
+	return nil, nil
 }
 
 // What a sidecar role's witness hint carries to its VPN component (§18.6's witness row): the newest pin it verified,
