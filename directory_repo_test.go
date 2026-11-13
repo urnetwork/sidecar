@@ -11,6 +11,7 @@ import (
 	"errors"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,9 +35,29 @@ func (self *testDirectoryWorld) createRepo(kind protocol.RepoKind, ownerMemberId
 	return repoId
 }
 
+// What a test client takes in place of the world's defaults: a nil field keeps the default.
+type testDirectoryClientOptions struct {
+	// the state the client judges at; the world's tip by default
+	auth func() sidecar.DirectoryAuthView
+	// DirectoryClientArgs.RepoDisplayName; none by default
+	repoDisplayName func(repoId sidecar.Id) string
+}
+
 // A client of the world's for sidecarId, appending through writer, nil for none: a reader's, or a device's.
 func (self *testDirectoryWorld) clientFor(sidecarId sidecar.Id, writer sidecar.RecordWriter, readOnly bool) *testDirectoryReader {
+	return self.clientWith(sidecarId, writer, readOnly, nil)
+}
+
+// clientFor with options, nil for the world's defaults.
+func (self *testDirectoryWorld) clientWith(sidecarId sidecar.Id, writer sidecar.RecordWriter, readOnly bool, options *testDirectoryClientOptions) *testDirectoryReader {
 	self.t.Helper()
+	if options == nil {
+		options = &testDirectoryClientOptions{}
+	}
+	auth := options.auth
+	if auth == nil {
+		auth = func() sidecar.DirectoryAuthView { return self.directoryAuth.Tip() }
+	}
 	files := sidecartest.NewFakeStore()
 	store, err := files.Root().Directory("directory", "search")
 	if err != nil {
@@ -48,17 +69,18 @@ func (self *testDirectoryWorld) clientFor(sidecarId sidecar.Id, writer sidecar.R
 		Store:      store,
 		Cards:      self.cards.For(sidecarId),
 		Streams:    func() sidecar.RecordStreams { return self.streams.For(sidecarId) },
-		Auth:       func() sidecar.DirectoryAuthView { return self.directoryAuth.Tip() },
+		Auth:       auth,
 		RecordAuth: func() sidecar.RecordAuthView { return self.recordAuth.Tip() },
 		Alarm: func(alarm *sidecar.RecordAlarm) {
 			reader.stateLock.Lock()
 			defer reader.stateLock.Unlock()
 			reader.alarms = append(reader.alarms, alarm)
 		},
-		Clock:    self.clock,
-		Settings: sidecar.DefaultSidecarSettings().Directory,
-		Writer:   writer,
-		ReadOnly: readOnly,
+		Clock:           self.clock,
+		Settings:        sidecar.DefaultSidecarSettings().Directory,
+		Writer:          writer,
+		ReadOnly:        readOnly,
+		RepoDisplayName: options.repoDisplayName,
 	})
 	if err != nil {
 		self.t.Fatal(err)
@@ -76,6 +98,11 @@ type testDirectoryDevice struct {
 
 // writer's device. Its entries go through its record alone, so its test chain stays unused.
 func (self *testDirectoryWorld) device(writer *testDirectoryWriter) *testDirectoryDevice {
+	return self.deviceWith(writer, nil)
+}
+
+// device with its client's options, nil for the world's defaults.
+func (self *testDirectoryWorld) deviceWith(writer *testDirectoryWriter, options *testDirectoryClientOptions) *testDirectoryDevice {
 	self.t.Helper()
 	files := sidecartest.NewFakeStore()
 	store, err := files.Root().Directory("record", "record")
@@ -95,7 +122,7 @@ func (self *testDirectoryWorld) device(writer *testDirectoryWriter) *testDirecto
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	return &testDirectoryDevice{writer: writer, record: record, testDirectoryReader: self.clientFor(writer.sidecarId, record.Writer(), false)}
+	return &testDirectoryDevice{writer: writer, record: record, testDirectoryReader: self.clientWith(writer.sidecarId, record.Writer(), false, options)}
 }
 
 // Pushes what the device's record holds.
@@ -526,53 +553,180 @@ func TestDirectoryAnnounceRepoRefusals(t *testing.T) {
 	}
 }
 
-// A general or record repo created before the directory, with no item, is written by the first of its admins'
-// devices to sync it, as a private marker while question record-m6-14-private-before-directory is open, so a repo its
-// creator marked private before the directory existed is never named; one created after the directory is its creating
-// device's to announce or to mark private, and no other device writes it; an admin may then announce it explicitly.
-func TestDirectoryMaintainReposMarksPredatingRepos(t *testing.T) {
+// §16.11's predating rule, as QD-748 restores it: a general or record repo created before the directory, with no item,
+// is announced by the first of its admins' devices to sync it, roles {reader, writer}, requests open and the display
+// name the device knows, none where it knows none, padded as every repo item is; a vault predating it is not announced
+// by default; and a repo created after it is its creating device's to announce or mark, so no other device writes it,
+// whatever name it knows. A second sync writes nothing more, and another admin's device finds the items standing.
+func TestDirectoryMaintainReposAnnouncesPredatingRepos(t *testing.T) {
 	world := newTestDirectoryWorld(t, nil)
-	memberId := sidecar.NewId()
+	memberId, otherMember := sidecar.NewId(), sidecar.NewId()
 	writer := world.memberWriter(memberId)
+	other := world.memberWriter(otherMember)
 	world.publish()
-	predating := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, writer)
+	predating := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, writer, other)
+	predatingRecord := world.createRepo(protocol.RepoKind_REPO_KIND_RECORD, nil, writer, other)
 	predatingVault := world.createRepo(protocol.RepoKind_REPO_KIND_VAULT, &memberId, writer)
 	// the directory is created after them
 	world.directoryFixture.Repos[world.directoryId].Admins[0].At = world.directoryAuth.Tip().Pin().GetVersion() + 1
 	world.publish()
-	later := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, writer)
-	device := world.device(writer)
+	later := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, writer, other)
+	names := map[sidecar.Id]string{predating: "old project", predatingVault: "my notes", later: "never shown"}
+	naming := &testDirectoryClientOptions{repoDisplayName: func(repoId sidecar.Id) string { return names[repoId] }}
+	device := world.deviceWith(writer, naming)
 	device.mustSync(t)
 	writes, err := device.client.MaintainRepos(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(writes) != 1 || sidecar.Id(writes[0].Item.GetWhere().GetRepoId()) != predating {
+	written := map[sidecar.Id]*sidecar.DirectoryRepoWrite{}
+	for _, write := range writes {
+		written[sidecar.Id(write.Item.GetWhere().GetRepoId())] = write
+	}
+	if len(writes) != 2 || written[predating] == nil || written[predatingRecord] == nil {
 		t.Fatalf("%d writes", len(writes))
 	}
+	for repoId, write := range written {
+		if write.Item.GetWhere().GetPrivate() || len(write.Warnings) != 0 || proto.Size(write.Item) != sidecar.DirectoryRepoEntryStepByteCount {
+			t.Errorf("%s written private %v, warnings %v, %d B", repoId, write.Item.GetWhere().GetPrivate(), write.Warnings, proto.Size(write.Item))
+		}
+	}
 	device.flush(t)
+
 	reader := world.reader(nil)
 	reader.mustSync(t)
-	item := testRepoItemShown(t, reader, predating)
-	if item == nil || item.Display != sidecar.DirectoryItemPrivate || item.Announcement.GetWhat().GetTitle() != "" ||
-		item.SignerSidecarId != writer.sidecarId || item.Announcement.GetWhat().GetRequests() != uint32(sidecar.DirectoryRequestsOpen) {
-		t.Errorf("the predating repo's item: %v", item)
+	for repoId, title := range map[sidecar.Id]string{predating: "old project", predatingRecord: ""} {
+		item := testRepoItemShown(t, reader, repoId)
+		if item == nil {
+			t.Fatalf("no item for the predating %q", title)
+		}
+		what := item.Announcement.GetWhat()
+		if item.Display != sidecar.DirectoryItemActive || item.SignerSidecarId != writer.sidecarId || item.Announcement.GetVersion() != 1 ||
+			what.GetTitle() != title || !slices.Equal(what.GetRoles(), []uint32{2, 3}) || what.GetRequests() != uint32(sidecar.DirectoryRequestsOpen) {
+			t.Errorf("the predating %q: %s, version %d, roles %v, requests %d", what.GetTitle(), item.Display, item.Announcement.GetVersion(), what.GetRoles(), what.GetRequests())
+		}
 	}
 	if testRepoItemShown(t, reader, later) != nil || testRepoItemShown(t, reader, predatingVault) != nil {
-		t.Error("a repo created after the directory, or a vault, written by another device")
+		t.Error("a repo created after the directory, or a vault, written by a device that did not create it")
+	}
+	if len(reader.alarmReasons()) != 0 {
+		t.Errorf("alarms %v", reader.alarmReasons())
 	}
 	device.mustSync(t)
 	if again, err := device.client.MaintainRepos(t.Context()); err != nil || len(again) != 0 {
 		t.Errorf("a second sync writes %d: %v", len(again), err)
 	}
-	// its admin announces it explicitly, over the marker
-	if _, err := device.client.AnnounceRepo(t.Context(), &sidecar.DirectoryRepoAnnounceArgs{RepoId: predating, DisplayName: "old project", Confirmed: true}); err != nil {
+	otherDevice := world.deviceWith(other, naming)
+	otherDevice.mustSync(t)
+	if writes, err := otherDevice.client.MaintainRepos(t.Context()); err != nil || len(writes) != 0 {
+		t.Errorf("another admin's device writes %d: %v", len(writes), err)
+	}
+}
+
+// QD-748's other half: a repo marked private is made only once the directory stands, so it never predates it. Its
+// creating device's marker keeps it private, and another admin's device writes nothing over it, whatever display name
+// it knows, until the creator is revoked, when it re-signs the marker as a marker; a repo whose creator died before
+// writing its item carries none, and no other device names it either.
+func TestDirectoryPrivateRepoAfterTheDirectoryNeverAnnouncedByAnotherDevice(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	creatorMember, adminMember := sidecar.NewId(), sidecar.NewId()
+	creator := world.memberWriter(creatorMember)
+	admin := world.memberWriter(adminMember)
+	world.publish()
+	private := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, creator, admin)
+	unwritten := world.createRepo(protocol.RepoKind_REPO_KIND_RECORD, nil, creator, admin)
+	creatorDevice := world.device(creator)
+	marker, err := creatorDevice.client.AnnounceNewRepo(t.Context(), &sidecar.EvsRepoCreated{
+		RepoId: private, Kind: protocol.RepoKind_REPO_KIND_GENERAL, DisplayName: "acquisition talks", Private: true, Confirmed: true,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	device.flush(t)
+	if !marker.Item.GetWhere().GetPrivate() || marker.Item.GetWhat().GetTitle() != "" {
+		t.Fatalf("the creator's marker: %v", marker.Item)
+	}
+	creatorDevice.flush(t)
+
+	names := map[sidecar.Id]string{private: "acquisition talks", unwritten: "board minutes"}
+	adminDevice := world.deviceWith(admin, &testDirectoryClientOptions{repoDisplayName: func(repoId sidecar.Id) string { return names[repoId] }})
+	for pass := 0; pass < 2; pass += 1 {
+		adminDevice.mustSync(t)
+		if writes, err := adminDevice.client.MaintainRepos(t.Context()); err != nil || len(writes) != 0 {
+			t.Fatalf("pass %d: another admin's device wrote %d: %v", pass, len(writes), err)
+		}
+	}
+	reader := world.reader(nil)
 	reader.mustSync(t)
-	if item := testRepoItemShown(t, reader, predating); item == nil || item.Display != sidecar.DirectoryItemActive || item.Announcement.GetWhat().GetTitle() != "old project" {
-		t.Errorf("announced over the marker: %v", item)
+	shown := testRepoItemShown(t, reader, private)
+	if shown == nil || shown.Display != sidecar.DirectoryItemPrivate || shown.SignerSidecarId != creator.sidecarId || shown.Announcement.GetWhat().GetTitle() != "" {
+		t.Fatalf("the marker: %v", shown)
+	}
+	if testRepoItemShown(t, reader, unwritten) != nil {
+		t.Error("a repo made after the directory with no item written by another device")
+	}
+
+	// the creator revoked: the marker is re-signed as a marker, never as an announcement
+	world.directoryFixture.Sidecars[creator.sidecarId].RevokedAt = world.directoryAuth.Tip().Pin().GetVersion() + 1
+	world.publish()
+	adminDevice.mustSync(t)
+	writes, err := adminDevice.client.MaintainRepos(t.Context())
+	if err != nil || len(writes) != 1 || !writes[0].Item.GetWhere().GetPrivate() || writes[0].Item.GetWhat().GetTitle() != "" {
+		t.Fatalf("the re-signed marker: %d writes, %v", len(writes), err)
+	}
+	adminDevice.flush(t)
+	reader.mustSync(t)
+	shown = testRepoItemShown(t, reader, private)
+	if shown == nil || shown.Display != sidecar.DirectoryItemPrivate || shown.SignerSidecarId != admin.sidecarId || shown.Announcement.GetVersion() != 2 {
+		t.Errorf("after the creator's revocation: %v", shown)
+	}
+	for _, item := range reader.items(t) {
+		title := item.Announcement.GetWhat().GetTitle()
+		if strings.Contains(title, "acquisition") || strings.Contains(title, "board") {
+			t.Errorf("a name shown: %q", title)
+		}
+	}
+}
+
+// A predating repo whose only version this device's state cannot judge yet, its push's pin ahead of the state, may be
+// a person's private marker, so the predating rule waits rather than announce beside it; once the state reaches the
+// pin, the marker stands and nothing is written.
+func TestDirectoryMaintainReposWaitsOnAVersionItCannotJudge(t *testing.T) {
+	world := newTestDirectoryWorld(t, nil)
+	ownerMember, adminMember := sidecar.NewId(), sidecar.NewId()
+	owner := world.memberWriter(ownerMember)
+	admin := world.memberWriter(adminMember)
+	world.publish()
+	predating := world.createRepo(protocol.RepoKind_REPO_KIND_GENERAL, nil, owner, admin)
+	world.directoryFixture.Repos[world.directoryId].Admins[0].At = world.directoryAuth.Tip().Pin().GetVersion() + 1
+	world.publish()
+	stale := world.directoryAuth.Tip()
+	world.publish()
+	ownerDevice := world.device(owner)
+	if _, err := ownerDevice.client.AnnounceRepo(t.Context(), &sidecar.DirectoryRepoAnnounceArgs{RepoId: predating, Private: true, Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	ownerDevice.flush(t)
+
+	behind := true
+	adminDevice := world.deviceWith(admin, &testDirectoryClientOptions{auth: func() sidecar.DirectoryAuthView {
+		if behind {
+			return stale
+		}
+		return world.directoryAuth.Tip()
+	}})
+	adminDevice.mustSync(t)
+	if writes, err := adminDevice.client.MaintainRepos(t.Context()); err != nil || len(writes) != 0 {
+		t.Fatalf("behind the marker's pin: %d writes, %v", len(writes), err)
+	}
+	behind = false
+	adminDevice.mustSync(t)
+	if writes, err := adminDevice.client.MaintainRepos(t.Context()); err != nil || len(writes) != 0 {
+		t.Fatalf("at the marker's pin: %d writes, %v", len(writes), err)
+	}
+	reader := world.reader(nil)
+	reader.mustSync(t)
+	if shown := testRepoItemShown(t, reader, predating); shown == nil || shown.Display != sidecar.DirectoryItemPrivate || shown.SignerSidecarId != owner.sidecarId {
+		t.Errorf("the owner's marker: %v", shown)
 	}
 }
 

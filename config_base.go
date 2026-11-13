@@ -5,7 +5,9 @@
 // folded_through+1..n-1, which must equal this reader's wherever it holds one. Its rows replace the state's, then the
 // tail re-applies by those verdicts, judging nothing (Reapply), so a later authority change never undoes an earlier
 // revocation while effects that depend on rows follow the new rows, and a reader that started later reaches the same
-// state as one that judged each entry at its own position.
+// state as one that judged each entry at its own position. Its shrunk_repo_ids must be exactly the repos whose key
+// holders its own change shrinks at its time, which this reader computes from S(n-1) and the state the base gives
+// (QD-746, config_coverage.go).
 //
 // A base that fails any of this is a fork, never a refusal: the rows it names would be every later entry's state.
 //
@@ -226,11 +228,10 @@ func (self *ConfigLog) applyBase(state *ConfigState, kept *configKeptEntry, rows
 	if err := self.reapplyTail(next, header.GetFoldedThrough(), kept.n, bits, true); err != nil {
 		return nil, self.baseFork(kept, "%v", err)
 	}
-	var previousRows []byte
-	if state.base != nil {
-		previousRows = self.baseRows[[sha256.Size]byte(state.base.header.GetRowsSha256())]
+	// the base's own shrinks, which this reader present at n-1 computes again and holds the base to (QD-746)
+	if err := configApplyBaseShrinks(state, next, header); err != nil {
+		return nil, self.baseFork(kept, "%v", err)
 	}
-	configAdvanceBaseShrinks(next, state.base, header, previousRows, rowsMessage)
 	result := next.finish()
 	self.retainBase(result, rows)
 	return result, nil
@@ -603,13 +604,14 @@ func (self *ConfigLog) checkBaseTail(previous *configBase, header *bridge.Projec
 }
 
 // DESIGN-DETAILS 5.2.4's Reapply over the tail folded_through+1..n-1 on next, by verdicts: each entry with a 1 or a 2
-// applies its effect again on the state being built, a 0 and a BASE nothing, and nothing is judged, no signature, no
-// header, no signer's standing, no type rule. What an effect derives from state, a row's signer, an acl statement's
-// fold inputs, a proposal's kind, is recomputed on the state being rebuilt, which every verifier holds alike; the verdict
-// and the completion come from verdicts alone. Each entry's effect lands at its own position. take records the
-// verdicts on entries this reader held none for, as a new device takes its first base's; a dry run, api's CheckBase,
-// records nothing. An error is a tail entry carried as taking effect that is no statement or tick this log reads: the
-// base lied, a fork.
+// applies its effect again on the state being built, a 0 nothing, and a BASE only its own shrinks as its
+// shrunk_repo_ids carry them (QD-746), and nothing is judged, no signature, no header, no signer's standing, no type
+// rule. What an effect derives from state, a row's signer, an acl statement's fold inputs, a proposal's kind, is
+// recomputed on the state being rebuilt, which every verifier holds alike; the verdict and the completion come from
+// verdicts alone. Each entry's effect lands at its own position. take records the verdicts on entries this reader held
+// none for, as a new device takes its first base's; a dry run, api's CheckBase, records nothing. An error is a tail
+// entry carried as taking effect that is no statement or tick this log reads, or a BASE that does not parse: the base
+// lied, a fork.
 func (self *ConfigLog) reapplyTail(next *configStateBuilder, foldedThrough uint64, n uint64, verdicts []uint8, take bool) error {
 	state := next.state
 	baseN, baseChain, baseTimeMs := state.n, state.chain, state.timeMs
@@ -629,7 +631,16 @@ func (self *ConfigLog) reapplyTail(next *configStateBuilder, foldedThrough uint6
 				kept.verdict.Refusal = fmt.Errorf("%w: at its own position, as base %d's tail_verdicts carry", ErrConfigRefused, n)
 			}
 		}
-		if verdict == configTailRefused || kept.entry.GetKind() == bridge.AuthEntryKindBase {
+		if kept.entry.GetKind() == bridge.AuthEntryKindBase {
+			// its rows are superseded, but its own shrinks happened at its position: they land there again, so a base
+			// that keeps a fold below it lowers no repo's holders_shrunk_at (QD-746)
+			state.n, state.chain, state.timeMs = k, kept.chain, kept.entry.GetTimeMs()
+			if err := configReapplyBaseShrinks(next, kept); err != nil {
+				return err
+			}
+			continue
+		}
+		if verdict == configTailRefused {
 			continue
 		}
 		if len(kept.entry.GetPrevChain()) != sha256.Size {
