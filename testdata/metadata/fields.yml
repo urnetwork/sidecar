@@ -788,6 +788,7 @@ not_keys:
   "tls/<>/<>": "a tls/<port>/<host> socket name (§9.4), what tlsedge's name map resolves a visitor's SNI to for Find (§13.5): no stored key"
   "tls/": "the first segment of a tls/<port>/<host> socket name (§9.4), which a sockets store matches in a client's set to say whether it still holds an edge name (DESIGN-DETAILS 13.2.3's step 9): no stored key"
   "smtp/": "the first segment of an smtp/25/<host> socket name (§9.4), matched as tls/ is: no stored key"
+  "ur/": "the first segment of a ur/<service> platform socket name (§9.4), by which the sockets engine reads the service a name is of (SOCK-M9-01's namespace_ur.go): no stored key"
 
 rows:
   connect-1: {server: [transfer_contract, contract_close, contract_close_report]}
