@@ -138,6 +138,11 @@ type BridgeHeadWriter interface {
 	SaveHead(ctx context.Context, edit func(head *ConfigHead) (*ConfigHead, error)) (*bridge.AuthPin, error)
 }
 
+var (
+	_ BridgeFilerConfig = (*ConfigClient)(nil)
+	_ BridgeHeadWriter  = (*ConfigWriter)(nil)
+)
+
 // What a filer is built over.
 type BridgeFilerArgs struct {
 	// The sidecar that files: its identity, its acts, its gate, its config keys and its record.

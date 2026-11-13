@@ -128,6 +128,8 @@ type ForwardingSetupConfig interface {
 	BridgeEntries(from uint64, through uint64) []*BridgeConfigEntry
 }
 
+var _ ForwardingSetupConfig = (*ConfigClient)(nil)
+
 // What a host gives the setup beyond the sidecar itself.
 type ForwardingSetupSources struct {
 	// The network's verified config.
