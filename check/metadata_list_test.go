@@ -157,6 +157,39 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "object key with its size, checksum, times and access pattern, on an NVMe metadata cluster",
 		list:     "object key with its size, checksum, times and access pattern, and no object metadata but an idx/ entry's state while its head lists sources (evs-11) and a slot/ object's origin (evs-5), on an NVMe metadata cluster",
 	},
+	{
+		// QD-040's list version, after v14's
+		question: "plan-SOCK-client-auth",
+		block:    "# metadata_list.yml v14;",
+		list:     "# metadata_list.yml v15;",
+	},
+	{
+		// QD-040: v15's line, after v14's
+		question: "plan-SOCK-client-auth",
+		block:    "# object metadata, and narrows evs-5's ttl to a dead push's own slots; evs-10 names the object metadata evs writes.\n",
+		list: "# object metadata, and narrows evs-5's ttl to a dead push's own slots; evs-10 names the object metadata evs writes.\n" +
+			"# v15, updated 2026-11-13 for the owner's answer QD-040 (plan-SOCK-client-auth), adds sock-2's caller sidecar id,\n" +
+			"# which its token names, and sock-5's {sc_<client_id>}ok, the time a client's token last checked valid at sockets.\n",
+	},
+	{
+		// QD-040: sock-2 gains the sidecar id, from the caller's by_client_jwt
+		question: "plan-SOCK-client-auth",
+		block:    "each Find's dialer client and network (edges add their K client ids)",
+		list:     "each Find's dialer client, network and sidecar id, which its token names (QD-040; edges add their K client ids and name no sidecar)",
+	},
+	{
+		// QD-040: sockets keeps a client's last valid time under its own tag, {sc_<client_id>}ok, for the revocation
+		// record's 120 s grace (§9.8's {sc_})
+		question: "plan-SOCK-client-auth",
+		block: "  store: Redis {sc_<client_id>}set\n" +
+			"  sees: a client's set_version and registered entries\n" +
+			"  why: idempotent full-set calls; removal on the client's removal signal (§9.5, §9.8)\n" +
+			"  ttl: 5 min after the client's last call\n",
+		list: "  store: Redis {sc_<client_id>}set and {sc_<client_id>}ok\n" +
+			"  sees: a client's set_version and registered entries; the time its token last checked valid (QD-040)\n" +
+			"  why: idempotent full-set calls; removal on the client's removal signal (§9.5, §9.8); a revocation-record miss within 120 s of a valid check counts as valid, since only api's and connect's SQL fallback projects the record again (QD-040)\n" +
+			"  ttl: 5 min after the client's last call; the valid time 120 s after the check it records\n",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
