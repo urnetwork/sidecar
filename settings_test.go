@@ -58,6 +58,8 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				SessionWriteRate: SidecarRate{Count: 20, Burst: settings.Mcp.SessionWriteRate.Burst, Interval: 1 * time.Second},
 				ResultByteCount:  256 * 1024,
 				CallTimeout:      30 * time.Second,
+				// MCP-M3-13's reading: a read's in-memory bound, past §16.4's result cap
+				ResourceByteCount: 16 * 1024 * 1024,
 				// §16.6's retention row
 				ApprovalFileRetention: 30 * 24 * time.Hour,
 				RunFileRetention:      30 * 24 * time.Hour,

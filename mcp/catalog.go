@@ -194,7 +194,7 @@ var mcpCatalogDesign = []mcpCatalogDesignTool{
 // The design names whose owners have not landed their tools: every one, at MCP-M3-12. An owner removes its names
 // in the change that registers them.
 var mcpCatalogUnbuilt = []string{
-	"evs_repos", "evs_list", "evs_history", "evs_read", "evs_drop_preview", "evs_write", "evs_delete",
+	"evs_drop_preview",
 	"mail_list", "mail_read", "mail_send", "mail_aliases", "mail_alias_create", "mail_alias_delete",
 	"tls_publish", "tls_unpublish",
 	"bridge_list", "bridge_forward", "bridge_expose", "bridge_close",

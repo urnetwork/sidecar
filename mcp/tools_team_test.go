@@ -310,13 +310,13 @@ func TestApprovalResourceNotifiesOnDecision(t *testing.T) {
 	}
 }
 
-// The registered families are §16.5's this build links: the approval and grants resources.
+// The registered families are §16.5's this build links: the approval and grants resources and ur://evs.
 func TestResourceFamiliesRegistered(t *testing.T) {
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	server := newTestMcpServer(newFakeMcpDaemon(), clock)
 	resources := NewDaemonMcpResources(t.Context(), server)
 	templates := resources.Templates()
-	for _, want := range []string{"ur://acl/grants", "ur://approval/{id}"} {
+	for _, want := range []string{"ur://acl/grants", "ur://approval/{id}", "ur://evs/{repo}/{+path}"} {
 		found := false
 		for _, template := range templates {
 			found = found || template == want

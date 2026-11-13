@@ -20,6 +20,10 @@ type SidecarMcpSettings struct {
 	// When a call times out: 30 s, under Codex's 60 s tool_timeout_sec default. A call awaiting a
 	// person returns pending at once.
 	CallTimeout time.Duration
+	// The most of one file a read through MCP holds in memory, evs_read's and ur://evs's: 16 MiB, a reading, since
+	// §16.4 bounds a result, not a resource, and an over-limit result links to its resource. A larger file is refused,
+	// naming ur evs for the person's own terminal.
+	ResourceByteCount int64
 	// How long an approval's ledger file stays past its not_after: 30 days (§16.6's retention row),
 	// long after a local use stops completing at not_after + 10 min.
 	ApprovalFileRetention time.Duration
@@ -221,6 +225,7 @@ func defaultSidecarMcpSettings() *SidecarMcpSettings {
 		SessionWriteRate:        SidecarRate{Count: 20, Burst: 20, Interval: 1 * time.Second},
 		ResultByteCount:         256 * 1024,
 		CallTimeout:             30 * time.Second,
+		ResourceByteCount:       16 * 1024 * 1024,
 		ApprovalFileRetention:   30 * 24 * time.Hour,
 		ApprovalRequestTimeout:  24 * time.Hour,
 		ApprovalCompleteTimeout: 10 * time.Minute,
