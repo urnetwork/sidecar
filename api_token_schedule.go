@@ -97,17 +97,38 @@ func sidecarJwtCanRefresh(byJwt string) bool {
 	return parse.ok && parse.stringClaim("client_id") != "" && parse.stringClaim("device_id") != ""
 }
 
-// The client and device a token names, which a refresh must not change.
+// The network, client and device a token names, which neither a refresh nor POST /sidecar/bind's re-mint may change
+// (QD-797).
 type sidecarJwtIdentity struct {
-	clientId string
-	deviceId string
+	networkId string
+	clientId  string
+	deviceId  string
 }
 
-// The identity byJwt names, false when it names none.
+// The identity byJwt names, false when it names no network, client or device.
 func sidecarJwtIdentityOf(byJwt string) (sidecarJwtIdentity, bool) {
 	parse := parseSidecarJwt(byJwt)
-	identity := sidecarJwtIdentity{clientId: parse.stringClaim("client_id"), deviceId: parse.stringClaim("device_id")}
-	return identity, parse.ok && identity.clientId != "" && identity.deviceId != ""
+	identity := sidecarJwtIdentity{
+		networkId: parse.stringClaim("network_id"),
+		clientId:  parse.stringClaim("client_id"),
+		deviceId:  parse.stringClaim("device_id"),
+	}
+	return identity, parse.ok && identity.networkId != "" && identity.clientId != "" && identity.deviceId != ""
+}
+
+// The sidecar byJwt's sidecar_id claim names (plan-SOCK-client-auth, QD-040), which only POST /sidecar/bind's re-mint
+// sets and a refresh keeps: false for a token without one, or with one that is not a nonzero id. Read unverified, as
+// every claim here is.
+func sidecarJwtSidecarId(byJwt string) (Id, bool) {
+	parse := parseSidecarJwt(byJwt)
+	if !parse.ok {
+		return Id{}, false
+	}
+	sidecarId, err := ParseId(parse.stringClaim("sidecar_id"))
+	if err != nil || sidecarId == (Id{}) {
+		return Id{}, false
+	}
+	return sidecarId, true
 }
 
 // The token's exp, or the zero time when it has none readable.

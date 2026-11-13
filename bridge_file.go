@@ -527,7 +527,7 @@ func (self *BridgeFiler) Expose(ctx context.Context, origin *BridgeFileOrigin, r
 		route.ExposedPrefix = exposed
 	}
 	// the shape every reader holds a body to, so no approval is asked for a body they would void
-	if err := bridgeCheckRouteBody(route); err != nil {
+	if err := bridgeCheckRouteBody(route, self.settings.Ledger); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBridgeFileRefused, err)
 	}
 	stored, err := bridgeRouteAction(view.self, route)
@@ -681,7 +681,7 @@ func (self *BridgeFiler) mapPlan(view *bridgeFileView, request *BridgeMapRequest
 		}
 	}
 	// the shape, over a placeholder /32: the match prefix is the host's address once the ledger shows it
-	if err := bridgeCheckMapBody(plan.body(0x7f000001)); err != nil {
+	if err := bridgeCheckMapBody(plan.body(0x7f000001), self.settings.Ledger); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBridgeFileRefused, err)
 	}
 	return plan, nil
@@ -1528,9 +1528,9 @@ type BridgeEgressRequest struct {
 }
 
 // The statement and the body an egress spec files: the mode in the clear, and under exits only a sealed body, nil
-// under auto and none, which never wait on a seal. Exits named twice, or an exit of zero, are refused, as the readers
-// void such a body.
-func bridgeEgressStatement(request *BridgeEgressRequest) (*bridge.BridgeEgress, *bridge.BridgeEgressBody, error) {
+// under auto and none, which never wait on a seal. Exits named twice, an exit of zero, or more exits than the ledger's
+// settings allow (nil, the defaults), are refused, as the readers void such a body.
+func bridgeEgressStatement(request *BridgeEgressRequest, settings *BridgeLedgerSettings) (*bridge.BridgeEgress, *bridge.BridgeEgressBody, error) {
 	if request == nil || request.Subject == (Id{}) {
 		return nil, nil, fmt.Errorf("%w: an egress spec names its subject", ErrBridgeFileRefused)
 	}
@@ -1545,7 +1545,7 @@ func bridgeEgressStatement(request *BridgeEgressRequest) (*bridge.BridgeEgress, 
 		if (len(request.ExitSidecarIds) == 0) == (request.ExitTagId == (Id{})) {
 			return nil, nil, fmt.Errorf("%w: exits names its sidecars or one tag, not both", ErrBridgeFileRefused)
 		}
-		if bridgeBodyListMaxCount < len(request.ExitSidecarIds) {
+		if bridgeLedgerSettingsOrDefault(settings).BodyListMaxCount < len(request.ExitSidecarIds) {
 			return nil, nil, fmt.Errorf("%w: %d exits", ErrBridgeFileRefused, len(request.ExitSidecarIds))
 		}
 		body := &bridge.BridgeEgressBody{}
@@ -1598,7 +1598,7 @@ func (self *BridgeFiler) SetEgress(ctx context.Context, origin *BridgeFileOrigin
 	if origin.Act != SidecarActConfirmed {
 		return nil, fmt.Errorf("%w: %w: egress is set by a person's confirmed command", ErrBridgeFileRefused, ErrSidecarActMode)
 	}
-	if _, _, err := bridgeEgressStatement(request); err != nil {
+	if _, _, err := bridgeEgressStatement(request, self.settings.Ledger); err != nil {
 		return nil, err
 	}
 	view, err := self.view(ctx)
@@ -1655,7 +1655,7 @@ func (self *bridgeEgressEffect) Run(ctx context.Context, effectKey []byte) ([]by
 	if self.origin.Act != SidecarActConfirmed {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, ErrSidecarActMode)
 	}
-	statement, body, err := bridgeEgressStatement(self.request)
+	statement, body, err := bridgeEgressStatement(self.request, filer.settings.Ledger)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
 	}

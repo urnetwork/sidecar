@@ -517,6 +517,8 @@ barrier tls.device_key_put.after tls_key.go
 barrier tls.device_key_put.before tls_key.go
 barrier tls.front_audience.after tls_audience.go
 barrier tls.front_audience.before tls_audience.go
+barrier tls.front_device.after tls_members_device.go
+barrier tls.front_device.before tls_members_device.go
 barrier tls.front_target.after tls_front.go
 barrier tls.front_target.before tls_front.go
 barrier tls.handshake.after smtpproof/tls_client.go
@@ -642,6 +644,7 @@ secret tls_device_key tls_key.go
 secret tls_ecdhe_private smtpproof/tls_client.go
 secret tls_ecdhe_shared smtpproof/tls_client.go
 secret tls_front_pre_login_key tls_session.go
+secret tls_front_reach_key tls_reach_receipt.go
 secret tls_front_session_key tls_session.go
 secret tls_front_session_root tls_session.go
 secret tls_visitor_cap tlsedgeservice/visitor_key.go
