@@ -28,9 +28,6 @@ import (
 // The holder name of the shred's projection.
 const evsWorldShredHolder = "shred"
 
-// §8.8's window: api takes a RepoRestore only within 7 d of its RepoDelete's entry.
-const evsWorldRestoreWindow = 7 * 24 * time.Hour
-
 // One RepoDelete the access log holds, with its RepoRestore's position once one is filed.
 type evsWorldDeletion struct {
 	deletionId sidecar.Id
@@ -82,7 +79,8 @@ func (self *EvsWorld) fileStatement(device *EvsWorldDevice, signedType bridge.Si
 				return errors.New("a RepoRestore of a RepoDelete with now")
 			case newest.restoredAt != 0:
 				return errors.New("a RepoRestore of a RepoDelete restored already")
-			case evsWorldRestoreWindow < now.Sub(newest.time):
+			case !sidecar.DefaultAclAccessLogSettings().RepoRestoreWithinWindow(newest.time.UnixMilli(), now.UnixMilli()):
+				// §8.8's window, as api and every reader take it from the deletion row's time
 				return errors.New("a RepoRestore past its RepoDelete's 7 d")
 			}
 			newest.restoredAt = position
@@ -105,6 +103,7 @@ func (self *EvsWorld) deletionRowWithLock() *protocol.AclRepoDeletionRow {
 	newest := self.deletions[len(self.deletions)-1]
 	return &protocol.AclRepoDeletionRow{
 		DeletionId: newest.deletionId.Bytes(), Now: newest.now, DeletedAt: newest.deletedAt, RestoredAt: newest.restoredAt,
+		DeletedTimeMs: newest.time.UnixMilli(),
 	}
 }
 

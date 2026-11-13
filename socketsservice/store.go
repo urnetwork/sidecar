@@ -209,6 +209,10 @@ type SocketStorePickRequest struct {
 	Protocol   string
 	MinVersion int
 	Alpns      []string
+	// §9.7's affinity key (SOCK-M6-01), which lives for this call alone and is never stored (sock-2): with one,
+	// the store reads the whole group, never a sample, and picks by rendezvous order among the listeners that
+	// opted in (affinity.go). Empty asks none.
+	AffinityKey []byte
 	// Two uniform draws for the weighted sample (§9.7's step 2).
 	FirstDraw  uint32
 	SecondDraw uint32

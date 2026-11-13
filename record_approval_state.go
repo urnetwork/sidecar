@@ -541,8 +541,8 @@ func (self *ApprovalInbox) logCancelled(approvalId Id) bool {
 }
 
 // The requests for this action in this run by this agent, newest first: the action itself, or a template
-// (scope = true) the action falls inside (§16.6's multi-use row), whose local_port, weight and alpn are the ones
-// detail binds, since a decision signs its request's and spends on no other (QD-740).
+// (scope = true) the action falls inside (§16.6's multi-use row), whose socket_name, local_port, weight and alpn are
+// the ones detail binds, since a decision signs its request's and spends on no other (QD-740, QD-772).
 func (self *ApprovalInbox) candidates(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id) []*approvalIndexed {
 	run := approvalIdOrZero(runId)
 	agent := approvalIdOrZero(agentId)
@@ -983,7 +983,8 @@ func (self *ApprovalRouter) findOrFile(ctx context.Context, action *SidecarActio
 }
 
 // A new ApprovalRequest for action, as stored: §16.8's fields, the approvers P names, not_after reading 3's, and the
-// action's daemon-built detail as local_port, weight and alpn (QD-740), which the parse holds to the action's kind.
+// action's daemon-built detail as socket_name, local_port, weight and alpn (QD-740, QD-772), which the parse holds to
+// the action's kind, a listen's name to its action's grant_dst as far as no key is needed.
 func (self *ApprovalRouter) newRequest(action *SidecarAction, stored *StoredCanonicalAction, tainted bool) (*StoredApprovalRequest, error) {
 	states, err := self.args.states()
 	if err != nil {
@@ -1023,6 +1024,7 @@ func (self *ApprovalRouter) newRequest(action *SidecarAction, stored *StoredCano
 		request.AgentId = action.AgentId.Bytes()
 	}
 	if detail := action.Detail; detail != nil {
+		request.SocketName = detail.SocketName
 		request.LocalPort = detail.LocalPort
 		request.Weight = detail.Weight
 		request.Alpn = slices.Clone(detail.Alpn)

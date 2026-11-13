@@ -651,13 +651,19 @@ func (self *SocketComponent) PolicyChanged() {
 	}
 }
 
-// The §5.4 action a tls/ or smtp/ listen goes through Authorize as: SidecarActionListen with its socket_name, built
-// by NewCanonicalAction. The weight the listen registers with, §9.5's default for none, rides the request beside it
-// (QD-740). This listener accepts in process and binds no local port, so the request carries none.
+// The §5.4 action a tls/ or smtp/ listen goes through Authorize as (QD-772): SidecarActionListen naming the socket by
+// its grant_dst alone, sock:<name>, as a server may see it (SocketListenGrantDst), built by NewCanonicalAction. The
+// name and the weight the listen registers with, §9.5's default for none, ride the request beside it as its
+// socket_name and weight (QD-740). This listener accepts in process and binds no local port, so the request carries
+// none.
 func socketListenAction(name string, settings *SocketListenSettings) (*SidecarAction, error) {
+	grantDst, err := SocketListenGrantDst(name, nil)
+	if err != nil {
+		return nil, err
+	}
 	stored, err := NewCanonicalAction(&protocol.CanonicalAction{
-		Kind:       uint32(SidecarActionListen),
-		SocketName: name,
+		Kind:     uint32(SidecarActionListen),
+		GrantDst: []string{grantDst},
 	})
 	if err != nil {
 		return nil, err
@@ -668,7 +674,7 @@ func socketListenAction(name string, settings *SocketListenSettings) (*SidecarAc
 	}
 	return &SidecarAction{
 		Kind: SidecarActionListen, Canonical: stored.Bytes, Risk: SidecarRiskNormal,
-		Detail: &SidecarActionDetail{Weight: int32(weight)},
+		Detail: &SidecarActionDetail{SocketName: name, Weight: int32(weight)},
 	}, nil
 }
 

@@ -126,6 +126,17 @@ func (self *urBridgeHost) setReceive(receive func(source connect.TransferPath, p
 	self.receive = receive
 }
 
+// The source a send into a link names: the sidecar's own client in the current generation, whose children the window
+// clients are; none before a generation, when no link builds.
+func (self *urBridgeHost) sourcePath() connect.TransferPath {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.generation == nil {
+		return connect.TransferPath{}
+	}
+	return connect.SourceId(self.generation.sourceClientId)
+}
+
 // device.BridgeHost: one link to target, a fixed window of one window client whose delegation sign returns.
 func (self *urBridgeHost) NewBridgeLink(ctx context.Context, target connect.Id, subject connect.Id, shareAliases []netip.Prefix,
 	sign func(windowClientId connect.Id, windowClientPublicKey []byte, notAfter time.Time) ([]byte, error),

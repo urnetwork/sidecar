@@ -1011,6 +1011,18 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "client_id", number: 10, typeName: "bytes"},
 		question: "plan-ACL-nonsidecar-subjects",
 	},
+	// QD-743: the folded access log keeps a RepoDelete's entry time and a removed admin's removal position, which
+	// readers need once those entries leave the log's retention
+	{
+		message:  "AclRepoAdminRow",
+		field:    testFenceField{name: "removed_at", number: 4, typeName: "uint64"},
+		question: "acl-m2-06-access-log-positions",
+	},
+	{
+		message:  "AclRepoDeletionRow",
+		field:    testFenceField{name: "deleted_time_ms", number: 5, typeName: "int64"},
+		question: "acl-m2-06-access-log-positions",
+	},
 	{
 		message:  "Announcement",
 		field:    testFenceField{name: "pad", number: 14, typeName: "bytes"},
@@ -1123,6 +1135,13 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "alpn", number: 16, typeName: "string", repeated: true},
 		question: "record-m2-01-canonical-action-detail",
 	},
+	// QD-772: a socket_listen's name rides the ApprovalRequest beside its local port and weight, and its action names
+	// the socket by its grant_dst alone
+	{
+		message:  "ApprovalRequest",
+		field:    testFenceField{name: "socket_name", number: 17, typeName: "string"},
+		question: "canonical-action-detail-listen-socket-name",
+	},
 }
 
 // One field an owner's answer takes out of a message the design fences, its number reserved.
@@ -1142,6 +1161,8 @@ var testFenceReservations = []testFenceReservation{
 	{message: "CanonicalAction", name: "local_port", number: 24, question: "record-m2-01-canonical-action-detail"},
 	{message: "CanonicalAction", name: "weight", number: 25, question: "record-m2-01-canonical-action-detail"},
 	{message: "CanonicalAction", name: "alpn", number: 34, question: "record-m2-01-canonical-action-detail"},
+	// QD-772: socket_name leaves CanonicalAction for ApprovalRequest's 17, and no other kind fills 23
+	{message: "CanonicalAction", name: "socket_name", number: 23, question: "canonical-action-detail-listen-socket-name"},
 }
 
 // One value an owner's answer adds to an enum the design fences.

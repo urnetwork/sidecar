@@ -293,10 +293,11 @@ func configFoldRecordOf(kept *configKeptEntry) ConfigFoldRecord {
 // reader's state at folded_through, which StateAt serves from the previous base on (the ft rule keeps it there).
 // state is S(n-1), whose newest base is the new base's previous one, as a writer's tip state is.
 //
-// Then the base compile's one rule of its own (QD-648): each superseded or ended forwarding Delegation's row whose
-// supersession or end the new base's retention point, min(the previous base, folded_through + 1), passes by 4,096
-// leaves. The writer folds through this and every full reader checks its compile through it, so every reader drops a
-// row at the same base, and a rows-only reader or a new device takes the rows that already dropped it.
+// Then the base compile's rules of its own, each at the new base's retention point, min(the previous base,
+// folded_through + 1): each superseded or ended forwarding Delegation's row whose supersession or end the point passes
+// by 4,096 leaves (QD-648), and so does each removed repo admin's row whose removal lies before the point (QD-743,
+// aclRowsKeptAt). The writer folds through this and every full reader checks its compile through it, so every reader
+// drops a row at the same base, and a rows-only reader or a new device takes the rows that already dropped it.
 func (self *ConfigLog) foldRows(state *ConfigState, header *bridge.ProjectionHeader) (*ConfigCompileRows, error) {
 	foldedThrough := header.GetFoldedThrough()
 	if state.base == nil {
@@ -327,7 +328,9 @@ func (self *ConfigLog) foldRows(state *ConfigState, header *bridge.ProjectionHea
 		}
 		compileRows = ConfigCompileRowsOf(folded)
 	}
-	compileRows.Delegations = configKeptDelegationRows(compileRows.Delegations, configRetentionPointAt(state.base, foldedThrough))
+	retentionPoint := configRetentionPointAt(state.base, foldedThrough)
+	compileRows.Delegations = configKeptDelegationRows(compileRows.Delegations, retentionPoint)
+	compileRows.AclStatements = aclRowsKeptAt(compileRows.AclStatements, retentionPoint)
 	return compileRows, nil
 }
 

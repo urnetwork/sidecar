@@ -92,8 +92,9 @@ func (self *AclState) Admitted(sidecarId Id) bool {
 }
 
 // A repo's newest RepoDelete as a gate holds it (§8.8's AclRepo deletion row), with what §11.12's DELETE writes into
-// repo/: the RepoDelete entry's time and its signer, known only while the gate's log keeps that entry. The row itself
-// carries positions alone (question acl-m2-06-access-log-positions), so past the log's window the deletion is undated.
+// repo/: the RepoDelete entry's time, which the row carries (QD-743), so the deletion is dated on every day of its
+// window from rows alone, and its signer, which the row does not carry and the gate knows only while its log keeps
+// that entry.
 type AclRepoDeletion struct {
 	DeletionId Id
 	// RepoDelete{now}: straight to shredding, never restorable.
@@ -102,10 +103,12 @@ type AclRepoDeletion struct {
 	DeletedAt uint64
 	// A RepoRestore of DeletionId stands.
 	Restored bool
-	// Whether the log keeps the RepoDelete's entry, so TimeMs and SignerSidecarId are known.
+	// Whether the row carries the entry's time, as every row a fold writes does, so TimeMs is known.
 	Dated bool
-	// The entry's time_ms, api's clock when it sequenced it.
+	// The entry's time_ms, api's clock when it sequenced it: the row's deleted_time_ms.
 	TimeMs int64
+	// Whether the gate's log keeps the RepoDelete's entry, so SignerSidecarId is known.
+	Signed bool
 	// The sidecar that signed the RepoDelete.
 	SignerSidecarId Id
 }
@@ -128,12 +131,13 @@ func (self *AclGateSnapshot) RepoDeletion(repoId Id) *AclRepoDeletion {
 		Now:        row.GetNow(),
 		DeletedAt:  row.GetDeletedAt(),
 		Restored:   row.GetRestoredAt() != 0,
+		Dated:      row.GetDeletedTimeMs() != 0,
+		TimeMs:     row.GetDeletedTimeMs(),
 	}
 	if kept := self.Config.keptEntryAt(row.GetDeletedAt()); kept != nil && kept.statement != nil {
 		for _, signer := range kept.statement.signers {
 			if signer.Kind == ConfigSignerSidecar {
-				deletion.Dated = true
-				deletion.TimeMs = kept.entry.GetTimeMs()
+				deletion.Signed = true
 				deletion.SignerSidecarId = signer.SidecarId
 				break
 			}
