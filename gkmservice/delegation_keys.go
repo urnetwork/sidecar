@@ -4,8 +4,8 @@
 // carries the key's SHA-256 alone, since 1,216 B a device would pass §8.8's 4 MiB of rows at about 2,600 app devices.
 //
 //   - The object's network is the token's, at the upload and at every read (QD-763): no request names one, so a
-//     token reaches only its own network's objects, and a network's objects stand under one prefix, which QD-675's
-//     sweep is to list and a network's shred or a hold finds them by.
+//     token reaches only its own network's objects, and a network's objects stand under one prefix, which the
+//     reconciler sweeps (reconciler.go) and a network's shred or a hold finds them by.
 //   - An upload is the Delegation's own sidecar's: the row in gkm's newest verified state names the token's sidecar
 //     as the forwarding Delegation's, and the body's SHA-256 is the row's reader_key_sha256. Until that state holds
 //     the row the upload answers 409, which the signer's setup sends again once it does (DESIGN-DETAILS 4.2.6's S3).
@@ -18,7 +18,8 @@
 //     POST /gkm/reader-keys reads ReaderKeys, so a config rotator at Team scale makes about 13 requests where it
 //     made one per forwarding Delegation. It answers in the request's order, an empty entry for an id with no stored
 //     key, and the digest check stays each caller's, per key.
-//   - The reconciler deletes the object 24 h after its Delegation ended or was superseded (reconciler.go).
+//   - The reconciler deletes the object 24 h after its Delegation ended or was superseded, and at once once no row
+//     and no end it tracks names it (reconciler.go; QD-675).
 //
 // A Delegation that does not forward keeps its key in its row, so it takes no object here.
 
