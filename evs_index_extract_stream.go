@@ -48,7 +48,7 @@ var (
 )
 
 // One document a one-pass extraction finished: its chunk, its key set and row, or skipped when its key set passes
-// its cap (D6), in which case neither is set.
+// its cap or it alone would not fit a shard (D6), in which case neither is set.
 type indexStreamDocument struct {
 	chunk   uint32
 	keys    indexKeySet
@@ -162,17 +162,18 @@ func (self *indexStreamDocuments) finish() {
 	}
 	keys := collector.keys()
 	document := &indexStreamDocument{chunk: uint32(self.chunk)}
-	if indexKeySetSkipped(keys) {
+	// the row first, as prepare builds it, since D6 reads its bytes
+	template := *self.args.template
+	template.Chunk = uint32(self.chunk)
+	template.ByteCount = self.args.byteCount
+	row := template.row(len(keys), self.args.companion, self.args.refId)
+	if err := row.check(self.args.companion); err != nil {
+		self.err = err
+		return
+	}
+	if indexDocumentSkipped(keys, row, self.args.settings) {
 		document.skipped = true
 	} else {
-		template := *self.args.template
-		template.Chunk = uint32(self.chunk)
-		template.ByteCount = self.args.byteCount
-		row := template.row(len(keys), self.args.companion, self.args.refId)
-		if err := row.check(self.args.companion); err != nil {
-			self.err = err
-			return
-		}
 		document.keys, document.row = keys, row
 	}
 	self.err = self.args.emit(document)

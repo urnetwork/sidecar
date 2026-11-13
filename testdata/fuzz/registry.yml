@@ -286,6 +286,14 @@ rows:
       - {name: FuzzDecodeStateDocument, package: "."}
       - {name: FuzzOpenSealedFile, package: "."}
 
+  - id: index-layout
+    spec: "DESIGN-DETAILS 1.6 and 11.6 (QD-760, QD-775): D6's lone(d) bounds the lone shard the encoder writes, and a layout always writes"
+    owner: SEARCH-M10-10
+    milestone: M10
+    targets:
+      - {name: FuzzIndexLoneShard, package: "."}
+      - {name: FuzzIndexLayoutWrites, package: "."}
+
   - id: identity-binding
     spec: "CORE-M1-05's Tests line: the sidecar identity binding's verifier"
     owner: CORE-M1-05

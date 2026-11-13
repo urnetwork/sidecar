@@ -9,15 +9,19 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -769,24 +773,735 @@ func TestIndexMergeMalformedDiff(t *testing.T) {
 	}
 }
 
-// A document whose row and postings pass a shard's cap in a shard of its own fails the merge closed, writing nothing.
-func TestIndexMergeUnplaceable(t *testing.T) {
-	window := indexBucketWindow{startDay: 20340, days: 30}
-	root := &indexViewRoot{number: indexRootNumber, paths: indexNewPaths(false, indexRootNumber)}
+// The guard 1.6 keeps (QD-760): a merge handed, as extra and so past every decoder, a document over D6's bound fails
+// closed with errIndexMergeUnplaceable and writes no file. It runs under a deadline, so a layout without the guard,
+// whose empty shard would take nothing for ever, fails here rather than hanging.
+func TestAnUnplaceableLayoutWritesNothing(t *testing.T) {
+	window, root := testLayoutGround()
 	keys := testIndexKeys(0, 300000, 1)
 	huge := &indexEntry{kind: indexEntryFull, key: testIndexId("huge", 1), version: 1, timeSeconds: 1757400000, row: testFileRow(keys), keys: keys}
-	if keys.encodedByteCount() > indexKeySetMaxByteCount {
-		t.Fatal("the probe key set is past KeySetMax")
+	if indexKeySetMaxByteCount < keys.encodedByteCount() || !indexDocumentPastAShard(keys, huge.row, DefaultIndexFormatSettings()) {
+		t.Fatal("the probe is not a document within KeySetMax past a shard")
 	}
-	_, err := indexMerge(&indexMergeArgs{root: root, bucket: &indexViewBucket{window: window}, extra: []*indexEntry{huge}, padKey: testPadKey(t, 2), tables: testHeadTables, settings: DefaultIndexFormatSettings()})
-	if !errors.Is(err, errIndexMergeUnplaceable) {
-		t.Fatalf("a document past a shard: %v", err)
+	type outcome struct {
+		result *indexMergeResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	padKey := testPadKey(t, 2)
+	go func() {
+		result, err := indexMerge(&indexMergeArgs{root: root, bucket: &indexViewBucket{window: window}, extra: []*indexEntry{huge}, padKey: padKey, tables: testHeadTables, settings: DefaultIndexFormatSettings()})
+		done <- outcome{result: result, err: err}
+	}()
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, errIndexMergeUnplaceable) || got.result != nil {
+			t.Fatalf("a document past a shard: %v", got.err)
+		}
+	case <-time.After(10 * time.Minute):
+		t.Fatal("a layout handed a document past a shard did not return")
 	}
 }
 
-// One merge vector: a name, and each file the merge wrote with its plaintext's hash and length, and each removal.
+// The test bucket's window and its root, which the layout cases share.
+func testLayoutGround() (indexBucketWindow, *indexViewRoot) {
+	return indexBucketWindow{startDay: 20340, days: 30}, &indexViewRoot{number: indexRootNumber, paths: indexNewPaths(false, indexRootNumber)}
+}
+
+// A file row of a document of keyCount keys that encodes to exactly byteCount bytes, its locator filled with ASCII.
+func testFileRowOfByteCount(t testing.TB, keyCount int, byteCount int) *indexRow {
+	t.Helper()
+	row := &indexRow{docKind: indexDocFile, trigramCount: uint64(keyCount)}
+	row.locator = string(bytes.Repeat([]byte("p"), byteCount-row.encodedByteCount()))
+	if row.encodedByteCount() != byteCount || row.check(false) != nil {
+		t.Fatalf("no file row of %d B", byteCount)
+	}
+	return row
+}
+
+// 11.2.3's boundary: a full entry of keys 0 to n - 1 under a row of rowByteCount bytes.
+func testBoundaryEntry(t testing.TB, label string, keyCount int, rowByteCount int) *indexEntry {
+	t.Helper()
+	keys := testIndexKeys(0, keyCount, 1)
+	return &indexEntry{kind: indexEntryFull, key: testIndexId(label, keyCount), version: 1, timeSeconds: 1757400000, row: testFileRowOfByteCount(t, keyCount, rowByteCount), keys: keys}
+}
+
+// 1.6's TestAnEntryPastAShardIsRefused (QD-760): the entry codec writes and reads a full entry at lone = ShardBody
+// (keys 0 to 199,607 under a 36 B row) and refuses one at ShardBody + 1 (under a 37 B row) and one at 199,609 keys,
+// both ways; a large entry holding one is index_malformed naming its signer; and a diff whose composed set passes the
+// bound under its own row is left out of the merge, reported with its slot's signer, while the merge commits the rest.
+func TestAnEntryPastAShardIsRefused(t *testing.T) {
+	settings := DefaultIndexFormatSettings()
+	// bytes no honest writer makes: the encoder's own test let through by counting nothing for ShardLone
+	permissive := DefaultIndexFormatSettings()
+	permissive.ShardLoneByteCount = 0
+
+	kept := testBoundaryEntry(t, "bound", 199608, 36)
+	if lone := indexLoneShardByteCount(kept.row.encodedByteCount(), kept.keys, settings); lone != indexShardMaxByteCount {
+		t.Fatalf("the kept entry's lone is %d", lone)
+	}
+	encoded, err := kept.appendEncoded(nil, false, settings)
+	if err != nil {
+		t.Fatalf("an entry at lone = ShardBody refused: %v", err)
+	}
+	decoder := indexDecoder{src: encoded}
+	if decoder.entry(false, settings); decoder.err != nil || decoder.remaining() != 0 {
+		t.Fatalf("an entry at lone = ShardBody unread: %v", decoder.err)
+	}
+	for _, past := range []*indexEntry{testBoundaryEntry(t, "bound", 199608, 37), testBoundaryEntry(t, "bound", 199609, 36)} {
+		if _, err := past.appendEncoded(nil, false, settings); !errors.Is(err, errIndexMalformed) || !strings.Contains(err.Error(), "an entry past a shard") {
+			t.Fatalf("an entry past a shard written: %v", err)
+		}
+		forged, err := past.appendEncoded(nil, false, permissive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoder := indexDecoder{src: forged}
+		if decoder.entry(false, settings); !errors.Is(decoder.err, errIndexMalformed) || !strings.Contains(decoder.err.Error(), "an entry past a shard") {
+			t.Fatalf("an entry past a shard read: %v", decoder.err)
+		}
+	}
+
+	world := testNewHeadWorld()
+	window := indexBucketWindow{startDay: 20340, days: 30}
+	forger := evsTestId("forger")
+	paths := indexNewPaths(false, indexRootNumber)
+	header := func(writer Id, seq uint32, fileType uint32) *protocol.IndexFileHeader {
+		header := indexNewFileHeader(fileType, testHeadTables)
+		header.BucketStartDay, header.BucketDays, header.WriterSidecarId, header.Seq = window.startDay, window.days, writer.Bytes(), seq
+		return header
+	}
+	largePath, _ := paths.largeEntry(window.startDay, [indexIdByteCount]byte(forger), 1)
+	largeFile, err := indexEncodeSlot(&indexSlot{header: header(forger, 1, indexFileLargeEntry), entries: []*indexEntry{testBoundaryEntry(t, "bound", 199609, 36)}}, false, permissive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.ref.store(forger).testCommit(t, world.at, &indexPushFile{path: largePath, plaintext: largeFile})
+	view := world.view(t, evsTestId("reader"))
+	alarmed := false
+	for _, event := range view.events() {
+		alarmed = alarmed || event.Kind == SidecarEventIndexMalformed && *event.SidecarId == forger && event.Path == largePath
+	}
+	if !alarmed {
+		t.Fatal("no index_malformed named the large entry's signer")
+	}
+
+	// a diff whose base is kept and whose composed set, keys 0 to 200,000 under a 36 B row, passes the bound
+	composer := evsTestId("composer")
+	base := testBoundaryEntry(t, "composed", 199001, 36)
+	base.key = testIndexId("composed", 1)
+	diff := &indexEntry{
+		kind: indexEntryDiff, key: base.key, version: 2, baseVersion: 1, timeSeconds: 1757400060,
+		row: testFileRowOfByteCount(t, 200001, 36), delta: indexDelta{added: testIndexKeys(199001, 1000, 1)},
+	}
+	honest := testViewEntry("composed honest", 1, 1, world.at.UnixMilli(), testHeadKeys(3, 0))
+	baseLargePath, _ := paths.largeEntry(window.startDay, [indexIdByteCount]byte(composer), 1)
+	sealedPath, _ := paths.slot(window.startDay, [indexIdByteCount]byte(composer), 0)
+	headPath, _ := paths.slot(window.startDay, [indexIdByteCount]byte(composer), 1)
+	sealed := []*indexEntry{diff, honest}
+	slices.SortFunc(sealed, indexCompareEntries)
+	files := []*indexPushFile{}
+	for _, file := range []struct {
+		path     string
+		seq      uint32
+		fileType uint32
+		entries  []*indexEntry
+	}{{baseLargePath, 1, indexFileLargeEntry, []*indexEntry{base}}, {sealedPath, 2, indexFileSlot, sealed}, {headPath, 3, indexFileSlot, nil}} {
+		plaintext, err := indexEncodeSlot(&indexSlot{header: header(composer, file.seq, file.fileType), entries: file.entries}, false, settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, &indexPushFile{path: file.path, plaintext: plaintext})
+	}
+	world.ref.store(composer).testCommit(t, world.at, files...)
+	outcome := world.merge(t, evsTestId("merger"))
+	reported := false
+	for _, malformed := range outcome.result.malformed {
+		reported = reported || malformed.signerSidecarId == composer && malformed.path == sealedPath
+	}
+	if !reported {
+		t.Fatalf("the diff composing past a shard: %+v", outcome.result.malformed)
+	}
+	merged := world.mergedBucket(t)
+	if document := merged.documents[base.key]; document == nil || document.version != 1 {
+		t.Fatal("the diff past a shard won, or its base did not merge")
+	}
+	if merged.documents[honest.key] == nil {
+		t.Fatal("the merge left out the rest of the slot")
+	}
+}
+
+// 1.6's TestADocumentPastAShardNeverReachesAMerge, on the fake store: 11.6's chunk of mixed-script letters, indexed
+// before as a smaller text, is skipped at prepare; the push carries its tombstone, as its writer does for a version
+// skipped where its key was indexed before; a push past DirectBytes that carries a second skipped version beside other
+// documents merges them; and the bucket's next merge and its roll-up commit, the document in no shard and no all row.
+func TestADocumentPastAShardNeverReachesAMerge(t *testing.T) {
+	settings := DefaultIndexFormatSettings()
+	normalizer := testIndexNormalizer(t)
+	letters := testMixedScriptLetters(5, settings.ChunkByteCount)
+	path := []byte("notes/noise.txt")
+	prepare := func(content []byte) *indexPreparedDocument {
+		documents, ok := indexExtractFile(path, content, settings)
+		if !ok || len(documents) != 1 {
+			t.Fatal("not one text document")
+		}
+		prepared, err := documents[0].prepare(normalizer, false, Id{}, settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return prepared
+	}
+	// what the in-ref writer makes of a prepared version: its full entry, or its tombstone where it was indexed before
+	pending := func(prepared *indexPreparedDocument, version uint64, replaces uint64) *indexPendingDocument {
+		if prepared.skipped {
+			return &indexPendingDocument{kind: indexEntryTombstone, key: testIndexId("noise", 0), version: version}
+		}
+		return &indexPendingDocument{kind: indexEntryFull, key: testIndexId("noise", 0), version: version, replaces: replaces, keys: prepared.keys, row: prepared.row}
+	}
+
+	world := testNewHeadWorld()
+	a := evsTestId("writer a")
+	smaller := prepare(letters[:4096])
+	if smaller.skipped {
+		t.Fatal("the smaller text was skipped")
+	}
+	world.push(t, a, pending(smaller, 1, 0))
+	skipped := prepare(letters)
+	if !skipped.skipped {
+		t.Fatal("the chunk of letters was kept")
+	}
+	world.push(t, a, pending(skipped, 2, 1))
+	if entry := testEntryAt(t, world.entries(t, "noise", 0), 2); entry.kind != indexEntryTombstone {
+		t.Fatal("the skipped version is no tombstone")
+	}
+
+	again := prepare(testMixedScriptLetters(6, settings.ChunkByteCount))
+	if !again.skipped {
+		t.Fatal("the second chunk of letters was kept")
+	}
+	bulk := []*indexPendingDocument{pending(again, 3, 2)}
+	for index := range 40 {
+		bulk = append(bulk, testLive("bulk", index, 1, 0, testIndexKeys(index*0x10000, 7000, 1)))
+	}
+	plan, view := world.plan(t, a, true, bulk...)
+	if !plan.mergeInPush {
+		t.Fatal("the push did not pass DirectBytes")
+	}
+	files, removals, malformed, err := indexMergeHeadPlan(context.Background(), view, view.writeRoot(), plan, testPadKey(t, 2), testHeadTables)
+	if err != nil || len(malformed) != 0 {
+		t.Fatal(err, malformed)
+	}
+	if _, err := world.ref.store(a).Commit(context.Background(), &indexPush{pushId: NewId(), baseVersion: view.head.version, indexEpoch: view.head.indexEpoch, signedTimeMs: world.at.UnixMilli(), files: files, removals: removals}); err != nil {
+		t.Fatal(err)
+	}
+	world.at = world.at.Add(time.Minute)
+	world.fillUntilSealed(t, a, "f", 0)
+	world.merge(t, evsTestId("merger"))
+	merged := world.mergedBucket(t)
+	if merged.documents[testIndexId("noise", 0)] != nil {
+		t.Fatal("a row of the skipped document reached a shard")
+	}
+	if tombstone := merged.tombstones[testIndexId("noise", 0)]; tombstone == nil || tombstone.version != 3 {
+		t.Fatal("the skipped versions' tombstone is not in the shards")
+	}
+	if len(merged.documents) < 40 {
+		t.Fatalf("%d documents merged beside the tombstone", len(merged.documents))
+	}
+
+	bucket := world.view(t, a).writeRoot().newestBucket()
+	world.at = testDayTime(bucket.window.endDay()+bucket.window.days, time.Hour)
+	world.rollUp(t, evsTestId("runner"))
+	rows, _ := world.allRows(t)
+	if rows[testIndexId("noise", 0)] != nil || rows[testIndexId("bulk", 0)] == nil {
+		t.Fatal("the roll-up carried the skipped document, or lost the others")
+	}
+}
+
+// A bucket of window whose shards 0, 1, ... are files, as a merge's base shows them, and the shards decoded.
+func testBucketOfShards(t testing.TB, root *indexViewRoot, window indexBucketWindow, files ...[]byte) (*indexViewBucket, []*indexShard) {
+	t.Helper()
+	bucket := &indexViewBucket{window: window, manifest: &protocol.IndexManifest{StartDay: window.startDay, Days: window.days}}
+	shards := []*indexShard{}
+	for n, file := range files {
+		decoded, err := testDecodeShard(file, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path, _ := indexParsePath(root.paths.bucketShard(window.startDay, uint32(n)), false)
+		bucket.shards = append(bucket.shards, &indexViewShard{file: &indexFileVersion{path: path.String(), version: uint64(n) + 1, byteCount: len(file)}, path: path, decoded: decoded})
+		shards = append(shards, decoded)
+	}
+	return bucket, shards
+}
+
+// A merge of the bucket's shards with extra entries, absorbing nothing, on the test pad key and tables.
+func testMergeShards(t testing.TB, root *indexViewRoot, bucket *indexViewBucket, shards []*indexShard, extra ...*indexEntry) (*indexMergeResult, error) {
+	t.Helper()
+	return indexMerge(&indexMergeArgs{root: root, bucket: bucket, shards: shards, extra: extra, padKey: testPadKey(t, 2), tables: testHeadTables, settings: DefaultIndexFormatSettings()})
+}
+
+// The shards a merge leaves, by n: each one it wrote, decoded and within ShardBody before its pad, and each of the
+// base's it did not touch. Fails unless every key stands once across them.
+func testShardsAfter(t testing.TB, root *indexViewRoot, bucket *indexViewBucket, shards []*indexShard, result *indexMergeResult) map[uint32]*indexShard {
+	t.Helper()
+	written := map[string][]byte{}
+	for _, planned := range result.shards {
+		written[planned.path.String()] = planned.file
+	}
+	after := map[uint32]*indexShard{}
+	seen := map[[indexIdByteCount]byte]bool{}
+	for _, row := range result.writtenManifest.Shards {
+		path := root.paths.bucketShard(bucket.window.startDay, row.N)
+		var shard *indexShard
+		if file, ok := written[path]; ok {
+			decoded, err := testDecodeShard(file, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if indexShardMaxByteCount < len(file)-decoded.padByteCount {
+				t.Fatalf("shard %d is %d B before its pad", row.N, len(file)-decoded.padByteCount)
+			}
+			shard = decoded
+		} else {
+			for index, held := range bucket.shards {
+				if held.path.String() == path {
+					shard = shards[index]
+				}
+			}
+			if shard == nil {
+				t.Fatalf("shard %d neither written nor held", row.N)
+			}
+		}
+		if uint32(len(shard.documents)) != row.Docs {
+			t.Fatalf("shard %d holds %d documents, its row %d", row.N, len(shard.documents), row.Docs)
+		}
+		for _, document := range shard.documents {
+			if seen[document.key] {
+				t.Fatal("a key twice across the shards")
+			}
+			seen[document.key] = true
+		}
+		for _, tombstone := range shard.tombstones {
+			if seen[tombstone.key] {
+				t.Fatal("a key twice across the shards")
+			}
+			seen[tombstone.key] = true
+		}
+		after[row.N] = shard
+	}
+	return after
+}
+
+// A doc_key that sorts by index, its last eight bytes big-endian.
+func testOrderedKey(index int) [indexIdByteCount]byte {
+	key := [indexIdByteCount]byte{}
+	binary.BigEndian.PutUint64(key[8:], uint64(index))
+	return key
+}
+
+// A live document of a bucket shard, at version 1.
+func testLayoutDocument(key [indexIdByteCount]byte, keys indexKeySet) *indexShardDocument {
+	return &indexShardDocument{key: key, version: 1, timeSeconds: 1757400000, row: testFileRow(keys), keys: keys}
+}
+
+// The documents as a merge's extra full entries.
+func testLayoutEntries(documents []*indexShardDocument) []*indexEntry {
+	entries := []*indexEntry{}
+	for _, document := range documents {
+		entries = append(entries, &indexEntry{kind: indexEntryFull, key: document.key, version: document.version, timeSeconds: document.timeSeconds, row: document.row, keys: document.keys})
+	}
+	return entries
+}
+
+// 1.6's TestANewShardTakesAtLeastOne (QD-760): under the widest header a layout can give, every number at its widest
+// and every version and time too, take on an empty shard takes at least one of any winners D6 kept, documents at
+// lone = ShardBody among them, and step 2 opens at most one shard a winner.
+func TestANewShardTakesAtLeastOne(t *testing.T) {
+	settings := DefaultIndexFormatSettings()
+	_, root := testLayoutGround()
+	args := &indexLayoutArgs{
+		root:          root,
+		fileType:      indexFileBucketShard,
+		window:        indexBucketWindow{startDay: math.MaxUint32, days: math.MaxUint32},
+		keepDocument:  func(document *indexShardDocument) bool { return true },
+		keepTombstone: func(tombstone *indexShardTombstone) bool { return true },
+		padKey:        &indexPadKey{generation: math.MaxUint64, key: bytes.Repeat([]byte{9}, 32)},
+		tables:        testHeadTables,
+		settings:      settings,
+	}
+	random := rand.New(rand.NewSource(13))
+	winners := []*indexLayoutEntry{}
+	add := func(index int, keys indexKeySet, row *indexRow) {
+		if indexDocumentSkipped(keys, row, settings) {
+			return
+		}
+		winners = append(winners, &indexLayoutEntry{document: &indexShardDocument{key: testIndexId("at least one", index), version: math.MaxUint64, timeSeconds: math.MaxUint64, row: row, keys: keys}})
+	}
+	add(0, testIndexKeys(0, 199608, 1), testRowOfByteCount(t, 199608, 36))
+	add(1, testIndexKeys(0x100000, 199608, 1), testRowOfByteCount(t, 199608, 36))
+	for index := 2; index < 34; index += 1 {
+		keys := testRandomKeys(random, random.Intn(60000), 0, indexKeyMax+1)
+		minimal := (&indexRow{docKind: indexDocRecord, trigramCount: uint64(len(keys))}).encodedByteCount()
+		add(index, keys, testRowOfByteCount(t, len(keys), minimal+random.Intn(indexRowMaxByteCount-minimal+1)))
+	}
+	for index := range 8 {
+		winners = append(winners, &indexLayoutEntry{tombstone: &indexShardTombstone{kind: indexEntryTombstone, key: testIndexId("at least one gone", index), version: math.MaxUint64, timeSeconds: math.MaxUint64}})
+	}
+	if len(winners) < 40 {
+		t.Fatalf("%d winners D6 kept", len(winners))
+	}
+	slices.SortFunc(winners, indexCompareLayoutEntries)
+	builder := indexNewShardBuilder(false)
+	for index, winner := range winners {
+		if count, err := indexTake(args, builder, &indexLayoutShard{}, []*indexLayoutEntry{winner}); err != nil || count != 1 {
+			t.Fatalf("an empty shard took %d of winner %d: %v", count, index, err)
+		}
+	}
+	// step 2 runs take on each shard it opens, over every winner still to place
+	args.appended = winners
+	laid, err := indexLayout(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(laid.shards) < 3 || len(winners) < len(laid.shards) {
+		t.Fatalf("%d shards for %d winners", len(laid.shards), len(winners))
+	}
+}
+
+// 11.6's join case: 16 documents sharing 60,000 keys, a list of each a two-byte bitset, and smallCount small
+// documents of two keys each.
+func testJoinCaseShards(t testing.TB, smallCount int, label string) ([]byte, []byte) {
+	t.Helper()
+	shared := testIndexKeys(0x100000, 60000, 1)
+	big := []*indexShardDocument{}
+	for index := range 16 {
+		big = append(big, testLayoutDocument(testIndexId("shared", index), shared))
+	}
+	random := rand.New(rand.NewSource(17))
+	small := []*indexShardDocument{}
+	for index := range smallCount {
+		small = append(small, testLayoutDocument(testIndexId(label, index), testRandomKeys(random, 2, 0x500000, 64)))
+	}
+	padKey := testPadKey(t, 2)
+	return testBuildShard(t, &indexShard{header: testShardHeader(indexFileBucketShard), documents: big}, false, padKey),
+		testBuildShard(t, &indexShard{header: testShardHeader(indexFileBucketShard), documents: small}, false, padKey)
+}
+
+// 1.6's TestAJoinPastTheCapIsNotMade (QD-775): two adjacent shards that come to under ShardJoin, 16 documents sharing
+// 60,000 keys and 2,000 small documents, do not encode within ShardBody as one, since each of the 60,000 lists grows
+// from a two-byte bitset to 16 docids. A merge of the bucket commits and both shards stand under their own n with their
+// own bytes. With a third shard of 100 small documents after them, the first pair is refused and the second and
+// third are joined.
+func TestAJoinPastTheCapIsNotMade(t *testing.T) {
+	window, root := testLayoutGround()
+	bigFile, smallFile := testJoinCaseShards(t, 2000, "join small")
+	bucket, shards := testBucketOfShards(t, root, window, bigFile, smallFile)
+	unpadded := func(index int) int {
+		return bucket.shards[index].file.byteCount - shards[index].padByteCount
+	}
+	if sum := unpadded(0) + unpadded(1); DefaultIndexFormatSettings().ShardJoinByteCount <= sum {
+		t.Fatalf("the pair comes to %d B", sum)
+	}
+	layoutArgs := &indexLayoutArgs{root: root, fileType: indexFileBucketShard, window: window, padKey: testPadKey(t, 2), tables: testHeadTables}
+	if _, err := layoutArgs.unpadded(indexNewShardBuilder(false), slices.Concat(shards[0].documents, shards[1].documents), nil); !errors.Is(err, errIndexShardFull) {
+		t.Fatalf("the union of %d B and %d B fits: %v", unpadded(0), unpadded(1), err)
+	}
+	t.Logf("shards of %d B and %d B before their pads refuse to join", unpadded(0), unpadded(1))
+
+	result, err := testMergeShards(t, root, bucket, shards)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.shards) != 0 || len(result.removedShards) != 0 || len(result.writtenManifest.Shards) != 2 {
+		t.Fatalf("a refused join wrote %d shards and removed %d", len(result.shards), len(result.removedShards))
+	}
+	testShardsAfter(t, root, bucket, shards, result)
+
+	thirdFile := testBuildShard(t, &indexShard{header: testShardHeader(indexFileBucketShard), documents: testShardDocuments(4, "join third", 100, indexDocFile)}, false, testPadKey(t, 2))
+	bucket, shards = testBucketOfShards(t, root, window, bigFile, smallFile, thirdFile)
+	result, err = testMergeShards(t, root, bucket, shards)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := testShardsAfter(t, root, bucket, shards, result)
+	if len(after) != 2 || len(after[1].documents) != 2100 || len(result.shards) != 1 || result.shards[0].path.String() != bucket.shards[1].path.String() {
+		t.Fatalf("the second and third did not join under 1: %d shards", len(after))
+	}
+	if len(result.removedShards) != 1 || result.removedShards[0].path != bucket.shards[2].path.String() {
+		t.Fatalf("the joined shard was not removed: %+v", result.removedShards)
+	}
+}
+
+// 11.6's removal case, built as the question measured it: documents whose keys are runs of 64 sharing their two high
+// bytes, run 1's first key held by one small document alone, which sorts first; four tiny documents of one key each
+// after it; then documents of two runs each. A merge of them all into an empty bucket fills shard 0 by take to within
+// one document of ShardBody, the rest opening shard 1. Removing the small document moves every block's start one key
+// on: each block's first key is then written whole and its last shares one byte with the key before it, about a byte
+// a block more, past the cap.
+type testRunsCase struct {
+	small  *indexShardDocument
+	tiny   []*indexShardDocument
+	shards [][]byte
+}
+
+func testRunsShards(t testing.TB) *testRunsCase {
+	t.Helper()
+	window, root := testLayoutGround()
+	run := func(number int) indexKeySet {
+		return testIndexKeys(number<<8, indexBlockMaxKeyCount, 1)
+	}
+	c := &testRunsCase{small: testLayoutDocument(testOrderedKey(1), indexKeySet{1 << 8})}
+	documents := []*indexShardDocument{c.small}
+	for index := range 4 {
+		tiny := testLayoutDocument(testOrderedKey(2+index), indexKeySet{uint32(0xF00000 + index)})
+		c.tiny = append(c.tiny, tiny)
+		documents = append(documents, tiny)
+	}
+	documents = append(documents, testLayoutDocument(testOrderedKey(6), run(1)[1:].with(run(2))))
+	for number := 3; number+1 <= 2840; number += 2 {
+		documents = append(documents, testLayoutDocument(testOrderedKey(4+number), run(number).with(run(number+1))))
+	}
+	result, err := indexMerge(&indexMergeArgs{root: root, bucket: &indexViewBucket{window: window}, extra: testLayoutEntries(documents), padKey: testPadKey(t, 2), tables: testHeadTables, settings: DefaultIndexFormatSettings()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.shards) != 2 {
+		t.Fatalf("the documents filled %d shards", len(result.shards))
+	}
+	for _, planned := range result.shards {
+		c.shards = append(c.shards, planned.file)
+	}
+	// shard 0 holds the small document and is within one document of the cap: the first of shard 1 does not fit
+	bucket, shards := testBucketOfShards(t, root, window, c.shards...)
+	layoutArgs := &indexLayoutArgs{root: root, fileType: indexFileBucketShard, window: window, padKey: testPadKey(t, 2), tables: testHeadTables}
+	if !slices.ContainsFunc(shards[0].documents, func(document *indexShardDocument) bool { return document.key == c.small.key }) {
+		t.Fatal("shard 0 does not hold the small document")
+	}
+	first := slices.MinFunc(shards[1].documents, func(a *indexShardDocument, b *indexShardDocument) int { return bytes.Compare(a.key[:], b.key[:]) })
+	if _, err := layoutArgs.unpadded(indexNewShardBuilder(false), append(slices.Clone(shards[0].documents), first), nil); !errors.Is(err, errIndexShardFull) {
+		t.Fatalf("shard 0 takes another document: %v", err)
+	}
+	without := slices.DeleteFunc(slices.Clone(shards[0].documents), func(document *indexShardDocument) bool { return document.key == c.small.key })
+	if _, err := layoutArgs.unpadded(indexNewShardBuilder(false), without, nil); !errors.Is(err, errIndexShardFull) {
+		t.Fatalf("shard 0 without the small document fits by 64: %v", err)
+	}
+	t.Logf("shard 0: %d documents, %d B with its pad; shard 1: %d documents", len(shards[0].documents), bucket.shards[0].file.byteCount, len(shards[1].documents))
+	return c
+}
+
+// Whether every document a shard holds sorts below every one of others.
+func testKeysBelow(shard *indexShard, others []*indexShardDocument) bool {
+	for _, document := range shard.documents {
+		for _, other := range others {
+			if 0 <= bytes.Compare(document.key[:], other.key[:]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// 1.6's TestARemovalPastTheCapGivesUpRows (QD-775): a merge whose winner is the small document's tombstone removes its
+// row from a shard take filled, which then encodes past ShardBody by 64. The layout keeps the count take's search finds
+// over the shard's remaining entries and gives up the rest, from its highest doc_key down, to the appended entries;
+// being the youngest, it takes back what take's test allows and a next shard opens for the others. The merge commits,
+// each shard decodes within ShardBody, every key stands once, and a second run writes equal bytes. Again with the
+// full shard not the youngest: its given-up rows go to the youngest.
+func TestARemovalPastTheCapGivesUpRows(t *testing.T) {
+	c := testRunsShards(t)
+	window, root := testLayoutGround()
+	tombstone := &indexEntry{kind: indexEntryTombstone, key: c.small.key, version: 2, timeSeconds: 1757400100}
+	for _, shardCount := range []int{1, 2} {
+		bucket, shards := testBucketOfShards(t, root, window, c.shards[:shardCount]...)
+		before := len(shards[0].documents)
+		result, err := testMergeShards(t, root, bucket, shards, tombstone)
+		if err != nil {
+			t.Fatalf("%d shards: %v", shardCount, err)
+		}
+		after := testShardsAfter(t, root, bucket, shards, result)
+		kept := after[0]
+		if kept == nil || len(kept.documents) == 0 || before-1 <= len(kept.documents) {
+			t.Fatalf("%d shards: shard 0 did not give up rows", shardCount)
+		}
+		given := []*indexShardDocument{}
+		for n, shard := range after {
+			if n != 0 {
+				given = append(given, shard.documents...)
+			}
+		}
+		if !testKeysBelow(kept, given) {
+			t.Fatalf("%d shards: shard 0 gave up rows below the ones it kept", shardCount)
+		}
+		dropped := false
+		for _, shard := range after {
+			if slices.ContainsFunc(shard.documents, func(document *indexShardDocument) bool { return document.key == c.small.key }) {
+				t.Fatal("the small document's row stayed")
+			}
+			dropped = dropped || slices.ContainsFunc(shard.tombstones, func(stone *indexShardTombstone) bool { return stone.key == c.small.key && stone.version == 2 })
+		}
+		if !dropped {
+			t.Fatal("the small document's tombstone stands in no shard")
+		}
+		switch shardCount {
+		case 1:
+			if len(after) < 2 {
+				t.Fatal("no next shard opened for the given-up rows")
+			}
+		case 2:
+			if len(after) != 2 || len(after[1].documents) <= len(shards[1].documents) {
+				t.Fatal("the given-up rows did not go to the youngest")
+			}
+		}
+		t.Logf("%d shards: shard 0 kept %d of %d documents, %d given up", shardCount, len(kept.documents), before-1, before-1-len(kept.documents))
+		bucket, shards = testBucketOfShards(t, root, window, c.shards[:shardCount]...)
+		again, err := testMergeShards(t, root, bucket, shards, tombstone)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.EqualFunc(result.files(), again.files(), func(a *indexPushFile, b *indexPushFile) bool {
+			return a.path == b.path && bytes.Equal(a.plaintext, b.plaintext)
+		}) {
+			t.Fatalf("%d shards: a second run wrote other bytes", shardCount)
+		}
+	}
+}
+
+// 1.6's TestALayoutKeepsAShardNothingChanged (QD-775): a shard a CLOSURE rewrote on its replaced partition, whose
+// encoding by blocks of 64 would pass ShardBody. A merge that changes nothing in it leaves its bytes; as the youngest
+// shard it takes nothing and a next shard opens; one removal from it makes it give up rows.
+func TestALayoutKeepsAShardNothingChanged(t *testing.T) {
+	c := testRunsShards(t)
+	window, root := testLayoutGround()
+	_, shards := testBucketOfShards(t, root, window, c.shards[0])
+	builder := indexNewShardBuilder(false)
+	rewrite, rewritten, err := builder.rewriteWithout(shards[0], func(kind indexEntryKind, key [indexIdByteCount]byte, version uint64) bool {
+		return key == c.small.key
+	}, len(c.shards[0]))
+	if err != nil {
+		t.Fatalf("a CLOSURE could not rewrite a full shard: %v", err)
+	}
+	if rewritten.blockKeyCounts == nil || len(rewrite) != len(c.shards[0]) {
+		t.Fatal("the rewrite did not keep the replaced partition and length")
+	}
+	layoutArgs := &indexLayoutArgs{root: root, fileType: indexFileBucketShard, window: window, padKey: testPadKey(t, 2), tables: testHeadTables}
+	if _, err := layoutArgs.unpadded(builder, rewritten.documents, nil); !errors.Is(err, errIndexShardFull) {
+		t.Fatalf("the rewritten shard fits by 64: %v", err)
+	}
+	late := testLayoutDocument(testOrderedKey(1000000), indexKeySet{0xF10000})
+
+	bucket, shards := testBucketOfShards(t, root, window, rewrite, c.shards[1])
+	result, err := testMergeShards(t, root, bucket, shards, testLayoutEntries([]*indexShardDocument{late})...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := testShardsAfter(t, root, bucket, shards, result)
+	if slices.ContainsFunc(result.shards, func(planned *indexPlannedFile) bool { return planned.path.String() == bucket.shards[0].path.String() }) || after[0] != shards[0] {
+		t.Fatal("a merge that changed nothing in the rewritten shard wrote it")
+	}
+
+	bucket, shards = testBucketOfShards(t, root, window, rewrite)
+	result, err = testMergeShards(t, root, bucket, shards, testLayoutEntries([]*indexShardDocument{late})...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after = testShardsAfter(t, root, bucket, shards, result)
+	if after[0] != shards[0] || len(after) != 2 || len(after[1].documents) != 1 || after[1].documents[0].key != late.key {
+		t.Fatal("the rewritten shard, youngest, took a document or no next shard opened")
+	}
+
+	bucket, shards = testBucketOfShards(t, root, window, rewrite)
+	gone := &indexEntry{kind: indexEntryTombstone, key: c.tiny[0].key, version: 2, timeSeconds: 1757400100}
+	result, err = testMergeShards(t, root, bucket, shards, gone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after = testShardsAfter(t, root, bucket, shards, result)
+	if after[0] == shards[0] || len(after) < 2 || len(shards[0].documents)-1 <= len(after[0].documents) {
+		t.Fatal("one removal from the rewritten shard did not make it give up rows")
+	}
+}
+
+// 1.6's FuzzIndexLayoutWrites (QD-775), in FuzzIndexLayoutTakes's place: any shards a decoder accepts and any winners
+// D6 kept, a seed choosing their shapes, small ones, random sets of up to 40,000 keys, and dense runs of up to 199,000
+// keys near lone = ShardBody, with removals and newer versions of held documents among the winners: a layout returns no
+// error, every shard it writes is within ShardBody before its pad, and each key stands once.
+func FuzzIndexLayoutWrites(f *testing.F) {
+	f.Add(int64(1), uint8(2), uint8(12), uint8(0))
+	f.Add(int64(2), uint8(3), uint8(40), uint8(1))
+	f.Add(int64(3), uint8(1), uint8(6), uint8(2))
+	f.Fuzz(func(t *testing.T, seed int64, shardCount uint8, winnerCount uint8, shape uint8) {
+		settings := DefaultIndexFormatSettings()
+		window, root := testLayoutGround()
+		random := rand.New(rand.NewSource(seed))
+		documentOf := func(label string, index int) *indexShardDocument {
+			var keys indexKeySet
+			switch shape % 4 {
+			case 1:
+				keys = testRandomKeys(random, 1+random.Intn(40000), 0, indexKeyMax+1)
+			case 2:
+				keys = testIndexKeys(random.Intn(0x10000), 1+random.Intn(199000), 1)
+			default:
+				keys = testRandomKeys(random, 1+random.Intn(300), random.Intn(0x100000), 4096)
+			}
+			document := testLayoutDocument(testIndexId(label, index), keys)
+			if indexDocumentSkipped(keys, document.row, settings) {
+				return testLayoutDocument(testIndexId(label, index), keys[:1])
+			}
+			return document
+		}
+		layoutArgs := &indexLayoutArgs{root: root, fileType: indexFileBucketShard, window: window, padKey: testPadKey(t, 2), tables: testHeadTables, settings: settings}
+		files := [][]byte{}
+		held := []*indexShardDocument{}
+		for n := range int(shardCount % 4) {
+			entries := []*indexLayoutEntry{}
+			for index := range 1 + random.Intn(8) {
+				entries = append(entries, &indexLayoutEntry{document: documentOf(fmt.Sprintf("held %d", n), index)})
+			}
+			// a shard a decoder accepts: as much of what was drawn as fits the cap, by take's own search
+			count, err := indexTake(layoutArgs, indexNewShardBuilder(false), &indexLayoutShard{}, entries)
+			if err != nil || count == 0 {
+				t.Fatal(count, err)
+			}
+			documents := []*indexShardDocument{}
+			for _, entry := range entries[:count] {
+				documents = append(documents, entry.document)
+			}
+			held = append(held, documents...)
+			files = append(files, testBuildShard(t, &indexShard{header: testShardHeader(indexFileBucketShard), documents: documents}, false, testPadKey(t, 2)))
+		}
+		bucket, shards := testBucketOfShards(t, root, window, files...)
+		extra := []*indexEntry{}
+		taken := map[[indexIdByteCount]byte]bool{}
+		for index := range int(winnerCount % 48) {
+			if 0 < len(held) && random.Intn(3) == 0 {
+				document := held[random.Intn(len(held))]
+				if taken[document.key] {
+					continue
+				}
+				taken[document.key] = true
+				if random.Intn(2) == 0 {
+					extra = append(extra, &indexEntry{kind: indexEntryTombstone, key: document.key, version: 2, timeSeconds: 1757400100})
+				} else {
+					newer := documentOf("newer", index)
+					extra = append(extra, &indexEntry{kind: indexEntryFull, key: document.key, version: 2, timeSeconds: 1757400100, row: newer.row, keys: newer.keys})
+				}
+				continue
+			}
+			extra = append(extra, testLayoutEntries([]*indexShardDocument{documentOf("winner", index)})...)
+		}
+		result, err := testMergeShards(t, root, bucket, shards, extra...)
+		if err != nil {
+			t.Fatalf("a layout of %d shards and %d winners: %v", len(files), len(extra), err)
+		}
+		testShardsAfter(t, root, bucket, shards, result)
+	})
+}
+
+// One merge vector: a name, and each file the merge wrote with its plaintext's hash and length, and each removal; where
+// the merge's input shards were built for it, each of them too.
 type testMergeVector struct {
 	Name     string                `json:"name"`
+	Inputs   []testMergeVectorFile `json:"inputs,omitempty"`
 	Files    []testMergeVectorFile `json:"files"`
 	Removals []string              `json:"removals,omitempty"`
 }
@@ -830,7 +1545,7 @@ func testCheckMergeVectors(t *testing.T, path string, built []testMergeVector) {
 	}
 	for index, vector := range built {
 		heldVector := held[index]
-		if heldVector.Name != vector.Name || len(heldVector.Files) != len(vector.Files) || !slices.Equal(heldVector.Removals, vector.Removals) {
+		if heldVector.Name != vector.Name || len(heldVector.Files) != len(vector.Files) || !slices.Equal(heldVector.Removals, vector.Removals) || !slices.Equal(heldVector.Inputs, vector.Inputs) {
 			t.Errorf("vector %s: held %s with %d files", vector.Name, heldVector.Name, len(heldVector.Files))
 			continue
 		}
@@ -845,7 +1560,9 @@ func testCheckMergeVectors(t *testing.T, path string, built []testMergeVector) {
 // D-TEST-15, DESIGN-DETAILS 1.6's merge/ list, pinned by each output file's plaintext hash: a sealed diff composed
 // onto its writer's kept slot and onto a large entry; one version from two writers (the tie order); a tombstone over a
 // row; a ref tombstone; the erasure set's document left out; take at the cap and the shard opened after it; a join; a
-// merge that changes only the manifest; a merge with extra entries. SIDECAR_WRITE_VECTORS rewrites them.
+// merge that changes only the manifest; a merge with extra entries; take at the cap before a document at lone =
+// ShardBody, which a shard holds alone (QD-760); and, each with its input shards' hashes, a join refused at the cap
+// and a removal that gives up rows (QD-775). SIDECAR_WRITE_VECTORS rewrites them.
 func TestIndexMergeVectors(t *testing.T) {
 	built := []testMergeVector{}
 	record := func(name string, result *indexMergeResult) {
@@ -936,6 +1653,49 @@ func TestIndexMergeVectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	record("join", joined)
+
+	// QD-760: take at the cap where the next winner is a document with lone = ShardBody, which opens a shard of its own
+	bound := testBoundaryEntry(t, "bound", 199608, 36)
+	bound.key = testOrderedKey(1000000)
+	boundExtra := []*indexEntry{}
+	for entryIndex := range 200 {
+		keys := testIndexKeys(0x200000+entryIndex*0x2000, 700, 3)
+		boundExtra = append(boundExtra, &indexEntry{kind: indexEntryFull, key: testOrderedKey(1 + entryIndex), version: 1, timeSeconds: 1757400000, row: testFileRow(keys), keys: keys})
+	}
+	boundResult, err := indexMerge(&indexMergeArgs{root: root, bucket: &indexViewBucket{window: window}, extra: append(boundExtra, bound), padKey: testPadKey(t, 2), tables: testHeadTables, settings: DefaultIndexFormatSettings()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shards := boundResult.writtenManifest.Shards; len(shards) != 2 || shards[1].Docs != 1 {
+		t.Fatalf("the document at lone = ShardBody did not open a shard of its own: %+v", shards)
+	}
+	record("take-at-the-cap-before-a-document-at-lone-shard-body", boundResult)
+
+	// QD-775: a join refused at the cap, the next pair joined; and a removal that gives up rows
+	recordWithInputs := func(name string, files [][]byte, result *indexMergeResult) {
+		vector := testMergeVectorOf(name, result.files(), result.removedShards)
+		for n, file := range files {
+			sum := sha256.Sum256(file)
+			vector.Inputs = append(vector.Inputs, testMergeVectorFile{Path: root.paths.bucketShard(window.startDay, uint32(n)), Replaces: uint64(n) + 1, Sha256: hex.EncodeToString(sum[:]), ByteCount: len(file)})
+		}
+		built = append(built, vector)
+	}
+	bigFile, smallFile := testJoinCaseShards(t, 2000, "join small")
+	thirdFile := testBuildShard(t, &indexShard{header: testShardHeader(indexFileBucketShard), documents: testShardDocuments(4, "join third", 100, indexDocFile)}, false, testPadKey(t, 2))
+	joinFiles := [][]byte{bigFile, smallFile, thirdFile}
+	joinBucket, joinShards := testBucketOfShards(t, root, window, joinFiles...)
+	joinResult, err := testMergeShards(t, root, joinBucket, joinShards)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordWithInputs("a-join-refused-at-the-cap", joinFiles, joinResult)
+	runs := testRunsShards(t)
+	removalBucket, removalShards := testBucketOfShards(t, root, window, runs.shards[0])
+	removalResult, err := testMergeShards(t, root, removalBucket, removalShards, &indexEntry{kind: indexEntryTombstone, key: runs.small.key, version: 2, timeSeconds: 1757400100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordWithInputs("a-removal-that-gives-up-rows", runs.shards[:1], removalResult)
 
 	testCheckMergeVectors(t, testMergeVectorPath, built)
 }
@@ -1061,7 +1821,7 @@ func TestIndexMergeKeepsEveryNewestVersion(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			winners, malformed, err := indexMergeCandidates(bucket, shards, nil, true, true, view.erased, map[Id]uint32{})
+			winners, malformed, err := indexMergeCandidates(bucket, shards, nil, true, true, view.erased, map[Id]uint32{}, view.settings)
 			if err != nil {
 				t.Fatal(err)
 			}
