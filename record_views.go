@@ -1,8 +1,11 @@
+//go:build !ios_extension
+
 // What MCP's views read of the root that the files they come from do not export (§16.5; MCP-M3-14): §8.4's action
 // and resource text forms, which acl_check takes as a policy document writes them, and a member's registered keys,
 // which ur://acl/grants lists by id, never by key.
 //
-// On every leg. Package-level functions are safe for concurrent use.
+// On every leg but the ios_extension legs, whose forwarding role serves no MCP. Package-level functions are safe for
+// concurrent use.
 
 package sidecar
 
