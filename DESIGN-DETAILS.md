@@ -8,7 +8,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 
 | # | Problem | Tasks held | Status |
 |---|---|---|---|
-| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10) |
+| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10; amended 2026-11-12, QD-760) |
 | 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10) |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | complete (2026-11-11) |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
@@ -18,14 +18,14 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 8 | Git and evs in both directions | 3 | complete (2026-11-10) |
 | 9 | Client path epochs and re-tokenizing | 3 | complete (2026-11-10) |
 | 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | complete (2026-11-11) |
-| 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10) |
-| 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11) |
+| 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10; amended 2026-11-12, QD-760) |
+| 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11; amended 2026-11-12, QD-761, built on the recommendations of open questions details-amend-2-late-generation and details-amend-2-fold-holds) |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 | 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
 
-Status: complete (2026-11-10)
+Status: complete (2026-11-10; amended 2026-11-12, QD-760: 1.2.2, 1.2.4, 1.2.9, 1.3, 1.5, 1.6, 1.7 and 1.8, each place marked)
 
 Tasks held until complete: SEARCH-M10-10, SEARCH-M10-11, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, SEARCH-M10-35, TEST-M10-02.
 
@@ -193,6 +193,11 @@ decoders        a slot whose diff names a base that no other file of its writer 
                 format when the slot is unabsorbed: index_malformed names the slot's signer. Under R1 and R2 no
                 honest writer's slot can be in that state (I1), so the alarm no longer falls on a writer that
                 wrote by the rules. In an absorbed slot nothing is checked.
+past a shard    (amended 2026-11-12, QD-760) a full entry whose row and key set section 11's D6 skips
+                (11.2.3: lone(d) past ShardBody) holds a value past its cap, as one whose key set passes
+                KeySetMax does: a decoder refuses its file and index_malformed names its signer. A diff whose
+                composed set D6 skips under the diff's own row is malformed where it is composed, as a diff
+                with no base is. No honest writer writes either: D6 made that version a tombstone.
 ```
 
 Nothing server-visible changes: no column, key, object family or proto field (I-18).
@@ -272,7 +277,8 @@ merge(N at base b, extra = none):
       the shards' entry of the key: a row or a tombstone
       each entry of the key in a slot of U_W: a full entry or a tombstone as it is; a diff composed onto
           its base (1.2.1). A diff whose base is missing is malformed: it is left out and alarms
-          index_malformed {signer: the slot's} (I1 says an honest slot never has one)
+          index_malformed {signer: the slot's} (I1 says an honest slot never has one). So is a diff whose
+          composed set D6 skips under the diff's row (1.2.2; amended 2026-11-12, QD-760)
       the full entry of each large entry in U_W
       extra, when a push merges its own entries (1.2.3) or a roll-up promotes (1.2.5)
   winner(key) = the candidate with the highest version. At one version: a tombstone; then the shards' own
@@ -292,7 +298,8 @@ layout(shards by ascending n, winners):
     take(Y, A): if Y with all of A encodes within ShardBody, all of A. Else the count c found by:
         lo = 0; hi = len(A); while lo < hi: mid = (lo + hi + 1) / 2;
             if Y with A[0:mid] encodes within ShardBody then lo = mid else hi = mid - 1; c = lo
-    Y takes A[0:c]. While A has more: Y = a new shard, the highest n + 1, and take again.
+    Y takes A[0:c]. While A has more: Y = a new shard, the highest n + 1, and take again. A new shard
+    takes at least one: every document of A is one D6 kept (below; amended 2026-11-12, QD-760).
   3 scanning by ascending n: while a shard and the next one after it come to fewer than ShardJoin bytes
     before their pads, the two become one under the lower n; the joined shard is tested again with its next.
   4 a shard left with no row and no tombstone is removed.
@@ -301,6 +308,16 @@ layout(shards by ascending n, winners):
 ```
 
 `take` is stated as a procedure because a shard's length is not quite monotone in its documents: re-blocking by 64 can save a few bytes when a key is added (QD-173 found the mirror of it). Every implementation runs the same search, so every one finds the same c. "Encodes within" is the length the shard encoder gives before the pad.
+
+**A new shard always takes** (amended 2026-11-12, QD-760; question search-m10-10-document-past-a-shard, option 1). As first written, nothing here said what `take` does with a document no shard can hold: one within KeySetMax whose row, dictionary entries and lists pass ShardBody in a shard of its own. An empty shard takes none of it and step 2's loop does not end; the landed `indexLayout` refuses instead (`errIndexMergeUnplaceable`), and the bucket stops merging. The owner's answer puts the rule at extraction: section 11's D6 skips a document whose bound lone(d) passes ShardBody (11.2.3), so it has no entry, and a tombstone where it was indexed before. Step 2 then ends, on three facts:
+
+- lone(d) is at least 33 B above the encoded length, before its pad, of a shard holding d alone, in a bucket or in all, at any pad generation, version and time (11.2.3). A tombstone alone encodes in under 128 B.
+- Every member of A is a tombstone or a document D6 kept. A full entry is held to D6 by its decoder, and a diff's composed set where it is composed (1.2.2). `extra` comes from `prepare`, which applies D6, or from a shard, and a shard's rows were placed by this layout: by induction over the pushes that wrote the bucket's and all's shards, each row passed D6 when it entered.
+- `take`'s search tries one member before it settles on none: with lo = 0 and hi at least 1, mid is at least 1, and hi falls to 0 only once mid = 1 has failed.
+
+So `take` on an empty shard returns at least 1, each pass of the loop places at least one member of A, and step 2 opens at most len(A) shards. `errIndexMergeUnplaceable` stays where it is, as a closed guard: an empty shard that takes nothing fails the merge, which writes nothing, and no input a decoder accepts reaches it. No model covers this: `IndexMerge.tla` leaves sizes out (1.3), so the argument is these three facts, each held by a test of 1.6.
+
+The rule closes step 2 and nothing else. Measuring it showed two other ways a layout's shard passes ShardBody, which the decision does not reach and this amendment does not change: step 3 joins two shards that come to under ShardJoin whose join does not encode within ShardBody (16 documents sharing 60,000 keys, 372,510 B, and 2,000 small ones, 119,795 B: lists that were two-byte bitsets become sixteen docids each), and step 1 can lengthen a full shard by removing a document, through the re-blocking (2,447 B on a built case). In both the encoder refuses, the merge writes nothing and its bucket stops merging, as it did for the document above. Question `details-amend-2-layout-past-the-cap` asks what a layout does there.
 
 A merge whose winners are all the shards' own entries still commits: the manifest alone, so that the writers can reuse their slots.
 
@@ -506,7 +523,8 @@ chains           a diff resolves in one step, from the full entry in its own wri
 malformed        an unabsorbed diff with no base is index_malformed naming the slot's signer, and its document
                  reads not yet searchable until a host with the text re-enters it (§11.14's chains row). The
                  row's "a diff below its key's newest entry is no candidate, resolved or not, and alarms
-                 nothing" goes: under I1 there is no such diff to excuse.
+                 nothing" goes: under I1 there is no such diff to excuse. An unabsorbed diff whose composed
+                 set D6 skips under its row reads the same way (1.2.2; amended 2026-11-12, QD-760).
 ```
 
 Newest-wins over every partition a device holds, the version table, masks and retained buckets are as §11.14 has them.
@@ -548,7 +566,7 @@ I8 a function      every file a writer's push, a merge or a roll-up writes is a 
 
 **The model.** `IndexMerge.tla` holds one index ref over three windows: two writers' slots (two each, three in one configuration, with seqs), their large entries, a shard and a manifest a bucket, all, the lock, and the content of two documents, d2 edited four times and d3 created and then deleted by a commit that skips the index. The journaler's entries trail their content; the backfiller indexes what no entry reaches. A head push has four shapes (create, append, seal as the head stood, fill and open the next slot), an entry may be full or a diff where a base stands, and a push built in one step commits in another, with anything between. A writer's process may die with a push in flight that still lands. Merges, a roll-up under its lock with two rollers, crashes and lapses run beside them. A head push is refused only by its own files' CAS, never by a manifest (1.1 F). Constants switch each rule between the design and §11.14 as written, and `Twin` breaks one rule of the design.
 
-What it leaves out, and why that is safe. Sizes: KeepSlots and the delta bound only turn diffs into full entries, and the model lets either be chosen. Several shards a bucket: `layout` is a function of the winners, and the model's one shard makes the shard's CAS and the manifest's the same step, so `PromoteBlind` removes both. Ref tombstones follow a document tombstone's rule with a ref for a key. Pushes carry one entry; a push of several is some sequence of these with fewer states between. D-EVS-45's move is one of the placements the model already allows. Coverage rows are not modelled: what is indexed is a ghost, and a backfill is whatever the content holds that no entry reaches. The erasure's CUT, CLOSUREs and epoch are `IndexRollup.tla`'s, and SEARCH-M10-46 joins the two. A DROP's rewrite is not modelled: its rule (1.2.3) is argued under I1 and held by FS-107's case.
+What it leaves out, and why that is safe. Sizes: KeepSlots and the delta bound only turn diffs into full entries, and the model lets either be chosen. D6's shard test is a size too (amended 2026-11-12, QD-760): a version it skips is a tombstone, which the model has, and that a new shard takes at least one is 1.2.4's argument, not a run's. Several shards a bucket: `layout` is a function of the winners, and the model's one shard makes the shard's CAS and the manifest's the same step, so `PromoteBlind` removes both. Ref tombstones follow a document tombstone's rule with a ref for a key. Pushes carry one entry; a push of several is some sequence of these with fewer states between. D-EVS-45's move is one of the placements the model already allows. Coverage rows are not modelled: what is indexed is a ghost, and a backfill is whatever the content holds that no entry reaches. The erasure's CUT, CLOSUREs and epoch are `IndexRollup.tla`'s, and SEARCH-M10-46 joins the two. A DROP's rewrite is not modelled: its rule (1.2.3) is argued under I1 and held by FS-107's case.
 
 **The runs**, on 2026-11-10 with TLC from tla2tools at d8fb231, through `run-indexmerge.sh`, on a host shared with the build lanes. Every run but one is breadth-first over its whole state graph. The one marked simulation draws 4,000 traces a worker from a fixed seed and shows only that those kept every invariant.
 
@@ -815,6 +833,14 @@ a deleted document indexed     a host with the text that meets a live entry whos
 a diff with no base            only a writer off the rules, or damage, leaves one in an unabsorbed slot:
                                index_malformed names the slot's signer; a merge leaves the diff out; a host with
                                the text re-enters the document full (§11.14's chains row).
+a document past a shard        (amended 2026-11-12, QD-760) skipped at extraction (section 11's D6): no entry,
+                               and a tombstone where it was indexed before, so no merge, push past DirectBytes
+                               or roll-up meets one. It is not searchable, as a document past KeySetMax already
+                               is not. A full entry of one, which only a writer off the rules leaves, is past
+                               its cap: a decoder refuses its file and index_malformed names its signer; a diff
+                               that composes to one is left out as a diff with no base is. Behind both,
+                               errIndexMergeUnplaceable: an empty shard that takes nothing fails the merge,
+                               which writes nothing.
 a runner that rolls early      a roll-up whose signed time is before its bucket's expiry is caught by every
                                reproducer: index_mismatch naming it. Its effect is a roll-up done early, which
                                breaks no invariant but R5's margin.
@@ -872,6 +898,33 @@ journal       a unit written at settle and not before; a companion build's read 
 
 **Mutants.** Each twin of 1.3 is a mutant of the code and must fail a named test: a seal that leaves the head unwritten (R2's two-push test); a seal that reuses a kept slot, a push that removes a kept large entry and a merge that removes large entries (FS-107, caches discarded); a merge that drops a tombstone and a roll-up that reads no head (FS-108); a roll-up that drops a tombstone above a newer bucket's older entry, and one that writes the target's shard without its manifest (FS-75's promotion case); a companion build that reads content before the index or from a cached pin, and one that resends after TIME_AHEAD (the journal tests).
 
+**D6 at the merge** (amended 2026-11-12, QD-760). The fix track's tests, each a top-level test beside the code it holds (`evs_index_merge_test.go`, `evs_index_codec_test.go`, `evs_index_fake_test.go`); section 11.6 has D6's own:
+
+```text
+merge/ vector                 take at the cap where the next winner is a document with lone = ShardBody: the
+                              shard opened for it holds it alone and encodes within ShardBody
+TestADocumentPastAShardNeverReachesAMerge
+                              on the fake store: 11.6's chunk of mixed-script letters, indexed before as a
+                              smaller text, is skipped at prepare; the push carries its tombstone, a push past
+                              DirectBytes that carries it beside other documents merges them, and the bucket's
+                              next merge and its roll-up commit
+TestAnEntryPastAShardIsRefused
+                              the entry codec refuses to write and to read a full entry D6 skips, at lone =
+                              ShardBody + 1 and not at ShardBody (keys 0 to n - 1 under a 36 B row, n = 199,609
+                              and 199,608); a slot holding one is index_malformed naming its signer; a diff
+                              whose composed set passes the bound under its row is left out of the merge,
+                              reported with its signer, and the merge commits the rest
+TestAnUnplaceableLayoutWritesNothing
+                              the guard, kept: TestIndexMergeUnplaceable as landed under this name. A merge
+                              handed, as extra and so past the decoders, a document over the bound returns
+                              errIndexMergeUnplaceable and no file
+TestANewShardTakesAtLeastOne  for generated winners that D6 kept, at the widest header, version and time:
+                              take on an empty shard returns at least 1, and step 2 opens at most len(A) shards
+FuzzIndexLayoutTakes          any shards and any winners D6 kept: layout never returns errIndexMergeUnplaceable
+```
+
+Mutants: a decoder without the bound fails `TestAnEntryPastAShardIsRefused`; a merge that composes without it fails the same test's diff case; a layout without the guard does not return from `TestAnUnplaceableLayoutWritesNothing`, which runs under a deadline.
+
 ### 1.7 Implementation notes, task by task
 
 Order: SEARCH-M10-45 first, since every other task plans on its `plan`. Then SEARCH-M10-10, then SEARCH-M10-11 and SEARCH-M10-12 together, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, and the schedules as their mechanisms land. SEARCH-M10-46 at any time. All are the evs lane's. Entries for the two new tasks are in `.stack/plan/proposals/details-1-tasks.md`.
@@ -903,6 +956,26 @@ testdata/index/head/      rewritten to 1.6's list
 Traps: bases are chosen against the files as the push's base shows them, never against a slot this same push writes; the keep set is recomputed from the plan's own result, in key order, so two builds agree; the head rule holds for a push that writes only large entries and for one that merges its own entries; `indexComposeDelta` has no caller left in a writer and stays for tests of INDEX-FORMAT.md's Deltas.
 
 **SEARCH-M10-10, bucket merges** (held; L; its Build changes). Build 1.2.4: `indexMerge` as the pure function `merge` with `layout` and `take`, and `IndexMerger` as its runner. Needs: SEARCH-M10-45 in place of SEARCH-M10-09 alone. What leaves its plan entry: heads as an input, the output row's "unless" clause, "absorbed large entries are removed", and "never drop a base a current head names", which is now the writer's keep rule. What joins it: `extra` entries and a no-absorb mode, for a push that merges its own entries and for SEARCH-M10-11's promotions; the tie order; a manifest-only commit; restart on `collected`. Proposed shapes: `indexMergeArgs{bucket *indexViewBucket, extra []*indexEntry, absorb bool, erased func(key, version) bool, padKey *indexPadKey, tables indexTables}` and `indexMergeResult{shards []*indexPlannedFile, removedShards []*indexPushRemoval, manifest *indexPlannedFile, malformed []*indexMalformedDiff}`. Barriers `evs.index.merge.built`, `.uploaded`, `.pushed`. Traps: the shard encoder is called up to 12 times by `take` when a shard fills, so `take` asks it for a length, not bytes, and the encoder must reach §11.14's 7 to 10 ns a posting first (the draft measured 843 ns under load, 1.4); on an app host the inputs stay in storage and the merge is a k-way pass over their key streams (1.4); the watermark is the highest seq read, never the head's; a merge writes no slot and removes no large entry. Tests: 1.6's merge vectors and fake-store cases; FS-74's two mergers; FS-107's and FS-108's merge clauses.
+
+**SEARCH-M10-10's fix track for QD-760** (amended 2026-11-12, QD-760). The merge side of the skip rule; section 11.7 has the extraction side, which lands first or with it, since this side calls its function. Landed code that changes:
+
+```text
+evs_index_entry.go        indexEntry.check, which the encoder and the decoder both run, refuses a full entry
+                          whose row and key set D6 skips (indexMalformed "an entry past a shard"), after the
+                          key set's own cap
+evs_index_merge.go        where a diff is composed onto its base, a composed set that D6 skips under the
+                          diff's row joins indexMergeResult.malformed with its slot's signer and is left out,
+                          as a diff with no base is. indexLayout keeps errIndexMergeUnplaceable and its test
+                          of an empty shard that took nothing; its comment says D6 makes it unreachable and
+                          that it stays as the closed guard
+search_chains.go          searchResolveChain holds a composed set to the same test: a diff that fails it
+                          reads as a diff with no base does (1.2.9)
+evs_index_merge_test.go   TestIndexMergeUnplaceable becomes TestAnUnplaceableLayoutWritesNothing; 1.6's other
+                          tests; testdata/index/merge/ gains its vector
+protocol/INDEX-FORMAT.md  1.8's two sentences
+```
+
+Traps: the bound is computed on the row's bytes as the entry holds them, never on a row built again from fields, so a decoder and a writer cannot differ by a trimming; a merge must not skip a document itself, since a merge's output is only its inputs' newest versions (the question's option 3 was not taken), so it either places a winner or fails; `take` still asks the encoder for a length and never uses lone(d) in its place, since lone is an upper bound and the layout's bytes are the encoder's.
 
 **SEARCH-M10-11, roll-ups and the index lock** (held; L; its Build changes). Build 1.2.5. `indexRollup` is pure over S whole, all, and a lookup "the newest version of this key in the newer buckets", which the runner answers from §5.9's version table where CORE-M10-02 has landed and else from a key-to-version run built in storage from the newer buckets' doc tables and slots. Step 4's in-place rewrite leaves the task: the roll-up calls `indexMerge` with `extra` and `absorb` false for each promotion target. `rewriteWithout` (landed, SEARCH-M10-05) keeps its two other callers, a CLOSURE and a DROP. Expiry is judged at the push's signed time, for the trigger, the lock and the merge runner's "never on an expired bucket"; the lock renews at half its term. `indexer_search.go` schedules merges, roll-ups and backfills as planned. Step 5's coverage rows go into the runner's own head in the newest bucket through `indexPlanHead` with no document. Traps: read S, the newer buckets and all at one head version taken after the lock commits; a 409 that is not the lock's keeps the lock and reruns from the read; a promotion writes the target's manifest even when it had none; a/m's `rolled_through_day` and I-EVS-11 as 1.8 words them. Tests: 1.6's roll-up vectors (one with a promotion replaces "one removing an older newer-bucket entry"); FS-75's barriers; the promotion races.
 
@@ -970,6 +1043,8 @@ Traps: bases are chosen against the files as the push's base shows them, never a
 **§22.8, the model row.** `details/IndexMerge.tla` beside `IndexRollup.tla`: "own bases and the head rule, merges, promotion and the pin, with §11.14's rules as written as failing configurations".
 
 **protocol/INDEX-FORMAT.md** (SEARCH-M10-45 writes it). Entries: after "A diff's base version is below its version, and no key is in both of its sets": "A diff stands only in a slot. Its base is the full entry of its key at its base version in another file of the same writer and bucket: a slot that is not that writer's head, or a large entry; of two, the one in the file with the higher seq." Deltas: "Format 1's writers take every delta against the base itself, so nothing composes two deltas; the rule stands for readers of a later format." Slots and large entries: "A large entry's one entry is full." and, for "`coverage` is strictly ascending by ref_id", "`coverage` ascends by ref_id, then horizon false before true, with at most one row of each a ref." Shards gains `take` and the join as 1.2.4 has them, and the tie order. Small files: "`absorbed` holds a row for each writer with a watermark above 0; a manifest may list no shard." Times: "An entry's time is that of the content push that made its version; its bucket follows the signed time of the index push that carries it."
+
+**Amended 2026-11-12, QD-760.** §11.14, Merges, the output row: after "a next one opening at the cap" add ", which takes at least one, since extraction skips a document that alone would not fit a shard (sniff row)". The sniff row's own words are section 11.8's. protocol/INDEX-FORMAT.md, in the fix track's change: Entries, for "A key set encodes to at most 512 KiB, since a chunk past that is skipped." read "A key set encodes to at most 512 KiB, and a full entry's row and key set pass D6's shard test, since a document past either is skipped; a decoder refuses an entry past either, and a diff whose composed set fails the test under its own row is malformed, as a diff with no base is." Shards, Merges, after "takes again from there": "A new shard takes at least one row, since D6 keeps no document that alone would not fit; an implementation whose empty shard takes nothing has met an input off the rules and writes nothing."
 
 Nothing server-visible changes: no column, key, object family or proto field (I-18), and §2.8's evs-26 keeps its words but for the shape row's phrase above.
 
@@ -8610,7 +8685,7 @@ This section is designed on the recommendation of each.
 
 ## 11. Canonical text extraction and exact body sizes for search
 
-Status: complete (2026-11-10)
+Status: complete (2026-11-10; amended 2026-11-12, QD-760: 11.2.1, 11.2.3, 11.2.7, 11.4, 11.5, 11.6, 11.7 and 11.8, each place marked)
 
 Tasks held until complete: SEARCH-M10-31, SEARCH-M10-36.
 
@@ -8716,6 +8791,8 @@ SniffWindow      8,000 B   the bytes that decide text or binary (S2)
 TitleMax            80 B   a file's title (S4)
 FieldCut         1,024 B   normalized subject, from, to and title (N6)
 KeySetMax      524,288 B   a key set's encoding, past which its document is skipped (D6)
+ShardLone          128 B   what D6 counts for the header, doc_key, version and time of a shard holding one
+                           document; D6 reads ShardBody, 1,032,192 B, from 1.2.1 (amended 2026-11-12, QD-760)
 ```
 
 Tables, each part of extractor 1 or normalizer 1:
@@ -8786,9 +8863,27 @@ D5  A document's row is INDEX-FORMAT.md's: its locator the path's bytes, its sub
     of fields 1-3 before normalization, its title the title of S4 alone, never the path, each with N1 applied
     and then cut by that file's Trimming; its size the length in bytes of the whole file or message, the
     same on every chunk's row.
-D6  A document whose key set would encode past KeySetMax is skipped: it has no entry, and where its key was
-    indexed before, its version is a tombstone (§11.14's sniff row).
+D6  (amended 2026-11-12, QD-760) A document d is skipped when its key set would encode past KeySetMax, or
+    when d alone would not fit a shard: lone(d) > ShardBody, with
+        lone(d) = ShardLone + len(row) + dict(K) + n
+        row     d's row as its entry carries it (D5; ref_id included in ur/index), at most 2,048 B
+        K       d's key set, k_1 < ... < k_n; n counts the postings, one byte a key
+        dict(K) = vlen(B) + the sum over blocks j = 0 .. B - 1 of (3 + vlen(o_j) + vlen(64 x j))
+                  + the sum over i = 1 .. n of (6 - p_i), with B = ceil(n / 64); 1 when n = 0
+        p_i     0 when k_i is the first key of its block (i mod 64 = 1); else 2 when k_i and k_(i-1) have
+                the same two high bytes, 1 when only the same high byte, else 0
+        o_j     the sum of (6 - p_i) over the keys before block j, i <= 64 x j
+        vlen(x) the length of x as a VByte
+    A skipped document has no entry, and where its key was indexed before, its version is a tombstone
+    (§11.14's sniff row). The test reads the key set and the row and nothing else, so the device that
+    extracts, a reproducer and a decoder compute it alike.
 ```
+
+**What lone(d) is** (amended 2026-11-12, QD-760; question search-m10-10-document-past-a-shard, option 1). It is the encoded length, before its pad, of a shard that holds d alone (INDEX-FORMAT.md's Shards), with one part made a constant. The doc table's row, the dictionary in blocks of 64 and the postings are counted byte for byte: a key's entry is its flag byte, the 3 - p bytes its block's previous key does not share, and one byte each for a document count of 1 and a list length of 1; a block's index row is its first key, its entries offset o_j and its list offset 64 x j; each list is the one byte 0x01. The rest, which is the magic, the header and its length, the doc_key, the version and the time, moves with the bucket's day, the pad generation and the version, none of which the extracting device and a later merger share, so D6 counts it as ShardLone. In format 1 it is at most 95 B: 4 for the magic, 1 for the header's length, a header of at most 54 B with every number at its widest, 16 for the doc_key and 10 each for the version and the time. So a shard holding a kept document alone encodes at least 33 B under ShardBody, in a bucket and in all, whoever writes it and when, which is what 1.2.4's `take` needs of a new shard.
+
+Measured against the landed encoder (`indexShardBuilder.encodeUnpadded`) on 2026-11-12: dict(K) + n equals the encoder's dictionary and postings on 32 key sets (none, 1, 63, 64 and 65 keys, dense runs up to 150,000, steps of 256, 257, 3,000 and 65,536, and twenty random sets of up to 60,000 keys); the constant part is 60 B in an all shard, 66 B in a bucket shard as the tests build one and 95 B at the widest; and keys 0 to n - 1 under a 36 B row give lone = 1,032,192 at n = 199,608, kept, whose shard at the widest header is 1,032,159 B, and 1,032,197 at n = 199,609, skipped.
+
+What it skips. A key costs at least 5 B in a shard of its own, a 4 B entry and a 1 B list, and at least 1 B in a key set. A key set past KeySetMax has more than 392,000 keys (each gap takes one byte, and the gaps' further bytes number at most 132,104, since the gaps sum to at most 2^24), so it fails the shard test too: KeySetMax stays as the entry codec's cap and as the test that needs no pass over the keys. A document of up to 144,000 keys always passes (7 B a key and 9 B a block at most, under a 2,048 B row), and none of more than 206,438 does; between the two the prefixes its keys share decide. Under normalizer 1 few texts get there. A 1 MiB chunk of base64, the question's example, folds to 37 symbols (N3, N5) and has 50,572 keys, lone 262,774; random code points of the BMP, as noise read as UTF-16 gives, 196,095 keys and lone 1,025,349, kept. What passes the bound is a chunk of letters from many scripts with little repeated: letters drawn at random from the BMP's 1,380 two-byte and 47,549 three-byte letters give 327,272 keys in 1 MiB, a key set of 333,861 B and lone 1,703,722, and with ASCII letters and digits among them 470,197 keys in a key set of 475,931 B, still within KeySetMax. Such a document was kept before this amendment and no shard could hold it; it is now skipped, and is not searchable, as a document past KeySetMax already was not.
 
 D2, D3 and D4 are question search-m10-07-extractor-field-placement's option 1. A path's words are found through field 4. A message's attachment names sit in field 5 where their parts stand, so a phrase can span a name and the text beside it only as they are laid out in the message. Field 4's cut (N6) means a path's tail past 1,024 normalized bytes of title and path is not indexed.
 
@@ -9029,6 +9124,7 @@ a file with a NUL or ill-formed UTF-8 in       binary: no document; where it was
   its first 8,000 B                              §11.14's sniff row)
 ill-formed UTF-8 past 8,000 B                  U+FFFD a byte, at normalization (N1)
 a chunk whose key set passes 512 KiB           skipped (D6)
+a chunk that alone would not fit a shard       skipped (D6's lone(d); amended 2026-11-12, QD-760)
 ```
 
 #### 11.2.8 One pass, fixed memory
@@ -9218,7 +9314,7 @@ message                                           size        extract   normaliz
 - **Time.** Normalizing and collecting keys runs at 30 to 35 MB/s here and is 10 to 20 times extraction's cost on text; an attachment costs a scan for delimiter lines, about 6 GB/s. The rules of 11.2 add nothing that shows: the reference's plain loops for base64 and quoted-printable ran the worst case at 98 MB/s, three times faster than the normalizer that follows them. A phone taken at a fifth of this host's speed extracts and normalizes a typical message in under 10 ms, and the 50 MiB all-text message, the largest §15's limits admit, in about 6 s: 9 MB/s, against §11.15's floor of 5 on mobile.
 - **Memory, whole-value form.** 2.5 to 10 times the message, as measured: the message, each part decoded, each part again in UTF-8, the joined text. For a 50 MiB message that is over 130 MB, past even the daemon's 128 MiB budget (§18). So the one-pass form is what every writer runs once it lands, and the whole-value form stays for tests and the oracle.
 - **Memory, one-pass form.** 11.2.8's table summed: the line window 1 KiB, sixteen boundaries 16 KiB, the header line being read 16 KiB, one entity's three header values 48 KiB, the message's four joined values 64 KiB, a soft break's blank run 1 KiB and under 1 KiB for the rest: at most 150 KiB, whatever the message. That is all extraction adds. What dominates is not its own: the normalizer's buffers and the key collector, a 2 MiB bitmap and up to 1 MiB of touched words (SEARCH-M10-03, landed), with a document's key set beside them when its entry is built. One collector is live at a time (11.2.8, point 3), and whether a writer's peak fits §11.15's 4 MiB on the iOS app is FS-77's to measure, as before. The message itself stays in storage and is read once, front to back; a file is read twice when its title is not near its start (point 4).
-- **Index size.** Extraction sets how many documents a version has: one per MiB of extracted text. Reading every alternative roughly doubles a typical message's text, and changes its key set little, since both alternatives hold the same words. The most text a message gives is three times its size (R3): 50 MiB of 8-bit bytes that each decode to a three-byte character are 150 MiB of text and 150 documents, each skipped past 512 KiB of key set (D6), so at most 75 MiB of entries, which §11.14's document and sniff rows already allow.
+- **Index size.** Extraction sets how many documents a version has: one per MiB of extracted text. Reading every alternative roughly doubles a typical message's text, and changes its key set little, since both alternatives hold the same words. The most text a message gives is three times its size (R3): 50 MiB of 8-bit bytes that each decode to a three-byte character are 150 MiB of text and 150 documents, each skipped past 512 KiB of key set (D6), so at most 75 MiB of entries, which §11.14's document and sniff rows already allow. D6's shard test (amended 2026-11-12, QD-760) only lowers that: a kept document has at most 206,438 keys. The test is one pass over a key set the writer already holds, an addition and two comparisons a key, and it allocates nothing.
 - **Code size.** The reference table is about 32 KB packed (16.6 KB of names, 6.4 KB of values, offsets) on every leg that links the index, `sidecar_http` included. The standard library's copy of the same list stays linked while `mail_parse_text.go` calls `html`; if that file takes the extractor's decoder (11.7), the copy can leave wherever nothing else links `html`, and the change is then about nil.
 - **Padding.** A request is one size computation and one marshal of 4 KiB. A reply is at most 21 size computations and one marshal of 16 to 64 KiB, well under a millisecond. Z8 (d) is one more marshal and a comparison per body received. The rule gives up at most 131 B of a body, 0.8% of a step, and the gap costs one hit of one page only when a content lands on one value in 16,384.
 
@@ -9234,6 +9330,10 @@ a cut message           its last part runs to the end (B4); base64 decodes to it
                         (T2); a last '=' is a soft break (T3); an open tag or script drops the tail (X7)
 huge parts              time and memory as 11.4. An attachment of any size costs a scan. Text is chunked (D4),
                         and a chunk of noise is skipped (D6). The one-pass form never holds a part.
+a document past a shard (amended 2026-11-12, QD-760) a chunk within KeySetMax that alone would not fit a
+                        shard is skipped (D6): no entry, a tombstone where it was indexed before, and nothing
+                        alarms, since every device skips it alike. It is not searchable. Before the amendment
+                        it was kept, and the merge that met it failed closed, so its bucket stopped merging.
 a huge header           a field past 16,384 B is cut (H4, H6): its tail is not indexed. A header block of any
                         length is read, each line of no interest discarded as it arrives.
 unknown charset         bytes as they are (C2): ASCII words are found, and the rest reads as U+FFFD, which N5
@@ -9284,6 +9384,12 @@ entities.json  the 2,231 named references
 charsets.json  the 228 labels and their 40 encodings
 sizes.json     85 rows of (size, content): sized or not, the pad's length and its varint's; and 7 whole
                bodies, each with its content bytes and the SHA-256 of the body
+skip.json      (amended 2026-11-12, QD-760; the fix track writes it) D6's shard test: rows of a key set given
+               as runs (first key, count, step), a row's length, lone(d) and the verdict. The empty set; 1,
+               63, 64, 65 and 129 keys; each value of p at a block's first key and at its second; an offset
+               at each VByte width; keys 0 to n - 1 at n = 199,608 and 199,609 under a 36 B row (1,032,192
+               kept, 1,032,197 skipped), and the first again under a 37 B row, skipped; steps of 64, 256 and
+               65,536; and a set past KeySetMax, skipped
 ```
 
 - **Their form.** A vector's `input` is its parts in order, each `t` (text) or `x` (hex) and an optional repeat count `n`; its `path` is text, or `path_x` in hex when the path is not UTF-8. A value is `t`, `x`, or `len` and `sha256` when it is long. A document's `fields` are by number, an absent one being empty. Each file's `about` says the same.
@@ -9327,6 +9433,28 @@ FS-83's size cases stay as planned (0, 1 and 20 hits, TOO_BROAD, INVALID, CURSOR
 
 **Mutants.** Each of these, put back, must fail a vector, and the landed code is the proof that it does: the library's quoted-printable reader (`t-qp-long-line`, `t-qp-control-bytes`), its base64 (`t-base64-unpadded`), `html.UnescapeString` (`e-one-digit`, `e-overflow`, `e-two-code-points`), `strings.TrimSpace` and `strings.ToLower` (`h-value-nbsp-stays`, `h-name-ascii-case-only`), `strconv.Atoi` (`p-section-signed`), no HeaderMax (`h-cap-line`), no LineWindow (`b-line-one-past-window`), no digest default (`m-digest-default`). For sizes: a pad computed by trial that stops at a gap (`TestSearchReplyOnTheGap`), and a receiver without Z8 (d) (`TestSearchBodyIsItsOneEncoding`).
 
+**D6's shard test** (amended 2026-11-12, QD-760). The fix track's tests, the index's in the root and the oracle's in `sidecartest`, by different authors (D-TEST-14):
+
+```text
+skip.json, both sides           each implementation's own lone(d) and verdict equal every row's
+TestLoneShardBoundsTheEncoder   root: for skip.json's kept rows and generated sets, the encoder's length of a
+                                shard holding the document alone is lone(d) - 33 at the widest header, version
+                                and time, and less at every other; a kept document's lone shard is never refused
+TestADocumentPastAShardIsSkipped
+                                root, through prepare and the one-pass form: 1 MiB of letters drawn by a fixed
+                                generator from the BMP's two-byte and three-byte letters has a key set within
+                                KeySetMax and is skipped, in a file and in a message's body; 1 MiB of base64
+                                is kept; a version skipped where its key was indexed before is a tombstone,
+                                and one never indexed leaves nothing
+TestExtractOracleEqualsIndexOnCorpus
+                                gains the generated chunk and a kept one beside it, and compares which
+                                documents are skipped; TestHookIndexExtract returns that for each document
+FuzzIndexLoneShard              root: for any key set and row the codec accepts, lone(d) is at least 33 B above
+                                the encoder's length of the lone shard at a fuzzed header, version and time
+```
+
+Mutants: D6 with KeySetMax alone fails `TestADocumentPastAShardIsSkipped` and skip.json's boundary rows; ShardLone at 0 fails the 199,609 row; a p that does not reset at a block's first key, an offset counted in keys and a list offset of j each fail a named row.
+
 ### 11.7 Implementation notes, task by task
 
 Order: SEARCH-M10-42 and SEARCH-M10-43 at once, by different authors (D-TEST-14). SEARCH-M10-31 at once; it shares nothing with them. SEARCH-M10-44 after SEARCH-M10-42. SEARCH-M10-36 after SEARCH-M10-42 and SEARCH-M10-43, with its other needs. All are the data lane's. Entries for the three new tasks are in `.stack/plan/proposals/details-11-tasks.md`.
@@ -9362,6 +9490,28 @@ The 32 vectors the landed code fails are its list of work: `h-value-nbsp-stays`,
 **SEARCH-M10-43, the oracle's extractor to the canonical rules** (new; M; another author than SEARCH-M10-42's). `sidecartest/search_oracle_extract.go` is brought to 11.2 from this section and `INDEX-FORMAT.md`, sharing nothing with the index: its own base64, quoted-printable and reference decoders and its own generated copy of the table (`search_oracle_entities.go`). The 41 vectors it fails are the index's 32 and the 9 where it read differently: `x-script-end-name` (X5), `t-base64-nbsp-stops` (T2), `w-charset-with-space` (W2), `w-nbsp-between` and `w-cr-between` (W6), `p-sections-without-zero`, `p-sections-empty-fall-through` and `p-sections-repeat` (P3, P5), `b-unterminated` (B4). `searchOracleDocument` keeps its fields before normalization, for the cross check. It adds `search_oracle_conformance_test.go` and the cross-implementation fuzz target and corpus test of 11.6. Trap: the oracle may not take the index's table or decoders to save work; `TestSearchOracleImportsNoIndexCode` must keep failing on that.
 
 **SEARCH-M10-44, extraction in one pass** (new; L). Build 11.2.8 in new files (`evs_index_extract_stream.go` and beside it): a message is written to it front to back in pieces of any size, and it hands each finished document to the caller as its key set and row, never as text; a file is read through an `io.ReaderAt`. The whole-value functions stay, as the form the vectors and the oracle are compared with and the form the fuzz target holds this one to. Writers call the one-pass form on every host once it lands (SEARCH-M10-13 and SEARCH-M10-14, which problem 1 holds). Tests: every conformance vector, written in one piece, byte by byte and in random pieces; `FuzzIndexExtractStreamEqualsWhole`; a generated 50 MiB message of each of 11.4's shapes with the heap sampled at each document, its growth over the normalizer's own staying under 256 KiB whatever the message. Traps: hold a line break back until the next line is known not to be a delimiter; test a line against the boundaries outermost first; never buffer a part to learn its length; one key bitmap at a time, the 256 B overlap replayed into the next document.
+
+**The fix track for QD-760, extraction side** (amended 2026-11-12, QD-760). D6's shard test in the index, with the format file and the vectors. The oracle's half is a second track by another author (D-TEST-14), and 11.6's corpus case lands with whichever of the two is second. Section 1.7 has the merge side. Landed code that changes:
+
+```text
+evs_index_document.go       indexKeySetSkipped(keys) becomes indexDocumentSkipped(keys, row, settings): the
+                            key set's encoding against KeySetMax first, then lone(d) against ShardBody.
+                            IndexDocument.prepare builds and checks the row before the test, where it tested
+                            before the row existed; a skipped result still holds no key set and no row
+evs_index_lone.go           new: indexLoneShardByteCount(rowByteCount, keys, settings), D6's sum in one pass
+                            over the keys, with no call into the shard encoder
+evs_index_extract_stream.go its call at a finished document follows prepare's
+evs_index_settings.go       IndexFormatSettings gains ShardLoneByteCount, 128 (QD-702)
+sidecartest/search_oracle_normalize.go
+                            the oracle's own sum beside searchOracleKeySetByteCount, written from 11.2.3 and
+                            INDEX-FORMAT.md and sharing nothing with the index (the second track)
+protocol/INDEX-FORMAT.md    D6 as 11.2.3 has it, a Limits row for ShardLone, 11.2.7's row and 1.8's two
+                            sentences
+testdata/index/conformance/skip.json
+                            11.6's rows, with its `about`
+```
+
+Traps: the row's length is that of the row as its entry encodes it, in its own root, so `ur/index`'s 16 B ref_id counts; the sum runs over the key set as the collector gives it, ascending and distinct; KeySetMax is tested first, so a set of millions of keys costs no pass; a journal unit (1.2.6) holds what `prepare` returned, so a skipped document's unit is its tombstone or nothing, as before; and the format is not frozen until M10's exit, so no index outside tests holds an entry in the gap and nothing migrates.
 
 **Tasks not held that this touches.** SEARCH-M10-41's runner needs no change to reach the new directory; its report should name the 32-bit legs for it. SEARCH-M10-06 and SEARCH-M10-07 are drafted, and their extract files are finished by SEARCH-M10-42 and SEARCH-M10-43. SEARCH-M10-32 calls `searchRemoteBuildReply` with its own `head`, and answers every failure after parsing through `searchRemoteFailureReply`. Of the landed pads, the one that changes is `padSearchReply`, with SEARCH-M10-31. An index document's own pad, normalizer 1's one space each side of a field (`indexFieldPad`, N7), and a shard's keyed pad and a rewrite's zero pad (`evs_index_pad.go`) are as landed.
 
@@ -9401,6 +9551,8 @@ The 32 vectors the landed code fails are its list of work: `h-value-nbsp-stays`,
 
 **protocol/INDEX-FORMAT.md** (SEARCH-M10-42 writes it; `design-records` need not). Its Extractor 1 and Documents sections become 11.2.1's constants and tables and the rules D1-D6, S1-S4, H1-H6, W1-W6, P1-P6, C1-C3, M1-M6, B1-B4, T1-T3, X1-X7 and E1-E4 as written here, with 11.2.7's table. Normalizer 1 gains the clarifications under 11.2.2. "What this file adds" gains a row for each reading 11.9 lists.
 
+**Amended 2026-11-12, QD-760.** §11.14, Documents, the sniff row: for "a chunk whose key set would encode past 512 KiB, which nearly every query would match, is skipped" read "a chunk whose key set would encode past 512 KiB, which nearly every query would match, or that alone would not fit a shard by protocol/INDEX-FORMAT.md's D6, is skipped". §22.8, FS-79: for "chunks whose key set would pass 512 KiB" read "chunks whose key set would pass 512 KiB or that alone would not fit a shard". protocol/INDEX-FORMAT.md, in the fix track's change (11.7): D6 as 11.2.3 has it with lone(d)'s definition, a Limits row "ShardLone 128 B what D6 counts for the header, doc_key, version and time of a shard holding one document", and 11.2.7's added row.
+
 Nothing server-visible changes: no column, key, object family or proto field (I-18), and `search.proto`'s fields are sealed end to end.
 
 ### 11.9 Owner questions
@@ -9426,11 +9578,11 @@ Each is filed under `.stack/questions/`, and the design above is built on its re
 
 ## 12. Bridge compiler and NAT engine (§17)
 
-Status: complete (2026-11-11)
+Status: complete (2026-11-11; amended 2026-11-12, QD-761: 12.2.2, 12.2.3, 12.3, 12.5, 12.6, 12.7, 12.8 and 12.9, each place marked; the readers' half of the amendment is built on the recommendation of open question `details-amend-2-late-generation`, and what the amendment leaves to a sidecar that keeps filing is open question `details-amend-2-fold-holds`)
 
 Tasks held until complete: BRIDGE-M4-16, BRIDGE-M4-17, BRIDGE-M6-03, BRIDGE-M6-04.
 
-Models: `sidecar/sidecartest/model/details/BridgeNat.tla` (the engine against the host's NAT), `ShareSign.tla` (a share's signers against removal and revocation) and `BridgeFold.tla` (one body-level verdict at every reader), their configurations (`BridgeNat*.cfg`, `ShareSign*.cfg`, `BridgeFold*.cfg`) and `run-bridge.sh` beside them. New tasks: `.stack/plan/proposals/details-12-tasks.md` (BRIDGE-M4-23, BRIDGE-M4-24, ACL-M2-17). Questions filed: `.stack/questions/details-12-ledger-in-head.md`, `details-12-unfolded-verdicts.md`, `details-12-start-gate.md`, `details-12-alias-table-pin.md`, `details-12-ratchet-commit.md`. Questions this section answers, each as 12.9 says: `bridge-m4-09-other-client-rows`, `bridge-m4-11-rule-three-tags`. It builds on the answers already given to `plan-BRIDGE-share-pins` (QD-077), `plan-BRIDGE-subject-resolution` (QD-161), `plan-BRIDGE-gate-row-prefixes` (QD-004, QD-003), `plan-BRIDGE-keyless-window-parent` (QD-184, as section 4 replaced it), `plan-BRIDGE-small-readings`, `plan-BRIDGE-windows-tun-driver` (QD-125), `g0-density-share-seal-format` (QD-108), `bridge-m2-01-egress-mode-field` (QD-630) and `bridge-m2-01-multi-use-approval` (QD-631). Section 4 stands as written: this section fills the compile its `Compile` step 4 calls and the engine its sink is, and changes neither.
+Models: `sidecar/sidecartest/model/details/BridgeNat.tla` (the engine against the host's NAT), `ShareSign.tla` (a share's signers against removal and revocation) and `BridgeFold.tla` (one body-level verdict at every reader), their configurations (`BridgeNat*.cfg`, `ShareSign*.cfg`, `BridgeFold*.cfg`) and `run-bridge.sh` beside them. Amended 2026-11-12, QD-761: `BridgeVoid.tla` (a body sealed to a generation that does not form), with `BridgeVoid*.cfg` and `run-bridgevoid.sh`. New tasks: `.stack/plan/proposals/details-12-tasks.md` (BRIDGE-M4-23, BRIDGE-M4-24, ACL-M2-17). Questions filed: `.stack/questions/details-12-ledger-in-head.md`, `details-12-unfolded-verdicts.md`, `details-12-start-gate.md`, `details-12-alias-table-pin.md`, `details-12-ratchet-commit.md`. Questions this section answers, each as 12.9 says: `bridge-m4-09-other-client-rows`, `bridge-m4-11-rule-three-tags`. It builds on the answers already given to `plan-BRIDGE-share-pins` (QD-077), `plan-BRIDGE-subject-resolution` (QD-161), `plan-BRIDGE-gate-row-prefixes` (QD-004, QD-003), `plan-BRIDGE-keyless-window-parent` (QD-184, as section 4 replaced it), `plan-BRIDGE-small-readings`, `plan-BRIDGE-windows-tun-driver` (QD-125), `g0-density-share-seal-format` (QD-108), `bridge-m2-01-egress-mode-field` (QD-630) and `bridge-m2-01-multi-use-approval` (QD-631). Section 4 stands as written: this section fills the compile its `Compile` step 4 calls and the engine its sink is, and changes neither.
 
 ### 12.1 The problem
 
@@ -9649,7 +9801,7 @@ Encoding, which every writer on every leg must give alike, since the manifest ha
 
 **Rule tags.** `EgressDecision.RuleTag` stays the first 8 bytes of SHA-256(subject_id || rule_id). Rule 3's rule_id becomes five bytes, 0x03 and the hosted address's IPv4, so an old address's drain end closes that address's flows alone (bridge-m4-11-rule-three-tags, option 2); rules 4 and 7 keep their one byte. A share flow's subject_id is its `share_id` and its rule_id is five bytes, 0x53 and u32be(target index), since X's host cannot list Y's subjects. Every tag is still enumerable from the state without tracking flows.
 
-**Settings.** `BridgeComponentSettings` (root; `DefaultBridgeComponentSettings()` fills them): `CompileDelay` 100 ms, `CompileMinInterval` 1 s, `CompileRetryInterval` 5 s doubling to 5 min, `CatchUpAlarmTimeout` 30 s, `WindowDelegationMaxLifetime` 168 h, `BindingRefreshInterval` 6 h, `BindingRetainTimeout` 7 days, `BindingMaxCount` 16 a subject, `ShareRenewInterval` 1 h, `ShareRenewBelow` 72 h, `ShareCertLifetime` 168 h, `ShareTableRefreshInterval` 1 h, `AcceptRetryCount` 3, `AutoAddressEnabled` false (plan-BRIDGE-small-readings #18). `BridgeLedgerSettings`: `ChunkByteCount` 64 KiB, `UnfoldedBodyMaxByteCount` 4 MiB (the opened bodies of the unfolded statements a compile holds; past it the compile refuses with `bridge_alarm` `ledger_over_budget` and the state stands), `RuleShardRowCount` 262,144.
+**Settings.** `BridgeComponentSettings` (root; `DefaultBridgeComponentSettings()` fills them): `CompileDelay` 100 ms, `CompileMinInterval` 1 s, `CompileRetryInterval` 5 s doubling to 5 min, `CatchUpAlarmTimeout` 30 s, `WindowDelegationMaxLifetime` 168 h, `BindingRefreshInterval` 6 h, `BindingRetainTimeout` 7 days, `BindingMaxCount` 16 a subject, `ShareRenewInterval` 1 h, `ShareRenewBelow` 72 h, `ShareCertLifetime` 168 h, `ShareTableRefreshInterval` 1 h, `AcceptRetryCount` 3, `AutoAddressEnabled` false (plan-BRIDGE-small-readings #18). `BridgeLedgerSettings`: `ChunkByteCount` 64 KiB, `UnfoldedBodyMaxByteCount` 4 MiB (the opened bodies of the unfolded statements a compile holds; past it the compile refuses with `bridge_alarm` `ledger_over_budget` and the state stands), `RuleShardRowCount` 262,144. Amended 2026-11-12, QD-761: `BridgeLedgerSettings` gains `UnformedVoidWait` 24 h and `GenerationFormGrace` 1 h (12.2.3's void at the fold). Every reader of a network reads the grace's default, as it does the shard width, since a verdict rides on it; a wait below the grace plus 30 min is raised to that floor when the settings are read, so with the default grace the lowest wait is 90 min.
 
 #### 12.2.3 The ledger: judging, the fold and its check
 
@@ -9660,6 +9812,9 @@ JudgeBridgeBody(before, e at k)                  -- ConfigLogSettings.BridgeBody
   entries below k applied by their verdicts (section 5.2.3's Reapply)
   body := OpenConfigBody(e.sealed_body, keys)
      its generation is not held   -> Unopened{generation}
+     its generation's GenRotate is signed more than GenerationFormGrace after e's time
+                                  -> Refused{no such generation}: void, and no alarm (below; amended
+                                     2026-11-12, QD-761)
      the seal or padding fails    -> Refused{seal}, which is the reader's alarm
   body.approval is unset          -> Standing        -- whether a standing grant covers it is the compile's (12.2.4)
   else  facts, err := before.CheckBridgeApproval(e, body, body.approval)   -- as landed, on `before` itself: action,
@@ -9694,14 +9849,16 @@ a rule id's states in the ledger (a route or a map)
   none -> pending              its first filing took effect at id level and its body's generation is not held
   none, pending -> active      the body opens and passes its rules (Standing or Approved); in force only while
                                12.2.4's check holds at the state compiled
-  none, pending -> void        the body does not open, breaks its rule, or its approval is Refused
+  none, pending -> void        the body does not open, breaks its rule, or its approval is Refused; or a fold
+                               finds its generation unformed (below; amended 2026-11-12, QD-761)
   reserved -> void             a filing of the id by a signer the withdrawal binds
   active -> active             a filing of the held id: weight, site_id and drain_seconds only
   active -> withdrawn          a BridgeWithdraw by its owner or an admin: reset at once, or draining for
                                max(drain_seconds, 600 s)
   withdrawn, reserved -> none  the fold whose time passes retain_until_ms drops the row
   void -> void                 for the network's life
-  unfolded -> frozen           a fold writes the row; pending is never frozen
+  unfolded -> frozen           a fold writes the row; pending is never frozen: a fold stops below it, or
+                               freezes it void as unformed (amended 2026-11-12, QD-761)
 ```
 
 `CheckBridgeApproval` changes in one way: it judges on its receiver, the state the log hands it, where the landed one asks `StateAt(statement.N - 1)`. `ErrBridgeApprovalUnverifiable` goes, and with it `BridgeLedgerReader.Approvals` and every verdict a reader kept for itself.
@@ -9719,10 +9876,17 @@ S(k-1) is R_b(k-1) for k above b (section 5.2.2), so the last two lines are one 
 ```text
 FoldBridgeLedger(T(ft'), the writer's state at its tip, ft) -> T(ft)          -- inside ConfigWriter's plan, at a base
   ledger := OpenBridgeLedger(T(ft'), the state's unfolded statements at or below ft, state, keys)
-  an Unopened filing at k stops the fold at k-1: a writer never freezes what it could not open. A config writer
-     holds every generation, so this is a broken delivery: it alarms config_key_waiting and folds to k-1, or
-     keeps the previous fold where section 5's rule (a fold is the previous one or at least the previous base)
-     does not allow k-1
+  an Unopened filing at k, sealed to generation g, is one of two things (amended 2026-11-12, QD-761):
+     unformed   the plan's whole read of gkm names G as the config repo's newest generation, the writer holds
+                the key of every generation 1..G, g > G, and the entry at ft, the writer's tip, was sequenced
+                at least UnformedVoidWait after the entry at k. The fold freezes it void, as a Refused body
+                (Refused{no such generation}), and goes on
+     waiting    anything else: gkm names g and its key has not reached the writer, the read was not whole, or
+                the wait has not passed. It stops the fold at k-1: a writer never freezes what it may still
+                come to open. A config writer holds every generation gkm names, so a named one it lacks is a
+                broken delivery: it alarms config_key_waiting and folds to k-1, or keeps the previous fold
+                where section 5's rule (a fold is the previous one or at least the previous base) does not
+                allow k-1
   rows   the ledger's addresses, live and the tombstones still holding at time_ms; its rules, active, void, withdrawn
          and reserved, a withdrawn or reserved row leaving once time_ms passes retain_until_ms; its egress specs; its
          aliases, a released one leaving at its drain's end
@@ -9737,12 +9901,34 @@ CheckBridgeLedgerFold(head, previous head, my state at b-1) -> ok | mismatch | u
      mine := FoldBridgeLedger(the previous head's T(ft'), my state, ft)
      every file's hash and the manifest equal   -> ok
      any differs                                -> ErrConfigHeadMismatch: a FORK, as a rows mismatch is
-     I hold an Unopened filing at or below ft   -> unchecked: I take the head's rows, as a new device does
+     I hold an Unopened filing at or below ft   -> unchecked: I take the head's rows, as a new device does.
+                                                   A checker voids nothing as unformed: that is the writer's
+                                                   alone (amended 2026-11-12, QD-761)
   a device that starts at b takes the rows; so does a VPN component, which is a rows-only verifier with a reader
   key and checks no compile (section 4.2.1), its app's sidecar role checking this one whenever it runs
 ```
 
 A verdict frozen at a fold is the one every reader standing under the previous base held, because the writer folds the statements its own state holds, judged under that base. A writer cannot freeze another: the readers standing there fork on it. And a frozen verdict never changes: a later fold copies the row.
+
+**A body sealed to a generation that does not form** (amended 2026-11-12, QD-761; question `bridge-m2-02-unopened-generation-stall`, option 2). A sealed body names its generation in its first 8 bytes, which the id level reads and does not bound. Any standing sidecar can file a route sealed to a generation that never forms. It takes effect at id level, no writer can ever open it, and as first written every later fold stopped below it, so that once §7.9's 4,096 entries had followed it no base could be published at all. The owner's answer bounds the stop at the fold: such a body is frozen void. That is the one frozen verdict the readers standing there did not hold, since to them the filing was pending, so the rule has two halves, one at the writer and one at every reader that holds keys.
+
+*The writer's half.* Inside a plan, after it has applied its tip, the writer reads gkm's generation listing for the config repo's group to its end (`SyncRepo`, as a key delivery does). The read counts when it is whole, no fork is recorded at the generation pin, and the writer holds the key of every generation it names, 1 to G. A filing at k that the writer holds Unopened, sealed to g > G, is then unformed once the entry at the writer's tip was sequenced at least `UnformedVoidWait` after the entry at k, and the fold freezes it void.
+
+- When the wait starts: at the filing's own entry, in the log's time, which is api's sequencing time (`ConfigState.TimeMs`). It is read against the time of the writer's tip entry and never against a device's clock, so the fold stays a function of its inputs, and a writer that restarted, or that came to write only now, voids exactly what one that ran throughout would.
+- What resets it: nothing. The wait is no timer a writer keeps. A rotation that forms a generation below g, a re-form, another writer and a restart leave it where it was, because each plan asks afresh whether g is above everything gkm names. This is how the section reads the decision's "has held every generation the config repo's gkm head names for a set time": the holding is tested at the plan, and the time is the filing's age. A timer on the holding itself would start again at every rotation, which the same sidecar can cause 60 times an hour (§10.6's rate row), and once it had run it would void a filing the moment it arrived, before any reader could tell a generation that will never form from one about to (the readers' half needs that margin).
+- What defers it: a read that failed or was cut short; a generation gkm names whose key the writer lacks, which is the broken delivery `config_key_waiting` alarms; g at or below G, where the writer waits for the key and then judges the body like any other; and a tip not yet the wait past k. A filing is never void at the writer for a key that exists and has not reached it.
+
+*The readers' half.* `JudgeBridgeBody`, and every other open of a bridge body by its generation (the ledger's own, for a BridgeEgress, a BridgeAlias and the rest), refuses a body whose generation the reader holds when that generation's GenRotate is signed, by its `time_ms`, more than `GenerationFormGrace` after the time of the entry that carries the body: Refused{no such generation}, void, with no alarm, since no seal failed. The time is the one every key carries (`EvsRepoKey.Time`). An honest filer seals to a generation it holds; gkm took that generation's claim within 10 min of its own clock (§10.6's time row) before the filer could hold the key, and the filing was sequenced after that. So an honest body's generation is signed before its entry, give or take the two servers' clocks, and the rule never meets it: the grace, 1 h, is well above those.
+
+*A checker.* `CheckBridgeLedgerFold` voids nothing as unformed. A reader that holds an Unopened filing at or below the head's fold takes the head's rows unchecked, as it did: it lacks the key to say more. A reader that holds the generation judges the filing itself, by the readers' half, and compares.
+
+*If the generation forms after the void.* The row is frozen and the id stays void for the network's life, as any void id does, and a later filing of it is void. A reader that comes to hold g and judges the filing itself, because it stands under an older base or holds the filing in a base's tail, reaches the same verdict. The writer's read named no g when its tip was already `UnformedVoidWait` past the filing, so gkm took g's claim after that read, and gkm holds a claim's time within 10 min of its clock. So g's GenRotate is signed later than the filing's entry by at least the wait less those 10 min and the servers' clock difference, which is above `GenerationFormGrace` whenever the wait is at least the grace plus 30 min, the floor 12.2.2 sets, and api's and gkm's clocks agree within 20 min. The reader therefore refuses the body as the fold did, and its check passes. This is what stops a sidecar that seals a body under a key of its own making, waits for the void and then claims g with that key (a rotator makes its generation's key): without the readers' half every reader that gained g would hold the rule active and fork on the base (`BridgeVoidTwin-NoGrace`). A requester whose body was honest has nothing to recover here, since an honest body names a generation that exists; one that was early by its own error files again.
+
+*Two writers.* A base is one writer's (section 5.2.4's 409), so the first base that folds past k decides, and a void row has one encoding whoever writes it. A writer whose wait is longer, or whose own read was not whole, stands under the previous base as any reader does: it holds the filing Unopened, takes the rows unchecked and folds on from them. Two writers that would both void write equal files. Because a wait below the floor is raised to it, no writer voids inside the grace (`BridgeVoidTwin-WaitInsideSkew`).
+
+*What changes in `FoldBridgeLedger`.* It stays pure. `BridgeLedgerReader` gains `FormedThrough`: G from the plan's read, or 0 where the read does not count. A checker, a compile and every other open pass 0. With it above 0, the fold treats an Unopened statement sealed above it, whose entry is at least the wait before the entry at the fold asked, as Refused, and does so in both of its opens, the one at the fold asked and the one at the fold it reaches. `BridgeLedgerFold.Stopped` is then the first statement still waiting, and nil when none is; a new `BridgeLedgerFold.Voided` lists the statements at or below the fold reached that this fold froze void as unformed, none where the fold stayed, for the writer's log line `config_key_void`. Both lines name the statement's generation and its signer. `BridgeBodyJudge` gains the read, `FormedThrough func() uint64`, which the `BridgeFold` seam of `ConfigWriter` calls once a plan.
+
+*What is left.* One such filing holds the fold for the wait and no longer. A sidecar that keeps filing them holds it for as long as it keeps on, which is less than the answer's words promise and is asked of the owner (12.9, `details-amend-2-fold-holds`). The fold passes a filing only once it is the wait old, and section 5's rule lets a fold stop short of its tip only at or above the previous base. So a plan moves the fold only when no such filing younger than the wait sits at or below the previous base (`BridgeVoidReach-Held`), and filings an hour apart keep one there unless a network goes nearly the whole wait without a base. Until 4,096 entries have followed the fold nothing else waits on it: bases land with the fold where it was, and statements take effect at their positions. After that no base lands (§7.9's tail cap) until every such filing under the last base is the wait old; then one base lands, its fold short of its tip by less than the wait, where the entries since then fit the cap, and the cycle begins again. A network that sequences more than 4,096 entries inside the wait lands no base while the filings continue. What ends it is the filer's revocation, a statement that needs no base: the first plan whose tip is the wait past the filer's last filing folds through its tip. `config_key_waiting` and `config_key_void` name the filer for that, and an operator who wants the windows shorter lowers `UnformedVoidWait` toward its floor. And a gkm that hides a formed generation from the writer's listing while it delivers it to others makes those readers fork on the base, which is the alarm, as for any head they cannot reproduce (`BridgeVoidTwin-StaleRead` is that fork, with a listing the writer remembered in place of one gkm cut short). By failing the read gkm can delay a void and do no more.
 
 Three smaller rules complete the ledger. A rule's approval budget is counted over rows and entries by `approval_id`, so it needs no table of its own: a row that names a decision keeps the count for as long as the rule lives, and once every rule of a decision has left the rows the decision's `not_after` has passed, which refuses any later filing under it. A void id stays for the network's life (`retain_until_ms` 0), since the entry that filed it is in the head's folds as long. And a daemon that gains a generation late judges the filings it held `Unopened` through `ConfigLog.RejudgeBridgeBodies`, which hands the judge S(k-1) from `StateAt` for an entry above the base and, for a tail entry, rebuilds R_b(k-1) from the retained base rows; a VPN component needs no such call, since every compile restores its judge at the base with the keys it then holds.
 
@@ -10106,6 +10292,18 @@ FoldFaithful      a fold's rows are the ledger the readers standing under the pr
                   the same fold and forks on a difference (CheckBridgeLedgerFold)
 FoldedStays       a verdict, once folded, is the same in every later fold
                   why: a fold copies the rows it does not change
+VoidsAgree        (amended 2026-11-12, QD-761) a filing a fold froze void as unformed is void at every reader that
+                  comes to hold its generation, so none forks on that base and none holds the rule active
+                  why: the writer voids only above every generation a whole read of gkm names, and no sooner than
+                  UnformedVoidWait after the filing's entry; a generation claimed after that read carries a time
+                  gkm held within 10 min of its clock, which is more than GenerationFormGrace after the entry;
+                  and every reader refuses a body whose generation was signed that late
+HonestValid       (amended 2026-11-12, QD-761) no body sealed to a generation that existed when it was filed is
+                  refused for its generation's time
+                  why: the grace is above gkm's bound on a claim's time and the servers' clocks together
+Bounded           (amended 2026-11-12, QD-761) a writer that holds every generation gkm names, publishing when
+                  every filing sealed above them is UnformedVoidWait old at its tip, folds through its tip
+                  why: its only Unopened filings are those, and the fold freezes each void
 CompileEqual      CompileBridgeState returns the same bytes for the same view and local facts, on every leg, at any
                   GOMAXPROCS, on a daemon and in a VPN component
                   why: 12.2.4's table, and one code path over LedgerFile
@@ -10211,6 +10409,41 @@ What the twins are. Three are the code or text as it stood: `RevokeAtZero` is th
 
 What the reach runs are. `Opens` and `Member` show the designs admit what they should. `RemovedInBound` is §17.9's accepted bound: a removed sidecar is admitted, inside the bound, until a later generation's cert reaches the host. `HolderRemoved` is its other accepted row: a device that held the ShareKey and left can certify until X revokes the share, which is why 12.2.8 raises `share_holder_removed`. `Turn` is the one case in which a verdict differs from the one judged at its entry's position (12.2.3), stated so the owner can weigh it (12.9).
 
+**The void at the fold** (amended 2026-11-12, QD-761). `BridgeFold.tla` has no generations, so a fourth model, `BridgeVoid.tla`, holds the amended rule; `BridgeFold.tla` and its runs stand as they are. Its log holds filings and bases with the times api sequenced them at. A filing is sealed to a formed generation by an honest filer, to one that never forms with bytes no key opens, or to the next generation under a key the filer made and may later claim that generation with. gkm forms generations in order, each by an honest rotator or by that filer, with a GenRotate time within `Skew` of its clock. Two readers, both writers with waits of their own, judge filings, publish bases and check each other's: one stands at the tip, applying each entry as it is sequenced, the other may fall behind in the log, and either may be behind in the generations it holds. `BridgeVoid-Mirror` gives each the other's wait. It leaves out what `BridgeFold.tla` holds (the approval's verdict, a device that starts at a base) and rule ids, each filing being its own. It checks `NoFork` (no checker that could compare finds a base's rows other than its own verdicts), `Equal`, `FoldedStays`, `NoPendingRow`, `Bounded`, `VoidsAgree` and `HonestValid`.
+
+Runs, TLC at the owner's jar (master d8fb231), breadth-first, 4 workers, on 2026-11-12 on a machine carrying five build lanes (load average near 120). `run-bridgevoid.sh <track>` runs every configuration and prints a verdict line for each.
+
+```text
+configuration                        bounds                                              result
+                                                                             distinct states  depth  time
+BridgeVoid.tla
+BridgeVoid                           4 entries, 2 generations and one that never forms, times 0 to 2, waits of 1
+                                     and 2, grace 0, no skew
+                                     pass: TypeOK, NoFork, Equal, FoldedStays, NoPendingRow, Bounded, VoidsAgree,
+                                     HonestValid                                   1,680,122     18  2 min 52 s
+BridgeVoid-Mirror                    the same with the waits the other way round
+                                     pass: the eight                               1,682,524     18  2 min 33 s
+BridgeVoid-Skew                      3 entries, times 0 to 3, waits of 3, grace 1, GenRotate times within 1
+                                     pass: the eight                                 830,293     16  55 s
+BridgeVoidTwin-Landed                Bounded violated, an 8-state trace
+BridgeVoidTwin-NoGrace               NoFork violated, a 14-state trace
+BridgeVoidTwin-NoWait                NoFork violated, a 10-state trace
+BridgeVoidTwin-StaleRead             NoFork violated, a 13-state trace
+BridgeVoidTwin-CheckerVoids          NoFork violated, a 13-state trace
+BridgeVoidTwin-WaitInsideSkew        the design with a wait of 2 against a grace of 1 and a skew of 1: VoidsAgree
+                                     violated, a 10-state trace
+BridgeVoidReach-Voids                the design, with "no fold voids above gkm's newest": violated, a 7-state trace
+BridgeVoidReach-LateForm             the design, with "no voided body's generation forms under its key": violated,
+                                     a 10-state trace
+BridgeVoidReach-Unchecked            the design, with "no checker takes rows unchecked": violated, an 8-state trace
+BridgeVoidReach-Held                 the design at 4 entries, 1 generation and waits of 2, with "every filing past
+                                     its wait is folded": violated, a 10-state trace
+```
+
+Each twin and reach run took 15 s or less and stopped within 408,000 states, at 3 entries but for `Held`'s 4; the trace lengths are those of the run recorded. No larger run was started: the designs at 4 entries are what finishes in about 3 min each on this host under its load. A first shape with a third reader was stopped unfinished and is not evidence.
+
+What these twins are. `Landed` is `FoldBridgeLedger` as it stood: the fold stops below a filing no key will open, however old. `NoWait` voids at once, and the generation is then claimed inside the grace, so a reader that gains it judges the body. `NoGrace` drops the readers' half: the filer claims the generation after the void under the key it sealed with, and a reader that was behind forks. `StaleRead` voids on a listing the writer remembered, a body sealed to a generation formed since, which a reader holding that generation judges valid. `CheckerVoids` has a checker apply the wait to a filing it lacks the key of, and fork on a row the writer judged with the key. `WaitInsideSkew` is the settings floor: a wait not above the grace and gkm's skew together lets a claim made just after the void carry a time inside the grace. The reach runs show the design does void, does meet a generation that forms afterwards under the filing's key, with `NoFork` and `VoidsAgree` holding in the design runs over the same traces, and does have a checker take rows unchecked. `Held` is the limit 12.2.3 states under What is left: a fold stays below a filing past its wait while a younger one sits under the previous base, which is why `Bounded` asks that every such filing be past its wait.
+
 ### 12.4 Cost
 
 Figures marked estimate are computed from the formats and from costs other sections measured; nothing here was measured on a device, and BRIDGE-M4-16's benchmark and SDK-M8-15's cell replace them.
@@ -10277,7 +10510,23 @@ shares
 ```text
 a body's generation is not held     the filing is pending: its id is held, nothing of it is active, Waits names the
                                     generation, and the first (re)application with the key judges it. Older bodies
-                                    compile. A writer does not fold past it
+                                    compile. A writer does not fold past it while gkm names the generation, nor
+                                    for UnformedVoidWait where it does not (amended 2026-11-12, QD-761)
+a body's generation does not form   (amended 2026-11-12, QD-761) pending for UnformedVoidWait from its entry. Then
+                                    the first base by a writer whose whole read of gkm names no such generation
+                                    freezes it void and folds on, logging config_key_void; a checker that lacks
+                                    the generation takes the rows unchecked. The id is void for the network's life
+its generation forms after the      (amended 2026-11-12, QD-761) the row stays void. A reader that gains the
+void                                generation refuses the body too, its GenRotate being signed more than
+                                    GenerationFormGrace after the entry, so its check passes and nothing opens
+a sidecar keeps filing bodies       (amended 2026-11-12, QD-761) the fold holds where it was while one younger than
+sealed to unformed generations      the wait sits at or below the previous base. Bases land with that fold until
+                                    4,096 entries follow it, then none until those under the last base are the
+                                    wait old. config_key_waiting names the filer, and its revocation ends it one
+                                    wait after its last filing (12.2.3; question details-amend-2-fold-holds)
+gkm hides a formed generation       (amended 2026-11-12, QD-761) the writer voids a body others can open, and each
+from the writer's listing           reader holding the generation forks on that base, which is the alarm. A read
+                                    that fails, or names a generation the writer lacks, only delays a void
 a body's seal does not open         void, and bridge_alarm state_unverified naming the entry; never a fallback
 a ledger file fails its hash,       the compile fails and changes nothing: the state in force stands, the sink is not
 or the manifest names none          called, bridge_alarm state_unverified; a daemon forks on the base (FoldFaithful's
@@ -10340,6 +10589,29 @@ root, the ledger      TestBridgeLedgerEqualFromAnyBase (generated logs with base
                       TestALateGenerationJudgesThePendingFiling, TestBridgeLedgerFilesAreDeterministic (byte-equal
                       across runs, GOMAXPROCS and legs), TestRuleShardsWiden, FuzzBridgeLedgerFold (a fold of a
                       random log equals the ledger of that log opened whole)
+root, the void at     (amended 2026-11-12, QD-761; BRIDGE-M4-23's fix track) TestAnUnformedFilingIsVoidedAfterTheWait
+the fold              (the fold reaches the tip, the row is void, Voided names it and Stopped is nil; for a route,
+(BRIDGE-M4-23)        a map, an egress and an alias), TestAnUnformedFilingWaits (a tip one millisecond short of
+                      the wait: stopped at k-1, config_key_waiting), TestANamedGenerationIsNeverVoided (g at or
+                      below FormedThrough with its key not held, at any age), TestNoVoidWithoutAWholeRead
+                      (FormedThrough 0: a failed read, a cut listing, a fork at the pin, a named generation not
+                      held), TestACheckerVoidsNothing (CheckBridgeLedgerFold with an Unopened filing at or below
+                      the fold is unchecked whatever its age, and takes a head's void),
+                      TestALateGenerationIsNoGeneration (a body whose generation is signed one millisecond past
+                      the grace after its entry is Refused by the judge and by each of the ledger's own opens,
+                      and one at the grace is judged; a reader that gains the generation after the void folds
+                      the head's files byte for byte, and RejudgeBridgeBodies leaves the frozen row),
+                      TestALaterFilingOfAVoidedIdIsVoid,
+                      TestTwoWritersFreezeOneVoid (waits of 24 h and 48 h, each writer first: one base folds past
+                      k, the other takes it unchecked, and where both would void their files are byte-equal),
+                      TestTheVoidIsMeasuredInLogTime (a writer restarted, and one whose clock is a day off, fold
+                      as the first did), TestTheFoldHoldsUnderAYoungerFilingBelowTheBase (BridgeVoidReach-Held's
+                      trace: the fold stays, Stopped names the younger filing and its signer, Voided is empty),
+                      TestTheFoldReachesTheTipAWaitAfterTheLastFiling (filings 6 h apart with bases between,
+                      then none: the first plan whose tip is the wait past the last folds through its tip and
+                      voids them all), TestBridgeLedgerSettingsFloorTheWait; TestAnUnopenedFilingStopsTheFold
+                      stays, for a generation gkm names; FuzzBridgeLedgerFold gains FormedThrough and entry
+                      times
 root, the compiler    golden states in testdata/bridge/compile/, byte-equal across runs and GOMAXPROCS; the plan's
 (BRIDGE-M4-16)        cases (§8.5's no-document rows, D-BRIDGE-8, a route in force only once approved or covered, a map
                       onto a listener or an overlay address refused, a name equal to a published host omitted, a
@@ -10370,7 +10642,7 @@ signers               (the stale holder of 12.1's E.1, a barrier between its rea
                       TestSeedsNeverLeaveTheSigner (a capture of BridgeState, every device RPC message and every event)
 ```
 
-Schedule rows. FS-56 gains the engine's schedules, each a twin of `BridgeNat.tla` on real code with barriers: a close held after its publish while a flow registers and dials; two publishes before the first close; a compile finishing below a held denial; a restart between a judged denial and its compile; a provider's first frame against the hook's installation. FS-38's share rows gain: a renewal racing a rotation at the write gate; a removed sidecar with an unexpired cert before and after a later generation's cert reaches the host, and after the host restarts; a ShareCert over 7 days out; a share revoked between states. FS-14 gains a bridge filing across a fold at a new device, a daemon and a VPN component, with equal `Digest`s, and a base that turns an unfolded verdict, at all three alike. §22.5's §17 row gains the compile's benchmark and "no compile reads a fold file". Each twin of the three models is one of these schedules, and each accepted reach trace is one the code must also reach, with its alarm where it has one.
+Schedule rows. FS-56 gains the engine's schedules, each a twin of `BridgeNat.tla` on real code with barriers: a close held after its publish while a flow registers and dials; two publishes before the first close; a compile finishing below a held denial; a restart between a judged denial and its compile; a provider's first frame against the hook's installation. FS-38's share rows gain: a renewal racing a rotation at the write gate; a removed sidecar with an unexpired cert before and after a later generation's cert reaches the host, and after the host restarts; a ShareCert over 7 days out; a share revoked between states. FS-14 gains a bridge filing across a fold at a new device, a daemon and a VPN component, with equal `Digest`s, and a base that turns an unfolded verdict, at all three alike. Amended 2026-11-12, QD-761: FS-14 also gains a filing sealed to a generation that never forms, void at the fold after the wait at all three with equal `Digest`s, and the same filing with its generation claimed after the void under the filing's key, a daemon that was behind taking the base with no fork; each twin of `BridgeVoid.tla` is one of 12.6's tests above. §22.5's §17 row gains the compile's benchmark and "no compile reads a fold file". Each twin of the three models is one of these schedules, and each accepted reach trace is one the code must also reach, with its alarm where it has one.
 
 Gates. `BenchmarkCompile` at 5,000 devices within section 4.4's 200 ms on the reference phone class and its heap within 12.4's working set, from M4; SDK-M8-15's cell samples the same compile inside the admission cap at M8. The ios_extension leg's size row counts the ledger and the compiler from M4 (section 4.2.3 estimated them at 350,000 B).
 
@@ -10404,6 +10676,28 @@ check/testdata/ios_extension_leg.txt   gains bridge_statement_rules.go, bridge_l
 ```
 
 The three `config_*` changes are seams of a few lines each in core-lane files; the orchestrator schedules the task when that lane is not in them. Traps: the fold must be written by the same streaming merge the compile reads with, never from a decoded whole, or a writer on a phone cannot fold; the manifest's hashes are over the files' plaintext as the head holds them; a fold whose bridge part is empty writes no manifest, and a reader takes an absent manifest as an empty ledger only when the head's fold records hold no bridge statement at or below `folded_through` (a full reader checks that; a device that starts there cannot, and takes it as it takes rows).
+
+**BRIDGE-M4-23's fix track for QD-761** (amended 2026-11-12, QD-761). 12.2.3's void at the fold and its readers' half. Landed code that changes:
+
+```text
+bridge_ledger.go            BridgeLedgerSettings gains UnformedVoidWait and GenerationFormGrace, with their
+                            defaults, and bridgeLedgerSettingsOrDefault raises a wait under the floor.
+                            BridgeBodyJudge gains FormedThrough func() uint64. Judge refuses a body whose key's
+                            Time is more than the grace after statement.TimeMs, before it opens the seal, with a
+                            new errBridgeGenerationUnformed as the verdict's Reason
+bridge_statement_rules.go   BridgeLedgerReader gains FormedThrough. openBody applies the grace test as Judge does.
+                            At a fold, where openBody or spendApproval would leave an entry pending for a
+                            generation above a FormedThrough that is not 0, and the entry is at least the wait
+                            before the entry at the fold asked, the entry is void instead
+bridge_ledger_fold.go       FoldBridgeLedger hands both of its opens the time of the entry at the fold asked;
+                            BridgeLedgerFold gains Voided; Stopped is the first entry still pending.
+                            CheckBridgeLedgerFold folds with FormedThrough 0 whatever its caller set.
+                            BridgeBodyJudge.Fold fills the reader's FormedThrough from its func
+config_writer.go            bridgeFold logs config_key_void for each of fold.Voided, beside config_key_waiting
+bridge_ledger_test.go       12.6's tests; TestAnUnopenedFilingStopsTheFold keeps its case
+```
+
+The read itself is the composition root's: `FormedThrough` is built over the config repo's generation sync (`SyncRepo` to the listing's end, no fork at the generation pin, `RepoKeyAt` holding 1 to G), a seam of a few lines in a core-lane file that this track reports rather than makes. Traps: read gkm inside the plan, after the tip is applied, never from a cache or an earlier plan; G is the newest generation the listing names, never the newest key held, and `SyncRepo` answers nil with a named generation unopened (it passes over `ErrGkmKeyMissing`), so the seam tests 1 to G itself and answers 0 on a gap; measure against entry times, never a clock; the generation's time is its verified statement's `time_ms`, which a re-formed group carries unchanged with its old generations (10.8), and nothing may sign an existing generation again with a later time, or the unfolded bodies sealed to it turn void; never void for a generation at or below `FormedThrough`; a void row for an unformed generation is byte for byte any void row, so it carries no reason; `RejudgeBridgeBodies` needs no change, since it judges through `Judge`, and must not touch a frozen row.
 
 **ACL-M2-17 (new): reach enumerators for the compiler.** `AclState.DialRules(source, destination)`, `RouteRules(source, via)` and `ExitRules(source, via)` return every rule and activated grant by which the source holds the action, in rule id order, each with its rule id, grant id and expiry, where `MayDial` and `MayRoute` return the first; `AclState.EgressMode(subject)` exports what `egressRestricted` computes; `AclLocalPolicy.StandingCovers(kind, owner, body)` answers 12.2.4's "in force"; `AclState.ShareReach(subject, shareId)` at M6. They are read paths over indexes `acl_state.go` already builds (`acl_eval.go`, `acl_contract.go`, `acl_compile.go`), on the leg's list. This is what the plan's "`AclEngine.AllowRoute` serves the compiler" becomes: the engine answers one flow, and the compiler needs the rows.
 
@@ -10451,6 +10745,8 @@ For a design-records track, section by section. Text in quotation marks is to be
 
 **§22.** The dial-fence invariant gains the engine's: "no flow opens, and none stays open past its close, under a rule the host has durably judged revoked, across late compiles, new client generations and restarts"; FS-56, FS-38 and FS-14 gain 12.6's schedule rows; §22.5's §17 row gains "a compile reads no fold file, and a daemon's and a forwarding role's compiles of one view are byte-equal".
 
+**Amended 2026-11-12, QD-761.** §17.8, Placement, at the end of the text proposed for it above (after "no reader re-opens a folded statement"): "A body sealed to a generation gkm does not name is pending. A config writer whose whole read of gkm's listing shows it holds every generation named freezes such a body void at the fold once its entry is `UnformedVoidWait`, 24 h, old in the log's time, and every reader refuses a body whose generation was signed more than `GenerationFormGrace`, 1 h, after its entry, so a generation claimed after the void changes no verdict; a checker that lacks the generation takes the head's rows unchecked." §7.9, the fold row gains: "a bridge body sealed to a generation that does not form stops a fold until it is `UnformedVoidWait` old; a fold stops only at or above the previous base, so it waits for every such body under that base". §17.13, D-BRIDGE-6 gains: "a body sealed above every formed generation is frozen void after `UnformedVoidWait`". §17.17, add: "A standing sidecar files bridge bodies sealed to generations that never form | Low | Medium | each is void at the fold 24 h after its entry; while they keep coming the fold holds, and past the tail cap bases wait up to 24 h at a time, until the sidecar is revoked (DESIGN-DETAILS 12.2.3)". No server sees anything new: no column, key, object family or proto field.
+
 **§2.6, §2.10.** §2.6's custody rows gain "K, a share's table key, is in the sharing network's config (`bridge/share-grant/`), so every reader of that config holds it". §2.10's share-signer bound is unchanged.
 
 ### 12.9 Owner questions
@@ -10467,8 +10763,13 @@ Each is filed under `.stack/questions/`, and the section is built on the recomme
 
 **details-12-ratchet-commit.** When X's host stores a share's raised generation. Options: (1) before it admits the contract that carried it: one store commit a share a rise, in that contract's sequence; (2) after, off the sequence; (3) refuse that contract, commit, admit the next. Costs: (1) a few milliseconds on the first contract after each rotation of Y, never a packet's or a later contract's; (2) a crash between the admission and the commit loses the raise, and a removed sidecar is admitted again until a current one presents the newer cert (`ShareSignTwin-RatchetVolatile`), inside the cert's 7 days; (3) the first contract after every rotation fails and its link marks down for 30 s. Recommendation: (1). The design takes it.
 
+**details-amend-2-late-generation** (amended 2026-11-12, QD-761; open). What a reader that comes to hold a generation makes of a body sealed to it before it formed, once a fold has voided that body. Options: (1) every reader refuses a body whose generation's GenRotate is signed more than `GenerationFormGrace`, 1 h, after the body's entry, so it voids the body as the fold did; (2) no reader rule, and the check accepts a head's void for an old enough filing sealed above the generation the head was sealed at; (3) no rule, and the reader forks. Costs: (1) one test in the judge and the ledger's opens, a second settings field every reader of a network holds alike, a floor on the wait, and reliance on gkm keeping its own 10 min rule, a gkm that does not getting a fork and no silent split; (2) the reader holds the rule active from the moment it gains the generation until it reaches the base, and the check gains a rule a lying writer can aim at an honest filing; (3) one standing sidecar can fork every device that was behind when the void was frozen (`BridgeVoidTwin-NoGrace`). Recommendation: (1). The amendment takes it.
+
+**details-amend-2-fold-holds** (amended 2026-11-12, QD-761; open). Whether it is enough that a sidecar which keeps filing bodies sealed to unformed generations holds the fold until it is revoked (12.2.3's What is left). Options: (1) accept it: the filer's revocation ends it one wait after its last filing; (2) lower the default wait to its floor of 90 min; (3) also bound the generation at id level, the answered question's option 1; (4) let a fold stop inside the previous base's tail. Costs: (1) an admin must act, and until then, past the tail cap, bases wait up to 24 h at a time; (2) the same with shorter windows, and the thinnest margin over the servers' clocks; (3) a rows field, a §2.8 line and an id-level rule; (4) a change to section 5's fold rule and to what api checks. Recommendation: (1). The amendment takes it.
+
 Existing questions this section answers, each built on the option named:
 
+- `bridge-m2-02-unopened-generation-stall` (amended 2026-11-12, QD-761): option 2, as 12.2.3's void at the fold has it, with the question above for what the answer left to this section.
 - `bridge-m4-09-other-client-rows`: option 1, `BridgeRules.untagged = 10`, filled by the compile's reach pass and read by the sdk provider's other client (12.2.2, 12.2.4).
 - `bridge-m4-11-rule-three-tags`: option 2, rule 3's tag names the hosted address (12.2.2; BRIDGE-M4-24).
 - `plan-BRIDGE-subject-resolution` (QD-161): as answered, with the cache, its bounds and its refresh in 12.2.4, and the share exception kept.
