@@ -7,6 +7,9 @@
 //
 //	TakesForeign         step 6 takes the refused statement's object as it stands; evacuation then deletes it for
 //	                     that statement's dead record, under the retoken's commit (AdopterKept)
+//	TakesForeign, C      a deposit takes the shared ref's committed slot as it stands and commits, a second
+//	                     introducer, and a CONSUME of the deposit deletes the slot (TakesForeign-Consume's
+//	                     OneIntroducer)
 //	TakesLive            a takeover of a statement of the attempt's own epoch, which then commits; the taker dies
 //	                     and evacuation deletes its object under that commit (DeadIsFinal)
 //	TakesCommitted       a takeover of a committed statement's object; the taker dies and evacuation deletes it
@@ -90,6 +93,46 @@ func slotTwinRetokenSchedule(t *testing.T, rule evsSlotTwin) bool {
 
 func TestSlotTwinTakesForeign(t *testing.T) {
 	requireSlotTwin(t, evsSlotTwinTakesForeign, slotTwinRetokenSchedule)
+}
+
+// C: a depositor lists the shared ref's committed young slot as new with its bytes in a deposit; if the deposit
+// commits, a reader's CONSUME of it deletes the slots its removed version names.
+func slotTwinSecondIntroducerSchedule(t *testing.T, rule evsSlotTwin) bool {
+	fixture := newPushFixture(t, nil)
+	slotId, _, slotBody := checkTestSlot(t, "twin introduced")
+	committed := fixture.plan()
+	fixture.createWithSlot(committed, checkTestPath("a"), slotId, slotBody)
+	committedBody, committedOrigin := fixture.bodyAndOrigin(committed)
+	fixture.requireCommitted(fixture.post(fixture.token(fixture.check.signerId), committedBody), 1)
+	fixture.awaitStepEights()
+
+	depositor := fixture.check.otherId
+	fixture.auth.grant(depositor, fixture.check.repoId, sidecar.AclEvsDeposit)
+	deposit := fixture.depositPlan(depositor)
+	fixture.createWithSlot(deposit, checkTestPath("deposit 1"), slotId, slotBody)
+	depositBody, _ := fixture.bodyAndOriginBy(deposit, fixture.check.otherKey, depositor)
+	if recorder := fixture.post(fixture.token(depositor, "deposit"), depositBody); recorder.Code != http.StatusOK {
+		// refused at step 6: no second introducer, so no CONSUME can take the slot
+		return fixture.slotLost(slotId, committedOrigin)
+	}
+	refId := sidecar.EvsDepositRefId(fixture.check.repoId, depositor)
+	consume := fixture.plan()
+	consume.PushId = testId("twin consume")
+	consume.RefId = refId
+	consume.RefKind = protocol.EvsRefKind_EVS_REF_DEPOSIT
+	consume.OwnerSidecarId = &depositor
+	consume.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_CONSUME)
+	consume.ConsumedThrough = 1
+	consume.BaseVersion = 1
+	consume.BaseChain = [32]byte(fixture.headOf(refId).Head.GetChain())
+	consume.Changes = append(consume.Changes, &sidecar.EvsPlannedChange{TokenPath: checkTestPath("deposit 1"), BaseEntryVersion: 1})
+	consumeBody, _ := fixture.bodyAndOrigin(consume)
+	fixture.requireCommitted(fixture.post(fixture.token(fixture.check.signerId), consumeBody), 2)
+	return fixture.slotLost(slotId, committedOrigin)
+}
+
+func TestSlotTwinTakesForeignConsume(t *testing.T) {
+	requireSlotTwin(t, evsSlotTwinTakesForeign, slotTwinSecondIntroducerSchedule)
 }
 
 // o, a push of the writer's, passes step 6 and is held before step 7; another statement of the writer's in o's own
