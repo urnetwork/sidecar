@@ -123,6 +123,7 @@ evs_http.go
 evs_index_dictionary.go
 evs_index_entry.go
 evs_index_keyset.go
+evs_index_lone.go
 evs_index_normalize.go
 evs_index_pad.go
 evs_index_postings.go
