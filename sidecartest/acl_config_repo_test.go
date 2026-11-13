@@ -1,8 +1,9 @@
 // QD-719 through the real gates on T2 (question team-m2-15-config-repo-acl-row): no state's rows hold an AclRepo for
-// the network's config repo, since §7.9's bootstrap creates it and a RepoCreate of kind config is refused, so ACL's
-// state adds the row from the Genesis and every gate answers from it. One network on the admission world's real log,
-// bootstrapped by BootstrapNetwork on the Net's api, read by §8.9's real gate cache over the Net's Redis and first
-// metadata cluster, with evs's real EvsAuthState and engine over that cache:
+// the network's config repo before its key holders first shrink, since §7.9's bootstrap creates it and a RepoCreate of
+// kind config is refused, so ACL's state adds the row from the Genesis, with holders_shrunk_at 0, and every gate
+// answers from it; from the first shrink the rows hold it at that entry's position (QD-762). One network on the
+// admission world's real log, bootstrapped by BootstrapNetwork on the Net's api, read by §8.9's real gate cache over
+// the Net's Redis and first metadata cluster, with evs's real EvsAuthState and engine over that cache:
 //
 //	exchange   AclExchangeScopes grants repo:<config_repo_id>:r and :rw as §8.5's kind default gives them, the
 //	           bootstrap sidecar's :admin (§7.9), and a forward_only client's r alone while its sidecar's forwarding
@@ -180,8 +181,33 @@ func aclConfigRepoScope(repoId sidecar.Id, role string) string {
 	return "repo:" + repoId.String() + ":" + role
 }
 
+// The state's config row at the tip: kind config with no admins and holders_shrunk_at shrunkAt, from no rows while
+// shrunkAt is 0, and from the rows' one row of it from the config's first shrink on.
+func (self *aclConfigRepoWorld) configRowIs(shrunkAt uint64) {
+	self.t.Helper()
+	tip := self.admission.Tip().GetVersion()
+	acl, err := self.admission.State().Acl()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	held := []*protocol.AclRepo{}
+	for _, repo := range acl.Rows().GetRepos() {
+		if bytes.Equal(repo.GetRepoId(), self.configId.Bytes()) || repo.GetKind() == protocol.RepoKind_REPO_KIND_CONFIG {
+			held = append(held, repo)
+		}
+	}
+	if want := min(shrunkAt, 1); uint64(len(held)) != want {
+		self.t.Fatalf("the rows hold %d config rows at %d, want %d: %v", len(held), tip, want, held)
+	}
+	row := acl.Repo(self.configId)
+	if row.GetKind() != protocol.RepoKind_REPO_KIND_CONFIG || len(row.GetAdmins()) != 0 || row.GetHoldersShrunkAt() != shrunkAt {
+		self.t.Fatalf("the state's config row at %d: %v, want holders_shrunk_at %d", tip, row, shrunkAt)
+	}
+}
+
 // The bootstrap, then the network's later devices: the exchange, the gate cache at both audiences and evs answer the
-// config repo's scopes from the row the state adds, with no AclRepo of it in any rows.
+// config repo's scopes from the row the state adds, with no AclRepo of it in any rows until the config's holders
+// first shrink, and from the rows' own after.
 func TestAclConfigRepoRowAtTheRealGates(t *testing.T) {
 	world := newAclConfigRepoWorld(t)
 	admission := world.admission
@@ -192,22 +218,7 @@ func TestAclConfigRepoRowAtTheRealGates(t *testing.T) {
 
 	// base 1: the bootstrap sidecar holds the config's admin, and places the repo with it
 	world.load()
-	rowless := func() {
-		t.Helper()
-		acl, err := admission.State().Acl()
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, repo := range acl.Rows().GetRepos() {
-			if bytes.Equal(repo.GetRepoId(), world.configId.Bytes()) || repo.GetKind() == protocol.RepoKind_REPO_KIND_CONFIG {
-				t.Fatalf("the rows hold a config row at %d: %v", admission.Tip().GetVersion(), repo)
-			}
-		}
-		if row := acl.Repo(world.configId); row.GetKind() != protocol.RepoKind_REPO_KIND_CONFIG || len(row.GetAdmins()) != 0 {
-			t.Fatalf("the state's config row at %d: %v", admission.Tip().GetVersion(), row)
-		}
-	}
-	rowless()
+	world.configRowIs(0)
 	for _, audience := range []sidecar.AclTokenAudience{evs, gkm} {
 		if granted := world.exchange(owner, audience, false, all...); !slices.Equal(granted, all) {
 			t.Fatalf("the bootstrap sidecar's scopes at %d: %v", audience, granted)
@@ -273,7 +284,7 @@ func TestAclConfigRepoRowAtTheRealGates(t *testing.T) {
 		t.Fatal("the owner's second device writes no config head")
 	}
 	world.load()
-	rowless()
+	world.configRowIs(0)
 	cases := []struct {
 		name   string
 		device *AdmissionDevice
@@ -337,16 +348,18 @@ func TestAclConfigRepoRowAtTheRealGates(t *testing.T) {
 	if status, code := world.serve(http.MethodGet, phone, configR); status != http.StatusOK {
 		t.Errorf("a forward_only client's read: %d %s", status, code)
 	}
-	admission.MustLand(admission.Sign(phone, bridge.SignedType_SIGNED_DELEGATION_REVOKE, admission.DelegationRevoke(AdmissionStatementId(forwarding), 0)))
+	// the forwarding holder leaves the config's holders, its first shrink: the rows take the config's row there
+	ended := admission.MustLand(admission.Sign(phone, bridge.SignedType_SIGNED_DELEGATION_REVOKE, admission.DelegationRevoke(AdmissionStatementId(forwarding), 0)))
 	world.load()
+	world.configRowIs(ended.Pin.GetVersion())
 	if granted := world.exchange(phone, evs, true, all...); len(granted) != 0 {
 		t.Errorf("a forward_only client after its Delegation's revoke: %v", granted)
 	}
 
-	// a revocation closes the config's scopes at the next load, at both audiences and at evs
-	admission.MustLand(admission.Sign(owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, admission.Revocation(phone, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, 0)))
+	// a revocation closes the config's scopes at the next load, at both audiences and at evs, and advances the row
+	revoked := admission.MustLand(admission.Sign(owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, admission.Revocation(phone, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, 0)))
 	world.load()
-	rowless()
+	world.configRowIs(revoked.Pin.GetVersion())
 	for _, audience := range []sidecar.AclTokenAudience{evs, gkm} {
 		if granted := world.exchange(phone, audience, false, all...); len(granted) != 0 {
 			t.Errorf("a revoked device's scopes at %d: %v", audience, granted)
@@ -364,7 +377,8 @@ func TestAclConfigRepoRowAtTheRealGates(t *testing.T) {
 }
 
 // Every reader of the admission world, full, rows-only and started at a base, builds the same row for the config repo
-// from its rows and the Genesis, at a base and in its tail alike, and no reader's rows hold it.
+// from its rows and the Genesis, at a base and in its tail alike, and no reader's rows hold it while nothing shrank
+// the config's holders.
 func TestAclConfigRepoRowIsAlikeInEveryReader(t *testing.T) {
 	world := newAclConfigRepoWorld(t)
 	admission := world.admission
@@ -378,7 +392,7 @@ func TestAclConfigRepoRowIsAlikeInEveryReader(t *testing.T) {
 	admission.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
 		readers += 1
 		row := acl.Repo(world.configId)
-		if row.GetKind() != protocol.RepoKind_REPO_KIND_CONFIG || len(row.GetAdmins()) != 0 || row.GetHoldersShrunkAt() != state.Pin().GetVersion() {
+		if row.GetKind() != protocol.RepoKind_REPO_KIND_CONFIG || len(row.GetAdmins()) != 0 || row.GetHoldersShrunkAt() != 0 {
 			return fmt.Errorf("the config row: %v", row)
 		}
 		for _, repo := range acl.Rows().GetRepos() {
@@ -399,5 +413,54 @@ func TestAclConfigRepoRowIsAlikeInEveryReader(t *testing.T) {
 	})
 	if readers < 2 {
 		t.Errorf("%d readers answered", readers)
+	}
+}
+
+// QD-762 on the admission world's real writer and every reader it runs: the config's row joins the rows at a
+// revocation, the writer's next base compiles it into the base's own rows, which the new device and the gate started at
+// that base take with no tail to re-apply, and a later revocation advances it alike at every reader, none forking.
+func TestAclConfigRepoRowJoinsTheRowsAndRidesTheWritersBase(t *testing.T) {
+	world := newAclConfigRepoWorld(t)
+	admission := world.admission
+	owner := admission.Owner()
+	_, phone := admission.ConsentedMember("config row rides")
+	_, laptop := admission.ConsentedMember("config row rides later")
+	everyReaderHolds := func(label string, shrunkAt uint64) {
+		t.Helper()
+		readers := 0
+		admission.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
+			readers += 1
+			held := []*protocol.AclRepo{}
+			for _, repo := range acl.Rows().GetRepos() {
+				if bytes.Equal(repo.GetRepoId(), world.configId.Bytes()) || repo.GetKind() == protocol.RepoKind_REPO_KIND_CONFIG {
+					held = append(held, repo)
+				}
+			}
+			want := &protocol.AclRepo{RepoId: world.configId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG, HoldersShrunkAt: shrunkAt}
+			if (shrunkAt == 0 && len(held) != 0) || (shrunkAt != 0 && (len(held) != 1 || !proto.Equal(held[0], want))) {
+				return fmt.Errorf("%s: the rows hold %v", label, held)
+			}
+			if row := acl.Repo(world.configId); row.GetKind() != protocol.RepoKind_REPO_KIND_CONFIG || row.GetHoldersShrunkAt() != shrunkAt ||
+				state.ShrunkAt(world.configId) != shrunkAt {
+				return fmt.Errorf("%s: the state's config row %v, want holders_shrunk_at %d", label, row, shrunkAt)
+			}
+			return nil
+		})
+		if readers < 2 {
+			t.Errorf("%s: %d readers answered", label, readers)
+		}
+	}
+	everyReaderHolds("before any shrink", 0)
+	revoked := admission.MustLand(admission.Sign(owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, admission.Revocation(phone, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, 0)))
+	everyReaderHolds("the revocation", revoked.Pin.GetVersion())
+	base := admission.Fold(true)
+	if header := admission.State().Base(); header.GetVersion() != base.GetVersion() || header.GetFoldedThrough() != base.GetVersion()-1 {
+		t.Fatalf("the writer's base at %d folds through %d", header.GetVersion(), header.GetFoldedThrough())
+	}
+	everyReaderHolds("the writer's base", revoked.Pin.GetVersion())
+	later := admission.MustLand(admission.Sign(owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, admission.Revocation(laptop, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST, 0)))
+	everyReaderHolds("a later revocation", later.Pin.GetVersion())
+	if forks := admission.Forks(); len(forks) != 0 {
+		t.Errorf("readers forked: %v", forks)
 	}
 }
