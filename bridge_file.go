@@ -99,14 +99,17 @@ const (
 
 // Tunables of a filer.
 type BridgeFilerSettings struct {
-	// How long a first map waits for its BridgeAddress's entry to apply before it reads the ledger again: 30 s.
+	// How long a first map waits for its BridgeAddress's entry to apply before it reads the ledger again: 30 s, a
+	// follow's few round trips. Non-positive waits not at all, so a claim answers uncertain unless its entry applied.
 	AddressLandTimeout time.Duration
-	// How many addresses a first map proposes, drawing again after a claim another won in log order: 3.
+	// How many addresses a first map proposes, drawing again after a claim another won in log order: 3, since two
+	// hosts racing for one free address of thousands is rare. Non-positive proposes one.
 	AddressClaimAttemptCount int
 	// How long the block SetBlock replaces drains, its drain_until from now: 600 s, §17.8's shortest drain of an old
-	// address.
+	// address. Non-positive is refused by CheckBridgeBlock, which takes no previous block without a drain.
 	BlockDrainTimeout time.Duration
-	// How many blocks cycle draws before it gives up finding one other than the block in force: 16.
+	// How many blocks cycle draws before it gives up finding one other than the block in force: 16, where one draw in
+	// 62 repeats it. Non-positive draws once.
 	BlockDrawAttemptCount int
 	// The ledger the filer opens, nil its defaults.
 	Ledger *BridgeLedgerSettings

@@ -27,6 +27,7 @@ import (
 	mathrand "math/rand/v2"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -96,13 +97,15 @@ func (self *testBridgeFileAuthority) Pin() *bridge.AuthPin {
 
 // POST /network/config/delta onto the net: each post sequenced and judged there, answered with its entry, or 403 for a
 // statement the log refused. A scripted answer "dropped" is a post that never applied and whose answer was lost, and
-// "lost" one that applied and whose answer was lost.
+// "lost" one that applied and whose answer was lost. POST /network/auth-client goes to authClient, which answers a
+// status and a body; nil refuses every mint.
 type testBridgeFileApi struct {
 	stateLock sync.Mutex
 	net       *testConfigNet
 	answers   []string
 	// every post's Signed, in order
-	posts [][]byte
+	posts      [][]byte
+	authClient func(wire *sidecarAuthClientWire) (int, any)
 }
 
 func (self *testBridgeFileApi) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -110,6 +113,21 @@ func (self *testBridgeFileApi) RoundTrip(request *http.Request) (*http.Response,
 	request.Body.Close()
 	if err != nil {
 		return nil, err
+	}
+	respond := func(status int, value any) *http.Response {
+		encoded, _ := json.Marshal(value)
+		return &http.Response{StatusCode: status, Body: io.NopCloser(bytes.NewReader(encoded)), Header: http.Header{"Content-Type": {"application/json"}}, Request: request}
+	}
+	if strings.HasSuffix(request.URL.Path, "/network/auth-client") {
+		wire := &sidecarAuthClientWire{}
+		if err := json.Unmarshal(body, wire); err != nil {
+			return nil, err
+		}
+		if self.authClient == nil {
+			return respond(http.StatusForbidden, map[string]any{"error": "no mint here"}), nil
+		}
+		status, value := self.authClient(wire)
+		return respond(status, value), nil
 	}
 	wire := &sidecarConfigDeltaWire{}
 	if err := json.Unmarshal(body, wire); err != nil {
@@ -132,10 +150,6 @@ func (self *testBridgeFileApi) RoundTrip(request *http.Request) (*http.Response,
 	verdict := self.net.push(self.net.makeEntry(bridge.AuthEntryKindStatement, wire.Signed))
 	if answer == "lost" {
 		return nil, errors.New("the answer was lost")
-	}
-	respond := func(status int, value any) *http.Response {
-		encoded, _ := json.Marshal(value)
-		return &http.Response{StatusCode: status, Body: io.NopCloser(bytes.NewReader(encoded)), Header: http.Header{"Content-Type": {"application/json"}}, Request: request}
 	}
 	if !verdict.Accepted() {
 		return respond(http.StatusForbidden, map[string]any{"error": "The statement fails at the tip.", "code": "config_refused"}), nil
@@ -420,6 +434,9 @@ func newTestBridgeFileWorld(t *testing.T, admin bool) *testBridgeFileWorld {
 		t.Fatal(err)
 	}
 	sidecarApi.SetByJwt("a-synthetic-client-token-for-the-filer-tests")
+	sidecarApi.setDpopSigner(func(method string, url string, ath string) (string, error) {
+		return "a-synthetic-proof", nil
+	})
 	sidecar.sidecarApi = sidecarApi
 	t.Cleanup(sidecar.InstallAuthority(&testBridgeFileAuthority{testActAuthority: newTestActAuthority(), net: net}))
 	t.Cleanup(sidecar.InstallConfigKeys(&testConfigKeys{key: testConfigSealKey(1)}))
