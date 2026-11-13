@@ -1442,3 +1442,55 @@ func TestPresenceActBuildersRefuseWhatVerifiersWould(t *testing.T) {
 		}
 	}
 }
+
+// A registration's client data (QD-730): a webauthn.create with a listed origin passes whatever its challenge is, and an
+// assertion's type, an unlisted origin and what is no client data are refused. The exported check reads the release's
+// table, so a fixture origin is refused there.
+func TestRegistrationClientDataNeedsCreateAndAListedOrigin(t *testing.T) {
+	origins := testFixtureOrigins(t)
+	clientData := func(clientType string, origin string) []byte {
+		return fmt.Appendf(nil, `{"type":%q,"challenge":"YW55IGNoYWxsZW5nZQ","origin":%q,"crossOrigin":false}`, clientType, origin)
+	}
+	for i, origin := range origins {
+		if err := checkWebAuthnRegistrationClientData(clientData(webAuthnClientDataTypeCreate, origin), origins); err != nil {
+			t.Errorf("fixture origin %d: %v", i, err)
+		}
+	}
+	noChallenge := fmt.Appendf(nil, `{"type":"webauthn.create","origin":%q}`, origins[0])
+	if err := checkWebAuthnRegistrationClientData(noChallenge, origins); err != nil {
+		t.Errorf("no challenge: %v", err)
+	}
+	for _, c := range []struct {
+		name       string
+		clientData []byte
+	}{
+		{name: "an assertion's type", clientData: clientData(webAuthnClientDataTypeGet, origins[0])},
+		{name: "no type", clientData: fmt.Appendf(nil, `{"origin":%q}`, origins[0])},
+		{name: "an unlisted origin", clientData: clientData(webAuthnClientDataTypeCreate, "https://phish.example")},
+		{name: "a subdomain", clientData: clientData(webAuthnClientDataTypeCreate, "https://app."+origins[0][len("https://"):])},
+		{name: "a debug build's origin", clientData: clientData(webAuthnClientDataTypeCreate, testDebugBuildOrigin())},
+		{name: "no origin", clientData: []byte(`{"type":"webauthn.create"}`)},
+		{name: "not json", clientData: []byte(`{"type":"webauthn.create"`)},
+		{name: "empty", clientData: []byte{}},
+		{name: "another shape", clientData: []byte(`["webauthn.create"]`)},
+	} {
+		if err := checkWebAuthnRegistrationClientData(c.clientData, origins); !errors.Is(err, ErrSignedEvidence) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+
+	for i, origin := range webAuthnOrigins {
+		if err := CheckWebAuthnRegistrationClientData(clientData(webAuthnClientDataTypeCreate, origin)); err != nil {
+			t.Errorf("listed origin %d: %v", i, err)
+		}
+	}
+	for _, origin := range append(origins, "https://phish.example", "") {
+		if slices.Contains(webAuthnOrigins[:], origin) {
+			continue
+		}
+		err := CheckWebAuthnRegistrationClientData(clientData(webAuthnClientDataTypeCreate, origin))
+		if !errors.Is(err, ErrSignedEvidence) || !strings.Contains(err.Error(), "origin") {
+			t.Errorf("origin %q against the release table: %v", origin, err)
+		}
+	}
+}
