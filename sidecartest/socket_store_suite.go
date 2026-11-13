@@ -141,6 +141,7 @@ func socketSuiteCases() []socketSuiteCase {
 		{name: "first and last listeners are reported on explicit transitions", run: caseSocketFirstAndLastListener},
 		{name: "one name in two networks is two groups", run: caseSocketNetworksIsolated},
 		{name: "a group past the sample size still picks", run: caseSocketSampledGroupPicks},
+		{name: "a keyed pick matches PickSocketListeners over its whole group", run: caseSocketKeyedPickMatchesScheduler},
 		{name: SocketSuiteCaseRemovalLeavesATombstone, run: caseSocketRemovalLeavesATombstone},
 		{name: "a put at or above a tombstone clears it, and a lease keeps its highest position", run: caseSocketPutClearsTombstone},
 		{name: "a lease admitted above a removal's position is kept", run: caseSocketRemovalKeptAboveItsPosition},
@@ -152,6 +153,7 @@ func socketSuiteCases() []socketSuiteCase {
 		{name: SocketSuiteCasePairWriteBelowFloor, run: caseSocketPairWriteBelowFloor},
 		{name: "a pair removal keeps the higher floor, which lapses at its ttl", run: caseSocketPairFloorKept},
 		{name: "a pair touch never lengthens a pair past its grant", run: caseSocketPairTouch},
+		{name: "a pair touch never shortens a pair", run: caseSocketPairTouchNeverShortens},
 		{name: "a client's removal works its set in batches and fences every lease", run: caseSocketRemoveClientInBatches, settings: func(settings *socketsservice.SocketStoreSettings) { settings.RemoveClientBatchCount = 3 }},
 		{name: "a sweep is claimed once per position, renewed by its holder, and never listed", run: caseSocketClaimSweep},
 		{name: "a page says whether the client's set still holds an edge name", run: caseSocketEdgeEntriesRemain},
@@ -847,6 +849,7 @@ func (self *socketSuiteEnv) pickAgainstScheduler(request *socketsservice.SocketS
 		Protocol:       request.Protocol,
 		MinVersion:     request.MinVersion,
 		Alpns:          request.Alpns,
+		AffinityKey:    request.AffinityKey,
 		NowMillis:      self.clock.Now().UnixMilli(),
 		FirstDraw:      request.FirstDraw,
 		SecondDraw:     request.SecondDraw,
@@ -867,6 +870,44 @@ func (self *socketSuiteEnv) pickAgainstScheduler(request *socketsservice.SocketS
 		}
 	}
 	return got, nil
+}
+
+// §9.7's affinity (SOCK-M6-01): a keyed pick reads the whole group, past the sample's size, and picks as the pure
+// function does by rendezvous order among the listeners that opted in, at loads that reach the bound, a group with
+// listeners that did not opt in among them.
+func caseSocketKeyedPickMatchesScheduler(env *socketSuiteEnv) error {
+	networkId := socketSuiteId()
+	nameKey := socketSuiteBytes(32)
+	random := mathrand.New(mathrand.NewPCG(5, 6))
+	for index := range env.settings.SampleCount + 6 {
+		registration := socketSuiteRegistration("")
+		registration.NameToken = nameKey
+		registration.Affinity = index%5 != 0
+		registration.MaxStreams = 64
+		registration.Inflight = random.IntN(40)
+		if err := env.mustApplyWhole(networkId, socketSuiteId(), 1, registration); err != nil {
+			return err
+		}
+	}
+	keys := [][]byte{}
+	for index := range 8 {
+		keys = append(keys, socketSuiteBytes(1+index*7))
+	}
+	for round := range 80 {
+		if _, err := env.pickAgainstScheduler(&socketsservice.SocketStorePickRequest{
+			NetworkId:       networkId,
+			NameKey:         nameKey,
+			DialerClientId:  socketSuiteId(),
+			DialerNetworkId: networkId,
+			AffinityKey:     keys[round%len(keys)],
+			FirstDraw:       random.Uint32(),
+			SecondDraw:      random.Uint32(),
+		}); err != nil {
+			return fmt.Errorf("round %d: %w", round, err)
+		}
+		env.clock.Advance(time.Duration(random.IntN(300)) * time.Millisecond)
+	}
+	return nil
 }
 
 func caseSocketPickMatchesSchedulerAtItsEdges(env *socketSuiteEnv) error {
@@ -1904,6 +1945,26 @@ func caseSocketPairTouch(env *socketSuiteEnv) error {
 	}
 	// a touch of a listener with no pairs is no error
 	return env.store.TouchServicePairs(env.ctx, socketSuiteId())
+}
+
+// QD-728: a ur/ pair, field <edge listener> of {svc_<sidecar dialer>}, keeps the service's longer life through a touch of
+// the sidecar's own edge pairs, which the same key takes.
+func caseSocketPairTouchNeverShortens(env *socketSuiteEnv) error {
+	sidecarClientId := socketSuiteId()
+	edgeListenerId := socketSuiteId()
+	nowMillis := uint64(env.clock.Now().UnixMilli())
+	life := 125 * time.Minute
+	if wrote, _, err := env.store.SetServicePair(env.ctx, sidecarClientId, edgeListenerId, nowMillis+uint64(life.Milliseconds()), life, 0); err != nil || !wrote {
+		return fmt.Errorf("the pair: %v, %v", wrote, err)
+	}
+	if err := env.store.TouchServicePairs(env.ctx, sidecarClientId); err != nil {
+		return err
+	}
+	env.clock.Advance(env.settings.EdgePairTtl + time.Minute)
+	if _, found, err := env.store.GetServicePair(env.ctx, sidecarClientId, edgeListenerId); err != nil || !found {
+		return fmt.Errorf("a touch cut the pair to an edge pair's life: %v, %v", found, err)
+	}
+	return nil
 }
 
 func caseSocketRemoveClientInBatches(env *socketSuiteEnv) error {
