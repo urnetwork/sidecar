@@ -162,7 +162,8 @@ type forwardingSetupRecord struct {
 	// Step 1's Signed Delegation and its delegation_id.
 	SignedDelegation []byte `json:"signed_delegation,omitempty"`
 	DelegationId     []byte `json:"delegation_id,omitempty"`
-	// Step 2's entry.
+	// The entry that carried it: its position as api answered it, or as the Delegation's row names it, and A_n once
+	// step 2 has followed the log to it.
 	DelegationAtN     uint64 `json:"delegation_at_n,omitempty"`
 	DelegationAtChain []byte `json:"delegation_at_chain,omitempty"`
 	// Step 5's forwarding client.
