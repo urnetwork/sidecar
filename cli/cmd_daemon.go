@@ -156,6 +156,8 @@ type urDaemonNetwork struct {
 	start func(networkId *sidecar.Id) (*sidecar.Sidecar, error)
 	// ends a Sidecar the daemon no longer hosts
 	stop func(running *sidecar.Sidecar)
+	// the networks' bridges and the instance's ur tun (bridge_wire.go), nil for a target with none
+	bridges *urBridgeDaemon
 
 	// one enrollment at a time, since the further network's Sidecar joins the registry when it lands
 	enrollLock sync.Mutex
@@ -660,6 +662,9 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		}
 	}()
 	network := &urDaemonNetwork{instance: instance, daemon: daemon, stop: closeSidecar}
+	// the bridges and ur tun end with the daemon, the tun's routes removed, on every path Run returns by
+	network.bridges = newUrBridgeDaemon(ctx, urBridgeDaemonArgsOf(cli.instance, log))
+	defer network.bridges.close()
 	if urlsErr != nil {
 		network.noSidecar = urlsErr.Error()
 		log.Warningf("[ur]%s", urlsErr)

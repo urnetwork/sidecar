@@ -678,7 +678,10 @@ func (self *AclState) indexRepos() error {
 			if err != nil {
 				return err
 			}
-			repo.admins[sidecarId] = true
+			// a removed admin's row stays for RepoAdminAt's earlier positions (QD-743) and administers nothing now
+			if AclRepoAdminStands(admin) {
+				repo.admins[sidecarId] = true
+			}
 		}
 		for j, revoke := range row.GetRevokes() {
 			subject, err := aclRowsId(revoke.GetSubject(), fmt.Sprintf("%s.revokes[%d].subject", field, j))

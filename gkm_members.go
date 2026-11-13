@@ -927,10 +927,11 @@ func GkmFormsAgentRepo(view GkmAuthView, repoId Id, sidecarId Id, now time.Time)
 	if repo.GetDeletion() != nil {
 		return agentRepo, nil
 	}
-	// the RepoCreate's admin row: the earliest one its own sidecar signed
+	// the RepoCreate's admin row: the earliest standing one its own sidecar signed; a removed creator's row, which the
+	// rows keep a while (QD-743), forms nothing, as when a removal took it out
 	var creatorRow *protocol.AclRepoAdminRow
 	for _, admin := range repo.GetAdmins() {
-		if bytes.Equal(admin.GetSidecarId(), admin.GetSigner()) && (creatorRow == nil || admin.GetAt() < creatorRow.GetAt()) {
+		if AclRepoAdminStands(admin) && bytes.Equal(admin.GetSidecarId(), admin.GetSigner()) && (creatorRow == nil || admin.GetAt() < creatorRow.GetAt()) {
 			creatorRow = admin
 		}
 	}

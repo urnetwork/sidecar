@@ -423,7 +423,8 @@ func TestAclGateHonorScopeClosesAtASuspend(t *testing.T) {
 	}
 }
 
-// A RepoDelete the gate's log keeps is dated by its entry's time and signer; one past the log's window is undated.
+// A RepoDelete is dated by its row's time, the entry's (QD-743), and while the gate's log keeps its entry the gate also
+// knows its signer; with no log it is dated all the same and unsigned.
 func TestAclGateSnapshotDatesARepoDeleteItKeeps(t *testing.T) {
 	net := newTestConfigNet(t)
 	repoId := testConfigId("deleted repo")
@@ -443,14 +444,34 @@ func TestAclGateSnapshotDatesARepoDeleteItKeeps(t *testing.T) {
 	snapshot := &AclGateSnapshot{Pin: state.Pin(), Config: state, Acl: acl}
 	deletion := snapshot.RepoDeletion(repoId)
 	if deletion == nil || deletion.DeletionId != deletionId || deletion.DeletedAt != verdict.Pin.GetVersion() || !deletion.Dated ||
-		deletion.SignerSidecarId != net.owner.sidecarId || deletion.TimeMs != state.TimeMs() || deletion.Now || deletion.Restored {
+		!deletion.Signed || deletion.SignerSidecarId != net.owner.sidecarId || deletion.TimeMs != state.TimeMs() || deletion.Now || deletion.Restored {
 		t.Fatalf("the kept deletion: %+v", deletion)
 	}
-	undated := &AclGateSnapshot{Pin: state.Pin(), Acl: acl}
-	if deletion := undated.RepoDeletion(repoId); deletion == nil || deletion.Dated {
+	rowsOnly := &AclGateSnapshot{Pin: state.Pin(), Acl: acl}
+	if deletion := rowsOnly.RepoDeletion(repoId); deletion == nil || !deletion.Dated || deletion.TimeMs != state.TimeMs() || deletion.Signed ||
+		deletion.SignerSidecarId != (Id{}) {
 		t.Errorf("with no log: %+v", deletion)
 	}
 	if deletion := snapshot.RepoDeletion(testConfigId("no such repo")); deletion != nil {
 		t.Errorf("an unknown repo: %+v", deletion)
+	}
+}
+
+// QD-743 at the gate over TEAM's log: a RepoDelete whose entry two bases have moved out of the log's retention is
+// still dated by its row's time, and the gate no longer knows its signer, which only the entry names.
+func TestAclGateSnapshotDatesARepoDeletePastItsEntrysRetention(t *testing.T) {
+	net := newTestConfigNet(t)
+	repoId, deletionId := testConfigId("gate deleted repo"), testConfigId("gate deletion")
+	deletedTimeMs := aclTestDeletedPastRetention(t, net, repoId, deletionId)
+	state := net.log.State()
+	acl, err := state.Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &AclGateSnapshot{Pin: state.Pin(), Config: state, Acl: acl}
+	deletion := snapshot.RepoDeletion(repoId)
+	if deletion == nil || deletion.DeletionId != deletionId || !deletion.Dated || deletion.TimeMs != deletedTimeMs || deletion.Signed ||
+		deletion.SignerSidecarId != (Id{}) {
+		t.Errorf("the gate's deletion %+v", deletion)
 	}
 }

@@ -1158,11 +1158,14 @@ func (x *AclRepo) GetHoldersShrunkAt() uint64 {
 	return 0
 }
 
+// A RepoAdmin{remove} stamps removed_at and keeps the row, so a reader judges the admin's right at a position before
+// its removal; the next base's compile drops a row whose removal its retention point has passed (QD-743).
 type AclRepoAdminRow struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SidecarId     []byte                 `protobuf:"bytes,1,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`
 	Signer        []byte                 `protobuf:"bytes,2,opt,name=signer,proto3" json:"signer,omitempty"`
 	At            uint64                 `protobuf:"varint,3,opt,name=at,proto3" json:"at,omitempty"`
+	RemovedAt     uint64                 `protobuf:"varint,4,opt,name=removed_at,json=removedAt,proto3" json:"removed_at,omitempty"` // the RepoAdmin{remove}'s position; 0 while the admin stands
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1214,6 +1217,13 @@ func (x *AclRepoAdminRow) GetSigner() []byte {
 func (x *AclRepoAdminRow) GetAt() uint64 {
 	if x != nil {
 		return x.At
+	}
+	return 0
+}
+
+func (x *AclRepoAdminRow) GetRemovedAt() uint64 {
+	if x != nil {
+		return x.RemovedAt
 	}
 	return 0
 }
@@ -1428,6 +1438,7 @@ type AclRepoDeletionRow struct {
 	Now           bool                   `protobuf:"varint,2,opt,name=now,proto3" json:"now,omitempty"`
 	DeletedAt     uint64                 `protobuf:"varint,3,opt,name=deleted_at,json=deletedAt,proto3" json:"deleted_at,omitempty"`
 	RestoredAt    uint64                 `protobuf:"varint,4,opt,name=restored_at,json=restoredAt,proto3" json:"restored_at,omitempty"`
+	DeletedTimeMs int64                  `protobuf:"varint,5,opt,name=deleted_time_ms,json=deletedTimeMs,proto3" json:"deleted_time_ms,omitempty"` // the RepoDelete entry's time_ms, which RepoRestore's 7 days and §11.12's
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1486,6 +1497,13 @@ func (x *AclRepoDeletionRow) GetDeletedAt() uint64 {
 func (x *AclRepoDeletionRow) GetRestoredAt() uint64 {
 	if x != nil {
 		return x.RestoredAt
+	}
+	return 0
+}
+
+func (x *AclRepoDeletionRow) GetDeletedTimeMs() int64 {
+	if x != nil {
+		return x.DeletedTimeMs
 	}
 	return 0
 }
@@ -2624,12 +2642,14 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\bdeletion\x18\t \x01(\v2%.urnetwork.sidecar.AclRepoDeletionRowR\bdeletion\x129\n" +
 	"\x04lock\x18\n" +
 	" \x01(\x0e2%.urnetwork.sidecar.RepoVersioningLockR\x04lock\x12*\n" +
-	"\x11holders_shrunk_at\x18\v \x01(\x04R\x0fholdersShrunkAt\"X\n" +
+	"\x11holders_shrunk_at\x18\v \x01(\x04R\x0fholdersShrunkAt\"w\n" +
 	"\x0fAclRepoAdminRow\x12\x1d\n" +
 	"\n" +
 	"sidecar_id\x18\x01 \x01(\fR\tsidecarId\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
-	"\x02at\x18\x03 \x01(\x04R\x02at\"\xa3\x01\n" +
+	"\x02at\x18\x03 \x01(\x04R\x02at\x12\x1d\n" +
+	"\n" +
+	"removed_at\x18\x04 \x01(\x04R\tremovedAt\"\xa3\x01\n" +
 	"\x0fAclRepoGrantRow\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\fR\asubject\x124\n" +
 	"\x04role\x18\x02 \x01(\x0e2 .urnetwork.sidecar.RepoGrantRoleR\x04role\x12\x18\n" +
@@ -2644,7 +2664,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x10AclRepoRevokeRow\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\fR\asubject\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
-	"\x02at\x18\x03 \x01(\x04R\x02at\"\x87\x01\n" +
+	"\x02at\x18\x03 \x01(\x04R\x02at\"\xaf\x01\n" +
 	"\x12AclRepoDeletionRow\x12\x1f\n" +
 	"\vdeletion_id\x18\x01 \x01(\fR\n" +
 	"deletionId\x12\x10\n" +
@@ -2652,7 +2672,8 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\n" +
 	"deleted_at\x18\x03 \x01(\x04R\tdeletedAt\x12\x1f\n" +
 	"\vrestored_at\x18\x04 \x01(\x04R\n" +
-	"restoredAt\"\x89\x01\n" +
+	"restoredAt\x12&\n" +
+	"\x0fdeleted_time_ms\x18\x05 \x01(\x03R\rdeletedTimeMs\"\x89\x01\n" +
 	"\bAclAudit\x12!\n" +
 	"\freader_atoms\x18\x01 \x03(\fR\vreaderAtoms\x12\x1d\n" +
 	"\n" +

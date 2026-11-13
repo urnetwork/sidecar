@@ -137,11 +137,15 @@ func mailRepoStands(repo *protocol.AclRepo) bool {
 	return deletion == nil || deletion.GetDeletedAt() == 0 || deletion.GetRestoredAt() != 0
 }
 
-// The log position a repo was created at, as its rows tell it: its earliest admin row, the creator's, which a
-// RepoCreate adds; 0 for a repo with none left.
+// The log position a repo was created at, as its rows tell it: its earliest standing admin row, the creator's, which a
+// RepoCreate adds; 0 for a repo with none left. A removed admin's row, which the rows keep for a while (QD-743), counts
+// as gone, as it did when a removal took the row out.
 func mailRepoCreatedAt(repo *protocol.AclRepo) uint64 {
 	createdAt := uint64(0)
 	for _, admin := range repo.GetAdmins() {
+		if !AclRepoAdminStands(admin) {
+			continue
+		}
 		if at := admin.GetAt(); createdAt == 0 || at < createdAt {
 			createdAt = at
 		}
@@ -222,11 +226,11 @@ func (self *MailRepos) holdsKey(ctx context.Context, repoId Id) (bool, error) {
 	return key != nil, nil
 }
 
-// Whether this device created repo: its sidecar signed the earliest admin row, its own.
+// Whether this device created repo: its sidecar signed the earliest standing admin row, its own.
 func (self *MailRepos) created(repo *protocol.AclRepo) bool {
 	createdAt := mailRepoCreatedAt(repo)
 	for _, admin := range repo.GetAdmins() {
-		if admin.GetAt() != createdAt {
+		if !AclRepoAdminStands(admin) || admin.GetAt() != createdAt {
 			continue
 		}
 		adminId, err := IdFromBytes(admin.GetSidecarId())
@@ -366,7 +370,8 @@ func (self *MailRepos) EnsureRepoAdmin(ctx context.Context, repoId Id) (bool, er
 		return false, nil
 	}
 	for _, admin := range repo.GetAdmins() {
-		if adminId, err := IdFromBytes(admin.GetSidecarId()); err == nil && adminId == self.sidecarId {
+		// a removed row of this device's, which the rows keep a while (QD-743), makes it no admin
+		if adminId, err := IdFromBytes(admin.GetSidecarId()); err == nil && adminId == self.sidecarId && AclRepoAdminStands(admin) {
 			return false, nil
 		}
 	}

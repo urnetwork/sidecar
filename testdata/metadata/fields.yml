@@ -544,6 +544,7 @@ fields:
   AclRepoAdminRow.sidecar_id: api-7
   AclRepoAdminRow.signer: api-7
   AclRepoAdminRow.at: api-7
+  AclRepoAdminRow.removed_at: api-7
   AclRepoGrantRow.subject: api-7
   AclRepoGrantRow.role: api-7
   AclRepoGrantRow.expires: api-7
@@ -560,6 +561,7 @@ fields:
   AclRepoDeletionRow.now: api-7
   AclRepoDeletionRow.deleted_at: api-7
   AclRepoDeletionRow.restored_at: api-7
+  AclRepoDeletionRow.deleted_time_ms: api-7
   AclAudit.reader_atoms: api-7
   AclAudit.repo_kinds: api-7
   AclAudit.repo_ids: api-7
