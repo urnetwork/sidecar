@@ -963,6 +963,9 @@ enum ApprovalChannel {
   APPROVAL_CHANNEL_UNSPECIFIED = 0; APPROVAL_CHANNEL_DEVICE = 1; APPROVAL_CHANNEL_PRESENCE = 2;
   APPROVAL_CHANNEL_HARNESS = 3;
 }
+// record-m2-01-canonical-action-detail's answer (QD-740): what CanonicalAction.sealed_detail opens to, a dial or
+// route grant's prefixes and ports and a version-3 access request's, with the numbers the answer gives.
+message CanonicalActionDetail { repeated string cidrs = 1; uint32 target_port = 2; repeated string grant_dst = 3; }
 `
 
 // Fields the owner's answers add to messages the design fences, ahead of design-records' fold, each with the question
@@ -1093,6 +1096,47 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "erasure_note", number: 8, typeName: "bytes"},
 		question: "evs1-m2-30-erasure-note-format",
 	},
+	// QD-740: a dial or route grant's prefixes and ports ride sealed, at CanonicalAction version 4, and local_port,
+	// weight and alpn ride the ApprovalRequest, which is sealed in its entry
+	{
+		message:  "CanonicalAction",
+		field:    testFenceField{name: "sealed_detail", number: 38, typeName: "bytes"},
+		question: "record-m2-01-canonical-action-detail",
+	},
+	{
+		message:  "ApprovalRequest",
+		field:    testFenceField{name: "local_port", number: 14, typeName: "uint32"},
+		question: "record-m2-01-canonical-action-detail",
+	},
+	{
+		message:  "ApprovalRequest",
+		field:    testFenceField{name: "weight", number: 15, typeName: "int32"},
+		question: "record-m2-01-canonical-action-detail",
+	},
+	{
+		message:  "ApprovalRequest",
+		field:    testFenceField{name: "alpn", number: 16, typeName: "string", repeated: true},
+		question: "record-m2-01-canonical-action-detail",
+	},
+}
+
+// One field an owner's answer takes out of a message the design fences, its number reserved.
+type testFenceReservation struct {
+	message  string
+	name     string
+	number   int32
+	question string
+}
+
+// Fields the owner's answers take out of messages the design fences, ahead of design-records' fold, each with the
+// question that holds its answer. Each leaves the fence that writes it and its number joins that fence's
+// reservations, so both directions stay exact, and one the design comes to reserve, or stops writing, fails until its
+// line here leaves.
+var testFenceReservations = []testFenceReservation{
+	// QD-740: local_port, weight and alpn leave CanonicalAction for ApprovalRequest's 14, 15 and 16
+	{message: "CanonicalAction", name: "local_port", number: 24, question: "record-m2-01-canonical-action-detail"},
+	{message: "CanonicalAction", name: "weight", number: 25, question: "record-m2-01-canonical-action-detail"},
+	{message: "CanonicalAction", name: "alpn", number: 34, question: "record-m2-01-canonical-action-detail"},
 }
 
 // One value an owner's answer adds to an enum the design fences.

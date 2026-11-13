@@ -2,13 +2,14 @@
 
 // §16.5's socket tools (SOCK-M5-14) on the tool framework, with the daemon's sockets faked: each tool's tier and hints;
 // socket_listen running as W under a covering grant, recorded and naming the grant, and outward without one, its
-// action held on record-m2-01-canonical-action-detail and a pending gate naming the approval; other namespaces and
+// action of kind listen with the local port beside it (QD-740) and a pending gate naming the approval; other namespaces and
 // ports refused; the listing's share/ names left out and its trust a member's; and each MCP version's wire and output
 // schemas on the four tools.
 
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -221,14 +222,31 @@ func TestSocketListenCoveredRunsAsWrite(t *testing.T) {
 	}
 }
 
-// With no covering grant socket_listen is outward: its action is built for §5.4's gate, and while the listen kind's row
-// waits on its question that build refuses, so nothing listens and nothing is recorded as a W call.
-func TestSocketListenUncoveredIsHeld(t *testing.T) {
+// With no covering grant socket_listen is outward: the production action reaches §5.4's gate as kind listen naming
+// the socket, with no local port in its bytes and the tool's local port beside it as the request's, and a gate that
+// refuses leaves nothing listening and nothing recorded as a W call.
+func TestSocketListenUncoveredAsksTheGate(t *testing.T) {
 	env := newTestSocketToolEnv(t, nil)
+	env.network.authorize = sidecar.ErrApprovalRefused
 	conn := env.conn("2025-06-18")
-	wantMcpError(t, env.callTool(conn, "2025-06-18", "socket_listen", map[string]any{"name": "db/primary", "local_port": 5432}), McpCodeRefused, "approval")
-	if len(env.sockets.listensAsked()) != 0 || len(env.network.authorized) != 0 || len(env.sink.sunk()) != 0 {
-		t.Error("a held listen acted")
+	wantMcpError(t, env.callTool(conn, "2025-06-18", "socket_listen", map[string]any{"name": "db/primary", "local_port": 15432}), McpCodeRefused, "approval")
+	if len(env.sockets.listensAsked()) != 0 || len(env.sink.sunk()) != 0 {
+		t.Error("a refused listen acted")
+	}
+	if len(env.network.authorized) != 1 {
+		t.Fatalf("the gate saw %d actions", len(env.network.authorized))
+	}
+	action := env.network.authorized[0]
+	stored, err := sidecar.ParseStoredCanonicalAction(action.Canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action.Kind != sidecar.SidecarActionListen || stored.Action.GetSocketName() != "db/primary" ||
+		!action.Detail.Equal(&sidecar.SidecarActionDetail{LocalPort: 15432}) {
+		t.Errorf("the action: %+v, detail %+v", stored.Action, action.Detail)
+	}
+	if bytes.Contains(action.Canonical, []byte("15432")) {
+		t.Error("the action's bytes hold the local port")
 	}
 }
 
@@ -251,6 +269,11 @@ func TestSocketListenUncoveredPassesTheGate(t *testing.T) {
 	testSocketToolData(t, env.callTool(conn, "2025-06-18", "socket_listen", map[string]any{"name": "db/primary", "local_port": 5432}), out)
 	if out.Status != "listening" || out.GrantId != "" || len(env.sockets.listensAsked()) != 1 || len(env.network.authorized) != 2 {
 		t.Errorf("an allowed gate: %+v", out)
+	}
+	for _, action := range env.network.authorized {
+		if !action.Detail.Equal(&sidecar.SidecarActionDetail{LocalPort: 5432}) {
+			t.Errorf("the gate saw detail %+v", action.Detail)
+		}
 	}
 }
 
