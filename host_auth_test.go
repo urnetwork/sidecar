@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/urnetwork/connect"
 )
@@ -163,6 +164,21 @@ func TestAuthenticateKeepsUnavailableApartFromRefused(t *testing.T) {
 	_, err = (&ServiceHost{}).Authenticate(context.Background(), "evs", "synthetic-token")
 	if err == nil || errors.Is(err, ErrAuthenticationRefused) {
 		t.Errorf("no authenticator: %v", err)
+	}
+}
+
+// A host whose check cannot answer yet names its wait (QD-040's record miss): the wait reaches the
+// engine unchanged, and it is never a refusal.
+func TestAuthenticateCarriesAnUnavailableWait(t *testing.T) {
+	cause := errors.New("the revocation record cannot answer")
+	host := &ServiceHost{Authenticator: scriptedAuthenticator{err: &AuthenticationUnavailableError{RetryAfter: 5 * time.Second, Err: cause}}}
+	_, err := host.Authenticate(context.Background(), "sockets", "synthetic-token")
+	unavailable := &AuthenticationUnavailableError{}
+	if !errors.As(err, &unavailable) || unavailable.RetryAfter != 5*time.Second || !errors.Is(err, cause) {
+		t.Fatalf("err %v", err)
+	}
+	if errors.Is(err, ErrAuthenticationRefused) {
+		t.Fatalf("an unavailable answer reads as a refusal: %v", err)
 	}
 }
 
