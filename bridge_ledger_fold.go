@@ -4,17 +4,23 @@
 //
 //	fold      FoldBridgeLedger: the previous head's rows and the writer's unfolded statements at or below the fold,
 //	          opened as OpenBridgeLedger does at the fold's own position and time, written as rows. A body the writer
-//	          cannot open stops the fold below it: a writer never freezes what it could not open, and a config writer
-//	          holds every generation, so this is a broken delivery the caller alarms (config_key_waiting). The fold
-//	          then reaches the entry before it, or stays where it was where §7.9's fold rule (the previous fold, or at
-//	          least the previous base) does not allow that
+//	          cannot open stops the fold below it: a writer never freezes what it may still come to open, and a config
+//	          writer holds every generation gkm names, so one it lacks is a broken delivery the caller alarms
+//	          (config_key_waiting). The fold then reaches the entry before it, or stays where it was where §7.9's fold
+//	          rule (the previous fold, or at least the previous base) does not allow that
+//	unformed  the one body a fold freezes that its readers held pending (DESIGN-DETAILS 12.2.3's writer's half,
+//	          QD-761): where the writer's plan read gkm whole, FormedThrough G, a body sealed above G whose entry is
+//	          UnformedVoidWait before the entry at the fold asked, in the log's time and never a clock, is frozen void
+//	          as Refused{no such generation} in both of the fold's opens, and the fold goes on past it
+//	          (BridgeLedgerFold.Voided, config_key_void). Every reader that later holds that generation judges the
+//	          body void by its grace (bridge_ledger.go), so the frozen row is the one it would have written
 //	files     protobuf's deterministic marshal of rows sorted by key; no empty file; the rules in shards of 8 bits, or
 //	          16 once the rows hold more than BridgeLedgerSettings.RuleShardRowCount rules; a manifest naming every
 //	          file with the SHA-256 of its bytes, and none where the fold holds no bridge statement
 //	check     CheckBridgeLedgerFold, inside CheckConfigBase where the reader stands at S(b-1): the head's ledger files
 //	          equal the reader's own fold of the previous head's, byte for byte, or the base is a fork; unchecked where
 //	          the reader holds a body it could not open at or below the fold, and then it takes the head's rows as a new
-//	          device does
+//	          device does. A checker voids nothing as unformed: that is the writer's alone, so it folds with no G
 //
 // Pure: every input is passed, no clock is read, no Go map is ranged over unsorted, so two writers of one fold write
 // one set of bytes on every leg. testHookSecret runs inside OpenConfigBody. On every leg, with no connect import.
@@ -44,8 +50,12 @@ type BridgeLedgerFold struct {
 	// Every ledger file a head folded there holds, the manifest included, by path: none where the fold holds no
 	// bridge statement.
 	Files map[string][]byte
-	// The statement whose body stopped the fold, nil for none: the caller's config_key_waiting alarm.
+	// The first statement still waiting at the fold asked, its generation and signer the caller's config_key_waiting
+	// line: nil where none is.
 	Stopped *BridgeLedgerEntry
+	// The statements at or below the fold reached that this fold froze void as unformed, in log order, each with the
+	// generation it was sealed to and its signer for the caller's config_key_void line: none where the fold stayed.
+	Voided []*BridgeLedgerEntry
 }
 
 // The head with the fold's ledger: each of its files set, and every other bridge/ledger/ file removed.
@@ -78,7 +88,9 @@ func bridgeLedgerEntryTimeMs(reader *BridgeLedgerReader, n uint64) (int64, bool)
 // DESIGN-DETAILS 12.2.3's fold: the ledger files of a head folded through foldedThrough, from previous, the
 // rows of the head being extended, and reader.State's unfolded statements in (previous' fold, foldedThrough], as the top
 // of this file says. reader.State is the writer's state at its tip, or a checker's at S(b-1); reader.EntryTimeMs must
-// answer the entries the head folds, as a log's kept entries do. previous nil is the empty ledger before any fold.
+// answer the entries the head folds, as a log's kept entries do; reader.FormedThrough is the writer's G, 0 at a
+// checker. previous nil is the empty ledger before any fold. Pure: the same inputs fold to the same bytes wherever and
+// whenever they are folded, a writer restarted or one whose clock is off included.
 func FoldBridgeLedger(previous BridgeLedgerRows, reader *BridgeLedgerReader, foldedThrough uint64) (*BridgeLedgerFold, error) {
 	if reader == nil || reader.State == nil {
 		return nil, errors.New("bridge ledger fold: no state to fold at")
@@ -95,13 +107,6 @@ func FoldBridgeLedger(previous BridgeLedgerRows, reader *BridgeLedgerReader, fol
 		return nil, fmt.Errorf("%w: rows through %d under a base folded through %d", ErrBridgeLedgerMalformed, previousFoldedThrough, base.GetFoldedThrough())
 	}
 	statements := state.Bridge().Statements()
-	open := func(through uint64) (*BridgeLedger, error) {
-		timeMs, ok := bridgeLedgerEntryTimeMs(reader, through)
-		if !ok {
-			return nil, fmt.Errorf("bridge ledger fold: the time of entry %d is not held", through)
-		}
-		return openBridgeLedger(previous, statements, reader, through, timeMs, true)
-	}
 	fold := &BridgeLedgerFold{FoldedThrough: foldedThrough}
 	if foldedThrough == previousFoldedThrough {
 		files, err := bridgeLedgerRowsFiles(previous)
@@ -111,12 +116,25 @@ func FoldBridgeLedger(previous BridgeLedgerRows, reader *BridgeLedgerReader, fol
 		fold.Files = files
 		return fold, nil
 	}
+	// the wait for an unformed generation is read against the entry at the fold asked, in both opens, so a fold that
+	// stops short voids below its stop exactly what the fold asked would
+	askedTimeMs, ok := bridgeLedgerEntryTimeMs(reader, foldedThrough)
+	if !ok {
+		return nil, fmt.Errorf("bridge ledger fold: the time of entry %d is not held", foldedThrough)
+	}
+	open := func(through uint64) (*BridgeLedger, error) {
+		timeMs, ok := bridgeLedgerEntryTimeMs(reader, through)
+		if !ok {
+			return nil, fmt.Errorf("bridge ledger fold: the time of entry %d is not held", through)
+		}
+		return openBridgeLedger(previous, statements, reader, through, timeMs, true, askedTimeMs)
+	}
 	ledger, err := open(foldedThrough)
 	if err != nil {
 		return nil, err
 	}
 	if pending := ledger.Pending(); 0 < len(pending) {
-		// the fold stops below the first body the writer could not open, where §7.9's fold rule lets it
+		// the fold stops below the first body still waiting, where §7.9's fold rule lets it
 		fold.Stopped = pending[0]
 		reached := pending[0].Statement.N - 1
 		if base := state.Base(); reached != previousFoldedThrough && (base == nil || reached < base.GetVersion()) {
@@ -134,7 +152,13 @@ func FoldBridgeLedger(previous BridgeLedgerRows, reader *BridgeLedgerReader, fol
 		if ledger, err = open(reached); err != nil {
 			return nil, err
 		}
+		if pending := ledger.Pending(); 0 < len(pending) {
+			// the same statements at the same asked time wait alike at any cutoff, so this is a broken invariant, and
+			// a fold that froze a waiting body would lose it
+			return nil, fmt.Errorf("bridge ledger fold: entry %d waits below the fold reached, %d", pending[0].Statement.N, reached)
+		}
 	}
+	fold.Voided = slices.Clone(ledger.unformed)
 	folded := previous != nil && previous.Manifest() != nil
 	for _, statement := range statements {
 		folded = folded || (previousFoldedThrough < statement.N && statement.N <= fold.FoldedThrough)
@@ -315,21 +339,25 @@ func (self *BridgeLedger) foldFiles(foldedThrough uint64, folded bool) (map[stri
 // DESIGN-DETAILS 12.2.3's fold check: whether head, the config head base b names folding through
 // foldedThrough, holds the bridge ledger reader.State, S(b-1), folds from previous, the head the previous base names (nil
 // before the first base), as FoldBridgeLedger does. Answers true checked, or false unchecked where the reader holds a
-// body it could not open at or below the fold, which then takes the head's rows; an error wrapping
-// ErrConfigHeadMismatch is a fork.
+// body it could not open at or below the fold, whatever its age, which then takes the head's rows and so the void a
+// writer froze; an error wrapping ErrConfigHeadMismatch is a fork. It folds with FormedThrough 0 whatever reader says:
+// a checker never voids as unformed, since one that lacks a formed generation would fork on a row its writer judged
+// with the key (BridgeVoidTwin-CheckerVoids).
 func CheckBridgeLedgerFold(head *ConfigHead, previous *ConfigHead, reader *BridgeLedgerReader, foldedThrough uint64) (bool, error) {
 	if head == nil {
 		return false, fmt.Errorf("%w: no head", ErrConfigHeadMismatch)
 	}
-	settings := (*BridgeLedgerSettings)(nil)
+	checker := &BridgeLedgerReader{}
 	if reader != nil {
-		settings = reader.Settings
+		copied := *reader
+		checker = &copied
 	}
-	previousRows, err := NewBridgeLedgerHeadRows(previous, settings)
+	checker.FormedThrough = 0
+	previousRows, err := NewBridgeLedgerHeadRows(previous, checker.Settings)
 	if err != nil {
 		return false, fmt.Errorf("%w: the previous head: %w", ErrConfigHeadMismatch, err)
 	}
-	fold, err := FoldBridgeLedger(previousRows, reader, foldedThrough)
+	fold, err := FoldBridgeLedger(previousRows, checker, foldedThrough)
 	if err != nil {
 		return false, fmt.Errorf("%w: %w", ErrConfigHeadMismatch, err)
 	}
@@ -394,11 +422,17 @@ func (self *ConfigLog) bridgeFoldCheck(state *ConfigState, header *bridge.Projec
 }
 
 // FoldBridgeLedger with the judge's keys and settings over the head being extended: what ConfigWriterArgs.BridgeFold
-// takes.
+// takes. It asks the judge's FormedThrough once, for this plan's G, and folds with 0 where there is none.
 func (self *BridgeBodyJudge) Fold(previous *ConfigHead, state *ConfigState, foldedThrough uint64, entryTimeMs func(n uint64) (int64, bool)) (*BridgeLedgerFold, error) {
 	rows, err := NewBridgeLedgerHeadRows(previous, self.Settings)
 	if err != nil {
 		return nil, err
 	}
-	return FoldBridgeLedger(rows, &BridgeLedgerReader{State: state, RepoKeyAt: self.RepoKeyAt, EntryTimeMs: entryTimeMs, Settings: self.Settings}, foldedThrough)
+	formedThrough := uint64(0)
+	if self.FormedThrough != nil {
+		formedThrough = self.FormedThrough()
+	}
+	return FoldBridgeLedger(rows, &BridgeLedgerReader{
+		State: state, RepoKeyAt: self.RepoKeyAt, EntryTimeMs: entryTimeMs, FormedThrough: formedThrough, Settings: self.Settings,
+	}, foldedThrough)
 }
