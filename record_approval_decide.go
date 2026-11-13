@@ -18,15 +18,17 @@
 //	         choice of 2 or more, evidence_sha256 empty (QD-261)
 //	cancel   ApprovalCancel{approval_id} by the identity key, after the same confirmation, filed in the request's log
 //	sealed   a request whose action carries a sealed_detail, a dial or route grant's prefixes and ports (QD-740), is
-//	         rendered with what the detail opens to on this device (WithDetailOpener); where no opener is given or
-//	         the detail does not open, the render says so, the request lists deny alone, and an approval is refused,
-//	         so no prefix or port is approved unseen (D-MCP-17)
+//	         rendered with what the detail opens to on this device: Sidecar.OpenActionDetail, with the config repo's
+//	         keys under the context the action's own clear fields derive (QD-771), never one a caller makes; where the
+//	         device has no opener or the detail does not open, the render says so, the request lists deny alone, and
+//	         an approval is refused, so no prefix or port is approved unseen (D-MCP-17)
 //
 // The pass approves nothing (§5.9): only a confirmed call reaches here. A presence check that fails, is refused or does
 // not verify against a live presence key this device registered for its member signs nothing.
 //
-// Nothing here creates, derives or unwraps a key: Sidecar.Sign holds the identity key, and a presence key never leaves
-// its authenticator. Safe for concurrent use. On every leg but the ios_extension legs.
+// Nothing here creates, derives or unwraps a key: Sidecar.Sign holds the identity key, a presence key never leaves
+// its authenticator, and the opener derives a detail's key (Sidecar.OpenActionDetail, through EvsRepoKey.DeriveKey's
+// testHookSecret). Safe for concurrent use. On every leg but the ios_extension legs.
 
 package sidecar
 
@@ -102,13 +104,17 @@ type ApprovalApprover struct {
 	details CanonicalActionDetailOpener
 }
 
-// The approver side of sidecar over log.
+// The approver side of sidecar over log, opening each action's sealed_detail on sidecar (Sidecar.OpenActionDetail).
 func NewApprovalApprover(sidecar *Sidecar, log ApproverLog) *ApprovalApprover {
-	return &ApprovalApprover{sidecar: sidecar, log: log}
+	approver := &ApprovalApprover{sidecar: sidecar, log: log}
+	if sidecar != nil {
+		approver.details = sidecar
+	}
+	return approver
 }
 
-// The same approver side, opening each action's sealed_detail with opener before it renders or approves it. The
-// receiver is not changed.
+// The same approver side, opening each action's sealed_detail with opener before it renders or approves it, nil
+// opening none. The receiver is not changed.
 func (self *ApprovalApprover) WithDetailOpener(opener CanonicalActionDetailOpener) *ApprovalApprover {
 	return &ApprovalApprover{sidecar: self.sidecar, log: self.log, details: opener}
 }

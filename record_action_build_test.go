@@ -17,33 +17,48 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/urnetwork/sidecar/protocol"
-	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The sidecar a test's forward dials, as grant_dst names it.
 const testActionTargetDst = "sidecar:5152535455565758595a5b5c5d5e5f60"
 
-// What a test seals an action's detail to. Which values production binds is question
-// canonical-action-detail-seal-context; these are synthetic.
-func testActionDetailContext() *ConfigSealContext {
-	return &ConfigSealContext{
-		SignedType: bridge.SignedType_SIGNED_GRANT_ACTIVATE,
-		NetworkId:  testConfigId("network").Bytes(),
-		Nonce:      bytes.Repeat([]byte{0x38}, configNonceByteCount),
-	}
+// The network a test's actions are filed in, which their details are sealed to (QD-771).
+func testActionDetailNetworkId() Id {
+	return testConfigId("network")
 }
 
 // The key generation a test's details are sealed under.
 const testActionDetailGeneration = 3
 
-// detail as an action's sealed_detail, under the test key and a fixed nonce, so a vector's bytes hold.
-func testSealActionDetail(detail *protocol.CanonicalActionDetail) []byte {
-	sealed, err := SealConfigBody(testConfigSealKey(testActionDetailGeneration), testActionDetailContext(), detail,
-		bytes.NewReader(bytes.Repeat([]byte{0x24}, 24)))
+// The AEAD nonce a test seals a detail with, fixed so a vector's bytes hold.
+func testActionDetailRandom() *bytes.Reader {
+	return bytes.NewReader(bytes.Repeat([]byte{0x24}, 24))
+}
+
+// detail sealed for clear's sealed_detail as a daemon seals it (NewSealedCanonicalAction), under the test key and a
+// fixed nonce: bound to clear's own fields as the builder stores them, sealed_detail left out and the version fixed,
+// in the test's network (CanonicalActionDetailSealContext). Sealed for any action, one the builder refuses included,
+// so a test of a parser's refusal carries a detail of the same form.
+func testSealActionDetail(clear *protocol.CanonicalAction, detail *protocol.CanonicalActionDetail) []byte {
+	clearBytes, err := canonicalActionClearBytes(clear)
+	if err != nil {
+		panic(err)
+	}
+	sealContext, err := CanonicalActionDetailSealContext(testActionDetailNetworkId(), clearBytes)
+	if err != nil {
+		panic(err)
+	}
+	sealed, err := SealConfigBody(testConfigSealKey(testActionDetailGeneration), sealContext, detail, testActionDetailRandom())
 	if err != nil {
 		panic(err)
 	}
 	return sealed
+}
+
+// action with detail sealed into its sealed_detail (testSealActionDetail), in place, answering action.
+func testWithSealedDetail(action *protocol.CanonicalAction, detail *protocol.CanonicalActionDetail) *protocol.CanonicalAction {
+	action.SealedDetail = testSealActionDetail(action, detail)
+	return action
 }
 
 // What the test's forward seals: its target's port, and the port's text in §8.4's grammar.
@@ -79,15 +94,14 @@ func testBuildableActions() map[string]*protocol.CanonicalAction {
 			RuleId:        ruleId,
 			Subject:       subject,
 		},
-		"bridge_forward": {
+		"bridge_forward": testWithSealedDetail(&protocol.CanonicalAction{
 			Kind:          uint32(SidecarActionForward),
 			ExpiresMillis: 1762387200000,
 			GrantDst:      []string{testActionTargetDst},
 			GrantAllow:    []string{"dial"},
 			RuleId:        ruleId,
 			Subject:       subject,
-			SealedDetail:  testSealActionDetail(testForwardDetail()),
-		},
+		}, testForwardDetail()),
 		"bridge_expose": {
 			Kind:            uint32(SidecarActionExpose),
 			ExpiresMillis:   1762387200000,

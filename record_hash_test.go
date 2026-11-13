@@ -1,8 +1,10 @@
 //go:build !js
 
 // record_hash.go's values over stored bytes: RECORD.md section 20's vectors byte for byte, §16.6's ids over a fixed
-// stored action and request in testdata/record/hashes.json, a re-encoded copy failing each hash, §22.5's §16 T1
-// request_sha256 case, and the parsers' refusals. The js leg opens no files, so these stay off it.
+// stored action and request in testdata/record/hashes.json, QD-771's detail vectors (a version-4 and a version-3
+// action's sealed_detail nonce, recomputed here by hand and opened in record_action_detail_vectors_test.go), a
+// re-encoded copy failing each hash, §22.5's §16 T1 request_sha256 case, and the parsers' refusals. The js leg opens
+// no files, so these stay off it.
 
 package sidecar
 
@@ -10,6 +12,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -56,6 +59,23 @@ type testRecordVectors struct {
 		Request         string `json:"request"`
 		RequestSha256   string `json:"request_sha256"`
 	} `json:"approval"`
+	DetailSeal []testRecordDetailSealVector `json:"detail_seal"`
+}
+
+// QD-771's vector for one action whose sealed_detail is sealed beside its clear fields: the inputs, the network, the
+// config repo's test key (RK_g, its repo_id and g) and the action as stored, and what they derive, the clear bytes cut
+// from it, the nonce and the aad, with the detail it opens to, deterministically encoded.
+type testRecordDetailSealVector struct {
+	Name       string `json:"name"`
+	NetworkId  string `json:"network_id"`
+	RepoId     string `json:"repo_id"`
+	RepoKey    string `json:"repo_key"`
+	Generation uint64 `json:"generation"`
+	Stored     string `json:"stored"`
+	Clear      string `json:"clear"`
+	Nonce      string `json:"nonce"`
+	Aad        string `json:"aad"`
+	Detail     string `json:"detail"`
 }
 
 // Hex to bytes, failing the test on bad hex.
@@ -94,9 +114,12 @@ func testRecordRequest(t *testing.T, storedAction []byte) *protocol.ApprovalRequ
 func testRecordComputeVectors(t *testing.T) *testRecordVectors {
 	vectors := &testRecordVectors{
 		Comment: "RECORD-M2-02's vectors: RECORD.md section 20's commitment, leaves and tool action_id, then §16.6's " +
-			"payload_sha256, action_id, effect_key and request_sha256 over a fixed stored dns_set action and its request. " +
-			"Inputs are stored bytes, never re-encoded. go test -run TestRecordHashVectors -update-record-vectors rewrites " +
-			"this file.",
+			"payload_sha256, action_id, effect_key and request_sha256 over a fixed stored dns_set action and its request, " +
+			"then section 20's detail nonces (QD-771): a version-4 bridge_forward and a version-3 access_request as " +
+			"stored, each sealed_detail sealed beside its clear fields, nonce = SHA-256(the stored bytes with the field-38 " +
+			"record cut out)[:16], aad = \"urnetwork-sidecar-v1/sealed-body\" || 0x00 || u32be(SIGNED_GRANT_ACTIVATE) || " +
+			"network_id || nonce || u64be(generation), under the synthetic config key repo_key. Inputs are stored bytes, " +
+			"never re-encoded. go test -run TestRecordHashVectors -update-record-vectors rewrites this file.",
 	}
 	salt := bytes.Repeat([]byte{0x11}, 32)
 	body := []byte{0x0a, 0x05, 0x68, 0x65, 0x6c, 0x6c, 0x6f}
@@ -126,7 +149,57 @@ func testRecordComputeVectors(t *testing.T) *testRecordVectors {
 	storedAction := testRecordStored(t, testRecordDnsAction())
 	storedRequest := testRecordStored(t, testRecordRequest(t, storedAction))
 	testRecordFillApproval(vectors, storedAction, storedRequest)
+
+	// a version-4 forward as the builder stores it, and a version-3 access request as a build that knows version 3
+	// does, each detail sealed beside its clear fields
+	for _, c := range []struct {
+		name   string
+		action *protocol.CanonicalAction
+		detail *protocol.CanonicalActionDetail
+	}{
+		{name: "bridge_forward", action: testBuildableActions()["bridge_forward"], detail: testForwardDetail()},
+		{name: "access_request", action: testRecordAccessRequestAction(), detail: testRecordAccessRequestDetail()},
+	} {
+		stored, err := newCanonicalAction(c.action, testRecordVersionsKnown(1, 3, 4))
+		if err != nil {
+			t.Fatal(err)
+		}
+		repoKey := testConfigSealKey(testActionDetailGeneration)
+		vector := testRecordDetailSealVector{
+			Name: c.name, NetworkId: hex.EncodeToString(testActionDetailNetworkId().Bytes()),
+			RepoId: hex.EncodeToString(repoKey.repoId.Bytes()), RepoKey: hex.EncodeToString(repoKey.repoKey),
+			Generation: repoKey.Generation(), Stored: hex.EncodeToString(stored.Bytes),
+			Detail: hex.EncodeToString(testRecordStored(t, c.detail)),
+		}
+		testRecordFillDetailSeal(t, &vector)
+		vectors.DetailSeal = append(vectors.DetailSeal, vector)
+	}
 	return vectors
+}
+
+// A detail vector's derived values, by hand from its inputs, as QD-771 states them: the stored bytes with the field-38
+// record cut out, the first 16 bytes of their SHA-256, and config_seal.go's aad with those in the nonce's place.
+func testRecordFillDetailSeal(t *testing.T, vector *testRecordDetailSealVector) {
+	t.Helper()
+	clear := []byte{}
+	for _, record := range testRecordFields(t, testRecordHex(t, vector.Stored)) {
+		if number, _, _ := protowire.ConsumeTag(record); number != 38 {
+			clear = append(clear, record...)
+		}
+	}
+	clearSha256 := sha256.Sum256(clear)
+	nonce := clearSha256[:16]
+	aad := bytes.Join([][]byte{
+		[]byte("urnetwork-sidecar-v1/sealed-body"),
+		{0x00},
+		binary.BigEndian.AppendUint32(nil, uint32(bridge.SignedType_SIGNED_GRANT_ACTIVATE)),
+		testRecordHex(t, vector.NetworkId),
+		nonce,
+		binary.BigEndian.AppendUint64(nil, vector.Generation),
+	}, nil)
+	vector.Clear = hex.EncodeToString(clear)
+	vector.Nonce = hex.EncodeToString(nonce)
+	vector.Aad = hex.EncodeToString(aad)
 }
 
 // The approval case's values from its two stored inputs.
@@ -212,12 +285,44 @@ func TestRecordHashVectors(t *testing.T) {
 		t.Errorf("the parsed request hashes as %x", requestSha256)
 	}
 
+	// QD-771's detail vectors: a version-4 and a version-3 action, each value recomputed by hand from the file's own
+	// inputs and by record_hash.go's derivation, and each stored action one a build that knows its version parses,
+	// its detail naming the vector's generation
+	versions := []uint32{}
+	for _, vector := range vectors.DetailSeal {
+		recomputed := vector
+		testRecordFillDetailSeal(t, &recomputed)
+		if recomputed != vector {
+			t.Errorf("%s: the detail vector recomputes as %+v", vector.Name, recomputed)
+		}
+		stored := testRecordHex(t, vector.Stored)
+		derived, err := CanonicalActionDetailSealContext(Id(testRecordHex(t, vector.NetworkId)), stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hex.EncodeToString(derived.Nonce) != vector.Nonce || hex.EncodeToString(derived.aad(vector.Generation)) != vector.Aad {
+			t.Errorf("%s: the derivation gives nonce %x and aad %x", vector.Name, derived.Nonce, derived.aad(vector.Generation))
+		}
+		parsed, err := parseStoredCanonicalAction(stored, testRecordVersionsKnown(1, 3, 4))
+		if err != nil {
+			t.Fatalf("%s: %v", vector.Name, err)
+		}
+		if generation, err := ConfigSealedGeneration(parsed.Action.GetSealedDetail()); err != nil || generation != vector.Generation {
+			t.Errorf("%s: its detail names generation %d: %v", vector.Name, generation, err)
+		}
+		versions = append(versions, parsed.Action.GetVersion())
+	}
+	if !slices.Equal(versions, []uint32{canonicalActionVersionSealedGrant, canonicalActionVersionAccessRequest}) {
+		t.Fatalf("the detail vectors are of versions %v", versions)
+	}
+
 	// Section 20's values are the file's, byte for byte.
 	section := newRecordMd(t).section(t, "20")
 	recordMdRequire(t, "section 20", section,
 		vectors.BodyCommitment.Commitment,
 		vectors.Leaves[0].Leaf, vectors.Leaves[1].Leaf, vectors.Leaves[2].Leaf,
 		vectors.ToolActionId.ActionId,
+		vectors.DetailSeal[0].Nonce, vectors.DetailSeal[1].Nonce,
 	)
 }
 

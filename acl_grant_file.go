@@ -7,7 +7,8 @@
 //	          AclEngine.ActiveGrant, which MCP's ApprovalGate reads as its ApprovalStandingGrants
 //	request   otherwise MatchAclRequest finds the requests rule at the installed state, and AclGrantFiler.Action fills
 //	          the CanonicalAction's grant fields, rule_id, subject and expires_millis, on the caller's action of its
-//	          kind, which the gate files as the ApprovalRequest; a grant defaults to the rule's expiresDefault, 1 h
+//	          kind, and only then seals a dial or route grant's detail beside them, which the gate files as the
+//	          ApprovalRequest; a grant defaults to the rule's expiresDefault, 1 h
 //	activate  on a spendable decision the gate runs the grant component, AclGrantFiler.Effect: it files GrantActivate
 //	          under the grant_id the approval fixes, AclGrantId(approval_id, payload_sha256), through sidecarAct, whose
 //	          pending statements retry the same bytes against POST /network/config/delta until they land; the grant
@@ -25,9 +26,12 @@
 // §13.10's and §17.9's callers and MCP's tools are theirs; this gives them ActiveGrant, Grants and AclGrantFiler.
 //
 // Of the kinds whose action carries a grant, socket_listen and tls_publish build at version 1, and bridge_forward,
-// a dial or route grant, at version 4 (QD-740): its base carries the sealed_detail its caller sealed, the target's
-// port inside, and the grant_dst a request gives names subjects alone. Action refuses a forward with none, as
-// NewCanonicalAction does. Safe for concurrent use. Nothing here creates, derives or unwraps a key.
+// a dial or route grant, at version 4 (QD-740): its request carries the detail, the target's port inside, which the
+// filer's device seals into sealed_detail once the grant's clear fields are filled, bound to them (QD-771;
+// CanonicalActionDetailSealer, the sidecar's by default), and the grant_dst a request gives names subjects alone.
+// Action refuses a forward with no detail, as NewCanonicalAction does, and a base sealed already, whose seal binds no
+// field the filer fills. Safe for concurrent use. Nothing here creates, derives or unwraps a key: the sealer derives a
+// detail's (Sidecar.SealActionDetail).
 
 package sidecar
 
@@ -221,33 +225,48 @@ func (self *AclEngine) Grants(subject AclSubject, now time.Time) []AclGrantInfo 
 type AclGrantFiler struct {
 	sidecar *Sidecar
 	engine  *AclEngine
+	// seals a dial or route grant's detail once its clear fields are filled; nil seals none
+	details CanonicalActionDetailSealer
 }
 
-// A filer acting as sidecar, matching requests on engine's installed state.
+// A filer acting as sidecar, matching requests on engine's installed state and sealing a grant's detail on sidecar
+// (Sidecar.SealActionDetail).
 func NewAclGrantFiler(sidecar *Sidecar, engine *AclEngine) *AclGrantFiler {
-	return &AclGrantFiler{sidecar: sidecar, engine: engine}
+	filer := &AclGrantFiler{sidecar: sidecar, engine: engine}
+	if sidecar != nil {
+		filer.details = sidecar
+	}
+	return filer
 }
 
 // The grant an action asks for, before its rule is found: the destinations and actions in §8.4's grant forms
-// (ParseAclGrantDst, ParseAclGrantAllow), and an expiry, 0 for the rule's default.
+// (ParseAclGrantDst, ParseAclGrantAllow), an expiry, 0 for the rule's default, and a dial or route grant's detail.
 type AclGrantRequest struct {
 	Subject    Id
 	GrantDst   []string
 	GrantAllow []string
 	ExpiresMs  int64
+	// A dial or route grant's prefixes and ports (QD-740), which the filer seals into the action's sealed_detail once
+	// the grant's clear fields are filled (QD-771); nil for a grant that seals nothing.
+	Detail *protocol.CanonicalActionDetail
 }
 
 // The CanonicalAction a grant needs (§16.8): base, the caller's action of its kind with its own fields set (a
-// forward's target and port, a publish's host, port, audience, app_mode and pin), with the grant's fields filled from
-// the requests rule MatchAclRequest finds at the installed state: rule_id, subject, grant_dst, grant_allow and
-// expires_millis. Built through NewCanonicalAction, which holds it to its kind's row.
-func (self *AclGrantFiler) Action(base *protocol.CanonicalAction, request *AclGrantRequest, now time.Time) (*StoredCanonicalAction, error) {
+// publish's host, port, audience, app_mode and pin), with the grant's fields filled from the requests rule
+// MatchAclRequest finds at the installed state: rule_id, subject, grant_dst, grant_allow and expires_millis. A dial or
+// route grant's request.Detail is sealed only then, beside those final fields, by the filer's sealer
+// (NewSealedCanonicalAction); a base that carries a sealed_detail already is refused, since its seal binds none of
+// them. Built through NewCanonicalAction or NewSealedCanonicalAction, which hold it to its kind's row.
+func (self *AclGrantFiler) Action(ctx context.Context, base *protocol.CanonicalAction, request *AclGrantRequest, now time.Time) (*StoredCanonicalAction, error) {
 	state := self.engine.State()
 	if state == nil {
 		return nil, fmt.Errorf("%w: no state installed", ErrAclGrantFile)
 	}
 	if base == nil || request == nil {
 		return nil, fmt.Errorf("%w: no action", ErrAclGrantFile)
+	}
+	if len(base.GetSealedDetail()) != 0 {
+		return nil, fmt.Errorf("%w: a sealed_detail sealed before the grant's fields were filled: %w", ErrAclGrantFile, ErrCanonicalActionInvalid)
 	}
 	action := proto.Clone(base).(*protocol.CanonicalAction)
 	action.Subject = request.Subject.Bytes()
@@ -267,7 +286,14 @@ func (self *AclGrantFiler) Action(base *protocol.CanonicalAction, request *AclGr
 	}
 	action.RuleId = append([]byte{}, match.Rule.GetRuleId()...)
 	action.ExpiresMillis = match.ExpiresMs
-	return NewCanonicalAction(action)
+	if request.Detail == nil {
+		return NewCanonicalAction(action)
+	}
+	// the clear fields are final, so the detail is sealed beside them now
+	if self.details == nil {
+		return nil, fmt.Errorf("%w: no device here seals a grant's detail", ErrAclGrantFile)
+	}
+	return self.details.SealActionDetail(ctx, action, request.Detail)
 }
 
 // The grant component of action (§16.6): the effect the gate runs on a spendable decision.
