@@ -24,6 +24,10 @@ message AclRows {
   AclAudit audit = 7;                     // owner decision 63; Team only
   repeated AclSuspension suspensions = 8; // active Suspends a fold kept (plan-ACL-folded-grant-state #1)
   repeated AclSpentGrant spent_grants = 9; // activated and revoked grant ids (plan-ACL-folded-grant-state #3)
+  // The document's effective evidenceDefault, compiled at each base as each AclRequestRule's evidence is: the
+  // ApprovalDecision.channel values accepted for an action no requests rule names (dns_set, dns_delete,
+  // bridge_expose); default all three (QD-727)
+  repeated uint32 evidence_default = 10;
 }
 
 // A tag or group atom, or a selector with no table name compiled to a derived atom: the first 16 bytes of

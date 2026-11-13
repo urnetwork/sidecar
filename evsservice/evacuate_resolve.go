@@ -8,7 +8,12 @@
 //	committed  at this record's place: kept, to be moved. A part follows its seal: it is kept when the committed
 //	           seal's record names its place. At another place, a second copy of its push: dropped, nothing else
 //	           deleted
-//	dead       dropped, and the new slots its record lists are deleted before its batch, the only cleanup
+//	dead       dropped, nothing else deleted: the slots its record lists stay, counted (DESIGN-DETAILS 14.2.8's
+//	           interim, QD-766). A slot id a dead record lists may name an object a committed push holds: an honest
+//	           retoken's, which carries its refused statement's slots under a new push id, or a committed version's
+//	           that a refused push listed again (14.1's A and B). Nothing on a slot object says which statement wrote
+//	           it until 14.7's track 2 writes its origin, so deleting by the list could take a committed version's
+//	           keys. Keeping them leaks objects of at most 8 KiB and loses no key
 //	pending    the ref's fence is raised, one head CAS with fence_ms, and the record resolved again on the fenced
 //	           head. While this process's clock is unsure no fence is raised and the record stays. A ref with no
 //	           head has nothing to fence and its record stays too: how a fence reaches such a ref is
@@ -250,14 +255,14 @@ func (self *evacuateRun) resolveRecord(minute *evacuateMinute, place *protocol.E
 	}
 	switch resolution.State {
 	case EvsResolveDead:
+		// the interim of the file header: its slots are counted and none is queued for deleteMinute, which a
+		// dead record's own slots reach again once their origin says whose they are (14.2.5)
 		_, slotIds, err := evacuateRecordObjects(record)
 		if err != nil {
-			// its slots cannot be read from it, so none is deleted: the record goes, as a dead one does
+			// its slots cannot be read from it, so none is counted: the record goes, as a dead one does
 			self.alarm("evacuate_dead_record", placeKey(place), "a dead record of batch minute %d on cluster %s lists objects that do not parse: its slots stay", minute.minute, self.clusterId)
 		}
-		for _, slotId := range slotIds {
-			minute.deadSlots = append(minute.deadSlots, &evacuateSlot{repoId: record.RepoId, slotId: slotId})
-		}
+		self.result.SlotKeptCount += len(slotIds)
 		self.result.DeadCount += 1
 	case EvsResolveCommitted:
 		keep, version, err := self.committedHere(record, place, resolution)
