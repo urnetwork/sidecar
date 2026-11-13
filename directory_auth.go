@@ -560,11 +560,12 @@ func directoryRepoAdminIn(state *ConfigState, repoId Id, sidecarId Id, position 
 
 // D-MCP-35's right at a position before what this state retains, from the head's positions: the repo created by then
 // and not deleted then; the sidecar's row not revoked, parked, read_only or voided by a cascade there, no active Suspend of it
-// from at or before it, and a member device consented by then; and a current admin row added at or before it, or, for
-// an owner-bound repo, the device being its owner's. A removed admin's row, a lifted Suspend and a consent replaced by
-// a later one are gone from the head, so what they said of an earlier position is not told here (question
-// acl-m2-06-access-log-positions): the first refuses, the second reads as never suspended, the third as consented
-// later.
+// from at or before it, and a member device consented by then; and an admin row added at or before it and not removed
+// by then (RepoAdminAt), or, for an owner-bound repo, the device being its owner's. A removed admin's row stays in the
+// rows with its removal's position until a base whose retention point passed the removal drops it (QD-743), so its
+// right before the removal is told until then and refused after. A lifted Suspend and a consent replaced by a later one
+// are gone from the head, so what they said of an earlier position is not told here: the first reads as never
+// suspended, the second as consented later.
 func directoryRepoAdminFromHead(head *ConfigState, repoId Id, sidecarId Id, position uint64) bool {
 	acl := directoryAcl(head)
 	if acl == nil {
@@ -600,8 +601,8 @@ func directoryRepoAdminFromHead(head *ConfigState, repoId Id, sidecarId Id, posi
 	return acl.RepoAdminAt(repoId, sidecarId, position)
 }
 
-// The position of a repo's RepoCreate, which the rows keep as its creator's admin row: the earliest admin row's, or
-// never once no admin row is left.
+// The position of a repo's RepoCreate, which the rows keep as its creator's admin row: the earliest admin row's, a
+// removed one's included while the rows keep it (QD-743), or never once no admin row is left.
 func directoryRepoCreatedAt(repo *protocol.AclRepo) uint64 {
 	createdAt := ^uint64(0)
 	for _, admin := range repo.GetAdmins() {
@@ -629,7 +630,7 @@ func directoryAdminsIn(state *ConfigState) []Id {
 	admins := []Id{}
 	for _, sidecarId := range state.SidecarIds() {
 		creator := slices.ContainsFunc(directory.GetAdmins(), func(admin *protocol.AclRepoAdminRow) bool {
-			return bytes.Equal(admin.GetSidecarId(), sidecarId.Bytes())
+			return AclRepoAdminStands(admin) && bytes.Equal(admin.GetSidecarId(), sidecarId.Bytes())
 		})
 		if !creator && !state.IsConfigWriter(sidecarId) {
 			continue
@@ -677,7 +678,9 @@ func directoryApproversIn(state *ConfigState, request *protocol.DirectoryRequest
 		case aclRepoKindGeneral(kind):
 			for _, admin := range repo.GetAdmins() {
 				adminId := Id(admin.GetSidecarId())
-				if directoryRepoAdminIn(state, repoId, adminId, state.n) {
+				// a removed row, which the rows keep a while (QD-743), names no approver, and a re-added admin's
+				// standing row names it once
+				if AclRepoAdminStands(admin) && directoryRepoAdminIn(state, repoId, adminId, state.n) {
 					approvers.SidecarIds = append(approvers.SidecarIds, adminId)
 				}
 			}

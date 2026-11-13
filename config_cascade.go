@@ -605,7 +605,10 @@ func configCascadeStands(rows *protocol.AclRows, closure *ConfigCascadeClosure) 
 	}
 	for _, repo := range rows.GetRepos() {
 		for _, admin := range repo.GetAdmins() {
-			add("repo_admin", repo.GetRepoId(), admin.GetSigner(), admin.GetAt())
+			// a removed admin's row no longer stands (QD-743)
+			if AclRepoAdminStands(admin) {
+				add("repo_admin", repo.GetRepoId(), admin.GetSigner(), admin.GetAt())
+			}
 		}
 		for _, grant := range repo.GetGrants() {
 			add("repo_grant", repo.GetRepoId(), grant.GetSigner(), grant.GetAt())

@@ -391,7 +391,7 @@ func (self *AclState) addAccessLogRights(accumulator *aclEvsAccumulator, sidecar
 	if repo.admins[sidecar.id] {
 		var at uint64
 		for _, admin := range repo.row.GetAdmins() {
-			if Id(admin.GetSidecarId()) == sidecar.id {
+			if Id(admin.GetSidecarId()) == sidecar.id && AclRepoAdminStands(admin) {
 				at = admin.GetAt()
 			}
 		}
