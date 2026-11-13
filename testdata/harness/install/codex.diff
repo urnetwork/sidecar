@@ -1,0 +1,118 @@
+--- a/$HOME/.codex/config.toml
++++ b/$HOME/.codex/config.toml
+@@ -11,3 +11,34 @@
+ 
+ [profiles.review]
+ model = "review-example"
++
++[mcp_servers.ur]
++command = "/opt/ur/bin/ur"
++args = ["mcp"]
++
++[mcp_servers.ur.tools.bridge_expose]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.bridge_forward]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.directory_request]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.dns_delete]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.dns_set]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.mail_alias_create]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.mail_alias_delete]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.socket_listen]
++approval_mode = "prompt"
++
++[mcp_servers.ur.tools.tls_publish]
++approval_mode = "prompt"
+--- /dev/null
++++ b/$HOME/.codex/hooks.json
+@@ -0,0 +1,78 @@
++{
++  "hooks": {
++    "PermissionRequest": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook codex",
++            "timeout": 75
++          }
++        ]
++      }
++    ],
++    "PostToolUse": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook codex"
++          }
++        ]
++      }
++    ],
++    "PreToolUse": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook codex"
++          }
++        ]
++      }
++    ],
++    "SessionEnd": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook codex"
++          }
++        ]
++      }
++    ],
++    "SessionStart": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook codex"
++          }
++        ]
++      }
++    ],
++    "Stop": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook codex"
++          }
++        ]
++      }
++    ],
++    "UserPromptSubmit": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook codex"
++          }
++        ]
++      }
++    ]
++  }
++}

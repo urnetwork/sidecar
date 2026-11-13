@@ -36,8 +36,8 @@ func newTestConfigAgentNet(t *testing.T) (*testConfigNet, *testConfigDelegation,
 }
 
 // FS-102 part 2: a Suspend of a Delegation's agent retires its shared key, the other agent then reading by its own
-// ReaderWrap and the repo the Delegation reaches rotating, and leaves the Delegation admitting, which the plan offers
-// to end; the plan's statement is the Suspend.
+// ReaderWrap and the repos the Delegation reaches rotating, the config among them, and leaves the Delegation admitting,
+// which the plan offers to end; the plan's statement is the Suspend.
 func TestAnAgentPlanNamesItsThreeCapabilitiesApart(t *testing.T) {
 	net, delegation, first, second, repoId := newTestConfigAgentNet(t)
 	plan, err := net.log.State().AgentRevokePlan(first.sidecarId, AgentActSuspend, false, 0)
@@ -50,6 +50,10 @@ func TestAnAgentPlanNamesItsThreeCapabilitiesApart(t *testing.T) {
 	}
 	if !part.KeyRetires || !slices.Equal(part.AgentsOnOwnWraps, []Id{second.sidecarId}) || !slices.Contains(part.ReposRotating, repoId) {
 		t.Errorf("the shared key: retires %v, own wraps %v, rotating %v", part.KeyRetires, part.AgentsOnOwnWraps, part.ReposRotating)
+	}
+	// the config rotates too, a live Delegation reaching it always, though nothing has put its row in the rows yet
+	if configRows, _ := testConfigConfigRepoRows(t, net.log.State()); len(configRows) != 0 || !slices.Contains(part.ReposRotating, net.configRepoId()) {
+		t.Errorf("the config among the rotating repos %v, the rows' config rows %v", part.ReposRotating, configRows)
 	}
 	if part.AuthorityEnds || part.AdmissionsLeft != 3 || part.NotAfter.UnixMilli() != delegation.notAfter {
 		t.Errorf("the authority: ends %v, %d left, until %v", part.AuthorityEnds, part.AdmissionsLeft, part.NotAfter)

@@ -312,7 +312,7 @@ func TestCatalogMatchesDesign(t *testing.T) {
 	AddTool(wrong, &McpToolSpec[testToolIn]{Name: "evs_read", Tier: McpTierWrite, Description: "reads", Access: none}, echo)
 	AddTool(wrong, &McpToolSpec[testToolIn]{Name: "not_a_design_tool", Tier: McpTierRead, Description: "reads", Access: none}, echo)
 	err := checkMcpCatalog(wrong)
-	if err == nil || !strings.Contains(err.Error(), "evs_read is not W") && !strings.Contains(err.Error(), "evs_read is registered and still listed unbuilt") ||
+	if err == nil || !strings.Contains(err.Error(), "evs_read is not R with its hints") && !strings.Contains(err.Error(), "evs_read is registered and still listed unbuilt") ||
 		!strings.Contains(err.Error(), "not_a_design_tool is no §16.5 tool") {
 		t.Errorf("a wrong catalog: %v", err)
 	}

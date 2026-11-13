@@ -260,6 +260,8 @@ barrier gkm.wrap_put.after gkmservice/recovery.go
 barrier gkm.wrap_put.after gkmservice/wraps.go
 barrier gkm.wrap_put.before gkmservice/recovery.go
 barrier gkm.wrap_put.before gkmservice/wraps.go
+barrier harness.evidence.after mcp/harness_evidence.go
+barrier harness.evidence.before mcp/harness_evidence.go
 barrier hold.list.after host_hold.go
 barrier hold.list.before host_hold.go
 barrier identity.agent_subkey.mint.after identity_agent.go

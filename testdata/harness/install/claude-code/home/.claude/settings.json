@@ -1,0 +1,20 @@
+{
+  // the person's own rules, kept byte for byte
+  "permissions": {
+    "allow": ["Bash(git status)", "Read"],
+    "ask": [
+      "Bash(rm:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "/opt/fmt/bin/format-on-save" }
+        ]
+      }
+    ]
+  },
+  "model": "sonnet"
+}
