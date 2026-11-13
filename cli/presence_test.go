@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -48,7 +49,13 @@ type testFidoDevice struct {
 	responses [][]byte
 	// what it saw: the client data hashes asked to sign, in order
 	signedHashes [][]byte
+	// the client data hash its makeCredential was asked under, and the authenticator data it answered
+	createdHash     []byte
+	createdAuthData []byte
 }
+
+// The model the test authenticator reports, which a registration must not carry.
+var testFidoAaguid = bytes.Repeat([]byte{0xa6}, 16)
 
 func newTestFidoDevice(t testing.TB) *testFidoDevice {
 	return &testFidoDevice{t: t, settings: defaultUrFidoSettings(), flags: urFidoFlagUserPresent | urFidoFlagUserVerified, keepalives: 2, channelId: 0x01020304}
@@ -137,11 +144,15 @@ func (self *testFidoDevice) ctapWithLock(command byte, encoded []byte) []byte {
 			self.t.Fatal(err)
 		}
 		authenticatorData := append(append(rpIdHash[:], self.flags|urFidoFlagAttested), 0, 0, 0, 0)
-		authenticatorData = append(authenticatorData, make([]byte, 16)...)
+		authenticatorData = append(authenticatorData, testFidoAaguid...)
 		authenticatorData = binary.BigEndian.AppendUint16(authenticatorData, uint16(len(self.credentialId)))
 		authenticatorData = append(append(authenticatorData, self.credentialId...), coseKey...)
+		self.createdHash = bytes.Clone(request[int64(1)].([]byte))
+		self.createdAuthData = bytes.Clone(authenticatorData)
+		// a security key answers with its own statement, here packed self attestation's shape, which the client drops
 		answer, err := urCborAppend([]byte{urFidoStatusOk}, urCborMap{
-			{Key: int64(1), Value: "none"}, {Key: int64(2), Value: authenticatorData}, {Key: int64(3), Value: urCborMap{}},
+			{Key: int64(1), Value: "packed"}, {Key: int64(2), Value: authenticatorData},
+			{Key: int64(3), Value: urCborMap{{Key: "alg", Value: urFidoCoseEs256}, {Key: "sig", Value: []byte("a statement the client drops")}}},
 		})
 		if err != nil {
 			self.t.Fatal(err)
@@ -250,6 +261,74 @@ func TestFidoRegisterAndAssertVerify(t *testing.T) {
 	}
 	if _, err := reopened.Assert(t.Context(), handle.KeyId, body); !errors.Is(err, sidecar.ErrPresenceNoKey) {
 		t.Errorf("an assertion of a removed key: %v", err)
+	}
+}
+
+// A registration's attestation is KeyRegister.attestation's map (QD-730): the client data this client hashed for the
+// makeCredential, a webauthn.create from the table's origin, beside a fmt none attestation object over the
+// authenticator's data with its aaguid zeroed and its statement dropped, which the root's check labels asserted for the
+// handle's key and refuses for another.
+func TestFidoRegistrationCarriesItsClientData(t *testing.T) {
+	device := newTestFidoDevice(t)
+	provider := newTestFidoProvider(t, device)
+	handle, err := provider.Register(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	register := &protocol.KeyRegister{
+		KeyId: handle.KeyId, Alg: handle.Alg, PublicKey: handle.PublicKey, Attestation: handle.Attestation,
+		Purpose: bridge.KeyPurpose_KEY_PURPOSE_PRESENCE,
+	}
+	label, err := sidecar.VerifyPresenceAttestation(register, time.Now().UnixMilli())
+	if err != nil || label != sidecar.PresenceLabelAsserted {
+		t.Fatalf("the attestation, %d bytes: %s, %v", len(handle.Attestation), label, err)
+	}
+	otherKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPoint, err := otherKey.PublicKey.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	register.PublicKey = otherPoint
+	if _, err := sidecar.VerifyPresenceAttestation(register, time.Now().UnixMilli()); !errors.Is(err, sidecar.ErrPresenceAttestation) {
+		t.Errorf("the attestation for another key: %v", err)
+	}
+
+	value, rest, err := urCborRead(handle.Attestation, device.settings.CborDepthCount)
+	if err != nil || len(rest) != 0 {
+		t.Fatalf("the map: %v, %d bytes after", err, len(rest))
+	}
+	container, ok := value.(map[any]any)
+	if !ok || len(container) != 2 {
+		t.Fatalf("the map: %+v", value)
+	}
+	clientData, _ := container["clientDataJSON"].([]byte)
+	clientDataHash := sha256.Sum256(clientData)
+	if !bytes.Equal(clientDataHash[:], device.createdHash) {
+		t.Errorf("the client data carried is not what the authenticator was asked under: %s", clientData)
+	}
+	if !bytes.Contains(clientData, []byte(`"type":"webauthn.create"`)) || !bytes.Contains(clientData, []byte(`"origin":"https://ur.io"`)) {
+		t.Errorf("the client data: %s", clientData)
+	}
+	encodedObject, _ := container["attObj"].([]byte)
+	value, rest, err = urCborRead(encodedObject, device.settings.CborDepthCount)
+	if err != nil || len(rest) != 0 {
+		t.Fatalf("the object: %v, %d bytes after", err, len(rest))
+	}
+	object, ok := value.(map[any]any)
+	if !ok || len(object) != 3 || object["fmt"] != "none" {
+		t.Fatalf("the object: %+v", value)
+	}
+	if statement, ok := object["attStmt"].(map[any]any); !ok || len(statement) != 0 {
+		t.Errorf("the statement: %+v", object["attStmt"])
+	}
+	anonymous := bytes.Clone(device.createdAuthData)
+	clear(anonymous[urFidoAaguidOffset : urFidoAaguidOffset+urFidoAaguidByteCount])
+	authData, _ := object["authData"].([]byte)
+	if !bytes.Equal(authData, anonymous) || bytes.Contains(handle.Attestation, testFidoAaguid) {
+		t.Error("the authenticator data is not the authenticator's with its aaguid zeroed")
 	}
 }
 
