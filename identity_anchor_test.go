@@ -82,8 +82,10 @@ func testDelegationAdmitArgs(t *testing.T) (*sidecarDelegationAdmitArgs, ed25519
 	}
 	readerSeed := make([]byte, 32)
 	rand.Read(readerSeed)
+	delegationId := make([]byte, sha256.Size)
+	rand.Read(delegationId)
 	bundle := &AuthKeyBundle{
-		DelegationId:          NewId(),
+		DelegationId:          delegationId,
 		DelegationSigningSeed: bytes.Clone(privateKey.Seed()),
 		DelegationReaderSeed:  readerSeed,
 		TagIds:                [][]byte{NewId().Bytes(), NewId().Bytes()},
@@ -98,7 +100,8 @@ func testDelegationAdmitArgs(t *testing.T) (*sidecarDelegationAdmitArgs, ed25519
 		identity:  &SidecarIdentity{SidecarId: NewId(), IdentityPublicKey: identityKey},
 		bundle:    bundle,
 		delegation: &bridge.DelegationRow{
-			DelegationId: bundle.DelegationId.Bytes(),
+			DelegationId: bytes.Clone(bundle.DelegationId),
+			Pubkey:       bytes.Clone(publicKey),
 			NotAfter:     1_900_000_000_000,
 		},
 		at:                  &bridge.AuthPin{Version: 12, Chain: chain[:]},
@@ -124,7 +127,7 @@ func TestDelegationKeepsOnlyReaderSeed(t *testing.T) {
 		t.Fatalf("the Delegation's signature: %v", err)
 	}
 	keyId := sha256.Sum256(delegationKey)
-	if !bytes.Equal(signed.GetSignerId(), args.bundle.DelegationId.Bytes()) || !bytes.Equal(signed.GetKeyId(), keyId[:]) {
+	if !bytes.Equal(signed.GetSignerId(), args.bundle.DelegationId) || !bytes.Equal(signed.GetKeyId(), keyId[:]) {
 		t.Error("the signer is not the Delegation's")
 	}
 	admit := &protocol.SidecarAdmit{}
@@ -176,15 +179,26 @@ func TestDelegationAdmitRefusals(t *testing.T) {
 	}
 
 	for name, edit := range map[string]func(args *sidecarDelegationAdmitArgs){
-		"ended":      func(args *sidecarDelegationAdmitArgs) { args.delegation.EndedAt = 3 },
-		"another id": func(args *sidecarDelegationAdmitArgs) { args.delegation.DelegationId = NewId().Bytes() },
-		"a 32-byte id": func(args *sidecarDelegationAdmitArgs) {
-			// §10.5's d is SHA-256(Signed Delegation); a bundle's 16-byte id matches no such row
-			id := sha256.Sum256(args.bundle.DelegationId.Bytes())
+		"ended": func(args *sidecarDelegationAdmitArgs) { args.delegation.EndedAt = 3 },
+		"another id": func(args *sidecarDelegationAdmitArgs) {
+			id := sha256.Sum256(args.bundle.DelegationId)
 			args.delegation.DelegationId = id[:]
 		},
-		"no not_after": func(args *sidecarDelegationAdmitArgs) { args.delegation.NotAfter = 0 },
-		"no tags":      func(args *sidecarDelegationAdmitArgs) { args.bundle.TagIds = nil },
+		"a 16-byte id": func(args *sidecarDelegationAdmitArgs) {
+			// §10.5's d is SHA-256(Signed Delegation) (QD-731); a 16-byte id matches no row, even one cut to match
+			args.bundle.DelegationId = args.bundle.DelegationId[:16]
+			args.delegation.DelegationId = bytes.Clone(args.bundle.DelegationId)
+		},
+		"no id": func(args *sidecarDelegationAdmitArgs) {
+			args.bundle.DelegationId = nil
+			args.delegation.DelegationId = nil
+		},
+		"another key's seed": func(args *sidecarDelegationAdmitArgs) {
+			args.bundle.DelegationSigningSeed = bytes.Repeat([]byte{0x33}, ed25519.SeedSize)
+		},
+		"a row with no key": func(args *sidecarDelegationAdmitArgs) { args.delegation.Pubkey = nil },
+		"no not_after":      func(args *sidecarDelegationAdmitArgs) { args.delegation.NotAfter = 0 },
+		"no tags":           func(args *sidecarDelegationAdmitArgs) { args.bundle.TagIds = nil },
 	} {
 		args, _ := testDelegationAdmitArgs(t)
 		edit(args)
@@ -194,5 +208,87 @@ func TestDelegationAdmitRefusals(t *testing.T) {
 		if !bytes.Equal(args.bundle.DelegationSigningSeed, make([]byte, 32)) {
 			t.Errorf("%s: the signing seed was not erased", name)
 		}
+	}
+}
+
+// QD-731: a pre-approved key's self-admission matches its Delegation's row. A device declares a Delegation on the log,
+// whose id is SHA-256 of the Signed Delegation, and formats that id into the key's bundle; the daemon that parses the
+// string finds the row by the bundle's id, signs its own SidecarAdmit under it, and every reader of the log takes the
+// admission as the Delegation's: signer_id the delegation_id, exactly its tags, and its not_after.
+func TestBundleSelfAdmissionMatchesItsDelegationRow(t *testing.T) {
+	net, ci, deploy := newTestConfigTagNet(t)
+	day := int64(24 * 60 * 60 * 1000)
+	delegation := net.delegate(net.owner, "runners", []Id{ci, deploy}, 2, net.timeMs+30*day)
+	if len(delegation.id) != sha256.Size {
+		t.Fatalf("a delegation_id of %d bytes", len(delegation.id))
+	}
+
+	// the creating device's encoder: the anchor, the head it stood at, the Delegation's id and both seeds
+	genesisSha256 := bridge.GenesisChain(net.signedGenesis)
+	created := &AuthKeyBundle{
+		GenesisSha256:         genesisSha256[:],
+		HeadVersion:           net.n,
+		HeadChain:             bytes.Clone(net.chain[:]),
+		DelegationId:          bytes.Clone(delegation.id),
+		DelegationSigningSeed: bytes.Clone(delegation.key.Seed()),
+		DelegationReaderSeed:  countingBytes(0x81, authKeySeedByteCount),
+		TagIds:                [][]byte{ci.Bytes(), deploy.Bytes()},
+	}
+	text, err := formatAuthKey(testAuthKeyBearer(), created)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the enrolling daemon: the string, then the row its bundle names in the state it verified
+	authKey, err := ParseAuthKey(text, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := authKey.Bundle()
+	state := net.log.State()
+	row := state.Delegation(bundle.DelegationId)
+	if row == nil {
+		t.Fatal("the bundle's delegation_id names no row of the log")
+	}
+	agent := net.device("runner 1", Id{})
+	signed, err := newDelegationSidecarAdmit(&sidecarDelegationAdmitArgs{
+		networkId:           net.networkId,
+		identity:            &SidecarIdentity{NetworkId: net.networkId, SidecarId: agent.sidecarId, IdentityPublicKey: agent.publicKey()},
+		bundle:              bundle,
+		delegation:          row,
+		at:                  state.Pin(),
+		statementNotAfterMs: net.timeMs + 60*60*1000,
+		random:              rand.Reader,
+	})
+	if err != nil {
+		t.Fatalf("the self-admission: %v", err)
+	}
+	if !bytes.Equal(signed.GetSignerId(), delegation.id) {
+		t.Error("the statement's signer_id is not the delegation_id")
+	}
+	if !bytes.Equal(bundle.DelegationSigningSeed, make([]byte, ed25519.SeedSize)) {
+		t.Error("the signing seed was not erased")
+	}
+
+	verdict := net.push(net.makeEntry(bridge.AuthEntryKindStatement, testConfigMarshal(t, signed)))
+	if !verdict.Accepted() {
+		t.Fatalf("the log refused the self-admission: %v", verdict.Refusal)
+	}
+	admitted := net.log.State().SidecarRow(agent.sidecarId)
+	if admitted == nil || !bytes.Equal(admitted.GetDelegationId(), delegation.id) || admitted.GetNotAfter() != delegation.notAfter ||
+		len(admitted.GetTagIds()) != 2 || !bytes.Equal(admitted.GetTagIds()[0], ci.Bytes()) || len(admitted.GetMemberId()) != 0 ||
+		!bytes.Equal(admitted.GetIdentityPublicKey(), agent.publicKey()) {
+		t.Errorf("the admitted sidecar's row: %v", admitted)
+	}
+	if after := net.log.State().Delegation(delegation.id); after == nil || after.GetAdmissions() != 1 {
+		t.Errorf("the Delegation's row after its admission: %v", after)
+	}
+	net.everyReaderAgrees()
+
+	// a second copy of the string whose bundle names the id's first 16 bytes finds no row and signs nothing
+	short := testBundleMessage()
+	short.DelegationId = bytes.Clone(delegation.id[:16])
+	if _, err := ParseAuthKey(testAuthKeyBearer()+"#"+encodeTestBundle(t, short), nil); !errors.Is(err, ErrAuthKeyMalformed) {
+		t.Errorf("a 16-byte delegation_id: %v", err)
 	}
 }

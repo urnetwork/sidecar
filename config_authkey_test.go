@@ -57,12 +57,11 @@ func testAuthKeyBearer() string {
 func testAuthKeyBundle() *AuthKeyBundle {
 	genesis := sha256.Sum256([]byte("synthetic genesis"))
 	head := sha256.Sum256([]byte("synthetic head"))
-	delegationId, _ := IdFromBytes(countingBytes(0x41, authKeyIdByteCount))
 	return &AuthKeyBundle{
 		GenesisSha256:         genesis[:],
 		HeadVersion:           7,
 		HeadChain:             head[:],
-		DelegationId:          delegationId,
+		DelegationId:          countingBytes(0x41, authKeyDelegationIdByteCount),
 		DelegationSigningSeed: countingBytes(0x61, authKeySeedByteCount),
 		DelegationReaderSeed:  countingBytes(0x81, authKeySeedByteCount),
 		TagIds:                [][]byte{countingBytes(0xa1, authKeyTagIdByteCount), countingBytes(0xc1, authKeyTagIdByteCount)},
@@ -86,7 +85,7 @@ func testBundleMessage() *protocol.AuthKeyBundle {
 		Version:               authKeyBundleVersion,
 		GenesisSha256:         bundle.GenesisSha256,
 		Head:                  &bridge.AuthPin{Version: bundle.HeadVersion, Chain: bundle.HeadChain},
-		DelegationId:          bundle.DelegationId.Bytes(),
+		DelegationId:          bundle.DelegationId,
 		DelegationSigningSeed: bundle.DelegationSigningSeed,
 		DelegationReaderSeed:  bundle.DelegationReaderSeed,
 		TagIds:                bundle.TagIds,
@@ -109,7 +108,7 @@ func readAuthKeyVectors(t *testing.T) []authKeyVector {
 // The vectors split into their parts, and the parts format back to the same string, on every leg.
 func TestAuthKeyVectorsRoundTrip(t *testing.T) {
 	for _, vector := range readAuthKeyVectors(t) {
-		authKey, err := ParseAuthKey(vector.Text)
+		authKey, err := ParseAuthKey(vector.Text, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", vector.Name, err)
 		}
@@ -127,7 +126,7 @@ func TestAuthKeyVectorsRoundTrip(t *testing.T) {
 			}
 			hexOf := func(value []byte) string { return fmt.Sprintf("%x", value) }
 			if hexOf(bundle.GenesisSha256) != vector.GenesisSha256 || bundle.HeadVersion != vector.HeadVersion ||
-				hexOf(bundle.HeadChain) != vector.HeadChain || bundle.DelegationId.String() != vector.DelegationId ||
+				hexOf(bundle.HeadChain) != vector.HeadChain || hexOf(bundle.DelegationId) != vector.DelegationId ||
 				hexOf(bundle.DelegationSigningSeed) != vector.DelegationSigningSeed ||
 				hexOf(bundle.DelegationReaderSeed) != vector.DelegationReaderSeed || len(bundle.TagIds) != len(vector.TagIds) {
 				t.Errorf("%s: bundle fields differ", vector.Name)
@@ -161,10 +160,82 @@ func TestAuthKeyVectorsAreTheSyntheticParts(t *testing.T) {
 	}
 }
 
+// QD-731: a bundle's delegation_id is §10.5's 32-byte id, SHA-256 of the Signed Delegation, and it comes back from
+// the string a creating device formats as the same 32 bytes.
+func TestAuthKeyBundleRoundTripsA32ByteDelegationId(t *testing.T) {
+	signedDelegation := testConfigMarshal(t, &bridge.Signed{
+		Type:     uint32(bridge.SignedType_SIGNED_DELEGATION),
+		SignerId: testConfigId("delegating device").Bytes(),
+		Body:     []byte("a synthetic delegation body"),
+	})
+	delegationId, err := DelegationId(signedDelegation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := testAuthKeyBundle()
+	bundle.DelegationId = bytes.Clone(delegationId[:])
+	text, err := formatAuthKey(testAuthKeyBearer(), bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authKey, err := ParseAuthKey(text, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed := authKey.Bundle()
+	if parsed == nil || len(parsed.DelegationId) != sha256.Size || !bytes.Equal(parsed.DelegationId, delegationId[:]) {
+		t.Fatal("the delegation_id did not come back as its 32 bytes")
+	}
+	if !bytes.Equal(parsed.GenesisSha256, bundle.GenesisSha256) || parsed.HeadVersion != bundle.HeadVersion ||
+		!bytes.Equal(parsed.HeadChain, bundle.HeadChain) ||
+		!bytes.Equal(parsed.DelegationSigningSeed, bundle.DelegationSigningSeed) ||
+		!bytes.Equal(parsed.DelegationReaderSeed, bundle.DelegationReaderSeed) || len(parsed.TagIds) != len(bundle.TagIds) {
+		t.Error("another field changed on the way")
+	}
+	// the parsed id is its own copy: erasing the wire bytes' holder does not reach it
+	again, err := formatAuthKey(authKey.Bearer(), parsed)
+	if err != nil || again != text {
+		t.Errorf("the parsed bundle formats to another string: %v", err)
+	}
+}
+
+// QD-731: a 16-byte delegation_id names no Delegation of the log, so neither the parser nor the creating device's
+// encoder takes one.
+func TestAuthKeyBundleRefusesA16ByteDelegationId(t *testing.T) {
+	message := testBundleMessage()
+	message.DelegationId = countingBytes(0x41, 16)
+	text := testAuthKeyBearer() + "#" + encodeTestBundle(t, message)
+	if _, err := ParseAuthKey(text, nil); !errors.Is(err, ErrAuthKeyMalformed) {
+		t.Errorf("the parser: %v", err)
+	}
+	bundle := testAuthKeyBundle()
+	bundle.DelegationId = countingBytes(0x41, 16)
+	if text, err := formatAuthKey(testAuthKeyBearer(), bundle); !errors.Is(err, ErrAuthKeyMalformed) || text != "" {
+		t.Errorf("the encoder: %v", err)
+	}
+}
+
+// The longest string read is the settings' bound, and nil settings are the defaults.
+func TestParseAuthKeyReadsItsBoundFromSettings(t *testing.T) {
+	text, err := formatAuthKey(testAuthKeyBearer(), testAuthKeyBundle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseAuthKey(text, &AuthKeySettings{MaxByteCount: len(text)}); err != nil {
+		t.Errorf("a string at the bound: %v", err)
+	}
+	if _, err := ParseAuthKey(text, &AuthKeySettings{MaxByteCount: len(text) - 1}); !errors.Is(err, ErrAuthKeyMalformed) {
+		t.Errorf("a string past the bound: %v", err)
+	}
+	if DefaultAuthKeySettings().MaxByteCount != 16*1024 {
+		t.Errorf("the default bound: %d", DefaultAuthKeySettings().MaxByteCount)
+	}
+}
+
 // A bearer given without its prefix reads as the same key, and Bearer answers the prefixed form, as
 // server reads both.
 func TestParseAuthKeyTakesABearerWithoutItsPrefix(t *testing.T) {
-	authKey, err := ParseAuthKey(strings.TrimPrefix(testAuthKeyBearer(), authKeyPrefix))
+	authKey, err := ParseAuthKey(strings.TrimPrefix(testAuthKeyBearer(), authKeyPrefix), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +247,7 @@ func TestParseAuthKeyTakesABearerWithoutItsPrefix(t *testing.T) {
 // D-CORE-7: a urn_ API key is no auth key, with or without a bundle after it.
 func TestParseAuthKeyRefusesApiKey(t *testing.T) {
 	for _, text := range []string{"urn_synthetic", "urn_synthetic#AAAA"} {
-		if _, err := ParseAuthKey(text); !errors.Is(err, ErrAuthKeyIsApiKey) {
+		if _, err := ParseAuthKey(text, nil); !errors.Is(err, ErrAuthKeyIsApiKey) {
 			t.Errorf("%v", err)
 		}
 	}
@@ -224,8 +295,12 @@ func TestParseAuthKeyRefusesMalformed(t *testing.T) {
 		breakBundle(func(message *protocol.AuthKeyBundle) { message.Head = nil }),
 		breakBundle(func(message *protocol.AuthKeyBundle) { message.Head.Version = 0 }),
 		breakBundle(func(message *protocol.AuthKeyBundle) { message.Head.Chain = nil }),
-		breakBundle(func(message *protocol.AuthKeyBundle) { message.DelegationId = make([]byte, 16) }),
-		breakBundle(func(message *protocol.AuthKeyBundle) { message.DelegationId = message.DelegationId[:15] }),
+		// QD-731: the id is the log's 32 bytes; the 16-byte id an earlier draft read, any other width and all zero
+		breakBundle(func(message *protocol.AuthKeyBundle) { message.DelegationId = countingBytes(0x41, 16) }),
+		breakBundle(func(message *protocol.AuthKeyBundle) { message.DelegationId = message.DelegationId[:31] }),
+		breakBundle(func(message *protocol.AuthKeyBundle) { message.DelegationId = countingBytes(0x41, 33) }),
+		breakBundle(func(message *protocol.AuthKeyBundle) { message.DelegationId = nil }),
+		breakBundle(func(message *protocol.AuthKeyBundle) { message.DelegationId = make([]byte, 32) }),
 		breakBundle(func(message *protocol.AuthKeyBundle) {
 			message.DelegationSigningSeed = message.DelegationSigningSeed[:31]
 		}),
@@ -235,10 +310,10 @@ func TestParseAuthKeyRefusesMalformed(t *testing.T) {
 			message.TagIds = [][]byte{message.TagIds[0], message.TagIds[0]}
 		}),
 		unknownField(),
-		strings.Repeat("a", authKeyMaxByteCount+1),
+		strings.Repeat("a", DefaultAuthKeySettings().MaxByteCount+1),
 	}
 	for _, text := range cases {
-		_, err := ParseAuthKey(text)
+		_, err := ParseAuthKey(text, nil)
 		if !errors.Is(err, ErrAuthKeyMalformed) {
 			t.Errorf("case %q: %v", RedactAuthKey(text), err)
 			continue
@@ -255,7 +330,7 @@ func TestAuthKeyPrintsNothingItHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	authKey, err := ParseAuthKey(text)
+	authKey, err := ParseAuthKey(text, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +353,7 @@ func TestAuthKeyEraseZeroesTheSeeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	authKey, err := ParseAuthKey(text)
+	authKey, err := ParseAuthKey(text, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

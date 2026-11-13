@@ -162,9 +162,10 @@ func newDelegationSidecarAdmit(args *sidecarDelegationAdmitArgs) (*bridge.Signed
 		return nil, ErrSidecarDelegationAdmit
 	}
 	testHookSecret("delegation_signing_seed", bundle.DelegationSigningSeed)
-	// a delegation_id is SHA-256(Signed Delegation), 32 bytes (§10.5's d); a bundle naming another id, the 16-byte form
-	// TEAM-M1-05's parser reads today included (questions/core-m2-01-bundle-delegation-id-width.md), matches no row
-	if !bytes.Equal(args.delegation.GetDelegationId(), bundle.DelegationId.Bytes()) || args.delegation.GetEndedAt() != 0 {
+	// a delegation_id is SHA-256(Signed Delegation), 32 bytes (§10.5's d, QD-731), in the bundle as in the row; an
+	// id of any other width names no Delegation, so two empty ids never match
+	if len(bundle.DelegationId) != authKeyDelegationIdByteCount ||
+		!bytes.Equal(args.delegation.GetDelegationId(), bundle.DelegationId) || args.delegation.GetEndedAt() != 0 {
 		return nil, fmt.Errorf("%w: the Delegation is not this bundle's, or has ended", ErrSidecarDelegationAdmit)
 	}
 	if len(bundle.TagIds) == 0 {
@@ -177,6 +178,10 @@ func newDelegationSidecarAdmit(args *sidecarDelegationAdmitArgs) (*bridge.Signed
 	privateKey := ed25519.NewKeyFromSeed(bundle.DelegationSigningSeed)
 	defer clear(privateKey)
 	publicKey := privateKey.Public().(ed25519.PublicKey)
+	// the row's pubkey is the one key the log takes this Delegation's admissions from (§6.9's Signers)
+	if !bytes.Equal(args.delegation.GetPubkey(), publicKey) {
+		return nil, fmt.Errorf("%w: the signing seed is not the Delegation's key", ErrSidecarDelegationAdmit)
+	}
 	keyId := sha256.Sum256(publicKey)
 	nonce := make([]byte, configNonceByteCount)
 	if _, err := io.ReadFull(args.random, nonce); err != nil {
@@ -210,7 +215,7 @@ func newDelegationSidecarAdmit(args *sidecarDelegationAdmitArgs) (*bridge.Signed
 	signature := ed25519.Sign(privateKey, bridge.SignedBytes(bridge.SignedPurposeAuthority, signedType, body))
 	return &bridge.Signed{
 		Type:      uint32(signedType),
-		SignerId:  bundle.DelegationId.Bytes(),
+		SignerId:  bytes.Clone(bundle.DelegationId),
 		KeyId:     keyId[:],
 		Body:      body,
 		Signature: signature,

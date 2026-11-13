@@ -1491,10 +1491,10 @@ func (x *DelegationRevoke) GetSinceN() uint64 {
 // numbers, so these are in the order written.
 type AuthKeyBundle struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
-	Version               uint32                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`                                 // 1
-	GenesisSha256         []byte                 `protobuf:"bytes,2,opt,name=genesis_sha256,json=genesisSha256,proto3" json:"genesis_sha256,omitempty"` // A_0 = SHA-256(Signed Genesis)
-	Head                  *bridge.AuthPin        `protobuf:"bytes,3,opt,name=head,proto3" json:"head,omitempty"`                                        // the log position the creating device stood at (§7.9)
-	DelegationId          []byte                 `protobuf:"bytes,4,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`
+	Version               uint32                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`                                                           // 1
+	GenesisSha256         []byte                 `protobuf:"bytes,2,opt,name=genesis_sha256,json=genesisSha256,proto3" json:"genesis_sha256,omitempty"`                           // A_0 = SHA-256(Signed Genesis)
+	Head                  *bridge.AuthPin        `protobuf:"bytes,3,opt,name=head,proto3" json:"head,omitempty"`                                                                  // the log position the creating device stood at (§7.9)
+	DelegationId          []byte                 `protobuf:"bytes,4,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`                              // 32 B: SHA-256(Signed Delegation), §10.5's d (QD-731)
 	DelegationSigningSeed []byte                 `protobuf:"bytes,5,opt,name=delegation_signing_seed,json=delegationSigningSeed,proto3" json:"delegation_signing_seed,omitempty"` // 32 B: the Delegation's Ed25519 key, which signs SidecarAdmit
 	DelegationReaderSeed  []byte                 `protobuf:"bytes,6,opt,name=delegation_reader_seed,json=delegationReaderSeed,proto3" json:"delegation_reader_seed,omitempty"`    // 32 B: the Delegation's X-Wing reader key (§10.5)
 	TagIds                [][]byte               `protobuf:"bytes,7,rep,name=tag_ids,json=tagIds,proto3" json:"tag_ids,omitempty"`                                                // the Delegation's keyed tag ids, 16 B each, never names

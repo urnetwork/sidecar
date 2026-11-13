@@ -102,7 +102,7 @@ func (self *Sidecar) Enroll(ctx context.Context, credential *SidecarEnrollCreden
 		return ErrSidecarEnrollBundle
 	}
 	// the bundle comes off before anything else reads the key
-	authKey, err := ParseAuthKey(credential.AuthKey)
+	authKey, err := ParseAuthKey(credential.AuthKey, nil)
 	if err != nil {
 		return err
 	}
