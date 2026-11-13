@@ -15,6 +15,12 @@
 // the ref's next verified head, at most PushRetryCount times, then ErrEvsPathEpochDue (DESIGN-DETAILS 9.2.5); every
 // other refusal, a file-mode 409 with paths among them, goes back to the caller.
 //
+// A write held to the version its caller read (EvsPathWrite.IfVersion; QD-721) is checked by every plan, the first
+// and each made again, so a rebuild or a creation's second plan never puts a caller's older bytes over a version
+// that landed meanwhile: the planner answers 409 PATH_CONFLICT itself, nothing sent. A 409 PATH_CONFLICT evs gives
+// the push goes back as an *EvsPathConflictError too, naming the written paths its token paths are, none when evs
+// named only a parent directory's delta.
+//
 // On every leg. Safe for concurrent use, each call its own push.
 
 package sidecar
@@ -24,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -85,13 +92,44 @@ func (self *EvsRepo) WritePaths(ctx context.Context, args *EvsWritePathsArgs) (*
 // WritePaths with what the push carries beside its changes, nil for none: a CLOSURE's flag, erased list, scope and
 // note.
 func (self *EvsRepo) writePaths(ctx context.Context, args *EvsWritePathsArgs, extras *evsPushExtras) (*EvsWritePathsResult, error) {
+	result, plan, err := self.writePathsPlanned(ctx, args, extras)
+	if err != nil {
+		return nil, evsWrittenConflict(err, args.Writes, plan)
+	}
+	return result, nil
+}
+
+// evs's 409 PATH_CONFLICT to a push of plan, as an *EvsPathConflictError naming the writes whose token paths it
+// names, in the writes' order; any other error, and the planner's own conflict, as it is.
+func evsWrittenConflict(err error, writes []*EvsPathWrite, plan *EvsWritePlan) error {
+	var conflict *EvsPathConflictError
+	if !evsCreationConflict(err) || errors.As(err, &conflict) || plan == nil {
+		return err
+	}
+	refusal, _ := EvsErrorOf(err)
+	tokenPaths := map[string]EvsTokenPath{}
+	for _, planned := range plan.Paths {
+		tokenPaths[planned.Path] = planned.TokenPath
+	}
+	conflict = &EvsPathConflictError{Refusal: refusal, Paths: []string{}, causes: []error{err}}
+	for _, write := range writes {
+		tokenPath, ok := tokenPaths[write.Path]
+		if ok && slices.ContainsFunc(refusal.Paths, tokenPath.Equal) {
+			conflict.Paths = append(conflict.Paths, write.Path)
+		}
+	}
+	return conflict
+}
+
+// writePaths' attempts, with the plan whose push an error answers, nil when none was made.
+func (self *EvsRepo) writePathsPlanned(ctx context.Context, args *EvsWritePathsArgs, extras *evsPushExtras) (*EvsWritePathsResult, *EvsWritePlan, error) {
 	refName := args.RefName
 	if refName == nil {
 		refName = EvsMainRefName
 	}
 	refId, err := self.resolveRefId(ctx, refName, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var creations map[string]bool
 	rebuilds := 0
@@ -100,17 +138,17 @@ func (self *EvsRepo) writePaths(ctx context.Context, args *EvsWritePathsArgs, ex
 		result, plan, err := self.writeOnce(ctx, args.Writes, refName, refId, 0 < attempt, &rebuilds, extras)
 		switch {
 		case err == nil:
-			return result, nil
+			return result, plan, nil
 		case errors.Is(err, ErrEvsPathEpochDue) || IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_EPOCH_DUE):
 			if self.client.settings.PushRetryCount <= dueWaits {
 				if errors.Is(err, ErrEvsPathEpochDue) {
-					return nil, err
+					return nil, plan, err
 				}
-				return nil, fmt.Errorf("%w: %w", ErrEvsPathEpochDue, err)
+				return nil, plan, fmt.Errorf("%w: %w", ErrEvsPathEpochDue, err)
 			}
 			dueWaits += 1
 			if err := self.waitPathEpoch(ctx, refId, err); err != nil {
-				return nil, err
+				return nil, plan, err
 			}
 		case (evsNeedsRebuild(err) || errors.Is(err, errEvsPlanEpochMoved) || errors.Is(err, errEvsRetokenSealsAgain)) &&
 			rebuilds < self.client.settings.PushRebuildCount:
@@ -124,19 +162,19 @@ func (self *EvsRepo) writePaths(ctx context.Context, args *EvsWritePathsArgs, ex
 				}
 			}
 			if len(creations) == 0 {
-				return nil, err
+				return nil, plan, err
 			}
 			// read the removal the first read did not show, and plan once more, unless a creation now stands
-			retried, _, retryErr := self.writeOnce(ctx, args.Writes, refName, refId, true, &rebuilds, extras, creations)
+			retried, retriedPlan, retryErr := self.writeOnce(ctx, args.Writes, refName, refId, true, &rebuilds, extras, creations)
 			if retryErr == nil {
-				return retried, nil
+				return retried, retriedPlan, nil
 			}
 			if errors.Is(retryErr, errEvsCreationStands) {
-				return nil, err
+				return nil, plan, err
 			}
-			return nil, retryErr
+			return nil, retriedPlan, retryErr
 		default:
-			return nil, err
+			return nil, plan, err
 		}
 	}
 }

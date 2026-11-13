@@ -6,6 +6,7 @@
 package tlsedgeservice
 
 import (
+	"context"
 	"net"
 	"time"
 
@@ -35,4 +36,29 @@ func (self *TlsEdgeService) KillChangeCountForTest() *sidecar.MonitorValue[uint6
 // Finished passes of the caps' loader.
 func (self *TlsEdgeService) LimitsPassCountForTest() *sidecar.MonitorValue[uint64] {
 	return self.limits.passCount
+}
+
+// Connections that have run to their end.
+func (self *TlsEdgeService) ConnectionEndCountForTest() *sidecar.MonitorValue[uint64] {
+	return self.connectionEndCount
+}
+
+// Waits armed by the connection records' loop, the first before any flush.
+func (self *TlsEdgeService) RecordFlushCountForTest() *sidecar.MonitorValue[uint64] {
+	return self.records.flushCount
+}
+
+// Connection records waiting for a flush.
+func (self *TlsEdgeService) RecordsPendingCountForTest() int {
+	return self.records.PendingCount()
+}
+
+// Spliced connections open now.
+func (self *TlsEdgeService) SpliceCountForTest() int {
+	return len(self.splices(nil))
+}
+
+// Sends the open usage window now, as a drain does.
+func (self *TlsEdgeService) UsageDrainForTest(ctx context.Context) error {
+	return self.usage.Drain(ctx)
 }

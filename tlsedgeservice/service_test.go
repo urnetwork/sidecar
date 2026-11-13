@@ -397,9 +397,9 @@ func TestTlsEdgeServiceServeRefusesOtherPorts(t *testing.T) {
 	}
 }
 
-// Until the connection path lands, a connection on a listed port gets one internal_error alert and is
-// closed, with no store or dialer call.
-func TestTlsEdgeServiceServeAnswersInternalErrorUntilThePath(t *testing.T) {
+// On each listed port, behind a gate no file opened, a hello gets one internal_error alert and a close,
+// with no record written.
+func TestTlsEdgeServiceServeAnswersInternalErrorBehindAClosedGate(t *testing.T) {
 	store := sidecartest.NewFakeTlsEdgeStore(nil)
 	world := newTestServiceWorld(t, store, newTestServiceDialer(4))
 	for _, port := range []int{443, 8443, 8883, 5671} {
@@ -413,6 +413,9 @@ func TestTlsEdgeServiceServeAnswersInternalErrorUntilThePath(t *testing.T) {
 			t.Fatal(err)
 		}
 		conn.SetDeadline(time.Now().Add(30 * time.Second))
+		if _, err := conn.Write(testEdgeHello("blog.a1b2c3d4e5."+testServiceRoot, []string{"h2"}, 0)); err != nil {
+			t.Fatal(err)
+		}
 		answer, err := io.ReadAll(conn)
 		conn.Close()
 		if err != nil {

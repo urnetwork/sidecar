@@ -485,6 +485,8 @@ barrier tlsedge.kill_read.after tlsedgeservice/service.go
 barrier tlsedge.kill_read.before tlsedgeservice/service.go
 barrier tlsedge.names_publish.after tlsedgeservice/names.go
 barrier tlsedge.names_publish.before tlsedgeservice/names.go
+barrier tlsedge.splice_register.after tlsedgeservice/conn.go
+barrier tlsedge.splice_register.before tlsedgeservice/conn.go
 barrier token.refresh.after api_token_manager.go
 barrier token.refresh.before api_token_manager.go
 secret * gkm_keys.go
