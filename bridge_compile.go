@@ -168,10 +168,19 @@ type bridgeHeldConfigView struct {
 	repoKeyAt func(generation uint64) *EvsRepoKey
 }
 
-func (self *bridgeHeldConfigView) State() *ConfigState       { return self.state }
-func (self *bridgeHeldConfigView) Acl() *AclState            { return self.acl }
+// The state the view was made over.
+func (self *bridgeHeldConfigView) State() *ConfigState { return self.state }
+
+// The state's acl part, built once when the view was made.
+func (self *bridgeHeldConfigView) Acl() *AclState { return self.acl }
+
+// The local policy the view was made with, nil for none.
 func (self *bridgeHeldConfigView) AclLocal() *AclLocalPolicy { return self.aclLocal }
-func (self *bridgeHeldConfigView) Head() *ConfigHead         { return self.head }
+
+// The head the state's base names, nil before base 1.
+func (self *bridgeHeldConfigView) Head() *ConfigHead { return self.head }
+
+// The key of a generation, nil for one not held or with no key source.
 func (self *bridgeHeldConfigView) RepoKeyAt(generation uint64) *EvsRepoKey {
 	if self.repoKeyAt == nil {
 		return nil
@@ -179,6 +188,7 @@ func (self *bridgeHeldConfigView) RepoKeyAt(generation uint64) *EvsRepoKey {
 	return self.repoKeyAt(generation)
 }
 
+// A ledger file of the head, streamed and hashed as it is read; nil for none.
 func (self *bridgeHeldConfigView) LedgerFile(path string) (BridgeLedgerFileReader, error) {
 	if self.rows == nil {
 		return nil, nil
@@ -238,8 +248,11 @@ func newBridgeCompileLedgerRows(view BridgeConfigView, head *ConfigHead) (*bridg
 	return rows, nil
 }
 
+// The head's manifest, nil for a head that holds no ledger.
 func (self *bridgeCompileLedgerRows) Manifest() *protocol.BridgeLedgerManifest { return self.manifest }
-func (self *bridgeCompileLedgerRows) FoldedThrough() uint64                    { return self.foldedThrough }
+
+// The head's fold, which the rows hold every bridge statement through.
+func (self *bridgeCompileLedgerRows) FoldedThrough() uint64 { return self.foldedThrough }
 
 // A file the manifest names, through the view: one it names and the view does not hold is no ledger.
 func (self *bridgeCompileLedgerRows) LedgerFile(path string) (BridgeLedgerFileReader, error) {

@@ -289,10 +289,12 @@ type bridgeBindingSnapshot struct {
 	clientIds map[Id][]Id
 }
 
+// The sidecar's current binding in the snapshot, nil for none.
 func (self *bridgeBindingSnapshot) Current(sidecarId Id) *BridgeBinding {
 	return self.current[sidecarId]
 }
 
+// The sidecar's current and kept client ids in the snapshot, ascending.
 func (self *bridgeBindingSnapshot) ClientIds(sidecarId Id) []Id {
 	return self.clientIds[sidecarId]
 }
@@ -303,12 +305,14 @@ type bridgeBindingCacheFile struct {
 	Sidecars []*bridgeBindingCacheRecord `json:"sidecars"`
 }
 
+// One sidecar in the cache file: its current binding as api signed it, and its kept ids.
 type bridgeBindingCacheRecord struct {
 	SidecarId Id                        `json:"sidecar_id"`
 	Current   []byte                    `json:"current,omitempty"`
 	Kept      []*bridgeBindingCacheKept `json:"kept,omitempty"`
 }
 
+// One kept client id in the cache file, with the time the cache may drop it.
 type bridgeBindingCacheKept struct {
 	ClientId Id    `json:"client_id"`
 	UntilMs  int64 `json:"until_ms"`
