@@ -12,19 +12,19 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10) |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | complete (2026-11-11) |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
-| 5 | Authorization-log verdicts across folds (§7.9) | 13 | complete (2026-11-09) |
+| 5 | Authorization-log verdicts across folds (§7.9) | 13 | complete (2026-11-09; amended 2026-11-13, section 16) |
 | 6 | MLS group key management (§10) | 13 | complete (2026-11-10) |
 | 7 | Remote search across designated indexers (§11.14, §18.4) | 3 | complete (2026-11-11) |
-| 8 | Git and evs in both directions | 3 | complete (2026-11-10) |
+| 8 | Git and evs in both directions | 3 | complete (2026-11-10; amended 2026-11-13, section 16) |
 | 9 | Client path epochs and re-tokenizing | 3 | complete (2026-11-10) |
-| 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | complete (2026-11-11) |
+| 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | complete (2026-11-11; amended 2026-11-13, section 16) |
 | 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10; amended 2026-11-12, QD-760) |
 | 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11; amended 2026-11-12, QD-761, built on the recommendations of open questions details-amend-2-late-generation and details-amend-2-fold-holds) |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 | 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
-| 15 | Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10) | 2 | complete (2026-11-12) |
-| 16 | Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9) | 0 | complete (2026-11-13) |
-| 17 | Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8) | 1 | complete (2026-11-13) |
+| 15 | Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10) | 2 | complete (2026-11-12; §22.8 row added 2026-11-13) |
+| 16 | Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9) | 0 | complete (2026-11-13; amendments 16-A to 16-D written 2026-11-13, built on the recommendation of open question details-amend-3-pin-push-refs) |
+| 17 | Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8) | 1 | complete (2026-11-13; §22.8 row added 2026-11-13) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
 
@@ -3711,7 +3711,7 @@ None blocked the held tasks. With the answers, SDK-M8-17 builds 4.2.5 as amended
 
 ## 5. Authorization-log verdicts across folds (§7.9)
 
-Status: complete (2026-11-09)
+Status: complete (2026-11-09; amended 2026-11-13, section 16: 5.2.2, 5.2.3, 5.2.4 and 5.7, each place marked)
 
 Amended 2026-11-10 for the owner's answers: QD-628 (in `AuthLog.tla` a recovery-signed proposal stays pending at any cosign until its tick, and the recovery cosign is in every run's alphabet: 5.3's WindowHolds, model and runs). 5.9 records every answer, QD-627 to QD-629. Nothing of 5.2 changes.
 
@@ -3818,9 +3818,35 @@ message ConfirmationRow {
 // holds every entry in (after, folded_through] and a reader recomputes A_k from the genesis through the head alone
 ```
 
-Encoding and order, which every compiler on every leg must give alike, since `rows_sha256` hashes them: `proposals` sorted by `proposal_id` bytes; `signers` in log order; `ring` in `n` order; `confirmations` in `at` order; `settings` always present, its zero value meaning the defaults; `tail_verdicts` as the comment says, little-endian within a byte, two bits per entry, so a tail of 1,024 entries is 256 B and the cap below bounds it at 1 KiB.
+```proto
+// sidecar/protocol/acl.proto, an addition (amended 2026-11-13, section 16; amendment 16-C; 16.2.2, 16.2.3)
+message AclRepo {
+  // fields 1-11 as today
+  repeated AclRepoPrefixRulesRow prefix_rules = 12;  // every RepoPrefixRules that took effect on this repo, in
+                                                     //   position order, for the repo's life; at most 256
+}
+message AclRepoPrefixRulesRow {
+  bytes  signer = 1;                     // the statement's signer, a sidecar_id
+  uint64 at = 2;                         // the entry that carried it
+}
+```
 
-**Compile.** `compile(head, L)` takes the head and L, the *log-derived rows at folded_through*: members, sidecars (confirmations included), Delegations, registered keys, the open proposals, the ring and AclRows' statement-derived rows, exactly `ConfigCompileRows` plus proposals and ring. It writes `settings` from the head's `ServiceSettings` (absent: the zero value), `proposals` from L's open ones, `ring` from L's, and the acl part as ACL's `CompileAcl` does. A proposal is *open at ft* when it took effect, has not completed, been vetoed or voided, and its `not_after_ms` is not below the entry time at ft, T_ft (never a clock; with BASE records in folds every position has a time). A ring entry is kept when its `n` is above ft - 4,096.
+**`AclRepo.prefix_rules` is a rows-only input** (amended 2026-11-13, section 16; amendment 16-C). The rows carry, for each repo, the list of its prefix rule sets as {signer, at}, and nothing of a set's body, which stays in the log's entry and the head's fold record (16.2.3). It is one of AclRows' statement-derived rows, so it is in L below, and it is the only thing in the rows that says a `RepoPrefixRules` took effect at a position: a verifier started at a base judges a push pinned in a folded span by the row alone. One fold writes it everywhere, `FoldAclRepos`' case, which clones the repo's row and appends:
+
+```text
+ApplyStatement      a RepoPrefixRules that passes 16.2.2's check appends {its first signer, its entry}
+Reapply             a tail entry of that type with verdict 1 appends the same pair, from the entry's body and
+                    its position and from nothing the check found; the type is not k of n, so its verdict is
+                    never 2
+a base's compile    the writer's fold over the statements the base folds appends the same pairs in the same
+                    order; CompileAcl then copies each repo's row whole, the list with it
+```
+
+Three things make the three agree where other acl rows need care. The pair is the body's and the position's, so it reads no head and no standing (5.2.3's effect rule). The fold's one failure is a repo absent from the rows, and no repo's row ever leaves them: a deleted repo's stays, and QD-743's drop at the retention point takes removed admin rows and never a repo or its list. So 5.2.3's clause "an acl effect dropped where the new rows no longer allow it" never applies to this statement. And the list is never shortened or reordered, by a later set, a cascade, a `RepoDelete` or a compile, so a base that folds a set and a reader that applied it hold the same list at every position from the set's on.
+
+Encoding and order, which every compiler on every leg must give alike, since `rows_sha256` hashes them: `proposals` sorted by `proposal_id` bytes; `signers` in log order; `ring` in `n` order; `confirmations` in `at` order; `AclRepo.prefix_rules` in `at` order, which is the order appended (amended 2026-11-13, section 16); `settings` always present, its zero value meaning the defaults; `tail_verdicts` as the comment says, little-endian within a byte, two bits per entry, so a tail of 1,024 entries is 256 B and the cap below bounds it at 1 KiB.
+
+**Compile.** `compile(head, L)` takes the head and L, the *log-derived rows at folded_through*: members, sidecars (confirmations included), Delegations, registered keys, the open proposals, the ring and AclRows' statement-derived rows (each repo's `prefix_rules` among them; amended 2026-11-13, section 16), exactly `ConfigCompileRows` plus proposals and ring. It writes `settings` from the head's `ServiceSettings` (absent: the zero value), `proposals` from L's open ones, `ring` from L's, and the acl part as ACL's `CompileAcl` does. A proposal is *open at ft* when it took effect, has not completed, been vetoed or voided, and its `not_after_ms` is not below the entry time at ft, T_ft (never a clock; with BASE records in folds every position has a time). A ring entry is kept when its `n` is above ft - 4,096.
 
 L is defined by one recurrence so that the writer and every reader compute it from what they retain. With b' the previous base, ft' its fold and R_b'(k) the state rebuilt from b''s rows by re-applying the entries ft'+1..k by their verdicts (BASEs skipped): L(ft) = LogPart(R_b'(ft)). Since the entries b'+1.. apply by the same re-application rule, R_b'(k) = S(k) for k >= b', so a reader uses `StateAt(ft)` when ft >= b' and b''s retained rows when ft = ft'. Those are the only two cases, by the next rule.
 
@@ -3832,7 +3858,7 @@ L is defined by one recurrence so that the writer and every reader compute it fr
 
 **The base's verdicts.** The writer fills `tail_verdicts` from the verdicts it holds for ft+1..n-1: its own where it judged, the previous base's bits where it took them. Every verifier that holds a verdict for a tail position compares: a differing bit, a 2 on an entry that is no AuthorityProposal or AuthorityCosign, a 3, or a wrong length is a FORK naming the position (the writer lied, or diverged). A verifier that holds none takes the bits.
 
-**Re-application** (`Reapply(state, entry, verdict)`): for each tail entry with verdict 1 or 2, parse the body and apply its effect on the state being built; never verify a signature, a header, a signer's standing or a type rule. An AuthorityProposal with verdict 2 applies the proposed statement with signers [proposer]; with 1 it opens a ProposalRow. An AuthorityCosign with 2 applies the proposed statement with the row's signers plus the cosigner and closes the row; with 1 it appends the cosigner. A TICK applies its reaps and each activation, closing the row and applying its statement with the row's signers. Every other statement applies its effect as its type's `apply` says, an acl effect dropped where the new rows no longer allow it (ACL's `ReapplyStatement`, plan-ACL-folded-grant-state #2). An effect reads only the statement's body and the log-derived state being built, never what the check found on a head at the entry's own position: the row signer, `lifted_park`, `live_since`, `key_dropped_at` and `holders_shrunk_at` are recomputed on the rebuilt state, which every verifier holds alike. The verdict and the completion are never recomputed: they come from the entry's own judgment, or the bits.
+**Re-application** (`Reapply(state, entry, verdict)`): for each tail entry with verdict 1 or 2, parse the body and apply its effect on the state being built; never verify a signature, a header, a signer's standing or a type rule. An AuthorityProposal with verdict 2 applies the proposed statement with signers [proposer]; with 1 it opens a ProposalRow. An AuthorityCosign with 2 applies the proposed statement with the row's signers plus the cosigner and closes the row; with 1 it appends the cosigner. A TICK applies its reaps and each activation, closing the row and applying its statement with the row's signers. Every other statement applies its effect as its type's `apply` says, an acl effect dropped where the new rows no longer allow it (ACL's `ReapplyStatement`, plan-ACL-folded-grant-state #2); a `RepoPrefixRules` with verdict 1 appends its row and is never dropped (5.2.2; amended 2026-11-13, section 16). An effect reads only the statement's body and the log-derived state being built, never what the check found on a head at the entry's own position: the row signer, `lifted_park`, `live_since`, `key_dropped_at` and `holders_shrunk_at` are recomputed on the rebuilt state, which every verifier holds alike. The verdict and the completion are never recomputed: they come from the entry's own judgment, or the bits.
 
 **Open proposals.** Rows carry every open proposal; the tail re-opens, advances, completes, vetoes or voids them as its verdicts say; after the base, cosigns, vetoes, rebinds, AdminSet changes, removals and ticks find them in S(n) at every verifier alike. The window's activation reads `window_time_ms` from the row, so T_p is known where the entry p is below the retention point. `kind` is fixed when the proposal takes effect, from the signer's kind, whether the member is in the AdminSet, whether the binding is one a void restored, and `self_admit` then, so the activation rule needs none of those at the tick. Voiding, vetoing and completion delete nothing: the row closes with the position and reason, `OpenProposalIds` filters, and compile drops closed and expired rows.
 
@@ -3916,7 +3942,7 @@ ApiAcceptBase(e)                                 -- api, a rows-only verifier at
   as ApplyBase without the head check, every FORK a 403 {tip, A_tip} with the reason; then PUT projrows, the entry
 ```
 
-The equal-verdict argument, in short: a verifier judges an entry only at a state every verifier present holds (S(n-1), by induction from the previous base), so present verifiers agree; a verifier not present takes the bits, which the present verifiers checked, so it agrees with them or they forked; rows at ft equal LogPart(S(ft)) by the full readers' compile check, with every rows-only input a verifier judges by (settings, proposals, ring, confirmations) inside them; and the ring needs no position below the retention point, by the `at` rule. 5.3 states the invariants and checks them.
+The equal-verdict argument, in short: a verifier judges an entry only at a state every verifier present holds (S(n-1), by induction from the previous base), so present verifiers agree; a verifier not present takes the bits, which the present verifiers checked, so it agrees with them or they forked; rows at ft equal LogPart(S(ft)) by the full readers' compile check, with every rows-only input a verifier judges by (settings, proposals, ring, confirmations, and each repo's `prefix_rules`, which a `RepoPrefixRules`' count rule and section 16's verdict read; amended 2026-11-13, section 16) inside them; and the ring needs no position below the retention point, by the `at` rule. 5.3 states the invariants and checks them.
 
 ### 5.3 Invariants and why they hold
 
@@ -4162,6 +4188,8 @@ sidecartest/fake_authority.go  PendingProposal(id) beside the rest, for CORE's a
 **CORE-M3-02 (PreviewDeviceRevoke).** `Cascade` through `SidecarAuthority` is unchanged in signature; its items now come from rows' full confirmation history, so the plan lists "confirmed by" items with each confirmation's position; `ProposedSince` from retained entries as before. No scope change.
 
 **CORE-M3-03 (RevokeDevice).** At k > 1 the act's AuthorityProposal is a `ProposalRow` the device watches through `PendingProposal`; `REVOKE_STALE` and the re-derivation are unchanged; the cosign path (`ur approve`, `Decide`) finds the proposal in S(n) after any fold, which is what this section makes true. No scope change.
+
+**ACL-M2-18 and section 16's row** (amended 2026-11-13, section 16; amendment 16-C). `AclRepo.prefix_rules` is written by ACL-M2-18, section 16's task (16.7): `acl.proto`'s field and message, `FoldAclRepos`' case, and the statement in `aclFoldStatement`'s access-log list, which is what puts it in `ApplyStatement`, in `ReapplyStatement` and in a writer's compile together. None of the thirteen tasks above builds any of it. `CompileAcl` clones each repo's row whole and `aclRowsKeptAt` touches only admin rows, so the list rides through a base and past the retention point with no code; `configAclBodyVerdict` already gives re-application the statement's first signer, which is the row's `signer`. One of the thirteen reads it: TEAM-M2-04's `CascadePlan` lists the rows a device in P signed (16.7's scope note; a fix track of that task). The base-independence test of the row is ACL-M2-18's own (16.7): a restored log and a rows-only log hold the long-running log's `prefix_rules` for every repo, across a base that folds a set and across the retention point.
 
 ### 5.8 Proposed DESIGN.md text
 
@@ -5918,7 +5946,7 @@ Each is filed under `.stack/questions/`, and the section is built on the recomme
 
 ## 8. Git and evs in both directions
 
-Status: complete (2026-11-10)
+Status: complete (2026-11-10; amended 2026-11-13, section 16: 8.2.4, 8.2.5, 8.2.7, 8.2.8, 8.2.9, 8.2.10, 8.3, 8.5, 8.6 and 8.7, each place marked)
 
 Amended 2026-11-10 for the owner's answers: QD-604 (an import makes helper refs for a first-parent step too large for one push, where this section had refused it: 8.2.2, 8.2.6, 8.2.8, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8) and QD-632 (a new ref's path epoch; an overlay's first push takes its base ref's current epoch: 8.2.4, 8.2.10). 8.9 records every answer, QD-598 to QD-606 and QD-634. EVS1-M2-34, held for the first amendment, builds to this text.
 
@@ -6204,6 +6232,16 @@ content    a write's new bytes and its previous version's bytes come from the ba
            they are read; a miss falls back to reconstruction from evs, as file mode does
 chain      the planner's rules unchanged: a diff against the path's previous entry, or a checkpoint by rules (1)
            to (4); a file past 8 MiB in chunks; an inline chain to 16 KiB
+           (amended 2026-11-13, section 16; amendment 16-D) §11.7's list holds six rules since section 16. (5),
+           a DROP's kept head, never applies here: a git-mode ref takes no DROP (G11). (6) is the write of a
+           path whose newest version on evs is one the writer ignores under the repo's prefix rules: one
+           checkpoint built from the version the writer holds, never a diff (16.2.7's repair form). On a
+           file-mode ref that is the next write of a path a breach wrote. On a git-mode ref a breach stops
+           the ref (8.2.7), so the one write over a version its writer refused is the re-creating push's
+           write of a tainted token path (8.5), and there the rule is the same whatever the version was
+           refused for: one checkpoint (chunks above 8 MiB) of the tree's blob, read from the bare
+           repository, with no diff against the entry that stands there; and no rename or reuse cites a
+           tainted path's chain
 rename     a removed path A and a created path B with one blob oid, in one push: B takes A's file_id and chain
            (5h's "a path the push removes"); several candidates pair in path order
 reuse      an overlay's first write of an inherited path whose base entry holds the previous blob: a diff citing
@@ -6226,7 +6264,9 @@ publish(r, old, new, opt):
   2 per c in C, streaming, commits to a spool file:
         new commit: the strict checks of 8.2.3, else refuse; imported (opt.Import): graph decode only
         changes(c) = diff(tree(first parent), tree(c)) by the tree reader; trees(c) = its non-canonical trees
-  3 net change (8.2.4); PlanGitUpdate; entries sealed, their segments uploaded (the landed sender)
+  3 net change (8.2.4); on a shared ref the prefix check (below; amended 2026-11-13, section 16), whose refusal
+        is the caller's and comes before any request to evs; PlanGitUpdate; entries sealed, their segments
+        uploaded (the landed sender)
   4 history blobs sealed into history segments and uploaded, 4 at once, each under its receipt
   5 sealed metadata: group, provenance (the session's agent, §5.5), commits (from the spool), git,
         signed_import, and for a creating push ref_name and base; payload sections 15 and 16 beside it; the
@@ -6240,6 +6280,8 @@ publish(r, old, new, opt):
                                   the history holds this push id            -> as 200
                                   only PATH_EPOCH versions since b          -> section 9's retoken on the new base
                                   a REKEY since b, the tip unchanged        -> build again from step 3, a new push id
+                                  a pin push since b, the tip unchanged     -> the same: from step 3, where the prefix
+                                    (8.2.10; amended 2026-11-13, section 16)   check runs again under the new set
                                   the tip moved                             -> the caller's (8.2.8): ng, or the queue's
         412 PATH_EPOCH          section 9's retoken
         409 SEGMENT_STALE, SEGMENT_GONE, SLOT_STALE, TIME_STALE; 412 GATE_CLOSED
@@ -6262,6 +6304,23 @@ diff(a, b):     a merge walk of the two trees in name order (each sorted by name
 ```
 
 It never calls `git diff-tree`, whose walk assumes git's order. A refusal here refuses the update, or the import, before any evs write, naming the object.
+
+**The prefix check** (amended 2026-11-13, section 16; amendment 16-B, 16.2.7). On a shared ref of a general repo, step 3 asks `AclEngine.AllowPrefixWrite` between the net change and `PlanGitUpdate`, at the engine's installed state, whose pin step 6's statement then carries. It asks about exactly what 8.2.7's prefix line will judge, so that a push this device sends passes that line at every reader (16.3's P2):
+
+```text
+files      every path that is a file in S or in N and not the same mode and oid in both (8.2.4's two trees), by
+           its components against the rules' paths: a write, a removal, an inherited file a held directory's
+           table drops, a file a directory is created over
+tainted    every tainted token path the push writes or removes (8.5), on the token path itself, as 16.2.4's
+           line 3 gives the signer's prefixes in the push's epoch: this device may hold no name for it
+flags      a DELETE skips step 3; a FORCE update is outside the rules (16.2.4's line 1) and is not refused
+refused    a path the set in force does not give this sidecar, or a set this device holds pending or newer:
+           the update ends here; nothing is planned, sealed, uploaded or sent
+```
+
+The check sits in publish and not in the receive path because every sender of a git-mode push on a shared ref passes this step. A receive answers as 8.2.8 says. An import into a shared ref (8.2.6) stops before any evs write for that push, naming the path, with dst at the cut before it; the importing device is a repo admin's, which the filing command names for every path (16.2.9), so this stops only an import under a set filed `--as-written` without it. An owned ref is outside the rules, so its queue, a conflict branch and an import's helper ask nothing. A rekey does not pass through publish: it is asked by the planner (8.2.10).
+
+The check is of one state. Whenever a statement is signed for the update on another state's pin (the landed rebuild after 412 GATE_CLOSED or a stale segment, a build again from step 3, a retoken), the check runs again at that state first, and a refusal then is the update's answer as at the first. A rule set that tightens while a push waits is therefore met on this device and not at every reader's `check`.
 
 #### 8.2.6 Imports
 
@@ -6369,6 +6428,13 @@ replay(r, upTo):                                   // on a hint, the hourly resy
                         refs/ur/evs/<r>; EvsGitRef {version, chain, tip}; settle(r)
   a refused u:          evs_alarm (version_rule, or tamper for a hash); EvsGitRef.stuck_at = u; nothing past u-1
                         is applied, and the local ref is left alone (8.5)
+                        (amended 2026-11-13, section 16) a u that check's prefix line refuses: the same, its
+                        reason prefix_rule with detail refused, the signer, and the first path found where
+                        this device holds its name
+  a waiting u:          (amended 2026-11-13, section 16) the rule set at u's pin is pending, or newer than this
+                        device reads: the replay ends before u, as it does for a source it cannot reach; no
+                        alarm on the ref and no stuck_at; `ur status` shows the ref held, or update; the replay
+                        runs again when the config state or the device's version moves
 ```
 
 `check(u)`, for a branch or tag ref whose tip before u is E:
@@ -6376,6 +6442,10 @@ replay(r, upTo):                                   // on a hint, the hourly resy
 ```text
 every shape   git present; shape, flags and ref kind agree (8.2.3's table); a tag ref's first push IMMUTABLE and
               no other; ref_name and base only where the push creates the ref, equal to the head's
+              prefix rules (amended 2026-11-13, section 16; amendment 16-A, 16.2.6): u is outside the rules
+              (16.2.4's line 1), or no set is in force at its pin, or every file u changes lies under a prefix
+              the set gives the signer, in u's epoch; a set that is pending or newer leaves the replay waiting
+              at u, as an unreachable source does. The files u changes are the paragraph's below
 DELETE        no commit, no change; old_tip is not checked, since a stopped ref's deleter does not hold it (8.5);
               the tip becomes none
 REKEY         no commit, blob, tag or source; every change a file entry whose opened mode and oid are those of
@@ -6400,6 +6470,33 @@ UPDATE        old_tip = E
                   each entry's opened mode and oid the tree's, and beside it a write or a removal of every
                   tainted token path (8.5); on a tag ref, none
 ```
+
+**The prefix line** (amended 2026-11-13, section 16; amendment 16-A). It is 16.2.6's line, and its verdict is 16.2.4's lines 1 to 3 with the signer and the pin of u. Three things are fixed here that 16.2.6 left to this section.
+
+*What a file change is.* 16.2.6 says "every file change of u (a write or a removal of a file's path)". Read on evs's change list that misses two changes a tree makes to a file with no change at the file's own token path: on an overlay an inherited file the overlay does not hold is removed by a held directory's table, or by its parent's (8.2.4), so `git rm -r src` on a shared branch with a base can be one delta of the root; and a directory created where a file stood replaces the file with a creation of the other kind (8.2.2's kinds row). Both are directory changes on evs, and directory changes are not judged. So the line is read on git's own change, which `check` already holds:
+
+```text
+UPDATE on a branch   every path that is a file in S or in N (8.2.4's two trees: the path state at E, and
+                     tree(peel(new_tip))) and not the same mode and oid in both, however u's change list
+                     states it: a write, a removal, a table that drops it, a creation of the other kind over it.
+                     Each is tested by its components against the rules' paths, which for a reader that holds
+                     the names is 16.2.4's token test
+                     and every tainted token path u writes or removes (8.5), tested on the token path itself as
+                     a file's whatever stood there, since the reader may hold no name for it and a removal
+                     states no kind
+REKEY                every file entry it writes (16.2.4: a writer re-checkpoints only under its prefixes)
+a tag ref's push     no file: allowed
+a pin push           the UPDATE whose S and N are one tree (8.2.10): no file, allowed
+a DELETE, a FORCE    outside the rules by 16.2.4's line 1
+```
+
+Directory changes stay unjudged, as 16.2.6 has them, and for its reason: a ref's directories follow from its files, and a writer that removes its last file under a prefix must be able to drop the directories above it.
+
+A push that changes no file is allowed whoever signs it, a signer the set does not name included, which is 16.2.4's last line read on a git-mode ref: a tag, a branch created at a commit a ref already reaches, a pin push, and an UPDATE whose commits leave the tree as it was. The rules hold a writer to the files it may change. They say nothing of the commits a branch gains, which the committer rule and descent already govern (8.2.3, G10).
+
+*Where it is judged.* In three places, in one order on every device. The set is found first, from u's pin and this device's config state alone, so a waiting u is known before its record is read. Then, after the shape checks and before a commit is read, every change of u that writes a file entry is tested by its token path; the entry's kind and the token path are cleartext in the push record. The plain breach, a file written outside the signer's prefixes, is refused there and costs no object work. The rest of the line (removals, files a table drops or a creation replaces, tainted token paths) is tested with the `changes` row, once S and N stand. The early test refuses nothing the late one would pass: a written file entry that the `changes` row accepts is a file of N that differs from S, or a tainted path's. A push that fails another row before the late test is refused under that row's reason. Every replaying device walks the same rows in the same order on the same bytes, so all reach one verdict and one reason (16.3's P1).
+
+*What a failure is* (QD-793). A push that fails the line fails `check` like any other refused push: the replay block's refused row, the ref stopped at u on every mount, the local ref left alone and still serving, and receive answering `ng <ref> ref refused at version u`. Nothing is skipped and nothing past u - 1 is applied. Recovery is 8.5's: an admin deletes the ref and pushes it again. That push is an UPDATE and is judged by this line like any, tainted token paths included, so it is sent from a device the set names for every path, which the filing command makes every standing admin's (16.2.9). The versions between stay in evs's history, and their token paths are tainted as any refused version's are.
 
 The tree builder and the object sink are shared with export (EVS1-M2-49):
 
@@ -6482,6 +6579,10 @@ receive(r, old, new):                                  // a shared ref; an owned
         read (b, E) from EvsGitRef
   from v1, §11.11's git-lfs tip check, whose refusal deletes the update (`ng <r> lfs objects missing`)
   publish(r, old, new) with the answers of 8.2.5, and:
+        the prefix check refuses a path (8.2.5's step 3)      delete the update; `ng <r> prefix rule: <path>`,
+          (amended 2026-11-13, section 16; amendment 16-B)    nothing planned, sealed or sent
+        the set is pending, or newer than this device reads,  delete the update; `ng <r> prefix rule: pending`,
+          at step 3 or where a 409's replay waits (8.2.7)     or `prefix rule: update`
         tip moved (409, the history does not hold the push)   delete the update; `ng <r> non-fast-forward`
         200, or the history holds the push id                 settled: `ok <r>`; the local update failing (a
                                                               git ref lock): retried to ReceiveWaitTimeout, then
@@ -6494,6 +6595,10 @@ receive(r, old, new):                                  // a shared ref; an owned
 ```
 
 `non-fast-forward` is said only when the ref's tip moved and no attempt of the update is in the history, so SEGMENT_GONE, 429 and GATE_CLOSED never read as one, and a commitless version never produces an `ng`.
+
+**The prefix refusal** (amended 2026-11-13, section 16; amendment 16-B, 16.2.7). The receive path's refusal under a repo's prefix rules is 8.2.5's prefix check: `AclEngine.AllowPrefixWrite` over every file path of the update's net change, before the push is built. It answers `ng <r> prefix rule: <path>`, the first refused path in the tree reader's order; the journal's update is deleted, no attempt was recorded since no push id was made, and no request went to evs for the update. The path is the client's own, printed to its own git client and written to no log (I-13). A refusal for a tainted token path this device holds no name for answers `ng <r> prefix rule: tainted paths`. §18.5's code for all of them is `EVS_PREFIX_RULE` with its detail, which `ur status` and the SDK's push report carry. Each ref of a multi-ref push is answered on its own, as every `ng` is. The refusal is a local courtesy and the reader's line is the rule: a build that skipped the check would send a push every mount refuses (8.2.7), which stops the ref and names the signer.
+
+An owned ref, below, asks nothing: it is outside the rules by 16.2.4's line 1, so `ok` before evs stays true, and a queue's push, a conflict branch and an import's helper are never refused for a prefix.
 
 **An owned ref** (`ur/<this sidecar>/…`) is accepted at once:
 
@@ -6581,11 +6686,13 @@ Each line below is the order in which one actor meets its fences, and a later on
 ```text
 a git push     pre-receive (quarantine): ref namespace, new commits' committers and forms
                proc-receive: name rules; P_r; L_r {settle, local ref = old, journal RECEIVED, read (b, E)}
-               publish: build; journal SENT {push id}; lease; parts; seal
+               publish: the net change; on a shared ref the prefix check, at the state whose pin the statement
+               will carry (amended 2026-11-13, section 16); build; journal SENT {push id}; lease; parts; seal
                evs: 5c the refs table; 5d the gate; 5e the epoch; 5f TIP and the lease; 5g; 5h; step 7
                the answer or the history; L_r {EvsGitRef, update-ref old -> new, applied_tip, journal}; ok
 an owned ref   L_r {journal RECEIVED, update-ref old -> new, journal LOCAL}; ok; then the queue as a git push
-sync           the verifier's walk; check(u); the sink's flush; L_r {EvsGitRef, settle}
+sync           the verifier's walk; check(u), its prefix line among its rows (amended 2026-11-13, section 16);
+               the sink's flush; L_r {EvsGitRef, settle}
 a restart      stale git lock files removed; journals read; RECEIVED settled as 8.2.8's table; settle(r) for each
                ref whose applied_tip is not its tip; resolve(r) for each SENT; then listeners open
 ```
@@ -6610,6 +6717,29 @@ CreatedAfter   for each version in (S, Head], from the tips log: the paths of tr
 ```
 
 **Rekey** (question keys-m2-26-rekey-git-mode-refs, option 1). A rekey of a git-mode ref is the REKEY shape: an ordinary push on the tip whose changes re-checkpoint files under the current generation and change no mode, oid or name. Any writer's device can send it, a head-mode one included, since it needs no tree: `EvsRepo.WritePaths` takes a git-mode ref when every write has `ForceCheckpoint` and `IfVersion` and no `Remove`, the planner refuses a write whose new blob's oid is not the standing version's (`ErrEvsGitRef`, as today, for anything else), and the sender seals `git {shape: REKEY}`. evs needs no rule: TIP, 5g and 5h hold it as they hold any push, and a replaying reader holds each entry to the tree (8.2.7). KEYS-M2-26's job then walks a git-mode ref as it walks a file-mode one. It covers the ref's own entries: an overlay's held files, and nothing on a tag ref. History blobs and sealed commits are never rekeyed, as a file-mode ref's older versions are not. On a device that mounts the repo, `WritePaths` takes P_r for a git-mode ref, so a rekey and a git push from one device do not race each other to the tip.
+
+*Under prefix rules* (amended 2026-11-13, section 16). "Any writer's device" reads: any writer's device the rule set allows the path. A REKEY's file entries are judged by `check`'s prefix line (8.2.7; 16.2.4, "a writer re-checkpoints only under its prefixes"), so the planner's `AllowPrefixWrite` call (16.2.7) covers `WritePaths` on a shared git-mode ref as it covers a file-mode write: a path outside the device's prefixes is refused with `EVS_PREFIX_RULE` before any request. KEYS-M2-26's job on a device held to a prefix rekeys the ref's files under its prefixes and reports the rest as left for a device the set names for them, which an admin's is.
+
+**A pin push** (amended 2026-11-13, section 16; 16.2.9, QD-795). The command that files a rule set sends each shared git-mode ref "an UPDATE whose new tip is its old tip, with no commit and no change", so that the ref's head carries a pin at or above the set. It is a third commitless version on a git-mode ref, beside a PATH_EPOCH and a REKEY, and it meets this section's rules as follows.
+
+```text
+shape     git {shape: UPDATE}, old_tip = new_tip = E, no FORCE; no commit, blob, tag, source or change. `check`
+          passes it by the UPDATE's own rows: E's commit is its own ancestor, the net change between a tree and
+          itself is empty, and the prefix line finds no file (16.2.4: a push with no change is allowed)
+sending   built on (b, C_b) under P_r on a device that mounts the repo, as a rekey is; it moves no local ref,
+          since settle finds the tip where it was
+losing    a waiting git push that loses TIP to one is built again from step 3 (8.2.5's 409 table): the tip did
+          not move, so it is never `non-fast-forward` (G7), and its prefix check runs again under the new set
+a tag     none is sent: an IMMUTABLE ref takes only a DELETE after its first push (§11.8's refs table; 8.2.7's
+ref       every shape row), and it holds no file for a later push to change
+a ref     none can be sent, an UPDATE needing a tip. A stopped ref applies nothing until its DELETE, and the
+with no   admin's DELETE and re-creating push carry the admin's pin. A deleted ref is bound from the push that
+tip, or   re-creates it, and until then a writer may re-create it at a pin below the set and above the DELETE's,
+stopped   under the set in force there: 16.2.9's stale pin, which no pin push closes on that ref. `ur evs rules
+          show` lists such a ref as unbound until its re-creation (question details-amend-3-pin-push-refs)
+```
+
+`GitSync.tla` models a commitless version as any version that moves no tip (`EvsCommitless`), so the pin push is within it and no configuration changes.
 
 #### 8.2.11 The bare repository's upkeep
 
@@ -6642,6 +6772,8 @@ CreatedAfter   for each version in (S, Head], from the tips log: the paths of tr
 **G12, bounded cost.** A push's bytes, reads and memory are bounded by what it changes and carries (8.4).
 
 **Helper refs add no rule to these** (QD-604). A helper is a branch, its pushes are import pushes and its end is a DELETE, each of which G1 to G11 already cover; the step's push that names it is G2's and G3's source case. Two things they rest on are worth saying. G2 and G3 need a named source version to stay replayable after its ref is deleted: it does, since a DELETE is a later version of the same history and evs retains a ref's versions and what their pushes introduced (G11), which is also what lets any merged and deleted branch stay a source. And G3's induction is unchanged: a commit the merge step does not carry was carried by a helper's push under that push's own `EvsImport`, signed by a repo admin for the helper's ref id.
+
+**Prefix rules add a refusal and no rule to these** (amended 2026-11-13, section 16). `check`'s prefix line (8.2.7) refuses a push the other rows would apply, and a refused push is what G1 to G12 already treat: nothing of it is applied, so G1, G2, G4 and G8 hold of what is. Publish's prefix check (8.2.5) ends an update before any attempt exists, so G5 and G6 have nothing to count and G7's answer is a `ng` that promises nothing. A pin push (8.2.10) is a commitless version: it moves no tip, so a push that loses TIP to one is built again and is never answered `non-fast-forward` (G7), and G4 holds across it since it changes no entry. G4 is also why the line may be read on the two trees: an applied UPDATE's entries are exactly the net change, so the files a push changes are the files whose tree rows differ. That every reader reaches one verdict on a push, and that a design device's push passes it, are 16.3's P1 and P2, checked by `PrefixRules.tla`; `GitSync.tla` and its configurations do not change.
 
 **The model.** `GitSync.tla` is one git-mode ref on evs and each device's side of it. A commit is the set of the history it holds, so ancestry is inclusion. A push attempt, once sent, may reach evs at any step, any number of times, until its time bound drops it, and a daemon learns an outcome only from the ref's history, which is the worst case of every lost answer, lb re-send and stalled write. Daemons crash and restart. `LocalFirst` chooses a shared ref or an owned one; two devices on an owned ref are one sidecar's state restored or copied, the way an owned ref diverges. Its invariants are `MirrorExact`, `NoDuplicate`, `AckedDurable`, `SharedSafe`, `TruthfulNg`, `NoSpurious` and `Converge`, read above.
 
@@ -6835,6 +6967,16 @@ a helper is deleted, and a device first       the merge step names (helper, vers
   syncs dst afterwards                        below its DELETE as before it (8.2.6's cleanup)
 a version fails check                         evs_alarm; the ref stops at the version before; its local ref is left
                                               alone and still serves; receive answers `ng <ref> ref refused at version u`
+a version breaks the repo's prefix rules      (amended 2026-11-13, section 16; QD-793) the row above, with reason
+                                              prefix_rule naming the signer and the path; recovery as below, by a
+                                              device the set names for every path
+a version's rule set is pending, or newer     the ref waits before it (`held` or `update` in `ur status`), no alarm on
+  than this device reads                      it, as for a source that cannot be replayed; receive answers
+                                              `ng <ref> prefix rule: pending`, or `update`
+a client's push changes a file outside this   `ng <ref> prefix rule: <path>` before any evs write (8.2.8); the commits
+  device's prefixes                           stay in the client's repository, and nothing is journalled or sent
+an import meets a file outside the importing  the import stops before any evs write for that push, naming the path;
+  device's prefixes                           dst is at the cut before it; a rerun resumes once a set names the device
 the bare repository is lost or corrupt        `ur mount add` again: replay rebuilds it from evs; queued commits that
                                               were only there are lost with it, as with any local git repository
 local/<repo>/ is lost, the repository kept    replay from version 1 recomputes it; local refs equal to evs's tips are
@@ -6843,17 +6985,19 @@ local/<repo>/ is lost, the repository kept    replay from version 1 recomputes i
 
 A ref that stops at a refused version u stays stopped until the ref is deleted on evs. A DELETE at a version w above u carries nothing to check, so a stopped reader skips to w, applies it (its local ref is its applied tip, so it is deleted) and replays on. A stopped device's own receive path takes that deletion and nothing else for the ref, and builds it on the head's version with no old tip. The versions in between wrote entries no reader vouches for, so every token path their change lists name, which are cleartext, is *tainted* in the reader's `EvsGitRef`. The push that re-creates the ref must write or remove each tainted token path beside its net change against the last tree applied, which its sender can do without the names: a removal needs the token path, its standing version from a read, and the parent's `removed_tokens`. `check` holds it to that, and the taints clear. Recovery from a forged or broken push is therefore `git push --delete` and a new push, by an admin on a shared ref and by its sidecar on an owned one. The refused versions stay in evs's history; export reports them and goes on from the DELETE.
 
+*Under prefix rules* (amended 2026-11-13, section 16). A push refused by the prefix line is recovered the same way, and nothing here changes for it (QD-793). Two things follow from the rules binding the recovery too. The DELETE is outside them (16.2.4's line 1). The re-creating push is an UPDATE and is judged: its files by the two trees, and each tainted token path it writes or removes as a file's, on the token path (8.2.7). So it is sent from a device the set names for every path, which the filing command makes each standing admin's; an admin a set filed `--as-written` left out files the set again first. And a tainted token path is written as §11.7's sixth checkpoint case has it (8.2.4's chain row): the tree's blob whole, from the bare repository, resting on nothing a refused version wrote.
+
 ### 8.6 The test plan
 
 Every test is deterministic: a fake clock, barriers at `evs.local.<point>` (publish.sent, publish.answer, apply.state, apply.ref, apply.done, queue.send, receive.local), a stand-in evs or `evsservice` on `FakeBlobs`, and real stock git on a temporary bare repository.
 
 **The codec and the builder (`evs_git_object_test.go`, `evs_git_tree_test.go`; EVS1-M2-49).** Vectors, each made by stock git and checked against its oid: a tree with a zero-padded mode, with mode 100600, out of order; a commit with a late `committer`, with a NUL in a header, with no blank line; an annotated tag, a tag of a tag. The tree reader refuses a name with a slash and a repeated name. The builder: 1,000 random commits from go-git's oracle rebuilt with equal tree oids from changes alone; a raw tree inherited across a commit that changes a sibling directory; a raw tree whose reading differs from the changes, refused; memory flat over 100,000 commits (the cache's bound asserted). A fuzz target for the tree reader and one for the graph decoder, registered in `check/`'s fuzz registry.
 
-**Git to evs (`evs_local_publish_test.go`; EVS1-M2-34).** A's scenario: two commits, one push, the middle blob a history blob, and a second device's `git fsck --strict` clean. A file added and removed inside a push. A 2,000-commit push in two parts, the second changeless. A branch at an existing commit, a lightweight tag and an annotated tag: one empty push each, the tag IMMUTABLE, a second push to it refused. A forced rewind. A DELETE and a re-creation whose net change starts from the old tree. C's scenario: a pull of two other sidecars' commits names one source and carries only the merge; with 17 branches merged at once the 17th's commits are carried. A rename keeps the file_id and uploads nothing; a merged file is cited from its source ref, and a moved-on source falls back to a checkpoint. FS-5's overlay cases, and H's: an inherited file removed, its directory then held whole, the removal standing after a marker collection and after a path-epoch copy; a file changed in a directory the overlay never holds. N's: a file replaced by a directory and back; a gitlink. §11.19's limits refused before any evs write. An import: a foreign history of 10,000 commits in three pushes by a lowered `ImportPushPartCount`, each `EvsImport` checked alone; a writer's push carrying the admin's `EvsImport` with other commits, refused by replay; a kill between pushes and a rerun; a history with raw trees and late headers, its export's oids equal; a tree name with a slash, refused naming the tree; a 100,000-file commit as one multi-part push (§22.8's row), run at 1,100 files in the unit leg. Helper refs (QD-604), each with `ImportStepPartCount` lowered so that a side of a few hundred commits is oversized: a merge of two disjoint histories imports through one helper, `ur/<sidecar_id>/import/<id>/1`, the merge step's push carrying the merge commit alone and naming the helper's version as its one source, each push's `EvsImport` checked alone, and a second device's `git fsck --strict` clean; a side that itself merges an oversized side makes a helper inside a helper, numbered in the order first needed; an octopus merge of three sides of which two are oversized makes two helpers and carries the third; a side that forked from dst's line gets a helper that is an overlay; after the import every helper is deleted on evs, no `refs/heads/ur/<sidecar_id>/import/` is left on either device, `refs/ur/evs/` keeps each last tip, and a third device that first syncs dst then replays each deleted helper to its named version and ends with equal oids; a kill at each of `evs.local.import.helper_recorded`, `.helper_pushed`, `.helper_done`, `.step_sent` and `.clean_deleted`, each rerun finishing with the same refs and no second helper for a pair; a helper deleted mid-import, abandoned and replaced; a helper push refused SCOPE stopping the import with dst at the cut before the step, and `--abandon` deleting the helpers and the record; a step past `ImportHelperCount`, past `ImportHelperDepth`, and one needing 17 sources, each refused before any evs write for the step, naming the commit; an import with no oversized step making no helper.
+**Git to evs (`evs_local_publish_test.go`; EVS1-M2-34).** A's scenario: two commits, one push, the middle blob a history blob, and a second device's `git fsck --strict` clean. A file added and removed inside a push. A 2,000-commit push in two parts, the second changeless. A branch at an existing commit, a lightweight tag and an annotated tag: one empty push each, the tag IMMUTABLE, a second push to it refused. A forced rewind. A DELETE and a re-creation whose net change starts from the old tree. C's scenario: a pull of two other sidecars' commits names one source and carries only the merge; with 17 branches merged at once the 17th's commits are carried. A rename keeps the file_id and uploads nothing; a merged file is cited from its source ref, and a moved-on source falls back to a checkpoint. FS-5's overlay cases, and H's: an inherited file removed, its directory then held whole, the removal standing after a marker collection and after a path-epoch copy; a file changed in a directory the overlay never holds. N's: a file replaced by a directory and back; a gitlink. §11.19's limits refused before any evs write. An import: a foreign history of 10,000 commits in three pushes by a lowered `ImportPushPartCount`, each `EvsImport` checked alone; a writer's push carrying the admin's `EvsImport` with other commits, refused by replay; a kill between pushes and a rerun; a history with raw trees and late headers, its export's oids equal; a tree name with a slash, refused naming the tree; a 100,000-file commit as one multi-part push (§22.8's row), run at 1,100 files in the unit leg. Helper refs (QD-604), each with `ImportStepPartCount` lowered so that a side of a few hundred commits is oversized: a merge of two disjoint histories imports through one helper, `ur/<sidecar_id>/import/<id>/1`, the merge step's push carrying the merge commit alone and naming the helper's version as its one source, each push's `EvsImport` checked alone, and a second device's `git fsck --strict` clean; a side that itself merges an oversized side makes a helper inside a helper, numbered in the order first needed; an octopus merge of three sides of which two are oversized makes two helpers and carries the third; a side that forked from dst's line gets a helper that is an overlay; after the import every helper is deleted on evs, no `refs/heads/ur/<sidecar_id>/import/` is left on either device, `refs/ur/evs/` keeps each last tip, and a third device that first syncs dst then replays each deleted helper to its named version and ends with equal oids; a kill at each of `evs.local.import.helper_recorded`, `.helper_pushed`, `.helper_done`, `.step_sent` and `.clean_deleted`, each rerun finishing with the same refs and no second helper for a pair; a helper deleted mid-import, abandoned and replaced; a helper push refused SCOPE stopping the import with dst at the cut before the step, and `--abandon` deleting the helpers and the record; a step past `ImportHelperCount`, past `ImportHelperDepth`, and one needing 17 sources, each refused before any evs write for the step, naming the commit; an import with no oversized step making no helper. Amended 2026-11-13, section 16 (EVS1-M6-06's tests): an import into a shared ref by a device a set filed `--as-written` leaves out stops before any evs write for the push that changes a file outside its prefixes, naming the path, with dst at the cut before it, and its helpers are not refused; a pin push on a branch commits, moves no local ref and is not sent to a tag ref; a re-creating push writes each tainted token path as one checkpoint of the tree's blob with no diff, rename or reuse resting on it.
 
-**Evs to git (`evs_local_sync_test.go`; EVS1-M2-35).** A push on device A applied on device B with equal oids and a clean `git fsck`. Each line of `check` broken in turn by a hand-built push, each refused with its alarm and the ref left: a forged committer; a commit of another sidecar carried without a source; a source that does not reach it; a missing history blob; a change that is not the tree's; an UPDATE that does not descend, without FORCE; a REKEY that changes an oid; a second push to a tag. A committed FORCE and a git-mode PATH_EPOCH raise no alarm (FS-1's case). A source ref replayed first, a missing source leaving the ref waiting, a cycle refused. A stopped ref resuming at a DELETE, its re-creating push refused until it writes or removes every tainted token path. Settle's table, one test a row, with a kill at each of `apply.state`, `apply.ref` and `apply.done`. Conflicts: an owned ref with two copies of one sidecar; the conflict branch published and visible on a third device; the 65th conflict stopping the ref; no conflict for E's schedule. Sync racing a receive on one ref at every barrier order (the seeded explorer, 10 seeds a merge). The replayed name index against `sidecartest.FakeNameIndex` for one tree, an overlay included.
+**Evs to git (`evs_local_sync_test.go`; EVS1-M2-35).** A push on device A applied on device B with equal oids and a clean `git fsck`. Each line of `check` broken in turn by a hand-built push, each refused with its alarm and the ref left: a forged committer; a commit of another sidecar carried without a source; a source that does not reach it; a missing history blob; a change that is not the tree's; an UPDATE that does not descend, without FORCE; a REKEY that changes an oid; a second push to a tag. A committed FORCE and a git-mode PATH_EPOCH raise no alarm (FS-1's case). A source ref replayed first, a missing source leaving the ref waiting, a cycle refused. A stopped ref resuming at a DELETE, its re-creating push refused until it writes or removes every tainted token path. Settle's table, one test a row, with a kill at each of `apply.state`, `apply.ref` and `apply.done`. Conflicts: an owned ref with two copies of one sidecar; the conflict branch published and visible on a third device; the 65th conflict stopping the ref; no conflict for E's schedule. Sync racing a receive on one ref at every barrier order (the seeded explorer, 10 seeds a merge). The replayed name index against `sidecartest.FakeNameIndex` for one tree, an overlay included. Amended 2026-11-13, section 16 (EVS1-M6-06's tests, in `evs_git_check_test.go` and here): under a rule set, hand-built pushes by a signer held to `agents/build/`, each refused with `prefix_rule` and its passing twin by a signer the set names: a file written outside, refused before a commit is read (an op-counting source); a file removed outside; on an overlay, an inherited file outside dropped by a held directory's table with no change at its own token path; a directory created over a file outside; a REKEY of a file outside; a re-creating push that writes a tainted token path outside. Passing: the last file under the prefix removed with the directories above it; a tag ref's push; a pin push; a FORCE by an admin. A set pending at u's pin leaves the ref waiting with no alarm and no `stuck_at`, and the replay goes on when the set opens; a push that fails both the tree's hash and the prefix line late raises the tree's reason on two devices alike.
 
-**The receive path (`evs_local_receive_test.go`; EVS1-M2-36).** FS-5's journal cases with stock git as the client: two clients push siblings and the second gets `! [remote rejected] … (non-fast-forward)`; a push whose head moved only by a PATH_EPOCH, and one by a rekey, land with no `ng`; SEGMENT_GONE, 429 and GATE_CLOSED never read as non-fast-forward; a two-ref push reports each status; `git push --atomic` fails before any write; the daemon killed at each row of 8.5's first table; a git ref lock held after pre-receive. G's: an unknown outcome answered `remote outcome pending` and later resolved each way, with no statement sent twice across the restart. An owned ref: `ok` before evs, three pushes coalesced into one, a forced local update, an offline queue re-sealed at the generation current at reconnect, a final refusal held and released by `ur evs retry`. pre-receive: a foreign committer refused with both config values, a non-canonical new commit refused, a ref outside refs/heads and refs/tags refused, the quarantine paths checked to lie in the bare repository. An import's helper ref: a client's push to it answers `ng … import helper`, and its deletion is taken.
+**The receive path (`evs_local_receive_test.go`; EVS1-M2-36).** FS-5's journal cases with stock git as the client: two clients push siblings and the second gets `! [remote rejected] … (non-fast-forward)`; a push whose head moved only by a PATH_EPOCH, and one by a rekey, land with no `ng`; SEGMENT_GONE, 429 and GATE_CLOSED never read as non-fast-forward; a two-ref push reports each status; `git push --atomic` fails before any write; the daemon killed at each row of 8.5's first table; a git ref lock held after pre-receive. G's: an unknown outcome answered `remote outcome pending` and later resolved each way, with no statement sent twice across the restart. An owned ref: `ok` before evs, three pushes coalesced into one, a forced local update, an offline queue re-sealed at the generation current at reconnect, a final refusal held and released by `ur evs retry`. pre-receive: a foreign committer refused with both config values, a non-canonical new commit refused, a ref outside refs/heads and refs/tags refused, the quarantine paths checked to lie in the bare repository. An import's helper ref: a client's push to it answers `ng … import helper`, and its deletion is taken. Amended 2026-11-13, section 16 (EVS1-M6-06's tests): with stock git as the client of a device held to a prefix, a push that changes a file outside answers `ng … prefix rule: <path>` with no request to evs (a counter on the transport) and no journal entry left; so do `git rm -r` of an inherited directory on a shared overlay branch and a directory replacing a file; a two-ref push, one ref refused and one landing; a pending set answers `prefix rule: pending`; the same pushes to an owned ref answer `ok`. A push built under one set that meets GATE_CLOSED and is sealed again under a narrower one is refused at the second check and never sent. A waiting push that loses TIP to a pin push lands with no `ng`, or is refused by the new set, and is never answered `non-fast-forward`.
 
 **Model twins in code (`sidecartest/evs_git_twins_test.go`, a new file of EVS1-M2-43).** One schedule per twin of 8.3, run against the real code, which must hold where the twin breaks: `EqualsOld`, `BlindUpdateRef`, `NgOnUnknown`, `NoRecognition`, `NoApplyLock`, `RefusedDropOnly`.
 
@@ -6900,6 +7044,14 @@ Two new tasks change landed code before the held ones can pass their tests. `.st
 **Order.** EVS1-M2-48, then EVS1-M2-49, which uses its messages; then EVS1-M2-34; then EVS1-M2-35; then EVS1-M2-36, as the plan has them. EVS1-M2-35's unit tests need only hand-built pushes, so it can start beside EVS1-M2-34.
 
 **Other tasks this section touches by name.** EVS1-M2-32 (export) is changed by EVS1-M2-49. EVS1-M2-33's files change as listed under EVS1-M2-34 and EVS1-M2-35. EVS1-M2-37 starts `git-receive-pack` with `UR_GIT_SESSION`. EVS1-M2-38's `ur evs import` passes `cuts` and `force`, takes `--abandon`, and adds `ur evs retry`; its `ur status` lines gain an unfinished import and leftover helper refs. EVS1-M2-43 gains 8.6's matrix rows and its twins file. EVS1-M2-47's seam is registered by EVS1-M2-35. KEYS-M2-26 drops its git-mode skip once EVS1-M2-48 lands. EVS2's drop job holds to G11.
+
+**Section 16's amendments** (amended 2026-11-13). None of the five tasks above changes what it builds at M2: no rule set can be in force before ACL-M6-04, and each seam the M6 tasks need is one this section already gives. EVS1-M6-06 builds 16-A and 16-B, and its scope is wider than 16.7 wrote it:
+
+- 16-A, 8.2.7's prefix line: `evs_git_check.go` (`EvsGitCheckUpdate` takes the verdict as an argument, beside the committer resolver and the held-object test, so export judges with the same function), the early test on written file entries and the late test on the two trees and the taints; `evs_local_sync.go` (the reason, and the waiting u beside the wait on a source). EVS1-M2-49 and EVS1-M2-35 leave the seam: a refusal's reason is the row's, and the replay loop's wait takes a cause.
+- 16-B, 8.2.5's prefix check and 8.2.8's answers: the call is in `evs_local_publish.go`, which EVS1-M6-06's Files gain, so that an import and a rebuild pass it; `evs_local_receive.go` maps the refusal to its `ng` lines. EVS1-M2-34 and EVS1-M2-36 leave the seam: publish returns a refusal before any evs write as it does for the tree reader's.
+- 8.2.10's rekey: `AllowPrefixWrite` on `WritePaths` for a shared git-mode ref is EVS1-M6-05's, with its planner call; KEYS-M2-26's job reports the paths a held device left.
+- 8.2.10's pin push on a git-mode ref is EVS1-M6-05's `PinPush`: the UPDATE of one tip, under P_r, on branches that have a tip.
+- 16-D, 8.2.4's chain row: the sixth checkpoint case is EVS1-M6-05's in `evs_checkpoint.go`. EVS1-M2-34's re-creating push, not yet built, writes a tainted token path as one checkpoint from the bare repository, which is that task's own and needs no rule set to be right. EVS1-M2-25's planner rules (1) to (4) are unchanged.
 
 ### 8.8 Proposed DESIGN.md text
 
@@ -7869,7 +8021,7 @@ This section was designed on the recommendation of each, and the owner answered 
 
 ## 10. DROP lists a phone can check (§11.6, §11.7, §11.9)
 
-Status: complete (2026-11-11)
+Status: complete (2026-11-11; amended 2026-11-13, section 16: 10.2.4, 10.5, 10.6, 10.7 and 10.8, each place marked)
 
 Tasks held until complete: EVS2-M10-09, EVS2-M10-10, EVS2-M10-22, EVSB-M10-03, EVSB-M10-04.
 
@@ -8094,7 +8246,18 @@ dry run    POST .../drops/preview with each path's lineage, through_version, cou
 bounds     a body past EvsDropMaxBodyByteCount, or lists past EvsDropMaxListedCount, is cut into several DROP pushes
            at lineage boundaries, each previewed and confirmed as one command; one lineage that alone passes
            either bound is refused locally (ErrEvsDropTooLarge)
+prefix     (amended 2026-11-13, section 16) in a repo with prefix rule sets the builder reads each path with
+rules      16.2.5's `effective`, and builds a DROP only over a path whose newest event on evs it allows. One it
+           cannot judge (a set pending or newer, or a walk that ends in depth or unavailable) stops the command
+           with that answer. One it ignores is written back first, on a device that mirrors the ref and is
+           allowed the path (16.2.8's who): the repair form with no edit, whatever RepairDepth says, which is the
+           effective content as one checkpoint with its row, or the removal where the effective state is absent;
+           the lineage, the list and the boundary are then built on the head that push left. Any other device,
+           a head-mode signer among them, stops before the dry run: EVS_PREFIX_RULE, the path, detail refused,
+           its message naming `ur evs repair` on a device that mirrors the ref
 ```
+
+**§11.7's checkpoint list has six cases** (amended 2026-11-13, section 16; amendment 16-D). This section reads the list for a written boundary: case (5) is the kept head. Section 16 adds case (6), the repair form: a write of a path whose newest version on evs is one the writer ignores under the repo's prefix rules is one checkpoint built from the version the writer holds effective, with the path's row stated again (16.2.7). The two cannot ride in one change, and must not. A DROP's written boundary is exactly one change, at the lineage's newest token path (10.2.5's seal row), where the repair form states the row in the parent's delta, a second change. And §11.7's boundary row has the kept head copy "the head's plaintext, mode and git oid": copied from an ignored version it would carry that version's content under a DROP, which every reader takes as outside the rules (16.2.4's line 1) because a DROP does not change what a path's content is, and the versions below it, the effective one among them, would be listed and deleted. So the builder's row above puts the repair first, as an ordinary push, and the DROP after it on an allowed head. The kept head then copies the repair's checkpoint. The list takes the ignored versions with every other version below `through_version`, so the job deletes their content with the rest, which is how an admin clears what a breach stored (16.2.13's first row). A path a breach created is removed by the repair and dropped at a removed boundary; one a breach removed is created again and dropped at a written one. A breach that lands between the two pushes makes the DROP lose 5g's CAS on its base, and the command starts again. evs's checks, the job and every reader's check of a DROP are unchanged, and so is a DROP of a path whose newest version its builder allows.
 
 `map_parts` is the only field the builder takes from evs. Nothing rests on it but the job's own cost: it tells resolve which 8 MiB map part to read, resolve checks the move it finds there, and no reader looks at it, since a reader derives every token.
 
@@ -8616,6 +8779,9 @@ a list file unreadable         evs answers the read 503: it does not serve a ver
                                job's drops, from their bodies and the ref's history (an operations command, 10.7)
 a re-seed from a stale         §19.10's re-seeded job runs again from its signed state (FI-27's last clause):
 mirror                         resolve rewrites the list files, equal bytes, and the rounds delete what returned
+a path's newest version is     (amended 2026-11-13, section 16) the builder writes the effective state back first
+one the builder ignores        and drops on that head, or stops with EVS_PREFIX_RULE on a device that cannot
+under prefix rules             (10.2.4); a DROP never copies an ignored version into its kept head
 ```
 
 ### 10.6 The test plan
@@ -8648,6 +8814,11 @@ evs_drop_lineage_test.go    a lineage names every epoch from its oldest version'
                             the floor; the dry run's map_parts copied; linked false stops the command; a
                             head-mode walk of 5,000 versions refused past HeadDropFetchByteCount, and one of 300
                             signing exactly what a mirroring device signs for the same path
+                            (amended 2026-11-13, section 16) under a rule set, a path whose newest version the
+                            builder ignores: a mirroring admin's command sends the repair form first and the
+                            DROP's kept head copies it, the ignored versions in its list; a head-mode signer
+                            and a device the set does not name stop with EVS_PREFIX_RULE before the dry run; a
+                            path a breach created is dropped at a removed boundary; a pending set stops it
 ```
 
 **Unit tests in evsservice:**
@@ -8742,7 +8913,7 @@ One new task carries the format changes and the changes to landed code that no h
 - EVSB-M10-07 (`EvsCommit.tla`'s drop extension; drafted): 10.6's Models paragraph.
 - EVS2-M10-06 (versionless pushes on evs; not drafted): 10.2.6. A part's record takes the `replaced` list, the seal's the candidates over every part, and `PurgeSink` only the seal's.
 - EVS2-M10-07 (folds; drafted): its landed fold gains the removed boundary's mark, in EVS2-M10-36. The drop mark stays the fence's; serving reads none.
-- EVS2-M10-20 and EVS2-M10-21 (the client's drop engine; not drafted): 10.2.4 and 10.2.5. The lineage's epochs, the dry run's `map_parts`, the cut into several pushes at the bounds, the head-mode walk and its refusal.
+- EVS2-M10-20 and EVS2-M10-21 (the client's drop engine; not drafted): 10.2.4 and 10.2.5. The lineage's epochs, the dry run's `map_parts`, the cut into several pushes at the bounds, the head-mode walk and its refusal. Amended 2026-11-13, section 16: EVS2-M10-20's builder also takes 10.2.4's prefix rules row, on EVS1-M6-04's `effective` and EVS1-M6-05's repair form. The five held tasks read §11.7's checkpoint list and change nothing for its sixth case.
 - EVS2-M10-13 (mirrors and re-seeding) and CORE-M10-04 (`ApplyExecutedDrop`): a device decides what an executed drop covers by `Covers` over what it holds, as EVS2-M10-22 hands it.
 - EVSB-M2-12's nightly pass deletes `snap`, `cand`, `mark`, `del` and `held` files 30 d after their job ends and never a `list` file.
 
@@ -8757,6 +8928,8 @@ For a design-records track. Each item replaces the words it quotes and leaves th
 **§11.6, `EvsDropHistory` and `EvsDropPath`.** `paths`' comment: "drop: 1 to 1,024 lineages, sorted by their newest token path's bytes; the body at most 256 KiB as bytes". `count`'s: "listed versions, 1 to 1,048,576, and at most that many over all of a DROP's paths". `listed_sha256`'s: "SHA-256 over the listed entry_sha256 values, ascending, which follow the body in the payload, spread over the push's parts past one part's 1 MiB; a check of the signer's enumeration, which the job's resolve and a replaying reader recompute and no reader is sent". The payload row, for "a DROP's EvsDropHistory and then its sorted lists, across the push's parts when large (11.7)": "a DROP's EvsDropHistory, whole in part 1, and then its sorted lists, across the push's parts when large, in parts that hold no change once the changes end (11.7, 11.8's parts row)". The checks row, after "sorted and unrepeated (409 DROP_LIST)": ", a DROP's body within 256 KiB and its counts within 1,048,576 in all".
 
 **§11.7, the action row.** For "and marks only once evacuation's horizon has passed the drop's commit by 2 min, so a now drop's deletions start about 25 to 26 h after it (owner decision 204)": "and marks only once evacuation's horizon has passed, by 12 min, the time evs saw the drop committed, which covers a citation validated on a cached head, so a now drop's deletions start about 25 to 26 h after it (owner decision 204), and it deletes an object only once the horizon has passed its LastModified + 24 h + 2 min". The states row, for "a DROP failing a reader's checks (its signer's role at its auth pin, for a drop no lock there (§8.8), drop_sha256 and listed_sha256, each lineage entry the path's token path in its epoch, the boundary, and, replaying, the listed set equal to the lineage's versions below through_version)": "a DROP failing a reader's checks (its signer's role at its auth pin, for a drop no lock there (§8.8), drop_sha256 over a body of at most 256 KiB, each entry of the path's lineage the path's token path in its epoch, the boundary where the reader reads the kept version, and, replaying, the count and SHA-256 of the lineage's versions below through_version, computed from its own history, equal to count and listed_sha256)". Add to the states row: "a version is listed for a reader when the DROP's body covers it: its token path in its statement's epoch is in a lineage and its version is below that lineage's through_version; the reader judges the name and version it asked for". The fence row, after "(index entries, below)": "; a reuse source's head may come from the cache, which serves a head only within 10 min of that head's own write". The fold row, after "the DROP's setting the entry's drop mark {drop_id, through_version}": ", and a DROP at a removed boundary setting it on the path's marker entry while that entry holds folded versions". The rule row, for "are deleted, each once over 25 h old": "are deleted, each once evacuation's horizon has passed its LastModified + 24 h + 2 min".
+
+**§11.7, the boundary row** (amended 2026-11-13, section 16). After "1 written: the DROP writes through_version, the path's next version, with the head's plaintext, mode and git oid": ", the head being a version its builder allows under the repo's prefix rules: a path whose newest version the builder ignores is first written back in the repair form (checkpoint case 6), and the DROP is built on that head".
 
 **§11.8.** The `drops/` row's "holds": "the repo's drop table, each drop with the time evs saw it committed, the running drop job with its round and horizon, and dry runs (11.13)". The `dropscan/` row: holds "a drop job's or dry run's file: snap, cand, list, mark, del or held (11.13)", lifetime "30 d after its job or dry run ends; a list file, the repo's life". Step 8, for "a DROP's or cancel's append to drops/<repo>/_ (If-Match, retried on 412)": "a DROP's or cancel's append to drops/<repo>/_ with the clock read after step 7's 200 (If-Match, retried on 412)". The parts row, after "(owner decision 239)": "; a DROP carries its body whole in part 1 and its lists in the parts' sections, in parts with no change once its changes end, and one with no change at all states the empty change list". The seal row, after "checks them against parts_sha256": ", runs a DROP's body and list checks, which no part runs, and lists the push's purge candidates from every part's replaced versions less every id any part's versions name (11.13)". I-EVS-15:
 
@@ -12147,7 +12320,7 @@ Section 14 is built on the recommendation of each.
 
 ## 15. Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10)
 
-Status: complete (2026-11-12)
+Status: complete (2026-11-12; 15.8 gained its §22.8 model row on 2026-11-13)
 
 Tasks held until complete: SEARCH-M10-17 and SEARCH-M10-28. Both build from this section, in the order 15.7 gives.
 
@@ -12795,6 +12968,8 @@ For a design-records track; nothing here edits DESIGN.md or `design/source/`.
 
 **§2.8's metadata list.** No new row: a re-entry push is an index push by an admin's sidecar on a ref that sidecar already writes CUTs and CLOSUREs to, of sizes the existing index rows describe.
 
+**§22.8, the model row** (added 2026-11-13). `details/IndexErase.tla` beside `details/IndexMerge.tla`, under `IndexRollup.tla`, with `run-indexerase.sh`: "an erasure under own bases: the resting diff, the re-entry push and the order of CLOSUREs, and a run card's version, fence and second fold, with the rules as landed as failing configurations".
+
 ### 15.9 Owner questions
 
 Each is filed under `.stack/questions/` and the section is built on its recommendation.
@@ -12809,11 +12984,11 @@ Each is filed under `.stack/questions/` and the section is built on its recommen
 
 ## 16. Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9)
 
-Status: complete (2026-11-13)
+Status: complete (2026-11-13; its amendments 16-A to 16-D were written into sections 5, 8 and 10 on 2026-11-13, as 16.7 lists)
 
 Tasks held until complete: none. ACL-M6-04's prefix half was never built, and 16.7 says what it and five new tasks build.
 
-Model: `sidecar/sidecartest/model/details/PrefixRules.tla`, its configurations (`PrefixRules.cfg`, `PrefixRules-*.cfg`, `PrefixRulesTwin-*.cfg`, `PrefixRulesReach-*.cfg`) and `run-prefixrules.sh` beside it. Questions filed: `.stack/questions/details-16-subject-atoms.md`, `details-16-admins-unbound.md`, `details-16-git-mode-stop.md`, `details-16-repair.md`, `details-16-small-readings.md`. The section is built on the recommendation of each, and on the recommendation of the open question `details-amend-2-late-generation`, whose grace rule 16.2.2 and 16.2.3 take as section 12 does. It specifies what the owner accepted in QD-212 (DESIGN-AMENDMENTS.md) and what RESOLUTIONS.md `plan-EVS1-v1-unspecified` #5 made the rule. It builds on section 5 (rows and verdicts across bases), section 8 (git and evs) and section 9 (path epochs), and changes no rule of any of them: it adds one line to 8.2.7's `check` and to 8.2.8's receive path, and one list to section 5's rows.
+Model: `sidecar/sidecartest/model/details/PrefixRules.tla`, its configurations (`PrefixRules.cfg`, `PrefixRules-*.cfg`, `PrefixRulesTwin-*.cfg`, `PrefixRulesReach-*.cfg`) and `run-prefixrules.sh` beside it. Questions filed: `.stack/questions/details-16-subject-atoms.md`, `details-16-admins-unbound.md`, `details-16-git-mode-stop.md`, `details-16-repair.md`, `details-16-small-readings.md`. The section is built on the recommendation of each, and on the recommendation of the open question `details-amend-2-late-generation`, whose grace rule 16.2.2 and 16.2.3 take as section 12 does. It specifies what the owner accepted in QD-212 (DESIGN-AMENDMENTS.md) and what RESOLUTIONS.md `plan-EVS1-v1-unspecified` #5 made the rule. It builds on section 5 (rows and verdicts across bases), section 8 (git and evs) and section 9 (path epochs), and changes no rule of any of them: it adds one line to 8.2.7's `check` and to 8.2.8's receive path, and one list to section 5's rows. Those additions were written into sections 5, 8 and 10 on 2026-11-13 (16.7's last paragraphs), with one more question, `details-amend-3-pin-push-refs`, on whose recommendation 8.2.10's pin push is built.
 
 ### 16.1 The problem
 
@@ -13073,6 +13248,8 @@ Directory changes are not judged here: a git-mode ref's directories follow from 
 
 This gives a breaching writer nothing it did not hold: any writer of a git-mode ref can stop it today with one push whose tree does not hash. Skipping the push and going on would need every later push to rest on the tip before u while evs's entries hold u's changes, which is 8.5's taint rule on every push forever; the question is filed with the recommendation to stop (`details-16-git-mode-stop`).
 
+*Written into 8.2.7* (2026-11-13, amendment 16-A), which fixes three readings this subsection left open. "Every file change of u" is read on git's own change and not on evs's change list: every path that is a file in either of the push's two trees and differs between them, so that an overlay's inherited file dropped by a directory's table, and a file a directory is created over, are judged though no change names their token path. A REKEY's file entries and a re-creating push's tainted token paths are judged too. And the line is tested early on the file entries a push writes, before a commit is read, and in full once the trees stand. 8.2.7 is the text to build from.
+
 Head mode reads a git-mode ref one change at a time and never ran `check`. It applies 16.2.5's rule to the change it reads, so it does not show a breach's file, and it does not learn that the mounts refused the rest of that push.
 
 #### 16.2.7 The writer
@@ -13091,6 +13268,8 @@ AllowPrefixWrite(repo, ref kind and name, paths, sets) -> AclDecision
 It is called by the planner (`evs_plan.go`) for every path a file-mode write names, before the first round trip, and by the receive path (8.2.8) for every file path of an update's net change before it builds the push: `ng <ref> prefix rule: <path>`. Directory rows are not asked about: a design planner adds rows on the way to a path it may write and removes none above its prefix. §18.5 gains the code `EVS_PREFIX_RULE`, which the SDK and MCP's write tools return with the path. The plaintext path is the caller's own and goes into no log (I-13).
 
 Because the push pins the state the check ran at, and readers judge at that pin, a design device's write is allowed by every reader (16.3's P2). A set that lands between the check and the commit does not reach back: the push is judged at its pin.
+
+*Written into 8.2.5 and 8.2.8* (2026-11-13, amendment 16-B). On a git-mode ref the call is in `publish`, between the net change and the planner, and not in the receive path alone, so an import into a shared ref and a push sealed again on a new pin pass it too; it asks about the files 8.2.7's line judges, and it runs again whenever the statement is signed on another state's pin, which is what keeps P2 true of a push that was rebuilt. A rekey of a git-mode ref is asked by the planner like a file-mode write (8.2.10). An owned ref asks nothing.
 
 *Writing over an ignored event.* The planner reads the path with `effective`. Where evs's newest event of the path is not the effective one, the write takes the **repair form**:
 
@@ -13111,6 +13290,8 @@ metadata    the sealed metadata names the push ids it writes over, for `ur evs l
 ```
 
 The first allowed version after an ignored one is therefore a full copy, under the writer's own key, with its row. §11.7's checkpoint list gains this as its sixth case.
+
+*Written into 8.2.4 and 10.2.4* (2026-11-13, amendment 16-D), the two places this document reads that list. On a git-mode ref the case is the re-creating push's write of a tainted token path. For a DROP, the sixth case and the fifth, the kept head, never share a change: a DROP is built only over a head its builder allows, and a path whose newest version the builder ignores is repaired first, whatever `RepairDepth` says, or the command stops on a device that cannot repair.
 
 #### 16.2.8 Repair
 
@@ -13154,6 +13335,8 @@ after the statement's 200:
 ```
 
 Any honest push does the same, since a design device pins its tip. Until one lands, a writer that sends an older pin can still write under the older set on that ref (`PrefixRulesReach-StalePin`); after it, none can (`Fence`). A widening needs no pin push: the writer it frees pins its own tip.
+
+*On a git-mode ref* (2026-11-13; 8.2.10 as amended). "Each shared ref" is each shared branch that has a tip and is not stopped on the filer's device. A tag ref takes no second push and holds no file. A ref with no tip takes no UPDATE: a deleted ref is bound from the push that re-creates it, and `show` lists it as unbound until then. A stopped ref is bound by its recovery, whose DELETE and re-creating push carry the admin's pin. This narrows the reading QD-795 ratified, as section 8's rules force for a tag ref and a stopped one; what binds a deleted ref is filed (`details-amend-3-pin-push-refs`).
 
 #### 16.2.10 The alarm
 
@@ -13452,18 +13635,27 @@ One existing task changes and five are new. The ids are free in `.stack/plan`, t
 - Needs: EVS1-M6-04; ACL-M6-04; EVS1-M6-01 for the refs listing, the mounts' refs until it lands.
 - Tests: `evs_plan_test.go` and `evs_prefix_repair_test.go` as 16.6 lists.
 - Traps: a repair form's `base_entry_version` and `prev_push_id` are evs's newest, never the effective version's, or 5g refuses it and History's walk breaks. A repair never runs on a phone, an ephemeral sidecar or a device that does not mirror the ref. The pin push must carry the pin of a state at or above the set, so the filer waits for its own log to apply its statement before it sends one.
+- Amended 2026-11-13 (8.2.10, 8.2.4, 10.2.4 as amended). `AllowPrefixWrite` also covers `EvsRepo.WritePaths` on a shared git-mode ref, which is a rekey. `PinPush` on a git-mode ref is the UPDATE of one tip, under P_r, on branches that have a tip and are not stopped, and `ur evs rules show` lists the refs it could not bind. The repair form with no edit is callable for one path whatever `RepairDepth` says, for EVS2-M10-20's DROP builder.
 
 **EVS1-M6-06, git mode** (new; M6; S; sidecar).
 
 - Files: `evs_git_check.go` (16.2.6's line under `every shape`, after the shape checks and before the commits are read, so a breach costs no object work), `evs_local_sync.go` (the alarm's reason; the wait on a pending or newer set), `evs_local_receive.go` (`ng <ref> prefix rule: <path>` from `AllowPrefixWrite` over the update's net change), and tests.
 - Needs: ACL-M6-04; EVS1-M2-35, -36, -49.
 - Trap: only file changes are judged; a directory's rows on a git-mode ref follow from the trees.
+- Amended 2026-11-13, with 16-A and 16-B written (8.2.5, 8.2.7, 8.2.8; 8.7's last paragraph). Its scope grows, and its size is M. Files gain `evs_local_publish.go`: the writer's call sits in `publish`'s step 3, so an import and a rebuilt push pass it, and it runs again before a statement signed on another pin. `evs_git_check.go` holds two tests: the early one above, on the file entries a push writes, and the full line with the `changes` row, on every file that differs between the two trees, a REKEY's entries and the tainted token paths. `evs_local_receive.go` also answers `prefix rule: pending`, `update` and `tainted paths`. Needs gain EVS1-M2-34. Tests: 8.6's three amended rows. Traps: a file can change with no change at its own token path (an overlay's table, a creation of the other kind over it), so neither test may read the change list alone; the refusal's reason is the first failing row's, in `check`'s order, on every device; an owned ref asks nothing.
 
 **TEST-M6-03, prefix rules end to end** (new; M6; M). 16.6's schedule rows on T2; `run-prefixrules.sh` beside the other details models in the gate's model step; the hand-built breaching pushes as a `sidecartest` helper that signs with a real admitted sidecar's key and skips `AllowPrefixWrite`, which no release build can do.
 
 **Scope notes for tasks that are not held.** SEARCH-M10-24 (masks): a hit whose (path, version) `effective` ignores is masked. SEARCH-M10-12 and SEARCH-M10-14 (coverage, backfill, companion pushes): no ignored version is indexed, and an ignored push counts as indexed. EVS1-M2-49 (export): reports an ignored version as it reports a refused one. TEAM-M2-04 (`CascadePlan`): lists the `prefix_rules` rows whose signer is in P at the row's position. Each is one call to ACL-M6-04's verdict or one read of the row.
 
-**Amendments to other sections of this document**, stated here and not edited there: 8.2.7's `check` gains 16.2.6's line (16-A); 8.2.8's receive path gains 16.2.7's refusal (16-B); 5.2.2's list of what rows carry gains `AclRepo.prefix_rules` (16-C); §11.7's checkpoint list, as section 8 and section 10 read it, gains the repair form (16-D).
+**Amendments to other sections of this document**, stated here when the section was written and written into those sections on 2026-11-13, each place marked "(amended 2026-11-13, section 16)":
+
+- **16-A, written 2026-11-13.** 8.2.7's `check` gains 16.2.6's line under `every shape`, with a paragraph that fixes what a file change is (the files that differ between the push's two trees, a REKEY's entries, a re-creating push's tainted token paths), where the line is tested (the set from the pin; written file entries before a commit is read; the rest with the `changes` row) and what a failure is (QD-793: `check` fails, the ref stops, recovery is 8.5's). The replay block gains the `prefix_rule` reason and the waiting u. 8.3, 8.5 and 8.6 are marked where they follow.
+- **16-B, written 2026-11-13.** 8.2.8's receive path answers `ng <ref> prefix rule: <path>`, and `pending`, `update` or `tainted paths` where there is no path to name. The call itself is in 8.2.5's `publish`, step 3, so an import into a shared ref and a push sealed again on a new pin pass it; 8.2.9's fence order names it. An owned ref asks nothing.
+- **16-C, written 2026-11-13.** 5.2.2's list of what rows carry gains `AclRepo.prefix_rules`, a rows-only input folded alike by `ApplyStatement`, by `Reapply` for a tail entry whose verdict is 1, and by a base's compile; 5.2.4 and 5.7 are marked where they follow.
+- **16-D, written 2026-11-13.** §11.7's checkpoint list holds six cases where 8.2.4's chain row and 10.2.4 read it. On a git-mode ref the sixth is a tainted token path's write. A DROP's kept head is never built on an ignored version: the builder repairs first or stops.
+
+Three places beyond those four were amended because the four could not be written without them: 8.2.10's rekey (judged, so asked by the planner), 8.2.10's pin push on a git-mode ref (a commitless version; none on a tag ref, a ref with no tip or a stopped ref), and 10.2.4's DROP builder. One question is filed (16.9). No model changes: `GitSync.tla` holds a commitless version as any version that moves no tip, `DropJob.tla` models evs's job and not the client's builder, and `PrefixRules.tla` is one file-mode ref of one-change pushes, whose verdict is the function 8.2.7's line calls for each file.
 
 ### 16.8 Proposed DESIGN.md text
 
@@ -13528,7 +13720,9 @@ rules     11.9's checks, by the set in force at its push's auth pin: allowed whe
 
 **§11.9, the readers row.** After the signed statement and entry hash: "then §11.7's prefix rules: a version they do not allow is not returned, and the newest allowed one below it is". **The trusts row.** After "is evs's word": "; its prefix verdict is not: the reader computes it for the version it is served, from rows alone".
 
-**§11.11.** The mount's check gains the prefix line (DESIGN-DETAILS 8.2.7 and 16.2.6); receive answers `ng <ref> prefix rule` for a path its own device may not write.
+**§11.11.** The mount's check gains the prefix line (DESIGN-DETAILS 8.2.7 and 16.2.6); receive answers `ng <ref> prefix rule` for a path its own device may not write. Amended 2026-11-13, with 16-A and 16-B written, add: "the line judges every file that differs between the push's two trees, a rekey's entries and a re-creating push's tainted token paths, and no directory change; a device asks its own rules before it builds any push for a shared ref, an import's and a rebuilt one included; a set's filer sends its push of no change to each shared branch that has a tip".
+
+**§11.7, the boundary row.** 10.8's amended item: a DROP's kept head is a version its builder allows.
 
 **§11.22, v1.** For "Q-EVS-3's prefix rules" read "Q-EVS-3's prefix rules (§8.8, §11.7's prefix rules row; M6)".
 
@@ -13552,9 +13746,11 @@ Five are filed. The section is built on the recommendation of each, so none bloc
 
 **details-16-small-readings** (filed). Eleven readings the section took where QD-212's sentence allows more than one; each is one line to change: (1) only a general repo takes a set, though QD-212 names owner-bound repos after RepoVersioning's pattern: every owner-bound kind is record-class and written only by its owner's devices; (2) a set binds every shared ref of its repo, with no rule per ref; (3) once a set is in force a signer it does not name writes nothing, pushes pinned below a repo's first set are unbound, and the rules are lifted by the one rule that names `autogroup:sidecar`; (4) a void set leaves the set below it in force; (5) `.ur-index/`, `ur/index` and `ur/lfs` are outside the rules; (6) pushes carrying an admin's flag are outside the rules; (7) a repo's rows hold at most 256 sets for its life, with no compaction; (8) a set binds a ref from the first push pinned at or above it, which the filer sends; (9) a compromise cascade voids no set; (10) a device older than M6 enforces nothing, and no row lets a filer list such devices; (11) the default numbers of 16.2.11. Recommendation: each as built.
 
+**details-amend-3-pin-push-refs** (filed 2026-11-13, with the amendments). Which git-mode refs get a set's pin push, and what binds a deleted one? QD-795 has the filer send a push of no change "to each shared ref"; section 8 leaves no such push for a tag ref (it takes only a DELETE), a ref with no tip (an UPDATE needs one) or a ref stopped on the filer's device. Options: (1) none is sent to those; a tag ref needs none, a stopped ref is bound by its recovery, and a deleted ref is bound from the push that re-creates it, listed as unbound by `ur evs rules show` until then (built). (2) The filer sends a deleted ref a second DELETE, which carries its pin: every filing then writes a version to every branch the repo ever deleted, and evs must take a DELETE of a deleted ref. Recommendation: 1. What it leaves open is a writer re-creating a deleted branch at a stale pin under the set in force there, which is the reach 16.2.9 already names, on a branch the admin had deleted.
+
 ## 17. Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8)
 
-Status: complete (2026-11-13)
+Status: complete (2026-11-13; 17.8 gained its §22.8 model row the same day)
 
 Tasks held until complete: TLS-M6-05. It builds from this section, in the order 17.7 gives, beside a proposed task for the sockets half (17.7).
 
@@ -14623,6 +14819,8 @@ For a design-records track; nothing here edits DESIGN.md or `design/source/`.
 **§12.8**, item 3: "devices pass DNS-01 through a CNAME at `_acme-challenge.<custom host>`, one for each custom host, to `<token>.acme.<root>`", and "TLS-ALPN-01 needs the ordering desktop to hold a publish grant on port 443 of the host's owner".
 
 **§2.8's metadata list.** cert-1, cert-2, sock-1, sock-2 and api-8 gain 17.2.16's clauses, as a new version of `metadata_list.yml`.
+
+**§22.8, the model row** (added 2026-11-13). `details/CertOrder.tla`, with `run-certorder.sh`. It stands alone: no model §22.8 names keeps an account's lock or a custom row's recorded order, so it is listed by itself and not beside another.
 
 **§22.9**, the ACME line gains: "Pebble neither reuses orders nor limits; those are tested on a scripted client (DESIGN-DETAILS 17.6)". §22's schedule gains 17.6's eleven rows.
 
