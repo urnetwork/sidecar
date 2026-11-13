@@ -440,15 +440,20 @@ func (self *ConfigWriter) plan(ctx context.Context, previous *configWriterPlan, 
 // The bridge ledger's fold through foldedThrough over the head being extended, by args.BridgeFold. With none, the fold
 // stops below the first bridge statement it would take, or stays at the head's where §7.9's fold rule does not allow
 // that, and the head's ledger stands: a writer that cannot write the ledger never folds a statement into a head
-// without it. A fold stopped below a body the writer could not open alarms config_key_waiting.
+// without it. A fold stopped below a body still waiting alarms config_key_waiting, and each body it froze void as
+// unformed is logged config_key_void (DESIGN-DETAILS 12.2.3); both lines name the body's generation and its filer, on
+// every plan, so an admin can revoke a filer that keeps the fold held (QD-774).
 func (self *ConfigWriter) bridgeFold(head *ConfigHead, state *ConfigState, foldedThrough uint64, entryTimeMs func(n uint64) (int64, bool)) (*BridgeLedgerFold, error) {
 	if self.args.BridgeFold != nil {
 		fold, err := self.args.BridgeFold(head, state, foldedThrough, entryTimeMs)
 		if err != nil {
 			return nil, err
 		}
-		if fold.Stopped != nil {
-			self.log.Warningf("[config]%s config_key_waiting: the fold stops at %d below a bridge body of generation %d", self.args.Client.NetworkId(), fold.FoldedThrough, fold.Stopped.Generation)
+		if stopped := fold.Stopped; stopped != nil {
+			self.log.Warningf("[config]%s config_key_waiting: the fold stops at %d below the bridge body at %d, of generation %d, filed by %s", state.NetworkId(), fold.FoldedThrough, stopped.Statement.N, stopped.Generation, stopped.Statement.Signer)
+		}
+		for _, voided := range fold.Voided {
+			self.log.Warningf("[config]%s config_key_void: the fold through %d freezes void the bridge body at %d, of generation %d above every generation gkm names, filed by %s", state.NetworkId(), fold.FoldedThrough, voided.Statement.N, voided.Generation, voided.Statement.Signer)
 		}
 		return fold, nil
 	}
@@ -463,7 +468,7 @@ func (self *ConfigWriter) bridgeFold(head *ConfigHead, state *ConfigState, folde
 		reached = head.FoldedThrough()
 	}
 	if reached < foldedThrough {
-		self.log.Warningf("[config]%s no bridge fold is installed: the fold stops at %d", self.args.Client.NetworkId(), reached)
+		self.log.Warningf("[config]%s no bridge fold is installed: the fold stops at %d", state.NetworkId(), reached)
 	}
 	files, err := bridgeLedgerRowsFiles(&bridgeLedgerHeadRows{head: head})
 	if err != nil {

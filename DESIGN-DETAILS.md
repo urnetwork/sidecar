@@ -15,7 +15,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 5 | Authorization-log verdicts across folds (§7.9) | 13 | complete (2026-11-09; amended 2026-11-13, section 16) |
 | 6 | MLS group key management (§10) | 13 | complete (2026-11-10) |
 | 7 | Remote search across designated indexers (§11.14, §18.4) | 3 | complete (2026-11-11) |
-| 8 | Git and evs in both directions | 3 | complete (2026-11-10; amended 2026-11-13, section 16 and QD-801) |
+| 8 | Git and evs in both directions | 3 | complete (2026-11-10; amended 2026-11-13, section 16, QD-801 and QD-803) |
 | 9 | Client path epochs and re-tokenizing | 3 | complete (2026-11-10) |
 | 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | complete (2026-11-11; amended 2026-11-13, section 16) |
 | 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10; amended 2026-11-12, QD-760) |
@@ -23,7 +23,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 | 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
 | 15 | Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10) | 2 | complete (2026-11-12; §22.8 row added 2026-11-13) |
-| 16 | Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9) | 0 | complete (2026-11-13; amendments 16-A to 16-D written 2026-11-13; amended 2026-11-13, QD-801 and QD-802; question details-amend-4-new-ref-stale-pin is open, and the text stays as ratified until its answer) |
+| 16 | Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9) | 0 | complete (2026-11-13; amendments 16-A to 16-D written 2026-11-13; amended 2026-11-13, QD-801, QD-802 and QD-803) |
 | 17 | Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8) | 1 | complete (2026-11-13; §22.8 row added 2026-11-13) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
@@ -5946,7 +5946,7 @@ Each is filed under `.stack/questions/`, and the section is built on the recomme
 
 ## 8. Git and evs in both directions
 
-Status: complete (2026-11-10; amended 2026-11-13, section 16: 8.2.4, 8.2.5, 8.2.7, 8.2.8, 8.2.9, 8.2.10, 8.3, 8.5, 8.6 and 8.7, each place marked; amended 2026-11-13, QD-801: 8.2.3, 8.2.4, 8.2.5, 8.2.7, 8.2.8, 8.3, 8.5, 8.6 and 8.7, each place marked)
+Status: complete (2026-11-10; amended 2026-11-13, section 16: 8.2.4, 8.2.5, 8.2.7, 8.2.8, 8.2.9, 8.2.10, 8.3, 8.5, 8.6 and 8.7, each place marked; amended 2026-11-13, QD-801: 8.2.3, 8.2.4, 8.2.5, 8.2.7, 8.2.8, 8.3, 8.5, 8.6 and 8.7, each place marked; amended 2026-11-13, QD-803: 8.2.5, 8.2.7, 8.2.10, 8.5 and 8.7, each place marked)
 
 Amended 2026-11-10 for the owner's answers: QD-604 (an import makes helper refs for a first-parent step too large for one push, where this section had refused it: 8.2.2, 8.2.6, 8.2.8, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8) and QD-632 (a new ref's path epoch; an overlay's first push takes its base ref's current epoch: 8.2.4, 8.2.10). 8.9 records every answer, QD-598 to QD-606 and QD-634. EVS1-M2-34, held for the first amendment, builds to this text.
 
@@ -6316,6 +6316,9 @@ publish(r, old, new, opt):
         412 PATH_EPOCH          section 9's retoken
         409 SEGMENT_STALE, SEGMENT_GONE, SLOT_STALE, TIME_STALE; 412 GATE_CLOSED
                                 the landed rebuild: a new push id, sealed again, uploads kept while under 22 h old
+        412 GATE_CLOSED on a push that creates or re-creates a shared ref (amended 2026-11-13, QD-803)
+                                one follow of the authorization log, then that rebuild, and only on a pin or a
+                                generation above the refused statement's (the last paragraph of 8.2.5)
         409 PARTS_MISSING       post the part again and seal again
         429, 412 PATH_EPOCH_DUE, a lease another push holds
                                 wait retry_after_ms, within the caller's wait bound
@@ -6363,6 +6366,8 @@ The check is of one state. Whenever a statement is signed for the update on anot
 The refusal says what was missing, since the path alone would not: `EVS_PREFIX_RULE` with detail `base` for a new branch measured from nothing, and with detail `tag` for a tag with no proof, each carrying the first file of the tree outside this device's prefixes. A new branch measured from its shared base is refused with the path, as any update is. 8.2.8 has the `ng` lines. J does not change when the statement is signed again on another state's pin: the base is sealed, and the proof is a fixed version. The check runs again at the new state with the same J, so a device that a newer set now holds, and that chose a base that is not shared, is refused then, and its client's next push chooses again.
 
 An import (8.2.6) runs on a repo admin's device, which the filing command names for every path: its new dst, over any base or none, and the tags pushed after it, at commits that were never a tip, pass from nothing. Under a set filed `--as-written` without that admin they are refused, as its other pushes are. A helper, a conflict branch and an owned ref's queue ask nothing, as before.
+
+**A creating push the gate refuses** (amended 2026-11-13, QD-803; 16.2.9). evs holds the pin of a push that creates or re-creates a shared ref at or above the repo's newest rule set, and answers 412 GATE_CLOSED below it. Step 6 signs on the installed state, so a design device meets that refusal only while its log is behind the set. Before it builds again it follows its log once (`ConfigClient.CatchUp`). It builds again only where the installed pin, or the generation `EnsureWritable` returns, is above the refused statement's: a statement on the same pin and generation is the one evs just refused. The prefix check then runs at the newer state, as the paragraph on one state has it for every statement signed on another pin. So the device meets the newer set itself: its update passes and goes under the new pin, or it is refused there with `EVS_PREFIX_RULE` and nothing more is sent. With no newer state and no newer generation nothing more is sent on that pin, and the update is answered as any update is whose gate stays closed (8.2.8; 8.5's row for GATE_CLOSED). QD-803 adds no answer of its own to git. 16.2.9 holds the handling in full, for both modes.
 
 #### 8.2.6 Imports
 
@@ -6573,7 +6578,7 @@ A signer the set names for every path passes each of these from nothing. QD-801 
 
 The record that proves a past tip is therefore the row of the reader's own tips log at v'. It is evs's push record of that version, its signed statement and the `new_tip` its sealed metadata states, after `check` passed it on that device. A reader that cannot reach (r', v') yet does not judge u: r waits with no alarm, as it does for any source (8.5), and its replay runs again when r' moves. It never passes a tag on what it cannot check, and never refuses one for it. One case can differ between devices, and it is the case in which bases and sources already differ: a re-seed (§19.10) that lost the versions of r' below v' leaves a device that starts afterwards with no row there, or with another, and it stops r where an earlier device applied it. An admin deletes the tag and tags again.
 
-*What this does not bind.* The set that judges u is the one in force at u's pin, as for every push, and nothing holds the pin of a ref's first push up: evs's fence compares a pin with the head's, and a ref that does not exist has no head. A writer that runs its own code can therefore create a shared name at a pin below the set that holds it, and is judged under the older set, or under none below the repo's first. 16.2.13 lists it, and question `details-amend-4-new-ref-stale-pin` asks whether evs's gate should hold such a push's pin up.
+*The pin of a creating push* (amended 2026-11-13, QD-803; under QD-801 this paragraph was "What this does not bind", and said that nothing held such a pin up). The set that judges u is the one in force at u's pin, as for every push. On a ref that exists, evs's fence holds that pin at or above the head's. A ref that does not exist has no head, and a deleted ref's head carries only its DELETE's pin. So a writer that runs its own code could create or re-create a shared name at a pin below the set that holds it, and be judged under the older set, or under none below the repo's first. evs's gate now refuses that push: a push that creates or re-creates a shared ref is pinned at or above the repo's newest rule set (16.2.9; D-EVS-18's fence). `check` does not change and reads nothing new. No reader can tell what evs's state held when it committed u, so a reader judges u under the set at u's pin as before, and the bound is evs's to keep, as the fence against the head's pin is. 16.2.13 says what that leaves.
 
 *Where it is judged.* In three places, in one order on every device. The set is found first, from u's pin and this device's config state alone, so a waiting u is known before its record is read. Then, after the shape checks and before a commit is read, every change of u that writes a file entry is tested by its token path; the entry's kind and the token path are cleartext in the push record. The plain breach, a file written outside the signer's prefixes, is refused there and costs no object work. The rest of the line (removals, files a table drops or a creation replaces, tainted token paths) is tested with the `changes` row, once S and N stand, and a new branch's measure from J with it; a tag's proof is tested with the tags row, once its sources are replayed, and its walk after that (amended 2026-11-13, QD-801). The early test refuses nothing the late one would pass: a written file entry that the `changes` row accepts is a file of N that differs from S, or a tainted path's, and a file of N that differs from S is judged under either J. A push that fails another row before the late test is refused under that row's reason. Every replaying device walks the same rows in the same order on the same bytes, so all reach one verdict and one reason (16.3's P1).
 
@@ -6822,9 +6827,11 @@ a tag     none is sent: an IMMUTABLE ref takes only a DELETE after its first pus
 ref       every shape row), and it holds no file for a later push to change
 a ref     none can be sent, an UPDATE needing a tip. A stopped ref applies nothing until its DELETE, and the
 with no   admin's DELETE and re-creating push carry the admin's pin. A deleted ref is bound from the push that
-tip, or   re-creates it, and until then a writer may re-create it at a pin below the set and above the DELETE's,
-stopped   under the set in force there: 16.2.9's stale pin, which no pin push closes on that ref. `ur evs rules
-          show` lists such a ref as unbound until its re-creation (question details-amend-3-pin-push-refs)
+tip, or   re-creates it (question details-amend-3-pin-push-refs; QD-802). (amended 2026-11-13, QD-803; the row
+stopped   went on: until then a writer may re-create it at a pin below the set and above the DELETE's, under
+          the set in force there) evs holds that push's pin at or above the repo's newest set (16.2.9), so the
+          re-creation is judged under that set or a later one, and no pin push is needed there. `ur evs rules
+          show` lists such a ref as deleted, held at its re-creation
 ```
 
 `GitSync.tla` models a commitless version as any version that moves no tip (`EvsCommitless`), so the pin push is within it and no configuration changes.
@@ -7078,6 +7085,13 @@ a version gives a shared ref its first tip    the row for a version that breaks 
   outside its signer's prefixes
 a tag's proof, or a new branch's base, names  the ref waits (`waiting_source`) with no alarm, as for any source; it
   a version this device cannot replay yet     is never passed or refused on a guess
+a push that creates or re-creates a shared    (amended 2026-11-13, QD-803) this device's log is behind the repo's
+  ref is answered 412 GATE_CLOSED             newest rule set, or its generation behind a shrink: one follow of
+                                              the log, then the rebuild on the newer pin, where the prefix check
+                                              runs again (8.2.5); with no newer state and no newer generation
+                                              nothing more is sent on that pin, the update ends as the row for
+                                              GATE_CLOSED above has it, and the client pushes again once the
+                                              device's log has moved
 a re-seed lost the version a tag's proof      a device that starts afterwards finds no proof and stops the tag ref
   names (§19.10)                              where earlier devices applied it; an admin deletes the tag and tags
                                               again
@@ -7091,7 +7105,7 @@ A ref that stops at a refused version u stays stopped until the ref is deleted o
 
 *Under prefix rules* (amended 2026-11-13, section 16). A push refused by the prefix line is recovered the same way, and nothing here changes for it (QD-793). Two things follow from the rules binding the recovery too. The DELETE is outside them (16.2.4's line 1). The re-creating push is an UPDATE and is judged: its files by the two trees, and each tainted token path it writes or removes as a file's, on the token path (8.2.7). So it is sent from a device the set names for every path, which the filing command makes each standing admin's; an admin a set filed `--as-written` left out files the set again first. And a tainted token path is written as §11.7's sixth checkpoint case has it (8.2.4's chain row): the tree's blob whole, from the bare repository, resting on nothing a refused version wrote.
 
-*A ref refused at its first version* (amended 2026-11-13, QD-801). Such a ref never held a tip, so the push that re-creates it after the admin's DELETE is again a push that gives the ref its first tip, and is measured as one (8.2.7): from its base when that is a shared branch, and from nothing otherwise, never from the tree the refused push named. The base is the head's and the re-creating push repeats it (8.2.2), so over a base that is not a shared branch only a device the set names for every path re-creates that name; for anyone else the remedy is another name. A deleted tag is judged, when it is pushed again, as any tag is.
+*A ref refused at its first version* (amended 2026-11-13, QD-801). Such a ref never held a tip, so the push that re-creates it after the admin's DELETE is again a push that gives the ref its first tip, and is measured as one (8.2.7): from its base when that is a shared branch, and from nothing otherwise, never from the tree the refused push named. The base is the head's and the re-creating push repeats it (8.2.2), so over a base that is not a shared branch only a device the set names for every path re-creates that name; for anyone else the remedy is another name. A deleted tag is judged, when it is pushed again, as any tag is. Each of these re-creating pushes commits on a deleted head, so evs holds its pin at or above the repo's newest rule set (amended 2026-11-13, QD-803; 16.2.9), and the set that judges it is that one or a later one.
 
 ### 8.6 The test plan
 
@@ -7159,6 +7173,7 @@ Two new tasks change landed code before the held ones can pass their tests. `.st
 - 8.2.10's pin push on a git-mode ref is EVS1-M6-05's `PinPush`: the UPDATE of one tip, under P_r, on branches that have a tip.
 - 16-D, 8.2.4's chain row: the sixth checkpoint case is EVS1-M6-05's in `evs_checkpoint.go`. EVS1-M2-34's re-creating push, not yet built, writes a tainted token path as one checkpoint from the bare repository, with no diff, rename or reuse resting on the entry that stands there. That is a scope note for EVS1-M2-34 at M2, since it holds for a version refused for any reason, with or without a rule set. EVS1-M2-25's planner rules (1) to (4) are unchanged.
 - QD-801 (amended 2026-11-13; 8.2.4, 8.2.5, 8.2.7, 8.2.8). EVS1-M6-06 builds all of it, and nothing changes at M2. `evs_local_overlay.go` gains the held device's candidates (shared branches only, every parent line) and `evs_local_commits.go` a tag's proof, both read from `EvsGitSourceState`, whose rows already carry a ref's kind and whether it is a tag. `evs_local_publish.go` asks at step 1 whether the device is held and measures from J at step 3, walking the tree through `evs_local_tree.go`'s reader. `evs_git_check.go` and `evs_local_sync.go` compute J and test the proof against the tips log's `tipAt`, which already answers none inside a stopped span. `evs_local_receive.go` gains the two `ng` lines and publishes a push's tags after its branches, which is the one change to behavior that holds without a rule set. EVS1-M2-34, -35 and -36 leave no new seam: the ones 16-A and 16-B named carry it.
+- QD-803 (amended 2026-11-13; 8.2.5, 8.2.7, 8.2.10). Nothing changes at M2, and `check` is untouched. The gate's clause is EVS1-M6-07's, in `evsservice`. The follow before a creating push is built again is EVS1-M6-05's, in the sender (`evs_push.go`) that `publish` and the file-mode writer both send through, so `evs_local_publish.go` gains no call. What the rebuilt update then meets is EVS1-M6-06's check before a statement signed on another pin, as written. 16.7 has both tasks.
 
 ### 8.8 Proposed DESIGN.md text
 
@@ -13091,11 +13106,11 @@ Each is filed under `.stack/questions/` and the section is built on its recommen
 
 ## 16. Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9)
 
-Status: complete (2026-11-13; its amendments 16-A to 16-D were written into sections 5, 8 and 10 on 2026-11-13, as 16.7 lists; amended 2026-11-13, QD-801: 16.2.4, 16.2.6, 16.2.7, 16.2.9, 16.2.13, 16.3, 16.4, 16.5, 16.6, 16.7, 16.8 and 16.9, each place marked)
+Status: complete (2026-11-13; its amendments 16-A to 16-D were written into sections 5, 8 and 10 on 2026-11-13, as 16.7 lists; amended 2026-11-13, QD-801: 16.2.4, 16.2.6, 16.2.7, 16.2.9, 16.2.13, 16.3, 16.4, 16.5, 16.6, 16.7, 16.8 and 16.9, each place marked; amended 2026-11-13, QD-803: 16.1, 16.2.1, 16.2.4, 16.2.9, 16.2.12, 16.2.13, 16.3, 16.4, 16.5, 16.6, 16.7, 16.8 and 16.9, each place marked)
 
 Tasks held until complete: none. ACL-M6-04's prefix half was never built, and 16.7 says what it and five new tasks build.
 
-Model: `sidecar/sidecartest/model/details/PrefixRules.tla`, its configurations (`PrefixRules.cfg`, `PrefixRules-*.cfg`, `PrefixRulesTwin-*.cfg`, `PrefixRulesReach-*.cfg`) and `run-prefixrules.sh` beside it. Questions filed: `.stack/questions/details-16-subject-atoms.md`, `details-16-admins-unbound.md`, `details-16-git-mode-stop.md`, `details-16-repair.md`, `details-16-small-readings.md`. The section is built on the recommendation of each, and on the recommendation of the open question `details-amend-2-late-generation`, whose grace rule 16.2.2 and 16.2.3 take as section 12 does. It specifies what the owner accepted in QD-212 (DESIGN-AMENDMENTS.md) and what RESOLUTIONS.md `plan-EVS1-v1-unspecified` #5 made the rule. It builds on section 5 (rows and verdicts across bases), section 8 (git and evs) and section 9 (path epochs), and changes no rule of any of them: it adds one line to 8.2.7's `check` and to 8.2.8's receive path, and one list to section 5's rows. Those additions were written into sections 5, 8 and 10 on 2026-11-13 (16.7's last paragraphs), with one more question, `details-amend-3-pin-push-refs`, on whose recommendation 8.2.10's pin push is built, and a second, `details-amend-3-new-shared-refs`, which asked whether the rules should also bind the creation of a shared ref. Both are answered (amended 2026-11-13). QD-802 ratified the pin push as built. QD-801 chose the second question's option 2: a push that creates a shared ref is judged from a shared branch's tree, or from nothing. It is written into 8.2.3, 8.2.4, 8.2.5, 8.2.7 and 8.2.8 and into this section, each place marked "amended 2026-11-13, QD-801", and 8.2.7 is the text to build from. Writing it showed that nothing holds up the pin of a push that creates a ref, so the rule binds a writer that runs its own code only under the set at the pin it picks; question `details-amend-4-new-ref-stale-pin` is filed, and the section is not built on its recommendation, which would change evs's gate.
+Model: `sidecar/sidecartest/model/details/PrefixRules.tla`, its configurations (`PrefixRules.cfg`, `PrefixRules-*.cfg`, `PrefixRulesTwin-*.cfg`, `PrefixRulesReach-*.cfg`) and `run-prefixrules.sh` beside it. Questions filed: `.stack/questions/details-16-subject-atoms.md`, `details-16-admins-unbound.md`, `details-16-git-mode-stop.md`, `details-16-repair.md`, `details-16-small-readings.md`. The section is built on the recommendation of each, and on the recommendation of the open question `details-amend-2-late-generation`, whose grace rule 16.2.2 and 16.2.3 take as section 12 does. It specifies what the owner accepted in QD-212 (DESIGN-AMENDMENTS.md) and what RESOLUTIONS.md `plan-EVS1-v1-unspecified` #5 made the rule. It builds on section 5 (rows and verdicts across bases), section 8 (git and evs) and section 9 (path epochs), and changes no rule of any of them: it adds one line to 8.2.7's `check` and to 8.2.8's receive path, and one list to section 5's rows. Those additions were written into sections 5, 8 and 10 on 2026-11-13 (16.7's last paragraphs), with one more question, `details-amend-3-pin-push-refs`, on whose recommendation 8.2.10's pin push is built, and a second, `details-amend-3-new-shared-refs`, which asked whether the rules should also bind the creation of a shared ref. Both are answered (amended 2026-11-13). QD-802 ratified the pin push as built. QD-801 chose the second question's option 2: a push that creates a shared ref is judged from a shared branch's tree, or from nothing. It is written into 8.2.3, 8.2.4, 8.2.5, 8.2.7 and 8.2.8 and into this section, each place marked "amended 2026-11-13, QD-801", and 8.2.7 is the text to build from. Writing it showed that nothing holds up the pin of a push that creates a ref, so the rule bound a writer that runs its own code only under the set at the pin it picked; question `details-amend-4-new-ref-stale-pin` was filed, and the section was not built on its recommendation, which changes evs's gate. That question is answered too (amended 2026-11-13, QD-803): its option 2. evs's gate holds the pin of a push that creates or re-creates a shared ref at or above the repo's newest rule set. 16.2.9 is the text to build from, with the device's handling of the refusal; 16.2.13 says what is left; and 8.2.5, 8.2.7 and 8.2.10 are marked where they follow. It is evs's check, as the fence is, and no reader's verdict changes.
 
 ### 16.1 The problem
 
@@ -13115,13 +13130,13 @@ Terms. A *set* is one `RepoPrefixRules` statement's opened rules. A set *binds* 
 
 **F. The next writer must build on the breach (`PrefixRulesTwin-DiffOnNewest`, 4 states).** §11.8's 5g holds a change to `base_entry_version` = the path's newest version on evs, and that is the breach's. §11.7 writes a file's next record as a diff on its previous version's chain. An honest device that ignores version 2 and edits the file would send version 3 as a diff resting on version 2's records: a reader that shows 3 reconstructs it through bytes it refused, and if the breach's records are garbage, cannot.
 
-**G. A pin may be as old as the head's (`PrefixRulesReach-StalePin`, 3 states; `PrefixRulesTwin-NoHeadFence`, 4).** evs holds a push's auth pin at or above the head's and no higher (§11.8's fence row); the gate's other clause is about generations, and a rule change shrinks no holder. An admin tightens the rules at position 40. The agent pushes with pin 39, the head's, and readers judge the push at 39, under the old set, for as long as no other push raises the head's pin on that ref.
+**G. A pin may be as old as the head's (`PrefixRulesReach-StalePin`, 3 states; `PrefixRulesTwin-NoHeadFence`, 4).** evs holds a push's auth pin at or above the head's and no higher (§11.8's fence row); the gate's other clause is about generations, and a rule change shrinks no holder. An admin tightens the rules at position 40. The agent pushes with pin 39, the head's, and readers judge the push at 39, under the old set, for as long as no other push raises the head's pin on that ref. (amended 2026-11-13, QD-803) The configuration's 3 states are a set and then the ref's first push, which has no head at all to be held to. evs now refuses that push (16.2.9), and the story above, on a ref that exists, is the window that stays (16.3).
 
 **H. Rules are names and statements are tokens.** A rule's prefix is plaintext. A statement names a change by its token path in the push's path epoch (§11.6), a statement past 1 KiB carries a Merkle root and covering prefixes in place of its changes, a directory change is a delta whose rows are in its entry version, and section 9 keeps several epochs standing during a copy. A head reader holds one change and its proof. Nothing says which bytes a reader compares, or how a writer held to a prefix creates the directory that prefix names when a change at the directory above it is, read naively, outside the prefix.
 
 **I. Two modes.** A file-mode ref takes each change by itself. A git-mode ref takes a push whole: 8.2.7's `check` proves that a push's changes are exactly the net change between two trees, and a mount cannot apply half of one.
 
-**The requirement.** One verdict per change, the same at every device that verifies the push, whenever it started and whatever it retains, computed from the log's rows and the push's signed bytes and nothing else. No reader shows, builds on, indexes, exports or mirrors a version its rules do not allow, and none ever holds bytes of one inside a version it shows. A design device's own write is never ignored. A device that starts after a breach reads what a device that watched it reads, once any device that holds the effective state has written it back, and until then is wrong only about names and about content evs no longer serves. A tightened set binds a ref from a stated point that the filer controls. api learns that a repo has rule sets, when each was filed and by whom; evs and gkm learn nothing (I-18). Formats 1 and 2 of evs do not change.
+**The requirement.** One verdict per change, the same at every device that verifies the push, whenever it started and whatever it retains, computed from the log's rows and the push's signed bytes and nothing else. No reader shows, builds on, indexes, exports or mirrors a version its rules do not allow, and none ever holds bytes of one inside a version it shows. A design device's own write is never ignored. A device that starts after a breach reads what a device that watched it reads, once any device that holds the effective state has written it back, and until then is wrong only about names and about content evs no longer serves. A tightened set binds a ref from a stated point that the filer controls. api learns that a repo has rule sets, when each was filed and by whom; evs and gkm learn nothing (I-18). Formats 1 and 2 of evs do not change. (amended 2026-11-13, QD-803) "Learn nothing" is about a rule, a subject, a prefix and a verdict. evs is a gate, and every gate holds the repo's row with its sets' positions (§2.8's api-7). From QD-803 evs's gate reads the newest of those positions, for the one comparison of 16.2.9; it gains no store, field or request.
 
 ### 16.2 The design
 
@@ -13135,7 +13150,7 @@ Three ideas carry the section.
 
 **A write is refused where it is made.** The writer's device runs the same function on its own change at the state it pins, before any byte goes to evs. So a breach is never an accident of timing: it is a device that does not run this code, and the alarm names it.
 
-What does not change: every message of evs formats 1 and 2, the statement's fields, evs's checks, the gate, §11.9's read API, the signer check (I-EVS-14), which still runs first, and the refs table. Prefix rules sit after all of them and can only take a change away.
+What does not change: every message of evs formats 1 and 2, the statement's fields, evs's checks, the gate, §11.9's read API, the signer check (I-EVS-14), which still runs first, and the refs table. Prefix rules sit after all of them and can only take a change away. (amended 2026-11-13, QD-803) One thing in that list now changes: the gate gains a clause, which holds the pin of a push that creates or re-creates a shared ref at or above the repo's newest set (16.2.9). It reads a position and no rule, and evs is still told nothing of any verdict.
 
 #### 16.2.2 The statement and its bytes
 
@@ -13289,7 +13304,7 @@ The verdict on a push that carries no change is allowed. That is the pin push (1
 
 *A push that creates a shared ref* (amended 2026-11-13, QD-801). The lines above judge a change. What a push changes on a git-mode ref is measured between two trees (8.2.7), and as this section was ratified the first tree could be one the rules never judged: the tree of the writer's own branch, for a new shared branch created over it, and no tree at all for a tag. QD-801 fixes the first tree. On the push that gives a shared branch its first tip it is the tree of the branch's base when the base is a shared branch, and the empty tree otherwise. A tag changes no file when its push names, among its sources, a shared branch version whose tip the tagged commit is or was; any other tag is measured from the empty tree. From the empty tree every file of the new tree is a change, so the push passes only where line 3 gives the signer a prefix over each of them: for a signer the set names for every path, always.
 
-Lines 1 to 3 are unchanged, and so is the pin they read: a creating push is judged under the set in force at its own pin, and 16.2.13 says what that leaves. 8.2.7 holds the rule in full, with the record that proves a past tip and why devices agree on it; 8.2.4 and 8.2.5 hold what a design device does so that its own push passes. A file-mode ref is not touched: it has no base and no tag, and each change of a new ref is judged by its own path, as on any ref. An owned ref stays outside by line 1, whatever it is created from.
+Lines 1 to 3 are unchanged, and so is the pin they read: a creating push is judged under the set in force at its own pin. evs holds that pin at or above the repo's newest set (amended 2026-11-13, QD-803; 16.2.9), and 16.2.13 says what that leaves. 8.2.7 holds the rule in full, with the record that proves a past tip and why devices agree on it; 8.2.4 and 8.2.5 hold what a design device does so that its own push passes. A file-mode ref is not touched: it has no base and no tag, and each change of a new ref is judged by its own path, as on any ref. An owned ref stays outside by line 1, whatever it is created from.
 
 #### 16.2.5 File mode: the effective version
 
@@ -13453,11 +13468,91 @@ after the statement's 200:
        binds yet, comparing each head's auth pin with the set's position
 ```
 
-Any honest push does the same, since a design device pins its tip. Until one lands, a writer that sends an older pin can still write under the older set on that ref (`PrefixRulesReach-StalePin`); after it, none can (`Fence`). A widening needs no pin push: the writer it frees pins its own tip.
+Any honest push does the same, since a design device pins its tip. Until one lands, a writer that sends an older pin can still write under the older set on that ref (`PrefixRulesReach-StalePin`); after it, none can (`Fence`). A widening needs no pin push: the writer it frees pins its own tip. (amended 2026-11-13, QD-803) That window is a ref's that exists, and it stands. The configuration's recorded trace reaches the state another way, through a ref's first push, which evs now refuses; 16.3 has both.
 
-*On a git-mode ref* (2026-11-13; 8.2.10 as amended). "Each shared ref" is each shared branch that has a tip and is not stopped on the filer's device. A tag ref takes no second push and holds no file. A ref with no tip takes no UPDATE: a deleted ref is bound from the push that re-creates it, and `show` lists it as unbound until then. A stopped ref is bound by its recovery, whose DELETE and re-creating push carry the admin's pin. This narrows the reading QD-795 ratified, as section 8's rules force for a tag ref and a stopped one; what binds a deleted ref is filed (`details-amend-3-pin-push-refs`), and QD-802 ratified it as built (amended 2026-11-13).
+*On a git-mode ref* (2026-11-13; 8.2.10 as amended). "Each shared ref" is each shared branch that has a tip and is not stopped on the filer's device. A tag ref takes no second push and holds no file. A ref with no tip takes no UPDATE: a deleted ref is bound from the push that re-creates it, and `show` lists it as unbound until then (amended 2026-11-13, QD-803: as deleted and held at its re-creation, since evs now holds that push's pin; the next paragraph). A stopped ref is bound by its recovery, whose DELETE and re-creating push carry the admin's pin. This narrows the reading QD-795 ratified, as section 8's rules force for a tag ref and a stopped one; what binds a deleted ref is filed (`details-amend-3-pin-push-refs`), and QD-802 ratified it as built (amended 2026-11-13).
 
-*A ref that does not exist yet* (amended 2026-11-13, QD-801) stands as a deleted one does, with one difference: a deleted ref's DELETE bounds the pin of the push that re-creates it, and a new name has nothing below it. It is bound from the push that creates it, under the set in force at whatever pin that push carries, and no pin push can be sent ahead of it. A design device pins its installed state, so its new ref is judged under the newest set it holds. A writer that runs its own code is judged under the set it picks a pin for (16.2.13; question `details-amend-4-new-ref-stale-pin`).
+*A ref that does not exist yet, and a deleted one* (amended 2026-11-13, QD-803; question `details-amend-4-new-ref-stale-pin`, option 2. Under QD-801 this paragraph said that a new ref is bound from the push that creates it, under the set at whatever pin that push carries, and that a writer running its own code is judged under the set it picks a pin for). No pin push can be sent to a name that has no head, and a deleted ref's head carries only its DELETE's pin. So evs itself holds the pin of the push that creates or re-creates a shared ref, by one more clause in its gate (D-EVS-18's fence; step 5d; `evsservice/check_gate.go`):
+
+```text
+the clause    a push that creates or re-creates a shared ref commits only if its auth pin is at or above the
+              position of the repo's newest rule set: push.auth.version >= at, for the greatest `at` in
+              AclRepo.prefix_rules of the repo's row. A pin at the set's own position passes: the set is in
+              force there (16.2.4's line 2)
+creates       the ref's head, as step 4 read it, is absent; or a placeholder, version 0 with no kind or mode,
+              which a refused or fenced creation leaves; or deleted, a DELETE having committed with no push
+              since. These are the pushes 5c lets carry a ref name and a base, and no other push is one
+              file mode   a ref's first push; the first push after its DELETE
+              git mode    the UPDATE that creates a branch; a tag ref's one push; the push that re-creates
+                          a deleted branch or a deleted tag
+not one       every push on a head that has a version and is not deleted: a pin push, a DELETE of a live or a
+              stopped ref, a FORCE, a REKEY, a PATH_EPOCH. The fence's clause 2 holds those to the head's pin
+shared        push.ref_kind is shared: the first test of 16.2.4's line 1, and the one evs can make. The kind
+              is cleartext in the statement, 5c holds it to the head's on a deleted head, and readers take a
+              ref's kind from the same bytes. An owned ref, a deposit ref and the erasure ref are outside the
+              rules and outside the clause, whatever state their creator pins. `ur/index` and `ur/lfs` are
+              shared refs that evs cannot tell from any other (I-1), so the clause holds their creation too,
+              which costs a design device nothing
+flags         none exempts a push: a creating push that carries FORCE, or any flag of 16.2.4's line 1, is
+              held alike. An admin's device pins its installed state
+no set        the repo's row holds no set, as in every repo that is not general and in a general repo
+              before its first: nothing is compared, and a ref is created at any pin on evs's chain, as before
+which set     the newest row, whatever a reader makes of its body. evs sees a row and never a rule (I-18): it
+              cannot tell an opened set from a void, pending or newer one, or a set that lifts the rules from
+              one that tightens them. A pin held above a void set changes no verdict, since readers pass
+              over a void set at any pin
+the state     the newest verified authorization state evs holds for the network, the one clause 1 reads,
+              within 5 s of its commit (§11.8's timing row). The row is the one the gate reads
+              holders_shrunk_at from, to which ACL-M2-18 adds the sets, so evs reads nothing it did not
+              hold. A state that lacks the repo's row answers 503, as the predicate does
+order         in 5d: after the fence against the head, the generation record and the push's own pin (above
+              evs's state 503, off its chain final), and before the predicate. On a deleted head a pin below
+              the DELETE's is the fence's refusal, final; this clause is asked only at or above it
+refusal       412 GATE_CLOSED, recorded: one head CAS adds the push to the head's refusal records, on a
+              placeholder head where the ref has none (§11.8's refuse row). A pin below the head's is final
+              because the head settles it. This is not: what settles it is one process's state, and a
+              sibling that has not loaded the set would take a held attempt of the same push after the
+              answer. The record is what answers that attempt. A part's refusal needs no record, since only
+              its push's seal commits
+```
+
+So a set binds a new name as it binds a ref that exists once the pin push has landed. From the first creating push that evs validates against a state holding the set, every push that creates or re-creates a shared ref of the repo is pinned at or above it, and readers judge it under that set or a later one (16.2.4; 8.2.7's J and proof). QD-802's window closes with it: a writer whose rights a new set narrowed cannot re-create, at a pin between the DELETE's and the set's, a branch that an admin deleted before the set was filed. `ur evs rules show` lists a deleted ref apart from the refs the set binds and the refs it does not bind yet, as `deleted, held at re-creation`.
+
+*What a device does with the refusal* (amended 2026-11-13, QD-803). A design device signs on its installed state, so it meets the clause only while its log is behind the set: after a hint it lost, in the seconds before its follower applies a new entry, or with a log that cannot move. The answer does not say which clause of the gate refused the push, this one or the predicate's for a generation that does not cover a shrink the device has not applied. One handling serves both, in the sender that the file-mode writer and `publish` both use:
+
+```text
+412 GATE_CLOSED on a push this device built to create or re-create a shared ref (planned on no head, or on a
+deleted one):
+1 follow     one follow of the authorization log now: ConfigClient.CatchUp, within its FollowTimeout (60 s)
+             and the caller's own bound
+2 rebuild    the landed rebuild (§11.8's client steps; 8.2.5): EnsureWritable, the write planned again,
+             AllowPrefixWrite at the installed state, a new push id, the statement on the installed pin.
+             Only where that pin, or the generation, is above the refused statement's. Every clause of the
+             gate that answers 412 only tightens as evs's state grows, so a statement on the same pin and
+             generation is refused again, and each refusal takes one of the ref's 8 refusal records (§11.8's
+             refuse row). It is not sent
+3 the set    what the rebuilt write meets at the newer state. Allowed: the push goes under the new pin. A
+             path outside the device's prefixes, a new branch with no shared base, a tag with no proof:
+             EVS_PREFIX_RULE with its detail, before any request (16.2.7, 8.2.5). A set the device holds
+             pending or newer: EVS_PREFIX_RULE, detail pending or update
+4 bound      each rebuild counts against PushRebuildCount (8) with the write's other rebuilds and retokens,
+             and each is on a newer pin or generation than the last. A git push stays inside
+             ReceiveWaitTimeout (3 min)
+5 no newer   the follow fails or times out, api not being reached; or it ends with the pin where it was,
+  state      because api serves nothing newer, the log is stopped at a fork or withheld (5.5), or its next
+             entry does not verify on this device; and the generation did not rise either. Nothing more is
+             sent on that pin and generation. The sender returns evs's refusal, and each caller answers as
+             it does for any closed gate it could not get past: the SDK and MCP return the refusal, a git
+             push is answered by 8.2.8 and 8.5's row for GATE_CLOSED, and an import stops at the cut before
+             the push (8.2.6). Nothing retries in the background, a shared ref having no queue: the caller
+             asks again, and passes once the device's hourly follow or its next hint has moved the log.
+             Until then the device creates no shared ref in that repo. Its pushes to refs that exist, and
+             its own refs, which the clause does not hold, go on as before
+```
+
+A device older than the release that carries this pins its installed state like any other, and without step 1 is refused until its follower catches up (16.2.12).
+
+*What the clause adds, and what it does not* (amended 2026-11-13, QD-803). It is evs's check, as the whole fence is. No reader checks it and none can: whether a pin was stale when evs committed a push is a fact about evs's state at that moment, which no signed byte carries (the question's options 3 and 4 put a clock into a verdict, or an alarm beside one; a readers' `stale_pin` alarm may still be added). So a reader judges a creating push exactly as before, under the set in force at the pin the push carries, and P1 and P2 are untouched. Three things stay open, and 16.2.13 lists them: an evs that does not enforce the clause; the seconds between api storing a set and each evs process holding it; and, unchanged, a ref that exists before its pin push lands.
 
 #### 16.2.10 The alarm
 
@@ -13497,7 +13592,7 @@ A component's length and a path's depth are §11.6's, in `EvsFormatSettings`.
 
 #### 16.2.12 Releases that do not enforce
 
-The statement's number, the `AclRepo` field and the id-level rule land at M2 with the rule table (ACL-M2-18, 16.7), so that every verifier built from M2 on judges a `RepoPrefixRules` entry alike and folds its row, and no base forks on one (D-PHASE-9; QD-212's "reserve before M2's Gn-in"). A device built before M6 folds the row and enforces nothing: it reads the ref as evs has it. Rows carry no build, so the filer cannot list such devices; `ur evs rules` says once, at a repo's first set, that devices older than the release that carries this section do not follow the rules. evs formats 1 and 2 are untouched, and a repo of either takes rules.
+The statement's number, the `AclRepo` field and the id-level rule land at M2 with the rule table (ACL-M2-18, 16.7), so that every verifier built from M2 on judges a `RepoPrefixRules` entry alike and folds its row, and no base forks on one (D-PHASE-9; QD-212's "reserve before M2's Gn-in"). A device built before M6 folds the row and enforces nothing: it reads the ref as evs has it. Rows carry no build, so the filer cannot list such devices; `ur evs rules` says once, at a repo's first set, that devices older than the release that carries this section do not follow the rules. evs formats 1 and 2 are untouched, and a repo of either takes rules. (amended 2026-11-13, QD-803) evs's clause (16.2.9) holds such a device's creating pushes as it holds any: the device pins its installed state, which passes whenever its log is at the set. It lacks the follow before a rebuild, so while its log is behind a set it is refused 412 GATE_CLOSED on a new shared ref until its own follower catches up, within the hour at worst.
 
 #### 16.2.13 What the rules do not stop
 
@@ -13520,14 +13615,10 @@ directory                         rows can be filled with names nobody shows
 write the index                  `.ur-index/`, `ur/index` and `ur/lfs` are outside the rules; reproduction and
                                  index_mismatch are their guard (§11.14)
 stop a git-mode ref              as any writer can today (16.2.6)
-create a shared name at a stale  (amended 2026-11-13, QD-801; this row read "publish a tree under a new shared
-pin                              name") a push that gives a shared ref its first tip is judged from a shared
-                                 branch's tree or from nothing (8.2.7), under the set in force at its pin, and
-                                 nothing holds that pin up: evs fences a pin against the head's, and a ref
-                                 that does not exist has none. A writer that pins below the set that holds it
-                                 creates a tag or a branch under the older set, and with any tree below the
-                                 repo's first set. A new file-mode ref is open the same way. Design devices
-                                 pin their newest state (question details-amend-4-new-ref-stale-pin)
+write under an older set, on a   until the filer's pin push or any honest push lands there, by sending the
+ref that exists                  head's older pin (16.2.9). (amended 2026-11-13, QD-803: the row that stood
+                                 here, "create a shared name at a stale pin", is gone, since evs now stops
+                                 that; the last paragraph of 16.2.13 says what is left of it)
 carry any tree in a commit no    the rules judge a branch's tips. A commit between two tips can hold anything;
 tip shows                        it is reached by its oid and by no shared name, since a tag of it is measured
                                  from nothing
@@ -13552,9 +13643,27 @@ create its own refs        ur/<its id>/... over any base and with any tree: outs
                            the tree a shared name is measured from
 ```
 
-It cannot: give a new shared branch a tree that differs from a shared branch's tip outside its prefixes; create a shared branch at a commit of its own branch, of a conflict branch or of an import's helper, where that tree holds a file outside them; tag a commit that the tag's own push carries, one that only an owned ref or another tag holds, or one of a shared branch's history that was never its tip; or re-create, from the base it chose, a name whose first push the mounts refused. A signer the set does not name can open a branch at a shared branch's tip and tag one, since neither changes a file, and can create nothing else. A signer the set names for every path is held by none of this. All of it is the verdict under the set in force at the push's pin, and for a name that does not exist yet the stale-pin row above leaves that pin to the writer.
+It cannot: give a new shared branch a tree that differs from a shared branch's tip outside its prefixes; create a shared branch at a commit of its own branch, of a conflict branch or of an import's helper, where that tree holds a file outside them; tag a commit that the tag's own push carries, one that only an owned ref or another tag holds, or one of a shared branch's history that was never its tip; or re-create, from the base it chose, a name whose first push the mounts refused. A signer the set does not name can open a branch at a shared branch's tip and tag one, since neither changes a file, and can create nothing else. A signer the set names for every path is held by none of this. All of it is the verdict under the set in force at the push's pin, and for a name that does not exist yet, or was deleted, evs holds that pin at or above the repo's newest set (amended 2026-11-13, QD-803; under QD-801 this sentence left the pin to the writer).
 
-A team that needs a server to refuse the write keeps separate repos (D-ACL-11), which remains the only server-enforced boundary.
+**What evs stops at a new name, and what that leaves** (amended 2026-11-13, QD-803). Under QD-801 the list above held a row, "create a shared name at a stale pin": a push that creates a ref has no head for evs to hold its pin to, so a writer that pinned below the set that holds it created a tag or a branch, in either mode, under the older set, and with any tree below the repo's first set. evs's gate now refuses that push (16.2.9). A push that creates or re-creates a shared ref is pinned at or above the repo's newest set, so 8.2.7's rule for a new name, and every prefix test of a new file-mode ref, is asked of that set or a later one. The re-creation of a branch that an admin deleted before a set was filed, which QD-802 had accepted as open, is refused the same way. What is left:
+
+```text
+an evs that does not enforce it  the clause is evs's own check, as the fence against the head's pin is. An evs
+                                 that is compromised or dishonest, or a test build with the gate switched off
+                                 (D-TEST-6), commits the push, and every reader accepts it under the older set.
+                                 No reader can tell and no alarm fires. An admin who finds the ref deletes it
+                                 and revokes the writer
+the seconds after a filing       a set binds new names from the first creating push evs validates against a
+                                 state that holds it: about 10 s after api stores the entry, and at worst
+                                 5 min at a process that missed api's notification (§11.8's timing and
+                                 contract rows). A ref created inside that window at an older pin is one that
+                                 could have been created before the set was filed, and is judged so
+a ref that exists                the list's row above: the window before a pin push lands is as it was
+an owned, deposit or erasure     created at any pin, as before. They are outside the rules (16.2.4's line 1),
+ref                              so no verdict is asked there for a pin to change
+```
+
+A team that needs a server to refuse the write keeps separate repos (D-ACL-11), which remains the only server-enforced boundary. evs's fence, with its new clause, holds pins and never a path.
 
 ### 16.3 Invariants and why they hold
 
@@ -13568,10 +13677,14 @@ P3 shown allowed     what a reader shows, serves, indexes, exports, mirrors or b
 P4 clean bytes       no record that a shown version's chain names was written by a push the reader ignores
 P5 the fence         on one ref a later push is never judged under an older set than an earlier push: once a
                      push pinned at or above a set has committed, that set or a later one judges every push after
+                     (amended 2026-11-13, QD-803) and the push that creates or re-creates a shared ref is
+                     pinned at or above the newest set that evs's state held when it committed
 P6 names converge    once a design device has written a path after the last event ignored there, a head reader
                      whose table evs folded at any version lists the path as a mirror does
 P7 what servers see  api: a set's repo, position, time, signer, generation number and padded length. evs and gkm:
                      nothing they did not see before (I-18)
+                     (amended 2026-11-13, QD-803) evs's gate now reads one thing it already held: the position
+                     of a repo's newest set, in the row every gate holds
 ```
 
 **P1.** The verdict reads five things. The push's flags, ref kind, signer, pin, path epoch and the change's token path are signed bytes. The rows at or below the pin are a prefix of a list that only grows at its end, in position order, in every state at or above the pin, and section 5 gives every verifier the same rows at every position (5.3's Agreement), a device started at a base and a rows-only gate included. A set's state is a function of the entry's bytes and of the repo's generation ladder, which members hold alike (§10's ladder; section 6), with one time rule taken from section 12 that reads only signed times. The signer's `member_id`, `tag_ids` and `ephemeral` are written once at admission. The token paths of the rules are HMACs under a key every reader derives. Nothing is read at the reader's tip, from a head, or from a state at the pin. Model: `Agreement`, over the long-running reader and a device started at each base; twins `NewestOnly` (the rows keep one set), `JudgeAtTip` (the set in force now), `HeadAtoms` (a subject whose members a head gives).
@@ -13584,19 +13697,25 @@ P7 what servers see  api: a set's repo, position, time, signer, generation numbe
 
 **P5.** evs commits a push only if its auth pin is not below the head's, atomically with the head (§11.8's fence row, clause 2; `CheckGate`), so the pins of a ref's pushes never fall, and the newest row at or below a pin is monotone in the pin. The filer's pin push carries a pin at or above its own set. Model: `Fence`; twin `NoHeadFence`; `PrefixRulesReach-StalePin` is the window before the pin push, and `PrefixRulesReach-Tightened` a set that takes a path away.
 
+(amended 2026-11-13, QD-803) That argument starts at a ref's second push. The first has no head to be held to, and the first after a DELETE is held only to the DELETE's pin. The gate's clause bounds both (16.2.9): evs commits a push that creates or re-creates a shared ref only at a pin at or above the position of the newest row of the repo's `prefix_rules`, in the state it validated the push against. Rows are appended in position order and never removed, so in every state a reader holds, the newest row at or below that pin is that row or a later one. With the first half this covers a ref's life: from its creation, or its re-creation, no push of it is pinned below the newest set evs held when the ref began. Both halves are evs's to keep, in one function, and no reader checks either. The second holds from the first creating push that evs validates against a state holding the set (§11.8's timing row). It is not in the model, whose W is the stronger for it; the paragraph on QD-803 and the model, below, says what `PrefixRulesReach-StalePin` records.
+
 **P6.** Let k be the last ignored event at a path and k' the first design write after it. k' is a repair form, so it states the path's row. Every event after k is allowed, so evs, a mirror and a head reader all apply every row from k' on, and k' fixed the row for all three. A head reader whose table was folded below k' applies k' itself, as an allowed delta. Model: `ListingAfterRepair`, over a head reader started at every version; twin `RepairSkipsNames`; `PrefixRulesReach-Hidden` is the state before the repair and `PrefixRulesReach-Repaired` the repair.
 
 **P7.** The statement's clear fields are its header, the repo's id and a sealed blob whose length is 48 B plus a multiple of 256 B and whose first 8 B are a generation number; the row adds its signer and position. A pin push is an ordinary push of no change, and a repair an ordinary write; evs can see that one follows a config entry in time, as it can for any write a config change prompts. No request carries a rule, a prefix or a verdict, and no reader tells a server what it ignored.
 
-**A new shared ref** (amended 2026-11-13, QD-801). P1 and P2 hold of 8.2.7's rule, and P5 does not reach it.
+(amended 2026-11-13, QD-803) evs is one of the gates that hold the authorization state, so each repo's row, with every set's signer and position, was already in its memory: §2.8's api-7 names every gate. The clause of 16.2.9 reads the greatest of those positions and compares it with a push's pin. It adds no object, Redis family, column or proto field, and its refusal carries the code and nothing of the set. A writer it refuses learns that the repo has a set above the pin it sent, which the log it follows already shows it.
+
+**A new shared ref** (amended 2026-11-13, QD-801). P1 and P2 hold of 8.2.7's rule. P5 did not reach it as QD-801 left it, and reaches it since QD-803 (amended 2026-11-13, QD-803).
 
 P1. Beyond the five things above, the verdict on a push that gives a shared ref its first tip reads the push's sealed base and sources, which its statement signs; the kind and the name of each ref they name, from that ref's own statements; the tip a named ref held at the named version; and the new tree. The tip is the row of the reader's tips log at that version. Every reader derives it from the named ref's history up to that version, by `check`, and that history does not change once it is committed. A device that has not replayed the ref that far has no verdict yet, and waits; it does not guess. So two devices that have a verdict have the same one, whatever base of the log each started at, whichever refs each follows and whenever each mounted. 8.2.7 gives the argument, and the one exception: a re-seed that lost the version.
 
 P2. A design device computes J from the base and the proof it chose from its own tips log and tip index (8.2.4), asks its own rules about the files measured from that J at the state it pins (8.2.5), and seals the base and the proof into the push. A reader computes J from those sealed fields and from its own replay of the same versions, which gives the rows the writer's replay gave.
 
-P5 is about one ref's pushes in order, and a ref's first push has none before it: the fence that makes the pins of a ref's pushes rise does not bound the first. So the set that judges a creating push is the one at the pin its writer chose. For a design device that is the newest it holds. For a device that runs its own code it is any set since that writer could first write (16.2.13).
+P5 (amended 2026-11-13, QD-803; under QD-801 this paragraph said that the fence does not bound a ref's first push, so that a device running its own code is judged under any set since it could first write). P5's first half is about one ref's pushes in order, and a ref's first push has none before it. Its second half is the gate's clause: the push that creates or re-creates a shared ref is pinned at or above the repo's newest set in the state evs committed it against. So the set that judges a creating push is the one in force at the newest row evs held, or later, whoever built the push. For a design device nothing changes: it pins the newest state it holds, and follows its log when evs says that state is behind (16.2.9). What 16.2.13 leaves is evs itself, and the seconds after a filing.
 
 No model is added. `PrefixRules.tla` holds one file-mode ref, where a new ref's changes are judged like any. What QD-801 adds on a git-mode ref is a function of a named version of another ref's committed history, with no interleaving to explore: a reader holds that version or waits for it. 16.6's base-independence test for a proof carries it on the real code, over mounts that start at different times and follow different refs.
+
+**QD-803 and the model** (amended 2026-11-13, QD-803). The model is as it was, and its evs has no such clause: W's push on the empty ref takes any pin from 0. So the model's W can do more than the design's W can. The three design runs check their seven invariants over that larger behaviour, and stand. One reach run needs a new reading. `PrefixRulesReach-StalePin` holds one push, and its recorded trace of 3 is a set filed and then W's first push of the ref at pin 0. That is the stale-pin creation evs now refuses. The window 16.2.9 still has is on a ref that exists: a push, then a set, then W at the head's older pin, a trace of 4 that needs two pushes. The model should therefore gain the clause, a twin without it and an invariant for it, and that configuration a second push. This amendment was limited to this document and edits no model file; 16.7 gives the change in full, with the results of a scratch copy that carries it.
 
 **The model.** `PrefixRules.tla` holds one authorization log and one file-mode ref of one repo with two paths, one under the prefix that a set may name and one outside it. The log takes sets of three kinds (every path, the one path, nothing), bases, and under one twin a group's membership changes. The ref takes pushes by A, an admin's device that every set names for every path; by B, a design device the sets hold to their paths; and by W, which the sets hold as they hold B and which sends any change with any row under any pin evs takes. Each push is one change with its pin, the log's length when evs committed it, what it does to the path's content and to its row, and for a write its lineage: the versions whose bytes its record chain rests on. Readers are not variables: the long-running reader, a device started at each base, a mirror, and a head reader started at each version are functions of the log and the ref, which is the claim under test. Tokens, epochs, deltas' row rules, a set's four states and git mode are not in it.
 
@@ -13628,7 +13747,7 @@ PrefixRulesReach-Tightened        a set takes a path that an earlier set gave   
 
 The design configurations check `TypeOK`, `Agreement`, `HonestStands`, `ShownAllowed`, `CleanLineage`, `Fence` and `ListingAfterRepair`. `PrefixRules` runs two log entries and two pushes with all three kinds of set and both design writers; `PrefixRules-Deep` three log entries, so that a set, a second set and a base can all precede a device's start; `PrefixRules-Long` four pushes on one path-naming set, so that an ignored event, a second, a repair and a later write can follow each other. Each twin and reach run is the smallest ground that shows its trace.
 
-**What the model does not show.** Git mode: 16.2.6 adds one line to a check whose refusal path is section 8's, modelled in `GitSync.tla`. The token arithmetic, the delta rule and a set's states: each is a pure function of bytes, and 16.6's unit tests carry them, the delta rule against a generated corpus. The walk's bound and an unavailable version: they change what a reader can return, never to something it ignores. Liveness: that a repair is sent is the runner's timer and its journal, not a property TLC was given. Two refs of one repo: a ref's pushes are judged alone, and the pin push is per ref; the one push that reads another ref, the push that gives a shared git-mode ref its first tip, reads a named and committed version of it (amended 2026-11-13, QD-801; the paragraph above).
+**What the model does not show.** Git mode: 16.2.6 adds one line to a check whose refusal path is section 8's, modelled in `GitSync.tla`. The token arithmetic, the delta rule and a set's states: each is a pure function of bytes, and 16.6's unit tests carry them, the delta rule against a generated corpus. The walk's bound and an unavailable version: they change what a reader can return, never to something it ignores. Liveness: that a repair is sent is the runner's timer and its journal, not a property TLC was given. Two refs of one repo: a ref's pushes are judged alone, and the pin push is per ref; the one push that reads another ref, the push that gives a shared git-mode ref its first tip, reads a named and committed version of it (amended 2026-11-13, QD-801; the paragraph above). evs's clause for a push that creates a ref (amended 2026-11-13, QD-803): one comparison at evs, which 16.6's gate tests carry on the real code, and whose absence from the model makes W stronger there.
 
 ### 16.4 Cost
 
@@ -13664,6 +13783,10 @@ a git-mode push    one verdict per file change inside check(u)
                    OverlayBaseSearchCount commits read once, a tip index lookup each. Head mode: nothing
 servers            api: one rule-table row and one repeated field in AclRepo; no table, endpoint or migration.
                    evs, gkm, the gates: nothing
+                   (amended 2026-11-13, QD-803) evs, on a push that creates or re-creates a shared ref: one
+                   read of the repo's row in the state it holds and one comparison, with no I/O; a refusal is
+                   one head CAS, as any recorded refusal is. A device it refuses: one follow of its log, a
+                   read of the entries after its pin, and one rebuild
 ```
 
 What a breach costs the network: the bytes the breach itself stores, charged to the network's quota like any write until an admin drops them (16.2.13), and for each versionless or removed file the upload of its accepted content by one honest device, inside the repair bounds. One breach push under 1 KiB that removes a directory can therefore ask for up to 1 GiB of honest upload a day per repairing device, and no more.
@@ -13715,9 +13838,18 @@ a held device is asked to open a shared    refused locally, EVS_PREFIX_RULE with
 branch that descends from no shared        request to evs: the branch is opened from a shared branch's tip, the
 branch's tip, or to tag a commit that no   commit goes to a shared branch first, or an admin's device does it
 shared branch's tip was
-a writer that runs its own code creates a  judged under the older set, or under none (16.2.13); an admin deletes
-shared name at a pin below the set that    the ref and revokes the writer; nothing closes it before that (question
-holds it                                   details-amend-4-new-ref-stale-pin)
+a writer that runs its own code creates    (amended 2026-11-13, QD-803; this row read that the push is judged
+or re-creates a shared name at a pin       under the older set and that nothing closes it) evs refuses the push,
+below the repo's newest set                412 GATE_CLOSED, recorded; the ref gains no version and no reader
+                                           sees anything. At the set's position or above it, the push is judged
+                                           under that set or a later one
+evs takes such a push all the same         a compromised evs, or a process that has not loaded the set inside
+                                           §11.8's timing bound: every reader accepts the ref under the older
+                                           set, with no alarm; an admin who finds it deletes the ref and
+                                           revokes the writer (16.2.13)
+a design device whose log is behind a set  412 GATE_CLOSED; it follows its log once and builds again on the
+creates a shared ref                       newer pin, where its own rules are asked again; with no newer state
+                                           the write ends with that refusal and the caller asks again (16.2.9)
 a signer's row is gone                     a tagged or ephemeral sidecar's tombstone past its not_after, at a pin
                                            the reader does not retain: the reader cannot verify the signature at
                                            all, with or without rules; such a version is §11.9's trusts row's,
@@ -13750,6 +13882,10 @@ the local record is lost                   the next read walks again and alarms 
 - Base independence for a new shared ref, on real code (amended 2026-11-13, QD-801): a generated history of branches, forced updates, deletions, tags and new branches under two sets; a long-running mount, a mount made after the last push, a mount that learns of a proof's ref only from the tag that names it, and a device whose `ConfigLog` was restored at a later base give one verdict for every tag and every new branch. Under a hook that looks the tagged commit up in the device's own tip index, in place of the version the push names, the mount that does not follow the branch disagrees, which the test asserts.
 - `evs_prefix_test.go`, head mode (amended 2026-11-13, QD-801): on a shared branch that a held signer created over its own branch, a path the ref holds an entry for is judged by that entry's push, so a file the creating push wrote outside the prefixes is ignored; a path it holds no entry for answers `ErrEvsOverlayBase` from `ReadHead`, `List` and `History`, with and without a set in force, and no read of the base ref follows.
 - `acl_prefix_test.go` (amended 2026-11-13, QD-801): `AllowPrefixWrite` draws no path for a sidecar that a rule names with no path, stops at the first refused path of a sequence, and for the path of no component is allowed exactly where such a rule names the sidecar, where no set is in force and where the ref is outside the rules.
+- The gate's clause (amended 2026-11-13, QD-803), in `evsservice/check_gate_rules_test.go`, over hand-built push views. A push that creates a shared ref on no head, pinned below, at and above the newest set's position: 412 GATE_CLOSED with the recorded fate, then pass, then pass. The same on a placeholder head, and on a deleted head at pins at or above the DELETE's; below the DELETE's pin the fence's final refusal comes first. Each kind of creating push: a file-mode ref's first, a branch's creating UPDATE, a tag ref's IMMUTABLE push, each again after a DELETE, and one that carries FORCE. Not held, each at a pin below the set: an owned ref, a deposit ref and the erasure ref on no head; a pin push, a DELETE and an ordinary push on a live head, each at the head's pin; a creating push where the repo's row holds no set, and in a repo that is not general. Two sets: the greater position is the one compared, in either order in the row. A state without the repo's row: 503. A pin above evs's state: 503, and a pin off its chain: final, both before the clause. With the testhooks switch off (`check_gate_off_testhooks_test.go`), the stale-pin push passes the gate.
+- The refusal's fate (amended 2026-11-13, QD-803), in `evsservice/push_gate_rules_test.go`, through the engine on `FakeBlobs`. A stale-pin creating push leaves a placeholder head that holds its refusal record and no version. A second attempt of the same push id is answered from the record, by an engine whose state does not hold the set yet as well. That engine commits the same statement on a ref id whose head holds no record, which the test asserts as the reason the fate is recorded. The same update built again at the set's position commits as version 1 over the placeholder. On a deleted head the record goes into the tombstone, and the next version follows the DELETE's. A part of a creating push in parts is refused with no record.
+- `acl_prefix_gate_test.go` (amended 2026-11-13, QD-803): `AclPrefixRulesNewestAt` over a row with no set, with one and with three.
+- The device's handling (amended 2026-11-13, QD-803), in `evs_push_test.go`, against a scripted evs with a counter on the follow seam. A push that creates a shared ref and is refused 412 GATE_CLOSED asks one follow; where the follow installs a newer pin the write is planned again and its second statement carries that pin. Where the newer state holds the device to a prefix the path lies outside, the write ends `EVS_PREFIX_RULE` and no second statement is sent. Where the follow raises neither the pin nor the generation, no second statement is sent and the write ends with the refusal. Where only the generation rose, it builds again. A push on a head that exists, and a creating push of an owned ref, ask no follow. A gate that refuses every statement ends the write at `PushRebuildCount`.
 
 **Schedule rows**, for a design-records track to number, each on T2 with real evs and api:
 
@@ -13784,13 +13920,24 @@ new shared names               (amended 2026-11-13, QD-801) a set holds tag ci t
                                device. An admin's device tags the middle commit of a push: it lands
 a pending set                  a set sealed to a generation that does not exist: readers hold; a later entry past
                                the grace voids it everywhere; the set below is in force again
+new names at a stale pin       (amended 2026-11-13, QD-803) a ci sidecar is admitted, an admin deletes branch
+                               `old`, and then a set holds tag ci to agents/build. Four hand-built pushes by
+                               the ci sidecar, pinned below the set, each with src/x written or changed: a new
+                               file-mode ref, a new branch over its own branch, a tag of that branch's commit,
+                               and `old` again. Each is 412 GATE_CLOSED at evs, and no device lists a ref. The
+                               same four, pinned at the set, commit, and every reader ignores or refuses them
+                               under it. The ci sidecar's own daemon, its follower held one entry behind at a
+                               barrier, opens `feature` off main with a change under agents/build: 412, one
+                               follow, and the rebuilt push lands on every device. With the testhooks gate
+                               off, the stale-pin tag commits and every reader accepts it, which the row
+                               asserts as the residual
 ```
 
-**The model.** `run-prefixrules.sh <track>` at each change to 16.2.3, 16.2.4, 16.2.7, 16.2.8 or 16.2.9: the design configurations pass, each twin fails on the invariant its cfg names, each reach configuration reaches its state (16.3). The paragraphs QD-801 added to 16.2.4 and 16.2.7 (amended 2026-11-13) are about a git-mode ref's first push, which the model does not hold, and call for no run.
+**The model.** `run-prefixrules.sh <track>` at each change to 16.2.3, 16.2.4, 16.2.7, 16.2.8 or 16.2.9: the design configurations pass, each twin fails on the invariant its cfg names, each reach configuration reaches its state (16.3). The paragraphs QD-801 added to 16.2.4 and 16.2.7 (amended 2026-11-13) are about a git-mode ref's first push, which the model does not hold, and call for no run. Nor does QD-803's change to 16.2.9 (amended 2026-11-13, QD-803): the clause is evs's and not in the model, whose files are as they were, so every recorded result stands. When 16.7's model change lands, the script runs whole, with the new twin and the wider reach configuration.
 
 ### 16.7 Implementation notes, task by task
 
-One existing task changes and five are new. The ids are free in `.stack/plan`, the questions and both design documents as of 2026-11-13; the orchestrator files them. Order: ACL-M2-18, then ACL-M6-04's prefix half, then EVS1-M6-04, then EVS1-M6-05 and EVS1-M6-06 beside each other, then TEST-M6-03.
+One existing task changes and five are new. The ids are free in `.stack/plan`, the questions and both design documents as of 2026-11-13; the orchestrator files them. Order: ACL-M2-18, then ACL-M6-04's prefix half, then EVS1-M6-04, then EVS1-M6-05 and EVS1-M6-06 beside each other, then TEST-M6-03. (amended 2026-11-13, QD-803) A sixth new task, EVS1-M6-07, holds evs's clause. Its id is free in the same places as of this amendment. It needs only ACL-M2-18, names no file of another task here, and lands any time after ACL-M2-18 and before TEST-M6-03. EVS1-M6-05 and TEST-M6-03 change scope with it, and ACL-M2-18 and EVS1-M6-06 do not.
 
 **ACL-M2-18, the statement, the rows and the fold** (new; M2; S; server and sidecar). It must land before M2's Gn-in, since it is what QD-212 reserves: from it on, every verifier judges a `RepoPrefixRules` entry alike and folds its row, and enforces nothing.
 
@@ -13799,6 +13946,7 @@ One existing task changes and five are new. The ids are free in `.stack/plan`, t
 - Build: the check never opens `sealed_rules` and reads only its length. The fold appends and never removes. `Reapply` and the base compile run the same fold (5.2.3), which the test asserts on a generated log.
 - Tests: 16.6's first bullet; the base-independence test's rows half (a restored log and a rows-only log hold the long-running log's `prefix_rules`).
 - Trap: a format-1 device must not refuse the type as unknown, or it forks at the first set; that is why the row lands with M2 and not with M6.
+- Amended 2026-11-13, QD-803. Nothing changes here. The row as specified, `{signer, at}` appended in position order and never removed, is what evs's gate reads: it reaches evs through `GkmAuthView.Repo`, which the gate already calls for `holders_shrunk_at`, and the newest set is the row with the greatest `at`. No field, accessor or file is added to this task; EVS1-M6-07 carries the one helper. Its two pending `metadata_rows.yml` rows wait on api-7's words as before, and 16.8 now gives those words with evs's read in them.
 
 **ACL-M6-04, peer-list filtering and client-checked prefix writes** (existing; M; scope changed). The peer-list half is as its plan entry has it. The prefix half is no longer "unbuilt until plan-EVS1-v1-unspecified": that question's #5 is answered and this section is the rule. It keeps `sidecar/acl_prefix.go` and `acl_prefix_test.go` and provides, there:
 
@@ -13828,6 +13976,7 @@ One existing task changes and five are new. The ids are free in `.stack/plan`, t
 - Traps: a repair form's `base_entry_version` and `prev_push_id` are evs's newest, never the effective version's, or 5g refuses it and History's walk breaks. A repair never runs on a phone, an ephemeral sidecar or a device that does not mirror the ref. The pin push must carry the pin of a state at or above the set, so the filer waits for its own log to apply its statement before it sends one.
 - Amended 2026-11-13 (8.2.10, 8.2.4, 10.2.4 as amended). `AllowPrefixWrite` also covers `EvsRepo.WritePaths` on a shared git-mode ref, which is a rekey. `PinPush` on a git-mode ref is the UPDATE of one tip, under P_r, on branches that have a tip and are not stopped, and `ur evs rules show` lists the refs it could not bind. The repair form with no edit is callable for one path whatever `RepairDepth` says, for EVS2-M10-20's DROP builder.
 - Amended 2026-11-13, QD-801. Files and size are unchanged. The SDK's and MCP's mapping of `EVS_PREFIX_RULE` gains the details `base` and `tag` (8.2.8), and `ur status` shows a ref this device refused with them. `PinPush` sends nothing for a name that does not exist and `ur evs rules show` lists none: a new ref is judged at its creating push's pin (16.2.9). The planner's `AllowPrefixWrite` call is as it was, since a file-mode ref has no base and no tag and a new one's changes are judged by their paths. Tests: the mapping of the two details.
+- Amended 2026-11-13, QD-803 (16.2.9's handling of the refusal). Scope grows by the device's half, and size stays M. Files gain `evs_client.go` (`EvsClientArgs.ConfigFollow`, a function of a context that returns an error; nil on a leg with no follower, which skips the follow) and `evs_component.go` (wired to `ConfigClient.CatchUp`). The handling itself is in `evs_push.go`, in the sender that the file-mode loop and `publish` both send through, so `evs_write.go`'s loop and EVS1-M6-06's `evs_local_publish.go` do not change for it. After a push that creates or re-creates a shared ref is refused 412 GATE_CLOSED, the sender follows once and keeps the refused statement's pin and generation for that ref; the next build for the ref on the same pin and generation returns the kept refusal in a form `evsNeedsRebuild` does not take. `ur evs rules show` lists a ref whose head is deleted as `deleted, held at re-creation`, where it had `unbound`, and `PinPush` still sends it nothing. Tests: 16.6's bullet for the device's handling. Traps: the follow runs with the write's locks held, the local tier's publish lock among them, and applies entries on the caller's goroutine, so no entry callback may wait on that write; a push on a head that exists, a push to an owned ref and a deposit ask no follow; one follow a refusal, never a loop.
 
 **EVS1-M6-06, git mode** (new; M6; S; sidecar).
 
@@ -13836,8 +13985,17 @@ One existing task changes and five are new. The ids are free in `.stack/plan`, t
 - Trap: only file changes are judged; a directory's rows on a git-mode ref follow from the trees.
 - Amended 2026-11-13, with 16-A and 16-B written (8.2.5, 8.2.7, 8.2.8; 8.7's last paragraph). Its scope grows, and its size is M. Files gain `evs_local_publish.go`: the writer's call sits in `publish`'s step 3, so an import and a rebuilt push pass it, and it runs again before a statement signed on another pin. `evs_git_check.go` holds two tests: the early one above, on the file entries a push writes, and the full line with the `changes` row, on every file that differs between the two trees, a REKEY's entries and the tainted token paths. `evs_local_receive.go` also answers `prefix rule: pending`, `update` and `tainted paths`. Needs gain EVS1-M2-34. Tests: 8.6's three amended rows. Traps: a file can change with no change at its own token path (an overlay's table, a creation of the other kind over it), so neither test may read the change list alone; the refusal's reason is the first failing row's, in `check`'s order, on every device; an owned ref asks nothing.
 - Amended 2026-11-13, QD-801 (8.2.4, 8.2.5, 8.2.7, 8.2.8; 8.7's last item). The task was held for this text and builds to it. Its scope grows again, and its size is L. Files gain `evs_local_overlay.go` (the held device's candidates: shared branches only, on every parent line) and `evs_local_commits.go` (a tag's proof, first among the sources). `evs_local_publish.go`: step 1 asks whether the device is held; step 3 measures from J, drawing a tree's files through `evs_local_tree.go`'s reader for a push measured from nothing; the refusal carries detail `base` or `tag`. `evs_git_check.go` and `evs_local_sync.go`: J for a branch that has never held a tip (its `EvsGitRef` holds neither a tip nor a last tip), the proof test for a tag against `tipAt` of the named source with that ref's kind and name, and the walk from nothing; `EvsGitCheckUpdate` takes those as arguments beside the verdict, so export judges alike. `evs_local_receive.go`: the two `ng` lines, and a push's tag updates published after its branch updates are answered. Needs are unchanged. Tests: 8.6's three rows as amended for QD-801 and 16.6's two bullets for new shared refs, about thirty cases, most of them hand-built pushes. Traps: the proof is the version the push names, never a lookup in the reader's own tip index, which differs between mounts; a named version the reader has not replayed is a wait and not a refusal, and one inside a stopped span, at another tip or after a DELETE is no proof; "first tip" is read from what this reader applied, so a ref whose first push was refused is still new after its DELETE; J replaces S in the prefix test only, and the `changes` row still holds the push to the net change against S; a signer named for every path is passed before any tree is read; the proof excuses no carried commit; nothing reads an owned ref's tree as the measure of a shared name.
+- Amended 2026-11-13, QD-803. No file, test or size changes. What a creating update meets after the follow is this task's check before a statement signed on another pin (8.2.5), as already written; the follow is EVS1-M6-05's, in the sender. If this task lands first, a creating update refused 412 GATE_CLOSED takes the landed rebuild with no follow until EVS1-M6-05 lands.
 
-**TEST-M6-03, prefix rules end to end** (new; M6; M). 16.6's schedule rows on T2; `run-prefixrules.sh` beside the other details models in the gate's model step; the hand-built breaching pushes as a `sidecartest` helper that signs with a real admitted sidecar's key and skips `AllowPrefixWrite`, which no release build can do. Amended 2026-11-13, QD-801: 16.6's `new shared names` row, whose hand-built pushes create a shared branch over the signer's own and a tag with no proof.
+**EVS1-M6-07, the gate holds a new shared ref's pin to the newest rule set** (new; M6; S; sidecar; amended 2026-11-13, QD-803).
+
+- Files: `sidecar/acl_prefix_gate.go` (new: `AclPrefixRulesNewestAt(repo *protocol.AclRepo) (at uint64, ok bool)`, the greatest `at` among the row's sets, so that evs and the tests read "the newest set" in one place) and `sidecar/acl_prefix_gate_test.go` (new); `sidecar/evsservice/check_gate.go` (the clause, and a row for it in the file header's table); `sidecar/evsservice/refusal_codes.go` (`EvsCheckReasonPinBelowRules`: name `pin_below_rules`, 412 GATE_CLOSED, recorded; the header's list of recorded reasons); `sidecar/evsservice/check_gate_rules_test.go` and `sidecar/evsservice/push_gate_rules_test.go` (new); `sidecar/evsservice/check_gate_off_testhooks_test.go` (one case).
+- Needs: ACL-M2-18 (`AclRepo.prefix_rules`). The gate and the refuse row are landed (EVS1-M2-11, EVS1-M2-12). Nothing of M6.
+- Build: 16.2.9's clause table. In `CheckGate`, after the own-pin row and before the predicate: the push creates its ref when `!view.headExists() || view.Head.GetDeleted()`, the test `checkCreatingSections` makes; its `ref_kind` is shared; the row is `view.Auth.Repo(view.RepoId)`, and a nil row answers `EvsCheckReasonGateUnknown`; a pin version below `AclPrefixRulesNewestAt` refuses, its detail naming the two positions as the fence's does. The clause holds no limit, count or time, so it adds no settings field (QD-702). It adds no proto field, route, object or Redis family, and §2.8 gains no row (16.8).
+- Tests: 16.6's three gate bullets: the clause, the refusal's fate and the helper.
+- Traps: the clause sits inside `CheckGate`, so D-TEST-6's switch turns it off with the rest, and only a testhooks build has that switch. Versions are compared only after the own-pin row has judged the pin against evs's chain, which is why the clause sits below that row and not beside the fence. A deleted head is a head: the fence against the DELETE's pin runs first and is final, and the two refusals differ in fate. The fate here is recorded, and on a ref with no head the record makes a placeholder, as every recorded refusal of a creating push does; making it final to save that write lets a held attempt commit at a sibling that has not loaded the set (FS-1, FS-113's shape). `ur/index` and `ur/lfs` are held like any shared ref, since evs has no name to tell them by. Owned, deposit and erasure refs are not held, and their tests say so.
+
+**TEST-M6-03, prefix rules end to end** (new; M6; M). 16.6's schedule rows on T2; `run-prefixrules.sh` beside the other details models in the gate's model step; the hand-built breaching pushes as a `sidecartest` helper that signs with a real admitted sidecar's key and skips `AllowPrefixWrite`, which no release build can do. Amended 2026-11-13, QD-801: 16.6's `new shared names` row, whose hand-built pushes create a shared branch over the signer's own and a tag with no proof. Amended 2026-11-13, QD-803: 16.6's `new names at a stale pin` row. The breach helper builds a creating push at a pin its caller chooses; the row holds a daemon's follower one entry behind at a barrier, and its last line runs under the testhooks gate switch. Needs gain EVS1-M6-07. Size stays M.
 
 **Scope notes for tasks that are not held.** SEARCH-M10-24 (masks): a hit whose (path, version) `effective` ignores is masked. SEARCH-M10-12 and SEARCH-M10-14 (coverage, backfill, companion pushes): no ignored version is indexed, and an ignored push counts as indexed. EVS1-M2-49 (export): reports an ignored version as it reports a refused one. TEAM-M2-04 (`CascadePlan`): lists the `prefix_rules` rows whose signer is in P at the row's position. Each is one call to ACL-M6-04's verdict or one read of the row.
 
@@ -13848,14 +14006,42 @@ One existing task changes and five are new. The ids are free in `.stack/plan`, t
 - **16-C, written 2026-11-13.** 5.2.2's list of what rows carry gains `AclRepo.prefix_rules`, a rows-only input folded alike by `ApplyStatement`, by `Reapply` for a tail entry whose verdict is 1, and by a base's compile; 5.2.4 and 5.7 are marked where they follow.
 - **16-D, written 2026-11-13.** §11.7's checkpoint list holds six cases where 8.2.4's chain row and 10.2.4 read it. On a git-mode ref the sixth is a tainted token path's write. A DROP's kept head is never built on an ignored version: the builder repairs first or stops.
 - **QD-801, written 2026-11-13 (amendment 4), each place marked "(amended 2026-11-13, QD-801)".** A push that gives a shared ref its first tip is measured from a shared branch's tree, or from nothing. 8.2.7 holds the rule: J, a tag's proof, the record that proves a past tip (the row of the reader's tips log at the version the push names) and why every device agrees on it. 8.2.4 holds what a held device chooses: a shared branch as its new branch's base, found on any parent line, and its tag's proof. 8.2.5 holds the writer's check, measured from J, and 8.2.8 the two `ng` lines and the order of a push's tags after its branches. 8.2.3, 8.3, 8.5, 8.6 and 8.7 are marked where they follow.
+- **QD-803, written 2026-11-13 (amendment 5), each place marked "(amended 2026-11-13, QD-803)".** evs's gate holds the pin of a push that creates or re-creates a shared ref at or above the repo's newest rule set. 16.2.9 holds the clause and the device's handling of its refusal. 8.2.5 holds the follow before a creating update is built again. 8.2.7's paragraph on a creating push's pin no longer says that nothing holds it. 8.2.10's row for a deleted ref loses its window. 8.5 and 8.7 are marked where they follow. `check` and every reader's verdict are as they were.
 
-Three places beyond those four were amended because the four could not be written without them: 8.2.10's rekey (judged, so asked by the planner), 8.2.10's pin push on a git-mode ref (a commitless version; none on a tag ref, a ref with no tip or a stopped ref), and 10.2.4's DROP builder. Two questions are filed (16.9): the pin push's refs, built on its recommendation, and the creation of a shared ref, left as ratified. No model changes: `GitSync.tla` holds a commitless version as any version that moves no tip, `DropJob.tla` models evs's job and not the client's builder, and `PrefixRules.tla` is one file-mode ref of one-change pushes, whose verdict is the function 8.2.7's line calls for each file. Both questions are answered (amended 2026-11-13): QD-802 ratified the first as built, and QD-801 chose the second's option 2, which the last item above writes. One question follows from it (16.9), `details-amend-4-new-ref-stale-pin`, and no model changes for QD-801 either (16.3).
+Three places beyond those four were amended because the four could not be written without them: 8.2.10's rekey (judged, so asked by the planner), 8.2.10's pin push on a git-mode ref (a commitless version; none on a tag ref, a ref with no tip or a stopped ref), and 10.2.4's DROP builder. Two questions are filed (16.9): the pin push's refs, built on its recommendation, and the creation of a shared ref, left as ratified. No model changes: `GitSync.tla` holds a commitless version as any version that moves no tip, `DropJob.tla` models evs's job and not the client's builder, and `PrefixRules.tla` is one file-mode ref of one-change pushes, whose verdict is the function 8.2.7's line calls for each file. Both questions are answered (amended 2026-11-13): QD-802 ratified the first as built, and QD-801 chose the second's option 2, which the last item above writes. One question follows from it (16.9), `details-amend-4-new-ref-stale-pin`, and no model changes for QD-801 either (16.3). That question is answered as well (amended 2026-11-13, QD-803), and the item for QD-803 above writes its answer. No model file changes with it either, but it calls for one change to `PrefixRules.tla`, which the next paragraph gives.
+
+**The model change QD-803 calls for** (amended 2026-11-13, QD-803; not made by this amendment, which was limited to this document). `PrefixRules.tla` lets W pin the ref's first push anywhere from 0, and `PrefixRulesReach-StalePin` records exactly that push (16.3). A pass that may edit `sidecartest/model/details/` makes the change below and runs `run-prefixrules.sh` whole; TEST-M6-03 runs whatever the script then holds.
+
+```text
+PrefixRules.tla   NewestSet == MaxOr0({i \in 1..Len(log) : IsSet(i)})
+                  WPush takes a pin in PinFloor..Tip. PinFloor is 0 under NoHeadFence. On the empty ref it is
+                  NewestSet, and 0 under a new twin value, NoNewRefFence. Otherwise it is HeadPin
+                  NewRefFence == ref # <<>> => SetPos(0, ref[1].pin) = MaxOr0({i \in 1..ref[1].at : IsSet(i)})
+configurations    the three design ones gain NewRefFence. A new PrefixRulesTwin-NoNewRefFence, with one log
+                  entry and one push, must violate it. PrefixRulesReach-StalePin goes to two pushes
+the script        the new twin in its list; 16.3's table and 16.1's G take the new figures
+```
+
+A scratch copy with exactly this change was run on 2026-11-13 from track details-amend-5: TLC at the owner's jar (master d8fb231) through `.stack/tools/tlc`, breadth-first, on a host at a load average near 105, each run's state directory deleted when it ended. The copy is not landed. These are the figures to expect, and not a record of the repository's model:
+
+```text
+design, must pass, with NewRefFence     distinct states   depth   time
+PrefixRules                                    37,275       5     4 s
+PrefixRules-Deep                              300,450       6     28 s
+PrefixRules-Long                              600,923       6     1 min 26 s
+
+PrefixRulesTwin-NoNewRefFence           NewRefFence violated, a trace of 3: the trace StalePin records today
+PrefixRulesReach-StalePin, one push     no violation in 75 states, depth 3: the state is no longer reached
+PrefixRulesReach-StalePin, two pushes   NeverStalePin violated, a trace of 4: A writes, a set is filed, W
+                                        pushes at the head's pin, 0
+the other seven twins and five reaches  each violates its own invariant with the trace 16.3's table gives
+```
 
 ### 16.8 Proposed DESIGN.md text
 
 For a design-records track; none of it is applied here.
 
-**§2.8, api-7.** Add: "for each general repo, every `RepoPrefixRules` entry: its position, time and signer, the generation its rules are sealed to and their padded length (48 B and a multiple of 256 B); never a rule, a subject or a prefix". `metadata_rows.yml` gains `RepoPrefixRules.sealed_rules` and `AclRepoPrefixRulesRow`. No evs or gkm row changes.
+**§2.8, api-7.** Add: "for each general repo, every `RepoPrefixRules` entry: its position, time and signer, the generation its rules are sealed to and their padded length (48 B and a multiple of 256 B); never a rule, a subject or a prefix". `metadata_rows.yml` gains `RepoPrefixRules.sealed_rules` and `AclRepoPrefixRulesRow`. No evs or gkm row changes. Amended 2026-11-13, QD-803, add to the same sentence: "; evs's gate reads the newest of those positions (§11.8's fence row) and nothing else of a set". There is still no evs or gkm row to change. api-7's `service` names every gate, evs among them, so the row's position is already listed as something evs holds; the clause adds no store, column, Redis family, object family or proto field for I-18's guard to find.
 
 **§5.4.** `evs_alarm`'s reason `prefix_rule` carries {repo, ref, path, signer, version, push id, detail: ignored | refused | set_void | set_newer | depth | unavailable, count}, at most one a minute per (repo, ref, signer).
 
@@ -13878,6 +14064,14 @@ in force  at a push's auth pin: the newest opened set at or below it; none: no r
 void      a set whose seal does not open, whose rules break the format, or whose generation was signed more
           than 1 h after its entry leaves the set below it in force and alarms; a later release's set makes a
           reader that cannot read it hold the repo's later versions and say `update`
+```
+
+Amended 2026-11-13, QD-803, add a row to that block:
+
+```text
+new refs  evs's gate holds a push that creates or re-creates a shared ref to an auth pin at or above the
+          position of the repo's newest row (§11.8's fence row), so a new name is judged under that set or a
+          later one; evs reads the position and never a rule
 ```
 
 **§8.8, `AclRows`.** `AclRepo` gains `repeated AclRepoPrefixRulesRow prefix_rules = 12`, with `AclRepoPrefixRulesRow {signer = 1, at = 2}`.
@@ -13910,13 +14104,36 @@ rules     11.9's checks, by the set in force at its push's auth pin: allowed whe
 
 Amended 2026-11-13, QD-801, add to the row after "the ref stops there (11.11)": "A push that gives a shared git-mode ref its first tip is measured from the tree of its base where that is a shared branch, and from nothing otherwise; a tag changes no file where its push names a shared branch's version whose tip it tags, and is measured from nothing otherwise; measured from nothing, every file of the tree is a change (DESIGN-DETAILS 8.2.7)."
 
+Amended 2026-11-13, QD-803, add to the row after "which its filer sends as a push of no change": "evs holds a push that creates or re-creates a shared ref to a pin at or above the repo's newest set (11.8's fence row), which is evs's check and no reader's."
+
+**§11.8, step 5d, the gate block and D-EVS-18** (amended 2026-11-13, QD-803).
+
+```text
+5d        after "and neither pin is below the head's" add: "and, on a push that creates or re-creates a shared
+          ref (one that commits on no head, on a placeholder or on a deleted head), the auth pin is not below
+          the position of the repo's newest RepoPrefixRules row in that state (§8.8)"
+fence     after clause (2) add: "(3) on a push that creates or re-creates a shared ref, the auth pin is not
+          below the position of the repo's newest RepoPrefixRules row in that state: a ref with no head has
+          no pin for (2) to hold such a push to, and a deleted one only its DELETE's"
+contract  add: "a rule set binds a new or re-created shared ref from the first creating push validated against
+          a state that includes it; a creating push validated before then serializes before the set"
+refusals  for "new refs are fenced by the same check on their creating push" read "new refs are fenced by the
+          same check on their creating push, and new shared refs by (3) as well; a device that (3) refuses
+          follows its authorization log once and builds the push again only on a newer pin or generation, in
+          either mode (DESIGN-DETAILS 16.2.9)"
+refuse    in step 5's refuse row, the list of refusals evs records gains "5d's rule-set pin" after "5d's
+          predicate": the state that settles it is one process's, so it is recorded and not final
+```
+
+**D-EVS-18.** For "and never fall below the head's" read "and never fall below the head's; a push that creates or re-creates a shared ref carries an authorization pin at or above the repo's newest prefix rule set in that state". Add to its *Why*: "A ref with no head gives the CAS no pin to compare, and readers judge a push by the rule set in force at its pin (§11.7), so the gate holds that pin where the head cannot (QD-803)."
+
 **§11.7, checkpoints.** Add case (6): "the path's newest version on evs is one the writer ignores under the repo's prefix rules".
 
 **§11.8, invariants.** Add: "I-EVS-19 every reader that holds a push's statement, the repo's rows and its signer's row reaches the same prefix verdict on each of its changes, whatever base it started at; a reader shows and builds on only versions that verdict allows; a change a device refused locally is the change readers ignore". I-EVS-14 is unchanged and runs first.
 
 **§11.9, the readers row.** After the signed statement and entry hash: "then §11.7's prefix rules: a version they do not allow is not returned, and the newest allowed one below it is". **The trusts row.** After "is evs's word": "; its prefix verdict is not: the reader computes it for the version it is served, from rows alone".
 
-**§11.11.** The mount's check gains the prefix line (DESIGN-DETAILS 8.2.7 and 16.2.6); receive answers `ng <ref> prefix rule` for a path its own device may not write. Amended 2026-11-13, with 16-A and 16-B written, add: "the line judges every file that differs between the push's two trees, a rekey's entries and a re-creating push's tainted token paths, and no directory change; a device asks its own rules before it builds any push for a shared ref, an import's and a rebuilt one included; a set's filer sends its push of no change to each shared branch that has a tip". Amended 2026-11-13, QD-801, add: "on the push that gives a shared ref its first tip the line measures from a shared branch's tree or from nothing (§11.7's prefix rules row); a device held to prefixes opens a shared branch over a shared branch's tip and names, for a tag, the shared branch's version whose tip it tags; receive answers `ng <ref> prefix rule: no shared base` and `not a shared branch's tip`, and publishes a push's tags after its branches".
+**§11.11.** The mount's check gains the prefix line (DESIGN-DETAILS 8.2.7 and 16.2.6); receive answers `ng <ref> prefix rule` for a path its own device may not write. Amended 2026-11-13, with 16-A and 16-B written, add: "the line judges every file that differs between the push's two trees, a rekey's entries and a re-creating push's tainted token paths, and no directory change; a device asks its own rules before it builds any push for a shared ref, an import's and a rebuilt one included; a set's filer sends its push of no change to each shared branch that has a tip". Amended 2026-11-13, QD-801, add: "on the push that gives a shared ref its first tip the line measures from a shared branch's tree or from nothing (§11.7's prefix rules row); a device held to prefixes opens a shared branch over a shared branch's tip and names, for a tag, the shared branch's version whose tip it tags; receive answers `ng <ref> prefix rule: no shared base` and `not a shared branch's tip`, and publishes a push's tags after its branches". Amended 2026-11-13, QD-803, add to the `journal` row: "a device whose push that creates or re-creates a shared ref is refused 412 GATE_CLOSED follows its authorization log once before it builds the push again, and builds again only on a newer pin or generation".
 
 **§11.7, the boundary row.** 10.8's amended item: a DROP's kept head is a version its builder allows.
 
@@ -13924,13 +14141,13 @@ Amended 2026-11-13, QD-801, add to the row after "the ref stops there (11.11)": 
 
 **§18.5.** Add `EVS_PREFIX_RULE` {path, detail: refused | pending | update | depth | unavailable}: a write this device's rules do not allow, or a read whose effective version it cannot reach. Amended 2026-11-13, QD-801: the details gain `base`, a new shared branch with no shared branch's tip to be measured from, and `tag`, a tag of a commit that no shared branch's tip was; each carries the first file outside the device's prefixes.
 
-**§22.8, §22.9.** The model row `details/PrefixRules` and 16.6's schedule rows, numbered by that track.
+**§22.8, §22.9.** The model row `details/PrefixRules` and 16.6's schedule rows, numbered by that track. Amended 2026-11-13, QD-803: `new names at a stale pin` is among those rows, and the model row takes the twin `NoNewRefFence` once 16.7's model change lands.
 
 **§23, D-PHASE-9.** The reservation list gains "acl.proto's `RepoPrefixRules` (SignedType 0x1111) and `AclRepo.prefix_rules`, which code from M2 verifies and folds and M6 enforces".
 
 ### 16.9 Owner questions
 
-Five are filed. The section is built on the recommendation of each, so none blocks a task. Amended 2026-11-13: the two filed with the amendments are answered, and one more is filed with QD-801's text, which is not built on its recommendation; they are the last three below.
+Five are filed. The section is built on the recommendation of each, so none blocks a task. Amended 2026-11-13: the two filed with the amendments are answered, and one more is filed with QD-801's text, which is not built on its recommendation; they are the last three below. Amended 2026-11-13, QD-803: that one is answered too, the section is built on the answer, and amendment 5 files no question.
 
 **details-16-subject-atoms** (filed). Which subjects may a rule name? Options: (1) only what an admission fixes: a sidecar, a member's untagged devices, a tag, and the four class autogroups; a group is filed as its members' `user:` subjects (built). (2) Every §8.4 atom, judged in the state at the push's pin: a device that does not retain that state, which is every new device for most of a repo, takes the version unjudged. (3) Groups, expanded by the filing device at filing time and filed again by an admin's daemon when the group changes, on top of (1). Recommendation: 1. It is the only one under which a device started today and a device that watched the push must agree (16.3's P1; `PrefixRulesTwin-HeadAtoms`). Option 3 can be added later with no format change; it spends a repo's 256 sets on membership changes.
 
@@ -13942,11 +14159,11 @@ Five are filed. The section is built on the recommendation of each, so none bloc
 
 **details-16-small-readings** (filed). Eleven readings the section took where QD-212's sentence allows more than one; each is one line to change: (1) only a general repo takes a set, though QD-212 names owner-bound repos after RepoVersioning's pattern: every owner-bound kind is record-class and written only by its owner's devices; (2) a set binds every shared ref of its repo, with no rule per ref; (3) once a set is in force a signer it does not name writes nothing, pushes pinned below a repo's first set are unbound, and the rules are lifted by the one rule that names `autogroup:sidecar`; (4) a void set leaves the set below it in force; (5) `.ur-index/`, `ur/index` and `ur/lfs` are outside the rules; (6) pushes carrying an admin's flag are outside the rules; (7) a repo's rows hold at most 256 sets for its life, with no compaction; (8) a set binds a ref from the first push pinned at or above it, which the filer sends; (9) a compromise cascade voids no set; (10) a device older than M6 enforces nothing, and no row lets a filer list such devices; (11) the default numbers of 16.2.11. Recommendation: each as built.
 
-**details-amend-3-pin-push-refs** (filed 2026-11-13, with the amendments). Which git-mode refs get a set's pin push, and what binds a deleted one? QD-795 has the filer send a push of no change "to each shared ref"; section 8 leaves no such push for a tag ref (it takes only a DELETE), a ref with no tip (an UPDATE needs one) or a ref stopped on the filer's device. Options: (1) none is sent to those; a tag ref needs none, a stopped ref is bound by its recovery, and a deleted ref is bound from the push that re-creates it, listed as unbound by `ur evs rules show` until then (built). (2) The filer sends a deleted ref a second DELETE, which carries its pin: every filing then writes a version to every branch the repo ever deleted, and evs must take a DELETE of a deleted ref. Recommendation: 1. What it leaves open is a writer re-creating a deleted branch at a stale pin under the set in force there, which is the reach 16.2.9 already names, on a branch the admin had deleted. Answered 2026-11-13 (QD-802): option 1, as built.
+**details-amend-3-pin-push-refs** (filed 2026-11-13, with the amendments). Which git-mode refs get a set's pin push, and what binds a deleted one? QD-795 has the filer send a push of no change "to each shared ref"; section 8 leaves no such push for a tag ref (it takes only a DELETE), a ref with no tip (an UPDATE needs one) or a ref stopped on the filer's device. Options: (1) none is sent to those; a tag ref needs none, a stopped ref is bound by its recovery, and a deleted ref is bound from the push that re-creates it, listed as unbound by `ur evs rules show` until then (built). (2) The filer sends a deleted ref a second DELETE, which carries its pin: every filing then writes a version to every branch the repo ever deleted, and evs must take a DELETE of a deleted ref. Recommendation: 1. What it leaves open is a writer re-creating a deleted branch at a stale pin under the set in force there, which is the reach 16.2.9 already names, on a branch the admin had deleted. Answered 2026-11-13 (QD-802): option 1, as built. What it left open is closed since (amended 2026-11-13, QD-803): evs's gate refuses that re-creation below the repo's newest set (16.2.9), and `show` lists such a ref as deleted and held at its re-creation.
 
 **details-amend-3-new-shared-refs** (filed 2026-11-13, with the amendments). May a writer held to a prefix create a shared ref whose tree was never judged? Writing 16.2.6's line into 8.2.7 showed that a tag, and a new shared branch whose base is the writer's own branch, change no file and so pass (16.2.13's row). Options: (1) as ratified: the rules judge changes to a shared branch's files and nothing about a new name (built). (2) A push that creates a shared ref is judged from the tree of a shared branch it names, its base for a branch and a source whose tip it tags for a tag, and from nothing otherwise, so a held writer creates a branch or tag only at a tree that differs from a shared branch's tip under its prefixes. (3) Under a set, only a signer the set names for every path creates a shared ref. Recommendation: 2. This one is not built on its recommendation: options 2 and 3 refuse pushes that the section the owner ratified allows, so the text stays as ratified until the answer, and either is a further amendment of 8.2.4, 8.2.5, 8.2.7 and 16.2.4 before EVS1-M6-06 builds. Answered 2026-11-13 (QD-801): option 2. It is written, each place marked, and 16.7's last amendment item lists the places. Three readings were taken in writing it, each where the answer's sentence allows more than one. "From nothing otherwise" refuses a push only where a file of its tree lies outside its signer's prefixes, so a signer the set names for every path creates any shared ref, an import's included, which is what makes option 2 wider than option 3. "Is or was a tip" is read as a tip a shared branch held at a version, never a commit of its history, since a push's middle commits are judged by nobody (16.2.13). And a branch whose first push the mounts refused is still a new name when it is pushed again.
 
-**details-amend-4-new-ref-stale-pin** (filed 2026-11-13, with QD-801's text). Should evs hold up the pin of a push that creates a ref? A push is judged under the set in force at its pin (QD-212), and D-EVS-18's fence holds a pin at or above the head's, so on a ref that exists a set binds once one push is pinned past it. A ref that does not exist has no head: `evsservice/check_gate.go` compares the pin with the head's only where there is one. A writer that runs its own code can therefore create a shared ref, in either mode, at a pin below the set that holds it, and QD-801's rule is then asked of the older set, or of none below the repo's first. Options: (1) leave it: 16.2.13 lists it, the alarm cannot see it since the push passes, and the remedy is to revoke the writer (as written). (2) evs's gate holds the pin of a push that creates or re-creates a ref at or above the position of the repo's newest `RepoPrefixRules` entry, which evs reads from the repo's `AclRepo` row once ACL-M2-18 folds it there (`evsservice/auth_state_acl.go` holds that row today): one clause in D-EVS-18's fence, answered 412 `GATE_CLOSED` so that an honest device behind on its log rebuilds as it does today, and it bounds the re-creation QD-802 left open too; it rests on evs enforcing it, as the fence does. (3) Readers alarm, and refuse nothing, when a creating push's signed time is more than 1 h past the entry time of a set it is pinned below. (4) Readers refuse on that test, which puts two clocks into a verdict (P2). Recommendation: 2. The text is not built on it: it changes what evs's gate checks, a D- item, and so needs the owner's word and a small task of its own in `evsservice/check_gate.go`, beside EVS1-M6-06 and blocking nothing there.
+**details-amend-4-new-ref-stale-pin** (filed 2026-11-13, with QD-801's text). Should evs hold up the pin of a push that creates a ref? A push is judged under the set in force at its pin (QD-212), and D-EVS-18's fence holds a pin at or above the head's, so on a ref that exists a set binds once one push is pinned past it. A ref that does not exist has no head: `evsservice/check_gate.go` compares the pin with the head's only where there is one. A writer that runs its own code can therefore create a shared ref, in either mode, at a pin below the set that holds it, and QD-801's rule is then asked of the older set, or of none below the repo's first. Options: (1) leave it: 16.2.13 lists it, the alarm cannot see it since the push passes, and the remedy is to revoke the writer (as written). (2) evs's gate holds the pin of a push that creates or re-creates a ref at or above the position of the repo's newest `RepoPrefixRules` entry, which evs reads from the repo's `AclRepo` row once ACL-M2-18 folds it there (`evsservice/auth_state_acl.go` holds that row today): one clause in D-EVS-18's fence, answered 412 `GATE_CLOSED` so that an honest device behind on its log rebuilds as it does today, and it bounds the re-creation QD-802 left open too; it rests on evs enforcing it, as the fence does. (3) Readers alarm, and refuse nothing, when a creating push's signed time is more than 1 h past the entry time of a set it is pinned below. (4) Readers refuse on that test, which puts two clocks into a verdict (P2). Recommendation: 2. The text is not built on it: it changes what evs's gate checks, a D- item, and so needs the owner's word and a small task of its own in `evsservice/check_gate.go`, beside EVS1-M6-06 and blocking nothing there. Answered 2026-11-13 (QD-803): option 2 (amended 2026-11-13, QD-803). It is written, each place marked: 16.2.9 holds the clause and the device's handling, 16.7 the task, EVS1-M6-07, and 16.8 the words for D-EVS-18 and §11.8. Six readings were taken in writing it, each where the answer's sentence allows more than one. "A ref" is a shared ref: the clause holds the refs the rules bind, by the one test of 16.2.4's line 1 that evs can make, so an owned ref, a deposit ref and the erasure ref are created at any pin as before, and a device whose log cannot move still creates its own refs. "Creates or re-creates" is evs's own test for a creating push, a head that is absent, a placeholder or deleted, whatever flags the push carries. "The newest prefix rule set" is the newest row, whatever a reader makes of its body, since evs sees no rule. The refusal is recorded and not final, by §11.8's own rule for a refusal that a head does not settle. "Rebuilding on its newer state" needs the device to have one, so a device follows its log once before it builds a creating push again, and sends nothing on the pin and generation evs just refused. And the model: `PrefixRules.tla` is unchanged and sound, its W being stronger than the design's, but `PrefixRulesReach-StalePin` records the push evs now refuses, so 16.7 gives the change the model should take in a pass that may edit it.
 
 ## 17. Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8)
 
