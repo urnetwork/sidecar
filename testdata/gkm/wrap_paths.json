@@ -62,5 +62,13 @@
     "generation": 0,
     "owner": true,
     "path": "gkm/9d9e4da1e3f0f820fe870ebe21822026/owner"
+  },
+  {
+    "name": "delegation key",
+    "group_id": "",
+    "generation": 0,
+    "network_id": "4754214e667e6b1d941c3d3882f502ec",
+    "delegation_id": "f9dc09cda106605f08dc4e4610fde3994e7c9e73bcf563eda8c9b59edf22b1b2",
+    "path": "gkm/dkey/4754214e667e6b1d941c3d3882f502ec/f9dc09cda106605f08dc4e4610fde3994e7c9e73bcf563eda8c9b59edf22b1b2"
   }
 ]
