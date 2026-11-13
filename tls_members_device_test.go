@@ -573,12 +573,47 @@ func TestSidecarSignTlsEdgeLoginNeedsAConsentedDevice(t *testing.T) {
 	}
 }
 
-// The front's config policy: a device vouches only while it is consented for the member, and not read_only,
-// suspended or revoked; one without a state vouches for nothing.
-func TestTlsFrontConfigPolicyDeviceConsentedNeedsAState(t *testing.T) {
-	policy := NewTlsFrontConfigPolicy(NewId(), func() *ConfigState { return nil })
-	if policy.DeviceConsented(NewId(), NewId(), time.Now()) {
+// The front's config policy over a real log: the member's consented device vouches for its member alone; a device an
+// admin admitted without the member's consent, a read_only one and a revoked one vouch for nothing; and with no state
+// nothing does.
+func TestTlsFrontConfigPolicyDeviceConsented(t *testing.T) {
+	now := time.Now()
+	if NewTlsFrontConfigPolicy(NewId(), func() *ConfigState { return nil }).DeviceConsented(NewId(), NewId(), now) {
 		t.Error("consented with no state")
+	}
+	net := newTestConfigNet(t)
+	member, first := net.consentedMember("m")
+	policy := NewTlsFrontConfigPolicy(net.owner.sidecarId, func() *ConfigState { return net.log.State() })
+	if !policy.DeviceConsented(first.sidecarId, member, now) {
+		t.Error("the member's consented device")
+	}
+	if policy.DeviceConsented(first.sidecarId, net.ownerMemberId, now) {
+		t.Error("for another member")
+	}
+
+	// the owner, an admin, admits one of m's devices alone: parked until m's consented device confirms it
+	adminAdmitted := net.device("m admin admitted", member)
+	net.admitDevice(net.owner, adminAdmitted, 0)
+	readOnly := net.device("m read only", member)
+	net.admitDevice(first, readOnly, uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY))
+	second := net.device("m second", member)
+	net.admitDevice(first, second, 0)
+	acl, err := net.log.State().Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acl.ConsentedFor(adminAdmitted.sidecarId, member) || policy.DeviceConsented(adminAdmitted.sidecarId, member, now) {
+		t.Error("a device the member has not consented")
+	}
+	if !acl.ConsentedFor(readOnly.sidecarId, member) || policy.DeviceConsented(readOnly.sidecarId, member, now) {
+		t.Error("a read_only device, consented, vouches")
+	}
+	if !policy.DeviceConsented(second.sidecarId, member, now) {
+		t.Error("the member's second consented device")
+	}
+	net.mustPost(first, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(second, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
+	if policy.DeviceConsented(second.sidecarId, member, now) || policy.IdentityKey(second.sidecarId) != nil {
+		t.Error("a revoked device")
 	}
 }
 
