@@ -734,6 +734,9 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	}()
 	// §16.5's tools, each registered from its owner's file, their W calls recorded as tool_call entries through ingest
 	mcp.NewDaemonMcpCatalog(mcpServer, ingest).Install(mcpServer)
+	// §16.6's harness evidence: each PermissionRequest the capture sealed, kept for a network's gate to ask about
+	// (MCP-M3-10), on the hook path after the ingest's capture
+	mcp.NewHarnessEvidenceStore(settings.Ingest, settings.Clock).Install(mcpServer)
 	// §16.6's config check over the seals ur install-harness wrote (cmd_install_harness.go): a harness with none, or
 	// whose files no longer hold ur's entries, taints its runs
 	mcpServer.Binder().SetConfigCheck(mcp.NewHarnessConfigHashes(&mcp.HarnessConfigHashesArgs{
