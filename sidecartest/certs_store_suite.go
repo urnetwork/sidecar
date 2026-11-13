@@ -76,6 +76,7 @@ func certsSuiteCases() []certsSuiteCase {
 		{name: "a set's orders are those at the CA since a time", run: caseCertsSetOrders},
 		{name: "new-set orders are the first certificates of their sets", run: caseCertsNewSetOrders},
 		{name: "the queue reads queued rows after its cursor, oldest first", run: caseCertsQueue},
+		{name: "rows are listed by their states after a cursor, oldest first", run: caseCertsInStates},
 		{name: "a purge takes what ended before its time, and only that", run: caseCertsPurge},
 		{name: "an ephemeral client reads as one", run: caseCertsEphemeral},
 	}
@@ -543,6 +544,104 @@ func caseCertsQueue(ctx context.Context, store certsservice.CertsStore, hooks *C
 	}
 	if len(got) != 1 {
 		return fmt.Errorf("a count of one read %d", len(got))
+	}
+	return nil
+}
+
+func caseCertsInStates(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
+	base := certsSuiteBase()
+	networkId := sidecar.NewId()
+	rows := []*sidecar.TlsCertRecord{}
+	for index := range 5 {
+		rows = append(rows, certsSuiteRow(networkId, base.Add(time.Duration(index)*time.Millisecond)))
+	}
+	for _, row := range rows {
+		if err := store.InsertCert(ctx, row); err != nil {
+			return err
+		}
+	}
+	// 0 stays queued, 1 is ordering, 2 waits on DNS, 3 is issued, 4 is revoking
+	move := func(row *sidecar.TlsCertRecord, from sidecar.TlsCertState, to sidecar.TlsCertState) error {
+		applied, err := store.TransitionCert(ctx, &certsservice.CertsTransition{
+			CertId: row.CertId, From: []sidecar.TlsCertState{from}, To: to, Ca: certsservice.CertsCaGts,
+		})
+		if err != nil {
+			return err
+		}
+		if !applied {
+			return fmt.Errorf("the transition to %s did not apply", to)
+		}
+		return nil
+	}
+	for _, row := range rows[1:3] {
+		if err := move(row, sidecar.TlsCertStateQueued, sidecar.TlsCertStateOrdering); err != nil {
+			return err
+		}
+	}
+	if err := move(rows[2], sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns); err != nil {
+		return err
+	}
+	for _, row := range rows[3:] {
+		if err := certsSuiteIssue(ctx, store, row, certsservice.CertsCaGts, fmt.Sprintf("%x", certsSuiteRandom(8)), base); err != nil {
+			return err
+		}
+	}
+	if err := move(rows[4], sidecar.TlsCertStateIssued, sidecar.TlsCertStateRevoking); err != nil {
+		return err
+	}
+	// a cursor just before the case's range: a row of the shared table before it is not read
+	before := CertsIdAt(base.Add(-time.Millisecond))
+	underWay := []sidecar.TlsCertState{sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns}
+	got, err := store.ListInStates(ctx, underWay, before, 1000)
+	if err != nil {
+		return err
+	}
+	if own := certsSuiteOwn(got, rows...); !slices.Equal(own, []sidecar.Id{rows[1].CertId, rows[2].CertId}) {
+		return fmt.Errorf("under way %v", own)
+	}
+	got, err = store.ListInStates(ctx, underWay, rows[1].CertId, 1000)
+	if err != nil {
+		return err
+	}
+	if own := certsSuiteOwn(got, rows...); !slices.Equal(own, []sidecar.Id{rows[2].CertId}) {
+		return fmt.Errorf("under way after the first %v", own)
+	}
+	for _, single := range []struct {
+		state sidecar.TlsCertState
+		want  sidecar.Id
+	}{
+		{sidecar.TlsCertStateIssued, rows[3].CertId},
+		{sidecar.TlsCertStateRevoking, rows[4].CertId},
+	} {
+		got, err = store.ListInStates(ctx, []sidecar.TlsCertState{single.state}, before, 1000)
+		if err != nil {
+			return err
+		}
+		if own := certsSuiteOwn(got, rows...); !slices.Equal(own, []sidecar.Id{single.want}) {
+			return fmt.Errorf("%s rows %v", single.state, own)
+		}
+	}
+	got, err = store.ListInStates(ctx, []sidecar.TlsCertState{sidecar.TlsCertStateQueued, sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns}, before, 2)
+	if err != nil {
+		return err
+	}
+	if len(got) != 2 {
+		return fmt.Errorf("a count of two read %d", len(got))
+	}
+	for _, read := range []struct {
+		states []sidecar.TlsCertState
+		count  int
+	}{
+		{nil, 1000},
+		{underWay, 0},
+	} {
+		got, err = store.ListInStates(ctx, read.states, before, read.count)
+		if err != nil {
+			return err
+		}
+		if len(got) != 0 {
+			return fmt.Errorf("states %v with a count of %d read %d rows", read.states, read.count, len(got))
+		}
 	}
 	return nil
 }

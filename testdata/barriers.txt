@@ -50,8 +50,11 @@ barrier certs.acme_order.before certsservice/acme.go
 barrier certs.admit.transition certsservice/queue.go
 barrier certs.dns_write.after certsservice/solver_dns01.go
 barrier certs.dns_write.before certsservice/solver_dns01.go
+barrier certs.revocation.mark certsservice/run.go
 barrier certs.revoke.after certsservice/revoke.go
 barrier certs.revoke.before certsservice/revoke.go
+barrier certs.run_order.before certsservice/run.go
+barrier certs.run_order.issued certsservice/run.go
 barrier config.apply config_apply.go
 barrier config.apply.after config_apply.go
 barrier config.apply.before config_apply.go
