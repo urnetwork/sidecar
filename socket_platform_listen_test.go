@@ -1,4 +1,4 @@
-//go:build !sidecar_http && !ios_extension
+//go:build !sidecar_http && !js
 
 // SOCK-M9-01's client side (T1 on the pipe seam): a platform listener's admission is §9.6's steps 1 to 5 and 7, with no
 // config, and a sidecar dials a ur/ name with no Hello, claim or listen grant, holding only a ticket the service

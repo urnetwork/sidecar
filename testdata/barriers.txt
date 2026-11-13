@@ -445,7 +445,9 @@ barrier socket.share.reserve.before socket_share.go
 barrier sockets.client_removed.after socketsservice/sweep.go
 barrier sockets.client_removed.before socketsservice/sweep.go
 barrier sockets.find.pair.after socketsservice/find.go
+barrier sockets.find.pair.after socketsservice/namespace_ur.go
 barrier sockets.find.pair.before socketsservice/find.go
+barrier sockets.find.pair.before socketsservice/namespace_ur.go
 barrier sockets.find.pick.after socketsservice/find.go
 barrier sockets.find.pick.before socketsservice/find.go
 barrier sockets.find.recheck.after socketsservice/find.go
