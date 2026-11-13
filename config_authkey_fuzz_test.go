@@ -18,7 +18,7 @@ func FuzzAuthKeyString(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, text string) {
-		authKey, err := ParseAuthKey(text)
+		authKey, err := ParseAuthKey(text, nil)
 		if err != nil {
 			if authKey != nil {
 				t.Fatal("a key beside an error")

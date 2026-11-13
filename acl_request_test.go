@@ -164,17 +164,26 @@ func TestMatchAclRequestLifetime(t *testing.T) {
 }
 
 // ParseAclGrantAction reads a CanonicalAction's grant fields and refuses one with no subject, rule, destination or
-// action.
+// action. A forward's action, version 4, names its target alone in the clear, so its ask holds no port (QD-740); port
+// text, which only a sealed_detail's grant_dst holds, reads as one port however often it is written.
 func TestParseAclGrantAction(t *testing.T) {
 	subject, ruleId := testConfigId("action subject"), testConfigId("action rule")
-	action := &protocol.CanonicalAction{
-		RuleId: ruleId.Bytes(), Subject: subject.Bytes(), ExpiresMillis: 77,
-		GrantDst: []string{aclTestDst(subject) + ":tcp:22", aclTestDst(subject) + ":tcp:22"}, GrantAllow: []string{"dial", "dial"},
+	action := aclTestGrantAction(ruleId.Bytes(), subject, []string{aclTestDst(subject) + ":tcp:22", aclTestDst(subject) + ":tcp:22", aclTestDst(testConfigId("action target"))},
+		[]string{"dial", "dial"}, 77)
+	if _, err := ParseStoredCanonicalAction(testConfigMarshal(t, action)); err != nil {
+		t.Fatal(err)
 	}
 	ask, err := ParseAclGrantAction(action)
 	if err != nil || ask.Subject != subject || !bytes.Equal(ask.RuleId, ruleId.Bytes()) || ask.ExpiresMs != 77 || len(ask.Dst) != 2 ||
-		len(ask.Ports) != 1 || len(ask.Allow) != 1 {
+		len(ask.Ports) != 0 || len(ask.Allow) != 1 {
 		t.Fatalf("%+v, %v", ask, err)
+	}
+	detailed := &protocol.CanonicalAction{
+		RuleId: action.RuleId, Subject: action.Subject,
+		GrantDst: []string{aclTestDst(subject) + ":tcp:22", aclTestDst(subject) + ":tcp:22"}, GrantAllow: action.GrantAllow,
+	}
+	if ask, err := ParseAclGrantAction(detailed); err != nil || len(ask.Dst) != 2 || len(ask.Ports) != 1 {
+		t.Fatalf("a detail's port text: %+v, %v", ask, err)
 	}
 	for _, edit := range []func(action *protocol.CanonicalAction){
 		func(action *protocol.CanonicalAction) { action.Subject = nil },

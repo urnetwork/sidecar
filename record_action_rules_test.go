@@ -257,6 +257,61 @@ func TestCanonicalActionVersionFourTakesOnlyItsFields(t *testing.T) {
 	}
 }
 
+// A bridge_forward takes version 4 alone (QD-740): the shape before it, a forward at version 1, is refused by every
+// parser and by the builder, with its port in the clear, with none, and as a template, and so is one at version 2 or
+// 3. And at every version a clear grant_dst names its destination alone, so another kind's version-1 action naming a
+// port or a prefix is refused as a forward's would be.
+func TestForwardTakesVersionFourAloneAndNoVersionShowsAPort(t *testing.T) {
+	known := testRecordVersionsKnown(1, 2, 3, 4)
+	forwards := map[string]func(action *protocol.CanonicalAction){
+		"version 1":            func(action *protocol.CanonicalAction) { action.Version = 1 },
+		"version 1, no detail": func(action *protocol.CanonicalAction) { action.Version, action.SealedDetail = 1, nil },
+		"version 1, a clear port": func(action *protocol.CanonicalAction) {
+			action.Version, action.SealedDetail, action.GrantDst = 1, nil, []string{testActionTargetDst + ":tcp:8443"}
+		},
+		"version 1, a template": func(action *protocol.CanonicalAction) {
+			action.Version, action.SealedDetail, action.Scope = 1, nil, true
+		},
+		"version 2": func(action *protocol.CanonicalAction) { action.Version, action.SealedDetail = 2, nil },
+		"version 3": func(action *protocol.CanonicalAction) { action.Version = 3 },
+	}
+	for name, change := range forwards {
+		action := testRecordSealedGrantAction()
+		change(action)
+		if err := canonicalActionCheck(action, known); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("a forward at %s: %v", name, err)
+		}
+		if _, err := newCanonicalAction(action, known); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("a forward built at %s: %v", name, err)
+		}
+	}
+	bare := &protocol.CanonicalAction{Kind: uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD), Version: 1}
+	if _, err := ParseStoredCanonicalAction(testRecordStored(t, bare)); !errors.Is(err, ErrCanonicalActionInvalid) {
+		t.Errorf("a forward at version 1 with no field: %v", err)
+	}
+
+	listen := func(dst string) *protocol.CanonicalAction {
+		return &protocol.CanonicalAction{
+			Kind:       uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_LISTEN),
+			Version:    1,
+			GrantDst:   []string{"sock:tls/443/blog", dst},
+			GrantAllow: []string{"listen"},
+			RuleId:     bytes.Repeat([]byte{0x36}, 16),
+			Subject:    bytes.Repeat([]byte{0x37}, 16),
+		}
+	}
+	for _, dst := range []string{testActionTargetDst + ":tcp:8443", testActionTargetDst + ":udp:53", "ip:192.0.2.0/24", "ip:2001:db8::/32"} {
+		if _, err := ParseStoredCanonicalAction(testRecordStored(t, listen(dst))); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("a version-1 action whose grant_dst names a port or a prefix: %v", err)
+		}
+	}
+	for _, dst := range []string{testActionTargetDst, "dns:blog.example", "network:0102030405060708090a0b0c0d0e0f10", "mail:*"} {
+		if _, err := ParseStoredCanonicalAction(testRecordStored(t, listen(dst))); err != nil {
+			t.Errorf("a version-1 action whose grant_dst names a destination alone: %v", err)
+		}
+	}
+}
+
 // Field 37 is version 2's, and a version-2 action with versioning on carries none.
 func TestCanonicalActionFieldThirtySevenOnlyAtVersionTwo(t *testing.T) {
 	known := testRecordVersionsKnown(1, 2)

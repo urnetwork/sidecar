@@ -8,7 +8,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 
 | # | Problem | Tasks held | Status |
 |---|---|---|---|
-| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10) |
+| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10; amended 2026-11-12, QD-760) |
 | 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10) |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | complete (2026-11-11) |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
@@ -18,14 +18,14 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 8 | Git and evs in both directions | 3 | complete (2026-11-10) |
 | 9 | Client path epochs and re-tokenizing | 3 | complete (2026-11-10) |
 | 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | complete (2026-11-11) |
-| 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10) |
+| 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10; amended 2026-11-12, QD-760) |
 | 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11) |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 | 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
 
-Status: complete (2026-11-10)
+Status: complete (2026-11-10; amended 2026-11-12, QD-760: 1.2.2, 1.2.4, 1.2.9, 1.3, 1.5, 1.6, 1.7 and 1.8, each place marked)
 
 Tasks held until complete: SEARCH-M10-10, SEARCH-M10-11, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, SEARCH-M10-35, TEST-M10-02.
 
@@ -193,6 +193,11 @@ decoders        a slot whose diff names a base that no other file of its writer 
                 format when the slot is unabsorbed: index_malformed names the slot's signer. Under R1 and R2 no
                 honest writer's slot can be in that state (I1), so the alarm no longer falls on a writer that
                 wrote by the rules. In an absorbed slot nothing is checked.
+past a shard    (amended 2026-11-12, QD-760) a full entry whose row and key set section 11's D6 skips
+                (11.2.3: lone(d) past ShardBody) holds a value past its cap, as one whose key set passes
+                KeySetMax does: a decoder refuses its file and index_malformed names its signer. A diff whose
+                composed set D6 skips under the diff's own row is malformed where it is composed, as a diff
+                with no base is. No honest writer writes either: D6 made that version a tombstone.
 ```
 
 Nothing server-visible changes: no column, key, object family or proto field (I-18).
@@ -272,7 +277,8 @@ merge(N at base b, extra = none):
       the shards' entry of the key: a row or a tombstone
       each entry of the key in a slot of U_W: a full entry or a tombstone as it is; a diff composed onto
           its base (1.2.1). A diff whose base is missing is malformed: it is left out and alarms
-          index_malformed {signer: the slot's} (I1 says an honest slot never has one)
+          index_malformed {signer: the slot's} (I1 says an honest slot never has one). So is a diff whose
+          composed set D6 skips under the diff's row (1.2.2; amended 2026-11-12, QD-760)
       the full entry of each large entry in U_W
       extra, when a push merges its own entries (1.2.3) or a roll-up promotes (1.2.5)
   winner(key) = the candidate with the highest version. At one version: a tombstone; then the shards' own
@@ -292,7 +298,8 @@ layout(shards by ascending n, winners):
     take(Y, A): if Y with all of A encodes within ShardBody, all of A. Else the count c found by:
         lo = 0; hi = len(A); while lo < hi: mid = (lo + hi + 1) / 2;
             if Y with A[0:mid] encodes within ShardBody then lo = mid else hi = mid - 1; c = lo
-    Y takes A[0:c]. While A has more: Y = a new shard, the highest n + 1, and take again.
+    Y takes A[0:c]. While A has more: Y = a new shard, the highest n + 1, and take again. A new shard
+    takes at least one: every document of A is one D6 kept (below; amended 2026-11-12, QD-760).
   3 scanning by ascending n: while a shard and the next one after it come to fewer than ShardJoin bytes
     before their pads, the two become one under the lower n; the joined shard is tested again with its next.
   4 a shard left with no row and no tombstone is removed.
@@ -301,6 +308,16 @@ layout(shards by ascending n, winners):
 ```
 
 `take` is stated as a procedure because a shard's length is not quite monotone in its documents: re-blocking by 64 can save a few bytes when a key is added (QD-173 found the mirror of it). Every implementation runs the same search, so every one finds the same c. "Encodes within" is the length the shard encoder gives before the pad.
+
+**A new shard always takes** (amended 2026-11-12, QD-760; question search-m10-10-document-past-a-shard, option 1). As first written, nothing here said what `take` does with a document no shard can hold: one within KeySetMax whose row, dictionary entries and lists pass ShardBody in a shard of its own. An empty shard takes none of it and step 2's loop does not end; the landed `indexLayout` refuses instead (`errIndexMergeUnplaceable`), and the bucket stops merging. The owner's answer puts the rule at extraction: section 11's D6 skips a document whose bound lone(d) passes ShardBody (11.2.3), so it has no entry, and a tombstone where it was indexed before. Step 2 then ends, on three facts:
+
+- lone(d) is at least 33 B above the encoded length, before its pad, of a shard holding d alone, in a bucket or in all, at any pad generation, version and time (11.2.3). A tombstone alone encodes in under 128 B.
+- Every member of A is a tombstone or a document D6 kept. A full entry is held to D6 by its decoder, and a diff's composed set where it is composed (1.2.2). `extra` comes from `prepare`, which applies D6, or from a shard, and a shard's rows were placed by this layout: by induction over the pushes that wrote the bucket's and all's shards, each row passed D6 when it entered.
+- `take`'s search tries one member before it settles on none: with lo = 0 and hi at least 1, mid is at least 1, and hi falls to 0 only once mid = 1 has failed.
+
+So `take` on an empty shard returns at least 1, each pass of the loop places at least one member of A, and step 2 opens at most len(A) shards. `errIndexMergeUnplaceable` stays where it is, as a closed guard: an empty shard that takes nothing fails the merge, which writes nothing, and no input a decoder accepts reaches it. No model covers this: `IndexMerge.tla` leaves sizes out (1.3), so the argument is these three facts, each held by a test of 1.6.
+
+The rule closes step 2 and nothing else. Measuring it showed two other ways a layout's shard passes ShardBody, which the decision does not reach and this amendment does not change: step 3 joins two shards that come to under ShardJoin whose join does not encode within ShardBody (16 documents sharing 60,000 keys, 372,510 B, and 2,000 small ones, 119,795 B: lists that were two-byte bitsets become sixteen docids each), and step 1 can lengthen a full shard by removing a document, through the re-blocking (2,447 B on a built case). In both the encoder refuses, the merge writes nothing and its bucket stops merging, as it did for the document above. Question `details-amend-2-layout-past-the-cap` asks what a layout does there.
 
 A merge whose winners are all the shards' own entries still commits: the manifest alone, so that the writers can reuse their slots.
 
@@ -506,7 +523,8 @@ chains           a diff resolves in one step, from the full entry in its own wri
 malformed        an unabsorbed diff with no base is index_malformed naming the slot's signer, and its document
                  reads not yet searchable until a host with the text re-enters it (§11.14's chains row). The
                  row's "a diff below its key's newest entry is no candidate, resolved or not, and alarms
-                 nothing" goes: under I1 there is no such diff to excuse.
+                 nothing" goes: under I1 there is no such diff to excuse. An unabsorbed diff whose composed
+                 set D6 skips under its row reads the same way (1.2.2; amended 2026-11-12, QD-760).
 ```
 
 Newest-wins over every partition a device holds, the version table, masks and retained buckets are as §11.14 has them.
@@ -548,7 +566,7 @@ I8 a function      every file a writer's push, a merge or a roll-up writes is a 
 
 **The model.** `IndexMerge.tla` holds one index ref over three windows: two writers' slots (two each, three in one configuration, with seqs), their large entries, a shard and a manifest a bucket, all, the lock, and the content of two documents, d2 edited four times and d3 created and then deleted by a commit that skips the index. The journaler's entries trail their content; the backfiller indexes what no entry reaches. A head push has four shapes (create, append, seal as the head stood, fill and open the next slot), an entry may be full or a diff where a base stands, and a push built in one step commits in another, with anything between. A writer's process may die with a push in flight that still lands. Merges, a roll-up under its lock with two rollers, crashes and lapses run beside them. A head push is refused only by its own files' CAS, never by a manifest (1.1 F). Constants switch each rule between the design and §11.14 as written, and `Twin` breaks one rule of the design.
 
-What it leaves out, and why that is safe. Sizes: KeepSlots and the delta bound only turn diffs into full entries, and the model lets either be chosen. Several shards a bucket: `layout` is a function of the winners, and the model's one shard makes the shard's CAS and the manifest's the same step, so `PromoteBlind` removes both. Ref tombstones follow a document tombstone's rule with a ref for a key. Pushes carry one entry; a push of several is some sequence of these with fewer states between. D-EVS-45's move is one of the placements the model already allows. Coverage rows are not modelled: what is indexed is a ghost, and a backfill is whatever the content holds that no entry reaches. The erasure's CUT, CLOSUREs and epoch are `IndexRollup.tla`'s, and SEARCH-M10-46 joins the two. A DROP's rewrite is not modelled: its rule (1.2.3) is argued under I1 and held by FS-107's case.
+What it leaves out, and why that is safe. Sizes: KeepSlots and the delta bound only turn diffs into full entries, and the model lets either be chosen. D6's shard test is a size too (amended 2026-11-12, QD-760): a version it skips is a tombstone, which the model has, and that a new shard takes at least one is 1.2.4's argument, not a run's. Several shards a bucket: `layout` is a function of the winners, and the model's one shard makes the shard's CAS and the manifest's the same step, so `PromoteBlind` removes both. Ref tombstones follow a document tombstone's rule with a ref for a key. Pushes carry one entry; a push of several is some sequence of these with fewer states between. D-EVS-45's move is one of the placements the model already allows. Coverage rows are not modelled: what is indexed is a ghost, and a backfill is whatever the content holds that no entry reaches. The erasure's CUT, CLOSUREs and epoch are `IndexRollup.tla`'s, and SEARCH-M10-46 joins the two. A DROP's rewrite is not modelled: its rule (1.2.3) is argued under I1 and held by FS-107's case.
 
 **The runs**, on 2026-11-10 with TLC from tla2tools at d8fb231, through `run-indexmerge.sh`, on a host shared with the build lanes. Every run but one is breadth-first over its whole state graph. The one marked simulation draws 4,000 traces a worker from a fixed seed and shows only that those kept every invariant.
 
@@ -815,6 +833,14 @@ a deleted document indexed     a host with the text that meets a live entry whos
 a diff with no base            only a writer off the rules, or damage, leaves one in an unabsorbed slot:
                                index_malformed names the slot's signer; a merge leaves the diff out; a host with
                                the text re-enters the document full (§11.14's chains row).
+a document past a shard        (amended 2026-11-12, QD-760) skipped at extraction (section 11's D6): no entry,
+                               and a tombstone where it was indexed before, so no merge, push past DirectBytes
+                               or roll-up meets one. It is not searchable, as a document past KeySetMax already
+                               is not. A full entry of one, which only a writer off the rules leaves, is past
+                               its cap: a decoder refuses its file and index_malformed names its signer; a diff
+                               that composes to one is left out as a diff with no base is. Behind both,
+                               errIndexMergeUnplaceable: an empty shard that takes nothing fails the merge,
+                               which writes nothing.
 a runner that rolls early      a roll-up whose signed time is before its bucket's expiry is caught by every
                                reproducer: index_mismatch naming it. Its effect is a roll-up done early, which
                                breaks no invariant but R5's margin.
@@ -872,6 +898,33 @@ journal       a unit written at settle and not before; a companion build's read 
 
 **Mutants.** Each twin of 1.3 is a mutant of the code and must fail a named test: a seal that leaves the head unwritten (R2's two-push test); a seal that reuses a kept slot, a push that removes a kept large entry and a merge that removes large entries (FS-107, caches discarded); a merge that drops a tombstone and a roll-up that reads no head (FS-108); a roll-up that drops a tombstone above a newer bucket's older entry, and one that writes the target's shard without its manifest (FS-75's promotion case); a companion build that reads content before the index or from a cached pin, and one that resends after TIME_AHEAD (the journal tests).
 
+**D6 at the merge** (amended 2026-11-12, QD-760). The fix track's tests, each a top-level test beside the code it holds (`evs_index_merge_test.go`, `evs_index_codec_test.go`, `evs_index_fake_test.go`); section 11.6 has D6's own:
+
+```text
+merge/ vector                 take at the cap where the next winner is a document with lone = ShardBody: the
+                              shard opened for it holds it alone and encodes within ShardBody
+TestADocumentPastAShardNeverReachesAMerge
+                              on the fake store: 11.6's chunk of mixed-script letters, indexed before as a
+                              smaller text, is skipped at prepare; the push carries its tombstone, a push past
+                              DirectBytes that carries it beside other documents merges them, and the bucket's
+                              next merge and its roll-up commit
+TestAnEntryPastAShardIsRefused
+                              the entry codec refuses to write and to read a full entry D6 skips, at lone =
+                              ShardBody + 1 and not at ShardBody (keys 0 to n - 1 under a 36 B row, n = 199,609
+                              and 199,608); a slot holding one is index_malformed naming its signer; a diff
+                              whose composed set passes the bound under its row is left out of the merge,
+                              reported with its signer, and the merge commits the rest
+TestAnUnplaceableLayoutWritesNothing
+                              the guard, kept: TestIndexMergeUnplaceable as landed under this name. A merge
+                              handed, as extra and so past the decoders, a document over the bound returns
+                              errIndexMergeUnplaceable and no file
+TestANewShardTakesAtLeastOne  for generated winners that D6 kept, at the widest header, version and time:
+                              take on an empty shard returns at least 1, and step 2 opens at most len(A) shards
+FuzzIndexLayoutTakes          any shards and any winners D6 kept: layout never returns errIndexMergeUnplaceable
+```
+
+Mutants: a decoder without the bound fails `TestAnEntryPastAShardIsRefused`; a merge that composes without it fails the same test's diff case; a layout without the guard does not return from `TestAnUnplaceableLayoutWritesNothing`, which runs under a deadline.
+
 ### 1.7 Implementation notes, task by task
 
 Order: SEARCH-M10-45 first, since every other task plans on its `plan`. Then SEARCH-M10-10, then SEARCH-M10-11 and SEARCH-M10-12 together, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, and the schedules as their mechanisms land. SEARCH-M10-46 at any time. All are the evs lane's. Entries for the two new tasks are in `.stack/plan/proposals/details-1-tasks.md`.
@@ -903,6 +956,26 @@ testdata/index/head/      rewritten to 1.6's list
 Traps: bases are chosen against the files as the push's base shows them, never against a slot this same push writes; the keep set is recomputed from the plan's own result, in key order, so two builds agree; the head rule holds for a push that writes only large entries and for one that merges its own entries; `indexComposeDelta` has no caller left in a writer and stays for tests of INDEX-FORMAT.md's Deltas.
 
 **SEARCH-M10-10, bucket merges** (held; L; its Build changes). Build 1.2.4: `indexMerge` as the pure function `merge` with `layout` and `take`, and `IndexMerger` as its runner. Needs: SEARCH-M10-45 in place of SEARCH-M10-09 alone. What leaves its plan entry: heads as an input, the output row's "unless" clause, "absorbed large entries are removed", and "never drop a base a current head names", which is now the writer's keep rule. What joins it: `extra` entries and a no-absorb mode, for a push that merges its own entries and for SEARCH-M10-11's promotions; the tie order; a manifest-only commit; restart on `collected`. Proposed shapes: `indexMergeArgs{bucket *indexViewBucket, extra []*indexEntry, absorb bool, erased func(key, version) bool, padKey *indexPadKey, tables indexTables}` and `indexMergeResult{shards []*indexPlannedFile, removedShards []*indexPushRemoval, manifest *indexPlannedFile, malformed []*indexMalformedDiff}`. Barriers `evs.index.merge.built`, `.uploaded`, `.pushed`. Traps: the shard encoder is called up to 12 times by `take` when a shard fills, so `take` asks it for a length, not bytes, and the encoder must reach §11.14's 7 to 10 ns a posting first (the draft measured 843 ns under load, 1.4); on an app host the inputs stay in storage and the merge is a k-way pass over their key streams (1.4); the watermark is the highest seq read, never the head's; a merge writes no slot and removes no large entry. Tests: 1.6's merge vectors and fake-store cases; FS-74's two mergers; FS-107's and FS-108's merge clauses.
+
+**SEARCH-M10-10's fix track for QD-760** (amended 2026-11-12, QD-760). The merge side of the skip rule; section 11.7 has the extraction side, which lands first or with it, since this side calls its function. Landed code that changes:
+
+```text
+evs_index_entry.go        indexEntry.check, which the encoder and the decoder both run, refuses a full entry
+                          whose row and key set D6 skips (indexMalformed "an entry past a shard"), after the
+                          key set's own cap
+evs_index_merge.go        where a diff is composed onto its base, a composed set that D6 skips under the
+                          diff's row joins indexMergeResult.malformed with its slot's signer and is left out,
+                          as a diff with no base is. indexLayout keeps errIndexMergeUnplaceable and its test
+                          of an empty shard that took nothing; its comment says D6 makes it unreachable and
+                          that it stays as the closed guard
+search_chains.go          searchResolveChain holds a composed set to the same test: a diff that fails it
+                          reads as a diff with no base does (1.2.9)
+evs_index_merge_test.go   TestIndexMergeUnplaceable becomes TestAnUnplaceableLayoutWritesNothing; 1.6's other
+                          tests; testdata/index/merge/ gains its vector
+protocol/INDEX-FORMAT.md  1.8's two sentences
+```
+
+Traps: the bound is computed on the row's bytes as the entry holds them, never on a row built again from fields, so a decoder and a writer cannot differ by a trimming; a merge must not skip a document itself, since a merge's output is only its inputs' newest versions (the question's option 3 was not taken), so it either places a winner or fails; `take` still asks the encoder for a length and never uses lone(d) in its place, since lone is an upper bound and the layout's bytes are the encoder's.
 
 **SEARCH-M10-11, roll-ups and the index lock** (held; L; its Build changes). Build 1.2.5. `indexRollup` is pure over S whole, all, and a lookup "the newest version of this key in the newer buckets", which the runner answers from §5.9's version table where CORE-M10-02 has landed and else from a key-to-version run built in storage from the newer buckets' doc tables and slots. Step 4's in-place rewrite leaves the task: the roll-up calls `indexMerge` with `extra` and `absorb` false for each promotion target. `rewriteWithout` (landed, SEARCH-M10-05) keeps its two other callers, a CLOSURE and a DROP. Expiry is judged at the push's signed time, for the trigger, the lock and the merge runner's "never on an expired bucket"; the lock renews at half its term. `indexer_search.go` schedules merges, roll-ups and backfills as planned. Step 5's coverage rows go into the runner's own head in the newest bucket through `indexPlanHead` with no document. Traps: read S, the newer buckets and all at one head version taken after the lock commits; a 409 that is not the lock's keeps the lock and reruns from the read; a promotion writes the target's manifest even when it had none; a/m's `rolled_through_day` and I-EVS-11 as 1.8 words them. Tests: 1.6's roll-up vectors (one with a promotion replaces "one removing an older newer-bucket entry"); FS-75's barriers; the promotion races.
 
@@ -970,6 +1043,8 @@ Traps: bases are chosen against the files as the push's base shows them, never a
 **§22.8, the model row.** `details/IndexMerge.tla` beside `IndexRollup.tla`: "own bases and the head rule, merges, promotion and the pin, with §11.14's rules as written as failing configurations".
 
 **protocol/INDEX-FORMAT.md** (SEARCH-M10-45 writes it). Entries: after "A diff's base version is below its version, and no key is in both of its sets": "A diff stands only in a slot. Its base is the full entry of its key at its base version in another file of the same writer and bucket: a slot that is not that writer's head, or a large entry; of two, the one in the file with the higher seq." Deltas: "Format 1's writers take every delta against the base itself, so nothing composes two deltas; the rule stands for readers of a later format." Slots and large entries: "A large entry's one entry is full." and, for "`coverage` is strictly ascending by ref_id", "`coverage` ascends by ref_id, then horizon false before true, with at most one row of each a ref." Shards gains `take` and the join as 1.2.4 has them, and the tie order. Small files: "`absorbed` holds a row for each writer with a watermark above 0; a manifest may list no shard." Times: "An entry's time is that of the content push that made its version; its bucket follows the signed time of the index push that carries it."
+
+**Amended 2026-11-12, QD-760.** §11.14, Merges, the output row: after "a next one opening at the cap" add ", which takes at least one, since extraction skips a document that alone would not fit a shard (sniff row)". The sniff row's own words are section 11.8's. protocol/INDEX-FORMAT.md, in the fix track's change: Entries, for "A key set encodes to at most 512 KiB, since a chunk past that is skipped." read "A key set encodes to at most 512 KiB, and a full entry's row and key set pass D6's shard test, since a document past either is skipped; a decoder refuses an entry past either, and a diff whose composed set fails the test under its own row is malformed, as a diff with no base is." Shards, Merges, after "takes again from there": "A new shard takes at least one row, since D6 keeps no document that alone would not fit; an implementation whose empty shard takes nothing has met an input off the rules and writes nothing."
 
 Nothing server-visible changes: no column, key, object family or proto field (I-18), and §2.8's evs-26 keeps its words but for the shape row's phrase above.
 
@@ -8610,7 +8685,7 @@ This section is designed on the recommendation of each.
 
 ## 11. Canonical text extraction and exact body sizes for search
 
-Status: complete (2026-11-10)
+Status: complete (2026-11-10; amended 2026-11-12, QD-760: 11.2.1, 11.2.3, 11.2.7, 11.4, 11.5, 11.6, 11.7 and 11.8, each place marked)
 
 Tasks held until complete: SEARCH-M10-31, SEARCH-M10-36.
 
@@ -8716,6 +8791,8 @@ SniffWindow      8,000 B   the bytes that decide text or binary (S2)
 TitleMax            80 B   a file's title (S4)
 FieldCut         1,024 B   normalized subject, from, to and title (N6)
 KeySetMax      524,288 B   a key set's encoding, past which its document is skipped (D6)
+ShardLone          128 B   what D6 counts for the header, doc_key, version and time of a shard holding one
+                           document; D6 reads ShardBody, 1,032,192 B, from 1.2.1 (amended 2026-11-12, QD-760)
 ```
 
 Tables, each part of extractor 1 or normalizer 1:
@@ -8786,9 +8863,27 @@ D5  A document's row is INDEX-FORMAT.md's: its locator the path's bytes, its sub
     of fields 1-3 before normalization, its title the title of S4 alone, never the path, each with N1 applied
     and then cut by that file's Trimming; its size the length in bytes of the whole file or message, the
     same on every chunk's row.
-D6  A document whose key set would encode past KeySetMax is skipped: it has no entry, and where its key was
-    indexed before, its version is a tombstone (§11.14's sniff row).
+D6  (amended 2026-11-12, QD-760) A document d is skipped when its key set would encode past KeySetMax, or
+    when d alone would not fit a shard: lone(d) > ShardBody, with
+        lone(d) = ShardLone + len(row) + dict(K) + n
+        row     d's row as its entry carries it (D5; ref_id included in ur/index), at most 2,048 B
+        K       d's key set, k_1 < ... < k_n; n counts the postings, one byte a key
+        dict(K) = vlen(B) + the sum over blocks j = 0 .. B - 1 of (3 + vlen(o_j) + vlen(64 x j))
+                  + the sum over i = 1 .. n of (6 - p_i), with B = ceil(n / 64); 1 when n = 0
+        p_i     0 when k_i is the first key of its block (i mod 64 = 1); else 2 when k_i and k_(i-1) have
+                the same two high bytes, 1 when only the same high byte, else 0
+        o_j     the sum of (6 - p_i) over the keys before block j, i <= 64 x j
+        vlen(x) the length of x as a VByte
+    A skipped document has no entry, and where its key was indexed before, its version is a tombstone
+    (§11.14's sniff row). The test reads the key set and the row and nothing else, so the device that
+    extracts, a reproducer and a decoder compute it alike.
 ```
+
+**What lone(d) is** (amended 2026-11-12, QD-760; question search-m10-10-document-past-a-shard, option 1). It is the encoded length, before its pad, of a shard that holds d alone (INDEX-FORMAT.md's Shards), with one part made a constant. The doc table's row, the dictionary in blocks of 64 and the postings are counted byte for byte: a key's entry is its flag byte, the 3 - p bytes its block's previous key does not share, and one byte each for a document count of 1 and a list length of 1; a block's index row is its first key, its entries offset o_j and its list offset 64 x j; each list is the one byte 0x01. The rest, which is the magic, the header and its length, the doc_key, the version and the time, moves with the bucket's day, the pad generation and the version, none of which the extracting device and a later merger share, so D6 counts it as ShardLone. In format 1 it is at most 95 B: 4 for the magic, 1 for the header's length, a header of at most 54 B with every number at its widest, 16 for the doc_key and 10 each for the version and the time. So a shard holding a kept document alone encodes at least 33 B under ShardBody, in a bucket and in all, whoever writes it and when, which is what 1.2.4's `take` needs of a new shard.
+
+Measured against the landed encoder (`indexShardBuilder.encodeUnpadded`) on 2026-11-12: dict(K) + n equals the encoder's dictionary and postings on 32 key sets (none, 1, 63, 64 and 65 keys, dense runs up to 150,000, steps of 256, 257, 3,000 and 65,536, and twenty random sets of up to 60,000 keys); the constant part is 60 B in an all shard, 66 B in a bucket shard as the tests build one and 95 B at the widest; and keys 0 to n - 1 under a 36 B row give lone = 1,032,192 at n = 199,608, kept, whose shard at the widest header is 1,032,159 B, and 1,032,197 at n = 199,609, skipped.
+
+What it skips. A key costs at least 5 B in a shard of its own, a 4 B entry and a 1 B list, and at least 1 B in a key set. A key set past KeySetMax has more than 392,000 keys (each gap takes one byte, and the gaps' further bytes number at most 132,104, since the gaps sum to at most 2^24), so it fails the shard test too: KeySetMax stays as the entry codec's cap and as the test that needs no pass over the keys. A document of up to 144,000 keys always passes (7 B a key and 9 B a block at most, under a 2,048 B row), and none of more than 206,438 does; between the two the prefixes its keys share decide. Under normalizer 1 few texts get there. A 1 MiB chunk of base64, the question's example, folds to 37 symbols (N3, N5) and has 50,572 keys, lone 262,774; random code points of the BMP, as noise read as UTF-16 gives, 196,095 keys and lone 1,025,349, kept. What passes the bound is a chunk of letters from many scripts with little repeated: letters drawn at random from the BMP's 1,380 two-byte and 47,549 three-byte letters give 327,272 keys in 1 MiB, a key set of 333,861 B and lone 1,703,722, and with ASCII letters and digits among them 470,197 keys in a key set of 475,931 B, still within KeySetMax. Such a document was kept before this amendment and no shard could hold it; it is now skipped, and is not searchable, as a document past KeySetMax already was not.
 
 D2, D3 and D4 are question search-m10-07-extractor-field-placement's option 1. A path's words are found through field 4. A message's attachment names sit in field 5 where their parts stand, so a phrase can span a name and the text beside it only as they are laid out in the message. Field 4's cut (N6) means a path's tail past 1,024 normalized bytes of title and path is not indexed.
 
@@ -9029,6 +9124,7 @@ a file with a NUL or ill-formed UTF-8 in       binary: no document; where it was
   its first 8,000 B                              §11.14's sniff row)
 ill-formed UTF-8 past 8,000 B                  U+FFFD a byte, at normalization (N1)
 a chunk whose key set passes 512 KiB           skipped (D6)
+a chunk that alone would not fit a shard       skipped (D6's lone(d); amended 2026-11-12, QD-760)
 ```
 
 #### 11.2.8 One pass, fixed memory
@@ -9218,7 +9314,7 @@ message                                           size        extract   normaliz
 - **Time.** Normalizing and collecting keys runs at 30 to 35 MB/s here and is 10 to 20 times extraction's cost on text; an attachment costs a scan for delimiter lines, about 6 GB/s. The rules of 11.2 add nothing that shows: the reference's plain loops for base64 and quoted-printable ran the worst case at 98 MB/s, three times faster than the normalizer that follows them. A phone taken at a fifth of this host's speed extracts and normalizes a typical message in under 10 ms, and the 50 MiB all-text message, the largest §15's limits admit, in about 6 s: 9 MB/s, against §11.15's floor of 5 on mobile.
 - **Memory, whole-value form.** 2.5 to 10 times the message, as measured: the message, each part decoded, each part again in UTF-8, the joined text. For a 50 MiB message that is over 130 MB, past even the daemon's 128 MiB budget (§18). So the one-pass form is what every writer runs once it lands, and the whole-value form stays for tests and the oracle.
 - **Memory, one-pass form.** 11.2.8's table summed: the line window 1 KiB, sixteen boundaries 16 KiB, the header line being read 16 KiB, one entity's three header values 48 KiB, the message's four joined values 64 KiB, a soft break's blank run 1 KiB and under 1 KiB for the rest: at most 150 KiB, whatever the message. That is all extraction adds. What dominates is not its own: the normalizer's buffers and the key collector, a 2 MiB bitmap and up to 1 MiB of touched words (SEARCH-M10-03, landed), with a document's key set beside them when its entry is built. One collector is live at a time (11.2.8, point 3), and whether a writer's peak fits §11.15's 4 MiB on the iOS app is FS-77's to measure, as before. The message itself stays in storage and is read once, front to back; a file is read twice when its title is not near its start (point 4).
-- **Index size.** Extraction sets how many documents a version has: one per MiB of extracted text. Reading every alternative roughly doubles a typical message's text, and changes its key set little, since both alternatives hold the same words. The most text a message gives is three times its size (R3): 50 MiB of 8-bit bytes that each decode to a three-byte character are 150 MiB of text and 150 documents, each skipped past 512 KiB of key set (D6), so at most 75 MiB of entries, which §11.14's document and sniff rows already allow.
+- **Index size.** Extraction sets how many documents a version has: one per MiB of extracted text. Reading every alternative roughly doubles a typical message's text, and changes its key set little, since both alternatives hold the same words. The most text a message gives is three times its size (R3): 50 MiB of 8-bit bytes that each decode to a three-byte character are 150 MiB of text and 150 documents, each skipped past 512 KiB of key set (D6), so at most 75 MiB of entries, which §11.14's document and sniff rows already allow. D6's shard test (amended 2026-11-12, QD-760) only lowers that: a kept document has at most 206,438 keys. The test is one pass over a key set the writer already holds, an addition and two comparisons a key, and it allocates nothing.
 - **Code size.** The reference table is about 32 KB packed (16.6 KB of names, 6.4 KB of values, offsets) on every leg that links the index, `sidecar_http` included. The standard library's copy of the same list stays linked while `mail_parse_text.go` calls `html`; if that file takes the extractor's decoder (11.7), the copy can leave wherever nothing else links `html`, and the change is then about nil.
 - **Padding.** A request is one size computation and one marshal of 4 KiB. A reply is at most 21 size computations and one marshal of 16 to 64 KiB, well under a millisecond. Z8 (d) is one more marshal and a comparison per body received. The rule gives up at most 131 B of a body, 0.8% of a step, and the gap costs one hit of one page only when a content lands on one value in 16,384.
 
@@ -9234,6 +9330,10 @@ a cut message           its last part runs to the end (B4); base64 decodes to it
                         (T2); a last '=' is a soft break (T3); an open tag or script drops the tail (X7)
 huge parts              time and memory as 11.4. An attachment of any size costs a scan. Text is chunked (D4),
                         and a chunk of noise is skipped (D6). The one-pass form never holds a part.
+a document past a shard (amended 2026-11-12, QD-760) a chunk within KeySetMax that alone would not fit a
+                        shard is skipped (D6): no entry, a tombstone where it was indexed before, and nothing
+                        alarms, since every device skips it alike. It is not searchable. Before the amendment
+                        it was kept, and the merge that met it failed closed, so its bucket stopped merging.
 a huge header           a field past 16,384 B is cut (H4, H6): its tail is not indexed. A header block of any
                         length is read, each line of no interest discarded as it arrives.
 unknown charset         bytes as they are (C2): ASCII words are found, and the rest reads as U+FFFD, which N5
@@ -9284,6 +9384,12 @@ entities.json  the 2,231 named references
 charsets.json  the 228 labels and their 40 encodings
 sizes.json     85 rows of (size, content): sized or not, the pad's length and its varint's; and 7 whole
                bodies, each with its content bytes and the SHA-256 of the body
+skip.json      (amended 2026-11-12, QD-760; the fix track writes it) D6's shard test: rows of a key set given
+               as runs (first key, count, step), a row's length, lone(d) and the verdict. The empty set; 1,
+               63, 64, 65 and 129 keys; each value of p at a block's first key and at its second; an offset
+               at each VByte width; keys 0 to n - 1 at n = 199,608 and 199,609 under a 36 B row (1,032,192
+               kept, 1,032,197 skipped), and the first again under a 37 B row, skipped; steps of 64, 256 and
+               65,536; and a set past KeySetMax, skipped
 ```
 
 - **Their form.** A vector's `input` is its parts in order, each `t` (text) or `x` (hex) and an optional repeat count `n`; its `path` is text, or `path_x` in hex when the path is not UTF-8. A value is `t`, `x`, or `len` and `sha256` when it is long. A document's `fields` are by number, an absent one being empty. Each file's `about` says the same.
@@ -9327,6 +9433,28 @@ FS-83's size cases stay as planned (0, 1 and 20 hits, TOO_BROAD, INVALID, CURSOR
 
 **Mutants.** Each of these, put back, must fail a vector, and the landed code is the proof that it does: the library's quoted-printable reader (`t-qp-long-line`, `t-qp-control-bytes`), its base64 (`t-base64-unpadded`), `html.UnescapeString` (`e-one-digit`, `e-overflow`, `e-two-code-points`), `strings.TrimSpace` and `strings.ToLower` (`h-value-nbsp-stays`, `h-name-ascii-case-only`), `strconv.Atoi` (`p-section-signed`), no HeaderMax (`h-cap-line`), no LineWindow (`b-line-one-past-window`), no digest default (`m-digest-default`). For sizes: a pad computed by trial that stops at a gap (`TestSearchReplyOnTheGap`), and a receiver without Z8 (d) (`TestSearchBodyIsItsOneEncoding`).
 
+**D6's shard test** (amended 2026-11-12, QD-760). The fix track's tests, the index's in the root and the oracle's in `sidecartest`, by different authors (D-TEST-14):
+
+```text
+skip.json, both sides           each implementation's own lone(d) and verdict equal every row's
+TestLoneShardBoundsTheEncoder   root: for skip.json's kept rows and generated sets, the encoder's length of a
+                                shard holding the document alone is lone(d) - 33 at the widest header, version
+                                and time, and less at every other; a kept document's lone shard is never refused
+TestADocumentPastAShardIsSkipped
+                                root, through prepare and the one-pass form: 1 MiB of letters drawn by a fixed
+                                generator from the BMP's two-byte and three-byte letters has a key set within
+                                KeySetMax and is skipped, in a file and in a message's body; 1 MiB of base64
+                                is kept; a version skipped where its key was indexed before is a tombstone,
+                                and one never indexed leaves nothing
+TestExtractOracleEqualsIndexOnCorpus
+                                gains the generated chunk and a kept one beside it, and compares which
+                                documents are skipped; TestHookIndexExtract returns that for each document
+FuzzIndexLoneShard              root: for any key set and row the codec accepts, lone(d) is at least 33 B above
+                                the encoder's length of the lone shard at a fuzzed header, version and time
+```
+
+Mutants: D6 with KeySetMax alone fails `TestADocumentPastAShardIsSkipped` and skip.json's boundary rows; ShardLone at 0 fails the 199,609 row; a p that does not reset at a block's first key, an offset counted in keys and a list offset of j each fail a named row.
+
 ### 11.7 Implementation notes, task by task
 
 Order: SEARCH-M10-42 and SEARCH-M10-43 at once, by different authors (D-TEST-14). SEARCH-M10-31 at once; it shares nothing with them. SEARCH-M10-44 after SEARCH-M10-42. SEARCH-M10-36 after SEARCH-M10-42 and SEARCH-M10-43, with its other needs. All are the data lane's. Entries for the three new tasks are in `.stack/plan/proposals/details-11-tasks.md`.
@@ -9362,6 +9490,28 @@ The 32 vectors the landed code fails are its list of work: `h-value-nbsp-stays`,
 **SEARCH-M10-43, the oracle's extractor to the canonical rules** (new; M; another author than SEARCH-M10-42's). `sidecartest/search_oracle_extract.go` is brought to 11.2 from this section and `INDEX-FORMAT.md`, sharing nothing with the index: its own base64, quoted-printable and reference decoders and its own generated copy of the table (`search_oracle_entities.go`). The 41 vectors it fails are the index's 32 and the 9 where it read differently: `x-script-end-name` (X5), `t-base64-nbsp-stops` (T2), `w-charset-with-space` (W2), `w-nbsp-between` and `w-cr-between` (W6), `p-sections-without-zero`, `p-sections-empty-fall-through` and `p-sections-repeat` (P3, P5), `b-unterminated` (B4). `searchOracleDocument` keeps its fields before normalization, for the cross check. It adds `search_oracle_conformance_test.go` and the cross-implementation fuzz target and corpus test of 11.6. Trap: the oracle may not take the index's table or decoders to save work; `TestSearchOracleImportsNoIndexCode` must keep failing on that.
 
 **SEARCH-M10-44, extraction in one pass** (new; L). Build 11.2.8 in new files (`evs_index_extract_stream.go` and beside it): a message is written to it front to back in pieces of any size, and it hands each finished document to the caller as its key set and row, never as text; a file is read through an `io.ReaderAt`. The whole-value functions stay, as the form the vectors and the oracle are compared with and the form the fuzz target holds this one to. Writers call the one-pass form on every host once it lands (SEARCH-M10-13 and SEARCH-M10-14, which problem 1 holds). Tests: every conformance vector, written in one piece, byte by byte and in random pieces; `FuzzIndexExtractStreamEqualsWhole`; a generated 50 MiB message of each of 11.4's shapes with the heap sampled at each document, its growth over the normalizer's own staying under 256 KiB whatever the message. Traps: hold a line break back until the next line is known not to be a delimiter; test a line against the boundaries outermost first; never buffer a part to learn its length; one key bitmap at a time, the 256 B overlap replayed into the next document.
+
+**The fix track for QD-760, extraction side** (amended 2026-11-12, QD-760). D6's shard test in the index, with the format file and the vectors. The oracle's half is a second track by another author (D-TEST-14), and 11.6's corpus case lands with whichever of the two is second. Section 1.7 has the merge side. Landed code that changes:
+
+```text
+evs_index_document.go       indexKeySetSkipped(keys) becomes indexDocumentSkipped(keys, row, settings): the
+                            key set's encoding against KeySetMax first, then lone(d) against ShardBody.
+                            IndexDocument.prepare builds and checks the row before the test, where it tested
+                            before the row existed; a skipped result still holds no key set and no row
+evs_index_lone.go           new: indexLoneShardByteCount(rowByteCount, keys, settings), D6's sum in one pass
+                            over the keys, with no call into the shard encoder
+evs_index_extract_stream.go its call at a finished document follows prepare's
+evs_index_settings.go       IndexFormatSettings gains ShardLoneByteCount, 128 (QD-702)
+sidecartest/search_oracle_normalize.go
+                            the oracle's own sum beside searchOracleKeySetByteCount, written from 11.2.3 and
+                            INDEX-FORMAT.md and sharing nothing with the index (the second track)
+protocol/INDEX-FORMAT.md    D6 as 11.2.3 has it, a Limits row for ShardLone, 11.2.7's row and 1.8's two
+                            sentences
+testdata/index/conformance/skip.json
+                            11.6's rows, with its `about`
+```
+
+Traps: the row's length is that of the row as its entry encodes it, in its own root, so `ur/index`'s 16 B ref_id counts; the sum runs over the key set as the collector gives it, ascending and distinct; KeySetMax is tested first, so a set of millions of keys costs no pass; a journal unit (1.2.6) holds what `prepare` returned, so a skipped document's unit is its tombstone or nothing, as before; and the format is not frozen until M10's exit, so no index outside tests holds an entry in the gap and nothing migrates.
 
 **Tasks not held that this touches.** SEARCH-M10-41's runner needs no change to reach the new directory; its report should name the 32-bit legs for it. SEARCH-M10-06 and SEARCH-M10-07 are drafted, and their extract files are finished by SEARCH-M10-42 and SEARCH-M10-43. SEARCH-M10-32 calls `searchRemoteBuildReply` with its own `head`, and answers every failure after parsing through `searchRemoteFailureReply`. Of the landed pads, the one that changes is `padSearchReply`, with SEARCH-M10-31. An index document's own pad, normalizer 1's one space each side of a field (`indexFieldPad`, N7), and a shard's keyed pad and a rewrite's zero pad (`evs_index_pad.go`) are as landed.
 
@@ -9400,6 +9550,8 @@ The 32 vectors the landed code fails are its list of work: `h-value-nbsp-stays`,
 **§22.8, FI-22.** "a function of its format version, normalization version, extractor version and inputs alone".
 
 **protocol/INDEX-FORMAT.md** (SEARCH-M10-42 writes it; `design-records` need not). Its Extractor 1 and Documents sections become 11.2.1's constants and tables and the rules D1-D6, S1-S4, H1-H6, W1-W6, P1-P6, C1-C3, M1-M6, B1-B4, T1-T3, X1-X7 and E1-E4 as written here, with 11.2.7's table. Normalizer 1 gains the clarifications under 11.2.2. "What this file adds" gains a row for each reading 11.9 lists.
+
+**Amended 2026-11-12, QD-760.** §11.14, Documents, the sniff row: for "a chunk whose key set would encode past 512 KiB, which nearly every query would match, is skipped" read "a chunk whose key set would encode past 512 KiB, which nearly every query would match, or that alone would not fit a shard by protocol/INDEX-FORMAT.md's D6, is skipped". §22.8, FS-79: for "chunks whose key set would pass 512 KiB" read "chunks whose key set would pass 512 KiB or that alone would not fit a shard". protocol/INDEX-FORMAT.md, in the fix track's change (11.7): D6 as 11.2.3 has it with lone(d)'s definition, a Limits row "ShardLone 128 B what D6 counts for the header, doc_key, version and time of a shard holding one document", and 11.2.7's added row.
 
 Nothing server-visible changes: no column, key, object family or proto field (I-18), and `search.proto`'s fields are sealed end to end.
 

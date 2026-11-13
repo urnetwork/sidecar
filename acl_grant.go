@@ -17,12 +17,14 @@
 // names no admin.
 //
 // A GrantActivate folds to an AclRule (plan-ACL-folded-grant-state #2): rule_id the grant_id, src its subject's
-// sidecar atom, targets and actions from grant_dst and grant_allow, ports_limited when grant_dst names a port, whose
-// value stays out of rows (plan-BRIDGE-gate-row-prefixes #1), or when the action carries a sealed_detail, whose
-// prefixes and ports no server reads (QD-740), so a grant with sealed ports never folds to one with none: the closed
-// direction, until the device reads its ports from the detail. Then expires the matching rule's lifetime, a publish's
-// audience, app_mode and pin, and source_rule_id the requests rule, whose deletion by a
-// later config head ends the grant at that base for every reader (FS-14). Its grant_id enters spent_grants until the
+// sidecar atom, targets and actions from grant_dst and grant_allow, ports_limited when the action carries a
+// sealed_detail, whose prefixes and ports no server reads (QD-740), so a grant with sealed ports never folds to one
+// with none: the closed direction, until the device reads its ports from the detail. A clear grant_dst names no port
+// at any version, which every parser holds, so no port's value reaches rows (plan-BRIDGE-gate-row-prefixes #1); the
+// ask's own ports still mark the rule, should a parser ever admit one. A bridge_forward's grant is version 4's
+// alone, so each one seals what it reaches. Then expires the matching rule's lifetime, a publish's audience,
+// app_mode and pin, and source_rule_id the requests rule, whose deletion by a later config head ends the grant at
+// that base for every reader (FS-14). Its grant_id enters spent_grants until the
 // latest of its decisions' not_after_millis plus 60 s, so a re-signed GrantActivate under a fresh header is refused
 // for as long as any of its decisions could spend.
 //
