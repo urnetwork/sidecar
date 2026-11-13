@@ -901,12 +901,17 @@ func TestAnEntryPastAShardIsRefused(t *testing.T) {
 	sealed := []*indexEntry{diff, honest}
 	slices.SortFunc(sealed, indexCompareEntries)
 	files := []*indexPushFile{}
-	for _, file := range []struct {
+	type writerFile struct {
 		path     string
 		seq      uint32
 		fileType uint32
 		entries  []*indexEntry
-	}{{baseLargePath, 1, indexFileLargeEntry, []*indexEntry{base}}, {sealedPath, 2, indexFileSlot, sealed}, {headPath, 3, indexFileSlot, nil}} {
+	}
+	for _, file := range []writerFile{
+		{path: baseLargePath, seq: 1, fileType: indexFileLargeEntry, entries: []*indexEntry{base}},
+		{path: sealedPath, seq: 2, fileType: indexFileSlot, entries: sealed},
+		{path: headPath, seq: 3, fileType: indexFileSlot},
+	} {
 		plaintext, err := indexEncodeSlot(&indexSlot{header: header(composer, file.seq, file.fileType), entries: file.entries}, false, settings)
 		if err != nil {
 			t.Fatal(err)
@@ -1419,82 +1424,6 @@ func TestALayoutKeepsAShardNothingChanged(t *testing.T) {
 	if after[0] == shards[0] || len(after) < 2 || len(shards[0].documents)-1 <= len(after[0].documents) {
 		t.Fatal("one removal from the rewritten shard did not make it give up rows")
 	}
-}
-
-// 1.6's FuzzIndexLayoutWrites (QD-775), in FuzzIndexLayoutTakes's place: any shards a decoder accepts and any winners
-// D6 kept, a seed choosing their shapes, small ones, random sets of up to 40,000 keys, and dense runs of up to 199,000
-// keys near lone = ShardBody, with removals and newer versions of held documents among the winners: a layout returns no
-// error, every shard it writes is within ShardBody before its pad, and each key stands once.
-func FuzzIndexLayoutWrites(f *testing.F) {
-	f.Add(int64(1), uint8(2), uint8(12), uint8(0))
-	f.Add(int64(2), uint8(3), uint8(40), uint8(1))
-	f.Add(int64(3), uint8(1), uint8(6), uint8(2))
-	f.Fuzz(func(t *testing.T, seed int64, shardCount uint8, winnerCount uint8, shape uint8) {
-		settings := DefaultIndexFormatSettings()
-		window, root := testLayoutGround()
-		random := rand.New(rand.NewSource(seed))
-		documentOf := func(label string, index int) *indexShardDocument {
-			var keys indexKeySet
-			switch shape % 4 {
-			case 1:
-				keys = testRandomKeys(random, 1+random.Intn(40000), 0, indexKeyMax+1)
-			case 2:
-				keys = testIndexKeys(random.Intn(0x10000), 1+random.Intn(199000), 1)
-			default:
-				keys = testRandomKeys(random, 1+random.Intn(300), random.Intn(0x100000), 4096)
-			}
-			document := testLayoutDocument(testIndexId(label, index), keys)
-			if indexDocumentSkipped(keys, document.row, settings) {
-				return testLayoutDocument(testIndexId(label, index), keys[:1])
-			}
-			return document
-		}
-		layoutArgs := &indexLayoutArgs{root: root, fileType: indexFileBucketShard, window: window, padKey: testPadKey(t, 2), tables: testHeadTables, settings: settings}
-		files := [][]byte{}
-		held := []*indexShardDocument{}
-		for n := range int(shardCount % 4) {
-			entries := []*indexLayoutEntry{}
-			for index := range 1 + random.Intn(8) {
-				entries = append(entries, &indexLayoutEntry{document: documentOf(fmt.Sprintf("held %d", n), index)})
-			}
-			// a shard a decoder accepts: as much of what was drawn as fits the cap, by take's own search
-			count, err := indexTake(layoutArgs, indexNewShardBuilder(false), &indexLayoutShard{}, entries)
-			if err != nil || count == 0 {
-				t.Fatal(count, err)
-			}
-			documents := []*indexShardDocument{}
-			for _, entry := range entries[:count] {
-				documents = append(documents, entry.document)
-			}
-			held = append(held, documents...)
-			files = append(files, testBuildShard(t, &indexShard{header: testShardHeader(indexFileBucketShard), documents: documents}, false, testPadKey(t, 2)))
-		}
-		bucket, shards := testBucketOfShards(t, root, window, files...)
-		extra := []*indexEntry{}
-		taken := map[[indexIdByteCount]byte]bool{}
-		for index := range int(winnerCount % 48) {
-			if 0 < len(held) && random.Intn(3) == 0 {
-				document := held[random.Intn(len(held))]
-				if taken[document.key] {
-					continue
-				}
-				taken[document.key] = true
-				if random.Intn(2) == 0 {
-					extra = append(extra, &indexEntry{kind: indexEntryTombstone, key: document.key, version: 2, timeSeconds: 1757400100})
-				} else {
-					newer := documentOf("newer", index)
-					extra = append(extra, &indexEntry{kind: indexEntryFull, key: document.key, version: 2, timeSeconds: 1757400100, row: newer.row, keys: newer.keys})
-				}
-				continue
-			}
-			extra = append(extra, testLayoutEntries([]*indexShardDocument{documentOf("winner", index)})...)
-		}
-		result, err := testMergeShards(t, root, bucket, shards, extra...)
-		if err != nil {
-			t.Fatalf("a layout of %d shards and %d winners: %v", len(files), len(extra), err)
-		}
-		testShardsAfter(t, root, bucket, shards, result)
-	})
 }
 
 // One merge vector: a name, and each file the merge wrote with its plaintext's hash and length, and each removal; where

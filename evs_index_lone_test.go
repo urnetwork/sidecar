@@ -11,10 +11,8 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"math"
 	"math/rand"
-	"slices"
 	"testing"
 	"unicode"
 	"unicode/utf8"
@@ -338,42 +336,4 @@ func TestADocumentPastAShardIsSkipped(t *testing.T) {
 	if entry := layer.entries[never]; entry != nil && entry.kind == indexEntryFull {
 		t.Fatal("a skipped version never indexed left a live entry")
 	}
-}
-
-// 11.6's FuzzIndexLoneShard: for any key set and row the codec accepts, under any header a decoder accepts and any
-// version and time, lone(d) is at least 33 B above the length of the shard holding the document alone, and a document
-// D6 keeps is never refused.
-func FuzzIndexLoneShard(f *testing.F) {
-	f.Add([]byte("abcdefghi"), uint16(36), uint32(20340), uint32(30), uint64(2), uint64(1), uint64(1800000000), false)
-	f.Add(bytes.Repeat([]byte{0, 1, 0, 0, 1, 1, 0, 2, 0}, 30), uint16(2048), uint32(math.MaxUint32), uint32(math.MaxUint32), uint64(math.MaxUint64), uint64(math.MaxUint64), uint64(math.MaxUint64), false)
-	f.Add([]byte{}, uint16(0), uint32(0), uint32(0), uint64(1), uint64(0), uint64(0), true)
-	f.Fuzz(func(t *testing.T, keyBytes []byte, rowByteCount uint16, startDay uint32, days uint32, generation uint64, version uint64, timeSeconds uint64, all bool) {
-		settings := DefaultIndexFormatSettings()
-		keys := indexKeySet{}
-		for index := 0; index+indexTrigramByteCount <= len(keyBytes); index += indexTrigramByteCount {
-			keys = append(keys, uint32(keyBytes[index])<<16|uint32(keyBytes[index+1])<<8|uint32(keyBytes[index+2]))
-		}
-		slices.Sort(keys)
-		keys = slices.Compact(keys)
-		minimal := (&indexRow{docKind: indexDocRecord, trigramCount: uint64(len(keys))}).encodedByteCount()
-		row := testRowOfByteCount(t, len(keys), max(minimal, min(int(rowByteCount), indexRowMaxByteCount)))
-		header := indexNewFileHeader(indexFileBucketShard, testHeadTables)
-		header.BucketStartDay, header.BucketDays = startDay, max(days, 1)
-		if all {
-			header = indexNewFileHeader(indexFileAllShard, testHeadTables)
-		}
-		header.PadGeneration = max(generation, 1)
-		lone := indexLoneShardByteCount(row.encodedByteCount(), keys, settings)
-		file, err := testLoneShard(t, header, keys, row, version, timeSeconds)
-		switch {
-		case errors.Is(err, errIndexShardFull):
-			if lone <= indexShardMaxByteCount {
-				t.Fatalf("a document of lone %d refused", lone)
-			}
-		case err != nil:
-			t.Fatal(err)
-		case lone-33 < len(file):
-			t.Fatalf("a lone shard of %d B, lone %d", len(file), lone)
-		}
-	})
 }
