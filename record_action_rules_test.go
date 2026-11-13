@@ -48,9 +48,9 @@ func testRecordAccessRequestDetail() *protocol.CanonicalActionDetail {
 	return &protocol.CanonicalActionDetail{TargetPort: 22, GrantDst: []string{testRecordWorkerDst + ":tcp:22"}}
 }
 
-// A version-3 access_request, using only its fields: its worker's port rides sealed_detail.
+// A version-3 access_request, using only its fields: its worker's port rides sealed_detail, sealed beside them.
 func testRecordAccessRequestAction() *protocol.CanonicalAction {
-	return &protocol.CanonicalAction{
+	return testWithSealedDetail(&protocol.CanonicalAction{
 		Kind:            uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_ACCESS_REQUEST),
 		ExpiresMillis:   1762387200000,
 		GrantDst:        []string{testRecordWorkerDst},
@@ -59,13 +59,12 @@ func testRecordAccessRequestAction() *protocol.CanonicalAction {
 		RepoId:          bytes.Repeat([]byte{0x31}, 16),
 		TargetSidecarId: bytes.Repeat([]byte{0x32}, 16),
 		Subject:         bytes.Repeat([]byte{0x33}, 16),
-		SealedDetail:    testSealActionDetail(testRecordAccessRequestDetail()),
-	}
+	}, testRecordAccessRequestDetail())
 }
 
-// A version-4 dial grant, kind bridge_forward's, using only its fields.
+// A version-4 dial grant, kind bridge_forward's, using only its fields, its detail sealed beside them.
 func testRecordSealedGrantAction() *protocol.CanonicalAction {
-	return &protocol.CanonicalAction{
+	return testWithSealedDetail(&protocol.CanonicalAction{
 		Kind:          uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD),
 		ExpiresMillis: 1762387200000,
 		GrantDst:      []string{testActionTargetDst},
@@ -73,8 +72,7 @@ func testRecordSealedGrantAction() *protocol.CanonicalAction {
 		Version:       4,
 		RuleId:        bytes.Repeat([]byte{0x36}, 16),
 		Subject:       bytes.Repeat([]byte{0x37}, 16),
-		SealedDetail:  testSealActionDetail(testForwardDetail()),
-	}
+	}, testForwardDetail())
 }
 
 // A known set for a test of a later version's rules.
@@ -134,7 +132,7 @@ func TestCanonicalActionVersionThreeTakesOnlyItsFields(t *testing.T) {
 		"preview":      func(action *protocol.CanonicalAction) { action.Preview = "ssh" },
 		"recipients":   func(action *protocol.CanonicalAction) { action.Recipients = []string{"a@example.com"} },
 		"rule_id":      func(action *protocol.CanonicalAction) { action.RuleId = bytes.Repeat([]byte{0x34}, 16) },
-		"socket_name":  func(action *protocol.CanonicalAction) { action.SocketName = "app" },
+		"socket_name":  func(action *protocol.CanonicalAction) { testRecordSetUnknownString(action, 23, "app") },
 		"versioning":   func(action *protocol.CanonicalAction) { action.Versioning = 1 },
 		"content_hash": func(action *protocol.CanonicalAction) { action.ContentSha256 = bytes.Repeat([]byte{0x35}, 32) },
 		// QD-740: a worker's port leaves version 3's clear set, as a number and as text
@@ -180,6 +178,12 @@ func testRecordSetUnknownVarint(action *protocol.CanonicalAction, number protowi
 	action.ProtoReflect().SetUnknown(protowire.AppendVarint(protowire.AppendTag(nil, number, protowire.VarintType), value))
 }
 
+// Sets a string field this build's CanonicalAction does not declare, as another build's bytes would carry it: socket_name
+// at 23, say, which QD-772 moved to the ApprovalRequest.
+func testRecordSetUnknownString(action *protocol.CanonicalAction, number protowire.Number, value string) {
+	action.ProtoReflect().SetUnknown(protowire.AppendString(protowire.AppendTag(nil, number, protowire.BytesType), value))
+}
+
 // Version 4 is a dial or route grant, kind bridge_forward alone, with only its fields: its clear grant_dst names
 // subjects, its grant_allow dial or route, and its prefixes and ports ride sealed_detail, which no other version but
 // 3 sets.
@@ -205,7 +209,7 @@ func TestCanonicalActionVersionFourTakesOnlyItsFields(t *testing.T) {
 		"target_sidecar_id": func(action *protocol.CanonicalAction) { action.TargetSidecarId = bytes.Repeat([]byte{0x32}, 16) },
 		"repo_id":           func(action *protocol.CanonicalAction) { action.RepoId = bytes.Repeat([]byte{0x31}, 16) },
 		"preview":           func(action *protocol.CanonicalAction) { action.Preview = "a forward" },
-		"socket_name":       func(action *protocol.CanonicalAction) { action.SocketName = "app" },
+		"socket_name":       func(action *protocol.CanonicalAction) { testRecordSetUnknownString(action, 23, "app") },
 		"versioning":        func(action *protocol.CanonicalAction) { action.Versioning = 1 },
 		"port text": func(action *protocol.CanonicalAction) {
 			action.GrantDst = []string{testActionTargetDst + ":tcp:8443"}
@@ -250,8 +254,7 @@ func TestCanonicalActionVersionFourTakesOnlyItsFields(t *testing.T) {
 	if _, err := ParseStoredCanonicalAction(testRecordStored(t, earlier)); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("a sealed_detail at version 1: %v", err)
 	}
-	dns := testRecordDnsAction()
-	dns.SealedDetail = testSealActionDetail(testForwardDetail())
+	dns := testWithSealedDetail(testRecordDnsAction(), testForwardDetail())
 	if _, err := ParseStoredCanonicalAction(testRecordStored(t, dns)); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("a dns action with a sealed_detail: %v", err)
 	}

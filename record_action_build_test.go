@@ -2,7 +2,8 @@
 // refused, a required one missing refused, templates matched field by field with recipients a subset, an agent only
 // raising risk, every server path held to its column, and the descriptor lint that keeps the table and record.proto
 // in step. The kinds QD-740 opened build here too: a publish, a listen and an expose at version 1 with no local port,
-// weight or ALPN, and a forward at version 4 with its port sealed.
+// weight or ALPN, a listen naming its socket by grant_dst alone (QD-772), and a forward at version 4 with its port
+// sealed.
 
 package sidecar
 
@@ -17,33 +18,48 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/urnetwork/sidecar/protocol"
-	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The sidecar a test's forward dials, as grant_dst names it.
 const testActionTargetDst = "sidecar:5152535455565758595a5b5c5d5e5f60"
 
-// What a test seals an action's detail to. Which values production binds is question
-// canonical-action-detail-seal-context; these are synthetic.
-func testActionDetailContext() *ConfigSealContext {
-	return &ConfigSealContext{
-		SignedType: bridge.SignedType_SIGNED_GRANT_ACTIVATE,
-		NetworkId:  testConfigId("network").Bytes(),
-		Nonce:      bytes.Repeat([]byte{0x38}, configNonceByteCount),
-	}
+// The network a test's actions are filed in, which their details are sealed to (QD-771).
+func testActionDetailNetworkId() Id {
+	return testConfigId("network")
 }
 
 // The key generation a test's details are sealed under.
 const testActionDetailGeneration = 3
 
-// detail as an action's sealed_detail, under the test key and a fixed nonce, so a vector's bytes hold.
-func testSealActionDetail(detail *protocol.CanonicalActionDetail) []byte {
-	sealed, err := SealConfigBody(testConfigSealKey(testActionDetailGeneration), testActionDetailContext(), detail,
-		bytes.NewReader(bytes.Repeat([]byte{0x24}, 24)))
+// The AEAD nonce a test seals a detail with, fixed so a vector's bytes hold.
+func testActionDetailRandom() *bytes.Reader {
+	return bytes.NewReader(bytes.Repeat([]byte{0x24}, 24))
+}
+
+// detail sealed for clear's sealed_detail as a daemon seals it (NewSealedCanonicalAction), under the test key and a
+// fixed nonce: bound to clear's own fields as the builder stores them, sealed_detail left out and the version fixed,
+// in the test's network (CanonicalActionDetailSealContext). Sealed for any action, one the builder refuses included,
+// so a test of a parser's refusal carries a detail of the same form.
+func testSealActionDetail(clear *protocol.CanonicalAction, detail *protocol.CanonicalActionDetail) []byte {
+	clearBytes, err := canonicalActionClearBytes(clear)
+	if err != nil {
+		panic(err)
+	}
+	sealContext, err := CanonicalActionDetailSealContext(testActionDetailNetworkId(), clearBytes)
+	if err != nil {
+		panic(err)
+	}
+	sealed, err := SealConfigBody(testConfigSealKey(testActionDetailGeneration), sealContext, detail, testActionDetailRandom())
 	if err != nil {
 		panic(err)
 	}
 	return sealed
+}
+
+// action with detail sealed into its sealed_detail (testSealActionDetail), in place, answering action.
+func testWithSealedDetail(action *protocol.CanonicalAction, detail *protocol.CanonicalActionDetail) *protocol.CanonicalAction {
+	action.SealedDetail = testSealActionDetail(action, detail)
+	return action
 }
 
 // What the test's forward seals: its target's port, and the port's text in §8.4's grammar.
@@ -72,22 +88,20 @@ func testBuildableActions() map[string]*protocol.CanonicalAction {
 		},
 		"socket_listen": {
 			Kind:          uint32(SidecarActionListen),
-			SocketName:    "tls/443/blog",
 			ExpiresMillis: 1762387200000,
 			GrantDst:      []string{"sock:tls/443/blog"},
 			GrantAllow:    []string{"listen"},
 			RuleId:        ruleId,
 			Subject:       subject,
 		},
-		"bridge_forward": {
+		"bridge_forward": testWithSealedDetail(&protocol.CanonicalAction{
 			Kind:          uint32(SidecarActionForward),
 			ExpiresMillis: 1762387200000,
 			GrantDst:      []string{testActionTargetDst},
 			GrantAllow:    []string{"dial"},
 			RuleId:        ruleId,
 			Subject:       subject,
-			SealedDetail:  testSealActionDetail(testForwardDetail()),
-		},
+		}, testForwardDetail()),
 		"bridge_expose": {
 			Kind:            uint32(SidecarActionExpose),
 			ExpiresMillis:   1762387200000,
@@ -461,9 +475,10 @@ func TestServerPathsHoldToTheirColumns(t *testing.T) {
 }
 
 // The descriptor lint: every field CanonicalAction declares is claimed by a row or by every action, so a field
-// record.proto adds cannot go unbuilt or unrefused; local_port, weight and alpn are gone from it, their numbers
-// reserved, and are ApprovalRequest's 14, 15 and 16, which a row's request column names (QD-740); field 37 is filled
-// only at version 2 and field 38 only at the versions that seal a detail; and every row's fields exist.
+// record.proto adds cannot go unbuilt or unrefused; local_port, weight, alpn and socket_name are gone from it, their
+// numbers reserved, and are ApprovalRequest's 14, 15, 16 and 17, which a row's request column names (QD-740, QD-772),
+// a row requiring only what its column names; field 37 is filled only at version 2 and field 38 only at the versions
+// that seal a detail; and every row's fields exist.
 func TestKindTableCoversTheDescriptor(t *testing.T) {
 	descriptor := (&protocol.CanonicalAction{}).ProtoReflect().Descriptor()
 	fields := descriptor.Fields()
@@ -471,7 +486,7 @@ func TestKindTableCoversTheDescriptor(t *testing.T) {
 	for _, number := range canonicalActionCommonFields {
 		claimed[number] = true
 	}
-	for _, number := range []protoreflect.FieldNumber{24, 25, 34} {
+	for _, number := range []protoreflect.FieldNumber{23, 24, 25, 34} {
 		if fields.ByNumber(number) != nil || !descriptor.ReservedRanges().Has(number) {
 			t.Errorf("field %d left CanonicalAction, and record.proto does not reserve it", number)
 		}
@@ -479,6 +494,7 @@ func TestKindTableCoversTheDescriptor(t *testing.T) {
 	requestFields := (&protocol.ApprovalRequest{}).ProtoReflect().Descriptor().Fields()
 	for number, name := range map[protoreflect.FieldNumber]protoreflect.Name{
 		approvalRequestFieldLocalPort: "local_port", approvalRequestFieldWeight: "weight", approvalRequestFieldAlpn: "alpn",
+		approvalRequestFieldSocketName: "socket_name",
 	} {
 		if field := requestFields.ByNumber(number); field == nil || field.Name() != name {
 			t.Errorf("ApprovalRequest's field %d is not %s", number, name)
@@ -496,7 +512,12 @@ func TestKindTableCoversTheDescriptor(t *testing.T) {
 		}
 		for _, number := range row.Request {
 			if !slices.Contains(approvalRequestDetailFields, number) {
-				t.Errorf("kind %d's request binds field %d, which is none of local_port, weight and alpn", row.Kind, number)
+				t.Errorf("kind %d's request binds field %d, which is none of socket_name, local_port, weight and alpn", row.Kind, number)
+			}
+		}
+		for _, number := range row.RequestRequired {
+			if !slices.Contains(row.Request, number) {
+				t.Errorf("kind %d's request requires field %d, which its request column does not name", row.Kind, number)
 			}
 		}
 		if slices.Contains(slices.Concat(row.Required, row.Optional), canonicalActionFieldVersioning) {

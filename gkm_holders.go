@@ -39,8 +39,8 @@
 //
 // A forwarding Delegation's row carries its reader key's SHA-256 and never the key, which is gkm's object
 // (DESIGN-DETAILS 4.2.2): a rotator takes the key from the statement where its state keeps the entry that filed the
-// Delegation, else from gkm/dkey/<delegation_id>, and seals to it only when its SHA-256 is the row's digest, which
-// the DelegationWrap's recipient_key_sha256 then names (GkmForwardingReaderKey).
+// Delegation, else from gkm/dkey/<network_id>/<delegation_id> (QD-763), and seals to it only when its SHA-256 is the
+// row's digest, which the DelegationWrap's recipient_key_sha256 then names (GkmForwardingReaderKey).
 //
 // On every leg, the sidecar_http page Worker's included, and pure but for the fetch GkmForwardingReaderKey is given.
 // Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret: a reader key is public.

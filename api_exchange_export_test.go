@@ -18,7 +18,7 @@ func NewSidecarApiWithClientKey(settings *SidecarSettings, transport http.RoundT
 	if err != nil {
 		return nil, err
 	}
-	signer, err := newDpopSigner(clientKeySeed, now, rand.Reader)
+	signer, err := newDpopSigner(clientKeySeed, now, api.currentApiClockOffset, rand.Reader)
 	if err != nil {
 		return nil, err
 	}

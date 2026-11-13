@@ -83,6 +83,9 @@ type Sidecar struct {
 	// §5.9's search state, the index cache and §5.4's search seams (sidecar_search.go), made on first use. Held as any,
 	// so this file, which the forwarding leg links, names none of their types: that leg runs no search (§18.10).
 	search atomic.Value
+	// Forwarding's setup for the app's VPN component, which a host installs (bridge_forward_setup.go). Held as any, as
+	// search is: the forwarding leg sets up nothing.
+	forwardingSetup atomic.Value
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle
@@ -184,8 +187,8 @@ type SidecarAction struct {
 	RunId   *Id
 	AgentId *Id
 	// What the action binds on this device alone, built by the daemon as Canonical is: filed as ApprovalRequest's
-	// local_port, weight and alpn, which approvers render and request_sha256 covers, and no server sees (QD-740). A
-	// decision spends only on an action whose Detail is its request's. Nil for none.
+	// socket_name, local_port, weight and alpn, which approvers render and request_sha256 covers, and no server sees
+	// (QD-740, QD-772). A decision spends only on an action whose Detail is its request's. Nil for none.
 	Detail *SidecarActionDetail
 	// The agent's own words about the action, filed as ApprovalRequest.summary and shown to an approver as
 	// untrusted text, never as the action (D-MCP-17). Empty for none.
@@ -199,9 +202,13 @@ type SidecarAction struct {
 }
 
 // What an outward action binds on the requesting device beside its CanonicalAction (§16.8's ApprovalRequest fields
-// 14, 15 and 16; QD-740): the local port a socket_listen, tls_publish, bridge_forward or bridge_expose points at, a
-// listen's weight and a publish's ALPNs. The kind table says which of them a kind takes.
+// 14 to 17; QD-740, QD-772): a socket_listen's socket name, the local port a socket_listen, tls_publish,
+// bridge_forward or bridge_expose points at, a listen's weight and a publish's ALPNs. The kind table says which of
+// them a kind takes.
 type SidecarActionDetail struct {
+	// A listen's name in its one form, which its action's grant_dst names as a server may see it
+	// (SocketListenGrantDst); "" for none.
+	SocketName string
 	// 0 for none.
 	LocalPort uint32
 	Weight    int32
@@ -217,7 +224,15 @@ func (self *SidecarActionDetail) Equal(other *SidecarActionDetail) bool {
 	if other != nil {
 		b = *other
 	}
-	return a.LocalPort == b.LocalPort && a.Weight == b.Weight && slices.Equal(a.Alpn, b.Alpn)
+	return a.SocketName == b.SocketName && a.LocalPort == b.LocalPort && a.Weight == b.Weight && slices.Equal(a.Alpn, b.Alpn)
+}
+
+// A copy, its slices its own; nil for nil.
+func (self *SidecarActionDetail) clone() *SidecarActionDetail {
+	if self == nil {
+		return nil
+	}
+	return &SidecarActionDetail{SocketName: self.SocketName, LocalPort: self.LocalPort, Weight: self.Weight, Alpn: slices.Clone(self.Alpn)}
 }
 
 // One O tool's effect, which §16.6's spend step 5 runs (plan-MCP-effect-seam). A mail body or a file's bytes are not
@@ -324,6 +339,35 @@ const (
 	// SidecarId where one is known (plan-RECORD-alarm-kinds). A storage failure is evs_alarm's, and a head not
 	// extending a pin head_alarm's.
 	SidecarEventRecordAlarm SidecarEventKind = "record_alarm"
+	// The bridge found what it alarms on, named by BridgeAlarm (plan-BRIDGE-small-readings #17, DESIGN-DETAILS
+	// 12.2.2): the sidecar it concerns in SidecarId where one is named, never a prefix, an address or a name (I-13).
+	SidecarEventBridgeAlarm SidecarEventKind = "bridge_alarm"
+)
+
+// Why a bridge_alarm fired: QD-557's five, DESIGN-DETAILS 12.7's three and this build's map_refused.
+type SidecarBridgeAlarm string
+
+const (
+	// A block that collides with what the host's physical path needs, or a route prefix that collides with the
+	// table's own block entries (§17.4).
+	SidecarBridgeAlarmBlockConflict SidecarBridgeAlarm = "block_conflict"
+	// A share's ShareKey holder left Y's AdminSet or was revoked (§17.9).
+	SidecarBridgeAlarmShareHolderRemoved SidecarBridgeAlarm = "share_holder_removed"
+	// A client id a host refused names another sidecar or none (§17.9's verify).
+	SidecarBridgeAlarmPrincipalMismatch SidecarBridgeAlarm = "principal_mismatch"
+	// A ledger file or a sealed body that does not verify: the state in force stands (§17.8).
+	SidecarBridgeAlarmStateUnverified SidecarBridgeAlarm = "state_unverified"
+	// A head's BridgeBlock a reader refuses: it keeps the previous block (D-BRIDGE-16).
+	SidecarBridgeAlarmBlockRefused SidecarBridgeAlarm = "block_refused"
+	// The unfolded statements' opened bodies passed BridgeLedgerSettings.UnfoldedBodyMaxByteCount: the state stands.
+	SidecarBridgeAlarmLedgerOverBudget SidecarBridgeAlarm = "ledger_over_budget"
+	// A share's table hashes to other than its pin, or holds another version (DESIGN-DETAILS 12.2.7).
+	SidecarBridgeAlarmShareTableMismatch SidecarBridgeAlarm = "share_table_mismatch"
+	// A start's catch-up waited past BridgeComponentSettings.CatchUpAlarmTimeout for the config's follow to reach the
+	// posture's pin (DESIGN-DETAILS 12.2.5).
+	SidecarBridgeAlarmCatchUpWaiting SidecarBridgeAlarm = "catch_up_waiting"
+	// A map onto a block address or one of the daemon's listeners, which the compile voids (§17.6, D-BRIDGE-19).
+	SidecarBridgeAlarmMapRefused SidecarBridgeAlarm = "map_refused"
 )
 
 // Why a record_alarm fired (plan-RECORD-alarm-kinds): a closed set of 14.
@@ -467,6 +511,8 @@ type SidecarEvent struct {
 	VerifiedSince time.Time
 	// record_alarm.
 	RecordAlarm SidecarRecordAlarm
+	// bridge_alarm.
+	BridgeAlarm SidecarBridgeAlarm
 }
 
 // Called for each event, on whatever goroutine raised it. It must not block or call CloseAndWait

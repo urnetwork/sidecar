@@ -109,9 +109,9 @@ const aclTestForwardPort = 22
 
 // The CanonicalAction a test's grant rides, as a daemon fills it (QD-740). A grant asking dial or route alone is a
 // bridge_forward's, at version 4: its target's port and each destination's port or prefix text ride its
-// sealed_detail, and the clear grant_dst names the same sidecars by id alone, a prefix nowhere. A grant asking
-// anything else is no forward's, so it rides a socket_listen action at version 1 with the grant's fields alone,
-// which seals nothing.
+// sealed_detail, sealed once the clear fields are final (QD-771), and the clear grant_dst names the same sidecars by
+// id alone, a prefix nowhere. A grant asking anything else is no forward's, so it rides a socket_listen action at
+// version 1 with the grant's fields alone, which seals nothing.
 func aclTestGrantAction(ruleId []byte, subject Id, dst []string, allow []string, expiresMs int64) *protocol.CanonicalAction {
 	action := &protocol.CanonicalAction{
 		Kind: uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_LISTEN), Version: 1,
@@ -140,8 +140,7 @@ func aclTestGrantAction(ruleId []byte, subject Id, dst []string, allow []string,
 			action.GrantDst = append(action.GrantDst, clear)
 		}
 	}
-	action.SealedDetail = testSealActionDetail(detail)
-	return action
+	return testWithSealedDetail(action, detail)
 }
 
 // A grant of dst and allow to subject under the requests rule, its action as stored (aclTestGrantAction).

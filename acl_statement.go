@@ -268,6 +268,8 @@ func aclRowsCopy(rows *protocol.AclRows) *protocol.AclRows {
 		Audit:       rows.GetAudit(),
 		Suspensions: rows.GetSuspensions(),
 		SpentGrants: rows.GetSpentGrants(),
+		// the base's compile, which no statement changes (QD-727)
+		EvidenceDefault: rows.GetEvidenceDefault(),
 	}
 	if unknown := rows.ProtoReflect().GetUnknown(); len(unknown) != 0 {
 		next.ProtoReflect().SetUnknown(unknown)
@@ -461,7 +463,8 @@ func (self *ConfigState) aclSpendCheck() AclSpendCheck {
 }
 
 // The time entry k was sequenced at, from the states this state's log keeps, false when k is above this state or
-// outside what the log retains. RepoRestore's 7 days run from it.
+// outside what the log retains. RepoRestore's 7 days do not read it: they run from the deletion row's own time
+// (QD-743), which every reader holds on every day of the window.
 func (self *ConfigState) aclTimeAt(k uint64) (int64, bool) {
 	if k == self.n {
 		return self.timeMs, true

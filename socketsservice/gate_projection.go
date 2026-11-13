@@ -43,6 +43,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -56,6 +58,13 @@ import (
 
 var _ SocketGate = (*SocketProjectionGate)(nil)
 var _ SocketGateFollower = (*SocketProjectionGate)(nil)
+var _ SocketScopeConsent = (*SocketProjectionGate)(nil)
+
+// Where a gate reads a network's Team scopes in its verified state (§7.9, Q-TLS-3; owner decisions 40, 126;
+// SOCK-M6-01): the scope a label names in snapshot, false for a label it holds no scope for. ProjectionRows keeps field 6
+// for TeamScopeRow, which no state carries yet (protos-bridge-row-fields #3), so a host sets none, and every scope host
+// is refused, the closed direction, until the rows carry scopes and a source reads them.
+type SocketScopeSource func(snapshot *sidecar.AclGateSnapshot, label string) (sidecar.AclScope, bool)
 
 // A run of evidence that arrived between two loads' starts: the newest evidence in it by count, and when its first
 // came.
@@ -95,8 +104,10 @@ type socketGateNetwork struct {
 	// The highest position a load reported, and whether one has reported a state.
 	position uint64
 	loaded   bool
-	// When the gate last asked for a load because the network was behind.
+	// When the gate last asked for a load because the network was behind, and when a View served it or a load began,
+	// which tells a network the cache still holds without asking the cache, whose every State marks a read.
 	reloadTime time.Time
+	usedTime   time.Time
 	// The newest snapshot's view, so a View allocates once a position.
 	view *socketProjectionView
 }
@@ -119,8 +130,9 @@ func (self *socketGateNetwork) addPositionEvidenceWithLock(position uint64, now 
 	self.positionEvidence = max(self.positionEvidence, position)
 }
 
-// A load begins: every run so far closes into one, which a load without error covers. The count it covers.
-func (self *socketGateNetwork) beginLoadWithLock() uint64 {
+// A load begins at now: every run so far closes into one, which a load without error covers. The count it covers.
+func (self *socketGateNetwork) beginLoadWithLock(now time.Time) uint64 {
+	self.usedTime = now
 	self.beginSeq = self.evidenceSeq
 	if 1 < len(self.groups) {
 		self.groups = []socketEvidenceGroup{{lastSeq: self.groups[len(self.groups)-1].lastSeq, firstTime: self.groups[0].firstTime}}
@@ -187,7 +199,9 @@ type SocketProjectionGate struct {
 	overLimit *socketOverLimit
 
 	onNarrowed atomic.Pointer[func(networkId connect.Id, position uint64)]
-	wake       chan struct{}
+	// Where Team scopes are read, nil refusing every scope host (SetScopeSource).
+	scopes atomic.Pointer[SocketScopeSource]
+	wake   chan struct{}
 	// Loads the cache reported, each counted once the gate has taken it in, so a test sees one land.
 	loadCount *sidecar.MonitorValue[uint64]
 	// Resubscription checks finished, for the same.
@@ -268,6 +282,11 @@ func (self *SocketProjectionGate) OverLimitReads() (count int, changed chan stru
 	return self.overLimit.readCount.Get()
 }
 
+// Loads the gate has taken in, and a channel that closes at the next: what a test of the composition waits on.
+func (self *SocketProjectionGate) Loads() (count uint64, changed chan struct{}) {
+	return self.loadCount.Get()
+}
+
 // The network's state, made on first use.
 func (self *SocketProjectionGate) networkWithLock(networkId connect.Id) *socketGateNetwork {
 	network := self.networks[networkId]
@@ -317,6 +336,7 @@ func (self *SocketProjectionGate) View(networkId connect.Id) (SocketGateView, er
 	if since := network.behindSinceWithLock(); !since.IsZero() && self.settings.BehindGrace <= now.Sub(since) {
 		return nil, ErrSocketGateBehind
 	}
+	network.usedTime = now
 	if view := network.view; view != nil && view.snapshot == snapshot && view.edgeSet == edgeSet && view.edgeNetworkId == edgeNetworkId {
 		return view, nil
 	}
@@ -325,8 +345,41 @@ func (self *SocketProjectionGate) View(networkId connect.Id) (SocketGateView, er
 		position:      snapshot.Pin.GetVersion(),
 		edgeNetworkId: edgeNetworkId,
 		edgeSet:       edgeSet,
+		scopes:        &self.scopes,
 	}
 	return network.view, nil
+}
+
+// Sets where the gate reads Team scopes, nil refusing every scope host, which is what a gate does until it is set. The
+// host sets it before serving, once §7.9's rows carry scopes (SOCK-M6-01).
+func (self *SocketProjectionGate) SetScopeSource(source SocketScopeSource) {
+	if source == nil {
+		self.scopes.Store(nil)
+		return
+	}
+	self.scopes.Store(&source)
+}
+
+// See SocketScopeConsent: the scope stands in the network's verified state and, in a member scope, sidecarId is one of
+// its member's consented devices (§8.5, owner decision 126), on the state View serves. smtp/'s namespace asks this for
+// mx.<scope> (SOCK-M7-01); the gate's own listen and publish verdicts apply the same rule to every scope host.
+func (self *SocketProjectionGate) ConsentListen(networkId connect.Id, scope string, sidecarId *connect.Id) error {
+	view, err := self.View(networkId)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrSocketListenUnavailable, err)
+	}
+	projection, ok := view.(*socketProjectionView)
+	if !ok {
+		return fmt.Errorf("%w: no state there holds a scope", ErrSocketListenRefused)
+	}
+	resolved, found := projection.scopeOf(scope)
+	if !found {
+		return fmt.Errorf("%w: a scope the state does not hold", ErrSocketListenRefused)
+	}
+	if resolved.MemberId != (sidecar.Id{}) && (sidecarId == nil || !projection.snapshot.Acl.ConsentedFor(sidecar.Id(*sidecarId), resolved.MemberId)) {
+		return fmt.Errorf("%w: not a consented device of the scope's member", ErrSocketListenRefused)
+	}
+	return nil
 }
 
 // See SocketGate. A position at or below the state's is no evidence, and neither is
@@ -348,10 +401,11 @@ func (self *SocketProjectionGate) Observe(networkId connect.Id, position uint64)
 	self.cache.Changed(sidecar.Id(networkId))
 }
 
-// See SocketGateFollower. Dropped for a network this process has never asked the cache for.
+// See SocketGateFollower. Dropped for a network the cache holds nothing of: one this process was never asked for. A
+// network the gate let go of past MaxNetworkCount while the cache still holds it is taken up again.
 func (self *SocketProjectionGate) Changed(networkId connect.Id) {
 	now := self.clock.Now()
-	tracked := func() bool {
+	add := func() bool {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		network := self.networks[networkId]
@@ -360,10 +414,18 @@ func (self *SocketProjectionGate) Changed(networkId connect.Id) {
 		}
 		network.addCountEvidenceWithLock(now)
 		return true
-	}()
-	if tracked {
-		self.cache.Changed(sidecar.Id(networkId))
 	}
+	if !add() {
+		if _, status := self.cache.State(sidecar.Id(networkId)); status == sidecar.AclGateUnknown {
+			return
+		}
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			self.networkWithLock(networkId).addCountEvidenceWithLock(now)
+		}()
+	}
+	self.cache.Changed(sidecar.Id(networkId))
 }
 
 // See SocketGateFollower.
@@ -420,9 +482,10 @@ func (self *SocketProjectionGate) IdentityKey(ctx context.Context, networkId con
 
 // A load begins for networkId: the evidence count it covers if it reads cleanly.
 func (self *SocketProjectionGate) beginLoad(networkId connect.Id) uint64 {
+	now := self.clock.Now()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	return self.networkWithLock(networkId).beginLoadWithLock()
+	return self.networkWithLock(networkId).beginLoadWithLock(now)
 }
 
 // Records what the running load's Entries read.
@@ -497,15 +560,17 @@ func (self *SocketProjectionGate) run() {
 	}
 }
 
-// Asks for another load of each network still behind whose last such ask is an interval old, and drops the state
-// of networks the cache has forgotten with no load running, so the gate holds about what the cache does.
+// Asks for another load of each network still behind whose last such ask is an interval old; and past
+// MaxNetworkCount lets go of the quiet networks served or loaded longest ago, which a later ask, load or event
+// takes up again. It asks the cache nothing but loads: a State would mark each network read and undo the cache's
+// eviction order.
 func (self *SocketProjectionGate) reloadBehind() {
 	now := self.clock.Now()
 	behindNetworkIds := []connect.Id{}
-	quietNetworkIds := []connect.Id{}
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		quietNetworkIds := []connect.Id{}
 		for networkId, network := range self.networks {
 			if network.behindSinceWithLock().IsZero() {
 				if network.begin == nil {
@@ -519,37 +584,33 @@ func (self *SocketProjectionGate) reloadBehind() {
 			network.reloadTime = now
 			behindNetworkIds = append(behindNetworkIds, networkId)
 		}
+		if excess := len(self.networks) - self.settings.MaxNetworkCount; 0 < excess {
+			slices.SortFunc(quietNetworkIds, func(a connect.Id, b connect.Id) int {
+				return self.networks[a].usedTime.Compare(self.networks[b].usedTime)
+			})
+			for _, networkId := range quietNetworkIds[:min(excess, len(quietNetworkIds))] {
+				delete(self.networks, networkId)
+			}
+		}
 	}()
 	for _, networkId := range behindNetworkIds {
 		self.cache.Changed(sidecar.Id(networkId))
 	}
-	forgottenNetworkIds := []connect.Id{}
-	for _, networkId := range quietNetworkIds {
-		if _, status := self.cache.State(sidecar.Id(networkId)); status == sidecar.AclGateUnknown {
-			forgottenNetworkIds = append(forgottenNetworkIds, networkId)
-		}
-	}
-	if 0 < len(forgottenNetworkIds) {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		for _, networkId := range forgottenNetworkIds {
-			if network := self.networks[networkId]; network != nil && network.begin == nil && network.behindSinceWithLock().IsZero() {
-				delete(self.networks, networkId)
-			}
-		}
-	}
 }
 
-// 13.2.3's resubscription check: {acl_<N>}v for every loaded network, ResyncBatchCount at a time with at most
-// ResyncConcurrency reads at once, and only a value that differs from the one recorded with the state is evidence.
-// A read that fails is evidence too, since nothing can say the log stood still in the gap.
+// 13.2.3's resubscription check: {acl_<N>}v for every loaded network the cache still holds, one served or loaded
+// within ResyncUsedWithin, ResyncBatchCount at a time with at most ResyncConcurrency reads at once, and only a
+// value that differs from the one recorded with the state is evidence. A read that fails is evidence too, since
+// nothing can say the log stood still in the gap. A network the cache has evicted is left to its next ask, which
+// loads it from the tip, rather than reloaded by every resubscription.
 func (self *SocketProjectionGate) resyncCheck() {
+	now := self.clock.Now()
 	networkIds := func() []connect.Id {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		networkIds := make([]connect.Id, 0, len(self.networks))
 		for networkId, network := range self.networks {
-			if network.loaded {
+			if network.loaded && now.Sub(network.usedTime) < self.settings.ResyncUsedWithin {
 				networkIds = append(networkIds, networkId)
 			}
 		}
@@ -637,6 +698,37 @@ type socketProjectionView struct {
 	position      uint64
 	edgeNetworkId connect.Id
 	edgeSet       bool
+	// The gate's scope source as it stands when a check asks.
+	scopes *atomic.Pointer[SocketScopeSource]
+}
+
+// The Team scope label names in the snapshot, false for none or with no source.
+func (self *socketProjectionView) scopeOf(label string) (sidecar.AclScope, bool) {
+	if self.scopes == nil {
+		return sidecar.AclScope{}, false
+	}
+	source := self.scopes.Load()
+	if source == nil {
+		return sidecar.AclScope{}, false
+	}
+	return (*source)(self.snapshot, label)
+}
+
+// The scope label a tls/ or smtp/ name's host names, <label>.<scope> (§9.4), false for a host of no scope.
+func socketNameScope(name string) (string, bool) {
+	if !socketGatePublicName(name) {
+		return "", false
+	}
+	return socketHostScope(name[strings.LastIndexByte(name, '/')+1:])
+}
+
+// The scope label of host <label>.<scope>, false for a host of no scope.
+func socketHostScope(host string) (string, bool) {
+	label, scope, found := strings.Cut(host, ".")
+	if !found || label == "" || scope == "" || strings.Contains(scope, ".") {
+		return "", false
+	}
+	return scope, true
 }
 
 var _ SocketGateView = (*socketProjectionView)(nil)
@@ -679,6 +771,14 @@ func (self *socketProjectionView) MayListen(request *SocketGateRequest, now time
 			return &SocketGateVerdict{}
 		}
 		socket = sidecar.AclSocketName{PublicName: request.Name}
+		// a scope host stands only for a scope the state holds, a member scope's only on its member's consented devices
+		if label, scoped := socketNameScope(request.Name); scoped {
+			scope, found := self.scopeOf(label)
+			if !found {
+				return &SocketGateVerdict{}
+			}
+			return self.verdict(self.snapshot.Acl.MayListenInScope(subject, socket, scope, now))
+		}
 	}
 	return self.verdict(self.snapshot.Acl.MayListen(subject, socket, now))
 }
@@ -707,6 +807,13 @@ func (self *socketProjectionView) MayPublish(request *SocketGateRequest, now tim
 	subject, ok := socketGateSubject(request)
 	if !ok || host == "" {
 		return &SocketGateVerdict{}
+	}
+	if label, scoped := socketHostScope(host); scoped {
+		scope, found := self.scopeOf(label)
+		if !found {
+			return &SocketGateVerdict{}
+		}
+		return self.verdict(self.snapshot.Acl.MayPublishInScope(subject, host, scope, now))
 	}
 	return self.verdict(self.snapshot.Acl.MayPublish(subject, host, now))
 }

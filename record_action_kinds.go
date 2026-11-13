@@ -4,23 +4,29 @@
 // every server path and the request's parser read the same rows, and the rule set is data: a kind's fields change in
 // a row, never in code.
 //
-// The rows follow MCP.md's MCP-M3-02 and the owner's answers to protos-services-canonical-action (QD-064) and
-// record-m2-01-canonical-action-detail (QD-740), which combine by field:
+// The rows follow MCP.md's MCP-M3-02 and the owner's answers to protos-services-canonical-action (QD-064),
+// record-m2-01-canonical-action-detail (QD-740) and canonical-action-detail-listen-socket-name (QD-772), which
+// combine by field:
 //
 //	server   a grant carries 8, 10, 11, 28 and 29, a publish's also 5, 6, 7, 33 and 35, a version-3 access_request 8,
 //	         10, 11, 14, 26, 29 and 38, and a dns_* action 8 and 18 to 21, each with kind, version and scope
 //	request  local_port, weight and alpn left CanonicalAction (24, 25 and 34 reserved) for ApprovalRequest's 14, 15
 //	         and 16, sealed with the request in its entry, for every kind that has them: publish its local port and
-//	         ALPNs, listen its local port and weight, forward and expose their local port
+//	         ALPNs, listen its local port and weight, forward and expose their local port. A listen's socket_name
+//	         left too (23 reserved) for ApprovalRequest's 17, which every listen's request carries
 //	sealed   bridge_forward's grant is a dial or route grant, so it takes version 4: its target's port, and its
 //	         grant_dst's port and prefix text, ride sealed_detail, 38, and its clear grant_dst names subjects alone;
 //	         access_request's port rides there too, 27 leaving version 3's clear set. bridge_expose's action rides a
 //	         rule body no server reads (§17.8), so it keeps 9 and 27 in the clear at version 1
 //
-// socket_listen's row requires socket_name, 23, which QD-064's grant column does not admit, so a listen's action
-// passes an approval and a spend here and no GrantActivate until question canonical-action-detail-listen-socket-name
-// says where an approver reads the name. Kinds 5, 6, 7 and 16 have no O tool and no row, so they are refused until
-// their owners name their fields (plan-MCP-wire-enum-numbers).
+// socket_listen's row is QD-772's: the action carries the grant's fields alone, its grant_dst naming the socket by one
+// sock: entry in the form a server may already see (D-SOCK-13), sock:<name> for a tls/ or smtp/ name and sock:<its
+// token path in hex> for an application name (SocketListenGrantDst), so a listen's action passes every server path as
+// QD-064's grant column stands and a listen's grant activates there. Its request carries the name as socket_name,
+// which agrees with that entry: a parse holds what needs no key (approvalRequestDetailCheck), and an approver's
+// device the token path under its K_sock (ApprovalApprover). A template names its socket too, so no multi-use
+// decision covers every listen. Kinds 5, 6, 7 and 16 have no O tool and no row, so they are refused until their
+// owners name their fields (plan-MCP-wire-enum-numbers).
 //
 // Kind 18, mail_tls_unauthenticated, is the owner's answer to smtp-m9-06-tl4-allowance-action (QD-729): §14.4's TL4
 // allowance for one recipient domain, host, in the one form a domain has here, lowercase with no trailing dot, so a
@@ -32,11 +38,22 @@
 package sidecar
 
 import (
+	"bytes"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	"github.com/urnetwork/sidecar/protocol"
 )
+
+// A listen's socket_name that does not agree with its action's grant_dst (QD-772): a name not in its one form or in a
+// namespace no listen action names, an action naming no one socket, or a sock: entry naming another socket than the
+// name, or one a device holding no K_sock could not derive.
+var ErrSocketListenName = errors.New("a listen's socket name does not agree with its action's grant_dst")
 
 // Fields every action sets, whatever its kind: kind, version and scope (§16.8).
 var canonicalActionCommonFields = []protoreflect.FieldNumber{
@@ -47,16 +64,19 @@ var canonicalActionCommonFields = []protoreflect.FieldNumber{
 // subject.
 var canonicalActionGrantFields = []protoreflect.FieldNumber{8, canonicalActionFieldGrantDst, 11, 28, 29}
 
-// ApprovalRequest's daemon-built fields beside its action (QD-740): local_port, weight and alpn.
+// ApprovalRequest's daemon-built fields beside its action: local_port, weight and alpn (QD-740), and socket_name
+// (QD-772).
 const (
-	approvalRequestFieldLocalPort protoreflect.FieldNumber = 14
-	approvalRequestFieldWeight    protoreflect.FieldNumber = 15
-	approvalRequestFieldAlpn      protoreflect.FieldNumber = 16
+	approvalRequestFieldLocalPort  protoreflect.FieldNumber = 14
+	approvalRequestFieldWeight     protoreflect.FieldNumber = 15
+	approvalRequestFieldAlpn       protoreflect.FieldNumber = 16
+	approvalRequestFieldSocketName protoreflect.FieldNumber = 17
 )
 
-// Every one of them, which a request of a kind whose row names none may not set.
+// Every one of them, which a request of a kind whose row names none may not set, in the order an approver's render
+// shows them: the name first, as what a listen is.
 var approvalRequestDetailFields = []protoreflect.FieldNumber{
-	approvalRequestFieldLocalPort, approvalRequestFieldWeight, approvalRequestFieldAlpn,
+	approvalRequestFieldSocketName, approvalRequestFieldLocalPort, approvalRequestFieldWeight, approvalRequestFieldAlpn,
 }
 
 // One kind's row.
@@ -76,8 +96,12 @@ type CanonicalActionKindFields struct {
 	// path takes, which every server refuses.
 	Server []protoreflect.FieldNumber
 	// ApprovalRequest's daemon-built fields a request for the kind may carry beside its action: 14 local_port, 15
-	// weight, 16 alpn (QD-740). Empty for a kind that binds none, whose request setting one is refused.
+	// weight, 16 alpn (QD-740), 17 socket_name (QD-772). Empty for a kind that binds none, whose request setting one is
+	// refused.
 	Request []protoreflect.FieldNumber
+	// Of Request, those every request for the kind carries, a template's included: a listen's socket_name, which says
+	// what the listen is (QD-772). A request without one is refused.
+	RequestRequired []protoreflect.FieldNumber
 	// String fields that hold a domain name, which the builder holds to its one form where filled
 	// (canonicalActionDomainForm).
 	Domains []protoreflect.FieldNumber
@@ -98,13 +122,18 @@ var canonicalActionKindRows = []*CanonicalActionKindFields{
 		Request:  []protoreflect.FieldNumber{approvalRequestFieldLocalPort, approvalRequestFieldAlpn},
 	},
 	{
-		// socket_listen: the name and the grant's fields (§9.9); its request binds the local port and the weight
+		// socket_listen: the grant's fields (§9.9), grant_dst naming the socket as a server may see it, which a template
+		// fills too (QD-772); its request binds the name, the local port and the weight
 		Kind:     SidecarActionListen,
-		Required: []protoreflect.FieldNumber{23},
-		Optional: canonicalActionGrantFields,
+		Required: []protoreflect.FieldNumber{canonicalActionFieldGrantDst},
+		Optional: []protoreflect.FieldNumber{8, 11, 28, 29},
 		Versions: []uint32{1},
 		Server:   canonicalActionGrantFields,
-		Request:  []protoreflect.FieldNumber{approvalRequestFieldLocalPort, approvalRequestFieldWeight},
+		Request: []protoreflect.FieldNumber{
+			approvalRequestFieldSocketName, approvalRequestFieldLocalPort, approvalRequestFieldWeight,
+		},
+		RequestRequired:  []protoreflect.FieldNumber{approvalRequestFieldSocketName},
+		TemplateRequired: []protoreflect.FieldNumber{canonicalActionFieldGrantDst},
 	},
 	{
 		// bridge_forward: a dial or route grant (§17), so version 4: the grant's fields, its destination a subject
@@ -247,4 +276,88 @@ func (self *CanonicalActionKindFields) requestAllows(field protoreflect.FieldNum
 func (self *CanonicalActionKindFields) serverAllows(field protoreflect.FieldNumber) bool {
 	return 0 < len(self.Server) &&
 		(slices.Contains(canonicalActionCommonFields, field) || slices.Contains(self.Server, field))
+}
+
+// §8.4's grant_dst kind of a socket, as ParseAclGrantDst reads it.
+const socketListenGrantDstPrefix = "sock:"
+
+// The namespace of a listen's name, held to the forms a listen's action names (QD-772): its one form, as
+// ParseSocketName gives it, so a person approves one spelling, and an application name, which tools listen on, or a
+// tls/ or smtp/ name, which Sidecar.Listen takes. share/ listens through ur share, which no approval covers, ur/ is the
+// platform's, and a reserved name has no owner. The name stays out of every error, which a log may carry (I-13).
+func socketListenNamespace(name string) (SocketNamespace, error) {
+	canonical, namespace, err := ParseSocketName(name)
+	if err != nil || canonical != name {
+		return 0, fmt.Errorf("%w: no socket name in its one form", ErrSocketListenName)
+	}
+	switch namespace {
+	case SocketNamespaceApplication, SocketNamespaceTls, SocketNamespaceSmtp:
+		return namespace, nil
+	}
+	return 0, fmt.Errorf("%w: a namespace no listen's action names", ErrSocketListenName)
+}
+
+// The grant_dst entry a listen on name carries (QD-772), what a server may already see of the socket (D-SOCK-13):
+// sock:<name> for a tls/ or smtp/ name, and for an application name sock:<its token path in lowercase hex> under keys,
+// the network's current K_sock's, which may be nil for a tls/ or smtp/ name. name is in its one form, in a namespace
+// a listen's action names (socketListenNamespace).
+func SocketListenGrantDst(name string, keys *SocketKeys) (string, error) {
+	namespace, err := socketListenNamespace(name)
+	if err != nil {
+		return "", err
+	}
+	if !namespace.blinded() {
+		return socketListenGrantDstPrefix + name, nil
+	}
+	if keys == nil {
+		return "", fmt.Errorf("%w: no K_sock to derive an application name's token path under", ErrSocketListenName)
+	}
+	tokenPath, err := keys.TokenPath(name)
+	if err != nil {
+		return "", fmt.Errorf("%w: no token path", ErrSocketListenName)
+	}
+	return socketListenGrantDstPrefix + hex.EncodeToString(tokenPath), nil
+}
+
+// Whether a listen's socket_name agrees with its action's grant_dst (QD-772): the action names one destination, the
+// sock: entry SocketListenGrantDst gives the name. A tls/ or smtp/ name's is the name itself. An application name's is
+// its token path, which K_sock alone decides: under ring's keys, the current and, while the file holds one, the
+// previous (CompileKeys), so a request built under either through a rotation's overlap agrees. ring nil checks what
+// holds without a key, an entry that reads as a token path in lowercase hex, 16 B a segment of the name, which is what
+// a parse can hold; an approver passes its ring. The name stays out of every error, which a log may carry (I-13).
+func checkSocketListenName(action *protocol.CanonicalAction, name string, ring *SocketKeyRing) error {
+	namespace, err := socketListenNamespace(name)
+	if err != nil {
+		return err
+	}
+	grantDsts := action.GetGrantDst()
+	if len(grantDsts) != 1 {
+		return fmt.Errorf("%w: an action naming %d destinations", ErrSocketListenName, len(grantDsts))
+	}
+	value, isSocket := strings.CutPrefix(grantDsts[0], socketListenGrantDstPrefix)
+	if !isSocket {
+		return fmt.Errorf("%w: a grant_dst naming no socket", ErrSocketListenName)
+	}
+	if !namespace.blinded() {
+		if value != name {
+			return fmt.Errorf("%w: a grant_dst naming another socket", ErrSocketListenName)
+		}
+		return nil
+	}
+	tokenPath, err := hex.DecodeString(value)
+	segmentCount := strings.Count(name, "/") + 1
+	if err != nil || strings.ToLower(value) != value || len(tokenPath) != segmentCount*socketTokenByteCount {
+		return fmt.Errorf("%w: a grant_dst that is no token path of the name's segments", ErrSocketListenName)
+	}
+	if ring == nil {
+		return nil
+	}
+	tokenPaths, err := ring.CompileTokenPaths(name)
+	if err != nil {
+		return fmt.Errorf("%w: no token path", ErrSocketListenName)
+	}
+	if !slices.ContainsFunc(tokenPaths, func(candidate []byte) bool { return bytes.Equal(candidate, tokenPath) }) {
+		return fmt.Errorf("%w: a grant_dst naming another socket", ErrSocketListenName)
+	}
+	return nil
 }

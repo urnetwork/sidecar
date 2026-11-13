@@ -8,7 +8,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 
 | # | Problem | Tasks held | Status |
 |---|---|---|---|
-| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10; amended 2026-11-12, QD-760) |
+| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10; amended 2026-11-12, QD-760, QD-775 and section 15) |
 | 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10) |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | complete (2026-11-11) |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
@@ -22,10 +22,13 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11; amended 2026-11-12, QD-761, built on the recommendations of open questions details-amend-2-late-generation and details-amend-2-fold-holds) |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 | 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
+| 15 | Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10) | 2 | complete (2026-11-12) |
+| 16 | Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9) | 0 | complete (2026-11-13) |
+| 17 | Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8) | 1 | complete (2026-11-13) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
 
-Status: complete (2026-11-10; amended 2026-11-12, QD-760: 1.2.2, 1.2.4, 1.2.9, 1.3, 1.5, 1.6, 1.7 and 1.8, each place marked)
+Status: complete (2026-11-10; amended 2026-11-12, QD-760: 1.2.2, 1.2.4, 1.2.9, 1.3, 1.5, 1.6, 1.7 and 1.8, each place marked; amended 2026-11-12, QD-775: 1.2.4, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8 and 1.9, each place marked; amended 2026-11-12, section 15: 1.2.3, 1.2.4, 1.2.5, 1.2.6, 1.2.8, 1.2.9, 1.3, 1.7 and 1.8, each place marked)
 
 Tasks held until complete: SEARCH-M10-10, SEARCH-M10-11, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, SEARCH-M10-35, TEST-M10-02.
 
@@ -258,7 +261,7 @@ What it costs: a document's first entry from each writer in each bucket is full,
 
 **What R2 gives.** Let P be a push by W into N built at b. If P commits, W's head in N was at the version P read. Every push that changed a file of W's in N after b replaced that head (R2 binds the writer's own pushes, a DROP's rewrites and anything else that writes a writer's file; the two exceptions are below). So every file of W's in N is as P read it, and P's plan, which named bases and removed large entries on that reading, is still right. Two pushes of one sidecar built on one base cannot both commit, which FS-74 already expects of two that append; it now also holds for one that appends and one that seals.
 
-The exceptions. A CLOSURE replaces committed versions only and may not be made to rewrite a head it has no other reason to touch; it is fenced by the CUT before it, which refuses every index push built before the CUT (I-EVS-17), and by the rule that no entry rests on a version the erasure set lists (`choose`'s B; landed in `indexChooseEntry`). A roll-up removes every file of an expired bucket in one push, heads included.
+The exceptions. A CLOSURE replaces committed versions only and may not be made to rewrite a head it has no other reason to touch; it is fenced by the CUT before it, which refuses every index push built before the CUT (I-EVS-17), and by the rule that no entry rests on a version the erasure set lists (`choose`'s B; landed in `indexChooseEntry`). A roll-up removes every file of an expired bucket in one push, heads included. Both fences bind pushes built after the CUT. A diff that landed before the CUT on a version the CUT then lists is a resting diff: the eraser enters its version full in its own head before any CLOSURE takes its base or the diff, and the CLOSUREs then remove both (amended 2026-11-12, section 15; 15.2.3 to 15.2.5).
 
 **Who else writes a writer's files.** A DROP's rewrite (SEARCH-M10-18) that removes a listed version from a file of W's, a slot or a large entry, also removes, in the same push, each diff in W's unabsorbed slots that rests on it, enters the composed version full in the DROP signer's own head when it is the kept head (§11.14's drop row, unchanged in effect), and replaces W's head in that bucket (R2), together with the bucket's manifest (R3's fence). That closes G.
 
@@ -273,6 +276,9 @@ merge(N at base b, extra = none):
       U_W = W's sealed slots and W's unabsorbed large entries
   every entry the erasure set lists at or below its version is left out first, a diff by its own version
       (§11.14's epoch row)
+      (amended 2026-11-12, section 15) a full entry the set lists is still the base of a diff whose own version the
+      set does not list, while it stands: the diff is composed onto it and its version is a candidate.
+      Such a diff whose base is gone is left out and alarms nothing (15.2.6)
   candidates, per key:
       the shards' entry of the key: a row or a tombstone
       each entry of the key in a slot of U_W: a full entry or a tombstone as it is; a diff composed onto
@@ -294,14 +300,21 @@ merge(N at base b, extra = none):
 layout(shards by ascending n, winners):
   1 C = the keys whose winner is not the shards' entry of the key. Remove from each shard its entry of
     each key in C, and each row a ref tombstone or the erasure set drops.
-  2 A = the winners of C, ascending by key. Y = the shard with the highest n, or shard 0 when there is none.
+    (amended 2026-11-12, QD-775) G = none. Each shard X that this step changed and that no longer encodes
+    within ShardBody gives up its highest entries: K = X's remaining rows and tombstones in A's order
+    (ascending by key, then kind); c = take(an empty shard, K), by step 2's search; X keeps K[0:c] and
+    K[c:] joins G. X keeps at least one and gives up at least one (below).
+  2 A = the winners of C, with G, ascending by key. Y = the shard with the highest n, or shard 0 when
+    there is none.
     take(Y, A): if Y with all of A encodes within ShardBody, all of A. Else the count c found by:
         lo = 0; hi = len(A); while lo < hi: mid = (lo + hi + 1) / 2;
             if Y with A[0:mid] encodes within ShardBody then lo = mid else hi = mid - 1; c = lo
     Y takes A[0:c]. While A has more: Y = a new shard, the highest n + 1, and take again. A new shard
     takes at least one: every document of A is one D6 kept (below; amended 2026-11-12, QD-760).
   3 scanning by ascending n: while a shard and the next one after it come to fewer than ShardJoin bytes
-    before their pads, the two become one under the lower n; the joined shard is tested again with its next.
+    before their pads and (amended 2026-11-12, QD-775) the two as one shard encode within ShardBody, the
+    two become one under the lower n; the joined shard is tested again with its next. A pair that fails
+    either test stays two shards, and the scan goes on from the second of them.
   4 a shard left with no row and no tombstone is removed.
   5 each changed shard is encoded in blocks of 64 and padded with the keyed pad at the merger's newest
     generation, which its header names. A shard nothing changed is not written.
@@ -317,7 +330,51 @@ layout(shards by ascending n, winners):
 
 So `take` on an empty shard returns at least 1, each pass of the loop places at least one member of A, and step 2 opens at most len(A) shards. `errIndexMergeUnplaceable` stays where it is, as a closed guard: an empty shard that takes nothing fails the merge, which writes nothing, and no input a decoder accepts reaches it. No model covers this: `IndexMerge.tla` leaves sizes out (1.3), so the argument is these three facts, each held by a test of 1.6.
 
-The rule closes step 2 and nothing else. Measuring it showed two other ways a layout's shard passes ShardBody, which the decision does not reach and this amendment does not change: step 3 joins two shards that come to under ShardJoin whose join does not encode within ShardBody (16 documents sharing 60,000 keys, 372,510 B, and 2,000 small ones, 119,795 B: lists that were two-byte bitsets become sixteen docids each), and step 1 can lengthen a full shard by removing a document, through the re-blocking (2,447 B on a built case). In both the encoder refuses, the merge writes nothing and its bucket stops merging, as it did for the document above. Question `details-amend-2-layout-past-the-cap` asks what a layout does there.
+The rule closes step 2 and nothing else. Measuring it showed two other ways a layout's shard passes ShardBody, which that decision does not reach: step 3 joined two shards that come to under ShardJoin whose join does not encode within ShardBody (16 documents sharing 60,000 keys, 372,510 B, and 2,000 small ones, 119,795 B: lists that were two-byte bitsets become sixteen docids each), and step 1 can lengthen a full shard by removing a document, through the re-blocking (2,447 B on a built case). In both the encoder refused, the merge wrote nothing and its bucket stopped merging, as it did for the document above. Question `details-amend-2-layout-past-the-cap` asked what a layout does there, and the owner answered it (amended 2026-11-12, QD-775): the next paragraphs.
+
+**A layout always writes** (amended 2026-11-12, QD-775; question details-amend-2-layout-past-the-cap, option 1). The two steps that built a shard without asking the encoder now ask it, as `take` does, and both read its answer past the cap as a test's result, never as a failure:
+
+```text
+step 1's give-up   after the removals, each shard X that step 1 changed is encoded as step 5 would encode it
+                   (blocks of 64, the layout's header). Within ShardBody: nothing more. Past it: K = X's
+                   remaining entries, rows and tombstones together, ascending by key and then kind, the order
+                   A has; c = the count take's search finds for an empty shard taking K
+                       lo = 0; hi = len(K); while lo < hi: mid = (lo + hi + 1) / 2;
+                           if K[0:mid] alone encodes within ShardBody then lo = mid else hi = mid - 1; c = lo
+                   X keeps K[0:c]. K[c:], the entries from X's highest key down, join G, and G joins step 2's
+                   A, which is sorted once with G in it. The shards are visited by ascending n, but the order
+                   decides nothing: each X is judged on its own entries, and G is sorted into A.
+step 3's test      a pair is joined only where both hold: the two lengths before their pads come to fewer than
+                   ShardJoin, and the union of their entries encodes within ShardBody. A shard's length in the
+                   sum is its encoding's where this layout changed it, and its stored bytes' before their pad
+                   where it did not, whatever partition those bytes keep (QD-173). The union is always encoded
+                   by blocks of 64. A pair that fails either test is left, and the scan moves to the next
+                   pair, so the second shard of a refused pair is still tried with the one after it.
+```
+
+The decision's words for the give-up are "rows from its highest doc_key down, by the search take runs". Tombstones ride with the rows in key order here, so that one search and one order serve both steps, as `take`'s A already mixes them; a tombstone that moves stays in its bucket's shards, once, which is all a tombstone's place means (1.2.2).
+
+Why every shard a layout writes then fits, by where it was last changed:
+
+- By step 1 alone. It was tested. If it gave up, it holds K[0:c], which the search found to encode within ShardBody: the search returns a count only after that count passed the test, or 0, and it does not return 0, because it tries mid = 1 before it settles on none and one entry alone always fits (the three facts above: every entry of a shard is a tombstone or a row D6 kept, either fits a shard of its own, and the search tries one before none). c is below len(K), since all of K is what failed. So X keeps at least one entry and gives up at least one.
+- By step 2. Y with A[0:c] passed `take`'s test where c is above 0. Where c is 0, Y is as step 1 left it, or untouched. A new shard takes at least one and what it takes passed the test (QD-760's rule, which G's members meet as the winners do).
+- By step 3. The joined shard passed step 3's test, and it is tested again each time it grows.
+- By nothing. It is not written (step 5), so its bytes are the ones a decoder accepted, at most ShardBody before their pad. A shard that a CLOSURE or a DROP rewrote on its replaced partition (QD-173) may be longer by blocks of 64 than as stored. That shows only when a layout changes it, and then one of the three tests above is run on its encoding by blocks of 64: a removal makes it give up entries, and `take` on it as Y, or a join with it, goes through only where its test passes, so it usually takes nothing and joins nothing.
+
+So step 5 encodes no shard past ShardBody, and with QD-760's rule a layout is a function of its inputs that always writes. The cap's two guards stay, closed, and the rules make both unreachable from inputs a decoder accepts:
+
+```text
+errIndexShardFull          the shard encoder's answer past ShardBody. In take, in step 1's test and in step
+                           3's test it is the answer "does not encode within", and the layout goes on. From
+                           step 5's encode, or from any other caller of the encoder, it fails the layout,
+                           and the merge, the push past DirectBytes or the roll-up writes nothing.
+errIndexMergeUnplaceable   an empty shard that takes nothing: in step 2 (QD-760), and in step 1 where a
+                           give-up's search returns 0. It fails the layout the same way.
+```
+
+What the rule keeps. A given-up entry leaves X and enters another shard of the same partition in the same push, so a partition's shards still hold one version a key (I2, I7, I-EVS-11) and an eraser still finds a document in one shard. The keys of G are not in C (their winner was their shard's own entry) and no two shards hold one key, so A has each key once. A reproducer runs the same steps on the same inputs and writes the same bytes (I8). No model covers it: sizes are left out of `IndexMerge.tla` (1.3), so the argument is the four cases above, each held by a test of 1.6.
+
+What it costs. Step 3's test is the encode the joined shard needs at step 5 anyway, run one step earlier, and a refused join costs that one encode. Step 1's test is an encode each changed shard already gets, at step 3 or at step 5. The give-up's search runs only when a removal leaves a shard past the cap, which needs a shard `take` filled and an unlucky re-blocking: as `take`'s, at most ⌈log2 n⌉ + 1 length computations for a shard of n entries.
 
 A merge whose winners are all the shards' own entries still commits: the manifest alone, so that the writers can reuse their slots.
 
@@ -337,7 +394,8 @@ rollup(S), S the oldest expired bucket at t:
     entries, heads included); every newer bucket's entries by key, heads included; all (a/m and shards)
   3 carried(key) = the winner, as a merge picks it, over S's shards, every unabsorbed slot of S, heads
     included, and S's unabsorbed large entries; per ref, S's newest ref tombstone. The erasure set's
-    documents are left out.
+    documents are left out. A diff on a listed version, of a version the set does not list, is composed
+    through its base while the base stands, as at a merge (amended 2026-11-12, section 15; 15.2.6).
   4 per key with carried c; n = the newest entry of the key in the newer buckets (heads, sealed slots,
     unabsorbed large entries, shards; tombstones count); a = all's row of the key:
        n exists and n.version < c.version   promote: c goes to P, the newest bucket holding an entry of
@@ -392,6 +450,9 @@ bound       past Search.JournalByteCount the oldest units lose their key sets an
             drops the unit, and its push is backfilled.
 search      the device's own searches read committed and sent units as a local overlay (§11.14's companion
             row); SearchCache.ApplyErase and ApplyCut remove a listed document's units
+cards       (amended 2026-11-12, section 15) on a record stream a unit also holds a card marker for each run
+            its entries touch, and the journal holds again units for the cards an erasure listed;
+            ApplyCut removes neither (15.2.9)
 ```
 
 **A companion push** is built in this order, and the order is the fence (R5):
@@ -444,6 +505,8 @@ when it next builds an index push for I (§11.14's coverage row):
 ```
 
 Both kinds may ride one push: a device with committed units and backfill work builds one plan from both document sets.
+
+**Record logs (amended 2026-11-12, section 15).** For a record log, 15.2.9 adds to a companion push its interval (`RecordSettings.CardInterval`), a step 2a that reads the log's `erasure` ref at an epoch the device has not yet built at, step 4's run cards, the pin below a blocked document and again units, and to a backfill's step 4 the cards of the runs its versions touched. An eraser's re-entry push (15.2.4) is built in a companion push's order.
 
 **Why the pin is enough.** Take an entry of document d at version v that such a push publishes, and let T be evs's time at the push's index read (step 2). Suppose that when the push commits a roll-up has already dropped, or moved into all, an entry of d at a version v' above v, which is the only way an older entry does harm (I5). R at the pin held d at v, so v' was committed to R after the builder's read of R, which came after T. The index entry of v' was committed later still, with a signed time t' that evs held within 10 min of its clock, so t' is after T less 10 min, and it went to the bucket whose window holds t' or to a newer one. A roll-up of that bucket carries a signed time at which the bucket is expired: a whole window, at least 7 days, past the window's end, so more than 7 days past t', and evs took the roll-up's push within 30 min of that time. So the roll-up committed more than 6 days and 23 h after T. The builder took t before step 2 and sends only while its monotonic clock and its wall clock both read within IndexPushLife of that moment. Its push cannot land after that roll-up.
 
@@ -503,6 +566,9 @@ a companion push  per content ref R, with p the version in its {R, p, false} row
                   each entry being its path's state at the push's base, and is not rebuilt whole.
 a backfill        with h from its {R, h, true} row and p from its {R, p, false} row (the push's base on a
                   file-mode ref's own index): 1.2.6's backfill, step 4
+a run card        (amended 2026-11-12, section 15) on a record stream both kinds also carry the card of each
+                  run their versions touched; 15.2.9 gives a card's inputs
+a re-entry push   (amended 2026-11-12, section 15) an eraser's push, which moves no own row: 15.2.4's documents
 ```
 
 So any device that holds the writer's files in the bucket at the push's base, the content ref's history to p and the text of the changed paths rebuilds every file of the push and compares `content_sha256`: equal, it fetches nothing; unequal, `index_mismatch` names the signer (§11.14's reproduce row, D-EVS-56). It needs no other writer's head and no shard, which the landed rule required. The team directory's readers (§16.11) derive a card writer's next head the same way from its previous head and the card version.
@@ -525,6 +591,10 @@ malformed        an unabsorbed diff with no base is index_malformed naming the s
                  row's "a diff below its key's newest entry is no candidate, resolved or not, and alarms
                  nothing" goes: under I1 there is no such diff to excuse. An unabsorbed diff whose composed
                  set D6 skips under its row reads the same way (1.2.2; amended 2026-11-12, QD-760).
+resting diffs    (amended 2026-11-12, section 15) a diff resolves through a base the erasure set lists while
+                 that base stands. A diff whose base is gone and whose base version the set lists is
+                 excused: no candidate, no alarm, and nothing reads not yet searchable on its account
+                 (15.2.6)
 ```
 
 Newest-wins over every partition a device holds, the version table, masks and retained buckets are as §11.14 has them.
@@ -532,8 +602,10 @@ Newest-wins over every partition a device holds, the version table, masks and re
 ### 1.3 Invariants and why they hold
 
 ```text
-I1 own bases       every diff in an unabsorbed slot, of a document the erasure set does not list, has its base,
-                   a full entry of its key, in another file of its own writer in its bucket (proposed I-EVS-18)
+I1 own bases       every diff in an unabsorbed slot whose base version the erasure set does not list has its
+                   base, a full entry of its key, in another file of its own writer in its bucket (proposed
+                   I-EVS-18; amended 2026-11-12, section 15: the exception read "of a document the erasure
+                   set does not list")
 I2 merges total    a merge composes every input it reads and writes each key's newest version; a bucket's
                    shards hold one version a key, a row or a tombstone, never a diff; a tombstone stays until
                    the bucket rolls
@@ -550,7 +622,7 @@ I8 a function      every file a writer's push, a merge or a roll-up writes is a 
                    (FI-22)
 ```
 
-**I1.** By induction over commits. A writer's own push P, built at b: if it commits, its writer's head in the bucket was at the version P read, so by R2 no other push has changed a file of that writer's there since b, a CLOSURE aside. P's plan adds diffs whose bases stood in the writer's other files at b, and reuses or removes only files that its own result does not keep. The watermark may have moved since b; that only makes more slots absorbed, so fewer diffs are owed a base. A merge writes no writer's file and only raises watermarks. A roll-up removes a bucket's files together, and a promotion writes shards. A DROP's rewrite takes the diffs that rest on what it removes and replaces the head (1.2.3). A CLOSURE takes a listed document's base and its diffs in separate pushes, so between them a diff of a listed document may lack its base: every reader, merge and roll-up leaves out the erasure set's documents before it composes anything, which is why I1 excepts them, and no diff built after the CUT rests on a listed version. Model: `ChainsResolve`; twins `NoOwnCas`, `ReusePinned`, `CleanupReferenced`, `MergeRemovesLarge`.
+**I1.** By induction over commits. A writer's own push P, built at b: if it commits, its writer's head in the bucket was at the version P read, so by R2 no other push has changed a file of that writer's there since b, a CLOSURE aside. P's plan adds diffs whose bases stood in the writer's other files at b, and reuses or removes only files that its own result does not keep. The watermark may have moved since b; that only makes more slots absorbed, so fewer diffs are owed a base. A merge writes no writer's file and only raises watermarks. A roll-up removes a bucket's files together, and a promotion writes shards. A DROP's rewrite takes the diffs that rest on what it removes and replaces the head (1.2.3). A CLOSURE takes only entries at listed versions and diffs on listed versions, in separate pushes, so between them a diff on a listed version may lack its base: I1 excepts it by its base's version, every reader, merge and roll-up passes over it once its base is gone, its version stands full in the eraser's head where nothing else a reader scans held it, and no diff built after the CUT rests on a listed version (amended 2026-11-12, section 15; 15.3 has the argument, and 15.1 A what the earlier wording missed). Model: `ChainsResolve`; twins `NoOwnCas`, `ReusePinned`, `CleanupReferenced`, `MergeRemovesLarge`.
 
 **I2.** A merge's inputs are full rows and tombstones (the shards), the entries of sealed slots and the unabsorbed large entries. By I1 every diff among them has its base. Each of those files is stable from the merge's base to its commit: a sealed slot is overwritten only once absorbed, which only this merge's commit or an earlier winner's can do, and a base is kept while its diff's slot is unabsorbed. One version a key follows from the winner replacing the shards' entry. Model: the ghost `broken`, `OneVersionEach`, `TypeOk`'s "no diff in a shard"; twin `MergeDropsTombstone`.
 
@@ -566,7 +638,7 @@ I8 a function      every file a writer's push, a merge or a roll-up writes is a 
 
 **The model.** `IndexMerge.tla` holds one index ref over three windows: two writers' slots (two each, three in one configuration, with seqs), their large entries, a shard and a manifest a bucket, all, the lock, and the content of two documents, d2 edited four times and d3 created and then deleted by a commit that skips the index. The journaler's entries trail their content; the backfiller indexes what no entry reaches. A head push has four shapes (create, append, seal as the head stood, fill and open the next slot), an entry may be full or a diff where a base stands, and a push built in one step commits in another, with anything between. A writer's process may die with a push in flight that still lands. Merges, a roll-up under its lock with two rollers, crashes and lapses run beside them. A head push is refused only by its own files' CAS, never by a manifest (1.1 F). Constants switch each rule between the design and §11.14 as written, and `Twin` breaks one rule of the design.
 
-What it leaves out, and why that is safe. Sizes: KeepSlots and the delta bound only turn diffs into full entries, and the model lets either be chosen. D6's shard test is a size too (amended 2026-11-12, QD-760): a version it skips is a tombstone, which the model has, and that a new shard takes at least one is 1.2.4's argument, not a run's. Several shards a bucket: `layout` is a function of the winners, and the model's one shard makes the shard's CAS and the manifest's the same step, so `PromoteBlind` removes both. Ref tombstones follow a document tombstone's rule with a ref for a key. Pushes carry one entry; a push of several is some sequence of these with fewer states between. D-EVS-45's move is one of the placements the model already allows. Coverage rows are not modelled: what is indexed is a ghost, and a backfill is whatever the content holds that no entry reaches. The erasure's CUT, CLOSUREs and epoch are `IndexRollup.tla`'s, and SEARCH-M10-46 joins the two. A DROP's rewrite is not modelled: its rule (1.2.3) is argued under I1 and held by FS-107's case.
+What it leaves out, and why that is safe. Sizes: KeepSlots and the delta bound only turn diffs into full entries, and the model lets either be chosen. D6's shard test is a size too (amended 2026-11-12, QD-760): a version it skips is a tombstone, which the model has, and that a new shard takes at least one is 1.2.4's argument, not a run's. So are step 1's give-up and step 3's test (amended 2026-11-12, QD-775): they move rows between shards of one partition and change no winner, and that every shard a layout writes fits is 1.2.4's argument as well. Several shards a bucket: `layout` is a function of the winners, and the model's one shard makes the shard's CAS and the manifest's the same step, so `PromoteBlind` removes both. Ref tombstones follow a document tombstone's rule with a ref for a key. Pushes carry one entry; a push of several is some sequence of these with fewer states between. D-EVS-45's move is one of the placements the model already allows. Coverage rows are not modelled: what is indexed is a ghost, and a backfill is whatever the content holds that no entry reaches. The erasure's CUT, CLOSUREs and epoch are `IndexRollup.tla`'s, and SEARCH-M10-46 joins the two. A DROP's rewrite is not modelled: its rule (1.2.3) is argued under I1 and held by FS-107's case.
 
 **The runs**, on 2026-11-10 with TLC from tla2tools at d8fb231, through `run-indexmerge.sh`, on a host shared with the build lanes. Every run but one is breadth-first over its whole state graph. The one marked simulation draws 4,000 traces a worker from a fixed seed and shows only that those kept every invariant.
 
@@ -726,6 +798,9 @@ requests     one upload a changed shard and one push
 time         one encode a changed shard; at §11.14's speed 10 to 15 ms each, on the draft encoder about a second
 take         only when the youngest shard fills, once in about 19 merges: up to 12 length computations of a
              1 MiB shard
+join, give-up (amended 2026-11-12, QD-775) a join's test is the joined shard's own encode, taken before the
+             join and not after; a give-up runs take's search once, and only when a removal has left a
+             shard past the cap
 ```
 
 **A roll-up** of a bucket of n documents: one lock push; S's winners into all, n × 471 to 900 B, as ⌈that / 1 MiB⌉ + 1 uploads; a/m; the removal of b/<S>/, one entry a file (the manifest, the shards and every writer's slots and large entries); a promotion's shard and manifest when there is one, which needs two writers' clocks apart at the boundary or a trailing entry; and each all shard holding a row that a carried version or tombstone replaces.
@@ -841,6 +916,13 @@ a document past a shard        (amended 2026-11-12, QD-760) skipped at extractio
                                that composes to one is left out as a diff with no base is. Behind both,
                                errIndexMergeUnplaceable: an empty shard that takes nothing fails the merge,
                                which writes nothing.
+a shard past the cap           (amended 2026-11-12, QD-775) no layout writes one. A join that would not encode
+                               within ShardBody is not made, and its two shards stay. A shard that a removal
+                               leaves past ShardBody gives up its highest entries to the rows the layout
+                               appends (1.2.4). Neither is a failure, and neither raises anything. Behind both,
+                               errIndexShardFull out of step 5's encode fails the layout, and the merge, the
+                               push past DirectBytes or the roll-up writes nothing: a state no input a decoder
+                               accepts reaches.
 a runner that rolls early      a roll-up whose signed time is before its bucket's expiry is caught by every
                                reproducer: index_mismatch naming it. Its effect is a roll-up done early, which
                                breaks no invariant but R5's margin.
@@ -925,6 +1007,41 @@ FuzzIndexLayoutTakes          any shards and any winners D6 kept: layout never r
 
 Mutants: a decoder without the bound fails `TestAnEntryPastAShardIsRefused`; a merge that composes without it fails the same test's diff case; a layout without the guard does not return from `TestAnUnplaceableLayoutWritesNothing`, which runs under a deadline.
 
+**A layout at the cap** (amended 2026-11-12, QD-775). The fix track's tests, top-level, in `evs_index_merge_test.go`. The first two are the cases measured on 2026-11-12 for question details-amend-2-layout-past-the-cap, built through the shard encoder as that measurement built them:
+
+```text
+merge/ vectors                a join refused at the cap, and a removal that gives up rows: the two cases
+                              below, each with its input shards and the output files' plaintext hashes
+TestAJoinPastTheCapIsNotMade  a bucket whose two adjacent shards hold 16 documents sharing 60,000 keys
+                              (372,510 B before its pad) and 2,000 small documents (119,795 B): they come to
+                              492,305 B, under ShardJoin, and as one shard do not encode within ShardBody,
+                              since each of the 60,000 lists grows from a 2 B bitset to 16 docids or more. A
+                              merge of the bucket commits; both shards stand under their own n with their own
+                              bytes; the manifest lists both. Again with a third shard of 100 small documents
+                              after them: the first pair is refused, and the second and third are joined
+TestARemovalPastTheCapGivesUpRows
+                              a shard that take filled to within one document of ShardBody, its keys in runs
+                              of 64 sharing two bytes and the first key held by one small document alone. A
+                              merge whose winner is that document's tombstone removes its row, and the shard
+                              as it then stands would encode 2,447 B longer, past ShardBody. The layout keeps
+                              the count take's search finds over the shard's remaining entries; the rest, from
+                              its highest doc_key down, join the tombstone among the appended rows; the shard,
+                              being the youngest, takes back what take's test allows and a next shard opens
+                              for the others; the merge commits; each shard decodes within ShardBody; every
+                              key stands once across the shards; a second run writes equal bytes. Again with
+                              the full shard not the youngest: its given-up rows go to the youngest
+TestALayoutKeepsAShardNothingChanged
+                              a shard a CLOSURE rewrote on its replaced partition, whose encoding by blocks of
+                              64 would pass ShardBody: a merge that changes nothing in it leaves its bytes; as
+                              the youngest shard it takes nothing and a next shard opens; one removal from it
+                              makes it give up rows
+FuzzIndexLayoutWrites         any shards a decoder accepts and any winners D6 kept: layout returns no error,
+                              every shard it writes is within ShardBody before its pad, and each key stands
+                              once. It takes FuzzIndexLayoutTakes's place
+```
+
+Mutants: a layout that joins on the sum alone returns errIndexShardFull from `TestAJoinPastTheCapIsNotMade`; one that skips the give-up returns it from `TestARemovalPastTheCapGivesUpRows`; one that gives up from the lowest key, or that leaves G unsorted, fails that test's vector.
+
 ### 1.7 Implementation notes, task by task
 
 Order: SEARCH-M10-45 first, since every other task plans on its `plan`. Then SEARCH-M10-10, then SEARCH-M10-11 and SEARCH-M10-12 together, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, and the schedules as their mechanisms land. SEARCH-M10-46 at any time. All are the evs lane's. Entries for the two new tasks are in `.stack/plan/proposals/details-1-tasks.md`.
@@ -977,6 +1094,27 @@ protocol/INDEX-FORMAT.md  1.8's two sentences
 
 Traps: the bound is computed on the row's bytes as the entry holds them, never on a row built again from fields, so a decoder and a writer cannot differ by a trimming; a merge must not skip a document itself, since a merge's output is only its inputs' newest versions (the question's option 3 was not taken), so it either places a winner or fails; `take` still asks the encoder for a length and never uses lone(d) in its place, since lone is an upper bound and the layout's bytes are the encoder's.
 
+**SEARCH-M10-10's fix track for QD-775** (amended 2026-11-12, QD-775). The layout's two tests, on the landed `indexLayout`; it follows or rides with the QD-760 fix track, since both touch the same function and its guards. Landed code that changes:
+
+```text
+evs_index_merge.go        indexLayout, after step 1's removals: each changed shard is asked for its length
+                          before its pad. Where the encoder answers errIndexShardFull, indexTake runs on an
+                          empty shard with the shard's remaining entries in append order (key, then kind);
+                          the shard keeps that count, the rest join the appended entries, and those are
+                          sorted again before step 2. A count of 0 returns errIndexMergeUnplaceable.
+                          Step 3's loop: where the two lengths come to under ShardJoinByteCount it asks
+                          the encoder for the union, and on errIndexShardFull leaves the pair and moves on
+                          by one. errIndexShardFull out of step 5's build still returns; the comments on
+                          both errors say that QD-760 and QD-775 make them unreachable and that they stay
+                          as closed guards
+evs_index_shard.go        errIndexShardFull's comment: a test's answer in take, step 1 and step 3
+evs_index_merge_test.go   1.6's four tests; FuzzIndexLayoutTakes becomes FuzzIndexLayoutWrites;
+                          testdata/index/merge/ gains its two vectors
+protocol/INDEX-FORMAT.md  1.8's Merges text
+```
+
+Traps: a give-up's entries are the shard's rows and tombstones together, in the appended entries' order, and the appended entries are sorted once with them in; the join's test is the union's encoding by blocks of 64 under the layout's header, never the sum of two lengths; an unchanged shard's length in the sum is its stored bytes before their pad, which the landed code already reads; a refused pair moves the scan on by one, so its second shard is tried with the next; the test of step 1 runs on shards step 1 changed and on no other, so a shard on a kept partition that nothing touches is never encoded again; the roll-up's layout of all and each promotion's merge are this function and need nothing of their own; a CLOSURE's and a DROP's `rewriteWithout` is not a layout and keeps QD-173's rule.
+
 **SEARCH-M10-11, roll-ups and the index lock** (held; L; its Build changes). Build 1.2.5. `indexRollup` is pure over S whole, all, and a lookup "the newest version of this key in the newer buckets", which the runner answers from §5.9's version table where CORE-M10-02 has landed and else from a key-to-version run built in storage from the newer buckets' doc tables and slots. Step 4's in-place rewrite leaves the task: the roll-up calls `indexMerge` with `extra` and `absorb` false for each promotion target. `rewriteWithout` (landed, SEARCH-M10-05) keeps its two other callers, a CLOSURE and a DROP. Expiry is judged at the push's signed time, for the trigger, the lock and the merge runner's "never on an expired bucket"; the lock renews at half its term. `indexer_search.go` schedules merges, roll-ups and backfills as planned. Step 5's coverage rows go into the runner's own head in the newest bucket through `indexPlanHead` with no document. Traps: read S, the newer buckets and all at one head version taken after the lock commits; a 409 that is not the lock's keeps the lock and reruns from the read; a promotion writes the target's manifest even when it had none; a/m's `rolled_through_day` and I-EVS-11 as 1.8 words them. Tests: 1.6's roll-up vectors (one with a promotion replaces "one removing an older newer-bucket entry"); FS-75's barriers; the promotion races.
 
 **SEARCH-M10-13, the in-ref writer on the real push builder** (held; L; Needs and Build change). Needs gain SEARCH-M10-45, SEARCH-M10-42 and SEARCH-M10-44: no index is written outside tests on the old extractor (section 11.5), and `Prepare` runs on phones, where extraction must be the one-pass form. It may be drafted against the whole-value extractor behind one seam and switched when SEARCH-M10-44 lands. `IndexWriter.Prepare(plan)` calls `indexPlanHead` (1.2.3) with the push's documents and adds every file and removal it returns to the statement. Conflict: a 409 naming the writer's head, or any file of its own, rereads its files and plans again, which is §11.14's "merges its delta into the winner's file" in effect; it is the same for an append and a seal. A push past DirectBytes calls `indexMerge` with its entries and commits the shards, the manifest and its head together. An in-ref push needs no pin and no life of its own: its content CAS is its fence. Dropped chunks: a version with fewer chunks than the one it replaces writes tombstones for the chunk numbers from its count up to the replaced version's count less one (section 11's interface), the replaced count taken from the replaced version's text; a device that does not hold that text and will not fetch it writes no index entry for the push, which then reads unindexed and is backfilled. Tests as planned, with R2's two-push case in both shapes.
@@ -996,7 +1134,7 @@ Traps: the bound is computed on the row's bytes as the entry holds them, never o
 - SEARCH-M10-09 is drafted; SEARCH-M10-45 finishes it.
 - SEARCH-M10-12 (coverage and backfill; it waits on SEARCH-M10-10): the backfill is 1.2.6's, with h and its two rows; `indexCoverageOf` reads up to two rows a ref; a push whose documents were all superseded is covered by its committer's next row; "re-enter a broken chain's version" becomes "re-enter a document whose diff has no base".
 - SEARCH-M10-18 (DROP rewrites): a rewrite that removes a base from a writer's file removes the diffs that name it, enters a kept head's composed version full in the signer's own head, and replaces that writer's head and the bucket's manifest in the same push (1.2.3).
-- SEARCH-M10-17 (erasure's rewrites): unchanged. Its list still names "each writer's slots and large entries in each bucket"; kept and lingering files are among them. A CLOSURE needs no head rewrite (1.2.3).
+- SEARCH-M10-17 (erasure's rewrites): changed (amended 2026-11-12, section 15; this note read "unchanged"). Its list still names "each writer's slots and large entries in each bucket"; kept and lingering files are among them, and it gains every slot holding a resting diff (15.2.3). The eraser's re-entry push precedes its CLOSUREs, which remove resting diffs with the listed entries (15.2.4, 15.2.5). A CLOSURE still rewrites no head it has no other reason to touch (1.2.3). 15.7 has the task's build.
 - SEARCH-M10-21 (reproduction): a head is reproduced from 1.2.8's inputs; hosts with the text add 1.5's check for a live entry of a removed path.
 - SEARCH-M10-23 and SEARCH-M10-24 (matching and masks): 1.2.9; the reader half is in SEARCH-M10-45.
 - SEARCH-M10-36 (FS-76, FS-107, FS-108): FS-107 and FS-108 as 1.8 rewords them.
@@ -1028,7 +1166,7 @@ Traps: the bound is computed on the row's bytes as the entry holds them, never o
 
 **§11.17.** D-EVS-46: for "A diff rests only on its document's previous version outside every head in the current bucket, or carries over the base of the writer's own head diff it replaces, and merges keep a base a head names" read "A diff rests only on a full entry of its document in another file of its own writer in its bucket, which that writer keeps while the diff needs it; every push that writes a writer's file replaces that writer's head". Its why gains: "a base in a file another device rewrites cannot be fenced by a push that writes only a head (DESIGN-DETAILS.md section 1)". D-EVS-47: for "a merge's writers' heads included" read "a merge reading no head"; for "and removing any older entry racing pushes left in a newer bucket" read "and moving a version or tombstone above an older entry that racing pushes left in a newer bucket into that bucket's shards". D-EVS-49: after "with coverage": ", built from the content ref as read after the index and sent within 5 min".
 
-**§11.8, I-EVS-11.** For "the push that removes an expired bucket adds its documents to all" read "the push that removes an expired bucket adds each of its documents to all or, for one a newer bucket holds only older entries of, to that bucket's shards". A new invariant after I-EVS-17: "I-EVS-18 every diff in a slot no merge has absorbed has its base, a full entry of its document, in another file of its own writer in its bucket".
+**§11.8, I-EVS-11.** For "the push that removes an expired bucket adds its documents to all" read "the push that removes an expired bucket adds each of its documents to all or, for one a newer bucket holds only older entries of, to that bucket's shards". A new invariant after I-EVS-17: "I-EVS-18 every diff in a slot no merge has absorbed, whose base version the erasure set does not list, has its base, a full entry of its document, in another file of its own writer in its bucket" (amended 2026-11-12, section 15).
 
 **§11.21, the risk row** "A diff's base or a deletion's mask leaves the index before the entries relying on it": its mitigation becomes "11.14's dependency row (own bases, the head rule), merges that read no head, the roll-up's promotion and the companion push's pin; an unabsorbed diff with no base is `index_malformed`; FS-107, FS-108, IndexRollup.tla and details/IndexMerge.tla".
 
@@ -1045,6 +1183,8 @@ Traps: the bound is computed on the row's bytes as the entry holds them, never o
 **protocol/INDEX-FORMAT.md** (SEARCH-M10-45 writes it). Entries: after "A diff's base version is below its version, and no key is in both of its sets": "A diff stands only in a slot. Its base is the full entry of its key at its base version in another file of the same writer and bucket: a slot that is not that writer's head, or a large entry; of two, the one in the file with the higher seq." Deltas: "Format 1's writers take every delta against the base itself, so nothing composes two deltas; the rule stands for readers of a later format." Slots and large entries: "A large entry's one entry is full." and, for "`coverage` is strictly ascending by ref_id", "`coverage` ascends by ref_id, then horizon false before true, with at most one row of each a ref." Shards gains `take` and the join as 1.2.4 has them, and the tie order. Small files: "`absorbed` holds a row for each writer with a watermark above 0; a manifest may list no shard." Times: "An entry's time is that of the content push that made its version; its bucket follows the signed time of the index push that carries it."
 
 **Amended 2026-11-12, QD-760.** §11.14, Merges, the output row: after "a next one opening at the cap" add ", which takes at least one, since extraction skips a document that alone would not fit a shard (sniff row)". The sniff row's own words are section 11.8's. protocol/INDEX-FORMAT.md, in the fix track's change: Entries, for "A key set encodes to at most 512 KiB, since a chunk past that is skipped." read "A key set encodes to at most 512 KiB, and a full entry's row and key set pass D6's shard test, since a document past either is skipped; a decoder refuses an entry past either, and a diff whose composed set fails the test under its own row is malformed, as a diff with no base is." Shards, Merges, after "takes again from there": "A new shard takes at least one row, since D6 keeps no document that alone would not fit; an implementation whose empty shard takes nothing has met an input off the rules and writes nothing."
+
+**Amended 2026-11-12, QD-775.** §11.14, Merges, the output row: for "its older version dropped from the shard holding it" read "its older version dropped from the shard holding it, a shard that this leaves past the cap giving its highest entries to the appended ones"; for "adjacent shards under 512 KiB together are joined" read "adjacent shards under 512 KiB together are joined where the joined shard fits the cap". §11.14, Roll-up, the steps row, step 4: for "join adjacent shards under 512 KiB" read "join adjacent shards under 512 KiB where the joined shard fits the cap". protocol/INDEX-FORMAT.md, in the fix track's change, Shards, Merges. Before "A merge's new rows, ascending by key, go to the youngest shard Y": "A merge first drops from each shard the entries it no longer keeps: its entry of a key whose winner is not that entry, and each row a ref tombstone or the erasure set drops. A shard so changed that no longer encodes within 1,032,192 B keeps the first c of its remaining entries, rows and tombstones ascending by key and then kind, c being the count the search below finds for an empty shard taking them, and gives up the rest, which join the merge's new rows." For "A merge's new rows, ascending by key, go to" read "The new rows, with any given up, ascending by key and then kind, go to". For "Then, by ascending n, while a shard and the next come to fewer than 524,288 B before their pads, the two become one under the lower n, the joined shard tested again with its next" read "Then, by ascending n, while a shard and the next come to fewer than 524,288 B before their pads and the two as one shard encode within 1,032,192 B, the two become one under the lower n, the joined shard tested again with its next; a pair that fails either test stays two shards and the scan goes on from the second; a shard's length is its encoding's where the merge changed it and its stored bytes' before their pad where it did not". After "a shard left with no row and no tombstone is removed.": "So a merge writes no shard past 1,032,192 B, and an implementation whose encoder refuses one at the last step has met an input off the rules and writes nothing."
 
 Nothing server-visible changes: no column, key, object family or proto field (I-18), and §2.8's evs-26 keeps its words but for the shape row's phrase above.
 
@@ -1068,6 +1208,7 @@ Each is filed under `.stack/questions/`, and the design above is built on its re
 - `search-m10-07-merge-stale-diff`: none of its options. Under R1 and R2 a merge's inputs always compose (I2), so the question has no case left.
 - `search-m10-07-rollup-merge-race`: the fence of its option 1, the newer bucket's manifest, on a different step 4 (R4, the second question above).
 - `search-m10-07-late-journal-tombstone`: its option 1, made exact: the pin is read from evs after the index, in the push's own build, and the push has a life (R5, the third question above).
+- `details-amend-2-layout-past-the-cap` (amended 2026-11-12, QD-775): its option 1, as the owner decided it. 1.2.4's steps 1 and 3 carry the rule, with one reading: a give-up takes the shard's tombstones in key order with its rows.
 - `plan-SEARCH-no-document-pushes` (QD-209), `plan-SEARCH-shrink-claim` (QD-173), `plan-SEARCH-small-readings` #4 and #6 (QD-406, QD-511), `plan-SEARCH-index-format-bytes` (QD-300) and `plan-SEARCH-sync-before-search` (QD-048): stand. QD-173's partition-keeping rewrite loses one of its three callers, the roll-up's step 4. QD-477's slot order and QD-475's paths are used as they are.
 
 ## 2. Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6)
@@ -12003,3 +12144,2496 @@ Section 14 is built on the recommendation of each.
 4. **A deposit that cites** (`details-14-deposit-cited-slots.md`). Options: (1) 5h refuses, on a deposit ref, a version that names a slot its push does not introduce (the recommendation); (2) CONSUME deletes a slot only when its origin is the consumed deposit's statement, a HEAD per slot on a P0 path, which also guards a deposit committed before the rule; (3) both.
 
 **Question this section answers.** `evsb-m2-11-dead-record-shared-slot`: none of its options as stated. Its option 1 (the client never lists a slot twice) cannot bind a hostile client and would undo 9.2.5. Its option 2 (the slot carries its push id) is the idea taken, in object metadata rather than in `EvsSlotObject`, with step 6 and evacuation both reading it. Its option 3 (slot ids in pidx/) is not needed and does not close C.
+
+## 15. Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10)
+
+Status: complete (2026-11-12)
+
+Tasks held until complete: SEARCH-M10-17 and SEARCH-M10-28. Both build from this section, in the order 15.7 gives.
+
+Model: `sidecar/sidecartest/model/details/IndexErase.tla`, its configurations (`IndexErase.cfg`, `IndexErase-*.cfg`, `IndexEraseLanded-*.cfg`, `IndexEraseTwin-*.cfg`, `IndexEraseReach-*.cfg`) and `run-indexerase.sh` beside it. Questions filed: `.stack/questions/details-15-resting-diffs.md`, `details-15-reentry-at-the-limit.md`, `details-15-card-version.md`, `details-15-card-per-stream.md`, `details-15-erase-before-cut.md`, `details-15-context-fields.md`, `details-15-small-readings.md`. Question this section answers: `search-m10-46-erased-base-of-a-live-diff`, with its option 1 changed in three places (15.9). It builds on section 1's own bases (R1, R2), its journal and its backfill, and on QD-775's layout, which already drops an erased row in its step 1. It amends 1.2.3, 1.2.4, 1.2.5, 1.2.6, 1.2.8, 1.2.9, 1.3's I1, 1.7 and 1.8 (15.2.12), and changes no rule of section 7 or section 13.
+
+### 15.1 The problem
+
+An erasure is key destruction (§11.12). For the search index it is four kinds of push on the index's ref: a CUT, which adds the erasure's documents to the ref's erasure set, each "up to" a version, and moves the ref's index_epoch, so that every index push built before it is refused; CLOSUREs, which rewrite in place, at the same length and under a fresh key, each index file that holds a listed version; and ERASEs, which destroy the old keys. A CLOSURE may only replace committed file versions with shorter or equal ones, and evs takes one at the storage limit within its eraser's allowance (§11.13's wait row).
+
+Section 1 rebuilt everything else on that ref. A diff now rests on a full entry in another file of its own writer (R1), every push that writes a writer's file replaces that writer's head (R2), and I1 says that an honest writer's unabsorbed diff always has its base. Section 1 left the erasure "unchanged" (1.7), with one exception clause: a CLOSURE need not replace a head, since the CUT's epoch and `choose`'s rule that no diff rests on a listed version fence it. Seven things are wrong on the result. A, D, E and F are the brief's; B, C and G were found writing this.
+
+Terms for this section. The *listed version* L(k) of a doc_key k is the highest version at which the ref's erasure set lists it, 0 if it lists none. A *resting diff* is a diff of k whose base version is at or below L(k) and whose own version is above it.
+
+**A. The erased base of a live diff (`IndexEraseLanded-ErasedBase`, 6 states; `IndexRollup.tla`'s `cut-read` ground, 11).** File d is at version 1, and writer W's full entry of it sits in a sealed slot of W's. An admin's device reads d at 1 and builds a CUT listing d up to 1. W commits version 2, whose entry is a diff on 1, as R1 allows: the push names the epoch that only a CUT moves, so it commits. The CUT commits. It changes one file, the erasure set, so nothing orders it after the edit. A CLOSURE rewrites the sealed slot without version 1, as §11.14's erase row requires. W's diff now has no base; version 2 is not listed, so no reader masks or excuses it; 1.2.9 makes it `index_malformed` naming W, which wrote by the rules, and version 2 reads not yet searchable until a host with the text re-enters it. The two fences bind pushes built after the CUT, and this push was built before it and committed before it. A message never changes, so mail cannot meet this; files and git-mode refs can.
+
+**B. A resting diff is erased content, found here (`IndexEraseTwin-KeepResting`).** A diff's body is the keys its version adds to its base's set and the keys it removes (INDEX-FORMAT.md's entry). Whoever holds a resting diff of d at 2 on 1 and the full set of version 2, which is not erased and which the index must keep, has the erased set: keys(1) = (keys(2) less the added keys) with the removed keys. So an answer that leaves the diff in place and only stops the alarm, which options 1 and 2 of the filed question both do as worded, keeps the erased version's postings under an openable key for as long as the slot stands, in an absorbed slot as well as a live one. FI-19 and I-EVS-13 forbid that.
+
+**C. A merge between the CUT and any repair loses the version, found here (`IndexEraseTwin-MergeDropsResting`, 7 states).** `indexMergeCandidates` as landed leaves a resting diff out before it composes anything, whether or not its base still stands, and raises the writer's watermark over its slot. A merge built after the CUT and committed before the eraser acts therefore leaves version 2 in no shard and in no file a reader scans, with no alarm: a search for it answers no match, not "not yet searchable".
+
+**D. A run card cannot come back (`IndexEraseTwin-SeqVersion`, 8 states).** §16.8 has the CUT list "each run card holding it, at its current version" and the CLOSUREs "re-project each run card that holds the entry". RECORD.md 7.4 makes a card's version the highest seq of the entries folded. Fold the card again without the erased entry and its version is the same, or lower when the erased entry was the newest: the set masks it at every reader, §11.14's epoch row forbids any push to write it, and a CLOSURE can only remove. An ended run's card never returns to search, where §16.10 and FS-80 say it does.
+
+**E. A projection can bring the text back (`IndexEraseTwin-SeqVersion-Late`, 6 states; `IndexEraseTwin-NoSync`, 6; `IndexEraseTwin-CutFirst`, 5).** The CUT lists the card up to the version its eraser read. A projection that folds one more entry and lands between that read and the CUT has a higher version: it is not listed, no CLOSURE takes it, and it holds the erased text for good. After the CUT, a device that still holds the entry's plaintext and has not yet applied the ERASE projects the card at the new epoch with the erased entry in it; nothing in the set tells it which entry to leave out, since the set names documents, not entries. Where the CUT precedes the ERASE, as SEARCH-M10-16's plan entry orders them for every caller, even a device that has just read the erasure ref can still open the entry.
+
+**F. No push is defined to carry a card, and a card has no ref.** 1.2.8 gives a companion push's documents by path, and a reproducer rebuilds every file of a push or raises `index_mismatch`. A card is not a path. Its doc_key needs a ref_id, `IndexDocumentSource.IndexDocuments` visits one ref at one version, and §16.10 and RECORD.md say "one run card per run" of a log, whose entries two ingesters may hold in two streams (RECORD.md 5.4's twice row). §16.10's "at most once every 5 min while the run moves" is a device's timing, which no reproducer can derive. Coverage and backfill have no rule for a card.
+
+**G. Two honest builders can write two cards at one version, found here (`IndexEraseTwin-NoBlock`, 8 states).** 1.2.9 lets a reader test a diff against any copy of its base's version, because copies of one version are equal. "The highest seq folded" does not make them so: an ingester's stream can hold a run with a gap that another ingester's stream fills, and a builder that has applied an ERASE cannot fold an entry that a builder which has not still folds. A diff composed against the other copy then fails its row's trigram count, and an honest writer reads `index_malformed`.
+
+**The requirement.** I1 holds for every honest writer under a CUT that lists what its eraser read, and an edit that survives an erasure stays searchable at every step. No stored index version keeps an erased version's postings under an openable key (FI-19, I-EVS-13), a resting diff's among them. A card is searchable again after an erasure, without the erased text, at a version every reader and reproducer derives alike, and no projection built after the CUT holds an erased entry. One push carries a card, and coverage counts it. No message of format 1 or 2 changes, and evs's rules for a CUT, a CLOSURE and an ERASE stand as built.
+
+### 15.2 The design
+
+#### 15.2.1 The principle
+
+Three ideas.
+
+**An erasure re-enters what it would take out of search.** Before its first CLOSURE on an index ref, the eraser writes, as full entries in its own head on that ref, each version that would otherwise be left with nothing a reader can resolve: the version a resting diff carries, composed from the diff and its base as a merge composes them, with no content read; and each listed run card, folded again from its stream without the erased entries. This is the shape of a DROP's rewrite, which enters the kept head's composed version full in the signer's own head (1.2.3), made into a push of its own because a CLOSURE may create nothing.
+
+**Whatever gives the erased set back is erased with it.** A CLOSURE's rewrite of a slot removes every listed entry and every diff that rests on a listed version, and the erasure's list of files takes in every file that holds such a diff. Readers, merges and roll-ups resolve a resting diff through its base while the base stands, and pass over it in silence once the base is gone, so no step of an honest erasure alarms an honest writer.
+
+**A derived document's version carries the index epoch.** A run card's version is the index_epoch its push names, above the stream version of its run's newest entry. A CUT lists a card through the epoch it names, which covers every projection made before the CUT whatever landed after its eraser read, and every projection made after it is above the list. The erasure destroys the entry's body before its CUT, and a builder that reads a new epoch reads the erasure ref before it folds, so no projection at or above the CUT's epoch can hold the entry. A card is a function of one stream at one version and of the erasures whose CUT precedes its epoch, so a companion push carries it, a backfill covers it, and a reproducer rebuilds it.
+
+#### 15.2.2 Terms
+
+```text
+L(k)             the highest version at which the ref's erasure set lists doc_key k (IndexErased.version), 0 for
+                 none; a version v of k is listed when v <= L(k) (`indexView.erased`, as landed)
+resting diff     a diff entry of k, in any slot of any writer, absorbed or not, with base version <= L(k) and
+                 own version > L(k). Diffs sit only in slots (1.2.3)
+excused          a resting diff whose base no file of its writer holds (1.2.1's base of a diff). An excused diff
+                 breaks no format and alarms nothing
+cover of (k, v)  an entry of k at a version >= v that a reader scans and that is not a resting diff: a row or a
+                 tombstone of a bucket shard or an all shard; an entry in a head, a sealed slot or an unabsorbed
+                 large entry (a full entry, a tombstone, or a diff that is not resting)
+owed (k)         for a key k with a resting diff at the list's head: v* = the highest version among k's resting
+                 diffs; k is owed at v* when no cover of (k, v*) stands
+re-entry         a full entry of an owed key at its owed version, or a run card folded again, in the eraser's own
+                 head (15.2.4)
+stream R         one ref of a record log that holds entries; an owned stream takes only its sidecar's pushes
+                 (§11.8), so R has one writer, W_R
+source entry     an entry of one of the kinds RECORD.md 7.4's sources row names for the log's card (a vault:
+                 context, tool_call, change, transcript; a team record: context, change, approval, publish,
+                 route, reach, coverage)
+card (R, r)      the run card of run r in stream R: the derived document named run/ || run_id under R's ref_id
+E                the index_epoch a push names: the version of the index ref's newest CUT before it (11.8's 5d)
+c(R, r, p)       the highest entry version, among the source entries of r that R holds at version p, erased or
+                 not: the stream version at which the run last changed in R
+erased at E      an entry is erased at epoch E when an ERASE names it, by its key row or, through its sealed note,
+                 by its entry_id (RECORD.md 8's every copy), and that ERASE's erasure has a CUT on the log's
+                 ur/index that named an epoch below E
+blocked          a card whose builder cannot open one of its source entries because an ERASE has taken its key,
+                 where that entry is not erased at the builder's E
+```
+
+Whether an erasure has a CUT below E is read from two places, and no third is needed. The erasure set at the push's base lists it: then its CUT named `IndexErasure.epoch`, and E is above that. Or the set does not list it and one of its ERASEs' notes says complete: then a later CUT dropped it, which a CUT does only for a complete erasure whose own CUT named an epoch below `listed_since` (§11.12's cut row), and E is at or above `listed_since`. An erasure that the set does not list and no ERASE completes has no CUT below E.
+
+#### 15.2.3 The erasure's list
+
+§11.14's erase row has the eraser list, at a head at or after its CUT, every index file holding one of its documents. The list gains the resting diffs, and the row's history clause with it:
+
+```text
+list(index ref I, erasure X), at a head b at or after X's CUT:
+  for each doc_key k that X lists, in every bucket and in all:
+      held(k)    = every file with an entry of k at a version <= L(k): each writer's slots and large entries,
+                   absorbed or not; the bucket shard holding its row; the all shard holding it (I-EVS-11)
+      resting(k) = every slot with a resting diff of k
+  the files to rewrite = held(k) and resting(k), over X's keys: one rekey object each (§11.13's wait row)
+  the keys to destroy besides = the key of every index path whose retained version holds an entry of k at or
+      below L(k) or a diff of k on a base at or below L(k), found from the ref's history as §11.14's erase row
+      finds a held version, a reused slot, a shard the document left and a rolled bucket
+```
+
+**No later push lengthens it.** After the CUT every index push names its epoch or a later one, so its builder has applied the set: it writes no entry of k at or below L(k) (§11.14's epoch row), and `choose`'s B leaves a listed version out, so it writes no diff on one. A writer's push that seals its head as it stood (R2) writes the head's bytes again at the same path, which is a new version of a file already on the list; the CLOSURE for that path then gets 409 and rereads it, as the erase row has it. A merge or a roll-up after the CUT drops a listed row in its layout's step 1 (QD-775) and writes none.
+
+**What a writer's own push does with a resting diff of its own.** Nothing new. `plan` keeps the entry in the head, since its version is not listed, and keeps its base's file, since an unabsorbed diff names it. The eraser acts whether or not the writer ever pushes again, so no rule is added to `plan`.
+
+#### 15.2.4 The re-entry push
+
+A re-entry push is an ordinary index push by the eraser's sidecar as a writer. It names the epoch, carries no flag, and is built in a companion push's order (1.2.6), so R5's pin argument covers it.
+
+```text
+reenter(index ref I, erasure X):
+  1 t = now, before any read
+  2 read I's head from evs: base b, index_epoch E, the erasure set, the eraser's own files and manifest row in
+    the bucket of t. The set must list X, else X's CUT is committed first (§11.12's reconcile row)
+  3 list(I, X) at b (15.2.3)
+  4 documents:
+      for each key k of X that is owed at b, at v*:
+          the resting diff of k at v*; of several, the one whose writer_sidecar_id is lowest, then the one in
+              the slot with the highest seq (copies of one version are equal, so the choice only makes the
+              push a function)
+          its base, by 1.2.1's rule, in that diff's writer's files; keys = the base's set with the diff's
+              delta applied, which must have the row's trigram count, as at a merge (1.2.4)
+          the document {kind full, key k, version v*, row: the diff's row, keys, replaces: 0}
+          a set that D6 skips under the diff's row (1.2.2; QD-760) is not entered, and reads as 1.2.9's
+              malformed row has it
+      for each run card X lists whose stream this device holds: 15.2.10's re-projection
+  5 plan(b, the eraser, t, documents, coverage) (1.2.3), where coverage is the rows of the eraser's newest head,
+    none moved; in key order, in pushes whose encoded entries stay within DirectBytes, so that none merges
+  6 send within IndexPushLife of t. On 409 for a path, 409 INDEX_EPOCH, 429 TIME_AHEAD or the life passing: from
+    step 1. On a quota refusal (§11.13's limit row): 15.2.5's wait
+```
+
+**Bounds on the eraser's head.** An erasure lists at most what one erasure set holds, 16,208 B, about 700 path documents of 22 or 23 B each beside its own 50 B, and owes at most one version a document. A re-entered entry is a full entry: in the head when it is within EntryMax, else a large entry of its own, by `plan`'s rules and under its caps (RingSlots, KeepSlots, SlotCount, the seal, a merge first at a ninth other slot). The eraser already holds every file it lists, so it can merge. A push is at most DirectBytes of entries, 256 KiB; 700 entries of 8 KiB are 22 pushes, and the case this section expects is one entry.
+
+**Why the composed entry is the document.** The diff's row is the row of version v* and its delta was taken against the base itself (1.2.3), so the composed set is the key set extraction gave for v*. A host with the text checks the entry against its path's state, as it checks any entry of a push that moves no coverage row (1.2.8). The entry holds nothing of the erased version: its keys are v*'s.
+
+**Which bucket.** `plan`'s: the bucket of t, or the newest bucket already holding an entry of the document where that is newer (D-EVS-45's move, which the eraser can always make, since its list read those buckets). A re-entry in a newer bucket than its resting diff is found by newest-wins like any entry. It cannot land below a version a roll-up has moved or dropped (I5): an entry of k above v* would be a cover, so none stood at b, and one committed after b cannot be rolled within IndexPushLife (1.2.6's argument).
+
+#### 15.2.5 CLOSUREs, their order and the storage limit
+
+```text
+clean(file, set):
+  a slot or large entry   the file without each entry e with e.version <= L(e.key), and without each diff e with
+                          e.base_version <= L(e.key); entries in key order as before; the header's count and
+                          body length set; padded to the replaced version's exact length (§11.14's pad row)
+  a shard                 as §11.14's erase row has it: without each row and tombstone of a listed version
+```
+
+A CLOSURE push replaces each file it names by `clean` of the version it replaces, and nothing else. It is a function of the replaced files and the erasure set at its base, so a reproducer checks it as §11.14's reproduce row says and raises `index_mismatch` naming the CLOSURE's signer on one that left a listed entry or a resting diff in a file it rewrote.
+
+**Order on one index ref.**
+
+```text
+1 the CUT (§11.12), then list(I, X)
+2 reenter(I, X) until no key of X is owed and every listed card this device can fold stands (15.2.10)
+3 CLOSURE and ERASE pairs over the list, sized to the allowance (§11.13's wait row), in path order
+4 the erasure's last ERASE says complete, as today
+```
+
+No CLOSURE of X rewrites a file of resting(k) or the file holding the base of one of k's resting diffs while k is owed. That is the whole ordering rule for a path document: once k is not owed, its files go in any order, and between a CLOSURE that takes a base and the one that takes its diff the diff is excused (15.2.6). A run card's files never wait: a listed card is removed whether or not it has been folded again (15.2.10).
+
+**At the storage limit, or while the network is spent.** evs takes the CUT, the CLOSUREs and the ERASEs (§11.13's limit row) and refuses the re-entry push, which adds payload. Then:
+
+```text
+a key that is owed     its resting(k) slots and the files of their bases wait, with their ERASEs, until evs takes
+                       the re-entry; every other object of the erasure goes on. The base stays masked from the
+                       CUT (§11.14's cut row) and stays openable to key holders meanwhile
+a listed card          its CLOSUREs and ERASEs go on; the card is out of search until evs takes a re-projection
+                       (15.2.10)
+retry                  the re-entry is sent again at each turn of the eraser's allowance and at least every
+                       IndexErase.ReentryRetryInterval (10 min), and §5.4's erasure event shows `waiting` with
+                       the count of documents to re-enter
+```
+
+How often a key waits: the edit must commit in the seconds between the eraser's read and its CUT, and the network must then reach its limit, or be spent, in the seconds before the re-entry, which is the eraser's next push after the CUT. At the limit itself no content push commits, so no edit can make a resting diff there. 15.9 puts the choice to the owner.
+
+#### 15.2.6 Readers, merges and roll-ups
+
+```text
+a reader (1.2.9)   resolves a diff in one step from its writer's other files, through a listed base while that
+                   base stands: the base's set is used to compose and for nothing else. A diff whose base no
+                   file holds is excused when it is a resting diff: no candidate, no alarm, nothing shown as not
+                   yet searchable on its account. Any other baseless unabsorbed diff is index_malformed, as today
+a merge (1.2.4)    leaves out every entry at a listed version, a diff by its own version, as today. A full entry
+                   at a listed version is still the base of a resting diff while it stands: the diff is composed
+                   onto it and its version is a candidate. An excused diff is left out and alarms nothing
+a roll-up (1.2.5)  the same two rules in its step 3
+```
+
+Why a merge composes through the base rather than leaving the diff out: a merge raises the writer's watermark over the diff's slot, after which no reader scans it. If the merge left the diff out, the version would be in no shard and in no scanned file until the eraser's re-entry, and C is that window. Composed, the version is in the shard, the shard's row is a cover, and the eraser owes nothing for it.
+
+A reader needs no history for the excuse. It holds the erasure set, since it masks by it, and the test is the diff's own base version against L(k).
+
+#### 15.2.7 Resume
+
+§11.12's reconcile row stands: the eraser's device at its next start, another device of its member 25 h after its CUT or last ERASE, any device that may erase once the eraser is revoked, reaped, suspended or parked. Each step above reads only evs's state, so a resumer runs them as the first eraser would:
+
+```text
+the CUT            committed by the resumer where a crash or a full set left it missing (reconcile row)
+the list           taken again at the resumer's head
+re-entries         owed is judged at that head. A version the first eraser entered is a cover, in that eraser's
+                   head, so it is not entered twice; one it had not entered goes into the resumer's own head
+an owed key whose  cannot arise from an honest eraser, which rewrites no base while its key is owed. A resumer
+base is gone       that meets one enters nothing for it, removes the diff with the rest, and the version is left
+                   to a host with the text, as 1.2.9's malformed row has it for any lost entry
+pairs              first an ERASE for each CLOSURE no ERASE followed, then the rest (reconcile row)
+```
+
+The first eraser's head stays where it is when its device is revoked: its entries are ordinary entries of that writer, absorbed by the next merge that reads its sealed slots.
+
+#### 15.2.8 The run card: identity, fold and version
+
+```text
+identity   card (R, r): doc kind derived, name run/ || run_id, chunk 0, doc_key under R's ref_id (§11.14's key
+           row), the row's ref_id R's, the locator the name. One card a run a stream
+writer     W_R, the stream's writer: the capturing daemon for its own stream, the ingester for the stream it
+           ingests into (RECORD.md 5.4's index row). Others write it only as a backfill or a re-entry
+fold       fold(R, r, p, E) = the source entries of r that R holds at p, less those erased at E, in the order
+           (seq in their writer's chain, then entry_id bytes). RECORD.md 7.4's mapping over them, "first" and
+           "newest" read in that order, gives the row and the text; where 7.4 takes "the newest context", it is
+           the newest among the entries folded. A fold with no entry is no document
+version    E * 2^32 + c(R, r, p), E the index_epoch the push names. The split is
+           IndexFormatSettings.CardVersionBitCount, 32. A stream version or an epoch at or past 2^32 writes no
+           card (errIndexCardVersionSpace), and R's pin stops below it, so its run reads not yet searchable
+replaces   for 1.2.3's choose: the version of this writer's newest entry of the card in its own files at the
+           push's base, 0 where it has none or the set lists it
+```
+
+**Two streams, two cards.** Two streams of one log that hold entries of one run, as two ingesters' streams can (RECORD.md 5.4's twice row), give two cards, each the fold of what its own stream holds, as two copies of one entry are already two documents under two refs (RECORD.md 7.1's row). §16.10's group row joins them by field 10: the run's started is the earlier of the two, its last activity the later, its title and fields the card's whose row time is newer. A card is thereby a function of one ref, which is what `IndexDocumentSource.IndexDocuments(refVersion)` visits and what a coverage row names.
+
+**Why the stream version and not the seq.** c is read from R's state at p by any device, with or without the bodies, and it grows with every entry the run gains in R, in whatever order an ingester wrote them. The highest seq folded does neither: a stream that holds a run's entries 1 to 64 and 129 to 192 and later gains 65 to 128 has two folds at seq 192.
+
+**Why the epoch.** Compared as numbers, versions order by epoch first. Every index push names the epoch in force (11.8's 5d) and a CUT moves it, so "made before this CUT" is a range of versions: everything below (the CUT's version) * 2^32. Nothing else on the index ref separates the projections a CUT must list from the ones that follow it, and the eraser's read of "the current version" cannot (E). An unrelated CUT on the same ref also moves the epoch; a card it does not list keeps its entry and its version, and its next projection is above both.
+
+**What decides a card's bytes.** R's source entries of r at versions at or below c, with their bodies; E; and which of those entries are erased at E. Entries of a stream are created and never changed, and 15.2.10 keeps a BASE from removing one whose erasure is not complete, so the first is the same for every device that reads R at or after c. The third is the same for every builder that names E (15.3's I12). So two entries of a card at one version are equal, as 1.2.9 needs.
+
+**An entry document's fields 9 and 11.** RECORD.md 7.1 fills them, for an entry that is its own document, from "the run's first context entry in this log". Read for a copy in stream R at a push with pin p and epoch E: the first, in the fold's order, of the run's context entries that R holds at p and that are not erased at E; empty if none. An entry document whose builder cannot open that context entry while it is not erased at E is blocked as a card is, and holds R's pin the same way. An erasure of a context entry does not list the run's other entry documents: a row written before it keeps the agent label and the session ids it read, which are names the run's other entries carry in their own bodies (a handoff names an agent label, RECORD.md 4.3), and a rebuild at a later epoch writes them from the next context entry or empty. So two copies of an entry document at one version can differ in those two fields across an erasure's CUT, and nowhere else. Nothing rests on their equality: an entry's path is created once, so no diff has an entry document as its base, and newest-wins shows either. `ur record erase`, listing what it will destroy (RECORD.md 8), says for a context entry how many of the run's other entry documents keep its label and session ids. 15.9 puts this to the owner.
+
+#### 15.2.9 The card's carrier, coverage and backfill
+
+A card rides its stream's index pushes on the log's `ur/index`: W_R's companion push, a backfill, or a re-entry. 1.2.6 gains, for a record log:
+
+```text
+the journal
+  unit      a unit of stream R at version c holds, beside the entry documents its log indexes (RECORD.md 7.1's
+            documents row), one card marker {doc_key, name} for each run that a source entry created at c
+            belongs to. A marker has no version, row or key set: its card is folded at the build. It adds
+            nothing to the device's local overlay (the search row), so a card is as fresh as its last push,
+            which is §16.10's cadence
+  again     a unit {R, run_id, erasure_id} with no version, appended when this device applies an ERASE that
+            names a source entry of the run in R and the device holds R's entries: W_R; the eraser; an indexer
+            serving the repo for search; where none serves it, a desktop or daemon that mirrors the log
+            (§11.14's coverage row names the same devices for a backfill)
+  ApplyCut  removes no marker and no again unit: a card's version is assigned at the build, above every
+            version a set lists
+
+a companion push
+  when      for a record log the interval is RecordSettings.CardInterval (5 min) in place of
+            Search.CompanionInterval; a build is also due at once when a unit holds a run's first source
+            entry or the coverage entry that ends it (§16.10's start and end)
+  2a        where this build may carry a card and E is not the epoch at which this device last did this step
+            for the log: read the log's `erasure` ref's head from evs, not from a cache, bring the replica to
+            it and apply every ERASE (§11.12's after row); then record E beside the journal. The read comes
+            after step 2's
+  4         per run with a marker among R's due units: one card, fold(R, r, p_R, E), a put at
+            E * 2^32 + c(R, r, p_R); a fold with no entry gives nothing. A marker is dropped as covered as a
+            path's unit is: a horizon row for R at the push's base is at or above its c
+  blocked   where the card of a marker is blocked (15.2.2), R's pin for this build is one below the lowest c
+            of a due unit holding a marker of a blocked card. Units above it stay committed, and where none is
+            at or below it R gives this build nothing
+  again     an again unit is due when its erasure has a CUT below E and, on a device other than that
+            erasure's eraser, t is at or past the erasure's cut_ms + BackfillAge while the set lists it. It is
+            dropped as covered when the device's copy of the index holds an entry of the card at an epoch
+            above the erasure's `IndexErasure.epoch`, or, where the set no longer lists the erasure, at or
+            above `listed_since`. Else it gives the card as a marker does. Before its erasure has a CUT below
+            E it waits
+  5         coverage as today; a build that carries only again units moves no row
+
+a backfill
+  4         documents gain: for each run whose newest source entry at p_R was created by an unindexed version
+            at or below h, its card, fold(R, r, p_R, E) at E * 2^32 + c(R, r, p_R). A run that changed again
+            after h is left to that change's own push. h also stays below the first version whose card is
+            blocked
+```
+
+**Coverage counts a card as it counts a path.** A version of R is indexed when a coverage row for R reaches it (§11.14's coverage row): the push that carries that row holds the entry documents of every version up to it and the card of every run those versions touched, each at its state at the pin. A version that adds only entries that are neither documents nor sources adds a unit with no document, and the build still raises the row (1.2.6). A run that is blocked holds its stream's row below its first blocked version, so its later entries read not yet searchable until the CUT lands; other streams and other repos are not held.
+
+**The cadence is no input.** Whichever push covers (q, p] carries the card at p of every run touched in it, so a reproducer derives the card from the push and never from a timer. §16.10's "at most once every 5 min while the run moves" is the interval above. A build that the device makes sooner, because its head would seal or it is about to sleep, carries the cards due then too.
+
+**Reproduction.** 1.2.8's table gains:
+
+```text
+a card            fold(R, r, p, E) at E * 2^32 + c(R, r, p): R's source entries of the run at p with their
+                  bodies; the push's index_epoch; the erasure set at the base and the notes of the ERASEs of
+                  each erasure with a CUT below E; record extractor 1 (RECORD.md 7.4)
+a re-entry push   15.2.4's documents, from the listing at the push's base and, for a card, as above
+```
+
+A card's version names its own inputs: its low 32 bits are c, and no source entry of the run lies in R between c and the pin, so fold(R, r, p, E) is the fold of R's entries of r at or below c; its high bits are E. A card in a push that moves no row, an again unit's or a re-entry's, is therefore checked from the entry alone (1.2.8).
+
+A reproducer checks a card later than its builder made it, and may hold ERASEs the builder did not. For each source entry it cannot open: where the erasure set at the push's base lists that entry's erasure, the entry was erased at E and is left out. Where it does not, the reproducer cannot tell an erasure dropped before the base from one whose CUT came after it, so it folds without the entry: equal bytes pass, and unequal ones mean it lacks an input, since the builder may have folded the entry before the ERASE reached it. It then fetches the file and raises nothing (§11.14's reproduce row). One that can open every entry the fold names and builds other bytes raises `index_mismatch` naming the push's signer.
+
+#### 15.2.10 A card through an erasure
+
+```text
+erase(log, entries), by a device that may erase them (RECORD.md 8):
+  1 read every stream and deposit ref of the log to its head; find every copy of each entry (RECORD.md 8)
+  2 ERASE every copy's key row and each deposit slot that RECORD.md 8 names, in as many pushes as their keys
+    take. The bodies are gone from here. Each ERASE's sealed note is the erasure's ErasureBody, naming
+    the entry ids, as landed (record_erase.go). No ERASE of this step or the next says complete: an
+    erasure is complete only after its CUT
+  3 read the streams' heads again; ERASE a copy found now, as step 2
+  4 IndexEraser.Cut on the log's ur/index:
+        a copy that is a document   {its doc_key, its path's entry version}
+        card (R, r), for each       {its doc_key, through the epoch}: the CUT writes
+        stream R holding a copy     (the epoch the CUT names) * 2^32 + 2^32 - 1 as its version, so every
+        of a source entry of r      version of that epoch or an older one, and writes it again on a rebuild
+                                    after 409 INDEX_EPOCH
+    A full set makes this step wait (§11.12's cut row), and steps 5 to 7 with it
+  5 reenter(ur/index, X) (15.2.4): each listed card is folded at its stream's head, fold(R, r, head, E), and
+    entered full at E * 2^32 + c(R, r, head) in the eraser's own head. A fold with no entry enters nothing. An
+    eraser that does not mirror the log fetches the run's source entries for it, at most
+    IndexErase.CardFetchByteCount (16 MiB) a card, and past that enters nothing
+  6 IndexEraser.Rewrite: the list and the CLOSURE and ERASE pairs (15.2.5)
+  7 the erasure entry (§16.8)
+```
+
+Step 4 lists a card for every stream that holds a copy of a source entry, whether or not the index holds that card yet: a projection in flight is then listed too. An erasure none of whose entries is a document or a source entry has nothing to list and takes none of steps 4 to 6, as today.
+
+**The fence.** Let X erase entry e, and let its CUT name epoch E_X. Every index entry of a card whose fold holds e was written by a push naming an epoch at or below E_X, so X's CUT lists it. A push naming a higher epoch names the version of X's CUT or of a later one. Its builder therefore read `ur/index`'s head after X's CUT committed, and at step 2a then read the `erasure` ref's head from evs and applied it. X's ERASEs of steps 2 and 3 committed before its CUT was built. So the builder had destroyed its plaintext and its key of e, and e was erased at its epoch: it could not fold e, and the rule did not let it. The same holds of a backfiller, a re-entry and a rebuild, which build by the same steps. What it rests on: the order of steps 2 to 4 on the eraser; step 2a's read coming after step 2's; and evs's refusal of an index push that names another epoch than the head's (I-EVS-17).
+
+**Between the ERASE and the CUT.** A builder that has applied the ERASE holds a blocked card and builds none; one that has not still folds e, at the old epoch, which the CUT will list. No two builders write different cards at one version. A device that applies an ERASE of a source entry it holds also masks the entry's card whole in its own searches, from that moment until it applies a set version that lists the card; from then the listed versions are masked and no others. The window is one push for an erasure that is not waiting on a full set. Until the CUT, a device that has not applied the ERASE still finds the card's old versions, as it would under the other order, where the CUT waits on the same room in the set; here the body is already gone.
+
+**Who folds the card again.** The eraser, at step 5, at once. Every other device that held the stream's entries when it applied the ERASE has an again unit (15.2.9), which it builds BackfillAge after the CUT unless the index already holds the card above the list. So a card whose eraser could not enter it (a phone past CardFetchByteCount, a crash before step 5, a quota refusal at the storage limit) is entered by its stream's writer or a mirror, and an erasure's `complete` does not wait for it: complete is every key gone (§11.12), and step 6 runs whether or not step 5 could. A card has no resting diff: one would have a base below the CUT and a version above it, and `choose` takes no listed base.
+
+**A copy that arrives late.** RECORD.md 8 has a log admin's daemon ERASE, under the same erasure_id, a live copy of an erased entry that it reads at a later sync. It then runs steps 4 to 6 for that copy: IndexEraser.Cut called for an erasure the set still lists adds the copy's documents to that erasure's entry, and where the set has dropped it adds the entry again; the card of the copy's stream is listed through the epoch that CUT names. Until then the card's next projection already leaves the entry out, since its builder holds the ERASE, and newest-wins shows that one.
+
+**A BASE waits for the erasure.** The weekly BASE (RECORD.md 8's expiry row) removes from a stream only entries whose erasure is complete. An entry file removed earlier would change what a builder that has not applied the ERASE reads at a version it shares with one that has.
+
+**Masks at a reader.** A key the set lists is masked at or below L(k), whether or not an ERASE names it. A key that an ERASE names and no set version the device holds lists is masked whole, until a set version lists it or, as today, the rewritten files are cached. So an edit that survives an erasure, and a card folded again, show as soon as they are synced.
+
+**The directory.** §16.11's announcement documents keep their rule: a directory erasure removes an announcement's document whole and folds nothing again, and an announcement's version stays the Announcement's.
+
+#### 15.2.11 Settings
+
+Every limit is a settings field (QD-702). A field marked format is one every device must hold alike, as `IndexFormatSettings`' others are.
+
+```text
+IndexFormatSettings.CardVersionBitCount   32       format: the low bits of a card's version that hold c
+IndexEraseSettings.ReentryRetryInterval   10 min   between tries of a re-entry push that a quota refused
+IndexEraseSettings.CardFetchByteCount     16 MiB   the most source-entry bytes an eraser that does not mirror
+                                                   the log fetches to fold one card again
+RecordSettings.CardInterval               5 min    as landed: now the companion interval of a record log
+BackfillAge, DirectBytes, IndexPushLife            section 1's, used here unchanged
+```
+
+#### 15.2.12 Amendments to section 1
+
+Each place is marked "(amended 2026-11-12, section 15)" where it stands.
+
+```text
+1.2.3   The exceptions: a CLOSURE's two fences bind pushes built after the CUT; a diff that landed before it on
+        a version the CUT then lists is a resting diff, which 15.2.4 re-enters and 15.2.5 removes
+1.2.4   merge: a full entry at a listed version is still the base of a resting diff while it stands; an
+        excused diff is left out and alarms nothing
+1.2.5   roll-up step 3: the same
+1.2.6   the journal's card markers and again units; ApplyCut removes neither; a record log's interval; step 2a;
+        step 4's cards, blocked pin and again units; a backfill's cards
+1.2.8   a companion push's documents on a record stream; a card's and a re-entry push's inputs
+1.2.9   chains and malformed: a diff resolves through a listed base while it stands; an excused diff is no
+        candidate and alarms nothing
+1.3     I1's statement and its proof's last sentences
+1.7     the note for SEARCH-M10-17
+1.8     the proposed I-EVS-18, in I1's amended wording
+```
+
+### 15.3 Invariants and why they hold
+
+```text
+I1 own bases       (amended) every diff in an unabsorbed slot whose base version the erasure set does not list
+                   has its base, a full entry of its key, in another file of its own writer in its bucket
+I9 survivors       for each key, the newest version above L(k) that the index holds is one a reader resolves:
+                   a full entry, a shard row, or a diff whose base stands. No step of an erasure, and no merge
+                   or roll-up beside it, lowers it (FI-18 through an erasure)
+I10 erased gone    once an erasure's last ERASE commits, no stored version of an index file under an openable
+                   key holds an entry of one of its documents at or below L(k), a diff resting on one, or a
+                   version of a card that folds an entry it erased (FI-19, I-EVS-13)
+I11 the card fence an index entry of a card whose fold holds an entry that erasure X erased was written by a
+                   push naming an epoch at or below the one X's CUT named, so X's CUT lists it
+I12 one fold       two index entries of one card at one version hold one fold, so copies of one version are
+                   equal for a derived document as for a path's (1.2.9)
+I13 a card returns once a device that holds the stream has built after X's CUT, the index holds an entry of
+                   the card above X's listed version whose fold holds no entry erased at its epoch, and no
+                   CLOSURE of X removes it
+I8 a function      (extended) a card, a re-entry push's files and a CLOSURE's files are functions of 15.2.9's,
+                   15.2.4's and 15.2.5's inputs
+```
+
+**I1.** Section 1's induction stands for every push built after a CUT: `choose` takes no listed base, so such a push adds no diff whose base version is listed, and the amended statement asks nothing of a diff whose base version is listed. For a diff whose base version is not listed, the only new step is a CLOSURE, and `clean` takes from a file only listed entries and resting diffs: it removes no full entry at an unlisted version, so it removes no base that the statement protects. Before the CUT nothing is listed and the statement is section 1's. What changed is which diffs are excepted: section 1 excepted "a document the erasure set lists", which excused version 2 of A's file only by reading "lists" as "lists at any version"; the chain reader read it by the diff's own version and alarmed. The exception is now by the base's version, on both sides. Model: `OwnBases`; `IndexEraseLanded-ErasedBase` is the old reading; `IndexEraseReach-Excused` shows an excused diff standing between two CLOSUREs, which is why the exception is needed at all.
+
+**I9.** Let v be the newest version of k above L(k) that the index holds, and take the steps an erasure adds. The CUT raises L(k). If v's entry is full, or a diff on an unlisted base, nothing changed for it. If it is a resting diff, its base still stands, since no CLOSURE of this erasure has run and a writer keeps a base while an unabsorbed diff names it (1.2.1's kept), and a reader resolves through a listed base (15.2.6). A merge then composes it through the base into the shard, or leaves it for the eraser; either way a reader still finds v. The re-entry adds a full entry at v where no cover stood. Only then may a CLOSURE take the base or the diff (15.2.5's order), and from then v's cover is the re-entry, a full entry at an unlisted version, which no CLOSURE touches. A writer's next push of k replaces its head's entry of k by a full entry at a higher version, which is then the newest. An absorbed resting diff was composed into its shard when its slot was absorbed, because its base stood then by I1, so its version has a cover without any re-entry. Model: `Searchable`; `Composable` (what the eraser owes it can compose); twins `NoReentry`, `ClosureFirst`, `MergeDropsResting`.
+
+**I10.** The list holds every file with a listed entry or a resting diff at the list's head, and no later push adds one (15.2.3). Each such file is rewritten by `clean` under a fresh key, and the pair's ERASE destroys the old key, which every stored version of that path shared (§11.14's keys row); the ERASEs also name the key of every path whose retained version holds one, the resting diffs among them. For a card, I11 puts every version that folds an erased entry in the list. A re-entry holds nothing erased: a composed set is the surviving version's own (15.2.4), and a card folded again leaves out every entry erased at its epoch. Model: `ErasedGone`, `CardGone`; twin `KeepResting`.
+
+**I11.** 15.2.10's fence. Model: `Fence`; twins `CutFirst` (the CUT before the ERASE), `NoSync` (no step 2a), `SeqVersion` with `IndexEraseTwin-SeqVersion-Late` (a version without the epoch, listed as read).
+
+**I12.** A version fixes E and c. Every builder that names E folds R's source entries of r at versions at or below c less those erased at E. The entries are the same for each (15.2.8). "Erased at E" is the same for each: the erasures with a CUT below E are fixed by E, since a CUT moves the epoch; each such erasure's ERASEs of steps 2 and 3 precede its CUT; and every builder at E has applied them (step 2a). No builder folds fewer: one that cannot open an entry not erased at E is blocked and builds nothing. RECORD.md 7.1's determinism row then gives equal bytes. Model: `CopiesEqual`; twin `NoBlock`; `IndexEraseReach-Blocked`.
+
+**I13.** After X's CUT a builder's fold leaves out X's entries (I11's argument) and its version is at least (the CUT's version) * 2^32, above X's listed version. The eraser builds it at step 5; where it cannot, an again unit on each device that held the stream is due BackfillAge after the CUT. `clean` removes only listed versions. A later erasure of another entry of the run lists this version in turn and folds the card again. Model: `CardStands`; twin `SeqVersion`; `IndexEraseReach-Returns`, `IndexEraseReach-Twice`.
+
+**I8.** 15.2.4, 15.2.5 and 15.2.9 name each input, and each is on evs or in the push: the listing at the base, the set, the statement's epoch and time, the stream at its pin, the ERASE notes.
+
+**The model.** `IndexErase.tla` holds two specifications. `SpecPath` is one path document on an in-ref index: a writer that edits it with full entries and own-base diffs, seals its head, has its sealed slots merged and takes absorbed slots again, beside an eraser whose CUT lists the version it read (IndexRollup.tla's CutVersion "read"), re-enters, and rewrites one file a CLOSURE in any order. `SpecCard` is one card of one stream: the stream's writer, a backfiller and the eraser project it, devices apply ERASEs at any time, and erasures run one after another. A push is built and committed in one step, which the epoch guard justifies (IndexRollup.tla's `CutFences`); sizes, buckets, large entries, roll-ups, the journal and coverage are IndexMerge.tla's and IndexRollup.tla's and are not here. `IndexRollup.tla` and its `cut-read` ground are the data lane's and are not edited: 15.7 says what that lane changes for them to pass.
+
+Every run below is TLC at revision d8fb231 through `.stack/tools/tlc`, breadth-first, 4 workers, by `run-indexerase.sh details-15 all` from the track on 2026-11-12, on a host at a load average near 100. A design run goes to the end of its graph. A run that must fail stops at its first violation, so its trace length is fixed and the states it had counted by then vary with the workers; the table leaves those out.
+
+```text
+design, must pass                 specification   distinct states   depth   time        disk
+IndexErase                        SpecPath               27,460      19     4 s          1 MB
+IndexErase-Long                   SpecPath            1,029,883      27     1 min 12 s   126 MB
+IndexErase-Card                   SpecCard              181,881      22     12 s         29 MB
+IndexErase-CardLong               SpecCard            2,741,466      31     2 min 48 s   231 MB
+
+must fail, with                   invariant violated     trace
+IndexEraseLanded-ErasedBase       ChainsResolveLanded    6
+IndexEraseTwin-NoReentry          Searchable             6
+IndexEraseTwin-ClosureFirst       Searchable             6
+IndexEraseTwin-KeepResting        ErasedGone             8
+IndexEraseTwin-MergeDropsResting  Searchable             7
+IndexEraseTwin-CutFirst           Fence                  5
+IndexEraseTwin-NoSync             Fence                  6
+IndexEraseTwin-NoBlock            CopiesEqual            8
+IndexEraseTwin-SeqVersion         CardStands             8
+IndexEraseTwin-SeqVersion-Late    Fence                  6
+
+must reach                        the state                                               trace
+IndexEraseReach-Owed              after the CUT a version rests on the listed one alone   5
+IndexEraseReach-Reentered         the eraser enters a version in its own head             6
+IndexEraseReach-Excused           a resting diff stands after a CLOSURE took its base     7
+IndexEraseReach-ComposedThrough   a merge composes through a listed base                  7
+IndexEraseReach-Raced             a projection with the entry lands after the read        7
+IndexEraseReach-Blocked           a builder holds a blocked card                          6
+IndexEraseReach-Returns           an erasure ends with the card folded again              8
+IndexEraseReach-Twice             a second erasure lists the first's re-projection        14
+```
+
+The design configurations check `PathTypeOk`, `OwnBases`, `Searchable`, `ErasedGone` and `Composable`, or `CardTypeOk`, `Fence`, `CardGone`, `CopiesEqual` and `CardStands`. `IndexErase` runs d to version 4 through 3 seals, 2 merges, 2 reuses and 2 erasures; `IndexErase-Long` to version 6 through 4 seals, 3 merges, 3 reuses and 3 erasures; `IndexErase-Card` a stream of 3 entries, 2 seals and 2 erasures; `IndexErase-CardLong` 4 entries, 3 seals and 3 erasures. Each twin, landed and reach run is the smallest ground that shows its trace.
+
+**What the model does not show.** Liveness: that a re-entry is eventually sent is the eraser's loop and reconcile's resume, not a property TLC was given. The storage limit: a refused re-entry is the model's eraser not yet taking its `Reenter` step, during which every safety invariant holds and `ErasedGone` is not yet owed. Two writers holding resting diffs of one key, large entries and buckets: 15.2.4's rules for them are the one-writer rule applied to each file, and 15.6's unit tests carry them. Two streams holding one run: each card is the model's one card. An entry document's fields 9 and 11 (15.2.8): its blocked rule is the card's, and 15.6 has its unit test.
+
+### 15.4 Cost
+
+**A re-entry for a path document.** One full entry in place of a diff: 1.4 measured a source file of 29 KB to 137 KB at 1,894 B to 3,475 B of key set full, and a 1% edit's delta at 92 to 279 B. One push staging one head, at most 16,208 B, in an erasure that already stages a slot a rewrite. It reads no content and no file the list had not read. The case needs an edit of the erased document to commit between the eraser's read and its CUT, so most erasures owe nothing, and a mailbox's never do.
+
+**More files on the list.** Each slot holding a resting diff is one more rekey object, a staged record of at most 16 KiB against the allowance (§11.13's wait row: 64 MiB a UTC day, 4 MiB at the floor). §11.13's wait bound is unchanged in form: its objects are still whole files of at most 1,088 KiB, and B, the closure bytes left, counts the added slots.
+
+**A card's version.** E * 2^32 + c is 33 bits or more: 5 VByte bytes while E is under 8, 6 under 1,024, 7 under 131,072, against 1 to 3 for a seq. That is 3 to 5 B more in an entry and in a shard row a card, and a card's `IndexErased` is 26 to 28 B in the set against 22 or 23 for a path's, so a set of 16,208 B holds about 590 cards or 700 path documents beside an erasure's own 50 B.
+
+**A card folded again.** One full entry a listed card. A card's text is at most 16 KiB, so at most 16,382 distinct trigrams, about 33 KiB of key set at two bytes a gap, a large entry; a card of 2 KiB of text is a slot entry of about 4 KiB. A mirror folds from what it holds. An eraser that does not mirror fetches the run's source entries: a team record's are small (context, change, approval, publish, route, reach, coverage), a vault's include its tool calls and transcripts, which is what CardFetchByteCount bounds.
+
+**Step 2a.** One head read of the `erasure` ref from evs (§11.15: 250 ms at p50 on a desktop) at a device's first card build after each CUT on the log's `ur/index`, and the replay of the ERASEs it had not seen. A log with no erasure pays it once.
+
+**Blocked.** From an ERASE to its CUT: the eraser's next push, unless the set is full, when it is until the pending erasures complete (§11.12's cut row). Only a run with an entry in that state is held, and only on devices that have applied the ERASE.
+
+**Again units.** 48 B each in the journal. At most one a (device, run, erasure); each builds at most one entry, and the first to land covers the rest.
+
+**Erasure by expiry.** A daily pass that erases every entry of n runs lists n cards, 27 B each, and folds none again where nothing of the run is left: 590 runs a CUT. Section 15 adds nothing a run to that pass but the card's listing, which §16.8 already had.
+
+**The model.** The table in 15.3: the largest run is 2.7 million states, 231 MB and under three minutes; the 22 runs together took under six.
+
+### 15.5 Failure modes and recovery
+
+```text
+what goes wrong                               what holds                         recovery
+the eraser dies after its CUT, before the     readers resolve through the base;  reconcile's resume: the list,
+re-entry                                      I9, nothing removed yet            the re-entry in the resumer's
+                                                                                 own head, then the pairs
+it dies between a base's CLOSURE and its      the diff is excused; the           resume rewrites the diff's slot
+diff's                                        re-entry is the cover
+a merge lands between the CUT and the         it composes through the base; the  none needed: the version is
+re-entry                                      shard row is a cover               not owed
+the re-entry gets 409 for the eraser's head   nothing sent; built again from     from step 1
+or 409 INDEX_EPOCH (another CUT)              step 1 at the new head and set
+the re-entry is refused for quota             an owed key's files wait, masked;  retried every
+                                              all else goes on (15.2.5)          ReentryRetryInterval; the
+                                                                                 erasure event shows waiting
+a writer pushes a newer version of an owed    its full entry is a cover; the     the key is no longer owed
+key before the re-entry                       resting diff is replaced or stays
+                                              on the list
+a CLOSURE leaves a resting diff in a file it  reproducers build clean(file)      index_mismatch naming the
+rewrote                                       and compare                        CLOSURE's signer
+an eraser rewrites a base while its key is    the diff is excused, the version   a host with the text re-enters
+owed (not an honest one)                      unsearchable, no alarm             it at the path's next check
+                                                                                 (D-EVS-56); 15.9
+the eraser dies between its ERASE and its     bodies gone; cards blocked on      resume commits the CUT
+CUT                                           devices that applied the ERASE,    (§11.12's reconcile row)
+                                              shown from the index by others
+the set is full at step 4                     the same, until pending erasures   the CUT, then steps 5 to 7
+                                              complete
+a device that has not applied the ERASE       its push names the old epoch and   none needed
+projects the card before the CUT              the CUT lists it (I11)
+the same device after the CUT                 409 INDEX_EPOCH if built before;   none needed
+                                              else step 2a applies the ERASE
+the eraser cannot fold a card (no mirror and  its CLOSUREs go on; the card is    again units on the stream's
+past CardFetchByteCount; quota)               out of search                      writer and mirrors
+no device holds the stream's entries any      the card stays out of search; its  a rebuild from content, if a
+more                                          run's entries still read by id     device mirrors again
+a copy of an erased entry is ingested after   the card's next projection leaves  the late-copy CUT lists that
+step 3                                        it out; the old one is not listed  stream's card (15.2.10)
+a stream or epoch reaches 2^32                no card is written; the run reads  none: 136 years at a push a
+                                              not yet searchable                 second
+a reproducer has applied an ERASE the         it lacks an input                  it fetches, raising nothing
+builder had not
+a CUT lists a card the index never held       nothing to remove; the next        none needed
+                                              projection is above the list
+```
+
+**What is not recovered.** A device that kept an erased entry's plaintext against §11.12's after row can publish it again in a card; hosts that hold the stream rebuild the card and raise `index_mismatch` on its signer, and the entry's text is beyond recall as any copy an agent took is (§11.12's residual). An admin that erases dishonestly can make an honest writer's diff read malformed by rewriting a base and never its diff; the alarm then names the writer, and the CLOSURE that took the base is in the ref's history for whoever investigates.
+
+### 15.6 The test plan
+
+Unit tests, on the fake store unless said, named by the task that owns them (15.7).
+
+```text
+SEARCH-M10-17
+TestEraseListTakesRestingDiffs          a slot with a diff on a listed version is on the list, absorbed or not;
+                                        a diff on an unlisted version is not
+TestReentryComposesFromIndex            A's story to the byte: the re-entered entry equals extraction's full
+                                        entry of version 2, with no content read (a store that fails content GETs)
+TestReentryPrecedesClosure              no CLOSURE of an owed key's files is sent before the re-entry's 200
+TestReentrySkipsACoveredVersion         a newer full entry, a shard row, a tombstone, or a first eraser's entry
+                                        each make the key not owed
+TestReentryOfTwoWritersPicksOne         two resting diffs at one version: one entry, from the lowest writer id
+TestReentryAsLargeEntry                 a composed entry past EntryMax is a large entry of the eraser's
+TestReentryBatchesUnderDirectBytes      700 owed entries of 8 KiB go in pushes that never merge
+TestCleanRemovesListedAndResting        clean of a slot: exact bytes, the replaced length, count and body length
+TestClosureLeavesUnlistedBase           a full entry at an unlisted version survives every CLOSURE
+TestResumeReentersInItsOwnHead          a second device finishes after a crash at each step of 15.2.5's order,
+                                        entering once
+TestReentryRefusedForQuotaWaits         the owed key's files wait, the rest of the erasure completes, the event
+                                        shows waiting; on the limit lifting the erasure completes
+TestErasureLeavesNoRestingDiff          after complete, no file version under a live key holds a listed entry or
+                                        a resting diff, retained versions included (FS-78's sweep)
+FuzzEraseUnderEdits                     random edits, seals, merges and reuses beside an erasure at random
+                                        points: I1, I9 and I10 after every push
+
+SEARCH-M10-17's two fixes to landed code
+TestMergeComposesThroughAListedBase     evs_index_merge.go: the shard holds version 2 after a merge that follows
+                                        the CUT, and nothing of version 1
+TestMergeLeavesOutAnExcusedDiff         no malformed diff is reported for it
+TestChainExcusesARestingDiff            search_match.go: no unresolved entry, no alarm, and the re-entry is the hit
+TestChainStillAlarmsAnUnlistedBase      a baseless diff on an unlisted version is index_malformed as before
+TestMaskYieldsToTheSet                  search_mask.go: an ERASE's whole-key mask ends when a set version lists
+                                        the key; a version above L(k) shows
+
+SEARCH-M10-28, the card
+TestCardKeyIsPerStream                  two streams of one log holding one run: two doc_keys, two rows
+TestCardVersion                         E * 2^32 + c for E 1, 7, 1,023 and c 1 and 2^32 - 1; 2^32 refused
+TestCardFoldOrder                       entries out of seq order in the stream fold in seq order
+TestCardIsAFunction                     two devices, one stream, one epoch: equal bytes; a gap filled later
+                                        changes c and the version
+TestCardRebuild                         FS-80: a rebuild writes each card's bytes again at the build's epoch
+TestCardSkipsErasedAtEpoch              an entry erased by a listed erasure and by a dropped, complete one
+TestCardBlockedBeforeTheCut             a builder that applied the ERASE builds no card and holds R's row below
+                                        the run's first blocked version; one that has not folds the entry
+TestCardSyncsErasureRefOnANewEpoch      step 2a: one head read at the first build after a CUT, none after
+TestCardThroughAnErasure                FS-80: ERASE, CUT, re-projection, pairs: the card is masked, returns
+                                        without the entry, and no stored version holds its text
+TestCardRaceAfterTheRead                a projection landing between the read and the CUT is listed and removed
+TestCardAgainUnit                       the writer's again unit builds the card BackfillAge after the CUT when
+                                        the eraser entered nothing, and is dropped when it did
+TestCardLastEntryErased                 a fold with no entry writes nothing, and the card is gone from search
+TestEntryDocumentContextFields          fields 9 and 11 from the first context entry its stream holds at the pin;
+                                        after that entry's erasure a rebuild reads the next, or writes them
+                                        empty; before its CUT a builder that applied the ERASE is blocked
+
+SEARCH-M10-14 and SEARCH-M10-12
+TestJournalCardMarkers                  a unit's markers, one a run; ApplyCut keeps them
+TestCompanionCarriesCards               a push covering (q, p] holds the card at p of each run touched in it
+TestBackfillCarriesCards                a backfill of h carries the cards of runs last touched at or below h
+
+SEARCH-M10-16
+TestCutListsACardThroughItsEpoch        the version written, and written again after 409 INDEX_EPOCH
+TestCutAgainAddsToItsErasure            a second call for a listed erasure, and for a dropped one
+
+RECORD-M10-01
+TestRecordEraseOrder                    the ERASEs of steps 2 and 3 commit before the CUT is built
+TestRecordEraseLateCopy                 a copy ingested after step 3 is erased, listed and its card folded again
+```
+
+Vectors: `testdata/index/erase/` gains `resting-clean` (a slot before and after `clean`), `reentry` (a diff, its base and the composed entry) and `card-version` (five cards with their versions and rows).
+
+Model twins as mutants: each `IndexEraseTwin-*` names a rule, and 15.7's task that builds the rule carries a test that fails when the rule is removed.
+
+Scenario rows, at the later of M10-out and the milestone that brings what they run on: FS-78 gains "an edit that lands between the eraser's read and its CUT stays searchable through the erasure, and no stored index version keeps a diff on the erased version"; FS-80 gains "a card folded while the erasure runs, by a device that has not applied the ERASE, is listed by the CUT or leaves the entry out"; FS-107's "a diff whose base is gone alarms" excepts a resting diff; FS-111 gains a companion push carrying a card among its prepared pushes; FS-112's wait counts a resting diff's slot.
+
+### 15.7 Implementation notes, task by task
+
+Order: SEARCH-M10-16 first, as planned; then SEARCH-M10-17; SEARCH-M10-28's card after SEARCH-M10-14 and SEARCH-M10-16.
+
+**SEARCH-M10-16, the CUT** (not held, not yet on `sidecar`; two additions to its seam, neither a decision of its own).
+- `IndexEraser.Cut` takes each document as `{Key, Version, ThroughEpoch bool}`. For `ThroughEpoch` it writes `epoch * 2^CardVersionBitCount + 2^CardVersionBitCount - 1`, with `epoch` the index_epoch that CUT names, computed when the CUT is built and again on each rebuild after 409 INDEX_EPOCH. Every other version is the caller's, as planned.
+- Called for an erasure_id the set lists, it adds the documents to that erasure's entry (docs stay sorted by doc_key, the entry's `epoch` and `cut_ms` stay); called for one the set has dropped, it adds the entry again.
+- Its plan entry's "Order for callers: CUT and first ERASE" stands for §15.7's mail; for §16.8's records the ERASEs of the bodies come first (15.2.10).
+
+**SEARCH-M10-17, erasure's rewrites** (held; L; Build changes; Provides gains `IndexEraser.Reenter`).
+- `evs_index_erase.go`: `indexEraseList` per 15.2.3, returning the files, the resting diffs and the owed keys; `IndexEraser.Reenter` per 15.2.4, built through `indexPlanHead` with `replaces` 0 and no coverage, `PushLife` and the store seam as SEARCH-M10-14's build uses them.
+- `evs_index_closure.go`: `indexClean(file, erased)` per 15.2.5 for slots and large entries, beside the shard rewrite SEARCH-M10-05 gave (`rewriteWithout`); the order rule (no CLOSURE of an owed key's files).
+- `evs_index_wait.go`: the wait when a re-entry is refused for quota; `SidecarErasure`'s `waiting` gains the count of documents to re-enter; `IndexEraseSettings` with 15.2.11's two fields, defaults from `DefaultIndexEraseSettings()`.
+- `IndexEraser.Resume`: 15.2.7.
+- Two fixes to landed code ride this task, since nothing calls them wrongly until an erasure exists: `evs_index_merge.go`'s `indexMergeCandidates`, where the branch `if erased(entry.key, entry.baseVersion) { continue }` becomes: resolve the base; compose where it stands; leave the diff out, with no `indexMalformedDiff`, where it does not (the roll-up reads the same function); and `search_match.go`, where a diff that `searchResolveChain` cannot resolve joins `unresolved` only if `erased(entry.key, entry.baseVersion)` is false. `search_chains.go`'s and `evs_index_dependency.go`'s header comments take 1.2.9's amended wording.
+- `search_mask.go` (CORE-M10-02's table, CORE-M10-04's hooks): 15.2.10's mask rule. `erasedThrough` is the set's L(k) where a set version the device holds lists the key, and `searchErasedAll` only where an ERASE names the key and none does.
+- INDEX-FORMAT.md: the Erasure section gains `clean` and the resting diff; the Documents section the card's version.
+
+**SEARCH-M10-28, record documents and run cards** (held for its card; XL as planned). Its record documents and mail join build now, the documents with 15.2.8's reading of fields 9 and 11 and its blocked rule. The card: `search_run_card.go` gives `searchRunCard(stream, runId, refVersion, epoch, erasedAtEpoch) (*IndexDocument, uint64, error)` per 15.2.8, with `c` beside it; `evs_index_record.go`'s `IndexDocuments` visits each run's card at the ref version it is given, and takes the epoch and the erased-at-epoch test through its constructor, since the interface names neither. `IndexFormatSettings.CardVersionBitCount`. The local mask of a card from an ERASE to its CUT (15.2.10) is this task's, through `SearchCache.ApplyErase`.
+
+**SEARCH-M10-14, companion pushes and the journal** (not on `sidecar` yet; Build gains 15.2.9): card markers and again units in `IndexJournal`; `ApplyCut` keeps both; step 2a with the epoch recorded beside the journal; step 4's cards, the blocked pin and again units; a record log's interval and its two at-once triggers.
+
+**SEARCH-M10-12, backfill** (not on `sidecar` yet): 15.2.9's backfill row.
+
+**SEARCH-M10-23 and SEARCH-M10-24, readers**: 1.2.9 as amended; the two reader fixes above are written under SEARCH-M10-17 and reviewed by this ground's owner.
+
+**SEARCH-M10-46, IndexRollup.tla** (the data lane's model): `CutVersion = "read"` passes once the model's eraser takes 15.2.4's re-entry before `ClosureBuild`, its CLOSUREs remove resting diffs, its `ChainsResolve` takes I1's amended wording, and its merge composes through a listed base. Its `cut-read` ground then becomes a design run, and a derived document joins its story with 15.2.8's version. `details/IndexErase.tla` is the reference for each rule.
+
+**RECORD-M10-01, a record erasure's CUT and CLOSUREs** (not held): 15.2.10's steps in `record_erase.go`'s order, the ERASEs of steps 2 and 3 before `IndexEraser.Cut`; the documents it passes: each copy that RECORD.md 7.1 makes a document at its path's entry version, and `{card key, ThroughEpoch}` for each stream holding a copy of a source entry; then `IndexEraser.Reenter` and `IndexEraser.Rewrite`. The late copy RECORD-M3-06 deferred ("a copy another ingester writes after the erasure is not erased again at a later sync") takes steps 4 to 6 after its ERASE. `ur record erase`'s listing gains 15.2.8's line for a context entry.
+
+**RECORD-M6-03, expiry**: its erasures run the same steps, and its weekly BASE removes only entries whose erasure is complete.
+
+**RECORD-M10-05 and MAIL-M10-02** (not held): they call the eraser through its seam and pass path documents at their versions. A message never changes, so a mailbox's erasure owes no re-entry and its list holds no resting diff; `IndexEraser.Reenter` returns at once for it. Mail keeps the CUT before its first ERASE.
+
+**CORE-M10-04**: `ApplyErase` calls SEARCH-M10-28's card mask and the journal's again unit for an ERASE of a source entry the device holds, and removes the journal units of every copy of an erased entry, found by entry_id from the ERASE's note (RECORD.md 8's every copy).
+
+**Held tasks whose scope changed.** SEARCH-M10-17 gains the re-entry push, `clean`'s resting diffs, the order rule, the quota wait and the three fixes to landed files (`evs_index_merge.go`, `search_match.go`, `search_mask.go`). SEARCH-M10-28's card gains its identity, version and fold rules and loses nothing; its record documents and mail join are released.
+
+### 15.8 Proposed DESIGN.md text
+
+For a design-records track; nothing here edits DESIGN.md or `design/source/`.
+
+**§11.14.**
+- version row, after "a derived document's, its writer's sequence": replace that clause with "a run card's, the index_epoch its push names times 2^32 plus the stream version of its run's newest source entry (§16.10); a directory announcement's, the Announcement's".
+- dependency row, its last clause "and an erasure removes a document's entries together" becomes "and an erasure enters full, in its eraser's own head, a version whose diff rests on a version its CUT lists, before any CLOSURE takes the base or the diff (erase, below)".
+- chains row gains: "a diff resolves through a base the erasure set lists while that base stands; a diff whose base is gone and listed is no candidate and alarms nothing".
+- cut row, after "each listed document, at or below its version, from the CUT on": "a run card is listed through the epoch its CUT names, so at every version of that epoch or an older one".
+- erase row, after "the eraser lists every index file holding the document": "and every slot holding a diff of it on a listed version, whose removed keys with its own version's set give the listed set back; for the highest version such a diff carries that nothing else a reader scans holds, the eraser first enters that version full in its own head, composed from the diff and its base, and folds each listed run card again there; CLOSURE pushes then rewrite each listed file in place without the document and without those diffs". Its history clause gains "or a diff on a listed version".
+- limit row gains: "an erasure's re-entry adds payload and waits with merges; the files of a version it has not yet entered wait with it, and every other rewrite goes on".
+- A new invariant I-EVS-18 as 1.8 proposed it, in I1's amended wording.
+
+**§11.12.** closure row: "in a format-2 repo that may hold an index, a CUT (below) on each index ref of its documents precedes every list of index files; for a record entry the ERASE of its body precedes that CUT (§16.8)". cut row: "per document of it the ref indexes, the doc_key and the newest version erased; a run card, every version through the epoch the CUT names".
+
+**§16.8, Erasure.** Replace "in a format-2 repo a CUT on the repo's `ur/index` lists the entry and each run card holding it, at its current version, so no index push built before the CUT publishes them (§11.12), and CLOSUREs after the CUT rewrite in place the search-index files holding the entry's postings and re-project each run card that holds the entry (§11.14, 16.10)" with "in a format-2 repo a CUT on the repo's `ur/index` then lists the entry and, through its epoch, the run card of each stream holding it, so every projection made before the CUT is listed and none made after it can hold the entry (§11.12); the eraser folds each of those cards again in its own index head, and CLOSUREs rewrite in place the search-index files holding the entry's postings and the cards' listed versions (§11.14, 16.10)".
+
+**§16.10.** documents row: "vault: one run card per run and stream". run card row, its last clauses: "re-indexed in its stream writer's companion push (§11.14), which a record log makes at most once every 5 min, at once at the run's start and at its end; its version is the index_epoch that push names above the stream version of the run's newest entry; derived, a function of its stream at that version and of the erasures whose CUT precedes that epoch, so a rebuild reproduces it, and an erasure lists it through its CUT's epoch and folds it again without the erased entry".
+
+**RECORD.md** (the mcp lane's, proposed). 7.4, its second sentence: "Its version is the index_epoch its push names times 2^32 plus the stream version of the run's newest source entry in its stream (DESIGN-DETAILS 15.2.8), so every device that folds one stream at one epoch writes one card." 7.1's fields row, for a card: "from the newest context among the entries folded"; for an entry: "from the first context entry of its run that its own stream holds at the push's pin and no erasure with a CUT below the push's epoch names". 8's Run cards paragraph: "An erased entry leaves its run card when the erasure folds the card again, after its CUT (§16.8)". 8's expiry row: "a BASE removes only entries whose erasure is complete".
+
+**§2.8's metadata list.** No new row: a re-entry push is an index push by an admin's sidecar on a ref that sidecar already writes CUTs and CLOSUREs to, of sizes the existing index rows describe.
+
+### 15.9 Owner questions
+
+Each is filed under `.stack/questions/` and the section is built on its recommendation.
+
+- **`details-15-resting-diffs`** replaces `search-m10-46-erased-base-of-a-live-diff`. The section builds that question's option 1 with three changes: the eraser composes the version from the index and opens no content; a CLOSURE also removes the diff, which with its version's set gives the erased set back (15.1 B), so the excuse lasts only between two CLOSUREs; and a merge composes through a listed base while it stands (15.1 C). Recommendation: as built.
+- **`details-15-reentry-at-the-limit`**: at the storage limit evs refuses the re-entry. Built: the files of the one version not yet entered wait, masked, and everything else is erased on schedule. The other way destroys first and leaves the surviving version out of search with no signal. Recommendation: as built; the case needs two races of seconds.
+- **`details-15-card-version`**: a card's version is epoch above stream version, in place of RECORD.md 7.4's highest seq. Recommendation: as built.
+- **`details-15-card-per-stream`**: one card a run a stream, in place of "one run card per run" of a log. Recommendation: as built.
+- **`details-15-erase-before-cut`**: a record erasure destroys the bodies before its CUT, where SEARCH-M10-16's plan entry has every caller CUT first. Recommendation: as built.
+- **`details-15-context-fields`**: an erased context entry's agent label and session ids stay in the rows of the run's other entry documents written before the erasure (15.2.8). Built: they stay, as names the run's other entries carry themselves. The other ways give every entry document a version with the epoch and fold each again, or take fields 9 and 11 out of entry rows. Recommendation: as built.
+- **`details-15-small-readings`**: nine readings an implementer would otherwise decide, each with what was built: the mask rule, a record log's companion interval, the fold's order, an empty fold, the 2^32 bound, which devices hold again units and when they build, the CUT for a late copy, a BASE waiting for its erasure, and the eraser's fetch bound.
+
+## 16. Client-checked prefix write rules (§8.8, §8.12, §11.7, §11.9)
+
+Status: complete (2026-11-13)
+
+Tasks held until complete: none. ACL-M6-04's prefix half was never built, and 16.7 says what it and five new tasks build.
+
+Model: `sidecar/sidecartest/model/details/PrefixRules.tla`, its configurations (`PrefixRules.cfg`, `PrefixRules-*.cfg`, `PrefixRulesTwin-*.cfg`, `PrefixRulesReach-*.cfg`) and `run-prefixrules.sh` beside it. Questions filed: `.stack/questions/details-16-subject-atoms.md`, `details-16-admins-unbound.md`, `details-16-git-mode-stop.md`, `details-16-repair.md`, `details-16-small-readings.md`. The section is built on the recommendation of each, and on the recommendation of the open question `details-amend-2-late-generation`, whose grace rule 16.2.2 and 16.2.3 take as section 12 does. It specifies what the owner accepted in QD-212 (DESIGN-AMENDMENTS.md) and what RESOLUTIONS.md `plan-EVS1-v1-unspecified` #5 made the rule. It builds on section 5 (rows and verdicts across bases), section 8 (git and evs) and section 9 (path epochs), and changes no rule of any of them: it adds one line to 8.2.7's `check` and to 8.2.8's receive path, and one list to section 5's rows.
+
+### 16.1 The problem
+
+A repo's writers are the sidecars that hold its `rw` right, and the right is whole: evs sees token paths, never names (I-1, X2), and §8.13 rules out a server that checks prefixes. So a team that wants an agent to write only under `agents/build/`, or a group's devices only under `docs/`, has one tool in v0, a repo per prefix (D-ACL-11). Q-EVS-3 closed on the v1 answer: prefix rules in the repo's sealed configuration, enforced by sidecars with an alarm. QD-212 fixed its shape: an access-log statement `RepoPrefixRules{repo_id, rules (sealed)}`, a rule being {subject atom, path prefix in whole components, write}, readers folding it at each push's auth pin, a version no rule allows ignored with `evs_alarm prefix_rule`. That is a sentence, and nine things stand between it and code. A and B are the brief's; C to I were found writing this.
+
+Terms. A *set* is one `RepoPrefixRules` statement's opened rules. A set *binds* every signer: one it names may write under the prefixes it names for it, and one it does not name may write nothing. A push that writes a path its signer's rules do not allow is a *breach*, and its signer runs code that is not this design's, since a design device refuses the write before it reaches evs. A reader that does not follow a change *ignores* it. The *effective* version of a path is the newest one a reader does not ignore.
+
+**A. Nothing is checked (`PrefixRulesTwin-NoCheck`, 3 states).** The repo holds `agents/build/` and `src/`. A set gives the tag `ci` the prefix `agents/build`. A CI agent's token is stolen, or its daemon is patched, and it pushes a new version of `src/main.go`. evs commits it: the signer holds `rw`. Every reader verifies the statement, finds a writer of the repo at its pin, and shows the file. No line of code reads a rule; `AllowPrefixWrite` appears nowhere.
+
+**B. The rows keep only the newest (`PrefixRulesTwin-NewestOnly`, 5 states).** "On RepoVersioning's pattern" keeps one value in `AclRepo`, the newest lock. A lock is read at the tip. A rule is read at a push's pin, which may be any position since the repo was created. A set at position 10 holds the agent to `agents/build`; it breaches at pin 12; an admin files a wider set at 20; a base lands at 30. A device that starts at that base holds one set, the one at 20, and by it the breach at pin 12 is allowed, or, reading "no set at or below 12", unbound. A device that was running at 12 ignored it. The two show different files, and each builds its next write on what it shows.
+
+**C. Judged at the reader's tip (`PrefixRulesTwin-JudgeAtTip`, 4 states).** The simpler rule, "the set in force now", re-judges history at every change of the rules: a version written under yesterday's wider set is ignored today by a device that reads it today and kept by one that read it yesterday. QD-212 says the pin; the model shows why nothing else agrees.
+
+**D. A subject whose members a head gives (`PrefixRulesTwin-HeadAtoms`, 4 states).** §8.4's atoms include groups, roles and the admin, owner and auditor autogroups, whose members are compiled from the config head and change. A reader holds S(k) only from its previous base to its tip (§7.9's retention row; `ConfigLog.StateAt`). Most of what a new device reads was pushed before that: the newest version of nearly every file is older than the previous base. For a signer's right the server stands behind an old version, since evs checked the scope at commit (§11.9's trusts row). For a prefix it does not: no server ever checked. A rule that names a group can be judged only by a device that held the state at the push's pin, so a new device either takes every old version unjudged or judges it by today's membership, which ignores an honest version whose writer has since left the group.
+
+**E. The server folds what readers ignore (`PrefixRulesReach-Hidden`, 3 states; `PrefixRulesTwin-RepairSkipsNames`, 4).** Ignoring is a reader's act. evs applies a breach like any push: the file's entry takes the new version, the parent's name table loses or gains a row, a versionless file's replaced content is purged a minute later (§11.7), a removal's marker is collected past the horizon. A head reader takes a directory's table from evs at its first pin (§11.9's trusts row) and walks only the deltas after it. So a device that starts after a breach removed `src/main.go`'s row lists no such file, while a mirror that ignored the delta lists it; a versionless file a breach replaced is gone from evs for every device that did not hold it.
+
+**F. The next writer must build on the breach (`PrefixRulesTwin-DiffOnNewest`, 4 states).** §11.8's 5g holds a change to `base_entry_version` = the path's newest version on evs, and that is the breach's. §11.7 writes a file's next record as a diff on its previous version's chain. An honest device that ignores version 2 and edits the file would send version 3 as a diff resting on version 2's records: a reader that shows 3 reconstructs it through bytes it refused, and if the breach's records are garbage, cannot.
+
+**G. A pin may be as old as the head's (`PrefixRulesReach-StalePin`, 3 states; `PrefixRulesTwin-NoHeadFence`, 4).** evs holds a push's auth pin at or above the head's and no higher (§11.8's fence row); the gate's other clause is about generations, and a rule change shrinks no holder. An admin tightens the rules at position 40. The agent pushes with pin 39, the head's, and readers judge the push at 39, under the old set, for as long as no other push raises the head's pin on that ref.
+
+**H. Rules are names and statements are tokens.** A rule's prefix is plaintext. A statement names a change by its token path in the push's path epoch (§11.6), a statement past 1 KiB carries a Merkle root and covering prefixes in place of its changes, a directory change is a delta whose rows are in its entry version, and section 9 keeps several epochs standing during a copy. A head reader holds one change and its proof. Nothing says which bytes a reader compares, or how a writer held to a prefix creates the directory that prefix names when a change at the directory above it is, read naively, outside the prefix.
+
+**I. Two modes.** A file-mode ref takes each change by itself. A git-mode ref takes a push whole: 8.2.7's `check` proves that a push's changes are exactly the net change between two trees, and a mount cannot apply half of one.
+
+**The requirement.** One verdict per change, the same at every device that verifies the push, whenever it started and whatever it retains, computed from the log's rows and the push's signed bytes and nothing else. No reader shows, builds on, indexes, exports or mirrors a version its rules do not allow, and none ever holds bytes of one inside a version it shows. A design device's own write is never ignored. A device that starts after a breach reads what a device that watched it reads, once any device that holds the effective state has written it back, and until then is wrong only about names and about content evs no longer serves. A tightened set binds a ref from a stated point that the filer controls. api learns that a repo has rule sets, when each was filed and by whom; evs and gkm learn nothing (I-18). Formats 1 and 2 of evs do not change.
+
+### 16.2 The design
+
+#### 16.2.1 The principle
+
+Three ideas carry the section.
+
+**The verdict is a function of rows that keep positions.** `AclRepo` gains the list of every rule set that took effect, each with its signer and position, for the repo's life. The set in force at a pin is the newest row at or below it. A rule's subject is a fact an admission fixes for a sidecar's life: its id, its member, a tag, its class. Every such fact is in the signer's `SidecarRow`, which a reader holds whenever it can verify the signature at all, since the row also holds the key. Nothing else is read: not a group, not a role, not the repo's admin rows, which QD-743 drops at the first base past retention after an admin is removed. So a device that starts at any base, and holds no state at the push's pin, computes what a device that was there computed (B, C, D). This is section 5's rule for a rows-only verifier applied to a reader: what a later reader needs is in the rows, with its position.
+
+**Readers ignore; evs is not told; devices that hold the effective state write it back.** There is no server-side flag, mark or message: evs commits a breach and folds it (§8.13, I-1). Each reader keeps, per path, the newest version it allows, and serves, bases and builds on that. The gap E describes is closed in the ref itself: the first design device to write a path after an event it ignored writes the effective state in full, as a checkpoint with the path's row stated again, and a device that mirrors the ref does that unasked after a delay. After it, evs's newest is an allowed version and every reader, new or old, agrees with no walk.
+
+**A write is refused where it is made.** The writer's device runs the same function on its own change at the state it pins, before any byte goes to evs. So a breach is never an accident of timing: it is a device that does not run this code, and the alarm names it.
+
+What does not change: every message of evs formats 1 and 2, the statement's fields, evs's checks, the gate, §11.9's read API, the signer check (I-EVS-14), which still runs first, and the refs table. Prefix rules sit after all of them and can only take a change away.
+
+#### 16.2.2 The statement and its bytes
+
+```proto
+// protocol/bridge/signed.proto, with the other 0x11xx access-log statements
+SIGNED_REPO_PREFIX_RULES = 0x1111;       // 0x1110 stays QD-013's ApprovalDelivery
+
+// protocol/acl.proto
+message RepoPrefixRules {                // purpose acl; an access-log statement (§8.8)
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes sealed_rules = 3;                // a PrefixRuleSet in config_seal's form, sealed to the repo's own generation
+}
+message PrefixRuleSet {                  // the plaintext; no server ever holds it
+  repeated PrefixRule rules = 1;         // ascending by (subject, path), no rule twice
+}
+message PrefixRule {
+  bytes subject = 1;                     // 16 B: a sidecar_id, a member_id, a tag id, or one of four autogroup atoms
+  repeated bytes path = 2;               // the prefix in whole components, §11.6's raw names; none: every path
+  PrefixAction action = 3;               // PREFIX_ACTION_WRITE, the only action
+}
+enum PrefixAction { PREFIX_ACTION_UNSPECIFIED = 0; PREFIX_ACTION_WRITE = 1; }
+
+message AclRepo {                        // ... fields 1 to 11 as they are
+  repeated AclRepoPrefixRulesRow prefix_rules = 12;   // every set that took effect, in position order, for its life
+}
+message AclRepoPrefixRulesRow { bytes signer = 1; uint64 at = 2; }
+```
+
+The id-level rule is one row of §7.9's rule table, judged alike by api, the gates and every device, none of which needs a key for it:
+
+```text
+signer   a repo admin at the entry's position, or a config writer: checkRepoVersioning's test
+repo     in the rows, of kind general, not deleted (16.9, small reading 1)
+body     sealed_rules is 48 B and a positive multiple of 256 B, at most SealedMaxByteCount (64 KiB): config_seal's
+         u64be(g), 24 B nonce, the padded plaintext and its 16 B tag
+count    the repo's rows hold fewer than SetMaxCount (256) sets; the next is refused naming the limit
+effect   {signer, at} appended to AclRepo.prefix_rules, and nothing else: no right, holder or key changes, so
+         holders_shrunk_at does not move and no generation is asked for
+```
+
+The seal is `SealConfigBody` with `ConfigSealContext{SIGNED_REPO_PREFIX_RULES, header}` and the repo's own `EvsRepoKey` at the filer's newest generation, as an owner-bound repo's `RepoVersioning` rules are sealed. The key is HKDF over RK_g with the repo's id as salt, and the aad binds the signed type and the header's network id and nonce, so a body opens in no other statement and under no other repo. Every reader of the repo opens it, through the ladder for an older generation (§10's ladder); a writer reads (§8.4), so every writer does; a config reader that does not read the repo learns only what api learns.
+
+What an opened body is, by rules every reader applies to the same bytes:
+
+```text
+opened   the AEAD and the padding pass; the message parses with no unknown field; every action is WRITE; at most
+         RuleMaxCount (256) rules, ascending by (subject bytes, then the path's components compared in order as
+         bytes, a shorter path first), none equal to its neighbour; each subject 16 B; each path at most the token
+         path's 32 components (EvsFormatSettings), each component a name §11.6 takes (not empty, no slash, no NUL)
+newer    it parses, and holds an unknown field or an action above WRITE: a later release's set (D-PHASE-9)
+void     anything else: the seal does not open under its generation's key, or a rule above fails; and a body whose
+         generation's GenRotate is signed more than GenerationFormGrace (1 h) after the entry that carries it
+         (12.2.3's readers' half, on the recommendation of details-amend-2-late-generation)
+pending  the reader does not hold the body's generation yet, or has not fetched the entry
+```
+
+A set with no rule is opened: it names nobody, so nobody may write. The set that restricts nobody is the one rule {`autogroup:sidecar`, no path}, which is how an admin lifts the rules.
+
+A rule's subject names a signer by its admission alone (question `details-16-subject-atoms`, option 1):
+
+```text
+names(subject, row):                       // row: the signer's SidecarRow, a tombstone included
+   subject = row.sidecar_id                                                              sidecar:<id>
+   subject = row.member_id, and the row carries no tag                                   user:<email>
+   subject ∈ row.tag_ids                                                                 tag:<name>
+   subject = AclAutogroupAtom(SIDECAR)                                                   every signer
+   subject = AclAutogroupAtom(TAGGED), and the row carries a tag
+   subject = AclAutogroupAtom(MEMBER), and the row carries no tag and is not ephemeral
+   subject = AclAutogroupAtom(EPHEMERAL), and the row carries no tag and is ephemeral
+   else no
+```
+
+`member_id`, `tag_ids` and `ephemeral` are set at admission and never change (`config_admit.go`), and a member id, a tag id and a sidecar id are drawn so that none takes the autogroup form (plan-ACL-atom-and-rule-ids). An atom of any other kind in a rule, a group's among them, names nobody: a reader cannot tell it from a random id, and no reader needs to. The command that files a set refuses to seal one (16.2.9).
+
+#### 16.2.3 The rows, and where a set's body comes from
+
+`FoldAclRepos` gains the case: clone the repo's row, append `{Signer: signer, At: at}`. It runs in `ApplyStatement`, in section 5's `Reapply` for a tail entry with verdict 1, and in a writer's compile over the statements a base folds, as every access-log statement does, so a rows-only verifier, a device started at a base and a long-running reader hold one list (5.2.3). The list is in position order because entries apply in position order. It is never shortened: a set stays in the list after a later set replaces it, since versions pinned in its span are judged by it for as long as they are read. A compromise cascade voids nothing here, as it voids no grant and no lock; the row keeps its signer so that TEAM-M2-04's `CascadePlan` can list the sets a device in P filed for an admin to replace (16.5).
+
+A row is 2 B of framing, 18 B of signer and 2 to 11 B of position, a tag and a varint: 24 B at positions below 2^21, at most 31 B. At the cap a repo's sets take 6 KiB so, and at most 7.75 KiB, of §8.8's 4 MiB of rows; `AclRowsCheckLimits` counts them with the rest. The cap exists because a row is for the repo's life. A team that would pass it moves to a new repo, which D-ACL-11's interim already describes.
+
+The body is not in the rows. A device that reads or writes the repo gets the entry at `at`:
+
+```text
+body(at):   the log's retained entry at `at` when the device holds it (at ≥ its retention point), else
+            ConfigHead.RecordsIn(at - 1, at): the fold record at that position, which the config head holds
+            verbatim for the network's life and which the chain the device recomputed at its anchor binds
+            (5.2.4; details-5-base-records-in-folds, QD-627)
+            the record's kind and body must be a Signed RepoPrefixRules for this repo; anything else is a base
+            whose rows do not compile from its head, section 5's alarm, and no set of this repo is judged
+opened sets are kept in the evs component's sealed store, prefix/<repo_id>: {at, state, the plaintext rules}
+            per row; a set never changes, so one is opened once per device; a pending one is tried again at each
+            generation the repo's key ring gains and at each entry the log applies
+```
+
+*Pending and newer.* A row whose set a reader holds pending or newer stops that reader from judging any push of the repo pinned at or above it: the verdict is `wait` (pending) or `update` (newer), and the reader shows what it accepted before (16.2.5). A pending set resolves: the generation arrives through the ladder, or it never forms and the grace rule voids it once the log holds an entry timed more than `GenerationFormGrace` plus `PendingVoidMargin` after the set's entry and the device's read of gkm's generation listing, taken after it applied that entry, is whole and names no such generation (12.2.3's argument, with its 10 min and 20 min clock bounds: a generation claimed later is signed past the grace, so a reader that gains it voids the set as well). Only a repo admin or a config writer can file a set that stays pending, and an honest filer seals to a generation it holds.
+
+*Void.* A void set changes nothing: the newest opened set below it stays in force, as `config_seal` has a sealed effect void and its id-level effect standing. Each reader raises `evs_alarm prefix_rule` with detail `set_void` once per set.
+
+`AclNewestRepoVersioning`'s pattern, a scan of every fold record from the genesis taking each record whatever its verdict, is not used: the row is the verdict, and its position is the lookup.
+
+#### 16.2.4 The verdict
+
+One pure function, in `sidecar/acl_prefix.go`. It reads the push's signed bytes, the repo's rows and the signer's row, and no state at the push's pin, so a reader computes it for every version it shows, one whose signer's right it takes on evs's word included (§11.9's trusts row). It runs after §11.9's checks; a push that fails those is refused as today and never reaches it.
+
+```text
+PrefixVerdict(row, rows, sets, u, c, entry, table) -> allowed | ignored | wait | update
+   row     the signer's SidecarRow, from the state the reader verified the push in or any later one: a tombstone
+           serves, since the three facts read never change
+   rows    the repo's AclRepo.prefix_rules in any state of this log at or above u.auth.version
+   sets    the repo's opened sets by position (16.2.3)
+   u       the verified push; c one of its changes; entry c's EvsEntryVersion where the reader holds it
+   table   for a directory delta outside every prefix: the table the reader is applying the delta to
+
+   1 scope     u.ref_kind is not shared; or the ref is `erasure`, `ur/index` or `ur/lfs`; or the repo's kind is
+               not general; or u.flags holds FORCE, DELETE, BASE, DROP, ERASE, CUT or CLOSURE  -> allowed (outside)
+   2 the set   the rows with at ≤ u.auth.version, newest first: a void set is passed over; a pending one -> wait;
+               a newer one -> update; the first opened one is the set in force; none        -> allowed (no set)
+   3 prefixes  A = { tp(rule.path, u.path_epoch) : rule in the set, names(rule.subject, row) }
+               tp is EvsPathTokens under K_path of the push's epoch; a rule with no path gives the empty token
+               path, a prefix of every path
+   4 index     a file-mode ref, and tp(".ur-index", u.path_epoch) is a prefix of c.token_path -> allowed (outside)
+   5 the change, T = c.token_path:
+       under(T)      some a in A is a prefix of T (equal counts)
+       a file's version or removal, a directory's creation or removal:   under(T) -> allowed, else ignored
+       a directory delta (entry.names):
+           under(T)                                                       -> allowed
+           else, each row it adds, child token t of kind k:  T+[t] is a prefix of some a in A; where it is a
+                 proper prefix, k is directory; and table holds no row for t, or holds one of kind directory
+                 each token it removes, t:                   T+[t] equals some a in A
+           every row passes -> allowed, else ignored
+```
+
+Line by line.
+
+*Scope.* Owned refs are their sidecar's (§11.8's refs table), deposit and erasure refs hold no path, record-class kinds are creates-only streams with their own writer rules, and the config, the directory and mailcfg are written by fixed sets (16.9, small reading 1). `ur/index`, `ur/lfs` and a file-mode ref's `.ur-index/` are written by every writer by design (§11.14: every writer of a ref writes its index) and are guarded by reproduction and `index_mismatch`, not by prefix; 16.2.5 says what search does with an ignored version. The seven flags are the pushes §11.8's refs table and 10.2.3's H1 hold to the admin right, which evs checks at commit against the token's scope, so the server stands behind them as it stands behind a signer's right. Each rewrites or removes what stands without changing what a reader may believe of a path's content (a CLOSURE replaces a version with its equal under a new key, a DROP and a BASE remove history, an ERASE destroys keys), and a reader that ignored one would keep citing bytes that are gone. The flag is in the signed statement, so this line too reads the same at every reader.
+
+*No admin is exempt.* A set binds every signer, a repo admin included, and an admin writes because the set names it: the command that files a set writes each standing admin into it as `sidecar:<id>` with no path (16.2.9). An exemption would be simpler to state and cannot be judged: it needs to know whether a signer was an admin at an old pin, and QD-743 keeps a removed admin's row only until the first base past retention, so a device that starts later would judge an old push of a since-removed admin as bound and ignore what its peers kept (B again). A name in a sealed set at a position is the same fact, kept for the repo's life. The question is filed (`details-16-admins-unbound`).
+
+*The set.* By position only. Pushes pinned below the first set are unbound, which is what "no statement" must mean for every version written before a team adopted rules.
+
+*Prefixes, in token space.* A token path is the HMAC chain of §11.6 under one epoch's path key, so a path lies under a prefix exactly when its token path begins with the prefix's token path in the same epoch, up to a 128-bit collision. The reader computes `tp(rule.path, e)` itself, from the name and the ladder, as section 9 has it compute every token path (9.2.4's reader). It compares with the change's own token path in the push's epoch, which the statement or the proof's leaf holds in the clear. Nothing is decrypted to judge a file change, and a head reader that holds one change and its inclusion proof has everything (H). Covering prefixes are not read: they bound absence proofs and say nothing a change does not.
+
+*Deltas.* A directory at or under a prefix is the writer's to change. A directory above a prefix is not, with one allowance, without which a writer held to a prefix could never create the directory it names: it may add the rows that lead to its prefix, each a directory row, and none replacing a row of another kind; and it may remove only the row of its prefix itself. It may not remove a row on the way: `agents/` may hold another writer's `agents/deploy/`, and a removed row hides a subtree from every listing. An added row that is already there changes nothing and is allowed. A reader judges a delta only when it applies one to a table it holds (a listing, a mirror), so it has the table.
+
+*Removals.* A removal at T removes everything below it (§11.7), all of which is under T, so the one test covers the subtree. A change's source paths (9.2.2's source row) are not judged: they name the same path in older epochs by the writer's claim, which evs cannot check and which a reader that replays checks against its own tokens as section 9 has it; 16.2.13 names what is left.
+
+*Nothing else is outside.* A REKEY's changes and a PATH_EPOCH's are judged like any: a writer re-checkpoints only under its prefixes, and a PATH_EPOCH push carries a map and no change.
+
+The verdict on a push that carries no change is allowed. That is the pin push (16.2.9).
+
+#### 16.2.5 File mode: the effective version
+
+On a file-mode ref the verdict is per change, and a push some of whose changes are ignored keeps the rest.
+
+```text
+effective(X):                                        // a head read, a mirror's apply, a planner's read
+   v = the newest event of X as §11.9 serves and verifies it: a version of X, or a removal at X or at a
+       directory above it
+   n = 0
+   loop:
+       PrefixVerdict(v's push, v's change):
+       allowed   return v                            // a version: its content. A removal: absent
+       wait      return the record's accepted version, state `held`; nothing above it is shown
+       update    the same, state `update`
+       ignored   alarm(v) once (16.2.10); n += 1
+                 n > WalkBackVersionCount (64):      EVS_PREFIX_RULE, detail depth
+                 v = the event v replaced: History's read at v's prev_commit_version with prev_push_id
+                     (9.2.4's history, E4), or for a removal the version below the one its marker names
+                 none: v created the path            return absent
+                 evs answers collected or dropped, or no marker stands:
+                     the record's accepted version where this device still holds its content, else
+                     EVS_PREFIX_RULE, detail unavailable
+```
+
+The head reader's record (`EvsReadRecord`) gains `Accepted {version, push id}` and `IgnoredThrough`, the newest version of the path this device ignored. A read whose newest version is at or below `IgnoredThrough` and whose accepted version stands returns from the record with no walk and no alarm. The record's pin, floor and epoch are section 9's and move as they do today, at every verified read, ignored or not: they describe what evs was shown, not what the reader believes.
+
+What each reader surface does with an ignored change:
+
+```text
+ReadHead, the SDK's and MCP's reads   effective(X): the accepted content and its version number; EvsFileInfo
+                                      gains IgnoredAbove, the count of ignored versions over it
+List                                  the folded table is evs's word, as it always is for a head reader, which
+                                      checks each name against its token and nothing about which rows a table
+                                      holds (§11.7); the deltas after it, which the reply carries, are judged and
+                                      an ignored one is not applied; a row whose path the record holds as
+                                      effectively absent is left out. The mirror is the reader that knows the
+                                      effective table, and 16.2.8 makes evs's table equal it
+History, `ur history`, `ur evs log`   every version, the ignored ones marked `ignored: prefix rule` with their
+                                      signer; a version nobody can judge is shown as evs has it
+change events (§11.10)                none for an ignored change: MCP sessions and SidecarRepoChangeListener hear
+                                      of the alarm, not of a change
+the file-mode mirror                  folds every statement from the ref's first version, each change judged, and
+                                      applies the allowed ones; an ignored event is journalled {ref, path,
+                                      version, kind} in the sealed store, which 16.2.8's repair consumes and
+                                      `ur status` lists
+export (EVS1-M2-49)                   effective versions; an ignored version is reported, as 8.5 reports a
+                                      refused one
+search (§11.14), from M10             a hit whose (path, version) the searching device ignores is masked, with the
+                                      masks of SEARCH-M10-24; a design device's companion push and its backfill
+                                      index no ignored version, and coverage counts an ignored push as indexed
+```
+
+A device shows the same file before and after a breach, and one line in `ur status`.
+
+#### 16.2.6 Git mode: a refused push
+
+On a git-mode ref the verdict is per push. 8.2.7's `check(u)` gains one line under `every shape`:
+
+```text
+prefix rules   u is outside the rules (16.2.4's line 1), or no set is in force at its pin, or every file change of
+               u (a write or a removal of a file's path) has its token path under a prefix the set gives the
+               signer; a set that is pending or newer leaves the replay waiting at u, as an unreachable source does
+```
+
+Directory changes are not judged here: a git-mode ref's directories follow from its files, `check` already holds the change list to the exact net change between two trees, and a tree cannot keep an empty directory, so a writer that removes its last file under `agents/build/` must be able to drop `agents/` with it. A push that fails the line is refused whole like any push that fails `check`: `evs_alarm` with reason `prefix_rule` in place of `version_rule`, `EvsGitRef.stuck_at = u`, nothing past u - 1 applied, the local ref left alone. Recovery is 8.5's and unchanged: an admin deletes the ref and pushes it again, and the push that re-creates it writes or removes every tainted token path. Every replaying device reaches the same verdict on u, a new one included (16.3's P1), so every mount stops at the same version.
+
+This gives a breaching writer nothing it did not hold: any writer of a git-mode ref can stop it today with one push whose tree does not hash. Skipping the push and going on would need every later push to rest on the tip before u while evs's entries hold u's changes, which is 8.5's taint rule on every push forever; the question is filed with the recommendation to stop (`details-16-git-mode-stop`).
+
+Head mode reads a git-mode ref one change at a time and never ran `check`. It applies 16.2.5's rule to the change it reads, so it does not show a breach's file, and it does not learn that the mounts refused the rest of that push.
+
+#### 16.2.7 The writer
+
+`AclEngine.AllowPrefixWrite` is the same function turned around, at the engine's installed state, whose pin the push will carry:
+
+```text
+AllowPrefixWrite(repo, ref kind and name, paths, sets) -> AclDecision
+   the lines 1 to 3 of PrefixVerdict with signer = this sidecar and pin = the installed state's
+   wait or update:  refuse, EVS_PREFIX_RULE detail pending or update: a device that cannot read the rules in
+                    force does not write under them
+   each path:       some rule's path that names this sidecar is a prefix of it, by components, in plaintext
+   a path refused:  AclDecision deny, reason prefix_rule, and the path; nothing is planned, sealed or sent
+```
+
+It is called by the planner (`evs_plan.go`) for every path a file-mode write names, before the first round trip, and by the receive path (8.2.8) for every file path of an update's net change before it builds the push: `ng <ref> prefix rule: <path>`. Directory rows are not asked about: a design planner adds rows on the way to a path it may write and removes none above its prefix. §18.5 gains the code `EVS_PREFIX_RULE`, which the SDK and MCP's write tools return with the path. The plaintext path is the caller's own and goes into no log (I-13).
+
+Because the push pins the state the check ran at, and readers judge at that pin, a design device's write is allowed by every reader (16.3's P2). A set that lands between the check and the commit does not reach back: the push is judged at its pin.
+
+*Writing over an ignored event.* The planner reads the path with `effective`. Where evs's newest event of the path is not the effective one, the write takes the **repair form**:
+
+```text
+condition   a caller's IfVersion or IfBaseVersion is compared with the effective version's number
+change      what evs's state needs: base_entry_version = evs's newest version of the path (5g's CAS is on evs's
+            state, and prev_push_id names it, so History's walk still passes through the ignored versions);
+            a creation where evs holds a removal the device ignores; a change over a file evs holds and the
+            device counts absent
+content     built from the effective version's content and nothing else: one checkpoint (chunks above 8 MiB),
+            never a diff, since a diff's chain would rest on the ignored version's records (F); the file's
+            file_id and versioning are the effective version's; a file whose effective state is absent is
+            removed
+names       the parent's delta states the path's row again: added where the effective state stands, removed
+            where it is absent, whatever evs's table shows; a directory the device counts standing and evs
+            removed is created again on the way
+metadata    the sealed metadata names the push ids it writes over, for `ur evs log`
+```
+
+The first allowed version after an ignored one is therefore a full copy, under the writer's own key, with its row. §11.7's checkpoint list gains this as its sixth case.
+
+#### 16.2.8 Repair
+
+A repair is the repair form with no edit: the effective state written back so that evs's newest is an allowed version again.
+
+```text
+who      a desktop or the daemon that mirrors the ref, holds rw, and is allowed every path the repair writes
+         (AllowPrefixWrite): an admin's device for any path, since the set names it for all, and any other
+         writer's for paths under its prefixes
+when     RepairDelay (5 min) after the device journalled the ignored event, plus a share of RepairJitter (5 min)
+         by SHA-256(sidecar_id || push id), so two candidates rarely send at once; one that loses 5g's CAS reads
+         again, finds the newest event allowed, and drops its journal unit
+what     names, always: one delta per directory, stating each dirty row
+         a path a breach created (effective: absent): its removal
+         a file or directory a breach removed: created again from the mirror's copy, the subtree with it
+         a versionless file a breach replaced: its accepted content again, from the mirror's copy
+         a versioned file a breach replaced: nothing at once, since every reader walks back one version;
+             a checkpoint once RepairDepth (8) ignored versions lie over it
+bounds   RepairPushCount (60) an hour and RepairByteCount (1 GiB) a day, per repo and device; past either the
+         journal units wait, `ur status` lists the dirty paths, and the alarm stands
+by hand  `ur evs repair <repo> [<path>]`: the same pushes at once, without the bounds, for a device that is allowed
+```
+
+A repair is an ordinary push: signed by its device, allowed by its rules, indexed and charged like any write. It asserts nothing about the breach, so a reader that could not judge the breach needs nothing from it but its content. The lasting remedy for a writer that keeps breaching is its revocation (`RepoRevoke`, `SidecarRevoke`, `Suspend`), which the alarm's signer field names; the bounds exist so that a breaching writer cannot spend the network's quota through honest devices.
+
+Whether repair is automatic is the owner's (`details-16-repair`); the section recommends this.
+
+#### 16.2.9 Filing, and when a set binds
+
+`ur evs rules <repo> show | allow <subject> <path>... | deny <subject> | set <file> | lift` on an admin's device, with the daemon's control method behind it and the apps' repo settings over that. `show` prints the set in force and, with `--history`, each row's position, signer and state. The others build the next set from the one in force, add a rule {`sidecar:<id>`, no path} for each standing admin of the repo that it lacks, sort it, and file one `RepoPrefixRules`; `set` with `--as-written` files the file's rules alone and says which admins it leaves unable to write. The command that adds a repo admin offers to file the set again with it. A subject is `sidecar:<id>`, `user:<email>`, `tag:<name>`, or `autogroup:sidecar`, `autogroup:member`, `autogroup:tagged` or `autogroup:ephemeral`; `group:<name>` is refused with the list of its members' `user:` subjects to file instead. `lift` files the set that binds nobody.
+
+A set is in the log from its entry. It binds a ref from the first push on that ref whose pin is at or above it, since readers judge at the pin and evs holds every later push's pin at or above the head's (G). The filer makes that push itself:
+
+```text
+after the statement's 200:
+   for each shared ref of the repo (GET .../refs, EVS1-M6-01; the mounts' refs until then):
+       a push of no change at the filer's tip, which is at or above the set: on a file-mode ref a statement with
+       no change; on a git-mode ref an UPDATE whose new tip is its old tip, with no commit and no change
+   a ref whose pin push fails is retried with the device's journal; `ur evs rules show` says which refs the set
+       binds yet, comparing each head's auth pin with the set's position
+```
+
+Any honest push does the same, since a design device pins its tip. Until one lands, a writer that sends an older pin can still write under the older set on that ref (`PrefixRulesReach-StalePin`); after it, none can (`Fence`). A widening needs no pin push: the writer it frees pins its own tip.
+
+#### 16.2.10 The alarm
+
+`SidecarEvent evs_alarm` with reason `prefix_rule` (`SidecarEvsAlarmPrefixRule`, landed) and:
+
+```text
+RepoId, RefId     the repo and ref
+Path              the path, this device's plaintext, shown to its user and in no log (I-13)
+Signer            the push's signer_sidecar_id
+Version, PushId   the ref version and the push
+Detail            ignored | refused (git mode) | set_void | set_newer | depth | unavailable
+Count             changes this event stands for
+```
+
+One event per (repo, ref, signer) in `AlarmInterval` (1 min), carrying the first path and the count, so a breach of a thousand files is one event; `ur status` lists every journalled path. `set_void` and `set_newer` are raised once per set per device and carry the row's signer and position in place of a push. The event goes where every `evs_alarm` goes (§5.4): the device's UI, MCP sessions, and an admin's notifier.
+
+#### 16.2.11 Settings
+
+`AclPrefixSettings` (root; `DefaultAclPrefixSettings()` fills them). No limit is a constant (QD-702). The first five are format limits that every verifier of the log or of a set holds alike, and change only with a release every device has:
+
+```text
+SealedMaxByteCount     65,536     the longest sealed_rules; id level
+SetMaxCount            256        rule sets in a repo's rows; id level
+RuleMaxCount           256        rules in a set, the admins' among them
+GenerationFormGrace    1 h        a set sealed to a generation signed later than this after its entry is void
+PendingVoidMargin      30 min     past the grace before a reader voids a set whose generation gkm does not name
+WalkBackVersionCount   64         ignored versions a read walks under before it answers EVS_PREFIX_RULE
+RepairDelay            5 min      from an ignored event to its repair
+RepairJitter           5 min      spread across candidates
+RepairDepth            8          ignored versions over a versioned file before its content is written again
+RepairPushCount        60 / h     per repo and device
+RepairByteCount        1 GiB / d  per repo and device
+AlarmInterval          1 min      one event per (repo, ref, signer)
+```
+
+A component's length and a path's depth are §11.6's, in `EvsFormatSettings`.
+
+#### 16.2.12 Releases that do not enforce
+
+The statement's number, the `AclRepo` field and the id-level rule land at M2 with the rule table (ACL-M2-18, 16.7), so that every verifier built from M2 on judges a `RepoPrefixRules` entry alike and folds its row, and no base forks on one (D-PHASE-9; QD-212's "reserve before M2's Gn-in"). A device built before M6 folds the row and enforces nothing: it reads the ref as evs has it. Rows carry no build, so the filer cannot list such devices; `ur evs rules` says once, at a repo's first set, that devices older than the release that carries this section do not follow the rules. evs formats 1 and 2 are untouched, and a repo of either takes rules.
+
+#### 16.2.13 What the rules do not stop
+
+Stated here so that no one reads more into "prefix rules" than a client can deliver. A writer that holds `rw` and runs its own code can still:
+
+```text
+write anywhere on evs            the bytes are stored and charged to the network's quota until an admin drops
+                                 them (§11.7's DROP) or the repo is deleted; readers do not show them
+destroy a versionless file       its replaced content is purged a minute later; devices that held it keep it and
+                                 one that is allowed writes it back (16.2.8); a device that never held it reads
+                                 EVS_PREFIX_RULE, detail unavailable, until then. A repo under RepoVersioning's
+                                 lock holds no versionless file but the index, so the lock closes this
+remove a path past the horizon   the same, once the removal's marker is collected (§11.7's collect row)
+hide or plant a name             for a head reader that starts after the delta and before the repair
+delete another path's source     while a path-epoch copy runs: a change's source paths are its writer's claim
+copy                             (9.2.2), so a breach can name another path's token in an older epoch and evs
+                                 deletes that copy; a mirror re-creates the path
+force retries and fill a          every writer of the path loses 5g's CAS once per breach; a directory's 4,096
+directory                         rows can be filled with names nobody shows
+write the index                  `.ur-index/`, `ur/index` and `ur/lfs` are outside the rules; reproduction and
+                                 index_mismatch are their guard (§11.14)
+stop a git-mode ref              as any writer can today (16.2.6)
+read everything                  a rule is about writes; every writer holds the repo's keys
+```
+
+A team that needs a server to refuse the write keeps separate repos (D-ACL-11), which remains the only server-enforced boundary.
+
+### 16.3 Invariants and why they hold
+
+```text
+P1 one verdict       two devices that hold a push's statement, the repo's rows at or above its pin and its signer's
+                     row reach one verdict on each of its changes, whatever base each started at, whatever state
+                     each retains, and whenever each reads it
+P2 honest stands     a change a design device sent is allowed by every reader
+P3 shown allowed     what a reader shows, serves, indexes, exports, mirrors or builds on for a path is a version
+                     its verdict allows, or absent
+P4 clean bytes       no record that a shown version's chain names was written by a push the reader ignores
+P5 the fence         on one ref a later push is never judged under an older set than an earlier push: once a
+                     push pinned at or above a set has committed, that set or a later one judges every push after
+P6 names converge    once a design device has written a path after the last event ignored there, a head reader
+                     whose table evs folded at any version lists the path as a mirror does
+P7 what servers see  api: a set's repo, position, time, signer, generation number and padded length. evs and gkm:
+                     nothing they did not see before (I-18)
+```
+
+**P1.** The verdict reads five things. The push's flags, ref kind, signer, pin, path epoch and the change's token path are signed bytes. The rows at or below the pin are a prefix of a list that only grows at its end, in position order, in every state at or above the pin, and section 5 gives every verifier the same rows at every position (5.3's Agreement), a device started at a base and a rows-only gate included. A set's state is a function of the entry's bytes and of the repo's generation ladder, which members hold alike (§10's ladder; section 6), with one time rule taken from section 12 that reads only signed times. The signer's `member_id`, `tag_ids` and `ephemeral` are written once at admission. The token paths of the rules are HMACs under a key every reader derives. Nothing is read at the reader's tip, from a head, or from a state at the pin. Model: `Agreement`, over the long-running reader and a device started at each base; twins `NewestOnly` (the rows keep one set), `JudgeAtTip` (the set in force now), `HeadAtoms` (a subject whose members a head gives).
+
+**P2.** A design device runs lines 1 to 3 on its own change at its installed state and stamps that state's pin into the push (16.2.7). A reader runs them at that pin, on the same rows, with the same row for the signer. The device compares plaintext components and the reader compares their tokens, which agree up to a collision of a 128-bit HMAC truncation. The delta rule cannot refuse what the planner sends: it adds only directory rows on the way to a path it may write, where no row of another kind stands (a file there is `ErrEvsPathKind` before any push), and removes no row above its prefix. Model: `HonestStands`, with a second design writer that the sets hold to one path while sets change beside it.
+
+**P3.** `effective` returns only a version whose verdict is allowed, the record's accepted version, which was returned by an earlier call, or absent; every surface of 16.2.5 calls it or applies only allowed changes, and 16.2.6's mount applies no push that fails `check`. Model: `ShownAllowed`; twin `NoCheck`; `PrefixRulesReach-Ignored` and `PrefixRulesReach-WalkedBack` show the walk is taken.
+
+**P4.** By induction over a path's allowed versions. An allowed version written by a design device over an allowed newest version rests on that version's chain, clean by induction. Written over an ignored event it is the repair form: one checkpoint built from the effective version's content, naming no earlier record (16.2.7). An allowed version written by any other code rests on whatever its signer chose, and the signer is allowed the path, so those bytes are its own to choose: P4 is about what a reader is made to take from a writer it ignores, and the only door is a design device's own next diff. Model: `CleanLineage`; twin `DiffOnNewest`.
+
+**P5.** evs commits a push only if its auth pin is not below the head's, atomically with the head (§11.8's fence row, clause 2; `CheckGate`), so the pins of a ref's pushes never fall, and the newest row at or below a pin is monotone in the pin. The filer's pin push carries a pin at or above its own set. Model: `Fence`; twin `NoHeadFence`; `PrefixRulesReach-StalePin` is the window before the pin push, and `PrefixRulesReach-Tightened` a set that takes a path away.
+
+**P6.** Let k be the last ignored event at a path and k' the first design write after it. k' is a repair form, so it states the path's row. Every event after k is allowed, so evs, a mirror and a head reader all apply every row from k' on, and k' fixed the row for all three. A head reader whose table was folded below k' applies k' itself, as an allowed delta. Model: `ListingAfterRepair`, over a head reader started at every version; twin `RepairSkipsNames`; `PrefixRulesReach-Hidden` is the state before the repair and `PrefixRulesReach-Repaired` the repair.
+
+**P7.** The statement's clear fields are its header, the repo's id and a sealed blob whose length is 48 B plus a multiple of 256 B and whose first 8 B are a generation number; the row adds its signer and position. A pin push is an ordinary push of no change, and a repair an ordinary write; evs can see that one follows a config entry in time, as it can for any write a config change prompts. No request carries a rule, a prefix or a verdict, and no reader tells a server what it ignored.
+
+**The model.** `PrefixRules.tla` holds one authorization log and one file-mode ref of one repo with two paths, one under the prefix that a set may name and one outside it. The log takes sets of three kinds (every path, the one path, nothing), bases, and under one twin a group's membership changes. The ref takes pushes by A, an admin's device that every set names for every path; by B, a design device the sets hold to their paths; and by W, which the sets hold as they hold B and which sends any change with any row under any pin evs takes. Each push is one change with its pin, the log's length when evs committed it, what it does to the path's content and to its row, and for a write its lineage: the versions whose bytes its record chain rests on. Readers are not variables: the long-running reader, a device started at each base, a mirror, and a head reader started at each version are functions of the log and the ref, which is the claim under test. Tokens, epochs, deltas' row rules, a set's four states and git mode are not in it.
+
+Every run below is TLC at the owner's jar (master d8fb231) through `.stack/tools/tlc`, breadth-first, by `run-prefixrules.sh details-16` from the track on 2026-11-13, on a host at a load average near 120; each run's state directory is deleted when it ends. A design run takes 4 workers and goes to the end of its graph. A run that must fail takes one worker and stops at its first violation, so its trace is a shortest one.
+
+```text
+design, must pass                 distinct states   depth   time
+PrefixRules                              53,718       5     7 s
+PrefixRules-Deep                        507,291       6     52 s
+PrefixRules-Long                        670,387       6     1 min 31 s
+
+must fail, with                   invariant violated     trace
+PrefixRulesTwin-NoCheck           ShownAllowed           3
+PrefixRulesTwin-NewestOnly        Agreement              5
+PrefixRulesTwin-JudgeAtTip        Agreement              4
+PrefixRulesTwin-HeadAtoms         Agreement              4
+PrefixRulesTwin-DiffOnNewest      CleanLineage           4
+PrefixRulesTwin-NoHeadFence       Fence                  4
+PrefixRulesTwin-RepairSkipsNames  ListingAfterRepair     4
+
+must reach                        the state                                                         trace
+PrefixRulesReach-Ignored          a push is ignored                                                 3
+PrefixRulesReach-WalkedBack       a path's effective version is not evs's newest                    3
+PrefixRulesReach-StalePin         W's push under an older pin is allowed against the set in force   3
+PrefixRulesReach-Hidden           a head reader and a mirror list a path differently                3
+PrefixRulesReach-Repaired         a design device writes a path after its last ignored event        4
+PrefixRulesReach-Tightened        a set takes a path that an earlier set gave                       4
+```
+
+The design configurations check `TypeOK`, `Agreement`, `HonestStands`, `ShownAllowed`, `CleanLineage`, `Fence` and `ListingAfterRepair`. `PrefixRules` runs two log entries and two pushes with all three kinds of set and both design writers; `PrefixRules-Deep` three log entries, so that a set, a second set and a base can all precede a device's start; `PrefixRules-Long` four pushes on one path-naming set, so that an ignored event, a second, a repair and a later write can follow each other. Each twin and reach run is the smallest ground that shows its trace.
+
+**What the model does not show.** Git mode: 16.2.6 adds one line to a check whose refusal path is section 8's, modelled in `GitSync.tla`. The token arithmetic, the delta rule and a set's states: each is a pure function of bytes, and 16.6's unit tests carry them, the delta rule against a generated corpus. The walk's bound and an unavailable version: they change what a reader can return, never to something it ignores. Liveness: that a repair is sent is the runner's timer and its journal, not a property TLC was given. Two refs of one repo: a ref's pushes are judged alone, and the pin push is per ref.
+
+### 16.4 Cost
+
+```text
+a rule change      one log entry: a statement of about 0.5 KiB for a set whose plaintext is under 256 B (six rules
+                   of two short components), 304 B of it the sealed set; 256 B more per 256 B of rules; at most
+                   64 KiB. One pin push per shared ref: a statement under 400 B and one head CAS
+rows               24 B a set at positions below 2^21 and at most 31 B, for the repo's life: 6 KiB a repo at the
+                   cap of 256 and at most 7.75 KiB, of §8.8's 4 MiB
+opening a set      one HKDF and one XChaCha20-Poly1305 over at most 64 KiB, once per set per device; the opened
+                   set is kept sealed on disk (QD-641), at most 16 MiB a repo at both caps, under 1 KiB typically
+a device's start   the fold records at the repo's set positions: a full reader holds them already (5.2.4's
+                   anchor); a phone reads each fold file that holds one, once
+token table        per (set, path epoch): one HMAC-SHA256 per component of each rule's path, at most 8,192, about
+                   4 ms on a desktop and 16 ms on a phone at the caps, under 50 µs for ten rules of two components;
+                   16 B a component in memory, at most 128 KiB at the caps, 320 B for ten rules; kept for the set
+                   in force in the current epoch and rebuilt for any other
+a verdict          a 16 B-wise prefix compare per rule that names the signer: no I/O, no decryption, under 1 µs
+a read             nothing more when evs's newest version is allowed. One History round (9.2.4) per ignored
+                   version above the effective one, once: the record then answers. At most 64
+a listing          nothing more
+a mirror           one verdict per change it replays
+a write            one plaintext prefix compare per path. Over an ignored event: one checkpoint of the file's size
+                   where a diff would have gone, once per breach per path
+a repair           names: one delta, 128 to 194 B a row (§11.7's name row). A re-created or versionless file: its
+                   size. A versioned file: nothing until 8 ignored versions lie over it. At most 60 pushes an
+                   hour and 1 GiB a day per repo and device
+a git-mode push    one verdict per file change inside check(u)
+servers            api: one rule-table row and one repeated field in AclRepo; no table, endpoint or migration.
+                   evs, gkm, the gates: nothing
+```
+
+What a breach costs the network: the bytes the breach itself stores, charged to the network's quota like any write until an admin drops them (16.2.13), and for each versionless or removed file the upload of its accepted content by one honest device, inside the repair bounds. One breach push under 1 KiB that removes a directory can therefore ask for up to 1 GiB of honest upload a day per repairing device, and no more.
+
+### 16.5 Failure modes and recovery
+
+```text
+a writer breaches                          every reader that holds the rules ignores the change and alarms with
+                                           the signer; a mirroring device that is allowed repairs after 5 min;
+                                           an admin revokes or suspends the signer, which the alarm names
+it breaches again and again                the repair bounds hold; journal units wait; `ur status` lists the dirty
+                                           paths; revocation is the remedy; `ur evs repair` after it
+a set does not open (void)                 the set below it stays in force; set_void at every reader, naming the
+                                           filer; an admin files again
+a set is sealed to a generation that       readers hold the repo's versions pinned at or above it (state `held`)
+never forms                                until the grace rule voids it, at the first log entry more than 1 h 30 min
+                                           after it; then as a void set
+a set from a later release (newer)         a device that cannot read it shows what it accepted and says `update`;
+                                           its writes to the repo are refused locally; no version is ignored or
+                                           shown on a guess
+the cap of 256 sets                        the 257th is refused at api and by every reader, naming the limit; the
+                                           set in force stands; a new repo, or a release that raises the limit
+a set that names no admin                  admins cannot write or repair until one files a set that names them,
+                                           which their admin right always allows; the filing command warns
+an admin's device is compromised           it can file any set. The cascade voids no set (as it voids no grant):
+                                           CascadePlan lists the sets it filed from since_n, and a clean admin
+                                           files the next. Versions judged under its set stay as judged; an
+                                           admin restores what it let through, by hand
+the pin push fails or the filer goes       the set binds the ref from the next honest push, which any design
+offline                                    device's write is; `ur evs rules show` names the refs not yet bound
+a base's rows hold a position whose         section 5's alarm for a base that does not compile from its head; no
+entry is not a RepoPrefixRules             set of the repo is judged by that device until it holds a good base
+the effective version is gone from evs     a versionless file's purged content, a removal collected past the
+                                           horizon, a dropped version: devices that hold it show it; others read
+                                           EVS_PREFIX_RULE, detail unavailable, until a repair
+more than 64 ignored versions over a       EVS_PREFIX_RULE, detail depth, on a device with no record of the path;
+path                                       a mirror repairs at 8
+two devices repair at once                 one wins 5g's CAS; the other reads an allowed newest version and drops
+                                           its unit; equal content either way
+a repair's device is itself held to a      it repairs only paths under its prefixes; the rest wait for an admin's
+prefix                                     device
+a git-mode ref stops at a breach           8.5: an admin deletes the ref and pushes it again, the re-creating push
+                                           writing or removing every tainted token path
+a signer's row is gone                     a tagged or ephemeral sidecar's tombstone past its not_after, at a pin
+                                           the reader does not retain: the reader cannot verify the signature at
+                                           all, with or without rules; such a version is §11.9's trusts row's,
+                                           evs's word, and unjudged here. A breach is at least 5 min of repair
+                                           delay old by then, against a not_after measured in days
+a device older than M6                     folds the row, enforces nothing, shows evs's newest (16.2.12)
+a restricted writer's daemon is honest     it never reaches evs with a refused path: EVS_PREFIX_RULE locally
+and its user asks for a path outside
+a set lands while a write is in flight     the push is judged at its pin, under the set its device checked (P2)
+the local record is lost                   the next read walks again and alarms again, once
+```
+
+### 16.6 The test plan
+
+**Unit (T1).**
+
+- `acl_prefix_test.go`. The statement's id-level rule, one case per row of 16.2.2's table and its positive twin: a signer that is neither, each refused kind, a deleted repo, a body of 47, 48, 303 and 304 B and one past the cap, the 256th and 257th set. The fold: a row per set in position order; `Reapply` over a tail gives the rows `ApplyStatement` gave; a compile over a base's statements gives them again; `AclRowsCheckLimits` counts them.
+- A set's states: opened; each void cause in turn (a wrong key, a flipped byte, bad padding, rules out of order, a rule twice, a 15 B subject, a 33-component path, an empty component, a slash, 257 rules, an action of 0); newer (an unknown field at each level, an action of 2); pending, then opened when the generation arrives, then void when its GenRotate is signed past the grace; a body sealed for another repo or another statement type does not open.
+- `names`: the table of the seven subject forms against a member device, an ephemeral one, a tagged one and a tombstone of each; a group's atom, a role's and `autogroup:admin` name nobody.
+- `PrefixVerdict`: each line of 16.2.4 with its twin. The set in force at pins below, at and above each of three sets with a void one between; pending and newer above an opened one. A file change at, under, beside and above a prefix; a prefix that names a file; the empty prefix; two rules for one signer. A removal of a directory under and above. Each flag of line 1; an owned, a deposit and an erasure ref; `.ur-index/` on a file-mode ref and the same name on a git-mode ref, where it is a path like any other.
+- The delta rule against a generated corpus: random trees, random sets, a design planner's deltas for random allowed writes are all allowed; each single mutation of one (a file row on the way, a row beside the way, a removal on the way, a row over a file's row) is ignored.
+- Tokens: `under` computed in plaintext equals `under` computed on token paths, for random paths and prefixes in two epochs; a change in epoch 2 is judged with epoch 2's table.
+- Base independence, on real code: a generated log with sets, bases and admissions; a `ConfigLog` restored at each base and a rows-only one give `PrefixVerdict` the same answer as the long-running log for every push pinned anywhere since the repo's creation. This is P1 on the implementation; under a hook that keeps only the newest row it fails, which the test asserts.
+- `evs_prefix_test.go` (readers). `effective` over a scripted evs: allowed newest; one, two and 65 ignored versions; a removal ignored at the path and at a directory above; a breach-created path; `collected` and `dropped` below an ignored version, with and without a local copy; `wait` and `update` return the record's version; a second read takes the record and raises no second alarm. `List` with an ignored window delta. `History` marks. No change event for an ignored change.
+- `evs_plan_test.go` (writers). `AllowPrefixWrite` refuses before any request (a counter on the fake transport). The repair form: a checkpoint and no diff over an ignored version; `base_entry_version` evs's newest; a creation over an ignored removal; the row stated again; `IfVersion` against the effective version. A hook that sends a diff makes the reader's reconstruction pass through the ignored record, which the test asserts.
+- `evs_prefix_repair_test.go`. Each class of 16.2.8's table; the delay and the jitter on a fake clock; two runners, one push; the bounds; a device held to a prefix repairs only under it.
+- `evs_git_check_test.go`. `check(u)` refuses a push with one file change outside and accepts the same push by a signer the set names; a removal of the last file under a prefix, dropping the directories above it, passes; the alarm's reason is `prefix_rule`; receive answers `ng <ref> prefix rule: <path>` and sends nothing.
+- The alarm: one event per (repo, ref, signer) a minute with the count; `set_void` once per set.
+
+**Schedule rows**, for a design-records track to number, each on T2 with real evs and api:
+
+```text
+a breach, three readers        a set holds tag ci to agents/build; a hand-built push by a ci sidecar writes src/x:
+                               a device that was running, one started at a later base and a phone in head mode
+                               all show the old src/x and raise prefix_rule naming the signer; evs holds the
+                               breach as the newest version
+rules change under history     three sets and two bases; a push pinned under each; a device started after the
+                               last base judges each as the long-running one did (P1)
+repair                         a breach removes a file and its row; a phone started after it lists no such file;
+                               a desktop repairs after the delay on the fake clock; the phone lists and reads it;
+                               evs's newest is the desktop's version
+versionless                    a breach replaces a versionless file; the purge runs; a mirror shows its copy, a new
+                               device reads `unavailable`; after the repair both read the accepted content
+writer over a breach           a design device edits a file whose newest version it ignores: one checkpoint, the
+                               row stated, History walking 3, 2 (ignored), 1; a reader reconstructs 3 without 2's
+                               records, which the test deletes from the fake store first
+the pin push                   a set tightens; a hand-built push with the head's older pin commits and is allowed;
+                               the filer's pin push lands; the same push with the older pin is 412 at evs, and
+                               with a new pin is ignored by every reader
+local refusal                  a design device held to a prefix writes outside it through the SDK, MCP and git
+                               push: EVS_PREFIX_RULE each time, no request to evs
+git mode                       a breach on a git-mode ref: every mount stops at u with prefix_rule, a new mount
+                               replaying from version 1 included; an admin deletes and re-pushes; all go on
+a pending set                  a set sealed to a generation that does not exist: readers hold; a later entry past
+                               the grace voids it everywhere; the set below is in force again
+```
+
+**The model.** `run-prefixrules.sh <track>` at each change to 16.2.3, 16.2.4, 16.2.7, 16.2.8 or 16.2.9: the design configurations pass, each twin fails on the invariant its cfg names, each reach configuration reaches its state (16.3).
+
+### 16.7 Implementation notes, task by task
+
+One existing task changes and five are new. The ids are free in `.stack/plan`, the questions and both design documents as of 2026-11-13; the orchestrator files them. Order: ACL-M2-18, then ACL-M6-04's prefix half, then EVS1-M6-04, then EVS1-M6-05 and EVS1-M6-06 beside each other, then TEST-M6-03.
+
+**ACL-M2-18, the statement, the rows and the fold** (new; M2; S; server and sidecar). It must land before M2's Gn-in, since it is what QD-212 reserves: from it on, every verifier judges a `RepoPrefixRules` entry alike and folds its row, and enforces nothing.
+
+- Files: `protocol/bridge/signed.proto` (`SIGNED_REPO_PREFIX_RULES = 0x1111`; leave 0x1110 unused for QD-013), `protocol/acl.proto` (16.2.2's five messages and `AclRepo.prefix_rules = 12`), `config_records.go` (the type table's row, purpose acl), `acl_statement.go` (the dispatch and the access-log list beside `RepoVersioning`), `acl_statement_repo.go` (`checkRepoPrefixRules`: 16.2.2's table), `acl_access_log.go` (the fold's case and the header's list), `acl_prefix_settings.go` (new: `AclPrefixSettings` with the two id-level limits; the other fields arrive with their tasks), and their tests. api takes the rule through the shared rule table (TEAM-M2-13); no server file changes but the generated protos.
+- Needs: ACL-M2-06 (the acl rules), TEAM-M2-04 (the rows). Waits on nothing.
+- Build: the check never opens `sealed_rules` and reads only its length. The fold appends and never removes. `Reapply` and the base compile run the same fold (5.2.3), which the test asserts on a generated log.
+- Tests: 16.6's first bullet; the base-independence test's rows half (a restored log and a rows-only log hold the long-running log's `prefix_rules`).
+- Trap: a format-1 device must not refuse the type as unknown, or it forks at the first set; that is why the row lands with M2 and not with M6.
+
+**ACL-M6-04, peer-list filtering and client-checked prefix writes** (existing; M; scope changed). The peer-list half is as its plan entry has it. The prefix half is no longer "unbuilt until plan-EVS1-v1-unspecified": that question's #5 is answered and this section is the rule. It keeps `sidecar/acl_prefix.go` and `acl_prefix_test.go` and provides, there:
+
+- `OpenPrefixRuleSet(sealed, context, repoKeyAt, genRotateTimeAt, entryTimeMs)` returning the set and its state (opened, void with its cause, newer, pending), and `SealPrefixRuleSet`, both on `config_seal.go`'s two functions; the canonical order and every check of 16.2.2 in one validator that the sealer runs too, so no design device files a void set.
+- `AclPrefixSets`, a repo's sets by position: it reads `AclState`'s rows, fetches each body (the log's entry, else `ConfigHead.RecordsIn`), opens it once and keeps it in the sealed store under `prefix/<repo_id>`; it takes the repo's keys through a small interface the evs client implements (`RepoKeyAt(generation)`, `PathKeyAt(epoch)`, `GenRotateTimeAt(generation)`), so `acl_prefix.go` imports nothing of evs's client.
+- `aclPrefixNames` (16.2.2's `names`), `PrefixVerdict` (16.2.4) as a pure function over rows, sets, a `bridge.SidecarRow` and the statement's fields, and `AclEngine.AllowPrefixWrite` (16.2.7).
+- `AclPrefixRulesFiler.File`, on `AclRepoVersioningFiler`'s pattern (`act.AddSealed`), which builds the next set, writes the standing admins in, and returns the set's position for the pin push.
+- Needs: ACL-M2-18; ACL-M2-02, -09, -13 as before. It no longer needs the question.
+- Tests: 16.6's second to seventh bullets.
+- Traps: the verdict takes no `ConfigState` at the pin and must never call `StateAt`; a test runs it with a log that retains nothing below its tip. A group's atom in a rule names nobody: do not resolve it through `atomIndexes`. `names` reads `member_id` only where the row carries no tag.
+
+**EVS1-M6-04, readers of a ruled repo** (new; M6; L; sidecar).
+
+- Files: `sidecar/evs_prefix.go` (new: the judge per repo, with its token tables per (set, epoch), `effective`, the alarm and its interval), `evs_read.go` and `evs_epoch_read.go` (a read returns `effective`'s version; `EvsFileInfo.IgnoredAbove`), `evs_list.go` (judged window deltas; rows the record holds absent), `evs_history.go` (`Ignored` on a version), `evs_pin_store.go` (`EvsReadRecord.Accepted`, `IgnoredThrough`; a record stored without them reads as none, which only walks again), `evs_subscribe.go` (no change event), `evs_mirror.go` (allowed changes only; the journal of ignored events), `evs_export.go` and `evs_export_file.go` (effective versions, ignored ones reported), `sidecar_types.go` (the alarm's detail values), and tests.
+- Needs: ACL-M6-04; EVS1-M2-23, -24, -27; section 9's read path as landed.
+- Landed code that changes: `evs_verify.go` is not changed, and that is the point: `VerifyStatement` still answers whether a push is the repo's, and the prefix verdict is asked where a change is applied. `readRound` today returns the newest verified version; it calls `effective`. `List` today returns evs's table and the window's deltas unjudged.
+- Tests: `evs_prefix_test.go` as 16.6 lists.
+- Traps: the record's pin, floor and epoch move on every verified read, ignored or not (section 9's E1 to E4 are about what evs was shown). An ignored removal at a directory above the path is found by the removal's own token path being a prefix of the path's, as 9.2.4's `verifyPath` finds it. Never log a path (I-13).
+
+**EVS1-M6-05, writers, repair and the pin push** (new; M6; M; sidecar).
+
+- Files: `evs_plan.go` and `evs_plan_remove.go` (`AllowPrefixWrite` before the first round; conditions against the effective version; the repair form), `evs_write.go` and `evs_checkpoint.go` (the sixth checkpoint case; the row stated again), `evs_prefix_repair.go` (new: the runner over the mirror's journal, the delay, the jitter and the bounds), `evs_push.go` (`EvsRepo.PinPush(ref)`, a push of no change at the installed pin), the `ur evs rules`, `ur evs repair` and `ur status` commands with the daemon's control methods, the SDK's and MCP's mapping of `EVS_PREFIX_RULE`, and tests.
+- Needs: EVS1-M6-04; ACL-M6-04; EVS1-M6-01 for the refs listing, the mounts' refs until it lands.
+- Tests: `evs_plan_test.go` and `evs_prefix_repair_test.go` as 16.6 lists.
+- Traps: a repair form's `base_entry_version` and `prev_push_id` are evs's newest, never the effective version's, or 5g refuses it and History's walk breaks. A repair never runs on a phone, an ephemeral sidecar or a device that does not mirror the ref. The pin push must carry the pin of a state at or above the set, so the filer waits for its own log to apply its statement before it sends one.
+
+**EVS1-M6-06, git mode** (new; M6; S; sidecar).
+
+- Files: `evs_git_check.go` (16.2.6's line under `every shape`, after the shape checks and before the commits are read, so a breach costs no object work), `evs_local_sync.go` (the alarm's reason; the wait on a pending or newer set), `evs_local_receive.go` (`ng <ref> prefix rule: <path>` from `AllowPrefixWrite` over the update's net change), and tests.
+- Needs: ACL-M6-04; EVS1-M2-35, -36, -49.
+- Trap: only file changes are judged; a directory's rows on a git-mode ref follow from the trees.
+
+**TEST-M6-03, prefix rules end to end** (new; M6; M). 16.6's schedule rows on T2; `run-prefixrules.sh` beside the other details models in the gate's model step; the hand-built breaching pushes as a `sidecartest` helper that signs with a real admitted sidecar's key and skips `AllowPrefixWrite`, which no release build can do.
+
+**Scope notes for tasks that are not held.** SEARCH-M10-24 (masks): a hit whose (path, version) `effective` ignores is masked. SEARCH-M10-12 and SEARCH-M10-14 (coverage, backfill, companion pushes): no ignored version is indexed, and an ignored push counts as indexed. EVS1-M2-49 (export): reports an ignored version as it reports a refused one. TEAM-M2-04 (`CascadePlan`): lists the `prefix_rules` rows whose signer is in P at the row's position. Each is one call to ACL-M6-04's verdict or one read of the row.
+
+**Amendments to other sections of this document**, stated here and not edited there: 8.2.7's `check` gains 16.2.6's line (16-A); 8.2.8's receive path gains 16.2.7's refusal (16-B); 5.2.2's list of what rows carry gains `AclRepo.prefix_rules` (16-C); §11.7's checkpoint list, as section 8 and section 10 read it, gains the repair form (16-D).
+
+### 16.8 Proposed DESIGN.md text
+
+For a design-records track; none of it is applied here.
+
+**§2.8, api-7.** Add: "for each general repo, every `RepoPrefixRules` entry: its position, time and signer, the generation its rules are sealed to and their padded length (48 B and a multiple of 256 B); never a rule, a subject or a prefix". `metadata_rows.yml` gains `RepoPrefixRules.sealed_rules` and `AclRepoPrefixRulesRow`. No evs or gkm row changes.
+
+**§5.4.** `evs_alarm`'s reason `prefix_rule` carries {repo, ref, path, signer, version, push id, detail: ignored | refused | set_void | set_newer | depth | unavailable, count}, at most one a minute per (repo, ref, signer).
+
+**§8.8, the access-log table.** After `RepoVersioning`'s row: "`RepoPrefixRules{repo_id, rules (sealed)}`; v1 (QD-212), see below | a repo admin or a config writer; only in a general repo". After the `RepoVersioning` block:
+
+```text
+RepoPrefixRules (§11.7):
+M2        acl.proto carries it and AclRepo's prefix_rules from M2: every verifier checks its signer, its repo's
+          kind, its body's length and the repo's count of sets, and folds {signer, at}; nothing is enforced
+          until M6 (D-PHASE-9)
+rows      every set that took effect, in position order, for the repo's life, at most 256; the body stays in
+          the log and the config head's fold records
+sealed    a PrefixRuleSet under the repo's own generation, in §7.9's sealed-field form: rules {subject, path
+          prefix in whole components, write}, sorted, at most 256 and 64 KiB; api and evs see that a set exists
+subjects  a sidecar, a member's untagged devices, a tag, or autogroup:sidecar, member, tagged or ephemeral:
+          facts an admission fixes, so a reader that holds no state at a push's pin still judges it; a group
+          or a role names nobody; the filing command writes the repo's admins in
+in force  at a push's auth pin: the newest opened set at or below it; none: no restriction; a set binds every
+          signer, and one it does not name writes nothing
+void      a set whose seal does not open, whose rules break the format, or whose generation was signed more
+          than 1 h after its entry leaves the set below it in force and alarms; a later release's set makes a
+          reader that cannot read it hold the repo's later versions and say `update`
+```
+
+**§8.8, `AclRows`.** `AclRepo` gains `repeated AclRepoPrefixRulesRow prefix_rules = 12`, with `AclRepoPrefixRulesRow {signer = 1, at = 2}`.
+
+**§8.12.** Add `AclEngine.AllowPrefixWrite(repo, ref, paths)`: the writer's own refusal, at the state its push pins, before anything is sent (`EVS_PREFIX_RULE`, §18.5).
+
+**§8.19, v1.** For "client-checked prefix writes (Q-EVS-3 (a))" read "client-checked prefix writes (Q-EVS-3 (a); §8.8's RepoPrefixRules, §11.7's prefix rules row)".
+
+**D-ACL-11.** Append: "From M6 a general repo may carry prefix rules, which every reader enforces and no server checks (§11.7); separate repos remain the only boundary a server enforces, and the only one that limits reads."
+
+**§11.7, a new row after `directory`.**
+
+```text
+prefix    (v1; §8.8's RepoPrefixRules) a reader judges each change of a shared ref of a general repo, after
+rules     11.9's checks, by the set in force at its push's auth pin: allowed when a rule that names the signer
+          has a prefix whose token path, in the push's path epoch, begins the change's token path; a directory
+          delta above every such prefix is allowed only to add the directory rows that lead to one and to remove
+          the row of the prefix itself; pushes flagged FORCE, DELETE, BASE, DROP, ERASE, CUT or CLOSURE, the
+          refs erasure, ur/index and ur/lfs, and .ur-index/ are outside the rules. On a file-mode ref a change
+          that is not allowed is ignored: the reader shows, serves, mirrors, indexes and exports the newest
+          allowed version below it (at most 64 back), marks the ignored ones in history, raises no change event,
+          and raises evs_alarm prefix_rule naming the signer. On a git-mode ref the push fails the mount's check
+          and the ref stops there (11.11). evs is told nothing and folds the push as any other. A device writes
+          a path whose newest version it ignores as one checkpoint built on the version it shows, with the path's
+          row stated again, its base_entry_version evs's newest; a device that mirrors the ref and is allowed
+          the path writes that back unasked after 5 min, within 60 pushes an hour and 1 GiB a day. A set binds a
+          ref from the first push pinned at or above it, which its filer sends as a push of no change. What a
+          writer with rw can still do to evs's own state is DESIGN-DETAILS 16.2.13's list
+```
+
+**§11.7, checkpoints.** Add case (6): "the path's newest version on evs is one the writer ignores under the repo's prefix rules".
+
+**§11.8, invariants.** Add: "I-EVS-19 every reader that holds a push's statement, the repo's rows and its signer's row reaches the same prefix verdict on each of its changes, whatever base it started at; a reader shows and builds on only versions that verdict allows; a change a device refused locally is the change readers ignore". I-EVS-14 is unchanged and runs first.
+
+**§11.9, the readers row.** After the signed statement and entry hash: "then §11.7's prefix rules: a version they do not allow is not returned, and the newest allowed one below it is". **The trusts row.** After "is evs's word": "; its prefix verdict is not: the reader computes it for the version it is served, from rows alone".
+
+**§11.11.** The mount's check gains the prefix line (DESIGN-DETAILS 8.2.7 and 16.2.6); receive answers `ng <ref> prefix rule` for a path its own device may not write.
+
+**§11.22, v1.** For "Q-EVS-3's prefix rules" read "Q-EVS-3's prefix rules (§8.8, §11.7's prefix rules row; M6)".
+
+**§18.5.** Add `EVS_PREFIX_RULE` {path, detail: refused | pending | update | depth | unavailable}: a write this device's rules do not allow, or a read whose effective version it cannot reach.
+
+**§22.8, §22.9.** The model row `details/PrefixRules` and 16.6's schedule rows, numbered by that track.
+
+**§23, D-PHASE-9.** The reservation list gains "acl.proto's `RepoPrefixRules` (SignedType 0x1111) and `AclRepo.prefix_rules`, which code from M2 verifies and folds and M6 enforces".
+
+### 16.9 Owner questions
+
+Five are filed. The section is built on the recommendation of each, so none blocks a task.
+
+**details-16-subject-atoms** (filed). Which subjects may a rule name? Options: (1) only what an admission fixes: a sidecar, a member's untagged devices, a tag, and the four class autogroups; a group is filed as its members' `user:` subjects (built). (2) Every §8.4 atom, judged in the state at the push's pin: a device that does not retain that state, which is every new device for most of a repo, takes the version unjudged. (3) Groups, expanded by the filing device at filing time and filed again by an admin's daemon when the group changes, on top of (1). Recommendation: 1. It is the only one under which a device started today and a device that watched the push must agree (16.3's P1; `PrefixRulesTwin-HeadAtoms`). Option 3 can be added later with no format change; it spends a repo's 256 sets on membership changes.
+
+**details-16-admins-unbound** (filed). Are a repo's admins held to its prefix rules? Options: (1) yes, like every signer, and the command that files a set writes each standing admin into it for every path (built). (2) No: a signer that is a repo admin at the push's pin is exempt. That needs each admin's spans kept in the rows for the repo's life, where QD-743 keeps a removed admin's row only until the first base past retention. Recommendation: 1. Both give admins the whole repo; only 1 is judged alike by a device that starts after an admin was removed.
+
+**details-16-git-mode-stop** (filed). What does a breach do to a git-mode ref? Options: (1) it is a push that fails the mount's check: every mount stops at it, and an admin deletes the ref and pushes it again, as for any forged or broken push (8.5; built). (2) Mounts skip it and go on: every later push rests on the tip before it and restores each path it touched. Recommendation: 1. Any writer of a git-mode ref can already stop it with one malformed push, so 2 takes nothing from a breaching writer, and it adds a second way for a ref's tip to be computed.
+
+**details-16-repair** (filed). Does a device write the effective state back without being asked? Options: (1) yes: a desktop or the daemon that mirrors the ref and is allowed the path, 5 min after it ignored an event, within 60 pushes an hour and 1 GiB a day; `ur evs repair` for the rest (built). (2) Never unasked: the alarm, `ur status` and `ur evs repair` only. (3) Unasked for names only, since a row costs under 200 B. Recommendation: 1. Until a repair, a device that starts after a breach lists what the breach left and cannot read a versionless file the breach replaced (16.2.13), and nothing tells it so; §16.11 already has a rightful writer reproduce its own paths unasked.
+
+**details-16-small-readings** (filed). Eleven readings the section took where QD-212's sentence allows more than one; each is one line to change: (1) only a general repo takes a set, though QD-212 names owner-bound repos after RepoVersioning's pattern: every owner-bound kind is record-class and written only by its owner's devices; (2) a set binds every shared ref of its repo, with no rule per ref; (3) once a set is in force a signer it does not name writes nothing, pushes pinned below a repo's first set are unbound, and the rules are lifted by the one rule that names `autogroup:sidecar`; (4) a void set leaves the set below it in force; (5) `.ur-index/`, `ur/index` and `ur/lfs` are outside the rules; (6) pushes carrying an admin's flag are outside the rules; (7) a repo's rows hold at most 256 sets for its life, with no compaction; (8) a set binds a ref from the first push pinned at or above it, which the filer sends; (9) a compromise cascade voids no set; (10) a device older than M6 enforces nothing, and no row lets a filer list such devices; (11) the default numbers of 16.2.11. Recommendation: each as built.
+
+## 17. Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8)
+
+Status: complete (2026-11-13)
+
+Tasks held until complete: TLS-M6-05. It builds from this section, in the order 17.7 gives, beside a proposed task for the sockets half (17.7).
+
+Model: `sidecar/sidecartest/model/details/CertOrder.tla`, its configurations (`CertOrder.cfg`, `CertOrder-*.cfg`, `CertOrderTwin-*.cfg`, `CertOrderReach-*.cfg`) and `run-certorder.sh` beside it. Questions filed: `.stack/questions/details-17-ca-numbers.md`, `details-17-one-name-per-device.md`, `details-17-own-share-of-the-domain-limit.md`, `details-17-key-holders-and-rollover.md`, `details-17-alpn-needs-the-443-grant.md`, `details-17-every-certificate-is-a-row.md`, `details-17-small-readings.md`. It extends 13.2.3's registration and Find with two facts and changes none of its rules, and it rests on 12.2.8's write gate for the account key's repo.
+
+### 17.1 The problem
+
+§13.8 gives a Team custom domain one ACME account, pinned by the customer's CAA (`issue "letsencrypt.org; accounturi=<uri>"`). The account key lives in an admin desktop's `secret` repo and is shared by `EvsShare` with the desktops that hold the domain's publish grants. Those desktops order with acmez, for mobile devices too, and register each chain at `POST /tls/cert-register`. Every device holds its own key, so a custom host served by N devices needs N certificates naming one host. The cell says who holds the key and what the routes are called. It does not say how several desktops share one queue, one account and one set of CA limits, and the landed code would do the wrong thing in ten places.
+
+The stakes are the customer's, not ours. The limits belong to the customer's registered domain and account at the CA, a spent one comes back only with time, and a lost account key means the customer must change a CAA record we cannot reach.
+
+**A. Two desktops order one CSR.** A phone queues a CSR for `app.example.com`. Desktops D1 and D2 both poll `GET /tls/certs`, both see it, both send newOrder and finalize. The CA issues two certificates for one key and one name. The exact-set limit (assumed 5 in 7 days, 17.2.8) has lost two of five for one device, and the second chain has no row.
+
+**B. Custom rows in the shared states.** `certsservice.Admit` takes every `queued` row, `RunRenewals` lists `issued`, and `RunRevocations` moves `issued` to `revoking` and revokes at URnetwork's CA account. A custom row in those states is ordered under URnetwork's account, which the customer's CAA refuses (a failed authorization against the customer's name each try), or issues where the customer has no pin. Its renewal and its revocation go the same wrong way, and the revocation fails forever, since only the issuing account or the certificate's key may revoke.
+
+**C. The challenge reaches the wrong listener.** TLS-ALPN-01 validates by a TLS hello for the host offering only `acme-tls/1`. `SocketFindArgs.Protocol`, `MinVersion` and `Alpn` are `json:"-"`, so over HTTP Find applies no ALPN filter and the hello goes to any listener of `tls/443/<owner>`. With three listeners and one responder, two validations in three fail, and the CA validates from several places, so nearly every order fails. Each failure counts against the account's failed-authorization limit for the name (assumed 5 an hour). With the filter on the wire two desktops can still both list `acme-tls/1`, one of them a holder that lost its claim, and the pick is random between them. The other direction is wrong too: a visitor hello with no ALPN matches every listener, so it can reach a registration that exists only for a challenge.
+
+**D. A visitor reaches a device with no certificate for the name.** Five devices listen on `tls/443/web`. `app.example.com` maps to that name. Two devices hold a certificate for the custom host and three wait on the plan (E). Find has no server-name input, so three visitors in five reach a device that answers with its self-signed leaf or its network wildcard. The browser shows a certificate error for a host that is correctly set up.
+
+**E. N devices, one name.** Every device's certificate names the same one-name set, so the CA's exact-set limit counts them together: the sixth device's first order is refused for about 34 hours, whatever the desktop does. A desktop that retries blind spends new-order requests and learns nothing. The CA may also answer two newOrders for one name in one account with one order object (order reuse, assumed in 17.2.8), so two rows ordered side by side finalize one order with one row's CSR and the other row never gets a certificate from it.
+
+**F. A desktop dies between finalize and register.** The CA has issued. No row holds the chain. A second desktop that starts a new order spends a second certificate of five. A desktop that only stalled, and wakes after another took its work, finalizes beside it.
+
+**G. Rollover loses the account.** RFC 8555 §7.3.5 replaces the account key in one request. If the desktop sends it and crashes before the new key is durable anywhere, no one holds the key the CA now expects: the account is gone, and the customer must pin a new account in CAA. If two holders roll at once, one request wins at the CA and the other's key may be the one recorded. Until the change is sent, a removed holder still signs as the account: it can finalize orders on the account's valid authorizations, revoke, deactivate the account or roll the key to one only it holds.
+
+**H. Revocation.** §13.8's I-15 revokes a removed device's certificates. For a custom row the server cannot: it holds no key the CA accepts. A row left `issued` after its device is removed is a live certificate on a key the network no longer controls.
+
+**I. No desktop is online.** A certificate reaches two thirds of its 45 days with no ordering desktop awake. It lapses, and every visitor of the host gets an expired certificate on every device at about the same time, since the devices were certified together (§13.16's risk).
+
+**J. The numbers move.** The CA's limits are its policy and change without notice (they did in 2025). A constant compiled into a desktop is wrong on every desktop at once, and QD-702 forbids it in any case.
+
+### 17.2 The design
+
+#### 17.2.1 The principle
+
+The server's row is the only place desktops meet, and the CA is the only judge of what was issued. Four rules follow, and each failure above is one of them missing.
+
+1. **A row before an order, and its own states.** Every custom certificate is a `network_tls_cert` row first, in states only this design moves, so no landed pass sees one (B, H).
+2. **One lock an account, one order in flight, and only a recorded order is finalized.** A desktop touches the CA for an account only while it holds that account's lock at the server, every server write it makes names the lock's sequence, and it finalizes only an order whose URL the server took under that sequence. A takeover resumes the recorded order and starts another only when the CA says the recorded one is dead (A, E, F). The same lock serializes the key change (G).
+3. **The server counts before the CA does.** Every request the CA limits is granted by the claim, in the transaction that checks and spends the budget. A 429 becomes a hold on the account row that every desktop honors. A wrong number therefore costs a refused request and a wait, never a certificate (E, J).
+4. **A name is routed only to a listener that proved it.** A registration lists the custom hosts it holds a certificate for and the challenges it holds a claim for; `ValidateListen` checks both against rows; Find takes the server name and picks only among those (C, D).
+
+#### 17.2.2 Terms and the identifier set
+
+```text
+custom host c       a row of network_dns_custom_host: a full name, lowercase, no wildcard, mapped to one owner
+                    label of its network. Its socket names are tls/<port>/<owner> (TLS-M6-02)
+domain(c)           the verified network_domain row of c's network with the longest domain that is c or a
+                    suffix of c at a label boundary. The ACME account is the domain's, one each
+rd(c)               the registered domain of c: publicsuffix.EffectiveTLDPlusOne(c), which the CA's
+                    per-domain limit counts by. Two domains of one rd share that limit and no account
+device              a sidecar holding an active approved publish grant on a tls/ name of owner(c). It may
+                    hold a certificate for c
+ordering desktop    a sidecar that runs cli/, reads the account's key file (17.2.13) and holds an active
+                    approved publish grant on a tls/ name of the owner of some custom host of the domain
+the lock            the account row's lock_seq, holder and lease (17.2.6). A claim is one take of it
+```
+
+A custom certificate names exactly one name, the custom host, and carries the device's own P-256 key: one certificate per (device, custom host), as §13.11's verdict has it. Never a wildcard, and never a name under a URnetwork root, which stays certs' to order.
+
+```go
+// §13.8's set for one custom host: {host}. host is a canonical name (tlsDnsNameCanonical), not a wildcard, and
+// neither a root in roots nor a name under one. Pure, like TlsIdentifierSet, and hashed by TlsIdentifierSetHash.
+func TlsCustomIdentifierSet(host string, roots []string) ([]string, error)
+```
+
+The device's `TlsKeyAttestation` binds its key to `TlsIdentifierSetHash({c})`, as for any other set.
+
+#### 17.2.3 State
+
+Postgres, in the api block's database. Nothing here is in Redis.
+
+```text
+network_tls_cert, new columns (NULL or the default on every row that is not custom)
+  custom_host     text           c
+  custom_domain   text           domain(c) when the row was written
+  order_url       text           the ACME order the lock's holder recorded; NULL when none is
+  claim_seq       bigint  0      the lock_seq of the claim that last took this row
+  exempt          bool    false  ordered as an ARI renewal, outside the certificate budgets (17.2.8)
+  no_replaces     bool    false  the CA refused `replaces` for this row; it is ordered without
+  custom_reason   varchar(24)    why it is failed, or why it went back to custom_queued
+
+  unique (sidecar_id, custom_host)     where state in ('custom_queued', 'custom_ordering')
+  unique (network_id, custom_domain)   where state = 'custom_ordering'
+  unique (sidecar_id, custom_host)     where state = 'custom_issued' and successor_cert_id is null
+  index  (network_id, custom_domain)   where state in ('custom_queued', 'custom_ordering', 'custom_revoking')
+
+network_tls_account                  primary key (network_id, domain)
+  ca                 varchar(16)     'letsencrypt'
+  account_uri        text
+  key_seq            bigint          1 at creation, one more for each completed key change
+  key_thumbprint     bytea           RFC 7638's SHA-256 thumbprint of the current account key, a public value
+  key_repo_id        uuid            the secret repo that holds the key file
+  next_key_thumbprint bytea NULL     set while a key change is in flight
+  next_key_repo_id   uuid   NULL
+  lock_seq           bigint  0       raised by every take of the lock, never lowered
+  lock_sidecar_id    uuid   NULL     the holder; NULL when free
+  lock_cert_id       uuid   NULL     the row it works on; NULL for a key change
+  lock_purpose       varchar(8) NULL 'order', 'revoke' or 'rollover'
+  lock_until         timestamptz NULL
+  hold_new_until     timestamptz NULL   no order outside an ARI renewal before this
+  hold_all_until     timestamptz NULL   no order at all before this
+  orderer_seen       jsonb           {sidecar_id: time} of the ordering desktops' last polls, pruned at 7 d
+  create_time        timestamptz
+
+network_tls_custom_spend             primary key (spend_id); what the budgets replay (17.2.8)
+  network_id, domain, custom_host, registered_domain, ca, account_uri
+  kind               varchar(16)     'certificate', 'new_order', 'authz_failed' or 'no_route'
+  cert_id            uuid            unique (cert_id) where kind = 'certificate'
+  at                 timestamptz
+  index (ca, custom_host, kind, at), (ca, registered_domain, kind, at), (account_uri, kind, at)
+```
+
+The three unique indexes are the design's exclusions held by the database, not by a pass's care: one open row per device and host, one row in flight per account, one live certificate per device and host that nothing has succeeded.
+
+The account key is not here. It is one file, `tls/acme/<domain>.json`, in a `secret` repo (§11.12), read by its owner's consented devices and its `EvsShare` subjects and written only by its owner's devices:
+
+```text
+{ "format": 1, "domain": "<domain>", "ca": "letsencrypt", "account_uri": "<uri or empty before newAccount>",
+  "key_seq": 3, "key": "<PKCS #8 DER, base64>",
+  "next": null | { "key_seq": 4, "key": "<PKCS #8 DER, base64>" },
+  "shrunk_at": 812 }          the repo's holders_shrunk_at (§10.6) when this key was made
+```
+
+An ordering desktop uses a key file only when (`key_seq`, thumbprint of `key`) is the row's (`key_seq`, `key_thumbprint`) or, with a next recorded, the row's (`key_seq + 1`, `next_key_thumbprint`), which is a key change whose last step is owed (17.2.13). After each read that passes it keeps the file's bytes in the sidecar's local secret store beside the device key, replacing the copy before, so that a holder still has the key when the repo's owner is removed (17.2.13).
+
+#### 17.2.4 Row states
+
+Four new values of `TlsCertState`, each within the column's 16 bytes, beside the three ends every row shares. A reader that does not know a state treats it as no certificate (§13.8), which is the right answer for an old reader of each.
+
+```text
+custom_queued     the CSR waits for an ordering desktop
+custom_ordering   a desktop took it under the lock; it stays here while its order is at the CA, lock or no lock
+custom_issued     its chain is registered
+custom_revoking   a revocation is due, which only an ordering desktop can send
+failed, revoked, expired   as for any row
+
+from             to               by                                   compare-and-move on
+(none)           custom_queued    POST /tls/cert-order, the device     the open-row index
+(none)           custom_queued    the sweep, a renewal's successor     the predecessor's empty successor
+custom_queued    custom_ordering  a claim, purpose order               state, with the lock, one transaction
+custom_ordering  custom_issued    POST /tls/cert-register              state and lock_seq
+custom_ordering  custom_queued    progress: no order stands at the CA  state and lock_seq
+custom_ordering  failed           progress: failed, no order recorded  state and lock_seq
+custom_ordering  custom_revoking  progress: failed, an order recorded  state and lock_seq
+custom_queued    failed           the device's newer CSR                                        state
+custom_queued, custom_ordering    failed        its device, host or domain removed, and no      state
+                                                order recorded
+custom_ordering  custom_revoking  the same removal, an order recorded                           state
+custom_issued    custom_revoking  POST /tls/cert-revoke; its device, host or domain removed     state
+custom_revoking  revoked          progress: revoked                    state and lock_seq
+custom_issued, custom_revoking    expired       the sweep, at not_after                         state
+```
+
+A row never leaves `custom_ordering` for an end while an order is recorded for it: it goes to `custom_revoking`, where 17.2.12 settles the order before the account orders again, because a holder that only stalled may still finalize it (17.3's C10). A removal that ends a `custom_ordering` row frees the lock if the lock names it. A lapsed lease moves nothing: a `custom_ordering` row whose lock lapsed stays `custom_ordering` and is the first thing any desktop claims (17.2.6). `certsservice`'s `Admit`, `RunRenewals`, `RunRevocations` and `FindOpenOrder` read `queued`, `ordering`, `waiting_dns`, `issued` and `revoking` and are unchanged. `PurgeEnded` already takes the three ends.
+
+#### 17.2.5 Routes
+
+All under the certs audience, the token naming the caller. Durations on the wire are milliseconds from the answer, never a time of day, so no desktop clock is compared with the server's. A refusal is `{"reason": ..., "retry_after_ms": ...}` with the status given.
+
+```text
+POST /tls/cert-order            the device queues a CSR (existing route, new branch)
+GET  /tls/cert-order/<id>       the device reads its row (unchanged; custom_issued carries the chain)
+GET  /tls/certs                 rows; for an ordering desktop also accounts and the work list
+POST /tls/custom-claim          take or renew an account's lock for one row or for a key change
+POST /tls/custom-progress       what the holder learned at the CA; ARI windows
+POST /tls/cert-register         the chain of the row the caller holds the lock for
+POST /tls/custom-account        create the account row; begin, end, abort or repair a key change
+POST /tls/custom-challenge      a DNS-01 value at <acme_token>.acme.<root> (QD-175, unchanged)
+GET  /tls/custom-challenge/<id> whether the dns edges serve it (QD-175, unchanged)
+POST /tls/cert-revoke           existing; a custom_issued row moves to custom_revoking
+```
+
+**`POST /tls/cert-order`, the custom branch.** Taken when the CSR's one name is under no URnetwork root. In one transaction: the CSR is a P-256 request, self-signed, with exactly one dNSName and no other name; that name is an `active` custom host c of the caller's network; the caller holds an active approved publish grant on a `tls/` name of owner(c); the attestation verifies for the CSR's key and `TlsIdentifierSetHash({c})`; the domain has an account row. Then, for the caller's sidecar and c: an open row with this key is returned as it is (idempotent); an open row with another key is moved `custom_queued` to `failed` (`custom_reason` `superseded`) if it is `custom_queued`, and refused 409 `in_flight` if it is `custom_ordering`; the newest row of this sidecar and host that is `custom_issued`, `custom_revoking` or `revoked` and has no successor gets the new row as its successor, which is what 17.2.8 calls the new row's predecessor. The new row is `custom_queued`. `Replaces` in the body is ignored on this branch: the server names the predecessor. Refusals: 400 `csr`, 403 `grant`, 404 `host`, 409 `no_account`, 409 `in_flight`.
+
+**`GET /tls/certs`.** `Certs` gains the network's custom rows in any state. For a caller that is an ordering desktop of a domain it also returns the accounts and the work list, and with `?work=1` it returns those two alone, which is what the orderer's loop asks for, so that a poll carries no chains:
+
+```go
+type TlsCertsResult struct {
+	Certs      []*TlsCertRecord    `json:"certs"`
+	QueuedCsrs []*TlsCertRecord    `json:"queued_csrs,omitempty"` // the work list, in 17.2.8's plan order
+	Accounts   []*TlsCustomAccount `json:"accounts,omitempty"`
+}
+
+// TlsCertRecord gains, on custom rows:
+//	CustomHost   string `json:"custom_host,omitempty"`
+//	CustomDomain string `json:"custom_domain,omitempty"`
+//	CustomReason string `json:"custom_reason,omitempty"`
+// and on a work-list row only:
+//	WaitMs    uint32 `json:"wait_ms,omitempty"`    // 0: claimable now; else how long its budgets or holds ask
+//	HostReady bool   `json:"host_ready,omitempty"` // network_dns_custom_host is active with ready_time set
+//	Owner     string `json:"owner,omitempty"`      // owner(c), for the socket name
+
+type TlsCustomAccount struct {
+	Domain            string `json:"domain"`
+	Ca                string `json:"ca"`
+	AccountUri        string `json:"account_uri"`
+	KeySeq            uint64 `json:"key_seq"`
+	KeyThumbprint     []byte `json:"key_thumbprint"`
+	KeyRepoId         Id     `json:"key_repo_id"`
+	NextKeyThumbprint []byte `json:"next_key_thumbprint,omitempty"`
+	NextKeyRepoId     Id     `json:"next_key_repo_id,omitzero"`
+	LockSidecarId     Id     `json:"lock_sidecar_id,omitzero"`
+	LockRetryAfterMs  uint32 `json:"lock_retry_after_ms,omitempty"`
+	HoldNewMs         uint32 `json:"hold_new_ms,omitempty"`
+	HoldAllMs         uint32 `json:"hold_all_ms,omitempty"`
+	// The TXT owner name DNS-01 values are written at: <acme_token>.acme.<root>.
+	AcmeName string `json:"acme_name"`
+}
+```
+
+The call also stamps the caller in `orderer_seen`, when its stored time is older than `OrdererSeenStamp`.
+
+**`POST /tls/custom-claim`.**
+
+```go
+type TlsCustomClaimArgs struct {
+	Domain  string `json:"domain"`
+	Purpose string `json:"purpose"`          // "order", "revoke" or "rollover"
+	CertId  Id     `json:"cert_id,omitzero"` // zero for rollover
+	KeySeq  uint64 `json:"key_seq"`          // the key_seq of the key file the caller holds
+}
+
+type TlsCustomClaimResult struct {
+	ClaimSeq uint64 `json:"claim_seq"`
+	LeaseMs  uint32 `json:"lease_ms"`
+	// The row with its CSR and attestation, and for a revoke its chain.
+	Record *TlsCertRecord `json:"record,omitempty"`
+	// The order to resume. Empty when none is recorded.
+	OrderUrl string `json:"order_url,omitempty"`
+	// One newOrder is granted. False with an OrderUrl.
+	MayOrder bool `json:"may_order,omitempty"`
+	// The predecessor's leaf in DER when the order names it in `replaces` (RFC 9773). Empty for none.
+	ReplacesLeaf []byte `json:"replaces_leaf,omitempty"`
+}
+```
+
+Refusals: 403 `orderer` (17.2.6's rule), 404 `no_account`, 409 `key_seq` (with the row's `key_seq`), 409 `locked` (`retry_after_ms` to the lease's end), 409 `in_flight` (with the `cert_id` to claim instead), 409 `state`, 429 `budget` or `hold` (`retry_after_ms`).
+
+**`POST /tls/custom-progress`.**
+
+```go
+type TlsCustomProgressArgs struct {
+	Domain   string `json:"domain"`
+	ClaimSeq uint64 `json:"claim_seq,omitempty"` // required for every event but "ari" and "rollover_due"
+	CertId   Id     `json:"cert_id,omitzero"`
+	Event    string `json:"event"`
+	OrderUrl     string          `json:"order_url,omitempty"`      // order_recorded
+	RetryAfterMs uint32          `json:"retry_after_ms,omitempty"` // rate_limited
+	Reason       string          `json:"reason,omitempty"`         // failed, authz_failed
+	Ari          []*TlsCustomAri `json:"ari,omitempty"`            // ari
+}
+
+type TlsCustomAri struct {
+	CertId         Id        `json:"cert_id"`
+	AriWindowStart time.Time `json:"ari_window_start"`
+	AriWindowEnd   time.Time `json:"ari_window_end"`
+}
+```
+
+Every event but `ari` and `rollover_due` applies only if `lock_seq = claim_seq`, the holder is the caller and the lock names the row; otherwise 409 `claim`, and the caller stops touching the CA for that row.
+
+```text
+order_recorded  order_url must be NULL; it is set. Nothing else moves
+order_invalid   the recorded order is dead at the CA (17.2.7), or the granted newOrder was refused: order_url
+                is cleared and the row's certificate spend deleted. With the reason no_route a no_route
+                spend is written for the host first; the reason no_path writes none. The answer is a
+                TlsCustomClaimResult: with may_order when 17.2.8's budgets grant another (spent in this
+                transaction), else the row goes to custom_queued, the lock is freed and the answer is
+                429 budget
+authz_failed    writes an authz_failed spend for the host, reason kept in custom_reason. The caller sends
+                order_invalid next
+rate_limited    sets a hold to now + retry_after_ms clamped to [HoldDefault, HoldMax]: hold_new_until when the
+                row has no order_url and is not exempt (an ordinary newOrder was refused), hold_all_until
+                otherwise. An exempt row with no order_url becomes not exempt. A row with no order_url goes
+                to custom_queued; the lock is freed
+not_exempt      the CA refused the newOrder for its `replaces`, so order_url is NULL: no_replaces is set, exempt
+                cleared, the row goes to custom_queued, the lock is freed
+release         the lock is freed. A custom_ordering row with an order_url stays as it is, and one without
+                goes to custom_queued. A custom_revoking row stays as it is
+failed          the reason (csr, attestation, ca_refused, foreign) is kept. A row with no order_url goes to
+                failed and its certificate spend is deleted. A row with one goes to custom_revoking, whose
+                pass settles the order (17.2.12), and its spend stays. The lock is freed
+revoked         purpose revoke: the row goes to revoked; the lock is freed
+ari             no claim: for each cert_id of a custom_issued row of the domain, the window is stored
+rollover_due    no claim: an ordering desktop saw 17.2.13's key change due and may not make it. Raises the admin
+                event tls_account_rollover_due, at most once each EventRepeatInterval
+```
+
+**`POST /tls/cert-register`.** `TlsCertRegisterArgs` gains `ClaimSeq uint64` (`claim_seq`), `AriWindowStart` and `AriWindowEnd`; `CertId` is required and `Attestation` unused, since every custom certificate is a row first (17.9). In one transaction: the lock check above; the row is `custom_ordering`; the chain is 1 to `ChainMaxCount` certificates, each signed by the next; the leaf's SubjectPublicKeyInfo hashes to the row's `spki_sha256`; the leaf's names are exactly the one dNSName `custom_host`; `not_after` is ahead; `AccountUri` equals the account row's. Then the row takes the chain, serial, validity, window, `ca`, `account_uri` and profile and moves to `custom_issued`, its certificate spend's `at` becomes now, and the lock is freed. Refusals: 409 `claim`, 409 `state`, 400 `chain`.
+
+**`POST /tls/custom-account`.** Network admins' desktops only.
+
+```go
+type TlsCustomAccountArgs struct {
+	Domain        string `json:"domain"`
+	Op            string `json:"op"` // "create", "roll_begin", "roll_end", "roll_abort" or "repair"
+	AccountUri    string `json:"account_uri"`
+	KeySeq        uint64 `json:"key_seq"` // the row's key_seq as the caller read it; 0 for create
+	KeyThumbprint []byte `json:"key_thumbprint"`
+	KeyRepoId     Id     `json:"key_repo_id"`
+	ClaimSeq      uint64 `json:"claim_seq,omitempty"` // roll_*: the rollover claim
+}
+```
+
+```text
+create      the domain is verified and has no account row: insert with key_seq 1. 409 exists otherwise
+roll_begin  lock check; key_seq equals the row's; next_* must be NULL: set next_key_thumbprint, next_key_repo_id
+roll_end    lock check; key_seq equals the row's; KeyThumbprint equals next_key_thumbprint: key_seq + 1,
+            key_thumbprint and key_repo_id take the next values, next_* cleared, the lock freed
+roll_abort  lock check; next_* cleared, the lock freed
+repair      lock check (a rollover claim); next_* is NULL; key_seq equals the row's: key_seq + 1 with the given
+            thumbprint and repo. For a row restored behind the CA (17.5)
+```
+
+#### 17.2.6 The lock
+
+One lock an account. Its clock is Postgres's `now()` and nothing else: a desktop's clock decides only when the desktop gives up early.
+
+```text
+orderer(caller, domain)   the token names a sidecar of the network that holds an active approved publish grant
+                          on a tls/ name of the owner of an active custom host of the domain. For purpose
+                          rollover, and for POST /tls/custom-account, the caller's user is also a network admin
+
+claim(caller, a = the account row FOR UPDATE, purpose, cert_id, key_seq), one transaction:
+  1  no row: 404 no_account.  not orderer: 403 orderer.  key_seq is neither a.key_seq nor, with a next
+     recorded, a.key_seq + 1: 409 key_seq
+  2  held = a.lock_sidecar_id is not NULL and now < a.lock_until
+     held by the caller for this purpose and cert_id: lock_until = now + LockLease; answer the same
+       claim_seq, the row's order_url, may_order false                                   (a renewal)
+     held otherwise: 409 locked, retry_after_ms = lock_until − now
+  3  f = the account's row with an order open, if any: its custom_ordering row (the in-flight index), or
+         a custom_revoking row with an order_url and no chain, which ended under its order (17.2.12)
+     purpose order:   now < a.hold_all_until: 429 hold
+                      f exists and f ≠ cert_id: 409 in_flight {cert_id: f}
+                      r = the row FOR UPDATE; r.state not in (custom_queued, custom_ordering): 409 state
+                      r.order_url is NULL: grant(r) (17.2.8), which spends, or answers 429 after moving a
+                      custom_ordering row back to custom_queued, so a row no one may order holds no one up
+                      r.state = custom_queued: r.state = custom_ordering
+     purpose revoke:  r.state ≠ custom_revoking: 409 state
+     purpose rollover: nothing more. A row in flight stays as it is and resumes after
+  4  a.lock_seq += 1; holder, cert_id, purpose = the caller's; lock_until = now + LockLease
+     r.claim_seq = a.lock_seq
+  5  answer claim_seq = a.lock_seq, lease_ms, the row, r.order_url, may_order = (order_url was NULL),
+     replaces_leaf = the predecessor's leaf when grant gave one
+```
+
+The lock is never waited on inside the server: a refused claim returns at once with how long to wait.
+
+**The holder's side.** A holder keeps a local deadline: the moment it sent the claim, on its monotonic clock, plus `lease_ms` less `LeaseMargin`. It renews, by the same claim call, every `LockLease / 3`, and again immediately before each of the five requests that change something at the CA: newOrder, the challenge POST, finalize, keyChange and revokeCert. A renewal that is refused, or a deadline that passes, ends its work on the row: it clears its challenge and sends nothing more to the CA but reads. These renewals keep a stalled holder's reach to one request (17.5). No invariant rests on them.
+
+#### 17.2.7 The order
+
+`TlsCustomDomainOrderer` runs this loop on a desktop that holds a key file, at once after it frees a lock, every `PollInterval` (jittered by a fifth) while its last answer listed work, and every `IdlePollInterval` otherwise. `acme` is the injected client (17.7); every request retries a `badNonce` with the fresh nonce up to `NonceRetryCount` times, which is one request to the CA's limits, not several.
+
+```text
+run once:
+  1  w = GET /tls/certs?work=1. For each account whose key file passes 17.2.3's check:
+       a key change is due or recorded and this desktop may roll (17.2.13): do that, and stop
+       r = the first work row with wait_ms = 0 this desktop can serve (17.2.9). None: next account
+  2  c = POST /tls/custom-claim {domain, purpose, cert_id: r, key_seq}
+       409 in_flight: claim the named row instead, once, for the purpose its state asks.
+       409 locked, 429: next account.
+       409 key_seq: read the key file again; stop
+  3  purpose revoke: 17.2.12.  Else check the row, trusting nothing the server said about it:
+       the attestation verifies (VerifyTlsKeyAttestation) for a device of this desktop's own verified
+       config that holds an active publish grant; the CSR is self-signed by the attested P-256 key and
+       names exactly one dNSName, a canonical name under the account's domain and under no root
+       a check fails: progress failed {csr | attestation}; stop
+  4  c.order_url ≠ "":  o = acme.Order(c.order_url)          (resume: no newOrder)
+       dead (404, or a status other than pending, ready, processing and valid): c = progress
+       order_invalid; 429: stop; else go on at 5
+     else (c.may_order):  o = acme.NewOrder(name, profile, replaces = id of c.replaces_leaf or none)
+       refused: by the table below.  outcome unknown (5xx, timeout): progress release; stop
+       progress order_recorded {o.url} must answer 200 before anything else is sent to the CA.
+       409 claim: stop, and send the CA nothing more for this row
+     neither (a restart met its own unlapsed claim with nothing recorded): progress release; stop
+  5  by o.status:
+       pending     its one authorization: valid: wait for ready.  pending: 17.2.9's challenge, then poll.
+                   invalid: progress authz_failed {problem type}, then order_invalid; stop
+                   pending and this desktop has no path for the row (17.2.9): kill the order, then
+                   progress order_invalid {no_path}; stop
+       ready       renew the claim; acme.Finalize(o, the row's CSR)
+       processing  poll the order every OrderPollInterval
+       valid       6
+       dead        c = progress order_invalid; a granted c goes to 4, else stop
+     an attempt lasts at most OrderDeadline; past it: progress release; stop (the order stays recorded)
+  6  chain = acme.Certificate(o.certificate): the CA's default chain. Check: the leaf's key is the CSR's
+     key, its names are exactly the row's one name, not_after is ahead, each certificate is signed by
+     the next. A check fails: progress failed {foreign}; raise tls_custom_foreign_certificate; stop
+  7  window = acme.RenewalInfo(leaf), zero if the CA gives none
+  8  POST /tls/cert-register {cert_id, claim_seq, chain, account_uri, window}.
+       200: done.  409 claim: another holder registers it; stop.  no answer: 8 again while the claim
+       renews; else stop, and the next claim resumes at 4 and registers
+       409 state: the row ended under the order (its device, host or domain was removed): revoke the
+       chain at once, acme.Revoke(leaf, cessationOfOperation), and stop
+```
+
+What each CA answer does. An answer not listed is `outcome unknown` at that step.
+
+```text
+at             the CA answers                          the holder
+newOrder       201                                     records the URL
+               429 rateLimited                         progress rate_limited {Retry-After}; stops
+               409 alreadyReplaced, or a 4xx whose     progress not_exempt; stops. The row is ordered again
+                 problem names `replaces`                without `replaces`, inside the budgets
+               401, 403 unauthorized,                  the key is not the account's: with a `next` in the key
+                 accountDoesNotExist                     file, the same request under the next key (17.2.13);
+                                                         else progress release, raise tls_account_key_mismatch
+               400 rejectedIdentifier, 403 caa         progress failed {ca_refused}; raise tls_custom_ca_refused
+authorization  invalid, any problem                    progress authz_failed {type}, then order_invalid
+finalize       200                                     polls
+               403 orderNotReady                       reads the order again and acts on its status
+               400 badCSR, badPublicKey                progress failed {ca_refused}: the same CSR would fail again
+               429                                     progress rate_limited; the order stays recorded and ready,
+                                                         and the next claim resumes it with no new spend
+               unknown                                 reads the order until OrderDeadline, then progress release
+certificate    unknown                                 retries until OrderDeadline, then progress release
+revokeCert     200, or 400 alreadyRevoked              progress revoked
+               403 unauthorized                        progress release; raise tls_account_key_mismatch
+```
+
+Three rules carry the design, and each is local to the holder:
+
+- **One newOrder a grant.** A holder sends newOrder only on `may_order`, once. A refused or unknown newOrder ends the grant.
+- **Finalize only the recorded order.** A holder finalizes an order only after the server answered 200 to its `order_recorded` or handed it the URL in a claim.
+- **A recorded order is replaced only when dead.** `order_invalid` is sent only when the CA itself answers for that URL a 404 or a status other than `pending`, `ready`, `processing` and `valid`, or on a refused newOrder with nothing recorded. Never on a timeout or a 5xx, and never for an order the CA still calls live.
+
+A holder that must give a live order up does not leave it: it **kills** it. An order left recorded keeps its row `custom_ordering`, and that row is first in line for every desktop, so an order nobody can complete would hold up every other host of the account until the CA expired it, days later. To kill an order the holder deactivates each of its authorizations (`acme.DeactivateAuthorization`, RFC 8555 §7.5.2) and reads the order again, up to `DeactivateTryCount` times. Dead: `order_invalid` with the reason. Valid, because another holder finalized it meanwhile: it goes on at step 6. Still live after the tries: `release`, and `tls_custom_order_stuck`. A holder kills an order in two cases: its probe fails (17.2.9), or the order is pending and it has no challenge path for the row. A crash kills nothing, which is what the takeover is for.
+
+#### 17.2.8 The budgets, the holds and the plan
+
+**What is assumed about the CA.** Let's Encrypt, profile `tlsserver`. I did not read the CA's pages for this section: no page may be fetched. Each number is DESIGN.md §13.8's, with the date its author read it, or mine from memory with knowledge to mid-2026. Every one is a field of `CertsCustomSettings` (17.2.15), and `details-17-ca-numbers` asks the owner to confirm them.
+
+```text
+     the CA's rule                                    assumed                              from
+A1   certificate lifetime                             45 days                              §13.8, read 2026-10-04
+A2   valid authorization reuse                        7 h                                  §13.8, read 2026-10-04
+A3   new certificates a registered domain,            50 in 7 d, one back each 202 min     §13.8, read 2026-08-05;
+     all accounts together                                                                 the refill from memory
+A4   new certificates an exact set of names           5 in 7 d, one back each 34 h,        §13.8, read 2026-08-05
+                                                      no override
+A5   new orders an account                            300 in 3 h, one back each 36 s       memory
+A6   failed authorizations a name and account         5 an hour, one back each 12 min      §13.8; the refill from
+                                                                                           memory
+A7   an order with `replaces` naming a certificate    counts against none of A3 to A5      §13.8 ("ARI renewals
+     of its account, sent inside that certificate's                                        skip all limits"); the
+     suggested window (RFC 9773)                                                           window condition from memory
+A8   a certificate is replaced once                   a second order replacing it is       memory
+                                                      refused 409 alreadyReplaced
+A9   order reuse                                      newOrder may return the account's    memory
+                                                      pending or ready order for the same names
+A10  a long run of failed validations for a name      the CA pauses that name for the      memory, low confidence
+                                                      account; thousands of failures
+A11  a 429                                            problem type rateLimited, with       memory
+                                                      Retry-After
+A12  an order issues at most once; a key change keeps the account, its orders and          RFC 8555 §7.4, §7.3.5,
+     authorizations; the account or the certificate's key may revoke                       §7.6
+A13  an order one of whose authorizations is deactivated is never finalized after; the     RFC 8555 §7.1.6, §7.5.2
+     CA may call it invalid or deactivated
+```
+
+Only A12 and A13 are relied on for safety, and they are the protocol, not policy. If A13 failed, 17.2.12's pass would stop the account's ordering and raise an alarm; it would not issue. A wrong A1 to A11 changes how long a row waits or turns one request into a 429 and a hold. A9 is handled either way: the design is safe whether or not the CA reuses orders (17.3).
+
+**The buckets.** A budget is a bucket replayed from `network_tls_custom_spend`, so there is no counter to lose and a restore behind the truth is repaired by the CA's next 429.
+
+```text
+level(cap, refill, spends, now):      spends: the times in (now − cap × refill, now], ascending
+  t = now − cap × refill ; x = 0      empty at the window's start, so never above the truth
+  for s in spends: x = min(cap, x + (s − t) / refill) − 1 ; t = s
+  return min(cap, x + (now − t) / refill)
+wait(cap, refill, spends, now, need) = 0 if level ≥ need, else (need − level) × refill
+
+bucket   keyed by                      cap  refill                 need   spends
+set      (ca, custom_host)             5    34 h                   2      certificate
+                                                                   1      for a row whose predecessor is
+                                                                          custom_revoking or revoked
+domain   (ca, registered_domain)       25   7 d / 25 (6 h 43 min)  1      certificate
+orders   (ca, account_uri)             60   3 min                  1      new_order
+failures (ca, account_uri, host)       after the k-th authz_failed or no_route since the host's newest
+                                       register: no grant for min(2^(k−1) × FailureBackoff, FailureBackoffMax)
+
+grant(r), inside the claim's or order_invalid's transaction, after pg_advisory_xact_lock(hash(ca, rd)):
+  exempt = r has a predecessor p that is custom_issued and unexpired, r.no_replaces is false, and p has a
+           stored window with window_start ≤ now ≤ window_end
+  a hold: now < hold_all_until, or not exempt and now < hold_new_until: 429 hold
+  waits: failures, orders, and unless exempt set and domain, the last two replayed without r's own
+         certificate spend, which a takeover reuses. The largest, if above 0: 429 budget
+  spend: a new_order row; unless exempt, r's certificate row (insert, or move its `at` to now)
+  r.exempt = exempt ; replaces_leaf = p's leaf when p is unexpired and r.no_replaces is false
+```
+
+`set` keeps one certificate back (need 2 of 5), so a device whose key is compromised can be re-certified at once. `domain` is our share of A3, which the customer's other issuance draws on too: we take at most half (`details-17-own-share-of-the-domain-limit`). `orders` and the failure backoff are a fifth and less of A5 and A6. A row has at most one `certificate` spend, written when a newOrder is first granted, kept across takeovers, moved to the register time on issue and deleted only on proof that no certificate came of it. So the replay never counts less than the CA does, whatever crashes.
+
+**The holds.** A 429 is the CA telling us our count is behind. `rate_limited` writes it on the account row, where every desktop's next claim reads it. A 429 on an ordinary order holds ordinary orders (`hold_new_until`) and lets ARI renewals through. A 429 on an ARI renewal means A7 did not hold for it: everything is held (`hold_all_until`), and the row becomes an ordinary one that waits its turn in the buckets. A 429 anywhere past newOrder is the CA's request limit and holds everything too; the order stays recorded, and the claim refuses every order until the hold ends, so no desktop repeats the request meanwhile.
+
+**The plan for N devices.** The work list is the server's, in this order, each row with its `wait_ms` from the grant's rule (the largest wait, or the hold's remainder):
+
+```text
+1  custom_revoking rows, oldest first
+2  the account's custom_ordering row
+3  custom_queued rows whose predecessor is custom_revoking or revoked
+4  custom_queued renewals with a live predecessor, by the predecessor's not_after
+5  the other custom_queued rows: the host with the fewest unexpired custom_issued rows first, then by the
+   row's creation time
+```
+
+Rule 5 gives every host its first certified device before any host its second, so a new custom host is reachable after one order. Within A2's 7 hours a second device's order for the same host finds the name's authorization valid and needs no challenge. With the buckets full, a host's first 4 devices are certified as fast as the desktop orders (seconds each), and each further device 34 hours after the one before; 17.4 has the table. A device with no certificate for c is simply not routed c's visitors (17.2.10), so the wait costs capacity for that host, never a certificate error.
+
+#### 17.2.9 The challenge
+
+The order's one authorization offers `tls-alpn-01` and `dns-01`. A desktop can serve a row when one path is open, and takes them in this order:
+
+```text
+tls-alpn-01   the row's host_ready is true and the desktop holds an active approved publish grant on
+              tls/443/<owner(c)>
+dns-01        resolver.LookupCname(_acme-challenge.<c>) is the account's acme_name (case and a trailing dot
+              ignored): the customer delegated the name (§12.8)
+```
+
+**TLS-ALPN-01.**
+
+```text
+1  front.SetAlpnChallenge(c, key authorization, now + ChallengeLifetime)             (landed, TLS-M5-19)
+2  the desktop's registration for tls/443/<owner> lists acme-tls/1 in alpn and {name: c, claim_seq} in
+   acme_names (17.2.10), sent in a heartbeat page at once. With no local service on that name the
+   registration is acme-only: alpn is exactly ["acme-tls/1"]
+3  wait for that page's 200
+4  probe: the desktop dials c on port 443 itself, by public DNS, offering only acme-tls/1, and must read
+   back its own challenge certificate, byte for byte, ProbeCount times in a row within ProbeTimeout each.
+   Not so: clear the challenge; kill the order (17.2.7); progress order_invalid {no_route}. The host backs
+   off as for a failed authorization, without one having been spent, and the account's other rows go on
+5  renew the claim; acme.Challenge(url); poll the authorization every OrderPollInterval
+6  valid or invalid: clear the challenge (front.ClearAlpnChallenge), and the next page drops acme_names
+```
+
+The probe is the same path the CA's validators take: public DNS to tlsedge, Find's ACME route, the responder. It costs two handshakes and saves a failed authorization, which is the scarcest thing here (A6).
+
+**DNS-01.**
+
+```text
+1  value = base64url(SHA-256(key authorization)); POST /tls/custom-challenge {domain, value}
+2  poll GET /tls/custom-challenge/<id> until the edges serve it
+3  probe: resolver.LookupTxt(_acme-challenge.<c>) holds value, ProbeCount times in a row within
+   ProbeTimeout each. Not so: kill the order; progress order_invalid {no_route}
+4  renew the claim; acme.Challenge(url); poll
+5  nothing to clear: the value lapses in 1 h (QD-175). One order in flight an account and one account a
+   domain keep a domain within QD-175's two values
+```
+
+#### 17.2.10 Certified names and the ACME route in Find
+
+13.2.3's registration and Find gain two facts. A `tls/` registration lists them, `ValidateListen` holds them to rows, and the pick reads them.
+
+```go
+// SocketRegistration gains, for tls/ names:
+//	// Custom hosts and aliases mapped to this name for which the listener has an unexpired certificate installed.
+//	CertifiedNames []string `json:"certified_names,omitempty"`
+//	// Names it holds a pending TLS-ALPN-01 challenge for, each with the claim it holds.
+//	AcmeNames []*SocketAcmeName `json:"acme_names,omitempty"`
+type SocketAcmeName struct {
+	Name     string `json:"name"`
+	ClaimSeq uint64 `json:"claim_seq"`
+}
+
+// SocketFindArgs: Protocol, MinVersion and Alpn go on the wire as "protocol", "min_version" and "alpn", which
+// sock-2 already lists, and it gains
+//	// The hello's server name, set by tlsedge exactly when it resolved the name through the custom-host map or
+//	// the alias table. Empty for a name under the network's own zone.
+//	ServerName string `json:"server_name,omitempty"`
+```
+
+Neither list is in the signed `SocketRegistrationClaim`: they route, and the certificate the listener then presents is the proof a visitor checks. `SocketCandidate` gains `CertifiedNames []string` and `AcmeNames map[string]uint64`, and `SocketPickRequest` gains `ServerName`. `PickSocketListeners`, and its Lua twin, change in `matches` and gain one branch:
+
+```text
+acme   = "acme-tls/1" ∈ request.Alpns
+custom = request.ServerName ≠ ""
+
+matches(candidate):
+  acme:    the lease is live, custom, and candidate.AcmeNames holds request.ServerName
+           (Serving, Draining, Weight, est, ejections and exclusions are not read: one handshake)
+  else:    today's rule, and candidate.Alpns ≠ ["acme-tls/1"]                (an acme-only listener serves no visitor)
+           and, if custom, request.ServerName ∈ candidate.CertifiedNames
+
+acme pick: of the matches, the one with the highest AcmeNames[request.ServerName]; equal, the lowest
+           client id. Primary only: no backup, no draw. None: no_listener
+```
+
+A hello offering `acme-tls/1` for a name under the network's own zone finds no listener, as it should: those names are certs' and use DNS-01. tlsedge reads the ALPN list off the hello it already parses for the server name and passes both; it changes nothing else (TLS-M6-02).
+
+**`ValidateListen` narrows.** TLS-M5-22's `TlsListenFacts`, for the entry's sidecar and name, gain:
+
+```text
+CustomCertified  map[name]not_after   the sidecar's custom_issued rows whose custom_host is active and mapped
+                                      to this name's owner; TLS-M6-03 adds its certified aliases to the same map
+AcmeClaims       map[name]claim_seq   accounts whose lock this sidecar holds, purpose order, unlapsed, for a
+                                      row of a custom host mapped to this name's owner: custom_host → lock_seq
+```
+
+The hook removes from the entry every certified name that is not in `CustomCertified` with `not_after > now + CertifiedMargin`, and every ACME name whose claim is not in `AcmeClaims` with that sequence, and allows the rest of the entry as before. It never refuses an entry for them: a listener must not lose its network names over a custom one. A list longer than `CertifiedNameMaxCount` or `AcmeNameMaxCount` is refused as malformed. The facts are cached as today, with one rule more: an ACME name whose claim is above the cached one reads the facts again, once a page a sidecar, so a new claim is not held up by the cache.
+
+**The listener's side.** A device installs a custom chain it read from its row when the leaf's key is its device key, the leaf's one name is c and the chain parses, and keeps it beside the device key. `TlsFrontTarget.ServerNames` gains c while one is installed. For a hello naming a custom host or alias, `front.certificate` answers the installed certificate or fails the handshake with `unrecognized_name`: never the self-signed leaf, never the network's wildcard. The listener lists c in `certified_names` from install until `not_after − CertifiedMargin`, or until it reads its row as anything but `custom_issued`, and sends the changed page at once. `SocketListener` gains `UpdateTls(alpn, certifiedNames, acmeNames)`, which changes those three fields of the registration under the same `listen_id` and sends the page now; the front calls it on `AlpnChanged` and on install, expiry and revocation.
+
+#### 17.2.11 Renewal
+
+A renewal is a new row with the old CSR, queued by the server, so a phone need not wake for it. `RunCustomSweep` (taskworker, every `SweepInterval`) makes no CA call:
+
+```text
+for each custom_issued row r with no successor, now ≥ renew_time(r), its device, host and domain live,
+and no row of r's sidecar and host ended failed within RequeueBackoff:
+    insert a custom_queued row with r's CSR, attestation, sidecar, host and domain; set r's successor
+renew_time(r) = window_start + H(r.cert_id) mod (window_end − window_start)   if r has a stored window
+              = not_before + RenewalLifetimeFraction × (not_after − not_before)   otherwise
+    H: the first 8 bytes of SHA-256(cert_id), big-endian. RFC 9773 asks for a uniform point of the window
+
+also: custom_issued and custom_revoking rows past not_after go to expired; spends older than SpendRetention
+are deleted; 17.2.14's warnings are raised
+```
+
+A successor that ends without a chain, as `failed` or as `revoked` after 17.2.12's step 4, clears its predecessor's `successor_cert_id` in the same transaction, so the predecessor is renewed again, by the sweep after `RequeueBackoff` or at once by a new CSR from the device, which links to it as any CSR does (17.2.5).
+
+The order then carries `replaces` and, inside the window, is exempt (17.2.8). Ordering desktops keep the windows fresh: every `AriRefreshInterval` each asks the CA's renewalInfo for the live certificates of its accounts, one unauthenticated GET each, and reports those that changed (`ari`). A window the CA moves to the past queues the renewal at the next sweep, which is how a CA asks for early replacement.
+
+The device reads its successor from `GET /tls/certs`, installs it and lists the name under the new certificate. The predecessor stays `custom_issued` until it expires; nothing revokes it. If the device's attestation no longer verifies at 17.2.7's step 3, the successor fails with `attestation` and the device's certificate manager queues a new CSR when it is next online (TLS-M5-18).
+
+#### 17.2.12 Revocation
+
+Only the customer's account, or the certificate's own key, can revoke (A12). The server marks; a desktop sends.
+
+```text
+1  POST /tls/cert-revoke (the device or an admin, as for any row), the removal of the row's device, or the
+   removal of its host or domain, moves custom_issued to custom_revoking with QD-741's reason: keyCompromise
+   when asked, else cessationOfOperation
+2  from that commit the facts no longer certify the name for that listener (17.2.10): its next page is
+   narrowed and no visitor of c is routed to it
+3  the work list puts the row first. A desktop claims it, purpose revoke. A row with a chain:
+   acme.Revoke(leaf, reason) under the account key; 200 or alreadyRevoked: progress revoked
+4  a row with no chain and an order_url ended under its order (17.2.4). The claim's step 3 lets the
+   account order nothing until this row is settled:
+     o = acme.Order(order_url)
+     dead (404, or any status but pending, ready, processing and valid): progress revoked
+     valid: acme.Certificate(o), acme.Revoke(leaf, cessationOfOperation), then progress revoked
+     pending or ready: kill it as 17.2.7 does, by acme.DeactivateAuthorization for each of its
+         authorizations, after which no finalize of it succeeds (A13); read it again
+     processing: wait OrderPollInterval; read it again
+     still pending or ready after DeactivateTryCount tries: raise tls_custom_order_stuck; progress
+         release. The row stays custom_revoking, and the account orders nothing until the order lapses
+         at the CA or a later pass kills it
+5  a custom_revoking row with a chain that reaches not_after goes to expired: nothing is left to revoke
+```
+
+Step 4 is why a row with an order recorded never simply fails. A holder that stalled before its finalize, with the row since ended, would otherwise wake and have a certificate issued that no row names, on the key of a device that may have been removed. The pass reads the order after anything such a holder could have done: it finds the order dead, kills it, or finds the certificate and revokes it. Revocation spends no budget and waits on no hold. The device's replacement is a new CSR on a new key; its predecessor is the revoking row, so it stands third in the plan and may take the set bucket's last certificate.
+
+#### 17.2.13 The account: creation and the key change
+
+**Creation**, by a network admin's desktop (`tls account create <domain>`, in cli's verb style), for a verified domain with no account row:
+
+```text
+1  make a P-256 key. Write the key file (key_seq 1, account_uri empty, shrunk_at the repo's holders_shrunk_at)
+   to the admin's own secret repo, creating the repo if there is none, and wait for the push to commit
+2  acme.NewAccount(key, termsOfServiceAgreed): the command shows the CA's terms and needs the admin's --agree-tos
+3  write the key file again with the account URI; wait for the commit
+4  POST /tls/custom-account {create}. 409 exists: another admin won; deactivate this account (RFC 8555 §7.3.6)
+   and delete the file
+5  share the repo, by EvsShare, with the ordering desktops' users. The command prints the CAA record to
+   publish: <domain>. CAA 0 issue "letsencrypt.org; accounturi=<uri>" and, since no custom certificate is a
+   wildcard, CAA 0 issuewild ";"
+a crash after 2: the next run finds a file with no URI and asks acme.NewAccount(key, onlyReturnExisting),
+which returns the account the key already made
+```
+
+**When a key change is due.** For the key file's repo R, on an ordering desktop's own verified projection: R's `holders_shrunk_at` is above the file's `shrunk_at` (a holder was removed, or a share ended, since the key was made), or R's owner is no longer a member of the network. A desktop that sees it due and may not make it sends `rollover_due`.
+
+**Who makes it.** A network admin's ordering desktop: one of R's owner, while the owner is a member; any that holds the key, from R or from its local copy, once the owner is not. The second kind moves the key into its own user's secret repo T, since a share's subject cannot write R. For the first kind T is R.
+
+```text
+R1  POST /tls/custom-claim {purpose: rollover, key_seq: s}. No order is in flight under a held rollover lock
+R2  T ≠ R: create T if the user has none; EvsShare T to every subject of R's shares that still stands;
+    wait until the log admits them
+R3  K' = a new P-256 key. Write to T the key file {key_seq: s, key: K_s, next: {key_seq: s + 1, key: K'},
+    shrunk_at: T's holders_shrunk_at}; wait for the push to commit. The push passes §10.6's write gate, so it
+    is sealed under a generation no removed holder was wrapped for (12.2.8)
+R4  POST /tls/custom-account {roll_begin, key_seq: s, thumbprint(K'), T, claim_seq}. 409: stop
+R5  renew the claim; acme.KeyChange(account, K_s, K')                       (RFC 8555 §7.3.5)
+R6  write to T {key_seq: s + 1, key: K', next: null, shrunk_at}; wait for the commit
+R7  POST /tls/custom-account {roll_end, key_seq: s, thumbprint(K'), T, claim_seq}: key_seq is s + 1
+
+resume, by any admin's ordering desktop that reads a `next` in the file or in the row, after R1:
+    acme.Account(K_s) answers the account: the change was not made. Go on at R4 if the row has no next,
+        else R5. If this desktop cannot read K' (the row names a next the file lacks): roll_abort, then R2
+    it answers unauthorized, and acme.NewAccount(K', onlyReturnExisting) returns this account's URI:
+        the change was made. Go on at R6
+    the file is at s + 1 and the row at s with that key's thumbprint as next: R6 was done. Go on at R7
+    neither key is the account's: raise tls_account_lost. Nothing on our side recovers it (17.5)
+```
+
+The order is the point. K' is durable in a repo the remaining holders read (R3) before the CA is asked to require it (R5), so at every instant some holder can read whichever key the CA accepts. The row's `key_seq` moves last (R7), so a desktop that reads `s + 1` finds a file with `s + 1` in the repo the row names. Between R5 and R6 an orderer's key file still passes 17.2.3's check, at `s`, and 17.2.7's table sends its request again under `next`; between R6 and R7 the file passes at `s + 1`. Either way an order in flight resumes under the new key, since orders belong to the account (A12). Two rollers cannot both reach R5: the lock admits one, and `roll_begin` refuses a second `next`.
+
+A desktop that reads the row at a `key_seq` above its file's reads the file again from the row's `key_repo_id`. One that is no longer a holder deletes its local copy.
+
+#### 17.2.14 Warnings
+
+Admin events (api-8), raised by the sweep unless said otherwise, each at most once a host or account every `EventRepeatInterval`:
+
+```text
+tls_custom_renewal_due      a custom_issued row with no issued successor passed LapseWarnFraction of its life
+tls_custom_renewal_late     the same, past RenewalLifetimeFraction; names the host, the device and not_after
+tls_custom_one_orderer      an account with live rows has fewer than OrdererMinCount desktops in orderer_seen
+                            within OrdererSeenWindow
+tls_custom_queue_stalled    a work row with wait_ms 0 has gone unclaimed for QueueStallAfter
+tls_account_rollover_due    on a desktop's rollover_due
+tls_custom_<reason>         on a progress event carrying a reason: ca_refused, foreign, attestation, csr,
+                            no_route, and an authz_failed's problem type (caa, dns, connection, tls, unauthorized)
+```
+
+A desktop raises the same names as local alarms, with `tls_account_key_mismatch`, `tls_account_lost` and `tls_custom_order_stuck`, which only it can see.
+
+#### 17.2.15 Settings
+
+No number of this section is a constant (QD-702). The identifiers are: the state names, the event and reason names, `acme-tls/1`, the key file's path and format number.
+
+```text
+CertsCustomSettings (server: the routes and RunCustomSweep)
+  LockLease                 120 s      SetCap / SetRefill / SetReserve     5 / 34 h / 1          (A4)
+  SweepInterval             10 min     DomainCap / DomainRefill            25 / 6 h 43 min 12 s  (A3: 50, 202 min)
+  SpendRetention            8 d        OrderCap / OrderRefill              60 / 3 min            (A5: 300, 36 s)
+  HoldDefault / HoldMax     1 h / 7 d  FailureBackoff / FailureBackoffMax  30 min / 24 h         (A6: 5 an hour)
+  RenewalLifetimeFraction   2/3        LapseWarnFraction                   1/2
+  ChainMaxCount             4          OrdererMinCount / OrdererSeenWindow 2 / 7 d
+  QueueStallAfter           24 h       EventRepeatInterval                 24 h
+  OrdererSeenStamp          1 h        RequeueBackoff                      6 h
+  Lifetime                  45 d (A1, for 17.4's arithmetic and the tests; a row's own validity is what counts)
+
+TlsCustomSettings (the ordering desktop)
+  PollInterval / IdlePollInterval  60 s / 5 min     OrderPollInterval   2 s
+  LeaseMargin                      10 s             OrderDeadline       10 min
+  ChallengeLifetime                10 min           NonceRetryCount     3
+  ProbeCount / ProbeTimeout        2 / 10 s         AriRefreshInterval  6 h
+  DeactivateTryCount               3
+  Profile                          "tlsserver"      AuthorizationReuse  7 h (A2; read only by tests)
+  the CA's directory URL: CertsSettings' Let's Encrypt value, as certs' own orders use, so a test points it
+  at Pebble
+
+TlsFrontSettings gains CertifiedMargin 1 h. SocketsSettings gains CertifiedNameMaxCount 64 and
+AcmeNameMaxCount 4, and DNS-M6-02 holds a network to CertifiedNameMaxCount custom hosts an owner label.
+```
+
+#### 17.2.16 What each place newly sees (§2.8, I-18)
+
+```text
+cert-1  store  + network_tls_account, network_tls_custom_spend
+        sees   + per custom row its host and domain, the ACME order's URL, the claim sequence, whether it is
+                 an ARI renewal, and a reason; per domain the account's URI, CA, key sequence, the current and
+                 next key's thumbprints (public) and the ids of the secret repos holding the key file; the
+                 lock's holder sidecar, purpose, row and lease; rate-limit holds; each ordering desktop's last
+                 poll time; per custom host and registered domain the times of orders, certificates and failed
+                 authorizations of the last 8 days. Never the account key
+        ttl    + the account row with its domain; spends 8 d; poll times 7 d
+cert-2  sees   + for a Team custom domain: the customer's ACME account, its key changes, every order and
+                 revocation, and the public address each ordering desktop reaches the CA from
+sock-1  sees   + per tls/ listener the custom hosts and aliases it is certified for, and the names it holds
+                 an ACME claim for with the claim sequence
+sock-2  sees   + the server name of a dial that came by a custom host or an alias
+api-8          + the events of 17.2.14, naming a host, a device and a time
+evs     no new row: the key file is one more file of a secret repo (evs-1), which the server cannot read
+```
+
+### 17.3 Invariants and why they hold
+
+```text
+C1 one certificate  for each row, at most one certificate is issued on orders this design finalizes, and it is
+                    the one registered or the one the next claim finds on the recorded order
+C2 one in flight    at most one row of an account is custom_ordering, and at most one sidecar holds an
+                    account's lock on the server's clock
+C3 the row's key    a registered chain's leaf carries its row's CSR key and exactly its row's one name
+C4 fenced writes    every server write made for an order, a revocation or a key change applies only while the
+                    account's lock_seq is the one its claim returned
+C5 budget first     every newOrder was granted in a transaction that checked and spent its budgets, and no
+                    replay of the spends counts fewer certificates than the CA issued for us
+C6 challenge home   an acme-tls/1 hello for c is given to the listener holding the account's newest claim for
+                    c among the registered, or to none
+C7 no mismatch      a visitor's hello for c is given only to a listener whose sidecar held an unexpired
+                    custom_issued row for c at its last page, and that listener answers with a certificate for
+                    c on its own key or fails the handshake
+C8 one key line     the CA is asked to require a key only after that key is committed where the remaining
+                    holders read it, and key_seq moves only to the key the CA took
+C9 never ours       no custom row is ordered, renewed or revoked under a URnetwork account, and no other row
+                    under a customer's
+C10 nothing stray   every certificate the CA issued for the account and nobody revoked is registered on its
+                    row, or is the recorded order of a row still custom_ordering or custom_revoking, where the
+                    next claim finds it
+```
+
+**C2 and C4** are compare-and-move and nothing else. The claim runs under `FOR UPDATE` on the account row, so two claims are serial; it raises `lock_seq`, so every earlier holder's writes fail their check; and the partial unique index refuses a second `custom_ordering` row whatever code asks. No clock but Postgres's is read. A holder that stalls past its lease is not stopped by this, and need not be: C1 and C3 say what it can still do at the CA.
+
+**C1** rests on four facts, each small. (a) A holder finalizes only the order the server recorded for the row (17.2.7), and `order_recorded` needs `order_url` NULL under the current `lock_seq`, so a row has one recorded order at a time. (b) The recorded order is replaced only after the CA called it invalid or gone, which the CA never takes back, so of the orders ever recorded for a row at most the last can issue. (c) An order issues at most once (A12): a second finalize, by a stalled holder or a resuming one, gets `orderNotReady` or the order already valid, and both then download the same chain. (d) A newOrder sent and never recorded is never finalized, by (a). It lapses at the CA and costs one of A5. So a row's certificates are those of its last recorded order: at most one. A desktop that dies between finalize and register leaves that order recorded, and the next claim's first act is to read it and register its chain (F).
+
+**C10** is C1's other half, and the one the first draft of this section got wrong. A row keeps its recorded order until it is registered or the CA called it dead (b), so while the row is `custom_ordering` its certificate, if one exists, is found. The gap was a row that ended while its order lived: its device removed, or its attestation refused at a takeover. Moved to `failed`, it left a `ready` order that a stalled earlier holder could still finalize, for a key that might be a removed device's, with no row to find it by. So such a row goes to `custom_revoking` and keeps its order, the claim lets the account order nothing until 17.2.12's step 4 has settled it, and that step ends only on an order the CA calls dead or on a certificate revoked. A13 makes the kill final.
+
+Order reuse (A9) is where compare-and-move alone would not do, and it is why the lock is the account's and not the row's. If rows r1 and r2, for one host, were ordered side by side, their two newOrders could return one order, finalized with r1's CSR and recorded on both; r2 would then download a chain for r1's key. C2 forbids the overlap. Across a takeover it can still arise in one way: r1's holder dies with its newOrder sent and unrecorded, and r1 goes back to `custom_queued` (a release, or a later claim that the budgets refuse); r2 is claimed and its newOrder returns r1's orphan. That is harmless: the orphan was never finalized, r2 records it and finalizes it with r2's CSR, and r1 later gets a new order. The claim's `in_flight` rule keeps a row with a recorded order first in line, so a recorded order is never left for another row's newOrder to pick up. **C3** closes what is left: whatever the CA handed back, the desktop registers only a chain whose leaf carries the row's key and name, and the server checks the same again, so a wrong chain becomes `failed {foreign}` and an alarm, never a row.
+
+**C5.** `grant` runs in the claim's transaction, under the account row's lock and an advisory lock on the registered domain, so check and spend are one step even where two accounts share a registered domain. The certificate spend is written before the newOrder and deleted only on `order_invalid` or `failed`, both of which state that no certificate came of the row's order, so every crash leaves it counted.
+
+**C6.** Find's ACME route reads only `AcmeNames`, which `ValidateListen` cut down to claims the account row holds for that sidecar. Lock sequences are unique in an account and rise, so the highest registered is the newest holder that has registered. An earlier holder's entry is gone at its next page and at the latest when its lease lapses; until then the route still prefers the newer. Before the newer holder registers, the hello may reach the older, whose responder has no challenge for the newer order's token and fails the handshake: that is why 17.2.9 waits for its page's 200 and probes before it asks the CA to validate.
+
+**C7.** A visitor's Find with a server name matches only candidates listing it, the hook lists it only for a sidecar with an unexpired `custom_issued` row for it, and the front never answers a custom name with another certificate. The gap is one heartbeat after a revocation, during which the revoked device may still be handed a visitor and answers with its revoked, still matching, certificate.
+
+**C8.** R3 commits K' before R5 asks for it, and the lock with `roll_begin`'s check admits one roller, so the CA is never asked for a key that is not durable. `roll_end` requires the thumbprint `roll_begin` recorded.
+
+**C9.** The landed passes select `queued`, `ordering`, `waiting_dns`, `issued` and `revoking`; a custom row is never in one. The custom routes select only the custom states and require a `custom_host`.
+
+**The model.** `details/CertOrder.tla` holds the account's lock, each row's state, recorded order and registered order, the CA's orders, and what each desktop remembers. Any step may be followed by a crash, which forgets what a desktop held, or by the lease lapsing while its holder goes on, so a stalled holder acts later on what it remembers beside the desktop that took over. The CA validates, fails or expires an order whenever it likes, and answers a newOrder with a pending or ready order of the account or with a new one, either way (A9). Both rows name one host. A row's device may be removed at any step. It checks `OneInFlight` (C2), `OneCert` (C1), `KeyMatch` (C3), `Tracked` (C10), `Served`, that no certificate registered on a `custom_issued` row has been revoked, and `NoForeign`, that no row's recorded order is valid on another row's key. `run-certorder.sh details-17 all`, TLC d8fb231, 8 workers, 2026-11-13; a trace is one TLC found, not always the shortest:
+
+```text
+must pass                         distinct states   depth   time         state directory
+CertOrder                         2,858,349         33      1 min 44 s   163 MB
+CertOrder-Long                    8,015,922         36      5 min 31 s   295 MB
+CertOrder-Three                   2,161,054         29      2 min 07 s   184 MB
+
+must fail, with                   invariant violated   trace
+CertOrderTwin-NoRecord            OneCert              12
+CertOrderTwin-NoResume            OneCert              13
+CertOrderTwin-ReplaceLive         OneCert              15
+CertOrderTwin-TwoInFlight         Served               13
+CertOrderTwin-TwoInFlightBlind    KeyMatch             12
+CertOrderTwin-FailKeepsOrder      Tracked              8
+
+must reach                        the state                                                       trace
+CertOrderReach-Resumed            a takeover holds a chain another desktop finalized              10
+CertOrderReach-Reused             an orphan order is registered on another row                    10
+CertOrderReach-Killed             a certificate is revoked for a row that ended under its order   12
+CertOrderReach-Reordered          a row is certified on its second order                          11
+```
+
+Each twin drops one rule. `NoRecord`: a holder finalizes an order the server did not take under its claim. `NoResume`: a takeover orders again whatever is recorded (failure F). `ReplaceLive`: `order_invalid` on a timeout, for an order still live. `TwoInFlight`: a second row is claimed beside an open order; with order reuse both rows record one order, and the row that loses it revokes the other's certificate. `TwoInFlightBlind`: the same with no leaf check, and a row registers a chain on another row's key. `FailKeepsOrder`: a row ends as `failed` with its order live, which was this section's first draft; a stalled holder then has a certificate issued that no row names, in 8 states.
+
+**What the model does not show.** `NoForeign` holds in the design, so the leaf check of 17.2.7's step 6 and of `cert-register` is never the thing that saves a run of the model: it is kept for what the model leaves out, a server that hands a holder another order's URL and a CA that errs. The budgets, holds and the plan are not in it: a refused claim is a step not taken, and C5 is the argument above. The challenge is the CA's own step, so C6 and C7 are arguments and 17.6's schedule rows. The key change shares the lock and is not modelled; C8 is its order of writes, and 17.6 kills it at each step. Liveness is not checked: that an order is eventually resumed is the desktops' loop and 17.2.14's warnings.
+
+### 17.4 Cost
+
+**Requests to the CA for one certificate.** One directory GET and one newNonce a run; after that each answer's nonce feeds the next request.
+
+```text
+                                        newOrder  authz  challenge  finalize  order  certificate  ARI   total
+with a challenge (first of a host       1         1 + ~2 1          1         ~1     1            1     ~9
+  in 7 h)                                         polls
+on a valid authorization (A2)           1         0      0          1         ~1     1            1     ~5
+a resume after a dead desktop           0         0-3    0-1        0-1       ~1     1            1     2-8
+a revocation                            1 request
+```
+
+The validators' side of a TLS-ALPN-01 challenge is a handful of handshakes (one a vantage point), each one Find and one accept on the desktop, beside the probe's two. To the server, a certificate costs about four claims (the take and three renewals), one `order_recorded`, one register and two heartbeat pages.
+
+**N devices and H hosts against each limit.** N × H certificates. First issue, buckets full:
+
+```text
+limit                       what we spend                          against
+A4 exact set, per host      N, the first 4 at once, then one       5, one back each 34 h. We stay one under
+                            each 34 h
+A3 registered domain        N × H, the first 25 at once, then      50, one back each 202 min, shared with the
+                            one each 6 h 43 min                    customer's other issuance. We take half
+A5 new orders, account      N × H, plus one for each takeover      300 in 3 h. Ours: 60, one back each 3 min
+                            that found no recorded order
+A6 failed authorizations    0 when the probe passes                5 an hour. Ours: 2 in the first hour, then
+                                                                   backing off to one a day
+
+N    H    certificates   the set limit alone     our domain share alone      all certified after
+2    1    2              at once                 at once                     minutes
+3    2    6              at once                 at once                     minutes
+5    3    15             34 h (1 device a host)  at once                     34 h
+10   4    40             6 × 34 h = 8.5 d        15 × 6.72 h = 4.2 d         8.5 d
+20   10   200            16 × 34 h = 22.7 d      175 × 6.72 h = 49 d         49 d
+```
+
+Every host is served by its first device within minutes in each row; the wait is for the further devices. At H × N above about 100 the domain share binds, and the owner may raise it toward A3's 50 (`details-17-own-share-of-the-domain-limit`).
+
+**Renewal**, once each 30 days a certificate (two thirds of A1). With A7, N × H orders that count against nothing; our own `orders` bucket passes 480 a day. Each host's first renewal in 7 hours needs a challenge (~9 requests) and the rest ~5: for N = 10, H = 4 at most 360 requests to the CA in 30 days, and 160 renewalInfo GETs a day from each ordering desktop. If A7 does not hold, a renewal is a first order: one a host each 34 hours, so a host keeps at most 30 d / 34 h = 21 devices certified and a registered domain about 107 certificates on our share, and beyond that certificates lapse. That is the number the owner most needs confirmed. A renewal claimed after its window closed is paced the same way: with 15 days of life left, 4 + 15 d / 34 h = 14 devices of one host still make it.
+
+**The server.** A claim is one row lock, one advisory lock and four index range reads of at most 60, 25, 5 and 8 spends. A `?work=1` poll returns the accounts and the waiting rows, about 0.6 KB each (a CSR and an attestation), and about 200 B when idle. Spends are at most three rows a certificate, kept 8 days. No Redis key is added.
+
+**The model.** The table in 17.3: the largest run is 8.0 million states, 295 MB and under six minutes; the 13 runs together took about ten.
+
+**Sockets.** A registration grows by its names, at most 64 of about 30 B. A custom-host Find carries the server name, and its `matches` compares it with each candidate's names: 64 candidates of 64 names is 4,096 short string compares in the script at the worst, and a handful in the common case. SOCK-M5-17's bench measures the worst case against Find's gate.
+
+### 17.5 Failure modes and recovery
+
+```text
+what fails                                 what is true then                         what recovers it
+a desktop dies before its newOrder         the row is custom_ordering with no URL;   the next claim is granted a newOrder: one
+                                           the lock lapses after LockLease           more of A5, the same certificate spend
+dies after newOrder, before the record     an order at the CA that no row names      the next newOrder returns it (A9) or a
+                                                                                     new one; an orphan lapses unfinalized
+dies in the challenge                      a recorded order, pending                 the next claim resumes it, sets the
+                                                                                     challenge under its own claim, probes
+dies after finalize, before register       a certificate no row holds                the next claim reads the recorded
+                                                                                     order, downloads and registers (F)
+stalls, wakes after a takeover             its server writes get 409 claim           C1. It may have sent one request: a
+                                                                                     second finalize the CA refuses, or one
+                                                                                     challenge POST that fails an
+                                                                                     authorization. We keep 3 of A6's 5 spare
+the probe fails (DNS, the map, no route)   no validation was asked of the CA         the holder kills the order; the row is
+                                                                                     queued again and its host backs off,
+                                                                                     30 min doubling to a day; other hosts
+                                                                                     of the account are not held up
+an in-flight row no online desktop has a   its order is pending                      the desktop that claimed it kills the
+challenge path for                                                                   order; the row waits in the queue for
+                                                                                     a desktop with a path
+the CAA does not name the account          the authorization is invalid (caa)        backoff to one try a day; tls_custom_caa;
+                                                                                     the admin fixes the record
+a 429 our count did not foresee            a hold on the account row                 every desktop waits it out; the owner's
+                                                                                     numbers are checked (J)
+A7 does not hold                           the first exempt order is refused 429     hold_all; that row and later renewals
+                                                                                     are paced as first orders (17.4)
+no ordering desktop online                 rows wait; nothing is spent               17.2.14's warnings from half-life; a
+                                                                                     host's other devices keep serving
+the row's device, host or domain is        the row is custom_revoking with its       17.2.12's step 4 kills the order, or
+removed, or the row fails, under an        order recorded; a stalled holder may      revokes what the holder finalized,
+order                                      still finalize it                         before the account orders again
+a removed holder still has the key         until R5 it signs as the account: it      the key change, at once; the CT watch
+                                           can finalize on authorizations up to      flags a certificate for c on a key no
+                                           A2 old, revoke, deactivate the account    row holds. A deactivated or stolen
+                                           or change its key                         account is tls_account_lost: a new
+                                                                                     account, and the customer pins it
+the roller dies between R3 and R5          K_s is still the account's key            resume: go on, or roll_abort
+dies between R5 and R6                     the CA requires K'; the file has it as    orderers fall to `next`; an admin's
+                                           next                                      desktop resumes at R6
+dies between R6 and R7                     file at s + 1, row at s with the next     orderers accept the file (17.2.3); an
+                                           thumbprint                                admin's desktop resumes at R7
+the key's repo is lost or its owner gone   each holder has its local copy            an admin holder rolls into its own repo
+two admins create an account at once       one create wins                           the other deactivates its account
+the database is restored behind            rows and spends after the restore point   below
+                                           are gone
+```
+
+**A restore behind.** A lost `custom_issued` row leaves a device with an installed chain that no row names, so the hook no longer certifies it. The device presents the newest installed certificate whose row it reads as `custom_issued`, so it falls back to the predecessor, which lives another third of its life, and the sweep queues the successor again; the CA refuses its `replaces` (A8), `not_exempt` follows, and it is ordered as a first order. A device with no predecessor queues its CSR again (TLS-M5-18's check that its row survived). Lost spends make the replay count low: the CA's 429 and the hold correct it. A row restored to `custom_ordering` with an older `order_url`, or none, resumes by the rules: a recorded order that is valid is downloaded, and the leaf check decides. An account row restored to an older `key_seq` than the file's is `repair`: an admin's desktop that holds a key the CA accepts, by `acme.Account`, moves the row to it under a rollover claim.
+
+**What a server that lies can do.** Withhold rows, grant freely, hand a holder another order's URL. It cannot have a certificate issued for a key no member device attested (17.2.7's step 3 reads the desktop's own verified config), nor for a name outside the account's domain, nor register a chain the desktop did not check. Granting freely spends the customer's limits up to what the CA itself allows, and no further. It does hold the map from a custom host to its owner label (§12.8), so it can have one of the network's own names certified for one of the network's own publishing devices.
+
+### 17.6 The test plan
+
+**Unit (T1).**
+
+- `TlsCustomIdentifierSet`: the apex, a host, a wildcard, a root, a name under a root, upper case, an over-long name.
+- `level` and `wait`: the empty start, the cap, a spend exactly at a refill, and a property test against a reference bucket fed the same spends, that `level` is never above it.
+- `grant`: the window's two edges for `exempt`; the reserve and the revoked predecessor's need of 1; a takeover reusing the row's own spend; both holds; two accounts of one registered domain granting at once.
+- The claim: one case for each refusal; a renewal answers the same sequence; a takeover raises it; `in_flight` names the row; `key_seq + 1` with a next recorded.
+- Progress: every event under a stale claim is 409 and changes nothing; `order_recorded` twice; `order_invalid` deletes the spend and grants or queues; `not_exempt` with an `order_url` is refused.
+- `cert-register`: a leaf on another key, a second name, a wildcard, an expired leaf, a chain that does not chain, another account's URI, a stale claim.
+- The pick: the table of `acme` by `custom` by an acme-only listener by a visitor with no ALPN; the highest claim wins, the tie, no backup. The Go function and the Lua script agree on a generated corpus, as the landed twin test does.
+- `ValidateListen`: a claim below the row's, a certificate inside the margin, a list over its count, the cache read again for a higher claim, and that no narrowing refuses the entry.
+- The front: a custom name with no installed certificate fails with `unrecognized_name` and never presents the self-signed leaf or the wildcard.
+- The orderer against a scripted `TlsAcmeClient`: one test for each line of 17.2.7's table; a counter holds one newOrder a grant; a server that delays `order_recorded`'s 200 sees no finalize before it; a kill at each step from 4 to 8, after which a second orderer ends with one `custom_issued` row and the fake CA with one certificate.
+- A row ended under an order: a removal with an order recorded moves the row to `custom_revoking` and not `failed`; a claim for another row is refused `in_flight` until the pass reports; the pass against a scripted CA whose order is pending, ready, processing, valid and dead in turn, and against one where a second client finalizes between the read and the deactivation.
+- The key change: a kill after each of R1 to R7, and a second desktop's resume, ends with the row at `s + 1`, the fake CA requiring the key the file holds, and at no instant a CA key that no committed file holds. Two rollers: one `roll_begin`.
+- The sweep: `renew_time` over 10,000 ids is spread across the window; a row with a successor is skipped; expiry; each warning once.
+
+**Schedule rows**, for a design-records track to number, each on T2 and, where it names tlsedge or Postgres, on T3:
+
+```text
+custom order, two desktops    a phone's CSR, two ordering desktops polling together: one certificate at the CA, one
+                              custom_issued row, the loser's claim refused locked
+takeover after finalize       the holder is killed after finalize: the second desktop registers the same serial and
+                              sends no newOrder
+stalled holder                the holder is frozen before finalize past its lease and thawed after the takeover
+                              registered: one certificate, its register refused
+six devices, one host         the fifth and sixth rows read wait_ms above 0 and are granted 34 h apart on the fake
+                              clock; no request reaches the CA for them before
+a 429                         the CA refuses a newOrder: both desktops read the hold and send nothing until it ends
+challenge routing             three listeners on tls/443/<owner>, one holding the claim: every acme-tls/1 hello for the
+                              host reaches it; after a takeover every one reaches the new holder; a hello for a
+                              network name offering acme-tls/1 finds no listener (extends FS-35)
+eligibility                   five listeners, two certified: 1,000 visitor hellos for the custom host reach only those
+                              two; when one's certificate enters the margin, only the other; with none, no_listener and
+                              never a certificate for another name (extends FS-35 and FS-122)
+revocation                    a device is removed: its row is custom_revoking, no visitor reaches it after its next
+                              page, a desktop revokes at the CA and the row is revoked
+renewal                       the fake clock enters the window: the sweep queues one successor, the order carries
+                              `replaces`, no certificate spend is written, the device installs it
+ended under an order          a device is removed with its order ready and its holder frozen; the holder thaws and
+                              finalizes: the pass revokes that certificate, and only then is the next row claimed
+key change                    a share ends: one desktop rolls, the other's next order signs with the new key, the old
+                              key is refused by the CA; killed between R5 and R6, the other resumes
+```
+
+**Pebble (T2, §22.9, 5% bad nonces).** The orderer end to end by TLS-ALPN-01 through the real front and a fake edge, and by DNS-01 through the fenced resolver, each with two desktops; the key change with Pebble's keyChange and `onlyReturnExisting`; revocation; renewal with `replaces`, using `testOrderReplaceable` for the serials Pebble v2.10.1 cannot replace (question `certs-ari-flake-pebble-replaces-serial`). Pebble does not reuse orders, does not check `accounturi` and has none of A3 to A7, so order reuse, the limits and the 429 are tested on the scripted client and never on Pebble. No test reaches a real CA.
+
+**The model.** `run-certorder.sh <track>` at each change to 17.2.6, 17.2.7 or 17.2.12: the design configurations pass, each twin fails on the invariant its cfg names, each reach configuration reaches its state (17.3).
+
+### 17.7 Implementation notes, task by task
+
+TLS-M6-05's scope grows: three routes, two tables, four states and the sweep are more than its entry lists, and the sockets half is outside its files. Proposed, for the planner: TLS-M6-05 keeps the orderer and the routes; a new task, here called **TLS-M6-06**, takes 17.2.10. TLS-M6-06 needs nothing of TLS-M6-05 and TLS-M6-05's TLS-ALPN-01 path and its T3 need TLS-M6-06.
+
+**TLS-M6-05**, in this order:
+
+1. `sidecar/tls_identifier.go`: `TlsCustomIdentifierSet`. `sidecar/tls_api.go`: the four states, the bodies of 17.2.5, the fields `TlsCertRecord` gains. `connect/api/bringyour.yml`: the three new routes and `?work=1`.
+2. `server/model/tls_cert_model.go`, with a new `server/model/tls_account_model.go` and the migration: 17.2.3's columns, indexes and tables; the claim, `grant`, each progress event, register and the account operations as one transaction each. Every custom move goes through the landed compare-and-move (`CertsTransition`, with QD-742's `At`, so `state_time` moves with the state, and QD-741's `RevocationReason` while a row is `custom_revoking`), and the landed purges take custom rows' ends and chains as they take any row's. Those fields landed on the tip while this section was written (track `cert-row-chain-reason`), and the section is written against them. `level` and `wait` are pure and live in `sidecar/certsservice/custom_queue.go`, beside `certsRepeatSetNext`, which they generalize; certs' own budget is not changed.
+3. `server/controller/tls_controller.go`, `server/api/handlers/tls_handlers.go`, `server/api/api.go`, `route_authz.go`: the routes, under the certs audience; `orderer` and the admin rule in the controller. The custom branch of `POST /tls/cert-order` is chosen before `certsservice.Accept` is reached.
+4. `sidecar/certsservice/custom_queue.go`: `RunCustomSweep` and `CertsCustomSettings`, scheduled beside certs' passes in taskworker.
+5. `sidecar/tls_custom_domain.go`: `TlsCustomDomainOrderer`, `TlsCustomSettings`, the key file's format and check, the local copy, 17.2.7's loop, 17.2.9, 17.2.12's step 3, 17.2.13. It takes its CA through this interface, which `sidecar/cli/tls_acme.go` implements on acmez (QD-288), and its resolver the same way:
+
+```go
+type TlsAcmeClient interface {
+	NewAccount(ctx context.Context, key crypto.Signer, onlyReturnExisting bool) (accountUri string, err error)
+	Account(ctx context.Context, key crypto.Signer, accountUri string) error
+	KeyChange(ctx context.Context, accountUri string, oldKey crypto.Signer, newKey crypto.Signer) error
+	Deactivate(ctx context.Context, key crypto.Signer, accountUri string) error
+	NewOrder(ctx context.Context, key crypto.Signer, accountUri string, name string, profile string, replacesLeaf []byte) (*TlsAcmeOrder, error)
+	Order(ctx context.Context, key crypto.Signer, accountUri string, orderUrl string) (*TlsAcmeOrder, error)
+	Authorization(ctx context.Context, key crypto.Signer, accountUri string, url string) (*TlsAcmeAuthorization, error)
+	Challenge(ctx context.Context, key crypto.Signer, accountUri string, url string) error
+	Finalize(ctx context.Context, key crypto.Signer, accountUri string, order *TlsAcmeOrder, csr []byte) (*TlsAcmeOrder, error)
+	Certificate(ctx context.Context, key crypto.Signer, accountUri string, url string) ([][]byte, error)
+	RenewalInfo(ctx context.Context, leaf []byte) (start time.Time, end time.Time, err error)
+	Revoke(ctx context.Context, key crypto.Signer, accountUri string, leaf []byte, reason int) error
+	DeactivateAuthorization(ctx context.Context, key crypto.Signer, accountUri string, url string) error
+}
+
+// A CA's refusal: RFC 8555's problem type without its urn prefix, the status and Retry-After. Any other error is
+// "outcome unknown". ErrTlsAcmeGone is a 404 for an order.
+type TlsAcmeProblem struct {
+	Type       string
+	Status     int
+	RetryAfter time.Duration
+}
+
+type TlsCustomResolver interface {
+	LookupCname(ctx context.Context, name string) (string, error)
+	LookupTxt(ctx context.Context, name string) ([]string, error)
+}
+```
+
+6. `sidecar/cli/tls_acme.go`: the client, the system resolver, and the commands `tls account create`, `tls account roll` (forces 17.2.13 when due) and `tls account status`.
+7. The device-removal path that moves `issued` rows to `revoking` (TLS-M5-16) gains the custom moves of 17.2.4 for a removal (`custom_issued` and a `custom_ordering` row with an order recorded to `custom_revoking`, the rest to `failed`), and host and domain removal call the same; all are calls into `tls_cert_model.go`.
+8. The model is written (17.3). A change to the claim, the progress events, register or the revoke pass is made in `CertOrder.tla` first.
+
+**TLS-M6-06 (proposed): certified names and the ACME route.** `sidecar/socket_api.go` (the registration's two lists, `SocketAcmeName`, Find's four wire fields), `sidecar/socket_listen.go` (`UpdateTls`), `sidecar/socketsservice/scheduler.go` and `store.go` (the candidate's and request's fields, `matches`, the ACME pick), `server/model/socket_store_scripts.go` and `sidecar/sidecartest/socket_store_fake.go` (the same in the script and the fake, both read from one registration JSON), `sidecar/tls_front.go` and `tls_dispatch.go` (custom names in `ServerNames`, no fallback certificate for one, `UpdateTls` on `AlpnChanged`), `metadata_list.yml` (17.2.16's rows). A registration with neither list, and a Find with no server name, behave exactly as today, so nothing landed changes its results.
+
+**What the others add or leave alone.**
+
+- **TLS-M5-22** (`ValidateListen`): `TlsListenFacts` gains `CustomCertified` and `AcmeClaims`, `model.GetTlsListenFacts` reads them from `network_tls_cert` and `network_tls_account`, and the hook narrows (17.2.10). Its "no unexpired row, except an `acme-tls/1`-only registration" rule stays, and an acme-only registration must also survive narrowing with at least one ACME name, else it is refused.
+- **TLS-M6-02** (tlsedge custom hosts): sets `server_name` and `alpn` in Find for a name resolved through the custom-host map, and leaves both empty for a network name. It routes nothing by certificate itself.
+- **TLS-M6-03** (scope and alias certificates): puts certified aliases in `CustomCertified` through `DnsAliasCertifiedInTx`, and tlsedge sets `server_name` for an alias, so an alias's visitors reach only listeners certified for it. It adds no state and no pick rule. Scope hosts are names under the network's zone and are not listed.
+- **TLS-M6-04** (the CAA walk): unchanged. Its strong-mode result already says whether the pin names the account; the orderer does not walk CAA, the CA does.
+- **TLS-M5-18** (the certificate manager): for each custom host its device may serve, queues a CSR by `POST /tls/cert-order` when it has no open row and no live certificate, installs chains from its rows, keeps the predecessor until it expires, and presents the newest installed certificate whose row is `custom_issued`.
+- **The CT watch** (D-TLS-8): a custom row that is `custom_issued` or `custom_revoking`, or that ended with a chain, is a known certificate for its host by its attestation, as any row is, and `custom_queued` and `custom_ordering` are no certificate yet. A logged certificate for a custom host on a key no such row holds is its alarm, which is what catches a removed holder (17.5). Without this the watch reads the four states as unknown and alarms on every custom certificate.
+- **TLS-M5-19** (the front): unchanged but for TLS-M6-06's two edits. `tlsAlpnResponder` is used as it is.
+- **DNS-M6-02** (custom hosts): its remove route, and a domain's removal, call 17.2.12's move in their transaction; it holds an owner label to `CertifiedNameMaxCount` custom hosts; `<token>.acme.<root>` challenges are QD-175's, unchanged. **DNS-M6-03**: `ready_time` is read for `host_ready`, nothing more. **DNS-M6-01** and **DNS-M6-05**: unchanged.
+- **SOCK-M5-16**: the T2 suite gains the pick's table and the narrowing through the fake store, and the privacy harness gains canaries for a certified name and an ACME name against sock-1's and sock-2's rows. **SOCK-M5-17**: a custom-host Find under `DenyPostgresForTest`, and the 64 by 64 group in the bench (17.4).
+
+### 17.8 Proposed DESIGN.md text
+
+For a design-records track; nothing here edits DESIGN.md or `design/source/`.
+
+**§13.8, the custom-domain cell.** After "one ACME account per domain, pinned by the customer's CAA": "A custom certificate names exactly its one custom host and carries its device's key. Every one is a `network_tls_cert` row first, in the states `custom_queued`, `custom_ordering`, `custom_issued` and `custom_revoking`, which no certs pass reads. An ordering desktop touches the CA for an account only while it holds the account's lock (`network_tls_account`: a sequence, a holder and a lease on the database's clock), one order in flight an account; it finalizes only an order whose URL the server recorded under that sequence, and a takeover resumes the recorded order and starts another only when the CA calls it invalid or gone, so a row yields at most one certificate. A row that ends while an order is recorded for it goes to `custom_revoking`, and that order is killed, or its certificate revoked, before the account orders again. The server grants each newOrder after checking and spending the account's budgets (the exact-set, registered-domain, new-order and failed-authorization limits, each a setting, one certificate of the exact set kept back) and records a CA's 429 as a hold every desktop honors. Renewals are successor rows the server queues with the stored CSR at a point of the ARI window, ordered with `replaces`. Revocation is marked by the server and sent by an ordering desktop under the account key." Replace "a holder's or the repo owner's removal rolls the key" with: "when the key repo's holders shrink, or its owner leaves, a network admin's ordering desktop changes the account key (RFC 8555 §7.3.5) under the account's lock: the new key is committed to a secret repo the remaining holders read before the CA is asked to require it, and the row's key sequence moves last; the pin is kept. Until that request a removed holder still signs as the account."
+
+**§13.8, the limits paragraph** gains: "For a custom domain the same numbers are settings of `CertsCustomSettings`; N devices of one host share the exact-set limit, so the fifth and later first certificates of a host follow at one each 34 h, and a device with no certificate for a host is not routed its visitors."
+
+**§13.9, the refusal table**, cert row: "a custom host or alias is listed for a listener only while its sidecar holds an unexpired certificate row for it; a registration's certified and ACME names that the rows do not bear out are dropped, and the entry stands".
+
+**§13.15** gains the routes `POST /tls/custom-claim`, `POST /tls/custom-progress` and `POST /tls/custom-account`, the `?work=1` form of `GET /tls/certs`, and for `POST /tls/cert-register`: "the caller holds the account's lock for the row; the leaf carries the row's key and exactly its one name".
+
+**§13.16**, the lapse risk gains: "warnings from half-life name the host and device; fewer than two ordering desktops seen in 7 days is itself a warning".
+
+**§9.5 and §9.6.** A `tls/` registration may list certified names and ACME names with their claim; Find carries `protocol`, `min_version`, `alpn` and, for a custom host or alias, `server_name`. **§9.7**, step 1 gains: "a dial with a server name matches only listeners certified for it; a dial offering `acme-tls/1` matches only listeners holding a claim for the name and takes the newest claim, with no backup; a listener that lists only `acme-tls/1` matches no other dial".
+
+**§12.8**, item 3: "devices pass DNS-01 through a CNAME at `_acme-challenge.<custom host>`, one for each custom host, to `<token>.acme.<root>`", and "TLS-ALPN-01 needs the ordering desktop to hold a publish grant on port 443 of the host's owner".
+
+**§2.8's metadata list.** cert-1, cert-2, sock-1, sock-2 and api-8 gain 17.2.16's clauses, as a new version of `metadata_list.yml`.
+
+**§22.9**, the ACME line gains: "Pebble neither reuses orders nor limits; those are tested on a scripted client (DESIGN-DETAILS 17.6)". §22's schedule gains 17.6's eleven rows.
+
+### 17.9 Owner questions
+
+Each is filed under `.stack/questions/` and the section is built on its recommendation.
+
+- **`details-17-ca-numbers`**: confirm A1 to A11 (17.2.8) against the CA's pages, which this agent may not fetch: above all A7, whether an order with `replaces` inside the window counts against nothing, and A4's 5 and 34 h. A wrong number costs waits and refused requests, not certificates, but a false A7 caps a host at about 21 devices. Recommendation: the owner reads the two pages and corrects the settings' defaults; the design does not change.
+- **`details-17-one-name-per-device`**: one certificate a device and host, as §13.11's verdict has it, so N devices of a host share the exact-set limit and the fifth and later wait 34 h each. The other way is one certificate a device naming all its hosts of the domain: fewer certificates against the registered-domain limit, the same exact-set pressure in N, a new certificate for every device whenever a host is added, and one host's failed validation holding all. Recommendation: as built.
+- **`details-17-own-share-of-the-domain-limit`**: we take at most 25 of the registered domain's 50 certificates in 7 days, since the customer's other systems draw on the same 50 and we cannot see them. Recommendation: 25, as a setting the owner may later offer the customer.
+- **`details-17-key-holders-and-rollover`**: any holder orders; only a network admin's desktop changes the key or writes the account row; a removed holder keeps signing as the account until the change is sent, and a hostile one can lose the customer the account. Recommendation: as built, with the warning when fewer than two admins' desktops hold the key, and the key change forced at once when due.
+- **`details-17-alpn-needs-the-443-grant`**: an ordering desktop answers TLS-ALPN-01 only for hosts whose owner it holds a port 443 publish grant on; for the rest it needs the customer's DNS-01 CNAME or another desktop. The other way lets an ordering desktop register an acme-only listener on any owner of its domain, which widens §13.9's gate. Recommendation: as built.
+- **`details-17-every-certificate-is-a-row`**: `POST /tls/cert-register` takes a chain only for a row the caller holds the lock for, and drops the drafted body's second form, where a desktop attests its own key with no queued row. A desktop's own certificate is queued like a phone's. Recommendation: as built; the second form is failure A with one desktop fewer.
+- **`details-17-small-readings`**: readings an implementer would otherwise decide, each with what was built: distinct row states in place of a flag; the lock an account and not a row; spends as rows replayed in place of counters; the probe before the challenge; narrowing in place of refusing a registration; the device falling back to its predecessor; the two holds; the plan's order; `?work=1`; the local copy of the key file; a row that ends under a recorded order is settled at the CA before the account orders again.

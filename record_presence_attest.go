@@ -11,19 +11,30 @@
 // access control exists on an unmanaged device, and carries no attestation. A present attestation that fails is
 // refused, never downgraded to asserted, so a software key cannot pass as apple and then show as anything.
 //
-// Two things hold the attested label back in this build, each failing closed. No production roots ship and clients
-// request none conveyance (QD-137's interim), so the release's pools are empty and nothing chains. And every format but
-// none signs the create ceremony's client data, which KeyRegister.attestation, the raw attestation object (QD-445), does
-// not carry: until question mcp-m2-01-attestation-client-data is answered, VerifyPresenceAttestation refuses those
-// formats. verifyPresenceAttestationObject is the whole check on an explicit client data hash and fixture roots, which
-// the tests run, ready for the container the answer gives.
+// KeyRegister.attestation is a canonical CBOR map of two byte strings (QD-730): attObj, the WebAuthn attestation
+// object, and clientDataJSON, the create ceremony's client data, which every format but none signs or embeds a hash of
+// and which the object does not carry. A registering client writes it with EncodePresenceAttestation, a platform
+// client from the clientDataJSON its API returned and a CTAP2 client from the JSON it hashed. The check, in order:
 //
-// The attestation object is parsed by record_presence_cbor.go's canonical reader, and certificates by crypto/x509, so
+//	map          the field decodes as canonical CBOR, a map of attObj and clientDataJSON, both byte strings, and nothing
+//	             else; a map of attObj alone carries no client data, which passes fmt none and no other format
+//	client data  its type is webauthn.create and its origin is on §16.6's table (protocol/bridge's, QD-073). The
+//	             challenge is left unread: the credential key below is what binds the attestation to the registration
+//	object       canonical CBOR of exactly fmt, attStmt and authData; the authenticator data's rp id is ur.io, with UP, UV
+//	             and attested credential data, and its credential key equals the KeyRegister's public_key
+//	statement    packed, tpm, android-key or apple over authData || SHA-256(clientDataJSON), chained to the roots the
+//	             release pins for the format
+//
+// One thing holds the attested label back in this build, failing closed: no production roots ship and clients request
+// none conveyance (QD-137's interim), so the release's pools are empty and nothing chains. Every format's check is built
+// and runs in the tests on fixture roots.
+//
+// The map and the object are parsed by record_presence_cbor.go's canonical reader, and certificates by crypto/x509, so
 // the root adds no module. Certificate chains are checked at the time the caller judges the registration at, the
 // carrying entry's for a reader labelling a logged key, so readers of one log under one release label one key alike.
 // Releases pin different roots, so a label can differ between releases: the device about to sign a KeyRegister runs
-// this and refuses a failing attestation, and question mcp-m2-01-attestation-in-the-log-rule asks whether §7.9's rule,
-// which every reader must judge alike, may read the attestation at all.
+// this and refuses a failing attestation (RegisterPresenceKey), and question mcp-m2-01-attestation-in-the-log-rule asks
+// whether §7.9's rule, which every reader must judge alike, may read the attestation at all.
 //
 // No key is created, derived or unwrapped here, so nothing calls testHookSecret. Package-level functions are safe for
 // concurrent use. On every leg: nothing here names a connect type.
@@ -80,23 +91,42 @@ func (self PresenceLabel) String() string {
 // not the registration's. Never a reason to label the key asserted instead.
 var ErrPresenceAttestation = errors.New("presence attestation refused")
 
-// Format bounds of an attestation object: its size, which the longest certificate chains a platform sends fit many
-// times over, and the certificates in one x5c.
-const (
-	presenceAttestationMaxByteCount = 64 * 1024
-	presenceAttestationMaxChainSize = 8
-)
+// §16.6's bounds on a registration's attestation, which every device that labels a key holds alike (QD-702): the
+// formats' own values. The package-level checks read DefaultPresenceAttestationSettings(); threading each side's own
+// instance through them is the review phase's settings sweep (QD-706).
+type PresenceAttestationSettings struct {
+	// KeyRegister.attestation, the map with its attestation object and client data, at most: 64 KiB, which the longest
+	// certificate chains a platform sends fit many times over.
+	AttestationMaxByteCount int
+	// The certificates in one x5c, at most: 8.
+	ChainMaxCertificateCount int
+	// A credential id, at most: 1,023 bytes (WebAuthn §6.5.1).
+	CredentialIdMaxByteCount int
+	// CBOR nesting, at most: 16. The deepest a registration has is the object, its statement, the x5c array and a
+	// certificate, and the authenticator data's extensions under their own map; anything near this is no attestation.
+	CborMaxDepth int
+}
+
+// The formats' values. A fresh value each call.
+func DefaultPresenceAttestationSettings() *PresenceAttestationSettings {
+	return &PresenceAttestationSettings{
+		AttestationMaxByteCount:  64 * 1024,
+		ChainMaxCertificateCount: 8,
+		CredentialIdMaxByteCount: 1023,
+		CborMaxDepth:             16,
+	}
+}
 
 // WebAuthn's authenticator data flags (WebAuthn §6.1): user present, user verified, attested credential data, extension
 // data.
 const (
-	presenceAuthFlagUserPresent     byte = 0x01
-	presenceAuthFlagUserVerified    byte = 0x04
-	presenceAuthFlagAttestedData    byte = 0x40
-	presenceAuthFlagExtensionData   byte = 0x80
-	presenceAuthDataFixedSize            = 32 + 1 + 4
-	presenceAuthAaguidSize               = 16
-	presenceAuthCredentialIdMaxSize      = 1023
+	presenceAuthFlagUserPresent   byte = 0x01
+	presenceAuthFlagUserVerified  byte = 0x04
+	presenceAuthFlagAttestedData  byte = 0x40
+	presenceAuthFlagExtensionData byte = 0x80
+	// The layout before the credential id: the rp id hash, the flags and the counter, then the aaguid.
+	presenceAuthDataFixedSize = 32 + 1 + 4
+	presenceAuthAaguidSize    = 16
 )
 
 // COSE's values for an ES256 key (RFC 9053): kty EC2, alg ES256, crv P-256, and RS256 for a tpm statement's signature.
@@ -167,9 +197,9 @@ func presenceReleaseAttestationRoots() *presenceAttestationRoots {
 // entry's time for a reader labelling a logged key: asserted or attested, or a refusal (above). register's own proof is
 // VerifyPresenceRegistration's, which a caller runs too.
 //
-// KeyRegister.attestation is read as the raw attestation object (QD-445): fmt none or an empty field labels a
-// webauthn-es256 key asserted, and every other format is refused until question mcp-m2-01-attestation-client-data says
-// where its client data rides. An ecdsa-p256-sha256 key is asserted and carries none.
+// KeyRegister.attestation is read as QD-730's map (the file header): an empty field and fmt none label a webauthn-es256
+// key asserted, and packed, tpm, android-key and apple are checked over SHA-256 of the map's client data against the
+// release's roots. An ecdsa-p256-sha256 key is asserted and carries none.
 func VerifyPresenceAttestation(register *protocol.KeyRegister, atMillis int64) (PresenceLabel, error) {
 	if register == nil {
 		return 0, fmt.Errorf("%w: no KeyRegister", ErrPresenceAttestation)
@@ -188,15 +218,55 @@ func VerifyPresenceAttestation(register *protocol.KeyRegister, atMillis int64) (
 		if len(attestation) == 0 {
 			return PresenceLabelAsserted, nil
 		}
-		return verifyPresenceAttestationObject(
+		return verifyPresenceAttestation(
 			attestation,
-			nil,
 			register.GetPublicKey(),
 			presenceReleaseAttestationRoots(),
+			DefaultPresenceAttestationSettings(),
 			time.UnixMilli(atMillis),
 		)
 	}
 	return 0, fmt.Errorf("%w: algorithm %s", ErrPresenceAttestation, register.GetAlg())
+}
+
+// The label of a non-empty KeyRegister.attestation for the credential key publicKey (QD-730): the canonical CBOR map of
+// attObj and clientDataJSON, both byte strings and nothing else, whose client data is a webauthn.create from an origin
+// on §16.6's table and whose object verifies over that client data's SHA-256 (verifyPresenceAttestationObject). A map of
+// attObj alone has no client data to check a statement against, so it passes fmt none and no other format. The raw
+// attestation object, which the field held before QD-730, is no such map and is refused.
+func verifyPresenceAttestation(
+	attestation []byte,
+	publicKey []byte,
+	roots *presenceAttestationRoots,
+	settings *PresenceAttestationSettings,
+	at time.Time,
+) (PresenceLabel, error) {
+	if settings.AttestationMaxByteCount < len(attestation) {
+		return 0, fmt.Errorf("%w: %d bytes", ErrPresenceAttestation, len(attestation))
+	}
+	container, err := presenceCborDecodeAll(attestation, settings.CborMaxDepth)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", ErrPresenceAttestation, err)
+	}
+	clientData, hasClientData := container.textKey(presenceAttestationClientDataKey)
+	if hasClientData && !container.hasTextKeysExactly(presenceAttestationObjectKey, presenceAttestationClientDataKey) ||
+		!hasClientData && !container.hasTextKeysExactly(presenceAttestationObjectKey) {
+		return 0, fmt.Errorf("%w: not a map of attObj and clientDataJSON", ErrPresenceAttestation)
+	}
+	attestationObject, _ := container.textKey(presenceAttestationObjectKey)
+	if attestationObject.kind != presenceCborBytes || hasClientData && clientData.kind != presenceCborBytes {
+		return 0, fmt.Errorf("%w: attObj or clientDataJSON is no byte string", ErrPresenceAttestation)
+	}
+
+	var clientDataHash []byte
+	if hasClientData {
+		if err := bridge.CheckWebAuthnRegistrationClientData(clientData.content); err != nil {
+			return 0, fmt.Errorf("%w: %w", ErrPresenceAttestation, err)
+		}
+		digest := sha256.Sum256(clientData.content)
+		clientDataHash = digest[:]
+	}
+	return verifyPresenceAttestationObject(attestationObject.content, clientDataHash, publicKey, roots, settings, at)
 }
 
 // A WebAuthn attestation object's label for the credential key publicKey, a SEC 1 point: the object parses as canonical
@@ -209,12 +279,13 @@ func verifyPresenceAttestationObject(
 	clientDataHash []byte,
 	publicKey []byte,
 	roots *presenceAttestationRoots,
+	settings *PresenceAttestationSettings,
 	at time.Time,
 ) (PresenceLabel, error) {
-	if presenceAttestationMaxByteCount < len(attestationObject) {
+	if settings.AttestationMaxByteCount < len(attestationObject) {
 		return 0, fmt.Errorf("%w: %d bytes", ErrPresenceAttestation, len(attestationObject))
 	}
-	object, err := presenceCborDecodeAll(attestationObject)
+	object, err := presenceCborDecodeAll(attestationObject, settings.CborMaxDepth)
 	if err != nil {
 		return 0, fmt.Errorf("%w: %w", ErrPresenceAttestation, err)
 	}
@@ -228,7 +299,7 @@ func verifyPresenceAttestationObject(
 		return 0, fmt.Errorf("%w: an attestation object's types", ErrPresenceAttestation)
 	}
 
-	authData, err := parsePresenceAuthData(authDataItem.content)
+	authData, err := parsePresenceAuthData(authDataItem.content, settings)
 	if err != nil {
 		return 0, err
 	}
@@ -247,11 +318,7 @@ func verifyPresenceAttestationObject(
 		return 0, fmt.Errorf("%w: fmt %q", ErrPresenceAttestation, formatName)
 	}
 	if clientDataHash == nil {
-		return 0, fmt.Errorf(
-			"%w: fmt %q signs client data KeyRegister does not carry (question mcp-m2-01-attestation-client-data)",
-			ErrPresenceAttestation,
-			formatName,
-		)
+		return 0, fmt.Errorf("%w: fmt %q signs client data the attestation does not carry", ErrPresenceAttestation, formatName)
 	}
 	if len(clientDataHash) != sha256.Size {
 		return 0, fmt.Errorf("%w: a client data hash of %d bytes", ErrPresenceAttestation, len(clientDataHash))
@@ -260,13 +327,13 @@ func verifyPresenceAttestationObject(
 
 	switch formatName {
 	case "packed":
-		return verifyPresencePacked(statement, authData, signedData, roots.packed, at)
+		return verifyPresencePacked(statement, authData, signedData, roots.packed, settings, at)
 	case "tpm":
-		return verifyPresenceTpm(statement, authData, signedData, roots.tpm, at)
+		return verifyPresenceTpm(statement, authData, signedData, roots.tpm, settings, at)
 	case "android-key":
-		return verifyPresenceAndroidKey(statement, authData, signedData, clientDataHash, roots.androidKey, at)
+		return verifyPresenceAndroidKey(statement, authData, signedData, clientDataHash, roots.androidKey, settings, at)
 	default:
-		return verifyPresenceApple(statement, authData, signedData, roots.apple, at)
+		return verifyPresenceApple(statement, authData, signedData, roots.apple, settings, at)
 	}
 }
 
@@ -281,7 +348,7 @@ type presenceAuthData struct {
 
 // Parses authenticator data that must carry an ES256 credential for rp ur.io, with UP and UV, and nothing after its
 // extensions.
-func parsePresenceAuthData(authData []byte) (*presenceAuthData, error) {
+func parsePresenceAuthData(authData []byte, settings *PresenceAttestationSettings) (*presenceAuthData, error) {
 	if len(authData) < presenceAuthDataFixedSize+presenceAuthAaguidSize+2 {
 		return nil, fmt.Errorf("%w: authenticator data of %d bytes", ErrPresenceAttestation, len(authData))
 	}
@@ -299,17 +366,17 @@ func parsePresenceAuthData(authData []byte) (*presenceAuthData, error) {
 	rest = rest[presenceAuthAaguidSize:]
 	credentialIdSize := int(binary.BigEndian.Uint16(rest[:2]))
 	rest = rest[2:]
-	if credentialIdSize == 0 || presenceAuthCredentialIdMaxSize < credentialIdSize || len(rest) < credentialIdSize {
+	if credentialIdSize == 0 || settings.CredentialIdMaxByteCount < credentialIdSize || len(rest) < credentialIdSize {
 		return nil, fmt.Errorf("%w: a credential id of %d bytes", ErrPresenceAttestation, credentialIdSize)
 	}
 	rest = rest[credentialIdSize:]
 
-	coseKey, rest, err := presenceCborDecode(rest)
+	coseKey, rest, err := presenceCborDecode(rest, settings.CborMaxDepth)
 	if err != nil {
 		return nil, fmt.Errorf("%w: credential key: %w", ErrPresenceAttestation, err)
 	}
 	if flags&presenceAuthFlagExtensionData != 0 {
-		extensions, extensionsRest, err := presenceCborDecode(rest)
+		extensions, extensionsRest, err := presenceCborDecode(rest, settings.CborMaxDepth)
 		if err != nil {
 			return nil, fmt.Errorf("%w: extensions: %w", ErrPresenceAttestation, err)
 		}
@@ -357,10 +424,10 @@ func parsePresenceAuthData(authData []byte) (*presenceAuthData, error) {
 	return parsed, nil
 }
 
-// An x5c array: 1 to presenceAttestationMaxChainSize certificates, the first the leaf, each parsed.
-func parsePresenceX5c(statement *presenceCborItem) ([]*x509.Certificate, error) {
+// An x5c array: 1 to settings.ChainMaxCertificateCount certificates, the first the leaf, each parsed.
+func parsePresenceX5c(statement *presenceCborItem, settings *PresenceAttestationSettings) ([]*x509.Certificate, error) {
 	x5c, ok := statement.textKey("x5c")
-	if !ok || x5c.kind != presenceCborArray || len(x5c.items) == 0 || presenceAttestationMaxChainSize < len(x5c.items) {
+	if !ok || x5c.kind != presenceCborArray || len(x5c.items) == 0 || settings.ChainMaxCertificateCount < len(x5c.items) {
 		return nil, fmt.Errorf("%w: x5c", ErrPresenceAttestation)
 	}
 	certificates := make([]*x509.Certificate, 0, len(x5c.items))
@@ -468,6 +535,7 @@ func verifyPresencePacked(
 	authData *presenceAuthData,
 	signedData []byte,
 	pool *x509.CertPool,
+	settings *PresenceAttestationSettings,
 	at time.Time,
 ) (PresenceLabel, error) {
 	_, hasX5c := statement.textKey("x5c")
@@ -493,7 +561,7 @@ func verifyPresencePacked(
 		return PresenceLabelAsserted, nil
 	}
 
-	certificates, err := parsePresenceX5c(statement)
+	certificates, err := parsePresenceX5c(statement, settings)
 	if err != nil {
 		return 0, err
 	}
@@ -525,6 +593,7 @@ func verifyPresenceTpm(
 	authData *presenceAuthData,
 	signedData []byte,
 	pool *x509.CertPool,
+	settings *PresenceAttestationSettings,
 	at time.Time,
 ) (PresenceLabel, error) {
 	if !statement.hasTextKeysExactly("alg", "sig", "ver", "x5c", "pubArea", "certInfo") {
@@ -568,7 +637,7 @@ func verifyPresenceTpm(
 		return 0, err
 	}
 
-	certificates, err := parsePresenceX5c(statement)
+	certificates, err := parsePresenceX5c(statement, settings)
 	if err != nil {
 		return 0, err
 	}
@@ -770,6 +839,7 @@ func verifyPresenceAndroidKey(
 	signedData []byte,
 	clientDataHash []byte,
 	pool *x509.CertPool,
+	settings *PresenceAttestationSettings,
 	at time.Time,
 ) (PresenceLabel, error) {
 	if !statement.hasTextKeysExactly("alg", "sig", "x5c") {
@@ -782,7 +852,7 @@ func verifyPresenceAndroidKey(
 	if err != nil {
 		return 0, err
 	}
-	certificates, err := parsePresenceX5c(statement)
+	certificates, err := parsePresenceX5c(statement, settings)
 	if err != nil {
 		return 0, err
 	}
@@ -960,12 +1030,13 @@ func verifyPresenceApple(
 	authData *presenceAuthData,
 	signedData []byte,
 	pool *x509.CertPool,
+	settings *PresenceAttestationSettings,
 	at time.Time,
 ) (PresenceLabel, error) {
 	if !statement.hasTextKeysExactly("x5c") {
 		return 0, fmt.Errorf("%w: an apple statement's keys", ErrPresenceAttestation)
 	}
-	certificates, err := parsePresenceX5c(statement)
+	certificates, err := parsePresenceX5c(statement, settings)
 	if err != nil {
 		return 0, err
 	}

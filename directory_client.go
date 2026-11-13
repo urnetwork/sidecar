@@ -17,7 +17,8 @@
 // view fetches apart from the sync (directory_phone.go). The writes go through the record writer for entries (repo
 // items here, RECORD-M6-15; runs, workers, requests and decisions RECORD-M6-16 to -19) and through PutCard and
 // RemoveCard for notices. An admin device that finds a team with no directory files its RepoCreate through
-// TEAM-M6-10's FileTeamDirectory, which is not built: until it is, nothing here files one.
+// TEAM-M6-10's FileTeamDirectory: a create marked private does so first (directory_private.go, QD-748), and nothing
+// here files one at a sync yet.
 //
 // Safe for concurrent use. Locks: syncLock, then stateLock, then a fold's own; none is held across a call out but
 // syncLock across a sync's own I/O.
@@ -67,6 +68,10 @@ type DirectoryClientArgs struct {
 	// Whether a config label names the repo (§8.8), for the warning a repo marked private takes; nil reads every repo
 	// as possibly labeled, so the warning is never missed.
 	RepoLabeled func(repoId Id) bool
+	// The display name this device knows for a repo (prose), which a repo predating the directory is announced under
+	// (§16.11's default row): "" for none, and nil knows none, so the item names the repo by its kind and id until an
+	// admin announces it at a higher version.
+	RepoDisplayName func(repoId Id) string
 }
 
 // One network's team directory on this sidecar.
@@ -87,6 +92,8 @@ type DirectoryClient struct {
 	writer        RecordWriter
 	redactor      *Redactor
 	repoLabeled   func(repoId Id) bool
+	// what a repo predating the directory is announced under (DirectoryClientArgs.RepoDisplayName), nil for none
+	repoDisplayName func(repoId Id) string
 
 	syncLock sync.Mutex
 	// the record reader over the copy, replaced at a lost read
@@ -157,6 +164,8 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 		repoLabeled:   args.RepoLabeled,
 		cards:         cards,
 		authFunc:      args.Auth,
+
+		repoDisplayName: args.RepoDisplayName,
 
 		repoWrittenVersions: map[Id]uint64{},
 	}

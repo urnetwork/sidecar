@@ -8,8 +8,10 @@
 // network: other networks are reached by IP (§6.4). The namespace decides the rest. An application name goes to the
 // service only as its token path under the newest K_sock (D-SOCK-13). tls/ and smtp/ are an edge's to dial (§9.4's
 // table, SOCK-M5-13), share/ is `ur share get`'s alone (SOCK-M5-15), and a reserved name has no owner, so each is
-// refused here. A ur/ name resolves to urnetwork-edge and stops there: its dial, with no Hello and no claim, is
-// SOCK-M9-01's (plan reading 7), and until it lands such a Dial answers unavailable.
+// refused here. A ur/ name resolves to urnetwork-edge, as the registrar's newest answer named it, and is dialed with no
+// Hello, claim or listen grant (SOCK.md reading 7, SOCK-M9-01): a platform listener holds no identity key and §8 does
+// not govern it, so the dialer holds instead to the ticket's own signature under the service's keys, its group in
+// urnetwork-edge and this client as its dialer, and opens an edge stream (C9) to the name itself, ur/<service>.
 //
 // Before OPEN (owner decision 3, I-5). A ticket names its listener's client; the dialer runs §6.4's Hello with it and
 // checks the ticket's claim, a §6 Signed of purpose socket-registration, under the identity key that Hello verified,
@@ -118,9 +120,11 @@ type socketDialer struct {
 	ring      *SocketKeyRing
 	// the urnetwork-edge network, as the registrar's newest answer named it; nil before any
 	urnetworkEdge *Id
-	find          *socketFindClient
-	opener        socketStreamOpener
-	policy        SocketPolicy
+	// the registrar's newest answer for admission: the service's ticket keys and clock, which a ur/ ticket is held to
+	admission *socketAdmissionState
+	find      *socketFindClient
+	opener    socketStreamOpener
+	policy    SocketPolicy
 	// ur share get's: the sidecar whose listener alone this Dial opens to, nil for any (§9.9)
 	listenerSidecarId *Id
 }
@@ -164,8 +168,15 @@ func (self *socketDialer) resolve(address *SocketAddress, allowShare bool) (*soc
 		if address.NetworkLabel != "" {
 			return nil, errInvalidSocketAddress
 		}
-		// their dial is SOCK-M9-01's: no Hello, no claim, the service's signature checked here
-		return nil, &SocketCodeError{Err: ErrSocketUnavailable}
+		if self.urnetworkEdge == nil {
+			return nil, &SocketCodeError{Err: ErrSocketUnavailable}
+		}
+		return &socketDialTarget{
+			networkId:    *self.urnetworkEdge,
+			namespace:    namespace,
+			name:         name,
+			streamTarget: name,
+		}, nil
 	default:
 		// tls/ and smtp/ are an edge's, and a reserved name has no owner
 		return nil, &SocketCodeError{Err: ErrSocketDenied}
@@ -282,6 +293,9 @@ func (self *socketDialer) wait(ctx context.Context, wait time.Duration) bool {
 
 // One ticket: the checks before OPEN, then the open, within acceptTimeout.
 func (self *socketDialer) attempt(ctx context.Context, target *socketDialTarget, findTicket *SocketFindTicket, settings *SocketDialSettings, acceptTimeout time.Duration) *socketAttempt {
+	if target.namespace == SocketNamespacePlatform {
+		return self.attemptPlatform(ctx, target, findTicket, acceptTimeout)
+	}
 	ticket, err := parseSocketFindTicket(findTicket.Ticket)
 	if err != nil {
 		return &socketAttempt{kind: socketAttemptRefused}
@@ -329,6 +343,44 @@ func (self *socketDialer) attempt(ctx context.Context, target *socketDialTarget,
 		Target: target.streamTarget,
 		Ticket: findTicket.Ticket,
 	})
+	return self.openAttempt(ctx, attemptCtx, stream, err, target, listenerClientId, ticket)
+}
+
+// One ticket of a ur/ name (D-SOCK-11): see the file header. Any check that fails is the ticket's, refused before the
+// open, so a ticket naming a listener outside urnetwork-edge is never opened.
+func (self *socketDialer) attemptPlatform(ctx context.Context, target *socketDialTarget, findTicket *SocketFindTicket, acceptTimeout time.Duration) *socketAttempt {
+	admission := self.admission
+	if admission == nil || !admission.known || admission.urnetworkEdge == nil {
+		return &socketAttempt{kind: socketAttemptRefused}
+	}
+	ticket, err := VerifySocketTicket(findTicket.Ticket, admission.ticketKeys, admission.serverNowMillis(self.clock.Now()))
+	if err != nil {
+		return &socketAttempt{kind: socketAttemptRefused}
+	}
+	if !bytes.Equal(ticket.GetNetworkId(), admission.urnetworkEdge.Bytes()) || !bytes.Equal(ticket.GetNetworkId(), target.networkId.Bytes()) ||
+		!bytes.Equal(ticket.GetDialerClientId(), self.clientId.Bytes()) || ticket.GetName() != target.name || len(ticket.GetNameToken()) != 0 {
+		return &socketAttempt{kind: socketAttemptRefused}
+	}
+	listenerClientId, err := IdFromBytes(ticket.GetListenerClientId())
+	if err != nil {
+		return &socketAttempt{kind: socketAttemptRefused}
+	}
+	attemptCtx, done := self.attemptContext(ctx, acceptTimeout)
+	defer done()
+	stream, err := self.opener.open(attemptCtx, listenerClientId, &StreamOpenRequest{
+		Target: target.streamTarget,
+		Ticket: findTicket.Ticket,
+		Edge:   true,
+	})
+	return self.openAttempt(ctx, attemptCtx, stream, err, target, listenerClientId, ticket)
+}
+
+// What one open came to: the accepted stream as a conn, the listener's refusal, or a timeout once attemptCtx ended
+// while ctx had not.
+func (self *socketDialer) openAttempt(ctx context.Context, attemptCtx context.Context, stream socketStream, err error, target *socketDialTarget, listenerClientId Id, ticket *protocol.SocketTicket) *socketAttempt {
+	timedOut := func() bool {
+		return attemptCtx.Err() != nil && ctx.Err() == nil
+	}
 	if err == nil {
 		localAddr := &SocketAddr{NetworkId: connect.Id(self.networkId), ClientId: connect.Id(self.clientId)}
 		remoteAddr := &SocketAddr{NetworkId: connect.Id(target.networkId), ClientId: connect.Id(listenerClientId)}
@@ -390,6 +442,10 @@ func (self *socketDialer) dial(ctx context.Context, address *SocketAddress, sett
 		MinVersion:  settings.MinVersion,
 		Alpn:        settings.Alpn,
 		AffinityKey: settings.AffinityKey,
+	}
+	if target.nameToken == nil {
+		// a ur/ name goes in the clear (D-SOCK-13)
+		args.Name = target.name
 	}
 
 	failedTickets := []*SocketFailedTicket{}
@@ -510,6 +566,7 @@ func (self *SocketComponent) dialer() (*socketDialer, error) {
 		labels:        labels,
 		ring:          ring,
 		urnetworkEdge: admission.urnetworkEdge,
+		admission:     admission,
 		find:          newSocketFindClient(generation.sidecarApi.SocketFind),
 		opener:        &subprotocolSocketOpener{subprotocol: generation.subprotocol},
 		policy:        policy,

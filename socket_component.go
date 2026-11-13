@@ -300,6 +300,13 @@ func (self *SocketComponent) SetKeyRing(ring *SocketKeyRing) error {
 	return self.registrar.setKeyRing(ring)
 }
 
+// The newest K_sock ring the registrar holds, nil before one is set.
+func (self *SocketComponent) currentKeyRing() *SocketKeyRing {
+	self.registrar.stateLock.Lock()
+	defer self.registrar.stateLock.Unlock()
+	return self.registrar.state.ring
+}
+
 // The registrar a listener registers through.
 func (self *SocketComponent) socketRegistrar() *socketRegistrar {
 	return self.registrar
@@ -317,4 +324,18 @@ func (self *Sidecar) socketComponent() *SocketComponent {
 		}
 	}
 	return nil
+}
+
+var _ ApprovalSocketKeys = (*Sidecar)(nil)
+
+// The newest K_sock ring of the network's verified config head that this sidecar's sockets component holds, nil
+// without the component or before its host installs one (SetKeyRing). An approver's device reads a listen request's
+// application name with it (ApprovalSocketKeys; QD-772), and socket_listen's tool derives the name's grant_dst under
+// its current keys (SocketListenGrantDst).
+func (self *Sidecar) SocketKeyRing() *SocketKeyRing {
+	component := self.socketComponent()
+	if component == nil {
+		return nil
+	}
+	return component.currentKeyRing()
 }

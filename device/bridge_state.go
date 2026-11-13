@@ -294,3 +294,20 @@ func (self *Bridge) adoptWithLock(decision PostureDecision, force bool) ([]uint6
 	self.deadline.Set(next)
 	return closeTags, changed || routesChanged || zoneChanged
 }
+
+// What the bridge enforces: the posture's decision it last adopted, a copy whose BridgeState and pins the caller must
+// not change. A producer reads its pins to hand the entries above them (BRIDGE-M4-17's catch-up).
+func (self *Bridge) Decision() PostureDecision {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.decision
+}
+
+// The sidecar role, a full reader, found a base that does not compile from its head, or found it again: the posture
+// is pending until it says otherwise (Posture.SetFork), and the narrowing it publishes ends the flows it closes.
+func (self *Bridge) SetFork(fork bool) error {
+	return self.apply(func() (PostureDecision, bool, error) {
+		decision, err := self.posture.SetFork(fork)
+		return decision, false, err
+	})
+}

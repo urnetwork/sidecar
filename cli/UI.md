@@ -55,6 +55,32 @@ ur share rm <token> [--network=<name>]
   identity is not the link's.
 - `rm` ends a share at once: its live streams reset and its link redeems nothing more.
 
+## ur tun (§17.11)
+
+The OS tun `ur-<instance>` for one network's bridge, on Linux and WSL2 at M4 (macOS and Windows at M6). It lives in
+the daemon, as a socket does: each command returns once the daemon holds what it asked for, and the daemon stays up
+while the bridge is on (§5.8).
+
+```text
+ur tun [--network=<name>]               bring the tun up over the network's bridge, and show what it carries
+ur tun down                             end it, removing its routes
+ur tun ip [<ip>] [--network=<name>]     show this host's overlay address and the block, or claim <ip>, or auto
+```
+
+- The daemon needs CAP_NET_ADMIN or root: `sudo setcap cap_net_admin=ep "$(command -v ur)"` grants it to the ur the
+  daemon runs as. Without it `ur tun` says so, and `ur bridge` still works over the userspace stack.
+- The tun carries the block, the granted prefixes and `<block>.0.53`, never the default route: under the egress mode
+  `exits` the exits are held off the tun for now, and `ur tun` says so (question bridge-m4-18-linux-exits).
+- The network's names, `~<net>.<root>`, resolve through `<block>.0.53` by systemd-resolved, set for the tun's link.
+  Where resolved is absent or refuses, `ur tun` prints the step to take.
+- `ur tun` yields to an app's bridge: on a sidecar paired with an app whose VPN holds the block, it refuses, naming the
+  interface.
+- One network's tun an instance: `ur tun` for another network refuses until `ur tun down`. `down` is this file's
+  spelling; §17.11 names none.
+- `ip <ip>` must lie in the block's lower /17, outside `<block>.0.0/24`, and not end in .0 or .255 (§17.4); the first
+  claim in the log wins. `ip auto` refuses until the check that no browser leaks an overlay address through WebRTC has
+  passed (QD-424).
+
 ## ur login --device (§5.6, §7.8; RFC 8628)
 
 For a host with no browser, or one whose browser cannot reach a loopback redirect: the same single-use, user-owned

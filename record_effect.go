@@ -27,7 +27,6 @@ package sidecar
 import (
 	"bytes"
 	"context"
-	"slices"
 	"sync"
 )
 
@@ -80,8 +79,8 @@ type ApprovalSpend struct {
 	Decisions [][]byte
 	// The action the decisions hash, as stored: the use's own, or the template it falls inside.
 	Action []byte
-	// What the approved request binds beside its action, the local port, weight and ALPNs every decision's
-	// request_sha256 covers (QD-740), which the effect applies; nil for none.
+	// What the approved request binds beside its action, the socket name, local port, weight and ALPNs every decision's
+	// request_sha256 covers (QD-740, QD-772), which the effect applies; nil for none.
 	Detail *SidecarActionDetail
 }
 
@@ -90,10 +89,7 @@ type approvalSpendContextKey struct{}
 
 // ctx carrying spend, a copy.
 func withApprovalSpend(ctx context.Context, spend *ApprovalSpend) context.Context {
-	copied := &ApprovalSpend{ApprovalId: spend.ApprovalId, Action: bytes.Clone(spend.Action)}
-	if spend.Detail != nil {
-		copied.Detail = &SidecarActionDetail{LocalPort: spend.Detail.LocalPort, Weight: spend.Detail.Weight, Alpn: slices.Clone(spend.Detail.Alpn)}
-	}
+	copied := &ApprovalSpend{ApprovalId: spend.ApprovalId, Action: bytes.Clone(spend.Action), Detail: spend.Detail.clone()}
 	for _, decision := range spend.Decisions {
 		copied.Decisions = append(copied.Decisions, bytes.Clone(decision))
 	}

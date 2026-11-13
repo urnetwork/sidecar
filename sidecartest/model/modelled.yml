@@ -31,10 +31,14 @@ models:
     owners: [EVS1-M2-02, EVSB-M10-07]
     milestones: [M2, M10]
     objects: "head (its fence, refusal records, seal lease and collect window), batch records, packs and parcels with their pidx/ entries, index entries, segments with their upload receipts, slot, pmap, log, gen, epoch, repo, proj and rev; from M10 versionless versions, kind-5 and staged content, holds, DROP pushes and the citation fence"
+    companions: [details/EvsSlot]
     sources:
       - sidecar/sidecartest/model/EvsCommit.tla
       - sidecar/sidecartest/model/EvsCommit.cfg
       - sidecar/sidecartest/model/run-tlc.sh
+      - sidecar/sidecartest/model/details/EvsSlot.tla
+      - sidecar/sidecartest/model/details/EvsSlot*.cfg
+      - sidecar/sidecartest/model/details/run-slot.sh
       - sidecar/evsservice/*.go
       - sidecar/evs_*.go
       - sidecar/gkmservice/*.go
@@ -42,6 +46,7 @@ models:
       - sidecar/evs_index_*.go
     runs:
       - {at: 2026-11-09, commit: 1b95665622a4ec38509bd30a686d6ed752eb400c, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 9aece8d3ee88a44e3891dcc1e2c7a0d569c6343f513304a6ad2a6ea40c512ea6, states: 14451583, depth: 67, seconds: 1743}
+      - {at: 2026-11-13, commit: 49e46669de07d5448ecf89362621d01819fe5a20, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 1543fa7c06670839da4be10f56a28f7ba52bc5775c5a8a1d83dbaba9f7296dab, states: 27678754, depth: 66, seconds: 13982}
 
   - spec: StoreSettle
     owners: [EVS1-M2-02]

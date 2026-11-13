@@ -629,6 +629,7 @@ func fakeSocketCandidate(listenerClientId connect.Id, listener *fakeSocketListen
 		MaxStreams:           listener.registration.MaxStreams,
 		Serving:              listener.registration.Serving,
 		Draining:             listener.registration.Draining,
+		Affinity:             listener.registration.Affinity,
 		LeaseExpireMillis:    listener.leaseExpireMillis,
 		ReportedInflight:     listener.reportedInflight,
 		ReportMillis:         listener.reportMillis,
@@ -732,7 +733,8 @@ func (self *FakeSocketStore) Pick(ctx context.Context, request *socketsservice.S
 		}
 
 		listenerClientIds := fakeSocketSortedListenerIds(group)
-		if self.settings.SampleCount < len(listenerClientIds) {
+		// a keyed pick reads the whole group, since a sample would move a key's listener (SOCK-M6-01)
+		if self.settings.SampleCount < len(listenerClientIds) && len(request.AffinityKey) == 0 {
 			random := rand.New(rand.NewPCG(uint64(request.SampleSeed), 0))
 			random.Shuffle(len(listenerClientIds), func(i int, j int) {
 				listenerClientIds[i], listenerClientIds[j] = listenerClientIds[j], listenerClientIds[i]
@@ -748,6 +750,7 @@ func (self *FakeSocketStore) Pick(ctx context.Context, request *socketsservice.S
 			Protocol:       request.Protocol,
 			MinVersion:     request.MinVersion,
 			Alpns:          request.Alpns,
+			AffinityKey:    request.AffinityKey,
 			NowMillis:      nowMillis,
 			FirstDraw:      request.FirstDraw,
 			SecondDraw:     request.SecondDraw,
@@ -943,7 +946,8 @@ func (self *FakeSocketStore) TouchServicePairs(ctx context.Context, listenerClie
 				delete(pairs, dialerClientId)
 				continue
 			}
-			pair.expireMillis = nowMillis + ttlMillis
+			// never shorter: a ur/ pair keyed by its sidecar dialer keeps its own longer life (QD-728)
+			pair.expireMillis = max(pair.expireMillis, nowMillis+ttlMillis)
 		}
 		return nil
 	})
@@ -1066,4 +1070,59 @@ func (self *FakeSocketStore) ClaimSweep(ctx context.Context, networkId connect.I
 		return nil, false, err
 	}
 	return claim, claimed, nil
+}
+
+// Every value the store holds, raw, as CC3's Redis class: what server's store keeps in {sg_}, {sn_}, {sc_} and
+// {svc_} (§2.8's sock-1, sock-3 to sock-5), so the privacy harness scans what a sockets process keeps (SOCK-M5-16):
+// a source for PrivacyCapture.AddSource. Each item is one group, client set or listener's pairs, its fields written
+// raw, so a value a scan looks for is in it as the store would hold it.
+func (self *FakeSocketStore) PrivacyItems() []*PrivacyItem {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	items := []*PrivacyItem{}
+	for key, group := range self.groups {
+		body := &bytes.Buffer{}
+		body.Write(key.networkId.Bytes())
+		body.WriteString(key.nameKey)
+		body.Write(group.listedSealedName)
+		for listenerClientId, listener := range group.listeners {
+			body.Write(listenerClientId.Bytes())
+			if listener.sidecarId != nil {
+				body.Write(listener.sidecarId.Bytes())
+			}
+			if registration := listener.registration; registration != nil {
+				body.WriteString(registration.Name)
+				body.Write(registration.NameToken)
+				body.Write(registration.SealedName)
+				body.Write(registration.Claim)
+				body.WriteString(registration.Protocol)
+				body.WriteString(registration.AppMode)
+				for _, alpn := range registration.Alpn {
+					body.WriteString(alpn)
+				}
+			}
+		}
+		for listenerClientId := range self.groupTombstones[key] {
+			body.Write(listenerClientId.Bytes())
+		}
+		items = append(items, &PrivacyItem{Class: PrivacyClassRedis, Name: "sockets group of " + key.networkId.String(), Body: body.Bytes()})
+	}
+	for clientId, set := range self.clientSets {
+		body := &bytes.Buffer{}
+		body.Write(clientId.Bytes())
+		body.Write(set.networkId.Bytes())
+		for nameKey := range set.nameKeys {
+			body.WriteString(nameKey)
+		}
+		items = append(items, &PrivacyItem{Class: PrivacyClassRedis, Name: "sockets client set " + clientId.String(), Body: body.Bytes()})
+	}
+	for listenerClientId, pairs := range self.listenerIdPairs {
+		body := &bytes.Buffer{}
+		body.Write(listenerClientId.Bytes())
+		for dialerClientId := range pairs {
+			body.Write(dialerClientId.Bytes())
+		}
+		items = append(items, &PrivacyItem{Class: PrivacyClassRedis, Name: "sockets pairs of " + listenerClientId.String(), Body: body.Bytes()})
+	}
+	return items
 }

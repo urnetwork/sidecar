@@ -136,6 +136,13 @@ type SocketGateSettings struct {
 	ResyncConcurrency int
 	// The bound on one {acl_}v read, at a load's start or in the resubscription check: 2 s.
 	VersionReadTimeout time.Duration
+	// How recently a network must have been served or loaded for the resubscription check to read its {acl_}v: 15 min,
+	// three of §8.9's 5-minute polls, which load every network the cache holds, so a network the cache has evicted is
+	// not reloaded by a resubscription.
+	ResyncUsedWithin time.Duration
+	// How many networks the gate follows at most: 100,000, the cache's own UnloadedCount. Past it the quiet networks
+	// served or loaded longest ago are let go, some 200 B each, and taken up again at their next ask, load or event.
+	MaxNetworkCount int
 	// How often §20.7's OverLimit is read again: 5 s (13.2.3's OverLimitInterval).
 	OverLimitInterval time.Duration
 	// The bound on one read: 2 s (OverLimitTimeout), inside the interval, so a stalled api never stacks reads.
@@ -153,6 +160,8 @@ func DefaultSocketGateSettings() *SocketGateSettings {
 		ResyncBatchCount:     1000,
 		ResyncConcurrency:    64,
 		VersionReadTimeout:   2 * time.Second,
+		ResyncUsedWithin:     15 * time.Minute,
+		MaxNetworkCount:      100000,
 		OverLimitInterval:    5 * time.Second,
 		OverLimitTimeout:     2 * time.Second,
 		Cache:                sidecar.DefaultAclGateSettings(),
@@ -176,6 +185,8 @@ func (self *SocketGateSettings) Validate() error {
 		{name: "gate.resync_batch_count", positive: 0 < self.ResyncBatchCount},
 		{name: "gate.resync_concurrency", positive: 0 < self.ResyncConcurrency},
 		{name: "gate.version_read_timeout", positive: 0 < self.VersionReadTimeout},
+		{name: "gate.resync_used_within", positive: 0 < self.ResyncUsedWithin},
+		{name: "gate.max_network_count", positive: 0 < self.MaxNetworkCount},
 		{name: "gate.over_limit_interval", positive: 0 < self.OverLimitInterval},
 		{name: "gate.over_limit_timeout", positive: 0 < self.OverLimitTimeout && self.OverLimitTimeout <= self.OverLimitInterval},
 	} {
@@ -194,10 +205,9 @@ type SocketsSettings struct {
 	FairQueue *SocketFairQueueSettings
 	// The production gate's, which the host builds SocketProjectionGate from; the engine reads none of it.
 	Gate *SocketGateSettings
-	// The longest a ur/ {svc_} pair lives past its last Find, whatever the grant says (§9.6,
-	// plan-SMTP-small-readings' per-service constant): 60 min. A tls/ or smtp/ pair takes the store's
-	// EdgePairTtl instead (QD-656).
-	PlatformPairTtlMax time.Duration
+	// ur/'s services and their grants (namespace_ur.go; §9.6, QD-190): a ur/ ticket's grant and its {svc_} pair live a
+	// service's GrantLifetime, refreshed per Find. A tls/ or smtp/ pair takes the store's EdgePairTtl instead (QD-656).
+	Platform *SocketPlatformSettings
 	// How long one store call may take before it reads as unavailable: 2 s, inside a dialer's 5 s
 	// accept timeout.
 	StoreTimeout time.Duration
@@ -285,7 +295,7 @@ func DefaultSocketsSettings() *SocketsSettings {
 		Bound:                 DefaultSocketControlBoundSettings(),
 		FairQueue:             DefaultSocketFairQueueSettings(),
 		Gate:                  DefaultSocketGateSettings(),
-		PlatformPairTtlMax:    60 * time.Minute,
+		Platform:              DefaultSocketPlatformSettings(),
 		StoreTimeout:          2 * time.Second,
 		ProbeInterval:         5 * time.Second,
 		MaxRetryAfter:         time.Second,
@@ -361,6 +371,7 @@ func (self *SocketSchedulerSettings) Validate() error {
 		{name: "ejection_group_percent", positive: 0 < self.EjectionGroupPercent && self.EjectionGroupPercent <= 100},
 		{name: "reporter_window", positive: 0 < self.ReporterWindow},
 		{name: "reporter_network_count", positive: 0 < self.ReporterNetworkCount},
+		{name: "affinity_load_percent", positive: 100 <= self.AffinityLoadPercent},
 	} {
 		if !check.positive {
 			return fmt.Errorf("%w: %s", ErrSocketsSettingsRefused, check.name)
@@ -389,6 +400,9 @@ func (self *SocketsSettings) Validate() error {
 	if err := self.Gate.Validate(); err != nil {
 		return err
 	}
+	if err := self.Platform.Validate(); err != nil {
+		return err
+	}
 	for _, check := range []struct {
 		name     string
 		positive bool
@@ -401,7 +415,6 @@ func (self *SocketsSettings) Validate() error {
 		{name: "concurrency", positive: 0 < self.FairQueue.Concurrency},
 		{name: "queue_count", positive: 0 < self.FairQueue.QueueCount},
 		{name: "max_wait", positive: 0 < self.FairQueue.MaxWait},
-		{name: "platform_pair_ttl_max", positive: 0 < self.PlatformPairTtlMax},
 		{name: "store_timeout", positive: 0 < self.StoreTimeout},
 		{name: "probe_interval", positive: 0 < self.ProbeInterval},
 		{name: "max_retry_after", positive: 0 < self.MaxRetryAfter},

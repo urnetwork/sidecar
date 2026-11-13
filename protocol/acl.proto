@@ -24,6 +24,10 @@ message AclRows {
   AclAudit audit = 7;                     // owner decision 63; Team only
   repeated AclSuspension suspensions = 8; // active Suspends a fold kept (plan-ACL-folded-grant-state #1)
   repeated AclSpentGrant spent_grants = 9; // activated and revoked grant ids (plan-ACL-folded-grant-state #3)
+  // The document's effective evidenceDefault, compiled at each base as each AclRequestRule's evidence is: the
+  // ApprovalDecision.channel values accepted for an action no requests rule names (dns_set, dns_delete,
+  // bridge_expose); default all three (QD-727)
+  repeated uint32 evidence_default = 10;
 }
 
 // A tag or group atom, or a selector with no table name compiled to a derived atom: the first 16 bytes of
@@ -178,10 +182,13 @@ message AclRepo {
   uint64 holders_shrunk_at = 11;             // the newest log position that dropped a key holder (§7.9)
 }
 
+// A RepoAdmin{remove} stamps removed_at and keeps the row, so a reader judges the admin's right at a position before
+// its removal; the next base's compile drops a row whose removal its retention point has passed (QD-743).
 message AclRepoAdminRow {
   bytes sidecar_id = 1;
   bytes signer = 2;
   uint64 at = 3;
+  uint64 removed_at = 4;                  // the RepoAdmin{remove}'s position; 0 while the admin stands
 }
 
 message AclRepoGrantRow {
@@ -210,6 +217,8 @@ message AclRepoDeletionRow {
   bool now = 2;
   uint64 deleted_at = 3;
   uint64 restored_at = 4;
+  int64 deleted_time_ms = 5;              // the RepoDelete entry's time_ms, which RepoRestore's 7 days and §11.12's
+                                          // shred start count from once the log no longer keeps the entry (QD-743)
 }
 
 message AclAudit {                        // a reader every member sees (owner decision 63)

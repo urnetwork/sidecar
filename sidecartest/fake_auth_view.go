@@ -9,6 +9,10 @@
 // sidecar.KeyHolders needs a row for every reader, so a fixture whose readers have none computes no holders, and the
 // gate's expiry half refuses on it (ErrGkmMalformed).
 //
+// The network's config repo is a fixture's ConfigRepoId, as a Genesis names it: Repo answers the AclRepo the rows hold
+// for it, or else the one ACL's state adds where they hold none, of kind config with holders_shrunk_at 0 (QD-719). The
+// rows take it from the config's first shrink, as TEAM's do (QD-762).
+//
 // Safe for concurrent use. A view never changes once appended.
 
 package sidecartest
@@ -44,6 +48,8 @@ type FakeGkmAuthFixture struct {
 	RepoReaderExpiries map[sidecar.Id]map[sidecar.Id]time.Time
 	// By tag atom, the repos a read or write grant naming it reads, for ReposGrantedToAtoms.
 	AtomRepos map[sidecar.Id][]sidecar.Id
+	// The Genesis's config repo, whose row Repo adds where the rows hold none. Zero: no config repo.
+	ConfigRepoId sidecar.Id
 }
 
 // A copy that shares nothing the test may change later.
@@ -58,6 +64,7 @@ func (self *FakeGkmAuthFixture) clone() *FakeGkmAuthFixture {
 	if self == nil {
 		return cloned
 	}
+	cloned.ConfigRepoId = self.ConfigRepoId
 	if self.Rows != nil {
 		cloned.Rows = proto.Clone(self.Rows).(*bridge.ProjectionRows)
 	}
@@ -203,11 +210,15 @@ func (self *FakeGkmAuthView) IdentityKey(sidecarId sidecar.Id) []byte {
 	return bytes.Clone(self.fixture.IdentityKeys[sidecarId])
 }
 
+// The rows' AclRepo, or the config repo's as ACL's state adds it where the rows hold none.
 func (self *FakeGkmAuthView) Repo(repoId sidecar.Id) *protocol.AclRepo {
 	for _, repo := range self.acl.GetRepos() {
 		if bytes.Equal(repo.GetRepoId(), repoId.Bytes()) {
 			return proto.Clone(repo).(*protocol.AclRepo)
 		}
+	}
+	if repoId != (sidecar.Id{}) && repoId == self.fixture.ConfigRepoId {
+		return &protocol.AclRepo{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG}
 	}
 	return nil
 }

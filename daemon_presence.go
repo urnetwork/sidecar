@@ -15,7 +15,8 @@
 //	          /dev/tty, ur login's offer), never a harness's word: a consented, approval-capable device signs the
 //	          new key's KeyRegister, carrying the key's own signature over the body before field 9 (QD-086), and the
 //	          act's countersignature where this device registered a live key, which the act takes from the log's
-//	          presence row, never from a caller
+//	          presence row, never from a caller. What the authenticator's client answered as the key's attestation
+//	          (QD-730's map) is checked by VerifyPresenceAttestation first: one that fails registers nothing
 //	remove    RevokePresenceKey: KeyRevoke of one of the member's keys, on a confirmation alone, a presence key only
 //	          from a device that registered a live one of its own, the act countersigned
 //	list      PresenceKeys: the member's live presence keys, each with its registering device and position
@@ -49,7 +50,10 @@ type PresenceKeyHandle struct {
 	Alg bridge.KeyAlg
 	// A SEC 1 uncompressed point, 65 bytes (QD-445).
 	PublicKey []byte
-	// The raw attestation object, empty for none: clients ask for none until release roots ship (QD-137).
+	// KeyRegister.attestation's bytes for a webauthn-es256 key: EncodePresenceAttestation's map of the create ceremony's
+	// attestation object and its client data, the clientDataJSON a platform API returned or the JSON a CTAP2 client
+	// hashed (QD-730). Clients ask for none conveyance until release roots ship (QD-137), so the object is fmt none.
+	// Empty for an ecdsa-p256-sha256 key, which carries none, and for a client that kept none.
 	Attestation []byte
 }
 
@@ -255,6 +259,10 @@ func (self *Sidecar) RegisterPresenceKey(ctx context.Context, provider PresenceP
 		Attestation: bytes.Clone(handle.Attestation),
 		Purpose:     bridge.KeyPurpose_KEY_PURPOSE_PRESENCE,
 		NotAfter:    notAfter.UnixMilli(),
+	}
+	// the device about to sign refuses an attestation that fails, never signing it as asserted (§16.6's labels)
+	if _, err := VerifyPresenceAttestation(register, self.clock.Now().UnixMilli()); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrPresenceKeyInvalid, err)
 	}
 	// QD-086: the new key signs the body before field 9, header included, which AddSealed has set by now
 	err = act.AddSealed(bridge.SignedType_SIGNED_KEY_REGISTER, register, func(header *bridge.StatementHeader, statement proto.Message) error {

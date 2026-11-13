@@ -517,18 +517,22 @@ func (RepoAdminChange) EnumDescriptor() ([]byte, []int) {
 }
 
 type AclRows struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	HasDocument   bool                   `protobuf:"varint,1,opt,name=has_document,json=hasDocument,proto3" json:"has_document,omitempty"` // owner decisions 50, 105
-	Atoms         []*AclAtom             `protobuf:"bytes,2,rep,name=atoms,proto3" json:"atoms,omitempty"`                                 // §7.9's keyed tag and group ids -> member_ids, sidecar_ids
-	Rules         []*AclRule             `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
-	Requests      []*AclRequestRule      `protobuf:"bytes,4,rep,name=requests,proto3" json:"requests,omitempty"`
-	Repos         []*AclRepo             `protobuf:"bytes,5,rep,name=repos,proto3" json:"repos,omitempty"`
-	Bridge        []byte                 `protobuf:"bytes,6,opt,name=bridge,proto3" json:"bridge,omitempty"`                              // §17's id-only section
-	Audit         *AclAudit              `protobuf:"bytes,7,opt,name=audit,proto3" json:"audit,omitempty"`                                // owner decision 63; Team only
-	Suspensions   []*AclSuspension       `protobuf:"bytes,8,rep,name=suspensions,proto3" json:"suspensions,omitempty"`                    // active Suspends a fold kept (plan-ACL-folded-grant-state #1)
-	SpentGrants   []*AclSpentGrant       `protobuf:"bytes,9,rep,name=spent_grants,json=spentGrants,proto3" json:"spent_grants,omitempty"` // activated and revoked grant ids (plan-ACL-folded-grant-state #3)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	HasDocument bool                   `protobuf:"varint,1,opt,name=has_document,json=hasDocument,proto3" json:"has_document,omitempty"` // owner decisions 50, 105
+	Atoms       []*AclAtom             `protobuf:"bytes,2,rep,name=atoms,proto3" json:"atoms,omitempty"`                                 // §7.9's keyed tag and group ids -> member_ids, sidecar_ids
+	Rules       []*AclRule             `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
+	Requests    []*AclRequestRule      `protobuf:"bytes,4,rep,name=requests,proto3" json:"requests,omitempty"`
+	Repos       []*AclRepo             `protobuf:"bytes,5,rep,name=repos,proto3" json:"repos,omitempty"`
+	Bridge      []byte                 `protobuf:"bytes,6,opt,name=bridge,proto3" json:"bridge,omitempty"`                              // §17's id-only section
+	Audit       *AclAudit              `protobuf:"bytes,7,opt,name=audit,proto3" json:"audit,omitempty"`                                // owner decision 63; Team only
+	Suspensions []*AclSuspension       `protobuf:"bytes,8,rep,name=suspensions,proto3" json:"suspensions,omitempty"`                    // active Suspends a fold kept (plan-ACL-folded-grant-state #1)
+	SpentGrants []*AclSpentGrant       `protobuf:"bytes,9,rep,name=spent_grants,json=spentGrants,proto3" json:"spent_grants,omitempty"` // activated and revoked grant ids (plan-ACL-folded-grant-state #3)
+	// The document's effective evidenceDefault, compiled at each base as each AclRequestRule's evidence is: the
+	// ApprovalDecision.channel values accepted for an action no requests rule names (dns_set, dns_delete,
+	// bridge_expose); default all three (QD-727)
+	EvidenceDefault []uint32 `protobuf:"varint,10,rep,packed,name=evidence_default,json=evidenceDefault,proto3" json:"evidence_default,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *AclRows) Reset() {
@@ -620,6 +624,13 @@ func (x *AclRows) GetSuspensions() []*AclSuspension {
 func (x *AclRows) GetSpentGrants() []*AclSpentGrant {
 	if x != nil {
 		return x.SpentGrants
+	}
+	return nil
+}
+
+func (x *AclRows) GetEvidenceDefault() []uint32 {
+	if x != nil {
+		return x.EvidenceDefault
 	}
 	return nil
 }
@@ -1147,11 +1158,14 @@ func (x *AclRepo) GetHoldersShrunkAt() uint64 {
 	return 0
 }
 
+// A RepoAdmin{remove} stamps removed_at and keeps the row, so a reader judges the admin's right at a position before
+// its removal; the next base's compile drops a row whose removal its retention point has passed (QD-743).
 type AclRepoAdminRow struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SidecarId     []byte                 `protobuf:"bytes,1,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`
 	Signer        []byte                 `protobuf:"bytes,2,opt,name=signer,proto3" json:"signer,omitempty"`
 	At            uint64                 `protobuf:"varint,3,opt,name=at,proto3" json:"at,omitempty"`
+	RemovedAt     uint64                 `protobuf:"varint,4,opt,name=removed_at,json=removedAt,proto3" json:"removed_at,omitempty"` // the RepoAdmin{remove}'s position; 0 while the admin stands
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1203,6 +1217,13 @@ func (x *AclRepoAdminRow) GetSigner() []byte {
 func (x *AclRepoAdminRow) GetAt() uint64 {
 	if x != nil {
 		return x.At
+	}
+	return 0
+}
+
+func (x *AclRepoAdminRow) GetRemovedAt() uint64 {
+	if x != nil {
+		return x.RemovedAt
 	}
 	return 0
 }
@@ -1417,6 +1438,7 @@ type AclRepoDeletionRow struct {
 	Now           bool                   `protobuf:"varint,2,opt,name=now,proto3" json:"now,omitempty"`
 	DeletedAt     uint64                 `protobuf:"varint,3,opt,name=deleted_at,json=deletedAt,proto3" json:"deleted_at,omitempty"`
 	RestoredAt    uint64                 `protobuf:"varint,4,opt,name=restored_at,json=restoredAt,proto3" json:"restored_at,omitempty"`
+	DeletedTimeMs int64                  `protobuf:"varint,5,opt,name=deleted_time_ms,json=deletedTimeMs,proto3" json:"deleted_time_ms,omitempty"` // the RepoDelete entry's time_ms, which RepoRestore's 7 days and §11.12's
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1475,6 +1497,13 @@ func (x *AclRepoDeletionRow) GetDeletedAt() uint64 {
 func (x *AclRepoDeletionRow) GetRestoredAt() uint64 {
 	if x != nil {
 		return x.RestoredAt
+	}
+	return 0
+}
+
+func (x *AclRepoDeletionRow) GetDeletedTimeMs() int64 {
+	if x != nil {
+		return x.DeletedTimeMs
 	}
 	return 0
 }
@@ -2549,7 +2578,7 @@ var File_protocol_acl_proto protoreflect.FileDescriptor
 
 const file_protocol_acl_proto_rawDesc = "" +
 	"\n" +
-	"\x12protocol/acl.proto\x12\x11urnetwork.sidecar\x1a\x1aprotocol/bridge/auth.proto\x1a\x1cprotocol/bridge/signed.proto\"\xd5\x03\n" +
+	"\x12protocol/acl.proto\x12\x11urnetwork.sidecar\x1a\x1aprotocol/bridge/auth.proto\x1a\x1cprotocol/bridge/signed.proto\"\x80\x04\n" +
 	"\aAclRows\x12!\n" +
 	"\fhas_document\x18\x01 \x01(\bR\vhasDocument\x120\n" +
 	"\x05atoms\x18\x02 \x03(\v2\x1a.urnetwork.sidecar.AclAtomR\x05atoms\x120\n" +
@@ -2559,7 +2588,9 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x06bridge\x18\x06 \x01(\fR\x06bridge\x121\n" +
 	"\x05audit\x18\a \x01(\v2\x1b.urnetwork.sidecar.AclAuditR\x05audit\x12B\n" +
 	"\vsuspensions\x18\b \x03(\v2 .urnetwork.sidecar.AclSuspensionR\vsuspensions\x12C\n" +
-	"\fspent_grants\x18\t \x03(\v2 .urnetwork.sidecar.AclSpentGrantR\vspentGrants\"\x80\x02\n" +
+	"\fspent_grants\x18\t \x03(\v2 .urnetwork.sidecar.AclSpentGrantR\vspentGrants\x12)\n" +
+	"\x10evidence_default\x18\n" +
+	" \x03(\rR\x0fevidenceDefault\"\x80\x02\n" +
 	"\aAclAtom\x12\x12\n" +
 	"\x04atom\x18\x01 \x01(\fR\x04atom\x12\x1d\n" +
 	"\n" +
@@ -2611,12 +2642,14 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\bdeletion\x18\t \x01(\v2%.urnetwork.sidecar.AclRepoDeletionRowR\bdeletion\x129\n" +
 	"\x04lock\x18\n" +
 	" \x01(\x0e2%.urnetwork.sidecar.RepoVersioningLockR\x04lock\x12*\n" +
-	"\x11holders_shrunk_at\x18\v \x01(\x04R\x0fholdersShrunkAt\"X\n" +
+	"\x11holders_shrunk_at\x18\v \x01(\x04R\x0fholdersShrunkAt\"w\n" +
 	"\x0fAclRepoAdminRow\x12\x1d\n" +
 	"\n" +
 	"sidecar_id\x18\x01 \x01(\fR\tsidecarId\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
-	"\x02at\x18\x03 \x01(\x04R\x02at\"\xa3\x01\n" +
+	"\x02at\x18\x03 \x01(\x04R\x02at\x12\x1d\n" +
+	"\n" +
+	"removed_at\x18\x04 \x01(\x04R\tremovedAt\"\xa3\x01\n" +
 	"\x0fAclRepoGrantRow\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\fR\asubject\x124\n" +
 	"\x04role\x18\x02 \x01(\x0e2 .urnetwork.sidecar.RepoGrantRoleR\x04role\x12\x18\n" +
@@ -2631,7 +2664,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x10AclRepoRevokeRow\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\fR\asubject\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
-	"\x02at\x18\x03 \x01(\x04R\x02at\"\x87\x01\n" +
+	"\x02at\x18\x03 \x01(\x04R\x02at\"\xaf\x01\n" +
 	"\x12AclRepoDeletionRow\x12\x1f\n" +
 	"\vdeletion_id\x18\x01 \x01(\fR\n" +
 	"deletionId\x12\x10\n" +
@@ -2639,7 +2672,8 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\n" +
 	"deleted_at\x18\x03 \x01(\x04R\tdeletedAt\x12\x1f\n" +
 	"\vrestored_at\x18\x04 \x01(\x04R\n" +
-	"restoredAt\"\x89\x01\n" +
+	"restoredAt\x12&\n" +
+	"\x0fdeleted_time_ms\x18\x05 \x01(\x03R\rdeletedTimeMs\"\x89\x01\n" +
 	"\bAclAudit\x12!\n" +
 	"\freader_atoms\x18\x01 \x03(\fR\vreaderAtoms\x12\x1d\n" +
 	"\n" +

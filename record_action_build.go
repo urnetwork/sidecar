@@ -10,10 +10,12 @@
 // kind's column of the table (QD-064): CheckCanonicalActionForServer.
 //
 // The builder takes both of QD-740's forms. A kind that binds a local port, a weight or ALPNs builds its action
-// without them: they are the request's, which the caller hands the gate as SidecarAction.Detail. A dial or route
-// grant, bridge_forward's at version 4, and an access request to a worker's port carry sealed_detail, which the caller
-// seals first (NewSealedCanonicalAction, record_action_detail.go): the builder holds it to the sealed-body layout and
-// holds every clear grant_dst to a subject alone, so no action it answers shows a server a prefix or a port.
+// without them: they are the request's, which the caller hands the gate as SidecarAction.Detail, and so is a listen's
+// socket name (QD-772), its action naming the socket by grant_dst alone (SocketListenGrantDst). A dial or route
+// grant, bridge_forward's at version 4, and an access request to a worker's port carry sealed_detail, which
+// NewSealedCanonicalAction (record_action_detail.go) seals once the clear fields are final, bound to them (QD-771;
+// canonicalActionClearBytes here): the builder holds it to the sealed-body layout and holds every clear grant_dst to a
+// subject alone, so no action it answers shows a server a prefix or a port.
 //
 // Package-level functions are safe for concurrent use.
 
@@ -77,10 +79,7 @@ func newCanonicalAction(action *protocol.CanonicalAction, known func(version uin
 	if len(built.ProtoReflect().GetUnknown()) != 0 {
 		return nil, fmt.Errorf("%w: a field this build cannot name", ErrCanonicalActionInvalid)
 	}
-	version := built.GetVersion()
-	if version == 0 {
-		version = row.Versions[0]
-	}
+	version := canonicalActionBuildVersion(built, row)
 	if !slices.Contains(row.Versions, version) {
 		return nil, fmt.Errorf("%w: kind %d at version %d", ErrCanonicalActionInvalid, action.GetKind(), version)
 	}
@@ -130,6 +129,33 @@ func newCanonicalAction(action *protocol.CanonicalAction, known func(version uin
 		return nil, fmt.Errorf("%w: %v", ErrCanonicalActionInvalid, err)
 	}
 	return parseStoredCanonicalAction(stored, known)
+}
+
+// The version an action of row's kind is built at: its own, or the kind's default, the row's first, where it sets
+// none (0).
+func canonicalActionBuildVersion(action *protocol.CanonicalAction, row *CanonicalActionKindFields) uint32 {
+	if version := action.GetVersion(); version != 0 || len(row.Versions) == 0 {
+		return version
+	}
+	return row.Versions[0]
+}
+
+// clear's bytes as the builder stores them, before its detail is sealed: sealed_detail left out and the version fixed
+// as NewCanonicalAction fixes it, deterministically encoded, field by field in number order. Field 38 being
+// CanonicalAction's last, the stored action is these bytes and its sealed_detail after them, so the context a detail
+// is sealed to here is the one its stored bytes derive (CanonicalActionDetailSealContext). The caller's message is
+// not changed.
+func canonicalActionClearBytes(clear *protocol.CanonicalAction) ([]byte, error) {
+	final := proto.Clone(clear).(*protocol.CanonicalAction)
+	final.SealedDetail = nil
+	if row, ok := CanonicalActionFields(SidecarActionKind(final.GetKind())); ok {
+		final.Version = canonicalActionBuildVersion(final, row)
+	}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(final)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCanonicalActionInvalid, err)
+	}
+	return encoded, nil
 }
 
 // Whether use falls inside template (§16.6's multi-use row): template is a scope = true action, use a full one of
@@ -210,15 +236,19 @@ func CanonicalActionRisk(action *StoredCanonicalAction, policy SidecarRisk, agen
 
 // Holds an action a GrantActivate or a gate carries to its kind's server column (QD-064): kind, version, scope and
 // the column's fields, nothing more, so recipients, previews and paths never reach a server even from a builder that
-// filled them. A kind no server path takes is refused. api, every reader's GrantActivate check and each gate run this
-// on the stored bytes, after ParseStoredCanonicalAction.
+// filled them, nor a field this build cannot name, such as a listen's name at its old 23 (QD-772), whose listen
+// passes on the grant's fields alone. A kind no server path takes is refused. api, every reader's GrantActivate check
+// and each gate run this on the stored bytes, after ParseStoredCanonicalAction.
 func CheckCanonicalActionForServer(action *StoredCanonicalAction) error {
-	if action == nil {
+	if action == nil || action.Action == nil {
 		return fmt.Errorf("%w: no action", ErrCanonicalActionInvalid)
 	}
 	row, ok := CanonicalActionFields(SidecarActionKind(action.Action.GetKind()))
 	if !ok || len(row.Server) == 0 {
 		return fmt.Errorf("%w: kind %d takes no server path", ErrCanonicalActionInvalid, action.Action.GetKind())
+	}
+	if len(action.Action.ProtoReflect().GetUnknown()) != 0 {
+		return fmt.Errorf("%w: a field this build cannot name on a server path", ErrCanonicalActionInvalid)
 	}
 	for _, number := range setFieldNumbers(action.Action.ProtoReflect()) {
 		if !row.serverAllows(number) {

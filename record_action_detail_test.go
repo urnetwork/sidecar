@@ -1,14 +1,18 @@
 //go:build !ios_extension
 
 // QD-740's sealed form (record_action_detail.go): each kind's clear bytes hold no port or prefix; a detail round-trips
-// under its seal and is held to its action; and a version-3 access request's port rides sealed. How a request binds
-// its local port, weight and ALPNs, and how an approver and a spender treat a sealed grant, are
-// record_approval_detail_test.go's. Synthetic values only.
+// under its seal and is held to its action; and a version-3 access request's port rides sealed. QD-771's binding: a
+// detail is sealed beside its action's own clear fields, its context derived from the stored bytes alone, so it opens
+// beside those fields and in that network and beside no other. How a request binds its local port, weight and ALPNs,
+// and how an approver and a spender treat a sealed grant, are record_approval_detail_test.go's; section 20's detail
+// vectors are record_hash_test.go's and record_action_detail_vectors_test.go's. Synthetic values only.
 
 package sidecar
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
 	"errors"
 	"slices"
 	"strings"
@@ -21,18 +25,18 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// An approver's device that holds the test key's generations.
+// An approver's device in a network that holds the test key's generations.
 type testActionDetailOpener struct {
 	generations []uint64
-	context     *ConfigSealContext
+	networkId   Id
 }
 
 func newTestActionDetailOpener(generations ...uint64) *testActionDetailOpener {
-	return &testActionDetailOpener{generations: generations, context: testActionDetailContext()}
+	return &testActionDetailOpener{generations: generations, networkId: testActionDetailNetworkId()}
 }
 
 func (self *testActionDetailOpener) OpenActionDetail(action *StoredCanonicalAction) (*protocol.CanonicalActionDetail, error) {
-	return OpenCanonicalActionDetail(action, self.context, func(generation uint64) *EvsRepoKey {
+	return OpenCanonicalActionDetail(action, self.networkId, func(generation uint64) *EvsRepoKey {
 		if !slices.Contains(self.generations, generation) {
 			return nil
 		}
@@ -40,7 +44,15 @@ func (self *testActionDetailOpener) OpenActionDetail(action *StoredCanonicalActi
 	})
 }
 
-// The test's forward, built as a daemon builds it: its clear fields and its detail, sealed.
+// A daemon's device that seals a grant's detail as Sidecar.SealActionDetail does: under the test key's generation, in
+// the test's network.
+type testActionDetailSealer struct{}
+
+func (self testActionDetailSealer) SealActionDetail(ctx context.Context, clear *protocol.CanonicalAction, detail *protocol.CanonicalActionDetail) (*StoredCanonicalAction, error) {
+	return NewSealedCanonicalAction(clear, detail, testConfigSealKey(testActionDetailGeneration), testActionDetailNetworkId(), nil)
+}
+
+// The test's forward, built as a daemon builds it: its clear fields, then its detail sealed beside them.
 func testSealedForward(t *testing.T) *StoredCanonicalAction {
 	t.Helper()
 	return testSealedForwardExpiring(t, testBuildableActions()["bridge_forward"].GetExpiresMillis())
@@ -53,17 +65,29 @@ func testSealedForwardExpiring(t *testing.T, expiresMs int64) *StoredCanonicalAc
 	clear.SealedDetail = nil
 	clear.ExpiresMillis = expiresMs
 	stored, err := NewSealedCanonicalAction(clear, testForwardDetail(), testConfigSealKey(testActionDetailGeneration),
-		testActionDetailContext(), bytes.NewReader(bytes.Repeat([]byte{0x24}, 24)))
+		testActionDetailNetworkId(), testActionDetailRandom())
 	if err != nil {
 		t.Fatal(err)
 	}
 	return stored
 }
 
-// The field numbers on stored's wire, top level, in the order written.
-func testWireFieldNumbers(t *testing.T, stored []byte) []protowire.Number {
+// The test's version-3 access request as stored, its detail sealed beside its clear fields, parsed as a build that
+// knows version 3 parses it.
+func testSealedAccessRequest(t *testing.T) *StoredCanonicalAction {
 	t.Helper()
-	numbers := []protowire.Number{}
+	stored, err := parseStoredCanonicalAction(testRecordStored(t, testRecordAccessRequestAction()), testRecordVersionsKnown(1, 3, 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stored
+}
+
+// stored's tag-and-value records, top level, in the order written. Here rather than record_hash_test.go's
+// testRecordFields, which the js legs leave out with the file.
+func testWireRecords(t *testing.T, stored []byte) [][]byte {
+	t.Helper()
+	records := [][]byte{}
 	for 0 < len(stored) {
 		number, wireType, tagByteCount := protowire.ConsumeTag(stored)
 		if tagByteCount < 0 {
@@ -73,10 +97,36 @@ func testWireFieldNumbers(t *testing.T, stored []byte) []protowire.Number {
 		if valueByteCount < 0 {
 			t.Fatal(protowire.ParseError(valueByteCount))
 		}
-		numbers = append(numbers, number)
+		records = append(records, stored[:tagByteCount+valueByteCount])
 		stored = stored[tagByteCount+valueByteCount:]
 	}
+	return records
+}
+
+// The field numbers on stored's wire, top level, in the order written.
+func testWireFieldNumbers(t *testing.T, stored []byte) []protowire.Number {
+	t.Helper()
+	numbers := []protowire.Number{}
+	for _, record := range testWireRecords(t, stored) {
+		number, _, _ := protowire.ConsumeTag(record)
+		numbers = append(numbers, number)
+	}
 	return numbers
+}
+
+// stored's tag-and-value records cut in two: every one but field 38's, in the order written, and field 38's.
+func testCutDetailRecords(t *testing.T, stored []byte) ([]byte, [][]byte) {
+	t.Helper()
+	clear := []byte{}
+	detailRecords := [][]byte{}
+	for _, record := range testWireRecords(t, stored) {
+		if number, _, _ := protowire.ConsumeTag(record); number == canonicalActionFieldSealedDetail {
+			detailRecords = append(detailRecords, record)
+			continue
+		}
+		clear = append(clear, record...)
+	}
+	return clear, detailRecords
 }
 
 // Each kind's clear bytes hold no port or prefix: no action carries local_port's, weight's or alpn's old numbers; an
@@ -168,7 +218,8 @@ func TestEveryKindsClearBytesHoldNoPortOrPrefix(t *testing.T) {
 	}
 }
 
-// A detail opens to what was sealed, under the generation it names and what it was sealed to, and to nothing else.
+// A detail opens to what was sealed, under the generation it names, in its network and under SIGNED_GRANT_ACTIVATE,
+// and to nothing else.
 func TestCanonicalActionDetailRoundTrip(t *testing.T) {
 	stored := testSealedForward(t)
 	if !bytes.Equal(stored.Bytes, buildTestAction(t, testBuildableActions()["bridge_forward"]).Bytes) {
@@ -187,15 +238,33 @@ func TestCanonicalActionDetailRoundTrip(t *testing.T) {
 	if _, err := newTestActionDetailOpener(1, 2).OpenActionDetail(stored); !errors.Is(err, ErrConfigSealGenerationMissing) {
 		t.Errorf("a device without the generation: %v", err)
 	}
-	elsewhere := newTestActionDetailOpener(testActionDetailGeneration)
-	elsewhere.context.NetworkId = testConfigId("another network").Bytes()
-	if _, err := elsewhere.OpenActionDetail(stored); !errors.Is(err, ErrConfigSealInvalid) {
-		t.Errorf("another network's context: %v", err)
+	if _, err := OpenCanonicalActionDetail(stored, testActionDetailNetworkId(), nil); !errors.Is(err, ErrConfigSealGenerationMissing) {
+		t.Errorf("a device holding no generation: %v", err)
 	}
-	otherType := newTestActionDetailOpener(testActionDetailGeneration)
-	otherType.context.SignedType = bridge.SignedType_SIGNED_INDEXER_SET
-	if _, err := otherType.OpenActionDetail(stored); !errors.Is(err, ErrConfigSealInvalid) {
-		t.Errorf("another signed type's context: %v", err)
+	elsewhere := newTestActionDetailOpener(testActionDetailGeneration)
+	elsewhere.networkId = testConfigId("another network")
+	if _, err := elsewhere.OpenActionDetail(stored); !errors.Is(err, ErrConfigSealInvalid) {
+		t.Errorf("another network: %v", err)
+	}
+	// sealed under another signed type, with this action's own nonce and network, it opens under none
+	otherTypeContext, err := CanonicalActionDetailSealContext(testActionDetailNetworkId(), stored.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherTypeContext.SignedType != bridge.SignedType_SIGNED_GRANT_ACTIVATE {
+		t.Errorf("the derived context's type is %s", otherTypeContext.SignedType)
+	}
+	otherTypeContext.SignedType = bridge.SignedType_SIGNED_INDEXER_SET
+	otherType := proto.Clone(stored.Action).(*protocol.CanonicalAction)
+	if otherType.SealedDetail, err = SealConfigBody(testConfigSealKey(testActionDetailGeneration), otherTypeContext, testForwardDetail(), nil); err != nil {
+		t.Fatal(err)
+	}
+	carried, err := NewCanonicalAction(otherType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newTestActionDetailOpener(testActionDetailGeneration).OpenActionDetail(carried); !errors.Is(err, ErrConfigSealInvalid) {
+		t.Errorf("another signed type: %v", err)
 	}
 	// an action with no detail opens to none
 	plain := buildTestAction(t, testBuildableActions()["dns_set"])
@@ -205,21 +274,169 @@ func TestCanonicalActionDetailRoundTrip(t *testing.T) {
 	// two seals of one detail differ, each naming its own nonce
 	clear := proto.Clone(testBuildableActions()["bridge_forward"]).(*protocol.CanonicalAction)
 	clear.SealedDetail = nil
-	fresh, err := NewSealedCanonicalAction(clear, testForwardDetail(), testConfigSealKey(testActionDetailGeneration), testActionDetailContext(), nil)
+	fresh, err := NewSealedCanonicalAction(clear, testForwardDetail(), testConfigSealKey(testActionDetailGeneration), testActionDetailNetworkId(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Equal(fresh.Bytes, stored.Bytes) {
 		t.Error("a random nonce gave the fixed one's bytes")
 	}
-	if _, err := NewSealedCanonicalAction(fresh.Action, testForwardDetail(), testConfigSealKey(testActionDetailGeneration), testActionDetailContext(), nil); !errors.Is(err, ErrCanonicalActionInvalid) {
+	if _, err := NewSealedCanonicalAction(fresh.Action, testForwardDetail(), testConfigSealKey(testActionDetailGeneration), testActionDetailNetworkId(), nil); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("sealing a sealed action: %v", err)
+	}
+	if _, err := NewSealedCanonicalAction(clear, testForwardDetail(), testConfigSealKey(testActionDetailGeneration), Id{}, nil); !errors.Is(err, ErrCanonicalActionInvalid) {
+		t.Errorf("sealing in no network: %v", err)
+	}
+}
+
+// The context is the action's own (QD-771): SIGNED_GRANT_ACTIVATE, the network, and the first 16 bytes of SHA-256 over
+// the stored bytes with the field-38 record cut out, every other byte as stored, which for the builder's bytes is the
+// clear fields' deterministic encoding. With or without its detail, and wherever the detail's record stands, an action
+// derives one context; its clear fields reordered derive another, since nothing is re-encoded; and bytes that are not
+// the wire format, a detail stored twice and a zero network derive none.
+func TestCanonicalActionDetailSealContextIsTheClearFieldsAsStored(t *testing.T) {
+	networkId := testActionDetailNetworkId()
+	for name, stored := range map[string]*StoredCanonicalAction{
+		"version 4": testSealedForward(t), "version 3": testSealedAccessRequest(t),
+	} {
+		clear, detailRecords := testCutDetailRecords(t, stored.Bytes)
+		if len(detailRecords) != 1 {
+			t.Fatalf("%s: %d detail records", name, len(detailRecords))
+		}
+		clearSha256 := sha256.Sum256(clear)
+		derived, err := CanonicalActionDetailSealContext(networkId, stored.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if derived.SignedType != bridge.SignedType_SIGNED_GRANT_ACTIVATE || !bytes.Equal(derived.NetworkId, networkId.Bytes()) ||
+			!bytes.Equal(derived.Nonce, clearSha256[:16]) {
+			t.Errorf("%s: the derived context %+v", name, derived)
+		}
+		// the builder writes the clear fields in number order and the detail after them
+		clearAction := proto.Clone(stored.Action).(*protocol.CanonicalAction)
+		clearAction.SealedDetail = nil
+		if !bytes.Equal(clear, testRecordStored(t, clearAction)) || !bytes.HasSuffix(stored.Bytes, detailRecords[0]) {
+			t.Errorf("%s: the stored bytes are not the clear fields' encoding and the detail after them", name)
+		}
+		// a daemon derives from the clear bytes alone before it seals; a detail written first derives the same
+		for what, bytesOf := range map[string][]byte{
+			"the clear bytes":          clear,
+			"the detail written first": slices.Concat(detailRecords[0], clear),
+		} {
+			again, err := CanonicalActionDetailSealContext(networkId, bytesOf)
+			if err != nil || !bytes.Equal(again.Nonce, derived.Nonce) {
+				t.Errorf("%s, %s: %+v, %v", name, what, again, err)
+			}
+		}
+		// the same clear fields reordered, the first two swapped: protobuf reads them alike, and they derive another
+		// nonce
+		records := testWireRecords(t, stored.Bytes)
+		records[0], records[1] = records[1], records[0]
+		if reordered, err := CanonicalActionDetailSealContext(networkId, bytes.Join(records, nil)); err != nil || bytes.Equal(reordered.Nonce, derived.Nonce) {
+			t.Errorf("%s: the clear fields reordered derive %+v, %v", name, reordered, err)
+		}
+		for what, bytesOf := range map[string][]byte{
+			"a detail stored twice": slices.Concat(stored.Bytes, detailRecords[0]),
+			"bytes cut short":       stored.Bytes[:len(stored.Bytes)-1],
+			"a tag of field 0":      slices.Concat(stored.Bytes, []byte{0x00}),
+		} {
+			if _, err := CanonicalActionDetailSealContext(networkId, bytesOf); !errors.Is(err, ErrCanonicalActionInvalid) {
+				t.Errorf("%s, %s: %v", name, what, err)
+			}
+		}
+		if _, err := CanonicalActionDetailSealContext(Id{}, stored.Bytes); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("%s in no network: %v", name, err)
+		}
+	}
+}
+
+// A detail opens beside the clear fields it was sealed with, and beside no action that differs in one bound field:
+// subject, rule, destination, expiry, allow, scope, kind and version, and for version 3 its repo and target, nor in
+// another network. Each altered action a parser takes is refused by the AEAD before the detail's own check, which a
+// destination added beside the detail's would pass; one at another kind or version, which no parser takes beside the
+// detail's version, is refused by the AEAD as well, so the binding does not rest on the parsers alone.
+func TestCanonicalActionDetailOpensBesideItsOwnClearFieldsAlone(t *testing.T) {
+	known := testRecordVersionsKnown(1, 3, 4)
+	opener := newTestActionDetailOpener(testActionDetailGeneration)
+	other := "sidecar:6162636465666768696a6b6c6d6e6f70"
+	elsewhere := newTestActionDetailOpener(testActionDetailGeneration)
+	elsewhere.networkId = testConfigId("another network")
+	cases := map[string]struct {
+		stored  *StoredCanonicalAction
+		detail  *protocol.CanonicalActionDetail
+		changes map[string]func(action *protocol.CanonicalAction)
+		// a kind and a version no parser takes beside this one's detail
+		otherKind    SidecarActionKind
+		otherVersion uint32
+	}{
+		"version 4": {
+			stored: testSealedForward(t), detail: testForwardDetail(),
+			changes: map[string]func(action *protocol.CanonicalAction){
+				"subject":            func(action *protocol.CanonicalAction) { action.Subject = bytes.Repeat([]byte{0x57}, 16) },
+				"rule":               func(action *protocol.CanonicalAction) { action.RuleId = bytes.Repeat([]byte{0x56}, 16) },
+				"destination":        func(action *protocol.CanonicalAction) { action.GrantDst = []string{other} },
+				"destination beside": func(action *protocol.CanonicalAction) { action.GrantDst = append(action.GrantDst, other) },
+				"expiry":             func(action *protocol.CanonicalAction) { action.ExpiresMillis += 1 },
+				"allow":              func(action *protocol.CanonicalAction) { action.GrantAllow = []string{"route"} },
+				"scope":              func(action *protocol.CanonicalAction) { action.Scope = true },
+			},
+			otherKind: SidecarActionAccessRequest, otherVersion: canonicalActionVersionAccessRequest,
+		},
+		"version 3": {
+			stored: testSealedAccessRequest(t), detail: testRecordAccessRequestDetail(),
+			changes: map[string]func(action *protocol.CanonicalAction){
+				"subject":            func(action *protocol.CanonicalAction) { action.Subject = bytes.Repeat([]byte{0x57}, 16) },
+				"repo":               func(action *protocol.CanonicalAction) { action.RepoId = bytes.Repeat([]byte{0x56}, 16) },
+				"target":             func(action *protocol.CanonicalAction) { action.TargetSidecarId = bytes.Repeat([]byte{0x55}, 16) },
+				"destination":        func(action *protocol.CanonicalAction) { action.GrantDst = []string{other} },
+				"destination beside": func(action *protocol.CanonicalAction) { action.GrantDst = append(action.GrantDst, other) },
+				"expiry":             func(action *protocol.CanonicalAction) { action.ExpiresMillis += 1 },
+				"allow":              func(action *protocol.CanonicalAction) { action.GrantAllow = []string{"read"} },
+				"scope":              func(action *protocol.CanonicalAction) { action.Scope = true },
+			},
+			otherKind: SidecarActionForward, otherVersion: canonicalActionVersionSealedGrant,
+		},
+	}
+	for name, c := range cases {
+		opened, err := opener.OpenActionDetail(c.stored)
+		if err != nil || !proto.Equal(opened, c.detail) {
+			t.Errorf("%s beside its own clear fields: %+v, %v", name, opened, err)
+		}
+		if _, err := elsewhere.OpenActionDetail(c.stored); !errors.Is(err, ErrConfigSealInvalid) {
+			t.Errorf("%s in another network: %v", name, err)
+		}
+		for field, change := range c.changes {
+			altered := proto.Clone(c.stored.Action).(*protocol.CanonicalAction)
+			change(altered)
+			parsed, err := parseStoredCanonicalAction(testRecordStored(t, altered), known)
+			if err != nil {
+				t.Fatalf("%s, another %s: the parse refused it, %v", name, field, err)
+			}
+			if _, err := opener.OpenActionDetail(parsed); !errors.Is(err, ErrConfigSealInvalid) {
+				t.Errorf("%s beside another %s: %v", name, field, err)
+			}
+		}
+		for field, change := range map[string]func(action *protocol.CanonicalAction){
+			"kind":    func(action *protocol.CanonicalAction) { action.Kind = uint32(c.otherKind) },
+			"version": func(action *protocol.CanonicalAction) { action.Version = c.otherVersion },
+		} {
+			altered := proto.Clone(c.stored.Action).(*protocol.CanonicalAction)
+			change(altered)
+			alteredBytes := testRecordStored(t, altered)
+			if _, err := parseStoredCanonicalAction(alteredBytes, known); err == nil {
+				t.Errorf("%s at another %s: a parser took it", name, field)
+			}
+			unparsed := &StoredCanonicalAction{Action: altered, Bytes: alteredBytes}
+			if _, err := opener.OpenActionDetail(unparsed); !errors.Is(err, ErrConfigSealInvalid) {
+				t.Errorf("%s beside another %s: %v", name, field, err)
+			}
+		}
 	}
 }
 
 // A detail is held to its action: it holds something, its port is one, its prefixes read in one form, its
 // destinations each name a port or a prefix, and a sidecar it names a port of is one the clear grant_dst names; a
-// detail sealed for one action and carried by another is refused where it is opened.
+// detail sealed beside an action it is not held to is refused where it is opened, after its AEAD passes.
 func TestCanonicalActionDetailHeldToItsAction(t *testing.T) {
 	action := testBuildableActions()["bridge_forward"]
 	other := "sidecar:6162636465666768696a6b6c6d6e6f70"
@@ -265,23 +482,20 @@ func TestCanonicalActionDetailHeldToItsAction(t *testing.T) {
 	clear := proto.Clone(action).(*protocol.CanonicalAction)
 	clear.SealedDetail = nil
 	stray := &protocol.CanonicalActionDetail{GrantDst: []string{other + ":tcp:22"}}
-	if _, err := NewSealedCanonicalAction(clear, stray, testConfigSealKey(testActionDetailGeneration), testActionDetailContext(), nil); !errors.Is(err, ErrCanonicalActionDetailInvalid) {
+	if _, err := NewSealedCanonicalAction(clear, stray, testConfigSealKey(testActionDetailGeneration), testActionDetailNetworkId(), nil); !errors.Is(err, ErrCanonicalActionDetailInvalid) {
 		t.Errorf("another sidecar's port: %v", err)
 	}
-	// and one sealed well for another action, then carried by this one, is refused where it is opened
-	moved := proto.Clone(action).(*protocol.CanonicalAction)
-	moved.SealedDetail = testSealActionDetail(stray)
-	carried, err := NewCanonicalAction(moved)
+	// and one a device sealed beside this action's own fields though it names another sidecar's port opens, and is
+	// refused there
+	strayed, err := NewCanonicalAction(testWithSealedDetail(proto.Clone(clear).(*protocol.CanonicalAction), stray))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newTestActionDetailOpener(testActionDetailGeneration).OpenActionDetail(carried); !errors.Is(err, ErrCanonicalActionDetailInvalid) {
-		t.Errorf("a detail carried by another action: %v", err)
+	if _, err := newTestActionDetailOpener(testActionDetailGeneration).OpenActionDetail(strayed); !errors.Is(err, ErrCanonicalActionDetailInvalid) {
+		t.Errorf("a detail not held to the action it is sealed beside: %v", err)
 	}
 	// a sealed body that holds no detail at all
-	empty := proto.Clone(action).(*protocol.CanonicalAction)
-	empty.SealedDetail = testSealActionDetail(&protocol.CanonicalActionDetail{})
-	hollow, err := NewCanonicalAction(empty)
+	hollow, err := NewCanonicalAction(testWithSealedDetail(proto.Clone(clear).(*protocol.CanonicalAction), &protocol.CanonicalActionDetail{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,17 +511,17 @@ func TestAccessRequestPortRidesSealed(t *testing.T) {
 	known := testRecordVersionsKnown(1, 3, 4)
 	clear := testRecordAccessRequestAction()
 	clear.SealedDetail = nil
-	random := func() *bytes.Reader {
-		return bytes.NewReader(bytes.Repeat([]byte{0x24}, 24))
-	}
 	stored, err := newSealedCanonicalAction(clear, testRecordAccessRequestDetail(), testConfigSealKey(testActionDetailGeneration),
-		testActionDetailContext(), random(), known)
+		testActionDetailNetworkId(), testActionDetailRandom(), known)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stored.Action.GetVersion() != 3 || stored.Action.GetTargetPort() != 0 || len(stored.Action.GetSealedDetail()) == 0 ||
 		!slices.Equal(stored.Action.GetGrantDst(), []string{testRecordWorkerDst}) {
 		t.Errorf("the stored access request: %+v", stored.Action)
+	}
+	if !bytes.Equal(stored.Bytes, testSealedAccessRequest(t).Bytes) {
+		t.Error("the sealed builder and the test's fixture differ on one access request")
 	}
 	if slices.Contains(testWireFieldNumbers(t, stored.Bytes), 27) || bytes.Contains(stored.Bytes, []byte(":tcp:")) {
 		t.Error("the port shows in the clear")
@@ -326,13 +540,13 @@ func TestAccessRequestPortRidesSealed(t *testing.T) {
 	numbered := proto.Clone(clear).(*protocol.CanonicalAction)
 	numbered.TargetPort = 22
 	if _, err := newSealedCanonicalAction(numbered, testRecordAccessRequestDetail(), testConfigSealKey(testActionDetailGeneration),
-		testActionDetailContext(), random(), known); !errors.Is(err, ErrCanonicalActionInvalid) {
+		testActionDetailNetworkId(), testActionDetailRandom(), known); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("a clear target_port: %v", err)
 	}
 	texted := proto.Clone(clear).(*protocol.CanonicalAction)
 	texted.GrantDst = []string{testRecordWorkerDst + ":tcp:22"}
 	if _, err := newSealedCanonicalAction(texted, testRecordAccessRequestDetail(), testConfigSealKey(testActionDetailGeneration),
-		testActionDetailContext(), random(), known); !errors.Is(err, ErrCanonicalActionInvalid) {
+		testActionDetailNetworkId(), testActionDetailRandom(), known); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("clear port text: %v", err)
 	}
 	numbered.Version, numbered.SealedDetail = 3, stored.Action.GetSealedDetail()
@@ -341,7 +555,7 @@ func TestAccessRequestPortRidesSealed(t *testing.T) {
 	}
 	// this build's approvers do not know version 3 yet
 	if _, err := NewSealedCanonicalAction(clear, testRecordAccessRequestDetail(), testConfigSealKey(testActionDetailGeneration),
-		testActionDetailContext(), random()); !errors.Is(err, ErrCanonicalActionVersionUnknown) {
+		testActionDetailNetworkId(), testActionDetailRandom()); !errors.Is(err, ErrCanonicalActionVersionUnknown) {
 		t.Errorf("version 3 in production: %v", err)
 	}
 	if _, err := ParseStoredCanonicalAction(stored.Bytes); !errors.Is(err, ErrCanonicalActionVersionUnknown) {

@@ -128,11 +128,11 @@ func EvsRepoKindRecordClass(kind protocol.RepoKind) bool {
 	return kind != protocol.RepoKind_REPO_KIND_GENERAL && kind != protocol.RepoKind_REPO_KIND_CONFIG
 }
 
-// Whether sidecarId is one of the repo's admins in state: its access log's RepoAdmins, and for the config repo its
-// writers.
+// Whether sidecarId is one of the repo's admins in state: its access log's RepoAdmins that stand, and for the config
+// repo its writers.
 func evsRepoAdmin(state GkmAuthView, repo *protocol.AclRepo, sidecarId Id) bool {
 	for _, admin := range repo.GetAdmins() {
-		if bytes.Equal(admin.GetSidecarId(), sidecarId.Bytes()) {
+		if AclRepoAdminStands(admin) && bytes.Equal(admin.GetSidecarId(), sidecarId.Bytes()) {
 			return true
 		}
 	}

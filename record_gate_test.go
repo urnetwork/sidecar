@@ -480,17 +480,25 @@ func TestDeniedAndNoLookupRefuse(t *testing.T) {
 
 // CORE-M3-01's TestEveryKindReachesGate on the real gate: every kind of §5.4's list reaches it through
 // Sidecar.Authorize, and none passes without a decision. A kind with a row in the kind table files its request and
-// waits; one with none is refused as the action it cannot parse.
+// waits; one with none is refused as the action it cannot parse. A listen's request always names its socket, the one
+// its action's grant_dst names (QD-772), so a listen asks with both.
 func TestEveryKindReachesRealGate(t *testing.T) {
 	world := newTestApprovalWorld(t)
 	sidecar, _, _ := newIdentityTestSidecar(t)
 	defer sidecar.InstallGate(world.gate)()
 	for _, kind := range sidecarGateKinds {
-		canonical, err := proto.Marshal(&protocol.CanonicalAction{Kind: uint32(kind), Version: 1, Scope: true})
+		template := &protocol.CanonicalAction{Kind: uint32(kind), Version: 1, Scope: true}
+		var detail *SidecarActionDetail
+		if row, ok := CanonicalActionFields(kind); ok && slices.Contains(row.RequestRequired, approvalRequestFieldSocketName) {
+			template.GrantDst = []string{"sock:tls/443/blog"}
+			detail = &SidecarActionDetail{SocketName: "tls/443/blog"}
+		}
+		canonical, err := proto.Marshal(template)
 		if err != nil {
 			t.Fatal(err)
 		}
 		action := world.action(&StoredCanonicalAction{Action: &protocol.CanonicalAction{Kind: uint32(kind)}, Bytes: canonical})
+		action.Detail = detail
 		err = sidecar.Authorize(t.Context(), action, nil)
 		pending := &ApprovalPendingError{}
 		switch {

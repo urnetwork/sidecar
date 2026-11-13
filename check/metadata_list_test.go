@@ -74,6 +74,136 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "keyed by the address's peppered hash; no domain or address held)\n  why: sign-in, roles and SSO (§7.5, §7.6);",
 		list:     "keyed by the address's peppered hash; no domain or address held); IdP sign-in flows in progress (state, nonce, PKCE verifier, IdP, network, the signed-in user that began one; 10 min, taken once)\n  why: sign-in, roles and SSO (§7.5, §7.6);",
 	},
+	{
+		// QD-741 and QD-742: cert-1's sees gains a row's issued chain, a requested revocation's reason and
+		// the time of its latest state
+		question: "tls-m5-05-cert-row-values",
+		block:    "ARI window, state and successor; Team custom-domain chains and queued CSRs (v1);",
+		list:     "ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1);",
+	},
+	{
+		// QD-742: cert-1's ttl counts a failed order's 30 d too
+		question: "tls-m5-14-cert-row-end-time",
+		block:    "  ttl: 30 d after expiry or revocation; budget entries 7 d,",
+		list:     "  ttl: 30 d after expiry, revocation or failure; budget entries 7 d,",
+	},
+	{
+		// QD-741's list version bump: the first line's version
+		question: "tls-m5-05-cert-row-values",
+		block:    "# metadata_list.yml v11;",
+		list:     "# metadata_list.yml v12;",
+	},
+	{
+		// and what the version adds, after v11's lines
+		question: "tls-m5-05-cert-row-values",
+		block:    "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n",
+		list:     "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n# v12, updated 2026-11-12 for the owner's answers on certs' rows (QD-741, QD-742), adds cert-1's issued chains, a\n# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n",
+	},
+	{
+		// QD-743: api-7's folded access log names what its rows now keep, which were already visible as their
+		// entries' times and positions, so only the wording changes
+		question: "acl-m2-06-access-log-positions",
+		block:    "folded access log with its versioning lock (its rules stay sealed), each EvsShare's signer, position and expiry",
+		list:     "folded access log with its versioning lock (its rules stay sealed), each repo admin's add position and a removed one's removal position until a later base drops it, the newest RepoDelete's entry time, each EvsShare's signer, position and expiry",
+	},
+	{
+		// QD-746: a base's header names the repos its own config head change shrinks, which every verifier already
+		// held as those repos' holders_shrunk_at at the base's position, so only the wording changes
+		question: "team-m2-09-base-shrinks",
+		block:    "whose base headers carry the config_version, config head hash, folded_through, rows hash, rows_byte_count and threshold;",
+		list:     "whose base headers carry the config_version, config head hash, folded_through, rows hash, rows_byte_count and threshold, and the repos whose key holders the base's own config head change shrinks;",
+	},
+	{
+		// QD-763: gkm-1's forwarding reader keys are keyed by their network as well
+		question: "core-owner-fixes-dkey-sweep-network",
+		block:    "(metadata cluster); gkm/dkey/<delegation_id>\n",
+		list:     "(metadata cluster); gkm/dkey/<network_id>/<delegation_id>\n",
+	},
+	{
+		// QD-763's list version bump, on the version the additions above give
+		question: "core-owner-fixes-dkey-sweep-network",
+		block:    "# metadata_list.yml v12;",
+		list:     "# metadata_list.yml v13;",
+	},
+	{
+		// and what the version adds, after v12's lines
+		question: "core-owner-fixes-dkey-sweep-network",
+		block:    "# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n",
+		list:     "# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n# v13, updated 2026-11-13 for the owner's answer QD-763, keys gkm-1's forwarding reader keys by their network as\n# well, gkm/dkey/<network_id>/<delegation_id>, so gkm's reconciler sweeps one network's at a time (QD-675).\n",
+	},
+	{
+		// QD-765: the list's version names the slot origin's change (DESIGN-DETAILS 14.8), after v13's
+		question: "details-14-slot-origin",
+		block:    "# metadata_list.yml v13;",
+		list:     "# metadata_list.yml v14;",
+	},
+	{
+		// QD-765: v14's line, after v13's
+		question: "details-14-slot-origin",
+		block:    "# well, gkm/dkey/<network_id>/<delegation_id>, so gkm's reconciler sweeps one network's at a time (QD-675).\n",
+		list: "# well, gkm/dkey/<network_id>/<delegation_id>, so gkm's reconciler sweeps one network's at a time (QD-675).\n" +
+			"# v14, updated 2026-11-13 for the slot fix (DESIGN-DETAILS 14; QD-765), adds evs-5's origin of each slot object, in\n" +
+			"# object metadata, and narrows evs-5's ttl to a dead push's own slots; evs-10 names the object metadata evs writes.\n",
+	},
+	{
+		// QD-765: evs-5's sees gains each slot's origin (DESIGN-DETAILS 14.8), whose colon and space quote the value,
+		// as every strict row's are
+		question: "details-14-slot-origin",
+		block:    "  sees: slot id, up to 64 wrapped object keys (ciphertext)",
+		list:     "  sees: \"slot id, up to 64 wrapped object keys (ciphertext)",
+	},
+	{
+		// QD-765: the origin itself, closing the quoted value
+		question: "details-14-slot-origin",
+		block:    "and their deletion by the drop's job (evs-28)\n  why: per-entry erasure for record-class repos and mail",
+		list:     "and their deletion by the drop's job (evs-28); each slot's origin, in object metadata: the push id, statement hash prefix, ref, signer sidecar, base version, path epoch and mode of the statement that created it, or a re-seed's mark; all of it also in that push's record (evs-12)\"\n  why: per-entry erasure for record-class repos and mail",
+	},
+	{
+		// QD-765: evs-5's ttl keeps a dead push's own slots only (DESIGN-DETAILS 14.8)
+		question: "details-14-slot-origin",
+		block:    "a refused or dead push's new slots until evacuation finds it dead, at most about 26 h after its batch",
+		list:     "a refused or dead push's own slots until evacuation finds it dead, at most about 26 h after its batch, a slot stored within 2 s of that or after it staying",
+	},
+	{
+		// QD-765: the MinIO row's object metadata, a slot/ object's origin beside QD-248's idx/ entry state
+		// (DESIGN-DETAILS 14.8's §19.6 text, carried to evs-10)
+		question: "details-14-slot-origin",
+		block:    "object key with its size, checksum, times and access pattern, on an NVMe metadata cluster",
+		list:     "object key with its size, checksum, times and access pattern, and no object metadata but an idx/ entry's state while its head lists sources (evs-11) and a slot/ object's origin (evs-5), on an NVMe metadata cluster",
+	},
+	{
+		// QD-040's list version, after v14's
+		question: "plan-SOCK-client-auth",
+		block:    "# metadata_list.yml v14;",
+		list:     "# metadata_list.yml v15;",
+	},
+	{
+		// QD-040: v15's line, after v14's
+		question: "plan-SOCK-client-auth",
+		block:    "# object metadata, and narrows evs-5's ttl to a dead push's own slots; evs-10 names the object metadata evs writes.\n",
+		list: "# object metadata, and narrows evs-5's ttl to a dead push's own slots; evs-10 names the object metadata evs writes.\n" +
+			"# v15, updated 2026-11-13 for the owner's answer QD-040 (plan-SOCK-client-auth), adds sock-2's caller sidecar id,\n" +
+			"# which its token names, and sock-5's {sc_<client_id>}ok, the time a client's token last checked valid at sockets.\n",
+	},
+	{
+		// QD-040: sock-2 gains the sidecar id, from the caller's by_client_jwt
+		question: "plan-SOCK-client-auth",
+		block:    "each Find's dialer client and network (edges add their K client ids)",
+		list:     "each Find's dialer client, network and sidecar id, which its token names (QD-040; edges add their K client ids and name no sidecar)",
+	},
+	{
+		// QD-040: sockets keeps a client's last valid time under its own tag, {sc_<client_id>}ok, for the revocation
+		// record's 120 s grace (§9.8's {sc_})
+		question: "plan-SOCK-client-auth",
+		block: "  store: Redis {sc_<client_id>}set\n" +
+			"  sees: a client's set_version and registered entries\n" +
+			"  why: idempotent full-set calls; removal on the client's removal signal (§9.5, §9.8)\n" +
+			"  ttl: 5 min after the client's last call\n",
+		list: "  store: Redis {sc_<client_id>}set and {sc_<client_id>}ok\n" +
+			"  sees: a client's set_version and registered entries; the time its token last checked valid (QD-040)\n" +
+			"  why: idempotent full-set calls; removal on the client's removal signal (§9.5, §9.8); a revocation-record miss within 120 s of a valid check counts as valid, since only api's and connect's SQL fallback projects the record again (QD-040)\n" +
+			"  ttl: 5 min after the client's last call; the valid time 120 s after the check it records\n",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
