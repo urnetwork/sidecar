@@ -170,11 +170,12 @@ func testDirectoryRepoRequest() *protocol.DirectoryRequest {
 }
 
 // A CanonicalAction of kind access_request at version 3, to dial a worker's one port, as stored: its clear grant_dst
-// names the worker alone, and the port and its text ride sealed_detail (QD-740).
+// names the worker alone, and the port and its text ride sealed_detail (QD-740), sealed beside the clear fields
+// (QD-771).
 func testDirectoryReachAction(t testing.TB, workerId []byte, subject []byte) []byte {
 	t.Helper()
 	worker := "sidecar:" + directoryIdText(Id(workerId))
-	action, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.CanonicalAction{
+	action, err := proto.MarshalOptions{Deterministic: true}.Marshal(testWithSealedDetail(&protocol.CanonicalAction{
 		Kind:            uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_ACCESS_REQUEST),
 		Version:         3,
 		ExpiresMillis:   testDirectoryRenewedMillis + 60*60*1000,
@@ -182,8 +183,7 @@ func testDirectoryReachAction(t testing.TB, workerId []byte, subject []byte) []b
 		GrantAllow:      []string{"dial"},
 		TargetSidecarId: workerId,
 		Subject:         subject,
-		SealedDetail:    testSealActionDetail(&protocol.CanonicalActionDetail{TargetPort: 8080, GrantDst: []string{worker + ":tcp:8080"}}),
-	})
+	}, &protocol.CanonicalActionDetail{TargetPort: 8080, GrantDst: []string{worker + ":tcp:8080"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
