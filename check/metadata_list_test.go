@@ -107,6 +107,13 @@ var metadataListAdditions = []metadataListAddition{
 		list:     "folded access log with its versioning lock (its rules stay sealed), each repo admin's add position and a removed one's removal position until a later base drops it, the newest RepoDelete's entry time, each EvsShare's signer, position and expiry",
 	},
 	{
+		// QD-746: a base's header names the repos its own config head change shrinks, which every verifier already
+		// held as those repos' holders_shrunk_at at the base's position, so only the wording changes
+		question: "team-m2-09-base-shrinks",
+		block:    "whose base headers carry the config_version, config head hash, folded_through, rows hash, rows_byte_count and threshold;",
+		list:     "whose base headers carry the config_version, config head hash, folded_through, rows hash, rows_byte_count and threshold, and the repos whose key holders the base's own config head change shrinks;",
+	},
+	{
 		// QD-763: gkm-1's forwarding reader keys are keyed by their network as well
 		question: "core-owner-fixes-dkey-sweep-network",
 		block:    "(metadata cluster); gkm/dkey/<delegation_id>\n",
