@@ -376,8 +376,8 @@ func TestAclStateAnswersItsRows(t *testing.T) {
 }
 
 // QD-719: where the rows hold no AclRepo for the Genesis's config repo, the state adds one of kind config with no
-// owner, admins or access log, and the rows keep their bytes; its holders_shrunk_at is the state's own position, the
-// closed direction until rows carry the config's shrinks (question acl-config-repo-row-shrunk-at).
+// owner, admins or access log, and the rows keep their bytes; its holders_shrunk_at is 0 at any position, since the
+// rows take the config's row at its first shrink (QD-762).
 func TestAclStateAddsTheConfigReposRow(t *testing.T) {
 	fixture := newAclTestFixture()
 	generalId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
@@ -393,8 +393,8 @@ func TestAclStateAddsTheConfigReposRow(t *testing.T) {
 		len(row.GetShares()) != 0 || len(row.GetConsentedSidecarIds()) != 0 || row.GetDeletion() != nil {
 		t.Errorf("the config's row carries more than its id and kind: %v", row)
 	}
-	if row.GetHoldersShrunkAt() != 7 {
-		t.Errorf("holders_shrunk_at %d, want the state's position", row.GetHoldersShrunkAt())
+	if row.GetHoldersShrunkAt() != 0 {
+		t.Errorf("holders_shrunk_at %d at position 7, want 0", row.GetHoldersShrunkAt())
 	}
 	if state.Rows() != fixture.rows || len(state.Rows().GetRepos()) != 1 || !bytes.Equal(aclEncodeRows(t, state.Rows()), rowsBefore) {
 		t.Error("the rows changed")

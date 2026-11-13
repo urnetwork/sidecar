@@ -27,9 +27,9 @@
 // another kind refuse to build, and with the row standing a RepoCreate of that id is a second one, so no
 // statement moves the config onto another kind's rules. A view with no Genesis, a test's, gets no such row.
 //
-// The added row's holders_shrunk_at is the state's own position: no rows carry the config's shrinks yet
-// (question acl-config-repo-row-shrunk-at), so until they do every position counts as one, the closed
-// direction, and §10.6's gate takes a config write only under a generation pinned at the state judging it.
+// The added row's holders_shrunk_at is 0: the config's key holders have not shrunk while the rows hold none of
+// its row, since TEAM adds the row to the rows at the first entry that shrinks them, with that entry's position,
+// and advances it there afterwards like any repo's (QD-762). Rows that hold it keep their own.
 //
 // Safe for concurrent use once built.
 //
@@ -710,7 +710,8 @@ func (self *AclState) indexRepos() error {
 }
 
 // Indexes the Genesis's config repo: the row the rows hold for it, which must be of kind config, or else the state's
-// own row (the file's header, QD-719). A view with no Genesis, or one naming no config repo, indexes none.
+// own row, with holders_shrunk_at 0 (the file's header, QD-719, QD-762). A view with no Genesis, or one naming no
+// config repo, indexes none.
 func (self *AclState) indexConfigRepo() error {
 	genesis := self.view.Genesis()
 	if genesis == nil {
@@ -732,9 +733,8 @@ func (self *AclState) indexConfigRepo() error {
 	}
 	self.repos[configRepoId] = &aclRepoState{
 		row: &protocol.AclRepo{
-			RepoId:          configRepoId.Bytes(),
-			Kind:            protocol.RepoKind_REPO_KIND_CONFIG,
-			HoldersShrunkAt: self.pin.GetVersion(),
+			RepoId: configRepoId.Bytes(),
+			Kind:   protocol.RepoKind_REPO_KIND_CONFIG,
 		},
 		kind:     protocol.RepoKind_REPO_KIND_CONFIG,
 		admins:   map[Id]bool{},
