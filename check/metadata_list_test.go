@@ -74,6 +74,31 @@ var metadataListAdditions = []metadataListAddition{
 		block:    "keyed by the address's peppered hash; no domain or address held)\n  why: sign-in, roles and SSO (§7.5, §7.6);",
 		list:     "keyed by the address's peppered hash; no domain or address held); IdP sign-in flows in progress (state, nonce, PKCE verifier, IdP, network, the signed-in user that began one; 10 min, taken once)\n  why: sign-in, roles and SSO (§7.5, §7.6);",
 	},
+	{
+		// QD-741 and QD-742: cert-1's sees gains a row's issued chain, a requested revocation's reason and
+		// the time of its latest state
+		question: "tls-m5-05-cert-row-values",
+		block:    "ARI window, state and successor; Team custom-domain chains and queued CSRs (v1);",
+		list:     "ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1);",
+	},
+	{
+		// QD-742: cert-1's ttl counts a failed order's 30 d too
+		question: "tls-m5-14-cert-row-end-time",
+		block:    "  ttl: 30 d after expiry or revocation; budget entries 7 d,",
+		list:     "  ttl: 30 d after expiry, revocation or failure; budget entries 7 d,",
+	},
+	{
+		// QD-741's list version bump: the first line's version
+		question: "tls-m5-05-cert-row-values",
+		block:    "# metadata_list.yml v11;",
+		list:     "# metadata_list.yml v12;",
+	},
+	{
+		// and what the version adds, after v11's lines
+		question: "tls-m5-05-cert-row-values",
+		block:    "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n",
+		list:     "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n# v12, updated 2026-11-12 for the owner's answers on certs' rows (QD-741, QD-742), adds cert-1's issued chains, a\n# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.

@@ -221,6 +221,7 @@ func (self *testCerts) issue(certId sidecar.Id, serial string) {
 		CertId:     certId,
 		From:       []sidecar.TlsCertState{sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns},
 		To:         sidecar.TlsCertStateIssued,
+		At:         now,
 		AccountUri: "https://ca.example/acct/1",
 		Serial:     serial,
 		NotBefore:  now,
