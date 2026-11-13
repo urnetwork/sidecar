@@ -7,13 +7,15 @@
 // bytes and refused a version this build does not know (RecordApprovals.Pending), so nothing is shown that was not
 // checked.
 //
-// Two more sets of daemon-built values show as the action, by QD-740. The request's local_port, weight and alpn, which
-// left CanonicalAction for the ApprovalRequest and which request_sha256 covers, show by those names after the
-// action's fields. A dial or route grant's sealed_detail never shows as its ciphertext: the approver's device opens it
-// (CanonicalActionDetailOpener: Sidecar.OpenActionDetail, under the context the action's own clear fields derive,
-// QD-771) and RenderApprovalRequestDetail shows what it holds, each field named
-// sealed_detail.<name>; a render of an action whose detail was not opened says so, and such a request takes no
-// approval (record_approval_decide.go), so a prefix or a port is never approved unseen.
+// Two more sets of daemon-built values show as the action, by QD-740 and QD-772. The request's socket_name,
+// local_port, weight and alpn, which left CanonicalAction for the ApprovalRequest and which request_sha256 covers,
+// show by those names after the action's fields: a listen's name comes from the opened request, and the device that
+// renders it reads it against the action's grant_dst before it approves (record_approval_decide.go), a render whose
+// name did not read so saying it takes no approval. A dial or route grant's sealed_detail never shows as its
+// ciphertext: the approver's device opens it (CanonicalActionDetailOpener: Sidecar.OpenActionDetail, under the
+// context the action's own clear fields derive, QD-771) and RenderApprovalRequestDetail shows what it holds, each
+// field named sealed_detail.<name>; a render of an action whose detail was not opened says so, and such a request
+// takes no approval (record_approval_decide.go), so a prefix or a port is never approved unseen.
 //
 // A kind whose fields alone do not say what approving it gives up also shows a sentence built around those fields,
 // never from an agent's text: mail_tls_unauthenticated's names its domain and that an active URnetwork edge could read
@@ -72,13 +74,17 @@ type ApprovalRender struct {
 	// not say it; empty for the rest. Printable.
 	Meaning string
 	// Each field the action sets, in field order, kind, version, scope, preview and sealed_detail aside, then the
-	// request's local_port, weight and alpn where set, then what an opened sealed_detail holds, each named
+	// request's socket_name, local_port, weight and alpn where set, then what an opened sealed_detail holds, each named
 	// sealed_detail.<name>: the action the person approves.
 	Fields []*ApprovalRenderField
 	// The action carries a sealed_detail, and whether Fields holds what it opened to. Sealed and not opened, the
 	// device shows the rest and takes no approval.
 	Sealed bool
 	Opened bool
+	// A listen's socket_name did not read as its action's grant_dst on this device (QD-772): an application name it
+	// holds no K_sock to derive the token path of, or a name naming another socket than grant_dst does. The device
+	// shows the rest and takes no approval. Set by the approver's device, which reads the name.
+	NameUnread bool
 	// The agent's own words and the daemon's preview, untrusted, printable.
 	Summary string
 	Preview string
@@ -273,6 +279,9 @@ func (self *ApprovalRender) Text() string {
 	}
 	if self.Sealed && !self.Opened {
 		lines = append(lines, "  sealed_detail: its prefixes and ports did not open on this device, so it takes no approval here")
+	}
+	if self.NameUnread {
+		lines = append(lines, "  socket_name: it does not read as the action's grant_dst on this device, so it takes no approval here")
 	}
 	asked := fmt.Sprintf("asked by sidecar %s", self.RequesterSidecarId)
 	if self.RunId != (Id{}) {

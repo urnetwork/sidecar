@@ -2,7 +2,8 @@
 // refused, a required one missing refused, templates matched field by field with recipients a subset, an agent only
 // raising risk, every server path held to its column, and the descriptor lint that keeps the table and record.proto
 // in step. The kinds QD-740 opened build here too: a publish, a listen and an expose at version 1 with no local port,
-// weight or ALPN, and a forward at version 4 with its port sealed.
+// weight or ALPN, a listen naming its socket by grant_dst alone (QD-772), and a forward at version 4 with its port
+// sealed.
 
 package sidecar
 
@@ -87,7 +88,6 @@ func testBuildableActions() map[string]*protocol.CanonicalAction {
 		},
 		"socket_listen": {
 			Kind:          uint32(SidecarActionListen),
-			SocketName:    "tls/443/blog",
 			ExpiresMillis: 1762387200000,
 			GrantDst:      []string{"sock:tls/443/blog"},
 			GrantAllow:    []string{"listen"},
@@ -475,9 +475,10 @@ func TestServerPathsHoldToTheirColumns(t *testing.T) {
 }
 
 // The descriptor lint: every field CanonicalAction declares is claimed by a row or by every action, so a field
-// record.proto adds cannot go unbuilt or unrefused; local_port, weight and alpn are gone from it, their numbers
-// reserved, and are ApprovalRequest's 14, 15 and 16, which a row's request column names (QD-740); field 37 is filled
-// only at version 2 and field 38 only at the versions that seal a detail; and every row's fields exist.
+// record.proto adds cannot go unbuilt or unrefused; local_port, weight, alpn and socket_name are gone from it, their
+// numbers reserved, and are ApprovalRequest's 14, 15, 16 and 17, which a row's request column names (QD-740, QD-772),
+// a row requiring only what its column names; field 37 is filled only at version 2 and field 38 only at the versions
+// that seal a detail; and every row's fields exist.
 func TestKindTableCoversTheDescriptor(t *testing.T) {
 	descriptor := (&protocol.CanonicalAction{}).ProtoReflect().Descriptor()
 	fields := descriptor.Fields()
@@ -485,7 +486,7 @@ func TestKindTableCoversTheDescriptor(t *testing.T) {
 	for _, number := range canonicalActionCommonFields {
 		claimed[number] = true
 	}
-	for _, number := range []protoreflect.FieldNumber{24, 25, 34} {
+	for _, number := range []protoreflect.FieldNumber{23, 24, 25, 34} {
 		if fields.ByNumber(number) != nil || !descriptor.ReservedRanges().Has(number) {
 			t.Errorf("field %d left CanonicalAction, and record.proto does not reserve it", number)
 		}
@@ -493,6 +494,7 @@ func TestKindTableCoversTheDescriptor(t *testing.T) {
 	requestFields := (&protocol.ApprovalRequest{}).ProtoReflect().Descriptor().Fields()
 	for number, name := range map[protoreflect.FieldNumber]protoreflect.Name{
 		approvalRequestFieldLocalPort: "local_port", approvalRequestFieldWeight: "weight", approvalRequestFieldAlpn: "alpn",
+		approvalRequestFieldSocketName: "socket_name",
 	} {
 		if field := requestFields.ByNumber(number); field == nil || field.Name() != name {
 			t.Errorf("ApprovalRequest's field %d is not %s", number, name)
@@ -510,7 +512,12 @@ func TestKindTableCoversTheDescriptor(t *testing.T) {
 		}
 		for _, number := range row.Request {
 			if !slices.Contains(approvalRequestDetailFields, number) {
-				t.Errorf("kind %d's request binds field %d, which is none of local_port, weight and alpn", row.Kind, number)
+				t.Errorf("kind %d's request binds field %d, which is none of socket_name, local_port, weight and alpn", row.Kind, number)
+			}
+		}
+		for _, number := range row.RequestRequired {
+			if !slices.Contains(row.Request, number) {
+				t.Errorf("kind %d's request requires field %d, which its request column does not name", row.Kind, number)
 			}
 		}
 		if slices.Contains(slices.Concat(row.Required, row.Optional), canonicalActionFieldVersioning) {

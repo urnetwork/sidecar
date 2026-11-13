@@ -184,8 +184,8 @@ type SidecarAction struct {
 	RunId   *Id
 	AgentId *Id
 	// What the action binds on this device alone, built by the daemon as Canonical is: filed as ApprovalRequest's
-	// local_port, weight and alpn, which approvers render and request_sha256 covers, and no server sees (QD-740). A
-	// decision spends only on an action whose Detail is its request's. Nil for none.
+	// socket_name, local_port, weight and alpn, which approvers render and request_sha256 covers, and no server sees
+	// (QD-740, QD-772). A decision spends only on an action whose Detail is its request's. Nil for none.
 	Detail *SidecarActionDetail
 	// The agent's own words about the action, filed as ApprovalRequest.summary and shown to an approver as
 	// untrusted text, never as the action (D-MCP-17). Empty for none.
@@ -199,9 +199,13 @@ type SidecarAction struct {
 }
 
 // What an outward action binds on the requesting device beside its CanonicalAction (§16.8's ApprovalRequest fields
-// 14, 15 and 16; QD-740): the local port a socket_listen, tls_publish, bridge_forward or bridge_expose points at, a
-// listen's weight and a publish's ALPNs. The kind table says which of them a kind takes.
+// 14 to 17; QD-740, QD-772): a socket_listen's socket name, the local port a socket_listen, tls_publish,
+// bridge_forward or bridge_expose points at, a listen's weight and a publish's ALPNs. The kind table says which of
+// them a kind takes.
 type SidecarActionDetail struct {
+	// A listen's name in its one form, which its action's grant_dst names as a server may see it
+	// (SocketListenGrantDst); "" for none.
+	SocketName string
 	// 0 for none.
 	LocalPort uint32
 	Weight    int32
@@ -217,7 +221,15 @@ func (self *SidecarActionDetail) Equal(other *SidecarActionDetail) bool {
 	if other != nil {
 		b = *other
 	}
-	return a.LocalPort == b.LocalPort && a.Weight == b.Weight && slices.Equal(a.Alpn, b.Alpn)
+	return a.SocketName == b.SocketName && a.LocalPort == b.LocalPort && a.Weight == b.Weight && slices.Equal(a.Alpn, b.Alpn)
+}
+
+// A copy, its slices its own; nil for nil.
+func (self *SidecarActionDetail) clone() *SidecarActionDetail {
+	if self == nil {
+		return nil
+	}
+	return &SidecarActionDetail{SocketName: self.SocketName, LocalPort: self.LocalPort, Weight: self.Weight, Alpn: slices.Clone(self.Alpn)}
 }
 
 // One O tool's effect, which §16.6's spend step 5 runs (plan-MCP-effect-seam). A mail body or a file's bytes are not

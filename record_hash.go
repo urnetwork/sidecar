@@ -322,9 +322,10 @@ func approvalRequestVersionKnown(version uint32) bool {
 // Parses an ApprovalRequest as stored, for the approver's device and the spender: a version this build knows and no
 // field it cannot name; ids at their lengths; a risk SidecarRisk names; an expiry; payload_sha256 equal to SHA-256 of
 // the canonical_action bytes it carries and action_id equal to §16.6's formula over them (R-MCP-6); that action
-// passing ParseStoredCanonicalAction; and local_port, weight and alpn set only where the action's kind binds them
-// (the kind table's request column; QD-740), a port one a listener can bind and no ALPN empty. summary and preview
-// stay untrusted text for the approver to show as such.
+// passing ParseStoredCanonicalAction; and local_port, weight, alpn and socket_name set only where the action's kind
+// binds them (the kind table's request column; QD-740, QD-772), a port one a listener can bind, no ALPN empty, and a
+// listen's socket_name present and agreeing with its action's grant_dst as far as no key is needed
+// (approvalRequestDetailCheck). summary and preview stay untrusted text for the approver to show as such.
 func ParseStoredApprovalRequest(stored []byte) (*StoredApprovalRequest, error) {
 	request := &protocol.ApprovalRequest{}
 	if err := proto.Unmarshal(stored, request); err != nil {
@@ -376,9 +377,12 @@ func ParseStoredApprovalRequest(stored []byte) (*StoredApprovalRequest, error) {
 	return &StoredApprovalRequest{Request: request, Bytes: bytes.Clone(stored), Action: action}, nil
 }
 
-// Holds a request's daemon-built fields beside its action, local_port, weight and alpn, to its action's kind: one the
-// kind's row does not name is refused, so an approver renders none that binds nothing; a local port is a port; and no
-// ALPN is empty.
+// Holds a request's daemon-built fields beside its action, socket_name, local_port, weight and alpn, to its action's
+// kind: one the kind's row does not name is refused, so an approver renders none that binds nothing, and one it
+// requires is present, so every listen's request names its socket (QD-772); a local port is a port; no ALPN is
+// empty; and a socket_name agrees with the action's grant_dst as far as no key is needed (checkSocketListenName: a tls/
+// or smtp/ name in full, an application name by its token path's form), the token path itself being an approver's to
+// derive under K_sock.
 func approvalRequestDetailCheck(request *protocol.ApprovalRequest, action *StoredCanonicalAction) error {
 	message := request.ProtoReflect()
 	fields := message.Descriptor().Fields()
@@ -388,11 +392,23 @@ func approvalRequestDetailCheck(request *protocol.ApprovalRequest, action *Store
 			return fmt.Errorf("%w: approval request field %d beside an action of kind %d", ErrRecordStoredInvalid, number, action.Action.GetKind())
 		}
 	}
+	if row != nil {
+		for _, number := range row.RequestRequired {
+			if !message.Has(fields.ByNumber(number)) {
+				return fmt.Errorf("%w: approval request without field %d beside an action of kind %d", ErrRecordStoredInvalid, number, action.Action.GetKind())
+			}
+		}
+	}
 	if math.MaxUint16 < request.GetLocalPort() {
 		return fmt.Errorf("%w: local_port %d", ErrRecordStoredInvalid, request.GetLocalPort())
 	}
 	if slices.Contains(request.GetAlpn(), "") {
 		return fmt.Errorf("%w: an empty alpn", ErrRecordStoredInvalid)
+	}
+	if name := request.GetSocketName(); name != "" {
+		if err := checkSocketListenName(action.Action, name, nil); err != nil {
+			return fmt.Errorf("%w: %w", ErrRecordStoredInvalid, err)
+		}
 	}
 	return nil
 }
@@ -400,13 +416,14 @@ func approvalRequestDetailCheck(request *protocol.ApprovalRequest, action *Store
 // The request's daemon-built fields beside its action, nil where it sets none.
 func (self *StoredApprovalRequest) Detail() *SidecarActionDetail {
 	request := self.Request
-	if request.GetLocalPort() == 0 && request.GetWeight() == 0 && len(request.GetAlpn()) == 0 {
+	if request.GetSocketName() == "" && request.GetLocalPort() == 0 && request.GetWeight() == 0 && len(request.GetAlpn()) == 0 {
 		return nil
 	}
 	return &SidecarActionDetail{
-		LocalPort: request.GetLocalPort(),
-		Weight:    request.GetWeight(),
-		Alpn:      slices.Clone(request.GetAlpn()),
+		SocketName: request.GetSocketName(),
+		LocalPort:  request.GetLocalPort(),
+		Weight:     request.GetWeight(),
+		Alpn:       slices.Clone(request.GetAlpn()),
 	}
 }
 
