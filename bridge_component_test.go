@@ -292,6 +292,23 @@ func TestTheComponentAnchorsThenCompilesARisingState(t *testing.T) {
 	}
 }
 
+// The bridge is on once a device role is set, ur tun's or ur bridge's: the component is then an active one, which keeps
+// an auto-spawned daemon from idling out (§5.8; BRIDGE-M4-18's Daemon.ShouldIdleExit), and off before one.
+func TestTheBridgeIsActiveWhileItHasADeviceRole(t *testing.T) {
+	world := newTestBridgeComponentWorld(t)
+	component := world.component()
+	var active SidecarActiveComponent = component
+	if active.Active() {
+		t.Fatal("active with no device role")
+	}
+	if err := component.SetDeviceRole(world.sink); err != nil {
+		t.Fatal(err)
+	}
+	if !active.Active() {
+		t.Fatal("not active with a device role")
+	}
+}
+
 // 12.2.5's "a denial is held at its own position": a revocation's entry reaches the sink as a delta and then as a
 // Revoke at that entry's own position, never 0.
 func TestADenialIsRevokedAtItsOwnPosition(t *testing.T) {

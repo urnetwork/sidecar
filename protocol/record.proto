@@ -19,7 +19,10 @@
 // design-records writes: local_port, weight and alpn leave CanonicalAction, 24, 25 and 34 reserved, for
 // ApprovalRequest's 14, 15 and 16, which ride sealed in the approval entry and never reach a server; and a dial or
 // route grant's prefixes and ports ride sealed_detail = 38, a CanonicalActionDetail under §7.9's sealed-body format
-// (owner decision 220), at version 4, as a version-3 access_request's port does. design_unfenced_test.go lists each.
+// (owner decision 220), at version 4, as a version-3 access_request's port does. The answer to
+// canonical-action-detail-listen-socket-name (QD-772) moves a socket_listen's socket name the same way: socket_name
+// leaves CanonicalAction, 23 reserved, for ApprovalRequest's 17, and a listen's action names its socket by its one
+// grant_dst entry alone, in the form a server may see. design_unfenced_test.go lists each.
 
 syntax = "proto3";
 package urnetwork.sidecar;
@@ -80,8 +83,7 @@ message CanonicalAction {                   // built by the daemon; hashed as st
                                                         // evs_delete; mail_alias_delete's mailcfg record (16.6)
   string dns_name = 18; string dns_type = 19; string dns_value = 20; uint32 dns_ttl = 21;     // dns_set, dns_delete
   string alias = 22;                                                     // mail_alias_*; mail_send's from_alias
-  reserved 24, 25, 34;                      // local_port, weight and alpn: ApprovalRequest's 14, 15 and 16 (QD-740)
-  string socket_name = 23;                                                                   // socket_listen
+  reserved 23, 24, 25, 34;  // socket_name, local_port, weight, alpn: ApprovalRequest's 17, 14-16 (QD-772, QD-740)
   bytes target_sidecar_id = 26; uint32 target_port = 27;                                     // bridge_expose
   bytes rule_id = 28; bytes subject = 29;                // a grant (§8.8), with 8, 10 and 11; a publish's also 33, 35
   bytes restore_run_id = 30; repeated string restore_paths = 31; bytes restore_preview_id = 32; // run_restore
@@ -117,10 +119,12 @@ message ApprovalRequest {                   // body of an approval entry
   uint32 risk = 8;                          // max(policy, classifier); agents may only raise it
   bytes requester_sidecar_id = 9; bool tainted = 10; repeated bytes approvers = 11; int64 not_after_millis = 12;
   uint32 version = 13;                      // 1
-  uint32 local_port = 14; int32 weight = 15; repeated string alpn = 16;  // daemon-built, as the action's fields
-                                            // are, and rendered by approvers: the local port a socket_listen,
-                                            // tls_publish, bridge_forward or bridge_expose binds, a listen's weight
-                                            // and a publish's ALPNs (QD-740); request_sha256 covers them
+  // Daemon-built, as the action's fields are, and rendered by approvers; request_sha256 covers them: the local port a
+  // socket_listen, tls_publish, bridge_forward or bridge_expose binds, a listen's weight and a publish's ALPNs
+  // (QD-740), and a socket_listen's name in its one form, which every listen's request carries (QD-772). The name
+  // agrees with the action's one grant_dst entry: sock:<the name> for a tls/ or smtp/ name, sock:<its token path in
+  // hex> for an application name, which an approver derives under K_sock before it approves.
+  uint32 local_port = 14; int32 weight = 15; repeated string alpn = 16; string socket_name = 17;
 }
 message ApprovalDecision {                  // inside §6 Signed, purpose approval; holds no run or agent id
   bytes approval_id = 1;
@@ -161,7 +165,8 @@ message RetentionPolicy {                   // Signed (purpose record-entry) by 
 // approver, spender or gate refuses 0 or a value it does not know in any of them; §16.8's "unknown kinds are kept"
 // speaks of RecordHeader.kind alone.
 // CanonicalAction.kind: §5.4's SidecarActionKind in its order, one verb a value, 16.7's restore appended, and new
-// kinds append. publish and listen cover tls/ and smtp/ alike, since host and socket_name say which.
+// kinds append. publish and listen cover tls/ and smtp/ alike, since host, and a listen's request's socket_name, say
+// which.
 // mail_tls_unauthenticated is §14.4's TL4 allowance for one recipient domain, host (QD-729).
 enum SidecarActionKind {
   SIDECAR_ACTION_KIND_UNSPECIFIED = 0;
