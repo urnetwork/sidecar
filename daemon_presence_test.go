@@ -4,7 +4,8 @@
 // presence key registers on a confirmation alone, carrying its own proof; a harness, an MCP call or an unconfirmed call
 // registers nothing; a failed or refused prompt signs nothing and takes the new key off the authenticator; a second key
 // from a device holding a live one is countersigned; a key is removed only from a device with a live key of its own;
-// the daemon's prompt yields a presence decision; and each act asks the authenticator afresh.
+// the daemon's prompt yields a presence decision; each act asks the authenticator afresh; and a registration carries
+// the attestation its authenticator's client answered (QD-730's map) only where it verifies.
 
 package sidecar
 
@@ -35,7 +36,9 @@ type testPresenceProvider struct {
 	registerCount int
 	assertCount   int
 	// what Assert answers instead of an assertion, nil to assert
-	refuse  error
+	refuse error
+	// a new key's KeyRegister.attestation, nil for none
+	attest  func(key *testPresenceKey) []byte
 	removed [][]byte
 }
 
@@ -49,7 +52,11 @@ func (self *testPresenceProvider) Register(ctx context.Context) (*PresenceKeyHan
 	self.registerCount += 1
 	key := newTestPresenceKey(self.t, fmt.Sprintf("provider key %d", self.registerCount), self.alg)
 	self.keyIdKeys[hex.EncodeToString(key.keyId)] = key
-	return &PresenceKeyHandle{KeyId: bytes.Clone(key.keyId), Alg: key.alg, PublicKey: bytes.Clone(key.publicKey)}, nil
+	handle := &PresenceKeyHandle{KeyId: bytes.Clone(key.keyId), Alg: key.alg, PublicKey: bytes.Clone(key.publicKey)}
+	if self.attest != nil {
+		handle.Attestation = self.attest(key)
+	}
+	return handle, nil
 }
 
 func (self *testPresenceProvider) Holds(keyId []byte) bool {
@@ -355,5 +362,69 @@ func TestFreshContextEachAct(t *testing.T) {
 		if signed.GetWebauthn() == nil {
 			t.Error("an act signed without its countersignature")
 		}
+	}
+}
+
+// A registration carries what its authenticator's client answered as the key's attestation, QD-730's map of a fmt none
+// object and the create ceremony's client data, once it verifies. One that fails, another key's, client data from an
+// origin off the table, the object with no map around it, or a chained format with no pinned root, registers nothing,
+// never as asserted, and the new key is taken off the authenticator.
+func TestRegistrationCarriesOnlyAnAttestationThatVerifies(t *testing.T) {
+	cas := newTestAttestCas(t)
+	world := newTestPresenceWorld(t, bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256)
+	world.provider.attest = func(key *testPresenceKey) []byte {
+		return newTestAttestation(cas, key).attestation(t, "none")
+	}
+	key, err := world.sidecar.RegisterPresenceKey(t.Context(), world.provider, SidecarActConfirmed, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	posted := postedStatements(t, world.sidecar)
+	if len(posted) != 1 {
+		t.Fatalf("%d statements posted", len(posted))
+	}
+	register := &protocol.KeyRegister{}
+	if err := proto.Unmarshal(posted[0].GetBody(), register); err != nil {
+		t.Fatal(err)
+	}
+	label, err := VerifyPresenceAttestation(register, world.sidecar.clock.Now().UnixMilli())
+	if err != nil || label != PresenceLabelAsserted || len(register.GetAttestation()) == 0 || !bytes.Equal(register.GetKeyId(), key.KeyId) {
+		t.Errorf("the registered key's attestation, %d bytes: %s, %v", len(register.GetAttestation()), label, err)
+	}
+	if err := VerifyPresenceRegistration(register, posted[0]); err != nil {
+		t.Errorf("the key's own proof beside its attestation: %v", err)
+	}
+
+	_, other := testAttestCredentials(t)
+	for i, attest := range []func(key *testPresenceKey) []byte{
+		func(key *testPresenceKey) []byte { return newTestAttestation(cas, other).attestation(t, "none") },
+		func(key *testPresenceKey) []byte {
+			clientData := testAttestClientData("webauthn.create", "https://presence.example")
+			return newTestAttestation(cas, key).withClientData(clientData).attestation(t, "none")
+		},
+		func(key *testPresenceKey) []byte { return newTestAttestation(cas, key).none() },
+		func(key *testPresenceKey) []byte { return newTestAttestation(cas, key).attestation(t, "packed") },
+	} {
+		world.provider.attest = attest
+		removedCount := len(world.provider.removed)
+		_, err := world.sidecar.RegisterPresenceKey(t.Context(), world.provider, SidecarActConfirmed, nil)
+		if !errors.Is(err, ErrPresenceKeyInvalid) || !errors.Is(err, ErrPresenceAttestation) {
+			t.Errorf("failing attestation %d: %v", i, err)
+		}
+		if len(postedStatements(t, world.sidecar)) != 1 || len(world.provider.removed) != removedCount+1 {
+			t.Errorf("failing attestation %d: posted %d, removed %d", i, len(postedStatements(t, world.sidecar)), len(world.provider.removed)-removedCount)
+		}
+	}
+
+	// a Secure Enclave key carries none
+	enclave := newTestPresenceWorld(t, bridge.KeyAlg_KEY_ALG_ECDSA_P256_SHA256)
+	enclave.provider.attest = func(key *testPresenceKey) []byte {
+		return newTestAttestation(cas, key).attestation(t, "none")
+	}
+	if _, err := enclave.sidecar.RegisterPresenceKey(t.Context(), enclave.provider, SidecarActConfirmed, nil); !errors.Is(err, ErrPresenceAttestation) {
+		t.Errorf("an ecdsa-p256-sha256 key with an attestation: %v", err)
+	}
+	if len(postedStatements(t, enclave.sidecar)) != 0 {
+		t.Error("a statement was signed")
 	}
 }

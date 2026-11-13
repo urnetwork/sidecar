@@ -75,6 +75,10 @@ type CertsStore interface {
 	ClientEphemeral(ctx context.Context, clientId sidecar.Id) (bool, error)
 	// Queued rows after afterCertId, oldest first, at most count: the admission pass's cursor.
 	ListQueued(ctx context.Context, afterCertId sidecar.Id, count int) ([]*sidecar.TlsCertRecord, error)
+	// Rows in one of states after afterCertId, oldest first, at most count: the chains' cursors (run.go)
+	// over what is under way at a CA (ordering, waiting_dns), what is issued, and what waits for its CA
+	// to revoke it (revoking). No states, or a count that is not positive, reads nothing.
+	ListInStates(ctx context.Context, states []sidecar.TlsCertState, afterCertId sidecar.Id, count int) ([]*sidecar.TlsCertRecord, error)
 	// Applies transition while the row is in one of its From states. Returns whether it applied.
 	TransitionCert(ctx context.Context, transition *CertsTransition) (bool, error)
 	// Links a row to the row that took over from it, unless it has a successor already. Returns whether

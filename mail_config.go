@@ -103,7 +103,7 @@ type MailConfigSettings struct {
 	// Non-positive syncs at every miss.
 	MissRefreshInterval time.Duration
 	// How long the follower waits after a failed Sync, or a failed subscription, before it tries again.
-	// Non-positive takes 1 s, so a failing store is never spun on.
+	// Non-positive takes the default, so a failing store is never spun on.
 	FollowRetryInterval time.Duration
 	// How often the follower syncs with no change raised: hints are lossy, and evs's own hourly fresh read raises
 	// a change only for a ref that moved. Non-positive never syncs on its own.
@@ -465,7 +465,10 @@ func (self *MailConfig) Close() {
 // ResyncInterval, a failure tried again after FollowRetryInterval. It ends with ctx.
 func (self *MailConfig) run(ctx context.Context) {
 	defer close(self.finished)
-	retryInterval := max(self.settings.FollowRetryInterval, time.Second)
+	retryInterval := self.settings.FollowRetryInterval
+	if retryInterval <= 0 {
+		retryInterval = DefaultMailConfigSettings().FollowRetryInterval
+	}
 	var stopFollowing func()
 	defer func() {
 		if stopFollowing != nil {
