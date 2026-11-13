@@ -107,6 +107,13 @@ var metadataListAdditions = []metadataListAddition{
 		list:     "folded access log with its versioning lock (its rules stay sealed), each repo admin's add position and a removed one's removal position until a later base drops it, the newest RepoDelete's entry time, each EvsShare's signer, position and expiry",
 	},
 	{
+		// QD-746: a base's header names the repos its own config head change shrinks, which every verifier already
+		// held as those repos' holders_shrunk_at at the base's position, so only the wording changes
+		question: "team-m2-09-base-shrinks",
+		block:    "whose base headers carry the config_version, config head hash, folded_through, rows hash, rows_byte_count and threshold;",
+		list:     "whose base headers carry the config_version, config head hash, folded_through, rows hash, rows_byte_count and threshold, and the repos whose key holders the base's own config head change shrinks;",
+	},
+	{
 		// QD-763: gkm-1's forwarding reader keys are keyed by their network as well
 		question: "core-owner-fixes-dkey-sweep-network",
 		block:    "(metadata cluster); gkm/dkey/<delegation_id>\n",
@@ -163,6 +170,39 @@ var metadataListAdditions = []metadataListAddition{
 		question: "details-14-slot-origin",
 		block:    "object key with its size, checksum, times and access pattern, on an NVMe metadata cluster",
 		list:     "object key with its size, checksum, times and access pattern, and no object metadata but an idx/ entry's state while its head lists sources (evs-11) and a slot/ object's origin (evs-5), on an NVMe metadata cluster",
+	},
+	{
+		// QD-040's list version, after v14's
+		question: "plan-SOCK-client-auth",
+		block:    "# metadata_list.yml v14;",
+		list:     "# metadata_list.yml v15;",
+	},
+	{
+		// QD-040: v15's line, after v14's
+		question: "plan-SOCK-client-auth",
+		block:    "# object metadata, and narrows evs-5's ttl to a dead push's own slots; evs-10 names the object metadata evs writes.\n",
+		list: "# object metadata, and narrows evs-5's ttl to a dead push's own slots; evs-10 names the object metadata evs writes.\n" +
+			"# v15, updated 2026-11-13 for the owner's answer QD-040 (plan-SOCK-client-auth), adds sock-2's caller sidecar id,\n" +
+			"# which its token names, and sock-5's {sc_<client_id>}ok, the time a client's token last checked valid at sockets.\n",
+	},
+	{
+		// QD-040: sock-2 gains the sidecar id, from the caller's by_client_jwt
+		question: "plan-SOCK-client-auth",
+		block:    "each Find's dialer client and network (edges add their K client ids)",
+		list:     "each Find's dialer client, network and sidecar id, which its token names (QD-040; edges add their K client ids and name no sidecar)",
+	},
+	{
+		// QD-040: sockets keeps a client's last valid time under its own tag, {sc_<client_id>}ok, for the revocation
+		// record's 120 s grace (§9.8's {sc_})
+		question: "plan-SOCK-client-auth",
+		block: "  store: Redis {sc_<client_id>}set\n" +
+			"  sees: a client's set_version and registered entries\n" +
+			"  why: idempotent full-set calls; removal on the client's removal signal (§9.5, §9.8)\n" +
+			"  ttl: 5 min after the client's last call\n",
+		list: "  store: Redis {sc_<client_id>}set and {sc_<client_id>}ok\n" +
+			"  sees: a client's set_version and registered entries; the time its token last checked valid (QD-040)\n" +
+			"  why: idempotent full-set calls; removal on the client's removal signal (§9.5, §9.8); a revocation-record miss within 120 s of a valid check counts as valid, since only api's and connect's SQL fallback projects the record again (QD-040)\n" +
+			"  ttl: 5 min after the client's last call; the valid time 120 s after the check it records\n",
 	},
 }
 
