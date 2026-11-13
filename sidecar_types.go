@@ -83,6 +83,9 @@ type Sidecar struct {
 	// §5.9's search state, the index cache and §5.4's search seams (sidecar_search.go), made on first use. Held as any,
 	// so this file, which the forwarding leg links, names none of their types: that leg runs no search (§18.10).
 	search atomic.Value
+	// Forwarding's setup for the app's VPN component, which a host installs (bridge_forward_setup.go). Held as any, as
+	// search is: the forwarding leg sets up nothing.
+	forwardingSetup atomic.Value
 
 	stateLock sync.Mutex
 	lifecycle sidecarLifecycle

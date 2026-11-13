@@ -1,4 +1,4 @@
-# metadata_list.yml v14; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v15; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -54,6 +54,8 @@
 # well, gkm/dkey/<network_id>/<delegation_id>, so gkm's reconciler sweeps one network's at a time (QD-675).
 # v14, updated 2026-11-13 for the slot fix (DESIGN-DETAILS 14; QD-765), adds evs-5's origin of each slot object, in
 # object metadata, and narrows evs-5's ttl to a dead push's own slots; evs-10 names the object metadata evs writes.
+# v15, updated 2026-11-13 for the owner's answer QD-040 (plan-SOCK-client-auth), adds sock-2's caller sidecar id,
+# which its token names, and sock-5's {sc_<client_id>}ok, the time a client's token last checked valid at sockets.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -223,7 +225,7 @@ sock-1:
 sock-2:
   service: sockets
   store: memory; per-dialer fields in sock-1's hash
-  sees: each Find's dialer client and network (edges add their K client ids), token path or edge name, a dial's protocol, minimum version and offered ALPN ids, affinity key (tlsedge's keyed /24 or /48 hash, never stored), the authorization log position that allowed it (§7.9), chosen listeners, grant id, issued tickets and the failed tickets a retry reports; each dialer's issued share and exclusions; reported accept timeouts; per-source registration and Find rates for the control-plane bound (memory; D-SOCK-15)
+  sees: each Find's dialer client, network and sidecar id, which its token names (QD-040; edges add their K client ids and name no sidecar), token path or edge name, a dial's protocol, minimum version and offered ALPN ids, affinity key (tlsedge's keyed /24 or /48 hash, never stored), the authorization log position that allowed it (§7.9), chosen listeners, grant id, issued tickets and the failed tickets a retry reports; each dialer's issued share and exclusions; reported accept timeouts; per-source registration and Find rates for the control-plane bound (memory; D-SOCK-15)
   why: admission, scheduling and outlier ejection (§9.6, §9.7)
   ttl: the request; tickets 30 s; dialer shares and exclusions at most 300 s; no per-dial record (D-SOCK-9)
   owner: §9.6
@@ -243,10 +245,10 @@ sock-4:
   owner: §9.8
 sock-5:
   service: sockets
-  store: Redis {sc_<client_id>}set
-  sees: a client's set_version and registered entries
-  why: idempotent full-set calls; removal on the client's removal signal (§9.5, §9.8)
-  ttl: 5 min after the client's last call
+  store: Redis {sc_<client_id>}set and {sc_<client_id>}ok
+  sees: a client's set_version and registered entries; the time its token last checked valid (QD-040)
+  why: idempotent full-set calls; removal on the client's removal signal (§9.5, §9.8); a revocation-record miss within 120 s of a valid check counts as valid, since only api's and connect's SQL fallback projects the record again (QD-040)
+  ttl: 5 min after the client's last call; the valid time 120 s after the check it records
   owner: §9.8
 evs-1:
   service: evs; gkm reads it
