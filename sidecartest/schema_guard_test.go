@@ -120,8 +120,10 @@ func TestSchemaGuardKeepsSealedFieldsOutOfTheMap(t *testing.T) {
 // bound for either may set shows to a server, and AD4, which speaks of fields a gate already sees, cannot call it
 // unset. protos-services-canonical-action's answer lists those fields per kind, which api, every reader's
 // GrantActivate check and each gate admit, as record-m2-01-canonical-action-detail's amends them (QD-740: 24, 25 and
-// 34 gone to ApprovalRequest, 27 out of version 3, sealed_detail 38 on versions 3 and 4), and MCP-M3-02's kind table
-// what each such kind fills. Both give numbers, so the lists here are numbers read through the descriptor: an entry
+// 34 gone to ApprovalRequest, 27 out of version 3, sealed_detail 38 on versions 3 and 4) and
+// canonical-action-detail-listen-socket-name's (QD-772: a listen's socket_name, 23, gone to ApprovalRequest, so a
+// listen carries the grant's fields alone), and MCP-M3-02's kind table what each such kind fills. Both give numbers,
+// so the lists here are numbers read through the descriptor: an entry
 // cannot pass on a name the action lacks, and a number the action stops declaring fails until its list follows.
 func TestSchemaGuardCallsNoFieldAServerMaySeeUnset(t *testing.T) {
 	guard, err := LoadSchemaGuard()
@@ -142,7 +144,7 @@ func TestSchemaGuardCallsNoFieldAServerMaySeeUnset(t *testing.T) {
 		{kind: "a dns_* action", fieldNumbers: []protoreflect.FieldNumber{8, 18, 19, 20, 21}},
 		// MCP-M3-02's kind table
 		{kind: "a publish", fieldNumbers: []protoreflect.FieldNumber{5, 6, 7, 8, 10, 11, 28, 29, 33, 35}},
-		{kind: "a socket_listen", fieldNumbers: []protoreflect.FieldNumber{23, 8, 10, 11, 28, 29}},
+		{kind: "a socket_listen", fieldNumbers: []protoreflect.FieldNumber{8, 10, 11, 28, 29}},
 		{kind: "a bridge_forward", fieldNumbers: []protoreflect.FieldNumber{8, 10, 11, 28, 29, 38}},
 		{kind: "a bridge_expose", fieldNumbers: []protoreflect.FieldNumber{8, 9, 26, 27}},
 		{kind: "a dns_set or dns_delete", fieldNumbers: []protoreflect.FieldNumber{18, 19, 20, 21}},

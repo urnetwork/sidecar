@@ -13,10 +13,12 @@
 //   - socket_listen(name, local_port) listens an application name, forwarding each admitted stream to
 //     127.0.0.1:<local_port>, serving false while that port refuses. Under a covering grant, §8's local allow of listen
 //     on sock:<name> for this sidecar, it runs as W: rate-limited and recorded, its grant_id in the result. With none it
-//     is outward, §5.4's gate with a CanonicalAction of kind listen naming the socket and, beside it, the local port
-//     as the request's local_port (QD-740), which the approver renders and the decision binds: the tool listens on
-//     the port it asked for and no other. tls/ is tls_publish's, smtp/ a receiver's, share/ ur share's and ur/ the
-//     platform's: each is refused here.
+//     is outward, §5.4's gate with a CanonicalAction of kind listen naming the socket by its grant_dst alone, its token
+//     path under the network's current K_sock (QD-772), and beside it the name and the local port as the request's
+//     socket_name and local_port (QD-740), which the approver renders and the decision binds: the tool listens on the
+//     name and the port it asked for and no other. A network whose K_sock this daemon does not hold yet takes no
+//     outward listen, as its sockets would register none. tls/ is tls_publish's, smtp/ a receiver's, share/ ur
+//     share's and ur/ the platform's: each is refused here.
 //   - socket_unlisten(name) ends the daemon's listen on name at once (§9.9's Close); streams accepted stay.
 //
 // No result holds a key, a seal, a token path or a credential (I-7), and the framework's matcher holds every result to
@@ -155,15 +157,16 @@ func mcpSocketTargetPort(target string) int {
 	return port
 }
 
-// The §5.4 action an uncovered socket_listen goes through Authorize as: kind listen naming the socket, built by
-// NewCanonicalAction. A test replaces it.
-type mcpSocketListenActionFunction func(call *McpCall, name string) (*sidecar.SidecarAction, error)
+// The §5.4 action an uncovered socket_listen on name goes through Authorize as: kind listen naming the socket by
+// grantDst alone (QD-772), built by NewCanonicalAction. The tool sets the request's detail beside it. A test replaces
+// it.
+type mcpSocketListenActionFunction func(call *McpCall, name string, grantDst string) (*sidecar.SidecarAction, error)
 
 // The production action: NewCanonicalAction, then NewSidecarAction bound to the call's run.
-func mcpSocketListenAction(call *McpCall, name string) (*sidecar.SidecarAction, error) {
+func mcpSocketListenAction(call *McpCall, name string, grantDst string) (*sidecar.SidecarAction, error) {
 	stored, err := sidecar.NewCanonicalAction(&protocol.CanonicalAction{
-		Kind:       uint32(sidecar.SidecarActionListen),
-		SocketName: name,
+		Kind:     uint32(sidecar.SidecarActionListen),
+		GrantDst: []string{grantDst},
 	})
 	if err != nil {
 		return nil, err
@@ -175,6 +178,12 @@ func mcpSocketListenAction(call *McpCall, name string) (*sidecar.SidecarAction, 
 // What an outward socket_listen passes: the network's §5.4 gate, *sidecar.Sidecar's Authorize.
 type mcpAuthorizer interface {
 	Authorize(ctx context.Context, action *sidecar.SidecarAction, decision *bridge.Signed) error
+}
+
+// What an outward socket_listen blinds its name with: the network's K_sock ring, *sidecar.Sidecar's SocketKeyRing,
+// nil while the daemon holds none.
+type mcpSocketKeys interface {
+	SocketKeyRing() *sidecar.SocketKeyRing
 }
 
 func init() {
@@ -281,12 +290,26 @@ func addSocketTools(catalog *McpCatalog, sockets func() McpSockets, listenAction
 			if !ok {
 				return nil, errMcpSocketHeld
 			}
-			action, err := listenAction(call, name)
+			// the action names the socket as a server may see it, its token path under the network's current K_sock
+			// (QD-772), which a daemon holding none yet cannot derive, as its sockets could register none
+			var ring *sidecar.SocketKeyRing
+			if keys, ok := call.Network.(mcpSocketKeys); ok {
+				ring = keys.SocketKeyRing()
+			}
+			if ring == nil {
+				return nil, mcpSocketError(sidecar.ErrSocketUnavailable)
+			}
+			grantDst, err := sidecar.SocketListenGrantDst(name, ring.Current())
 			if err != nil {
 				return nil, errMcpSocketHeld
 			}
-			// the port the listen below forwards to rides the request, so the approval is of this port
-			action.Detail = &sidecar.SidecarActionDetail{LocalPort: uint32(in.LocalPort)}
+			action, err := listenAction(call, name, grantDst)
+			if err != nil {
+				return nil, errMcpSocketHeld
+			}
+			// the name and the port the listen below forwards to ride the request, so the approval is of this socket
+			// and this port
+			action.Detail = &sidecar.SidecarActionDetail{SocketName: name, LocalPort: uint32(in.LocalPort)}
 			if err := authorizer.Authorize(ctx, action, nil); err != nil {
 				var pending *sidecar.ApprovalPendingError
 				if errors.As(err, &pending) {

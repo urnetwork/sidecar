@@ -4,7 +4,8 @@
 // ApprovalGate.Authorize runs once it holds an approval for the action:
 //
 //	1  the approval's mutex (ApprovalLedger.Hold); the request binds this requester, run, agent, action and the
-//	   action's detail, the local port, weight and ALPNs request_sha256 covers (QD-740); spendable over the kept
+//	   action's detail, the socket name, local port, weight and ALPNs request_sha256 covers (QD-740, QD-772);
+//	   spendable over the kept
 //	   approving decisions, each approver's first, as §16.6's k approvers set (SpendableSet), its expiry test left out
 //	   when this action's use is reserved already
 //	2  that Reserve exists: the retry path, after the mutex
@@ -138,9 +139,9 @@ func (self *ApprovalGate) planWithHold(hold *ApprovalHold, action *SidecarAction
 		return nil, fmt.Errorf("%w: a decision on another action", ErrApprovalRefused)
 	}
 	if !request.Detail().Equal(action.Detail) {
-		// request_sha256 binds the local port, weight and ALPNs the approver saw (QD-740), so a decision spends on
-		// no other
-		return nil, fmt.Errorf("%w: a decision on another local port, weight or alpn", ErrApprovalRefused)
+		// request_sha256 binds the socket name, local port, weight and ALPNs the approver saw (QD-740, QD-772), so a
+		// decision spends on no other
+		return nil, fmt.Errorf("%w: a decision on another socket name, local port, weight or alpn", ErrApprovalRefused)
 	}
 	plan := &approvalSpendPlan{request: request}
 	kept, denied := approvalKeptDecisions(state)
