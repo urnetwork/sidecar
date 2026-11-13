@@ -110,6 +110,24 @@ type SidecarIngestSettings struct {
 	RestoreHoldTimeout time.Duration
 	// How much of a file that hold keeps: 8 MiB.
 	RestoreHoldByteCount int64
+	// The largest per-run ingest state file read whole: 1 MiB, its blob hashes bounded by IngestBlobHashCount.
+	IngestStateByteCount int64
+	// The blob hashes a run's ingest state remembers, so a blob already captured is not captured again, the oldest
+	// forgotten past it: 4,096, a bound on the state file.
+	IngestBlobHashCount int
+	// The largest file of a restore point read whole, its manifest, ledger, preview list or one preview: 64 MiB, past
+	// any real point's, so one that is larger reads as failed rather than being held in memory.
+	RestoreManifestByteCount int64
+	// The dry runs' previews one restore point keeps, the oldest removed past it: 16, a reading. An apply names one by
+	// its preview_id, and a removed one is previewed again (§16.7's apply row).
+	RestorePreviewCount int
+	// The random bytes in each hidden name an apply stages, moves aside or probes under in a path's directory: 16, so a
+	// fresh name never meets one that exists (§16.7's stage and aside rows).
+	RestoreHiddenNameByteCount int
+	// The names one conflict copy tries, <name>.ur-restored-<h>, then -2 and on (§16.7's copies row), before the bytes
+	// stay under their hidden name, which the result names instead: 1,024, a reading. Non-positive tries the first
+	// name alone.
+	RestoreCopyNameCount int
 	// Permission modes under which a run is recorded and gapped bypass_mode, and whose harness evidence never counts
 	// (§16.6; D-MCP-9): Claude Code's bypassPermissions and dontAsk, and Codex's auto, as the harness names them.
 	BypassPermissionModes []string
@@ -259,7 +277,14 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		RestorePointByteCount: 256 * 1024 * 1024,
 		RestoreHoldTimeout:    10 * time.Minute,
 		RestoreHoldByteCount:  8 * 1024 * 1024,
-		BypassPermissionModes: []string{"bypassPermissions", "dontAsk", "auto"},
+		IngestStateByteCount:  1024 * 1024,
+		IngestBlobHashCount:   4096,
+		// a restore point's files and the apply's names and copies (MCP-M3-21)
+		RestoreManifestByteCount:   64 * 1024 * 1024,
+		RestorePreviewCount:        16,
+		RestoreHiddenNameByteCount: 16,
+		RestoreCopyNameCount:       1024,
+		BypassPermissionModes:      []string{"bypassPermissions", "dontAsk", "auto"},
 		InstructionProjectFileNames: []string{
 			"CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md", "AGENTS.md", ".cursorrules", ".cursor/rules",
 		},

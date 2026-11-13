@@ -10,8 +10,9 @@
    The ref holds pushes, each one change: a signer, the auth pin it carries, the log's length when evs committed
    it (at), a path, what it does to the path's content (write, remove, keep), what its parent's delta does to the
    path's row (add, remove, none), and for a write its lineage: the versions whose bytes its record chain rests
-   on, its own included. evs holds a push's pin at or above the head's (§11.8's fence row) and folds every row
-   into its name table, since it sees no path.
+   on, its own included. evs holds a push's pin at or above the head's (§11.8's fence row), holds the pin of the
+   push that creates the ref at or above the newest set the log holds (16.2.9's clause, QD-803), and folds every
+   row into its name table, since it sees no path.
 
    A reader's verdict on a push is the design's one function: the newest set at or below the push's pin, read
    from the positions the rows keep for the repo's life, allows the signer the path. Readers are the long-running
@@ -33,12 +34,13 @@
      HeadAtoms         a set's subject is a group whose members a head gives, judged in the oldest state held
      DiffOnNewest      a writer builds its record chain on evs's newest version, ignored or not
      NoHeadFence       evs takes a push whose pin is below the head's
+     NoNewRefFence     evs takes any pin on the push that creates the ref
      RepairSkipsNames  a repair writes content and no row *)
 EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS MaxLog, MaxRef, RuleSets, Honest, Twin
 
-ASSUME Twin \in {"none", "NoCheck", "NewestOnly", "JudgeAtTip", "HeadAtoms", "DiffOnNewest", "NoHeadFence", "RepairSkipsNames"}
+ASSUME Twin \in {"none", "NoCheck", "NewestOnly", "JudgeAtTip", "HeadAtoms", "DiffOnNewest", "NoHeadFence", "NoNewRefFence", "RepairSkipsNames"}
 ASSUME RuleSets \subseteq {"open", "inOnly", "closed"}
 ASSUME Honest \subseteq {"A", "B"}
 
@@ -95,6 +97,14 @@ Present(X) == Stands(EffC(X))
 Dirty(X) == Ev(X) # {} /\ ~Good(Max(Ev(X)))
 LinOf(j) == IF Stands(j) THEN ref[j].lineage ELSE {}
 HeadPin == IF ref = <<>> THEN 0 ELSE ref[Len(ref)].pin
+
+\* the lowest pin evs takes: the head's on a ref that exists (the fence), and on the push that creates the ref the
+\* position of the newest set the log holds (16.2.9's clause, QD-803)
+NewestSet == MaxOr0({i \in 1..Len(log) : IsSet(i)})
+PinFloor ==
+  IF Twin = "NoHeadFence" THEN 0
+  ELSE IF ref = <<>> THEN (IF Twin = "NoNewRefFence" THEN 0 ELSE NewestSet)
+  ELSE HeadPin
 
 \* what a writer builds a new record chain on
 BaseOf(X) == IF Twin = "DiffOnNewest" THEN NewestC(X) ELSE EffC(X)
@@ -169,7 +179,7 @@ Shapes == {<<"write", "add">>, <<"write", "none">>, <<"remove", "remove">>, <<"k
 
 WPush(X, shape, pin) ==
   /\ Len(ref) < MaxRef
-  /\ pin \in (IF Twin = "NoHeadFence" THEN 0 ELSE HeadPin)..Tip
+  /\ pin \in PinFloor..Tip
   /\ ref' = Append(ref, Cand("W", pin, X, shape[1], shape[2], IF shape[1] = "write" THEN {Len(ref) + 1} ELSE {},
                              FALSE, FALSE))
   /\ UNCHANGED log
@@ -207,6 +217,9 @@ CleanLineage == \A X \in Paths : Present(X) => \A j \in ref[EffC(X)].lineage : G
 
 \* a later push is never judged under an older set than an earlier push of the ref
 Fence == \A i, j \in 1..Len(ref) : i < j => SetPos(0, ref[i].pin) <= SetPos(0, ref[j].pin)
+
+\* the push that creates the ref is judged under the newest set the log held when evs committed it
+NewRefFence == ref # <<>> => SetPos(0, ref[1].pin) = MaxOr0({i \in 1..ref[1].at : IsSet(i)})
 
 RowEv(X, S) == {j \in S : ref[j].path = X /\ ref[j].row # "none"}
 Listed(S) == S # {} /\ ref[Max(S)].row = "add"

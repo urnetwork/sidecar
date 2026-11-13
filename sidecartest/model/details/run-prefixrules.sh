@@ -18,7 +18,7 @@ ROOT=/Users/builder/urnetwork-sidecar
 track=$1
 shift
 designs="PrefixRules PrefixRules-Deep PrefixRules-Long"
-twins="PrefixRulesTwin-NoCheck PrefixRulesTwin-NewestOnly PrefixRulesTwin-JudgeAtTip PrefixRulesTwin-HeadAtoms PrefixRulesTwin-DiffOnNewest PrefixRulesTwin-NoHeadFence PrefixRulesTwin-RepairSkipsNames"
+twins="PrefixRulesTwin-NoCheck PrefixRulesTwin-NewestOnly PrefixRulesTwin-JudgeAtTip PrefixRulesTwin-HeadAtoms PrefixRulesTwin-DiffOnNewest PrefixRulesTwin-NoHeadFence PrefixRulesTwin-NoNewRefFence PrefixRulesTwin-RepairSkipsNames"
 reaches="PrefixRulesReach-Ignored PrefixRulesReach-WalkedBack PrefixRulesReach-StalePin PrefixRulesReach-Hidden PrefixRulesReach-Repaired PrefixRulesReach-Tightened"
 [ $# -ge 1 ] || set -- all
 configs=
