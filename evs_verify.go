@@ -188,9 +188,40 @@ func (self *EvsVerifier) VerifyStatement(statementBytes []byte, repoId Id, refId
 	return statement, nil
 }
 
-// §11.8's refs table at the statement's state: who may write each ref kind, and who may FORCE, DELETE, BASE, CONSUME
-// and ERASE there. Record-class owned refs, deposit refs and the erasure ref take only creations from their writers.
+// §11.8's refs table again over a verified statement's payload, as a replaying reader holds it: changes are the push's
+// own, each with its entry version, and pathOf gives each change's path as the reader's replay holds it, nil for a path
+// it holds none of. What VerifyStatement leaves a statement read alone to, a write on a base of a record-class stream,
+// is judged here: a directory's add-only delta passes, and any other change is ErrEvsStatementRefused (QD-722).
+func (self *EvsVerifier) VerifyPayloadRefRules(statement *EvsStatement, repoId Id, refId Id, changes []*EvsCheckedChange, pathOf func(change *EvsCheckedChange) *EvsCreatesOnlyPath) error {
+	push := statement.Push
+	newest, err := self.config()
+	if err != nil {
+		return err
+	}
+	state, err := newest.At(push.GetAuth())
+	if err != nil {
+		return fmt.Errorf("%w: its authorization pin: %w", ErrEvsStatementRefused, err)
+	}
+	signerId, err := IdFromBytes(push.GetSignerSidecarId())
+	if err != nil {
+		return fmt.Errorf("%w: its signer", ErrEvsStatementRefused)
+	}
+	return evsCheckRefRulesOver(state, statement, changes, pathOf, repoId, refId, signerId)
+}
+
+// §11.8's refs table at the statement's state over the statement read alone: who may write each ref kind, and who may
+// FORCE, DELETE, BASE, CONSUME and ERASE there. Record-class owned refs, deposit refs and the erasure ref take only
+// creations from their writers, a record-class stream also a directory's add-only delta (evs_creates_only.go), which
+// a statement alone cannot tell from a file's write: the replaying reader that holds the payload judges that
+// (VerifyPayloadRefRules).
 func evsCheckRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, refId Id, signerId Id) error {
+	return evsCheckRefRulesOver(state, statement, statement.Changes, nil, repoId, refId, signerId)
+}
+
+// The refs table as evsCheckRefRules holds it, over changes: the statement's inline ones, or a push's payload's with
+// their entry versions. pathOf gives a change's path as the caller's replay holds it, nil when it holds none, as nil
+// pathOf does for every change.
+func evsCheckRefRulesOver(state GkmAuthView, statement *EvsStatement, changes []*EvsCheckedChange, pathOf func(change *EvsCheckedChange) *EvsCreatesOnlyPath, repoId Id, refId Id, signerId Id) error {
 	push := statement.Push
 	repo := state.Repo(repoId)
 	if repo == nil {
@@ -200,10 +231,14 @@ func evsCheckRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, ref
 	has := func(flag protocol.EvsPushFlag) bool { return flags&uint32(flag) != 0 }
 	writer := slices.Contains(state.RepoWriters(repoId), signerId)
 	admin := evsRepoAdmin(state, repo, signerId)
-	createsOnly := func() error {
-		for _, change := range statement.Changes {
-			if change.Change.GetBaseEntryVersion() != 0 || len(change.Change.GetEntrySha256()) == 0 {
-				return fmt.Errorf("%w: a creates-only ref changed or removed a path", ErrEvsStatementRefused)
+	createsOnly := func(deltas bool) error {
+		for _, change := range changes {
+			var path *EvsCreatesOnlyPath
+			if pathOf != nil {
+				path = pathOf(change)
+			}
+			if refusal := EvsCreatesOnlyRefusal(change, deltas, path); refusal != "" {
+				return fmt.Errorf("%w: a creates-only ref's change: %s", ErrEvsStatementRefused, refusal)
 			}
 		}
 		if has(protocol.EvsPushFlag_EVS_PUSH_FORCE) || has(protocol.EvsPushFlag_EVS_PUSH_DELETE) {
@@ -236,7 +271,8 @@ func evsCheckRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, ref
 			if has(protocol.EvsPushFlag_EVS_PUSH_ERASE) || has(protocol.EvsPushFlag_EVS_PUSH_CLOSURE) {
 				return nil
 			}
-			return createsOnly()
+			// a stream's directories grow by add-only deltas (QD-722)
+			return createsOnly(true)
 		}
 	case protocol.EvsRefKind_EVS_REF_DEPOSIT:
 		if ownerErr != nil || EvsDepositRefId(repoId, ownerId) != refId {
@@ -246,7 +282,7 @@ func evsCheckRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, ref
 			if !writer {
 				return fmt.Errorf("%w: a CONSUME by a sidecar that does not write the repo", ErrEvsStatementRefused)
 			}
-			for _, change := range statement.Changes {
+			for _, change := range changes {
 				if len(change.Change.GetEntrySha256()) != 0 {
 					return fmt.Errorf("%w: a CONSUME that writes", ErrEvsStatementRefused)
 				}
@@ -256,7 +292,7 @@ func evsCheckRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, ref
 		if ownerId != signerId {
 			return fmt.Errorf("%w: a deposit signed by another sidecar", ErrEvsStatementRefused)
 		}
-		return createsOnly()
+		return createsOnly(false)
 	case protocol.EvsRefKind_EVS_REF_ERASURE:
 		if EvsErasureRefId(repoId) != refId {
 			return fmt.Errorf("%w: an erasure ref at another id", ErrEvsStatementRefused)
@@ -264,7 +300,7 @@ func evsCheckRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, ref
 		if !admin {
 			return fmt.Errorf("%w: an erasure push by a non-admin", ErrEvsStatementRefused)
 		}
-		return createsOnly()
+		return createsOnly(false)
 	default:
 		return fmt.Errorf("%w: ref kind %d", ErrEvsStatementRefused, push.GetRefKind())
 	}

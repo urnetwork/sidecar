@@ -236,7 +236,8 @@ func evsTokenPathOfStatement(epochs *EvsPathEpochs, statement *EvsStatement) (Ev
 }
 
 // Checks a version: its statement, its entry hash to that statement's change of exactly the path's token path in the
-// statement's epoch, its push and base, and format 1's shape.
+// statement's epoch, its push and base, format 1's shape, and the refs table over the change with its entry, which a
+// creates-only stream's write on a base needs (VerifyPayloadRefRules).
 func (self *EvsVerifier) verifyVersion(head *EvsVerifiedHead, epochs *EvsPathEpochs, version *protocol.EvsIndexVersion, sent []byte, proofs []*protocol.EvsMerkleProof, verified *EvsVerifiedPath) error {
 	if version.GetElided() || len(version.GetEntryVersion()) == 0 {
 		return fmt.Errorf("%w: an elided version", ErrEvsEntryRefused)
@@ -272,6 +273,13 @@ func (self *EvsVerifier) verifyVersion(head *EvsVerifiedHead, epochs *EvsPathEpo
 	if change.GetBaseEntryVersion() == 0 && entry.GetVersion() <= statement.Push.GetBaseVersion() {
 		self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmVersionRule, "", nil)
 		return fmt.Errorf("%w: a creation at or below its push's base", ErrEvsVersionRule)
+	}
+	// the refs table with this change's entry at hand, which the statement read alone lacked: on a creates-only stream
+	// a write on a base is a directory's add-only delta or nothing (QD-722)
+	held := &EvsCheckedChange{Change: change, TokenPath: tokenPath, EntryVersion: version.GetEntryVersion()}
+	if err := self.VerifyPayloadRefRules(statement, head.RepoId, head.RefId, []*EvsCheckedChange{held}, nil); err != nil {
+		self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", evsSignerOf(statement.Bytes))
+		return err
 	}
 	verified.EntryBytes = version.GetEntryVersion()
 	verified.Entry = entry
