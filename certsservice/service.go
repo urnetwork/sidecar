@@ -19,6 +19,8 @@
 //   - budget.go, CertsBudget, {tcb_<ca>_<registered_domain>}.
 //   - queue.go, the admission pass.
 //   - service.go, the service, its seams to DNS and the CAs, and the routes' reads.
+//   - run.go, the chains' passes: orders, renewals and the revocation sweep (TLS-M5-17).
+//   - hints.go, TlsHint on topic tls.
 //
 // A CA's Retry-After and the names' failed authorizations are held in the process, as the extender's
 // hold is: a restart forgets them, and the CA's next refusal holds again.
@@ -175,6 +177,8 @@ type CertsService struct {
 	budget   *CertsBudget
 	settings *CertsSettings
 	clock    sidecar.Clock
+	// the host's hints, nil on a host with none: no TlsHint is published (hints.go)
+	push sidecar.Push
 
 	stateLock sync.Mutex
 	// the newest cert_id minted here (newCertId)
@@ -218,6 +222,7 @@ func NewCertsService(
 		budget:       NewCertsBudget(host.Redis, store, settings),
 		settings:     settings,
 		clock:        host.ClockOrReal(),
+		push:         host.Push,
 		caHolds:      map[CertsCa]time.Time{},
 		nameFailures: map[string][]time.Time{},
 	}, nil
