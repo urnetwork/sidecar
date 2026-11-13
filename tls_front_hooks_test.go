@@ -113,6 +113,7 @@ func TestTlsMembersDeviceRaceCompletesOnce(t *testing.T) {
 		select {
 		case <-release:
 		case <-time.After(tlsFrontTestGuard):
+			t.Error("a post was held at the barrier and never released")
 		}
 	}})
 	t.Cleanup(func() { SetTestHooks(nil) })
