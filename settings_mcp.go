@@ -122,6 +122,43 @@ type SidecarIngestSettings struct {
 	RunCardPromptByteCount int
 	// The most touched paths a run card keeps: 256 (§16.10).
 	RunCardPathCount int
+	// The agent-config files of a shared repo, which evs_write and evs_delete reach only as an outward action
+	// (§16.5's row; sidecar/design/pitch5.html:737): CLAUDE.md, AGENTS.md, .mcp.json and each harness's hook and
+	// settings files. An entry with no / matches a path's last name, at any depth, as harnesses load nested
+	// CLAUDE.md and AGENTS.md files; one with a / matches the path itself or its tail after a /. Matched exactly, case
+	// and all.
+	AgentConfigPaths []string
+	// The largest harness config file `ur install-harness` and the config check read whole: 16 MiB, past the
+	// counters and per-project state Claude Code keeps in ~/.claude.json. A larger one is refused, and its check reads
+	// changed.
+	HarnessConfigByteCount int64
+	// How deep a harness config's JSON or TOML values may nest before it is refused: 64, far past any real one.
+	HarnessConfigDepthCount int
+	// The most exact edits one install makes in one file before it stops: 1,024, far past the entries ur writes (an
+	// MCP entry, an ask rule per outward tool, a hook per event) and any stale copies of them a file could hold.
+	HarnessConfigEditCount int
+	// The lines of context `ur install-harness` shows around each change of its diff: 3, unified diff's own.
+	HarnessDiffContextLineCount int
+	// The timeout `ur install-harness` writes on the hook entries that may wait on the daemon's presence prompt, Claude
+	// Code's and Codex's PermissionRequest and Cursor's beforeMCPExecution: 75 s, past Ingest.PresencePromptTimeout's
+	// 60 s, since Claude Code and Codex default to 600 s and Cursor states only a platform default
+	// (plan-MCP-presence-hook-timing). Written in whole seconds.
+	PermissionHookTimeout time.Duration
+	// How many times `ur install-harness` plans a file again when the harness rewrote it between the plan and the
+	// write: 3. Past that the install stops, naming the file.
+	HarnessInstallRetryCount int
+	// How old a hook event may be and still count as harness evidence, and how long a harness decision on it lasts:
+	// 10 min (§16.6's harness_ok; MCP.md's reading 4).
+	HarnessEvidenceTimeout time.Duration
+	// The most unused harness evidence events kept in memory per network, the oldest dropped first: 1,024, far past
+	// the prompts a person answers in ten minutes. A dropped event is lost evidence, the closed direction.
+	HarnessEvidenceEventCount int
+	// The permission modes a hook event's session may report for its event to count as harness evidence, as each
+	// harness names them: Claude Code's default, acceptEdits and plan. Any other mode, an unknown or missing one
+	// included, voids it (§16.6's harness_ok; D-MCP-9), so a harness whose modes this list does not name gives no
+	// evidence until hook conformance (MCP-M3-28) names them. Cursor reports none: its beforeMCPExecution counts only
+	// where `ur hook cursor` answered ask, which makes Cursor prompt.
+	HarnessPromptingModes []string
 }
 
 // §16.8's record defaults, with RECORD.md section 18's fields below the first six, whose names stand
@@ -225,6 +262,22 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		ChangePathCount:          4096,
 		RunCardPromptByteCount:   2 * 1024,
 		RunCardPathCount:         256,
+		AgentConfigPaths: []string{
+			"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".mcp.json", ".cursorrules",
+			".claude/settings.json", ".claude/settings.local.json",
+			".codex/config.toml", ".codex/hooks.json",
+			".cursor/mcp.json", ".cursor/hooks.json",
+			".ur",
+		},
+		HarnessConfigByteCount:      16 * 1024 * 1024,
+		HarnessConfigDepthCount:     64,
+		HarnessConfigEditCount:      1024,
+		HarnessDiffContextLineCount: 3,
+		PermissionHookTimeout:       75 * time.Second,
+		HarnessInstallRetryCount:    3,
+		HarnessEvidenceTimeout:      10 * time.Minute,
+		HarnessEvidenceEventCount:   1024,
+		HarnessPromptingModes:       []string{"default", "acceptEdits", "plan"},
 	}
 }
 
