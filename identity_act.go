@@ -162,13 +162,15 @@ func (self *sidecarAct) Add(signedType bridge.SignedType, statement proto.Messag
 
 // Add, with seal run on the statement once its StatementHeader is set and before it is encoded, nil for none: what a
 // statement with a sealed field needs, since the seal binds the header's network and nonce
-// (plan-TEAM-sealed-field-format), as IndexerSet's services (TEAM-M2-18).
+// (plan-TEAM-sealed-field-format), as IndexerSet's services (TEAM-M2-18). §17.8's log statements sign under purpose
+// bridge: those beyond the own-resource filings, a BridgeEgress or a BridgeAlias, only on a person's confirmation; a
+// BridgeBlock rides a head and carries no StatementHeader, so it is no act's.
 func (self *sidecarAct) AddSealed(signedType bridge.SignedType, statement proto.Message, seal func(header *bridge.StatementHeader, statement proto.Message) error) error {
 	if self.ran {
 		return ErrSidecarActState
 	}
 	purpose, ok := sidecarIdentitySignedPurpose(signedType)
-	if !ok || (purpose != bridge.SignedPurposeAuthority && purpose != bridge.SignedPurposeAcl && !sidecarOwnResourceTypes[signedType]) {
+	if !ok || (purpose != bridge.SignedPurposeAuthority && purpose != bridge.SignedPurposeAcl && purpose != bridge.SignedPurposeBridge && !sidecarOwnResourceTypes[signedType]) {
 		return fmt.Errorf("%w: type %#x is no statement this act signs", ErrSidecarSignRefused, int32(signedType))
 	}
 	if self.origin != SidecarActConfirmed && !sidecarOwnResourceTypes[signedType] {
