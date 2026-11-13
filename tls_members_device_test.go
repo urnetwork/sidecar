@@ -574,8 +574,8 @@ func TestSidecarSignTlsEdgeLoginNeedsAConsentedDevice(t *testing.T) {
 }
 
 // The front's config policy over a real log: the member's consented device vouches for its member alone; a device an
-// admin admitted without the member's consent, a read_only one and a revoked one vouch for nothing; and with no state
-// nothing does.
+// admin admitted without the member's consent, a read_only one and a revoked one vouch for nothing, and a suspended one
+// nothing until its suspension lifts (§8.6); and with no state nothing does.
 func TestTlsFrontConfigPolicyDeviceConsented(t *testing.T) {
 	now := time.Now()
 	if NewTlsFrontConfigPolicy(NewId(), func() *ConfigState { return nil }).DeviceConsented(NewId(), NewId(), now) {
@@ -610,6 +610,23 @@ func TestTlsFrontConfigPolicyDeviceConsented(t *testing.T) {
 	}
 	if !policy.DeviceConsented(second.sidecarId, member, now) {
 		t.Error("the member's second consented device")
+	}
+	// the owner suspends it: still consented in the ACL, and vouching for nothing until the suspension lifts
+	suspendId := aclTestSuspendId("tls members device")
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SUSPEND, &bridge.Suspend{Header: net.header(), Subject: second.sidecarId.Bytes(), SuspendId: suspendId})
+	suspended, err := net.log.State().Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !net.log.State().Suspended(second.sidecarId) || !suspended.ConsentedFor(second.sidecarId, member) {
+		t.Fatal("the suspension did not stand over a consented device")
+	}
+	if policy.DeviceConsented(second.sidecarId, member, now) {
+		t.Error("a suspended device vouches")
+	}
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_UNSUSPEND, &bridge.Unsuspend{Header: net.header(), Subject: second.sidecarId.Bytes(), SuspendId: suspendId})
+	if !policy.DeviceConsented(second.sidecarId, member, now) {
+		t.Error("a device whose suspension lifted")
 	}
 	net.mustPost(first, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(second, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
 	if policy.DeviceConsented(second.sidecarId, member, now) || policy.IdentityKey(second.sidecarId) != nil {
