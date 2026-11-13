@@ -263,6 +263,10 @@ func (self *evsTestWorld) pushPathEpoch(epoch uint64) {
 		MapSourceVersion: baseVersion, MapSourceChain: baseChain[:],
 		SealedMetadata: append(evsTestBytes(fmt.Sprint("metadata ", version), 32), evsTestBytes("metadata tail", 16)...),
 	}
+	if self.owned {
+		owner := self.signer.sidecarId
+		plan.RefKind, plan.OwnerSidecarId = protocol.EvsRefKind_EVS_REF_OWNED, &owner
+	}
 	built, err := NewEvsStatementBuilder(self.signer.sign).Build(plan)
 	if err != nil {
 		self.t.Fatal(err)
