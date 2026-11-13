@@ -241,7 +241,7 @@ func TestApplyNeedsPreview(t *testing.T) {
 	env := newRestoreTestEnv(t)
 	point := env.open()
 	env.hookedWrite("toolu_1", "committed.txt", "edited\n")
-	for _, previewId := range [][]byte{bytes.Repeat([]byte{7}, 32), {1, 2, 3}, nil} {
+	for _, previewId := range [][]byte{bytes.Repeat([]byte{7}, 16), bytes.Repeat([]byte{7}, 32), {1, 2, 3}, nil} {
 		if _, err := point.Apply(context.Background(), previewId); !errors.Is(err, ErrRestorePreviewUnknown) {
 			t.Errorf("preview %x: %v", previewId, err)
 		}

@@ -201,7 +201,6 @@ var mcpCatalogUnbuilt = []string{
 	"dns_records", "dns_set", "dns_delete",
 	"record_query", "run_coverage", "approval_status", "record_append",
 	"directory_list", "directory_requests", "directory_request",
-	"run_restore",
 	"search", "search_agents", "search_status",
 }
 

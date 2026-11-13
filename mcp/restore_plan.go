@@ -14,7 +14,8 @@
 // A path whose bytes equal its base has nothing to restore and is left out; named in paths, it is answered unchanged.
 //
 // preview_id is SHA-256 over the run and each entry in preview order: (path, current kind and hash, target kind,
-// mode and hash, and whether it is a shell path), a kind being absent, file or symlink. The preview is kept sealed
+// mode and hash, and whether it is a shell path), a kind being absent, file or symlink, cut to an id's 16 bytes, the
+// width RestoreBody.preview_id has (record_body.go) as §11.13's drop preview_id does. The preview is kept sealed
 // in the point under preview/, at most Ingest.RestorePreviewCount of them, so an apply (restore_apply.go) acts on
 // exactly what the dry run showed and checks the bytes it displaces against it, never against an earlier read (RV3).
 // A dry run only reads the worktree and git; it holds the worktree's apply lock while it plans, so no apply's hidden
@@ -48,6 +49,8 @@ const (
 	restorePreviewVersion   = 1
 	// the preview_id's domain, so no other hash of the same bytes is one
 	restorePreviewIdLabel = "urnetwork-sidecar-v1/restore-preview"
+	// a preview_id is an id's width, record.proto's RestoreBody.preview_id
+	restorePreviewIdByteCount = len(sidecar.Id{})
 )
 
 var (
@@ -81,7 +84,7 @@ type RestoreRefusal struct {
 type RestorePlan struct {
 	Version int        `json:"version"`
 	RunId   sidecar.Id `json:"run_id"`
-	// SHA-256 over the run and the entries, 32 bytes.
+	// SHA-256 over the run and the entries, an id's 16 bytes of it.
 	PreviewId []byte `json:"preview_id"`
 	// The daemon's clock at the dry run, Unix milliseconds.
 	CreatedMillis int64 `json:"created_millis"`
@@ -397,7 +400,8 @@ func (self *RestorePoint) copyPresent(name string) (bool, error) {
 	return false, nil
 }
 
-// SHA-256 over the run and the entries in order, each part length-prefixed (see the file's header).
+// SHA-256 over the run and the entries in order, each part length-prefixed, an id's width of it (see the file's
+// header).
 func restorePreviewId(runId sidecar.Id, entries []*RestorePreviewEntry) []byte {
 	hash := sha256.New()
 	write := func(part []byte) {
@@ -419,7 +423,7 @@ func restorePreviewId(runId sidecar.Id, entries []*RestorePreviewEntry) []byte {
 		}
 		write([]byte{shell})
 	}
-	return hash.Sum(nil)
+	return hash.Sum(nil)[:restorePreviewIdByteCount]
 }
 
 // The preview's file name.
@@ -458,7 +462,7 @@ func (self *RestorePoint) savePreview(plan *RestorePlan) error {
 
 // The preview kept under previewId, its id checked against its entries. ErrRestorePreviewUnknown for none.
 func (self *RestorePoint) Preview(previewId []byte) (*RestorePlan, error) {
-	if len(previewId) != sha256.Size {
+	if len(previewId) != restorePreviewIdByteCount {
 		return nil, ErrRestorePreviewUnknown
 	}
 	plan := &RestorePlan{}

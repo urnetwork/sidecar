@@ -17,6 +17,7 @@
 //	done     a path's outcome, and moved bytes awaiting end's rule
 //	ended    a path's outcome after end's rule
 //	end      the apply is over: a retry answers its recorded result and moves nothing
+//	recorded the apply's restore entry reached RecordWriter.Append (MCP-M3-22), so a replay appends none again
 //
 // The restart row, which a point's load and an apply that finds its journal open both run: a path journaled aside but
 // neither installed nor back goes back the same way, or, p having reappeared, becomes recreated; a path whose install
@@ -30,7 +31,6 @@ package mcp
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -44,19 +44,20 @@ import (
 
 // The journal's name and its records' operations, format values.
 const (
-	restoreJournalPrefix  = "apply/"
-	restoreJournalBegin   = "begin"
-	restoreJournalStage   = "stage"
-	restoreJournalStaged  = "staged"
-	restoreJournalAside   = "aside"
-	restoreJournalInstall = "install"
-	restoreJournalBack    = "back"
-	restoreJournalCopy    = "copy"
-	restoreJournalRemove  = "remove"
-	restoreJournalReset   = "reset"
-	restoreJournalDone    = "done"
-	restoreJournalEnded   = "ended"
-	restoreJournalEnd     = "end"
+	restoreJournalPrefix   = "apply/"
+	restoreJournalBegin    = "begin"
+	restoreJournalStage    = "stage"
+	restoreJournalStaged   = "staged"
+	restoreJournalAside    = "aside"
+	restoreJournalInstall  = "install"
+	restoreJournalBack     = "back"
+	restoreJournalCopy     = "copy"
+	restoreJournalRemove   = "remove"
+	restoreJournalReset    = "reset"
+	restoreJournalDone     = "done"
+	restoreJournalEnded    = "ended"
+	restoreJournalEnd      = "end"
+	restoreJournalRecorded = "recorded"
 )
 
 // One record of an apply's journal.
@@ -101,11 +102,12 @@ func (self *restoreJournalPath) staged() string {
 
 // One apply's journal, read back. Not safe for concurrent use: the worktree's apply lock is held across it.
 type restoreJournal struct {
-	log       sidecar.SidecarStoreLog
-	plan      *RestorePlan
-	paths     map[int]*restoreJournalPath
-	beginSeen bool
-	endSeen   bool
+	log          sidecar.SidecarStoreLog
+	plan         *RestorePlan
+	paths        map[int]*restoreJournalPath
+	beginSeen    bool
+	endSeen      bool
+	recordedSeen bool
 }
 
 // The journal's name in the point.
@@ -116,7 +118,7 @@ func restoreJournalName(previewId []byte) string {
 // The journal of the apply of previewId, read whole: empty for one never begun. A journal whose begin names another
 // preview, or that does not read, is ErrSidecarStoreFailed.
 func (self *RestorePoint) openJournal(previewId []byte) (*restoreJournal, error) {
-	if len(previewId) != sha256.Size {
+	if len(previewId) != restorePreviewIdByteCount {
 		return nil, ErrRestorePreviewUnknown
 	}
 	log, err := sidecar.OpenSidecarStoreLog(self.store, restoreJournalName(previewId))
@@ -179,6 +181,9 @@ func (self *restoreJournal) take(record *restoreJournalRecord) {
 	case restoreJournalEnd:
 		self.endSeen = true
 		return
+	case restoreJournalRecorded:
+		self.recordedSeen = true
+		return
 	}
 	state := self.path(record.Index)
 	switch record.Op {
@@ -225,7 +230,7 @@ func (self *restoreJournal) append(record *restoreJournalRecord) error {
 // The apply's result as the journal holds it: each path's ended outcome, else its done one, else error for a path
 // never finished.
 func (self *restoreJournal) result(runId sidecar.Id) *RestoreApplyResult {
-	result := &RestoreApplyResult{RunId: runId, Paths: []*RestorePathResult{}}
+	result := &RestoreApplyResult{RunId: runId, Paths: []*RestorePathResult{}, Recorded: self.recordedSeen}
 	if self.plan == nil {
 		return result
 	}
@@ -259,6 +264,38 @@ func (self *RestorePoint) ApplyState(previewId []byte) (begun bool, ended bool, 
 		result.Replayed = true
 	}
 	return journal.begun(), journal.ended(), result, nil
+}
+
+// The plan the apply of previewId acts on: the journal's once the apply began, which outlives its preview's file,
+// else the preview the point keeps. ErrRestorePreviewUnknown for neither.
+func (self *RestorePoint) AppliedPlan(previewId []byte) (*RestorePlan, error) {
+	unlock := self.points.lockApply(self.Root())
+	defer unlock()
+	journal, err := self.openJournal(previewId)
+	if err != nil {
+		return nil, err
+	}
+	if journal.begun() {
+		return journal.plan, nil
+	}
+	return self.Preview(previewId)
+}
+
+// Notes in the ended apply's journal that its restore entry was appended, so a replay appends none again.
+func (self *RestorePoint) NoteRecorded(previewId []byte) error {
+	unlock := self.points.lockApply(self.Root())
+	defer unlock()
+	journal, err := self.openJournal(previewId)
+	if err != nil {
+		return err
+	}
+	if !journal.ended() {
+		return fmt.Errorf("%w: the apply has not ended", ErrRestorePreviewUnknown)
+	}
+	if journal.recordedSeen {
+		return nil
+	}
+	return journal.append(&restoreJournalRecord{Op: restoreJournalRecorded})
 }
 
 // The restart row over the apply's journal, before the apply goes on: each path journaled but not done is put back or

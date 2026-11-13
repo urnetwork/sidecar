@@ -193,6 +193,8 @@ func NewIngest(args *IngestArgs) *Ingest {
 	server.SetHookCapture(self.captureHook)
 	if self.restore != nil {
 		server.SetHookHolds(self.restore.HookHolds())
+		// run_restore reads the same points (MCP-M3-22)
+		server.SetRestorePoints(self.restore)
 	}
 	return self
 }

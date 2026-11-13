@@ -135,6 +135,8 @@ type RestoreApplyResult struct {
 	Paths []*RestorePathResult
 	// The journal held this apply as ended: its recorded result, nothing moved by this call.
 	Replayed bool
+	// The apply's restore entry was appended (RestorePoint.NoteRecorded).
+	Recorded bool
 }
 
 // The paths restored.
