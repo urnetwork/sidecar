@@ -764,3 +764,51 @@ func TestGatePlatformNetworkRefusesEveryCheck(t *testing.T) {
 		t.Fatal("the gate loaded the platform network")
 	}
 }
+
+// The gate follows at most MaxNetworkCount networks: past it the quiet network served longest ago is let go, with no
+// read of the cache that would reorder its eviction, and an event for it takes it up again as evidence.
+func TestGateLetsGoPastItsCountAndTakesANetworkUpAgain(t *testing.T) {
+	log := newTestGateLog(t)
+	first := log.newNetwork()
+	second := log.newNetwork()
+	world := newTestSocketWorldOn(t, log.net.Clock())
+	process := log.newProcess(world, func(settings *socketsservice.SocketsSettings) {
+		settings.Gate.MaxNetworkCount = 1
+	})
+	process.awaitLoaded(first.networkId)
+	world.clock.Advance(time.Second)
+	process.awaitLoaded(second.networkId)
+	process.projection.ReloadBehindForTest()
+	if count := process.projection.NetworkCountForTest(); count != 1 {
+		t.Fatalf("past its count the gate follows %d networks", count)
+	}
+	first.admission.AdmitMember(first.admission.Owner(), "after the let go", bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	process.changed(first.networkId)
+	if view, err := process.projection.View(first.networkId); err != nil || view.Position() != first.tip() {
+		t.Fatalf("the network let go and taken up again answers %v", err)
+	}
+}
+
+// A resubscription reads {acl_}v only for networks served or loaded within ResyncUsedWithin, so a network the cache
+// has stopped loading is not reloaded by it.
+func TestGateResyncSkipsANetworkLongUnused(t *testing.T) {
+	log := newTestGateLog(t)
+	network := log.newNetwork()
+	world := newTestSocketWorldOn(t, log.net.Clock())
+	process := log.newProcess(world, func(settings *socketsservice.SocketsSettings) {
+		settings.Gate.Cache.PollInterval = 0
+	})
+	process.awaitLoaded(network.networkId)
+	world.clock.Advance(socketsservice.DefaultSocketGateSettings().ResyncUsedWithin)
+	if _, err := process.host.Redis.Increment(world.ctx, sidecar.AclVersionKey(sidecar.Id(network.networkId)), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	count := process.projection.LoadCount()
+	process.service.ProjectionsResync()
+	if err := process.projection.AwaitResyncs(world.ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if process.projection.LoadCount() != count {
+		t.Fatal("a resubscription reloaded a network long unused")
+	}
+}

@@ -804,7 +804,7 @@ func TestFsKeysDelegationAKeyOffItsDigestIsRefusedAtGkmAndAtARotator(t *testing.
 		t.Fatalf("a refused upload stored a key: %v", err)
 	}
 	// a store that holds other bytes, past gkm's check
-	objectKey, err := gkmservice.GkmDelegationKeyKey(forward.delegationId)
+	objectKey, err := gkmservice.GkmDelegationKeyKey(sidecar.Id(world.networkId), forward.delegationId)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -884,7 +884,7 @@ func TestFsKeysDelegationARotationReadsForwardingKeysInOneBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	objectKey, err := gkmservice.GkmDelegationKeyKey(rotatorForward.delegationId)
+	objectKey, err := gkmservice.GkmDelegationKeyKey(sidecar.Id(world.networkId), rotatorForward.delegationId)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -952,7 +952,7 @@ func TestFsKeysDelegationKeysReadThreeHundredInTwoRequestsInOrder(t *testing.T) 
 			want = append(want, nil)
 			continue
 		}
-		objectKey, err := gkmservice.GkmDelegationKeyKey(delegationId[:])
+		objectKey, err := gkmservice.GkmDelegationKeyKey(sidecar.Id(world.networkId), delegationId[:])
 		if err != nil {
 			t.Fatal(err)
 		}

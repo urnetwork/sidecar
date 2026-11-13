@@ -6,10 +6,10 @@
 //	step 4   reads each slot the ERASE's erased list names
 //	5h       a list naming no key those slots still hold gets 409 NOTHING_TO_ERASE, recorded (§11.8's refuse row)
 //	after    once the ERASE commits, and again whenever an attempt of it finds it committed, each named slot is
-//	         rewritten without those keys, If-Match the slot it read, before the 200, under a preservation hold
-//	         too: a slot answering 404 is done, since every key it held is gone (the drops row); a rewrite that
-//	         cannot finish answers 503 unknown, which the client's retry finishes, and queues taskworker's
-//	         evs.erasure_finish for the repo, which FinishErasures runs
+//	         rewritten without those keys, If-Match the slot it read and keeping its origin (DESIGN-DETAILS 14.2.6),
+//	         before the 200, under a preservation hold too: a slot answering 404 is done, since every key it held is
+//	         gone (the drops row); a rewrite that cannot finish answers 503 unknown, which the client's retry
+//	         finishes, and queues taskworker's evs.erasure_finish for the repo, which FinishErasures runs
 //	class    a network's ERASE, CUT and CLOSURE pushes within 60 a minute are P0, past it P1, counted through
 //	         Quota.CountRate's evs_erasure_pushes; every slot rewrite is P0 (§11.13's classes)
 //
@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 
 	"github.com/urnetwork/connect"
@@ -155,7 +156,8 @@ type slotRewriter struct {
 	settings   *EvsSettings
 }
 
-// Each named slot without its erased keys: read, rewritten If-Match, again on a 412 or a lost answer; a 404 is done.
+// Each named slot without its erased keys: read, rewritten If-Match with the object metadata it read, so a slot keeps
+// its origin (DESIGN-DETAILS 14.2.6), again on a 412 or a lost answer; a 404 is done.
 func (self *slotRewriter) rewriteErased(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, erased []*sidecar.EvsErasedKey) error {
 	slotIndexes := map[sidecar.Id][]uint32{}
 	slotIds := []sidecar.Id{}
@@ -201,7 +203,12 @@ func (self *slotRewriter) rewriteSlot(ctx context.Context, cluster sidecar.BlobC
 			return err
 		}
 		writeCtx := self.budget.IssueP0(ctx, cluster.ClusterId(), sidecar.WriteP0KindErasure, price)
-		_, err = cluster.PutIfMatch(writeCtx, key, object.Etag, rewritten, nil)
+		// the origin rides on, so every slot a push wrote says who made it for as long as it stands
+		var options *sidecar.BlobPutOptions
+		if 0 < len(object.Metadata) {
+			options = &sidecar.BlobPutOptions{Metadata: maps.Clone(object.Metadata)}
+		}
+		_, err = cluster.PutIfMatch(writeCtx, key, object.Etag, rewritten, options)
 		var unknown *sidecar.BlobUnknownError
 		switch {
 		case err == nil:

@@ -9,9 +9,14 @@
 //	move     per repo across the run's minutes, the kept records, with its aged log pages and parcels once they
 //	         reach a pack's size or age, into one pack or parcel, then its pidx/ entries, then the delete of what
 //	         they replace (evacuate_move.go)
-//	delete   a minute whose every batch was read, whose every record was settled and whose every repo moved: each
-//	         of its batches, whole (I-EVS-7). The slots its dead records list stay while DESIGN-DETAILS 14.2.8's
-//	         interim stands (evacuate_resolve.go), so the slot deletes that go before its batches receive none
+//	delete   a minute whose every batch was read, whose every record was settled and whose every repo moved: first
+//	         the slots its dead records list, each decided on the object (DESIGN-DETAILS 14.2.5), then each of its
+//	         batches, whole (I-EVS-7). Per slot, after the repo recheck: a HEAD; a 404 is absent; an origin that is
+//	         not the record's own statement keeps it, as another statement's, a re-seed's or no one's; a
+//	         LastModified the settle age has not passed by this process's checked clock keeps it, unsettled; else
+//	         a DELETE naming that LastModified, whose 412 keeps it as changed since the HEAD. While
+//	         EvacuatorSettings.DeleteDeadSlots is off, as it is in the release that brings slot origins, no slot is
+//	         queued and every one a dead record lists stays, counted (14.2.8's interim, 14.7)
 //
 // At format 2 (EvsSettings.InstanceFormat) a run reads batches of either format, and a kept format-2 record's tail is
 // settled before its batch goes: each staged segment written to seg/ or dropped (evacuate_staged.go), then its purge
@@ -114,6 +119,11 @@ type EvacuatorSettings struct {
 	ResumeEntryCount int
 	// Where the spool file is made. Empty: the system's temporary directory.
 	SpoolDirectory string
+	// Whether a dead record's own slots are deleted, each by its origin (DESIGN-DETAILS 14.2.5). Off by default in the
+	// release that brings slot origins and on in the next (14.2.8, 14.7): an evs process of the release before
+	// writes no origin and takes another statement's object as its own, so a delete by origin is safe only once
+	// none runs. Off keeps every slot a dead record lists, as the interim did.
+	DeleteDeadSlots bool
 }
 
 // §11.13's figures.
@@ -199,10 +209,17 @@ type EvacuationResult struct {
 	ParcelCount         int
 	ReplacedParcelCount int
 	PackedLogPageCount  int
-	// Slots of dead records deleted: none while DESIGN-DETAILS 14.2.8's interim stands.
-	SlotDeletedCount int
-	// The slots dead records list, each left where it is: while DESIGN-DETAILS 14.2.8's interim stands (QD-766)
-	// evacuation deletes none of them, since a slot a dead record lists may be one a committed push holds.
+	// The slots dead records list, by what DESIGN-DETAILS 14.2.5 made of each: deleted as the record's own statement's;
+	// absent at the HEAD; kept as another statement's, a re-seed's or no one's; kept unsettled; kept under a hold; kept
+	// as changed between the HEAD and the DELETE.
+	SlotDeletedCount   int
+	SlotAbsentCount    int
+	SlotForeignCount   int
+	SlotUnsettledCount int
+	SlotHeldCount      int
+	SlotChangedCount   int
+	// The slots dead records list, each left where it is unjudged while EvacuatorSettings.DeleteDeadSlots is off
+	// (14.2.8's interim, QD-766), or because the record's statement does not parse.
 	SlotKeptCount int
 	// Format 2: staged segments written to seg/ and dropped, and what the sweep of kept records' lists did.
 	StagedWrittenCount int
@@ -372,15 +389,17 @@ type evacuateMinute struct {
 	moveRepoIds map[sidecar.Id]bool
 	// the repos whose records were dropped as an unheld shred's, reread before its batches go
 	shredRepoIds map[sidecar.Id]bool
-	// the slots to delete before its batches go: none while DESIGN-DETAILS 14.2.8's interim keeps every slot a dead
-	// record lists, and a dead record's own once 14.7's track 2 can tell which are its own (14.2.5)
+	// the slots its dead records list, each decided on its object before its batches go (DESIGN-DETAILS 14.2.5); none
+	// while EvacuatorSettings.DeleteDeadSlots is off
 	deadSlots []*evacuateSlot
 }
 
-// A slot of a dead record's to delete before its minute's batches go.
+// A slot a dead record lists, with the record's statement: the origin under which its object is the record's own.
 type evacuateSlot struct {
-	repoId sidecar.Id
-	slotId sidecar.Id
+	repoId          sidecar.Id
+	slotId          sidecar.Id
+	pushId          sidecar.Id
+	statementPrefix [16]byte
 }
 
 // One run's state. Used by one goroutine.
@@ -724,9 +743,122 @@ func (self *evacuateRun) deleteKey(minute uint32, key string, recheck func(ctx c
 	return self.cluster.Delete(grant.Context(), key)
 }
 
+// One DELETE naming the object a HEAD read (x-ur-if-unmodified-ms), paid as the minute's work: ErrBlobPrecondition
+// when the key holds an object stored a second or more after lastModified, deleting nothing.
+func (self *evacuateRun) deleteNamedKey(minute uint32, key string, lastModified time.Time, recheck func(ctx context.Context) error) error {
+	grant, err := self.acquire(minute, WriteOperation{Kind: WriteOperationDelete, Count: 1}, recheck)
+	if err != nil {
+		return err
+	}
+	defer grant.Close()
+	return self.cluster.Delete(sidecar.WithBlobUnmodified(grant.Context(), lastModified), key)
+}
+
+// DESIGN-DETAILS 14.2.5 for one slot a dead record lists, in deleteMinute after the repo recheck: false when the
+// minute must wait, the run having failed or stopped or the object being undecidable now. The decision is on the
+// object as it is just before the DELETE, so its HEAD is made here and not when the record resolved. Three things
+// make the DELETE safe: the fence or the head past the window made the statement dead for good before the HEAD; the
+// origin says the object is that statement's, which no other statement holds or will, since step 6 gives another
+// statement this object only by a takeover that deletes it first; and the DELETE names the LastModified the HEAD
+// read on an object the settle age has passed, so a run that stalled between its HEAD and its DELETE beside a
+// successor and a later create of the id deletes nothing, the new object being more than a second younger.
+func (self *evacuateRun) deleteDeadSlot(minute *evacuateMinute, slot *evacuateSlot) bool {
+	evacuator := self.evacuator
+	recheck := func(ctx context.Context) error {
+		return self.recheckDelete(ctx, slot.repoId)
+	}
+	// a hold keeps what a dead push left, and its batch goes without it; a repo the run cannot judge waits
+	switch err := recheck(self.ctx); {
+	case errors.Is(err, errEvacuateHeld):
+		self.result.SlotHeldCount += 1
+		return true
+	case errors.Is(err, errEvacuateRepoWaits):
+		minute.wait("slot not deleted")
+		return false
+	case err != nil:
+		minute.wait("slot not deleted")
+		self.fail(err)
+		return false
+	}
+	key := SlotKey(slot.repoId, slot.slotId)
+	barrierKey := barrierSlotKey(slot.repoId, slot.slotId)
+	testHookBarrier(BarrierEvacuateSlotHeadBefore, barrierKey)
+	if err := self.stop(BarrierEvacuateSlotHeadBefore, barrierKey); err != nil {
+		minute.wait("stopped")
+		return false
+	}
+	info, err := self.cluster.Head(self.ctx, key)
+	testHookBarrier(BarrierEvacuateSlotHeadAfter, barrierKey)
+	if stopErr := self.stop(BarrierEvacuateSlotHeadAfter, barrierKey); stopErr != nil {
+		minute.wait("stopped")
+		return false
+	}
+	switch {
+	case errors.Is(err, sidecar.ErrBlobNotFound):
+		self.result.SlotAbsentCount += 1
+		return true
+	case err != nil:
+		minute.wait("slot unread")
+		self.fail(err)
+		return false
+	}
+	origin := ParseEvsSlotOrigin(info.Metadata, evacuator.evsSettings.SlotOriginMaxByteCount)
+	if !origin.IsStatement(slot.pushId, slot.statementPrefix) && !evsSlotTwinBreaks(evsSlotTwinNoOriginAtDelete) {
+		// another statement's, a re-seed's or no one's: not this record's to clean up
+		self.result.SlotForeignCount += 1
+		return true
+	}
+	clockCheck := evacuator.host.ClockCheck
+	if clockCheck == nil || !clockCheck.Sure() {
+		// the settle age is measured on a clock this process can trust, so the minute waits for one
+		minute.wait("slot unsettled while the clock is unsure")
+		return false
+	}
+	if evacuator.clock.Now().Before(info.LastModified.Add(evacuator.evsSettings.SlotSettleAge)) && !evsSlotTwinBreaks(evsSlotTwinNoSettle) {
+		// stored within the settle age of now: an attempt that slept since its record. Kept, not waited for, so a
+		// slot never holds a minute back (14.5's leaks)
+		self.result.SlotUnsettledCount += 1
+		return true
+	}
+	testHookBarrier(BarrierEvacuateSlotDeleteBefore, barrierKey)
+	if err := self.stop(BarrierEvacuateSlotDeleteBefore, barrierKey); err != nil {
+		minute.wait("stopped")
+		return false
+	}
+	if evsSlotTwinBreaks(evsSlotTwinUnconditionalDelete) {
+		err = self.deleteKey(minute.minute, key, recheck)
+	} else {
+		err = self.deleteNamedKey(minute.minute, key, info.LastModified, recheck)
+	}
+	testHookBarrier(BarrierEvacuateSlotDeleteAfter, barrierKey)
+	stopErr := self.stop(BarrierEvacuateSlotDeleteAfter, barrierKey)
+	switch {
+	case err == nil:
+		self.result.SlotDeletedCount += 1
+	case errors.Is(err, sidecar.ErrBlobPrecondition):
+		// stored since the HEAD: not the object judged
+		self.result.SlotChangedCount += 1
+	case errors.Is(err, errEvacuateHeld):
+		self.result.SlotHeldCount += 1
+	case errors.Is(err, errEvacuateRepoWaits):
+		minute.wait("slot not deleted")
+		return false
+	default:
+		// a store error or a held key: the minute waits, as a slot's DELETE did before the origin
+		minute.wait("slot not deleted")
+		self.fail(err)
+		return false
+	}
+	if stopErr != nil {
+		minute.wait("stopped")
+		return false
+	}
+	return true
+}
+
 // Deletes the minute's batches once nothing holds them: every repo with a kept record in it moved, every repo
-// dropped as a shred's still an unheld shred's, and every slot queued for deletion gone, of which there is none
-// while DESIGN-DETAILS 14.2.8's interim stands (I-EVS-7, I-EVS-2).
+// dropped as a shred's still an unheld shred's, and every slot its dead records list decided (deleteDeadSlot), of
+// which none is queued while EvacuatorSettings.DeleteDeadSlots is off (I-EVS-7, I-EVS-2).
 func (self *evacuateRun) deleteMinute(minute *evacuateMinute) {
 	if minute.waiting != "" {
 		return
@@ -750,21 +882,8 @@ func (self *evacuateRun) deleteMinute(minute *evacuateMinute) {
 			minute.wait("stopped")
 			return
 		}
-		err := self.deleteKey(minute.minute, SlotKey(slot.repoId, slot.slotId), func(ctx context.Context) error {
-			return self.recheckDelete(ctx, slot.repoId)
-		})
-		switch {
-		case errors.Is(err, errEvacuateHeld):
-			// a hold keeps what a dead push left, and its batch goes without it
-		case errors.Is(err, errEvacuateRepoWaits):
-			minute.wait("slot not deleted")
+		if !self.deleteDeadSlot(minute, slot) {
 			return
-		case err != nil:
-			minute.wait("slot not deleted")
-			self.fail(err)
-			return
-		default:
-			self.result.SlotDeletedCount += 1
 		}
 	}
 	for _, batch := range minute.batches {

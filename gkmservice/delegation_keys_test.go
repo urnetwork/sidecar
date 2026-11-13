@@ -2,22 +2,27 @@ package gkmservice
 
 // KEYS-M8-01 at gkm (DESIGN-DETAILS 4.2.2): a forwarding Delegation's reader key object, its upload held to the
 // Delegation's own sidecar and the row's digest, each refusal beside its twin; its read by the config's readers alone;
-// the wrap checks holding a DelegationWrap to the key its row names; a forwarding sidecar reading its own
-// Delegations' wraps; and the reconciler's deletion of the object a day after its Delegation ended or was superseded,
-// a hold keeping it.
+// the object under its token's network alone (QD-763); the wrap checks holding a DelegationWrap to the key its row
+// names; a forwarding sidecar reading its own Delegations' wraps; the reconciler's deletion of the object a day after
+// its Delegation ended or was superseded, a hold keeping it; and QD-675's sweep of one network's prefix.
 
 import (
 	"bytes"
+	"context"
 	"crypto/hpke"
 	"crypto/sha256"
 	"encoding/hex"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
+
+	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -51,14 +56,30 @@ func gkmTestDelegationKeyPath(delegationId []byte) string {
 	return "/gkm/delegation-keys/" + hex.EncodeToString(delegationId)
 }
 
-// The object a Delegation's key is stored at on the first cluster, nil for none.
+// The object a Delegation's key is stored at in the fixture's network on the first cluster, nil for none.
 func (self *gkmFixture) delegationKeyObject(delegationId []byte) []byte {
 	self.t.Helper()
-	key, err := GkmDelegationKeyKey(delegationId)
+	return self.networkDelegationKeyObject(sidecar.Id(self.networkId), delegationId)
+}
+
+// The object a Delegation's key is stored at in a network on the first cluster, nil for none.
+func (self *gkmFixture) networkDelegationKeyObject(networkId sidecar.Id, delegationId []byte) []byte {
+	self.t.Helper()
+	key, err := GkmDelegationKeyKey(networkId, delegationId)
 	if err != nil {
 		self.t.Fatal(err)
 	}
 	return self.object("meta-1", key)
+}
+
+// Stores a Delegation's key in a network on the first cluster, as an upload would have.
+func (self *gkmFixture) putDelegationKey(networkId sidecar.Id, key *gkmTestForwardingKey) {
+	self.t.Helper()
+	objectKey, err := GkmDelegationKeyKey(networkId, key.delegationId)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.put("meta-1", objectKey, key.publicKey)
 }
 
 // The format value holds X-Wing's public key size.
@@ -214,6 +235,107 @@ func TestGkmDelegationKeyReadIsTheConfigsReaders(t *testing.T) {
 	}
 }
 
+// QD-763: a forwarding Delegation's key object is its token's network's, gkm/dkey/<network_id>/<delegation_id>, at the
+// upload and at every read, and no request names a network. A path that names another network's id beside the
+// Delegation's reaches no route and stores or serves nothing, and a query naming one changes nothing; a token of
+// another network, whose state holds no row of the Delegation, has its upload answer 409 and its reads 404, and reaches
+// nothing of the first network's; and where both networks' states hold a row of one delegation_id, each network's
+// sidecar uploads to its own network's object and each token reads only its own.
+func TestGkmDelegationKeyObjectIsTheTokensNetworks(t *testing.T) {
+	fixture := newGkmFixture(t)
+	networkA, networkB := sidecar.Id(fixture.networkId), testId("network-b")
+	fixture.host.Gates.OpenService(sidecar.ServiceGateGkm, connect.Id(networkA), connect.Id(networkB))
+	memberId := testId("member-a")
+	configRepoA, configRepoB := testId("repo-config-a"), testId("repo-config-b")
+	fixture.placeRepo(configRepoA, "meta-2", protocol.EvsRepoState_EVS_REPO_ACTIVE)
+	fixture.placeRepo(configRepoB, "meta-2", protocol.EvsRepoState_EVS_REPO_ACTIVE)
+	forwardingA := fixture.newSidecar("sc-forward-a", memberDeviceFacts(memberId))
+	readerA := fixture.newSidecar("sc-reader-a", memberDeviceFacts(memberId))
+	forwardingB := fixture.newSidecar("sc-forward-b", memberDeviceFacts(memberId))
+	readerB := fixture.newSidecar("sc-reader-b", memberDeviceFacts(memberId))
+	for _, testSidecar := range []*gkmTestSidecar{forwardingA, readerA} {
+		fixture.auth.grant(testSidecar.sidecarId, configRepoA, sidecar.AclEvsRead)
+	}
+	for _, testSidecar := range []*gkmTestSidecar{forwardingB, readerB} {
+		fixture.auth.grant(testSidecar.sidecarId, configRepoB, sidecar.AclEvsRead)
+	}
+	forwardingAId, forwardingBId := forwardingA.sidecarId, forwardingB.sidecarId
+	forwardingTokenA := fixture.token(forwardingA.sidecarId, repoScope(configRepoA, "r"))
+	readerTokenA := fixture.token(readerA.sidecarId, repoScope(configRepoA, "r"))
+	forwardingTokenB := fixture.networkToken(networkB, forwardingB.sidecarId, repoScope(configRepoB, "r"))
+	readerTokenB := fixture.networkToken(networkB, readerB.sidecarId, repoScope(configRepoB, "r"))
+	key := newGkmTestForwardingKey(t, "a's")
+	fixture.auth.setDelegationKey(key.delegationId, &GkmDelegationKeyFacts{ReaderKeySha256: key.keySha256, ForwardSidecarId: &forwardingAId, ConfigRepoId: configRepoA})
+	path := gkmTestDelegationKeyPath(key.delegationId)
+
+	if recorder := fixture.serve(http.MethodPut, path, forwardingTokenA, key.publicKey); recorder.Code != http.StatusOK {
+		t.Fatalf("the upload: %d", recorder.Code)
+	}
+	if !bytes.Equal(fixture.networkDelegationKeyObject(networkA, key.delegationId), key.publicKey) {
+		t.Fatal("the key is not under its token's network")
+	}
+	if fixture.networkDelegationKeyObject(networkB, key.delegationId) != nil {
+		t.Fatal("an upload stored a key under a network its token is not of")
+	}
+
+	// a path naming the other network beside the Delegation reaches no route
+	namingB := "/gkm/delegation-keys/" + hex.EncodeToString(networkB[:]) + "/" + hex.EncodeToString(key.delegationId)
+	if recorder := fixture.serve(http.MethodPut, namingB, forwardingTokenA, key.publicKey); recorder.Code != http.StatusNotFound {
+		t.Errorf("an upload whose path names another network: %d", recorder.Code)
+	}
+	if recorder := fixture.serve(http.MethodGet, namingB, readerTokenA, nil); recorder.Code != http.StatusNotFound {
+		t.Errorf("a read whose path names another network: %d", recorder.Code)
+	}
+	// a query naming it is not read: the same bytes again land where they stand
+	if recorder := fixture.serve(http.MethodPut, path+"?network_id="+hex.EncodeToString(networkB[:]), forwardingTokenA, key.publicKey); recorder.Code != http.StatusOK {
+		t.Errorf("an upload with a query naming another network: %d", recorder.Code)
+	}
+	if fixture.networkDelegationKeyObject(networkB, key.delegationId) != nil {
+		t.Fatal("a request naming another network stored a key under it")
+	}
+
+	// the other network's tokens: its state holds no row of the Delegation
+	if recorder := fixture.serve(http.MethodGet, path, readerTokenB, nil); recorder.Code != http.StatusNotFound {
+		t.Errorf("another network's read: %d", recorder.Code)
+	}
+	if recorder := fixture.serve(http.MethodPost, "/gkm/delegation-keys", readerTokenB, fixture.delegationKeysBody(key.delegationId)); recorder.Code != http.StatusNotFound {
+		t.Errorf("another network's batch: %d", recorder.Code)
+	}
+	if recorder := fixture.serve(http.MethodPut, path, forwardingTokenB, key.publicKey); recorder.Code != http.StatusConflict {
+		t.Errorf("another network's upload: %d", recorder.Code)
+	}
+	if fixture.networkDelegationKeyObject(networkB, key.delegationId) != nil {
+		t.Fatal("another network's refused upload stored a key")
+	}
+
+	// both states hold a row of the one delegation_id, each with its own key: each network's object is its own
+	keyB := newGkmTestForwardingKey(t, "b's")
+	fixture.auth.setNetworkDelegationKey(networkB, key.delegationId, &GkmDelegationKeyFacts{ReaderKeySha256: keyB.keySha256, ForwardSidecarId: &forwardingBId, ConfigRepoId: configRepoB})
+	if recorder := fixture.serve(http.MethodPut, path, forwardingTokenB, key.publicKey); recorder.Code != http.StatusForbidden {
+		t.Errorf("the other network's sidecar uploading the first network's key: %d", recorder.Code)
+	}
+	if recorder := fixture.serve(http.MethodPut, path, forwardingTokenB, keyB.publicKey); recorder.Code != http.StatusOK {
+		t.Fatalf("the other network's upload of its own key: %d", recorder.Code)
+	}
+	if !bytes.Equal(fixture.networkDelegationKeyObject(networkB, key.delegationId), keyB.publicKey) {
+		t.Error("the other network's object does not hold its key")
+	}
+	if !bytes.Equal(fixture.networkDelegationKeyObject(networkA, key.delegationId), key.publicKey) {
+		t.Error("the first network's object changed")
+	}
+	if recorder := fixture.serve(http.MethodGet, path, readerTokenA, nil); recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), key.publicKey) {
+		t.Errorf("the first network's read: %d", recorder.Code)
+	}
+	if recorder := fixture.serve(http.MethodGet, path, readerTokenB, nil); recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), keyB.publicKey) {
+		t.Errorf("the other network's read: %d", recorder.Code)
+	}
+	recorder := fixture.serve(http.MethodPost, "/gkm/delegation-keys", readerTokenB, fixture.delegationKeysBody(key.delegationId))
+	reply := &protocol.GkmDelegationKeysReply{}
+	if recorder.Code != http.StatusOK || proto.Unmarshal(recorder.Body.Bytes(), reply) != nil || len(reply.GetReaderKeys()) != 1 || !bytes.Equal(reply.GetReaderKeys()[0], keyB.publicKey) {
+		t.Errorf("the other network's batch: %d", recorder.Code)
+	}
+}
+
 // A POST /gkm/delegation-keys body naming delegationIds.
 func (self *gkmFixture) delegationKeysBody(delegationIds ...[]byte) []byte {
 	return self.marshal(&protocol.GkmDelegationKeysRequest{DelegationIds: delegationIds})
@@ -276,16 +398,19 @@ func TestGkmDelegationKeysReadAnswersInOrderToTheConfigsReaders(t *testing.T) {
 		}
 	}
 
-	// the bound: 256 ids answered, 257 refused
+	// the bound: 256 ids answered, 257 refused, §10.14's value the default
+	if fixture.settings.DelegationKeysMaxCount != 256 {
+		t.Errorf("the default batch bound: %d", fixture.settings.DelegationKeysMaxCount)
+	}
 	full := [][]byte{}
-	for range gkmDelegationKeysMaxCount {
+	for range fixture.settings.DelegationKeysMaxCount {
 		full = append(full, stored[0].delegationId)
 	}
 	recorder = fixture.serve(http.MethodPost, "/gkm/delegation-keys", readerToken, fixture.delegationKeysBody(full...))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("a batch of %d: %d", len(full), recorder.Code)
 	}
-	if err := proto.Unmarshal(recorder.Body.Bytes(), reply); err != nil || len(reply.GetReaderKeys()) != gkmDelegationKeysMaxCount {
+	if err := proto.Unmarshal(recorder.Body.Bytes(), reply); err != nil || len(reply.GetReaderKeys()) != fixture.settings.DelegationKeysMaxCount {
 		t.Errorf("a batch of %d: %d answers, %v", len(full), len(reply.GetReaderKeys()), err)
 	}
 	for _, c := range []struct {
@@ -422,15 +547,20 @@ func TestGkmForwardingSidecarReadsItsOwnDelegationsWraps(t *testing.T) {
 	}
 }
 
-// Sets a network's state with PositionTime answering from a copy of positionTimes, and announces it.
+// Sets the world's network's state with PositionTime answering from a copy of positionTimes, and announces it.
 func (self *gkmReconcilerWorld) setWithTimes(view sidecar.GkmAuthView, positionTimes map[uint64]time.Time) {
+	self.setNetworkWithTimes(self.networkId, view, []sidecar.Id{self.repoId}, positionTimes)
+}
+
+// Sets a network's state with PositionTime answering from a copy of positionTimes, and announces it.
+func (self *gkmReconcilerWorld) setNetworkWithTimes(networkId sidecar.Id, view sidecar.GkmAuthView, repoIds []sidecar.Id, positionTimes map[uint64]time.Time) {
 	positionTimes = maps.Clone(positionTimes)
 	changed := func() func(change *GkmStateChange) {
 		self.state.stateLock.Lock()
 		defer self.state.stateLock.Unlock()
-		self.state.networkStates[self.networkId] = &GkmNetworkState{
+		self.state.networkStates[networkId] = &GkmNetworkState{
 			View:    view,
-			RepoIds: []sidecar.Id{self.repoId},
+			RepoIds: slices.Clone(repoIds),
 			PositionTime: func(n uint64) (time.Time, bool) {
 				at, ok := positionTimes[n]
 				return at, ok
@@ -439,8 +569,138 @@ func (self *gkmReconcilerWorld) setWithTimes(view sidecar.GkmAuthView, positionT
 		return self.state.changed
 	}()
 	if changed != nil {
-		changed(&GkmStateChange{NetworkId: self.networkId})
+		changed(&GkmStateChange{NetworkId: networkId})
 	}
+}
+
+// A state of another network than the world's, on that network's own log, whose rows hold the Delegations given and
+// no repo.
+func gkmTestNetworkDelegations(log *sidecartest.FakeGkmAuthLog, delegations []*bridge.DelegationRow) *sidecartest.FakeGkmAuthView {
+	fixture := &sidecartest.FakeGkmAuthFixture{
+		Rows:         sidecartest.FakeGkmAuthRows(),
+		IdentityKeys: map[sidecar.Id][]byte{},
+	}
+	fixture.Rows.Delegations = delegations
+	return log.Append(fixture)
+}
+
+// Runs fn, then waits until the reconciler holds view for a network, as awaitState does for the world's.
+func (self *gkmReconcilerWorld) awaitNetworkState(networkId sidecar.Id, view sidecar.GkmAuthView, fn func()) {
+	self.t.Helper()
+	_, changed := self.reconciler.Passes()
+	fn()
+	for {
+		held := func() sidecar.GkmAuthView {
+			self.reconciler.stateLock.Lock()
+			defer self.reconciler.stateLock.Unlock()
+			if entry, ok := self.reconciler.networkEntries[networkId]; ok && entry.state != nil {
+				return entry.state.View
+			}
+			return nil
+		}()
+		if held == view {
+			return
+		}
+		select {
+		case <-changed:
+			_, changed = self.reconciler.Passes()
+		case <-self.fixture.ctx.Done():
+			self.t.Fatal("the reconciler never read the network's state")
+		}
+	}
+}
+
+// Waits until the reconciler has swept a network's key objects at at: the pass that swept has handed the deleter what
+// it found.
+func (self *gkmReconcilerWorld) awaitSweep(networkId sidecar.Id, at time.Time) {
+	self.t.Helper()
+	for {
+		_, changed := self.reconciler.Passes()
+		swept := func() bool {
+			self.reconciler.stateLock.Lock()
+			defer self.reconciler.stateLock.Unlock()
+			entry, ok := self.reconciler.networkEntries[networkId]
+			return ok && entry.delegationKeySweptAt.Equal(at)
+		}()
+		if swept {
+			return
+		}
+		select {
+		case <-changed:
+		case <-self.fixture.ctx.Done():
+			self.t.Fatal("the reconciler never swept the network")
+		}
+	}
+}
+
+// A BlobStore over another that records the prefix of every LIST its clusters serve, so a test sees what a process
+// listed. Safe for concurrent use.
+type listRecordingBlobs struct {
+	sidecar.BlobStore
+	stateLock sync.Mutex
+	prefixes  []string
+}
+
+// One cluster of listRecordingBlobs.
+type listRecordingCluster struct {
+	sidecar.BlobCluster
+	blobs *listRecordingBlobs
+}
+
+func (self *listRecordingBlobs) Cluster(clusterId string) (sidecar.BlobCluster, error) {
+	cluster, err := self.BlobStore.Cluster(clusterId)
+	if err != nil {
+		return nil, err
+	}
+	return &listRecordingCluster{BlobCluster: cluster, blobs: self}, nil
+}
+
+func (self *listRecordingBlobs) FirstCluster() (sidecar.BlobCluster, error) {
+	cluster, err := self.BlobStore.FirstCluster()
+	if err != nil {
+		return nil, err
+	}
+	return &listRecordingCluster{BlobCluster: cluster, blobs: self}, nil
+}
+
+func (self *listRecordingCluster) List(ctx context.Context, keyPrefix string, startAfter string, limit int) ([]*sidecar.BlobInfo, bool, error) {
+	func() {
+		self.blobs.stateLock.Lock()
+		defer self.blobs.stateLock.Unlock()
+		self.blobs.prefixes = append(self.blobs.prefixes, keyPrefix)
+	}()
+	return self.BlobCluster.List(ctx, keyPrefix, startAfter, limit)
+}
+
+// The prefixes listed whose LIST could return a key under prefix: prefix itself, one under it, or one it is under,
+// as gkm/dkey/ whole would be.
+func (self *listRecordingBlobs) listedReaching(prefix string) []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	reaching := []string{}
+	for _, listed := range self.prefixes {
+		if strings.HasPrefix(listed, prefix) || strings.HasPrefix(prefix, listed) {
+			reaching = append(reaching, listed)
+		}
+	}
+	return reaching
+}
+
+// Closes the world's reconciler and starts another on the same host and state with no table, as a restart would,
+// its store recording every LIST.
+func (self *gkmReconcilerWorld) restart() *listRecordingBlobs {
+	self.t.Helper()
+	self.reconciler.Close()
+	host := self.fixture.host.ServiceHost()
+	blobs := &listRecordingBlobs{BlobStore: host.Blobs}
+	host.Blobs = blobs
+	restarted, err := NewGkmReconciler(self.fixture.ctx, host, DefaultGkmReconcilerSettings(), &GkmReconcilerDeps{State: self.state})
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	self.t.Cleanup(restarted.Close)
+	self.reconciler = restarted
+	return blobs
 }
 
 // A state whose rows hold the Delegations given, a member device of the world's reading and writing the repo.
@@ -499,11 +759,7 @@ func TestGkmReconcilerDeletesAForwardingKeyObjectADayAfterItsEnd(t *testing.T) {
 	live := newGkmTestForwardingKey(t, "live")
 	revoked := newGkmTestForwardingKey(t, "revoked")
 	for _, key := range []*gkmTestForwardingKey{superseded, live, revoked} {
-		objectKey, err := GkmDelegationKeyKey(key.delegationId)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fixture.put("meta-1", objectKey, key.publicKey)
+		fixture.putDelegationKey(world.networkId, key)
 	}
 	now := fixture.clock.Now()
 	supersededRow := gkmTestForwardingRow(superseded, appSidecarId, 2)
@@ -549,8 +805,7 @@ func TestGkmReconcilerDeletesAForwardingKeyObjectADayAfterItsEnd(t *testing.T) {
 	// past the hold set's reread, as any reader of holds is
 	fixture.clock.Advance(sidecar.DefaultHoldSetSettings().RereadInterval)
 	held := newGkmTestForwardingKey(t, "held")
-	heldKey, _ := GkmDelegationKeyKey(held.delegationId)
-	fixture.put("meta-1", heldKey, held.publicKey)
+	fixture.putDelegationKey(world.networkId, held)
 	heldRow := gkmTestForwardingRow(held, laptopSidecarId, 6)
 	heldRow.EndedAt = 7
 	positionTimes[7] = fixture.clock.Now().Add(-2 * settings.DelegationKeyRetention)
@@ -583,8 +838,9 @@ func (self *gkmReconcilerWorld) trackedDelegationKeyEnds() int {
 
 // QD-675: a forwarding Delegation's row leaves the rows once retention passes its end by 4,096 positions (QD-648),
 // which a busy network reaches before the key object's day has run. The end the reconciler saw stays tracked, so the
-// object stands until DelegationKeyRetention after the end and goes then, with no row left to name it; the live
-// Delegation's object stays, and once the object is gone and its row has left nothing is tracked for it.
+// object stands until DelegationKeyRetention after the end and goes then, with no row left to name it, and the sweep
+// due at the state that dropped the row leaves it to that schedule; the live Delegation's object stays, and once the
+// object is gone and its row has left nothing is tracked for it.
 func TestGkmReconcilerDeletesAForwardingKeyObjectWhoseRowLeftBeforeItsDay(t *testing.T) {
 	world := newGkmReconcilerWorld(t)
 	fixture := world.fixture
@@ -593,11 +849,7 @@ func TestGkmReconcilerDeletesAForwardingKeyObjectWhoseRowLeftBeforeItsDay(t *tes
 	ended := newGkmTestForwardingKey(t, "ended")
 	live := newGkmTestForwardingKey(t, "live")
 	for _, key := range []*gkmTestForwardingKey{ended, live} {
-		objectKey, err := GkmDelegationKeyKey(key.delegationId)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fixture.put("meta-1", objectKey, key.publicKey)
+		fixture.putDelegationKey(world.networkId, key)
 	}
 	now := fixture.clock.Now()
 	endedRow := gkmTestForwardingRow(ended, laptopSidecarId, 2)
@@ -612,10 +864,14 @@ func TestGkmReconcilerDeletesAForwardingKeyObjectWhoseRowLeftBeforeItsDay(t *tes
 	}
 
 	// the network sequences past the row's 4,096 positions within the hour, and a base drops the row: the host no
-	// longer tells its position's time either
+	// longer tells its position's time either, only its newest entry's, so the sweep due an hour after the first
+	// judges the network and finds the object no row names, whose end it tracks
 	world.awaitPass(func() { fixture.clock.Advance(time.Hour) })
 	leftView := world.appendDelegations([]*bridge.DelegationRow{liveRow})
-	world.awaitState(leftView, func() { world.setWithTimes(leftView, nil) })
+	world.awaitState(leftView, func() {
+		world.setWithTimes(leftView, map[uint64]time.Time{leftView.Pin().GetVersion(): fixture.clock.Now()})
+	})
+	world.awaitSweep(world.networkId, fixture.clock.Now())
 	if finished, _ := world.reconciler.DelegationKeyDeletes(); finished != 0 {
 		t.Fatalf("%d deletions before the object's day ended", finished)
 	}
@@ -646,59 +902,98 @@ func TestGkmReconcilerDeletesAForwardingKeyObjectWhoseRowLeftBeforeItsDay(t *tes
 	}
 }
 
-// A restart forgets every tracked end. The process that starts after it finds an ended row its network's rows still
-// hold and deletes that object at its time by the host's position times, so the restart does not start its day
-// again. An object no row of the networks it has read names is kept: gkm/dkey/<delegation_id> names no network, so
-// it may be a live Delegation's in a network this process has not read as well as one whose row left while no
-// process tracked it, and every doubt keeps the object (QD-675's sweep waits on question
-// core-owner-fixes-dkey-sweep-network).
-func TestGkmReconcilerAfterARestartDeletesByTheRowsAndKeepsAnObjectNoRowNames(t *testing.T) {
+// QD-675's sweep after a restart, on the prefix the key's network gives (QD-763). The first process tracks two ended
+// Delegations' ends, neither yet due, and stops; while no process runs, one's row leaves the rows. The process that
+// starts after it, with no table, lists the network's gkm/dkey/<network_id>/ at the network's first pass and deletes
+// at once the object whose row left, before the day its end would have given it; the ended row the rows still hold
+// goes at the time the host's position times give, so the restart does not start its day again; and the live
+// Delegation's object stays. A second network it reads is swept against its own rows alone: its live Delegation's
+// object stays, though the first network's rows name it nowhere, and its object whose row left goes. A third
+// network it never reads is never listed, nor gkm/dkey/ whole, and its objects stand, a live one and one no row
+// names alike.
+func TestGkmReconcilerAfterARestartSweepsAnObjectWhoseRowLeft(t *testing.T) {
 	world := newGkmReconcilerWorld(t)
 	fixture := world.fixture
 	settings := world.reconciler.settings
-	appSidecarId, laptopSidecarId := testId("sc-app"), testId("sc-laptop")
+	appSidecarId, laptopSidecarId, phoneSidecarId := testId("sc-app"), testId("sc-laptop"), testId("sc-phone")
+	networkB, networkC := testId("network-b"), testId("network-c")
 	ended := newGkmTestForwardingKey(t, "ended")
+	left := newGkmTestForwardingKey(t, "left")
 	live := newGkmTestForwardingKey(t, "live")
-	unnamed := newGkmTestForwardingKey(t, "unnamed")
-	for _, key := range []*gkmTestForwardingKey{ended, live, unnamed} {
-		objectKey, err := GkmDelegationKeyKey(key.delegationId)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fixture.put("meta-1", objectKey, key.publicKey)
+	liveB := newGkmTestForwardingKey(t, "live in b")
+	leftB := newGkmTestForwardingKey(t, "left in b")
+	liveC := newGkmTestForwardingKey(t, "live in c")
+	leftC := newGkmTestForwardingKey(t, "left in c")
+	for _, key := range []*gkmTestForwardingKey{ended, left, live} {
+		fixture.putDelegationKey(world.networkId, key)
 	}
-	now := fixture.clock.Now()
+	for _, key := range []*gkmTestForwardingKey{liveB, leftB} {
+		fixture.putDelegationKey(networkB, key)
+	}
+	for _, key := range []*gkmTestForwardingKey{liveC, leftC} {
+		fixture.putDelegationKey(networkC, key)
+	}
+	start := fixture.clock.Now()
 	endedRow := gkmTestForwardingRow(ended, laptopSidecarId, 2)
 	endedRow.EndedAt = 3
-	liveRow := gkmTestForwardingRow(live, appSidecarId, 4)
-	positionTimes := map[uint64]time.Time{3: now.Add(-settings.DelegationKeyRetention + 2*time.Hour)}
-	view := world.appendDelegations([]*bridge.DelegationRow{endedRow, liveRow})
+	leftRow := gkmTestForwardingRow(left, phoneSidecarId, 4)
+	leftRow.EndedAt = 5
+	liveRow := gkmTestForwardingRow(live, appSidecarId, 6)
+	// the ended row's day ends in two hours, the left row's in four
+	positionTimes := map[uint64]time.Time{
+		3: start.Add(-settings.DelegationKeyRetention + 2*time.Hour),
+		5: start.Add(-settings.DelegationKeyRetention + 4*time.Hour),
+	}
+	view := world.appendDelegations([]*bridge.DelegationRow{endedRow, leftRow, liveRow})
 	world.awaitState(view, func() { world.setWithTimes(view, positionTimes) })
 	world.awaitPass(func() { fixture.clock.Advance(time.Hour) })
-
-	// the restart: the first process ends with the end tracked and not yet due, and a new one starts with no table
-	world.reconciler.Close()
-	restarted, err := NewGkmReconciler(fixture.ctx, fixture.host.ServiceHost(), DefaultGkmReconcilerSettings(), &GkmReconcilerDeps{State: world.state})
-	if err != nil {
-		t.Fatal(err)
+	if world.trackedDelegationKeyEnds() != 2 {
+		t.Fatalf("%d ends tracked before the restart, not the two", world.trackedDelegationKeyEnds())
 	}
-	t.Cleanup(restarted.Close)
-	world.reconciler = restarted
+
+	// the restart, and the left row's leaving while no process ran: a busy network's log moved 4,096 positions past
+	// its end within the hour, and its newest entry is now
+	blobs := world.restart()
 	if world.trackedDelegationKeyEnds() != 0 {
 		t.Fatalf("a new reconciler tracks %d ends", world.trackedDelegationKeyEnds())
 	}
 	restartedView := world.appendDelegations([]*bridge.DelegationRow{endedRow, liveRow})
-	world.awaitState(restartedView, func() { world.setWithTimes(restartedView, positionTimes) })
-	if finished, _ := restarted.DelegationKeyDeletes(); finished != 0 {
-		t.Fatalf("%d deletions before the object's day ended", finished)
+	restartedTimes := maps.Clone(positionTimes)
+	restartedTimes[restartedView.Pin().GetVersion()] = fixture.clock.Now()
+	world.awaitState(restartedView, func() { world.setWithTimes(restartedView, restartedTimes) })
+	world.awaitSweep(world.networkId, fixture.clock.Now())
+	world.awaitDelegationKeyDeletes(1)
+	if fixture.delegationKeyObject(left.delegationId) != nil {
+		t.Errorf("the object whose row left while no process ran stands after the restart's sweep")
 	}
 	if fixture.delegationKeyObject(ended.delegationId) == nil {
-		t.Fatalf("an object deleted before its day, after a restart")
+		t.Fatalf("the ended row's object went before its day, after a restart")
+	}
+	if fixture.delegationKeyObject(live.delegationId) == nil {
+		t.Fatalf("the live forwarding Delegation's object was deleted")
+	}
+	if listed := blobs.listedReaching(GkmDelegationKeyNetworkPrefix(world.networkId)); len(listed) != 1 {
+		t.Errorf("the network's prefix was listed %d times at its first pass: %v", len(listed), listed)
 	}
 
-	// the day the first process counted ends in an hour, not a day after the restart
+	// a second network, read now: its own rows judge its own prefix
+	logB := sidecartest.NewFakeGkmAuthLog()
+	viewB := gkmTestNetworkDelegations(logB, []*bridge.DelegationRow{gkmTestForwardingRow(liveB, appSidecarId, 2)})
+	world.awaitNetworkState(networkB, viewB, func() {
+		world.setNetworkWithTimes(networkB, viewB, nil, map[uint64]time.Time{viewB.Pin().GetVersion(): fixture.clock.Now()})
+	})
+	world.awaitSweep(networkB, fixture.clock.Now())
+	world.awaitDelegationKeyDeletes(2)
+	if fixture.networkDelegationKeyObject(networkB, leftB.delegationId) != nil {
+		t.Errorf("the second network's object whose row left stands after its sweep")
+	}
+	if fixture.networkDelegationKeyObject(networkB, liveB.delegationId) == nil {
+		t.Errorf("the second network's live Delegation's object was deleted")
+	}
+
+	// the ended row's day ends an hour after the restart, as the first process counted it
 	world.awaitPass(func() { fixture.clock.Advance(time.Hour) })
-	world.awaitDelegationKeyDeletes(1)
+	world.awaitDelegationKeyDeletes(3)
 	if fixture.delegationKeyObject(ended.delegationId) != nil {
 		t.Errorf("an ended Delegation's object stands a day after its end, a restart between")
 	}
@@ -706,13 +1001,135 @@ func TestGkmReconcilerAfterARestartDeletesByTheRowsAndKeepsAnObjectNoRowNames(t 
 		t.Errorf("the live forwarding Delegation's object was deleted")
 	}
 
-	// long after, the object no row names still stands, and nothing was tried on it
-	world.awaitPass(func() { fixture.clock.Advance(settings.DelegationKeyRetryInterval) })
+	// long after, past both networks' later sweeps, the third network's objects stand and nothing listed them
+	world.awaitPass(func() { fixture.clock.Advance(settings.DelegationKeySweepInterval) })
 	world.awaitPass(func() { fixture.clock.Advance(2 * settings.DelegationKeyRetention) })
-	if fixture.delegationKeyObject(unnamed.delegationId) == nil {
-		t.Errorf("an object no row names was deleted, though nothing tells its network")
+	if fixture.networkDelegationKeyObject(networkC, liveC.delegationId) == nil || fixture.networkDelegationKeyObject(networkC, leftC.delegationId) == nil {
+		t.Errorf("an object of a network this process never read was deleted")
 	}
-	if finished, _ := restarted.DelegationKeyDeletes(); finished != 1 {
-		t.Errorf("%d deletions, not the ended row's one", finished)
+	if listed := blobs.listedReaching(GkmDelegationKeyNetworkPrefix(networkC)); len(listed) != 0 {
+		t.Errorf("a network this process never read was listed: %v", listed)
+	}
+	if fixture.networkDelegationKeyObject(networkB, liveB.delegationId) == nil || fixture.delegationKeyObject(live.delegationId) == nil {
+		t.Errorf("a live Delegation's object went at a later sweep")
+	}
+	if finished, _ := world.reconciler.DelegationKeyDeletes(); finished != 3 {
+		t.Errorf("%d deletions, not the three", finished)
+	}
+}
+
+// The sweep judges an object against the state it holds only where that state has reached the object's row: an object
+// no row names, written at or after the time of the state's newest entry less DelegationKeySweepClockSkew, may be a
+// new Delegation's whose row gkm's own state held at its upload and this one has not reached, and stays, while one
+// written before goes. Once a later state names it, later sweeps keep it.
+func TestGkmReconcilerSweepKeepsAnObjectItsStateMayNotHaveReached(t *testing.T) {
+	world := newGkmReconcilerWorld(t)
+	fixture := world.fixture
+	settings := world.reconciler.settings
+	appSidecarId, laptopSidecarId := testId("sc-app"), testId("sc-laptop")
+	old := newGkmTestForwardingKey(t, "old")
+	fresh := newGkmTestForwardingKey(t, "fresh")
+	fixture.putDelegationKey(world.networkId, old)
+	world.awaitIdle()
+	fixture.clock.Advance(time.Hour)
+	// written a minute after the newest entry the state below holds
+	fixture.putDelegationKey(world.networkId, fresh)
+	behindView := world.appendDelegations([]*bridge.DelegationRow{})
+	world.awaitState(behindView, func() {
+		world.setWithTimes(behindView, map[uint64]time.Time{behindView.Pin().GetVersion(): fixture.clock.Now().Add(-time.Minute)})
+	})
+	world.awaitSweep(world.networkId, fixture.clock.Now())
+	world.awaitDelegationKeyDeletes(1)
+	if fixture.delegationKeyObject(old.delegationId) != nil {
+		t.Errorf("an object no row names, written well before the state's newest entry, stands")
+	}
+	if fixture.delegationKeyObject(fresh.delegationId) == nil {
+		t.Fatalf("an object written after the state's newest entry was deleted: its row may be one the state has not reached")
+	}
+
+	// the state reaches the new Delegation's row: later sweeps keep its object
+	freshRow := gkmTestForwardingRow(fresh, laptopSidecarId, 2)
+	liveRow := gkmTestForwardingRow(newGkmTestForwardingKey(t, "another live"), appSidecarId, 3)
+	world.awaitPass(func() { fixture.clock.Advance(time.Minute) })
+	reachedView := world.appendDelegations([]*bridge.DelegationRow{freshRow, liveRow})
+	world.awaitState(reachedView, func() {
+		world.setWithTimes(reachedView, map[uint64]time.Time{reachedView.Pin().GetVersion(): fixture.clock.Now()})
+	})
+	world.awaitPass(func() { fixture.clock.Advance(settings.DelegationKeySweepInterval) })
+	world.awaitSweep(world.networkId, fixture.clock.Now())
+	world.awaitPass(func() { fixture.clock.Advance(settings.DelegationKeySweepInterval) })
+	world.awaitSweep(world.networkId, fixture.clock.Now())
+	if fixture.delegationKeyObject(fresh.delegationId) == nil {
+		t.Errorf("a live Delegation's object went once the state named it")
+	}
+	if finished, _ := world.reconciler.DelegationKeyDeletes(); finished != 1 {
+		t.Errorf("%d deletions, not the old object's one", finished)
+	}
+}
+
+// The sweep comes again each DelegationKeySweepInterval, against the newest state the reconciler holds, and finds an
+// object no row and no tracked end names that appeared since, as one whose end a full table let go by would: not at a
+// state's pass before the interval has run, at the sweep after it. A hold covering the network keeps it, and the
+// sweep after the hold ends deletes it.
+func TestGkmReconcilerSweepsANetworkAgainEachInterval(t *testing.T) {
+	world := newGkmReconcilerWorld(t)
+	fixture := world.fixture
+	settings := world.reconciler.settings
+	appSidecarId := testId("sc-app")
+	live := newGkmTestForwardingKey(t, "live")
+	stray := newGkmTestForwardingKey(t, "stray")
+	fixture.putDelegationKey(world.networkId, live)
+	liveRow := gkmTestForwardingRow(live, appSidecarId, 2)
+	view := world.appendDelegations([]*bridge.DelegationRow{liveRow})
+	world.awaitState(view, func() {
+		world.setWithTimes(view, map[uint64]time.Time{view.Pin().GetVersion(): fixture.clock.Now()})
+	})
+	firstSweep := fixture.clock.Now()
+	world.awaitSweep(world.networkId, firstSweep)
+
+	// an object no row names appears after the first sweep, and a later state's pass comes before the interval
+	fixture.putDelegationKey(world.networkId, stray)
+	world.awaitPass(func() { fixture.clock.Advance(settings.DelegationKeySweepInterval / 2) })
+	laterView := world.appendDelegations([]*bridge.DelegationRow{liveRow})
+	world.awaitState(laterView, func() {
+		world.setWithTimes(laterView, map[uint64]time.Time{laterView.Pin().GetVersion(): fixture.clock.Now()})
+	})
+	if fixture.delegationKeyObject(stray.delegationId) == nil {
+		t.Fatalf("an object went at a state's pass before the sweep's interval had run")
+	}
+
+	// a hold covers the network when the interval's sweep comes: the deleter keeps the object
+	caseId := testId("case-dkey-sweep")
+	if err := sidecartest.PlaceHold(fixture.ctx, fixture.host.Blobs, &sidecar.HoldRecord{
+		NetworkId:  world.networkId,
+		CaseId:     caseId,
+		Kind:       sidecar.HoldKindPreserve2703f,
+		Scope:      sidecar.HoldScopeNetwork(),
+		PlaceTime:  fixture.clock.Now(),
+		ExpireTime: fixture.clock.Now().Add(365 * 24 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	world.awaitPass(func() {
+		fixture.clock.Advance(firstSweep.Add(settings.DelegationKeySweepInterval).Sub(fixture.clock.Now()))
+	})
+	world.awaitSweep(world.networkId, firstSweep.Add(settings.DelegationKeySweepInterval))
+	world.awaitDelegationKeyDeletes(1)
+	if fixture.delegationKeyObject(stray.delegationId) == nil {
+		t.Fatalf("an object deleted under a hold")
+	}
+
+	// the hold ends: the next interval's sweep deletes it
+	if err := sidecartest.RemoveHold(fixture.ctx, fixture.host.Blobs, world.networkId, caseId); err != nil {
+		t.Fatal(err)
+	}
+	world.awaitPass(func() { fixture.clock.Advance(settings.DelegationKeySweepInterval) })
+	world.awaitSweep(world.networkId, firstSweep.Add(2*settings.DelegationKeySweepInterval))
+	world.awaitDelegationKeyDeletes(2)
+	if fixture.delegationKeyObject(stray.delegationId) != nil {
+		t.Errorf("an object no row names stands at the sweep after its hold ended")
+	}
+	if fixture.delegationKeyObject(live.delegationId) == nil {
+		t.Errorf("the live forwarding Delegation's object was deleted")
 	}
 }

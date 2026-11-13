@@ -486,9 +486,31 @@ func TestGkmServiceSettingsRefusePastTheDesignsBounds(t *testing.T) {
 		t.Fatalf("the defaults: %v", err)
 	}
 	settings := DefaultGkmServiceSettings()
+	if settings.RepoCacheMaxTtl != 5*time.Second {
+		t.Errorf("§10.6's repo/ bound defaults to %s", settings.RepoCacheMaxTtl)
+	}
 	settings.RepoCacheTtl = 6 * time.Second
 	if err := settings.Validate(); !errors.Is(err, ErrGkmSettings) {
 		t.Errorf("repo/ cached 6 s: %v", err)
+	}
+	// the bound holds every cache under it, and a lower bound holds them lower
+	for _, adjust := range []func(settings *GkmServiceSettings){
+		func(settings *GkmServiceSettings) { settings.FormCacheTtl = 6 * time.Second },
+		func(settings *GkmServiceSettings) { settings.GroupInfoCacheTtl = 6 * time.Second },
+		func(settings *GkmServiceSettings) { settings.RepoCacheMaxTtl = 4 * time.Second },
+		func(settings *GkmServiceSettings) { settings.RepoCacheMaxTtl = 0 },
+	} {
+		settings = DefaultGkmServiceSettings()
+		adjust(settings)
+		if err := settings.Validate(); !errors.Is(err, ErrGkmSettings) {
+			t.Errorf("a cache past its bound, or no bound: %v", err)
+		}
+	}
+	settings = DefaultGkmServiceSettings()
+	settings.RepoCacheMaxTtl = 4 * time.Second
+	settings.RepoCacheTtl, settings.FormCacheTtl, settings.GroupInfoCacheTtl = 4*time.Second, 4*time.Second, 4*time.Second
+	if err := settings.Validate(); err != nil {
+		t.Errorf("caches at a lower bound: %v", err)
 	}
 	settings = DefaultGkmServiceSettings()
 	settings.KeyPackageClaimRate = GkmRate{Count: 10}

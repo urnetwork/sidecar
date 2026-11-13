@@ -578,14 +578,30 @@ func TestGkmDelegationKeySha256ByRowKind(t *testing.T) {
 	}
 }
 
-// QD-442's form of the key object's key: gkm/dkey/ and 64 lowercase hex characters; an id of another size is refused.
-func TestGkmDelegationKeyPathIsQd442s(t *testing.T) {
+// QD-442's form of the key object's key, under its network (QD-763): gkm/dkey/, the network_id in 32 lowercase hex
+// characters, and the delegation_id in 64; the network's prefix is the key's start; an id of another size is refused,
+// and so is the zero network.
+func TestGkmDelegationKeyPathIsQd442sUnderItsNetwork(t *testing.T) {
+	networkId := gkmTestId("network")
 	delegationId := sha256.Sum256([]byte("a forwarding Delegation"))
-	path, err := GkmDelegationKeyPath(delegationId[:])
-	if err != nil || path != "gkm/dkey/"+hex.EncodeToString(delegationId[:]) || strings.ToLower(path) != path {
+	path, err := GkmDelegationKeyPath(networkId, delegationId[:])
+	want := "gkm/dkey/" + hex.EncodeToString(networkId[:]) + "/" + hex.EncodeToString(delegationId[:])
+	if err != nil || path != want || strings.ToLower(path) != path || len(path) != len("gkm/dkey/")+32+1+64 {
 		t.Errorf("the path: %s %v", path, err)
 	}
-	if _, err := GkmDelegationKeyPath(delegationId[:31]); !errors.Is(err, ErrGkmMalformed) {
+	prefix := GkmDelegationKeyNetworkPrefix(networkId)
+	if prefix != "gkm/dkey/"+hex.EncodeToString(networkId[:])+"/" || !strings.HasPrefix(path, prefix) {
+		t.Errorf("the network's prefix: %s", prefix)
+	}
+	// another network's prefix holds none of this network's keys
+	otherPrefix := GkmDelegationKeyNetworkPrefix(gkmTestId("another network"))
+	if strings.HasPrefix(path, otherPrefix) || strings.HasPrefix(otherPrefix, prefix) || strings.HasPrefix(prefix, otherPrefix) {
+		t.Errorf("two networks' prefixes overlap: %s %s", prefix, otherPrefix)
+	}
+	if _, err := GkmDelegationKeyPath(networkId, delegationId[:31]); !errors.Is(err, ErrGkmMalformed) {
 		t.Errorf("a short id: %v", err)
+	}
+	if _, err := GkmDelegationKeyPath(Id{}, delegationId[:]); !errors.Is(err, ErrGkmMalformed) {
+		t.Errorf("the zero network: %v", err)
 	}
 }

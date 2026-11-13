@@ -31,10 +31,14 @@ models:
     owners: [EVS1-M2-02, EVSB-M10-07]
     milestones: [M2, M10]
     objects: "head (its fence, refusal records, seal lease and collect window), batch records, packs and parcels with their pidx/ entries, index entries, segments with their upload receipts, slot, pmap, log, gen, epoch, repo, proj and rev; from M10 versionless versions, kind-5 and staged content, holds, DROP pushes and the citation fence"
+    companions: [details/EvsSlot]
     sources:
       - sidecar/sidecartest/model/EvsCommit.tla
       - sidecar/sidecartest/model/EvsCommit.cfg
       - sidecar/sidecartest/model/run-tlc.sh
+      - sidecar/sidecartest/model/details/EvsSlot.tla
+      - sidecar/sidecartest/model/details/EvsSlot*.cfg
+      - sidecar/sidecartest/model/details/run-slot.sh
       - sidecar/evsservice/*.go
       - sidecar/evs_*.go
       - sidecar/gkmservice/*.go
