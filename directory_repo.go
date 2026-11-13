@@ -25,7 +25,9 @@
 //	            requests closed and no roles; nothing for any other kind
 //	private     under --private, a private marker instead: who, repo_id, repo_kind and requests alone, padded to the
 //	            same 2,048 B as an announcement (plan-RECORD-m6-carrier #2), so evs cannot tell which repos are private;
-//	            no device announces a private repo on its own, and its owner may later, a full item at a higher version
+//	            no device announces a private repo on its own, and its owner may later, a full item at a higher version;
+//	            a create marked private is filed only while the directory stands, a directory admin's device filing it
+//	            first and any other refusing (QD-748, directory_private.go), so no private repo predates the directory
 //	explicit    ur directory announce repo: any announceable kind, a full item at a higher version; vault, mailbox,
 //	            secret and team_record only so, by their owner or repo admin
 //	predating   a general or record repo created before the directory, with no item, is written by the first of its
@@ -60,6 +62,10 @@ var (
 	ErrDirectoryRepoKind = errors.New("directory repo kind never announced")
 	// No record writer is bound, so the directory takes nothing from this client.
 	ErrDirectoryNoWriter = errors.New("directory has no record writer")
+	// A general or record repo marked private needs the team's directory to hold its private marker, and none stands
+	// where this device can see it (QD-748): a create refuses before its RepoCreate is filed, and a repo already made
+	// waits for the directory to show, its create resumed by id to write the marker.
+	ErrDirectoryPrivateNeedsDirectory = errors.New("a repo marked private needs the team directory standing first")
 )
 
 // The warning a repo marked private takes while a config label may still name it (§16.11's labels row): the label
@@ -546,14 +552,22 @@ func directoryRepoArgsOf(item *protocol.Announcement, withProse bool) *Directory
 }
 
 // EvsClientArgs.RepoCreated for this Sidecar: its team network's directory announces the new repo, or writes its
-// private marker; a network with no directory, or a directory client not bound yet, writes nothing.
+// private marker. With no directory shown, or a directory client not bound yet, a repo the directory would announce is
+// left to §16.11's predating rule and nothing is written; but a general or record repo marked private answers
+// ErrDirectoryPrivateNeedsDirectory, since only its marker keeps the choice: EvsClientArgs.PrivateCreate let its
+// RepoCreate be filed only once the directory stood, so the view has not caught up yet, and a create resumed by its id
+// writes the marker once it has (QD-748).
 func (self *Sidecar) announceCreatedRepo(ctx context.Context, created *EvsRepoCreated) error {
-	directory := self.Directory()
-	if directory == nil {
-		return nil
+	err := ErrDirectoryNone
+	if directory := self.Directory(); directory != nil {
+		_, err = directory.AnnounceNewRepo(ctx, created)
 	}
-	_, err := directory.AnnounceNewRepo(ctx, created)
-	if errors.Is(err, ErrDirectoryNone) {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrDirectoryNone) && created != nil && created.Private && aclRepoKindGeneral(created.Kind):
+		return fmt.Errorf("%w: the repo is made, and its private marker waits for the directory: %w", ErrDirectoryPrivateNeedsDirectory, err)
+	case errors.Is(err, ErrDirectoryNone):
 		return nil
 	}
 	return err
