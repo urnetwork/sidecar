@@ -165,6 +165,12 @@ type SidecarAuthClientArgs struct {
 	DeviceSpec string
 	// true unless the client provides egress (§20.8).
 	DeclaresNoEgress bool
+	// §7.4's forwarding client F of this sidecar (owner decision 197; DESIGN-DETAILS 4.2.6's S5): a child of its own
+	// client, kept for life and inherited by F's children, whose tokens pass only §7.4's forwarding allowlist.
+	ForwardOnly bool
+	// A new forwarding client's ClientKey public key, Ed25519, 32 bytes: what its proofs are checked against with no
+	// binding. Only with ForwardOnly.
+	ClientPublicKey []byte
 }
 
 // POST /network/auth-client's body.
@@ -176,6 +182,8 @@ type sidecarAuthClientWire struct {
 	DeclaresNoEgress bool   `json:"declares_no_egress"`
 	AdminRefused     bool   `json:"admin_refused"`
 	StrictExp        bool   `json:"strict_exp"`
+	ForwardOnly      bool   `json:"forward_only,omitempty"`
+	ClientPublicKey  []byte `json:"client_public_key,omitempty"`
 }
 
 // What POST /network/auth-client answers.
@@ -237,6 +245,8 @@ func (self *SidecarApi) AuthClient(ctx context.Context, args *SidecarAuthClientA
 		DeclaresNoEgress: args.DeclaresNoEgress,
 		AdminRefused:     true,
 		StrictExp:        true,
+		ForwardOnly:      args.ForwardOnly,
+		ClientPublicKey:  args.ClientPublicKey,
 	}, reply)
 	if err != nil {
 		return nil, err
