@@ -1480,6 +1480,21 @@ func bridgeSignedStatementId(signedBytes []byte) ([sha256.Size]byte, error) {
 	return bridge.SignedBytesSha256(purpose, signedType, signed.GetBody()), nil
 }
 
+// The pending statement whose Signed bytes are signed, nil where none is pending: it landed, was refused, or passed
+// its not_after. Here, on every leg the filer and forwarding's setup run on, both of which post a statement again.
+func (self *Sidecar) pendingStatement(signed []byte) (*sidecarPendingStatement, error) {
+	pendings, err := self.pendingStatements()
+	if err != nil {
+		return nil, err
+	}
+	for _, pending := range pendings {
+		if bytes.Equal(pending.signed, signed) {
+			return pending, nil
+		}
+	}
+	return nil, nil
+}
+
 // Whether the newest verified state's replay ring holds the statement: it took effect among the log's last 4,096
 // entries.
 func (self *BridgeFiler) logHolds(statementId [sha256.Size]byte) bool {

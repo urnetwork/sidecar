@@ -645,21 +645,6 @@ func (self *Sidecar) fileForwardingDelegation(ctx context.Context, setup *sideca
 	}
 }
 
-// The pending statement whose Signed bytes are signed, nil where none is pending: it landed, was refused, or passed
-// its not_after.
-func (self *Sidecar) pendingStatement(signed []byte) (*sidecarPendingStatement, error) {
-	pendings, err := self.pendingStatements()
-	if err != nil {
-		return nil, err
-	}
-	for _, pending := range pendings {
-		if bytes.Equal(pending.signed, signed) {
-			return pending, nil
-		}
-	}
-	return nil, nil
-}
-
 // What a sidecar role's witness hint carries to its VPN component (§18.6's witness row): the newest pin it verified,
 // §6.4's witnessed pin where one stands, and whether its full reading found a fork, which holds the component pending
 // until a later witness clears it (DESIGN-DETAILS 4.2.5).
