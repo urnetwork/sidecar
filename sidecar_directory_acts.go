@@ -4,8 +4,9 @@
 // access_request outward action a directory request passes §5.4's gate as, and the three events the directory raises.
 //
 //	gate      a directory request is O (§16.11's endorse row): its filer builds a CanonicalAction of kind
-//	          access_request at version 3, in fields 8, 10, 11, 14, 26, 27 and 29 (RECORD-M6-18's
-//	          DirectoryAccessAction, through MCP-M3-02's builder), and files nothing before AuthorizeAccessRequest
+//	          access_request at version 3, in fields 8, 10, 11, 14, 26 and 29, with a worker's port and its port
+//	          text sealed in field 38 and nowhere in the clear (QD-740; RECORD-M6-18's DirectoryAccessAction,
+//	          through MCP-M3-02's builder), and files nothing before AuthorizeAccessRequest
 //	          passes it, under the member's decision: harness under harness_ok in an untainted run, device or presence
 //	          in a tainted one (owner decisions 74, 75, 142), which the installed gate judges with §16.6's TS1. Until
 //	          approvers know version 3 (MCP-M6-01 adds it to CanonicalActionVersionKnown) the builder refuses every

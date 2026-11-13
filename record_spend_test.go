@@ -150,19 +150,18 @@ func testSpendDnsAction(t testing.TB, value string) *StoredCanonicalAction {
 	return action
 }
 
-// A bridge_forward grant to dst for subject under the requests rule, as stored.
+// A bridge_forward grant to dst for subject under the requests rule, as a daemon builds it: version 4, the target's
+// port and a port dst names sealed in its detail, its clear grant_dst the target alone (QD-740).
 func testSpendGrantAction(t testing.TB, ruleId []byte, subject Id, dst string) *StoredCanonicalAction {
 	t.Helper()
-	action, err := ParseStoredCanonicalAction(testConfigMarshal(t, &protocol.CanonicalAction{
-		Kind:       uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD),
-		Version:    1,
-		RuleId:     ruleId,
-		Subject:    subject.Bytes(),
-		GrantDst:   []string{dst},
-		GrantAllow: []string{"dial"},
-	}))
+	filled := aclTestGrantAction(ruleId, subject, []string{dst}, []string{"dial"}, 0)
+	filled.Version = 0
+	action, err := NewCanonicalAction(filled)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if action.Action.GetVersion() != canonicalActionVersionSealedGrant || bytes.Contains(action.Bytes, []byte(":tcp:")) {
+		t.Fatalf("a forward at version %d", action.Action.GetVersion())
 	}
 	return action
 }
