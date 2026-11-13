@@ -309,7 +309,7 @@ func TestFidoRegistrationCarriesItsClientData(t *testing.T) {
 	if !bytes.Equal(clientDataHash[:], device.createdHash) {
 		t.Errorf("the client data carried is not what the authenticator was asked under: %s", clientData)
 	}
-	if !bytes.Contains(clientData, []byte(`"type":"webauthn.create"`)) || !bytes.Contains(clientData, []byte(`"origin":"https://ur.io"`)) {
+	if !bytes.Contains(clientData, []byte(`"type":"webauthn.create"`)) || !bytes.Contains(clientData, []byte(`"origin":"`+urPresenceOrigin+`"`)) {
 		t.Errorf("the client data: %s", clientData)
 	}
 	encodedObject, _ := container["attObj"].([]byte)

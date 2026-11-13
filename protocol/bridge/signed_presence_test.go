@@ -1467,7 +1467,7 @@ func TestRegistrationClientDataNeedsCreateAndAListedOrigin(t *testing.T) {
 		{name: "an assertion's type", clientData: clientData(webAuthnClientDataTypeGet, origins[0])},
 		{name: "no type", clientData: fmt.Appendf(nil, `{"origin":%q}`, origins[0])},
 		{name: "an unlisted origin", clientData: clientData(webAuthnClientDataTypeCreate, "https://phish.example")},
-		{name: "a subdomain", clientData: clientData(webAuthnClientDataTypeCreate, "https://app."+origins[0][len("https://"):])},
+		{name: "a subdomain", clientData: clientData(webAuthnClientDataTypeCreate, strings.Replace(origins[0], "://", "://sub.", 1))},
 		{name: "a debug build's origin", clientData: clientData(webAuthnClientDataTypeCreate, testDebugBuildOrigin())},
 		{name: "no origin", clientData: []byte(`{"type":"webauthn.create"}`)},
 		{name: "not json", clientData: []byte(`{"type":"webauthn.create"`)},

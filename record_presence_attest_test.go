@@ -30,6 +30,7 @@ import (
 	"math/big"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -954,7 +955,7 @@ func TestPresenceAttestationMapRefusesAWrongTypeOrOrigin(t *testing.T) {
 		{name: "an assertion's type", clientData: testAttestClientData("webauthn.get", testPresenceOrigin)},
 		{name: "no type", clientData: []byte(`{"challenge":"c3ludGhldGlj","origin":"https://ur.io"}`)},
 		{name: "a fixture origin", clientData: testAttestClientData("webauthn.create", "https://presence.example")},
-		{name: "a subdomain origin", clientData: testAttestClientData("webauthn.create", "https://app.ur.io")},
+		{name: "a subdomain origin", clientData: testAttestClientData("webauthn.create", strings.Replace(testPresenceOrigin, "://", "://sub.", 1))},
 		{name: "a port", clientData: testAttestClientData("webauthn.create", "https://ur.io:8443")},
 		{name: "plain http", clientData: testAttestClientData("webauthn.create", "http://ur.io")},
 		{name: "an android origin", clientData: testAttestClientData(
