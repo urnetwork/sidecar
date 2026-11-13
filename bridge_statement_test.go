@@ -42,6 +42,9 @@ func testBridgePrefix(a byte, b byte, c byte, d byte, length uint32) *bridge.Bri
 	return &bridge.BridgeIpv4Prefix{Address: testBridgeIpv4(a, b, c, d), Length: length}
 }
 
+// How long every reader holds a released address, by the ledger's default settings (§17.4, I-14).
+var testBridgeTombstoneMs = DefaultBridgeLedgerSettings().AddressTombstoneTimeout.Milliseconds()
+
 // A rule id from a label, as a standing grant's 32 random bytes.
 func testBridgeRuleId(label string) []byte {
 	digest := sha256.Sum256([]byte("bridge test rule " + label))
@@ -832,7 +835,7 @@ func TestAReleasedBridgeAddressIsATombstoneForThirtyDays(t *testing.T) {
 		t.Fatalf("after the revocation: %d addresses, tombstones %+v", len(ledger.Addresses()), tombstones)
 	}
 
-	net.timeMs = releasedMs + BridgeAddressTombstoneMs - testBridgeDayMs
+	net.timeMs = releasedMs + testBridgeTombstoneMs - testBridgeDayMs
 	early := net.mustPost(phone, address, net.bridgeAddress(phone, ipv4))
 	ledger = net.bridgeLedger()
 	testBridgeDisposition(t, ledger, early.Pin.GetVersion(), BridgeDispositionVoid)
@@ -841,7 +844,7 @@ func TestAReleasedBridgeAddressIsATombstoneForThirtyDays(t *testing.T) {
 	}
 
 	// the entry's own time is 1 s past the tip's, so this one lands exactly 30 days after the release
-	net.timeMs = releasedMs + BridgeAddressTombstoneMs - 1000
+	net.timeMs = releasedMs + testBridgeTombstoneMs - 1000
 	exact := net.mustPost(tablet, address, net.bridgeAddress(tablet, ipv4))
 	ledger = net.bridgeLedger()
 	testBridgeDisposition(t, ledger, exact.Pin.GetVersion(), BridgeDispositionActive)
@@ -1011,11 +1014,11 @@ func TestAFilingOfAHeldBridgeIdChangesOnlyItsWeightSiteAndDrain(t *testing.T) {
 // target_port are void, beside one of each protocol that holds.
 func TestABridgeMapsBodyIsHeldToItsShape(t *testing.T) {
 	good := testBridgeMapBody(testBridgeIpv4(100, 80, 3, 8), 8443, 443)
-	if err := bridgeCheckMapBody(good); err != nil {
+	if err := bridgeCheckMapBody(good, nil); err != nil {
 		t.Fatal(err)
 	}
 	icmp := &bridge.BridgeMapBody{MatchPrefix: good.GetMatchPrefix(), Protocol: 1, Target: good.GetTarget()}
-	if err := bridgeCheckMapBody(icmp); err != nil {
+	if err := bridgeCheckMapBody(icmp, nil); err != nil {
 		t.Fatal(err)
 	}
 	change := func(edit func(body *bridge.BridgeMapBody)) *bridge.BridgeMapBody {
@@ -1040,7 +1043,7 @@ func TestABridgeMapsBodyIsHeldToItsShape(t *testing.T) {
 		"a long drain":       change(func(body *bridge.BridgeMapBody) { body.DrainSeconds = 3601 }),
 		"no match prefix":    change(func(body *bridge.BridgeMapBody) { body.MatchPrefix = nil }),
 	} {
-		if err := bridgeCheckMapBody(body); err == nil {
+		if err := bridgeCheckMapBody(body, nil); err == nil {
 			t.Errorf("%s: taken", name)
 		}
 	}

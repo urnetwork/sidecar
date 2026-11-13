@@ -884,7 +884,6 @@ func TestBridgeLedgerFilesAreDeterministic(t *testing.T) {
 	}
 }
 
-
 // The vectors, embedded so they read on every leg, the page Worker's included.
 //
 //go:embed testdata/bridge/ledger
@@ -1053,7 +1052,7 @@ func TestAnExpiredTombstoneLeavesRoomForAnAlias(t *testing.T) {
 	for _, c := range []struct {
 		timeMs int64
 		room   bool
-	}{{timeMs: releasedMs + BridgeAddressTombstoneMs - 1, room: false}, {timeMs: releasedMs + BridgeAddressTombstoneMs, room: true}} {
+	}{{timeMs: releasedMs + testBridgeTombstoneMs - 1, room: false}, {timeMs: releasedMs + testBridgeTombstoneMs, room: true}} {
 		ledger := newBridgeLedger(&BridgeLedgerReader{}, math.MaxUint64, c.timeMs, false)
 		ledger.holdAddress(&BridgeLedgerAddress{
 			SidecarId: testConfigId("spilled"), HostBits: 0x8001, ClaimedAt: 3,

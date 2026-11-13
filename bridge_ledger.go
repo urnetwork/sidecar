@@ -34,6 +34,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -59,7 +60,9 @@ var (
 	ErrBridgeLedgerOverBudget = errors.New("bridge ledger over budget")
 )
 
-// Tunables of reading and folding a ledger.
+// Tunables of reading and folding a ledger. A verdict rides on AddressTombstoneTimeout, DrainMaximum, BodyListMaxCount
+// and SiteIdMaxByteCount, and the manifest's hashes on RuleShardRowCount, so every reader of a network reads their
+// defaults, which are the protocol's values, and only a test changes them.
 type BridgeLedgerSettings struct {
 	// A ledger file is read this many bytes at a time, and no row is longer: 64 KiB, against the rows' 3 KB at most.
 	// Non-positive is the default.
@@ -70,23 +73,53 @@ type BridgeLedgerSettings struct {
 	// The rule rows past which the rule shards widen from 8 to 16 bits: 262,144. Every writer and checker of a
 	// network reads the default, since the shard width is part of what the manifest hashes; a test lowers it.
 	RuleShardRowCount int
+	// How long a released overlay address routes to no new holder, by the log's time (§17.4, I-14): 30 days.
+	// Non-positive is the default.
+	AddressTombstoneTimeout time.Duration
+	// The longest drain a route's or map's drain_seconds may name (§17.8's disposition): 3,600 s. Non-positive is the
+	// default.
+	DrainMaximum time.Duration
+	// The most prefixes one BridgeRoute advertises, port ranges one BridgeMap names, or exits one BridgeEgress lists:
+	// 64. Non-positive is the default.
+	BodyListMaxCount int
+	// The longest site_id a BridgeRoute names: 32 bytes. Non-positive is the default.
+	SiteIdMaxByteCount int
 }
 
-// DESIGN-DETAILS 12.2.2's values.
+// DESIGN-DETAILS 12.2.2's values, with §17.4's and §17.8's limits.
 func DefaultBridgeLedgerSettings() *BridgeLedgerSettings {
 	return &BridgeLedgerSettings{
 		ChunkByteCount:           64 * 1024,
 		UnfoldedBodyMaxByteCount: 4 * 1024 * 1024,
 		RuleShardRowCount:        262144,
+		AddressTombstoneTimeout:  30 * 24 * time.Hour,
+		DrainMaximum:             time.Hour,
+		BodyListMaxCount:         64,
+		SiteIdMaxByteCount:       32,
 	}
 }
 
-// The settings, defaults for nil.
+// The settings as a ledger reads them: a copy, each field that takes a default where it is non-positive given it. Nil
+// is the defaults. The caller's settings are never changed.
 func bridgeLedgerSettingsOrDefault(settings *BridgeLedgerSettings) *BridgeLedgerSettings {
+	defaults := DefaultBridgeLedgerSettings()
 	if settings == nil {
-		return DefaultBridgeLedgerSettings()
+		return defaults
 	}
-	return settings
+	read := *settings
+	if read.AddressTombstoneTimeout <= 0 {
+		read.AddressTombstoneTimeout = defaults.AddressTombstoneTimeout
+	}
+	if read.DrainMaximum <= 0 {
+		read.DrainMaximum = defaults.DrainMaximum
+	}
+	if read.BodyListMaxCount <= 0 {
+		read.BodyListMaxCount = defaults.BodyListMaxCount
+	}
+	if read.SiteIdMaxByteCount <= 0 {
+		read.SiteIdMaxByteCount = defaults.SiteIdMaxByteCount
+	}
+	return &read
 }
 
 // What a judge made of one route's or map's body where its entry landed.
@@ -637,7 +670,7 @@ func (self *BridgeLedger) loadRuleRow(row *protocol.BridgeLedgerRuleRow) error {
 			if row.GetRoute().GetApproval() != nil {
 				return errors.New("a body that keeps its approval")
 			}
-			if err := bridgeCheckRouteBody(row.GetRoute()); err != nil {
+			if err := bridgeCheckRouteBody(row.GetRoute(), self.settings); err != nil {
 				return err
 			}
 			rule.Route = row.GetRoute()
@@ -645,7 +678,7 @@ func (self *BridgeLedger) loadRuleRow(row *protocol.BridgeLedgerRuleRow) error {
 			if row.GetMap().GetApproval() != nil {
 				return errors.New("a body that keeps its approval")
 			}
-			if err := bridgeCheckMapBody(row.GetMap()); err != nil {
+			if err := bridgeCheckMapBody(row.GetMap(), self.settings); err != nil {
 				return err
 			}
 			rule.Map = row.GetMap()
@@ -697,7 +730,7 @@ func (self *BridgeLedger) loadEgressRow(row *protocol.BridgeLedgerEgressRow) err
 		return errors.New("exits under none")
 	case len(row.GetExitTagId()) != 0 && (len(row.GetExitTagId()) != len(Id{}) || len(row.GetExitSidecarIds()) != 0):
 		return errors.New("an exit tag malformed, or beside exits")
-	case bridgeBodyListMaxCount < len(row.GetExitSidecarIds()):
+	case self.settings.BodyListMaxCount < len(row.GetExitSidecarIds()):
 		return fmt.Errorf("%d exits", len(row.GetExitSidecarIds()))
 	}
 	for _, exitBytes := range row.GetExitSidecarIds() {

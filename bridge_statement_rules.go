@@ -46,6 +46,7 @@ import (
 	"math"
 	"net/netip"
 	"slices"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -53,9 +54,9 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+// §17.4's block: the shape of the address plan every reader holds addresses to, not a limit. The times and limits a
+// verdict reads are BridgeLedgerSettings' fields.
 const (
-	// A released overlay address routes to no new holder for this long, by the log's time (§17.4, I-14).
-	BridgeAddressTombstoneMs = int64(30 * 24 * 60 * 60 * 1000)
 	// A network's block is one IPv4 /16 (§17.4).
 	bridgeBlockPrefixLength = 16
 	// The upper /17 of a block, in host bits: aliases and exposed prefixes from its bottom, spilled hosts from its top.
@@ -64,14 +65,8 @@ const (
 	bridgeLowerHostCount = 127 * 254
 	// The hosts a block's upper /17 holds.
 	bridgeUpperHostCount = 128 * 254
-	// §17.8's bound on a block's addresses, 64,770.
+	// §17.8's bound on a block's addresses, 64,770: every host the block's shape holds.
 	BridgeAddressMaxCount = bridgeLowerHostCount + bridgeUpperHostCount
-	// drain_seconds is 3,600 s at most (§17.8's disposition).
-	bridgeDrainSecondsMax = 3600
-	// The most prefixes one BridgeRoute advertises, port ranges one BridgeMap names, or exits one BridgeEgress lists.
-	bridgeBodyListMaxCount = 64
-	// A site_id is at most this long.
-	bridgeSiteIdMaxByteCount = 32
 )
 
 var (
@@ -296,11 +291,13 @@ type BridgeLedgerTombstone struct {
 	ReleasedAt      uint64
 	ReleasedMs      int64
 	ReleasedMsKnown bool
+	// how long it holds from ReleasedMs: the ledger's AddressTombstoneTimeout
+	holdMs int64
 }
 
 // Whether the tombstone still holds at the log's time timeMs.
 func (self *BridgeLedgerTombstone) Holds(timeMs int64) bool {
-	return !self.ReleasedMsKnown || timeMs < self.ReleasedMs+BridgeAddressTombstoneMs
+	return !self.ReleasedMsKnown || timeMs < self.ReleasedMs+self.holdMs
 }
 
 // One BridgeWithdraw that binds a rule, or reserves an id no filing holds yet.
@@ -719,7 +716,7 @@ func (self *BridgeLedger) hostBitsFree(hostBits uint32, statement *BridgeLogStat
 // the fold whose time passes it drops, so a statement reads it alike whether a fold came between or not.
 func (self *BridgeLedger) freeAt(address *BridgeLedgerAddress, statement *BridgeLogStatement) bool {
 	release := self.addressRelease(address)
-	if release == nil || statement.N <= release.n || !release.timeMsKnown || statement.TimeMs < release.timeMs+BridgeAddressTombstoneMs {
+	if release == nil || statement.N <= release.n || !release.timeMsKnown || statement.TimeMs < release.timeMs+self.settings.AddressTombstoneTimeout.Milliseconds() {
 		return false
 	}
 	self.dropAddress(address)
@@ -942,7 +939,7 @@ func (self *BridgeLedger) applyRule(entry *BridgeLedgerEntry) error {
 			rule.Pending, rule.Void = entry.Disposition == BridgeDispositionPending, entry.Disposition != BridgeDispositionPending
 			return err
 		}
-		if err := bridgeCheckMapBody(mapBody); err != nil {
+		if err := bridgeCheckMapBody(mapBody, self.settings); err != nil {
 			rule.Void = true
 			return err
 		}
@@ -998,7 +995,7 @@ func (self *BridgeLedger) applyHeldRule(entry *BridgeLedgerEntry, rule *BridgeLe
 		if err := self.openBody(entry, body); err != nil {
 			return err
 		}
-		if err := bridgeCheckRouteBody(body); err != nil {
+		if err := bridgeCheckRouteBody(body, self.settings); err != nil {
 			return err
 		}
 		body = bridgeBodyWithoutApproval(body)
@@ -1018,7 +1015,7 @@ func (self *BridgeLedger) applyHeldRule(entry *BridgeLedgerEntry, rule *BridgeLe
 		if err := self.openBody(entry, body); err != nil {
 			return err
 		}
-		if err := bridgeCheckMapBody(body); err != nil {
+		if err := bridgeCheckMapBody(body, self.settings); err != nil {
 			return err
 		}
 		body = bridgeBodyWithoutApproval(body)
@@ -1036,11 +1033,12 @@ func (self *BridgeLedger) applyHeldRule(entry *BridgeLedgerEntry, rule *BridgeLe
 
 // A BridgeRouteBody's own shape: a subnet route's prefixes, each at least a /1 with no bits past its length, or an
 // exit with none; an exposed_prefix only on a subnet route of one prefix, of that prefix's length, so host bits map
-// one to one; a site_id, weight and drain_seconds in range.
-func bridgeCheckRouteBody(body *bridge.BridgeRouteBody) error {
+// one to one; a site_id, weight and drain_seconds in range, by settings' limits (nil, the defaults).
+func bridgeCheckRouteBody(body *bridge.BridgeRouteBody, settings *BridgeLedgerSettings) error {
+	settings = bridgeLedgerSettingsOrDefault(settings)
 	switch body.GetKind() {
 	case bridge.BridgeRouteKind_BRIDGE_ROUTE_KIND_SUBNET:
-		if len(body.GetPrefixes()) == 0 || bridgeBodyListMaxCount < len(body.GetPrefixes()) {
+		if len(body.GetPrefixes()) == 0 || settings.BodyListMaxCount < len(body.GetPrefixes()) {
 			return fmt.Errorf("a subnet route of %d prefixes", len(body.GetPrefixes()))
 		}
 	case bridge.BridgeRouteKind_BRIDGE_ROUTE_KIND_EXIT:
@@ -1073,11 +1071,11 @@ func bridgeCheckRouteBody(body *bridge.BridgeRouteBody) error {
 		}
 	}
 	switch {
-	case bridgeSiteIdMaxByteCount < len(body.GetSiteId()):
+	case settings.SiteIdMaxByteCount < len(body.GetSiteId()):
 		return fmt.Errorf("a site_id of %d bytes", len(body.GetSiteId()))
 	case math.MaxUint16 < body.GetWeight():
 		return fmt.Errorf("a weight of %d", body.GetWeight())
-	case bridgeDrainSecondsMax < body.GetDrainSeconds():
+	case uint64(settings.DrainMaximum/time.Second) < uint64(body.GetDrainSeconds()):
 		return fmt.Errorf("drain_seconds of %d", body.GetDrainSeconds())
 	}
 	return nil
@@ -1086,7 +1084,7 @@ func bridgeCheckRouteBody(body *bridge.BridgeRouteBody) error {
 // A new route's body against the ledger: its shape, D-BRIDGE-8 against every other route in force, and room for its
 // exposed prefix, which it answers for the caller to hold once the rule's approval passes.
 func (self *BridgeLedger) checkRoute(rule *BridgeLedgerRule, body *bridge.BridgeRouteBody) (*bridgeUpperRange, error) {
-	if err := bridgeCheckRouteBody(body); err != nil {
+	if err := bridgeCheckRouteBody(body, self.settings); err != nil {
 		return nil, err
 	}
 	if err := self.checkOverlap(rule, body); err != nil {
@@ -1142,8 +1140,9 @@ func (self *BridgeLedger) checkOverlap(rule *BridgeLedgerRule, body *bridge.Brid
 
 // A BridgeMapBody's own shape: a match_prefix of /16 or longer; TCP, UDP or ICMP; ports ascending and disjoint, none
 // on ICMP; a target address of 4 or 16 bytes; a target_port only where at most one range maps onto it; drain_seconds
-// in range.
-func bridgeCheckMapBody(body *bridge.BridgeMapBody) error {
+// in range, by settings' limits (nil, the defaults).
+func bridgeCheckMapBody(body *bridge.BridgeMapBody, settings *BridgeLedgerSettings) error {
+	settings = bridgeLedgerSettingsOrDefault(settings)
 	matchPrefix, err := bridgePrefixOf(body.GetMatchPrefix())
 	if err != nil {
 		return fmt.Errorf("match_prefix: %w", err)
@@ -1160,7 +1159,7 @@ func bridgeCheckMapBody(body *bridge.BridgeMapBody) error {
 	default:
 		return fmt.Errorf("protocol %d", body.GetProtocol())
 	}
-	if bridgeBodyListMaxCount < len(body.GetPorts()) {
+	if settings.BodyListMaxCount < len(body.GetPorts()) {
 		return fmt.Errorf("%d port ranges", len(body.GetPorts()))
 	}
 	previousLast := uint32(0)
@@ -1177,7 +1176,7 @@ func bridgeCheckMapBody(body *bridge.BridgeMapBody) error {
 		return fmt.Errorf("a target_port of %d", body.GetTargetPort())
 	case body.GetTargetPort() != 0 && 1 < len(body.GetPorts()):
 		return errors.New("a target_port with more than one port range")
-	case bridgeDrainSecondsMax < body.GetDrainSeconds():
+	case uint64(settings.DrainMaximum/time.Second) < uint64(body.GetDrainSeconds()):
 		return fmt.Errorf("drain_seconds of %d", body.GetDrainSeconds())
 	}
 	return nil
@@ -1257,7 +1256,7 @@ func (self *BridgeLedger) applyEgress(entry *BridgeLedgerEntry) error {
 	if (len(body.GetExitSidecarIds()) == 0) == (len(body.GetExitTagId()) == 0) {
 		return errors.New("exits names its exit sidecars or one tag, and not both")
 	}
-	if bridgeBodyListMaxCount < len(body.GetExitSidecarIds()) {
+	if self.settings.BodyListMaxCount < len(body.GetExitSidecarIds()) {
 		return fmt.Errorf("%d exits", len(body.GetExitSidecarIds()))
 	}
 	exits := []Id{}
@@ -1333,7 +1332,7 @@ func (self *BridgeLedger) releaseAddresses() {
 		}
 		tombstone := &BridgeLedgerTombstone{
 			SidecarId: address.SidecarId, HostBits: address.HostBits, ReleasedAt: release.n, ReleasedMs: release.timeMs,
-			ReleasedMsKnown: release.timeMsKnown,
+			ReleasedMsKnown: release.timeMsKnown, holdMs: self.settings.AddressTombstoneTimeout.Milliseconds(),
 		}
 		if self.bySidecar[address.SidecarId] == address {
 			delete(self.bySidecar, address.SidecarId)
