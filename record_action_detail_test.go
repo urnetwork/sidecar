@@ -83,10 +83,11 @@ func testSealedAccessRequest(t *testing.T) *StoredCanonicalAction {
 	return stored
 }
 
-// The field numbers on stored's wire, top level, in the order written.
-func testWireFieldNumbers(t *testing.T, stored []byte) []protowire.Number {
+// stored's tag-and-value records, top level, in the order written. Here rather than record_hash_test.go's
+// testRecordFields, which the js legs leave out with the file.
+func testWireRecords(t *testing.T, stored []byte) [][]byte {
 	t.Helper()
-	numbers := []protowire.Number{}
+	records := [][]byte{}
 	for 0 < len(stored) {
 		number, wireType, tagByteCount := protowire.ConsumeTag(stored)
 		if tagByteCount < 0 {
@@ -96,8 +97,19 @@ func testWireFieldNumbers(t *testing.T, stored []byte) []protowire.Number {
 		if valueByteCount < 0 {
 			t.Fatal(protowire.ParseError(valueByteCount))
 		}
-		numbers = append(numbers, number)
+		records = append(records, stored[:tagByteCount+valueByteCount])
 		stored = stored[tagByteCount+valueByteCount:]
+	}
+	return records
+}
+
+// The field numbers on stored's wire, top level, in the order written.
+func testWireFieldNumbers(t *testing.T, stored []byte) []protowire.Number {
+	t.Helper()
+	numbers := []protowire.Number{}
+	for _, record := range testWireRecords(t, stored) {
+		number, _, _ := protowire.ConsumeTag(record)
+		numbers = append(numbers, number)
 	}
 	return numbers
 }
@@ -107,7 +119,7 @@ func testCutDetailRecords(t *testing.T, stored []byte) ([]byte, [][]byte) {
 	t.Helper()
 	clear := []byte{}
 	detailRecords := [][]byte{}
-	for _, record := range testRecordFields(t, stored) {
+	for _, record := range testWireRecords(t, stored) {
 		if number, _, _ := protowire.ConsumeTag(record); number == canonicalActionFieldSealedDetail {
 			detailRecords = append(detailRecords, record)
 			continue
@@ -316,8 +328,11 @@ func TestCanonicalActionDetailSealContextIsTheClearFieldsAsStored(t *testing.T) 
 				t.Errorf("%s, %s: %+v, %v", name, what, again, err)
 			}
 		}
-		// the same clear fields reordered: protobuf reads them alike, and they derive another nonce
-		if reordered, err := CanonicalActionDetailSealContext(networkId, testRecordReordered(t, stored.Bytes)); err != nil || bytes.Equal(reordered.Nonce, derived.Nonce) {
+		// the same clear fields reordered, the first two swapped: protobuf reads them alike, and they derive another
+		// nonce
+		records := testWireRecords(t, stored.Bytes)
+		records[0], records[1] = records[1], records[0]
+		if reordered, err := CanonicalActionDetailSealContext(networkId, bytes.Join(records, nil)); err != nil || bytes.Equal(reordered.Nonce, derived.Nonce) {
 			t.Errorf("%s: the clear fields reordered derive %+v, %v", name, reordered, err)
 		}
 		for what, bytesOf := range map[string][]byte{
