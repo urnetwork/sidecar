@@ -168,7 +168,8 @@ type RecordStreamConsume struct {
 	DepositIds         []Id
 }
 
-// An ERASE push on the repo's erasure ref (§11.12): the slot keys it destroys, and its note, which the binding seals.
+// An ERASE push on the repo's erasure ref (§11.12): the slot keys it destroys, and its note, which the binding seals
+// with the push's metadata (EvsSealedMetadata.erasure_note; QD-682), the ERASE creating nothing on the ref.
 type RecordStreamErase struct {
 	PushId Id
 	// The erasure it belongs to (§11.12's reconcile row): one erasure may take several ERASEs, a copy found later
@@ -177,8 +178,8 @@ type RecordStreamErase struct {
 	// This ERASE ends the erasure: every key of every representation it names is gone with it.
 	Complete bool
 	Keys     []*RecordSlotKey
-	// §11.12's note of what the keys covered, which the binding seals under the eraser's generation and only readers
-	// open; opaque here.
+	// §11.12's note of what the keys covered, the caller's bytes of the ERASE's erasure note after its erasure id and
+	// complete byte, which the binding seals under the eraser's generation and only readers open; opaque here.
 	SealedNote []byte
 }
 

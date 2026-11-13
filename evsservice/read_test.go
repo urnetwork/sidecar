@@ -295,6 +295,153 @@ func TestReadAnswersADirectory(t *testing.T) {
 	}
 }
 
+// A push past the inline bound that adds files to a directory changes the directory by a delta under changes_root
+// (QD-681; question evs1-m2-28-rooted-delta-proofs). A read of the directory sends each unfolded delta with its own
+// proof, one a delta in order, empty for the inline statement's; a read of a file already there, or of a name never
+// written there, sends for each such push the adjacent leaves around the path and the directory delta's inclusion
+// proof in present, in place of leaves the directory's own change does not have.
+func TestReadProvesARootedPushesDirectoryDeltas(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	token := fixture.token(fixture.check.signerId)
+	directory := checkTestPath("d")
+	row := func(label string) *protocol.EvsName {
+		return &protocol.EvsName{Token: checkTestPath("d", label).Last().Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: []byte("sealed " + label)}
+	}
+	// the directory's delta naming labels, and each of them created, in one push
+	add := func(base uint64, version uint64, labels ...string) *sidecar.EvsStatement {
+		plan := fixture.plan()
+		rows := []*protocol.EvsName{}
+		for _, label := range labels {
+			rows = append(rows, row(label))
+			fixture.create(plan, "d", label)
+		}
+		plan.Changes = append(plan.Changes, &sidecar.EvsPlannedChange{TokenPath: directory, BaseEntryVersion: base, EntryVersion: fixture.check.directoryEntry(plan, max(version, plan.BaseVersion+1), rows, nil)})
+		body := fixture.body(plan)
+		fixture.requireCommitted(fixture.post(token, body), version)
+		fixture.awaitStepEights()
+		statement, err := sidecar.ParseEvsStatement(body.GetStatement())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return statement
+	}
+	labels := func(prefix string) []string {
+		names := []string{}
+		for i := range 12 {
+			names = append(names, fmt.Sprintf("%s%02d", prefix, i))
+		}
+		return names
+	}
+	statements := map[uint64]*sidecar.EvsStatement{
+		1: add(0, 1, "keep"),
+		2: add(1, 2, labels("m")...),
+		3: add(2, 3, labels("n")...),
+	}
+	if len(statements[1].Push.GetChangesRoot()) != 0 || len(statements[2].Push.GetChangesRoot()) == 0 || len(statements[3].Push.GetChangesRoot()) == 0 {
+		t.Fatal("want the first push inline and both 12-file pushes under changes_root")
+	}
+	// the change the proofs show, verified to its statement's root
+	proven := func(version uint64, proofs []*protocol.EvsMerkleProof) (*protocol.EvsChange, sidecar.EvsTokenPath) {
+		t.Helper()
+		push := statements[version].Push
+		change, changedPath, err := sidecar.EvsVerifyChangeInclusion(push.GetChangesRoot(), push.GetPartCount(), uint64(push.GetChangeCount()), proofs)
+		if err != nil {
+			t.Fatalf("version %d's proof: %v", version, err)
+		}
+		return change, changedPath
+	}
+
+	reply := fixture.readPath(token, 0, false, directory)
+	pathReply := reply.paths[0]
+	requireVersionProven(t, reply, pathReply, directory)
+	if pathReply.GetVersion().GetCommitVersion() != 3 || len(pathReply.GetDeltas()) != 3 || len(pathReply.GetDeltaProofs()) != 3 {
+		t.Fatalf("directory at %d with %d deltas and %d delta proofs", pathReply.GetVersion().GetCommitVersion(), len(pathReply.GetDeltas()), len(pathReply.GetDeltaProofs()))
+	}
+	if len(pathReply.GetDeltaProofs()[0].GetProof()) != 0 {
+		t.Fatal("a proof beside an inline statement's delta")
+	}
+	for i, delta := range pathReply.GetDeltas()[1:] {
+		version := uint64(i + 2)
+		change, changedPath := proven(version, pathReply.GetDeltaProofs()[i+1].GetProof())
+		digest := sha256.Sum256(delta.GetEntryVersion())
+		if delta.GetCommitVersion() != version || !changedPath.Equal(directory) || !bytes.Equal(change.GetEntrySha256(), digest[:]) {
+			t.Fatalf("delta %d: its proof shows another change", version)
+		}
+	}
+
+	// a file already there, and a name never written there, read by a reader pinned below both pushes
+	for _, label := range []string{"keep", "zzz"} {
+		path := checkTestPath("d", label)
+		reply := fixture.readPath(token, 1, false, path)
+		pathReply := reply.paths[0]
+		if label == "keep" {
+			requireVersionProven(t, reply, pathReply, path)
+		} else if pathReply.GetVersion() != nil || pathReply.GetRemoval() != nil {
+			t.Fatalf("%s: %v", label, pathReply)
+		}
+		adjacent, present := map[uint64]int{}, map[uint64]int{}
+		for _, absence := range pathReply.GetAbsences() {
+			version := absence.GetVersion()
+			push := statements[version].Push
+			absentPath, err := sidecar.ParseEvsTokenPath(absence.GetTokenPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(absence.GetPresent()) == 0 {
+				if err := sidecar.EvsVerifyChangeAbsence(push.GetChangesRoot(), push.GetPartCount(), uint64(push.GetChangeCount()), path, absence); err != nil {
+					t.Fatalf("%s: version %d's absence: %v", label, version, err)
+				}
+				adjacent[version] += 1
+				continue
+			}
+			change, changedPath := proven(version, absence.GetPresent())
+			if !absentPath.Equal(directory) || !changedPath.Equal(directory) || len(change.GetEntrySha256()) == 0 || len(absence.GetBelow()) != 0 || len(absence.GetAbove()) != 0 {
+				t.Fatalf("%s: version %d's present is not the directory's delta alone", label, version)
+			}
+			present[version] += 1
+		}
+		for _, version := range []uint64{2, 3} {
+			if adjacent[version] != 1 || present[version] != 1 {
+				t.Fatalf("%s: version %d: %d adjacent-leaf proofs and %d present, want one of each", label, version, adjacent[version], present[version])
+			}
+		}
+		if len(pathReply.GetAbsences()) != 4 {
+			t.Fatalf("%s: %d absences", label, len(pathReply.GetAbsences()))
+		}
+	}
+
+	// the directory's delta frames each carry their own delta's proof
+	recorder := fixture.call(token, http.MethodPost, "/read", &protocol.EvsReadRequest{
+		RefId: fixture.check.refId.Bytes(),
+		Paths: []*protocol.EvsReadPath{{TokenPaths: []*protocol.EvsSourcePath{{Epoch: 1, TokenPath: directory.Components()}}}},
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("read: status %d", recorder.Code)
+	}
+	deltaFrames := 0
+	for _, frame := range readRawFrames(t, recorder.Body.Bytes()) {
+		path := frame.GetPath()
+		switch {
+		case path == nil:
+		case !path.GetContinues():
+			if len(path.GetDeltas()) != 0 || len(path.GetDeltaProofs()) != 0 {
+				t.Fatal("the path frame carries a delta or a delta's proof")
+			}
+		default:
+			deltaFrames += 1
+			if len(path.GetDeltas()) != 1 || len(path.GetDeltaProofs()) != 1 {
+				t.Fatalf("delta frame %d: %d deltas and %d proofs", deltaFrames, len(path.GetDeltas()), len(path.GetDeltaProofs()))
+			}
+			if rooted := 1 < path.GetDeltas()[0].GetCommitVersion(); rooted != (len(path.GetDeltaProofs()[0].GetProof()) != 0) {
+				t.Fatalf("delta frame %d: its proof is not its delta's", deltaFrames)
+			}
+		}
+	}
+	if deltaFrames != 3 {
+		t.Fatalf("%d delta frames", deltaFrames)
+	}
+}
+
 // An older version by number comes from the window with its own statement and proof.
 func TestReadAnswersAnOlderVersionByNumber(t *testing.T) {
 	fixture := newPushFixture(t, nil)

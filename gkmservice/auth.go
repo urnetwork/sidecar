@@ -1,8 +1,8 @@
 // §10.6's tokens and scopes: who may do what at gkm. A daemon's service token (aud gkm, 15 minutes, §7.8) verifies
 // offline through ServiceHost.Authenticate, and carries repo:<id>:r|rw|admin|deposit scopes, or, for an unadmitted
 // client of member M, recovery:<M>. The rest of every check asks gkm's newest verified state, behind GkmAuthState,
-// so T2 runs on a fake and the host supplies the real one over §8.9's gate cache (ACL-M2-13's AclGateCache, whose
-// AclState.EvsAccess answers for the gkm audience) and §7.8's rev/ reader:
+// so T2 runs on a fake and the host supplies the real one, AclGkmAuthState (auth_state_acl.go; QD-718), over §8.9's
+// gate cache (ACL-M2-13's AclGateCache, whose HonorScope answers for the gkm audience) and §7.8's rev/ reader:
 //
 //   - a scope is honored only while the newest verified state gives its subject that right on the repo (D-ACL-21):
 //     r while it reads R, rw and admin while it writes R, deposit while it may deposit there (QD-070, decided), so a
