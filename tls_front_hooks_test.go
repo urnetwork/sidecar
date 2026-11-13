@@ -58,3 +58,96 @@ func TestTlsFrontReachesTheHooks(t *testing.T) {
 		}
 	}
 }
+
+// The privacy harness sees the reach receipts' visitor key where it is derived, and a members-device statement's
+// check and its nonce's take sit between their barriers.
+func TestTlsMembersDeviceReachesTheHooks(t *testing.T) {
+	recorder := recordHooks(t)
+	memberId := NewId()
+	writer := newTlsReachTestWriter(t)
+	fixture, issuer := newTlsEdgeLoginFixture(t, memberId, func(fixture *tlsFrontFixture) {
+		fixture.policy.setGrant(protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE, protocol.AclAppMode_ACL_APP_MODE_HTTP, nil)
+		fixture.record = writer
+	})
+	device := newTlsMembersDeviceTestDevice(t, fixture.policy, memberId, true)
+	client := fixture.httpClient(tlsAlpnHttp11)
+	_, pending := tlsMembersDeviceTestLogin(t, fixture, issuer, client, memberId, "/")
+	_, challenge := tlsMembersDeviceTestChallenge(t, client, pending)
+	statement := device.statement(t, challenge.Origin, tlsMembersDeviceTestNonce(t, challenge))
+	if response := tlsMembersDeviceTestPost(t, client, pending, statement, tlsFetchSiteSameOrigin); response.StatusCode != http.StatusSeeOther {
+		t.Fatalf("%d", response.StatusCode)
+	}
+
+	recorder.stateLock.Lock()
+	defer recorder.stateLock.Unlock()
+	if !recorder.kinds["tls_front_reach_key"] {
+		t.Error("no tls_front_reach_key reached the hook")
+	}
+	for _, barrier := range []string{"tls.front_device.before", "tls.front_device.after"} {
+		if !recorder.barriers[barrier] {
+			t.Errorf("no %s", barrier)
+		}
+	}
+}
+
+// The nonce's take is the device step's linearization point: two posts of one statement, held together inside the
+// check until both have arrived, both verify, and exactly one completes the login.
+func TestTlsMembersDeviceRaceCompletesOnce(t *testing.T) {
+	memberId := NewId()
+	fixture, issuer := newTlsEdgeLoginFixture(t, memberId, func(fixture *tlsFrontFixture) {
+		fixture.policy.setGrant(protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE, protocol.AclAppMode_ACL_APP_MODE_HTTP, nil)
+	})
+	device := newTlsMembersDeviceTestDevice(t, fixture.policy, memberId, true)
+	client := fixture.httpClient(tlsAlpnHttp11)
+	_, pending := tlsMembersDeviceTestLogin(t, fixture, issuer, client, memberId, "/")
+	_, challenge := tlsMembersDeviceTestChallenge(t, client, pending)
+	statement := device.statement(t, challenge.Origin, tlsMembersDeviceTestNonce(t, challenge))
+
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	SetTestHooks(&TestHooks{Barrier: func(name string, key string) {
+		if name != "tls.front_device.before" {
+			return
+		}
+		arrived <- struct{}{}
+		select {
+		case <-release:
+		case <-time.After(tlsFrontTestGuard):
+		}
+	}})
+	t.Cleanup(func() { SetTestHooks(nil) })
+	codes := make(chan int, 2)
+	for range 2 {
+		request := tlsMembersDeviceTestPostRequest(t, pending, statement)
+		postClient := fixture.httpClient(tlsAlpnHttp11)
+		go func() {
+			response, err := postClient.Do(request)
+			if err != nil {
+				codes <- 0
+				return
+			}
+			response.Body.Close()
+			codes <- response.StatusCode
+		}()
+	}
+	for range 2 {
+		select {
+		case <-arrived:
+		case <-time.After(tlsFrontTestGuard):
+			t.Fatal("the posts never met at the barrier")
+		}
+	}
+	close(release)
+	completed, refused := 0, 0
+	for range 2 {
+		switch <-codes {
+		case http.StatusSeeOther:
+			completed += 1
+		case http.StatusForbidden:
+			refused += 1
+		}
+	}
+	if completed != 1 || refused != 1 {
+		t.Errorf("%d completed, %d refused", completed, refused)
+	}
+}
