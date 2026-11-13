@@ -104,9 +104,10 @@ enum SignedType {
   SIGNED_EVS_PATH_MAP = 0x1403;
   SIGNED_EVS_IMPORT = 0x1404;
 
-  // 0x15xx §13: a device key's attestation, purpose tls-key (§13.8), and a link audience's token, purpose tls-link
-  // (QD-134). 0x1502 waits for M6's edge-login statement (plan-TLS-small-readings#2).
+  // 0x15xx §13: a device key's attestation, purpose tls-key (§13.8), M6's members-device statement, purpose
+  // edge-login (§13.7, plan-TLS-small-readings#2), and a link audience's token, purpose tls-link (QD-134).
   SIGNED_TLS_KEY_ATTESTATION = 0x1501;
+  SIGNED_TLS_EDGE_LOGIN = 0x1502;
   SIGNED_TLS_LINK = 0x1503;
 
   // 0x16xx §14, 0x17xx §15, 0x1Bxx §12

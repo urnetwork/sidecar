@@ -63,6 +63,7 @@ rows:
       - {name: FuzzConfigStatementType, package: ".", owner: TEAM-M2-01, milestone: M2, seeds: [testdata/fuzz/FuzzConfigStatementType]}
       - {name: FuzzAclStatement, package: ".", owner: ACL-M2-06, milestone: M2, seeds: [testdata/fuzz/FuzzAclStatement]}
       - {name: FuzzBridgeStatement, package: ".", owner: BRIDGE-M2-01, milestone: M2, seeds: [testdata/fuzz/FuzzBridgeStatement]}
+      - {name: FuzzTlsEdgeLogin, package: ".", owner: TLS-M6-06, milestone: M6}
 
   - id: record-headers
     bullet: "`record.proto` headers"
