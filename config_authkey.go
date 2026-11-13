@@ -42,6 +42,9 @@ const (
 	// An API key's prefix, which never enrolls (D-CORE-7).
 	authKeyApiKeyPrefix = "urn_"
 	authKeyIdByteCount  = 16
+	// A bundle's delegation_id: §10.5's d, SHA-256 of the Signed Delegation (bridge.SignedBytesSha256), the id the log's
+	// DelegationRow, §6.9's signer table and the daemon's self-signed SidecarAdmit name the Delegation by (QD-731).
+	authKeyDelegationIdByteCount = sha256.Size
 	// The secret's 32 random bytes.
 	authKeySecretByteCount = 32
 	authKeyBundleVersion   = 1
@@ -49,9 +52,6 @@ const (
 	authKeySeedByteCount = 32
 	// A keyed tag id's bytes (§7.9).
 	authKeyTagIdByteCount = 16
-	// The longest string ParseAuthKey reads. A bundle is about 200 B, and this leaves room for a
-	// Delegation holding many tags, so the bound only stops a decoder from reading garbage whole.
-	authKeyMaxByteCount = 16 * 1024
 	// What RedactAuthKey shows in place of what it covers.
 	authKeyRedacted = "[redacted]"
 	// The separator as JSON may escape it, lowercase.
@@ -60,6 +60,20 @@ const (
 
 // Lowercase RFC 4648 base32 without padding, as server writes a key's id and secret.
 var authKeyEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
+
+// Tunables of auth key parsing.
+type AuthKeySettings struct {
+	// The longest string ParseAuthKey reads: 16 KiB. A bundle is about 220 B, and this leaves room for a Delegation
+	// holding many tags, so the bound only stops a decoder from reading garbage whole.
+	MaxByteCount int
+}
+
+// The format's bounds.
+func DefaultAuthKeySettings() *AuthKeySettings {
+	return &AuthKeySettings{
+		MaxByteCount: 16 * 1024,
+	}
+}
 
 var (
 	// The string is not an auth key, or its bundle does not decode. Nothing of the string is in the
@@ -117,9 +131,11 @@ type AuthKeyBundle struct {
 	// A_0 = SHA-256(Signed Genesis), the anchor this key's network chains to (plan-TEAM-genesis-custody).
 	GenesisSha256 []byte
 	// The log position the creating device stood at (§7.9): version n and its chain digest A_n.
-	HeadVersion  uint64
-	HeadChain    []byte
-	DelegationId Id
+	HeadVersion uint64
+	HeadChain   []byte
+	// The Delegation's id as the log names it, 32 bytes: SHA-256 of the Signed Delegation (§10.5's d, QD-731). It
+	// is the signer_id of the SidecarAdmit this daemon signs for itself and the key of the Delegation's row.
+	DelegationId []byte
 	// The Delegation's Ed25519 seed, which signs this daemon's own SidecarAdmit (§5.6, §7.9's scoped).
 	DelegationSigningSeed []byte
 	// The Delegation's X-Wing reader seed, the one part a daemon keeps (§10.5).
@@ -148,10 +164,13 @@ func (self *AuthKeyBundle) GoString() string {
 // before anything else reads it (D-TEAM-22). The bearer may be given with or without its ur-authkey-
 // prefix, as server reads it, and Bearer answers it with the prefix. A urn_ API key is
 // ErrAuthKeyIsApiKey; anything else that is not a key with exactly one well-formed part each side of a
-// # is ErrAuthKeyMalformed. Neither error holds any of the text. Each seed, and the bearer, reaches
-// testHookSecret as it is decoded.
-func ParseAuthKey(text string) (*AuthKey, error) {
-	if authKeyMaxByteCount < len(text) {
+// # is ErrAuthKeyMalformed. Neither error holds any of the text. nil settings are the defaults. Each seed,
+// and the bearer, reaches testHookSecret as it is decoded.
+func ParseAuthKey(text string, settings *AuthKeySettings) (*AuthKey, error) {
+	if settings == nil {
+		settings = DefaultAuthKeySettings()
+	}
+	if settings.MaxByteCount < len(text) {
 		return nil, ErrAuthKeyMalformed
 	}
 	bearerText, bundleText, hasBundle := strings.Cut(text, authKeyBundleSeparator)
@@ -194,7 +213,8 @@ func parseAuthKeyBearer(text string) (string, error) {
 }
 
 // The bundle text after #: canonical unpadded base64url of an AuthKeyBundle whose every field has its
-// format's length, with no field this version does not know.
+// format's length, with no field this version does not know. Its delegation_id is the 32-byte id the log
+// names the Delegation by (QD-731): a 16-byte id, or any other width, is refused, and so is one all zero.
 func decodeAuthKeyBundle(text string) (*AuthKeyBundle, error) {
 	encoded, err := base64.RawURLEncoding.DecodeString(text)
 	if err != nil || base64.RawURLEncoding.EncodeToString(encoded) != text {
@@ -215,13 +235,10 @@ func decodeAuthKeyBundle(text string) (*AuthKeyBundle, error) {
 		len(message.GetGenesisSha256()) != sha256.Size ||
 		head == nil || len(head.ProtoReflect().GetUnknown()) != 0 ||
 		head.GetVersion() < 1 || len(head.GetChain()) != sha256.Size ||
-		len(message.GetDelegationId()) != authKeyIdByteCount ||
+		len(message.GetDelegationId()) != authKeyDelegationIdByteCount ||
+		bytes.Equal(message.GetDelegationId(), make([]byte, authKeyDelegationIdByteCount)) ||
 		len(message.GetDelegationSigningSeed()) != authKeySeedByteCount ||
 		len(message.GetDelegationReaderSeed()) != authKeySeedByteCount {
-		return nil, ErrAuthKeyMalformed
-	}
-	delegationId, err := IdFromBytes(message.GetDelegationId())
-	if err != nil || delegationId == (Id{}) {
 		return nil, ErrAuthKeyMalformed
 	}
 	tagIds := make([][]byte, 0, len(message.GetTagIds()))
@@ -240,7 +257,7 @@ func decodeAuthKeyBundle(text string) (*AuthKeyBundle, error) {
 		GenesisSha256:         bytes.Clone(message.GetGenesisSha256()),
 		HeadVersion:           head.GetVersion(),
 		HeadChain:             bytes.Clone(head.GetChain()),
-		DelegationId:          delegationId,
+		DelegationId:          bytes.Clone(message.GetDelegationId()),
 		DelegationSigningSeed: bytes.Clone(message.GetDelegationSigningSeed()),
 		DelegationReaderSeed:  bytes.Clone(message.GetDelegationReaderSeed()),
 		TagIds:                tagIds,
@@ -264,7 +281,7 @@ func formatAuthKey(bearer string, bundle *AuthKeyBundle) (string, error) {
 		Version:               authKeyBundleVersion,
 		GenesisSha256:         bundle.GenesisSha256,
 		Head:                  &bridge.AuthPin{Version: bundle.HeadVersion, Chain: bundle.HeadChain},
-		DelegationId:          bundle.DelegationId.Bytes(),
+		DelegationId:          bundle.DelegationId,
 		DelegationSigningSeed: bundle.DelegationSigningSeed,
 		DelegationReaderSeed:  bundle.DelegationReaderSeed,
 		TagIds:                bundle.TagIds,
