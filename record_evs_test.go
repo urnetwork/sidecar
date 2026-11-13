@@ -642,17 +642,6 @@ func recordEvsWorldPush(world *recordEvsWorld, writerId sidecar.Id, paths ...str
 	return push
 }
 
-// The routes of sent that write: uploads, pushes and slot deletions.
-func recordEvsWrites(sent []string) []string {
-	writes := []string{}
-	for _, request := range sent {
-		if strings.HasPrefix(request, http.MethodPut) || strings.HasSuffix(request, "/push") || strings.HasSuffix(request, "/slots/delete") {
-			writes = append(writes, request)
-		}
-	}
-	return writes
-}
-
 // The production codec while question record-m2-01-slot-row-salt is open: a push of RECORD.md's rows is refused
 // before anything reaches evs, and a row slot opens nothing, while a deposit, whose key and salt ride in its batch,
 // goes as it would.
@@ -831,10 +820,142 @@ func TestRecordEvsStreamsRetryAfterALostAnswerSendsTheSameStatement(t *testing.T
 	}
 }
 
-// evs's creates-only rule refuses a delta of a directory that stands, which §16.8's 2,048-entry directories need: a
-// stream's second push into a leaf directory is refused before it uploads anything, pending question
-// record-m3-12-stream-directory-rows, and the stream stays as its first push left it.
-func TestRecordEvsStreamsSecondPushIntoADirectoryWaitsOnItsQuestion(t *testing.T) {
+// A push of the stream's entries from through to, each at section 5.2's path for its counter, all keyed by one row of
+// the push's slot: what a writer that drew those counters appends.
+func recordEvsWorldCounterPush(world *recordEvsWorld, writerId sidecar.Id, from uint64, to uint64) *sidecar.RecordStreamPush {
+	push := &sidecar.RecordStreamPush{
+		PushId: sidecar.NewEvsPushId(), WriterSidecarId: writerId, SlotId: sidecar.NewEvsSlotId(), AuthPin: world.Pin(),
+		SlotRows: []*sidecar.RecordSlotRow{{KeyIndex: 0, Row: bytes.Repeat([]byte{0x5a}, recordEvsTestRowByteCount)}},
+	}
+	for n := from; n <= to; n += 1 {
+		path, err := sidecar.RecordStreamPath(n)
+		if err != nil {
+			world.t.Fatal(err)
+		}
+		push.Entries = append(push.Entries, &sidecar.RecordStreamEntry{Path: path, Entry: []byte(fmt.Sprint("entry ", n))})
+	}
+	return push
+}
+
+// The engine folds every unfolded version of writerId's stream, as its idle fold would: each directory's newest is then
+// a table that keeps no version of its own until the next delta.
+func (self *recordEvsWorld) foldStream(repoId sidecar.Id, writerId sidecar.Id) {
+	self.t.Helper()
+	refId := self.streamRefId(repoId, writerId)
+	head, err := self.engine.Heads().ReadCluster(self.ctx, self.cluster, repoId, refId)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	now := self.clock.Now()
+	if _, err := self.engine.Folder().FoldAll(self.ctx, self.cluster, repoId, refId, head, now, now.Add(15*time.Second)); err != nil {
+		self.t.Fatal(err)
+	}
+}
+
+// writerId's stream's ref id, as Streams lists it.
+func (self *recordEvsWorld) streamRefId(repoId sidecar.Id, writerId sidecar.Id) sidecar.Id {
+	self.t.Helper()
+	heads, err := self.For(writerId).Streams(self.ctx, repoId)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	for _, head := range heads {
+		if head.SidecarId == writerId {
+			return head.RefId
+		}
+	}
+	self.t.Fatalf("no stream of %s", writerId)
+	return sidecar.Id{}
+}
+
+// The counters a stream's versions hold, in order, and whether each version's entries are its path's counters in
+// order: what reading a stream back must give.
+func recordEvsStreamCounters(t *testing.T, versions []*sidecar.RecordStreamVersion) []uint64 {
+	t.Helper()
+	counters := []uint64{}
+	for _, version := range versions {
+		for _, entry := range version.Entries {
+			n, ok := sidecar.RecordStreamPathCounter(entry.Path)
+			if !ok || !bytes.Equal(entry.Entry, []byte(fmt.Sprint("entry ", n))) {
+				t.Fatalf("version %d reads back an entry at %s", version.Version, entry.Path)
+			}
+			counters = append(counters, n)
+		}
+	}
+	return counters
+}
+
+// QD-722 on T2: a stream grows past one push per leaf directory and past 2,048 entries, each push into a standing
+// directory adding its names by that directory's delta on its newest version, which evs's creates-only rule takes on a
+// record-class stream: into e/0/0/ again and again, from e/0/0/ into e/0/1/ by e/0's delta, and after a fold, when the
+// leaf's newest is a folded table that keeps no version of its own and evs reads it from the table's delta. The
+// stream reads back whole, from its first push and from a later one, by the writer and by another device replaying it.
+func TestRecordEvsStreamsGrowPastALeafDirectory(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the reader another device of the vault's member, which writes it too and so reads with no receipt to deposit
+	writerId, readerId := sidecar.NewId(), sidecar.NewId()
+	if err := world.Grant(repoId, writerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := world.Grant(repoId, readerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
+	streams := world.For(writerId)
+	// e/0/0/ holds 1 to 2,047 and e/0/1/ from 2,048: pushes 2 and 3 are deltas of e/0/0, push 4 fills it and starts
+	// e/0/1 by e/0's delta, and push 5 adds to e/0/1
+	pushes := [][2]uint64{{1, 700}, {701, 1400}, {1401, 2000}, {2001, 2100}, {2101, 2110}}
+	for i, bounds := range pushes {
+		if i == 2 || i == 4 {
+			// folded first: the directory the push adds to is then a table with no version of its own
+			world.foldStream(repoId, writerId)
+		}
+		commit, err := streams.Append(t.Context(), repoId, recordEvsWorldCounterPush(world, writerId, bounds[0], bounds[1]))
+		if err != nil {
+			t.Fatalf("push %d of %d to %d: %v", i+1, bounds[0], bounds[1], err)
+		}
+		if commit.Version != uint64(i+1) {
+			t.Fatalf("push %d committed at %d", i+1, commit.Version)
+		}
+	}
+	want := []uint64{}
+	for n := uint64(1); n <= 2110; n += 1 {
+		want = append(want, n)
+	}
+	versions, err := streams.ReadStream(t.Context(), repoId, writerId, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != len(pushes) || !slices.Equal(recordEvsStreamCounters(t, versions), want) {
+		t.Fatalf("the stream reads back %d versions", len(versions))
+	}
+	later, err := streams.ReadStream(t.Context(), repoId, writerId, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(later) != 2 || !slices.Equal(recordEvsStreamCounters(t, later), want[2000:]) {
+		t.Fatalf("after version 3 the stream reads back %d versions", len(later))
+	}
+	// another device, which holds no replay of the stream, replays it from the first push to read from a later one
+	replayed, err := world.For(readerId).ReadStream(t.Context(), repoId, writerId, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 1 || !slices.Equal(recordEvsStreamCounters(t, replayed), want[2100:]) {
+		t.Fatalf("a replaying reader reads back %d versions after version 4", len(replayed))
+	}
+	if counter, err := sidecar.RecordStreamCounter(t.Context(), streams, repoId, writerId); err != nil || counter != 2110 {
+		t.Fatalf("the counter reads back as %d: %v", counter, err)
+	}
+}
+
+// QD-722 at evs: two pushes the writer built on one read of a leaf directory, each adding its own entry. The first
+// commits; the second's delta, on the version the first replaced, is 409 PATH_CONFLICT naming the leaf, and nothing of
+// it commits. The writer's next push, planned on the newest version, commits.
+func TestRecordEvsStreamsRefusesADeltaOffTheNewestVersion(t *testing.T) {
 	world := newRecordEvsWorld(t)
 	repoId, err := world.NewRepo(t.Context())
 	if err != nil {
@@ -845,19 +966,49 @@ func TestRecordEvsStreamsSecondPushIntoADirectoryWaitsOnItsQuestion(t *testing.T
 		t.Fatal(err)
 	}
 	streams := world.For(writerId)
-	if _, err := streams.Append(t.Context(), repoId, recordEvsWorldPush(world, writerId, "e/0/0/1")); err != nil {
+	if _, err := streams.Append(t.Context(), repoId, recordEvsWorldCounterPush(world, writerId, 1, 1)); err != nil {
 		t.Fatal(err)
 	}
-	before := len(recordEvsWrites(world.sent()))
-	if _, err := streams.Append(t.Context(), repoId, recordEvsWorldPush(world, writerId, "e/0/0/2")); !errors.Is(err, sidecar.ErrEvsStreamDirectoryDelta) {
-		t.Fatalf("a second push into e/0/0: %v", err)
+	repo := func() *sidecar.EvsRepo {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		return world.clients[writerId].Repo(repoId)
+	}()
+	build := func(n uint64) *sidecar.EvsStreamPush {
+		push := recordEvsWorldCounterPush(world, writerId, n, n)
+		built, err := repo.BuildStreamPush(t.Context(), &sidecar.EvsStreamPushArgs{
+			RefName: sidecar.RecordStreamRefName(writerId),
+			PushId:  push.PushId,
+			SlotId:  push.SlotId,
+			SlotKeys: func(fek *sidecar.EvsFekKey) ([]*protocol.EvsSlotKey, error) {
+				return recordEvsTestCodec{}.Wrap(fek, push.SlotRows)
+			},
+			Files:   []*sidecar.EvsStreamFile{{Path: push.Entries[0].Path, Content: push.Entries[0].Entry}},
+			AuthPin: push.AuthPin,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return built
 	}
-	if writes := recordEvsWrites(world.sent())[before:]; len(writes) != 0 {
-		t.Fatalf("the refused push wrote %v", writes)
+	first, second := build(2), build(3)
+	if commit, err := repo.PostStreamPush(t.Context(), first); err != nil || commit.Version != 2 {
+		t.Fatalf("the first push: %+v %v", commit, err)
+	}
+	_, err = repo.PostStreamPush(t.Context(), second)
+	evsError, ok := sidecar.EvsErrorOf(err)
+	if !ok || evsError.Status != http.StatusConflict || evsError.Code != protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT || len(evsError.Paths) != 1 {
+		t.Fatalf("a delta off the leaf's newest version: %v", err)
+	}
+	if commit, err := streams.Append(t.Context(), repoId, recordEvsWorldCounterPush(world, writerId, 3, 3)); err != nil || commit.Version != 3 {
+		t.Fatalf("the push planned on the newest version: %+v %v", commit, err)
 	}
 	versions, err := streams.ReadStream(t.Context(), repoId, writerId, 0)
-	if err != nil || len(versions) != 1 {
-		t.Fatalf("the stream reads %d versions: %v", len(versions), err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(recordEvsStreamCounters(t, versions), []uint64{1, 2, 3}) {
+		t.Fatalf("the stream reads back %d versions", len(versions))
 	}
 }
 
