@@ -12,15 +12,20 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/urnetwork/connect"
+
 	"github.com/urnetwork/sidecar"
+	"github.com/urnetwork/sidecar/socketsservice"
 )
 
 // How long a schedule waits, in real time, for what it expects. Every wait is on a monitor or an event; this only
@@ -241,7 +246,8 @@ func TestRestoreRequiredRebindsAndRefreshes(t *testing.T) {
 	}
 	count := api.ClientTokenCount(record.ClientId)
 	advancePastRefreshPoint(t, net, laptop, record.ClientId)
-	awaitClientTokenCount(t, api, record.ClientId, count+1)
+	// bind's re-mint, then the refresh's token
+	awaitClientTokenCount(t, api, record.ClientId, count+2)
 
 	if identityStatus, newest, ok := api.SidecarIdentity(record.SidecarId); !ok || identityStatus != fakeApiIdentityActive || newest != 1 {
 		t.Errorf("api holds %q at generation %d (%v)", identityStatus, newest, ok)
@@ -392,6 +398,8 @@ type coreRouteClient struct {
 	clientKey   ed25519.PrivateKey
 	identityKey ed25519.PrivateKey
 	jtiCount    int
+	// the token the newest bind that landed answered: the bearer re-minted with the sidecar_id (QD-797)
+	reminted string
 }
 
 // Enrolls a client of networkId on the world's api through POST /network/enroll.
@@ -445,7 +453,7 @@ func (self *coreRouteClient) binding(generation int64) []byte {
 	return signed
 }
 
-// POST /sidecar/bind of binding: its status, code and generation.
+// POST /sidecar/bind of binding: its status, code and generation. A bind that lands keeps its re-mint in reminted.
 func (self *coreRouteClient) bind(binding []byte) (int, string, int64) {
 	self.t.Helper()
 	result := &fakeApiBindResult{}
@@ -453,8 +461,29 @@ func (self *coreRouteClient) bind(binding []byte) (int, string, int64) {
 	if err != nil {
 		self.t.Fatal(err)
 	}
+	if status == http.StatusOK {
+		self.reminted = result.ByClientJwt
+	}
 	code, _ := refusal["code"].(string)
 	return status, code, result.Generation
+}
+
+// A token's claims as a sidecar reads them, unverified.
+func fakeApiTestClaims(t *testing.T, token string) map[string]any {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatal("not a token")
+	}
+	claimBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims := map[string]any{}
+	if err := json.Unmarshal(claimBytes, &claims); err != nil {
+		t.Fatal(err)
+	}
+	return claims
 }
 
 // A fresh proof of method on path by key over the client's token.
@@ -552,6 +581,142 @@ func TestFakeApiBindFollowsTheBindingRules(t *testing.T) {
 	world.api.RevokeSidecarIdentity(laptop.sidecarId)
 	if status, code, _ := tablet.bind(tablet.binding(2)); status != http.StatusForbidden || code != fakeApiCodeSidecarRevoked {
 		t.Errorf("a revoked identity: %d %s", status, code)
+	}
+}
+
+// Bind and its retry answer the bearer re-minted as server's RemintSidecarCredential does (QD-040, QD-797): every claim
+// as presented, its lifetime included, the binding's sidecar as sidecar_id and a new jti. A refresh keeps the claim of
+// the token it presents and never adds one from the binding, and a reissue and a child, derived as server's
+// ByJwt.Renew derives them, carry none.
+func TestFakeApiBindRemintsTheBearer(t *testing.T) {
+	world := newFakeApiTestWorld(t)
+	laptop := newCoreRouteClient(t, world, sidecar.NewId())
+	enrolled := laptop.token
+	world.clock.Advance(time.Hour)
+	binding := laptop.binding(1)
+	if status, code, _ := laptop.bind(binding); status != http.StatusOK || laptop.reminted == "" {
+		t.Fatalf("bind: %d %s", status, code)
+	}
+	first := laptop.reminted
+	presentedClaims := fakeApiTestClaims(t, enrolled)
+	remintedClaims := fakeApiTestClaims(t, first)
+	if remintedClaims["sidecar_id"] != laptop.sidecarId.String() || presentedClaims["sidecar_id"] != nil {
+		t.Fatalf("the re-mint names %v, the enrollment's %v", remintedClaims["sidecar_id"], presentedClaims["sidecar_id"])
+	}
+	for _, name := range []string{"network_id", "client_id", "device_id", "session_id", "create_time", "strict_exp", "iat", "exp"} {
+		if fmt.Sprint(remintedClaims[name]) != fmt.Sprint(presentedClaims[name]) {
+			t.Errorf("%s: the re-mint's %v, presented %v", name, remintedClaims[name], presentedClaims[name])
+		}
+	}
+	if remintedClaims["jti"] == presentedClaims["jti"] {
+		t.Error("the re-mint kept the presented jti")
+	}
+	if _, _, sidecarId, ok := world.api.TokenClient(first); !ok || sidecarId != laptop.sidecarId {
+		t.Errorf("the re-mint maps to sidecar %s", sidecarId)
+	}
+
+	// a byte-identical retry re-mints again
+	if status, _, generation := laptop.bind(binding); status != http.StatusOK || generation != 1 || laptop.reminted == first ||
+		fakeApiTestClaims(t, laptop.reminted)["sidecar_id"] != laptop.sidecarId.String() {
+		t.Errorf("a retry: %d %d", status, generation)
+	}
+
+	laptop.token = first
+	status, code, refreshed := laptop.refresh(laptop.proof(laptop.clientKey, http.MethodGet, "/auth/refresh"))
+	if status != http.StatusOK || fakeApiTestClaims(t, refreshed)["sidecar_id"] != laptop.sidecarId.String() {
+		t.Errorf("a refresh of the re-mint: %d %s", status, code)
+	}
+	laptop.token = enrolled
+	status, code, refreshed = laptop.refresh(laptop.proof(laptop.clientKey, http.MethodGet, "/auth/refresh"))
+	if status != http.StatusOK || fakeApiTestClaims(t, refreshed)["sidecar_id"] != nil {
+		t.Errorf("a refresh of the enrollment's token, the client bound: %d %s", status, code)
+	}
+
+	laptop.token = first
+	clientId := laptop.clientId
+	reissue, refusal := laptop.authClient(laptop.clientKey, &fakeApiAuthClientArgs{ClientId: &clientId, AdminRefused: true, StrictExp: true})
+	if refusal != "" || fakeApiTestClaims(t, reissue.ByClientJwt)["sidecar_id"] != nil {
+		t.Errorf("a reissue: %q", refusal)
+	}
+	child, refusal := laptop.authClient(laptop.clientKey, &fakeApiAuthClientArgs{
+		SourceClientId: &clientId, Description: "child", DeviceSpec: "sdk", AdminRefused: true, StrictExp: true,
+	})
+	if refusal != "" || fakeApiTestClaims(t, child.ByClientJwt)["sidecar_id"] != nil {
+		t.Errorf("a child: %q", refusal)
+	}
+	// the enrollment's, the bind's and its retry's, two refreshes and the reissue
+	if tokens := world.api.ClientTokens(laptop.clientId); len(tokens) != 6 || tokens[0] != enrolled || tokens[1] != first {
+		t.Errorf("the client's tokens: %d", len(tokens))
+	}
+}
+
+// ClientTokenAuthenticator reads sockets' subject from the token alone, as server's Client-class verifier does
+// (plan-SOCK-client-auth, QD-040): the re-mint's sidecar_id, and none for the token the client held before it bound,
+// though api binds the client; a refusal for a token it never minted, of a removed client or past its exp; and every
+// other audience to next.
+func TestFakeApiClientTokenAuthenticatorReadsTheClaim(t *testing.T) {
+	world := newFakeApiTestWorld(t)
+	laptop := newCoreRouteClient(t, world, sidecar.NewId())
+	enrolled := laptop.token
+	if status, _, _ := laptop.bind(laptop.binding(1)); status != http.StatusOK {
+		t.Fatal(status)
+	}
+	next := NewFakeAuthenticator(world.clock, world.faults)
+	authenticator := world.api.ClientTokenAuthenticator(socketsservice.SocketsAudience, next)
+
+	principal, err := authenticator.Authenticate(world.ctx, socketsservice.SocketsAudience, laptop.reminted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if principal.SidecarId == nil || *principal.SidecarId != connect.Id(laptop.sidecarId) || principal.ClientId != connect.Id(laptop.clientId) ||
+		principal.NetworkId != connect.Id(laptop.networkId) || principal.Audience != socketsservice.SocketsAudience || !world.clock.Now().Before(principal.ExpiresAt) {
+		t.Errorf("the re-mint's principal: %+v", principal)
+	}
+	principal, err = authenticator.Authenticate(world.ctx, socketsservice.SocketsAudience, enrolled)
+	if err != nil || principal.SidecarId != nil || principal.ClientId != connect.Id(laptop.clientId) {
+		t.Errorf("the enrollment's token: %+v, %v", principal, err)
+	}
+
+	issued := next.Issue(&sidecar.Principal{
+		NetworkId: connect.Id(laptop.networkId),
+		ClientId:  connect.Id(laptop.clientId),
+		Audience:  "evs",
+		IssuedAt:  world.clock.Now(),
+		ExpiresAt: world.clock.Now().Add(time.Hour),
+	})
+	if _, err := authenticator.Authenticate(world.ctx, "evs", issued); err != nil {
+		t.Errorf("another audience's token: %v", err)
+	}
+	for name, refused := range map[string]func() error{
+		"a client token for another audience": func() error {
+			_, err := authenticator.Authenticate(world.ctx, "evs", laptop.reminted)
+			return err
+		},
+		"no audience": func() error {
+			_, err := authenticator.Authenticate(world.ctx, "", laptop.reminted)
+			return err
+		},
+		"a token it never minted": func() error {
+			_, err := authenticator.Authenticate(world.ctx, socketsservice.SocketsAudience, laptop.reminted+"A")
+			return err
+		},
+	} {
+		if err := refused(); !errors.Is(err, sidecar.ErrAuthenticationRefused) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	removed := newCoreRouteClient(t, world, laptop.networkId)
+	if status, _, _ := removed.bind(removed.binding(1)); status != http.StatusOK {
+		t.Fatal(status)
+	}
+	world.api.RemoveClient(removed.clientId)
+	if _, err := authenticator.Authenticate(world.ctx, socketsservice.SocketsAudience, removed.reminted); !errors.Is(err, sidecar.ErrAuthenticationRefused) {
+		t.Errorf("a removed client's: %v", err)
+	}
+	world.clock.Advance(world.api.settings.ClientTokenTimeout)
+	if _, err := authenticator.Authenticate(world.ctx, socketsservice.SocketsAudience, laptop.reminted); !errors.Is(err, sidecar.ErrAuthenticationRefused) {
+		t.Errorf("past its exp: %v", err)
 	}
 }
 
