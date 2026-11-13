@@ -24,10 +24,10 @@
 // tls_endpoints at activation in the delta route (§20.7; QUOTA-M4-04's model.CheckGrantActivationLimits).
 // §13.10's and §17.9's callers and MCP's tools are theirs; this gives them ActiveGrant, Grants and AclGrantFiler.
 //
-// The kinds whose action carries a grant (socket_listen, tls_publish, bridge_forward) are held by question
-// record-m2-01-canonical-action-detail, so NewCanonicalAction refuses to build them and Action refuses with it: the
-// request half fails closed until that answer lands. Safe for concurrent use. Nothing here creates, derives or
-// unwraps a key.
+// Of the kinds whose action carries a grant, socket_listen and tls_publish build at version 1, and bridge_forward,
+// a dial or route grant, at version 4 (QD-740): its base carries the sealed_detail its caller sealed, the target's
+// port inside, and the grant_dst a request gives names subjects alone. Action refuses a forward with none, as
+// NewCanonicalAction does. Safe for concurrent use. Nothing here creates, derives or unwraps a key.
 
 package sidecar
 
@@ -57,8 +57,9 @@ var _ ApprovalStandingGrants = (*AclEngine)(nil)
 // applies to (§8.4: publish on a dns host and listen on its tls/ socket, as one publish's grant asks both) by a rule or
 // activated grant in force until now plus the clock skew, ports matching where the grant names one; a destination no
 // asked action applies to, or an action that applies to no destination, is covered by nothing. So is an action with no
-// grant fields, a route (whose prefix rides sealed_detail, which this build does not read) and another network's
-// destination. Reads the installed state with no lock.
+// grant fields, a route (whose prefix rides sealed_detail, which this does not open) and another network's
+// destination. A version-4 action's ports ride sealed_detail too, so its ask names none, and only a rule that limits
+// no ports covers it. Reads the installed state with no lock.
 func (self *AclEngine) ActiveGrant(action *StoredCanonicalAction, spender Id, now time.Time) bool {
 	installed := self.installed.Load()
 	if installed == nil || action == nil || action.Action == nil {
@@ -239,7 +240,7 @@ type AclGrantRequest struct {
 // The CanonicalAction a grant needs (§16.8): base, the caller's action of its kind with its own fields set (a
 // forward's target and port, a publish's host, port, audience, app_mode and pin), with the grant's fields filled from
 // the requests rule MatchAclRequest finds at the installed state: rule_id, subject, grant_dst, grant_allow and
-// expires_millis. Built through NewCanonicalAction, which refuses a kind its question still holds.
+// expires_millis. Built through NewCanonicalAction, which holds it to its kind's row.
 func (self *AclGrantFiler) Action(base *protocol.CanonicalAction, request *AclGrantRequest, now time.Time) (*StoredCanonicalAction, error) {
 	state := self.engine.State()
 	if state == nil {

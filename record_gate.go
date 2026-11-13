@@ -8,9 +8,10 @@
 //	   typed ur command's action, is untainted
 //	2  untainted and a standing grant covers it (ACL-M4-02's AclEngine.ActiveGrant): the effect under an empty key,
 //	   no ledger row; in a tainted run no standing grant passes (TS1)
-//	3  the decisions: the one passed, kept first through the inbox's intake, else an approval of this action, run and
-//	   agent the inbox holds: one whose use of this action is reserved, the retry path, else the newest approved,
-//	   one filed in a tainted run first where this run is tainted
+//	3  the decisions: the one passed, kept first through the inbox's intake, else an approval of this action, its
+//	   detail (the local port, weight and ALPNs its request binds, QD-740), run and agent the inbox holds: one whose
+//	   use of this action is reserved, the retry path, else the newest approved, one filed in a tainted run first
+//	   where this run is tainted
 //	4  none: the request found or filed (ApprovalRouter), then ApprovalHarnessEvidence asked for a harness decision on
 //	   it (MCP-M3-10); none answers *ApprovalPendingError with the request's id
 //	5  §16.6's spend steps (record_gate_spend.go): the approval's mutex, spendable, the step 3 refusals, the Reserve's
@@ -218,7 +219,7 @@ func (self *ApprovalGate) harnessDecision(ctx context.Context, action *SidecarAc
 // stale refusal meets only an untainted request the run has no tainted one beside. A newest decided approval that
 // denies or was cancelled refuses.
 func (self *ApprovalGate) candidate(action *StoredCanonicalAction, sidecarAction *SidecarAction, tainted bool, now time.Time) (Id, bool, error) {
-	candidates := self.inbox.candidates(action, sidecarAction.RunId, sidecarAction.AgentId)
+	candidates := self.inbox.candidates(action, sidecarAction.Detail, sidecarAction.RunId, sidecarAction.AgentId)
 	approved := []Id{}
 	approvedTaintMatch := []Id{}
 	// the newest decided request for exactly this action, of the run's taint and of the other: a denial or a cancel

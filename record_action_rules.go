@@ -3,10 +3,21 @@
 // An approver refuses a CanonicalAction version it does not know (§16.8, §22.5's §16 row), so the versions this build
 // knows are a set, never a maximum: version 3, access_request's, arrives at M6 and version 2, field 37's, at M10, in
 // either order (§23.4's M3 row). Only version 2 may carry field 37, and versioning 0 (on) encodes as absent, so no
-// version is ever read from a field's presence. Version 3 is kind access_request alone, setting kind, version and
-// scope and fields 8, 10, 11, 14, 26, 27 and 29 (16.11; protos-services-canonical-action). Which fields each other
-// kind fills, and which of them a GrantActivate or a gate may carry, are MCP-M3-02's kind table, and the per-path
-// allowlist ACL's and the gates' (protos-services-canonical-action); this file holds what is true of every action.
+// version is ever read from a field's presence.
+//
+// The owner's answer to record-m2-01-canonical-action-detail (QD-740; owner decision 220) seals what a dial or route
+// grant's clear fields may not show a server. Version 4 is such a grant's, kind bridge_forward's: kind, version and
+// scope, fields 8, 10, 11, 28 and 29, and sealed_detail, 38, a CanonicalActionDetail holding its prefixes and ports
+// under §7.9's sealed-body format, so its clear grant_dst names subjects alone, never an ip: prefix or a port. Every
+// version-4 action carries one, a template's included, so no such grant reads as one to every port.
+// Version 3 is kind access_request alone, in fields 8, 10, 11, 14, 26 and 29 with its port and port text in field 38
+// the same way (16.11), 27 leaving its clear set. Field 38 is set in no other version. A version-1 bridge_forward,
+// the shape before the answer, still parses, since ACL's GrantActivate checks hold it until they read the detail;
+// NewCanonicalAction builds none.
+//
+// Which fields each other kind fills, and which of them a GrantActivate or a gate may carry, are MCP-M3-02's kind
+// table, and the per-path allowlist ACL's and the gates' (protos-services-canonical-action); this file holds what is
+// true of every action.
 //
 // Package-level functions are safe for concurrent use.
 
@@ -18,7 +29,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
+	"golang.org/x/crypto/chacha20poly1305"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -33,30 +46,87 @@ var (
 	ErrCanonicalActionInvalid = errors.New("canonical action invalid")
 )
 
-// CanonicalAction's field numbers the rules name (§16.8's fence).
+// CanonicalAction's field numbers the rules name (§16.8's fence), and the versions that seal a detail.
 const (
-	canonicalActionFieldKind       = 1
-	canonicalActionFieldVersion    = 12
-	canonicalActionFieldScope      = 13
-	canonicalActionFieldVersioning = 37
-	// §16.8's preview cap, rendered as untrusted text.
-	canonicalActionPreviewMaxByteCount = 2 * 1024
+	canonicalActionFieldKind         = 1
+	canonicalActionFieldGrantDst     = 10
+	canonicalActionFieldVersion      = 12
+	canonicalActionFieldScope        = 13
+	canonicalActionFieldVersioning   = 37
+	canonicalActionFieldSealedDetail = 38
+
+	// access_request's version (16.11).
+	canonicalActionVersionAccessRequest = 3
+	// A dial or route grant's version, its prefixes and ports in sealed_detail (QD-740).
+	canonicalActionVersionSealedGrant = 4
 )
 
-// The fields a version-3 access_request may set (§16.8's version comment; 16.11): kind, version and scope, and
-// expires_millis, grant_dst, grant_allow, repo_id, target_sidecar_id, target_port and subject.
-var canonicalActionVersion3Fields = []protoreflect.FieldNumber{
-	canonicalActionFieldKind, canonicalActionFieldVersion, canonicalActionFieldScope, 8, 10, 11, 14, 26, 27, 29,
+// §16.8's limits on a CanonicalAction, which every builder, approver, spender and gate holds alike (QD-702): the
+// protocol's values, so changing one is a protocol change no deployment makes on one side alone. The package-level
+// rules read DefaultCanonicalActionSettings(); threading each side's own instance through them is the review phase's
+// settings sweep (QD-706).
+type CanonicalActionSettings struct {
+	// A preview, rendered as untrusted text: 2 KiB (§16.8).
+	PreviewMaxByteCount int
 }
 
-// Whether this build's approvers know a CanonicalAction version: 1 at M3. MCP-M6-01 adds 3 and RECORD-M10's
-// carrier switch adds 2, each with its rules below already in force.
+// §16.8's values. A fresh value each call.
+func DefaultCanonicalActionSettings() *CanonicalActionSettings {
+	return &CanonicalActionSettings{
+		PreviewMaxByteCount: 2 * 1024,
+	}
+}
+
+// The fields a version-3 access_request may set (§16.8's version comment; 16.11; QD-740): kind, version and scope, and
+// expires_millis, grant_dst, grant_allow, repo_id, target_sidecar_id, subject and sealed_detail, where its port rides.
+var canonicalActionVersion3Fields = []protoreflect.FieldNumber{
+	canonicalActionFieldKind, canonicalActionFieldVersion, canonicalActionFieldScope, 8, canonicalActionFieldGrantDst,
+	11, 14, 26, 29, canonicalActionFieldSealedDetail,
+}
+
+// The fields a version-4 dial or route grant may set (owner decision 220; QD-740): kind, version and scope, and
+// expires_millis, a subject-only grant_dst, grant_allow, rule_id, subject and sealed_detail.
+var canonicalActionVersion4Fields = []protoreflect.FieldNumber{
+	canonicalActionFieldKind, canonicalActionFieldVersion, canonicalActionFieldScope, 8, canonicalActionFieldGrantDst,
+	11, 28, 29, canonicalActionFieldSealedDetail,
+}
+
+// The actions a version-4 grant asks: §8.4's names of dial and route.
+var canonicalActionSealedGrantAllows = []string{"dial", "route"}
+
+// Whether this build's approvers know a CanonicalAction version: 1 at M3, and 4, a dial or route grant's sealed
+// form (QD-740). MCP-M6-01 adds 3 and RECORD-M10's carrier switch adds 2, each with its rules below already in
+// force.
 func CanonicalActionVersionKnown(version uint32) bool {
 	switch version {
-	case 1:
+	case 1, canonicalActionVersionSealedGrant:
 		return true
 	}
 	return false
+}
+
+// Whether a clear grant_dst entry names its destination alone, as a server may see it (owner decision 220): never an
+// ip: prefix, and a sidecar with no port after its id. The rest of §8.4's grammar is ACL's to read (ParseAclGrantDst).
+func canonicalActionGrantDstClear(dst string) bool {
+	kind, value, _ := strings.Cut(dst, ":")
+	switch kind {
+	case "ip":
+		return false
+	case "sidecar":
+		return !strings.Contains(value, ":")
+	}
+	return true
+}
+
+// Whether sealed has a sealed body's layout (config_seal.go): a generation, a nonce, and a ciphertext of whole padded
+// blocks with its tag. Read without a key, so a detail written unsealed, or cut short, is refused by every parser,
+// a server's included; whether it opens is the approver's and the reader's to find.
+func canonicalActionSealedDetailLayout(sealed []byte) bool {
+	if _, err := ConfigSealedGeneration(sealed); err != nil {
+		return false
+	}
+	paddedByteCount := len(sealed) - configSealGenerationByteCount - chacha20poly1305.NonceSizeX - chacha20poly1305.Overhead
+	return 0 < paddedByteCount && paddedByteCount%configSealPadByteCount == 0
 }
 
 // Holds an action to the rules of every version, given which versions are known: the version, then the kind, then
@@ -75,9 +145,14 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 		return fmt.Errorf("%w: kind %d", ErrCanonicalActionInvalid, action.GetKind())
 	}
 	accessRequest := kind == protocol.SidecarActionKind_SIDECAR_ACTION_KIND_ACCESS_REQUEST
-	if accessRequest != (version == 3) {
+	if accessRequest != (version == canonicalActionVersionAccessRequest) {
 		return fmt.Errorf("%w: kind %s at version %d", ErrCanonicalActionInvalid, kind, version)
 	}
+	if version == canonicalActionVersionSealedGrant && kind != protocol.SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD {
+		// the one kind whose grant is a dial or route grant
+		return fmt.Errorf("%w: kind %s at version %d", ErrCanonicalActionInvalid, kind, version)
+	}
+	sealedVersion := version == canonicalActionVersionAccessRequest || version == canonicalActionVersionSealedGrant
 	setFields := []protoreflect.FieldNumber{}
 	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
 		setFields = append(setFields, field.Number())
@@ -87,11 +162,40 @@ func canonicalActionCheck(action *protocol.CanonicalAction, known func(version u
 		if number == canonicalActionFieldVersioning && version != 2 {
 			return fmt.Errorf("%w: field %d at version %d", ErrCanonicalActionInvalid, number, version)
 		}
-		if version == 3 && !slices.Contains(canonicalActionVersion3Fields, number) {
+		if number == canonicalActionFieldSealedDetail && !sealedVersion {
+			return fmt.Errorf("%w: field %d at version %d", ErrCanonicalActionInvalid, number, version)
+		}
+		if version == canonicalActionVersionAccessRequest && !slices.Contains(canonicalActionVersion3Fields, number) {
 			return fmt.Errorf("%w: field %d at version 3", ErrCanonicalActionInvalid, number)
 		}
+		if version == canonicalActionVersionSealedGrant && !slices.Contains(canonicalActionVersion4Fields, number) {
+			return fmt.Errorf("%w: field %d at version 4", ErrCanonicalActionInvalid, number)
+		}
 	}
-	if canonicalActionPreviewMaxByteCount < len(action.GetPreview()) {
+	if sealedVersion {
+		// the clear fields hold no prefix or port, and what rides sealed reads as a sealed body: an approver that
+		// cannot open it refuses the action rather than render it short (D-MCP-17)
+		for _, dst := range action.GetGrantDst() {
+			if !canonicalActionGrantDstClear(dst) {
+				return fmt.Errorf("%w: a clear grant_dst naming a prefix or a port at version %d", ErrCanonicalActionInvalid, version)
+			}
+		}
+		if sealed := action.GetSealedDetail(); len(sealed) != 0 && !canonicalActionSealedDetailLayout(sealed) {
+			return fmt.Errorf("%w: a sealed_detail of %d bytes", ErrCanonicalActionInvalid, len(sealed))
+		}
+	}
+	if version == canonicalActionVersionSealedGrant {
+		// a dial or route grant always seals what it reaches, a template's included, so none reads as every port
+		if len(action.GetSealedDetail()) == 0 {
+			return fmt.Errorf("%w: a version-4 grant with no sealed_detail", ErrCanonicalActionInvalid)
+		}
+		for _, allow := range action.GetGrantAllow() {
+			if !slices.Contains(canonicalActionSealedGrantAllows, allow) {
+				return fmt.Errorf("%w: a version-4 grant asking more than dial or route", ErrCanonicalActionInvalid)
+			}
+		}
+	}
+	if DefaultCanonicalActionSettings().PreviewMaxByteCount < len(action.GetPreview()) {
 		return fmt.Errorf("%w: a preview of %d bytes", ErrCanonicalActionInvalid, len(action.GetPreview()))
 	}
 	// A publish writes its resolved audience and mode (plan-MCP-wire-enum-numbers), and any action that sets one
