@@ -467,8 +467,8 @@ func (self *Ingest) captureBlobWithLock(ctx context.Context, run *ingestRun, red
 		entryId = ref.EntryId[:]
 	}
 	state.BlobHashes = append(state.BlobHashes, hashHex)
-	if ingestBlobHashCount < len(state.BlobHashes) {
-		state.BlobHashes = state.BlobHashes[len(state.BlobHashes)-ingestBlobHashCount:]
+	if count := max(self.settings.IngestBlobHashCount, 1); count < len(state.BlobHashes) {
+		state.BlobHashes = state.BlobHashes[len(state.BlobHashes)-count:]
 	}
 	run.dirty = true
 	return entryId

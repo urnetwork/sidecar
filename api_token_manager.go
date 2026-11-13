@@ -1,8 +1,8 @@
 // sidecarTokenManager, D-CORE-8's refresher (§5.6): one per client generation, it runs sdk's schedule
 // (api_token_schedule.go) on GET /auth/refresh through SidecarApi, whose DPoP proof crypto/ed25519 signs by the
 // ClientKey, and refreshes again whenever connect reports a refused credential. A refreshed token is checked to name
-// the same client and device, persisted to the keychain first, and only then installed: in SidecarApi, and through
-// the owner's install callback in connect's three holders, api.SetByJwt, transport.SetAuth and
+// the same network, client and device, persisted to the keychain first, and only then installed: in SidecarApi, and
+// through the owner's install callback in connect's three holders, api.SetByJwt, transport.SetAuth and
 // ApiOutOfBandControl.SetByJwt (connect/transfer_oob_control.go:101 keeps its own jwt), SetAuth with the new token
 // ending connect's refusal hold.
 //
@@ -11,8 +11,9 @@
 // it, session_revoked to session_ended, a child's to parent_lost (plan-CORE-parent-lost-signal), else refused, and a
 // token whose exp passed with no refresh to expired. Only a verified SidecarRevoke means Revoked, which is not this
 // file's to decide. restore_required, after a Postgres restore, is no rejection: the owner re-posts the newest
-// binding and each component's registrations, and the manager refreshes again (§19.10). Network errors and anything
-// else retry after the schedule's jitter.
+// binding, installs the token bind re-mints with the sidecar_id through this manager's install (QD-797), re-posts each
+// component's registrations, and the manager refreshes again, presenting the re-mint (§19.10). Network errors and
+// anything else retry after the schedule's jitter.
 //
 // A refresh request is level-triggered, a counter in a MonitorValue, so one made while a refresh is in flight is
 // honored when it returns rather than dropped with an edge nobody was waiting on. Every wait is on the sidecar's
@@ -56,8 +57,9 @@ type sidecarTokenManagerArgs struct {
 	Install func(byJwt string)
 	// The generation was refused: the owner moves to Unenrolled for reason.
 	Refused func(generation int64, reason SidecarStateReason)
-	// restore_required: re-post the newest binding and each component's registrations (§19.10).
-	Restore func(ctx context.Context) error
+	// restore_required: re-post the newest binding and each component's registrations (§19.10), installing the token
+	// bind re-mints through install, the manager's own (QD-797).
+	Restore func(ctx context.Context, install func(presentedByJwt string, byJwt string) error) error
 	// The retry wait after a failed refresh, a uniform draw below RefreshRetryTimeout. Nil draws one; a test fixes it.
 	RetryTimeout func() time.Duration
 	// The host's token source refreshes, holding this generation's signer (api_token_source.go, CORE-M8-01): the
@@ -232,6 +234,8 @@ func (self *sidecarTokenManager) run() {
 				if self.ctx.Err() != nil {
 					return
 				}
+				// the restore installed bind's re-mint, which the refresh presents now and installs against
+				byJwt = self.args.Api.currentByJwt()
 				continue
 			case sidecarRefreshFailed:
 				if self.ctx.Err() != nil {
@@ -328,7 +332,7 @@ func (self *sidecarTokenManager) restore() sidecarRefreshOutcome {
 		self.args.Log.Warningf("[token]restore_required, and nothing restores")
 		return sidecarRefreshFailed
 	}
-	if err := self.args.Restore(self.ctx); err != nil {
+	if err := self.args.Restore(self.ctx, self.install); err != nil {
 		if self.ctx.Err() == nil {
 			self.args.Log.Infof("[token]restore failed, retrying: %s", err)
 		}
@@ -337,13 +341,14 @@ func (self *sidecarTokenManager) restore() sidecarRefreshOutcome {
 	return sidecarRefreshRestored
 }
 
-// Checks refreshed names byJwt's client and device, persists it, then installs it in SidecarApi and connect's
-// holders, in that order, so no holder carries a token the keychain would lose.
+// Checks refreshed names byJwt's network, client and device, persists it, then installs it in SidecarApi and
+// connect's holders, in that order, so no holder carries a token the keychain would lose. byJwt is the token the
+// request presented: a refresh's, or restore_required's bind, whose re-mint comes here too (QD-797).
 func (self *sidecarTokenManager) install(byJwt string, refreshed string) error {
 	previous, previousOk := sidecarJwtIdentityOf(byJwt)
 	next, nextOk := sidecarJwtIdentityOf(refreshed)
 	if !previousOk || !nextOk || previous != next {
-		return errors.New("the refreshed token names another client or device")
+		return errors.New("the new token names another network, client or device")
 	}
 	// a token installed meanwhile, by a re-enrollment or another refresh, is newer than this answer
 	if current := self.args.Api.currentByJwt(); current != byJwt {
@@ -389,9 +394,12 @@ type SidecarRestorer interface {
 }
 
 // restore_required's steps (§5.6): POST /sidecar/bind with the newest binding, taken once the re-published
-// projection admits the identity key, then each restorer's registrations. The first error stops it, and the
-// manager retries the whole after its jitter.
-func (self *Sidecar) restoreRegistrations(ctx context.Context, restorers []SidecarRestorer) error {
+// projection admits the identity key; the bearer bind re-mints with the sidecar_id installed through install, the
+// generation's manager's, which persists it before any holder takes it (QD-797), and handed to a host's source that
+// takes one; then each restorer's registrations. A re-mint naming another sidecar than the record's, or one install
+// refuses, installs nothing, so the token held stays. The first error stops it, and the manager retries the whole
+// after its jitter.
+func (self *Sidecar) restoreRegistrations(ctx context.Context, restorers []SidecarRestorer, install func(presentedByJwt string, byJwt string) error) error {
 	var secrets SidecarSecrets
 	func() {
 		self.stateLock.Lock()
@@ -406,7 +414,8 @@ func (self *Sidecar) restoreRegistrations(ctx context.Context, restorers []Sidec
 		return err
 	}
 	record.keys.erase()
-	if _, err := self.sidecarApi.Bind(ctx, record.binding); err != nil {
+	bound, err := self.sidecarApi.Bind(ctx, record.binding)
+	if err != nil {
 		if isSidecarRevokedRefusal(err) {
 			// a claim, checked against the config and never taken on api's word (CORE-M2-07)
 			if _, verifyErr := self.VerifyRevocationClaim(ctx); verifyErr != nil {
@@ -415,6 +424,16 @@ func (self *Sidecar) restoreRegistrations(ctx context.Context, restorers []Sidec
 		}
 		return err
 	}
+	if err := checkSidecarBound(bound, record.identity.Generation, record.identity.SidecarId); err != nil {
+		return err
+	}
+	if install == nil {
+		return errors.New("no generation runs to install the re-minted token")
+	}
+	if err := install(bound.presentedByJwt, bound.ByClientJwt); err != nil {
+		return fmt.Errorf("the re-minted token was not installed: %w", err)
+	}
+	self.handOffRemintedToken(bound.ByClientJwt)
 	for _, restorer := range restorers {
 		if err := restorer.Reregister(ctx); err != nil {
 			return err

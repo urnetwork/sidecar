@@ -51,9 +51,6 @@ const (
 	ingestDirectoryName = "ingest"
 	ingestClass         = "ingest"
 	ingestStateVersion  = 1
-	ingestStateMaxBytes = 1024 * 1024
-	// a blob hash is remembered this many times over before the oldest are forgotten, a bound on the state file
-	ingestBlobHashCount = 4096
 )
 
 // Nothing can be sealed: the network has no redactor (no spool), so the event is a gap.
@@ -196,6 +193,8 @@ func NewIngest(args *IngestArgs) *Ingest {
 	server.SetHookCapture(self.captureHook)
 	if self.restore != nil {
 		server.SetHookHolds(self.restore.HookHolds())
+		// run_restore reads the same points (MCP-M3-22)
+		server.SetRestorePoints(self.restore)
 	}
 	return self
 }
@@ -279,7 +278,7 @@ func (self *Ingest) runFor(ctx context.Context, network McpNetwork, networkId si
 		return nil, err
 	}
 	state := &ingestRunState{}
-	found, err := readRestoreJson(store, runId.String(), state)
+	found, err := readRestoreJson(store, runId.String(), state, self.settings.IngestStateByteCount)
 	if err != nil {
 		return nil, err
 	}

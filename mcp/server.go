@@ -148,6 +148,8 @@ type McpServer struct {
 	instructionsFor func(session *McpSession) string
 	// nil refuses every subscription
 	subscribeCheck McpSubscribeCheck
+	// run_restore's points (tools_restore.go); nil answers unavailable
+	restorePoints *RestorePoints
 }
 
 // A server for daemon.
