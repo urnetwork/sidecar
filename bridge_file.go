@@ -620,7 +620,7 @@ func (self *BridgeFiler) mapPlan(view *bridgeFileView, request *BridgeMapRequest
 			}
 		}
 	}
-	// the shape, over any address of the block's lower half: the real one is the host's once the ledger shows it
+	// the shape, over a placeholder /32: the match prefix is the host's address once the ledger shows it
 	if err := bridgeCheckMapBody(plan.body(0x7f000001)); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBridgeFileRefused, err)
 	}
