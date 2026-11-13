@@ -1128,6 +1128,10 @@ func TestRecordMdVectorsRecompute(t *testing.T) {
 		`"urnetwork-sidecar-v1/attestation-sshsig" || 0x00 || u32be(statement) || u16be(count) || each commit's oid in hex, in order, u16be(len) || oid || u16be(len) || member_id`,
 		`SHA-256("urnetwork-sidecar-v1/model-weights" || 0x00 || u32be(file count) || per file, by path bytes: u16be(len) || path || the file's SHA-256)`,
 	)
+	recordMdRequire(t, "section 5.1's detail nonce row", doc.row(t, "5.1", "detail nonce"),
+		"the first 16 bytes of SHA-256 over the action as stored with its field-38 record cut out",
+		"The aad's SignedType is SIGNED_GRANT_ACTIVATE and its network_id the action's network",
+	)
 	recordMdRequire(t, "section 4.4", doc.section(t, "4.4"), `SHA-256("urnetwork-sidecar-v1/action-tool" || run_id || u16be(len(tool_use_id)) || tool_use_id)`)
 	recordMdRequire(t, "section 10.1", doc.section(t, "10.1"), `node SHA-256(0x01 || left || right)`)
 }

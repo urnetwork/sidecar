@@ -225,6 +225,14 @@ statement_sha256   SHA-256 of the statement's Signed as stored
 packet_sha256      SHA-256 of the packet file
 config_sha256,     §16.6's harness config hash and its hash of a call's arguments, unchanged
 arguments_sha256
+detail nonce       what stands for a header's nonce in the aad of CanonicalAction.sealed_detail, §7.9's sealed body,
+                   since an action has no header (QD-771): the first 16 bytes of SHA-256 over the action as stored
+                   with its field-38 record cut out, every other tag and value kept in its stored order and encoding;
+                   a builder's action, written once in field-number order, gives the deterministic encoding of its
+                   clear fields alone. The aad's SignedType is SIGNED_GRANT_ACTIVATE and its network_id the action's
+                   network, so a detail opens beside the clear fields it was sealed with, in that network, and beside
+                   no other: a daemon seals once those fields are final, and an approver and every reader derive the
+                   nonce from the bytes they open
 elsewhere          the tool action_id (section 4.4); sealed_body's aad (section 5.2); the agent key's signature (section
                    5.3); the log key's id (section 10.2)
 ```
