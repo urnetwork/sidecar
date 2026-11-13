@@ -35,10 +35,12 @@ type AuthenticationUnavailableError struct {
 	Err error
 }
 
+// The wait and the cause, never the token.
 func (self *AuthenticationUnavailableError) Error() string {
 	return fmt.Sprintf("authentication unavailable, retry after %s: %v", self.RetryAfter, self.Err)
 }
 
+// The cause, so errors.Is sees what the host could not reach.
 func (self *AuthenticationUnavailableError) Unwrap() error {
 	return self.Err
 }
