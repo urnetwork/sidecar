@@ -11,12 +11,23 @@
 // Credentials stay in this process (I-7): an error carries a route's method and path template, its
 // status, structured code and retry hint, and never a url, a request or response body, or a token,
 // and logs say no more. A redirect is never followed, since following one would repeat a bearer or a
-// form holding the subject token to wherever the answer pointed. Every call sends at most one request
-// and retries nothing: a proof's jti is single use, so a retry is a new call with a new proof, which
-// the caller decides.
+// form holding the subject token to wherever the answer pointed. Every call sends one request and
+// retries nothing, with one exception below: a proof's jti is single use, so a retry is a new call
+// with a new proof, which the caller decides.
 //
-// SidecarApi is safe for concurrent use. A call reads the token, signer and transport once, when it
-// starts, so one that SetByJwt races finishes on the token it began with.
+// A proof's iat is signed by the api's clock, not this device's (§7.4, QD-757): api holds iat within
+// its window of its own clock, so a device whose clock is minutes off would be refused at every
+// renewal and exchange. Each answer of api's own origins gives its clock in its Date header, and the
+// client keeps the offset from this device's, as §9.6's socket registrar keeps the sockets
+// service's; api_dpop.go signs iat at this device's time plus it. A request whose proof is refused
+// while the refusal's own Date shows the offset it was signed by was off, as the first after a start
+// or after the device's clock was set is, goes once more with a new proof on the newer offset, and
+// never a third time. The refused proof spent no jti and reached no handler, so the second request
+// is the first api acts on.
+//
+// SidecarApi is safe for concurrent use. A request reads the token, signer and transport once, when
+// it starts, so one that SetByJwt races finishes on the token it began with, and its proof and its
+// body name the same token.
 
 package sidecar
 
@@ -71,6 +82,8 @@ const (
 	SidecarApiCodeGenerationConflict = "generation_conflict"
 	// POST /sidecar/bind's 409 for a client already bound with other bytes: a client binds once.
 	SidecarApiCodeClientBound = "client_bound"
+	// POST /oauth/token's 400 for a DPoP proof that did not verify (§7.4), whichever check failed.
+	sidecarApiCodeInvalidDpopProof = "invalid_dpop_proof"
 )
 
 // The longest structured code read from an answer. A longer one is not a code.
@@ -111,10 +124,12 @@ func (self *SidecarApiError) Error() string {
 type SidecarApi struct {
 	settings *SidecarSettings
 	log      Logger
-	// the clock a Retry-After given as a date is read against; set once, at construction
+	// this device's clock, which the api's is read against; set once, at construction
 	now func() time.Time
 
 	stateLock sync.Mutex
+	// the api's clock less this device's, at the newest answer whose Date gave it; zero until one
+	apiClockOffset time.Duration
 	// the authenticated jwt
 	byJwt string
 	// the ClientKey's proof (§7.4), newDpopSigner's; nil until the core installs one, and then a call
@@ -129,8 +144,8 @@ type SidecarApi struct {
 // A client of api on settings, which must pass validate, so no route builds a url on an empty or
 // relative service url. transport carries every request; nil is the leg's default, which on
 // sidecar_http is fetch and on a connect leg refuses until the core installs its client strategy's
-// with setTransport. Whatever transport is given goes behind absoluteUrlTransport. now is the clock a
-// Retry-After given as a date is read against, which a test fixes; nil is real time.
+// with setTransport. Whatever transport is given goes behind absoluteUrlTransport. now is this
+// device's clock, which the api's is read against, and which a test fixes; nil is real time.
 func newSidecarApi(settings *SidecarSettings, transport http.RoundTripper, now func() time.Time) (*SidecarApi, error) {
 	if err := settings.validate(); err != nil {
 		return nil, err
@@ -189,6 +204,59 @@ func (self *SidecarApi) setDpopSigner(dpopSigner func(method string, url string,
 	self.dpopSigner = dpopSigner
 }
 
+// The api's clock less this device's, as the newest answer's Date gave it: what a DPoP proof's iat
+// is signed by (newDpopSigner's apiClockOffset). Zero until an answer gives one, which is this
+// device's clock alone.
+func (self *SidecarApi) currentApiClockOffset() time.Duration {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.apiClockOffset
+}
+
+// The api's clock by this device's and the newest offset: what a Retry-After given as a date is
+// read against.
+func (self *SidecarApi) apiNow() time.Time {
+	return self.now().Add(self.currentApiClockOffset())
+}
+
+// Whether requestUrl is on one of api's own origins, whose answers give api's clock. Another
+// service's answer, such as sockets', gives its own, which the registrar keeps.
+func (self *SidecarApi) isApiOrigin(requestUrl string) bool {
+	return strings.HasPrefix(requestUrl, self.settings.ApiUrl+"/") || strings.HasPrefix(requestUrl, self.settings.AuthUrl+"/")
+}
+
+// Keeps the api's clock from an answer's Date, in place of what the answer before gave. sentAt and
+// receivedAt are this device's clock around the round trip: api read its clock somewhere inside it,
+// so the midpoint halves the error the round trip leaves, and an answer that took longer than
+// ApiClockMaxRoundTrip leaves too much to keep. A Date is whole seconds, so the offset reads up to
+// 1 s low, far inside §7.4's window. An answer with no Date, or one that is not an HTTP-date, as a
+// page Worker's fetch hides it unless api exposes it, changes nothing.
+func (self *SidecarApi) keepApiClock(response *http.Response, sentAt time.Time, receivedAt time.Time) {
+	roundTrip := receivedAt.Sub(sentAt)
+	if roundTrip < 0 || self.settings.ApiClockMaxRoundTrip < roundTrip {
+		return
+	}
+	apiTime, err := http.ParseTime(response.Header.Get("Date"))
+	if err != nil {
+		return
+	}
+	offset := apiTime.Sub(sentAt.Add(roundTrip / 2))
+	testHookBarrier("api.clock_offset.before", "")
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.apiClockOffset = offset
+	}()
+	testHookBarrier("api.clock_offset.after", "")
+}
+
+// Whether apiErr is how api refuses a DPoP proof: the exchange's invalid_dpop_proof, or the
+// strict_exp proof gate's 403, which is plain text and so holds no code. Neither says which check
+// failed, so a refusal for iat is told from the others by the clock (send).
+func isSidecarApiProofRefusal(apiErr *SidecarApiError) bool {
+	return apiErr.Code == sidecarApiCodeInvalidDpopProof || apiErr.Status == http.StatusForbidden && apiErr.Code == ""
+}
+
 // The transport every call goes through, behind absoluteUrlTransport: what another client of a service, such as
 // evs's (EvsClientArgs.Transport), dials with, so it binds to the same egress and never reaches net/http's default.
 func (self *SidecarApi) Transport() http.RoundTripper {
@@ -244,9 +312,40 @@ type sidecarApiRequest struct {
 	dpop bool
 }
 
-// Sends request, once, and returns the body of its 2xx answer. A refusal is a *SidecarApiError, and
-// a failure before any answer is the transport's error, named by the route and without the url.
+// Sends request and returns the body of its 2xx answer. A refusal is a *SidecarApiError, and a
+// failure before any answer is the transport's error, named by the route and without the url.
+//
+// One request, except where a proof was refused for its iat (§7.4, QD-757): a request carrying a
+// proof, refused as api refuses a proof, whose refusal's Date moved the api's clock at least
+// ApiClockRetryShift from the reading the proof was signed by, is sent once more, with a new proof
+// signed by the newer reading. A refusal that moved the clock less was not for iat, or cannot be
+// mended by signing again, and stands; so does the second request's answer, whatever it is.
 func (self *SidecarApi) send(ctx context.Context, request *sidecarApiRequest) ([]byte, error) {
+	signedOffset := self.currentApiClockOffset()
+	responseBody, err := self.sendOnce(ctx, request)
+	if err == nil || !request.dpop {
+		return responseBody, err
+	}
+	var apiErr *SidecarApiError
+	if !errors.As(err, &apiErr) || !isSidecarApiProofRefusal(apiErr) {
+		return nil, err
+	}
+	shift := self.currentApiClockOffset() - signedOffset
+	if shift < 0 {
+		shift = -shift
+	}
+	if shift < self.settings.ApiClockRetryShift {
+		return nil, err
+	}
+	if self.log.V(1).Enabled() {
+		self.log.Infof("[api]%s: the proof was signed %s off the api's clock, signing once more\n", request.route, shift)
+	}
+	testHookBarrier("api.send.iat_retry", request.operation)
+	return self.sendOnce(ctx, request)
+}
+
+// Sends request, once: send's one request, or its second.
+func (self *SidecarApi) sendOnce(ctx context.Context, request *sidecarApiRequest) ([]byte, error) {
 	var byJwt string
 	var dpopSigner func(method string, url string, ath string) (string, error)
 	var transport http.RoundTripper
@@ -304,7 +403,9 @@ func (self *SidecarApi) send(ctx context.Context, request *sidecarApiRequest) ([
 		},
 	}
 	testHookBarrier("api.send.before", request.operation)
+	sentAt := self.now()
 	response, err := client.Do(httpRequest)
+	receivedAt := self.now()
 	testHookBarrier("api.send.after", request.operation)
 	if err != nil {
 		// net/http's url.Error repeats the url, which may hold an id or a query (I-13)
@@ -315,6 +416,9 @@ func (self *SidecarApi) send(ctx context.Context, request *sidecarApiRequest) ([
 		return nil, fmt.Errorf("sidecar api %s: %w", request.route, err)
 	}
 	defer response.Body.Close()
+	if self.isApiOrigin(request.url) {
+		self.keepApiClock(response, sentAt, receivedAt)
+	}
 
 	responseBody, tooLarge, err := readSidecarApiBody(response.Body, self.settings.ApiResponseByteCount)
 	if err != nil {
@@ -324,7 +428,7 @@ func (self *SidecarApi) send(ctx context.Context, request *sidecarApiRequest) ([
 		self.log.Infof("[api]%s %d\n", request.route, response.StatusCode)
 	}
 	if response.StatusCode < 200 || 300 <= response.StatusCode {
-		return nil, newSidecarApiError(request.route, response, responseBody, self.now)
+		return nil, newSidecarApiError(request.route, response, responseBody, self.apiNow)
 	}
 	if tooLarge {
 		return nil, fmt.Errorf("sidecar api %s: %w: past %d bytes", request.route, ErrSidecarApiReply, self.settings.ApiResponseByteCount)
@@ -408,7 +512,8 @@ type sidecarApiErrorBody struct {
 }
 
 // The refusal a non-2xx answer carries, read from its body and headers: a code only where one is
-// well formed, and never the body's text. now is read only for a Retry-After given as a date.
+// well formed, and never the body's text. now is the api's clock as the caller reads it, read only
+// for a Retry-After given as a date.
 func newSidecarApiError(route string, response *http.Response, body []byte, now func() time.Time) *SidecarApiError {
 	apiErr := &SidecarApiError{
 		Route:  route,

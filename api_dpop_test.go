@@ -114,7 +114,7 @@ func computeDpopVectors(t *testing.T) *dpopVectors {
 
 	vectors := &dpopVectors{}
 	for _, vector := range inputs {
-		signer, err := newDpopSigner(vector.Seed, fixedDpopClock(vector.Iat), bytes.NewReader(vector.JtiBytes))
+		signer, err := newDpopSigner(vector.Seed, fixedDpopClock(vector.Iat), nil, bytes.NewReader(vector.JtiBytes))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -263,7 +263,7 @@ func TestDpopVectorsVerify(t *testing.T) {
 
 // RFC 9449's htu: no query, no fragment, and the rest as the request had it.
 func TestDpopHtuDropsQuery(t *testing.T) {
-	signer, err := newDpopSigner(dpopVectorSeed(), fixedDpopClock(1767225600), cryptorand.Reader)
+	signer, err := newDpopSigner(dpopVectorSeed(), fixedDpopClock(1767225600), nil, cryptorand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestDpopHtuDropsQuery(t *testing.T) {
 
 // What the signer refuses signs nothing, and its error repeats no argument.
 func TestDpopSignerRefusesWhatIsNotARequest(t *testing.T) {
-	signer, err := newDpopSigner(dpopVectorSeed(), fixedDpopClock(1767225600), cryptorand.Reader)
+	signer, err := newDpopSigner(dpopVectorSeed(), fixedDpopClock(1767225600), nil, cryptorand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestDpopSignerRefusesWhatIsNotARequest(t *testing.T) {
 // A ClientKey seed is 32 bytes, connect.ClientSettings.ClientKeySeed's.
 func TestDpopSignerRefusesAShortSeed(t *testing.T) {
 	for _, seed := range [][]byte{nil, make([]byte, 31), make([]byte, 33), make([]byte, 64)} {
-		if _, err := newDpopSigner(seed, time.Now, cryptorand.Reader); !errors.Is(err, errDpopProof) {
+		if _, err := newDpopSigner(seed, time.Now, nil, cryptorand.Reader); !errors.Is(err, errDpopProof) {
 			t.Errorf("%d bytes: %v", len(seed), err)
 		}
 	}
@@ -336,7 +336,7 @@ func TestDpopSignerRefusesAShortSeed(t *testing.T) {
 // Each proof draws its own jti, which a verifier spends once, and iat follows the clock.
 func TestDpopSignerDrawsEachJtiAndReadsTheClock(t *testing.T) {
 	now := time.Unix(1767225600, 0)
-	signer, err := newDpopSigner(dpopVectorSeed(), func() time.Time { return now }, cryptorand.Reader)
+	signer, err := newDpopSigner(dpopVectorSeed(), func() time.Time { return now }, nil, cryptorand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +379,7 @@ func TestDpopSignerSignsNothingWithoutAJti(t *testing.T) {
 		failingDpopReader{},
 		bytes.NewReader(make([]byte, dpopJtiByteCount-1)),
 	} {
-		signer, err := newDpopSigner(dpopVectorSeed(), fixedDpopClock(1767225600), random)
+		signer, err := newDpopSigner(dpopVectorSeed(), fixedDpopClock(1767225600), nil, random)
 		if err != nil {
 			t.Fatal(err)
 		}
