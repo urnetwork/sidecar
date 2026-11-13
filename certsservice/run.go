@@ -19,12 +19,18 @@
 // will never answer and no budget is spent; its sweep still marks, since a certificate that must go
 // stops renewing and its device is told at once.
 //
-// What a pass cannot do yet, because a URnetwork-zone row keeps no chain until
-// tls-m5-05-cert-row-values' columns land (QD-741): an issued chain is not written to its row, a
-// renewal carries `replaces` only where its predecessor's row has a chain, an ARI window is read again
-// only for such a row, and a revoking row with no chain waits, since a CA revokes a certificate it is
-// shown (RFC 8555 §7.6). A marked row's reason is not kept either: the sweep tells the CA the reason of
-// the cause it found in the same pass, and cessationOfOperation otherwise.
+// A row keeps what the next step needs (cert-1; QD-741). An order's chain is written with its issuance,
+// so GET /tls/cert-order/<id> answers it after a restart, a renewal carries `replaces`, an ARI window
+// is read again, and the sweep has a certificate to show its CA (RFC 8555 §7.6); a row with no chain,
+// one issued before rows kept theirs, carries none of that and waits in revoking. A revocation's reason
+// is written with its mark, by the route (keyCompromise or cessationOfOperation), by a takedown
+// (model.RequestTlsCertRevocation) or by the sweep for the cause it found, and the sweep tells the CA
+// the stored one, in this pass or any later; a marked row with none is asked about once more, and told
+// cessationOfOperation when its host shows no cause. The store drops the reason once the CA has taken
+// the revocation.
+//
+// Every move carries the pass's clock as the row's state time (QD-742), from which a revoked or failed
+// row's retention counts.
 //
 // Each move publishes a TlsHint (hints.go).
 
@@ -317,7 +323,7 @@ func (self *CertsService) runOrder(ctx context.Context, order *certsRunOrder) ce
 			to = sidecar.TlsCertStateFailed
 			outcome.end = certsOrderFailed
 		}
-		moved, moveErr := self.transition(ctx, &CertsTransition{CertId: row.CertId, From: underWay, To: to})
+		moved, moveErr := self.transition(ctx, &CertsTransition{CertId: row.CertId, From: underWay, To: to, At: self.clock.Now()})
 		if moveErr != nil || !moved {
 			// the row stays under way, or another pass moved it: the next pass reads it as it stands
 			outcome.end = certsOrderInterrupted
@@ -331,10 +337,13 @@ func (self *CertsService) runOrder(ctx context.Context, order *certsRunOrder) ce
 		CertId:     row.CertId,
 		From:       underWay,
 		To:         sidecar.TlsCertStateIssued,
+		At:         self.clock.Now(),
 		AccountUri: issued.AccountUri,
 		Serial:     issued.Serial,
 		NotBefore:  issued.NotBefore,
 		NotAfter:   issued.NotAfter,
+		// kept for the device's GET, the renewal's replaces and a revocation (cert-1)
+		Chain: issued.Chain,
 	}
 	// the CA's suggested window, when it gives one: without it the row renews at two thirds
 	if windowStart, windowEnd, ariErr := self.acme.RenewalInfo(ctx, ca, issued.Chain[0]); ariErr == nil && windowStart.Before(windowEnd) {
@@ -432,6 +441,7 @@ func (self *CertsService) RunRenewals(ctx context.Context, afterCertId sidecar.I
 				CertId: row.CertId,
 				From:   []sidecar.TlsCertState{sidecar.TlsCertStateIssued},
 				To:     sidecar.TlsCertStateExpired,
+				At:     now,
 			})
 			switch {
 			case err != nil:
@@ -453,6 +463,7 @@ func (self *CertsService) RunRenewals(ctx context.Context, afterCertId sidecar.I
 					CertId:         row.CertId,
 					From:           []sidecar.TlsCertState{sidecar.TlsCertStateIssued},
 					To:             sidecar.TlsCertStateIssued,
+					At:             now,
 					AriWindowStart: windowStart,
 					AriWindowEnd:   windowEnd,
 				})
@@ -513,7 +524,8 @@ type CertsRevocationsReport struct {
 	Revoked []sidecar.Id
 	// Revoking rows whose validity ended before a CA was asked, now expired.
 	Expired []sidecar.Id
-	// Revoking rows with no chain to show a CA, which wait (run.go's header).
+	// Revoking rows that wait: one with no chain to show a CA (run.go's header), or any on a host with
+	// no ACME client.
 	WaitingCount int
 	// Rows the pass could not move or their CA would not take, left for the next.
 	FailedCount int
@@ -544,8 +556,6 @@ func (self *CertsService) RunRevocations(ctx context.Context, source CertsRevoca
 	}
 	report.Next = *cursor
 	batchCount := self.settings.RevocationBatchCount
-	// the reason of each cause this pass found, which no column keeps
-	reasons := map[sidecar.Id]CertsRevocationReason{}
 
 	if source != nil {
 		issued, err := self.listInStates(ctx, []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, cursor.AfterIssuedCertId, batchCount)
@@ -562,10 +572,13 @@ func (self *CertsService) RunRevocations(ctx context.Context, source CertsRevoca
 				continue
 			}
 			testHookBarrier("certs.revocation.mark", row.CertId.String())
+			// the reason waits in the row, so a pass that dies here, or a CA that is down, loses none
 			moved, err := self.transition(ctx, &CertsTransition{
-				CertId: row.CertId,
-				From:   []sidecar.TlsCertState{sidecar.TlsCertStateIssued},
-				To:     sidecar.TlsCertStateRevoking,
+				CertId:           row.CertId,
+				From:             []sidecar.TlsCertState{sidecar.TlsCertStateIssued},
+				To:               sidecar.TlsCertStateRevoking,
+				At:               self.clock.Now(),
+				RevocationReason: CertsRevocationReasonName(CertsRevocationReasonFor(cause)),
 			})
 			if err != nil {
 				report.FailedCount += 1
@@ -574,7 +587,6 @@ func (self *CertsService) RunRevocations(ctx context.Context, source CertsRevoca
 			if !moved {
 				continue
 			}
-			reasons[row.CertId] = CertsRevocationReasonFor(cause)
 			report.Marked = append(report.Marked, row.CertId)
 			// the device stops serving the certificate now, whenever its CA hears
 			self.hintCounted(ctx, &report.Hints, row, protocol.TlsHintKind_TLS_HINT_REVOKED)
@@ -593,11 +605,12 @@ func (self *CertsService) RunRevocations(ctx context.Context, source CertsRevoca
 	if len(revoking) == batchCount {
 		report.Next.AfterRevokingCertId = revoking[len(revoking)-1].CertId
 	}
+	// the reason of each marked row that holds none: its cause, where its host still shows one
+	reasons := map[sidecar.Id]CertsRevocationReason{}
 	if source != nil && !report.Unavailable {
-		// a row marked before this pass: its cause, where its host still shows one
 		unreasoned := []*sidecar.TlsCertRecord{}
 		for _, row := range revoking {
-			if _, found := reasons[row.CertId]; !found && len(row.Chain) != 0 {
+			if row.RevocationReason == "" && len(row.Chain) != 0 {
 				unreasoned = append(unreasoned, row)
 			}
 		}
@@ -624,6 +637,7 @@ func (self *CertsService) RunRevocations(ctx context.Context, source CertsRevoca
 				CertId: row.CertId,
 				From:   []sidecar.TlsCertState{sidecar.TlsCertStateRevoking},
 				To:     sidecar.TlsCertStateExpired,
+				At:     self.clock.Now(),
 			})
 			switch {
 			case err != nil:
@@ -637,11 +651,15 @@ func (self *CertsService) RunRevocations(ctx context.Context, source CertsRevoca
 			report.WaitingCount += 1
 			continue
 		}
-		// a marked row with no cause to read is a takedown's or its device's own request: the names
-		// stop being served
-		reason, found := reasons[row.CertId]
-		if !found {
-			reason = CertsRevocationCessationOfOperation
+		// the row's own reason, which its mark wrote. A marked row with none and no cause to read was
+		// marked before rows kept one: its names stop being served
+		reason := CertsRevocationReasonNamed(row.RevocationReason)
+		if row.RevocationReason == "" {
+			derived, found := reasons[row.CertId]
+			if !found {
+				derived = CertsRevocationCessationOfOperation
+			}
+			reason = derived
 		}
 		if err := self.RevokeIssued(ctx, row.CertId, row.Chain[0], reason); err != nil {
 			report.FailedCount += 1

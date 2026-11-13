@@ -3,6 +3,10 @@
 // no head), the skip row's repo states and holds, parcels, packs at their size and at 7 d, the resume row with a
 // stop at every barrier, a seal evacuated a run after its parts, an unknown batch format, the job's chain, and
 // HoldCache. A reader here is a fresh RecordLocator, so nothing a process cached answers for the store.
+//
+// FS-8's evacuation clause reads as DESIGN-DETAILS 14.6 gives it while 14.2.8's interim stands (QD-766): evacuation
+// has dropped every dead record at 26 h, and its slots stay. evacuate_slot_test.go holds 14.6's schedules A and B
+// for the interim.
 
 package evsservice
 
@@ -263,7 +267,8 @@ func TestEvacuationDropsACopyCommittedAtAnotherPlace(t *testing.T) {
 }
 
 // A pending record on an idle ref: the ref is fenced by one head CAS that sets fence_ms and changes no version, the
-// record then resolves dead, its new slot is deleted and its batch goes. The committed record beside it is kept.
+// record then resolves dead and its batch goes, and the new slot its record lists stays, counted (DESIGN-DETAILS
+// 14.2.8's interim). The committed record beside it is kept.
 func TestEvacuationFencesThenDropsAPendingRecord(t *testing.T) {
 	fixture := newEvacuateFixture(t, nil)
 	place, recordBytes := fixture.commit("a")
@@ -274,7 +279,7 @@ func TestEvacuationFencesThenDropsAPendingRecord(t *testing.T) {
 	})
 	pending.NewObjects = append(pending.NewObjects, slotObject)
 	pending.SlotBodies = append(pending.SlotBodies, slotBody)
-	fixture.putBatch(1, fixture.unposted(pending))
+	_, deadPlaces := fixture.putBatch(1, fixture.unposted(pending))
 	// step 6 wrote its slot before the attempt died
 	if _, err := fixture.cluster.PutIfNoneMatch(fixture.ctx, SlotKey(fixture.check.repoId, slotId), slotBody, nil); err != nil {
 		t.Fatal(err)
@@ -282,15 +287,17 @@ func TestEvacuationFencesThenDropsAPendingRecord(t *testing.T) {
 	before := fixture.head()
 	fixture.age()
 	result := fixture.mustRun()
-	if result.FenceCount != 1 || result.DeadCount != 1 || result.KeptCount != 1 || result.SlotDeletedCount != 1 || result.BatchDeletedCount != 2 {
+	if result.FenceCount != 1 || result.DeadCount != 1 || result.KeptCount != 1 || result.SlotDeletedCount != 0 || result.SlotKeptCount != 1 ||
+		result.BatchDeletedCount != 2 || result.HasBatches {
 		t.Fatalf("result %+v", result)
 	}
 	after := fixture.head()
 	if after.Version() != before.Version() || after.Head.GetFence() != before.Head.GetFence()+1 || after.Head.GetFenceMs() != fixture.clock.Now().UnixMilli() {
 		t.Fatalf("the fence wrote version %d fence %d fence_ms %d", after.Version(), after.Head.GetFence(), after.Head.GetFenceMs())
 	}
-	if _, err := fixture.cluster.Head(fixture.ctx, SlotKey(fixture.check.repoId, slotId)); !errors.Is(err, sidecar.ErrBlobNotFound) {
-		t.Fatalf("the dead push's slot stands: %v", err)
+	fixture.requireSlot(slotId, slotBody)
+	if _, err := fixture.readRecord(fixture.check.refId, deadPlaces[0]); !errors.Is(err, sidecar.ErrBlobNotFound) {
+		t.Fatalf("the dead record still reads: %v", err)
 	}
 	fixture.requireRecord(place, recordBytes)
 	if !slices.Contains(fixture.steps, BarrierEvacuateFenceBefore) || !slices.Contains(fixture.steps, BarrierEvacuateFenceAfter) {
@@ -331,9 +338,9 @@ func TestEvacuationRaisesNoFenceOnAnUnsureClock(t *testing.T) {
 }
 
 // A pending record on a ref with no head, as a creating push that passed step 5 and died before step 7 leaves: the
-// ref is fenced by a placeholder head created with its fence raised and fence_ms set, the record then resolves dead,
-// its new slot is deleted and its batch goes (DESIGN-DETAILS 2.2.3). The ref still reads as absent, and a later push
-// to that name commits on the placeholder.
+// ref is fenced by a placeholder head created with its fence raised and fence_ms set, the record then resolves dead
+// and its batch goes (DESIGN-DETAILS 2.2.3), and its new slot stays (14.2.8's interim). The ref still reads as
+// absent, and a later push to that name commits on the placeholder.
 func TestEvacuationFencesARefWithNoHeadByPlaceholderAndDropsItsPendingRecord(t *testing.T) {
 	fixture := newEvacuateFixture(t, nil)
 	slotId, slotObject, slotBody := checkTestSlot(t, "dead creating push")
@@ -349,7 +356,8 @@ func TestEvacuationFencesARefWithNoHeadByPlaceholderAndDropsItsPendingRecord(t *
 	}
 	fixture.age()
 	result := fixture.mustRun()
-	if result.FenceCount != 1 || result.DeadCount != 1 || result.WaitingCount != 0 || result.SlotDeletedCount != 1 || result.BatchDeletedCount != 1 || result.HasBatches {
+	if result.FenceCount != 1 || result.DeadCount != 1 || result.WaitingCount != 0 || result.SlotDeletedCount != 0 || result.SlotKeptCount != 1 ||
+		result.BatchDeletedCount != 1 || result.HasBatches {
 		t.Fatalf("result %+v", result)
 	}
 	placeholder := fixture.head()
@@ -357,9 +365,7 @@ func TestEvacuationFencesARefWithNoHeadByPlaceholderAndDropsItsPendingRecord(t *
 		len(placeholder.Head.GetWindow()) != 0 || placeholder.Head.GetRefKind() != 0 || placeholder.Head.GetRefMode() != 0 {
 		t.Fatalf("placeholder %v", placeholder.Head)
 	}
-	if _, err := fixture.cluster.Head(fixture.ctx, SlotKey(fixture.check.repoId, slotId)); !errors.Is(err, sidecar.ErrBlobNotFound) {
-		t.Fatalf("the dead push's slot stands: %v", err)
-	}
+	fixture.requireSlot(slotId, slotBody)
 	if keys := fixture.keys("meta-1", batchKeyPrefix); len(keys) != 0 {
 		t.Fatalf("batches %v", keys)
 	}
@@ -484,7 +490,8 @@ func TestEvacuationMovesAHeldReposRecordsAndDeletesNothingOfIt(t *testing.T) {
 	// a pack is due by size, so the first run's parcel would be replaced
 	fixture.settings.PackByteCount = 1
 	result := fixture.mustRun()
-	if result.KeptCount != 1 || result.PackCount != 1 || result.DeadCount != 1 || result.SlotDeletedCount != 0 || result.ReplacedParcelCount != 0 || result.BatchDeletedCount != 2 {
+	if result.KeptCount != 1 || result.PackCount != 1 || result.DeadCount != 1 || result.SlotDeletedCount != 0 || result.SlotKeptCount != 1 ||
+		result.ReplacedParcelCount != 0 || result.BatchDeletedCount != 2 {
 		t.Fatalf("held run %+v", result)
 	}
 	if _, err := fixture.cluster.Head(fixture.ctx, SlotKey(fixture.check.repoId, slotId)); err != nil {
@@ -535,7 +542,7 @@ func TestEvacuationKeepsEverythingOfARepoWithNoNetwork(t *testing.T) {
 	}
 	fixture.age()
 	result := fixture.mustRun()
-	if result.KeptCount != 1 || result.DeadCount != 1 || result.SlotDeletedCount != 0 || result.BatchDeletedCount != 2 {
+	if result.KeptCount != 1 || result.DeadCount != 1 || result.SlotDeletedCount != 0 || result.SlotKeptCount != 1 || result.BatchDeletedCount != 2 {
 		t.Fatalf("result %+v", result)
 	}
 	if _, err := fixture.cluster.Head(fixture.ctx, SlotKey(fixture.check.repoId, slotId)); err != nil {

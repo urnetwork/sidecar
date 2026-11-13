@@ -8,7 +8,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 
 | # | Problem | Tasks held | Status |
 |---|---|---|---|
-| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10; amended 2026-11-12, QD-760 and QD-775) |
+| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10; amended 2026-11-12, QD-760, QD-775 and section 15) |
 | 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10) |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | complete (2026-11-11) |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
@@ -22,10 +22,11 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11; amended 2026-11-12, QD-761, built on the recommendations of open questions details-amend-2-late-generation and details-amend-2-fold-holds) |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 | 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
+| 15 | Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10) | 2 | complete (2026-11-12) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
 
-Status: complete (2026-11-10; amended 2026-11-12, QD-760: 1.2.2, 1.2.4, 1.2.9, 1.3, 1.5, 1.6, 1.7 and 1.8, each place marked; amended 2026-11-12, QD-775: 1.2.4, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8 and 1.9, each place marked)
+Status: complete (2026-11-10; amended 2026-11-12, QD-760: 1.2.2, 1.2.4, 1.2.9, 1.3, 1.5, 1.6, 1.7 and 1.8, each place marked; amended 2026-11-12, QD-775: 1.2.4, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8 and 1.9, each place marked; amended 2026-11-12, section 15: 1.2.3, 1.2.4, 1.2.5, 1.2.6, 1.2.8, 1.2.9, 1.3, 1.7 and 1.8, each place marked)
 
 Tasks held until complete: SEARCH-M10-10, SEARCH-M10-11, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, SEARCH-M10-35, TEST-M10-02.
 
@@ -258,7 +259,7 @@ What it costs: a document's first entry from each writer in each bucket is full,
 
 **What R2 gives.** Let P be a push by W into N built at b. If P commits, W's head in N was at the version P read. Every push that changed a file of W's in N after b replaced that head (R2 binds the writer's own pushes, a DROP's rewrites and anything else that writes a writer's file; the two exceptions are below). So every file of W's in N is as P read it, and P's plan, which named bases and removed large entries on that reading, is still right. Two pushes of one sidecar built on one base cannot both commit, which FS-74 already expects of two that append; it now also holds for one that appends and one that seals.
 
-The exceptions. A CLOSURE replaces committed versions only and may not be made to rewrite a head it has no other reason to touch; it is fenced by the CUT before it, which refuses every index push built before the CUT (I-EVS-17), and by the rule that no entry rests on a version the erasure set lists (`choose`'s B; landed in `indexChooseEntry`). A roll-up removes every file of an expired bucket in one push, heads included.
+The exceptions. A CLOSURE replaces committed versions only and may not be made to rewrite a head it has no other reason to touch; it is fenced by the CUT before it, which refuses every index push built before the CUT (I-EVS-17), and by the rule that no entry rests on a version the erasure set lists (`choose`'s B; landed in `indexChooseEntry`). A roll-up removes every file of an expired bucket in one push, heads included. Both fences bind pushes built after the CUT. A diff that landed before the CUT on a version the CUT then lists is a resting diff: the eraser enters its version full in its own head before any CLOSURE takes its base or the diff, and the CLOSUREs then remove both (amended 2026-11-12, section 15; 15.2.3 to 15.2.5).
 
 **Who else writes a writer's files.** A DROP's rewrite (SEARCH-M10-18) that removes a listed version from a file of W's, a slot or a large entry, also removes, in the same push, each diff in W's unabsorbed slots that rests on it, enters the composed version full in the DROP signer's own head when it is the kept head (§11.14's drop row, unchanged in effect), and replaces W's head in that bucket (R2), together with the bucket's manifest (R3's fence). That closes G.
 
@@ -273,6 +274,9 @@ merge(N at base b, extra = none):
       U_W = W's sealed slots and W's unabsorbed large entries
   every entry the erasure set lists at or below its version is left out first, a diff by its own version
       (§11.14's epoch row)
+      (amended 2026-11-12, section 15) a full entry the set lists is still the base of a diff whose own version the
+      set does not list, while it stands: the diff is composed onto it and its version is a candidate.
+      Such a diff whose base is gone is left out and alarms nothing (15.2.6)
   candidates, per key:
       the shards' entry of the key: a row or a tombstone
       each entry of the key in a slot of U_W: a full entry or a tombstone as it is; a diff composed onto
@@ -388,7 +392,8 @@ rollup(S), S the oldest expired bucket at t:
     entries, heads included); every newer bucket's entries by key, heads included; all (a/m and shards)
   3 carried(key) = the winner, as a merge picks it, over S's shards, every unabsorbed slot of S, heads
     included, and S's unabsorbed large entries; per ref, S's newest ref tombstone. The erasure set's
-    documents are left out.
+    documents are left out. A diff on a listed version, of a version the set does not list, is composed
+    through its base while the base stands, as at a merge (amended 2026-11-12, section 15; 15.2.6).
   4 per key with carried c; n = the newest entry of the key in the newer buckets (heads, sealed slots,
     unabsorbed large entries, shards; tombstones count); a = all's row of the key:
        n exists and n.version < c.version   promote: c goes to P, the newest bucket holding an entry of
@@ -443,6 +448,9 @@ bound       past Search.JournalByteCount the oldest units lose their key sets an
             drops the unit, and its push is backfilled.
 search      the device's own searches read committed and sent units as a local overlay (§11.14's companion
             row); SearchCache.ApplyErase and ApplyCut remove a listed document's units
+cards       (amended 2026-11-12, section 15) on a record stream a unit also holds a card marker for each run
+            its entries touch, and the journal holds again units for the cards an erasure listed;
+            ApplyCut removes neither (15.2.9)
 ```
 
 **A companion push** is built in this order, and the order is the fence (R5):
@@ -495,6 +503,8 @@ when it next builds an index push for I (§11.14's coverage row):
 ```
 
 Both kinds may ride one push: a device with committed units and backfill work builds one plan from both document sets.
+
+**Record logs (amended 2026-11-12, section 15).** For a record log, 15.2.9 adds to a companion push its interval (`RecordSettings.CardInterval`), a step 2a that reads the log's `erasure` ref at an epoch the device has not yet built at, step 4's run cards, the pin below a blocked document and again units, and to a backfill's step 4 the cards of the runs its versions touched. An eraser's re-entry push (15.2.4) is built in a companion push's order.
 
 **Why the pin is enough.** Take an entry of document d at version v that such a push publishes, and let T be evs's time at the push's index read (step 2). Suppose that when the push commits a roll-up has already dropped, or moved into all, an entry of d at a version v' above v, which is the only way an older entry does harm (I5). R at the pin held d at v, so v' was committed to R after the builder's read of R, which came after T. The index entry of v' was committed later still, with a signed time t' that evs held within 10 min of its clock, so t' is after T less 10 min, and it went to the bucket whose window holds t' or to a newer one. A roll-up of that bucket carries a signed time at which the bucket is expired: a whole window, at least 7 days, past the window's end, so more than 7 days past t', and evs took the roll-up's push within 30 min of that time. So the roll-up committed more than 6 days and 23 h after T. The builder took t before step 2 and sends only while its monotonic clock and its wall clock both read within IndexPushLife of that moment. Its push cannot land after that roll-up.
 
@@ -554,6 +564,9 @@ a companion push  per content ref R, with p the version in its {R, p, false} row
                   each entry being its path's state at the push's base, and is not rebuilt whole.
 a backfill        with h from its {R, h, true} row and p from its {R, p, false} row (the push's base on a
                   file-mode ref's own index): 1.2.6's backfill, step 4
+a run card        (amended 2026-11-12, section 15) on a record stream both kinds also carry the card of each
+                  run their versions touched; 15.2.9 gives a card's inputs
+a re-entry push   (amended 2026-11-12, section 15) an eraser's push, which moves no own row: 15.2.4's documents
 ```
 
 So any device that holds the writer's files in the bucket at the push's base, the content ref's history to p and the text of the changed paths rebuilds every file of the push and compares `content_sha256`: equal, it fetches nothing; unequal, `index_mismatch` names the signer (§11.14's reproduce row, D-EVS-56). It needs no other writer's head and no shard, which the landed rule required. The team directory's readers (§16.11) derive a card writer's next head the same way from its previous head and the card version.
@@ -576,6 +589,10 @@ malformed        an unabsorbed diff with no base is index_malformed naming the s
                  row's "a diff below its key's newest entry is no candidate, resolved or not, and alarms
                  nothing" goes: under I1 there is no such diff to excuse. An unabsorbed diff whose composed
                  set D6 skips under its row reads the same way (1.2.2; amended 2026-11-12, QD-760).
+resting diffs    (amended 2026-11-12, section 15) a diff resolves through a base the erasure set lists while
+                 that base stands. A diff whose base is gone and whose base version the set lists is
+                 excused: no candidate, no alarm, and nothing reads not yet searchable on its account
+                 (15.2.6)
 ```
 
 Newest-wins over every partition a device holds, the version table, masks and retained buckets are as §11.14 has them.
@@ -583,8 +600,10 @@ Newest-wins over every partition a device holds, the version table, masks and re
 ### 1.3 Invariants and why they hold
 
 ```text
-I1 own bases       every diff in an unabsorbed slot, of a document the erasure set does not list, has its base,
-                   a full entry of its key, in another file of its own writer in its bucket (proposed I-EVS-18)
+I1 own bases       every diff in an unabsorbed slot whose base version the erasure set does not list has its
+                   base, a full entry of its key, in another file of its own writer in its bucket (proposed
+                   I-EVS-18; amended 2026-11-12, section 15: the exception read "of a document the erasure
+                   set does not list")
 I2 merges total    a merge composes every input it reads and writes each key's newest version; a bucket's
                    shards hold one version a key, a row or a tombstone, never a diff; a tombstone stays until
                    the bucket rolls
@@ -601,7 +620,7 @@ I8 a function      every file a writer's push, a merge or a roll-up writes is a 
                    (FI-22)
 ```
 
-**I1.** By induction over commits. A writer's own push P, built at b: if it commits, its writer's head in the bucket was at the version P read, so by R2 no other push has changed a file of that writer's there since b, a CLOSURE aside. P's plan adds diffs whose bases stood in the writer's other files at b, and reuses or removes only files that its own result does not keep. The watermark may have moved since b; that only makes more slots absorbed, so fewer diffs are owed a base. A merge writes no writer's file and only raises watermarks. A roll-up removes a bucket's files together, and a promotion writes shards. A DROP's rewrite takes the diffs that rest on what it removes and replaces the head (1.2.3). A CLOSURE takes a listed document's base and its diffs in separate pushes, so between them a diff of a listed document may lack its base: every reader, merge and roll-up leaves out the erasure set's documents before it composes anything, which is why I1 excepts them, and no diff built after the CUT rests on a listed version. Model: `ChainsResolve`; twins `NoOwnCas`, `ReusePinned`, `CleanupReferenced`, `MergeRemovesLarge`.
+**I1.** By induction over commits. A writer's own push P, built at b: if it commits, its writer's head in the bucket was at the version P read, so by R2 no other push has changed a file of that writer's there since b, a CLOSURE aside. P's plan adds diffs whose bases stood in the writer's other files at b, and reuses or removes only files that its own result does not keep. The watermark may have moved since b; that only makes more slots absorbed, so fewer diffs are owed a base. A merge writes no writer's file and only raises watermarks. A roll-up removes a bucket's files together, and a promotion writes shards. A DROP's rewrite takes the diffs that rest on what it removes and replaces the head (1.2.3). A CLOSURE takes only entries at listed versions and diffs on listed versions, in separate pushes, so between them a diff on a listed version may lack its base: I1 excepts it by its base's version, every reader, merge and roll-up passes over it once its base is gone, its version stands full in the eraser's head where nothing else a reader scans held it, and no diff built after the CUT rests on a listed version (amended 2026-11-12, section 15; 15.3 has the argument, and 15.1 A what the earlier wording missed). Model: `ChainsResolve`; twins `NoOwnCas`, `ReusePinned`, `CleanupReferenced`, `MergeRemovesLarge`.
 
 **I2.** A merge's inputs are full rows and tombstones (the shards), the entries of sealed slots and the unabsorbed large entries. By I1 every diff among them has its base. Each of those files is stable from the merge's base to its commit: a sealed slot is overwritten only once absorbed, which only this merge's commit or an earlier winner's can do, and a base is kept while its diff's slot is unabsorbed. One version a key follows from the winner replacing the shards' entry. Model: the ghost `broken`, `OneVersionEach`, `TypeOk`'s "no diff in a shard"; twin `MergeDropsTombstone`.
 
@@ -1113,7 +1132,7 @@ Traps: a give-up's entries are the shard's rows and tombstones together, in the 
 - SEARCH-M10-09 is drafted; SEARCH-M10-45 finishes it.
 - SEARCH-M10-12 (coverage and backfill; it waits on SEARCH-M10-10): the backfill is 1.2.6's, with h and its two rows; `indexCoverageOf` reads up to two rows a ref; a push whose documents were all superseded is covered by its committer's next row; "re-enter a broken chain's version" becomes "re-enter a document whose diff has no base".
 - SEARCH-M10-18 (DROP rewrites): a rewrite that removes a base from a writer's file removes the diffs that name it, enters a kept head's composed version full in the signer's own head, and replaces that writer's head and the bucket's manifest in the same push (1.2.3).
-- SEARCH-M10-17 (erasure's rewrites): unchanged. Its list still names "each writer's slots and large entries in each bucket"; kept and lingering files are among them. A CLOSURE needs no head rewrite (1.2.3).
+- SEARCH-M10-17 (erasure's rewrites): changed (amended 2026-11-12, section 15; this note read "unchanged"). Its list still names "each writer's slots and large entries in each bucket"; kept and lingering files are among them, and it gains every slot holding a resting diff (15.2.3). The eraser's re-entry push precedes its CLOSUREs, which remove resting diffs with the listed entries (15.2.4, 15.2.5). A CLOSURE still rewrites no head it has no other reason to touch (1.2.3). 15.7 has the task's build.
 - SEARCH-M10-21 (reproduction): a head is reproduced from 1.2.8's inputs; hosts with the text add 1.5's check for a live entry of a removed path.
 - SEARCH-M10-23 and SEARCH-M10-24 (matching and masks): 1.2.9; the reader half is in SEARCH-M10-45.
 - SEARCH-M10-36 (FS-76, FS-107, FS-108): FS-107 and FS-108 as 1.8 rewords them.
@@ -1145,7 +1164,7 @@ Traps: a give-up's entries are the shard's rows and tombstones together, in the 
 
 **§11.17.** D-EVS-46: for "A diff rests only on its document's previous version outside every head in the current bucket, or carries over the base of the writer's own head diff it replaces, and merges keep a base a head names" read "A diff rests only on a full entry of its document in another file of its own writer in its bucket, which that writer keeps while the diff needs it; every push that writes a writer's file replaces that writer's head". Its why gains: "a base in a file another device rewrites cannot be fenced by a push that writes only a head (DESIGN-DETAILS.md section 1)". D-EVS-47: for "a merge's writers' heads included" read "a merge reading no head"; for "and removing any older entry racing pushes left in a newer bucket" read "and moving a version or tombstone above an older entry that racing pushes left in a newer bucket into that bucket's shards". D-EVS-49: after "with coverage": ", built from the content ref as read after the index and sent within 5 min".
 
-**§11.8, I-EVS-11.** For "the push that removes an expired bucket adds its documents to all" read "the push that removes an expired bucket adds each of its documents to all or, for one a newer bucket holds only older entries of, to that bucket's shards". A new invariant after I-EVS-17: "I-EVS-18 every diff in a slot no merge has absorbed has its base, a full entry of its document, in another file of its own writer in its bucket".
+**§11.8, I-EVS-11.** For "the push that removes an expired bucket adds its documents to all" read "the push that removes an expired bucket adds each of its documents to all or, for one a newer bucket holds only older entries of, to that bucket's shards". A new invariant after I-EVS-17: "I-EVS-18 every diff in a slot no merge has absorbed, whose base version the erasure set does not list, has its base, a full entry of its document, in another file of its own writer in its bucket" (amended 2026-11-12, section 15).
 
 **§11.21, the risk row** "A diff's base or a deletion's mask leaves the index before the entries relying on it": its mitigation becomes "11.14's dependency row (own bases, the head rule), merges that read no head, the roll-up's promotion and the companion push's pin; an unabsorbed diff with no base is `index_malformed`; FS-107, FS-108, IndexRollup.tla and details/IndexMerge.tla".
 
@@ -12123,3 +12142,665 @@ Section 14 is built on the recommendation of each.
 4. **A deposit that cites** (`details-14-deposit-cited-slots.md`). Options: (1) 5h refuses, on a deposit ref, a version that names a slot its push does not introduce (the recommendation); (2) CONSUME deletes a slot only when its origin is the consumed deposit's statement, a HEAD per slot on a P0 path, which also guards a deposit committed before the rule; (3) both.
 
 **Question this section answers.** `evsb-m2-11-dead-record-shared-slot`: none of its options as stated. Its option 1 (the client never lists a slot twice) cannot bind a hostile client and would undo 9.2.5. Its option 2 (the slot carries its push id) is the idea taken, in object metadata rather than in `EvsSlotObject`, with step 6 and evacuation both reading it. Its option 3 (slot ids in pidx/) is not needed and does not close C.
+
+## 15. Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10)
+
+Status: complete (2026-11-12)
+
+Tasks held until complete: SEARCH-M10-17 and SEARCH-M10-28. Both build from this section, in the order 15.7 gives.
+
+Model: `sidecar/sidecartest/model/details/IndexErase.tla`, its configurations (`IndexErase.cfg`, `IndexErase-*.cfg`, `IndexEraseLanded-*.cfg`, `IndexEraseTwin-*.cfg`, `IndexEraseReach-*.cfg`) and `run-indexerase.sh` beside it. Questions filed: `.stack/questions/details-15-resting-diffs.md`, `details-15-reentry-at-the-limit.md`, `details-15-card-version.md`, `details-15-card-per-stream.md`, `details-15-erase-before-cut.md`, `details-15-context-fields.md`, `details-15-small-readings.md`. Question this section answers: `search-m10-46-erased-base-of-a-live-diff`, with its option 1 changed in three places (15.9). It builds on section 1's own bases (R1, R2), its journal and its backfill, and on QD-775's layout, which already drops an erased row in its step 1. It amends 1.2.3, 1.2.4, 1.2.5, 1.2.6, 1.2.8, 1.2.9, 1.3's I1, 1.7 and 1.8 (15.2.12), and changes no rule of section 7 or section 13.
+
+### 15.1 The problem
+
+An erasure is key destruction (§11.12). For the search index it is four kinds of push on the index's ref: a CUT, which adds the erasure's documents to the ref's erasure set, each "up to" a version, and moves the ref's index_epoch, so that every index push built before it is refused; CLOSUREs, which rewrite in place, at the same length and under a fresh key, each index file that holds a listed version; and ERASEs, which destroy the old keys. A CLOSURE may only replace committed file versions with shorter or equal ones, and evs takes one at the storage limit within its eraser's allowance (§11.13's wait row).
+
+Section 1 rebuilt everything else on that ref. A diff now rests on a full entry in another file of its own writer (R1), every push that writes a writer's file replaces that writer's head (R2), and I1 says that an honest writer's unabsorbed diff always has its base. Section 1 left the erasure "unchanged" (1.7), with one exception clause: a CLOSURE need not replace a head, since the CUT's epoch and `choose`'s rule that no diff rests on a listed version fence it. Seven things are wrong on the result. A, D, E and F are the brief's; B, C and G were found writing this.
+
+Terms for this section. The *listed version* L(k) of a doc_key k is the highest version at which the ref's erasure set lists it, 0 if it lists none. A *resting diff* is a diff of k whose base version is at or below L(k) and whose own version is above it.
+
+**A. The erased base of a live diff (`IndexEraseLanded-ErasedBase`, 6 states; `IndexRollup.tla`'s `cut-read` ground, 11).** File d is at version 1, and writer W's full entry of it sits in a sealed slot of W's. An admin's device reads d at 1 and builds a CUT listing d up to 1. W commits version 2, whose entry is a diff on 1, as R1 allows: the push names the epoch that only a CUT moves, so it commits. The CUT commits. It changes one file, the erasure set, so nothing orders it after the edit. A CLOSURE rewrites the sealed slot without version 1, as §11.14's erase row requires. W's diff now has no base; version 2 is not listed, so no reader masks or excuses it; 1.2.9 makes it `index_malformed` naming W, which wrote by the rules, and version 2 reads not yet searchable until a host with the text re-enters it. The two fences bind pushes built after the CUT, and this push was built before it and committed before it. A message never changes, so mail cannot meet this; files and git-mode refs can.
+
+**B. A resting diff is erased content, found here (`IndexEraseTwin-KeepResting`).** A diff's body is the keys its version adds to its base's set and the keys it removes (INDEX-FORMAT.md's entry). Whoever holds a resting diff of d at 2 on 1 and the full set of version 2, which is not erased and which the index must keep, has the erased set: keys(1) = (keys(2) less the added keys) with the removed keys. So an answer that leaves the diff in place and only stops the alarm, which options 1 and 2 of the filed question both do as worded, keeps the erased version's postings under an openable key for as long as the slot stands, in an absorbed slot as well as a live one. FI-19 and I-EVS-13 forbid that.
+
+**C. A merge between the CUT and any repair loses the version, found here (`IndexEraseTwin-MergeDropsResting`, 7 states).** `indexMergeCandidates` as landed leaves a resting diff out before it composes anything, whether or not its base still stands, and raises the writer's watermark over its slot. A merge built after the CUT and committed before the eraser acts therefore leaves version 2 in no shard and in no file a reader scans, with no alarm: a search for it answers no match, not "not yet searchable".
+
+**D. A run card cannot come back (`IndexEraseTwin-SeqVersion`, 8 states).** §16.8 has the CUT list "each run card holding it, at its current version" and the CLOSUREs "re-project each run card that holds the entry". RECORD.md 7.4 makes a card's version the highest seq of the entries folded. Fold the card again without the erased entry and its version is the same, or lower when the erased entry was the newest: the set masks it at every reader, §11.14's epoch row forbids any push to write it, and a CLOSURE can only remove. An ended run's card never returns to search, where §16.10 and FS-80 say it does.
+
+**E. A projection can bring the text back (`IndexEraseTwin-SeqVersion-Late`, 6 states; `IndexEraseTwin-NoSync`, 6; `IndexEraseTwin-CutFirst`, 5).** The CUT lists the card up to the version its eraser read. A projection that folds one more entry and lands between that read and the CUT has a higher version: it is not listed, no CLOSURE takes it, and it holds the erased text for good. After the CUT, a device that still holds the entry's plaintext and has not yet applied the ERASE projects the card at the new epoch with the erased entry in it; nothing in the set tells it which entry to leave out, since the set names documents, not entries. Where the CUT precedes the ERASE, as SEARCH-M10-16's plan entry orders them for every caller, even a device that has just read the erasure ref can still open the entry.
+
+**F. No push is defined to carry a card, and a card has no ref.** 1.2.8 gives a companion push's documents by path, and a reproducer rebuilds every file of a push or raises `index_mismatch`. A card is not a path. Its doc_key needs a ref_id, `IndexDocumentSource.IndexDocuments` visits one ref at one version, and §16.10 and RECORD.md say "one run card per run" of a log, whose entries two ingesters may hold in two streams (RECORD.md 5.4's twice row). §16.10's "at most once every 5 min while the run moves" is a device's timing, which no reproducer can derive. Coverage and backfill have no rule for a card.
+
+**G. Two honest builders can write two cards at one version, found here (`IndexEraseTwin-NoBlock`, 8 states).** 1.2.9 lets a reader test a diff against any copy of its base's version, because copies of one version are equal. "The highest seq folded" does not make them so: an ingester's stream can hold a run with a gap that another ingester's stream fills, and a builder that has applied an ERASE cannot fold an entry that a builder which has not still folds. A diff composed against the other copy then fails its row's trigram count, and an honest writer reads `index_malformed`.
+
+**The requirement.** I1 holds for every honest writer under a CUT that lists what its eraser read, and an edit that survives an erasure stays searchable at every step. No stored index version keeps an erased version's postings under an openable key (FI-19, I-EVS-13), a resting diff's among them. A card is searchable again after an erasure, without the erased text, at a version every reader and reproducer derives alike, and no projection built after the CUT holds an erased entry. One push carries a card, and coverage counts it. No message of format 1 or 2 changes, and evs's rules for a CUT, a CLOSURE and an ERASE stand as built.
+
+### 15.2 The design
+
+#### 15.2.1 The principle
+
+Three ideas.
+
+**An erasure re-enters what it would take out of search.** Before its first CLOSURE on an index ref, the eraser writes, as full entries in its own head on that ref, each version that would otherwise be left with nothing a reader can resolve: the version a resting diff carries, composed from the diff and its base as a merge composes them, with no content read; and each listed run card, folded again from its stream without the erased entries. This is the shape of a DROP's rewrite, which enters the kept head's composed version full in the signer's own head (1.2.3), made into a push of its own because a CLOSURE may create nothing.
+
+**Whatever gives the erased set back is erased with it.** A CLOSURE's rewrite of a slot removes every listed entry and every diff that rests on a listed version, and the erasure's list of files takes in every file that holds such a diff. Readers, merges and roll-ups resolve a resting diff through its base while the base stands, and pass over it in silence once the base is gone, so no step of an honest erasure alarms an honest writer.
+
+**A derived document's version carries the index epoch.** A run card's version is the index_epoch its push names, above the stream version of its run's newest entry. A CUT lists a card through the epoch it names, which covers every projection made before the CUT whatever landed after its eraser read, and every projection made after it is above the list. The erasure destroys the entry's body before its CUT, and a builder that reads a new epoch reads the erasure ref before it folds, so no projection at or above the CUT's epoch can hold the entry. A card is a function of one stream at one version and of the erasures whose CUT precedes its epoch, so a companion push carries it, a backfill covers it, and a reproducer rebuilds it.
+
+#### 15.2.2 Terms
+
+```text
+L(k)             the highest version at which the ref's erasure set lists doc_key k (IndexErased.version), 0 for
+                 none; a version v of k is listed when v <= L(k) (`indexView.erased`, as landed)
+resting diff     a diff entry of k, in any slot of any writer, absorbed or not, with base version <= L(k) and
+                 own version > L(k). Diffs sit only in slots (1.2.3)
+excused          a resting diff whose base no file of its writer holds (1.2.1's base of a diff). An excused diff
+                 breaks no format and alarms nothing
+cover of (k, v)  an entry of k at a version >= v that a reader scans and that is not a resting diff: a row or a
+                 tombstone of a bucket shard or an all shard; an entry in a head, a sealed slot or an unabsorbed
+                 large entry (a full entry, a tombstone, or a diff that is not resting)
+owed (k)         for a key k with a resting diff at the list's head: v* = the highest version among k's resting
+                 diffs; k is owed at v* when no cover of (k, v*) stands
+re-entry         a full entry of an owed key at its owed version, or a run card folded again, in the eraser's own
+                 head (15.2.4)
+stream R         one ref of a record log that holds entries; an owned stream takes only its sidecar's pushes
+                 (§11.8), so R has one writer, W_R
+source entry     an entry of one of the kinds RECORD.md 7.4's sources row names for the log's card (a vault:
+                 context, tool_call, change, transcript; a team record: context, change, approval, publish,
+                 route, reach, coverage)
+card (R, r)      the run card of run r in stream R: the derived document named run/ || run_id under R's ref_id
+E                the index_epoch a push names: the version of the index ref's newest CUT before it (11.8's 5d)
+c(R, r, p)       the highest entry version, among the source entries of r that R holds at version p, erased or
+                 not: the stream version at which the run last changed in R
+erased at E      an entry is erased at epoch E when an ERASE names it, by its key row or, through its sealed note,
+                 by its entry_id (RECORD.md 8's every copy), and that ERASE's erasure has a CUT on the log's
+                 ur/index that named an epoch below E
+blocked          a card whose builder cannot open one of its source entries because an ERASE has taken its key,
+                 where that entry is not erased at the builder's E
+```
+
+Whether an erasure has a CUT below E is read from two places, and no third is needed. The erasure set at the push's base lists it: then its CUT named `IndexErasure.epoch`, and E is above that. Or the set does not list it and one of its ERASEs' notes says complete: then a later CUT dropped it, which a CUT does only for a complete erasure whose own CUT named an epoch below `listed_since` (§11.12's cut row), and E is at or above `listed_since`. An erasure that the set does not list and no ERASE completes has no CUT below E.
+
+#### 15.2.3 The erasure's list
+
+§11.14's erase row has the eraser list, at a head at or after its CUT, every index file holding one of its documents. The list gains the resting diffs, and the row's history clause with it:
+
+```text
+list(index ref I, erasure X), at a head b at or after X's CUT:
+  for each doc_key k that X lists, in every bucket and in all:
+      held(k)    = every file with an entry of k at a version <= L(k): each writer's slots and large entries,
+                   absorbed or not; the bucket shard holding its row; the all shard holding it (I-EVS-11)
+      resting(k) = every slot with a resting diff of k
+  the files to rewrite = held(k) and resting(k), over X's keys: one rekey object each (§11.13's wait row)
+  the keys to destroy besides = the key of every index path whose retained version holds an entry of k at or
+      below L(k) or a diff of k on a base at or below L(k), found from the ref's history as §11.14's erase row
+      finds a held version, a reused slot, a shard the document left and a rolled bucket
+```
+
+**No later push lengthens it.** After the CUT every index push names its epoch or a later one, so its builder has applied the set: it writes no entry of k at or below L(k) (§11.14's epoch row), and `choose`'s B leaves a listed version out, so it writes no diff on one. A writer's push that seals its head as it stood (R2) writes the head's bytes again at the same path, which is a new version of a file already on the list; the CLOSURE for that path then gets 409 and rereads it, as the erase row has it. A merge or a roll-up after the CUT drops a listed row in its layout's step 1 (QD-775) and writes none.
+
+**What a writer's own push does with a resting diff of its own.** Nothing new. `plan` keeps the entry in the head, since its version is not listed, and keeps its base's file, since an unabsorbed diff names it. The eraser acts whether or not the writer ever pushes again, so no rule is added to `plan`.
+
+#### 15.2.4 The re-entry push
+
+A re-entry push is an ordinary index push by the eraser's sidecar as a writer. It names the epoch, carries no flag, and is built in a companion push's order (1.2.6), so R5's pin argument covers it.
+
+```text
+reenter(index ref I, erasure X):
+  1 t = now, before any read
+  2 read I's head from evs: base b, index_epoch E, the erasure set, the eraser's own files and manifest row in
+    the bucket of t. The set must list X, else X's CUT is committed first (§11.12's reconcile row)
+  3 list(I, X) at b (15.2.3)
+  4 documents:
+      for each key k of X that is owed at b, at v*:
+          the resting diff of k at v*; of several, the one whose writer_sidecar_id is lowest, then the one in
+              the slot with the highest seq (copies of one version are equal, so the choice only makes the
+              push a function)
+          its base, by 1.2.1's rule, in that diff's writer's files; keys = the base's set with the diff's
+              delta applied, which must have the row's trigram count, as at a merge (1.2.4)
+          the document {kind full, key k, version v*, row: the diff's row, keys, replaces: 0}
+          a set that D6 skips under the diff's row (1.2.2; QD-760) is not entered, and reads as 1.2.9's
+              malformed row has it
+      for each run card X lists whose stream this device holds: 15.2.10's re-projection
+  5 plan(b, the eraser, t, documents, coverage) (1.2.3), where coverage is the rows of the eraser's newest head,
+    none moved; in key order, in pushes whose encoded entries stay within DirectBytes, so that none merges
+  6 send within IndexPushLife of t. On 409 for a path, 409 INDEX_EPOCH, 429 TIME_AHEAD or the life passing: from
+    step 1. On a quota refusal (§11.13's limit row): 15.2.5's wait
+```
+
+**Bounds on the eraser's head.** An erasure lists at most what one erasure set holds, 16,208 B, about 700 path documents of 22 or 23 B each beside its own 50 B, and owes at most one version a document. A re-entered entry is a full entry: in the head when it is within EntryMax, else a large entry of its own, by `plan`'s rules and under its caps (RingSlots, KeepSlots, SlotCount, the seal, a merge first at a ninth other slot). The eraser already holds every file it lists, so it can merge. A push is at most DirectBytes of entries, 256 KiB; 700 entries of 8 KiB are 22 pushes, and the case this section expects is one entry.
+
+**Why the composed entry is the document.** The diff's row is the row of version v* and its delta was taken against the base itself (1.2.3), so the composed set is the key set extraction gave for v*. A host with the text checks the entry against its path's state, as it checks any entry of a push that moves no coverage row (1.2.8). The entry holds nothing of the erased version: its keys are v*'s.
+
+**Which bucket.** `plan`'s: the bucket of t, or the newest bucket already holding an entry of the document where that is newer (D-EVS-45's move, which the eraser can always make, since its list read those buckets). A re-entry in a newer bucket than its resting diff is found by newest-wins like any entry. It cannot land below a version a roll-up has moved or dropped (I5): an entry of k above v* would be a cover, so none stood at b, and one committed after b cannot be rolled within IndexPushLife (1.2.6's argument).
+
+#### 15.2.5 CLOSUREs, their order and the storage limit
+
+```text
+clean(file, set):
+  a slot or large entry   the file without each entry e with e.version <= L(e.key), and without each diff e with
+                          e.base_version <= L(e.key); entries in key order as before; the header's count and
+                          body length set; padded to the replaced version's exact length (§11.14's pad row)
+  a shard                 as §11.14's erase row has it: without each row and tombstone of a listed version
+```
+
+A CLOSURE push replaces each file it names by `clean` of the version it replaces, and nothing else. It is a function of the replaced files and the erasure set at its base, so a reproducer checks it as §11.14's reproduce row says and raises `index_mismatch` naming the CLOSURE's signer on one that left a listed entry or a resting diff in a file it rewrote.
+
+**Order on one index ref.**
+
+```text
+1 the CUT (§11.12), then list(I, X)
+2 reenter(I, X) until no key of X is owed and every listed card this device can fold stands (15.2.10)
+3 CLOSURE and ERASE pairs over the list, sized to the allowance (§11.13's wait row), in path order
+4 the erasure's last ERASE says complete, as today
+```
+
+No CLOSURE of X rewrites a file of resting(k) or the file holding the base of one of k's resting diffs while k is owed. That is the whole ordering rule for a path document: once k is not owed, its files go in any order, and between a CLOSURE that takes a base and the one that takes its diff the diff is excused (15.2.6). A run card's files never wait: a listed card is removed whether or not it has been folded again (15.2.10).
+
+**At the storage limit, or while the network is spent.** evs takes the CUT, the CLOSUREs and the ERASEs (§11.13's limit row) and refuses the re-entry push, which adds payload. Then:
+
+```text
+a key that is owed     its resting(k) slots and the files of their bases wait, with their ERASEs, until evs takes
+                       the re-entry; every other object of the erasure goes on. The base stays masked from the
+                       CUT (§11.14's cut row) and stays openable to key holders meanwhile
+a listed card          its CLOSUREs and ERASEs go on; the card is out of search until evs takes a re-projection
+                       (15.2.10)
+retry                  the re-entry is sent again at each turn of the eraser's allowance and at least every
+                       IndexErase.ReentryRetryInterval (10 min), and §5.4's erasure event shows `waiting` with
+                       the count of documents to re-enter
+```
+
+How often a key waits: the edit must commit in the seconds between the eraser's read and its CUT, and the network must then reach its limit, or be spent, in the seconds before the re-entry, which is the eraser's next push after the CUT. At the limit itself no content push commits, so no edit can make a resting diff there. 15.9 puts the choice to the owner.
+
+#### 15.2.6 Readers, merges and roll-ups
+
+```text
+a reader (1.2.9)   resolves a diff in one step from its writer's other files, through a listed base while that
+                   base stands: the base's set is used to compose and for nothing else. A diff whose base no
+                   file holds is excused when it is a resting diff: no candidate, no alarm, nothing shown as not
+                   yet searchable on its account. Any other baseless unabsorbed diff is index_malformed, as today
+a merge (1.2.4)    leaves out every entry at a listed version, a diff by its own version, as today. A full entry
+                   at a listed version is still the base of a resting diff while it stands: the diff is composed
+                   onto it and its version is a candidate. An excused diff is left out and alarms nothing
+a roll-up (1.2.5)  the same two rules in its step 3
+```
+
+Why a merge composes through the base rather than leaving the diff out: a merge raises the writer's watermark over the diff's slot, after which no reader scans it. If the merge left the diff out, the version would be in no shard and in no scanned file until the eraser's re-entry, and C is that window. Composed, the version is in the shard, the shard's row is a cover, and the eraser owes nothing for it.
+
+A reader needs no history for the excuse. It holds the erasure set, since it masks by it, and the test is the diff's own base version against L(k).
+
+#### 15.2.7 Resume
+
+§11.12's reconcile row stands: the eraser's device at its next start, another device of its member 25 h after its CUT or last ERASE, any device that may erase once the eraser is revoked, reaped, suspended or parked. Each step above reads only evs's state, so a resumer runs them as the first eraser would:
+
+```text
+the CUT            committed by the resumer where a crash or a full set left it missing (reconcile row)
+the list           taken again at the resumer's head
+re-entries         owed is judged at that head. A version the first eraser entered is a cover, in that eraser's
+                   head, so it is not entered twice; one it had not entered goes into the resumer's own head
+an owed key whose  cannot arise from an honest eraser, which rewrites no base while its key is owed. A resumer
+base is gone       that meets one enters nothing for it, removes the diff with the rest, and the version is left
+                   to a host with the text, as 1.2.9's malformed row has it for any lost entry
+pairs              first an ERASE for each CLOSURE no ERASE followed, then the rest (reconcile row)
+```
+
+The first eraser's head stays where it is when its device is revoked: its entries are ordinary entries of that writer, absorbed by the next merge that reads its sealed slots.
+
+#### 15.2.8 The run card: identity, fold and version
+
+```text
+identity   card (R, r): doc kind derived, name run/ || run_id, chunk 0, doc_key under R's ref_id (§11.14's key
+           row), the row's ref_id R's, the locator the name. One card a run a stream
+writer     W_R, the stream's writer: the capturing daemon for its own stream, the ingester for the stream it
+           ingests into (RECORD.md 5.4's index row). Others write it only as a backfill or a re-entry
+fold       fold(R, r, p, E) = the source entries of r that R holds at p, less those erased at E, in the order
+           (seq in their writer's chain, then entry_id bytes). RECORD.md 7.4's mapping over them, "first" and
+           "newest" read in that order, gives the row and the text; where 7.4 takes "the newest context", it is
+           the newest among the entries folded. A fold with no entry is no document
+version    E * 2^32 + c(R, r, p), E the index_epoch the push names. The split is
+           IndexFormatSettings.CardVersionBitCount, 32. A stream version or an epoch at or past 2^32 writes no
+           card (errIndexCardVersionSpace), and R's pin stops below it, so its run reads not yet searchable
+replaces   for 1.2.3's choose: the version of this writer's newest entry of the card in its own files at the
+           push's base, 0 where it has none or the set lists it
+```
+
+**Two streams, two cards.** Two streams of one log that hold entries of one run, as two ingesters' streams can (RECORD.md 5.4's twice row), give two cards, each the fold of what its own stream holds, as two copies of one entry are already two documents under two refs (RECORD.md 7.1's row). §16.10's group row joins them by field 10: the run's started is the earlier of the two, its last activity the later, its title and fields the card's whose row time is newer. A card is thereby a function of one ref, which is what `IndexDocumentSource.IndexDocuments(refVersion)` visits and what a coverage row names.
+
+**Why the stream version and not the seq.** c is read from R's state at p by any device, with or without the bodies, and it grows with every entry the run gains in R, in whatever order an ingester wrote them. The highest seq folded does neither: a stream that holds a run's entries 1 to 64 and 129 to 192 and later gains 65 to 128 has two folds at seq 192.
+
+**Why the epoch.** Compared as numbers, versions order by epoch first. Every index push names the epoch in force (11.8's 5d) and a CUT moves it, so "made before this CUT" is a range of versions: everything below (the CUT's version) * 2^32. Nothing else on the index ref separates the projections a CUT must list from the ones that follow it, and the eraser's read of "the current version" cannot (E). An unrelated CUT on the same ref also moves the epoch; a card it does not list keeps its entry and its version, and its next projection is above both.
+
+**What decides a card's bytes.** R's source entries of r at versions at or below c, with their bodies; E; and which of those entries are erased at E. Entries of a stream are created and never changed, and 15.2.10 keeps a BASE from removing one whose erasure is not complete, so the first is the same for every device that reads R at or after c. The third is the same for every builder that names E (15.3's I12). So two entries of a card at one version are equal, as 1.2.9 needs.
+
+**An entry document's fields 9 and 11.** RECORD.md 7.1 fills them, for an entry that is its own document, from "the run's first context entry in this log". Read for a copy in stream R at a push with pin p and epoch E: the first, in the fold's order, of the run's context entries that R holds at p and that are not erased at E; empty if none. An entry document whose builder cannot open that context entry while it is not erased at E is blocked as a card is, and holds R's pin the same way. An erasure of a context entry does not list the run's other entry documents: a row written before it keeps the agent label and the session ids it read, which are names the run's other entries carry in their own bodies (a handoff names an agent label, RECORD.md 4.3), and a rebuild at a later epoch writes them from the next context entry or empty. So two copies of an entry document at one version can differ in those two fields across an erasure's CUT, and nowhere else. Nothing rests on their equality: an entry's path is created once, so no diff has an entry document as its base, and newest-wins shows either. `ur record erase`, listing what it will destroy (RECORD.md 8), says for a context entry how many of the run's other entry documents keep its label and session ids. 15.9 puts this to the owner.
+
+#### 15.2.9 The card's carrier, coverage and backfill
+
+A card rides its stream's index pushes on the log's `ur/index`: W_R's companion push, a backfill, or a re-entry. 1.2.6 gains, for a record log:
+
+```text
+the journal
+  unit      a unit of stream R at version c holds, beside the entry documents its log indexes (RECORD.md 7.1's
+            documents row), one card marker {doc_key, name} for each run that a source entry created at c
+            belongs to. A marker has no version, row or key set: its card is folded at the build. It adds
+            nothing to the device's local overlay (the search row), so a card is as fresh as its last push,
+            which is §16.10's cadence
+  again     a unit {R, run_id, erasure_id} with no version, appended when this device applies an ERASE that
+            names a source entry of the run in R and the device holds R's entries: W_R; the eraser; an indexer
+            serving the repo for search; where none serves it, a desktop or daemon that mirrors the log
+            (§11.14's coverage row names the same devices for a backfill)
+  ApplyCut  removes no marker and no again unit: a card's version is assigned at the build, above every
+            version a set lists
+
+a companion push
+  when      for a record log the interval is RecordSettings.CardInterval (5 min) in place of
+            Search.CompanionInterval; a build is also due at once when a unit holds a run's first source
+            entry or the coverage entry that ends it (§16.10's start and end)
+  2a        where this build may carry a card and E is not the epoch at which this device last did this step
+            for the log: read the log's `erasure` ref's head from evs, not from a cache, bring the replica to
+            it and apply every ERASE (§11.12's after row); then record E beside the journal. The read comes
+            after step 2's
+  4         per run with a marker among R's due units: one card, fold(R, r, p_R, E), a put at
+            E * 2^32 + c(R, r, p_R); a fold with no entry gives nothing. A marker is dropped as covered as a
+            path's unit is: a horizon row for R at the push's base is at or above its c
+  blocked   where the card of a marker is blocked (15.2.2), R's pin for this build is one below the lowest c
+            of a due unit holding a marker of a blocked card. Units above it stay committed, and where none is
+            at or below it R gives this build nothing
+  again     an again unit is due when its erasure has a CUT below E and, on a device other than that
+            erasure's eraser, t is at or past the erasure's cut_ms + BackfillAge while the set lists it. It is
+            dropped as covered when the device's copy of the index holds an entry of the card at an epoch
+            above the erasure's `IndexErasure.epoch`, or, where the set no longer lists the erasure, at or
+            above `listed_since`. Else it gives the card as a marker does. Before its erasure has a CUT below
+            E it waits
+  5         coverage as today; a build that carries only again units moves no row
+
+a backfill
+  4         documents gain: for each run whose newest source entry at p_R was created by an unindexed version
+            at or below h, its card, fold(R, r, p_R, E) at E * 2^32 + c(R, r, p_R). A run that changed again
+            after h is left to that change's own push. h also stays below the first version whose card is
+            blocked
+```
+
+**Coverage counts a card as it counts a path.** A version of R is indexed when a coverage row for R reaches it (§11.14's coverage row): the push that carries that row holds the entry documents of every version up to it and the card of every run those versions touched, each at its state at the pin. A version that adds only entries that are neither documents nor sources adds a unit with no document, and the build still raises the row (1.2.6). A run that is blocked holds its stream's row below its first blocked version, so its later entries read not yet searchable until the CUT lands; other streams and other repos are not held.
+
+**The cadence is no input.** Whichever push covers (q, p] carries the card at p of every run touched in it, so a reproducer derives the card from the push and never from a timer. §16.10's "at most once every 5 min while the run moves" is the interval above. A build that the device makes sooner, because its head would seal or it is about to sleep, carries the cards due then too.
+
+**Reproduction.** 1.2.8's table gains:
+
+```text
+a card            fold(R, r, p, E) at E * 2^32 + c(R, r, p): R's source entries of the run at p with their
+                  bodies; the push's index_epoch; the erasure set at the base and the notes of the ERASEs of
+                  each erasure with a CUT below E; record extractor 1 (RECORD.md 7.4)
+a re-entry push   15.2.4's documents, from the listing at the push's base and, for a card, as above
+```
+
+A card's version names its own inputs: its low 32 bits are c, and no source entry of the run lies in R between c and the pin, so fold(R, r, p, E) is the fold of R's entries of r at or below c; its high bits are E. A card in a push that moves no row, an again unit's or a re-entry's, is therefore checked from the entry alone (1.2.8).
+
+A reproducer checks a card later than its builder made it, and may hold ERASEs the builder did not. For each source entry it cannot open: where the erasure set at the push's base lists that entry's erasure, the entry was erased at E and is left out. Where it does not, the reproducer cannot tell an erasure dropped before the base from one whose CUT came after it, so it folds without the entry: equal bytes pass, and unequal ones mean it lacks an input, since the builder may have folded the entry before the ERASE reached it. It then fetches the file and raises nothing (§11.14's reproduce row). One that can open every entry the fold names and builds other bytes raises `index_mismatch` naming the push's signer.
+
+#### 15.2.10 A card through an erasure
+
+```text
+erase(log, entries), by a device that may erase them (RECORD.md 8):
+  1 read every stream and deposit ref of the log to its head; find every copy of each entry (RECORD.md 8)
+  2 ERASE every copy's key row and each deposit slot that RECORD.md 8 names, in as many pushes as their keys
+    take. The bodies are gone from here. Each ERASE's sealed note is the erasure's ErasureBody, naming
+    the entry ids, as landed (record_erase.go). No ERASE of this step or the next says complete: an
+    erasure is complete only after its CUT
+  3 read the streams' heads again; ERASE a copy found now, as step 2
+  4 IndexEraser.Cut on the log's ur/index:
+        a copy that is a document   {its doc_key, its path's entry version}
+        card (R, r), for each       {its doc_key, through the epoch}: the CUT writes
+        stream R holding a copy     (the epoch the CUT names) * 2^32 + 2^32 - 1 as its version, so every
+        of a source entry of r      version of that epoch or an older one, and writes it again on a rebuild
+                                    after 409 INDEX_EPOCH
+    A full set makes this step wait (§11.12's cut row), and steps 5 to 7 with it
+  5 reenter(ur/index, X) (15.2.4): each listed card is folded at its stream's head, fold(R, r, head, E), and
+    entered full at E * 2^32 + c(R, r, head) in the eraser's own head. A fold with no entry enters nothing. An
+    eraser that does not mirror the log fetches the run's source entries for it, at most
+    IndexErase.CardFetchByteCount (16 MiB) a card, and past that enters nothing
+  6 IndexEraser.Rewrite: the list and the CLOSURE and ERASE pairs (15.2.5)
+  7 the erasure entry (§16.8)
+```
+
+Step 4 lists a card for every stream that holds a copy of a source entry, whether or not the index holds that card yet: a projection in flight is then listed too. An erasure none of whose entries is a document or a source entry has nothing to list and takes none of steps 4 to 6, as today.
+
+**The fence.** Let X erase entry e, and let its CUT name epoch E_X. Every index entry of a card whose fold holds e was written by a push naming an epoch at or below E_X, so X's CUT lists it. A push naming a higher epoch names the version of X's CUT or of a later one. Its builder therefore read `ur/index`'s head after X's CUT committed, and at step 2a then read the `erasure` ref's head from evs and applied it. X's ERASEs of steps 2 and 3 committed before its CUT was built. So the builder had destroyed its plaintext and its key of e, and e was erased at its epoch: it could not fold e, and the rule did not let it. The same holds of a backfiller, a re-entry and a rebuild, which build by the same steps. What it rests on: the order of steps 2 to 4 on the eraser; step 2a's read coming after step 2's; and evs's refusal of an index push that names another epoch than the head's (I-EVS-17).
+
+**Between the ERASE and the CUT.** A builder that has applied the ERASE holds a blocked card and builds none; one that has not still folds e, at the old epoch, which the CUT will list. No two builders write different cards at one version. A device that applies an ERASE of a source entry it holds also masks the entry's card whole in its own searches, from that moment until it applies a set version that lists the card; from then the listed versions are masked and no others. The window is one push for an erasure that is not waiting on a full set. Until the CUT, a device that has not applied the ERASE still finds the card's old versions, as it would under the other order, where the CUT waits on the same room in the set; here the body is already gone.
+
+**Who folds the card again.** The eraser, at step 5, at once. Every other device that held the stream's entries when it applied the ERASE has an again unit (15.2.9), which it builds BackfillAge after the CUT unless the index already holds the card above the list. So a card whose eraser could not enter it (a phone past CardFetchByteCount, a crash before step 5, a quota refusal at the storage limit) is entered by its stream's writer or a mirror, and an erasure's `complete` does not wait for it: complete is every key gone (§11.12), and step 6 runs whether or not step 5 could. A card has no resting diff: one would have a base below the CUT and a version above it, and `choose` takes no listed base.
+
+**A copy that arrives late.** RECORD.md 8 has a log admin's daemon ERASE, under the same erasure_id, a live copy of an erased entry that it reads at a later sync. It then runs steps 4 to 6 for that copy: IndexEraser.Cut called for an erasure the set still lists adds the copy's documents to that erasure's entry, and where the set has dropped it adds the entry again; the card of the copy's stream is listed through the epoch that CUT names. Until then the card's next projection already leaves the entry out, since its builder holds the ERASE, and newest-wins shows that one.
+
+**A BASE waits for the erasure.** The weekly BASE (RECORD.md 8's expiry row) removes from a stream only entries whose erasure is complete. An entry file removed earlier would change what a builder that has not applied the ERASE reads at a version it shares with one that has.
+
+**Masks at a reader.** A key the set lists is masked at or below L(k), whether or not an ERASE names it. A key that an ERASE names and no set version the device holds lists is masked whole, until a set version lists it or, as today, the rewritten files are cached. So an edit that survives an erasure, and a card folded again, show as soon as they are synced.
+
+**The directory.** §16.11's announcement documents keep their rule: a directory erasure removes an announcement's document whole and folds nothing again, and an announcement's version stays the Announcement's.
+
+#### 15.2.11 Settings
+
+Every limit is a settings field (QD-702). A field marked format is one every device must hold alike, as `IndexFormatSettings`' others are.
+
+```text
+IndexFormatSettings.CardVersionBitCount   32       format: the low bits of a card's version that hold c
+IndexEraseSettings.ReentryRetryInterval   10 min   between tries of a re-entry push that a quota refused
+IndexEraseSettings.CardFetchByteCount     16 MiB   the most source-entry bytes an eraser that does not mirror
+                                                   the log fetches to fold one card again
+RecordSettings.CardInterval               5 min    as landed: now the companion interval of a record log
+BackfillAge, DirectBytes, IndexPushLife            section 1's, used here unchanged
+```
+
+#### 15.2.12 Amendments to section 1
+
+Each place is marked "(amended 2026-11-12, section 15)" where it stands.
+
+```text
+1.2.3   The exceptions: a CLOSURE's two fences bind pushes built after the CUT; a diff that landed before it on
+        a version the CUT then lists is a resting diff, which 15.2.4 re-enters and 15.2.5 removes
+1.2.4   merge: a full entry at a listed version is still the base of a resting diff while it stands; an
+        excused diff is left out and alarms nothing
+1.2.5   roll-up step 3: the same
+1.2.6   the journal's card markers and again units; ApplyCut removes neither; a record log's interval; step 2a;
+        step 4's cards, blocked pin and again units; a backfill's cards
+1.2.8   a companion push's documents on a record stream; a card's and a re-entry push's inputs
+1.2.9   chains and malformed: a diff resolves through a listed base while it stands; an excused diff is no
+        candidate and alarms nothing
+1.3     I1's statement and its proof's last sentences
+1.7     the note for SEARCH-M10-17
+1.8     the proposed I-EVS-18, in I1's amended wording
+```
+
+### 15.3 Invariants and why they hold
+
+```text
+I1 own bases       (amended) every diff in an unabsorbed slot whose base version the erasure set does not list
+                   has its base, a full entry of its key, in another file of its own writer in its bucket
+I9 survivors       for each key, the newest version above L(k) that the index holds is one a reader resolves:
+                   a full entry, a shard row, or a diff whose base stands. No step of an erasure, and no merge
+                   or roll-up beside it, lowers it (FI-18 through an erasure)
+I10 erased gone    once an erasure's last ERASE commits, no stored version of an index file under an openable
+                   key holds an entry of one of its documents at or below L(k), a diff resting on one, or a
+                   version of a card that folds an entry it erased (FI-19, I-EVS-13)
+I11 the card fence an index entry of a card whose fold holds an entry that erasure X erased was written by a
+                   push naming an epoch at or below the one X's CUT named, so X's CUT lists it
+I12 one fold       two index entries of one card at one version hold one fold, so copies of one version are
+                   equal for a derived document as for a path's (1.2.9)
+I13 a card returns once a device that holds the stream has built after X's CUT, the index holds an entry of
+                   the card above X's listed version whose fold holds no entry erased at its epoch, and no
+                   CLOSURE of X removes it
+I8 a function      (extended) a card, a re-entry push's files and a CLOSURE's files are functions of 15.2.9's,
+                   15.2.4's and 15.2.5's inputs
+```
+
+**I1.** Section 1's induction stands for every push built after a CUT: `choose` takes no listed base, so such a push adds no diff whose base version is listed, and the amended statement asks nothing of a diff whose base version is listed. For a diff whose base version is not listed, the only new step is a CLOSURE, and `clean` takes from a file only listed entries and resting diffs: it removes no full entry at an unlisted version, so it removes no base that the statement protects. Before the CUT nothing is listed and the statement is section 1's. What changed is which diffs are excepted: section 1 excepted "a document the erasure set lists", which excused version 2 of A's file only by reading "lists" as "lists at any version"; the chain reader read it by the diff's own version and alarmed. The exception is now by the base's version, on both sides. Model: `OwnBases`; `IndexEraseLanded-ErasedBase` is the old reading; `IndexEraseReach-Excused` shows an excused diff standing between two CLOSUREs, which is why the exception is needed at all.
+
+**I9.** Let v be the newest version of k above L(k) that the index holds, and take the steps an erasure adds. The CUT raises L(k). If v's entry is full, or a diff on an unlisted base, nothing changed for it. If it is a resting diff, its base still stands, since no CLOSURE of this erasure has run and a writer keeps a base while an unabsorbed diff names it (1.2.1's kept), and a reader resolves through a listed base (15.2.6). A merge then composes it through the base into the shard, or leaves it for the eraser; either way a reader still finds v. The re-entry adds a full entry at v where no cover stood. Only then may a CLOSURE take the base or the diff (15.2.5's order), and from then v's cover is the re-entry, a full entry at an unlisted version, which no CLOSURE touches. A writer's next push of k replaces its head's entry of k by a full entry at a higher version, which is then the newest. An absorbed resting diff was composed into its shard when its slot was absorbed, because its base stood then by I1, so its version has a cover without any re-entry. Model: `Searchable`; `Composable` (what the eraser owes it can compose); twins `NoReentry`, `ClosureFirst`, `MergeDropsResting`.
+
+**I10.** The list holds every file with a listed entry or a resting diff at the list's head, and no later push adds one (15.2.3). Each such file is rewritten by `clean` under a fresh key, and the pair's ERASE destroys the old key, which every stored version of that path shared (§11.14's keys row); the ERASEs also name the key of every path whose retained version holds one, the resting diffs among them. For a card, I11 puts every version that folds an erased entry in the list. A re-entry holds nothing erased: a composed set is the surviving version's own (15.2.4), and a card folded again leaves out every entry erased at its epoch. Model: `ErasedGone`, `CardGone`; twin `KeepResting`.
+
+**I11.** 15.2.10's fence. Model: `Fence`; twins `CutFirst` (the CUT before the ERASE), `NoSync` (no step 2a), `SeqVersion` with `IndexEraseTwin-SeqVersion-Late` (a version without the epoch, listed as read).
+
+**I12.** A version fixes E and c. Every builder that names E folds R's source entries of r at versions at or below c less those erased at E. The entries are the same for each (15.2.8). "Erased at E" is the same for each: the erasures with a CUT below E are fixed by E, since a CUT moves the epoch; each such erasure's ERASEs of steps 2 and 3 precede its CUT; and every builder at E has applied them (step 2a). No builder folds fewer: one that cannot open an entry not erased at E is blocked and builds nothing. RECORD.md 7.1's determinism row then gives equal bytes. Model: `CopiesEqual`; twin `NoBlock`; `IndexEraseReach-Blocked`.
+
+**I13.** After X's CUT a builder's fold leaves out X's entries (I11's argument) and its version is at least (the CUT's version) * 2^32, above X's listed version. The eraser builds it at step 5; where it cannot, an again unit on each device that held the stream is due BackfillAge after the CUT. `clean` removes only listed versions. A later erasure of another entry of the run lists this version in turn and folds the card again. Model: `CardStands`; twin `SeqVersion`; `IndexEraseReach-Returns`, `IndexEraseReach-Twice`.
+
+**I8.** 15.2.4, 15.2.5 and 15.2.9 name each input, and each is on evs or in the push: the listing at the base, the set, the statement's epoch and time, the stream at its pin, the ERASE notes.
+
+**The model.** `IndexErase.tla` holds two specifications. `SpecPath` is one path document on an in-ref index: a writer that edits it with full entries and own-base diffs, seals its head, has its sealed slots merged and takes absorbed slots again, beside an eraser whose CUT lists the version it read (IndexRollup.tla's CutVersion "read"), re-enters, and rewrites one file a CLOSURE in any order. `SpecCard` is one card of one stream: the stream's writer, a backfiller and the eraser project it, devices apply ERASEs at any time, and erasures run one after another. A push is built and committed in one step, which the epoch guard justifies (IndexRollup.tla's `CutFences`); sizes, buckets, large entries, roll-ups, the journal and coverage are IndexMerge.tla's and IndexRollup.tla's and are not here. `IndexRollup.tla` and its `cut-read` ground are the data lane's and are not edited: 15.7 says what that lane changes for them to pass.
+
+Every run below is TLC at revision d8fb231 through `.stack/tools/tlc`, breadth-first, 4 workers, by `run-indexerase.sh details-15 all` from the track on 2026-11-12, on a host at a load average near 100. A design run goes to the end of its graph. A run that must fail stops at its first violation, so its trace length is fixed and the states it had counted by then vary with the workers; the table leaves those out.
+
+```text
+design, must pass                 specification   distinct states   depth   time        disk
+IndexErase                        SpecPath               27,460      19     4 s          1 MB
+IndexErase-Long                   SpecPath            1,029,883      27     1 min 12 s   126 MB
+IndexErase-Card                   SpecCard              181,881      22     12 s         29 MB
+IndexErase-CardLong               SpecCard            2,741,466      31     2 min 48 s   231 MB
+
+must fail, with                   invariant violated     trace
+IndexEraseLanded-ErasedBase       ChainsResolveLanded    6
+IndexEraseTwin-NoReentry          Searchable             6
+IndexEraseTwin-ClosureFirst       Searchable             6
+IndexEraseTwin-KeepResting        ErasedGone             8
+IndexEraseTwin-MergeDropsResting  Searchable             7
+IndexEraseTwin-CutFirst           Fence                  5
+IndexEraseTwin-NoSync             Fence                  6
+IndexEraseTwin-NoBlock            CopiesEqual            8
+IndexEraseTwin-SeqVersion         CardStands             8
+IndexEraseTwin-SeqVersion-Late    Fence                  6
+
+must reach                        the state                                               trace
+IndexEraseReach-Owed              after the CUT a version rests on the listed one alone   5
+IndexEraseReach-Reentered         the eraser enters a version in its own head             6
+IndexEraseReach-Excused           a resting diff stands after a CLOSURE took its base     7
+IndexEraseReach-ComposedThrough   a merge composes through a listed base                  7
+IndexEraseReach-Raced             a projection with the entry lands after the read        7
+IndexEraseReach-Blocked           a builder holds a blocked card                          6
+IndexEraseReach-Returns           an erasure ends with the card folded again              8
+IndexEraseReach-Twice             a second erasure lists the first's re-projection        14
+```
+
+The design configurations check `PathTypeOk`, `OwnBases`, `Searchable`, `ErasedGone` and `Composable`, or `CardTypeOk`, `Fence`, `CardGone`, `CopiesEqual` and `CardStands`. `IndexErase` runs d to version 4 through 3 seals, 2 merges, 2 reuses and 2 erasures; `IndexErase-Long` to version 6 through 4 seals, 3 merges, 3 reuses and 3 erasures; `IndexErase-Card` a stream of 3 entries, 2 seals and 2 erasures; `IndexErase-CardLong` 4 entries, 3 seals and 3 erasures. Each twin, landed and reach run is the smallest ground that shows its trace.
+
+**What the model does not show.** Liveness: that a re-entry is eventually sent is the eraser's loop and reconcile's resume, not a property TLC was given. The storage limit: a refused re-entry is the model's eraser not yet taking its `Reenter` step, during which every safety invariant holds and `ErasedGone` is not yet owed. Two writers holding resting diffs of one key, large entries and buckets: 15.2.4's rules for them are the one-writer rule applied to each file, and 15.6's unit tests carry them. Two streams holding one run: each card is the model's one card. An entry document's fields 9 and 11 (15.2.8): its blocked rule is the card's, and 15.6 has its unit test.
+
+### 15.4 Cost
+
+**A re-entry for a path document.** One full entry in place of a diff: 1.4 measured a source file of 29 KB to 137 KB at 1,894 B to 3,475 B of key set full, and a 1% edit's delta at 92 to 279 B. One push staging one head, at most 16,208 B, in an erasure that already stages a slot a rewrite. It reads no content and no file the list had not read. The case needs an edit of the erased document to commit between the eraser's read and its CUT, so most erasures owe nothing, and a mailbox's never do.
+
+**More files on the list.** Each slot holding a resting diff is one more rekey object, a staged record of at most 16 KiB against the allowance (§11.13's wait row: 64 MiB a UTC day, 4 MiB at the floor). §11.13's wait bound is unchanged in form: its objects are still whole files of at most 1,088 KiB, and B, the closure bytes left, counts the added slots.
+
+**A card's version.** E * 2^32 + c is 33 bits or more: 5 VByte bytes while E is under 8, 6 under 1,024, 7 under 131,072, against 1 to 3 for a seq. That is 3 to 5 B more in an entry and in a shard row a card, and a card's `IndexErased` is 26 to 28 B in the set against 22 or 23 for a path's, so a set of 16,208 B holds about 590 cards or 700 path documents beside an erasure's own 50 B.
+
+**A card folded again.** One full entry a listed card. A card's text is at most 16 KiB, so at most 16,382 distinct trigrams, about 33 KiB of key set at two bytes a gap, a large entry; a card of 2 KiB of text is a slot entry of about 4 KiB. A mirror folds from what it holds. An eraser that does not mirror fetches the run's source entries: a team record's are small (context, change, approval, publish, route, reach, coverage), a vault's include its tool calls and transcripts, which is what CardFetchByteCount bounds.
+
+**Step 2a.** One head read of the `erasure` ref from evs (§11.15: 250 ms at p50 on a desktop) at a device's first card build after each CUT on the log's `ur/index`, and the replay of the ERASEs it had not seen. A log with no erasure pays it once.
+
+**Blocked.** From an ERASE to its CUT: the eraser's next push, unless the set is full, when it is until the pending erasures complete (§11.12's cut row). Only a run with an entry in that state is held, and only on devices that have applied the ERASE.
+
+**Again units.** 48 B each in the journal. At most one a (device, run, erasure); each builds at most one entry, and the first to land covers the rest.
+
+**Erasure by expiry.** A daily pass that erases every entry of n runs lists n cards, 27 B each, and folds none again where nothing of the run is left: 590 runs a CUT. Section 15 adds nothing a run to that pass but the card's listing, which §16.8 already had.
+
+**The model.** The table in 15.3: the largest run is 2.7 million states, 231 MB and under three minutes; the 23 runs together took under six.
+
+### 15.5 Failure modes and recovery
+
+```text
+what goes wrong                               what holds                         recovery
+the eraser dies after its CUT, before the     readers resolve through the base;  reconcile's resume: the list,
+re-entry                                      I9, nothing removed yet            the re-entry in the resumer's
+                                                                                 own head, then the pairs
+it dies between a base's CLOSURE and its      the diff is excused; the           resume rewrites the diff's slot
+diff's                                        re-entry is the cover
+a merge lands between the CUT and the         it composes through the base; the  none needed: the version is
+re-entry                                      shard row is a cover               not owed
+the re-entry gets 409 for the eraser's head   nothing sent; built again from     from step 1
+or 409 INDEX_EPOCH (another CUT)              step 1 at the new head and set
+the re-entry is refused for quota             an owed key's files wait, masked;  retried every
+                                              all else goes on (15.2.5)          ReentryRetryInterval; the
+                                                                                 erasure event shows waiting
+a writer pushes a newer version of an owed    its full entry is a cover; the     the key is no longer owed
+key before the re-entry                       resting diff is replaced or stays
+                                              on the list
+a CLOSURE leaves a resting diff in a file it  reproducers build clean(file)      index_mismatch naming the
+rewrote                                       and compare                        CLOSURE's signer
+an eraser rewrites a base while its key is    the diff is excused, the version   a host with the text re-enters
+owed (not an honest one)                      unsearchable, no alarm             it at the path's next check
+                                                                                 (D-EVS-56); 15.9
+the eraser dies between its ERASE and its     bodies gone; cards blocked on      resume commits the CUT
+CUT                                           devices that applied the ERASE,    (§11.12's reconcile row)
+                                              shown from the index by others
+the set is full at step 4                     the same, until pending erasures   the CUT, then steps 5 to 7
+                                              complete
+a device that has not applied the ERASE       its push names the old epoch and   none needed
+projects the card before the CUT              the CUT lists it (I11)
+the same device after the CUT                 409 INDEX_EPOCH if built before;   none needed
+                                              else step 2a applies the ERASE
+the eraser cannot fold a card (no mirror and  its CLOSUREs go on; the card is    again units on the stream's
+past CardFetchByteCount; quota)               out of search                      writer and mirrors
+no device holds the stream's entries any      the card stays out of search; its  a rebuild from content, if a
+more                                          run's entries still read by id     device mirrors again
+a copy of an erased entry is ingested after   the card's next projection leaves  the late-copy CUT lists that
+step 3                                        it out; the old one is not listed  stream's card (15.2.10)
+a stream or epoch reaches 2^32                no card is written; the run reads  none: 136 years at a push a
+                                              not yet searchable                 second
+a reproducer has applied an ERASE the         it lacks an input                  it fetches, raising nothing
+builder had not
+a CUT lists a card the index never held       nothing to remove; the next        none needed
+                                              projection is above the list
+```
+
+**What is not recovered.** A device that kept an erased entry's plaintext against §11.12's after row can publish it again in a card; hosts that hold the stream rebuild the card and raise `index_mismatch` on its signer, and the entry's text is beyond recall as any copy an agent took is (§11.12's residual). An admin that erases dishonestly can make an honest writer's diff read malformed by rewriting a base and never its diff; the alarm then names the writer, and the CLOSURE that took the base is in the ref's history for whoever investigates.
+
+### 15.6 The test plan
+
+Unit tests, on the fake store unless said, named by the task that owns them (15.7).
+
+```text
+SEARCH-M10-17
+TestEraseListTakesRestingDiffs          a slot with a diff on a listed version is on the list, absorbed or not;
+                                        a diff on an unlisted version is not
+TestReentryComposesFromIndex            A's story to the byte: the re-entered entry equals extraction's full
+                                        entry of version 2, with no content read (a store that fails content GETs)
+TestReentryPrecedesClosure              no CLOSURE of an owed key's files is sent before the re-entry's 200
+TestReentrySkipsACoveredVersion         a newer full entry, a shard row, a tombstone, or a first eraser's entry
+                                        each make the key not owed
+TestReentryOfTwoWritersPicksOne         two resting diffs at one version: one entry, from the lowest writer id
+TestReentryAsLargeEntry                 a composed entry past EntryMax is a large entry of the eraser's
+TestReentryBatchesUnderDirectBytes      700 owed entries of 8 KiB go in pushes that never merge
+TestCleanRemovesListedAndResting        clean of a slot: exact bytes, the replaced length, count and body length
+TestClosureLeavesUnlistedBase           a full entry at an unlisted version survives every CLOSURE
+TestResumeReentersInItsOwnHead          a second device finishes after a crash at each step of 15.2.5's order,
+                                        entering once
+TestReentryRefusedForQuotaWaits         the owed key's files wait, the rest of the erasure completes, the event
+                                        shows waiting; on the limit lifting the erasure completes
+TestErasureLeavesNoRestingDiff          after complete, no file version under a live key holds a listed entry or
+                                        a resting diff, retained versions included (FS-78's sweep)
+FuzzEraseUnderEdits                     random edits, seals, merges and reuses beside an erasure at random
+                                        points: I1, I9 and I10 after every push
+
+SEARCH-M10-17's two fixes to landed code
+TestMergeComposesThroughAListedBase     evs_index_merge.go: the shard holds version 2 after a merge that follows
+                                        the CUT, and nothing of version 1
+TestMergeLeavesOutAnExcusedDiff         no malformed diff is reported for it
+TestChainExcusesARestingDiff            search_match.go: no unresolved entry, no alarm, and the re-entry is the hit
+TestChainStillAlarmsAnUnlistedBase      a baseless diff on an unlisted version is index_malformed as before
+TestMaskYieldsToTheSet                  search_mask.go: an ERASE's whole-key mask ends when a set version lists
+                                        the key; a version above L(k) shows
+
+SEARCH-M10-28, the card
+TestCardKeyIsPerStream                  two streams of one log holding one run: two doc_keys, two rows
+TestCardVersion                         E * 2^32 + c for E 1, 7, 1,023 and c 1 and 2^32 - 1; 2^32 refused
+TestCardFoldOrder                       entries out of seq order in the stream fold in seq order
+TestCardIsAFunction                     two devices, one stream, one epoch: equal bytes; a gap filled later
+                                        changes c and the version
+TestCardRebuild                         FS-80: a rebuild writes each card's bytes again at the build's epoch
+TestCardSkipsErasedAtEpoch              an entry erased by a listed erasure and by a dropped, complete one
+TestCardBlockedBeforeTheCut             a builder that applied the ERASE builds no card and holds R's row below
+                                        the run's first blocked version; one that has not folds the entry
+TestCardSyncsErasureRefOnANewEpoch      step 2a: one head read at the first build after a CUT, none after
+TestCardThroughAnErasure                FS-80: ERASE, CUT, re-projection, pairs: the card is masked, returns
+                                        without the entry, and no stored version holds its text
+TestCardRaceAfterTheRead                a projection landing between the read and the CUT is listed and removed
+TestCardAgainUnit                       the writer's again unit builds the card BackfillAge after the CUT when
+                                        the eraser entered nothing, and is dropped when it did
+TestCardLastEntryErased                 a fold with no entry writes nothing, and the card is gone from search
+TestEntryDocumentContextFields          fields 9 and 11 from the first context entry its stream holds at the pin;
+                                        after that entry's erasure a rebuild reads the next, or writes them
+                                        empty; before its CUT a builder that applied the ERASE is blocked
+
+SEARCH-M10-14 and SEARCH-M10-12
+TestJournalCardMarkers                  a unit's markers, one a run; ApplyCut keeps them
+TestCompanionCarriesCards               a push covering (q, p] holds the card at p of each run touched in it
+TestBackfillCarriesCards                a backfill of h carries the cards of runs last touched at or below h
+
+SEARCH-M10-16
+TestCutListsACardThroughItsEpoch        the version written, and written again after 409 INDEX_EPOCH
+TestCutAgainAddsToItsErasure            a second call for a listed erasure, and for a dropped one
+
+RECORD-M10-01
+TestRecordEraseOrder                    the ERASEs of steps 2 and 3 commit before the CUT is built
+TestRecordEraseLateCopy                 a copy ingested after step 3 is erased, listed and its card folded again
+```
+
+Vectors: `testdata/index/erase/` gains `resting-clean` (a slot before and after `clean`), `reentry` (a diff, its base and the composed entry) and `card-version` (five cards with their versions and rows).
+
+Model twins as mutants: each `IndexEraseTwin-*` names a rule, and 15.7's task that builds the rule carries a test that fails when the rule is removed.
+
+Scenario rows, at the later of M10-out and the milestone that brings what they run on: FS-78 gains "an edit that lands between the eraser's read and its CUT stays searchable through the erasure, and no stored index version keeps a diff on the erased version"; FS-80 gains "a card folded while the erasure runs, by a device that has not applied the ERASE, is listed by the CUT or leaves the entry out"; FS-107's "a diff whose base is gone alarms" excepts a resting diff; FS-111 gains a companion push carrying a card among its prepared pushes; FS-112's wait counts a resting diff's slot.
+
+### 15.7 Implementation notes, task by task
+
+Order: SEARCH-M10-16 first, as planned; then SEARCH-M10-17; SEARCH-M10-28's card after SEARCH-M10-14 and SEARCH-M10-16.
+
+**SEARCH-M10-16, the CUT** (not held, not yet on `sidecar`; two additions to its seam, neither a decision of its own).
+- `IndexEraser.Cut` takes each document as `{Key, Version, ThroughEpoch bool}`. For `ThroughEpoch` it writes `epoch * 2^CardVersionBitCount + 2^CardVersionBitCount - 1`, with `epoch` the index_epoch that CUT names, computed when the CUT is built and again on each rebuild after 409 INDEX_EPOCH. Every other version is the caller's, as planned.
+- Called for an erasure_id the set lists, it adds the documents to that erasure's entry (docs stay sorted by doc_key, the entry's `epoch` and `cut_ms` stay); called for one the set has dropped, it adds the entry again.
+- Its plan entry's "Order for callers: CUT and first ERASE" stands for §15.7's mail; for §16.8's records the ERASEs of the bodies come first (15.2.10).
+
+**SEARCH-M10-17, erasure's rewrites** (held; L; Build changes; Provides gains `IndexEraser.Reenter`).
+- `evs_index_erase.go`: `indexEraseList` per 15.2.3, returning the files, the resting diffs and the owed keys; `IndexEraser.Reenter` per 15.2.4, built through `indexPlanHead` with `replaces` 0 and no coverage, `PushLife` and the store seam as SEARCH-M10-14's build uses them.
+- `evs_index_closure.go`: `indexClean(file, erased)` per 15.2.5 for slots and large entries, beside the shard rewrite SEARCH-M10-05 gave (`rewriteWithout`); the order rule (no CLOSURE of an owed key's files).
+- `evs_index_wait.go`: the wait when a re-entry is refused for quota; `SidecarErasure`'s `waiting` gains the count of documents to re-enter; `IndexEraseSettings` with 15.2.11's two fields, defaults from `DefaultIndexEraseSettings()`.
+- `IndexEraser.Resume`: 15.2.7.
+- Two fixes to landed code ride this task, since nothing calls them wrongly until an erasure exists: `evs_index_merge.go`'s `indexMergeCandidates`, where the branch `if erased(entry.key, entry.baseVersion) { continue }` becomes: resolve the base; compose where it stands; leave the diff out, with no `indexMalformedDiff`, where it does not (the roll-up reads the same function); and `search_match.go`, where a diff that `searchResolveChain` cannot resolve joins `unresolved` only if `erased(entry.key, entry.baseVersion)` is false. `search_chains.go`'s and `evs_index_dependency.go`'s header comments take 1.2.9's amended wording.
+- `search_mask.go` (CORE-M10-02's table, CORE-M10-04's hooks): 15.2.10's mask rule. `erasedThrough` is the set's L(k) where a set version the device holds lists the key, and `searchErasedAll` only where an ERASE names the key and none does.
+- INDEX-FORMAT.md: the Erasure section gains `clean` and the resting diff; the Documents section the card's version.
+
+**SEARCH-M10-28, record documents and run cards** (held for its card; XL as planned). Its record documents and mail join build now, the documents with 15.2.8's reading of fields 9 and 11 and its blocked rule. The card: `search_run_card.go` gives `searchRunCard(stream, runId, refVersion, epoch, erasedAtEpoch) (*IndexDocument, uint64, error)` per 15.2.8, with `c` beside it; `evs_index_record.go`'s `IndexDocuments` visits each run's card at the ref version it is given, and takes the epoch and the erased-at-epoch test through its constructor, since the interface names neither. `IndexFormatSettings.CardVersionBitCount`. The local mask of a card from an ERASE to its CUT (15.2.10) is this task's, through `SearchCache.ApplyErase`.
+
+**SEARCH-M10-14, companion pushes and the journal** (not on `sidecar` yet; Build gains 15.2.9): card markers and again units in `IndexJournal`; `ApplyCut` keeps both; step 2a with the epoch recorded beside the journal; step 4's cards, the blocked pin and again units; a record log's interval and its two at-once triggers.
+
+**SEARCH-M10-12, backfill** (not on `sidecar` yet): 15.2.9's backfill row.
+
+**SEARCH-M10-23 and SEARCH-M10-24, readers**: 1.2.9 as amended; the two reader fixes above are written under SEARCH-M10-17 and reviewed by this ground's owner.
+
+**SEARCH-M10-46, IndexRollup.tla** (the data lane's model): `CutVersion = "read"` passes once the model's eraser takes 15.2.4's re-entry before `ClosureBuild`, its CLOSUREs remove resting diffs, its `ChainsResolve` takes I1's amended wording, and its merge composes through a listed base. Its `cut-read` ground then becomes a design run, and a derived document joins its story with 15.2.8's version. `details/IndexErase.tla` is the reference for each rule.
+
+**RECORD-M10-01, a record erasure's CUT and CLOSUREs** (not held): 15.2.10's steps in `record_erase.go`'s order, the ERASEs of steps 2 and 3 before `IndexEraser.Cut`; the documents it passes: each copy that RECORD.md 7.1 makes a document at its path's entry version, and `{card key, ThroughEpoch}` for each stream holding a copy of a source entry; then `IndexEraser.Reenter` and `IndexEraser.Rewrite`. The late copy RECORD-M3-06 deferred ("a copy another ingester writes after the erasure is not erased again at a later sync") takes steps 4 to 6 after its ERASE. `ur record erase`'s listing gains 15.2.8's line for a context entry.
+
+**RECORD-M6-03, expiry**: its erasures run the same steps, and its weekly BASE removes only entries whose erasure is complete.
+
+**RECORD-M10-05 and MAIL-M10-02** (not held): they call the eraser through its seam and pass path documents at their versions. A message never changes, so a mailbox's erasure owes no re-entry and its list holds no resting diff; `IndexEraser.Reenter` returns at once for it. Mail keeps the CUT before its first ERASE.
+
+**CORE-M10-04**: `ApplyErase` calls SEARCH-M10-28's card mask and the journal's again unit for an ERASE of a source entry the device holds, and removes the journal units of every copy of an erased entry, found by entry_id from the ERASE's note (RECORD.md 8's every copy).
+
+**Held tasks whose scope changed.** SEARCH-M10-17 gains the re-entry push, `clean`'s resting diffs, the order rule, the quota wait and the three fixes to landed files (`evs_index_merge.go`, `search_match.go`, `search_mask.go`). SEARCH-M10-28's card gains its identity, version and fold rules and loses nothing; its record documents and mail join are released.
+
+### 15.8 Proposed DESIGN.md text
+
+For a design-records track; nothing here edits DESIGN.md or `design/source/`.
+
+**§11.14.**
+- version row, after "a derived document's, its writer's sequence": replace that clause with "a run card's, the index_epoch its push names times 2^32 plus the stream version of its run's newest source entry (§16.10); a directory announcement's, the Announcement's".
+- dependency row, its last clause "and an erasure removes a document's entries together" becomes "and an erasure enters full, in its eraser's own head, a version whose diff rests on a version its CUT lists, before any CLOSURE takes the base or the diff (erase, below)".
+- chains row gains: "a diff resolves through a base the erasure set lists while that base stands; a diff whose base is gone and listed is no candidate and alarms nothing".
+- cut row, after "each listed document, at or below its version, from the CUT on": "a run card is listed through the epoch its CUT names, so at every version of that epoch or an older one".
+- erase row, after "the eraser lists every index file holding the document": "and every slot holding a diff of it on a listed version, whose removed keys with its own version's set give the listed set back; for the highest version such a diff carries that nothing else a reader scans holds, the eraser first enters that version full in its own head, composed from the diff and its base, and folds each listed run card again there; CLOSURE pushes then rewrite each listed file in place without the document and without those diffs". Its history clause gains "or a diff on a listed version".
+- limit row gains: "an erasure's re-entry adds payload and waits with merges; the files of a version it has not yet entered wait with it, and every other rewrite goes on".
+- A new invariant I-EVS-18 as 1.8 proposed it, in I1's amended wording.
+
+**§11.12.** closure row: "in a format-2 repo that may hold an index, a CUT (below) on each index ref of its documents precedes every list of index files; for a record entry the ERASE of its body precedes that CUT (§16.8)". cut row: "per document of it the ref indexes, the doc_key and the newest version erased; a run card, every version through the epoch the CUT names".
+
+**§16.8, Erasure.** Replace "in a format-2 repo a CUT on the repo's `ur/index` lists the entry and each run card holding it, at its current version, so no index push built before the CUT publishes them (§11.12), and CLOSUREs after the CUT rewrite in place the search-index files holding the entry's postings and re-project each run card that holds the entry (§11.14, 16.10)" with "in a format-2 repo a CUT on the repo's `ur/index` then lists the entry and, through its epoch, the run card of each stream holding it, so every projection made before the CUT is listed and none made after it can hold the entry (§11.12); the eraser folds each of those cards again in its own index head, and CLOSUREs rewrite in place the search-index files holding the entry's postings and the cards' listed versions (§11.14, 16.10)".
+
+**§16.10.** documents row: "vault: one run card per run and stream". run card row, its last clauses: "re-indexed in its stream writer's companion push (§11.14), which a record log makes at most once every 5 min, at once at the run's start and at its end; its version is the index_epoch that push names above the stream version of the run's newest entry; derived, a function of its stream at that version and of the erasures whose CUT precedes that epoch, so a rebuild reproduces it, and an erasure lists it through its CUT's epoch and folds it again without the erased entry".
+
+**RECORD.md** (the mcp lane's, proposed). 7.4, its second sentence: "Its version is the index_epoch its push names times 2^32 plus the stream version of the run's newest source entry in its stream (DESIGN-DETAILS 15.2.8), so every device that folds one stream at one epoch writes one card." 7.1's fields row, for a card: "from the newest context among the entries folded"; for an entry: "from the first context entry of its run that its own stream holds at the push's pin and no erasure with a CUT below the push's epoch names". 8's Run cards paragraph: "An erased entry leaves its run card when the erasure folds the card again, after its CUT (§16.8)". 8's expiry row: "a BASE removes only entries whose erasure is complete".
+
+**§2.8's metadata list.** No new row: a re-entry push is an index push by an admin's sidecar on a ref that sidecar already writes CUTs and CLOSUREs to, of sizes the existing index rows describe.
+
+### 15.9 Owner questions
+
+Each is filed under `.stack/questions/` and the section is built on its recommendation.
+
+- **`details-15-resting-diffs`** replaces `search-m10-46-erased-base-of-a-live-diff`. The section builds that question's option 1 with three changes: the eraser composes the version from the index and opens no content; a CLOSURE also removes the diff, which with its version's set gives the erased set back (15.1 B), so the excuse lasts only between two CLOSUREs; and a merge composes through a listed base while it stands (15.1 C). Recommendation: as built.
+- **`details-15-reentry-at-the-limit`**: at the storage limit evs refuses the re-entry. Built: the files of the one version not yet entered wait, masked, and everything else is erased on schedule. The other way destroys first and leaves the surviving version out of search with no signal. Recommendation: as built; the case needs two races of seconds.
+- **`details-15-card-version`**: a card's version is epoch above stream version, in place of RECORD.md 7.4's highest seq. Recommendation: as built.
+- **`details-15-card-per-stream`**: one card a run a stream, in place of "one run card per run" of a log. Recommendation: as built.
+- **`details-15-erase-before-cut`**: a record erasure destroys the bodies before its CUT, where SEARCH-M10-16's plan entry has every caller CUT first. Recommendation: as built.
+- **`details-15-context-fields`**: an erased context entry's agent label and session ids stay in the rows of the run's other entry documents written before the erasure (15.2.8). Built: they stay, as names the run's other entries carry themselves. The other ways give every entry document a version with the epoch and fold each again, or take fields 9 and 11 out of entry rows. Recommendation: as built.
+- **`details-15-small-readings`**: nine readings an implementer would otherwise decide, each with what was built: the mask rule, a record log's companion interval, the fold's order, an empty fold, the 2^32 bound, which devices hold again units and when they build, the CUT for a late copy, a BASE waiting for its erasure, and the eraser's fetch bound.
