@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -110,8 +111,9 @@ type Sidecar struct {
 // and refused, so a value left unset never reads as one.
 //
 // §5.4 lists these in prose with no numbers, and the numbers here are §5.4's order with §16.7's
-// restore appended, as plan-MCP-wire-enum-numbers.md fills them. record.proto's SidecarActionKind
-// holds the same values, which record_kind_test.go checks, and they freeze with it at M3.
+// restore appended, as plan-MCP-wire-enum-numbers.md fills them, and then §14.4's TL4 allowance
+// (QD-729). record.proto's SidecarActionKind holds the same values, which record_kind_test.go
+// checks, and they freeze with it at M3.
 type SidecarActionKind uint32
 
 const (
@@ -151,6 +153,9 @@ const (
 	SidecarActionPayment SidecarActionKind = 16
 	// A run_restore apply, which puts a run's files back (§16.7).
 	SidecarActionRestore SidecarActionKind = 17
+	// The allowance to send one recipient domain's mail through an MX that cannot be authenticated, §14.4's TL4,
+	// which an active URnetwork edge could read (owner decision 38, QD-729).
+	SidecarActionMailTlsUnauthenticated SidecarActionKind = 18
 )
 
 // How much an outward action could cost, the larger of policy's and the daemon's classifier's
@@ -178,6 +183,10 @@ type SidecarAction struct {
 	// each once (D-MCP-11).
 	RunId   *Id
 	AgentId *Id
+	// What the action binds on this device alone, built by the daemon as Canonical is: filed as ApprovalRequest's
+	// local_port, weight and alpn, which approvers render and request_sha256 covers, and no server sees (QD-740). A
+	// decision spends only on an action whose Detail is its request's. Nil for none.
+	Detail *SidecarActionDetail
 	// The agent's own words about the action, filed as ApprovalRequest.summary and shown to an approver as
 	// untrusted text, never as the action (D-MCP-17). Empty for none.
 	Summary string
@@ -187,6 +196,28 @@ type SidecarAction struct {
 	// What the effect came to, set by Authorize when it answers nil. A retry of the same action finds the recorded
 	// outcome here without the effect running again, unless that outcome is uncertain (AU4).
 	Outcome *SidecarOutcome
+}
+
+// What an outward action binds on the requesting device beside its CanonicalAction (§16.8's ApprovalRequest fields
+// 14, 15 and 16; QD-740): the local port a socket_listen, tls_publish, bridge_forward or bridge_expose points at, a
+// listen's weight and a publish's ALPNs. The kind table says which of them a kind takes.
+type SidecarActionDetail struct {
+	// 0 for none.
+	LocalPort uint32
+	Weight    int32
+	Alpn      []string
+}
+
+// Whether two details bind the same values, nil binding none.
+func (self *SidecarActionDetail) Equal(other *SidecarActionDetail) bool {
+	a, b := SidecarActionDetail{}, SidecarActionDetail{}
+	if self != nil {
+		a = *self
+	}
+	if other != nil {
+		b = *other
+	}
+	return a.LocalPort == b.LocalPort && a.Weight == b.Weight && slices.Equal(a.Alpn, b.Alpn)
 }
 
 // One O tool's effect, which §16.6's spend step 5 runs (plan-MCP-effect-seam). A mail body or a file's bytes are not

@@ -5,7 +5,8 @@
 // verdict: a case that reads a whole queue or a whole CA's orders keeps only its own rows.
 //
 // Times are whole microseconds, as Postgres keeps them, and a row's order time is its cert_id's
-// (CertsIdAt), as certs mints them.
+// (CertsIdAt), as certs mints them. A row is written with that time as its state's, and each case's
+// transitions carry times of its own range.
 //
 // A case is a plain function returning its first failure, and RunCertsStoreSuite loops over them, as
 // blobsuite does (connect/CODESTYLE.md:216). A failure in one does not stop the next.
@@ -76,7 +77,15 @@ func certsSuiteCases() []certsSuiteCase {
 		{name: "a set's orders are those at the CA since a time", run: caseCertsSetOrders},
 		{name: "new-set orders are the first certificates of their sets", run: caseCertsNewSetOrders},
 		{name: "the queue reads queued rows after its cursor, oldest first", run: caseCertsQueue},
+		{name: "rows are listed by their states after a cursor, oldest first", run: caseCertsInStates},
+		{name: "a row and a transition with no time are refused", run: caseCertsStateTimeRequired},
+		{name: "a state's time moves with its state, and only then", run: caseCertsStateTime},
+		{name: "an issued chain is kept, and a reason only while revoking", run: caseCertsChainAndReason},
+		// the purges' cases sit in decades of their own before every other case's times, earliest
+		// first, so each one's purge finds only rows of cases that have ended
+		{name: "a chain is dropped once its certificate ended, and its row kept", run: caseCertsPurgeChains},
 		{name: "a purge takes what ended before its time, and only that", run: caseCertsPurge},
+		{name: "a revoked or failed row is purged by its state's time", run: caseCertsPurgeByStateTime},
 		{name: "an ephemeral client reads as one", run: caseCertsEphemeral},
 	}
 }
@@ -108,6 +117,7 @@ func certsSuiteRow(networkId sidecar.Id, orderTime time.Time) *sidecar.TlsCertRe
 		Attestation:         certsSuiteRandom(96),
 		Csr:                 certsSuiteRandom(200),
 		State:               sidecar.TlsCertStateQueued,
+		StateTime:           orderTime,
 	}
 }
 
@@ -120,14 +130,16 @@ func certsSuiteNextOrder(row *sidecar.TlsCertRecord, orderTime time.Time) *sidec
 	return next
 }
 
-// Moves row to issued at ca with serial and a validity from notBefore, as an order's end does.
+// Moves row to issued at ca with serial and a validity from notBefore, as an order's end does: admitted
+// at its order time and issued at notBefore.
 func certsSuiteIssue(ctx context.Context, store certsservice.CertsStore, row *sidecar.TlsCertRecord, ca certsservice.CertsCa, serial string, notBefore time.Time) error {
 	for _, step := range []*certsservice.CertsTransition{
-		{CertId: row.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateOrdering, Ca: ca, Profile: "tlsserver"},
+		{CertId: row.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateOrdering, At: certsFakeIdTime(row.CertId), Ca: ca, Profile: "tlsserver"},
 		{
 			CertId:     row.CertId,
 			From:       []sidecar.TlsCertState{sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns},
 			To:         sidecar.TlsCertStateIssued,
+			At:         notBefore,
 			AccountUri: "https://ca.example/acct/1",
 			Serial:     serial,
 			NotBefore:  notBefore,
@@ -179,7 +191,8 @@ func certsSuiteSameRow(got *sidecar.TlsCertRecord, want *sidecar.TlsCertRecord) 
 		got.Ca != want.Ca || got.AccountUri != want.AccountUri || got.Profile != want.Profile || got.Serial != want.Serial ||
 		!equalTime(got.NotBefore, want.NotBefore) || !equalTime(got.NotAfter, want.NotAfter) ||
 		!equalTime(got.AriWindowStart, want.AriWindowStart) || !equalTime(got.AriWindowEnd, want.AriWindowEnd) ||
-		got.State != want.State || got.SuccessorCertId != want.SuccessorCertId || !chainsEqual {
+		got.State != want.State || !equalTime(got.StateTime, want.StateTime) || got.SuccessorCertId != want.SuccessorCertId || !chainsEqual ||
+		got.RevocationReason != want.RevocationReason {
 		return fmt.Errorf("read %+v, want %+v", got, want)
 	}
 	return nil
@@ -206,6 +219,7 @@ func caseCertsRoundTrip(ctx context.Context, store certsservice.CertsStore, hook
 		CertId:         row.CertId,
 		From:           []sidecar.TlsCertState{sidecar.TlsCertStateIssued},
 		To:             sidecar.TlsCertStateIssued,
+		At:             base.Add(2 * time.Hour),
 		AriWindowStart: base.Add(30 * 24 * time.Hour),
 		AriWindowEnd:   base.Add(31 * 24 * time.Hour),
 	})
@@ -214,6 +228,8 @@ func caseCertsRoundTrip(ctx context.Context, store certsservice.CertsStore, hook
 	}
 	want := *row
 	want.State = sidecar.TlsCertStateIssued
+	// the issuance's time: the ARI window's write kept the state, and so its time
+	want.StateTime = base.Add(time.Hour)
 	want.Ca = string(certsservice.CertsCaLetsEncrypt)
 	want.AccountUri = "https://ca.example/acct/1"
 	want.Profile = "tlsserver"
@@ -340,6 +356,7 @@ func caseCertsTransition(ctx context.Context, store certsservice.CertsStore, hoo
 		CertId: row.CertId,
 		From:   []sidecar.TlsCertState{sidecar.TlsCertStateQueued},
 		To:     sidecar.TlsCertStateOrdering,
+		At:     row.StateTime.Add(time.Second),
 		Ca:     certsservice.CertsCaZeroSsl,
 	}
 	applied, err := store.TransitionCert(ctx, toOrdering)
@@ -357,7 +374,7 @@ func caseCertsTransition(ctx context.Context, store certsservice.CertsStore, hoo
 	if got.State != sidecar.TlsCertStateOrdering || got.Ca != string(certsservice.CertsCaZeroSsl) {
 		return fmt.Errorf("read %+v", got)
 	}
-	applied, err = store.TransitionCert(ctx, &certsservice.CertsTransition{CertId: CertsIdAt(certsSuiteBase()), From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateFailed})
+	applied, err = store.TransitionCert(ctx, &certsservice.CertsTransition{CertId: CertsIdAt(certsSuiteBase()), From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateFailed, At: row.StateTime})
 	if err != nil || applied {
 		return fmt.Errorf("an unknown row: %v, %v", applied, err)
 	}
@@ -486,8 +503,8 @@ func caseCertsNewSetOrders(ctx context.Context, store certsservice.CertsStore, h
 		}
 	}
 	for _, step := range []*certsservice.CertsTransition{
-		{CertId: inFlight.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateWaitingDns, Ca: certsservice.CertsCaLetsEncrypt},
-		{CertId: failed.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateFailed, Ca: certsservice.CertsCaLetsEncrypt},
+		{CertId: inFlight.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateWaitingDns, At: inFlight.StateTime, Ca: certsservice.CertsCaLetsEncrypt},
+		{CertId: failed.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateFailed, At: failed.StateTime, Ca: certsservice.CertsCaLetsEncrypt},
 	} {
 		if applied, err := store.TransitionCert(ctx, step); err != nil || !applied {
 			return fmt.Errorf("to %s: %v, %v", step.To, applied, err)
@@ -517,7 +534,7 @@ func caseCertsQueue(ctx context.Context, store certsservice.CertsStore, hooks *C
 		}
 	}
 	if applied, err := store.TransitionCert(ctx, &certsservice.CertsTransition{
-		CertId: rows[1].CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateOrdering, Ca: certsservice.CertsCaGts,
+		CertId: rows[1].CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateOrdering, At: base, Ca: certsservice.CertsCaGts,
 	}); err != nil || !applied {
 		return fmt.Errorf("admitting one: %v, %v", applied, err)
 	}
@@ -547,6 +564,104 @@ func caseCertsQueue(ctx context.Context, store certsservice.CertsStore, hooks *C
 	return nil
 }
 
+func caseCertsInStates(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
+	base := certsSuiteBase()
+	networkId := sidecar.NewId()
+	rows := []*sidecar.TlsCertRecord{}
+	for index := range 5 {
+		rows = append(rows, certsSuiteRow(networkId, base.Add(time.Duration(index)*time.Millisecond)))
+	}
+	for _, row := range rows {
+		if err := store.InsertCert(ctx, row); err != nil {
+			return err
+		}
+	}
+	// 0 stays queued, 1 is ordering, 2 waits on DNS, 3 is issued, 4 is revoking
+	move := func(row *sidecar.TlsCertRecord, from sidecar.TlsCertState, to sidecar.TlsCertState) error {
+		applied, err := store.TransitionCert(ctx, &certsservice.CertsTransition{
+			CertId: row.CertId, From: []sidecar.TlsCertState{from}, To: to, At: base, Ca: certsservice.CertsCaGts,
+		})
+		if err != nil {
+			return err
+		}
+		if !applied {
+			return fmt.Errorf("the transition to %s did not apply", to)
+		}
+		return nil
+	}
+	for _, row := range rows[1:3] {
+		if err := move(row, sidecar.TlsCertStateQueued, sidecar.TlsCertStateOrdering); err != nil {
+			return err
+		}
+	}
+	if err := move(rows[2], sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns); err != nil {
+		return err
+	}
+	for _, row := range rows[3:] {
+		if err := certsSuiteIssue(ctx, store, row, certsservice.CertsCaGts, fmt.Sprintf("%x", certsSuiteRandom(8)), base); err != nil {
+			return err
+		}
+	}
+	if err := move(rows[4], sidecar.TlsCertStateIssued, sidecar.TlsCertStateRevoking); err != nil {
+		return err
+	}
+	// a cursor just before the case's range: a row of the shared table before it is not read
+	before := CertsIdAt(base.Add(-time.Millisecond))
+	underWay := []sidecar.TlsCertState{sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns}
+	got, err := store.ListInStates(ctx, underWay, before, 1000)
+	if err != nil {
+		return err
+	}
+	if own := certsSuiteOwn(got, rows...); !slices.Equal(own, []sidecar.Id{rows[1].CertId, rows[2].CertId}) {
+		return fmt.Errorf("under way %v", own)
+	}
+	got, err = store.ListInStates(ctx, underWay, rows[1].CertId, 1000)
+	if err != nil {
+		return err
+	}
+	if own := certsSuiteOwn(got, rows...); !slices.Equal(own, []sidecar.Id{rows[2].CertId}) {
+		return fmt.Errorf("under way after the first %v", own)
+	}
+	for _, single := range []struct {
+		state sidecar.TlsCertState
+		want  sidecar.Id
+	}{
+		{sidecar.TlsCertStateIssued, rows[3].CertId},
+		{sidecar.TlsCertStateRevoking, rows[4].CertId},
+	} {
+		got, err = store.ListInStates(ctx, []sidecar.TlsCertState{single.state}, before, 1000)
+		if err != nil {
+			return err
+		}
+		if own := certsSuiteOwn(got, rows...); !slices.Equal(own, []sidecar.Id{single.want}) {
+			return fmt.Errorf("%s rows %v", single.state, own)
+		}
+	}
+	got, err = store.ListInStates(ctx, []sidecar.TlsCertState{sidecar.TlsCertStateQueued, sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns}, before, 2)
+	if err != nil {
+		return err
+	}
+	if len(got) != 2 {
+		return fmt.Errorf("a count of two read %d", len(got))
+	}
+	for _, read := range []struct {
+		states []sidecar.TlsCertState
+		count  int
+	}{
+		{nil, 1000},
+		{underWay, 0},
+	} {
+		got, err = store.ListInStates(ctx, read.states, before, read.count)
+		if err != nil {
+			return err
+		}
+		if len(got) != 0 {
+			return fmt.Errorf("states %v with a count of %d read %d rows", read.states, read.count, len(got))
+		}
+	}
+	return nil
+}
+
 func caseCertsPurge(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
 	// the epoch's own decade, so no other case's validity ends before the purge's time
 	base := time.Date(1980, time.January, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(certsSuiteRandom(1)[0]) * time.Hour)
@@ -564,8 +679,9 @@ func caseCertsPurge(ctx context.Context, store certsservice.CertsStore, hooks *C
 	if err := certsSuiteIssue(ctx, store, live, certsservice.CertsCaLetsEncrypt, fmt.Sprintf("%x", certsSuiteRandom(8)), base.Add(60*24*time.Hour)); err != nil {
 		return err
 	}
+	// failed after the purge's time: a failed row counts from its failure (caseCertsPurgeByStateTime)
 	if applied, err := store.TransitionCert(ctx, &certsservice.CertsTransition{
-		CertId: failed.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateFailed,
+		CertId: failed.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateFailed, At: base.Add(46 * 24 * time.Hour),
 	}); err != nil || !applied {
 		return fmt.Errorf("failing one: %v, %v", applied, err)
 	}
@@ -587,6 +703,321 @@ func caseCertsPurge(ctx context.Context, store certsservice.CertsStore, hooks *C
 		}
 	}
 	return nil
+}
+
+func caseCertsStateTimeRequired(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
+	base := certsSuiteBase()
+	timeless := certsSuiteRow(sidecar.NewId(), base)
+	timeless.StateTime = time.Time{}
+	if err := store.InsertCert(ctx, timeless); !errors.Is(err, certsservice.ErrCertsStateTime) {
+		return fmt.Errorf("a row with no state time answered %v", err)
+	}
+	if _, err := store.GetCert(ctx, timeless.CertId); !errors.Is(err, certsservice.ErrCertsNotFound) {
+		return fmt.Errorf("the refused row: %v", err)
+	}
+	row := certsSuiteRow(sidecar.NewId(), base.Add(time.Minute))
+	if err := store.InsertCert(ctx, row); err != nil {
+		return err
+	}
+	applied, err := store.TransitionCert(ctx, &certsservice.CertsTransition{
+		CertId: row.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateFailed,
+	})
+	if !errors.Is(err, certsservice.ErrCertsStateTime) || applied {
+		return fmt.Errorf("a transition with no time: %v, %v", applied, err)
+	}
+	got, err := store.GetCert(ctx, row.CertId)
+	if err != nil {
+		return err
+	}
+	return certsSuiteSameRow(got, row)
+}
+
+func caseCertsStateTime(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
+	base := certsSuiteBase()
+	row := certsSuiteRow(sidecar.NewId(), base)
+	if err := store.InsertCert(ctx, row); err != nil {
+		return err
+	}
+	stateTime := func() (time.Time, error) {
+		got, err := store.GetCert(ctx, row.CertId)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return got.StateTime, nil
+	}
+	for _, step := range []struct {
+		from sidecar.TlsCertState
+		to   sidecar.TlsCertState
+		at   time.Time
+		want time.Time
+	}{
+		{sidecar.TlsCertStateQueued, sidecar.TlsCertStateOrdering, base.Add(time.Minute), base.Add(time.Minute)},
+		// the same state again keeps its time
+		{sidecar.TlsCertStateOrdering, sidecar.TlsCertStateOrdering, base.Add(2 * time.Minute), base.Add(time.Minute)},
+		{sidecar.TlsCertStateOrdering, sidecar.TlsCertStateQueued, base.Add(3 * time.Minute), base.Add(3 * time.Minute)},
+		// a transition that does not apply moves nothing
+		{sidecar.TlsCertStateOrdering, sidecar.TlsCertStateFailed, base.Add(4 * time.Minute), base.Add(3 * time.Minute)},
+		{sidecar.TlsCertStateQueued, sidecar.TlsCertStateFailed, base.Add(5 * time.Minute), base.Add(5 * time.Minute)},
+	} {
+		if _, err := store.TransitionCert(ctx, &certsservice.CertsTransition{
+			CertId: row.CertId, From: []sidecar.TlsCertState{step.from}, To: step.to, At: step.at, Ca: certsservice.CertsCaGts,
+		}); err != nil {
+			return err
+		}
+		got, err := stateTime()
+		if err != nil {
+			return err
+		}
+		if !got.Equal(step.want) {
+			return fmt.Errorf("after %s to %s at %v the state's time is %v, want %v", step.from, step.to, step.at, got, step.want)
+		}
+	}
+	return nil
+}
+
+func caseCertsChainAndReason(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
+	base := certsSuiteBase()
+	row := certsSuiteRow(sidecar.NewId(), base)
+	if err := store.InsertCert(ctx, row); err != nil {
+		return err
+	}
+	chain := [][]byte{certsSuiteRandom(310), certsSuiteRandom(290)}
+	read := func(wantState sidecar.TlsCertState, wantReason sidecar.TlsCertRevocationReason) error {
+		got, err := store.GetCert(ctx, row.CertId)
+		if err != nil {
+			return err
+		}
+		if got.State != wantState || got.RevocationReason != wantReason || len(got.Chain) != len(chain) ||
+			!bytes.Equal(got.Chain[0], chain[0]) || !bytes.Equal(got.Chain[1], chain[1]) {
+			return fmt.Errorf("read state %s, reason %q and a chain of %d, want %s and %q with its chain", got.State, got.RevocationReason, len(got.Chain), wantState, wantReason)
+		}
+		return nil
+	}
+	for _, step := range []struct {
+		transition *certsservice.CertsTransition
+		wantReason sidecar.TlsCertRevocationReason
+	}{
+		{&certsservice.CertsTransition{From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateOrdering, Ca: certsservice.CertsCaLetsEncrypt}, ""},
+		// the chain arrives with the issuance; a reason named with any state but revoking is not kept
+		{&certsservice.CertsTransition{
+			From: []sidecar.TlsCertState{sidecar.TlsCertStateOrdering}, To: sidecar.TlsCertStateIssued, Serial: fmt.Sprintf("%x", certsSuiteRandom(8)),
+			NotBefore: base, NotAfter: base.Add(45 * 24 * time.Hour), Chain: chain, RevocationReason: sidecar.TlsCertRevocationReasonKeyCompromise,
+		}, ""},
+		{&certsservice.CertsTransition{
+			From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateRevoking, RevocationReason: sidecar.TlsCertRevocationReasonCessationOfOperation,
+		}, sidecar.TlsCertRevocationReasonCessationOfOperation},
+		// a later word of compromise replaces it, and a pass that asks again with none keeps it
+		{&certsservice.CertsTransition{
+			From: []sidecar.TlsCertState{sidecar.TlsCertStateRevoking}, To: sidecar.TlsCertStateRevoking, RevocationReason: sidecar.TlsCertRevocationReasonKeyCompromise,
+		}, sidecar.TlsCertRevocationReasonKeyCompromise},
+		{&certsservice.CertsTransition{
+			From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued, sidecar.TlsCertStateRevoking}, To: sidecar.TlsCertStateRevoking,
+		}, sidecar.TlsCertRevocationReasonKeyCompromise},
+		// the CA took it: the reason goes, and the chain stays for its retention
+		{&certsservice.CertsTransition{From: []sidecar.TlsCertState{sidecar.TlsCertStateRevoking}, To: sidecar.TlsCertStateRevoked}, ""},
+	} {
+		step.transition.CertId = row.CertId
+		step.transition.At = base.Add(time.Hour)
+		applied, err := store.TransitionCert(ctx, step.transition)
+		if err != nil || !applied {
+			return fmt.Errorf("to %s: %v, %v", step.transition.To, applied, err)
+		}
+		if step.transition.To == sidecar.TlsCertStateOrdering {
+			continue
+		}
+		if err := read(step.transition.To, step.wantReason); err != nil {
+			return err
+		}
+	}
+	// a row written with a reason and not revoking keeps none; a row read in a list carries both
+	listed := certsSuiteRow(sidecar.NewId(), base.Add(time.Minute))
+	listed.RevocationReason = sidecar.TlsCertRevocationReasonKeyCompromise
+	if err := store.InsertCert(ctx, listed); err != nil {
+		return err
+	}
+	if got, err := store.GetCert(ctx, listed.CertId); err != nil || got.RevocationReason != "" {
+		return fmt.Errorf("a queued row written with a reason: %+v, %v", got, err)
+	}
+	if err := certsSuiteIssue(ctx, store, listed, certsservice.CertsCaGts, fmt.Sprintf("%x", certsSuiteRandom(8)), base); err != nil {
+		return err
+	}
+	if applied, err := store.TransitionCert(ctx, &certsservice.CertsTransition{
+		CertId: listed.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateRevoking, At: base.Add(2 * time.Hour),
+		Chain: chain, RevocationReason: sidecar.TlsCertRevocationReasonKeyCompromise,
+	}); err != nil || !applied {
+		return fmt.Errorf("marking: %v, %v", applied, err)
+	}
+	rows, err := store.ListInStates(ctx, []sidecar.TlsCertState{sidecar.TlsCertStateRevoking}, CertsIdAt(base), 1000)
+	if err != nil {
+		return err
+	}
+	for _, got := range rows {
+		if got.CertId == listed.CertId {
+			if got.RevocationReason != sidecar.TlsCertRevocationReasonKeyCompromise || len(got.Chain) != 2 || !got.StateTime.Equal(base.Add(2*time.Hour)) {
+				return fmt.Errorf("listed %+v", got)
+			}
+			return nil
+		}
+	}
+	return errors.New("the revoking row was not listed")
+}
+
+// A revoked row counts from its revocation, however long its validity had left, and a failed one, which
+// has no validity, from its failure (cert-1's ttl; QD-742).
+func caseCertsPurgeByStateTime(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
+	// a decade of its own, after the purges' other cases and before the suite's other times
+	base := time.Date(1990, time.January, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(certsSuiteRandom(1)[0]) * time.Hour)
+	day := 24 * time.Hour
+	revoked := certsSuiteRow(sidecar.NewId(), base)
+	revokedLater := certsSuiteRow(sidecar.NewId(), base.Add(time.Minute))
+	revoking := certsSuiteRow(sidecar.NewId(), base.Add(2*time.Minute))
+	failed := certsSuiteRow(sidecar.NewId(), base.Add(3*time.Minute))
+	failedLater := certsSuiteRow(sidecar.NewId(), base.Add(4*time.Minute))
+	queued := certsSuiteRow(sidecar.NewId(), base.Add(5*time.Minute))
+	for _, row := range []*sidecar.TlsCertRecord{revoked, revokedLater, revoking, failed, failedLater, queued} {
+		if err := store.InsertCert(ctx, row); err != nil {
+			return err
+		}
+	}
+	// each certificate's validity runs 45 days from base, far past the purge's time
+	for _, row := range []*sidecar.TlsCertRecord{revoked, revokedLater, revoking} {
+		if err := certsSuiteIssue(ctx, store, row, certsservice.CertsCaLetsEncrypt, fmt.Sprintf("%x", certsSuiteRandom(8)), base); err != nil {
+			return err
+		}
+	}
+	for _, step := range []*certsservice.CertsTransition{
+		{CertId: revoked.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateRevoking, At: base.Add(day)},
+		{CertId: revoked.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateRevoking}, To: sidecar.TlsCertStateRevoked, At: base.Add(2 * day)},
+		{CertId: revokedLater.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateRevoking, At: base.Add(day)},
+		{CertId: revokedLater.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateRevoking}, To: sidecar.TlsCertStateRevoked, At: base.Add(4 * day)},
+		// marked long ago and never taken by its CA: not revoked, so it counts from its validity's end
+		{CertId: revoking.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateRevoking, At: base.Add(day)},
+		{CertId: failed.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateFailed, At: base.Add(2 * day)},
+		{CertId: failedLater.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateQueued}, To: sidecar.TlsCertStateFailed, At: base.Add(4 * day)},
+	} {
+		if applied, err := store.TransitionCert(ctx, step); err != nil || !applied {
+			return fmt.Errorf("to %s: %v, %v", step.To, applied, err)
+		}
+	}
+	gone := func(row *sidecar.TlsCertRecord) (bool, error) {
+		_, err := store.GetCert(ctx, row.CertId)
+		if errors.Is(err, certsservice.ErrCertsNotFound) {
+			return true, nil
+		}
+		return false, err
+	}
+	// at the instant of the revocation and the failure nothing has ended before it
+	if _, err := store.PurgeEnded(ctx, base.Add(2*day)); err != nil {
+		return err
+	}
+	for _, row := range []*sidecar.TlsCertRecord{revoked, failed} {
+		if went, err := gone(row); err != nil || went {
+			return fmt.Errorf("a row purged at its state's own time: %v, %v", went, err)
+		}
+	}
+	removedCount, err := store.PurgeEnded(ctx, base.Add(3*day))
+	if err != nil {
+		return err
+	}
+	if removedCount < 2 {
+		return fmt.Errorf("purged %d", removedCount)
+	}
+	for _, row := range []*sidecar.TlsCertRecord{revoked, failed} {
+		if went, err := gone(row); err != nil || !went {
+			return fmt.Errorf("a row past its state's time: gone %v, %v", went, err)
+		}
+	}
+	for _, row := range []*sidecar.TlsCertRecord{revokedLater, revoking, failedLater, queued} {
+		if went, err := gone(row); err != nil || went {
+			return fmt.Errorf("a row the purge must keep: gone %v, %v", went, err)
+		}
+	}
+	return nil
+}
+
+func caseCertsPurgeChains(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {
+	// the first decade, before the purges' other cases
+	base := time.Date(1970, time.January, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(certsSuiteRandom(1)[0]) * time.Hour)
+	day := 24 * time.Hour
+	chain := [][]byte{certsSuiteRandom(300), certsSuiteRandom(280)}
+	expired := certsSuiteRow(sidecar.NewId(), base)
+	revoked := certsSuiteRow(sidecar.NewId(), base.Add(time.Minute))
+	live := certsSuiteRow(sidecar.NewId(), base.Add(2*time.Minute))
+	rows := []*sidecar.TlsCertRecord{expired, revoked, live}
+	for index, row := range rows {
+		if err := store.InsertCert(ctx, row); err != nil {
+			return err
+		}
+		// expired's validity ends 45 days in, the others' 60 days later
+		notBefore := base
+		if 0 < index {
+			notBefore = base.Add(60 * day)
+		}
+		if err := certsSuiteIssue(ctx, store, row, certsservice.CertsCaLetsEncrypt, fmt.Sprintf("%x", certsSuiteRandom(8)), notBefore); err != nil {
+			return err
+		}
+		if applied, err := store.TransitionCert(ctx, &certsservice.CertsTransition{
+			CertId: row.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateIssued, At: notBefore, Chain: chain,
+		}); err != nil || !applied {
+			return fmt.Errorf("the chain: %v, %v", applied, err)
+		}
+	}
+	for _, step := range []*certsservice.CertsTransition{
+		{CertId: expired.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateExpired, At: base.Add(45 * day)},
+		{CertId: revoked.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateIssued}, To: sidecar.TlsCertStateRevoking, At: base.Add(61 * day)},
+		{CertId: revoked.CertId, From: []sidecar.TlsCertState{sidecar.TlsCertStateRevoking}, To: sidecar.TlsCertStateRevoked, At: base.Add(62 * day)},
+	} {
+		if applied, err := store.TransitionCert(ctx, step); err != nil || !applied {
+			return fmt.Errorf("to %s: %v, %v", step.To, applied, err)
+		}
+	}
+	chainCount := func(row *sidecar.TlsCertRecord) (int, error) {
+		got, err := store.GetCert(ctx, row.CertId)
+		if err != nil {
+			return 0, err
+		}
+		return len(got.Chain), nil
+	}
+	want := func(when string, counts ...int) error {
+		for index, row := range rows {
+			count, err := chainCount(row)
+			if err != nil {
+				return fmt.Errorf("%s: a row went with its chain: %w", when, err)
+			}
+			if count != counts[index] {
+				return fmt.Errorf("%s: row %d holds a chain of %d, want %d", when, index, count, counts[index])
+			}
+		}
+		return nil
+	}
+	if _, err := store.PurgeChains(ctx, base.Add(45*day)); err != nil {
+		return err
+	}
+	if err := want("at the expiry", 2, 2, 2); err != nil {
+		return err
+	}
+	droppedCount, err := store.PurgeChains(ctx, base.Add(45*day+time.Second))
+	if err != nil {
+		return err
+	}
+	if droppedCount < 1 {
+		return fmt.Errorf("dropped %d", droppedCount)
+	}
+	if err := want("past the expiry", 0, 2, 2); err != nil {
+		return err
+	}
+	// the revoked row's validity runs to day 105: its chain goes by its revocation's time
+	if _, err := store.PurgeChains(ctx, base.Add(62*day+time.Second)); err != nil {
+		return err
+	}
+	if err := want("past the revocation", 0, 0, 2); err != nil {
+		return err
+	}
+	// a second pass finds nothing of this case's left to drop, and the rows are all still there
+	if _, err := store.PurgeChains(ctx, base.Add(62*day+time.Second)); err != nil {
+		return err
+	}
+	return want("a second pass", 0, 0, 2)
 }
 
 func caseCertsEphemeral(ctx context.Context, store certsservice.CertsStore, hooks *CertsStoreSuiteHooks) error {

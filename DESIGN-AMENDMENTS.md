@@ -5621,3 +5621,85 @@ server's api answers a request whose Postgres connection a restart cut with 503 
 Changes: server/router answers Postgres connection-loss classes 503 with Retry-After; TEST-M2-15's retryable half of the Postgres restart row.
 
 Questions: `test-m2-15-postgres-restart-answer.md`.
+
+### QD-760: What does a merge write for a document whose row and postings pass a shard's cap in a shard of their own?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+Extractor 1's D6 skips a document (no entry, a tombstone where it was indexed before) when its key set would encode past KeySetMax or when it alone would not fit a shard, a test every device computes from the key set and row alone at extraction time, so no merge, push past DirectBytes or roll-up meets a document it cannot place. Such documents are not searchable, as documents past KeySetMax already are. The design agent amends DESIGN-DETAILS sections 1 and 11 with the exact test (the one-document shard's encoded length, or a bound of it every device computes alike) before the code changes.
+
+Changes: D6 in DESIGN-DETAILS 11.2.3 and protocol/INDEX-FORMAT.md, before the index format freezes; the extractor's skip test and its tombstone; errIndexMergeUnplaceable stays as a closed guard that the rule makes unreachable; a short amendment to DESIGN-DETAILS sections 1 and 11 by the design agent, then a fix track in the lane holding SEARCH.
+
+Questions: `search-m10-10-document-past-a-shard.md`.
+
+### QD-761: What ends the fold's stop below a bridge body sealed to a generation that never forms?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §17 IP addresses, subnet routing, and port forwarding.*
+
+A config writer that has held every generation the config repo's gkm head names for a set time (a settings field, 24 h by default) freezes a bridge body sealed above all of them as void (Refused, no such generation) and folds past it; a checker that lacks that generation too takes the head's rows unchecked, as now. The id level and the rows stay as they are, and no server sees anything new. The design agent amends DESIGN-DETAILS 12.2.3 with the exact rule (when the time starts, what a checker does, the fork argument) before FoldBridgeLedger changes.
+
+Changes: DESIGN-DETAILS 12.2.3: the stop below an Unopened filing is bounded; a short amendment by the design agent; FoldBridgeLedger and BridgeLedgerFold.Stopped (BRIDGE-M4-23), with the wait as a settings field; then a fix track in the lane holding BRIDGE.
+
+Questions: `bridge-m2-02-unopened-generation-stall.md`.
+
+### QD-762: Where does the config repo's holders_shrunk_at live, now that its AclRepo row is the state's own and no rows hold it?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §8 Access control.*
+
+TEAM's configSetShrunkAt adds the config repo's row to the rows at the first entry that shrinks its key holders, AclRepo{repo_id, kind: config, holders_shrunk_at: n}, sorted in with the rest, and advances it there afterwards like any repo's; configAdvanceShrinks judges the config beside the rows' repos, and QD-746's shrunk_repo_ids may name it. ACL's state keeps a config row the rows hold and synthesizes one only where the rows hold none, with holders_shrunk_at 0 there. This amends QD-719: no rows bytes change at the row's creation, and the rows change only when there is a shrink to record.
+
+Changes: config_coverage.go: configSetShrunkAt and configAdvanceShrinks reach the config repo; acl_state.go's indexConfigRepo: the synthesized row's holders_shrunk_at is 0, not the state's position; the hand-built config rows leave sidecartest/gkmschedule/world.go, gkm_holders_test.go and gkmservice/reconciler_test.go.
+
+Questions: `acl-config-repo-row-shrunk-at.md`.
+
+### QD-763: Since gkm/dkey/<delegation_id> names no network, what tells QD-675's sweep which network's rows an object answers to?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §10 Group keys for evs: MLS and the GKM service.*
+
+A forwarding Delegation's reader key object is gkm/dkey/<network_id>/<delegation_id>. The engine takes the network from the token at the upload and the read; gkm's reconciler lists one network's prefix at its pass now and then and deletes at once any object that no forwarding row in the state's rows and no tracked end names, which is QD-675's sweep. A network's shred or a hold finds its key objects by the prefix. The network id in the key is an opaque id (I-13), as a group's and a repo's are. This changes QD-442's path form for this family; nothing in production holds one.
+
+Changes: GkmDelegationKeyPath (gkm_paths.go) and its callers in the root and gkmservice; testdata/gkm/wrap_paths.json; the reconciler's per-network sweep of gkm/dkey/<network_id>/ (QD-675's second part); sidecar/metadata_list.yml gkm-1's store line; §10.6's object table through design-records.
+
+Questions: `core-owner-fixes-dkey-sweep-network.md`.
+
+### QD-764: Where do rows get a route rule's via subjects when it names no `via`, which QD-004 makes the advertisers its BridgeRoutes name, and how does a gate tell an exit rule's via subjects from its other targets?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §8 Access control.*
+
+BridgeRows gains repeated BridgeRouteRow routes = 2 {bytes route_id = 1; bytes advertiser = 2; repeated bytes route_rule_ids = 3;}, written at the fold for every approved route in force and applied by every verifier in log order after a base, as the egress mode is. AclState adds each advertiser to the via subjects of the no-via route rules its row names, which builds QD-004's second half. AclRule gains repeated AclTarget via = 12, so a rule's via subjects no longer share targets with its dial destinations and an internet rule that names a via holds to it at every gate. The server sees the ids §17.8 already describes, with an api-7 line.
+
+Changes: acl.proto and the bridge rows proto: BridgeRouteRow, BridgeRows.routes = 2, AclRule.via = 12, listed in protocol/design_unfenced_test.go's testFenceAdditions; the fold writing the routes rows, CompileAcl moving via subjects to via, AclState, MayRoute, AclEngine.AllowRoute, the contract gate's Reach, RouteRules and ExitRules; sidecar/metadata_list.yml api-7; BRIDGE-M4-16's subject rows for a no-via rule.
+
+Questions: `acl-m2-17-no-via-route-advertisers.md`.
+
+### QD-765: Where should evs write which statement a slot object belongs to: object metadata, a field of EvsSlotObject, or nowhere?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+evs writes each slot object's creating statement as its origin (push id, statement hash prefix, ref, signer sidecar, base version, path epoch, mode: at most 190 B) in object metadata on slot/ objects, key origin, set by the create If-None-Match and returned to no client. Step 6 takes an existing object only under its own statement's origin, and evacuation deletes a dead record's slot only when the origin is that record's statement; an absent or unparseable origin means the object is no statement's, never taken and never deleted by evacuation. No format-1 message, route or client changes.
+
+Changes: DESIGN-DETAILS section 14 stands as written (14.2.2, 14.8); §2.8 evs-5's sees and ttl, and §19.6's MinIO row (a slot/ object's origin beside QD-248's idx/ entry state): sidecar/metadata_list.yml with the list's version bump, in the fix track; DESIGN.md text by design-records from 14.8; evsservice: slot_origin.go (new), push_commit.go, resolve.go, check_objects.go, erase.go, evacuate_resolve.go, evacuate.go, settings.go (14.7's track 2).
+
+Questions: `details-14-slot-origin.md`.
+
+### QD-766: Should evacuation stop deleting dead records' slots now, as an interim fix, before the full slot fix is built?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+Evacuation stops deleting the slots a dead batch record lists, as an interim that lands before the full slot fix: evacuate_resolve.go's dead branch queues no slot. It closes the honest retoken's loss (14.1 A) and the hostile re-listing (14.1 B) at the cost of leaked slot objects of at most 8 KiB each. The full fix (QD-765) turns the delete back on for a dead record's own slots one release after every process writes origins.
+
+Changes: evsservice/evacuate_resolve.go: the dead branch queues no slot (DESIGN-DETAILS 14.2.8, 14.7's track 1); FS-8's slots clause reads 'and its slots stay' until the full fix; cases C and D of 14.1 stay open until the full fix.
+
+Questions: `details-14-interim-first.md`.
+
+### QD-767: Should evs hand a retoken the slot its refused statement created, or refuse it and have the push rebuilt?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+A retoken that meets the slot its refused statement created takes it over: evs deletes the refused statement's object and the retoken creates its own, when the origin names a push on the same ref by the same signer in a lower path epoch that the head does not show committed, the bytes are equal and no hold applies. The DELETE names the object's LastModified, after evs waits until the object is past the settle age (SlotSettleAge, a settings field, 2 s by default). A CLOSURE is uploaded and charged once across a retoken. Any other statement's object is 409 SLOT_STALE.
+
+Changes: DESIGN-DETAILS 14.2.4 stands as written; amendments 14-B (9.2.5's slot paragraph) and 14-C (9.3's K) apply; evsservice writeSlot: the takeover, the settle wait and the Resolve in the push route (14.7's track 2).
+
+Questions: `details-14-retoken-takeover.md`.
+
+### QD-768: Should 5h refuse a deposit whose version names a slot its own push does not introduce?
+*Decided by the owner on 2026-11-12, asked one question at a time. Folds into §11 Encrypted versioned storage.*
+
+On a deposit ref, every slot a new version names is one its own push introduces; otherwise 5h refuses the push 409 SLOT_UNKNOWN, recorded, as an unknown slot is today. With step 6's origin rule, each slot a consumed deposit names was then created by that deposit's statement and by no other, so CONSUME's delete needs no check of its own.
+
+Changes: evsservice/check_objects.go: 5h's deposit-ref condition (DESIGN-DETAILS 14.2.6, 14.7's track 2); §11.8's 5h and §11.12's deposits row text, by design-records from 14.8.
+
+Questions: `details-14-deposit-cited-slots.md`.
+

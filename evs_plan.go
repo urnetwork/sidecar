@@ -44,6 +44,12 @@
 // REKEY shape. Any other write to a git-mode ref is ErrEvsGitRef: the local tier plans a git ref update through
 // PlanGitUpdate (below), sharing the chain rules, with a rename keeping its file's chain.
 //
+// A write held to the version its caller read (EvsPathWrite.IfVersion; QD-721) is checked against the plan's own read
+// of the path: 0 for a path that is absent or removed, else the version that stands. One the read does not bear out
+// is answered here with evs's own 409 PATH_CONFLICT, as an *EvsPathConflictError naming every such path of the write,
+// before anything is sealed or sent; one it bears out states that version as its base_entry_version, so 5g's CAS spans
+// the caller's read to the commit, and a plan made again after a refusal checks it again.
+//
 // Not built here, and failing closed: a file-mode rename or copy, which would keep a file's chain under another path
 // through the reuse list.
 //
@@ -57,6 +63,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"slices"
 	"strings"
 
@@ -83,7 +90,8 @@ var (
 	ErrEvsPathKind = errors.New("evs: a path of another kind")
 	// What a format-1 write cannot do yet: named in the error, nothing sent.
 	ErrEvsWriteNotBuilt = errors.New("evs: write not built")
-	// A write held to an entry version (EvsPathWrite.IfVersion) the path no longer stands at.
+	// A write held to a version the path is no longer at: §16.2's base_version (EvsPathWrite.IfBaseVersion), and the
+	// planner's PATH_CONFLICT for EvsPathWrite.IfVersion, which is this as well.
 	ErrEvsPathMoved = errors.New("evs: the path moved past the version the write was made on")
 	// A rekey write to a git-mode ref whose new blob, or mode, is not the standing version's: a rekey changes no tree
 	// (DESIGN-DETAILS 8.2.10).
@@ -103,18 +111,59 @@ type EvsPathWrite struct {
 	Remove bool
 	// A whole checkpoint under a fresh key even where a diff would do: KEYS-M2-26's ur evs rekey.
 	ForceCheckpoint bool
-	// The entry version the path must stand at, 0 for any. A write whose content came from an earlier read of that
-	// version, as ur evs rekey's does, is refused with ErrEvsPathMoved once another write or a removal landed
-	// between, rather than putting the older content back; evs then holds the push to the version the plan read (5g).
-	IfVersion uint64
+	// The path version the write's caller read, nil for no check (QD-721): 0 for a path it read as absent, which a
+	// removed path is too, so 0 is the create-only write; else the entry version that stood. A write whose content
+	// came from that read, as a mail writer's append and ur evs rekey's do, is refused with an *EvsPathConflictError,
+	// evs's 409 PATH_CONFLICT, once another write, creation or removal landed between, rather than putting the older
+	// content back; evs then holds the push to the version the plan read (5g), which is the caller's.
+	IfVersion *uint64
 	// §16.2's base_version, the path version the write was made on, nil for no check: the path's newest version, a
 	// standing file's or a removal's, 0 for a path evs shows nothing of, must be it, else ErrEvsPathMoved. Unlike
-	// IfVersion it lets a removed path be written again, on the removal's version, as an agent's evs_write over a
-	// removal it read may (EVS1-M3-01); evs holds the push to the version the plan read all the same (5g).
+	// IfVersion it tells a removal from a path never written, so a removed path is written again only on the
+	// removal's version, as an agent's evs_write over a removal it read may (EVS1-M3-01); evs holds the push to the
+	// version the plan read all the same (5g).
 	IfBaseVersion *uint64
 	// The version's versioning, EvsVersioningFor's answer (evs_versioning.go): 0 keeps every version, 1 and 2 are
 	// versionless, format 2's (evs_plan_versionless.go). The planner never picks one of its own.
 	Versioning uint32
+}
+
+// A write evs's path CAS refused, with the written paths it names (QD-721). The planner's own: a write held to a
+// version its read did not bear out (EvsPathWrite.IfVersion), answered before anything is sealed or sent, which is
+// ErrEvsPathMoved as well. Or evs's 409 to the push (§11.8's 5g), its token paths found among the plan's
+// (evs_write.go). Either way errors.As finds the *EvsError, 409 PATH_CONFLICT, whose Paths are the token paths.
+type EvsPathConflictError struct {
+	Refusal *EvsError
+	// The written paths that moved, in the write's order: none where evs named only what the planner changed for
+	// the write, a parent directory's delta. Never logged (I-13).
+	Paths []string
+	// what errors.Is and errors.As see: the refusal, with ErrEvsPathMoved for the planner's own
+	causes []error
+}
+
+// The refusal's text, which names no path (I-13).
+func (self *EvsPathConflictError) Error() string {
+	return self.Refusal.Error()
+}
+
+// The refusal, and ErrEvsPathMoved for the planner's own.
+func (self *EvsPathConflictError) Unwrap() []error {
+	return self.causes
+}
+
+// The planner's own conflict on the written paths, each with its token path as the plan's read named it.
+func newEvsPlannedConflict(paths []string, tokenPaths []EvsTokenPath) *EvsPathConflictError {
+	refusal := &EvsError{Status: http.StatusConflict, Code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT, Paths: tokenPaths}
+	return &EvsPathConflictError{Refusal: refusal, Paths: paths, causes: []error{refusal, ErrEvsPathMoved}}
+}
+
+// Whether err is the planner's own conflict, nothing sent.
+func evsPlannedConflict(err error) (*EvsPathConflictError, bool) {
+	var conflict *EvsPathConflictError
+	if errors.As(err, &conflict) && errors.Is(err, ErrEvsPathMoved) {
+		return conflict, true
+	}
+	return nil, false
 }
 
 // What a plan is made against.
@@ -165,6 +214,8 @@ type EvsWritePlan struct {
 	Flags  uint32
 	Erased []*EvsErasedKey
 	scope  string
+	// an ERASE's or a CLOSURE's note, which the sender seals as EvsSealedMetadata.erasure_note (QD-682; evs_erase.go)
+	erasureNote []byte
 	// a git-mode push's update, which the sender seals as EvsSealedMetadata.git: a rekey's REKEY shape, set by setRef
 	gitUpdate *protocol.EvsGitUpdate
 	// planned on a ref with no head, in the epoch firstEpoch gave: a refusal is answered by planning again, never by a
@@ -305,7 +356,7 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 	// every write a rekey write: the one write a git-mode ref takes here (DESIGN-DETAILS 8.2.10)
 	rekeyOnly := true
 	for _, write := range args.Writes {
-		rekeyOnly = rekeyOnly && write.ForceCheckpoint && write.IfVersion != 0 && !write.Remove
+		rekeyOnly = rekeyOnly && write.ForceCheckpoint && write.IfVersion != nil && *write.IfVersion != 0 && !write.Remove
 	}
 	writePaths := map[string]bool{}
 	readPaths := []string{}
@@ -341,6 +392,8 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 	var plan *EvsWritePlan
 	planned := map[string]*EvsPlannedPath{}
 	directories := map[string]*evsDirectoryRead{}
+	// the held writes whose paths the reads did not bear out, each with its token path (IfVersion)
+	moved := map[string]EvsTokenPath{}
 	// a read names at most 64 paths (§11.9), so a large write reads in batches, each verified, the push based on the
 	// first one's head; every path's own newest is what its batch read, which 5g holds it to at commit
 	readBatch := func(batch []string, fresh bool) error {
@@ -385,6 +438,11 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 					continue
 				}
 				path, err := self.planPath(ctx, plan, result, readPath, result.replies[i], write)
+				if _, ok := evsPlannedConflict(err); ok {
+					// gathered, so the answer names every path of the write that moved
+					moved[write.Path] = readPath.current
+					continue
+				}
 				if err != nil {
 					return err
 				}
@@ -398,6 +456,17 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 		if err := readBatch(batch, args.Fresh || 0 < start); err != nil {
 			return nil, err
 		}
+	}
+	if 0 < len(moved) {
+		paths := []string{}
+		tokenPaths := []EvsTokenPath{}
+		for _, write := range args.Writes {
+			if tokenPath, ok := moved[write.Path]; ok {
+				paths = append(paths, write.Path)
+				tokenPaths = append(tokenPaths, tokenPath)
+			}
+		}
+		return nil, newEvsPlannedConflict(paths, tokenPaths)
 	}
 	if evsNeedsRoot(planned, directories) && directories[""] == nil {
 		// a top-level creation or removal changes the root's table, read after the rest (DESIGN-DETAILS 9.2.8)
@@ -528,8 +597,15 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 		planned.PrevPushId = verified.Statement.Push.GetPushId()
 		planned.PrevCommitVersion = verified.CommitVersion
 	}
-	if write.IfVersion != 0 && (!stands || evsVerifiedNewestVersion(verified) != write.IfVersion) {
-		return nil, ErrEvsPathMoved
+	if write.IfVersion != nil {
+		// the version the caller read against what this read shows: 0 for a path absent or removed (QD-721)
+		newest := uint64(0)
+		if stands {
+			newest = evsVerifiedNewestVersion(verified)
+		}
+		if newest != *write.IfVersion {
+			return nil, newEvsPlannedConflict([]string{write.Path}, []EvsTokenPath{readPath.current})
+		}
 	}
 	if base := write.IfBaseVersion; base != nil {
 		newest := uint64(0)

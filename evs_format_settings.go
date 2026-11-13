@@ -49,6 +49,13 @@ type EvsFormatSettings struct {
 	// The listed values a builder puts in a part that holds no change: 32,000, 1,024,000 B (DESIGN-DETAILS 10.2.5). A
 	// checker takes a slice cut anywhere.
 	DropListPartValueCount int
+	// One read reply frame, as encoded: 1 MiB + 64 KiB, an object's 1 MiB slice (EvsReadObject spans frames past it)
+	// with room for its fields, a path with its proofs, or a statement (plan-EVS1-format-bytes#8). evs writes none
+	// past it and a reader refuses one, so evs cannot make a reader buffer more.
+	ReadFrameMaxByteCount int
+	// The deltas one path's reply carries, a frame each after its path frame (QD-662): 255, a head window's entries,
+	// since each delta is a window version past names_through. A reader refuses a path past it.
+	ReadPathDeltaMaxCount int
 }
 
 // The protocol's values, the only source of their defaults.
@@ -69,6 +76,8 @@ func DefaultEvsFormatSettings() *EvsFormatSettings {
 		DropMaxBodyByteCount:        256 * 1024,
 		DropWindow:                  7 * 24 * time.Hour,
 		DropListPartValueCount:      32000,
+		ReadFrameMaxByteCount:       1024*1024 + 64*1024,
+		ReadPathDeltaMaxCount:       255,
 	}
 }
 

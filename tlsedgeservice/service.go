@@ -10,9 +10,8 @@
 // key event names (KillChanged). A failed read keeps the last answer, so a running process outlives a
 // store outage on what it holds, while one started then stays not ready.
 //
-// The connection path itself, §13.5's steps in order, is TLS-M5-10's: until it lands, Serve accepts on
-// the listed ports and answers every connection with internal_error, the alert of an edge that cannot
-// route (reading 5), so nothing reaches a listener and nothing is half-routed.
+// The connection path itself, §13.5's steps in order, is conn.go's and splice.go's, with lease.go's
+// accounting and records.go's connection records; drain.go ends the engine.
 //
 // Every wait is on the host's clock, never a socket deadline or a sleep. Safe for concurrent use.
 
@@ -51,6 +50,10 @@ type TlsEdgeService struct {
 	visitorKeys   *TlsVisitorKeys
 	caps          *TlsEdgeCaps
 	limits        *tlsEndpointLimitsCache
+	// Nil when the host gave no Quota, and then no connection is routed (lease.go).
+	usage   *sidecar.QuotaUsageBatcher
+	leases  *tlsEdgeLeases
+	records *tlsConnectionRecords
 
 	// Wakes the kills loop for a key event or a resync.
 	killWake chan struct{}
@@ -62,6 +65,8 @@ type TlsEdgeService struct {
 	killLoadCount *sidecar.MonitorValue[uint64]
 	// Whether a kill reload has read the rows and every key they and the last reads named.
 	killsLoaded *sidecar.MonitorValue[bool]
+	// Rises as each connection ends, after it is counted.
+	connectionEndCount *sidecar.MonitorValue[uint64]
 
 	loopGroup       sync.WaitGroup
 	connectionGroup sync.WaitGroup
@@ -70,9 +75,13 @@ type TlsEdgeService struct {
 	killPendingNetworkIds map[sidecar.Id]bool
 	killResyncPending     bool
 	draining              bool
-	closed                bool
-	liveListeners         map[net.Listener]bool
-	liveConnections       map[net.Conn]bool
+	// a drain's wait is over: what is open resets, and what is still setting up ends itself
+	drainReset      bool
+	closed          bool
+	liveListeners   map[net.Listener]bool
+	liveConnections map[net.Conn]bool
+	// connections past their setup, by listening network
+	networkIdSplices map[sidecar.Id]map[*tlsEdgeConnection]bool
 }
 
 // Starts the engine and its loops, which run until ctx ends or Close. host needs Redis, for the {tes_}
@@ -94,6 +103,16 @@ func NewTlsEdgeService(
 	clock := host.ClockOrReal()
 	cancelCtx, cancel := context.WithCancel(ctx)
 	visitorKeys := NewTlsVisitorKeys(clock)
+	metrics := newTlsEdgeMetrics(host.Metrics, settings)
+	var usage *sidecar.QuotaUsageBatcher
+	if host.Quota != nil {
+		var err error
+		usage, err = sidecar.NewQuotaUsageBatcher(cancelCtx, host, sidecar.QuotaProducerTlsEdge, settings.Usage)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+	}
 	self := &TlsEdgeService{
 		ctx:                   cancelCtx,
 		cancel:                cancel,
@@ -102,7 +121,9 @@ func NewTlsEdgeService(
 		dialer:                dialer,
 		settings:              settings,
 		clock:                 clock,
-		metrics:               newTlsEdgeMetrics(host.Metrics),
+		metrics:               metrics,
+		usage:                 usage,
+		records:               newTlsConnectionRecords(store, settings, clock, metrics),
 		names:                 NewTlsEdgeNames(settings.Root, clock),
 		kills:                 NewTlsKillSet(clock),
 		negativeCache:         newTlsNegativeCache(settings.NegativeCacheTtl, settings.NegativeCacheMaxCount, clock),
@@ -114,19 +135,26 @@ func NewTlsEdgeService(
 		nameLoadCount:         sidecar.NewMonitorValue(uint64(0)),
 		killLoadCount:         sidecar.NewMonitorValue(uint64(0)),
 		killsLoaded:           sidecar.NewMonitorValue(false),
+		connectionEndCount:    sidecar.NewMonitorValue(uint64(0)),
 		killPendingNetworkIds: map[sidecar.Id]bool{},
 		liveListeners:         map[net.Listener]bool{},
 		liveConnections:       map[net.Conn]bool{},
+		networkIdSplices:      map[sidecar.Id]map[*tlsEdgeConnection]bool{},
 	}
+	self.leases = newTlsEdgeLeases(cancelCtx, host.Quota, usage, settings, clock, self.resetSpent)
 	self.loopGroup.Add(1)
 	go func() {
 		defer self.loopGroup.Done()
 		self.limits.run(cancelCtx)
 	}()
 	if store != nil {
-		self.loopGroup.Add(2)
+		self.loopGroup.Add(3)
 		go self.runNames()
 		go self.runKills()
+		go func() {
+			defer self.loopGroup.Done()
+			self.records.run(cancelCtx)
+		}()
 	}
 	return self, nil
 }
@@ -340,7 +368,8 @@ func (self *TlsEdgeService) reloadKills() bool {
 		return false
 	}
 	self.metrics.killLoads.Add(1, tlsKillLoadResultRows)
-	if 0 < len(self.kills.SetRows(rows)) {
+	if changedNetworkIds := self.kills.SetRows(rows); 0 < len(changedNetworkIds) {
+		self.resetKilled(changedNetworkIds)
 		self.killChangeCount.Update(func(count uint64) uint64 { return count + 1 })
 	}
 	complete := true
@@ -367,6 +396,7 @@ func (self *TlsEdgeService) readKillKey(networkId sidecar.Id) bool {
 	}
 	self.metrics.killLoads.Add(1, tlsKillLoadResultKey)
 	if self.kills.SetKey(networkId, fieldValues) {
+		self.resetKilled([]sidecar.Id{networkId})
 		self.killChangeCount.Update(func(count uint64) uint64 { return count + 1 })
 	}
 	testHookBarrier("tlsedge.kill_read.after", networkId.String())
@@ -456,80 +486,4 @@ func (self *TlsEdgeService) Serve(listener net.Listener) error {
 			self.serveConnection(conn, port)
 		}()
 	}
-}
-
-// One connection. TLS-M5-10 builds §13.5's steps here. Until then nothing can be routed, so every
-// connection gets the one alert an edge that cannot route sends, internal_error (reading 5), and closes:
-// no byte of it is read, no store or dialer is asked, and nothing reaches a listener.
-func (self *TlsEdgeService) serveConnection(conn net.Conn, port int) {
-	defer conn.Close()
-	WriteTlsAlert(conn, TlsAlertInternalError)
-}
-
-// See sidecar.Engine: takes no new connection, closing the listeners Serve holds, and waits up to
-// drain_s for the connections in flight before resetting what remains.
-func (self *TlsEdgeService) Drain() {
-	listeners := func() []net.Listener {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		self.draining = true
-		listeners := []net.Listener{}
-		for listener := range self.liveListeners {
-			listeners = append(listeners, listener)
-		}
-		return listeners
-	}()
-	for _, listener := range listeners {
-		listener.Close()
-	}
-	done := make(chan struct{})
-	go func() {
-		self.connectionGroup.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return
-	case <-self.ctx.Done():
-	case <-self.clock.After(self.settings.DrainTimeout):
-	}
-	self.closeConnections()
-}
-
-// Closes every connection still open.
-func (self *TlsEdgeService) closeConnections() {
-	connections := func() []net.Conn {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		connections := []net.Conn{}
-		for conn := range self.liveConnections {
-			connections = append(connections, conn)
-		}
-		return connections
-	}()
-	for _, conn := range connections {
-		conn.Close()
-	}
-}
-
-// See sidecar.Engine: ends everything at once and waits for the loops. Safe after Drain and more than
-// once.
-func (self *TlsEdgeService) Close() {
-	listeners := func() []net.Listener {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		self.closed = true
-		listeners := []net.Listener{}
-		for listener := range self.liveListeners {
-			listeners = append(listeners, listener)
-		}
-		return listeners
-	}()
-	self.cancel()
-	for _, listener := range listeners {
-		listener.Close()
-	}
-	self.closeConnections()
-	self.loopGroup.Wait()
-	self.connectionGroup.Wait()
 }

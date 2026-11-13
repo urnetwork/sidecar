@@ -551,6 +551,46 @@ func TestAclRepoCreateSigners(t *testing.T) {
 	}
 }
 
+// The config repo's row is the state's own (QD-719), so with no row in the rows a RepoCreate of the Genesis's config
+// repo is a second one, whatever kind it asks, and every access-log statement naming the config is refused: no
+// statement moves the config onto another kind's rules or gives it an admin, a grant or a deletion.
+func TestAclNoStatementMovesTheConfigRepo(t *testing.T) {
+	cast := newAclStatementCast()
+	fixture := cast.fixture
+	configId := fixture.configRepo(Id{}, Id{})
+	state := fixture.state(t)
+	if len(state.Rows().GetRepos()) != 0 {
+		t.Fatalf("the rows hold %d repos", len(state.Rows().GetRepos()))
+	}
+	for kind := protocol.RepoKind_REPO_KIND_GENERAL; kind <= protocol.RepoKind_REPO_KIND_SECRET; kind += 1 {
+		for _, signer := range []Id{cast.ownerDevice, cast.laptop} {
+			create := &protocol.RepoCreate{RepoId: configId.Bytes(), Kind: kind}
+			_, err := state.CheckStatement(fixture.statement(bridge.SignedType_SIGNED_REPO_CREATE, create, signer), nil)
+			if aclTestRefusal(err) != ErrConfigRule {
+				t.Errorf("a RepoCreate of the config repo as %s: %v", kind, err)
+			}
+		}
+	}
+	statements := []struct {
+		name       string
+		signedType bridge.SignedType
+		body       proto.Message
+	}{
+		{name: "RepoAdmin", signedType: bridge.SignedType_SIGNED_REPO_ADMIN, body: &protocol.RepoAdmin{RepoId: configId.Bytes(), SidecarId: cast.laptop.Bytes(),
+			Change: protocol.RepoAdminChange_REPO_ADMIN_CHANGE_ADD}},
+		{name: "RepoGrant", signedType: bridge.SignedType_SIGNED_REPO_GRANT, body: &protocol.RepoGrant{
+			RepoId: configId.Bytes(), Subject: cast.laptop.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_WRITER}},
+		{name: "RepoRevoke", signedType: bridge.SignedType_SIGNED_REPO_REVOKE, body: &protocol.RepoRevoke{RepoId: configId.Bytes(), Subject: cast.laptop.Bytes()}},
+		{name: "RepoDelete", signedType: bridge.SignedType_SIGNED_REPO_DELETE, body: &protocol.RepoDelete{RepoId: configId.Bytes(), DeletionId: NewId().Bytes()}},
+	}
+	for _, c := range statements {
+		_, err := state.CheckStatement(fixture.statement(c.signedType, c.body, cast.ownerDevice), nil)
+		if aclTestRefusal(err) != ErrConfigRule {
+			t.Errorf("%s of the config repo: %v", c.name, err)
+		}
+	}
+}
+
 // RepoAdmin: a repo admin or a config writer adds and removes; never an add in the directory; in an owner-bound repo
 // an add only by a consented device of its owner, of one.
 func TestAclRepoAdminSigners(t *testing.T) {
@@ -773,7 +813,7 @@ func TestAclStatementShapeRefusals(t *testing.T) {
 	}{
 		{name: "a body of another type", statement: cast.fixture.statement(bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoRevoke{}, cast.laptop), refusal: ErrConfigRule},
 		{name: "k of n on a RepoGrant", statement: cast.fixture.authorityStatement(bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoGrant{}, cast.laptop, cast.ownerDevice), refusal: ErrConfigRule},
-		{name: "AuditOptIn", statement: cast.fixture.statement(bridge.SignedType_SIGNED_AUDIT_OPT_IN, &protocol.AuditOptIn{}, cast.ownerDevice), refusal: ErrConfigRuleMissing},
+		{name: "one signer's AuditOptIn", statement: cast.fixture.statement(bridge.SignedType_SIGNED_AUDIT_OPT_IN, &protocol.AuditOptIn{}, cast.ownerDevice), refusal: ErrConfigAuthority},
 		{name: "two signers on one statement", statement: &AclStatement{Type: bridge.SignedType_SIGNED_REPO_GRANT, Body: &protocol.RepoGrant{},
 			Signers: []ConfigSigner{{Kind: ConfigSignerSidecar, SidecarId: cast.laptop}, {Kind: ConfigSignerSidecar, SidecarId: cast.phone}}}, refusal: ErrConfigRule},
 		{name: "a recovery key's signature", statement: &AclStatement{Type: bridge.SignedType_SIGNED_REPO_GRANT, Body: &protocol.RepoGrant{},

@@ -1618,44 +1618,87 @@ func admissionRowRecoveryWindow(t testing.TB, net *AdmissionNet) {
 	}
 }
 
+// The racing row's network: two first devices of one owner, each on an api instance of its own over the tier's
+// cluster, as two of server's instances serve them.
+type admissionRace struct {
+	net           *AdmissionNet
+	networkId     sidecar.Id
+	configRepoId  sidecar.Id
+	ownerMemberId sidecar.Id
+	heads         *FakeConfigHeads
+	devices       []*AdmissionDevice
+	apis          []AdmissionApi
+}
+
+// The id of the network the racing row's devices race for, the same for the row's network on every run.
+func admissionRacingNetworkId(net *AdmissionNet) sidecar.Id {
+	return net.Id("racing network")
+}
+
+func newAdmissionRace(net *AdmissionNet) *admissionRace {
+	configRepoId := net.Id("racing config repo")
+	ownerMemberId := net.Id("racing owner")
+	return &admissionRace{
+		net:           net,
+		networkId:     admissionRacingNetworkId(net),
+		configRepoId:  configRepoId,
+		ownerMemberId: ownerMemberId,
+		heads:         NewFakeConfigHeads(configRepoId),
+		devices:       []*AdmissionDevice{net.Device("racing first", ownerMemberId), net.Device("racing second", ownerMemberId)},
+		apis:          []AdmissionApi{net.newApi(net.clock, net.cluster), net.newApi(net.clock, net.cluster)},
+	}
+}
+
+// BootstrapNetwork by device i on its api instance, once.
+func (self *admissionRace) bootstrap(i int) (*sidecar.ConfigBootstrapResult, error) {
+	device := self.devices[i]
+	return sidecar.BootstrapNetwork(self.net.ctx, &sidecar.ConfigBootstrapArgs{
+		NetworkId:         self.networkId,
+		OwnerMemberId:     self.ownerMemberId,
+		SidecarId:         device.SidecarId,
+		IdentityPublicKey: device.PublicKey(),
+		Sign:              self.net.signFunction(device),
+		ConfigRepoId:      self.configRepoId,
+		Heads:             self.heads.For(device.SidecarId, device.Key),
+		Publisher:         admissionPublisher{api: self.apis[i], networkId: self.networkId},
+		Projection:        admissionProjection{api: self.apis[i], networkId: self.networkId},
+		Clock:             self.net.clock,
+	})
+}
+
 // §22.7: two first devices racing base 1 (proj/<network_id>/1/_) on two api instances over one cluster leave one
 // genesis, which the loser learns and follows; the winner then admits the loser like any device, and a full reader
 // of the winning genesis holds both.
 func admissionRowFirstDevicesRacing(t testing.TB, net *AdmissionNet) {
-	networkId := net.Id("racing network")
-	heads := NewFakeConfigHeads(net.Id("racing config repo"))
-	ownerMemberId := net.Id("racing owner")
-	devices := []*AdmissionDevice{net.Device("racing first", ownerMemberId), net.Device("racing second", ownerMemberId)}
-	apis := []AdmissionApi{net.newApi(net.clock, net.cluster), net.newApi(net.clock, net.cluster)}
+	race := newAdmissionRace(net)
+	networkId, heads, ownerMemberId, devices, apis := race.networkId, race.heads, race.ownerMemberId, race.devices, race.apis
 	results := make([]*sidecar.ConfigBootstrapResult, len(devices))
 	errs := make([]error, len(devices))
-	done := make(chan int, len(devices))
-	for i, device := range devices {
+	// closed as each device's goroutine ends, its bootstrap returned; two devices, so the other one is 1-i
+	returned := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	for i := range devices {
 		go func() {
-			defer func() { done <- i }()
-			// a loser that read between the winner's entry 1 and its genesis, on another api instance, answers that
-			// api's 503 (plan-TEAM-genesis-custody #3); its daemon bootstraps again, which learns the genesis
-			for range 3 {
-				results[i], errs[i] = sidecar.BootstrapNetwork(net.ctx, &sidecar.ConfigBootstrapArgs{
-					NetworkId:         networkId,
-					OwnerMemberId:     ownerMemberId,
-					SidecarId:         device.SidecarId,
-					IdentityPublicKey: device.PublicKey(),
-					Sign:              net.signFunction(device),
-					ConfigRepoId:      net.Id("racing config repo"),
-					Heads:             heads.For(device.SidecarId, device.Key),
-					Publisher:         admissionPublisher{api: apis[i], networkId: networkId},
-					Projection:        admissionProjection{api: apis[i], networkId: networkId},
-					Clock:             net.clock,
-				})
-				if errs[i] == nil {
-					return
-				}
+			defer close(returned[i])
+			results[i], errs[i] = race.bootstrap(i)
+			refusal := &ConfigLogRefusal{}
+			if errs[i] == nil || !errors.As(errs[i], &refusal) || refusal.Status != http.StatusServiceUnavailable {
+				return
+			}
+			// the loser, which read between the winner's entry 1 and its genesis on another api instance, is answered
+			// that api's 503 (plan-TEAM-genesis-custody #3). Its daemon bootstraps again, and learns the genesis once
+			// the winner's base 1 has returned, which is when api has written it. So it waits for the other device's
+			// return, the winner's, and counts no tries: on a loaded host any count runs out before the genesis lands.
+			// Only a winner that never returns waits out the row's timeout, in real time, and fails the row there.
+			select {
+			case <-returned[1-i]:
+				results[i], errs[i] = race.bootstrap(i)
+			case <-net.ctx.Done():
+				errs[i] = fmt.Errorf("the other first device's bootstrap never returned (%w) after this one's %w", net.ctx.Err(), errs[i])
 			}
 		}()
 	}
-	for range devices {
-		<-done
+	for _, deviceReturned := range returned {
+		<-deviceReturned
 	}
 	for i, err := range errs {
 		if err != nil {

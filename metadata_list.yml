@@ -1,4 +1,4 @@
-# metadata_list.yml v11; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v12; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -48,6 +48,8 @@
 # v11, updated 2026-11-10 for §11's answers (owner decisions 225-250), adds evs-2's erasure ref id, keyed from the
 # repo id alone; evs-4's keyless expired record-class segments, kept until a later GC (246), and deposits retained
 # until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).
+# v12, updated 2026-11-12 for the owner's answers on certs' rows (QD-741, QD-742), adds cert-1's issued chains, a
+# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -124,7 +126,7 @@ api-2:
 api-3:
   service: api
   store: network_member, network_invite, network_idp, network_domain, network_scim_change; Redis {address_<hash>} attempt histories (existing; the ones every Public route's limit uses, under POST /auth/sso-discover's own key prefix)
-  sees: members (member_id, user, email, role, reauth_deadline, pending JIT state); invitations (hashed token, email, role, expiry); IdP configuration (issuer, client, vault-encrypted secret); verified domains and their daily checks, with each domain's acme_token, public in the customer's CNAME (§13.8's delegated DNS-01); SCIM changes awaiting an admin (Team v1); discovery attempts per caller address hash, for 10 minutes (POST /auth/sso-discover's per-address limit, 30 in 10 minutes, keyed by the address's peppered hash; no domain or address held)
+  sees: members (member_id, user, email, role, reauth_deadline, pending JIT state); invitations (hashed token, email, role, expiry); IdP configuration (issuer, client, vault-encrypted secret); verified domains and their daily checks, with each domain's acme_token, public in the customer's CNAME (§13.8's delegated DNS-01); SCIM changes awaiting an admin (Team v1); discovery attempts per caller address hash, for 10 minutes (POST /auth/sso-discover's per-address limit, 30 in 10 minutes, keyed by the address's peppered hash; no domain or address held); IdP sign-in flows in progress (state, nonce, PKCE verifier, IdP, network, the signed-in user that began one; 10 min, taken once)
   why: sign-in, roles and SSO (§7.5, §7.6); groups, tags, device names and admissions live only in the config repo (owner decision 46); discovery's limit bounds the IdP fetches a Public route makes api do
   ttl: members until removed; invitations until accepted or expired, at most 30 d; IdP rows until removed; domains, with their acme_token, while verified, dropped after 7 failed days; SCIM changes at most 7 d; discovery attempt histories 10 min, a family that exists today and so also sits in ops-3's bundles
   owner: §7.6
@@ -529,9 +531,9 @@ tls-4:
 cert-1:
   service: certs (taskworker), api
   store: network_tls_cert; Redis {tcb_<ca>_<registered_domain>} (a sorted set of the last 7 days' new-set orders)
-  sees: cert_id, network_id, client_id, sidecar_id, identifier-set hash, SPKI hash, the identity-key attestation, the CSR (public key and names), CA, account URI, profile, serial, validity, ARI window, state and successor; Team custom-domain chains and queued CSRs (v1); each CA's and registered domain's new-set orders of the last 7 days
+  sees: cert_id, network_id, client_id, sidecar_id, identifier-set hash, SPKI hash, the identity-key attestation, the CSR (public key and names), CA, account URI, profile, serial, validity, ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1); each CA's and registered domain's new-set orders of the last 7 days
   why: order, renew and revoke certificates for device-held keys (owner decision 39; §13.8)
-  ttl: 30 d after expiry or revocation; budget entries 7 d, the key 7 d after its newest order, rebuilt from network_tls_cert on loss
+  ttl: 30 d after expiry, revocation or failure; budget entries 7 d, the key 7 d after its newest order, rebuilt from network_tls_cert on loss
   owner: §13.8
 cert-2:
   service: CAs (Let's Encrypt, GTS, ZeroSSL) and public CT logs

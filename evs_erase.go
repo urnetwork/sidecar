@@ -7,18 +7,24 @@
 //
 //	erase     an ERASE (flag 64, admin) on the erasure ref (EvsErasureRefId: shared semantics, file mode, creates only,
 //	          path epoch 1 for life) through POST .../slots/delete: the erased list of (slot id, key index) in its
-//	          payload, which erased_sha256 binds, and one creation under a random 16 B id, the erasure's note: its id,
-//	          whether this ERASE completes it, and the caller's sealed note of what the keys covered, sealed as a file
-//	          under the eraser's generation. evs commits it, then rewrites each named slot without its keys before its
-//	          200; NOTHING_TO_ERASE, once recorded, means every named key is gone already, and counts done
+//	          payload, which erased_sha256 binds, and no change: it creates nothing on the erasure ref. evs commits
+//	          it, then rewrites each named slot without its keys before its 200; NOTHING_TO_ERASE, once recorded,
+//	          means every named key is gone already, and counts done
+//	note      the erasure's note rides the push's sealed metadata, EvsSealedMetadata.erasure_note, sealed under the
+//	          eraser's generation with the rest of it (QD-682; question evs1-m2-30-erasure-note-format; EVS-FORMAT.md's
+//	          erasure notes): erasure id 16 B | complete u8, 1 when this ERASE ends the erasure | the caller's note
+//	          of what the keys covered (RECORD's SealedNote, MAIL's documents). A CLOSURE's note is its erasure id
+//	          alone (evs_closure.go)
 //	first     an erasure's first ERASE carries at least the entry's own keys and an unconsumed deposit's slot, which
 //	          re-key nothing, so at the storage limit the body goes at once and its derived chains follow in CLOSURE
 //	          and ERASE pairs; that order is the caller's (§15.7, §16.8), which names the keys
 //	read      ReadErasures walks the erasure ref's verified statements and, for each ERASE, reads its push record for
-//	          the erased list and its note entry for the note
-//	reconcile Erasures gives each erasure the committed ERASEs name, done once one of them completes it, else
+//	          the erased list and its sealed metadata, whose erasure note it opens; an ERASE that changes a path, or
+//	          whose note is not one, refuses the read
+//	reconcile Erasures gives each erasure the committed ERASEs' notes name, done once one of them completes it, else
 //	          rewriting, and stalled 25 h after its last ERASE with none since; which device resumes it, its eraser's
-//	          at its start or another of its member's after 25 h, is the caller's, from these states
+//	          at its start or another of its member's after 25 h, is the caller's, from these states and from each
+//	          content ref's CLOSUREs, whose notes name their erasure (EvsRepo.ReadClosures)
 //	after     on an ERASE's hint a reader deletes its cached object keys, slot copies and decrypted copies and refuses
 //	          those keys: not built here, since those caches are §15.7's mail stores, §16.8's record caches and §5.9's
 //	          index cache; ReadErasures gives them the keys to forget
@@ -32,10 +38,8 @@
 package sidecar
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -73,11 +77,53 @@ type EvsErasure struct {
 	Note            []byte
 }
 
-// An erasure note's opening: erasure id 16 B | complete u8 | the caller's note.
-const evsErasureNoteHeaderByteCount = 17
+// An erasure note's layout (EVS-FORMAT.md's erasure notes; QD-682): the erasure's id, 16 B, which is all of a
+// CLOSURE's note, and in an ERASE's the complete byte after it, then the caller's bytes.
+const (
+	evsErasureNoteIdByteCount     = 16
+	evsErasureNoteHeaderByteCount = evsErasureNoteIdByteCount + 1
+)
 
-// §11.12's reconcile row: an erasure with no ERASE for 25 h is another device's to finish.
-const evsErasureStallAfter = 25 * time.Hour
+// An ERASE's note: erasure id 16 B | complete u8, 1 when this ERASE ends the erasure | the caller's note bytes.
+func EvsEraseNote(erasureId Id, complete bool, callerNote []byte) []byte {
+	note := make([]byte, 0, evsErasureNoteHeaderByteCount+len(callerNote))
+	note = append(note, erasureId.Bytes()...)
+	if complete {
+		note = append(note, 1)
+	} else {
+		note = append(note, 0)
+	}
+	return append(note, callerNote...)
+}
+
+// An ERASE's note opened to its parts. ErrEvsEntryRefused for one short of its id and complete byte, or whose
+// complete byte is neither 0 nor 1.
+func ParseEvsEraseNote(note []byte) (erasureId Id, complete bool, callerNote []byte, err error) {
+	if len(note) < evsErasureNoteHeaderByteCount || 1 < note[evsErasureNoteIdByteCount] {
+		return Id{}, false, nil, fmt.Errorf("%w: an ERASE's erasure note of %d bytes", ErrEvsEntryRefused, len(note))
+	}
+	if erasureId, err = IdFromBytes(note[:evsErasureNoteIdByteCount]); err != nil {
+		return Id{}, false, nil, fmt.Errorf("%w: an erasure note's id", ErrEvsEntryRefused)
+	}
+	return erasureId, note[evsErasureNoteIdByteCount] == 1, note[evsErasureNoteHeaderByteCount:], nil
+}
+
+// A CLOSURE's note: its erasure's id, 16 B, and no caller bytes.
+func EvsClosureNote(erasureId Id) []byte {
+	return erasureId.Bytes()
+}
+
+// A CLOSURE's note opened to its erasure's id. ErrEvsEntryRefused for anything but the id's 16 bytes.
+func ParseEvsClosureNote(note []byte) (Id, error) {
+	if len(note) != evsErasureNoteIdByteCount {
+		return Id{}, fmt.Errorf("%w: a CLOSURE's erasure note of %d bytes", ErrEvsEntryRefused, len(note))
+	}
+	erasureId, err := IdFromBytes(note)
+	if err != nil {
+		return Id{}, fmt.Errorf("%w: an erasure note's id", ErrEvsEntryRefused)
+	}
+	return erasureId, nil
+}
 
 // Destroys args.Keys by an ERASE: see the file header.
 func (self *EvsRepo) Erase(ctx context.Context, args *EvsEraseArgs) (*EvsEraseResult, error) {
@@ -112,10 +158,6 @@ func (self *EvsRepo) buildErase(ctx context.Context, args *EvsEraseArgs, pushId 
 		}
 	}
 	refId := EvsErasureRefId(self.repoId)
-	note := append(append(args.ErasureId.Bytes(), 0), args.Note...)
-	if args.Complete {
-		note[16] = 1
-	}
 	repoKey, err := self.client.args.Gkm.EnsureWritable(ctx, self.repoId)
 	if err != nil {
 		return nil, err
@@ -124,40 +166,20 @@ func (self *EvsRepo) buildErase(ctx context.Context, args *EvsEraseArgs, pushId 
 	if err != nil {
 		return nil, err
 	}
-	plan, err := self.notePlan(ctx, refId, protocol.EvsRefKind_EVS_REF_ERASURE, head, repoKey, note)
-	if err != nil {
-		return nil, err
+	// no change: the note rides the sealed metadata, and the erasure ref, which stays at epoch 1, gains no entry
+	plan := &EvsWritePlan{
+		RepoId: self.repoId, RefId: refId, RefKind: protocol.EvsRefKind_EVS_REF_ERASURE, RefMode: protocol.EvsRefMode_EVS_REF_FILE,
+		BaseVersion: head.Version, BaseChain: head.Chain, Head: head.Head, PathEpoch: 1, Generation: repoKey.Generation(),
+		keys: newEvsReadKeys(self), floors: map[string]uint64{},
+		Flags: uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE), Erased: args.Keys,
+		erasureNote: EvsEraseNote(args.ErasureId, args.Complete, args.Note),
 	}
-	plan.Flags = uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE)
-	plan.Erased = args.Keys
 	sealed, err := self.client.sealWrite(ctx, plan, repoKey)
 	if err != nil {
 		return nil, err
 	}
 	defer sealed.Close()
 	return self.buildPush(ctx, sealed, pushId)
-}
-
-// A one-file plan on a ref that stays at epoch 1: the note as an inline checkpoint under a random id, created on head.
-func (self *EvsRepo) notePlan(ctx context.Context, refId Id, refKind protocol.EvsRefKind, head *EvsVerifiedHead, repoKey *EvsRepoKey, note []byte) (*EvsWritePlan, error) {
-	keys := newEvsReadKeys(self)
-	plan := &EvsWritePlan{
-		RepoId: self.repoId, RefId: refId, RefKind: refKind, RefMode: protocol.EvsRefMode_EVS_REF_FILE,
-		BaseVersion: head.Version, BaseChain: head.Chain, Head: head.Head, PathEpoch: 1, Generation: repoKey.Generation(),
-		keys: keys, floors: map[string]uint64{},
-	}
-	oid, err := EvsGitBlobOid(bytes.NewReader(note), int64(len(note)))
-	if err != nil {
-		return nil, err
-	}
-	noteId := NewEvsRandomToken()
-	plan.Paths = []*EvsPlannedPath{{
-		TokenPath: EvsTokenPath{noteId}, Kind: protocol.EvsEntryKind_EVS_ENTRY_FILE, Version: head.Version + 1,
-		Fields: &protocol.EvsSealedFields{FileId: NewEvsSlotId().Bytes(), Mode: EvsGitModeFile, GitOid: oid[:], OidKind: protocol.EvsOidKind_EVS_OID_SHA1, Size: uint64(len(note))},
-		Chain:  []*EvsPlannedLink{{Record: &EvsPlannedRecord{Kind: protocol.EvsRecordKind_EVS_RECORD_CHECKPOINT, RecordId: NewEvsSlotId(), Oid: oid, Body: bytes.NewReader(note)}}},
-		Inline: EvsPadme(EvsWrappedKeyByteCount+EvsRecordByteCount(uint64(len(note)))) <= EvsInlineMaxByteCount,
-	}}
-	return plan, nil
 }
 
 // POST .../slots/delete with the ERASE, admin, the same bytes until evs answers it.
@@ -211,46 +233,45 @@ func (self *EvsRepo) ReadErasures(ctx context.Context, afterVersion uint64) ([]*
 	return erasures, nil
 }
 
-// One ERASE: its push record's erased list, checked against erased_sha256, and its note entry, read and opened.
+// One ERASE: its push record's erased list, checked against erased_sha256, and its sealed metadata's erasure note,
+// opened. An ERASE creates nothing, so one that changes a path is refused.
 func (self *EvsRepo) readErasure(ctx context.Context, head *EvsVerifiedHead, statement *EvsVerifiedStatement) (*EvsErasure, error) {
-	refId := head.RefId
 	push := statement.Statement.Push
 	pushId, _ := IdFromBytes(push.GetPushId())
 	signerId, _ := IdFromBytes(push.GetSignerSidecarId())
 	erasure := &EvsErasure{Version: statement.Version, PushId: pushId, Time: evsTime(push.GetTimeMs()), EraserSidecarId: signerId}
-	checked, err := self.pushPayload(ctx, head, statement)
+	if len(statement.Statement.Changes) != 0 || push.GetChangeCount() != 0 {
+		return nil, fmt.Errorf("%w: an ERASE that changes a path", ErrEvsEntryRefused)
+	}
+	checked, note, err := self.erasureNoteOf(ctx, head, statement)
 	if err != nil {
 		return nil, err
 	}
 	erasure.Keys = checked.Erased
-	if len(statement.Statement.Changes) != 1 {
-		return nil, fmt.Errorf("%w: an ERASE of %d notes", ErrEvsEntryRefused, len(statement.Statement.Changes))
-	}
-	result, err := self.readPaths(ctx, refId, []*evsReadPath{{token: statement.Statement.Changes[0].TokenPath}}, false)
-	if err != nil {
+	if erasure.ErasureId, erasure.Complete, erasure.Note, err = ParseEvsEraseNote(note); err != nil {
 		return nil, err
 	}
-	defer result.objects.close()
-	verified := result.replies[0]
-	if verified.Entry == nil {
-		return nil, fmt.Errorf("%w: an ERASE's note", ErrEvsPathAbsent)
-	}
-	content, _, _, err := self.reconstructContent(ctx, result, verified, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer content.close()
-	note, err := io.ReadAll(content.reader())
-	if err != nil {
-		return nil, err
-	}
-	if len(note) < evsErasureNoteHeaderByteCount || 1 < note[16] {
-		return nil, fmt.Errorf("%w: an erasure note of %d bytes", ErrEvsEntryRefused, len(note))
-	}
-	erasure.ErasureId, _ = IdFromBytes(note[:16])
-	erasure.Complete = note[16] == 1
-	erasure.Note = note[evsErasureNoteHeaderByteCount:]
 	return erasure, nil
+}
+
+// A committed ERASE's or CLOSURE's push payload, checked against its statement, and the erasure note its sealed
+// metadata carries, opened under the generation the statement names; the note is empty when the metadata carries
+// none, which its caller's parse refuses.
+func (self *EvsRepo) erasureNoteOf(ctx context.Context, head *EvsVerifiedHead, statement *EvsVerifiedStatement) (*EvsCheckedPayload, []byte, error) {
+	checked, err := self.pushPayload(ctx, head, statement)
+	if err != nil {
+		return nil, nil, err
+	}
+	manifest, err := newEvsReadKeys(self).manifest(ctx, statement.Statement.Push.GetGeneration())
+	if err != nil {
+		return nil, nil, err
+	}
+	metadata, err := EvsOpenMetadata(manifest, checked.SealedMetadata)
+	if err != nil {
+		self.client.alarm(self.repoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
+		return nil, nil, err
+	}
+	return checked, metadata.GetErasureNote(), nil
 }
 
 // The repo's erasures as this device sees them from evs's state (§18.5, §11.12's reconcile row): one per erasure the
@@ -280,7 +301,7 @@ func (self *EvsRepo) Erasures(ctx context.Context) ([]*SidecarErasure, error) {
 	states := []*SidecarErasure{}
 	for _, erasureId := range order {
 		state := byId[erasureId]
-		if state.State != "done" && last[erasureId].Add(evsErasureStallAfter).Before(now) {
+		if state.State != "done" && last[erasureId].Add(self.client.settings.ErasureStallAfter).Before(now) {
 			state.State = "stalled"
 		}
 		states = append(states, state)

@@ -327,7 +327,7 @@ func urcliDeviceLogin(ctx context.Context, cli *urCli, invite string) (authKey s
 		// the model's refusal, which names a rule and never a key
 		return "", drop, fmt.Errorf("ur-cli: the auth key was refused: %s", result.Error.Message)
 	}
-	if _, err := sidecar.ParseAuthKey(result.AuthKey); err != nil {
+	if _, err := sidecar.ParseAuthKey(result.AuthKey, nil); err != nil {
 		return "", drop, errors.New("ur-cli: the answer holds no auth key")
 	}
 	return result.AuthKey, drop, nil

@@ -123,8 +123,8 @@ func TestDefaultsHoldTheDesignsChoices(t *testing.T) {
 	if settings.Cas[CertsCaGts].RepeatSetLimited || settings.Cas[CertsCaZeroSsl].RepeatSetLimited || settings.Cas[CertsCaZeroSsl].BudgetCap != 0 {
 		t.Error("only LE carries the repeated-set rule, and ZeroSSL has no cap")
 	}
-	if settings.RowRetention != 30*24*time.Hour || settings.BudgetTtl != 7*24*time.Hour {
-		t.Errorf("rows %v, budget %v", settings.RowRetention, settings.BudgetTtl)
+	if settings.RowRetention != 30*24*time.Hour || settings.ChainRetention != 30*24*time.Hour || settings.BudgetTtl != 7*24*time.Hour {
+		t.Errorf("rows %v, chains %v, budget %v", settings.RowRetention, settings.ChainRetention, settings.BudgetTtl)
 	}
 }
 
@@ -152,6 +152,7 @@ func TestValidateRefusesWhatLeavesARuleUnenforced(t *testing.T) {
 		"RepeatSetCount":           func(settings *CertsSettings) { settings.RepeatSetCount = 0 },
 		"FailedAuthorizationCount": func(settings *CertsSettings) { settings.FailedAuthorizationCount = 0 },
 		"RowRetention":             func(settings *CertsSettings) { settings.RowRetention = 0 },
+		"ChainRetention":           func(settings *CertsSettings) { settings.ChainRetention = 0 },
 		"CallTimeout":              func(settings *CertsSettings) { settings.CallTimeout = -time.Second },
 	} {
 		settings := valid()

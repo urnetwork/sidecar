@@ -3,8 +3,10 @@
 // §16.6's spend steps for one use (MCP-M3-06; D-MCP-11, D-MCP-12, AU1-AU4, TS1, owner decision 142), which
 // ApprovalGate.Authorize runs once it holds an approval for the action:
 //
-//	1  the approval's mutex (ApprovalLedger.Hold); spendable over the kept approving decisions, each approver's first,
-//	   as §16.6's k approvers set (SpendableSet), its expiry test left out when this action's use is reserved already
+//	1  the approval's mutex (ApprovalLedger.Hold); the request binds this requester, run, agent, action and the
+//	   action's detail, the local port, weight and ALPNs request_sha256 covers (QD-740); spendable over the kept
+//	   approving decisions, each approver's first, as §16.6's k approvers set (SpendableSet), its expiry test left out
+//	   when this action's use is reserved already
 //	2  that Reserve exists: the retry path, after the mutex
 //	3  refuse: cancelled; spent at uses Reserves; stale in a tainted run on an untainted request, where a tainted
 //	   request is filed and the answer is pending; a harness decision in a tainted run whose rule's own list does not
@@ -100,7 +102,9 @@ func (self *ApprovalGate) spendOnce(ctx context.Context, action *SidecarAction, 
 		// AU4: the original outcome, the effect not run again
 		return &SidecarOutcome{State: plan.outcome.State, EffectRef: bytes.Clone(plan.outcome.EffectRef)}, nil
 	}
-	spendCtx := withApprovalSpend(ctx, &ApprovalSpend{ApprovalId: approvalId, Decisions: plan.decisions, Action: plan.request.Action.Bytes})
+	spendCtx := withApprovalSpend(ctx, &ApprovalSpend{
+		ApprovalId: approvalId, Decisions: plan.decisions, Action: plan.request.Action.Bytes, Detail: plan.request.Detail(),
+	})
 	completeBy := time.UnixMilli(plan.notAfterMillis).Add(self.args.Settings.ApprovalCompleteTimeout)
 	if plan.retry && self.args.Clock.Now().After(completeBy) {
 		return self.reconcileUse(spendCtx, approvalId, plan, kind, action.RunId)
@@ -132,6 +136,11 @@ func (self *ApprovalGate) planWithHold(hold *ApprovalHold, action *SidecarAction
 	if !bytes.Equal(request.Action.Bytes, stored.Bytes) &&
 		!(request.Action.Action.GetScope() && ActionMatchesTemplate(request.Action, stored)) {
 		return nil, fmt.Errorf("%w: a decision on another action", ErrApprovalRefused)
+	}
+	if !request.Detail().Equal(action.Detail) {
+		// request_sha256 binds the local port, weight and ALPNs the approver saw (QD-740), so a decision spends on
+		// no other
+		return nil, fmt.Errorf("%w: a decision on another local port, weight or alpn", ErrApprovalRefused)
 	}
 	plan := &approvalSpendPlan{request: request}
 	kept, denied := approvalKeptDecisions(state)

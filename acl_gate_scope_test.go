@@ -10,6 +10,7 @@ package sidecar
 
 import (
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -50,7 +51,8 @@ func newAclScopeWorld(t testing.TB, policy string) *aclScopeWorld {
 	self.agent = world.agent("agent", self.owner, "ci")
 	world.group("eng")
 	self.notes = world.repo("notes", protocol.RepoKind_REPO_KIND_GENERAL, Id{})
-	self.config = world.repo("config", protocol.RepoKind_REPO_KIND_CONFIG, Id{})
+	// the config's row is the state's own, from the Genesis (QD-719)
+	self.config = world.configRepo()
 	world.setPolicy(t, policy)
 	return self
 }
@@ -312,6 +314,85 @@ func TestAclGateHonorScopeClosesByEventAndByPoll(t *testing.T) {
 		t.Fatalf("after the poll: %d", honored(second))
 	}
 	<-clock.armed
+}
+
+// QD-719 at the real gate, over TEAM's log: no rows hold the config repo's AclRepo, and the cache's state, built from
+// those rows and the Genesis, honors the config's scopes for evs and for gkm as §8.5's kind default gives them: every
+// admitted sidecar's r, a config writer's rw at evs, a member device's rw at gkm, §7.9's bootstrap admin for the
+// Genesis's owner sidecar alone; and a revocation closes a live config scope at the next load.
+func TestAclGateHonorScopeHonorsTheConfigRepo(t *testing.T) {
+	net := newTestConfigNet(t)
+	phone := net.admitMemberDevice("config scope")
+	readOnly := net.device("config scope read only", phone.memberId)
+	net.admitDevice(net.owner, readOnly, uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY))
+	ephemeral := net.device("config scope ephemeral", phone.memberId)
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(ephemeral, nil, true, net.timeMs+24*60*60*1000, 0))
+	ownerPhone := net.device("config scope owner phone", net.ownerMemberId)
+	net.admitDevice(net.owner, ownerPhone, 0)
+	configId := Id(net.log.State().Genesis().GetConfigRepoId())
+	if acl, err := net.log.State().Acl(); err != nil || len(acl.Rows().GetRepos()) != 0 {
+		t.Fatalf("the rows hold repos: %v", err)
+	}
+
+	source := newAclGateTestSource()
+	source.publish(net)
+	cache, loads := newAclGateTestCache(t, source, newAclGateTestClock(), nil)
+	now := time.UnixMilli(net.timeMs)
+	if answer := cache.HonorScope(net.networkId, phone.sidecarId, configId, AclEvsRead, AclTokenAudienceEvs, now); answer != AclScopeUnknown {
+		t.Fatalf("before the load: %d", answer)
+	}
+	if load := aclGateTestNextLoad(t, loads); load.err != nil {
+		t.Fatal(load.err)
+	}
+	evs, gkm := AclTokenAudienceEvs, AclTokenAudienceGkm
+	cases := []struct {
+		name     string
+		device   testConfigDevice
+		scope    AclEvsRights
+		audience AclTokenAudience
+		want     AclScopeAnswer
+	}{
+		{name: "the bootstrap sidecar reads at evs", device: net.owner, scope: AclEvsRead, audience: evs, want: AclScopeHonored},
+		{name: "writes heads at evs", device: net.owner, scope: AclEvsWrite, audience: evs, want: AclScopeHonored},
+		{name: "places the repo at evs", device: net.owner, scope: AclEvsAdmin, audience: evs, want: AclScopeHonored},
+		{name: "and forms its group at gkm", device: net.owner, scope: AclEvsAdmin, audience: gkm, want: AclScopeHonored},
+		{name: "another config writer writes heads at evs", device: ownerPhone, scope: AclEvsWrite, audience: evs, want: AclScopeHonored},
+		{name: "and administers nothing at evs", device: ownerPhone, scope: AclEvsAdmin, audience: evs, want: AclScopeRefused},
+		{name: "or at gkm", device: ownerPhone, scope: AclEvsAdmin, audience: gkm, want: AclScopeRefused},
+		{name: "a member device reads at evs", device: phone, scope: AclEvsRead, audience: evs, want: AclScopeHonored},
+		{name: "reads at gkm", device: phone, scope: AclEvsRead, audience: gkm, want: AclScopeHonored},
+		{name: "writes no head at evs", device: phone, scope: AclEvsWrite, audience: evs, want: AclScopeRefused},
+		{name: "commits the group at gkm", device: phone, scope: AclEvsWrite, audience: gkm, want: AclScopeHonored},
+		{name: "and administers nothing", device: phone, scope: AclEvsAdmin, audience: gkm, want: AclScopeRefused},
+		{name: "a read_only device reads at evs", device: readOnly, scope: AclEvsRead, audience: evs, want: AclScopeHonored},
+		{name: "and commits nothing at gkm", device: readOnly, scope: AclEvsWrite, audience: gkm, want: AclScopeRefused},
+		{name: "an ephemeral device reads at evs", device: ephemeral, scope: AclEvsRead, audience: evs, want: AclScopeHonored},
+		{name: "reads at gkm", device: ephemeral, scope: AclEvsRead, audience: gkm, want: AclScopeHonored},
+		{name: "and writes at neither", device: ephemeral, scope: AclEvsWrite, audience: gkm, want: AclScopeRefused},
+	}
+	for _, c := range cases {
+		if answer := cache.HonorScope(net.networkId, c.device.sidecarId, configId, c.scope, c.audience, now); answer != c.want {
+			t.Errorf("%s: %d, want %d", c.name, answer, c.want)
+		}
+	}
+	if answer := cache.HonorScope(net.networkId, testConfigId("config scope stranger"), configId, AclEvsRead, evs, now); answer != AclScopeRefused {
+		t.Errorf("an unadmitted sidecar: %d", answer)
+	}
+
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(phone, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
+	source.publish(net)
+	cache.Changed(net.networkId)
+	if load := aclGateTestNextLoad(t, loads); load.err != nil {
+		t.Fatal(load.err)
+	}
+	for _, audience := range []AclTokenAudience{evs, gkm} {
+		if answer := cache.HonorScope(net.networkId, phone.sidecarId, configId, AclEvsRead, audience, now); answer != AclScopeRefused {
+			t.Errorf("a revoked device's config r at %d: %d", audience, answer)
+		}
+		if answer := cache.HonorScope(net.networkId, readOnly.sidecarId, configId, AclEvsRead, audience, now); answer != AclScopeHonored {
+			t.Errorf("another device's config r at %d after the revocation: %d", audience, answer)
+		}
+	}
 }
 
 // A Suspend in the log's tail closes the subject's live scope at the gate's next load, before any base folds it.

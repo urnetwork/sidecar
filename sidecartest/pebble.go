@@ -70,6 +70,8 @@ type Pebble struct {
 	Dns *FakeCertsDns
 
 	newOrderPath string
+	// Pebble's rows, for what it recorded of a revocation
+	memoryStore *db.MemoryStore
 
 	stateLock sync.Mutex
 	// newOrder requests still to refuse with 429, and the Retry-After each says
@@ -105,6 +107,7 @@ func StartPebble(t testing.TB, settings *PebbleSettings) *Pebble {
 	pebble := &Pebble{
 		Dns:          newFakeCertsDns(dnsServer),
 		newOrderPath: "/order-plz",
+		memoryStore:  memoryStore,
 	}
 	handler := frontEnd.Handler()
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -137,6 +140,19 @@ func StartPebble(t testing.TB, settings *PebbleSettings) *Pebble {
 	}
 	pebble.newOrderPath = parsed.Path
 	return pebble
+}
+
+// What Pebble recorded of leaf's revocation: the RFC 5280 reason code it was told, 0 when it was told
+// none, and whether it holds the certificate as revoked at all.
+func (self *Pebble) RevocationReason(leaf []byte) (reason int, revoked bool) {
+	record := self.memoryStore.GetRevokedCertificateByDER(leaf)
+	if record == nil {
+		return 0, false
+	}
+	if record.Reason != nil {
+		reason = int(*record.Reason)
+	}
+	return reason, true
 }
 
 // Refuses the next count newOrder requests with 429 rateLimited and Retry-After, as LE's limits do.

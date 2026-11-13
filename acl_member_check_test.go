@@ -282,7 +282,7 @@ func TestCheckRepoMemberConfigLeafFollowsTheLeavesRule(t *testing.T) {
 	wrapped := fixture.device(owner, entitled.Bytes())
 	agent := fixture.agent(owner, tagId)
 	fixture.view.leafEntitled = map[Id]bool{entitled: true}
-	configId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_CONFIG, Id{})
+	configId := fixture.configRepo(Id{}, Id{})
 	directoryId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_DIRECTORY, Id{})
 	dataId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
 	fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER), []*protocol.AclTarget{aclRepoTarget(dataId)}, protocol.AclAction_ACL_ACTION_READ)
@@ -327,7 +327,7 @@ func TestCheckRepoMemberTakesTheAuditReaderOnlyWithItsOptIn(t *testing.T) {
 	if decision := fixture.state(t).CheckRepoMember(vaultId, aclTestWrap(auditor), aclTestNow); decision.Allowed {
 		t.Errorf("without its opt-in: %+v", decision)
 	}
-	fixture.rows.Audit.AuditOptIn = []byte("a k-of-n AuditOptIn the compile verified")
+	fixture.rows.Audit.AuditOptIn = aclTestAuditOptInRecord(t, aclTestNow.Add(time.Hour), auditTag)
 	state := fixture.state(t)
 	if decision := state.CheckRepoMember(vaultId, aclTestWrap(auditor), aclTestNow); !decision.Allowed || decision.Reason != AclReasonAudit {
 		t.Errorf("the audit reader's wrap: %+v", decision)
@@ -352,7 +352,7 @@ func TestCheckRepoMemberWithoutTheLeavesRuleTakesNoConfigLeaf(t *testing.T) {
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
 	device := fixture.invitedDevice(owner)
 	fixture.view.leafEntitled = map[Id]bool{device: true}
-	configId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_CONFIG, Id{})
+	configId := fixture.configRepo(Id{}, Id{})
 	directoryId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_DIRECTORY, Id{})
 	dataId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
 	fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER), []*protocol.AclTarget{aclRepoTarget(dataId)}, protocol.AclAction_ACL_ACTION_READ)
@@ -397,7 +397,7 @@ func TestAclNonReaders(t *testing.T) {
 	repo.Grants = []*protocol.AclRepoGrantRow{{
 		Subject: granted.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_READER, Expires: expires.UnixMilli(), Signer: reader.Bytes(), At: fixture.next(),
 	}}
-	configId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_CONFIG, Id{})
+	configId := fixture.configRepo(Id{}, Id{})
 	fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_OWNER), []*protocol.AclTarget{aclRepoTarget(repoId)}, protocol.AclAction_ACL_ACTION_READ)
 	fixture.rule([]Id{tagId}, []*protocol.AclTarget{aclRepoTarget(repoId)}, protocol.AclAction_ACL_ACTION_DEPOSIT)
 	state := fixture.state(t)

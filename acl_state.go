@@ -19,6 +19,18 @@
 // two kinds set. A target with no kind this code knows, from a later format, matches nothing, and so does
 // an action value it does not know, so an older reader never allows what it cannot read.
 //
+// The config repo's row is the state's own (QD-719). §7.9's bootstrap creates the config repo and no RepoCreate
+// ever files it, so no rows hold an AclRepo for it: where the rows hold none, the state adds
+// AclRepo{repo_id: Genesis.config_repo_id, kind: config}, with no owner, no admins and no access log, so §8.5's
+// config kind default answers it alike in every reader, gate and api, each of which holds the Genesis. The
+// rows' bytes do not change, and Rows answers the rows as they came. Rows that give the Genesis's config repo
+// another kind refuse to build, and with the row standing a RepoCreate of that id is a second one, so no
+// statement moves the config onto another kind's rules. A view with no Genesis, a test's, gets no such row.
+//
+// The added row's holders_shrunk_at is the state's own position: no rows carry the config's shrinks yet
+// (question acl-config-repo-row-shrunk-at), so until they do every position counts as one, the closed
+// direction, and §10.6's gate takes a config write only under a generation pinned at the state judging it.
+//
 // Safe for concurrent use once built.
 //
 // On every leg, the sidecar_http page Worker's included: root Id, no connect type.
@@ -293,6 +305,9 @@ type AclState struct {
 	principalAtoms map[string][]int32
 
 	repos map[Id]*aclRepoState
+	// the Genesis's config repo and the sidecar that signed it, zero for a view with no Genesis
+	configRepoId   Id
+	genesisOwnerId Id
 
 	// subjects an active Suspend names (plan-ACL-folded-grant-state #1)
 	suspended map[Id]bool
@@ -349,6 +364,9 @@ func NewAclState(rows *protocol.AclRows, view AclAuthView) (*AclState, error) {
 		return nil, err
 	}
 	if err := self.indexRepos(); err != nil {
+		return nil, err
+	}
+	if err := self.indexConfigRepo(); err != nil {
 		return nil, err
 	}
 	self.indexSidecars(sidecarListedAtoms)
@@ -688,6 +706,41 @@ func (self *AclState) indexRepos() error {
 	return nil
 }
 
+// Indexes the Genesis's config repo: the row the rows hold for it, which must be of kind config, or else the state's
+// own row (the file's header, QD-719). A view with no Genesis, or one naming no config repo, indexes none.
+func (self *AclState) indexConfigRepo() error {
+	genesis := self.view.Genesis()
+	if genesis == nil {
+		return nil
+	}
+	if ownerId, err := IdFromBytes(genesis.GetOwnerSidecarId()); err == nil {
+		self.genesisOwnerId = ownerId
+	}
+	configRepoId, err := IdFromBytes(genesis.GetConfigRepoId())
+	if err != nil || configRepoId == (Id{}) {
+		return nil
+	}
+	self.configRepoId = configRepoId
+	if repo, found := self.repos[configRepoId]; found {
+		if repo.kind != protocol.RepoKind_REPO_KIND_CONFIG {
+			return aclRowsRefusal("repos give the config repo another kind")
+		}
+		return nil
+	}
+	self.repos[configRepoId] = &aclRepoState{
+		row: &protocol.AclRepo{
+			RepoId:          configRepoId.Bytes(),
+			Kind:            protocol.RepoKind_REPO_KIND_CONFIG,
+			HoldersShrunkAt: self.pin.GetVersion(),
+		},
+		kind:     protocol.RepoKind_REPO_KIND_CONFIG,
+		admins:   map[Id]bool{},
+		revoked:  map[Id]bool{},
+		consents: map[Id]bool{},
+	}
+	return nil
+}
+
 // Indexes every sidecar the view holds: classes it, gathers its atoms and builds its rule sets.
 func (self *AclState) indexSidecars(sidecarListedAtoms map[Id][]int32) {
 	sidecarIds := slices.Clone(self.view.SidecarIds())
@@ -830,12 +883,29 @@ func (self *AclState) HasDocument() bool {
 	return self.rows.GetHasDocument()
 }
 
-// A repo's folded row, or nil when the rows hold no such repo. The caller must not change it.
+// A repo's folded row, or nil when the state holds no such repo. The config repo's is the state's own where the
+// rows hold none (QD-719). The caller must not change it.
 func (self *AclState) Repo(repoId Id) *protocol.AclRepo {
 	if repo, found := self.repos[repoId]; found {
 		return repo.row
 	}
 	return nil
+}
+
+// Every repo the state holds, sorted: the rows' repos and the config repo, which the rows may not hold (QD-719). What
+// lists a network's repos reads this, not Rows.
+func (self *AclState) RepoIds() []Id {
+	repoIds := make([]Id, 0, len(self.repos))
+	for repoId := range self.repos {
+		repoIds = append(repoIds, repoId)
+	}
+	slices.SortFunc(repoIds, Id.Cmp)
+	return repoIds
+}
+
+// The network's config repo, the Genesis's, and false for a view with no Genesis.
+func (self *AclState) ConfigRepoId() (Id, bool) {
+	return self.configRepoId, self.configRepoId != (Id{})
 }
 
 // Whether an active Suspend names the subject (plan-ACL-folded-grant-state #1), for §7.9's leaves rule.

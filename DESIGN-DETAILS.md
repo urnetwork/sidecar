@@ -8,7 +8,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 
 | # | Problem | Tasks held | Status |
 |---|---|---|---|
-| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10) |
+| 1 | Search index merges, roll-ups and the journal (§11.14) | 7 | complete (2026-11-10; amended 2026-11-12, QD-760, QD-775 and section 15) |
 | 2 | Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6) | 4 | complete (2026-11-10) |
 | 3 | Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5) | 5 | complete (2026-11-11) |
 | 4 | Forwarding in the apps' VPN component: key, verification and size (owner decision 197) | 40 | complete (2026-11-10) |
@@ -18,13 +18,15 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 8 | Git and evs in both directions | 3 | complete (2026-11-10) |
 | 9 | Client path epochs and re-tokenizing | 3 | complete (2026-11-10) |
 | 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | complete (2026-11-11) |
-| 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10) |
-| 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11) |
+| 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10; amended 2026-11-12, QD-760) |
+| 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11; amended 2026-11-12, QD-761, built on the recommendations of open questions details-amend-2-late-generation and details-amend-2-fold-holds) |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
+| 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
+| 15 | Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10) | 2 | complete (2026-11-12) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
 
-Status: complete (2026-11-10)
+Status: complete (2026-11-10; amended 2026-11-12, QD-760: 1.2.2, 1.2.4, 1.2.9, 1.3, 1.5, 1.6, 1.7 and 1.8, each place marked; amended 2026-11-12, QD-775: 1.2.4, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8 and 1.9, each place marked; amended 2026-11-12, section 15: 1.2.3, 1.2.4, 1.2.5, 1.2.6, 1.2.8, 1.2.9, 1.3, 1.7 and 1.8, each place marked)
 
 Tasks held until complete: SEARCH-M10-10, SEARCH-M10-11, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, SEARCH-M10-35, TEST-M10-02.
 
@@ -192,6 +194,11 @@ decoders        a slot whose diff names a base that no other file of its writer 
                 format when the slot is unabsorbed: index_malformed names the slot's signer. Under R1 and R2 no
                 honest writer's slot can be in that state (I1), so the alarm no longer falls on a writer that
                 wrote by the rules. In an absorbed slot nothing is checked.
+past a shard    (amended 2026-11-12, QD-760) a full entry whose row and key set section 11's D6 skips
+                (11.2.3: lone(d) past ShardBody) holds a value past its cap, as one whose key set passes
+                KeySetMax does: a decoder refuses its file and index_malformed names its signer. A diff whose
+                composed set D6 skips under the diff's own row is malformed where it is composed, as a diff
+                with no base is. No honest writer writes either: D6 made that version a tombstone.
 ```
 
 Nothing server-visible changes: no column, key, object family or proto field (I-18).
@@ -252,7 +259,7 @@ What it costs: a document's first entry from each writer in each bucket is full,
 
 **What R2 gives.** Let P be a push by W into N built at b. If P commits, W's head in N was at the version P read. Every push that changed a file of W's in N after b replaced that head (R2 binds the writer's own pushes, a DROP's rewrites and anything else that writes a writer's file; the two exceptions are below). So every file of W's in N is as P read it, and P's plan, which named bases and removed large entries on that reading, is still right. Two pushes of one sidecar built on one base cannot both commit, which FS-74 already expects of two that append; it now also holds for one that appends and one that seals.
 
-The exceptions. A CLOSURE replaces committed versions only and may not be made to rewrite a head it has no other reason to touch; it is fenced by the CUT before it, which refuses every index push built before the CUT (I-EVS-17), and by the rule that no entry rests on a version the erasure set lists (`choose`'s B; landed in `indexChooseEntry`). A roll-up removes every file of an expired bucket in one push, heads included.
+The exceptions. A CLOSURE replaces committed versions only and may not be made to rewrite a head it has no other reason to touch; it is fenced by the CUT before it, which refuses every index push built before the CUT (I-EVS-17), and by the rule that no entry rests on a version the erasure set lists (`choose`'s B; landed in `indexChooseEntry`). A roll-up removes every file of an expired bucket in one push, heads included. Both fences bind pushes built after the CUT. A diff that landed before the CUT on a version the CUT then lists is a resting diff: the eraser enters its version full in its own head before any CLOSURE takes its base or the diff, and the CLOSUREs then remove both (amended 2026-11-12, section 15; 15.2.3 to 15.2.5).
 
 **Who else writes a writer's files.** A DROP's rewrite (SEARCH-M10-18) that removes a listed version from a file of W's, a slot or a large entry, also removes, in the same push, each diff in W's unabsorbed slots that rests on it, enters the composed version full in the DROP signer's own head when it is the kept head (§11.14's drop row, unchanged in effect), and replaces W's head in that bucket (R2), together with the bucket's manifest (R3's fence). That closes G.
 
@@ -267,11 +274,15 @@ merge(N at base b, extra = none):
       U_W = W's sealed slots and W's unabsorbed large entries
   every entry the erasure set lists at or below its version is left out first, a diff by its own version
       (§11.14's epoch row)
+      (amended 2026-11-12, section 15) a full entry the set lists is still the base of a diff whose own version the
+      set does not list, while it stands: the diff is composed onto it and its version is a candidate.
+      Such a diff whose base is gone is left out and alarms nothing (15.2.6)
   candidates, per key:
       the shards' entry of the key: a row or a tombstone
       each entry of the key in a slot of U_W: a full entry or a tombstone as it is; a diff composed onto
           its base (1.2.1). A diff whose base is missing is malformed: it is left out and alarms
-          index_malformed {signer: the slot's} (I1 says an honest slot never has one)
+          index_malformed {signer: the slot's} (I1 says an honest slot never has one). So is a diff whose
+          composed set D6 skips under the diff's row (1.2.2; amended 2026-11-12, QD-760)
       the full entry of each large entry in U_W
       extra, when a push merges its own entries (1.2.3) or a roll-up promotes (1.2.5)
   winner(key) = the candidate with the highest version. At one version: a tombstone; then the shards' own
@@ -287,19 +298,81 @@ merge(N at base b, extra = none):
 layout(shards by ascending n, winners):
   1 C = the keys whose winner is not the shards' entry of the key. Remove from each shard its entry of
     each key in C, and each row a ref tombstone or the erasure set drops.
-  2 A = the winners of C, ascending by key. Y = the shard with the highest n, or shard 0 when there is none.
+    (amended 2026-11-12, QD-775) G = none. Each shard X that this step changed and that no longer encodes
+    within ShardBody gives up its highest entries: K = X's remaining rows and tombstones in A's order
+    (ascending by key, then kind); c = take(an empty shard, K), by step 2's search; X keeps K[0:c] and
+    K[c:] joins G. X keeps at least one and gives up at least one (below).
+  2 A = the winners of C, with G, ascending by key. Y = the shard with the highest n, or shard 0 when
+    there is none.
     take(Y, A): if Y with all of A encodes within ShardBody, all of A. Else the count c found by:
         lo = 0; hi = len(A); while lo < hi: mid = (lo + hi + 1) / 2;
             if Y with A[0:mid] encodes within ShardBody then lo = mid else hi = mid - 1; c = lo
-    Y takes A[0:c]. While A has more: Y = a new shard, the highest n + 1, and take again.
+    Y takes A[0:c]. While A has more: Y = a new shard, the highest n + 1, and take again. A new shard
+    takes at least one: every document of A is one D6 kept (below; amended 2026-11-12, QD-760).
   3 scanning by ascending n: while a shard and the next one after it come to fewer than ShardJoin bytes
-    before their pads, the two become one under the lower n; the joined shard is tested again with its next.
+    before their pads and (amended 2026-11-12, QD-775) the two as one shard encode within ShardBody, the
+    two become one under the lower n; the joined shard is tested again with its next. A pair that fails
+    either test stays two shards, and the scan goes on from the second of them.
   4 a shard left with no row and no tombstone is removed.
   5 each changed shard is encoded in blocks of 64 and padded with the keyed pad at the merger's newest
     generation, which its header names. A shard nothing changed is not written.
 ```
 
 `take` is stated as a procedure because a shard's length is not quite monotone in its documents: re-blocking by 64 can save a few bytes when a key is added (QD-173 found the mirror of it). Every implementation runs the same search, so every one finds the same c. "Encodes within" is the length the shard encoder gives before the pad.
+
+**A new shard always takes** (amended 2026-11-12, QD-760; question search-m10-10-document-past-a-shard, option 1). As first written, nothing here said what `take` does with a document no shard can hold: one within KeySetMax whose row, dictionary entries and lists pass ShardBody in a shard of its own. An empty shard takes none of it and step 2's loop does not end; the landed `indexLayout` refuses instead (`errIndexMergeUnplaceable`), and the bucket stops merging. The owner's answer puts the rule at extraction: section 11's D6 skips a document whose bound lone(d) passes ShardBody (11.2.3), so it has no entry, and a tombstone where it was indexed before. Step 2 then ends, on three facts:
+
+- lone(d) is at least 33 B above the encoded length, before its pad, of a shard holding d alone, in a bucket or in all, at any pad generation, version and time (11.2.3). A tombstone alone encodes in under 128 B.
+- Every member of A is a tombstone or a document D6 kept. A full entry is held to D6 by its decoder, and a diff's composed set where it is composed (1.2.2). `extra` comes from `prepare`, which applies D6, or from a shard, and a shard's rows were placed by this layout: by induction over the pushes that wrote the bucket's and all's shards, each row passed D6 when it entered.
+- `take`'s search tries one member before it settles on none: with lo = 0 and hi at least 1, mid is at least 1, and hi falls to 0 only once mid = 1 has failed.
+
+So `take` on an empty shard returns at least 1, each pass of the loop places at least one member of A, and step 2 opens at most len(A) shards. `errIndexMergeUnplaceable` stays where it is, as a closed guard: an empty shard that takes nothing fails the merge, which writes nothing, and no input a decoder accepts reaches it. No model covers this: `IndexMerge.tla` leaves sizes out (1.3), so the argument is these three facts, each held by a test of 1.6.
+
+The rule closes step 2 and nothing else. Measuring it showed two other ways a layout's shard passes ShardBody, which that decision does not reach: step 3 joined two shards that come to under ShardJoin whose join does not encode within ShardBody (16 documents sharing 60,000 keys, 372,510 B, and 2,000 small ones, 119,795 B: lists that were two-byte bitsets become sixteen docids each), and step 1 can lengthen a full shard by removing a document, through the re-blocking (2,447 B on a built case). In both the encoder refused, the merge wrote nothing and its bucket stopped merging, as it did for the document above. Question `details-amend-2-layout-past-the-cap` asked what a layout does there, and the owner answered it (amended 2026-11-12, QD-775): the next paragraphs.
+
+**A layout always writes** (amended 2026-11-12, QD-775; question details-amend-2-layout-past-the-cap, option 1). The two steps that built a shard without asking the encoder now ask it, as `take` does, and both read its answer past the cap as a test's result, never as a failure:
+
+```text
+step 1's give-up   after the removals, each shard X that step 1 changed is encoded as step 5 would encode it
+                   (blocks of 64, the layout's header). Within ShardBody: nothing more. Past it: K = X's
+                   remaining entries, rows and tombstones together, ascending by key and then kind, the order
+                   A has; c = the count take's search finds for an empty shard taking K
+                       lo = 0; hi = len(K); while lo < hi: mid = (lo + hi + 1) / 2;
+                           if K[0:mid] alone encodes within ShardBody then lo = mid else hi = mid - 1; c = lo
+                   X keeps K[0:c]. K[c:], the entries from X's highest key down, join G, and G joins step 2's
+                   A, which is sorted once with G in it. The shards are visited by ascending n, but the order
+                   decides nothing: each X is judged on its own entries, and G is sorted into A.
+step 3's test      a pair is joined only where both hold: the two lengths before their pads come to fewer than
+                   ShardJoin, and the union of their entries encodes within ShardBody. A shard's length in the
+                   sum is its encoding's where this layout changed it, and its stored bytes' before their pad
+                   where it did not, whatever partition those bytes keep (QD-173). The union is always encoded
+                   by blocks of 64. A pair that fails either test is left, and the scan moves to the next
+                   pair, so the second shard of a refused pair is still tried with the one after it.
+```
+
+The decision's words for the give-up are "rows from its highest doc_key down, by the search take runs". Tombstones ride with the rows in key order here, so that one search and one order serve both steps, as `take`'s A already mixes them; a tombstone that moves stays in its bucket's shards, once, which is all a tombstone's place means (1.2.2).
+
+Why every shard a layout writes then fits, by where it was last changed:
+
+- By step 1 alone. It was tested. If it gave up, it holds K[0:c], which the search found to encode within ShardBody: the search returns a count only after that count passed the test, or 0, and it does not return 0, because it tries mid = 1 before it settles on none and one entry alone always fits (the three facts above: every entry of a shard is a tombstone or a row D6 kept, either fits a shard of its own, and the search tries one before none). c is below len(K), since all of K is what failed. So X keeps at least one entry and gives up at least one.
+- By step 2. Y with A[0:c] passed `take`'s test where c is above 0. Where c is 0, Y is as step 1 left it, or untouched. A new shard takes at least one and what it takes passed the test (QD-760's rule, which G's members meet as the winners do).
+- By step 3. The joined shard passed step 3's test, and it is tested again each time it grows.
+- By nothing. It is not written (step 5), so its bytes are the ones a decoder accepted, at most ShardBody before their pad. A shard that a CLOSURE or a DROP rewrote on its replaced partition (QD-173) may be longer by blocks of 64 than as stored. That shows only when a layout changes it, and then one of the three tests above is run on its encoding by blocks of 64: a removal makes it give up entries, and `take` on it as Y, or a join with it, goes through only where its test passes, so it usually takes nothing and joins nothing.
+
+So step 5 encodes no shard past ShardBody, and with QD-760's rule a layout is a function of its inputs that always writes. The cap's two guards stay, closed, and the rules make both unreachable from inputs a decoder accepts:
+
+```text
+errIndexShardFull          the shard encoder's answer past ShardBody. In take, in step 1's test and in step
+                           3's test it is the answer "does not encode within", and the layout goes on. From
+                           step 5's encode, or from any other caller of the encoder, it fails the layout,
+                           and the merge, the push past DirectBytes or the roll-up writes nothing.
+errIndexMergeUnplaceable   an empty shard that takes nothing: in step 2 (QD-760), and in step 1 where a
+                           give-up's search returns 0. It fails the layout the same way.
+```
+
+What the rule keeps. A given-up entry leaves X and enters another shard of the same partition in the same push, so a partition's shards still hold one version a key (I2, I7, I-EVS-11) and an eraser still finds a document in one shard. The keys of G are not in C (their winner was their shard's own entry) and no two shards hold one key, so A has each key once. A reproducer runs the same steps on the same inputs and writes the same bytes (I8). No model covers it: sizes are left out of `IndexMerge.tla` (1.3), so the argument is the four cases above, each held by a test of 1.6.
+
+What it costs. Step 3's test is the encode the joined shard needs at step 5 anyway, run one step earlier, and a refused join costs that one encode. Step 1's test is an encode each changed shard already gets, at step 3 or at step 5. The give-up's search runs only when a removal leaves a shard past the cap, which needs a shard `take` filled and an unlucky re-blocking: as `take`'s, at most ⌈log2 n⌉ + 1 length computations for a shard of n entries.
 
 A merge whose winners are all the shards' own entries still commits: the manifest alone, so that the writers can reuse their slots.
 
@@ -319,7 +392,8 @@ rollup(S), S the oldest expired bucket at t:
     entries, heads included); every newer bucket's entries by key, heads included; all (a/m and shards)
   3 carried(key) = the winner, as a merge picks it, over S's shards, every unabsorbed slot of S, heads
     included, and S's unabsorbed large entries; per ref, S's newest ref tombstone. The erasure set's
-    documents are left out.
+    documents are left out. A diff on a listed version, of a version the set does not list, is composed
+    through its base while the base stands, as at a merge (amended 2026-11-12, section 15; 15.2.6).
   4 per key with carried c; n = the newest entry of the key in the newer buckets (heads, sealed slots,
     unabsorbed large entries, shards; tombstones count); a = all's row of the key:
        n exists and n.version < c.version   promote: c goes to P, the newest bucket holding an entry of
@@ -374,6 +448,9 @@ bound       past Search.JournalByteCount the oldest units lose their key sets an
             drops the unit, and its push is backfilled.
 search      the device's own searches read committed and sent units as a local overlay (§11.14's companion
             row); SearchCache.ApplyErase and ApplyCut remove a listed document's units
+cards       (amended 2026-11-12, section 15) on a record stream a unit also holds a card marker for each run
+            its entries touch, and the journal holds again units for the cards an erasure listed;
+            ApplyCut removes neither (15.2.9)
 ```
 
 **A companion push** is built in this order, and the order is the fence (R5):
@@ -426,6 +503,8 @@ when it next builds an index push for I (§11.14's coverage row):
 ```
 
 Both kinds may ride one push: a device with committed units and backfill work builds one plan from both document sets.
+
+**Record logs (amended 2026-11-12, section 15).** For a record log, 15.2.9 adds to a companion push its interval (`RecordSettings.CardInterval`), a step 2a that reads the log's `erasure` ref at an epoch the device has not yet built at, step 4's run cards, the pin below a blocked document and again units, and to a backfill's step 4 the cards of the runs its versions touched. An eraser's re-entry push (15.2.4) is built in a companion push's order.
 
 **Why the pin is enough.** Take an entry of document d at version v that such a push publishes, and let T be evs's time at the push's index read (step 2). Suppose that when the push commits a roll-up has already dropped, or moved into all, an entry of d at a version v' above v, which is the only way an older entry does harm (I5). R at the pin held d at v, so v' was committed to R after the builder's read of R, which came after T. The index entry of v' was committed later still, with a signed time t' that evs held within 10 min of its clock, so t' is after T less 10 min, and it went to the bucket whose window holds t' or to a newer one. A roll-up of that bucket carries a signed time at which the bucket is expired: a whole window, at least 7 days, past the window's end, so more than 7 days past t', and evs took the roll-up's push within 30 min of that time. So the roll-up committed more than 6 days and 23 h after T. The builder took t before step 2 and sends only while its monotonic clock and its wall clock both read within IndexPushLife of that moment. Its push cannot land after that roll-up.
 
@@ -485,6 +564,9 @@ a companion push  per content ref R, with p the version in its {R, p, false} row
                   each entry being its path's state at the push's base, and is not rebuilt whole.
 a backfill        with h from its {R, h, true} row and p from its {R, p, false} row (the push's base on a
                   file-mode ref's own index): 1.2.6's backfill, step 4
+a run card        (amended 2026-11-12, section 15) on a record stream both kinds also carry the card of each
+                  run their versions touched; 15.2.9 gives a card's inputs
+a re-entry push   (amended 2026-11-12, section 15) an eraser's push, which moves no own row: 15.2.4's documents
 ```
 
 So any device that holds the writer's files in the bucket at the push's base, the content ref's history to p and the text of the changed paths rebuilds every file of the push and compares `content_sha256`: equal, it fetches nothing; unequal, `index_mismatch` names the signer (§11.14's reproduce row, D-EVS-56). It needs no other writer's head and no shard, which the landed rule required. The team directory's readers (§16.11) derive a card writer's next head the same way from its previous head and the card version.
@@ -505,7 +587,12 @@ chains           a diff resolves in one step, from the full entry in its own wri
 malformed        an unabsorbed diff with no base is index_malformed naming the slot's signer, and its document
                  reads not yet searchable until a host with the text re-enters it (§11.14's chains row). The
                  row's "a diff below its key's newest entry is no candidate, resolved or not, and alarms
-                 nothing" goes: under I1 there is no such diff to excuse.
+                 nothing" goes: under I1 there is no such diff to excuse. An unabsorbed diff whose composed
+                 set D6 skips under its row reads the same way (1.2.2; amended 2026-11-12, QD-760).
+resting diffs    (amended 2026-11-12, section 15) a diff resolves through a base the erasure set lists while
+                 that base stands. A diff whose base is gone and whose base version the set lists is
+                 excused: no candidate, no alarm, and nothing reads not yet searchable on its account
+                 (15.2.6)
 ```
 
 Newest-wins over every partition a device holds, the version table, masks and retained buckets are as §11.14 has them.
@@ -513,8 +600,10 @@ Newest-wins over every partition a device holds, the version table, masks and re
 ### 1.3 Invariants and why they hold
 
 ```text
-I1 own bases       every diff in an unabsorbed slot, of a document the erasure set does not list, has its base,
-                   a full entry of its key, in another file of its own writer in its bucket (proposed I-EVS-18)
+I1 own bases       every diff in an unabsorbed slot whose base version the erasure set does not list has its
+                   base, a full entry of its key, in another file of its own writer in its bucket (proposed
+                   I-EVS-18; amended 2026-11-12, section 15: the exception read "of a document the erasure
+                   set does not list")
 I2 merges total    a merge composes every input it reads and writes each key's newest version; a bucket's
                    shards hold one version a key, a row or a tombstone, never a diff; a tombstone stays until
                    the bucket rolls
@@ -531,7 +620,7 @@ I8 a function      every file a writer's push, a merge or a roll-up writes is a 
                    (FI-22)
 ```
 
-**I1.** By induction over commits. A writer's own push P, built at b: if it commits, its writer's head in the bucket was at the version P read, so by R2 no other push has changed a file of that writer's there since b, a CLOSURE aside. P's plan adds diffs whose bases stood in the writer's other files at b, and reuses or removes only files that its own result does not keep. The watermark may have moved since b; that only makes more slots absorbed, so fewer diffs are owed a base. A merge writes no writer's file and only raises watermarks. A roll-up removes a bucket's files together, and a promotion writes shards. A DROP's rewrite takes the diffs that rest on what it removes and replaces the head (1.2.3). A CLOSURE takes a listed document's base and its diffs in separate pushes, so between them a diff of a listed document may lack its base: every reader, merge and roll-up leaves out the erasure set's documents before it composes anything, which is why I1 excepts them, and no diff built after the CUT rests on a listed version. Model: `ChainsResolve`; twins `NoOwnCas`, `ReusePinned`, `CleanupReferenced`, `MergeRemovesLarge`.
+**I1.** By induction over commits. A writer's own push P, built at b: if it commits, its writer's head in the bucket was at the version P read, so by R2 no other push has changed a file of that writer's there since b, a CLOSURE aside. P's plan adds diffs whose bases stood in the writer's other files at b, and reuses or removes only files that its own result does not keep. The watermark may have moved since b; that only makes more slots absorbed, so fewer diffs are owed a base. A merge writes no writer's file and only raises watermarks. A roll-up removes a bucket's files together, and a promotion writes shards. A DROP's rewrite takes the diffs that rest on what it removes and replaces the head (1.2.3). A CLOSURE takes only entries at listed versions and diffs on listed versions, in separate pushes, so between them a diff on a listed version may lack its base: I1 excepts it by its base's version, every reader, merge and roll-up passes over it once its base is gone, its version stands full in the eraser's head where nothing else a reader scans held it, and no diff built after the CUT rests on a listed version (amended 2026-11-12, section 15; 15.3 has the argument, and 15.1 A what the earlier wording missed). Model: `ChainsResolve`; twins `NoOwnCas`, `ReusePinned`, `CleanupReferenced`, `MergeRemovesLarge`.
 
 **I2.** A merge's inputs are full rows and tombstones (the shards), the entries of sealed slots and the unabsorbed large entries. By I1 every diff among them has its base. Each of those files is stable from the merge's base to its commit: a sealed slot is overwritten only once absorbed, which only this merge's commit or an earlier winner's can do, and a base is kept while its diff's slot is unabsorbed. One version a key follows from the winner replacing the shards' entry. Model: the ghost `broken`, `OneVersionEach`, `TypeOk`'s "no diff in a shard"; twin `MergeDropsTombstone`.
 
@@ -547,7 +636,7 @@ I8 a function      every file a writer's push, a merge or a roll-up writes is a 
 
 **The model.** `IndexMerge.tla` holds one index ref over three windows: two writers' slots (two each, three in one configuration, with seqs), their large entries, a shard and a manifest a bucket, all, the lock, and the content of two documents, d2 edited four times and d3 created and then deleted by a commit that skips the index. The journaler's entries trail their content; the backfiller indexes what no entry reaches. A head push has four shapes (create, append, seal as the head stood, fill and open the next slot), an entry may be full or a diff where a base stands, and a push built in one step commits in another, with anything between. A writer's process may die with a push in flight that still lands. Merges, a roll-up under its lock with two rollers, crashes and lapses run beside them. A head push is refused only by its own files' CAS, never by a manifest (1.1 F). Constants switch each rule between the design and §11.14 as written, and `Twin` breaks one rule of the design.
 
-What it leaves out, and why that is safe. Sizes: KeepSlots and the delta bound only turn diffs into full entries, and the model lets either be chosen. Several shards a bucket: `layout` is a function of the winners, and the model's one shard makes the shard's CAS and the manifest's the same step, so `PromoteBlind` removes both. Ref tombstones follow a document tombstone's rule with a ref for a key. Pushes carry one entry; a push of several is some sequence of these with fewer states between. D-EVS-45's move is one of the placements the model already allows. Coverage rows are not modelled: what is indexed is a ghost, and a backfill is whatever the content holds that no entry reaches. The erasure's CUT, CLOSUREs and epoch are `IndexRollup.tla`'s, and SEARCH-M10-46 joins the two. A DROP's rewrite is not modelled: its rule (1.2.3) is argued under I1 and held by FS-107's case.
+What it leaves out, and why that is safe. Sizes: KeepSlots and the delta bound only turn diffs into full entries, and the model lets either be chosen. D6's shard test is a size too (amended 2026-11-12, QD-760): a version it skips is a tombstone, which the model has, and that a new shard takes at least one is 1.2.4's argument, not a run's. So are step 1's give-up and step 3's test (amended 2026-11-12, QD-775): they move rows between shards of one partition and change no winner, and that every shard a layout writes fits is 1.2.4's argument as well. Several shards a bucket: `layout` is a function of the winners, and the model's one shard makes the shard's CAS and the manifest's the same step, so `PromoteBlind` removes both. Ref tombstones follow a document tombstone's rule with a ref for a key. Pushes carry one entry; a push of several is some sequence of these with fewer states between. D-EVS-45's move is one of the placements the model already allows. Coverage rows are not modelled: what is indexed is a ghost, and a backfill is whatever the content holds that no entry reaches. The erasure's CUT, CLOSUREs and epoch are `IndexRollup.tla`'s, and SEARCH-M10-46 joins the two. A DROP's rewrite is not modelled: its rule (1.2.3) is argued under I1 and held by FS-107's case.
 
 **The runs**, on 2026-11-10 with TLC from tla2tools at d8fb231, through `run-indexmerge.sh`, on a host shared with the build lanes. Every run but one is breadth-first over its whole state graph. The one marked simulation draws 4,000 traces a worker from a fixed seed and shows only that those kept every invariant.
 
@@ -707,6 +796,9 @@ requests     one upload a changed shard and one push
 time         one encode a changed shard; at §11.14's speed 10 to 15 ms each, on the draft encoder about a second
 take         only when the youngest shard fills, once in about 19 merges: up to 12 length computations of a
              1 MiB shard
+join, give-up (amended 2026-11-12, QD-775) a join's test is the joined shard's own encode, taken before the
+             join and not after; a give-up runs take's search once, and only when a removal has left a
+             shard past the cap
 ```
 
 **A roll-up** of a bucket of n documents: one lock push; S's winners into all, n × 471 to 900 B, as ⌈that / 1 MiB⌉ + 1 uploads; a/m; the removal of b/<S>/, one entry a file (the manifest, the shards and every writer's slots and large entries); a promotion's shard and manifest when there is one, which needs two writers' clocks apart at the boundary or a trailing entry; and each all shard holding a row that a carried version or tombstone replaces.
@@ -814,6 +906,21 @@ a deleted document indexed     a host with the text that meets a live entry whos
 a diff with no base            only a writer off the rules, or damage, leaves one in an unabsorbed slot:
                                index_malformed names the slot's signer; a merge leaves the diff out; a host with
                                the text re-enters the document full (§11.14's chains row).
+a document past a shard        (amended 2026-11-12, QD-760) skipped at extraction (section 11's D6): no entry,
+                               and a tombstone where it was indexed before, so no merge, push past DirectBytes
+                               or roll-up meets one. It is not searchable, as a document past KeySetMax already
+                               is not. A full entry of one, which only a writer off the rules leaves, is past
+                               its cap: a decoder refuses its file and index_malformed names its signer; a diff
+                               that composes to one is left out as a diff with no base is. Behind both,
+                               errIndexMergeUnplaceable: an empty shard that takes nothing fails the merge,
+                               which writes nothing.
+a shard past the cap           (amended 2026-11-12, QD-775) no layout writes one. A join that would not encode
+                               within ShardBody is not made, and its two shards stay. A shard that a removal
+                               leaves past ShardBody gives up its highest entries to the rows the layout
+                               appends (1.2.4). Neither is a failure, and neither raises anything. Behind both,
+                               errIndexShardFull out of step 5's encode fails the layout, and the merge, the
+                               push past DirectBytes or the roll-up writes nothing: a state no input a decoder
+                               accepts reaches.
 a runner that rolls early      a roll-up whose signed time is before its bucket's expiry is caught by every
                                reproducer: index_mismatch naming it. Its effect is a roll-up done early, which
                                breaks no invariant but R5's margin.
@@ -871,6 +978,68 @@ journal       a unit written at settle and not before; a companion build's read 
 
 **Mutants.** Each twin of 1.3 is a mutant of the code and must fail a named test: a seal that leaves the head unwritten (R2's two-push test); a seal that reuses a kept slot, a push that removes a kept large entry and a merge that removes large entries (FS-107, caches discarded); a merge that drops a tombstone and a roll-up that reads no head (FS-108); a roll-up that drops a tombstone above a newer bucket's older entry, and one that writes the target's shard without its manifest (FS-75's promotion case); a companion build that reads content before the index or from a cached pin, and one that resends after TIME_AHEAD (the journal tests).
 
+**D6 at the merge** (amended 2026-11-12, QD-760). The fix track's tests, each a top-level test beside the code it holds (`evs_index_merge_test.go`, `evs_index_codec_test.go`, `evs_index_fake_test.go`); section 11.6 has D6's own:
+
+```text
+merge/ vector                 take at the cap where the next winner is a document with lone = ShardBody: the
+                              shard opened for it holds it alone and encodes within ShardBody
+TestADocumentPastAShardNeverReachesAMerge
+                              on the fake store: 11.6's chunk of mixed-script letters, indexed before as a
+                              smaller text, is skipped at prepare; the push carries its tombstone, a push past
+                              DirectBytes that carries it beside other documents merges them, and the bucket's
+                              next merge and its roll-up commit
+TestAnEntryPastAShardIsRefused
+                              the entry codec refuses to write and to read a full entry D6 skips, at lone =
+                              ShardBody + 1 and not at ShardBody (keys 0 to n - 1 under a 36 B row, n = 199,609
+                              and 199,608); a slot holding one is index_malformed naming its signer; a diff
+                              whose composed set passes the bound under its row is left out of the merge,
+                              reported with its signer, and the merge commits the rest
+TestAnUnplaceableLayoutWritesNothing
+                              the guard, kept: TestIndexMergeUnplaceable as landed under this name. A merge
+                              handed, as extra and so past the decoders, a document over the bound returns
+                              errIndexMergeUnplaceable and no file
+TestANewShardTakesAtLeastOne  for generated winners that D6 kept, at the widest header, version and time:
+                              take on an empty shard returns at least 1, and step 2 opens at most len(A) shards
+FuzzIndexLayoutTakes          any shards and any winners D6 kept: layout never returns errIndexMergeUnplaceable
+```
+
+Mutants: a decoder without the bound fails `TestAnEntryPastAShardIsRefused`; a merge that composes without it fails the same test's diff case; a layout without the guard does not return from `TestAnUnplaceableLayoutWritesNothing`, which runs under a deadline.
+
+**A layout at the cap** (amended 2026-11-12, QD-775). The fix track's tests, top-level, in `evs_index_merge_test.go`. The first two are the cases measured on 2026-11-12 for question details-amend-2-layout-past-the-cap, built through the shard encoder as that measurement built them:
+
+```text
+merge/ vectors                a join refused at the cap, and a removal that gives up rows: the two cases
+                              below, each with its input shards and the output files' plaintext hashes
+TestAJoinPastTheCapIsNotMade  a bucket whose two adjacent shards hold 16 documents sharing 60,000 keys
+                              (372,510 B before its pad) and 2,000 small documents (119,795 B): they come to
+                              492,305 B, under ShardJoin, and as one shard do not encode within ShardBody,
+                              since each of the 60,000 lists grows from a 2 B bitset to 16 docids or more. A
+                              merge of the bucket commits; both shards stand under their own n with their own
+                              bytes; the manifest lists both. Again with a third shard of 100 small documents
+                              after them: the first pair is refused, and the second and third are joined
+TestARemovalPastTheCapGivesUpRows
+                              a shard that take filled to within one document of ShardBody, its keys in runs
+                              of 64 sharing two bytes and the first key held by one small document alone. A
+                              merge whose winner is that document's tombstone removes its row, and the shard
+                              as it then stands would encode 2,447 B longer, past ShardBody. The layout keeps
+                              the count take's search finds over the shard's remaining entries; the rest, from
+                              its highest doc_key down, join the tombstone among the appended rows; the shard,
+                              being the youngest, takes back what take's test allows and a next shard opens
+                              for the others; the merge commits; each shard decodes within ShardBody; every
+                              key stands once across the shards; a second run writes equal bytes. Again with
+                              the full shard not the youngest: its given-up rows go to the youngest
+TestALayoutKeepsAShardNothingChanged
+                              a shard a CLOSURE rewrote on its replaced partition, whose encoding by blocks of
+                              64 would pass ShardBody: a merge that changes nothing in it leaves its bytes; as
+                              the youngest shard it takes nothing and a next shard opens; one removal from it
+                              makes it give up rows
+FuzzIndexLayoutWrites         any shards a decoder accepts and any winners D6 kept: layout returns no error,
+                              every shard it writes is within ShardBody before its pad, and each key stands
+                              once. It takes FuzzIndexLayoutTakes's place
+```
+
+Mutants: a layout that joins on the sum alone returns errIndexShardFull from `TestAJoinPastTheCapIsNotMade`; one that skips the give-up returns it from `TestARemovalPastTheCapGivesUpRows`; one that gives up from the lowest key, or that leaves G unsorted, fails that test's vector.
+
 ### 1.7 Implementation notes, task by task
 
 Order: SEARCH-M10-45 first, since every other task plans on its `plan`. Then SEARCH-M10-10, then SEARCH-M10-11 and SEARCH-M10-12 together, SEARCH-M10-13, SEARCH-M10-14, SEARCH-M10-15, and the schedules as their mechanisms land. SEARCH-M10-46 at any time. All are the evs lane's. Entries for the two new tasks are in `.stack/plan/proposals/details-1-tasks.md`.
@@ -903,6 +1072,47 @@ Traps: bases are chosen against the files as the push's base shows them, never a
 
 **SEARCH-M10-10, bucket merges** (held; L; its Build changes). Build 1.2.4: `indexMerge` as the pure function `merge` with `layout` and `take`, and `IndexMerger` as its runner. Needs: SEARCH-M10-45 in place of SEARCH-M10-09 alone. What leaves its plan entry: heads as an input, the output row's "unless" clause, "absorbed large entries are removed", and "never drop a base a current head names", which is now the writer's keep rule. What joins it: `extra` entries and a no-absorb mode, for a push that merges its own entries and for SEARCH-M10-11's promotions; the tie order; a manifest-only commit; restart on `collected`. Proposed shapes: `indexMergeArgs{bucket *indexViewBucket, extra []*indexEntry, absorb bool, erased func(key, version) bool, padKey *indexPadKey, tables indexTables}` and `indexMergeResult{shards []*indexPlannedFile, removedShards []*indexPushRemoval, manifest *indexPlannedFile, malformed []*indexMalformedDiff}`. Barriers `evs.index.merge.built`, `.uploaded`, `.pushed`. Traps: the shard encoder is called up to 12 times by `take` when a shard fills, so `take` asks it for a length, not bytes, and the encoder must reach §11.14's 7 to 10 ns a posting first (the draft measured 843 ns under load, 1.4); on an app host the inputs stay in storage and the merge is a k-way pass over their key streams (1.4); the watermark is the highest seq read, never the head's; a merge writes no slot and removes no large entry. Tests: 1.6's merge vectors and fake-store cases; FS-74's two mergers; FS-107's and FS-108's merge clauses.
 
+**SEARCH-M10-10's fix track for QD-760** (amended 2026-11-12, QD-760). The merge side of the skip rule; section 11.7 has the extraction side, which lands first or with it, since this side calls its function. Landed code that changes:
+
+```text
+evs_index_entry.go        indexEntry.check, which the encoder and the decoder both run, refuses a full entry
+                          whose row and key set D6 skips (indexMalformed "an entry past a shard"), after the
+                          key set's own cap
+evs_index_merge.go        where a diff is composed onto its base, a composed set that D6 skips under the
+                          diff's row joins indexMergeResult.malformed with its slot's signer and is left out,
+                          as a diff with no base is. indexLayout keeps errIndexMergeUnplaceable and its test
+                          of an empty shard that took nothing; its comment says D6 makes it unreachable and
+                          that it stays as the closed guard
+search_chains.go          searchResolveChain holds a composed set to the same test: a diff that fails it
+                          reads as a diff with no base does (1.2.9)
+evs_index_merge_test.go   TestIndexMergeUnplaceable becomes TestAnUnplaceableLayoutWritesNothing; 1.6's other
+                          tests; testdata/index/merge/ gains its vector
+protocol/INDEX-FORMAT.md  1.8's two sentences
+```
+
+Traps: the bound is computed on the row's bytes as the entry holds them, never on a row built again from fields, so a decoder and a writer cannot differ by a trimming; a merge must not skip a document itself, since a merge's output is only its inputs' newest versions (the question's option 3 was not taken), so it either places a winner or fails; `take` still asks the encoder for a length and never uses lone(d) in its place, since lone is an upper bound and the layout's bytes are the encoder's.
+
+**SEARCH-M10-10's fix track for QD-775** (amended 2026-11-12, QD-775). The layout's two tests, on the landed `indexLayout`; it follows or rides with the QD-760 fix track, since both touch the same function and its guards. Landed code that changes:
+
+```text
+evs_index_merge.go        indexLayout, after step 1's removals: each changed shard is asked for its length
+                          before its pad. Where the encoder answers errIndexShardFull, indexTake runs on an
+                          empty shard with the shard's remaining entries in append order (key, then kind);
+                          the shard keeps that count, the rest join the appended entries, and those are
+                          sorted again before step 2. A count of 0 returns errIndexMergeUnplaceable.
+                          Step 3's loop: where the two lengths come to under ShardJoinByteCount it asks
+                          the encoder for the union, and on errIndexShardFull leaves the pair and moves on
+                          by one. errIndexShardFull out of step 5's build still returns; the comments on
+                          both errors say that QD-760 and QD-775 make them unreachable and that they stay
+                          as closed guards
+evs_index_shard.go        errIndexShardFull's comment: a test's answer in take, step 1 and step 3
+evs_index_merge_test.go   1.6's four tests; FuzzIndexLayoutTakes becomes FuzzIndexLayoutWrites;
+                          testdata/index/merge/ gains its two vectors
+protocol/INDEX-FORMAT.md  1.8's Merges text
+```
+
+Traps: a give-up's entries are the shard's rows and tombstones together, in the appended entries' order, and the appended entries are sorted once with them in; the join's test is the union's encoding by blocks of 64 under the layout's header, never the sum of two lengths; an unchanged shard's length in the sum is its stored bytes before their pad, which the landed code already reads; a refused pair moves the scan on by one, so its second shard is tried with the next; the test of step 1 runs on shards step 1 changed and on no other, so a shard on a kept partition that nothing touches is never encoded again; the roll-up's layout of all and each promotion's merge are this function and need nothing of their own; a CLOSURE's and a DROP's `rewriteWithout` is not a layout and keeps QD-173's rule.
+
 **SEARCH-M10-11, roll-ups and the index lock** (held; L; its Build changes). Build 1.2.5. `indexRollup` is pure over S whole, all, and a lookup "the newest version of this key in the newer buckets", which the runner answers from §5.9's version table where CORE-M10-02 has landed and else from a key-to-version run built in storage from the newer buckets' doc tables and slots. Step 4's in-place rewrite leaves the task: the roll-up calls `indexMerge` with `extra` and `absorb` false for each promotion target. `rewriteWithout` (landed, SEARCH-M10-05) keeps its two other callers, a CLOSURE and a DROP. Expiry is judged at the push's signed time, for the trigger, the lock and the merge runner's "never on an expired bucket"; the lock renews at half its term. `indexer_search.go` schedules merges, roll-ups and backfills as planned. Step 5's coverage rows go into the runner's own head in the newest bucket through `indexPlanHead` with no document. Traps: read S, the newer buckets and all at one head version taken after the lock commits; a 409 that is not the lock's keeps the lock and reruns from the read; a promotion writes the target's manifest even when it had none; a/m's `rolled_through_day` and I-EVS-11 as 1.8 words them. Tests: 1.6's roll-up vectors (one with a promotion replaces "one removing an older newer-bucket entry"); FS-75's barriers; the promotion races.
 
 **SEARCH-M10-13, the in-ref writer on the real push builder** (held; L; Needs and Build change). Needs gain SEARCH-M10-45, SEARCH-M10-42 and SEARCH-M10-44: no index is written outside tests on the old extractor (section 11.5), and `Prepare` runs on phones, where extraction must be the one-pass form. It may be drafted against the whole-value extractor behind one seam and switched when SEARCH-M10-44 lands. `IndexWriter.Prepare(plan)` calls `indexPlanHead` (1.2.3) with the push's documents and adds every file and removal it returns to the statement. Conflict: a 409 naming the writer's head, or any file of its own, rereads its files and plans again, which is §11.14's "merges its delta into the winner's file" in effect; it is the same for an append and a seal. A push past DirectBytes calls `indexMerge` with its entries and commits the shards, the manifest and its head together. An in-ref push needs no pin and no life of its own: its content CAS is its fence. Dropped chunks: a version with fewer chunks than the one it replaces writes tombstones for the chunk numbers from its count up to the replaced version's count less one (section 11's interface), the replaced count taken from the replaced version's text; a device that does not hold that text and will not fetch it writes no index entry for the push, which then reads unindexed and is backfilled. Tests as planned, with R2's two-push case in both shapes.
@@ -922,7 +1132,7 @@ Traps: bases are chosen against the files as the push's base shows them, never a
 - SEARCH-M10-09 is drafted; SEARCH-M10-45 finishes it.
 - SEARCH-M10-12 (coverage and backfill; it waits on SEARCH-M10-10): the backfill is 1.2.6's, with h and its two rows; `indexCoverageOf` reads up to two rows a ref; a push whose documents were all superseded is covered by its committer's next row; "re-enter a broken chain's version" becomes "re-enter a document whose diff has no base".
 - SEARCH-M10-18 (DROP rewrites): a rewrite that removes a base from a writer's file removes the diffs that name it, enters a kept head's composed version full in the signer's own head, and replaces that writer's head and the bucket's manifest in the same push (1.2.3).
-- SEARCH-M10-17 (erasure's rewrites): unchanged. Its list still names "each writer's slots and large entries in each bucket"; kept and lingering files are among them. A CLOSURE needs no head rewrite (1.2.3).
+- SEARCH-M10-17 (erasure's rewrites): changed (amended 2026-11-12, section 15; this note read "unchanged"). Its list still names "each writer's slots and large entries in each bucket"; kept and lingering files are among them, and it gains every slot holding a resting diff (15.2.3). The eraser's re-entry push precedes its CLOSUREs, which remove resting diffs with the listed entries (15.2.4, 15.2.5). A CLOSURE still rewrites no head it has no other reason to touch (1.2.3). 15.7 has the task's build.
 - SEARCH-M10-21 (reproduction): a head is reproduced from 1.2.8's inputs; hosts with the text add 1.5's check for a live entry of a removed path.
 - SEARCH-M10-23 and SEARCH-M10-24 (matching and masks): 1.2.9; the reader half is in SEARCH-M10-45.
 - SEARCH-M10-36 (FS-76, FS-107, FS-108): FS-107 and FS-108 as 1.8 rewords them.
@@ -954,7 +1164,7 @@ Traps: bases are chosen against the files as the push's base shows them, never a
 
 **§11.17.** D-EVS-46: for "A diff rests only on its document's previous version outside every head in the current bucket, or carries over the base of the writer's own head diff it replaces, and merges keep a base a head names" read "A diff rests only on a full entry of its document in another file of its own writer in its bucket, which that writer keeps while the diff needs it; every push that writes a writer's file replaces that writer's head". Its why gains: "a base in a file another device rewrites cannot be fenced by a push that writes only a head (DESIGN-DETAILS.md section 1)". D-EVS-47: for "a merge's writers' heads included" read "a merge reading no head"; for "and removing any older entry racing pushes left in a newer bucket" read "and moving a version or tombstone above an older entry that racing pushes left in a newer bucket into that bucket's shards". D-EVS-49: after "with coverage": ", built from the content ref as read after the index and sent within 5 min".
 
-**§11.8, I-EVS-11.** For "the push that removes an expired bucket adds its documents to all" read "the push that removes an expired bucket adds each of its documents to all or, for one a newer bucket holds only older entries of, to that bucket's shards". A new invariant after I-EVS-17: "I-EVS-18 every diff in a slot no merge has absorbed has its base, a full entry of its document, in another file of its own writer in its bucket".
+**§11.8, I-EVS-11.** For "the push that removes an expired bucket adds its documents to all" read "the push that removes an expired bucket adds each of its documents to all or, for one a newer bucket holds only older entries of, to that bucket's shards". A new invariant after I-EVS-17: "I-EVS-18 every diff in a slot no merge has absorbed, whose base version the erasure set does not list, has its base, a full entry of its document, in another file of its own writer in its bucket" (amended 2026-11-12, section 15).
 
 **§11.21, the risk row** "A diff's base or a deletion's mask leaves the index before the entries relying on it": its mitigation becomes "11.14's dependency row (own bases, the head rule), merges that read no head, the roll-up's promotion and the companion push's pin; an unabsorbed diff with no base is `index_malformed`; FS-107, FS-108, IndexRollup.tla and details/IndexMerge.tla".
 
@@ -969,6 +1179,10 @@ Traps: bases are chosen against the files as the push's base shows them, never a
 **§22.8, the model row.** `details/IndexMerge.tla` beside `IndexRollup.tla`: "own bases and the head rule, merges, promotion and the pin, with §11.14's rules as written as failing configurations".
 
 **protocol/INDEX-FORMAT.md** (SEARCH-M10-45 writes it). Entries: after "A diff's base version is below its version, and no key is in both of its sets": "A diff stands only in a slot. Its base is the full entry of its key at its base version in another file of the same writer and bucket: a slot that is not that writer's head, or a large entry; of two, the one in the file with the higher seq." Deltas: "Format 1's writers take every delta against the base itself, so nothing composes two deltas; the rule stands for readers of a later format." Slots and large entries: "A large entry's one entry is full." and, for "`coverage` is strictly ascending by ref_id", "`coverage` ascends by ref_id, then horizon false before true, with at most one row of each a ref." Shards gains `take` and the join as 1.2.4 has them, and the tie order. Small files: "`absorbed` holds a row for each writer with a watermark above 0; a manifest may list no shard." Times: "An entry's time is that of the content push that made its version; its bucket follows the signed time of the index push that carries it."
+
+**Amended 2026-11-12, QD-760.** §11.14, Merges, the output row: after "a next one opening at the cap" add ", which takes at least one, since extraction skips a document that alone would not fit a shard (sniff row)". The sniff row's own words are section 11.8's. protocol/INDEX-FORMAT.md, in the fix track's change: Entries, for "A key set encodes to at most 512 KiB, since a chunk past that is skipped." read "A key set encodes to at most 512 KiB, and a full entry's row and key set pass D6's shard test, since a document past either is skipped; a decoder refuses an entry past either, and a diff whose composed set fails the test under its own row is malformed, as a diff with no base is." Shards, Merges, after "takes again from there": "A new shard takes at least one row, since D6 keeps no document that alone would not fit; an implementation whose empty shard takes nothing has met an input off the rules and writes nothing."
+
+**Amended 2026-11-12, QD-775.** §11.14, Merges, the output row: for "its older version dropped from the shard holding it" read "its older version dropped from the shard holding it, a shard that this leaves past the cap giving its highest entries to the appended ones"; for "adjacent shards under 512 KiB together are joined" read "adjacent shards under 512 KiB together are joined where the joined shard fits the cap". §11.14, Roll-up, the steps row, step 4: for "join adjacent shards under 512 KiB" read "join adjacent shards under 512 KiB where the joined shard fits the cap". protocol/INDEX-FORMAT.md, in the fix track's change, Shards, Merges. Before "A merge's new rows, ascending by key, go to the youngest shard Y": "A merge first drops from each shard the entries it no longer keeps: its entry of a key whose winner is not that entry, and each row a ref tombstone or the erasure set drops. A shard so changed that no longer encodes within 1,032,192 B keeps the first c of its remaining entries, rows and tombstones ascending by key and then kind, c being the count the search below finds for an empty shard taking them, and gives up the rest, which join the merge's new rows." For "A merge's new rows, ascending by key, go to" read "The new rows, with any given up, ascending by key and then kind, go to". For "Then, by ascending n, while a shard and the next come to fewer than 524,288 B before their pads, the two become one under the lower n, the joined shard tested again with its next" read "Then, by ascending n, while a shard and the next come to fewer than 524,288 B before their pads and the two as one shard encode within 1,032,192 B, the two become one under the lower n, the joined shard tested again with its next; a pair that fails either test stays two shards and the scan goes on from the second; a shard's length is its encoding's where the merge changed it and its stored bytes' before their pad where it did not". After "a shard left with no row and no tombstone is removed.": "So a merge writes no shard past 1,032,192 B, and an implementation whose encoder refuses one at the last step has met an input off the rules and writes nothing."
 
 Nothing server-visible changes: no column, key, object family or proto field (I-18), and §2.8's evs-26 keeps its words but for the shape row's phrase above.
 
@@ -992,6 +1206,7 @@ Each is filed under `.stack/questions/`, and the design above is built on its re
 - `search-m10-07-merge-stale-diff`: none of its options. Under R1 and R2 a merge's inputs always compose (I2), so the question has no case left.
 - `search-m10-07-rollup-merge-race`: the fence of its option 1, the newer bucket's manifest, on a different step 4 (R4, the second question above).
 - `search-m10-07-late-journal-tombstone`: its option 1, made exact: the pin is read from evs after the index, in the push's own build, and the push has a life (R5, the third question above).
+- `details-amend-2-layout-past-the-cap` (amended 2026-11-12, QD-775): its option 1, as the owner decided it. 1.2.4's steps 1 and 3 carry the rule, with one reading: a give-up takes the shard's tombstones in key order with its rows.
 - `plan-SEARCH-no-document-pushes` (QD-209), `plan-SEARCH-shrink-claim` (QD-173), `plan-SEARCH-small-readings` #4 and #6 (QD-406, QD-511), `plan-SEARCH-index-format-bytes` (QD-300) and `plan-SEARCH-sync-before-search` (QD-048): stand. QD-173's partition-keeping rewrite loses one of its three callers, the roll-up's step 4. QD-477's slot order and QD-475's paths are used as they are.
 
 ## 2. Storage consistency under stalled writes: segment GC and the MinIO settle rules (§11.13, §19.6)
@@ -1161,6 +1376,8 @@ per record, on its ref's head read from the cluster (a held key waits, then 503:
   pending                    RaiseFence, which now always has a head to raise or makes one; resolve again
                              on the head it wrote: dead, by the fence_ms just set, or committed
 ```
+
+Section 14 amends the `dead` row (Amendment 14-A, 14.2.9): a slot the record lists is deleted only as the record's own.
 
 `ResolvePush` needs no change: on a placeholder its first dead rule cannot hold (the version is 0) and its second does (the statement's 35 min are long past at 25 h, and fence_ms is now).
 
@@ -1683,6 +1900,8 @@ This section is designed on the recommendation of each of the first three; the f
 **The drop job and a ref with no head (`details-2-drop-job-new-ref.md`).** Found while checking who else deletes on the strength of a scan of the repo's refs. §11.13's drop job marks "over every ref of the repo" at a snapshot after each drop's fence. A push that creates its ref, validated before the DROP committed and citing a listed version through `reuse`, whose head write stalls past mark and verify (25 min after a `now` drop), lands on a head the scans never saw, naming a segment the job deleted. It is A again, at 25 min in place of 25 h. Options: (1) the job takes mark only once the horizon of 2.2.4 has passed each covered drop's commit by 2 min, so every record validated before the fence has been settled, which makes a `now` drop's deletion start about 25 h after it and leaves a 7-day drop as it is; (2) the job resolves pending batch records itself before mark; (3) accept it. Recommendation: (1). It belongs to problem 10's tasks (EVSB-M10-03 and EVSB-M10-04) and to `EvsCommit.tla`'s drop stories, which run only refs that have heads; this section builds nothing for it.
 
 **Questions this section answers.** `evs-models-gc-unfenced-new-ref`: none of its options as stated; GC fences nothing, and the fence of a ref with no head is evacuation's placeholder (its option 1's write, made by evacuation). `evs1-m2-12-first-commit-gc-fence`: its option 1, the push route as it is. `evsb-m2-11-pending-record-no-head`: its option 1. `evs-models-settle-stalled-deletes`: its option 1, with the stamp for C, which it did not have; that option is the owner's too, since it changes FI-30's last clause and D-OPS-20's cost (2.4, 2.8). `evsb-m2-11-dead-record-shared-slot` is not answered here; its option 3 can take 2.2.4's horizon in place of reading batch-resident records, and a DELETE naming the slot's LastModified, when it is decided.
+
+Section 14 answers `evsb-m2-11-dead-record-shared-slot` (14.9), with none of its options as stated.
 
 ## 3. Zero-knowledge proofs of TLS delivery for outbound mail (smtpproof; §14.5)
 
@@ -7116,6 +7335,8 @@ A retoken counts against `PushRebuildCount` with rebuilds. The lowered floor is 
 
 Keeping the slot ids changes §11.6's slot rule, which today draws new ones for every rebuilt push. A push refused 412 PATH_EPOCH never commits, since the epoch only rises; its slot bodies are the bytes the retoken sends again; and step 6 already takes equal bytes on a 412 as success. A slot object an attempt of the refused push left is adopted by the retoken exactly as a segment's receipt is (under 23 h, else 409 SLOT_STALE and the ordinary rebuild). So a CLOSURE is uploaded and charged once (K).
 
+Section 14 amends this paragraph (Amendment 14-B, 14.2.9): evs gives the retoken that slot by a takeover, not by taking equal bytes.
+
 Format 2's kind-5 segment names its push in its header, so a retoken cannot adopt one and uploads it again. That is EVS2's to carry; format 1 has no such segment.
 
 #### 9.2.6 evs
@@ -7314,6 +7535,8 @@ Two mappers need no agreement. If both map to one generation, the first PATH_EPO
 **P7, a mapper costs time only.** Nothing a mapper does before its PATH_EPOCH commits is visible to any reader or writer: parts are objects no head names. A map whose state moved is refused by the fence, whose hash matches no stored bytes by MAP_PARTS, and whose source is gone by MAP_SOURCE, each leaving the head as it was. The job record makes every step repeatable.
 
 **K.** A retoken's kept slot ids name the bytes the refused statement would have written, and that statement can never commit, so no slot is introduced by two committed pushes.
+
+Section 14 restates K so that it holds against any client (Amendment 14-C, 14.2.9).
 
 **The model.** `PathEpoch.tla` holds one ref whose paths are files under one directory that any client lists without a token, which is the root. It models keys and heads (a rotation, a device learning it, a head read), reads by the floor and new-name rules and lookups, plans, pushes with their fold, the 412 and the retoken, abandoning a plan, a mapper building from either kind of index and committing against the fence, the tail and the source slots, and the copy: each move as its two writes, the PUT of the current entry and the DELETE of the source copies, with any other step between them, then the row translation and the drop. A token is the pair (path, epoch), and `seen` is every pair a request showed evs. Its invariants are P1 (`NoLateToken`, `FloorsBacked`), P2 (`ReadsNewest`), P3 (`NoLostUpdate`), P5 (`NoneMissed`, `EntriesHome`) and P6 (`RowsLead`, `NoGhostRows`), with `TypeOK`. Every rotation in it is a REMOVE and immediate. TLC is the owner's jar, a nightly from master at d8fb231, through `.stack/tools/tlc`; `run-pathepoch.sh details-9 all` runs everything below and deletes each run's state directory as it ends.
 
@@ -8601,7 +8824,7 @@ This section is designed on the recommendation of each.
 
 ## 11. Canonical text extraction and exact body sizes for search
 
-Status: complete (2026-11-10)
+Status: complete (2026-11-10; amended 2026-11-12, QD-760: 11.2.1, 11.2.3, 11.2.7, 11.4, 11.5, 11.6, 11.7 and 11.8, each place marked)
 
 Tasks held until complete: SEARCH-M10-31, SEARCH-M10-36.
 
@@ -8707,6 +8930,8 @@ SniffWindow      8,000 B   the bytes that decide text or binary (S2)
 TitleMax            80 B   a file's title (S4)
 FieldCut         1,024 B   normalized subject, from, to and title (N6)
 KeySetMax      524,288 B   a key set's encoding, past which its document is skipped (D6)
+ShardLone          128 B   what D6 counts for the header, doc_key, version and time of a shard holding one
+                           document; D6 reads ShardBody, 1,032,192 B, from 1.2.1 (amended 2026-11-12, QD-760)
 ```
 
 Tables, each part of extractor 1 or normalizer 1:
@@ -8777,9 +9002,27 @@ D5  A document's row is INDEX-FORMAT.md's: its locator the path's bytes, its sub
     of fields 1-3 before normalization, its title the title of S4 alone, never the path, each with N1 applied
     and then cut by that file's Trimming; its size the length in bytes of the whole file or message, the
     same on every chunk's row.
-D6  A document whose key set would encode past KeySetMax is skipped: it has no entry, and where its key was
-    indexed before, its version is a tombstone (§11.14's sniff row).
+D6  (amended 2026-11-12, QD-760) A document d is skipped when its key set would encode past KeySetMax, or
+    when d alone would not fit a shard: lone(d) > ShardBody, with
+        lone(d) = ShardLone + len(row) + dict(K) + n
+        row     d's row as its entry carries it (D5; ref_id included in ur/index), at most 2,048 B
+        K       d's key set, k_1 < ... < k_n; n counts the postings, one byte a key
+        dict(K) = vlen(B) + the sum over blocks j = 0 .. B - 1 of (3 + vlen(o_j) + vlen(64 x j))
+                  + the sum over i = 1 .. n of (6 - p_i), with B = ceil(n / 64); 1 when n = 0
+        p_i     0 when k_i is the first key of its block (i mod 64 = 1); else 2 when k_i and k_(i-1) have
+                the same two high bytes, 1 when only the same high byte, else 0
+        o_j     the sum of (6 - p_i) over the keys before block j, i <= 64 x j
+        vlen(x) the length of x as a VByte
+    A skipped document has no entry, and where its key was indexed before, its version is a tombstone
+    (§11.14's sniff row). The test reads the key set and the row and nothing else, so the device that
+    extracts, a reproducer and a decoder compute it alike.
 ```
+
+**What lone(d) is** (amended 2026-11-12, QD-760; question search-m10-10-document-past-a-shard, option 1). It is the encoded length, before its pad, of a shard that holds d alone (INDEX-FORMAT.md's Shards), with one part made a constant. The doc table's row, the dictionary in blocks of 64 and the postings are counted byte for byte: a key's entry is its flag byte, the 3 - p bytes its block's previous key does not share, and one byte each for a document count of 1 and a list length of 1; a block's index row is its first key, its entries offset o_j and its list offset 64 x j; each list is the one byte 0x01. The rest, which is the magic, the header and its length, the doc_key, the version and the time, moves with the bucket's day, the pad generation and the version, none of which the extracting device and a later merger share, so D6 counts it as ShardLone. In format 1 it is at most 95 B: 4 for the magic, 1 for the header's length, a header of at most 54 B with every number at its widest, 16 for the doc_key and 10 each for the version and the time. So a shard holding a kept document alone encodes at least 33 B under ShardBody, in a bucket and in all, whoever writes it and when, which is what 1.2.4's `take` needs of a new shard.
+
+Measured against the landed encoder (`indexShardBuilder.encodeUnpadded`) on 2026-11-12: dict(K) + n equals the encoder's dictionary and postings on 32 key sets (none, 1, 63, 64 and 65 keys, dense runs up to 150,000, steps of 256, 257, 3,000 and 65,536, and twenty random sets of up to 60,000 keys); the constant part is 60 B in an all shard, 66 B in a bucket shard as the tests build one and 95 B at the widest; and keys 0 to n - 1 under a 36 B row give lone = 1,032,192 at n = 199,608, kept, whose shard at the widest header is 1,032,159 B, and 1,032,197 at n = 199,609, skipped.
+
+What it skips. A key costs at least 5 B in a shard of its own, a 4 B entry and a 1 B list, and at least 1 B in a key set. A key set past KeySetMax has more than 392,000 keys (each gap takes one byte, and the gaps' further bytes number at most 132,104, since the gaps sum to at most 2^24), so it fails the shard test too: KeySetMax stays as the entry codec's cap and as the test that needs no pass over the keys. A document of up to 144,000 keys always passes (7 B a key and 9 B a block at most, under a 2,048 B row), and none of more than 206,438 does; between the two the prefixes its keys share decide. Under normalizer 1 few texts get there. A 1 MiB chunk of base64, the question's example, folds to 37 symbols (N3, N5) and has 50,572 keys, lone 262,774; random code points of the BMP, as noise read as UTF-16 gives, 196,095 keys and lone 1,025,349, kept. What passes the bound is a chunk of letters from many scripts with little repeated: letters drawn at random from the BMP's 1,380 two-byte and 47,549 three-byte letters give 327,272 keys in 1 MiB, a key set of 333,861 B and lone 1,703,722, and with ASCII letters and digits among them 470,197 keys in a key set of 475,931 B, still within KeySetMax. Such a document was kept before this amendment and no shard could hold it; it is now skipped, and is not searchable, as a document past KeySetMax already was not.
 
 D2, D3 and D4 are question search-m10-07-extractor-field-placement's option 1. A path's words are found through field 4. A message's attachment names sit in field 5 where their parts stand, so a phrase can span a name and the text beside it only as they are laid out in the message. Field 4's cut (N6) means a path's tail past 1,024 normalized bytes of title and path is not indexed.
 
@@ -9020,6 +9263,7 @@ a file with a NUL or ill-formed UTF-8 in       binary: no document; where it was
   its first 8,000 B                              §11.14's sniff row)
 ill-formed UTF-8 past 8,000 B                  U+FFFD a byte, at normalization (N1)
 a chunk whose key set passes 512 KiB           skipped (D6)
+a chunk that alone would not fit a shard       skipped (D6's lone(d); amended 2026-11-12, QD-760)
 ```
 
 #### 11.2.8 One pass, fixed memory
@@ -9209,7 +9453,7 @@ message                                           size        extract   normaliz
 - **Time.** Normalizing and collecting keys runs at 30 to 35 MB/s here and is 10 to 20 times extraction's cost on text; an attachment costs a scan for delimiter lines, about 6 GB/s. The rules of 11.2 add nothing that shows: the reference's plain loops for base64 and quoted-printable ran the worst case at 98 MB/s, three times faster than the normalizer that follows them. A phone taken at a fifth of this host's speed extracts and normalizes a typical message in under 10 ms, and the 50 MiB all-text message, the largest §15's limits admit, in about 6 s: 9 MB/s, against §11.15's floor of 5 on mobile.
 - **Memory, whole-value form.** 2.5 to 10 times the message, as measured: the message, each part decoded, each part again in UTF-8, the joined text. For a 50 MiB message that is over 130 MB, past even the daemon's 128 MiB budget (§18). So the one-pass form is what every writer runs once it lands, and the whole-value form stays for tests and the oracle.
 - **Memory, one-pass form.** 11.2.8's table summed: the line window 1 KiB, sixteen boundaries 16 KiB, the header line being read 16 KiB, one entity's three header values 48 KiB, the message's four joined values 64 KiB, a soft break's blank run 1 KiB and under 1 KiB for the rest: at most 150 KiB, whatever the message. That is all extraction adds. What dominates is not its own: the normalizer's buffers and the key collector, a 2 MiB bitmap and up to 1 MiB of touched words (SEARCH-M10-03, landed), with a document's key set beside them when its entry is built. One collector is live at a time (11.2.8, point 3), and whether a writer's peak fits §11.15's 4 MiB on the iOS app is FS-77's to measure, as before. The message itself stays in storage and is read once, front to back; a file is read twice when its title is not near its start (point 4).
-- **Index size.** Extraction sets how many documents a version has: one per MiB of extracted text. Reading every alternative roughly doubles a typical message's text, and changes its key set little, since both alternatives hold the same words. The most text a message gives is three times its size (R3): 50 MiB of 8-bit bytes that each decode to a three-byte character are 150 MiB of text and 150 documents, each skipped past 512 KiB of key set (D6), so at most 75 MiB of entries, which §11.14's document and sniff rows already allow.
+- **Index size.** Extraction sets how many documents a version has: one per MiB of extracted text. Reading every alternative roughly doubles a typical message's text, and changes its key set little, since both alternatives hold the same words. The most text a message gives is three times its size (R3): 50 MiB of 8-bit bytes that each decode to a three-byte character are 150 MiB of text and 150 documents, each skipped past 512 KiB of key set (D6), so at most 75 MiB of entries, which §11.14's document and sniff rows already allow. D6's shard test (amended 2026-11-12, QD-760) only lowers that: a kept document has at most 206,438 keys. The test is one pass over a key set the writer already holds, an addition and two comparisons a key, and it allocates nothing.
 - **Code size.** The reference table is about 32 KB packed (16.6 KB of names, 6.4 KB of values, offsets) on every leg that links the index, `sidecar_http` included. The standard library's copy of the same list stays linked while `mail_parse_text.go` calls `html`; if that file takes the extractor's decoder (11.7), the copy can leave wherever nothing else links `html`, and the change is then about nil.
 - **Padding.** A request is one size computation and one marshal of 4 KiB. A reply is at most 21 size computations and one marshal of 16 to 64 KiB, well under a millisecond. Z8 (d) is one more marshal and a comparison per body received. The rule gives up at most 131 B of a body, 0.8% of a step, and the gap costs one hit of one page only when a content lands on one value in 16,384.
 
@@ -9225,6 +9469,10 @@ a cut message           its last part runs to the end (B4); base64 decodes to it
                         (T2); a last '=' is a soft break (T3); an open tag or script drops the tail (X7)
 huge parts              time and memory as 11.4. An attachment of any size costs a scan. Text is chunked (D4),
                         and a chunk of noise is skipped (D6). The one-pass form never holds a part.
+a document past a shard (amended 2026-11-12, QD-760) a chunk within KeySetMax that alone would not fit a
+                        shard is skipped (D6): no entry, a tombstone where it was indexed before, and nothing
+                        alarms, since every device skips it alike. It is not searchable. Before the amendment
+                        it was kept, and the merge that met it failed closed, so its bucket stopped merging.
 a huge header           a field past 16,384 B is cut (H4, H6): its tail is not indexed. A header block of any
                         length is read, each line of no interest discarded as it arrives.
 unknown charset         bytes as they are (C2): ASCII words are found, and the rest reads as U+FFFD, which N5
@@ -9275,6 +9523,12 @@ entities.json  the 2,231 named references
 charsets.json  the 228 labels and their 40 encodings
 sizes.json     85 rows of (size, content): sized or not, the pad's length and its varint's; and 7 whole
                bodies, each with its content bytes and the SHA-256 of the body
+skip.json      (amended 2026-11-12, QD-760; the fix track writes it) D6's shard test: rows of a key set given
+               as runs (first key, count, step), a row's length, lone(d) and the verdict. The empty set; 1,
+               63, 64, 65 and 129 keys; each value of p at a block's first key and at its second; an offset
+               at each VByte width; keys 0 to n - 1 at n = 199,608 and 199,609 under a 36 B row (1,032,192
+               kept, 1,032,197 skipped), and the first again under a 37 B row, skipped; steps of 64, 256 and
+               65,536; and a set past KeySetMax, skipped
 ```
 
 - **Their form.** A vector's `input` is its parts in order, each `t` (text) or `x` (hex) and an optional repeat count `n`; its `path` is text, or `path_x` in hex when the path is not UTF-8. A value is `t`, `x`, or `len` and `sha256` when it is long. A document's `fields` are by number, an absent one being empty. Each file's `about` says the same.
@@ -9318,6 +9572,28 @@ FS-83's size cases stay as planned (0, 1 and 20 hits, TOO_BROAD, INVALID, CURSOR
 
 **Mutants.** Each of these, put back, must fail a vector, and the landed code is the proof that it does: the library's quoted-printable reader (`t-qp-long-line`, `t-qp-control-bytes`), its base64 (`t-base64-unpadded`), `html.UnescapeString` (`e-one-digit`, `e-overflow`, `e-two-code-points`), `strings.TrimSpace` and `strings.ToLower` (`h-value-nbsp-stays`, `h-name-ascii-case-only`), `strconv.Atoi` (`p-section-signed`), no HeaderMax (`h-cap-line`), no LineWindow (`b-line-one-past-window`), no digest default (`m-digest-default`). For sizes: a pad computed by trial that stops at a gap (`TestSearchReplyOnTheGap`), and a receiver without Z8 (d) (`TestSearchBodyIsItsOneEncoding`).
 
+**D6's shard test** (amended 2026-11-12, QD-760). The fix track's tests, the index's in the root and the oracle's in `sidecartest`, by different authors (D-TEST-14):
+
+```text
+skip.json, both sides           each implementation's own lone(d) and verdict equal every row's
+TestLoneShardBoundsTheEncoder   root: for skip.json's kept rows and generated sets, the encoder's length of a
+                                shard holding the document alone is lone(d) - 33 at the widest header, version
+                                and time, and less at every other; a kept document's lone shard is never refused
+TestADocumentPastAShardIsSkipped
+                                root, through prepare and the one-pass form: 1 MiB of letters drawn by a fixed
+                                generator from the BMP's two-byte and three-byte letters has a key set within
+                                KeySetMax and is skipped, in a file and in a message's body; 1 MiB of base64
+                                is kept; a version skipped where its key was indexed before is a tombstone,
+                                and one never indexed leaves nothing
+TestExtractOracleEqualsIndexOnCorpus
+                                gains the generated chunk and a kept one beside it, and compares which
+                                documents are skipped; TestHookIndexExtract returns that for each document
+FuzzIndexLoneShard              root: for any key set and row the codec accepts, lone(d) is at least 33 B above
+                                the encoder's length of the lone shard at a fuzzed header, version and time
+```
+
+Mutants: D6 with KeySetMax alone fails `TestADocumentPastAShardIsSkipped` and skip.json's boundary rows; ShardLone at 0 fails the 199,609 row; a p that does not reset at a block's first key, an offset counted in keys and a list offset of j each fail a named row.
+
 ### 11.7 Implementation notes, task by task
 
 Order: SEARCH-M10-42 and SEARCH-M10-43 at once, by different authors (D-TEST-14). SEARCH-M10-31 at once; it shares nothing with them. SEARCH-M10-44 after SEARCH-M10-42. SEARCH-M10-36 after SEARCH-M10-42 and SEARCH-M10-43, with its other needs. All are the data lane's. Entries for the three new tasks are in `.stack/plan/proposals/details-11-tasks.md`.
@@ -9353,6 +9629,28 @@ The 32 vectors the landed code fails are its list of work: `h-value-nbsp-stays`,
 **SEARCH-M10-43, the oracle's extractor to the canonical rules** (new; M; another author than SEARCH-M10-42's). `sidecartest/search_oracle_extract.go` is brought to 11.2 from this section and `INDEX-FORMAT.md`, sharing nothing with the index: its own base64, quoted-printable and reference decoders and its own generated copy of the table (`search_oracle_entities.go`). The 41 vectors it fails are the index's 32 and the 9 where it read differently: `x-script-end-name` (X5), `t-base64-nbsp-stops` (T2), `w-charset-with-space` (W2), `w-nbsp-between` and `w-cr-between` (W6), `p-sections-without-zero`, `p-sections-empty-fall-through` and `p-sections-repeat` (P3, P5), `b-unterminated` (B4). `searchOracleDocument` keeps its fields before normalization, for the cross check. It adds `search_oracle_conformance_test.go` and the cross-implementation fuzz target and corpus test of 11.6. Trap: the oracle may not take the index's table or decoders to save work; `TestSearchOracleImportsNoIndexCode` must keep failing on that.
 
 **SEARCH-M10-44, extraction in one pass** (new; L). Build 11.2.8 in new files (`evs_index_extract_stream.go` and beside it): a message is written to it front to back in pieces of any size, and it hands each finished document to the caller as its key set and row, never as text; a file is read through an `io.ReaderAt`. The whole-value functions stay, as the form the vectors and the oracle are compared with and the form the fuzz target holds this one to. Writers call the one-pass form on every host once it lands (SEARCH-M10-13 and SEARCH-M10-14, which problem 1 holds). Tests: every conformance vector, written in one piece, byte by byte and in random pieces; `FuzzIndexExtractStreamEqualsWhole`; a generated 50 MiB message of each of 11.4's shapes with the heap sampled at each document, its growth over the normalizer's own staying under 256 KiB whatever the message. Traps: hold a line break back until the next line is known not to be a delimiter; test a line against the boundaries outermost first; never buffer a part to learn its length; one key bitmap at a time, the 256 B overlap replayed into the next document.
+
+**The fix track for QD-760, extraction side** (amended 2026-11-12, QD-760). D6's shard test in the index, with the format file and the vectors. The oracle's half is a second track by another author (D-TEST-14), and 11.6's corpus case lands with whichever of the two is second. Section 1.7 has the merge side. Landed code that changes:
+
+```text
+evs_index_document.go       indexKeySetSkipped(keys) becomes indexDocumentSkipped(keys, row, settings): the
+                            key set's encoding against KeySetMax first, then lone(d) against ShardBody.
+                            IndexDocument.prepare builds and checks the row before the test, where it tested
+                            before the row existed; a skipped result still holds no key set and no row
+evs_index_lone.go           new: indexLoneShardByteCount(rowByteCount, keys, settings), D6's sum in one pass
+                            over the keys, with no call into the shard encoder
+evs_index_extract_stream.go its call at a finished document follows prepare's
+evs_index_settings.go       IndexFormatSettings gains ShardLoneByteCount, 128 (QD-702)
+sidecartest/search_oracle_normalize.go
+                            the oracle's own sum beside searchOracleKeySetByteCount, written from 11.2.3 and
+                            INDEX-FORMAT.md and sharing nothing with the index (the second track)
+protocol/INDEX-FORMAT.md    D6 as 11.2.3 has it, a Limits row for ShardLone, 11.2.7's row and 1.8's two
+                            sentences
+testdata/index/conformance/skip.json
+                            11.6's rows, with its `about`
+```
+
+Traps: the row's length is that of the row as its entry encodes it, in its own root, so `ur/index`'s 16 B ref_id counts; the sum runs over the key set as the collector gives it, ascending and distinct; KeySetMax is tested first, so a set of millions of keys costs no pass; a journal unit (1.2.6) holds what `prepare` returned, so a skipped document's unit is its tombstone or nothing, as before; and the format is not frozen until M10's exit, so no index outside tests holds an entry in the gap and nothing migrates.
 
 **Tasks not held that this touches.** SEARCH-M10-41's runner needs no change to reach the new directory; its report should name the 32-bit legs for it. SEARCH-M10-06 and SEARCH-M10-07 are drafted, and their extract files are finished by SEARCH-M10-42 and SEARCH-M10-43. SEARCH-M10-32 calls `searchRemoteBuildReply` with its own `head`, and answers every failure after parsing through `searchRemoteFailureReply`. Of the landed pads, the one that changes is `padSearchReply`, with SEARCH-M10-31. An index document's own pad, normalizer 1's one space each side of a field (`indexFieldPad`, N7), and a shard's keyed pad and a rewrite's zero pad (`evs_index_pad.go`) are as landed.
 
@@ -9392,6 +9690,8 @@ The 32 vectors the landed code fails are its list of work: `h-value-nbsp-stays`,
 
 **protocol/INDEX-FORMAT.md** (SEARCH-M10-42 writes it; `design-records` need not). Its Extractor 1 and Documents sections become 11.2.1's constants and tables and the rules D1-D6, S1-S4, H1-H6, W1-W6, P1-P6, C1-C3, M1-M6, B1-B4, T1-T3, X1-X7 and E1-E4 as written here, with 11.2.7's table. Normalizer 1 gains the clarifications under 11.2.2. "What this file adds" gains a row for each reading 11.9 lists.
 
+**Amended 2026-11-12, QD-760.** §11.14, Documents, the sniff row: for "a chunk whose key set would encode past 512 KiB, which nearly every query would match, is skipped" read "a chunk whose key set would encode past 512 KiB, which nearly every query would match, or that alone would not fit a shard by protocol/INDEX-FORMAT.md's D6, is skipped". §22.8, FS-79: for "chunks whose key set would pass 512 KiB" read "chunks whose key set would pass 512 KiB or that alone would not fit a shard". protocol/INDEX-FORMAT.md, in the fix track's change (11.7): D6 as 11.2.3 has it with lone(d)'s definition, a Limits row "ShardLone 128 B what D6 counts for the header, doc_key, version and time of a shard holding one document", and 11.2.7's added row.
+
 Nothing server-visible changes: no column, key, object family or proto field (I-18), and `search.proto`'s fields are sealed end to end.
 
 ### 11.9 Owner questions
@@ -9417,11 +9717,11 @@ Each is filed under `.stack/questions/`, and the design above is built on its re
 
 ## 12. Bridge compiler and NAT engine (§17)
 
-Status: complete (2026-11-11)
+Status: complete (2026-11-11; amended 2026-11-12, QD-761: 12.2.2, 12.2.3, 12.3, 12.5, 12.6, 12.7, 12.8 and 12.9, each place marked; the readers' half of the amendment is built on the recommendation of open question `details-amend-2-late-generation`, and what the amendment leaves to a sidecar that keeps filing is open question `details-amend-2-fold-holds`)
 
 Tasks held until complete: BRIDGE-M4-16, BRIDGE-M4-17, BRIDGE-M6-03, BRIDGE-M6-04.
 
-Models: `sidecar/sidecartest/model/details/BridgeNat.tla` (the engine against the host's NAT), `ShareSign.tla` (a share's signers against removal and revocation) and `BridgeFold.tla` (one body-level verdict at every reader), their configurations (`BridgeNat*.cfg`, `ShareSign*.cfg`, `BridgeFold*.cfg`) and `run-bridge.sh` beside them. New tasks: `.stack/plan/proposals/details-12-tasks.md` (BRIDGE-M4-23, BRIDGE-M4-24, ACL-M2-17). Questions filed: `.stack/questions/details-12-ledger-in-head.md`, `details-12-unfolded-verdicts.md`, `details-12-start-gate.md`, `details-12-alias-table-pin.md`, `details-12-ratchet-commit.md`. Questions this section answers, each as 12.9 says: `bridge-m4-09-other-client-rows`, `bridge-m4-11-rule-three-tags`. It builds on the answers already given to `plan-BRIDGE-share-pins` (QD-077), `plan-BRIDGE-subject-resolution` (QD-161), `plan-BRIDGE-gate-row-prefixes` (QD-004, QD-003), `plan-BRIDGE-keyless-window-parent` (QD-184, as section 4 replaced it), `plan-BRIDGE-small-readings`, `plan-BRIDGE-windows-tun-driver` (QD-125), `g0-density-share-seal-format` (QD-108), `bridge-m2-01-egress-mode-field` (QD-630) and `bridge-m2-01-multi-use-approval` (QD-631). Section 4 stands as written: this section fills the compile its `Compile` step 4 calls and the engine its sink is, and changes neither.
+Models: `sidecar/sidecartest/model/details/BridgeNat.tla` (the engine against the host's NAT), `ShareSign.tla` (a share's signers against removal and revocation) and `BridgeFold.tla` (one body-level verdict at every reader), their configurations (`BridgeNat*.cfg`, `ShareSign*.cfg`, `BridgeFold*.cfg`) and `run-bridge.sh` beside them. Amended 2026-11-12, QD-761: `BridgeVoid.tla` (a body sealed to a generation that does not form), with `BridgeVoid*.cfg` and `run-bridgevoid.sh`. New tasks: `.stack/plan/proposals/details-12-tasks.md` (BRIDGE-M4-23, BRIDGE-M4-24, ACL-M2-17). Questions filed: `.stack/questions/details-12-ledger-in-head.md`, `details-12-unfolded-verdicts.md`, `details-12-start-gate.md`, `details-12-alias-table-pin.md`, `details-12-ratchet-commit.md`. Questions this section answers, each as 12.9 says: `bridge-m4-09-other-client-rows`, `bridge-m4-11-rule-three-tags`. It builds on the answers already given to `plan-BRIDGE-share-pins` (QD-077), `plan-BRIDGE-subject-resolution` (QD-161), `plan-BRIDGE-gate-row-prefixes` (QD-004, QD-003), `plan-BRIDGE-keyless-window-parent` (QD-184, as section 4 replaced it), `plan-BRIDGE-small-readings`, `plan-BRIDGE-windows-tun-driver` (QD-125), `g0-density-share-seal-format` (QD-108), `bridge-m2-01-egress-mode-field` (QD-630) and `bridge-m2-01-multi-use-approval` (QD-631). Section 4 stands as written: this section fills the compile its `Compile` step 4 calls and the engine its sink is, and changes neither.
 
 ### 12.1 The problem
 
@@ -9640,7 +9940,7 @@ Encoding, which every writer on every leg must give alike, since the manifest ha
 
 **Rule tags.** `EgressDecision.RuleTag` stays the first 8 bytes of SHA-256(subject_id || rule_id). Rule 3's rule_id becomes five bytes, 0x03 and the hosted address's IPv4, so an old address's drain end closes that address's flows alone (bridge-m4-11-rule-three-tags, option 2); rules 4 and 7 keep their one byte. A share flow's subject_id is its `share_id` and its rule_id is five bytes, 0x53 and u32be(target index), since X's host cannot list Y's subjects. Every tag is still enumerable from the state without tracking flows.
 
-**Settings.** `BridgeComponentSettings` (root; `DefaultBridgeComponentSettings()` fills them): `CompileDelay` 100 ms, `CompileMinInterval` 1 s, `CompileRetryInterval` 5 s doubling to 5 min, `CatchUpAlarmTimeout` 30 s, `WindowDelegationMaxLifetime` 168 h, `BindingRefreshInterval` 6 h, `BindingRetainTimeout` 7 days, `BindingMaxCount` 16 a subject, `ShareRenewInterval` 1 h, `ShareRenewBelow` 72 h, `ShareCertLifetime` 168 h, `ShareTableRefreshInterval` 1 h, `AcceptRetryCount` 3, `AutoAddressEnabled` false (plan-BRIDGE-small-readings #18). `BridgeLedgerSettings`: `ChunkByteCount` 64 KiB, `UnfoldedBodyMaxByteCount` 4 MiB (the opened bodies of the unfolded statements a compile holds; past it the compile refuses with `bridge_alarm` `ledger_over_budget` and the state stands), `RuleShardRowCount` 262,144.
+**Settings.** `BridgeComponentSettings` (root; `DefaultBridgeComponentSettings()` fills them): `CompileDelay` 100 ms, `CompileMinInterval` 1 s, `CompileRetryInterval` 5 s doubling to 5 min, `CatchUpAlarmTimeout` 30 s, `WindowDelegationMaxLifetime` 168 h, `BindingRefreshInterval` 6 h, `BindingRetainTimeout` 7 days, `BindingMaxCount` 16 a subject, `ShareRenewInterval` 1 h, `ShareRenewBelow` 72 h, `ShareCertLifetime` 168 h, `ShareTableRefreshInterval` 1 h, `AcceptRetryCount` 3, `AutoAddressEnabled` false (plan-BRIDGE-small-readings #18). `BridgeLedgerSettings`: `ChunkByteCount` 64 KiB, `UnfoldedBodyMaxByteCount` 4 MiB (the opened bodies of the unfolded statements a compile holds; past it the compile refuses with `bridge_alarm` `ledger_over_budget` and the state stands), `RuleShardRowCount` 262,144. Amended 2026-11-12, QD-761: `BridgeLedgerSettings` gains `UnformedVoidWait` 24 h and `GenerationFormGrace` 1 h (12.2.3's void at the fold). Every reader of a network reads the grace's default, as it does the shard width, since a verdict rides on it; a wait below the grace plus 30 min is raised to that floor when the settings are read, so with the default grace the lowest wait is 90 min.
 
 #### 12.2.3 The ledger: judging, the fold and its check
 
@@ -9651,6 +9951,9 @@ JudgeBridgeBody(before, e at k)                  -- ConfigLogSettings.BridgeBody
   entries below k applied by their verdicts (section 5.2.3's Reapply)
   body := OpenConfigBody(e.sealed_body, keys)
      its generation is not held   -> Unopened{generation}
+     its generation's GenRotate is signed more than GenerationFormGrace after e's time
+                                  -> Refused{no such generation}: void, and no alarm (below; amended
+                                     2026-11-12, QD-761)
      the seal or padding fails    -> Refused{seal}, which is the reader's alarm
   body.approval is unset          -> Standing        -- whether a standing grant covers it is the compile's (12.2.4)
   else  facts, err := before.CheckBridgeApproval(e, body, body.approval)   -- as landed, on `before` itself: action,
@@ -9685,14 +9988,16 @@ a rule id's states in the ledger (a route or a map)
   none -> pending              its first filing took effect at id level and its body's generation is not held
   none, pending -> active      the body opens and passes its rules (Standing or Approved); in force only while
                                12.2.4's check holds at the state compiled
-  none, pending -> void        the body does not open, breaks its rule, or its approval is Refused
+  none, pending -> void        the body does not open, breaks its rule, or its approval is Refused; or a fold
+                               finds its generation unformed (below; amended 2026-11-12, QD-761)
   reserved -> void             a filing of the id by a signer the withdrawal binds
   active -> active             a filing of the held id: weight, site_id and drain_seconds only
   active -> withdrawn          a BridgeWithdraw by its owner or an admin: reset at once, or draining for
                                max(drain_seconds, 600 s)
   withdrawn, reserved -> none  the fold whose time passes retain_until_ms drops the row
   void -> void                 for the network's life
-  unfolded -> frozen           a fold writes the row; pending is never frozen
+  unfolded -> frozen           a fold writes the row; pending is never frozen: a fold stops below it, or
+                               freezes it void as unformed (amended 2026-11-12, QD-761)
 ```
 
 `CheckBridgeApproval` changes in one way: it judges on its receiver, the state the log hands it, where the landed one asks `StateAt(statement.N - 1)`. `ErrBridgeApprovalUnverifiable` goes, and with it `BridgeLedgerReader.Approvals` and every verdict a reader kept for itself.
@@ -9710,10 +10015,17 @@ S(k-1) is R_b(k-1) for k above b (section 5.2.2), so the last two lines are one 
 ```text
 FoldBridgeLedger(T(ft'), the writer's state at its tip, ft) -> T(ft)          -- inside ConfigWriter's plan, at a base
   ledger := OpenBridgeLedger(T(ft'), the state's unfolded statements at or below ft, state, keys)
-  an Unopened filing at k stops the fold at k-1: a writer never freezes what it could not open. A config writer
-     holds every generation, so this is a broken delivery: it alarms config_key_waiting and folds to k-1, or
-     keeps the previous fold where section 5's rule (a fold is the previous one or at least the previous base)
-     does not allow k-1
+  an Unopened filing at k, sealed to generation g, is one of two things (amended 2026-11-12, QD-761):
+     unformed   the plan's whole read of gkm names G as the config repo's newest generation, the writer holds
+                the key of every generation 1..G, g > G, and the entry at ft, the writer's tip, was sequenced
+                at least UnformedVoidWait after the entry at k. The fold freezes it void, as a Refused body
+                (Refused{no such generation}), and goes on
+     waiting    anything else: gkm names g and its key has not reached the writer, the read was not whole, or
+                the wait has not passed. It stops the fold at k-1: a writer never freezes what it may still
+                come to open. A config writer holds every generation gkm names, so a named one it lacks is a
+                broken delivery: it alarms config_key_waiting and folds to k-1, or keeps the previous fold
+                where section 5's rule (a fold is the previous one or at least the previous base) does not
+                allow k-1
   rows   the ledger's addresses, live and the tombstones still holding at time_ms; its rules, active, void, withdrawn
          and reserved, a withdrawn or reserved row leaving once time_ms passes retain_until_ms; its egress specs; its
          aliases, a released one leaving at its drain's end
@@ -9728,12 +10040,34 @@ CheckBridgeLedgerFold(head, previous head, my state at b-1) -> ok | mismatch | u
      mine := FoldBridgeLedger(the previous head's T(ft'), my state, ft)
      every file's hash and the manifest equal   -> ok
      any differs                                -> ErrConfigHeadMismatch: a FORK, as a rows mismatch is
-     I hold an Unopened filing at or below ft   -> unchecked: I take the head's rows, as a new device does
+     I hold an Unopened filing at or below ft   -> unchecked: I take the head's rows, as a new device does.
+                                                   A checker voids nothing as unformed: that is the writer's
+                                                   alone (amended 2026-11-12, QD-761)
   a device that starts at b takes the rows; so does a VPN component, which is a rows-only verifier with a reader
   key and checks no compile (section 4.2.1), its app's sidecar role checking this one whenever it runs
 ```
 
 A verdict frozen at a fold is the one every reader standing under the previous base held, because the writer folds the statements its own state holds, judged under that base. A writer cannot freeze another: the readers standing there fork on it. And a frozen verdict never changes: a later fold copies the row.
+
+**A body sealed to a generation that does not form** (amended 2026-11-12, QD-761; question `bridge-m2-02-unopened-generation-stall`, option 2). A sealed body names its generation in its first 8 bytes, which the id level reads and does not bound. Any standing sidecar can file a route sealed to a generation that never forms. It takes effect at id level, no writer can ever open it, and as first written every later fold stopped below it, so that once §7.9's 4,096 entries had followed it no base could be published at all. The owner's answer bounds the stop at the fold: such a body is frozen void. That is the one frozen verdict the readers standing there did not hold, since to them the filing was pending, so the rule has two halves, one at the writer and one at every reader that holds keys.
+
+*The writer's half.* Inside a plan, after it has applied its tip, the writer reads gkm's generation listing for the config repo's group to its end (`SyncRepo`, as a key delivery does). The read counts when it is whole, no fork is recorded at the generation pin, and the writer holds the key of every generation it names, 1 to G. A filing at k that the writer holds Unopened, sealed to g > G, is then unformed once the entry at the writer's tip was sequenced at least `UnformedVoidWait` after the entry at k, and the fold freezes it void.
+
+- When the wait starts: at the filing's own entry, in the log's time, which is api's sequencing time (`ConfigState.TimeMs`). It is read against the time of the writer's tip entry and never against a device's clock, so the fold stays a function of its inputs, and a writer that restarted, or that came to write only now, voids exactly what one that ran throughout would.
+- What resets it: nothing. The wait is no timer a writer keeps. A rotation that forms a generation below g, a re-form, another writer and a restart leave it where it was, because each plan asks afresh whether g is above everything gkm names. This is how the section reads the decision's "has held every generation the config repo's gkm head names for a set time": the holding is tested at the plan, and the time is the filing's age. A timer on the holding itself would start again at every rotation, which the same sidecar can cause 60 times an hour (§10.6's rate row), and once it had run it would void a filing the moment it arrived, before any reader could tell a generation that will never form from one about to (the readers' half needs that margin).
+- What defers it: a read that failed or was cut short; a generation gkm names whose key the writer lacks, which is the broken delivery `config_key_waiting` alarms; g at or below G, where the writer waits for the key and then judges the body like any other; and a tip not yet the wait past k. A filing is never void at the writer for a key that exists and has not reached it.
+
+*The readers' half.* `JudgeBridgeBody`, and every other open of a bridge body by its generation (the ledger's own, for a BridgeEgress, a BridgeAlias and the rest), refuses a body whose generation the reader holds when that generation's GenRotate is signed, by its `time_ms`, more than `GenerationFormGrace` after the time of the entry that carries the body: Refused{no such generation}, void, with no alarm, since no seal failed. The time is the one every key carries (`EvsRepoKey.Time`). An honest filer seals to a generation it holds; gkm took that generation's claim within 10 min of its own clock (§10.6's time row) before the filer could hold the key, and the filing was sequenced after that. So an honest body's generation is signed before its entry, give or take the two servers' clocks, and the rule never meets it: the grace, 1 h, is well above those.
+
+*A checker.* `CheckBridgeLedgerFold` voids nothing as unformed. A reader that holds an Unopened filing at or below the head's fold takes the head's rows unchecked, as it did: it lacks the key to say more. A reader that holds the generation judges the filing itself, by the readers' half, and compares.
+
+*If the generation forms after the void.* The row is frozen and the id stays void for the network's life, as any void id does, and a later filing of it is void. A reader that comes to hold g and judges the filing itself, because it stands under an older base or holds the filing in a base's tail, reaches the same verdict. The writer's read named no g when its tip was already `UnformedVoidWait` past the filing, so gkm took g's claim after that read, and gkm holds a claim's time within 10 min of its clock. So g's GenRotate is signed later than the filing's entry by at least the wait less those 10 min and the servers' clock difference, which is above `GenerationFormGrace` whenever the wait is at least the grace plus 30 min, the floor 12.2.2 sets, and api's and gkm's clocks agree within 20 min. The reader therefore refuses the body as the fold did, and its check passes. This is what stops a sidecar that seals a body under a key of its own making, waits for the void and then claims g with that key (a rotator makes its generation's key): without the readers' half every reader that gained g would hold the rule active and fork on the base (`BridgeVoidTwin-NoGrace`). A requester whose body was honest has nothing to recover here, since an honest body names a generation that exists; one that was early by its own error files again.
+
+*Two writers.* A base is one writer's (section 5.2.4's 409), so the first base that folds past k decides, and a void row has one encoding whoever writes it. A writer whose wait is longer, or whose own read was not whole, stands under the previous base as any reader does: it holds the filing Unopened, takes the rows unchecked and folds on from them. Two writers that would both void write equal files. Because a wait below the floor is raised to it, no writer voids inside the grace (`BridgeVoidTwin-WaitInsideSkew`).
+
+*What changes in `FoldBridgeLedger`.* It stays pure. `BridgeLedgerReader` gains `FormedThrough`: G from the plan's read, or 0 where the read does not count. A checker, a compile and every other open pass 0. With it above 0, the fold treats an Unopened statement sealed above it, whose entry is at least the wait before the entry at the fold asked, as Refused, and does so in both of its opens, the one at the fold asked and the one at the fold it reaches. `BridgeLedgerFold.Stopped` is then the first statement still waiting, and nil when none is; a new `BridgeLedgerFold.Voided` lists the statements at or below the fold reached that this fold froze void as unformed, none where the fold stayed, for the writer's log line `config_key_void`. Both lines name the statement's generation and its signer. `BridgeBodyJudge` gains the read, `FormedThrough func() uint64`, which the `BridgeFold` seam of `ConfigWriter` calls once a plan.
+
+*What is left.* One such filing holds the fold for the wait and no longer. A sidecar that keeps filing them holds it for as long as it keeps on, which is less than the answer's words promise and is asked of the owner (12.9, `details-amend-2-fold-holds`). The fold passes a filing only once it is the wait old, and section 5's rule lets a fold stop short of its tip only at or above the previous base. So a plan moves the fold only when no such filing younger than the wait sits at or below the previous base (`BridgeVoidReach-Held`), and filings an hour apart keep one there unless a network goes nearly the whole wait without a base. Until 4,096 entries have followed the fold nothing else waits on it: bases land with the fold where it was, and statements take effect at their positions. After that no base lands (§7.9's tail cap) until every such filing under the last base is the wait old; then one base lands, its fold short of its tip by less than the wait, where the entries since then fit the cap, and the cycle begins again. A network that sequences more than 4,096 entries inside the wait lands no base while the filings continue. What ends it is the filer's revocation, a statement that needs no base: the first plan whose tip is the wait past the filer's last filing folds through its tip. `config_key_waiting` and `config_key_void` name the filer for that, and an operator who wants the windows shorter lowers `UnformedVoidWait` toward its floor. And a gkm that hides a formed generation from the writer's listing while it delivers it to others makes those readers fork on the base, which is the alarm, as for any head they cannot reproduce (`BridgeVoidTwin-StaleRead` is that fork, with a listing the writer remembered in place of one gkm cut short). By failing the read gkm can delay a void and do no more.
 
 Three smaller rules complete the ledger. A rule's approval budget is counted over rows and entries by `approval_id`, so it needs no table of its own: a row that names a decision keeps the count for as long as the rule lives, and once every rule of a decision has left the rows the decision's `not_after` has passed, which refuses any later filing under it. A void id stays for the network's life (`retain_until_ms` 0), since the entry that filed it is in the head's folds as long. And a daemon that gains a generation late judges the filings it held `Unopened` through `ConfigLog.RejudgeBridgeBodies`, which hands the judge S(k-1) from `StateAt` for an entry above the base and, for a tail entry, rebuilds R_b(k-1) from the retained base rows; a VPN component needs no such call, since every compile restores its judge at the base with the keys it then holds.
 
@@ -10097,6 +10431,18 @@ FoldFaithful      a fold's rows are the ledger the readers standing under the pr
                   the same fold and forks on a difference (CheckBridgeLedgerFold)
 FoldedStays       a verdict, once folded, is the same in every later fold
                   why: a fold copies the rows it does not change
+VoidsAgree        (amended 2026-11-12, QD-761) a filing a fold froze void as unformed is void at every reader that
+                  comes to hold its generation, so none forks on that base and none holds the rule active
+                  why: the writer voids only above every generation a whole read of gkm names, and no sooner than
+                  UnformedVoidWait after the filing's entry; a generation claimed after that read carries a time
+                  gkm held within 10 min of its clock, which is more than GenerationFormGrace after the entry;
+                  and every reader refuses a body whose generation was signed that late
+HonestValid       (amended 2026-11-12, QD-761) no body sealed to a generation that existed when it was filed is
+                  refused for its generation's time
+                  why: the grace is above gkm's bound on a claim's time and the servers' clocks together
+Bounded           (amended 2026-11-12, QD-761) a writer that holds every generation gkm names, publishing when
+                  every filing sealed above them is UnformedVoidWait old at its tip, folds through its tip
+                  why: its only Unopened filings are those, and the fold freezes each void
 CompileEqual      CompileBridgeState returns the same bytes for the same view and local facts, on every leg, at any
                   GOMAXPROCS, on a daemon and in a VPN component
                   why: 12.2.4's table, and one code path over LedgerFile
@@ -10202,6 +10548,41 @@ What the twins are. Three are the code or text as it stood: `RevokeAtZero` is th
 
 What the reach runs are. `Opens` and `Member` show the designs admit what they should. `RemovedInBound` is §17.9's accepted bound: a removed sidecar is admitted, inside the bound, until a later generation's cert reaches the host. `HolderRemoved` is its other accepted row: a device that held the ShareKey and left can certify until X revokes the share, which is why 12.2.8 raises `share_holder_removed`. `Turn` is the one case in which a verdict differs from the one judged at its entry's position (12.2.3), stated so the owner can weigh it (12.9).
 
+**The void at the fold** (amended 2026-11-12, QD-761). `BridgeFold.tla` has no generations, so a fourth model, `BridgeVoid.tla`, holds the amended rule; `BridgeFold.tla` and its runs stand as they are. Its log holds filings and bases with the times api sequenced them at. A filing is sealed to a formed generation by an honest filer, to one that never forms with bytes no key opens, or to the next generation under a key the filer made and may later claim that generation with. gkm forms generations in order, each by an honest rotator or by that filer, with a GenRotate time within `Skew` of its clock. Two readers, both writers with waits of their own, judge filings, publish bases and check each other's: one stands at the tip, applying each entry as it is sequenced, the other may fall behind in the log, and either may be behind in the generations it holds. `BridgeVoid-Mirror` gives each the other's wait. It leaves out what `BridgeFold.tla` holds (the approval's verdict, a device that starts at a base) and rule ids, each filing being its own. It checks `NoFork` (no checker that could compare finds a base's rows other than its own verdicts), `Equal`, `FoldedStays`, `NoPendingRow`, `Bounded`, `VoidsAgree` and `HonestValid`.
+
+Runs, TLC at the owner's jar (master d8fb231), breadth-first, 4 workers, on 2026-11-12 on a machine carrying five build lanes (load average near 120). `run-bridgevoid.sh <track>` runs every configuration and prints a verdict line for each.
+
+```text
+configuration                        bounds                                              result
+                                                                             distinct states  depth  time
+BridgeVoid.tla
+BridgeVoid                           4 entries, 2 generations and one that never forms, times 0 to 2, waits of 1
+                                     and 2, grace 0, no skew
+                                     pass: TypeOK, NoFork, Equal, FoldedStays, NoPendingRow, Bounded, VoidsAgree,
+                                     HonestValid                                   1,680,122     18  2 min 52 s
+BridgeVoid-Mirror                    the same with the waits the other way round
+                                     pass: the eight                               1,682,524     18  2 min 33 s
+BridgeVoid-Skew                      3 entries, times 0 to 3, waits of 3, grace 1, GenRotate times within 1
+                                     pass: the eight                                 830,293     16  55 s
+BridgeVoidTwin-Landed                Bounded violated, an 8-state trace
+BridgeVoidTwin-NoGrace               NoFork violated, a 14-state trace
+BridgeVoidTwin-NoWait                NoFork violated, a 10-state trace
+BridgeVoidTwin-StaleRead             NoFork violated, a 13-state trace
+BridgeVoidTwin-CheckerVoids          NoFork violated, a 13-state trace
+BridgeVoidTwin-WaitInsideSkew        the design with a wait of 2 against a grace of 1 and a skew of 1: VoidsAgree
+                                     violated, a 10-state trace
+BridgeVoidReach-Voids                the design, with "no fold voids above gkm's newest": violated, a 7-state trace
+BridgeVoidReach-LateForm             the design, with "no voided body's generation forms under its key": violated,
+                                     a 10-state trace
+BridgeVoidReach-Unchecked            the design, with "no checker takes rows unchecked": violated, an 8-state trace
+BridgeVoidReach-Held                 the design at 4 entries, 1 generation and waits of 2, with "every filing past
+                                     its wait is folded": violated, a 10-state trace
+```
+
+Each twin and reach run took 15 s or less and stopped within 408,000 states, at 3 entries but for `Held`'s 4; the trace lengths are those of the run recorded. No larger run was started: the designs at 4 entries are what finishes in about 3 min each on this host under its load. A first shape with a third reader was stopped unfinished and is not evidence.
+
+What these twins are. `Landed` is `FoldBridgeLedger` as it stood: the fold stops below a filing no key will open, however old. `NoWait` voids at once, and the generation is then claimed inside the grace, so a reader that gains it judges the body. `NoGrace` drops the readers' half: the filer claims the generation after the void under the key it sealed with, and a reader that was behind forks. `StaleRead` voids on a listing the writer remembered, a body sealed to a generation formed since, which a reader holding that generation judges valid. `CheckerVoids` has a checker apply the wait to a filing it lacks the key of, and fork on a row the writer judged with the key. `WaitInsideSkew` is the settings floor: a wait not above the grace and gkm's skew together lets a claim made just after the void carry a time inside the grace. The reach runs show the design does void, does meet a generation that forms afterwards under the filing's key, with `NoFork` and `VoidsAgree` holding in the design runs over the same traces, and does have a checker take rows unchecked. `Held` is the limit 12.2.3 states under What is left: a fold stays below a filing past its wait while a younger one sits under the previous base, which is why `Bounded` asks that every such filing be past its wait.
+
 ### 12.4 Cost
 
 Figures marked estimate are computed from the formats and from costs other sections measured; nothing here was measured on a device, and BRIDGE-M4-16's benchmark and SDK-M8-15's cell replace them.
@@ -10268,7 +10649,23 @@ shares
 ```text
 a body's generation is not held     the filing is pending: its id is held, nothing of it is active, Waits names the
                                     generation, and the first (re)application with the key judges it. Older bodies
-                                    compile. A writer does not fold past it
+                                    compile. A writer does not fold past it while gkm names the generation, nor
+                                    for UnformedVoidWait where it does not (amended 2026-11-12, QD-761)
+a body's generation does not form   (amended 2026-11-12, QD-761) pending for UnformedVoidWait from its entry. Then
+                                    the first base by a writer whose whole read of gkm names no such generation
+                                    freezes it void and folds on, logging config_key_void; a checker that lacks
+                                    the generation takes the rows unchecked. The id is void for the network's life
+its generation forms after the      (amended 2026-11-12, QD-761) the row stays void. A reader that gains the
+void                                generation refuses the body too, its GenRotate being signed more than
+                                    GenerationFormGrace after the entry, so its check passes and nothing opens
+a sidecar keeps filing bodies       (amended 2026-11-12, QD-761) the fold holds where it was while one younger than
+sealed to unformed generations      the wait sits at or below the previous base. Bases land with that fold until
+                                    4,096 entries follow it, then none until those under the last base are the
+                                    wait old. config_key_waiting names the filer, and its revocation ends it one
+                                    wait after its last filing (12.2.3; question details-amend-2-fold-holds)
+gkm hides a formed generation       (amended 2026-11-12, QD-761) the writer voids a body others can open, and each
+from the writer's listing           reader holding the generation forks on that base, which is the alarm. A read
+                                    that fails, or names a generation the writer lacks, only delays a void
 a body's seal does not open         void, and bridge_alarm state_unverified naming the entry; never a fallback
 a ledger file fails its hash,       the compile fails and changes nothing: the state in force stands, the sink is not
 or the manifest names none          called, bridge_alarm state_unverified; a daemon forks on the base (FoldFaithful's
@@ -10331,6 +10728,29 @@ root, the ledger      TestBridgeLedgerEqualFromAnyBase (generated logs with base
                       TestALateGenerationJudgesThePendingFiling, TestBridgeLedgerFilesAreDeterministic (byte-equal
                       across runs, GOMAXPROCS and legs), TestRuleShardsWiden, FuzzBridgeLedgerFold (a fold of a
                       random log equals the ledger of that log opened whole)
+root, the void at     (amended 2026-11-12, QD-761; BRIDGE-M4-23's fix track) TestAnUnformedFilingIsVoidedAfterTheWait
+the fold              (the fold reaches the tip, the row is void, Voided names it and Stopped is nil; for a route,
+(BRIDGE-M4-23)        a map, an egress and an alias), TestAnUnformedFilingWaits (a tip one millisecond short of
+                      the wait: stopped at k-1, config_key_waiting), TestANamedGenerationIsNeverVoided (g at or
+                      below FormedThrough with its key not held, at any age), TestNoVoidWithoutAWholeRead
+                      (FormedThrough 0: a failed read, a cut listing, a fork at the pin, a named generation not
+                      held), TestACheckerVoidsNothing (CheckBridgeLedgerFold with an Unopened filing at or below
+                      the fold is unchecked whatever its age, and takes a head's void),
+                      TestALateGenerationIsNoGeneration (a body whose generation is signed one millisecond past
+                      the grace after its entry is Refused by the judge and by each of the ledger's own opens,
+                      and one at the grace is judged; a reader that gains the generation after the void folds
+                      the head's files byte for byte, and RejudgeBridgeBodies leaves the frozen row),
+                      TestALaterFilingOfAVoidedIdIsVoid,
+                      TestTwoWritersFreezeOneVoid (waits of 24 h and 48 h, each writer first: one base folds past
+                      k, the other takes it unchecked, and where both would void their files are byte-equal),
+                      TestTheVoidIsMeasuredInLogTime (a writer restarted, and one whose clock is a day off, fold
+                      as the first did), TestTheFoldHoldsUnderAYoungerFilingBelowTheBase (BridgeVoidReach-Held's
+                      trace: the fold stays, Stopped names the younger filing and its signer, Voided is empty),
+                      TestTheFoldReachesTheTipAWaitAfterTheLastFiling (filings 6 h apart with bases between,
+                      then none: the first plan whose tip is the wait past the last folds through its tip and
+                      voids them all), TestBridgeLedgerSettingsFloorTheWait; TestAnUnopenedFilingStopsTheFold
+                      stays, for a generation gkm names; FuzzBridgeLedgerFold gains FormedThrough and entry
+                      times
 root, the compiler    golden states in testdata/bridge/compile/, byte-equal across runs and GOMAXPROCS; the plan's
 (BRIDGE-M4-16)        cases (§8.5's no-document rows, D-BRIDGE-8, a route in force only once approved or covered, a map
                       onto a listener or an overlay address refused, a name equal to a published host omitted, a
@@ -10361,7 +10781,7 @@ signers               (the stale holder of 12.1's E.1, a barrier between its rea
                       TestSeedsNeverLeaveTheSigner (a capture of BridgeState, every device RPC message and every event)
 ```
 
-Schedule rows. FS-56 gains the engine's schedules, each a twin of `BridgeNat.tla` on real code with barriers: a close held after its publish while a flow registers and dials; two publishes before the first close; a compile finishing below a held denial; a restart between a judged denial and its compile; a provider's first frame against the hook's installation. FS-38's share rows gain: a renewal racing a rotation at the write gate; a removed sidecar with an unexpired cert before and after a later generation's cert reaches the host, and after the host restarts; a ShareCert over 7 days out; a share revoked between states. FS-14 gains a bridge filing across a fold at a new device, a daemon and a VPN component, with equal `Digest`s, and a base that turns an unfolded verdict, at all three alike. §22.5's §17 row gains the compile's benchmark and "no compile reads a fold file". Each twin of the three models is one of these schedules, and each accepted reach trace is one the code must also reach, with its alarm where it has one.
+Schedule rows. FS-56 gains the engine's schedules, each a twin of `BridgeNat.tla` on real code with barriers: a close held after its publish while a flow registers and dials; two publishes before the first close; a compile finishing below a held denial; a restart between a judged denial and its compile; a provider's first frame against the hook's installation. FS-38's share rows gain: a renewal racing a rotation at the write gate; a removed sidecar with an unexpired cert before and after a later generation's cert reaches the host, and after the host restarts; a ShareCert over 7 days out; a share revoked between states. FS-14 gains a bridge filing across a fold at a new device, a daemon and a VPN component, with equal `Digest`s, and a base that turns an unfolded verdict, at all three alike. Amended 2026-11-12, QD-761: FS-14 also gains a filing sealed to a generation that never forms, void at the fold after the wait at all three with equal `Digest`s, and the same filing with its generation claimed after the void under the filing's key, a daemon that was behind taking the base with no fork; each twin of `BridgeVoid.tla` is one of 12.6's tests above. §22.5's §17 row gains the compile's benchmark and "no compile reads a fold file". Each twin of the three models is one of these schedules, and each accepted reach trace is one the code must also reach, with its alarm where it has one.
 
 Gates. `BenchmarkCompile` at 5,000 devices within section 4.4's 200 ms on the reference phone class and its heap within 12.4's working set, from M4; SDK-M8-15's cell samples the same compile inside the admission cap at M8. The ios_extension leg's size row counts the ledger and the compiler from M4 (section 4.2.3 estimated them at 350,000 B).
 
@@ -10395,6 +10815,28 @@ check/testdata/ios_extension_leg.txt   gains bridge_statement_rules.go, bridge_l
 ```
 
 The three `config_*` changes are seams of a few lines each in core-lane files; the orchestrator schedules the task when that lane is not in them. Traps: the fold must be written by the same streaming merge the compile reads with, never from a decoded whole, or a writer on a phone cannot fold; the manifest's hashes are over the files' plaintext as the head holds them; a fold whose bridge part is empty writes no manifest, and a reader takes an absent manifest as an empty ledger only when the head's fold records hold no bridge statement at or below `folded_through` (a full reader checks that; a device that starts there cannot, and takes it as it takes rows).
+
+**BRIDGE-M4-23's fix track for QD-761** (amended 2026-11-12, QD-761). 12.2.3's void at the fold and its readers' half. Landed code that changes:
+
+```text
+bridge_ledger.go            BridgeLedgerSettings gains UnformedVoidWait and GenerationFormGrace, with their
+                            defaults, and bridgeLedgerSettingsOrDefault raises a wait under the floor.
+                            BridgeBodyJudge gains FormedThrough func() uint64. Judge refuses a body whose key's
+                            Time is more than the grace after statement.TimeMs, before it opens the seal, with a
+                            new errBridgeGenerationUnformed as the verdict's Reason
+bridge_statement_rules.go   BridgeLedgerReader gains FormedThrough. openBody applies the grace test as Judge does.
+                            At a fold, where openBody or spendApproval would leave an entry pending for a
+                            generation above a FormedThrough that is not 0, and the entry is at least the wait
+                            before the entry at the fold asked, the entry is void instead
+bridge_ledger_fold.go       FoldBridgeLedger hands both of its opens the time of the entry at the fold asked;
+                            BridgeLedgerFold gains Voided; Stopped is the first entry still pending.
+                            CheckBridgeLedgerFold folds with FormedThrough 0 whatever its caller set.
+                            BridgeBodyJudge.Fold fills the reader's FormedThrough from its func
+config_writer.go            bridgeFold logs config_key_void for each of fold.Voided, beside config_key_waiting
+bridge_ledger_test.go       12.6's tests; TestAnUnopenedFilingStopsTheFold keeps its case
+```
+
+The read itself is the composition root's: `FormedThrough` is built over the config repo's generation sync (`SyncRepo` to the listing's end, no fork at the generation pin, `RepoKeyAt` holding 1 to G), a seam of a few lines in a core-lane file that this track reports rather than makes. Traps: read gkm inside the plan, after the tip is applied, never from a cache or an earlier plan; G is the newest generation the listing names, never the newest key held, and `SyncRepo` answers nil with a named generation unopened (it passes over `ErrGkmKeyMissing`), so the seam tests 1 to G itself and answers 0 on a gap; measure against entry times, never a clock; the generation's time is its verified statement's `time_ms`, which a re-formed group carries unchanged with its old generations (10.8), and nothing may sign an existing generation again with a later time, or the unfolded bodies sealed to it turn void; never void for a generation at or below `FormedThrough`; a void row for an unformed generation is byte for byte any void row, so it carries no reason; `RejudgeBridgeBodies` needs no change, since it judges through `Judge`, and must not touch a frozen row.
 
 **ACL-M2-17 (new): reach enumerators for the compiler.** `AclState.DialRules(source, destination)`, `RouteRules(source, via)` and `ExitRules(source, via)` return every rule and activated grant by which the source holds the action, in rule id order, each with its rule id, grant id and expiry, where `MayDial` and `MayRoute` return the first; `AclState.EgressMode(subject)` exports what `egressRestricted` computes; `AclLocalPolicy.StandingCovers(kind, owner, body)` answers 12.2.4's "in force"; `AclState.ShareReach(subject, shareId)` at M6. They are read paths over indexes `acl_state.go` already builds (`acl_eval.go`, `acl_contract.go`, `acl_compile.go`), on the leg's list. This is what the plan's "`AclEngine.AllowRoute` serves the compiler" becomes: the engine answers one flow, and the compiler needs the rows.
 
@@ -10442,6 +10884,8 @@ For a design-records track, section by section. Text in quotation marks is to be
 
 **§22.** The dial-fence invariant gains the engine's: "no flow opens, and none stays open past its close, under a rule the host has durably judged revoked, across late compiles, new client generations and restarts"; FS-56, FS-38 and FS-14 gain 12.6's schedule rows; §22.5's §17 row gains "a compile reads no fold file, and a daemon's and a forwarding role's compiles of one view are byte-equal".
 
+**Amended 2026-11-12, QD-761.** §17.8, Placement, at the end of the text proposed for it above (after "no reader re-opens a folded statement"): "A body sealed to a generation gkm does not name is pending. A config writer whose whole read of gkm's listing shows it holds every generation named freezes such a body void at the fold once its entry is `UnformedVoidWait`, 24 h, old in the log's time, and every reader refuses a body whose generation was signed more than `GenerationFormGrace`, 1 h, after its entry, so a generation claimed after the void changes no verdict; a checker that lacks the generation takes the head's rows unchecked." §7.9, the fold row gains: "a bridge body sealed to a generation that does not form stops a fold until it is `UnformedVoidWait` old; a fold stops only at or above the previous base, so it waits for every such body under that base". §17.13, D-BRIDGE-6 gains: "a body sealed above every formed generation is frozen void after `UnformedVoidWait`". §17.17, add: "A standing sidecar files bridge bodies sealed to generations that never form | Low | Medium | each is void at the fold 24 h after its entry; while they keep coming the fold holds, and past the tail cap bases wait up to 24 h at a time, until the sidecar is revoked (DESIGN-DETAILS 12.2.3)". No server sees anything new: no column, key, object family or proto field.
+
 **§2.6, §2.10.** §2.6's custody rows gain "K, a share's table key, is in the sharing network's config (`bridge/share-grant/`), so every reader of that config holds it". §2.10's share-signer bound is unchanged.
 
 ### 12.9 Owner questions
@@ -10458,8 +10902,13 @@ Each is filed under `.stack/questions/`, and the section is built on the recomme
 
 **details-12-ratchet-commit.** When X's host stores a share's raised generation. Options: (1) before it admits the contract that carried it: one store commit a share a rise, in that contract's sequence; (2) after, off the sequence; (3) refuse that contract, commit, admit the next. Costs: (1) a few milliseconds on the first contract after each rotation of Y, never a packet's or a later contract's; (2) a crash between the admission and the commit loses the raise, and a removed sidecar is admitted again until a current one presents the newer cert (`ShareSignTwin-RatchetVolatile`), inside the cert's 7 days; (3) the first contract after every rotation fails and its link marks down for 30 s. Recommendation: (1). The design takes it.
 
+**details-amend-2-late-generation** (amended 2026-11-12, QD-761; open). What a reader that comes to hold a generation makes of a body sealed to it before it formed, once a fold has voided that body. Options: (1) every reader refuses a body whose generation's GenRotate is signed more than `GenerationFormGrace`, 1 h, after the body's entry, so it voids the body as the fold did; (2) no reader rule, and the check accepts a head's void for an old enough filing sealed above the generation the head was sealed at; (3) no rule, and the reader forks. Costs: (1) one test in the judge and the ledger's opens, a second settings field every reader of a network holds alike, a floor on the wait, and reliance on gkm keeping its own 10 min rule, a gkm that does not getting a fork and no silent split; (2) the reader holds the rule active from the moment it gains the generation until it reaches the base, and the check gains a rule a lying writer can aim at an honest filing; (3) one standing sidecar can fork every device that was behind when the void was frozen (`BridgeVoidTwin-NoGrace`). Recommendation: (1). The amendment takes it.
+
+**details-amend-2-fold-holds** (amended 2026-11-12, QD-761; open). Whether it is enough that a sidecar which keeps filing bodies sealed to unformed generations holds the fold until it is revoked (12.2.3's What is left). Options: (1) accept it: the filer's revocation ends it one wait after its last filing; (2) lower the default wait to its floor of 90 min; (3) also bound the generation at id level, the answered question's option 1; (4) let a fold stop inside the previous base's tail. Costs: (1) an admin must act, and until then, past the tail cap, bases wait up to 24 h at a time; (2) the same with shorter windows, and the thinnest margin over the servers' clocks; (3) a rows field, a §2.8 line and an id-level rule; (4) a change to section 5's fold rule and to what api checks. Recommendation: (1). The amendment takes it.
+
 Existing questions this section answers, each built on the option named:
 
+- `bridge-m2-02-unopened-generation-stall` (amended 2026-11-12, QD-761): option 2, as 12.2.3's void at the fold has it, with the question above for what the answer left to this section.
 - `bridge-m4-09-other-client-rows`: option 1, `BridgeRules.untagged = 10`, filled by the compile's reach pass and read by the sdk provider's other client (12.2.2, 12.2.4).
 - `bridge-m4-11-rule-three-tags`: option 2, rule 3's tag names the hosted address (12.2.2; BRIDGE-M4-24).
 - `plan-BRIDGE-subject-resolution` (QD-161): as answered, with the cache, its bounds and its refresh in 12.2.4, and the share exception kept.
@@ -11283,3 +11732,1075 @@ Each is filed under `.stack/questions/`, and the design above is built on its re
 **The §2.8 rows (`details-13-metadata-rows.md`).** The store's new values need rows before they ship (I-18): sock-1's sidecar id, position, set version and tombstones, sock-3's floor and ttl, sock-4's sweep claim, api-13's floor and draw sizes, as 13.8 words them. Options: (1) amend the rows; (2) keep the listener's subject out of Redis and resolve it per Find from api, a call on the Find path. Recommended: 1; the sidecar id is what sock-1's stored claim already identifies.
 
 Questions this section builds on, with the option taken: plan-QUOTA-lease-debits (QD-087, carve), plan-QUOTA-host-reach and plan-SOCK-gate-data (QD-055, api's internal surface; narrowed as above), plan-SOCK-client-auth (QD-040, the `sidecar_id` claim, which is the listener's stored subject), plan-QUOTA-small-readings #16 and #19 (ref-counted handles; reading 19's shape, changed as above), sock-pure-est-reach (QD-109, untouched), quota-m2-03-readings #10 (the spent mark's flap, unchanged).
+
+## 14. Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13)
+
+Status: complete (2026-11-12)
+
+Tasks held until complete: none. The fix returns to landed code as two fix tracks (14.7), the first an interim that stops the loss before the rest is built. EVS2-M10-12 and EVS2-M10-16 build against the slot rules as they stand, and 14.7 says what each must keep.
+
+Model: `sidecar/sidecartest/model/details/EvsSlot.tla`, its configurations (`EvsSlot.cfg`, `EvsSlot-*.cfg`, `EvsSlotInterim.cfg`, `EvsSlotInterimOpen-*.cfg`, `EvsSlotLanded-*.cfg`, `EvsSlotTwin-*.cfg`, `EvsSlotProbe-*.cfg`, `EvsSlotReach-*.cfg`) and `run-slot.sh` beside it. Questions filed: `.stack/questions/details-14-slot-origin.md`, `details-14-interim-first.md`, `details-14-retoken-takeover.md`, `details-14-deposit-cited-slots.md`. Question this section answers: `evsb-m2-11-dead-record-shared-slot`, with none of its options as stated (14.9). It builds on section 2's fence of a pending record's ref (2.2.3) and on the DELETE that names a LastModified (QD-624), and on section 9's retoken (9.2.5). It amends 2.2.3, 9.2.5 and 9.3's K (14.2.9) and changes no rule of section 10.
+
+### 14.1 The problem
+
+A slot is an object of at most 8 KiB, `slot/<repo>/<slot_id>`, that holds up to 64 wrapped object keys: in a slot-keyed repo (a record-class repo, a group inbox, a mailbox's deposits) it is the only place a version's content key lives. Its id is 16 random bytes that the client draws when it seals a write; its body is client bytes that no signature covers (the statement binds `new_objects_sha256`, the ids, and not payload section 7, the bodies). A push lists a slot as new in its new-objects list, and step 6 writes it. A later version of the same path names it again by citing its base (5h: "one this push introduces or one a version step 4 read names").
+
+Three rules meet on that object, and nothing on the object says which push it belongs to.
+
+- **Step 6 takes any object of equal bytes.** `pushAttempt.writeSlot` PUTs If-None-Match; on a 412 it GETs the key, and equal bytes under `SlotExistingMaxAge` (23 h) are success, "whichever push wrote it". The record is appended before the slot round (`step6`), so a record lists every slot its statement names whether or not the round succeeds.
+- **The retoken lists its refused statement's slots again.** 9.2.5 re-tokenizes a push refused 412 PATH_EPOCH under a new push id with every sealed byte kept, slot ids and bodies among them, because a slot's id sits in the header of every record sealed under its key (`evs_upload.go`: `header.SlotId`), so a new id would mean sealing and uploading the segments again.
+- **Evacuation deletes every slot a dead record lists.** `evacuateRun.resolveRecord`'s `EvsResolveDead` branch queues each slot of `evacuateRecordObjects(record)`, and `deleteMinute` sends an unconditional DELETE after a repo-level recheck and a hold check. 2.2.3 kept that row "as today".
+
+Terms. A *statement* is one signed `EvsPush`, named by its push id and the first 16 bytes of its SHA-256 (its *statement prefix*), which is how a head's window entry names a commit. An *attempt* is one request's run of steps 4 to 7 for a statement. A statement is *dead* when Resolve says so: not committed, and the head at or past its window or its ref's fence later than its time checks (§11.8's Resolve row). A slot is *introduced* by a statement that lists it as new, and *cited* by one that names it through a version step 4 read.
+
+Five things are wrong. A and B are the brief's; C, D and E were found writing this.
+
+**A. An honest retoken loses its keys a day later (`EvsSlotLanded-Retoken`, 14 states).** Writer w's statement s1 on a shared ref passes step 5, appends its record and writes slot S. A PATH_EPOCH push commits before s1's step 7; s1's CAS fails, its rerun of step 5 answers 412 PATH_EPOCH, and w retokens: s2, a new push id, the same S and bytes. s2's slot round gets a 412, reads equal bytes and goes on; s2 commits. 25 to 26 h later evacuation resolves s1's record: s1 never committed and its window or the fence says dead, so S is deleted. The version s2 committed can no longer be opened by anyone. No party misbehaved, and no alarm fires.
+
+**B. Anyone who can write a ref and read a slot id can delete that slot (`EvsSlotLanded-Relist`, 12 states).** The record precedes the slot round, and a refusal after the record leaves the record. So a principal lists a committed version's slot S as new in a push of its own that passes step 5, and makes sure the push does not commit: it sends other bytes for S, or the same bytes for an S over 23 h old, and step 6 answers 409 SLOT_STALE after the record is written; or it sends the same bytes for a young S and loses a race it arranged. Either way its record resolves dead and evacuation deletes S. It needs the slot's id, which every reader of a version that names it holds, and a scope that passes step 5 on any ref of the repo: `rw` on a shared ref, its own owned ref, or `deposit`. It does not need the slot's bytes. The age of S does not matter, and the refusal it receives is an ordinary one (other bytes raise `slot_mismatch`; an old S with equal bytes raises nothing). This is read from the code and from the model; no test of it was run against evs.
+
+**C. A second introduction that commits, found here (`EvsSlotLanded-Consume`, 11 states).** Every deleter of a removed version's slots trusts that the slots that version names are that version's alone: a CONSUME deletes "the slots the versions it removes name" (`finishConsume`, unconditionally), and format 2's purge and marker collection do the same for a versionless path's slot. A principal that may deposit lists a young S of another ref with its bytes as new in a deposit, which commits (step 6 takes equal bytes). When the owner's device consumes that deposit, S goes, and the record or message that S keyed is lost. A fix that only guards evacuation leaves this open: it is not a dead record that deletes S, it is a committed one. So is any fix that lets two committed pushes introduce one slot object, which the question's option 3 (slot ids in `pidx/`, GC by the horizon) does.
+
+**D. A deposit that cites, found here.** §11.12 has a deposit put its key "in a slot its deposit push introduces", and nothing enforces *introduces*: 5h lets any version name a slot that a `reuse` source names, the reuse source may be a committed version that the entry or window of any ref of the repo still holds, a path's newest among them (`pushAttempt.readReuse` reads the head of the ref the item names, with no scope check of its own), and a deposit ref's rule checks only that every change is a creation (`checkCreatesOnly`). So a reader that may deposit commits a deposit whose version names S by citing the version whose keys it wants gone, at any age of S and with no bytes at all, and the CONSUME that ingests the deposit deletes S. Read from the code; no test of it was run.
+
+**E. The object cannot arbitrate, found here.** A slot object carries no metadata (§19.6's MinIO row), and its ETag is a function of its bytes. Two objects of equal bytes written by two statements are indistinguishable to a HEAD, a GET and an If-Match alike. So no rule of the form "delete it unless another push has taken it" can be evaluated on the object, and an If-Match rewrite cannot tell one owner's object from another's: whatever marks an owner has to be something a create If-None-Match sets, since that is the one exact arbiter the store offers between two writers of equal bytes.
+
+What the brief names as hard holds for each of these: a check that "no committed record lists this slot" made by evacuation races a commit validated before the check that lands after it (problem 2's stalled head write), a record still in a batch that no index lists, a re-seed, and a hold; an ERASE rewrites slot objects in place, and four other deleters remove them.
+
+The requirement: no object that a committed version names is deleted by the cleanup of another push, under stalled writes, for an honest retoken and a hostile re-listing alike; no slot is deleted on behalf of a version that did not introduce it; a CLOSURE is still uploaded and charged once across a retoken; and no format-1 message changes.
+
+### 14.2 The design
+
+#### 14.2.1 The principle
+
+Three ideas.
+
+**A slot object says whose it is.** Step 6's create writes its statement's identity on the object as its *origin*, in object metadata, in the same PUT If-None-Match that stores the bytes. The create is atomic and exclusive, so exactly one statement is the origin of each object for as long as that object stands, and a HEAD reads it. No message a client signs, sends or reads changes: the origin is evs's, on evs's object.
+
+**An attempt takes only its own object.** On a 412, equal bytes are success only under the attempt's own statement's origin, which is what "a retry of the same statement keeps them" (§11.6) always meant. Another statement's object, an object with no origin and a re-seeded one are 409 SLOT_STALE, the refusal the client already rebuilds on. So two statements never both hold one object, and no two committed pushes introduce one: the premise every deleter of a removed version's slots already rests on (C) becomes something evs enforces. One case is let through, because the requirement asks for it: a retoken takes over the object its refused statement created, by deleting it and creating its own, once evs can show that the refused statement can never commit (14.2.4).
+
+**A slot is deleted only on its owner's fate.** Evacuation deletes a dead record's slot only when the object's origin is that record's own statement: the object of a statement that is dead for good. It no longer deletes "the slots the record lists", which was a claim about ids, never about objects. The deleters of a committed version's slots (CONSUME, the purge, a marker's collection, the drop job, a shred) are unchanged, and are right again because of the second idea, with one rule added at 5h for deposits (D, 14.2.6).
+
+What does not change: `EvsPush`, `EvsSlotObject`, `EvsPidxEntry`, the payload and its sections, batch records and every other format-1 message; the client, the retoken and the rebuild; the order of step 6 (record, then slots, once per attempt); Resolve and its fence (2.2.3); the 23 h rule; an ERASE's rewrite and its erased list; refusal codes and alarms; the routes that read a slot.
+
+#### 14.2.2 The origin
+
+```text
+key     origin      object metadata on slot/ objects, written by evs; no route returns it to a client
+value   1.p.<push_id>.<statement_prefix>.<ref_id>.<signer_sidecar_id>.<base_version>.<path_epoch>.<mode>
+                    a push's or a seal's slot: its statement's fields; ids in lower hex, 32 characters each;
+                    numbers in decimal; mode f (file) or g (git); at most 190 B
+        1.r         a re-seeded slot (EVSB-M2-20)
+none    no origin key, or a value that does not parse to one of the two forms: the object is no statement's
+```
+
+`push_id` and `statement_prefix` are the statement's name, the pair a head's window entry and a log page name a commit by, so "this attempt's own" and "this record's own" are one comparison of 32 bytes. The other five fields are what the takeover tests (14.2.4): they let evs run `EvsPushStandingIn` for the origin's statement without finding its record. All seven are fields of the statement evs holds when it writes the slot. Each is already in the push's batch record (evs-12) and, once it commits, in its container and the head's window, so the cluster learns nothing it does not hold elsewhere; it holds it in a new place, which §2.8's evs-5 row and §19.6's MinIO row must say (I-18; question `details-14-slot-origin`). QD-248 did the same for an idx/ entry's state, under the key `entry-state`.
+
+The value is versioned by its first field. A reader of an origin it cannot parse treats the object as no statement's, which is the closed direction everywhere below: it is never taken and never deleted by evacuation.
+
+#### 14.2.3 Step 6's slot round
+
+```text
+per new slot S of statement st, after st's record is appended, at most SlotWriteRoundCount (4) rounds:
+  1  PUT S If-None-Match, origin = st                   200: written
+  2  on 412, or an outcome it does not know: GET S
+       404                                              round 1 again
+       origin = st, equal bytes                         written, if the object is under 23 h old as today, else
+                                                        409 SLOT_STALE
+       origin = st, other bytes                         as today: the head from the cluster and 5a, which finds
+                                                        the push committed if an ERASE rewrote its slot; else
+                                                        alarm slot_mismatch and 409 SLOT_STALE
+       origin = another statement o, and o is taken     wait until evs's clock passes LastModified + SlotSettleAge;
+       over (14.2.4)                                    DELETE S naming that LastModified; round 1 again, whatever
+                                                        the DELETE answered
+       anything else                                    the head from the cluster and 5a, as for other bytes;
+                                                        then 409 SLOT_STALE, recorded; counted slot_foreign
+  rounds spent, or a store error                        503 unknown, as today
+```
+
+"Anything else" is another statement's object that is not taken over, a re-seeded slot, and an object with no origin. Bytes are not compared for it: whose the object is decides, and a statement that lists another's id gets the same answer whatever it sends. The cluster read and 5a come first, as they do for other bytes, so that an attempt of a push that has committed is answered its 200 and never a refusal (I-EVS-3): its slot may since have been deleted with its version and the id created again. The client's answer to SLOT_STALE is the rebuild it has today, which seals again and so draws new ids. The record is appended first, as today, so every origin on a slot names a statement whose record a batch held (S4): evacuation will resolve that record and, if it is dead, delete the slot.
+
+The slot round stays once per attempt (`slotsWritten`). An attempt that reruns step 7 on a reread head does not look at its slots again, and need not: its object can go only by evacuation of its own dead record or by a takeover, and each happens only once the statement can never commit (S2, S3).
+
+`SlotSettleAge` and `SlotWriteRoundCount` are `EvsSettings` fields (QD-702), 2 s and 4. An attempt that waited may be past the 5 s that step 7 allows after step 4's reads, and then runs steps 4 and 5 again as §11.8 already has it.
+
+#### 14.2.4 The takeover
+
+A statement st takes over the object of another statement o when all of these hold:
+
+1. o's origin is a push's (`1.p`), on st's ref, by st's signer.
+2. o declared a lower path epoch than st, whose epoch step 5 found to be the head's.
+3. `EvsPushStandingIn` on the head the attempt holds, for o's push id, statement prefix, base version and mode, finds o neither committed nor its push id committed under another statement.
+4. The object's bytes equal the body st carries.
+5. No hold covers the object.
+
+2 and 3 are the proof that o can never commit. A statement commits only on a head whose current path epoch is the one it declares (step 5 runs on the head whose ETag step 7 names). The attempt holds a head, cached or not, whose epoch is st's, above o's; a ref's epoch only rises; so no head from that one on has o's epoch, and o cannot commit after it. Whether o committed before it is what 3 reads: a commit of o lies in (b, b+64] of o's base b, below the first head of the higher epoch, so the attempt's head, or the log pages under it, hold it if it exists. Both facts are permanent, so nothing that happens between the test and the DELETE undoes them. This is the retoken's own case and no other: 9.2.5 re-tokenizes exactly a statement refused 412 PATH_EPOCH, in the epoch above it. A deposit ref and the erasure ref stay at epoch 1 for life, so nothing is ever taken over there.
+
+1, 4 and 5 are narrowing, not proof. The retoken is by the same signer on the same ref with the same bytes, so nothing else is let through; safety does not rest on them, and the model lets any statement take over (14.3). Under a hold the object stays, as a dead record's slot does today, and the retoken is rebuilt.
+
+**Why a delete and a create, and not a rewrite.** E: a PUT If-Match on the object's ETag cannot tell o's object from one a second retoken has just made its own, since both have the same bytes. Two statements of one epoch that both rewrote would both believe they held it. The create If-None-Match is exact, so the takeover removes o's object and then runs round 1 like any other attempt: one creator wins, and the loser's GET finds the winner's origin, which is not below its own epoch, and answers SLOT_STALE.
+
+**Why the settle age.** The store's conditional DELETE is exact to a second: `x-ur-if-unmodified-ms: T` refuses only an object stored a second or more after T (QD-624), because LastModified is whole seconds. A DELETE that names the T of o's object could therefore take an object that another attempt created within that second. Waiting until evs's clock is `SlotSettleAge` past T before the DELETE closes it: any object created after any such DELETE is stored at least `SlotSettleAge` after T less the clocks' error, so a second DELETE naming T refuses it. 2 s is the second of slack and a second for clocks the design holds to 50 ms. The same age guards evacuation's DELETE (14.2.5). The wait is paid only on this path: a retoken whose refused statement had already written its slots, which needs a cut-over to commit between one push's step 6 and step 7.
+
+A push planned on no head is never retokened (9.2.3), and a retoken more than 23 h after its refused statement wrote its slots finds either the object past the 23 h rule's age, and is rebuilt, or the object gone with its dead record, and creates it.
+
+#### 14.2.5 Evacuation
+
+Resolve is unchanged, and so is which records are dead. What changes is what a dead record's slot list means: candidates, each decided on the object.
+
+```text
+per slot S a dead record of statement st lists, in deleteMinute, after the repo recheck as today:
+  HEAD S
+    404                                                absent
+    origin is not st                                   kept: another statement's, a re-seeded one, or no one's
+    LastModified + SlotSettleAge is past the run's     kept: unsettled
+    checked clock
+    a hold covers it                                   kept, as today
+  DELETE S naming LastModified (x-ur-if-unmodified-ms)
+    204                                                deleted
+    412                                                kept: it changed since the HEAD
+    a store error, a held key                          the minute waits, as today
+```
+
+The record's statement is in the record: `EvsBatchRecordStatement` gives it for a push, a seal and a part alike, a part's being its push's. A reseed record counts as committed and is never dead.
+
+**The fence.** Three things make the DELETE safe, and each is needed (14.3's twins). The ref's fence, or the head past the window, made st dead for good before the HEAD (2.2.3): no attempt of st commits after it. The origin says the object is st's, so no other statement holds it or will: step 6 gives another statement this object only by a takeover, which deletes it first. And the DELETE names the LastModified the HEAD read, on an object the settle age has passed, so a run that stalled between its HEAD and its DELETE, beside a successor that deleted the object and a later statement that created the id again, deletes nothing: the new object is more than a second younger.
+
+An unsettled slot is kept, not waited for: a dead statement's slot stored within 2 s of its record's evacuation, a day after the record, is an attempt that slept that day, and holding a minute back for it would hold the horizon (2.2.4) and with it orphan GC and the drop job. The object stays (14.5).
+
+#### 14.2.6 Rewrites, the other deleters, re-seed and holds
+
+**ERASE.** `slotRewriter.rewriteSlot` replaces a slot If-Match with the erased keys dropped, and today passes no options, which would drop the origin. It passes the metadata its GET returned. The object's LastModified moves, as it does today. Dropping the origin would lose no key (`EvsSlotProbe-RewriteDropsOrigin`): the slot would be no statement's, which evacuation keeps and no push takes. It is kept so that every slot a push wrote says who made it for as long as it stands.
+
+**CONSUME, and the rule 5h gains (D).** On a deposit ref every slot a new version names is one its push introduces; a deposit that names a slot it does not list as new is 409 SLOT_UNKNOWN, recorded, as an unknown slot is today. A deposit is one body under one key that its own push wraps (§11.12's deposits row), so no honest deposit cites. With that and 14.2.3, each slot a consumed deposit names was created by that deposit's statement and held by no other, and `finishConsume` deletes exactly its own, as written. Question `details-14-deposit-cited-slots` offers the alternative of a check in CONSUME.
+
+**The purge, a marker's collection, the drop job (format 2), a shred.** Unchanged. The purge and the collection delete a versionless path's slot, "a slot only that path's versions name" (§11.6), which format 2's citation rule enforces for citing and 14.2.3 now enforces for introducing. The drop job deletes a slot only after scans that find no live version naming it (10.2.8), and no push can introduce one of its candidates again: the candidate's origin is a committed statement's, so a re-listing is SLOT_STALE. Section 10's young rule for slots (F7) stays; it now guards against nothing step 6 allows, and costs nothing. A shred removes the repo's keys whole.
+
+**Re-seed (EVSB-M2-20).** A re-seeded slot is written with origin `1.r`. A reseed record counts as committed (§11.13's resolve row), so evacuation never treats one as dead; a push record that lists the same id and is dead finds an origin that is not its own and keeps the object; and no push takes a re-seeded slot. A re-seed onto a cluster that still holds the slot finds it by If-None-Match and leaves it.
+
+**Holds.** A hold keeps a dead record's slot today, and keeps it from a takeover (14.2.4). An ERASE rewrites under a hold as today (owner decision 133).
+
+**Any other writer of a slot key.** A copy of a slot object between clusters, when one is built, writes the metadata it read. 14.7 lists every landed call on `SlotKey`.
+
+#### 14.2.7 The slot's life, as one rule set
+
+```text
+list as new   any statement may list any id; a client draws 16 random bytes per sealed write, keeps them across
+              a retry and a retoken, and draws new ones at a rebuild (§11.6, unchanged)
+create        step 6, after the record: PUT If-None-Match with the statement as origin; the object is that
+              statement's for as long as it stands
+take          only its own origin, under 23 h old; a retoken takes over its refused statement's object by a
+              settled DELETE naming LastModified and a create of its own (14.2.4); all else 409 SLOT_STALE
+cite          a later version of the path, by its base (5h, unchanged); on a deposit ref, never
+rewrite       an ERASE, If-Match, the origin kept
+delete        its origin's statement dead: evacuation, by HEAD, origin, settle age and a DELETE naming
+              LastModified (14.2.5); its origin's statement unable to commit: a takeover; its version removed: the
+              CONSUME, purge, collection or drop job that removes it (unchanged); the repo shredded
+never         by the record of a statement that is not its origin; by a version that did not introduce it
+```
+
+#### 14.2.8 The interim
+
+Until the rest lands, evacuation keeps every dead record's slots: `resolveRecord` queues none and counts them. That is the brief's closed direction, a leak of objects of at most 8 KiB and never a loss, and it closes A and B at once, which are the two that need no deposit. It does not close C or D (`EvsSlotInterimOpen-Consume`), which need 14.2.3 and 14.2.6. The full fix turns the delete back on behind the origin. It must not turn it on while any evs process still runs the landed step 6, which takes another statement's object without a word on it: evacuation's delete is a settings field, off in the release that brings the origin and on in the next (14.7).
+
+#### 14.2.9 Amendments to sections 2 and 9
+
+**Amendment 14-A, to 2.2.3's resolve table.** The `dead` row reads: "drop; each slot its record lists is deleted only if a HEAD shows the record's own statement as its origin and a LastModified `SlotSettleAge` old, by a DELETE that names that LastModified (14.2.5)". The rest of 2.2.3 stands: the fence, the placeholder head and `ResolvePush` are what make a dead statement dead for good, which 14.2.5 rests on. 2.9's sentence on `evsb-m2-11-dead-record-shared-slot` is answered by 14.9.
+
+**Amendment 14-B, to 9.2.5's slot paragraph.** For "A slot object an attempt of the refused push left is adopted by the retoken exactly as a segment's receipt is (under 23 h, else 409 SLOT_STALE and the ordinary rebuild)": "A slot object an attempt of the refused push left is taken over by the retoken: evs deletes it, once settled and by a DELETE naming its LastModified, and the retoken's step 6 creates its own, when the object's origin names a statement of the same ref and signer in a lower path epoch that the head does not show committed (14.2.4); otherwise 409 SLOT_STALE and the ordinary rebuild". The client's side of 9.2.5 is unchanged: the retoken keeps its slot ids and bodies and sends them again. "So a CLOSURE is uploaded and charged once (K)" stands, for a retoken within 23 h of the refused statement's slots and outside a hold.
+
+**Amendment 14-C, to 9.3's K.** K reads: "No slot object is held by two statements, and none is introduced by two committed pushes: step 6 gives an attempt an object only under its own statement's origin, and a retoken's kept slot ids come to name an object of its own, created after evs deleted the refused statement's, which it does only once that statement can never commit (14.3, S1 to S3)." K as written argued from what an honest client sends; this holds against any client.
+
+Section 10 is not amended. EVS1-M2-30's note in 9.7 ("a CLOSURE refused 412 PATH_EPOCH is retokened with its segments, receipts and slot ids kept, so the closure upload is charged once") stands as written.
+
+### 14.3 Invariants and why they hold
+
+An *object* below is one stored incarnation of a slot key, from its create to its delete. Its *holder* is the statement of its origin.
+
+**S1, one holder.** An attempt goes on to step 7 only after it has seen its own statement's origin on each new slot: its own create's 200, or a GET of an object whose origin is its statement. An origin is written only by a create If-None-Match (step 6, and a re-seed's `1.r`) and copied by an ERASE's rewrite, so an object's holder never changes. Two statements therefore never both pass step 6 on one object.
+
+**S2, a held object outlives every chance of its holder to commit.** An object whose origin is statement st is deleted by three parties only. Evacuation deletes it for a dead record of st (14.2.5), and dead is final: a record is dead by a head past its window, which no attempt of st passes at 5a, or by a fence raised after its time checks ended, which fails the step 7 of every attempt that read the head before it and leaves every later one to the time checks (2.2.3, and 2.3's step 5: a stalled head write holds the head's key, so the fence waits behind it and finds it landed or reverted). A takeover deletes it once st can never commit (14.2.4's 2 and 3). A deleter of a committed version's slots deletes it once the version st committed is removed. So at any instant at which an attempt of st can still commit, or st's version stands, the object st's attempts passed step 6 on is stored, unless a later create by st itself replaced it.
+
+**S3, no delete takes another object than the one it judged.** Evacuation's and the takeover's DELETE name the LastModified their HEAD or GET read, and are sent only for an object `SlotSettleAge` old by a checked clock. The store refuses the DELETE if the object it finds was stored a second or more after that LastModified. Any object created after the judged one was deleted is stored after that delete was sent, which is at least `SlotSettleAge` less the clocks' error after the judged LastModified; with 2 s and clocks within 50 ms that is more than a second. An ERASE's rewrite of the judged object applies only to a slot a committed version names, which neither party judges.
+
+**S4, an origin has a record.** Step 6 appends the record before the slot round, and the takeover's DELETE and create are part of that round. So every statement that is an object's origin has a record that a batch held, and evacuation resolves it. If the statement is dead the object is deleted then, unless it is unsettled or held, or was stored after its record left (14.5's leaks).
+
+**S5, one introducer.** From S1 and S2: a committed push st introduced slot id S on an object it held. A second statement that lists S as new and passes step 6 does so on an object of its own, created after st's was deleted, which S2 allows only once st's version is removed. So no two committed versions that stand introduce one slot id on one object, and a deleter that removes a version's slots removes no other introducing version's. With 5h's deposit rule (14.2.6), a deposit names only slots it introduced.
+
+**I-EVS-1 for slots.** A committed version names a slot by introducing it or by citing its path's base. For an introducing version, S2 and S3 keep its object until its version is removed. A citing version rests on the deleter's own rule for its path, which S5 restores: the purge and the collection take a slot only that path's versions name, and the drop job scans. A, B, C and D are each the failure of one of these: A and B of S2 (evacuation deleted for a statement that was not the holder), C of S1 and S5, D of the deposit rule.
+
+**The model.** `EvsSlot.tla` holds one ref's head (version, path epoch, fence) with a stalled head write, one slot id with its object (stored, origin, LastModified tick), statements that all list that id as new with equal bytes, each with one attempt (steps 4 to 7, the record, the create, the GET, the takeover's DELETE), other commits and PATH_EPOCH commits, the evacuator as one or two runs (Resolve, the fence, the HEAD, the DELETE, a kill at any step), a deleter that removes a committed version with its slot, and an ERASE's rewrite. Every attempt and every run may stop for any time at any step. A tick is longer than the settle age and the DELETE's second: a DELETE naming a LastModified takes any object stored in that tick, and a HEAD finds an object stored in its own tick unsettled. Its invariants: `ClosureHolds` (no committed version that stands names a deleted slot), `OriginStands` (a committed push's object stands under its own origin until its version is removed; S1 and S2), `OneIntroducer` (S5), `StampHasRecord` (S4), `DeadIsFinal` (a statement that evacuation or a takeover judged unable to commit never commits; S2) and, under fairness for the evacuator, `RecordsLeave` (a slot never holds a minute back).
+
+It abstracts: bytes are equal throughout (a statement with other bytes is refused whoever it is); a statement has one attempt, and a later attempt of a dead statement is left to the time checks; any statement may take over, which is weaker than 14.2.4's first condition; the 23 h rule, holds, parts and re-seeds are left out, each of which only keeps an object or refuses a push.
+
+Runs, by `run-slot.sh` on TLC master `d8fb231`, 2026-11-12, breadth-first, each complete at its bounds:
+
+```text
+                                       result                                              distinct states depth        time
+EvsSlot.tla, the design (Twin none)
+EvsSlot                                two statements, 1 evacuation run, a window of 1, 1 other commit, 1 PATH_EPOCH commit, 1 stalled
+                                       head write, 1 killed run, 1 version removed with its slot, 1 ERASE rewrite, 2 ticks
+                                       pass, every invariant                                     6,048,416    38  4 min 18 s
+EvsSlot-Zombie                         two statements, a stalled evacuation run beside its successor, 1 other commit, 1 PATH_EPOCH
+                                       commit, 1 version removed, 2 ticks
+                                       pass, every invariant                                     8,951,410    45 10 min 14 s
+EvsSlot-Window                         two statements, a window of 2, 1 other commit, 1 PATH_EPOCH commit, 1 stalled head write, 1
+                                       version removed, 3 ticks
+                                       pass, every invariant                                     3,210,617    37  2 min 10 s
+EvsSlot-Three                          three statements, so two may take over one refused statement's slot at once; 1 PATH_EPOCH
+                                       commit, 2 ticks
+                                       pass, every invariant                                     3,227,506    44   4 min 1 s
+EvsSlot-Live                           RecordsLeave under weak fairness, no symmetry: two statements, 1 PATH_EPOCH commit, 1
+                                       stalled head write, 2 ticks
+                                       pass, the property                                          274,387    32  5 min 19 s
+EvsSlot.tla, the interim (evacuation keeps every dead record's slots, step 6 as landed)
+EvsSlotInterim                         two statements, 1 other commit, 1 PATH_EPOCH commit, 1 stalled head write, 1 killed run, 1
+                                       ERASE rewrite, no version removed; ClosureHolds, StampHasRecord and DeadIsFinal
+                                       pass, those three                                         5,169,822    35  4 min 16 s
+EvsSlotInterimOpen-Consume             a second introducer commits and is removed (C)
+                                       ConsumeKeeps violated, a trace of 11 states                   6,786    11         3 s
+EvsSlot.tla, the code as landed
+EvsSlotLanded-Retoken                  a push takes a dead statement's slot and commits; the dead record is evacuated (A)
+                                       AdopterKept violated, a trace of 14 states                   40,960    14         6 s
+EvsSlotLanded-Relist                   a statement lists a committed push's slot and dies; its record is evacuated (B)
+                                       CreatorKept violated, a trace of 12 states                   12,928    12         4 s
+EvsSlotLanded-Consume                  a statement lists a committed push's slot and commits; its version is removed (C)
+                                       ConsumeKeeps violated, a trace of 11 states                   1,983    11         3 s
+EvsSlot.tla, one rule of the design broken
+EvsSlotTwin-TakesForeign               step 6 takes another statement's object as it stands; evacuation checks the origin
+                                       AdopterKept violated, a trace of 14 states                   41,777    14         7 s
+EvsSlotTwin-TakesForeign-Consume       the same, with a version removed
+                                       OneIntroducer violated, a trace of 10 states                  1,239    10         2 s
+EvsSlotTwin-TakesLive                  a takeover of a statement in the same path epoch
+                                       DeadIsFinal violated, a trace of 10 states                      401    10         2 s
+EvsSlotTwin-TakesCommitted             a takeover that does not look for the statement in the head
+                                       ClosureHolds violated, a trace of 12 states                   4,122    12         2 s
+EvsSlotTwin-TakesUnsettled             a takeover that does not wait out the settle age; three statements
+                                       OriginStands violated, a trace of 17 states                 189,872    17        26 s
+EvsSlotTwin-NoOriginAtDelete           evacuation deletes a dead record's slot whatever its origin
+                                       CreatorKept violated, a trace of 12 states                   12,775    12         3 s
+EvsSlotTwin-UnconditionalDelete        evacuation's DELETE names no LastModified; two runs
+                                       ClosureHolds violated, a trace of 18 states                 134,516    18        17 s
+EvsSlotTwin-NoSettle                   evacuation deletes an unsettled slot; two runs
+                                       ClosureHolds violated, a trace of 18 states                 149,578    18        17 s
+EvsSlotTwin-StampBeforeRecord          the slots before the record
+                                       StampHasRecord violated, a trace of 4 states                      7     4         2 s
+EvsSlotTwin-DeadUnfenced               a pending record taken for dead with no fence (2.2.3)
+                                       ClosureHolds violated, a trace of 10 states                     100    10         3 s
+EvsSlot.tla, a rule the design does not rest on, broken
+EvsSlotProbe-RewriteDropsOrigin        an ERASE rewrite that drops the origin, at EvsSlot's bounds; every invariant but
+                                       OriginStands
+                                       pass, those four                                          6,063,424    38  4 min 38 s
+EvsSlot.tla, states the design must reach, each stated as an invariant that says it never does
+EvsSlotReach-Takes                     a retoken takes over its refused statement's slot and commits
+                                       NeverTakes violated, a trace of 13 states                     7,266    13         6 s
+EvsSlotReach-Deletes                   evacuation deletes a dead statement's own slot
+                                       NeverDeletes violated, a trace of 10 states                   1,319    10         4 s
+EvsSlotReach-Refuses                   a statement that lists another's slot is refused 409 SLOT_STALE
+                                       NeverRefuses violated, a trace of 8 states                      271     8         4 s
+EvsSlotReach-Young                     a dead statement's unsettled slot is kept
+                                       NeverYoung violated, a trace of 9 states                        822     9         4 s
+EvsSlotReach-SecondLife                after evacuation deleted a dead statement's slot, a later statement creates the id
+                                       again and commits
+                                       NeverSecondLife violated, a trace of 14 states               11,024    14         5 s
+EvsSlotReach-Leaks                     a slot stored late outlives its statement's record
+                                       NeverLeaks violated, a trace of 13 states                       729    13         3 s
+```
+
+Every design run, the interim's and the probe pass, and every landed, open, twin and reach run ends on the one invariant its configuration names. The seven runs that pass used four workers and the others one, on a shared host; the largest state directory was 363 MB. `EvsSlot-Live` runs at smaller bounds than the safety runs, since a liveness run takes no symmetry: it has no other push's commit, no killed run and no removed version.
+
+The three runs of the code as landed are the brief's requirement in the negative: the code as landed loses a committed version's slot to a retoken's dead record (A), to a re-lister's dead record (B) and to the removal of a second introducer (C). `EvsSlotInterimOpen-Consume` shows that keeping dead records' slots leaves C. Each twin removes one rule and loses a slot or the property that rule carries: taking another's object as it stands, a takeover of a statement in the same epoch or of one not looked for in the head or of an unsettled object, evacuation's delete without the origin, without the condition or without the settle age, the record after the slots, and a dead verdict without the fence. D is not in the model: it is a missing check at 5h, not a schedule.
+
+### 14.4 Cost
+
+**A push.** Nothing on the common path. A new slot's PUT carries at most 190 B more, in the object's metadata, which the store keeps beside the bytes in the one write it already makes; at §11.13's 0.2 new slots a push that is under 40 B a push. No request is added: the create is the same PUT, and a 412's GET is the one made today and returns the metadata with the body.
+
+**A takeover.** One DELETE (about 3.5 KiB a drive, §11.13's figure for a slot DELETE) and a wait of at most `SlotSettleAge`, 2 s, before it; the create is the one the push would have made. Resolve reads the head the attempt holds and at most two log pages, each cached for the process's life; a retoken follows its refused statement by seconds, so its range is in the window and no page is read. It happens only to a retoken whose refused statement had passed step 6, that is, to a push that a PATH_EPOCH commit overtook between its step 6 and its step 7: of the pushes in flight on a ref at a cut-over, those that introduce a slot. A ref cuts over at most about once a day (§11.13's inputs). The CLOSURE that meets one is uploaded and charged once.
+
+**A refused re-listing.** As a refusal costs today: the 412's GET, a head read from the cluster and the refusal's recording CAS.
+
+**Evacuation.** One HEAD per slot a dead record lists, which is new, and the DELETE as today for those that are the record's own. A dead record is a push refused after its record or abandoned before its commit; with d the share of pushes that die so, evacuation adds 0.2 d HEADs a push: at year two's 2,000 pushes a second and d = 1%, 4 HEADs a second on the metadata cluster, against ~21,000 GETs a second. §11.13's "evacuating it" row gains "a HEAD per slot of a dead record".
+
+**What is kept that was deleted.** Slots a dead record lists and did not create: these are another statement's and are that statement's to delete. Unsettled slots and the other leaks of 14.5: each at most 8 KiB, each from a schedule in which a process slept for a day or was killed between two writes.
+
+**The interim.** Every dead record's slots stay: 0.2 d slots a push of at most 8 KiB, on every drive of the metadata cluster. At year one's 200 pushes a second and d = 1% that is about 35,000 objects a day, under 280 MiB a drive a day. It is an interim for the weeks before the full fix, not a rule to keep.
+
+### 14.5 Failure modes and recovery
+
+**evs dies in step 6.** After the record and before the create: no object; the record resolves dead and its HEAD answers 404. After the create: the record resolves dead and the object, its statement's own, is deleted. A create whose answer is lost is read back: the attempt finds its own origin and goes on.
+
+**A takeover is cut short.** After the DELETE and before the create: no object stands, and the retoken's retry, or its next round, creates it. A DELETE whose answer is lost is not read back: round 1 decides, by creating or by a 412 and a GET. The refused statement's own late attempt may create the id again between the DELETE and the create; the retoken's create then gets a 412, finds that statement's origin again, and takes over again after the settle age. Rounds are bounded by `SlotWriteRoundCount`; past them the answer is 503 unknown and the client retries the same statement.
+
+**Two retokens of one statement.** Each deletes the refused statement's object or finds it gone, and each creates: one create wins. The other finds an origin that is not below its own epoch and is refused SLOT_STALE; its client rebuilds. An honest client sends one retoken at a time.
+
+**An evacuation run stalls between its HEAD and its DELETE**, and its successor finishes the minute. The stalled run's DELETE names the old LastModified and takes nothing newer (S3). A run killed at any step repeats the minute: Resolve answers the same, and the HEAD decides again on the object as it then is.
+
+**The store.** A held key or an error on the HEAD or the DELETE leaves the minute waiting, as a slot's DELETE does today. A stalled DELETE holds the slot's key until §19.6 settles it; a create behind it waits and then finds the key as the DELETE left it. While the clock is unsure evacuation leaves pending records pending, as today, and a takeover answers 503 rather than wait on a clock it cannot trust.
+
+**Leaks.** Each is an object of at most 8 KiB that nothing deletes until the repo is shredded, and each is counted where it is decided:
+
+- a dead statement's slot that was unsettled when its record was evacuated, or stored after its record left its batch: an attempt that slept about a day between its record and its slot PUT (`EvsSlotReach-Leaks`);
+- a slot created again by a late attempt of a push that committed and whose version was since removed with its slot;
+- a slot a dead part lists when the part's new-objects slice does not parse (as today, alarm `evacuate_dead_record`);
+- a dead record's slot under a hold, whose record goes while the object stays (as today);
+- an object with no origin: one written before the fix, or by the interim's evs;
+- every dead record's slots, while the interim stands.
+
+A later pass over slot/ can remove those that carry an origin and no hold: an object whose origin's statement Resolve finds dead, once the horizon (2.2.4) has passed the minute its record could lie in. It is not designed here; nothing rests on it.
+
+**A hostile client.** Listing another statement's slot costs it a refusal and deletes nothing: its record is dead and the object is not its own. It cannot take over a slot that a committed version names (14.2.4's 3), nor one on a deposit or erasure ref (2), nor one of a statement that can still commit. It can take over the slots of its own refused statements, which are its own. It cannot hold an id against the writer that drew it, since an id is seen by no one else until a commit names it, and from then its object is the committed statement's. The refusal does not depend on the bytes it sends, so it learns nothing from it.
+
+**An honest writer refused SLOT_STALE**, where today it would have gone on: a retoken more than 23 h after its refused statement's slots, a retoken under a hold, and, in the release that brings the origin, a retry or retoken that meets an object an older process wrote without one. Each rebuilds, which uploads its segments again.
+
+**The release order.** The landed step 6 takes another statement's object and writes no origin, so evacuation's delete by origin is safe only once no process runs it. The interim lands first and turns the delete off; the full fix brings the origin with the delete still off, behind a settings field, and the next release turns it on (14.7).
+
+### 14.6 The test plan
+
+**Unit, `evsservice`.** The origin: encode and parse both forms, the size bound, every malformed value read as none. Step 6 on the fake cluster, one case per row of 14.2.3: a create carries the origin; a 412 on its own origin with equal bytes, under and over 23 h; its own origin with other bytes after an ERASE, answered by 5a; another statement's object refused whatever the bytes, with a committed push's attempt answered 200 by 5a first; an object with no origin and a re-seeded one refused; the takeover's five conditions, each failing alone (another ref, another signer, an equal epoch, a committed origin found in the window and found in a log page, a push id under another statement, other bytes, a hold); the wait, on the fake clock; a DELETE that answers 412 followed by a create that answers 412. 5h: a deposit that cites a slot through a reuse source is 409 SLOT_UNKNOWN, and one that introduces its slot passes. The ERASE rewrite keeps the origin. Evacuation, one case per row of 14.2.5, and a record of each type (push, seal, part).
+
+**Schedules, on the barriers the push route and evacuation already have** (`BarrierPushSlotPutBefore`, `BarrierPushSlotPutAfter`, the head CAS's, evacuation's delete barriers), T2 and T3, each ending with every committed version's slots read back:
+
+- A, the retoken: a push passes step 6; a PATH_EPOCH commits; the push is refused; its retoken waits out the settle age, takes over and commits; the fake clock passes 26 h; evacuation drops the refused statement's record and keeps the slot. Again with a CLOSURE, whose closure upload is counted once.
+- B, the re-listing: a second principal lists a committed version's slot as new, with its bytes and with others, young and past 23 h; each is 409 SLOT_STALE; at 26 h its records are dropped and the slot stands.
+- C, the second introduction: a depositor lists another ref's young slot with its bytes in a deposit: refused. A deposit that introduces its own slot commits, is consumed, and only its slot goes.
+- D, the citing deposit: refused at 5h.
+- two retokens of one refused statement, held at the takeover's DELETE: one commits, the other is refused, and the committed one's slot stands at 26 h.
+- a stalled evacuation run: held between its HEAD and its DELETE while a second run deletes the dead statement's slot and a later push creates the id again and commits; the first run's DELETE answers 412.
+- an attempt held between its record and its slot PUT past 26 h: its record is dropped with a 404, the slot it then writes is kept as unsettled or as stored after its record, and its step 7 fails on the fence.
+- FS-8, as amended (14.8): the dead records' own slots are gone at 26 h, and a slot a dead record listed and did not create stands.
+
+**The interim.** FS-8's slots clause reads "and its slots stay" while it stands; A and B's schedules pass on it; C's and D's are skipped until the full fix.
+
+**The model.** `EvsSlot.tla` is a companion of `EvsCommit.tla` in `modelled.yml` (`details/EvsSlot`, `run-slot.sh`), added by `EvsCommit.tla`'s owner with the fix, so a change to the slot rules reruns both. `EvsCommit.tla`'s own slot write and dead-slot delete take 14.2's rules.
+
+### 14.7 Implementation notes, track by track
+
+Two fix tracks to landed code, in order. Neither changes a format-1 message, a route or the client.
+
+**Track 1, the interim (S).** `evsservice/evacuate_resolve.go`: `resolveRecord`'s `EvsResolveDead` branch queues no slot; it counts the slots the record lists in a new result field and logs nothing per slot. `evacuate.go`'s `deleteMinute` loop over `deadSlots` stays and receives none. Tests: evacuation's dead-record tests expect the slot to stand; FS-8's harness clause changes as 14.6 says. A DESIGN-AMENDMENTS entry records the interim against §11.13's resolve row and I-EVS-2. Nothing else. It can land the day it is written, and should land before anything else in evs that touches slots.
+
+**Track 2, the origin (M).** In one track, with the delete off until every process runs it:
+
+- `evsservice/slot_origin.go`, new: `EvsSlotOriginMetadataKey = "origin"`, the origin's type, `EvsSlotOriginOf(statement)`, encode, parse (any error is "none"), and equality on (push id, statement prefix). Beside `entry.go`'s `entry-state`, which is the pattern.
+- `push_commit.go`: `writeSlot` by 14.2.3. The PUT passes `&sidecar.BlobPutOptions{Metadata: ...}`; the 412's GET reads `Metadata` and `LastModified` from the object it already opens; the foreign row reads the cluster head and settles as the other-bytes row does, then refuses; the takeover calls `EvsPushStandingIn` with `self.head.Head` and the engine's `readLogPage`, reads hold/ as the purge does, waits on the engine's clock with the request's context, and deletes with `sidecar.WithBlobUnmodified(ctx, lastModified)`. `writeSlots` runs slots in parallel today and may keep doing so; a takeover's wait is per slot and the same for each. New results beside `slotStale`: foreign, and unknown after the rounds.
+- `resolve.go`: `EvsPushStandingIn` takes the statement's 32-byte hash and compares its first 16; the takeover holds only the prefix, so it gains a form that takes the prefix, which the existing one calls.
+- `check_objects.go`: on a deposit ref, a slot a new version names must be in `newSlots` (14.2.6); `citedSlots` is not consulted there.
+- `erase.go`: `slotRewriter.rewriteSlot` passes the metadata of the object it read to `PutIfMatch`.
+- `evacuate_resolve.go`, `evacuate.go`: `evacuateSlot` gains the record's push id and statement prefix, from `EvsBatchRecordStatement`; `deleteMinute` runs 14.2.5, with the run's `ClockCheck` for the settle age; result fields count absent, kept as another's, kept unsettled, kept held, deleted and changed.
+- `settings.go`: `SlotSettleAge` (2 s) and `SlotWriteRoundCount` (4) on `EvsSettings`, validated positive, with `SlotSettleAge` at least 2 s (the store's second and a second for the clocks); the evacuator's settings gain the delete's switch, off by default in this track's release and on in the next. No constant (QD-702).
+- `closure.go`'s `finishConsume`, `purge.go`'s `deleteSlot`, `sweep.go`'s `sweepSlot`, `collect_markers.go`, `shred.go`, `read_frame.go`: no change. These are every other landed call on `SlotKey`.
+- EVSB-M2-20's re-seed, when it is built, writes a slot with origin `1.r`.
+- The blob fake already holds metadata, as idx/'s entry state needs, and the conditional DELETE (EVSB-M2-23); the suite gains a case for metadata on a PUT If-None-Match that answers 412 (the stored metadata is the first writer's).
+
+**EVS2-M10-12 (erasure, format 2).** Any rewrite of a slot it adds or touches, in `erase.go` or `closure.go`, passes the metadata it read. A CLOSURE's new slots get their origin from step 6 like any push's; a CLOSURE's retoken is 14.2.4's case and needs nothing of its own. It deletes no slot on behalf of a version that did not introduce it.
+
+**EVS2-M10-16 (the client's retoken and rebuild).** Nothing changes: a retoken keeps its slot ids and bodies and a rebuild draws new ones, and 409 SLOT_STALE is a rebuild as it is today. The retoken's push may take up to `SlotSettleAge` longer to answer when evs takes over a slot.
+
+**Traps.** The origin is compared as parsed fields, never as a string, so a later version of the value can add fields. The takeover's epoch is the statement's declared epoch, which step 5 has checked against the head; it must not be read from a head fetched after step 5. The settle age is measured from the object's LastModified by evs's checked clock, not from the time of the GET. `x-ur-if-unmodified-ms` on the DELETE is the LastModified the HEAD or GET returned, unchanged. Evacuation's HEAD is made in `deleteMinute`, after the repo recheck, not in `resolveRecord`: the decision must be on the object as it is just before the DELETE.
+
+### 14.8 Proposed DESIGN.md text
+
+For a design-records track. Each item replaces the words it quotes and leaves the rest of its row.
+
+**§11.6, the object key row.** After "and a retry of the same statement keeps them (11.8)": "; a retoken keeps them too (the read row), and evs gives it the object by a takeover (11.8, step 6). A slot object carries the statement that created it as its origin, in object metadata, and is that statement's for as long as it stands".
+
+**§11.6, the slot/ line of the objects table.** For "If-None-Match; rewritten If-Match": "If-None-Match, with its origin; rewritten If-Match, origin kept". For "a dead push's, <= ~26 h": "a dead push's own, <= ~26 h".
+
+**§11.8, the fences row.** For "slot/ (created If-None-Match, equal bytes on 412 success, from M2 only on an object under 23 h old, step 6;": "slot/ (created If-None-Match with its statement as origin; a 412 is success only on that statement's own object under 23 h old, or after a retoken's takeover of its refused statement's, step 6; deleted for a dead record only as that record's own, 11.13;".
+
+**§11.8, 5h.** After the slot rule ("one this push introduces or one a version step 4 read names"): "; on a deposit ref, only one this push introduces".
+
+**§11.8, step 6.** For "one more round PUTs each slot (If-None-Match; equal bytes on 412 are success, from M2 (11.22) only if a HEAD shows that object under 23 h old, else 409 SLOT_STALE, as a re-upload gets SEGMENT_STALE; unequal ones send evs to a cluster read of the head, where 5a finds P committed if an ERASE rewrote it, else alarm), so a record names every slot written": "at most four rounds PUT each slot If-None-Match with the statement as its origin (object metadata: push id, statement hash prefix, ref, signer, base version, path epoch, mode). On a 412 the object's origin decides. The statement's own: equal bytes are success while the object is under 23 h old (else 409 SLOT_STALE), and unequal ones send evs to a cluster read of the head, where 5a finds P committed if an ERASE rewrote it, else alarm. A push's on this ref, by this signer, with equal bytes and under no hold, whose statement declared a lower path epoch than this one and which the head does not show committed: that statement can never commit, and evs takes the slot over, waiting until the object is 2 s old, deleting it by a DELETE that names its LastModified, and creating its own. Any other object, one with no origin among them: a cluster read of the head and 5a, then 409 SLOT_STALE. So a record names every slot written, and a slot object is held by one statement".
+
+**§11.8, the cleanup row.** For "a refused or unknown push's record and new slots stay until evacuation's Resolve finds it dead": "a refused or unknown push's record and the slots it created stay until evacuation's Resolve finds it dead; a slot it listed and did not create is not its to clean up".
+
+**§11.8, I-EVS-2.** For "a push's new slots go only once Resolve finds it dead": "a slot goes with a push only once Resolve finds that push dead and only if that push's statement is the slot's origin". A new invariant, numbered by design-records: "a slot object has one origin for its life, the statement whose create stored it; an attempt passes step 6 only on an object of its own statement's origin; so no two committed pushes introduce one slot object, and a slot is deleted only when its origin's statement is dead or can never commit, or the version it committed is removed".
+
+**§11.12, the push row.** For "rewrites each named slot object without those keys (If-Match)": "rewrites each named slot object without those keys (If-Match, its origin kept)".
+
+**§11.13, the resolve row.** For "dead -> drop, deleting the new slots its record lists, the only cleanup (11.8)": "dead -> drop, deleting each slot its record lists whose origin is the record's own statement and whose LastModified is 2 s old, by a DELETE naming that LastModified, the only cleanup (11.8); a slot of another origin, of none, or unsettled stays".
+
+**§11.13, the operation budget.** The "evacuating it after 25-26 h" row's GET column gains "+ a HEAD per slot of a dead record".
+
+**§19.6, the MinIO row.** For QD-248's "except an idx/ entry's state while its head lists sources (§11.7)": "except an idx/ entry's state while its head lists sources (§11.7) and a slot/ object's origin (§11.8)".
+
+**§2.8, evs-5.** `sees` gains: "each slot's origin, in object metadata: the push id, statement hash prefix, ref, signer sidecar, base version, path epoch and mode of the statement that created it, or a re-seed's mark; all of it also in that push's record (evs-12)". `ttl`: for "a refused or dead push's new slots until evacuation finds it dead, at most about 26 h after its batch": "a refused or dead push's own slots until evacuation finds it dead, at most about 26 h after its batch, a slot stored within 2 s of that or after it staying". The metadata list's next version names the change.
+
+**D-EVS-25.** For "which names every slot its push wrote": "which names every slot its push listed". After "(owner decision 203)": "A dead record's slots are deleted only as that record's own, by the origin each slot object carries (DESIGN-DETAILS 14)."
+
+**§22, FS-8.** For "evacuation has dropped every dead record and its slots at 26 h": "evacuation has dropped every dead record and the slots it created at 26 h, and a slot a dead record listed and did not create stands". New schedule rows for 14.6's A to D, the two retokens, the stalled run and the late slot PUT, numbered by design-records, each under FI-1 and FI-6.
+
+**§22.8, the model row.** `details/EvsSlot.tla` beside `EvsCommit.tla`, with `run-slot.sh`.
+
+### 14.9 Owner questions
+
+Section 14 is built on the recommendation of each.
+
+1. **Where a slot's owner is written** (`details-14-slot-origin.md`). Options: (1) object metadata on slot/, written by evs, with evs-5's and §19.6's rows amended as QD-248 did for idx/ (the recommendation); (2) a field of `EvsSlotObject`, which changes a format-1 object before the freeze and shows the origin to every reader, and in exchange makes the ETag differ per owner; (3) slot ids in `EvsPidxEntry` and a GC of slot/ by the horizon, the question's option 3, which changes a format-1 object and closes A and B and not C; (4) evacuation never deletes a slot, which leaks every dead push's slots for the repo's life and closes neither C nor the exclusivity every other deleter rests on.
+2. **The interim first** (`details-14-interim-first.md`). Options: (1) land track 1 now and track 2 after it (the recommendation); (2) land track 2 alone, leaving A and B open in landed code until it is done.
+3. **The retoken's slots** (`details-14-retoken-takeover.md`). Options: (1) the takeover, 14.2.4, which keeps "a CLOSURE is uploaded and charged once" and costs a wait of up to 2 s and a Resolve in the push route on that path (the recommendation, since the brief requires it); (2) no takeover: a retoken that meets its refused statement's slot is 409 SLOT_STALE and rebuilt, which removes 14.2.4, the settle wait and three twins, and charges a CLOSURE twice when a cut-over commits between its step 6 and step 7.
+4. **A deposit that cites** (`details-14-deposit-cited-slots.md`). Options: (1) 5h refuses, on a deposit ref, a version that names a slot its push does not introduce (the recommendation); (2) CONSUME deletes a slot only when its origin is the consumed deposit's statement, a HEAD per slot on a P0 path, which also guards a deposit committed before the rule; (3) both.
+
+**Question this section answers.** `evsb-m2-11-dead-record-shared-slot`: none of its options as stated. Its option 1 (the client never lists a slot twice) cannot bind a hostile client and would undo 9.2.5. Its option 2 (the slot carries its push id) is the idea taken, in object metadata rather than in `EvsSlotObject`, with step 6 and evacuation both reading it. Its option 3 (slot ids in pidx/) is not needed and does not close C.
+
+## 15. Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10)
+
+Status: complete (2026-11-12)
+
+Tasks held until complete: SEARCH-M10-17 and SEARCH-M10-28. Both build from this section, in the order 15.7 gives.
+
+Model: `sidecar/sidecartest/model/details/IndexErase.tla`, its configurations (`IndexErase.cfg`, `IndexErase-*.cfg`, `IndexEraseLanded-*.cfg`, `IndexEraseTwin-*.cfg`, `IndexEraseReach-*.cfg`) and `run-indexerase.sh` beside it. Questions filed: `.stack/questions/details-15-resting-diffs.md`, `details-15-reentry-at-the-limit.md`, `details-15-card-version.md`, `details-15-card-per-stream.md`, `details-15-erase-before-cut.md`, `details-15-context-fields.md`, `details-15-small-readings.md`. Question this section answers: `search-m10-46-erased-base-of-a-live-diff`, with its option 1 changed in three places (15.9). It builds on section 1's own bases (R1, R2), its journal and its backfill, and on QD-775's layout, which already drops an erased row in its step 1. It amends 1.2.3, 1.2.4, 1.2.5, 1.2.6, 1.2.8, 1.2.9, 1.3's I1, 1.7 and 1.8 (15.2.12), and changes no rule of section 7 or section 13.
+
+### 15.1 The problem
+
+An erasure is key destruction (§11.12). For the search index it is four kinds of push on the index's ref: a CUT, which adds the erasure's documents to the ref's erasure set, each "up to" a version, and moves the ref's index_epoch, so that every index push built before it is refused; CLOSUREs, which rewrite in place, at the same length and under a fresh key, each index file that holds a listed version; and ERASEs, which destroy the old keys. A CLOSURE may only replace committed file versions with shorter or equal ones, and evs takes one at the storage limit within its eraser's allowance (§11.13's wait row).
+
+Section 1 rebuilt everything else on that ref. A diff now rests on a full entry in another file of its own writer (R1), every push that writes a writer's file replaces that writer's head (R2), and I1 says that an honest writer's unabsorbed diff always has its base. Section 1 left the erasure "unchanged" (1.7), with one exception clause: a CLOSURE need not replace a head, since the CUT's epoch and `choose`'s rule that no diff rests on a listed version fence it. Seven things are wrong on the result. A, D, E and F are the brief's; B, C and G were found writing this.
+
+Terms for this section. The *listed version* L(k) of a doc_key k is the highest version at which the ref's erasure set lists it, 0 if it lists none. A *resting diff* is a diff of k whose base version is at or below L(k) and whose own version is above it.
+
+**A. The erased base of a live diff (`IndexEraseLanded-ErasedBase`, 6 states; `IndexRollup.tla`'s `cut-read` ground, 11).** File d is at version 1, and writer W's full entry of it sits in a sealed slot of W's. An admin's device reads d at 1 and builds a CUT listing d up to 1. W commits version 2, whose entry is a diff on 1, as R1 allows: the push names the epoch that only a CUT moves, so it commits. The CUT commits. It changes one file, the erasure set, so nothing orders it after the edit. A CLOSURE rewrites the sealed slot without version 1, as §11.14's erase row requires. W's diff now has no base; version 2 is not listed, so no reader masks or excuses it; 1.2.9 makes it `index_malformed` naming W, which wrote by the rules, and version 2 reads not yet searchable until a host with the text re-enters it. The two fences bind pushes built after the CUT, and this push was built before it and committed before it. A message never changes, so mail cannot meet this; files and git-mode refs can.
+
+**B. A resting diff is erased content, found here (`IndexEraseTwin-KeepResting`).** A diff's body is the keys its version adds to its base's set and the keys it removes (INDEX-FORMAT.md's entry). Whoever holds a resting diff of d at 2 on 1 and the full set of version 2, which is not erased and which the index must keep, has the erased set: keys(1) = (keys(2) less the added keys) with the removed keys. So an answer that leaves the diff in place and only stops the alarm, which options 1 and 2 of the filed question both do as worded, keeps the erased version's postings under an openable key for as long as the slot stands, in an absorbed slot as well as a live one. FI-19 and I-EVS-13 forbid that.
+
+**C. A merge between the CUT and any repair loses the version, found here (`IndexEraseTwin-MergeDropsResting`, 7 states).** `indexMergeCandidates` as landed leaves a resting diff out before it composes anything, whether or not its base still stands, and raises the writer's watermark over its slot. A merge built after the CUT and committed before the eraser acts therefore leaves version 2 in no shard and in no file a reader scans, with no alarm: a search for it answers no match, not "not yet searchable".
+
+**D. A run card cannot come back (`IndexEraseTwin-SeqVersion`, 8 states).** §16.8 has the CUT list "each run card holding it, at its current version" and the CLOSUREs "re-project each run card that holds the entry". RECORD.md 7.4 makes a card's version the highest seq of the entries folded. Fold the card again without the erased entry and its version is the same, or lower when the erased entry was the newest: the set masks it at every reader, §11.14's epoch row forbids any push to write it, and a CLOSURE can only remove. An ended run's card never returns to search, where §16.10 and FS-80 say it does.
+
+**E. A projection can bring the text back (`IndexEraseTwin-SeqVersion-Late`, 6 states; `IndexEraseTwin-NoSync`, 6; `IndexEraseTwin-CutFirst`, 5).** The CUT lists the card up to the version its eraser read. A projection that folds one more entry and lands between that read and the CUT has a higher version: it is not listed, no CLOSURE takes it, and it holds the erased text for good. After the CUT, a device that still holds the entry's plaintext and has not yet applied the ERASE projects the card at the new epoch with the erased entry in it; nothing in the set tells it which entry to leave out, since the set names documents, not entries. Where the CUT precedes the ERASE, as SEARCH-M10-16's plan entry orders them for every caller, even a device that has just read the erasure ref can still open the entry.
+
+**F. No push is defined to carry a card, and a card has no ref.** 1.2.8 gives a companion push's documents by path, and a reproducer rebuilds every file of a push or raises `index_mismatch`. A card is not a path. Its doc_key needs a ref_id, `IndexDocumentSource.IndexDocuments` visits one ref at one version, and §16.10 and RECORD.md say "one run card per run" of a log, whose entries two ingesters may hold in two streams (RECORD.md 5.4's twice row). §16.10's "at most once every 5 min while the run moves" is a device's timing, which no reproducer can derive. Coverage and backfill have no rule for a card.
+
+**G. Two honest builders can write two cards at one version, found here (`IndexEraseTwin-NoBlock`, 8 states).** 1.2.9 lets a reader test a diff against any copy of its base's version, because copies of one version are equal. "The highest seq folded" does not make them so: an ingester's stream can hold a run with a gap that another ingester's stream fills, and a builder that has applied an ERASE cannot fold an entry that a builder which has not still folds. A diff composed against the other copy then fails its row's trigram count, and an honest writer reads `index_malformed`.
+
+**The requirement.** I1 holds for every honest writer under a CUT that lists what its eraser read, and an edit that survives an erasure stays searchable at every step. No stored index version keeps an erased version's postings under an openable key (FI-19, I-EVS-13), a resting diff's among them. A card is searchable again after an erasure, without the erased text, at a version every reader and reproducer derives alike, and no projection built after the CUT holds an erased entry. One push carries a card, and coverage counts it. No message of format 1 or 2 changes, and evs's rules for a CUT, a CLOSURE and an ERASE stand as built.
+
+### 15.2 The design
+
+#### 15.2.1 The principle
+
+Three ideas.
+
+**An erasure re-enters what it would take out of search.** Before its first CLOSURE on an index ref, the eraser writes, as full entries in its own head on that ref, each version that would otherwise be left with nothing a reader can resolve: the version a resting diff carries, composed from the diff and its base as a merge composes them, with no content read; and each listed run card, folded again from its stream without the erased entries. This is the shape of a DROP's rewrite, which enters the kept head's composed version full in the signer's own head (1.2.3), made into a push of its own because a CLOSURE may create nothing.
+
+**Whatever gives the erased set back is erased with it.** A CLOSURE's rewrite of a slot removes every listed entry and every diff that rests on a listed version, and the erasure's list of files takes in every file that holds such a diff. Readers, merges and roll-ups resolve a resting diff through its base while the base stands, and pass over it in silence once the base is gone, so no step of an honest erasure alarms an honest writer.
+
+**A derived document's version carries the index epoch.** A run card's version is the index_epoch its push names, above the stream version of its run's newest entry. A CUT lists a card through the epoch it names, which covers every projection made before the CUT whatever landed after its eraser read, and every projection made after it is above the list. The erasure destroys the entry's body before its CUT, and a builder that reads a new epoch reads the erasure ref before it folds, so no projection at or above the CUT's epoch can hold the entry. A card is a function of one stream at one version and of the erasures whose CUT precedes its epoch, so a companion push carries it, a backfill covers it, and a reproducer rebuilds it.
+
+#### 15.2.2 Terms
+
+```text
+L(k)             the highest version at which the ref's erasure set lists doc_key k (IndexErased.version), 0 for
+                 none; a version v of k is listed when v <= L(k) (`indexView.erased`, as landed)
+resting diff     a diff entry of k, in any slot of any writer, absorbed or not, with base version <= L(k) and
+                 own version > L(k). Diffs sit only in slots (1.2.3)
+excused          a resting diff whose base no file of its writer holds (1.2.1's base of a diff). An excused diff
+                 breaks no format and alarms nothing
+cover of (k, v)  an entry of k at a version >= v that a reader scans and that is not a resting diff: a row or a
+                 tombstone of a bucket shard or an all shard; an entry in a head, a sealed slot or an unabsorbed
+                 large entry (a full entry, a tombstone, or a diff that is not resting)
+owed (k)         for a key k with a resting diff at the list's head: v* = the highest version among k's resting
+                 diffs; k is owed at v* when no cover of (k, v*) stands
+re-entry         a full entry of an owed key at its owed version, or a run card folded again, in the eraser's own
+                 head (15.2.4)
+stream R         one ref of a record log that holds entries; an owned stream takes only its sidecar's pushes
+                 (§11.8), so R has one writer, W_R
+source entry     an entry of one of the kinds RECORD.md 7.4's sources row names for the log's card (a vault:
+                 context, tool_call, change, transcript; a team record: context, change, approval, publish,
+                 route, reach, coverage)
+card (R, r)      the run card of run r in stream R: the derived document named run/ || run_id under R's ref_id
+E                the index_epoch a push names: the version of the index ref's newest CUT before it (11.8's 5d)
+c(R, r, p)       the highest entry version, among the source entries of r that R holds at version p, erased or
+                 not: the stream version at which the run last changed in R
+erased at E      an entry is erased at epoch E when an ERASE names it, by its key row or, through its sealed note,
+                 by its entry_id (RECORD.md 8's every copy), and that ERASE's erasure has a CUT on the log's
+                 ur/index that named an epoch below E
+blocked          a card whose builder cannot open one of its source entries because an ERASE has taken its key,
+                 where that entry is not erased at the builder's E
+```
+
+Whether an erasure has a CUT below E is read from two places, and no third is needed. The erasure set at the push's base lists it: then its CUT named `IndexErasure.epoch`, and E is above that. Or the set does not list it and one of its ERASEs' notes says complete: then a later CUT dropped it, which a CUT does only for a complete erasure whose own CUT named an epoch below `listed_since` (§11.12's cut row), and E is at or above `listed_since`. An erasure that the set does not list and no ERASE completes has no CUT below E.
+
+#### 15.2.3 The erasure's list
+
+§11.14's erase row has the eraser list, at a head at or after its CUT, every index file holding one of its documents. The list gains the resting diffs, and the row's history clause with it:
+
+```text
+list(index ref I, erasure X), at a head b at or after X's CUT:
+  for each doc_key k that X lists, in every bucket and in all:
+      held(k)    = every file with an entry of k at a version <= L(k): each writer's slots and large entries,
+                   absorbed or not; the bucket shard holding its row; the all shard holding it (I-EVS-11)
+      resting(k) = every slot with a resting diff of k
+  the files to rewrite = held(k) and resting(k), over X's keys: one rekey object each (§11.13's wait row)
+  the keys to destroy besides = the key of every index path whose retained version holds an entry of k at or
+      below L(k) or a diff of k on a base at or below L(k), found from the ref's history as §11.14's erase row
+      finds a held version, a reused slot, a shard the document left and a rolled bucket
+```
+
+**No later push lengthens it.** After the CUT every index push names its epoch or a later one, so its builder has applied the set: it writes no entry of k at or below L(k) (§11.14's epoch row), and `choose`'s B leaves a listed version out, so it writes no diff on one. A writer's push that seals its head as it stood (R2) writes the head's bytes again at the same path, which is a new version of a file already on the list; the CLOSURE for that path then gets 409 and rereads it, as the erase row has it. A merge or a roll-up after the CUT drops a listed row in its layout's step 1 (QD-775) and writes none.
+
+**What a writer's own push does with a resting diff of its own.** Nothing new. `plan` keeps the entry in the head, since its version is not listed, and keeps its base's file, since an unabsorbed diff names it. The eraser acts whether or not the writer ever pushes again, so no rule is added to `plan`.
+
+#### 15.2.4 The re-entry push
+
+A re-entry push is an ordinary index push by the eraser's sidecar as a writer. It names the epoch, carries no flag, and is built in a companion push's order (1.2.6), so R5's pin argument covers it.
+
+```text
+reenter(index ref I, erasure X):
+  1 t = now, before any read
+  2 read I's head from evs: base b, index_epoch E, the erasure set, the eraser's own files and manifest row in
+    the bucket of t. The set must list X, else X's CUT is committed first (§11.12's reconcile row)
+  3 list(I, X) at b (15.2.3)
+  4 documents:
+      for each key k of X that is owed at b, at v*:
+          the resting diff of k at v*; of several, the one whose writer_sidecar_id is lowest, then the one in
+              the slot with the highest seq (copies of one version are equal, so the choice only makes the
+              push a function)
+          its base, by 1.2.1's rule, in that diff's writer's files; keys = the base's set with the diff's
+              delta applied, which must have the row's trigram count, as at a merge (1.2.4)
+          the document {kind full, key k, version v*, row: the diff's row, keys, replaces: 0}
+          a set that D6 skips under the diff's row (1.2.2; QD-760) is not entered, and reads as 1.2.9's
+              malformed row has it
+      for each run card X lists whose stream this device holds: 15.2.10's re-projection
+  5 plan(b, the eraser, t, documents, coverage) (1.2.3), where coverage is the rows of the eraser's newest head,
+    none moved; in key order, in pushes whose encoded entries stay within DirectBytes, so that none merges
+  6 send within IndexPushLife of t. On 409 for a path, 409 INDEX_EPOCH, 429 TIME_AHEAD or the life passing: from
+    step 1. On a quota refusal (§11.13's limit row): 15.2.5's wait
+```
+
+**Bounds on the eraser's head.** An erasure lists at most what one erasure set holds, 16,208 B, about 700 path documents of 22 or 23 B each beside its own 50 B, and owes at most one version a document. A re-entered entry is a full entry: in the head when it is within EntryMax, else a large entry of its own, by `plan`'s rules and under its caps (RingSlots, KeepSlots, SlotCount, the seal, a merge first at a ninth other slot). The eraser already holds every file it lists, so it can merge. A push is at most DirectBytes of entries, 256 KiB; 700 entries of 8 KiB are 22 pushes, and the case this section expects is one entry.
+
+**Why the composed entry is the document.** The diff's row is the row of version v* and its delta was taken against the base itself (1.2.3), so the composed set is the key set extraction gave for v*. A host with the text checks the entry against its path's state, as it checks any entry of a push that moves no coverage row (1.2.8). The entry holds nothing of the erased version: its keys are v*'s.
+
+**Which bucket.** `plan`'s: the bucket of t, or the newest bucket already holding an entry of the document where that is newer (D-EVS-45's move, which the eraser can always make, since its list read those buckets). A re-entry in a newer bucket than its resting diff is found by newest-wins like any entry. It cannot land below a version a roll-up has moved or dropped (I5): an entry of k above v* would be a cover, so none stood at b, and one committed after b cannot be rolled within IndexPushLife (1.2.6's argument).
+
+#### 15.2.5 CLOSUREs, their order and the storage limit
+
+```text
+clean(file, set):
+  a slot or large entry   the file without each entry e with e.version <= L(e.key), and without each diff e with
+                          e.base_version <= L(e.key); entries in key order as before; the header's count and
+                          body length set; padded to the replaced version's exact length (§11.14's pad row)
+  a shard                 as §11.14's erase row has it: without each row and tombstone of a listed version
+```
+
+A CLOSURE push replaces each file it names by `clean` of the version it replaces, and nothing else. It is a function of the replaced files and the erasure set at its base, so a reproducer checks it as §11.14's reproduce row says and raises `index_mismatch` naming the CLOSURE's signer on one that left a listed entry or a resting diff in a file it rewrote.
+
+**Order on one index ref.**
+
+```text
+1 the CUT (§11.12), then list(I, X)
+2 reenter(I, X) until no key of X is owed and every listed card this device can fold stands (15.2.10)
+3 CLOSURE and ERASE pairs over the list, sized to the allowance (§11.13's wait row), in path order
+4 the erasure's last ERASE says complete, as today
+```
+
+No CLOSURE of X rewrites a file of resting(k) or the file holding the base of one of k's resting diffs while k is owed. That is the whole ordering rule for a path document: once k is not owed, its files go in any order, and between a CLOSURE that takes a base and the one that takes its diff the diff is excused (15.2.6). A run card's files never wait: a listed card is removed whether or not it has been folded again (15.2.10).
+
+**At the storage limit, or while the network is spent.** evs takes the CUT, the CLOSUREs and the ERASEs (§11.13's limit row) and refuses the re-entry push, which adds payload. Then:
+
+```text
+a key that is owed     its resting(k) slots and the files of their bases wait, with their ERASEs, until evs takes
+                       the re-entry; every other object of the erasure goes on. The base stays masked from the
+                       CUT (§11.14's cut row) and stays openable to key holders meanwhile
+a listed card          its CLOSUREs and ERASEs go on; the card is out of search until evs takes a re-projection
+                       (15.2.10)
+retry                  the re-entry is sent again at each turn of the eraser's allowance and at least every
+                       IndexErase.ReentryRetryInterval (10 min), and §5.4's erasure event shows `waiting` with
+                       the count of documents to re-enter
+```
+
+How often a key waits: the edit must commit in the seconds between the eraser's read and its CUT, and the network must then reach its limit, or be spent, in the seconds before the re-entry, which is the eraser's next push after the CUT. At the limit itself no content push commits, so no edit can make a resting diff there. 15.9 puts the choice to the owner.
+
+#### 15.2.6 Readers, merges and roll-ups
+
+```text
+a reader (1.2.9)   resolves a diff in one step from its writer's other files, through a listed base while that
+                   base stands: the base's set is used to compose and for nothing else. A diff whose base no
+                   file holds is excused when it is a resting diff: no candidate, no alarm, nothing shown as not
+                   yet searchable on its account. Any other baseless unabsorbed diff is index_malformed, as today
+a merge (1.2.4)    leaves out every entry at a listed version, a diff by its own version, as today. A full entry
+                   at a listed version is still the base of a resting diff while it stands: the diff is composed
+                   onto it and its version is a candidate. An excused diff is left out and alarms nothing
+a roll-up (1.2.5)  the same two rules in its step 3
+```
+
+Why a merge composes through the base rather than leaving the diff out: a merge raises the writer's watermark over the diff's slot, after which no reader scans it. If the merge left the diff out, the version would be in no shard and in no scanned file until the eraser's re-entry, and C is that window. Composed, the version is in the shard, the shard's row is a cover, and the eraser owes nothing for it.
+
+A reader needs no history for the excuse. It holds the erasure set, since it masks by it, and the test is the diff's own base version against L(k).
+
+#### 15.2.7 Resume
+
+§11.12's reconcile row stands: the eraser's device at its next start, another device of its member 25 h after its CUT or last ERASE, any device that may erase once the eraser is revoked, reaped, suspended or parked. Each step above reads only evs's state, so a resumer runs them as the first eraser would:
+
+```text
+the CUT            committed by the resumer where a crash or a full set left it missing (reconcile row)
+the list           taken again at the resumer's head
+re-entries         owed is judged at that head. A version the first eraser entered is a cover, in that eraser's
+                   head, so it is not entered twice; one it had not entered goes into the resumer's own head
+an owed key whose  cannot arise from an honest eraser, which rewrites no base while its key is owed. A resumer
+base is gone       that meets one enters nothing for it, removes the diff with the rest, and the version is left
+                   to a host with the text, as 1.2.9's malformed row has it for any lost entry
+pairs              first an ERASE for each CLOSURE no ERASE followed, then the rest (reconcile row)
+```
+
+The first eraser's head stays where it is when its device is revoked: its entries are ordinary entries of that writer, absorbed by the next merge that reads its sealed slots.
+
+#### 15.2.8 The run card: identity, fold and version
+
+```text
+identity   card (R, r): doc kind derived, name run/ || run_id, chunk 0, doc_key under R's ref_id (§11.14's key
+           row), the row's ref_id R's, the locator the name. One card a run a stream
+writer     W_R, the stream's writer: the capturing daemon for its own stream, the ingester for the stream it
+           ingests into (RECORD.md 5.4's index row). Others write it only as a backfill or a re-entry
+fold       fold(R, r, p, E) = the source entries of r that R holds at p, less those erased at E, in the order
+           (seq in their writer's chain, then entry_id bytes). RECORD.md 7.4's mapping over them, "first" and
+           "newest" read in that order, gives the row and the text; where 7.4 takes "the newest context", it is
+           the newest among the entries folded. A fold with no entry is no document
+version    E * 2^32 + c(R, r, p), E the index_epoch the push names. The split is
+           IndexFormatSettings.CardVersionBitCount, 32. A stream version or an epoch at or past 2^32 writes no
+           card (errIndexCardVersionSpace), and R's pin stops below it, so its run reads not yet searchable
+replaces   for 1.2.3's choose: the version of this writer's newest entry of the card in its own files at the
+           push's base, 0 where it has none or the set lists it
+```
+
+**Two streams, two cards.** Two streams of one log that hold entries of one run, as two ingesters' streams can (RECORD.md 5.4's twice row), give two cards, each the fold of what its own stream holds, as two copies of one entry are already two documents under two refs (RECORD.md 7.1's row). §16.10's group row joins them by field 10: the run's started is the earlier of the two, its last activity the later, its title and fields the card's whose row time is newer. A card is thereby a function of one ref, which is what `IndexDocumentSource.IndexDocuments(refVersion)` visits and what a coverage row names.
+
+**Why the stream version and not the seq.** c is read from R's state at p by any device, with or without the bodies, and it grows with every entry the run gains in R, in whatever order an ingester wrote them. The highest seq folded does neither: a stream that holds a run's entries 1 to 64 and 129 to 192 and later gains 65 to 128 has two folds at seq 192.
+
+**Why the epoch.** Compared as numbers, versions order by epoch first. Every index push names the epoch in force (11.8's 5d) and a CUT moves it, so "made before this CUT" is a range of versions: everything below (the CUT's version) * 2^32. Nothing else on the index ref separates the projections a CUT must list from the ones that follow it, and the eraser's read of "the current version" cannot (E). An unrelated CUT on the same ref also moves the epoch; a card it does not list keeps its entry and its version, and its next projection is above both.
+
+**What decides a card's bytes.** R's source entries of r at versions at or below c, with their bodies; E; and which of those entries are erased at E. Entries of a stream are created and never changed, and 15.2.10 keeps a BASE from removing one whose erasure is not complete, so the first is the same for every device that reads R at or after c. The third is the same for every builder that names E (15.3's I12). So two entries of a card at one version are equal, as 1.2.9 needs.
+
+**An entry document's fields 9 and 11.** RECORD.md 7.1 fills them, for an entry that is its own document, from "the run's first context entry in this log". Read for a copy in stream R at a push with pin p and epoch E: the first, in the fold's order, of the run's context entries that R holds at p and that are not erased at E; empty if none. An entry document whose builder cannot open that context entry while it is not erased at E is blocked as a card is, and holds R's pin the same way. An erasure of a context entry does not list the run's other entry documents: a row written before it keeps the agent label and the session ids it read, which are names the run's other entries carry in their own bodies (a handoff names an agent label, RECORD.md 4.3), and a rebuild at a later epoch writes them from the next context entry or empty. So two copies of an entry document at one version can differ in those two fields across an erasure's CUT, and nowhere else. Nothing rests on their equality: an entry's path is created once, so no diff has an entry document as its base, and newest-wins shows either. `ur record erase`, listing what it will destroy (RECORD.md 8), says for a context entry how many of the run's other entry documents keep its label and session ids. 15.9 puts this to the owner.
+
+#### 15.2.9 The card's carrier, coverage and backfill
+
+A card rides its stream's index pushes on the log's `ur/index`: W_R's companion push, a backfill, or a re-entry. 1.2.6 gains, for a record log:
+
+```text
+the journal
+  unit      a unit of stream R at version c holds, beside the entry documents its log indexes (RECORD.md 7.1's
+            documents row), one card marker {doc_key, name} for each run that a source entry created at c
+            belongs to. A marker has no version, row or key set: its card is folded at the build. It adds
+            nothing to the device's local overlay (the search row), so a card is as fresh as its last push,
+            which is §16.10's cadence
+  again     a unit {R, run_id, erasure_id} with no version, appended when this device applies an ERASE that
+            names a source entry of the run in R and the device holds R's entries: W_R; the eraser; an indexer
+            serving the repo for search; where none serves it, a desktop or daemon that mirrors the log
+            (§11.14's coverage row names the same devices for a backfill)
+  ApplyCut  removes no marker and no again unit: a card's version is assigned at the build, above every
+            version a set lists
+
+a companion push
+  when      for a record log the interval is RecordSettings.CardInterval (5 min) in place of
+            Search.CompanionInterval; a build is also due at once when a unit holds a run's first source
+            entry or the coverage entry that ends it (§16.10's start and end)
+  2a        where this build may carry a card and E is not the epoch at which this device last did this step
+            for the log: read the log's `erasure` ref's head from evs, not from a cache, bring the replica to
+            it and apply every ERASE (§11.12's after row); then record E beside the journal. The read comes
+            after step 2's
+  4         per run with a marker among R's due units: one card, fold(R, r, p_R, E), a put at
+            E * 2^32 + c(R, r, p_R); a fold with no entry gives nothing. A marker is dropped as covered as a
+            path's unit is: a horizon row for R at the push's base is at or above its c
+  blocked   where the card of a marker is blocked (15.2.2), R's pin for this build is one below the lowest c
+            of a due unit holding a marker of a blocked card. Units above it stay committed, and where none is
+            at or below it R gives this build nothing
+  again     an again unit is due when its erasure has a CUT below E and, on a device other than that
+            erasure's eraser, t is at or past the erasure's cut_ms + BackfillAge while the set lists it. It is
+            dropped as covered when the device's copy of the index holds an entry of the card at an epoch
+            above the erasure's `IndexErasure.epoch`, or, where the set no longer lists the erasure, at or
+            above `listed_since`. Else it gives the card as a marker does. Before its erasure has a CUT below
+            E it waits
+  5         coverage as today; a build that carries only again units moves no row
+
+a backfill
+  4         documents gain: for each run whose newest source entry at p_R was created by an unindexed version
+            at or below h, its card, fold(R, r, p_R, E) at E * 2^32 + c(R, r, p_R). A run that changed again
+            after h is left to that change's own push. h also stays below the first version whose card is
+            blocked
+```
+
+**Coverage counts a card as it counts a path.** A version of R is indexed when a coverage row for R reaches it (§11.14's coverage row): the push that carries that row holds the entry documents of every version up to it and the card of every run those versions touched, each at its state at the pin. A version that adds only entries that are neither documents nor sources adds a unit with no document, and the build still raises the row (1.2.6). A run that is blocked holds its stream's row below its first blocked version, so its later entries read not yet searchable until the CUT lands; other streams and other repos are not held.
+
+**The cadence is no input.** Whichever push covers (q, p] carries the card at p of every run touched in it, so a reproducer derives the card from the push and never from a timer. §16.10's "at most once every 5 min while the run moves" is the interval above. A build that the device makes sooner, because its head would seal or it is about to sleep, carries the cards due then too.
+
+**Reproduction.** 1.2.8's table gains:
+
+```text
+a card            fold(R, r, p, E) at E * 2^32 + c(R, r, p): R's source entries of the run at p with their
+                  bodies; the push's index_epoch; the erasure set at the base and the notes of the ERASEs of
+                  each erasure with a CUT below E; record extractor 1 (RECORD.md 7.4)
+a re-entry push   15.2.4's documents, from the listing at the push's base and, for a card, as above
+```
+
+A card's version names its own inputs: its low 32 bits are c, and no source entry of the run lies in R between c and the pin, so fold(R, r, p, E) is the fold of R's entries of r at or below c; its high bits are E. A card in a push that moves no row, an again unit's or a re-entry's, is therefore checked from the entry alone (1.2.8).
+
+A reproducer checks a card later than its builder made it, and may hold ERASEs the builder did not. For each source entry it cannot open: where the erasure set at the push's base lists that entry's erasure, the entry was erased at E and is left out. Where it does not, the reproducer cannot tell an erasure dropped before the base from one whose CUT came after it, so it folds without the entry: equal bytes pass, and unequal ones mean it lacks an input, since the builder may have folded the entry before the ERASE reached it. It then fetches the file and raises nothing (§11.14's reproduce row). One that can open every entry the fold names and builds other bytes raises `index_mismatch` naming the push's signer.
+
+#### 15.2.10 A card through an erasure
+
+```text
+erase(log, entries), by a device that may erase them (RECORD.md 8):
+  1 read every stream and deposit ref of the log to its head; find every copy of each entry (RECORD.md 8)
+  2 ERASE every copy's key row and each deposit slot that RECORD.md 8 names, in as many pushes as their keys
+    take. The bodies are gone from here. Each ERASE's sealed note is the erasure's ErasureBody, naming
+    the entry ids, as landed (record_erase.go). No ERASE of this step or the next says complete: an
+    erasure is complete only after its CUT
+  3 read the streams' heads again; ERASE a copy found now, as step 2
+  4 IndexEraser.Cut on the log's ur/index:
+        a copy that is a document   {its doc_key, its path's entry version}
+        card (R, r), for each       {its doc_key, through the epoch}: the CUT writes
+        stream R holding a copy     (the epoch the CUT names) * 2^32 + 2^32 - 1 as its version, so every
+        of a source entry of r      version of that epoch or an older one, and writes it again on a rebuild
+                                    after 409 INDEX_EPOCH
+    A full set makes this step wait (§11.12's cut row), and steps 5 to 7 with it
+  5 reenter(ur/index, X) (15.2.4): each listed card is folded at its stream's head, fold(R, r, head, E), and
+    entered full at E * 2^32 + c(R, r, head) in the eraser's own head. A fold with no entry enters nothing. An
+    eraser that does not mirror the log fetches the run's source entries for it, at most
+    IndexErase.CardFetchByteCount (16 MiB) a card, and past that enters nothing
+  6 IndexEraser.Rewrite: the list and the CLOSURE and ERASE pairs (15.2.5)
+  7 the erasure entry (§16.8)
+```
+
+Step 4 lists a card for every stream that holds a copy of a source entry, whether or not the index holds that card yet: a projection in flight is then listed too. An erasure none of whose entries is a document or a source entry has nothing to list and takes none of steps 4 to 6, as today.
+
+**The fence.** Let X erase entry e, and let its CUT name epoch E_X. Every index entry of a card whose fold holds e was written by a push naming an epoch at or below E_X, so X's CUT lists it. A push naming a higher epoch names the version of X's CUT or of a later one. Its builder therefore read `ur/index`'s head after X's CUT committed, and at step 2a then read the `erasure` ref's head from evs and applied it. X's ERASEs of steps 2 and 3 committed before its CUT was built. So the builder had destroyed its plaintext and its key of e, and e was erased at its epoch: it could not fold e, and the rule did not let it. The same holds of a backfiller, a re-entry and a rebuild, which build by the same steps. What it rests on: the order of steps 2 to 4 on the eraser; step 2a's read coming after step 2's; and evs's refusal of an index push that names another epoch than the head's (I-EVS-17).
+
+**Between the ERASE and the CUT.** A builder that has applied the ERASE holds a blocked card and builds none; one that has not still folds e, at the old epoch, which the CUT will list. No two builders write different cards at one version. A device that applies an ERASE of a source entry it holds also masks the entry's card whole in its own searches, from that moment until it applies a set version that lists the card; from then the listed versions are masked and no others. The window is one push for an erasure that is not waiting on a full set. Until the CUT, a device that has not applied the ERASE still finds the card's old versions, as it would under the other order, where the CUT waits on the same room in the set; here the body is already gone.
+
+**Who folds the card again.** The eraser, at step 5, at once. Every other device that held the stream's entries when it applied the ERASE has an again unit (15.2.9), which it builds BackfillAge after the CUT unless the index already holds the card above the list. So a card whose eraser could not enter it (a phone past CardFetchByteCount, a crash before step 5, a quota refusal at the storage limit) is entered by its stream's writer or a mirror, and an erasure's `complete` does not wait for it: complete is every key gone (§11.12), and step 6 runs whether or not step 5 could. A card has no resting diff: one would have a base below the CUT and a version above it, and `choose` takes no listed base.
+
+**A copy that arrives late.** RECORD.md 8 has a log admin's daemon ERASE, under the same erasure_id, a live copy of an erased entry that it reads at a later sync. It then runs steps 4 to 6 for that copy: IndexEraser.Cut called for an erasure the set still lists adds the copy's documents to that erasure's entry, and where the set has dropped it adds the entry again; the card of the copy's stream is listed through the epoch that CUT names. Until then the card's next projection already leaves the entry out, since its builder holds the ERASE, and newest-wins shows that one.
+
+**A BASE waits for the erasure.** The weekly BASE (RECORD.md 8's expiry row) removes from a stream only entries whose erasure is complete. An entry file removed earlier would change what a builder that has not applied the ERASE reads at a version it shares with one that has.
+
+**Masks at a reader.** A key the set lists is masked at or below L(k), whether or not an ERASE names it. A key that an ERASE names and no set version the device holds lists is masked whole, until a set version lists it or, as today, the rewritten files are cached. So an edit that survives an erasure, and a card folded again, show as soon as they are synced.
+
+**The directory.** §16.11's announcement documents keep their rule: a directory erasure removes an announcement's document whole and folds nothing again, and an announcement's version stays the Announcement's.
+
+#### 15.2.11 Settings
+
+Every limit is a settings field (QD-702). A field marked format is one every device must hold alike, as `IndexFormatSettings`' others are.
+
+```text
+IndexFormatSettings.CardVersionBitCount   32       format: the low bits of a card's version that hold c
+IndexEraseSettings.ReentryRetryInterval   10 min   between tries of a re-entry push that a quota refused
+IndexEraseSettings.CardFetchByteCount     16 MiB   the most source-entry bytes an eraser that does not mirror
+                                                   the log fetches to fold one card again
+RecordSettings.CardInterval               5 min    as landed: now the companion interval of a record log
+BackfillAge, DirectBytes, IndexPushLife            section 1's, used here unchanged
+```
+
+#### 15.2.12 Amendments to section 1
+
+Each place is marked "(amended 2026-11-12, section 15)" where it stands.
+
+```text
+1.2.3   The exceptions: a CLOSURE's two fences bind pushes built after the CUT; a diff that landed before it on
+        a version the CUT then lists is a resting diff, which 15.2.4 re-enters and 15.2.5 removes
+1.2.4   merge: a full entry at a listed version is still the base of a resting diff while it stands; an
+        excused diff is left out and alarms nothing
+1.2.5   roll-up step 3: the same
+1.2.6   the journal's card markers and again units; ApplyCut removes neither; a record log's interval; step 2a;
+        step 4's cards, blocked pin and again units; a backfill's cards
+1.2.8   a companion push's documents on a record stream; a card's and a re-entry push's inputs
+1.2.9   chains and malformed: a diff resolves through a listed base while it stands; an excused diff is no
+        candidate and alarms nothing
+1.3     I1's statement and its proof's last sentences
+1.7     the note for SEARCH-M10-17
+1.8     the proposed I-EVS-18, in I1's amended wording
+```
+
+### 15.3 Invariants and why they hold
+
+```text
+I1 own bases       (amended) every diff in an unabsorbed slot whose base version the erasure set does not list
+                   has its base, a full entry of its key, in another file of its own writer in its bucket
+I9 survivors       for each key, the newest version above L(k) that the index holds is one a reader resolves:
+                   a full entry, a shard row, or a diff whose base stands. No step of an erasure, and no merge
+                   or roll-up beside it, lowers it (FI-18 through an erasure)
+I10 erased gone    once an erasure's last ERASE commits, no stored version of an index file under an openable
+                   key holds an entry of one of its documents at or below L(k), a diff resting on one, or a
+                   version of a card that folds an entry it erased (FI-19, I-EVS-13)
+I11 the card fence an index entry of a card whose fold holds an entry that erasure X erased was written by a
+                   push naming an epoch at or below the one X's CUT named, so X's CUT lists it
+I12 one fold       two index entries of one card at one version hold one fold, so copies of one version are
+                   equal for a derived document as for a path's (1.2.9)
+I13 a card returns once a device that holds the stream has built after X's CUT, the index holds an entry of
+                   the card above X's listed version whose fold holds no entry erased at its epoch, and no
+                   CLOSURE of X removes it
+I8 a function      (extended) a card, a re-entry push's files and a CLOSURE's files are functions of 15.2.9's,
+                   15.2.4's and 15.2.5's inputs
+```
+
+**I1.** Section 1's induction stands for every push built after a CUT: `choose` takes no listed base, so such a push adds no diff whose base version is listed, and the amended statement asks nothing of a diff whose base version is listed. For a diff whose base version is not listed, the only new step is a CLOSURE, and `clean` takes from a file only listed entries and resting diffs: it removes no full entry at an unlisted version, so it removes no base that the statement protects. Before the CUT nothing is listed and the statement is section 1's. What changed is which diffs are excepted: section 1 excepted "a document the erasure set lists", which excused version 2 of A's file only by reading "lists" as "lists at any version"; the chain reader read it by the diff's own version and alarmed. The exception is now by the base's version, on both sides. Model: `OwnBases`; `IndexEraseLanded-ErasedBase` is the old reading; `IndexEraseReach-Excused` shows an excused diff standing between two CLOSUREs, which is why the exception is needed at all.
+
+**I9.** Let v be the newest version of k above L(k) that the index holds, and take the steps an erasure adds. The CUT raises L(k). If v's entry is full, or a diff on an unlisted base, nothing changed for it. If it is a resting diff, its base still stands, since no CLOSURE of this erasure has run and a writer keeps a base while an unabsorbed diff names it (1.2.1's kept), and a reader resolves through a listed base (15.2.6). A merge then composes it through the base into the shard, or leaves it for the eraser; either way a reader still finds v. The re-entry adds a full entry at v where no cover stood. Only then may a CLOSURE take the base or the diff (15.2.5's order), and from then v's cover is the re-entry, a full entry at an unlisted version, which no CLOSURE touches. A writer's next push of k replaces its head's entry of k by a full entry at a higher version, which is then the newest. An absorbed resting diff was composed into its shard when its slot was absorbed, because its base stood then by I1, so its version has a cover without any re-entry. Model: `Searchable`; `Composable` (what the eraser owes it can compose); twins `NoReentry`, `ClosureFirst`, `MergeDropsResting`.
+
+**I10.** The list holds every file with a listed entry or a resting diff at the list's head, and no later push adds one (15.2.3). Each such file is rewritten by `clean` under a fresh key, and the pair's ERASE destroys the old key, which every stored version of that path shared (§11.14's keys row); the ERASEs also name the key of every path whose retained version holds one, the resting diffs among them. For a card, I11 puts every version that folds an erased entry in the list. A re-entry holds nothing erased: a composed set is the surviving version's own (15.2.4), and a card folded again leaves out every entry erased at its epoch. Model: `ErasedGone`, `CardGone`; twin `KeepResting`.
+
+**I11.** 15.2.10's fence. Model: `Fence`; twins `CutFirst` (the CUT before the ERASE), `NoSync` (no step 2a), `SeqVersion` with `IndexEraseTwin-SeqVersion-Late` (a version without the epoch, listed as read).
+
+**I12.** A version fixes E and c. Every builder that names E folds R's source entries of r at versions at or below c less those erased at E. The entries are the same for each (15.2.8). "Erased at E" is the same for each: the erasures with a CUT below E are fixed by E, since a CUT moves the epoch; each such erasure's ERASEs of steps 2 and 3 precede its CUT; and every builder at E has applied them (step 2a). No builder folds fewer: one that cannot open an entry not erased at E is blocked and builds nothing. RECORD.md 7.1's determinism row then gives equal bytes. Model: `CopiesEqual`; twin `NoBlock`; `IndexEraseReach-Blocked`.
+
+**I13.** After X's CUT a builder's fold leaves out X's entries (I11's argument) and its version is at least (the CUT's version) * 2^32, above X's listed version. The eraser builds it at step 5; where it cannot, an again unit on each device that held the stream is due BackfillAge after the CUT. `clean` removes only listed versions. A later erasure of another entry of the run lists this version in turn and folds the card again. Model: `CardStands`; twin `SeqVersion`; `IndexEraseReach-Returns`, `IndexEraseReach-Twice`.
+
+**I8.** 15.2.4, 15.2.5 and 15.2.9 name each input, and each is on evs or in the push: the listing at the base, the set, the statement's epoch and time, the stream at its pin, the ERASE notes.
+
+**The model.** `IndexErase.tla` holds two specifications. `SpecPath` is one path document on an in-ref index: a writer that edits it with full entries and own-base diffs, seals its head, has its sealed slots merged and takes absorbed slots again, beside an eraser whose CUT lists the version it read (IndexRollup.tla's CutVersion "read"), re-enters, and rewrites one file a CLOSURE in any order. `SpecCard` is one card of one stream: the stream's writer, a backfiller and the eraser project it, devices apply ERASEs at any time, and erasures run one after another. A push is built and committed in one step, which the epoch guard justifies (IndexRollup.tla's `CutFences`); sizes, buckets, large entries, roll-ups, the journal and coverage are IndexMerge.tla's and IndexRollup.tla's and are not here. `IndexRollup.tla` and its `cut-read` ground are the data lane's and are not edited: 15.7 says what that lane changes for them to pass.
+
+Every run below is TLC at revision d8fb231 through `.stack/tools/tlc`, breadth-first, 4 workers, by `run-indexerase.sh details-15 all` from the track on 2026-11-12, on a host at a load average near 100. A design run goes to the end of its graph. A run that must fail stops at its first violation, so its trace length is fixed and the states it had counted by then vary with the workers; the table leaves those out.
+
+```text
+design, must pass                 specification   distinct states   depth   time        disk
+IndexErase                        SpecPath               27,460      19     4 s          1 MB
+IndexErase-Long                   SpecPath            1,029,883      27     1 min 12 s   126 MB
+IndexErase-Card                   SpecCard              181,881      22     12 s         29 MB
+IndexErase-CardLong               SpecCard            2,741,466      31     2 min 48 s   231 MB
+
+must fail, with                   invariant violated     trace
+IndexEraseLanded-ErasedBase       ChainsResolveLanded    6
+IndexEraseTwin-NoReentry          Searchable             6
+IndexEraseTwin-ClosureFirst       Searchable             6
+IndexEraseTwin-KeepResting        ErasedGone             8
+IndexEraseTwin-MergeDropsResting  Searchable             7
+IndexEraseTwin-CutFirst           Fence                  5
+IndexEraseTwin-NoSync             Fence                  6
+IndexEraseTwin-NoBlock            CopiesEqual            8
+IndexEraseTwin-SeqVersion         CardStands             8
+IndexEraseTwin-SeqVersion-Late    Fence                  6
+
+must reach                        the state                                               trace
+IndexEraseReach-Owed              after the CUT a version rests on the listed one alone   5
+IndexEraseReach-Reentered         the eraser enters a version in its own head             6
+IndexEraseReach-Excused           a resting diff stands after a CLOSURE took its base     7
+IndexEraseReach-ComposedThrough   a merge composes through a listed base                  7
+IndexEraseReach-Raced             a projection with the entry lands after the read        7
+IndexEraseReach-Blocked           a builder holds a blocked card                          6
+IndexEraseReach-Returns           an erasure ends with the card folded again              8
+IndexEraseReach-Twice             a second erasure lists the first's re-projection        14
+```
+
+The design configurations check `PathTypeOk`, `OwnBases`, `Searchable`, `ErasedGone` and `Composable`, or `CardTypeOk`, `Fence`, `CardGone`, `CopiesEqual` and `CardStands`. `IndexErase` runs d to version 4 through 3 seals, 2 merges, 2 reuses and 2 erasures; `IndexErase-Long` to version 6 through 4 seals, 3 merges, 3 reuses and 3 erasures; `IndexErase-Card` a stream of 3 entries, 2 seals and 2 erasures; `IndexErase-CardLong` 4 entries, 3 seals and 3 erasures. Each twin, landed and reach run is the smallest ground that shows its trace.
+
+**What the model does not show.** Liveness: that a re-entry is eventually sent is the eraser's loop and reconcile's resume, not a property TLC was given. The storage limit: a refused re-entry is the model's eraser not yet taking its `Reenter` step, during which every safety invariant holds and `ErasedGone` is not yet owed. Two writers holding resting diffs of one key, large entries and buckets: 15.2.4's rules for them are the one-writer rule applied to each file, and 15.6's unit tests carry them. Two streams holding one run: each card is the model's one card. An entry document's fields 9 and 11 (15.2.8): its blocked rule is the card's, and 15.6 has its unit test.
+
+### 15.4 Cost
+
+**A re-entry for a path document.** One full entry in place of a diff: 1.4 measured a source file of 29 KB to 137 KB at 1,894 B to 3,475 B of key set full, and a 1% edit's delta at 92 to 279 B. One push staging one head, at most 16,208 B, in an erasure that already stages a slot a rewrite. It reads no content and no file the list had not read. The case needs an edit of the erased document to commit between the eraser's read and its CUT, so most erasures owe nothing, and a mailbox's never do.
+
+**More files on the list.** Each slot holding a resting diff is one more rekey object, a staged record of at most 16 KiB against the allowance (§11.13's wait row: 64 MiB a UTC day, 4 MiB at the floor). §11.13's wait bound is unchanged in form: its objects are still whole files of at most 1,088 KiB, and B, the closure bytes left, counts the added slots.
+
+**A card's version.** E * 2^32 + c is 33 bits or more: 5 VByte bytes while E is under 8, 6 under 1,024, 7 under 131,072, against 1 to 3 for a seq. That is 3 to 5 B more in an entry and in a shard row a card, and a card's `IndexErased` is 26 to 28 B in the set against 22 or 23 for a path's, so a set of 16,208 B holds about 590 cards or 700 path documents beside an erasure's own 50 B.
+
+**A card folded again.** One full entry a listed card. A card's text is at most 16 KiB, so at most 16,382 distinct trigrams, about 33 KiB of key set at two bytes a gap, a large entry; a card of 2 KiB of text is a slot entry of about 4 KiB. A mirror folds from what it holds. An eraser that does not mirror fetches the run's source entries: a team record's are small (context, change, approval, publish, route, reach, coverage), a vault's include its tool calls and transcripts, which is what CardFetchByteCount bounds.
+
+**Step 2a.** One head read of the `erasure` ref from evs (§11.15: 250 ms at p50 on a desktop) at a device's first card build after each CUT on the log's `ur/index`, and the replay of the ERASEs it had not seen. A log with no erasure pays it once.
+
+**Blocked.** From an ERASE to its CUT: the eraser's next push, unless the set is full, when it is until the pending erasures complete (§11.12's cut row). Only a run with an entry in that state is held, and only on devices that have applied the ERASE.
+
+**Again units.** 48 B each in the journal. At most one a (device, run, erasure); each builds at most one entry, and the first to land covers the rest.
+
+**Erasure by expiry.** A daily pass that erases every entry of n runs lists n cards, 27 B each, and folds none again where nothing of the run is left: 590 runs a CUT. Section 15 adds nothing a run to that pass but the card's listing, which §16.8 already had.
+
+**The model.** The table in 15.3: the largest run is 2.7 million states, 231 MB and under three minutes; the 23 runs together took under six.
+
+### 15.5 Failure modes and recovery
+
+```text
+what goes wrong                               what holds                         recovery
+the eraser dies after its CUT, before the     readers resolve through the base;  reconcile's resume: the list,
+re-entry                                      I9, nothing removed yet            the re-entry in the resumer's
+                                                                                 own head, then the pairs
+it dies between a base's CLOSURE and its      the diff is excused; the           resume rewrites the diff's slot
+diff's                                        re-entry is the cover
+a merge lands between the CUT and the         it composes through the base; the  none needed: the version is
+re-entry                                      shard row is a cover               not owed
+the re-entry gets 409 for the eraser's head   nothing sent; built again from     from step 1
+or 409 INDEX_EPOCH (another CUT)              step 1 at the new head and set
+the re-entry is refused for quota             an owed key's files wait, masked;  retried every
+                                              all else goes on (15.2.5)          ReentryRetryInterval; the
+                                                                                 erasure event shows waiting
+a writer pushes a newer version of an owed    its full entry is a cover; the     the key is no longer owed
+key before the re-entry                       resting diff is replaced or stays
+                                              on the list
+a CLOSURE leaves a resting diff in a file it  reproducers build clean(file)      index_mismatch naming the
+rewrote                                       and compare                        CLOSURE's signer
+an eraser rewrites a base while its key is    the diff is excused, the version   a host with the text re-enters
+owed (not an honest one)                      unsearchable, no alarm             it at the path's next check
+                                                                                 (D-EVS-56); 15.9
+the eraser dies between its ERASE and its     bodies gone; cards blocked on      resume commits the CUT
+CUT                                           devices that applied the ERASE,    (§11.12's reconcile row)
+                                              shown from the index by others
+the set is full at step 4                     the same, until pending erasures   the CUT, then steps 5 to 7
+                                              complete
+a device that has not applied the ERASE       its push names the old epoch and   none needed
+projects the card before the CUT              the CUT lists it (I11)
+the same device after the CUT                 409 INDEX_EPOCH if built before;   none needed
+                                              else step 2a applies the ERASE
+the eraser cannot fold a card (no mirror and  its CLOSUREs go on; the card is    again units on the stream's
+past CardFetchByteCount; quota)               out of search                      writer and mirrors
+no device holds the stream's entries any      the card stays out of search; its  a rebuild from content, if a
+more                                          run's entries still read by id     device mirrors again
+a copy of an erased entry is ingested after   the card's next projection leaves  the late-copy CUT lists that
+step 3                                        it out; the old one is not listed  stream's card (15.2.10)
+a stream or epoch reaches 2^32                no card is written; the run reads  none: 136 years at a push a
+                                              not yet searchable                 second
+a reproducer has applied an ERASE the         it lacks an input                  it fetches, raising nothing
+builder had not
+a CUT lists a card the index never held       nothing to remove; the next        none needed
+                                              projection is above the list
+```
+
+**What is not recovered.** A device that kept an erased entry's plaintext against §11.12's after row can publish it again in a card; hosts that hold the stream rebuild the card and raise `index_mismatch` on its signer, and the entry's text is beyond recall as any copy an agent took is (§11.12's residual). An admin that erases dishonestly can make an honest writer's diff read malformed by rewriting a base and never its diff; the alarm then names the writer, and the CLOSURE that took the base is in the ref's history for whoever investigates.
+
+### 15.6 The test plan
+
+Unit tests, on the fake store unless said, named by the task that owns them (15.7).
+
+```text
+SEARCH-M10-17
+TestEraseListTakesRestingDiffs          a slot with a diff on a listed version is on the list, absorbed or not;
+                                        a diff on an unlisted version is not
+TestReentryComposesFromIndex            A's story to the byte: the re-entered entry equals extraction's full
+                                        entry of version 2, with no content read (a store that fails content GETs)
+TestReentryPrecedesClosure              no CLOSURE of an owed key's files is sent before the re-entry's 200
+TestReentrySkipsACoveredVersion         a newer full entry, a shard row, a tombstone, or a first eraser's entry
+                                        each make the key not owed
+TestReentryOfTwoWritersPicksOne         two resting diffs at one version: one entry, from the lowest writer id
+TestReentryAsLargeEntry                 a composed entry past EntryMax is a large entry of the eraser's
+TestReentryBatchesUnderDirectBytes      700 owed entries of 8 KiB go in pushes that never merge
+TestCleanRemovesListedAndResting        clean of a slot: exact bytes, the replaced length, count and body length
+TestClosureLeavesUnlistedBase           a full entry at an unlisted version survives every CLOSURE
+TestResumeReentersInItsOwnHead          a second device finishes after a crash at each step of 15.2.5's order,
+                                        entering once
+TestReentryRefusedForQuotaWaits         the owed key's files wait, the rest of the erasure completes, the event
+                                        shows waiting; on the limit lifting the erasure completes
+TestErasureLeavesNoRestingDiff          after complete, no file version under a live key holds a listed entry or
+                                        a resting diff, retained versions included (FS-78's sweep)
+FuzzEraseUnderEdits                     random edits, seals, merges and reuses beside an erasure at random
+                                        points: I1, I9 and I10 after every push
+
+SEARCH-M10-17's two fixes to landed code
+TestMergeComposesThroughAListedBase     evs_index_merge.go: the shard holds version 2 after a merge that follows
+                                        the CUT, and nothing of version 1
+TestMergeLeavesOutAnExcusedDiff         no malformed diff is reported for it
+TestChainExcusesARestingDiff            search_match.go: no unresolved entry, no alarm, and the re-entry is the hit
+TestChainStillAlarmsAnUnlistedBase      a baseless diff on an unlisted version is index_malformed as before
+TestMaskYieldsToTheSet                  search_mask.go: an ERASE's whole-key mask ends when a set version lists
+                                        the key; a version above L(k) shows
+
+SEARCH-M10-28, the card
+TestCardKeyIsPerStream                  two streams of one log holding one run: two doc_keys, two rows
+TestCardVersion                         E * 2^32 + c for E 1, 7, 1,023 and c 1 and 2^32 - 1; 2^32 refused
+TestCardFoldOrder                       entries out of seq order in the stream fold in seq order
+TestCardIsAFunction                     two devices, one stream, one epoch: equal bytes; a gap filled later
+                                        changes c and the version
+TestCardRebuild                         FS-80: a rebuild writes each card's bytes again at the build's epoch
+TestCardSkipsErasedAtEpoch              an entry erased by a listed erasure and by a dropped, complete one
+TestCardBlockedBeforeTheCut             a builder that applied the ERASE builds no card and holds R's row below
+                                        the run's first blocked version; one that has not folds the entry
+TestCardSyncsErasureRefOnANewEpoch      step 2a: one head read at the first build after a CUT, none after
+TestCardThroughAnErasure                FS-80: ERASE, CUT, re-projection, pairs: the card is masked, returns
+                                        without the entry, and no stored version holds its text
+TestCardRaceAfterTheRead                a projection landing between the read and the CUT is listed and removed
+TestCardAgainUnit                       the writer's again unit builds the card BackfillAge after the CUT when
+                                        the eraser entered nothing, and is dropped when it did
+TestCardLastEntryErased                 a fold with no entry writes nothing, and the card is gone from search
+TestEntryDocumentContextFields          fields 9 and 11 from the first context entry its stream holds at the pin;
+                                        after that entry's erasure a rebuild reads the next, or writes them
+                                        empty; before its CUT a builder that applied the ERASE is blocked
+
+SEARCH-M10-14 and SEARCH-M10-12
+TestJournalCardMarkers                  a unit's markers, one a run; ApplyCut keeps them
+TestCompanionCarriesCards               a push covering (q, p] holds the card at p of each run touched in it
+TestBackfillCarriesCards                a backfill of h carries the cards of runs last touched at or below h
+
+SEARCH-M10-16
+TestCutListsACardThroughItsEpoch        the version written, and written again after 409 INDEX_EPOCH
+TestCutAgainAddsToItsErasure            a second call for a listed erasure, and for a dropped one
+
+RECORD-M10-01
+TestRecordEraseOrder                    the ERASEs of steps 2 and 3 commit before the CUT is built
+TestRecordEraseLateCopy                 a copy ingested after step 3 is erased, listed and its card folded again
+```
+
+Vectors: `testdata/index/erase/` gains `resting-clean` (a slot before and after `clean`), `reentry` (a diff, its base and the composed entry) and `card-version` (five cards with their versions and rows).
+
+Model twins as mutants: each `IndexEraseTwin-*` names a rule, and 15.7's task that builds the rule carries a test that fails when the rule is removed.
+
+Scenario rows, at the later of M10-out and the milestone that brings what they run on: FS-78 gains "an edit that lands between the eraser's read and its CUT stays searchable through the erasure, and no stored index version keeps a diff on the erased version"; FS-80 gains "a card folded while the erasure runs, by a device that has not applied the ERASE, is listed by the CUT or leaves the entry out"; FS-107's "a diff whose base is gone alarms" excepts a resting diff; FS-111 gains a companion push carrying a card among its prepared pushes; FS-112's wait counts a resting diff's slot.
+
+### 15.7 Implementation notes, task by task
+
+Order: SEARCH-M10-16 first, as planned; then SEARCH-M10-17; SEARCH-M10-28's card after SEARCH-M10-14 and SEARCH-M10-16.
+
+**SEARCH-M10-16, the CUT** (not held, not yet on `sidecar`; two additions to its seam, neither a decision of its own).
+- `IndexEraser.Cut` takes each document as `{Key, Version, ThroughEpoch bool}`. For `ThroughEpoch` it writes `epoch * 2^CardVersionBitCount + 2^CardVersionBitCount - 1`, with `epoch` the index_epoch that CUT names, computed when the CUT is built and again on each rebuild after 409 INDEX_EPOCH. Every other version is the caller's, as planned.
+- Called for an erasure_id the set lists, it adds the documents to that erasure's entry (docs stay sorted by doc_key, the entry's `epoch` and `cut_ms` stay); called for one the set has dropped, it adds the entry again.
+- Its plan entry's "Order for callers: CUT and first ERASE" stands for §15.7's mail; for §16.8's records the ERASEs of the bodies come first (15.2.10).
+
+**SEARCH-M10-17, erasure's rewrites** (held; L; Build changes; Provides gains `IndexEraser.Reenter`).
+- `evs_index_erase.go`: `indexEraseList` per 15.2.3, returning the files, the resting diffs and the owed keys; `IndexEraser.Reenter` per 15.2.4, built through `indexPlanHead` with `replaces` 0 and no coverage, `PushLife` and the store seam as SEARCH-M10-14's build uses them.
+- `evs_index_closure.go`: `indexClean(file, erased)` per 15.2.5 for slots and large entries, beside the shard rewrite SEARCH-M10-05 gave (`rewriteWithout`); the order rule (no CLOSURE of an owed key's files).
+- `evs_index_wait.go`: the wait when a re-entry is refused for quota; `SidecarErasure`'s `waiting` gains the count of documents to re-enter; `IndexEraseSettings` with 15.2.11's two fields, defaults from `DefaultIndexEraseSettings()`.
+- `IndexEraser.Resume`: 15.2.7.
+- Two fixes to landed code ride this task, since nothing calls them wrongly until an erasure exists: `evs_index_merge.go`'s `indexMergeCandidates`, where the branch `if erased(entry.key, entry.baseVersion) { continue }` becomes: resolve the base; compose where it stands; leave the diff out, with no `indexMalformedDiff`, where it does not (the roll-up reads the same function); and `search_match.go`, where a diff that `searchResolveChain` cannot resolve joins `unresolved` only if `erased(entry.key, entry.baseVersion)` is false. `search_chains.go`'s and `evs_index_dependency.go`'s header comments take 1.2.9's amended wording.
+- `search_mask.go` (CORE-M10-02's table, CORE-M10-04's hooks): 15.2.10's mask rule. `erasedThrough` is the set's L(k) where a set version the device holds lists the key, and `searchErasedAll` only where an ERASE names the key and none does.
+- INDEX-FORMAT.md: the Erasure section gains `clean` and the resting diff; the Documents section the card's version.
+
+**SEARCH-M10-28, record documents and run cards** (held for its card; XL as planned). Its record documents and mail join build now, the documents with 15.2.8's reading of fields 9 and 11 and its blocked rule. The card: `search_run_card.go` gives `searchRunCard(stream, runId, refVersion, epoch, erasedAtEpoch) (*IndexDocument, uint64, error)` per 15.2.8, with `c` beside it; `evs_index_record.go`'s `IndexDocuments` visits each run's card at the ref version it is given, and takes the epoch and the erased-at-epoch test through its constructor, since the interface names neither. `IndexFormatSettings.CardVersionBitCount`. The local mask of a card from an ERASE to its CUT (15.2.10) is this task's, through `SearchCache.ApplyErase`.
+
+**SEARCH-M10-14, companion pushes and the journal** (not on `sidecar` yet; Build gains 15.2.9): card markers and again units in `IndexJournal`; `ApplyCut` keeps both; step 2a with the epoch recorded beside the journal; step 4's cards, the blocked pin and again units; a record log's interval and its two at-once triggers.
+
+**SEARCH-M10-12, backfill** (not on `sidecar` yet): 15.2.9's backfill row.
+
+**SEARCH-M10-23 and SEARCH-M10-24, readers**: 1.2.9 as amended; the two reader fixes above are written under SEARCH-M10-17 and reviewed by this ground's owner.
+
+**SEARCH-M10-46, IndexRollup.tla** (the data lane's model): `CutVersion = "read"` passes once the model's eraser takes 15.2.4's re-entry before `ClosureBuild`, its CLOSUREs remove resting diffs, its `ChainsResolve` takes I1's amended wording, and its merge composes through a listed base. Its `cut-read` ground then becomes a design run, and a derived document joins its story with 15.2.8's version. `details/IndexErase.tla` is the reference for each rule.
+
+**RECORD-M10-01, a record erasure's CUT and CLOSUREs** (not held): 15.2.10's steps in `record_erase.go`'s order, the ERASEs of steps 2 and 3 before `IndexEraser.Cut`; the documents it passes: each copy that RECORD.md 7.1 makes a document at its path's entry version, and `{card key, ThroughEpoch}` for each stream holding a copy of a source entry; then `IndexEraser.Reenter` and `IndexEraser.Rewrite`. The late copy RECORD-M3-06 deferred ("a copy another ingester writes after the erasure is not erased again at a later sync") takes steps 4 to 6 after its ERASE. `ur record erase`'s listing gains 15.2.8's line for a context entry.
+
+**RECORD-M6-03, expiry**: its erasures run the same steps, and its weekly BASE removes only entries whose erasure is complete.
+
+**RECORD-M10-05 and MAIL-M10-02** (not held): they call the eraser through its seam and pass path documents at their versions. A message never changes, so a mailbox's erasure owes no re-entry and its list holds no resting diff; `IndexEraser.Reenter` returns at once for it. Mail keeps the CUT before its first ERASE.
+
+**CORE-M10-04**: `ApplyErase` calls SEARCH-M10-28's card mask and the journal's again unit for an ERASE of a source entry the device holds, and removes the journal units of every copy of an erased entry, found by entry_id from the ERASE's note (RECORD.md 8's every copy).
+
+**Held tasks whose scope changed.** SEARCH-M10-17 gains the re-entry push, `clean`'s resting diffs, the order rule, the quota wait and the three fixes to landed files (`evs_index_merge.go`, `search_match.go`, `search_mask.go`). SEARCH-M10-28's card gains its identity, version and fold rules and loses nothing; its record documents and mail join are released.
+
+### 15.8 Proposed DESIGN.md text
+
+For a design-records track; nothing here edits DESIGN.md or `design/source/`.
+
+**§11.14.**
+- version row, after "a derived document's, its writer's sequence": replace that clause with "a run card's, the index_epoch its push names times 2^32 plus the stream version of its run's newest source entry (§16.10); a directory announcement's, the Announcement's".
+- dependency row, its last clause "and an erasure removes a document's entries together" becomes "and an erasure enters full, in its eraser's own head, a version whose diff rests on a version its CUT lists, before any CLOSURE takes the base or the diff (erase, below)".
+- chains row gains: "a diff resolves through a base the erasure set lists while that base stands; a diff whose base is gone and listed is no candidate and alarms nothing".
+- cut row, after "each listed document, at or below its version, from the CUT on": "a run card is listed through the epoch its CUT names, so at every version of that epoch or an older one".
+- erase row, after "the eraser lists every index file holding the document": "and every slot holding a diff of it on a listed version, whose removed keys with its own version's set give the listed set back; for the highest version such a diff carries that nothing else a reader scans holds, the eraser first enters that version full in its own head, composed from the diff and its base, and folds each listed run card again there; CLOSURE pushes then rewrite each listed file in place without the document and without those diffs". Its history clause gains "or a diff on a listed version".
+- limit row gains: "an erasure's re-entry adds payload and waits with merges; the files of a version it has not yet entered wait with it, and every other rewrite goes on".
+- A new invariant I-EVS-18 as 1.8 proposed it, in I1's amended wording.
+
+**§11.12.** closure row: "in a format-2 repo that may hold an index, a CUT (below) on each index ref of its documents precedes every list of index files; for a record entry the ERASE of its body precedes that CUT (§16.8)". cut row: "per document of it the ref indexes, the doc_key and the newest version erased; a run card, every version through the epoch the CUT names".
+
+**§16.8, Erasure.** Replace "in a format-2 repo a CUT on the repo's `ur/index` lists the entry and each run card holding it, at its current version, so no index push built before the CUT publishes them (§11.12), and CLOSUREs after the CUT rewrite in place the search-index files holding the entry's postings and re-project each run card that holds the entry (§11.14, 16.10)" with "in a format-2 repo a CUT on the repo's `ur/index` then lists the entry and, through its epoch, the run card of each stream holding it, so every projection made before the CUT is listed and none made after it can hold the entry (§11.12); the eraser folds each of those cards again in its own index head, and CLOSUREs rewrite in place the search-index files holding the entry's postings and the cards' listed versions (§11.14, 16.10)".
+
+**§16.10.** documents row: "vault: one run card per run and stream". run card row, its last clauses: "re-indexed in its stream writer's companion push (§11.14), which a record log makes at most once every 5 min, at once at the run's start and at its end; its version is the index_epoch that push names above the stream version of the run's newest entry; derived, a function of its stream at that version and of the erasures whose CUT precedes that epoch, so a rebuild reproduces it, and an erasure lists it through its CUT's epoch and folds it again without the erased entry".
+
+**RECORD.md** (the mcp lane's, proposed). 7.4, its second sentence: "Its version is the index_epoch its push names times 2^32 plus the stream version of the run's newest source entry in its stream (DESIGN-DETAILS 15.2.8), so every device that folds one stream at one epoch writes one card." 7.1's fields row, for a card: "from the newest context among the entries folded"; for an entry: "from the first context entry of its run that its own stream holds at the push's pin and no erasure with a CUT below the push's epoch names". 8's Run cards paragraph: "An erased entry leaves its run card when the erasure folds the card again, after its CUT (§16.8)". 8's expiry row: "a BASE removes only entries whose erasure is complete".
+
+**§2.8's metadata list.** No new row: a re-entry push is an index push by an admin's sidecar on a ref that sidecar already writes CUTs and CLOSUREs to, of sizes the existing index rows describe.
+
+### 15.9 Owner questions
+
+Each is filed under `.stack/questions/` and the section is built on its recommendation.
+
+- **`details-15-resting-diffs`** replaces `search-m10-46-erased-base-of-a-live-diff`. The section builds that question's option 1 with three changes: the eraser composes the version from the index and opens no content; a CLOSURE also removes the diff, which with its version's set gives the erased set back (15.1 B), so the excuse lasts only between two CLOSUREs; and a merge composes through a listed base while it stands (15.1 C). Recommendation: as built.
+- **`details-15-reentry-at-the-limit`**: at the storage limit evs refuses the re-entry. Built: the files of the one version not yet entered wait, masked, and everything else is erased on schedule. The other way destroys first and leaves the surviving version out of search with no signal. Recommendation: as built; the case needs two races of seconds.
+- **`details-15-card-version`**: a card's version is epoch above stream version, in place of RECORD.md 7.4's highest seq. Recommendation: as built.
+- **`details-15-card-per-stream`**: one card a run a stream, in place of "one run card per run" of a log. Recommendation: as built.
+- **`details-15-erase-before-cut`**: a record erasure destroys the bodies before its CUT, where SEARCH-M10-16's plan entry has every caller CUT first. Recommendation: as built.
+- **`details-15-context-fields`**: an erased context entry's agent label and session ids stay in the rows of the run's other entry documents written before the erasure (15.2.8). Built: they stay, as names the run's other entries carry themselves. The other ways give every entry document a version with the epoch and fold each again, or take fields 9 and 11 out of entry rows. Recommendation: as built.
+- **`details-15-small-readings`**: nine readings an implementer would otherwise decide, each with what was built: the mask rule, a record log's companion interval, the fold's order, an empty fold, the 2^32 bound, which devices hold again units and when they build, the CUT for a late copy, a BASE waiting for its erasure, and the eraser's fetch bound.

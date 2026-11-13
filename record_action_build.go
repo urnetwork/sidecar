@@ -9,6 +9,12 @@
 // recipients a superset of each use's (§16.6's multi-use row): ActionMatchesTemplate. A server path admits only its
 // kind's column of the table (QD-064): CheckCanonicalActionForServer.
 //
+// The builder takes both of QD-740's forms. A kind that binds a local port, a weight or ALPNs builds its action
+// without them: they are the request's, which the caller hands the gate as SidecarAction.Detail. A dial or route
+// grant, bridge_forward's at version 4, and an access request to a worker's port carry sealed_detail, which the caller
+// seals first (NewSealedCanonicalAction, record_action_detail.go): the builder holds it to the sealed-body layout and
+// holds every clear grant_dst to a subject alone, so no action it answers shows a server a prefix or a port.
+//
 // Package-level functions are safe for concurrent use.
 
 package sidecar
@@ -48,11 +54,17 @@ func setFieldNumbers(message protoreflect.Message) []protoreflect.FieldNumber {
 }
 
 // The stored action for what action holds, held to its kind's row: no field outside the row, every required field
-// filled unless the action is a template (scope = true), hashes and ids at their sizes, the preview within 2 KiB, a
-// version the kind takes (0 picks its default) and this build knows, and nothing the verifiers would refuse, since the
-// bytes go through ParseStoredCanonicalAction before they are answered. The caller's message is not changed. A kind
-// with no row, or one a question holds, is refused.
+// filled unless the action is a template (scope = true), which fills only the row's TemplateRequired, a domain field
+// in its one form, lowercase with no trailing dot, hashes and ids at their sizes, the preview within 2 KiB, a
+// version the kind takes (0 picks its default) and this build knows, a grant_dst naming subjects alone, with no ip:
+// prefix or port, and nothing the verifiers would refuse, since the bytes go through ParseStoredCanonicalAction before
+// they are answered. The caller's message is not changed. A kind with no row is refused.
 func NewCanonicalAction(action *protocol.CanonicalAction) (*StoredCanonicalAction, error) {
+	return newCanonicalAction(action, CanonicalActionVersionKnown)
+}
+
+// NewCanonicalAction, given which versions are known: CanonicalActionVersionKnown outside tests.
+func newCanonicalAction(action *protocol.CanonicalAction, known func(version uint32) bool) (*StoredCanonicalAction, error) {
 	if action == nil {
 		return nil, fmt.Errorf("%w: no action", ErrCanonicalActionInvalid)
 	}
@@ -60,9 +72,6 @@ func NewCanonicalAction(action *protocol.CanonicalAction) (*StoredCanonicalActio
 	row, ok := CanonicalActionFields(kind)
 	if !ok {
 		return nil, fmt.Errorf("%w: kind %d has no fields", ErrCanonicalActionInvalid, action.GetKind())
-	}
-	if row.Held != "" {
-		return nil, fmt.Errorf("%w: kind %d waits on question %s", ErrCanonicalActionInvalid, action.GetKind(), row.Held)
 	}
 	built := proto.Clone(action).(*protocol.CanonicalAction)
 	if len(built.ProtoReflect().GetUnknown()) != 0 {
@@ -75,7 +84,7 @@ func NewCanonicalAction(action *protocol.CanonicalAction) (*StoredCanonicalActio
 	if !slices.Contains(row.Versions, version) {
 		return nil, fmt.Errorf("%w: kind %d at version %d", ErrCanonicalActionInvalid, action.GetKind(), version)
 	}
-	if !CanonicalActionVersionKnown(version) {
+	if !known(version) {
 		return nil, fmt.Errorf("%w: version %d", ErrCanonicalActionVersionUnknown, version)
 	}
 	built.Version = version
@@ -92,21 +101,35 @@ func NewCanonicalAction(action *protocol.CanonicalAction) (*StoredCanonicalActio
 			}
 		}
 	}
-	if !built.GetScope() {
-		for _, number := range row.Required {
-			if !message.Has(fields.ByNumber(number)) {
-				return nil, fmt.Errorf("%w: kind %d without field %d", ErrCanonicalActionInvalid, action.GetKind(), number)
-			}
+	required := row.Required
+	if built.GetScope() {
+		required = row.TemplateRequired
+	}
+	for _, number := range required {
+		if !message.Has(fields.ByNumber(number)) {
+			return nil, fmt.Errorf("%w: kind %d without field %d", ErrCanonicalActionInvalid, action.GetKind(), number)
+		}
+	}
+	for _, number := range row.Domains {
+		if field := fields.ByNumber(number); message.Has(field) && !canonicalActionDomainForm(message.Get(field).String()) {
+			// the name itself stays out of the error, which a log may carry (I-13)
+			return nil, fmt.Errorf("%w: field %d on kind %d is not a domain in lowercase with no trailing dot", ErrCanonicalActionInvalid, number, action.GetKind())
 		}
 	}
 	if slices.Contains(built.GetRecipients(), "") || slices.Contains(built.GetRestorePaths(), "") {
 		return nil, fmt.Errorf("%w: an empty recipient or path", ErrCanonicalActionInvalid)
 	}
+	for _, dst := range built.GetGrantDst() {
+		// at every version: a prefix or a port rides sealed_detail, never the clear fields (owner decision 220)
+		if !canonicalActionGrantDstClear(dst) {
+			return nil, fmt.Errorf("%w: a grant_dst naming a prefix or a port, which rides sealed_detail", ErrCanonicalActionInvalid)
+		}
+	}
 	stored, err := proto.MarshalOptions{Deterministic: true}.Marshal(built)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCanonicalActionInvalid, err)
 	}
-	return ParseStoredCanonicalAction(stored)
+	return parseStoredCanonicalAction(stored, known)
 }
 
 // Whether use falls inside template (§16.6's multi-use row): template is a scope = true action, use a full one of

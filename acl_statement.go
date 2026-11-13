@@ -20,8 +20,8 @@
 //
 // Every signer is a sidecar the state admits, standing at the entry's time (not revoked, expired, parked or
 // suspended, an untagged one's member still a member) and not read_only (D-TEAM-24). A k-of-n statement, a completed
-// AuthorityProposal, comes with its signers counted by TEAM's authority rows, and only Suspend and Unsuspend take one.
-// AuditOptIn and AuditOptOut are the audit reader's (ACL-M6-02), refused until it lands.
+// AuthorityProposal, comes with its signers counted by TEAM's authority rows, and only Suspend, Unsuspend, AuditOptIn
+// and AuditOptOut take one; the last two take nothing else (acl_audit.go).
 //
 // Pure functions of the state and the statement: no clock, no I/O. On every leg, the sidecar_http page Worker's
 // included: root Id, no connect type. Nothing here creates, derives or unwraps a key, so nothing calls testHookSecret.
@@ -114,7 +114,8 @@ func (self *AclState) CheckStatement(statement *AclStatement, spendCheck AclSpen
 	if statement == nil || statement.Body == nil || len(statement.Signers) == 0 {
 		return nil, fmt.Errorf("%w: no statement", ErrConfigRule)
 	}
-	if statement.Authority && statement.Type != bridge.SignedType_SIGNED_SUSPEND && statement.Type != bridge.SignedType_SIGNED_UNSUSPEND {
+	if statement.Authority && statement.Type != bridge.SignedType_SIGNED_SUSPEND && statement.Type != bridge.SignedType_SIGNED_UNSUSPEND &&
+		statement.Type != bridge.SignedType_SIGNED_AUDIT_OPT_IN && statement.Type != bridge.SignedType_SIGNED_AUDIT_OPT_OUT {
 		return nil, fmt.Errorf("%w: %s takes no k-of-n signers", ErrConfigRule, statement.Type)
 	}
 	switch body := statement.Body.(type) {
@@ -170,8 +171,14 @@ func (self *AclState) CheckStatement(statement *AclStatement, spendCheck AclSpen
 		if statement.Type == bridge.SignedType_SIGNED_REPO_VERSIONING {
 			return self.checkRepoVersioning(statement, body)
 		}
-	case *protocol.AuditOptIn, *protocol.AuditOptOut:
-		return nil, fmt.Errorf("%w: %s waits on the audit reader (ACL-M6-02)", ErrConfigRuleMissing, statement.Type)
+	case *protocol.AuditOptIn:
+		if statement.Type == bridge.SignedType_SIGNED_AUDIT_OPT_IN {
+			return self.checkAuditOptIn(statement, body)
+		}
+	case *protocol.AuditOptOut:
+		if statement.Type == bridge.SignedType_SIGNED_AUDIT_OPT_OUT {
+			return self.checkAuditOptOut(statement)
+		}
 	}
 	return nil, fmt.Errorf("%w: %s with a body of another type", ErrConfigRule, statement.Type)
 }
@@ -224,6 +231,11 @@ func aclFoldStatement(rows *protocol.AclRows, statement *AclStatement, verdict *
 			effect.UnsuspendedSubjectIds = []Id{subjectId}
 		}
 		return next, effect, nil
+	case *protocol.AuditOptIn:
+		next, err := aclFoldAuditOptIn(rows, body)
+		return next, effect, err
+	case *protocol.AuditOptOut:
+		return aclFoldAuditOptOut(rows), effect, nil
 	case *protocol.OwnerConfirm:
 		effect.OwnerConfirmed = &AclOwnerConfirmed{SidecarId: verdict.TargetId, Signer: verdict.Signer}
 	case *protocol.EvsShare, *protocol.RepoCreate, *protocol.RepoAdmin, *protocol.RepoGrant, *protocol.RepoRevoke,
@@ -256,6 +268,8 @@ func aclRowsCopy(rows *protocol.AclRows) *protocol.AclRows {
 		Audit:       rows.GetAudit(),
 		Suspensions: rows.GetSuspensions(),
 		SpentGrants: rows.GetSpentGrants(),
+		// the base's compile, which no statement changes (QD-727)
+		EvidenceDefault: rows.GetEvidenceDefault(),
 	}
 	if unknown := rows.ProtoReflect().GetUnknown(); len(unknown) != 0 {
 		next.ProtoReflect().SetUnknown(unknown)
@@ -377,8 +391,8 @@ func (self configAclStatementRules) fold(next *configStateBuilder, statement *co
 }
 
 // What a k-of-n proposal of an acl statement acts on, which never counts toward its own authority: a Suspend's or
-// Unsuspend's subject. False for every other acl type, which no proposal carries: AuditOptIn and AuditOptOut wait on
-// ACL-M6-02.
+// Unsuspend's subject, and nothing for an AuditOptIn or AuditOptOut, which act on no subject. False for every other acl
+// type, which no proposal carries.
 func (self configAclStatementRules) targets(state *ConfigState, statement *configStatement) (ConfigTargets, bool) {
 	var subject []byte
 	switch body := statement.body.(type) {
@@ -386,6 +400,8 @@ func (self configAclStatementRules) targets(state *ConfigState, statement *confi
 		subject = body.GetSubject()
 	case *bridge.Unsuspend:
 		subject = body.GetSubject()
+	case *protocol.AuditOptIn, *protocol.AuditOptOut:
+		return ConfigTargets{}, true
 	default:
 		return ConfigTargets{}, false
 	}

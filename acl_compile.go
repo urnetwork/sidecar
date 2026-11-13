@@ -16,12 +16,14 @@
 //	the log's rows    members and sidecars the atoms expand over, and the acl statements' rows: activated grants,
 //	                  the folded access logs, suspensions, spent grant ids and BridgeRows
 //
-// What it writes: has_document; an AclAtom for every tag, group and derived atom the policy names, autogroups being
+// What it writes: has_document; evidence_default, the document's effective evidenceDefault as channel values, all
+// three where it names none, the implicit document's included, which every verifier reads for an action no requests
+// rule names (QD-727); an AclAtom for every tag, group and derived atom the policy names, autogroups being
 // fixed constants with no row; the policy's grants and requests, then §8.5's kind-default rules that need the head
 // (acl_kind.go), then the log's activated grants whose requests rule this head still holds (FS-14); the log's repos,
 // suspensions and spent grant ids, a spent id dropped once its retention is below the head's newest record time; and
-// BridgeRows from BRIDGE's CompileBridgeRows. The audit block stays empty until ACL-M6-02, so a head whose policy
-// holds one refuses: no AuditOptIn can stand before then. Kind defaults themselves are the binary's (acl_kind.go):
+// BridgeRows from BRIDGE's CompileBridgeRows; and the audit block, which counts only under the k-of-n AuditOptIn record
+// the log's rows hold (acl_audit.go), so a block with none names no reader. Kind defaults themselves are the binary's (acl_kind.go):
 // documents add to them and never narrow them, and nothing here can.
 //
 // What rows drop on purpose stays on the device as AclLocalPolicy, which CompileAclLocal gives from the same input and
@@ -285,10 +287,6 @@ func newAclCompiler(input *AclCompileInput) (*aclCompiler, error) {
 	if err != nil {
 		return nil, err
 	}
-	if self.policy.Audit != nil {
-		// no AuditOptIn stands before ACL-M6-02, and the block counts only under one (§8.5)
-		return nil, aclCompileRefusal("an audit block, which counts only under an AuditOptIn (ACL-M6-02)")
-	}
 	if err := self.compile(); err != nil {
 		return nil, err
 	}
@@ -476,7 +474,11 @@ func aclActionValues(actions []protocol.AclAction) []uint32 {
 
 // Builds both outputs.
 func (self *aclCompiler) compile() error {
-	rows := &protocol.AclRows{HasDocument: self.hasDocument}
+	rows := &protocol.AclRows{
+		HasDocument: self.hasDocument,
+		// the effective default, as each requests rule's row carries its effective list (QD-396, QD-727)
+		EvidenceDefault: aclEvidenceChannels(self.policy.EvidenceDefault),
+	}
 	self.local.HasDocument = self.hasDocument
 	keys, err := AclPolicyRuleKeys(self.policy)
 	if err != nil {
@@ -572,6 +574,10 @@ func (self *aclCompiler) compile() error {
 		rows.SpentGrants = append(rows.SpentGrants, proto.Clone(spent).(*protocol.AclSpentGrant))
 	}
 	rows.Bridge = bytes.Clone(self.input.Bridge)
+	// owner decision 63's reader, under the opt-in record the log's rows hold (acl_audit.go)
+	if rows.Audit, err = self.compileAudit(); err != nil {
+		return err
+	}
 
 	for _, atom := range self.atoms {
 		aclSortAtom(atom)

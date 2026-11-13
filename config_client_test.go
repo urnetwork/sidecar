@@ -107,6 +107,8 @@ func (self *testConfigClock) Advance(by time.Duration) {
 type testConfigClientStore struct {
 	stateLock sync.Mutex
 	files     map[string][]byte
+	// how many of the next commits fail, as a full disk does
+	failCommitCount int
 }
 
 func newTestConfigClientStore() *testConfigClientStore {
@@ -180,6 +182,10 @@ func (self *testConfigClientStoreWriter) Write(data []byte) (int, error) {
 func (self *testConfigClientStoreWriter) Commit() error {
 	self.store.stateLock.Lock()
 	defer self.store.stateLock.Unlock()
+	if 0 < self.store.failCommitCount {
+		self.store.failCommitCount -= 1
+		return errors.New("the test's store refused a commit")
+	}
 	self.store.files[self.name] = bytes.Clone(self.buffer.Bytes())
 	return nil
 }
@@ -507,6 +513,138 @@ func TestConfigClientFollowsAndCallsBackInOrder(t *testing.T) {
 	if row := state.SidecarRow(second.sidecarId); row == nil {
 		t.Error("the second device is not admitted at the client")
 	}
+}
+
+// The entries authlog/ holds now, by position, and the pin it holds.
+func (self *testConfigClientStore) keptEntries(t testing.TB) (map[uint64]bool, uint64) {
+	t.Helper()
+	kept := map[uint64]bool{}
+	document := self.document(t)
+	if document == nil {
+		return kept, 0
+	}
+	for _, entryBytes := range document.Entries {
+		entry := &bridge.AuthEntry{}
+		if err := proto.Unmarshal(entryBytes, entry); err != nil {
+			t.Fatal(err)
+		}
+		kept[entry.GetN()] = true
+	}
+	pin := uint64(0)
+	if document.Pin != nil {
+		pin = document.Pin.N
+	}
+	return kept, pin
+}
+
+// DESIGN-DETAILS 12.2.5's rule, which the bridge's start gate replays from (QD-669): an entry is in the client's
+// store before any entry callback runs. A callback that reads authlog/ finds its own entry there and the store's pin
+// at or past it, for each entry of a page of several, on a phone's store and a desktop's.
+func TestEntriesAreStoredBeforeTheirCallbacks(t *testing.T) {
+	for _, retainFullTail := range []bool{false, true} {
+		world := newTestConfigClientWorld(t)
+		net := world.net
+		net.admitMember(net.owner, testConfigId("a"), bridge.MemberRole_MEMBER_ROLE_MEMBER)
+		world.publish()
+		settings := DefaultConfigClientSettings()
+		settings.RetainFullTail = retainFullTail
+		client := world.client(settings)
+		world.caughtUp(client)
+		subscribedAt := net.n
+
+		type seenEntry struct {
+			n    uint64
+			kept bool
+			pin  uint64
+		}
+		seen := []*seenEntry{}
+		var seenLock sync.Mutex
+		remove := client.AddEntryCallback(func(entry *SidecarAuthorityEntry) {
+			kept, pin := world.store.keptEntries(t)
+			seenLock.Lock()
+			defer seenLock.Unlock()
+			seen = append(seen, &seenEntry{n: entry.Pin.GetVersion(), kept: kept[entry.Pin.GetVersion()], pin: pin})
+		})
+		for _, label := range []string{"b", "c", "d"} {
+			net.admitMember(net.owner, testConfigId(label), bridge.MemberRole_MEMBER_ROLE_MEMBER)
+		}
+		world.publish()
+		client.ReceiveNotice(PushNotice{Topic: PushTopicTeam, Version: net.n})
+		world.caughtUp(client)
+		remove()
+
+		seenLock.Lock()
+		if uint64(len(seen)) != net.n-subscribedAt {
+			t.Errorf("full tail %t: %d callbacks for %d entries", retainFullTail, len(seen), net.n-subscribedAt)
+		}
+		for i, entry := range seen {
+			if entry.n != subscribedAt+1+uint64(i) {
+				t.Errorf("full tail %t: callback %d saw entry %d", retainFullTail, i, entry.n)
+			}
+			if !entry.kept || entry.pin < entry.n {
+				t.Errorf("full tail %t: entry %d's callback ran with the store at pin %d, the entry kept: %t", retainFullTail, entry.n, entry.pin, entry.kept)
+			}
+		}
+		seenLock.Unlock()
+		client.Close()
+	}
+}
+
+// A write to authlog/ that fails holds no callback back, so the running judge hears of every entry, and the follow
+// answers the store's error; the next follow writes the log again, with nothing new to apply, and answers nil.
+func TestConfigClientKeepsTheLogAgainAfterAFailedWrite(t *testing.T) {
+	world := newTestConfigClientWorld(t)
+	net := world.net
+	net.admitMember(net.owner, testConfigId("a"), bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	world.publish()
+	client := world.client(nil)
+	world.caughtUp(client)
+	if _, pin := world.store.keptEntries(t); pin != net.n {
+		t.Fatalf("the store holds pin %d, not %d", pin, net.n)
+	}
+	keptAt := net.n
+
+	seen := []uint64{}
+	var seenLock sync.Mutex
+	remove := client.AddEntryCallback(func(entry *SidecarAuthorityEntry) {
+		seenLock.Lock()
+		defer seenLock.Unlock()
+		seen = append(seen, entry.Pin.GetVersion())
+	})
+	defer remove()
+	net.admitMember(net.owner, testConfigId("b"), bridge.MemberRole_MEMBER_ROLE_MEMBER)
+	world.publish()
+	world.store.stateLock.Lock()
+	world.store.failCommitCount = 1
+	world.store.stateLock.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := client.CatchUp(ctx); err == nil {
+		t.Error("a follow whose store write failed answered no error")
+	}
+	if got := client.Pin().GetVersion(); got != net.n {
+		t.Fatalf("the log stands at %d, not %d", got, net.n)
+	}
+	seenLock.Lock()
+	if len(seen) != int(net.n-keptAt) || seen[len(seen)-1] != net.n {
+		t.Errorf("callbacks saw %v", seen)
+	}
+	seenLock.Unlock()
+	if _, pin := world.store.keptEntries(t); pin != keptAt {
+		t.Fatalf("the store holds pin %d after a failed write, not %d", pin, keptAt)
+	}
+
+	if err := client.CatchUp(ctx); err != nil {
+		t.Fatalf("the next follow: %v", err)
+	}
+	if kept, pin := world.store.keptEntries(t); pin != net.n || !kept[net.n] {
+		t.Errorf("the store holds pin %d, entry %d kept: %t", pin, net.n, kept[net.n])
+	}
+	seenLock.Lock()
+	if len(seen) != int(net.n-keptAt) {
+		t.Errorf("a write again called back again: %v", seen)
+	}
+	seenLock.Unlock()
 }
 
 // A restart from authlog/ resumes at the same pin with no read, on a desktop that keeps the whole tail; on a phone it

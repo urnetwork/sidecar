@@ -10,7 +10,8 @@
 //  2. a sidecar's token only, since only a sidecar holds evs scopes: else 403 SCOPE;
 //  3. §19.11's evs gate: a network it does not admit, or a write while `writes: false` holds, answers 503 with
 //     Retry-After, and the engine stays ready;
-//  4. ur_sidecar_id matched to §5's binding (EvsAuthState): 403 SCOPE, or 503 while the state is not loaded;
+//  4. ur_sidecar_id an admitted, unrevoked sidecar of the token's network, as the exchange bound it to the token's
+//     client (EvsAuthState, QD-717): 403 SCOPE, or 503 while the state is not loaded;
 //  5. on a repo route, the token's repo:<id>:<role> scopes against the rights the route takes, the strongest held
 //     honored only while the newest verified state agrees (D-ACL-21): 403 SCOPE, or 503; then, on one that does not
 //     write, §20.6's spent row: a spent network's reply is paced on its own repo and refused on another's
@@ -226,9 +227,9 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 	self.records = NewRecordCache(settings)
 	self.batches = NewBatchWriter(cancelCtx, clock, host.ClockCheck, blobs, self.records, settings, log)
 	self.overlays = NewOverlayChains(self.heads, settings)
-	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.repos, priceTable, settings, log)
-	self.generations = NewGenerationRecords(settings)
 	self.locator = NewRecordLocator(blobs, nil)
+	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.locator, self.repos, priceTable, settings, log)
+	self.generations = NewGenerationRecords(settings)
 	self.segments = NewSegmentLocator(blobs)
 	self.notifier = deps.CommitNotifier
 	if self.notifier == nil {

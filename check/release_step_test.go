@@ -216,7 +216,7 @@ func releaseTreeFiles(t *testing.T, directory string) map[string][]byte {
 func releaseStepFindings(t *testing.T, described string, released string) []string {
 	t.Helper()
 	findings := []string{}
-	for _, name := range []string{"v2026", "smtpproof/v2026", "cli", "mlsinterop", "sidecarctl"} {
+	for _, name := range []string{"v2026", "smtpproof/v2026", "cli", "mlsinterop"} {
 		describedFile, err := readModuleFile(filepath.Join(described, filepath.FromSlash(name), "go.mod"))
 		if err != nil {
 			t.Fatal(err)

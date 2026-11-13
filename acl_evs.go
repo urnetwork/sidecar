@@ -9,6 +9,11 @@
 // tag:mail mail indexers, whose atom only the config head knows (acl-m2-02-state-readings #3); and rules
 // add nothing to config, directory or secret repos (D-ACL-13, D-ACL-24).
 //
+// The config repo's row is the state's own where the rows hold none (acl_state.go, QD-719), so its kind default
+// answers in every state. Its one admin is §7.9's bootstrap sidecar, the Genesis's owner_sidecar_id while it stands as
+// a config writer: the exchange gives that sidecar the config's admin scope to create the repo, push its head and form
+// its group, and evs and gkm honor it from here.
+//
 // §8.6's ceiling holds an ephemeral sidecar to the config's read, the directory's read and own-path writes,
 // kind-default deposits, and the rules, RepoGrants and EvsShares that name it: its sidecar atom, a tag it
 // carries, or autogroup:ephemeral. A parked sidecar gets nothing, and no ephemeral one writes a config head.
@@ -186,6 +191,13 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 				accumulator.add(AclEvsWrite, kindDefault)
 			}
 		}
+		// §7.9's bootstrap: the exchange gives repo:<config_repo_id>:admin to the Genesis's owner sidecar alone, while
+		// it stands as a config writer, to create the repo, push its head and form its group, and a gate honors a
+		// scope only for a subject that holds it here (D-ACL-21), so that sidecar holds it at both audiences. The
+		// config has no other admin and no access log
+		if self.genesisOwnerId != (Id{}) && sidecar.id == self.genesisOwnerId && sidecar.configWriter && memberDevice && !sidecar.readOnly {
+			accumulator.add(AclEvsAdmin, kindDefault)
+		}
 	case protocol.RepoKind_REPO_KIND_DIRECTORY:
 		// every admitted sidecar of the team reads it and every one not read_only writes its own paths;
 		// admin is its creator's and every config writer's, each while consented and not read_only
@@ -225,7 +237,7 @@ func (self *AclState) sidecarEvsAccess(sidecar *aclSidecarState, repoId Id, audi
 	if aclRepoKindTakesGrants(repo.kind) {
 		self.addAccessLogRights(&accumulator, sidecar, repo, nowMs)
 	}
-	self.addAuditRights(&accumulator, sidecar, repoId, repo)
+	self.addAuditRights(&accumulator, sidecar, repoId, repo, nowMs)
 
 	rights := accumulator.rights
 	if rights.Has(AclEvsAdmin) {
@@ -399,12 +411,12 @@ func (self *AclState) addAccessLogRights(accumulator *aclEvsAccumulator, sidecar
 	}
 }
 
-// The audit block's read and receipt deposit, while its AuditOptIn stands, for a sidecar holding a reader
-// atom, on the kinds and repos the block names (owner decision 63). The compile writes the block only with
-// a verified opt-in (ACL-M6-02), so rows with none read nothing here.
-func (self *AclState) addAuditRights(accumulator *aclEvsAccumulator, sidecar *aclSidecarState, repoId Id, repo *aclRepoState) {
+// The audit block's read and receipt deposit, while its AuditOptIn stands at nowMs, for a sidecar holding a
+// reader atom, on the kinds and repos the block names (owner decision 63). Rows hold a block only with a verified
+// opt-in's record (acl_audit.go), and past its not_after the reader drops as an expiry (§7.9).
+func (self *AclState) addAuditRights(accumulator *aclEvsAccumulator, sidecar *aclSidecarState, repoId Id, repo *aclRepoState, nowMs int64) {
 	audit := self.rows.GetAudit()
-	if audit == nil || len(audit.GetAuditOptIn()) == 0 {
+	if audit == nil || !self.auditStands(nowMs) {
 		return
 	}
 	named := slices.Contains(audit.GetRepoKinds(), uint32(repo.kind)) ||

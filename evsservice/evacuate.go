@@ -9,8 +9,9 @@
 //	move     per repo across the run's minutes, the kept records, with its aged log pages and parcels once they
 //	         reach a pack's size or age, into one pack or parcel, then its pidx/ entries, then the delete of what
 //	         they replace (evacuate_move.go)
-//	delete   a minute whose every batch was read, whose every record was settled and whose every repo moved: the
-//	         new slots its dead records list, then each of its batches, whole (I-EVS-7)
+//	delete   a minute whose every batch was read, whose every record was settled and whose every repo moved: each
+//	         of its batches, whole (I-EVS-7). The slots its dead records list stay while DESIGN-DETAILS 14.2.8's
+//	         interim stands (evacuate_resolve.go), so the slot deletes that go before its batches receive none
 //
 // At format 2 (EvsSettings.InstanceFormat) a run reads batches of either format, and a kept format-2 record's tail is
 // settled before its batch goes: each staged segment written to seg/ or dropped (evacuate_staged.go), then its purge
@@ -198,8 +199,11 @@ type EvacuationResult struct {
 	ParcelCount         int
 	ReplacedParcelCount int
 	PackedLogPageCount  int
-	// New slots of dead records deleted.
+	// Slots of dead records deleted: none while DESIGN-DETAILS 14.2.8's interim stands.
 	SlotDeletedCount int
+	// The slots dead records list, each left where it is: while DESIGN-DETAILS 14.2.8's interim stands (QD-766)
+	// evacuation deletes none of them, since a slot a dead record lists may be one a committed push holds.
+	SlotKeptCount int
 	// Format 2: staged segments written to seg/ and dropped, and what the sweep of kept records' lists did.
 	StagedWrittenCount int
 	StagedDroppedCount int
@@ -299,7 +303,7 @@ func NewEvacuator(host *sidecar.ServiceHost, deps *EvacuatorDeps) (*Evacuator, e
 	}
 	self.newest = deps.Newest
 	if self.newest == nil {
-		self.newest = &headPurgeNewest{heads: self.heads, records: NewRecordCache(evsSettings)}
+		self.newest = &headPurgeNewest{heads: self.heads, records: NewRecordCache(evsSettings), locator: self.locator}
 	}
 	sweep, err := NewSweep(host, &SweepDeps{
 		Format2:     deps.Format2,
@@ -368,11 +372,12 @@ type evacuateMinute struct {
 	moveRepoIds map[sidecar.Id]bool
 	// the repos whose records were dropped as an unheld shred's, reread before its batches go
 	shredRepoIds map[sidecar.Id]bool
-	// the new slots its dead records list
+	// the slots to delete before its batches go: none while DESIGN-DETAILS 14.2.8's interim keeps every slot a dead
+	// record lists, and a dead record's own once 14.7's track 2 can tell which are its own (14.2.5)
 	deadSlots []*evacuateSlot
 }
 
-// A new slot a dead record lists.
+// A slot of a dead record's to delete before its minute's batches go.
 type evacuateSlot struct {
 	repoId sidecar.Id
 	slotId sidecar.Id
@@ -720,7 +725,8 @@ func (self *evacuateRun) deleteKey(minute uint32, key string, recheck func(ctx c
 }
 
 // Deletes the minute's batches once nothing holds them: every repo with a kept record in it moved, every repo
-// dropped as a shred's still an unheld shred's, and its dead records' new slots gone (I-EVS-7, I-EVS-2).
+// dropped as a shred's still an unheld shred's, and every slot queued for deletion gone, of which there is none
+// while DESIGN-DETAILS 14.2.8's interim stands (I-EVS-7, I-EVS-2).
 func (self *evacuateRun) deleteMinute(minute *evacuateMinute) {
 	if minute.waiting != "" {
 		return

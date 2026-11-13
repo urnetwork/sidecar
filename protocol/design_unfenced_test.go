@@ -726,6 +726,8 @@ message EvsReadPathReply {
   bytes drop_statement = 15; bytes drop_body = 16; uint64 entry_epoch = 17; bool stale_epoch = 18;
 }
 message EvsMerkleProof { bytes leaf = 1; uint64 index = 2; uint64 size = 3; repeated bytes path = 4; }
+// QD-681 (question evs1-m2-28-rooted-delta-proofs): a directory delta's proof to its own statement's changes_root.
+message EvsDeltaProof { repeated EvsMerkleProof proof = 1; }
 message EvsAbsenceProof {
   uint64 version = 1; repeated bytes token_path = 2; repeated EvsMerkleProof below = 3;
   repeated EvsMerkleProof above = 4;
@@ -961,6 +963,9 @@ enum ApprovalChannel {
   APPROVAL_CHANNEL_UNSPECIFIED = 0; APPROVAL_CHANNEL_DEVICE = 1; APPROVAL_CHANNEL_PRESENCE = 2;
   APPROVAL_CHANNEL_HARNESS = 3;
 }
+// record-m2-01-canonical-action-detail's answer (QD-740): what CanonicalAction.sealed_detail opens to, a dial or
+// route grant's prefixes and ports and a version-3 access request's, with the numbers the answer gives.
+message CanonicalActionDetail { repeated string cidrs = 1; uint32 target_port = 2; repeated string grant_dst = 3; }
 `
 
 // Fields the owner's answers add to messages the design fences, ahead of design-records' fold, each with the question
@@ -995,6 +1000,11 @@ var testFenceAdditions = []struct {
 		message:  "AclRows",
 		field:    testFenceField{name: "spent_grants", number: 9, typeName: "AclSpentGrant", repeated: true},
 		question: "plan-ACL-folded-grant-state",
+	},
+	{
+		message:  "AclRows",
+		field:    testFenceField{name: "evidence_default", number: 10, typeName: "uint32", repeated: true},
+		question: "mcp-m3-03-evidence-default-at-gates",
 	},
 	{
 		message:  "AclTarget",
@@ -1066,6 +1076,72 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "indexers", number: 10, typeName: "IndexerRow", repeated: true},
 		question: "team-m2-07-indexer-rows",
 	},
+	{
+		message:  "EvsReadFrame",
+		field:    testFenceField{name: "error", number: 8, typeName: "EvsRefusalReply"},
+		question: "evs1-m2-40-unfolded-listing-frame",
+	},
+	{
+		message:  "EvsReadPathReply",
+		field:    testFenceField{name: "continues", number: 20, typeName: "bool"},
+		question: "evs1-m2-40-unfolded-listing-frame",
+	},
+	{
+		message:  "EvsReadPathReply",
+		field:    testFenceField{name: "delta_proofs", number: 19, typeName: "EvsDeltaProof", repeated: true},
+		question: "evs1-m2-28-rooted-delta-proofs",
+	},
+	{
+		message:  "EvsAbsenceProof",
+		field:    testFenceField{name: "present", number: 5, typeName: "EvsMerkleProof", repeated: true},
+		question: "evs1-m2-28-rooted-delta-proofs",
+	},
+	{
+		message:  "EvsSealedMetadata",
+		field:    testFenceField{name: "erasure_note", number: 8, typeName: "bytes"},
+		question: "evs1-m2-30-erasure-note-format",
+	},
+	// QD-740: a dial or route grant's prefixes and ports ride sealed, at CanonicalAction version 4, and local_port,
+	// weight and alpn ride the ApprovalRequest, which is sealed in its entry
+	{
+		message:  "CanonicalAction",
+		field:    testFenceField{name: "sealed_detail", number: 38, typeName: "bytes"},
+		question: "record-m2-01-canonical-action-detail",
+	},
+	{
+		message:  "ApprovalRequest",
+		field:    testFenceField{name: "local_port", number: 14, typeName: "uint32"},
+		question: "record-m2-01-canonical-action-detail",
+	},
+	{
+		message:  "ApprovalRequest",
+		field:    testFenceField{name: "weight", number: 15, typeName: "int32"},
+		question: "record-m2-01-canonical-action-detail",
+	},
+	{
+		message:  "ApprovalRequest",
+		field:    testFenceField{name: "alpn", number: 16, typeName: "string", repeated: true},
+		question: "record-m2-01-canonical-action-detail",
+	},
+}
+
+// One field an owner's answer takes out of a message the design fences, its number reserved.
+type testFenceReservation struct {
+	message  string
+	name     string
+	number   int32
+	question string
+}
+
+// Fields the owner's answers take out of messages the design fences, ahead of design-records' fold, each with the
+// question that holds its answer. Each leaves the fence that writes it and its number joins that fence's
+// reservations, so both directions stay exact, and one the design comes to reserve, or stops writing, fails until its
+// line here leaves.
+var testFenceReservations = []testFenceReservation{
+	// QD-740: local_port, weight and alpn leave CanonicalAction for ApprovalRequest's 14, 15 and 16
+	{message: "CanonicalAction", name: "local_port", number: 24, question: "record-m2-01-canonical-action-detail"},
+	{message: "CanonicalAction", name: "weight", number: 25, question: "record-m2-01-canonical-action-detail"},
+	{message: "CanonicalAction", name: "alpn", number: 34, question: "record-m2-01-canonical-action-detail"},
 }
 
 // One value an owner's answer adds to an enum the design fences.
@@ -1082,4 +1158,6 @@ type testFenceValueAddition struct {
 var testFenceValueAdditions = []testFenceValueAddition{
 	{enum: "MessageType", name: "SMTP_HANDSHAKE", number: 0x1607, question: "smtpproof-start-shts-wire"},
 	{enum: "MessageType", name: "SMTP_HANDSHAKE_RESULT", number: 0x1608, question: "smtpproof-start-shts-wire"},
+	// §14.4's TL4 allowance for a recipient domain (QD-729), appended to the enum testUnfencedFence writes
+	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED", number: 18, question: "smtp-m9-06-tl4-allowance-action"},
 }

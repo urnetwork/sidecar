@@ -4,6 +4,10 @@
 // included, so a row changes in the design and reaches the repository through make metadata. A hand
 // edit here, or a design change that skipped make metadata, fails. sidecartest's strict reader reads
 // the same bytes in go test ./..., and this package imports nothing of ours, so this reads only bytes.
+//
+// The one hand edit that passes is a line an owner's answer adds to the list ahead of design-records'
+// fold of §2.8, named in metadataListAdditions with the question that holds the answer: the list is
+// then §2.8's block with exactly those edits, byte for byte.
 
 package check
 
@@ -52,6 +56,68 @@ func metadataListBlock(section []byte) ([]byte, bool) {
 	return nil, false
 }
 
+// Text an owner's answer adds to the list ahead of design-records' fold of §2.8: the block's text as the
+// design writes it, which the block holds exactly once, the text the list holds in its place, and the
+// question that holds the answer. Each applies to the block before the comparison, so the list stays
+// exact in both directions: a list without the text fails, and so does an entry whose text the block no
+// longer holds once, which is how one the design comes to write fails until its entry here leaves.
+type metadataListAddition struct {
+	question string
+	block    string
+	list     string
+}
+
+var metadataListAdditions = []metadataListAddition{
+	{
+		// QD-720: api-3's sees gains the IdP sign-in flows api keeps in Redis under {sso_<state>}
+		question: "team-m2-16-sso-flow-state-row",
+		block:    "keyed by the address's peppered hash; no domain or address held)\n  why: sign-in, roles and SSO (§7.5, §7.6);",
+		list:     "keyed by the address's peppered hash; no domain or address held); IdP sign-in flows in progress (state, nonce, PKCE verifier, IdP, network, the signed-in user that began one; 10 min, taken once)\n  why: sign-in, roles and SSO (§7.5, §7.6);",
+	},
+	{
+		// QD-741 and QD-742: cert-1's sees gains a row's issued chain, a requested revocation's reason and
+		// the time of its latest state
+		question: "tls-m5-05-cert-row-values",
+		block:    "ARI window, state and successor; Team custom-domain chains and queued CSRs (v1);",
+		list:     "ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1);",
+	},
+	{
+		// QD-742: cert-1's ttl counts a failed order's 30 d too
+		question: "tls-m5-14-cert-row-end-time",
+		block:    "  ttl: 30 d after expiry or revocation; budget entries 7 d,",
+		list:     "  ttl: 30 d after expiry, revocation or failure; budget entries 7 d,",
+	},
+	{
+		// QD-741's list version bump: the first line's version
+		question: "tls-m5-05-cert-row-values",
+		block:    "# metadata_list.yml v11;",
+		list:     "# metadata_list.yml v12;",
+	},
+	{
+		// and what the version adds, after v11's lines
+		question: "tls-m5-05-cert-row-values",
+		block:    "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n",
+		list:     "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n# v12, updated 2026-11-12 for the owner's answers on certs' rows (QD-741, QD-742), adds cert-1's issued chains, a\n# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n",
+	},
+}
+
+// §2.8's block with each addition in place, in order, and a finding for each that does not apply.
+func applyMetadataListAdditions(block []byte, additions []metadataListAddition) ([]byte, []string) {
+	findings := []string{}
+	for _, addition := range additions {
+		if addition.question == "" || addition.block == "" || addition.block == addition.list {
+			findings = append(findings, findingf("the addition for question %q names no question or changes nothing", addition.question))
+			continue
+		}
+		if count := bytes.Count(block, []byte(addition.block)); count != 1 {
+			findings = append(findings, findingf("the addition for question %s no longer applies: §2.8's block holds its text %d times, not once; if the design now writes the line, its entry in metadataListAdditions leaves and make metadata brings the block here", addition.question, count))
+			continue
+		}
+		block = bytes.Replace(block, []byte(addition.block), []byte(addition.list), 1)
+	}
+	return block, findings
+}
+
 // The first line two texts differ on, numbered from 1, for a finding a reader can act on.
 func firstDifferentLine(a []byte, b []byte) int {
 	aLines := bytes.Split(a, []byte("\n"))
@@ -67,6 +133,11 @@ func firstDifferentLine(a []byte, b []byte) int {
 // Whether the list in moduleDirectory is the block of §2.8 in topDirectory. The two are one directory
 // in development and differ on a release branch.
 func metadataListFindings(topDirectory string, moduleDirectory string) []string {
+	return metadataListFindingsWithAdditions(topDirectory, moduleDirectory, nil)
+}
+
+// As metadataListFindings, the block first taking the additions.
+func metadataListFindingsWithAdditions(topDirectory string, moduleDirectory string, additions []metadataListAddition) []string {
 	section, err := os.ReadFile(filepath.Join(topDirectory, metadataListSectionPath))
 	if err != nil {
 		return []string{findingf("reading §2.8: %v", err)}
@@ -79,6 +150,10 @@ func metadataListFindings(topDirectory string, moduleDirectory string) []string 
 	if err != nil {
 		return []string{findingf("reading the list: %v; make metadata writes it", err)}
 	}
+	block, findings := applyMetadataListAdditions(block, additions)
+	if 0 < len(findings) {
+		return findings
+	}
 	if !bytes.Equal(list, block) {
 		return []string{findingf("%s differs from §2.8's block at line %d: a row changes in the design, and make metadata brings it here", metadataListFileName, firstDifferentLine(list, block))}
 	}
@@ -87,7 +162,57 @@ func metadataListFindings(topDirectory string, moduleDirectory string) []string 
 
 func TestMetadataListIsSection2sBlock(t *testing.T) {
 	repository := openThisCheckout(t)
-	failFindings(t, "metadata list", metadataListFindings(repository.topDirectory, repository.moduleDirectory))
+	failFindings(t, "metadata list", metadataListFindingsWithAdditions(repository.topDirectory, repository.moduleDirectory, metadataListAdditions))
+}
+
+// An owner's answer ahead of the fold: the list holds the added text and the block does not yet.
+func TestMetadataListPassesAnAdditionAheadOfTheFold(t *testing.T) {
+	directory := plantMetadataList(t)
+	additions := []metadataListAddition{{question: "a-question", block: "withdrawn: gone\n", list: "withdrawn: gone, and more\n"}}
+	if err := os.WriteFile(filepath.Join(directory, metadataListFileName), []byte("# metadata_list.yml v1\nevs-1:\n  withdrawn: gone, and more\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failFindings(t, "metadata list", metadataListFindingsWithAdditions(directory, directory, additions))
+	// without its entry the same list is a hand edit
+	wantFindings(t, metadataListFindings(directory, directory), "differs from §2.8's block at line 3")
+}
+
+// An entry is owed its text: a list still as the block writes it fails.
+func TestMetadataListRefusesAListBehindItsAddition(t *testing.T) {
+	directory := plantMetadataList(t)
+	additions := []metadataListAddition{{question: "a-question", block: "withdrawn: gone\n", list: "withdrawn: gone, and more\n"}}
+	wantFindings(t, metadataListFindingsWithAdditions(directory, directory, additions), "differs from §2.8's block at line 3")
+}
+
+// Once the design writes the line, or changes the text around it, the entry no longer applies and fails
+// until it leaves.
+func TestMetadataListRefusesAnAdditionTheBlockNoLongerHolds(t *testing.T) {
+	directory := plantMetadataList(t)
+	additions := []metadataListAddition{{question: "a-question", block: "withdrawn: went\n", list: "withdrawn: gone\n"}}
+	wantFindings(t, metadataListFindingsWithAdditions(directory, directory, additions), "the addition for question a-question no longer applies")
+}
+
+// Text the block holds twice names no one place.
+func TestMetadataListRefusesAnAdditionThatAppliesTwice(t *testing.T) {
+	directory := plantMetadataList(t)
+	additions := []metadataListAddition{{question: "a-question", block: "evs-1", list: "evs-2"}}
+	section := "**The list**\n\n```yaml\n# metadata_list.yml v1\nevs-1:\n  withdrawn: see evs-1\n```\n"
+	if err := os.WriteFile(filepath.Join(directory, metadataListSectionPath), []byte(section), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantFindings(t, metadataListFindingsWithAdditions(directory, directory, additions), "holds its text 2 times")
+}
+
+// An entry names its question and changes something.
+func TestMetadataListRefusesAnEmptyAddition(t *testing.T) {
+	directory := plantMetadataList(t)
+	for _, addition := range []metadataListAddition{
+		{block: "withdrawn: gone\n", list: "withdrawn: gone, and more\n"},
+		{question: "a-question", list: "withdrawn: gone, and more\n"},
+		{question: "a-question", block: "withdrawn: gone\n", list: "withdrawn: gone\n"},
+	} {
+		wantFindings(t, metadataListFindingsWithAdditions(directory, directory, []metadataListAddition{addition}), "names no question or changes nothing")
+	}
 }
 
 // A module directory holding what make metadata reads, and a list it would write.

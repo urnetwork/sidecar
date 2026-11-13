@@ -4,7 +4,10 @@
 // statement after the version's own, among those the reader walked, changes the path or a prefix holding it again. A
 // statement whose changes are inline answers that from its list; one under changes_root answers it only where a
 // covering prefix matches, and then by the adjacent-leaf proofs evs sends for the path and each such prefix, never
-// the whole list (§11.6's merkle row).
+// the whole list (§11.6's merkle row). A strict prefix such a statement changed by a delta, which does not end the
+// path (§11.7's newest row), has no adjacent leaves: evs sends that delta's inclusion proof in the absence's present,
+// which the reader takes for a strict prefix whose change writes an entry and refuses for the path itself or a
+// removal; and each of a directory's deltas after its table comes with its own proof, delta_proofs (QD-681).
 //
 // What a statement at or below the read's pin says is checked against that statement, signed by a writer, but nothing
 // shows it was the version current at the pin: for a path this device never read, or no longer remembers, that is
@@ -138,7 +141,8 @@ func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs
 				return nil, nil, err
 			}
 		}
-	case len(reply.GetStatement()) != 0 && len(reply.GetNames().GetNames()) == 0 && len(reply.GetDeltas()) == 0 && len(reply.GetProof()) == 0:
+	case len(reply.GetStatement()) != 0 && len(reply.GetNames().GetNames()) == 0 && len(reply.GetDeltas()) == 0 &&
+		len(reply.GetDeltaProofs()) == 0 && len(reply.GetProof()) == 0:
 		// the statement alone, of a version or removal evs could not place: its epoch is the reader's to name
 		statement, err := self.VerifyStatement(reply.GetStatement(), head.RepoId, head.RefId)
 		if err != nil {
@@ -146,7 +150,8 @@ func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs
 		}
 		verified.StatementAlone = statement
 		return verified, nil, nil
-	case len(reply.GetNames().GetNames()) != 0 || len(reply.GetDeltas()) != 0 || len(reply.GetStatement()) != 0 || len(reply.GetProof()) != 0:
+	case len(reply.GetNames().GetNames()) != 0 || len(reply.GetDeltas()) != 0 || len(reply.GetDeltaProofs()) != 0 ||
+		len(reply.GetStatement()) != 0 || len(reply.GetProof()) != 0:
 		return nil, nil, fmt.Errorf("%w: a reply with no version, removal or base beside what only those carry", ErrEvsEntryRefused)
 	default:
 		// a path never written: no walked statement may change it (below); before the walk it is evs's word, which a
@@ -317,14 +322,19 @@ func (self *EvsVerifier) verifyRemoval(head *EvsVerifiedHead, epochs *EvsPathEpo
 // The table itself is evs's fold, whose names List checks against their tokens.
 //
 // A delta that is the served version, which evs lists again while the table holds nothing folded, was verified with
-// that version's proof. Any other walked delta in a statement whose list is under changes_root is refused: the reply
-// has no place for its proof (question evs1-m2-28-rooted-delta-proofs), so it fails closed rather than take the delta on
-// evs's word.
+// that version's proof. Any other walked delta is checked against its own statement's change: an inline list by the
+// list, one under changes_root by the delta's entry of delta_proofs, one a delta in order (QD-681). A reply carries
+// either no delta proofs, which stands only where every walked delta's list is inline, or one a delta; a rooted
+// statement's delta with no proof fails closed rather than take the delta on evs's word.
 func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply, verified *EvsVerifiedPath) error {
 	verified.Names = reply.GetNames()
 	verified.NamesThrough = reply.GetNamesThrough()
+	deltaProofs := reply.GetDeltaProofs()
+	if len(deltaProofs) != 0 && len(deltaProofs) != len(reply.GetDeltas()) {
+		return fmt.Errorf("%w: %d delta proofs for %d deltas", ErrEvsEntryRefused, len(deltaProofs), len(reply.GetDeltas()))
+	}
 	last := reply.GetNamesThrough()
-	for _, delta := range reply.GetDeltas() {
+	for i, delta := range reply.GetDeltas() {
 		if delta.GetCommitVersion() <= last {
 			return fmt.Errorf("%w: deltas out of version order", ErrEvsEntryRefused)
 		}
@@ -348,8 +358,15 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, epochs *EvsPathEpoc
 			verified.Deltas = append(verified.Deltas, deltaPath)
 			continue
 		}
-		if err := self.verifyVersion(head, epochs, delta, nil, nil, deltaPath); err != nil {
+		var proofs []*protocol.EvsMerkleProof
+		if i < len(deltaProofs) {
+			proofs = deltaProofs[i].GetProof()
+		}
+		if err := self.verifyVersion(head, epochs, delta, nil, proofs, deltaPath); err != nil {
 			return err
+		}
+		if deltaPath.Entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) {
+			return fmt.Errorf("%w: a delta that is not a directory's", ErrEvsEntryRefused)
 		}
 		verified.Deltas = append(verified.Deltas, deltaPath)
 	}
@@ -361,9 +378,10 @@ func (self *EvsVerifier) verifyDeltas(head *EvsVerifiedHead, epochs *EvsPathEpoc
 // proofs evs sent for each path its covering prefixes reach (EvsAbsencePaths). A directory's own later writes are its
 // deltas, at deltaVersions, already verified; any other is a delta evs left out. A rooted statement with no proof, of
 // an epoch the request did not name, adds that epoch to the epochs answered: the reader asks once more naming it.
-// A rooted statement that changed a prefix of the path by a delta, which does not end the path, has no absence proof
-// evs can give for that prefix and no other proof the reply can carry, so it is refused (question
-// evs1-m2-28-rooted-delta-proofs), where an inline list's own delta is not.
+// A rooted statement that changed a prefix of the path by a delta, which does not end the path, has no adjacent
+// leaves around that prefix: its absence carries the delta's inclusion proof in present (QD-681), taken only for a
+// strict prefix whose change writes an entry, as an inline list's own delta is, and refused for the path itself or a
+// removal, either of which ends what the reply served.
 func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *EvsPathEpochs, since uint64, absences []*protocol.EvsAbsenceProof, deltaVersions map[uint64]bool, absent bool) ([]uint64, error) {
 	more := []uint64{}
 	for _, walked := range head.Statements {
@@ -395,6 +413,14 @@ func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *Evs
 				if absence.GetVersion() != walked.Version || err != nil || !absencePath.Equal(absentPath) {
 					continue
 				}
+				if len(absence.GetPresent()) != 0 {
+					if err := evsVerifyPrefixDelta(push, tokenPath, absentPath, absence); err != nil {
+						self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
+						return nil, err
+					}
+					proven = true
+					break
+				}
 				if err := EvsVerifyChangeAbsence(push.GetChangesRoot(), push.GetPartCount(), uint64(push.GetChangeCount()), absentPath, absence); err != nil {
 					self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
 					return nil, fmt.Errorf("%w: %w", ErrEvsEntryRefused, err)
@@ -414,4 +440,27 @@ func (self *EvsVerifier) verifyUnchangedSince(head *EvsVerifiedHead, epochs *Evs
 		}
 	}
 	return more, nil
+}
+
+// Checks an absence's present (QD-681): the inclusion proof, to push's changes_root, of the change push makes to
+// prefix, which must be a strict prefix of tokenPath and whose change must write an entry, a directory's delta. The
+// path's own change, a removal, a proof of another path, or one beside below or above is refused.
+func evsVerifyPrefixDelta(push *protocol.EvsPush, tokenPath EvsTokenPath, prefix EvsTokenPath, absence *protocol.EvsAbsenceProof) error {
+	if len(absence.GetBelow()) != 0 || len(absence.GetAbove()) != 0 {
+		return fmt.Errorf("%w: a present change beside the leaves around it", ErrEvsEntryRefused)
+	}
+	if len(tokenPath) <= len(prefix) || !tokenPath.HasPrefix(prefix) {
+		return fmt.Errorf("%w: a later statement changes the path, served as unchanged", ErrEvsEntryRefused)
+	}
+	change, changedPath, err := EvsVerifyChangeInclusion(push.GetChangesRoot(), push.GetPartCount(), uint64(push.GetChangeCount()), absence.GetPresent())
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrEvsEntryRefused, err)
+	}
+	if !changedPath.Equal(prefix) {
+		return fmt.Errorf("%w: a proof of another path's change", ErrEvsEntryRefused)
+	}
+	if len(change.GetEntrySha256()) == 0 {
+		return fmt.Errorf("%w: a later statement removes a prefix of the path, served as unchanged", ErrEvsEntryRefused)
+	}
+	return nil
 }

@@ -62,8 +62,11 @@ type CertsSettings struct {
 
 	// A budget key lives this long past its newest order (cert-1: 7 d). At least every BudgetWindow.
 	BudgetTtl time.Duration
-	// A row stays this long past its expiry or revocation (§13.8, cert-1: 30 d). Positive.
+	// A row stays this long past its expiry, revocation or failure (§13.8, cert-1: 30 d). Positive.
 	RowRetention time.Duration
+	// A row keeps its issued chain this long past its certificate's expiry or revocation (cert-1: 30 d;
+	// QD-741). Positive. A row gone sooner takes its chain with it.
+	ChainRetention time.Duration
 	// Queued rows one admission pass reads at most. Positive.
 	AdmitBatchCount int
 	// What GET /tls/cert-order/<id> tells a device to wait before asking again while its order is under
@@ -71,6 +74,22 @@ type CertsSettings struct {
 	OrderRetryAfter time.Duration
 	// How long one store, budget or DNS call may take before it reads as failed. Positive.
 	CallTimeout time.Duration
+
+	// The chains' (TLS-M5-17, run.go).
+
+	// The rows an earlier pass left under way that one order pass takes up again at most, before it
+	// admits any. Positive.
+	OrderResumeCount int
+	// The orders one pass has at its CAs at once. Positive.
+	OrderConcurrency int
+	// An order that has not issued this long after it was accepted fails, where a younger one queues
+	// again; a renewal of a certificate still valid queues again whatever its age. Positive.
+	OrderGiveUpAge time.Duration
+	// Issued rows one renewal pass reads at most. Positive.
+	RenewalBatchCount int
+	// Issued rows one revocation pass asks its source about at most, and revoking rows it takes to
+	// their CAs at most. Positive.
+	RevocationBatchCount int
 
 	// ACME's (TLS-M5-15).
 
@@ -132,9 +151,15 @@ func DefaultCertsSettings() *CertsSettings {
 		DefaultRetryAfter:         1 * time.Hour,
 		BudgetTtl:                 7 * 24 * time.Hour,
 		RowRetention:              30 * 24 * time.Hour,
+		ChainRetention:            30 * 24 * time.Hour,
 		AdmitBatchCount:           100,
 		OrderRetryAfter:           30 * time.Second,
 		CallTimeout:               10 * time.Second,
+		OrderResumeCount:          32,
+		OrderConcurrency:          4,
+		OrderGiveUpAge:            24 * time.Hour,
+		RenewalBatchCount:         200,
+		RevocationBatchCount:      200,
 		AcmePollInterval:          1 * time.Second,
 		AcmePollTimeout:           5 * time.Minute,
 		AcmeOrderTimeout:          30 * time.Minute,
@@ -200,9 +225,15 @@ func (self *CertsSettings) Validate() error {
 		"DefaultRetryAfter":         int64(self.DefaultRetryAfter),
 		"BudgetTtl":                 int64(self.BudgetTtl),
 		"RowRetention":              int64(self.RowRetention),
+		"ChainRetention":            int64(self.ChainRetention),
 		"AdmitBatchCount":           int64(self.AdmitBatchCount),
 		"OrderRetryAfter":           int64(self.OrderRetryAfter),
 		"CallTimeout":               int64(self.CallTimeout),
+		"OrderResumeCount":          int64(self.OrderResumeCount),
+		"OrderConcurrency":          int64(self.OrderConcurrency),
+		"OrderGiveUpAge":            int64(self.OrderGiveUpAge),
+		"RenewalBatchCount":         int64(self.RenewalBatchCount),
+		"RevocationBatchCount":      int64(self.RevocationBatchCount),
 		"AcmePollInterval":          int64(self.AcmePollInterval),
 		"AcmePollTimeout":           int64(self.AcmePollTimeout),
 		"AcmeOrderTimeout":          int64(self.AcmeOrderTimeout),
