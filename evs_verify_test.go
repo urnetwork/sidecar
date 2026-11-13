@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -468,8 +469,10 @@ func TestEvsUnretainedStatePinRefusesQuietly(t *testing.T) {
 	}
 }
 
-// The refs table on a record-class owned stream: its owner creates only, a repo admin's BASE and CLOSURE pass, and
-// another sidecar's write does not.
+// The refs table on a record-class owned stream, the statement read alone: its owner creates, a repo admin's BASE and
+// CLOSURE pass, and another sidecar's write does not. The owner's write on a base passes here, since without its entry
+// version it may be a directory's add-only delta (QD-722): the reader holding the payload judges it
+// (TestEvsReplayingReaderHoldsAStreamDeltaToTheCreatesOnlyRule).
 func TestEvsOwnedStreamRefRules(t *testing.T) {
 	repoId := evsTestId("record repo")
 	owner, admin, other := evsTestId("owner"), evsTestId("admin"), evsTestId("other")
@@ -492,7 +495,7 @@ func TestEvsOwnedStreamRefRules(t *testing.T) {
 		ok     bool
 	}{
 		{name: "owner creates", signer: owner, ok: true},
-		{name: "owner rewrites", signer: owner, base: 3, ok: false},
+		{name: "owner writes on a base, its entry not at hand", signer: owner, base: 3, ok: true},
 		{name: "admin base", signer: admin, flags: protocol.EvsPushFlag_EVS_PUSH_BASE, ok: true},
 		{name: "admin closure", signer: admin, flags: protocol.EvsPushFlag_EVS_PUSH_CLOSURE, base: 3, ok: true},
 		{name: "other writes", signer: other, ok: false},
@@ -503,6 +506,136 @@ func TestEvsOwnedStreamRefRules(t *testing.T) {
 		if c.ok != (err == nil) {
 			t.Errorf("%s: %v", c.name, err)
 		}
+	}
+	// a removal stays refused, entry or none
+	removal := statement(owner, 0, 3)
+	removal.Changes[0].Change.EntrySha256 = nil
+	if err := evsCheckRefRules(config, removal, repoId, refId, owner); !errors.Is(err, ErrEvsStatementRefused) {
+		t.Errorf("owner removes: %v", err)
+	}
+}
+
+// QD-722 at a replaying reader, which holds each change's entry version and its replay's state of the path: on a
+// record-class stream a directory's add-only delta on its newest version passes, and a delta removing a token, one on
+// an older version, one not at its base + 1, a file's write on a base, and a delta on a path standing as a file or not
+// at all are each refused. The statement read alone, with no entry version, leaves a stream's write on a base to that
+// check and refuses one on a deposit ref, which takes no delta; a statement that names no entry change is refused alike
+// with its entry at hand and no path state, as a head reader holds a version it read.
+func TestEvsReplayingReaderHoldsAStreamDeltaToTheCreatesOnlyRule(t *testing.T) {
+	repoId := evsTestId("record repo")
+	owner := evsTestId("owner")
+	config := &evsTestConfig{
+		writers: []Id{owner},
+		repo:    &protocol.AclRepo{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_RECORD},
+	}
+	refId := evsTestId("stream")
+	directory := EvsTokenPath{evsTestToken("e")}
+	entryOf := func(kind protocol.EvsEntryKind, version uint64, removed [][]byte) []byte {
+		entry := &protocol.EvsEntryVersion{Version: version, Kind: uint32(kind)}
+		if kind == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
+			entry.Names = &protocol.EvsNameTable{
+				Names:         []*protocol.EvsName{{Token: evsTestToken("1").Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: evsTestBytes("sealed 1", 32)}},
+				RemovedTokens: removed,
+			}
+		}
+		entryBytes, err := proto.Marshal(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entryBytes
+	}
+	changeOf := func(base uint64, entryBytes []byte) *EvsCheckedChange {
+		digest := sha256.Sum256(entryBytes)
+		return &EvsCheckedChange{
+			Change:       &protocol.EvsChange{TokenPath: directory.Components(), BaseEntryVersion: base, EntrySha256: digest[:]},
+			TokenPath:    directory,
+			EntryVersion: entryBytes,
+		}
+	}
+	standing := func(path *EvsCreatesOnlyPath) func(change *EvsCheckedChange) *EvsCreatesOnlyPath {
+		return func(change *EvsCheckedChange) *EvsCreatesOnlyPath {
+			return path
+		}
+	}
+	directoryAt := &EvsCreatesOnlyPath{Exists: true, Directory: true, Version: 3}
+	fileAt := &EvsCreatesOnlyPath{Exists: true, Version: 3}
+	directoryEntry := protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY
+	stream := &EvsStatement{Push: &protocol.EvsPush{RefKind: uint32(protocol.EvsRefKind_EVS_REF_OWNED), OwnerSidecarId: owner.Bytes()}}
+	cases := []struct {
+		name   string
+		change *EvsCheckedChange
+		pathOf func(change *EvsCheckedChange) *EvsCreatesOnlyPath
+		// the refusal's reason, empty for a change that passes
+		reason string
+	}{
+		{name: "an add-only delta on the newest version", change: changeOf(3, entryOf(directoryEntry, 4, nil)), pathOf: standing(directoryAt)},
+		{name: "a delta removing a token", change: changeOf(3, entryOf(directoryEntry, 4, [][]byte{evsTestToken("0").Bytes()})), pathOf: standing(directoryAt),
+			reason: "a directory delta removing a name"},
+		{name: "a delta on an older version", change: changeOf(2, entryOf(directoryEntry, 3, nil)), pathOf: standing(directoryAt),
+			reason: "a directory delta off the directory's newest version"},
+		{name: "a delta not at its base + 1", change: changeOf(3, entryOf(directoryEntry, 5, nil)), pathOf: standing(directoryAt),
+			reason: "a directory delta not at its base + 1"},
+		{name: "a file's write on a base", change: changeOf(3, entryOf(protocol.EvsEntryKind_EVS_ENTRY_FILE, 4, nil)), pathOf: standing(fileAt),
+			reason: "a file's write on a base"},
+		{name: "a delta on a path standing as a file", change: changeOf(3, entryOf(directoryEntry, 4, nil)), pathOf: standing(fileAt),
+			reason: "a directory delta on a path that does not stand as a directory"},
+		{name: "a delta on a path that does not stand", change: changeOf(3, entryOf(directoryEntry, 4, nil)), pathOf: standing(&EvsCreatesOnlyPath{}),
+			reason: "a directory delta on a path that does not stand as a directory"},
+		{name: "a file's write on a base, no path state", change: changeOf(3, entryOf(protocol.EvsEntryKind_EVS_ENTRY_FILE, 4, nil)),
+			reason: "a file's write on a base"},
+		{name: "a delta removing a token, no path state", change: changeOf(3, entryOf(directoryEntry, 4, [][]byte{evsTestToken("0").Bytes()})),
+			reason: "a directory delta removing a name"},
+		{name: "an add-only delta, no path state", change: changeOf(3, entryOf(directoryEntry, 4, nil))},
+	}
+	for _, c := range cases {
+		err := evsCheckRefRulesOver(config, stream, []*EvsCheckedChange{c.change}, c.pathOf, repoId, refId, owner)
+		if (c.reason == "") != (err == nil) || (err != nil && (!errors.Is(err, ErrEvsStatementRefused) || !strings.HasSuffix(err.Error(), ": "+c.reason))) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	// the statement alone: a stream's write on a base waits on its payload, a deposit's is refused
+	alone := changeOf(3, entryOf(directoryEntry, 4, nil))
+	alone.EntryVersion = nil
+	if err := evsCheckRefRulesOver(config, stream, []*EvsCheckedChange{alone}, nil, repoId, refId, owner); err != nil {
+		t.Errorf("a stream's write on a base, the statement alone: %v", err)
+	}
+	depositId := EvsDepositRefId(repoId, owner)
+	deposit := &EvsStatement{Push: &protocol.EvsPush{RefKind: uint32(protocol.EvsRefKind_EVS_REF_DEPOSIT), OwnerSidecarId: owner.Bytes()}}
+	if err := evsCheckRefRulesOver(config, deposit, []*EvsCheckedChange{alone}, nil, repoId, depositId, owner); !errors.Is(err, ErrEvsStatementRefused) {
+		t.Errorf("a deposit's write on a base, the statement alone: %v", err)
+	}
+	if err := evsCheckRefRulesOver(config, deposit, []*EvsCheckedChange{changeOf(3, entryOf(directoryEntry, 4, nil))}, standing(directoryAt), repoId, depositId, owner); !errors.Is(err, ErrEvsStatementRefused) {
+		t.Errorf("a deposit's directory delta: %v", err)
+	}
+}
+
+// QD-722 at a head reader of a record-class stream, which holds each version it reads with its entry: a directory's
+// add-only delta lists and the file it added reads, while a file written again on a base, whose statement read alone
+// passes since it cannot be told from a delta, is refused once its entry is at hand and alarmed as tampering.
+func TestEvsHeadReaderHoldsAStreamVersionToTheCreatesOnlyRule(t *testing.T) {
+	world := newEvsTestWorld(t)
+	world.owned = true
+	world.config.repo.Kind = protocol.RepoKind_REPO_KIND_RECORD
+	world.push(&evsTestChange{path: "e", children: []string{"1"}}, &evsTestChange{path: "e/1", content: []byte("1")})
+	world.push(&evsTestChange{path: "e", children: []string{"2"}}, &evsTestChange{path: "e/2", content: []byte("2")})
+	reader := world.reader(t, evsTestId("reader"))
+	listing, err := reader.client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: "e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listing.Entries) != 2 {
+		t.Fatalf("e lists %d entries", len(listing.Entries))
+	}
+	if content, _, err := evsTestRead(t, reader, world, "e/2"); err != nil || string(content) != "2" {
+		t.Fatalf("the delta's file: %q %v", content, err)
+	}
+	// e/1 written again, which evs's 5c refuses and a server that lies commits
+	world.push(&evsTestChange{path: "e/1", content: []byte("written again")})
+	if _, _, err := evsTestRead(t, reader, world, "e/1"); !errors.Is(err, ErrEvsStatementRefused) {
+		t.Fatalf("a stream's file written on a base: %v", err)
+	}
+	if alarms := reader.eventsOf(SidecarEventEvsAlarm); len(alarms) == 0 || alarms[len(alarms)-1].EvsAlarm != SidecarEvsAlarmTamper {
+		t.Errorf("alarms %v", alarms)
 	}
 }
 

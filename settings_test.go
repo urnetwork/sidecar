@@ -58,6 +58,8 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				SessionWriteRate: SidecarRate{Count: 20, Burst: settings.Mcp.SessionWriteRate.Burst, Interval: 1 * time.Second},
 				ResultByteCount:  256 * 1024,
 				CallTimeout:      30 * time.Second,
+				// MCP-M3-13's reading: a read's in-memory bound, past §16.4's result cap
+				ResourceByteCount: 16 * 1024 * 1024,
 				// §16.6's retention row
 				ApprovalFileRetention: 30 * 24 * time.Hour,
 				RunFileRetention:      30 * 24 * time.Hour,
@@ -109,6 +111,23 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				ChangePathCount:          4096,
 				RunCardPromptByteCount:   2 * 1024,
 				RunCardPathCount:         256,
+				// §16.5's agent-config files, and MCP-M3-16's and MCP-M3-10's readings of §16.6 and §16.7
+				AgentConfigPaths: []string{
+					"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".mcp.json", ".cursorrules",
+					".claude/settings.json", ".claude/settings.local.json",
+					".codex/config.toml", ".codex/hooks.json",
+					".cursor/mcp.json", ".cursor/hooks.json",
+					".ur",
+				},
+				HarnessConfigByteCount:      16 * 1024 * 1024,
+				HarnessConfigDepthCount:     64,
+				HarnessConfigEditCount:      1024,
+				HarnessDiffContextLineCount: 3,
+				PermissionHookTimeout:       75 * time.Second,
+				HarnessInstallRetryCount:    3,
+				HarnessEvidenceTimeout:      10 * time.Minute,
+				HarnessEvidenceEventCount:   1024,
+				HarnessPromptingModes:       []string{"default", "acceptEdits", "plan"},
 			},
 		},
 		// §16.8

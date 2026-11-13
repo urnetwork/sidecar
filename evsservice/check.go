@@ -57,6 +57,10 @@ type PathRead struct {
 	// For a directory this push adds names to or removes names from: its listing at that head (Listing), whose rows
 	// 5g's bound counts with the push's delta. nil for any other path.
 	Listing *EvsListing
+	// For a directory a creates-only stream's delta writes (5c; QD-722): its newest version, which 5c holds the delta's
+	// base to. Newest gives a window version's; a folded table keeps none, so step 4 reads its delta's at names_through
+	// (push_step4.go). 0 for any other path, and for one that does not stand as a directory.
+	DirectoryVersion uint64
 }
 
 // A reuse source step 4 read: the committed version a reuse item names.

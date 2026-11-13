@@ -236,11 +236,9 @@ func (self *ConfigState) AgentRevokePlan(agentId Id, act AgentAct, compromise bo
 			}
 		}
 		if part.KeyRetires {
-			for _, repo := range self.aclRows.GetRepos() {
-				repoId, err := IdFromBytes(repo.GetRepoId())
-				if err != nil {
-					continue
-				}
+			// the rows' repos and the config beside them, which a live Delegation always reaches though the rows hold
+			// its row only from its first shrink (QD-762)
+			for _, repoId := range configShrinkRepoIds(self) {
 				holders, err := KeyHolders(self, repoId, at)
 				if err == nil && holders.Contains(GkmHolderDelegation, delegationId) {
 					part.ReposRotating = append(part.ReposRotating, repoId)

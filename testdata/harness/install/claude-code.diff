@@ -1,0 +1,155 @@
+--- a/$HOME/.claude.json
++++ b/$HOME/.claude.json
+@@ -6,6 +6,13 @@
+       "type": "stdio",
+       "command": "/opt/notes/bin/notes-mcp",
+       "args": ["serve"]
++    },
++    "ur": {
++      "type": "stdio",
++      "command": "/opt/ur/bin/ur",
++      "args": [
++        "mcp"
++      ]
+     }
+   },
+   "projects": {
+--- a/$HOME/.claude/settings.json
++++ b/$HOME/.claude/settings.json
+@@ -3,7 +3,16 @@
+   "permissions": {
+     "allow": ["Bash(git status)", "Read"],
+     "ask": [
+-      "Bash(rm:*)"
++      "Bash(rm:*)",
++      "mcp__ur__bridge_expose",
++      "mcp__ur__bridge_forward",
++      "mcp__ur__directory_request",
++      "mcp__ur__dns_delete",
++      "mcp__ur__dns_set",
++      "mcp__ur__mail_alias_create",
++      "mcp__ur__mail_alias_delete",
++      "mcp__ur__socket_listen",
++      "mcp__ur__tls_publish"
+     ]
+   },
+   "hooks": {
+@@ -12,6 +21,118 @@
+         "matcher": "Edit|Write",
+         "hooks": [
+           { "type": "command", "command": "/opt/fmt/bin/format-on-save" }
++        ]
++      },
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code"
++          }
++        ]
++      }
++    ],
++    "SessionStart": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code"
++          }
++        ]
++      }
++    ],
++    "InstructionsLoaded": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code"
++          }
++        ]
++      }
++    ],
++    "UserPromptSubmit": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code"
++          }
++        ]
++      }
++    ],
++    "PreToolUse": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code"
++          }
++        ]
++      }
++    ],
++    "PermissionRequest": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code",
++            "timeout": 75
++          }
++        ]
++      }
++    ],
++    "Notification": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code"
++          }
++        ]
++      }
++    ],
++    "Stop": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code"
++          }
++        ]
++      }
++    ],
++    "SubagentStop": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code"
++          }
++        ]
++      }
++    ],
++    "PreCompact": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code"
++          }
++        ]
++      }
++    ],
++    "SessionEnd": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code"
++          }
+         ]
+       }
+     ]
