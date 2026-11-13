@@ -1076,6 +1076,30 @@ func TestRecordMdVectorsRecompute(t *testing.T) {
 	}, nil))
 	approvalSum := sha256.Sum256(approval)
 	attestationSum := sha256.Sum256(attestation)
+	// QD-771's detail nonces: each action's clear fields as the lines name them, in field order, with no field 38
+	varint := func(encoded []byte, number protowire.Number, value uint64) []byte {
+		return protowire.AppendVarint(protowire.AppendTag(encoded, number, protowire.VarintType), value)
+	}
+	text := func(encoded []byte, number protowire.Number, value []byte) []byte {
+		return protowire.AppendBytes(protowire.AppendTag(encoded, number, protowire.BytesType), value)
+	}
+	forwardClear := varint(nil, 1, 3)
+	forwardClear = varint(forwardClear, 8, 1762387200000)
+	forwardClear = text(forwardClear, 10, []byte("sidecar:5152535455565758595a5b5c5d5e5f60"))
+	forwardClear = text(forwardClear, 11, []byte("dial"))
+	forwardClear = varint(forwardClear, 12, 4)
+	forwardClear = text(forwardClear, 28, repeated(0x46, 16))
+	forwardClear = text(forwardClear, 29, repeated(0x47, 16))
+	accessClear := varint(nil, 1, 15)
+	accessClear = varint(accessClear, 8, 1762387200000)
+	accessClear = text(accessClear, 10, []byte("sidecar:0102030405060708090a0b0c0d0e0f10"))
+	accessClear = text(accessClear, 11, []byte("dial"))
+	accessClear = varint(accessClear, 12, 3)
+	accessClear = text(accessClear, 14, repeated(0x31, 16))
+	accessClear = text(accessClear, 26, repeated(0x32, 16))
+	accessClear = text(accessClear, 29, repeated(0x33, 16))
+	forwardNonce := sha256.Sum256(forwardClear)
+	accessNonce := sha256.Sum256(accessClear)
 	wants := []string{
 		hex.EncodeToString(commitment[:]),
 		hex.EncodeToString(leaf("h0")),
@@ -1088,8 +1112,13 @@ func TestRecordMdVectorsRecompute(t *testing.T) {
 		fmt.Sprintf("%d bytes, SHA-256 %x", len(approval), approvalSum),
 		fmt.Sprintf("%d bytes, SHA-256 %x", len(attestation), attestationSum),
 		hex.EncodeToString(weights[:]),
+		hex.EncodeToString(forwardNonce[:16]),
+		hex.EncodeToString(accessNonce[:16]),
 	}
 	recordMdRequire(t, "section 20's vectors", section, wants...)
+	// and the nonce's formula is the one the vectors state
+	recordMdRequire(t, "section 20's vectors", strings.Join(strings.Fields(section), " "),
+		"the first 16 bytes of SHA-256 over a CanonicalAction as stored with its field-38 record cut out")
 
 	// The formulas above are the document's, or a value here could drift from the bytes section 5.1 states.
 	recordMdRequire(t, "section 5.1", doc.section(t, "5.1"),
