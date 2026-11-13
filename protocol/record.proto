@@ -92,7 +92,13 @@ message CanonicalAction {                   // built by the daemon; hashed as st
   bytes sealed_detail = 38;                 // a dial or route grant's prefixes and ports, and a version-3 access
                                             // request's: a CanonicalActionDetail in §7.9's sealed-body format, which
                                             // approvers and readers open and no server does (owner decision 220);
-                                            // set only in versions 3 and 4
+                                            // set only in versions 3 and 4. Its aad takes the action's own clear
+                                            // identity for a header's (QD-771): SignedType SIGNED_GRANT_ACTIVATE,
+                                            // the network's id, and as the nonce the first 16 bytes of SHA-256 over
+                                            // this action as stored with its field-38 record cut out, every other
+                                            // tag and value in its stored order and encoding: for a builder's bytes,
+                                            // written once in field order, the clear fields' deterministic encoding.
+                                            // Sealed once those fields are final, it opens beside them alone
 }
 // What sealed_detail opens to: what a dial or route grant's clear fields may not hold (QD-740).
 message CanonicalActionDetail {

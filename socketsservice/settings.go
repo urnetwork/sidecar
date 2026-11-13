@@ -136,6 +136,13 @@ type SocketGateSettings struct {
 	ResyncConcurrency int
 	// The bound on one {acl_}v read, at a load's start or in the resubscription check: 2 s.
 	VersionReadTimeout time.Duration
+	// How recently a network must have been served or loaded for the resubscription check to read its {acl_}v: 15 min,
+	// three of §8.9's 5-minute polls, which load every network the cache holds, so a network the cache has evicted is
+	// not reloaded by a resubscription.
+	ResyncUsedWithin time.Duration
+	// How many networks the gate follows at most: 100,000, the cache's own UnloadedCount. Past it the quiet networks
+	// served or loaded longest ago are let go, some 200 B each, and taken up again at their next ask, load or event.
+	MaxNetworkCount int
 	// How often §20.7's OverLimit is read again: 5 s (13.2.3's OverLimitInterval).
 	OverLimitInterval time.Duration
 	// The bound on one read: 2 s (OverLimitTimeout), inside the interval, so a stalled api never stacks reads.
@@ -153,6 +160,8 @@ func DefaultSocketGateSettings() *SocketGateSettings {
 		ResyncBatchCount:     1000,
 		ResyncConcurrency:    64,
 		VersionReadTimeout:   2 * time.Second,
+		ResyncUsedWithin:     15 * time.Minute,
+		MaxNetworkCount:      100000,
 		OverLimitInterval:    5 * time.Second,
 		OverLimitTimeout:     2 * time.Second,
 		Cache:                sidecar.DefaultAclGateSettings(),
@@ -176,6 +185,8 @@ func (self *SocketGateSettings) Validate() error {
 		{name: "gate.resync_batch_count", positive: 0 < self.ResyncBatchCount},
 		{name: "gate.resync_concurrency", positive: 0 < self.ResyncConcurrency},
 		{name: "gate.version_read_timeout", positive: 0 < self.VersionReadTimeout},
+		{name: "gate.resync_used_within", positive: 0 < self.ResyncUsedWithin},
+		{name: "gate.max_network_count", positive: 0 < self.MaxNetworkCount},
 		{name: "gate.over_limit_interval", positive: 0 < self.OverLimitInterval},
 		{name: "gate.over_limit_timeout", positive: 0 < self.OverLimitTimeout && self.OverLimitTimeout <= self.OverLimitInterval},
 	} {
