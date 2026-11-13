@@ -242,6 +242,23 @@ func (self *FakeCertsStore) ListQueued(ctx context.Context, afterCertId sidecar.
 	return
 }
 
+func (self *FakeCertsStore) ListInStates(ctx context.Context, states []sidecar.TlsCertState, afterCertId sidecar.Id, count int) (rows []*sidecar.TlsCertRecord, err error) {
+	err = self.call(ctx, "ListInStates", func() error {
+		rows = []*sidecar.TlsCertRecord{}
+		if count <= 0 {
+			return nil
+		}
+		rows = self.sortedWithLock(func(row *sidecar.TlsCertRecord) bool {
+			return slices.Contains(states, row.State) && 0 < row.CertId.Cmp(afterCertId)
+		})
+		if count < len(rows) {
+			rows = rows[:count]
+		}
+		return nil
+	})
+	return
+}
+
 func (self *FakeCertsStore) TransitionCert(ctx context.Context, transition *certsservice.CertsTransition) (applied bool, err error) {
 	err = self.call(ctx, "TransitionCert", func() error {
 		row, ok := self.rows[transition.CertId]

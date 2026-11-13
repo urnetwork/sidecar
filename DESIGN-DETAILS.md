@@ -19,7 +19,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 9 | Client path epochs and re-tokenizing | 3 | complete (2026-11-10) |
 | 10 | DROP lists a phone can check (§11.6, §11.7, §11.9) | 5 | complete (2026-11-11) |
 | 11 | Canonical text extraction and exact body sizes for search | 2 | complete (2026-11-10; amended 2026-11-12, QD-760) |
-| 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11) |
+| 12 | Bridge compiler and NAT engine (§17) | 4 | complete (2026-11-11; amended 2026-11-12, QD-761, built on the recommendations of open questions details-amend-2-late-generation and details-amend-2-fold-holds) |
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 | 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
 
@@ -9578,11 +9578,11 @@ Each is filed under `.stack/questions/`, and the design above is built on its re
 
 ## 12. Bridge compiler and NAT engine (§17)
 
-Status: complete (2026-11-11)
+Status: complete (2026-11-11; amended 2026-11-12, QD-761: 12.2.2, 12.2.3, 12.3, 12.5, 12.6, 12.7, 12.8 and 12.9, each place marked; the readers' half of the amendment is built on the recommendation of open question `details-amend-2-late-generation`, and what the amendment leaves to a sidecar that keeps filing is open question `details-amend-2-fold-holds`)
 
 Tasks held until complete: BRIDGE-M4-16, BRIDGE-M4-17, BRIDGE-M6-03, BRIDGE-M6-04.
 
-Models: `sidecar/sidecartest/model/details/BridgeNat.tla` (the engine against the host's NAT), `ShareSign.tla` (a share's signers against removal and revocation) and `BridgeFold.tla` (one body-level verdict at every reader), their configurations (`BridgeNat*.cfg`, `ShareSign*.cfg`, `BridgeFold*.cfg`) and `run-bridge.sh` beside them. New tasks: `.stack/plan/proposals/details-12-tasks.md` (BRIDGE-M4-23, BRIDGE-M4-24, ACL-M2-17). Questions filed: `.stack/questions/details-12-ledger-in-head.md`, `details-12-unfolded-verdicts.md`, `details-12-start-gate.md`, `details-12-alias-table-pin.md`, `details-12-ratchet-commit.md`. Questions this section answers, each as 12.9 says: `bridge-m4-09-other-client-rows`, `bridge-m4-11-rule-three-tags`. It builds on the answers already given to `plan-BRIDGE-share-pins` (QD-077), `plan-BRIDGE-subject-resolution` (QD-161), `plan-BRIDGE-gate-row-prefixes` (QD-004, QD-003), `plan-BRIDGE-keyless-window-parent` (QD-184, as section 4 replaced it), `plan-BRIDGE-small-readings`, `plan-BRIDGE-windows-tun-driver` (QD-125), `g0-density-share-seal-format` (QD-108), `bridge-m2-01-egress-mode-field` (QD-630) and `bridge-m2-01-multi-use-approval` (QD-631). Section 4 stands as written: this section fills the compile its `Compile` step 4 calls and the engine its sink is, and changes neither.
+Models: `sidecar/sidecartest/model/details/BridgeNat.tla` (the engine against the host's NAT), `ShareSign.tla` (a share's signers against removal and revocation) and `BridgeFold.tla` (one body-level verdict at every reader), their configurations (`BridgeNat*.cfg`, `ShareSign*.cfg`, `BridgeFold*.cfg`) and `run-bridge.sh` beside them. Amended 2026-11-12, QD-761: `BridgeVoid.tla` (a body sealed to a generation that does not form), with `BridgeVoid*.cfg` and `run-bridgevoid.sh`. New tasks: `.stack/plan/proposals/details-12-tasks.md` (BRIDGE-M4-23, BRIDGE-M4-24, ACL-M2-17). Questions filed: `.stack/questions/details-12-ledger-in-head.md`, `details-12-unfolded-verdicts.md`, `details-12-start-gate.md`, `details-12-alias-table-pin.md`, `details-12-ratchet-commit.md`. Questions this section answers, each as 12.9 says: `bridge-m4-09-other-client-rows`, `bridge-m4-11-rule-three-tags`. It builds on the answers already given to `plan-BRIDGE-share-pins` (QD-077), `plan-BRIDGE-subject-resolution` (QD-161), `plan-BRIDGE-gate-row-prefixes` (QD-004, QD-003), `plan-BRIDGE-keyless-window-parent` (QD-184, as section 4 replaced it), `plan-BRIDGE-small-readings`, `plan-BRIDGE-windows-tun-driver` (QD-125), `g0-density-share-seal-format` (QD-108), `bridge-m2-01-egress-mode-field` (QD-630) and `bridge-m2-01-multi-use-approval` (QD-631). Section 4 stands as written: this section fills the compile its `Compile` step 4 calls and the engine its sink is, and changes neither.
 
 ### 12.1 The problem
 
@@ -9801,7 +9801,7 @@ Encoding, which every writer on every leg must give alike, since the manifest ha
 
 **Rule tags.** `EgressDecision.RuleTag` stays the first 8 bytes of SHA-256(subject_id || rule_id). Rule 3's rule_id becomes five bytes, 0x03 and the hosted address's IPv4, so an old address's drain end closes that address's flows alone (bridge-m4-11-rule-three-tags, option 2); rules 4 and 7 keep their one byte. A share flow's subject_id is its `share_id` and its rule_id is five bytes, 0x53 and u32be(target index), since X's host cannot list Y's subjects. Every tag is still enumerable from the state without tracking flows.
 
-**Settings.** `BridgeComponentSettings` (root; `DefaultBridgeComponentSettings()` fills them): `CompileDelay` 100 ms, `CompileMinInterval` 1 s, `CompileRetryInterval` 5 s doubling to 5 min, `CatchUpAlarmTimeout` 30 s, `WindowDelegationMaxLifetime` 168 h, `BindingRefreshInterval` 6 h, `BindingRetainTimeout` 7 days, `BindingMaxCount` 16 a subject, `ShareRenewInterval` 1 h, `ShareRenewBelow` 72 h, `ShareCertLifetime` 168 h, `ShareTableRefreshInterval` 1 h, `AcceptRetryCount` 3, `AutoAddressEnabled` false (plan-BRIDGE-small-readings #18). `BridgeLedgerSettings`: `ChunkByteCount` 64 KiB, `UnfoldedBodyMaxByteCount` 4 MiB (the opened bodies of the unfolded statements a compile holds; past it the compile refuses with `bridge_alarm` `ledger_over_budget` and the state stands), `RuleShardRowCount` 262,144.
+**Settings.** `BridgeComponentSettings` (root; `DefaultBridgeComponentSettings()` fills them): `CompileDelay` 100 ms, `CompileMinInterval` 1 s, `CompileRetryInterval` 5 s doubling to 5 min, `CatchUpAlarmTimeout` 30 s, `WindowDelegationMaxLifetime` 168 h, `BindingRefreshInterval` 6 h, `BindingRetainTimeout` 7 days, `BindingMaxCount` 16 a subject, `ShareRenewInterval` 1 h, `ShareRenewBelow` 72 h, `ShareCertLifetime` 168 h, `ShareTableRefreshInterval` 1 h, `AcceptRetryCount` 3, `AutoAddressEnabled` false (plan-BRIDGE-small-readings #18). `BridgeLedgerSettings`: `ChunkByteCount` 64 KiB, `UnfoldedBodyMaxByteCount` 4 MiB (the opened bodies of the unfolded statements a compile holds; past it the compile refuses with `bridge_alarm` `ledger_over_budget` and the state stands), `RuleShardRowCount` 262,144. Amended 2026-11-12, QD-761: `BridgeLedgerSettings` gains `UnformedVoidWait` 24 h and `GenerationFormGrace` 1 h (12.2.3's void at the fold). Every reader of a network reads the grace's default, as it does the shard width, since a verdict rides on it; a wait below the grace plus 30 min is raised to that floor when the settings are read, so with the default grace the lowest wait is 90 min.
 
 #### 12.2.3 The ledger: judging, the fold and its check
 
@@ -9812,6 +9812,9 @@ JudgeBridgeBody(before, e at k)                  -- ConfigLogSettings.BridgeBody
   entries below k applied by their verdicts (section 5.2.3's Reapply)
   body := OpenConfigBody(e.sealed_body, keys)
      its generation is not held   -> Unopened{generation}
+     its generation's GenRotate is signed more than GenerationFormGrace after e's time
+                                  -> Refused{no such generation}: void, and no alarm (below; amended
+                                     2026-11-12, QD-761)
      the seal or padding fails    -> Refused{seal}, which is the reader's alarm
   body.approval is unset          -> Standing        -- whether a standing grant covers it is the compile's (12.2.4)
   else  facts, err := before.CheckBridgeApproval(e, body, body.approval)   -- as landed, on `before` itself: action,
@@ -9846,14 +9849,16 @@ a rule id's states in the ledger (a route or a map)
   none -> pending              its first filing took effect at id level and its body's generation is not held
   none, pending -> active      the body opens and passes its rules (Standing or Approved); in force only while
                                12.2.4's check holds at the state compiled
-  none, pending -> void        the body does not open, breaks its rule, or its approval is Refused
+  none, pending -> void        the body does not open, breaks its rule, or its approval is Refused; or a fold
+                               finds its generation unformed (below; amended 2026-11-12, QD-761)
   reserved -> void             a filing of the id by a signer the withdrawal binds
   active -> active             a filing of the held id: weight, site_id and drain_seconds only
   active -> withdrawn          a BridgeWithdraw by its owner or an admin: reset at once, or draining for
                                max(drain_seconds, 600 s)
   withdrawn, reserved -> none  the fold whose time passes retain_until_ms drops the row
   void -> void                 for the network's life
-  unfolded -> frozen           a fold writes the row; pending is never frozen
+  unfolded -> frozen           a fold writes the row; pending is never frozen: a fold stops below it, or
+                               freezes it void as unformed (amended 2026-11-12, QD-761)
 ```
 
 `CheckBridgeApproval` changes in one way: it judges on its receiver, the state the log hands it, where the landed one asks `StateAt(statement.N - 1)`. `ErrBridgeApprovalUnverifiable` goes, and with it `BridgeLedgerReader.Approvals` and every verdict a reader kept for itself.
@@ -9871,10 +9876,17 @@ S(k-1) is R_b(k-1) for k above b (section 5.2.2), so the last two lines are one 
 ```text
 FoldBridgeLedger(T(ft'), the writer's state at its tip, ft) -> T(ft)          -- inside ConfigWriter's plan, at a base
   ledger := OpenBridgeLedger(T(ft'), the state's unfolded statements at or below ft, state, keys)
-  an Unopened filing at k stops the fold at k-1: a writer never freezes what it could not open. A config writer
-     holds every generation, so this is a broken delivery: it alarms config_key_waiting and folds to k-1, or
-     keeps the previous fold where section 5's rule (a fold is the previous one or at least the previous base)
-     does not allow k-1
+  an Unopened filing at k, sealed to generation g, is one of two things (amended 2026-11-12, QD-761):
+     unformed   the plan's whole read of gkm names G as the config repo's newest generation, the writer holds
+                the key of every generation 1..G, g > G, and the entry at ft, the writer's tip, was sequenced
+                at least UnformedVoidWait after the entry at k. The fold freezes it void, as a Refused body
+                (Refused{no such generation}), and goes on
+     waiting    anything else: gkm names g and its key has not reached the writer, the read was not whole, or
+                the wait has not passed. It stops the fold at k-1: a writer never freezes what it may still
+                come to open. A config writer holds every generation gkm names, so a named one it lacks is a
+                broken delivery: it alarms config_key_waiting and folds to k-1, or keeps the previous fold
+                where section 5's rule (a fold is the previous one or at least the previous base) does not
+                allow k-1
   rows   the ledger's addresses, live and the tombstones still holding at time_ms; its rules, active, void, withdrawn
          and reserved, a withdrawn or reserved row leaving once time_ms passes retain_until_ms; its egress specs; its
          aliases, a released one leaving at its drain's end
@@ -9889,12 +9901,34 @@ CheckBridgeLedgerFold(head, previous head, my state at b-1) -> ok | mismatch | u
      mine := FoldBridgeLedger(the previous head's T(ft'), my state, ft)
      every file's hash and the manifest equal   -> ok
      any differs                                -> ErrConfigHeadMismatch: a FORK, as a rows mismatch is
-     I hold an Unopened filing at or below ft   -> unchecked: I take the head's rows, as a new device does
+     I hold an Unopened filing at or below ft   -> unchecked: I take the head's rows, as a new device does.
+                                                   A checker voids nothing as unformed: that is the writer's
+                                                   alone (amended 2026-11-12, QD-761)
   a device that starts at b takes the rows; so does a VPN component, which is a rows-only verifier with a reader
   key and checks no compile (section 4.2.1), its app's sidecar role checking this one whenever it runs
 ```
 
 A verdict frozen at a fold is the one every reader standing under the previous base held, because the writer folds the statements its own state holds, judged under that base. A writer cannot freeze another: the readers standing there fork on it. And a frozen verdict never changes: a later fold copies the row.
+
+**A body sealed to a generation that does not form** (amended 2026-11-12, QD-761; question `bridge-m2-02-unopened-generation-stall`, option 2). A sealed body names its generation in its first 8 bytes, which the id level reads and does not bound. Any standing sidecar can file a route sealed to a generation that never forms. It takes effect at id level, no writer can ever open it, and as first written every later fold stopped below it, so that once §7.9's 4,096 entries had followed it no base could be published at all. The owner's answer bounds the stop at the fold: such a body is frozen void. That is the one frozen verdict the readers standing there did not hold, since to them the filing was pending, so the rule has two halves, one at the writer and one at every reader that holds keys.
+
+*The writer's half.* Inside a plan, after it has applied its tip, the writer reads gkm's generation listing for the config repo's group to its end (`SyncRepo`, as a key delivery does). The read counts when it is whole, no fork is recorded at the generation pin, and the writer holds the key of every generation it names, 1 to G. A filing at k that the writer holds Unopened, sealed to g > G, is then unformed once the entry at the writer's tip was sequenced at least `UnformedVoidWait` after the entry at k, and the fold freezes it void.
+
+- When the wait starts: at the filing's own entry, in the log's time, which is api's sequencing time (`ConfigState.TimeMs`). It is read against the time of the writer's tip entry and never against a device's clock, so the fold stays a function of its inputs, and a writer that restarted, or that came to write only now, voids exactly what one that ran throughout would.
+- What resets it: nothing. The wait is no timer a writer keeps. A rotation that forms a generation below g, a re-form, another writer and a restart leave it where it was, because each plan asks afresh whether g is above everything gkm names. This is how the section reads the decision's "has held every generation the config repo's gkm head names for a set time": the holding is tested at the plan, and the time is the filing's age. A timer on the holding itself would start again at every rotation, which the same sidecar can cause 60 times an hour (§10.6's rate row), and once it had run it would void a filing the moment it arrived, before any reader could tell a generation that will never form from one about to (the readers' half needs that margin).
+- What defers it: a read that failed or was cut short; a generation gkm names whose key the writer lacks, which is the broken delivery `config_key_waiting` alarms; g at or below G, where the writer waits for the key and then judges the body like any other; and a tip not yet the wait past k. A filing is never void at the writer for a key that exists and has not reached it.
+
+*The readers' half.* `JudgeBridgeBody`, and every other open of a bridge body by its generation (the ledger's own, for a BridgeEgress, a BridgeAlias and the rest), refuses a body whose generation the reader holds when that generation's GenRotate is signed, by its `time_ms`, more than `GenerationFormGrace` after the time of the entry that carries the body: Refused{no such generation}, void, with no alarm, since no seal failed. The time is the one every key carries (`EvsRepoKey.Time`). An honest filer seals to a generation it holds; gkm took that generation's claim within 10 min of its own clock (§10.6's time row) before the filer could hold the key, and the filing was sequenced after that. So an honest body's generation is signed before its entry, give or take the two servers' clocks, and the rule never meets it: the grace, 1 h, is well above those.
+
+*A checker.* `CheckBridgeLedgerFold` voids nothing as unformed. A reader that holds an Unopened filing at or below the head's fold takes the head's rows unchecked, as it did: it lacks the key to say more. A reader that holds the generation judges the filing itself, by the readers' half, and compares.
+
+*If the generation forms after the void.* The row is frozen and the id stays void for the network's life, as any void id does, and a later filing of it is void. A reader that comes to hold g and judges the filing itself, because it stands under an older base or holds the filing in a base's tail, reaches the same verdict. The writer's read named no g when its tip was already `UnformedVoidWait` past the filing, so gkm took g's claim after that read, and gkm holds a claim's time within 10 min of its clock. So g's GenRotate is signed later than the filing's entry by at least the wait less those 10 min and the servers' clock difference, which is above `GenerationFormGrace` whenever the wait is at least the grace plus 30 min, the floor 12.2.2 sets, and api's and gkm's clocks agree within 20 min. The reader therefore refuses the body as the fold did, and its check passes. This is what stops a sidecar that seals a body under a key of its own making, waits for the void and then claims g with that key (a rotator makes its generation's key): without the readers' half every reader that gained g would hold the rule active and fork on the base (`BridgeVoidTwin-NoGrace`). A requester whose body was honest has nothing to recover here, since an honest body names a generation that exists; one that was early by its own error files again.
+
+*Two writers.* A base is one writer's (section 5.2.4's 409), so the first base that folds past k decides, and a void row has one encoding whoever writes it. A writer whose wait is longer, or whose own read was not whole, stands under the previous base as any reader does: it holds the filing Unopened, takes the rows unchecked and folds on from them. Two writers that would both void write equal files. Because a wait below the floor is raised to it, no writer voids inside the grace (`BridgeVoidTwin-WaitInsideSkew`).
+
+*What changes in `FoldBridgeLedger`.* It stays pure. `BridgeLedgerReader` gains `FormedThrough`: G from the plan's read, or 0 where the read does not count. A checker, a compile and every other open pass 0. With it above 0, the fold treats an Unopened statement sealed above it, whose entry is at least the wait before the entry at the fold asked, as Refused, and does so in both of its opens, the one at the fold asked and the one at the fold it reaches. `BridgeLedgerFold.Stopped` is then the first statement still waiting, and nil when none is; a new `BridgeLedgerFold.Voided` lists the statements at or below the fold reached that this fold froze void as unformed, none where the fold stayed, for the writer's log line `config_key_void`. Both lines name the statement's generation and its signer. `BridgeBodyJudge` gains the read, `FormedThrough func() uint64`, which the `BridgeFold` seam of `ConfigWriter` calls once a plan.
+
+*What is left.* One such filing holds the fold for the wait and no longer. A sidecar that keeps filing them holds it for as long as it keeps on, which is less than the answer's words promise and is asked of the owner (12.9, `details-amend-2-fold-holds`). The fold passes a filing only once it is the wait old, and section 5's rule lets a fold stop short of its tip only at or above the previous base. So a plan moves the fold only when no such filing younger than the wait sits at or below the previous base (`BridgeVoidReach-Held`), and filings an hour apart keep one there unless a network goes nearly the whole wait without a base. Until 4,096 entries have followed the fold nothing else waits on it: bases land with the fold where it was, and statements take effect at their positions. After that no base lands (§7.9's tail cap) until every such filing under the last base is the wait old; then one base lands, its fold short of its tip by less than the wait, where the entries since then fit the cap, and the cycle begins again. A network that sequences more than 4,096 entries inside the wait lands no base while the filings continue. What ends it is the filer's revocation, a statement that needs no base: the first plan whose tip is the wait past the filer's last filing folds through its tip. `config_key_waiting` and `config_key_void` name the filer for that, and an operator who wants the windows shorter lowers `UnformedVoidWait` toward its floor. And a gkm that hides a formed generation from the writer's listing while it delivers it to others makes those readers fork on the base, which is the alarm, as for any head they cannot reproduce (`BridgeVoidTwin-StaleRead` is that fork, with a listing the writer remembered in place of one gkm cut short). By failing the read gkm can delay a void and do no more.
 
 Three smaller rules complete the ledger. A rule's approval budget is counted over rows and entries by `approval_id`, so it needs no table of its own: a row that names a decision keeps the count for as long as the rule lives, and once every rule of a decision has left the rows the decision's `not_after` has passed, which refuses any later filing under it. A void id stays for the network's life (`retain_until_ms` 0), since the entry that filed it is in the head's folds as long. And a daemon that gains a generation late judges the filings it held `Unopened` through `ConfigLog.RejudgeBridgeBodies`, which hands the judge S(k-1) from `StateAt` for an entry above the base and, for a tail entry, rebuilds R_b(k-1) from the retained base rows; a VPN component needs no such call, since every compile restores its judge at the base with the keys it then holds.
 
@@ -10258,6 +10292,18 @@ FoldFaithful      a fold's rows are the ledger the readers standing under the pr
                   the same fold and forks on a difference (CheckBridgeLedgerFold)
 FoldedStays       a verdict, once folded, is the same in every later fold
                   why: a fold copies the rows it does not change
+VoidsAgree        (amended 2026-11-12, QD-761) a filing a fold froze void as unformed is void at every reader that
+                  comes to hold its generation, so none forks on that base and none holds the rule active
+                  why: the writer voids only above every generation a whole read of gkm names, and no sooner than
+                  UnformedVoidWait after the filing's entry; a generation claimed after that read carries a time
+                  gkm held within 10 min of its clock, which is more than GenerationFormGrace after the entry;
+                  and every reader refuses a body whose generation was signed that late
+HonestValid       (amended 2026-11-12, QD-761) no body sealed to a generation that existed when it was filed is
+                  refused for its generation's time
+                  why: the grace is above gkm's bound on a claim's time and the servers' clocks together
+Bounded           (amended 2026-11-12, QD-761) a writer that holds every generation gkm names, publishing when
+                  every filing sealed above them is UnformedVoidWait old at its tip, folds through its tip
+                  why: its only Unopened filings are those, and the fold freezes each void
 CompileEqual      CompileBridgeState returns the same bytes for the same view and local facts, on every leg, at any
                   GOMAXPROCS, on a daemon and in a VPN component
                   why: 12.2.4's table, and one code path over LedgerFile
@@ -10363,6 +10409,41 @@ What the twins are. Three are the code or text as it stood: `RevokeAtZero` is th
 
 What the reach runs are. `Opens` and `Member` show the designs admit what they should. `RemovedInBound` is §17.9's accepted bound: a removed sidecar is admitted, inside the bound, until a later generation's cert reaches the host. `HolderRemoved` is its other accepted row: a device that held the ShareKey and left can certify until X revokes the share, which is why 12.2.8 raises `share_holder_removed`. `Turn` is the one case in which a verdict differs from the one judged at its entry's position (12.2.3), stated so the owner can weigh it (12.9).
 
+**The void at the fold** (amended 2026-11-12, QD-761). `BridgeFold.tla` has no generations, so a fourth model, `BridgeVoid.tla`, holds the amended rule; `BridgeFold.tla` and its runs stand as they are. Its log holds filings and bases with the times api sequenced them at. A filing is sealed to a formed generation by an honest filer, to one that never forms with bytes no key opens, or to the next generation under a key the filer made and may later claim that generation with. gkm forms generations in order, each by an honest rotator or by that filer, with a GenRotate time within `Skew` of its clock. Two readers, both writers with waits of their own, judge filings, publish bases and check each other's: one stands at the tip, applying each entry as it is sequenced, the other may fall behind in the log, and either may be behind in the generations it holds. `BridgeVoid-Mirror` gives each the other's wait. It leaves out what `BridgeFold.tla` holds (the approval's verdict, a device that starts at a base) and rule ids, each filing being its own. It checks `NoFork` (no checker that could compare finds a base's rows other than its own verdicts), `Equal`, `FoldedStays`, `NoPendingRow`, `Bounded`, `VoidsAgree` and `HonestValid`.
+
+Runs, TLC at the owner's jar (master d8fb231), breadth-first, 4 workers, on 2026-11-12 on a machine carrying five build lanes (load average near 120). `run-bridgevoid.sh <track>` runs every configuration and prints a verdict line for each.
+
+```text
+configuration                        bounds                                              result
+                                                                             distinct states  depth  time
+BridgeVoid.tla
+BridgeVoid                           4 entries, 2 generations and one that never forms, times 0 to 2, waits of 1
+                                     and 2, grace 0, no skew
+                                     pass: TypeOK, NoFork, Equal, FoldedStays, NoPendingRow, Bounded, VoidsAgree,
+                                     HonestValid                                   1,680,122     18  2 min 52 s
+BridgeVoid-Mirror                    the same with the waits the other way round
+                                     pass: the eight                               1,682,524     18  2 min 33 s
+BridgeVoid-Skew                      3 entries, times 0 to 3, waits of 3, grace 1, GenRotate times within 1
+                                     pass: the eight                                 830,293     16  55 s
+BridgeVoidTwin-Landed                Bounded violated, an 8-state trace
+BridgeVoidTwin-NoGrace               NoFork violated, a 14-state trace
+BridgeVoidTwin-NoWait                NoFork violated, a 10-state trace
+BridgeVoidTwin-StaleRead             NoFork violated, a 13-state trace
+BridgeVoidTwin-CheckerVoids          NoFork violated, a 13-state trace
+BridgeVoidTwin-WaitInsideSkew        the design with a wait of 2 against a grace of 1 and a skew of 1: VoidsAgree
+                                     violated, a 10-state trace
+BridgeVoidReach-Voids                the design, with "no fold voids above gkm's newest": violated, a 7-state trace
+BridgeVoidReach-LateForm             the design, with "no voided body's generation forms under its key": violated,
+                                     a 10-state trace
+BridgeVoidReach-Unchecked            the design, with "no checker takes rows unchecked": violated, an 8-state trace
+BridgeVoidReach-Held                 the design at 4 entries, 1 generation and waits of 2, with "every filing past
+                                     its wait is folded": violated, a 10-state trace
+```
+
+Each twin and reach run took 15 s or less and stopped within 408,000 states, at 3 entries but for `Held`'s 4; the trace lengths are those of the run recorded. No larger run was started: the designs at 4 entries are what finishes in about 3 min each on this host under its load. A first shape with a third reader was stopped unfinished and is not evidence.
+
+What these twins are. `Landed` is `FoldBridgeLedger` as it stood: the fold stops below a filing no key will open, however old. `NoWait` voids at once, and the generation is then claimed inside the grace, so a reader that gains it judges the body. `NoGrace` drops the readers' half: the filer claims the generation after the void under the key it sealed with, and a reader that was behind forks. `StaleRead` voids on a listing the writer remembered, a body sealed to a generation formed since, which a reader holding that generation judges valid. `CheckerVoids` has a checker apply the wait to a filing it lacks the key of, and fork on a row the writer judged with the key. `WaitInsideSkew` is the settings floor: a wait not above the grace and gkm's skew together lets a claim made just after the void carry a time inside the grace. The reach runs show the design does void, does meet a generation that forms afterwards under the filing's key, with `NoFork` and `VoidsAgree` holding in the design runs over the same traces, and does have a checker take rows unchecked. `Held` is the limit 12.2.3 states under What is left: a fold stays below a filing past its wait while a younger one sits under the previous base, which is why `Bounded` asks that every such filing be past its wait.
+
 ### 12.4 Cost
 
 Figures marked estimate are computed from the formats and from costs other sections measured; nothing here was measured on a device, and BRIDGE-M4-16's benchmark and SDK-M8-15's cell replace them.
@@ -10429,7 +10510,23 @@ shares
 ```text
 a body's generation is not held     the filing is pending: its id is held, nothing of it is active, Waits names the
                                     generation, and the first (re)application with the key judges it. Older bodies
-                                    compile. A writer does not fold past it
+                                    compile. A writer does not fold past it while gkm names the generation, nor
+                                    for UnformedVoidWait where it does not (amended 2026-11-12, QD-761)
+a body's generation does not form   (amended 2026-11-12, QD-761) pending for UnformedVoidWait from its entry. Then
+                                    the first base by a writer whose whole read of gkm names no such generation
+                                    freezes it void and folds on, logging config_key_void; a checker that lacks
+                                    the generation takes the rows unchecked. The id is void for the network's life
+its generation forms after the      (amended 2026-11-12, QD-761) the row stays void. A reader that gains the
+void                                generation refuses the body too, its GenRotate being signed more than
+                                    GenerationFormGrace after the entry, so its check passes and nothing opens
+a sidecar keeps filing bodies       (amended 2026-11-12, QD-761) the fold holds where it was while one younger than
+sealed to unformed generations      the wait sits at or below the previous base. Bases land with that fold until
+                                    4,096 entries follow it, then none until those under the last base are the
+                                    wait old. config_key_waiting names the filer, and its revocation ends it one
+                                    wait after its last filing (12.2.3; question details-amend-2-fold-holds)
+gkm hides a formed generation       (amended 2026-11-12, QD-761) the writer voids a body others can open, and each
+from the writer's listing           reader holding the generation forks on that base, which is the alarm. A read
+                                    that fails, or names a generation the writer lacks, only delays a void
 a body's seal does not open         void, and bridge_alarm state_unverified naming the entry; never a fallback
 a ledger file fails its hash,       the compile fails and changes nothing: the state in force stands, the sink is not
 or the manifest names none          called, bridge_alarm state_unverified; a daemon forks on the base (FoldFaithful's
@@ -10492,6 +10589,29 @@ root, the ledger      TestBridgeLedgerEqualFromAnyBase (generated logs with base
                       TestALateGenerationJudgesThePendingFiling, TestBridgeLedgerFilesAreDeterministic (byte-equal
                       across runs, GOMAXPROCS and legs), TestRuleShardsWiden, FuzzBridgeLedgerFold (a fold of a
                       random log equals the ledger of that log opened whole)
+root, the void at     (amended 2026-11-12, QD-761; BRIDGE-M4-23's fix track) TestAnUnformedFilingIsVoidedAfterTheWait
+the fold              (the fold reaches the tip, the row is void, Voided names it and Stopped is nil; for a route,
+(BRIDGE-M4-23)        a map, an egress and an alias), TestAnUnformedFilingWaits (a tip one millisecond short of
+                      the wait: stopped at k-1, config_key_waiting), TestANamedGenerationIsNeverVoided (g at or
+                      below FormedThrough with its key not held, at any age), TestNoVoidWithoutAWholeRead
+                      (FormedThrough 0: a failed read, a cut listing, a fork at the pin, a named generation not
+                      held), TestACheckerVoidsNothing (CheckBridgeLedgerFold with an Unopened filing at or below
+                      the fold is unchecked whatever its age, and takes a head's void),
+                      TestALateGenerationIsNoGeneration (a body whose generation is signed one millisecond past
+                      the grace after its entry is Refused by the judge and by each of the ledger's own opens,
+                      and one at the grace is judged; a reader that gains the generation after the void folds
+                      the head's files byte for byte, and RejudgeBridgeBodies leaves the frozen row),
+                      TestALaterFilingOfAVoidedIdIsVoid,
+                      TestTwoWritersFreezeOneVoid (waits of 24 h and 48 h, each writer first: one base folds past
+                      k, the other takes it unchecked, and where both would void their files are byte-equal),
+                      TestTheVoidIsMeasuredInLogTime (a writer restarted, and one whose clock is a day off, fold
+                      as the first did), TestTheFoldHoldsUnderAYoungerFilingBelowTheBase (BridgeVoidReach-Held's
+                      trace: the fold stays, Stopped names the younger filing and its signer, Voided is empty),
+                      TestTheFoldReachesTheTipAWaitAfterTheLastFiling (filings 6 h apart with bases between,
+                      then none: the first plan whose tip is the wait past the last folds through its tip and
+                      voids them all), TestBridgeLedgerSettingsFloorTheWait; TestAnUnopenedFilingStopsTheFold
+                      stays, for a generation gkm names; FuzzBridgeLedgerFold gains FormedThrough and entry
+                      times
 root, the compiler    golden states in testdata/bridge/compile/, byte-equal across runs and GOMAXPROCS; the plan's
 (BRIDGE-M4-16)        cases (§8.5's no-document rows, D-BRIDGE-8, a route in force only once approved or covered, a map
                       onto a listener or an overlay address refused, a name equal to a published host omitted, a
@@ -10522,7 +10642,7 @@ signers               (the stale holder of 12.1's E.1, a barrier between its rea
                       TestSeedsNeverLeaveTheSigner (a capture of BridgeState, every device RPC message and every event)
 ```
 
-Schedule rows. FS-56 gains the engine's schedules, each a twin of `BridgeNat.tla` on real code with barriers: a close held after its publish while a flow registers and dials; two publishes before the first close; a compile finishing below a held denial; a restart between a judged denial and its compile; a provider's first frame against the hook's installation. FS-38's share rows gain: a renewal racing a rotation at the write gate; a removed sidecar with an unexpired cert before and after a later generation's cert reaches the host, and after the host restarts; a ShareCert over 7 days out; a share revoked between states. FS-14 gains a bridge filing across a fold at a new device, a daemon and a VPN component, with equal `Digest`s, and a base that turns an unfolded verdict, at all three alike. §22.5's §17 row gains the compile's benchmark and "no compile reads a fold file". Each twin of the three models is one of these schedules, and each accepted reach trace is one the code must also reach, with its alarm where it has one.
+Schedule rows. FS-56 gains the engine's schedules, each a twin of `BridgeNat.tla` on real code with barriers: a close held after its publish while a flow registers and dials; two publishes before the first close; a compile finishing below a held denial; a restart between a judged denial and its compile; a provider's first frame against the hook's installation. FS-38's share rows gain: a renewal racing a rotation at the write gate; a removed sidecar with an unexpired cert before and after a later generation's cert reaches the host, and after the host restarts; a ShareCert over 7 days out; a share revoked between states. FS-14 gains a bridge filing across a fold at a new device, a daemon and a VPN component, with equal `Digest`s, and a base that turns an unfolded verdict, at all three alike. Amended 2026-11-12, QD-761: FS-14 also gains a filing sealed to a generation that never forms, void at the fold after the wait at all three with equal `Digest`s, and the same filing with its generation claimed after the void under the filing's key, a daemon that was behind taking the base with no fork; each twin of `BridgeVoid.tla` is one of 12.6's tests above. §22.5's §17 row gains the compile's benchmark and "no compile reads a fold file". Each twin of the three models is one of these schedules, and each accepted reach trace is one the code must also reach, with its alarm where it has one.
 
 Gates. `BenchmarkCompile` at 5,000 devices within section 4.4's 200 ms on the reference phone class and its heap within 12.4's working set, from M4; SDK-M8-15's cell samples the same compile inside the admission cap at M8. The ios_extension leg's size row counts the ledger and the compiler from M4 (section 4.2.3 estimated them at 350,000 B).
 
@@ -10556,6 +10676,28 @@ check/testdata/ios_extension_leg.txt   gains bridge_statement_rules.go, bridge_l
 ```
 
 The three `config_*` changes are seams of a few lines each in core-lane files; the orchestrator schedules the task when that lane is not in them. Traps: the fold must be written by the same streaming merge the compile reads with, never from a decoded whole, or a writer on a phone cannot fold; the manifest's hashes are over the files' plaintext as the head holds them; a fold whose bridge part is empty writes no manifest, and a reader takes an absent manifest as an empty ledger only when the head's fold records hold no bridge statement at or below `folded_through` (a full reader checks that; a device that starts there cannot, and takes it as it takes rows).
+
+**BRIDGE-M4-23's fix track for QD-761** (amended 2026-11-12, QD-761). 12.2.3's void at the fold and its readers' half. Landed code that changes:
+
+```text
+bridge_ledger.go            BridgeLedgerSettings gains UnformedVoidWait and GenerationFormGrace, with their
+                            defaults, and bridgeLedgerSettingsOrDefault raises a wait under the floor.
+                            BridgeBodyJudge gains FormedThrough func() uint64. Judge refuses a body whose key's
+                            Time is more than the grace after statement.TimeMs, before it opens the seal, with a
+                            new errBridgeGenerationUnformed as the verdict's Reason
+bridge_statement_rules.go   BridgeLedgerReader gains FormedThrough. openBody applies the grace test as Judge does.
+                            At a fold, where openBody or spendApproval would leave an entry pending for a
+                            generation above a FormedThrough that is not 0, and the entry is at least the wait
+                            before the entry at the fold asked, the entry is void instead
+bridge_ledger_fold.go       FoldBridgeLedger hands both of its opens the time of the entry at the fold asked;
+                            BridgeLedgerFold gains Voided; Stopped is the first entry still pending.
+                            CheckBridgeLedgerFold folds with FormedThrough 0 whatever its caller set.
+                            BridgeBodyJudge.Fold fills the reader's FormedThrough from its func
+config_writer.go            bridgeFold logs config_key_void for each of fold.Voided, beside config_key_waiting
+bridge_ledger_test.go       12.6's tests; TestAnUnopenedFilingStopsTheFold keeps its case
+```
+
+The read itself is the composition root's: `FormedThrough` is built over the config repo's generation sync (`SyncRepo` to the listing's end, no fork at the generation pin, `RepoKeyAt` holding 1 to G), a seam of a few lines in a core-lane file that this track reports rather than makes. Traps: read gkm inside the plan, after the tip is applied, never from a cache or an earlier plan; G is the newest generation the listing names, never the newest key held, and `SyncRepo` answers nil with a named generation unopened (it passes over `ErrGkmKeyMissing`), so the seam tests 1 to G itself and answers 0 on a gap; measure against entry times, never a clock; the generation's time is its verified statement's `time_ms`, which a re-formed group carries unchanged with its old generations (10.8), and nothing may sign an existing generation again with a later time, or the unfolded bodies sealed to it turn void; never void for a generation at or below `FormedThrough`; a void row for an unformed generation is byte for byte any void row, so it carries no reason; `RejudgeBridgeBodies` needs no change, since it judges through `Judge`, and must not touch a frozen row.
 
 **ACL-M2-17 (new): reach enumerators for the compiler.** `AclState.DialRules(source, destination)`, `RouteRules(source, via)` and `ExitRules(source, via)` return every rule and activated grant by which the source holds the action, in rule id order, each with its rule id, grant id and expiry, where `MayDial` and `MayRoute` return the first; `AclState.EgressMode(subject)` exports what `egressRestricted` computes; `AclLocalPolicy.StandingCovers(kind, owner, body)` answers 12.2.4's "in force"; `AclState.ShareReach(subject, shareId)` at M6. They are read paths over indexes `acl_state.go` already builds (`acl_eval.go`, `acl_contract.go`, `acl_compile.go`), on the leg's list. This is what the plan's "`AclEngine.AllowRoute` serves the compiler" becomes: the engine answers one flow, and the compiler needs the rows.
 
@@ -10603,6 +10745,8 @@ For a design-records track, section by section. Text in quotation marks is to be
 
 **§22.** The dial-fence invariant gains the engine's: "no flow opens, and none stays open past its close, under a rule the host has durably judged revoked, across late compiles, new client generations and restarts"; FS-56, FS-38 and FS-14 gain 12.6's schedule rows; §22.5's §17 row gains "a compile reads no fold file, and a daemon's and a forwarding role's compiles of one view are byte-equal".
 
+**Amended 2026-11-12, QD-761.** §17.8, Placement, at the end of the text proposed for it above (after "no reader re-opens a folded statement"): "A body sealed to a generation gkm does not name is pending. A config writer whose whole read of gkm's listing shows it holds every generation named freezes such a body void at the fold once its entry is `UnformedVoidWait`, 24 h, old in the log's time, and every reader refuses a body whose generation was signed more than `GenerationFormGrace`, 1 h, after its entry, so a generation claimed after the void changes no verdict; a checker that lacks the generation takes the head's rows unchecked." §7.9, the fold row gains: "a bridge body sealed to a generation that does not form stops a fold until it is `UnformedVoidWait` old; a fold stops only at or above the previous base, so it waits for every such body under that base". §17.13, D-BRIDGE-6 gains: "a body sealed above every formed generation is frozen void after `UnformedVoidWait`". §17.17, add: "A standing sidecar files bridge bodies sealed to generations that never form | Low | Medium | each is void at the fold 24 h after its entry; while they keep coming the fold holds, and past the tail cap bases wait up to 24 h at a time, until the sidecar is revoked (DESIGN-DETAILS 12.2.3)". No server sees anything new: no column, key, object family or proto field.
+
 **§2.6, §2.10.** §2.6's custody rows gain "K, a share's table key, is in the sharing network's config (`bridge/share-grant/`), so every reader of that config holds it". §2.10's share-signer bound is unchanged.
 
 ### 12.9 Owner questions
@@ -10619,8 +10763,13 @@ Each is filed under `.stack/questions/`, and the section is built on the recomme
 
 **details-12-ratchet-commit.** When X's host stores a share's raised generation. Options: (1) before it admits the contract that carried it: one store commit a share a rise, in that contract's sequence; (2) after, off the sequence; (3) refuse that contract, commit, admit the next. Costs: (1) a few milliseconds on the first contract after each rotation of Y, never a packet's or a later contract's; (2) a crash between the admission and the commit loses the raise, and a removed sidecar is admitted again until a current one presents the newer cert (`ShareSignTwin-RatchetVolatile`), inside the cert's 7 days; (3) the first contract after every rotation fails and its link marks down for 30 s. Recommendation: (1). The design takes it.
 
+**details-amend-2-late-generation** (amended 2026-11-12, QD-761; open). What a reader that comes to hold a generation makes of a body sealed to it before it formed, once a fold has voided that body. Options: (1) every reader refuses a body whose generation's GenRotate is signed more than `GenerationFormGrace`, 1 h, after the body's entry, so it voids the body as the fold did; (2) no reader rule, and the check accepts a head's void for an old enough filing sealed above the generation the head was sealed at; (3) no rule, and the reader forks. Costs: (1) one test in the judge and the ledger's opens, a second settings field every reader of a network holds alike, a floor on the wait, and reliance on gkm keeping its own 10 min rule, a gkm that does not getting a fork and no silent split; (2) the reader holds the rule active from the moment it gains the generation until it reaches the base, and the check gains a rule a lying writer can aim at an honest filing; (3) one standing sidecar can fork every device that was behind when the void was frozen (`BridgeVoidTwin-NoGrace`). Recommendation: (1). The amendment takes it.
+
+**details-amend-2-fold-holds** (amended 2026-11-12, QD-761; open). Whether it is enough that a sidecar which keeps filing bodies sealed to unformed generations holds the fold until it is revoked (12.2.3's What is left). Options: (1) accept it: the filer's revocation ends it one wait after its last filing; (2) lower the default wait to its floor of 90 min; (3) also bound the generation at id level, the answered question's option 1; (4) let a fold stop inside the previous base's tail. Costs: (1) an admin must act, and until then, past the tail cap, bases wait up to 24 h at a time; (2) the same with shorter windows, and the thinnest margin over the servers' clocks; (3) a rows field, a §2.8 line and an id-level rule; (4) a change to section 5's fold rule and to what api checks. Recommendation: (1). The amendment takes it.
+
 Existing questions this section answers, each built on the option named:
 
+- `bridge-m2-02-unopened-generation-stall` (amended 2026-11-12, QD-761): option 2, as 12.2.3's void at the fold has it, with the question above for what the answer left to this section.
 - `bridge-m4-09-other-client-rows`: option 1, `BridgeRules.untagged = 10`, filled by the compile's reach pass and read by the sdk provider's other client (12.2.2, 12.2.4).
 - `bridge-m4-11-rule-three-tags`: option 2, rule 3's tag names the hosted address (12.2.2; BRIDGE-M4-24).
 - `plan-BRIDGE-subject-resolution` (QD-161): as answered, with the cache, its bounds and its refresh in 12.2.4, and the share exception kept.
