@@ -189,6 +189,8 @@ type evsTestWorld struct {
 	due *protocol.EvsPathEpoch
 	// a removed path answers its removal whatever version a read asks for by number, as evs did before QD-672
 	repeatRemoval bool
+	// the ref is its signer's owned ref, as a record-class stream is, rather than the shared main
+	owned bool
 }
 
 // One token path a request showed evs, by the epoch it named it in, with the current epoch then.
@@ -260,6 +262,10 @@ func (self *evsTestWorld) pushPathEpoch(epoch uint64) {
 		Flags: uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH), PathMapSha256: evsTestBytes(fmt.Sprint("map ", epoch), 32),
 		MapSourceVersion: baseVersion, MapSourceChain: baseChain[:],
 		SealedMetadata: append(evsTestBytes(fmt.Sprint("metadata ", version), 32), evsTestBytes("metadata tail", 16)...),
+	}
+	if self.owned {
+		owner := self.signer.sidecarId
+		plan.RefKind, plan.OwnerSidecarId = protocol.EvsRefKind_EVS_REF_OWNED, &owner
 	}
 	built, err := NewEvsStatementBuilder(self.signer.sign).Build(plan)
 	if err != nil {
@@ -474,6 +480,10 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 	}
 	plan.RefName, plan.Base, plan.Flags, plan.NewObjects = self.nextRefName, self.nextBase, self.nextFlags, self.nextNewObjects
 	self.nextRefName, self.nextBase, self.nextFlags, self.nextNewObjects = nil, nil, 0, nil
+	if self.owned {
+		owner := self.signer.sidecarId
+		plan.RefKind, plan.OwnerSidecarId = protocol.EvsRefKind_EVS_REF_OWNED, &owner
+	}
 	type pending struct {
 		key     string
 		version uint64
@@ -597,6 +607,9 @@ func (self *evsTestWorld) headSummaryWithLock() *protocol.EvsHeadSummary {
 	}
 	for _, source := range self.sourceEpochs {
 		head.PathEpoch.Sources = append(head.PathEpoch.Sources, &protocol.EvsEpochSource{Epoch: source})
+	}
+	if self.owned {
+		head.RefKind, head.OwnerSidecarId = protocol.EvsRefKind_EVS_REF_OWNED, self.signer.sidecarId.Bytes()
 	}
 	if self.due != nil {
 		head.PathEpoch.DueGeneration, head.PathEpoch.DueBlocksCreation = self.due.GetDueGeneration(), self.due.GetDueBlocksCreation()

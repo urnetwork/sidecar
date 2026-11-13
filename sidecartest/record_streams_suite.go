@@ -76,6 +76,7 @@ func recordStreamsSuiteCases() []recordStreamsSuiteCase {
 	return []recordStreamsSuiteCase{
 		{name: "a push reads back", run: caseRecordStreamsPushReadsBack},
 		{name: "a stream takes creates only", run: caseRecordStreamsCreatesOnly},
+		{name: "a stream takes push after push into one leaf", run: caseRecordStreamsPushesIntoOneLeaf},
 		{name: "another writer is refused", run: caseRecordStreamsOwnStreamOnly},
 		{name: "each step takes its scope", run: caseRecordStreamsScopes},
 		{name: "a retry keeps its slot ids", run: caseRecordStreamsRetryKeepsSlotIds},
@@ -250,6 +251,44 @@ func caseRecordStreamsCreatesOnly(ctx context.Context, world RecordStreamsWorld,
 	}
 	if version, err := recordStreamVersion(ctx, streams, repoId, writerId); err != nil || version != 1 {
 		return fmt.Errorf("a refused push moved the stream to %d: %v", version, err)
+	}
+	return nil
+}
+
+// A stream takes push after push into one leaf directory, each push creating its own entries there, as a binding over
+// evs sends them with the leaf's add-only delta (QD-722), and reads them back in order.
+func caseRecordStreamsPushesIntoOneLeaf(ctx context.Context, world RecordStreamsWorld, repoId sidecar.Id) error {
+	writerId := sidecar.NewId()
+	if err := world.Grant(repoId, writerId, RecordStreamsScope{Read: true, Write: true}); err != nil {
+		return err
+	}
+	streams := world.For(writerId)
+	pushes := [][]string{{"e/0/0/1", "e/0/0/2"}, {"e/0/0/3"}, {"e/0/0/4", "e/0/0/5"}}
+	for i, paths := range pushes {
+		commit, err := streams.Append(ctx, repoId, recordStreamsSuitePush(world, writerId, paths...))
+		if err != nil {
+			return fmt.Errorf("push %d into e/0/0: %w", i+1, err)
+		}
+		if commit.Version != uint64(i+1) {
+			return fmt.Errorf("push %d into e/0/0 committed at %d", i+1, commit.Version)
+		}
+	}
+	versions, err := streams.ReadStream(ctx, repoId, writerId, 0)
+	if err != nil {
+		return err
+	}
+	if len(versions) != len(pushes) {
+		return fmt.Errorf("%d versions read back", len(versions))
+	}
+	for i, version := range versions {
+		if len(version.Entries) != len(pushes[i]) {
+			return fmt.Errorf("version %d reads back %d entries", version.Version, len(version.Entries))
+		}
+		for j, entry := range version.Entries {
+			if entry.Path != pushes[i][j] || !bytes.Equal(entry.Entry, []byte("entry "+pushes[i][j])) {
+				return fmt.Errorf("version %d's entry %d reads back as %s", version.Version, j, entry.Path)
+			}
+		}
 	}
 	return nil
 }
