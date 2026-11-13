@@ -6,6 +6,11 @@
 //	          R_b(k-1) when a base b re-applies it. Its verdict (Standing, Approved with its facts, Refused, Unopened
 //	          with its generation) rides the BridgeLogStatement the state's fold holds, as SignerAdmin does. A keyless
 //	          verifier installs none and judges nothing.
+//	late      a body whose generation the reader holds, when that generation's GenRotate is signed more than
+//	          GenerationFormGrace after the entry that carries the body, is no such generation there: Refused before
+//	          the seal is opened, void with no alarm, by the judge and by every open of the ledger alike (QD-773). So a
+//	          generation claimed after a writer froze such a body void as unformed (bridge_ledger_fold.go, QD-761)
+//	          changes no reader's verdict, and no reader forks on the base
 //	rows      the head's bridge/ledger/ files: a manifest of the files and their hashes, and rows by kind, which a
 //	          writer freezes at each fold and every full reader standing under the previous base checks
 //	          (bridge_ledger_fold.go). Read one row at a time through BridgeLedgerFileReader, which hashes the bytes
@@ -60,9 +65,17 @@ var (
 	ErrBridgeLedgerOverBudget = errors.New("bridge ledger over budget")
 )
 
-// Tunables of reading and folding a ledger. A verdict rides on AddressTombstoneTimeout, DrainMaximum, BodyListMaxCount
-// and SiteIdMaxByteCount, and the manifest's hashes on RuleShardRowCount, so every reader of a network reads their
-// defaults, which are the protocol's values, and only a test changes them.
+// A body's generation is no generation where its entry landed (DESIGN-DETAILS 12.2.3, QD-761, QD-773): its GenRotate
+// is signed more than GenerationFormGrace after the entry, or, at a writer's fold, it is above every generation gkm
+// names and the entry is UnformedVoidWait old. The body is void, Refused{no such generation}, with no alarm, since no
+// seal failed; a void row it leaves is byte for byte any void row.
+var errBridgeGenerationUnformed = errors.New("no such generation")
+
+// Tunables of reading and folding a ledger. A verdict rides on GenerationFormGrace, AddressTombstoneTimeout,
+// DrainMaximum, BodyListMaxCount and SiteIdMaxByteCount, and the manifest's hashes on RuleShardRowCount, so every reader
+// of a network reads their defaults, which are the protocol's values, and only a test changes them. UnformedVoidWait
+// is a writer's own: two writers whose waits differ freeze one void between them (DESIGN-DETAILS 12.2.3's two
+// writers).
 type BridgeLedgerSettings struct {
 	// A ledger file is read this many bytes at a time, and no row is longer: 64 KiB, against the rows' 3 KB at most.
 	// Non-positive is the default.
@@ -73,6 +86,21 @@ type BridgeLedgerSettings struct {
 	// The rule rows past which the rule shards widen from 8 to 16 bits: 262,144. Every writer and checker of a
 	// network reads the default, since the shard width is part of what the manifest hashes; a test lowers it.
 	RuleShardRowCount int
+	// How old a filing's entry must be, in the log's time, against the entry at the fold asked, before a config writer
+	// whose whole read of gkm names every generation it holds freezes a body sealed above them all void at the fold
+	// (DESIGN-DETAILS 12.2.3's writer's half, QD-761): 24 h. A wait below GenerationFormGrace plus
+	// UnformedVoidWaitMargin is raised to that floor where the settings are read, so no writer voids a generation that
+	// may still be claimed inside the grace (BridgeVoidTwin-WaitInsideSkew); non-positive is the floor.
+	UnformedVoidWait time.Duration
+	// How long after the entry that carries a body its generation's GenRotate may be signed, by its time_ms, for the
+	// body to open (QD-773): 1 h, above the 10 min gkm holds a claim's time to its clock and the difference between
+	// api's and gkm's clocks, so an honest body never meets it. A body whose generation is signed later is void at
+	// every reader that holds that generation, with no alarm. Non-positive is the default.
+	GenerationFormGrace time.Duration
+	// What the wait's floor keeps above the grace: 30 min, gkm's 10 min on a claim's time and 20 min between api's and
+	// gkm's clocks, so a generation claimed after a void is signed past the grace (12.2.3's fork argument).
+	// Non-positive is the default.
+	UnformedVoidWaitMargin time.Duration
 	// How long a released overlay address routes to no new holder, by the log's time (§17.4, I-14): 30 days.
 	// Non-positive is the default.
 	AddressTombstoneTimeout time.Duration
@@ -86,12 +114,15 @@ type BridgeLedgerSettings struct {
 	SiteIdMaxByteCount int
 }
 
-// DESIGN-DETAILS 12.2.2's values, with §17.4's and §17.8's limits.
+// DESIGN-DETAILS 12.2.2's values, with §17.4's and §17.8's limits and QD-761's and QD-773's times.
 func DefaultBridgeLedgerSettings() *BridgeLedgerSettings {
 	return &BridgeLedgerSettings{
 		ChunkByteCount:           64 * 1024,
 		UnfoldedBodyMaxByteCount: 4 * 1024 * 1024,
 		RuleShardRowCount:        262144,
+		UnformedVoidWait:         24 * time.Hour,
+		GenerationFormGrace:      time.Hour,
+		UnformedVoidWaitMargin:   30 * time.Minute,
 		AddressTombstoneTimeout:  30 * 24 * time.Hour,
 		DrainMaximum:             time.Hour,
 		BodyListMaxCount:         64,
@@ -99,14 +130,24 @@ func DefaultBridgeLedgerSettings() *BridgeLedgerSettings {
 	}
 }
 
-// The settings as a ledger reads them: a copy, each field that takes a default where it is non-positive given it. Nil
-// is the defaults. The caller's settings are never changed.
+// The settings as a ledger reads them: a copy, each field that takes a default where it is non-positive given it, and
+// the wait raised to its floor, the grace plus UnformedVoidWaitMargin. Nil is the defaults. The caller's settings are
+// never changed.
 func bridgeLedgerSettingsOrDefault(settings *BridgeLedgerSettings) *BridgeLedgerSettings {
 	defaults := DefaultBridgeLedgerSettings()
 	if settings == nil {
 		return defaults
 	}
 	read := *settings
+	if read.GenerationFormGrace <= 0 {
+		read.GenerationFormGrace = defaults.GenerationFormGrace
+	}
+	if read.UnformedVoidWaitMargin <= 0 {
+		read.UnformedVoidWaitMargin = defaults.UnformedVoidWaitMargin
+	}
+	if floor := read.GenerationFormGrace + read.UnformedVoidWaitMargin; read.UnformedVoidWait < floor {
+		read.UnformedVoidWait = floor
+	}
 	if read.AddressTombstoneTimeout <= 0 {
 		read.AddressTombstoneTimeout = defaults.AddressTombstoneTimeout
 	}
@@ -159,11 +200,49 @@ type BridgeBodyJudge struct {
 	// whose chain value is configHeadSha256. The fold check reads the previous base's head through it. Nil checks
 	// no fold, as a forwarding role's judge, which takes the head's rows (DESIGN-DETAILS 4.2.1).
 	ReadHead func(configVersion uint64, configHeadSha256 []byte) (*ConfigHead, error)
+	// A config writer's read of gkm for its plan (DESIGN-DETAILS 12.2.3's writer's half): G, the newest generation a
+	// whole read of the config repo group's generation listing names, made inside the plan after its tip is applied,
+	// while this device holds the key of every generation 1 to G; 0 where the read does not count. BridgeFormedThrough
+	// answers it from one read. Fold calls it once a plan, and that fold freezes void a body sealed above G whose entry
+	// is UnformedVoidWait before the entry at the fold asked. Nil voids nothing; a checker, a compile and every other
+	// open read no G whatever it answers.
+	FormedThrough func() uint64
 	// Nil is the defaults.
 	Settings *BridgeLedgerSettings
 
 	// how an approval verifies; nil is the receiver state's CheckBridgeApproval (tests set it)
 	checkApproval BridgeApprovalCheck
+}
+
+// One read of gkm's generation listing for the config repo's group, as a config writer's plan makes it: the composition
+// root fills it from its sync of the config repo (GkmGroupClient.SyncRepo to the listing's end), inside the plan after
+// the tip is applied, never from a cache or an earlier plan.
+type BridgeGenerationRead struct {
+	// The sync's failure, nil where it reached the listing's end.
+	Err error
+	// Whether the listing was read to its end: false for one cut short.
+	Whole bool
+	// The newest generation the listing names, G: never the newest key this device holds.
+	Newest uint64
+	// Whether a fork is recorded at the config repo's generation pin.
+	Forked bool
+}
+
+// FormedThrough's answer for one read (DESIGN-DETAILS 12.2.3's writer's half): G where the read counts, which is where
+// it did not fail, reached the listing's end, found no fork at the generation pin, and repoKeyAt holds the key of every
+// generation 1 to G, tested here since SyncRepo answers nil with a named generation unopened; else 0, which voids
+// nothing. A writer is then never void for a key that exists and has not reached it.
+func BridgeFormedThrough(read *BridgeGenerationRead, repoKeyAt func(generation uint64) *EvsRepoKey) uint64 {
+	if read == nil || read.Err != nil || !read.Whole || read.Forked || read.Newest == 0 || repoKeyAt == nil {
+		return 0
+	}
+	for generation := uint64(1); generation <= read.Newest; generation += 1 {
+		key := repoKeyAt(generation)
+		if key == nil || key.Generation() != generation || key.checkHeld() != nil {
+			return 0
+		}
+	}
+	return read.Newest
 }
 
 // Verifies the BridgeApproval a rule's body carries, for the statement that filed it and its opened body, a
@@ -178,8 +257,32 @@ func (self *BridgeBodyJudge) repoKeyAt() func(generation uint64) *EvsRepoKey {
 	return self.RepoKeyAt
 }
 
+// The readers' half of DESIGN-DETAILS 12.2.3's void (QD-773), before any seal is opened: a body sealed to a generation
+// the reader holds, whose GenRotate is signed more than grace after the entry that carries the body, is no such
+// generation at that entry, errBridgeGenerationUnformed. Nil where the reader does not hold the generation (the body
+// is Unopened), where the generation was signed within the grace, and where the sealed field names no generation
+// (the open's own refusal, the alarm).
+func bridgeGenerationLate(statement *BridgeLogStatement, repoKeyAt func(generation uint64) *EvsRepoKey, grace time.Duration) error {
+	generation, err := ConfigSealedGeneration(statement.SealedBody)
+	if err != nil {
+		return nil
+	}
+	key := repoKeyAt(generation)
+	if key == nil || key.Generation() != generation || key.checkHeld() != nil {
+		return nil
+	}
+	signedMs := key.Time().UnixMilli()
+	// a difference taken only where it is positive, as unsigned, so no time can wrap it
+	if signedMs <= statement.TimeMs || uint64(signedMs-statement.TimeMs) <= uint64(grace.Milliseconds()) {
+		return nil
+	}
+	return fmt.Errorf("%w: generation %d was signed at %d ms, past the grace after its entry at %d ms", errBridgeGenerationUnformed, generation, signedMs, statement.TimeMs)
+}
+
 // DESIGN-DETAILS 12.2.3's JudgeBridgeBody: opens a route's or map's sealed body with the judge's keys and verifies its
-// approval on before, the state the entry lands on. A statement that files no rule has no verdict, nil.
+// approval on before, the state the entry lands on. A body whose generation the judge holds but was signed past
+// GenerationFormGrace after the entry is Refused before its seal is opened, with no alarm. A statement that files no
+// rule has no verdict, nil.
 func (self *BridgeBodyJudge) Judge(before *ConfigState, statement *BridgeLogStatement) *BridgeBodyVerdict {
 	var body proto.Message
 	switch statement.SignedType {
@@ -190,7 +293,11 @@ func (self *BridgeBodyJudge) Judge(before *ConfigState, statement *BridgeLogStat
 	default:
 		return nil
 	}
-	generation, err := OpenConfigBody(statement.SealedBody, statement.Seal, self.repoKeyAt(), body)
+	repoKeyAt := self.repoKeyAt()
+	if err := bridgeGenerationLate(statement, repoKeyAt, bridgeLedgerSettingsOrDefault(self.Settings).GenerationFormGrace); err != nil {
+		return &BridgeBodyVerdict{Kind: BridgeBodyRefused, Reason: err}
+	}
+	generation, err := OpenConfigBody(statement.SealedBody, statement.Seal, repoKeyAt, body)
 	if errors.Is(err, ErrConfigSealGenerationMissing) {
 		return &BridgeBodyVerdict{Kind: BridgeBodyUnopened, Generation: generation}
 	}

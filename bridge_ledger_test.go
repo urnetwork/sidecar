@@ -44,6 +44,11 @@ type testBridgeLedgerNet struct {
 	checkApproval BridgeApprovalCheck
 	// the ledger's settings for every judge here
 	settings *BridgeLedgerSettings
+	// the judge a base's writer folds with, its plan's read of gkm included; the net's own judge, which reads none,
+	// when nil
+	fold *BridgeBodyJudge
+	// the fold the newest base's writer made, nil where its fold did not move
+	lastFold *BridgeLedgerFold
 }
 
 // A ledger net over a fresh test network: base 1's head the genesis alone, the reader under test judging with
@@ -157,11 +162,17 @@ func (self *testBridgeLedgerNet) foldHead(foldedThrough uint64, configVersion ui
 	}
 	head := previous
 	reached := previous.FoldedThrough()
+	self.lastFold = nil
 	if previous.FoldedThrough() < foldedThrough {
-		fold, err := self.judge().Fold(previous, state, foldedThrough, self.log.EntryTimeMs)
+		writer := self.fold
+		if writer == nil {
+			writer = self.judge()
+		}
+		fold, err := writer.Fold(previous, state, foldedThrough, self.log.EntryTimeMs)
 		if err != nil {
 			self.t.Fatal(err)
 		}
+		self.lastFold = fold
 		if edit != nil {
 			edit(fold.Files)
 		}
@@ -626,7 +637,7 @@ func TestBridgeLedgerHeadRowsRefuseWhatNoWriterFolds(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		ledger := newBridgeLedger(&BridgeLedgerReader{}, 0, 0, false)
+		ledger := newBridgeLedger(&BridgeLedgerReader{}, 0, 0, false, 0)
 		return ledger.loadRows(rows)
 	}
 	if err := readAll(head); err != nil {
@@ -752,17 +763,23 @@ func TestABridgeLedgerFileReaderHashesWhatItRead(t *testing.T) {
 // One generated run of filings, folds and policy changes over a policy net (TestBridgeLedgerEqualFromAnyBase,
 // FuzzBridgeLedgerFold): every bridge statement kind, refused ones among them, approvals under the approvers' rule, a
 // device revoked, time passing past tombstones and retention, and bases that fold through the tip. turns lets a base
-// keep its fold and change the policy, which may turn a tail verdict. each runs after every base.
-func testBridgeLedgerRun(t testing.TB, net *testBridgeLedgerNet, member Id, devices []testConfigDevice, random *rand.Rand, stepCount int, turns bool, each func()) {
+// keep its fold and change the policy, which may turn a tail verdict. unformed adds filings of every kind sealed to
+// generation 2, which never forms at the run's readers, and time passing by the hour across UnformedVoidWait; without
+// it the run draws what it always drew. each runs after every base.
+func testBridgeLedgerRun(t testing.TB, net *testBridgeLedgerNet, member Id, devices []testConfigDevice, random *rand.Rand, stepCount int, turns bool, unformed bool, each func()) {
 	t.Helper()
 	signers := append([]testConfigDevice{net.owner}, devices...)
 	ruleIds := [][]byte{}
 	approvers := true
 	route, mapType := bridge.SignedType_SIGNED_BRIDGE_ROUTE, bridge.SignedType_SIGNED_BRIDGE_MAP
 	pick := func(count int) int { return random.IntN(count) }
+	caseCount := 13
+	if unformed {
+		caseCount = 15
+	}
 	for step := range stepCount {
 		signer := signers[pick(len(signers))]
-		switch pick(13) {
+		switch pick(caseCount) {
 		case 0, 1:
 			subject := signers[pick(len(signers))]
 			net.post(signer, bridge.SignedType_SIGNED_BRIDGE_ADDRESS, net.bridgeAddress(subject, testBridgeIpv4(100, 80, 3, byte(1+pick(6)))))
@@ -826,18 +843,46 @@ func testBridgeLedgerRun(t testing.TB, net *testBridgeLedgerNet, member Id, devi
 				net.foldLedger(net.log.State().Base().GetFoldedThrough(), edit)
 				each()
 			}
+		case 13:
+			// a body sealed to a generation that never forms here, of each kind, the route's id held for retries
+			subject := signers[pick(len(signers))]
+			switch pick(5) {
+			case 0:
+				ruleId := testBridgeRuleId(fmt.Sprint("run unformed route ", step))
+				ruleIds = append(ruleIds, ruleId)
+				net.post(signer, route, net.bridgeRouteAt(signer, ruleId, testBridgeSubnet(testBridgePrefix(172, 16, byte(pick(4)), 0, 24), "u"), 2))
+			case 1:
+				net.post(signer, mapType, net.bridgeMapAt(signer, testBridgeRuleId(fmt.Sprint("run unformed map ", step)), 0, testBridgeMapBody(testBridgeIpv4(100, 80, 3, 9), uint32(9000+pick(4)), 443), 2))
+			case 2:
+				net.post(net.owner, bridge.SignedType_SIGNED_BRIDGE_EGRESS, net.bridgeEgressAt(subject.sidecarId, &bridge.BridgeEgressBody{ExitSidecarIds: [][]byte{signer.sidecarId.Bytes()}}, 2))
+			case 3:
+				net.post(signer, bridge.SignedType_SIGNED_BRIDGE_ALIAS, net.bridgeAliasAt(&bridge.BridgeAliasBody{
+					ShareId: testConfigId("run unformed share").Bytes(), TargetIndex: uint32(pick(3)), AliasPrefix: testBridgePrefix(100, 80, byte(140+pick(3)), 0, 24),
+					Host: testConfigId("run host").Bytes(),
+				}, 2))
+			default:
+				net.post(signer, bridge.SignedType_SIGNED_BRIDGE_ADDRESS, net.bridgeAddressAt(subject, testBridgeIpv4(100, 80, 4, byte(1+pick(6))), 2))
+			}
+		case 14:
+			net.timeMs += int64(1+pick(30)) * time.Hour.Milliseconds()
 		}
 	}
 }
 
 // LedgerEqual (QD-667): over generated runs of filings, folds and policy changes, the reader under test, a reader
 // present since the bootstrap, which checks each base's ledger itself, and a reader restored at each base hold one
-// ledger at every base and at the end.
+// ledger at every base and at the end; and so they do where the runs file bodies sealed to a generation that never
+// forms, which the writer, reading gkm whole at generation 1, freezes void at the fold once they are a wait old, and
+// which every reader standing under the previous base takes unchecked.
 func TestBridgeLedgerEqualFromAnyBase(t *testing.T) {
-	for seed := range uint64(4) {
+	for seed := range uint64(6) {
 		net, member, devices := newTestBridgePolicyNet(t)
+		unformed := 4 <= seed
+		if unformed {
+			net.fold = net.writerJudge(1, 0)
+		}
 		random := rand.New(rand.NewPCG(seed, 0xb1d9e))
-		testBridgeLedgerRun(t, net, member, devices, random, 120, true, func() {
+		testBridgeLedgerRun(t, net, member, devices, random, 120, true, unformed, func() {
 			testBridgeLedgersEqual(t, net, net.restoredReader())
 		})
 		testBridgeLedgersEqual(t, net, net.presentReader(), net.restoredReader())
@@ -849,7 +894,7 @@ func testBridgeLedgerVectorRun(t *testing.T, procs int) map[uint64]*ConfigHead {
 	previous := runtime.GOMAXPROCS(procs)
 	defer runtime.GOMAXPROCS(previous)
 	net, member, devices := newTestBridgePolicyNet(t)
-	testBridgeLedgerRun(t, net, member, devices, rand.New(rand.NewPCG(7, 0xde7)), 100, true, func() {})
+	testBridgeLedgerRun(t, net, member, devices, rand.New(rand.NewPCG(7, 0xde7)), 100, true, false, func() {})
 	net.foldLedger(net.n, nil)
 	return net.heads
 }
@@ -1053,7 +1098,7 @@ func TestAnExpiredTombstoneLeavesRoomForAnAlias(t *testing.T) {
 		timeMs int64
 		room   bool
 	}{{timeMs: releasedMs + testBridgeTombstoneMs - 1, room: false}, {timeMs: releasedMs + testBridgeTombstoneMs, room: true}} {
-		ledger := newBridgeLedger(&BridgeLedgerReader{}, math.MaxUint64, c.timeMs, false)
+		ledger := newBridgeLedger(&BridgeLedgerReader{}, math.MaxUint64, c.timeMs, false, 0)
 		ledger.holdAddress(&BridgeLedgerAddress{
 			SidecarId: testConfigId("spilled"), HostBits: 0x8001, ClaimedAt: 3,
 			folded: &bridgeRelease{n: 5, timeMs: releasedMs, timeMsKnown: true},

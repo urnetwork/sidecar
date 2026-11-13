@@ -8,6 +8,11 @@
 //	          and opens once RK_g arrives (plan-TEAM-sealed-field-format); a bodiless BridgeWithdraw never waits
 //	void      the AEAD or the padding fails, which is the reader's alarm, the approval was Refused, or the body breaks
 //	          its rule below: the id-level effect stands and the sealed effect is nothing
+//	unformed  void with no alarm, Refused{no such generation} (DESIGN-DETAILS 12.2.3, QD-761 and QD-773): at every
+//	          open, a body sealed to a generation the reader holds whose GenRotate was signed more than
+//	          GenerationFormGrace after the body's entry; and at a writer's fold alone, a body that would wait for a
+//	          generation above the reader's FormedThrough, not 0, once its entry is UnformedVoidWait before the entry at
+//	          the fold asked, which both of the fold's opens use. Nothing else ends a wait
 //	address   the first BridgeAddress in log order wins a host's bits; a second for an addressed host is void; a
 //	          released address is a tombstone for 30 days by the log's time (I-14); the upper /17 takes a host only
 //	          once the lower is full, and never inside an alias or an exposed prefix (§17.4, D-BRIDGE-20)
@@ -237,7 +242,7 @@ type BridgeLedgerEntry struct {
 	Disposition BridgeDisposition
 	// Why it is void, wrapping ErrBridgeVoid. One that also wraps ErrConfigSealInvalid is the reader's alarm.
 	Reason error
-	// The generation a pending entry waits for.
+	// The generation a pending entry waits for, or the one a body a fold froze void as unformed was sealed to.
 	Generation uint64
 }
 
@@ -266,6 +271,11 @@ type BridgeLedgerReader struct {
 	EntryTimeMs func(n uint64) (int64, bool)
 	// The log's time the ledger reads tombstones and retention at. 0 is State's.
 	TimeMs int64
+	// A config writer's G for this fold, from its plan's whole read of gkm (BridgeBodyJudge.FormedThrough), which only
+	// FoldBridgeLedger reads: a body that would wait for a generation above it is frozen void as unformed once its
+	// entry is UnformedVoidWait before the entry at the fold asked (DESIGN-DETAILS 12.2.3). 0 voids nothing, and is
+	// what a checker, a compile and every other open hold; CheckBridgeLedgerFold sets 0 whatever its caller did.
+	FormedThrough uint64
 	// Nil is the defaults.
 	Settings *BridgeLedgerSettings
 }
@@ -442,6 +452,11 @@ type BridgeLedger struct {
 	openedByteCount int
 	// what keeps a fold from writing these rows, nil for nothing
 	foldError error
+	// a fold's void of a body sealed above every formed generation: the reader's FormedThrough, 0 at an open; the
+	// time of the entry at the fold asked, which the wait is read against; and the entries frozen void so, in log order
+	formedThrough uint64
+	askedTimeMs   int64
+	unformed      []*BridgeLedgerEntry
 
 	reader   *BridgeLedgerReader
 	settings *BridgeLedgerSettings
@@ -461,9 +476,10 @@ type bridgeRelease struct {
 	timeMsKnown bool
 }
 
-// An empty ledger for reader at cutoffN and timeMs.
-func newBridgeLedger(reader *BridgeLedgerReader, cutoffN uint64, timeMs int64, folding bool) *BridgeLedger {
-	return &BridgeLedger{
+// An empty ledger for reader at cutoffN and timeMs. A fold's ledger reads the reader's FormedThrough against
+// askedTimeMs, the time of the entry at the fold asked; an open's reads none.
+func newBridgeLedger(reader *BridgeLedgerReader, cutoffN uint64, timeMs int64, folding bool, askedTimeMs int64) *BridgeLedger {
+	ledger := &BridgeLedger{
 		timeMs:     timeMs,
 		cutoffN:    cutoffN,
 		folding:    folding,
@@ -477,6 +493,10 @@ func newBridgeLedger(reader *BridgeLedgerReader, cutoffN uint64, timeMs int64, f
 		reader:     reader,
 		settings:   bridgeLedgerSettingsOrDefault(reader.Settings),
 	}
+	if folding {
+		ledger.formedThrough, ledger.askedTimeMs = reader.FormedThrough, askedTimeMs
+	}
+	return ledger
 }
 
 // The reader's state's position and time, or what it passes.
@@ -503,12 +523,13 @@ func OpenBridgeLedger(rows BridgeLedgerRows, reader *BridgeLedgerReader) (*Bridg
 	if base := reader.State.Base(); base != nil && rows != nil && rows.FoldedThrough() < base.GetFoldedThrough() {
 		return nil, fmt.Errorf("%w: rows through %d under a base folded through %d", ErrBridgeLedgerMalformed, rows.FoldedThrough(), base.GetFoldedThrough())
 	}
-	return openBridgeLedger(rows, reader.State.Bridge().Statements(), reader, cutoffN, timeMs, false)
+	return openBridgeLedger(rows, reader.State.Bridge().Statements(), reader, cutoffN, timeMs, false, 0)
 }
 
-// Opens the rows and every statement past their fold at or below cutoffN, at timeMs.
-func openBridgeLedger(rows BridgeLedgerRows, statements []*BridgeLogStatement, reader *BridgeLedgerReader, cutoffN uint64, timeMs int64, folding bool) (*BridgeLedger, error) {
-	ledger := newBridgeLedger(reader, cutoffN, timeMs, folding)
+// Opens the rows and every statement past their fold at or below cutoffN, at timeMs; a fold's, with askedTimeMs the
+// time of the entry at the fold asked.
+func openBridgeLedger(rows BridgeLedgerRows, statements []*BridgeLogStatement, reader *BridgeLedgerReader, cutoffN uint64, timeMs int64, folding bool, askedTimeMs int64) (*BridgeLedger, error) {
+	ledger := newBridgeLedger(reader, cutoffN, timeMs, folding, askedTimeMs)
 	if rows != nil {
 		ledger.foldedThrough = rows.FoldedThrough()
 		if err := ledger.loadRows(rows); err != nil {
@@ -539,7 +560,7 @@ func (self *BridgeLog) Open(reader *BridgeLedgerReader) *BridgeLedger {
 	unbounded.UnfoldedBodyMaxByteCount = 0
 	bounded := *reader
 	bounded.Settings = &unbounded
-	ledger, _ := openBridgeLedger(nil, self.Statements(), &bounded, cutoffN, timeMs, false)
+	ledger, _ := openBridgeLedger(nil, self.Statements(), &bounded, cutoffN, timeMs, false, 0)
 	return ledger
 }
 
@@ -627,15 +648,43 @@ func (self *BridgeLedger) addressRelease(address *BridgeLedgerAddress) *bridgeRe
 // errBridgePending marks a body whose generation the reader lacks, or an approval no judge ran on.
 var errBridgePending = errors.New("bridge body pending")
 
-// Opens an entry's sealed body into body. A generation the reader lacks marks the entry pending and answers
-// errBridgePending; a seal that does not open answers ErrConfigSealInvalid, the alarm.
+// The writer's half of DESIGN-DETAILS 12.2.3's void (QD-761), for an entry that would wait for generation: at a fold
+// whose writer's whole read of gkm named every formed generation, FormedThrough, a generation above it is unformed once
+// the entry is UnformedVoidWait before the entry at the fold asked, and the entry is frozen void,
+// errBridgeGenerationUnformed. Nil otherwise: at every open, a read that did not count, a generation gkm names (a key
+// that exists and has not reached this writer is never a void), or a wait not yet passed, which all leave it waiting.
+func (self *BridgeLedger) unformedVoid(entry *BridgeLedgerEntry, generation uint64) error {
+	if self.formedThrough == 0 || generation <= self.formedThrough {
+		return nil
+	}
+	statement := entry.Statement
+	// a difference taken only where it is not negative, as unsigned, so no time can wrap it
+	waitMs := self.settings.UnformedVoidWait.Milliseconds()
+	if self.askedTimeMs < statement.TimeMs || uint64(self.askedTimeMs-statement.TimeMs) < uint64(waitMs) {
+		return nil
+	}
+	entry.Generation = generation
+	self.unformed = append(self.unformed, entry)
+	return fmt.Errorf("%w: generation %d is above every generation gkm names, %d, %d ms after its entry", errBridgeGenerationUnformed, generation, self.formedThrough, self.askedTimeMs-statement.TimeMs)
+}
+
+// Opens an entry's sealed body into body. A body whose generation the reader holds but was signed past
+// GenerationFormGrace after the entry is void before its seal is opened, with no alarm; a generation the reader lacks
+// marks the entry pending and answers errBridgePending, but at a fold that finds it unformed (unformedVoid); a seal that
+// does not open answers ErrConfigSealInvalid, the alarm.
 func (self *BridgeLedger) openBody(entry *BridgeLedgerEntry, body proto.Message) error {
 	repoKeyAt := self.reader.RepoKeyAt
 	if repoKeyAt == nil {
 		repoKeyAt = func(generation uint64) *EvsRepoKey { return nil }
 	}
+	if err := bridgeGenerationLate(entry.Statement, repoKeyAt, self.settings.GenerationFormGrace); err != nil {
+		return err
+	}
 	generation, err := OpenConfigBody(entry.Statement.SealedBody, entry.Statement.Seal, repoKeyAt, body)
 	if errors.Is(err, ErrConfigSealGenerationMissing) {
+		if err := self.unformedVoid(entry, generation); err != nil {
+			return err
+		}
 		entry.Disposition, entry.Generation = BridgeDispositionPending, generation
 		return errBridgePending
 	}
@@ -1184,17 +1233,22 @@ func bridgeCheckMapBody(body *bridge.BridgeMapBody, settings *BridgeLedgerSettin
 
 // A new rule's approval by the verdict its judge reached where its entry landed, counted against its decision: the
 // rule id the one the approval fixes, and the decision's ids at most its uses, over the rows and the entries alike. No
-// verdict, or an Unopened one, leaves the rule pending; a Refused one voids it.
+// verdict, or an Unopened one, leaves the rule pending, but at a fold that finds its generation unformed
+// (unformedVoid); a Refused one voids it.
 func (self *BridgeLedger) spendApproval(entry *BridgeLedgerEntry, rule *BridgeLedgerRule) error {
 	verdict := entry.Statement.Approval
 	if verdict == nil || verdict.Kind == BridgeBodyUnopened {
-		entry.Disposition = BridgeDispositionPending
-		if generation, err := ConfigSealedGeneration(entry.Statement.SealedBody); err == nil {
-			entry.Generation = generation
+		generation := uint64(0)
+		if sealed, err := ConfigSealedGeneration(entry.Statement.SealedBody); err == nil {
+			generation = sealed
 		}
 		if verdict != nil {
-			entry.Generation = verdict.Generation
+			generation = verdict.Generation
 		}
+		if err := self.unformedVoid(entry, generation); err != nil {
+			return err
+		}
+		entry.Disposition, entry.Generation = BridgeDispositionPending, generation
 		return errBridgePending
 	}
 	switch verdict.Kind {
