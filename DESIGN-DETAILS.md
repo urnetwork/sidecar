@@ -23,7 +23,7 @@ Status values: `pending`, `in progress`, `complete (date)`, or `complete pending
 | 13 | Smaller scheduling problems: closure pacing, quota leases, socket registration | 4 | complete (2026-11-10) |
 | 14 | Slot objects that a dead record and a committed push both list (§11.6, §11.8, §11.13) | 0 | complete (2026-11-12) |
 | 15 | Index erasure and derived documents under section 1's rules (§11.12, §11.14, §16.8, §16.10) | 2 | complete (2026-11-12) |
-| 17 | Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8) | 1 | in progress |
+| 17 | Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8) | 1 | complete (2026-11-13) |
 
 ## 1. Search index merges, roll-ups and the journal (§11.14)
 
@@ -12808,11 +12808,11 @@ Each is filed under `.stack/questions/` and the section is built on its recommen
 
 ## 17. Team custom-domain certificates: one ACME account, several ordering desktops, a certificate per device (§13.8, §13.15, §12.8)
 
-Status: in progress (2026-11-13). 17.1 to 17.9 are written. What is left: the model 17.3 names (`CertOrder.tla`) and its runs, after which the status is set.
+Status: complete (2026-11-13)
 
 Tasks held until complete: TLS-M6-05. It builds from this section, in the order 17.7 gives, beside a proposed task for the sockets half (17.7).
 
-Model: `sidecar/sidecartest/model/details/CertOrder.tla`, its configurations and `run-certorder.sh` beside it (pending, 17.3). Questions filed: `.stack/questions/details-17-ca-numbers.md`, `details-17-one-name-per-device.md`, `details-17-own-share-of-the-domain-limit.md`, `details-17-key-holders-and-rollover.md`, `details-17-alpn-needs-the-443-grant.md`, `details-17-every-certificate-is-a-row.md`, `details-17-small-readings.md`. It extends 13.2.3's registration and Find with two facts and changes none of its rules, and it rests on 12.2.8's write gate for the account key's repo.
+Model: `sidecar/sidecartest/model/details/CertOrder.tla`, its configurations (`CertOrder.cfg`, `CertOrder-*.cfg`, `CertOrderTwin-*.cfg`, `CertOrderReach-*.cfg`) and `run-certorder.sh` beside it. Questions filed: `.stack/questions/details-17-ca-numbers.md`, `details-17-one-name-per-device.md`, `details-17-own-share-of-the-domain-limit.md`, `details-17-key-holders-and-rollover.md`, `details-17-alpn-needs-the-443-grant.md`, `details-17-every-certificate-is-a-row.md`, `details-17-small-readings.md`. It extends 13.2.3's registration and Find with two facts and changes none of its rules, and it rests on 12.2.8's write gate for the account key's repo.
 
 ### 17.1 The problem
 
@@ -12916,7 +12916,7 @@ network_tls_account                  primary key (network_id, domain)
 
 network_tls_custom_spend             primary key (spend_id); what the budgets replay (17.2.8)
   network_id, domain, custom_host, registered_domain, ca, account_uri
-  kind               varchar(16)     'certificate', 'new_order' or 'authz_failed'
+  kind               varchar(16)     'certificate', 'new_order', 'authz_failed' or 'no_route'
   cert_id            uuid            unique (cert_id) where kind = 'certificate'
   at                 timestamptz
   index (ca, custom_host, kind, at), (ca, registered_domain, kind, at), (account_uri, kind, at)
@@ -12952,15 +12952,18 @@ from             to               by                                   compare-a
 custom_queued    custom_ordering  a claim, purpose order               state, with the lock, one transaction
 custom_ordering  custom_issued    POST /tls/cert-register              state and lock_seq
 custom_ordering  custom_queued    progress: no order stands at the CA  state and lock_seq
-custom_ordering  failed           progress: failed                     state and lock_seq
+custom_ordering  failed           progress: failed, no order recorded  state and lock_seq
+custom_ordering  custom_revoking  progress: failed, an order recorded  state and lock_seq
 custom_queued    failed           the device's newer CSR                                        state
-custom_queued, custom_ordering    failed        its device, host or domain removed              state
+custom_queued, custom_ordering    failed        its device, host or domain removed, and no      state
+                                                order recorded
+custom_ordering  custom_revoking  the same removal, an order recorded                           state
 custom_issued    custom_revoking  POST /tls/cert-revoke; its device, host or domain removed     state
 custom_revoking  revoked          progress: revoked                    state and lock_seq
 custom_issued, custom_revoking    expired       the sweep, at not_after                         state
 ```
 
-A removal that ends a `custom_ordering` row frees the lock if the lock names it. A lapsed lease moves nothing: a `custom_ordering` row whose lock lapsed stays `custom_ordering` and is the first thing any desktop claims (17.2.6). `certsservice`'s `Admit`, `RunRenewals`, `RunRevocations` and `FindOpenOrder` read `queued`, `ordering`, `waiting_dns`, `issued` and `revoking` and are unchanged. `PurgeEnded` already takes the three ends.
+A row never leaves `custom_ordering` for an end while an order is recorded for it: it goes to `custom_revoking`, where 17.2.12 settles the order before the account orders again, because a holder that only stalled may still finalize it (17.3's C10). A removal that ends a `custom_ordering` row frees the lock if the lock names it. A lapsed lease moves nothing: a `custom_ordering` row whose lock lapsed stays `custom_ordering` and is the first thing any desktop claims (17.2.6). `certsservice`'s `Admit`, `RunRenewals`, `RunRevocations` and `FindOpenOrder` read `queued`, `ordering`, `waiting_dns`, `issued` and `revoking` and are unchanged. `PurgeEnded` already takes the three ends.
 
 #### 17.2.5 Routes
 
@@ -13070,21 +13073,25 @@ Every event but `ari` and `rollover_due` applies only if `lock_seq = claim_seq`,
 
 ```text
 order_recorded  order_url must be NULL; it is set. Nothing else moves
-order_invalid   the recorded order is invalid or gone at the CA, or the granted newOrder was refused: order_url
-                is cleared and the row's certificate spend deleted. The answer is a TlsCustomClaimResult: with
-                may_order when 17.2.8's budgets grant another (spent in this transaction), else the row goes
-                to custom_queued, the lock is freed and the answer is 429 budget
+order_invalid   the recorded order is dead at the CA (17.2.7), or the granted newOrder was refused: order_url
+                is cleared and the row's certificate spend deleted. With the reason no_route a no_route
+                spend is written for the host first; the reason no_path writes none. The answer is a
+                TlsCustomClaimResult: with may_order when 17.2.8's budgets grant another (spent in this
+                transaction), else the row goes to custom_queued, the lock is freed and the answer is
+                429 budget
 authz_failed    writes an authz_failed spend for the host, reason kept in custom_reason. The caller sends
                 order_invalid next
-rate_limited    sets hold_new_until, or hold_all_until if the row is exempt, to now + retry_after_ms clamped to
-                [HoldDefault, HoldMax]; an exempt row becomes not exempt; a row with no order_url goes to
-                custom_queued; the lock is freed
+rate_limited    sets a hold to now + retry_after_ms clamped to [HoldDefault, HoldMax]: hold_new_until when the
+                row has no order_url and is not exempt (an ordinary newOrder was refused), hold_all_until
+                otherwise. An exempt row with no order_url becomes not exempt. A row with no order_url goes
+                to custom_queued; the lock is freed
 not_exempt      the CA refused the newOrder for its `replaces`, so order_url is NULL: no_replaces is set, exempt
                 cleared, the row goes to custom_queued, the lock is freed
-release         the lock is freed. A row with an order_url stays custom_ordering; one without goes to
-                custom_queued. A reason (no_route) is kept in custom_reason
-failed          the row goes to failed with the reason (csr, attestation, ca_refused, foreign); its certificate
-                spend is deleted unless the reason is foreign; the lock is freed
+release         the lock is freed. A custom_ordering row with an order_url stays as it is, and one without
+                goes to custom_queued. A custom_revoking row stays as it is
+failed          the reason (csr, attestation, ca_refused, foreign) is kept. A row with no order_url goes to
+                failed and its certificate spend is deleted. A row with one goes to custom_revoking, whose
+                pass settles the order (17.2.12), and its spend stays. The lock is freed
 revoked         purpose revoke: the row goes to revoked; the lock is freed
 ari             no claim: for each cert_id of a custom_issued row of the domain, the window is stored
 rollover_due    no claim: an ordering desktop saw 17.2.13's key change due and may not make it. Raises the admin
@@ -13133,10 +13140,13 @@ claim(caller, a = the account row FOR UPDATE, purpose, cert_id, key_seq), one tr
      held by the caller for this purpose and cert_id: lock_until = now + LockLease; answer the same
        claim_seq, the row's order_url, may_order false                                   (a renewal)
      held otherwise: 409 locked, retry_after_ms = lock_until − now
-  3  f = the account's custom_ordering row, if any (the in-flight index)
-     purpose order:   f exists and f ≠ cert_id: 409 in_flight {cert_id: f}
+  3  f = the account's row with an order open, if any: its custom_ordering row (the in-flight index), or
+         a custom_revoking row with an order_url and no chain, which ended under its order (17.2.12)
+     purpose order:   now < a.hold_all_until: 429 hold
+                      f exists and f ≠ cert_id: 409 in_flight {cert_id: f}
                       r = the row FOR UPDATE; r.state not in (custom_queued, custom_ordering): 409 state
-                      r.order_url is NULL: grant(r) (17.2.8), which answers 429 or spends
+                      r.order_url is NULL: grant(r) (17.2.8), which spends, or answers 429 after moving a
+                      custom_ordering row back to custom_queued, so a row no one may order holds no one up
                       r.state = custom_queued: r.state = custom_ordering
      purpose revoke:  r.state ≠ custom_revoking: 409 state
      purpose rollover: nothing more. A row in flight stays as it is and resumes after
@@ -13160,7 +13170,8 @@ run once:
        a key change is due or recorded and this desktop may roll (17.2.13): do that, and stop
        r = the first work row with wait_ms = 0 this desktop can serve (17.2.9). None: next account
   2  c = POST /tls/custom-claim {domain, purpose, cert_id: r, key_seq}
-       409 in_flight: claim the named row instead, once.  409 locked, 429: next account.
+       409 in_flight: claim the named row instead, once, for the purpose its state asks.
+       409 locked, 429: next account.
        409 key_seq: read the key file again; stop
   3  purpose revoke: 17.2.12.  Else check the row, trusting nothing the server said about it:
        the attestation verifies (VerifyTlsKeyAttestation) for a device of this desktop's own verified
@@ -13168,18 +13179,22 @@ run once:
        names exactly one dNSName, a canonical name under the account's domain and under no root
        a check fails: progress failed {csr | attestation}; stop
   4  c.order_url ≠ "":  o = acme.Order(c.order_url)          (resume: no newOrder)
-       gone (404) or o.status = invalid: c = progress order_invalid; 429: stop; else go on at 5
+       dead (404, or a status other than pending, ready, processing and valid): c = progress
+       order_invalid; 429: stop; else go on at 5
      else (c.may_order):  o = acme.NewOrder(name, profile, replaces = id of c.replaces_leaf or none)
        refused: by the table below.  outcome unknown (5xx, timeout): progress release; stop
        progress order_recorded {o.url} must answer 200 before anything else is sent to the CA.
        409 claim: stop, and send the CA nothing more for this row
+     neither (a restart met its own unlapsed claim with nothing recorded): progress release; stop
   5  by o.status:
        pending     its one authorization: valid: wait for ready.  pending: 17.2.9's challenge, then poll.
                    invalid: progress authz_failed {problem type}, then order_invalid; stop
+                   pending and this desktop has no path for the row (17.2.9): kill the order, then
+                   progress order_invalid {no_path}; stop
        ready       renew the claim; acme.Finalize(o, the row's CSR)
        processing  poll the order every OrderPollInterval
        valid       6
-       invalid     c = progress order_invalid; a granted c goes to 4, else stop
+       dead        c = progress order_invalid; a granted c goes to 4, else stop
      an attempt lasts at most OrderDeadline; past it: progress release; stop (the order stays recorded)
   6  chain = acme.Certificate(o.certificate): the CA's default chain. Check: the leaf's key is the CSR's
      key, its names are exactly the row's one name, not_after is ahead, each certificate is signed by
@@ -13220,7 +13235,9 @@ Three rules carry the design, and each is local to the holder:
 
 - **One newOrder a grant.** A holder sends newOrder only on `may_order`, once. A refused or unknown newOrder ends the grant.
 - **Finalize only the recorded order.** A holder finalizes an order only after the server answered 200 to its `order_recorded` or handed it the URL in a claim.
-- **A recorded order is replaced only when dead.** `order_invalid` is sent only on the CA's own `invalid` or 404 for that URL, or on a refused newOrder with nothing recorded. Never on a timeout, a 5xx, or `pending`, `ready`, `processing` or `valid`.
+- **A recorded order is replaced only when dead.** `order_invalid` is sent only when the CA itself answers for that URL a 404 or a status other than `pending`, `ready`, `processing` and `valid`, or on a refused newOrder with nothing recorded. Never on a timeout or a 5xx, and never for an order the CA still calls live.
+
+A holder that must give a live order up does not leave it: it **kills** it. An order left recorded keeps its row `custom_ordering`, and that row is first in line for every desktop, so an order nobody can complete would hold up every other host of the account until the CA expired it, days later. To kill an order the holder deactivates each of its authorizations (`acme.DeactivateAuthorization`, RFC 8555 §7.5.2) and reads the order again, up to `DeactivateTryCount` times. Dead: `order_invalid` with the reason. Valid, because another holder finalized it meanwhile: it goes on at step 6. Still live after the tries: `release`, and `tls_custom_order_stuck`. A holder kills an order in two cases: its probe fails (17.2.9), or the order is pending and it has no challenge path for the row. A crash kills nothing, which is what the takeover is for.
 
 #### 17.2.8 The budgets, the holds and the plan
 
@@ -13250,9 +13267,11 @@ A11  a 429                                            problem type rateLimited, 
                                                       Retry-After
 A12  an order issues at most once; a key change keeps the account, its orders and          RFC 8555 §7.4, §7.3.5,
      authorizations; the account or the certificate's key may revoke                       §7.6
+A13  an order one of whose authorizations is deactivated is never finalized after; the     RFC 8555 §7.1.6, §7.5.2
+     CA may call it invalid or deactivated
 ```
 
-Only A12 is relied on for safety, and it is the protocol, not policy. A wrong A1 to A11 changes how long a row waits or turns one request into a 429 and a hold. A9 is handled either way: the design is safe whether or not the CA reuses orders (17.3).
+Only A12 and A13 are relied on for safety, and they are the protocol, not policy. If A13 failed, 17.2.12's pass would stop the account's ordering and raise an alarm; it would not issue. A wrong A1 to A11 changes how long a row waits or turns one request into a 429 and a hold. A9 is handled either way: the design is safe whether or not the CA reuses orders (17.3).
 
 **The buckets.** A budget is a bucket replayed from `network_tls_custom_spend`, so there is no counter to lose and a restore behind the truth is repaired by the CA's next 429.
 
@@ -13269,8 +13288,8 @@ set      (ca, custom_host)             5    34 h                   2      certif
                                                                           custom_revoking or revoked
 domain   (ca, registered_domain)       25   7 d / 25 (6 h 43 min)  1      certificate
 orders   (ca, account_uri)             60   3 min                  1      new_order
-failures (ca, account_uri, host)       after the k-th authz_failed since the host's newest register:
-                                       no grant for min(2^(k−1) × FailureBackoff, FailureBackoffMax)
+failures (ca, account_uri, host)       after the k-th authz_failed or no_route since the host's newest
+                                       register: no grant for min(2^(k−1) × FailureBackoff, FailureBackoffMax)
 
 grant(r), inside the claim's or order_invalid's transaction, after pg_advisory_xact_lock(hash(ca, rd)):
   exempt = r has a predecessor p that is custom_issued and unexpired, r.no_replaces is false, and p has a
@@ -13284,7 +13303,7 @@ grant(r), inside the claim's or order_invalid's transaction, after pg_advisory_x
 
 `set` keeps one certificate back (need 2 of 5), so a device whose key is compromised can be re-certified at once. `domain` is our share of A3, which the customer's other issuance draws on too: we take at most half (`details-17-own-share-of-the-domain-limit`). `orders` and the failure backoff are a fifth and less of A5 and A6. A row has at most one `certificate` spend, written when a newOrder is first granted, kept across takeovers, moved to the register time on issue and deleted only on proof that no certificate came of it. So the replay never counts less than the CA does, whatever crashes.
 
-**The holds.** A 429 is the CA telling us our count is behind. `rate_limited` writes it on the account row, where every desktop's next claim reads it. A 429 on an ordinary order holds ordinary orders (`hold_new_until`) and lets ARI renewals through. A 429 on an ARI renewal means A7 did not hold for it: everything is held (`hold_all_until`), and the row becomes an ordinary one that waits its turn in the buckets.
+**The holds.** A 429 is the CA telling us our count is behind. `rate_limited` writes it on the account row, where every desktop's next claim reads it. A 429 on an ordinary order holds ordinary orders (`hold_new_until`) and lets ARI renewals through. A 429 on an ARI renewal means A7 did not hold for it: everything is held (`hold_all_until`), and the row becomes an ordinary one that waits its turn in the buckets. A 429 anywhere past newOrder is the CA's request limit and holds everything too; the order stays recorded, and the claim refuses every order until the hold ends, so no desktop repeats the request meanwhile.
 
 **The plan for N devices.** The work list is the server's, in this order, each row with its `wait_ms` from the grant's rule (the largest wait, or the hold's remainder):
 
@@ -13320,7 +13339,8 @@ dns-01        resolver.LookupCname(_acme-challenge.<c>) is the account's acme_na
 3  wait for that page's 200
 4  probe: the desktop dials c on port 443 itself, by public DNS, offering only acme-tls/1, and must read
    back its own challenge certificate, byte for byte, ProbeCount times in a row within ProbeTimeout each.
-   Not so: clear the challenge; progress release {no_route}; leave this row alone for ProbeRetryInterval
+   Not so: clear the challenge; kill the order (17.2.7); progress order_invalid {no_route}. The host backs
+   off as for a failed authorization, without one having been spent, and the account's other rows go on
 5  renew the claim; acme.Challenge(url); poll the authorization every OrderPollInterval
 6  valid or invalid: clear the challenge (front.ClearAlpnChallenge), and the next page drops acme_names
 ```
@@ -13332,7 +13352,8 @@ The probe is the same path the CA's validators take: public DNS to tlsedge, Find
 ```text
 1  value = base64url(SHA-256(key authorization)); POST /tls/custom-challenge {domain, value}
 2  poll GET /tls/custom-challenge/<id> until the edges serve it
-3  probe: resolver.LookupTxt(_acme-challenge.<c>) holds value, ProbeCount times in a row
+3  probe: resolver.LookupTxt(_acme-challenge.<c>) holds value, ProbeCount times in a row within
+   ProbeTimeout each. Not so: kill the order; progress order_invalid {no_route}
 4  renew the claim; acme.Challenge(url); poll
 5  nothing to clear: the value lapses in 1 h (QD-175). One order in flight an account and one account a
    domain keep a domain within QD-175's two values
@@ -13396,7 +13417,8 @@ The hook removes from the entry every certified name that is not in `CustomCerti
 A renewal is a new row with the old CSR, queued by the server, so a phone need not wake for it. `RunCustomSweep` (taskworker, every `SweepInterval`) makes no CA call:
 
 ```text
-for each custom_issued row r with no successor, now ≥ renew_time(r), its device, host and domain live:
+for each custom_issued row r with no successor, now ≥ renew_time(r), its device, host and domain live,
+and no row of r's sidecar and host ended failed within RequeueBackoff:
     insert a custom_queued row with r's CSR, attestation, sidecar, host and domain; set r's successor
 renew_time(r) = window_start + H(r.cert_id) mod (window_end − window_start)   if r has a stored window
               = not_before + RenewalLifetimeFraction × (not_after − not_before)   otherwise
@@ -13405,6 +13427,8 @@ renew_time(r) = window_start + H(r.cert_id) mod (window_end − window_start)   
 also: custom_issued and custom_revoking rows past not_after go to expired; spends older than SpendRetention
 are deleted; 17.2.14's warnings are raised
 ```
+
+A successor that ends without a chain, as `failed` or as `revoked` after 17.2.12's step 4, clears its predecessor's `successor_cert_id` in the same transaction, so the predecessor is renewed again, by the sweep after `RequeueBackoff` or at once by a new CSR from the device, which links to it as any CSR does (17.2.5).
 
 The order then carries `replaces` and, inside the window, is exempt (17.2.8). Ordering desktops keep the windows fresh: every `AriRefreshInterval` each asks the CA's renewalInfo for the live certificates of its accounts, one unauthenticated GET each, and reports those that changed (`ari`). A window the CA moves to the past queues the renewal at the next sweep, which is how a CA asks for early replacement.
 
@@ -13420,12 +13444,23 @@ Only the customer's account, or the certificate's own key, can revoke (A12). The
    when asked, else cessationOfOperation
 2  from that commit the facts no longer certify the name for that listener (17.2.10): its next page is
    narrowed and no visitor of c is routed to it
-3  the work list puts the row first. A desktop claims it, purpose revoke, and sends
+3  the work list puts the row first. A desktop claims it, purpose revoke. A row with a chain:
    acme.Revoke(leaf, reason) under the account key; 200 or alreadyRevoked: progress revoked
-4  a custom_revoking row that reaches not_after goes to expired: there is nothing left to revoke
+4  a row with no chain and an order_url ended under its order (17.2.4). The claim's step 3 lets the
+   account order nothing until this row is settled:
+     o = acme.Order(order_url)
+     dead (404, or any status but pending, ready, processing and valid): progress revoked
+     valid: acme.Certificate(o), acme.Revoke(leaf, cessationOfOperation), then progress revoked
+     pending or ready: kill it as 17.2.7 does, by acme.DeactivateAuthorization for each of its
+         authorizations, after which no finalize of it succeeds (A13); read it again
+     processing: wait OrderPollInterval; read it again
+     still pending or ready after DeactivateTryCount tries: raise tls_custom_order_stuck; progress
+         release. The row stays custom_revoking, and the account orders nothing until the order lapses
+         at the CA or a later pass kills it
+5  a custom_revoking row with a chain that reaches not_after goes to expired: nothing is left to revoke
 ```
 
-Revocation spends no budget and waits on no hold. The device's replacement is a new CSR on a new key; its predecessor is the revoking row, so it stands third in the plan and may take the set bucket's last certificate.
+Step 4 is why a row with an order recorded never simply fails. A holder that stalled before its finalize, with the row since ended, would otherwise wake and have a certificate issued that no row names, on the key of a device that may have been removed. The pass reads the order after anything such a holder could have done: it finds the order dead, kills it, or finds the certificate and revokes it. Revocation spends no budget and waits on no hold. The device's replacement is a new CSR on a new key; its predecessor is the revoking row, so it stands third in the plan and may take the set bucket's last certificate.
 
 #### 17.2.13 The account: creation and the key change
 
@@ -13489,7 +13524,7 @@ tls_custom_<reason>         on a progress event carrying a reason: ca_refused, f
                             no_route, and an authz_failed's problem type (caa, dns, connection, tls, unauthorized)
 ```
 
-A desktop raises the same names as local alarms, with `tls_account_key_mismatch` and `tls_account_lost`, which only it can see.
+A desktop raises the same names as local alarms, with `tls_account_key_mismatch`, `tls_account_lost` and `tls_custom_order_stuck`, which only it can see.
 
 #### 17.2.15 Settings
 
@@ -13504,7 +13539,7 @@ CertsCustomSettings (server: the routes and RunCustomSweep)
   RenewalLifetimeFraction   2/3        LapseWarnFraction                   1/2
   ChainMaxCount             4          OrdererMinCount / OrdererSeenWindow 2 / 7 d
   QueueStallAfter           24 h       EventRepeatInterval                 24 h
-  OrdererSeenStamp          1 h
+  OrdererSeenStamp          1 h        RequeueBackoff                      6 h
   Lifetime                  45 d (A1, for 17.4's arithmetic and the tests; a row's own validity is what counts)
 
 TlsCustomSettings (the ordering desktop)
@@ -13512,7 +13547,7 @@ TlsCustomSettings (the ordering desktop)
   LeaseMargin                      10 s             OrderDeadline       10 min
   ChallengeLifetime                10 min           NonceRetryCount     3
   ProbeCount / ProbeTimeout        2 / 10 s         AriRefreshInterval  6 h
-  ProbeRetryInterval               5 min
+  DeactivateTryCount               3
   Profile                          "tlsserver"      AuthorizationReuse  7 h (A2; read only by tests)
   the CA's directory URL: CertsSettings' Let's Encrypt value, as certs' own orders use, so a test points it
   at Pebble
@@ -13562,13 +13597,18 @@ C8 one key line     the CA is asked to require a key only after that key is comm
                     holders read it, and key_seq moves only to the key the CA took
 C9 never ours       no custom row is ordered, renewed or revoked under a URnetwork account, and no other row
                     under a customer's
+C10 nothing stray   every certificate the CA issued for the account and nobody revoked is registered on its
+                    row, or is the recorded order of a row still custom_ordering or custom_revoking, where the
+                    next claim finds it
 ```
 
 **C2 and C4** are compare-and-move and nothing else. The claim runs under `FOR UPDATE` on the account row, so two claims are serial; it raises `lock_seq`, so every earlier holder's writes fail their check; and the partial unique index refuses a second `custom_ordering` row whatever code asks. No clock but Postgres's is read. A holder that stalls past its lease is not stopped by this, and need not be: C1 and C3 say what it can still do at the CA.
 
 **C1** rests on four facts, each small. (a) A holder finalizes only the order the server recorded for the row (17.2.7), and `order_recorded` needs `order_url` NULL under the current `lock_seq`, so a row has one recorded order at a time. (b) The recorded order is replaced only after the CA called it invalid or gone, which the CA never takes back, so of the orders ever recorded for a row at most the last can issue. (c) An order issues at most once (A12): a second finalize, by a stalled holder or a resuming one, gets `orderNotReady` or the order already valid, and both then download the same chain. (d) A newOrder sent and never recorded is never finalized, by (a). It lapses at the CA and costs one of A5. So a row's certificates are those of its last recorded order: at most one. A desktop that dies between finalize and register leaves that order recorded, and the next claim's first act is to read it and register its chain (F).
 
-Order reuse (A9) is where compare-and-move alone would not do, and it is why the lock is the account's and not the row's. If rows r1 and r2, for one host, were ordered side by side, their two newOrders could return one order, finalized with r1's CSR and recorded on both; r2 would then download a chain for r1's key. C2 forbids the overlap. Across a takeover it can still arise in one way: r1's holder dies with its newOrder sent and unrecorded, and r1 goes back to `custom_queued` (its release, or `order_invalid` with no budget); r2 is claimed and its newOrder returns r1's orphan. That is harmless: the orphan was never finalized, r2 records it and finalizes it with r2's CSR, and r1 later gets a new order. The claim's `in_flight` rule keeps a row with a recorded order first in line, so a recorded order is never left for another row's newOrder to pick up. **C3** closes what is left: whatever the CA handed back, the desktop registers only a chain whose leaf carries the row's key and name, and the server checks the same again, so a wrong chain becomes `failed {foreign}` and an alarm, never a row.
+**C10** is C1's other half, and the one the first draft of this section got wrong. A row keeps its recorded order until it is registered or the CA called it dead (b), so while the row is `custom_ordering` its certificate, if one exists, is found. The gap was a row that ended while its order lived: its device removed, or its attestation refused at a takeover. Moved to `failed`, it left a `ready` order that a stalled earlier holder could still finalize, for a key that might be a removed device's, with no row to find it by. So such a row goes to `custom_revoking` and keeps its order, the claim lets the account order nothing until 17.2.12's step 4 has settled it, and that step ends only on an order the CA calls dead or on a certificate revoked. A13 makes the kill final.
+
+Order reuse (A9) is where compare-and-move alone would not do, and it is why the lock is the account's and not the row's. If rows r1 and r2, for one host, were ordered side by side, their two newOrders could return one order, finalized with r1's CSR and recorded on both; r2 would then download a chain for r1's key. C2 forbids the overlap. Across a takeover it can still arise in one way: r1's holder dies with its newOrder sent and unrecorded, and r1 goes back to `custom_queued` (a release, or a later claim that the budgets refuse); r2 is claimed and its newOrder returns r1's orphan. That is harmless: the orphan was never finalized, r2 records it and finalizes it with r2's CSR, and r1 later gets a new order. The claim's `in_flight` rule keeps a row with a recorded order first in line, so a recorded order is never left for another row's newOrder to pick up. **C3** closes what is left: whatever the CA handed back, the desktop registers only a chain whose leaf carries the row's key and name, and the server checks the same again, so a wrong chain becomes `failed {foreign}` and an alarm, never a row.
 
 **C5.** `grant` runs in the claim's transaction, under the account row's lock and an advisory lock on the registered domain, so check and spend are one step even where two accounts share a registered domain. The certificate spend is written before the newOrder and deleted only on `order_invalid` or `failed`, both of which state that no certificate came of the row's order, so every crash leaves it counted.
 
@@ -13580,7 +13620,32 @@ Order reuse (A9) is where compare-and-move alone would not do, and it is why the
 
 **C9.** The landed passes select `queued`, `ordering`, `waiting_dns`, `issued` and `revoking`; a custom row is never in one. The custom routes select only the custom states and require a `custom_host`.
 
-**The model.** `details/CertOrder.tla` is to check C1, C2, C3 and C6 with two desktops that crash, stall and are taken over at any step, two rows for one host, a CA that reuses orders or does not, and the twins that drop the recorded-order rule, the dead-order rule, the in-flight rule and the leaf check. It is not yet written; this section's status waits on it. C5, C7, C8 and C9 are the arguments above and 17.6's tests.
+**The model.** `details/CertOrder.tla` holds the account's lock, each row's state, recorded order and registered order, the CA's orders, and what each desktop remembers. Any step may be followed by a crash, which forgets what a desktop held, or by the lease lapsing while its holder goes on, so a stalled holder acts later on what it remembers beside the desktop that took over. The CA validates, fails or expires an order whenever it likes, and answers a newOrder with a pending or ready order of the account or with a new one, either way (A9). Both rows name one host. A row's device may be removed at any step. It checks `OneInFlight` (C2), `OneCert` (C1), `KeyMatch` (C3), `Tracked` (C10), `Served`, that no certificate registered on a `custom_issued` row has been revoked, and `NoForeign`, that no row's recorded order is valid on another row's key. `run-certorder.sh details-17 all`, TLC d8fb231, 8 workers, 2026-11-13; a trace is one TLC found, not always the shortest:
+
+```text
+must pass                         distinct states   depth   time         state directory
+CertOrder                         2,858,349         33      1 min 44 s   163 MB
+CertOrder-Long                    8,015,922         36      5 min 31 s   295 MB
+CertOrder-Three                   2,161,054         29      2 min 07 s   184 MB
+
+must fail, with                   invariant violated   trace
+CertOrderTwin-NoRecord            OneCert              12
+CertOrderTwin-NoResume            OneCert              13
+CertOrderTwin-ReplaceLive         OneCert              15
+CertOrderTwin-TwoInFlight         Served               13
+CertOrderTwin-TwoInFlightBlind    KeyMatch             12
+CertOrderTwin-FailKeepsOrder      Tracked              8
+
+must reach                        the state                                                       trace
+CertOrderReach-Resumed            a takeover holds a chain another desktop finalized              10
+CertOrderReach-Reused             an orphan order is registered on another row                    10
+CertOrderReach-Killed             a certificate is revoked for a row that ended under its order   12
+CertOrderReach-Reordered          a row is certified on its second order                          11
+```
+
+Each twin drops one rule. `NoRecord`: a holder finalizes an order the server did not take under its claim. `NoResume`: a takeover orders again whatever is recorded (failure F). `ReplaceLive`: `order_invalid` on a timeout, for an order still live. `TwoInFlight`: a second row is claimed beside an open order; with order reuse both rows record one order, and the row that loses it revokes the other's certificate. `TwoInFlightBlind`: the same with no leaf check, and a row registers a chain on another row's key. `FailKeepsOrder`: a row ends as `failed` with its order live, which was this section's first draft; a stalled holder then has a certificate issued that no row names, in 8 states.
+
+**What the model does not show.** `NoForeign` holds in the design, so the leaf check of 17.2.7's step 6 and of `cert-register` is never the thing that saves a run of the model: it is kept for what the model leaves out, a server that hands a holder another order's URL and a CA that errs. The budgets, holds and the plan are not in it: a refused claim is a step not taken, and C5 is the argument above. The challenge is the CA's own step, so C6 and C7 are arguments and 17.6's schedule rows. The key change shares the lock and is not modelled; C8 is its order of writes, and 17.6 kills it at each step. Liveness is not checked: that an order is eventually resumed is the desktops' loop and 17.2.14's warnings.
 
 ### 17.4 Cost
 
@@ -13624,6 +13689,8 @@ Every host is served by its first device within minutes in each row; the wait is
 
 **The server.** A claim is one row lock, one advisory lock and four index range reads of at most 60, 25, 5 and 8 spends. A `?work=1` poll returns the accounts and the waiting rows, about 0.6 KB each (a CSR and an attestation), and about 200 B when idle. Spends are at most three rows a certificate, kept 8 days. No Redis key is added.
 
+**The model.** The table in 17.3: the largest run is 8.0 million states, 295 MB and under six minutes; the 13 runs together took about ten.
+
 **Sockets.** A registration grows by its names, at most 64 of about 30 B. A custom-host Find carries the server name, and its `matches` compares it with each candidate's names: 64 candidates of 64 names is 4,096 short string compares in the script at the worst, and a handful in the common case. SOCK-M5-17's bench measures the worst case against Find's gate.
 
 ### 17.5 Failure modes and recovery
@@ -13642,9 +13709,13 @@ stalls, wakes after a takeover             its server writes get 409 claim      
                                                                                      second finalize the CA refuses, or one
                                                                                      challenge POST that fails an
                                                                                      authorization. We keep 3 of A6's 5 spare
-the probe fails (DNS, the map, no route)   nothing was asked of the CA               release {no_route}, the order stays
-                                                                                     recorded; this desktop leaves the row
-                                                                                     for ProbeRetryInterval, others may try
+the probe fails (DNS, the map, no route)   no validation was asked of the CA         the holder kills the order; the row is
+                                                                                     queued again and its host backs off,
+                                                                                     30 min doubling to a day; other hosts
+                                                                                     of the account are not held up
+an in-flight row no online desktop has a   its order is pending                      the desktop that claimed it kills the
+challenge path for                                                                   order; the row waits in the queue for
+                                                                                     a desktop with a path
 the CAA does not name the account          the authorization is invalid (caa)        backoff to one try a day; tls_custom_caa;
                                                                                      the admin fixes the record
 a 429 our count did not foresee            a hold on the account row                 every desktop waits it out; the owner's
@@ -13653,8 +13724,9 @@ A7 does not hold                           the first exempt order is refused 429
                                                                                      are paced as first orders (17.4)
 no ordering desktop online                 rows wait; nothing is spent               17.2.14's warnings from half-life; a
                                                                                      host's other devices keep serving
-the row's device, host or domain is        the row is failed or custom_revoking      a chain in hand is revoked (17.2.7's
-removed under an order                                                               step 8); a registered one by 17.2.12
+the row's device, host or domain is        the row is custom_revoking with its       17.2.12's step 4 kills the order, or
+removed, or the row fails, under an        order recorded; a stalled holder may      revokes what the holder finalized,
+order                                      still finalize it                         before the account orders again
 a removed holder still has the key         until R5 it signs as the account: it      the key change, at once; the CT watch
                                            can finalize on authorizations up to      flags a certificate for c on a key no
                                            A2 old, revoke, deactivate the account    row holds. A deactivated or stolen
@@ -13689,6 +13761,7 @@ the database is restored behind            rows and spends after the restore poi
 - `ValidateListen`: a claim below the row's, a certificate inside the margin, a list over its count, the cache read again for a higher claim, and that no narrowing refuses the entry.
 - The front: a custom name with no installed certificate fails with `unrecognized_name` and never presents the self-signed leaf or the wildcard.
 - The orderer against a scripted `TlsAcmeClient`: one test for each line of 17.2.7's table; a counter holds one newOrder a grant; a server that delays `order_recorded`'s 200 sees no finalize before it; a kill at each step from 4 to 8, after which a second orderer ends with one `custom_issued` row and the fake CA with one certificate.
+- A row ended under an order: a removal with an order recorded moves the row to `custom_revoking` and not `failed`; a claim for another row is refused `in_flight` until the pass reports; the pass against a scripted CA whose order is pending, ready, processing, valid and dead in turn, and against one where a second client finalizes between the read and the deactivation.
 - The key change: a kill after each of R1 to R7, and a second desktop's resume, ends with the row at `s + 1`, the fake CA requiring the key the file holds, and at no instant a CA key that no committed file holds. Two rollers: one `roll_begin`.
 - The sweep: `renew_time` over 10,000 ids is spread across the window; a row with a successor is skipped; expiry; each warning once.
 
@@ -13714,22 +13787,24 @@ revocation                    a device is removed: its row is custom_revoking, n
                               page, a desktop revokes at the CA and the row is revoked
 renewal                       the fake clock enters the window: the sweep queues one successor, the order carries
                               `replaces`, no certificate spend is written, the device installs it
+ended under an order          a device is removed with its order ready and its holder frozen; the holder thaws and
+                              finalizes: the pass revokes that certificate, and only then is the next row claimed
 key change                    a share ends: one desktop rolls, the other's next order signs with the new key, the old
                               key is refused by the CA; killed between R5 and R6, the other resumes
 ```
 
 **Pebble (T2, §22.9, 5% bad nonces).** The orderer end to end by TLS-ALPN-01 through the real front and a fake edge, and by DNS-01 through the fenced resolver, each with two desktops; the key change with Pebble's keyChange and `onlyReturnExisting`; revocation; renewal with `replaces`, using `testOrderReplaceable` for the serials Pebble v2.10.1 cannot replace (question `certs-ari-flake-pebble-replaces-serial`). Pebble does not reuse orders, does not check `accounturi` and has none of A3 to A7, so order reuse, the limits and the 429 are tested on the scripted client and never on Pebble. No test reaches a real CA.
 
-**The model**, once written: its design configurations pass, each twin fails on the invariant its cfg names, each reach configuration reaches its state (17.3).
+**The model.** `run-certorder.sh <track>` at each change to 17.2.6, 17.2.7 or 17.2.12: the design configurations pass, each twin fails on the invariant its cfg names, each reach configuration reaches its state (17.3).
 
 ### 17.7 Implementation notes, task by task
 
-TLS-M6-05's scope grows: three routes, two tables, four states and the sweep are more than its entry lists, and the sockets half is outside its files. Proposed, for the planner: TLS-M6-05 keeps the orderer, the routes and the model; a new task, here called **TLS-M6-06**, takes 17.2.10. TLS-M6-06 needs nothing of TLS-M6-05 and TLS-M6-05's TLS-ALPN-01 path and its T3 need TLS-M6-06.
+TLS-M6-05's scope grows: three routes, two tables, four states and the sweep are more than its entry lists, and the sockets half is outside its files. Proposed, for the planner: TLS-M6-05 keeps the orderer and the routes; a new task, here called **TLS-M6-06**, takes 17.2.10. TLS-M6-06 needs nothing of TLS-M6-05 and TLS-M6-05's TLS-ALPN-01 path and its T3 need TLS-M6-06.
 
 **TLS-M6-05**, in this order:
 
 1. `sidecar/tls_identifier.go`: `TlsCustomIdentifierSet`. `sidecar/tls_api.go`: the four states, the bodies of 17.2.5, the fields `TlsCertRecord` gains. `connect/api/bringyour.yml`: the three new routes and `?work=1`.
-2. `server/model/tls_cert_model.go`, with a new `server/model/tls_account_model.go` and the migration: 17.2.3's columns, indexes and tables; the claim, `grant`, each progress event, register and the account operations as one transaction each. `level` and `wait` are pure and live in `sidecar/certsservice/custom_queue.go`, beside `certsRepeatSetNext`, which they generalize; certs' own budget is not changed.
+2. `server/model/tls_cert_model.go`, with a new `server/model/tls_account_model.go` and the migration: 17.2.3's columns, indexes and tables; the claim, `grant`, each progress event, register and the account operations as one transaction each. Every custom move goes through the landed compare-and-move (`CertsTransition`, with QD-742's `At`, so `state_time` moves with the state, and QD-741's `RevocationReason` while a row is `custom_revoking`), and the landed purges take custom rows' ends and chains as they take any row's. Those fields landed on the tip while this section was written (track `cert-row-chain-reason`), and the section is written against them. `level` and `wait` are pure and live in `sidecar/certsservice/custom_queue.go`, beside `certsRepeatSetNext`, which they generalize; certs' own budget is not changed.
 3. `server/controller/tls_controller.go`, `server/api/handlers/tls_handlers.go`, `server/api/api.go`, `route_authz.go`: the routes, under the certs audience; `orderer` and the admin rule in the controller. The custom branch of `POST /tls/cert-order` is chosen before `certsservice.Accept` is reached.
 4. `sidecar/certsservice/custom_queue.go`: `RunCustomSweep` and `CertsCustomSettings`, scheduled beside certs' passes in taskworker.
 5. `sidecar/tls_custom_domain.go`: `TlsCustomDomainOrderer`, `TlsCustomSettings`, the key file's format and check, the local copy, 17.2.7's loop, 17.2.9, 17.2.12's step 3, 17.2.13. It takes its CA through this interface, which `sidecar/cli/tls_acme.go` implements on acmez (QD-288), and its resolver the same way:
@@ -13748,6 +13823,7 @@ type TlsAcmeClient interface {
 	Certificate(ctx context.Context, key crypto.Signer, accountUri string, url string) ([][]byte, error)
 	RenewalInfo(ctx context.Context, leaf []byte) (start time.Time, end time.Time, err error)
 	Revoke(ctx context.Context, key crypto.Signer, accountUri string, leaf []byte, reason int) error
+	DeactivateAuthorization(ctx context.Context, key crypto.Signer, accountUri string, url string) error
 }
 
 // A CA's refusal: RFC 8555's problem type without its urn prefix, the status and Retry-After. Any other error is
@@ -13765,8 +13841,8 @@ type TlsCustomResolver interface {
 ```
 
 6. `sidecar/cli/tls_acme.go`: the client, the system resolver, and the commands `tls account create`, `tls account roll` (forces 17.2.13 when due) and `tls account status`.
-7. The device-removal path that moves `issued` rows to `revoking` (TLS-M5-16) gains the custom move of 17.2.12's step 1, and host and domain removal call it; both are calls into `tls_cert_model.go`.
-8. `sidecar/sidecartest/model/details/CertOrder.tla` and its script.
+7. The device-removal path that moves `issued` rows to `revoking` (TLS-M5-16) gains the custom moves of 17.2.4 for a removal (`custom_issued` and a `custom_ordering` row with an order recorded to `custom_revoking`, the rest to `failed`), and host and domain removal call the same; all are calls into `tls_cert_model.go`.
+8. The model is written (17.3). A change to the claim, the progress events, register or the revoke pass is made in `CertOrder.tla` first.
 
 **TLS-M6-06 (proposed): certified names and the ACME route.** `sidecar/socket_api.go` (the registration's two lists, `SocketAcmeName`, Find's four wire fields), `sidecar/socket_listen.go` (`UpdateTls`), `sidecar/socketsservice/scheduler.go` and `store.go` (the candidate's and request's fields, `matches`, the ACME pick), `server/model/socket_store_scripts.go` and `sidecar/sidecartest/socket_store_fake.go` (the same in the script and the fake, both read from one registration JSON), `sidecar/tls_front.go` and `tls_dispatch.go` (custom names in `ServerNames`, no fallback certificate for one, `UpdateTls` on `AlpnChanged`), `metadata_list.yml` (17.2.16's rows). A registration with neither list, and a Find with no server name, behave exactly as today, so nothing landed changes its results.
 
@@ -13777,6 +13853,7 @@ type TlsCustomResolver interface {
 - **TLS-M6-03** (scope and alias certificates): puts certified aliases in `CustomCertified` through `DnsAliasCertifiedInTx`, and tlsedge sets `server_name` for an alias, so an alias's visitors reach only listeners certified for it. It adds no state and no pick rule. Scope hosts are names under the network's zone and are not listed.
 - **TLS-M6-04** (the CAA walk): unchanged. Its strong-mode result already says whether the pin names the account; the orderer does not walk CAA, the CA does.
 - **TLS-M5-18** (the certificate manager): for each custom host its device may serve, queues a CSR by `POST /tls/cert-order` when it has no open row and no live certificate, installs chains from its rows, keeps the predecessor until it expires, and presents the newest installed certificate whose row is `custom_issued`.
+- **The CT watch** (D-TLS-8): a custom row that is `custom_issued` or `custom_revoking`, or that ended with a chain, is a known certificate for its host by its attestation, as any row is, and `custom_queued` and `custom_ordering` are no certificate yet. A logged certificate for a custom host on a key no such row holds is its alarm, which is what catches a removed holder (17.5). Without this the watch reads the four states as unknown and alarms on every custom certificate.
 - **TLS-M5-19** (the front): unchanged but for TLS-M6-06's two edits. `tlsAlpnResponder` is used as it is.
 - **DNS-M6-02** (custom hosts): its remove route, and a domain's removal, call 17.2.12's move in their transaction; it holds an owner label to `CertifiedNameMaxCount` custom hosts; `<token>.acme.<root>` challenges are QD-175's, unchanged. **DNS-M6-03**: `ready_time` is read for `host_ready`, nothing more. **DNS-M6-01** and **DNS-M6-05**: unchanged.
 - **SOCK-M5-16**: the T2 suite gains the pick's table and the narrowing through the fake store, and the privacy harness gains canaries for a certified name and an ACME name against sock-1's and sock-2's rows. **SOCK-M5-17**: a custom-host Find under `DenyPostgresForTest`, and the 64 by 64 group in the bench (17.4).
@@ -13785,7 +13862,7 @@ type TlsCustomResolver interface {
 
 For a design-records track; nothing here edits DESIGN.md or `design/source/`.
 
-**§13.8, the custom-domain cell.** After "one ACME account per domain, pinned by the customer's CAA": "A custom certificate names exactly its one custom host and carries its device's key. Every one is a `network_tls_cert` row first, in the states `custom_queued`, `custom_ordering`, `custom_issued` and `custom_revoking`, which no certs pass reads. An ordering desktop touches the CA for an account only while it holds the account's lock (`network_tls_account`: a sequence, a holder and a lease on the database's clock), one order in flight an account; it finalizes only an order whose URL the server recorded under that sequence, and a takeover resumes the recorded order and starts another only when the CA calls it invalid or gone, so a row yields at most one certificate. The server grants each newOrder after checking and spending the account's budgets (the exact-set, registered-domain, new-order and failed-authorization limits, each a setting, one certificate of the exact set kept back) and records a CA's 429 as a hold every desktop honors. Renewals are successor rows the server queues with the stored CSR at a point of the ARI window, ordered with `replaces`. Revocation is marked by the server and sent by an ordering desktop under the account key." Replace "a holder's or the repo owner's removal rolls the key" with: "when the key repo's holders shrink, or its owner leaves, a network admin's ordering desktop changes the account key (RFC 8555 §7.3.5) under the account's lock: the new key is committed to a secret repo the remaining holders read before the CA is asked to require it, and the row's key sequence moves last; the pin is kept. Until that request a removed holder still signs as the account."
+**§13.8, the custom-domain cell.** After "one ACME account per domain, pinned by the customer's CAA": "A custom certificate names exactly its one custom host and carries its device's key. Every one is a `network_tls_cert` row first, in the states `custom_queued`, `custom_ordering`, `custom_issued` and `custom_revoking`, which no certs pass reads. An ordering desktop touches the CA for an account only while it holds the account's lock (`network_tls_account`: a sequence, a holder and a lease on the database's clock), one order in flight an account; it finalizes only an order whose URL the server recorded under that sequence, and a takeover resumes the recorded order and starts another only when the CA calls it invalid or gone, so a row yields at most one certificate. A row that ends while an order is recorded for it goes to `custom_revoking`, and that order is killed, or its certificate revoked, before the account orders again. The server grants each newOrder after checking and spending the account's budgets (the exact-set, registered-domain, new-order and failed-authorization limits, each a setting, one certificate of the exact set kept back) and records a CA's 429 as a hold every desktop honors. Renewals are successor rows the server queues with the stored CSR at a point of the ARI window, ordered with `replaces`. Revocation is marked by the server and sent by an ordering desktop under the account key." Replace "a holder's or the repo owner's removal rolls the key" with: "when the key repo's holders shrink, or its owner leaves, a network admin's ordering desktop changes the account key (RFC 8555 §7.3.5) under the account's lock: the new key is committed to a secret repo the remaining holders read before the CA is asked to require it, and the row's key sequence moves last; the pin is kept. Until that request a removed holder still signs as the account."
 
 **§13.8, the limits paragraph** gains: "For a custom domain the same numbers are settings of `CertsCustomSettings`; N devices of one host share the exact-set limit, so the fifth and later first certificates of a host follow at one each 34 h, and a device with no certificate for a host is not routed its visitors."
 
@@ -13801,7 +13878,7 @@ For a design-records track; nothing here edits DESIGN.md or `design/source/`.
 
 **§2.8's metadata list.** cert-1, cert-2, sock-1, sock-2 and api-8 gain 17.2.16's clauses, as a new version of `metadata_list.yml`.
 
-**§22.9**, the ACME line gains: "Pebble neither reuses orders nor limits; those are tested on a scripted client (DESIGN-DETAILS 17.6)". §22's schedule gains 17.6's ten rows.
+**§22.9**, the ACME line gains: "Pebble neither reuses orders nor limits; those are tested on a scripted client (DESIGN-DETAILS 17.6)". §22's schedule gains 17.6's eleven rows.
 
 ### 17.9 Owner questions
 
@@ -13813,4 +13890,4 @@ Each is filed under `.stack/questions/` and the section is built on its recommen
 - **`details-17-key-holders-and-rollover`**: any holder orders; only a network admin's desktop changes the key or writes the account row; a removed holder keeps signing as the account until the change is sent, and a hostile one can lose the customer the account. Recommendation: as built, with the warning when fewer than two admins' desktops hold the key, and the key change forced at once when due.
 - **`details-17-alpn-needs-the-443-grant`**: an ordering desktop answers TLS-ALPN-01 only for hosts whose owner it holds a port 443 publish grant on; for the rest it needs the customer's DNS-01 CNAME or another desktop. The other way lets an ordering desktop register an acme-only listener on any owner of its domain, which widens §13.9's gate. Recommendation: as built.
 - **`details-17-every-certificate-is-a-row`**: `POST /tls/cert-register` takes a chain only for a row the caller holds the lock for, and drops the drafted body's second form, where a desktop attests its own key with no queued row. A desktop's own certificate is queued like a phone's. Recommendation: as built; the second form is failure A with one desktop fewer.
-- **`details-17-small-readings`**: readings an implementer would otherwise decide, each with what was built: distinct row states in place of a flag; the lock an account and not a row; spends as rows replayed in place of counters; the probe before the challenge; narrowing in place of refusing a registration; the device falling back to its predecessor; the two holds; the plan's order; `?work=1`; the local copy of the key file.
+- **`details-17-small-readings`**: readings an implementer would otherwise decide, each with what was built: distinct row states in place of a flag; the lock an account and not a row; spends as rows replayed in place of counters; the probe before the challenge; narrowing in place of refusing a registration; the device falling back to its predecessor; the two holds; the plan's order; `?work=1`; the local copy of the key file; a row that ends under a recorded order is settled at the CA before the account orders again.
