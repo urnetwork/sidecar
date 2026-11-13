@@ -602,7 +602,10 @@ func (self *Sidecar) fileForwardingDelegation(ctx context.Context, setup *sideca
 				if err := drop(); err != nil {
 					return err
 				}
-				continue
+				if attempt+1 < max(1, setup.settings.FileAttemptCount) {
+					continue
+				}
+				return fmt.Errorf("%w: the forwarding Delegation never landed", ErrForwardingSetupIncomplete)
 			}
 			pin, err := self.postPendingInOrder(ctx, pending)
 			switch {
