@@ -276,9 +276,10 @@ func TestAnUnformedFilingIsVoidedAfterTheWait(t *testing.T) {
 }
 
 // Twin NoWait's guard: a tip one millisecond short of the wait after a filing sealed above every generation gkm names
-// stops the fold below it, with config_key_waiting naming its generation and its filer and nothing voided; the tip the
-// wait after it freezes it void, with config_key_void naming them. The wait is read against the entry at the fold asked,
-// the tip, in both of the fold's opens, so the earlier filing the stop leaves below the fold is voided by the same tip.
+// stops the fold below it, the filing not voided, with config_key_waiting naming its generation and its filer; the tip
+// the wait after it freezes it void, with config_key_void naming them. The wait is read against the entry at the fold
+// asked, the tip, in both of the fold's opens, so an older filing the stop leaves below the fold, a wait old at that
+// tip, is voided by the short fold already and named by config_key_void.
 func TestAnUnformedFilingWaits(t *testing.T) {
 	net := newTestBridgeLedgerNet(t)
 	_, laptop, desktop := testBridgeCast(net.testConfigNet)
@@ -348,7 +349,8 @@ func TestANamedGenerationIsNeverVoided(t *testing.T) {
 // a named generation not held (above the keys held, or a gap below the newest, or a key holding no RK_g) and no read at
 // all each answer 0, and a fold on any of them voids nothing; the whole read answers G and voids. Twin StaleRead's
 // guard: Fold asks the read once each plan and keeps nothing, so a generation that formed between two plans is read
-// by the second, which then judges the body it opens rather than voiding it.
+// by the second, which then judges the body it opens rather than voiding it; the twin itself, a writer that plans on
+// the listing it read before and lacks the new key, voids that body, and a reader holding the generation forks.
 func TestNoVoidWithoutAWholeRead(t *testing.T) {
 	keys := testConfigSealKeyAt(testConfigSealKey(1), testConfigSealKey(2))
 	if got := BridgeFormedThrough(&BridgeGenerationRead{Whole: true, Newest: 2}, keys); got != 2 {
@@ -420,6 +422,15 @@ func TestNoVoidWithoutAWholeRead(t *testing.T) {
 	head := stale.headOf(fold)
 	if checked, err := stale.checkAsReader(head, stale.keys, stale.settings, 0, tip); !checked || err != nil {
 		t.Fatalf("a reader holding generation 2 checks the plan: %v, %v", checked, err)
+	}
+	remembered := stale.writerJudge(1, 0)
+	remembered.RepoKeyAt = testConfigSealKeyAt(testConfigSealKey(1))
+	staleFold := stale.foldBy(remembered, tip)
+	if staleFold.FoldedThrough != tip || len(staleFold.Voided) != 1 {
+		t.Fatalf("a writer on the listing it remembered: through %d, voided %d", staleFold.FoldedThrough, len(staleFold.Voided))
+	}
+	if _, err := stale.checkAsReader(stale.headOf(staleFold), stale.keys, stale.settings, 0, tip); !errors.Is(err, ErrConfigHeadMismatch) {
+		t.Fatalf("a reader holding generation 2 took a void on a remembered listing: %v", err)
 	}
 }
 
