@@ -977,12 +977,14 @@ func TestRecordEvsStreamsRefusesADeltaOffTheNewestVersion(t *testing.T) {
 	build := func(n uint64) *sidecar.EvsStreamPush {
 		push := recordEvsWorldCounterPush(world, writerId, n, n)
 		built, err := repo.BuildStreamPush(t.Context(), &sidecar.EvsStreamPushArgs{
-			RefName:  sidecar.RecordStreamRefName(writerId),
-			PushId:   push.PushId,
-			SlotId:   push.SlotId,
-			SlotKeys: func(fek *sidecar.EvsFekKey) ([]*protocol.EvsSlotKey, error) { return recordEvsTestCodec{}.Wrap(fek, push.SlotRows) },
-			Files:    []*sidecar.EvsStreamFile{{Path: push.Entries[0].Path, Content: push.Entries[0].Entry}},
-			AuthPin:  push.AuthPin,
+			RefName: sidecar.RecordStreamRefName(writerId),
+			PushId:  push.PushId,
+			SlotId:  push.SlotId,
+			SlotKeys: func(fek *sidecar.EvsFekKey) ([]*protocol.EvsSlotKey, error) {
+				return recordEvsTestCodec{}.Wrap(fek, push.SlotRows)
+			},
+			Files:   []*sidecar.EvsStreamFile{{Path: push.Entries[0].Path, Content: push.Entries[0].Entry}},
+			AuthPin: push.AuthPin,
 		})
 		if err != nil {
 			t.Fatal(err)
