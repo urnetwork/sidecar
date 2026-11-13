@@ -75,17 +75,42 @@ var metadataListAdditions = []metadataListAddition{
 		list:     "keyed by the address's peppered hash; no domain or address held); IdP sign-in flows in progress (state, nonce, PKCE verifier, IdP, network, the signed-in user that began one; 10 min, taken once)\n  why: sign-in, roles and SSO (§7.5, §7.6);",
 	},
 	{
-		// QD-765: the list's version names the slot origin's change (DESIGN-DETAILS 14.8)
-		question: "details-14-slot-origin",
-		block:    "# metadata_list.yml v11; v7 was updated",
-		list:     "# metadata_list.yml v12; v7 was updated",
+		// QD-741 and QD-742: cert-1's sees gains a row's issued chain, a requested revocation's reason and
+		// the time of its latest state
+		question: "tls-m5-05-cert-row-values",
+		block:    "ARI window, state and successor; Team custom-domain chains and queued CSRs (v1);",
+		list:     "ARI window, state and successor, the time of its latest state; issued chains until 30 d after expiry or revocation, and a requested revocation's reason; Team custom-domain chains and queued CSRs (v1);",
 	},
 	{
-		// QD-765: v12's line
-		question: "details-14-slot-origin",
+		// QD-742: cert-1's ttl counts a failed order's 30 d too
+		question: "tls-m5-14-cert-row-end-time",
+		block:    "  ttl: 30 d after expiry or revocation; budget entries 7 d,",
+		list:     "  ttl: 30 d after expiry, revocation or failure; budget entries 7 d,",
+	},
+	{
+		// QD-741's list version bump: the first line's version
+		question: "tls-m5-05-cert-row-values",
+		block:    "# metadata_list.yml v11;",
+		list:     "# metadata_list.yml v12;",
+	},
+	{
+		// and what the version adds, after v11's lines
+		question: "tls-m5-05-cert-row-values",
 		block:    "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n",
-		list: "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n" +
-			"# v12, updated 2026-11-12 for the slot fix (DESIGN-DETAILS 14; QD-765), adds evs-5's origin of each slot object, in\n" +
+		list:     "# until CONSUME; and evs-4's and evs-12's content kept until a later compaction, unscheduled (247).\n# v12, updated 2026-11-12 for the owner's answers on certs' rows (QD-741, QD-742), adds cert-1's issued chains, a\n# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n",
+	},
+	{
+		// QD-765: the list's version names the slot origin's change (DESIGN-DETAILS 14.8), after v12's
+		question: "details-14-slot-origin",
+		block:    "# metadata_list.yml v12;",
+		list:     "# metadata_list.yml v13;",
+	},
+	{
+		// QD-765: v13's line, after v12's
+		question: "details-14-slot-origin",
+		block:    "# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n",
+		list: "# requested revocation's reason and the time of a row's latest state, and counts a failed order's 30 d from its failure.\n" +
+			"# v13, updated 2026-11-12 for the slot fix (DESIGN-DETAILS 14; QD-765), adds evs-5's origin of each slot object, in\n" +
 			"# object metadata, and narrows evs-5's ttl to a dead push's own slots; evs-10 names the object metadata evs writes.\n",
 	},
 	{
