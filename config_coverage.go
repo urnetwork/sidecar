@@ -7,20 +7,22 @@
 //	         (R, n, A_n). Every verifier advances AclRepo.holders_shrunk_at to n at each such entry, in Apply and in a
 //	         base's re-application alike, on the state being built (DESIGN-DETAILS 5.7), so a new device and a gate
 //	         that started at a base reach a long-running reader's value, and writers compile it into bases
-//	base     a base whose config head is newer than the previous base's may drop readers by policy, which a verifier
-//	         that started at that base cannot compare with the state before it; until question
-//	         team-m2-09-base-shrinks is answered, every verifier advances every repo's holders_shrunk_at to the
-//	         position of a base whose compiled policy part differs from the previous base's rows', the fail-closed
-//	         rule, since both bases' rows are what every verifier holds; a fold, a ServiceSettings or a K_sock change
-//	         moves no policy and shrinks nothing
+//	base     a base b is an entry too: its own config head change can drop readers by policy, so it shrinks R when
+//	         KeyHolders(R, b-1, t_b) is not a subset of KeyHolders(R, b, t_b), S(b) being b's rows with its tail
+//	         re-applied. A verifier that starts at b holds no S(b-1), so b's header carries those repos,
+//	         shrunk_repo_ids (QD-746): its writer computes them from its tip and the state its base gives, at its own
+//	         clock, since only api knows t_b; api computes them again at the time it stamps the entry and answers 409
+//	         to a list that differs, so the writer signs again; a verifier present at b-1 computes them again at t_b
+//	         and forks on any difference, as with tail_verdicts; one that starts at b takes them. Every verifier then
+//	         advances holders_shrunk_at to b for exactly those repos
 //	expiry   a holder whose RepoGrant or requested grant expires, or whose SidecarAdmit (an uncovered agent's) or
 //	         Delegation not_after passes, at T_e, leaves at T_e with no entry: KEYS's GkmHolderExpiry, identity
 //	         (R, T_e). A covered agent's own not_after drops no holder where it is covered, and a ReaderKey's lapse is
 //	         no expiry: KeyHolders holds neither
 //
 // Only an entry that wrote a sidecar, member or Delegation row, or the acl rows, can shrink, so every other entry costs
-// nothing here; one that did is judged over every repo the rows hold. Bounding that by the repos the entry's subject
-// can reach is the review phase's.
+// nothing here; one that did is judged over every repo the rows hold, and so is every base. Bounding that by the repos
+// the entry's subject can reach is the review phase's.
 //
 // Nothing here creates, derives or unwraps a key. On every leg.
 
@@ -28,6 +30,9 @@ package sidecar
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"slices"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -35,6 +40,11 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+// A base's shrunk_repo_ids, well formed, are not the repos its own change shrinks at its time as this verifier's
+// states give them: a fork at a reader present at b-1; at api, whose time is the entry's own, the writer's 409 to sign
+// again at its clock (QD-746).
+var errConfigBaseShrinksDiffer = errors.New("shrunk_repo_ids differ")
 
 // The newest log position that shrank the repo's key holders (§7.9's shrink row), 0 for none or a repo this state does
 // not hold: a generation covers it iff its auth pin is at or past it.
@@ -179,43 +189,139 @@ func configSetShrunkAt(next *configStateBuilder, shrink func(repoId Id) bool) {
 	}
 }
 
-// The fail-closed rule for a base whose config head is newer than the previous base's (question
-// team-m2-09-base-shrinks): when the policy part of its compiled acl rows differs from the previous base's rows', or
-// those rows cannot be read (previousRows nil), every repo's holders_shrunk_at advances to the base's position, at
-// every verifier alike, since each holds both bases' rows.
-func configAdvanceBaseShrinks(next *configStateBuilder, previous *configBase, header *bridge.ProjectionHeader, previousRows []byte, rows *bridge.ProjectionRows) {
-	if previous == nil || header.GetConfigVersion() <= previous.header.GetConfigVersion() {
-		return
+// The repos whose key holders a base's own change shrinks (QD-746), as its shrunk_repo_ids carries them: each repo of
+// after's rows, after being the base's state with its tail re-applied, that before, S(b-1), holds, and whose
+// KeyHolders at the time given lose a holder from before to after by Dropped, so an agent its Delegation covers in
+// after is no loss. Holders after's state cannot compute fail closed, as a shrink, as configAdvanceShrinks reads them.
+// Sorted by id bytes, each once.
+func configBaseShrunkRepoIds(before *ConfigState, after *ConfigState, at time.Time) [][]byte {
+	repoIds := []Id{}
+	for _, repo := range after.aclRows.GetRepos() {
+		repoId, err := IdFromBytes(repo.GetRepoId())
+		if err != nil || before.Repo(repoId) == nil {
+			// a repo the base's state made has no holder to lose
+			continue
+		}
+		beforeHolders, err := KeyHolders(before, repoId, at)
+		if err != nil {
+			continue
+		}
+		afterHolders, err := KeyHolders(after, repoId, at)
+		if err != nil || 0 < len(beforeHolders.Dropped(afterHolders)) {
+			repoIds = append(repoIds, repoId)
+		}
 	}
-	if previousRows != nil && configPolicyRowsEqual(previousRows, rows) {
-		return
+	slices.SortFunc(repoIds, Id.Cmp)
+	repoIds = slices.Compact(repoIds)
+	repoIdBytes := make([][]byte, 0, len(repoIds))
+	for _, repoId := range repoIds {
+		repoIdBytes = append(repoIdBytes, repoId.Bytes())
 	}
-	configSetShrunkAt(next, func(repoId Id) bool { return true })
+	return repoIdBytes
 }
 
-// Whether two rows' acl parts compile the same policy: has_document, evidence_default, rules, requests, the bridge
-// section, audit and each atom's policy fields, leaving out what the log folds, repos, suspensions, spent grants and
-// the sidecars carrying a tag. False when either does not parse.
-func configPolicyRowsEqual(previousRowsBytes []byte, rows *bridge.ProjectionRows) bool {
-	previousRows := &bridge.ProjectionRows{}
-	if err := proto.Unmarshal(previousRowsBytes, previousRows); err != nil {
-		return false
-	}
-	policy := func(aclBytes []byte) (*protocol.AclRows, bool) {
-		acl := &protocol.AclRows{}
-		if err := proto.Unmarshal(aclBytes, acl); err != nil {
-			return nil, false
+// The repos a base's shrunk_repo_ids name, as a verifier takes them: each a 16-byte repo_id of after's rows, in
+// strictly ascending byte order. Else an error, which no honest writer's base gives.
+func configBaseShrunkRepoIdsOf(header *bridge.ProjectionHeader, after *ConfigState) (map[Id]bool, error) {
+	rowsRepoIds := map[Id]bool{}
+	for _, repo := range after.aclRows.GetRepos() {
+		if repoId, err := IdFromBytes(repo.GetRepoId()); err == nil {
+			rowsRepoIds[repoId] = true
 		}
-		acl.Repos, acl.Suspensions, acl.SpentGrants = nil, nil, nil
-		for _, atom := range acl.GetAtoms() {
-			atom.SidecarIds = nil
+	}
+	shrunk := map[Id]bool{}
+	for i, repoIdBytes := range header.GetShrunkRepoIds() {
+		repoId, err := IdFromBytes(repoIdBytes)
+		if err != nil {
+			return nil, fmt.Errorf("shrunk_repo_ids[%d] of %d bytes", i, len(repoIdBytes))
 		}
-		return acl, true
+		if 0 < i && 0 <= bytes.Compare(header.GetShrunkRepoIds()[i-1], repoIdBytes) {
+			return nil, fmt.Errorf("shrunk_repo_ids[%d] out of ascending order", i)
+		}
+		if !rowsRepoIds[repoId] {
+			return nil, fmt.Errorf("shrunk_repo_ids[%d] names a repo the rows do not hold", i)
+		}
+		shrunk[repoId] = true
 	}
-	previousPolicy, ok := policy(previousRows.GetAcl())
-	if !ok {
-		return false
+	return shrunk, nil
+}
+
+// A base in a later base's tail, re-applied on next at its own position: its rows are superseded and it judges
+// nothing, but holders_shrunk_at advances again to its position for each repo of the rebuilt rows its shrunk_repo_ids
+// name, which every verifier at the later base holds alike, since it keeps the tail's entries. Its list was held to
+// what its change shrank where it landed (configApplyBaseShrinks); an id that does not parse names no repo here. An
+// entry that does not parse as a base is an error, a fork.
+func configReapplyBaseShrinks(next *configStateBuilder, kept *configKeptEntry) error {
+	_, header, err := configParseBase(kept.entry)
+	if err != nil {
+		return fmt.Errorf("the tail's base %d does not parse: %w", kept.n, err)
 	}
-	nextPolicy, ok := policy(rows.GetAcl())
-	return ok && proto.Equal(previousPolicy, nextPolicy)
+	shrunk := map[Id]bool{}
+	for _, repoIdBytes := range header.GetShrunkRepoIds() {
+		if repoId, err := IdFromBytes(repoIdBytes); err == nil {
+			shrunk[repoId] = true
+		}
+	}
+	if 0 < len(shrunk) {
+		configSetShrunkAt(next, func(repoId Id) bool { return shrunk[repoId] })
+	}
+	return nil
+}
+
+// The shrunk_repo_ids an honest writer signs for a base at this log's next position (QD-746): the state header's fold,
+// tail_verdicts and rows give over the tip, built as applying the base builds it, against the tip's state, at timeMs,
+// the time the writer expects the entry to carry; api judges the list again at the time it stamps. header's other
+// fields must be the base's own, shrunk_repo_ids aside; a header whose tail the log cannot re-apply, or rows that do
+// not build, are an error. Nothing is kept and no published state changes. For the goroutine that applies, as Apply
+// is, or under the lock that serializes it (ConfigClient's followLock).
+func (self *ConfigLog) BaseShrunkRepoIds(header *bridge.ProjectionHeader, rows []byte, timeMs int64) ([][]byte, error) {
+	tip := self.state.Load()
+	n := tip.n + 1
+	verdicts, err := self.checkBaseTail(tip.base, header, n)
+	if err != nil {
+		return nil, err
+	}
+	// a copy whose arrays end where its own do, so the dry run appends to arrays of its own and never writes into the
+	// ones the log's states share
+	before := configCopyState(tip)
+	before.chains = before.chains[:len(before.chains):len(before.chains)]
+	before.ring = before.ring[:len(before.ring):len(before.ring)]
+	// the entry's digest is no input to the holders, so the dry run's is zero
+	scratch := &configKeptEntry{
+		n:     n,
+		entry: &bridge.AuthEntry{NetworkId: self.networkId.Bytes(), N: n, PrevChain: bytes.Clone(tip.chain[:]), Kind: bridge.AuthEntryKindBase, TimeMs: timeMs},
+	}
+	next, _, err := self.stateFromBase(before, scratch, header, rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := self.reapplyTail(next, header.GetFoldedThrough(), n, verdicts, false); err != nil {
+		return nil, err
+	}
+	return configBaseShrunkRepoIds(tip, configCopyState(next.state), time.UnixMilli(timeMs)), nil
+}
+
+// A base's own shrinks on next, the state its rows give with its tail re-applied (QD-746; §7.9's shrink row): a
+// verifier standing at before, S(b-1), computes the repos at the base's time and requires the header's shrunk_repo_ids
+// to be exactly those (errConfigBaseShrinksDiffer otherwise), and one that starts at the base, before nil, takes them;
+// either way the list must be well formed. Then holders_shrunk_at advances to the base's position for exactly those
+// repos, so a long-running reader, a new device and a cold gate hold one value (D-TEAM-19). An error changes nothing:
+// a fork at a reader, a refusal at api.
+func configApplyBaseShrinks(before *ConfigState, next *configStateBuilder, header *bridge.ProjectionHeader) error {
+	// the state the base made, an immutable view with an acl part of its own
+	after := configCopyState(next.state)
+	shrunk, err := configBaseShrunkRepoIdsOf(header, after)
+	if err != nil {
+		return err
+	}
+	if before != nil {
+		computed := configBaseShrunkRepoIds(before, after, time.UnixMilli(next.state.timeMs))
+		carried := header.GetShrunkRepoIds()
+		if !slices.EqualFunc(computed, carried, bytes.Equal) {
+			return fmt.Errorf("%w: the base names %d repos its own change shrinks where this verifier's states give %d, or others",
+				errConfigBaseShrinksDiffer, len(carried), len(computed))
+		}
+	}
+	configSetShrunkAt(next, func(repoId Id) bool { return shrunk[repoId] })
+	return nil
 }

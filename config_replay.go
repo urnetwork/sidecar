@@ -153,8 +153,8 @@ func (self *ConfigLog) restore(retained *ConfigRetained, rowsSource ConfigRowsSo
 }
 
 // Builds S(b) for the base at baseIndex (DESIGN-DETAILS 5.2.4's StartAtBase): its checks and, for a full reader, its
-// anchor; its rows; the kept entries before it chained to its prev_chain; and the tail among folded_through+1..b-1
-// re-applied by its tail_verdicts. Publishes S(b).
+// anchor; its rows; the kept entries before it chained to its prev_chain; the tail among folded_through+1..b-1
+// re-applied by its tail_verdicts; and b's own shrinks as its shrunk_repo_ids name them (QD-746). Publishes S(b).
 func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256.Size]byte, entryBytes [][]byte, baseIndex int, rowsSource ConfigRowsSource, floor *bridge.AuthPin) error {
 	baseEntry := entries[baseIndex]
 	baseN := baseEntry.GetN()
@@ -283,13 +283,12 @@ func (self *ConfigLog) startAtBase(entries []*bridge.AuthEntry, chains [][sha256
 		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseN, err)
 	}
 
-	// the state at b itself, with S(b)'s pin and chains
+	// the state at b itself, with S(b)'s pin and chains, and b's own shrinks as its header carries them, since this
+	// reader holds no S(b-1) to compute them from (QD-746)
 	state.n, state.chain, state.timeMs = baseN, chains[baseIndex], baseEntry.GetTimeMs()
-	var previousRows []byte
-	if previousBase != nil {
-		previousRows, _ = rowsSource.Rows(self.networkId, previousBase.header.GetRowsSha256())
+	if err := configApplyBaseShrinks(nil, next, header); err != nil {
+		return fmt.Errorf("%w: base %d: %w", ErrConfigFork, baseN, err)
 	}
-	configAdvanceBaseShrinks(next, previousBase, header, previousRows, rows)
 	result := next.finish()
 	self.keep(start)
 	self.retainBase(result, rowsBytes)

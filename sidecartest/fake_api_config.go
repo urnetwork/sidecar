@@ -257,8 +257,9 @@ type fakeApiAppend struct {
 	body []byte
 	// the genesis a base 1 carries
 	genesis []byte
-	// the entry a retry finds, or the verdict at the tip; nil appends unverified (SequenceAnyway)
-	verify func(configLog *fakeApiConfigLog) (*bridge.AuthPin, error)
+	// the entry a retry finds, or the verdict at the tip at timeMs, the time the entry is stamped with; nil appends
+	// unverified (SequenceAnyway)
+	verify func(configLog *fakeApiConfigLog, timeMs int64) (*bridge.AuthPin, error)
 	// written before the entry (a base's rows) and after it (base 1's genesis), each once more on a retry
 	before func(ctx context.Context, cluster sidecar.BlobCluster) error
 	after  func(ctx context.Context, cluster sidecar.BlobCluster) error
@@ -306,8 +307,11 @@ func (self *FakeApi) append(ctx context.Context, networkId sidecar.Id, request *
 		return pin, nil
 	}
 	for range self.settings.AppendAttemptCount {
+		// one time an attempt: the verdict's and the entry's, so a base's own shrinks are judged at the time readers
+		// judge them (QD-746)
+		timeMs := self.clock.Now().UnixMilli()
 		if request.verify != nil {
-			found, err := request.verify(configLog)
+			found, err := request.verify(configLog, timeMs)
 			if err != nil {
 				status := http.StatusForbidden
 				if errors.Is(err, sidecar.ErrConfigTipMoved) {
@@ -325,7 +329,7 @@ func (self *FakeApi) append(ctx context.Context, networkId sidecar.Id, request *
 			N:         tip.GetVersion() + 1,
 			PrevChain: tip.GetChain(),
 			Kind:      request.kind,
-			TimeMs:    self.clock.Now().UnixMilli(),
+			TimeMs:    timeMs,
 			Body:      request.body,
 		})
 		if err != nil {
@@ -397,8 +401,8 @@ func (self *FakeApi) AppendStatement(ctx context.Context, networkId sidecar.Id, 
 	return self.append(ctx, networkId, &fakeApiAppend{
 		kind: bridge.AuthEntryKindStatement,
 		body: signed,
-		verify: func(configLog *fakeApiConfigLog) (*bridge.AuthPin, error) {
-			verdict := configLog.log.Check(signed, self.clock.Now().UnixMilli())
+		verify: func(configLog *fakeApiConfigLog, timeMs int64) (*bridge.AuthPin, error) {
+			verdict := configLog.log.Check(signed, timeMs)
 			if pin, found := configLog.log.FindStatement(verdict.StatementId); found {
 				return pin, nil
 			}
@@ -433,11 +437,11 @@ func (self *FakeApi) AppendBase(ctx context.Context, networkId sidecar.Id, signe
 		kind:    bridge.AuthEntryKindBase,
 		body:    signedHeader,
 		genesis: genesis,
-		verify: func(configLog *fakeApiConfigLog) (*bridge.AuthPin, error) {
+		verify: func(configLog *fakeApiConfigLog, timeMs int64) (*bridge.AuthPin, error) {
 			if pin := configLog.basePins[bodyId]; pin != nil {
 				return pin, nil
 			}
-			if err := configLog.log.CheckBase(signedHeader, rows); err != nil {
+			if err := configLog.log.CheckBase(signedHeader, rows, timeMs); err != nil {
 				return nil, err
 			}
 			return nil, configLog.log.CheckConfigPushes(signedHeader, configPushes)
@@ -464,7 +468,7 @@ func (self *FakeApi) AppendTick(ctx context.Context, networkId sidecar.Id, tick 
 	if err != nil {
 		return nil, err
 	}
-	return self.append(ctx, networkId, &fakeApiAppend{kind: bridge.AuthEntryKindTick, body: body, verify: func(configLog *fakeApiConfigLog) (*bridge.AuthPin, error) {
+	return self.append(ctx, networkId, &fakeApiAppend{kind: bridge.AuthEntryKindTick, body: body, verify: func(configLog *fakeApiConfigLog, timeMs int64) (*bridge.AuthPin, error) {
 		if configLog.log.State().Base() == nil {
 			return nil, errors.New("no tick before base 1")
 		}
