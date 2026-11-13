@@ -1707,7 +1707,7 @@ func (self *fsKeysWorldState) HonorScope(principal *sidecar.Principal, repoId si
 	case sidecar.AclEvsAdmin:
 		repo := view.Repo(repoId)
 		return fsKeysAnswer(repo != nil && slices.ContainsFunc(repo.GetAdmins(), func(admin *protocol.AclRepoAdminRow) bool {
-			return bytes.Equal(admin.GetSidecarId(), sidecarId.Bytes())
+			return sidecar.AclRepoAdminStands(admin) && bytes.Equal(admin.GetSidecarId(), sidecarId.Bytes())
 		}))
 	case sidecar.AclEvsDeposit:
 		return fsKeysAnswer(slices.Contains(world.depositors, sidecarId) || slices.Contains(view.RepoReadersAt(repoId, now), sidecarId))

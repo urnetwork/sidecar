@@ -174,7 +174,7 @@ func (self *MailConfigAclAuthority) MayChangeRecord(signerSidecarId Id, mailboxR
 		return err == nil && state.ConsentedFor(signerSidecarId, ownerMemberId)
 	case protocol.RepoKind_REPO_KIND_GENERAL:
 		for _, admin := range repo.GetAdmins() {
-			if adminId, err := IdFromBytes(admin.GetSidecarId()); err == nil && adminId == signerSidecarId {
+			if adminId, err := IdFromBytes(admin.GetSidecarId()); err == nil && adminId == signerSidecarId && AclRepoAdminStands(admin) {
 				return true
 			}
 		}

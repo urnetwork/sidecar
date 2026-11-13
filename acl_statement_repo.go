@@ -23,9 +23,9 @@
 // give it an admin and policy never widens its writers (D-ACL-13; acl-m2-02-state-readings #10). Statements on a
 // deleted repo are refused but for RepoRevoke, RepoAdmin's remove, RepoDelete{now} and RepoRestore.
 //
-// RepoRestore's window runs from its RepoDelete's entry time, which rows do not carry: the state's log answers it
-// while it retains that entry, and a restore it cannot judge is refused (question
-// acl-m2-06-access-log-positions).
+// RepoRestore's window runs from its RepoDelete's entry time, which the deletion row carries (QD-743), so every reader
+// judges it from rows alone on any day of the window, whether or not its log still keeps that entry. A row with no
+// time, which no fold writes, is refused as a restore that cannot be dated.
 //
 // On every leg, the sidecar_http page Worker's included: root Id, no connect type.
 
@@ -42,13 +42,27 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// How long after its RepoDelete's entry a RepoRestore is taken (§8.8, owner decision 82): a protocol value every
-// reader and api hold alike.
-const aclRepoRestoreWindowMs = int64(7 * 24 * 60 * 60 * 1000)
+// §8.8's access-log limits, which every reader and api hold alike (QD-702): the protocol's values, so changing one is a
+// protocol change no deployment makes on one side alone. The statement rules read DefaultAclAccessLogSettings();
+// threading each side's own instance through them is the review phase's settings sweep (QD-706).
+type AclAccessLogSettings struct {
+	// How long after its RepoDelete's entry a RepoRestore is taken: 7 days (§8.8, owner decision 82). §11.12's shred
+	// starts no earlier than this past the entry, so a restore every reader takes always finds the repo unshredded.
+	// Positive.
+	RepoRestoreWindow time.Duration
+}
 
-// A state that knows when an entry was sequenced, which ConfigState's log answers while it retains the entry.
-type aclEntryTimes interface {
-	aclTimeAt(n uint64) (int64, bool)
+// §8.8's values. A fresh value each call.
+func DefaultAclAccessLogSettings() *AclAccessLogSettings {
+	return &AclAccessLogSettings{
+		RepoRestoreWindow: 7 * 24 * time.Hour,
+	}
+}
+
+// Whether a RepoRestore sequenced at restoreTimeMs lies within the window of a RepoDelete whose entry was sequenced at
+// deletedTimeMs, both ms since the epoch: at most RepoRestoreWindow after it, the window's last ms included.
+func (self *AclAccessLogSettings) RepoRestoreWithinWindow(deletedTimeMs int64, restoreTimeMs int64) bool {
+	return restoreTimeMs-deletedTimeMs <= self.RepoRestoreWindow.Milliseconds()
 }
 
 // A time from ms since the epoch.
@@ -341,15 +355,12 @@ func (self *AclState) checkRepoRestore(statement *AclStatement, restore *protoco
 	case deletion.GetRestoredAt() != 0:
 		return nil, fmt.Errorf("%w: a deletion already restored", ErrConfigRule)
 	}
-	times, ok := self.view.(aclEntryTimes)
-	if !ok {
-		return nil, fmt.Errorf("%w: the state cannot tell when the RepoDelete landed", ErrConfigRuleMissing)
+	// the row's own time, never the log's copy of the entry, so the verdict is the same at every reader on every day
+	deletedTimeMs := deletion.GetDeletedTimeMs()
+	if deletedTimeMs == 0 {
+		return nil, fmt.Errorf("%w: a deletion row with no entry time", ErrConfigRuleMissing)
 	}
-	deletedTimeMs, ok := times.aclTimeAt(deletion.GetDeletedAt())
-	if !ok {
-		return nil, fmt.Errorf("%w: the RepoDelete's entry is not retained here (acl-m2-06-access-log-positions)", ErrConfigRuleMissing)
-	}
-	if aclRepoRestoreWindowMs < statement.TimeMs-deletedTimeMs {
+	if !DefaultAclAccessLogSettings().RepoRestoreWithinWindow(deletedTimeMs, statement.TimeMs) {
 		return nil, fmt.Errorf("%w: a RepoRestore more than 7 days after its RepoDelete", ErrConfigRule)
 	}
 	if !self.repoAdminSigner(repo, signer, statement.N) {

@@ -1011,6 +1011,18 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "client_id", number: 10, typeName: "bytes"},
 		question: "plan-ACL-nonsidecar-subjects",
 	},
+	// QD-743: the folded access log keeps a RepoDelete's entry time and a removed admin's removal position, which
+	// readers need once those entries leave the log's retention
+	{
+		message:  "AclRepoAdminRow",
+		field:    testFenceField{name: "removed_at", number: 4, typeName: "uint64"},
+		question: "acl-m2-06-access-log-positions",
+	},
+	{
+		message:  "AclRepoDeletionRow",
+		field:    testFenceField{name: "deleted_time_ms", number: 5, typeName: "int64"},
+		question: "acl-m2-06-access-log-positions",
+	},
 	{
 		message:  "Announcement",
 		field:    testFenceField{name: "pad", number: 14, typeName: "bytes"},

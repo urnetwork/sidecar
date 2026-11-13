@@ -146,7 +146,7 @@ func GkmFormSignerAllowed(view GkmAuthView, repoId Id, signerId Id) error {
 		return nil
 	}
 	for _, admin := range repo.GetAdmins() {
-		if bytes.Equal(admin.GetSidecarId(), signerId.Bytes()) {
+		if AclRepoAdminStands(admin) && bytes.Equal(admin.GetSidecarId(), signerId.Bytes()) {
 			return nil
 		}
 	}

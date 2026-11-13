@@ -423,7 +423,8 @@ func TestAclGateHonorScopeClosesAtASuspend(t *testing.T) {
 	}
 }
 
-// A RepoDelete the gate's log keeps is dated by its entry's time and signer; one past the log's window is undated.
+// A RepoDelete is dated by its row's time, the entry's (QD-743), and while the gate's log keeps its entry the gate also
+// knows its signer; with no log it is dated all the same and unsigned.
 func TestAclGateSnapshotDatesARepoDeleteItKeeps(t *testing.T) {
 	net := newTestConfigNet(t)
 	repoId := testConfigId("deleted repo")
@@ -443,11 +444,12 @@ func TestAclGateSnapshotDatesARepoDeleteItKeeps(t *testing.T) {
 	snapshot := &AclGateSnapshot{Pin: state.Pin(), Config: state, Acl: acl}
 	deletion := snapshot.RepoDeletion(repoId)
 	if deletion == nil || deletion.DeletionId != deletionId || deletion.DeletedAt != verdict.Pin.GetVersion() || !deletion.Dated ||
-		deletion.SignerSidecarId != net.owner.sidecarId || deletion.TimeMs != state.TimeMs() || deletion.Now || deletion.Restored {
+		!deletion.Signed || deletion.SignerSidecarId != net.owner.sidecarId || deletion.TimeMs != state.TimeMs() || deletion.Now || deletion.Restored {
 		t.Fatalf("the kept deletion: %+v", deletion)
 	}
-	undated := &AclGateSnapshot{Pin: state.Pin(), Acl: acl}
-	if deletion := undated.RepoDeletion(repoId); deletion == nil || deletion.Dated {
+	rowsOnly := &AclGateSnapshot{Pin: state.Pin(), Acl: acl}
+	if deletion := rowsOnly.RepoDeletion(repoId); deletion == nil || !deletion.Dated || deletion.TimeMs != state.TimeMs() || deletion.Signed ||
+		deletion.SignerSidecarId != (Id{}) {
 		t.Errorf("with no log: %+v", deletion)
 	}
 	if deletion := snapshot.RepoDeletion(testConfigId("no such repo")); deletion != nil {
