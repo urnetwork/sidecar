@@ -10,7 +10,8 @@
 // Two more sets of daemon-built values show as the action, by QD-740. The request's local_port, weight and alpn, which
 // left CanonicalAction for the ApprovalRequest and which request_sha256 covers, show by those names after the
 // action's fields. A dial or route grant's sealed_detail never shows as its ciphertext: the approver's device opens it
-// (CanonicalActionDetailOpener) and RenderApprovalRequestDetail shows what it holds, each field named
+// (CanonicalActionDetailOpener: Sidecar.OpenActionDetail, under the context the action's own clear fields derive,
+// QD-771) and RenderApprovalRequestDetail shows what it holds, each field named
 // sealed_detail.<name>; a render of an action whose detail was not opened says so, and such a request takes no
 // approval (record_approval_decide.go), so a prefix or a port is never approved unseen.
 //
