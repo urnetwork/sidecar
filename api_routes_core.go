@@ -5,7 +5,9 @@
 //
 // A sidecar always sends §7.4's marks, admin_refused and strict_exp, so no call here can leave them
 // out. Every token a reply carries is reported to testHookSecret as it arrives, so the privacy
-// harness finds one that leaks (I-7), and the types holding one print without it.
+// harness finds one that leaks (I-7), and the types holding one print without it. Bind's reply
+// carries one too: the bearer re-minted with the bound sidecar_id (QD-040, QD-797), which the
+// caller keeps in place of the token it presented.
 //
 // The bindings these routes carry are opaque bytes here: api is untrusted, so a binding is checked by
 // VerifySidecarIdentityBinding (CORE-M1-05) against the caller's pin before anything reads it, and an
@@ -319,35 +321,90 @@ type sidecarBindWire struct {
 
 // POST /sidecar/bind's answer.
 type sidecarBindReply struct {
-	Generation int64 `json:"generation"`
+	Generation  int64  `json:"generation"`
+	ByClientJwt string `json:"by_client_jwt"`
+}
+
+// What POST /sidecar/bind answers (§5.15's bind reply; QD-040, QD-797).
+type SidecarBindResult struct {
+	// The generation api recorded for the client.
+	Generation int64
+	// The bearer api re-minted with the binding's sidecar as its sidecar_id claim, every other claim as presented, its
+	// lifetime included: the token the sidecar keeps in place of the one it presented, so sockets reads its §8
+	// subject with no Postgres (plan-SOCK-client-auth). It goes to the keychain and SidecarApi, nowhere else (I-7).
+	ByClientJwt string
+	// The sidecar the re-minted token's claim names. Bind holds it to name one; the caller holds it to the sidecar it
+	// bound.
+	SidecarId Id
+	// the token the request presented, which the re-mint was checked against and which a restore's install compares
+	// with the token installed by then
+	presentedByJwt string
+}
+
+// Says what it is, never a token.
+func (self *SidecarBindResult) String() string {
+	return "SidecarBindResult{generation " + strconv.FormatInt(self.Generation, 10) + ", sidecar " + self.SidecarId.String() + "}"
+}
+
+// As String, for %#v.
+func (self *SidecarBindResult) GoString() string {
+	return self.String()
 }
 
 // POST /sidecar/bind (§5.5, §5.6): appends this client's binding, signedBinding being the
 // marshalled SignedSidecarIdentityBinding (CORE-M1-05), with the jwt as bearer and no proof, since
-// bind takes none. Answers the generation api recorded. A byte-identical retry answers the same
-// generation; a refusal is a *SidecarApiError with code sidecar_revoked, binding_invalid,
-// generation_conflict or client_bound. Re-registration after a restore posts the newest binding
-// again through here.
-func (self *SidecarApi) Bind(ctx context.Context, signedBinding []byte) (int64, error) {
+// bind takes none. Answers the generation api recorded and the bearer re-minted with the bound
+// sidecar_id (QD-040, QD-797), which must name the network, client and device of the token the
+// request presented, never another: a re-mint that names another one, names no sidecar, or is
+// missing is not the route's answer, and nothing of it is kept. A byte-identical retry answers the
+// same generation and re-mints again; a refusal is a *SidecarApiError with code sidecar_revoked,
+// binding_invalid, generation_conflict or client_bound. Re-registration after a restore posts the
+// newest binding again through here.
+func (self *SidecarApi) Bind(ctx context.Context, signedBinding []byte) (*SidecarBindResult, error) {
 	route := "POST /sidecar/bind"
 	if len(signedBinding) == 0 {
-		return 0, fmt.Errorf("sidecar api %s: %w", route, ErrSidecarApiArgs)
+		return nil, fmt.Errorf("sidecar api %s: %w", route, ErrSidecarApiArgs)
 	}
-	reply := &sidecarBindReply{}
-	err := self.sendJson(ctx, &sidecarApiRequest{
+	body, err := json.Marshal(&sidecarBindWire{Binding: signedBinding})
+	if err != nil {
+		return nil, fmt.Errorf("sidecar api %s: %w", route, ErrSidecarApiArgs)
+	}
+	presentedByJwt := ""
+	responseBody, err := self.send(ctx, &sidecarApiRequest{
 		route:     route,
 		operation: "bind",
 		method:    "POST",
 		url:       self.settings.ApiUrl + "/sidecar/bind",
-		bearer:    true,
-	}, &sidecarBindWire{Binding: signedBinding}, reply)
+		// the body is the binding alone: building it here only keeps the token the request presents, which the
+		// re-mint is checked against, rather than one installed while the request was out
+		buildBody: func(byJwt string) []byte {
+			presentedByJwt = byJwt
+			return body
+		},
+		contentType: "application/json",
+		bearer:      true,
+	})
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	if reply.Generation < 1 {
-		return 0, fmt.Errorf("sidecar api %s: %w", route, ErrSidecarApiReply)
+	reply := &sidecarBindReply{}
+	if err := json.Unmarshal(responseBody, reply); err != nil || reply.Generation < 1 || reply.ByClientJwt == "" {
+		return nil, fmt.Errorf("sidecar api %s: %w", route, ErrSidecarApiReply)
 	}
-	return reply.Generation, nil
+	testHookSecret("by_client_jwt", []byte(reply.ByClientJwt))
+	presented, presentedOk := sidecarJwtIdentityOf(presentedByJwt)
+	reminted, remintedOk := sidecarJwtIdentityOf(reply.ByClientJwt)
+	sidecarId, sidecarOk := sidecarJwtSidecarId(reply.ByClientJwt)
+	if !presentedOk || !remintedOk || presented != reminted || !sidecarOk {
+		// the error says no more than a malformed answer's, so neither token reaches it
+		return nil, fmt.Errorf("sidecar api %s: %w", route, ErrSidecarApiReply)
+	}
+	return &SidecarBindResult{
+		Generation:     reply.Generation,
+		ByClientJwt:    reply.ByClientJwt,
+		SidecarId:      sidecarId,
+		presentedByJwt: presentedByJwt,
+	}, nil
 }
 
 // What api holds about one sidecar's identity (§5.15), never its user_id. All of it is unverified:
