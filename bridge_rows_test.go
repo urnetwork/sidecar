@@ -62,15 +62,15 @@ func TestBridgeRowsFoldEachEgressEntryToOneEncoding(t *testing.T) {
 	}
 
 	net := newTestConfigNet(t)
-	compiled, err := CompileBridgeRows(testConfigHead(t, net), forward)
+	compiled, err := CompileBridgeRows(forward, nil, nil)
 	if err != nil || !bytes.Equal(compiled, forward) {
 		t.Fatalf("compile: %x, %v", compiled, err)
 	}
-	if compiled, err := CompileBridgeRows(testConfigHead(t, net), nil); err != nil || len(compiled) != 0 {
+	if compiled, err := CompileBridgeRows(nil, nil, nil); err != nil || len(compiled) != 0 {
 		t.Errorf("compile of the empty section: %x, %v", compiled, err)
 	}
-	if _, err := CompileBridgeRows(nil, forward); !errors.Is(err, ErrBridgeRowsMalformed) {
-		t.Errorf("compile with no head: %v", err)
+	if _, err := CompileBridgeRows([]byte{0xff}, nil, nil); !errors.Is(err, ErrBridgeRowsMalformed) {
+		t.Errorf("compile of bytes no verifier folded: %v", err)
 	}
 	if _, err := bridgeRowsWithEgress(forward, a, bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_UNSPECIFIED); !errors.Is(err, ErrBridgeRowsMalformed) {
 		t.Errorf("an entry of no mode: %v", err)

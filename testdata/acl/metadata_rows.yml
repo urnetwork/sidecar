@@ -31,3 +31,11 @@ AclRepoPrefixRulesRow.signer: {number: 1, type: bytes, row: api-7, pending: "DES
 AclRepoPrefixRulesRow.at: {number: 2, type: uint64, row: api-7, pending: "DESIGN-DETAILS 16.8 (QD-212): api-7's rows add, for each general repo, every RepoPrefixRules entry's position and signer"}
 
 RepoPrefixRules.sealed_rules: {number: 3, type: bytes, row: api-7, pending: "DESIGN-DETAILS 16.8 (QD-212): api-7 adds the generation a set's rules are sealed to and their padded length, never a rule, a subject or a prefix"}
+
+# QD-764 (acl-m2-17-no-via-route-advertisers): a rule's via subjects apart from its targets, and BridgeRows' approved
+# routes by their ids, which api-7's rows name ahead of design-records' fold of §2.8 (metadata_list.yml v20).
+AclRule.via: {number: 12, type: repeated AclTarget, row: api-7, sees: "via subjects (QD-764)"}
+BridgeRows.routes: {number: 2, type: repeated BridgeRouteRow, row: api-7, sees: "each approved route in force by its ids"}
+BridgeRouteRow.route_id: {number: 1, type: bytes, row: api-7, sees: "(route id, advertiser and the route rules it serves; QD-764)"}
+BridgeRouteRow.advertiser: {number: 2, type: bytes, row: api-7, sees: "(route id, advertiser and the route rules it serves; QD-764)"}
+BridgeRouteRow.route_rule_ids: {number: 3, type: repeated bytes, row: api-7, sees: "(route id, advertiser and the route rules it serves; QD-764)"}

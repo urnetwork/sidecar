@@ -13,8 +13,9 @@
 // that starts above version 0 cannot see a removal before it, and holds a creation only to at least b + 1. Removals
 // of a directory reach its children through their own markers, which evs folds, so a child's m here is its own.
 //
-// A git-mode ref (NewEvsReplayPathsOfMode) holds a creation to exactly b + 1, its effective base being its own base
-// under TIP, and takes a creation over a standing path of the other kind (DESIGN-DETAILS 8.2.2's kinds row).
+// A git-mode ref (NewEvsReplayPathsOfMode) holds a creation to exactly its effective base + 1, b under TIP plus, on an
+// overlay, the versions its chain names (WithOverlayOffset), and takes a creation over a standing path of the other
+// kind (DESIGN-DETAILS 8.2.2's kinds and versions rows).
 //
 // A failure raises evs_alarm version_rule, and the walk is refused.
 //
@@ -126,7 +127,16 @@ type EvsReplayPaths struct {
 	// base b, so a creation is at exactly b + 1 whatever the replay saw before it, and a creation of the other kind
 	// over a standing path is a path changing kind, not a conflict
 	gitMode bool
-	paths   map[string]*evsReplayPath
+	// what a git-mode overlay's chain adds to each push's base (WithOverlayOffset)
+	overlayOffset uint64
+	paths         map[string]*evsReplayPath
+}
+
+// The replay of a git-mode overlay, whose effective base is each push's base plus offset, the versions its overlay
+// chain names (DESIGN-DETAILS 8.2.2's versions row; evsservice.EffectiveBaseVersion).
+func (self *EvsReplayPaths) WithOverlayOffset(offset uint64) *EvsReplayPaths {
+	self.overlayOffset = offset
+	return self
 }
 
 // A replay of a file-mode ref's statements after fromVersion.
@@ -193,9 +203,10 @@ func (self *EvsReplayPaths) Apply(statement *EvsVerifiedStatement, changes []*Ev
 			}
 			least := max(push.GetBaseVersion(), standing) + 1
 			if self.gitMode {
-				// every earlier version is at most b, so TIP makes max(b, m) + 1 exactly b + 1
-				if version != push.GetBaseVersion()+1 {
-					return fmt.Errorf("%w: a git-mode creation not at b + 1", ErrEvsVersionRule)
+				// every earlier version is at most the effective base, b and the overlay chain's versions, so TIP makes
+				// max(b, m) + 1 exactly that + 1
+				if version != push.GetBaseVersion()+self.overlayOffset+1 {
+					return fmt.Errorf("%w: a git-mode creation not at its effective base + 1", ErrEvsVersionRule)
 				}
 			} else if version < least || (self.complete && version != least) {
 				return fmt.Errorf("%w: a creation not at max(b, m) + 1", ErrEvsVersionRule)

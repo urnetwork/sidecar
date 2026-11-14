@@ -722,3 +722,13 @@ type DeviceRevokeError struct {
 func (self *DeviceRevokeError) Error() string {
 	return self.Code
 }
+
+// One provenance signature by an agent's subkey, with the certificate a reader checks it under: what RECORD.md 5.3's
+// AgentSignedBody and §11.6's sealed metadata carry (identity_agent.go's Sidecar.SignProvenance makes it). Here, on
+// every leg, since EvsClientArgs names its signer on every leg.
+type AgentProvenanceSignature struct {
+	AgentId   Id
+	KeyId     []byte
+	Signature []byte
+	Cert      []byte
+}

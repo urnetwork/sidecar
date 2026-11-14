@@ -283,14 +283,14 @@ func (self *AclState) inSrc(resolved *aclResolved, rule *aclRule) bool {
 }
 
 // Whether the rule's subject targets name the destination for this source: an atom it holds, its id, or
-// autogroup:self where the two share an owner or sponsor (§8.4).
+// autogroup:self where the two share an owner or sponsor (§8.4). A dial reaches what they name.
 func (self *AclState) targetsSubject(source *aclResolved, destination *aclResolved, rule *aclRule) bool {
 	if rule.selfTarget && source.hasOwner && destination.hasOwner && source.owner == destination.owner {
 		return true
 	}
 	if destination.sidecar != nil {
-		if rule.actions&aclReachActions != 0 {
-			return destination.sidecar.reachRules.has(rule.index)
+		if rule.allows(protocol.AclAction_ACL_ACTION_DIAL) {
+			return destination.sidecar.dialRules.has(rule.index)
 		}
 		return self.sidecarIsSubjectTarget(destination.sidecar, rule)
 	}
@@ -308,10 +308,42 @@ func (self *AclState) targetsSubject(source *aclResolved, destination *aclResolv
 	return false
 }
 
-// Whether a rule names any subject as a target, which makes its subjects a route's via subjects.
-func (self *aclRule) hasSubjectTargets() bool {
-	return self.selfTarget || 0 < len(self.atomTargets) || 0 < len(self.sidecarTargets) ||
-		0 < len(self.clientTargets) || 0 < len(self.networkTargets)
+// Whether a route rule's via subjects name the via for this source (QD-764): its via targets, an atom the via holds,
+// its id or autogroup:self where the two share an owner or sponsor, or for a rule that names no via the advertisers
+// whose route rows name it (QD-004's second half). A route reaches what they name.
+func (self *AclState) viaSubject(source *aclResolved, via *aclResolved, rule *aclRule) bool {
+	if rule.viaSelf && source.hasOwner && via.hasOwner && source.owner == via.owner {
+		return true
+	}
+	if via.sidecar != nil {
+		if rule.allows(protocol.AclAction_ACL_ACTION_ROUTE) {
+			return via.sidecar.viaRules.has(rule.index)
+		}
+		return self.sidecarIsVia(via.sidecar, rule)
+	}
+	for _, atomIndex := range rule.viaAtoms {
+		if self.holdsAtom(via, atomIndex) {
+			return true
+		}
+	}
+	switch via.subject.Kind {
+	case AclSubjectClient:
+		return slices.Contains(rule.viaClients, via.subject.Id)
+	case AclSubjectRemote:
+		return slices.Contains(rule.viaNetworks, via.subject.Id)
+	}
+	return false
+}
+
+// Whether a rule takes one of actions from the source to the destination: a dial to what its targets name, a route
+// through what its via subjects name (§8.10's reach).
+func (self *AclState) reachesSubject(source *aclResolved, destination *aclResolved, rule *aclRule, actions uint32) bool {
+	if actions&(1<<uint32(protocol.AclAction_ACL_ACTION_DIAL)) != 0 && rule.allows(protocol.AclAction_ACL_ACTION_DIAL) &&
+		self.targetsSubject(source, destination, rule) {
+		return true
+	}
+	return actions&(1<<uint32(protocol.AclAction_ACL_ACTION_ROUTE)) != 0 && rule.allows(protocol.AclAction_ACL_ACTION_ROUTE) &&
+		self.viaSubject(source, destination, rule)
 }
 
 // Whether the destination sidecar holds, at nowMs, a listen grant on a socket the dial rule names.
@@ -358,9 +390,15 @@ func (self *AclState) nextSubjectRule(source *aclResolved, destination *aclResol
 			word &= source.sidecar.srcRules[w]
 		}
 		if destination.sidecar != nil {
-			candidates := destination.sidecar.reachRules[w] | self.selfReachRules[w]
-			if expandSockets {
-				candidates |= self.socketDialRules[w]
+			candidates := uint64(0)
+			if actions&(1<<uint32(protocol.AclAction_ACL_ACTION_DIAL)) != 0 {
+				candidates |= destination.sidecar.dialRules[w] | self.selfDialRules[w]
+				if expandSockets {
+					candidates |= self.socketDialRules[w]
+				}
+			}
+			if actions&(1<<uint32(protocol.AclAction_ACL_ACTION_ROUTE)) != 0 {
+				candidates |= destination.sidecar.viaRules[w] | self.selfViaRules[w]
 			}
 			word &= candidates
 		}
@@ -374,7 +412,7 @@ func (self *AclState) nextSubjectRule(source *aclResolved, destination *aclResol
 			if source.sidecar == nil && !self.inSrc(source, rule) {
 				continue
 			}
-			if self.targetsSubject(source, destination, rule) {
+			if self.reachesSubject(source, destination, rule, actions) {
 				return rule
 			}
 			if expandSockets && self.socketDialRules.has(rule.index) && self.listensOn(destination, rule, nowMs) {
@@ -385,9 +423,10 @@ func (self *AclState) nextSubjectRule(source *aclResolved, destination *aclResol
 	return nil
 }
 
-// reach(a, b) for §8.10's contract rule: an active dial or route grant from a to b, a socket dial
-// expanding to the subjects that listen on it and an ip grant to its via subjects. Ports are not read:
-// the contract gate is who talks to whom, and the endpoints check ports.
+// reach(a, b) for §8.10's contract rule: an active dial grant from a to b, a socket dial expanding to the
+// subjects that listen on it, or a route grant whose via subjects name b: its via, or with none the
+// advertisers of the approved routes that name it (QD-764). Ports are not read: the contract gate is who
+// talks to whom, and the endpoints check ports.
 func (self *AclState) Reach(source AclSubject, destination AclSubject, now time.Time) AclDecision {
 	nowMs := now.UnixMilli()
 	sourceResolved := self.resolve(&source, nowMs)
@@ -506,10 +545,12 @@ func (self *AclState) MayListen(subject AclSubject, socket AclSocketName, now ti
 	})
 }
 
-// Whether the subject may route to an address via a subject: a route grant whose via subjects, its subject
-// targets, hold the via subject, or whose autogroup:internet takes the address, a public one. The rule's
-// prefixes and ports are the client's to check (AclEngine.AllowRoute): rows carry neither, and a route rule
-// with no via names its advertisers only through BridgeRows, so it reaches no via here.
+// Whether the subject may route to an address via a subject: a route grant whose via subjects hold the via, its
+// AclRule.via or, where it names none, the advertisers whose approved routes name it (QD-764). Its
+// autogroup:internet takes a public address and its prefixes the rest, through those vias alone: rows carry no
+// prefix, so here every route rule takes every address through its own vias, and the rule's prefixes and ports
+// are the client's to check (AclEngine.AllowRoute). A route rule that names no via reaches nothing before an
+// approved route names it.
 func (self *AclState) MayRoute(source AclSubject, address netip.Addr, via AclSubject, now time.Time) AclDecision {
 	return self.mayRoute(source, address, via, now.UnixMilli(), nil)
 }
@@ -524,12 +565,11 @@ func (self *AclState) mayRoute(source AclSubject, address netip.Addr, via AclSub
 	if viaResolved.deny != 0 {
 		return aclDeny(viaResolved.deny)
 	}
-	public := aclAddressPublic(address.Unmap())
 	rule := self.findResourceRule(&sourceResolved, nowMs, protocol.AclAction_ACL_ACTION_ROUTE, func(rule *aclRule) bool {
 		if accept != nil && !accept(rule) {
 			return false
 		}
-		return self.routeTakes(&sourceResolved, &viaResolved, public, rule)
+		return self.routeTakes(&sourceResolved, &viaResolved, rule)
 	})
 	if rule != nil {
 		return aclAllowRule(rule)
@@ -537,14 +577,13 @@ func (self *AclState) mayRoute(source AclSubject, address netip.Addr, via AclSub
 	return aclDeny(AclReasonNoGrant)
 }
 
-// Whether a route rule in force from the source takes a route via a subject to a public address or to another one: its
-// autogroup:internet takes a public one through any via, and its via subjects, its subject targets, take any address
-// through a via they hold. MayRoute and the enumerators (acl_reach.go) decide by this one test.
-func (self *AclState) routeTakes(source *aclResolved, via *aclResolved, public bool, rule *aclRule) bool {
-	if rule.internetTarget && public {
-		return true
-	}
-	return rule.hasSubjectTargets() && self.targetsSubject(source, via, rule)
+// Whether a route rule in force from the source takes a route through a via, to any address: its via subjects hold it
+// (viaSubject), so an autogroup:internet rule that names a via takes a public address through that via alone, and one
+// that names none through its advertisers alone (QD-764). Rows hold no prefix, so they cannot tell a rule's private
+// destinations from its public ones: AclEngine.AllowRoute does, from AclLocalPolicy. MayRoute and the enumerators
+// (acl_reach.go) decide by this one test.
+func (self *AclState) routeTakes(source *aclResolved, via *aclResolved, rule *aclRule) bool {
+	return self.viaSubject(source, via, rule)
 }
 
 // Whether an address is a public destination, which autogroup:internet takes (§8.4).

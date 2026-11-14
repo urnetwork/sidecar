@@ -141,6 +141,13 @@ func (self *EvsRepo) buildPush(ctx context.Context, sealed *EvsSealedWrite, push
 		}
 		pushPlan.ReuseList = plan.reuse
 	}
+	if plan.AgentId != nil {
+		// the agent's subkey signs this push and its commits inside the sealed metadata, never a field evs reads (§11.5)
+		message := EvsAgentProvenanceMessage(plan.RepoId, plan.RefId, pushId, timeMs, evsSealedCommitOids(metadata.Commits))
+		if err := evsSignPushProvenance(metadata.Provenance, self.client.args.SignProvenance, *plan.AgentId, message); err != nil {
+			return nil, err
+		}
+	}
 	if self.client.args.GroupHead != nil {
 		if groupHead, ok := self.client.args.GroupHead(repoKey.GroupId()); ok {
 			metadata.Group = groupHead

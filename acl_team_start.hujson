@@ -16,7 +16,9 @@
       "approver": ["autogroup:dst-owner"], "evidence": ["device", "presence"], "maxExpiry": "30d" },
   ],
   "tests": [
-    { "src": "autogroup:member", "accept": ["autogroup:self#dial", "autogroup:self#route"],
+    // grant 1 names no via, so it routes through the advertisers of approved routes that name it alone (QD-764), and a
+    // new network files none: its own devices are what it dials
+    { "src": "autogroup:member", "accept": ["autogroup:self#dial"],
       "deny": ["autogroup:member#dial", "autogroup:tagged#dial"] },
     { "src": "tag:recurd", "deny": ["autogroup:member#dial", "autogroup:tagged#dial"] },
   ],

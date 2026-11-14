@@ -337,10 +337,19 @@ func (self *EvsGitSyncEngine) replayWithSlot(ctx context.Context, refId Id, upTo
 		return nil, err
 	}
 	defer store.Close()
+	// an overlay's creations sit one past its effective base, which its chain's versions raise (8.2.2's versions row)
+	overlay := head.Head.GetBase()
+	if overlay == nil {
+		overlay = ref.Base
+	}
+	overlayOffset, err := self.repo.overlayEffectiveBase(ctx, 0, overlay)
+	if err != nil {
+		return nil, err
+	}
 	run := &evsGitReplayRun{
 		engine: self, ref: ref.clone(), head: head, store: store, replayer: newEvsGitReplayer(self.repo, store),
-		keys: newEvsReadKeys(self.repo), paths: NewEvsReplayPathsOfMode(ref.Version, protocol.EvsRefMode_EVS_REF_GIT),
-		replaying: replaying,
+		keys: newEvsReadKeys(self.repo), replaying: replaying,
+		paths: NewEvsReplayPathsOfMode(ref.Version, protocol.EvsRefMode_EVS_REF_GIT).WithOverlayOffset(overlayOffset),
 	}
 	if run.ref.WaitingSource != nil {
 		// tried again now: a wait still owed is recorded again below
@@ -362,9 +371,17 @@ func (self *EvsGitSyncEngine) replayWithSlot(ctx context.Context, refId Id, upTo
 		return nil, err
 	}
 	if run.ref.Version == head.Version && run.ref.Chain == head.Chain {
-		// the walk reached the head: pinned before what it backs is shown
-		if err := self.client.verifier.Pin(head); err != nil {
+		// the walk reached the head: pinned before what it backs is shown, unless a read on another path, a push's
+		// plan or a receive's own replay, pinned a newer head meanwhile: the pin only rises, and this older head is
+		// not pinned again, so a race of two reads is no fork (found by EVS1-M2-43's twenty agents)
+		held, pinned, err := self.client.pins.Pin(self.mount.RepoId, refId)
+		if err != nil {
 			return nil, err
+		}
+		if !pinned || held.Version <= head.Version {
+			if err := self.client.verifier.Pin(head); err != nil {
+				return nil, err
+			}
 		}
 		run.ref.PathEpoch = head.Head.GetPathEpoch()
 		run.reachedHead = true
@@ -560,6 +577,11 @@ func (self *evsGitReplayRun) apply(ctx context.Context, statement *EvsVerifiedSt
 	if err != nil {
 		engine.client.alarm(engine.mount.RepoId, ref.RefId, SidecarEvsAlarmTamper, "", evsSignerOf(statement.Statement.Bytes))
 		return self.refuse(statement, payload, err)
+	}
+	// an agent's subkey signature that does not hold alarms and is never attributed; the version applies all the same
+	// (EVS1-M6-02)
+	if _, err := engine.client.checkPushProvenance(engine.mount.RepoId, ref.RefId, statement.Statement, metadata); err != nil && engine.client.log.V(1).Enabled() {
+		engine.client.log.Infof("[evs]provenance of repo %s ref %s: %v", engine.mount.RepoId, ref.RefId, err)
 	}
 	creating := ref.Tip == nil && flags&deleteFlag == 0
 	var sectionRefName []byte

@@ -406,6 +406,8 @@ const (
 	evsLocalBarrierPublishAnswer = "evs.local.publish.answer"
 	evsLocalBarrierReceiveLocal  = "evs.local.receive.local"
 	evsLocalBarrierQueueSend     = "evs.local.queue.send"
+	// after an owned ref's queue is held and its journal written, the apply lock released
+	evsLocalBarrierQueueHeld = "evs.local.queue.held"
 )
 
 // A shared ref's receive: see the file header.
@@ -814,6 +816,7 @@ func (self *EvsGitReceiver) publishQueued(ctx context.Context, refId Id) error {
 // Holds an owned ref's queue on a final refusal: `ur status` shows the code, and the queue waits for the local ref to
 // move or `ur evs retry`; the commits stay on the local ref.
 func (self *EvsGitReceiver) hold(ctx context.Context, refId Id, code string, local *EvsGitOid) error {
+	defer testHookBarrier(evsLocalBarrierQueueHeld, self.engine.barrierKey(refId))
 	return self.withApply(ctx, refId, func() error {
 		journal, err := self.engine.state.journal(refId)
 		if err != nil {

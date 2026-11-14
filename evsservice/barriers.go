@@ -131,6 +131,13 @@ const (
 	BarrierReadEntriesAfter  = "evs.read.entries.after"
 )
 
+// EVS1-M6-01: the streams read (§11.9's streams row), keyed by the repo.
+const (
+	// Around its heads' reads, before its first frame.
+	BarrierReadStreamsBefore = "evs.read.streams.before"
+	BarrierReadStreamsAfter  = "evs.read.streams.after"
+)
+
 // EVS1-M2-19: repo/'s lifecycle (§11.12), keyed by the repo.
 const (
 	// Around a lifecycle transition's If-Match on repo/: a restore and a --now delete, or a restore and the 7-day

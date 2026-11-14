@@ -178,6 +178,8 @@ type EvsPlanArgs struct {
 	Fresh bool
 	// The writing run's tainted bit (§16.6), which a format-2 push's provenance carries; format 1 ignores it.
 	Tainted bool
+	// The agent the push is made for, which its sealed provenance names and its subkey signs, nil for none.
+	AgentId *Id
 }
 
 // A planned push. See the file header.
@@ -201,6 +203,8 @@ type EvsWritePlan struct {
 	Paths      []*EvsPlannedPath
 	// The writing run's tainted bit, which the push's provenance carries (EvsPlanArgs.Tainted).
 	Tainted bool
+	// The agent the push is made for (EvsPlanArgs.AgentId), nil for none.
+	AgentId *Id
 	// The changes' token paths, in the head's current epoch, and manifest_p of that epoch, which seals a delta's rows.
 	pathKey *EvsPathKey
 	nameKey *EvsManifestKey
@@ -230,6 +234,9 @@ type EvsWritePlan struct {
 	gitExtras *evsGitPushExtras
 	// an overlay's base, the creating push's or the head's, and the entries of other refs the push cites
 	overlayBase *protocol.EvsOverlay
+	// a git-mode plan's effective base version: its own base plus each version its overlay chain names (DESIGN-DETAILS
+	// 8.2.2's versions row), what a creation's version is one past
+	effectiveBaseVersion uint64
 	reuse       []*EvsReuse
 }
 
@@ -409,7 +416,7 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 					RepoId: self.repoId, RefId: args.RefId, BaseVersion: result.head.Version, BaseChain: result.head.Chain,
 					Head: head, PathEpoch: evsCurrentEpoch(head.GetPathEpoch()), Sources: evsSourceEpochs(head.GetPathEpoch()),
 					Generation: args.Generation, keys: result.keys, floors: map[string]uint64{},
-					slotKeyed: EvsRepoKindRecordClass(repoKind), Tainted: args.Tainted,
+					slotKeyed: EvsRepoKindRecordClass(repoKind), Tainted: args.Tainted, AgentId: args.AgentId,
 				}
 				if err := plan.setRef(head, args.RefName, self.client.args.Identity().SidecarId, rekeyOnly); err != nil {
 					return err
@@ -1300,6 +1307,9 @@ func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*
 				}
 				plan.overlayBase = head.GetBase()
 			}
+			if plan.effectiveBaseVersion, err = self.overlayEffectiveBase(ctx, plan.BaseVersion, plan.overlayBase); err != nil {
+				return err
+			}
 			if plan.pathKey, err = result.keys.path(ctx, plan.PathEpoch); err != nil {
 				return err
 			}
@@ -1596,7 +1606,8 @@ func (self *EvsRepo) planGitPath(ctx context.Context, plan *EvsWritePlan, result
 		if verified.Removal != nil {
 			planned.removalVersion = verified.Removal.GetPathVersion()
 		}
-		planned.Version = max(plan.BaseVersion, planned.removalVersion) + 1
+		// one past the effective base, which TIP makes max(b, m) + 1 (DESIGN-DETAILS 8.2.2's versions row)
+		planned.Version = max(plan.effectiveBaseVersion, planned.removalVersion) + 1
 	}
 	if change.Kind == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
 		children := change.Children
@@ -1752,7 +1763,8 @@ func (self *EvsRepo) planGitInherited(ctx context.Context, plan *EvsWritePlan, r
 		return nil, nil
 	}
 	planned := &EvsPlannedPath{
-		Path: change.Path, TokenPath: readPath.current, Kind: change.Kind, names: readPath.names, Version: plan.BaseVersion + 1,
+		Path: change.Path, TokenPath: readPath.current, Kind: change.Kind, names: readPath.names,
+		Version: plan.effectiveBaseVersion + 1,
 	}
 	if change.Kind == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
 		for _, child := range change.Children {
@@ -1884,6 +1896,32 @@ func (self *EvsRepo) planGitReuse(ctx context.Context, plan *EvsWritePlan, refId
 	}
 	planned.Chain = nil
 	return self.planChain(ctx, plan, planned, pending.write, nil, nil, nil, nil, change.Oid)
+}
+
+// A git-mode push's effective base version, as evs takes it (evsservice.EffectiveBaseVersion; DESIGN-DETAILS 8.2.2's
+// versions row): its own base version plus the version its overlay base names and each one up that base's own
+// chain, read from each base ref's verified head. No overlay leaves the base version as it is.
+func (self *EvsRepo) overlayEffectiveBase(ctx context.Context, baseVersion uint64, overlay *protocol.EvsOverlay) (uint64, error) {
+	effective := baseVersion
+	seen := map[Id]bool{}
+	maxDepth := DefaultEvsFormatSettings().OverlayMaxDepth
+	for depth := 0; overlay != nil; depth += 1 {
+		if maxDepth <= depth {
+			return 0, fmt.Errorf("%w: an overlay chain deeper than %d", ErrEvsGitStateDiffers, maxDepth)
+		}
+		refId, err := IdFromBytes(overlay.GetRefId())
+		if err != nil || seen[refId] {
+			return 0, fmt.Errorf("%w: an overlay base that is no ref, or loops", ErrEvsGitStateDiffers)
+		}
+		seen[refId] = true
+		effective += overlay.GetVersion()
+		head, err := self.readHeadAlone(ctx, refId, false)
+		if err != nil {
+			return 0, err
+		}
+		overlay = head.Head.GetBase()
+	}
+	return effective, nil
 }
 
 // Names each tainted token path of a re-creating update and gives it its change beside the net change

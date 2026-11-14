@@ -849,8 +849,9 @@ func (x *AclPortRange) GetLast() uint32 {
 }
 
 // Ports and CIDRs stay in AclLocalPolicy, from the sealed policy, so a server sees whether a rule limits ports,
-// never which (plan-BRIDGE-gate-row-prefixes #1, §17.8). A route rule's targets are its via subjects; one with no
-// via names none, and the advertisers BridgeRoute.route_rule_ids names stand in at id level.
+// never which (plan-BRIDGE-gate-row-prefixes #1, §17.8). targets are a rule's destinations and via its via subjects,
+// kept apart (QD-764): a route rule that names no via takes as its via subjects the advertisers whose BridgeRouteRow
+// in AclRows.bridge names it (QD-004's second half).
 type AclRule struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	RuleId         []byte                 `protobuf:"bytes,1,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
@@ -864,7 +865,9 @@ type AclRule struct {
 	// api anyway (§16.6 AD4)
 	SourceRuleId []byte `protobuf:"bytes,10,opt,name=source_rule_id,json=sourceRuleId,proto3" json:"source_rule_id,omitempty"` // an activated grant's: the requests rule its CanonicalAction names,
 	// whose deletion ends it (plan-ACL-folded-grant-state #2)
-	PortsLimited  bool `protobuf:"varint,11,opt,name=ports_limited,json=portsLimited,proto3" json:"ports_limited,omitempty"` // the rule's ip field names ports: a legacy client is reached only
+	PortsLimited bool `protobuf:"varint,11,opt,name=ports_limited,json=portsLimited,proto3" json:"ports_limited,omitempty"` // the rule's ip field names ports: a legacy client is reached only
+	// under a dial grant with none (§8.10, D-ACL-5)
+	Via           []*AclTarget `protobuf:"bytes,12,rep,name=via,proto3" json:"via,omitempty"` // a route rule's via subjects, each a subject kind of AclTarget; none
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -967,6 +970,13 @@ func (x *AclRule) GetPortsLimited() bool {
 		return x.PortsLimited
 	}
 	return false
+}
+
+func (x *AclRule) GetVia() []*AclTarget {
+	if x != nil {
+		return x.Via
+	}
+	return nil
 }
 
 type AclRequestRule struct {
@@ -2895,7 +2905,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\fAclPortRange\x12\x1a\n" +
 	"\bprotocol\x18\x01 \x01(\rR\bprotocol\x12\x14\n" +
 	"\x05first\x18\x02 \x01(\rR\x05first\x12\x12\n" +
-	"\x04last\x18\x03 \x01(\rR\x04last\"\xa3\x03\n" +
+	"\x04last\x18\x03 \x01(\rR\x04last\"\xd3\x03\n" +
 	"\aAclRule\x12\x17\n" +
 	"\arule_id\x18\x01 \x01(\fR\x06ruleId\x12\x1b\n" +
 	"\tsrc_atoms\x18\x02 \x03(\fR\bsrcAtoms\x126\n" +
@@ -2907,7 +2917,8 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x10link_spki_sha256\x18\t \x01(\fR\x0elinkSpkiSha256\x12$\n" +
 	"\x0esource_rule_id\x18\n" +
 	" \x01(\fR\fsourceRuleId\x12#\n" +
-	"\rports_limited\x18\v \x01(\bR\fportsLimitedJ\x04\b\x05\x10\x06R\x05ports\"\xdd\x02\n" +
+	"\rports_limited\x18\v \x01(\bR\fportsLimited\x12.\n" +
+	"\x03via\x18\f \x03(\v2\x1c.urnetwork.sidecar.AclTargetR\x03viaJ\x04\b\x05\x10\x06R\x05ports\"\xdd\x02\n" +
 	"\x0eAclRequestRule\x12\x17\n" +
 	"\arule_id\x18\x01 \x01(\fR\x06ruleId\x12\x1b\n" +
 	"\tsrc_atoms\x18\x02 \x03(\fR\bsrcAtoms\x126\n" +
@@ -3205,41 +3216,42 @@ var file_protocol_acl_proto_depIdxs = []int32{
 	22, // 7: urnetwork.sidecar.AclRule.targets:type_name -> urnetwork.sidecar.AclTarget
 	2,  // 8: urnetwork.sidecar.AclRule.audience:type_name -> urnetwork.sidecar.AclAudience
 	3,  // 9: urnetwork.sidecar.AclRule.app_mode:type_name -> urnetwork.sidecar.AclAppMode
-	22, // 10: urnetwork.sidecar.AclRequestRule.targets:type_name -> urnetwork.sidecar.AclTarget
-	4,  // 11: urnetwork.sidecar.AclRepo.kind:type_name -> urnetwork.sidecar.RepoKind
-	15, // 12: urnetwork.sidecar.AclRepo.admins:type_name -> urnetwork.sidecar.AclRepoAdminRow
-	16, // 13: urnetwork.sidecar.AclRepo.grants:type_name -> urnetwork.sidecar.AclRepoGrantRow
-	17, // 14: urnetwork.sidecar.AclRepo.shares:type_name -> urnetwork.sidecar.AclRepoShareRow
-	18, // 15: urnetwork.sidecar.AclRepo.revokes:type_name -> urnetwork.sidecar.AclRepoRevokeRow
-	19, // 16: urnetwork.sidecar.AclRepo.deletion:type_name -> urnetwork.sidecar.AclRepoDeletionRow
-	6,  // 17: urnetwork.sidecar.AclRepo.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
-	20, // 18: urnetwork.sidecar.AclRepo.prefix_rules:type_name -> urnetwork.sidecar.AclRepoPrefixRulesRow
-	5,  // 19: urnetwork.sidecar.AclRepoGrantRow.role:type_name -> urnetwork.sidecar.RepoGrantRole
-	40, // 20: urnetwork.sidecar.GrantActivate.header:type_name -> urnetwork.sidecar.StatementHeader
-	41, // 21: urnetwork.sidecar.GrantActivate.decisions:type_name -> urnetwork.sidecar.Signed
-	40, // 22: urnetwork.sidecar.EvsShare.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 23: urnetwork.sidecar.OwnerConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 24: urnetwork.sidecar.RepoCreate.header:type_name -> urnetwork.sidecar.StatementHeader
-	4,  // 25: urnetwork.sidecar.RepoCreate.kind:type_name -> urnetwork.sidecar.RepoKind
-	40, // 26: urnetwork.sidecar.RepoAdmin.header:type_name -> urnetwork.sidecar.StatementHeader
-	7,  // 27: urnetwork.sidecar.RepoAdmin.change:type_name -> urnetwork.sidecar.RepoAdminChange
-	40, // 28: urnetwork.sidecar.RepoGrant.header:type_name -> urnetwork.sidecar.StatementHeader
-	5,  // 29: urnetwork.sidecar.RepoGrant.role:type_name -> urnetwork.sidecar.RepoGrantRole
-	40, // 30: urnetwork.sidecar.RepoRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 31: urnetwork.sidecar.RepoDelete.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 32: urnetwork.sidecar.RepoRestore.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 33: urnetwork.sidecar.RepoVersioning.header:type_name -> urnetwork.sidecar.StatementHeader
-	6,  // 34: urnetwork.sidecar.RepoVersioning.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
-	40, // 35: urnetwork.sidecar.RepoPrefixRules.header:type_name -> urnetwork.sidecar.StatementHeader
-	37, // 36: urnetwork.sidecar.PrefixRuleSet.rules:type_name -> urnetwork.sidecar.PrefixRule
-	8,  // 37: urnetwork.sidecar.PrefixRule.action:type_name -> urnetwork.sidecar.PrefixAction
-	40, // 38: urnetwork.sidecar.AuditOptIn.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // 39: urnetwork.sidecar.AuditOptOut.header:type_name -> urnetwork.sidecar.StatementHeader
-	40, // [40:40] is the sub-list for method output_type
-	40, // [40:40] is the sub-list for method input_type
-	40, // [40:40] is the sub-list for extension type_name
-	40, // [40:40] is the sub-list for extension extendee
-	0,  // [0:40] is the sub-list for field type_name
+	22, // 10: urnetwork.sidecar.AclRule.via:type_name -> urnetwork.sidecar.AclTarget
+	22, // 11: urnetwork.sidecar.AclRequestRule.targets:type_name -> urnetwork.sidecar.AclTarget
+	4,  // 12: urnetwork.sidecar.AclRepo.kind:type_name -> urnetwork.sidecar.RepoKind
+	15, // 13: urnetwork.sidecar.AclRepo.admins:type_name -> urnetwork.sidecar.AclRepoAdminRow
+	16, // 14: urnetwork.sidecar.AclRepo.grants:type_name -> urnetwork.sidecar.AclRepoGrantRow
+	17, // 15: urnetwork.sidecar.AclRepo.shares:type_name -> urnetwork.sidecar.AclRepoShareRow
+	18, // 16: urnetwork.sidecar.AclRepo.revokes:type_name -> urnetwork.sidecar.AclRepoRevokeRow
+	19, // 17: urnetwork.sidecar.AclRepo.deletion:type_name -> urnetwork.sidecar.AclRepoDeletionRow
+	6,  // 18: urnetwork.sidecar.AclRepo.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
+	20, // 19: urnetwork.sidecar.AclRepo.prefix_rules:type_name -> urnetwork.sidecar.AclRepoPrefixRulesRow
+	5,  // 20: urnetwork.sidecar.AclRepoGrantRow.role:type_name -> urnetwork.sidecar.RepoGrantRole
+	40, // 21: urnetwork.sidecar.GrantActivate.header:type_name -> urnetwork.sidecar.StatementHeader
+	41, // 22: urnetwork.sidecar.GrantActivate.decisions:type_name -> urnetwork.sidecar.Signed
+	40, // 23: urnetwork.sidecar.EvsShare.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 24: urnetwork.sidecar.OwnerConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 25: urnetwork.sidecar.RepoCreate.header:type_name -> urnetwork.sidecar.StatementHeader
+	4,  // 26: urnetwork.sidecar.RepoCreate.kind:type_name -> urnetwork.sidecar.RepoKind
+	40, // 27: urnetwork.sidecar.RepoAdmin.header:type_name -> urnetwork.sidecar.StatementHeader
+	7,  // 28: urnetwork.sidecar.RepoAdmin.change:type_name -> urnetwork.sidecar.RepoAdminChange
+	40, // 29: urnetwork.sidecar.RepoGrant.header:type_name -> urnetwork.sidecar.StatementHeader
+	5,  // 30: urnetwork.sidecar.RepoGrant.role:type_name -> urnetwork.sidecar.RepoGrantRole
+	40, // 31: urnetwork.sidecar.RepoRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 32: urnetwork.sidecar.RepoDelete.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 33: urnetwork.sidecar.RepoRestore.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 34: urnetwork.sidecar.RepoVersioning.header:type_name -> urnetwork.sidecar.StatementHeader
+	6,  // 35: urnetwork.sidecar.RepoVersioning.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
+	40, // 36: urnetwork.sidecar.RepoPrefixRules.header:type_name -> urnetwork.sidecar.StatementHeader
+	37, // 37: urnetwork.sidecar.PrefixRuleSet.rules:type_name -> urnetwork.sidecar.PrefixRule
+	8,  // 38: urnetwork.sidecar.PrefixRule.action:type_name -> urnetwork.sidecar.PrefixAction
+	40, // 39: urnetwork.sidecar.AuditOptIn.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 40: urnetwork.sidecar.AuditOptOut.header:type_name -> urnetwork.sidecar.StatementHeader
+	41, // [41:41] is the sub-list for method output_type
+	41, // [41:41] is the sub-list for method input_type
+	41, // [41:41] is the sub-list for extension type_name
+	41, // [41:41] is the sub-list for extension extendee
+	0,  // [0:41] is the sub-list for field type_name
 }
 
 func init() { file_protocol_acl_proto_init() }

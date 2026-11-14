@@ -230,8 +230,9 @@ func (self *aclReference) dstHoldsSubject(source aclReferenceSubject, destinatio
 	return false
 }
 
-// reach(a, b): a dial or route grant from a to b, a socket dial grant reaching the subjects that listen on one of its
-// sockets among names, and a route grant reaching its via subjects (§8.10).
+// reach(a, b): a dial grant from a to b, a socket dial grant reaching the subjects that listen on one of its sockets
+// among names, and a route grant reaching its via subjects, never its destinations (§8.10, QD-764). A grant with no via
+// reaches through the advertisers of the approved routes that name it, and this world files none.
 func (self *aclReference) reach(source aclReferenceSubject, destination aclReferenceSubject, names []string, t time.Time) bool {
 	if self.hardDenied(source) || self.hardDenied(destination) {
 		return false
@@ -247,7 +248,7 @@ func (self *aclReference) reach(source aclReferenceSubject, destination aclRefer
 			continue
 		}
 		for _, resource := range grant.Dst {
-			if self.dstHoldsSubject(source, destination, resource) {
+			if dials && self.dstHoldsSubject(source, destination, resource) {
 				return true
 			}
 			// sockets expand to their listeners, which are sidecars: an app device registers no listener (§9.5)

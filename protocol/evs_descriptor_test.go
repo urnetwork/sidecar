@@ -219,7 +219,9 @@ func TestEvsSealedValuesKeepTheirNumbers(t *testing.T) {
 			"4 signed_import bytes", "5 git EvsGitUpdate", "6 ref_name bytes", "7 base EvsOverlay",
 			"8 erasure_note bytes",
 		},
-		"EvsProvenance": {"1 agent_id bytes", "2 tainted bool"},
+		"EvsProvenance": {
+			"1 agent_id bytes", "2 tainted bool", "3 agent_cert bytes", "4 agent_key_id bytes", "5 agent_signature bytes",
+		},
 		"EvsSealedCommit": {
 			"1 object bytes", "2 changes repeated EvsSealedChange", "3 trees repeated EvsSealedTree",
 		},

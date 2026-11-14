@@ -78,7 +78,7 @@ func TestAclTeamStartCompilesToItsGoldenAndPassesItsTests(t *testing.T) {
 		t.Fatalf("validation on Team: %v", err)
 	}
 	report, err := AclPolicyTestRun(&AclPolicyTestInput{Compile: team.world.input(), View: team.world.view(), Now: aclTestNow})
-	if err != nil || !report.Passed() || report.TestCount != 2 || report.CheckCount != 6 {
+	if err != nil || !report.Passed() || report.TestCount != 2 || report.CheckCount != 5 {
 		t.Fatalf("its tests: %+v, %v", report, err)
 	}
 	request := rows.GetRequests()[0]
