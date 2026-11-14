@@ -236,6 +236,13 @@ func newRecordEvsWorld(t *testing.T) *recordEvsWorld {
 	return world
 }
 
+// The signer of sidecarId, its identity key, as signerWithLock makes it.
+func (self *recordEvsWorld) signer(sidecarId sidecar.Id) *sidecartest.FakeGkmSigner {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.signerWithLock(sidecarId)
+}
+
 // The signer of sidecarId, made a member device of the world's member on first use.
 func (self *recordEvsWorld) signerWithLock(sidecarId sidecar.Id) *sidecartest.FakeGkmSigner {
 	signer := self.signers[sidecarId]
@@ -864,6 +871,119 @@ func TestRecordEvsStreamsEraseTakesARowsKeyAndSaltTogether(t *testing.T) {
 	for _, entry := range versions[0].Entries {
 		if bytes.Contains(entry.Entry, keys[1]) || bytes.Contains(entry.Entry, salts[1]) {
 			t.Fatalf("the entry file at %s holds the erased key or salt", entry.Path)
+		}
+	}
+}
+
+// QD-739 from RECORD-M3-01's sealing to evs and back: notes RecordSeal sealed go to their writer's stream with their
+// slot rows; a reader verifies each header and opens each body from the row its entry's key_slot_id and key_index
+// name in the stored slot, the commitment holding; after an ERASE of the first note's row its header still verifies
+// and no slot read gives its row, so its body opens nowhere, while the second note's still opens.
+func TestRecordEvsStreamsSealedEntriesOpenFromTheirRowsUntilErased(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerId, adminId := sidecar.NewId(), sidecar.NewId()
+	if err := world.Grant(repoId, writerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := world.Grant(repoId, adminId, sidecartest.RecordStreamsScope{Read: true, Write: true, Admin: true}); err != nil {
+		t.Fatal(err)
+	}
+	signer := world.signer(writerId)
+	env := &sidecar.RecordSealEnv{Chain: sidecar.NewRecordChainStore(sidecartest.NewFakeStore().Root(), writerId), Sign: signer.Sign}
+	push := &sidecar.RecordStreamPush{PushId: sidecar.NewEvsPushId(), WriterSidecarId: writerId, SlotId: sidecar.NewEvsSlotId(), AuthPin: world.Pin()}
+	wantBodies := [][]byte{}
+	for index := range 2 {
+		text := fmt.Sprint("note ", index)
+		sealed, err := sidecar.RecordSeal(env, testChainNote(repoId, text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.CoordinationBody{Text: text})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantBodies = append(wantBodies, body)
+		path, err := sidecar.RecordStreamPath(sealed.Seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		push.SlotRows = append(push.SlotRows, sealed.SlotRow(uint32(index)))
+		push.Entries = append(push.Entries, &sidecar.RecordStreamEntry{Path: path, Entry: sealed.EntryBytes(&push.SlotId, uint32(index))})
+	}
+	if _, err := world.For(writerId).Append(t.Context(), repoId, push); err != nil {
+		t.Fatal(err)
+	}
+
+	// each entry of the writer's stream by seq, its header verified, and its body opened from the row it names: nil
+	// where its slot holds no live row at its index
+	open := func(readerId sidecar.Id) map[uint64][]byte {
+		streams := world.For(readerId)
+		versions, err := streams.ReadStream(t.Context(), repoId, writerId, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seqBodies := map[uint64][]byte{}
+		for _, version := range versions {
+			for _, streamEntry := range version.Entries {
+				entry := &protocol.RecordEntry{}
+				if err := proto.Unmarshal(streamEntry.Entry, entry); err != nil {
+					t.Fatal(err)
+				}
+				if err := bridge.VerifySigned(entry.GetHeader(), sidecar.RecordEntryPurpose, bridge.SignedType_SIGNED_RECORD_HEADER, bridge.SignedKeyAlgEd25519, signer.PublicKey()); err != nil {
+					t.Fatalf("the header at %s does not verify: %v", streamEntry.Path, err)
+				}
+				header, err := sidecar.ParseStoredRecordHeader(entry.GetHeader().GetBody())
+				if err != nil {
+					t.Fatal(err)
+				}
+				slotId, err := sidecar.IdFromBytes(entry.GetKeySlotId())
+				if err != nil {
+					t.Fatal(err)
+				}
+				slot, err := streams.ReadSlot(t.Context(), repoId, slotId)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var body []byte
+				for _, row := range slot.Rows {
+					if row.KeyIndex != entry.GetKeyIndex() {
+						continue
+					}
+					key, salt, err := sidecar.RecordSlotRowSplit(row.Row)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if body, err = sidecar.RecordOpen(header, entry.GetSealedBody(), key, salt); err != nil {
+						t.Fatalf("the body at %s does not open from its row: %v", streamEntry.Path, err)
+					}
+				}
+				seqBodies[header.Header.GetSeq()] = body
+			}
+		}
+		return seqBodies
+	}
+	for _, readerId := range []sidecar.Id{writerId, adminId} {
+		seqBodies := open(readerId)
+		if len(seqBodies) != 2 || !bytes.Equal(seqBodies[1], wantBodies[0]) || !bytes.Equal(seqBodies[2], wantBodies[1]) {
+			t.Fatal("a reader does not open both notes from their rows")
+		}
+	}
+
+	erase := &sidecar.RecordStreamErase{
+		PushId: sidecar.NewEvsPushId(), ErasureId: sidecar.NewId(), Complete: true,
+		Keys: []*sidecar.RecordSlotKey{{SlotId: push.SlotId, KeyIndex: 0}}, SealedNote: []byte("sealed note"),
+	}
+	if _, err := world.For(adminId).Erase(t.Context(), repoId, erase); err != nil {
+		t.Fatal(err)
+	}
+	for _, readerId := range []sidecar.Id{writerId, adminId} {
+		seqBodies := open(readerId)
+		if len(seqBodies) != 2 || seqBodies[1] != nil || !bytes.Equal(seqBodies[2], wantBodies[1]) {
+			t.Fatal("after the ERASE the erased note still opens, or the other does not")
 		}
 	}
 }
