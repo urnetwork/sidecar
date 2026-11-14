@@ -24,7 +24,9 @@
 // statement's (evs_list.go).
 //
 // Format 2's read states and settings answer ErrEvsFormatUnsupported for that path alone, never a fork, so the
-// caller reads the rest (EVS1-M2-39).
+// caller reads the rest (EVS1-M2-39), to a reader of format 1 alone (EvsClient.format2Reader). A reader of format 2
+// takes versioning 1 and 2 and kind-5 and staged locators, each version judged where it sits (evs_verify_format2.go;
+// EVS2-M10-17), and `collected` for a version's content; a drop's states stay refused until EVS2-M10-22 reads them.
 //
 // On every leg. Safe for concurrent use.
 
@@ -33,6 +35,7 @@ package sidecar
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -69,6 +72,14 @@ type EvsVerifiedPath struct {
 	// (question evs1-m2-45-inline-leaf-place; 9.2.4's history): the reader asks again naming its epoch, and nothing
 	// else of the reply stands.
 	StatementAlone *EvsStatement
+	// Format 2: evs answered `collected` for the content of a versionless version asked for by number (§11.9's
+	// collected row), its entry version and statement verified as any version's. evs's word, unsigned: whether the
+	// version is replaced is its reader's to learn from a fresh head read (evs_read_versionless.go). For a path's
+	// newest version, or a version that keeps its content, VerifyPath alarms and refuses instead.
+	Collected bool
+	// Format 2: evs served a version its reader ignores where it sits (evs_verify_format2.go's ignored rows), which
+	// alarmed. The path reads as Absent.
+	Ignored bool
 }
 
 // A path as the verifier checks it: its token path in any epoch, derived by the reader from its name, never taken from
@@ -76,6 +87,10 @@ type EvsVerifiedPath struct {
 type EvsPathEpochs struct {
 	TokenPathIn func(epoch uint64) (EvsTokenPath, error)
 	Named       map[uint64]bool
+	// The path's raw names as the reader asked for it, nil for a path it names by a token alone (a deposit's or the
+	// erasure ref's entry), and the reserved ref it sits on: what format 2's ignored rows judge (evs_verify_format2.go).
+	Names    [][]byte
+	Reserved EvsReservedRef
 	// An older version asked for by number: history, not a rollback, so the walk after it is not checked (§11.9's
 	// "older ones on request").
 	History bool
@@ -90,9 +105,15 @@ type EvsPathEpochs struct {
 // that epoch. A rooted statement of an epoch the request did not name, with no proof, adds that epoch to the epochs
 // answered, which the reader asks once more naming; of one it named, it refuses.
 func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs, reply *protocol.EvsReadPathReply) (*EvsVerifiedPath, []uint64, error) {
-	if reply.GetState() != protocol.EvsReadPathState_EVS_READ_PATH_STATE_UNSPECIFIED || len(reply.GetDropId()) != 0 ||
+	collected := reply.GetState() == protocol.EvsReadPathState_EVS_READ_PATH_COLLECTED && self.client.format2Reader() != nil
+	if (reply.GetState() != protocol.EvsReadPathState_EVS_READ_PATH_STATE_UNSPECIFIED && !collected) || len(reply.GetDropId()) != 0 ||
 		reply.GetNotBeforeMs() != 0 || reply.GetDropVersion() != 0 || len(reply.GetDropStatement()) != 0 || len(reply.GetDropBody()) != 0 {
+		// a drop's states are EVS2-M10-22's, and every state a format-1 reader's
 		return nil, nil, fmt.Errorf("%w: a format-2 read state", ErrEvsFormatUnsupported)
+	}
+	if collected && reply.GetVersion() == nil {
+		// collected speaks for a version's content: its signed entry version and statement come with it (§11.9)
+		return nil, nil, fmt.Errorf("%w: collected with no version", ErrEvsEntryRefused)
 	}
 	current := evsCurrentEpoch(head.Head.GetPathEpoch())
 	if reply.GetStaleEpoch() {
@@ -117,7 +138,7 @@ func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs
 			return nil, nil, fmt.Errorf("%w: an entry served from an epoch not listed or not named", ErrEvsEntryRefused)
 		}
 	}
-	verified := &EvsVerifiedPath{TokenPath: tokenPath, EntryEpoch: reply.GetEntryEpoch()}
+	verified := &EvsVerifiedPath{TokenPath: tokenPath, EntryEpoch: reply.GetEntryEpoch(), Collected: collected}
 	switch {
 	case reply.GetBase() != nil:
 		if reply.GetVersion() != nil || reply.GetRemoval() != nil {
@@ -134,7 +155,17 @@ func (self *EvsVerifier) VerifyPath(head *EvsVerifiedHead, epochs *EvsPathEpochs
 		}
 	case reply.GetVersion() != nil:
 		if err := self.verifyVersion(head, epochs, reply.GetVersion(), reply.GetStatement(), reply.GetProof(), verified); err != nil {
+			if errors.Is(err, ErrEvsVersionIgnored) {
+				// format 2's ignored rows: the version alarmed, and its path reads as holding none
+				return &EvsVerifiedPath{TokenPath: tokenPath, Absent: true, Ignored: true}, nil, nil
+			}
 			return nil, nil, err
+		}
+		if collected && (!epochs.History || verified.Entry.GetVersioning() == uint32(protocol.EvsVersioning_EVS_VERSIONING_KEPT)) {
+			// only a replaced versionless version's content is collected, and a head read answers a path's newest
+			// version, whose content evs holds (I-EVS-1): for any other it is a missing segment (§11.9's collected row)
+			self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmMissingSegment, "", nil)
+			return nil, nil, fmt.Errorf("%w: collected answered for a version whose content is kept", ErrEvsObjectMissing)
 		}
 		if verified.Entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) {
 			if err := self.verifyDeltas(head, epochs, reply, verified); err != nil {
@@ -259,12 +290,20 @@ func (self *EvsVerifier) verifyVersion(head *EvsVerifiedHead, epochs *EvsPathEpo
 		self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmTamper, "", nil)
 		return fmt.Errorf("%w: an entry that does not hash to its statement's", ErrEvsEntryRefused)
 	}
-	if _, err := checkEvsEntryVersion(version.GetEntryVersion(), statement.Push); err != nil {
+	reader := self.client.format2Reader()
+	if _, err := checkEvsEntryVersionOf(version.GetEntryVersion(), statement.Push, reader != nil); err != nil {
 		return err
 	}
 	entry := &protocol.EvsEntryVersion{}
 	if err := proto.Unmarshal(version.GetEntryVersion(), entry); err != nil {
 		return fmt.Errorf("%w: an entry that does not parse", ErrEvsEntryRefused)
+	}
+	if reader != nil {
+		// a format-2 reader judges every version where it sits: a versioned file under an index root is as wrong as a
+		// versionless one outside it (EVS2-M10-17)
+		if err := reader.verifyVersion(self, head.RepoId, head.RefId, statement, epochs.Names, epochs.Reserved, entry); err != nil {
+			return err
+		}
 	}
 	if change.GetBaseEntryVersion() != 0 && entry.GetVersion() != change.GetBaseEntryVersion()+1 {
 		self.client.alarm(head.RepoId, head.RefId, SidecarEvsAlarmVersionRule, "", nil)

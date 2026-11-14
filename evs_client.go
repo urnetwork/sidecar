@@ -147,6 +147,10 @@ type EvsClient struct {
 	localTier any
 	// each repo's sealed mirror, one per repo so its puts serialize (evs_mirror_layout.go)
 	repoIdMirrors map[Id]*EvsMirrorStore
+	// format 2's reader, nil until a composition installs it (EnableFormat2Reader, evs_verify_format2.go), and each
+	// repo's ur/index and ur/lfs ref ids, derived once
+	format2Reads       evsFormat2Reader
+	repoIdReservedRefs map[Id]*evsReservedRefIds
 	// where M10's index writer joins each write's plan (evs_plan.go), nil until then
 	writeHook EvsWritePlanHook
 	// whether the network is in §19.11's format2 gate, from the composition's core state (evs_format_client.go); nil

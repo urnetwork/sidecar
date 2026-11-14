@@ -36,7 +36,9 @@ import (
 type evsTestConfig struct {
 	stateLock sync.Mutex
 	// what At answers, nil for this one state
-	atErr        error
+	atErr error
+	// the states At answers at other auth versions than this one's, as a retained history does
+	states       map[uint64]GkmAuthView
 	identityKeys map[Id][]byte
 	writers      []Id
 	readers      []Id
@@ -51,6 +53,9 @@ func (self *evsTestConfig) At(pin *bridge.AuthPin) (GkmAuthView, error) {
 	defer self.stateLock.Unlock()
 	if self.atErr != nil {
 		return nil, self.atErr
+	}
+	if state, ok := self.states[pin.GetVersion()]; ok {
+		return state, nil
 	}
 	return self, nil
 }
@@ -128,6 +133,8 @@ type evsTestChange struct {
 	segment bool
 	// a directory whose delta names these children, which the same push creates
 	children []string
+	// format 2: changes the file's entry version before it is signed, which then builds as a format-2 push
+	format2 func(entry *protocol.EvsEntryVersion)
 }
 
 // The world.
@@ -191,6 +198,9 @@ type evsTestWorld struct {
 	repeatRemoval bool
 	// the ref is its signer's owned ref, as a record-class stream is, rather than the shared main
 	owned bool
+	// the auth version the world's pushes pin, 0 for 1, and the next push's index_epoch, which builds it as format 2
+	authVersion    uint64
+	nextIndexEpoch uint64
 }
 
 // One token path a request showed evs, by the epoch it named it in, with the current epoch then.
@@ -484,6 +494,11 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 		owner := self.signer.sidecarId
 		plan.RefKind, plan.OwnerSidecarId = protocol.EvsRefKind_EVS_REF_OWNED, &owner
 	}
+	if self.authVersion != 0 {
+		plan.Auth.Version = self.authVersion
+	}
+	plan.IndexEpoch, self.nextIndexEpoch = self.nextIndexEpoch, 0
+	format2 := plan.IndexEpoch != 0 || plan.Flags&uint32(protocol.EvsPushFlag_EVS_PUSH_DROP|protocol.EvsPushFlag_EVS_PUSH_CUT) != 0
 	type pending struct {
 		key     string
 		version uint64
@@ -539,6 +554,15 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 			p.entry, _ = proto.MarshalOptions{Deterministic: true}.Marshal(entry)
 		case change.content != nil:
 			p.entry = self.fileEntry(change.content, change.segment, entryVersion, pushId, baseVersion, prev)
+			if change.format2 != nil {
+				entry := &protocol.EvsEntryVersion{}
+				if err := proto.Unmarshal(p.entry, entry); err != nil {
+					self.t.Fatal(err)
+				}
+				change.format2(entry)
+				p.entry, _ = proto.MarshalOptions{Deterministic: true}.Marshal(entry)
+				format2 = true
+			}
 		default:
 			if state == nil || state.removal != nil {
 				self.t.Fatalf("removing an absent %s", change.path)
@@ -551,7 +575,11 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 		})
 		pendings = append(pendings, p)
 	}
-	built, err := NewEvsStatementBuilder(self.signer.sign).Build(plan)
+	build := NewEvsStatementBuilder(self.signer.sign).Build
+	if format2 {
+		build = NewEvsStatementBuilder(self.signer.sign).BuildFormat2
+	}
+	built, err := build(plan)
 	if err != nil {
 		self.t.Fatal(err)
 	}
