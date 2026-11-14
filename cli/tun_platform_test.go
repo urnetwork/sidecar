@@ -21,10 +21,10 @@ import (
 	"github.com/urnetwork/sidecar"
 )
 
-// Linux and macOS each set their platform, so ur tun runs there.
+// Linux, macOS and Windows each set their platform, so ur tun refuses nowhere the release ships.
 func TestTunPlatformIsRegistered(t *testing.T) {
 	switch runtime.GOOS {
-	case "linux", "darwin":
+	case "linux", "darwin", "windows":
 		if urTunPlatform == nil {
 			t.Fatalf("%s has no ur tun", runtime.GOOS)
 		}
@@ -60,7 +60,7 @@ func TestTunExitsHalvesCoverIpv4(t *testing.T) {
 	if len(halves) != 2 || halves[0].Overlaps(halves[1]) {
 		t.Fatalf("halves %v", halves)
 	}
-	for _, address := range []string{"0.0.0.0", "1.2.3.4", "127.255.255.255", "128.0.0.0", "203.0.113.7", "255.255.255.255"} {
+	for _, address := range []string{"0.0.0.0", "10.0.0.1", "127.255.255.255", "192.0.2.1", "203.0.113.7", "255.255.255.255"} {
 		inside := 0
 		for _, half := range halves {
 			if half.Bits() != 1 {
@@ -80,11 +80,11 @@ func TestTunExitsHalvesCoverIpv4(t *testing.T) {
 func TestTunZoneNames(t *testing.T) {
 	settings := testUrTunSettings()
 	for zone, want := range map[string]string{
-		"net.example":       "net.example",
-		"Net.Example.":      "net.example",
-		"a-1.b2.example":    "a-1.b2.example",
-		"x":                 "x",
-		"label-" + "63.org": "label-63.org",
+		"net.example":      "net.example",
+		"Net.Example.":     "net.example",
+		"a-1.b2.example":   "a-1.b2.example",
+		"x":                "x",
+		"label-63.example": "label-63.example",
 	} {
 		if got, ok := urTunZoneName(zone, settings); !ok || got != want {
 			t.Errorf("%q: %q %v", zone, got, ok)

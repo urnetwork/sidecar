@@ -352,12 +352,11 @@ modules:
     leg: [client, engine, cli, test]
   - module: golang.zx2c4.com/wintun
     spdx: MIT
-    reason: through wireguard's tun on Windows, a loader of wintun.dll that holds no DLL; linked only once ur tun runs on Windows (BRIDGE-M6-06), which loads the DLL only after owner decision 222's checks; read from its LICENSE
+    reason: through wireguard's tun on Windows, a loader of wintun.dll that holds no DLL; ur tun on Windows (BRIDGE-M6-06, cli's tun_windows.go) loads the DLL only after owner decision 222's checks; read from its LICENSE
     leg: [cli]
-    planned: true
   - module: golang.zx2c4.com/wireguard
     spdx: MIT
-    reason: wireguard's tun for ur tun's OS tun on Linux (§17.10), its tun, conn and rwcancel packages, from cli's Linux files alone; read from its LICENSE
+    reason: wireguard's tun for ur tun's OS tun (§17.10), its tun, conn and rwcancel packages, from cli's platform files alone, Linux's, macOS's and Windows'; read from its LICENSE
     leg: [cli]
   - module: google.golang.org/protobuf
     spdx: BSD-3-Clause

@@ -166,31 +166,37 @@ type urTunSettings struct {
 	// less its length and root bytes, and 63 (RFC 1035 2.3.4).
 	ZoneNameMaxByteCount  int
 	ZoneLabelMaxByteCount int
+	// Windows' adapter list (tun_windows.go): the buffer GetAdaptersAddresses is first given, 15 KiB as IP Helper
+	// advises, and how many times it is asked again with the size it answers, for adapters that come between asks: 3.
+	AdapterBufferByteCount  int
+	AdapterReadAttemptCount int
 }
 
 // The defaults, a fresh value each call.
 func defaultUrTunSettings() *urTunSettings {
 	return &urTunSettings{
-		Mtu:                    connect.DefaultTunnelMtu,
-		ReadBatchCount:         64,
-		ReadPacketByteCount:    65535,
-		WriteHeadroomByteCount: 16,
-		SendTimeout:            5 * time.Second,
-		SyncDelay:              100 * time.Millisecond,
-		SyncRetryInterval:      5 * time.Second,
-		LocalPollInterval:      30 * time.Second,
-		LocalDelay:             250 * time.Millisecond,
-		RouteMetric:            0,
-		PlatformTimeout:        5 * time.Second,
-		CloseTimeout:           10 * time.Second,
-		DeviceNameByteCount:    15,
-		ExitsTable:             0x7572,
-		ExitsMark:              0x7572,
-		ExitsRulePriority:      32760,
-		SharedBlockInterval:    time.Minute,
-		ReadHeadroomByteCount:  4,
-		ZoneNameMaxByteCount:   253,
-		ZoneLabelMaxByteCount:  63,
+		Mtu:                     connect.DefaultTunnelMtu,
+		ReadBatchCount:          64,
+		ReadPacketByteCount:     65535,
+		WriteHeadroomByteCount:  16,
+		SendTimeout:             5 * time.Second,
+		SyncDelay:               100 * time.Millisecond,
+		SyncRetryInterval:       5 * time.Second,
+		LocalPollInterval:       30 * time.Second,
+		LocalDelay:              250 * time.Millisecond,
+		RouteMetric:             0,
+		PlatformTimeout:         5 * time.Second,
+		CloseTimeout:            10 * time.Second,
+		DeviceNameByteCount:     15,
+		ExitsTable:              0x7572,
+		ExitsMark:               0x7572,
+		ExitsRulePriority:       32760,
+		SharedBlockInterval:     time.Minute,
+		ReadHeadroomByteCount:   4,
+		ZoneNameMaxByteCount:    253,
+		ZoneLabelMaxByteCount:   63,
+		AdapterBufferByteCount:  15 * 1024,
+		AdapterReadAttemptCount: 3,
 	}
 }
 
