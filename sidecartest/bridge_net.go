@@ -89,9 +89,10 @@ type BridgeNetSettings struct {
 	// The binding cache the hosts' components keep: 7 days and 16 a sidecar, the component's defaults.
 	BindingRetainTimeout time.Duration
 	BindingMaxCount      int
-	// How often a wait for a host's component to compile and serve looks again: 10 ms. The component raises nothing
-	// when its provider starts or a compile lands, so that wait polls, bounded by WaitTimeout. Positive.
-	ServingPollInterval time.Duration
+	// How often a wait on what raises nothing looks again: 10 ms. A host's component raises nothing when its provider
+	// starts or a compile lands, nor an exit's policy when it judges a packet, so those waits poll, bounded by
+	// WaitTimeout. Positive.
+	PollInterval time.Duration
 	// The largest read an upstream listener or a window's UDP socket takes at once: 64 KiB, a datagram's most.
 	ReadByteCount int
 	// The strict_exp a sender's link gives each window client past the Net's clock: 7 days, §7.4's.
@@ -107,7 +108,7 @@ func DefaultBridgeNetSettings() *BridgeNetSettings {
 		SendTimeout:          5 * time.Second,
 		BindingRetainTimeout: 7 * 24 * time.Hour,
 		BindingMaxCount:      16,
-		ServingPollInterval:  10 * time.Millisecond,
+		PollInterval:         10 * time.Millisecond,
 		ReadByteCount:        64 * 1024,
 		WindowClientLifetime: 7 * 24 * time.Hour,
 	}
@@ -136,6 +137,8 @@ type BridgeNetClientArgs struct {
 	SidecarId sidecar.Id
 	// A window client's parent, the subject's own client, whose subject C13 seals for it.
 	ParentClientId *connect.Id
+	// A public exit's client, which provides Public to clients of other networks.
+	Exit bool
 }
 
 // The seals and bytes of a contract an operator mints (Net.MintContract), whatever the platform's records say.
@@ -213,6 +216,7 @@ type bridgeNetFakePlatform struct {
 type bridgeNetFakeClient struct {
 	networkId       sidecar.Id
 	subjectClientId connect.Id
+	exit            bool
 }
 
 func newBridgeNetFakePlatform(net *Net, settings *BridgeNetSettings) *bridgeNetFakePlatform {
@@ -223,7 +227,7 @@ func (self *bridgeNetFakePlatform) AddClient(ctx context.Context, args *BridgeNe
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	clientId := connect.NewId()
-	client := &bridgeNetFakeClient{networkId: args.NetworkId, subjectClientId: clientId}
+	client := &bridgeNetFakeClient{networkId: args.NetworkId, subjectClientId: clientId, exit: args.Exit}
 	if args.ParentClientId != nil {
 		parent := self.clients[*args.ParentClientId]
 		if parent == nil {
@@ -281,7 +285,17 @@ func (self *bridgeNetFakePlatform) createContract(sourceId connect.Id, request *
 		return self.clients[sourceId], self.clients[destinationId]
 	}()
 	refused := protocol.ContractError_NoPermission
-	if source == nil || destination == nil || source.networkId != destination.networkId {
+	provideMode := protocol.ProvideMode_Network
+	switch {
+	case source == nil || destination == nil:
+		return &protocol.CreateContractResult{Error: &refused, CreateContract: request}, nil
+	case source.networkId != destination.networkId && destination.exit && !request.GetCompanion():
+		// a public exit's Public, with the source's seals as in every mode (D-PROTO-19)
+		provideMode = protocol.ProvideMode_Public
+	case source.networkId != destination.networkId && source.exit && request.GetCompanion():
+		// the Stream companion answering a Public contract, with the forward's seals
+		provideMode = protocol.ProvideMode_Stream
+	case source.networkId != destination.networkId:
 		return &protocol.CreateContractResult{Error: &refused, CreateContract: request}, nil
 	}
 	sealed := source
@@ -294,7 +308,7 @@ func (self *bridgeNetFakePlatform) createContract(sourceId connect.Id, request *
 	contract, err := self.net.MintContract(&MintContractArgs{
 		SourceId:              sourceId,
 		DestinationId:         destinationId,
-		ProvideMode:           protocol.ProvideMode_Network,
+		ProvideMode:           provideMode,
 		SourceSubjectClientId: &sealed.subjectClientId,
 		SourceNetworkId:       &networkId,
 		ContractClass:         protocol.ContractClass_ContractClassData,
@@ -448,6 +462,7 @@ func (self *BridgeNet) waitClient(ctx context.Context, client *NetClient, provid
 // The parts of §22.7 this world runs (BRIDGE-M4-22): S8 on T2 in sidecartest/scenario and on T3 in server's controller
 // package, and the bridge's asserts, each a test of its own.
 var (
+	_ = RegisterPrivacyAssert("public-exits", &PrivacyAssertTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestBridgePublicExitsRefuseOverlayAndPrivateDestinations"})
 	_ = RegisterScenario("S8", "", ScenarioTierT2, &ScenarioTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest/scenario", Name: "TestScenarioS8"})
 	_ = RegisterScenario("S8", "", ScenarioTierT3, &ScenarioTest{Repo: "server", Package: "github.com/urnetwork/server/controller", Name: "TestScenarioS8OnT3", Tags: "sidecar_pending"})
 	_ = RegisterPrivacyAssert("unsealed-peer", &PrivacyAssertTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestBridgeUnsealedPeerFlowIsDenied"})
@@ -521,6 +536,7 @@ type BridgeNet struct {
 	stateLock sync.Mutex
 	devices   []*BridgeNetDevice
 	hosts     []*BridgeNetHost
+	exits     []*BridgeNetExit
 	senders   []*BridgeNetSender
 	windows   []*BridgeNetWindow
 	// the operator's clients, whose return contracts the operator mints too
@@ -581,14 +597,18 @@ func (self *BridgeNet) Close() {
 	var windows []*BridgeNetWindow
 	var senders []*BridgeNetSender
 	var hosts []*BridgeNetHost
+	var exits []*BridgeNetExit
 	func() {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		windows, senders, hosts = self.windows, self.senders, self.hosts
-		self.windows, self.senders, self.hosts = nil, nil, nil
+		windows, senders, hosts, exits = self.windows, self.senders, self.hosts, self.exits
+		self.windows, self.senders, self.hosts, self.exits = nil, nil, nil, nil
 	}()
 	for _, window := range windows {
 		window.Close()
+	}
+	for _, exit := range exits {
+		exit.Close()
 	}
 	for _, sender := range senders {
 		sender.Close()
@@ -1487,7 +1507,7 @@ func (self *BridgeNetHost) WaitAdopted(n uint64) {
 		}
 		select {
 		case <-changed:
-		case <-time.After(self.bridgeNet.settings.ServingPollInterval):
+		case <-time.After(self.bridgeNet.settings.PollInterval):
 			// the component's compile and serving move without a callback of the bridge's
 		case <-ctx.Done():
 			t.Fatalf("%s adopted %d, not %d, compiled at %d, not %d: %+v", self.Device.Name, adopted, n, status.CompiledPin.GetVersion(), compileAt, status)
@@ -1812,6 +1832,10 @@ type BridgeNetWindowArgs struct {
 	// The window's client runs with encryption off, the unsealed peer I-3 shuts out (§22.7's unsealed-peer assert):
 	// the one client the world attaches that is not Required.
 	Unsealed bool
+	// A public client of this exit's in place of a window to a host: Public, with no delegation. Its own client's policy
+	// judges what it sends first, as every public client's does: it refuses a destination that is not public before
+	// the exit sees it, and sends 100.64/10, which it counts public until a release drops it.
+	Exit *BridgeNetExit
 }
 
 // A window client to one host. See the file's comment.
@@ -1849,6 +1873,18 @@ func (self *BridgeNet) OpenWindow(name string, subject *BridgeNetDevice, host *B
 	provideMode := args.ProvideMode
 	if provideMode == protocol.ProvideMode_None {
 		provideMode = protocol.ProvideMode_Network
+	}
+	destination := func() *NetClient {
+		if args.Exit != nil {
+			return args.Exit.Client
+		}
+		return host.Client
+	}()
+	if args.Exit != nil {
+		provideMode = protocol.ProvideMode_Public
+		noDelegation := *args
+		noDelegation.NoDelegation = true
+		args = &noDelegation
 	}
 	ctx, cancel := context.WithCancel(self.net.Context())
 	window := &BridgeNetWindow{
@@ -1950,11 +1986,11 @@ func (self *BridgeNet) OpenWindow(name string, subject *BridgeNetDevice, host *B
 			window.source = address
 		}
 	}
-	hostHop, err := connect.NewMultiHopId(host.Client.ClientId)
+	destinationHop, err := connect.NewMultiHopId(destination.ClientId)
 	if err != nil {
-		fail("the host's hop: %v", err)
+		fail("the destination's hop: %v", err)
 	}
-	window.natClient = connect.NewRemoteUserNatClient(window.Client.Client, window.receive, []connect.MultiHopId{hostHop}, provideMode)
+	window.natClient = connect.NewRemoteUserNatClient(window.Client.Client, window.receive, []connect.MultiHopId{destinationHop}, provideMode)
 	window.workers.Add(1)
 	go window.pump()
 	self.stateLock.Lock()
@@ -2656,7 +2692,7 @@ func (self *BridgeNetSender) WaitAdopted(n uint64) {
 		}
 		select {
 		case <-changed:
-		case <-time.After(self.bridgeNet.settings.ServingPollInterval):
+		case <-time.After(self.bridgeNet.settings.PollInterval):
 		case <-ctx.Done():
 			t.Fatalf("%s adopted %d, not %d, compiled at %d, not %d", self.Device.Name, adopted, n, status.CompiledPin.GetVersion(), compileAt)
 		}
@@ -2866,4 +2902,134 @@ func bridgeNetUnsignedToken(clientId connect.Id, expireTime time.Time) string {
 // whatever entry covers it (§17.4's carve).
 func (self *BridgeNetSender) TakesDefaultRoute(destination netip.AddrPort) bool {
 	return self.Bridge.Route(bridgeNetSyn(netip.AddrPortFrom(self.source, 40000), destination)) == nil
+}
+
+// A public exit (§17.6's C6a; §22.7's public-exits assert): a client of a network of its own providing Public over a
+// NAT with no hook, as today's providers run, its provider's CFAA policy dropping 100.64/10 when the release that
+// turns DropSharedAddressSpace on runs, and only counting it before. Its dials are counted, and one to a LAN or
+// overlay address it is given reaches the upstream's loopback listener, so a pass is seen.
+type BridgeNetExit struct {
+	bridgeNet *BridgeNet
+	Client    *NetClient
+	Upstream  *BridgeNetUpstream
+
+	ctx      context.Context
+	cancel   context.CancelFunc
+	nat      *connect.LocalUserNat
+	provider *connect.RemoteUserNatProvider
+	dials    *bridgeNetDials
+}
+
+// Starts a public exit in a network of its own, dropping 100.64/10 when dropSharedAddressSpace is set.
+func (self *BridgeNet) StartExit(name string, dropSharedAddressSpace bool) *BridgeNetExit {
+	self.t.Helper()
+	ctx, cancel := context.WithCancel(self.net.Context())
+	exit := &BridgeNetExit{
+		bridgeNet: self,
+		ctx:       ctx,
+		cancel:    cancel,
+		dials:     &bridgeNetDials{changes: connect.NewMonitorValue(0), lanHosts: map[netip.Addr]bool{}},
+	}
+	fail := func(format string, args ...any) {
+		exit.Close()
+		self.t.Fatalf(format, args...)
+	}
+	var exitNetworkId sidecar.Id
+	rand.Read(exitNetworkId[:])
+	clientId, err := self.platform.AddClient(ctx, &BridgeNetClientArgs{Name: name, NetworkId: exitNetworkId, Exit: true})
+	if err != nil {
+		fail("the exit's client: %v", err)
+	}
+	exit.Client = self.net.exchange.addClientWithControl(ctx, name, clientId, netClientSettings(), &bridgeNetControl{
+		ctx: ctx, clientId: clientId, platform: self.platform, workers: self.controls,
+	})
+	if err := self.waitClient(ctx, exit.Client, map[protocol.ProvideMode]bool{protocol.ProvideMode_Public: true}); err != nil {
+		fail("the exit's client: %v", err)
+	}
+	exit.Upstream, err = newBridgeNetUpstream(self.settings.ReadByteCount)
+	if err != nil {
+		fail("the exit's upstream: %v", err)
+	}
+	natSettings := connect.DefaultLocalUserNatSettings()
+	dialSettings := &connect.DialContextSettings{DialContext: exit.dials.dial}
+	natSettings.TcpBufferSettings.DialContextSettings = dialSettings
+	natSettings.UdpBufferSettings.DialContextSettings = dialSettings
+	exit.nat = connect.NewLocalUserNat(ctx, name, natSettings)
+	providerSettings := connect.DefaultRemoteUserNatProviderSettings()
+	providerSettings.SecurityPolicyGenerator = func(ctx context.Context, stats *connect.SecurityPolicyStatsCollector) connect.SecurityPolicy {
+		cfaa := connect.DefaultCfaaSecurityPolicySettings()
+		cfaa.DropSharedAddressSpace = dropSharedAddressSpace
+		return connect.Reverse(connect.NewSecurityPolicy(ctx, cfaa, connect.DefaultDmcaSecurityPolicySettings(), connect.DefaultWebStandardSettings(), stats))
+	}
+	exit.provider, err = connect.TryNewRemoteUserNatProvider(exit.Client.Client, exit.nat, providerSettings)
+	if err != nil {
+		fail("the exit's provider: %v", err)
+	}
+	self.stateLock.Lock()
+	self.exits = append(self.exits, exit)
+	self.stateLock.Unlock()
+	return exit
+}
+
+// Ends the exit's provider, NAT, client and upstream. Idempotent.
+func (self *BridgeNetExit) Close() {
+	self.cancel()
+	if self.provider != nil {
+		self.provider.Close()
+	}
+	if self.nat != nil {
+		self.nat.Close()
+	}
+	if self.Client != nil {
+		self.Client.Client.Cancel()
+	}
+	self.dials.open()
+	if self.Upstream != nil {
+		self.Upstream.close()
+	}
+}
+
+// As BridgeNetHost.AddLan: a dial to lan reaches the exit's upstream on loopback, counted under lan.
+func (self *BridgeNetExit) AddLan(lan netip.Addr) {
+	self.dials.stateLock.Lock()
+	defer self.dials.stateLock.Unlock()
+	self.dials.lanHosts[lan] = true
+}
+
+// Every dial the exit's NAT made upstream so far.
+func (self *BridgeNetExit) Dials() []BridgeNetDial {
+	self.dials.stateLock.Lock()
+	defer self.dials.stateLock.Unlock()
+	dials := []BridgeNetDial{}
+	for _, dial := range self.dials.dials {
+		dials = append(dials, *dial)
+	}
+	return dials
+}
+
+// How many packets to port the exit's policy judged by reason: SecurityPolicyReasonSharedAddressSpace drops them once
+// the release turns DropSharedAddressSpace on, and only counts them before. The policy's counts keep a destination's
+// port and never its address (I-13), so a test tells two destinations apart by their reasons.
+func (self *BridgeNetExit) ReasonCount(reason connect.SecurityPolicyReason, port uint16) uint64 {
+	count := uint64(0)
+	for securityDestination, destinationCount := range self.provider.SecurityPolicyReasons(false)[reason] {
+		if securityDestination.Port == int(port) {
+			count += destinationCount
+		}
+	}
+	return count
+}
+
+// Waits until the exit's policy has judged a packet to port by reason, false past WaitTimeout. The policy raises
+// nothing when it judges, so the wait polls at PollInterval.
+func (self *BridgeNetExit) WaitReason(reason connect.SecurityPolicyReason, port uint16) bool {
+	deadline := time.After(self.bridgeNet.settings.WaitTimeout)
+	for self.ReasonCount(reason, port) == 0 {
+		select {
+		case <-time.After(self.bridgeNet.settings.PollInterval):
+		case <-deadline:
+			return false
+		}
+	}
+	return true
 }
