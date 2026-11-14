@@ -9,7 +9,8 @@
 // with K_ref from RK_1 (D-KEYS-22), so keys survive rotations and path epochs, and a rename is a removal and a
 // creation. Text past IndexFormatSettings.ChunkByteCount, 1 MiB, is one document per 1 MiB, each with the next
 // OverlapByteCount, 256 B, so a query of up to 256 B across a boundary is found (D4). A chunk whose key set would
-// encode past 512 KiB, which nearly every query would match, is skipped (D6).
+// encode past 512 KiB, which nearly every query would match, or that alone would not fit a shard, is skipped (D6;
+// evs_index_lone.go), so no merge, push past DirectBytes or roll-up meets a document it cannot place (QD-760).
 //
 // An index covers only documents every reader of its ref can open, and config, mailcfg and secret repos hold none
 // (D-EVS-43), which indexExcluded decides before a version is read.
@@ -151,16 +152,18 @@ func (self *IndexDocument) row(trigramCount int, companion bool, refId Id) *inde
 	return row
 }
 
-// What one document indexes as: its key set and row, or skipped, when its key set would encode past 512 KiB.
+// What one document indexes as: its key set and row, or skipped by D6, when its key set would encode past 512 KiB
+// or it alone would not fit a shard.
 type indexPreparedDocument struct {
 	keys    indexKeySet
 	row     *indexRow
 	skipped bool
 }
 
-// Normalizes the document and builds its key set and row. A skipped chunk holds no key set and no row: its version
-// is a tombstone where its key was indexed before, which only the writer knows.
-func (self *IndexDocument) prepare(normalizer *indexNormalizer, companion bool, refId Id) (*indexPreparedDocument, error) {
+// Normalizes the document and builds its key set and row, the row before D6's test, which reads the row's bytes as
+// the entry would carry them. A skipped chunk holds no key set and no row: its version is a tombstone where its key
+// was indexed before, which only the writer knows, and nothing where it never was.
+func (self *IndexDocument) prepare(normalizer *indexNormalizer, companion bool, refId Id, settings *IndexFormatSettings) (*indexPreparedDocument, error) {
 	if err := self.check(); err != nil {
 		return nil, err
 	}
@@ -168,20 +171,14 @@ func (self *IndexDocument) prepare(normalizer *indexNormalizer, companion bool, 
 	if err != nil {
 		return nil, err
 	}
-	if indexKeySetSkipped(keys) {
-		return &indexPreparedDocument{skipped: true}, nil
-	}
 	row := self.row(len(keys), companion, refId)
 	if err := row.check(companion); err != nil {
 		return nil, err
 	}
+	if indexDocumentSkipped(keys, row, settings) {
+		return &indexPreparedDocument{skipped: true}, nil
+	}
 	return &indexPreparedDocument{keys: keys, row: row}, nil
-}
-
-// Whether a chunk with these keys is skipped: its key set would encode past 512 KiB, which nearly every query would
-// match (§11.14's sniff row).
-func indexKeySetSkipped(keys indexKeySet) bool {
-	return indexKeySetMaxByteCount < keys.encodedByteCount()
 }
 
 // Refuses what no extractor or source gives: an unknown kind, a name too long for its key, fields its kind does not

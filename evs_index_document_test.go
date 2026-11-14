@@ -37,7 +37,7 @@ func testIndexNormalizer(t testing.TB) *indexNormalizer {
 // A document's key set, through prepare.
 func testDocumentKeySet(t testing.TB, document *IndexDocument) indexKeySet {
 	t.Helper()
-	prepared, err := document.prepare(testIndexNormalizer(t), false, Id{})
+	prepared, err := document.prepare(testIndexNormalizer(t), false, Id{}, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,28 +166,33 @@ func TestTextPastOneMiBIsChunked(t *testing.T) {
 	}
 }
 
-// FS-79: a chunk whose key set would encode past 512 KiB is skipped, and one at it is kept. Ordinary text in any
-// script stays far below the cap, so the boundary is held on key sets built to sit at it, and a whole chunk of prose
-// is kept.
+// FS-79: a chunk whose key set would encode past 512 KiB is skipped. A set at the cap is within KeySetMax, and D6's
+// shard test skips it all the same, since a set past some 392,000 keys passes ShardBody alone: KeySetMax stays as the
+// entry codec's cap and the test that needs no pass over the keys. Ordinary text in any script stays far below both,
+// so the boundary is held on key sets built to sit at it, and a whole chunk of prose is kept.
 func TestChunkPastItsKeySetCapIsSkipped(t *testing.T) {
+	settings := DefaultIndexFormatSettings()
 	// Every gap one byte and the count three: the set encodes to its key count plus 3.
 	atCap := testIndexKeys(0, indexKeySetMaxByteCount-3, 1)
-	if atCap.encodedByteCount() != indexKeySetMaxByteCount || indexKeySetSkipped(atCap) {
-		t.Errorf("a set of %d B was skipped", atCap.encodedByteCount())
+	if atCap.encodedByteCount() != indexKeySetMaxByteCount {
+		t.Fatalf("a set of %d B", atCap.encodedByteCount())
+	}
+	if !indexDocumentPastAShard(atCap, testFileRow(atCap), settings) || !indexDocumentSkipped(atCap, testFileRow(atCap), settings) {
+		t.Errorf("a set at KeySetMax, lone %d B, was kept", indexLoneShardByteCount(testFileRow(atCap).encodedByteCount(), atCap, settings))
 	}
 	pastCap := testIndexKeys(0, indexKeySetMaxByteCount-2, 1)
-	if !indexKeySetSkipped(pastCap) {
+	if !indexDocumentSkipped(pastCap, testFileRow(pastCap), settings) {
 		t.Errorf("a set of %d B was kept", pastCap.encodedByteCount())
 	}
 	// Two-byte gaps reach the cap with fewer keys.
 	sparse := testIndexKeys(0, indexKeySetMaxByteCount/2, 128)
-	if !indexKeySetSkipped(sparse) {
+	if !indexDocumentSkipped(sparse, testFileRow(sparse), settings) {
 		t.Errorf("a sparse set of %d B was kept", sparse.encodedByteCount())
 	}
-	prose := bytes.Repeat([]byte("The quick brown fox jumps over the lazy dog, again and again. "), DefaultIndexFormatSettings().ChunkByteCount/62)
+	prose := bytes.Repeat([]byte("The quick brown fox jumps over the lazy dog, again and again. "), settings.ChunkByteCount/62)
 	document := &IndexDocument{Kind: IndexDocFile, Name: []byte("prose.txt"), ByteCount: uint64(len(prose))}
 	document.Fields[indexFieldBody] = prose
-	prepared, err := document.prepare(testIndexNormalizer(t), false, Id{})
+	prepared, err := document.prepare(testIndexNormalizer(t), false, Id{}, settings)
 	if err != nil || prepared.skipped || prepared.row == nil {
 		t.Errorf("a chunk of prose: %+v %v", prepared, err)
 	}
@@ -586,7 +591,7 @@ func TestPreparedDocumentRows(t *testing.T) {
 	}
 	file[0].Version = 4
 	file[0].Tainted = true
-	prepared, err := file[0].prepare(testIndexNormalizer(t), false, refId)
+	prepared, err := file[0].prepare(testIndexNormalizer(t), false, refId, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -605,7 +610,7 @@ func TestPreparedDocumentRows(t *testing.T) {
 	derived.Fields[indexFieldTitle] = []byte("Build the codec")
 	derived.Fields[indexFieldBody] = []byte("prompt text " + strings.Repeat("x", 300))
 	derived.Fields[9] = []byte(strings.Repeat("label ", 60))
-	prepared, err = derived.prepare(testIndexNormalizer(t), true, refId)
+	prepared, err = derived.prepare(testIndexNormalizer(t), true, refId, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}

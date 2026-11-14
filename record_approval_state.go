@@ -515,13 +515,16 @@ func (self *ApprovalInbox) markFiled(approvalId Id) {
 	}
 }
 
-// Notes that a decision is kept for the request.
-func (self *ApprovalInbox) markDecided(approvalId Id) {
+// Notes that a decision is kept for the request, answering whether it was not noted before.
+func (self *ApprovalInbox) markDecided(approvalId Id) bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	if indexed, ok := self.approvalIdRequests[approvalId]; ok {
-		indexed.decided = true
+	indexed, ok := self.approvalIdRequests[approvalId]
+	if !ok || indexed.decided {
+		return false
 	}
+	indexed.decided = true
+	return true
 }
 
 // Notes that a Cancel row is kept for the request.
@@ -602,8 +605,10 @@ func (self *ApprovalInbox) Receive(ctx context.Context, storedSigned []byte) (Id
 	if err != nil {
 		return approvalId, err
 	}
-	if kept {
-		self.markDecided(approvalId)
+	// kept now, or kept by an earlier intake whose row was appended and whose answer was lost: the request is decided
+	// either way, so a decision on disk never waits for a restart to count, and its waiters hear of it
+	newlyDecided := self.markDecided(approvalId)
+	if kept || newlyDecided {
 		self.notify(approvalId)
 	}
 	return approvalId, nil
