@@ -133,3 +133,37 @@ ur login --device [--network=<name>] [--replace]
   expiry, a denial, or 15 min. The token and its DPoP key are dropped before the daemon is reached; the daemon gets the
   key alone, and nothing ur prints holds the token or the device code.
 - An issuer that offers no device sign-in is refused, naming it.
+
+## ur id (§15.8)
+
+A network's mail addresses, thin over the daemon's mail component. §15.8 gives `ur id create <name>`, `ur id
+group-create [--private]` and `group-add`; the rest of these spellings and the flags are this file's until the owner's
+copy lands.
+
+```text
+ur id create <name> [--network=<net>]                  <name>@<net>.<root>, into this member's mailbox
+ur id group-create <name> [--private] [--network=<net>]
+ur id group-add <group> <member_id> [--network=<net>]
+ur id ls [--network=<net>]                             every address mailcfg holds, and whether a receiver takes it
+ur id rm <name> [--network=<net>]
+```
+
+- `create` and `rm` are outward actions (I-8): each passes §5.4's gate first. While a person's decision is awaited the
+  command prints `ur approve <id>` for another approval-capable device and exits 1; it runs once it is run again
+  after the approval.
+- `group-create` and `group-add` ask on /dev/tty first, never through MCP. A group's repo stores its mail once for all
+  of its members; `group-add` is the only way in (§16.11). `group-create` refuses until the access log carries a group
+  inbox's marker (plan-MAIL-group-inbox).
+- `ls` names an address whose creator's grant is gone as one no receiver takes, since a record outlives no grant.
+
+## ur mail (§15.6, §15.15)
+
+```text
+ur mail enable [--network=<net>]    turns mail on: mailcfg, this member's mailbox, then POST /mail/enable
+ur mail status [--network=<net>]    the network's mail status, this device's receiver, and the indexer prompt
+```
+
+- With mail on, the daemon never idles out (§5.8), and `ur status` adds the same lines.
+- Until a mail indexer stands, both print §15.6's prompt: a phone alone cannot reliably receive mail, and a desktop
+  `ur daemon`, a NAS or a VPS is needed.
+- A receiver whose listen waits on a person shows `ur approve <id>` for another approval-capable device.
