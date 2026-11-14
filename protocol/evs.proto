@@ -476,7 +476,7 @@ message EvsSlotObject {                 // slot/<repo>/<slot_id>, <= 8 KiB; rewr
 message EvsSlotKey {
   uint32 key_index = 1;                 // 0 to 63, never reused within its slot
   uint64 generation = 2;                // g: fek_g wraps it, or, for a deposit, g's drop key
-  bytes wrapped = 3;                    // EVS-FORMAT.md's wrapped-key block under fek_g, or a deposit's HPKE bytes
+  bytes wrapped = 3;                    // EVS-FORMAT.md's 72 B key or 104 B record slot row block under fek_g, or HPKE
 }
 
 message EvsIndexEntry {                 // idx/<repo>/<ref>/<p>/<t1>/.../<tn>.e, <= 512 KiB: a cache of committed versions

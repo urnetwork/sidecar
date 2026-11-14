@@ -9,10 +9,12 @@
 //	          EvsRepo.BuildStreamPush and PostStreamPush (evs_stream_append.go), its entry files at the paths the caller
 //	          names and its slot object the caller's rows; a push for another writer's stream is REF_MODE here, as evs
 //	          answers another's owned ref, so no binding squats on a stream's id before its writer's first push
-//	rows      a slot row is plaintext key || salt (RECORD.md section 5.2), which the row codec wraps under fek_g and
-//	          opens; RECORD.md's 64 B rows have no slot format yet, since evs holds only 72 B wrapped 32 B keys
-//	          (question record-m2-01-slot-row-salt), so the default codec refuses (RecordSlotRowsUnsettled): no push
-//	          is built and no row slot opened until it is answered, and every other call works
+//	rows      a slot row is plaintext key || salt, 64 B (RECORD.md section 5.2), which the binding wraps under fek_g
+//	          of the push's generation as EVS-FORMAT.md's 104 B record slot row block (QD-739), one slot key a row
+//	          at its key_index, and a slot read opens again under fek of each key's generation; so an ERASE of
+//	          (slot, key_index) destroys the entry's key and salt together, and neither rides in the entry file.
+//	          Rows of another width, or past 64, or whose indexes do not ascend, are refused before anything is
+//	          journaled or sent, and a slot key that is not such a block, or does not open, refuses the slot read
 //	journal   a built push, deposit or ERASE is kept in the store under its push id before its first post, so a retry
 //	          of that push id, after a kill or an answer that never came, sends the same bytes and evs answers it as
 //	          that statement (I-EVS-3); the same push id with other content is PUSH_ID_REUSED here, recorded, as evs
@@ -47,9 +49,9 @@
 //	hints     Subscribe leases the whole repo (EvsRepo.Subscribe) and listens to the client's verified changes, and this
 //	          binding's own commits call the callbacks too, each with no lock held
 //
-// Every refusal of evs comes back as *RecordStreamRefusal with evs's code and whether evs recorded it; the slot-row
-// refusal, a pin behind, an unreachable evs or a gkm failure come back as they are. On desktop and mobile legs. Safe
-// for concurrent use.
+// Every refusal of evs comes back as *RecordStreamRefusal with evs's code and whether evs recorded it; rows refused
+// before sending, a pin behind, an unreachable evs or a gkm failure come back as they are. On desktop and mobile
+// legs. Safe for concurrent use.
 
 package sidecar
 
@@ -95,37 +97,57 @@ const (
 	recordEvsEraseDigestLabel   = "urnetwork-sidecar-v1/record-stream-erase\x00"
 )
 
-// RECORD.md's 64 B slot rows have no slot format evs takes yet (question record-m2-01-slot-row-salt): nothing was
-// built, wrapped or opened.
-var ErrRecordSlotRowUnsettled = errors.New("record slot rows wait on question record-m2-01-slot-row-salt")
-
-// How a binding keeps slot rows in evs's slot objects: under fek_g of the push's generation, in ascending key_index,
-// one slot key a row, so an ERASE of (slot, key_index) destroys exactly that row. Safe for concurrent use.
-type RecordSlotRowCodec interface {
-	// Whether rows can be wrapped: their widths and indexes, checked before anything is read or sent.
-	Check(rows []*RecordSlotRow) error
-	// The slot keys rows become under fek.
-	Wrap(fek *EvsFekKey, rows []*RecordSlotRow) ([]*protocol.EvsSlotKey, error)
-	// The rows a slot object's live keys hold, fekOf giving fek of a key's generation.
-	Open(slot *protocol.EvsSlotObject, fekOf func(generation uint64) (*EvsFekKey, error)) ([]*RecordSlotRow, error)
+// Holds a push's rows to the file header's rows row before anything is read or sent: 1 to SlotMaxKeyCount rows of
+// RECORD.md section 5.2's 64 B, their key indexes ascending below SlotMaxKeyCount.
+func checkRecordSlotRows(rows []*RecordSlotRow) error {
+	format := DefaultEvsFormatSettings()
+	if len(rows) == 0 || format.SlotMaxKeyCount < len(rows) {
+		return fmt.Errorf("%w: a slot of %d rows", ErrRecordDraftInvalid, len(rows))
+	}
+	for i, row := range rows {
+		if len(row.Row) != RecordSlotRowByteCount {
+			return fmt.Errorf("%w: a slot row of %d bytes", ErrRecordDraftInvalid, len(row.Row))
+		}
+		if uint64(format.SlotMaxKeyCount) <= uint64(row.KeyIndex) || (0 < i && row.KeyIndex <= rows[i-1].KeyIndex) {
+			return fmt.Errorf("%w: slot rows whose key indexes do not ascend below %d", ErrRecordDraftInvalid, format.SlotMaxKeyCount)
+		}
+	}
+	return nil
 }
 
-// The codec while question record-m2-01-slot-row-salt is open: it wraps and opens nothing.
-type RecordSlotRowsUnsettled struct{}
-
-// Refuses.
-func (self RecordSlotRowsUnsettled) Check(rows []*RecordSlotRow) error {
-	return ErrRecordSlotRowUnsettled
+// The slot keys rows become under fek: each row's 104 B record slot row block at its key_index, of fek's generation.
+func wrapRecordSlotRows(fek *EvsFekKey, rows []*RecordSlotRow) ([]*protocol.EvsSlotKey, error) {
+	if err := checkRecordSlotRows(rows); err != nil {
+		return nil, err
+	}
+	slotKeys := make([]*protocol.EvsSlotKey, 0, len(rows))
+	for _, row := range rows {
+		wrapped, err := EvsWrapRecordSlotRow(fek, row.Row)
+		if err != nil {
+			return nil, err
+		}
+		slotKeys = append(slotKeys, &protocol.EvsSlotKey{KeyIndex: row.KeyIndex, Generation: fek.Generation(), Wrapped: wrapped})
+	}
+	return slotKeys, nil
 }
 
-// Refuses.
-func (self RecordSlotRowsUnsettled) Wrap(fek *EvsFekKey, rows []*RecordSlotRow) ([]*protocol.EvsSlotKey, error) {
-	return nil, ErrRecordSlotRowUnsettled
-}
-
-// Refuses.
-func (self RecordSlotRowsUnsettled) Open(slot *protocol.EvsSlotObject, fekOf func(generation uint64) (*EvsFekKey, error)) ([]*RecordSlotRow, error) {
-	return nil, ErrRecordSlotRowUnsettled
+// The rows a slot object's live keys hold, each opened under fek of its own generation, which fekOf gives. A key
+// that is no record slot row block, or does not open, refuses the whole slot as ErrEvsSealInvalid: no honest writer
+// stores one, and a reader that took the rest would read a slot evs changed.
+func openRecordSlotRows(slot *protocol.EvsSlotObject, fekOf func(generation uint64) (*EvsFekKey, error)) ([]*RecordSlotRow, error) {
+	rows := make([]*RecordSlotRow, 0, len(slot.GetKeys()))
+	for _, slotKey := range slot.GetKeys() {
+		fek, err := fekOf(slotKey.GetGeneration())
+		if err != nil {
+			return nil, err
+		}
+		row, err := EvsOpenRecordSlotRow(fek, slotKey)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, &RecordSlotRow{KeyIndex: slotKey.GetKeyIndex(), Row: row})
+	}
+	return rows, nil
 }
 
 // What the binding runs by.
@@ -158,9 +180,7 @@ func DefaultRecordEvsStreamsSettings() *RecordEvsStreamsSettings {
 type RecordEvsStreamsArgs struct {
 	Client *EvsClient
 	// Where built pushes are journaled: the record component's sealed directory, or a directory under it.
-	Store SidecarStore
-	// Nil: RecordSlotRowsUnsettled.
-	RowCodec RecordSlotRowCodec
+	Store    SidecarStore
 	Settings *RecordEvsStreamsSettings
 }
 
@@ -168,7 +188,6 @@ type RecordEvsStreamsArgs struct {
 type RecordEvsStreams struct {
 	client   *EvsClient
 	store    SidecarStore
-	codec    RecordSlotRowCodec
 	settings *RecordEvsStreamsSettings
 
 	stateLock sync.Mutex
@@ -191,14 +210,9 @@ func NewRecordEvsStreams(args *RecordEvsStreamsArgs) (*RecordEvsStreams, error) 
 	if settings == nil {
 		settings = DefaultRecordEvsStreamsSettings()
 	}
-	codec := args.RowCodec
-	if codec == nil {
-		codec = RecordSlotRowsUnsettled{}
-	}
 	return &RecordEvsStreams{
 		client:            args.Client,
 		store:             args.Store,
-		codec:             codec,
 		settings:          settings,
 		repoIdSubscribers: map[Id]map[uint64]func(repoId Id){},
 		repoIdHints:       map[Id]func(){},
@@ -439,7 +453,7 @@ func (self *RecordEvsStreams) Append(ctx context.Context, repoId Id, push *Recor
 		// another's owned ref, as evs answers it (§11.8's refs table)
 		return nil, &RecordStreamRefusal{Code: protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE}
 	}
-	if err := self.codec.Check(push.SlotRows); err != nil {
+	if err := checkRecordSlotRows(push.SlotRows); err != nil {
 		return nil, err
 	}
 	repo := self.client.Repo(repoId)
@@ -457,7 +471,7 @@ func (self *RecordEvsStreams) Append(ctx context.Context, repoId Id, push *Recor
 			RefName:  RecordStreamRefName(push.WriterSidecarId),
 			PushId:   push.PushId,
 			SlotId:   push.SlotId,
-			SlotKeys: func(fek *EvsFekKey) ([]*protocol.EvsSlotKey, error) { return self.codec.Wrap(fek, push.SlotRows) },
+			SlotKeys: func(fek *EvsFekKey) ([]*protocol.EvsSlotKey, error) { return wrapRecordSlotRows(fek, push.SlotRows) },
 			Files:    files,
 			AuthPin:  push.AuthPin,
 		})
@@ -973,7 +987,8 @@ func (self *RecordEvsStreams) ReadStream(ctx context.Context, repoId Id, writerS
 	return versions, nil
 }
 
-// A slot object's live rows, opened by the row codec. NOT_FOUND for a slot evs does not hold.
+// A slot object's live rows, each opened from its record slot row block: see the file header's rows row. NOT_FOUND for
+// a slot evs does not hold.
 func (self *RecordEvsStreams) ReadSlot(ctx context.Context, repoId Id, slotId Id) (*RecordSlot, error) {
 	repo := self.client.Repo(repoId)
 	refId := EvsErasureRefId(repoId)
@@ -996,7 +1011,7 @@ func (self *RecordEvsStreams) ReadSlot(ctx context.Context, repoId Id, slotId Id
 		return nil, err
 	}
 	keys := newEvsReadKeys(repo)
-	rows, err := self.codec.Open(slot, func(generation uint64) (*EvsFekKey, error) { return keys.fek(ctx, generation) })
+	rows, err := openRecordSlotRows(slot, func(generation uint64) (*EvsFekKey, error) { return keys.fek(ctx, generation) })
 	if err != nil {
 		return nil, err
 	}
@@ -1191,8 +1206,9 @@ func (self *RecordEvsStreams) Erase(ctx context.Context, repoId Id, erase *Recor
 	}
 	if journal == nil {
 		args := &EvsEraseArgs{ErasureId: erase.ErasureId, Complete: erase.Complete, Note: erase.SealedNote}
+		slotMaxKeyCount := DefaultEvsFormatSettings().SlotMaxKeyCount
 		for _, key := range erase.Keys {
-			if EvsSlotMaxKeyCount <= key.KeyIndex {
+			if uint64(slotMaxKeyCount) <= uint64(key.KeyIndex) {
 				return nil, fmt.Errorf("%w: key index %d", ErrRecordDraftInvalid, key.KeyIndex)
 			}
 			args.Keys = append(args.Keys, &EvsErasedKey{SlotId: key.SlotId, KeyIndex: uint16(key.KeyIndex)})
