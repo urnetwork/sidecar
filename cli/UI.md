@@ -72,9 +72,12 @@ ur tun ip [<ip>] [--network=<name>]     show this host's overlay address and the
 - The tun carries the block, the granted prefixes and `<block>.0.53`, and under the egress mode `exits` the default
   route too, in a routing table of its own with wg-quick's rules (`lookup main suppress_prefixlength 0`, then
   `not fwmark <mark> lookup <table>`): the daemon's own connect sockets carry connect's egress mark, so its transport
-  keeps the host's route (QD-800); IPv6, which the tun does not carry, keeps the host's route too. Where the host
-  refuses it, a strict reverse path filter or a table or mark another program uses, `ur tun` says the exits are held
-  and why, the host's other traffic keeps its route, and it tries again. The route, its rules and the mark come off
+  keeps the host's route (QD-800); IPv6, which the tun does not carry, keeps the host's route too. This host's own
+  interface, gateway and resolver addresses, which the bridge carves out of what it routes (§17.4), take a `throw`
+  route each in that table, kept in step as they change, so they keep the host's route as well, and a resolver beyond
+  the host's own networks still answers the host's lookups, outside the exits (QD-808). Where the host refuses it, a
+  strict reverse path filter or a table or mark another program uses, `ur tun` says the exits are held and why, the
+  host's other traffic keeps its route, and it tries again. The route, its throws, its rules and the mark come off
   when the mode leaves `exits` and when the tun ends.
 - The network's names, `~<net>.<root>`, resolve through `<block>.0.53` by systemd-resolved, set for the tun's link.
   Where resolved is absent or refuses, `ur tun` prints the step to take.

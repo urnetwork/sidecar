@@ -9,8 +9,9 @@
 //	write    each packet the bridge answers, a link's reply, a reject or the resolver's answer, written into the device
 //	         at once on the caller's goroutine, the packet the caller's again after the call
 //	sync     on each change the bridge reports, coalesced: the device's addresses are this host's overlay addresses,
-//	         its routes Bridge.Routes(), the default route too under the egress mode exits, and the state's name zones
-//	         resolve through <block>.0.53
+//	         its routes Bridge.Routes(), the default route too under the egress mode exits, beside the bridge's carve
+//	         passed back to the host's own route where the platform can, and the state's name zones resolve through
+//	         <block>.0.53
 //	local    this host's interface, gateway and resolver addresses, which the platform watches and the tun reads again
 //	         every LocalPollInterval, into Bridge.SetLocalAddresses whenever they change, the bridge's own resolvers left
 //	         out so their routes are never carved
@@ -18,11 +19,14 @@
 // Under exits the default route rides the tun (§17.11). On Linux it goes in a routing table of the platform's own with
 // wg-quick's rules, `not fwmark <mark> lookup <table>` and `lookup main suppress_prefixlength 0` (tun_linux.go;
 // QD-800): the daemon's own connect sockets carry connect's egress mark, which the first rule passes by, so its
-// transport, and with it every link the bridge sends on, keeps today's route, and nothing is carved by address. On
-// macOS and Windows it goes on as IPv4's two halves (urTunExitsHalves), and connect's sockets are bound to the
-// interface of the host's own default route instead (tun_darwin.go, tun_windows.go). Where the platform cannot put it
-// on, or the host refuses it, the exits are held: the status says why, the host's other traffic keeps today's route,
-// and the sync tries again. Off exits, or once the tun ends, the route, the rules and the binding go.
+// transport, and with it every link the bridge sends on, keeps today's route; nothing is carved by the platform's
+// addresses. The bridge's own carve, this host's interface, gateway and resolver addresses (§17.4), takes a throw route
+// each in that table, which each sync keeps in step through urTunCarvedInterface, so the host reaches them by today's
+// route too, an off-link resolver among them, rather than through a tun that could only drop them (QD-808). On macOS
+// and Windows it goes on as IPv4's two halves (urTunExitsHalves), and connect's sockets are bound to the interface of
+// the host's own default route instead (tun_darwin.go, tun_windows.go). Where the platform cannot put it on, or the
+// host refuses it, the exits are held: the status says why, the host's other traffic keeps today's route, and the sync
+// tries again. Off exits, or once the tun ends, the route, the rules, the throws and the binding go.
 //
 // A block of the network's that this device routes to another network, one it joined first holding the same block
 // (§17.4; bridge_shared_block.go), is withheld: each sync leaves the addresses, routes and names inside it off the
@@ -238,6 +242,17 @@ type urTunInterface interface {
 type urTunNamedInterface interface {
 	urTunInterface
 	Name() string
+}
+
+// An open tun whose platform passes the bridge's carved addresses back to the host's own route under exits, as Linux's
+// exits table does by a throw route each (tun_linux.go; QD-808), so the host's own traffic to one never meets the tun,
+// which could only drop it. Each sync hands it the carve after SetExits.
+type urTunCarvedInterface interface {
+	urTunInterface
+	// Sets the addresses the bridge carves, those the local read last handed Bridge.SetLocalAddresses: under exits,
+	// each is passed back to the host's own route, those no longer carved are not, and off exits the list waits for the
+	// next SetExits(true). Answers what would not go on or come off, which the next call tries again.
+	SetCarved(addresses []netip.Addr) error
 }
 
 // The platform's half of ur tun.
@@ -746,6 +761,17 @@ func (self *urTun) sync() error {
 		// a default route that did not come off is the sync's to retry, not a hold
 		keep(exitsErr)
 		exitsErr = nil
+	}
+	// the bridge's carve, after SetExits, so a carve that changed since the exits went on follows them; what would not
+	// go on is the sync's to retry, not a hold, since the exits stand and only the host's traffic to that address drops
+	if carvedIface, ok := self.iface.(urTunCarvedInterface); ok {
+		var carvedAddrs []netip.Addr
+		func() {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			carvedAddrs = slices.Clone(self.localAddrs)
+		}()
+		keep(carvedIface.SetCarved(carvedAddrs))
 	}
 	exitsHeldReason := ""
 	if exitsErr != nil {
