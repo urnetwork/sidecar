@@ -1,8 +1,10 @@
 // The program around §22.8's TLA+ models (TEST-M2-08; D-TEST-10, D-PHASE-7, FI-30), the part that needs
 // no TLC: modelled.yml's sources and the digest a gate compares, the rule that decides a gate's rerun,
-// mutants/mutants.yml held to run-tlc.sh's twin tables and each cfg's invariants, and IndexRollup's
-// design grounds held to its spec's reach states and its cfg. model_test.go, under sidecar_tlc, runs TLC
-// itself.
+// mutants/mutants.yml held to run-tlc.sh's twin tables and each cfg's invariants, IndexRollup's design
+// grounds held to its spec's reach states and its cfg, and modelled.yml's details list, the models of
+// DESIGN-DETAILS.md that stand alone under details/, each held to its run script and to real files and
+// rerun at a gate by its own script. It also reads what a run script prints, which model_test.go, under
+// sidecar_tlc, records when it runs TLC itself.
 
 package model
 
@@ -15,9 +17,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -30,8 +34,18 @@ var modelSpecs = []string{"EvsCommit", "StoreSettle", "IndexRollup"}
 // What a gate needs passing at a model's sources before it lets the run stand.
 var modelRequiredModes = []string{"model", "mutants", "live"}
 
+// The modes a model's recorded run may name, as model_test.go records run-tlc.sh's: its twins as mutants.
+var modelRecordedModes = []string{"model", "mutants", "live", "stories"}
+
+// The groups of a details model's run script, each of which a gate needs passing at the model's sources
+// before it lets the runs stand, and which a recorded run names as its mode: the design configurations,
+// which must pass; the twins, each of which must end with the invariant its cfg names violated; and the
+// reach configurations, each of which must reach the state its cfg's last invariant denies.
+var detailsRequiredModes = []string{"design", "twins", "reach"}
+
 type modelledFile struct {
-	Models []*modelledModel `yaml:"models"`
+	Models  []*modelledModel  `yaml:"models"`
+	Details []*modelledDetail `yaml:"details"`
 }
 
 // One model: what it keeps, the code that implements that, and its recorded runs.
@@ -42,6 +56,21 @@ type modelledModel struct {
 	Objects    string   `yaml:"objects"`
 	// models of the same objects under details/, each run by its own script there
 	Companions []string       `yaml:"companions"`
+	Sources    []string       `yaml:"sources"`
+	Exclude    []string       `yaml:"exclude"`
+	Runs       []*modelledRun `yaml:"runs"`
+}
+
+// One model that stands alone under details/: no spec in this directory keeps its objects, so it is no
+// spec's companion, and its own run script is the check a gate runs.
+type modelledDetail struct {
+	// details/<Name>, whose spec is details/<Name>.tla
+	Model string `yaml:"model"`
+	// its script under details/, run as <Run> <track> <group> for each of detailsRequiredModes
+	Run        string         `yaml:"run"`
+	Owners     []string       `yaml:"owners"`
+	Milestones []string       `yaml:"milestones"`
+	Objects    string         `yaml:"objects"`
 	Sources    []string       `yaml:"sources"`
 	Exclude    []string       `yaml:"exclude"`
 	Runs       []*modelledRun `yaml:"runs"`
@@ -140,10 +169,10 @@ type sourcesState struct {
 	empty      []string
 }
 
-func modelSources(root string, model *modelledModel) (*sourcesState, error) {
+func modelSources(root string, sourcePatterns []string, excludePatterns []string) (*sourcesState, error) {
 	state := &sourcesState{}
 	excluded := map[string]bool{}
-	for _, pattern := range model.Exclude {
+	for _, pattern := range excludePatterns {
 		matches, err := filepath.Glob(filepath.Join(root, pattern))
 		if err != nil {
 			return nil, err
@@ -153,7 +182,7 @@ func modelSources(root string, model *modelledModel) (*sourcesState, error) {
 		}
 	}
 	seen := map[string]bool{}
-	for _, pattern := range model.Sources {
+	for _, pattern := range sourcePatterns {
 		repo, _, _ := strings.Cut(pattern, "/")
 		if _, err := os.Stat(filepath.Join(root, repo)); err != nil {
 			state.unreadable = append(state.unreadable, pattern)
@@ -211,39 +240,178 @@ const (
 	tlcFail tlcAction = "fail"
 )
 
-// §22.8's cadence for one model: at a gate, the newest passing runs stand while the sources they ran at
-// are unchanged, and otherwise TLC runs, or the gate fails naming the missing tool; at a merge, TLC
-// runs where it is, and is reported not run where it is not.
-func tlcVerdict(model *modelledModel, mode string, sources *sourcesState, tlcAvailable bool) (tlcAction, string) {
+// §22.8's cadence for one model, named name, whose runs need each of requiredModes: at a gate, the newest
+// passing runs stand while the sources they ran at are unchanged, and otherwise TLC runs, or the gate fails
+// naming the missing tool; at a merge, TLC runs where it is, and is reported not run where it is not.
+// missingTool says why TLC cannot run here, and is empty where it can.
+func tlcVerdict(name string, runs []*modelledRun, requiredModes []string, mode string, sources *sourcesState, missingTool string) (tlcAction, string) {
 	if mode == "gate" {
 		if 0 < len(sources.unreadable) {
-			return tlcFail, fmt.Sprintf("%s's sources %v are not beside this checkout, so whether they changed is unknown", model.Spec, sources.unreadable)
+			return tlcFail, fmt.Sprintf("%s's sources %v are not beside this checkout, so whether they changed is unknown", name, sources.unreadable)
 		}
-		standing := []string{}
-		for _, required := range modelRequiredModes {
-			for _, run := range model.Runs {
-				if run.Mode == required && run.Result == "pass" && run.SourcesSha256 == sources.digest {
-					standing = append(standing, required)
-					break
-				}
+		standing := 0
+		for _, required := range requiredModes {
+			if standingRun(runs, required, sources.digest) != nil {
+				standing += 1
 			}
 		}
-		if len(standing) == len(modelRequiredModes) {
-			return tlcUnchanged, fmt.Sprintf("%s's sources are unchanged since its passing runs, which stand", model.Spec)
+		if standing == len(requiredModes) {
+			return tlcUnchanged, fmt.Sprintf("%s's sources are unchanged since its passing runs, which stand", name)
 		}
-		if !tlcAvailable {
-			return tlcFail, fmt.Sprintf("%s's sources changed since its last passing runs, or none is recorded, and TLC has not run: no tla2tools.jar (set TLC to a command that runs tlc2.TLC)", model.Spec)
+		if missingTool != "" {
+			return tlcFail, fmt.Sprintf("%s's sources changed since its last passing runs, or none is recorded, and TLC has not run: %s", name, missingTool)
 		}
-		return tlcRun, fmt.Sprintf("%s's sources changed since its last passing runs, or none is recorded", model.Spec)
+		return tlcRun, fmt.Sprintf("%s's sources changed since its last passing runs, or none is recorded", name)
 	}
-	if !tlcAvailable {
-		return tlcNotRun, fmt.Sprintf("%s: TLC has not run: no tla2tools.jar (set TLC to a command that runs tlc2.TLC)", model.Spec)
+	if missingTool != "" {
+		return tlcNotRun, fmt.Sprintf("%s: TLC has not run: %s", name, missingTool)
 	}
-	return tlcRun, model.Spec + "'s mutants run at each merge"
+	return tlcRun, name + "'s mutants run at each merge"
+}
+
+// The passing run of mode recorded at the sources' digest, or nil: a run at other sources, or one that
+// failed, never stands.
+func standingRun(runs []*modelledRun, mode string, digest string) *modelledRun {
+	for _, run := range runs {
+		if run.Mode == mode && run.Result == "pass" && digest != "" && run.SourcesSha256 == digest {
+			return run
+		}
+	}
+	return nil
+}
+
+// Why the owner's TLC a details run script runs cannot run here, or empty where it can. Every script under
+// details/ runs "$ROOT/.stack/tools/tlc" with its own ROOT, the monoroot, and that wrapper refuses to run
+// without the owner's tla2tools.jar beside it (plan-EVS1-tlc-tool), so the jar and the wrapper are what a
+// gate looks for before it lets a script run.
+func detailsTlcMissing(script string) string {
+	data, err := os.ReadFile(script)
+	if err != nil {
+		return fmt.Sprintf("no tla2tools.jar found: %v", err)
+	}
+	match := detailsScriptRootPattern.FindSubmatch(data)
+	if match == nil || !bytes.Contains(data, []byte(`"$ROOT/.stack/tools/tlc"`)) {
+		return fmt.Sprintf("no tla2tools.jar found: %s runs no owner's TLC under a ROOT of its own", script)
+	}
+	tools := filepath.Join(string(match[1]), ".stack", "tools")
+	jar := filepath.Join(tools, "tla2tools.jar")
+	if _, err := os.Stat(jar); err != nil {
+		return fmt.Sprintf("no tla2tools.jar at %s, whose TLC %s runs", jar, script)
+	}
+	wrapper := filepath.Join(tools, "tlc")
+	if info, err := os.Stat(wrapper); err != nil || info.Mode()&0o111 == 0 {
+		return fmt.Sprintf("no TLC at %s to run tla2tools.jar, which %s runs", wrapper, script)
+	}
+	return ""
+}
+
+// A details run script's ROOT, the monoroot whose .stack/tools holds the owner's TLC.
+var detailsScriptRootPattern = regexp.MustCompile(`(?m)^[ \t]*ROOT="?([^"\s]+)"?[ \t]*$`)
+
+// TLC's banner names its revision, which a report must name with any result; a details run script's verdict
+// line names it in its facts, as "tlc <rev>, exit <code>".
+var tlcRevisionPattern = regexp.MustCompile(`\(rev: ([0-9a-f]+)\)`)
+
+var detailsRevisionPattern = regexp.MustCompile(`\btlc ([0-9a-f]+), exit\b`)
+
+// A run script's verdict line: "== PASS twin-X: ..." or "== FAIL model: ...".
+var tlcVerdictPattern = regexp.MustCompile(`^== (PASS|FAIL) ([^:]+): (.*)$`)
+
+var tlcStatesPattern = regexp.MustCompile(`([0-9,]+) (?:distinct states|states generated)`)
+
+var tlcDepthPattern = regexp.MustCompile(`depth ([0-9]+)`)
+
+// What a run script printed, over its runs: TLC's revision, each verdict line by how it ended, as
+// "<configuration>: <facts>", the states the lines report summed and the deepest search.
+type tlcSummary struct {
+	revision string
+	passes   []string
+	failures []string
+	states   int64
+	depth    int64
+}
+
+// Reads run-tlc.sh's output and a details run script's alike: a verdict line each run, TLC's revision in its
+// banner or in a verdict's facts.
+func summarizeTlc(output []byte) *tlcSummary {
+	summary := &tlcSummary{}
+	if match := tlcRevisionPattern.FindSubmatch(output); match != nil {
+		summary.revision = string(match[1])
+	} else if match := detailsRevisionPattern.FindSubmatch(output); match != nil {
+		summary.revision = string(match[1])
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		match := tlcVerdictPattern.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		if stateMatch := tlcStatesPattern.FindStringSubmatch(match[3]); stateMatch != nil {
+			count, _ := strconv.ParseInt(strings.ReplaceAll(stateMatch[1], ",", ""), 10, 64)
+			summary.states += count
+		}
+		if depthMatch := tlcDepthPattern.FindStringSubmatch(match[3]); depthMatch != nil {
+			if value, _ := strconv.ParseInt(depthMatch[1], 10, 64); summary.depth < value {
+				summary.depth = value
+			}
+		}
+		verdict := match[2] + ": " + match[3]
+		if match[1] == "PASS" {
+			summary.passes = append(summary.passes, verdict)
+		} else {
+			summary.failures = append(summary.failures, verdict)
+		}
+	}
+	return summary
+}
+
+// The line that records a passing run under a model's runs in modelled.yml.
+func runRecordLine(run *modelledRun) string {
+	return fmt.Sprintf("      - {at: %s, commit: %s, tlc: %s, mode: %s, result: %s, sources_sha256: %s, states: %d, depth: %d, seconds: %d}",
+		run.At, run.Commit, run.Tlc, run.Mode, run.Result, run.SourcesSha256, run.States, run.Depth, run.Seconds)
+}
+
+var runAtPattern = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
+
+var runCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+var runTlcPattern = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
+var runDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// What is wrong with a model's recorded runs: a run of a mode the model has no runs of, a result other than
+// pass or fail, or a date, commit, TLC revision or digest out of form. Such a run never stands at a gate,
+// and reads as though it did.
+func runFindings(name string, runs []*modelledRun, modes []string) []string {
+	findings := []string{}
+	for index, run := range runs {
+		which := fmt.Sprintf("%s's run %d", name, 1+index)
+		if !slices.Contains(modes, run.Mode) {
+			findings = append(findings, fmt.Sprintf("%s has mode %q, which is none of %v", which, run.Mode, modes))
+		}
+		if run.Result != "pass" && run.Result != "fail" {
+			findings = append(findings, fmt.Sprintf("%s has result %q, which is neither pass nor fail", which, run.Result))
+		}
+		for _, field := range []struct {
+			name    string
+			value   string
+			pattern *regexp.Regexp
+		}{
+			{name: "at", value: run.At, pattern: runAtPattern},
+			{name: "commit", value: run.Commit, pattern: runCommitPattern},
+			{name: "tlc", value: run.Tlc, pattern: runTlcPattern},
+			{name: "sources_sha256", value: run.SourcesSha256, pattern: runDigestPattern},
+		} {
+			if !field.pattern.MatchString(field.value) {
+				findings = append(findings, fmt.Sprintf("%s has %s %q, which is out of form", which, field.name, field.value))
+			}
+		}
+	}
+	return findings
 }
 
 // modelled.yml names each spec once, with owners and milestones, and its globs match real files: every
-// spec, cfg and run-tlc.sh, and code for each model.
+// spec, cfg and run-tlc.sh, each companion's spec, cfgs and own run script, and code for each model. Each
+// recorded run is in a form a gate can read.
 func TestModelledNamesEachModelsSources(t *testing.T) {
 	modelled := readModelled(t)
 	root := monoroot(t)
@@ -272,14 +440,23 @@ func TestModelledNamesEachModelsSources(t *testing.T) {
 					t.Errorf("%s's sources leave out its companion's %s, whose change needs a rerun too", model.Spec, pattern)
 				}
 			}
+			// its own script: a run script under details/ among the sources that runs the companion's spec
 			companionScript := slices.ContainsFunc(model.Sources, func(source string) bool {
-				return strings.HasPrefix(source, "sidecar/sidecartest/model/details/run-") && strings.HasSuffix(source, ".sh")
+				script, found := strings.CutPrefix(source, "sidecar/sidecartest/model/")
+				if !found || !strings.HasPrefix(script, "details/run-") || !strings.HasSuffix(script, ".sh") {
+					return false
+				}
+				data, err := os.ReadFile(script)
+				return err == nil && bytes.Contains(data, []byte(path.Base(companion)+".tla"))
 			})
 			if !companionScript {
-				t.Errorf("%s's sources name no run script for its companion %s", model.Spec, companion)
+				t.Errorf("%s's sources name no run script that runs its companion %s", model.Spec, companion)
 			}
 		}
-		sources, err := modelSources(root, model)
+		for _, finding := range runFindings(model.Spec, model.Runs, modelRecordedModes) {
+			t.Error(finding)
+		}
+		sources, err := modelSources(root, model.Sources, model.Exclude)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -324,7 +501,8 @@ func TestChangedModelledFileForcesARerunAtAGate(t *testing.T) {
 		}
 	}
 	model := &modelledModel{Spec: "Toy", Sources: []string{"sidecar/sidecartest/model/Toy.tla", "sidecar/toy_*.go"}}
-	before, err := modelSources(root, model)
+	noTlc := "no tla2tools.jar (set TLC to a command that runs tlc2.TLC)"
+	before, err := modelSources(root, model.Sources, model.Exclude)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +512,7 @@ func TestChangedModelledFileForcesARerunAtAGate(t *testing.T) {
 	for _, mode := range modelRequiredModes {
 		model.Runs = append(model.Runs, &modelledRun{Mode: mode, Result: "pass", SourcesSha256: before.digest})
 	}
-	if action, _ := tlcVerdict(model, "gate", before, false); action != tlcUnchanged {
+	if action, _ := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, "gate", before, noTlc); action != tlcUnchanged {
 		t.Errorf("unchanged sources at a gate: %s", action)
 	}
 
@@ -342,26 +520,26 @@ func TestChangedModelledFileForcesARerunAtAGate(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "sidecar/toy_head_test.go"), []byte("package sidecar\n\n// edited\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if again, _ := modelSources(root, model); again.digest != before.digest {
+	if again, _ := modelSources(root, model.Sources, model.Exclude); again.digest != before.digest {
 		t.Error("a test file's edit changed the digest")
 	}
 	if err := os.WriteFile(filepath.Join(root, "sidecar/toy_head.go"), []byte("package sidecar\n\nconst toyFold = 64\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	after, err := modelSources(root, model)
+	after, err := modelSources(root, model.Sources, model.Exclude)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if after.digest == before.digest {
 		t.Fatal("a source's edit left the digest")
 	}
-	if action, reason := tlcVerdict(model, "gate", after, false); action != tlcFail || !strings.Contains(reason, "no tla2tools.jar") {
+	if action, reason := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, "gate", after, noTlc); action != tlcFail || !strings.Contains(reason, "no tla2tools.jar") {
 		t.Errorf("changed sources at a gate with no TLC: %s, %s", action, reason)
 	}
-	if action, _ := tlcVerdict(model, "gate", after, true); action != tlcRun {
+	if action, _ := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, "gate", after, ""); action != tlcRun {
 		t.Errorf("changed sources at a gate with TLC: %s", action)
 	}
-	if action, reason := tlcVerdict(model, "merge", after, false); action != tlcNotRun || !strings.Contains(reason, "has not run") {
+	if action, reason := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, "merge", after, noTlc); action != tlcNotRun || !strings.Contains(reason, "has not run") {
 		t.Errorf("a merge with no TLC: %s, %s", action, reason)
 	}
 
@@ -371,18 +549,294 @@ func TestChangedModelledFileForcesARerunAtAGate(t *testing.T) {
 		{Mode: "mutants", Result: "fail", SourcesSha256: after.digest},
 		{Mode: "live", Result: "pass", SourcesSha256: after.digest},
 	}
-	if action, _ := tlcVerdict(model, "gate", after, false); action != tlcFail {
+	if action, _ := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, "gate", after, noTlc); action != tlcFail {
 		t.Errorf("a failed mutants run stood at a gate: %s", action)
 	}
 
 	// a sibling the sources name and this machine lacks leaves the gate unable to decide
 	model.Sources = append(model.Sources, "minio/cmd/settle-*.go")
-	missing, err := modelSources(root, model)
+	missing, err := modelSources(root, model.Sources, model.Exclude)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if action, reason := tlcVerdict(model, "gate", missing, true); action != tlcFail || !strings.Contains(reason, "not beside") {
+	if action, reason := tlcVerdict(model.Spec, model.Runs, modelRequiredModes, "gate", missing, ""); action != tlcFail || !strings.Contains(reason, "not beside") {
 		t.Errorf("a missing sibling at a gate: %s, %s", action, reason)
+	}
+}
+
+// The details form's half of TEST-M2-08's cadence: a details model's groups stand, each by its own passing
+// run, while its sources are unchanged; a changed source reruns each group at a gate, and with no
+// tla2tools.jar the gate fails and says the model has not run, never a pass; a merge runs none. A group
+// whose passing run stands is not rerun beside one that must be.
+func TestChangedDetailsSourceRerunsItsGroupsAtAGate(t *testing.T) {
+	root := t.TempDir()
+	// the monoroot the toy script names as its ROOT, whose .stack/tools holds the owner's TLC or not
+	scriptRoot := filepath.Join(t.TempDir(), "monoroot")
+	stackTools := filepath.Join(scriptRoot, ".stack", "tools")
+	script := filepath.Join(root, "sidecar/sidecartest/model/details/run-toy.sh")
+	for name, content := range map[string]string{
+		"sidecar/sidecartest/model/details/Toy.tla":        "---- MODULE Toy ----\n====\n",
+		"sidecar/sidecartest/model/details/ToyTwin-No.cfg": "INVARIANT\n    Held\n",
+		"sidecar/sidecartest/model/details/run-toy.sh":     "#!/usr/bin/env bash\nROOT=" + scriptRoot + "\n(cd here && \"$ROOT/.stack/tools/tlc\" \"$track\" Toy.tla)\n",
+		"sidecar/toy_head.go":                              "package sidecar\n",
+	} {
+		file := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	detail := &modelledDetail{
+		Model: "details/Toy",
+		Run:   "details/run-toy.sh",
+		Sources: []string{
+			"sidecar/sidecartest/model/details/Toy.tla",
+			"sidecar/sidecartest/model/details/Toy*.cfg",
+			"sidecar/sidecartest/model/details/run-toy.sh",
+			"sidecar/toy_*.go",
+		},
+	}
+	before, err := modelSources(root, detail.Sources, detail.Exclude)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the script's TLC: no jar beside the wrapper is no TLC, and the reason says so
+	missing := detailsTlcMissing(script)
+	if !strings.Contains(missing, "no tla2tools.jar") {
+		t.Fatalf("no jar beside the script's TLC: %q", missing)
+	}
+	if err := os.MkdirAll(stackTools, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stackTools, "tla2tools.jar"), []byte("jar"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if reason := detailsTlcMissing(script); !strings.Contains(reason, "no TLC at") {
+		t.Errorf("a jar with no wrapper to run it: %q", reason)
+	}
+	if err := os.WriteFile(filepath.Join(stackTools, "tlc"), []byte("#!/usr/bin/env bash\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if reason := detailsTlcMissing(script); reason != "" {
+		t.Errorf("the jar and its wrapper are there: %q", reason)
+	}
+	if reason := detailsTlcMissing(filepath.Join(root, "sidecar/toy_head.go")); !strings.Contains(reason, "no owner's TLC") {
+		t.Errorf("a file that runs no TLC: %q", reason)
+	}
+
+	// every group passing at these sources stands, with no TLC here
+	for _, group := range detailsRequiredModes {
+		detail.Runs = append(detail.Runs, &modelledRun{Mode: group, Result: "pass", SourcesSha256: before.digest})
+	}
+	if action, reason := tlcVerdict(detail.Model, detail.Runs, detailsRequiredModes, "gate", before, missing); action != tlcUnchanged {
+		t.Errorf("unchanged sources at a gate: %s, %s", action, reason)
+	}
+
+	// a cfg added to the model is a source like the spec
+	if err := os.WriteFile(filepath.Join(root, "sidecar/sidecartest/model/details/ToyReach-Seen.cfg"), []byte("INVARIANT\n    NeverSeen\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := modelSources(root, detail.Sources, detail.Exclude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.digest == before.digest {
+		t.Fatal("a new cfg of the model left the digest")
+	}
+	if action, reason := tlcVerdict(detail.Model, detail.Runs, detailsRequiredModes, "gate", after, missing); action != tlcFail || !strings.Contains(reason, "has not run") || !strings.Contains(reason, "no tla2tools.jar") {
+		t.Errorf("changed sources at a gate with no jar: %s, %s", action, reason)
+	}
+	if action, _ := tlcVerdict(detail.Model, detail.Runs, detailsRequiredModes, "gate", after, ""); action != tlcRun {
+		t.Errorf("changed sources at a gate with the jar: %s", action)
+	}
+	if action, reason := tlcVerdict(detail.Model, detail.Runs, detailsRequiredModes, "merge", after, missing); action != tlcNotRun || !strings.Contains(reason, "has not run") {
+		t.Errorf("a merge with no jar: %s, %s", action, reason)
+	}
+
+	// design and twins passed at the new sources and reach failed: reach alone reruns
+	detail.Runs = append(detail.Runs,
+		&modelledRun{Mode: "design", Result: "pass", SourcesSha256: after.digest},
+		&modelledRun{Mode: "twins", Result: "pass", SourcesSha256: after.digest},
+		&modelledRun{Mode: "reach", Result: "fail", SourcesSha256: after.digest},
+	)
+	if action, _ := tlcVerdict(detail.Model, detail.Runs, detailsRequiredModes, "gate", after, ""); action != tlcRun {
+		t.Errorf("a failed reach run stood at a gate: %s", action)
+	}
+	rerun := []string{}
+	for _, group := range detailsRequiredModes {
+		if standingRun(detail.Runs, group, after.digest) == nil {
+			rerun = append(rerun, group)
+		}
+	}
+	if !slices.Equal(rerun, []string{"reach"}) {
+		t.Errorf("groups rerun %v, want only reach", rerun)
+	}
+}
+
+// Both kinds of run script print what a record needs, and a failing verdict is never read as a pass:
+// run-tlc.sh's lines after TLC's banner, and a details script's lines, each naming the revision in its facts.
+func TestRunScriptOutputIsSummarized(t *testing.T) {
+	details := strings.Join([]string{
+		"== PASS PrefixRules: every invariant holds, tlc d8fb231, exit 0, 37,275 distinct states, depth 5, 23s",
+		"== PASS PrefixRules-Deep: every invariant holds, tlc d8fb231, exit 0, 300,450 distinct states, depth 6, 01min 18s",
+		"== PASS PrefixRulesTwin-NoNewRefFence: NewRefFence violated as it must, a trace of 3 states, tlc d8fb231, exit 12, 19 distinct states, depth ?, 01s",
+		"Error: Invariant NewRefFence is violated.",
+		"",
+	}, "\n")
+	summary := summarizeTlc([]byte(details))
+	if summary.revision != "d8fb231" || len(summary.passes) != 3 || len(summary.failures) != 0 {
+		t.Errorf("details lines: revision %q, %d passes, %d failures", summary.revision, len(summary.passes), len(summary.failures))
+	}
+	if summary.states != 37275+300450+19 || summary.depth != 6 {
+		t.Errorf("details lines: %d states, depth %d", summary.states, summary.depth)
+	}
+
+	spec := strings.Join([]string{
+		"TLC2 Version 2.19 of Day Month 20?? (rev: d8fb231)",
+		"== PASS model: 697,346 distinct states found, depth 21",
+		"== FAIL twin-NoSettle: expected NoStaleQuorum violated, got 12 states generated",
+		"",
+	}, "\n")
+	summary = summarizeTlc([]byte(spec))
+	if summary.revision != "d8fb231" || len(summary.passes) != 1 || len(summary.failures) != 1 {
+		t.Errorf("run-tlc.sh lines: revision %q, %d passes, %d failures", summary.revision, len(summary.passes), len(summary.failures))
+	}
+	if len(summary.failures) == 1 && !strings.HasPrefix(summary.failures[0], "twin-NoSettle: expected NoStaleQuorum") {
+		t.Errorf("the failing verdict reads %q", summary.failures[0])
+	}
+
+	// a run whose TLC never started names no revision, so no record can be made of it
+	summary = summarizeTlc([]byte("== FAIL CertOrder: error, tlc , exit 65, ? distinct states, depth ?, ?, 0 MB on disk at most\n"))
+	if summary.revision != "" || len(summary.failures) != 1 {
+		t.Errorf("a run with no TLC: revision %q, %d failures", summary.revision, len(summary.failures))
+	}
+
+	line := runRecordLine(&modelledRun{At: "2026-11-13", Commit: strings.Repeat("ab", 20), Tlc: "d8fb231", Mode: "twins", Result: "pass", SourcesSha256: strings.Repeat("0f", 32), States: 19, Depth: 0, Seconds: 1})
+	record := &modelledRun{}
+	if err := decodeStrict([]byte(strings.TrimPrefix(strings.TrimSpace(line), "- ")), record); err != nil {
+		t.Fatalf("the record line %q does not read back: %v", line, err)
+	}
+	if findings := runFindings("details/Toy", []*modelledRun{record}, detailsRequiredModes); len(findings) != 0 {
+		t.Errorf("the record line reads back out of form: %v", findings)
+	}
+}
+
+// The runs rule refuses a run no gate could match, and passes a whole one.
+func TestRunsRuleCatchesARunOutOfForm(t *testing.T) {
+	whole := &modelledRun{At: "2026-11-13", Commit: strings.Repeat("1a", 20), Tlc: "d8fb231", Mode: "design", Result: "pass", SourcesSha256: strings.Repeat("c3", 32)}
+	if findings := runFindings("details/Toy", []*modelledRun{whole}, detailsRequiredModes); len(findings) != 0 {
+		t.Errorf("a whole run drew findings: %v", findings)
+	}
+	bad := &modelledRun{At: "13 Nov", Commit: "1a2b", Tlc: "", Mode: "mutants", Result: "passed", SourcesSha256: strings.Repeat("c3", 31)}
+	findings := runFindings("details/Toy", []*modelledRun{whole, bad}, detailsRequiredModes)
+	wants := []string{
+		"details/Toy's run 2 has mode \"mutants\", which is none of [design twins reach]",
+		"details/Toy's run 2 has result \"passed\", which is neither pass nor fail",
+		"details/Toy's run 2 has at \"13 Nov\", which is out of form",
+		"details/Toy's run 2 has commit \"1a2b\", which is out of form",
+		"details/Toy's run 2 has tlc \"\", which is out of form",
+		"details/Toy's run 2 has sources_sha256 \"" + strings.Repeat("c3", 31) + "\", which is out of form",
+	}
+	if !slices.Equal(findings, wants) {
+		t.Errorf("findings:\n%s\nwant:\n%s", strings.Join(findings, "\n"), strings.Join(wants, "\n"))
+	}
+}
+
+// modelled.yml's details list names each model that stands alone under details/ once, with owners,
+// milestones and objects, and holds it to real files: its spec, a run script under details/ that runs that
+// spec and takes each group a gate runs, the spec, its cfgs and the script among its sources, and every
+// source glob matching a file. A model under details/ that no list holds is reported open, as is a
+// registered model whose code has not landed.
+func TestModelledDetailsHoldTheirGlobsToRealFiles(t *testing.T) {
+	modelled := readModelled(t)
+	root := monoroot(t)
+	companions := map[string]bool{}
+	for _, model := range modelled.Models {
+		for _, companion := range model.Companions {
+			companions[companion] = true
+		}
+	}
+	named := map[string]bool{}
+	for _, detail := range modelled.Details {
+		name, found := strings.CutPrefix(detail.Model, "details/")
+		if !found || name == "" || strings.ContainsAny(name, "/*?[") {
+			t.Errorf("%q is not a model under details/", detail.Model)
+			continue
+		}
+		if named[detail.Model] {
+			t.Errorf("modelled.yml's details list names %s twice", detail.Model)
+		}
+		named[detail.Model] = true
+		if companions[detail.Model] {
+			t.Errorf("%s is a spec's companion, which reruns with that spec; the details list holds models that stand alone", detail.Model)
+		}
+		if len(detail.Owners) == 0 || len(detail.Milestones) == 0 || detail.Objects == "" {
+			t.Errorf("%s: no owners, milestones or objects", detail.Model)
+		}
+		spec := detail.Model + ".tla"
+		if _, err := os.Stat(spec); err != nil {
+			t.Errorf("%s has no spec: %v", detail.Model, err)
+		}
+		if !strings.HasPrefix(detail.Run, "details/run-") || !strings.HasSuffix(detail.Run, ".sh") || path.Clean(detail.Run) != detail.Run || strings.Count(detail.Run, "/") != 1 {
+			t.Errorf("%s's run %q is no run script under details/", detail.Model, detail.Run)
+		} else if script, err := os.ReadFile(detail.Run); err != nil {
+			t.Errorf("%s's run script: %v", detail.Model, err)
+		} else {
+			if !bytes.Contains(script, []byte(name+".tla")) {
+				t.Errorf("%s's run script %s never names %s.tla, so it does not run the model", detail.Model, detail.Run, name)
+			}
+			// the groups the script's case arms take
+			groups := []string{}
+			for _, group := range detailsRequiredModes {
+				if regexp.MustCompile(`(?m)^\s*` + group + `\)`).Match(script) {
+					groups = append(groups, group)
+				}
+			}
+			if !slices.Equal(groups, detailsRequiredModes) {
+				t.Errorf("%s's run script %s takes the groups %v, and a gate runs %v", detail.Model, detail.Run, groups, detailsRequiredModes)
+			}
+		}
+		for _, pattern := range []string{spec, detail.Model + "*.cfg", detail.Run} {
+			if !slices.Contains(detail.Sources, "sidecar/sidecartest/model/"+pattern) {
+				t.Errorf("%s's sources leave out %s, whose change needs a rerun too", detail.Model, pattern)
+			}
+		}
+		for _, finding := range runFindings(detail.Model, detail.Runs, detailsRequiredModes) {
+			t.Error(finding)
+		}
+		sources, err := modelSources(root, detail.Sources, detail.Exclude)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if 0 < len(sources.unreadable) {
+			t.Logf("%s: %v not beside this checkout", detail.Model, sources.unreadable)
+		}
+		for _, pattern := range sources.empty {
+			t.Errorf("%s's source %s matches no file", detail.Model, pattern)
+		}
+		code := 0
+		for _, file := range sources.files {
+			if strings.HasSuffix(file, ".go") {
+				code += 1
+			}
+		}
+		if code == 0 && len(sources.unreadable) == 0 {
+			t.Logf("open: %s's sources hold no code yet, which its owners %v add as it lands", detail.Model, detail.Owners)
+		}
+		t.Logf("%s: %d source files, digest %s, %d runs recorded", detail.Model, len(sources.files), sources.digest, len(detail.Runs))
+	}
+	specs, err := filepath.Glob(filepath.Join("details", "*.tla"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range specs {
+		model := strings.TrimSuffix(filepath.ToSlash(spec), ".tla")
+		if !named[model] && !companions[model] {
+			t.Logf("open: %s is in neither list of modelled.yml, so no gate reruns it", model)
+		}
 	}
 }
 
