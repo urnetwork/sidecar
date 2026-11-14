@@ -39,6 +39,17 @@ barrier bridge_file.egress.after bridge_file.go
 barrier bridge_file.egress.before bridge_file.go
 barrier bridge_file.rule.after bridge_file.go
 barrier bridge_file.rule.before bridge_file.go
+barrier bridge_forward.compile.hand bridge_forward_compile.go
+barrier bridge_forward.compile.head bridge_forward_compile.go
+barrier bridge_forward.compile.judge bridge_forward_compile.go
+barrier bridge_forward.compile.record bridge_forward_compile.go
+barrier bridge_forward.compile.state bridge_forward_compile.go
+barrier bridge_forward.deltas.before bridge_forward_follow.go
+barrier bridge_forward.follow.read bridge_forward_follow.go
+barrier bridge_forward.follow.store bridge_forward_follow.go
+barrier bridge_forward.fork.before bridge_forward_follow.go
+barrier bridge_forward.generation.store bridge_forward_keys.go
+barrier bridge_forward.pending.before bridge_forward.go
 barrier bridge_forward.sign bridge_forward_sign.go
 barrier bridge_forward_setup.step.after bridge_forward_setup.go
 barrier bridge_forward_setup.step.before bridge_forward_setup.go

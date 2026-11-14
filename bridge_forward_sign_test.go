@@ -222,3 +222,56 @@ func TestForwardingSignerNeedsItsKeyAndItsState(t *testing.T) {
 		t.Fatal("no args built a signer")
 	}
 }
+
+// A Forwarder's signer signs by its last compile: its sidecar's link to a sidecar the state in force links, and
+// nothing for another subject, for a sidecar the state does not link, or while the sink is forked.
+func TestTheForwardersSignerSignsByItsLastCompile(t *testing.T) {
+	world := newTestForwarderWorld(t)
+	world.rotate(world.recipient())
+	world.bind(world.peer)
+	forwarder := world.forwarder()
+	signer, err := forwarder.NewSigner(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func() *ForwardingSignRequest {
+		return &ForwardingSignRequest{
+			NetworkId: world.net.networkId, SubjectSidecarId: world.host.sidecarId, WindowClientId: Id{1, 2, 3},
+			WindowClientPublicKey: bytes.Repeat([]byte{9}, ed25519.PublicKeySize), TargetSidecarId: world.peer.sidecarId,
+			NotAfter: world.clock.Now().Add(time.Hour),
+		}
+	}
+	if signed, err := signer.SignWindowDelegation(request()); err != nil || len(signed) == 0 {
+		t.Fatalf("the link the state holds: %v", err)
+	}
+	anotherSubject := request()
+	anotherSubject.SubjectSidecarId = world.peer.sidecarId
+	if _, err := signer.SignWindowDelegation(anotherSubject); !errors.Is(err, ErrForwardingDelegationRefused) {
+		t.Errorf("another subject: %v", err)
+	}
+	unlinked := request()
+	unlinked.TargetSidecarId = world.net.owner.sidecarId
+	if _, err := signer.SignWindowDelegation(unlinked); !errors.Is(err, ErrForwardingDelegationRefused) {
+		t.Errorf("a sidecar the state does not link: %v", err)
+	}
+	if err := forwarder.Witness(world.net.log.State().Pin(), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := signer.SignWindowDelegation(request()); !errors.Is(err, ErrForwardingDelegationRefused) {
+		t.Errorf("while forked: %v", err)
+	}
+	if err := forwarder.Witness(world.net.log.State().Pin(), false); err != nil {
+		t.Fatal(err)
+	}
+	world.settle(forwarder)
+	if _, err := signer.SignWindowDelegation(request()); err != nil {
+		t.Errorf("after the fork cleared: %v", err)
+	}
+
+	world.keys.stateLock.Lock()
+	world.keys.key = nil
+	world.keys.stateLock.Unlock()
+	if _, err := forwarder.NewSigner(nil); !errors.Is(err, ErrForwardingDelegationRefused) {
+		t.Errorf("a signer with no current key set: %v", err)
+	}
+}
