@@ -54,6 +54,13 @@ type EvsFormatSettings struct {
 	// The listed values a builder puts in a part that holds no change: 32,000, 1,024,000 B (DESIGN-DETAILS 10.2.5). A
 	// checker takes a slice cut anywhere.
 	DropListPartValueCount int
+	// §11.9's streams row: the owned streams one POST .../read {refs} names, 64, and the most its framed reply holds,
+	// 4 MiB, past which a stream answers more with its next version (EVS1-M6-01).
+	ReadStreamMaxRefCount  int
+	ReadStreamMaxByteCount int64
+	// The overlays a git-mode ref's base chain holds at most: 16, past which a chain is refused (evsservice's
+	// overlay chains; DESIGN-DETAILS 8.2.4).
+	OverlayMaxDepth int
 	// One read reply frame, as encoded: 1 MiB + 64 KiB, an object's 1 MiB slice (EvsReadObject spans frames past it)
 	// with room for its fields, a path with its proofs, or a statement (plan-EVS1-format-bytes#8). evs writes none
 	// past it and a reader refuses one, so evs cannot make a reader buffer more.
@@ -86,6 +93,9 @@ func DefaultEvsFormatSettings() *EvsFormatSettings {
 		DropMaxBodyByteCount:        256 * 1024,
 		DropWindow:                  7 * 24 * time.Hour,
 		DropListPartValueCount:      32000,
+		ReadStreamMaxRefCount:       64,
+		ReadStreamMaxByteCount:      4 * 1024 * 1024,
+		OverlayMaxDepth:             16,
 		ReadFrameMaxByteCount:       1024*1024 + 64*1024,
 		ReadPathDeltaMaxCount:       255,
 		ReseedStatementMaxByteCount: 4 * 1024,

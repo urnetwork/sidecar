@@ -216,6 +216,14 @@ type EvsSettings struct {
 	LogReplyStatementCount int
 	// GET .../refs: the keys one LIST of head/<repo>/ returns, 1,000. Positive.
 	RefsListPageCount int
+	// §11.9's streams row (EVS1-M6-01): the owned streams one POST .../read {refs} names, and the most its reply's
+	// frames hold, past which a stream answers more; a request serves at least one version whatever its size. The
+	// format's values (sidecar.EvsFormatSettings), which the client reads too. Positive.
+	ReadStreamRefMaxCount  int
+	ReadStreamMaxByteCount int64
+	// What the streams read's budget counts a slot object as before reading it: 512 B, a handful of 72 B wrapped
+	// keys. Non-negative.
+	ReadStreamSlotEstimateByteCount int64
 
 	// §11.10's lease row (EVS1-M2-15): the token prefixes one lease request names, 16, the protocol's value, which
 	// the client's Subscribe holds its paths to as well (evs_subscribe.go). Positive.
@@ -351,16 +359,19 @@ func DefaultEvsSettings() *EvsSettings {
 		GenerationCacheCount:        100 * 1000,
 		LeaseMaxDuration:            evsLeaseMaxDuration,
 
-		ReadPathMaxCount:          64,
-		ReadRangeMaxCount:         64,
-		ReadRangeMaxByteCount:     32 * 1024 * 1024,
-		ReadObjectMaxCount:        64,
-		ReadFrameByteCount:        1024 * 1024,
-		ReadSegmentWholeByteCount: 256 * 1024,
-		ReadSegmentRangeAlign:     64 * 1024,
-		ReadHeadRetryCount:        2,
-		LogReplyStatementCount:    evsLogReplyMaxStatementCount,
-		RefsListPageCount:         1000,
+		ReadPathMaxCount:                64,
+		ReadRangeMaxCount:               64,
+		ReadRangeMaxByteCount:           32 * 1024 * 1024,
+		ReadObjectMaxCount:              64,
+		ReadFrameByteCount:              1024 * 1024,
+		ReadSegmentWholeByteCount:       256 * 1024,
+		ReadSegmentRangeAlign:           64 * 1024,
+		ReadHeadRetryCount:              2,
+		LogReplyStatementCount:          evsLogReplyMaxStatementCount,
+		RefsListPageCount:               1000,
+		ReadStreamRefMaxCount:           sidecar.DefaultEvsFormatSettings().ReadStreamMaxRefCount,
+		ReadStreamMaxByteCount:          sidecar.DefaultEvsFormatSettings().ReadStreamMaxByteCount,
+		ReadStreamSlotEstimateByteCount: 512,
 
 		LeaseMaxPrefixCount:             16,
 		LeaseLife:                       7 * 24 * time.Hour,

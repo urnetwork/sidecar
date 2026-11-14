@@ -341,6 +341,33 @@ var metadataListAdditions = []metadataListAddition{
 			"  owner: §14.9\n" +
 			"mx-1:\n",
 	},
+	{
+		// QD-764's list version, after v19's
+		question: "acl-m2-17-no-via-route-advertisers",
+		block:    "# metadata_list.yml v19;",
+		list:     "# metadata_list.yml v20;",
+	},
+	{
+		// QD-764: v20's line, after v19's
+		question: "acl-m2-17-no-via-route-advertisers",
+		block:    "# path on ur.io sees of a mail prover host's fetch of the key set its release pins (DESIGN-DETAILS 3.8).\n",
+		list: "# path on ur.io sees of a mail prover host's fetch of the key set its release pins (DESIGN-DETAILS 3.8).\n" +
+			"# v20, updated 2026-11-14 for the owner's answer QD-764 (acl-m2-17-no-via-route-advertisers), adds to api-7's rows\n" +
+			"# each rule's via subjects apart from its targets, and BridgeRows' approved routes by their ids, route id, advertiser\n" +
+			"# and the route rules each serves, which §17.8's statements already show.\n",
+	},
+	{
+		// QD-764: a rule's via subjects ride AclRule.via, apart from its targets, which api already saw among them
+		question: "acl-m2-17-no-via-route-advertisers",
+		block:    "rules with targets, actions, whether a rule limits ports",
+		list:     "rules with targets and, apart from them, via subjects (QD-764), actions, whether a rule limits ports",
+	},
+	{
+		// QD-764: BridgeRows.routes, an approved route's ids, which api-7's bridge statements already show
+		question: "acl-m2-17-no-via-route-advertisers",
+		block:    "BridgeRows egress modes;",
+		list:     "BridgeRows egress modes and each approved route in force by its ids (route id, advertiser and the route rules it serves; QD-764);",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.

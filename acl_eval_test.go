@@ -405,22 +405,27 @@ func TestAclSocketPrefixesReachListeners(t *testing.T) {
 	}
 }
 
-// A route grant naming subjects reaches them as its via subjects (§8.10).
+// A route grant reaches its via subjects, AclRule.via (QD-764), and no destination its targets name, which a dial would
+// reach: a route rule's targets share nothing with its vias (§8.10).
 func TestAclRouteGrantReachesItsViaSubjects(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
-	exitTag := fixture.tag(owner)
+	exitTag, otherTag := fixture.tag(owner), fixture.tag(owner)
 	source := fixture.device(owner)
 	exit := fixture.agent(owner, exitTag)
-	other := fixture.agent(owner, fixture.tag(owner))
-	fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER),
-		[]*protocol.AclTarget{aclAtomTarget(exitTag)}, protocol.AclAction_ACL_ACTION_ROUTE)
+	other := fixture.agent(owner, otherTag)
+	via := fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER), nil, protocol.AclAction_ACL_ACTION_ROUTE)
+	via.Via = []*protocol.AclTarget{aclAtomTarget(exitTag)}
+	// a route rule whose targets name the other tag and whose via names the exit: the other is a destination, no via
+	destination := fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER), []*protocol.AclTarget{aclAtomTarget(otherTag)},
+		protocol.AclAction_ACL_ACTION_ROUTE)
+	destination.Via = []*protocol.AclTarget{aclAtomTarget(exitTag)}
 	state := fixture.state(t)
 	if decision := state.Reach(AclSidecarSubject(source), AclSidecarSubject(exit), aclTestNow); !decision.Allowed {
 		t.Errorf("via subject refused: %s", decision.Reason)
 	}
 	if decision := state.Reach(AclSidecarSubject(source), AclSidecarSubject(other), aclTestNow); decision.Allowed {
-		t.Errorf("other subject reached: %+v", decision)
+		t.Errorf("a route rule's destination reached as a via: %+v", decision)
 	}
 	// the rule's prefixes stay on devices (plan-BRIDGE-gate-row-prefixes #1): a gate sees the via, and AclEngine
 	// checks the address (acl_engine_test.go)
@@ -433,42 +438,48 @@ func TestAclRouteGrantReachesItsViaSubjects(t *testing.T) {
 	}
 }
 
-// A route rule with no via names no target in rows, its advertisers standing in only through BridgeRows, so a gate's
-// MayRoute finds no via for it (plan-BRIDGE-gate-row-prefixes #1).
-func TestAclRouteRuleWithoutViaReachesNoVia(t *testing.T) {
+// A route rule with no via names no via in rows: its advertisers stand in through BridgeRows' route rows (QD-004,
+// QD-764), so with none MayRoute finds no via for it, and once an approved route names it, its advertiser alone.
+func TestAclRouteRuleWithoutViaReachesOnlyItsAdvertisers(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
 	source := fixture.device(owner)
-	via := fixture.device(owner)
-	fixture.rule([]Id{fixture.sidecarAtom(source)}, nil, protocol.AclAction_ACL_ACTION_ROUTE)
+	advertiser := fixture.device(owner)
+	other := fixture.device(owner)
+	rule := fixture.rule([]Id{fixture.sidecarAtom(source)}, nil, protocol.AclAction_ACL_ACTION_ROUTE)
+	address := netip.MustParseAddr("10.0.0.1")
 	state := fixture.state(t)
-	if decision := state.MayRoute(AclSidecarSubject(source), netip.MustParseAddr("10.0.0.1"), AclSidecarSubject(via), aclTestNow); decision.Allowed {
-		t.Errorf("a route with no via reached one: %+v", decision)
+	if decision := state.MayRoute(AclSidecarSubject(source), address, AclSidecarSubject(advertiser), aclTestNow); decision.Allowed {
+		t.Errorf("a route with no via reached one before a route names it: %+v", decision)
+	}
+	fixture.routeRow(t, testBridgeRuleId("advertised"), advertiser, rule.GetRuleId())
+	state = fixture.state(t)
+	if decision := state.MayRoute(AclSidecarSubject(source), address, AclSidecarSubject(advertiser), aclTestNow); !decision.Allowed {
+		t.Errorf("its advertiser refused: %s", decision.Reason)
+	}
+	if decision := state.MayRoute(AclSidecarSubject(source), address, AclSidecarSubject(other), aclTestNow); decision.Allowed {
+		t.Errorf("a sidecar no route names reached: %+v", decision)
 	}
 }
 
-// autogroup:internet takes only public addresses, which rows can judge, since it is an atom and no prefix (§8.4).
+// autogroup:internet takes public addresses through its via subjects alone: with no via, the advertisers of the exits
+// that name it (QD-764). Rows hold no prefix, so they take every address through those vias; AclEngine.AllowRoute
+// holds an internet rule to public ones (acl_engine_test.go).
 func TestAclRouteToTheInternet(t *testing.T) {
 	fixture := newAclTestFixture()
 	owner := fixture.member(bridge.MemberRole_MEMBER_ROLE_OWNER)
-	via := fixture.device(owner)
+	exit := fixture.device(owner)
+	other := fixture.device(owner)
 	internetUser := fixture.device(owner)
-	fixture.rule([]Id{fixture.sidecarAtom(internetUser)}, []*protocol.AclTarget{aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_INTERNET)}, protocol.AclAction_ACL_ACTION_ROUTE)
+	rule := fixture.rule([]Id{fixture.sidecarAtom(internetUser)}, []*protocol.AclTarget{aclAutogroupTarget(protocol.AclAutogroup_ACL_AUTOGROUP_INTERNET)}, protocol.AclAction_ACL_ACTION_ROUTE)
+	fixture.routeRow(t, testBridgeRuleId("exit"), exit, rule.GetRuleId())
 	state := fixture.state(t)
-	cases := []struct {
-		address string
-		allowed bool
-	}{
-		{address: "198.51.100.9", allowed: true},
-		{address: "2001:db8::1", allowed: true},
-		{address: "10.0.0.1", allowed: false},
-		{address: "127.0.0.1", allowed: false},
-		{address: "fe80::1", allowed: false},
-	}
-	for i, c := range cases {
-		decision := state.MayRoute(AclSidecarSubject(internetUser), netip.MustParseAddr(c.address), AclSidecarSubject(via), aclTestNow)
-		if decision.Allowed != c.allowed {
-			t.Errorf("case %d (%s): allowed %t (%s)", i, c.address, decision.Allowed, decision.Reason)
+	for i, address := range []string{"198.51.100.9", "2001:db8::1"} {
+		if decision := state.MayRoute(AclSidecarSubject(internetUser), netip.MustParseAddr(address), AclSidecarSubject(exit), aclTestNow); !decision.Allowed {
+			t.Errorf("case %d (%s) through its exit: %s", i, address, decision.Reason)
+		}
+		if decision := state.MayRoute(AclSidecarSubject(internetUser), netip.MustParseAddr(address), AclSidecarSubject(other), aclTestNow); decision.Allowed {
+			t.Errorf("case %d (%s) through a sidecar no exit names: %+v", i, address, decision)
 		}
 	}
 }

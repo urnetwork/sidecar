@@ -367,8 +367,10 @@ message ForwardingHandOff {
 }
 
 // sidecar/protocol/bridge/bridge.proto
-// §17.8's statements and their rows, each statement's sealed part in its *Body.
+// §17.8's statements and their rows, each statement's sealed part in its *Body. BridgeRouteRow is
+// acl-m2-17-no-via-route-advertisers' (QD-764): an approved route's ids, which BridgeRows.routes carries.
 message BridgeEgressRow { bytes subject = 1; BridgeEgressMode mode = 2; }
+message BridgeRouteRow { bytes route_id = 1; bytes advertiser = 2; repeated bytes route_rule_ids = 3; }
 message BridgeIpv4Prefix { fixed32 address = 1; uint32 length = 2; }
 message BridgePortRange { uint32 first = 1; uint32 last = 2; }
 message BridgeApproval { bytes canonical_action = 1; repeated Signed decisions = 2; bytes template_action = 3; }
@@ -668,7 +670,9 @@ message EvsSealedBlob {
   bytes git_oid = 1; uint64 size = 2; bytes base_oid = 3; bytes file_id = 4; repeated EvsHistoryLocator records = 5;
 }
 message EvsHistoryLocator { uint32 segment = 1; uint32 offset = 2; uint32 length = 3; }
-message EvsProvenance { bytes agent_id = 1; bool tainted = 2; }
+message EvsProvenance {
+  bytes agent_id = 1; bool tainted = 2; bytes agent_cert = 3; bytes agent_key_id = 4; bytes agent_signature = 5;
+}
 // DESIGN-DETAILS 8.2.2 adds trees: a commit's trees that do not rebuild from names, modes and oids.
 message EvsSealedCommit { bytes object = 1; repeated EvsSealedChange changes = 2; repeated EvsSealedTree trees = 3; }
 message EvsSealedTree { repeated bytes path = 1; bytes object = 2; }
@@ -749,7 +753,7 @@ message EvsReadObject {
   EvsReadObjectKind kind = 1; bytes id = 2; uint64 number = 3; uint32 offset = 4; bytes body = 5; bool missing = 6;
 }
 // 11.9's moved row and 11.10's sequence and gap rows.
-message EvsRefsReply { uint32 format = 1; uint64 push_sequence = 2; repeated EvsHeadSummary refs = 3; }
+message EvsRefsReply { uint32 format = 1; uint64 push_sequence = 2; repeated EvsHeadSummary refs = 3; bool all = 4; }
 message EvsLogReply { repeated EvsReadStatement statements = 1; uint64 next_version = 2; }
 // Format 2's chapter (EVS-FORMAT.md, EVS2-M10-01): 11.13's purge row and 11.20's drop routes, with 11.9's dropped
 // row's DROP statement and body above, proposed until M10's entry review; replaced, EVS_DROP_HORIZON, map_parts and
@@ -1021,6 +1025,18 @@ var testFenceAdditions = []struct {
 		message:  "AclRows",
 		field:    testFenceField{name: "evidence_default", number: 10, typeName: "uint32", repeated: true},
 		question: "mcp-m3-03-evidence-default-at-gates",
+	},
+	// QD-764: a rule's via subjects apart from its targets, and an approved route's ids in the rows, whose advertisers
+	// a route rule with no via takes as its via subjects (QD-004's second half)
+	{
+		message:  "AclRule",
+		field:    testFenceField{name: "via", number: 12, typeName: "AclTarget", repeated: true},
+		question: "acl-m2-17-no-via-route-advertisers",
+	},
+	{
+		message:  "BridgeRows",
+		field:    testFenceField{name: "routes", number: 2, typeName: "BridgeRouteRow", repeated: true},
+		question: "acl-m2-17-no-via-route-advertisers",
 	},
 	{
 		message:  "AclTarget",
