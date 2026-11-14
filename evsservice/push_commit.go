@@ -213,6 +213,10 @@ func (self *pushAttempt) batchRecord() *sidecar.EvsBatchRecord {
 		record.Type = protocol.EvsBatchRecordType_EVS_BATCH_SEAL
 		record.Body = self.seal.body
 	}
+	if self.reseed != nil {
+		// a re-seeded push's record: a push record's body under its own type (reseed.go)
+		record.Type = protocol.EvsBatchRecordType_EVS_BATCH_RESEED
+	}
 	return record
 }
 
@@ -238,7 +242,7 @@ func (self *pushAttempt) admit() *pushOutcome {
 	if err != nil {
 		return self.unavailableOn(err)
 	}
-	if self.erasureP0() {
+	if self.reseed == nil && self.erasureP0() {
 		// within its network's 60 a minute: P0, never queued or refused (§11.13's classes)
 		self.writeCtx = self.engine.budget.IssueP0(self.ctx, self.cluster.ClusterId(), sidecar.WriteP0KindErasure, cost.ByteCount())
 		self.grant = p0Grant{ctx: self.writeCtx}

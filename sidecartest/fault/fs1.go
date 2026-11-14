@@ -19,8 +19,8 @@
 // What FS-1 also names and these schedules do not yet run is EVS1-M2-40's report: evs1's delayed step 7 across a
 // gate closing with the refusal recorded on evs2, evs1 in its 412 loop past the lb's read timeout while evs2
 // answers 429 BUSY, the git-mode PATH_EPOCH and FORCE pushes, a stream of recorded refusals beside honest pushes,
-// and evs2's clock 150 ms fast. FI-2 and FI-9's oracles are not bound (TEST-M2-04, TEST-M2-06), so the schedules
-// name the world's outcome check in FI-2's place and nothing in FI-9's.
+// and evs2's clock 150 ms fast. FI-2 holds through the world's checks (TEST-M2-04); FI-9's oracle is not bound
+// (TEST-M2-06), so the schedules name nothing in its place.
 
 package fault
 

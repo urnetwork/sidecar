@@ -159,6 +159,13 @@ func (self *BlobRecorder) History() []*BlobHistoryEntry {
 	return entries
 }
 
+// How many requests History holds now.
+func (self *BlobRecorder) Count() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return len(self.entries)
+}
+
 func (self *BlobRecorder) begin(ctx context.Context, entry *BlobHistoryEntry) {
 	entry.Actor = ActorName(ctx)
 	entry.Invoked = self.clock.Now()

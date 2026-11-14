@@ -104,7 +104,8 @@ func (self *pushAttempt) readStep4(cached bool) (*pushOutcome, bool) {
 	go func() {
 		defer waitGroup.Done()
 		groupId, idErr := sidecar.IdFromBytes(push.GetGroupId())
-		if idErr != nil {
+		if idErr != nil || self.reseed != nil {
+			// a re-seed's 5d is its pins' fence alone, which reads no generation record (reseed.go)
 			return
 		}
 		reads.generation, generationErr = engine.generations.Read(self.ctx, self.cluster, groupId, push.GetGeneration(), self.gateView)
