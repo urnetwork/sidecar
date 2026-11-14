@@ -315,6 +315,63 @@ func TestACascadePlansItems(t *testing.T) {
 	}
 }
 
+// The plan's prefix rule sets: each AclRepo.prefix_rules row whose signer P holds at the row's position, in position
+// order, as Stands of kind repo_prefix_rules.
+func testConfigPlanPrefixRuleSets(plan *ConfigCascadePlan) []ConfigCascadeStanding {
+	sets := []ConfigCascadeStanding{}
+	for _, standing := range plan.Stands {
+		if standing.Kind == "repo_prefix_rules" {
+			sets = append(sets, standing)
+		}
+	}
+	return sets
+}
+
+// DESIGN-DETAILS 16.2.3 and 16.5 (QD-795): the cascade voids no prefix rule set. The plan lists the set a sidecar in P
+// filed after since_n, by its repo, signer and position, and not the one it filed before since_n nor a set by a signer
+// outside P; once the revocation lands, every set stays in the repo's rows and the one P filed is still the newest, the
+// set in force until an admin files the next; and the plan's items name it as standing.
+func TestACascadePlanListsThePrefixRuleSetsPSigned(t *testing.T) {
+	net := newTestConfigNet(t)
+	ownerPhone := net.device("owner phone", net.ownerMemberId)
+	net.admitDevice(net.owner, ownerPhone, 0)
+	repoId := net.createGeneralRepo("cascade ruled repo")
+	filedBefore := net.mustPost(ownerPhone, bridge.SignedType_SIGNED_REPO_PREFIX_RULES, net.prefixRules(repoId)).Pin.GetVersion()
+	sinceN := net.n + 1
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("cascade filler"))
+	filedByOwner := net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_PREFIX_RULES, net.prefixRules(repoId)).Pin.GetVersion()
+	filedInP := net.mustPost(ownerPhone, bridge.SignedType_SIGNED_REPO_PREFIX_RULES, net.prefixRules(repoId)).Pin.GetVersion()
+
+	plan, err := net.log.State().CascadePlan(ownerPhone.sidecarId, sinceN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ConfigCascadeStanding{{Kind: "repo_prefix_rules", Id: repoId, Signer: ownerPhone.sidecarId, At: filedInP}}
+	if got := testConfigPlanPrefixRuleSets(plan); !slices.Equal(got, want) {
+		t.Fatalf("the plan lists %v, want %v", got, want)
+	}
+	if !slices.ContainsFunc(plan.Items(), func(item DeviceRevokeItem) bool {
+		return item.Effect == "stands" && item.Kind == "repo_prefix_rules" && bytes.Equal(item.Id, repoId.Bytes()) && item.Position == filedInP
+	}) {
+		t.Errorf("the items %v name no standing set", plan.Items())
+	}
+
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.compromise(ownerPhone, sinceN))
+	acl, err := net.log.State().Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := acl.Repo(repoId).GetPrefixRules()
+	positions := []uint64{}
+	for _, row := range rows {
+		positions = append(positions, row.GetAt())
+	}
+	if !slices.Equal(positions, []uint64{filedBefore, filedByOwner, filedInP}) || !bytes.Equal(rows[len(rows)-1].GetSigner(), ownerPhone.sidecarId.Bytes()) {
+		t.Errorf("after the revocation the rows hold sets at %v", positions)
+	}
+	net.everyReaderAgrees()
+}
+
 // The reference P: one pass over every admission and park-lifting confirmation in position order from since_n, each
 // joining P when a signer then in P signed it, as §7.9's cascade row reads, without the consent clause.
 func testConfigReferenceClosure(state *ConfigState, targetId Id, sinceN uint64) map[Id]uint64 {
@@ -370,7 +427,8 @@ func testConfigReferenceClosure(state *ConfigState, targetId Id, sinceN uint64) 
 }
 
 // A generated log of admissions by admins and members' own devices, lost revocations, compromise revocations that
-// park, admins' confirmations that lift, and folds, from a seed; it returns the member devices admitted.
+// park, admins' confirmations that lift, prefix rule sets standing devices file as a general repo's admins, and folds,
+// from a seed; it returns the member devices admitted.
 func (self *testConfigNet) generateCascades(seed uint64, count int) []testConfigDevice {
 	self.t.Helper()
 	random := rand.New(rand.NewPCG(seed, seed^0x51ed270b2f35a6c1))
@@ -380,6 +438,8 @@ func (self *testConfigNet) generateCascades(seed uint64, count int) []testConfig
 		_, first := self.consentedMember(fmt.Sprintf("generated member %d %d", seed, i))
 		devices = append(devices, first)
 	}
+	repoId := self.createGeneralRepo(fmt.Sprintf("generated ruled repo %d", seed))
+	repoAdmins := map[Id]bool{}
 	configVersion := self.log.State().Base().GetConfigVersion()
 	for i := range count {
 		state := self.log.State()
@@ -411,6 +471,16 @@ func (self *testConfigNet) generateCascades(seed uint64, count int) []testConfig
 		case op == 6:
 			configVersion += 1
 			self.fold(self.owner, self.n, configVersion)
+		case 0 < len(standing) && pick(2) == 0:
+			// a standing device files a set as the repo's admin, which a cascade lists and never voids (QD-795)
+			filer := standing[pick(len(standing))]
+			if !repoAdmins[filer.sidecarId] {
+				self.mustPost(self.owner, bridge.SignedType_SIGNED_REPO_ADMIN, &protocol.RepoAdmin{
+					Header: self.header(), RepoId: repoId.Bytes(), SidecarId: filer.sidecarId.Bytes(), Change: protocol.RepoAdminChange_REPO_ADMIN_CHANGE_ADD,
+				})
+				repoAdmins[filer.sidecarId] = true
+			}
+			self.post(filer, bridge.SignedType_SIGNED_REPO_PREFIX_RULES, self.prefixRules(repoId))
 		default:
 			self.mustPost(self.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, self.memberAdmitStatement(fmt.Sprintf("generated filler %d %d", seed, i)))
 		}
@@ -420,9 +490,10 @@ func (self *testConfigNet) generateCascades(seed uint64, count int) []testConfig
 
 // Property: over generated logs with bases between since_n and the end, P at the end equals the reference for every
 // device and since_n tried, the devices that admitted others most often among them, and a new device, a rows-only gate
-// and another long-running reader compute the same P from what they hold.
+// and another long-running reader compute the same P from what they hold. The plan lists exactly the prefix rule sets
+// whose signer the reference P holds at the set's position (QD-795), at every reader alike.
 func TestTheCascadeFromRowsEqualsAReferenceOverGeneratedLogs(t *testing.T) {
-	parks := 0
+	parks, listedSets := 0, 0
 	for seed := uint64(1); seed <= 8; seed += 1 {
 		net := newTestConfigNet(t)
 		devices := net.generateCascades(seed, 120)
@@ -463,7 +534,18 @@ func TestTheCascadeFromRowsEqualsAReferenceOverGeneratedLogs(t *testing.T) {
 				}
 			}
 			parks += len(closure.Members) - 1
-			for i, reader := range readers {
+			// the reference's list: every repo's set whose signer the reference P holds from at or before the set
+			wantSets := []ConfigCascadeStanding{}
+			for _, repo := range state.aclRows.GetRepos() {
+				for _, row := range repo.GetPrefixRules() {
+					if from, held := want[Id(row.GetSigner())]; held && from <= row.GetAt() {
+						wantSets = append(wantSets, ConfigCascadeStanding{Kind: "repo_prefix_rules", Id: Id(repo.GetRepoId()), Signer: Id(row.GetSigner()), At: row.GetAt()})
+					}
+				}
+			}
+			slices.SortStableFunc(wantSets, func(a ConfigCascadeStanding, b ConfigCascadeStanding) int { return cmp.Compare(a.At, b.At) })
+			listedSets += len(wantSets)
+			for i, reader := range append([]*ConfigLog{net.log}, readers...) {
 				other, err := reader.State().CascadeClosure(target.sidecarId, sinceN)
 				if err != nil {
 					t.Fatal(err)
@@ -471,9 +553,19 @@ func TestTheCascadeFromRowsEqualsAReferenceOverGeneratedLogs(t *testing.T) {
 				if !slices.Equal(other.Members, closure.Members) {
 					t.Fatalf("seed %d, reader %d: %v, want %v", seed, i, other.Members, closure.Members)
 				}
+				plan, err := reader.State().CascadePlan(target.sidecarId, sinceN)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := testConfigPlanPrefixRuleSets(plan); !slices.Equal(got, wantSets) {
+					t.Fatalf("seed %d, reader %d, %s from %d: the plan lists %v, the reference %v", seed, i, target.sidecarId, sinceN, got, wantSets)
+				}
 			}
 		}
 		testConfigStatesEqual(t, readers[0].State(), state)
+	}
+	if listedSets < 10 {
+		t.Errorf("the generated plans listed %d prefix rule sets", listedSets)
 	}
 	if parks < 20 {
 		t.Errorf("the generated closures held %d sidecars beyond their targets", parks)
