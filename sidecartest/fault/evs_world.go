@@ -13,7 +13,8 @@
 //	           timeout http_503 non_idempotent with proxy_next_upstream_tries 2 has it, a connection error, a 503 or
 //	           proxy_read_timeout (30 s of the Net's clock) sends the same request once to the next live one. A device
 //	           sees the last answer, or a transport error when none came; what each instance answered is kept by push
-//	           id, so a schedule checks an attempt whose answer the lb dropped
+//	           id, so a schedule checks an attempt whose answer the lb dropped. A T3 row may send some of a device's
+//	           requests past this model, through real nginx to the instances (DeviceTransport, InstanceHandler)
 //	devices    each a sidecar of the network with its own identity key, client and store: every device reads the repo,
 //	           and writers write it. A device's waits answer at once, so a retry the client makes runs on at once and
 //	           never parks a schedule on the clock. A device's evs alarms are kept, and EvsWorldNoAlarms fails on one
@@ -160,6 +161,12 @@ type EvsWorldSettings struct {
 	AdjustEngine func(instance string, settings *evsservice.EvsSettings)
 	// A device's client settings past the defaults, nil for none.
 	AdjustClient func(device string, settings *sidecar.EvsSettings)
+	// A device's transport in front of the world's model of the lb, nil for the model alone: given the device's
+	// name and the model, it answers what the device's client sends, passing the model what it does not take. A T3
+	// row sends a device's segment PUTs through real nginx in front of the instances' handlers so (InstanceHandler;
+	// §22.8's lb drain row, TEST-M2-15). The world notes a push's attempts only as its model carries them, so a push
+	// sent past the model is in no history a check reads.
+	DeviceTransport func(device string, lb http.RoundTripper) http.RoundTripper
 	// Every instance's handler serves through the Net's privacy capture (CC1) and logs to it (§22.7), for a
 	// scenario that scans what servers held.
 	Capture bool
@@ -340,13 +347,15 @@ type EvsWorld struct {
 // One attempt of a push as an instance took it, for a history check of §11.8's commit rule (Porcupine, EVS1-M2-42):
 // Call when the instance began it and Return when it answered, both on the world's logical clock, which moves at
 // every event under the world's lock and so orders them as they happened. An attempt its instance never answered,
-// killed or still held, has Return 0 and no Answer: its outcome is unknown and its end open.
+// killed or still held, has Return 0 and no Answer: its outcome is unknown and its end open. StoreArrival is how many
+// store requests the Net's blob history held when it began (Operation.StoreArrival).
 type EvsWorldAttempt struct {
-	PushId   sidecar.Id
-	Instance string
-	Call     int64
-	Return   int64
-	Answer   *EvsWorldAnswer
+	PushId       sidecar.Id
+	Instance     string
+	Call         int64
+	Return       int64
+	Answer       *EvsWorldAnswer
+	StoreArrival int
 }
 
 // A world on net, drawing its ids and keys; it writes nothing until Setup runs as a schedule's first step. settings
@@ -396,15 +405,20 @@ func NewEvsWorld(net *Net, settings *EvsWorldSettings) *EvsWorld {
 		// ran and every world of the process stayed
 		context.AfterFunc(net.Context(), func() { evsWorlds.Delete(key) })
 	}
+	// FI-2's ledger reads the world's attempts as its history gives them (TEST-M2-04)
+	LedgerOf(net).AddSource("evs world "+self.RepoId.String(), func() []*Operation {
+		return self.History("ledger").Operations()
+	})
 	return self
 }
 
 // An attempt beginning now, its call time taken from the logical clock.
 func (self *EvsWorld) beginAttempt(pushId sidecar.Id, instance string) *EvsWorldAttempt {
+	storeArrival := self.net.BlobHistoryCount()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.attemptClock += 1
-	attempt := &EvsWorldAttempt{PushId: pushId, Instance: instance, Call: self.attemptClock}
+	attempt := &EvsWorldAttempt{PushId: pushId, Instance: instance, Call: self.attemptClock, StoreArrival: storeArrival}
 	self.attempts = append(self.attempts, attempt)
 	return attempt
 }
@@ -905,6 +919,25 @@ func (self *EvsWorld) handlerOf(instance string, host EvsTierHost) http.Handler 
 	return host.Handler()
 }
 
+// What instance serves a request that reaches it from outside the world's model of the lb, as a block behind a real
+// lb does (EvsWorldSettings.DeviceTransport): its block's handler while it runs, through the Net's capture when the
+// settings ask, the answer returning once the instance's step 8s are done, as the model's do. The request runs on
+// the caller's goroutine, which no actor owns, so a schedule holds none of it and a barrier it reaches passes
+// (barrier.go). While the instance is killed, crashed or never started, or when its step 8s outlive
+// StepEightTimeout, the connection is cut with no answer, as a process that died gives none.
+func (self *EvsWorld) InstanceHandler(instance string) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		host := self.instanceHost(instance)
+		if host == nil {
+			panic(http.ErrAbortHandler)
+		}
+		self.handlerOf(instance, host).ServeHTTP(writer, request)
+		if err := self.awaitStepEights(host.Engine()); err != nil {
+			panic(http.ErrAbortHandler)
+		}
+	})
+}
+
 // The engine of a running instance, for a step that drives its parts.
 func (self *EvsWorld) Engine(instance string) (*evsservice.EvsEngine, error) {
 	host := self.instanceHost(instance)
@@ -932,10 +965,14 @@ func (self *EvsWorld) startDevice(device *EvsWorldDevice, view *sidecartest.Fake
 	if self.settings.AdjustClient != nil {
 		self.settings.AdjustClient(device.Name, settings)
 	}
+	var transport http.RoundTripper = device.transport
+	if self.settings.DeviceTransport != nil {
+		transport = self.settings.DeviceTransport(device.Name, device.transport)
+	}
 	client, err := sidecar.NewEvsClient(&sidecar.EvsClientArgs{
 		NetworkId: self.NetworkId,
 		EvsUrl:    "https://evs.example",
-		Transport: device.transport,
+		Transport: transport,
 		ServiceToken: func(ctx context.Context, resource string, scopes []string) (string, error) {
 			return self.issueToken(device, scopes)
 		},
@@ -1165,6 +1202,15 @@ func (self *EvsWorld) roundTrip(device *EvsWorldDevice, request *http.Request) (
 	if isPush {
 		answer := evsWorldAnswerOf("lb", last)
 		self.noteAnswer(pushId, answer)
+	}
+	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/read") && last.Code == http.StatusOK {
+		// what evs served the device, for FI-15's read clause (TEST-M2-04); a reply that does not parse is the client's
+		// to refuse, and records nothing
+		if reads, err := LedgerReadsOf(device.Name, tried[len(tried)-1], self.RepoId, last.Body.Bytes()); err == nil {
+			for _, read := range reads {
+				LedgerOf(self.net).RecordRead(read)
+			}
+		}
 	}
 	return last.Result(), nil
 }
@@ -1724,13 +1770,17 @@ func (self *EvsWorld) Nightly() func(ctx context.Context, net *Net) error {
 	}
 }
 
-// The checks every evs row of this world names beside its own: FI-1 and FI-6, which are bound, the outcome rules
-// FI-2's oracle (TEST-M2-04) will hold once it binds (EvsWorldOutcomes), and no device alarming.
+// The checks every evs row of this world names beside its own: FI-1, FI-2, FI-3, FI-6 and FI-15, each bound, the
+// world's writes and reads reaching FI-2 and FI-15 through the Net's ledger and its authorization states FI-3 through
+// SetAuthorizationView; the world's own outcome rules (Outcomes), whose record of what committed where the schedules'
+// own checks read (committedVersionOf); and no device alarming. Outcomes cannot see §11.12's shred exception, which
+// FI-2 judges (TEST-M2-04), so a schedule running that exception names FI(2) without Checks.
 func (self *EvsWorld) Checks(invariants ...Invariant) []Invariant {
-	return append([]Invariant{FI(1), FI(6), self.Outcomes(), self.NoAlarms()}, invariants...)
+	return append([]Invariant{FI(1), FI(2), FI(3), FI(6), FI(15), self.Outcomes(), self.NoAlarms()}, invariants...)
 }
 
-// FI-2's clauses a world can read until TEST-M2-04's oracle binds, which a schedule names in its place, as
+// FI-2's clauses a world can read alone, beside FI(2) in Checks since TEST-M2-04 bound it, and the record of what
+// committed where that the schedules' own checks read, as
 // fs_team.go's agreement does for FI-2 and FI-3: every committed version of main names one push id, which commits
 // once and never moves; every 200 an instance or the lb answered names its push id's committed version (a retry
 // returns the original result); no push id a refusal answered ever commits (I-EVS-3); and no evs instance issued a

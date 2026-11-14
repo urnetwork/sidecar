@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "search": { "command": "/opt/search/bin/search-mcp", "args": [] }
+  }
+}

@@ -4,10 +4,10 @@
 // as a renewal past every limit (queue.go).
 //
 // The CA's own exemption, `replaces`, names the old certificate by its RFC 9773 id, which needs the
-// leaf's authority key id. cert-1 keeps no URnetwork-zone chain (tls-m5-05-cert-row-values), so a
-// renewal certs queues on its own carries no replaces and a CA counts it as a repeated order; the
-// window certs stores is the one read when the certificate issued, and is not read again until a chain
-// is kept to ask with.
+// leaf's authority key id. A row keeps the chain its CA issued (cert-1; QD-741), so a renewal certs
+// queues on its own carries replaces, and the renewal pass asks the CA for the window again through
+// the certificate's life (run.go). A row with no chain, one issued before rows kept theirs, renews
+// with no replaces, which its CA counts as a repeated order, on the window read when it issued.
 
 package certsservice
 
@@ -74,6 +74,7 @@ func (self *CertsService) QueueRenewal(ctx context.Context, certId sidecar.Id) (
 		Attestation:         row.Attestation,
 		Csr:                 row.Csr,
 		State:               sidecar.TlsCertStateQueued,
+		StateTime:           now,
 	}
 	if err := self.store.InsertCert(callCtx, renewal); err != nil {
 		return nil, err
@@ -88,6 +89,7 @@ func (self *CertsService) QueueRenewal(ctx context.Context, certId sidecar.Id) (
 			CertId: renewal.CertId,
 			From:   []sidecar.TlsCertState{sidecar.TlsCertStateQueued},
 			To:     sidecar.TlsCertStateFailed,
+			At:     now,
 		}); err != nil {
 			return nil, err
 		}

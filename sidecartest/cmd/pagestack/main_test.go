@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 // A handler over a staged key origin and a pages directory in t's temp, with an api, evs and gkm that answer 299, 298
@@ -106,7 +108,8 @@ func TestServicesAnswerCorsForTheKeyOriginAlone(t *testing.T) {
 				t.Errorf("%s: %s is not among the allowed headers", host, name)
 			}
 		}
-		for _, name := range []string{"ETag", "Retry-After", "Content-Range"} {
+		// Date among them: the Worker signs its DPoP proof's iat by the api's clock (QD-776)
+		for _, name := range []string{"ETag", "Retry-After", "Content-Range", "Date"} {
 			if !slices.Contains(strings.Split(header.Get("Access-Control-Expose-Headers"), ","), name) {
 				t.Errorf("%s: %s is not among the exposed headers", host, name)
 			}
@@ -125,6 +128,37 @@ func TestServicesAnswerCorsForTheKeyOriginAlone(t *testing.T) {
 				preflight.Header().Get("Access-Control-Allow-Origin") != "" {
 				t.Errorf("%s, origin %q's preflight: %d, %v", host, origin, preflight.Code, preflight.Header())
 			}
+		}
+	}
+}
+
+// The fixture's api gives the key origin its clock (§7.4, QD-776): each answer of api's and the issuer's origins, a
+// refusal too, carries a Date on the api's clock, and the answer to the key origin lists Date among the headers a
+// browser shows its Worker. Another origin's answer lists nothing, and a browser shows that page none of it.
+func TestApiAnswersGiveTheKeyOriginTheirDate(t *testing.T) {
+	stack := testPagestack(t)
+	window := sidecartest.DefaultFakeApiSettings().DpopIatWindow
+	for _, name := range []string{"api", "auth"} {
+		host := strings.TrimPrefix(stack.origin(name), "https://")
+		// no token: the fixture's api refuses it, and the refusal is what a Worker with a wrong clock reads first
+		answer := testPagestackServe(stack.handler, http.MethodGet, host, "/auth/refresh", map[string]string{"Origin": stack.handler.keyOrigin})
+		if answer.Code < 400 {
+			t.Errorf("%s: a request with no token answered %d", name, answer.Code)
+		}
+		if !slices.Contains(strings.Split(answer.Header().Get("Access-Control-Expose-Headers"), ","), "Date") {
+			t.Errorf("%s: Date is not among the exposed headers %q", name, answer.Header().Get("Access-Control-Expose-Headers"))
+		}
+		date, err := http.ParseTime(answer.Header().Get("Date"))
+		if err != nil {
+			t.Errorf("%s: Date %q: %v", name, answer.Header().Get("Date"), err)
+			continue
+		}
+		if offset := stack.world.Clock().Now().Sub(date); offset < -window || window < offset {
+			t.Errorf("%s: Date is %s from the api's clock, outside a proof's window of %s", name, offset, window)
+		}
+		other := testPagestackServe(stack.handler, http.MethodGet, host, "/auth/refresh", map[string]string{"Origin": stack.handler.pageOrigin})
+		if other.Header().Get("Access-Control-Allow-Origin") != "" || other.Header().Get("Access-Control-Expose-Headers") != "" {
+			t.Errorf("%s: the page origin's answer carries CORS headers %v", name, other.Header())
 		}
 	}
 }

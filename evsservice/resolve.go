@@ -7,8 +7,11 @@
 //	           PUSH_ID_REUSED
 //	recorded   a refusal record names P and its statement: its refusal, again
 //	dead       for Resolve: not committed, and the head at or past b+64 (git mode b+1), or the statement past its time
-//	           checks (time_ms + 35 min) with the head's fence_ms later than that
+//	           checks (time_ms + EvsSettings.ResolveStatementLife, 35 min) with the head's fence_ms later than that
 //	pending    for Resolve: none of the above
+//
+// A slot's takeover (DESIGN-DETAILS 14.2.4) asks the same of a statement it knows only by its origin, its push id
+// and statement prefix: EvsPushStandingInPrefix.
 //
 // Log pages never change, so each is read once a process (LogPageCache); one packed after 24 h is found through
 // pidx/ (RecordLocator). Safe for concurrent use.
@@ -23,10 +26,6 @@ import (
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
 )
-
-// Resolve's dead rule: a statement can no longer pass 5b's time checks once its time_ms is 35 min past, the seal's
-// 30 min bound with margin (§11.8's Resolve row).
-const evsResolveStatementLife = 35 * time.Minute
 
 // A push id's standing in one head and the log pages under it.
 type EvsPushStanding struct {
@@ -43,6 +42,12 @@ type EvsPushStanding struct {
 // Where pushId, whose statement hashes to statementSha256 and was built on baseVersion in git or file mode, stands
 // in head and the log pages of (b, b+64] below its window. readPage reads one log page; nil reads none.
 func EvsPushStandingIn(ctx context.Context, head *protocol.EvsHead, pushId sidecar.Id, statementSha256 [32]byte, baseVersion uint64, gitMode bool, readPage func(ctx context.Context, page uint64) (*LogPage, error)) (*EvsPushStanding, error) {
+	return EvsPushStandingInPrefix(ctx, head, pushId, [16]byte(statementSha256[:16]), baseVersion, gitMode, readPage)
+}
+
+// EvsPushStandingIn for a statement known by the first 16 bytes of its SHA-256 alone, as a window entry and a slot's
+// origin name it. A refusal record keeps a statement's first 2 bytes, which this prefix holds.
+func EvsPushStandingInPrefix(ctx context.Context, head *protocol.EvsHead, pushId sidecar.Id, statementPrefix [16]byte, baseVersion uint64, gitMode bool, readPage func(ctx context.Context, page uint64) (*LogPage, error)) (*EvsPushStanding, error) {
 	standing := &EvsPushStanding{}
 	if head == nil {
 		return standing, nil
@@ -56,7 +61,7 @@ func EvsPushStandingIn(ctx context.Context, head *protocol.EvsHead, pushId sidec
 		if entry.PushId != pushId {
 			continue
 		}
-		if entry.StatementPrefix != [16]byte(statementSha256[:16]) {
+		if entry.StatementPrefix != statementPrefix {
 			standing.Reused = true
 			return standing, nil
 		}
@@ -83,7 +88,7 @@ func EvsPushStandingIn(ctx context.Context, head *protocol.EvsHead, pushId sidec
 				continue
 			}
 			entry, _, _ := logPage.At(version)
-			if entry.StatementPrefix != [16]byte(statementSha256[:16]) {
+			if entry.StatementPrefix != statementPrefix {
 				standing.Reused = true
 				return standing, nil
 			}
@@ -102,7 +107,7 @@ func EvsPushStandingIn(ctx context.Context, head *protocol.EvsHead, pushId sidec
 		if !refusal.RecordsPush(pushId) {
 			continue
 		}
-		if !refusal.RecordsStatement(statementSha256) {
+		if refusal.StatementPrefix != [2]byte(statementPrefix[:2]) {
 			standing.Reused = true
 			return standing, nil
 		}
@@ -136,7 +141,8 @@ type EvsResolveState int
 const (
 	// Committed at the place its version's entry names.
 	EvsResolveCommitted EvsResolveState = iota + 1
-	// Not committed and never will be: evacuation drops the record and deletes the new slots it lists (§11.13).
+	// Not committed and never will be: evacuation drops the record, and of the new slots it lists deletes only those
+	// whose origin is its own statement (§11.13; DESIGN-DETAILS 14.2.5).
 	EvsResolveDead
 	// Neither yet: evacuation raises the ref's fence and resolves again.
 	EvsResolvePending
@@ -155,7 +161,7 @@ type EvsResolution struct {
 // it resolves as its statement's push; a reseed counts as committed. head is the ref's head as the caller read it
 // from the cluster, nil when the ref has none.
 func (self *EvsEngine) ResolvePush(ctx context.Context, cluster sidecar.BlobCluster, record *sidecar.EvsBatchRecord, head *protocol.EvsHead) (*EvsResolution, error) {
-	return ResolveBatchRecord(ctx, record, head, func(ctx context.Context, page uint64) (*LogPage, error) {
+	return ResolveBatchRecord(ctx, record, head, self.settings.ResolveStatementLife, func(ctx context.Context, page uint64) (*LogPage, error) {
 		return self.readLogPage(ctx, cluster, record.RepoId, record.RefId, page)
 	})
 }
@@ -180,9 +186,10 @@ func EvsBatchRecordStatement(record *sidecar.EvsBatchRecord) (*sidecar.EvsStatem
 	return sidecar.ParseEvsStatementFormat2(statementBytes)
 }
 
-// ResolvePush's rule for a caller that holds no engine, taskworker's evacuation: readPage reads one log page of the
-// record's ref, from log/ or, once packed, from its pack.
-func ResolveBatchRecord(ctx context.Context, record *sidecar.EvsBatchRecord, head *protocol.EvsHead, readPage func(ctx context.Context, page uint64) (*LogPage, error)) (*EvsResolution, error) {
+// ResolvePush's rule for a caller that holds no engine, taskworker's evacuation: statementLife is
+// EvsSettings.ResolveStatementLife, and readPage reads one log page of the record's ref, from log/ or, once packed,
+// from its pack.
+func ResolveBatchRecord(ctx context.Context, record *sidecar.EvsBatchRecord, head *protocol.EvsHead, statementLife time.Duration, readPage func(ctx context.Context, page uint64) (*LogPage, error)) (*EvsResolution, error) {
 	if record.Type == protocol.EvsBatchRecordType_EVS_BATCH_RESEED {
 		return &EvsResolution{State: EvsResolveCommitted}, nil
 	}
@@ -206,7 +213,7 @@ func ResolveBatchRecord(ctx context.Context, record *sidecar.EvsBatchRecord, hea
 	if head != nil && bound <= head.GetVersion() {
 		return &EvsResolution{State: EvsResolveDead}, nil
 	}
-	if expiresMs := time.UnixMilli(push.GetTimeMs()).Add(evsResolveStatementLife).UnixMilli(); head != nil && expiresMs < head.GetFenceMs() {
+	if expiresMs := time.UnixMilli(push.GetTimeMs()).Add(statementLife).UnixMilli(); head != nil && expiresMs < head.GetFenceMs() {
 		return &EvsResolution{State: EvsResolveDead}, nil
 	}
 	return &EvsResolution{State: EvsResolvePending}, nil

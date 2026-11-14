@@ -2,13 +2,15 @@
 
 // §16.5's socket tools (SOCK-M5-14) on the tool framework, with the daemon's sockets faked: each tool's tier and hints;
 // socket_listen running as W under a covering grant, recorded and naming the grant, and outward without one, its
-// action held on record-m2-01-canonical-action-detail and a pending gate naming the approval; other namespaces and
+// action of kind listen naming the socket by its token path, with the name and the local port beside it (QD-740,
+// QD-772), none while the daemon holds no K_sock, and a pending gate naming the approval; other namespaces and
 // ports refused; the listing's share/ names left out and its trust a member's; and each MCP version's wire and output
 // schemas on the four tools.
 
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -76,12 +78,28 @@ func (self *fakeMcpSockets) listensAsked() []string {
 	return append([]string{}, self.asked...)
 }
 
-// A tool network whose allowed grants carry a grant id, and whose §5.4 gate answers what a test sets.
+// A tool network whose allowed grants carry a grant id, whose §5.4 gate answers what a test sets, and whose K_sock ring
+// is a synthetic key's, nil once a test takes it away.
 type fakeMcpSocketNetwork struct {
 	*fakeMcpToolNetwork
 	grantId    []byte
 	authorized []*sidecar.SidecarAction
 	authorize  error
+	ring       *sidecar.SocketKeyRing
+}
+
+func (self *fakeMcpSocketNetwork) SocketKeyRing() *sidecar.SocketKeyRing {
+	return self.ring
+}
+
+// The grant_dst a listen on an application name carries under the network's current K_sock (QD-772).
+func (self *fakeMcpSocketNetwork) listenGrantDst(t *testing.T, name string) string {
+	t.Helper()
+	tokenPath, err := self.ring.Current().TokenPath(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "sock:" + hex.EncodeToString(tokenPath)
 }
 
 func (self *fakeMcpSocketNetwork) Allow(action protocol.AclAction, resource sidecar.AclResource, now time.Time) (sidecar.AclCheck, bool) {
@@ -110,7 +128,11 @@ type testSocketToolEnv struct {
 func newTestSocketToolEnv(t *testing.T, listenAction mcpSocketListenActionFunction) *testSocketToolEnv {
 	t.Helper()
 	env := &testSocketToolEnv{hookTestEnv: newHookTestEnv(t), sockets: newFakeMcpSockets(), sink: &testCallSink{}}
-	env.network = &fakeMcpSocketNetwork{fakeMcpToolNetwork: newFakeMcpToolNetwork(env.hookTestEnv.network, testToolCredential), grantId: []byte{0xab, 0xcd}}
+	ring, err := sidecar.NewSocketKeyRing(env.networkId, &protocol.SocketKeyFile{CurrentKey: bytes.Repeat([]byte{0x5a}, 32)}, sidecar.DefaultSocketKeyRingSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.network = &fakeMcpSocketNetwork{fakeMcpToolNetwork: newFakeMcpToolNetwork(env.hookTestEnv.network, testToolCredential), grantId: []byte{0xab, 0xcd}, ring: ring}
 	env.daemon.hostNetwork(env.networkId, env.network)
 	env.catalog = NewMcpCatalog(env.server.settings.Mcp, env.clock, env.sink)
 	if listenAction == nil {
@@ -221,21 +243,55 @@ func TestSocketListenCoveredRunsAsWrite(t *testing.T) {
 	}
 }
 
-// With no covering grant socket_listen is outward: its action is built for §5.4's gate, and while the listen kind's row
-// waits on its question that build refuses, so nothing listens and nothing is recorded as a W call.
-func TestSocketListenUncoveredIsHeld(t *testing.T) {
+// With no covering grant socket_listen is outward: the production action reaches §5.4's gate as kind listen naming
+// the socket by its grant_dst alone, the name's token path under the network's K_sock and never the name (QD-772),
+// with no local port in its bytes and the tool's name and local port beside it as the request's, and a gate that
+// refuses leaves nothing listening and nothing recorded as a W call.
+func TestSocketListenUncoveredAsksTheGate(t *testing.T) {
 	env := newTestSocketToolEnv(t, nil)
+	env.network.authorize = sidecar.ErrApprovalRefused
 	conn := env.conn("2025-06-18")
-	wantMcpError(t, env.callTool(conn, "2025-06-18", "socket_listen", map[string]any{"name": "db/primary", "local_port": 5432}), McpCodeRefused, "approval")
-	if len(env.sockets.listensAsked()) != 0 || len(env.network.authorized) != 0 || len(env.sink.sunk()) != 0 {
-		t.Error("a held listen acted")
+	wantMcpError(t, env.callTool(conn, "2025-06-18", "socket_listen", map[string]any{"name": "db/primary", "local_port": 15432}), McpCodeRefused, "approval")
+	if len(env.sockets.listensAsked()) != 0 || len(env.sink.sunk()) != 0 {
+		t.Error("a refused listen acted")
+	}
+	if len(env.network.authorized) != 1 {
+		t.Fatalf("the gate saw %d actions", len(env.network.authorized))
+	}
+	action := env.network.authorized[0]
+	stored, err := sidecar.ParseStoredCanonicalAction(action.Canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantDst := env.network.listenGrantDst(t, "db/primary")
+	if action.Kind != sidecar.SidecarActionListen || len(stored.Action.GetGrantDst()) != 1 || stored.Action.GetGrantDst()[0] != grantDst ||
+		!action.Detail.Equal(&sidecar.SidecarActionDetail{SocketName: "db/primary", LocalPort: 15432}) {
+		t.Errorf("the action: %+v, detail %+v", stored.Action, action.Detail)
+	}
+	if bytes.Contains(action.Canonical, []byte("15432")) || bytes.Contains(action.Canonical, []byte("primary")) {
+		t.Error("the action's bytes hold the local port or the name")
+	}
+	if err := sidecar.CheckCanonicalActionForServer(stored); err != nil {
+		t.Errorf("the listen's action on a server path: %v", err)
+	}
+}
+
+// A daemon that holds no K_sock for the network yet takes no outward listen: it could not name the socket in the form
+// a server may see, and its sockets could register none. The answer is retryable, and nothing reaches the gate.
+func TestSocketListenUncoveredWaitsForTheSocketKey(t *testing.T) {
+	env := newTestSocketToolEnv(t, nil)
+	env.network.ring = nil
+	conn := env.conn("2025-06-18")
+	wantMcpError(t, env.callTool(conn, "2025-06-18", "socket_listen", map[string]any{"name": "db/primary", "local_port": 15432}), McpCodeUnavailable, "")
+	if len(env.network.authorized) != 0 || len(env.sockets.listensAsked()) != 0 {
+		t.Error("a listen with no K_sock reached the gate or listened")
 	}
 }
 
 // Once the action builds, an uncovered listen passes the gate first: a pending gate names its approval and listens on
 // nothing, an allowed one listens.
 func TestSocketListenUncoveredPassesTheGate(t *testing.T) {
-	built := func(call *McpCall, name string) (*sidecar.SidecarAction, error) {
+	built := func(call *McpCall, name string, grantDst string) (*sidecar.SidecarAction, error) {
 		return &sidecar.SidecarAction{Kind: sidecar.SidecarActionListen, Canonical: []byte(name), Risk: sidecar.SidecarRiskNormal}, nil
 	}
 	env := newTestSocketToolEnv(t, built)
@@ -251,6 +307,11 @@ func TestSocketListenUncoveredPassesTheGate(t *testing.T) {
 	testSocketToolData(t, env.callTool(conn, "2025-06-18", "socket_listen", map[string]any{"name": "db/primary", "local_port": 5432}), out)
 	if out.Status != "listening" || out.GrantId != "" || len(env.sockets.listensAsked()) != 1 || len(env.network.authorized) != 2 {
 		t.Errorf("an allowed gate: %+v", out)
+	}
+	for _, action := range env.network.authorized {
+		if !action.Detail.Equal(&sidecar.SidecarActionDetail{SocketName: "db/primary", LocalPort: 5432}) {
+			t.Errorf("the gate saw detail %+v", action.Detail)
+		}
 	}
 }
 

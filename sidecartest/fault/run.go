@@ -31,6 +31,10 @@ type Result struct {
 	LeftTrace string
 	// Every invariant that did not hold, each with its step: all of them at the check the run failed at.
 	Violations []*Violation
+	// The actors found still working with the baton past the driver's stall bound. They kept it, so the
+	// order was the schedule's and this fails nothing: it says where a slow machine's time went when a
+	// wait then ran out.
+	Slow []string
 }
 
 func (self *Result) String() string {
@@ -43,6 +47,9 @@ func (self *Result) String() string {
 	}
 	if self.LeftTrace != "" {
 		fmt.Fprintf(&text, "  the replay left its trace: %s\n", self.LeftTrace)
+	}
+	if 0 < len(self.Slow) {
+		fmt.Fprintf(&text, "  slow, working past the stall bound with the baton kept: %s\n", strings.Join(self.Slow, ", "))
 	}
 	for _, line := range self.Trace {
 		text.WriteString("  ")
@@ -92,6 +99,7 @@ func Run(ctx context.Context, schedule *Schedule, net *Net) *Result {
 	result.Err = self.run(result)
 	result.Violations = self.violations
 	result.Events = self.barriers.Trace()
+	result.Slow = self.barriers.SlowActors()
 	for _, event := range result.Events {
 		result.Trace = append(result.Trace, event.String())
 	}
@@ -276,9 +284,10 @@ func (self *runner) check(step int, final bool) error {
 	return self.stalled()
 }
 
-// An actor that kept the baton past the stall timeout let another run while it ran on, in an order the
-// schedule did not choose and a seed cannot repeat, so the run proves nothing it can be held to (§22.8's
-// determinism row).
+// An actor the driver found blocked out of its sight past the stall timeout lost the baton and let another
+// run while it ran on, in an order the schedule did not choose and a seed cannot repeat, so the run proves
+// nothing it can be held to (§22.8's determinism row). An actor only slow there kept the baton and fails
+// nothing here: the wait behind it fails the run if it outlasts §22.8's 10 s.
 func (self *runner) stalled() error {
 	actorNames := []string{}
 	for _, event := range self.barriers.Trace() {

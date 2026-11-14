@@ -32,16 +32,43 @@ func TestCertsRevocationReasonFor(t *testing.T) {
 	}
 }
 
-// A CertsAcme that records revocations.
+// A reason reads back from the name a row keeps for it; no reason has no name, and a name this build
+// does not know is no reason.
+func TestCertsRevocationReasonNames(t *testing.T) {
+	for reason, name := range map[certsservice.CertsRevocationReason]sidecar.TlsCertRevocationReason{
+		certsservice.CertsRevocationKeyCompromise:        sidecar.TlsCertRevocationReasonKeyCompromise,
+		certsservice.CertsRevocationCessationOfOperation: sidecar.TlsCertRevocationReasonCessationOfOperation,
+		certsservice.CertsRevocationUnspecified:          "",
+	} {
+		if got := certsservice.CertsRevocationReasonName(reason); got != name {
+			t.Errorf("%d is named %q", reason, got)
+		}
+		if got := certsservice.CertsRevocationReasonNamed(name); got != reason {
+			t.Errorf("%q reads as %d", name, got)
+		}
+	}
+	if got := certsservice.CertsRevocationReasonNamed("aReasonOfALaterBuild"); got != certsservice.CertsRevocationUnspecified {
+		t.Errorf("an unknown name reads as %d", got)
+	}
+	if sidecar.TlsCertRevocationReasonKeyCompromise != "keyCompromise" || sidecar.TlsCertRevocationReasonCessationOfOperation != "cessationOfOperation" {
+		t.Error("a stored reason is not RFC 5280's name")
+	}
+}
+
+// A CertsAcme that records the revocations it took, and refuses while err is set.
 type testRevokeAcme struct {
 	certsservice.ClosedCertsAcme
 	stateLock sync.Mutex
 	reasons   []certsservice.CertsRevocationReason
+	err       error
 }
 
 func (self *testRevokeAcme) Revoke(ctx context.Context, ca certsservice.CertsCa, leaf []byte, reason certsservice.CertsRevocationReason) error {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	if self.err != nil {
+		return self.err
+	}
 	self.reasons = append(self.reasons, reason)
 	return nil
 }
@@ -101,14 +128,30 @@ func TestCertsRevokeIssued(t *testing.T) {
 	}
 
 	leaf := testLeaf(t, device, serial)
+	// a CA that refuses leaves the row revoking, holding the reason for whoever asks next
+	acme.stateLock.Lock()
+	acme.err = errors.New("the CA is down")
+	acme.stateLock.Unlock()
+	clock.Advance(time.Minute)
+	markedAt := clock.Now()
+	if err := service.RevokeIssued(ctx, certId, leaf, certsservice.CertsRevocationKeyCompromise); err == nil {
+		t.Fatal("a refused revocation answered no error")
+	}
+	if row := certs.row(certId); row.State != sidecar.TlsCertStateRevoking || row.RevocationReason != sidecar.TlsCertRevocationReasonKeyCompromise || !row.StateTime.Equal(markedAt) {
+		t.Fatalf("the row its CA refused: %+v", row)
+	}
+	acme.stateLock.Lock()
+	acme.err = nil
+	acme.stateLock.Unlock()
+	clock.Advance(time.Minute)
 	if err := service.RevokeIssued(ctx, certId, leaf, certsservice.CertsRevocationKeyCompromise); err != nil {
 		t.Fatal(err)
 	}
 	if reasons := acme.revocations(); len(reasons) != 1 || reasons[0] != certsservice.CertsRevocationKeyCompromise {
 		t.Fatalf("reasons %v", reasons)
 	}
-	if state := certs.row(certId).State; state != sidecar.TlsCertStateRevoked {
-		t.Fatalf("state %s", state)
+	if row := certs.row(certId); row.State != sidecar.TlsCertStateRevoked || row.RevocationReason != "" || !row.StateTime.Equal(clock.Now()) {
+		t.Fatalf("the revoked row: %+v", row)
 	}
 	if err := service.RevokeIssued(ctx, certId, leaf, certsservice.CertsRevocationKeyCompromise); err != nil || len(acme.revocations()) != 1 {
 		t.Fatalf("a revoked row: %v, %d calls", err, len(acme.revocations()))

@@ -51,18 +51,17 @@ const (
 	ingestDirectoryName = "ingest"
 	ingestClass         = "ingest"
 	ingestStateVersion  = 1
-	ingestStateMaxBytes = 1024 * 1024
-	// a blob hash is remembered this many times over before the oldest are forgotten, a bound on the state file
-	ingestBlobHashCount = 4096
 )
 
 // Nothing can be sealed: the network has no redactor (no spool), so the event is a gap.
 var ErrIngestNoRedactor = errors.New("ingest has no redactor")
 
-// §16.7's run lifecycle, which MCP-M6-02 wires to RECORD-M6-16's DirectoryRuns: SessionStart's title, project and
-// branch, hook activity, and SessionEnd or Coverage. Nothing else of a session reaches it (I-20). Nil wires nothing.
+// §16.7's run lifecycle, which MCP-M6-02 wires to RECORD-M6-16's DirectoryRuns (ingest_directory.go): SessionStart's
+// title, project and branch, hook activity, and SessionEnd or Coverage. Nothing else of a session reaches it (I-20).
+// Nil wires nothing.
 type RunLifecycle interface {
-	// A run's first bound SessionStart, with what §16.11's announcement takes.
+	// A run's first bound SessionStart, with what §16.11's announcement takes; again when its title first arrives
+	// after that, and when a run its Coverage ended moves again.
 	RunStarted(ctx context.Context, networkId sidecar.Id, start *RunLifecycleStart)
 	// A hook event of a started run.
 	RunMoved(ctx context.Context, networkId sidecar.Id, runId sidecar.Id)
@@ -74,6 +73,9 @@ type RunLifecycle interface {
 type RunLifecycleStart struct {
 	RunId   sidecar.Id
 	Harness string
+	// §5.8's agent label of the run's project, empty for none, and the model the harness named.
+	AgentLabel string
+	Model      string
 	// §16.10's run title, 120 B after redaction; empty until known.
 	Title   string
 	Project string
@@ -116,6 +118,8 @@ type IngestArgs struct {
 	Lifecycle RunLifecycle
 	// The person's home, for the instruction files there and `.ur`; empty reads none.
 	Home string
+	// §16.18's file events' watch (ingest_fsevents.go), cli's fsnotify; nil watches nothing.
+	FileWatch IngestFileWatch
 	// §16.8's record settings, for CoverageIdleTimeout. Nil takes the defaults.
 	Record *sidecar.SidecarRecordSettings
 }
@@ -137,6 +141,9 @@ type Ingest struct {
 	restore   *RestorePoints
 	lifecycle RunLifecycle
 	home      string
+	fileWatch IngestFileWatch
+	// the worktrees watched for file events
+	fileEvents ingestFileEvents
 
 	stateLock sync.Mutex
 	runs      map[restorePointKey]*ingestRun
@@ -190,12 +197,16 @@ func NewIngest(args *IngestArgs) *Ingest {
 		restore:      args.Restore,
 		lifecycle:    args.Lifecycle,
 		home:         args.Home,
+		fileWatch:    args.FileWatch,
+		fileEvents:   ingestFileEvents{rootWatches: map[string]*ingestRootWatch{}},
 		runs:         map[restorePointKey]*ingestRun{},
 		lockedEvents: map[restoreLockedKey]int{},
 	}
 	server.SetHookCapture(self.captureHook)
 	if self.restore != nil {
 		server.SetHookHolds(self.restore.HookHolds())
+		// run_restore reads the same points (MCP-M3-22)
+		server.SetRestorePoints(self.restore)
 	}
 	return self
 }
@@ -279,7 +290,7 @@ func (self *Ingest) runFor(ctx context.Context, network McpNetwork, networkId si
 		return nil, err
 	}
 	state := &ingestRunState{}
-	found, err := readRestoreJson(store, runId.String(), state)
+	found, err := readRestoreJson(store, runId.String(), state, self.settings.IngestStateByteCount)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +337,8 @@ func (self *Ingest) saveRunWithLock(run *ingestRun) {
 	run.dirty = false
 }
 
-// Counts a gap on the run's file, where it occurred, and tells the restore point its next interval is foreign.
+// Counts a gap on the run's file, where it occurred, and, for a gap that can hide a change, tells the restore point its
+// next interval is foreign.
 func (self *Ingest) gap(ctx context.Context, network McpNetwork, networkId sidecar.Id, runId sidecar.Id, code string) {
 	runs, err := network.Runs()
 	if err != nil {
@@ -335,9 +347,23 @@ func (self *Ingest) gap(ctx context.Context, network McpNetwork, networkId sidec
 	if err := runs.AddGap(ctx, runId, code); err != nil && !errors.Is(err, sidecar.ErrRunUnknown) {
 		self.log.Warningf("[ingest]a gap was not counted: %s", err)
 	}
-	if self.restore != nil {
+	if self.restore != nil && ingestGapHidesChange(code) {
 		self.restore.NoteGap(networkId, runId)
 	}
+}
+
+// Whether a coverage gap can hide a change from §16.7's attribution, which then reads the interval foreign: a missed
+// event, a hook that failed, downtime, a changed harness config, a lost run file. A gap that marks only a cut or a
+// stand-in in the record (a redaction, an oversize body, a truncated list or transcript, a tool id the harness never
+// gives, as Cursor never does, a prompt-skipping mode, a spool drop) hides no hook from the restore point, whose ledger
+// keeps every observation itself; were it foreign, no Cursor edit could ever be restored (MCP-M3-27's FS-26).
+func ingestGapHidesChange(code string) bool {
+	switch code {
+	case sidecar.RecordCoverageGapMissedEvent, sidecar.RecordCoverageGapHookFailure, sidecar.RecordCoverageGapDowntime,
+		sidecar.RecordCoverageGapConfigChanged, sidecar.RecordCoverageGapRunFileMissing:
+		return true
+	}
+	return false
 }
 
 // The network's redactor, as the seam gives it.
@@ -371,10 +397,17 @@ type ingestEntry struct {
 // RunHourByteCount is dropped, oversize. The seq range the writer answers is kept for the Coverage. The run's lock is
 // held. The answer is whether the entry was appended.
 func (self *Ingest) appendWithLock(ctx context.Context, run *ingestRun, entry *ingestEntry) bool {
+	_, ok := self.appendEntryWithLock(ctx, run, entry)
+	return ok
+}
+
+// appendWithLock, answering beside it the first copy of the entry the writer sealed, nil where every copy waits in the
+// spool.
+func (self *Ingest) appendEntryWithLock(ctx context.Context, run *ingestRun, entry *ingestEntry) (*sidecar.RecordEntryRef, bool) {
 	now := self.clock.Now()
 	state := run.state
 	if entry.byteCount != 0 && !self.budgetWithLock(ctx, run, entry.byteCount) {
-		return false
+		return nil, false
 	}
 	if entry.coverageSource != "" && !slices.Contains(state.Sources, entry.coverageSource) {
 		state.Sources = append(state.Sources, entry.coverageSource)
@@ -384,7 +417,7 @@ func (self *Ingest) appendWithLock(ctx context.Context, run *ingestRun, entry *i
 	if err != nil {
 		self.log.Warningf("[ingest]no record writer: %s", err)
 		self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapMissedEvent)
-		return false
+		return nil, false
 	}
 	runId := run.runId
 	refs, err := writer.Append(&sidecar.RecordDraft{
@@ -398,11 +431,15 @@ func (self *Ingest) appendWithLock(ctx context.Context, run *ingestRun, entry *i
 	if err != nil {
 		self.log.Warningf("[ingest]an entry was not appended: %s", err)
 		self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapMissedEvent)
-		return false
+		return nil, false
 	}
+	var sealed *sidecar.RecordEntryRef
 	for _, ref := range refs {
 		if ref.Spooled {
 			continue
+		}
+		if sealed == nil {
+			sealed = ref
 		}
 		if state.FirstSeq == 0 || ref.Seq < state.FirstSeq {
 			state.FirstSeq = ref.Seq
@@ -412,7 +449,7 @@ func (self *Ingest) appendWithLock(ctx context.Context, run *ingestRun, entry *i
 		}
 		run.dirty = true
 	}
-	return true
+	return sealed, true
 }
 
 // The hook capture the server calls after each event's binding (hook_coverage.go): the event's entries, the
@@ -472,8 +509,9 @@ func (self *Ingest) captureHook(ctx context.Context, captured *HookCaptured) err
 	case HookEventPostToolUse:
 		self.captureToolCallWithLock(ctx, run, redactor, event, captured.Payload)
 	default:
-		self.captureHookEventWithLock(ctx, run, redactor, event, captured.Payload)
+		captured.EventLeaf = self.captureHookEventWithLock(ctx, run, redactor, event, captured.Payload)
 	}
+	self.captureHookModelCallWithLock(ctx, run, redactor, event, captured.Payload)
 	if event.Kind == HookEventPermissionRequest {
 		self.capturePermissionWithLock(ctx, run, event)
 	}
@@ -493,7 +531,9 @@ func (self *Ingest) captureHook(ctx context.Context, captured *HookCaptured) err
 		return nil
 	}
 	if reopened && self.lifecycle != nil && state.Started {
-		// a run ended by idling moved again: its next Coverage supersedes (RECORD.md's re-open row)
+		// a run ended by idling moved again: its next Coverage supersedes (RECORD.md's re-open row), and the
+		// lifecycle, which heard its end, hears it start again
+		self.lifecycleStartWithLock(ctx, run)
 		self.lifecycle.RunMoved(ctx, run.networkId, run.runId)
 	}
 	self.armIdleWithLock(run)
@@ -523,6 +563,9 @@ type HookCaptured struct {
 	Payload []byte
 	// The network was Locked, so nothing bound.
 	Locked bool
+	// The leaf of the hook_event entry the capture sealed for the event, nil where it sealed none or the entry waits in
+	// the spool: what a harness decision on the event cites (RECORD.md section 5.1; MCP-M3-10).
+	EventLeaf []byte
 }
 
 // Events seen while the network was Locked, by harness and session, each a missed_event gap on the run once it binds.

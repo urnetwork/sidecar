@@ -2,8 +2,10 @@
 // on every metadata cluster, so the state the access log records is the state repo/ shows even when a device was
 // killed between filing its statement and calling the route, and every shred a lost queue dropped is queued again.
 //
-//	apply  the newest projection's RepoDelete a repo/ lacks is applied as DELETE would apply it (decideDelete), and a
-//	       projected RepoRestore of the deletion repo/ shows as restore would (decideRestore), each P0 lifecycle
+//	apply  the newest projection's RepoDelete a repo/ lacks is applied as DELETE would apply it (decideDelete), from
+//	       its row's time and signer on any day (QD-743, QD-798), so a RepoDelete whose entry the gate's log no longer
+//	       keeps, or never held, still reaches deleted and its shred's start; and a projected RepoRestore of the
+//	       deletion repo/ shows as restore would (decideRestore), each P0 lifecycle
 //	queue  each deleted repo's start, 7 d 10 min after its RepoDelete's entry, and each shredding repo's shred, under
 //	       the shred's once keys (shred.go)
 //

@@ -18,10 +18,13 @@
 // Then what may refuse the level reached, in this order: a level below the host's pin (SmtpPinStore), a
 // refused downgrade; a REQUIRETLS message at neither TL1 nor TL2 (plan-SMTP-small-readings#12); and TL4
 // for a recipient domain the user has not allowed (owner decision 38, an outward action under I-8).
-// Until question smtp-m9-06-tl4-allowance-action names the action's form, AllowUnauthenticated refuses
-// and nothing keeps a desktop's allowance, so TL4 passes only for a message whose verified outbox entry
-// names the domain in tl4_domains (plan-SMTP-small-readings#11), the composing device's approval. What
-// passes raises or refreshes the host's pin before the handshake goes on.
+// The allowance is its own action, mail_tls_unauthenticated with the domain as host (QD-729):
+// AllowUnauthenticated passes it through Sidecar.Authorize, and its effect keeps the allowance in the
+// desktop's store until it ends (smtp_tls_allowance.go). TL4 then passes for a domain with an allowance
+// that holds, or for a message whose verified outbox entry names the domain in tl4_domains
+// (plan-SMTP-small-readings#11), the composing device's approval, and for nothing else: an approval of
+// a mail_send to the domain is consent to that message, never to TL4. What passes raises or refreshes
+// the host's pin before the handshake goes on.
 //
 // The refusal comes inside the handshake, as VerifyPeer's error, so no application byte reaches the MX:
 // no data, then a retry, then a DSN (§14.4). SendSmtp returns only that error, so the
@@ -35,7 +38,8 @@
 // against roots, the system's when nil, at the injected clock's time.
 //
 // Every lookup that needs the network runs in Authenticate, before the ClientHello, so VerifyPeer does
-// only checks and one pin write. Nothing here logs, and no error names a host or domain (I-13).
+// only checks, a read of the domain's allowance at TL4 and one pin write. Nothing here logs, and no
+// error names a host or domain (I-13).
 //
 // Off the sidecar_http leg: a page Worker sends no mail (§18.10).
 
@@ -55,14 +59,12 @@ import (
 
 	"github.com/urnetwork/connect"
 
+	"github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // connect's own cache is what a daemon hands the policy.
 var _ SmtpDohForwarder = (*connect.DohCache)(nil)
-
-// The question that holds AllowUnauthenticated.
-const smtpTlsAllowanceQuestion = "smtp-m9-06-tl4-allowance-action"
 
 // RFC 3463's enhanced status a DSN for a TLS refusal carries: missing TLS authentication, the status
 // plan-SMTP-small-readings#12 gives REQUIRETLS's, as RFC 8689 does.
@@ -73,8 +75,9 @@ var (
 	ErrSmtpTlsRefused = errors.New("smtp tls: mx refused")
 	// A recipient domain or MX host outside RFC 5321's Domain, or flags this version does not know.
 	ErrSmtpTlsRequest = errors.New("smtp tls: invalid request")
-	// No TL4 allowance can be made until its action has a form (question smtp-m9-06-tl4-allowance-action).
-	ErrSmtpTlsAllowanceHeld = errors.New("smtp tls: a tl4 allowance waits on its action's form")
+	// The allowance's action passed the gate and the store holds no allowance for the domain: its effect
+	// did not happen, its outcome is not known, or the allowance has since ended.
+	ErrSmtpTlsAllowanceNotKept = errors.New("smtp tls: the allowance was not kept")
 	// One connection's peer is checked once.
 	errSmtpTlsCheckedTwice = errors.New("smtp tls: a connection's peer checked twice")
 )
@@ -181,29 +184,47 @@ type SmtpTlsRequest struct {
 	MessageTl4Domains []string
 }
 
-// One network sender's TLS policy. Safe for concurrent use.
-type SmtpTlsPolicy struct {
-	dane     *SmtpDane
-	mtaSts   *SmtpMtaSts
-	pins     *SmtpPinStore
-	doh      SmtpDohForwarder
-	roots    *x509.CertPool
-	settings *SmtpSenderSettings
-	clock    Clock
+// §5.4's gate as the policy asks it for a TL4 allowance: Sidecar.Authorize, the one entry point every
+// outward action passes (I-8). Safe for concurrent use.
+type SmtpTlsAuthorizer interface {
+	// nil once the action's effect has an outcome, in action.Outcome; *ApprovalPendingError while it
+	// waits for a person; any other error refuses. decision may be nil.
+	Authorize(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error
 }
 
-// The policy over TL1's dane, TL2's mtaSts, the device's own doh for TL3, and pins, checking PKIX
-// against roots (nil is the system's), under settings, which must have passed validate, on clock (nil is
-// real time). Only roots may be nil.
-func NewSmtpTlsPolicy(dane *SmtpDane, mtaSts *SmtpMtaSts, pins *SmtpPinStore, doh SmtpDohForwarder, roots *x509.CertPool, settings *SmtpSenderSettings, clock Clock) *SmtpTlsPolicy {
+var _ SmtpTlsAuthorizer = (*Sidecar)(nil)
+
+// One network sender's TLS policy. Safe for concurrent use.
+type SmtpTlsPolicy struct {
+	dane       *SmtpDane
+	mtaSts     *SmtpMtaSts
+	pins       *SmtpPinStore
+	allowances *SmtpTlsAllowanceStore
+	authorizer SmtpTlsAuthorizer
+	doh        SmtpDohForwarder
+	roots      *x509.CertPool
+	settings   *SmtpSenderSettings
+	clock      Clock
+}
+
+// The policy over TL1's dane, TL2's mtaSts, the device's own doh for TL3, pins, and TL4's allowances,
+// which only an action that passed authorizer makes, checking PKIX against roots (nil is the system's),
+// under settings, which must have passed validate, on clock (nil is real time). A nil authorizer
+// refuses every allowance, as a sidecar with no gate does. Only roots and authorizer may be nil.
+func NewSmtpTlsPolicy(dane *SmtpDane, mtaSts *SmtpMtaSts, pins *SmtpPinStore, allowances *SmtpTlsAllowanceStore, authorizer SmtpTlsAuthorizer, doh SmtpDohForwarder, roots *x509.CertPool, settings *SmtpSenderSettings, clock Clock) *SmtpTlsPolicy {
+	if authorizer == nil {
+		authorizer = sidecarGateDeny{}
+	}
 	return &SmtpTlsPolicy{
-		dane:     dane,
-		mtaSts:   mtaSts,
-		pins:     pins,
-		doh:      doh,
-		roots:    roots,
-		settings: settings,
-		clock:    clockOrReal(clock),
+		dane:       dane,
+		mtaSts:     mtaSts,
+		pins:       pins,
+		allowances: allowances,
+		authorizer: authorizer,
+		doh:        doh,
+		roots:      roots,
+		settings:   settings,
+		clock:      clockOrReal(clock),
 	}
 }
 
@@ -304,17 +325,123 @@ func (self *SmtpTlsPolicy) Authenticate(ctx context.Context, request *SmtpTlsReq
 	return authentication, nil
 }
 
-// The user's allowance to send to recipientDomain at TL4 (§14.4, owner decision 38): an outward action
-// that passes Sidecar.Authorize (I-8) with decision, then kept per recipient domain in the store
-// (plan-SMTP-small-readings#11), and the mail it lets through carries EX4's label. No SidecarActionKind
-// or CanonicalAction field yet carries a recipient domain, so until question
-// smtp-m9-06-tl4-allowance-action names one, this refuses with ErrSmtpTlsAllowanceHeld, keeps nothing,
-// and TL4 stays refused but for a message whose verified outbox entry allows it.
-func (self *SmtpTlsPolicy) AllowUnauthenticated(ctx context.Context, recipientDomain string, decision *bridge.Signed) error {
-	if _, ok := smtpTlsName(recipientDomain); !ok {
+// The effect of one allowance's action: the store keeps the domain's allowance under the use's key.
+type smtpTlsAllowanceEffect struct {
+	allowances *SmtpTlsAllowanceStore
+	domain     string
+	expireTime time.Time
+}
+
+// Keeps the allowance, idempotent per effectKey, and answers its reference. An allowance that has
+// already ended, or one the store has no room for, proves no effect happened; a store that failed
+// leaves the use uncertain, for a retry under the same key.
+func (self *smtpTlsAllowanceEffect) Run(ctx context.Context, effectKey []byte) ([]byte, error) {
+	var approvalId *Id
+	if spend, ok := ApprovalSpendFromContext(ctx); ok {
+		approvalId = &spend.ApprovalId
+	}
+	allowance, err := self.allowances.allow(self.domain, self.expireTime, effectKey, approvalId)
+	if errors.Is(err, ErrSmtpTlsAllowanceEnded) || errors.Is(err, ErrSmtpTlsAllowanceFull) {
+		return nil, fmt.Errorf("%w: %w", ErrSidecarEffectNotDone, err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return allowance.effectRef(), nil
+}
+
+// The user's allowance to send to recipientDomain at TL4 until expireTime, the zero time for an
+// allowance that does not end (§14.4, owner decision 38, QD-729): the outward action
+// mail_tls_unauthenticated, built here from the domain in its one form, lowercase with no trailing
+// dot, and the expiry, never from an agent's words, and passed through Sidecar.Authorize (I-8) with
+// decision, which may be nil. Its effect keeps the allowance in the store per recipient domain
+// (plan-SMTP-small-readings#11), where VerifyPeer finds it until it ends, and the mail it lets through
+// carries EX4's label.
+//
+// nil once the store holds the domain's allowance. *ApprovalPendingError while the action waits for a
+// person: the same domain and expiry are the same action, so the call after the approval names both
+// again. ErrSmtpTlsRequest for a name outside RFC 5321's Domain, ErrSmtpTlsAllowanceEnded for an expiry
+// not ahead of now, ErrSmtpTlsAllowanceFull when the store has no room, each before any gate is asked,
+// so no approval is spent on them; ErrSmtpTlsAllowanceNotKept when the gate passed the action and no
+// allowance holds; any other error is the gate's or the store's. The approval binds this action's
+// bytes, so one of a mail_send to the domain, or of another domain's allowance, spends nothing here.
+func (self *SmtpTlsPolicy) AllowUnauthenticated(ctx context.Context, recipientDomain string, expireTime time.Time, decision *bridge.Signed) error {
+	domain, ok := smtpTlsName(recipientDomain)
+	if !ok {
 		return ErrSmtpTlsRequest
 	}
-	return fmt.Errorf("%w: question %s", ErrSmtpTlsAllowanceHeld, smtpTlsAllowanceQuestion)
+	expiresMillis := int64(0)
+	if !expireTime.IsZero() {
+		expiresMillis = expireTime.UnixMilli()
+		// 0 on the wire is an allowance that does not end, which an expiry must never read as
+		if expiresMillis <= 0 || expiresMillis <= self.clock.Now().UnixMilli() {
+			return ErrSmtpTlsAllowanceEnded
+		}
+		expireTime = time.UnixMilli(expiresMillis)
+	}
+	if err := self.allowances.checkRoom(domain); err != nil {
+		return err
+	}
+	stored, err := NewCanonicalAction(&protocol.CanonicalAction{
+		Kind:          uint32(SidecarActionMailTlsUnauthenticated),
+		Host:          domain,
+		ExpiresMillis: expiresMillis,
+	})
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrSmtpTlsRequest, err)
+	}
+	// the user's own act, in no run: nothing here is an agent's, so nothing raises the risk
+	action, err := NewSidecarAction(stored, SidecarRiskNormal, SidecarRiskUnspecified, nil, nil)
+	if err != nil {
+		return err
+	}
+	action.Effect = &smtpTlsAllowanceEffect{allowances: self.allowances, domain: domain, expireTime: expireTime}
+	if err := self.authorizer.Authorize(ctx, action, decision); err != nil {
+		return err
+	}
+	if outcome := action.Outcome; outcome != nil && outcome.State != ApprovalOutcomeDone {
+		if outcome.Err != nil {
+			return fmt.Errorf("%w: %w", ErrSmtpTlsAllowanceNotKept, outcome.Err)
+		}
+		return fmt.Errorf("%w: its use is %s", ErrSmtpTlsAllowanceNotKept, outcome.State)
+	}
+	// a gate's nil is not taken on its word: the allowance is in the store, or there is none
+	allowance, err := self.allowances.Allowance(domain)
+	if err != nil {
+		return err
+	}
+	if allowance == nil {
+		return ErrSmtpTlsAllowanceNotKept
+	}
+	return nil
+}
+
+// The allowance that holds for recipientDomain now, or nil when none does (§14.4).
+func (self *SmtpTlsPolicy) UnauthenticatedAllowance(recipientDomain string) (*SmtpTlsAllowance, error) {
+	return self.allowances.Allowance(recipientDomain)
+}
+
+// mail_tls_unauthenticated's Lookup (§16.6's spend step 5, plan-MCP-effect-seam), which the sender's
+// host registers with Sidecar.RegisterEffectLookup: done, with the effect's reference, where the store
+// holds the allowance made under effectKey for the action's domain; else uncertain, since an allowance
+// a later one replaced is no longer found by its key, so a retry of the same action completes the use
+// under the same key. An action of another kind is an error.
+func (self *SmtpTlsPolicy) Lookup(ctx context.Context, canonical []byte, effectKey []byte) (*SidecarOutcome, error) {
+	stored, err := ParseStoredCanonicalAction(canonical)
+	if err != nil {
+		return nil, err
+	}
+	if SidecarActionKind(stored.Action.GetKind()) != SidecarActionMailTlsUnauthenticated {
+		return nil, fmt.Errorf("%w: kind %d is no tls allowance", ErrSidecarActionInvalid, stored.Action.GetKind())
+	}
+	allowance, err := self.allowances.effect(effectKey)
+	if err != nil {
+		return nil, err
+	}
+	if allowance != nil && allowance.RecipientDomain == stored.Action.GetHost() {
+		return &SidecarOutcome{State: ApprovalOutcomeDone, EffectRef: allowance.effectRef()}, nil
+	}
+	return &SidecarOutcome{State: ApprovalOutcomeUncertain}, nil
 }
 
 // Whether chain's leaf holds for host under the policy's roots at now, through chain's other
@@ -389,8 +516,9 @@ func (self *SmtpTlsAuthentication) reach(chain []*x509.Certificate, now time.Tim
 // Decides the level of the chain the MX presented, leaf first, as SmtpProofJob.VerifyPeer, inside the
 // handshake: nil once the level passes and the host's pin has been raised to it or refreshed, so the
 // handshake goes on; a *SmtpTlsRefusal when the MX is refused, so no application byte is sent; any other
-// error is the store's, which records no level and holds the send. It decides once: a second call is
-// refused.
+// error is the store's, which records no level and holds the send. TL4 passes for a message whose own
+// approval names the domain, or for a domain whose allowance holds now, read from the store here, so
+// one that ended since Authenticate lets nothing through. It decides once: a second call is refused.
 func (self *SmtpTlsAuthentication) VerifyPeer(chain []*x509.Certificate) error {
 	first := func() bool {
 		self.stateLock.Lock()
@@ -423,8 +551,16 @@ func (self *SmtpTlsAuthentication) VerifyPeer(chain []*x509.Certificate) error {
 		return refuse(&SmtpTlsRefusal{Kind: SmtpTlsRefusalBelowPin, Level: level, PinLevel: pin.Level})
 	case self.requireTls && SmtpTlsLevelMtaSts < level:
 		return refuse(&SmtpTlsRefusal{Kind: SmtpTlsRefusalRequireTls, Level: level})
-	case level == SmtpTlsLevelUnauthenticated && !self.messageAllowed:
-		return refuse(&SmtpTlsRefusal{Kind: SmtpTlsRefusalUnauthenticated, Level: level})
+	}
+	if level == SmtpTlsLevelUnauthenticated && !self.messageAllowed {
+		// an allowance the store cannot read is neither one that holds nor none: the send is held
+		allowance, err := self.policy.allowances.Allowance(self.domain)
+		if err != nil {
+			return err
+		}
+		if allowance == nil {
+			return refuse(&SmtpTlsRefusal{Kind: SmtpTlsRefusalUnauthenticated, Level: level})
+		}
 	}
 	// the check and the raise are one step in the store, so a pin another send raised since the read
 	// above still refuses this one

@@ -266,7 +266,8 @@ func TestEvsTransportMapsEveryRefusalClass(t *testing.T) {
 	}
 }
 
-// A 401 is ErrEvsUnauthorized, and a proxy's page under a 502 reads as no code at all.
+// A 401 is ErrEvsUnauthorized, and a proxy's page under a 502 reads as no code at all, and as no answer from evs
+// (QD-758; evs_http_test.go).
 func TestEvsTransportUnauthorizedAndForeignBodies(t *testing.T) {
 	test := newEvsTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusUnauthorized)
@@ -282,7 +283,8 @@ func TestEvsTransportUnauthorizedAndForeignBodies(t *testing.T) {
 	}), newEvsTestStore(t))
 	err := test.client.http.callMessage(context.Background(), call, nil)
 	evsError, ok := EvsErrorOf(err)
-	if !ok || evsError.Status != http.StatusBadGateway || evsError.Code != protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED {
+	if !ok || evsError.Status != http.StatusBadGateway || evsError.Code != protocol.EvsRefusalCode_EVS_REFUSAL_CODE_UNSPECIFIED ||
+		!evsError.OutcomeUnknown {
 		t.Errorf("502: %#v", err)
 	}
 }
@@ -427,7 +429,7 @@ func TestEvsPinStoreSurvivesRestartAndNeverFalls(t *testing.T) {
 		t.Errorf("a fork: %v", err)
 	}
 	lowChain := [32]byte(evsTestBytes("chain 3", 32))
-	if err := reopened.lowerByReseed(&EvsPin{RepoId: repoId, RefId: refId, Version: 3, Chain: lowChain}, []byte("incident"), pinnedAt); err != nil {
+	if err := reopened.lowerByReseed(&EvsPin{RepoId: repoId, RefId: refId, Version: 3, Chain: lowChain}, []byte("incident"), pinnedAt, 1); err != nil {
 		t.Fatal(err)
 	}
 	pin, _, _ = reopened.Pin(repoId, refId)

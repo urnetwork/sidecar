@@ -15,6 +15,8 @@
 //	   registration's AppMode and never by ALPN's absence (tls_dispatch.go, D-TLS-13)
 //	4  by route: acme-tls/1 to the responder, which answers in the handshake and closes (tls_alpn_responder.go);
 //	   raw to the forward (tls_raw.go); http to the HTTP front (tls_http.go)
+//	5  a connection whose pass opened the target counts toward its grant's reach receipt, its bytes once it ends
+//	   (tls_reach_receipt.go)
 //
 // FI-11 is built into TlsFrontConn: its only way to the target is openTarget, which takes the pass only
 // tlsAudienceCheck gives, for that connection, so whatever the ALPN no application byte reaches the local service
@@ -119,6 +121,16 @@ type TlsFrontSettings struct {
 	// The longest path and query a login returns the visitor to; a longer one returns to /: 2 KiB, a reading.
 	ReturnPathMaxByteCount int
 
+	// How long a members-device login waits for its device's statement, its nonce and its __Host-ur-device-pre
+	// cookie: 10 min, a reading, as a pending edge login.
+	DeviceLoginLifetime time.Duration
+	// The most an edge-login statement's Signed takes: 1 KiB, a reading past a TlsEdgeLogin's ~200 B.
+	EdgeLoginMaxByteCount int
+
+	// Reach receipts one endpoint holds in memory before it writes them all early, never dropping one: 4,096, a
+	// reading.
+	ReachReceiptMaxCount int
+
 	// A __Host-ur-link cookie's life, capped by its token's expiry: 12 h (QD-134).
 	LinkCookieLifetime time.Duration
 	// The most a link token's Signed takes: 1 KiB, a reading past a TlsLinkToken's ~200 B.
@@ -158,6 +170,9 @@ func DefaultTlsFrontSettings() *TlsFrontSettings {
 		JwksLifetime:               1 * time.Hour,
 		JwksRefetchMinInterval:     1 * time.Minute,
 		ReturnPathMaxByteCount:     2 * 1024,
+		DeviceLoginLifetime:        10 * time.Minute,
+		EdgeLoginMaxByteCount:      1024,
+		ReachReceiptMaxCount:       4096,
 		LinkCookieLifetime:         12 * time.Hour,
 		LinkTokenMaxByteCount:      1024,
 		NoticeLifetime:             30 * 24 * time.Hour,
@@ -172,7 +187,8 @@ func (self *TlsFrontSettings) validate() error {
 		self.HandshakeTimeout, self.FirstRequestTimeout, self.TargetDialTimeout, self.TargetProbeMinInterval,
 		self.RequestHeaderTimeout, self.IdleTimeout, self.ChallengeBackdate, self.SessionLifetime, self.PreLoginLifetime,
 		self.IdTokenMaxLifetime, self.IssuerRequestTimeout, self.JwksLifetime, self.JwksRefetchMinInterval,
-		self.LinkCookieLifetime, self.NoticeLifetime, self.LimitsCacheTimeout, self.LimitsRequestTimeout,
+		self.DeviceLoginLifetime, self.LinkCookieLifetime, self.NoticeLifetime, self.LimitsCacheTimeout,
+		self.LimitsRequestTimeout,
 	}
 	for _, positiveTime := range positiveTimes {
 		if positiveTime <= 0 {
@@ -184,7 +200,7 @@ func (self *TlsFrontSettings) validate() error {
 		return fmt.Errorf("%w: a clock skew is not negative", errInvalidSettings)
 	case self.VisitorShareDivisor < 1, self.MaxHeaderByteCount < 1, self.TargetIdleConnectionCount < 1,
 		self.PendingLoginMaxCount < 1, self.IssuerResponseMaxByteCount < 1, self.ReturnPathMaxByteCount < 1,
-		self.LinkTokenMaxByteCount < 1:
+		self.LinkTokenMaxByteCount < 1, self.EdgeLoginMaxByteCount < 1, self.ReachReceiptMaxCount < 1:
 		return fmt.Errorf("%w: a tls front count is positive", errInvalidSettings)
 	case self.VisitorIpv4PrefixBitCount < 1 || 32 < self.VisitorIpv4PrefixBitCount,
 		self.VisitorIpv6PrefixBitCount < 1 || 128 < self.VisitorIpv6PrefixBitCount:
@@ -346,6 +362,11 @@ type TlsFrontArgs struct {
 	// Called when the registration's ALPN list changes, as a TLS-ALPN-01 challenge starts or ends, so the owner
 	// registers again with ListenSettings. Nil: nothing to tell.
 	AlpnChanged func()
+	// The network's record writer (SidecarRecord.Writer()), which the endpoint's reach receipts go through (§16.8).
+	// Nil writes none.
+	Record RecordWriter
+	// The record's settings, whose ReachReceiptCoalesce is a receipt's window. Nil takes the defaults.
+	RecordSettings *SidecarRecordSettings
 	// Nil is real time.
 	Clock Clock
 	// Nil is the default logger.
@@ -374,6 +395,8 @@ type TlsFront struct {
 	audience  *tlsAudienceCheck
 	sessions  *tlsSessionSealer
 	login     *tlsEdgeLogin
+	device    *tlsMembersDevice
+	reach     *tlsReachReceipts
 	http      *tlsHttpFront
 	// a visitor's dial failed, so the probe runs early
 	probeWake chan struct{}
@@ -418,7 +441,23 @@ func NewTlsFront(ctx context.Context, args *TlsFrontArgs) (*TlsFront, error) {
 	if alpnChanged == nil {
 		alpnChanged = func() {}
 	}
+	clock := clockOrReal(args.Clock)
+	log := loggerOrDefault(args.Log)
 	frontCtx, cancel := context.WithCancel(ctx)
+	reach, err := newTlsReachReceipts(frontCtx, &tlsReachReceiptsArgs{
+		Writer:         args.Record,
+		RecordSettings: args.RecordSettings,
+		Settings:       settings,
+		Secrets:        args.Secrets,
+		NetworkId:      args.NetworkId,
+		SidecarId:      args.SidecarId,
+		Clock:          clock,
+		Log:            log,
+	})
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 	self := &TlsFront{
 		ctx:         frontCtx,
 		cancel:      cancel,
@@ -431,9 +470,10 @@ func NewTlsFront(ctx context.Context, args *TlsFrontArgs) (*TlsFront, error) {
 		certificate: args.Certificate,
 		dialTarget:  dialTarget,
 		alpnChanged: alpnChanged,
-		clock:       clockOrReal(args.Clock),
-		log:         loggerOrDefault(args.Log),
+		clock:       clock,
+		log:         log,
 		sessions:    sessions,
+		reach:       reach,
 		probeWake:   make(chan struct{}, 1),
 		serving:     true,
 		liveConns:   map[*TlsFrontConn]bool{},
@@ -443,6 +483,7 @@ func NewTlsFront(ctx context.Context, args *TlsFrontArgs) (*TlsFront, error) {
 	self.visitors = newTlsFrontVisitors(settings, target.MaxStreams)
 	self.audience = &tlsAudienceCheck{front: self}
 	self.login = newTlsEdgeLogin(self, args.IssuerUrl, args.IssuerClient)
+	self.device = newTlsMembersDevice(self)
 	self.http = newTlsHttpFront(self, args.Limits)
 	go self.run()
 	go self.runProbe()
@@ -499,7 +540,8 @@ func (self *TlsFront) alpnChallengeChanged() {
 	self.alpnChanged()
 }
 
-// Stops accepting, closes the listener and every connection, and ends the HTTP front. A second Close does nothing.
+// Stops accepting, closes the listener and every connection, ends the HTTP front, and writes the reach receipts it
+// holds. A second Close does nothing.
 func (self *TlsFront) Close() error {
 	conns, first := func() ([]*TlsFrontConn, bool) {
 		self.stateLock.Lock()
@@ -523,6 +565,7 @@ func (self *TlsFront) Close() error {
 	for _, conn := range conns {
 		conn.reset(protocol.StreamResetCode_RST_CANCELLED)
 	}
+	self.reach.close()
 	return err
 }
 
@@ -558,6 +601,8 @@ func (self *TlsFront) serve(socketConn *SocketConn) {
 		return
 	}
 	defer self.untrack(conn)
+	// after the close below, so the stream's every byte is counted
+	defer conn.noteReachEnd()
 	defer conn.close()
 	if !conn.handshake(self.ctx) {
 		return
@@ -668,15 +713,31 @@ func (self *TlsFront) setServing(serving bool) {
 }
 
 // The stream under a visitor's tls.Conn: its SocketConn, closing once whichever way it ends, so the front knows when a
-// connection the HTTP front or a hijack holds has ended.
+// connection the HTTP front or a hijack holds has ended, and counting the bytes it carries either way, records
+// included, for the reach receipt.
 type tlsFrontStream struct {
 	*SocketConn
 	endOnce sync.Once
 	// closed once the stream has ended
-	done chan struct{}
+	done      chan struct{}
+	byteCount atomic.Uint64
 }
 
 var _ net.Conn = (*tlsFrontStream)(nil)
+
+// See net.Conn.
+func (self *tlsFrontStream) Read(b []byte) (int, error) {
+	n, err := self.SocketConn.Read(b)
+	self.byteCount.Add(uint64(max(n, 0)))
+	return n, err
+}
+
+// See net.Conn.
+func (self *tlsFrontStream) Write(b []byte) (int, error) {
+	n, err := self.SocketConn.Write(b)
+	self.byteCount.Add(uint64(max(n, 0)))
+	return n, err
+}
 
 // Marks the stream ended.
 func (self *tlsFrontStream) end() {
@@ -720,6 +781,8 @@ type TlsFrontConn struct {
 	serverName string
 	// an HTTP request has arrived, which stops the first-request bound
 	requestSeen atomic.Bool
+	// the grant the first target connection opened under, which the connection's reach counts toward
+	reachGrant atomic.Pointer[TlsPublishGrant]
 
 	transportOnce sync.Once
 	transport     *http.Transport
@@ -824,7 +887,18 @@ func (self *TlsFrontConn) openTarget(ctx context.Context, pass *tlsAudiencePass)
 			return nil, err
 		}
 	}
+	// the visitor reached the service: the connection counts once, under the grant of its first pass
+	if pass.grant != nil && self.reachGrant.CompareAndSwap(nil, pass.grant) {
+		self.front.reach.note(pass.grant, self.open.GetClientIp(), 1, 0)
+	}
 	return target, nil
+}
+
+// Counts the ended connection's bytes toward its reach, when its pass opened the target.
+func (self *TlsFrontConn) noteReachEnd() {
+	if grant := self.reachGrant.Load(); grant != nil {
+		self.front.reach.note(grant, self.open.GetClientIp(), 0, self.stream.byteCount.Load())
+	}
 }
 
 // This connection's own transport to the target, made on first use: its connections serve this visitor alone, each

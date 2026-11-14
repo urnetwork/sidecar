@@ -1,38 +1,56 @@
 //go:build !ios_extension
 
 // §21.6's screen of new names (R-ABUSE-3, D-ABUSE-1, D-ABUSE-4, Q-ABUSE-4; owner decisions 14 and
-// 97). Brands enter only through names a network creates: aliases, record owners, published hosts
-// and burner From domains. ScreenName applies §12.5's brand rule and §21.6's Names paragraph to each
-// such name, and to each label draw, as one pure function on every leg with no connect import, since
-// dnsservice and smtpedgeservice call it and neither may import server. Clients run it as a courtesy,
-// and every server gate runs it again, because a modified sidecar skips sidecar-side controls (§21.4).
+// 97; QD-807). Brands enter only through names a network creates: aliases, record owners, published
+// hosts and burner From domains. Two entry points apply §12.5's brand rule and §21.6's Names paragraph
+// to each such name, and differ by where the name sits:
 //
-// It screens at creation only. A name already live is never screened again here, so a list change
+//   - ScreenName screens a label draw, an alias and a Team scope label: names that stand for a network
+//     or a scope, where a platform word such as www or api would pass for URnetwork's. §12.5's
+//     reserved block applies.
+//   - ScreenHost screens a host inside a network's own zone, <host>.<label>.<root>: a record owner's
+//     label or a published host (§13). There the same word names nothing of URnetwork's, so §12.7's
+//     owner table applies in place of the reserved block, and www, api, status and login are the
+//     network's to use (owner, QD-807).
+//
+// Both are pure functions on every leg with no connect import, since dnsservice and smtpedgeservice
+// call them and neither may import server. Clients run them as a courtesy, and every server gate runs
+// them again, because a modified sidecar skips sidecar-side controls (§21.4).
+//
+// They screen at creation only. A name already live is never screened again here, so a list change
 // withdraws nothing; the CT watch compares live names with the current lists (ABUSE-M5-13). §15.9's
-// burner word list skips these lists, so a burner's own draw never calls it.
+// burner word list skips these lists, so a burner's own draw never calls them.
 //
 // The rules, in order, the first that decides answering:
 //
 //   - The name is one DNS label as a gate stores it: 1 to 63 lowercase letters, digits and dashes,
 //     no dash at either end, and no two dashes as its third and fourth characters, which keeps out
 //     xn-- and the IDNA homographs §12.5's mapping cannot read. Anything else denies, a dotted name
-//     included: a caller screens each label of a longer name.
-//   - With nil facts, a label draw, the name must also pass ValidateDnsName, since a draw lands
-//     directly under <root> beside aliases (§12.5). A host or record owner may be shorter than a
+//     included: a caller screens each label of a longer name. An underscore label or * denies too:
+//     neither is a host, and §12.7's validator holds those owners (dnsservice.ValidateUserRecordSet).
+//   - ScreenName with nil facts, a label draw: the name must also pass ValidateDnsName, since a draw
+//     lands directly under <root> beside aliases (§12.5). A host or record owner may be shorter than a
 //     network name, so a network's facts do not bring ValidateDnsName's length bound.
-//   - §12.5's reserved block, dns_reserved_labels.txt, denies, whatever the facts.
+//   - ScreenName: §12.5's reserved block, dns_reserved_labels.txt, denies, whatever the facts.
+//     ScreenHost: §12.7's owner table denies, whatever the facts: the zone's system hosts b, mx, mail
+//     and mta-sts, and the network's Team scope labels (ScreenFacts.ScopeLabels).
 //   - A word-number name (§12.7) denies, since those stay burners' (owner decision 32).
 //   - Each - token is read for brands and keywords (screenList.readToken): as a brand or keyword
 //     after §12.5's mapping (0 to o, 1 to l, 3 to e, 5 to s, rn to m), or as a run of them written
 //     together, as paypalsupport is.
 //   - A token reading as one of URnetwork's own names, which the reserved block lists among its
-//     brands, denies: no verified domain or reviewer's allow lets a network use them.
+//     brands, denies: no verified domain or reviewer's allow lets a network use them. This is a brand
+//     rule, so it holds for hosts too: urnetwork.<label>.<root> would pass for URnetwork's.
 //   - A brand with a keyword (login, secure, verify, account, support, wallet, update) goes to review;
 //     it denies on probation, or with nil facts, which have no network to hold a name for, and allows
 //     once a reviewer has allowed the name (ScreenFacts.ReviewAllowed).
 //   - A brand otherwise denies unless the network verified one of the brand's domains, every brand
 //     the name reads as counting.
 //   - Anything else allows.
+//
+// So under a network's facts the two entry points answer alike for every name outside §12.5's block
+// and §12.7's owner table. ScreenHost with nil facts answers as with a network of which nothing is
+// known: nothing verified, nothing reviewed, on probation, which no network's facts answer below.
 //
 // Two readings of ABUSE-M5-01's rule list. Its reserved rule is §12.5's block, not IsReservedDnsLabel,
 // which counts every curated brand reserved and so would deny paypal with paypal's domain verified,
@@ -42,7 +60,8 @@
 // option 3), so paypal-support goes to review, refused on probation.
 //
 // The lists are dns_screen_brands.txt, which gives each brand of dns_brand_labels.txt its domains,
-// and dns_reserved_labels.txt, embedded and parsed once, so ScreenName is safe for concurrent use.
+// and dns_reserved_labels.txt, embedded and parsed once, so ScreenName and ScreenHost are safe for
+// concurrent use.
 
 package sidecar
 
@@ -63,6 +82,11 @@ const dnsDomainMaxByteCount = 253
 // §21.6's keywords, which make a name holding a brand a brand-plus-keyword name. The design's list,
 // a fact of the policy rather than a tunable.
 var screenKeywords = []string{"login", "secure", "verify", "account", "support", "wallet", "update"}
+
+// §12.7's system hosts, which every network, alias and scope zone keeps for the platform's mail: the
+// bounce zone b (§14.6) and the mx, mail and mta-sts hosts. Labels of the zone's layout, not tunables;
+// dnsservice's validator and mail_address.go's zone labels name the same four.
+var screenZoneSystemHosts = []string{"b", "mx", "mail", "mta-sts"}
 
 // One of ScreenName's three answers. The zero value denies, so a verdict left unset refuses.
 type ScreenVerdict int
@@ -91,8 +115,8 @@ func (self ScreenVerdict) String() string {
 }
 
 // What a gate knows about the network creating a name: ABUSE-M5-08's ScreenFactsForNetwork on the
-// server, the client's own view as a courtesy. A nil *ScreenFacts is a label draw, which has no
-// network behind it yet.
+// server, the client's own view as a courtesy. A nil *ScreenFacts is, to ScreenName, a label draw,
+// which has no network behind it yet, and to ScreenHost a network of which nothing is known.
 type ScreenFacts struct {
 	// The network's verified domains (§7.6, network_domain), any case, a trailing dot ignored. A
 	// brand's name is allowed only when one of the brand's own domains is here exactly: a subdomain
@@ -104,6 +128,10 @@ type ScreenFacts struct {
 	// A reviewer allowed this name for this network: an abuse_action of kind screen_allow naming
 	// both (ABUSE-M5-08). It turns a review into an allow and changes no other verdict.
 	ReviewAllowed bool
+	// The network's Team scope labels (§8's signed projection; none before M6), any case, which
+	// §12.7 keeps from every host in the network's zone. Only ScreenHost reads them: a new scope
+	// label is ScreenName's, and its clash with the network's hosts is the scope's own check (§12.5).
+	ScopeLabels []string
 }
 
 // One brand of the screen's list and the domains whose verification lets a network use it.
@@ -129,10 +157,10 @@ func ScreenBrands() []ScreenBrand {
 	return brands
 }
 
-// Screens name, a label a network creates or a label draw, under facts, which are nil for a draw.
-// The file's header gives the rules.
+// Screens name, a label draw, an alias or a Team scope label, under facts, which are nil for a draw.
+// §12.5's reserved block applies. The file's header gives the rules.
 func ScreenName(name string, facts *ScreenFacts) ScreenVerdict {
-	if !isDnsLowerLdhLabel(name) || (4 <= len(name) && name[2:4] == "--") {
+	if !isScreenLabel(name) {
 		return ScreenVerdictDeny
 	}
 	if facts == nil && ValidateDnsName(name) != nil {
@@ -141,38 +169,32 @@ func ScreenName(name string, facts *ScreenFacts) ScreenVerdict {
 	if dnsScreenList.isReserved(name) || IsWordNumberDnsLabel(name) {
 		return ScreenVerdictDeny
 	}
-	brands := []*screenBrand{}
-	keyword := false
-	for _, token := range strings.Split(name, "-") {
-		brands, keyword = dnsScreenList.readToken(token, brands, keyword)
-	}
-	if len(brands) == 0 {
-		return ScreenVerdictAllow
-	}
-	for _, brand := range brands {
-		if brand.sealed {
-			return ScreenVerdictDeny
-		}
-	}
-	if keyword {
-		switch {
-		case facts == nil || facts.Probation:
-			return ScreenVerdictDeny
-		case facts.ReviewAllowed:
-			return ScreenVerdictAllow
-		default:
-			return ScreenVerdictReview
-		}
-	}
-	if facts == nil {
+	return dnsScreenList.screenBrands(name, facts)
+}
+
+// Screens host, one label of a name inside a network's own zone, under the network's facts: a record
+// owner's label or a published host (§13), as the owner answered QD-807. §12.7's owner table applies
+// and §12.5's reserved block does not, so www, api, status and login allow. The file's header gives
+// the rules.
+//
+// The caller screens each host label a new name brings and nothing else: none for the apex, @, which
+// is the network's label or alias and was screened when drawn or claimed, and none for * or an
+// underscore label, which are §12.7's validator's. nil facts screen as a network of which nothing is
+// known, so a brand denies and nothing goes to review.
+func ScreenHost(host string, facts *ScreenFacts) ScreenVerdict {
+	if !isScreenLabel(host) {
 		return ScreenVerdictDeny
 	}
-	for _, brand := range brands {
-		if !facts.verifiesBrand(brand) {
-			return ScreenVerdictDeny
-		}
+	if slices.Contains(screenZoneSystemHosts, host) || IsWordNumberDnsLabel(host) || facts.isScopeLabel(host) {
+		return ScreenVerdictDeny
 	}
-	return ScreenVerdictAllow
+	return dnsScreenList.screenBrands(host, facts)
+}
+
+// Whether name is one DNS label as a gate stores it: lowercase LDH, with no two dashes as its third and
+// fourth characters, so no xn-- and no IDNA homograph.
+func isScreenLabel(name string) bool {
+	return isDnsLowerLdhLabel(name) && !(4 <= len(name) && name[2:4] == "--")
 }
 
 // Whether one of the network's verified domains is one of brand's domains.
@@ -184,6 +206,16 @@ func (self *ScreenFacts) verifiesBrand(brand *screenBrand) bool {
 		}
 	}
 	return false
+}
+
+// Whether label is one of the network's Team scope labels. nil facts know of none.
+func (self *ScreenFacts) isScopeLabel(label string) bool {
+	if self == nil {
+		return false
+	}
+	return slices.ContainsFunc(self.ScopeLabels, func(scopeLabel string) bool {
+		return dnsAsciiLower(scopeLabel) == label
+	})
 }
 
 // The screen's lists, parsed once from the three embedded files.
@@ -358,6 +390,44 @@ func (self *screenList) isReserved(label string) bool {
 		}
 	}
 	return false
+}
+
+// The brand rules, the last of the file header's, on name, a label the rules before them passed, under
+// facts, nil for none known: URnetwork's own names deny, a brand with a keyword goes to review, any
+// other brand needs one of its domains verified, and a name that reads as no brand allows.
+func (self *screenList) screenBrands(name string, facts *ScreenFacts) ScreenVerdict {
+	brands := []*screenBrand{}
+	keyword := false
+	for _, token := range strings.Split(name, "-") {
+		brands, keyword = self.readToken(token, brands, keyword)
+	}
+	if len(brands) == 0 {
+		return ScreenVerdictAllow
+	}
+	for _, brand := range brands {
+		if brand.sealed {
+			return ScreenVerdictDeny
+		}
+	}
+	if keyword {
+		switch {
+		case facts == nil || facts.Probation:
+			return ScreenVerdictDeny
+		case facts.ReviewAllowed:
+			return ScreenVerdictAllow
+		default:
+			return ScreenVerdictReview
+		}
+	}
+	if facts == nil {
+		return ScreenVerdictDeny
+	}
+	for _, brand := range brands {
+		if !facts.verifiesBrand(brand) {
+			return ScreenVerdictDeny
+		}
+	}
+	return ScreenVerdictAllow
 }
 
 // Adds to brands what one - token reads as, and answers whether it or an earlier token reads as a

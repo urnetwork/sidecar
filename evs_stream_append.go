@@ -14,10 +14,10 @@
 //	          ur/<sidecar_id as 32 lowercase hex>/record (plan-RECORD-stream-names#1) and the planner tells an owned
 //	          ref only by Id.String()'s form (question record-m3-01-owned-ref-id-text)
 //	creates   every file a creation: a path that stands, or a removal, is 409 PATH_CONFLICT before anything is
-//	          sealed, as evs's creates-only rule would answer; a delta of a directory that already stands is refused
-//	          here too, ErrEvsStreamDirectoryDelta, since evs's creates-only rule refuses every change on a base
-//	          version, a delta's included, which §16.8's 2,048-entry directories need (question
-//	          record-m3-12-stream-directory-rows): a stream takes its first push into each directory and no second
+//	          sealed, as evs's creates-only rule would answer; each directory the files land in takes the planner's
+//	          creation or, standing, its delta on its newest version, adding the new names' rows, which the rule takes
+//	          on a stream (QD-722), so §16.8's 2,048-entry directories grow one push after another; a directory
+//	          change removing a name, which no stream push makes, is the same 409
 //	slots     each entry file is a record-class file, its chain under a fresh key in a new slot of its own
 //	          (evs_upload.go), which an ERASE of a body row never touches; the caller's slot object follows them in
 //	          the new-objects list, its keys from SlotKeys under fek_g of the generation EnsureWritable gave
@@ -45,13 +45,8 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-var (
-	// A stream push that would change a directory standing on its creates-only ref, which evs refuses: the push waits
-	// on question record-m3-12-stream-directory-rows and sends nothing.
-	ErrEvsStreamDirectoryDelta = errors.New("evs: a stream push extending a standing directory")
-	// The newest verified config state is below the pin the push must declare, or off its chain: nothing was built.
-	ErrEvsStreamPinBehind = errors.New("evs: the verified state is behind the stream push's pin")
-)
+// The newest verified config state is below the pin the push must declare, or off its chain: nothing was built.
+var ErrEvsStreamPinBehind = errors.New("evs: the verified state is behind the stream push's pin")
 
 // One entry file of a stream push: its plaintext path, raw names joined by /, and its bytes.
 type EvsStreamFile struct {
@@ -144,11 +139,13 @@ func (self *EvsRepo) BuildStreamPush(ctx context.Context, args *EvsStreamPushArg
 		return nil, fmt.Errorf("%w: a stream that is not this sidecar's owned ref", ErrEvsWriteInvalid)
 	}
 	conflicts := []EvsTokenPath{}
-	directoryDelta := false
 	for _, planned := range plan.Paths {
 		switch {
 		case planned.Kind == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY && !planned.Remove:
-			directoryDelta = directoryDelta || planned.BaseEntryVersion != 0
+			// a directory's creation, or its add-only delta on its newest version (QD-722)
+			if 0 < len(planned.RemovedTokens) {
+				conflicts = append(conflicts, planned.TokenPath)
+			}
 		case planned.Remove || planned.BaseEntryVersion != 0:
 			conflicts = append(conflicts, planned.TokenPath)
 		}
@@ -156,9 +153,6 @@ func (self *EvsRepo) BuildStreamPush(ctx context.Context, args *EvsStreamPushArg
 	if 0 < len(conflicts) {
 		// evs's own answer to a creates-only ref's write (5c's change shape), given before anything is sealed
 		return nil, &EvsError{Status: http.StatusConflict, Code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT, PushId: &args.PushId, Paths: conflicts}
-	}
-	if directoryDelta {
-		return nil, fmt.Errorf("%w: question record-m3-12-stream-directory-rows", ErrEvsStreamDirectoryDelta)
 	}
 	sealed, err := self.client.sealWrite(ctx, plan, repoKey)
 	if err != nil {

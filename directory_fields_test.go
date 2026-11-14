@@ -169,19 +169,21 @@ func testDirectoryRepoRequest() *protocol.DirectoryRequest {
 	}
 }
 
-// A CanonicalAction of kind access_request at version 3, to dial a worker's one port, as stored.
+// A CanonicalAction of kind access_request at version 3, to dial a worker's one port, as stored: its clear grant_dst
+// names the worker alone, and the port and its text ride sealed_detail (QD-740), sealed beside the clear fields
+// (QD-771).
 func testDirectoryReachAction(t testing.TB, workerId []byte, subject []byte) []byte {
 	t.Helper()
-	action, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.CanonicalAction{
+	worker := "sidecar:" + directoryIdText(Id(workerId))
+	action, err := proto.MarshalOptions{Deterministic: true}.Marshal(testWithSealedDetail(&protocol.CanonicalAction{
 		Kind:            uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_ACCESS_REQUEST),
 		Version:         3,
 		ExpiresMillis:   testDirectoryRenewedMillis + 60*60*1000,
-		GrantDst:        []string{"sidecar:" + directoryIdText(Id(workerId)) + ":tcp:8080"},
+		GrantDst:        []string{worker},
 		GrantAllow:      []string{"dial"},
 		TargetSidecarId: workerId,
-		TargetPort:      8080,
 		Subject:         subject,
-	})
+	}, &protocol.CanonicalActionDetail{TargetPort: 8080, GrantDst: []string{worker + ":tcp:8080"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1444,9 +1446,9 @@ func TestDirectoryDecodeRequestKeepsItsApprovalAsReceived(t *testing.T) {
 	if ApprovalRequestSha256(stored.ApprovalBytes) == ApprovalRequestSha256(testDirectoryMarshal(t, stored.Request.GetApproval())) {
 		t.Error("a re-marshal hashed as the received bytes do, so this test shows nothing")
 	}
-	// version 3 is MCP-M6-01's: until it lands, an approver refuses the approval and never the request
-	if _, err := stored.Approval(); !errors.Is(err, ErrCanonicalActionVersionUnknown) {
-		t.Errorf("an approval of version 3 parsed for an approver: %v", err)
+	// an approver parses the approval, version 3 (MCP-M6-01), from the bytes as received
+	if approval, err := stored.Approval(); err != nil || approval == nil {
+		t.Errorf("an approval of version 3 did not parse for an approver: %v", err)
 	}
 
 	twice := protowire.AppendBytes(protowire.AppendTag(bytes.Clone(body), 14, protowire.BytesType), reversed)

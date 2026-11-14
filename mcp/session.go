@@ -1,7 +1,7 @@
 //go:build !js && !ios && !android && !sdk_mobile_bind
 
 // One relay connection's session (§16.4, D-MCP-2): its hello, its agent and the instructions text picked at its start,
-// its limits (limits.go), and its run bindings, one per network (hook_bind.go). The agent is an attribution label,
+// its claims values (§16.11), its limits (limits.go), and its run bindings, one per network (hook_bind.go). The agent is an attribution label,
 // agent_asserted (X10; owner decision 47): the hello's, else the project's `.ur` default, read once at the session's
 // start. A label that is not one leaves the session unable to serve calls, each refused, rather than recorded raw.
 //
@@ -13,6 +13,7 @@
 package mcp
 
 import (
+	"context"
 	"sync"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -30,7 +31,11 @@ type McpSession struct {
 	// why the hello's or .ur's agent label was refused, nil when it was not
 	agentErr     error
 	instructions string
-	limits       *mcpSessionLimits
+	// the session's claims, nil when its daemon reads none, and the value of the network it started in, nil when
+	// none resolved then; both fixed at the start
+	claims      McpSessionClaims
+	startClaims *sidecar.SidecarClaimsResolution
+	limits      *mcpSessionLimits
 	// the relay's harness process and ancestry, by the pid the system reports; empty when it cannot be read
 	caller mcpCallerProcess
 
@@ -57,6 +62,30 @@ func (self *McpSession) Agent() *sidecar.SidecarAgent {
 // The instructions text the session's go-sdk Server sends, fixed at its start.
 func (self *McpSession) Instructions() string {
 	return self.instructions
+}
+
+// The claims value the session started under, in the network it started in: what picked its instructions text. Nil
+// when its daemon reads no claims or no network resolved at its start. A copy.
+func (self *McpSession) StartClaims() *sidecar.SidecarClaimsResolution {
+	if self.startClaims == nil {
+		return nil
+	}
+	resolution := *self.startClaims
+	return &resolution
+}
+
+// The claims value the session runs under in networkId: resolved at its first ask and the same for the session's
+// life, whatever changes after (§16.10's claims row). Nil when its daemon reads no claims. A copy.
+func (self *McpSession) Claims(ctx context.Context, networkId sidecar.Id) *sidecar.SidecarClaimsResolution {
+	if self.claims == nil {
+		return nil
+	}
+	resolved := self.claims.For(ctx, networkId)
+	if resolved == nil {
+		return nil
+	}
+	resolution := *resolved
+	return &resolution
 }
 
 // Takes one of the session's W calls, refusing one past SessionWriteRate with a retryable McpCodeRateLimited error.

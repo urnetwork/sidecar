@@ -202,7 +202,7 @@ func TestAclDataSeatsAgentsTakeNoSeat(t *testing.T) {
 // (owner decision 182, §10.8).
 func TestAclDataSeatsRefusesTheConfigAndADirectory(t *testing.T) {
 	seats := newAclSeatsFixture(1)
-	configId, _ := seats.repo(protocol.RepoKind_REPO_KIND_CONFIG, Id{})
+	configId := seats.configRepo(Id{}, Id{})
 	directoryId, _ := seats.repo(protocol.RepoKind_REPO_KIND_DIRECTORY, Id{})
 	deletedId, deleted := seats.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
 	deleted.Deletion = &protocol.AclRepoDeletionRow{DeletionId: NewId().Bytes(), DeletedAt: seats.next()}
@@ -239,7 +239,7 @@ func TestAclUnseatedFollowsTheTreesItKnows(t *testing.T) {
 	exactId, _ := seats.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
 	deletedId, deleted := seats.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
 	deleted.Deletion = &protocol.AclRepoDeletionRow{DeletionId: NewId().Bytes(), DeletedAt: seats.next()}
-	configId, _ := seats.repo(protocol.RepoKind_REPO_KIND_CONFIG, Id{})
+	configId := seats.configRepo(Id{}, Id{})
 	seats.rule([]Id{seats.group(seats.memberId)}, []*protocol.AclTarget{aclRepoTarget(deletedId)}, protocol.AclAction_ACL_ACTION_READ)
 	// exactly 1,000 read the second repo
 	for _, sidecarId := range seats.devices[1:] {
@@ -275,7 +275,8 @@ func TestAclUnseatedFollowsTheTreesItKnows(t *testing.T) {
 func TestAclSeatsOnTheConfigLogsState(t *testing.T) {
 	net := newTestConfigNet(t)
 	member := testConfigId("seated member")
-	configId, repoId := testConfigId("seats config repo"), testConfigId("seats data repo")
+	// the config repo is the Genesis's, and the rows hold no row of it (QD-719)
+	configId, repoId := Id(net.log.State().Genesis().GetConfigRepoId()), testConfigId("seats data repo")
 	rows := net.log.State().Rows()
 	rows.Members = append(rows.Members, &bridge.MemberRow{MemberId: member.Bytes(), Role: bridge.MemberRole_MEMBER_ROLE_MEMBER})
 	seated := []Id{net.owner.sidecarId}
@@ -297,7 +298,6 @@ func TestAclSeatsOnTheConfigLogsState(t *testing.T) {
 			Actions:  []uint32{uint32(protocol.AclAction_ACL_ACTION_READ), uint32(protocol.AclAction_ACL_ACTION_WRITE)},
 		}},
 		Repos: []*protocol.AclRepo{
-			{RepoId: configId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG},
 			{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL},
 		},
 	})

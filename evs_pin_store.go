@@ -14,6 +14,25 @@
 // (DESIGN-DETAILS 9.2.2, 9.2.3): a floor only falls, and a record stored without them reads as no floor, which only
 // sends less.
 //
+// A record also keeps the ref version its entry was committed at (QD-816): exact where the read walked the statement
+// that wrote it, else evs's word, as what a never-read path holds below a pin is (Q-EVS-6). A verified EvsReseed,
+// which lowers the ref's pin to a re-seeded head h, takes the ref's records with it:
+//
+//	lost      a record whose entry was committed above h is dropped: the incident lost that entry, so the path's
+//	          surviving version reads as part of the ref's loss, never as a rollback refused and alarmed
+//	kept      any other keeps its entry version, so the path's rollback check stands, with its pin lowered to h, C_h
+//	          and h's current epoch where it lay above h
+//	before    a record stored before the field holds no commit version: dropped when its pin lies above h, since
+//	          which entry it read cannot be told, else kept as it is
+//	floors    a kept record's floor above h's current epoch is lowered to it: a floor holds no commit version either,
+//	          and a path that stands at h was named there, by the map that cut the ref over to that epoch or by a
+//	          push in it
+//
+// The records are durable before the pin is written, so a kill between the two leaves the pin above h, the next read
+// meets h again under the same EvsReseed, and that changes nothing twice. A read whose head the pin fell below while
+// it ran raises no record (RaiseReadRecords), and a read in flight loads its records again when the ref's count of
+// reseeds moves (reseedCount).
+//
 // Layout: pins/<repo_id> and reads/<repo_id>, each the repo's records as JSON, rewritten whole by Commit, so a kill
 // leaves the old file or the new one. Writes serialize on writeLock, which is never held with stateLock's work on the
 // store; memory answers reads under stateLock. Safe for concurrent use.
@@ -76,8 +95,10 @@ type EvsReadRecord struct {
 	RefId  Id
 	// The path as this device names it, raw names joined by /.
 	Path string
-	// The entry version last read.
-	EntryVersion uint64
+	// The entry version last read, and the ref version its push committed at, 0 for a record stored before that was
+	// kept (QD-816).
+	EntryVersion  uint64
+	CommitVersion uint64
 	// The ref pin the read verified against, and C there, so the next read of the path checks every statement since.
 	PinVersion uint64
 	PinChain   *[sha256.Size]byte
@@ -101,16 +122,17 @@ type evsPinRecord struct {
 	LossAtMs      int64  `json:"loss_at_ms,omitempty"`
 }
 
-// A read record's stored form.
+// A read record's stored form. A field added later is optional, so a record stored before it opens with its zero.
 type evsReadRecordRecord struct {
-	RefId        string `json:"ref_id"`
-	Path         string `json:"path"`
-	EntryVersion uint64 `json:"entry_version"`
-	PinVersion   uint64 `json:"pin_version"`
-	PinChain     string `json:"pin_chain,omitempty"`
-	UsedAtMs     int64  `json:"used_at_ms"`
-	Floor        uint64 `json:"floor,omitempty"`
-	PinEpoch     uint64 `json:"pin_epoch,omitempty"`
+	RefId         string `json:"ref_id"`
+	Path          string `json:"path"`
+	EntryVersion  uint64 `json:"entry_version"`
+	CommitVersion uint64 `json:"commit_version,omitempty"`
+	PinVersion    uint64 `json:"pin_version"`
+	PinChain      string `json:"pin_chain,omitempty"`
+	UsedAtMs      int64  `json:"used_at_ms"`
+	Floor         uint64 `json:"floor,omitempty"`
+	PinEpoch      uint64 `json:"pin_epoch,omitempty"`
 }
 
 // One repo's state as memory holds it.
@@ -137,14 +159,18 @@ type EvsPinStore struct {
 	stateLock   sync.Mutex
 	loaded      bool
 	repoIdRepos map[Id]*evsRepoState
+	// per ref, the verified EvsReseeds this store took since it opened, in memory only: a read in flight that loaded
+	// the ref's records loads them again when it moves
+	refReseedCounts map[evsRefKey]uint64
 }
 
 // The store over the evs component's sealed directory.
 func NewEvsPinStore(store SidecarStore, settings *EvsSettings) *EvsPinStore {
 	return &EvsPinStore{
-		store:       store,
-		settings:    settings,
-		repoIdRepos: map[Id]*evsRepoState{},
+		store:           store,
+		settings:        settings,
+		repoIdRepos:     map[Id]*evsRepoState{},
+		refReseedCounts: map[evsRefKey]uint64{},
 	}
 }
 
@@ -206,14 +232,15 @@ func (self *EvsPinStore) load() error {
 						return fmt.Errorf("%w: an evs read record's ref", ErrSidecarStoreFailed)
 					}
 					read := &EvsReadRecord{
-						RepoId:       repoId,
-						RefId:        refId,
-						Path:         record.Path,
-						EntryVersion: record.EntryVersion,
-						PinVersion:   record.PinVersion,
-						UsedAt:       time.UnixMilli(record.UsedAtMs),
-						Floor:        record.Floor,
-						PinEpoch:     record.PinEpoch,
+						RepoId:        repoId,
+						RefId:         refId,
+						Path:          record.Path,
+						EntryVersion:  record.EntryVersion,
+						CommitVersion: record.CommitVersion,
+						PinVersion:    record.PinVersion,
+						UsedAt:        time.UnixMilli(record.UsedAtMs),
+						Floor:         record.Floor,
+						PinEpoch:      record.PinEpoch,
 					}
 					if record.PinChain != "" {
 						chainBytes, err := hex.DecodeString(record.PinChain)
@@ -410,18 +437,100 @@ func (self *EvsPinStore) Raise(pin *EvsPin) error {
 	})
 }
 
-// Lowers a ref's pin to pin under a verified EvsReseed (§11.13): the only way a pin falls, kept as a loss.
-// reseedVersion and reseedChain are the EvsReseed's, which pin must equal.
-func (self *EvsPinStore) lowerByReseed(pin *EvsPin, incidentId []byte, at time.Time) error {
-	return self.update(pin.RepoId, func(state *evsRepoState) error {
+// Lowers a ref's pin to pin, the re-seeded head a verified EvsReseed names (§11.13): the only way a pin falls, kept
+// as a loss, and the ref's read records with it, headEpoch being that head's current path epoch (QD-816; see the file
+// header). The records are durable first. The pin keeps the group and gap mark held, and the same head again keeps
+// the loss already held.
+func (self *EvsPinStore) lowerByReseed(pin *EvsPin, incidentId []byte, at time.Time, headEpoch uint64) error {
+	if err := self.load(); err != nil {
+		return err
+	}
+	self.writeLock.Lock()
+	defer self.writeLock.Unlock()
+	reads, changed := func() (map[evsReadKey]*EvsReadRecord, bool) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		reads := map[evsReadKey]*EvsReadRecord{}
+		changed := false
+		for key, record := range self.repoWithLock(pin.RepoId).reads {
+			if key.refId != pin.RefId {
+				reads[key] = record
+				continue
+			}
+			lowered := evsReseedReadRecord(record, pin, headEpoch)
+			if lowered != record {
+				changed = true
+			}
+			if lowered != nil {
+				reads[key] = lowered
+			}
+		}
+		return reads, changed
+	}()
+	if changed {
+		if err := self.writeReadsWithWriteLock(pin.RepoId, reads); err != nil {
+			return err
+		}
+	}
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if changed {
+			self.repoWithLock(pin.RepoId).reads = reads
+		}
+		self.refReseedCounts[evsRefKey{repoId: pin.RepoId, refId: pin.RefId}] += 1
+	}()
+	return self.updateWithWriteLock(pin.RepoId, func(state *evsRepoState) error {
 		held := state.refIdPins[pin.RefId]
 		lowered := pin.clone()
-		if held != nil && pin.Version < held.Version {
-			lowered.Loss = &EvsPinLoss{IncidentId: slices.Clone(incidentId), FromVersion: held.Version, At: at}
+		if held != nil {
+			if pin.Version < held.Version {
+				lowered.Loss = &EvsPinLoss{IncidentId: slices.Clone(incidentId), FromVersion: held.Version, At: at}
+			} else if lowered.Loss == nil {
+				// a second read that met the same head before the first lowered the pin
+				lowered.Loss = held.Loss
+			}
+			if lowered.GroupId == (Id{}) {
+				lowered.GroupId = held.GroupId
+			}
+			if lowered.VerifiedSince.IsZero() {
+				lowered.VerifiedSince = held.VerifiedSince
+			}
 		}
 		state.refIdPins[pin.RefId] = lowered
 		return nil
 	})
+}
+
+// What a verified EvsReseed to head, its version and chain, at headEpoch leaves of one of the ref's read records (see
+// the file header): nil when it drops it, record itself when nothing changes, else a lowered copy.
+func evsReseedReadRecord(record *EvsReadRecord, head *EvsPin, headEpoch uint64) *EvsReadRecord {
+	switch {
+	case record.CommitVersion != 0 && head.Version < record.CommitVersion:
+		// the incident lost the entry read
+		return nil
+	case record.CommitVersion == 0 && head.Version < record.PinVersion:
+		// stored before the commit version was kept, and read above the head
+		return nil
+	case record.PinVersion <= head.Version && record.Floor <= headEpoch:
+		return record
+	}
+	lowered := *record
+	if head.Version < lowered.PinVersion {
+		chain := head.Chain
+		lowered.PinVersion, lowered.PinChain, lowered.PinEpoch = head.Version, &chain, headEpoch
+	}
+	if headEpoch < lowered.Floor {
+		lowered.Floor = headEpoch
+	}
+	return &lowered
+}
+
+// How many verified EvsReseeds this store took for a ref since it opened.
+func (self *EvsPinStore) reseedCount(repoId Id, refId Id) uint64 {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.refReseedCounts[evsRefKey{repoId: repoId, refId: refId}]
 }
 
 // Drops every pin and read record of a repo, as a shred does (§11.12).
@@ -450,6 +559,11 @@ func (self *EvsPinStore) update(repoId Id, change func(state *evsRepoState) erro
 	}
 	self.writeLock.Lock()
 	defer self.writeLock.Unlock()
+	return self.updateWithWriteLock(repoId, change)
+}
+
+// update, under writeLock, the store loaded.
+func (self *EvsPinStore) updateWithWriteLock(repoId Id, change func(state *evsRepoState) error) error {
 	copied := func() *evsRepoState {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -523,9 +637,11 @@ func (self *EvsPinStore) ReadRecord(repoId Id, refId Id, path string) (*EvsReadR
 	return &copied, true, nil
 }
 
-// Raises the read records of one repo's reads, each to its entry version and pin, its floor to the lower of the two,
-// and evicts the network's least recently used past HeadReadRecordCount. A record never falls: a lower entry version
-// is the caller's refusal, which it makes before calling this.
+// Raises the read records of one repo's reads, each to its entry version, with that entry's commit version, and pin,
+// its floor to the lower of the two, and evicts the network's least recently used past HeadReadRecordCount. A record
+// never falls: a lower entry version is the caller's refusal, which it makes before calling this. A record pinned
+// above its ref's pin raises nothing: a verified EvsReseed lowered the pin after the read pinned a head of the history
+// the incident lost, and a record of it would hold that history's entry over the re-seeded one (QD-816).
 func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) error {
 	if len(records) == 0 {
 		return nil
@@ -552,12 +668,22 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 			return reads
 		}
 		reads := copyOf(repoId)
+		refIdPins := self.repoWithLock(repoId).refIdPins
 		for _, record := range records {
+			if pin := refIdPins[record.RefId]; pin != nil && pin.Version < record.PinVersion {
+				continue
+			}
 			key := evsReadKey{refId: record.RefId, path: record.Path}
 			raised := *record
 			raised.RepoId = repoId
 			if held := reads[key]; held != nil {
-				raised.EntryVersion = max(raised.EntryVersion, held.EntryVersion)
+				switch {
+				case raised.EntryVersion < held.EntryVersion:
+					raised.EntryVersion, raised.CommitVersion = held.EntryVersion, held.CommitVersion
+				case raised.EntryVersion == held.EntryVersion && held.CommitVersion != 0:
+					// an entry version commits once, and the first read of it knew its commit as well as any later one
+					raised.CommitVersion = held.CommitVersion
+				}
 				if raised.PinVersion < held.PinVersion {
 					raised.PinVersion, raised.PinChain, raised.PinEpoch = held.PinVersion, held.PinChain, held.PinEpoch
 				}
@@ -590,33 +716,7 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 		}
 	}()
 	for changedRepoId, reads := range changed {
-		stored := []*evsReadRecordRecord{}
-		for _, record := range reads {
-			storedRecord := &evsReadRecordRecord{
-				RefId:        record.RefId.String(),
-				Path:         record.Path,
-				EntryVersion: record.EntryVersion,
-				PinVersion:   record.PinVersion,
-				UsedAtMs:     record.UsedAt.UnixMilli(),
-				Floor:        record.Floor,
-				PinEpoch:     record.PinEpoch,
-			}
-			if record.PinChain != nil {
-				storedRecord.PinChain = hex.EncodeToString(record.PinChain[:])
-			}
-			stored = append(stored, storedRecord)
-		}
-		slices.SortFunc(stored, func(a *evsReadRecordRecord, b *evsReadRecordRecord) int {
-			if c := strings.Compare(a.RefId, b.RefId); c != 0 {
-				return c
-			}
-			return strings.Compare(a.Path, b.Path)
-		})
-		data, err := json.Marshal(stored)
-		if err != nil {
-			return err
-		}
-		if err := self.writeFile(evsReadDirectory+changedRepoId.String(), data); err != nil {
+		if err := self.writeReadsWithWriteLock(changedRepoId, reads); err != nil {
 			return err
 		}
 	}
@@ -626,4 +726,36 @@ func (self *EvsPinStore) RaiseReadRecords(repoId Id, records []*EvsReadRecord) e
 		self.repoWithLock(changedRepoId).reads = reads
 	}
 	return nil
+}
+
+// Writes one repo's read records whole, under writeLock.
+func (self *EvsPinStore) writeReadsWithWriteLock(repoId Id, reads map[evsReadKey]*EvsReadRecord) error {
+	stored := []*evsReadRecordRecord{}
+	for _, record := range reads {
+		storedRecord := &evsReadRecordRecord{
+			RefId:         record.RefId.String(),
+			Path:          record.Path,
+			EntryVersion:  record.EntryVersion,
+			CommitVersion: record.CommitVersion,
+			PinVersion:    record.PinVersion,
+			UsedAtMs:      record.UsedAt.UnixMilli(),
+			Floor:         record.Floor,
+			PinEpoch:      record.PinEpoch,
+		}
+		if record.PinChain != nil {
+			storedRecord.PinChain = hex.EncodeToString(record.PinChain[:])
+		}
+		stored = append(stored, storedRecord)
+	}
+	slices.SortFunc(stored, func(a *evsReadRecordRecord, b *evsReadRecordRecord) int {
+		if c := strings.Compare(a.RefId, b.RefId); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Path, b.Path)
+	})
+	data, err := json.Marshal(stored)
+	if err != nil {
+		return err
+	}
+	return self.writeFile(evsReadDirectory+repoId.String(), data)
 }

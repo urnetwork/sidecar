@@ -225,6 +225,14 @@ statement_sha256   SHA-256 of the statement's Signed as stored
 packet_sha256      SHA-256 of the packet file
 config_sha256,     §16.6's harness config hash and its hash of a call's arguments, unchanged
 arguments_sha256
+detail nonce       what stands for a header's nonce in the aad of CanonicalAction.sealed_detail, §7.9's sealed body,
+                   since an action has no header (QD-771): the first 16 bytes of SHA-256 over the action as stored
+                   with its field-38 record cut out, every other tag and value kept in its stored order and encoding;
+                   a builder's action, written once in field-number order, gives the deterministic encoding of its
+                   clear fields alone. The aad's SignedType is SIGNED_GRANT_ACTIVATE and its network_id the action's
+                   network, so a detail opens beside the clear fields it was sealed with, in that network, and beside
+                   no other: a daemon seals once those fields are final, and an approver and every reader derive the
+                   nonce from the bytes they open
 elsewhere          the tool action_id (section 4.4); sealed_body's aad (section 5.2); the agent key's signature (section
                    5.3); the log key's id (section 10.2)
 ```
@@ -1579,4 +1587,13 @@ weights_digest     a.bin of file SHA-256 32 x 0x11; b/c.bin of file SHA-256 32 x
                    fe6beeb3275d648269c92a0ba1c24917f9030a8e9b5271a31045194bf14c5456
 stream path        n 1: e/0/0/1; n 2,047: e/0/0/2047; n 2,048: e/0/1/2048; n 4,194,303: e/0/2047/4194303;
                    n 4,194,304: e/1/0/4194304
+detail nonce v4    QD-771's sealed_detail nonce: the first 16 bytes of SHA-256 over a CanonicalAction as stored with
+                   its field-38 record cut out; a bridge_forward of kind 3, expires_millis 1762387200000, grant_dst
+                   "sidecar:5152535455565758595a5b5c5d5e5f60", grant_allow "dial", version 4, rule_id = 16 x 0x46,
+                   subject = 16 x 0x47, in field order
+                   632433b055aec9dfe3bd036d88318ca7
+detail nonce v3    an access_request of kind 15, expires_millis 1762387200000, grant_dst
+                   "sidecar:0102030405060708090a0b0c0d0e0f10", grant_allow "dial", version 3, repo_id = 16 x 0x31,
+                   target_sidecar_id = 16 x 0x32, subject = 16 x 0x33, in field order
+                   fdb5388cdb287f4c28f31e2b5d1a0718
 ```

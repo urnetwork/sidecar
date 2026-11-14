@@ -15,7 +15,7 @@
 //	owner-bound   a read, write or admin on a vault, mailbox or secret repo, which only its owner's EvsShare or the
 //	              audit block adds (D-ACL-13, owner decision 126); a deposit to a vault or mailbox stands
 //	config        any grant on the config repo or the directory (D-ACL-13, D-ACL-24)
-//	audit         an audit block, which counts only under a k-of-n AuditOptIn, and none stands before ACL-M6-02
+//	audit         an audit block while no k-of-n AuditOptIn stands at the head's time (ACL-M6-02)
 //	publishes     a standing publish outside a Pro or Team document (§8.5); a publish request past the tier's
 //	              publish expiry (§13.9: 7 days on Community)
 //	raw           app_mode raw outside audience public and link, and a raw link without link_spki_sha256 (§13.7)
@@ -132,7 +132,9 @@ func (self *aclValidator) refuse(rule string, field string, reason string) {
 func (self *aclValidator) validate() {
 	limits := self.input.Limits
 	if self.policy.Audit != nil {
-		self.refuse("audit", "", "an audit block counts only under an AuditOptIn, and none stands before ACL-M6-02")
+		if notAfter, ok := aclAuditNotAfter(self.input.Compile.Statements.GetAudit().GetAuditOptIn()); !ok || notAfter <= self.input.Compile.HeadTimeMs {
+			self.refuse("audit", "", "an audit block counts only under a k-of-n AuditOptIn, and none stands")
+		}
 	}
 	if limits != nil {
 		if 0 < len(self.policy.Groups) && limits.Groups == 0 {

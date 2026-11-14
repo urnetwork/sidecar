@@ -60,7 +60,7 @@ func FuzzCheckHeaderBlock(f *testing.F) {
 	f.Add([]byte(testHeaderBlock()))
 	f.Add([]byte("\r\n\r\n"))
 	f.Add([]byte("From: <a@b>\r\n\r\n"))
-	preamble := newSessionPreamble(testJob("", "bob").Preamble)
+	preamble := newSessionPreamble(testJob("", "bob").Preamble, DefaultProofSettings())
 	f.Fuzz(func(t *testing.T, input []byte) {
 		checkHeaderBlock(input, preamble)
 		checkDataLines(input)
@@ -127,7 +127,7 @@ func TestTheGateSurvivesRandomRecordsInEveryPhase(t *testing.T) {
 type testAssigningVerifier struct{}
 
 func (self *testAssigningVerifier) verifyPart(ctx context.Context, statement *partStatement, proof []byte) error {
-	_, err := partShapeFor(statement)
+	_, err := partShapeFor(DefaultProofSettings(), statement)
 	return err
 }
 
@@ -146,7 +146,7 @@ func TestAnEmptyRecordFailsClosedInEveryPart(t *testing.T) {
 			for i := range statement.clientRecords {
 				clone := testCloneStatement(statement)
 				clone.clientRecords[i].raw = empty
-				if _, err := partShapeFor(clone); err == nil {
+				if _, err := partShapeFor(DefaultProofSettings(), clone); err == nil {
 					t.Errorf("%s: part %d record %d: a shape took an empty record", leg.name, index, i)
 				}
 			}
@@ -207,14 +207,21 @@ func TestTheGateSurvivesMutatedParts(t *testing.T) {
 }
 
 func TestAHugeDeclaredRecipientCountCostsNothing(t *testing.T) {
-	// the count is the sidecar's, and pi2's shape is checked against it before anything is built
+	// the count is the sidecar's: the preamble's check refuses it past RecipientMaxCount, and roles,
+	// which follow from positions, build nothing by it
+	preamble := newSessionPreamble(testJob("", "bob").Preamble, DefaultProofSettings())
+	preamble.recipientCount = 1<<32 - 1
+	if err := checkSessionPreamble(preamble); err == nil {
+		t.Error("a preamble of a huge recipient count passed")
+	}
 	statement := &partStatement{
-		session:       &sessionStatement{preamble: &sessionPreamble{recipientCount: 1<<32 - 1}},
+		session:       &sessionStatement{version: tlsVersion13, preamble: preamble},
 		index:         2,
 		mode:          partModeBdat,
-		clientRecords: []*partRecord{{}, {}},
+		clientRecords: []*partRecord{{seq: 1}, {seq: 1 << 31}},
 	}
-	if _, err := partRoles(statement); err == nil {
-		t.Error("two records fit a huge recipient count")
+	roles, err := partRoles(statement)
+	if err != nil || roles[0] != recordRoleMail || roles[1] != recordRoleRcpt {
+		t.Errorf("roles %v, %v", roles, err)
 	}
 }

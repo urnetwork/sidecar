@@ -11,6 +11,10 @@
 // generation n+1 on a new ClientKey, removing the old child (§5.8). A child token minted elsewhere carries no answer
 // this sidecar saw, so Enroll refuses ChildJwt alone (ErrSidecarEnrollChild).
 //
+// The token kept is the one bind answers, the child's re-minted with the bound sidecar_id (QD-040, QD-797), and the
+// host's source, which holds the mint's, takes it too where it can (SidecarTokenSourceRemint), so its refreshes keep
+// the claim sockets reads.
+//
 // On every leg: root Id, no connect type.
 
 package sidecar
@@ -120,7 +124,7 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 		return abandon(err)
 	}
 	testHookBarrier("identity.bind.before", sidecarId.String())
-	boundGeneration, err := childApi.Bind(ctx, signedBinding)
+	bound, err := childApi.Bind(ctx, signedBinding)
 	testHookBarrier("identity.bind.after", sidecarId.String())
 	if err != nil {
 		if previous != nil && isSidecarRevokedRefusal(err) {
@@ -130,11 +134,12 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 		}
 		return abandon(err)
 	}
-	if boundGeneration != generation {
-		return abandon(fmt.Errorf("%w: api bound generation %d, not %d", ErrSidecarApiReply, boundGeneration, generation))
+	if err := checkSidecarBound(bound, generation, sidecarId); err != nil {
+		return abandon(err)
 	}
 
-	// both marks confirmed and the binding recorded: the keychain first, sidecar.json last of all
+	// both marks confirmed and the binding recorded: the keychain first, sidecar.json last of all; the token kept is
+	// api's re-mint of the child's, which names the sidecar (QD-797)
 	if previous == nil {
 		if _, err := self.instance.createKeychain(networkId); err != nil {
 			return abandon(err)
@@ -144,7 +149,7 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 	if _, err := persistSidecarIdentity(secrets, keys, signedBinding); err != nil {
 		return abandon(err)
 	}
-	if err := persistSidecarByJwt(secrets, result.ByClientJwt); err != nil {
+	if err := persistSidecarByJwt(secrets, bound.ByClientJwt); err != nil {
 		return abandon(err)
 	}
 	if readerKeySeed != nil {
@@ -166,6 +171,9 @@ func (self *Sidecar) enrollChild(ctx context.Context, credential *SidecarEnrollC
 	if err != nil {
 		return abandon(err)
 	}
+	// the host's source holds the child's pre-bind token from its mint and refreshes whatever it holds, so it takes the
+	// re-mint too before the generation starts, else its first token would replace the keychain's (followTokenSource)
+	self.handOffRemintedToken(bound.ByClientJwt)
 	if previous != nil && previousByJwt != "" {
 		// the old child goes with its own token (§5.8's re-pair)
 		if err := self.sidecarApi.withByJwt(previousByJwt).RemoveClient(ctx, previous.identity.ClientId); err != nil {

@@ -98,7 +98,7 @@ func TestBudgetRebuildsALostKeyEqualToTheRows(t *testing.T) {
 		t.Fatalf("admitted %+v", report)
 	}
 	if applied, err := certs.store.TransitionCert(certs.ctx, &certsservice.CertsTransition{
-		CertId: otherId, From: []sidecar.TlsCertState{sidecar.TlsCertStateOrdering}, To: sidecar.TlsCertStateFailed,
+		CertId: otherId, From: []sidecar.TlsCertState{sidecar.TlsCertStateOrdering}, To: sidecar.TlsCertStateFailed, At: certs.clock.Now(),
 	}); err != nil || !applied {
 		t.Fatal(err)
 	}

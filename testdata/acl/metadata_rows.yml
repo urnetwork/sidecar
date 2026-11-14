@@ -4,6 +4,7 @@
 
 AclRows.suspensions: {number: 8, type: repeated AclSuspension, row: api-7, pending: "plan-ACL-folded-grant-state #1: api-7's rows add the folded Suspends"}
 AclRows.spent_grants: {number: 9, type: repeated AclSpentGrant, row: api-7, pending: "plan-ACL-folded-grant-state #3: api-7's rows add the spent grant ids"}
+AclRows.evidence_default: {number: 10, type: repeated uint32, row: api-7, pending: "mcp-m3-03-evidence-default-at-gates (QD-727): api-7's rows add the document's default evidence channels"}
 
 AclAtom.tag_owner_member_ids: {number: 4, type: repeated bytes, row: api-7, pending: "plan-ACL-atom-and-rule-ids #4: api-7 adds tag owners"}
 AclAtom.client_ids: {number: 5, type: repeated bytes, row: api-7, pending: "plan-ACL-nonsidecar-subjects: api-7 adds these to atoms"}
@@ -24,3 +25,9 @@ AclSuspension.at: {number: 5, type: uint64, row: api-7, pending: "plan-ACL-folde
 
 AclSpentGrant.grant_id: {number: 1, type: bytes, row: api-7, pending: "plan-ACL-folded-grant-state #3: api-7's rows add the spent grant ids"}
 AclSpentGrant.retain_until_ms: {number: 2, type: int64, row: api-7, pending: "plan-ACL-folded-grant-state #3: api-7's rows add the spent grant ids"}
+
+AclRepo.prefix_rules: {number: 12, type: repeated AclRepoPrefixRulesRow, row: api-7, pending: "DESIGN-DETAILS 16.8 (QD-212): api-7's rows add, for each general repo, every RepoPrefixRules entry's position and signer"}
+AclRepoPrefixRulesRow.signer: {number: 1, type: bytes, row: api-7, pending: "DESIGN-DETAILS 16.8 (QD-212): api-7's rows add, for each general repo, every RepoPrefixRules entry's position and signer"}
+AclRepoPrefixRulesRow.at: {number: 2, type: uint64, row: api-7, pending: "DESIGN-DETAILS 16.8 (QD-212): api-7's rows add, for each general repo, every RepoPrefixRules entry's position and signer"}
+
+RepoPrefixRules.sealed_rules: {number: 3, type: bytes, row: api-7, pending: "DESIGN-DETAILS 16.8 (QD-212): api-7 adds the generation a set's rules are sealed to and their padded length, never a rule, a subject or a prefix"}

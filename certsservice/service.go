@@ -19,6 +19,8 @@
 //   - budget.go, CertsBudget, {tcb_<ca>_<registered_domain>}.
 //   - queue.go, the admission pass.
 //   - service.go, the service, its seams to DNS and the CAs, and the routes' reads.
+//   - run.go, the chains' passes: orders, renewals and the revocation sweep (TLS-M5-17).
+//   - hints.go, TlsHint on topic tls.
 //
 // A CA's Retry-After and the names' failed authorizations are held in the process, as the extender's
 // hold is: a restart forgets them, and the CA's next refusal holds again.
@@ -175,6 +177,8 @@ type CertsService struct {
 	budget   *CertsBudget
 	settings *CertsSettings
 	clock    sidecar.Clock
+	// the host's hints, nil on a host with none: no TlsHint is published (hints.go)
+	push sidecar.Push
 
 	stateLock sync.Mutex
 	// the newest cert_id minted here (newCertId)
@@ -218,6 +222,7 @@ func NewCertsService(
 		budget:       NewCertsBudget(host.Redis, store, settings),
 		settings:     settings,
 		clock:        host.ClockOrReal(),
+		push:         host.Push,
 		caHolds:      map[CertsCa]time.Time{},
 		nameFailures: map[string][]time.Time{},
 	}, nil
@@ -298,9 +303,9 @@ func certsOrderOpen(state sidecar.TlsCertState) bool {
 	return state == sidecar.TlsCertStateQueued || state == sidecar.TlsCertStateOrdering || state == sidecar.TlsCertStateWaitingDns
 }
 
-// GET /tls/cert-order/<id>: the caller's own order, ErrCertsNotFound for anyone else's. A row holds a
-// chain only for a custom domain (cert-1), so a URnetwork-zone order's chain is not served here until
-// tls-m5-05-cert-row-values settles where an issued chain waits.
+// GET /tls/cert-order/<id>: the caller's own order, ErrCertsNotFound for anyone else's. The chain is
+// the row's, written when its order issued (run.go) and kept until ChainRetention past the
+// certificate's end, so it is read the same after a restart and by a device that was offline.
 func (self *CertsService) OrderStatus(ctx context.Context, networkId sidecar.Id, clientId sidecar.Id, certId sidecar.Id) (*sidecar.TlsCertOrderStatus, error) {
 	callCtx, cancel := self.callContext(ctx)
 	defer cancel()
@@ -342,9 +347,31 @@ func (self *CertsService) Certs(ctx context.Context, networkId sidecar.Id) (*sid
 	return result, nil
 }
 
-// Deletes the rows past RowRetention from their end, as the store can count it (CertsStore.PurgeEnded).
-func (self *CertsService) Purge(ctx context.Context) (int, error) {
+// What one purge removed.
+type CertsPurgeReport struct {
+	// Rows that lost their chain and stay.
+	ChainCount int
+	// Rows deleted.
+	RowCount int
+}
+
+// Drops the chains past ChainRetention from their certificate's expiry or revocation, then deletes the
+// rows past RowRetention from their expiry, revocation or failure (cert-1; CertsStore.PurgeChains,
+// CertsStore.PurgeEnded). An error ends it with what it has done.
+func (self *CertsService) Purge(ctx context.Context) (*CertsPurgeReport, error) {
+	report := &CertsPurgeReport{}
+	now := self.clock.Now()
 	callCtx, cancel := self.callContext(ctx)
 	defer cancel()
-	return self.store.PurgeEnded(callCtx, self.clock.Now().Add(-self.settings.RowRetention))
+	chainCount, err := self.store.PurgeChains(callCtx, now.Add(-self.settings.ChainRetention))
+	if err != nil {
+		return report, err
+	}
+	report.ChainCount = chainCount
+	rowCount, err := self.store.PurgeEnded(callCtx, now.Add(-self.settings.RowRetention))
+	if err != nil {
+		return report, err
+	}
+	report.RowCount = rowCount
+	return report, nil
 }

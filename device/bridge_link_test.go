@@ -629,3 +629,94 @@ func TestBridgeLinkSettings(t *testing.T) {
 		t.Fatal("the link's generator parks identities, or the host's settings changed")
 	}
 }
+
+// An app host's target as the rules pin it: the sidecar's identity key, and the device client and its key that the
+// sidecar's live forwarding Delegation names (§17.9's target row; owner decision 197).
+func linkTestAppHostTarget(seed byte) device.BridgeLinkTarget {
+	target := linkTestTarget(seed)
+	copy(target.HostClientPublicKey[:], linkTestClientKey(seed).Public().(ed25519.PublicKey))
+	return target
+}
+
+// A link to an app host is built on the client key the rules pin, with no binding fetched, and admits a contract only
+// to that client under that key: a substituted host key is refused and marks the link down, and so is the key
+// GET /sidecar/identity would have named, the sidecar's own client's.
+func TestBridgeLinkToAnAppHostHoldsThePinnedClientKey(t *testing.T) {
+	fetchCount := 0
+	var fetchLock sync.Mutex
+	test := newLinkTest(t, func(settings *device.BridgeSettings) {
+		settings.LinkTargetKey = func(ctx context.Context, targetSidecarId connect.Id, targetClientId connect.Id) ([]byte, error) {
+			fetchLock.Lock()
+			defer fetchLock.Unlock()
+			fetchCount += 1
+			return nil, errors.New("an app host's binding is never fetched")
+		}
+	})
+	target := linkTestAppHostTarget(4)
+	uses := test.manager.Retain([]device.BridgeLinkTarget{target})[target]
+	if len(uses) != 1 {
+		t.Fatalf("the target has %d links", len(uses))
+	}
+	link := uses[0].Link
+	test.open(link)
+	func() {
+		fetchLock.Lock()
+		defer fetchLock.Unlock()
+		if fetchCount != 0 {
+			t.Fatalf("%d bindings fetched for an app host", fetchCount)
+		}
+	}()
+	pinnedKey := linkTestClientKey(4).Public().(ed25519.PublicKey)
+	if allowed, built := test.manager.DestinationAllowedForTest(link, target.ClientId, pinnedKey); !built || !allowed {
+		t.Fatalf("the pinned host client: allowed %t, built %t", allowed, built)
+	}
+	// another client under the pinned key
+	if allowed, _ := test.manager.DestinationAllowedForTest(link, sidecartest.BridgeFixtureClientId(5), pinnedKey); allowed {
+		t.Fatal("another destination under the pinned key was allowed")
+	}
+	if down := test.awaitDown(); down != link {
+		t.Fatalf("link %d down, want %d", down, link)
+	}
+
+	// a substituted host key, as an operator's stored contract would carry
+	substituted := newLinkTest(t, nil)
+	substitutedUses := substituted.manager.Retain([]device.BridgeLinkTarget{target})[target]
+	substitutedLink := substitutedUses[0].Link
+	substituted.open(substitutedLink)
+	if allowed, _ := substituted.manager.DestinationAllowedForTest(substitutedLink, target.ClientId, linkTestClientKey(5).Public().(ed25519.PublicKey)); allowed {
+		t.Fatal("a substituted host key was allowed")
+	}
+	if down := substituted.awaitDown(); down != substitutedLink {
+		t.Fatalf("link %d down, want %d", down, substitutedLink)
+	}
+	// the identity key in the client key's place
+	if allowed, _ := substituted.manager.DestinationAllowedForTest(substitutedLink, target.ClientId, target.IdentityPublicKey[:]); allowed {
+		t.Fatal("the identity key as the host client's was allowed")
+	}
+}
+
+// A change of the client key the rules pin is another target: the link is built anew, and the old one leaves with its
+// target. A target with no pin fetches and verifies its binding as before.
+func TestBridgeLinkPinnedClientKeyChangeIsAnotherTarget(t *testing.T) {
+	test := newLinkTest(t, nil)
+	pinned := linkTestAppHostTarget(4)
+	first := test.manager.Retain([]device.BridgeLinkTarget{pinned})[pinned][0].Link
+	test.open(first)
+	repinned := linkTestTarget(4)
+	copy(repinned.HostClientPublicKey[:], linkTestClientKey(6).Public().(ed25519.PublicKey))
+	second := test.manager.Retain([]device.BridgeLinkTarget{repinned})[repinned][0].Link
+	if second == first {
+		t.Fatal("a new pinned key kept the old link")
+	}
+	test.open(second)
+	if allowed, _ := test.manager.DestinationAllowedForTest(second, repinned.ClientId, linkTestClientKey(4).Public().(ed25519.PublicKey)); allowed {
+		t.Fatal("the old pinned key was allowed on the new link")
+	}
+	// the unpinned twin goes by its binding
+	twin := newLinkTest(t, nil)
+	twinLink := twin.link(4)
+	twin.open(twinLink)
+	if allowed, built := twin.manager.DestinationAllowedForTest(twinLink, linkTestTarget(4).ClientId, linkTestClientKey(4).Public().(ed25519.PublicKey)); !built || !allowed {
+		t.Fatalf("the binding's client key: allowed %t, built %t", allowed, built)
+	}
+}

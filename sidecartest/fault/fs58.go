@@ -15,8 +15,8 @@
 // FS-58's page-out of a directory changed in every version, folds held until 255 versions (429 FOLD_BEHIND), the
 // idle ref's PATH_EPOCH folding every version, the newer-head and listing cases, the removal folds of D and D/x with
 // late marker PUTs, a file removed and re-created across a marker's collection and a path-epoch copy, versions not
-// max(b, m) + 1 refused, and the collection window with its clocks 50 ms off are EVS1-M2-41's report's; FI-15's
-// oracle is not bound (TEST-M2-04).
+// max(b, m) + 1 refused, and the collection window with its clocks 50 ms off are EVS1-M2-41's report's; FI-15 holds
+// through the world's checks (TEST-M2-04).
 
 package fault
 

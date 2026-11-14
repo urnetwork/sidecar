@@ -29,12 +29,15 @@ var (
 type testEnvelopeClockWait struct {
 	at   time.Time
 	fire chan time.Time
+	// its place among the clock's After calls, from 1
+	ordinal int
 }
 
 // A subprotocolClock a test moves, safe for concurrent use. Advance moves the time and fires no wait
 // unless the clock was made to fire them, which only a test of run asks for: run drops a group only once
 // a wait fires, so on any other clock it drops nothing, and the one sweep is the expire a test calls.
-// awaitWaitCount is how a test learns that a goroutine has reached its next wait, with no sleep.
+// awaitWaitCount is how a test learns that a goroutine has reached its next wait, with no sleep, and
+// awaitWaitDue how it learns that one goroutine has while others set waits on the same clock.
 type testEnvelopeClock struct {
 	stateLock sync.Mutex
 	now       time.Time
@@ -65,10 +68,12 @@ func (self *testEnvelopeClock) After(timeout time.Duration) <-chan time.Time {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	fire := make(chan time.Time, 1)
-	self.waits = append(self.waits, testEnvelopeClockWait{at: self.now.Add(timeout), fire: fire})
+	wait := testEnvelopeClockWait{at: self.now.Add(timeout), fire: fire}
 	self.waitCount.Update(func(waitCount int) int {
-		return waitCount + 1
+		wait.ordinal = waitCount + 1
+		return wait.ordinal
 	})
+	self.waits = append(self.waits, wait)
 	return fire
 }
 
@@ -118,6 +123,32 @@ func (self *testEnvelopeClock) awaitWaitCount(count int) {
 	for {
 		waitCount, notify := self.waitCount.Get()
 		if count <= waitCount {
+			return
+		}
+		<-notify
+	}
+}
+
+// Whether a wait set after the clock's first count is due by at and no Advance has fired it, so an Advance
+// to at fires it, with a channel that closes at the next After. Where other loops set waits on the same
+// clock, the next wait awaitWaitCount counts may be any of theirs; a goroutine's own wait is told apart by
+// its time, when no other wait set after count is due by at.
+func (self *testEnvelopeClock) waitDue(count int, at time.Time) (bool, chan struct{}) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	// After counts under stateLock, so a wait set after this read closes the channel
+	_, notify := self.waitCount.Get()
+	due := slices.ContainsFunc(self.waits, func(wait testEnvelopeClockWait) bool {
+		return count < wait.ordinal && !at.Before(wait.at)
+	})
+	return due, notify
+}
+
+// Blocks until waitDue holds.
+func (self *testEnvelopeClock) awaitWaitDue(count int, at time.Time) {
+	for {
+		due, notify := self.waitDue(count, at)
+		if due {
 			return
 		}
 		<-notify

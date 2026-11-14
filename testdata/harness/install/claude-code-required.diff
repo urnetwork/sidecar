@@ -1,0 +1,166 @@
+--- a/$HOME/.claude.json
++++ b/$HOME/.claude.json
+@@ -6,6 +6,13 @@
+       "type": "stdio",
+       "command": "/opt/notes/bin/notes-mcp",
+       "args": ["serve"]
++    },
++    "ur": {
++      "type": "stdio",
++      "command": "/opt/ur/bin/ur",
++      "args": [
++        "mcp"
++      ]
+     }
+   },
+   "projects": {
+--- a/$HOME/.claude/settings.json
++++ b/$HOME/.claude/settings.json
+@@ -3,7 +3,16 @@
+   "permissions": {
+     "allow": ["Bash(git status)", "Read"],
+     "ask": [
+-      "Bash(rm:*)"
++      "Bash(rm:*)",
++      "mcp__ur__bridge_expose",
++      "mcp__ur__bridge_forward",
++      "mcp__ur__directory_request",
++      "mcp__ur__dns_delete",
++      "mcp__ur__dns_set",
++      "mcp__ur__mail_alias_create",
++      "mcp__ur__mail_alias_delete",
++      "mcp__ur__socket_listen",
++      "mcp__ur__tls_publish"
+     ]
+   },
+   "hooks": {
+@@ -12,6 +21,129 @@
+         "matcher": "Edit|Write",
+         "hooks": [
+           { "type": "command", "command": "/opt/fmt/bin/format-on-save" }
++        ]
++      },
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code --required",
++            "onFailure": "block"
++          }
++        ]
++      }
++    ],
++    "SessionStart": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code --required",
++            "onFailure": "block"
++          }
++        ]
++      }
++    ],
++    "InstructionsLoaded": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code --required",
++            "onFailure": "block"
++          }
++        ]
++      }
++    ],
++    "UserPromptSubmit": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code --required",
++            "onFailure": "block"
++          }
++        ]
++      }
++    ],
++    "PreToolUse": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code --required",
++            "onFailure": "block"
++          }
++        ]
++      }
++    ],
++    "PermissionRequest": [
++      {
++        "matcher": "*",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code --required",
++            "timeout": 75,
++            "onFailure": "block"
++          }
++        ]
++      }
++    ],
++    "Notification": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code --required",
++            "onFailure": "block"
++          }
++        ]
++      }
++    ],
++    "Stop": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code --required",
++            "onFailure": "block"
++          }
++        ]
++      }
++    ],
++    "SubagentStop": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code --required",
++            "onFailure": "block"
++          }
++        ]
++      }
++    ],
++    "PreCompact": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code --required",
++            "onFailure": "block"
++          }
++        ]
++      }
++    ],
++    "SessionEnd": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "/opt/ur/bin/ur hook claude-code --required",
++            "onFailure": "block"
++          }
+         ]
+       }
+     ]

@@ -32,19 +32,12 @@ func TestHygieneFailsOnAMissingReplace(t *testing.T) {
 	wantFindings(t, fixture.open().replaceFindings(t), ".: no replace for @glog@, which §4.7 has it repeat")
 }
 
-// C-23 lets sidecarctl, and no other module, replace warp with its sibling checkout.
-func TestHygieneLetsSidecarctlAloneReplaceWarp(t *testing.T) {
+// No module here replaces warp with its sibling checkout: sidecarctl, which did, is server's since
+// QD-750.
+func TestHygieneFailsOnAReplaceOfWarp(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.edit("sidecarctl/go.mod", "replace gvisor.dev/gvisor => ../../gvisor\n", "replace gvisor.dev/gvisor => ../../gvisor\n\nreplace "+warpBasePath+" => ../../warp\n")
-	wantFindings(t, fixture.open().replaceFindings(t))
-
-	fixture.edit("sidecarctl/go.mod", "replace "+warpBasePath+" => ../../warp\n", "replace "+warpBasePath+" => ../../warp-fork\n")
-	wantFindings(t, fixture.open().replaceFindings(t), "sidecarctl: replace "+warpBasePath+" => ../../warp-fork, and C-23's is ../../warp")
-
 	fixture.edit("cli/go.mod", "replace gvisor.dev/gvisor => ../../gvisor\n", "replace gvisor.dev/gvisor => ../../gvisor\n\nreplace "+warpBasePath+" => ../../warp\n")
-	wantFindings(t, fixture.open().replaceFindings(t),
-		"cli: replace "+warpBasePath+" => ../../warp is not one of §4.7's",
-		"sidecarctl: replace "+warpBasePath+" => ../../warp-fork, and C-23's is ../../warp")
+	wantFindings(t, fixture.open().replaceFindings(t), "cli: replace "+warpBasePath+" => ../../warp is not one of §4.7's")
 }
 
 // Go does not inherit a replace, so each nested module is read on its own.
@@ -146,13 +139,6 @@ func TestHygieneFailsOnASubpackageOfCli(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.write("cli/daemon/daemon.go", "package daemon\n")
 	wantFindings(t, fixture.open().untaggedSubpackageFindings(t), "cli/daemon: a package beside cli's own")
-}
-
-// sidecarctl keeps its unversioned path too, and every command stays a file of its one package.
-func TestHygieneFailsOnASubpackageOfSidecarctl(t *testing.T) {
-	fixture := newFixture(t)
-	fixture.write("sidecarctl/certs/swap.go", "package certs\n")
-	wantFindings(t, fixture.open().untaggedSubpackageFindings(t), "sidecarctl/certs: a package beside sidecarctl's own")
 }
 
 // One finding a package, its tests included, and testdata is no package.

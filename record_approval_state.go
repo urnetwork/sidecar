@@ -93,10 +93,10 @@ type ConfigApprovalStates struct {
 	local *AclLocalPolicy
 }
 
-// The approval states of config: forked and evidenceDefault as NewConfigSpendState takes them, local the policy
-// compiled at config's head, nil for none, which names harness in no rule.
-func NewConfigApprovalStates(config *ConfigState, forked bool, evidenceDefault []protocol.ApprovalChannel, local *AclLocalPolicy) (*ConfigApprovalStates, error) {
-	spendState, err := NewConfigSpendState(config, forked, evidenceDefault)
+// The approval states of config: forked as NewConfigSpendState takes it, local the policy compiled at config's head,
+// nil for none, which names harness in no rule.
+func NewConfigApprovalStates(config *ConfigState, forked bool, local *AclLocalPolicy) (*ConfigApprovalStates, error) {
+	spendState, err := NewConfigSpendState(config, forked)
 	if err != nil {
 		return nil, err
 	}
@@ -515,13 +515,16 @@ func (self *ApprovalInbox) markFiled(approvalId Id) {
 	}
 }
 
-// Notes that a decision is kept for the request.
-func (self *ApprovalInbox) markDecided(approvalId Id) {
+// Notes that a decision is kept for the request, answering whether it was not noted before.
+func (self *ApprovalInbox) markDecided(approvalId Id) bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	if indexed, ok := self.approvalIdRequests[approvalId]; ok {
-		indexed.decided = true
+	indexed, ok := self.approvalIdRequests[approvalId]
+	if !ok || indexed.decided {
+		return false
 	}
+	indexed.decided = true
+	return true
 }
 
 // Notes that a Cancel row is kept for the request.
@@ -541,15 +544,16 @@ func (self *ApprovalInbox) logCancelled(approvalId Id) bool {
 }
 
 // The requests for this action in this run by this agent, newest first: the action itself, or a template
-// (scope = true) the action falls inside (§16.6's multi-use row).
-func (self *ApprovalInbox) candidates(action *StoredCanonicalAction, runId *Id, agentId *Id) []*approvalIndexed {
+// (scope = true) the action falls inside (§16.6's multi-use row), whose socket_name, local_port, weight and alpn are
+// the ones detail binds, since a decision signs its request's and spends on no other (QD-740, QD-772).
+func (self *ApprovalInbox) candidates(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id) []*approvalIndexed {
 	run := approvalIdOrZero(runId)
 	agent := approvalIdOrZero(agentId)
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	candidates := []*approvalIndexed{}
 	for _, indexed := range self.approvalIdRequests {
-		if indexed.runId != run || indexed.agentId != agent {
+		if indexed.runId != run || indexed.agentId != agent || !indexed.request.Detail().Equal(detail) {
 			continue
 		}
 		requested := indexed.request.Action
@@ -566,10 +570,11 @@ func (self *ApprovalInbox) candidates(action *StoredCanonicalAction, runId *Id, 
 	return candidates
 }
 
-// The request for exactly this action, run and agent that still waits for a decision at now: filed tainted when the
-// run is tainted, since a decision on an untainted request spends nothing in a tainted run (TS1). Nil for none.
-func (self *ApprovalInbox) waitingFor(action *StoredCanonicalAction, runId *Id, agentId *Id, tainted bool, now time.Time) *approvalIndexed {
-	for _, candidate := range self.candidates(action, runId, agentId) {
+// The request for exactly this action, its detail, run and agent that still waits for a decision at now: filed
+// tainted when the run is tainted, since a decision on an untainted request spends nothing in a tainted run (TS1).
+// Nil for none.
+func (self *ApprovalInbox) waitingFor(action *StoredCanonicalAction, detail *SidecarActionDetail, runId *Id, agentId *Id, tainted bool, now time.Time) *approvalIndexed {
+	for _, candidate := range self.candidates(action, detail, runId, agentId) {
 		request := candidate.request
 		approvalId := request.ApprovalId()
 		if !bytes.Equal(request.Action.Bytes, action.Bytes) || candidate.decided || self.logCancelled(approvalId) ||
@@ -600,8 +605,10 @@ func (self *ApprovalInbox) Receive(ctx context.Context, storedSigned []byte) (Id
 	if err != nil {
 		return approvalId, err
 	}
-	if kept {
-		self.markDecided(approvalId)
+	// kept now, or kept by an earlier intake whose row was appended and whose answer was lost: the request is decided
+	// either way, so a decision on disk never waits for a restart to count, and its waiters hear of it
+	newlyDecided := self.markDecided(approvalId)
+	if kept || newlyDecided {
 		self.notify(approvalId)
 	}
 	return approvalId, nil
@@ -962,7 +969,7 @@ func (self *ApprovalRouter) findOrFile(ctx context.Context, action *SidecarActio
 	}
 	self.fileLock.Lock()
 	defer self.fileLock.Unlock()
-	if waiting := self.inbox.waitingFor(stored, action.RunId, action.AgentId, tainted, self.args.Clock.Now()); waiting != nil {
+	if waiting := self.inbox.waitingFor(stored, action.Detail, action.RunId, action.AgentId, tainted, self.args.Clock.Now()); waiting != nil {
 		if !waiting.filed {
 			self.fileToLog(waiting.request)
 		}
@@ -980,7 +987,9 @@ func (self *ApprovalRouter) findOrFile(ctx context.Context, action *SidecarActio
 	return request, nil
 }
 
-// A new ApprovalRequest for action, as stored: §16.8's fields, the approvers P names, not_after reading 3's.
+// A new ApprovalRequest for action, as stored: §16.8's fields, the approvers P names, not_after reading 3's, and the
+// action's daemon-built detail as socket_name, local_port, weight and alpn (QD-740, QD-772), which the parse holds to
+// the action's kind, a listen's name to its action's grant_dst as far as no key is needed.
 func (self *ApprovalRouter) newRequest(action *SidecarAction, stored *StoredCanonicalAction, tainted bool) (*StoredApprovalRequest, error) {
 	states, err := self.args.states()
 	if err != nil {
@@ -1018,6 +1027,12 @@ func (self *ApprovalRouter) newRequest(action *SidecarAction, stored *StoredCano
 	}
 	if action.AgentId != nil {
 		request.AgentId = action.AgentId.Bytes()
+	}
+	if detail := action.Detail; detail != nil {
+		request.SocketName = detail.SocketName
+		request.LocalPort = detail.LocalPort
+		request.Weight = detail.Weight
+		request.Alpn = slices.Clone(detail.Alpn)
 	}
 	for _, approver := range approvers {
 		request.Approvers = append(request.Approvers, approver.Bytes())

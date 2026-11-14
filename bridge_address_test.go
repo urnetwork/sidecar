@@ -235,7 +235,7 @@ func TestAnAllocationSkipsATombstoneByTheLogsTime(t *testing.T) {
 		}
 		return plan
 	}
-	during := read(releasedMs + BridgeAddressTombstoneMs - 1)
+	during := read(releasedMs + testBridgeTombstoneMs - 1)
 	if during.FreeCount() != BridgeAddressMaxCount-1 {
 		t.Fatalf("%d free while the tombstone holds", during.FreeCount())
 	}
@@ -255,7 +255,7 @@ func TestAnAllocationSkipsATombstoneByTheLogsTime(t *testing.T) {
 	if err := ValidateBridgeAddress(during, testBridgeIpv4(100, 80, 0, 0)|free); err != nil {
 		t.Errorf("a free address beside it: %v", err)
 	}
-	after := read(releasedMs + BridgeAddressTombstoneMs)
+	after := read(releasedMs + testBridgeTombstoneMs)
 	if after.FreeCount() != BridgeAddressMaxCount {
 		t.Errorf("%d free once the 30 days ran", after.FreeCount())
 	}

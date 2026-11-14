@@ -245,21 +245,22 @@ func (self *testAccessGate) Authorize(ctx context.Context, action *SidecarAction
 
 // §16.11's endorse row: a directory request passes §5.4's gate as a version-3 access_request, its stored bytes what
 // the gate judges; any other kind or version, or bytes that say otherwise, is refused before a gate sees it, and while
-// approvers know no version 3 its builder refuses every such action.
+// the builder takes such an action only because approvers know version 3 (MCP-M6-01).
 func TestAccessRequestPassesTheGate(t *testing.T) {
 	sidecar := newSidecarBase(nil, cheapKeychainSettings())
 	gate := &testAccessGate{}
 	sidecar.InstallGate(gate)
 	worker := NewId()
-	action := &protocol.CanonicalAction{
+	// the worker alone in the clear, its port and the port's text sealed beside the clear fields (QD-740, QD-771)
+	workerDst := "sidecar:" + strings.ReplaceAll(worker.String(), "-", "")
+	action := testWithSealedDetail(&protocol.CanonicalAction{
 		Kind:            uint32(SidecarActionAccessRequest),
 		Version:         3,
-		GrantDst:        []string{"sidecar:" + strings.ReplaceAll(worker.String(), "-", "") + ":tcp:22"},
+		GrantDst:        []string{workerDst},
 		GrantAllow:      []string{"dial"},
 		TargetSidecarId: worker.Bytes(),
-		TargetPort:      22,
 		Subject:         NewId().Bytes(),
-	}
+	}, &protocol.CanonicalActionDetail{TargetPort: 22, GrantDst: []string{workerDst + ":tcp:22"}})
 	stored, err := proto.Marshal(action)
 	if err != nil {
 		t.Fatal(err)
@@ -311,8 +312,14 @@ func TestAccessRequestPassesTheGate(t *testing.T) {
 		t.Fatalf("a refused action reached the gate: %+v", gate.actions)
 	}
 
-	// fail closed until approvers know version 3 (MCP-M6-01)
-	if _, err := NewCanonicalAction(action); !CanonicalActionVersionKnown(3) && !errors.Is(err, ErrCanonicalActionVersionUnknown) {
+	// the builder stores the action because approvers know version 3 (MCP-M6-01), and would refuse it otherwise
+	if !CanonicalActionVersionKnown(3) {
+		t.Fatal("approvers do not know version 3")
+	}
+	if _, err := NewCanonicalAction(action); err != nil {
+		t.Fatalf("the builder refused a version-3 access request: %v", err)
+	}
+	if _, err := newCanonicalAction(action, func(version uint32) bool { return version == 1 }); !errors.Is(err, ErrCanonicalActionVersionUnknown) {
 		t.Fatalf("the builder made a version-3 action approvers cannot render: %v", err)
 	}
 }

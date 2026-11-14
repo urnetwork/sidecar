@@ -718,7 +718,7 @@ func TestEvsWriteHeldToAVersionRefusesAMovedPath(t *testing.T) {
 	}
 	posted, uploads := len(writer.server.postedStatements), len(writer.server.uploads)
 	held := func(version uint64, content []byte) error {
-		write := &EvsPathWrite{Path: "held.txt", IfVersion: version, Remove: content == nil}
+		write := &EvsPathWrite{Path: "held.txt", IfVersion: &version, Remove: content == nil}
 		if content != nil {
 			write.Content = bytes.NewReader(content)
 		}

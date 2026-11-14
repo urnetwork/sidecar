@@ -184,6 +184,22 @@ func (self *EvsClient) noteVerifiedHead(repoId Id, refId Id, head *protocol.EvsH
 	}
 }
 
+// Drops what memory holds of a ref's head above headVersion: its epoch state, its hinted version, the listings cached
+// at heads above it, and the version a push of this device committed at above it. Called after a verified EvsReseed
+// lowered the ref's pin to a re-seeded head there (§11.13), so that head, below them, is noted as the next read
+// verifies it, no row of the history the incident lost floors a path (9.2.3's E2), and no listing cached at a lost
+// version answers for the version the re-seeded ref commits there next.
+func (self *EvsClient) forgetRefHead(repoId Id, refId Id, headVersion uint64) {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		key := evsRefKey{repoId: repoId, refId: refId}
+		delete(self.refEpochs, key)
+		delete(self.hintedVersions, key)
+	}()
+	self.epochs.forgetAbove(repoId, refId, headVersion)
+}
+
 // Whether a state was verified within EpochFreshFor.
 func (self *EvsClient) epochFresh(state *evsRefEpoch) bool {
 	return state != nil && self.clock.Now().Sub(state.verifiedAt) <= self.settings.EpochFreshFor
@@ -193,6 +209,11 @@ func (self *EvsClient) epochFresh(state *evsRefEpoch) bool {
 // kept: what a read does first when it holds no epoch state for the ref or a new name needs a fresh one, and what a
 // retoken waits on.
 func (self *EvsRepo) readHeadAlone(ctx context.Context, refId Id, fresh bool) (*EvsVerifiedHead, error) {
+	return self.readHeadAloneFromPin(ctx, refId, fresh, true)
+}
+
+// readHeadAlone, taking a head below the pin under the ref's EvsReseed at most once (reseed).
+func (self *EvsRepo) readHeadAloneFromPin(ctx context.Context, refId Id, fresh bool, reseed bool) (*EvsVerifiedHead, error) {
 	fromVersion := uint64(0)
 	fromChain := EvsChainStart(self.repoId, refId)
 	pin, pinned, err := self.client.pins.Pin(self.repoId, refId)
@@ -210,6 +231,16 @@ func (self *EvsRepo) readHeadAlone(ctx context.Context, refId Id, fresh bool) (*
 		return nil, err
 	}
 	objects.close()
+	if reseed && pinned && reply.head.GetVersion() < pin.Version {
+		// the shorter history a site loss left, taken only under the ref's Signed EvsReseed (evs_read.go)
+		again, err := self.acceptReseedBelowPin(ctx, refId, pin, reply, fromVersion)
+		if err != nil {
+			return nil, err
+		}
+		if again {
+			return self.readHeadAloneFromPin(ctx, refId, fresh, false)
+		}
+	}
 	head, err := self.client.verifier.VerifyHead(ctx, &EvsHeadRead{
 		RepoId:      self.repoId,
 		RefId:       refId,
@@ -510,6 +541,26 @@ func (self *evsClientEpochs) committedVersion(repoId Id, refId Id) uint64 {
 	return self.committed[evsRefKey{repoId: repoId, refId: refId}]
 }
 
+// Drops a ref's listings cached at heads above headVersion, and lowers the version its pushes committed at to it:
+// what a ref re-seeded at headVersion no longer holds (EvsClient.forgetRefHead).
+func (self *evsClientEpochs) forgetAbove(repoId Id, refId Id, headVersion uint64) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	order := []evsListingKey{}
+	for _, key := range self.order {
+		if key.repoId == repoId && key.refId == refId && headVersion < key.headVersion {
+			delete(self.listings, key)
+			continue
+		}
+		order = append(order, key)
+	}
+	self.order = order
+	key := evsRefKey{repoId: repoId, refId: refId}
+	if headVersion < self.committed[key] {
+		self.committed[key] = headVersion
+	}
+}
+
 // The listing cached for a directory at headVersion, nil when none is.
 func (self *evsClientEpochs) cachedListing(repoId Id, refId Id, headVersion uint64, directory string) *evsListedDirectory {
 	self.stateLock.Lock()
@@ -705,6 +756,10 @@ var errEvsReadRounds = errors.New("evs: a read past its rounds")
 // head of another epoch state once it is pinned, each path verified in its statements' own epochs and asked once more
 // for an epoch the walk needs, a miss settled by its sources or its parent's table, then the read records' rule, the
 // pin, and the records raised with their floors. A path's own failure fails the read: the caller asked for it.
+//
+// A verified EvsReseed that lowers the ref's pin while the call runs, taken by a round of its own, a lookup's or
+// another read's, drops or lowers the ref's records (QD-816): the call loads them again, drops what it gathered of
+// the history the incident lost, and starts its round again on the re-seeded head.
 func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPath, fresh bool) (*evsReadResult, error) {
 	keys := newEvsReadKeys(self)
 	for _, path := range paths {
@@ -716,15 +771,29 @@ func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPa
 			return nil, err
 		}
 		path.names = names
-		record, ok, err := self.client.pins.ReadRecord(self.repoId, refId, path.path)
-		if err != nil {
-			return nil, err
+	}
+	reseedCount := self.client.pins.reseedCount(self.repoId, refId)
+	// each path's record, and the floor it and the cached listings give, as the store holds them now
+	loadRecords := func() error {
+		for _, path := range paths {
+			if path.token != nil {
+				continue
+			}
+			path.record, path.floor, path.more, path.moreAsked, path.lookedUp = nil, 0, nil, false, false
+			record, ok, err := self.client.pins.ReadRecord(self.repoId, refId, path.path)
+			if err != nil {
+				return err
+			}
+			if ok {
+				path.record = record
+				path.floor = evsLowerFloor(path.floor, record.Floor)
+			}
+			path.floor = evsLowerFloor(path.floor, self.client.epochs.cachedRowFloor(self.repoId, refId, path.path))
 		}
-		if ok {
-			path.record = record
-			path.floor = evsLowerFloor(path.floor, record.Floor)
-		}
-		path.floor = evsLowerFloor(path.floor, self.client.epochs.cachedRowFloor(self.repoId, refId, path.path))
+		return nil
+	}
+	if err := loadRecords(); err != nil {
+		return nil, err
 	}
 	if len(paths) == 0 {
 		// the head alone, verified and pinned as any round's
@@ -739,6 +808,12 @@ func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPa
 	for roundCount := 0; ; roundCount += 1 {
 		if self.client.settings.ReadEpochRoundCount <= roundCount {
 			return nil, errEvsReadRounds
+		}
+		if count := self.client.pins.reseedCount(self.repoId, refId); count != reseedCount {
+			reseedCount = count
+			if err := loadRecords(); err != nil {
+				return nil, err
+			}
 		}
 		state := self.client.refEpochState(self.repoId, refId)
 		if state == nil {
@@ -768,6 +843,11 @@ func (self *EvsRepo) readPaths(ctx context.Context, refId Id, paths []*evsReadPa
 			return nil, err
 		}
 		roundFresh = false
+		if self.client.pins.reseedCount(self.repoId, refId) != reseedCount {
+			// the pin fell to a re-seeded head while the round ran: again from the records as the reseed left them
+			round.objects.close()
+			continue
+		}
 		if !evsSamePathEpoch(round.head.Head.GetPathEpoch(), state.epoch) {
 			// a head of another epoch state: pinned, adopted, and every path asked again on it
 			round.objects.close()
@@ -991,8 +1071,9 @@ func (self *EvsRepo) statementNames(ctx context.Context, keys *evsReadKeys, stat
 	return false, nil
 }
 
-// Ends a read: the records' rule over each path, the pin, and each record raised with its floor and the epoch it is
-// pinned in. A path a lookup settled absent was never asked, so its record, which a lookup never consults, keeps.
+// Ends a read: the records' rule over each path, the pin, and each record raised with the ref version its entry
+// committed at, its floor and the epoch it is pinned in. A path a lookup settled absent was never asked, so its
+// record, which a lookup never consults, keeps.
 func (self *EvsRepo) finishRead(ctx context.Context, refId Id, keys *evsReadKeys, round *evsReadRound, paths []*evsReadPath) (*evsReadResult, error) {
 	head := round.head
 	current := evsCurrentEpoch(head.Head.GetPathEpoch())
@@ -1030,14 +1111,15 @@ func (self *EvsRepo) finishRead(ctx context.Context, refId Id, keys *evsReadKeys
 		}
 		chain := head.Chain
 		records = append(records, &EvsReadRecord{
-			RefId:        refId,
-			Path:         path.path,
-			EntryVersion: verifiedPaths[i].Entry.GetVersion(),
-			PinVersion:   head.Version,
-			PinChain:     &chain,
-			UsedAt:       self.client.clock.Now(),
-			Floor:        path.floor,
-			PinEpoch:     current,
+			RefId:         refId,
+			Path:          path.path,
+			EntryVersion:  verifiedPaths[i].Entry.GetVersion(),
+			CommitVersion: verifiedPaths[i].CommitVersion,
+			PinVersion:    head.Version,
+			PinChain:      &chain,
+			UsedAt:        self.client.clock.Now(),
+			Floor:         path.floor,
+			PinEpoch:      current,
 		})
 	}
 	if err := self.client.pins.RaiseReadRecords(self.repoId, records); err != nil {

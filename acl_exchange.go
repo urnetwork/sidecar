@@ -10,7 +10,11 @@
 //	rw       it writes it; on the config, evs rw only for config writers, gkm rw for every member device but a
 //	         read_only one (§7.9's commit row, §10.6), so an ephemeral sidecar gets no config rw at either (FS-19)
 //	admin    it administers the repo; in the team directory only its consented, not-read-only admins, its creator and
-//	         the config writers (§8.10, §16.11)
+//	         the config writers (§8.10, §16.11); on the config only §7.9's bootstrap sidecar, the Genesis's
+//	         owner_sidecar_id while it stands as a config writer
+//
+// The config repo's row is the state's own, from the Genesis (acl_state.go, QD-719): no rows hold one, and its scopes
+// answer in every state.
 //	deposit  §8 gives it deposit, or it reads an owner-bound repo it does not write (§16.8's receipts)
 //
 // A read_only sidecar gets only r and the receipt deposit, whatever else it is (D-TEAM-24); in a team network every

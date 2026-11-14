@@ -56,7 +56,10 @@ type fakeGkmAuthState struct {
 	newestVersion   uint64
 	baseVersion     uint64
 	delegationReads map[string]bool
-	// what DelegationKey answers, by delegation_id: Denied for one not here
+	// the network whose state setDelegationKey writes a row into: the fixture's
+	networkId sidecar.Id
+	// what DelegationKey answers, by the token's network and the delegation_id (fakeGkmDelegationKeyKey): Denied for
+	// one not here, as a network's state holds only its own rows
 	delegationKeys  map[string]*GkmDelegationKeyFacts
 	lateHolderIds   map[sidecar.Id][]sidecar.Id
 	writerOverrides map[sidecar.Id][]sidecar.Id
@@ -146,16 +149,26 @@ func (self *fakeGkmAuthState) setDelegationReads(repoId sidecar.Id, delegationId
 	self.delegationReads[sidecar.EvsKeyId(repoId)+":"+fmt.Sprintf("%x", delegationId)] = reads
 }
 
-// What the state holds of a Delegation's reader key from now on, nil forgetting it.
+// The fake's key of a Delegation's row in one network's state.
+func fakeGkmDelegationKeyKey(networkId sidecar.Id, delegationId []byte) string {
+	return string(networkId[:]) + string(delegationId)
+}
+
+// What the fixture's network's state holds of a Delegation's reader key from now on, nil forgetting it.
 func (self *fakeGkmAuthState) setDelegationKey(delegationId []byte, facts *GkmDelegationKeyFacts) {
+	self.setNetworkDelegationKey(self.networkId, delegationId, facts)
+}
+
+// What a network's state holds of a Delegation's reader key from now on, nil forgetting it.
+func (self *fakeGkmAuthState) setNetworkDelegationKey(networkId sidecar.Id, delegationId []byte, facts *GkmDelegationKeyFacts) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	if facts == nil {
-		delete(self.delegationKeys, string(delegationId))
+		delete(self.delegationKeys, fakeGkmDelegationKeyKey(networkId, delegationId))
 		return
 	}
 	factsCopy := *facts
-	self.delegationKeys[string(delegationId)] = &factsCopy
+	self.delegationKeys[fakeGkmDelegationKeyKey(networkId, delegationId)] = &factsCopy
 }
 
 func (self *fakeGkmAuthState) setLateHolders(repoId sidecar.Id, sidecarIds []sidecar.Id) {
@@ -236,7 +249,7 @@ func (self *fakeGkmAuthState) DelegationKey(principal *sidecar.Principal, delega
 	if self.unloaded {
 		return nil, GkmAuthUnknown
 	}
-	facts, ok := self.delegationKeys[string(delegationId)]
+	facts, ok := self.delegationKeys[fakeGkmDelegationKeyKey(sidecar.Id(principal.NetworkId), delegationId)]
 	if !ok {
 		return nil, GkmAuthDenied
 	}
@@ -410,12 +423,14 @@ func newGkmFixtureWith(t *testing.T, adjust func(settings *GkmServiceSettings, d
 	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, hostSettings)
 	networkId := connect.Id(testId("network-a"))
 	host.Gates.OpenService(sidecar.ServiceGateGkm, networkId)
+	auth := newFakeGkmAuthState()
+	auth.networkId = sidecar.Id(networkId)
 	fixture := &gkmFixture{
 		t:          t,
 		ctx:        ctx,
 		clock:      clock,
 		host:       host,
-		auth:       newFakeGkmAuthState(),
+		auth:       auth,
 		serviceLog: &recordingGkmServiceLog{},
 		settings:   DefaultGkmServiceSettings(),
 		networkId:  networkId,
@@ -450,8 +465,13 @@ func (self *gkmFixture) spentCtx() context.Context {
 // A token for sidecarId with scopes, each repo:<id>:<role> or recovery:<member_id>. A zero sidecarId gives a token
 // with no ur_sidecar_id.
 func (self *gkmFixture) token(sidecarId sidecar.Id, scopes ...string) string {
+	return self.networkToken(sidecar.Id(self.networkId), sidecarId, scopes...)
+}
+
+// A token of another network than the fixture's, as token makes one.
+func (self *gkmFixture) networkToken(networkId sidecar.Id, sidecarId sidecar.Id, scopes ...string) string {
 	principal := &sidecar.Principal{
-		NetworkId: self.networkId,
+		NetworkId: connect.Id(networkId),
 		ClientId:  connect.Id(testId("client-" + string(sidecarId[:6]))),
 		Audience:  GkmAudience,
 		Scopes:    scopes,

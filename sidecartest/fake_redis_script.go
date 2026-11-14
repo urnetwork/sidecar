@@ -214,6 +214,34 @@ func (self *FakeRedisScriptCall) HashExpire(key string, fields []string, ttl tim
 	return self.redis.hashExpireWithLock(key, fields, ttl)
 }
 
+// HINCRBY of one: the field raised in place, its own ttl kept as Redis keeps it, where HashSet clears it. An
+// absent field counts from 0, and one that is no integer is Redis's error.
+func (self *FakeRedisScriptCall) HashIncrement(key string, field string) (int64, error) {
+	if err := self.check(key); err != nil {
+		return 0, err
+	}
+	entry, err := self.redis.hashEntryWithLock(key)
+	if err != nil {
+		return 0, err
+	}
+	if entry == nil {
+		entry = &fakeRedisEntry{kind: fakeRedisHash, fields: map[string]*fakeRedisField{}}
+		self.redis.entries[key] = entry
+	}
+	current, ok := entry.fields[field]
+	if !ok {
+		entry.fields[field] = &fakeRedisField{value: []byte("1")}
+		return 1, nil
+	}
+	value, err := strconv.ParseInt(string(current.value), 10, 64)
+	if err != nil {
+		return 0, errors.New("ERR hash value is not an integer")
+	}
+	value += 1
+	current.value = []byte(strconv.FormatInt(value, 10))
+	return value, nil
+}
+
 func (self *FakeRedisScriptCall) StreamAdd(key string, maxLength int64, fieldValues map[string][]byte) (string, error) {
 	if err := self.check(key); err != nil {
 		return "", err

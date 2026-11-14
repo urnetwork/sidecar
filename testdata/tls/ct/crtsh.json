@@ -1,0 +1,59 @@
+{
+  "certificates": {
+    "7000001": "-----BEGIN CERTIFICATE-----\nMIIBojCCAUmgAwIBAgICEAEwCgYIKoZIzj0EAwIwHDEaMBgGA1UEAxMRU3ludGhl\ndGljIFRlc3QgQ0EwHhcNMjYwMzAxMDAwMDAwWhcNMjYwNDE1MDAwMDAwWjAAMFkw\nEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE0SwbQYbPVD51IfRh9rc7yHMTTgCdCH+t\nBHuaBGnTQingjkbP7bN8YIgREegiuCs8r6+Iaz5+iqL8oQ8z1mKhiKOBljCBkzAO\nBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwDwYDVR0jBAgwBoAE\nAQIDBDBGBgNVHREBAf8EPDA6ghwqLmFiY2RlZmdoaWouc2lkZWNhci5leGFtcGxl\nghphYmNkZWZnaGlqLnNpZGVjYXIuZXhhbXBsZTATBgorBgEEAdZ5AgQDAQH/BAIF\nADAKBggqhkjOPQQDAgNHADBEAiAe5NDLHc1JfCMWgwxzKDGFx4Uo1u+WPXgLFuZo\noN61EAIgeDehC4B0S32jDVEe9xmxz46eKppj5kjP8doQm6sCGys=\n-----END CERTIFICATE-----\n",
+    "7000002": "-----BEGIN CERTIFICATE-----\nMIIBjTCCATOgAwIBAgICEAEwCgYIKoZIzj0EAwIwHDEaMBgGA1UEAxMRU3ludGhl\ndGljIFRlc3QgQ0EwHhcNMjYwMzAxMDAwMDAwWhcNMjYwNDE1MDAwMDAwWjAAMFkw\nEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE0SwbQYbPVD51IfRh9rc7yHMTTgCdCH+t\nBHuaBGnTQingjkbP7bN8YIgREegiuCs8r6+Iaz5+iqL8oQ8z1mKhiKOBgDB+MA4G\nA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDATAPBgNVHSMECDAGgAQB\nAgMEMEYGA1UdEQEB/wQ8MDqCHCouYWJjZGVmZ2hpai5zaWRlY2FyLmV4YW1wbGWC\nGmFiY2RlZmdoaWouc2lkZWNhci5leGFtcGxlMAoGCCqGSM49BAMCA0gAMEUCIQCy\neZ0WZIcGV2ZFcDpxJOA/LqnwoWZvDt0Omf5by+shuwIgC7CTu4OR8nlWmsTq71tq\n2KOnTcPz015ieCYDlRxnZ9Y=\n-----END CERTIFICATE-----\n",
+    "7000003": "-----BEGIN CERTIFICATE-----\nMIIBjTCCATOgAwIBAgICEAIwCgYIKoZIzj0EAwIwHDEaMBgGA1UEAxMRU3ludGhl\ndGljIFRlc3QgQ0EwHhcNMjYwMzAyMDAwMDAwWhcNMjYwNDE2MDAwMDAwWjAAMFkw\nEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAED4YHBkO9EsFBlr1W9lhWMMFtoyYvs6TZ\naJFU9hoAvnKV3z0GmKa1SIiUNgUL/g83oAqSm7iWXwjhkc+6EINLVKOBgDB+MA4G\nA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDATAPBgNVHSMECDAGgAQB\nAgMEMEYGA1UdEQEB/wQ8MDqCHCouYWJjZGVmZ2hpai5zaWRlY2FyLmV4YW1wbGWC\nGmFiY2RlZmdoaWouc2lkZWNhci5leGFtcGxlMAoGCCqGSM49BAMCA0gAMEUCIBz4\nfg45KuZQK04Tj5f2lL0ZkWOmG0hXNVt4BPphJiMzAiEAh+mC+IVRUOBmpN0RcX9v\n+4/lqnA+fJBC5bRl+huZ12k=\n-----END CERTIFICATE-----\n",
+    "7000004": "-----BEGIN CERTIFICATE-----\nMIIBaDCCAQ6gAwIBAgICEAMwCgYIKoZIzj0EAwIwHDEaMBgGA1UEAxMRU3ludGhl\ndGljIFRlc3QgQ0EwHhcNMjYwMzAxMDAwMDAwWhcNMjYwNDE1MDAwMDAwWjAAMFkw\nEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdQBaGdOREBOHmZBEnreC/QTPHGf/cSOg\nbGoLwJO9zLiH/wfwEaSJDkbr2YqEZSEvvghLFtq5oPXvF5ffXBasnKNcMFowDgYD\nVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMA8GA1UdIwQIMAaABAEC\nAwQwIgYDVR0RAQH/BBgwFoIUYXBwLmN1c3RvbWVyLmV4YW1wbGUwCgYIKoZIzj0E\nAwIDSAAwRQIgdMAQpEUfNHpe24hHtRijhgIIhBWqL4+abFjis7Irr0gCIQCFJqes\n4C5JcS1PSYGrp64Z1uB1tRFzP++CZHran2hSIQ==\n-----END CERTIFICATE-----\n"
+  },
+  "listing": [
+    {
+      "common_name": "*.abcdefghij.sidecar.example",
+      "entry_timestamp": "2026-03-01T00:01:00.000",
+      "id": 7000001,
+      "issuer_ca_id": 1,
+      "issuer_name": "CN=Synthetic Test CA",
+      "name_value": "*.abcdefghij.sidecar.example\nabcdefghij.sidecar.example",
+      "not_after": "2026-04-15T00:00:00",
+      "not_before": "2026-03-01T00:00:00",
+      "result_count": 2,
+      "serial_number": "1001"
+    },
+    {
+      "common_name": "*.abcdefghij.sidecar.example",
+      "entry_timestamp": "2026-03-01T00:01:00.000",
+      "id": 7000002,
+      "issuer_ca_id": 1,
+      "issuer_name": "CN=Synthetic Test CA",
+      "name_value": "*.abcdefghij.sidecar.example\nabcdefghij.sidecar.example",
+      "not_after": "2026-04-15T00:00:00",
+      "not_before": "2026-03-01T00:00:00",
+      "result_count": 2,
+      "serial_number": "1001"
+    },
+    {
+      "common_name": "*.abcdefghij.sidecar.example",
+      "entry_timestamp": "2026-03-02T00:01:00.000",
+      "id": 7000003,
+      "issuer_ca_id": 1,
+      "issuer_name": "CN=Synthetic Test CA",
+      "name_value": "*.abcdefghij.sidecar.example\nabcdefghij.sidecar.example",
+      "not_after": "2026-04-16T00:00:00",
+      "not_before": "2026-03-02T00:00:00",
+      "result_count": 2,
+      "serial_number": "1002"
+    },
+    {
+      "common_name": "app.customer.example",
+      "entry_timestamp": "2026-03-01T00:01:00.000",
+      "id": 7000004,
+      "issuer_ca_id": 1,
+      "issuer_name": "CN=Synthetic Test CA",
+      "name_value": "app.customer.example",
+      "not_after": "2026-04-15T00:00:00",
+      "not_before": "2026-03-01T00:00:00",
+      "result_count": 2,
+      "serial_number": "1003"
+    }
+  ],
+  "note": "synthetic. listing is crt.sh's ?output=json answer; certificates is each id's ?d= answer, which the listing does not carry"
+}

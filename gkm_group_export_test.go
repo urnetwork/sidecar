@@ -60,3 +60,16 @@ func (self *GkmGroupClient) TestHasRotateDraft(repoId Id) bool {
 	_, err := self.args.Secrets.Get(gkmRepoRecordName(repoId, "draft"))
 	return err == nil
 }
+
+// The Welcome watches the repo's pending record holds, as epoch and joiner count, with the group and epoch the
+// record names them current at: what the keychain holds, whether or not it still holds at this client's pins.
+func (self *GkmGroupClient) TestWelcomeWatches(repoId Id) (groupId Id, epoch uint64, watchEpochs []uint64, err error) {
+	record, err := self.manager(repoId).pendingRecord()
+	if err != nil {
+		return Id{}, 0, nil, err
+	}
+	for _, watch := range record.welcomeWatches {
+		watchEpochs = append(watchEpochs, watch.epoch)
+	}
+	return record.watchGroupId, record.watchEpoch, watchEpochs, nil
+}

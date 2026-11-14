@@ -17,8 +17,8 @@
 // under an immediate and a batched epoch with the 2-min block, the overdue alarm, old-epoch parts and seals 412
 // PATH_EPOCH, a mapper killed after half its parts, the carried directory D through p1, p2 and p3, removals after
 // cut-over before the copy, a move between one round's GETs, no late token, EPOCH_SOURCES_FULL after the fence, kills
-// at each copy boundary and a lease holder re-subscribing) are EVS1-M2-41's report's; FI-3's oracle is not bound
-// (TEST-M2-05).
+// at each copy boundary and a lease holder re-subscribing) are EVS1-M2-41's report's; FI-3 holds through the
+// world's checks (TEST-M2-05).
 
 package fault
 

@@ -62,8 +62,16 @@ func TestPairBindsNextGeneration(t *testing.T) {
 	if len(removed) != 1 || removed[0] != first.ClientId || removers[0] != firstToken {
 		t.Fatalf("the top-level client's removal: %v by %d tokens", removed, len(removers))
 	}
-	if kept, _ := loadSidecarByJwt(world.instance.secrets(first.NetworkId, sidecarCoreSecretsNamespace)); kept != childToken {
-		t.Fatal("the keychain does not hold the child's token")
+	// the keychain and the generation hold bind's re-mint of the child's token, which names the sidecar (QD-797)
+	kept, _ := loadSidecarByJwt(world.instance.secrets(first.NetworkId, sidecarCoreSecretsNamespace))
+	reminted := world.api.remintedTokens()
+	if kept == childToken || kept != reminted[len(reminted)-1] || world.sidecar.sidecarApi.currentByJwt() != kept {
+		t.Fatal("the keychain and the generation do not hold bind's re-mint of the child's token")
+	}
+	keptIdentity, _ := sidecarJwtIdentityOf(kept)
+	childIdentity, _ := sidecarJwtIdentityOf(childToken)
+	if claimed, ok := sidecarJwtSidecarId(kept); !ok || claimed != first.SidecarId || keptIdentity != childIdentity {
+		t.Fatalf("the kept token names sidecar %s, %+v", claimed, keptIdentity)
 	}
 
 	// refusals send nothing: no strict_exp, another network, no client, the client it runs on
@@ -188,6 +196,8 @@ func TestUnpairRemovesChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOnline, 2))
+	// the child's token as the keychain keeps it: bind's re-mint, with which the child goes (QD-797)
+	keptChildToken, _ := loadSidecarByJwt(world.instance.secrets(world.api.networkId, sidecarCoreSecretsNamespace))
 	if err := world.enroll(context.Background()); err != nil {
 		t.Fatalf("ur login on a paired sidecar: %v", err)
 	}
@@ -202,8 +212,11 @@ func TestUnpairRemovesChild(t *testing.T) {
 	world.api.stateLock.Lock()
 	removed, removers := append([]Id{}, world.api.removed...), append([]string{}, world.api.removers...)
 	world.api.stateLock.Unlock()
-	if len(removed) != 2 || removed[1] != childId || removers[1] != childToken {
+	if len(removed) != 2 || removed[1] != childId || removers[1] != keptChildToken {
 		t.Fatalf("the child's removal: %v", removed)
+	}
+	if claimed, ok := sidecarJwtSidecarId(keptChildToken); !ok || claimed != third.SidecarId {
+		t.Fatalf("the child's kept token names sidecar %s", claimed)
 	}
 	// a top-level sidecar running is not re-enrolled by ur login: the person logs out first
 	if err := world.enroll(context.Background()); !errors.Is(err, ErrSidecarEnrolled) {

@@ -5,7 +5,10 @@
 //
 //	register  makeCredential: a non-resident ES256 credential under a random user id, client data a webauthn.create;
 //	          the authenticator data must carry UP, UV and the attested credential, its rp id hash ur.io's; the key's
-//	          COSE point becomes a SEC 1 one (QD-445). No attestation is kept (QD-137).
+//	          COSE point becomes a SEC 1 one (QD-445). The handle's attestation is KeyRegister.attestation's map
+//	          (QD-730): the JSON this client hashed as clientDataJSON, beside a fmt none attestation object over the
+//	          authenticator data, as a WebAuthn client asked for none conveyance gives: the authenticator's statement
+//	          is dropped and its aaguid zeroed, since no release pins roots to check one against (QD-137)
 //	assert    getAssertion over the credential, client data a webauthn.get of the message (presence.go), UP and UV
 //	          asked and checked; each device tried in turn, one that holds no such credential passed over
 //	key_id    the first 16 bytes of SHA-256 of the credential id, which may pass KeyRegister's 64 bytes, so the provider
@@ -57,6 +60,9 @@ const (
 	urFidoFlagUserPresent    byte   = 0x01
 	urFidoFlagUserVerified   byte   = 0x04
 	urFidoFlagAttested       byte   = 0x40
+	// authenticator data's layout: the aaguid follows the rp id hash, the flags and the counter
+	urFidoAaguidOffset    = 32 + 1 + 4
+	urFidoAaguidByteCount = 16
 	// the file of key_ids' credential ids under <state>/presence
 	urFidoCredentialsName = "fido.json"
 )
@@ -335,7 +341,8 @@ func (self *urFidoProvider) Register(ctx context.Context) (*sidecar.PresenceKeyH
 	if _, err := io.ReadFull(self.random, userId); err != nil {
 		return nil, err
 	}
-	clientDataHash := sha256.Sum256(urPresenceClientData(urPresenceCreateType, challenge))
+	clientData := urPresenceClientData(urPresenceCreateType, challenge)
+	clientDataHash := sha256.Sum256(clientData)
 	answer, _, err := channel.cbor(ctx, urFidoMakeCredential, urCborMap{
 		{Key: int64(1), Value: clientDataHash[:]},
 		{Key: int64(2), Value: urCborMap{{Key: "id", Value: urPresenceRpId}, {Key: "name", Value: "URnetwork"}}},
@@ -354,6 +361,10 @@ func (self *urFidoProvider) Register(ctx context.Context) (*sidecar.PresenceKeyH
 	if err != nil {
 		return nil, err
 	}
+	attestation, err := urFidoNoneAttestation(authenticatorData, clientData)
+	if err != nil {
+		return nil, err
+	}
 	keyIdHash := sha256.Sum256(credentialId)
 	keyId := keyIdHash[:self.settings.KeyIdByteCount]
 	err = func() error {
@@ -369,7 +380,30 @@ func (self *urFidoProvider) Register(ctx context.Context) (*sidecar.PresenceKeyH
 	if err != nil {
 		return nil, err
 	}
-	return &sidecar.PresenceKeyHandle{KeyId: bytes.Clone(keyId), Alg: bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256, PublicKey: publicKey}, nil
+	return &sidecar.PresenceKeyHandle{
+		KeyId:       bytes.Clone(keyId),
+		Alg:         bridge.KeyAlg_KEY_ALG_WEBAUTHN_ES256,
+		PublicKey:   publicKey,
+		Attestation: attestation,
+	}, nil
+}
+
+// KeyRegister.attestation for a makeCredential's authenticator data, which urFidoAttestedCredential has read, and the
+// client data whose hash it was asked under (QD-730): the root's map of a fmt none attestation object and that JSON.
+// The object holds the authenticator data with its aaguid zeroed and an empty statement, what WebAuthn's none
+// conveyance leaves of an attestation (WebAuthn §5.1.3), so the key's model does not ride in the registration.
+func urFidoNoneAttestation(authenticatorData []byte, clientData []byte) ([]byte, error) {
+	anonymous := bytes.Clone(authenticatorData)
+	clear(anonymous[urFidoAaguidOffset : urFidoAaguidOffset+urFidoAaguidByteCount])
+	attestationObject, err := urCborAppend(nil, urCborMap{
+		{Key: "fmt", Value: "none"},
+		{Key: "attStmt", Value: urCborMap{}},
+		{Key: "authData", Value: anonymous},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return sidecar.EncodePresenceAttestation(attestationObject, clientData), nil
 }
 
 // Whether the credentials file names keyId.

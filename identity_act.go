@@ -126,6 +126,8 @@ type sidecarAct struct {
 	presence      bool
 	evidence      *bridge.WebAuthnEvidence
 	ran           bool
+	// each statement's Signed bytes once Run signed them, in act order
+	signed [][]byte
 }
 
 // A new act of origin's, at the installed authority's pin. ErrSidecarActNoAuthority with none installed and
@@ -162,13 +164,15 @@ func (self *sidecarAct) Add(signedType bridge.SignedType, statement proto.Messag
 
 // Add, with seal run on the statement once its StatementHeader is set and before it is encoded, nil for none: what a
 // statement with a sealed field needs, since the seal binds the header's network and nonce
-// (plan-TEAM-sealed-field-format), as IndexerSet's services (TEAM-M2-18).
+// (plan-TEAM-sealed-field-format), as IndexerSet's services (TEAM-M2-18). §17.8's log statements sign under purpose
+// bridge: those beyond the own-resource filings, a BridgeEgress or a BridgeAlias, only on a person's confirmation; a
+// BridgeBlock rides a head and carries no StatementHeader, so it is no act's.
 func (self *sidecarAct) AddSealed(signedType bridge.SignedType, statement proto.Message, seal func(header *bridge.StatementHeader, statement proto.Message) error) error {
 	if self.ran {
 		return ErrSidecarActState
 	}
 	purpose, ok := sidecarIdentitySignedPurpose(signedType)
-	if !ok || (purpose != bridge.SignedPurposeAuthority && purpose != bridge.SignedPurposeAcl && !sidecarOwnResourceTypes[signedType]) {
+	if !ok || (purpose != bridge.SignedPurposeAuthority && purpose != bridge.SignedPurposeAcl && purpose != bridge.SignedPurposeBridge && !sidecarOwnResourceTypes[signedType]) {
 		return fmt.Errorf("%w: type %#x is no statement this act signs", ErrSidecarSignRefused, int32(signedType))
 	}
 	if self.origin != SidecarActConfirmed && !sidecarOwnResourceTypes[signedType] {
@@ -442,6 +446,7 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 			notAfterMs: statement.notAfterMs,
 			act:        &sidecarPendingAct{actId: actId, index: uint32(index), stale: statement.stale},
 		})
+		self.signed = append(self.signed, bytes.Clone(signedBytes))
 	}
 	// every statement is kept before any is posted, so a kill between two posts retries the rest's same bytes
 	for _, pending := range signedStatements {
@@ -462,6 +467,17 @@ func (self *sidecarAct) Run(ctx context.Context, check SidecarPresenceCheck) ([]
 		pins = append(pins, pin)
 	}
 	return pins, nil
+}
+
+// Each statement's Signed bytes as Run signed them, in act order, whether or not its post landed; nil before Run signed
+// them. What a caller that hands a statement on keeps, as forwarding's setup keeps its Delegation's (DESIGN-DETAILS
+// 4.2.6's S1). Copies.
+func (self *sidecarAct) Signed() [][]byte {
+	signed := make([][]byte, 0, len(self.signed))
+	for _, signedBytes := range self.signed {
+		signed = append(signed, bytes.Clone(signedBytes))
+	}
+	return signed
 }
 
 // A statement's not_after from now: at most §7.9's 7 days.

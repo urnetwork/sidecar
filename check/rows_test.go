@@ -60,7 +60,7 @@ var failsOnRows = []failsOnRow{
 	{
 		row: "deps", item: "a first-party require §4.7's imports bullet does not name",
 		rule:         (*repository).firstPartyRequireFindings,
-		plantedTests: []string{"TestDepsFailsOnANestedModuleRequiringProxy", "TestDepsFailsOnARequireNoPackageReaches"},
+		plantedTests: []string{"TestDepsFailsOnANestedModuleRequiringProxy", "TestDepsFailsOnAModuleRequiringWarp", "TestDepsFailsOnARequireNoPackageReaches"},
 	},
 	{
 		row: "deps", item: "a module outside §4.7's table, or one no leg reads",
@@ -263,7 +263,7 @@ var failsOnRows = []failsOnRow{
 		row: "hygiene", item: "replaces other than §4.7's",
 		rule: (*repository).replaceFindings,
 		plantedTests: []string{
-			"TestHygieneFailsOnAnExtraReplace", "TestHygieneFailsOnAMovedReplace", "TestHygieneFailsOnAMissingReplace",
+			"TestHygieneFailsOnAnExtraReplace", "TestHygieneFailsOnAMovedReplace", "TestHygieneFailsOnAMissingReplace", "TestHygieneFailsOnAReplaceOfWarp",
 			"TestHygieneFailsOnANestedModuleNotRepeatingAReplace", "TestHygieneFailsOnAVersionedReplace",
 			"TestHygieneFailsOnAReleaseBranchExtraReplace", "TestHygieneFailsOnAMovedForkReplace",
 			"TestHygieneFailsOnAModuleLinkingAForkWithoutItsReplace",
@@ -280,10 +280,10 @@ var failsOnRows = []failsOnRow{
 		plantedTests: []string{"TestHygieneFailsOnAGoWorkFile"},
 	},
 	{
-		row: "hygiene", item: "a package beside cli's, mlsinterop's or sidecarctl's own, or a file naming one, which the release's rewrite would break (§4.9)",
+		row: "hygiene", item: "a package beside cli's or mlsinterop's own, or a file naming one, which the release's rewrite would break (§4.9)",
 		rule: (*repository).untaggedSubpackageFindings,
 		plantedTests: []string{
-			"TestHygieneFailsOnASubpackageOfCli", "TestHygieneFailsOnASubpackageOfMlsinterop", "TestHygieneFailsOnASubpackageOfSidecarctl",
+			"TestHygieneFailsOnASubpackageOfCli", "TestHygieneFailsOnASubpackageOfMlsinterop",
 			"TestHygieneFailsOnAnExternalTestImportingMlsinterop", "TestHygieneFailsOnAQuotedPathOfCliOutsideAnImport",
 		},
 	},

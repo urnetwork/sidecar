@@ -44,6 +44,32 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+// The team directory's person acts (16.11; D-MCP-33, D-MCP-34; MCP-M6-01). Each is a person's at a device, on
+// /dev/tty or in an app's UI, so the guard refuses every one from MCP, whoever asks and whatever the run's taint, and
+// one this list does not name as well: no tool decides a request, so no RepoGrant, EvsShare or ApprovalDecision on
+// another sidecar's request is signed from a session, and no tool erases, so no ERASE, CUT or CLOSURE push starts
+// from one. A tool that would do one reports it so the refusal does not rest on the tool's own restraint.
+type McpDirectoryAct int
+
+const (
+	// Approving or denying a request, or completing a decision's protocol (D-MCP-34).
+	McpDirectoryActDecide McpDirectoryAct = iota + 1
+	// Announcing a repo.
+	McpDirectoryActAnnounce
+	// Revoking a repo's announcement.
+	McpDirectoryActRevoke
+	// Marking a repo private.
+	McpDirectoryActPrivate
+	// Changing the claims setting: a member's value, a project's, or a wider one than `.ur`'s.
+	McpDirectoryActClaims
+	// Changing a worker's announcement.
+	McpDirectoryActWorker
+	// Changing ServiceSettings.directory.
+	McpDirectoryActSettings
+	// Erasing directory items, or destroying the directory's keys (D-MCP-33).
+	McpDirectoryActErase
+)
+
 // What a target is.
 type McpTargetKind int
 
@@ -99,6 +125,10 @@ type McpTarget struct {
 
 	// McpTargetRecordAppend's.
 	RecordKind sidecar.RecordKind
+
+	// McpTargetDirectoryAct's: which person act, for the tool's own account of what it would do. Every value is
+	// refused, one the list does not name included.
+	DirectoryAct McpDirectoryAct
 }
 
 // The search index's files (§11.14): the directory on a file-mode ref and the companion ref.

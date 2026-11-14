@@ -172,6 +172,7 @@ func cases() []*suiteCase {
 		{name: "delete-of-a-missing-key", run: caseDeleteMissing},
 		{name: "delete-then-create", run: caseDeleteThenCreate},
 		{name: "metadata-rides-put", run: caseMetadata},
+		{name: "metadata-of-a-refused-create-is-the-first-writers", run: caseMetadataRefusedCreate},
 		{name: "metadata-at-its-limit", run: caseMetadataLimit},
 		{name: "invalid-options-write-nothing", run: caseInvalidOptions},
 		{name: "checksum-is-verified", run: caseChecksum},
@@ -838,6 +839,38 @@ func caseMetadata(ctx context.Context, target *Target, keys *keySpace) error {
 	}
 	if _, ok := info.Metadata["entry-state"]; ok {
 		return fmt.Errorf("metadata survived an overwrite: %v", info.Metadata)
+	}
+	return nil
+}
+
+// A create that answers 412 changes nothing of the object it found, its metadata included: a slot's
+// origin is the statement whose create stored it, and a second statement's create of equal bytes must
+// leave the first's origin for a HEAD and a GET to read (DESIGN-DETAILS 14.2.2, 14.7).
+func caseMetadataRefusedCreate(ctx context.Context, target *Target, keys *keySpace) error {
+	cluster := target.Cluster
+	key := keys.key("slot")
+	first := map[string]string{"origin": "1.p.first"}
+	if _, err := cluster.PutIfNoneMatch(ctx, key, []byte("x"), &sidecar.BlobPutOptions{Metadata: first}); err != nil {
+		return err
+	}
+	_, err := cluster.PutIfNoneMatch(ctx, key, []byte("x"), &sidecar.BlobPutOptions{Metadata: map[string]string{"origin": "1.p.second"}})
+	if err := wantError("the second create", err, sidecar.ErrBlobPrecondition); err != nil {
+		return err
+	}
+	info, err := cluster.Head(ctx, key)
+	if err != nil {
+		return err
+	}
+	if info.Metadata["origin"] != first["origin"] {
+		return fmt.Errorf("head: origin is %q after a refused create, want the first writer's %q", info.Metadata["origin"], first["origin"])
+	}
+	object, err := cluster.Get(ctx, key)
+	if err != nil {
+		return err
+	}
+	object.Body.Close()
+	if object.Metadata["origin"] != first["origin"] {
+		return fmt.Errorf("get: origin is %q after a refused create, want the first writer's %q", object.Metadata["origin"], first["origin"])
 	}
 	return nil
 }

@@ -216,17 +216,29 @@ func TestTlsAudienceSessionCountsOnItsOwnOriginAlone(t *testing.T) {
 	}
 }
 
-// members-device waits on M6's device statement, so nothing passes it yet, signed in or not.
-func TestTlsAudienceMembersDeviceRefused(t *testing.T) {
+// members-device counts no members session, which names no device: a navigation carrying one goes to edge login, and
+// any other request is refused, and nothing reaches the service either way (tls_members_device_test.go has the rest).
+func TestTlsAudienceMembersDeviceRefusesAMembersSession(t *testing.T) {
 	memberId := NewId()
 	fixture := newTlsFrontFixture(t, func(fixture *tlsFrontFixture) {
 		fixture.policy.setGrant(protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE, protocol.AclAppMode_ACL_APP_MODE_HTTP, nil)
 		fixture.policy.members[memberId] = true
 	})
+	client := fixture.httpClient(tlsAlpnHttp11)
 	request := tlsFrontTestNavigation(t, http.MethodGet, "/")
 	request.AddCookie(&http.Cookie{Name: tlsSessionCookieName, Value: fixture.sealSession(t, memberId)})
-	if response, _ := tlsFrontTestDo(t, fixture.httpClient(tlsAlpnHttp11), request); response.StatusCode != http.StatusForbidden {
-		t.Errorf("%d", response.StatusCode)
+	response, _ := tlsFrontTestDo(t, client, request)
+	if response.StatusCode != http.StatusFound || !strings.HasPrefix(response.Header.Get("Location"), tlsFrontTestIssuer+tlsEdgeLoginAuthorizePath) {
+		t.Errorf("a navigation: %d to %q", response.StatusCode, response.Header.Get("Location"))
+	}
+	request, err := http.NewRequest(http.MethodGet, "https://"+tlsFrontTestServerName+"/api", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set(tlsHttpHeaderFetchSite, tlsFetchSiteSameOrigin)
+	request.AddCookie(&http.Cookie{Name: tlsSessionCookieName, Value: fixture.sealSession(t, memberId)})
+	if response, _ := tlsFrontTestDo(t, client, request); response.StatusCode != http.StatusUnauthorized {
+		t.Errorf("a fetch: %d", response.StatusCode)
 	}
 	if dials, _ := fixture.backend.counts(); dials != 0 {
 		t.Errorf("%d dials", dials)

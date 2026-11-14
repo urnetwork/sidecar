@@ -380,17 +380,42 @@ func (self *SocketsService) judgeEntry(
 	if self.killSet.kills(networkId, name, now) {
 		return entry
 	}
+	if name.namespace == sidecar.SocketNamespacePlatform {
+		// only urnetwork-edge's platform clients list a ur/ name, in the clear and with no claim, and §8 judges none
+		// (§9.4, SOCK.md reading 7): their namespace's rules alone decide (namespace_ur.go)
+		if !caller.edge {
+			return entry
+		}
+		hooks, registered := self.namespaces.lookup(sidecar.SocketNamespacePlatform)
+		if !registered {
+			return entry
+		}
+		err := hooks.ValidateListen(r.Context(), &SocketListenCheck{
+			NetworkId:        networkId,
+			ListenerClientId: caller.principal.ClientId,
+			SidecarId:        caller.principal.SidecarId,
+			Name:             name.name,
+			Namespace:        name.namespace,
+			Registration:     stored,
+		})
+		switch {
+		case errors.Is(err, ErrSocketListenRefused):
+			return entry
+		case err != nil:
+			return nil
+		}
+		entry.verdict = socketEntryAllowed
+		return entry
+	}
 	listen := view.MayListen(caller.gateRequest(networkId, name), now)
 	if listen == nil || !listen.Allowed {
 		return entry
 	}
-	// ur/ listeners are platform clients, which hold no identity key; their namespace's owner authorizes them
-	// (§9.4, SOCK-M9-01)
-	if name.namespace != sidecar.SocketNamespacePlatform && !self.claimHolds(caller, view, networkId, registration, name) {
+	if !self.claimHolds(caller, view, networkId, registration, name) {
 		return entry
 	}
 	switch name.namespace {
-	case sidecar.SocketNamespaceTls, sidecar.SocketNamespaceSmtp, sidecar.SocketNamespacePlatform:
+	case sidecar.SocketNamespaceTls, sidecar.SocketNamespaceSmtp:
 		hooks, registered := self.namespaces.lookup(name.namespace)
 		if !registered {
 			// an edge namespace nobody registered refuses every entry (§9.4)

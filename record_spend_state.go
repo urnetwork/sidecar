@@ -22,9 +22,13 @@
 //	                 destinations, §8.6's admin clause counting an admin wherever the grant touches another member's
 //	                 devices, a share or autogroup:public, its evidence the row's effective list (the format's three
 //	                 channels where the row lists none), k its approvers; any other action, which no requests rule
-//	                 names: the requester's owner or sponsor (§8.6's default, autogroup:self, autogroup:admin where
-//	                 none stands), k = 1, and the document's evidenceDefault, which rows do not carry, so only a
-//	                 caller holding the compiled policy knows it (question mcp-m3-03-evidence-default-at-gates)
+//	                 names (dns_set, dns_delete, bridge_expose): the requester's owner or sponsor (§8.6's default,
+//	                 autogroup:self, autogroup:admin where none stands), k = 1, and the document's evidenceDefault
+//	                 as the rows carry it, AclRows.evidence_default, which each base compiles (QD-727), the
+//	                 format's three channels where the rows list none, as a state before its first base does
+//
+// So the daemon, a gate and a reader, each from rows alone, give one verdict for either kind of action (D-MCP-12), and
+// a document that narrows evidenceDefault, to device alone, say, is held to at every one of them.
 //
 // AD4: neither type takes a run id, an agent id, a recipient or a preview, since a gate holds none of them.
 //
@@ -69,9 +73,9 @@ type SpendState interface {
 
 // The rule that governs one action at P, as the spend check reads it (§16.6, §8.6).
 type SpendRule interface {
-	// The governing evidence list: the matching requests rule's, else the document's evidenceDefault. False where the
-	// state does not know it, which refuses every channel.
-	Evidence() ([]protocol.ApprovalChannel, bool)
+	// The governing evidence list: the matching requests rule's, else the document's evidenceDefault. A channel
+	// outside it is refused, so an empty list refuses every channel.
+	Evidence() []protocol.ApprovalChannel
 	// k: how many distinct eligible approvers a decision set needs, at least 1.
 	ApproverCount() int
 	// Whether the member approves under the rule at P.
@@ -80,7 +84,8 @@ type SpendRule interface {
 	AdminClauseMet(memberIds []Id) bool
 }
 
-// The format's evidence list where a rule's row lists none: every §16.6 channel (§8.8's AclRequestRule).
+// The format's evidence list where a rule's row or the rows' evidence_default lists none: every §16.6 channel (§8.8's
+// AclRequestRule and AclRows).
 var spendAllChannels = []protocol.ApprovalChannel{
 	protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE,
 	protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE,
@@ -95,14 +100,11 @@ type ConfigSpendState struct {
 	config *ConfigState
 	acl    *AclState
 	forked bool
-	// nil where this verifier does not hold the document's evidenceDefault
-	evidenceDefault []protocol.ApprovalChannel
 }
 
-// The spend state of config, with forked what the caller knows of a fork (AD3) and evidenceDefault the compiled
-// document's, nil where the caller does not hold it, as a gate and every rows-only reader do not. evidenceDefault is
-// copied; a channel outside §16.6's three is refused.
-func NewConfigSpendState(config *ConfigState, forked bool, evidenceDefault []protocol.ApprovalChannel) (*ConfigSpendState, error) {
+// The spend state of config, with forked what the caller knows of a fork (AD3). Everything else is the state's own,
+// the document's evidenceDefault included, which its rows carry (QD-727).
+func NewConfigSpendState(config *ConfigState, forked bool) (*ConfigSpendState, error) {
 	if config == nil {
 		return nil, fmt.Errorf("%w: no state", ErrSpendStateInvalid)
 	}
@@ -110,16 +112,20 @@ func NewConfigSpendState(config *ConfigState, forked bool, evidenceDefault []pro
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSpendStateInvalid, err)
 	}
-	for _, channel := range evidenceDefault {
-		if !slices.Contains(spendAllChannels, channel) {
-			return nil, fmt.Errorf("%w: evidence channel %d", ErrSpendStateInvalid, channel)
-		}
+	return &ConfigSpendState{config: config, acl: acl, forked: forked}, nil
+}
+
+// A list of ApprovalDecision.channel values as rows carry it: the format's three for none, else the listed values,
+// one outside §16.6's three among them, which no decision that verifies carries. A new list.
+func spendRowsEvidence(channels []uint32) []protocol.ApprovalChannel {
+	if len(channels) == 0 {
+		return slices.Clone(spendAllChannels)
 	}
-	state := &ConfigSpendState{config: config, acl: acl, forked: forked}
-	if evidenceDefault != nil {
-		state.evidenceDefault = slices.Clone(evidenceDefault)
+	evidence := make([]protocol.ApprovalChannel, 0, len(channels))
+	for _, channel := range channels {
+		evidence = append(evidence, protocol.ApprovalChannel(channel))
 	}
-	return state, nil
+	return evidence
 }
 
 // The state's (n, A_n).
@@ -183,15 +189,16 @@ func (self *ConfigSpendState) Govern(action *StoredCanonicalAction, spender Id, 
 		return nil, fmt.Errorf("%w: no action", ErrAclRequestNoMatch)
 	}
 	if len(action.Action.GetRuleId()) == 0 {
-		// no requests rule names the action: the requester's owner or sponsor approve (§8.6)
+		// no requests rule names the action: the requester's owner or sponsor approve (§8.6), on the document's
+		// default channels as the rows carry them (QD-727)
 		selfAtom := AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_SELF)
 		approvers := self.acl.ResolveApprovers([][]byte{selfAtom.Bytes()}, AclSidecarSubject(spender), nil, now)
-		rule := &configSpendRule{acl: self.acl, approvers: approvers, count: 1}
-		if self.evidenceDefault != nil {
-			rule.evidence = slices.Clone(self.evidenceDefault)
-			rule.evidenceKnown = true
-		}
-		return rule, nil
+		return &configSpendRule{
+			acl:       self.acl,
+			approvers: approvers,
+			count:     1,
+			evidence:  spendRowsEvidence(self.acl.Rows().GetEvidenceDefault()),
+		}, nil
 	}
 
 	ask, err := ParseAclGrantAction(action.Action)
@@ -215,13 +222,8 @@ func (self *ConfigSpendState) Govern(action *StoredCanonicalAction, spender Id, 
 		count:            max(1, int(match.Rule.GetApprovers())),
 		adminOnly:        adminOnly,
 		touchedMemberIds: touchedMemberIds,
-		evidenceKnown:    true,
-	}
-	for _, channel := range match.Rule.GetEvidence() {
-		rule.evidence = append(rule.evidence, protocol.ApprovalChannel(channel))
-	}
-	if len(rule.evidence) == 0 {
-		rule.evidence = slices.Clone(spendAllChannels)
+		// the rule's own list, never the document's default, which its compile already folded in (QD-396)
+		evidence: spendRowsEvidence(match.Rule.GetEvidence()),
 	}
 	return rule, nil
 }
@@ -240,13 +242,13 @@ type configSpendRule struct {
 	adminOnly        bool
 	touchedMemberIds []Id
 
-	evidence      []protocol.ApprovalChannel
-	evidenceKnown bool
+	// the requests rule's list, else the rows' evidence_default
+	evidence []protocol.ApprovalChannel
 }
 
-// The rule's list, or the document's default, or unknown.
-func (self *configSpendRule) Evidence() ([]protocol.ApprovalChannel, bool) {
-	return self.evidence, self.evidenceKnown
+// The rule's list, or the document's default.
+func (self *configSpendRule) Evidence() []protocol.ApprovalChannel {
+	return self.evidence
 }
 
 // The rule's approvers, at least 1.

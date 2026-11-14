@@ -190,3 +190,56 @@ func TestTlsIdentifierSetHashRefusesWhatASetCannotHold(t *testing.T) {
 		}
 	}
 }
+
+func TestTlsCustomIdentifierSetIsOneHostOutsideEveryRoot(t *testing.T) {
+	roots := []string{"sidecar.example", "other-root.example"}
+	set, err := TlsCustomIdentifierSet("app.customer.example", roots)
+	if err != nil || !slices.Equal(set, []string{"app.customer.example"}) {
+		t.Fatalf("set %v, %v", set, err)
+	}
+	if _, err := TlsIdentifierSetHash(set); err != nil {
+		t.Errorf("the set has no hash: %v", err)
+	}
+	for _, host := range []string{
+		// a root, and names under one, stay certs' to order
+		"sidecar.example",
+		"abcdefghij.sidecar.example",
+		"app.abcdefghij.other-root.example",
+		// never a wildcard, and only a canonical name
+		"*.customer.example",
+		"App.customer.example",
+		"app.customer.example.",
+		"",
+	} {
+		if _, err := TlsCustomIdentifierSet(host, roots); !errors.Is(err, ErrTlsIdentifierSet) {
+			t.Errorf("%q: %v", host, err)
+		}
+	}
+	// a name that only ends in a root's letters is not under it
+	if _, err := TlsCustomIdentifierSet("notsidecar.example", roots); err != nil {
+		t.Errorf("a name beside a root: %v", err)
+	}
+	if _, err := TlsCustomIdentifierSet("app.customer.example", []string{"Not A Root"}); !errors.Is(err, ErrTlsIdentifierSet) {
+		t.Errorf("a root that is no name: %v", err)
+	}
+}
+
+func TestTlsCertStateCustomOpen(t *testing.T) {
+	for state, open := range map[TlsCertState]bool{
+		TlsCertStateCustomQueued:   true,
+		TlsCertStateCustomOrdering: true,
+		TlsCertStateCustomIssued:   false,
+		TlsCertStateCustomRevoking: false,
+		TlsCertStateQueued:         false,
+		TlsCertStateFailed:         false,
+		TlsCertState("later"):      false,
+	} {
+		if state.CustomOpen() != open {
+			t.Errorf("%s open %t", state, state.CustomOpen())
+		}
+		// the column holds 16 bytes (DESIGN-DETAILS 17.2.4)
+		if 16 < len(state) {
+			t.Errorf("%s is past the column", state)
+		}
+	}
+}

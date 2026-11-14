@@ -61,7 +61,8 @@ func TestStreamResetZeroAndUnknownReadAsProtocol(t *testing.T) {
 }
 
 func TestEdgeResultZeroAndUnknownResetTheStream(t *testing.T) {
-	for _, code := range []uint32{0, 8, 0x80000000, math.MaxUint32} {
+	// 8 is KEYS (DESIGN-DETAILS 3.2.5), so 9 is the first preamble code no version knows
+	for _, code := range []uint32{0, 9, 0x80000000, math.MaxUint32} {
 		if got, ok := readSmtpPreambleCode(code); ok {
 			t.Errorf("a preamble code of %d read as %s", code, got)
 		}

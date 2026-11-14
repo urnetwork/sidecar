@@ -110,10 +110,18 @@ func certsFakeInFlight(row *sidecar.TlsCertRecord) bool {
 
 func (self *FakeCertsStore) InsertCert(ctx context.Context, row *sidecar.TlsCertRecord) error {
 	return self.call(ctx, "InsertCert", func() error {
+		if row.StateTime.IsZero() {
+			return certsservice.ErrCertsStateTime
+		}
 		if _, exists := self.rows[row.CertId]; exists {
 			return certsservice.ErrCertsConflict
 		}
-		self.rows[row.CertId] = certsFakeCopy(row)
+		stored := certsFakeCopy(row)
+		// a reason waits only in a revoking row
+		if stored.State != sidecar.TlsCertStateRevoking {
+			stored.RevocationReason = ""
+		}
+		self.rows[row.CertId] = stored
 		return nil
 	})
 }
@@ -242,13 +250,48 @@ func (self *FakeCertsStore) ListQueued(ctx context.Context, afterCertId sidecar.
 	return
 }
 
+func (self *FakeCertsStore) ListInStates(ctx context.Context, states []sidecar.TlsCertState, afterCertId sidecar.Id, count int) (rows []*sidecar.TlsCertRecord, err error) {
+	err = self.call(ctx, "ListInStates", func() error {
+		rows = []*sidecar.TlsCertRecord{}
+		if count <= 0 {
+			return nil
+		}
+		rows = self.sortedWithLock(func(row *sidecar.TlsCertRecord) bool {
+			return slices.Contains(states, row.State) && 0 < row.CertId.Cmp(afterCertId)
+		})
+		if count < len(rows) {
+			rows = rows[:count]
+		}
+		return nil
+	})
+	return
+}
+
 func (self *FakeCertsStore) TransitionCert(ctx context.Context, transition *certsservice.CertsTransition) (applied bool, err error) {
 	err = self.call(ctx, "TransitionCert", func() error {
+		if transition.At.IsZero() {
+			return certsservice.ErrCertsStateTime
+		}
 		row, ok := self.rows[transition.CertId]
 		if !ok || !slices.Contains(transition.From, row.State) {
 			return nil
 		}
+		if row.State != transition.To {
+			row.StateTime = transition.At
+		}
 		row.State = transition.To
+		// a reason waits only in a revoking row
+		if transition.To != sidecar.TlsCertStateRevoking {
+			row.RevocationReason = ""
+		} else if transition.RevocationReason != "" {
+			row.RevocationReason = transition.RevocationReason
+		}
+		if 0 < len(transition.Chain) {
+			row.Chain = make([][]byte, 0, len(transition.Chain))
+			for _, certificate := range transition.Chain {
+				row.Chain = append(row.Chain, bytes.Clone(certificate))
+			}
+		}
 		if transition.Ca != "" {
 			row.Ca = string(transition.Ca)
 		}
@@ -295,12 +338,37 @@ func (self *FakeCertsStore) SetSuccessor(ctx context.Context, certId sidecar.Id,
 	return
 }
 
+// Whether row's certificate, or with failed its order, ended before before: a revoked row by its state
+// time, a failed one by its state time when failed counts, and any other by its validity's end.
+func certsFakeEndedBefore(row *sidecar.TlsCertRecord, before time.Time, failed bool) bool {
+	switch row.State {
+	case sidecar.TlsCertStateRevoked:
+		return row.StateTime.Before(before)
+	case sidecar.TlsCertStateFailed:
+		return failed && row.StateTime.Before(before)
+	}
+	return !row.NotAfter.IsZero() && row.NotAfter.Before(before)
+}
+
 func (self *FakeCertsStore) PurgeEnded(ctx context.Context, before time.Time) (removedCount int, err error) {
 	err = self.call(ctx, "PurgeEnded", func() error {
 		for certId, row := range self.rows {
-			if !row.NotAfter.IsZero() && row.NotAfter.Before(before) {
+			if certsFakeEndedBefore(row, before, true) {
 				delete(self.rows, certId)
 				removedCount += 1
+			}
+		}
+		return nil
+	})
+	return
+}
+
+func (self *FakeCertsStore) PurgeChains(ctx context.Context, before time.Time) (droppedCount int, err error) {
+	err = self.call(ctx, "PurgeChains", func() error {
+		for _, row := range self.rows {
+			if 0 < len(row.Chain) && certsFakeEndedBefore(row, before, false) {
+				row.Chain = nil
+				droppedCount += 1
 			}
 		}
 		return nil

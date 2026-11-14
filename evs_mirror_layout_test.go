@@ -199,7 +199,7 @@ func TestEvsMirrorHoldsObjectsToTheirNames(t *testing.T) {
 	if err := mirror.Put(statementKey, bytes.NewReader(past[:DefaultEvsFormatSettings().StatementMaxByteCount])); err != nil {
 		t.Errorf("a statement at its bound: %v", err)
 	}
-	slotPast := evsTestMirrorBody("slot ", evsSlotMaxByteCount+1)
+	slotPast := evsTestMirrorBody("slot ", DefaultEvsFormatSettings().SlotMaxByteCount+1)
 	if err := mirror.Put(EvsMirrorSlotKey(evsTestId("slot").Bytes()), bytes.NewReader(slotPast)); !errors.Is(err, ErrEvsMirrorObjectInvalid) {
 		t.Errorf("a slot past its bound: %v", err)
 	}

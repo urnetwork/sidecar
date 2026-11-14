@@ -608,7 +608,7 @@ func TestIndexHeadSealsOnlyAtItsCap(t *testing.T) {
 		}
 		old := before.writeRoot().newestBucket().writer(a).head()
 		entry := &indexEntry{kind: indexEntryFull, key: document.key, version: 1, timeSeconds: indexEntrySeconds(world.at.UnixMilli()), row: document.row, keys: document.keys}
-		encoded, err := entry.appendEncoded(nil, false)
+		encoded, err := entry.appendEncoded(nil, false, DefaultIndexFormatSettings())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1049,7 +1049,7 @@ func testRawSlot(t testing.TB, header *protocol.IndexFileHeader, entries ...*ind
 	body := []byte{}
 	for _, entry := range entries {
 		var err error
-		if body, err = entry.appendEncoded(body, false); err != nil {
+		if body, err = entry.appendEncoded(body, false, DefaultIndexFormatSettings()); err != nil {
 			t.Fatal(err)
 		}
 	}

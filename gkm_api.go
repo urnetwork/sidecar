@@ -49,12 +49,6 @@ import (
 // The body type of every gkm request and answer: a protocol/gkm.proto message, a bare Signed, or MLS bytes.
 const gkmHttpContentType = "application/octet-stream"
 
-// §10.14's bound on one POST /gkm/reader-keys (QD-066).
-const gkmReaderKeysBatchCount = 256
-
-// The bound on one POST /gkm/delegation-keys (QD-637), reader-keys' own.
-const gkmDelegationKeysBatchCount = 256
-
 // The roles of a gkm repo scope (§7.8).
 const (
 	GkmScopeRoleRead    = "r"
@@ -478,9 +472,10 @@ func (self *GkmApi) ReaderKeys(ctx context.Context, sidecarIds []Id) ([]*bridge.
 		return nil, err
 	}
 	readerKeys := []*bridge.Signed{}
-	for start := 0; start < len(sidecarIds); start += gkmReaderKeysBatchCount {
+	batchCount := max(1, self.settings.ReaderKeysBatchCount)
+	for start := 0; start < len(sidecarIds); start += batchCount {
 		request := &protocol.GkmReaderKeysRequest{}
-		for _, sidecarId := range sidecarIds[start:min(len(sidecarIds), start+gkmReaderKeysBatchCount)] {
+		for _, sidecarId := range sidecarIds[start:min(len(sidecarIds), start+batchCount)] {
 			request.SidecarIds = append(request.SidecarIds, sidecarId.Bytes())
 		}
 		body, err := gkmBody(request)
@@ -579,9 +574,10 @@ func (self *GkmApi) DelegationKeys(ctx context.Context, configRepoId Id, delegat
 		return nil, err
 	}
 	readerKeys := make([][]byte, 0, len(delegationIds))
-	for start := 0; start < len(delegationIds); start += gkmDelegationKeysBatchCount {
+	batchCount := max(1, self.settings.DelegationKeysBatchCount)
+	for start := 0; start < len(delegationIds); start += batchCount {
 		request := &protocol.GkmDelegationKeysRequest{}
-		for _, delegationId := range delegationIds[start:min(len(delegationIds), start+gkmDelegationKeysBatchCount)] {
+		for _, delegationId := range delegationIds[start:min(len(delegationIds), start+batchCount)] {
 			request.DelegationIds = append(request.DelegationIds, bytes.Clone(delegationId))
 		}
 		body, err := gkmBody(request)
@@ -852,6 +848,27 @@ func (self *GkmApi) UploadWelcome(ctx context.Context, repoId Id, groupId Id, ep
 	}
 	path := gkmGroupPath(groupId, "/welcome/"+strconv.FormatUint(epoch, 10))
 	return self.callMessage(ctx, &gkmCall{route: "POST /gkm/groups/{group_id}/welcome/{n}", method: http.MethodPost, path: path, scopes: scopes, body: body}, nil)
+}
+
+// HEAD /gkm/groups/<id>/welcome/<n> (QD-747): whether epoch n's Welcome stands at gkm, its 200 or its 404, which
+// carry no body. Any other answer is an error and says nothing of the Welcome: a caller removes no joiner on one.
+func (self *GkmApi) WelcomeStands(ctx context.Context, repoId Id, groupId Id, epoch uint64) (bool, error) {
+	scopes, err := self.scopesFor(&repoId, GkmScopeRoleWrite)
+	if err != nil {
+		return false, err
+	}
+	path := gkmGroupPath(groupId, "/welcome/"+strconv.FormatUint(epoch, 10))
+	call := &gkmCall{route: "HEAD /gkm/groups/{group_id}/welcome/{n}", method: http.MethodHead, path: path, scopes: scopes, retry: true}
+	status, _, err := self.do(ctx, call)
+	switch {
+	case err == nil && status == http.StatusOK:
+		return true, nil
+	case err == nil:
+		return false, fmt.Errorf("%w: %s: a success that is not a 200", ErrGkmReplyInvalid, call.route)
+	case IsGkmStatus(err, http.StatusNotFound):
+		return false, nil
+	}
+	return false, err
 }
 
 // GET /gkm/groups/<id>/group-info?want=: the pointer at 16 leaves or fewer, else the sealed GroupInfo; nil want asks

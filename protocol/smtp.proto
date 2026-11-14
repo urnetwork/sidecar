@@ -2,7 +2,9 @@
 //
 // The first four messages are §14's fenced blocks. SmtpOutcome and SmtpStatus take their fields from
 // plan-SMTP-wire-gaps#1 and #2, and SmtpHandshake and SmtpHandshakeResult theirs from smtpproof-start-shts-wire,
-// each decided with its numbers, and design_unfenced_test.go holds them until §14 fences them.
+// each decided with its numbers, and design_unfenced_test.go holds them until §14 fences them. SmtpPreamble's
+// proof_key_set, SmtpProof's fields 10 to 13 and SMTP_PREAMBLE_KEYS are DESIGN-DETAILS 3.2.5's (QD-712, QD-716),
+// which design_unfenced_test.go holds the same way until design-records folds them into §14.5.
 //
 // Only SmtpPreamble and SmtpPreambleResult travel as frames ahead of the raw TLS (plan-SMTP-wire-gaps#3,
 // smtp_frame.go). SmtpOutcome is a NO_REPLY envelope to the ticket's listener, SmtpProof and SmtpHandshake are
@@ -23,9 +25,12 @@ message SmtpPreamble {           // 0x1601, sidecar -> edge
   uint64 message_byte_count = 7;  // proven: BDAT's n, or DATA's octets before the end mark (Z4, Z6)
   bytes retry_of_send_id = 8;
   uint32 flags = 9;               // 1 BULK, 2 REQUIRETLS, 4 BURNER
+  bytes proof_key_set = 10;       // SHA-256 of the keyset.json every part of this connection is proven under
+                                  //   (DESIGN-DETAILS 3.2.5, 3.2.7)
 }
 message SmtpPreambleResult {     // 0x1602, edge -> sidecar
-  uint32 code = 1;  // §6.11: 1 OK, 2 HALTED, 3 QUOTA, 4 DENIED, 5 NO_MX, 6 NO_TLS, 7 TRY_LATER;
+  uint32 code = 1;  // §6.11: 1 OK, 2 HALTED, 3 QUOTA, 4 DENIED, 5 NO_MX, 6 NO_TLS, 7 TRY_LATER,
+                    //   8 KEYS (the edge does not accept proof_key_set: no MX is dialed, nothing is debited);
                     //   0 UNSPECIFIED, a protocol error
   uint32 retry_after_ms = 2;
   bytes send_id = 3;
@@ -38,16 +43,23 @@ message SmtpPreambleResult {     // 0x1602, edge -> sidecar
 }
 message SmtpProof {              // 0x1605, RPC sidecar -> edge (M9)
   bytes send_id = 1;
-  uint32 index = 2;               // 1 pi1; 2 pi2; 3 pi3; 4.. later DATA parts
-  uint32 mode = 3;                // 1 BDAT, 2 DATA; fixed from pi2 on (Z9)
-  uint64 first_record = 4;        // client application records covered,
-  uint64 last_record = 5;         //   by TLS sequence number
-  bytes proof = 6;
+  uint32 index = 2;               // the part's ordinal, from 1; part 1 is the key part
+  uint32 mode = 3;                // 0 in part 1; 1 BDAT or 2 DATA from part 2 on, which fixes it (Z9)
+  uint64 first_record = 4;        // client application records covered, by TLS sequence number;
+  uint64 last_record = 5;         //   a part that opens none has last_record = first_record - 1
+  bytes proof = 6;                // 164 octets
   bool last = 7;                  // covers octet n, the end mark (DATA) and QUIT
   uint64 server_record_count = 8; // server records after Finished that this and earlier parts cover (0 in
-                                  //   pi1); this part covers those past the previous part's count (Z7)
+                                  //   part 1); this part covers those past the previous part's count (Z7)
   repeated bytes records = 9;     // ciphertext of each client record the part opens, in sequence order
-                                  //   (BDAT's pi3: the head from first_record, then QUIT at last_record)
+                                  //   (BDAT's last part: its header record from first_record, then QUIT at
+                                  //   last_record)
+  bytes key_commitment = 10;      // part 1 only: C, 64 octets (DESIGN-DETAILS 3.2.2)
+  uint32 reply_count = 11;        // the replies the server records it covers hold (Z8)
+  uint32 header_record_count = 12;  // on the part that opens the header block's first record, and no other:
+                                    //   how many client records hold the header block
+  bytes carry = 13;               // on a part that opens a header or body record: the scan state after it,
+                                  //   64 octets
 }
 message SmtpProofResult {        // 0x1606, edge -> sidecar
   uint32 code = 1;                // §6.11: 1 OK; 2 INVALID, and the edge cuts the connection (14.7);
@@ -89,6 +101,7 @@ enum SmtpPreambleCode {
   SMTP_PREAMBLE_NO_MX = 5;
   SMTP_PREAMBLE_NO_TLS = 6;
   SMTP_PREAMBLE_TRY_LATER = 7;
+  SMTP_PREAMBLE_KEYS = 8;         // the edge holds no key set of that id (DESIGN-DETAILS 3.2.5)
 }
 
 // SmtpProofResult.code, numbered by §6.11. A receiver takes 0 as a protocol error and resets the stream.

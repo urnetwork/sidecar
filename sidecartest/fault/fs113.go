@@ -14,8 +14,8 @@
 //
 // FS-113 also names the cached-head form of A, a multipart seal, each other recorded refusal, the lb's own re-send
 // on T3 (warp's nginx, not this world's model of it), a record lapsing past P's until, 8 live records and one under
-// 1 s answering 429, TIME_AHEAD, and a push creating its ref: EVS1-M2-40's report keeps them. FI-2 and FI-3's
-// oracles are not bound (TEST-M2-04, TEST-M2-05), so the schedules name the world's checks in their place.
+// 1 s answering 429, TIME_AHEAD, and a push creating its ref: EVS1-M2-40's report keeps them. FI-2 holds through
+// the world's checks (TEST-M2-04), and so does FI-3 (TEST-M2-05).
 
 package fault
 

@@ -1,0 +1,11 @@
+# The protocol/smtp.proto fields DESIGN-DETAILS 3.2.5 adds to §14.5's fenced SmtpPreamble and SmtpProof, which
+# design_unfenced_test.go's additions hold until design-records folds them in, for I-18: the key set a connection is
+# proven under, and the parts bound to one key part (QD-712). Each line pins the field's number and type and names the
+# §2.8 row that shows it, smtp-2 as QD-716 amended it; `sees` quotes that row, so a row that stops saying it fails.
+
+SmtpPreamble.proof_key_set: {number: 10, type: bytes, row: smtp-2, sees: "the id of the key set the sidecar proves under"}
+
+SmtpProof.key_commitment: {number: 10, type: bytes, row: smtp-2, sees: "the key commitment"}
+SmtpProof.reply_count: {number: 11, type: uint32, row: smtp-2, sees: "each with its reply count"}
+SmtpProof.header_record_count: {number: 12, type: uint32, row: smtp-2, sees: "the header block's record count"}
+SmtpProof.carry: {number: 13, type: bytes, row: smtp-2, sees: "the scan-state commitments the sidecar publishes"}

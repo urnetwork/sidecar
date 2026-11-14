@@ -16,10 +16,8 @@
 //     the AdminSet; Delegation-admitted, after the DelegationRevoke it reads the config's next generation by its own
 //     ReaderWrap, as an agent holder the Delegation no longer covers.
 //
-// The config read itself waits on question team-m2-15-config-repo-acl-row: no compile writes the config repo's own
-// AclRepo row, so the rows refuse every config scope to every sidecar alike, the closed direction. Until it is
-// answered the schedule holds the ephemeral's config rights to a member device's on the rows as they are, and judges
-// the read, the key holders and the head writers on sidecartest.AclConfigRowView, the row every option gives.
+// The config read is every reader's own state's (QD-719): no compile writes the config repo's AclRepo row, and each
+// state adds it from the Genesis, so the read, the key holders and the head writers are judged on the state itself.
 //
 // Named clauses, each a T2 test in fs_acl_test.go and a T3 test in server's sidecart3 where its row runs on T3:
 //
@@ -39,6 +37,7 @@
 package fault
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -214,11 +213,12 @@ func fs19CheckCeiling(net *sidecartest.AdmissionNet, world *fs19World) error {
 			{what: "the burner on the mailbox", rights: aclRights(net, acl, burner, world.mailboxId, evs), want: sidecar.AclEvsDeposit},
 			{what: "the burner on the secret", rights: aclRights(net, acl, burner, world.secretId, evs), want: 0},
 			{what: "the laptop on the vault", rights: aclRights(net, acl, laptop, world.vaultId, evs), want: ownerBound},
-			// the config on the rows as they are: whatever they give a member device, never more to the burner
-			{what: "the burner's config read beside the laptop's, at evs", rights: aclRights(net, acl, burner, world.configId, evs) & sidecar.AclEvsRead,
-				want: aclRights(net, acl, laptop, world.configId, evs) & sidecar.AclEvsRead},
-			{what: "the burner's config write at evs", rights: aclRights(net, acl, burner, world.configId, evs) & sidecar.AclEvsWrite, want: 0},
-			{what: "the burner's config write at gkm", rights: aclRights(net, acl, burner, world.configId, gkm) & sidecar.AclEvsWrite, want: 0},
+			// the config, on the row each state adds from the Genesis (QD-719): the burner reads it and writes it at
+			// neither audience; the laptop, the Genesis's owner sidecar and a config writer, holds §7.9's bootstrap admin
+			{what: "the burner on the config at evs", rights: aclRights(net, acl, burner, world.configId, evs), want: sidecar.AclEvsRead},
+			{what: "the burner on the config at gkm", rights: aclRights(net, acl, burner, world.configId, gkm), want: sidecar.AclEvsRead},
+			{what: "the laptop on the config at evs", rights: aclRights(net, acl, laptop, world.configId, evs), want: ownerBound},
+			{what: "the laptop on the config at gkm", rights: aclRights(net, acl, laptop, world.configId, gkm), want: ownerBound},
 		} {
 			if err := aclExpectRights(check.what, check.rights, check.want); err != nil {
 				return err
@@ -237,30 +237,17 @@ func fs19CheckCeiling(net *sidecartest.AdmissionNet, world *fs19World) error {
 			return err
 		}
 
-		// the config read on the config row every answer to team-m2-15-config-repo-acl-row gives
-		view, err := sidecartest.NewAclConfigRowView(state)
-		if err != nil {
-			return err
-		}
-		for _, check := range []struct {
-			what   string
-			rights sidecar.AclEvsRights
-			want   sidecar.AclEvsRights
-		}{
-			{what: "the burner on the config at evs", rights: aclRights(net, view.Acl(), burner, world.configId, evs), want: sidecar.AclEvsRead},
-			{what: "the burner on the config at gkm", rights: aclRights(net, view.Acl(), burner, world.configId, gkm), want: sidecar.AclEvsRead},
-			{what: "the laptop on the config at evs", rights: aclRights(net, view.Acl(), laptop, world.configId, evs), want: sidecar.AclEvsRead | sidecar.AclEvsWrite},
-			{what: "the laptop on the config at gkm", rights: aclRights(net, view.Acl(), laptop, world.configId, gkm), want: sidecar.AclEvsRead | sidecar.AclEvsWrite},
-		} {
-			if err := aclExpectRights(check.what, check.rights, check.want); err != nil {
-				return err
+		// the rows hold no row of the config repo: the one the state reads is its own
+		for _, repo := range acl.Rows().GetRepos() {
+			if bytes.Equal(repo.GetRepoId(), world.configId.Bytes()) {
+				return errors.New("the rows hold the config repo's row")
 			}
 		}
 		// the burner reads the config by a wrap of its own, the laptop as a leaf
-		if err := aclExpectHolder(view, world.configId, at, burner, true, sidecar.GkmHolderAgent); err != nil {
+		if err := aclExpectHolder(state, world.configId, at, burner, true, sidecar.GkmHolderAgent); err != nil {
 			return err
 		}
-		if err := aclExpectHolder(view, world.configId, at, laptop, true, sidecar.GkmHolderLeaf); err != nil {
+		if err := aclExpectHolder(state, world.configId, at, laptop, true, sidecar.GkmHolderLeaf); err != nil {
 			return err
 		}
 		return nil
@@ -288,14 +275,16 @@ func fs19CheckExchange(net *sidecartest.AdmissionNet, world *fs19World) error {
 		if err := aclExpectScopes(net, state, burner, gkm, []string{aclScope(world.configId, "rw"), aclScope(world.notesId, "rw")}, []string{}); err != nil {
 			return fmt.Errorf("the burner's: %w", err)
 		}
-		// whatever the config's r gives a member device, it gives the burner (question team-m2-15-config-repo-acl-row)
+		// the config's r at both audiences, as every admitted sidecar's (owner decision 6, QD-719)
 		configR := []string{aclScope(world.configId, "r")}
-		laptopGrant, err := sidecar.AclExchangeScopes(state, &sidecar.AclExchangeRequest{SidecarId: laptop, Audience: evs, Scopes: configR, Now: net.Clock().Now()})
-		if err != nil {
-			return err
-		}
-		if err := aclExpectScopes(net, state, burner, evs, configR, laptopGrant.Scopes); err != nil {
-			return fmt.Errorf("the burner's config read beside the laptop's: %w", err)
+		for _, audience := range []sidecar.AclTokenAudience{evs, gkm} {
+			if err := aclExpectScopes(net, state, burner, audience, configR, configR); err != nil {
+				return fmt.Errorf("the burner's config read: %w", err)
+			}
+			if err := aclExpectScopes(net, state, laptop, audience, []string{aclScope(world.configId, "r"), aclScope(world.configId, "rw"), aclScope(world.configId, "admin")},
+				[]string{aclScope(world.configId, "r"), aclScope(world.configId, "rw"), aclScope(world.configId, "admin")}); err != nil {
+				return fmt.Errorf("the laptop's config scopes: %w", err)
+			}
 		}
 		if err := aclExpectScopes(net, state, laptop, evs, []string{aclScope(world.notesId, "rw"), aclScope(world.vaultId, "rw")},
 			[]string{aclScope(world.notesId, "rw"), aclScope(world.vaultId, "rw")}); err != nil {
@@ -324,11 +313,7 @@ func fs19CheckHeadWriters(net *sidecartest.AdmissionNet, world *fs19World) error
 		if err := sidecar.CheckConfigHeadWriter(state, laptop); err != nil {
 			return fmt.Errorf("the laptop's config head: %w", err)
 		}
-		view, err := sidecartest.NewAclConfigRowView(state)
-		if err != nil {
-			return err
-		}
-		if writers := view.Acl().RepoWriters(world.configId, at); !slices.Equal(writers, []sidecar.Id{laptop}) {
+		if writers := acl.RepoWriters(world.configId, at); !slices.Equal(writers, []sidecar.Id{laptop}) {
 			return fmt.Errorf("the config's writers are %v", writers)
 		}
 		return nil
@@ -361,18 +346,14 @@ func fs19DelegationRevoked(net *sidecartest.AdmissionNet, world *fs19World) erro
 		net.Admission(agent, []sidecar.Id{tagId}, true, net.Clock().Now().Add(24*time.Hour).UnixMilli(), 0)))
 	at := net.Clock().Now()
 	net.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
-		view, err := sidecartest.NewAclConfigRowView(state)
-		if err != nil {
-			return err
-		}
-		holders, err := sidecar.KeyHolders(view, world.configId, at)
+		holders, err := sidecar.KeyHolders(state, world.configId, at)
 		if err != nil {
 			return err
 		}
 		if !holders.Contains(sidecar.GkmHolderDelegation, delegation.Id) || holders.Contains(sidecar.GkmHolderAgent, agent.SidecarId.Bytes()) {
 			return errors.New("before the revoke the Delegation covers its agent's config read")
 		}
-		if rights := aclRights(net, view.Acl(), agent.SidecarId, world.configId, sidecar.AclTokenAudienceEvs); rights != sidecar.AclEvsRead {
+		if rights := aclRights(net, acl, agent.SidecarId, world.configId, sidecar.AclTokenAudienceEvs); rights != sidecar.AclEvsRead {
 			return fmt.Errorf("the agent's config rights: %04b", rights)
 		}
 		return nil
@@ -383,18 +364,14 @@ func fs19DelegationRevoked(net *sidecartest.AdmissionNet, world *fs19World) erro
 	}
 	at = net.Clock().Now()
 	net.EveryAcl(func(state *sidecar.ConfigState, acl *sidecar.AclState) error {
-		view, err := sidecartest.NewAclConfigRowView(state)
-		if err != nil {
-			return err
-		}
-		holders, err := sidecar.KeyHolders(view, world.configId, at)
+		holders, err := sidecar.KeyHolders(state, world.configId, at)
 		if err != nil {
 			return err
 		}
 		if holders.Contains(sidecar.GkmHolderDelegation, delegation.Id) || !holders.Contains(sidecar.GkmHolderAgent, agent.SidecarId.Bytes()) {
 			return errors.New("after the revoke the agent holds the config as an agent of its own")
 		}
-		if rights := aclRights(net, view.Acl(), agent.SidecarId, world.configId, sidecar.AclTokenAudienceEvs); rights != sidecar.AclEvsRead {
+		if rights := aclRights(net, acl, agent.SidecarId, world.configId, sidecar.AclTokenAudienceEvs); rights != sidecar.AclEvsRead {
 			return fmt.Errorf("the agent's config rights after the revoke: %04b", rights)
 		}
 		// and no other repo's: the agent's tag reaches nothing here

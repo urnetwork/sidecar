@@ -1,18 +1,20 @@
 // The real EvsAuthState through evs's guard (ACL-M2-14), on T2's fake host and clock: the newest verified state alone
 // decides each scope, so a group edit and a Suspend close a live token's scope at the next state (FS-14's closing
 // case, 403 with no clock moving), a grant's expiry closes it at its time and a projection that drops it at the next
-// state (FS-3's inputs to step 7's recheck); cold state answers 503 and starts a load; the binding, rev/ and repo facts
-// answer as the state and their seams do. The gate cache's own event and poll timing is acl_gate_scope_test.go's, on
-// TEAM's real log.
+// state (FS-3's inputs to step 7's recheck); cold state answers 503 and starts a load; a token's sidecar is served
+// while its network's state admits it, whichever client the exchange bound it to (QD-717), and refused once revoked,
+// when another network admitted it and when none did; rev/ and repo facts answer as the state and their seam do. The
+// gate cache's own event and poll timing is acl_gate_scope_test.go's, on TEAM's real log.
 
 package evsservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -23,25 +25,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
-
-// The binding a test says api made: each sidecar's current client.
-type testBindings struct {
-	stateLock sync.Mutex
-	clientIds map[sidecar.Id]sidecar.Id
-	unknown   bool
-}
-
-func (self *testBindings) MatchBinding(networkId sidecar.Id, clientId sidecar.Id, sidecarId sidecar.Id) EvsAuthAnswer {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	if self.unknown {
-		return EvsAuthUnknown
-	}
-	if bound, ok := self.clientIds[sidecarId]; ok && bound == clientId {
-		return EvsAuthAllowed
-	}
-	return EvsAuthDenied
-}
 
 // rev/ as a test says it reads.
 type testRevocations struct {
@@ -58,7 +41,6 @@ func (self *testRevocations) Check(ctx context.Context, principal *sidecar.Princ
 type aclAuthFixture struct {
 	*evsFixture
 	states      *sidecartest.FakeAclContractStates
-	bindings    *testBindings
 	revocations *testRevocations
 	view        *sidecartest.FakeAclView
 	member      sidecar.Id
@@ -67,7 +49,7 @@ type aclAuthFixture struct {
 }
 
 // The engine of newEvsFixture, its auth state the real one over hand-installed states.
-func newAclAuthFixture(t *testing.T, bindings *testBindings, routes ...*EvsRoute) *aclAuthFixture {
+func newAclAuthFixture(t *testing.T, routes ...*EvsRoute) *aclAuthFixture {
 	ctx := t.Context()
 	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	hostSettings := sidecartest.DefaultFakeHostSettings()
@@ -79,13 +61,9 @@ func newAclAuthFixture(t *testing.T, bindings *testBindings, routes ...*EvsRoute
 	host.Gates.OpenService(sidecar.ServiceGateEvs, networkId)
 	states := sidecartest.NewFakeAclContractStates()
 	revocations := &testRevocations{}
-	var bindingSource EvsBindingSource
-	if bindings != nil {
-		bindingSource = bindings
-	}
 	serviceLog := &recordingServiceLog{}
 	engine, err := NewEvsEngine(ctx, host.ServiceHost(), DefaultEvsSettings(), &EvsEngineDeps{
-		AuthState:  NewAclEvsAuthState(states, revocations, bindingSource),
+		AuthState:  NewAclEvsAuthState(states, revocations),
 		ServiceLog: serviceLog,
 		testRoutes: routes,
 	})
@@ -96,16 +74,12 @@ func newAclAuthFixture(t *testing.T, bindings *testBindings, routes ...*EvsRoute
 	fixture := &aclAuthFixture{
 		evsFixture:  &evsFixture{t: t, ctx: ctx, clock: clock, host: host, serviceLog: serviceLog, engine: engine, networkId: networkId},
 		states:      states,
-		bindings:    bindings,
 		revocations: revocations,
 		view:        sidecartest.NewFakeAclView(),
 		repoId:      testId("acl-repo"),
 	}
 	fixture.member = fixture.view.AddMember(bridge.MemberRole_MEMBER_ROLE_MEMBER)
 	fixture.device = fixture.view.AddDevice(fixture.member)
-	if bindings != nil {
-		bindings.clientIds[fixture.device] = fixture.clientOf(fixture.device)
-	}
 	return fixture
 }
 
@@ -150,7 +124,7 @@ func (self *aclAuthFixture) read() int {
 // token 403 at once, and one with the device suspended does too.
 func TestAclEvsAuthStateClosesALiveTokensScopeAtTheNextState(t *testing.T) {
 	probe := newProbeRoute(http.MethodGet, "/evs/v1/repos/{repo_id}/probe", sidecar.AclEvsRead, false, false, false)
-	fixture := newAclAuthFixture(t, &testBindings{clientIds: map[sidecar.Id]sidecar.Id{}}, probe.route)
+	fixture := newAclAuthFixture(t, probe.route)
 	fixture.install(0, []protocol.AclAction{protocol.AclAction_ACL_ACTION_READ})
 	if code := fixture.read(); code != http.StatusOK {
 		t.Fatalf("with the read: %d", code)
@@ -175,7 +149,7 @@ func TestAclEvsAuthStateClosesALiveTokensScopeAtTheNextState(t *testing.T) {
 // later projection drops is refused at that state, each with the token unchanged.
 func TestAclEvsAuthStateHonorsAGrantUntilItsExpiry(t *testing.T) {
 	probe := newProbeRoute(http.MethodPost, "/evs/v1/repos/{repo_id}/probe", sidecar.AclEvsWrite, false, false, false)
-	fixture := newAclAuthFixture(t, &testBindings{clientIds: map[sidecar.Id]sidecar.Id{}}, probe.route)
+	fixture := newAclAuthFixture(t, probe.route)
 	expiry := fixture.clock.Now().Add(time.Minute)
 	fixture.install(expiry.UnixMilli(), []protocol.AclAction{protocol.AclAction_ACL_ACTION_WRITE})
 	token := fixture.token(fixture.device, repoScope(fixture.repoId, "rw"))
@@ -197,7 +171,7 @@ func TestAclEvsAuthStateHonorsAGrantUntilItsExpiry(t *testing.T) {
 // Cold state is no pass: a network with no state answers 503 and asks the cache for it.
 func TestAclEvsAuthStateIsUnavailableWhileTheStateIsCold(t *testing.T) {
 	probe := newProbeRoute(http.MethodGet, "/evs/v1/repos/{repo_id}/probe", sidecar.AclEvsRead, false, false, false)
-	fixture := newAclAuthFixture(t, &testBindings{clientIds: map[sidecar.Id]sidecar.Id{}}, probe.route)
+	fixture := newAclAuthFixture(t, probe.route)
 	recorder := fixture.serve(http.MethodGet, "/evs/v1/repos/"+sidecar.EvsKeyId(fixture.repoId)+"/probe",
 		fixture.token(fixture.device, repoScope(fixture.repoId, "r")), nil)
 	requireRefusal(t, recorder, http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
@@ -209,49 +183,152 @@ func TestAclEvsAuthStateIsUnavailableWhileTheStateIsCold(t *testing.T) {
 	}
 }
 
-// The binding: an unrevoked admission and a binding source that names the token's client; another client is 403, a
-// revoked sidecar 403, and no source or a source that cannot tell 503.
-func TestAclEvsAuthStateMatchesTheBinding(t *testing.T) {
+// A read token of sidecarId in networkId, its client clientId, as the exchange would mint it.
+func (self *aclAuthFixture) tokenOf(networkId sidecar.Id, sidecarId sidecar.Id, clientId sidecar.Id) string {
+	connectSidecarId := connect.Id(sidecarId)
+	return self.host.Authenticator.Issue(&sidecar.Principal{
+		NetworkId: connect.Id(networkId),
+		ClientId:  connect.Id(clientId),
+		SidecarId: &connectSidecarId,
+		Audience:  EvsAudience,
+		Scopes:    []string{repoScope(self.repoId, "r")},
+		IssuedAt:  self.clock.Now(),
+		ExpiresAt: self.clock.Now().Add(15 * time.Minute),
+	})
+}
+
+// A GET of the probe route with token.
+func (self *aclAuthFixture) readWith(token string) *httptest.ResponseRecorder {
+	return self.serve(http.MethodGet, "/evs/v1/repos/"+sidecar.EvsKeyId(self.repoId)+"/probe", token, nil)
+}
+
+// The read rule every member's device holds on the fixture's repo, as rows for one network's state.
+func (self *aclAuthFixture) readRows() *protocol.AclRows {
+	return &protocol.AclRows{
+		HasDocument: true,
+		Repos:       []*protocol.AclRepo{{RepoId: self.repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL}},
+		Rules: []*protocol.AclRule{{
+			RuleId:   testId("member rule").Bytes(),
+			SrcAtoms: [][]byte{sidecar.AclAutogroupAtom(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER).Bytes()},
+			Targets:  []*protocol.AclTarget{{RepoId: self.repoId.Bytes()}},
+			Actions:  []uint32{uint32(protocol.AclAction_ACL_ACTION_READ)},
+		}},
+	}
+}
+
+// QD-717's binding, the mint is the match: a real state with no binding source serves a sidecar its network's state
+// admits, under whichever client the exchange wrote into the token, and looks no binding up.
+func TestAclEvsAuthStateServesAnAdmittedSidecar(t *testing.T) {
 	probe := newProbeRoute(http.MethodGet, "/evs/v1/repos/{repo_id}/probe", sidecar.AclEvsRead, false, false, false)
-	bindings := &testBindings{clientIds: map[sidecar.Id]sidecar.Id{}}
-	fixture := newAclAuthFixture(t, bindings, probe.route)
+	fixture := newAclAuthFixture(t, probe.route)
 	fixture.install(0, []protocol.AclAction{protocol.AclAction_ACL_ACTION_READ})
 	if code := fixture.read(); code != http.StatusOK {
-		t.Fatalf("bound: %d", code)
+		t.Fatalf("an admitted sidecar: %d", code)
 	}
-	bindings.stateLock.Lock()
-	bindings.clientIds[fixture.device] = testId("another client")
-	bindings.stateLock.Unlock()
-	if code := fixture.read(); code != http.StatusForbidden {
-		t.Errorf("another client: %d", code)
+	// a rebind's new client: the pair in the token is the binding as api made it
+	rebound := fixture.tokenOf(sidecar.Id(fixture.networkId), fixture.device, testId("a rebind's client"))
+	if recorder := fixture.readWith(rebound); recorder.Code != http.StatusOK {
+		t.Errorf("the sidecar under another client: %d", recorder.Code)
 	}
-	bindings.stateLock.Lock()
-	bindings.clientIds[fixture.device] = fixture.clientOf(fixture.device)
-	bindings.unknown = true
-	bindings.stateLock.Unlock()
-	if code := fixture.read(); code != http.StatusServiceUnavailable {
-		t.Errorf("a source that cannot tell: %d", code)
-	}
-	bindings.stateLock.Lock()
-	bindings.unknown = false
-	bindings.stateLock.Unlock()
-	fixture.view.Revoke(fixture.device)
-	fixture.install(0, []protocol.AclAction{protocol.AclAction_ACL_ACTION_READ})
-	if code := fixture.read(); code != http.StatusForbidden {
-		t.Errorf("a revoked sidecar: %d", code)
+	if probe.calls != 2 {
+		t.Errorf("the route ran %d times", probe.calls)
 	}
 
-	unbound := newAclAuthFixture(t, nil, newProbeRoute(http.MethodGet, "/evs/v1/repos/{repo_id}/probe", sidecar.AclEvsRead, false, false, false).route)
-	unbound.install(0, []protocol.AclAction{protocol.AclAction_ACL_ACTION_READ})
-	if code := unbound.read(); code != http.StatusServiceUnavailable {
-		t.Errorf("no binding source: %d", code)
+	connectDevice := connect.Id(fixture.device)
+	state := NewAclEvsAuthState(fixture.states, fixture.revocations)
+	principal := &sidecar.Principal{NetworkId: fixture.networkId, ClientId: connect.Id(fixture.clientOf(fixture.device)), SidecarId: &connectDevice}
+	if answer := state.MatchBinding(principal); answer != EvsAuthAllowed {
+		t.Errorf("the state's answer for an admitted sidecar: %d", answer)
+	}
+	if answer := state.MatchBinding(&sidecar.Principal{NetworkId: fixture.networkId, ClientId: principal.ClientId}); answer != EvsAuthDenied {
+		t.Errorf("a token naming no sidecar: %d", answer)
+	}
+	if answer := NewAclEvsAuthState(nil, fixture.revocations).MatchBinding(principal); answer != EvsAuthUnknown {
+		t.Errorf("no gate cache: %d", answer)
+	}
+}
+
+// A revoked sidecar is refused at the state that revokes it, its token and its client unchanged, and the route
+// never runs for it.
+func TestAclEvsAuthStateRefusesARevokedSidecar(t *testing.T) {
+	probe := newProbeRoute(http.MethodGet, "/evs/v1/repos/{repo_id}/probe", sidecar.AclEvsRead, false, false, false)
+	fixture := newAclAuthFixture(t, probe.route)
+	fixture.install(0, []protocol.AclAction{protocol.AclAction_ACL_ACTION_READ})
+	token := fixture.token(fixture.device, repoScope(fixture.repoId, "r"))
+	if recorder := fixture.readWith(token); recorder.Code != http.StatusOK {
+		t.Fatalf("before the revocation: %d", recorder.Code)
+	}
+	fixture.view.Revoke(fixture.device)
+	fixture.install(0, []protocol.AclAction{protocol.AclAction_ACL_ACTION_READ})
+	requireRefusal(t, fixture.readWith(token), http.StatusForbidden, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+	if probe.calls != 1 {
+		t.Errorf("the route ran %d times", probe.calls)
+	}
+	connectDevice := connect.Id(fixture.device)
+	principal := &sidecar.Principal{NetworkId: fixture.networkId, ClientId: connect.Id(fixture.clientOf(fixture.device)), SidecarId: &connectDevice}
+	if answer := NewAclEvsAuthState(fixture.states, fixture.revocations).MatchBinding(principal); answer != EvsAuthDenied {
+		t.Errorf("the state's answer for a revoked sidecar: %d", answer)
+	}
+}
+
+// A sidecar of another network is refused: a token naming network b for a sidecar only network a admits answers 403
+// from b's state, and one naming network a for a sidecar only b admits answers 403 from a's, each network's own
+// sidecar served beside it. A network whose state is not loaded answers 503, never an allow.
+func TestAclEvsAuthStateRefusesASidecarOfAnotherNetwork(t *testing.T) {
+	probe := newProbeRoute(http.MethodGet, "/evs/v1/repos/{repo_id}/probe", sidecar.AclEvsRead, false, false, false)
+	fixture := newAclAuthFixture(t, probe.route)
+	networkA, networkB, networkC := sidecar.Id(fixture.networkId), testId("network-b"), testId("network-c")
+	fixture.host.Gates.OpenService(sidecar.ServiceGateEvs, fixture.networkId, connect.Id(networkB), connect.Id(networkC))
+	fixture.install(0, []protocol.AclAction{protocol.AclAction_ACL_ACTION_READ})
+	otherView := sidecartest.NewFakeAclView()
+	otherDevice := otherView.AddDevice(otherView.AddMember(bridge.MemberRole_MEMBER_ROLE_MEMBER))
+	if err := fixture.states.Install(networkB, fixture.readRows(), otherView); err != nil {
+		t.Fatal(err)
+	}
+
+	if recorder := fixture.readWith(fixture.tokenOf(networkA, fixture.device, fixture.clientOf(fixture.device))); recorder.Code != http.StatusOK {
+		t.Fatalf("network a's sidecar in a: %d", recorder.Code)
+	}
+	if recorder := fixture.readWith(fixture.tokenOf(networkB, otherDevice, fixture.clientOf(otherDevice))); recorder.Code != http.StatusOK {
+		t.Fatalf("network b's sidecar in b: %d", recorder.Code)
+	}
+	requireRefusal(t, fixture.readWith(fixture.tokenOf(networkB, fixture.device, fixture.clientOf(fixture.device))),
+		http.StatusForbidden, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+	requireRefusal(t, fixture.readWith(fixture.tokenOf(networkA, otherDevice, fixture.clientOf(otherDevice))),
+		http.StatusForbidden, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+	requireRefusal(t, fixture.readWith(fixture.tokenOf(networkC, fixture.device, fixture.clientOf(fixture.device))),
+		http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+	if probe.calls != 2 {
+		t.Errorf("the route ran %d times", probe.calls)
+	}
+}
+
+// A token whose sidecar no state ever admitted is refused, though the token authenticates and names a client and a
+// scope the network's members hold: the exchange's word alone admits no sidecar.
+func TestAclEvsAuthStateRefusesASidecarNeverAdmitted(t *testing.T) {
+	probe := newProbeRoute(http.MethodGet, "/evs/v1/repos/{repo_id}/probe", sidecar.AclEvsRead, false, false, false)
+	fixture := newAclAuthFixture(t, probe.route)
+	fixture.install(0, []protocol.AclAction{protocol.AclAction_ACL_ACTION_READ})
+	stranger := testId("a sidecar never admitted")
+	requireRefusal(t, fixture.readWith(fixture.tokenOf(sidecar.Id(fixture.networkId), stranger, fixture.clientOf(fixture.device))),
+		http.StatusForbidden, protocol.EvsRefusalCode_EVS_REFUSAL_SCOPE)
+	if probe.calls != 0 {
+		t.Errorf("the route ran %d times", probe.calls)
+	}
+	connectStranger := connect.Id(stranger)
+	principal := &sidecar.Principal{NetworkId: fixture.networkId, ClientId: connect.Id(fixture.clientOf(fixture.device)), SidecarId: &connectStranger}
+	if answer := NewAclEvsAuthState(fixture.states, fixture.revocations).MatchBinding(principal); answer != EvsAuthDenied {
+		t.Errorf("the state's answer for a sidecar never admitted: %d", answer)
+	}
+	if code := fixture.read(); code != http.StatusOK {
+		t.Errorf("the admitted sidecar beside it: %d", code)
 	}
 }
 
 // rev/ through the real state: a voiding object answers a write 401, a read that cannot tell 503, and no reader 503.
 func TestAclEvsAuthStateReadsRevocations(t *testing.T) {
 	probe := newProbeRoute(http.MethodPost, "/evs/v1/repos/{repo_id}/probe", sidecar.AclEvsWrite, true, false, false)
-	fixture := newAclAuthFixture(t, &testBindings{clientIds: map[sidecar.Id]sidecar.Id{}}, probe.route)
+	fixture := newAclAuthFixture(t, probe.route)
 	fixture.install(0, []protocol.AclAction{protocol.AclAction_ACL_ACTION_WRITE})
 	token := fixture.token(fixture.device, repoScope(fixture.repoId, "rw"))
 	path := "/evs/v1/repos/" + sidecar.EvsKeyId(fixture.repoId) + "/probe"
@@ -266,29 +343,38 @@ func TestAclEvsAuthStateReadsRevocations(t *testing.T) {
 	if recorder := fixture.serve(http.MethodPost, path, token, nil); recorder.Code != http.StatusServiceUnavailable {
 		t.Errorf("a read that cannot tell: %d", recorder.Code)
 	}
-	if err := NewAclEvsAuthState(fixture.states, nil, nil).CheckRevocation(t.Context(), &sidecar.Principal{}); err == nil || errors.Is(err, ErrEvsTokenRevoked) {
+	if err := NewAclEvsAuthState(fixture.states, nil).CheckRevocation(t.Context(), &sidecar.Principal{}); err == nil || errors.Is(err, ErrEvsTokenRevoked) {
 		t.Errorf("no reader: %v", err)
 	}
 }
 
-// What the projection holds of a repo: its kind and owner, a RepoDelete{now} without a date, and no facts for one the
-// gate cannot date or a repo it does not hold.
+// What the projection holds of a repo: its kind and owner, a RepoDelete{now} without a date, a RepoDelete dated and
+// signed by its row (QD-743, QD-798) with no log behind the gate, one whose row carries no signer, as no fold leaves
+// it, dated and unsigned, and no facts for one its row does not date or a repo the gate does not hold.
 func TestAclEvsAuthStateRepoFacts(t *testing.T) {
-	fixture := newAclAuthFixture(t, &testBindings{clientIds: map[sidecar.Id]sidecar.Id{}})
-	vaultId, deletedId, undatedId := testId("acl-vault"), testId("acl-deleted"), testId("acl-undated")
+	fixture := newAclAuthFixture(t)
+	vaultId, deletedId, datedId, undatedId := testId("acl-vault"), testId("acl-deleted"), testId("acl-dated"), testId("acl-undated")
+	signedId, signer := testId("acl-signed"), testId("acl-deleting admin")
+	deletedTime := fixture.clock.Now().Add(-48 * time.Hour)
 	rows := &protocol.AclRows{HasDocument: true, Repos: []*protocol.AclRepo{
 		{RepoId: vaultId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_VAULT, OwnerMemberId: fixture.member.Bytes()},
 		{RepoId: deletedId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
 			Deletion: &protocol.AclRepoDeletionRow{DeletionId: testId("deletion now").Bytes(), Now: true, DeletedAt: 4}},
+		{RepoId: datedId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
+			Deletion: &protocol.AclRepoDeletionRow{DeletionId: testId("dated deletion").Bytes(), DeletedAt: 5, DeletedTimeMs: deletedTime.UnixMilli(), RestoredAt: 6}},
 		{RepoId: undatedId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
 			Deletion: &protocol.AclRepoDeletionRow{DeletionId: testId("deletion").Bytes(), DeletedAt: 5}},
+		{RepoId: signedId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
+			Deletion: &protocol.AclRepoDeletionRow{
+				DeletionId: testId("signed deletion").Bytes(), DeletedAt: 7, DeletedTimeMs: deletedTime.UnixMilli(), Signer: signer.Bytes(),
+			}},
 	}}
 	if err := fixture.states.Install(sidecar.Id(fixture.networkId), rows, fixture.view); err != nil {
 		t.Fatal(err)
 	}
 	connectDevice := connect.Id(fixture.device)
 	principal := &sidecar.Principal{NetworkId: fixture.networkId, ClientId: connect.Id(fixture.clientOf(fixture.device)), SidecarId: &connectDevice}
-	state := NewAclEvsAuthState(fixture.states, fixture.revocations, fixture.bindings)
+	state := NewAclEvsAuthState(fixture.states, fixture.revocations)
 	facts, answer := state.Repo(principal, vaultId)
 	if answer != EvsAuthAllowed || facts.Kind != protocol.RepoKind_REPO_KIND_VAULT || facts.OwnerMemberId != fixture.member ||
 		facts.NetworkId != sidecar.Id(fixture.networkId) || facts.Deletion != nil {
@@ -298,8 +384,38 @@ func TestAclEvsAuthStateRepoFacts(t *testing.T) {
 	if answer != EvsAuthAllowed || facts.Deletion == nil || !facts.Deletion.Now || facts.Deletion.DeletionId != testId("deletion now") {
 		t.Errorf("a RepoDelete{now}: %+v, %d", facts, answer)
 	}
+	facts, answer = state.Repo(principal, datedId)
+	if answer != EvsAuthAllowed || facts.Deletion == nil || facts.Deletion.Now || !facts.Deletion.Restored ||
+		!facts.Deletion.Time.Equal(time.UnixMilli(deletedTime.UnixMilli())) || facts.Deletion.SignerSidecarId != (sidecar.Id{}) {
+		t.Errorf("a RepoDelete its row dates and does not sign: %+v, %d", facts.Deletion, answer)
+	}
+	facts, answer = state.Repo(principal, signedId)
+	if answer != EvsAuthAllowed || facts.Deletion == nil || facts.Deletion.Now || facts.Deletion.Restored ||
+		!facts.Deletion.Time.Equal(time.UnixMilli(deletedTime.UnixMilli())) || facts.Deletion.SignerSidecarId != signer {
+		t.Errorf("a RepoDelete its row dates and signs: %+v, %d", facts.Deletion, answer)
+	}
+	if deletion, err := state.RepoDeletion(t.Context(), sidecar.Id(fixture.networkId), signedId); err != nil || deletion == nil ||
+		deletion.SignerSidecarId != signer || !deletion.Time.Equal(time.UnixMilli(deletedTime.UnixMilli())) {
+		t.Errorf("by network, a RepoDelete its row signs: %+v, %v", deletion, err)
+	}
 	if facts, answer := state.Repo(principal, undatedId); answer != EvsAuthAllowed || facts.Deletion != nil {
 		t.Errorf("an undated RepoDelete: %+v, %d", facts, answer)
+	}
+	// the same facts by network, as taskworker's shred start and reconciler read them; an undated RepoDelete is no
+	// answer at all, so neither takes it for no deletion
+	if deletion, err := state.RepoDeletion(t.Context(), sidecar.Id(fixture.networkId), datedId); err != nil || deletion == nil || !deletion.Restored ||
+		!deletion.Time.Equal(time.UnixMilli(deletedTime.UnixMilli())) {
+		t.Errorf("by network, a RepoDelete its row dates: %+v, %v", deletion, err)
+	}
+	if deletion, err := state.RepoDeletion(t.Context(), sidecar.Id(fixture.networkId), undatedId); err == nil {
+		t.Errorf("by network, an undated RepoDelete: %+v", deletion)
+	}
+	if deletion, err := state.RepoDeletion(t.Context(), sidecar.Id(fixture.networkId), vaultId); err != nil || deletion != nil {
+		t.Errorf("by network, a repo with no RepoDelete: %+v, %v", deletion, err)
+	}
+	unloaded := testId("network-c")
+	if _, err := state.RepoDeletion(t.Context(), unloaded, datedId); err == nil || !slices.Contains(fixture.states.ChangedNetworks(), unloaded) {
+		t.Errorf("by network, a network the gate has not loaded: %v, told %v", err, fixture.states.ChangedNetworks())
 	}
 	if _, answer := state.Repo(principal, testId("no such repo")); answer != EvsAuthDenied {
 		t.Errorf("an unknown repo: %d", answer)
@@ -307,5 +423,151 @@ func TestAclEvsAuthStateRepoFacts(t *testing.T) {
 	otherNetwork := &sidecar.Principal{NetworkId: connect.Id(testId("network-b")), ClientId: principal.ClientId, SidecarId: &connectDevice}
 	if _, answer := state.Repo(otherNetwork, vaultId); answer != EvsAuthUnknown {
 		t.Errorf("a network the cache does not hold: %d", answer)
+	}
+}
+
+// §11.12's shred start judged from rows alone (QD-743), with the real state as taskworker's EvsRepoDeletionSource over
+// a gate that keeps no log: a deleted repo waits until 7 d 10 min past its row's deleted_time_ms and then goes to
+// shredding; a RepoRestore in the rows stops it for good; and a row with no time stops nothing and starts nothing, the
+// run failing to be retried while repo/ stays deleted.
+func TestAclEvsAuthStateStartsAShredFromRows(t *testing.T) {
+	for _, c := range []string{"started", "restored", "undated"} {
+		fixture := newEvsFixture(t)
+		repoId, admin := testId("repo"), testId("sidecar-a")
+		fixture.activeRepo(repoId, admin)
+		entryTime := fixture.clock.Now().Add(-time.Minute)
+		deletionId := testId("deletion")
+		fixture.projectDeletion(repoId, &EvsRepoDeletionFacts{DeletionId: deletionId, Time: entryTime, SignerSidecarId: admin})
+		if status := fixture.lifecycle(http.MethodDelete, repoId, "", admin); status != http.StatusOK {
+			t.Fatalf("%s: delete: %d", c, status)
+		}
+
+		row := &protocol.AclRepoDeletionRow{DeletionId: deletionId.Bytes(), DeletedAt: 9, DeletedTimeMs: entryTime.UnixMilli()}
+		switch c {
+		case "restored":
+			row.RestoredAt = 10
+		case "undated":
+			row.DeletedTimeMs = 0
+		}
+		states := sidecartest.NewFakeAclContractStates()
+		rows := &protocol.AclRows{HasDocument: true, Repos: []*protocol.AclRepo{{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL, Deletion: row}}}
+		if err := states.Install(sidecar.Id(fixture.networkId), rows, sidecartest.NewFakeAclView()); err != nil {
+			t.Fatal(err)
+		}
+		deletions := NewAclEvsAuthState(states, nil)
+		probe := &shredProbe{}
+		host := fixture.host.ServiceHost()
+		args := EvsShredArgs(repoId, deletionId, false)
+
+		fixture.clock.AdvanceTo(entryTime.Add(evsShredStartAfter - time.Second))
+		if outcome, err := RunShred(fixture.ctx, host, probe.deps(deletions), args); err != nil || outcome != EvsShredWaiting {
+			t.Fatalf("%s: a second early: %v %v", c, outcome, err)
+		}
+		fixture.clock.AdvanceTo(entryTime.Add(evsShredStartAfter))
+		outcome, err := RunShred(fixture.ctx, host, probe.deps(deletions), args)
+		state := fixture.repoObject(repoId).GetState()
+		switch c {
+		case "started":
+			if err != nil || outcome != EvsShredWaiting || state != protocol.EvsRepoState_EVS_REPO_SHREDDING {
+				t.Errorf("%s: %v %v %s", c, outcome, err, state)
+			}
+		case "restored":
+			if err != nil || outcome != EvsShredRestored || state != protocol.EvsRepoState_EVS_REPO_DELETED {
+				t.Errorf("%s: %v %v %s", c, outcome, err, state)
+			}
+		case "undated":
+			if err == nil || state != protocol.EvsRepoState_EVS_REPO_DELETED {
+				t.Errorf("%s: %v %v %s", c, outcome, err, state)
+			}
+		}
+		if len(probe.groupCalls) != 0 {
+			t.Errorf("%s: gkm shredded at the start: %v", c, probe.groupCalls)
+		}
+	}
+}
+
+// DELETE without now writes deleted{deletion, time, signer} only from a projection that names both: one that dates
+// the RepoDelete but names no signer, neither its log nor its row (a row no fold writes), or one that does not date it,
+// refuses STATEMENT_MISSING and leaves repo/ active; a RepoDelete{now} needs neither.
+func TestRepoDeleteRefusesADeletionWithNoSigner(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		deletion EvsRepoDeletionFacts
+		ok       bool
+	}{
+		{name: "no signer", deletion: EvsRepoDeletionFacts{DeletionId: testId("deletion"), Time: time.UnixMilli(1)}},
+		{name: "no time", deletion: EvsRepoDeletionFacts{DeletionId: testId("deletion"), SignerSidecarId: testId("signer")}},
+		{name: "both", deletion: EvsRepoDeletionFacts{DeletionId: testId("deletion"), Time: time.UnixMilli(1), SignerSidecarId: testId("signer")}, ok: true},
+		{name: "now with neither", deletion: EvsRepoDeletionFacts{DeletionId: testId("deletion"), Now: true}, ok: true},
+	} {
+		object := &protocol.EvsRepoObject{RepoId: testId("repo").Bytes(), State: protocol.EvsRepoState_EVS_REPO_ACTIVE, Kind: protocol.RepoKind_REPO_KIND_GENERAL}
+		next, err := decideDelete(&c.deletion, time.UnixMilli(2))(&EvsRepoRead{Object: object})
+		var refusal *EvsRepoRefusal
+		switch {
+		case c.ok && (err != nil || next == nil):
+			t.Errorf("%s: %v", c.name, err)
+		case !c.ok && (!errors.As(err, &refusal) || refusal.Code != protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING || next != nil):
+			t.Errorf("%s: %v %v", c.name, next, err)
+		}
+	}
+}
+
+// QD-798's reconciler from rows alone, the real state over a gate that keeps no log, as one whose log no longer keeps
+// the RepoDelete's entry, or never held it: a device filed a RepoDelete three days ago and was killed before calling
+// DELETE, so repo/ is still active when taskworker's walk comes. With the row's signer, the walk applies it as DELETE
+// would, deleted{deletion_id, the row's time, the row's signer}, and queues the start, which at 7 d 10 min past the
+// row's time moves repo/ to shredding with gkm untouched. A row without a signer, which no fold writes, is refused
+// STATEMENT_MISSING as before the field: repo/ stays active, nothing is applied or queued, and the walk does not fail.
+func TestAclEvsAuthStateReconcilesARepoDeleteFromItsRow(t *testing.T) {
+	for _, signed := range []bool{true, false} {
+		fixture := newEvsFixture(t)
+		repoId, admin := testId("repo"), testId("sidecar-a")
+		fixture.activeRepo(repoId, admin)
+		entryTime := fixture.clock.Now().Add(-3 * 24 * time.Hour)
+		deletionId := testId("deletion")
+		row := &protocol.AclRepoDeletionRow{DeletionId: deletionId.Bytes(), DeletedAt: 9, DeletedTimeMs: entryTime.UnixMilli()}
+		if signed {
+			row.Signer = admin.Bytes()
+		}
+		states := sidecartest.NewFakeAclContractStates()
+		rows := &protocol.AclRows{HasDocument: true, Repos: []*protocol.AclRepo{{
+			RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
+			Admins:   []*protocol.AclRepoAdminRow{{SidecarId: admin.Bytes(), Signer: admin.Bytes(), At: 2}},
+			Deletion: row,
+		}}}
+		if err := states.Install(sidecar.Id(fixture.networkId), rows, sidecartest.NewFakeAclView()); err != nil {
+			t.Fatal(err)
+		}
+		deletions := NewAclEvsAuthState(states, nil)
+		host := fixture.host.ServiceHost()
+
+		counts, err := RunReconcile(fixture.ctx, host, &EvsReconcileDeps{Deletions: deletions})
+		object := fixture.repoObject(repoId)
+		if !signed {
+			if err != nil || counts.Applied != 0 || counts.Queued != 0 || counts.Failed != 0 || object.GetState() != protocol.EvsRepoState_EVS_REPO_ACTIVE ||
+				len(fixture.shredRequests(repoId)) != 0 {
+				t.Errorf("a row with no signer: %+v %v, repo/ %v", counts, err, object)
+			}
+			continue
+		}
+		if err != nil || counts.Applied != 1 || counts.Queued != 1 {
+			t.Fatalf("the walk: %+v %v", counts, err)
+		}
+		if object.GetState() != protocol.EvsRepoState_EVS_REPO_DELETED || !bytes.Equal(object.GetDeletionId(), deletionId.Bytes()) ||
+			object.GetStateMs() != entryTime.UnixMilli() || !bytes.Equal(object.GetStateSigner(), admin.Bytes()) {
+			t.Fatalf("repo/ %v", object)
+		}
+		if requests := fixture.shredRequests(repoId); len(requests) != 1 || !requests[0].RunAt.Equal(entryTime.Add(evsShredStartAfter)) {
+			t.Fatalf("the start %v", requests)
+		}
+
+		// the start, when the queue runs it, from the same rows
+		probe := &shredProbe{}
+		fixture.clock.AdvanceTo(entryTime.Add(evsShredStartAfter))
+		outcome, err := RunShred(fixture.ctx, host, probe.deps(deletions), EvsShredArgs(repoId, deletionId, false))
+		if state := fixture.repoObject(repoId).GetState(); err != nil || outcome != EvsShredWaiting || state != protocol.EvsRepoState_EVS_REPO_SHREDDING ||
+			len(probe.groupCalls) != 0 {
+			t.Errorf("the start: %v %v %s, gkm %v", outcome, err, state, probe.groupCalls)
+		}
 	}
 }

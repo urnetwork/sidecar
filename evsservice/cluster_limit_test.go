@@ -366,6 +366,13 @@ func TestPublishControlPlaneCountsTheFirstCluster(t *testing.T) {
 	put("meta-1", "hold/"+sidecar.EvsKeyId(testId("h1"))+"/_", 25)
 	put("meta-1", "gkm/kp/"+sidecar.EvsKeyId(testId("k1"))+"/_", 10)
 	put("meta-1", "proj/"+sidecar.EvsKeyId(testId("n1"))+"/1/_", 5)
+	// a forwarding Delegation's reader key, keyed by its network (QD-763): gkm/dkey/ covers the family still
+	delegationId := sha256.Sum256([]byte("a forwarding Delegation"))
+	delegationKey, err := sidecar.GkmDelegationKeyPath(testId("dkey network"), delegationId[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	put("meta-1", delegationKey, 1216)
 	// a repo's family and a group's gkm/ objects are its cohort's
 	put("meta-1", "head/"+sidecar.EvsKeyId(testId("repo"))+"/_", 1000)
 	put("meta-1", "gkm/"+sidecar.EvsKeyId(testId("group"))+"/owner", 1000)
@@ -375,10 +382,10 @@ func TestPublishControlPlaneCountsTheFirstCluster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count.ClusterId != "meta-1" || count.ObjectCount != 5 || count.ByteCount != 190 {
-		t.Fatalf("counted %+v, want meta-1's five control-plane objects of 190 bytes", count)
+	if count.ClusterId != "meta-1" || count.ObjectCount != 6 || count.ByteCount != 190+1216 {
+		t.Fatalf("counted %+v, want meta-1's six control-plane objects of %d bytes", count, 190+1216)
 	}
-	if got := host.Metrics.Value(fileClusterControlPlaneBytesMetricName, "meta-1"); got != 190 {
+	if got := host.Metrics.Value(fileClusterControlPlaneBytesMetricName, "meta-1"); got != 190+1216 {
 		t.Fatalf("the gauge reads %v", got)
 	}
 }

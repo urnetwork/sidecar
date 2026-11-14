@@ -135,7 +135,7 @@ func (self *testRecordingVerifier) verifyPart(ctx context.Context, statement *pa
 // Each part's statement as the edge builds it from a connection, with its witness.
 func testReplayStatements(t *testing.T, capture *ExportedCapture) ([]*partStatement, []*partWitness) {
 	t.Helper()
-	preamble := newSessionPreamble(capture.Preamble)
+	preamble := newSessionPreamble(capture.Preamble, DefaultProofSettings())
 	if err := checkSessionPreamble(preamble); err != nil {
 		t.Fatal(err)
 	}
@@ -146,16 +146,7 @@ func testReplayStatements(t *testing.T, capture *ExportedCapture) ([]*partStatem
 		switch {
 		case event.Part != nil:
 			witness := capture.Witnesses[i]
-			verifier.witness = &partWitness{
-				handshakeSecret:  witness.HandshakeSecret,
-				masterSecret:     witness.MasterSecret,
-				clientKey:        witness.ClientKey,
-				clientIv:         witness.ClientIv,
-				serverKey:        witness.ServerKey,
-				serverIv:         witness.ServerIv,
-				clientPlaintexts: witness.ClientPlaintexts,
-				serverPlaintexts: witness.ServerPlaintexts,
-			}
+			verifier.witness = importedWitness(witness)
 			_, err = gate.VerifyPart(context.Background(), event.Part)
 		case event.Shts != nil:
 			_, err = gate.DiscloseShts(event.Shts)
@@ -211,7 +202,7 @@ func testRenderTemplate(template []templateOctet) string {
 // A statement's public inputs, as SPEC.md 5.1 orders them.
 func testPublicInputs(t *testing.T, statement *partStatement) (*partShape, fr.Vector) {
 	t.Helper()
-	shape, err := partShapeFor(statement)
+	shape, err := partShapeFor(DefaultProofSettings(), statement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +295,7 @@ func TestSpecPi1ProofVectorVerifies(t *testing.T) {
 	if os.Getenv("SMTPPROOF_WRITE_VECTORS") != "" {
 		testNeedCircuits(t)
 		keys := testRealEhloKeys(t)
-		backend := newGroth16Backend()
+		backend := newGroth16Backend(DefaultProofSettings())
 		backend.addKeys(keys)
 		proof, err := backend.provePart(context.Background(), statement, witness)
 		if err != nil {
@@ -338,7 +329,7 @@ func TestSpecPi1ProofVectorVerifies(t *testing.T) {
 		t.Fatal(err)
 	}
 	shape, inputs := testPublicInputs(t, statement)
-	if *shape != *partShapes()[1] {
+	if *shape != *partShapes(DefaultProofSettings())[1] {
 		t.Fatalf("pi1 proves under %s", partShapeName(shape))
 	}
 	circuit, err := partAssignment(shape, statement)
@@ -352,9 +343,10 @@ func TestSpecPi1ProofVectorVerifies(t *testing.T) {
 	if err := groth16.Verify(proof, verifyingKey, public); err != nil {
 		t.Fatalf("the kept proof does not verify: %v", err)
 	}
-	// and nothing but its statement: the first ciphertext octet, then the last public input
+	// and nothing but its statement: C's x, the first ciphertext octet, then the last public input. In
+	// order: the three hashes, C, then the first pool block's counter and octets
 	vector := public.Vector().(fr.Vector)
-	for _, position := range []int{3*8*tlsSecretBytes + 1, len(inputs) - 1} {
+	for _, position := range []int{3 * 8 * tlsSecretBytes, 3*8*tlsSecretBytes + 3, len(inputs) - 1} {
 		original := vector[position]
 		var one fr.Element
 		one.SetOne()

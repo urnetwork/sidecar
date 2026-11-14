@@ -10,7 +10,9 @@
 // arrival order. With a seed, each barrier an actor passes is also a choice of who runs next, which is
 // §22.8's explorer. A goroutine the driver did not start for an actor takes no baton: it runs free,
 // and it holds at an armed site like any other. An actor blocked on something this file cannot see
-// loses the baton after settings.StallTimeout, and the trace says so.
+// loses the baton after settings.StallTimeout, and the trace says so. An actor still working then, or
+// waiting on a goroutine that is, is slow and not blocked: it keeps the baton, so the order stays the
+// schedule's, until a wait's settings.AwaitTimeout fails the schedule (barrier_stall.go).
 //
 // A script makes the driver follow a recorded trace instead: each baton choice and each yield the trace
 // shows, as long as the run keeps to it, which is how a failing seed becomes a fixed schedule (§22.8).
@@ -78,7 +80,7 @@ const (
 	BarrierKilled BarrierEventKind = "killed"
 	// An actor took the baton.
 	BarrierRan BarrierEventKind = "ran"
-	// An actor lost the baton to settings.StallTimeout.
+	// An actor lost the baton: past settings.StallTimeout it was found blocked where no barrier sees.
 	BarrierStalled BarrierEventKind = "stalled"
 )
 
@@ -103,17 +105,28 @@ type BarrierDriverSettings struct {
 	// §22.8: a schedule waiting this long in real time for a barrier fails with its trace.
 	AwaitTimeout time.Duration
 	// How long in real time an actor may keep the baton while others wait or a schedule wants to
-	// settle, before it counts as blocked on something the driver cannot see. Long enough that a
-	// busy machine does not reach it between two barriers: passing it costs determinism, so fault.Run
-	// fails a run in which an actor stalled. Non-positive disables it, so such an actor fails the
-	// schedule at AwaitTimeout.
+	// settle, before the driver asks whether it is blocked on something it cannot see. A holder found
+	// blocked loses the baton, which costs determinism, so fault.Run fails a run in which an actor
+	// stalled. A holder found working keeps it, however slow the machine, until AwaitTimeout.
+	// Non-positive disables it, so a blocked actor fails the schedule at AwaitTimeout too.
 	StallTimeout time.Duration
+	// Past StallTimeout, how long between two readings of the holder's goroutines. Non-positive:
+	// StallTimeout again.
+	StallSampleInterval time.Duration
+	// How many readings in a row must find the holder blocked before it loses the baton, so one that
+	// catches a working actor between two steps takes nothing from it. Under one counts as one.
+	StallSampleCount int
+	// The first size of the buffer a reading's goroutine dump goes into, doubled until the dump fits.
+	StallDumpByteCount int
 }
 
 func DefaultBarrierDriverSettings() *BarrierDriverSettings {
 	return &BarrierDriverSettings{
-		AwaitTimeout: 10 * time.Second,
-		StallTimeout: 2 * time.Second,
+		AwaitTimeout:        10 * time.Second,
+		StallTimeout:        2 * time.Second,
+		StallSampleInterval: 200 * time.Millisecond,
+		StallSampleCount:    3,
+		StallDumpByteCount:  1 << 20,
 	}
 }
 
@@ -176,6 +189,15 @@ type BarrierDriver struct {
 	batonHolder   *actorRun
 	batonWaiters  []*actorRun
 	batonSince    time.Time
+	// counts the batons given, so a reading of the holder's goroutines knows the hold it read
+	batonGrantCount uint64
+	// the holder's readings past StallTimeout: when the last began, how many in a row found it
+	// blocked, and what the last one saw
+	stallSampleTime   time.Time
+	stallBlockedCount int
+	stallSeen         string
+	// the actors a reading found working past StallTimeout, each once
+	slowActors []string
 	// no waiter takes the baton while set, so a step queues its actors together
 	batonPaused bool
 	// set by Close: an actor's goroutine stops at the next thing it does here
@@ -557,6 +579,10 @@ func (self *BarrierDriver) nextBatonWithLock(except *actorRun) {
 func (self *BarrierDriver) giveBatonWithLock(run *actorRun) {
 	self.batonHolder = run
 	self.batonSince = time.Now()
+	self.batonGrantCount += 1
+	self.stallSampleTime = time.Time{}
+	self.stallBlockedCount = 0
+	self.stallSeen = ""
 	self.recordWithLock(BarrierRan, "", "", run.actor.name)
 	close(run.granted)
 	run.granted = make(chan struct{})
@@ -735,12 +761,11 @@ func (self *BarrierDriver) AwaitHeldOrEnded(ctx context.Context, site string, ac
 func (self *BarrierDriver) AwaitChannel(ctx context.Context, what string, channel <-chan struct{}) error {
 	timeout := time.After(self.settings.AwaitTimeout)
 	for {
-		var stallIn time.Duration
+		stallIn := self.checkStall()
 		var changed chan struct{}
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
-			stallIn = self.checkStallWithLock()
 			changed = self.changed
 		}()
 		var stalled <-chan time.Time
@@ -755,24 +780,24 @@ func (self *BarrierDriver) AwaitChannel(ctx context.Context, what string, channe
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-timeout:
-			return fmt.Errorf("waited %s for %s", self.settings.AwaitTimeout, what)
+			return self.awaitTimeoutError(what)
 		}
 	}
 }
 
 // Waits for done to become true under the state lock, for at most settings.AwaitTimeout. While it
-// waits, an actor keeping the baton past settings.StallTimeout loses it, or the one waiting for the
-// baton behind it would run into this timeout.
+// waits, an actor blocked with the baton past settings.StallTimeout loses it, or the one waiting for
+// the baton behind it would run into this timeout. Behind an actor still working it does.
 func (self *BarrierDriver) awaitCondition(ctx context.Context, what string, done func() bool) error {
 	timeout := time.After(self.settings.AwaitTimeout)
 	for {
+		// before done is read, which then sees a baton this took
+		stallIn := self.checkStall()
 		var changed chan struct{}
 		var finished bool
-		var stallIn time.Duration
 		func() {
 			self.stateLock.Lock()
 			defer self.stateLock.Unlock()
-			stallIn = self.checkStallWithLock()
 			changed = self.changed
 			finished = done()
 		}()
@@ -789,26 +814,128 @@ func (self *BarrierDriver) awaitCondition(ctx context.Context, what string, done
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-timeout:
-			return fmt.Errorf("waited %s for %s", self.settings.AwaitTimeout, what)
+			return self.awaitTimeoutError(what)
 		}
 	}
 }
 
-// Takes the baton from an actor that has kept it too long, which runs on regardless. Returns how long
-// until the holder would stall, zero when none can.
-func (self *BarrierDriver) checkStallWithLock() time.Duration {
-	if self.batonHolder == nil || self.settings.StallTimeout <= 0 {
-		return 0
+// §22.8's failed wait, naming the actor that kept the baton through it and what it was last seen doing.
+func (self *BarrierDriver) awaitTimeoutError(what string) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.batonHolder == nil {
+		return fmt.Errorf("waited %s for %s", self.settings.AwaitTimeout, what)
 	}
-	stallIn := self.settings.StallTimeout - time.Since(self.batonSince)
-	if 0 < stallIn {
-		return stallIn
+	seen := self.stallSeen
+	if seen == "" {
+		seen = "its goroutines not read yet"
 	}
-	stalled := self.batonHolder
-	self.recordWithLock(BarrierStalled, "", "", stalled.actor.name)
+	return fmt.Errorf(
+		"waited %s for %s, with %s holding the baton for %s, %s",
+		self.settings.AwaitTimeout,
+		what,
+		self.batonHolder.actor.name,
+		time.Since(self.batonSince).Round(time.Millisecond),
+		seen,
+	)
+}
+
+// What a wait does about the baton each time it wakes. Past settings.StallTimeout it reads the
+// holder's goroutines, and takes the baton from a holder that settings.StallSampleCount readings in a
+// row found blocked, which runs on regardless once whatever blocks it lets go. Returns how long until
+// it should look again, zero when no holder can stall.
+func (self *BarrierDriver) checkStall() time.Duration {
+	holder, holderGoroutineId, grantCount, runGoroutineIds, checkIn := self.stallSampleDue()
+	if holder == nil {
+		return checkIn
+	}
+	// read with the state lock free: a goroutine waiting for that lock would read as blocked
+	blocked, seen := goroutinesBlocked(dumpGoroutines(self.settings.StallDumpByteCount), holderGoroutineId, runGoroutineIds)
+
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.batonHolder != holder || self.batonGrantCount != grantCount {
+		// the hold the reading saw is over
+		return self.nextStallCheckWithLock()
+	}
+	// the interval runs from a reading's end, so readings that take long leave the actors the time between
+	self.stallSampleTime = time.Now()
+	self.stallSeen = seen
+	if !blocked {
+		self.stallBlockedCount = 0
+		if !slices.Contains(self.slowActors, holder.actor.name) {
+			self.slowActors = append(self.slowActors, holder.actor.name)
+		}
+		return self.nextStallCheckWithLock()
+	}
+	self.stallBlockedCount += 1
+	if self.stallBlockedCount < self.settings.StallSampleCount {
+		return self.nextStallCheckWithLock()
+	}
+	self.recordWithLock(BarrierStalled, "", "", holder.actor.name)
 	self.batonHolder = nil
 	self.nextBatonWithLock(nil)
-	return self.settings.StallTimeout
+	return self.nextStallCheckWithLock()
+}
+
+// The holder to read now, with its goroutine, zero until that has started, the hold's count and every
+// run's goroutine, or nil and checkStall's answer while no reading is due. A reading due is taken here,
+// so two waits do not both count it.
+func (self *BarrierDriver) stallSampleDue() (
+	holder *actorRun,
+	holderGoroutineId uint64,
+	grantCount uint64,
+	runGoroutineIds map[uint64]bool,
+	checkIn time.Duration,
+) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if sampleIn, canStall := self.stallSampleInWithLock(); !canStall || 0 < sampleIn {
+		return nil, 0, 0, nil, self.nextStallCheckWithLock()
+	}
+	self.stallSampleTime = time.Now()
+	runGoroutineIds = map[uint64]bool{}
+	for goroutineId := range self.goroutineRuns {
+		runGoroutineIds[goroutineId] = true
+	}
+	return self.batonHolder, self.batonHolder.goroutineId, self.batonGrantCount, runGoroutineIds, 0
+}
+
+// How long until the holder's goroutines are next read, zero or less for now, and whether there is a
+// holder that can stall at all.
+func (self *BarrierDriver) stallSampleInWithLock() (sampleIn time.Duration, canStall bool) {
+	if self.batonHolder == nil || self.settings.StallTimeout <= 0 {
+		return 0, false
+	}
+	if stallIn := self.settings.StallTimeout - time.Since(self.batonSince); 0 < stallIn {
+		return stallIn, true
+	}
+	if self.stallSampleTime.IsZero() {
+		return 0, true
+	}
+	interval := self.settings.StallSampleInterval
+	if interval <= 0 {
+		interval = self.settings.StallTimeout
+	}
+	return interval - time.Since(self.stallSampleTime), true
+}
+
+// What checkStall returns: positive while a holder can stall, so the wait looks again, at once when a
+// reading is already due.
+func (self *BarrierDriver) nextStallCheckWithLock() time.Duration {
+	sampleIn, canStall := self.stallSampleInWithLock()
+	if !canStall {
+		return 0
+	}
+	return max(sampleIn, time.Nanosecond)
+}
+
+// The actors found still working with the baton past settings.StallTimeout, each once, in the order
+// found. They kept it, so the order stayed the schedule's: this says where a slow machine's time went.
+func (self *BarrierDriver) SlowActors() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.slowActors)
 }
 
 // A site with an actor in front, as in writerB/evs.head_cas.before: that actor's hold there, for a
@@ -890,8 +1017,9 @@ func (self *BarrierDriver) ArmedSites() []string {
 	return sites
 }
 
-// Returns once no actor is running: each is held, blocked in a fake, or done, or stalled past
-// settings.StallTimeout. What a schedule calls so that the step after a Release starts from one state.
+// Returns once no actor is running: each is held, blocked in a fake, or done, or found blocked out of
+// sight past settings.StallTimeout. What a schedule calls so that the step after a Release starts from
+// one state.
 func (self *BarrierDriver) Settle(ctx context.Context) error {
 	return self.awaitCondition(ctx, "the actors to settle", func() bool {
 		self.nextBatonWithLock(nil)

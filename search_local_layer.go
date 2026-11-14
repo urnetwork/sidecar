@@ -123,7 +123,7 @@ func (self *SearchLocalLayer) entriesOf(normalizer *indexNormalizer, version *Se
 		if err != nil {
 			return nil, err
 		}
-		prepared, err := document.prepare(normalizer, self.args.Companion, refId)
+		prepared, err := document.prepare(normalizer, self.args.Companion, refId, self.args.FormatSettings)
 		if err != nil {
 			return nil, err
 		}
@@ -162,7 +162,7 @@ func (self *SearchLocalLayer) Index(normalizer *indexNormalizer, version *Search
 	}
 	encoded := make([][]byte, len(entries))
 	for index, entry := range entries {
-		if encoded[index], err = entry.appendEncoded(nil, self.args.Companion); err != nil {
+		if encoded[index], err = entry.appendEncoded(nil, self.args.Companion, self.args.FormatSettings); err != nil {
 			return err
 		}
 	}
@@ -175,7 +175,7 @@ func (self *SearchLocalLayer) Index(normalizer *indexNormalizer, version *Search
 		}
 		heldByteCount := int64(0)
 		if ok {
-			heldByteCount = searchLocalEntryByteCount(held, self.args.Companion)
+			heldByteCount = searchLocalEntryByteCount(held, self.args.Companion, self.args.FormatSettings)
 		}
 		if self.args.Settings.LocalLayerByteCount < self.byteCount-heldByteCount+int64(len(encoded[index])) {
 			self.uncoveredCount += 1
@@ -192,8 +192,8 @@ func (self *SearchLocalLayer) Index(normalizer *indexNormalizer, version *Search
 }
 
 // An entry's encoded size, which the memory bound counts.
-func searchLocalEntryByteCount(entry *indexEntry, companion bool) int64 {
-	encoded, err := entry.appendEncoded(nil, companion)
+func searchLocalEntryByteCount(entry *indexEntry, companion bool, settings *IndexFormatSettings) int64 {
+	encoded, err := entry.appendEncoded(nil, companion, settings)
 	if err != nil {
 		return 0
 	}
@@ -209,7 +209,7 @@ func (self *SearchLocalLayer) Erase(key [indexIdByteCount]byte, throughVersion u
 	if !ok || throughVersion < entry.version {
 		return false
 	}
-	self.byteCount -= searchLocalEntryByteCount(entry, self.args.Companion)
+	self.byteCount -= searchLocalEntryByteCount(entry, self.args.Companion, self.args.FormatSettings)
 	delete(self.entries, key)
 	return true
 }
@@ -229,7 +229,7 @@ func (self *SearchLocalLayer) Cover(probe searchVersionProbe) (int, error) {
 			return dropped, err
 		}
 		if record.found && entry.version <= record.version || entry.version <= record.erasedThrough {
-			self.byteCount -= searchLocalEntryByteCount(entry, self.args.Companion)
+			self.byteCount -= searchLocalEntryByteCount(entry, self.args.Companion, self.args.FormatSettings)
 			delete(self.entries, key)
 			dropped += 1
 		}
@@ -300,8 +300,9 @@ func (self *SearchLocalLayer) partition() (*searchPartitionSource, error) {
 		return nil, err
 	}
 	return &searchPartitionSource{
-		partition: searchPartitionLocal,
-		slots:     []*searchSlotSource{{slot: &indexSlot{entries: entries}, head: true, path: "local"}},
+		partition:      searchPartitionLocal,
+		slots:          []*searchSlotSource{{slot: &indexSlot{entries: entries}, head: true, path: "local"}},
+		formatSettings: self.args.FormatSettings,
 	}, nil
 }
 
@@ -324,7 +325,7 @@ func (self *SearchLocalLayer) encode() ([]byte, error) {
 	encoded = indexAppendVByte(encoded, uint64(len(entries)))
 	for _, entry := range entries {
 		var err error
-		if encoded, err = entry.appendEncoded(encoded, self.args.Companion); err != nil {
+		if encoded, err = entry.appendEncoded(encoded, self.args.Companion, self.args.FormatSettings); err != nil {
 			return nil, err
 		}
 	}
@@ -347,7 +348,7 @@ func (self *SearchLocalLayer) decode(encoded []byte) error {
 	var previous *indexEntry
 	for range entryCount {
 		start := decoder.remaining()
-		entry := decoder.entry(self.args.Companion)
+		entry := decoder.entry(self.args.Companion, self.args.FormatSettings)
 		if decoder.err != nil {
 			return decoder.err
 		}

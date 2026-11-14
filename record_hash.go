@@ -1,5 +1,6 @@
 // RECORD.md section 5.1's hashed bytes and §16.6's ids, with parsers that keep each message's stored bytes, on every
-// leg: ACL-M2-07's GrantActivate check, MCP's spend check and gate, the record's own readers and §17 share them.
+// leg: ACL-M2-07's GrantActivate check, MCP's spend check and gate, the record's own readers and §17 share them. So
+// does what a CanonicalAction's sealed_detail is sealed to (QD-771), a hash of the action's own stored bytes.
 //
 // Every value covers bytes as stored, never a re-encoding (§16.8's what freezes). protobuf's encoding is not
 // canonical, so each parser here returns its message with the bytes it came from, every later hash takes those bytes,
@@ -22,7 +23,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -91,6 +94,60 @@ func RecordBodyCommitment(salt []byte, body []byte) ([sha256.Size]byte, error) {
 // payload_sha256: SHA-256 of a CanonicalAction as stored (§16.8), never a re-encoding.
 func ApprovalPayloadSha256(storedAction []byte) [sha256.Size]byte {
 	return sha256.Sum256(storedAction)
+}
+
+// What a CanonicalAction's sealed_detail is sealed to (QD-771): config_seal.go's context, which a record takes from
+// its StatementHeader, taken from the action itself, since an action is built and approved before any GrantActivate
+// header carries it.
+//
+//	SignedType  SIGNED_GRANT_ACTIVATE, the record that carries an action to its readers
+//	NetworkId   networkId, the network the action is filed, approved and activated in
+//	Nonce       the first 16 bytes of SHA-256(clear)
+//	clear       storedAction with its field-38 record cut out, every other tag and value kept in its stored order
+//	            and encoding: the action's own bytes, the ones payload_sha256 covers, with sealed_detail absent
+//
+// clear is the action's clear fields as stored: kind, version and scope, and 8, 10, 11, 28 and 29 at version 4, 8,
+// 10, 11, 14, 26 and 29 at version 3, all a parser lets those versions set. For the builder's bytes, which
+// NewCanonicalAction writes once in field-number order, it is the deterministic encoding of the clear fields alone,
+// sealed_detail being the last field; and since it is cut from the bytes as stored, never re-encoded, any encoder's
+// action derives its own. storedAction may carry field 38 or not: a daemon derives from its clear bytes before it
+// seals, an approver and every reader from the stored bytes they open, and both find the same nonce. A detail then
+// opens beside the clear fields it was sealed with alone, in its network: carried by an action naming another subject,
+// rule, destination, expiry, scope, kind or version, or in another network, its AEAD refuses it. Nothing new is
+// stored, and a server sees no value it does not hold already. Bytes that do not read as protobuf's wire format, carry
+// field 38 more than once, or a zero network, derive nothing.
+func CanonicalActionDetailSealContext(networkId Id, storedAction []byte) (*ConfigSealContext, error) {
+	if networkId == (Id{}) {
+		return nil, fmt.Errorf("%w: a sealed_detail's context names no network", ErrCanonicalActionInvalid)
+	}
+	clear := make([]byte, 0, len(storedAction))
+	detailCount := 0
+	for rest := storedAction; 0 < len(rest); {
+		number, wireType, tagByteCount := protowire.ConsumeTag(rest)
+		if tagByteCount < 0 {
+			return nil, fmt.Errorf("%w: canonical action: %v", ErrCanonicalActionInvalid, protowire.ParseError(tagByteCount))
+		}
+		valueByteCount := protowire.ConsumeFieldValue(number, wireType, rest[tagByteCount:])
+		if valueByteCount < 0 {
+			return nil, fmt.Errorf("%w: canonical action: %v", ErrCanonicalActionInvalid, protowire.ParseError(valueByteCount))
+		}
+		if number == canonicalActionFieldSealedDetail {
+			detailCount += 1
+		} else {
+			clear = append(clear, rest[:tagByteCount+valueByteCount]...)
+		}
+		rest = rest[tagByteCount+valueByteCount:]
+	}
+	if 1 < detailCount {
+		// protobuf would read the last, and no builder writes two
+		return nil, fmt.Errorf("%w: sealed_detail stored %d times", ErrCanonicalActionInvalid, detailCount)
+	}
+	clearSha256 := sha256.Sum256(clear)
+	return &ConfigSealContext{
+		SignedType: bridge.SignedType_SIGNED_GRANT_ACTIVATE,
+		NetworkId:  networkId.Bytes(),
+		Nonce:      bytes.Clone(clearSha256[:configNonceByteCount]),
+	}, nil
 }
 
 // request_sha256: SHA-256 of an ApprovalRequest as stored (§16.8), which binds run_id, agent_id, approvers and
@@ -217,14 +274,22 @@ type StoredCanonicalAction struct {
 }
 
 // Parses a CanonicalAction as stored and holds it to record_action_rules.go's rules: a version this build knows, a
-// kind it knows, only the fields that version may set, and no field it cannot name. Approvers, spenders and gates
-// take an action only through here, so one they could not render is refused, never approved unseen (D-MCP-17).
+// kind it knows, only the fields that version may set, and no field it cannot name. It names sealed_detail, field 38,
+// which a version-3 or version-4 action carries (QD-740), and holds it to the sealed-body layout without opening it:
+// a server takes the action by its clear fields, and an approver or a reader opens the detail before it renders or
+// enforces it (OpenCanonicalActionDetail). Approvers, spenders and gates take an action only through here, so one
+// they could not render is refused, never approved unseen (D-MCP-17).
 func ParseStoredCanonicalAction(stored []byte) (*StoredCanonicalAction, error) {
+	return parseStoredCanonicalAction(stored, CanonicalActionVersionKnown)
+}
+
+// ParseStoredCanonicalAction, given which versions are known: CanonicalActionVersionKnown outside tests.
+func parseStoredCanonicalAction(stored []byte, known func(version uint32) bool) (*StoredCanonicalAction, error) {
 	action := &protocol.CanonicalAction{}
 	if err := proto.Unmarshal(stored, action); err != nil {
 		return nil, fmt.Errorf("%w: canonical action: %v", ErrRecordStoredInvalid, err)
 	}
-	if err := canonicalActionCheck(action, CanonicalActionVersionKnown); err != nil {
+	if err := canonicalActionCheck(action, known); err != nil {
 		return nil, err
 	}
 	return &StoredCanonicalAction{Action: action, Bytes: bytes.Clone(stored)}, nil
@@ -256,8 +321,11 @@ func approvalRequestVersionKnown(version uint32) bool {
 
 // Parses an ApprovalRequest as stored, for the approver's device and the spender: a version this build knows and no
 // field it cannot name; ids at their lengths; a risk SidecarRisk names; an expiry; payload_sha256 equal to SHA-256 of
-// the canonical_action bytes it carries and action_id equal to §16.6's formula over them (R-MCP-6); and that action
-// passing ParseStoredCanonicalAction. summary and preview stay untrusted text for the approver to show as such.
+// the canonical_action bytes it carries and action_id equal to §16.6's formula over them (R-MCP-6); that action
+// passing ParseStoredCanonicalAction; and local_port, weight, alpn and socket_name set only where the action's kind
+// binds them (the kind table's request column; QD-740, QD-772), a port one a listener can bind, no ALPN empty, and a
+// listen's socket_name present and agreeing with its action's grant_dst as far as no key is needed
+// (approvalRequestDetailCheck). summary and preview stay untrusted text for the approver to show as such.
 func ParseStoredApprovalRequest(stored []byte) (*StoredApprovalRequest, error) {
 	request := &protocol.ApprovalRequest{}
 	if err := proto.Unmarshal(stored, request); err != nil {
@@ -303,7 +371,60 @@ func ParseStoredApprovalRequest(stored []byte) (*StoredApprovalRequest, error) {
 	if !bytes.Equal(request.GetActionId(), actionId[:]) {
 		return nil, fmt.Errorf("%w: action_id is not its action's", ErrRecordStoredInvalid)
 	}
+	if err := approvalRequestDetailCheck(request, action); err != nil {
+		return nil, err
+	}
 	return &StoredApprovalRequest{Request: request, Bytes: bytes.Clone(stored), Action: action}, nil
+}
+
+// Holds a request's daemon-built fields beside its action, socket_name, local_port, weight and alpn, to its action's
+// kind: one the kind's row does not name is refused, so an approver renders none that binds nothing, and one it
+// requires is present, so every listen's request names its socket (QD-772); a local port is a port; no ALPN is
+// empty; and a socket_name agrees with the action's grant_dst as far as no key is needed (checkSocketListenName: a tls/
+// or smtp/ name in full, an application name by its token path's form), the token path itself being an approver's to
+// derive under K_sock.
+func approvalRequestDetailCheck(request *protocol.ApprovalRequest, action *StoredCanonicalAction) error {
+	message := request.ProtoReflect()
+	fields := message.Descriptor().Fields()
+	row, _ := CanonicalActionFields(SidecarActionKind(action.Action.GetKind()))
+	for _, number := range approvalRequestDetailFields {
+		if message.Has(fields.ByNumber(number)) && (row == nil || !row.requestAllows(number)) {
+			return fmt.Errorf("%w: approval request field %d beside an action of kind %d", ErrRecordStoredInvalid, number, action.Action.GetKind())
+		}
+	}
+	if row != nil {
+		for _, number := range row.RequestRequired {
+			if !message.Has(fields.ByNumber(number)) {
+				return fmt.Errorf("%w: approval request without field %d beside an action of kind %d", ErrRecordStoredInvalid, number, action.Action.GetKind())
+			}
+		}
+	}
+	if math.MaxUint16 < request.GetLocalPort() {
+		return fmt.Errorf("%w: local_port %d", ErrRecordStoredInvalid, request.GetLocalPort())
+	}
+	if slices.Contains(request.GetAlpn(), "") {
+		return fmt.Errorf("%w: an empty alpn", ErrRecordStoredInvalid)
+	}
+	if name := request.GetSocketName(); name != "" {
+		if err := checkSocketListenName(action.Action, name, nil); err != nil {
+			return fmt.Errorf("%w: %w", ErrRecordStoredInvalid, err)
+		}
+	}
+	return nil
+}
+
+// The request's daemon-built fields beside its action, nil where it sets none.
+func (self *StoredApprovalRequest) Detail() *SidecarActionDetail {
+	request := self.Request
+	if request.GetSocketName() == "" && request.GetLocalPort() == 0 && request.GetWeight() == 0 && len(request.GetAlpn()) == 0 {
+		return nil
+	}
+	return &SidecarActionDetail{
+		SocketName: request.GetSocketName(),
+		LocalPort:  request.GetLocalPort(),
+		Weight:     request.GetWeight(),
+		Alpn:       slices.Clone(request.GetAlpn()),
+	}
 }
 
 // request_sha256 over the stored bytes.

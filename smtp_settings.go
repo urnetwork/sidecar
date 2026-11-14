@@ -38,6 +38,10 @@ type SmtpSenderSettings struct {
 	// 4,096 each, the one closest to lapsing leaving first past it, so the sealed file stays small
 	// enough to rewrite on every send.
 	PinMaxCount int
+	// How many recipient domains' TL4 allowances the store keeps: 4,096. Past it a new domain's
+	// allowance is refused until one ends, rather than another's dropped, since each is a person's
+	// consent (§14.4, QD-729).
+	TlsAllowanceMaxCount int
 	// How long one of TL2's or TL3's DoH lookups, the _mta-sts TXT or the recipient domain's MX, may
 	// take before that level counts as unavailable for the send: 15 s, well inside the 5 minutes an MX
 	// waits for the ClientHello after STARTTLS's 220.
@@ -80,6 +84,7 @@ func DefaultSmtpSenderSettings() *SmtpSenderSettings {
 		ProverConcurrency:          1,
 		PinTimeout:                 90 * 24 * time.Hour,
 		PinMaxCount:                4096,
+		TlsAllowanceMaxCount:       4096,
 		TlsLookupTimeout:           15 * time.Second,
 		MtaStsFetchTimeout:         time.Minute,
 		MtaStsPolicyMaxByteCount:   64 * 1024,

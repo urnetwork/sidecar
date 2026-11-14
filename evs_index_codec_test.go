@@ -305,7 +305,7 @@ func testReadVectors(t *testing.T, path string, built []testCodecVector) map[str
 // An entry decoded alone, every byte consumed.
 func testDecodeEntry(encoded []byte, companion bool) (*indexEntry, error) {
 	decoder := indexDecoder{src: encoded}
-	entry := decoder.entry(companion)
+	entry := decoder.entry(companion, DefaultIndexFormatSettings())
 	if decoder.err != nil {
 		return nil, decoder.err
 	}
@@ -342,7 +342,7 @@ func TestEntryVectors(t *testing.T) {
 	built := []testCodecVector{}
 	cases := testEntryCases()
 	for _, c := range cases {
-		encoded, err := c.entry.appendEncoded(nil, c.companion)
+		encoded, err := c.entry.appendEncoded(nil, c.companion, DefaultIndexFormatSettings())
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -366,7 +366,7 @@ func TestEntryVectors(t *testing.T) {
 		if !reflect.DeepEqual(testComparableEntry(decoded), testComparableEntry(c.entry)) {
 			t.Errorf("%s decoded differently", c.name)
 		}
-		again, err := decoded.appendEncoded(nil, c.companion)
+		again, err := decoded.appendEncoded(nil, c.companion, DefaultIndexFormatSettings())
 		if err != nil || !bytes.Equal(again, encoded) {
 			t.Errorf("%s re-encoded differently: %v", c.name, err)
 		}
@@ -1283,7 +1283,7 @@ func TestEncoderKeepsOneEntryAKey(t *testing.T) {
 	}
 	body := []byte{}
 	for _, entry := range []*indexEntry{tombstone, ref} {
-		if body, err = entry.appendEncoded(body, true); err != nil {
+		if body, err = entry.appendEncoded(body, true, DefaultIndexFormatSettings()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1347,7 +1347,7 @@ func TestEntrySizeDecidesItsFile(t *testing.T) {
 		for {
 			keys := testIndexKeys(0, count, 1)
 			entry := &indexEntry{kind: indexEntryFull, key: testIndexId("size", 1), version: 1, row: testFileRow(keys), keys: keys}
-			encoded, err := entry.appendEncoded(nil, false)
+			encoded, err := entry.appendEncoded(nil, false, DefaultIndexFormatSettings())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1388,11 +1388,11 @@ func TestEntrySizeDecidesItsFile(t *testing.T) {
 		t.Errorf("two entries: %v", err)
 	}
 	// the same bytes by hand, since the encoder refusing proves nothing about the decoder
-	one, err := entryOf(DefaultIndexFormatSettings().SlotEntryMaxByteCount+1).appendEncoded(nil, false)
+	one, err := entryOf(DefaultIndexFormatSettings().SlotEntryMaxByteCount+1).appendEncoded(nil, false, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, err := other.appendEncoded(nil, false)
+	two, err := other.appendEncoded(nil, false, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}

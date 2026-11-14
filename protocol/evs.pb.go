@@ -1247,6 +1247,7 @@ const (
 	EvsReadObjectKind_EVS_READ_OBJECT_MAP_PART         EvsReadObjectKind = 3
 	EvsReadObjectKind_EVS_READ_OBJECT_LOG_PAGE         EvsReadObjectKind = 4
 	EvsReadObjectKind_EVS_READ_OBJECT_BATCH_RECORD     EvsReadObjectKind = 5 // a push, part or seal record
+	EvsReadObjectKind_EVS_READ_OBJECT_RESEED           EvsReadObjectKind = 6 // the ref's Signed EvsReseed from reseed/<repo>/<ref>, after the head of a
 )
 
 // Enum value maps for EvsReadObjectKind.
@@ -1258,6 +1259,7 @@ var (
 		3: "EVS_READ_OBJECT_MAP_PART",
 		4: "EVS_READ_OBJECT_LOG_PAGE",
 		5: "EVS_READ_OBJECT_BATCH_RECORD",
+		6: "EVS_READ_OBJECT_RESEED",
 	}
 	EvsReadObjectKind_value = map[string]int32{
 		"EVS_READ_OBJECT_KIND_UNSPECIFIED": 0,
@@ -1266,6 +1268,7 @@ var (
 		"EVS_READ_OBJECT_MAP_PART":         3,
 		"EVS_READ_OBJECT_LOG_PAGE":         4,
 		"EVS_READ_OBJECT_BATCH_RECORD":     5,
+		"EVS_READ_OBJECT_RESEED":           6,
 	}
 )
 
@@ -4179,7 +4182,7 @@ type EvsSlotKey struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	KeyIndex      uint32                 `protobuf:"varint,1,opt,name=key_index,json=keyIndex,proto3" json:"key_index,omitempty"` // 0 to 63, never reused within its slot
 	Generation    uint64                 `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`             // g: fek_g wraps it, or, for a deposit, g's drop key
-	Wrapped       []byte                 `protobuf:"bytes,3,opt,name=wrapped,proto3" json:"wrapped,omitempty"`                    // EVS-FORMAT.md's wrapped-key block under fek_g, or a deposit's HPKE bytes
+	Wrapped       []byte                 `protobuf:"bytes,3,opt,name=wrapped,proto3" json:"wrapped,omitempty"`                    // EVS-FORMAT.md's 72 B key or 104 B record slot row block under fek_g, or HPKE
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4728,6 +4731,7 @@ type EvsSealedMetadata struct {
 	Git           *EvsGitUpdate      `protobuf:"bytes,5,opt,name=git,proto3" json:"git,omitempty"`                                       // git mode, every push but a PATH_EPOCH: what the update is (8.2.3)
 	RefName       []byte             `protobuf:"bytes,6,opt,name=ref_name,json=refName,proto3" json:"ref_name,omitempty"`                // a creating push: the ref name's bytes, the signed copy of payload section 15
 	Base          *EvsOverlay        `protobuf:"bytes,7,opt,name=base,proto3" json:"base,omitempty"`                                     // a creating push of an overlay: the signed copy of payload section 16
+	ErasureNote   []byte             `protobuf:"bytes,8,opt,name=erasure_note,json=erasureNote,proto3" json:"erasure_note,omitempty"`    // an ERASE's or a CLOSURE's note (11.12; QD-682): erasure id 16 B, and for an
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4807,6 +4811,13 @@ func (x *EvsSealedMetadata) GetRefName() []byte {
 func (x *EvsSealedMetadata) GetBase() *EvsOverlay {
 	if x != nil {
 		return x.Base
+	}
+	return nil
+}
+
+func (x *EvsSealedMetadata) GetErasureNote() []byte {
+	if x != nil {
+		return x.ErasureNote
 	}
 	return nil
 }
@@ -5435,6 +5446,85 @@ func (x *EvsPartRequest) GetStaged() []byte {
 	return nil
 }
 
+type EvsReseedRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// one Signed EvsReseed a call; a 200 carries an EvsPushReply
+	Statement []byte `protobuf:"bytes,1,opt,name=statement,proto3" json:"statement,omitempty"` // a re-seeded Signed EvsPush as its device kept it, never re-signed; with a
+	// slot, the Signed EvsPush of a re-seeded version that names the slot; alone and
+	// a Signed EvsReseed, the statement evs keeps at reseed/<repo>/<ref>
+	Payload       []byte   `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`             // a one-part push's payload, as EvsPushRequest's
+	Parts         [][]byte `protobuf:"bytes,3,rep,name=parts,proto3" json:"parts,omitempty"`                 // a push in parts: each EvsPushPart as sent, in part order
+	SlotId        []byte   `protobuf:"bytes,4,opt,name=slot_id,json=slotId,proto3" json:"slot_id,omitempty"` // a slot call: the slot's id, 16 B
+	Slot          []byte   `protobuf:"bytes,5,opt,name=slot,proto3" json:"slot,omitempty"`                   // and its EvsSlotObject bytes as the mirror holds them
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EvsReseedRequest) Reset() {
+	*x = EvsReseedRequest{}
+	mi := &file_protocol_evs_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EvsReseedRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EvsReseedRequest) ProtoMessage() {}
+
+func (x *EvsReseedRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_evs_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EvsReseedRequest.ProtoReflect.Descriptor instead.
+func (*EvsReseedRequest) Descriptor() ([]byte, []int) {
+	return file_protocol_evs_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *EvsReseedRequest) GetStatement() []byte {
+	if x != nil {
+		return x.Statement
+	}
+	return nil
+}
+
+func (x *EvsReseedRequest) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *EvsReseedRequest) GetParts() [][]byte {
+	if x != nil {
+		return x.Parts
+	}
+	return nil
+}
+
+func (x *EvsReseedRequest) GetSlotId() []byte {
+	if x != nil {
+		return x.SlotId
+	}
+	return nil
+}
+
+func (x *EvsReseedRequest) GetSlot() []byte {
+	if x != nil {
+		return x.Slot
+	}
+	return nil
+}
+
 type EvsLeaseRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RefId         []byte                 `protobuf:"bytes,1,opt,name=ref_id,json=refId,proto3" json:"ref_id,omitempty"`
@@ -5446,7 +5536,7 @@ type EvsLeaseRequest struct {
 
 func (x *EvsLeaseRequest) Reset() {
 	*x = EvsLeaseRequest{}
-	mi := &file_protocol_evs_proto_msgTypes[47]
+	mi := &file_protocol_evs_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5458,7 +5548,7 @@ func (x *EvsLeaseRequest) String() string {
 func (*EvsLeaseRequest) ProtoMessage() {}
 
 func (x *EvsLeaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[47]
+	mi := &file_protocol_evs_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5471,7 +5561,7 @@ func (x *EvsLeaseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsLeaseRequest.ProtoReflect.Descriptor instead.
 func (*EvsLeaseRequest) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{47}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *EvsLeaseRequest) GetRefId() []byte {
@@ -5505,7 +5595,7 @@ type EvsPathMapRequest struct {
 
 func (x *EvsPathMapRequest) Reset() {
 	*x = EvsPathMapRequest{}
-	mi := &file_protocol_evs_proto_msgTypes[48]
+	mi := &file_protocol_evs_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5517,7 +5607,7 @@ func (x *EvsPathMapRequest) String() string {
 func (*EvsPathMapRequest) ProtoMessage() {}
 
 func (x *EvsPathMapRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[48]
+	mi := &file_protocol_evs_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5530,7 +5620,7 @@ func (x *EvsPathMapRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsPathMapRequest.ProtoReflect.Descriptor instead.
 func (*EvsPathMapRequest) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{48}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *EvsPathMapRequest) GetPathMapSha256() []byte {
@@ -5557,7 +5647,7 @@ type EvsPathEpochBlockRequest struct {
 
 func (x *EvsPathEpochBlockRequest) Reset() {
 	*x = EvsPathEpochBlockRequest{}
-	mi := &file_protocol_evs_proto_msgTypes[49]
+	mi := &file_protocol_evs_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5569,7 +5659,7 @@ func (x *EvsPathEpochBlockRequest) String() string {
 func (*EvsPathEpochBlockRequest) ProtoMessage() {}
 
 func (x *EvsPathEpochBlockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[49]
+	mi := &file_protocol_evs_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5582,7 +5672,7 @@ func (x *EvsPathEpochBlockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsPathEpochBlockRequest.ProtoReflect.Descriptor instead.
 func (*EvsPathEpochBlockRequest) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{49}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *EvsPathEpochBlockRequest) GetRefId() []byte {
@@ -5611,7 +5701,7 @@ type EvsSubscriptionRequest struct {
 
 func (x *EvsSubscriptionRequest) Reset() {
 	*x = EvsSubscriptionRequest{}
-	mi := &file_protocol_evs_proto_msgTypes[50]
+	mi := &file_protocol_evs_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5623,7 +5713,7 @@ func (x *EvsSubscriptionRequest) String() string {
 func (*EvsSubscriptionRequest) ProtoMessage() {}
 
 func (x *EvsSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[50]
+	mi := &file_protocol_evs_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5636,7 +5726,7 @@ func (x *EvsSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*EvsSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{50}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *EvsSubscriptionRequest) GetRepoId() []byte {
@@ -5679,7 +5769,7 @@ type EvsSubscription struct {
 
 func (x *EvsSubscription) Reset() {
 	*x = EvsSubscription{}
-	mi := &file_protocol_evs_proto_msgTypes[51]
+	mi := &file_protocol_evs_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5691,7 +5781,7 @@ func (x *EvsSubscription) String() string {
 func (*EvsSubscription) ProtoMessage() {}
 
 func (x *EvsSubscription) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[51]
+	mi := &file_protocol_evs_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5704,7 +5794,7 @@ func (x *EvsSubscription) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsSubscription.ProtoReflect.Descriptor instead.
 func (*EvsSubscription) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{51}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *EvsSubscription) GetRefId() []byte {
@@ -5744,7 +5834,7 @@ type EvsSubscriptionsReply struct {
 
 func (x *EvsSubscriptionsReply) Reset() {
 	*x = EvsSubscriptionsReply{}
-	mi := &file_protocol_evs_proto_msgTypes[52]
+	mi := &file_protocol_evs_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5756,7 +5846,7 @@ func (x *EvsSubscriptionsReply) String() string {
 func (*EvsSubscriptionsReply) ProtoMessage() {}
 
 func (x *EvsSubscriptionsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[52]
+	mi := &file_protocol_evs_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5769,7 +5859,7 @@ func (x *EvsSubscriptionsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsSubscriptionsReply.ProtoReflect.Descriptor instead.
 func (*EvsSubscriptionsReply) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{52}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *EvsSubscriptionsReply) GetSubscriptions() []*EvsSubscription {
@@ -5790,7 +5880,7 @@ type EvsPushReply struct {
 
 func (x *EvsPushReply) Reset() {
 	*x = EvsPushReply{}
-	mi := &file_protocol_evs_proto_msgTypes[53]
+	mi := &file_protocol_evs_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5802,7 +5892,7 @@ func (x *EvsPushReply) String() string {
 func (*EvsPushReply) ProtoMessage() {}
 
 func (x *EvsPushReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[53]
+	mi := &file_protocol_evs_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5815,7 +5905,7 @@ func (x *EvsPushReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsPushReply.ProtoReflect.Descriptor instead.
 func (*EvsPushReply) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{53}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *EvsPushReply) GetVersion() uint64 {
@@ -5856,7 +5946,7 @@ type EvsRefusalReply struct {
 
 func (x *EvsRefusalReply) Reset() {
 	*x = EvsRefusalReply{}
-	mi := &file_protocol_evs_proto_msgTypes[54]
+	mi := &file_protocol_evs_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5868,7 +5958,7 @@ func (x *EvsRefusalReply) String() string {
 func (*EvsRefusalReply) ProtoMessage() {}
 
 func (x *EvsRefusalReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[54]
+	mi := &file_protocol_evs_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5881,7 +5971,7 @@ func (x *EvsRefusalReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsRefusalReply.ProtoReflect.Descriptor instead.
 func (*EvsRefusalReply) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{54}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *EvsRefusalReply) GetPushId() []byte {
@@ -5960,7 +6050,7 @@ type EvsQuotaRefusal struct {
 
 func (x *EvsQuotaRefusal) Reset() {
 	*x = EvsQuotaRefusal{}
-	mi := &file_protocol_evs_proto_msgTypes[55]
+	mi := &file_protocol_evs_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5972,7 +6062,7 @@ func (x *EvsQuotaRefusal) String() string {
 func (*EvsQuotaRefusal) ProtoMessage() {}
 
 func (x *EvsQuotaRefusal) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[55]
+	mi := &file_protocol_evs_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5985,7 +6075,7 @@ func (x *EvsQuotaRefusal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsQuotaRefusal.ProtoReflect.Descriptor instead.
 func (*EvsQuotaRefusal) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{55}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *EvsQuotaRefusal) GetLimitKey() string {
@@ -6034,7 +6124,7 @@ type EvsDepositHead struct {
 
 func (x *EvsDepositHead) Reset() {
 	*x = EvsDepositHead{}
-	mi := &file_protocol_evs_proto_msgTypes[56]
+	mi := &file_protocol_evs_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6046,7 +6136,7 @@ func (x *EvsDepositHead) String() string {
 func (*EvsDepositHead) ProtoMessage() {}
 
 func (x *EvsDepositHead) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[56]
+	mi := &file_protocol_evs_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6059,7 +6149,7 @@ func (x *EvsDepositHead) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsDepositHead.ProtoReflect.Descriptor instead.
 func (*EvsDepositHead) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{56}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *EvsDepositHead) GetVersion() uint64 {
@@ -6102,7 +6192,7 @@ type EvsReadRequest struct {
 
 func (x *EvsReadRequest) Reset() {
 	*x = EvsReadRequest{}
-	mi := &file_protocol_evs_proto_msgTypes[57]
+	mi := &file_protocol_evs_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6114,7 +6204,7 @@ func (x *EvsReadRequest) String() string {
 func (*EvsReadRequest) ProtoMessage() {}
 
 func (x *EvsReadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[57]
+	mi := &file_protocol_evs_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6127,7 +6217,7 @@ func (x *EvsReadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsReadRequest.ProtoReflect.Descriptor instead.
 func (*EvsReadRequest) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{57}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *EvsReadRequest) GetRefId() []byte {
@@ -6221,7 +6311,7 @@ type EvsReadPath struct {
 
 func (x *EvsReadPath) Reset() {
 	*x = EvsReadPath{}
-	mi := &file_protocol_evs_proto_msgTypes[58]
+	mi := &file_protocol_evs_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6233,7 +6323,7 @@ func (x *EvsReadPath) String() string {
 func (*EvsReadPath) ProtoMessage() {}
 
 func (x *EvsReadPath) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[58]
+	mi := &file_protocol_evs_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6246,7 +6336,7 @@ func (x *EvsReadPath) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsReadPath.ProtoReflect.Descriptor instead.
 func (*EvsReadPath) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{58}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *EvsReadPath) GetTokenPaths() []*EvsSourcePath {
@@ -6281,7 +6371,7 @@ type EvsReadRange struct {
 
 func (x *EvsReadRange) Reset() {
 	*x = EvsReadRange{}
-	mi := &file_protocol_evs_proto_msgTypes[59]
+	mi := &file_protocol_evs_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6293,7 +6383,7 @@ func (x *EvsReadRange) String() string {
 func (*EvsReadRange) ProtoMessage() {}
 
 func (x *EvsReadRange) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[59]
+	mi := &file_protocol_evs_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6306,7 +6396,7 @@ func (x *EvsReadRange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsReadRange.ProtoReflect.Descriptor instead.
 func (*EvsReadRange) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{59}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *EvsReadRange) GetSegmentId() []byte {
@@ -6341,7 +6431,7 @@ type EvsReadMap struct {
 
 func (x *EvsReadMap) Reset() {
 	*x = EvsReadMap{}
-	mi := &file_protocol_evs_proto_msgTypes[60]
+	mi := &file_protocol_evs_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6353,7 +6443,7 @@ func (x *EvsReadMap) String() string {
 func (*EvsReadMap) ProtoMessage() {}
 
 func (x *EvsReadMap) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[60]
+	mi := &file_protocol_evs_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6366,7 +6456,7 @@ func (x *EvsReadMap) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsReadMap.ProtoReflect.Descriptor instead.
 func (*EvsReadMap) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{60}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *EvsReadMap) GetPathEpoch() uint64 {
@@ -6401,7 +6491,7 @@ type EvsReadPush struct {
 
 func (x *EvsReadPush) Reset() {
 	*x = EvsReadPush{}
-	mi := &file_protocol_evs_proto_msgTypes[61]
+	mi := &file_protocol_evs_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6413,7 +6503,7 @@ func (x *EvsReadPush) String() string {
 func (*EvsReadPush) ProtoMessage() {}
 
 func (x *EvsReadPush) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[61]
+	mi := &file_protocol_evs_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6426,7 +6516,7 @@ func (x *EvsReadPush) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsReadPush.ProtoReflect.Descriptor instead.
 func (*EvsReadPush) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{61}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *EvsReadPush) GetPushId() []byte {
@@ -6460,7 +6550,7 @@ type EvsReadRef struct {
 
 func (x *EvsReadRef) Reset() {
 	*x = EvsReadRef{}
-	mi := &file_protocol_evs_proto_msgTypes[62]
+	mi := &file_protocol_evs_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6472,7 +6562,7 @@ func (x *EvsReadRef) String() string {
 func (*EvsReadRef) ProtoMessage() {}
 
 func (x *EvsReadRef) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[62]
+	mi := &file_protocol_evs_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6485,7 +6575,7 @@ func (x *EvsReadRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsReadRef.ProtoReflect.Descriptor instead.
 func (*EvsReadRef) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{62}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *EvsReadRef) GetRefId() []byte {
@@ -6509,16 +6599,17 @@ type EvsReadFrame struct {
 	Statement     *EvsReadStatement `protobuf:"bytes,2,opt,name=statement,proto3" json:"statement,omitempty"` // each version after the pin, in order
 	Behind        uint64            `protobuf:"varint,3,opt,name=behind,proto3" json:"behind,omitempty"`      // the pin is older than the window: the first missing version
 	More          uint64            `protobuf:"varint,4,opt,name=more,proto3" json:"more,omitempty"`          // a streams read stopped at its 4 MiB: this ref's next version
-	Path          *EvsReadPathReply `protobuf:"bytes,5,opt,name=path,proto3" json:"path,omitempty"`
+	Path          *EvsReadPathReply `protobuf:"bytes,5,opt,name=path,proto3" json:"path,omitempty"`           // a path's, then each of a directory's deltas in a frame of its own
 	Object        *EvsReadObject    `protobuf:"bytes,6,opt,name=object,proto3" json:"object,omitempty"`
 	End           bool              `protobuf:"varint,7,opt,name=end,proto3" json:"end,omitempty"`
+	Error         *EvsRefusalReply  `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"` // the reply could not be finished: the last frame in end's place, UNAVAILABLE,
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EvsReadFrame) Reset() {
 	*x = EvsReadFrame{}
-	mi := &file_protocol_evs_proto_msgTypes[63]
+	mi := &file_protocol_evs_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6530,7 +6621,7 @@ func (x *EvsReadFrame) String() string {
 func (*EvsReadFrame) ProtoMessage() {}
 
 func (x *EvsReadFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[63]
+	mi := &file_protocol_evs_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6543,7 +6634,7 @@ func (x *EvsReadFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsReadFrame.ProtoReflect.Descriptor instead.
 func (*EvsReadFrame) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{63}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *EvsReadFrame) GetHead() *EvsHeadSummary {
@@ -6595,6 +6686,13 @@ func (x *EvsReadFrame) GetEnd() bool {
 	return false
 }
 
+func (x *EvsReadFrame) GetError() *EvsRefusalReply {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
 type EvsHeadSummary struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	RefId                []byte                 `protobuf:"bytes,1,opt,name=ref_id,json=refId,proto3" json:"ref_id,omitempty"`
@@ -6620,7 +6718,7 @@ type EvsHeadSummary struct {
 
 func (x *EvsHeadSummary) Reset() {
 	*x = EvsHeadSummary{}
-	mi := &file_protocol_evs_proto_msgTypes[64]
+	mi := &file_protocol_evs_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6632,7 +6730,7 @@ func (x *EvsHeadSummary) String() string {
 func (*EvsHeadSummary) ProtoMessage() {}
 
 func (x *EvsHeadSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[64]
+	mi := &file_protocol_evs_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6645,7 +6743,7 @@ func (x *EvsHeadSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsHeadSummary.ProtoReflect.Descriptor instead.
 func (*EvsHeadSummary) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{64}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *EvsHeadSummary) GetRefId() []byte {
@@ -6777,7 +6875,7 @@ type EvsReadStatement struct {
 
 func (x *EvsReadStatement) Reset() {
 	*x = EvsReadStatement{}
-	mi := &file_protocol_evs_proto_msgTypes[65]
+	mi := &file_protocol_evs_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6789,7 +6887,7 @@ func (x *EvsReadStatement) String() string {
 func (*EvsReadStatement) ProtoMessage() {}
 
 func (x *EvsReadStatement) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[65]
+	mi := &file_protocol_evs_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6802,7 +6900,7 @@ func (x *EvsReadStatement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsReadStatement.ProtoReflect.Descriptor instead.
 func (*EvsReadStatement) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{65}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *EvsReadStatement) GetVersion() uint64 {
@@ -6841,14 +6939,18 @@ type EvsReadPathReply struct {
 	// path of this reply naming the drop (format 2)
 	EntryEpoch uint64 `protobuf:"varint,17,opt,name=entry_epoch,json=entryEpoch,proto3" json:"entry_epoch,omitempty"` // the epoch whose idx/ copy served the version, table or marker; 0 the
 	// head's current one (DESIGN-DETAILS 9.2.2)
-	StaleEpoch    bool `protobuf:"varint,18,opt,name=stale_epoch,json=staleEpoch,proto3" json:"stale_epoch,omitempty"` // the request named no token path in the head's current epoch: nothing was
+	StaleEpoch bool `protobuf:"varint,18,opt,name=stale_epoch,json=staleEpoch,proto3" json:"stale_epoch,omitempty"` // the request named no token path in the head's current epoch: nothing was
+	// read for this path, and the reader asks again on this head
+	DeltaProofs []*EvsDeltaProof `protobuf:"bytes,19,rep,name=delta_proofs,json=deltaProofs,proto3" json:"delta_proofs,omitempty"` // one per entry of deltas, in order: that delta's proof to its own
+	// statement's changes_root (QD-681)
+	Continues     bool `protobuf:"varint,20,opt,name=continues,proto3" json:"continues,omitempty"` // the next of the deltas of the path in the frame before it, its token_path,
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EvsReadPathReply) Reset() {
 	*x = EvsReadPathReply{}
-	mi := &file_protocol_evs_proto_msgTypes[66]
+	mi := &file_protocol_evs_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6860,7 +6962,7 @@ func (x *EvsReadPathReply) String() string {
 func (*EvsReadPathReply) ProtoMessage() {}
 
 func (x *EvsReadPathReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[66]
+	mi := &file_protocol_evs_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6873,7 +6975,7 @@ func (x *EvsReadPathReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsReadPathReply.ProtoReflect.Descriptor instead.
 func (*EvsReadPathReply) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{66}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *EvsReadPathReply) GetTokenPath() [][]byte {
@@ -7002,6 +7104,64 @@ func (x *EvsReadPathReply) GetStaleEpoch() bool {
 	return false
 }
 
+func (x *EvsReadPathReply) GetDeltaProofs() []*EvsDeltaProof {
+	if x != nil {
+		return x.DeltaProofs
+	}
+	return nil
+}
+
+func (x *EvsReadPathReply) GetContinues() bool {
+	if x != nil {
+		return x.Continues
+	}
+	return false
+}
+
+type EvsDeltaProof struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Proof         []*EvsMerkleProof      `protobuf:"bytes,1,rep,name=proof,proto3" json:"proof,omitempty"` // to its statement's changes_root, part level last; empty when inline
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EvsDeltaProof) Reset() {
+	*x = EvsDeltaProof{}
+	mi := &file_protocol_evs_proto_msgTypes[68]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EvsDeltaProof) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EvsDeltaProof) ProtoMessage() {}
+
+func (x *EvsDeltaProof) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_evs_proto_msgTypes[68]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EvsDeltaProof.ProtoReflect.Descriptor instead.
+func (*EvsDeltaProof) Descriptor() ([]byte, []int) {
+	return file_protocol_evs_proto_rawDescGZIP(), []int{68}
+}
+
+func (x *EvsDeltaProof) GetProof() []*EvsMerkleProof {
+	if x != nil {
+		return x.Proof
+	}
+	return nil
+}
+
 type EvsMerkleProof struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Leaf          []byte                 `protobuf:"bytes,1,opt,name=leaf,proto3" json:"leaf,omitempty"`    // the bytes the leaf hashes: an EvsChange as listed, or a part's changes_root
@@ -7014,7 +7174,7 @@ type EvsMerkleProof struct {
 
 func (x *EvsMerkleProof) Reset() {
 	*x = EvsMerkleProof{}
-	mi := &file_protocol_evs_proto_msgTypes[67]
+	mi := &file_protocol_evs_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7026,7 +7186,7 @@ func (x *EvsMerkleProof) String() string {
 func (*EvsMerkleProof) ProtoMessage() {}
 
 func (x *EvsMerkleProof) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[67]
+	mi := &file_protocol_evs_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7039,7 +7199,7 @@ func (x *EvsMerkleProof) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsMerkleProof.ProtoReflect.Descriptor instead.
 func (*EvsMerkleProof) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{67}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *EvsMerkleProof) GetLeaf() []byte {
@@ -7076,13 +7236,14 @@ type EvsAbsenceProof struct {
 	TokenPath     [][]byte               `protobuf:"bytes,2,rep,name=token_path,json=tokenPath,proto3" json:"token_path,omitempty"` // the path or the prefix shown absent
 	Below         []*EvsMerkleProof      `protobuf:"bytes,3,rep,name=below,proto3" json:"below,omitempty"`                          // the leaf sorting just below it, part level last; empty when none does
 	Above         []*EvsMerkleProof      `protobuf:"bytes,4,rep,name=above,proto3" json:"above,omitempty"`                          // the leaf sorting just above it, part level last; empty when none does
+	Present       []*EvsMerkleProof      `protobuf:"bytes,5,rep,name=present,proto3" json:"present,omitempty"`                      // in place of below and above, for a strict prefix the statement changes by
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EvsAbsenceProof) Reset() {
 	*x = EvsAbsenceProof{}
-	mi := &file_protocol_evs_proto_msgTypes[68]
+	mi := &file_protocol_evs_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7094,7 +7255,7 @@ func (x *EvsAbsenceProof) String() string {
 func (*EvsAbsenceProof) ProtoMessage() {}
 
 func (x *EvsAbsenceProof) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[68]
+	mi := &file_protocol_evs_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7107,7 +7268,7 @@ func (x *EvsAbsenceProof) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsAbsenceProof.ProtoReflect.Descriptor instead.
 func (*EvsAbsenceProof) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{68}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *EvsAbsenceProof) GetVersion() uint64 {
@@ -7138,6 +7299,13 @@ func (x *EvsAbsenceProof) GetAbove() []*EvsMerkleProof {
 	return nil
 }
 
+func (x *EvsAbsenceProof) GetPresent() []*EvsMerkleProof {
+	if x != nil {
+		return x.Present
+	}
+	return nil
+}
+
 type EvsReadObject struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Kind          EvsReadObjectKind      `protobuf:"varint,1,opt,name=kind,proto3,enum=urnetwork.sidecar.EvsReadObjectKind" json:"kind,omitempty"`
@@ -7152,7 +7320,7 @@ type EvsReadObject struct {
 
 func (x *EvsReadObject) Reset() {
 	*x = EvsReadObject{}
-	mi := &file_protocol_evs_proto_msgTypes[69]
+	mi := &file_protocol_evs_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7164,7 +7332,7 @@ func (x *EvsReadObject) String() string {
 func (*EvsReadObject) ProtoMessage() {}
 
 func (x *EvsReadObject) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[69]
+	mi := &file_protocol_evs_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7177,7 +7345,7 @@ func (x *EvsReadObject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsReadObject.ProtoReflect.Descriptor instead.
 func (*EvsReadObject) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{69}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *EvsReadObject) GetKind() EvsReadObjectKind {
@@ -7234,7 +7402,7 @@ type EvsRefsReply struct {
 
 func (x *EvsRefsReply) Reset() {
 	*x = EvsRefsReply{}
-	mi := &file_protocol_evs_proto_msgTypes[70]
+	mi := &file_protocol_evs_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7246,7 +7414,7 @@ func (x *EvsRefsReply) String() string {
 func (*EvsRefsReply) ProtoMessage() {}
 
 func (x *EvsRefsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[70]
+	mi := &file_protocol_evs_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7259,7 +7427,7 @@ func (x *EvsRefsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsRefsReply.ProtoReflect.Descriptor instead.
 func (*EvsRefsReply) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{70}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *EvsRefsReply) GetFormat() uint32 {
@@ -7300,7 +7468,7 @@ type EvsLogReply struct {
 
 func (x *EvsLogReply) Reset() {
 	*x = EvsLogReply{}
-	mi := &file_protocol_evs_proto_msgTypes[71]
+	mi := &file_protocol_evs_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7312,7 +7480,7 @@ func (x *EvsLogReply) String() string {
 func (*EvsLogReply) ProtoMessage() {}
 
 func (x *EvsLogReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[71]
+	mi := &file_protocol_evs_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7325,7 +7493,7 @@ func (x *EvsLogReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsLogReply.ProtoReflect.Descriptor instead.
 func (*EvsLogReply) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{71}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *EvsLogReply) GetStatements() []*EvsReadStatement {
@@ -7355,7 +7523,7 @@ type EvsPurgeList struct {
 
 func (x *EvsPurgeList) Reset() {
 	*x = EvsPurgeList{}
-	mi := &file_protocol_evs_proto_msgTypes[72]
+	mi := &file_protocol_evs_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7367,7 +7535,7 @@ func (x *EvsPurgeList) String() string {
 func (*EvsPurgeList) ProtoMessage() {}
 
 func (x *EvsPurgeList) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[72]
+	mi := &file_protocol_evs_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7380,7 +7548,7 @@ func (x *EvsPurgeList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsPurgeList.ProtoReflect.Descriptor instead.
 func (*EvsPurgeList) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{72}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *EvsPurgeList) GetCandidates() []*EvsPurgeCandidate {
@@ -7417,7 +7585,7 @@ type EvsPurgeCandidate struct {
 
 func (x *EvsPurgeCandidate) Reset() {
 	*x = EvsPurgeCandidate{}
-	mi := &file_protocol_evs_proto_msgTypes[73]
+	mi := &file_protocol_evs_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7429,7 +7597,7 @@ func (x *EvsPurgeCandidate) String() string {
 func (*EvsPurgeCandidate) ProtoMessage() {}
 
 func (x *EvsPurgeCandidate) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[73]
+	mi := &file_protocol_evs_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7442,7 +7610,7 @@ func (x *EvsPurgeCandidate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsPurgeCandidate.ProtoReflect.Descriptor instead.
 func (*EvsPurgeCandidate) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{73}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *EvsPurgeCandidate) GetTokenPath() [][]byte {
@@ -7500,7 +7668,7 @@ type EvsDropStatus struct {
 
 func (x *EvsDropStatus) Reset() {
 	*x = EvsDropStatus{}
-	mi := &file_protocol_evs_proto_msgTypes[74]
+	mi := &file_protocol_evs_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7512,7 +7680,7 @@ func (x *EvsDropStatus) String() string {
 func (*EvsDropStatus) ProtoMessage() {}
 
 func (x *EvsDropStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[74]
+	mi := &file_protocol_evs_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7525,7 +7693,7 @@ func (x *EvsDropStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsDropStatus.ProtoReflect.Descriptor instead.
 func (*EvsDropStatus) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{74}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *EvsDropStatus) GetDropId() []byte {
@@ -7621,7 +7789,7 @@ type EvsDropsReply struct {
 
 func (x *EvsDropsReply) Reset() {
 	*x = EvsDropsReply{}
-	mi := &file_protocol_evs_proto_msgTypes[75]
+	mi := &file_protocol_evs_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7633,7 +7801,7 @@ func (x *EvsDropsReply) String() string {
 func (*EvsDropsReply) ProtoMessage() {}
 
 func (x *EvsDropsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[75]
+	mi := &file_protocol_evs_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7646,7 +7814,7 @@ func (x *EvsDropsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsDropsReply.ProtoReflect.Descriptor instead.
 func (*EvsDropsReply) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{75}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *EvsDropsReply) GetDrops() []*EvsDropStatus {
@@ -7666,7 +7834,7 @@ type EvsDropPreviewRequest struct {
 
 func (x *EvsDropPreviewRequest) Reset() {
 	*x = EvsDropPreviewRequest{}
-	mi := &file_protocol_evs_proto_msgTypes[76]
+	mi := &file_protocol_evs_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7678,7 +7846,7 @@ func (x *EvsDropPreviewRequest) String() string {
 func (*EvsDropPreviewRequest) ProtoMessage() {}
 
 func (x *EvsDropPreviewRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[76]
+	mi := &file_protocol_evs_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7691,7 +7859,7 @@ func (x *EvsDropPreviewRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsDropPreviewRequest.ProtoReflect.Descriptor instead.
 func (*EvsDropPreviewRequest) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{76}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *EvsDropPreviewRequest) GetRefId() []byte {
@@ -7728,7 +7896,7 @@ type EvsDropPreviewReply struct {
 
 func (x *EvsDropPreviewReply) Reset() {
 	*x = EvsDropPreviewReply{}
-	mi := &file_protocol_evs_proto_msgTypes[77]
+	mi := &file_protocol_evs_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7740,7 +7908,7 @@ func (x *EvsDropPreviewReply) String() string {
 func (*EvsDropPreviewReply) ProtoMessage() {}
 
 func (x *EvsDropPreviewReply) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[77]
+	mi := &file_protocol_evs_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7753,7 +7921,7 @@ func (x *EvsDropPreviewReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsDropPreviewReply.ProtoReflect.Descriptor instead.
 func (*EvsDropPreviewReply) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{77}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *EvsDropPreviewReply) GetPreviewId() []byte {
@@ -7853,7 +8021,7 @@ type EvsDropPreviewPath struct {
 
 func (x *EvsDropPreviewPath) Reset() {
 	*x = EvsDropPreviewPath{}
-	mi := &file_protocol_evs_proto_msgTypes[78]
+	mi := &file_protocol_evs_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7865,7 +8033,7 @@ func (x *EvsDropPreviewPath) String() string {
 func (*EvsDropPreviewPath) ProtoMessage() {}
 
 func (x *EvsDropPreviewPath) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_evs_proto_msgTypes[78]
+	mi := &file_protocol_evs_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7878,7 +8046,7 @@ func (x *EvsDropPreviewPath) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsDropPreviewPath.ProtoReflect.Descriptor instead.
 func (*EvsDropPreviewPath) Descriptor() ([]byte, []int) {
-	return file_protocol_evs_proto_rawDescGZIP(), []int{78}
+	return file_protocol_evs_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *EvsDropPreviewPath) GetListMatch() bool {
@@ -8232,7 +8400,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\agit_oid\x18\x03 \x01(\fR\x06gitOid\x128\n" +
 	"\boid_kind\x18\x04 \x01(\x0e2\x1d.urnetwork.sidecar.EvsOidKindR\aoidKind\x12\x12\n" +
 	"\x04size\x18\x05 \x01(\x04R\x04size\x12%\n" +
-	"\x0econtent_sha256\x18\x06 \x01(\fR\rcontentSha256\"\xed\x02\n" +
+	"\x0econtent_sha256\x18\x06 \x01(\fR\rcontentSha256\"\x90\x03\n" +
 	"\x11EvsSealedMetadata\x122\n" +
 	"\x05group\x18\x01 \x01(\v2\x1c.urnetwork.sidecar.GroupHeadR\x05group\x12@\n" +
 	"\n" +
@@ -8242,7 +8410,8 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\rsigned_import\x18\x04 \x01(\fR\fsignedImport\x121\n" +
 	"\x03git\x18\x05 \x01(\v2\x1f.urnetwork.sidecar.EvsGitUpdateR\x03git\x12\x19\n" +
 	"\bref_name\x18\x06 \x01(\fR\arefName\x121\n" +
-	"\x04base\x18\a \x01(\v2\x1d.urnetwork.sidecar.EvsOverlayR\x04base\"\x9c\x02\n" +
+	"\x04base\x18\a \x01(\v2\x1d.urnetwork.sidecar.EvsOverlayR\x04base\x12!\n" +
+	"\ferasure_note\x18\b \x01(\fR\verasureNote\"\x9c\x02\n" +
 	"\fEvsGitUpdate\x124\n" +
 	"\x05shape\x18\x01 \x01(\x0e2\x1e.urnetwork.sidecar.EvsGitShapeR\x05shape\x12\x17\n" +
 	"\aold_tip\x18\x02 \x01(\fR\x06oldTip\x12\x17\n" +
@@ -8292,7 +8461,13 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\tstatement\x18\x01 \x01(\fR\tstatement\x12\x12\n" +
 	"\x04part\x18\x02 \x01(\fR\x04part\x12?\n" +
 	"\breceipts\x18\x03 \x03(\v2#.urnetwork.sidecar.EvsUploadReceiptR\breceipts\x12\x16\n" +
-	"\x06staged\x18\x04 \x01(\fR\x06staged\"[\n" +
+	"\x06staged\x18\x04 \x01(\fR\x06staged\"\x8d\x01\n" +
+	"\x10EvsReseedRequest\x12\x1c\n" +
+	"\tstatement\x18\x01 \x01(\fR\tstatement\x12\x18\n" +
+	"\apayload\x18\x02 \x01(\fR\apayload\x12\x14\n" +
+	"\x05parts\x18\x03 \x03(\fR\x05parts\x12\x17\n" +
+	"\aslot_id\x18\x04 \x01(\fR\x06slotId\x12\x12\n" +
+	"\x04slot\x18\x05 \x01(\fR\x04slot\"[\n" +
 	"\x0fEvsLeaseRequest\x12\x15\n" +
 	"\x06ref_id\x18\x01 \x01(\fR\x05refId\x12!\n" +
 	"\fbase_version\x18\x02 \x01(\x04R\vbaseVersion\x12\x0e\n" +
@@ -8382,7 +8557,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"EvsReadRef\x12\x15\n" +
 	"\x06ref_id\x18\x01 \x01(\fR\x05refId\x12\x1f\n" +
 	"\vpin_version\x18\x02 \x01(\x04R\n" +
-	"pinVersion\"\xb9\x02\n" +
+	"pinVersion\"\xf3\x02\n" +
 	"\fEvsReadFrame\x125\n" +
 	"\x04head\x18\x01 \x01(\v2!.urnetwork.sidecar.EvsHeadSummaryR\x04head\x12A\n" +
 	"\tstatement\x18\x02 \x01(\v2#.urnetwork.sidecar.EvsReadStatementR\tstatement\x12\x16\n" +
@@ -8390,7 +8565,8 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x04more\x18\x04 \x01(\x04R\x04more\x127\n" +
 	"\x04path\x18\x05 \x01(\v2#.urnetwork.sidecar.EvsReadPathReplyR\x04path\x128\n" +
 	"\x06object\x18\x06 \x01(\v2 .urnetwork.sidecar.EvsReadObjectR\x06object\x12\x10\n" +
-	"\x03end\x18\a \x01(\bR\x03end\"\xa9\x05\n" +
+	"\x03end\x18\a \x01(\bR\x03end\x128\n" +
+	"\x05error\x18\b \x01(\v2\".urnetwork.sidecar.EvsRefusalReplyR\x05error\"\xa9\x05\n" +
 	"\x0eEvsHeadSummary\x12\x15\n" +
 	"\x06ref_id\x18\x01 \x01(\fR\x05refId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x14\n" +
@@ -8416,7 +8592,7 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\rpush_sequence\x18\x11 \x01(\x04R\fpushSequence\"J\n" +
 	"\x10EvsReadStatement\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x1c\n" +
-	"\tstatement\x18\x02 \x01(\fR\tstatement\"\xb1\x06\n" +
+	"\tstatement\x18\x02 \x01(\fR\tstatement\"\x94\a\n" +
 	"\x10EvsReadPathReply\x12\x1d\n" +
 	"\n" +
 	"token_path\x18\x01 \x03(\fR\ttokenPath\x12<\n" +
@@ -8439,18 +8615,23 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\ventry_epoch\x18\x11 \x01(\x04R\n" +
 	"entryEpoch\x12\x1f\n" +
 	"\vstale_epoch\x18\x12 \x01(\bR\n" +
-	"staleEpoch\"b\n" +
+	"staleEpoch\x12C\n" +
+	"\fdelta_proofs\x18\x13 \x03(\v2 .urnetwork.sidecar.EvsDeltaProofR\vdeltaProofs\x12\x1c\n" +
+	"\tcontinues\x18\x14 \x01(\bR\tcontinues\"H\n" +
+	"\rEvsDeltaProof\x127\n" +
+	"\x05proof\x18\x01 \x03(\v2!.urnetwork.sidecar.EvsMerkleProofR\x05proof\"b\n" +
 	"\x0eEvsMerkleProof\x12\x12\n" +
 	"\x04leaf\x18\x01 \x01(\fR\x04leaf\x12\x14\n" +
 	"\x05index\x18\x02 \x01(\x04R\x05index\x12\x12\n" +
 	"\x04size\x18\x03 \x01(\x04R\x04size\x12\x12\n" +
-	"\x04path\x18\x04 \x03(\fR\x04path\"\xbc\x01\n" +
+	"\x04path\x18\x04 \x03(\fR\x04path\"\xf9\x01\n" +
 	"\x0fEvsAbsenceProof\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x1d\n" +
 	"\n" +
 	"token_path\x18\x02 \x03(\fR\ttokenPath\x127\n" +
 	"\x05below\x18\x03 \x03(\v2!.urnetwork.sidecar.EvsMerkleProofR\x05below\x127\n" +
-	"\x05above\x18\x04 \x03(\v2!.urnetwork.sidecar.EvsMerkleProofR\x05above\"\xb7\x01\n" +
+	"\x05above\x18\x04 \x03(\v2!.urnetwork.sidecar.EvsMerkleProofR\x05above\x12;\n" +
+	"\apresent\x18\x05 \x03(\v2!.urnetwork.sidecar.EvsMerkleProofR\apresent\"\xb7\x01\n" +
 	"\rEvsReadObject\x128\n" +
 	"\x04kind\x18\x01 \x01(\x0e2$.urnetwork.sidecar.EvsReadObjectKindR\x04kind\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\fR\x02id\x12\x16\n" +
@@ -8688,14 +8869,15 @@ const file_protocol_evs_proto_rawDesc = "" +
 	"\x1fEVS_READ_PATH_STATE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17EVS_READ_PATH_COLLECTED\x10\x01\x12\x1e\n" +
 	"\x1aEVS_READ_PATH_DROP_PENDING\x10\x02\x12\x19\n" +
-	"\x15EVS_READ_PATH_DROPPED\x10\x03*\xce\x01\n" +
+	"\x15EVS_READ_PATH_DROPPED\x10\x03*\xea\x01\n" +
 	"\x11EvsReadObjectKind\x12$\n" +
 	" EVS_READ_OBJECT_KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17EVS_READ_OBJECT_SEGMENT\x10\x01\x12\x18\n" +
 	"\x14EVS_READ_OBJECT_SLOT\x10\x02\x12\x1c\n" +
 	"\x18EVS_READ_OBJECT_MAP_PART\x10\x03\x12\x1c\n" +
 	"\x18EVS_READ_OBJECT_LOG_PAGE\x10\x04\x12 \n" +
-	"\x1cEVS_READ_OBJECT_BATCH_RECORD\x10\x05*\xb4\x01\n" +
+	"\x1cEVS_READ_OBJECT_BATCH_RECORD\x10\x05\x12\x1a\n" +
+	"\x16EVS_READ_OBJECT_RESEED\x10\x06*\xb4\x01\n" +
 	"\fEvsDropState\x12\x1e\n" +
 	"\x1aEVS_DROP_STATE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10EVS_DROP_PENDING\x10\x01\x12\x16\n" +
@@ -8736,7 +8918,7 @@ func file_protocol_evs_proto_rawDescGZIP() []byte {
 }
 
 var file_protocol_evs_proto_enumTypes = make([]protoimpl.EnumInfo, 24)
-var file_protocol_evs_proto_msgTypes = make([]protoimpl.MessageInfo, 79)
+var file_protocol_evs_proto_msgTypes = make([]protoimpl.MessageInfo, 81)
 var file_protocol_evs_proto_goTypes = []any{
 	(EvsPushFlag)(0),                 // 0: urnetwork.sidecar.EvsPushFlag
 	(EvsLocatorKind)(0),              // 1: urnetwork.sidecar.EvsLocatorKind
@@ -8809,45 +8991,47 @@ var file_protocol_evs_proto_goTypes = []any{
 	(*EvsSealedChange)(nil),          // 68: urnetwork.sidecar.EvsSealedChange
 	(*EvsPushRequest)(nil),           // 69: urnetwork.sidecar.EvsPushRequest
 	(*EvsPartRequest)(nil),           // 70: urnetwork.sidecar.EvsPartRequest
-	(*EvsLeaseRequest)(nil),          // 71: urnetwork.sidecar.EvsLeaseRequest
-	(*EvsPathMapRequest)(nil),        // 72: urnetwork.sidecar.EvsPathMapRequest
-	(*EvsPathEpochBlockRequest)(nil), // 73: urnetwork.sidecar.EvsPathEpochBlockRequest
-	(*EvsSubscriptionRequest)(nil),   // 74: urnetwork.sidecar.EvsSubscriptionRequest
-	(*EvsSubscription)(nil),          // 75: urnetwork.sidecar.EvsSubscription
-	(*EvsSubscriptionsReply)(nil),    // 76: urnetwork.sidecar.EvsSubscriptionsReply
-	(*EvsPushReply)(nil),             // 77: urnetwork.sidecar.EvsPushReply
-	(*EvsRefusalReply)(nil),          // 78: urnetwork.sidecar.EvsRefusalReply
-	(*EvsQuotaRefusal)(nil),          // 79: urnetwork.sidecar.EvsQuotaRefusal
-	(*EvsDepositHead)(nil),           // 80: urnetwork.sidecar.EvsDepositHead
-	(*EvsReadRequest)(nil),           // 81: urnetwork.sidecar.EvsReadRequest
-	(*EvsReadPath)(nil),              // 82: urnetwork.sidecar.EvsReadPath
-	(*EvsReadRange)(nil),             // 83: urnetwork.sidecar.EvsReadRange
-	(*EvsReadMap)(nil),               // 84: urnetwork.sidecar.EvsReadMap
-	(*EvsReadPush)(nil),              // 85: urnetwork.sidecar.EvsReadPush
-	(*EvsReadRef)(nil),               // 86: urnetwork.sidecar.EvsReadRef
-	(*EvsReadFrame)(nil),             // 87: urnetwork.sidecar.EvsReadFrame
-	(*EvsHeadSummary)(nil),           // 88: urnetwork.sidecar.EvsHeadSummary
-	(*EvsReadStatement)(nil),         // 89: urnetwork.sidecar.EvsReadStatement
-	(*EvsReadPathReply)(nil),         // 90: urnetwork.sidecar.EvsReadPathReply
-	(*EvsMerkleProof)(nil),           // 91: urnetwork.sidecar.EvsMerkleProof
-	(*EvsAbsenceProof)(nil),          // 92: urnetwork.sidecar.EvsAbsenceProof
-	(*EvsReadObject)(nil),            // 93: urnetwork.sidecar.EvsReadObject
-	(*EvsRefsReply)(nil),             // 94: urnetwork.sidecar.EvsRefsReply
-	(*EvsLogReply)(nil),              // 95: urnetwork.sidecar.EvsLogReply
-	(*EvsPurgeList)(nil),             // 96: urnetwork.sidecar.EvsPurgeList
-	(*EvsPurgeCandidate)(nil),        // 97: urnetwork.sidecar.EvsPurgeCandidate
-	(*EvsDropStatus)(nil),            // 98: urnetwork.sidecar.EvsDropStatus
-	(*EvsDropsReply)(nil),            // 99: urnetwork.sidecar.EvsDropsReply
-	(*EvsDropPreviewRequest)(nil),    // 100: urnetwork.sidecar.EvsDropPreviewRequest
-	(*EvsDropPreviewReply)(nil),      // 101: urnetwork.sidecar.EvsDropPreviewReply
-	(*EvsDropPreviewPath)(nil),       // 102: urnetwork.sidecar.EvsDropPreviewPath
-	(*bridge.AuthPin)(nil),           // 103: urnetwork.sidecar.AuthPin
-	(RepoKind)(0),                    // 104: urnetwork.sidecar.RepoKind
-	(*GroupHead)(nil),                // 105: urnetwork.sidecar.GroupHead
+	(*EvsReseedRequest)(nil),         // 71: urnetwork.sidecar.EvsReseedRequest
+	(*EvsLeaseRequest)(nil),          // 72: urnetwork.sidecar.EvsLeaseRequest
+	(*EvsPathMapRequest)(nil),        // 73: urnetwork.sidecar.EvsPathMapRequest
+	(*EvsPathEpochBlockRequest)(nil), // 74: urnetwork.sidecar.EvsPathEpochBlockRequest
+	(*EvsSubscriptionRequest)(nil),   // 75: urnetwork.sidecar.EvsSubscriptionRequest
+	(*EvsSubscription)(nil),          // 76: urnetwork.sidecar.EvsSubscription
+	(*EvsSubscriptionsReply)(nil),    // 77: urnetwork.sidecar.EvsSubscriptionsReply
+	(*EvsPushReply)(nil),             // 78: urnetwork.sidecar.EvsPushReply
+	(*EvsRefusalReply)(nil),          // 79: urnetwork.sidecar.EvsRefusalReply
+	(*EvsQuotaRefusal)(nil),          // 80: urnetwork.sidecar.EvsQuotaRefusal
+	(*EvsDepositHead)(nil),           // 81: urnetwork.sidecar.EvsDepositHead
+	(*EvsReadRequest)(nil),           // 82: urnetwork.sidecar.EvsReadRequest
+	(*EvsReadPath)(nil),              // 83: urnetwork.sidecar.EvsReadPath
+	(*EvsReadRange)(nil),             // 84: urnetwork.sidecar.EvsReadRange
+	(*EvsReadMap)(nil),               // 85: urnetwork.sidecar.EvsReadMap
+	(*EvsReadPush)(nil),              // 86: urnetwork.sidecar.EvsReadPush
+	(*EvsReadRef)(nil),               // 87: urnetwork.sidecar.EvsReadRef
+	(*EvsReadFrame)(nil),             // 88: urnetwork.sidecar.EvsReadFrame
+	(*EvsHeadSummary)(nil),           // 89: urnetwork.sidecar.EvsHeadSummary
+	(*EvsReadStatement)(nil),         // 90: urnetwork.sidecar.EvsReadStatement
+	(*EvsReadPathReply)(nil),         // 91: urnetwork.sidecar.EvsReadPathReply
+	(*EvsDeltaProof)(nil),            // 92: urnetwork.sidecar.EvsDeltaProof
+	(*EvsMerkleProof)(nil),           // 93: urnetwork.sidecar.EvsMerkleProof
+	(*EvsAbsenceProof)(nil),          // 94: urnetwork.sidecar.EvsAbsenceProof
+	(*EvsReadObject)(nil),            // 95: urnetwork.sidecar.EvsReadObject
+	(*EvsRefsReply)(nil),             // 96: urnetwork.sidecar.EvsRefsReply
+	(*EvsLogReply)(nil),              // 97: urnetwork.sidecar.EvsLogReply
+	(*EvsPurgeList)(nil),             // 98: urnetwork.sidecar.EvsPurgeList
+	(*EvsPurgeCandidate)(nil),        // 99: urnetwork.sidecar.EvsPurgeCandidate
+	(*EvsDropStatus)(nil),            // 100: urnetwork.sidecar.EvsDropStatus
+	(*EvsDropsReply)(nil),            // 101: urnetwork.sidecar.EvsDropsReply
+	(*EvsDropPreviewRequest)(nil),    // 102: urnetwork.sidecar.EvsDropPreviewRequest
+	(*EvsDropPreviewReply)(nil),      // 103: urnetwork.sidecar.EvsDropPreviewReply
+	(*EvsDropPreviewPath)(nil),       // 104: urnetwork.sidecar.EvsDropPreviewPath
+	(*bridge.AuthPin)(nil),           // 105: urnetwork.sidecar.AuthPin
+	(RepoKind)(0),                    // 106: urnetwork.sidecar.RepoKind
+	(*GroupHead)(nil),                // 107: urnetwork.sidecar.GroupHead
 }
 var file_protocol_evs_proto_depIdxs = []int32{
 	26,  // 0: urnetwork.sidecar.EvsPush.changes:type_name -> urnetwork.sidecar.EvsChange
-	103, // 1: urnetwork.sidecar.EvsPush.auth:type_name -> urnetwork.sidecar.AuthPin
+	105, // 1: urnetwork.sidecar.EvsPush.auth:type_name -> urnetwork.sidecar.AuthPin
 	25,  // 2: urnetwork.sidecar.EvsPush.changed_prefixes:type_name -> urnetwork.sidecar.EvsTokenPath
 	26,  // 3: urnetwork.sidecar.EvsPushPart.changes:type_name -> urnetwork.sidecar.EvsChange
 	31,  // 4: urnetwork.sidecar.EvsEntryVersion.chain:type_name -> urnetwork.sidecar.EvsLocator
@@ -8863,12 +9047,12 @@ var file_protocol_evs_proto_depIdxs = []int32{
 	12,  // 14: urnetwork.sidecar.EvsPidxRecord.type:type_name -> urnetwork.sidecar.EvsBatchRecordType
 	40,  // 15: urnetwork.sidecar.EvsPidxRecord.place:type_name -> urnetwork.sidecar.EvsPlace
 	45,  // 16: urnetwork.sidecar.EvsHead.base:type_name -> urnetwork.sidecar.EvsOverlay
-	103, // 17: urnetwork.sidecar.EvsHead.auth:type_name -> urnetwork.sidecar.AuthPin
+	105, // 17: urnetwork.sidecar.EvsHead.auth:type_name -> urnetwork.sidecar.AuthPin
 	47,  // 18: urnetwork.sidecar.EvsHead.path_epoch:type_name -> urnetwork.sidecar.EvsPathEpoch
 	46,  // 19: urnetwork.sidecar.EvsHead.lease:type_name -> urnetwork.sidecar.EvsSealLease
 	49,  // 20: urnetwork.sidecar.EvsHead.collect:type_name -> urnetwork.sidecar.EvsCollect
 	48,  // 21: urnetwork.sidecar.EvsPathEpoch.sources:type_name -> urnetwork.sidecar.EvsEpochSource
-	104, // 22: urnetwork.sidecar.EvsRepoObject.kind:type_name -> urnetwork.sidecar.RepoKind
+	106, // 22: urnetwork.sidecar.EvsRepoObject.kind:type_name -> urnetwork.sidecar.RepoKind
 	15,  // 23: urnetwork.sidecar.EvsRepoObject.state:type_name -> urnetwork.sidecar.EvsRepoState
 	54,  // 24: urnetwork.sidecar.EvsSlotObject.keys:type_name -> urnetwork.sidecar.EvsSlotKey
 	56,  // 25: urnetwork.sidecar.EvsIndexEntry.versions:type_name -> urnetwork.sidecar.EvsIndexVersion
@@ -8876,7 +9060,7 @@ var file_protocol_evs_proto_depIdxs = []int32{
 	57,  // 27: urnetwork.sidecar.EvsIndexEntry.marker:type_name -> urnetwork.sidecar.EvsRemovalMarker
 	58,  // 28: urnetwork.sidecar.EvsIndexEntry.drop_mark:type_name -> urnetwork.sidecar.EvsDropMark
 	10,  // 29: urnetwork.sidecar.EvsSealedFields.oid_kind:type_name -> urnetwork.sidecar.EvsOidKind
-	105, // 30: urnetwork.sidecar.EvsSealedMetadata.group:type_name -> urnetwork.sidecar.GroupHead
+	107, // 30: urnetwork.sidecar.EvsSealedMetadata.group:type_name -> urnetwork.sidecar.GroupHead
 	65,  // 31: urnetwork.sidecar.EvsSealedMetadata.provenance:type_name -> urnetwork.sidecar.EvsProvenance
 	66,  // 32: urnetwork.sidecar.EvsSealedMetadata.commits:type_name -> urnetwork.sidecar.EvsSealedCommit
 	62,  // 33: urnetwork.sidecar.EvsSealedMetadata.git:type_name -> urnetwork.sidecar.EvsGitUpdate
@@ -8892,55 +9076,59 @@ var file_protocol_evs_proto_depIdxs = []int32{
 	39,  // 43: urnetwork.sidecar.EvsPartRequest.receipts:type_name -> urnetwork.sidecar.EvsUploadReceipt
 	25,  // 44: urnetwork.sidecar.EvsSubscriptionRequest.prefixes:type_name -> urnetwork.sidecar.EvsTokenPath
 	25,  // 45: urnetwork.sidecar.EvsSubscription.prefix:type_name -> urnetwork.sidecar.EvsTokenPath
-	75,  // 46: urnetwork.sidecar.EvsSubscriptionsReply.subscriptions:type_name -> urnetwork.sidecar.EvsSubscription
+	76,  // 46: urnetwork.sidecar.EvsSubscriptionsReply.subscriptions:type_name -> urnetwork.sidecar.EvsSubscription
 	40,  // 47: urnetwork.sidecar.EvsPushReply.place:type_name -> urnetwork.sidecar.EvsPlace
-	80,  // 48: urnetwork.sidecar.EvsPushReply.deposit_head:type_name -> urnetwork.sidecar.EvsDepositHead
+	81,  // 48: urnetwork.sidecar.EvsPushReply.deposit_head:type_name -> urnetwork.sidecar.EvsDepositHead
 	16,  // 49: urnetwork.sidecar.EvsRefusalReply.code:type_name -> urnetwork.sidecar.EvsRefusalCode
 	25,  // 50: urnetwork.sidecar.EvsRefusalReply.paths:type_name -> urnetwork.sidecar.EvsTokenPath
 	17,  // 51: urnetwork.sidecar.EvsRefusalReply.outcome:type_name -> urnetwork.sidecar.EvsPushOutcome
-	79,  // 52: urnetwork.sidecar.EvsRefusalReply.quota:type_name -> urnetwork.sidecar.EvsQuotaRefusal
-	80,  // 53: urnetwork.sidecar.EvsRefusalReply.deposit_head:type_name -> urnetwork.sidecar.EvsDepositHead
-	82,  // 54: urnetwork.sidecar.EvsReadRequest.paths:type_name -> urnetwork.sidecar.EvsReadPath
-	83,  // 55: urnetwork.sidecar.EvsReadRequest.ranges:type_name -> urnetwork.sidecar.EvsReadRange
-	84,  // 56: urnetwork.sidecar.EvsReadRequest.maps:type_name -> urnetwork.sidecar.EvsReadMap
-	85,  // 57: urnetwork.sidecar.EvsReadRequest.pushes:type_name -> urnetwork.sidecar.EvsReadPush
-	86,  // 58: urnetwork.sidecar.EvsReadRequest.refs:type_name -> urnetwork.sidecar.EvsReadRef
+	80,  // 52: urnetwork.sidecar.EvsRefusalReply.quota:type_name -> urnetwork.sidecar.EvsQuotaRefusal
+	81,  // 53: urnetwork.sidecar.EvsRefusalReply.deposit_head:type_name -> urnetwork.sidecar.EvsDepositHead
+	83,  // 54: urnetwork.sidecar.EvsReadRequest.paths:type_name -> urnetwork.sidecar.EvsReadPath
+	84,  // 55: urnetwork.sidecar.EvsReadRequest.ranges:type_name -> urnetwork.sidecar.EvsReadRange
+	85,  // 56: urnetwork.sidecar.EvsReadRequest.maps:type_name -> urnetwork.sidecar.EvsReadMap
+	86,  // 57: urnetwork.sidecar.EvsReadRequest.pushes:type_name -> urnetwork.sidecar.EvsReadPush
+	87,  // 58: urnetwork.sidecar.EvsReadRequest.refs:type_name -> urnetwork.sidecar.EvsReadRef
 	34,  // 59: urnetwork.sidecar.EvsReadPath.token_paths:type_name -> urnetwork.sidecar.EvsSourcePath
-	88,  // 60: urnetwork.sidecar.EvsReadFrame.head:type_name -> urnetwork.sidecar.EvsHeadSummary
-	89,  // 61: urnetwork.sidecar.EvsReadFrame.statement:type_name -> urnetwork.sidecar.EvsReadStatement
-	90,  // 62: urnetwork.sidecar.EvsReadFrame.path:type_name -> urnetwork.sidecar.EvsReadPathReply
-	93,  // 63: urnetwork.sidecar.EvsReadFrame.object:type_name -> urnetwork.sidecar.EvsReadObject
-	4,   // 64: urnetwork.sidecar.EvsHeadSummary.ref_kind:type_name -> urnetwork.sidecar.EvsRefKind
-	5,   // 65: urnetwork.sidecar.EvsHeadSummary.ref_mode:type_name -> urnetwork.sidecar.EvsRefMode
-	45,  // 66: urnetwork.sidecar.EvsHeadSummary.base:type_name -> urnetwork.sidecar.EvsOverlay
-	103, // 67: urnetwork.sidecar.EvsHeadSummary.auth:type_name -> urnetwork.sidecar.AuthPin
-	47,  // 68: urnetwork.sidecar.EvsHeadSummary.path_epoch:type_name -> urnetwork.sidecar.EvsPathEpoch
-	56,  // 69: urnetwork.sidecar.EvsReadPathReply.version:type_name -> urnetwork.sidecar.EvsIndexVersion
-	91,  // 70: urnetwork.sidecar.EvsReadPathReply.proof:type_name -> urnetwork.sidecar.EvsMerkleProof
-	92,  // 71: urnetwork.sidecar.EvsReadPathReply.absences:type_name -> urnetwork.sidecar.EvsAbsenceProof
-	57,  // 72: urnetwork.sidecar.EvsReadPathReply.removal:type_name -> urnetwork.sidecar.EvsRemovalMarker
-	45,  // 73: urnetwork.sidecar.EvsReadPathReply.base:type_name -> urnetwork.sidecar.EvsOverlay
-	29,  // 74: urnetwork.sidecar.EvsReadPathReply.names:type_name -> urnetwork.sidecar.EvsNameTable
-	56,  // 75: urnetwork.sidecar.EvsReadPathReply.deltas:type_name -> urnetwork.sidecar.EvsIndexVersion
-	18,  // 76: urnetwork.sidecar.EvsReadPathReply.state:type_name -> urnetwork.sidecar.EvsReadPathState
-	91,  // 77: urnetwork.sidecar.EvsAbsenceProof.below:type_name -> urnetwork.sidecar.EvsMerkleProof
-	91,  // 78: urnetwork.sidecar.EvsAbsenceProof.above:type_name -> urnetwork.sidecar.EvsMerkleProof
-	19,  // 79: urnetwork.sidecar.EvsReadObject.kind:type_name -> urnetwork.sidecar.EvsReadObjectKind
-	88,  // 80: urnetwork.sidecar.EvsRefsReply.refs:type_name -> urnetwork.sidecar.EvsHeadSummary
-	89,  // 81: urnetwork.sidecar.EvsLogReply.statements:type_name -> urnetwork.sidecar.EvsReadStatement
-	97,  // 82: urnetwork.sidecar.EvsPurgeList.candidates:type_name -> urnetwork.sidecar.EvsPurgeCandidate
-	20,  // 83: urnetwork.sidecar.EvsDropStatus.state:type_name -> urnetwork.sidecar.EvsDropState
-	21,  // 84: urnetwork.sidecar.EvsDropStatus.phase:type_name -> urnetwork.sidecar.EvsDropPhase
-	22,  // 85: urnetwork.sidecar.EvsDropStatus.reason:type_name -> urnetwork.sidecar.EvsDropRefusal
-	98,  // 86: urnetwork.sidecar.EvsDropsReply.drops:type_name -> urnetwork.sidecar.EvsDropStatus
-	38,  // 87: urnetwork.sidecar.EvsDropPreviewRequest.paths:type_name -> urnetwork.sidecar.EvsDropPath
-	23,  // 88: urnetwork.sidecar.EvsDropPreviewReply.state:type_name -> urnetwork.sidecar.EvsDropPreviewState
-	102, // 89: urnetwork.sidecar.EvsDropPreviewReply.paths:type_name -> urnetwork.sidecar.EvsDropPreviewPath
-	90,  // [90:90] is the sub-list for method output_type
-	90,  // [90:90] is the sub-list for method input_type
-	90,  // [90:90] is the sub-list for extension type_name
-	90,  // [90:90] is the sub-list for extension extendee
-	0,   // [0:90] is the sub-list for field type_name
+	89,  // 60: urnetwork.sidecar.EvsReadFrame.head:type_name -> urnetwork.sidecar.EvsHeadSummary
+	90,  // 61: urnetwork.sidecar.EvsReadFrame.statement:type_name -> urnetwork.sidecar.EvsReadStatement
+	91,  // 62: urnetwork.sidecar.EvsReadFrame.path:type_name -> urnetwork.sidecar.EvsReadPathReply
+	95,  // 63: urnetwork.sidecar.EvsReadFrame.object:type_name -> urnetwork.sidecar.EvsReadObject
+	79,  // 64: urnetwork.sidecar.EvsReadFrame.error:type_name -> urnetwork.sidecar.EvsRefusalReply
+	4,   // 65: urnetwork.sidecar.EvsHeadSummary.ref_kind:type_name -> urnetwork.sidecar.EvsRefKind
+	5,   // 66: urnetwork.sidecar.EvsHeadSummary.ref_mode:type_name -> urnetwork.sidecar.EvsRefMode
+	45,  // 67: urnetwork.sidecar.EvsHeadSummary.base:type_name -> urnetwork.sidecar.EvsOverlay
+	105, // 68: urnetwork.sidecar.EvsHeadSummary.auth:type_name -> urnetwork.sidecar.AuthPin
+	47,  // 69: urnetwork.sidecar.EvsHeadSummary.path_epoch:type_name -> urnetwork.sidecar.EvsPathEpoch
+	56,  // 70: urnetwork.sidecar.EvsReadPathReply.version:type_name -> urnetwork.sidecar.EvsIndexVersion
+	93,  // 71: urnetwork.sidecar.EvsReadPathReply.proof:type_name -> urnetwork.sidecar.EvsMerkleProof
+	94,  // 72: urnetwork.sidecar.EvsReadPathReply.absences:type_name -> urnetwork.sidecar.EvsAbsenceProof
+	57,  // 73: urnetwork.sidecar.EvsReadPathReply.removal:type_name -> urnetwork.sidecar.EvsRemovalMarker
+	45,  // 74: urnetwork.sidecar.EvsReadPathReply.base:type_name -> urnetwork.sidecar.EvsOverlay
+	29,  // 75: urnetwork.sidecar.EvsReadPathReply.names:type_name -> urnetwork.sidecar.EvsNameTable
+	56,  // 76: urnetwork.sidecar.EvsReadPathReply.deltas:type_name -> urnetwork.sidecar.EvsIndexVersion
+	18,  // 77: urnetwork.sidecar.EvsReadPathReply.state:type_name -> urnetwork.sidecar.EvsReadPathState
+	92,  // 78: urnetwork.sidecar.EvsReadPathReply.delta_proofs:type_name -> urnetwork.sidecar.EvsDeltaProof
+	93,  // 79: urnetwork.sidecar.EvsDeltaProof.proof:type_name -> urnetwork.sidecar.EvsMerkleProof
+	93,  // 80: urnetwork.sidecar.EvsAbsenceProof.below:type_name -> urnetwork.sidecar.EvsMerkleProof
+	93,  // 81: urnetwork.sidecar.EvsAbsenceProof.above:type_name -> urnetwork.sidecar.EvsMerkleProof
+	93,  // 82: urnetwork.sidecar.EvsAbsenceProof.present:type_name -> urnetwork.sidecar.EvsMerkleProof
+	19,  // 83: urnetwork.sidecar.EvsReadObject.kind:type_name -> urnetwork.sidecar.EvsReadObjectKind
+	89,  // 84: urnetwork.sidecar.EvsRefsReply.refs:type_name -> urnetwork.sidecar.EvsHeadSummary
+	90,  // 85: urnetwork.sidecar.EvsLogReply.statements:type_name -> urnetwork.sidecar.EvsReadStatement
+	99,  // 86: urnetwork.sidecar.EvsPurgeList.candidates:type_name -> urnetwork.sidecar.EvsPurgeCandidate
+	20,  // 87: urnetwork.sidecar.EvsDropStatus.state:type_name -> urnetwork.sidecar.EvsDropState
+	21,  // 88: urnetwork.sidecar.EvsDropStatus.phase:type_name -> urnetwork.sidecar.EvsDropPhase
+	22,  // 89: urnetwork.sidecar.EvsDropStatus.reason:type_name -> urnetwork.sidecar.EvsDropRefusal
+	100, // 90: urnetwork.sidecar.EvsDropsReply.drops:type_name -> urnetwork.sidecar.EvsDropStatus
+	38,  // 91: urnetwork.sidecar.EvsDropPreviewRequest.paths:type_name -> urnetwork.sidecar.EvsDropPath
+	23,  // 92: urnetwork.sidecar.EvsDropPreviewReply.state:type_name -> urnetwork.sidecar.EvsDropPreviewState
+	104, // 93: urnetwork.sidecar.EvsDropPreviewReply.paths:type_name -> urnetwork.sidecar.EvsDropPreviewPath
+	94,  // [94:94] is the sub-list for method output_type
+	94,  // [94:94] is the sub-list for method input_type
+	94,  // [94:94] is the sub-list for extension type_name
+	94,  // [94:94] is the sub-list for extension extendee
+	0,   // [0:94] is the sub-list for field type_name
 }
 
 func init() { file_protocol_evs_proto_init() }
@@ -8956,7 +9144,7 @@ func file_protocol_evs_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_evs_proto_rawDesc), len(file_protocol_evs_proto_rawDesc)),
 			NumEnums:      24,
-			NumMessages:   79,
+			NumMessages:   81,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

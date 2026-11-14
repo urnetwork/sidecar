@@ -189,10 +189,11 @@ func resumeTeamDirectory(ctx context.Context, args *TeamDirectoryArgs, repo *pro
 	return result, nil
 }
 
-// Whether the sidecar filed the directory's RepoCreate: the admin row its creation wrote, which names the signer.
+// Whether the sidecar filed the directory's RepoCreate: the admin row its creation wrote, which names the signer, while
+// it stands; a removed creator resumes nothing, as when a removal took its row out (QD-743).
 func teamDirectoryCreatedBy(repo *protocol.AclRepo, sidecarId Id) bool {
 	for _, admin := range repo.GetAdmins() {
-		if bytes.Equal(admin.GetSidecarId(), sidecarId.Bytes()) && bytes.Equal(admin.GetSigner(), sidecarId.Bytes()) {
+		if AclRepoAdminStands(admin) && bytes.Equal(admin.GetSidecarId(), sidecarId.Bytes()) && bytes.Equal(admin.GetSigner(), sidecarId.Bytes()) {
 			return true
 		}
 	}

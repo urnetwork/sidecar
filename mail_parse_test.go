@@ -217,8 +217,9 @@ func TestMailParseHtmlText(t *testing.T) {
 	}
 }
 
-// INDEX-FORMAT.md's HTML rules: a block tag leaves a space and any other nothing; a < that starts no tag is text; a
-// > inside quotes ends no tag; entities decode after the tags are gone; a construct with no end ends the text.
+// INDEX-FORMAT.md's HTML rules, which mailHtmlText reads through Extractor 1's own function (QD-694): a block tag
+// leaves a space and any other nothing; a < that starts no tag is text; a > inside quotes ends no tag; entities decode
+// after the tags are gone; a construct with no end ends the text.
 func TestMailHtmlTextFollowsTheIndexFormat(t *testing.T) {
 	cases := []struct {
 		markup string
@@ -244,8 +245,8 @@ func TestMailHtmlTextFollowsTheIndexFormat(t *testing.T) {
 	}
 }
 
-// Charsets decode through htmlindex, as Extractor 1's do: a multibyte body and word, windows-1252's quotes under
-// their own label and under ISO-8859-1's, which the web reads as windows-1252, and UTF-8 left as it is.
+// Charsets decode through Extractor 1's indexDecodeCharset (QD-694): a multibyte body and word, windows-1252's quotes
+// under their own label and under ISO-8859-1's, which the web reads as windows-1252, and UTF-8 left as it is.
 func TestMailParseCharsetsThroughHtmlindex(t *testing.T) {
 	cases := []struct {
 		headers []string
@@ -265,6 +266,61 @@ func TestMailParseCharsetsThroughHtmlindex(t *testing.T) {
 		parsed := testMailParse(t, testMailMessage(c.headers, c.body))
 		if parsed.Text != c.text || (c.subject != "" && parsed.Subject != c.subject) {
 			t.Errorf("case %d: text %q, subject %q", index, parsed.Text, parsed.Subject)
+		}
+	}
+}
+
+// QD-694: an i/ snippet reads HTML and charsets as search indexes them, by Extractor 1's functions and no copy of
+// them. The three places the mail lane's copies read otherwise (DESIGN-DETAILS 11's list): a damaged reference, which
+// html.UnescapeString left as written and E1-E4 decode; an iso-2022-kr label and a replacement label, which
+// htmlindex's decoder turned into one U+FFFD and C2 leaves as bytes, so the ASCII in them is found.
+func TestMailParseReadsHtmlAndCharsetsAsExtractorOne(t *testing.T) {
+	cases := []struct {
+		name        string
+		contentType string
+		charset     string
+		body        string
+		html        bool
+		text        string
+		snippet     string
+	}{
+		{name: "a damaged reference", contentType: "text/html", body: "<p>tab&#9 x and &#65 x</p>", html: true,
+			text: " tab\t x and A x ", snippet: "tab x and A x"},
+		{name: "a name html.UnescapeString lacks", contentType: "text/html", body: "<b>a &nLt; b</b>", html: true,
+			text: "a \u226a\u20d2 b", snippet: "a \u226a\u20d2 b"},
+		{name: "an iso-2022-kr label", contentType: "text/plain; charset=iso-2022-kr", charset: "iso-2022-kr",
+			body: "code 4821 here", text: "code 4821 here", snippet: "code 4821 here"},
+		{name: "a replacement label", contentType: "text/plain; charset=replacement", charset: "replacement",
+			body: "code 4821 here", text: "code 4821 here", snippet: "code 4821 here"},
+		{name: "an iso-2022-kr html part", contentType: "text/html; charset=ISO-2022-KR", charset: "ISO-2022-KR",
+			body: "<div>code&#9 4821</div>", html: true, text: " code\t 4821 ", snippet: "code 4821"},
+	}
+	for _, c := range cases {
+		parsed := testMailParse(t, testMailMessage([]string{"Content-Type: " + c.contentType}, c.body))
+		if parsed.Text != c.text || parsed.Snippet != c.snippet {
+			t.Errorf("%s: text %q, snippet %q", c.name, parsed.Text, parsed.Snippet)
+		}
+		// and it is the extractor's own reading of the same bytes, cleaned as every text is
+		extracted := indexDecodeCharset(c.charset, []byte(c.body))
+		if c.html {
+			extracted = indexStripHtml(extracted)
+		}
+		if want := mailCleanText(extracted, len(extracted)+1); parsed.Text != want {
+			t.Errorf("%s: text %q, extractor 1 reads %q", c.name, parsed.Text, want)
+		}
+	}
+	// the functions the walk calls are the extractor's, on any input: a sweep of damaged markup and labels
+	markups := []string{"&#9 x", "&#x;", "&#4294967361;", "&nGt;", "a<br/>b", "<script>x</script >y", "<STYLE>x</style\t>y", "<a b='>'>c", "x<!-- y", "<"}
+	for _, markup := range markups {
+		if got, want := mailHtmlText([]byte(markup)), indexStripHtml([]byte(markup)); string(got) != string(want) {
+			t.Errorf("%q: %q, extractor 1 reads %q", markup, got, want)
+		}
+	}
+	labels := []string{"", " utf-8 ", "replacement", "iso-2022-kr", "hz-gb-2312", "\u212aoi8-r", "koi8-r", "x-synthetic-8bit", "windows-1252"}
+	for _, label := range labels {
+		raw := []byte("caf\xe9 \x93q\x94 \x1b$)C")
+		if got, want := mailDecodeCharset(label, raw), indexDecodeCharset(label, raw); string(got) != string(want) {
+			t.Errorf("label %q: %q, extractor 1 reads %q", label, got, want)
 		}
 	}
 }

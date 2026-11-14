@@ -33,7 +33,8 @@ type aclExchangeNet struct {
 
 func newAclExchangeNet(t *testing.T) *aclExchangeNet {
 	net := newTestConfigNet(t)
-	self := &aclExchangeNet{testConfigNet: net, configId: testConfigId("config repo"), notesId: testConfigId("exchange notes"), vaultId: testConfigId("exchange vault")}
+	// the config repo is the Genesis's: no rows hold its row, and the state adds it (QD-719)
+	self := &aclExchangeNet{testConfigNet: net, configId: Id(net.log.State().Genesis().GetConfigRepoId()), notesId: testConfigId("exchange notes"), vaultId: testConfigId("exchange vault")}
 	self.member, self.phone = net.consentedMember("exchange")
 	self.readOnly = net.device("exchange read only", self.member)
 	net.admitDevice(net.owner, self.readOnly, uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY))
@@ -48,7 +49,6 @@ func newAclExchangeNet(t *testing.T) *aclExchangeNet {
 			Actions:  []uint32{uint32(protocol.AclAction_ACL_ACTION_WRITE)},
 		})
 		rows.Repos = append(rows.Repos,
-			&protocol.AclRepo{RepoId: self.configId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG},
 			&protocol.AclRepo{RepoId: self.notesId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL},
 			&protocol.AclRepo{
 				RepoId: self.vaultId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_VAULT, OwnerMemberId: net.ownerMemberId.Bytes(),
@@ -97,6 +97,49 @@ func TestAclExchangeScopesForAMemberDevice(t *testing.T) {
 	}
 	aclExchangeCheck(t, "gkm", net.exchange(t, net.phone, AclTokenAudienceGkm, configRw), []string{configRw}, []string{})
 	aclExchangeCheck(t, "a config writer at evs", net.exchange(t, net.owner, AclTokenAudienceEvs, configRw), []string{configRw}, []string{})
+}
+
+// QD-719 on TEAM's log: the rows hold no AclRepo for the config repo, a RepoCreate of it being refused and base 1's
+// compile empty, and the state's own row answers the exchange: every admitted sidecar's r, a config writer's rw at evs,
+// a member device's rw at gkm, and §7.9's bootstrap admin for the Genesis's owner sidecar alone, at both audiences.
+func TestAclExchangeScopesReadTheConfigRepoFromTheGenesis(t *testing.T) {
+	net := newAclExchangeNet(t)
+	state := net.log.State()
+	acl, err := state.Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, repo := range acl.Rows().GetRepos() {
+		if Id(repo.GetRepoId()) == net.configId || repo.GetKind() == protocol.RepoKind_REPO_KIND_CONFIG {
+			t.Fatalf("the rows hold a config row: %v", repo)
+		}
+	}
+	if row := state.Repo(net.configId); row.GetKind() != protocol.RepoKind_REPO_KIND_CONFIG || len(row.GetAdmins()) != 0 {
+		t.Fatalf("the state's config row: %v", row)
+	}
+	create := &protocol.RepoCreate{Header: net.header(), RepoId: net.configId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL}
+	if verdict := net.post(net.owner, bridge.SignedType_SIGNED_REPO_CREATE, create); verdict.Accepted() {
+		t.Fatal("a RepoCreate of the config repo landed")
+	}
+
+	secondOwnerDevice := net.device("exchange owner phone", net.ownerMemberId)
+	net.admitDevice(net.owner, secondOwnerDevice, 0)
+	if !net.log.State().IsConfigWriter(secondOwnerDevice.sidecarId) {
+		t.Fatal("the owner's second device writes no config head")
+	}
+	configR, configRw, configAdmin := aclExchangeScope(net.configId, "r"), aclExchangeScope(net.configId, "rw"), aclExchangeScope(net.configId, "admin")
+	all := []string{configR, configRw, configAdmin}
+	for _, audience := range []AclTokenAudience{AclTokenAudienceEvs, AclTokenAudienceGkm} {
+		aclExchangeCheck(t, fmt.Sprintf("the bootstrap sidecar at %d", audience), net.exchange(t, net.owner, audience, all...), all, []string{})
+		aclExchangeCheck(t, fmt.Sprintf("another config writer at %d", audience), net.exchange(t, secondOwnerDevice, audience, all...),
+			[]string{configR, configRw}, []string{configAdmin})
+		aclExchangeCheck(t, fmt.Sprintf("a read_only device at %d", audience), net.exchange(t, net.readOnly, audience, all...),
+			[]string{configR}, []string{configRw, configAdmin})
+		aclExchangeCheck(t, fmt.Sprintf("an ephemeral device at %d", audience), net.exchange(t, net.ephemeral, audience, all...),
+			[]string{configR}, []string{configRw, configAdmin})
+	}
+	aclExchangeCheck(t, "a member device at evs", net.exchange(t, net.phone, AclTokenAudienceEvs, all...), []string{configR}, []string{configRw, configAdmin})
+	aclExchangeCheck(t, "a member device at gkm", net.exchange(t, net.phone, AclTokenAudienceGkm, all...), []string{configR, configRw}, []string{configAdmin})
 }
 
 // FS-19's scope rows: a read_only sidecar gets only r and the receipt deposit, an ephemeral one no config rw at either

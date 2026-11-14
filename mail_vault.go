@@ -39,10 +39,10 @@
 // The note an ERASE of this file carries (the caller's part of evs_erase.go's note) is the erased entry's path, one
 // per line: each path whose every key the ERASE destroys, so a reader tells a vault erasure from mail's by the path.
 //
-// mailVaultEvsStore is the store over the mailbox's EvsRepo. It writes, where mailEvsStore holds every write (question
-// mail-m7-06-evs-path-precondition): an update names evs's EvsPathWrite.IfVersion, the CAS from the caller's read to
-// the commit, and a creation is of a path whose last name is an id its writer drew at random, which no other writer
-// creates, read first and created only while it stands absent.
+// mailVaultEvsStore is the store over the mailbox's EvsRepo. Its writes are mailEvsStore's (QD-721, question
+// mail-m7-06-evs-path-precondition): each path names evs's EvsPathWrite.IfVersion, the CAS from the caller's read to
+// the commit, an update on the version read and a creation on 0, created only while the path stands absent; a
+// removal is held to the version it removes the same way.
 //
 // On every leg but the extension's: a page Worker reads its owner's entries as a phone does. MailVault is safe for
 // concurrent use.
@@ -193,7 +193,7 @@ func NewMailVault(args *MailVaultArgs) (*MailVault, error) {
 	if settings == nil {
 		settings = DefaultMailVaultSettings()
 	}
-	store := &mailVaultEvsStore{mailEvsStore: newMailEvsStore(args.Repo, nil), settings: settings}
+	store := &mailVaultEvsStore{mailEvsStore: newMailEvsStore(args.Repo, nil, nil)}
 	return newMailVault(store, args.OwnerMemberId, args.SidecarId, args.Authority, args.Clock, args.Log, settings), nil
 }
 
@@ -918,35 +918,6 @@ func mailVaultHookSecrets(entry *protocol.VaultEntry) {
 // The vault's store over the mailbox's EvsRepo: see the file header. Safe for concurrent use.
 type mailVaultEvsStore struct {
 	*mailEvsStore
-	settings *MailVaultSettings
-}
-
-// Writes every path in one push through evs, each held to its IfVersion: an update by EvsPathWrite.IfVersion, a
-// creation read first and created only while it stands absent (the file header).
-func (self *mailVaultEvsStore) Write(ctx context.Context, writes []*mailStoreWrite) ([]uint64, error) {
-	paths := []string{}
-	pathWrites := []*EvsPathWrite{}
-	for _, write := range writes {
-		paths = append(paths, write.Path)
-		if write.IfVersion == 0 {
-			_, _, err := self.mailEvsStore.Read(ctx, write.Path, max(1, self.settings.EntryMaxByteCount))
-			switch {
-			case err == nil, errors.Is(err, ErrMailStoreTooLarge):
-				return nil, &MailStoreConflictError{Paths: []string{write.Path}}
-			case !errors.Is(err, ErrEvsPathAbsent):
-				return nil, err
-			}
-		}
-		pathWrites = append(pathWrites, &EvsPathWrite{Path: write.Path, Content: bytes.NewReader(write.Content), IfVersion: write.IfVersion})
-	}
-	result, err := self.repo.WritePaths(ctx, &EvsWritePathsArgs{RefName: self.refName, Writes: pathWrites})
-	if errors.Is(err, ErrEvsPathMoved) || evsCreationConflict(err) {
-		return nil, &MailStoreConflictError{Paths: paths}
-	}
-	if err != nil {
-		return nil, err
-	}
-	return result.PathVersions, nil
 }
 
 // History's walk, page after page of HistoryVersionCount, to the path's first version, each version below the one
@@ -986,7 +957,7 @@ func (self *mailVaultEvsStore) Versions(ctx context.Context, path string) ([]*Ev
 
 // A removal through evs, held to ifVersion.
 func (self *mailVaultEvsStore) Remove(ctx context.Context, path string, ifVersion uint64) error {
-	_, err := self.repo.WritePaths(ctx, &EvsWritePathsArgs{RefName: self.refName, Writes: []*EvsPathWrite{{Path: path, Remove: true, IfVersion: ifVersion}}})
+	_, err := self.repo.WritePaths(ctx, &EvsWritePathsArgs{RefName: self.refName, Writes: []*EvsPathWrite{{Path: path, Remove: true, IfVersion: &ifVersion}}})
 	if errors.Is(err, ErrEvsPathMoved) || evsCreationConflict(err) {
 		return &MailStoreConflictError{Paths: []string{path}}
 	}

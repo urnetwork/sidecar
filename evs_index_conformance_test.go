@@ -205,7 +205,7 @@ func testConformanceDifferences(t testing.TB, vector *testConformanceVector, doc
 		if keys := len(indexTrigrams(text.Bytes())); keys != want.Keys {
 			differences = append(differences, fmt.Sprintf("document %d holds %d keys, want %d", index, keys, want.Keys))
 		}
-		prepared, err := document.prepare(normalizer, false, Id{})
+		prepared, err := document.prepare(normalizer, false, Id{}, DefaultIndexFormatSettings())
 		if err != nil {
 			t.Fatal(err)
 		}

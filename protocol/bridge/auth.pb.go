@@ -626,8 +626,15 @@ type ProjectionHeader struct {
 	RowsByteCount    uint32 `protobuf:"varint,8,opt,name=rows_byte_count,json=rowsByteCount,proto3" json:"rows_byte_count,omitempty"` // ProjectionRows, <= 4 MiB (§8.8)
 	Threshold        uint32 `protobuf:"varint,9,opt,name=threshold,proto3" json:"threshold,omitempty"`
 	TailVerdicts     []byte `protobuf:"bytes,10,opt,name=tail_verdicts,json=tailVerdicts,proto3" json:"tail_verdicts,omitempty"` // DESIGN-DETAILS 5.2.2: 2 bits per entry among folded_through+1..version-1,
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	//   in position order: entry folded_through+1+j is bits 2j and 2j+1 of byte
+	//   j/4, bit 0 the byte's least significant; 0 refused or a BASE, 1 took
+	//   effect, 2 took effect and completed a proposal (an AuthorityProposal at
+	//   k = 1 or the k-th AuthorityCosign only), 3 never; exactly
+	//   ceil(2*(version-1-folded_through)/8) bytes, padding bits 0; empty when
+	//   nothing is unfolded
+	ShrunkRepoIds [][]byte `protobuf:"bytes,11,rep,name=shrunk_repo_ids,json=shrunkRepoIds,proto3" json:"shrunk_repo_ids,omitempty"` // QD-746: the repos whose key holders this base's own change shrinks,
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProjectionHeader) Reset() {
@@ -726,6 +733,13 @@ func (x *ProjectionHeader) GetThreshold() uint32 {
 func (x *ProjectionHeader) GetTailVerdicts() []byte {
 	if x != nil {
 		return x.TailVerdicts
+	}
+	return nil
+}
+
+func (x *ProjectionHeader) GetShrunkRepoIds() [][]byte {
+	if x != nil {
+		return x.ShrunkRepoIds
 	}
 	return nil
 }
@@ -2629,7 +2643,7 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\x04body\x18\x06 \x01(\fR\x04body\"9\n" +
 	"\aAuthPin\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x14\n" +
-	"\x05chain\x18\x02 \x01(\fR\x05chain\"\xf2\x02\n" +
+	"\x05chain\x18\x02 \x01(\fR\x05chain\"\x9a\x03\n" +
 	"\x10ProjectionHeader\x12\x1d\n" +
 	"\n" +
 	"network_id\x18\x01 \x01(\fR\tnetworkId\x12\x18\n" +
@@ -2644,7 +2658,8 @@ const file_protocol_bridge_auth_proto_rawDesc = "" +
 	"\x0frows_byte_count\x18\b \x01(\rR\rrowsByteCount\x12\x1c\n" +
 	"\tthreshold\x18\t \x01(\rR\tthreshold\x12#\n" +
 	"\rtail_verdicts\x18\n" +
-	" \x01(\fR\ftailVerdicts\"\x89\x04\n" +
+	" \x01(\fR\ftailVerdicts\x12&\n" +
+	"\x0fshrunk_repo_ids\x18\v \x03(\fR\rshrunkRepoIds\"\x89\x04\n" +
 	"\x0eProjectionRows\x126\n" +
 	"\amembers\x18\x01 \x03(\v2\x1c.urnetwork.sidecar.MemberRowR\amembers\x129\n" +
 	"\bsidecars\x18\x02 \x03(\v2\x1d.urnetwork.sidecar.SidecarRowR\bsidecars\x12B\n" +

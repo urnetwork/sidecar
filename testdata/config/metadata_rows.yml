@@ -26,6 +26,7 @@ ProjectionHeader.folded_through: {number: 4, type: uint64, row: api-7, sees: "fo
 ProjectionHeader.config_head_sha256: {number: 6, type: bytes, row: api-7, sees: "config head hash"}
 ProjectionHeader.rows_sha256: {number: 7, type: bytes, row: api-7, sees: "rows hash"}
 ProjectionHeader.threshold: {number: 9, type: uint32, row: api-7, sees: "threshold"}
+ProjectionHeader.shrunk_repo_ids: {number: 11, type: repeated bytes, row: api-7, sees: "the repos whose key holders the base's own config head change shrinks"}
 
 ProjectionRows.members: {number: 1, type: repeated MemberRow, row: api-7, sees: "members with roles"}
 ProjectionRows.sidecars: {number: 2, type: repeated SidecarRow, row: api-7, sees: "sidecar admissions with identity keys"}

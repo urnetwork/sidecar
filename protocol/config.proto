@@ -165,7 +165,7 @@ message AuthKeyBundle {
   uint32  version = 1;                 // 1
   bytes   genesis_sha256 = 2;          // A_0 = SHA-256(Signed Genesis)
   AuthPin head = 3;                    // the log position the creating device stood at (§7.9)
-  bytes   delegation_id = 4;
+  bytes   delegation_id = 4;          // 32 B: SHA-256(Signed Delegation), §10.5's d (QD-731)
   bytes   delegation_signing_seed = 5; // 32 B: the Delegation's Ed25519 key, which signs SidecarAdmit
   bytes   delegation_reader_seed = 6;  // 32 B: the Delegation's X-Wing reader key (§10.5)
   repeated bytes tag_ids = 7;          // the Delegation's keyed tag ids, 16 B each, never names

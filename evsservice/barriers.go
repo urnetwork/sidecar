@@ -88,12 +88,20 @@ const (
 	// Around step 4's reads: the head, then the one round after it.
 	BarrierPushStep4Before = "evs.push.step4.before"
 	BarrierPushStep4After  = "evs.push.step4.after"
-	// Around step 6: the record's batch write, a page-out and the new slots, before step 7 may issue.
+	// Around step 6: the new slots, then the record's batch write (QD-806), before step 7 may issue.
 	BarrierPushStep6Before = "evs.push.step6.before"
 	BarrierPushStep6After  = "evs.push.step6.after"
 	// Around one new slot's If-None-Match at step 6.
 	BarrierPushSlotPutBefore = "evs.push.slot_put.before"
 	BarrierPushSlotPutAfter  = "evs.push.slot_put.after"
+	// Around the record's append at step 6, after the slot round (QD-806): an attempt held at .before has its new
+	// slots stored and no record naming them.
+	BarrierPushRecordBefore = "evs.push.record.before"
+	BarrierPushRecordAfter  = "evs.push.record.after"
+	// Around a takeover's DELETE of the object its refused statement left, settled and naming its LastModified
+	// (DESIGN-DETAILS 14.2.4): two retokens of one statement are held here.
+	BarrierPushSlotTakeBefore = "evs.push.slot_take.before"
+	BarrierPushSlotTakeAfter  = "evs.push.slot_take.after"
 	// Around the refuse row's recording CAS: the push's refusal fence.
 	BarrierPushRefuseBefore = "evs.push.refuse.before"
 	BarrierPushRefuseAfter  = "evs.push.refuse.after"
@@ -175,6 +183,12 @@ const (
 	// Around each batch's DELETE, keyed by the batch.
 	BarrierEvacuateBatchDeleteBefore = "evs.evacuate.batch_delete.before"
 	BarrierEvacuateBatchDeleteAfter  = "evs.evacuate.batch_delete.after"
+	// Around the HEAD of a slot a dead record lists, and around its DELETE naming the LastModified that HEAD read
+	// (DESIGN-DETAILS 14.2.5), keyed by <repo>:<slot>: a run stalled between the two is held here.
+	BarrierEvacuateSlotHeadBefore   = "evs.evacuate.slot_head.before"
+	BarrierEvacuateSlotHeadAfter    = "evs.evacuate.slot_head.after"
+	BarrierEvacuateSlotDeleteBefore = "evs.evacuate.slot_delete.before"
+	BarrierEvacuateSlotDeleteAfter  = "evs.evacuate.slot_delete.after"
 )
 
 // EVSB-M2-12 and EVSB-M2-13: the nightly pass and orphan GC by the evacuation horizon (DESIGN-DETAILS 2.2.4). The
@@ -224,6 +238,19 @@ const (
 	BarrierSweepDeleteAfter  = "evs.sweep.delete.after"
 )
 
+// EVSB-M2-20: POST .../reseed (§11.13's re-seed row; QD-725). A re-seeded push runs the push route's steps and is held
+// at their barriers, and a restorable repo's move to deleted at the repo CAS's.
+const (
+	// Around a re-seeded slot's If-None-Match, keyed by <repo>:<slot>, after the route read the ERASEs evs holds: an
+	// ERASE that commits while the create is held finds no slot to rewrite.
+	BarrierReseedSlotPutBefore = "evs.reseed.slot_put.before"
+	BarrierReseedSlotPutAfter  = "evs.reseed.slot_put.after"
+	// Around reseed/<repo>/<ref>'s write, the create or the replacement of an earlier statement, keyed by
+	// <repo>:<ref>, after the route read the head the statement names.
+	BarrierReseedStatementPutBefore = "evs.reseed.statement_put.before"
+	BarrierReseedStatementPutAfter  = "evs.reseed.statement_put.after"
+)
+
 // A repo's barrier key.
 func barrierRepoKey(repoId sidecar.Id) string {
 	return sidecar.EvsKeyId(repoId)
@@ -237,6 +264,11 @@ func barrierRefKey(repoId sidecar.Id, refId sidecar.Id) string {
 // A segment's barrier key: <repo>:<segment id in hex>.
 func barrierSegmentKey(repoId sidecar.Id, segmentId []byte) string {
 	return sidecar.EvsKeyId(repoId) + ":" + hex.EncodeToString(segmentId)
+}
+
+// A slot's barrier key: <repo>:<slot>.
+func barrierSlotKey(repoId sidecar.Id, slotId sidecar.Id) string {
+	return sidecar.EvsKeyId(repoId) + ":" + sidecar.EvsKeyId(slotId)
 }
 
 // A batch's barrier key: <minute>-<instance>-<seq> in hex, unique as its key is.

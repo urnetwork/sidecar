@@ -15,10 +15,11 @@
 // again in epoch 3, and once evs's copy into 3 has drained source 2 the reader reads every file and lists the
 // directory, as it does after epoch 2's copy.
 //
-// Fs4BatchedEpochReadBeforeCopy, a clause no test runs, reads before the copy into 3: the reader's read of d/n3.txt,
-// created in epoch 2 by a push of generation 3 while the mapper's push was held and carried into epoch 3 by the
-// PATH_EPOCH's tail, still unfolded, with the head at epoch 3 over source 2, fails with ErrEvsSealInvalid ("the seal
-// does not open"), where the same read after the copy verifies (question evs1-m2-41-tail-creation-read).
+// Fs4BatchedEpochReadBeforeCopy reads before the copy into 3 as well as after it (QD-666; question
+// evs1-m2-41-tail-creation-read): the reader's reads of d/n3.txt and d/n4.txt, created in epoch 2 by pushes of
+// generation 3 while the mapper's pushes were held and carried into epoch 3 by the PATH_EPOCH's tail, with the head
+// at epoch 3 over source 2, verify through the source, each sealed name under the epoch its statement names and each
+// sealed record under the generation it names, as the same reads do once the copy has run.
 //
 // The holds are evs1's arrivals at evs.push.step6.before, which each push attempt reaches once, writerA's alone going
 // to evs1: its two writes before each crossing and each of the mapper's pushes, a refused push's rerun and its

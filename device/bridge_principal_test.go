@@ -72,7 +72,7 @@ func principalTestSigned(t *testing.T, delegation *bridge.WindowDelegation) []by
 			Signature: ed25519.Sign(key, bridge.SignedBytes(purpose, signedType, body)),
 			Type:      uint32(signedType),
 		}, nil
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,8 +5,8 @@
 // in order:
 //
 //	1  421 unless its Host, :authority and target are the SNI (tls_http_origin.go)
-//	2  /.well-known/ur/ is the front's: the callback, the link and the notice; anything else under it is 404, and
-//	   none of it reaches the service
+//	2  /.well-known/ur/ is the front's: the callback, members-device's device step, the link and the notice;
+//	   anything else under it is 404, and none of it reaches the service
 //	3  the audience check on the request's counted cookies (tls_audience.go): members without a session reach edge
 //	   login and nothing else, a link without its cookie is refused, public passes
 //	4  the one-time notice on a Community public endpoint, never on the system publish (tls_http_notice.go)
@@ -51,7 +51,7 @@ const (
 	tlsProxyV2FamilyTcp6          = 0x21
 )
 
-// Everything under it is the front's (§13.7): the callback, the link, the notice.
+// Everything under it is the front's (§13.7): the callback, the device step, the link, the notice.
 const tlsHttpFrontPathRoot = "/.well-known/ur"
 
 // The ALPN-negotiated HTTP front of one endpoint.
@@ -177,6 +177,8 @@ func (self *tlsHttpFront) serveFrontPath(w http.ResponseWriter, r *http.Request,
 	switch r.URL.Path {
 	case tlsEdgeLoginCallbackPath:
 		self.front.login.callback(w, r, conn, view)
+	case tlsMembersDevicePath:
+		self.front.device.serve(w, r, conn, view)
 	case tlsLinkPath:
 		self.serveLink(w, r, conn)
 	case tlsNoticePath:

@@ -26,7 +26,7 @@ func (self *evsWorld) otherFolder(budget sidecar.WriteBudget) *Folder {
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	return NewFolder(self.ctx, self.clock, self.host.ClockCheck, self.budgetedBlob, budget, self.heads, NewRecordCache(self.settings),
+	return NewFolder(self.ctx, self.clock, self.host.ClockCheck, self.budgetedBlob, budget, self.heads, NewRecordCache(self.settings), nil,
 		NewRepoCache(self.clock, self.settings), priceTable, self.settings, sidecar.NewNoopLogger())
 }
 
@@ -64,7 +64,7 @@ func (self *evsWorld) listing(path sidecar.EvsTokenPath) *EvsListing {
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	listing, err := Listing(self.ctx, read, head.Head, NewRecordPushSource(NewRecordCache(self.settings), self.cluster, self.repoId, self.refId))
+	listing, err := Listing(self.ctx, read, head.Head, NewRecordPushSource(NewRecordCache(self.settings), nil, self.cluster, self.repoId, self.refId))
 	if err != nil {
 		self.t.Fatal(err)
 	}

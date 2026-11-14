@@ -41,6 +41,20 @@ func (self *BridgeLinkManager) WatchForTest() <-chan struct{} {
 	return passes
 }
 
+// A contract's destination check as the link's window clients run it (connect.ContractDestinationCheckFunction), and
+// false for a link with no build.
+func (self *BridgeLinkManager) DestinationAllowedForTest(link BridgeLinkId, destinationId connect.Id, destinationClientPublicKey []byte) (allowed bool, built bool) {
+	held := (*self.links.Load())[link]
+	if held == nil {
+		return false, false
+	}
+	linkBuilt := held.built.Load()
+	if linkBuilt == nil {
+		return false, false
+	}
+	return linkBuilt.destinationAllowed(destinationId, destinationClientPublicKey), true
+}
+
 // The links open and building now.
 func (self *BridgeLinkManager) CountsForTest() (openCount int, buildingCount int) {
 	return self.counts()

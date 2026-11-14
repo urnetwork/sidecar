@@ -11,14 +11,21 @@
 //     "UR evs 1.0 deposit key" and AAD repo_id || u64be(g). The depositor holds no manifest key, so the deposit's
 //     header, fields and metadata go under K_dep, derived from this key (plan-EVS1-format-bytes#5).
 //
-// A slot/ object is EvsSlotObject: at most 64 keys in ascending key_index, each index drawn once in its slot and
-// never reused, at most 8 KiB, all wrapped one way. An erased key leaves the list and no index shifts, so a record
-// naming (slot_id, key_index) never reaches another key. Slot ids are 16 random bytes drawn per statement, kept by
-// a retry of that statement and drawn again for a rebuilt push (§11.6).
+// A record log's stream push keeps its entries' keys in a slot of record slot rows instead (QD-739): each row is an
+// entry's 32 B key || its 256-bit salt (RECORD.md section 5.2), wrapped under fek_g as a 104 B block, 24 B nonce |
+// 64 B row sealed | 16 B tag, AAD "UR evs 1.0 record slot row" || repo_id || u64be(g). The key and the salt share
+// one block, so the ERASE naming the row destroys both, and the label keeps a row from opening as an object key and
+// a key from opening as a row.
 //
-// evs reads slot objects, to erase keys and check what a push names, and never opens a key: it holds no fek and no
-// drop key (I-1). On every leg. Package-level functions are safe for concurrent use, and an EvsObjectKey, which
-// never changes, is too.
+// A slot/ object is EvsSlotObject: at most EvsFormatSettings.SlotMaxKeyCount keys in ascending key_index, each
+// index drawn once in its slot and never reused, at most SlotMaxByteCount bytes, all of one width: 72 B object keys,
+// 104 B record slot rows or a deposit's HPKE. An erased key leaves the list and no index shifts, so a record naming
+// (slot_id, key_index) never reaches another key. Slot ids are 16 random bytes drawn per statement, kept by a retry
+// of that statement and drawn again for a rebuilt push (§11.6).
+//
+// evs reads slot objects, to erase keys and check what a push names, and never opens a key or a row: it holds no
+// fek and no drop key (I-1). On every leg. Package-level functions are safe for concurrent use, and an
+// EvsObjectKey, which never changes, is too.
 
 package sidecar
 
@@ -37,19 +44,21 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// The layouts of this file.
+// The layouts of this file. Its bounds are EvsFormatSettings'.
 const (
 	// A wrapped-key block: nonce, key and tag.
 	EvsWrappedKeyByteCount = chacha20poly1305.NonceSizeX + evsKeyByteCount + chacha20poly1305.Overhead
+	// A record slot row: an entry's 32 B key || its 32 B salt (RECORD.md section 5.2).
+	evsRecordSlotRowByteCount = evsKeyByteCount + evsKeyByteCount
+	// A record slot row block: nonce, row and tag, 104 B (QD-739).
+	EvsRecordSlotRowWrappedByteCount = chacha20poly1305.NonceSizeX + evsRecordSlotRowByteCount + chacha20poly1305.Overhead
 	// A deposit's key under HPKE-XWing: the encapsulation, then the key and AES-128-GCM's tag.
 	EvsDepositWrappedKeyByteCount = gkmXWingEncapsulationByteCount + evsKeyByteCount + 16
-	// §11.8's slot/ bounds.
-	EvsSlotMaxKeyCount  = 64
-	evsSlotMaxByteCount = 8 * 1024
 
-	evsObjectKeyAadLabel   = "UR evs 1.0 object key"
-	evsDepositKeyHpkeInfo  = "UR evs 1.0 deposit key"
-	evsDepositManifestInfo = "UR evs 1.0 deposit"
+	evsObjectKeyAadLabel     = "UR evs 1.0 object key"
+	evsRecordSlotRowAadLabel = "UR evs 1.0 record slot row"
+	evsDepositKeyHpkeInfo    = "UR evs 1.0 deposit key"
+	evsDepositManifestInfo   = "UR evs 1.0 deposit"
 )
 
 // A record body's key.
@@ -114,6 +123,46 @@ func EvsUnwrapObjectKey(fekKey *EvsFekKey, wrapped []byte) (*EvsObjectKey, error
 	return evsObjectKeyOf(key), nil
 }
 
+// The 104 B record slot row block of row, an entry's key || salt, under fek_g (QD-739). The row is the caller's,
+// hooked where its key and salt were drawn, and stays the caller's.
+func EvsWrapRecordSlotRow(fekKey *EvsFekKey, row []byte) ([]byte, error) {
+	if err := fekKey.checkHeld(); err != nil {
+		return nil, err
+	}
+	if len(row) != evsRecordSlotRowByteCount {
+		return nil, fmt.Errorf("%w: a record slot row of %d bytes", ErrEvsSealInvalid, len(row))
+	}
+	return evsSeal(fekKey.key, row, evsLabeledAad(evsRecordSlotRowAadLabel, fekKey.repoId, fekKey.generation))
+}
+
+// The row, key || salt, a 104 B record slot row block holds under fek_g, hooked; ErrEvsSealInvalid for any other
+// block, a 72 B object key's among them.
+func EvsUnwrapRecordSlotRow(fekKey *EvsFekKey, wrapped []byte) ([]byte, error) {
+	if err := fekKey.checkHeld(); err != nil {
+		return nil, err
+	}
+	if len(wrapped) != EvsRecordSlotRowWrappedByteCount {
+		return nil, fmt.Errorf("%w: a record slot row block of %d bytes", ErrEvsSealInvalid, len(wrapped))
+	}
+	row, err := evsOpen(fekKey.key, wrapped, evsLabeledAad(evsRecordSlotRowAadLabel, fekKey.repoId, fekKey.generation))
+	if err != nil {
+		return nil, err
+	}
+	testHookSecret("record_slot_row", row)
+	return row, nil
+}
+
+// The row a record slot's key holds, under fek of the key's own generation.
+func EvsOpenRecordSlotRow(fekKey *EvsFekKey, slotKey *protocol.EvsSlotKey) ([]byte, error) {
+	if err := fekKey.checkHeld(); err != nil {
+		return nil, err
+	}
+	if slotKey.GetGeneration() != fekKey.generation {
+		return nil, fmt.Errorf("%w: a row of generation %d under fek of %d", ErrEvsKeyMissing, slotKey.GetGeneration(), fekKey.generation)
+	}
+	return EvsUnwrapRecordSlotRow(fekKey, slotKey.GetWrapped())
+}
+
 // A deposit's object key HPKE-XWing to dropPublicKey, generation g's drop key, as its slot holds it.
 func EvsWrapDepositKey(dropPublicKey hpke.PublicKey, repoId Id, generation uint64, objectKey *EvsObjectKey) ([]byte, error) {
 	if err := objectKey.checkHeld(); err != nil {
@@ -169,18 +218,20 @@ func NewEvsDepositManifestKey(repoId Id, generation uint64, objectKey *EvsObject
 	return &EvsManifestKey{repoId: repoId, generation: generation, deposit: true, key: key}, nil
 }
 
-// A slot object's keys held to §11.8: at most 64 in ascending key_index below 64, each with a generation and all
-// wrapped one way, under fek or to a drop key; and the object within 8 KiB.
+// A slot object's keys held to §11.8: at most SlotMaxKeyCount in ascending key_index below it, each with a
+// generation and all of one width, 72 B object keys or 104 B record slot rows under fek, or keys to a drop key; and
+// the object within SlotMaxByteCount. The width is all evs checks of a key: it opens none (I-1).
 func checkEvsSlotObject(slot *protocol.EvsSlotObject, byteCount int) error {
-	if evsSlotMaxByteCount < byteCount {
+	format := DefaultEvsFormatSettings()
+	if format.SlotMaxByteCount < byteCount {
 		return fmt.Errorf("%w: a slot of %d bytes", ErrEvsSealInvalid, byteCount)
 	}
-	if EvsSlotMaxKeyCount < len(slot.GetKeys()) {
+	if format.SlotMaxKeyCount < len(slot.GetKeys()) {
 		return fmt.Errorf("%w: a slot of %d keys", ErrEvsSealInvalid, len(slot.GetKeys()))
 	}
 	wrappedByteCount := 0
 	for i, slotKey := range slot.GetKeys() {
-		if EvsSlotMaxKeyCount <= slotKey.GetKeyIndex() {
+		if uint64(format.SlotMaxKeyCount) <= uint64(slotKey.GetKeyIndex()) {
 			return fmt.Errorf("%w: key index %d", ErrEvsSealInvalid, slotKey.GetKeyIndex())
 		}
 		if 0 < i && slotKey.GetKeyIndex() <= slot.GetKeys()[i-1].GetKeyIndex() {
@@ -190,7 +241,9 @@ func checkEvsSlotObject(slot *protocol.EvsSlotObject, byteCount int) error {
 			return fmt.Errorf("%w: a key of no generation", ErrEvsSealInvalid)
 		}
 		length := len(slotKey.GetWrapped())
-		if length != EvsWrappedKeyByteCount && length != EvsDepositWrappedKeyByteCount {
+		switch length {
+		case EvsWrappedKeyByteCount, EvsRecordSlotRowWrappedByteCount, EvsDepositWrappedKeyByteCount:
+		default:
 			return fmt.Errorf("%w: a wrapped key of %d bytes", ErrEvsSealInvalid, length)
 		}
 		if wrappedByteCount != 0 && length != wrappedByteCount {

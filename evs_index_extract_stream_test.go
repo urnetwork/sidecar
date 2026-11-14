@@ -35,7 +35,7 @@ func testIndexWholeDocuments(t testing.TB, mail bool, path []byte, content []byt
 	normalizer := testIndexNormalizer(t)
 	whole := []*indexStreamDocument{}
 	for _, document := range documents {
-		prepared, err := document.prepare(normalizer, false, Id{})
+		prepared, err := document.prepare(normalizer, false, Id{}, settings)
 		if err != nil {
 			t.Fatal(err)
 		}

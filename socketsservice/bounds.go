@@ -42,6 +42,9 @@ type SocketControlBound struct {
 	stateLock       sync.Mutex
 	clientIdBuckets map[connect.Id]*socketControlBucket
 	lastSweepTime   time.Time
+	// A sidecar client's rate and burst: the settings', until SetRate lays §19.11's sockets_control_qps over them.
+	callsPerSecond int
+	burst          int
 }
 
 // A bound on clock with settings, which the caller has validated.
@@ -51,7 +54,22 @@ func NewSocketControlBound(settings *SocketControlBoundSettings, clock sidecar.C
 		clock:           clock,
 		clientIdBuckets: map[connect.Id]*socketControlBucket{},
 		lastSweepTime:   clock.Now(),
+		callsPerSecond:  settings.CallsPerSecond,
+		burst:           settings.Burst,
 	}
+}
+
+// Lays config/<env>/sidecar.yml's sockets_control_qps over a sidecar client's rate and burst (§19.11), which the
+// host rereads: a bucket refills at the new rate from its next charge, keeping its level up to the new burst. A
+// rate or burst that is not positive changes nothing. An urnetwork-edge client keeps W2's edge pair.
+func (self *SocketControlBound) SetRate(callsPerSecond int, burst int) {
+	if callsPerSecond <= 0 || burst <= 0 {
+		return
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.callsPerSecond = callsPerSecond
+	self.burst = burst
 }
 
 // One token, in level units.
@@ -63,7 +81,7 @@ func (self *SocketControlBound) rateAndCapacity(edge bool) (int64, int64) {
 	if edge {
 		return int64(self.settings.EdgeCallsPerSecond), int64(self.settings.EdgeBurst) * socketControlTokenUnits
 	}
-	return int64(self.settings.CallsPerSecond), int64(self.settings.Burst) * socketControlTokenUnits
+	return int64(self.callsPerSecond), int64(self.burst) * socketControlTokenUnits
 }
 
 // Brings bucket up to now.

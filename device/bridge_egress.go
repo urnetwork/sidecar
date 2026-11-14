@@ -36,6 +36,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"net/netip"
+	"slices"
 	"sync/atomic"
 
 	"github.com/urnetwork/connect"
@@ -107,6 +108,24 @@ func BridgeRuleTag(subjectId connect.Id, ruleId []byte) uint64 {
 	return binary.BigEndian.Uint64(digest[:8])
 }
 
+// The tag of a (subject, rule) pair for the flows a forwarding key admitted (DESIGN-DETAILS 4.2.5): the big-endian
+// uint64 of the first 8 bytes of SHA-256(subject_id || delegation_id || rule_id), delegation_id being the forwarding
+// Delegation's 32 bytes. It is BridgeRuleTag's input with the Delegation between, which is longer than any (subject,
+// rule) pair's, so the two never meet, and a DelegationRevoke or a supersession ends these flows and none the subject's
+// identity key admitted. Allocates nothing for a rule id of up to 32 bytes.
+func BridgeForwardRuleTag(subjectId connect.Id, delegationId [sha256.Size]byte, ruleId []byte) uint64 {
+	if bridgeRuleRuleIdByteCount < len(ruleId) {
+		digest := sha256.Sum256(slices.Concat(subjectId[:], delegationId[:], ruleId))
+		return binary.BigEndian.Uint64(digest[:8])
+	}
+	var buffer [16 + sha256.Size + bridgeRuleRuleIdByteCount]byte
+	copy(buffer[:16], subjectId[:])
+	copy(buffer[16:], delegationId[:])
+	n := copy(buffer[16+sha256.Size:], ruleId)
+	digest := sha256.Sum256(buffer[:16+sha256.Size+n])
+	return binary.BigEndian.Uint64(digest[:8])
+}
+
 // What a policy is built from: what the posture has in force and what the device knows of itself.
 type BridgePolicyInput struct {
 	// §17.8's state in force.
@@ -142,6 +161,9 @@ type BridgeEgressPolicy struct {
 	// does not bind, which §17.9's verify row alarms on
 	principalVerifiedCount atomic.Uint64
 	principalMismatchCount atomic.Uint64
+
+	// which forwarding Delegation's key admitted a principal (bridge_principal.go)
+	forwardPrincipals bridgeForwardPrincipals
 }
 
 var _ connect.EgressHook = (*BridgeEgressPolicy)(nil)
@@ -197,7 +219,11 @@ func (self *BridgeEgressPolicy) ResolveEgress(flow *connect.EgressFlow) connect.
 	if flow == nil {
 		return connect.EgressDecision{Verdict: connect.EgressVerdictDeny, PolicyGeneration: state.generation}
 	}
-	return state.resolve(self.profile, self.settings, flow, self.clock.Now())
+	var forwardDelegationId *[sha256.Size]byte
+	if delegationId, ok := self.forwardPrincipals.delegationId(flow.Principal); ok {
+		forwardDelegationId = &delegationId
+	}
+	return state.resolve(self.profile, self.settings, flow, forwardDelegationId, self.clock.Now())
 }
 
 // The counts VerifyPrincipal keeps, for a status.

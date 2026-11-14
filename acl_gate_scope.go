@@ -92,8 +92,9 @@ func (self *AclState) Admitted(sidecarId Id) bool {
 }
 
 // A repo's newest RepoDelete as a gate holds it (§8.8's AclRepo deletion row), with what §11.12's DELETE writes into
-// repo/: the RepoDelete entry's time and its signer, known only while the gate's log keeps that entry. The row itself
-// carries positions alone (question acl-m2-06-access-log-positions), so past the log's window the deletion is undated.
+// repo/: the RepoDelete entry's time (QD-743) and its signer (QD-798), both of which the row carries, so the deletion
+// is dated and signed on every day of its window from rows alone, whether the gate's log still keeps the entry, no
+// longer keeps it, or never held it, as at a gate that loaded the network at a later base.
 type AclRepoDeletion struct {
 	DeletionId Id
 	// RepoDelete{now}: straight to shredding, never restorable.
@@ -102,15 +103,21 @@ type AclRepoDeletion struct {
 	DeletedAt uint64
 	// A RepoRestore of DeletionId stands.
 	Restored bool
-	// Whether the log keeps the RepoDelete's entry, so TimeMs and SignerSidecarId are known.
+	// Whether the row carries the entry's time, as every row a fold writes does, so TimeMs is known.
 	Dated bool
-	// The entry's time_ms, api's clock when it sequenced it.
+	// The entry's time_ms, api's clock when it sequenced it: the row's deleted_time_ms.
 	TimeMs int64
+	// Whether SignerSidecarId is known: from the entry while the gate's log keeps it, else from the row's signer, which
+	// every row a fold writes carries. False only for a row with no signer whose entry the log does not keep.
+	Signed bool
 	// The sidecar that signed the RepoDelete.
 	SignerSidecarId Id
 }
 
-// The repo's newest RepoDelete in the snapshot, nil when its rows hold no such repo or no RepoDelete of it.
+// The repo's newest RepoDelete in the snapshot, nil when its rows hold no such repo or no RepoDelete of it. Its signer
+// is the entry's while the snapshot's log keeps that entry, and the row's after (QD-798); a row that names no signer,
+// its field empty as no fold leaves it, or names one that is no sidecar id, leaves the deletion unsigned there, which
+// §11.12's DELETE without now refuses.
 func (self *AclGateSnapshot) RepoDeletion(repoId Id) *AclRepoDeletion {
 	if self == nil || self.Acl == nil {
 		return nil
@@ -128,15 +135,23 @@ func (self *AclGateSnapshot) RepoDeletion(repoId Id) *AclRepoDeletion {
 		Now:        row.GetNow(),
 		DeletedAt:  row.GetDeletedAt(),
 		Restored:   row.GetRestoredAt() != 0,
+		Dated:      row.GetDeletedTimeMs() != 0,
+		TimeMs:     row.GetDeletedTimeMs(),
 	}
 	if kept := self.Config.keptEntryAt(row.GetDeletedAt()); kept != nil && kept.statement != nil {
 		for _, signer := range kept.statement.signers {
 			if signer.Kind == ConfigSignerSidecar {
-				deletion.Dated = true
-				deletion.TimeMs = kept.entry.GetTimeMs()
+				deletion.Signed = true
 				deletion.SignerSidecarId = signer.SidecarId
 				break
 			}
+		}
+	}
+	if !deletion.Signed {
+		// the log no longer keeps the entry, or never held it: the row's signer, folded from the same statement
+		if signerId, err := IdFromBytes(row.GetSigner()); err == nil && signerId != (Id{}) {
+			deletion.Signed = true
+			deletion.SignerSidecarId = signerId
 		}
 	}
 	return deletion

@@ -3,7 +3,11 @@
 // EVS1-M2-34's tests of what an update carries (DESIGN-DETAILS 8.2.3, 8.2.5): the tree reader over git cat-file
 // --batch; 8.1's C, a pull of other sidecars' commits that names their ref as its one source and carries only the
 // merge; past 16 sources the seventeenth side carried and held to the new-commit rule; each carried commit sealed with
-// its changes against its first parent; and the new-commit rule's refusals.
+// its changes against its first parent; and the new-commit rule's refusals. And the re-creating push's tainted token
+// paths (8.5; 8.2.4's chain row, amendment 16-D): a tainted path the net change writes is one checkpoint, chunks past
+// 8 MiB included; a rename from a tainted path uploads its blob again; a merged file at a tainted path is a checkpoint
+// and cites no source; a taint of another path epoch refuses before any request; and with no taint the plan is as it
+// was.
 
 package sidecar
 
@@ -15,9 +19,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -874,8 +880,9 @@ func TestEvsLocalPublishJudgesAHeadPastItsBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	// a rekey of a.txt from a head-mode device: version 2, the tip still c1
+	rekeyed := uint64(1)
 	if _, err := publisher.writer.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
-		Path: "a.txt", Content: bytes.NewReader([]byte("a\n")), ForceCheckpoint: true, IfVersion: 1,
+		Path: "a.txt", Content: bytes.NewReader([]byte("a\n")), ForceCheckpoint: true, IfVersion: &rekeyed,
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1130,5 +1137,240 @@ func TestEvsLocalPublishATagOverALongUnheldHistoryGoesInParts(t *testing.T) {
 	}
 	if _, exported := publisher.export("main", "refs/tags/long"); exported.Refs[1].Tip != tip {
 		t.Fatalf("exported %+v", exported.Refs)
+	}
+}
+
+// Whether two chains share a locator: a version citing what another wrote.
+func evsTestChainsShare(chain []*protocol.EvsLocator, other []*protocol.EvsLocator) bool {
+	for _, locator := range chain {
+		for _, otherLocator := range other {
+			if proto.Equal(locator, otherLocator) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The taints every replaying reader records for a version that changed paths, in epoch 1: each token path's key form,
+// the root's empty.
+func (self *evsTestPublisher) taintsOf(paths ...string) []EvsTaintedPath {
+	tainted := []EvsTaintedPath{}
+	for _, path := range paths {
+		tainted = append(tainted, EvsTaintedPath{Epoch: 1, Key: self.writer.world.tokensAt(path, 1).KeyString()})
+	}
+	return tainted
+}
+
+// 8.6's sentence for the fix track (8.2.4's chain row, amendment 16-D): a tainted path the net change writes is one
+// checkpoint of the tree's blob, and past 8 MiB fresh chunks, with nothing of the entry a refused version left there
+// diffed on or kept. a.txt, which the plan would diff on the forged version, is one record; big.bin, whose middle
+// chunk the forged version kept and the new tree holds again, is chunked anew. The writer is stopped by hand, as every
+// reader stops it, and given the taints a reader records, since a device's replay of a file past 8 MiB is not what
+// this test is of.
+func TestEvsLocalPublishWritesATaintedPathAsOneCheckpoint(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	text := strings.Repeat("a line of a.txt that a diff would rest on\n", 64)
+	bigByteCount := 9 * 1024 * 1024
+	c1 := publisher.commit(map[string]string{"a.txt": text, "big.bin": string(evsTestContent("past the chunk bound", bigByteCount))})
+	if _, err := publisher.publish("main", &c1); err != nil {
+		t.Fatal(err)
+	}
+	firstBig := publisher.writer.entry(t, "big.bin")
+	forged, _ := publisher.mount.history.commit(publisher.tree(map[string]string{
+		"a.txt": text + "forged\n", "big.bin": string(evsTestEdited("past the chunk bound", bigByteCount, 100)),
+	}), evsTestId("another client").String()+evsCommitterDomain, c1)
+	if _, err := publisher.publish("main", &forged, func(args *EvsLocalPublishArgs) { args.OwnClient = func(Id) bool { return true } }); err != nil {
+		t.Fatal(err)
+	}
+	forgedText, forgedBig := publisher.writer.entry(t, "a.txt"), publisher.writer.entry(t, "big.bin")
+	if len(forgedBig.GetChain()) != 3 || !proto.Equal(forgedBig.GetChain()[1], firstBig.GetChain()[1]) {
+		// the middle chunk the forged entry cites is one the next tree holds again, which a plan resting on that
+		// entry would keep
+		t.Fatal("the forged version keeps no middle chunk")
+	}
+	ref := publisher.ref("main")
+	ref.tip = &c1
+	publisher.mount.evsTip(ref.refId, c1)
+	if _, err := publisher.publish("main", nil); err != nil {
+		t.Fatal(err)
+	}
+	next := publisher.commit(map[string]string{
+		"a.txt": text + "a change\n", "big.bin": string(evsTestEdited("past the chunk bound", bigByteCount, bigByteCount-100)),
+	}, c1)
+	tainted := publisher.taintsOf("a.txt", "big.bin")
+	if _, err := publisher.publish("main", &next, func(args *EvsLocalPublishArgs) { args.Tainted = tainted }); err != nil {
+		t.Fatal(err)
+	}
+	rewritten := publisher.writer.entry(t, "a.txt")
+	if len(rewritten.GetChain()) != 1 || evsTestChainsShare(rewritten.GetChain(), forgedText.GetChain()) {
+		t.Fatalf("a.txt written as a chain of %d", len(rewritten.GetChain()))
+	}
+	chunked := publisher.writer.entry(t, "big.bin")
+	if len(chunked.GetChain()) != 3 || evsTestChainsShare(chunked.GetChain(), forgedBig.GetChain()) {
+		t.Fatalf("big.bin's %d chunks, one kept from the forged version: %v", len(chunked.GetChain()), evsTestChainsShare(chunked.GetChain(), forgedBig.GetChain()))
+	}
+	content, _, err := publisher.writer.read(t, "big.bin")
+	if err != nil || !bytes.Equal(content, evsTestEdited("past the chunk bound", bigByteCount, bigByteCount-100)) {
+		t.Fatalf("big.bin read back: %v", err)
+	}
+}
+
+// A rename whose removed side is tainted (8.2.4's chain row): the forged version left another blob in old/name.txt's
+// entry, so the created path takes neither its file_id nor its chain, and its blob is uploaded again, where a rename
+// uploads nothing (TestEvsLocalPublishRenameUploadsNothing). Device b applies the push and reads the file back.
+func TestEvsLocalPublishARenameFromATaintedPathUploadsTheBlob(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	big := strings.Repeat("a large file that rides in a segment\n", 1024)
+	c1 := publisher.commit(map[string]string{"old/name.txt": big, "other.txt": "o\n"})
+	if _, err := publisher.publish("main", &c1); err != nil {
+		t.Fatal(err)
+	}
+	device := publisher.stopAndDelete("main", c1, map[string]string{"old/name.txt": big + "forged\n", "other.txt": "o\n"}, nil)
+	forged := publisher.writer.entry(t, "old/name.txt")
+	uploads := len(publisher.writer.server.uploads)
+	c2 := publisher.commit(map[string]string{"new/name.txt": big, "other.txt": "o\n"}, c1)
+	if _, err := publisher.publish("main", &c2, func(args *EvsLocalPublishArgs) { args.Tainted = device.ref("main").Tainted }); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.writer.server.uploads) == uploads {
+		t.Fatal("a rename from a tainted path uploaded nothing")
+	}
+	created := publisher.writer.entry(t, "new/name.txt")
+	if evsTestChainsShare(created.GetChain(), forged.GetChain()) {
+		t.Fatal("the created path cites the chain the forged version wrote")
+	}
+	device.replay("main")
+	if ref := device.ref("main"); ref.StuckAt != 0 || !evsOidEqual(ref.Tip, &c2) || len(ref.Tainted) != 0 {
+		t.Fatalf("device b %+v", ref)
+	}
+	if content := evsTestGit(t, device.mount.BareDir, "cat-file", "-p", hex.EncodeToString(c2[:])+":new/name.txt"); content != big {
+		t.Fatal("the renamed file reads back otherwise")
+	}
+}
+
+// A merged file at a tainted path (8.2.4's chain row): main's re-creation merges feature, whose entries hold both
+// files main gains. mine.txt is cited whole from feature, a reuse item naming it; shared.txt, whose path on main the
+// forged version wrote, is a checkpoint uploaded, with no reuse item. Device b, replaying feature as the source,
+// applies the push.
+func TestEvsLocalPublishAMergedFileAtATaintedPathIsACheckpoint(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	big := strings.Repeat("feature's large file, in a segment\n", 1024)
+	mine := strings.Repeat("feature's own file, in a segment\n", 1024)
+	m1 := publisher.commit(map[string]string{"shared.txt": "shared one\n", "other.txt": "o\n"})
+	if _, err := publisher.publish("main", &m1); err != nil {
+		t.Fatal(err)
+	}
+	f1 := publisher.commit(map[string]string{"shared.txt": big, "other.txt": "o\n", "mine.txt": mine}, m1)
+	if _, err := publisher.publish("feature", &f1); err != nil {
+		t.Fatal(err)
+	}
+	device := publisher.stopAndDelete("main", m1, map[string]string{"shared.txt": "forged\n", "other.txt": "o\n"}, nil)
+	uploads := len(publisher.writer.server.uploads)
+	merge := publisher.commit(map[string]string{"shared.txt": big, "other.txt": "o\n", "mine.txt": mine}, m1, f1)
+	result, err := publisher.publish("main", &merge, func(args *EvsLocalPublishArgs) { args.Tainted = device.ref("main").Tainted })
+	if err != nil {
+		t.Fatal(err)
+	}
+	featureId := publisher.ref("feature").refId
+	if len(result.Sources) != 1 || Id(result.Sources[0].GetRefId()) != featureId {
+		t.Fatalf("the merge's sources %v", result.Sources)
+	}
+	reuseList := publisher.payload("main", result.Version).ReuseList
+	mineTokens := publisher.writer.world.tokensAt("mine.txt", 1)
+	if len(reuseList) != 1 || reuseList[0].RefId != featureId || !reuseList[0].TokenPath.Equal(mineTokens) {
+		t.Fatalf("%d reuse items", len(reuseList))
+	}
+	if len(publisher.writer.server.uploads) == uploads {
+		t.Fatal("the merged file at a tainted path uploaded nothing")
+	}
+	if chain := publisher.writer.entry(t, "shared.txt").GetChain(); len(chain) != 1 {
+		t.Fatalf("shared.txt written as a chain of %d", len(chain))
+	}
+	device.replay("main")
+	if ref := device.ref("main"); ref.StuckAt != 0 || !evsOidEqual(ref.Tip, &merge) || len(ref.Tainted) != 0 {
+		t.Fatalf("device b %+v", ref)
+	}
+}
+
+// A transport that counts the requests it carries.
+type evsTestCountingTransport struct {
+	inner     http.RoundTripper
+	stateLock sync.Mutex
+	count     int
+}
+
+func (self *evsTestCountingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	self.stateLock.Lock()
+	self.count += 1
+	self.stateLock.Unlock()
+	return self.inner.RoundTrip(request)
+}
+
+// The requests carried so far.
+func (self *evsTestCountingTransport) requests() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.count
+}
+
+// A taint of another path epoch (8.5): main is stopped in epoch 1, and a path epoch commits before its DELETE, so a
+// re-creation is in epoch 2, where every reader fails closed on the taint. The design device refuses with no request
+// to evs, its client having seen the ref in epoch 2. A taint of an epoch the push is not in that this client's state
+// cannot rule out, one above the ref's, is refused by the plan once it read the head, before anything is sent.
+func TestEvsLocalPublishRefusesATaintOfAnotherEpochBeforeAnyRequest(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	c1 := publisher.commit(map[string]string{"a.txt": "a\n"})
+	if _, err := publisher.publish("main", &c1); err != nil {
+		t.Fatal(err)
+	}
+	device := publisher.stopAndDelete("main", c1, map[string]string{"a.txt": "forged\n"}, func() {
+		publisher.writer.gkm.newest = 2
+		publisher.writer.world.cutOverTo(2)
+	})
+	tainted := device.ref("main").Tainted
+	if len(tainted) != 1 || tainted[0].Epoch != 1 {
+		t.Fatalf("taints %v", tainted)
+	}
+	client := publisher.writer.test.client
+	counting := &evsTestCountingTransport{inner: client.args.Transport}
+	client.args.Transport = counting
+	client.http.transport = wrapSidecarApiTransport(counting)
+	next := publisher.commit(map[string]string{"a.txt": "a again\n"}, c1)
+	posted, uploads := publisher.posted(), len(publisher.writer.server.uploads)
+	if _, err := publisher.publish("main", &next, func(args *EvsLocalPublishArgs) { args.Tainted = tainted }); !errors.Is(err, ErrEvsGitTaintedPath) ||
+		counting.requests() != 0 {
+		t.Fatalf("a taint of epoch 1: %v, %d requests", err, counting.requests())
+	}
+	above := []EvsTaintedPath{{Epoch: 3, Key: tainted[0].Key}}
+	if _, err := publisher.publish("main", &next, func(args *EvsLocalPublishArgs) { args.Tainted = above }); !errors.Is(err, ErrEvsGitTaintedPath) ||
+		counting.requests() == 0 || publisher.posted() != posted || len(publisher.writer.server.uploads) != uploads {
+		t.Fatalf("a taint of epoch 3: %v, %d requests", err, counting.requests())
+	}
+}
+
+// A ref deleted with no version refused holds no taint, and its re-creation plans as it did: a.txt's change is a diff
+// on the entry that stands, citing its chain.
+func TestEvsLocalPublishARecreationWithNoTaintPlansAsItDid(t *testing.T) {
+	publisher := newEvsTestPublisher(t)
+	text := strings.Repeat("a line of a.txt that a diff rests on\n", 64)
+	c1 := publisher.commit(map[string]string{"a.txt": text, "b.txt": "b\n"})
+	if _, err := publisher.publish("main", &c1); err != nil {
+		t.Fatal(err)
+	}
+	standing := publisher.writer.entry(t, "a.txt")
+	if _, err := publisher.publish("main", nil); err != nil {
+		t.Fatal(err)
+	}
+	c2 := publisher.commit(map[string]string{"a.txt": text + "one more line\n", "b.txt": "b\n"}, c1)
+	if _, err := publisher.publish("main", &c2, func(args *EvsLocalPublishArgs) { args.Tainted = nil }); err != nil {
+		t.Fatal(err)
+	}
+	chain := publisher.writer.entry(t, "a.txt").GetChain()
+	if len(chain) != len(standing.GetChain())+1 || !proto.Equal(chain[0], standing.GetChain()[0]) {
+		t.Fatalf("a.txt's chain of %d on %d", len(chain), len(standing.GetChain()))
+	}
+	if _, exported := publisher.export("main"); exported.Refs[0].Tip != c2 {
+		t.Fatalf("exported %+v", exported.Refs[0])
 	}
 }

@@ -122,7 +122,7 @@ func testSearchEntry(t testing.TB, refKey []byte, refId Id, companion bool, docu
 	indexDocument.Fields[indexFieldFrom] = []byte(document.from)
 	indexDocument.Fields[indexFieldTitle] = []byte(document.title)
 	indexDocument.Fields[indexFieldBody] = []byte(document.body)
-	prepared, err := indexDocument.prepare(testSearchNormalizer(t), companion, refId)
+	prepared, err := indexDocument.prepare(testSearchNormalizer(t), companion, refId, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}

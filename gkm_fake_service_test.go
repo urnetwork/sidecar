@@ -662,6 +662,15 @@ func (self *gkmFakeApi) UploadWelcome(ctx context.Context, repoId sidecar.Id, gr
 	})
 }
 
+func (self *gkmFakeApi) WelcomeStands(ctx context.Context, repoId sidecar.Id, groupId sidecar.Id, epoch uint64) (bool, error) {
+	stands := false
+	err := self.call("WelcomeStands", func() error {
+		_, stands = self.store.groupWelcomes[fmt.Sprintf("%s/%d", hex.EncodeToString(groupId.Bytes()), epoch)]
+		return nil
+	})
+	return stands && err == nil, err
+}
+
 func (self *gkmFakeApi) Welcomes(ctx context.Context) ([]*protocol.GkmWelcomeEntry, error) {
 	entries := []*protocol.GkmWelcomeEntry{}
 	err := self.call("Welcomes", func() error {

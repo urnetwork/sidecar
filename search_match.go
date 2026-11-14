@@ -51,6 +51,17 @@ type searchPartitionSource struct {
 	shards    []*searchShardSource
 	// Bucket partitions: every writer's slots, heads included, and large entries.
 	slots []*searchSlotSource
+	// The format's bounds its files were read under, which a diff's composed set is held to (D6); nil takes
+	// DefaultIndexFormatSettings.
+	formatSettings *IndexFormatSettings
+}
+
+// The bounds the partition's files were read under.
+func (self *searchPartitionSource) settings() *IndexFormatSettings {
+	if self.formatSettings == nil {
+		return DefaultIndexFormatSettings()
+	}
+	return self.formatSettings
 }
 
 // A document a partition offers a query.
@@ -128,7 +139,7 @@ func searchMatch(args *searchMatchArgs) (*searchPartitionResult, error) {
 		}
 	}
 
-	sources := searchNewChainSources(args.source.slots)
+	sources := searchNewChainSources(args.source.slots, args.source.settings())
 	newest := args.newest
 	if newest == nil {
 		newest = searchLocalNewest(args.source.slots)

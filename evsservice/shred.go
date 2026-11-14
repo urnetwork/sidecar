@@ -394,7 +394,7 @@ func (self *evsShredRun) held(ctx context.Context, object *protocol.EvsRepoObjec
 // segment cluster objects.
 func (self *evsShredRun) deleteFamilies(ctx context.Context) error {
 	repoKey := sidecar.EvsKeyId(self.repoId) + "/"
-	for _, prefix := range []string{indexKeyPrefix, headKeyPrefix, logKeyPrefix, pathMapKeyPrefix, pidxKeyPrefix, spidxKeyPrefix, parcelKeyPrefix} {
+	for _, prefix := range []string{indexKeyPrefix, headKeyPrefix, logKeyPrefix, pathMapKeyPrefix, pidxKeyPrefix, spidxKeyPrefix, parcelKeyPrefix, reseedKeyPrefix} {
 		if err := self.deletePrefix(ctx, self.cluster, prefix+repoKey); err != nil {
 			return err
 		}

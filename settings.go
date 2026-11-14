@@ -96,6 +96,15 @@ type SidecarSettings struct {
 	// §7's routes answer. A longer answer is refused, so api cannot make a sidecar buffer more. §5.4
 	// names no such bound, so this is a reading.
 	ApiResponseByteCount int64
+	// The longest round trip whose answer's Date a SidecarApi keeps as the api's clock (§7.4, QD-757): 30 s. The
+	// api read its clock somewhere inside the round trip, so a reading is off by at most half of it and a Date's
+	// whole second, 16 s here against §7.4's 60 s window; a longer answer leaves the reading before it standing.
+	ApiClockMaxRoundTrip time.Duration
+	// How far a refused DPoP proof's reading of the api's clock must lie from the one the refusal's own Date
+	// gives for the request to go once more, signed by the newer reading (§7.4, QD-757): 5 s. Past the 1 s a
+	// Date's whole seconds move a reading by, so a proof refused for anything but its iat is not sent again, and
+	// far inside §7.4's 60 s window, so one refused for its iat always is.
+	ApiClockRetryShift time.Duration
 	// How long a statement this sidecar signs may wait to land: its StatementHeader's not_after, and so how long a
 	// kill or a lost answer leaves it pending, retried with the same bytes (§5.6's sign row, §5.9). 7 days, §7.9's
 	// most, a reading: §5.6 sets none shorter, and a cosign at k > 1 needs the whole of it.
@@ -338,6 +347,53 @@ type SidecarTlsSettings struct {
 	// How far before its making a self-signed leaf's validity starts, so a peer whose clock runs
 	// behind accepts it: 1 h, a reading.
 	SelfSignedBackdate time.Duration
+
+	// The certificate manager's (TLS-M5-18, tls_cert_manager.go).
+	//
+	// The url a certificate order's service token names as its audience, https://certs.<domain> (§7.8): absolute,
+	// with no path. No default, since no hostname sits in code; empty orders nothing, and EnsureTlsCertificate
+	// answers ErrTlsCertsUnconfigured. The routes themselves are api's, at ApiUrl.
+	CertsResource string
+	// How long the manager goes without reading GET /tls/certs when no hint asks: 1 h, §6.8's resync, which covers a
+	// lost TlsHint.
+	CertResyncInterval time.Duration
+	// The least time between two reads hints ask for, so a burst of hints costs one read: 1 s.
+	CertHintMinInterval time.Duration
+	// How long to wait before asking GET /tls/cert-order/<id> again when its answer names no wait: 5 s.
+	CertOrderPollInterval time.Duration
+	// The least a server's retry_after is held to: 1 s, so a zero or tiny wait cannot spin.
+	CertOrderPollMinInterval time.Duration
+	// The most a server's retry_after is held to: 5 min, so a wrong one cannot park an order past a person's
+	// patience.
+	CertOrderPollMaxInterval time.Duration
+	// The first wait after an order's refusal or failure before the background pass tries that name again: 1 min,
+	// doubling from there. A person's EnsureTlsCertificate does not wait on it.
+	CertRetryMinInterval time.Duration
+	// The longest that wait grows to: 1 h.
+	CertRetryMaxInterval time.Duration
+	// The most certificates a chain may hold, leaf first: 8 (DESIGN-DETAILS 17.2.15's ChainMaxCount).
+	CertChainMaxCount int
+	// The most bytes the chains and orders the manager keeps may take in its store: 1 MiB, some hundreds of chains.
+	// Past it nothing new installs, the closed direction.
+	CertStateMaxByteCount int
+	// About how often D-TLS-8's CT watch runs a pass: 6 hours.
+	CtWatchInterval time.Duration
+	// The most a pass is moved from CtWatchInterval either way, so devices do not ask in step: 30 minutes.
+	CtWatchJitter time.Duration
+	// How long before a certificate's issuance its attesting identity must have been pinned, or the watch alarms:
+	// D-TLS-8's 24 hours.
+	CtIdentityPinMinAge time.Duration
+	// The most certificates the watch remembers as known, the soonest to expire dropped first: 4096.
+	CtKnownMaxCount int
+	// The most bytes the watch's cursors, known certificates and alarms may take in its store: 1 MiB.
+	CtStateMaxByteCount int
+	// How long §13.10's target probe waits for the local service to take a connection and answer: 3 s.
+	ProbeTimeout time.Duration
+	// The most bytes of the local service's answer the probe reads: 64 KiB, the start of a page.
+	ProbeResponseMaxByteCount int
+	// How long a raw link's client certificate is valid when the publish names no expiry: 7 days, the longest a
+	// Community grant lasts (§13.9).
+	PublishLinkCertificateLifetime time.Duration
 }
 
 // §5.5's agent subkeys (identity_agent.go): each agent registration's Ed25519 subkey, which the daemon holds and
@@ -370,6 +426,24 @@ func DefaultSidecarTlsSettings() *SidecarTlsSettings {
 		KeyRotationInterval: 180 * 24 * time.Hour,
 		SelfSignedLifetime:  30 * 24 * time.Hour,
 		SelfSignedBackdate:  1 * time.Hour,
+
+		CertResyncInterval:             time.Hour,
+		CertHintMinInterval:            time.Second,
+		CertOrderPollInterval:          5 * time.Second,
+		CertOrderPollMinInterval:       time.Second,
+		CertOrderPollMaxInterval:       5 * time.Minute,
+		CertRetryMinInterval:           time.Minute,
+		CertRetryMaxInterval:           time.Hour,
+		CertChainMaxCount:              8,
+		CertStateMaxByteCount:          1024 * 1024,
+		CtWatchInterval:                6 * time.Hour,
+		CtWatchJitter:                  30 * time.Minute,
+		CtIdentityPinMinAge:            24 * time.Hour,
+		CtKnownMaxCount:                4096,
+		CtStateMaxByteCount:            1024 * 1024,
+		ProbeTimeout:                   3 * time.Second,
+		ProbeResponseMaxByteCount:      64 * 1024,
+		PublishLinkCertificateLifetime: 7 * 24 * time.Hour,
 	}
 }
 
@@ -434,8 +508,26 @@ type GkmSettings struct {
 	// The most a writer adds to PendingCommitDelay, drawn uniformly, so the others do not all commit at once: 5 s.
 	PendingCommitJitter time.Duration
 	// §10.6's re-add: a joiner whose Welcome has not appeared this long after its epoch is removed and added again
-	// by a writer leaf: 10 min.
+	// by a writer leaf: 10 min. A writer leaf that adopted the Add from another leaf's commit asks gkm once, this
+	// long after the epoch, whether the Welcome stands (QD-747). Non-positive asks at the next run of the engine.
 	WelcomeTimeout time.Duration
+	// QD-747: the most Adds of other leaves' commits whose Welcomes a device watches for at once, per repo: 64, far
+	// past the Adds ten minutes bring one group. Past it the oldest is dropped unasked, which leaves its joiners
+	// waiting on their uploader; non-positive watches none.
+	WelcomeWatchMaxCount int
+	// A writer leaf commits a stale Remove only this long past §10.9's stale rule (plan-KEYS-stale-remove-evidence):
+	// 24 h, so two clocks a minute apart do not disagree on it. Every committer follows it alike, so a deployment
+	// never changes it on one device alone.
+	StaleRemoveMargin time.Duration
+	// §10.6: at most this many leaves, an epoch's object carries its sealed GroupInfo inline, and above, group-info
+	// holds it: 16, the protocol's value, which gkm's EpochGroupInfoMaxByteCount is sized to.
+	GroupInfoInlineLeafCount int
+	// §10.14's bound on one POST /gkm/reader-keys (QD-066): 256 ids, the protocol's value, which gkm holds too.
+	// Below 1 sends one id a request.
+	ReaderKeysBatchCount int
+	// The bound on one POST /gkm/delegation-keys (QD-637): 256 ids, reader-keys' own and gkm's
+	// DelegationKeysMaxCount. Below 1 sends one id a request.
+	DelegationKeysBatchCount int
 	// §10.6's late wraps: a holder waits a random time up to this before it answers wrap-pending, so one normally
 	// delivers: 15 s.
 	LateDeliverJitter time.Duration
@@ -499,6 +591,11 @@ func DefaultGkmSettings() *GkmSettings {
 		PendingCommitDelay:           15 * time.Second,
 		PendingCommitJitter:          5 * time.Second,
 		WelcomeTimeout:               10 * time.Minute,
+		WelcomeWatchMaxCount:         64,
+		StaleRemoveMargin:            24 * time.Hour,
+		GroupInfoInlineLeafCount:     16,
+		ReaderKeysBatchCount:         256,
+		DelegationKeysBatchCount:     256,
 		LateDeliverJitter:            15 * time.Second,
 		SelfUpdateInterval:           7 * 24 * time.Hour,
 		SelfUpdateIntervalLarge:      30 * 24 * time.Hour,
@@ -783,6 +880,8 @@ func DefaultSidecarSettings() *SidecarSettings {
 		MemoryBudgetByteCount:      128 * 1024 * 1024,
 		StreamChunkByteCount:       4000,
 		ApiResponseByteCount:       2 * 1024 * 1024,
+		ApiClockMaxRoundTrip:       30 * time.Second,
+		ApiClockRetryShift:         5 * time.Second,
 		StatementTimeout:           7 * 24 * time.Hour,
 	}
 }

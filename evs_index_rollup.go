@@ -154,7 +154,7 @@ func (self *indexMergeCandidate) entry() *indexEntry {
 func indexRollup(ctx context.Context, args *indexRollupArgs) (*indexRollupResult, error) {
 	view, root := args.view, args.root
 	expired := args.expired
-	carried, malformed, err := indexMergeCandidates(expired.bucket, expired.shards, nil, true, true, view.erased, map[Id]uint32{})
+	carried, malformed, err := indexMergeCandidates(expired.bucket, expired.shards, nil, true, true, view.erased, map[Id]uint32{}, view.settings)
 	if err != nil {
 		return nil, err
 	}

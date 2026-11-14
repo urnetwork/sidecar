@@ -85,11 +85,13 @@ var (
 )
 
 // The lb's CORS lists for a service whose cors_origins name an origin (warp's addCorsHeaders): what the page Worker
-// sends and reads cross-origin, a DPoP proof, If-Match and If-None-Match, Range, ETag and Retry-After among them.
+// sends and reads cross-origin, a DPoP proof, If-Match and If-None-Match, Range, ETag and Retry-After among them, and
+// Date, the api's clock, which it signs its proof's iat by (§7.4, QD-776): a browser hides Date from a cross-origin
+// fetch unless the answer exposes it. The root's api_clock_page_test.go holds its Worker to the exposed list here.
 const (
 	pagestackCorsAllowMethods  = "GET, POST, PUT, DELETE, OPTIONS"
 	pagestackCorsAllowHeaders  = "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,X-Client-Version,X-UR-ClientInfo,X-UR-Intended-Network-Id,Authorization,Accept,Mcp-Session-Id,MCP-Protocol-Version,Last-Event-ID,DPoP,If-Match,If-None-Match"
-	pagestackCorsExposeHeaders = "Content-Length,Content-Range,Accept,Mcp-Session-Id,MCP-Protocol-Version,Last-Event-ID,ETag,Retry-After"
+	pagestackCorsExposeHeaders = "Content-Length,Content-Range,Accept,Mcp-Session-Id,MCP-Protocol-Version,Last-Event-ID,ETag,Retry-After,Date"
 )
 
 // What a run takes, its flags' defaults from defaultPagestackSettings.

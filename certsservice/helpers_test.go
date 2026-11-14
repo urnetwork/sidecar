@@ -12,6 +12,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
+	"encoding/base64"
+	"math/big"
 	"testing"
 	"time"
 
@@ -23,6 +26,17 @@ import (
 )
 
 const testRoot = "root.example"
+
+// RFC 9773's certificate id of the certificate with this authority key id and serial: base64url of the
+// key id, a dot, and base64url of the serial's DER content octets, which lead with a zero octet when
+// the serial's top bit is set.
+func testCertificateId(authorityKeyId []byte, serial *big.Int) string {
+	serialDer, err := asn1.Marshal(serial)
+	if err != nil {
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(authorityKeyId) + "." + base64.RawURLEncoding.EncodeToString(serialDer[2:])
+}
 
 // Settings that pass Validate, under testRoot.
 func testSettings() *certsservice.CertsSettings {
@@ -207,6 +221,7 @@ func (self *testCerts) issue(certId sidecar.Id, serial string) {
 		CertId:     certId,
 		From:       []sidecar.TlsCertState{sidecar.TlsCertStateOrdering, sidecar.TlsCertStateWaitingDns},
 		To:         sidecar.TlsCertStateIssued,
+		At:         now,
 		AccountUri: "https://ca.example/acct/1",
 		Serial:     serial,
 		NotBefore:  now,

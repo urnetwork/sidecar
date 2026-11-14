@@ -1,6 +1,5 @@
 // I-18 for §13.15's bodies (tls_api.go): each field a server keeps names the §2.8 row that shows it, in that row's own
-// words, and each it keeps nowhere says why, so a field added to a body cannot reach a store unnoticed. Two fields wait
-// on tls-m5-05-cert-row-values and are logged on every run until cert-1 names them.
+// words, and each it keeps nowhere says why, so a field added to a body cannot reach a store unnoticed.
 
 package sidecartest
 
@@ -42,8 +41,10 @@ var testTlsApiFields = map[reflect.Type]map[string]testTlsApiField{
 		"ari_window_start":      {row: "cert-1", sees: "ARI window"},
 		"ari_window_end":        {row: "cert-1", sees: "ARI window"},
 		"state":                 {row: "cert-1", sees: "state and successor"},
+		"state_time":            {row: "cert-1", sees: "the time of its latest state"},
 		"successor_cert_id":     {row: "cert-1", sees: "state and successor"},
-		"chain":                 {row: "cert-1", sees: "Team custom-domain chains"},
+		"chain":                 {row: "cert-1", sees: "issued chains until 30 d after expiry or revocation"},
+		"revocation_reason":     {row: "cert-1", sees: "a requested revocation's reason"},
 	},
 	reflect.TypeFor[sidecar.TlsCertsResult](): {
 		"certs":       {nowhere: "a list of TlsCertRecord, whose fields are mapped above"},
@@ -62,7 +63,7 @@ var testTlsApiFields = map[reflect.Type]map[string]testTlsApiField{
 	reflect.TypeFor[sidecar.TlsCertOrderStatus](): {
 		"state":            {row: "cert-1", sees: "state and successor"},
 		"retry_after_ms":   {nowhere: "a wait computed for this answer from the queue's holds"},
-		"chain":            {row: "cert-1", pending: "tls-m5-05-cert-row-values: an issued chain on a URnetwork-zone row"},
+		"chain":            {row: "cert-1", sees: "issued chains until 30 d after expiry or revocation"},
 		"ari_window_start": {row: "cert-1", sees: "ARI window"},
 		"ari_window_end":   {row: "cert-1", sees: "ARI window"},
 	},
@@ -74,7 +75,7 @@ var testTlsApiFields = map[reflect.Type]map[string]testTlsApiField{
 	},
 	reflect.TypeFor[sidecar.TlsCertRevokeArgs](): {
 		"cert_id":        {row: "cert-1", sees: "cert_id"},
-		"key_compromise": {row: "cert-1", pending: "tls-m5-05-cert-row-values: a requested revocation's reason"},
+		"key_compromise": {row: "cert-1", sees: "a requested revocation's reason"},
 	},
 	reflect.TypeFor[sidecar.TlsSuspendArgs](): {
 		"network_id": {row: "tls-4", sees: "kill-switch entries"},

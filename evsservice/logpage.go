@@ -411,7 +411,7 @@ func (self *Folder) PageOut(ctx context.Context, request *EvsPageOutRequest) (*E
 	if err != nil {
 		return nil, fmt.Errorf("%w: a window base chain of %d bytes", ErrEvsHeadInvalid, len(head.GetWindowBaseChain()))
 	}
-	pushes := NewRecordPushSource(self.records, request.Cluster, request.RepoId, request.RefId)
+	pushes := NewRecordPushSource(self.records, self.locator, request.Cluster, request.RepoId, request.RefId)
 	statements := make([][]byte, 0, pageLast-pageFirst+1)
 	for version := pageFirst; version <= pageLast; version += 1 {
 		statement, err := pushes.statementAt(ctx, version, window[version-firstVersion])

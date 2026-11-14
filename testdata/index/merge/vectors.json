@@ -137,5 +137,99 @@
   "removals": [
    ".ur-index/i1/b/20340/s/3"
   ]
+ },
+ {
+  "name": "take-at-the-cap-before-a-document-at-lone-shard-body",
+  "files": [
+   {
+    "path": ".ur-index/i1/b/20340/m",
+    "replaces": 0,
+    "sha256": "765e30046b5569e36c19207e499c854adfbe32c97932595eb073895fb691c08c",
+    "byte_count": 33
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/0",
+    "replaces": 0,
+    "sha256": "c8bfd9e75269feb1ff2ff9bdbd26a1c6eff5644cbd0da3a75f728bccb2acb109",
+    "byte_count": 794431
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/1",
+    "replaces": 0,
+    "sha256": "abdf31aaa3deac25658b5b782032d4834eaf955e93d2c45e1ebc9dd1116dd874",
+    "byte_count": 1041430
+   }
+  ]
+ },
+ {
+  "name": "a-join-refused-at-the-cap",
+  "inputs": [
+   {
+    "path": ".ur-index/i1/b/20340/s/0",
+    "replaces": 1,
+    "sha256": "2c9708c5aefe5a041c557ccc3ac556a1d80b3909cc1f09446b9a1f3366c3ae44",
+    "byte_count": 375128
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/1",
+    "replaces": 2,
+    "sha256": "f4ad5387df4896bc819372916cd5323d63d778be257a8f6725d4af977e8f2f93",
+    "byte_count": 117879
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/2",
+    "replaces": 3,
+    "sha256": "c15d66fa7bc36c738762ed88429d8b37456f1f9065868e7d73a8adb7c7537aea",
+    "byte_count": 13409
+   }
+  ],
+  "files": [
+   {
+    "path": ".ur-index/i1/b/20340/m",
+    "replaces": 0,
+    "sha256": "69b0a71d981f4d1f25013da5da94fc66f0006552b5563c9cab9d6179f11501a9",
+    "byte_count": 33
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/1",
+    "replaces": 2,
+    "sha256": "ffeca64898ec02165965b9aa5fbd9037de09b7ac6bd61e4706312273a0baf335",
+    "byte_count": 133102
+   }
+  ],
+  "removals": [
+   ".ur-index/i1/b/20340/s/2"
+  ]
+ },
+ {
+  "name": "a-removal-that-gives-up-rows",
+  "inputs": [
+   {
+    "path": ".ur-index/i1/b/20340/s/0",
+    "replaces": 1,
+    "sha256": "2dabfe60621ba22be5a76a9eafcaf531e07327170d78685d789449fb06f16d9e",
+    "byte_count": 1034237
+   }
+  ],
+  "files": [
+   {
+    "path": ".ur-index/i1/b/20340/m",
+    "replaces": 0,
+    "sha256": "e9d6dbaafb47464ed4a00f8784c440353be57a3bcd5c7d9df02d8889e639a27c",
+    "byte_count": 33
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/0",
+    "replaces": 1,
+    "sha256": "f87bd380d51d3bc5a3d6dcb14438128bb55e142830b0aaceabdb5cd19f4c782e",
+    "byte_count": 1039111
+   },
+   {
+    "path": ".ur-index/i1/b/20340/s/1",
+    "replaces": 0,
+    "sha256": "609ff30066d157ac142e0ac119ff860919d262fac8916cdd0f7d6659c0afcfa8",
+    "byte_count": 2233
+   }
+  ]
  }
 ]

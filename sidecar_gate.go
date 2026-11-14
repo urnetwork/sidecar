@@ -70,6 +70,7 @@ var sidecarGateKinds = [...]SidecarActionKind{
 	SidecarActionAccessRequest,
 	SidecarActionPayment,
 	SidecarActionRestore,
+	SidecarActionMailTlsUnauthenticated,
 }
 
 // Whether kind is one of §5.4's.

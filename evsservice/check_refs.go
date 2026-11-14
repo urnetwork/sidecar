@@ -6,9 +6,16 @@
 //	ref kind                     mode         writer                          FORCE, DELETE           other flags
 //	shared (main, ...)           git or file  rw                              admin                   IMMUTABLE ref: DELETE only
 //	owned, general and config    git or file  its sidecar, rw                 its sidecar             CLOSURE (admin)
-//	owned, record-class stream   file         its sidecar, rw, creates only   refused                 BASE, CLOSURE (admin)
+//	owned, record-class stream   file         its sidecar, rw, creates only,  refused                 BASE, CLOSURE (admin)
+//	                                          a directory taking add-only
+//	                                          deltas (QD-722)
 //	deposit                      file         its depositor, creates only     refused                 CONSUME (rw)
 //	erasure (per repo)           file         admin, creates only             refused                 ERASE (admin)
+//
+// The creates-only rule is sidecar.EvsCreatesOnlyRefusal, which readers apply too (evs_creates_only.go): a stream's
+// directory delta adds rows only, at its base + 1, on the directory's newest version as step 4 read it, which for a
+// folded table is its delta's at names_through (push_step4.go), the path standing as a directory; every other change
+// on a base, and every removal, is 409 PATH_CONFLICT, final, naming the paths.
 //
 // and with it: the erasure ref's public id carries the erasure kind and no other id does, a deposit ref's id is its
 // depositor's public one (plan-EVS1-ref-name-bytes#3); a ref's first push sets its kind, mode and owner, which every
@@ -199,7 +206,8 @@ func checkRefTable(view *PushView) *EvsCheckRefusal {
 			return scope("an owned ref below rw")
 		}
 		if recordClass && !adminPush {
-			if refusal := checkCreatesOnly(view); refusal != nil {
+			// a stream's directories grow by add-only deltas (QD-722)
+			if refusal := checkCreatesOnly(view, true); refusal != nil {
 				return refusal
 			}
 		}
@@ -216,14 +224,14 @@ func checkRefTable(view *PushView) *EvsCheckRefusal {
 		if !view.Rights.Has(sidecar.AclEvsDeposit) && !write {
 			return scope("a deposit below deposit")
 		}
-		if refusal := checkCreatesOnly(view); refusal != nil {
+		if refusal := checkCreatesOnly(view, false); refusal != nil {
 			return refusal
 		}
 	case protocol.EvsRefKind_EVS_REF_ERASURE:
 		if !admin {
 			return scope("the erasure ref below admin")
 		}
-		if refusal := checkCreatesOnly(view); refusal != nil {
+		if refusal := checkCreatesOnly(view, false); refusal != nil {
 			return refusal
 		}
 	}
@@ -276,18 +284,32 @@ func checkCreatingSections(view *PushView, refMode protocol.EvsRefMode) *EvsChec
 	return nil
 }
 
-// A creates-only ref's changes: each creates its path, writing a version on base 0. 409 naming the others.
-func checkCreatesOnly(view *PushView) *EvsCheckRefusal {
+// A creates-only ref's changes: each creates its path, writing a version on base 0, or, where deltas (a record-class
+// stream), adds rows to a standing directory on its newest version (sidecar.EvsCreatesOnlyRefusal). 409 naming the
+// others. A delta's path step 4 did not read refuses 503, as 5g does.
+func checkCreatesOnly(view *PushView, deltas bool) *EvsCheckRefusal {
 	conflicts := []*sidecar.EvsCheckedChange{}
+	detail := ""
 	for _, change := range view.Payload.Changes {
-		if change.Change.GetBaseEntryVersion() != 0 || !change.WritesEntry() {
+		var path *sidecar.EvsCreatesOnlyPath
+		if deltas && change.WritesEntry() && change.Change.GetBaseEntryVersion() != 0 {
+			read := view.Paths[change.TokenPath.KeyString()]
+			if read == nil || read.Newest == nil {
+				return newEvsCheckRefusal(EvsCheckReasonUnchecked, "a changed path step 4 did not read")
+			}
+			path = &sidecar.EvsCreatesOnlyPath{Exists: read.Newest.Exists, Directory: read.Newest.Directory, Version: read.DirectoryVersion}
+		}
+		if refusal := sidecar.EvsCreatesOnlyRefusal(change, deltas, path); refusal != "" {
+			if detail == "" {
+				detail = refusal
+			}
 			conflicts = append(conflicts, change)
 		}
 	}
 	if len(conflicts) == 0 {
 		return nil
 	}
-	refusal := newEvsCheckRefusal(EvsCheckReasonChangeShape, "a creates-only ref changed or removed a path")
+	refusal := newEvsCheckRefusal(EvsCheckReasonChangeShape, "a creates-only ref's change: "+detail)
 	refusal.Paths = evsChangePaths(conflicts)
 	return refusal
 }

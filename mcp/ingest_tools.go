@@ -160,8 +160,8 @@ func ingestToolInputOutput(event *HookEvent, payload []byte) ([]byte, []byte) {
 	return hookObjectRaw(raw, "tool_input"), hookObjectRaw(raw, "tool_response")
 }
 
-// Any other event as a hook_event entry: the payload redacted whole.
-func (self *Ingest) captureHookEventWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, event *HookEvent, payload []byte) {
+// Any other event as a hook_event entry: the payload redacted whole. Answers the sealed entry's leaf, nil for none.
+func (self *Ingest) captureHookEventWithLock(ctx context.Context, run *ingestRun, redactor *sidecar.Redactor, event *HookEvent, payload []byte) []byte {
 	if event.Kind == HookEventPreToolUse {
 		for _, path := range event.Paths {
 			self.touchWithLock(run, path)
@@ -172,7 +172,7 @@ func (self *Ingest) captureHookEventWithLock(ctx context.Context, run *ingestRun
 	if cut {
 		self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapTruncation)
 	}
-	self.appendWithLock(ctx, run, &ingestEntry{
+	sealed, _ := self.appendEntryWithLock(ctx, run, &ingestEntry{
 		kind:   sidecar.RecordKindHookEvent,
 		source: sidecar.RecordSourceHook,
 		body: &protocol.HookEventBody{
@@ -183,6 +183,10 @@ func (self *Ingest) captureHookEventWithLock(ctx context.Context, run *ingestRun
 		byteCount:      int64(len(redacted)),
 		coverageSource: sidecar.RecordCoverageSourceHooks,
 	})
+	if sealed == nil {
+		return nil
+	}
+	return append([]byte(nil), sealed.Leaf[:]...)
 }
 
 // A PermissionRequest as a permission entry: a harness's own step, never an I-8 decision.

@@ -3,9 +3,13 @@
 // CRLs, and the kill switch and 45-day lifetimes carry the load; certs still revokes each, because a
 // removed device's certificate must not stay good for weeks (I-15).
 //
-// A revocation needs the certificate itself (RFC 8555 §7.6), which cert-1 does not keep for a
-// URnetwork-zone row (tls-m5-05-cert-row-values): RevokeIssued takes the leaf from its caller, and until
-// a chain is kept the revocation sweep (TLS-M5-17) has none to give, so such a row waits in revoking.
+// A revocation needs the certificate itself (RFC 8555 §7.6): RevokeIssued takes the leaf from its
+// caller, and the revocation sweep (TLS-M5-17) gives it the row's own, which the row keeps from its
+// issuance (cert-1; QD-741). A row with no chain, one issued before rows kept theirs, waits in revoking.
+//
+// The reason waits in the row too, from the request or the sweep's mark until the CA has taken it: a
+// device's or an admin's keyCompromise cannot be read again from any other table, so it must survive
+// the request's return, a restart and a CA that is down. A store keeps a reason only on a revoking row.
 
 package certsservice
 
@@ -47,6 +51,29 @@ func CertsRevocationReasonFor(cause CertsRevocationCause) CertsRevocationReason 
 	return CertsRevocationUnspecified
 }
 
+// The name a row keeps for reason (sidecar.TlsCertRevocationReason), empty for none given.
+func CertsRevocationReasonName(reason CertsRevocationReason) sidecar.TlsCertRevocationReason {
+	switch reason {
+	case CertsRevocationKeyCompromise:
+		return sidecar.TlsCertRevocationReasonKeyCompromise
+	case CertsRevocationCessationOfOperation:
+		return sidecar.TlsCertRevocationReasonCessationOfOperation
+	}
+	return ""
+}
+
+// The reason a row's name stands for. A name this build does not know reads as none given, so its
+// certificate is still revoked.
+func CertsRevocationReasonNamed(name sidecar.TlsCertRevocationReason) CertsRevocationReason {
+	switch name {
+	case sidecar.TlsCertRevocationReasonKeyCompromise:
+		return CertsRevocationKeyCompromise
+	case sidecar.TlsCertRevocationReasonCessationOfOperation:
+		return CertsRevocationCessationOfOperation
+	}
+	return CertsRevocationUnspecified
+}
+
 var (
 	// A leaf that is not the row's certificate.
 	ErrCertsLeafMismatch = errors.New("the leaf is not the row's certificate")
@@ -55,8 +82,9 @@ var (
 )
 
 // Revokes certId's certificate, leaf, at its CA with reason: the row moves issued to revoking before the
-// CA is asked, and to revoked once the CA takes it, so a pass that dies between asks again. A leaf
-// whose serial or key is not the row's is refused, so no other certificate is revoked by mistake.
+// CA is asked, holding the reason, and to revoked once the CA takes it, which drops the reason, so a
+// pass that dies between asks again with the same one. A leaf whose serial or key is not the row's is
+// refused, so no other certificate is revoked by mistake.
 func (self *CertsService) RevokeIssued(ctx context.Context, certId sidecar.Id, leaf []byte, reason CertsRevocationReason) error {
 	callCtx, cancel := self.callContext(ctx)
 	defer cancel()
@@ -81,9 +109,11 @@ func (self *CertsService) RevokeIssued(ctx context.Context, certId sidecar.Id, l
 	}
 	// a revoking row is a pass that died before the CA answered: asked again
 	moved, err := self.store.TransitionCert(callCtx, &CertsTransition{
-		CertId: certId,
-		From:   []sidecar.TlsCertState{sidecar.TlsCertStateIssued, sidecar.TlsCertStateRevoking},
-		To:     sidecar.TlsCertStateRevoking,
+		CertId:           certId,
+		From:             []sidecar.TlsCertState{sidecar.TlsCertStateIssued, sidecar.TlsCertStateRevoking},
+		To:               sidecar.TlsCertStateRevoking,
+		At:               self.clock.Now(),
+		RevocationReason: CertsRevocationReasonName(reason),
 	})
 	if err != nil {
 		return err
@@ -103,6 +133,7 @@ func (self *CertsService) RevokeIssued(ctx context.Context, certId sidecar.Id, l
 		CertId: certId,
 		From:   []sidecar.TlsCertState{sidecar.TlsCertStateRevoking},
 		To:     sidecar.TlsCertStateRevoked,
+		At:     self.clock.Now(),
 	})
 	return err
 }

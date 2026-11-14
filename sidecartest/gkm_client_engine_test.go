@@ -277,6 +277,19 @@ func TestGkmClientReachesTheEngineForItsUpkeepAndAClaim(t *testing.T) {
 	if err != nil || len(welcomes) != 0 {
 		t.Errorf("Welcomes before any Add: %v %v", welcomes, err)
 	}
+	// QD-747: the writer's ask reads welcome/<n>'s existence from the engine's HEAD, and r reaches no answer
+	if stands, err := writer.api.WelcomeStands(ctx, repoId, groupId, 3); err != nil || stands {
+		t.Errorf("an epoch with no Welcome: %v %v", stands, err)
+	}
+	if _, err := firstCluster.PutIfNoneMatch(ctx, gkmservice.GkmWelcomeKey(groupId, 3), []byte("a Welcome"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if stands, err := writer.api.WelcomeStands(ctx, repoId, groupId, 3); err != nil || !stands {
+		t.Errorf("an epoch whose Welcome stands: %v %v", stands, err)
+	}
+	if stands, err := reader.api.WelcomeStands(ctx, repoId, groupId, 3); !sidecar.IsGkmStatus(err, http.StatusForbidden) || stands {
+		t.Errorf("the ask under r: %v %v", stands, err)
+	}
 }
 
 // keychain.ur's namespace in memory, for the upkeep this test runs.

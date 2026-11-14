@@ -324,6 +324,50 @@ func TestSearchMatchForgedDiffReadsNotYetSearchable(t *testing.T) {
 	}
 }
 
+// A diff whose composed set D6 skips under its own row reads as a diff with no base does (DESIGN-DETAILS 1.2.9;
+// QD-760): not yet searchable, its slot's signer alarmed, never a candidate; one that composes to lone = ShardBody,
+// keys 0 to 199,607 under a 36 B row, is a candidate.
+func TestSearchMatchChainPastAShardReadsNotYetSearchable(t *testing.T) {
+	writer := evsTestId("writer")
+	base := func(index int) *indexEntry {
+		keys := testIndexKeys(0, 199001, 1)
+		return &indexEntry{kind: indexEntryFull, key: testIndexId("lone", index), version: 1, row: testFileRowOfByteCount(t, len(keys), 36), keys: keys}
+	}
+	diff := func(index int, addedCount int) *indexEntry {
+		return &indexEntry{kind: indexEntryDiff, key: testIndexId("lone", index), version: 2, baseVersion: 1, timeSeconds: 2, row: testFileRowOfByteCount(t, 199001+addedCount, 36), delta: indexDelta{added: testIndexKeys(199001, addedCount, 1)}}
+	}
+	atBound, pastBound := diff(1, 607), diff(2, 1000)
+	sealed := []*indexEntry{atBound, pastBound}
+	slices.SortFunc(sealed, indexCompareEntries)
+	bases := []*indexEntry{base(1), base(2)}
+	slices.SortFunc(bases, indexCompareEntries)
+	source := &searchPartitionSource{
+		partition: searchPartitionCurrent,
+		slots: []*searchSlotSource{
+			{slot: &indexSlot{entries: bases}, writer: writer, seq: 1, path: "s/1", signer: writer},
+			{slot: &indexSlot{entries: sealed}, writer: writer, seq: 2, path: "s/2", signer: writer},
+			{slot: &indexSlot{}, writer: writer, seq: 3, head: true, path: "s/3", signer: writer},
+		},
+	}
+	result, err := searchMatch(&searchMatchArgs{query: testQueryOf([]indexKeySet{{5}}), source: source, maxCandidateCount: 20000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.unresolved) != 1 || result.unresolved[0].key != pastBound.key || result.unresolved[0].signer != writer || result.unresolved[0].path != "s/2" {
+		t.Fatalf("unresolved %+v", result.unresolved)
+	}
+	found := false
+	for _, candidate := range result.candidates {
+		if candidate.entry == pastBound {
+			t.Fatal("a diff composing past a shard is a candidate")
+		}
+		found = found || candidate.entry == atBound && candidate.trigramCount == 199608
+	}
+	if !found {
+		t.Fatal("the diff composing to lone = ShardBody is no candidate")
+	}
+}
+
 // Past the cap a partition answers too_broad with its count, keeping no more candidates than the cap.
 func TestSearchMatchTooBroad(t *testing.T) {
 	random := rand.New(rand.NewSource(9))

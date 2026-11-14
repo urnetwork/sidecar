@@ -175,7 +175,7 @@ func (self *tokenTestFixture) start(t *testing.T, generation int64, edit func(ar
 		Refused: func(generation int64, reason SidecarStateReason) {
 			self.note(func() { self.refused = append(self.refused, reason) })
 		},
-		Restore: func(ctx context.Context) error {
+		Restore: func(ctx context.Context, install func(presentedByJwt string, byJwt string) error) error {
 			self.note(func() { self.restores += 1 })
 			return nil
 		},
@@ -444,21 +444,113 @@ func TestRestoreRequiredRebindsNotUnenrolls(t *testing.T) {
 	}
 }
 
-// restore_required's steps on a Sidecar: the newest binding goes to POST /sidecar/bind again, then each component's
-// registrations.
+// An answer to refresh as server's: the presented token's network, client, device and sidecar_id claim, if it had one,
+// kept, with a new jti and a 7-day lifetime issued now on clock; refresh never adds the claim (QD-040, QD-797).
+func refreshKeepingClaim(clock *tokenTestClock) func(request *http.Request, body []byte) (*http.Response, error) {
+	return func(request *http.Request, body []byte) (*http.Response, error) {
+		presented := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+		now := clock.Now()
+		byJwt := testEditedJwt(presented, func(claims map[string]any) {
+			claims["jti"] = NewId().String()
+			claims["iat"] = now.Unix()
+			claims["exp"] = now.Add(7 * 24 * time.Hour).Unix()
+		})
+		return syntheticResponse(request, 200, `{"by_jwt":"`+byJwt+`"}`, nil), nil
+	}
+}
+
+// A token that names its sidecar keeps the claim through a refresh: the refreshed token names the same network,
+// client and device, so it is installed, and the sidecar_id comes with it (QD-797).
+func TestRefreshKeepsTheSidecarClaim(t *testing.T) {
+	clock := newTokenTestClock()
+	sidecarId := NewId()
+	initial := testRemintJwt(testInitialJwt(), sidecarId)
+	fixture := newTokenTestFixture(t, initial, refreshKeepingClaim(clock))
+	fixture.clock = clock
+	fixture.start(t, 1, nil)
+	clock.awaitArmed(t, 1)
+	fixture.manager.requestRefresh()
+	fixture.awaitEvents(t, 2)
+	if len(fixture.installed) != 1 || fixture.installed[0] == initial || fixture.api.currentByJwt() != fixture.installed[0] {
+		t.Fatalf("installed %d", len(fixture.installed))
+	}
+	if claimed, ok := sidecarJwtSidecarId(fixture.installed[0]); !ok || claimed != sidecarId {
+		t.Errorf("the refreshed token names sidecar %s", claimed)
+	}
+}
+
+// restore_required's re-mint goes through the manager's install, and the refresh that follows presents it and installs
+// against it at once: the token api re-minted with the sidecar_id is the one refreshed, never refused as a token
+// changed under the refresh and waited out (QD-797).
+func TestRestoreInstallsTheRemintThenRefreshesIt(t *testing.T) {
+	clock := newTokenTestClock()
+	sidecarId := NewId()
+	refreshed := refreshKeepingClaim(clock)
+	first := true
+	answer := func(request *http.Request, body []byte) (*http.Response, error) {
+		if first {
+			first = false
+			return syntheticResponse(request, 200, `{"error":{"message":"Re-register.","code":"restore_required"}}`, nil), nil
+		}
+		return refreshed(request, body)
+	}
+	fixture := newTokenTestFixture(t, testInitialJwt(), answer)
+	fixture.clock = clock
+	reminted := ""
+	fixture.start(t, 1, func(args *sidecarTokenManagerArgs) {
+		args.Restore = func(ctx context.Context, install func(presentedByJwt string, byJwt string) error) error {
+			presented := fixture.api.currentByJwt()
+			reminted = testRemintJwt(presented, sidecarId)
+			err := install(presented, reminted)
+			fixture.note(func() { fixture.restores += 1 })
+			return err
+		}
+	})
+	clock.awaitArmed(t, 1)
+	fixture.manager.requestRefresh()
+	// the re-mint's persist and install, the restore, the refresh's persist and install
+	fixture.awaitEvents(t, 5)
+	if fixture.restores != 1 || fixture.refreshCount() != 2 || len(fixture.installed) != 2 || fixture.installed[0] != reminted {
+		t.Fatalf("restores %d, refreshes %d, installed %d", fixture.restores, fixture.refreshCount(), len(fixture.installed))
+	}
+	fixture.transport.stateLock.Lock()
+	presented := fixture.transport.requests[1].Header.Get("Authorization")
+	fixture.transport.stateLock.Unlock()
+	if presented != "Bearer "+reminted {
+		t.Error("the refresh after the restore did not present the re-mint")
+	}
+	if claimed, ok := sidecarJwtSidecarId(fixture.api.currentByJwt()); !ok || claimed != sidecarId {
+		t.Errorf("the token held names sidecar %s", claimed)
+	}
+}
+
+// restore_required's steps on a Sidecar: the newest binding goes to POST /sidecar/bind again, the token bind re-mints
+// with the sidecar_id goes through the manager's install against the token the bind presented (QD-797), then each
+// component's registrations.
 func TestRestoreRegistrationsRepostsTheBinding(t *testing.T) {
 	sidecar, _, _ := newIdentityTestSidecar(t)
-	transport := answerWith(200, `{"generation":1}`)
+	fields := testBindingFields()
+	transport := bindAnswer(1, fields.SidecarId)
 	sidecar.sidecarApi = newTestSidecarApi(t, transport)
+	presented := testBindClientJwt(fields.NetworkId, fields.ClientId)
+	sidecar.sidecarApi.SetByJwt(presented)
+	installed := []string{}
+	install := func(presentedByJwt string, byJwt string) error {
+		if presentedByJwt != presented {
+			return errors.New("installed against another token than the bind presented")
+		}
+		installed = append(installed, byJwt)
+		return nil
+	}
 	reregistered := false
 	restorer := sidecarRestorerFunc(func(ctx context.Context) error {
-		if transport.requestCount() != 1 {
-			return errors.New("a registration before the binding")
+		if transport.requestCount() != 1 || len(installed) != 1 {
+			return errors.New("a registration before the binding and its token")
 		}
 		reregistered = true
 		return nil
 	})
-	if err := sidecar.restoreRegistrations(context.Background(), []SidecarRestorer{restorer}); err != nil {
+	if err := sidecar.restoreRegistrations(context.Background(), []SidecarRestorer{restorer}, install); err != nil {
 		t.Fatal(err)
 	}
 	request, body := transport.onlyRequest(t)
@@ -470,6 +562,53 @@ func TestRestoreRegistrationsRepostsTheBinding(t *testing.T) {
 	want, _ := json.Marshal(map[string]string{"binding": base64.StdEncoding.EncodeToString(record.binding)})
 	if request.URL.Path != "/sidecar/bind" || string(body) != string(want) || !reregistered {
 		t.Fatalf("%s %s, reregistered %t", request.URL.Path, body, reregistered)
+	}
+	if claimed, ok := sidecarJwtSidecarId(installed[0]); !ok || claimed != fields.SidecarId {
+		t.Errorf("the installed token names sidecar %s", claimed)
+	}
+}
+
+// A restore whose re-mint names another sidecar than the identity's, whose install refuses, or that has no generation
+// to install through installs nothing and re-registers nothing, so the token held stays, and the manager retries the
+// whole restore (QD-797).
+func TestRestoreRegistrationsInstallsNoOtherSidecarsToken(t *testing.T) {
+	fields := testBindingFields()
+	for _, c := range []struct {
+		name      string
+		sidecarId Id
+		refuse    bool
+		noInstall bool
+	}{
+		{name: "another sidecar", sidecarId: NewId()},
+		{name: "an install refusing", sidecarId: fields.SidecarId, refuse: true},
+		{name: "no generation", sidecarId: fields.SidecarId, noInstall: true},
+	} {
+		sidecar, _, _ := newIdentityTestSidecar(t)
+		sidecar.sidecarApi = newTestSidecarApi(t, bindAnswer(1, c.sidecarId))
+		presented := testBindClientJwt(fields.NetworkId, fields.ClientId)
+		sidecar.sidecarApi.SetByJwt(presented)
+		installed := 0
+		install := func(presentedByJwt string, byJwt string) error {
+			if c.refuse {
+				return errors.New("synthetic refusal")
+			}
+			installed += 1
+			return nil
+		}
+		if c.noInstall {
+			install = nil
+		}
+		reregistered := false
+		restorer := sidecarRestorerFunc(func(ctx context.Context) error {
+			reregistered = true
+			return nil
+		})
+		if err := sidecar.restoreRegistrations(context.Background(), []SidecarRestorer{restorer}, install); err == nil {
+			t.Errorf("%s: restored", c.name)
+		}
+		if installed != 0 || reregistered || sidecar.sidecarApi.currentByJwt() != presented {
+			t.Errorf("%s: installed %d, reregistered %t", c.name, installed, reregistered)
+		}
 	}
 }
 

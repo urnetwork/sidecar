@@ -12,7 +12,7 @@
 //
 // Group objects live on the cluster place/<repo_id> names, and per-sidecar ones (kp/, rk/, welcome/<sidecar_id>/)
 // on the first cluster, beside place/ (§10.6's placement row), as does a forwarding Delegation's reader key
-// (dkey/<delegation_id>), which no repo places.
+// (dkey/<network_id>/<delegation_id>, QD-763), which no repo places and its network's prefix gathers.
 
 package gkmservice
 
@@ -277,8 +277,27 @@ func GkmGroupOwnerKey(groupId sidecar.Id) string {
 	return sidecar.GkmGroupOwnerPath(groupId)
 }
 
-// gkm/dkey/<delegation_id>: a forwarding Delegation's reader key, its 1,216 B X-Wing public key, on the first cluster
-// (DESIGN-DETAILS 4.2.2); an error for an id of another size than 32 bytes.
-func GkmDelegationKeyKey(delegationId []byte) (string, error) {
-	return sidecar.GkmDelegationKeyPath(delegationId)
+// gkm/dkey/<network_id>/: a network's forwarding Delegations' reader keys, by LIST, on the first cluster (QD-763).
+func GkmDelegationKeyNetworkPrefix(networkId sidecar.Id) string {
+	return sidecar.GkmDelegationKeyNetworkPrefix(networkId)
+}
+
+// gkm/dkey/<network_id>/<delegation_id>: a forwarding Delegation's reader key, its 1,216 B X-Wing public key, on the
+// first cluster (DESIGN-DETAILS 4.2.2), under the network of the token that uploads or reads it (QD-763); an error
+// for an id of another size than 32 bytes, or the zero network.
+func GkmDelegationKeyKey(networkId sidecar.Id, delegationId []byte) (string, error) {
+	return sidecar.GkmDelegationKeyPath(networkId, delegationId)
+}
+
+// The delegation_id a key under a network's dkey/ prefix names, or false for a key in no form this family writes.
+func parseGkmDelegationKeyListKey(prefix string, key string) ([]byte, bool) {
+	rest, found := strings.CutPrefix(key, prefix)
+	if !found {
+		return nil, false
+	}
+	delegationId, err := parseGkmDelegationId(rest)
+	if err != nil {
+		return nil, false
+	}
+	return delegationId, true
 }

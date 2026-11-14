@@ -1,0 +1,17 @@
+{
+  "numStartups": 42,
+  "theme": "dark",
+  "mcpServers": {
+    "notes": {
+      "type": "stdio",
+      "command": "/opt/notes/bin/notes-mcp",
+      "args": ["serve"]
+    }
+  },
+  "projects": {
+    "/work/example": {
+      "allowedTools": [],
+      "history": []
+    }
+  }
+}

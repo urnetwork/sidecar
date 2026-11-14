@@ -97,6 +97,7 @@ func (self *CertsService) admitRow(ctx context.Context, row *sidecar.TlsCertReco
 			CertId: row.CertId,
 			From:   []sidecar.TlsCertState{sidecar.TlsCertStateQueued},
 			To:     sidecar.TlsCertStateFailed,
+			At:     now,
 		})
 		if err != nil {
 			return err
@@ -191,6 +192,7 @@ func (self *CertsService) admitTo(ctx context.Context, row *sidecar.TlsCertRecor
 		CertId:  row.CertId,
 		From:    []sidecar.TlsCertState{sidecar.TlsCertStateQueued},
 		To:      sidecar.TlsCertStateOrdering,
+		At:      self.clock.Now(),
 		Ca:      ca,
 		Profile: profile,
 	})

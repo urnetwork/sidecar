@@ -69,6 +69,9 @@ type ConfigLogSettings struct {
 	// (bridge_ledger.go, DESIGN-DETAILS 12.2.3). Nil at every keyless verifier, which judges no body and checks no
 	// ledger.
 	BridgeBodyJudge *BridgeBodyJudge
+	// §7.9's Recovery values, the window an activation waits out (config_recovery.go). Nil is
+	// DefaultConfigRecoverySettings.
+	Recovery *ConfigRecoverySettings
 }
 
 // §7.9's values.
@@ -77,6 +80,7 @@ func DefaultConfigLogSettings() *ConfigLogSettings {
 		BasePinRetention:          30 * 24 * time.Hour,
 		StateAtCheckpointInterval: 64,
 		StateAtCacheCount:         8,
+		Recovery:                  DefaultConfigRecoverySettings(),
 	}
 }
 

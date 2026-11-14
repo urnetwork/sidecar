@@ -82,7 +82,6 @@ func DefaultLegs() []*Leg {
 		{Name: "tests cli linux/amd64", Module: "cli", Goos: "linux", Goarch: "amd64", Packages: allPackages, Runner: RunnerContainer},
 		{Name: "tests smtpproof linux/amd64", Module: "smtpproof", Goos: "linux", Goarch: "amd64", Packages: allPackages, Runner: RunnerContainer},
 		{Name: "tests mlsinterop linux/amd64", Module: "mlsinterop", Goos: "linux", Goarch: "amd64", Packages: allPackages, Runner: RunnerContainer},
-		{Name: "tests sidecarctl linux/amd64", Module: "sidecarctl", Goos: "linux", Goarch: "amd64", Packages: allPackages, Runner: RunnerContainer},
 		{Name: "gomobile android/arm64", Module: ".", Goos: "android", Goarch: "arm64", Cgo: true, Tags: []string{"sdk_mobile_bind"}, Packages: allPackages, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
 		{Name: "gomobile ios/arm64", Module: ".", Goos: "ios", Goarch: "arm64", Cgo: true, Tags: []string{"sdk_mobile_bind"}, Packages: allPackages, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},
 		{Name: "gomobile ios/arm64 extension", Module: ".", Goos: "ios", Goarch: "arm64", Cgo: true, Tags: []string{"sdk_mobile_bind", "ios_extension"}, Packages: []string{"./protocol/bridge", "./device"}, Runner: RunnerCells, Why: "SDK-M10-06's cells run it"},

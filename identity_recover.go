@@ -385,7 +385,7 @@ func (self *Sidecar) recoveryResult(record *sidecarRecoveryRecord, authority Sid
 	case bridge.ProposalKind_PROPOSAL_KIND_RECOVERY_SCOPED:
 		result.Waiting = "the admission waits for one admin's cosign: ur approve on an admin's device"
 	case bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY, bridge.ProposalKind_PROPOSAL_KIND_RESTORED:
-		result.ActivatesAfter = time.UnixMilli(row.GetWindowTimeMs() + configRecoveryWindowMs)
+		result.ActivatesAfter = time.UnixMilli(row.GetWindowTimeMs() + sidecarAuthorityRecoverySettings(authority).Window.Milliseconds())
 		result.Waiting = "the admission waits out the recovery window, in which an admin may veto it"
 		if result.ProposalKind == bridge.ProposalKind_PROPOSAL_KIND_AUTHORITY {
 			result.Waiting += ", and for its cosigns where the network needs more than one admin"

@@ -44,6 +44,12 @@
 // REKEY shape. Any other write to a git-mode ref is ErrEvsGitRef: the local tier plans a git ref update through
 // PlanGitUpdate (below), sharing the chain rules, with a rename keeping its file's chain.
 //
+// A write held to the version its caller read (EvsPathWrite.IfVersion; QD-721) is checked against the plan's own read
+// of the path: 0 for a path that is absent or removed, else the version that stands. One the read does not bear out
+// is answered here with evs's own 409 PATH_CONFLICT, as an *EvsPathConflictError naming every such path of the write,
+// before anything is sealed or sent; one it bears out states that version as its base_entry_version, so 5g's CAS spans
+// the caller's read to the commit, and a plan made again after a refusal checks it again.
+//
 // Not built here, and failing closed: a file-mode rename or copy, which would keep a file's chain under another path
 // through the reuse list.
 //
@@ -57,6 +63,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"slices"
 	"strings"
 
@@ -83,7 +90,8 @@ var (
 	ErrEvsPathKind = errors.New("evs: a path of another kind")
 	// What a format-1 write cannot do yet: named in the error, nothing sent.
 	ErrEvsWriteNotBuilt = errors.New("evs: write not built")
-	// A write held to an entry version (EvsPathWrite.IfVersion) the path no longer stands at.
+	// A write held to a version the path is no longer at: §16.2's base_version (EvsPathWrite.IfBaseVersion), and the
+	// planner's PATH_CONFLICT for EvsPathWrite.IfVersion, which is this as well.
 	ErrEvsPathMoved = errors.New("evs: the path moved past the version the write was made on")
 	// A rekey write to a git-mode ref whose new blob, or mode, is not the standing version's: a rekey changes no tree
 	// (DESIGN-DETAILS 8.2.10).
@@ -103,18 +111,59 @@ type EvsPathWrite struct {
 	Remove bool
 	// A whole checkpoint under a fresh key even where a diff would do: KEYS-M2-26's ur evs rekey.
 	ForceCheckpoint bool
-	// The entry version the path must stand at, 0 for any. A write whose content came from an earlier read of that
-	// version, as ur evs rekey's does, is refused with ErrEvsPathMoved once another write or a removal landed
-	// between, rather than putting the older content back; evs then holds the push to the version the plan read (5g).
-	IfVersion uint64
+	// The path version the write's caller read, nil for no check (QD-721): 0 for a path it read as absent, which a
+	// removed path is too, so 0 is the create-only write; else the entry version that stood. A write whose content
+	// came from that read, as a mail writer's append and ur evs rekey's do, is refused with an *EvsPathConflictError,
+	// evs's 409 PATH_CONFLICT, once another write, creation or removal landed between, rather than putting the older
+	// content back; evs then holds the push to the version the plan read (5g), which is the caller's.
+	IfVersion *uint64
 	// §16.2's base_version, the path version the write was made on, nil for no check: the path's newest version, a
 	// standing file's or a removal's, 0 for a path evs shows nothing of, must be it, else ErrEvsPathMoved. Unlike
-	// IfVersion it lets a removed path be written again, on the removal's version, as an agent's evs_write over a
-	// removal it read may (EVS1-M3-01); evs holds the push to the version the plan read all the same (5g).
+	// IfVersion it tells a removal from a path never written, so a removed path is written again only on the
+	// removal's version, as an agent's evs_write over a removal it read may (EVS1-M3-01); evs holds the push to the
+	// version the plan read all the same (5g).
 	IfBaseVersion *uint64
 	// The version's versioning, EvsVersioningFor's answer (evs_versioning.go): 0 keeps every version, 1 and 2 are
 	// versionless, format 2's (evs_plan_versionless.go). The planner never picks one of its own.
 	Versioning uint32
+}
+
+// A write evs's path CAS refused, with the written paths it names (QD-721). The planner's own: a write held to a
+// version its read did not bear out (EvsPathWrite.IfVersion), answered before anything is sealed or sent, which is
+// ErrEvsPathMoved as well. Or evs's 409 to the push (§11.8's 5g), its token paths found among the plan's
+// (evs_write.go). Either way errors.As finds the *EvsError, 409 PATH_CONFLICT, whose Paths are the token paths.
+type EvsPathConflictError struct {
+	Refusal *EvsError
+	// The written paths that moved, in the write's order: none where evs named only what the planner changed for
+	// the write, a parent directory's delta. Never logged (I-13).
+	Paths []string
+	// what errors.Is and errors.As see: the refusal, with ErrEvsPathMoved for the planner's own
+	causes []error
+}
+
+// The refusal's text, which names no path (I-13).
+func (self *EvsPathConflictError) Error() string {
+	return self.Refusal.Error()
+}
+
+// The refusal, and ErrEvsPathMoved for the planner's own.
+func (self *EvsPathConflictError) Unwrap() []error {
+	return self.causes
+}
+
+// The planner's own conflict on the written paths, each with its token path as the plan's read named it.
+func newEvsPlannedConflict(paths []string, tokenPaths []EvsTokenPath) *EvsPathConflictError {
+	refusal := &EvsError{Status: http.StatusConflict, Code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT, Paths: tokenPaths}
+	return &EvsPathConflictError{Refusal: refusal, Paths: paths, causes: []error{refusal, ErrEvsPathMoved}}
+}
+
+// Whether err is the planner's own conflict, nothing sent.
+func evsPlannedConflict(err error) (*EvsPathConflictError, bool) {
+	var conflict *EvsPathConflictError
+	if errors.As(err, &conflict) && errors.Is(err, ErrEvsPathMoved) {
+		return conflict, true
+	}
+	return nil, false
 }
 
 // What a plan is made against.
@@ -169,6 +218,8 @@ type EvsWritePlan struct {
 	Flags  uint32
 	Erased []*EvsErasedKey
 	scope  string
+	// an ERASE's or a CLOSURE's note, which the sender seals as EvsSealedMetadata.erasure_note (QD-682; evs_erase.go)
+	erasureNote []byte
 	// a git-mode push's update, which the sender seals as EvsSealedMetadata.git: a rekey's REKEY shape, set by setRef
 	gitUpdate *protocol.EvsGitUpdate
 	// planned on a ref with no head, in the epoch firstEpoch gave: a refusal is answered by planning again, never by a
@@ -312,7 +363,7 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 	// every write a rekey write: the one write a git-mode ref takes here (DESIGN-DETAILS 8.2.10)
 	rekeyOnly := true
 	for _, write := range args.Writes {
-		rekeyOnly = rekeyOnly && write.ForceCheckpoint && write.IfVersion != 0 && !write.Remove
+		rekeyOnly = rekeyOnly && write.ForceCheckpoint && write.IfVersion != nil && *write.IfVersion != 0 && !write.Remove
 	}
 	writePaths := map[string]bool{}
 	readPaths := []string{}
@@ -348,6 +399,8 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 	var plan *EvsWritePlan
 	planned := map[string]*EvsPlannedPath{}
 	directories := map[string]*evsDirectoryRead{}
+	// the held writes whose paths the reads did not bear out, each with its token path (IfVersion)
+	moved := map[string]EvsTokenPath{}
 	// a read names at most 64 paths (§11.9), so a large write reads in batches, each verified, the push based on the
 	// first one's head; every path's own newest is what its batch read, which 5g holds it to at commit
 	readBatch := func(batch []string, fresh bool) error {
@@ -392,6 +445,11 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 					continue
 				}
 				path, err := self.planPath(ctx, plan, result, readPath, result.replies[i], write)
+				if _, ok := evsPlannedConflict(err); ok {
+					// gathered, so the answer names every path of the write that moved
+					moved[write.Path] = readPath.current
+					continue
+				}
 				if err != nil {
 					return err
 				}
@@ -405,6 +463,17 @@ func (self *EvsRepo) PlanWrite(ctx context.Context, args *EvsPlanArgs) (*EvsWrit
 		if err := readBatch(batch, args.Fresh || 0 < start); err != nil {
 			return nil, err
 		}
+	}
+	if 0 < len(moved) {
+		paths := []string{}
+		tokenPaths := []EvsTokenPath{}
+		for _, write := range args.Writes {
+			if tokenPath, ok := moved[write.Path]; ok {
+				paths = append(paths, write.Path)
+				tokenPaths = append(tokenPaths, tokenPath)
+			}
+		}
+		return nil, newEvsPlannedConflict(paths, tokenPaths)
 	}
 	if evsNeedsRoot(planned, directories) && directories[""] == nil {
 		// a top-level creation or removal changes the root's table, read after the rest (DESIGN-DETAILS 9.2.8)
@@ -535,8 +604,15 @@ func (self *EvsRepo) planPath(ctx context.Context, plan *EvsWritePlan, result *e
 		planned.PrevPushId = verified.Statement.Push.GetPushId()
 		planned.PrevCommitVersion = verified.CommitVersion
 	}
-	if write.IfVersion != 0 && (!stands || evsVerifiedNewestVersion(verified) != write.IfVersion) {
-		return nil, ErrEvsPathMoved
+	if write.IfVersion != nil {
+		// the version the caller read against what this read shows: 0 for a path absent or removed (QD-721)
+		newest := uint64(0)
+		if stands {
+			newest = evsVerifiedNewestVersion(verified)
+		}
+		if newest != *write.IfVersion {
+			return nil, newEvsPlannedConflict([]string{write.Path}, []EvsTokenPath{readPath.current})
+		}
 	}
 	if base := write.IfBaseVersion; base != nil {
 		newest := uint64(0)
@@ -1006,6 +1082,21 @@ func (self *EvsRepo) planEpochs(ctx context.Context, plan *EvsWritePlan) error {
 // holds every version to its tree (DESIGN-DETAILS 8.2.7's G4), so this is a fault, never a race.
 var ErrEvsGitStateDiffers = errors.New("evs: a git update's tree and the ref's entries differ")
 
+// A re-creating git update its ref's tainted token paths refuse before any evs write (DESIGN-DETAILS 8.5): a taint of
+// another path epoch than the push's, on which every replaying reader fails closed; one that neither the new tree,
+// the net change nor evs's tables name; or one evs holds no version of that the new tree lacks, which neither a write
+// nor a removal can clear, since evs answers a removal of a path that does not stand 409 PATH_CONFLICT. The text
+// names no path (I-13).
+var ErrEvsGitTaintedPath = errors.New("evs: a tainted token path the re-creating push cannot write or remove")
+
+// A token path a stopped version changed, which no reader vouches for (DESIGN-DETAILS 8.5): the path epoch its token
+// path is in, and its key form (EvsTokenPath.KeyString), the root's empty. Replay keeps a ref's in EvsGitRef.Tainted
+// until a version applies; the push that re-creates the ref after its DELETE writes or removes each.
+type EvsTaintedPath struct {
+	Epoch uint64 `json:"epoch"`
+	Key   string `json:"key"`
+}
+
 // A git update past §11.19's directory bounds on its new tree, or past a push's entry writes: refused before any evs
 // write, naming the path (DESIGN-DETAILS 8.2.4's limits row, `ng <ref> DIRECTORY_FULL <path>`).
 var ErrEvsDirectoryFull = errors.New("evs: DIRECTORY_FULL")
@@ -1057,6 +1148,10 @@ type EvsGitPathChange struct {
 	// and plans a checkpoint where it holds another blob.
 	ReuseRefId *Id
 	ReuseWhole bool
+	// A tainted token path's change (DESIGN-DETAILS 8.5), which PlanGitUpdate marks and adds: planned on what evs
+	// holds at the path, not on what the tree the path state stands at says, citing nothing (see PlanGitUpdate's
+	// tainted row).
+	Tainted bool
 }
 
 // A directory's child in a tree: its raw name and its kind.
@@ -1096,6 +1191,18 @@ type EvsGitPlanArgs struct {
 	Generation uint64
 	// Reads the cluster's head, not evs's cache.
 	Fresh bool
+	// The ref's tainted token paths (EvsGitRef.Tainted), which the caller read under the apply lock with the update's
+	// old tip and base version, on an update that re-creates the ref after its DELETE; and the new tree they are named
+	// in. Nil for none (DESIGN-DETAILS 8.5; see the tainted row).
+	Tainted  []EvsTaintedPath
+	NextTree EvsGitTreeEntries
+}
+
+// A git update's new tree as its plan names a tainted token path in it (DESIGN-DETAILS 8.5): the entries of the
+// directory at a path as git reads them, sorted by name, and false for a path that is no directory of the tree; ""
+// is the root.
+type EvsGitTreeEntries interface {
+	EntriesAt(ctx context.Context, path string) ([]EvsGitRawEntry, bool, error)
 }
 
 // Plans a git ref update on its ref (DESIGN-DETAILS 8.2.4's planner, beside PlanWrite and sharing its chain rules):
@@ -1128,6 +1235,15 @@ type EvsGitPlanArgs struct {
 //	           entry holding the blob that stood takes the write's diff, a source's holding the new blob is cited
 //	           whole where the checkpoint rules let it stand, each with a reuse item {ref, entry version, its token
 //	           path there}; one holding another blob, or none, plans a checkpoint
+//
+//	tainted    a re-creating update's tainted token paths (8.5; 8.2.4's chain row, amendment 16-D), with the head read
+//	           first: each must be in the push's epoch, else ErrEvsGitTaintedPath, as every reader fails closed on
+//	           it; each is named in the push's epoch by the net change, by the new tree, else by evs's tables, and
+//	           written where the new tree holds it and removed where it does not, beside the net change, on what evs
+//	           holds there (planGitTainted): a file one checkpoint of the tree's blob from Blobs, chunks past 8 MiB,
+//	           under a new file_id, with no diff against the entry that stands there, no rename pairing it and no
+//	           reuse item citing a chain for it; a directory given the table the new tree gives it. A removal of a
+//	           tainted path evs holds no version of, and a taint no tree or table names, refuse before any evs write
 func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*EvsWritePlan, error) {
 	for _, reserved := range evsReservedRefNames {
 		if bytes.Equal(args.RefName, reserved) {
@@ -1147,14 +1263,10 @@ func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*
 	if EvsRepoKindRecordClass(repoKind) {
 		return nil, fmt.Errorf("%w: a git-mode ref in a slot-keyed repo", ErrEvsWriteNotBuilt)
 	}
+	// the net change, and with taints beside it once the head is read (planGitTaints); each path once
+	gitChanges := args.Changes
 	changes := map[string]*EvsGitPathChange{}
-	for _, change := range args.Changes {
-		if changes[change.Path] != nil {
-			return nil, fmt.Errorf("%w: a path changed twice", ErrEvsWriteInvalid)
-		}
-		changes[change.Path] = change
-	}
-	renames := evsGitRenames(args.Changes)
+	renames := map[string]string{}
 	pendings := []*evsGitPendingReuse{}
 	plan := (*EvsWritePlan)(nil)
 	planned := map[string]*EvsPlannedPath{}
@@ -1217,11 +1329,18 @@ func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*
 			verifieds[readPath.path] = result.replies[i]
 		}
 		for i, readPath := range result.paths {
-			var from *evsGitRenameSource
-			if source, ok := renames[readPath.path]; ok {
-				from = &evsGitRenameSource{path: source, verified: verifieds[source]}
+			change := changes[readPath.path]
+			var path *EvsPlannedPath
+			var err error
+			if change.Tainted {
+				path, err = self.planGitTainted(ctx, plan, result, i, change, &contents)
+			} else {
+				var from *evsGitRenameSource
+				if source, ok := renames[readPath.path]; ok {
+					from = &evsGitRenameSource{path: source, verified: verifieds[source]}
+				}
+				path, err = self.planGitPath(ctx, plan, result, readPath, result.replies[i], change, from, &contents, &pendings)
 			}
-			path, err := self.planGitPath(ctx, plan, result, readPath, result.replies[i], changes[readPath.path], from, &contents, &pendings)
 			if err != nil {
 				return err
 			}
@@ -1231,20 +1350,40 @@ func (self *EvsRepo) PlanGitUpdate(ctx context.Context, args *EvsGitPlanArgs) (*
 		}
 		return nil
 	}
-	batches := evsGitReadBatches(args.Changes, renames)
-	if len(batches) == 0 {
+	if 0 < len(args.Tainted) {
+		// the head first: its current epoch is the push's, which every taint must be in, and its keys name them
+		if err := readBatch(nil, args.Fresh); err != nil {
+			return nil, err
+		}
+		if gitChanges, err = self.planGitTaints(ctx, plan, args); err != nil {
+			return nil, err
+		}
+		if err := evsGitCheckLimits(gitChanges); err != nil {
+			return nil, err
+		}
+	}
+	for _, change := range gitChanges {
+		if changes[change.Path] != nil {
+			return nil, fmt.Errorf("%w: a path changed twice", ErrEvsWriteInvalid)
+		}
+		changes[change.Path] = change
+	}
+	renames = evsGitRenames(gitChanges)
+	batches := evsGitReadBatches(gitChanges, renames)
+	if len(batches) == 0 && plan == nil {
 		// an update that changes no path, a tag's, a DELETE's or a branch's at a tree it holds: the head alone
 		batches = [][]string{nil}
 	}
-	for i, batch := range batches {
-		if err := readBatch(batch, args.Fresh || 0 < i); err != nil {
+	for _, batch := range batches {
+		// the caller's fresh goes to the first read; every later one reads the cluster's head
+		if err := readBatch(batch, args.Fresh || plan != nil); err != nil {
 			return nil, err
 		}
 	}
 	if err := self.planGitReuses(ctx, plan, pendings); err != nil {
 		return nil, err
 	}
-	for _, change := range args.Changes {
+	for _, change := range gitChanges {
 		if path := planned[change.Path]; path != nil {
 			plan.Paths = append(plan.Paths, path)
 		}
@@ -1323,11 +1462,13 @@ type evsGitRenameSource struct {
 }
 
 // Each created file whose blob a removed file of the update held, mapped to that removed file: candidates of one oid
-// pair in path order (DESIGN-DETAILS 8.2.4's rename row). A gitlink has no content and takes no rename.
+// pair in path order (DESIGN-DETAILS 8.2.4's rename row). A gitlink has no content and takes no rename, and a tainted
+// path is on neither side: its entry holds what a refused version wrote, whatever the tree says stood (8.2.4's chain
+// row).
 func evsGitRenames(changes []*EvsGitPathChange) map[string]string {
 	oidRemoved := map[EvsGitOid][]string{}
 	for _, change := range changes {
-		if change.removes() && change.Stood == protocol.EvsEntryKind_EVS_ENTRY_FILE && change.Path != "" {
+		if change.removes() && change.Stood == protocol.EvsEntryKind_EVS_ENTRY_FILE && change.Path != "" && !change.Tainted {
 			oidRemoved[change.StoodOid] = append(oidRemoved[change.StoodOid], change.Path)
 		}
 	}
@@ -1338,7 +1479,7 @@ func evsGitRenames(changes []*EvsGitPathChange) map[string]string {
 	created := []*EvsGitPathChange{}
 	for _, change := range changes {
 		if change.Kind == protocol.EvsEntryKind_EVS_ENTRY_FILE && change.Stood == protocol.EvsEntryKind_EVS_ENTRY_KIND_UNSPECIFIED &&
-			change.Mode != EvsGitModeGitlink {
+			change.Mode != EvsGitModeGitlink && !change.Tainted {
 			created = append(created, change)
 		}
 	}
@@ -1781,4 +1922,307 @@ func (self *EvsRepo) overlayEffectiveBase(ctx context.Context, baseVersion uint6
 		overlay = head.Head.GetBase()
 	}
 	return effective, nil
+}
+
+// Names each tainted token path of a re-creating update and gives it its change beside the net change
+// (DESIGN-DETAILS 8.5; PlanGitUpdate's tainted row), on the head the plan read, whose current epoch is the push's.
+// A taint of another epoch refuses, as every replaying reader does. A path the net change names keeps its change,
+// marked tainted and citing nothing. Any other is named in the new tree, each child's token in the push's epoch made
+// from the tree's names, else in the tables evs folds for the path above it, each row opened and held to its token;
+// it is written where the new tree holds it, a file or a directory, and removed where it does not. A taint none of
+// them names refuses: no request can write or remove a path the plan cannot read by name.
+func (self *EvsRepo) planGitTaints(ctx context.Context, plan *EvsWritePlan, args *EvsGitPlanArgs) ([]*EvsGitPathChange, error) {
+	if plan.firstPush {
+		return nil, fmt.Errorf("%w: tainted token paths on a ref with no head", ErrEvsGitTaintedPath)
+	}
+	if args.NextTree == nil {
+		return nil, fmt.Errorf("%w: tainted token paths with no new tree to name them in", ErrEvsWriteInvalid)
+	}
+	tainted := map[string]bool{}
+	for _, path := range args.Tainted {
+		if path.Epoch != plan.PathEpoch {
+			return nil, fmt.Errorf("%w: a taint of path epoch %d, where the push's is %d", ErrEvsGitTaintedPath, path.Epoch, plan.PathEpoch)
+		}
+		tainted[path.Key] = true
+	}
+	changes := make([]*EvsGitPathChange, 0, len(args.Changes)+len(tainted))
+	for _, change := range args.Changes {
+		names, err := evsReadPathNames(change.Path)
+		if err != nil {
+			return nil, err
+		}
+		tokenPath, err := plan.tokenPathIn(ctx, names, plan.PathEpoch)
+		if err != nil {
+			return nil, err
+		}
+		if key := tokenPath.KeyString(); tainted[key] {
+			marked := *change
+			marked.Tainted, marked.ReuseRefId, marked.ReuseWhole = true, nil, false
+			change = &marked
+			delete(tainted, key)
+		}
+		changes = append(changes, change)
+	}
+	keys := make([]string, 0, len(tainted))
+	for key := range tainted {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	namer := &evsGitTaintNamer{
+		repo: self, plan: plan, refId: args.RefId, tree: args.NextTree, nextChildren: map[string]map[string]*evsGitTaintChild{},
+		listed: map[string]map[string][]byte{},
+	}
+	for _, key := range keys {
+		named, err := namer.name(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		change := &EvsGitPathChange{Path: named.path, Tainted: true}
+		switch {
+		case !named.inNext:
+			// a removal of what evs holds there, of either kind
+		case named.directory:
+			entries, ok, err := args.NextTree.EntriesAt(ctx, named.path)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, fmt.Errorf("%w: a directory the new tree does not hold", ErrEvsWriteInvalid)
+			}
+			change.Stood, change.Kind = protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY, protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY
+			for _, entry := range entries {
+				kind := protocol.EvsEntryKind_EVS_ENTRY_FILE
+				if entry.CanonMode == EvsGitModeDirectory {
+					kind = protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY
+				}
+				change.Children = append(change.Children, &EvsGitChild{Name: bytes.Clone(entry.Name), Kind: kind})
+			}
+		default:
+			// a file the net change leaves alone, so the tree the path state stands at holds it as the new one does
+			change.Stood, change.Kind = protocol.EvsEntryKind_EVS_ENTRY_FILE, protocol.EvsEntryKind_EVS_ENTRY_FILE
+			change.Mode, change.Oid, change.StoodOid = named.entry.CanonMode, named.entry.Oid, named.entry.Oid
+		}
+		changes = append(changes, change)
+	}
+	return changes, nil
+}
+
+// Names tainted token paths in the push's epoch for planGitTaints: in the new tree, each directory's children's
+// tokens made once, else in the tables evs folds, each directory listed once.
+type evsGitTaintNamer struct {
+	repo  *EvsRepo
+	plan  *EvsWritePlan
+	refId Id
+	tree  EvsGitTreeEntries
+	// the new tree's directories read so far by path: each child by its token's key form
+	nextChildren map[string]map[string]*evsGitTaintChild
+	// evs's directories listed so far by path: each row's raw name by its token's key form
+	listed map[string]map[string][]byte
+}
+
+// A child of a directory of the new tree, and its token in the push's epoch.
+type evsGitTaintChild struct {
+	entry EvsGitRawEntry
+	token EvsToken
+}
+
+// A tainted token path named: its plaintext path, whether the new tree holds it, and if so whether as a directory, or
+// as the file entry.
+type evsGitNamedTaint struct {
+	path      string
+	inNext    bool
+	directory bool
+	entry     EvsGitRawEntry
+}
+
+// The path whose token path in the push's epoch has key as its key form: each component found among the new tree's
+// children of the path named so far while the tree holds it as a directory, else among the rows evs's table of that
+// path holds. The root, whose key is empty, is a directory of every tree.
+func (self *evsGitTaintNamer) name(ctx context.Context, key string) (*evsGitNamedTaint, error) {
+	named := &evsGitNamedTaint{inNext: true, directory: true}
+	if key == "" {
+		return named, nil
+	}
+	parent := EvsRootToken
+	for _, component := range strings.Split(key, "/") {
+		if named.inNext && named.directory {
+			children, err := self.nextChildrenOf(ctx, named.path, parent)
+			if err != nil {
+				return nil, err
+			}
+			if child := children[component]; child != nil {
+				named.path = evsGitJoin(named.path, child.entry.Name)
+				named.entry, named.directory = child.entry, child.entry.CanonMode == EvsGitModeDirectory
+				parent = child.token
+				continue
+			}
+		}
+		// a name the new tree does not hold there: the row of evs's table for it
+		names, err := self.listedOf(ctx, named.path)
+		if err != nil {
+			return nil, err
+		}
+		name := names[component]
+		if name == nil {
+			return nil, fmt.Errorf("%w: a tainted token path that neither the net change, the new tree nor evs's tables name", ErrEvsGitTaintedPath)
+		}
+		token, err := ParseEvsToken(component)
+		if err != nil {
+			return nil, err
+		}
+		named.path = evsGitJoin(named.path, name)
+		named.inNext, named.directory, named.entry = false, false, EvsGitRawEntry{}
+		parent = token
+	}
+	return named, nil
+}
+
+// The new tree's children of the directory at path, whose token is parent, by their tokens' key forms; none for a
+// path the tree holds no directory at.
+func (self *evsGitTaintNamer) nextChildrenOf(ctx context.Context, path string, parent EvsToken) (map[string]*evsGitTaintChild, error) {
+	if children, ok := self.nextChildren[path]; ok {
+		return children, nil
+	}
+	entries, ok, err := self.tree.EntriesAt(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	children := map[string]*evsGitTaintChild{}
+	if ok {
+		for _, entry := range entries {
+			token, err := EvsPathToken(self.plan.pathKey, parent, entry.Name)
+			if err != nil {
+				return nil, err
+			}
+			children[token.String()] = &evsGitTaintChild{entry: entry, token: token}
+		}
+	}
+	self.nextChildren[path] = children
+	return children, nil
+}
+
+// The raw names evs's table of the directory at path holds, by their rows' tokens' key forms, as listingAt opens and
+// checks them; none for a directory that does not stand. A directory an overlay holds no version of has no table of
+// its own to name a taint by, which refuses.
+func (self *evsGitTaintNamer) listedOf(ctx context.Context, path string) (map[string][]byte, error) {
+	if names, ok := self.listed[path]; ok {
+		return names, nil
+	}
+	listing, err := self.repo.listingAt(ctx, self.refId, path)
+	if errors.Is(err, ErrEvsOverlayBase) {
+		return nil, fmt.Errorf("%w: a tainted token path below a directory the overlay holds no version of", ErrEvsGitTaintedPath)
+	}
+	if err != nil {
+		return nil, err
+	}
+	names := map[string][]byte{}
+	for name, row := range listing.rows {
+		names[row.token.String()] = []byte(name)
+	}
+	self.listed[path] = names
+	return names, nil
+}
+
+// A tainted token path's change planned on what evs holds at the path, not on what the tree the path state stands at
+// says (DESIGN-DETAILS 8.5; PlanGitUpdate's tainted row):
+//
+//	file       written over a standing file at its newest version + 1, else created over what stands or over nothing,
+//	           at max(b, m) + 1; its chain one checkpoint of the new tree's blob, read from Blobs, or fresh chunks past
+//	           8 MiB, under a new file_id: nothing of the entry that stands there is read or kept, its sealed fields
+//	           included, so no chain a refused version wrote is diffed on, renamed from or cited (8.2.4's chain row)
+//	directory  over a standing directory a delta that makes its table, as evs folds it, list the new tree's children
+//	           exactly: each child missing or of another kind added, each other row's name removed; over a file or
+//	           nothing a creation listing every child
+//	removal    of what stands, a file or a directory, at its newest version; a path that does not stand refuses with
+//	           ErrEvsGitTaintedPath, since evs takes no removal of it and the new tree holds nothing to write there
+//
+// A path the overlay holds no version of has no entry of its own a refused version wrote, which refuses as well.
+func (self *EvsRepo) planGitTainted(ctx context.Context, plan *EvsWritePlan, result *evsReadResult, index int, change *EvsGitPathChange, contents *[]*evsSpill) (*EvsPlannedPath, error) {
+	readPath, verified := result.paths[index], result.replies[index]
+	if verified.Base != nil || (plan.firstPush && plan.overlayBase != nil) {
+		return nil, fmt.Errorf("%w: a tainted token path the overlay holds no version of", ErrEvsGitTaintedPath)
+	}
+	planned := &EvsPlannedPath{Path: change.Path, TokenPath: readPath.current, Kind: change.Kind, names: readPath.names}
+	stood := protocol.EvsEntryKind_EVS_ENTRY_KIND_UNSPECIFIED
+	if verified.Entry != nil {
+		stood = protocol.EvsEntryKind(verified.Entry.GetKind())
+		planned.PrevPushId = verified.Statement.Push.GetPushId()
+		planned.PrevCommitVersion = verified.CommitVersion
+	}
+	if change.removes() {
+		if stood == protocol.EvsEntryKind_EVS_ENTRY_KIND_UNSPECIFIED {
+			return nil, fmt.Errorf("%w: a tainted token path that evs holds no version of and the new tree lacks", ErrEvsGitTaintedPath)
+		}
+		planned.Remove, planned.Kind = true, stood
+		planned.BaseEntryVersion = evsVerifiedNewestVersion(verified)
+		return planned, nil
+	}
+	if stood == change.Kind {
+		planned.BaseEntryVersion = evsVerifiedNewestVersion(verified)
+		planned.Version = planned.BaseEntryVersion + 1
+	} else {
+		if verified.Removal != nil {
+			planned.removalVersion = verified.Removal.GetPathVersion()
+		}
+		planned.Version = max(plan.BaseVersion, planned.removalVersion) + 1
+	}
+	if change.Kind == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
+		listed := map[string]protocol.EvsEntryKind{}
+		if stood == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
+			rows, err := self.openListing(ctx, result, index)
+			if err != nil {
+				return nil, err
+			}
+			for _, row := range rows {
+				listed[string(row.name)] = row.kind
+			}
+		}
+		wanted := map[string]bool{}
+		for _, child := range change.Children {
+			wanted[string(child.Name)] = true
+			if kind, ok := listed[string(child.Name)]; !ok || kind != child.Kind {
+				planned.children = append(planned.children, &evsChildChange{path: evsGitJoin(change.Path, child.Name), name: child.Name, kind: child.Kind})
+			}
+		}
+		removedNames := []string{}
+		for name := range listed {
+			if !wanted[name] {
+				removedNames = append(removedNames, name)
+			}
+		}
+		slices.Sort(removedNames)
+		for _, name := range removedNames {
+			planned.children = append(planned.children, &evsChildChange{path: evsGitJoin(change.Path, []byte(name)), name: []byte(name), removed: true})
+		}
+		return planned, nil
+	}
+	if change.Kind != protocol.EvsEntryKind_EVS_ENTRY_FILE || !evsFileModeValid(change.Mode) {
+		return nil, fmt.Errorf("%w: %q of kind %d, mode %o", ErrEvsWriteInvalid, change.Path, change.Kind, change.Mode)
+	}
+	planned.Fields = &protocol.EvsSealedFields{
+		FileId: NewEvsSlotId().Bytes(), Mode: change.Mode, GitOid: bytes.Clone(change.Oid[:]), OidKind: protocol.EvsOidKind_EVS_OID_SHA1,
+	}
+	if change.Mode == EvsGitModeGitlink {
+		// a gitlink has no content: its sealed fields and an empty chain (DESIGN-DETAILS 8.2.2's gitlink row)
+		planned.Checkpoint = EvsCheckpointNewFile
+		return planned, nil
+	}
+	content := newEvsSpill(self.client.args.Store, self.client.settings.DeltaBaseMemoryByteCount)
+	*contents = append(*contents, content)
+	size, err := self.copyGitBlob(ctx, plan, change.Oid, content)
+	if err != nil {
+		return nil, err
+	}
+	if EvsFileMaxByteCount < size {
+		return nil, fmt.Errorf("%w: %d bytes", ErrEvsFileTooLarge, size)
+	}
+	planned.Fields.Size = uint64(size)
+	write := &EvsPathWrite{Path: change.Path, Content: content, Mode: change.Mode, ForceCheckpoint: true}
+	if err := self.planChain(ctx, plan, planned, write, nil, nil, nil, nil, change.Oid); err != nil {
+		return nil, err
+	}
+	if planned.Checkpoint != EvsCheckpointChunked {
+		planned.Checkpoint = EvsCheckpointForced
+	}
+	return planned, nil
 }

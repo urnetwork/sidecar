@@ -87,7 +87,7 @@ func TestEveryKindReachesGate(t *testing.T) {
 	if len(gate.actions) != len(sidecarGateKinds) {
 		t.Errorf("%d actions reached the gate", len(gate.actions))
 	}
-	for _, kind := range []SidecarActionKind{SidecarActionUnspecified, SidecarActionRestore + 1} {
+	for _, kind := range []SidecarActionKind{SidecarActionUnspecified, SidecarActionMailTlsUnauthenticated + 1} {
 		if err := sidecar.Authorize(t.Context(), testSidecarAction(t, kind), nil); !errors.Is(err, ErrSidecarActionInvalid) {
 			t.Errorf("kind %d: %v", kind, err)
 		}

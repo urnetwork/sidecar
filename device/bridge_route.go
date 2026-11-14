@@ -309,6 +309,8 @@ func bridgeRouteLinkTarget(link *bridge.BridgeRuleLink) BridgeLinkTarget {
 		SidecarId: connect.Id(link.GetTargetSidecarId()),
 	}
 	copy(target.IdentityPublicKey[:], link.GetTargetIdentityPublicKey())
+	// an app host's pinned device client key; checkBridgeRuleLink holds it to 32 bytes or none
+	copy(target.HostClientPublicKey[:], link.GetTargetClientPublicKey())
 	return target
 }
 

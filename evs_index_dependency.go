@@ -128,7 +128,7 @@ func indexChooseEntry(writer *indexViewWriter, keep map[*indexViewSlot]bool, pen
 		return full, nil
 	}
 	diff := &indexEntry{kind: indexEntryDiff, key: pending.key, version: pending.version, baseVersion: base.version, timeSeconds: timeSeconds, row: pending.row, delta: delta}
-	encoded, err := diff.appendEncoded(nil, companion)
+	encoded, err := diff.appendEncoded(nil, companion, settings)
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"net/http"
 	"testing"
+	"time"
 )
 
 // Every credential SidecarApi sees reaches the privacy harness as it arrives, the ClientKey at the
@@ -75,6 +76,23 @@ func TestApiCredentialsReachTheSecretHook(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"api.send.before", "api.send.after", "api.set_by_jwt.before", "api.set_by_jwt.after"} {
+		if !recorder.barriers[name] {
+			t.Errorf("no %s barrier", name)
+		}
+	}
+}
+
+// A proof refused for its iat passes the offset's barriers as the refusal's Date is kept, and the retry's
+// before it is signed once more (§7.4, QD-757).
+func TestApiClockRetryPassesItsBarriers(t *testing.T) {
+	recorder := recordHooks(t)
+	world := newTestApiClockWorld(t, 10*time.Minute)
+	if _, err := world.api.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	recorder.stateLock.Lock()
+	defer recorder.stateLock.Unlock()
+	for _, name := range []string{"api.clock_offset.before", "api.clock_offset.after", "api.send.iat_retry"} {
 		if !recorder.barriers[name] {
 			t.Errorf("no %s barrier", name)
 		}

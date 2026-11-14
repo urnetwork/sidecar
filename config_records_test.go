@@ -190,7 +190,8 @@ func TestConfigTypesAreWhatTheLogCarries(t *testing.T) {
 		}
 	}
 	slices.Sort(want)
-	if len(want) != 15+21+7 {
+	// §8.8's fifteen and RepoPrefixRules (QD-212), §7.9's twenty-one, §17.8's seven
+	if len(want) != 16+21+7 {
 		t.Errorf("found %d types", len(want))
 	}
 	if got := testConfigTypes(); !slices.Equal(got, want) {

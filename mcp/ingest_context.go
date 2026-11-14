@@ -78,14 +78,8 @@ func (self *Ingest) captureContextWithLock(ctx context.Context, run *ingestRun, 
 		state.PermissionMode = event.PermissionMode
 		run.dirty = true
 		self.appendContextWithLock(ctx, run, redactor, stage, event, payload)
-		if stage == 1 && self.lifecycle != nil {
-			self.lifecycle.RunStarted(ctx, run.networkId, &RunLifecycleStart{
-				RunId:   run.runId,
-				Harness: state.Harness,
-				Title:   state.Title,
-				Project: state.Project,
-				Branch:  state.Branch,
-			})
+		if stage == 1 {
+			self.lifecycleStartWithLock(ctx, run)
 		}
 	default:
 		changed := false
@@ -106,6 +100,24 @@ func (self *Ingest) captureContextWithLock(ctx context.Context, run *ingestRun, 
 			self.appendContextWithLock(ctx, run, redactor, 2, event, payload)
 		}
 	}
+}
+
+// The run's who, what and where to the lifecycle: all RunStarted carries, and all of a session that leaves the
+// ingest for the directory (I-20).
+func (self *Ingest) lifecycleStartWithLock(ctx context.Context, run *ingestRun) {
+	if self.lifecycle == nil {
+		return
+	}
+	state := run.state
+	self.lifecycle.RunStarted(ctx, run.networkId, &RunLifecycleStart{
+		RunId:      run.runId,
+		Harness:    state.Harness,
+		AgentLabel: state.AgentLabel,
+		Model:      state.Model,
+		Title:      state.Title,
+		Project:    state.Project,
+		Branch:     state.Branch,
+	})
 }
 
 // One context entry of stage.
@@ -177,6 +189,10 @@ func (self *Ingest) setTitleWithLock(ctx context.Context, run *ingestRun, redact
 	}
 	run.state.Title = string(cut)
 	run.dirty = true
+	if run.state.Started {
+		// the title arrived after the run's start: restated to the lifecycle
+		self.lifecycleStartWithLock(ctx, run)
+	}
 }
 
 // A UserPromptSubmit: the title from the first prompt when none is set, and the run card's prompts.
@@ -353,6 +369,8 @@ func (self *Ingest) captureScanWithLock(ctx context.Context, run *ingestRun, red
 		self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapMissedEvent)
 		return
 	}
+	// the run's worktree, watched for file events once its point holds one (ingest_fsevents.go)
+	self.watchRunRoot(ctx, run)
 	if scan == nil {
 		return
 	}
@@ -467,8 +485,8 @@ func (self *Ingest) captureBlobWithLock(ctx context.Context, run *ingestRun, red
 		entryId = ref.EntryId[:]
 	}
 	state.BlobHashes = append(state.BlobHashes, hashHex)
-	if ingestBlobHashCount < len(state.BlobHashes) {
-		state.BlobHashes = state.BlobHashes[len(state.BlobHashes)-ingestBlobHashCount:]
+	if count := max(self.settings.IngestBlobHashCount, 1); count < len(state.BlobHashes) {
+		state.BlobHashes = state.BlobHashes[len(state.BlobHashes)-count:]
 	}
 	run.dirty = true
 	return entryId

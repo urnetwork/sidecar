@@ -387,6 +387,7 @@ func TestSidecarActionKindsTakeTheProtoNumbers(t *testing.T) {
 		{kind: SidecarActionAccessRequest, name: "SIDECAR_ACTION_KIND_ACCESS_REQUEST"},
 		{kind: SidecarActionPayment, name: "SIDECAR_ACTION_KIND_PAYMENT"},
 		{kind: SidecarActionRestore, name: "SIDECAR_ACTION_KIND_RESTORE"},
+		{kind: SidecarActionMailTlsUnauthenticated, name: "SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED"},
 	}
 	for _, c := range kindCases {
 		value, ok := protocol.SidecarActionKind_value[c.name]

@@ -14,10 +14,9 @@
 //	                  entries through the tip, then once Fork serves one, an entry api never sequenced; the auth
 //	                  source a device's HeadCheck compares, so a schedule connects two such views (FS-14), and
 //	                  Follower, one reading api's own, for the honest twin
-//	AclConfigRowView  a reader's state with the config repo's AclRepo row that every option of question
-//	                  team-m2-15-config-repo-acl-row gives it: no compile writes that row yet, so the config's read,
-//	                  its key holders and its head signers are judged on this view until the question is answered,
-//	                  and the rows themselves refuse every config scope, the closed direction
+//
+// The config repo's AclRepo row is each reader's own state's, added from the Genesis (QD-719): no compile writes it, and
+// ConfigRepoId names the repo a schedule asks its readers about.
 //
 // Nothing here sleeps or reads a clock of its own: the admission world's FakeClock is the only time. Nothing creates,
 // derives or unwraps a key but the fixed test keys the admission world derives from labels.
@@ -411,64 +410,6 @@ func (self *AdmissionNet) PresenceKeyRegister(device *AdmissionDevice, key *Fixt
 func (self *AdmissionNet) ConfigRepoId() sidecar.Id {
 	return self.configRepoId
 }
-
-// A reader's state with the config repo's AclRepo row added where its rows hold none: kind config, no owner, no
-// admins and no access log, the row every option of question team-m2-15-config-repo-acl-row gives (an AclState that
-// synthesizes it, a compile that writes it, or gates that special-case the Genesis's id), so §8.5's config kind
-// default answers through it. Every other question goes to the state. Built once; immutable.
-type AclConfigRowView struct {
-	*sidecar.ConfigState
-	configRepoId sidecar.Id
-	acl          *sidecar.AclState
-}
-
-// The view over state. An error when the state's rows do not build.
-func NewAclConfigRowView(state *sidecar.ConfigState) (*AclConfigRowView, error) {
-	acl, err := state.Acl()
-	if err != nil {
-		return nil, err
-	}
-	configRepoId, err := sidecar.IdFromBytes(state.Genesis().GetConfigRepoId())
-	if err != nil {
-		return nil, fmt.Errorf("the genesis names no config repo: %w", err)
-	}
-	rows := proto.Clone(acl.Rows()).(*protocol.AclRows)
-	if acl.Repo(configRepoId) == nil {
-		rows.Repos = append(rows.Repos, &protocol.AclRepo{RepoId: configRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG})
-		slices.SortFunc(rows.Repos, func(a *protocol.AclRepo, b *protocol.AclRepo) int {
-			return bytes.Compare(a.GetRepoId(), b.GetRepoId())
-		})
-	}
-	withRow, err := sidecar.NewAclState(rows, state)
-	if err != nil {
-		return nil, err
-	}
-	return &AclConfigRowView{ConfigState: state, configRepoId: configRepoId, acl: withRow}, nil
-}
-
-// The acl part with the config's row.
-func (self *AclConfigRowView) Acl() *sidecar.AclState {
-	return self.acl
-}
-
-// GkmAuthView's, from the acl part with the config's row.
-func (self *AclConfigRowView) Repo(repoId sidecar.Id) *protocol.AclRepo {
-	return self.acl.Repo(repoId)
-}
-
-func (self *AclConfigRowView) RepoReaders(repoId sidecar.Id) []sidecar.Id {
-	return self.acl.RepoReaders(repoId, time.UnixMilli(self.TimeMs()))
-}
-
-func (self *AclConfigRowView) RepoWriters(repoId sidecar.Id) []sidecar.Id {
-	return self.acl.RepoWriters(repoId, time.UnixMilli(self.TimeMs()))
-}
-
-func (self *AclConfigRowView) RepoReadersAt(repoId sidecar.Id, at time.Time) []sidecar.Id {
-	return self.acl.RepoReaders(repoId, at)
-}
-
-var _ sidecar.GkmAuthView = (*AclConfigRowView)(nil)
 
 // Whether holders hold a sidecar under one of kinds.
 func AclHolds(holders sidecar.GkmHolders, sidecarId sidecar.Id, kinds ...sidecar.GkmHolderKind) bool {

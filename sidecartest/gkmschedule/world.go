@@ -194,8 +194,8 @@ type FsKeysWorld struct {
 	suspended      map[sidecar.Id]bool
 	// the sidecars a rev/ object voids every token of (§7.8), which gkm reads before each request
 	voided map[sidecar.Id]bool
-	// the RepoCreate's signer, the repo's first admin, and the config's writers, whose config repo the rows hold
-	// only once ConfigWriters names some
+	// the RepoCreate's signer, the repo's first admin, and the config's writers, whose config repo the world has only
+	// once ConfigWriters names some
 	creator       *sidecar.Id
 	configWriters []sidecar.Id
 	ConfigRepoId  sidecar.Id
@@ -553,7 +553,7 @@ func (self *fsKeysReconcilerState) SidecarStanding(ctx context.Context, sidecarI
 	return sidecar.Id(self.world.NetworkId), row.GetRevokedAt() != 0, true, nil
 }
 
-// The world's repo, and its config repo once the rows hold one.
+// The world's repo, and its config repo once ConfigWriters named one.
 func (self *FsKeysWorld) repoIds() []sidecar.Id {
 	repoIds := []sidecar.Id{self.RepoId}
 	if self.ConfigRepoId != (sidecar.Id{}) {
@@ -780,7 +780,8 @@ func (self *FsKeysWorld) Drop(device *FsKeysDevice) {
 	self.shrink(self.nextPosition(), self.RepoId)
 }
 
-// Moves holders_shrunk_at of repoIds to at; the config repo's only once the rows hold one.
+// Moves holders_shrunk_at of repoIds to at, the config repo's once ConfigWriters named one, whose row then joins the
+// rows (Advance).
 func (self *FsKeysWorld) shrink(at uint64, repoIds ...sidecar.Id) {
 	for _, repoId := range repoIds {
 		if repoId != (sidecar.Id{}) {
@@ -832,9 +833,10 @@ func (self *FsKeysWorld) Creator(device *FsKeysDevice) {
 	self.Admin(device)
 }
 
-// Makes devices the network's config writers and admins: the rows hold a config repo, which every standing device
-// reads and these write, and gkm's pending hint about a repo with no group goes to them (QD-638). Member devices also
-// hold gkm's rw in the config group (§7.8), so they claim KeyPackages and write its Welcomes.
+// Makes devices the network's config writers and its config repo's admins: the network has a config repo, which every
+// standing device reads and these write, and gkm's pending hint about a repo with no group goes to them (QD-638). Its
+// row is the view's, as ACL's state adds it, until its first shrink puts it in the rows (QD-719, QD-762). Member devices
+// also hold gkm's rw in the config group (§7.8), so they claim KeyPackages and write its Welcomes.
 func (self *FsKeysWorld) ConfigWriters(devices ...*FsKeysDevice) {
 	if self.ConfigRepoId == (sidecar.Id{}) {
 		self.ConfigRepoId = sidecar.NewId()
@@ -882,7 +884,7 @@ func (self *FsKeysWorld) Admin(device *FsKeysDevice) {
 }
 
 // The device's token scopes, as its reading, writing and admin right stand: on the repo, and on the config repo
-// once the rows hold one, admin for a config writer, rw for any other member device and r for an agent.
+// once the world has one, admin for a config writer, rw for any other member device and r for an agent.
 func (self *FsKeysDevice) rescope() {
 	world := self.world
 	role := sidecar.GkmScopeRoleRead
@@ -960,14 +962,13 @@ func (self *FsKeysWorld) Advance() *sidecartest.FakeGkmAuthView {
 		}
 	}
 	repos := []*protocol.AclRepo{{RepoId: self.RepoId.Bytes(), Kind: self.Kind, Admins: admins, HoldersShrunkAt: self.shrunkAt[self.RepoId]}}
-	if self.ConfigRepoId != (sidecar.Id{}) {
-		configAdmins := []*protocol.AclRepoAdminRow{}
-		for _, writerId := range self.configWriters {
-			configAdmins = append(configAdmins, &protocol.AclRepoAdminRow{SidecarId: writerId.Bytes(), Signer: writerId.Bytes(), At: 1})
-		}
+	if configShrunkAt := self.shrunkAt[self.ConfigRepoId]; self.ConfigRepoId != (sidecar.Id{}) && configShrunkAt != 0 {
+		// the config's row joins the rows at its first shrink, with no admins, sorted in, as TEAM's rows take it
+		// (QD-762); until then the view adds it from the fixture's ConfigRepoId
 		repos = append(repos, &protocol.AclRepo{
-			RepoId: self.ConfigRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG, Admins: configAdmins, HoldersShrunkAt: self.shrunkAt[self.ConfigRepoId],
+			RepoId: self.ConfigRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG, HoldersShrunkAt: configShrunkAt,
 		})
+		slices.SortFunc(repos, func(a *protocol.AclRepo, b *protocol.AclRepo) int { return bytes.Compare(a.GetRepoId(), b.GetRepoId()) })
 	}
 	acl, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.AclRows{Repos: repos})
 	if err != nil {
@@ -1032,6 +1033,7 @@ func (self *FsKeysWorld) Advance() *sidecartest.FakeGkmAuthView {
 		RepoWriters:        repoWriters,
 		RepoReaderExpiries: map[sidecar.Id]map[sidecar.Id]time.Time{self.RepoId: expiries},
 		AtomRepos:          atomRepos,
+		ConfigRepoId:       self.ConfigRepoId,
 	})
 	self.views = append(self.views, view)
 	for _, device := range append(slices.Clone(self.Devices), self.clones...) {
@@ -1706,8 +1708,14 @@ func (self *fsKeysWorldState) HonorScope(principal *sidecar.Principal, repoId si
 		return fsKeysAnswer(slices.Contains(view.RepoWriters(repoId), sidecarId))
 	case sidecar.AclEvsAdmin:
 		repo := view.Repo(repoId)
+		if repoId == world.ConfigRepoId && repoId != (sidecar.Id{}) {
+			// no row lists the config's admins (QD-719, QD-762): the world's config writers at the tip hold it, which
+			// question acl-config-repo-row-config-admin's second option reads; ACL as built gives it to the Genesis's
+			// owner sidecar alone
+			return fsKeysAnswer(repo != nil && slices.Contains(view.RepoWriters(repoId), sidecarId))
+		}
 		return fsKeysAnswer(repo != nil && slices.ContainsFunc(repo.GetAdmins(), func(admin *protocol.AclRepoAdminRow) bool {
-			return bytes.Equal(admin.GetSidecarId(), sidecarId.Bytes())
+			return sidecar.AclRepoAdminStands(admin) && bytes.Equal(admin.GetSidecarId(), sidecarId.Bytes())
 		}))
 	case sidecar.AclEvsDeposit:
 		return fsKeysAnswer(slices.Contains(world.depositors, sidecarId) || slices.Contains(view.RepoReadersAt(repoId, now), sidecarId))

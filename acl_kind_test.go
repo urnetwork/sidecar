@@ -58,7 +58,7 @@ func TestAclKindDefaultsBoundWhatADocumentAdds(t *testing.T) {
 			if row.OwnerBound {
 				ownerId = owner
 			}
-			repoId, _ := fixture.repo(row.Kind, ownerId)
+			repoId := aclTestKindRepo(fixture, row.Kind, ownerId)
 			if withRule {
 				fixture.rule([]Id{tagId}, []*protocol.AclTarget{aclRepoTarget(repoId)}, everything...)
 			}
@@ -84,7 +84,7 @@ func TestAclKindDefaultsReadersOfTheConfigAndDirectory(t *testing.T) {
 	member := fixture.device(owner)
 	burner := fixture.device(owner)
 	fixture.admission(burner).Ephemeral = true
-	config, _ := fixture.repo(protocol.RepoKind_REPO_KIND_CONFIG, Id{})
+	config := fixture.configRepo(Id{}, Id{})
 	directory, _ := fixture.repo(protocol.RepoKind_REPO_KIND_DIRECTORY, Id{})
 	state := fixture.state(t)
 	for _, row := range AclKindDefaults() {

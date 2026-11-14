@@ -3,12 +3,14 @@
 package sidecartest
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"net"
 	"net/netip"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +53,7 @@ func testWirePreamble(job *sidecar.SmtpProofJob) *protocol.SmtpPreamble {
 		DkimSelector:     job.Preamble.DkimSelector,
 		MessageByteCount: job.Preamble.MessageByteCount,
 		Flags:            job.Preamble.Flags,
+		ProofKeySet:      job.KeySet,
 	}
 }
 
@@ -67,10 +70,10 @@ func (self *testStubWorld) send(t *testing.T, prover *FakeSmtpProver, job *sidec
 		<-served
 		self.world.Wait()
 	}()
-	if err := sidecar.WriteSmtpPreamble(sidecarConn, testWirePreamble(job)); err != nil {
+	if err := sidecar.WriteSmtpPreamble(sidecarConn, testWirePreamble(job), nil); err != nil {
 		t.Fatal(err)
 	}
-	result, err := sidecar.ReadSmtpPreambleResult(sidecarConn)
+	result, err := sidecar.ReadSmtpPreambleResult(sidecarConn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,4 +348,93 @@ func TestScriptedMxWithoutChunkingReadsABodyAsCommands(t *testing.T) {
 	if len(mx.Transactions()) != 0 {
 		t.Errorf("took %d transactions", len(mx.Transactions()))
 	}
+}
+
+// DESIGN-DETAILS 3.2.5: a key set the verifier does not hold is answered KEYS before any MX is dialed,
+// and one it holds opens the session under that set.
+func TestStubSmtpEdgeAnswersKeysBeforeTheMx(t *testing.T) {
+	refused := bytes.Repeat([]byte{4}, 32)
+	mx, _ := NewScriptedMx(testMxHost, nil, nil)
+	stub := newTestStubWorld(t, mx, nil, &FakeSmtpProofScript{RefuseKeySets: [][]byte{refused}})
+	job := testSmtpJob("body\r\n", sidecar.SmtpModeBdat, "bob")
+	job.KeySet = refused
+	result, proofResult, err := stub.send(t, NewFakeSmtpProver(nil), job)
+	if err != nil || proofResult != nil || result.Code != uint32(protocol.SmtpPreambleCode_SMTP_PREAMBLE_KEYS) {
+		t.Fatalf("answered %d: %+v, %v", result.Code, proofResult, err)
+	}
+	if len(stub.world.Dials()) != 0 || len(stub.verifier.Sessions()) != 0 {
+		t.Errorf("KEYS after %d dials and %d sessions", len(stub.world.Dials()), len(stub.verifier.Sessions()))
+	}
+
+	mx, _ = NewScriptedMx(testMxHost, nil, nil)
+	stub = newTestStubWorld(t, mx, &mx.certificate, &FakeSmtpProofScript{RefuseKeySets: [][]byte{refused}})
+	job = testSmtpJob("body\r\n", sidecar.SmtpModeBdat, "bob")
+	job.KeySet = FakeSmtpProverKeySet()
+	_, proofResult, err = stub.send(t, NewFakeSmtpProver(nil), job)
+	testExpectSent(t, "a held key set", proofResult, err, mx.Transactions(), job)
+	if kept := stub.verifier.Sessions()[0].Preamble().ProofKeySet; !bytes.Equal(kept, FakeSmtpProverKeySet()) {
+		t.Errorf("the session's key set %x", kept)
+	}
+}
+
+// Every SmtpProof field crosses the channel to the session as the prover set it (DESIGN-DETAILS 3.2.5).
+func TestStubSmtpEdgeCarriesEveryProofField(t *testing.T) {
+	mx, _ := NewScriptedMx(testMxHost, nil, nil)
+	stub := newTestStubWorld(t, mx, &mx.certificate, nil)
+	prover := NewFakeSmtpProver(nil)
+	job := testSmtpJob("body\r\n", sidecar.SmtpModeBdat, "bob", "carol")
+	job.KeySet = FakeSmtpProverKeySet()
+	_, proofResult, err := stub.send(t, prover, job)
+	testExpectSent(t, "every field", proofResult, err, mx.Transactions(), job)
+	sent := prover.Sends()[0].Parts
+	var verified []*sidecar.SmtpProofPart
+	for _, call := range stub.verifier.Sessions()[0].Calls() {
+		if call.Method == "VerifyPart" {
+			verified = append(verified, call.Part)
+		}
+	}
+	if len(sent) != 3 || len(verified) != len(sent) {
+		t.Fatalf("%d parts sent, %d verified", len(sent), len(verified))
+	}
+	for i, part := range sent {
+		got := verified[i]
+		if !bytes.Equal(got.KeyCommitment, part.KeyCommitment) || got.ReplyCount != part.ReplyCount ||
+			got.HeaderRecordCount != part.HeaderRecordCount || !bytes.Equal(got.Carry, part.Carry) {
+			t.Errorf("part %d: sent %+v, verified %+v", part.Index, part, got)
+		}
+	}
+	// the key part alone commits to keys; the message's part covers the envelope's replies and opens the
+	// header block
+	if len(sent[0].KeyCommitment) != 64 || len(sent[1].KeyCommitment) != 0 || sent[1].ReplyCount != 1 ||
+		sent[2].ReplyCount != 3 || sent[2].HeaderRecordCount != 1 || len(sent[2].Carry) != 64 {
+		t.Errorf("parts %+v %+v %+v", sent[0], sent[1], sent[2])
+	}
+}
+
+// A scripted envelope overflow ends the send after MAIL with EnvelopeRetry: the MX took no message.
+func TestStubSmtpEdgeCarriesAnEnvelopeRetry(t *testing.T) {
+	mx, _ := NewScriptedMx(testMxHost, nil, nil)
+	stub := newTestStubWorld(t, mx, nil, nil)
+	settings := DefaultFakeSmtpProverSettings()
+	settings.EnvelopeRetry = func(job *sidecar.SmtpProofJob) bool { return job.EnvelopeGroupMaxCount == 0 }
+	prover := NewFakeSmtpProver(settings)
+	job := testSmtpJob("body\r\n", sidecar.SmtpModeBdat, "bob", "carol")
+	_, proofResult, err := stub.send(t, prover, job)
+	if err != nil || !proofResult.EnvelopeRetry || proofResult.Accepted {
+		t.Fatalf("%+v, %v", proofResult, err)
+	}
+	if transactions := mx.Transactions(); len(transactions) != 0 {
+		t.Errorf("the MX took %d transactions", len(transactions))
+	}
+	if accepted := mx.Accepted(); !slices.ContainsFunc(accepted, func(command string) bool { return strings.HasPrefix(command, "MAIL") }) {
+		t.Errorf("MAIL never went: %q", accepted)
+	}
+
+	// the retry with one command a group goes through
+	mx, _ = NewScriptedMx(testMxHost, nil, nil)
+	stub = newTestStubWorld(t, mx, nil, nil)
+	job = testSmtpJob("body\r\n", sidecar.SmtpModeBdat, "bob", "carol")
+	job.EnvelopeGroupMaxCount = 1
+	_, proofResult, err = stub.send(t, prover, job)
+	testExpectSent(t, "the retry", proofResult, err, mx.Transactions(), job)
 }

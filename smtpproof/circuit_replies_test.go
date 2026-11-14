@@ -9,6 +9,8 @@ package smtpproof
 import (
 	"bytes"
 	"crypto/tls"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/urnetwork/sidecar/sidecartest"
@@ -96,12 +98,8 @@ func TestReplyCircuitAgreesWithTheRelation(t *testing.T) {
 	t.Parallel()
 	for _, leg := range testTlsLegs() {
 		tls12 := leg.suites[0] == tlsSuiteEcdheEcdsaAes128GcmSha256
-		bodyBlocks := 6
-		if leg.suites[0] == tlsSuiteChacha20Poly1305Sha256 {
-			bodyBlocks = 2
-		}
 		envelope, envelopeCompiled := testEnvelopeCircuit(t, leg)
-		messages := map[bool]*partShape{false: testQuickMessageShape(leg.suites[0], 0), true: testQuickMessageShape(leg.suites[0], bodyBlocks)}
+		messages := map[bool]*partShape{false: testQuickMessageShape(leg.suites[0]), true: testQuickMessageShape(leg.suites[0])}
 		// the EHLO reply's cases need no third recipient, and the envelope's quick shape holds two
 		envelopeCaptures := map[bool]*testCapturedParts{false: testBdatCapture(t, leg), true: testDataCapture(t, leg)}
 		messageCaptures := map[bool]*testCapturedParts{false: testThreeRecipientCapture(t, leg, false), true: testThreeRecipientCapture(t, leg, true)}
@@ -252,38 +250,97 @@ func TestReplyCircuitFindsNoChunkingOfferedOnlyBeforeTls(t *testing.T) {
 // apart, Z1 left out, so the difference is Z7's opening, Z8's parse and, in pi2, Z9's window over 64
 // octets, with Z2's keystream.
 var testSpecServerOctetCosts = map[string]int{
-	"aes, envelope":      51046,
-	"aes, message":       51302,
-	"chacha20, envelope": 26202,
-	"chacha20, message":  26458,
+	"aes":      51758,
+	"chacha20": 26908,
 }
 
 func TestReplyScanCostIsSpecMds(t *testing.T) {
 	t.Parallel()
+	// one gadget reads every shape's replies, by its flags (DESIGN-DETAILS 3.2.3)
 	for _, suite := range []uint16{tlsSuiteAes128GcmSha256, tlsSuiteChacha20Poly1305Sha256} {
-		for _, kind := range []partKind{partKindEnvelope, partKindMessage} {
-			shape := &partShape{kind: kind, version: tlsVersion13, suite: suite, clientBlocks: 1, serverBlocks: 4, withoutKeySchedule: true}
-			name := "aes"
-			keystream := 4 * testSpecGadgetSizes["aes keystream block"]
-			if suite == tlsSuiteChacha20Poly1305Sha256 {
-				shape.serverBlocks = 1
-				name = "chacha20"
-				keystream = testSpecGadgetSizes["chacha20 keystream block"]
-			}
-			if kind == partKindEnvelope {
-				shape.localOctets = true
-				name += ", envelope"
+		shape := testPartShape(partKindEnvelope, suiteFamily(suite), 0)
+		shape.clientBlocks = 1
+		shape.serverBlocks = 4
+		shape.localOctets = true
+		name := "aes"
+		keystream := 4 * testSpecGadgetSizes["aes keystream block"]
+		if suite == tlsSuiteChacha20Poly1305Sha256 {
+			shape.serverBlocks = 1
+			name = "chacha20"
+			keystream = testSpecGadgetSizes["chacha20 keystream block"]
+		}
+		wider := *shape
+		wider.serverBlocks += 64 / shape.blockBytes()
+		cost := testCompileShape(t, &wider).GetNbConstraints() - testCompileShape(t, shape).GetNbConstraints()
+		t.Logf("%s: 64 server octets cost %d constraints, %d beyond the keystream, %.1f an octet", name, cost, cost-keystream, float64(cost-keystream)/64)
+		if want := testSpecServerOctetCosts[name]; cost != want {
+			t.Errorf("%s: 64 server octets cost %d constraints, SPEC.md 11.2 says %d", name, cost, want)
+		}
+	}
+}
+
+// The server gadget's public flags (DESIGN-DETAILS 3.2.3): the count a part names is the count its records
+// hold, part 2's reply is all 250, and the part that completes DATA's envelope ends in 354; through the
+// relation and the solver alike, each beside its honest twin.
+func TestReplyFlagsHoldTheCountAndTheRules(t *testing.T) {
+	t.Parallel()
+	for _, leg := range testTlsLegs() {
+		envelope, envelopeCompiled := testEnvelopeCircuit(t, leg)
+		message := testQuickMessageShape(leg.suites[0])
+		messageCompiled := testCompileShape(t, message)
+		bdat := testBdatCapture(t, leg)
+		data := testDataCapture(t, leg)
+
+		// the msg part names one reply more and one fewer than its records hold
+		for _, delta := range []int{0, 1, -1} {
+			statement, witness := bdat.part(t, 3)
+			statement.replyCount = uint32(int(statement.replyCount) + delta)
+			name := fmt.Sprintf("%s: reply_count %+d", leg.name, delta)
+			if delta == 0 {
+				testCircuitAgrees(t, name, message, messageCompiled, statement, witness, true)
 			} else {
-				// room for Z5's literals, which a block too short to hold them leaves constant
-				shape.headerBlocks = 256 / shape.blockBytes()
-				name += ", message"
+				testCircuitAgrees(t, name, message, messageCompiled, statement, witness, false, checkZ8)
 			}
-			wider := *shape
-			wider.serverBlocks += 64 / shape.blockBytes()
-			cost := testCompileShape(t, &wider).GetNbConstraints() - testCompileShape(t, shape).GetNbConstraints()
-			t.Logf("%s: 64 server octets cost %d constraints, %d beyond the keystream, %.1f an octet", name, cost, cost-keystream, float64(cost-keystream)/64)
-			if want := testSpecServerOctetCosts[name]; cost != want {
-				t.Errorf("%s: 64 server octets cost %d constraints, SPEC.md 11.2 says %d", name, cost, want)
+		}
+
+		// Last354 on a 250: DATA's msg part completes the envelope's replies, so its last must be 354
+		statement, witness := data.part(t, 3)
+		if !statement.last354() {
+			t.Fatalf("%s: DATA's msg part reads no 354", leg.name)
+		}
+		last := len(statement.serverRecords) - 1
+		plaintext := witness.serverPlaintexts[last]
+		content := string(plaintext)
+		if statement.session.version == tlsVersion13 {
+			content = content[:len(content)-1]
+		}
+		if !strings.Contains(content, "354 ") {
+			t.Fatalf("%s: no 354 in DATA's msg part's last record: %q", leg.name, content)
+		}
+		testAuthorServerRecord(t, statement, witness, last, testServerContent(statement, strings.Replace(content, "354 ", "250 ", 1)))
+		testCircuitAgrees(t, leg.name+": a 250 where Last354 wants 354", message, messageCompiled, statement, witness, false, checkZ8)
+
+		// EhloRule beside a 220 line: part 2's one reply has every line coded 250
+		statement, witness = bdat.part(t, 2)
+		reply := string(witness.serverPlaintexts[0])
+		if statement.session.version == tlsVersion13 {
+			reply = reply[:len(reply)-1]
+		}
+		at := strings.Index(reply, "\r\n250")
+		if at < 0 {
+			t.Fatalf("%s: a one-line EHLO reply: %q", leg.name, reply)
+		}
+		changed := reply[:at+2] + "220" + reply[at+5:]
+		testAuthorServerRecord(t, statement, witness, 0, testServerContent(statement, changed))
+		testCircuitAgrees(t, leg.name+": a 220 line in the EHLO reply", envelope, envelopeCompiled, statement, witness, false, checkZ8)
+
+		// a ticket's private flag under Tls13 0, which 1.2 has no ticket to set
+		if statement.session.version == tlsVersion12 {
+			statement, witness = bdat.part(t, 2)
+			circuit := testPartAssignment(t, envelope, statement, witness)
+			circuit.Server[0].Ticket = 1
+			if err := testPartSolved(t, envelopeCompiled, circuit); err == nil {
+				t.Errorf("%s: a ticket under TLS 1.2: accepted", leg.name)
 			}
 		}
 	}

@@ -127,6 +127,9 @@ type BridgeRulesFixtureLink struct {
 	Site          string
 	DrainingSince int64
 	DrainUntil    int64
+	// An app host's device client key, which the rules pin for the link (BridgeRuleLink.target_client_public_key);
+	// nil for a target whose binding names its client key.
+	HostClientKey []byte
 }
 
 // A map this host holds.
@@ -298,6 +301,9 @@ func (self BridgeRulesFixtureLink) rule() *bridge.BridgeRuleLink {
 	}
 	if self.Route != 0 {
 		link.RuleId = BridgeFixtureRouteId(self.Route)
+	}
+	if 0 < len(self.HostClientKey) {
+		link.TargetClientPublicKey = bytes.Clone(self.HostClientKey)
 	}
 	if self.Site != "" {
 		link.SiteId = []byte(self.Site)

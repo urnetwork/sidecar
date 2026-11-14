@@ -10,6 +10,10 @@
 //	caps   the lease script counts the repo's distinct holders and refuses a new one at evs_subscribers_per_repo, or
 //	       in the team directory at the network's config_admissions (§20.4, plan-EVS1-subscription-caps#1), with
 //	       §20.7's QuotaRefusal naming the key; a limit this build does not know reads 0 and refuses
+//	repos  before the lease script, a script on {evsc_<client_id>} counts the repos the client follows and refuses a
+//	       new one at evs_repos_per_client (plan-EVS1-subscription-caps#2, QD-263, QD-749), with the same refusal
+//	       naming that key; a renewal moves the repo's score and counts nothing twice, and a DELETE that leaves the
+//	       client no live lease on the repo removes it
 //	refuse each of the three, once its repo is authorized, takes §11.12's refused row as the guard gives a placed
 //	       route (QD-665): the repo's place, then repo/ from the 5 s repo cache, a deleted repo answering 409
 //	       REPO_DELETED and a shredding or shredded one 409 SHREDDING, a repo never placed 404
@@ -20,10 +24,15 @@
 // projection (evs-8: "per client"); ref is 32 lowercase hex, or * for every ref; epoch decimal; prefix the token
 // path's 26-character tokens joined by /, empty for the whole ref. No field holds a name (I-13).
 //
-// Not built: evs_repos_per_client's count in {evsc_<client_id>} (plan-EVS1-subscription-caps#2), which waits for
-// §2.8's evs-8 row to name the family (questions/evs1-m2-15-evsc-metadata-row.md); until then a client's repo count
-// is not capped, the per-repo cap holding. Every family here is soft state outside the rdb bundles (owner decision
-// 136): a loss is a gap, which holders' hourly resync re-creates.
+// {evsc_<client_id>} is a sorted set of the client's repo ids, 32 lowercase hex each, scored by the ms of its last
+// subscribe or renewal on that repo. Its script drops the members whose score is a lease's life old, so a repo the
+// client stopped renewing leaves the count when its leases lapse, and the key lives as long as {evsl_}'s. The two
+// scripts are two calls, each on one hash tag (§11.10's slots row), so they are not one step: a lease the per-repo
+// cap then refuses has its repo taken out again, and a DELETE racing the same client's POST on the same repo can
+// leave a lease whose repo the set lacks until its next renewal, which counts low, never high.
+//
+// Every family here is soft state outside the rdb bundles (owner decision 136): a loss is a gap, which holders'
+// hourly resync re-creates. A lost {evsc_} fails open, and renewals rebuild it within a day.
 
 package evsservice
 
@@ -46,6 +55,7 @@ import (
 const (
 	evsSubscribersPerRepoLimitKey  = "evs_subscribers_per_repo"
 	evsDirectoryAdmissionsLimitKey = "config_admissions"
+	evsReposPerClientLimitKey      = "evs_repos_per_client"
 )
 
 // The route templates.
@@ -69,6 +79,50 @@ func LeaseKey(repoId sidecar.Id) string {
 // A repo's lease version: {evsl_<repo_id>}v, raised by every lease write.
 func LeaseVersionKey(repoId sidecar.Id) string {
 	return LeaseKey(repoId) + "v"
+}
+
+// The client repo family's hash tag prefix.
+const clientRepoKeyPrefix = "{evsc_"
+
+// The repos a client follows: {evsc_<client_id>}.
+func ClientRepoKey(clientId sidecar.Id) string {
+	return clientRepoKeyPrefix + sidecar.EvsKeyId(clientId) + "}"
+}
+
+// ClientRepoPutScript's replies.
+const (
+	evsClientRepoRefused = 0
+	evsClientRepoAdded   = 1
+	evsClientRepoRenewed = 2
+)
+
+// Counts a repo against its client, refusing a new one at the cap. KEYS[1] the client's repos; ARGV[1] now in ms,
+// ARGV[2] the repo, ARGV[3] the cap, ARGV[4] the newest score that has lapsed, now less a lease's life, in ms,
+// ARGV[5] the key's ttl in ms. 0 past the cap, 1 when the repo is new to the set, 2 when it was there and its score
+// moved. The scores are ms since the epoch, exact in a double, and ZADD takes ARGV[1]'s own digits.
+var ClientRepoPutScript = &sidecar.RedisScript{
+	Name: "evs_client_repo_put",
+	Source: `
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[4])
+local held = redis.call('ZSCORE', KEYS[1], ARGV[2])
+if not held and redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then
+  return 0
+end
+redis.call('ZADD', KEYS[1], ARGV[1], ARGV[2])
+redis.call('PEXPIRE', KEYS[1], ARGV[5])
+if held then
+  return 2
+end
+return 1
+`,
+}
+
+// Takes a repo out of its client's count. KEYS[1] the client's repos; ARGV[1] the repo. Replies with how many went.
+var ClientRepoRemoveScript = &sidecar.RedisScript{
+	Name: "evs_client_repo_remove",
+	Source: `
+return redis.call('ZREM', KEYS[1], ARGV[1])
+`,
 }
 
 // Writes leases, refusing a new holder at the cap. KEYS[1] the leases, KEYS[2] their version; ARGV[1] now in ms,
@@ -303,14 +357,37 @@ func (self *EvsEngine) serveSubscribe(request *EvsRequest) {
 		request.Unavailable(nil)
 		return
 	}
-	limit, limitKey, ok := self.subscriberCap(request, repoId)
+	caps, ok := self.subscriptionCaps(request, repoId)
 	if !ok {
+		return
+	}
+	clientId := sidecar.Id(request.Principal.ClientId)
+	// the client's repo count first, on its own hash tag (plan-EVS1-subscription-caps#2)
+	counted, err := self.host.Redis.RunScript(request.Ctx, ClientRepoPutScript, []string{ClientRepoKey(clientId)}, []string{
+		strconv.FormatInt(request.Now().UnixMilli(), 10),
+		sidecar.EvsKeyId(repoId),
+		strconv.FormatInt(caps.reposPerClient, 10),
+		strconv.FormatInt(request.Now().Add(-self.settings.LeaseLife).UnixMilli(), 10),
+		strconv.FormatInt(self.settings.LeaseKeyTtl.Milliseconds(), 10),
+	})
+	if err != nil {
+		request.Unavailable(nil)
+		return
+	}
+	switch counted.Integer {
+	case evsClientRepoAdded, evsClientRepoRenewed:
+	case evsClientRepoRefused:
+		request.Refuse(evsQuotaRefusalReply(&sidecar.QuotaRefusal{LimitKey: evsReposPerClientLimitKey, Limit: caps.reposPerClient, Used: caps.reposPerClient}))
+		return
+	default:
+		// a reply the script does not give: nothing is known of the count, so no lease is written
+		request.Unavailable(nil)
 		return
 	}
 	args := []string{
 		strconv.FormatInt(request.Now().UnixMilli(), 10),
-		evsLeaseHolder(sidecar.Id(request.Principal.ClientId), request.SidecarId),
-		strconv.FormatInt(limit, 10),
+		evsLeaseHolder(clientId, request.SidecarId),
+		strconv.FormatInt(caps.holdersPerRepo, 10),
 		strconv.FormatInt(self.settings.LeaseKeyTtl.Milliseconds(), 10),
 	}
 	for _, lease := range leases {
@@ -321,10 +398,32 @@ func (self *EvsEngine) serveSubscribe(request *EvsRequest) {
 	case err != nil:
 		request.Unavailable(nil)
 	case reply.Integer != 1:
-		request.Refuse(evsQuotaRefusalReply(&sidecar.QuotaRefusal{LimitKey: limitKey, Limit: limit, Used: limit}))
+		if counted.Integer == evsClientRepoAdded {
+			// the repo was counted for a lease the per-repo cap refused. An error here leaves it counted until its
+			// score lapses, which counts high and so refuses no more than the cap would.
+			self.uncountClientRepo(request, clientId, repoId)
+		}
+		request.Refuse(evsQuotaRefusalReply(&sidecar.QuotaRefusal{LimitKey: caps.holdersPerRepoLimitKey, Limit: caps.holdersPerRepo, Used: caps.holdersPerRepo}))
 	default:
 		request.Reply(nil)
 	}
+}
+
+// Takes repoId out of the client's count once the client holds no live lease on it, under any of its sidecars: a
+// DELETE of its last lease there, or a POST the per-repo cap refused. The read and the removal are on two hash tags,
+// so a POST of the same client between them leaves a lease the set lacks until its renewal (the file header).
+func (self *EvsEngine) uncountClientRepo(request *EvsRequest, clientId sidecar.Id, repoId sidecar.Id) error {
+	leases, err := ReadLeases(request.Ctx, self.host.Redis, repoId)
+	if err != nil {
+		return err
+	}
+	for _, lease := range leases {
+		if lease.ClientId == clientId && request.Now().Before(lease.ExpiresAt) {
+			return nil
+		}
+	}
+	_, err = self.host.Redis.RunScript(request.Ctx, ClientRepoRemoveScript, []string{ClientRepoKey(clientId)}, []string{sidecar.EvsKeyId(repoId)})
+	return err
 }
 
 // The lease for the whole ref a request with no prefix names.
@@ -343,13 +442,22 @@ func (self *EvsEngine) wholeRefLease(request *EvsRequest, body *protocol.EvsSubs
 	return lease
 }
 
-// The repo's holder cap: evs_subscribers_per_repo, or in the team directory config_admissions, from the network's
-// limits (§20.4; plan-EVS1-subscription-caps#1). A key the limits lack reads 0, refusing every new holder. false once
-// answered.
-func (self *EvsEngine) subscriberCap(request *EvsRequest, repoId sidecar.Id) (int64, string, bool) {
+// The caps one lease request is held to.
+type evsSubscriptionCaps struct {
+	// The repo's distinct holders, and the key that set it.
+	holdersPerRepo         int64
+	holdersPerRepoLimitKey string
+	// The repos one client follows: evs_repos_per_client.
+	reposPerClient int64
+}
+
+// The request's caps from its network's limits (§20.4; plan-EVS1-subscription-caps#1 and #2): the repo's holders at
+// evs_subscribers_per_repo, or in the team directory config_admissions, and the client's repos at
+// evs_repos_per_client. A key the limits lack reads 0, refusing every new holder or repo. false once answered.
+func (self *EvsEngine) subscriptionCaps(request *EvsRequest, repoId sidecar.Id) (*evsSubscriptionCaps, bool) {
 	if self.host.Quota == nil {
 		request.Unavailable(nil)
-		return 0, "", false
+		return nil, false
 	}
 	limitKey := evsSubscribersPerRepoLimitKey
 	if facts, answer := self.deps.AuthState.Repo(request.Principal, repoId); answer == EvsAuthAllowed && facts.Kind == protocol.RepoKind_REPO_KIND_DIRECTORY {
@@ -358,14 +466,21 @@ func (self *EvsEngine) subscriberCap(request *EvsRequest, repoId sidecar.Id) (in
 	limits, err := self.host.Quota.Limits(request.Ctx, connect.Id(request.Principal.NetworkId))
 	if err != nil || limits == nil {
 		request.Unavailable(nil)
-		return 0, "", false
+		return nil, false
 	}
-	limit := limits.Limits[limitKey]
+	return &evsSubscriptionCaps{
+		holdersPerRepo:         evsSubscriptionCap(limits.Limits[limitKey]),
+		holdersPerRepoLimitKey: limitKey,
+		reposPerClient:         evsSubscriptionCap(limits.Limits[evsReposPerClientLimitKey]),
+	}, true
+}
+
+// A limit as a script's cap: §20.4's no limit, a negative value, is a count no set reaches.
+func evsSubscriptionCap(limit int64) int64 {
 	if limit < 0 {
-		// none: §20.4's no limit
-		limit = int64(^uint32(0))
+		return int64(^uint32(0))
 	}
-	return limit, limitKey, true
+	return limit
 }
 
 // GET: the caller's live leases on ?repo_id=.
@@ -437,6 +552,11 @@ func (self *EvsEngine) serveUnsubscribe(request *EvsRequest) {
 		}
 	}
 	if _, err := self.host.Redis.RunScript(request.Ctx, LeaseDeleteScript, []string{LeaseKey(repoId), LeaseVersionKey(repoId)}, args); err != nil {
+		request.Unavailable(nil)
+		return
+	}
+	// the repo leaves the client's count with its last lease there; a retry of the DELETE repeats this
+	if err := self.uncountClientRepo(request, sidecar.Id(request.Principal.ClientId), repoId); err != nil {
 		request.Unavailable(nil)
 		return
 	}

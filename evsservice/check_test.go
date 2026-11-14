@@ -677,6 +677,88 @@ func TestCheckRefsTable(t *testing.T) {
 	}
 }
 
+// QD-722 at 5c: on a record-class stream a directory's delta adding rows on the directory's newest version, as step 4
+// read it, passes beside the file it adds; a delta removing a token, one on an older version, one not at its base + 1,
+// a file's write on a base, and a delta on a path standing as a file or removed are each 409 PATH_CONFLICT, final,
+// naming the directory alone; a deposit ref takes no delta at all; and a delta whose directory step 4 did not read
+// refuses 503, refusing nothing.
+func TestCheckRefsTakesAStreamDirectoryAddOnlyDelta(t *testing.T) {
+	fixture := newCheckFixture(t)
+	signer := fixture.signerId
+	directory := checkTestPath("e")
+	child := checkTestPath("e", "1")
+	row := &protocol.EvsName{Token: child.Last().Bytes(), Kind: uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE), SealedName: []byte("sealed 1")}
+	// a directory standing at version 3, whose folded table keeps no version: step 4 read it from the table's delta
+	standingDirectory := &EvsNewest{Exists: true, Directory: true, CommitVersion: 3}
+	standingFile := &EvsNewest{Exists: true, CommitVersion: 3, Version: 3}
+	removedDirectory := &EvsNewest{CommitVersion: 4, RemovalVersion: 4}
+	deposit := protocol.EvsRefKind_EVS_REF_DEPOSIT
+	cases := []struct {
+		name    string
+		refKind protocol.EvsRefKind
+		// the directory's change: its base and version, the tokens it removes, or a file's write in its place
+		base      uint64
+		version   uint64
+		removed   [][]byte
+		fileWrite bool
+		// the directory as step 4 read it, nil for not read, and its newest version
+		newest           *EvsNewest
+		directoryVersion uint64
+		reason           EvsCheckReason
+	}{
+		{name: "an add-only delta on the newest version", base: 3, version: 4, newest: standingDirectory, directoryVersion: 3},
+		{name: "a delta removing a token", base: 3, version: 4, removed: [][]byte{checkTestPath("e", "0").Last().Bytes()},
+			newest: standingDirectory, directoryVersion: 3, reason: EvsCheckReasonChangeShape},
+		{name: "a delta on an older version", base: 2, version: 3, newest: standingDirectory, directoryVersion: 3, reason: EvsCheckReasonChangeShape},
+		{name: "a delta not at its base + 1", base: 3, version: 5, newest: standingDirectory, directoryVersion: 3, reason: EvsCheckReasonChangeShape},
+		{name: "a file's write on a base", base: 3, version: 4, fileWrite: true, newest: standingFile, reason: EvsCheckReasonChangeShape},
+		{name: "a delta on a path standing as a file", base: 3, version: 4, newest: standingFile, reason: EvsCheckReasonChangeShape},
+		{name: "a delta on a removed directory", base: 3, version: 4, newest: removedDirectory, reason: EvsCheckReasonChangeShape},
+		{name: "a deposit's delta", refKind: deposit, base: 3, version: 4, newest: standingDirectory, directoryVersion: 3, reason: EvsCheckReasonChangeShape},
+		{name: "a delta whose directory step 4 did not read", base: 3, version: 4, reason: EvsCheckReasonUnchecked},
+	}
+	for _, c := range cases {
+		plan := fixture.plan()
+		plan.RefKind = protocol.EvsRefKind_EVS_REF_OWNED
+		if c.refKind != 0 {
+			plan.RefKind = c.refKind
+		}
+		plan.OwnerSidecarId = &signer
+		if plan.RefKind == deposit {
+			plan.RefId = sidecar.EvsDepositRefId(fixture.repoId, signer)
+		}
+		plan.BaseVersion = 4
+		directoryChange := &sidecar.EvsPlannedChange{TokenPath: directory, BaseEntryVersion: c.base}
+		if c.fileWrite {
+			directoryChange.EntryVersion = fixture.fileEntry(plan, c.version, nil)
+		} else {
+			directoryChange.EntryVersion = fixture.directoryEntry(plan, c.version, []*protocol.EvsName{row}, c.removed)
+		}
+		plan.Changes = []*sidecar.EvsPlannedChange{directoryChange, fixture.change(plan, child, 0, 5)}
+		view := fixture.view(plan)
+		view.Repo.Kind = protocol.RepoKind_REPO_KIND_RECORD
+		view.Head = checkTestHead(view, 4)
+		if plan.RefKind == deposit {
+			view.Rights = sidecar.AclEvsDeposit
+		}
+		if c.newest == nil {
+			delete(view.Paths, directory.KeyString())
+		} else {
+			view.Paths[directory.KeyString()] = &PathRead{Newest: c.newest, DirectoryVersion: c.directoryVersion}
+		}
+		refusal := CheckRefs(view)
+		if c.reason == 0 {
+			requireCheckPass(t, c.name, refusal)
+			continue
+		}
+		requireCheckRefusal(t, c.name, refusal, c.reason)
+		if c.reason == EvsCheckReasonChangeShape && refusal != nil &&
+			(refusal.Code != protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT || refusal.Recorded() || len(refusal.Paths) != 1 || !refusal.Paths[0].Equal(directory)) {
+			t.Errorf("%s: %v naming %v", c.name, refusal, refusal.Paths)
+		}
+	}
+}
+
 // A quota checker answering one refusal to every push, for the rate row QuotaGate never makes on a push.
 type checkTestQuota struct {
 	refusal *sidecar.QuotaRefusal

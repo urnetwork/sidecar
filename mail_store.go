@@ -6,11 +6,15 @@
 // each only while its path still stands at the version its writer read: a path CAS, which is how §15.7's racing
 // writers meet ("a racing i/ write gets a path 409 and re-reads", §11.8's 5g).
 //
-// mailEvsStore is the store over EvsRepo. Its reads are EvsRepo's verified ReadHead and List. Its writes refuse,
-// closed, with ErrMailStoreWriteHeld: EvsRepo.Write plans each path from a read of its own, made inside the call, so
-// a writer that built its bytes from an earlier read would replace whatever another writer committed in between, and
-// no error would say so. Until evs takes the writer's version as the push's base_entry_version (question
-// mail-m7-06-evs-path-precondition), nothing here writes through evs, so no append is lost.
+// mailEvsStore is the store over EvsRepo. Its reads are EvsRepo's verified ReadHead and List. Its write is one
+// WritePaths push, each path one EvsPathWrite held to the version its writer read (EvsPathWrite.IfVersion; QD-721,
+// question mail-m7-06-evs-path-precondition): 0 for a path read as absent, the create-only write §15.7 asks of
+// addr/, burner/, o/ and ingest's m/. evs's planner checks that version against its own read and states it as the
+// push's base_entry_version, so the CAS spans the writer's read to the commit, and a writer that built its bytes from
+// an older read gets a conflict naming its path instead of replacing what another writer committed in between. A 409
+// PATH_CONFLICT comes back as ErrMailStoreConflict with the store's paths its token paths are; one that names none
+// of the write's paths, evs refusing only a parent directory's delta that another writer's creation raced, moved
+// nothing the writer read, so the store plans the write again, at most DirectoryRetryCount times.
 //
 // Paths are a mail repo's own, as mail_paths.go spells them, and are never logged (I-13). On every leg, sidecar_http
 // included: a page Worker reads mail through the same store.
@@ -31,8 +35,6 @@ var (
 	ErrMailStoreConflict = errors.New("mail store: a path moved since it was read")
 	// A file larger than its reader bounds the read to: a segment no writer that follows MAIL-FORMAT.md makes.
 	ErrMailStoreTooLarge = errors.New("mail store: a file past its bound")
-	// Conditional writes through evs wait on its path precondition (question mail-m7-06-evs-path-precondition).
-	ErrMailStoreWriteHeld = errors.New("mail store: a conditional write waits on evs's path precondition")
 )
 
 // The paths of a write that moved, a subset of what the write named, in its order.
@@ -69,6 +71,10 @@ type MailStoreSettings struct {
 	// How many times a writer reads again after a conflict on its own path before it gives the conflict back. Racing
 	// ingests and flag writes of one mailbox meet a few times at most; non-positive tries once.
 	WriteRetryCount int
+	// How many times the store over evs plans a write again after evs refused only a parent directory's delta, which
+	// another writer's creation or removal in that directory raced, and none of the write's own paths. Each plan
+	// holds every path to its writer's version again; non-positive tries once.
+	DirectoryRetryCount int
 	// The entries a view's page holds when its caller names no limit. Non-positive takes 1.
 	PageEntryCount int
 	// The months whose order a view keeps between pages, about 112 bytes a message: a phone pages a month at a
@@ -86,11 +92,12 @@ type MailStoreSettings struct {
 // The one default.
 func DefaultMailStoreSettings() *MailStoreSettings {
 	return &MailStoreSettings{
-		WriteRetryCount:    8,
-		PageEntryCount:     50,
-		CachedMonthCount:   2,
-		CachedSegmentCount: 2,
-		SpamScoreThreshold: DefaultMailSpamSettings().ScoreThreshold,
+		WriteRetryCount:     8,
+		DirectoryRetryCount: 8,
+		PageEntryCount:      50,
+		CachedMonthCount:    2,
+		CachedSegmentCount:  2,
+		SpamScoreThreshold:  DefaultMailSpamSettings().ScoreThreshold,
 	}
 }
 
@@ -128,16 +135,20 @@ func (self *mailBoundedBuffer) Write(data []byte) (int, error) {
 	return self.buffer.Write(data)
 }
 
-// mailStore over one repo's ref, by EvsRepo's verified reads. Safe for concurrent use.
+// mailStore over one repo's ref, by EvsRepo's verified reads and its path CAS writes. Safe for concurrent use.
 type mailEvsStore struct {
 	repo *EvsRepo
 	// The ref's name bytes: nil names main, a mailbox's and a group repo's file-mode ref.
-	refName []byte
+	refName  []byte
+	settings *MailStoreSettings
 }
 
-// The store over repo's ref named refName, main when nil.
-func newMailEvsStore(repo *EvsRepo, refName []byte) *mailEvsStore {
-	return &mailEvsStore{repo: repo, refName: refName}
+// The store over repo's ref named refName, main when nil; nil settings are the default.
+func newMailEvsStore(repo *EvsRepo, refName []byte, settings *MailStoreSettings) *mailEvsStore {
+	if settings == nil {
+		settings = DefaultMailStoreSettings()
+	}
+	return &mailEvsStore{repo: repo, refName: refName, settings: settings}
 }
 
 // ReadHead's verified newest version, held to maxByteCount.
@@ -166,7 +177,31 @@ func (self *mailEvsStore) List(ctx context.Context, directory string) ([]string,
 	return names, nil
 }
 
-// Refuses, closed: see the file header.
+// One WritePaths push, each path held to its IfVersion: see the file header.
 func (self *mailEvsStore) Write(ctx context.Context, writes []*mailStoreWrite) ([]uint64, error) {
-	return nil, ErrMailStoreWriteHeld
+	pathWrites := make([]*EvsPathWrite, len(writes))
+	for i, write := range writes {
+		pathWrites[i] = &EvsPathWrite{Path: write.Path, Content: bytes.NewReader(write.Content), IfVersion: &write.IfVersion}
+	}
+	for attempt := 0; ; attempt += 1 {
+		result, err := self.repo.WritePaths(ctx, &EvsWritePathsArgs{RefName: self.refName, Writes: pathWrites})
+		if err == nil {
+			return result.PathVersions, nil
+		}
+		var conflict *EvsPathConflictError
+		if !errors.As(err, &conflict) {
+			return nil, err
+		}
+		if 0 < len(conflict.Paths) {
+			return nil, &MailStoreConflictError{Paths: conflict.Paths}
+		}
+		// only a parent directory's delta was refused: no path of the write moved from what its writer read, and the
+		// next plan holds each to its version again
+		if self.settings.DirectoryRetryCount <= attempt {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 }

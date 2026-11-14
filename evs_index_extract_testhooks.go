@@ -21,7 +21,8 @@ type TestHookIndexDocument struct {
 	To        string
 	Title     string
 	ByteCount uint64
-	// Whether the document's key set passes its cap, so it has no entry (D6); its row's values are then empty.
+	// Whether D6 skips the document, its key set passing its cap or it alone not fitting a shard (lone(d) past
+	// ShardBody, as a file's row with no ref_id), so it has no entry; its row's values are then empty.
 	Skipped bool
 }
 
@@ -61,7 +62,7 @@ func TestHookIndexExtract(mail bool, path []byte, content []byte) ([]TestHookInd
 			}
 			hooked.Fields[field.number-1] = value
 		}
-		prepared, err := document.prepare(normalizer, false, Id{})
+		prepared, err := document.prepare(normalizer, false, Id{}, settings)
 		if err != nil {
 			return nil, false
 		}

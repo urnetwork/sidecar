@@ -176,7 +176,7 @@ func indexEncodeSlot(slot *indexSlot, companion bool, settings *IndexFormatSetti
 		}
 		start := len(body)
 		var err error
-		if body, err = entry.appendEncoded(body, companion); err != nil {
+		if body, err = entry.appendEncoded(body, companion, settings); err != nil {
 			return nil, err
 		}
 		if err := indexCheckEntrySize(slot.header.Type, len(body)-start, settings); err != nil {
@@ -241,7 +241,7 @@ func indexDecodeSlot(file []byte, contentSha256 []byte, companion bool, settings
 	slot := &indexSlot{header: header, padByteCount: decoder.remaining()}
 	for range header.Count {
 		start := body.remaining()
-		entry := body.entry(companion)
+		entry := body.entry(companion, settings)
 		if body.err != nil {
 			return nil, body.err
 		}

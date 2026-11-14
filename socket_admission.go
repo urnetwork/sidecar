@@ -21,6 +21,10 @@
 // Step 6 never trusts the ticket's grant, only its position, which the state must reach. The replay set holds each
 // ticket_id until its expiry and no longer, so it is bounded by the ticket lifetime times the rate tickets arrive.
 //
+// A platform listener on ur/<service> (SocketPlatformListener; SOCK-M9-01) runs steps 1 to 5 and 7: its dialer is a
+// sidecar that sent it no Hello and no edge, and it holds no config, since the service authorizes what comes through
+// it (§14.5). §20's stop it is told is urnetwork-edge's own, which stops no dialer's stream; Find judged the dialer's.
+//
 // socketAdmission is the logic, every input an argument and its clock passed in, so a T1 table steps it by hand; the
 // listener (socket_listen.go) holds it with the state it reads. Nothing here logs a name (I-13). Safe for concurrent
 // use.
@@ -164,6 +168,10 @@ func (self *socketAdmission) admit(ctx context.Context, request *socketAdmission
 	edgeTicket := admission.urnetworkEdge != nil && bytes.Equal(ticket.GetDialerNetworkId(), admission.urnetworkEdge.Bytes())
 	edgeName := self.namespace == SocketNamespaceTls || self.namespace == SocketNamespaceSmtp
 	switch {
+	case self.namespace == SocketNamespacePlatform:
+		if edgeTicket || request.peer != nil {
+			return socketAdmissionRefusal(protocol.StreamRejectCode_SR_INVALID)
+		}
 	case edgeTicket:
 		if !edgeName || !request.edge || request.peer != nil {
 			return socketAdmissionRefusal(protocol.StreamRejectCode_SR_INVALID)
@@ -187,8 +195,12 @@ func (self *socketAdmission) admit(ctx context.Context, request *socketAdmission
 	if !inputs.serving || self.maxStreams <= inputs.inflight {
 		return socketAdmissionRefusal(protocol.StreamRejectCode_SR_BUSY)
 	}
-	if admission.streamsStopped {
+	if admission.streamsStopped && self.namespace != SocketNamespacePlatform {
 		return socketAdmissionRefusal(protocol.StreamRejectCode_SR_QUOTA)
+	}
+	if self.namespace == SocketNamespacePlatform {
+		// 7 at once: a platform listener holds no config for step 6
+		return &socketAdmissionVerdict{ticket: ticket}
 	}
 
 	// 6: this device's own evaluation, at the ticket's position or later

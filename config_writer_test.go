@@ -518,6 +518,202 @@ func TestOnlyAConfigWriterPublishes(t *testing.T) {
 	}
 }
 
+// A writer world for QD-746: its compile takes the head's policy file, an AclRows holding atoms and rules, as the
+// document over the log's rows; members a and b each have a member device, and the owner made repos a and b.
+type testWriterPolicyWorld struct {
+	*testWriterWorld
+	a     testWriterDevice
+	b     testWriterDevice
+	repoA sidecar.Id
+	repoB sidecar.Id
+}
+
+func newTestWriterPolicyWorld(t *testing.T) *testWriterPolicyWorld {
+	world := newTestWriterWorld(t)
+	t.Cleanup(sidecar.RegisterConfigAclCompiler(func(head *sidecar.ConfigHead, rows *sidecar.ConfigCompileRows) (*protocol.AclRows, error) {
+		acl := rows.AclStatements
+		if policyBytes := head.File(sidecar.ConfigHeadPolicyPath); policyBytes != nil {
+			policy := &protocol.AclRows{}
+			if err := proto.Unmarshal(policyBytes, policy); err != nil {
+				return nil, err
+			}
+			acl.HasDocument, acl.Atoms, acl.Rules = true, policy.GetAtoms(), policy.GetRules()
+		}
+		return acl, nil
+	}))
+	world.started()
+	admitDevice := func(label string) testWriterDevice {
+		if _, err := world.admitMember(label); err != nil {
+			t.Fatal(err)
+		}
+		device := testWriterDeviceOf(label+" device", testWriterId(label))
+		_, err := world.api.AppendStatement(world.ctx, world.networkId, world.statement(world.owner, bridge.SignedType_SIGNED_SIDECAR_ADMIT, &protocol.SidecarAdmit{
+			Header:            world.header(),
+			NetworkId:         world.networkId.Bytes(),
+			SidecarId:         device.sidecarId.Bytes(),
+			IdentityPublicKey: device.key.Public().(ed25519.PublicKey),
+			IdentityAlg:       "ed25519",
+			MemberId:          device.memberId.Bytes(),
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return device
+	}
+	createRepo := func(label string) sidecar.Id {
+		repoId := testWriterId(label + " repo")
+		_, err := world.api.AppendStatement(world.ctx, world.networkId, world.statement(world.owner, bridge.SignedType_SIGNED_REPO_CREATE, &protocol.RepoCreate{
+			Header: world.header(), RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return repoId
+	}
+	self := &testWriterPolicyWorld{testWriterWorld: world}
+	self.a, self.b = admitDevice("a"), admitDevice("b")
+	self.repoA, self.repoB = createRepo("a"), createRepo("b")
+	return self
+}
+
+// A head edit whose policy lets each repo's group of members read it.
+func (self *testWriterPolicyWorld) policy(groups map[sidecar.Id][]sidecar.Id) func(head *sidecar.ConfigHead) (*sidecar.ConfigHead, error) {
+	acl := &protocol.AclRows{}
+	for _, repoId := range []sidecar.Id{self.repoA, self.repoB} {
+		groupId := testWriterId("group of " + repoId.String())
+		atom := &protocol.AclAtom{Atom: groupId.Bytes()}
+		for _, memberId := range groups[repoId] {
+			atom.MemberIds = append(atom.MemberIds, memberId.Bytes())
+		}
+		acl.Atoms = append(acl.Atoms, atom)
+		acl.Rules = append(acl.Rules, &protocol.AclRule{
+			RuleId:   testWriterId("rule of " + repoId.String()).Bytes(),
+			SrcAtoms: [][]byte{groupId.Bytes()},
+			Targets:  []*protocol.AclTarget{{RepoId: repoId.Bytes()}},
+			Actions:  []uint32{uint32(protocol.AclAction_ACL_ACTION_READ)},
+		})
+	}
+	return func(head *sidecar.ConfigHead) (*sidecar.ConfigHead, error) {
+		policyBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(acl)
+		if err != nil {
+			return nil, err
+		}
+		return head.WithFile(sidecar.ConfigHeadPolicyPath, policyBytes)
+	}
+}
+
+// QD-746 through a writer: a policy whose groups let members a and b read repo a and member b read repo b, saved as a
+// head, then edited to drop b from repo a's group, each by SaveHead, which keeps the fold. The edit's base names repo a
+// alone in its shrunk_repo_ids, which api took at its stamp and the client checked as a reader present before it; the
+// client, and a second client started after it, hold its position as repo a's holders_shrunk_at and refuse the
+// generation from before the edit at §10.6's gate; and a third head saved with the fold still below the edit keeps that
+// position, since the edit's base in its tail lands its shrinks again.
+func TestAWritersPolicyEditNamesTheRepoItShrinks(t *testing.T) {
+	world := newTestWriterPolicyWorld(t)
+	a, b, repoA, repoB := world.a, world.b, world.repoA, world.repoB
+	client := world.client()
+	world.caughtUp(client)
+	writer := world.writer(world.owner, client, nil, 0, nil)
+	before, err := writer.SaveHead(world.ctx, world.policy(map[sidecar.Id][]sidecar.Id{repoA: {a.memberId, b.memberId}, repoB: {b.memberId}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	holders, err := sidecar.KeyHolders(world.caughtUp(client), repoA, world.clock.Now())
+	if err != nil || !holders.Contains(sidecar.GkmHolderLeaf, b.sidecarId.Bytes()) {
+		t.Fatalf("b holds no key of repo a under the first policy: %v", err)
+	}
+	world.clock.Advance(time.Second)
+	edited, err := writer.SaveHead(world.ctx, world.policy(map[sidecar.Id][]sidecar.Id{repoA: {a.memberId}, repoB: {b.memberId}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := world.caughtUp(client)
+	if names := state.Base().GetShrunkRepoIds(); !slices.EqualFunc(names, [][]byte{repoA.Bytes()}, bytes.Equal) {
+		t.Fatalf("the edit's base names %x", names)
+	}
+	now := world.clock.Now()
+	for i, reader := range []*sidecar.ConfigState{state, world.caughtUp(world.client())} {
+		if shrunk := reader.ShrunkAt(repoA); shrunk != edited.GetVersion() {
+			t.Errorf("reader %d: repo a's holders_shrunk_at %d, the edit at %d", i, shrunk, edited.GetVersion())
+		}
+		if shrunk := reader.ShrunkAt(repoB); edited.GetVersion() <= shrunk {
+			t.Errorf("reader %d: repo b shrank at %d", i, shrunk)
+		}
+		if err := sidecar.GkmGateCheck(reader, repoA, before, now, now); !errors.Is(err, sidecar.ErrGkmGateClosed) {
+			t.Errorf("reader %d: the generation from before the edit: %v", i, err)
+		}
+	}
+
+	// a head saved after it with the same policy, an unknown field added to the file, keeping the fold below the edit
+	world.clock.Advance(time.Second)
+	later, err := writer.SaveHead(world.ctx, func(head *sidecar.ConfigHead) (*sidecar.ConfigHead, error) {
+		return head.WithFile(sidecar.ConfigHeadPolicyPath, append(bytes.Clone(head.File(sidecar.ConfigHeadPolicyPath)), 0x78, 0x01))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = world.caughtUp(client)
+	if state.Base().GetVersion() != later.GetVersion() || edited.GetVersion() <= state.Base().GetFoldedThrough() || 0 < len(state.Base().GetShrunkRepoIds()) {
+		t.Fatalf("the later base at %d folds through %d naming %x", state.Base().GetVersion(), state.Base().GetFoldedThrough(), state.Base().GetShrunkRepoIds())
+	}
+	for i, reader := range []*sidecar.ConfigState{state, world.caughtUp(world.client())} {
+		if shrunk := reader.ShrunkAt(repoA); shrunk != edited.GetVersion() {
+			t.Errorf("reader %d after the later base: repo a's holders_shrunk_at %d, the edit at %d", i, shrunk, edited.GetVersion())
+		}
+	}
+}
+
+// QD-746 at a re-sign: the writer plans the edit that drops b from repo a's group while a RepoGrant giving b repo a
+// lands first, so its base meets api's 409 and signs again at the new tip; there the edit drops no holder, since b
+// reads repo a by the grant, and the base lands naming none, api and the client taking it, repo a's holders_shrunk_at
+// not moving to it.
+func TestAWritersReSignComputesItsShrinksAgain(t *testing.T) {
+	world := newTestWriterPolicyWorld(t)
+	a, b, repoA, repoB := world.a, world.b, world.repoA, world.repoB
+	client := world.client()
+	world.caughtUp(client)
+	setup := world.writer(world.owner, client, nil, 0, nil)
+	if _, err := setup.SaveHead(world.ctx, world.policy(map[sidecar.Id][]sidecar.Id{repoA: {a.memberId, b.memberId}, repoB: {b.memberId}})); err != nil {
+		t.Fatal(err)
+	}
+	setup.Close()
+	world.caughtUp(client)
+	granted := false
+	publisher := world.publisher()
+	publisher.Before = func(ctx context.Context) {
+		if granted {
+			return
+		}
+		granted = true
+		grant := world.statement(world.owner, bridge.SignedType_SIGNED_REPO_GRANT, &protocol.RepoGrant{
+			Header: world.header(), RepoId: repoA.Bytes(), Subject: b.sidecarId.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_READER,
+		})
+		if _, err := world.api.AppendStatement(ctx, world.networkId, grant); err != nil {
+			t.Error(err)
+		}
+	}
+	writer := world.writer(world.owner, client, publisher, 0, nil)
+	shrunkBefore := client.State().ShrunkAt(repoA)
+	edited, err := writer.SaveHead(world.ctx, world.policy(map[sidecar.Id][]sidecar.Id{repoA: {a.memberId}, repoB: {b.memberId}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !granted {
+		t.Fatal("the grant never raced the base")
+	}
+	state := world.caughtUp(client)
+	if state.Base().GetVersion() != edited.GetVersion() || 0 < len(state.Base().GetShrunkRepoIds()) {
+		t.Fatalf("the re-signed base at %d names %x", state.Base().GetVersion(), state.Base().GetShrunkRepoIds())
+	}
+	if shrunk := state.ShrunkAt(repoA); shrunk != shrunkBefore {
+		t.Errorf("repo a's holders_shrunk_at %d, %d before the edit", shrunk, shrunkBefore)
+	}
+	holders, err := sidecar.KeyHolders(state, repoA, world.clock.Now())
+	if err != nil || !holders.Contains(sidecar.GkmHolderLeaf, b.sidecarId.Bytes()) {
+		t.Errorf("b holds no key of repo a by its grant: %v", err)
+	}
+}
+
 // A base that would keep both the fold and the head says nothing new, and none is published.
 func TestAWriterPublishesNothingNew(t *testing.T) {
 	world := newTestWriterWorld(t)

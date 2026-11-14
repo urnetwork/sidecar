@@ -8,7 +8,8 @@
 //   - the scope honored only while the newest verified state gives the sidecar that right on the repo (D-ACL-21,
 //     §7.9's tokens row), deposit included (g0-recheck-0-deposit-scope#1, decided), so a subject a group edit or a
 //     Suspend drops loses it within §8.9's 5 s and not at the token's 15 minutes;
-//   - ur_sidecar_id matched to §5's binding of the token's client.
+//   - ur_sidecar_id an admitted, unrevoked sidecar of the token's network. The token's (ur_sidecar_id, ur_client_id)
+//     pair is §5's binding as the exchange bound it at the mint, and evs looks no binding up (QD-717).
 //
 // Every answer is three-valued, and only an answer of the state allows: a network whose state is not loaded
 // answers 503, never an allow (ACL-M2-13's cold state).
@@ -55,15 +56,18 @@ type EvsRepoFacts struct {
 	Deletion *EvsRepoDeletionFacts
 }
 
-// A repo's newest RepoDelete as the projection holds it, with its entry's time and signer, which the row's position
-// names (AclRepoDeletionRow.deleted_at).
+// A repo's newest RepoDelete as the projection holds it, with its entry's time and its signer, which its row carries
+// (AclRepoDeletionRow.deleted_time_ms, QD-743, and AclRepoDeletionRow.signer, QD-798), the signer also named by the
+// entry at the row's position (AclRepoDeletionRow.deleted_at) while the projection's log keeps it.
 type EvsRepoDeletionFacts struct {
 	DeletionId sidecar.Id
 	// RepoDelete{now}: straight to shredding, never restorable.
 	Now bool
-	// The RepoDelete entry's time: repo/'s state_ms while deleted, and what the 7-day start counts from.
+	// The RepoDelete entry's time: repo/'s state_ms while deleted, and what the 7-day start counts from. Zero where the
+	// projection does not date it.
 	Time time.Time
-	// The entry's signer: repo/'s state_signer while deleted.
+	// The entry's signer: repo/'s state_signer while deleted. The zero id only where neither the projection's log nor
+	// the row names it, a row no fold writes, which DELETE without now refuses (decideDelete).
 	SignerSidecarId sidecar.Id
 	// A RepoRestore of DeletionId is projected, which api takes only within 7 d (§8.8).
 	Restored bool
@@ -77,7 +81,8 @@ type EvsAuthState interface {
 	// nil when no rev/ object voids the token's client, sidecar or member; ErrEvsTokenRevoked when one does; any
 	// other error when evs cannot tell, which answers 503.
 	CheckRevocation(ctx context.Context, principal *sidecar.Principal) error
-	// Whether the newest verified state binds the token's ur_sidecar_id to its ur_client_id (§5's binding).
+	// Whether the newest verified state holds the token's ur_sidecar_id as an admitted, unrevoked sidecar of the
+	// token's network. The token's ur_client_id is §5's binding as the exchange bound it at the mint (QD-717).
 	MatchBinding(principal *sidecar.Principal) EvsAuthAnswer
 	// Whether the newest verified state gives the token's sidecar every right in rights on repoId at now
 	// (D-ACL-21): AclState.EvsAccess's rights for the evs audience, read from the per-repo bitsets.

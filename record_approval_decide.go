@@ -17,12 +17,25 @@
 //	         payload_sha256 over the stored bytes, not_after the request's, uses 1, or for a template the person's
 //	         choice of 2 or more, evidence_sha256 empty (QD-261)
 //	cancel   ApprovalCancel{approval_id} by the identity key, after the same confirmation, filed in the request's log
+//	sealed   a request whose action carries a sealed_detail, a dial or route grant's prefixes and ports (QD-740), is
+//	         rendered with what the detail opens to on this device: Sidecar.OpenActionDetail, with the config repo's
+//	         keys under the context the action's own clear fields derive (QD-771), never one a caller makes; where the
+//	         device has no opener or the detail does not open, the render says so, the request lists deny alone, and
+//	         an approval is refused, so no prefix or port is approved unseen (D-MCP-17)
+//	listen   a listen's request names its socket in socket_name (QD-772), which the render shows from the opened
+//	         request, and which this device reads against the action's grant_dst before it approves: a tls/ or smtp/
+//	         name is its sock: entry itself, an application name its token path under the network's K_sock as this
+//	         device holds it (ApprovalSocketKeys: Sidecar.SocketKeyRing, where the device runs sockets); a name it holds
+//	         no K_sock to read, or one naming another socket than grant_dst does, renders so, lists deny alone and
+//	         takes no approval
 //
 // The pass approves nothing (§5.9): only a confirmed call reaches here. A presence check that fails, is refused or does
 // not verify against a live presence key this device registered for its member signs nothing.
 //
-// Nothing here creates, derives or unwraps a key: Sidecar.Sign holds the identity key, and a presence key never leaves
-// its authenticator. Safe for concurrent use. On every leg but the ios_extension legs.
+// Nothing here creates, derives or unwraps a key: Sidecar.Sign holds the identity key, a presence key never leaves
+// its authenticator, the opener derives a detail's key (Sidecar.OpenActionDetail, through EvsRepoKey.DeriveKey's
+// testHookSecret), and a token path comes from a ring its keys were derived for (NewSocketKeys' testHookSecret). Safe
+// for concurrent use. On every leg but the ios_extension legs.
 
 package sidecar
 
@@ -48,7 +61,21 @@ var (
 	ErrApprovalOwnRequest = errors.New("this sidecar's own request takes a presence key's evidence, never device")
 	// uses above 1 is for a template alone, and a template takes 2 or more.
 	ErrApprovalUses = errors.New("uses above 1 only for a template, and a template takes 2 or more")
+	// The action's sealed_detail did not open on this device, so it approves nothing it could not show (D-MCP-17).
+	ErrApprovalDetailSealed = errors.New("the action's sealed detail does not open on this device, so it is not approved here")
+	// A listen's socket_name did not read as its action's grant_dst on this device, which holds no K_sock to derive an
+	// application name's token path or finds the name naming another socket, so it approves nothing it could not
+	// check (QD-772).
+	ErrApprovalListenName = errors.New("the listen's socket name does not read as its action's grant_dst on this device, so it is not approved here")
 )
+
+// What reads a listen request's application name on an approver's device (QD-772): the network's K_sock ring as the
+// device holds it from its verified config head, nil while it holds none. Sidecar is the device's on the legs that run
+// sockets (socket_component.go); a device with none reads tls/ and smtp/ names alone, which need no key. Safe for
+// concurrent use.
+type ApprovalSocketKeys interface {
+	SocketKeyRing() *SocketKeyRing
+}
 
 // The approval family's log as an approver's device uses it: RecordApprovals (RECORD-M3-07), or a test's.
 type ApproverLog interface {
@@ -88,15 +115,86 @@ type SidecarRequestDecision struct {
 	Uses uint32
 }
 
-// An approver's device's side of §16.6's requests: its sidecar, for its standing and keys, and its approval log.
+// An approver's device's side of §16.6's requests: its sidecar, for its standing and keys, its approval log, what
+// opens an action's sealed_detail, nil where the device opens none, and what reads a listen's application name, nil
+// where the device holds no K_sock.
 type ApprovalApprover struct {
 	sidecar *Sidecar
 	log     ApproverLog
+	details CanonicalActionDetailOpener
+	sockets ApprovalSocketKeys
 }
 
-// The approver side of sidecar over log.
+// The approver side of sidecar over log, opening each action's sealed_detail on sidecar (Sidecar.OpenActionDetail)
+// and reading a listen's application name with its K_sock ring where its leg runs sockets (Sidecar.SocketKeyRing).
 func NewApprovalApprover(sidecar *Sidecar, log ApproverLog) *ApprovalApprover {
-	return &ApprovalApprover{sidecar: sidecar, log: log}
+	approver := &ApprovalApprover{sidecar: sidecar, log: log}
+	if sidecar != nil {
+		approver.details = sidecar
+		if sockets, ok := any(sidecar).(ApprovalSocketKeys); ok {
+			approver.sockets = sockets
+		}
+	}
+	return approver
+}
+
+// The same approver side, opening each action's sealed_detail with opener before it renders or approves it, nil
+// opening none. The receiver is not changed.
+func (self *ApprovalApprover) WithDetailOpener(opener CanonicalActionDetailOpener) *ApprovalApprover {
+	return &ApprovalApprover{sidecar: self.sidecar, log: self.log, details: opener, sockets: self.sockets}
+}
+
+// The same approver side, reading a listen's application name with sockets' K_sock ring before it approves it, nil
+// reading none. The receiver is not changed.
+func (self *ApprovalApprover) WithSocketKeys(sockets ApprovalSocketKeys) *ApprovalApprover {
+	return &ApprovalApprover{sidecar: self.sidecar, log: self.log, details: self.details, sockets: sockets}
+}
+
+// Whether request's socket_name reads as its action's grant_dst on this device (QD-772): nil for a request of a kind
+// that names no socket; for a listen, its name agreeing with grant_dst's sock: entry, an application name's token path
+// derived under this device's K_sock ring (checkSocketListenName). ErrApprovalListenName for a listen that names no
+// socket, an application name this device holds no ring to read, or a name naming another socket.
+func (self *ApprovalApprover) readListenName(request *StoredApprovalRequest) error {
+	name := request.Request.GetSocketName()
+	if name == "" {
+		row, _ := CanonicalActionFields(SidecarActionKind(request.Action.Action.GetKind()))
+		if row != nil && slices.Contains(row.RequestRequired, approvalRequestFieldSocketName) {
+			return fmt.Errorf("%w: a listen whose request names no socket", ErrApprovalListenName)
+		}
+		return nil
+	}
+	var ring *SocketKeyRing
+	if _, namespace, err := ParseSocketName(name); err == nil && namespace.blinded() {
+		if self.sockets != nil {
+			ring = self.sockets.SocketKeyRing()
+		}
+		if ring == nil {
+			return fmt.Errorf("%w: this device holds no K_sock to derive the name's token path under", ErrApprovalListenName)
+		}
+	}
+	if err := checkSocketListenName(request.Action.Action, name, ring); err != nil {
+		return fmt.Errorf("%w: %w", ErrApprovalListenName, err)
+	}
+	return nil
+}
+
+// What request's action's sealed_detail opens to on this device: nil with no error for an action that carries none,
+// and ErrApprovalDetailSealed for one this device has no opener for or cannot open.
+func (self *ApprovalApprover) openDetail(request *StoredApprovalRequest) (*protocol.CanonicalActionDetail, error) {
+	if len(request.Action.Action.GetSealedDetail()) == 0 {
+		return nil, nil
+	}
+	if self.details == nil {
+		return nil, ErrApprovalDetailSealed
+	}
+	detail, err := self.details.OpenActionDetail(request.Action)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrApprovalDetailSealed, err)
+	}
+	if detail == nil {
+		return nil, ErrApprovalDetailSealed
+	}
+	return detail, nil
 }
 
 // The approver side over this sidecar's record (Sidecar.Record's approvals).
@@ -168,9 +266,16 @@ func (self *ApprovalApprover) Pending(ctx context.Context) ([]*SidecarRequestIte
 			continue
 		}
 		item.ApprovalId = waiting.Request.ApprovalId()
-		item.Render = RenderApprovalRequest(waiting.Request)
+		detail, detailErr := self.openDetail(waiting.Request)
+		nameErr := self.readListenName(waiting.Request)
+		item.Render = RenderApprovalRequestDetail(waiting.Request, detail)
 		item.Render.Flagged = waiting.Flagged
+		item.Render.NameUnread = nameErr != nil
 		item.Channel, item.Decisions = approverChannel(waiting.Request, identity, own)
+		if (detailErr != nil || nameErr != nil) && 0 < len(item.Decisions) {
+			// what it could not show or check it may only refuse
+			item.Decisions = []string{SidecarDecisionDeny}
+		}
 		items = append(items, item)
 	}
 	return items, nil
@@ -224,6 +329,12 @@ func (self *ApprovalApprover) Decide(ctx context.Context, approvalId Id, decisio
 		uses = 0
 	} else if (1 < uses) != request.Action.Action.GetScope() {
 		return ErrApprovalUses
+	} else if _, err := self.openDetail(request); err != nil {
+		// an approval signs only what this device opened and showed
+		return err
+	} else if err := self.readListenName(request); err != nil {
+		// and only a listen whose name it read as the socket grant_dst names
+		return err
 	}
 	pin := authority.Pin()
 	if pin == nil {

@@ -24,8 +24,9 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// The test network at base 2, whose acl rows hold the config repo as its bootstrap leaves it, with a member's laptop
-// and phone admitted and a general repo the phone reads.
+// The test network with a member's laptop and phone admitted and a general repo the phone reads. Its config repo is
+// the Genesis's, whose row the state adds while the rows hold none and the rows take at its first shrink (QD-719,
+// QD-762).
 type gkmForwardNet struct {
 	*testConfigNet
 	configId  Id
@@ -36,12 +37,7 @@ type gkmForwardNet struct {
 
 func newGkmForwardNet(t *testing.T) *gkmForwardNet {
 	net := newTestConfigNet(t)
-	configId := testConfigId("config repo")
-	rows := net.statesAt[net.n].Rows()
-	rows.Acl = testConfigMarshal(t, &protocol.AclRows{Repos: []*protocol.AclRepo{{RepoId: configId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG}}})
-	if verdict := net.pushBase(net.owner, rows, net.n, 2, 0); !verdict.Accepted() {
-		t.Fatalf("base 2: %v", verdict.Refusal)
-	}
+	configId := Id(net.log.State().Genesis().GetConfigRepoId())
 	member, laptop := net.consentedMember("m")
 	phone := net.device("m phone", member)
 	net.admitDevice(laptop, phone, 0)
@@ -578,14 +574,30 @@ func TestGkmDelegationKeySha256ByRowKind(t *testing.T) {
 	}
 }
 
-// QD-442's form of the key object's key: gkm/dkey/ and 64 lowercase hex characters; an id of another size is refused.
-func TestGkmDelegationKeyPathIsQd442s(t *testing.T) {
+// QD-442's form of the key object's key, under its network (QD-763): gkm/dkey/, the network_id in 32 lowercase hex
+// characters, and the delegation_id in 64; the network's prefix is the key's start; an id of another size is refused,
+// and so is the zero network.
+func TestGkmDelegationKeyPathIsQd442sUnderItsNetwork(t *testing.T) {
+	networkId := gkmTestId("network")
 	delegationId := sha256.Sum256([]byte("a forwarding Delegation"))
-	path, err := GkmDelegationKeyPath(delegationId[:])
-	if err != nil || path != "gkm/dkey/"+hex.EncodeToString(delegationId[:]) || strings.ToLower(path) != path {
+	path, err := GkmDelegationKeyPath(networkId, delegationId[:])
+	want := "gkm/dkey/" + hex.EncodeToString(networkId[:]) + "/" + hex.EncodeToString(delegationId[:])
+	if err != nil || path != want || strings.ToLower(path) != path || len(path) != len("gkm/dkey/")+32+1+64 {
 		t.Errorf("the path: %s %v", path, err)
 	}
-	if _, err := GkmDelegationKeyPath(delegationId[:31]); !errors.Is(err, ErrGkmMalformed) {
+	prefix := GkmDelegationKeyNetworkPrefix(networkId)
+	if prefix != "gkm/dkey/"+hex.EncodeToString(networkId[:])+"/" || !strings.HasPrefix(path, prefix) {
+		t.Errorf("the network's prefix: %s", prefix)
+	}
+	// another network's prefix holds none of this network's keys
+	otherPrefix := GkmDelegationKeyNetworkPrefix(gkmTestId("another network"))
+	if strings.HasPrefix(path, otherPrefix) || strings.HasPrefix(otherPrefix, prefix) || strings.HasPrefix(prefix, otherPrefix) {
+		t.Errorf("two networks' prefixes overlap: %s %s", prefix, otherPrefix)
+	}
+	if _, err := GkmDelegationKeyPath(networkId, delegationId[:31]); !errors.Is(err, ErrGkmMalformed) {
 		t.Errorf("a short id: %v", err)
+	}
+	if _, err := GkmDelegationKeyPath(Id{}, delegationId[:]); !errors.Is(err, ErrGkmMalformed) {
+		t.Errorf("the zero network: %v", err)
 	}
 }

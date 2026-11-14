@@ -139,6 +139,9 @@ type Net struct {
 
 	// the networks of sidecars with HeadCheck attached (headcheck_net.go), which FI-10's oracle reads
 	headCheckNets []*HeadCheckNet
+
+	// the requesting daemons' approval worlds (approval_suite.go), which FI-7's oracle reads
+	approvalWorlds []*ApprovalWorld
 }
 
 // A fresh world. settings may be nil for the defaults. The caller closes it. Under sidecar_testhooks
@@ -281,6 +284,14 @@ func (self *Net) BlobHistory() []*BlobHistoryEntry {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.blobs.History()
+}
+
+// How many store requests BlobHistory holds now, without copying them: a request at this index or later comes after
+// this call.
+func (self *Net) BlobHistoryCount() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.blobs.Count()
 }
 
 // Starts a process under name, and keeps builder for its Restart. Returns its memory.

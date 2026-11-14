@@ -19,6 +19,7 @@ func TestDefaultSmtpSenderSettingsMatchDesign(t *testing.T) {
 		ProverConcurrency:          1,
 		PinTimeout:                 90 * 24 * time.Hour,
 		PinMaxCount:                4096,
+		TlsAllowanceMaxCount:       4096,
 		TlsLookupTimeout:           15 * time.Second,
 		MtaStsFetchTimeout:         time.Minute,
 		MtaStsPolicyMaxByteCount:   64 * 1024,

@@ -118,8 +118,13 @@ func FuzzCanonicalActionBuild(f *testing.F) {
 			return
 		}
 		row, ok := CanonicalActionFields(SidecarActionKind(stored.Action.GetKind()))
-		if !ok || row.Held != "" {
+		if !ok {
 			t.Fatalf("built kind %d", stored.Action.GetKind())
+		}
+		for _, dst := range stored.Action.GetGrantDst() {
+			if !canonicalActionGrantDstClear(dst) {
+				t.Errorf("built a clear grant_dst naming a prefix or a port on kind %d", stored.Action.GetKind())
+			}
 		}
 		stored.Action.ProtoReflect().Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
 			if !row.allows(field.Number(), stored.Action.GetVersion()) {

@@ -104,7 +104,7 @@ func (self *EvsRecordHeader) check() error {
 			return fmt.Errorf("%w: a slot on a container-keyed record", ErrEvsRecordInvalid)
 		}
 	case protocol.EvsKeyRefKind_EVS_KEY_REF_SLOT:
-		if self.SlotId == (Id{}) || EvsSlotMaxKeyCount <= self.KeyIndex {
+		if self.SlotId == (Id{}) || DefaultEvsFormatSettings().SlotMaxKeyCount <= int(self.KeyIndex) {
 			return fmt.Errorf("%w: a slot-keyed record names no key", ErrEvsRecordInvalid)
 		}
 	default:

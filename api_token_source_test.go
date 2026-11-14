@@ -271,6 +271,14 @@ func TestChildEnrollmentAndRepair(t *testing.T) {
 		t.Fatalf("the record is not a child's: %+v", records)
 	}
 	firstToken, _ := loadSidecarByJwt(world.instance.secrets(first.NetworkId, sidecarCoreSecretsNamespace))
+	// the keychain and the generation hold bind's re-mint of the child's token, naming the sidecar (QD-797)
+	reminted := world.api.remintedTokens()
+	if firstToken != reminted[len(reminted)-1] || world.sidecar.sidecarApi.currentByJwt() != firstToken {
+		t.Fatal("the child's generation does not hold bind's re-mint")
+	}
+	if claimed, ok := sidecarJwtSidecarId(firstToken); !ok || claimed != first.SidecarId {
+		t.Fatalf("the child's token names sidecar %s", claimed)
+	}
 	opened := world.platform.awaitOpened(t, 1)
 	world.sidecar.runningGeneration().tokenManager.Load().end(SidecarReasonParentLost)
 	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateUnenrolled, 1))
@@ -291,6 +299,129 @@ func TestChildEnrollmentAndRepair(t *testing.T) {
 	}
 	if firstToken == "" || len(world.api.removed) != 2 {
 		t.Errorf("the first child was not removed at the re-pair: removed %d", len(world.api.removed))
+	}
+}
+
+// A host token source that takes bind's re-mint (SidecarTokenSourceRemint), as an sdk host's Api session would.
+type testRemintTokenSource struct {
+	*testTokenSource
+	refuses bool
+}
+
+func (self *testRemintTokenSource) AdoptByJwt(byJwt string) error {
+	if self.refuses {
+		return errors.New("synthetic refusal")
+	}
+	self.hold(byJwt)
+	return nil
+}
+
+// Holds byJwt as the host's Api session does once it is given one, no refresh announced.
+func (self *testTokenSource) hold(byJwt string) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.byJwt = byJwt
+}
+
+// An unenrolled sidecar whose host's TokenSource is source, its api the enrollment fake.
+func newTokenSourceEnrollWorld(t *testing.T, source SidecarTokenSource) *testEnrollWorld {
+	t.Helper()
+	backend := NewSidecarMemoryBackend()
+	instance := newInstanceOn(t, backend, newFakeKeyStore())
+	if err := instance.Unlock(testPass); err != nil {
+		t.Fatal(err)
+	}
+	world := &testEnrollWorld{
+		instance: instance,
+		backend:  backend,
+		api:      newTestEnrollApi(t),
+		platform: newTestSidecarPlatform(),
+		log:      &testLineLogger{},
+	}
+	settings := testSidecarSettings(world.platform)
+	settings.Log = world.log
+	sidecar, err := NewSidecar(context.Background(), &testTokenSourceHost{testSidecarHost: testSidecarHost{store: instance.Store(nil)}, source: source}, nil, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), sidecarTestTimeout)
+		defer cancel()
+		sidecar.CloseAndWait(ctx)
+	})
+	world.sidecar = sidecar
+	world.sidecar.sidecarApi.setTransport(world.api)
+	world.sidecar.hostStores = func() []SidecarHostCredentialStore { return nil }
+	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateUnenrolled, 0))
+	return world
+}
+
+// A child enrolled for an sdk host keeps bind's re-mint (QD-797), and the host's source, which held the mint's token,
+// takes it too before the generation starts, so the generation and the source both hold the token naming the sidecar,
+// and a refresh the source reports, keeping the claim, is installed. A source that takes no re-mint, or refuses it, goes
+// on with the mint's token, which the generation then adopts from it, naming no sidecar: the closed direction for
+// sockets, and the core says so.
+func TestChildEnrollmentHandsTheRemintToTheHost(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		source  SidecarTokenSource
+		adopted bool
+	}{
+		{name: "a source that takes it", source: &testRemintTokenSource{testTokenSource: newTestTokenSource(true)}, adopted: true},
+		{name: "a source that refuses it", source: &testRemintTokenSource{testTokenSource: newTestTokenSource(true), refuses: true}},
+		{name: "a source that takes none", source: newTestTokenSource(true)},
+	} {
+		world := newTokenSourceEnrollWorld(t, c.source)
+		held := func() *testTokenSource {
+			if remint, ok := c.source.(*testRemintTokenSource); ok {
+				return remint.testTokenSource
+			}
+			return c.source.(*testTokenSource)
+		}()
+		minted := ""
+		mint := func(ctx context.Context, clientPublicKey []byte) (*SidecarAuthClientResult, error) {
+			clientId := NewId()
+			minted = testClientTokenOf(world.api.networkId, clientId)
+			// the host's session holds the child's token from its mint, as sdk's EnrollWithDevice installs it
+			held.hold(minted)
+			return &SidecarAuthClientResult{ByClientJwt: minted, ClientId: clientId, AdminRefused: true, StrictExp: true}, nil
+		}
+		if err := world.sidecar.Enroll(context.Background(), &SidecarEnrollCredential{MintChild: mint}); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			number, changed := world.sidecar.runningGenerationNumber.Get()
+			if number == 1 {
+				break
+			}
+			<-changed
+		}
+		identity := world.sidecar.currentIdentity()
+		reminted := world.api.remintedTokens()[0]
+		sourceToken, _ := held.ByJwt()
+		secrets := world.instance.secrets(world.api.networkId, sidecarCoreSecretsNamespace)
+		kept, _ := loadSidecarByJwt(secrets)
+		if !c.adopted {
+			// the generation adopted the source's own token, the mint's
+			if sourceToken != minted || world.sidecar.sidecarApi.currentByJwt() != minted || kept != minted {
+				t.Errorf("%s: the generation does not hold the source's token", c.name)
+			}
+			if !strings.Contains(world.log.text(), "re-minted token") {
+				t.Errorf("%s: nothing said the source kept the mint's token", c.name)
+			}
+			continue
+		}
+		if sourceToken != reminted || world.sidecar.sidecarApi.currentByJwt() != reminted || kept != reminted {
+			t.Fatalf("%s: the source, the generation and the keychain do not all hold the re-mint", c.name)
+		}
+		if claimed, ok := sidecarJwtSidecarId(reminted); !ok || claimed != identity.SidecarId {
+			t.Fatalf("%s: the re-mint names sidecar %s", c.name, claimed)
+		}
+		refreshed := testEditedJwt(reminted, func(claims map[string]any) { claims["jti"] = NewId().String() })
+		held.refreshed(refreshed)
+		if kept, _ := loadSidecarByJwt(secrets); kept != refreshed || world.sidecar.sidecarApi.currentByJwt() != refreshed {
+			t.Errorf("%s: the host's refresh of the re-mint was not installed", c.name)
+		}
 	}
 }
 

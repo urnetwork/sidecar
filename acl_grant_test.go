@@ -1,7 +1,9 @@
 // §8.8's GrantActivate on the fake view: grant_id's fixed vectors, each quorum branch (k = 1 and 2, a non-eligible
 // approver, evidence, expiry, the spend check), the admin clause and its dst-owner exception, the match checks, the
 // fold, and replays refused after activation, expiry and a GrantRevoke. Then FS-14 through TEAM's log: a grant whose
-// requests rule a new config head deleted ends at that base. Pure, on every leg.
+// requests rule a new config head deleted ends at that base. A dial or route grant here is a bridge_forward's at
+// version 4, its ports and prefixes in a sealed_detail no verifier opens (QD-740), and the match checks hold the
+// shape before it, a port or a prefix in the clear or a forward at version 1, refused. Pure, on every leg.
 
 package sidecar
 
@@ -12,6 +14,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,19 +104,71 @@ type aclTestGrant struct {
 	decisions   []*bridge.Signed
 }
 
-// A bridge_forward action granting dst and allow to subject under the requests rule, as stored.
-func newAclTestGrant(t *testing.T, ruleId []byte, subject Id, dst []string, allow []string, expiresMs int64) *aclTestGrant {
+// The port a test forward names on its target, which its detail always holds.
+const aclTestForwardPort = 22
+
+// The CanonicalAction a test's grant rides, as a daemon fills it (QD-740). A grant asking dial or route alone is a
+// bridge_forward's, at version 4: its target's port and each destination's port or prefix text ride its
+// sealed_detail, sealed once the clear fields are final (QD-771), and the clear grant_dst names the same sidecars by
+// id alone, a prefix nowhere. A grant asking anything else is no forward's, so it rides a socket_listen action at
+// version 1 with the grant's fields alone, which seals nothing.
+func aclTestGrantAction(ruleId []byte, subject Id, dst []string, allow []string, expiresMs int64) *protocol.CanonicalAction {
 	action := &protocol.CanonicalAction{
-		Kind: uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD), Version: 1,
+		Kind: uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_LISTEN), Version: 1,
 		RuleId: ruleId, Subject: subject.Bytes(), GrantDst: dst, GrantAllow: allow, ExpiresMillis: expiresMs,
 	}
+	if slices.ContainsFunc(allow, func(name string) bool { return !slices.Contains(canonicalActionSealedGrantAllows, name) }) {
+		return action
+	}
+	action.Kind = uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_FORWARD)
+	action.Version = canonicalActionVersionSealedGrant
+	action.GrantDst = nil
+	detail := &protocol.CanonicalActionDetail{TargetPort: aclTestForwardPort}
+	for _, entry := range dst {
+		clear := entry
+		if !canonicalActionGrantDstClear(entry) {
+			detail.GrantDst = append(detail.GrantDst, entry)
+			kind, value, _ := strings.Cut(entry, ":")
+			if kind != "sidecar" {
+				// a prefix has no clear form
+				continue
+			}
+			sidecarIdText, _, _ := strings.Cut(value, ":")
+			clear = kind + ":" + sidecarIdText
+		}
+		if !slices.Contains(action.GrantDst, clear) {
+			action.GrantDst = append(action.GrantDst, clear)
+		}
+	}
+	return testWithSealedDetail(action, detail)
+}
+
+// A grant of dst and allow to subject under the requests rule, its action as stored (aclTestGrantAction).
+func newAclTestGrant(t *testing.T, ruleId []byte, subject Id, dst []string, allow []string, expiresMs int64) *aclTestGrant {
+	return newAclTestGrantOf(testConfigMarshal(t, aclTestGrantAction(ruleId, subject, dst, allow, expiresMs)), subject)
+}
+
+// A grant to subject whose action is these stored bytes, under a fresh approval.
+func newAclTestGrantOf(actionBytes []byte, subject Id) *aclTestGrant {
 	approvalId := NewId()
 	return &aclTestGrant{
-		actionBytes: testConfigMarshal(t, action),
+		actionBytes: actionBytes,
 		approvalId:  approvalId,
 		requestSha:  sha256.Sum256(append([]byte("request "), approvalId[:]...)),
 		subject:     subject,
 	}
+}
+
+// Rewrites the grant's action by hand, as no builder would, and drops the decisions made over the old bytes.
+func (self *aclTestGrant) rewrite(t *testing.T, edit func(action *protocol.CanonicalAction)) *aclTestGrant {
+	action := &protocol.CanonicalAction{}
+	if err := proto.Unmarshal(self.actionBytes, action); err != nil {
+		t.Fatal(err)
+	}
+	edit(action)
+	self.actionBytes = testConfigMarshal(t, action)
+	self.decisions = nil
+	return self
 }
 
 // Adds an approver's decision on channel, expiring at notAfterMs.
@@ -309,25 +365,67 @@ func TestAclGrantActivateMatch(t *testing.T) {
 			return grant.activate()
 		}, signer: cast.laptop, refusal: ErrConfigRule},
 		{name: "a field off the kind's server row", activate: func() *protocol.GrantActivate {
-			action := &protocol.CanonicalAction{}
-			grant := valid()
-			if err := proto.Unmarshal(grant.actionBytes, action); err != nil {
-				t.Fatal(err)
-			}
-			action.Preview = "a preview no server sees"
-			grant.actionBytes = testConfigMarshal(t, action)
-			grant.decisions = nil
-			return grant.approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
+			return valid().rewrite(t, func(action *protocol.CanonicalAction) {
+				action.Preview = "a preview no server sees"
+			}).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
 		}, signer: cast.laptop, refusal: ErrConfigRule},
 		{name: "a destination the rule does not take", activate: func() *protocol.GrantActivate {
 			return newAclTestGrant(t, selfRule, cast.laptop, []string{aclTestDst(cast.stranger)}, []string{"dial"}, 0).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
 		}, signer: cast.laptop, refusal: ErrConfigAuthority},
 		{name: "an action the rule does not take", activate: func() *protocol.GrantActivate {
+			return newAclTestGrant(t, selfRule, cast.laptop, []string{aclTestDst(cast.phone)}, []string{"route"}, 0).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
+		}, signer: cast.laptop, refusal: ErrConfigAuthority},
+		{name: "another kind's action the rule does not take", activate: func() *protocol.GrantActivate {
 			return newAclTestGrant(t, selfRule, cast.laptop, []string{aclTestDst(cast.phone)}, []string{"listen"}, 0).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
 		}, signer: cast.laptop, refusal: ErrConfigAuthority},
-		{name: "a prefix in grant_dst", activate: func() *protocol.GrantActivate {
+		{name: "a port sealed with its sidecar in the clear", activate: func() *protocol.GrantActivate {
+			return newAclTestGrant(t, selfRule, cast.laptop, []string{aclTestDst(cast.phone) + ":tcp:22"}, []string{"dial"}, 0).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
+		}, signer: cast.laptop},
+		// QD-740: a dial or route grant shows a verifier no prefix and no port, and is a forward's at version 4 alone
+		{name: "a prefix sealed and no destination in the clear", activate: func() *protocol.GrantActivate {
 			return newAclTestGrant(t, selfRule, cast.laptop, []string{"ip:10.0.0.0/8"}, []string{"route"}, 0).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
-		}, signer: cast.laptop, refusal: ErrConfigRule},
+		}, signer: cast.laptop, refusal: ErrAclGrantFieldInvalid},
+		{name: "a prefix in the clear grant_dst", activate: func() *protocol.GrantActivate {
+			return valid().rewrite(t, func(action *protocol.CanonicalAction) {
+				action.GrantDst = append(action.GrantDst, "ip:10.0.0.0/8")
+			}).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
+		}, signer: cast.laptop, refusal: ErrCanonicalActionInvalid},
+		{name: "a port in the clear grant_dst", activate: func() *protocol.GrantActivate {
+			return valid().rewrite(t, func(action *protocol.CanonicalAction) {
+				action.GrantDst = []string{aclTestDst(cast.phone) + ":tcp:22"}
+			}).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
+		}, signer: cast.laptop, refusal: ErrCanonicalActionInvalid},
+		{name: "a forward with no sealed_detail", activate: func() *protocol.GrantActivate {
+			return valid().rewrite(t, func(action *protocol.CanonicalAction) {
+				action.SealedDetail = nil
+			}).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
+		}, signer: cast.laptop, refusal: ErrCanonicalActionInvalid},
+		{name: "a forward whose sealed_detail is no sealed body", activate: func() *protocol.GrantActivate {
+			return valid().rewrite(t, func(action *protocol.CanonicalAction) {
+				action.SealedDetail = testConfigMarshal(t, &protocol.CanonicalActionDetail{TargetPort: aclTestForwardPort})
+			}).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
+		}, signer: cast.laptop, refusal: ErrCanonicalActionInvalid},
+		{name: "a forward at version 1, its port in the clear", activate: func() *protocol.GrantActivate {
+			return valid().rewrite(t, func(action *protocol.CanonicalAction) {
+				action.Version = 1
+				action.SealedDetail = nil
+				action.GrantDst = []string{aclTestDst(cast.phone) + ":tcp:22"}
+			}).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
+		}, signer: cast.laptop, refusal: ErrCanonicalActionInvalid},
+		{name: "a forward at version 1 with no port", activate: func() *protocol.GrantActivate {
+			return valid().rewrite(t, func(action *protocol.CanonicalAction) {
+				action.Version = 1
+				action.SealedDetail = nil
+			}).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
+		}, signer: cast.laptop, refusal: ErrCanonicalActionInvalid},
+		{name: "another kind's grant naming a port in the clear", activate: func() *protocol.GrantActivate {
+			return valid().rewrite(t, func(action *protocol.CanonicalAction) {
+				action.Kind = uint32(protocol.SidecarActionKind_SIDECAR_ACTION_KIND_LISTEN)
+				action.Version = 1
+				action.SealedDetail = nil
+				action.GrantDst = []string{aclTestDst(cast.phone) + ":tcp:22"}
+			}).approve(t, cast.member, device, aclTestDecisionNotAfter).activate()
+		}, signer: cast.laptop, refusal: ErrCanonicalActionInvalid},
 	}
 	spend := &aclTestSpendCheck{}
 	for _, c := range cases {
@@ -356,6 +454,9 @@ func TestAclGrantActivateFoldsAndRefusesReplays(t *testing.T) {
 		t.Fatal("reach before the grant")
 	}
 	activate := grant.activate()
+	if bytes.Contains(activate.GetCanonicalAction(), []byte(":tcp:")) {
+		t.Fatal("the GrantActivate shows its port in the clear")
+	}
 	statement := fixture.statement(bridge.SignedType_SIGNED_GRANT_ACTIVATE, activate, cast.laptop)
 	verdict, err := state.CheckStatement(statement, spend)
 	if err != nil {
@@ -364,6 +465,9 @@ func TestAclGrantActivateFoldsAndRefusesReplays(t *testing.T) {
 	rows, _, err := state.ApplyStatement(statement, verdict)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if bytes.Contains(testConfigMarshal(t, rows), []byte(":tcp:")) {
+		t.Fatal("the rows hold the grant's port")
 	}
 	fixture.rows = rows
 	state = fixture.state(t)

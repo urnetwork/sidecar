@@ -16,7 +16,7 @@ import (
 // The suite RECORD-M3-12's binding passes on T2, here on the fake.
 func TestFakeRecordStreamsConforms(t *testing.T) {
 	world := NewFakeRecordStreams(nil, nil, nil)
-	RunRecordStreamsSuite(t, world)
+	RunRecordStreamsSuite(t, world, DefaultRecordStreamsSuiteSettings())
 	if violations := world.Violations(); len(violations) != 0 {
 		t.Errorf("the suite broke rules: %v", violations)
 	}

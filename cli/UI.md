@@ -55,6 +55,69 @@ ur share rm <token> [--network=<name>]
   identity is not the link's.
 - `rm` ends a share at once: its live streams reset and its link redeems nothing more.
 
+## ur tun (§17.11)
+
+The OS tun `ur-<instance>` for one network's bridge, on Linux and WSL2 at M4 (macOS and Windows at M6). It lives in
+the daemon, as a socket does: each command returns once the daemon holds what it asked for, and the daemon stays up
+while the bridge is on (§5.8).
+
+```text
+ur tun [--network=<name>]               bring the tun up over the network's bridge, and show what it carries
+ur tun down                             end it, removing its routes
+ur tun ip [<ip>] [--network=<name>]     show this host's overlay address and the block, or claim <ip>, or auto
+```
+
+- The daemon needs CAP_NET_ADMIN or root: `sudo setcap cap_net_admin=ep "$(command -v ur)"` grants it to the ur the
+  daemon runs as. Without it `ur tun` says so, and `ur bridge` still works over the userspace stack.
+- The tun carries the block, the granted prefixes and `<block>.0.53`, and under the egress mode `exits` the default
+  route too, in a routing table of its own with wg-quick's rules (`lookup main suppress_prefixlength 0`, then
+  `not fwmark <mark> lookup <table>`): the daemon's own connect sockets carry connect's egress mark, so its transport
+  keeps the host's route (QD-800); IPv6, which the tun does not carry, keeps the host's route too. This host's own
+  interface, gateway and resolver addresses, which the bridge carves out of what it routes (§17.4), take a `throw`
+  route each in that table, kept in step as they change, so they keep the host's route as well, and a resolver beyond
+  the host's own networks still answers the host's lookups, outside the exits (QD-808). Where the host refuses it, a
+  strict reverse path filter or a table or mark another program uses, `ur tun` says the exits are held and why, the
+  host's other traffic keeps its route, and it tries again. The route, its throws, its rules and the mark come off
+  when the mode leaves `exits` and when the tun ends.
+- The network's names, `~<net>.<root>`, resolve through `<block>.0.53` by systemd-resolved, set for the tun's link.
+  Where resolved is absent or refuses, `ur tun` prints the step to take.
+- `ur tun` yields to an app's bridge: on a sidecar paired with an app whose VPN holds the block, it refuses, naming the
+  interface.
+- One network's tun an instance: `ur tun` for another network refuses until `ur tun down`. `down` is this file's
+  spelling; §17.11 names none.
+- `ip <ip>` must lie in the block's lower /17, outside `<block>.0.0/24`, and not end in .0 or .255 (§17.4); the first
+  claim in the log wins. `ip auto` refuses until the check that no browser leaks an overlay address through WebRTC has
+  passed (QD-424).
+
+## ur bridge (§17.11)
+
+The network's bridge from the terminal. It lives in the daemon, as `ur tun` does, and needs no tun and no root: a
+forward dials over a userspace stack.
+
+```text
+ur bridge [--network=<name>]                       list addresses, private names, rules and forwards
+ur bridge expose <ranges>... [--remap]             advertise this host's subnets; 0.0.0.0/0 alone is its exit
+ur bridge expose :<port>[=<ip>:<port>] [--udp]     map a port of this host's overlay address
+ur bridge forward <client>:<port>[:<local ip>]:<local port> [--listen=<ip>] [--udp]
+                                                   listen locally and dial the client's port
+ur bridge close <id> [--reset]                     end a forward, withdraw a rule or revoke a grant
+ur bridge egress auto|<exit>[,<exit>]|tag:<t>|none set this device's default route
+ur bridge block [cycle|<cidr>]                     show the network's block, or re-roll or choose it (admins)
+```
+
+- The listing shows pinned and unpinned counts, what the bridge waits on, a block another network on this host
+  shares, and local addresses carved out of the block (§17.17). Rules and forwards are named by their ids.
+- Without an active grant, `expose` and `forward` print `ur approve <id>` and wait, asking the daemon again until
+  the decision lands; a wait that runs out exits 1 and the same command picks the decision up later (§16.6).
+- A forward listens on every interface unless a local ip or `--listen` narrows it, and then serves every host that
+  reaches the listener: it is listed LAN-exposed, here and in `ur status`, and the command warns. It carries its
+  user's own protocol, so no TLS rule applies. It stops at its grant's expiry and when the grant is revoked.
+- `egress` and `block` ask for a yes on the terminal first, and never run from MCP or a hook.
+- `close` is this file's spelling; §17.11 names none. Closing a forward leaves its grant; `close <grant id>` revokes
+  it. `<client>` is a sidecar's id until the daemon follows the network's config, then a private name or an overlay
+  address too.
+- Until the daemon follows a network's config, every `ur bridge` command answers that no bridge runs for the network.
+
 ## ur login --device (§5.6, §7.8; RFC 8628)
 
 For a host with no browser, or one whose browser cannot reach a loopback redirect: the same single-use, user-owned

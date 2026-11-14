@@ -255,6 +255,98 @@ func TestEvsBatchRecordsReadBackByPlace(t *testing.T) {
 	}
 }
 
+// A push in parts whose first change is the root's delta (EVS1-M2-46) names the root's empty token path as its first
+// part's, so that part's item is exactly 52 bytes, its place and changes_root with no token bytes, and it reads back
+// as the root through a batch and by its place, beside a part of a deeper path and a changeless part, and writes the
+// same bytes again (QD-661). An item of 51 bytes, one of 52 plus a part of a token, and a part with a change after a
+// changeless one are still refused.
+func TestEvsSealRecordNamesTheRootAsItsFirstPart(t *testing.T) {
+	statement := evsTestBody(200)
+	placeOf := func(seq uint32) *protocol.EvsPlace {
+		return &protocol.EvsPlace{Minute: 29453760, Instance: 0x0a0b0c0d, Seq: seq, Offset: 32, Length: 400 + seq}
+	}
+	parts := []*EvsSealPart{
+		{Place: placeOf(1), ChangesRoot: [32]byte(evsTestBytes("root's part", 32)), FirstTokenPath: EvsTokenPath{}},
+		{Place: placeOf(2), ChangesRoot: [32]byte(evsTestBytes("second part", 32)), FirstTokenPath: EvsTokenPath{evsTestToken("d"), evsTestToken("child")}},
+		{Place: placeOf(3), Changeless: true},
+	}
+	body := EvsSealRecordBody(statement, parts)
+	items, err := EvsPayloadItems(body)
+	if err != nil || len(items) != 4 {
+		t.Fatalf("the seal's items: %d %v", len(items), err)
+	}
+	if len(items[1]) != EvsPlaceByteCount+sha256.Size {
+		t.Errorf("the root's part item is %d bytes", len(items[1]))
+	}
+	if len(items[2]) != 52+2*EvsTokenByteCount || len(items[3]) != EvsPlaceByteCount {
+		t.Errorf("the other parts' items are %d and %d bytes", len(items[2]), len(items[3]))
+	}
+	check := func(label string, recordBody []byte) {
+		readStatement, readParts, err := ParseEvsSealRecordBody(recordBody)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if !bytes.Equal(readStatement, statement) || len(readParts) != len(parts) {
+			t.Fatalf("%s: %d parts", label, len(readParts))
+		}
+		root := readParts[0]
+		if len(root.FirstTokenPath) != 0 || root.Changeless || root.ChangesRoot != parts[0].ChangesRoot || !proto.Equal(root.Place, parts[0].Place) {
+			t.Errorf("%s: the root's part read back as %+v", label, root)
+		}
+		if !readParts[1].FirstTokenPath.Equal(parts[1].FirstTokenPath) || readParts[1].ChangesRoot != parts[1].ChangesRoot ||
+			!proto.Equal(readParts[1].Place, parts[1].Place) {
+			t.Errorf("%s: the second part read back as %+v", label, readParts[1])
+		}
+		if !readParts[2].Changeless || !proto.Equal(readParts[2].Place, parts[2].Place) {
+			t.Errorf("%s: the changeless part read back as %+v", label, readParts[2])
+		}
+		// the root's empty path sorts first, so the part holding any path below the second part's start is the first
+		if 0 < root.FirstTokenPath.Compare(EvsTokenPath{evsTestToken("a")}) {
+			t.Errorf("%s: the root's path sorts after a top-level path", label)
+		}
+		if !bytes.Equal(EvsSealRecordBody(readStatement, readParts), recordBody) {
+			t.Errorf("%s: the parts read back write other bytes", label)
+		}
+	}
+	check("the body", body)
+
+	// through a batch, and by the seal record's place alone, as evs and FI-1's walk read it
+	writer := NewEvsBatchWriter(0x0a0b0c0d, 29453760, 9, 1767225600123)
+	record := &EvsBatchRecord{
+		Type: protocol.EvsBatchRecordType_EVS_BATCH_SEAL, RepoId: evsTestId("repo"), RefId: evsTestId("ref main"),
+		PushId: evsTestId("push in parts"), SignerSidecarId: evsTestId("sidecar writer"), TimeMs: 1767225600000, Body: body,
+	}
+	place, err := writer.Add(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchBytes, err := writer.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := ParseEvsBatch(batchBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("the batch's record", batch.Records[0].Body)
+	byPlace, err := NewEvsBatchReader(bytes.NewReader(batchBytes)).Record(place)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("the record at its place", byPlace.Body)
+
+	refused := map[string][][]byte{
+		"a part of 51 bytes":                    {statement, items[1][:51], items[2]},
+		"a part of 52 bytes and half a token":   {statement, append(bytes.Clone(items[1]), evsTestBytes("half", 8)...), items[2]},
+		"a part with a change after changeless": {statement, items[3], items[1]},
+	}
+	for label, refusedItems := range refused {
+		if _, _, err := ParseEvsSealRecordBody(evsJoinItems(refusedItems)); !errors.Is(err, ErrEvsPushInvalid) {
+			t.Errorf("%s: %v", label, err)
+		}
+	}
+}
+
 // §11.8's bounds: 256 KiB for several records, 1 MiB for one alone; and what a reader refuses: format 2 as needing it
 // (an evacuator leaves it), and a bad magic, hash, index, type or tiling as INVALID.
 func TestEvsBatchBoundsAndRefusals(t *testing.T) {

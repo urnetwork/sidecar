@@ -8,23 +8,23 @@ import (
 	"github.com/consensys/gnark/frontend"
 )
 
-// Z5 and Z6 in the circuit: the message's framing. The header block's offsets are private, so a
-// field cannot be found by a public template. Instead every line start is examined: a field's name
-// is matched by a fingerprint at each one, which is what makes "exactly once" a sum, and the matching
-// line's whole value is then read at that one position and compared with the public literal.
+// Z5 and Z6 in the circuit, a record at a time (DESIGN-DETAILS 3.2.4): the header block's records, the
+// first in the msg shape and each later one in a hdr shape, and DATA's body records, one a body shape.
+// What a scan must remember across a record boundary arrives as the state the gate's carry opens to and
+// leaves as the state the part's own carry commits to (circuit_scan.go).
 //
-// Fingerprints are linear in the octets and fit a field element, so comparing one costs two
-// constraints however long it is. Reading a value costs one product per octet per 31-octet word.
+// The header block's offsets are private, so a field cannot be found by a public template. Every
+// position is examined instead: a literal is matched by a fingerprint of the octets from there, which is
+// what makes "exactly once" a sum, and a matching line's whole value is then read at that one position
+// and compared with the public literal. Octets past the record's end read as 0 everywhere, so nothing
+// matched or read there can be a literal, all of whose octets are nonzero.
+//
+// Fingerprints are linear in the octets and fit a field element, so comparing one costs two constraints
+// however long it is. Reading a value costs one product per octet per 31-octet word.
 
 const (
 	// Octets a fingerprint or an extracted word holds: the most below the field's 254 bits.
 	wordBytes = 31
-	// The capacity of a whole literal line, which holds a Message-ID, X-UR-Ref or Feedback-ID.
-	literalLineBytes = 124
-	// The capacity of From's tail, "@" domain ">" CRLF.
-	literalAddressBytes = 93
-	// The capacity of the fixed signature's tags.
-	literalTagBytes = 93
 
 	octetTab   = 9
 	octetLf    = 10
@@ -64,44 +64,54 @@ func assignLiteralCheck(check *literalCheck, literal []byte) error {
 	return nil
 }
 
-// The header block's blocks and what the edge knows of its positions.
-type headerScan struct {
+// One header record and what the edge knows of its positions: the msg shape's head, the header block's
+// first record, or a hdr shape's rest, a later one.
+type headerRecordScan struct {
 	Blocks []*poolBlock
-	// A content octet of the header block.
+	// A content octet of the record.
 	Active []frontend.Variable `gnark:",public"`
-	// A content octet before the block's final CRLF, where a line must be a field or a continuation.
+	// A content octet before the header block's final CRLF, where a line must be a field or a
+	// continuation: every content octet but the last record's final two (H13).
 	Field []frontend.Variable `gnark:",public"`
 
+	// The first record's alone: rule 4's and 5's literal forms, each read where its field begins (H10).
 	MessageId *literalCheck
 	XUrRef    *literalCheck
 	Feedback  *literalCheck
 	Address   *literalCheck
 	DkimTags  *literalCheck
-	// 1 if BULK is set (Z5.6).
+	// 1 if BULK is set: the first record holds the one-click field once (Z5.6), and a later one may not.
 	Bulk frontend.Variable `gnark:",public"`
 
-	// One-hot, private: where From's < and @ are.
+	// The first record's alone. One-hot, private: where From's < and @ are.
 	FromAngle []frontend.Variable
 	FromAt    []frontend.Variable
 }
 
-func newHeaderScan(shape *partShape) *headerScan {
-	size := shape.headerBlocks * shape.blockBytes()
-	scan := &headerScan{
-		Active:    make([]frontend.Variable, size),
-		Field:     make([]frontend.Variable, size),
-		MessageId: newLiteralCheck(literalLineBytes),
-		XUrRef:    newLiteralCheck(literalLineBytes),
-		Feedback:  newLiteralCheck(literalLineBytes),
-		Address:   newLiteralCheck(literalAddressBytes),
-		DkimTags:  newLiteralCheck(literalTagBytes),
-		FromAngle: make([]frontend.Variable, size),
-		FromAt:    make([]frontend.Variable, size),
+func newHeaderRecordScan(shape *partShape, blocks int, first bool) *headerRecordScan {
+	size := blocks * shape.blockBytes()
+	scan := &headerRecordScan{
+		Active: make([]frontend.Variable, size),
+		Field:  make([]frontend.Variable, size),
 	}
-	for range shape.headerBlocks {
+	if first {
+		scan.MessageId = newLiteralCheck(shape.literalLineBytes)
+		scan.XUrRef = newLiteralCheck(shape.literalLineBytes)
+		scan.Feedback = newLiteralCheck(shape.literalLineBytes)
+		scan.Address = newLiteralCheck(shape.literalAddressBytes)
+		scan.DkimTags = newLiteralCheck(shape.literalTagBytes)
+		scan.FromAngle = make([]frontend.Variable, size)
+		scan.FromAt = make([]frontend.Variable, size)
+	}
+	for range blocks {
 		scan.Blocks = append(scan.Blocks, newPoolBlock(shape.blockBytes(), false))
 	}
 	return scan
+}
+
+// Whether a scan is the header block's first record's, which carries the literal forms.
+func (self *headerRecordScan) first() bool {
+	return self.MessageId != nil
 }
 
 func zeroPoolBlock(block *poolBlock) {
@@ -116,18 +126,22 @@ func zeroPoolBlock(block *poolBlock) {
 	}
 }
 
-func zeroHeaderScan(scan *headerScan) {
+func zeroHeaderRecordScan(scan *headerRecordScan) {
 	for _, block := range scan.Blocks {
 		zeroPoolBlock(block)
 	}
 	for i := range scan.Active {
 		scan.Active[i] = 0
 		scan.Field[i] = 0
+	}
+	for i := range scan.FromAngle {
 		scan.FromAngle[i] = 0
 		scan.FromAt[i] = 0
 	}
 	for _, check := range []*literalCheck{scan.MessageId, scan.XUrRef, scan.Feedback, scan.Address, scan.DkimTags} {
-		zeroLiteralCheck(check)
+		if check != nil {
+			zeroLiteralCheck(check)
+		}
 	}
 	scan.Bulk = 0
 }
@@ -150,6 +164,11 @@ func wireFingerprint(api frontend.API, wires []frontend.Variable, start int, cou
 			terms = append(terms, api.Mul(wires[start+j], new(big.Int).Lsh(big.NewInt(1), uint(8*j))))
 		}
 	}
+	return sumWires(api, terms)
+}
+
+// The sum of wires, 0 for none.
+func sumWires(api frontend.API, terms []frontend.Variable) frontend.Variable {
 	switch len(terms) {
 	case 0:
 		return 0
@@ -159,18 +178,42 @@ func wireFingerprint(api frontend.API, wires []frontend.Variable, start int, cou
 	return api.Add(terms[0], terms[1], terms[2:]...)
 }
 
+// The product of a running match and one more, which skips a constant 1.
+func mulMatch(api frontend.API, match frontend.Variable, more frontend.Variable) frontend.Variable {
+	if _, ok := api.Compiler().ConstantValue(match); ok {
+		return more
+	}
+	return api.Mul(match, more)
+}
+
 // Whether wires from start equal a constant of any length, as 0 or 1.
 func matchesConstant(api frontend.API, wires []frontend.Variable, start int, constant []byte) frontend.Variable {
 	match := frontend.Variable(1)
 	for offset := 0; offset < len(constant); offset += wordBytes {
 		end := min(offset+wordBytes, len(constant))
 		fingerprint := wireFingerprint(api, wires, start+offset, end-offset)
-		equal := api.IsZero(api.Sub(fingerprint, constantFingerprint(constant[offset:end])))
-		if _, ok := api.Compiler().ConstantValue(match); ok {
-			match = equal
-		} else {
-			match = api.Mul(match, equal)
+		match = mulMatch(api, match, api.IsZero(api.Sub(fingerprint, constantFingerprint(constant[offset:end]))))
+	}
+	return match
+}
+
+// Whether the active octets from start equal a literal's first octets, as many as the record still
+// holds, up to the literal's length. masked is 0 past the record, and so is the literal's side there:
+// a record that ends inside the literal matches its beginning.
+func matchesLiteralPrefix(api frontend.API, masked []frontend.Variable, active []frontend.Variable, start int, literal string) frontend.Variable {
+	match := frontend.Variable(1)
+	for offset := 0; offset < len(literal); offset += wordBytes {
+		end := min(offset+wordBytes, len(literal))
+		terms := []frontend.Variable{}
+		for j := offset; j < end && start+j < len(masked); j += 1 {
+			weight := new(big.Int).Lsh(big.NewInt(1), uint(8*(j-offset)))
+			// the octet as the record holds it, less the literal's where the record holds an octet
+			terms = append(terms, api.Mul(api.Sub(masked[start+j], api.Mul(active[start+j], int(literal[j]))), weight))
 		}
+		if len(terms) == 0 {
+			break
+		}
+		match = mulMatch(api, match, api.IsZero(sumWires(api, terms)))
 	}
 	return match
 }
@@ -186,13 +229,7 @@ func checkLiteralAt(api frontend.API, values []frontend.Variable, hits []fronten
 				terms = append(terms, api.Mul(hits[i], wireFingerprint(api, values, start, count)))
 			}
 		}
-		word := frontend.Variable(0)
-		if 1 < len(terms) {
-			word = api.Add(terms[0], terms[1], terms[2:]...)
-		} else if len(terms) == 1 {
-			word = terms[0]
-		}
-		bits := bitsOf(api, word, 8*count)
+		bits := bitsOf(api, sumWires(api, terms), 8*count)
 		for j := range count {
 			var octet circuitByte
 			copy(octet[:], bits[8*j:8*j+8])
@@ -201,135 +238,262 @@ func checkLiteralAt(api frontend.API, values []frontend.Variable, hits []fronten
 	}
 }
 
-// Z5 over the header block, in SPEC.md's rule order.
-func checkHeaderBlockCircuit(api frontend.API, shape *partShape, stream *circuitKeystream, scan *headerScan) {
+// A or b, of boolean wires.
+func orWires(api frontend.API, a frontend.Variable, b frontend.Variable) frontend.Variable {
+	return api.Sub(api.Add(a, b), api.Mul(a, b))
+}
+
+// The octets of a record's blocks, each template position checked (Z3, and H13's final CRLF CRLF).
+func openTemplatedBlocks(api frontend.API, stream *circuitKeystream, blocks []*poolBlock) []*openOctet {
 	var octets []*openOctet
-	for _, block := range scan.Blocks {
+	for _, block := range blocks {
 		for i, octet := range openBlock(api, stream, block.Counter, block.Cipher) {
-			// the record's final CRLF CRLF and, in 1.3, its type octet are template literals (Z3, Z5.2)
 			api.AssertIsEqual(api.Mul(block.IsLiteral[i], api.Sub(octet.value, block.Literal[i])), 0)
 			octets = append(octets, octet)
 		}
 	}
+	return octets
+}
+
+// Z5 over one header record, DESIGN-DETAILS 3.2.4's H1 to H13, from the state in, returning the state
+// it leaves. The first record (scan.first()) starts from the start state and holds each single field
+// and the fixed signature's prefix exactly once, every such line whole inside it (H8 to H11); a later
+// record starts from the gate's carry and holds none of them, whole or crossing in from the record
+// before (H12). H13 is in the template: the last record's final CRLF CRLF is literal, and Field is 0
+// on its last two octets.
+func checkHeaderRecordCircuit(api frontend.API, shape *partShape, stream *circuitKeystream, scan *headerRecordScan, in *circuitScanState) *circuitScanState {
+	octets := openTemplatedBlocks(api, stream, scan.Blocks)
 	size := len(octets)
+	active := scan.Active
+	// the record's last content octet: the edge's Active is a run from position 0
+	lastAt := func(i int) frontend.Variable {
+		if i+1 < size {
+			return api.Sub(active[i], active[i+1])
+		}
+		return active[i]
+	}
 	values := make([]frontend.Variable, size)
-	folded := make([]frontend.Variable, size)
+	masked := make([]frontend.Variable, size)
+	foldedMasked := make([]frontend.Variable, size)
 	isCr := make([]frontend.Variable, size)
+	isLf := make([]frontend.Variable, size)
 	isSp := make([]frontend.Variable, size)
-	isTab := make([]frontend.Variable, size)
+	isWsp := make([]frontend.Variable, size)
 	isColon := make([]frontend.Variable, size)
+	isDot := make([]frontend.Variable, size)
 	crActive := make([]frontend.Variable, size)
 	lfActive := make([]frontend.Variable, size)
-	inLocal := make([]frontend.Variable, size)
+	wspActive := make([]frontend.Variable, size)
 	for i, octet := range octets {
 		value := octet.value
 		values[i] = value
-		// bit 5 forced, which compares letters without case; the rest of a name compares exactly,
-		// since rule 1 and rule 3 keep control octets out of it
-		folded[i] = api.Add(value, api.Mul(api.Sub(1, octet.bits[5]), 32))
+		masked[i] = api.Mul(active[i], value)
+		// bit 5 forced compares letters without case; rule 1 and H4 keep every other octet a name can
+		// hold to itself
+		foldedMasked[i] = api.Mul(active[i], api.Add(value, api.Mul(api.Sub(1, octet.bits[5]), 32)))
 		isCr[i] = api.IsZero(api.Sub(value, octetCr))
-		isLf := api.IsZero(api.Sub(value, octetLf))
+		isLf[i] = api.IsZero(api.Sub(value, octetLf))
 		isSp[i] = api.IsZero(api.Sub(value, octetSp))
-		isTab[i] = api.IsZero(api.Sub(value, octetTab))
+		isTab := api.IsZero(api.Sub(value, octetTab))
+		isWsp[i] = api.Add(isSp[i], isTab)
 		isColon[i] = api.IsZero(api.Sub(value, octetColon))
+		isDot[i] = api.IsZero(api.Sub(value, octetDot))
 		isDel := api.IsZero(api.Sub(value, octetDel))
-		crActive[i] = api.Mul(scan.Active[i], isCr[i])
-		lfActive[i] = api.Mul(scan.Active[i], isLf)
-		inLocal[i] = localSetMember(api, octet)
+		crActive[i] = api.Mul(active[i], isCr[i])
+		lfActive[i] = api.Mul(active[i], isLf[i])
+		wspActive[i] = api.Mul(active[i], isWsp[i])
 
-		// rule 1: HTAB, SP through ~, CR or LF
+		// H1: HTAB, SP through ~, CR or LF
 		bits := octet.bits
 		printable := api.Mul(api.Sub(1, bits[7]), api.Sub(api.Add(bits[5], bits[6]), api.Mul(bits[5], bits[6])))
-		allowed := api.Add(api.Sub(printable, isDel), isTab[i], isCr[i], isLf)
-		api.AssertIsEqual(api.Mul(scan.Active[i], api.Sub(1, allowed)), 0)
-	}
-	// rule 1: CR exactly before LF
-	api.AssertIsEqual(lfActive[0], 0)
-	api.AssertIsEqual(crActive[size-1], 0)
-	for i := range size - 1 {
-		api.AssertIsEqual(crActive[i], lfActive[i+1])
+		allowed := api.Add(api.Sub(printable, isDel), isTab, isCr[i], isLf[i])
+		api.AssertIsEqual(api.Mul(active[i], api.Sub(1, allowed)), 0)
 	}
 
-	fromHits := make([]frontend.Variable, size)
-	messageIdHits := make([]frontend.Variable, size)
-	xUrRefHits := make([]frontend.Variable, size)
-	feedbackHits := make([]frontend.Variable, size)
-	dkimHits := make([]frontend.Variable, size)
-	unsubscribeHits := make([]frontend.Variable, size)
-	inName := frontend.Variable(0)
-	inField := frontend.Variable(0)
+	// H2: LF exactly after CR, across the boundary by in.pos
+	inPosCr := in.posIs(api, scanPosCr)
+	inPosLf := in.posIs(api, scanPosLf)
 	for i := range size {
-		// a line starts at 0 and after every LF; the block's final CRLF is no line (rule 2)
-		lineStart := frontend.Variable(1)
+		previousCr := inPosCr
 		if 0 < i {
-			lineStart = lfActive[i-1]
+			previousCr = isCr[i-1]
 		}
-		lineStart = api.Mul(lineStart, scan.Field[i])
-		isWsp := api.Add(isSp[i], isTab[i])
-		// rule 2: no empty line before the end
-		api.AssertIsEqual(api.Mul(lineStart, isCr[i]), 0)
-		// rule 3: a line is a continuation, but never the first, or a name directly before a colon
-		if i == 0 {
-			api.AssertIsEqual(isWsp, 0)
+		api.AssertIsEqual(api.Mul(active[i], api.Sub(isLf[i], previousCr)), 0)
+	}
+	// H6: after a single field's line, no continuation
+	api.AssertIsEqual(api.Mul(in.single, wspActive[0]), 0)
+
+	// H3 and H4: line and name starts, and a name's octets up to its colon
+	lineStart := make([]frontend.Variable, size)
+	nameStart := make([]frontend.Variable, size)
+	inName := make([]frontend.Variable, size+1)
+	inName[0] = in.name
+	for i := range size {
+		previousLf := inPosLf
+		if 0 < i {
+			previousLf = lfActive[i-1]
 		}
-		nameStart := api.Mul(lineStart, api.Sub(1, isWsp))
+		lineStart[i] = api.Mul(scan.Field[i], previousLf)
+		api.AssertIsEqual(api.Mul(lineStart[i], isCr[i]), 0)
+		nameStart[i] = api.Mul(lineStart[i], api.Sub(1, isWsp[i]))
 		// nor does a name start with a dot, which an MX reading DATA would delete (RFC 5321 §4.5.2),
-		// leaving a field no fingerprint below saw
-		api.AssertIsEqual(api.Mul(nameStart, api.Add(isColon[i], api.IsZero(api.Sub(values[i], octetDot)))), 0)
-		naming := api.Add(inName, nameStart)
-		api.AssertIsEqual(api.Mul(naming, api.Add(isWsp, crActive[i])), 0)
-		inName = api.Mul(naming, api.Sub(1, isColon[i]))
+		// leaving a field no fingerprint here saw
+		api.AssertIsEqual(api.Mul(nameStart[i], api.Add(isColon[i], isDot[i])), 0)
+		naming := api.Add(inName[i], nameStart[i])
+		api.AssertIsEqual(api.Mul(naming, api.Add(wspActive[i], crActive[i])), 0)
+		inName[i+1] = api.Mul(naming, api.Sub(1, isColon[i]))
+	}
 
-		// rule 4: each single field, by a fingerprint of its name at each line start
-		match := func(name string) frontend.Variable {
-			return api.Mul(nameStart, matchesConstant(api, folded, i, []byte(name)))
+	// H5: each literal at each name start, whole inside the record (full) or running off its end
+	// (partial, which only the record's last line can be)
+	var full, partial [scanLiteralCount][]frontend.Variable
+	for literal, entry := range scanLiterals {
+		source := masked
+		if entry.folded {
+			source = foldedMasked
 		}
-		fromHits[i] = match("from:")
-		messageIdHits[i] = match("message-id:")
-		xUrRefHits[i] = match("x-ur-ref:")
-		feedbackHits[i] = match("feedback-id:")
-		// rule 5: exact octets, not folded
-		dkimHits[i] = api.Mul(nameStart, matchesConstant(api, values, i, []byte(literalDkimPrefix)))
-		// rule 6: on a BULK message the field is single as well, and its line is the literal's exact
-		// octets, so a continuation or a second field cannot leave it other than RFC 8058's one pair
-		unsubscribeHits[i] = api.Mul(scan.Bulk, match("list-unsubscribe-post:"))
-		unsubscribeLiteral := matchesConstant(api, values, i, []byte(literalUnsubscribePost+literalCrlf))
-		api.AssertIsEqual(api.Mul(unsubscribeHits[i], api.Sub(1, unsubscribeLiteral)), 0)
+		full[literal] = make([]frontend.Variable, size)
+		partial[literal] = make([]frontend.Variable, size)
+		for i := range size {
+			started := api.Mul(nameStart[i], matchesLiteralPrefix(api, source, active, i, entry.octets))
+			whole := frontend.Variable(0)
+			if end := i + len(entry.octets) - 1; end < size {
+				whole = api.Mul(started, active[end])
+			}
+			full[literal][i] = whole
+			partial[literal][i] = api.Sub(started, whole)
+		}
+	}
 
-		// rules 4 and 6: none of the single fields is continued
-		singleField := api.Add(inField, fromHits[i], messageIdHits[i], xUrRefHits[i], feedbackHits[i], unsubscribeHits[i])
+	out := &circuitScanState{single: 0}
+	if scan.first() {
+		out.single = checkFirstHeaderRecord(api, shape, scan, octets, masked, isSp, lfActive, wspActive, &full, lastAt)
+	} else {
+		checkLaterHeaderRecord(api, scan, masked, foldedMasked, in, &full)
+	}
+
+	// H7: the state after the record's last octet
+	posTerms := make([]frontend.Variable, 0, size)
+	nameTerms := make([]frontend.Variable, 0, size)
+	for i := range size {
+		last := lastAt(i)
+		posTerms = append(posTerms, api.Mul(last, api.Add(isCr[i], api.Mul(isLf[i], 2))))
+		nameTerms = append(nameTerms, api.Mul(last, inName[i+1]))
+	}
+	posBits := bitsOf(api, sumWires(api, posTerms), scanPosBits)
+	copy(out.pos[:], posBits)
+	out.name = sumWires(api, nameTerms)
+
+	// run: the octets from the last line start to the end, when that line is no continuation
+	laterLineStart := make([]frontend.Variable, size)
+	laterLineStart[size-1] = 0
+	for i := size - 2; 0 <= i; i -= 1 {
+		laterLineStart[i] = orWires(api, laterLineStart[i+1], lineStart[i+1])
+	}
+	anyLineStart := orWires(api, laterLineStart[0], lineStart[0])
+	runTerms := make([]frontend.Variable, 0, size)
+	for i := range size {
+		lastNameStart := api.Mul(nameStart[i], api.Sub(1, laterLineStart[i]))
+		rest := sumWires(api, active[i:])
+		runTerms = append(runTerms, api.Mul(lastNameStart, rest))
+	}
+	lineRun := sumWires(api, runTerms)
+	lineRunBits := bitsOf(api, lineRun, max(scanRunBits+1, big.NewInt(int64(size)).BitLen()))
+	more := frontend.Variable(0)
+	for _, bit := range lineRunBits[scanRunBits:] {
+		more = orWires(api, more, bit)
+	}
+	low := sumWires(api, func() []frontend.Variable {
+		terms := make([]frontend.Variable, 0, scanRunBits)
+		for i, bit := range lineRunBits[:scanRunBits] {
+			terms = append(terms, api.Mul(bit, 1<<i))
+		}
+		return terms
+	}())
+	capped := api.Add(api.Mul(more, scanRunMore), api.Mul(api.Sub(1, more), low))
+	// a line that began in an earlier record and is no continuation counts as more
+	carried := api.Mul(api.Sub(1, api.IsZero(in.runValue(api))), scanRunMore)
+	run := api.Mul(api.Sub(1, out.pos[1]), api.Add(api.Mul(anyLineStart, capped), api.Mul(api.Sub(1, anyLineStart), carried)))
+	copy(out.run[:], bitsOf(api, run, scanRunBits))
+
+	// prefix: the last line, a name start, is a literal's beginning running off the record's end
+	for literal := range scanLiterals {
+		out.prefix[literal] = sumWires(api, partial[literal])
+	}
+	return out
+}
+
+// H8 to H11 over the header block's first record, which the msg shape holds: the single fields, the
+// fixed signature's prefix and their literal forms (SPEC.md Z5.4 to Z5.6), every such line whole inside
+// the record. Returns out.single: whether a single field's line ends at the record's last octet.
+func checkFirstHeaderRecord(api frontend.API, shape *partShape, scan *headerRecordScan, octets []*openOctet, masked []frontend.Variable, isSp []frontend.Variable, lfActive []frontend.Variable, wspActive []frontend.Variable, full *[scanLiteralCount][]frontend.Variable, lastAt func(int) frontend.Variable) frontend.Variable {
+	size := len(octets)
+	// H8: the block does not start with a continuation
+	api.AssertIsEqual(wspActive[0], 0)
+
+	// the one-click field counts only on a BULK message, where it is single
+	unsubscribeHits := make([]frontend.Variable, size)
+	for i := range size {
+		unsubscribeHits[i] = api.Mul(scan.Bulk, full[scanLiteralUnsubscribe][i])
+	}
+	// H9: each single field and the signature's prefix begins exactly one line of this record
+	for literal := range scanLiterals {
+		hits := full[literal]
+		if literal == scanLiteralUnsubscribe {
+			api.AssertIsEqual(sumWires(api, unsubscribeHits), scan.Bulk)
+			continue
+		}
+		api.AssertIsEqual(sumWires(api, hits), 1)
+	}
+
+	// H10: each literal form read at its one position; past the record's end it reads 0 and fails
+	checkLiteralAt(api, masked, full[scanLiteralMessageId], 0, scan.MessageId)
+	checkLiteralAt(api, masked, full[scanLiteralXUrRef], 0, scan.XUrRef)
+	checkLiteralAt(api, masked, full[scanLiteralFeedbackId], 0, scan.Feedback)
+	checkLiteralAt(api, masked, full[scanLiteralDkim], len(literalDkimPrefix), scan.DkimTags)
+	// rule 6: the one-click line is the literal's exact octets, read like the others but against a
+	// constant, as a whole word at a time
+	unsubscribeLine := []byte(literalUnsubscribePost + literalCrlf)
+	for offset := 0; offset < len(unsubscribeLine); offset += wordBytes {
+		count := min(wordBytes, len(unsubscribeLine)-offset)
+		terms := []frontend.Variable{}
+		for i := range size {
+			if offset+i < size {
+				terms = append(terms, api.Mul(unsubscribeHits[i], wireFingerprint(api, masked, i+offset, count)))
+			}
+		}
+		api.AssertIsEqual(sumWires(api, terms), api.Mul(scan.Bulk, constantFingerprint(unsubscribeLine[offset:offset+count])))
+	}
+
+	// H11: no single field's line is continued inside the record, and whether one ends at its last octet
+	inField := frontend.Variable(0)
+	singleTerms := make([]frontend.Variable, 0, size)
+	for i := range size {
+		singleField := api.Add(inField, full[scanLiteralFrom][i], full[scanLiteralMessageId][i], full[scanLiteralXUrRef][i], full[scanLiteralFeedbackId][i], unsubscribeHits[i])
 		ending := api.Mul(singleField, lfActive[i])
 		if i+1 < size {
-			api.AssertIsEqual(api.Mul(ending, api.Add(isSp[i+1], isTab[i+1])), 0)
+			api.AssertIsEqual(api.Mul(ending, wspActive[i+1]), 0)
 		}
+		singleTerms = append(singleTerms, api.Mul(lastAt(i), ending))
 		inField = api.Sub(singleField, ending)
-		if i%pinInterval == 0 {
+		if i%shape.pinInterval == 0 {
 			inField = pinWire(api, inField)
 		}
 	}
-	sum := func(wires []frontend.Variable) frontend.Variable {
-		return api.Add(wires[0], wires[1], wires[2:]...)
-	}
-	for _, hits := range [][]frontend.Variable{fromHits, messageIdHits, xUrRefHits, feedbackHits, dkimHits} {
-		api.AssertIsEqual(sum(hits), 1)
-	}
-	// each hit carries Bulk, so this is exactly one on a BULK message and nothing otherwise
-	api.AssertIsEqual(sum(unsubscribeHits), scan.Bulk)
 
-	// rule 4's literal forms, each read at its one position
-	checkLiteralAt(api, values, messageIdHits, 0, scan.MessageId)
-	checkLiteralAt(api, values, xUrRefHits, 0, scan.XUrRef)
-	checkLiteralAt(api, values, feedbackHits, 0, scan.Feedback)
-	checkLiteralAt(api, values, dkimHits, len(literalDkimPrefix), scan.DkimTags)
-
-	// rule 4's From: "From: ", phrase, <, local, then the literal address
+	// rule 4's From: "From: ", phrase, <, local, then the literal address, all inside the record
+	fromHits := full[scanLiteralFrom]
+	inLocal := make([]frontend.Variable, size)
+	for i, octet := range octets {
+		inLocal[i] = localSetMember(api, octet)
+	}
 	for i := range size {
 		api.AssertIsBoolean(scan.FromAngle[i])
 		api.AssertIsBoolean(scan.FromAt[i])
 	}
-	api.AssertIsEqual(sum(scan.FromAngle), 1)
-	api.AssertIsEqual(sum(scan.FromAt), 1)
-	checkLiteralAt(api, values, scan.FromAt, 0, scan.Address)
+	api.AssertIsEqual(sumWires(api, scan.FromAngle), 1)
+	api.AssertIsEqual(sumWires(api, scan.FromAt), 1)
+	checkLiteralAt(api, masked, scan.FromAt, 0, scan.Address)
 	inPhrase := frontend.Variable(0)
 	inAddress := frontend.Variable(0)
 	localBytes := frontend.Variable(0)
@@ -339,12 +503,12 @@ func checkHeaderBlockCircuit(api frontend.API, shape *partShape, stream *circuit
 		if prefixLength <= i {
 			phraseStart = fromHits[i-prefixLength]
 		}
-		api.AssertIsEqual(api.Mul(fromHits[i], api.Sub(wireFingerprint(api, values, i, prefixLength), constantFingerprint([]byte(literalFromPrefix)))), 0)
+		api.AssertIsEqual(api.Mul(fromHits[i], api.Sub(wireFingerprint(api, masked, i, prefixLength), constantFingerprint([]byte(literalFromPrefix)))), 0)
 		// each region is a running sum of one-hots, kept a bit by these assertions
 		inPhrase = api.Sub(api.Add(inPhrase, phraseStart), scan.FromAngle[i])
 		api.AssertIsBoolean(inPhrase)
 		api.AssertIsEqual(api.Mul(inPhrase, api.Sub(1, api.Add(inLocal[i], isSp[i]))), 0)
-		api.AssertIsEqual(api.Mul(scan.FromAngle[i], api.Sub(values[i], octetLt)), 0)
+		api.AssertIsEqual(api.Mul(scan.FromAngle[i], api.Sub(masked[i], octetLt)), 0)
 		// a phrase is followed by SP, and an empty phrase needs none
 		if 0 < i {
 			api.AssertIsEqual(api.Mul(api.Mul(scan.FromAngle[i], api.Sub(1, phraseStart)), api.Sub(1, isSp[i-1])), 0)
@@ -354,18 +518,56 @@ func checkHeaderBlockCircuit(api frontend.API, shape *partShape, stream *circuit
 		api.AssertIsEqual(api.Mul(inAddress, api.Sub(1, inLocal[i])), 0)
 		localBytes = api.Add(localBytes, inAddress)
 		inAddress = api.Add(inAddress, scan.FromAngle[i])
-		if i%pinInterval == 0 {
+		if i%shape.pinInterval == 0 {
 			inPhrase = pinWire(api, inPhrase)
 			inAddress = pinWire(api, inAddress)
 			localBytes = pinWire(api, localBytes)
 		}
 	}
-	// the local part fills 1 to 64 octets
-	bitsOf(api, api.Sub(localBytes, 1), 6)
+	// the local part fills 1 to LocalMaxByteCount octets
+	assertBelow(api, api.Sub(localBytes, 1), shape.localMaxBytes)
+	return sumWires(api, singleTerms)
 }
 
-// The public wires of the header block record.
-func assignHeaderPublic(shape *partShape, statement *partStatement, record *partRecord, scan *headerScan) error {
+// H12 over a later header record: none of the literals begins a line in it, whole, or crossing in from
+// the record before (by in's prefix and run), the one-click field only on a BULK message.
+func checkLaterHeaderRecord(api frontend.API, scan *headerRecordScan, masked []frontend.Variable, foldedMasked []frontend.Variable, in *circuitScanState, full *[scanLiteralCount][]frontend.Variable) {
+	gate := func(literal int, value frontend.Variable) frontend.Variable {
+		if literal == scanLiteralUnsubscribe {
+			return api.Mul(scan.Bulk, value)
+		}
+		return value
+	}
+	for literal := range scanLiterals {
+		api.AssertIsEqual(gate(literal, sumWires(api, full[literal])), 0)
+	}
+	longest := 0
+	for _, entry := range scanLiterals {
+		longest = max(longest, len(entry.octets))
+	}
+	runValue := in.runValue(api)
+	runIs := make([]frontend.Variable, longest)
+	for r := 1; r < longest; r += 1 {
+		runIs[r] = api.IsZero(api.Sub(runValue, r))
+	}
+	for literal, entry := range scanLiterals {
+		source := masked
+		if entry.folded {
+			source = foldedMasked
+		}
+		crossings := []frontend.Variable{}
+		for r := 1; r < len(entry.octets); r += 1 {
+			crossings = append(crossings, api.Mul(runIs[r], matchesConstant(api, source, 0, []byte(entry.octets[r:]))))
+		}
+		cross := api.Mul(in.prefix[literal], sumWires(api, crossings))
+		api.AssertIsEqual(gate(literal, cross), 0)
+	}
+}
+
+// The public wires of a header record: its blocks and template, Active and Field, and in the first
+// record the literal forms. last is the header block's last record, whose final CRLF CRLF is literal
+// and outside Field (H13).
+func assignHeaderRecordPublic(shape *partShape, statement *partStatement, record *partRecord, scan *headerRecordScan, last bool) error {
 	session := statement.session
 	preamble := session.preamble
 	ciphertext, err := recordCiphertext(session.version, record.raw)
@@ -377,14 +579,20 @@ func assignHeaderPublic(shape *partShape, statement *partStatement, record *part
 		contentBytes -= tlsInnerTypeBytes
 	}
 	end := literalCrlf + literalCrlf
-	if contentBytes < len(end) || len(scan.Active) < len(ciphertext) {
-		return errors.New("the header block does not fit the shape")
+	if contentBytes < 1 || len(scan.Active) < len(ciphertext) || (last && contentBytes < len(end)) {
+		return errors.New("the header record does not fit the shape")
 	}
 	template := make([]templateOctet, 0, len(ciphertext))
-	for range contentBytes - len(end) {
+	free := contentBytes
+	if last {
+		free -= len(end)
+	}
+	for range free {
 		template = append(template, templateOctet{kind: templateFree})
 	}
-	template = append(template, templateOf(end)...)
+	if last {
+		template = append(template, templateOf(end)...)
+	}
 	if session.version == tlsVersion13 {
 		template = append(template, templateOctet{kind: templateLiteral, literal: tlsRecordApplicationData})
 	}
@@ -393,9 +601,15 @@ func assignHeaderPublic(shape *partShape, statement *partStatement, record *part
 	}
 	for i := range contentBytes {
 		scan.Active[i] = 1
-		if i < contentBytes-len(literalCrlf) {
+		if !last || i < contentBytes-len(literalCrlf) {
 			scan.Field[i] = 1
 		}
+	}
+	if preamble.flags&preambleFlagBulk != 0 {
+		scan.Bulk = 1
+	}
+	if !scan.first() {
+		return nil
 	}
 	checks := []struct {
 		check   *literalCheck
@@ -412,15 +626,12 @@ func assignHeaderPublic(shape *partShape, statement *partStatement, record *part
 			return err
 		}
 	}
-	if preamble.flags&preambleFlagBulk != 0 {
-		scan.Bulk = 1
-	}
 	return nil
 }
 
-// The private positions in From, if the block has a From to find. A block without one leaves them
-// zero, which the circuit refuses.
-func assignHeaderPrivate(scan *headerScan, preamble *sessionPreamble, plaintext []byte) {
+// The private positions in From, if the first record has a From to find. A record without one leaves
+// them zero, which the circuit refuses.
+func assignHeaderPrivate(scan *headerRecordScan, plaintext []byte) {
 	lineStart := 0
 	if !bytes.HasPrefix(plaintext, []byte(literalFromPrefix)) {
 		index := bytes.Index(plaintext, []byte(literalCrlf+literalFromPrefix))
@@ -443,77 +654,98 @@ func assignHeaderPrivate(scan *headerScan, preamble *sessionPreamble, plaintext 
 	scan.FromAt[lineStart+at] = 1
 }
 
-// A block of body record octets, and what the edge knows of its positions.
-type bodyBlock struct {
-	Block *poolBlock
+// One DATA body record and what the edge knows of its positions.
+type bodyRecordScan struct {
+	Blocks []*poolBlock
 	// A content octet.
 	Active []frontend.Variable `gnark:",public"`
-	// The first content octet of a record, which is always a line start (Z6).
-	Start []frontend.Variable `gnark:",public"`
-	// The last content octet of a record, which must be LF.
+	// On the body's last record alone: its last octet, which must be LF, so the end mark starts a line.
 	End []frontend.Variable `gnark:",public"`
 }
 
-func newBodyBlock(blockBytes int) *bodyBlock {
-	return &bodyBlock{
-		Block:  newPoolBlock(blockBytes, false),
-		Active: make([]frontend.Variable, blockBytes),
-		Start:  make([]frontend.Variable, blockBytes),
-		End:    make([]frontend.Variable, blockBytes),
+func newBodyRecordScan(shape *partShape) *bodyRecordScan {
+	size := shape.bodyBlocks * shape.blockBytes()
+	scan := &bodyRecordScan{Active: make([]frontend.Variable, size), End: make([]frontend.Variable, size)}
+	for range shape.bodyBlocks {
+		scan.Blocks = append(scan.Blocks, newPoolBlock(shape.blockBytes(), false))
+	}
+	return scan
+}
+
+func zeroBodyRecordScan(scan *bodyRecordScan) {
+	for _, block := range scan.Blocks {
+		zeroPoolBlock(block)
+	}
+	for i := range scan.Active {
+		scan.Active[i] = 0
+		scan.End[i] = 0
 	}
 }
 
-func zeroBodyBlock(block *bodyBlock) {
-	zeroPoolBlock(block.Block)
-	for i := range block.Active {
-		block.Active[i] = 0
-		block.Start[i] = 0
-		block.End[i] = 0
+// Z6 over one DATA body record, DESIGN-DETAILS 3.2.4's B1 to B3, from the state in, returning the state
+// it leaves: no bare CR or LF, and no line that is exactly ".", across record boundaries by pos. A part
+// that opens no body record, the last of an empty body, leaves in as it was.
+func checkBodyRecordCircuit(api frontend.API, stream *circuitKeystream, scan *bodyRecordScan, in *circuitScanState) *circuitScanState {
+	octets := openTemplatedBlocks(api, stream, scan.Blocks)
+	size := len(octets)
+	active := scan.Active
+	isCr := make([]frontend.Variable, size)
+	isLf := make([]frontend.Variable, size)
+	isDot := make([]frontend.Variable, size)
+	crActive := make([]frontend.Variable, size)
+	lfActive := make([]frontend.Variable, size)
+	for i, octet := range octets {
+		isCr[i] = api.IsZero(api.Sub(octet.value, octetCr))
+		isLf[i] = api.IsZero(api.Sub(octet.value, octetLf))
+		isDot[i] = api.IsZero(api.Sub(octet.value, octetDot))
+		crActive[i] = api.Mul(active[i], isCr[i])
+		lfActive[i] = api.Mul(active[i], isLf[i])
+		// the body's last octet is LF
+		api.AssertIsEqual(api.Mul(scan.End[i], api.Sub(1, isLf[i])), 0)
 	}
-}
-
-// Z6 over DATA's body records: whole lines, no bare CR or LF, no line that is exactly ".".
-func checkBody(api frontend.API, stream *circuitKeystream, blocks []*bodyBlock) {
-	var crActive, lfActive, isDot, starts, ends []frontend.Variable
-	for _, block := range blocks {
-		for i, octet := range openBlock(api, stream, block.Block.Counter, block.Block.Cipher) {
-			// Z3: a 1.3 record's final octet
-			api.AssertIsEqual(api.Mul(block.Block.IsLiteral[i], api.Sub(octet.value, block.Block.Literal[i])), 0)
-			crActive = append(crActive, api.Mul(block.Active[i], api.IsZero(api.Sub(octet.value, octetCr))))
-			lfActive = append(lfActive, api.Mul(block.Active[i], api.IsZero(api.Sub(octet.value, octetLf))))
-			isDot = append(isDot, api.IsZero(api.Sub(octet.value, octetDot)))
-			starts = append(starts, block.Start[i])
-			ends = append(ends, block.End[i])
-		}
-	}
-	size := len(crActive)
-	api.AssertIsEqual(lfActive[0], 0)
-	api.AssertIsEqual(crActive[size-1], 0)
-	// a record starting at the pool's last octet could hold no CRLF, so no assignment marks it; bound
-	// here because the dot rule below never reads it, and a public wire no constraint reads would
-	// verify at any value
-	api.AssertIsEqual(starts[size-1], 0)
+	inPosCr := in.posIs(api, scanPosCr)
+	inPosLf := in.posIs(api, scanPosLf)
+	inPosDot := in.posIs(api, scanPosDot)
+	// B2 at the boundary: a "." that began the record before's last line is not followed by CR
+	api.AssertIsEqual(api.Mul(inPosDot, crActive[0]), 0)
+	// a part with no body octet, an empty body's last, opens the end mark at a line's start
+	api.AssertIsEqual(api.Mul(api.Sub(1, active[0]), api.Sub(1, inPosLf)), 0)
+	posTerms := make([]frontend.Variable, 0, size+1)
 	for i := range size {
-		if i+1 < size {
-			api.AssertIsEqual(crActive[i], lfActive[i+1])
+		previousCr := inPosCr
+		lineStart := inPosLf
+		if 0 < i {
+			previousCr = isCr[i-1]
+			lineStart = lfActive[i-1]
 		}
-		api.AssertIsEqual(api.Mul(ends[i], api.Sub(1, lfActive[i])), 0)
+		// B1: LF exactly after CR
+		api.AssertIsEqual(api.Mul(active[i], api.Sub(isLf[i], previousCr)), 0)
+		// B2: a "." at a line's start is not followed by CR
+		dotStart := api.Mul(lineStart, isDot[i])
 		if i+1 < size {
-			lineStart := starts[i]
-			if 0 < i {
-				lineStart = api.Add(lineStart, lfActive[i-1])
-			}
-			api.AssertIsEqual(api.Mul(api.Mul(lineStart, isDot[i]), crActive[i+1]), 0)
+			api.AssertIsEqual(api.Mul(dotStart, crActive[i+1]), 0)
 		}
+		// B3: pos after the last octet
+		last := active[i]
+		if i+1 < size {
+			last = api.Sub(active[i], active[i+1])
+		}
+		posTerms = append(posTerms, api.Mul(last, api.Add(isCr[i], api.Mul(isLf[i], 2), api.Mul(dotStart, 3))))
 	}
+	// no octet: pos is as it was
+	inPos := api.Add(in.pos[0], api.Mul(in.pos[1], 2))
+	posTerms = append(posTerms, api.Mul(api.Sub(1, active[0]), inPos))
+	out := newCircuitScanStateConstant(0)
+	copy(out.pos[:], bitsOf(api, sumWires(api, posTerms), scanPosBits))
+	return out
 }
 
-// The public wires of one body record, placed from the given slot on.
-func assignBodyRecord(shape *partShape, statement *partStatement, record *partRecord, slots []*bodyBlock) (int, error) {
+// The public wires of a body record. last is the body's last record, whose last octet is LF.
+func assignBodyRecordPublic(shape *partShape, statement *partStatement, record *partRecord, scan *bodyRecordScan, last bool) error {
 	session := statement.session
 	ciphertext, err := recordCiphertext(session.version, record.raw)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	contentBytes := len(ciphertext)
 	if session.version == tlsVersion13 {
@@ -521,25 +753,23 @@ func assignBodyRecord(shape *partShape, statement *partStatement, record *partRe
 	}
 	// a hostile sidecar's record can be all tag, which in 1.3 leaves this at -1
 	if contentBytes <= 0 {
-		return 0, errors.New("empty body record")
+		return errors.New("empty body record")
+	}
+	if len(scan.Active) < len(ciphertext) {
+		return errors.New("the body record does not fit the shape")
 	}
 	template := make([]templateOctet, len(ciphertext))
 	if session.version == tlsVersion13 {
 		template[contentBytes] = templateOctet{kind: templateLiteral, literal: tlsRecordApplicationData}
 	}
-	blocks := make([]*poolBlock, len(slots))
-	for i, slot := range slots {
-		blocks[i] = slot.Block
+	if _, err := assignRecordBlocks(shape, statement, record, template, scan.Blocks); err != nil {
+		return err
 	}
-	used, err := assignRecordBlocks(shape, statement, record, template, blocks)
-	if err != nil {
-		return 0, err
-	}
-	blockBytes := shape.blockBytes()
 	for i := range contentBytes {
-		slots[i/blockBytes].Active[i%blockBytes] = 1
+		scan.Active[i] = 1
 	}
-	slots[0].Start[0] = 1
-	slots[(contentBytes-1)/blockBytes].End[(contentBytes-1)%blockBytes] = 1
-	return used, nil
+	if last {
+		scan.End[contentBytes-1] = 1
+	}
+	return nil
 }

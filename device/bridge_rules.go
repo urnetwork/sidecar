@@ -11,6 +11,7 @@
 package device
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -316,10 +317,17 @@ func checkBridgeRuleLink(row string, link *bridge.BridgeRuleLink) error {
 		checkBridgeRuleId(row, "target_identity_public_key", link.GetTargetIdentityPublicKey(), bridgeRuleIdentityByteCount, false),
 		checkBridgeRuleId(row, "target_member_id", link.GetTargetMemberId(), bridgeRuleIdByteCount, true),
 		checkBridgeRuleId(row, "rule_id", link.GetRuleId(), bridgeRuleRuleIdByteCount, true),
+		checkBridgeRuleId(row, "target_client_public_key", link.GetTargetClientPublicKey(), bridgeRuleIdentityByteCount, true),
 	}
 	for _, err := range checks {
 		if err != nil {
 			return err
+		}
+	}
+	if clientKey := link.GetTargetClientPublicKey(); 0 < len(clientKey) {
+		// a client key is never the identity key (§5.5), and all zero would read as no pin
+		if bytes.Equal(clientKey, link.GetTargetIdentityPublicKey()) || !slices.ContainsFunc(clientKey, func(b byte) bool { return b != 0 }) {
+			return bridgeRulesFault(row, "a target_client_public_key that pins no client key")
 		}
 	}
 	if link.GetWeight() == 0 {

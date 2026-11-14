@@ -2,7 +2,9 @@
 //
 // The first four messages are §14's fenced blocks. SmtpOutcome and SmtpStatus take their fields from
 // plan-SMTP-wire-gaps#1 and #2, and SmtpHandshake and SmtpHandshakeResult theirs from smtpproof-start-shts-wire,
-// each decided with its numbers, and design_unfenced_test.go holds them until §14 fences them.
+// each decided with its numbers, and design_unfenced_test.go holds them until §14 fences them. SmtpPreamble's
+// proof_key_set, SmtpProof's fields 10 to 13 and SMTP_PREAMBLE_KEYS are DESIGN-DETAILS 3.2.5's (QD-712, QD-716),
+// which design_unfenced_test.go holds the same way until design-records folds them into §14.5.
 //
 // Only SmtpPreamble and SmtpPreambleResult travel as frames ahead of the raw TLS (plan-SMTP-wire-gaps#3,
 // smtp_frame.go). SmtpOutcome is a NO_REPLY envelope to the ticket's listener, SmtpProof and SmtpHandshake are
@@ -43,6 +45,7 @@ const (
 	SmtpPreambleCode_SMTP_PREAMBLE_NO_MX            SmtpPreambleCode = 5
 	SmtpPreambleCode_SMTP_PREAMBLE_NO_TLS           SmtpPreambleCode = 6
 	SmtpPreambleCode_SMTP_PREAMBLE_TRY_LATER        SmtpPreambleCode = 7
+	SmtpPreambleCode_SMTP_PREAMBLE_KEYS             SmtpPreambleCode = 8 // the edge holds no key set of that id (DESIGN-DETAILS 3.2.5)
 )
 
 // Enum value maps for SmtpPreambleCode.
@@ -56,6 +59,7 @@ var (
 		5: "SMTP_PREAMBLE_NO_MX",
 		6: "SMTP_PREAMBLE_NO_TLS",
 		7: "SMTP_PREAMBLE_TRY_LATER",
+		8: "SMTP_PREAMBLE_KEYS",
 	}
 	SmtpPreambleCode_value = map[string]int32{
 		"SMTP_PREAMBLE_CODE_UNSPECIFIED": 0,
@@ -66,6 +70,7 @@ var (
 		"SMTP_PREAMBLE_NO_MX":            5,
 		"SMTP_PREAMBLE_NO_TLS":           6,
 		"SMTP_PREAMBLE_TRY_LATER":        7,
+		"SMTP_PREAMBLE_KEYS":             8,
 	}
 )
 
@@ -260,7 +265,8 @@ type SmtpPreamble struct {
 	DkimSelector     string                 `protobuf:"bytes,6,opt,name=dkim_selector,json=dkimSelector,proto3" json:"dkim_selector,omitempty"`                // proven with d= (Z5)
 	MessageByteCount uint64                 `protobuf:"varint,7,opt,name=message_byte_count,json=messageByteCount,proto3" json:"message_byte_count,omitempty"` // proven: BDAT's n, or DATA's octets before the end mark (Z4, Z6)
 	RetryOfSendId    []byte                 `protobuf:"bytes,8,opt,name=retry_of_send_id,json=retryOfSendId,proto3" json:"retry_of_send_id,omitempty"`
-	Flags            uint32                 `protobuf:"varint,9,opt,name=flags,proto3" json:"flags,omitempty"` // 1 BULK, 2 REQUIRETLS, 4 BURNER
+	Flags            uint32                 `protobuf:"varint,9,opt,name=flags,proto3" json:"flags,omitempty"`                                  // 1 BULK, 2 REQUIRETLS, 4 BURNER
+	ProofKeySet      []byte                 `protobuf:"bytes,10,opt,name=proof_key_set,json=proofKeySet,proto3" json:"proof_key_set,omitempty"` // SHA-256 of the keyset.json every part of this connection is proven under
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -358,9 +364,17 @@ func (x *SmtpPreamble) GetFlags() uint32 {
 	return 0
 }
 
+func (x *SmtpPreamble) GetProofKeySet() []byte {
+	if x != nil {
+		return x.ProofKeySet
+	}
+	return nil
+}
+
 type SmtpPreambleResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Code  uint32                 `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"` // §6.11: 1 OK, 2 HALTED, 3 QUOTA, 4 DENIED, 5 NO_MX, 6 NO_TLS, 7 TRY_LATER;
+	Code  uint32                 `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"` // §6.11: 1 OK, 2 HALTED, 3 QUOTA, 4 DENIED, 5 NO_MX, 6 NO_TLS, 7 TRY_LATER,
+	//   8 KEYS (the edge does not accept proof_key_set: no MX is dialed, nothing is debited);
 	//   0 UNSPECIFIED, a protocol error
 	RetryAfterMs  uint32   `protobuf:"varint,2,opt,name=retry_after_ms,json=retryAfterMs,proto3" json:"retry_after_ms,omitempty"`
 	SendId        []byte   `protobuf:"bytes,3,opt,name=send_id,json=sendId,proto3" json:"send_id,omitempty"`
@@ -470,15 +484,22 @@ func (x *SmtpPreambleResult) GetEhloKeywords() []string {
 type SmtpProof struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	SendId            []byte                 `protobuf:"bytes,1,opt,name=send_id,json=sendId,proto3" json:"send_id,omitempty"`
-	Index             uint32                 `protobuf:"varint,2,opt,name=index,proto3" json:"index,omitempty"`                                // 1 pi1; 2 pi2; 3 pi3; 4.. later DATA parts
-	Mode              uint32                 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"`                                  // 1 BDAT, 2 DATA; fixed from pi2 on (Z9)
-	FirstRecord       uint64                 `protobuf:"varint,4,opt,name=first_record,json=firstRecord,proto3" json:"first_record,omitempty"` // client application records covered,
-	LastRecord        uint64                 `protobuf:"varint,5,opt,name=last_record,json=lastRecord,proto3" json:"last_record,omitempty"`    //   by TLS sequence number
-	Proof             []byte                 `protobuf:"bytes,6,opt,name=proof,proto3" json:"proof,omitempty"`
+	Index             uint32                 `protobuf:"varint,2,opt,name=index,proto3" json:"index,omitempty"`                                                    // the part's ordinal, from 1; part 1 is the key part
+	Mode              uint32                 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"`                                                      // 0 in part 1; 1 BDAT or 2 DATA from part 2 on, which fixes it (Z9)
+	FirstRecord       uint64                 `protobuf:"varint,4,opt,name=first_record,json=firstRecord,proto3" json:"first_record,omitempty"`                     // client application records covered, by TLS sequence number;
+	LastRecord        uint64                 `protobuf:"varint,5,opt,name=last_record,json=lastRecord,proto3" json:"last_record,omitempty"`                        //   a part that opens none has last_record = first_record - 1
+	Proof             []byte                 `protobuf:"bytes,6,opt,name=proof,proto3" json:"proof,omitempty"`                                                     // 164 octets
 	Last              bool                   `protobuf:"varint,7,opt,name=last,proto3" json:"last,omitempty"`                                                      // covers octet n, the end mark (DATA) and QUIT
 	ServerRecordCount uint64                 `protobuf:"varint,8,opt,name=server_record_count,json=serverRecordCount,proto3" json:"server_record_count,omitempty"` // server records after Finished that this and earlier parts cover (0 in
-	//   pi1); this part covers those past the previous part's count (Z7)
-	Records       [][]byte `protobuf:"bytes,9,rep,name=records,proto3" json:"records,omitempty"` // ciphertext of each client record the part opens, in sequence order
+	//   part 1); this part covers those past the previous part's count (Z7)
+	Records [][]byte `protobuf:"bytes,9,rep,name=records,proto3" json:"records,omitempty"` // ciphertext of each client record the part opens, in sequence order
+	//   (BDAT's last part: its header record from first_record, then QUIT at
+	//   last_record)
+	KeyCommitment     []byte `protobuf:"bytes,10,opt,name=key_commitment,json=keyCommitment,proto3" json:"key_commitment,omitempty"`                // part 1 only: C, 64 octets (DESIGN-DETAILS 3.2.2)
+	ReplyCount        uint32 `protobuf:"varint,11,opt,name=reply_count,json=replyCount,proto3" json:"reply_count,omitempty"`                        // the replies the server records it covers hold (Z8)
+	HeaderRecordCount uint32 `protobuf:"varint,12,opt,name=header_record_count,json=headerRecordCount,proto3" json:"header_record_count,omitempty"` // on the part that opens the header block's first record, and no other:
+	//   how many client records hold the header block
+	Carry         []byte `protobuf:"bytes,13,opt,name=carry,proto3" json:"carry,omitempty"` // on a part that opens a header or body record: the scan state after it,
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -572,6 +593,34 @@ func (x *SmtpProof) GetServerRecordCount() uint64 {
 func (x *SmtpProof) GetRecords() [][]byte {
 	if x != nil {
 		return x.Records
+	}
+	return nil
+}
+
+func (x *SmtpProof) GetKeyCommitment() []byte {
+	if x != nil {
+		return x.KeyCommitment
+	}
+	return nil
+}
+
+func (x *SmtpProof) GetReplyCount() uint32 {
+	if x != nil {
+		return x.ReplyCount
+	}
+	return 0
+}
+
+func (x *SmtpProof) GetHeaderRecordCount() uint32 {
+	if x != nil {
+		return x.HeaderRecordCount
+	}
+	return 0
+}
+
+func (x *SmtpProof) GetCarry() []byte {
+	if x != nil {
+		return x.Carry
 	}
 	return nil
 }
@@ -865,7 +914,7 @@ var File_protocol_smtp_proto protoreflect.FileDescriptor
 
 const file_protocol_smtp_proto_rawDesc = "" +
 	"\n" +
-	"\x13protocol/smtp.proto\x12\x11urnetwork.sidecar\"\xdb\x02\n" +
+	"\x13protocol/smtp.proto\x12\x11urnetwork.sidecar\"\xff\x02\n" +
 	"\fSmtpPreamble\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x12)\n" +
 	"\x10recipient_domain\x18\x02 \x01(\tR\x0frecipientDomain\x12'\n" +
@@ -876,7 +925,9 @@ const file_protocol_smtp_proto_rawDesc = "" +
 	"\rdkim_selector\x18\x06 \x01(\tR\fdkimSelector\x12,\n" +
 	"\x12message_byte_count\x18\a \x01(\x04R\x10messageByteCount\x12'\n" +
 	"\x10retry_of_send_id\x18\b \x01(\fR\rretryOfSendId\x12\x14\n" +
-	"\x05flags\x18\t \x01(\rR\x05flags\"\xa0\x02\n" +
+	"\x05flags\x18\t \x01(\rR\x05flags\x12\"\n" +
+	"\rproof_key_set\x18\n" +
+	" \x01(\fR\vproofKeySet\"\xa0\x02\n" +
 	"\x12SmtpPreambleResult\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\rR\x04code\x12$\n" +
 	"\x0eretry_after_ms\x18\x02 \x01(\rR\fretryAfterMs\x12\x17\n" +
@@ -887,7 +938,7 @@ const file_protocol_smtp_proto_rawDesc = "" +
 	"\thelo_name\x18\x06 \x01(\tR\bheloName\x12\x17\n" +
 	"\amx_host\x18\a \x01(\tR\x06mxHost\x12!\n" +
 	"\fdnssec_chain\x18\b \x01(\fR\vdnssecChain\x12#\n" +
-	"\rehlo_keywords\x18\t \x03(\tR\fehloKeywords\"\x86\x02\n" +
+	"\rehlo_keywords\x18\t \x03(\tR\fehloKeywords\"\x94\x03\n" +
 	"\tSmtpProof\x12\x17\n" +
 	"\asend_id\x18\x01 \x01(\fR\x06sendId\x12\x14\n" +
 	"\x05index\x18\x02 \x01(\rR\x05index\x12\x12\n" +
@@ -898,7 +949,13 @@ const file_protocol_smtp_proto_rawDesc = "" +
 	"\x05proof\x18\x06 \x01(\fR\x05proof\x12\x12\n" +
 	"\x04last\x18\a \x01(\bR\x04last\x12.\n" +
 	"\x13server_record_count\x18\b \x01(\x04R\x11serverRecordCount\x12\x18\n" +
-	"\arecords\x18\t \x03(\fR\arecords\"%\n" +
+	"\arecords\x18\t \x03(\fR\arecords\x12%\n" +
+	"\x0ekey_commitment\x18\n" +
+	" \x01(\fR\rkeyCommitment\x12\x1f\n" +
+	"\vreply_count\x18\v \x01(\rR\n" +
+	"replyCount\x12.\n" +
+	"\x13header_record_count\x18\f \x01(\rR\x11headerRecordCount\x12\x14\n" +
+	"\x05carry\x18\r \x01(\fR\x05carry\"%\n" +
 	"\x0fSmtpProofResult\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\rR\x04code\"\xee\x01\n" +
 	"\vSmtpOutcome\x12\x17\n" +
@@ -918,7 +975,7 @@ const file_protocol_smtp_proto_rawDesc = "" +
 	"\asend_id\x18\x01 \x01(\fR\x06sendId\x12\x12\n" +
 	"\x04shts\x18\x02 \x01(\fR\x04shts\")\n" +
 	"\x13SmtpHandshakeResult\x12\x12\n" +
-	"\x04code\x18\x01 \x01(\rR\x04code*\xe9\x01\n" +
+	"\x04code\x18\x01 \x01(\rR\x04code*\x81\x02\n" +
 	"\x10SmtpPreambleCode\x12\"\n" +
 	"\x1eSMTP_PREAMBLE_CODE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10SMTP_PREAMBLE_OK\x10\x01\x12\x18\n" +
@@ -927,7 +984,8 @@ const file_protocol_smtp_proto_rawDesc = "" +
 	"\x14SMTP_PREAMBLE_DENIED\x10\x04\x12\x17\n" +
 	"\x13SMTP_PREAMBLE_NO_MX\x10\x05\x12\x18\n" +
 	"\x14SMTP_PREAMBLE_NO_TLS\x10\x06\x12\x1b\n" +
-	"\x17SMTP_PREAMBLE_TRY_LATER\x10\a*[\n" +
+	"\x17SMTP_PREAMBLE_TRY_LATER\x10\a\x12\x16\n" +
+	"\x12SMTP_PREAMBLE_KEYS\x10\b*[\n" +
 	"\rSmtpProofCode\x12\x1f\n" +
 	"\x1bSMTP_PROOF_CODE_UNSPECIFIED\x10\x00\x12\x11\n" +
 	"\rSMTP_PROOF_OK\x10\x01\x12\x16\n" +

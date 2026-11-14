@@ -1,5 +1,5 @@
 // §8.8's access log of one repo_id (owner decision 8): RepoCreate, RepoAdmin, RepoGrant, RepoRevoke, RepoDelete,
-// RepoRestore and RepoVersioning, each checked at its position here and folded by acl_access_log.go.
+// RepoRestore, RepoVersioning and RepoPrefixRules, each checked at its position here and folded by acl_access_log.go.
 //
 //	RepoCreate      general or record: a member device that is not read_only, or a tagged or ephemeral sidecar
 //	                under a rule giving it admin on evs:* or that repo, within §8.6's ceiling; team_record and
@@ -17,15 +17,19 @@
 //	RepoRestore     a repo admin, of the newest RepoDelete without now, within 7 days of its entry
 //	RepoVersioning  a repo admin or a config writer, in an owner-bound repo a consented device of its owner; never
 //	                the directory or the config; format 1 folds the lock and skips its rules (D-PHASE-9)
+//	RepoPrefixRules a repo admin or a config writer, by RepoVersioning's test, only in a general repo that is not
+//	                deleted; sealed_rules 48 B and a positive multiple of 256 B, at most SealedMaxByteCount, read by
+//	                its length alone; fewer than SetMaxCount sets in the repo's rows (DESIGN-DETAILS 16.2.2). Code
+//	                from M2 checks it and folds its row, and nothing enforces a rule until M6 (D-PHASE-9; QD-212)
 //
 // A repo admin counts while it stands, and in an owner-bound repo while it is a consented device of the owner, in
 // the directory while it is consented, either way not read_only. The config takes no access-log statement: no rows
 // give it an admin and policy never widens its writers (D-ACL-13; acl-m2-02-state-readings #10). Statements on a
 // deleted repo are refused but for RepoRevoke, RepoAdmin's remove, RepoDelete{now} and RepoRestore.
 //
-// RepoRestore's window runs from its RepoDelete's entry time, which rows do not carry: the state's log answers it
-// while it retains that entry, and a restore it cannot judge is refused (question
-// acl-m2-06-access-log-positions).
+// RepoRestore's window runs from its RepoDelete's entry time, which the deletion row carries (QD-743), so every reader
+// judges it from rows alone on any day of the window, whether or not its log still keeps that entry. A row with no
+// time, which no fold writes, is refused as a restore that cannot be dated.
 //
 // On every leg, the sidecar_http page Worker's included: root Id, no connect type.
 
@@ -42,13 +46,27 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
-// How long after its RepoDelete's entry a RepoRestore is taken (§8.8, owner decision 82): a protocol value every
-// reader and api hold alike.
-const aclRepoRestoreWindowMs = int64(7 * 24 * 60 * 60 * 1000)
+// §8.8's access-log limits, which every reader and api hold alike (QD-702): the protocol's values, so changing one is a
+// protocol change no deployment makes on one side alone. The statement rules read DefaultAclAccessLogSettings();
+// threading each side's own instance through them is the review phase's settings sweep (QD-706).
+type AclAccessLogSettings struct {
+	// How long after its RepoDelete's entry a RepoRestore is taken: 7 days (§8.8, owner decision 82). §11.12's shred
+	// starts no earlier than this past the entry, so a restore every reader takes always finds the repo unshredded.
+	// Positive.
+	RepoRestoreWindow time.Duration
+}
 
-// A state that knows when an entry was sequenced, which ConfigState's log answers while it retains the entry.
-type aclEntryTimes interface {
-	aclTimeAt(n uint64) (int64, bool)
+// §8.8's values. A fresh value each call.
+func DefaultAclAccessLogSettings() *AclAccessLogSettings {
+	return &AclAccessLogSettings{
+		RepoRestoreWindow: 7 * 24 * time.Hour,
+	}
+}
+
+// Whether a RepoRestore sequenced at restoreTimeMs lies within the window of a RepoDelete whose entry was sequenced at
+// deletedTimeMs, both ms since the epoch: at most RepoRestoreWindow after it, the window's last ms included.
+func (self *AclAccessLogSettings) RepoRestoreWithinWindow(deletedTimeMs int64, restoreTimeMs int64) bool {
+	return restoreTimeMs-deletedTimeMs <= self.RepoRestoreWindow.Milliseconds()
 }
 
 // A time from ms since the epoch.
@@ -341,15 +359,12 @@ func (self *AclState) checkRepoRestore(statement *AclStatement, restore *protoco
 	case deletion.GetRestoredAt() != 0:
 		return nil, fmt.Errorf("%w: a deletion already restored", ErrConfigRule)
 	}
-	times, ok := self.view.(aclEntryTimes)
-	if !ok {
-		return nil, fmt.Errorf("%w: the state cannot tell when the RepoDelete landed", ErrConfigRuleMissing)
+	// the row's own time, never the log's copy of the entry, so the verdict is the same at every reader on every day
+	deletedTimeMs := deletion.GetDeletedTimeMs()
+	if deletedTimeMs == 0 {
+		return nil, fmt.Errorf("%w: a deletion row with no entry time", ErrConfigRuleMissing)
 	}
-	deletedTimeMs, ok := times.aclTimeAt(deletion.GetDeletedAt())
-	if !ok {
-		return nil, fmt.Errorf("%w: the RepoDelete's entry is not retained here (acl-m2-06-access-log-positions)", ErrConfigRuleMissing)
-	}
-	if aclRepoRestoreWindowMs < statement.TimeMs-deletedTimeMs {
+	if !DefaultAclAccessLogSettings().RepoRestoreWithinWindow(deletedTimeMs, statement.TimeMs) {
 		return nil, fmt.Errorf("%w: a RepoRestore more than 7 days after its RepoDelete", ErrConfigRule)
 	}
 	if !self.repoAdminSigner(repo, signer, statement.N) {
@@ -385,6 +400,39 @@ func (self *AclState) checkRepoVersioning(statement *AclStatement, versioning *p
 			return nil, fmt.Errorf("%w: only a consented device of its owner sets an owner-bound repo's versioning", ErrConfigAuthority)
 		}
 	} else if !self.repoAdminSigner(repo, signer, statement.N) && !signer.configWriter {
+		return nil, fmt.Errorf("%w: neither a repo admin nor a config writer", ErrConfigAuthority)
+	}
+	return &AclStatementVerdict{Signer: signer.id}, nil
+}
+
+// RepoPrefixRules{repo_id, sealed_rules}: DESIGN-DETAILS 16.2.2's id-level rule, which api, the gates and every device
+// judge alike with no key. The body is never opened: its length is read, and what it holds is the reader's from M6
+// (ACL-M6-04), a set no reader can open leaving the one below it in force.
+func (self *AclState) checkRepoPrefixRules(statement *AclStatement, prefixRules *protocol.RepoPrefixRules) (*AclStatementVerdict, error) {
+	signer, err := self.statementSigner(statement)
+	if err != nil {
+		return nil, err
+	}
+	repo, err := self.statementRepo(prefixRules.GetRepoId())
+	if err != nil {
+		return nil, err
+	}
+	// every other kind is written by fixed sets or only by its owner's devices (16.9, small reading 1; QD-795)
+	if repo.kind != protocol.RepoKind_REPO_KIND_GENERAL {
+		return nil, fmt.Errorf("%w: a %s repo takes no RepoPrefixRules", ErrConfigRule, repo.kind)
+	}
+	if repo.deleted {
+		return nil, fmt.Errorf("%w: a RepoPrefixRules on a deleted repo", ErrConfigRule)
+	}
+	settings := DefaultAclPrefixSettings()
+	if byteCount := len(prefixRules.GetSealedRules()); !settings.SealedByteCountFits(byteCount) {
+		return nil, fmt.Errorf("%w: sealed rules of %d bytes, not 48 B and a positive multiple of 256 B within %d", ErrConfigRule, byteCount, settings.SealedMaxByteCount)
+	}
+	if setCount := len(repo.row.GetPrefixRules()); !settings.SetFits(setCount) {
+		return nil, fmt.Errorf("%w: the repo holds %d rule sets, SetMaxCount's limit of %d", ErrConfigRule, setCount, settings.SetMaxCount)
+	}
+	// checkRepoVersioning's test for a repo that is not owner-bound: an admin standing at S(n-1), or a config writer
+	if !self.repoAdminSigner(repo, signer, statement.N) && !signer.configWriter {
 		return nil, fmt.Errorf("%w: neither a repo admin nor a config writer", ErrConfigAuthority)
 	}
 	return &AclStatementVerdict{Signer: signer.id}, nil

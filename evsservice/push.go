@@ -162,8 +162,11 @@ type pushAttempt struct {
 	payloadBytes  []byte
 	payload       *sidecar.EvsCheckedPayload
 	formatRefusal *EvsCheckRefusal
-	needsFormat2  bool
-	receipts      []*protocol.EvsUploadReceipt
+	// a one-part push's payload as its record keeps it, set beside payload: payloadBytes with section 7, the slot
+	// bodies, taken out (QD-806), which step 6 writes to their slots before it appends the record
+	recordPayloadBytes []byte
+	needsFormat2       bool
+	receipts           []*protocol.EvsUploadReceipt
 	// format 2: the request's staged bytes as received, which ride the record's tail outside every hash, and the
 	// record's purge list once computed at its first write, which a rerun keeps (push_staged.go, push_purge.go)
 	staged []byte
@@ -200,6 +203,10 @@ type pushAttempt struct {
 	// (push_part.go). At most one is set; both nil for a one-part push.
 	seal *sealReads
 	part *partReads
+
+	// EVSB-M2-20's: set for a re-seeded push at POST .../reseed (reseed.go), whose 5 (b-h) is checkReseed, whose
+	// record is an EVS_BATCH_RESEED record and whose refusals record nothing
+	reseed *reseedAttempt
 }
 
 // Which of §11.8's requests this attempt is: a one-part push, a part or a seal.
@@ -325,6 +332,15 @@ func (self *EvsEngine) newPushAttempt(request *EvsRequest, body *protocol.EvsPus
 		refusal.NeedsFormat = 2
 		attempt.formatRefusal = refusal
 	}
+	if attempt.payload != nil {
+		// the payload just checked, so only a fault here fails it
+		recordPayload, err := sidecar.EvsRecordPayload(body.GetPayload())
+		if err != nil {
+			request.Refuse(EvsCheckRefusalOfCodec(err).Reply(attempt.pushId))
+			return nil, false
+		}
+		attempt.recordPayloadBytes = recordPayload
+	}
 
 	if !attempt.bind() {
 		return nil, false
@@ -366,7 +382,7 @@ func (self *pushAttempt) bind() bool {
 		request.Refuse(refusal.Reply(self.pushId))
 		return false
 	}
-	self.pushes = NewRecordPushSource(engine.records, self.cluster, self.repoId, self.refId).WithLocator(engine.locator)
+	self.pushes = NewRecordPushSource(engine.records, engine.locator, self.cluster, self.repoId, self.refId)
 	return true
 }
 
@@ -435,8 +451,11 @@ func (self *pushAttempt) runSteps() *pushOutcome {
 		if self.part != nil {
 			return self.appendPart()
 		}
-		if outcome := self.countedRules(); outcome != nil {
-			return outcome
+		// a re-seed is counted against nobody's allowance (QD-084)
+		if self.reseed == nil {
+			if outcome := self.countedRules(); outcome != nil {
+				return outcome
+			}
 		}
 		outcome, again := self.commit()
 		if !again {
@@ -471,6 +490,9 @@ func (self *pushAttempt) afterCommitted(outcome *pushOutcome) *pushOutcome {
 // checks are EVS2-M10-06's, takes 5c's gate answer: 409 VERSIONING outside the gate, recorded for a seal, and 503
 // inside it, refusing nothing, so nothing commits unchecked.
 func (self *pushAttempt) check() *EvsCheckRefusal {
+	if self.reseed != nil {
+		return self.checkReseed()
+	}
 	if self.formatRefusal != nil {
 		if !self.engine.format2Instance() {
 			return self.formatRefusal

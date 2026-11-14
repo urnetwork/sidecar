@@ -290,7 +290,7 @@ func (self *TestSidecar) Enroll(ctx context.Context, networkId sidecar.Id) error
 func (self *TestSidecar) EnrollWith(ctx context.Context, credential *sidecar.SidecarEnrollCredential) error {
 	authKey := credential.AuthKey
 	networkId := sidecar.Id{}
-	if parsed, err := sidecar.ParseAuthKey(authKey); err == nil {
+	if parsed, err := sidecar.ParseAuthKey(authKey, nil); err == nil {
 		if keyNetworkId, ok := self.Api.authKeyNetwork(parsed.Bearer()); ok {
 			networkId = keyNetworkId
 		}

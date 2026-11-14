@@ -240,21 +240,28 @@ func (self *tlsFrontTestListener) waitServing(t *testing.T, count int) bool {
 	}
 }
 
-// A policy a test sets: this sidecar's grant, signers' grants, members and identity keys, whatever name it is asked
-// for, since a fixture's front serves one endpoint.
+// A policy a test sets: this sidecar's grant, signers' grants, members, identity keys and consented devices, whatever
+// name it is asked for, since a fixture's front serves one endpoint.
 type tlsFrontTestPolicy struct {
 	stateLock    sync.Mutex
 	grant        *TlsPublishGrant
 	signerGrants map[Id]*TlsPublishGrant
 	members      map[Id]bool
 	identityKeys map[Id][]byte
+	// each device and the member it is consented for
+	consentedDevices map[[2]Id]bool
 }
 
 var _ TlsFrontPolicy = (*tlsFrontTestPolicy)(nil)
 
 // A policy holding nothing.
 func newTlsFrontTestPolicy() *tlsFrontTestPolicy {
-	return &tlsFrontTestPolicy{signerGrants: map[Id]*TlsPublishGrant{}, members: map[Id]bool{}, identityKeys: map[Id][]byte{}}
+	return &tlsFrontTestPolicy{
+		signerGrants:     map[Id]*TlsPublishGrant{},
+		members:          map[Id]bool{},
+		identityKeys:     map[Id][]byte{},
+		consentedDevices: map[[2]Id]bool{},
+	}
 }
 
 // Sets this sidecar's grant: audience and mode, a fresh grant id, no expiry.
@@ -301,6 +308,13 @@ func (self *tlsFrontTestPolicy) IdentityKey(sidecarId Id) []byte {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	return self.identityKeys[sidecarId]
+}
+
+// See TlsFrontPolicy.
+func (self *tlsFrontTestPolicy) DeviceConsented(sidecarId Id, memberId Id, now time.Time) bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.consentedDevices[[2]Id{sidecarId, memberId}]
 }
 
 // A keychain namespace in memory.
@@ -560,7 +574,9 @@ type tlsFrontFixture struct {
 	sidecarId     Id
 	// TlsEdgeOpen's and the ticket's grant expiry
 	grantExpireMillis uint64
-	front             *TlsFront
+	// where reach receipts go; nil writes none
+	record RecordWriter
+	front  *TlsFront
 }
 
 // A fixture whose front serves tls/443/app over http to an http backend, its grant public, configure changing any
@@ -630,8 +646,9 @@ func newTlsFrontFixture(t *testing.T, configure func(fixture *tlsFrontFixture)) 
 		AlpnChanged: func() {
 			fixture.alpnChanges <- struct{}{}
 		},
-		Clock: clock,
-		Log:   fixture.log,
+		Record: fixture.record,
+		Clock:  clock,
+		Log:    fixture.log,
 	})
 	if err != nil {
 		t.Fatal(err)

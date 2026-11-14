@@ -6,7 +6,9 @@
 // file with the higher seq. No diff rests on a diff, on a head or on a shard, so nothing is composed. An unabsorbed
 // diff whose base no such file holds, or whose composed set's size is not its row's trigram count, breaks the format:
 // its signer is alarmed index_malformed, and the document reads not yet searchable, never no match, until a host with
-// the text re-enters it. Under I1 an honest writer's slot is never in that state. A query never fetches.
+// the text re-enters it. So does one whose composed set D6 skips under the diff's own row (DESIGN-DETAILS 1.2.9;
+// QD-760), since no honest writer composes past a shard. Under I1 an honest writer's slot is never in either state. A
+// query never fetches.
 
 package sidecar
 
@@ -15,14 +17,15 @@ import (
 )
 
 // What a bucket's diffs resolve in: each writer's files that are not its head, slots and large entries, absorbed or
-// not.
+// not, and the format's bounds a composed set is held to.
 type searchChainSources struct {
 	writerFiles map[Id][]*searchSlotSource
+	settings    *IndexFormatSettings
 }
 
-// The sources of one bucket, from its slots and large entries as the device holds them.
-func searchNewChainSources(slots []*searchSlotSource) *searchChainSources {
-	sources := &searchChainSources{writerFiles: map[Id][]*searchSlotSource{}}
+// The sources of one bucket, from its slots and large entries as the device holds them, read under settings.
+func searchNewChainSources(slots []*searchSlotSource, settings *IndexFormatSettings) *searchChainSources {
+	sources := &searchChainSources{writerFiles: map[Id][]*searchSlotSource{}, settings: settings}
 	for _, slot := range slots {
 		if !slot.head {
 			sources.writerFiles[slot.writer] = append(sources.writerFiles[slot.writer], slot)
@@ -77,6 +80,9 @@ func searchResolveChain(sources *searchChainSources, slot *searchSlotSource, dif
 	}
 	if uint64(len(keys)) != diff.row.trigramCount {
 		return nil, indexMalformed("a composed set whose size is not its row's trigram count")
+	}
+	if indexDocumentSkipped(keys, diff.row, sources.settings) {
+		return nil, indexMalformed("a composed set past a shard")
 	}
 	return &searchResolvedChain{baseKeys: base.keys, delta: diff.delta, keys: keys}, nil
 }

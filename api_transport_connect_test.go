@@ -43,6 +43,8 @@ func TestConnectTransportDialsThroughConnectSettings(t *testing.T) {
 	dialLock := sync.Mutex{}
 	dials := []string{}
 	served := make(chan *http.Request, 1)
+	presented := testBindClientJwt(NewId(), NewId())
+	reply := testBindReply(1, presented, NewId())
 	strategySettings := connect.DefaultClientStrategySettings()
 	strategySettings.ConnectSettings.DialContextSettings = &connect.DialContextSettings{
 		DialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
@@ -55,7 +57,7 @@ func TestConnectTransportDialsThroughConnectSettings(t *testing.T) {
 				return nil, fmt.Errorf("network %s", network)
 			}
 			clientConn, serverConn := net.Pipe()
-			go serveOneApiRequest(serverConn, `{"generation":1}`, served)
+			go serveOneApiRequest(serverConn, reply, served)
 			return clientConn, nil
 		},
 	}
@@ -67,17 +69,17 @@ func TestConnectTransportDialsThroughConnectSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	api.SetByJwt(testByJwt)
+	api.SetByJwt(presented)
 
-	generation, err := api.Bind(ctx, []byte("synthetic-binding"))
+	bound, err := api.Bind(ctx, []byte("synthetic-binding"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if generation != 1 {
-		t.Errorf("generation %d", generation)
+	if bound.Generation != 1 {
+		t.Errorf("generation %d", bound.Generation)
 	}
 	request := <-served
-	if request.URL.Path != "/sidecar/bind" || request.Header.Get("Authorization") != "Bearer "+testByJwt {
+	if request.URL.Path != "/sidecar/bind" || request.Header.Get("Authorization") != "Bearer "+presented {
 		t.Errorf("served %s %q", request.URL.Path, request.Header.Get("Authorization"))
 	}
 	dialLock.Lock()

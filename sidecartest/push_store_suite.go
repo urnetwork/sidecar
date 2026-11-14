@@ -65,7 +65,7 @@ type pushSuiteCase struct {
 // so that server's test can run it inside its test environment's callback.
 func RunPushStoreSuite(t testing.TB, target *PushStoreTarget) {
 	t.Helper()
-	for _, suiteCase := range slices.Concat(pushSuiteCases(), pushTokenSuiteCases()) {
+	for _, suiteCase := range slices.Concat(pushSuiteCases(), pushTokenSuiteCases(), pushWakeSuiteCases()) {
 		func() {
 			ctx, cancel := context.WithTimeout(context.Background(), pushSuiteCaseTimeout)
 			defer cancel()

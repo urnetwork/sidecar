@@ -4,13 +4,13 @@
 //
 //   - The removed-client set holds each client whose {X}c_removed event this process received, for
 //     RemovedClientTtl, past any lease it held. A page from one answers 401, and a picked lease of one gets
-//     no ticket. SOCK-M5-07's ClientRemoved adds to it at once, then runs the store's RemoveClient.
+//     no ticket. ClientRemoved (sweep.go) adds to it at once, then a worker runs the store's RemoveClient.
 //   - The kill set is §13.9's switch as Find and registration read it: per network, a host or * with a
 //     reason and an until, from {tes_<network_id>}, which tlsedge reads too, and one rule for both,
 //     sidecar.TlsKillEntry.Kills, so a name tlsedge refuses Find does not admit (SOCK.md reading 4). It
-//     refuses tls/ names alone, the switch's own names. SOCK-M5-07's KillChanged reads the hash again and
-//     replaces the network's entries here; until a host feeds it, the set is empty, which only an engine
-//     whose gate is ClosedSocketGate meets today.
+//     refuses tls/ names alone, the switch's own names. The engine's reader (sweep.go's runKills) reads a
+//     network's hash on its {tes_}n event (KillChanged), after a resubscription (KillsResync), and when a tls/
+//     name of it is first judged here, and replaces the network's entries.
 //
 // Reads take no lock for the kill set: one immutable view behind an atomic pointer, since kills are few.
 // Safe for concurrent use.
@@ -77,27 +77,39 @@ func (self *socketRemovedClients) sweepWithLock(now time.Time) {
 	}
 }
 
-// One read of the kill set: each network's entries, never changed once published.
+// One read of the kill set: each network's entries, and the networks whose {tes_} hash was read, never changed
+// once published.
 type socketKillView struct {
 	networkIdEntries map[connect.Id][]*sidecar.TlsKillEntry
+	readNetworkIds   map[connect.Id]bool
 }
 
 // The kill set. newSocketKillSet makes one.
 type socketKillSet struct {
 	view atomic.Pointer[socketKillView]
+	// What wakes the engine's reader (sweep.go's runKills).
+	wake chan struct{}
+	// Reads the reader finished, each counted once its wait is armed, so a test sees one land.
+	readCount *sidecar.MonitorValue[int]
 
-	// Serializes writers, each of which publishes a new view.
-	stateLock sync.Mutex
+	// Serializes writers, each of which publishes a new view, and holds the networks due a read.
+	stateLock         sync.Mutex
+	pendingNetworkIds map[connect.Id]bool
 }
 
 // An empty set, killing nothing.
 func newSocketKillSet() *socketKillSet {
-	self := &socketKillSet{}
-	self.view.Store(&socketKillView{networkIdEntries: map[connect.Id][]*sidecar.TlsKillEntry{}})
+	self := &socketKillSet{
+		wake:              make(chan struct{}, 1),
+		readCount:         sidecar.NewMonitorValue(0),
+		pendingNetworkIds: map[connect.Id]bool{},
+	}
+	self.view.Store(&socketKillView{networkIdEntries: map[connect.Id][]*sidecar.TlsKillEntry{}, readNetworkIds: map[connect.Id]bool{}})
 	return self
 }
 
-// Replaces networkId's entries with entries, a read of its {tes_} hash: none clears it.
+// Replaces networkId's entries with entries, a read of its {tes_} hash: none clears it. The network counts as
+// read from now on.
 func (self *socketKillSet) set(networkId connect.Id, entries []*sidecar.TlsKillEntry) {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -118,16 +130,79 @@ func (self *socketKillSet) set(networkId connect.Id, entries []*sidecar.TlsKillE
 		}
 		networkIdEntries[networkId] = kept
 	}
-	self.view.Store(&socketKillView{networkIdEntries: networkIdEntries})
+	readNetworkIds := previous.readNetworkIds
+	if !readNetworkIds[networkId] {
+		readNetworkIds = make(map[connect.Id]bool, len(previous.readNetworkIds)+1)
+		for otherNetworkId := range previous.readNetworkIds {
+			readNetworkIds[otherNetworkId] = true
+		}
+		readNetworkIds[networkId] = true
+	}
+	self.view.Store(&socketKillView{networkIdEntries: networkIdEntries, readNetworkIds: readNetworkIds})
+}
+
+// Asks the reader for networkId's hash. Never blocks.
+func (self *socketKillSet) request(networkId connect.Id) {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.pendingNetworkIds[networkId] = true
+	}()
+	self.wakeReader()
+}
+
+// Asks the reader for every hash it has read. Never blocks.
+func (self *socketKillSet) requestAll() {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		for networkId := range self.view.Load().readNetworkIds {
+			self.pendingNetworkIds[networkId] = true
+		}
+	}()
+	self.wakeReader()
+}
+
+// Puts back reads that failed.
+func (self *socketKillSet) requeue(networkIds []connect.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for _, networkId := range networkIds {
+		self.pendingNetworkIds[networkId] = true
+	}
+}
+
+// The networks due a read, taken.
+func (self *socketKillSet) takePending() []connect.Id {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	networkIds := make([]connect.Id, 0, len(self.pendingNetworkIds))
+	for networkId := range self.pendingNetworkIds {
+		networkIds = append(networkIds, networkId)
+	}
+	clear(self.pendingNetworkIds)
+	return networkIds
+}
+
+func (self *socketKillSet) wakeReader() {
+	select {
+	case self.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Whether a kill refuses the name of networkId at now: a tls/ name whose host, or every host, its network's
-// entries name. Any other name is no kill switch's. Takes no lock and does no I/O.
+// entries name. Any other name is no kill switch's. A network whose hash was never read is asked for and judged
+// with no kill meanwhile (sweep.go's header). Does no I/O, and takes a lock only for such an ask.
 func (self *socketKillSet) kills(networkId connect.Id, name *socketParsedName, now time.Time) bool {
 	if name == nil || name.namespace != sidecar.SocketNamespaceTls {
 		return false
 	}
-	entries := self.view.Load().networkIdEntries[networkId]
+	view := self.view.Load()
+	if !view.readNetworkIds[networkId] {
+		self.request(networkId)
+	}
+	entries := view.networkIdEntries[networkId]
 	for _, entry := range entries {
 		if entry.Kills(name.host, now) {
 			return true

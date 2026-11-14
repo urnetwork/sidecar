@@ -191,9 +191,9 @@ func (self *EvsComponent) tickRef(ctx context.Context, repoId Id, refId Id) {
 }
 
 // The args an EvsClient takes from this Sidecar for the network it is enrolled in: the service url, SidecarApi's
-// transport, ServiceToken, Sign, the identity, the evs component's sealed directory, events, the clock, the log and
-// settings.Evs. gkm, the verified config state and the statement poster are the caller's, from KEYS, TEAM and
-// CORE-M2-02 as each lands.
+// transport, ServiceToken, Sign, the identity, the evs component's sealed directory, events, the clock, the log,
+// settings.Evs, and the team directory's hooks around a create (§16.11's default and private rows, QD-748). gkm, the
+// verified config state and the statement poster are the caller's, from KEYS, TEAM and CORE-M2-02 as each lands.
 func (self *Sidecar) EvsClientArgs(gkm GkmClient, config EvsConfigFunction, fileStatement EvsFileStatementFunction) (*EvsClientArgs, error) {
 	networkId := self.enrolledNetworkId()
 	if networkId == nil {
@@ -219,5 +219,6 @@ func (self *Sidecar) EvsClientArgs(gkm GkmClient, config EvsConfigFunction, file
 		Log:           self.log,
 		Settings:      self.settings.Evs,
 		RepoCreated:   self.announceCreatedRepo,
+		PrivateCreate: self.readyPrivateRepo,
 	}, nil
 }

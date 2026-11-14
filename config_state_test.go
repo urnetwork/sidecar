@@ -290,7 +290,9 @@ func testConfigHeadSha256(configVersion uint64) []byte {
 }
 
 // The entry of a base over rows at the tip's next position, without moving the tip, its rows published. The rows
-// carry the settings the head's ServiceSettings compile to, as a writer's do (DESIGN-DETAILS 5.2.3).
+// carry the settings the head's ServiceSettings compile to, as a writer's do (DESIGN-DETAILS 5.2.3), and the header
+// the repos its own change shrinks at the entry's time, as the reader under test computes them standing at the tip
+// (QD-746); a header that reader cannot build a state from carries none.
 func (self *testConfigNet) makeBase(signer testConfigDevice, rows *bridge.ProjectionRows, foldedThrough uint64, configVersion uint64, threshold uint32) []byte {
 	rows = proto.Clone(rows).(*bridge.ProjectionRows)
 	rows.Settings = ConfigProjectionSettings(self.source.settings[[sha256.Size]byte(testConfigHeadSha256(configVersion))])
@@ -308,6 +310,11 @@ func (self *testConfigNet) makeBase(signer testConfigDevice, rows *bridge.Projec
 		RowsByteCount:    uint32(len(rowsBytes)),
 		Threshold:        threshold,
 		TailVerdicts:     self.tailVerdicts(foldedThrough),
+	}
+	if self.log.Fork() == nil && self.log.State().n == self.n {
+		if shrunkRepoIds, err := self.log.BaseShrunkRepoIds(header, rowsBytes, self.timeMs+1000); err == nil {
+			header.ShrunkRepoIds = shrunkRepoIds
+		}
 	}
 	return self.makeEntry(bridge.AuthEntryKindBase, self.sign(signer, bridge.SignedType_SIGNED_PROJECTION_HEADER, header))
 }

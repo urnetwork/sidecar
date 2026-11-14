@@ -19,6 +19,11 @@ import (
 // A verifier with no circuits behind it: enough for readiness, which needs one present.
 type refusingVerifier struct{}
 
+// Holds no key set.
+func (self refusingVerifier) HoldsKeySet(keySet []byte) bool {
+	return false
+}
+
 // Refuses every session.
 func (self refusingVerifier) NewSmtpProofSession(preamble *sidecar.SmtpProofPreamble) (sidecar.SmtpProofSession, error) {
 	return nil, errors.New("no circuits in this test")

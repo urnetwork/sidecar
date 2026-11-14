@@ -273,7 +273,7 @@ func (self *gkmGroupManager) staleLeaves(ctx context.Context, workerIds []Id) ([
 		case 0 <= memberIndex:
 			leaf.State = SidecarStaleLeafLive
 			leaf.LastChange = gkmLeafLastChange(roster[memberIndex])
-			if GkmLeafStale(state, roster[memberIndex], now.Add(-gkmStaleRemoveMargin)) {
+			if GkmLeafStale(state, roster[memberIndex], now.Add(-client.settings.StaleRemoveMargin)) {
 				leaf.State = SidecarStaleLeafDue
 			}
 		case 0 <= removalIndex:
@@ -321,7 +321,7 @@ func (self *GkmStaleGroupView) CommitStaleRemove(ctx context.Context, groupId Id
 	}
 	roster := group.Roster()
 	memberIndex := slices.IndexFunc(roster, func(member MlsMember) bool { return member.SidecarId == workerId })
-	if memberIndex < 0 || !GkmLeafStale(state, roster[memberIndex], client.clock.Now().Add(-gkmStaleRemoveMargin)) {
+	if memberIndex < 0 || !GkmLeafStale(state, roster[memberIndex], client.clock.Now().Add(-client.settings.StaleRemoveMargin)) {
 		return fmt.Errorf("%w: the leaf is not due a stale Remove at the group's epoch", ErrGkmWait)
 	}
 	removes, adds := GkmMayCommit(state, repoId, client.args.SidecarId, roster, pending)

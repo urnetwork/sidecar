@@ -414,7 +414,7 @@ func TestVerifyWindowDelegationRefusesWhatIsNoDelegation(t *testing.T) {
 		lookups += 1
 		return identityKey(sidecarId)
 	}
-	oversize := bytes.Repeat([]byte{0x0a}, WindowDelegationMaxByteCount+1)
+	oversize := bytes.Repeat([]byte{0x0a}, DefaultWindowDelegationSettings().MaxByteCount+1)
 	shortSigner := &Signed{}
 	if err := proto.Unmarshal(testDelegationSigned(t, testDelegation()), shortSigner); err != nil {
 		t.Fatal(err)
@@ -454,7 +454,7 @@ func TestWindowDelegationSignedRoundTrips(t *testing.T) {
 			Type:      uint32(signedType),
 		}, nil
 	}
-	signedBytes, err := WindowDelegationSigned(testDelegation(), sign)
+	signedBytes, err := WindowDelegationSigned(testDelegation(), sign, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +476,7 @@ func TestWindowDelegationSignedRoundTrips(t *testing.T) {
 	for name, signer := range map[string]func(string, SignedType, []byte) (*Signed, error){
 		"another type": otherType, "another body": otherBody,
 	} {
-		if _, err := WindowDelegationSigned(testDelegation(), signer); !errors.Is(err, ErrWindowDelegationMalformed) {
+		if _, err := WindowDelegationSigned(testDelegation(), signer, nil); !errors.Is(err, ErrWindowDelegationMalformed) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -490,13 +490,13 @@ func TestWindowDelegationSignedRoundTrips(t *testing.T) {
 	for i, mutate := range malformed {
 		delegation := testDelegation()
 		mutate(delegation)
-		if _, err := WindowDelegationSigned(delegation, sign); !errors.Is(err, ErrWindowDelegationMalformed) {
+		if _, err := WindowDelegationSigned(delegation, sign, nil); !errors.Is(err, ErrWindowDelegationMalformed) {
 			t.Errorf("case %d: %v", i, err)
 		}
 	}
 	withShare := testDelegation()
 	withShare.ShareId = testDelegationOtherId
-	if _, err := WindowDelegationSigned(withShare, sign); !errors.Is(err, ErrWindowDelegationShare) {
+	if _, err := WindowDelegationSigned(withShare, sign, nil); !errors.Is(err, ErrWindowDelegationShare) {
 		t.Fatalf("a share: %v", err)
 	}
 }

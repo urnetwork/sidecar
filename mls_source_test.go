@@ -194,3 +194,94 @@ func TestMlsSecretsComeOnlyThroughHookedFunctions(t *testing.T) {
 		t.Errorf("found %d producers: the scan has stopped seeing them", len(producing))
 	}
 }
+
+// expandWithLabel hooks what it expands unless its caller says not to, and only an AEAD nonce may say so (ledger
+// QD-755): the three RFC 9420 derives, each of the suite's nonce length. Everything else it expands is a key or a
+// secret, and passes true, so no key leaves the hook by this flag.
+func TestMlsUnhooksOnlyItsAeadNonces(t *testing.T) {
+	nonceKinds := []string{"ratchet_nonce", "sender_data_nonce", "welcome_nonce"}
+	// the functions that take the flag, second, and their length, last
+	flagTakers := []string{"expandWithLabel", "deriveTreeSecret"}
+
+	paths, err := filepath.Glob("mls_*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileSet := token.NewFileSet()
+	unhookedKindCounts := map[string]int{}
+	hookedCount := 0
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			function, ok := decl.(*ast.FuncDecl)
+			if !ok || function.Body == nil {
+				continue
+			}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				selector, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || !slices.Contains(flagTakers, selector.Sel.Name) {
+					return true
+				}
+				where := fileSet.Position(call.Pos())
+				if len(call.Args) < 3 {
+					t.Errorf("%s: %s with %d arguments", where, selector.Sel.Name, len(call.Args))
+					return true
+				}
+				kind := ""
+				if literal, ok := call.Args[0].(*ast.BasicLit); ok && literal.Kind == token.STRING {
+					kind = strings.Trim(literal.Value, `"`)
+				}
+				nonceLength := false
+				if length, ok := call.Args[len(call.Args)-1].(*ast.SelectorExpr); ok && length.Sel.Name == "aeadNonceLength" {
+					nonceLength = true
+				}
+				flag, ok := call.Args[1].(*ast.Ident)
+				if !ok {
+					t.Errorf("%s: %s's hook flag is not true, false or its caller's own", where, selector.Sel.Name)
+					return true
+				}
+				switch flag.Name {
+				case "true":
+					hookedCount += 1
+					if slices.Contains(nonceKinds, kind) || strings.Contains(kind, "nonce") || nonceLength {
+						t.Errorf("%s: %s hooks a nonce, which the privacy capture refuses", where, selector.Sel.Name)
+					}
+				case "false":
+					if !slices.Contains(nonceKinds, kind) {
+						t.Errorf("%s: %s leaves %q unhooked, which only %v may be", where, selector.Sel.Name, kind, nonceKinds)
+					}
+					if !nonceLength {
+						t.Errorf("%s: %s leaves %q unhooked at a length that is not the suite's nonce length", where, selector.Sel.Name, kind)
+					}
+					unhookedKindCounts[kind] += 1
+				case "hook":
+					// deriveTreeSecret alone hands its caller's flag on
+					if function.Name.Name != "deriveTreeSecret" {
+						t.Errorf("%s: %s hands on a hook flag it was given", where, function.Name.Name)
+					}
+				default:
+					t.Errorf("%s: %s's hook flag is %s, not a literal", where, selector.Sel.Name, flag.Name)
+				}
+				return true
+			})
+		}
+	}
+	for _, kind := range nonceKinds {
+		if unhookedKindCounts[kind] != 1 {
+			t.Errorf("%s is derived unhooked %d times, want once", kind, unhookedKindCounts[kind])
+		}
+	}
+	if hookedCount == 0 {
+		t.Errorf("found no hooked expansion: the scan has stopped seeing them")
+	}
+}

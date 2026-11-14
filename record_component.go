@@ -50,7 +50,11 @@ func (self *recordComponent) Attach(env *SidecarEnv) error {
 	return nil
 }
 
-// Waits for the last generation's loop, whose context has ended by now.
+// Waits for the last generation's loop, whose context has ended by now, then writes the reach receipts still open
+// (record_reach.go's exit row), which needs no generation: an append journals.
 func (self *recordComponent) Close() {
 	self.runs.Wait()
+	if reach := self.record.reachIfMade(); reach != nil {
+		reach.Close()
+	}
 }

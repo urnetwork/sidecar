@@ -794,11 +794,13 @@ func (self *Purger) reportFreed(commit *PurgeCommit, byteCount int64, deleted bo
 type headPurgeNewest struct {
 	heads   *HeadStore
 	records *RecordCache
+	// finds a window version's record once evacuation emptied its batch (QD-664)
+	locator *RecordLocator
 }
 
 // The engine's reader of a path's newest version, for its Purger.
 func (self *EvsEngine) PurgeNewest() PurgeNewestReader {
-	return &headPurgeNewest{heads: self.heads, records: self.records}
+	return &headPurgeNewest{heads: self.heads, records: self.records, locator: self.locator}
 }
 
 // A path the reread cannot judge.
@@ -817,7 +819,7 @@ func (self *headPurgeNewest) NewestNames(ctx context.Context, cluster sidecar.Bl
 	if err != nil {
 		return nil, err
 	}
-	pushes := NewRecordPushSource(self.records, cluster, repoId, refId)
+	pushes := NewRecordPushSource(self.records, self.locator, cluster, repoId, refId)
 	var newest *EvsNewest
 	for attempt := 0; attempt < 2; attempt += 1 {
 		newest, err = Newest(ctx, read.EvsEntryRead, head.Head, pushes)

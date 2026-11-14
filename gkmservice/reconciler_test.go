@@ -379,8 +379,8 @@ func TestGkmReconcilerHintsTheConfigWritersOfAKeyingRepoAnAgentCreated(t *testin
 	}
 	fixture.placeRepoBy(agentRepoId, "meta-2", agent)
 	fixture.placeRepoBy(memberRepoId, "meta-2", configWriter)
+	// the config repo is the Genesis's, whose row the state adds while the rows hold none (QD-719, QD-762)
 	rows := sidecartest.FakeGkmAuthRows(
-		&protocol.AclRepo{RepoId: configRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG},
 		&protocol.AclRepo{RepoId: agentRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL},
 		&protocol.AclRepo{RepoId: memberRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL},
 		&protocol.AclRepo{RepoId: laterRepoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL},
@@ -393,6 +393,7 @@ func TestGkmReconcilerHintsTheConfigWritersOfAKeyingRepoAnAgentCreated(t *testin
 		IdentityKeys: map[sidecar.Id][]byte{},
 		RepoReaders:  map[sidecar.Id][]sidecar.Id{configRepoId: {configWriter, otherWriter, agent}, agentRepoId: {agent, configWriter}},
 		RepoWriters:  map[sidecar.Id][]sidecar.Id{configRepoId: {configWriter}, agentRepoId: {agent}, memberRepoId: {configWriter}},
+		ConfigRepoId: configRepoId,
 	})
 	repoIds := []sidecar.Id{configRepoId, agentRepoId, memberRepoId, laterRepoId}
 	world.awaitState(view, func() { world.state.set(world.networkId, view, repoIds, nil) })

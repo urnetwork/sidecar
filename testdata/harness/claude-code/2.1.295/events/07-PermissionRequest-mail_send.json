@@ -1,0 +1,1 @@
+{"session_id":"conf-claude-0001","transcript_path":"/work/project/.transcripts/conf-claude-0001.jsonl","cwd":"/work/project","permission_mode":"default","hook_event_name":"PermissionRequest","tool_name":"mcp__ur__mail_send","tool_input":{"from_alias":"agent","to":["someone@mail.example"],"subject":"build report","text":"the build passed"}}

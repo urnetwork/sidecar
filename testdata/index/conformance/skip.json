@@ -1,0 +1,310 @@
+{
+ "about": "D6's shard test (DESIGN-DETAILS 11.2.3; QD-760): a document is skipped when its key set would encode past KeySetMax, 524,288 B, or when lone(d) = ShardLone + len(row) + dict(K) + n passes ShardBody, 1,032,192 B, with ShardLone 128 B. rows: runs, the key set as runs of first + i x step for i in [0, count), ascending and distinct across runs; row_byte_count, the row's length as its entry encodes it; lone, lone(d) in bytes; skipped, the verdict. dict(K) = vlen(B) + the sum over blocks j of (3 + vlen(o_j) + vlen(64 x j)) + the sum over keys of (6 - p_i), B = ceil(n / 64), p_i 0 at a block's first key and else the high bytes k_i shares with k_(i-1), 2, 1 or 0; o_j the sum of (6 - p_i) over the keys before block j; 1 for no key. The rows were chosen by hand and their values computed from that rule by a reference written apart from both implementations; neither rewrites this file, which SIDECAR_WRITE_VECTORS does not reach.",
+ "shard_body": 1032192,
+ "shard_lone": 128,
+ "key_set_max": 524288,
+ "rows": [
+  {
+   "name": "the empty set",
+   "runs": [],
+   "row_byte_count": 36,
+   "lone": 165,
+   "skipped": false
+  },
+  {
+   "name": "one key",
+   "runs": [
+    {
+     "first": 6382179,
+     "count": 1,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 177,
+   "skipped": false
+  },
+  {
+   "name": "63 keys, one block short of full",
+   "runs": [
+    {
+     "first": 2105344,
+     "count": 63,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 487,
+   "skipped": false
+  },
+  {
+   "name": "64 keys, one full block",
+   "runs": [
+    {
+     "first": 2105344,
+     "count": 64,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 492,
+   "skipped": false
+  },
+  {
+   "name": "65 keys, a second block of one",
+   "runs": [
+    {
+     "first": 2105344,
+     "count": 65,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 505,
+   "skipped": false
+  },
+  {
+   "name": "129 keys, a third block of one",
+   "runs": [
+    {
+     "first": 2105344,
+     "count": 129,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 834,
+   "skipped": false
+  },
+  {
+   "name": "a block's first key sharing no byte with the key before it",
+   "runs": [
+    {
+     "first": 0,
+     "count": 64,
+     "step": 1
+    },
+    {
+     "first": 65536,
+     "count": 1,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 505,
+   "skipped": false
+  },
+  {
+   "name": "a block's first key sharing one byte with the key before it",
+   "runs": [
+    {
+     "first": 0,
+     "count": 64,
+     "step": 1
+    },
+    {
+     "first": 256,
+     "count": 1,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 505,
+   "skipped": false
+  },
+  {
+   "name": "a block's first key sharing two bytes with the key before it",
+   "runs": [
+    {
+     "first": 0,
+     "count": 65,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 505,
+   "skipped": false
+  },
+  {
+   "name": "a block's second key sharing no byte with its first",
+   "runs": [
+    {
+     "first": 0,
+     "count": 64,
+     "step": 1
+    },
+    {
+     "first": 65536,
+     "count": 1,
+     "step": 1
+    },
+    {
+     "first": 131072,
+     "count": 1,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 512,
+   "skipped": false
+  },
+  {
+   "name": "a block's second key sharing one byte with its first",
+   "runs": [
+    {
+     "first": 0,
+     "count": 64,
+     "step": 1
+    },
+    {
+     "first": 65536,
+     "count": 1,
+     "step": 1
+    },
+    {
+     "first": 65792,
+     "count": 1,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 511,
+   "skipped": false
+  },
+  {
+   "name": "a block's second key sharing two bytes with its first",
+   "runs": [
+    {
+     "first": 0,
+     "count": 64,
+     "step": 1
+    },
+    {
+     "first": 65536,
+     "count": 2,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 510,
+   "skipped": false
+  },
+  {
+   "name": "entries and list offsets of one, two and three bytes",
+   "runs": [
+    {
+     "first": 0,
+     "count": 20480,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 105763,
+   "skipped": false
+  },
+  {
+   "name": "keys 0 to 199,607 under a 36 B row: lone is ShardBody",
+   "runs": [
+    {
+     "first": 0,
+     "count": 199608,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 1032192,
+   "skipped": false
+  },
+  {
+   "name": "keys 0 to 199,608 under a 36 B row",
+   "runs": [
+    {
+     "first": 0,
+     "count": 199609,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 1032197,
+   "skipped": true
+  },
+  {
+   "name": "keys 0 to 199,607 under a 37 B row",
+   "runs": [
+    {
+     "first": 0,
+     "count": 199608,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 37,
+   "lone": 1032193,
+   "skipped": true
+  },
+  {
+   "name": "a step of 64",
+   "runs": [
+    {
+     "first": 64,
+     "count": 4000,
+     "step": 64
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 21735,
+   "skipped": false
+  },
+  {
+   "name": "a step of 256",
+   "runs": [
+    {
+     "first": 256,
+     "count": 4000,
+     "step": 256
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 24692,
+   "skipped": false
+  },
+  {
+   "name": "a step of 65,536",
+   "runs": [
+    {
+     "first": 0,
+     "count": 256,
+     "step": 65536
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 1982,
+   "skipped": false
+  },
+  {
+   "name": "a row at its cap",
+   "runs": [
+    {
+     "first": 3145728,
+     "count": 1000,
+     "step": 3
+    }
+   ],
+   "row_byte_count": 2048,
+   "lone": 7326,
+   "skipped": false
+  },
+  {
+   "name": "a set past KeySetMax",
+   "runs": [
+    {
+     "first": 0,
+     "count": 524286,
+     "step": 1
+    }
+   ],
+   "row_byte_count": 36,
+   "lone": 2711448,
+   "skipped": true
+  }
+ ]
+}

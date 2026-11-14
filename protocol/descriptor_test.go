@@ -288,7 +288,7 @@ func TestServiceEnumNumbersStable(t *testing.T) {
 			want: map[string]int32{
 				"SMTP_PREAMBLE_CODE_UNSPECIFIED": 0, "SMTP_PREAMBLE_OK": 1, "SMTP_PREAMBLE_HALTED": 2,
 				"SMTP_PREAMBLE_QUOTA": 3, "SMTP_PREAMBLE_DENIED": 4, "SMTP_PREAMBLE_NO_MX": 5, "SMTP_PREAMBLE_NO_TLS": 6,
-				"SMTP_PREAMBLE_TRY_LATER": 7,
+				"SMTP_PREAMBLE_TRY_LATER": 7, "SMTP_PREAMBLE_KEYS": 8,
 			},
 		},
 		{
@@ -441,6 +441,16 @@ func TestPhaseReservations(t *testing.T) {
 		{message: "AclRepo", field: "lock", number: 10},
 		{message: "AclRepo", field: "holders_shrunk_at", number: 11},
 		{message: "CanonicalAction", field: "versioning", number: 37},
+		// QD-212's reservation (DESIGN-DETAILS 16.2.2): M2 checks and folds a RepoPrefixRules, M6 enforces it
+		{message: "RepoPrefixRules", field: "repo_id", number: 2},
+		{message: "RepoPrefixRules", field: "sealed_rules", number: 3},
+		{message: "AclRepo", field: "prefix_rules", number: 12},
+		{message: "AclRepoPrefixRulesRow", field: "signer", number: 1},
+		{message: "AclRepoPrefixRulesRow", field: "at", number: 2},
+		{message: "PrefixRuleSet", field: "rules", number: 1},
+		{message: "PrefixRule", field: "subject", number: 1},
+		{message: "PrefixRule", field: "path", number: 2},
+		{message: "PrefixRule", field: "action", number: 3},
 	}
 	for _, c := range fields {
 		field := testMessage(t, c.message).Fields().ByName(c.field)
@@ -464,6 +474,12 @@ func TestPhaseReservations(t *testing.T) {
 	}
 	if bridge.SignedType_SIGNED_REPO_VERSIONING != 0x110D {
 		t.Errorf("RepoVersioning's type is %#x", int32(bridge.SignedType_SIGNED_REPO_VERSIONING))
+	}
+	if bridge.SignedType_SIGNED_REPO_PREFIX_RULES != 0x1111 {
+		t.Errorf("RepoPrefixRules' type is %#x", int32(bridge.SignedType_SIGNED_REPO_PREFIX_RULES))
+	}
+	if PrefixAction_PREFIX_ACTION_WRITE != 1 || len(PrefixAction_name) != 2 {
+		t.Errorf("PrefixAction holds %v", PrefixAction_name)
 	}
 }
 
@@ -665,7 +681,8 @@ func TestStatementsOpenWithHeader(t *testing.T) {
 		"IndexerSet", "RecoveryBind", "RecoveryRebind", "KeyRegister", "KeyRevoke", "Delegation", "DelegationRevoke",
 		"AuthorityProposal", "AuthorityCosign", "RecoveryVeto",
 		"GrantActivate", "GrantRevoke", "Suspend", "Unsuspend", "EvsShare", "OwnerConfirm", "RepoCreate", "RepoAdmin",
-		"RepoGrant", "RepoRevoke", "RepoDelete", "RepoRestore", "RepoVersioning", "AuditOptIn", "AuditOptOut",
+		"RepoGrant", "RepoRevoke", "RepoDelete", "RepoRestore", "RepoVersioning", "RepoPrefixRules", "AuditOptIn",
+		"AuditOptOut",
 		"BridgeAddress", "BridgeRoute", "BridgeMap", "BridgeEgress", "BridgeAlias", "BridgeWithdraw",
 	}
 	for _, name := range statements {
@@ -719,6 +736,8 @@ func TestSealedStatementsShowOnlyIds(t *testing.T) {
 			fields:  []string{"ed25519_public_key_sha256", "header", "member_id", "prev_sha256", "reason", "sealed_body"},
 		},
 		{message: "RepoVersioning", fields: []string{"header", "lock", "repo_id", "sealed_rules"}},
+		// api-7 sees that a set exists, its signer, position and padded length, never a rule (DESIGN-DETAILS 16.8)
+		{message: "RepoPrefixRules", fields: []string{"header", "repo_id", "sealed_rules"}},
 	}
 	for _, c := range cases {
 		messageFields := testMessage(t, c.message).Fields()

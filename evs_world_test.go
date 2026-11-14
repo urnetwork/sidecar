@@ -187,6 +187,10 @@ type evsTestWorld struct {
 	statementAloneUnnamed bool
 	// the due the head records, nil for none: its generation, block and due_by_ms
 	due *protocol.EvsPathEpoch
+	// a removed path answers its removal whatever version a read asks for by number, as evs did before QD-672
+	repeatRemoval bool
+	// the ref is its signer's owned ref, as a record-class stream is, rather than the shared main
+	owned bool
 }
 
 // One token path a request showed evs, by the epoch it named it in, with the current epoch then.
@@ -258,6 +262,10 @@ func (self *evsTestWorld) pushPathEpoch(epoch uint64) {
 		Flags: uint32(protocol.EvsPushFlag_EVS_PUSH_PATH_EPOCH), PathMapSha256: evsTestBytes(fmt.Sprint("map ", epoch), 32),
 		MapSourceVersion: baseVersion, MapSourceChain: baseChain[:],
 		SealedMetadata: append(evsTestBytes(fmt.Sprint("metadata ", version), 32), evsTestBytes("metadata tail", 16)...),
+	}
+	if self.owned {
+		owner := self.signer.sidecarId
+		plan.RefKind, plan.OwnerSidecarId = protocol.EvsRefKind_EVS_REF_OWNED, &owner
 	}
 	built, err := NewEvsStatementBuilder(self.signer.sign).Build(plan)
 	if err != nil {
@@ -472,6 +480,10 @@ func (self *evsTestWorld) push(changes ...*evsTestChange) uint64 {
 	}
 	plan.RefName, plan.Base, plan.Flags, plan.NewObjects = self.nextRefName, self.nextBase, self.nextFlags, self.nextNewObjects
 	self.nextRefName, self.nextBase, self.nextFlags, self.nextNewObjects = nil, nil, 0, nil
+	if self.owned {
+		owner := self.signer.sidecarId
+		plan.RefKind, plan.OwnerSidecarId = protocol.EvsRefKind_EVS_REF_OWNED, &owner
+	}
 	type pending struct {
 		key     string
 		version uint64
@@ -596,6 +608,9 @@ func (self *evsTestWorld) headSummaryWithLock() *protocol.EvsHeadSummary {
 	for _, source := range self.sourceEpochs {
 		head.PathEpoch.Sources = append(head.PathEpoch.Sources, &protocol.EvsEpochSource{Epoch: source})
 	}
+	if self.owned {
+		head.RefKind, head.OwnerSidecarId = protocol.EvsRefKind_EVS_REF_OWNED, self.signer.sidecarId.Bytes()
+	}
 	if self.due != nil {
 		head.PathEpoch.DueGeneration, head.PathEpoch.DueBlocksCreation = self.due.GetDueGeneration(), self.due.GetDueBlocksCreation()
 		head.PathEpoch.DueByMs, head.PathEpoch.BlockUntilMs = self.due.GetDueByMs(), self.due.GetBlockUntilMs()
@@ -615,6 +630,35 @@ func (self *evsTestWorld) headSummaryWithLock() *protocol.EvsHeadSummary {
 // The index of tokenPath in a push's change tree, false when the push did not change it.
 func evsTestTreePosition(tree *EvsChangeTree, tokenPath EvsTokenPath) (int, int, bool) {
 	return tree.position(tokenPath)
+}
+
+// What the statement at version, its list under changes_root, gives a reader to show it left tokenPath alone, as evs
+// does: the adjacent leaves around the path and around each prefix its covering prefixes reach, or, for a strict
+// prefix it changed by a delta, that delta's inclusion proof in present (QD-681). The path's own change and a
+// prefix's removal get nothing.
+func evsTestAbsences(tree *EvsChangeTree, changedPrefixes []EvsTokenPath, version uint64, tokenPath EvsTokenPath) []*protocol.EvsAbsenceProof {
+	absences := []*protocol.EvsAbsenceProof{}
+	for _, absentPath := range EvsAbsencePaths(changedPrefixes, tokenPath) {
+		absence, err := tree.AbsenceProof(absentPath)
+		if err != nil {
+			part, index, present := tree.position(absentPath)
+			if !present || len(tokenPath) <= len(absentPath) {
+				continue
+			}
+			change, _, err := parseEvsChangeLeaf(tree.runs[part].leaves[index])
+			if err != nil || len(change.GetEntrySha256()) == 0 {
+				continue
+			}
+			proofs, err := tree.InclusionProof(part, index)
+			if err != nil {
+				continue
+			}
+			absence = &protocol.EvsAbsenceProof{TokenPath: absentPath.Components(), Present: proofs}
+		}
+		absence.Version = version
+		absences = append(absences, absence)
+	}
+	return absences
 }
 
 // The reply for one path at its newest version, or version, with the proofs a reader needs from pin on: named holds
@@ -675,14 +719,10 @@ func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, versi
 			if tree == nil || laterPath == nil {
 				continue
 			}
-			for _, absentPath := range EvsAbsencePaths(self.commits[later-1].parsed.ChangedPrefixes, laterPath) {
-				absence, err := tree.AbsenceProof(absentPath)
-				if err != nil {
-					continue
-				}
-				absence.Version = later
-				reply.Absences = append(reply.Absences, absence)
-			}
+			reply.Absences = append(reply.Absences, evsTestAbsences(tree, self.commits[later-1].parsed.ChangedPrefixes, later, laterPath)...)
+		}
+		if self.mutatePath != nil {
+			self.mutatePath(reply)
 		}
 		return reply, nil, nil
 	}
@@ -691,7 +731,7 @@ func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, versi
 	if served, ok := self.serveVersion[key]; ok && version == 0 {
 		version = served
 	}
-	if state.removal != nil && version == 0 {
+	if state.removal != nil && (version == 0 || self.repeatRemoval) {
 		reply.Removal = state.removal
 		commitVersion = state.removal.GetRemovalVersion()
 	} else {
@@ -743,14 +783,7 @@ func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, versi
 		if tree == nil || laterPath == nil {
 			continue
 		}
-		for _, absentPath := range EvsAbsencePaths(self.commits[later-1].parsed.ChangedPrefixes, laterPath) {
-			absence, err := tree.AbsenceProof(absentPath)
-			if err != nil {
-				continue
-			}
-			absence.Version = later
-			reply.Absences = append(reply.Absences, absence)
-		}
+		reply.Absences = append(reply.Absences, evsTestAbsences(tree, self.commits[later-1].parsed.ChangedPrefixes, later, laterPath)...)
 	}
 	if self.mutatePath != nil {
 		self.mutatePath(reply)

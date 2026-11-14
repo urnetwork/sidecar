@@ -796,7 +796,7 @@ func TestARecoveryProposesInTheAdminSetAndWaitsOutTheWindow(t *testing.T) {
 			t.Fatalf("team %v: the filing: %+v", team, result)
 		}
 		proposalRow := world.authority.PendingProposal(result.StatementId)
-		if proposalRow == nil || !result.ActivatesAfter.Equal(time.UnixMilli(proposalRow.GetWindowTimeMs()+configRecoveryWindowMs)) {
+		if proposalRow == nil || !result.ActivatesAfter.Equal(time.UnixMilli(proposalRow.GetWindowTimeMs()+DefaultConfigRecoverySettings().Window.Milliseconds())) {
 			t.Fatalf("team %v: the window: %v, activates after %v", team, proposalRow, result.ActivatesAfter)
 		}
 		if team {

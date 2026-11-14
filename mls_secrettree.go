@@ -81,22 +81,22 @@ func (self *mlsSenderRatchet) derive(generation uint32) (*mlsRatchetStep, error)
 	secret := bytes.Clone(self.secret)
 	defer func() { clear(secret) }()
 	for current := self.generation; current < generation; current++ {
-		next, err := suite.deriveTreeSecret("ratchet_secret", secret, "secret", current, suite.hashLength)
+		next, err := suite.deriveTreeSecret("ratchet_secret", true, secret, "secret", current, suite.hashLength)
 		if err != nil {
 			return nil, err
 		}
 		clear(secret)
 		secret = next
 	}
-	nonce, err := suite.deriveTreeSecret("ratchet_nonce", secret, "nonce", generation, suite.aeadNonceLength)
+	nonce, err := suite.deriveTreeSecret("ratchet_nonce", false, secret, "nonce", generation, suite.aeadNonceLength)
 	if err != nil {
 		return nil, err
 	}
-	key, err := suite.deriveTreeSecret("ratchet_key", secret, "key", generation, suite.aeadKeyLength)
+	key, err := suite.deriveTreeSecret("ratchet_key", true, secret, "key", generation, suite.aeadKeyLength)
 	if err != nil {
 		return nil, err
 	}
-	nextSecret, err := suite.deriveTreeSecret("ratchet_secret", secret, "secret", generation, suite.hashLength)
+	nextSecret, err := suite.deriveTreeSecret("ratchet_secret", true, secret, "secret", generation, suite.hashLength)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +139,7 @@ func (self *mlsSenderRatchet) next() (generation uint32, key []byte, nonce []byt
 func (self *mlsSenderRatchet) skipTo(generation uint32) error {
 	suite := self.suite
 	for self.generation < generation {
-		next, err := suite.deriveTreeSecret("ratchet_secret", self.secret, "secret", self.generation, suite.hashLength)
+		next, err := suite.deriveTreeSecret("ratchet_secret", true, self.secret, "secret", self.generation, suite.hashLength)
 		if err != nil {
 			return err
 		}
@@ -231,11 +231,11 @@ func (self *mlsSecretTree) ratchets(leaf mlsLeafIndex) (*mlsLeafRatchets, error)
 		}
 		left, _ := node.left()
 		right, _ := node.right()
-		leftSecret, err := suite.expandWithLabel("tree_node_secret", secret, "tree", []byte("left"), suite.hashLength)
+		leftSecret, err := suite.expandWithLabel("tree_node_secret", true, secret, "tree", []byte("left"), suite.hashLength)
 		if err != nil {
 			return nil, err
 		}
-		rightSecret, err := suite.expandWithLabel("tree_node_secret", secret, "tree", []byte("right"), suite.hashLength)
+		rightSecret, err := suite.expandWithLabel("tree_node_secret", true, secret, "tree", []byte("right"), suite.hashLength)
 		if err != nil {
 			return nil, err
 		}
@@ -249,11 +249,11 @@ func (self *mlsSecretTree) ratchets(leaf mlsLeafIndex) (*mlsLeafRatchets, error)
 	if !ok {
 		return nil, fmt.Errorf("mls: leaf %d's secret is gone", leaf)
 	}
-	handshakeSecret, err := suite.expandWithLabel("handshake_ratchet_secret", leafSecret, mlsRatchetHandshake, nil, suite.hashLength)
+	handshakeSecret, err := suite.expandWithLabel("handshake_ratchet_secret", true, leafSecret, mlsRatchetHandshake, nil, suite.hashLength)
 	if err != nil {
 		return nil, err
 	}
-	applicationSecret, err := suite.expandWithLabel("application_ratchet_secret", leafSecret, mlsRatchetApplication, nil, suite.hashLength)
+	applicationSecret, err := suite.expandWithLabel("application_ratchet_secret", true, leafSecret, mlsRatchetApplication, nil, suite.hashLength)
 	if err != nil {
 		return nil, err
 	}
@@ -285,11 +285,11 @@ func (self *mlsSecretTree) erase() {
 // bytes of the content ciphertext, or all of it if shorter.
 func (self *mlsCipherSuite) deriveSenderDataKey(senderDataSecret []byte, ciphertext []byte) (key []byte, nonce []byte, err error) {
 	sample := ciphertext[:min(len(ciphertext), self.hashLength)]
-	key, err = self.expandWithLabel("sender_data_key", senderDataSecret, "key", sample, self.aeadKeyLength)
+	key, err = self.expandWithLabel("sender_data_key", true, senderDataSecret, "key", sample, self.aeadKeyLength)
 	if err != nil {
 		return nil, nil, err
 	}
-	nonce, err = self.expandWithLabel("sender_data_nonce", senderDataSecret, "nonce", sample, self.aeadNonceLength)
+	nonce, err = self.expandWithLabel("sender_data_nonce", false, senderDataSecret, "nonce", sample, self.aeadNonceLength)
 	if err != nil {
 		return nil, nil, err
 	}

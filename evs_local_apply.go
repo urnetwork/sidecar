@@ -188,12 +188,6 @@ type EvsGitRef struct {
 	SettleStopped bool
 }
 
-// A token path a stopped version changed: its epoch and its key form.
-type EvsTaintedPath struct {
-	Epoch uint64 `json:"epoch"`
-	Key   string `json:"key"`
-}
-
 // EvsGitRef's stored form: ids and oids as hex.
 type evsGitRefRecord struct {
 	RefId          string           `json:"ref_id"`

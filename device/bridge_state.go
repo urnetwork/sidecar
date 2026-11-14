@@ -42,6 +42,8 @@ var bridgeRevocationKinds = map[bridge.SignedType]PostureOverlayKind{
 	bridge.SignedType_SIGNED_SUSPEND:         PostureOverlaySuspend,
 	bridge.SignedType_SIGNED_GRANT_REVOKE:    PostureOverlayGrantRevoke,
 	bridge.SignedType_SIGNED_BRIDGE_WITHDRAW: PostureOverlayBridgeWithdraw,
+	// a forwarding Delegation's revocation: its key's flows end, and none the sidecar's identity key admitted
+	bridge.SignedType_SIGNED_DELEGATION_REVOKE: PostureOverlayDelegationRevoke,
 }
 
 // The hook a host or an sdk provider installs on its provider NATs: the bridge's policy, with a binder that keeps each
@@ -107,7 +109,8 @@ func (self *Bridge) ApplyDeltas(log *PostureLog) error {
 // AclSuspendEffects' path (§8.6): narrows what is in force at once, by a revocation the sidecar role verified and is
 // applying, then publishes and ends the flows it closes, as a verified entry between states does. statementType names
 // what id is: a sidecar_id for SIGNED_SIDECAR_REVOKE, a member_id for SIGNED_MEMBER_REVOKE, a subject for
-// SIGNED_SUSPEND, a grant_id for SIGNED_GRANT_REVOKE and a rule_id, reset, for SIGNED_BRIDGE_WITHDRAW. n is the
+// SIGNED_SUSPEND, a grant_id for SIGNED_GRANT_REVOKE, a rule_id, reset, for SIGNED_BRIDGE_WITHDRAW and a forwarding
+// Delegation's delegation_id for SIGNED_DELEGATION_REVOKE, which denies that Delegation's key alone. n is the
 // revocation's own log position: it holds until a state at or past n confirms or reverses it, so no state compiled
 // before the entry, however late it finishes, no timer and no lower state removes it (DESIGN-DETAILS 12.2.5, 12.3's
 // DenialsOutlive). 0 is refused: read as the state's pin plus one, it would be dropped by a state compiled below n that
@@ -293,4 +296,21 @@ func (self *Bridge) adoptWithLock(decision PostureDecision, force bool) ([]uint6
 	testHookBarrier("bridge.adopt.after", "")
 	self.deadline.Set(next)
 	return closeTags, changed || routesChanged || zoneChanged
+}
+
+// What the bridge enforces: the posture's decision it last adopted, a copy whose BridgeState and pins the caller must
+// not change. A producer reads its pins to hand the entries above them (BRIDGE-M4-17's catch-up).
+func (self *Bridge) Decision() PostureDecision {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.decision
+}
+
+// The sidecar role, a full reader, found a base that does not compile from its head, or found it again: the posture
+// is pending until it says otherwise (Posture.SetFork), and the narrowing it publishes ends the flows it closes.
+func (self *Bridge) SetFork(fork bool) error {
+	return self.apply(func() (PostureDecision, bool, error) {
+		decision, err := self.posture.SetFork(fork)
+		return decision, false, err
+	})
 }

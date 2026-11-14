@@ -9,10 +9,12 @@
 //	          EvsRepo.BuildStreamPush and PostStreamPush (evs_stream_append.go), its entry files at the paths the caller
 //	          names and its slot object the caller's rows; a push for another writer's stream is REF_MODE here, as evs
 //	          answers another's owned ref, so no binding squats on a stream's id before its writer's first push
-//	rows      a slot row is plaintext key || salt (RECORD.md section 5.2), which the row codec wraps under fek_g and
-//	          opens; RECORD.md's 64 B rows have no slot format yet, since evs holds only 72 B wrapped 32 B keys
-//	          (question record-m2-01-slot-row-salt), so the default codec refuses (RecordSlotRowsUnsettled): no push
-//	          is built and no row slot opened until it is answered, and every other call works
+//	rows      a slot row is plaintext key || salt, 64 B (RECORD.md section 5.2), which the binding wraps under fek_g
+//	          of the push's generation as EVS-FORMAT.md's 104 B record slot row block (QD-739), one slot key a row
+//	          at its key_index, and a slot read opens again under fek of each key's generation; so an ERASE of
+//	          (slot, key_index) destroys the entry's key and salt together, and neither rides in the entry file.
+//	          Rows of another width, or past 64, or whose indexes do not ascend, are refused before anything is
+//	          journaled or sent, and a slot key that is not such a block, or does not open, refuses the slot read
 //	journal   a built push, deposit or ERASE is kept in the store under its push id before its first post, so a retry
 //	          of that push id, after a kill or an answer that never came, sends the same bytes and evs answers it as
 //	          that statement (I-EVS-3); the same push id with other content is PUSH_ID_REUSED here, recorded, as evs
@@ -26,12 +28,20 @@
 //	consume   EvsRepo.Consume, whose own journal sends a CONSUME again after a kill: its push id is the client's, not
 //	          the caller's, it consumes the deposits that stand, and one naming none that stands is PATH_CONFLICT
 //	erase     an ERASE under the caller's push id through POST .../slots/delete (evs_erase.go's buildErase), its note
-//	          the erasure id, whether it completes the erasure, and the caller's bytes; NOTHING_TO_ERASE is evs's
-//	          recorded answer
+//	          the erasure id, whether it completes the erasure, and the caller's bytes, sealed with the push's
+//	          metadata (QD-682), the ERASE creating nothing on the erasure ref; NOTHING_TO_ERASE is evs's recorded
+//	          answer
 //	read      a stream's statements walked and verified from its first; each push's payload read for its changes and
 //	          new slots, each entry file rebuilt and checked against its sealed fields, and its path found from its
 //	          tokens (below); the push's slot object is the one new slot that no entry's chain names. A version that
 //	          creates no entry file, a BASE's, is left out, and so is an entry file a later BASE removed
+//	replay    every push's changes held again, with their entry versions, to the creates-only rule as
+//	          EvsVerifier.VerifyPayloadRefRules judges a payload (QD-722), against the stream's directories as a
+//	          replay of its pushes from the first holds them: each by its plaintext path, so a path epoch's new tokens
+//	          change nothing, at its newest version. So a directory's delta adds rows only, on that version, to a path
+//	          standing as a directory; no directory is created twice; and no file lands where the stream keeps a
+//	          directory. A read continues the replay its stream's last read left, on the same history, kept for
+//	          StreamReplayCount streams; else it replays from the first push, reading each push's payload once
 //	counter   a token path's names are section 5.2's e/<n div 4,194,304>/<(n div 2,048) mod 2,048>/<n>: the level and
 //	          leaf directories are found once each by trying their names under the push epoch's K_path, at most
 //	          StreamLevelCount and 2,048 tries, and n by trying the leaf's 2,048 names from the one after the last
@@ -39,9 +49,9 @@
 //	hints     Subscribe leases the whole repo (EvsRepo.Subscribe) and listens to the client's verified changes, and this
 //	          binding's own commits call the callbacks too, each with no lock held
 //
-// Every refusal of evs comes back as *RecordStreamRefusal with evs's code and whether evs recorded it; the slot-row
-// refusal, a pin behind, an unreachable evs or a gkm failure come back as they are. On desktop and mobile legs. Safe
-// for concurrent use.
+// Every refusal of evs comes back as *RecordStreamRefusal with evs's code and whether evs recorded it; rows refused
+// before sending, a pin behind, an unreachable evs or a gkm failure come back as they are. On desktop and mobile
+// legs. Safe for concurrent use.
 
 package sidecar
 
@@ -87,37 +97,57 @@ const (
 	recordEvsEraseDigestLabel   = "urnetwork-sidecar-v1/record-stream-erase\x00"
 )
 
-// RECORD.md's 64 B slot rows have no slot format evs takes yet (question record-m2-01-slot-row-salt): nothing was
-// built, wrapped or opened.
-var ErrRecordSlotRowUnsettled = errors.New("record slot rows wait on question record-m2-01-slot-row-salt")
-
-// How a binding keeps slot rows in evs's slot objects: under fek_g of the push's generation, in ascending key_index,
-// one slot key a row, so an ERASE of (slot, key_index) destroys exactly that row. Safe for concurrent use.
-type RecordSlotRowCodec interface {
-	// Whether rows can be wrapped: their widths and indexes, checked before anything is read or sent.
-	Check(rows []*RecordSlotRow) error
-	// The slot keys rows become under fek.
-	Wrap(fek *EvsFekKey, rows []*RecordSlotRow) ([]*protocol.EvsSlotKey, error)
-	// The rows a slot object's live keys hold, fekOf giving fek of a key's generation.
-	Open(slot *protocol.EvsSlotObject, fekOf func(generation uint64) (*EvsFekKey, error)) ([]*RecordSlotRow, error)
+// Holds a push's rows to the file header's rows row before anything is read or sent: 1 to SlotMaxKeyCount rows of
+// RECORD.md section 5.2's 64 B, their key indexes ascending below SlotMaxKeyCount.
+func checkRecordSlotRows(rows []*RecordSlotRow) error {
+	format := DefaultEvsFormatSettings()
+	if len(rows) == 0 || format.SlotMaxKeyCount < len(rows) {
+		return fmt.Errorf("%w: a slot of %d rows", ErrRecordDraftInvalid, len(rows))
+	}
+	for i, row := range rows {
+		if len(row.Row) != RecordSlotRowByteCount {
+			return fmt.Errorf("%w: a slot row of %d bytes", ErrRecordDraftInvalid, len(row.Row))
+		}
+		if uint64(format.SlotMaxKeyCount) <= uint64(row.KeyIndex) || (0 < i && row.KeyIndex <= rows[i-1].KeyIndex) {
+			return fmt.Errorf("%w: slot rows whose key indexes do not ascend below %d", ErrRecordDraftInvalid, format.SlotMaxKeyCount)
+		}
+	}
+	return nil
 }
 
-// The codec while question record-m2-01-slot-row-salt is open: it wraps and opens nothing.
-type RecordSlotRowsUnsettled struct{}
-
-// Refuses.
-func (self RecordSlotRowsUnsettled) Check(rows []*RecordSlotRow) error {
-	return ErrRecordSlotRowUnsettled
+// The slot keys rows become under fek: each row's 104 B record slot row block at its key_index, of fek's generation.
+func wrapRecordSlotRows(fek *EvsFekKey, rows []*RecordSlotRow) ([]*protocol.EvsSlotKey, error) {
+	if err := checkRecordSlotRows(rows); err != nil {
+		return nil, err
+	}
+	slotKeys := make([]*protocol.EvsSlotKey, 0, len(rows))
+	for _, row := range rows {
+		wrapped, err := EvsWrapRecordSlotRow(fek, row.Row)
+		if err != nil {
+			return nil, err
+		}
+		slotKeys = append(slotKeys, &protocol.EvsSlotKey{KeyIndex: row.KeyIndex, Generation: fek.Generation(), Wrapped: wrapped})
+	}
+	return slotKeys, nil
 }
 
-// Refuses.
-func (self RecordSlotRowsUnsettled) Wrap(fek *EvsFekKey, rows []*RecordSlotRow) ([]*protocol.EvsSlotKey, error) {
-	return nil, ErrRecordSlotRowUnsettled
-}
-
-// Refuses.
-func (self RecordSlotRowsUnsettled) Open(slot *protocol.EvsSlotObject, fekOf func(generation uint64) (*EvsFekKey, error)) ([]*RecordSlotRow, error) {
-	return nil, ErrRecordSlotRowUnsettled
+// The rows a slot object's live keys hold, each opened under fek of its own generation, which fekOf gives. A key
+// that is no record slot row block, or does not open, refuses the whole slot as ErrEvsSealInvalid: no honest writer
+// stores one, and a reader that took the rest would read a slot evs changed.
+func openRecordSlotRows(slot *protocol.EvsSlotObject, fekOf func(generation uint64) (*EvsFekKey, error)) ([]*RecordSlotRow, error) {
+	rows := make([]*RecordSlotRow, 0, len(slot.GetKeys()))
+	for _, slotKey := range slot.GetKeys() {
+		fek, err := fekOf(slotKey.GetGeneration())
+		if err != nil {
+			return nil, err
+		}
+		row, err := EvsOpenRecordSlotRow(fek, slotKey)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, &RecordSlotRow{KeyIndex: slotKey.GetKeyIndex(), Row: row})
+	}
+	return rows, nil
 }
 
 // What the binding runs by.
@@ -129,13 +159,20 @@ type RecordEvsStreamsSettings struct {
 	// The most level directories a stream's e/ holds, which a counter's search tries: §11.7's bound under e/ that
 	// RECORD.md section 5.2 keeps a stream within, 3,584. A format value.
 	StreamLevelCount int
+	// How many streams' replays of their directories the binding keeps between reads, so a later read continues one
+	// from the version it reached rather than reading every push of the stream again; past it the stream read least
+	// recently goes. A replay holds a few directories per 2,048 entries. Non-positive keeps none, so every read
+	// replays its stream from the first push.
+	StreamReplayCount int
 }
 
-// 48 h of journal, past evs's 26 h, and section 5.2's 3,584 level directories.
+// 48 h of journal, past evs's 26 h, section 5.2's 3,584 level directories, and 1,024 streams' replays, some MiB of
+// directories at most.
 func DefaultRecordEvsStreamsSettings() *RecordEvsStreamsSettings {
 	return &RecordEvsStreamsSettings{
-		JournalKeep:      48 * time.Hour,
-		StreamLevelCount: 3584,
+		JournalKeep:       48 * time.Hour,
+		StreamLevelCount:  3584,
+		StreamReplayCount: 1024,
 	}
 }
 
@@ -143,9 +180,7 @@ func DefaultRecordEvsStreamsSettings() *RecordEvsStreamsSettings {
 type RecordEvsStreamsArgs struct {
 	Client *EvsClient
 	// Where built pushes are journaled: the record component's sealed directory, or a directory under it.
-	Store SidecarStore
-	// Nil: RecordSlotRowsUnsettled.
-	RowCodec RecordSlotRowCodec
+	Store    SidecarStore
 	Settings *RecordEvsStreamsSettings
 }
 
@@ -153,7 +188,6 @@ type RecordEvsStreamsArgs struct {
 type RecordEvsStreams struct {
 	client   *EvsClient
 	store    SidecarStore
-	codec    RecordSlotRowCodec
 	settings *RecordEvsStreamsSettings
 
 	stateLock sync.Mutex
@@ -162,6 +196,9 @@ type RecordEvsStreams struct {
 	subscriberCount   uint64
 	// the leases and listeners each repo's first subscriber started, ended with its last
 	repoIdHints map[Id]func()
+	// each stream's replay as its newest read left it, and the count of reads that orders them for eviction
+	streamKeyReplays map[recordStreamKey]*recordStreamReplay
+	replayReadCount  uint64
 }
 
 // A binding on args.
@@ -173,17 +210,13 @@ func NewRecordEvsStreams(args *RecordEvsStreamsArgs) (*RecordEvsStreams, error) 
 	if settings == nil {
 		settings = DefaultRecordEvsStreamsSettings()
 	}
-	codec := args.RowCodec
-	if codec == nil {
-		codec = RecordSlotRowsUnsettled{}
-	}
 	return &RecordEvsStreams{
 		client:            args.Client,
 		store:             args.Store,
-		codec:             codec,
 		settings:          settings,
 		repoIdSubscribers: map[Id]map[uint64]func(repoId Id){},
 		repoIdHints:       map[Id]func(){},
+		streamKeyReplays:  map[recordStreamKey]*recordStreamReplay{},
 	}, nil
 }
 
@@ -420,7 +453,7 @@ func (self *RecordEvsStreams) Append(ctx context.Context, repoId Id, push *Recor
 		// another's owned ref, as evs answers it (§11.8's refs table)
 		return nil, &RecordStreamRefusal{Code: protocol.EvsRefusalCode_EVS_REFUSAL_REF_MODE}
 	}
-	if err := self.codec.Check(push.SlotRows); err != nil {
+	if err := checkRecordSlotRows(push.SlotRows); err != nil {
 		return nil, err
 	}
 	repo := self.client.Repo(repoId)
@@ -438,7 +471,7 @@ func (self *RecordEvsStreams) Append(ctx context.Context, repoId Id, push *Recor
 			RefName:  RecordStreamRefName(push.WriterSidecarId),
 			PushId:   push.PushId,
 			SlotId:   push.SlotId,
-			SlotKeys: func(fek *EvsFekKey) ([]*protocol.EvsSlotKey, error) { return self.codec.Wrap(fek, push.SlotRows) },
+			SlotKeys: func(fek *EvsFekKey) ([]*protocol.EvsSlotKey, error) { return wrapRecordSlotRows(fek, push.SlotRows) },
 			Files:    files,
 			AuthPin:  push.AuthPin,
 		})
@@ -545,42 +578,82 @@ func newRecordStreamCounters(pathKey *EvsPathKey) (*recordStreamCounters, error)
 	}, nil
 }
 
+// A name's bytes: its decimal number.
+func recordStreamName(n uint64) []byte {
+	return []byte(strconv.FormatUint(n, 10))
+}
+
+// The level directory a under e/ whose token is levelToken, false for none within levelCount level directories.
+func (self *recordStreamCounters) level(levelToken EvsToken, levelCount int) (uint64, bool, error) {
+	level, ok := self.levelIndexes[levelToken]
+	for !ok && self.levelsTried < uint64(levelCount) {
+		token, err := EvsPathToken(self.pathKey, self.root, recordStreamName(self.levelsTried))
+		if err != nil {
+			return 0, false, err
+		}
+		self.levelIndexes[token] = self.levelsTried
+		self.levelsTried += 1
+		level, ok = self.levelIndexes[levelToken]
+	}
+	return level, ok, nil
+}
+
+// The leaf n div 2,048 whose directory's token is leafToken under level a's levelToken, false for none.
+func (self *recordStreamCounters) leaf(levelToken EvsToken, level uint64, leafToken EvsToken) (uint64, bool, error) {
+	leaf, ok := self.leafIndexes[leafToken]
+	if !ok && !self.leafLevelsHit[levelToken] {
+		self.leafLevelsHit[levelToken] = true
+		for b := uint64(0); b < recordStreamLeafEntryCount; b += 1 {
+			token, err := EvsPathToken(self.pathKey, levelToken, recordStreamName(b))
+			if err != nil {
+				return 0, false, err
+			}
+			self.leafIndexes[token] = level*recordStreamLeafEntryCount + b
+		}
+		leaf, ok = self.leafIndexes[leafToken]
+	}
+	return leaf, ok, nil
+}
+
+// The plaintext path of the stream directory whose token path is tokenPath: "" the root, e, e/<a> or e/<a>/<b>, the
+// names section 5.2's paths hold; false for a token path no stream directory has within levelCount level directories.
+func (self *recordStreamCounters) directory(tokenPath EvsTokenPath, levelCount int) (string, bool, error) {
+	prefix := strings.TrimSuffix(recordStreamPathPrefix, "/")
+	switch {
+	case len(tokenPath) == 0:
+		return "", true, nil
+	case 3 < len(tokenPath) || tokenPath[0] != self.root:
+		return "", false, nil
+	case len(tokenPath) == 1:
+		return prefix, true, nil
+	}
+	level, ok, err := self.level(tokenPath[1], levelCount)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	if len(tokenPath) == 2 {
+		return fmt.Sprintf("%s/%d", prefix, level), true, nil
+	}
+	leaf, ok, err := self.leaf(tokenPath[1], level, tokenPath[2])
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return fmt.Sprintf("%s/%d/%d", prefix, level, leaf%recordStreamLeafEntryCount), true, nil
+}
+
 // The counter n whose stream path is tokenPath, false for a token path no stream path names within levelCount
 // level directories.
 func (self *recordStreamCounters) counter(tokenPath EvsTokenPath, levelCount int) (uint64, bool, error) {
 	if len(tokenPath) != 4 || tokenPath[0] != self.root {
 		return 0, false, nil
 	}
-	name := func(n uint64) []byte {
-		return []byte(strconv.FormatUint(n, 10))
+	level, ok, err := self.level(tokenPath[1], levelCount)
+	if err != nil || !ok {
+		return 0, false, err
 	}
-	level, ok := self.levelIndexes[tokenPath[1]]
-	for !ok && self.levelsTried < uint64(levelCount) {
-		token, err := EvsPathToken(self.pathKey, self.root, name(self.levelsTried))
-		if err != nil {
-			return 0, false, err
-		}
-		self.levelIndexes[token] = self.levelsTried
-		self.levelsTried += 1
-		level, ok = self.levelIndexes[tokenPath[1]]
-	}
-	if !ok {
-		return 0, false, nil
-	}
-	leaf, ok := self.leafIndexes[tokenPath[2]]
-	if !ok && !self.leafLevelsHit[tokenPath[1]] {
-		self.leafLevelsHit[tokenPath[1]] = true
-		for b := uint64(0); b < recordStreamLeafEntryCount; b += 1 {
-			token, err := EvsPathToken(self.pathKey, tokenPath[1], name(b))
-			if err != nil {
-				return 0, false, err
-			}
-			self.leafIndexes[token] = level*recordStreamLeafEntryCount + b
-		}
-		leaf, ok = self.leafIndexes[tokenPath[2]]
-	}
-	if !ok {
-		return 0, false, nil
+	leaf, ok, err := self.leaf(tokenPath[1], level, tokenPath[2])
+	if err != nil || !ok {
+		return 0, false, err
 	}
 	tries := []uint64{}
 	if self.next/recordStreamLeafEntryCount == leaf {
@@ -593,7 +666,7 @@ func (self *recordStreamCounters) counter(tokenPath EvsTokenPath, levelCount int
 		if n == 0 {
 			continue
 		}
-		token, err := EvsPathToken(self.pathKey, tokenPath[2], name(n))
+		token, err := EvsPathToken(self.pathKey, tokenPath[2], recordStreamName(n))
 		if err != nil {
 			return 0, false, err
 		}
@@ -603,6 +676,148 @@ func (self *recordStreamCounters) counter(tokenPath EvsTokenPath, levelCount int
 		}
 	}
 	return 0, false, nil
+}
+
+// One stream of one repo: a writer's.
+type recordStreamKey struct {
+	repoId          Id
+	writerSidecarId Id
+}
+
+// A stream's directories as a replay of its pushes from the first holds them, through a version whose C it keeps, so
+// a read continues it only on the history it replayed: see the file header's replay row. Not safe for concurrent use.
+type recordStreamReplay struct {
+	through uint64
+	chain   [sha256.Size]byte
+	// by plaintext path, "" the root
+	pathDirectories map[string]*recordStreamDirectory
+	// the binding's read count when a read last kept it, which orders the kept replays for eviction
+	readCount uint64
+}
+
+// One directory of a stream as its replay holds it: its newest version, and whether it was removed since.
+type recordStreamDirectory struct {
+	version uint64
+	removed bool
+}
+
+// A replay of no push.
+func newRecordStreamReplay(repoId Id, refId Id) *recordStreamReplay {
+	return &recordStreamReplay{chain: EvsChainStart(repoId, refId), pathDirectories: map[string]*recordStreamDirectory{}}
+}
+
+// A copy a read can carry on without changing what the binding keeps.
+func (self *recordStreamReplay) clone() *recordStreamReplay {
+	pathDirectories := make(map[string]*recordStreamDirectory, len(self.pathDirectories))
+	for path, directory := range self.pathDirectories {
+		pathDirectories[path] = &recordStreamDirectory{version: directory.version, removed: directory.removed}
+	}
+	return &recordStreamReplay{through: self.through, chain: self.chain, pathDirectories: pathDirectories}
+}
+
+// Holds one committed push to the creates-only rule with its payload's entry versions, against the directories the
+// replay holds before it (verifier.VerifyPayloadRefRules), then applies its changes: a directory written takes its
+// entry's version, and a directory removed goes with every directory below it. A file where the stream keeps a
+// directory, and a creation of a directory that stands, are refused here. Every refusal is ErrEvsStatementRefused or
+// ErrEvsVersionRule, and leaves the replay unusable.
+func (self *recordStreamReplay) apply(verifier *EvsVerifier, repoId Id, refId Id, statement *EvsVerifiedStatement, payload *EvsCheckedPayload, counters *recordStreamCounters, levelCount int) error {
+	// each change's directory path, for those at one
+	changePaths := map[*EvsCheckedChange]string{}
+	for _, change := range payload.Changes {
+		path, ok, err := counters.directory(change.TokenPath, levelCount)
+		if err != nil {
+			return err
+		}
+		if ok {
+			changePaths[change] = path
+		}
+	}
+	pathOf := func(change *EvsCheckedChange) *EvsCreatesOnlyPath {
+		path, ok := changePaths[change]
+		if !ok {
+			// no stream directory: none stands there for the replay
+			return &EvsCreatesOnlyPath{}
+		}
+		directory := self.pathDirectories[path]
+		if directory == nil || directory.removed {
+			return &EvsCreatesOnlyPath{}
+		}
+		return &EvsCreatesOnlyPath{Exists: true, Directory: true, Version: directory.version}
+	}
+	if err := verifier.VerifyPayloadRefRules(statement.Statement, repoId, refId, payload.Changes, pathOf); err != nil {
+		return err
+	}
+	for _, change := range payload.Changes {
+		path, ok := changePaths[change]
+		if !ok {
+			continue
+		}
+		if !change.WritesEntry() {
+			for held, directory := range self.pathDirectories {
+				if held == path || path == "" || strings.HasPrefix(held, path+"/") {
+					directory.removed = true
+				}
+			}
+			continue
+		}
+		entry := &protocol.EvsEntryVersion{}
+		if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
+			return fmt.Errorf("%w: a stream entry that does not parse", ErrEvsEntryRefused)
+		}
+		if entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) {
+			return fmt.Errorf("%w: a file where a stream keeps its directory %q", ErrEvsStatementRefused, path)
+		}
+		held := self.pathDirectories[path]
+		if change.Change.GetBaseEntryVersion() == 0 && held != nil && !held.removed {
+			return fmt.Errorf("%w: a creation of the stream directory %q, which stands", ErrEvsVersionRule, path)
+		}
+		self.pathDirectories[path] = &recordStreamDirectory{version: entry.GetVersion()}
+	}
+	self.through = statement.Version
+	self.chain = statement.Chain
+	return nil
+}
+
+// The replay a read of the stream key names continues: the one the binding keeps when walked, the stream's statements
+// from its first, passes through its version with its chain, else one of no push.
+func (self *RecordEvsStreams) streamReplayOf(key recordStreamKey, refId Id, walked []*EvsVerifiedStatement) *recordStreamReplay {
+	kept := func() *recordStreamReplay {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		replay := self.streamKeyReplays[key]
+		if replay == nil {
+			return nil
+		}
+		return replay.clone()
+	}()
+	if kept == nil || uint64(len(walked)) < kept.through || (0 < kept.through && walked[kept.through-1].Chain != kept.chain) {
+		return newRecordStreamReplay(key.repoId, refId)
+	}
+	return kept
+}
+
+// Keeps replay as the stream key's, the newest read's on the history that read walked, dropping the stream read least
+// recently past StreamReplayCount. Of two reads at once the later to finish is kept, which a third read continues
+// from wherever it stands, its own history checked.
+func (self *RecordEvsStreams) keepStreamReplay(key recordStreamKey, replay *recordStreamReplay) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.settings.StreamReplayCount <= 0 {
+		return
+	}
+	self.replayReadCount += 1
+	replay.readCount = self.replayReadCount
+	self.streamKeyReplays[key] = replay
+	for self.settings.StreamReplayCount < len(self.streamKeyReplays) {
+		var oldestKey recordStreamKey
+		var oldest *recordStreamReplay
+		for heldKey, held := range self.streamKeyReplays {
+			if oldest == nil || held.readCount < oldest.readCount {
+				oldestKey, oldest = heldKey, held
+			}
+		}
+		delete(self.streamKeyReplays, oldestKey)
+	}
 }
 
 // A stream's committed pushes after afterVersion, oldest first: see the file header's read and counter rows.
@@ -624,32 +839,77 @@ func (self *RecordEvsStreams) ReadStream(ctx context.Context, repoId Id, writerS
 		return nil, recordEvsRefusal(err)
 	}
 	keys := newEvsReadKeys(repo)
+	epochCounters := map[uint64]*recordStreamCounters{}
+	countersOf := func(pathEpoch uint64) (*recordStreamCounters, error) {
+		if counters := epochCounters[pathEpoch]; counters != nil {
+			return counters, nil
+		}
+		pathKey, err := keys.path(ctx, pathEpoch)
+		if err != nil {
+			return nil, err
+		}
+		counters, err := newRecordStreamCounters(pathKey)
+		if err != nil {
+			return nil, err
+		}
+		epochCounters[pathEpoch] = counters
+		return counters, nil
+	}
+	streamKey := recordStreamKey{repoId: repoId, writerSidecarId: writerSidecarId}
+	replay := self.streamReplayOf(streamKey, refId, walked)
 	// the token paths a BASE removed, which a later read of their files finds gone
 	removed := map[string]bool{}
+	// the payloads of the versions this read answers
 	payloads := map[uint64]*EvsCheckedPayload{}
 	for _, statement := range walked {
-		if statement.Version <= afterVersion && statement.Statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_BASE) == 0 {
+		base := statement.Statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_BASE) != 0
+		answered := afterVersion < statement.Version && !base
+		replayed := replay.through < statement.Version
+		if !answered && !replayed && !base {
 			continue
 		}
 		payload, err := repo.pushPayload(ctx, head, statement)
 		if err != nil {
 			return nil, recordEvsRefusal(err)
 		}
-		payloads[statement.Version] = payload
-		if statement.Statement.Push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_BASE) != 0 {
+		if base {
 			for _, change := range payload.Changes {
 				if !change.WritesEntry() {
 					removed[string(change.TokenPath.Bytes())] = true
 				}
 			}
 		}
+		if replayed {
+			var counters *recordStreamCounters
+			if 0 < len(payload.Changes) {
+				// a push of no change, a PATH_EPOCH's, names no path under its epoch's key
+				if counters, err = countersOf(statement.Statement.Push.GetPathEpoch()); err != nil {
+					return nil, err
+				}
+			}
+			if err := replay.apply(self.client.verifier, repoId, refId, statement, payload, counters, self.settings.StreamLevelCount); err != nil {
+				// a config or pin this device cannot judge at proves nothing against the signer, as a walk holds it
+				quiet := errors.Is(err, ErrEvsNoConfig) || errors.Is(err, ErrGkmAuthAhead) || errors.Is(err, ErrGkmAuthNotRetained)
+				if !quiet {
+					alarm := SidecarEvsAlarmTamper
+					if errors.Is(err, ErrEvsVersionRule) {
+						alarm = SidecarEvsAlarmVersionRule
+					}
+					self.client.alarm(repoId, refId, alarm, "", evsSignerOf(statement.Statement.Bytes))
+				}
+				return nil, err
+			}
+		}
+		if answered {
+			payloads[statement.Version] = payload
+		}
 	}
-	epochCounters := map[uint64]*recordStreamCounters{}
+	self.keepStreamReplay(streamKey, replay)
 	versions := []*RecordStreamVersion{}
 	for _, statement := range walked {
 		push := statement.Statement.Push
 		payload := payloads[statement.Version]
-		if statement.Version <= afterVersion || payload == nil || push.GetFlags()&uint32(protocol.EvsPushFlag_EVS_PUSH_BASE) != 0 {
+		if payload == nil {
 			continue
 		}
 		pushId, _ := IdFromBytes(push.GetPushId())
@@ -659,16 +919,9 @@ func (self *RecordEvsStreams) ReadStream(ctx context.Context, repoId Id, writerS
 		if push.GetAuth() != nil {
 			version.AuthPin = &bridge.AuthPin{Version: push.GetAuth().GetVersion(), Chain: bytes.Clone(push.GetAuth().GetChain())}
 		}
-		counters := epochCounters[push.GetPathEpoch()]
-		if counters == nil {
-			pathKey, err := keys.path(ctx, push.GetPathEpoch())
-			if err != nil {
-				return nil, err
-			}
-			if counters, err = newRecordStreamCounters(pathKey); err != nil {
-				return nil, err
-			}
-			epochCounters[push.GetPathEpoch()] = counters
+		counters, err := countersOf(push.GetPathEpoch())
+		if err != nil {
+			return nil, err
 		}
 		named := map[Id]bool{}
 		for _, change := range payload.Changes {
@@ -734,7 +987,8 @@ func (self *RecordEvsStreams) ReadStream(ctx context.Context, repoId Id, writerS
 	return versions, nil
 }
 
-// A slot object's live rows, opened by the row codec. NOT_FOUND for a slot evs does not hold.
+// A slot object's live rows, each opened from its record slot row block: see the file header's rows row. NOT_FOUND for
+// a slot evs does not hold.
 func (self *RecordEvsStreams) ReadSlot(ctx context.Context, repoId Id, slotId Id) (*RecordSlot, error) {
 	repo := self.client.Repo(repoId)
 	refId := EvsErasureRefId(repoId)
@@ -757,7 +1011,7 @@ func (self *RecordEvsStreams) ReadSlot(ctx context.Context, repoId Id, slotId Id
 		return nil, err
 	}
 	keys := newEvsReadKeys(repo)
-	rows, err := self.codec.Open(slot, func(generation uint64) (*EvsFekKey, error) { return keys.fek(ctx, generation) })
+	rows, err := openRecordSlotRows(slot, func(generation uint64) (*EvsFekKey, error) { return keys.fek(ctx, generation) })
 	if err != nil {
 		return nil, err
 	}
@@ -952,8 +1206,9 @@ func (self *RecordEvsStreams) Erase(ctx context.Context, repoId Id, erase *Recor
 	}
 	if journal == nil {
 		args := &EvsEraseArgs{ErasureId: erase.ErasureId, Complete: erase.Complete, Note: erase.SealedNote}
+		slotMaxKeyCount := DefaultEvsFormatSettings().SlotMaxKeyCount
 		for _, key := range erase.Keys {
-			if EvsSlotMaxKeyCount <= key.KeyIndex {
+			if uint64(slotMaxKeyCount) <= uint64(key.KeyIndex) {
 				return nil, fmt.Errorf("%w: key index %d", ErrRecordDraftInvalid, key.KeyIndex)
 			}
 			args.Keys = append(args.Keys, &EvsErasedKey{SlotId: key.SlotId, KeyIndex: uint16(key.KeyIndex)})
@@ -963,7 +1218,7 @@ func (self *RecordEvsStreams) Erase(ctx context.Context, repoId Id, erase *Recor
 			return nil, recordEvsRefusal(err)
 		}
 		if 0 < len(attempt.built.Parts) || 0 < len(attempt.receipts) {
-			return nil, fmt.Errorf("%w: an ERASE whose note is past one inline part", ErrRecordDraftInvalid)
+			return nil, fmt.Errorf("%w: an ERASE whose note is past one part", ErrRecordDraftInvalid)
 		}
 		journal = &recordEvsJournal{
 			Kind: recordEvsJournalErase, PushId: erase.PushId, Digest: digest, RefId: EvsErasureRefId(repoId),

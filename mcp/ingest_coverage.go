@@ -134,6 +134,7 @@ func (self *Ingest) detach() {
 // Ends every live run now: what the daemon calls at shutdown, so each run's coverage is sealed rather than left to
 // the next start's downtime gap.
 func (self *Ingest) Close(ctx context.Context) {
+	self.stopFileWatches()
 	runs := func() []*ingestRun {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()

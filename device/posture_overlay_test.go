@@ -11,6 +11,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
+	"math"
 	"slices"
 	"sync"
 	"testing"
@@ -387,87 +388,223 @@ func TestAnUnsuspendLiftsNothingUntilAState(t *testing.T) {
 	}
 }
 
+// The PostureAlarmCompileOverdue alarms decision holds.
+func postureOverdueAlarms(decision PostureDecision) []PostureAlarm {
+	alarms := []PostureAlarm{}
+	for _, alarm := range decision.Alarms {
+		if alarm.Kind == PostureAlarmCompileOverdue {
+			alarms = append(alarms, alarm)
+		}
+	}
+	return alarms
+}
+
+// A posture enforcing at the fixture's base 1 and pin 3 on clock, and a SidecarRevoke after the pin that it cannot
+// check, by a signer the rows do not hold, applied at the clock's time: what it returns.
+func (self *postureFixture) uncheckableRevocation(store PostureStore, settings *PostureSettings) (*Posture, uint64) {
+	self.t.Helper()
+	posture, _ := NewPosture(store, settings)
+	self.base(self.ownerPhone, true)
+	self.tick()
+	self.tick()
+	if _, err := posture.SetPending(self.pending()); err != nil {
+		self.t.Fatal(err)
+	}
+	if _, err := posture.SetState(self.state(3, true), self.log(1, 3)); err != nil {
+		self.t.Fatal(err)
+	}
+	revoke := self.uncheckableRevoke()
+	decision, err := posture.ApplyDeltas(self.log(revoke, revoke))
+	if err != nil || decision.State != PostureEnforcingDocument || decision.BridgeState.GetAuth().GetVersion() != 3 ||
+		len(decision.Overlay) != 0 || len(decision.Waiting) != 1 || decision.Waiting[0].N != revoke ||
+		!decision.Waiting[0].FirstSeen.Equal(settings.Now()) || decision.Overdue != nil || decision.Changed {
+		self.t.Fatalf("the revocation: %v, %v, overlay %+v, waiting %+v, overdue %+v", err, decision.State, decision.Overlay, decision.Waiting, decision.Overdue)
+	}
+	return posture, revoke
+}
+
+// A SidecarRevoke of the agent at the next position by a signer the rows do not hold: one the posture cannot check.
+func (self *postureFixture) uncheckableRevoke() uint64 {
+	stranger := &postureFixtureSidecar{id: postureFixtureId(0x7a), key: postureFixtureKey(0x7a), member: self.owner}
+	return self.sidecarRevoke(stranger, self.agent, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST)
+}
+
+// Checks that decision, read at age minutes of the entry at n first seen at firstSeen, is still enforcing and
+// reports n Overdue with that age and its next point at next minutes, and that the overdue alarm it holds names
+// alarmN at alarmAge minutes, the last raise.
+func checkPostureOverdue(t *testing.T, decision PostureDecision, firstSeen time.Time, n uint64, age int, next int, alarmN uint64, alarmAge int) {
+	t.Helper()
+	alarms := postureOverdueAlarms(decision)
+	if decision.State != PostureEnforcingDocument || decision.Overdue == nil || decision.Overdue.N != n ||
+		decision.Overdue.Age != time.Duration(age)*time.Minute ||
+		!decision.Overdue.NextAlarmAt.Equal(firstSeen.Add(time.Duration(next)*time.Minute)) || len(alarms) != 1 ||
+		alarms[0].N != alarmN || alarms[0].Age != time.Duration(alarmAge)*time.Minute {
+		t.Fatalf("at %d min: %v, overdue %+v, alarms %v", age, decision.State, decision.Overdue, decision.Alarms)
+	}
+}
+
 // A SidecarRevoke the posture cannot check, by a signer the rows do not hold, leaves the decision and the state in
-// force as they were and waits; at 10 minutes on a fake clock the decision reports it Overdue and the posture alarms,
-// once, then again at 20, across a restart, which raises it once more at its first decision; a state at its position
-// clears it, and nothing is ever pending.
+// force as they were and waits; on a fake clock the decision reports it Overdue from 10 minutes on and the posture
+// alarms at 10, not at 20, again at 30 and at 70 (QD-696's doubling); a restart raises it once at its first decision and
+// keeps the intervals, which follow the first sight the manifest holds; a state at its position clears it, and
+// nothing is ever pending.
 func TestAnUncheckableRevocationAlarmsAndKeepsTheState(t *testing.T) {
 	fixture := newPostureFixture(t)
 	clock := newPostureTestClock()
 	settings := testPostureSettingsOn(clock)
 	store := newMemoryPostureStore()
-	posture, _ := NewPosture(store, settings)
-	fixture.base(fixture.ownerPhone, true)
-	fixture.tick()
-	fixture.tick()
-	if _, err := posture.SetPending(fixture.pending()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := posture.SetState(fixture.state(3, true), fixture.log(1, 3)); err != nil {
-		t.Fatal(err)
-	}
 	firstSeen := clock.Now()
-	stranger := &postureFixtureSidecar{id: postureFixtureId(0x7a), key: postureFixtureKey(0x7a), member: fixture.owner}
-	revoke := fixture.sidecarRevoke(stranger, fixture.agent, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST)
-	decision, err := posture.ApplyDeltas(fixture.log(revoke, revoke))
-	if err != nil || decision.State != PostureEnforcingDocument || decision.BridgeState.GetAuth().GetVersion() != 3 ||
-		len(decision.Overlay) != 0 || len(decision.Waiting) != 1 || decision.Waiting[0].N != revoke ||
-		!decision.Waiting[0].FirstSeen.Equal(firstSeen) || decision.Overdue != nil || decision.Changed {
-		t.Fatalf("the revocation: %v, %v, overlay %+v, waiting %+v, overdue %+v", err, decision.State, decision.Overlay, decision.Waiting, decision.Overdue)
-	}
-	overdueAlarms := func(decision PostureDecision) []PostureAlarm {
-		alarms := []PostureAlarm{}
-		for _, alarm := range decision.Alarms {
-			if alarm.Kind == PostureAlarmCompileOverdue {
-				alarms = append(alarms, alarm)
-			}
-		}
-		return alarms
-	}
+	posture, revoke := fixture.uncheckableRevocation(store, settings)
 	clock.advance(10*time.Minute - time.Second)
-	if decision := posture.Decision(); decision.Overdue != nil || len(overdueAlarms(decision)) != 0 {
+	if decision := posture.Decision(); decision.Overdue != nil || len(postureOverdueAlarms(decision)) != 0 {
 		t.Fatalf("before 10 min: %+v, %v", decision.Overdue, decision.Alarms)
 	}
 	clock.advance(time.Second)
-	decision = posture.Decision()
-	alarms := overdueAlarms(decision)
-	if decision.State != PostureEnforcingDocument || decision.Overdue == nil || decision.Overdue.N != revoke ||
-		decision.Overdue.Age != 10*time.Minute || !decision.Overdue.NextAlarmAt.Equal(firstSeen.Add(20*time.Minute)) ||
-		len(alarms) != 1 || alarms[0].N != revoke || alarms[0].Age != 10*time.Minute {
-		t.Fatalf("at 10 min: %v, %+v, %v", decision.State, decision.Overdue, decision.Alarms)
-	}
-	// raised once a point: the same alarm is what a later read finds
+	checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, 10, 30, revoke, 10)
+	// raised once a point: the same alarm is what later reads find, and 20 min is no point
 	clock.advance(5 * time.Minute)
-	decision = posture.Decision()
-	if alarms := overdueAlarms(decision); decision.Overdue.Age != 15*time.Minute || len(alarms) != 1 || alarms[0].Age != 10*time.Minute {
-		t.Fatalf("at 15 min: %+v, %v", decision.Overdue, decision.Alarms)
+	checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, 15, 30, revoke, 10)
+	clock.advance(5 * time.Minute)
+	checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, 20, 30, revoke, 10)
+	clock.advance(10*time.Minute - time.Second)
+	if decision := posture.Decision(); decision.Overdue == nil || len(postureOverdueAlarms(decision)) != 1 || postureOverdueAlarms(decision)[0].Age != 10*time.Minute {
+		t.Fatalf("just before 30 min: %+v, %v", decision.Overdue, decision.Alarms)
 	}
-	// a restart keeps the first sight, and raises the alarm once at its first decision
-	posture, decision = NewPosture(store.survivor(), settings)
-	alarms = overdueAlarms(decision)
-	if decision.State != PostureEnforcingDocument || len(decision.Waiting) != 1 || !decision.Waiting[0].FirstSeen.Equal(firstSeen) ||
-		decision.Overdue == nil || decision.Overdue.Age != 15*time.Minute || len(alarms) != 1 || alarms[0].Age != 15*time.Minute {
-		t.Fatalf("restored at 15 min: %v, %+v, %+v, %v", decision.State, decision.Waiting, decision.Overdue, decision.Alarms)
+	clock.advance(time.Second)
+	checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, 30, 70, revoke, 30)
+	// a restart keeps the first sight and raises once at its first decision, for the newest point passed
+	clock.advance(10 * time.Minute)
+	posture, decision := NewPosture(store.survivor(), settings)
+	if len(decision.Waiting) != 1 || !decision.Waiting[0].FirstSeen.Equal(firstSeen) {
+		t.Fatalf("restored waiting %+v", decision.Waiting)
 	}
+	checkPostureOverdue(t, decision, firstSeen, revoke, 40, 70, revoke, 40)
 	clock.advance(time.Minute)
-	if alarms := overdueAlarms(posture.Decision()); len(alarms) != 1 || alarms[0].Age != 15*time.Minute {
-		t.Fatalf("at 16 min: %v", alarms)
-	}
-	clock.advance(4 * time.Minute)
-	decision = posture.Decision()
-	alarms = overdueAlarms(decision)
-	if decision.Overdue == nil || !decision.Overdue.NextAlarmAt.Equal(firstSeen.Add(30*time.Minute)) || len(alarms) != 1 ||
-		alarms[0].Age != 20*time.Minute || decision.State != PostureEnforcingDocument {
-		t.Fatalf("at 20 min: %+v, %v", decision.Overdue, decision.Alarms)
-	}
+	checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, 41, 70, revoke, 40)
+	// and keeps the intervals: the next raise is at 70, not 40 min after the restart
+	clock.advance(29 * time.Minute)
+	checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, 70, 150, revoke, 70)
 	// the state that judged it clears it
-	decision, err = posture.SetState(fixture.state(revoke, true), nil)
-	if err != nil || len(decision.Waiting) != 0 || decision.Overdue != nil || len(overdueAlarms(decision)) != 0 {
+	decision, err := posture.SetState(fixture.state(revoke, true), nil)
+	if err != nil || len(decision.Waiting) != 0 || decision.Overdue != nil || len(postureOverdueAlarms(decision)) != 0 ||
+		decision.State != PostureEnforcingDocument {
 		t.Fatalf("the state: %v, %+v, %+v, %v", err, decision.Waiting, decision.Overdue, decision.Alarms)
 	}
 	clock.advance(time.Hour)
-	if decision := posture.Decision(); decision.Overdue != nil || len(overdueAlarms(decision)) != 0 {
+	if decision := posture.Decision(); decision.Overdue != nil || len(postureOverdueAlarms(decision)) != 0 {
 		t.Errorf("after the state: %+v, %v", decision.Overdue, decision.Alarms)
+	}
+}
+
+// A second uncheckable entry first seen at 100 min raises the alarm at once at its own 10 min, 110, between the
+// repeats at 70 and 150, naming itself; the repeats do not move, and each names the oldest entry, which Overdue
+// reports throughout (Fwd.tla's RepeatsOnly twin on real code: a further entry never waits for a repeat).
+func TestAFurtherOverdueEntryAlarmsAtOnce(t *testing.T) {
+	fixture := newPostureFixture(t)
+	clock := newPostureTestClock()
+	settings := testPostureSettingsOn(clock)
+	firstSeen := clock.Now()
+	posture, revoke := fixture.uncheckableRevocation(newMemoryPostureStore(), settings)
+	clock.advance(10 * time.Minute)
+	checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, 10, 30, revoke, 10)
+	clock.advance(20 * time.Minute)
+	checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, 30, 70, revoke, 30)
+	clock.advance(40 * time.Minute)
+	checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, 70, 150, revoke, 70)
+	clock.advance(30 * time.Minute)
+	second := fixture.uncheckableRevoke()
+	decision, err := posture.ApplyDeltas(fixture.log(second, second))
+	if err != nil || len(decision.Waiting) != 2 || decision.Waiting[1].N != second || !decision.Waiting[1].FirstSeen.Equal(clock.Now()) ||
+		len(postureOverdueAlarms(decision)) != 0 || decision.Overdue == nil || !decision.Overdue.NextAlarmAt.Equal(firstSeen.Add(110*time.Minute)) {
+		t.Fatalf("the second at 100 min: %v, waiting %+v, overdue %+v, alarms %v", err, decision.Waiting, decision.Overdue, decision.Alarms)
+	}
+	clock.advance(10*time.Minute - time.Second)
+	if decision := posture.Decision(); len(postureOverdueAlarms(decision)) != 0 {
+		t.Fatalf("just before 110 min: %v", decision.Alarms)
+	}
+	clock.advance(time.Second)
+	// its own point names it, at its own age; Overdue still reports the oldest, and the next point is 150's repeat
+	checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, 110, 150, second, 10)
+	clock.advance(39 * time.Minute)
+	checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, 149, 150, second, 10)
+	clock.advance(time.Minute)
+	checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, 150, 310, revoke, 150)
+	// a state judging the oldest leaves the second, whose first sight the repeats follow from then on: its 30 min
+	// point, 130, has passed and a raise at 150 stands for it, so the next is its 70, at 170 of the first's clock
+	decision, err = posture.SetState(fixture.state(revoke, true), nil)
+	if err != nil || len(decision.Waiting) != 1 || decision.Waiting[0].N != second || decision.Overdue == nil ||
+		decision.Overdue.N != second || decision.Overdue.Age != 50*time.Minute || !decision.Overdue.NextAlarmAt.Equal(firstSeen.Add(170*time.Minute)) ||
+		len(postureOverdueAlarms(decision)) != 0 {
+		t.Fatalf("the state at the first: %v, waiting %+v, overdue %+v, alarms %v", err, decision.Waiting, decision.Overdue, decision.Alarms)
+	}
+	clock.advance(20 * time.Minute)
+	if decision := posture.Decision(); len(postureOverdueAlarms(decision)) != 1 || postureOverdueAlarms(decision)[0].N != second ||
+		postureOverdueAlarms(decision)[0].Age != 70*time.Minute {
+		t.Fatalf("at 170 min: %+v, %v", decision.Overdue, decision.Alarms)
+	}
+}
+
+// The repeats back off to once a day: an entry no state judges raises the alarm at 10, 30, 70, 150, 310, 630, 1,270
+// and 2,550 min of its age, then every 1,440, and at no time between (QD-696, DESIGN-DETAILS 4.2.5's schedule).
+func TestTheOverdueAlarmBacksOffToOnceADay(t *testing.T) {
+	fixture := newPostureFixture(t)
+	clock := newPostureTestClock()
+	settings := testPostureSettingsOn(clock)
+	firstSeen := clock.Now()
+	posture, revoke := fixture.uncheckableRevocation(newMemoryPostureStore(), settings)
+	points := []int{10, 30, 70, 150, 310, 630, 1270, 2550, 3990, 5430, 6870}
+	previous := 0
+	for index, point := range points[:len(points)-1] {
+		// a minute before the point the previous raise is still the one held
+		clock.advance(time.Duration(point-previous-1) * time.Minute)
+		decision := posture.Decision()
+		if alarms := postureOverdueAlarms(decision); previous == 0 && len(alarms) != 0 ||
+			previous != 0 && (len(alarms) != 1 || alarms[0].Age != time.Duration(previous)*time.Minute) {
+			t.Fatalf("a minute before %d min: %v", point, decision.Alarms)
+		}
+		clock.advance(time.Minute)
+		checkPostureOverdue(t, posture.Decision(), firstSeen, revoke, point, points[index+1], revoke, point)
+		previous = point
+	}
+}
+
+// The repeats' arithmetic at its edges: the defaults' schedule, a cap below the first doubling, a cap of zero that
+// keeps doubling, and an age far past any point, which neither overflows nor loops for long.
+func TestOverdueRepeatsAtTheirEdges(t *testing.T) {
+	type repeatsCase struct {
+		age         time.Duration
+		timeout     time.Duration
+		maxInterval time.Duration
+		ok          bool
+		last        time.Duration
+		next        time.Duration
+	}
+	minutes := func(count int64) time.Duration {
+		return time.Duration(count) * time.Minute
+	}
+	cases := []repeatsCase{
+		{age: minutes(9), timeout: minutes(10), maxInterval: minutes(1440), ok: false, next: minutes(10)},
+		{age: minutes(10), timeout: minutes(10), maxInterval: minutes(1440), ok: true, last: minutes(10), next: minutes(30)},
+		{age: minutes(29), timeout: minutes(10), maxInterval: minutes(1440), ok: true, last: minutes(10), next: minutes(30)},
+		{age: minutes(2549), timeout: minutes(10), maxInterval: minutes(1440), ok: true, last: minutes(1270), next: minutes(2550)},
+		{age: minutes(2550), timeout: minutes(10), maxInterval: minutes(1440), ok: true, last: minutes(2550), next: minutes(3990)},
+		{age: minutes(2550 + 1440*365 + 7), timeout: minutes(10), maxInterval: minutes(1440), ok: true, last: minutes(2550 + 1440*365), next: minutes(2550 + 1440*366)},
+		// a cap below the first doubling: every repeat after the first raise is the cap apart
+		{age: minutes(26), timeout: minutes(10), maxInterval: minutes(5), ok: true, last: minutes(25), next: minutes(30)},
+		// no cap: doubling for good
+		{age: minutes(10 + 20 + 40 + 80 + 160 + 320 + 640 + 1280 + 2560), timeout: minutes(10), maxInterval: 0, ok: true,
+			last: minutes(10 + 20 + 40 + 80 + 160 + 320 + 640 + 1280 + 2560), next: minutes(10 + 20 + 40 + 80 + 160 + 320 + 640 + 1280 + 2560 + 5120)},
+		{age: time.Duration(math.MaxInt64), timeout: minutes(10), maxInterval: 0, ok: true},
+		{age: minutes(10), timeout: 0, maxInterval: minutes(1440), ok: false},
+	}
+	for _, c := range cases {
+		last, next, ok := postureOverdueRepeats(c.age, c.timeout, c.maxInterval)
+		if ok != c.ok || (c.last != 0 || c.next != 0) && (last != c.last || next != c.next) {
+			t.Errorf("age %v, timeout %v, cap %v: last %v, next %v, %v", c.age, c.timeout, c.maxInterval, last, next, ok)
+		}
+		if ok && (c.age < last || next <= c.age && next != time.Duration(math.MaxInt64)) {
+			t.Errorf("age %v: last %v and next %v do not bracket it", c.age, last, next)
+		}
 	}
 }
 

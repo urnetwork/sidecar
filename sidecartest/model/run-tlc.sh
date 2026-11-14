@@ -10,15 +10,16 @@
 #   run-tlc.sh control <Spec> <Twin> [Name=value ...] the model at that twin's bounds, to pass
 #   run-tlc.sh live <Spec> [Name=value ...]           liveness, without symmetry or view
 #   run-tlc.sh stories <Spec> [Name=value ...]        EvsCommit's M10 stories, each at its bounds
-#   run-tlc.sh grounds <Spec> [Name=value ...]        IndexRollup's design grounds, each as it must end
+#   run-tlc.sh grounds <Spec> [Name=value ...]        a model's design grounds, each as it must end
 #   run-tlc.sh ground <Spec> <Ground> [Name=value ...] one of them
 #   run-tlc.sh list <Spec>                            the twins and the invariant each must break
 #   run-tlc.sh list-grounds <Spec>                    the grounds and what each must show
 #
 # <Spec> is EvsCommit, StoreSettle or IndexRollup. A Name=value replaces a constant of the spec's
-# cfg; Quiet=a+b leaves the named processes out (quiet_EvsCommit below; IndexRollup holds its
-# processes still by its own Still constant instead), and Script and Simulate shape a run further
-# (with_constants below). TLC names a command that runs tlc2.TLC, as in
+# cfg; Quiet=a+b leaves the named processes out (quiet_EvsCommit below; IndexRollup and StoreSettle
+# hold theirs still by their own Still constants instead), and Script and Simulate shape a run further
+# (with_constants below). Live mode runs a spec's liveness rows where it has them (lives_StoreSettle
+# below), each at its bounds, and otherwise the cfg's. TLC names a command that runs tlc2.TLC, as in
 #   TLC="java -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC" run-tlc.sh model StoreSettle
 # and TLC_FLAGS adds flags, as in TLC_FLAGS="-workers 8". Each run works in a fresh directory under
 # TMPDIR, so no state or trace file lands beside the specs. TLC prints its revision first: name it
@@ -30,7 +31,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 
 usage() {
-  sed -n '6,15p' "$0" | sed 's/^# //' >&2
+  sed -n '7,16p' "$0" | sed 's/^# //' >&2
   exit 64
 }
 
@@ -47,7 +48,11 @@ usage() {
 # source); and NoFenceRule and ResolveIgnoresPending, as at the model's hour marks a statement has
 # lapsed (5b) before its batch is old enough to evacuate, or its receipt or map is too old to pass
 # (5h, 5e) before GC or a map's reclaim acts, so every attempt a fence would end is refused anyway,
-# and a stalled one holds the key that Resolve's and the fence's head reads wait on.
+# and a stalled one holds the key that Resolve's and the fence's head reads wait on. The slot rules
+# of DESIGN-DETAILS 14.2 have their twins in details/EvsSlot.tla, this model's companion, run by
+# details/run-slot.sh: here every slot is its own statement's and a killed evacuation run sends
+# nothing, so no invariant here sees step 6 take another's object, or evacuation's origin, settle
+# age or named DELETE broken.
 seq_EvsCommit="Writers={w1} Instances={i1} Segments={s1} MaxAttempts=1 MaxFaults=0 MaxHour=0 MaxGeneration=1 MaxVersion=4"
 # The M10 part's twins run its stories (F2Run): a purge story on the committing instance alone, which
 # holds the purge's queue, and a drop story on two, whose late step 7s race the fence. PurgeUnseen
@@ -100,20 +105,25 @@ DropIgnoresHold        F2DeletesKeepRules    $m10drop
 EOF
 }
 
-# The design fails NoStaleQuorum once two DELETEs on a key stall or revert late, a question raised
-# on §19.6's rule (3), so these twins run without DELETEs, at 4 drives on 2 hosts and one
-# coordinator, with a host failure, a crash, heal and cancel only where a twin's rule needs them.
+# StoreSettle's twins run breadth-first with PUTs and DELETEs mixed, at 4 drives on 2 hosts, 2 writes
+# and one coordinator, as details/Settle.tla's twin configurations do (DESIGN-DETAILS.md 2.3), with a
+# host failure, a crash, heal and cancels only where a twin's rule needs them. A twin that must break
+# two invariants has a second row, named by its Twin value, a hyphen and a word (run_twin below):
+# DeleteReleasesEarly breaks FI-30 itself, and DeleteReleasesEarly-Settled rule (3)'s own invariant.
 small_StoreSettle="DriveCount=4 Writes={w1,w2} CoordinatorCount=1 HostFailures=0 CoordinatorCrashes=0"
 twins_StoreSettle() {
-  local small=$small_StoreSettle
+  local small=$small_StoreSettle still='Still={"heal","cancel"}'
   cat <<EOF
-ReleaseOnCancel        NoStaleQuorum        $small Quiet=deletes+heal
-NoDeadlineCheck        LateWritesNeverRead  $small Quiet=deletes+heal+cancel
-NoVersionCheck         NoStaleQuorum        $small Quiet=deletes+heal+cancel
-RevertBelowQuorumOnly  LateWritesNeverRead  $small Quiet=deletes+heal+cancel
-SettlerRevertsUnseen   NoStaleQuorum        $small HostFailures=1 CoordinatorCrashes=1 Quiet=deletes+heal+cancel
-HealMinority           NoStaleQuorum        $small Quiet=deletes+cancel
-NoDriveLock            NoStaleQuorum        $small Quiet=deletes+heal+cancel
+ReleaseOnCancel              NoStaleQuorum        $small Still={"heal"}
+NoDeadlineCheck              LateWritesNeverRead  $small $still
+NoVersionCheck               NoStaleQuorum        $small $still
+RevertBelowQuorumOnly        LateWritesNeverRead  $small $still
+SettlerRevertsUnseen         NoStaleQuorum        $small HostFailures=1 CoordinatorCrashes=1 $still
+HealMinority                 NoStaleQuorum        $small Still={"cancel"}
+NoDriveLock                  NoStaleQuorum        $small $still
+NoStamp                      NoStaleQuorum        $small MaxPuts=1 MaxDeletes=1 $still
+DeleteReleasesEarly          NoStaleQuorum        $small HostFailures=1 $still
+DeleteReleasesEarly-Settled  FailedDeleteSettled  $small $still
 EOF
 }
 
@@ -203,6 +213,62 @@ erase-windows           pass                  $d1 Events=2 Skew=TRUE Still={}
 EOF
 }
 
+# StoreSettle's design grounds. §22.8's row asks for breadth-first runs at 4 drives on 2 hosts and at 6
+# on 3, each with 2 and 3 writes, a coordinator crash and a host failure, and for simulation at 8 drives
+# with 3 writes and 2 coordinators. Its cfg is the first, with heal and cancels held still; the rest do
+# not finish breadth-first on a shared host (DESIGN-DETAILS.md 2.3 stopped details/Settle.tla at 6
+# drives with two writes at 19 M states, and at 4 drives with three writes of any kind at 38 M), so
+# they are bounded as details/Settle.tla's configurations bound them, and each must end as its row says:
+# "pass", every invariant of the cfg holding; "live", HeldKeyReleased under weak fairness without
+# symmetry (lives_StoreSettle below, which live mode runs); or an invariant violated, its trace the
+# witness. In order: the two traces of question evs-models-settle-stalled-deletes (QD-744), each
+# passing at its own bounds and refused there with twin DeleteReleasesEarly, so that a pass by
+# simulation is not one its seed could not fail. The first's bounds are the cfg's with heal and cancels
+# on, whose state outgrows the 12 GB a run may hold on a shared host (stopped twice past 138 M states,
+# no invariant violated), so heal and cancels each run beside the cfg's crash and host failure, and
+# both together by simulation with three-faults. Then the liveness rows; three writes in the two mixes
+# each counterexample needs, a PUT with two DELETEs and two PUTs with a DELETE, breadth-first and
+# without faults; then by simulation, which shows only that the behaviors it drew (Traces on each
+# worker) kept every invariant: three writes with a crash and a host failure at 4 drives, two and three
+# writes at 6 drives on 3 hosts, two writes at 8 drives deeper, and §22.8's own bounds, 8 drives, 3
+# writes, 2 coordinators and 2 host failures.
+grounds_StoreSettle() {
+  local deletes="CoordinatorCount=1 HostFailures=0 CoordinatorCrashes=0 MaxPuts=0"
+  local three="Writes={w1,w2,w3} CoordinatorCount=1 HostFailures=0 CoordinatorCrashes=0"
+  local any="Writes={w1,w2,w3} MaxPuts=3 MaxDeletes=3 Still={}"
+  cat <<EOF
+sum-heal           pass           Still={"cancel"}
+sum-cancel         pass           Still={"heal"}
+sum-early          NoStaleQuorum  Still={} Twin="DeleteReleasesEarly"
+revert             pass           DriveCount=8 $deletes Simulate=60 Traces=50000 Seed=7
+revert-early       NoStaleQuorum  DriveCount=8 $deletes Simulate=60 Traces=50000 Seed=7 Twin="DeleteReleasesEarly"
+EOF
+  lives_StoreSettle | while read -r name bounds; do
+    printf '%-18s %-14s %s\n' "live-$name" live "$bounds"
+  done
+  cat <<EOF
+three-deletes      pass           $three MaxPuts=1 MaxDeletes=2
+three-puts         pass           $three MaxPuts=2 MaxDeletes=1
+three-faults       pass           $any Simulate=70 Traces=50000 Seed=4
+six                pass           DriveCount=6 Still={} Simulate=70 Traces=50000 Seed=3
+six-three          pass           DriveCount=6 $any Simulate=70 Traces=50000 Seed=5
+eight              pass           DriveCount=8 Still={} Simulate=90 Traces=50000 Seed=2
+wide               pass           DriveCount=8 HostFailures=2 $any Simulate=60 Traces=100000 Seed=1
+EOF
+}
+
+# StoreSettle's liveness runs: HeldKeyReleased under weak fairness, without symmetry or view, so at
+# bounds narrower than its cfg's, as details/Settle.tla's liveness configurations run it: two DELETEs,
+# whose keys rule (3) holds longest; and one write of either kind beside a host failure and a crash the
+# settler settles once the host comes back. Live mode runs each row; a spec without such a table runs
+# its liveness at its cfg's bounds.
+lives_StoreSettle() {
+  cat <<'EOF'
+deletes  CoordinatorCount=1 HostFailures=0 CoordinatorCrashes=0 MaxPuts=0
+hosts    Writes={w1} MaxPuts=1 MaxDeletes=1
+EOF
+}
+
 properties_EvsCommit="RemovalGates DueEpochCommits F2DropsEnd"
 
 # EvsCommit's M10 part runs story by story (F2Run), each small enough for breadth-first search: the
@@ -256,13 +322,10 @@ quiet_IndexRollup() {
   :
 }
 
+# Nor has StoreSettle: its Still constant holds heal or cancels still, and MaxPuts and MaxDeletes bound
+# the writes the store takes of each kind.
 quiet_StoreSettle() {
-  cat <<'EOF'
-deletes    kind' = kind
-puts       \A w \in Writes : phase[w] = "waiting" /\ phase'[w] = "running" => kind'[w] = "delete"
-heal       healing' = healing
-cancel     cancelled' = cancelled
-EOF
+  :
 }
 
 # The cfg with each Name=value replacing that constant's line; an unknown name is refused. Quiet
@@ -378,13 +441,15 @@ check() {
   return 1
 }
 
+# A twin's row is named by its Twin value, or by that value, a hyphen and a word for a twin's second
+# row, which holds it to a second invariant.
 run_twin() {
   local twin=$1 invariant=$2 cfg
   shift 2
   quiet_parts="" sim_depth="" sim_traces="" sim_seed="" script=""
   cfg=$work/twin-$twin.cfg
   cp "$here/$spec.cfg" "$cfg"
-  with_constants "$cfg" "Twin=\"$twin\"" "$@"
+  with_constants "$cfg" "Twin=\"${twin%%-*}\"" "$@"
   replace_invariants "$cfg" "    $invariant"
   check "twin-$twin" "$cfg" "$invariant"
 }
@@ -452,11 +517,23 @@ main() {
       check model "$cfg" pass || failed=1
       ;;
     live)
-      cfg=$work/live.cfg
-      cp "$here/$spec.cfg" "$cfg"
-      with_constants "$cfg" "$@"
-      live_cfg "$cfg"
-      check live "$cfg" pass || failed=1
+      if declare -F "lives_$spec" > /dev/null; then
+        while read -r name bounds; do
+          quiet_parts="" sim_depth="" sim_traces="" sim_seed="" script=""
+          cfg=$work/live-$name.cfg
+          cp "$here/$spec.cfg" "$cfg"
+          # shellcheck disable=SC2086
+          with_constants "$cfg" $bounds "$@"
+          live_cfg "$cfg"
+          check "live-$name" "$cfg" pass || failed=1
+        done < <("lives_$spec")
+      else
+        cfg=$work/live.cfg
+        cp "$here/$spec.cfg" "$cfg"
+        with_constants "$cfg" "$@"
+        live_cfg "$cfg"
+        check live "$cfg" pass || failed=1
+      fi
       ;;
     twin|control)
       [ $# -ge 1 ] || usage

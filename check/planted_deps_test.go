@@ -160,12 +160,10 @@ func TestDepsFailsOnANestedModuleRequiringProxy(t *testing.T) {
 	wantFindings(t, fixture.open().firstPartyRequireFindings(t), "cli requires @proxy@, proxy")
 }
 
-// C-23 lets sidecarctl read warp's configuration through warp's packages, and no other module.
-func TestDepsLetsSidecarctlAloneRequireWarp(t *testing.T) {
+// No module here reads warp's configuration through warp's packages: the operations binary that
+// does, sidecarctl, is server's since QD-750.
+func TestDepsFailsOnAModuleRequiringWarp(t *testing.T) {
 	fixture := newFixture(t)
-	fixture.edit("sidecarctl/go.mod", "go 1.27.4\n", "go 1.27.4\n\nrequire "+warpBasePath+" v0.0.0\n")
-	wantFindings(t, fixture.open().firstPartyRequireFindings(t))
-
 	fixture.edit("cli/go.mod", "require @connect@ v0.0.0 // indirect", "require @connect@ v0.0.0 // indirect\n\nrequire "+warpBasePath+" v0.0.0 // indirect")
 	wantFindings(t, fixture.open().firstPartyRequireFindings(t), "cli requires "+warpBasePath+", a first-party module §4.7 does not name")
 }
@@ -177,7 +175,7 @@ func TestDepsFailsOnARequireNoPackageReaches(t *testing.T) {
 	wantFindings(t, fixture.open().firstPartyRequireFindings(t), "a first-party module §4.7 does not name")
 }
 
-// A module beyond §4.7's four and C-23's sidecarctl.
+// A module beyond §4.7's four.
 func TestDepsFailsOnAModuleOutsideTheTable(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.write("tools/go.mod", "module @module@/tools\n\ngo 1.27.4\n")

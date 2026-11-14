@@ -453,12 +453,12 @@ func TestCheckBaseRefusesWithoutForking(t *testing.T) {
 		}
 		return entry.GetBody()
 	}
-	if err := net.log.CheckBase(signedHeaderOf(net.makeBase(net.owner, rows, net.n, 2, 0)), rowsBytes); err != nil {
+	if err := net.log.CheckBase(signedHeaderOf(net.makeBase(net.owner, rows, net.n, 2, 0)), rowsBytes, net.timeMs+1000); err != nil {
 		t.Errorf("a base at the next position: %v", err)
 	}
 	stale := signedHeaderOf(net.makeBase(net.owner, rows, net.n, 2, 0))
 	net.mustPost(net.owner, bridge.SignedType_SIGNED_MEMBER_ADMIT, net.memberAdmitStatement("racer"))
-	if err := net.log.CheckBase(stale, rowsBytes); !errors.Is(err, ErrConfigTipMoved) {
+	if err := net.log.CheckBase(stale, rowsBytes, net.timeMs+1000); !errors.Is(err, ErrConfigTipMoved) {
 		t.Errorf("a base for a taken position: %v", err)
 	}
 	stranger := net.device("stranger", net.ownerMemberId)
@@ -474,7 +474,7 @@ func TestCheckBaseRefusesWithoutForking(t *testing.T) {
 		{name: "rows off their hash", header: signedHeaderOf(net.makeBase(net.owner, rows, net.n, 2, 0)), rows: append(bytes.Clone(rowsBytes), 0), want: ErrConfigRule},
 	}
 	for _, c := range cases {
-		if err := net.log.CheckBase(c.header, c.rows); !errors.Is(err, c.want) {
+		if err := net.log.CheckBase(c.header, c.rows, net.timeMs+1000); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v", c.name, err)
 		}
 	}

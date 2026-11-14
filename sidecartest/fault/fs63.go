@@ -11,7 +11,8 @@
 //
 // FS-63's place_new naming a second metadata cluster, restarts resolving every repo to its cluster with a cached 404
 // clearing within 5 s, an unreachable place_new answering 503, the one-pool suite and the next-cluster case are
-// EVS1-M2-41's report's; FI-2 and FI-4's oracles are not bound (TEST-M2-04, TEST-M2-05).
+// EVS1-M2-41's report's; FI-2 holds through the world's checks (TEST-M2-04), and FI-4's oracle is not bound
+// (TEST-M2-05).
 
 package fault
 

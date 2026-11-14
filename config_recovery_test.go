@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -512,5 +513,139 @@ func TestARecoveryWindowSurvivesAFold(t *testing.T) {
 			t.Errorf("vetoed %v: the activation %v", vetoed, activated.Refusal)
 		}
 		net.everyReaderAgrees()
+	}
+}
+
+// CheckTick is api's judgment of a tick before it appends one (§7.9's tick row; QD-745): the verdict the same tick gets
+// at its position at every reader, an activation judged from its proposal's row, with nothing kept and no state moved.
+// A tick 71 h after the newest recovery-key signature is refused and one 72 h after it taken; a proposal named twice,
+// an unknown one, and one already activated are refused; and a tick of two activations whose effects cannot both stand
+// is refused whole, as readers refuse it.
+func TestCheckTickJudgesATickAsEveryReaderDoes(t *testing.T) {
+	net := newTestConfigNet(t)
+	key := testConfigRecovery(net.ownerMemberId, "owner")
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_RECOVERY_BIND, net.recoveryBind(key))
+	phone := net.device("owner phone", net.ownerMemberId)
+	propose := func() []byte {
+		proposed := net.postByRecovery(key, bridge.SignedType_SIGNED_AUTHORITY_PROPOSAL, net.longProposal(bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(phone, nil, false, 0, 0)))
+		if !proposed.Accepted() {
+			t.Fatal(proposed.Refusal)
+		}
+		return bytes.Clone(proposed.StatementId[:])
+	}
+	first := propose()
+	// the same admission proposed again, under another header: both windows run, and only one can admit the phone
+	net.wait(1000)
+	second := propose()
+	if bytes.Equal(first, second) {
+		t.Fatal("the two proposals share an id")
+	}
+	// the time the next entry carries
+	next := func() int64 {
+		return net.timeMs + 1000
+	}
+	tickOf := func(proposalIds ...[]byte) *bridge.ApiTick {
+		return &bridge.ApiTick{ActivatedProposalIds: proposalIds}
+	}
+
+	net.wait(71 * testConfigHourMs)
+	pin := net.log.Pin()
+	if err := net.log.CheckTick(tickOf(first), next()); !errors.Is(err, ErrConfigRule) {
+		t.Fatalf("a tick at 71 h: %v", err)
+	}
+	net.wait(testConfigHourMs)
+	for _, refused := range []*bridge.ApiTick{
+		tickOf(first, first),
+		tickOf(make([]byte, sha256.Size)),
+		tickOf([]byte("short")),
+		{ReapedSidecarIds: [][]byte{net.owner.sidecarId.Bytes()}},
+	} {
+		if err := net.log.CheckTick(refused, next()); !errors.Is(err, ErrConfigRule) {
+			t.Errorf("tick %v: %v", refused, err)
+		}
+	}
+	// both proposals at once: what CheckTick says is what the entry gets
+	both := tickOf(first, second)
+	bothErr := net.log.CheckTick(both, next())
+	if err := net.log.CheckTick(tickOf(first), next()); err != nil {
+		t.Fatalf("a tick at 72 h: %v", err)
+	}
+	if after := net.log.Pin(); after.GetVersion() != pin.GetVersion() || !bytes.Equal(after.GetChain(), pin.GetChain()) ||
+		len(net.log.State().PendingProposals()) != 2 || net.log.State().SidecarRow(phone.sidecarId) != nil {
+		t.Fatal("CheckTick moved the state")
+	}
+	if verdict := net.tick(both); verdict.Accepted() != (bothErr == nil) {
+		t.Fatalf("CheckTick said %v and the entry got %v", bothErr, verdict.Refusal)
+	}
+	if bothErr == nil {
+		t.Fatal("two activations admitting one device both stood")
+	}
+	if verdict := net.tick(tickOf(first)); !verdict.Accepted() {
+		t.Fatalf("the activation CheckTick took: %v", verdict.Refusal)
+	}
+	if net.log.State().SidecarRow(phone.sidecarId) == nil {
+		t.Fatal("the phone is not admitted")
+	}
+	for _, refused := range [][]byte{first, second} {
+		err := net.log.CheckTick(tickOf(refused), next())
+		if verdict := net.tick(tickOf(refused)); err == nil || verdict.Accepted() {
+			t.Errorf("after the activation: CheckTick %v, the entry %v", err, verdict.Refusal)
+		}
+	}
+	net.everyReaderAgrees()
+}
+
+// The window is the log's setting (ConfigRecoverySettings.Window), 72 h by default: a verifier set to one hour takes
+// at an hour the tick the default refuses until 72 h, which is why every verifier of a network must hold one value.
+func TestTheRecoveryWindowIsTheLogsSetting(t *testing.T) {
+	if window := DefaultConfigLogSettings().Recovery.Window; window.Milliseconds() != 72*testConfigHourMs {
+		t.Fatalf("the default window is %s", window)
+	}
+	net := newTestConfigNet(t)
+	if window := net.log.RecoverySettings().Window; window.Milliseconds() != 72*testConfigHourMs {
+		t.Fatalf("the log's window is %s", window)
+	}
+	key := testConfigRecovery(net.ownerMemberId, "owner")
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_RECOVERY_BIND, net.recoveryBind(key))
+	phone := net.device("owner phone", net.ownerMemberId)
+	proposed := net.postByRecovery(key, bridge.SignedType_SIGNED_AUTHORITY_PROPOSAL, net.longProposal(bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(phone, nil, false, 0, 0)))
+	if !proposed.Accepted() {
+		t.Fatal(proposed.Refusal)
+	}
+	tick := &bridge.ApiTick{ActivatedProposalIds: [][]byte{proposed.StatementId[:]}}
+
+	settings := testConfigLogSettings()
+	settings.Recovery = &ConfigRecoverySettings{Window: time.Hour}
+	short, err := RestoreConfigLogRowsOnly(settings, net.log.Retained(), net.rowsOnlySource(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a log whose settings name no Recovery values holds the defaults
+	unset := testConfigLogSettings()
+	unset.Recovery = nil
+	plain, err := RestoreConfigLogRowsOnly(unset, net.log.Retained(), net.rowsOnlySource(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	windowTimeMs := net.log.State().PendingProposals()[0].GetWindowTimeMs()
+	for _, c := range []struct {
+		afterMs int64
+		short   bool
+		plain   bool
+	}{
+		{afterMs: testConfigHourMs - 1},
+		{afterMs: testConfigHourMs, short: true},
+		{afterMs: 72*testConfigHourMs - 1, short: true},
+		{afterMs: 72 * testConfigHourMs, short: true, plain: true},
+	} {
+		timeMs := windowTimeMs + c.afterMs
+		if err := short.CheckTick(tick, timeMs); (err == nil) != c.short {
+			t.Errorf("a one-hour window at %d ms: %v", c.afterMs, err)
+		}
+		for _, log := range []*ConfigLog{plain, net.log} {
+			if err := log.CheckTick(tick, timeMs); (err == nil) != c.plain {
+				t.Errorf("the default window at %d ms: %v", c.afterMs, err)
+			}
+		}
 	}
 }

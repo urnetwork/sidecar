@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -123,14 +124,31 @@ func TestHeadCheckRoundSummonsASilentAppHostThatThenWitnesses(t *testing.T) {
 	}
 	witnessedBefore := a.stop.WitnessedAt()
 
+	// HeadStopState's loop sets a wait on a's clock whenever a step wakes it, so the clock's next wait need not
+	// be the one an Advance means to fire: each Advance waits for a wait set after a count and due by the time
+	// it reaches. Ahead of each such wait the test sets a stray one of its own, due an interval out as the
+	// loop's are, so every run meets that order.
+	setStrayWait := func() {
+		a.clock.After(a.settings.HeadCheckInterval)
+	}
+
 	// the phone's app is suspended: what reaches it is lost
-	// each lost HeadCheck tells the test how many waits the clock held as it was lost, so the test knows when the
-	// call's own wait is set
+	// each lost HeadCheck tells the test how many waits the clock had set as it was lost, sets a stray one and
+	// holds the call at its send until the test lets it go, so the test looks for the call's own wait before
+	// the call sets it
 	dropped := make(chan int, 4)
+	sendHold := make(chan struct{})
+	releaseSend := sync.OnceFunc(func() {
+		close(sendHold)
+	})
+	// before the transport's detach, which waits for the round
+	t.Cleanup(releaseSend)
 	a.setDeliver(func(from *testRpcSide, to *testRpcSide, envelope *protocol.Envelope) *protocol.Envelope {
 		if from == a.testRpcSide && to == phone.testRpcSide && protocol.MessageType(envelope.Type) == protocol.MessageType_HEAD_CHECK {
 			waitCount, _ := a.clock.waitCount.Get()
+			setStrayWait()
 			dropped <- waitCount
+			<-sendHold
 			return nil
 		}
 		return envelope
@@ -141,12 +159,21 @@ func TestHeadCheckRoundSummonsASilentAppHostThatThenWitnesses(t *testing.T) {
 		a.candidates = []HeadCheckCandidate{{SidecarId: phone.sidecarId, Own: true}}
 	}()
 	waitCount, _ := a.clock.waitCount.Get()
+	setStrayWait()
 	a.subprotocol.headCheck.Load().requestRound()
 	// the request waits out HeadCheckTimeout from the last round, then the round's call waits it out again
-	a.clock.awaitWaitCount(waitCount + 1)
+	a.clock.awaitWaitDue(waitCount, a.clock.Now().Add(a.settings.HeadCheckTimeout))
 	a.clock.Advance(a.settings.HeadCheckTimeout)
 	droppedWaitCount := testAwait(t, dropped, "the lost HeadCheck")
-	a.clock.awaitWaitCount(droppedWaitCount + 1)
+	// the round, and so its call, started at the Advance above
+	deadline := a.clock.Now().Add(a.settings.HeadCheckTimeout)
+	// held at its send, the call has no wait yet while the stray one is past the count: an Advance on the next
+	// wait would leave the call waiting for an instant already passed
+	if due, _ := a.clock.waitDue(droppedWaitCount, deadline); due {
+		t.Fatalf("a wait due by the call's deadline while the call is held at its send")
+	}
+	releaseSend()
+	a.clock.awaitWaitDue(droppedWaitCount, deadline)
 	a.clock.Advance(a.settings.HeadCheckTimeout)
 	testAwaitWakes(t, a, 1)
 	if asked := testAwait(t, asks, "the summons"); asked != phone.sidecarId {

@@ -71,9 +71,14 @@ type testSocketWorld struct {
 // A world at the default clock start, with no process yet.
 func newTestSocketWorld(t *testing.T) *testSocketWorld {
 	t.Helper()
+	return newTestSocketWorldOn(t, sidecartest.NewFakeClock(sidecartest.DefaultClockStart()))
+}
+
+// A world on clock, which another fixture shares, with no process yet.
+func newTestSocketWorldOn(t *testing.T, clock *sidecartest.FakeClock) *testSocketWorld {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
-	clock := sidecartest.NewFakeClock(sidecartest.DefaultClockStart())
 	fakeStore := sidecartest.NewFakeSocketStore(clock, nil, nil)
 	_, privateKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -93,12 +98,14 @@ func newTestSocketWorld(t *testing.T) *testSocketWorld {
 	}
 }
 
-// One sockets process: an engine, its host and its gate.
+// One sockets process: an engine, its host and its gate, a fake one or, for gate_projection_test.go's processes,
+// the production gate.
 type testSocketProcess struct {
-	world   *testSocketWorld
-	host    *sidecartest.FakeHost
-	gate    *sidecartest.FakeSocketGate
-	service *socketsservice.SocketsService
+	world      *testSocketWorld
+	host       *sidecartest.FakeHost
+	gate       *sidecartest.FakeSocketGate
+	projection *socketsservice.SocketProjectionGate
+	service    *socketsservice.SocketsService
 }
 
 // A process with the defaults, or settings changed by mutate, with §19.11's sockets gate open to every

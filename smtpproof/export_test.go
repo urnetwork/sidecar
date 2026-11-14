@@ -7,6 +7,7 @@ package smtpproof
 import (
 	"context"
 	"errors"
+	"math/big"
 	"slices"
 	"testing"
 
@@ -24,14 +25,55 @@ type ExportedEvent struct {
 
 // A part's witness, as plain octets.
 type ExportedWitness struct {
-	HandshakeSecret  []byte
-	MasterSecret     []byte
-	ClientKey        []byte
-	ClientIv         []byte
-	ServerKey        []byte
-	ServerIv         []byte
+	HandshakeSecret []byte
+	MasterSecret    []byte
+	ClientKey       []byte
+	ClientIv        []byte
+	ServerKey       []byte
+	ServerIv        []byte
+	// rho, big-endian.
+	KeyBlind []byte
+	// The scan state a hdr or body part starts from (DESIGN-DETAILS 3.2.4), and the blinds of the carry it
+	// opens and of its own, big-endian.
+	CarryInState     uint32
+	CarryInBlind     []byte
+	CarryOutBlind    []byte
 	ClientPlaintexts [][]byte
 	ServerPlaintexts [][]byte
+}
+
+// A big.Int's octets, or none for no value.
+func exportedBlind(blind *big.Int) []byte {
+	if blind == nil {
+		return nil
+	}
+	return blind.Bytes()
+}
+
+// A blind from its octets, or no value for none.
+func importedBlind(octets []byte) *big.Int {
+	if octets == nil {
+		return nil
+	}
+	return new(big.Int).SetBytes(octets)
+}
+
+// A part's witness from its export.
+func importedWitness(witness *ExportedWitness) *partWitness {
+	return &partWitness{
+		handshakeSecret:  witness.HandshakeSecret,
+		masterSecret:     witness.MasterSecret,
+		clientKey:        witness.ClientKey,
+		clientIv:         witness.ClientIv,
+		serverKey:        witness.ServerKey,
+		serverIv:         witness.ServerIv,
+		keyBlind:         new(big.Int).SetBytes(witness.KeyBlind),
+		carryInState:     scanState(witness.CarryInState),
+		carryInBlind:     importedBlind(witness.CarryInBlind),
+		carryOutBlind:    importedBlind(witness.CarryOutBlind),
+		clientPlaintexts: witness.ClientPlaintexts,
+		serverPlaintexts: witness.ServerPlaintexts,
+	}
 }
 
 // An honest connection, every event in the order an edge could see it, and each part's witness by its
@@ -54,7 +96,7 @@ func ExportCapture(t *testing.T, legIndex int, data bool) *ExportedCapture {
 	}
 	send := testRunSend(t, leg, testMxDefaults(), settings, job)
 	testExpectOneTransaction(t, leg, send, job)
-	fixture := &testGateFixture{leg: leg, preamble: newSessionPreamble(job.Preamble), trace: send.edge.trace, parts: send.edge.parts}
+	fixture := &testGateFixture{leg: leg, preamble: newSessionPreamble(job.Preamble, DefaultProofSettings()), trace: send.edge.trace, parts: send.edge.parts}
 	return exportCapture(t, fixture, job, send.backend)
 }
 
@@ -78,6 +120,10 @@ func exportCapture(t *testing.T, fixture *testGateFixture, job *sidecar.SmtpProo
 				ClientIv:         witness.clientIv,
 				ServerKey:        witness.serverKey,
 				ServerIv:         witness.serverIv,
+				KeyBlind:         witness.keyBlind.Bytes(),
+				CarryInState:     uint32(witness.carryInState),
+				CarryInBlind:     exportedBlind(witness.carryInBlind),
+				CarryOutBlind:    exportedBlind(witness.carryOutBlind),
 				ClientPlaintexts: witness.clientPlaintexts,
 				ServerPlaintexts: witness.serverPlaintexts,
 			}
@@ -129,7 +175,7 @@ func ExportMxCapture(t *testing.T, legName string, data bool, mx sidecartest.MxS
 	if send.err != nil || !send.result.Accepted {
 		t.Fatalf("%s: %+v, %v (edge: %v)", legName, send.result, send.err, send.edge.failure())
 	}
-	fixture := &testGateFixture{leg: &testTlsLeg{name: leg.name}, preamble: newSessionPreamble(job.Preamble), trace: send.edge.trace, parts: send.edge.parts}
+	fixture := &testGateFixture{leg: &testTlsLeg{name: leg.name}, preamble: newSessionPreamble(job.Preamble, DefaultProofSettings()), trace: send.edge.trace, parts: send.edge.parts}
 	return exportCapture(t, fixture, job, send.backend)
 }
 
@@ -160,7 +206,7 @@ func (self *exportedVerifier) verifyPart(ctx context.Context, statement *partSta
 // the checks failing where the gate first refuses, or none. A preamble refused before the gate opens
 // is "preamble".
 func ExportGateVerdict(capture *ExportedCapture) []string {
-	preamble := newSessionPreamble(capture.Preamble)
+	preamble := newSessionPreamble(capture.Preamble, DefaultProofSettings())
 	if err := checkSessionPreamble(preamble); err != nil {
 		return []string{"preamble"}
 	}
@@ -173,16 +219,7 @@ func ExportGateVerdict(capture *ExportedCapture) []string {
 			verifier.witness = nil
 			verifier.failures = nil
 			if witness := capture.Witnesses[i]; witness != nil {
-				verifier.witness = &partWitness{
-					handshakeSecret:  witness.HandshakeSecret,
-					masterSecret:     witness.MasterSecret,
-					clientKey:        witness.ClientKey,
-					clientIv:         witness.ClientIv,
-					serverKey:        witness.ServerKey,
-					serverIv:         witness.ServerIv,
-					clientPlaintexts: witness.ClientPlaintexts,
-					serverPlaintexts: witness.ServerPlaintexts,
-				}
+				verifier.witness = importedWitness(witness)
 			}
 			_, err = gate.VerifyPart(context.Background(), event.Part)
 			if err != nil && 0 < len(verifier.failures) {
@@ -239,7 +276,7 @@ func (self *exportedCircuitVerifier) verifyPart(ctx context.Context, statement *
 	var shape *partShape
 	var err error
 	if self.keyed && statement.index == 1 {
-		shape, err = partShapeFor(statement)
+		shape, err = partShapeFor(DefaultProofSettings(), statement)
 	} else {
 		shape, err = testShapeFitting(statement, 0, 8)
 	}
@@ -276,7 +313,7 @@ func ExportKeyedCircuitVerdict(t *testing.T, capture *ExportedCapture) (uint32, 
 
 func exportCircuitVerdict(t *testing.T, capture *ExportedCapture, keyed bool) (uint32, error) {
 	t.Helper()
-	preamble := newSessionPreamble(capture.Preamble)
+	preamble := newSessionPreamble(capture.Preamble, DefaultProofSettings())
 	if err := checkSessionPreamble(preamble); err != nil {
 		return 0, err
 	}
@@ -289,16 +326,7 @@ func exportCircuitVerdict(t *testing.T, capture *ExportedCapture, keyed bool) (u
 			verifier.witness = nil
 			verifier.refused = false
 			if witness := capture.Witnesses[i]; witness != nil {
-				verifier.witness = &partWitness{
-					handshakeSecret:  witness.HandshakeSecret,
-					masterSecret:     witness.MasterSecret,
-					clientKey:        witness.ClientKey,
-					clientIv:         witness.ClientIv,
-					serverKey:        witness.ServerKey,
-					serverIv:         witness.ServerIv,
-					clientPlaintexts: witness.ClientPlaintexts,
-					serverPlaintexts: witness.ServerPlaintexts,
-				}
+				verifier.witness = importedWitness(witness)
 			}
 			_, err = gate.VerifyPart(context.Background(), event.Part)
 			if err != nil && verifier.refused {

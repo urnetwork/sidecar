@@ -106,7 +106,7 @@ budgets:
     kind: path
     owner: SOCK-M5-17
     module: server
-    package: ""
+    package: cli/sockets
     name: sockets.find
     settings: "socketsservice's Find on server's SocketStore, every feature on"
     limits: {postgres: 0, redis_calls: 1}

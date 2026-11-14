@@ -5,7 +5,10 @@ package sidecartest
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"errors"
+	"io"
+	"net"
 	"testing"
 
 	"github.com/urnetwork/sidecar"
@@ -160,4 +163,141 @@ func TestFakeSmtpProofSessionEndsAtARefusal(t *testing.T) {
 	if _, err := verifier.NewSmtpProofSession(testFakeSmtpPreamble()); err == nil {
 		t.Error("a refused session opened")
 	}
+}
+
+// DESIGN-DETAILS 3.2.5: a scripted key set is refused at HoldsKeySet and at NewSmtpProofSession alike, and
+// every other set, none included, opens a session that keeps the set it was opened under.
+func TestFakeSmtpProofVerifierRefusesAScriptedKeySet(t *testing.T) {
+	refused := bytes.Repeat([]byte{1}, 32)
+	held := FakeSmtpProverKeySet()
+	verifier := NewFakeSmtpProofVerifier(&FakeSmtpProofScript{RefuseKeySets: [][]byte{refused}})
+	if verifier.HoldsKeySet(refused) || !verifier.HoldsKeySet(held) || !verifier.HoldsKeySet(nil) {
+		t.Error("HoldsKeySet does not follow the script")
+	}
+	preamble := testFakeSmtpPreamble()
+	preamble.ProofKeySet = refused
+	if session, err := verifier.NewSmtpProofSession(preamble); !errors.Is(err, sidecar.ErrSmtpProofKeySet) || session != nil {
+		t.Errorf("a refused set opened a session: %v", err)
+	}
+	if len(verifier.Sessions()) != 0 {
+		t.Error("a refused set left a session behind")
+	}
+	preamble.ProofKeySet = held
+	if _, err := verifier.NewSmtpProofSession(preamble); err != nil {
+		t.Fatal(err)
+	}
+	preamble.ProofKeySet[0] ^= 1
+	if kept := verifier.Sessions()[0].Preamble().ProofKeySet; !bytes.Equal(kept, FakeSmtpProverKeySet()) {
+		t.Errorf("the session kept %x, not its own copy", kept)
+	}
+}
+
+// A part that opens no client record (DESIGN-DETAILS 3.2.5) adds no credit, and every new field reaches
+// the session's record of the call as sent.
+func TestFakeSmtpProofSessionTakesPartsWithNoRecordAndTheNewFields(t *testing.T) {
+	verifier := NewFakeSmtpProofVerifier(&FakeSmtpProofScript{HoldAfterClientRecords: 1})
+	session, _ := verifier.NewSmtpProofSession(testFakeSmtpPreamble())
+	ctx := context.Background()
+	session.ClientRecord([]byte("hello"))
+	if released, _ := session.ClientRecord([]byte("ehlo")); len(released) != 0 {
+		t.Fatalf("ehlo went ahead of its part: %q", released)
+	}
+	part := &sidecar.SmtpProofPart{Index: 1, FirstRecord: 2, LastRecord: 1, ReplyCount: 1, KeyCommitment: bytes.Repeat([]byte{7}, 64)}
+	if released, err := session.VerifyPart(ctx, part); err != nil || len(released) != 0 {
+		t.Fatalf("a part that opens nothing released %q: %v", released, err)
+	}
+	part = &sidecar.SmtpProofPart{Index: 2, FirstRecord: 2, LastRecord: 2, HeaderRecordCount: 3, Carry: bytes.Repeat([]byte{8}, 64)}
+	if released, err := session.VerifyPart(ctx, part); err != nil || len(released) != 1 {
+		t.Fatalf("the part released %q: %v", released, err)
+	}
+	part.Carry[0] = 0
+	calls := verifier.Sessions()[0].Calls()
+	first, second := calls[2].Part, calls[3].Part
+	if first.ReplyCount != 1 || len(first.KeyCommitment) != 64 || second.HeaderRecordCount != 3 || second.Carry[0] != 8 {
+		t.Errorf("the session kept %+v and %+v", first, second)
+	}
+}
+
+// The fake names a fixed key set once its scripted shapes are prepared, one a call, and a cancelled call
+// advances nothing.
+func TestFakeSmtpProverPreparesItsKeySetsOneShapeACall(t *testing.T) {
+	settings := DefaultFakeSmtpProverSettings()
+	older := bytes.Repeat([]byte{2}, 32)
+	settings.KeySets = append(settings.KeySets, older)
+	settings.PrepareShapeCount = 2
+	prover := NewFakeSmtpProver(settings)
+	if len(prover.KeySet()) != 0 {
+		t.Fatal("a key set before any shape was prepared")
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := prover.PrepareKeys(cancelled); err == nil || prover.PrepareCount() != 0 {
+		t.Fatalf("a cancelled prepare ran: %v", err)
+	}
+	ctx := context.Background()
+	readiness, err := prover.PrepareKeys(ctx)
+	if err != nil || readiness.Done || len(readiness.KeySets) != 0 || len(prover.KeySet()) != 0 {
+		t.Fatalf("one shape of two: %+v, %v", readiness, err)
+	}
+	readiness, err = prover.PrepareKeys(ctx)
+	if err != nil || !readiness.Done || len(readiness.KeySets) != 2 {
+		t.Fatalf("both shapes: %+v, %v", readiness, err)
+	}
+	if !bytes.Equal(readiness.KeySets[0].Id, FakeSmtpProverKeySet()) || !bytes.Equal(readiness.KeySets[1].Id, older) ||
+		len(readiness.KeySets[0].ReadySuites) == 0 {
+		t.Errorf("ready %+v", readiness.KeySets)
+	}
+	if !bytes.Equal(prover.KeySet(), FakeSmtpProverKeySet()) {
+		t.Errorf("KeySet %x", prover.KeySet())
+	}
+
+	// a fake pinned to nothing is done with nothing ready
+	settings = DefaultFakeSmtpProverSettings()
+	settings.KeySets = nil
+	readiness, err = NewFakeSmtpProver(settings).PrepareKeys(ctx)
+	if err != nil || !readiness.Done || len(readiness.KeySets) != 0 {
+		t.Errorf("no pins: %+v, %v", readiness, err)
+	}
+}
+
+// A job naming a key set the fake cannot prove under is refused before any octet goes out.
+func TestFakeSmtpProverRefusesAJobUnderAnotherKeySet(t *testing.T) {
+	prover := NewFakeSmtpProver(nil)
+	job := &sidecar.SmtpProofJob{
+		Preamble:        testFakeSmtpPreamble(),
+		RecipientLocals: []string{"bob"},
+		Message:         []byte("Subject: x\r\n\r\nbody\r\n"),
+		VerifyPeer:      func(chain []*x509.Certificate) error { return nil },
+		KeySet:          bytes.Repeat([]byte{3}, 32),
+	}
+	conn := &testUnusedConn{}
+	if _, err := prover.SendSmtp(context.Background(), conn, job, nil); !errors.Is(err, sidecar.ErrSmtpProofKeySet) {
+		t.Errorf("another key set: %v", err)
+	}
+	if conn.used {
+		t.Error("a refused job used the connection")
+	}
+	if sends := prover.Sends(); len(sends) != 1 || !errors.Is(sends[0].Err, sidecar.ErrSmtpProofKeySet) {
+		t.Errorf("sends %+v", sends)
+	}
+}
+
+// A connection that records whether anything touched it.
+type testUnusedConn struct {
+	net.Conn
+	used bool
+}
+
+func (self *testUnusedConn) Read(buffer []byte) (int, error) {
+	self.used = true
+	return 0, io.EOF
+}
+
+func (self *testUnusedConn) Write(buffer []byte) (int, error) {
+	self.used = true
+	return 0, io.ErrClosedPipe
+}
+
+func (self *testUnusedConn) Close() error {
+	return nil
 }

@@ -36,10 +36,6 @@ var refusedModules = map[string]string{
 // The first-party modules a sidecar module may require beside this repository's own (§4.7).
 var allowedFirstPartyModules = []string{connectBasePath, glogBasePath}
 
-// The first-party modules sidecarctl alone may require beside those: C-23 lets the operations binary
-// read warp's configuration through warp's own packages, as warpctl does.
-var sidecarctlFirstPartyModules = []string{warpBasePath}
-
 // One dependencies.yml row.
 type dependencyRow struct {
 	module string
@@ -123,7 +119,7 @@ func parseDependencies(data string) ([]*dependencyRow, []string) {
 		}
 		seen[row.module] = true
 		for _, class := range row.legs {
-			if !slices.Contains([]string{classClient, classEngine, classCli, classSidecarctl, classTest}, class) {
+			if !slices.Contains([]string{classClient, classEngine, classCli, classTest}, class) {
 				findings = append(findings, findingf("dependencies.yml:%d: %s is not a leg", row.line, class))
 			}
 		}
@@ -237,7 +233,7 @@ func (self *repository) rootRequireFindings(t testing.TB) []string {
 
 // §4.7's imports bullet at the module-file level, where a require no package reaches still shows:
 // no sidecar module requires a refused module, or any first-party module beside this repository's
-// own, connect and connect's replaced forks, and warp for sidecarctl (C-23).
+// own, connect and connect's replaced forks.
 func (self *repository) firstPartyRequireFindings(t testing.TB) []string {
 	t.Helper()
 	findings := []string{}
@@ -245,9 +241,6 @@ func (self *repository) firstPartyRequireFindings(t testing.TB) []string {
 		for _, require := range module.file.Require {
 			base := firstPartyBase(require.Path)
 			if underPath(base, sidecarBasePath) || slices.Contains(allowedFirstPartyModules, base) {
-				continue
-			}
-			if module.relativeName == "sidecarctl" && slices.Contains(sidecarctlFirstPartyModules, base) {
 				continue
 			}
 			what, refused := refusedModule(base)
@@ -262,14 +255,14 @@ func (self *repository) firstPartyRequireFindings(t testing.TB) []string {
 	return findings
 }
 
-// §4.7's module table and C-23's sidecarctl: these five and no other, each covered by a leg. A module
+// §4.7's module table: these four and no other, each covered by a leg. A module
 // added here is either given a leg or fails, so nothing builds out of the rows' sight.
 func (self *repository) moduleSetFindings(t testing.TB) []string {
 	t.Helper()
 	findings := []string{}
 	seen := map[string]bool{}
 	for _, module := range self.modules(t) {
-		if !slices.Contains([]string{".", "cli", "smtpproof", "mlsinterop", "sidecarctl"}, module.relativeName) {
+		if !slices.Contains([]string{".", "cli", "smtpproof", "mlsinterop"}, module.relativeName) {
 			findings = append(findings, findingf("%s is the module %s, which is not in §4.7's table", self.displayPath(module.directory), module.file.Module.Path))
 		}
 		if seen[module.relativeName] {

@@ -22,7 +22,8 @@
 //	deliver   POST wraps/<g>/<c8>: r, rw or admin, from a sidecar that is not read_only, under the wrap checks
 //	stage     POST recovery-wraps/<g>/<c8>: a rotator's RecoveryWraps, r, rw or admin, not read_only
 //	write     POST gen/<g>, key-packages/claim, welcome/<n>: rw, which §7.8 gives member devices in the config group
-//	          and every sidecar but read_only ones in the directory, so HonorScope's gkm audience decides
+//	          and every sidecar but read_only ones in the directory, so HonorScope's gkm audience decides; HEAD
+//	          welcome/<n> too, a read under the same right (QD-747)
 //	admin     POST /gkm/groups, POST repos/<id>/forms, POST ladder: admin
 //	deposit   GET repos/<id>/drop-key: deposit, r, rw or admin
 //	recovery  GET recovery/<member_id>/wraps: a device of that member, or its unadmitted client under
@@ -133,6 +134,8 @@ var gkmRoutes = []*GkmRoute{
 	{Pattern: "GET /gkm/groups/{group_id}/epochs", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveEpochsRead},
 	{Pattern: "POST /gkm/groups/{group_id}/epochs/{n}", Scope: gkmScopeLeaf, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveEpochCommit},
 	{Pattern: "POST /gkm/groups/{group_id}/welcome/{n}", Scope: gkmScopeWrite, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveWelcomeWrite},
+	// QD-747: whether epoch n's Welcome stands, for the WelcomeTimeout re-add
+	{Pattern: "HEAD /gkm/groups/{group_id}/welcome/{n}", Scope: gkmScopeWrite, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveWelcomeStands},
 	{Pattern: "GET /gkm/groups/{group_id}/group-info", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Serve: (*GkmEngine).serveGroupInfoRead},
 	{Pattern: "POST /gkm/groups/{group_id}/group-info", Scope: gkmScopeInfo, Target: gkmTargetPathGroup, Write: true, RepoState: gkmRepoStateActive, Serve: (*GkmEngine).serveGroupInfoWrite},
 	{Pattern: "POST /gkm/groups/{group_id}/ack", Scope: gkmScopeRead, Target: gkmTargetPathGroup, Write: true, Serve: (*GkmEngine).serveAck},

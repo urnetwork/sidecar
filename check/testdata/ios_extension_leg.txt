@@ -7,6 +7,7 @@
 #   SIDECAR_REGENERATE_IOS_EXTENSION_LEG=1 make ios-extension-leg  rewrites it
 acl_access_log.go
 acl_approver.go
+acl_audit.go
 acl_compile.go
 acl_compile_atoms.go
 acl_compile_targets.go
@@ -20,6 +21,8 @@ acl_kind.go
 acl_limits.go
 acl_member_check.go
 acl_policy.go
+acl_prefix_settings.go
+acl_reach.go
 acl_request.go
 acl_seats.go
 acl_selector.go
@@ -39,6 +42,14 @@ api_token_schedule.go
 api_token_source.go
 api_transport.go
 api_transport_connect.go
+bridge_compile.go
+bridge_compile_local.go
+bridge_compile_rows.go
+bridge_forward.go
+bridge_forward_compile.go
+bridge_forward_follow.go
+bridge_forward_keys.go
+bridge_forward_sign.go
 bridge_ledger.go
 bridge_ledger_fold.go
 bridge_rows.go
@@ -64,6 +75,7 @@ config_head.go
 config_indexer.go
 config_keys.go
 config_leaves.go
+config_names.go
 config_presence.go
 config_read_only.go
 config_records.go
@@ -103,6 +115,7 @@ evs_chain.go
 evs_checkpoint.go
 evs_chunk.go
 evs_client.go
+evs_creates_only.go
 evs_digest.go
 evs_directory.go
 evs_drop_payload.go
@@ -116,6 +129,7 @@ evs_http.go
 evs_index_dictionary.go
 evs_index_entry.go
 evs_index_keyset.go
+evs_index_lone.go
 evs_index_normalize.go
 evs_index_pad.go
 evs_index_postings.go
@@ -186,6 +200,7 @@ gkm_verify_commit.go
 gkm_verify_credential.go
 gkm_verify_delivery.go
 gkm_verify_rotation.go
+gkm_welcome_watch.go
 gkm_yield.go
 id.go
 identity_act.go

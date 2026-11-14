@@ -25,6 +25,11 @@
 // revoked grant ends the subject's flows under every rule the grant reached.
 //
 // A rule 0 change ends nothing: an open flow is connected to wherever it was dialed, and rule 0 is checked per flow.
+//
+// A subject whose forwarding key admits (owner decision 197) has a second tag for each pair above, BridgeForwardRuleTag
+// with its forwarding Delegation, on the pair's atoms and the Delegation's own. So a DelegationRevoke, a supersession
+// or a state that lists another Delegation or none ends every flow that key admitted and none the subject's identity
+// key did (DESIGN-DETAILS 4.2.5).
 
 package device
 
@@ -108,21 +113,31 @@ func (self *bridgePolicyState) admission(profile BridgePolicyProfile, at time.Ti
 		if !subject.admitted || (!sdk && !subject.hasIdentity) {
 			continue
 		}
-		tag := func(ruleId []byte) uint64 {
-			return BridgeRuleTag(subject.sidecarId, ruleId)
+		// the pair's tag for the flows the identity key admitted and, where a forwarding key admits, its own
+		forward := !sdk && subject.forwardAdmitted()
+		forwardAtom := ""
+		if forward {
+			forwardAtom = fmt.Sprintf("forward:%x", subject.forwardDelegationId)
+		}
+		add := func(ruleId []byte, atoms ...string) {
+			admission.add(BridgeRuleTag(subject.sidecarId, ruleId), atoms...)
+			if forward {
+				admission.add(BridgeForwardRuleTag(subject.sidecarId, subject.forwardDelegationId, ruleId), atoms...)
+				admission.add(BridgeForwardRuleTag(subject.sidecarId, subject.forwardDelegationId, ruleId), forwardAtom)
+			}
 		}
 		allowAll := self.posture == PostureEnforcingNoDocument && !subject.tagged
 		allowAllAtoms := []string{}
 		if allowAll {
 			allowAllAtoms = append(allowAllAtoms, "allow_all")
-			admission.add(tag([]byte{BridgeRuleAllowAll}), allowAllAtoms...)
+			add([]byte{BridgeRuleAllowAll}, allowAllAtoms...)
 		}
 		exitAtoms := bridgeReachAtoms("exit", subject.exit, at, nil)
 		if 0 < len(exitAtoms) && (sdk || servesExit) {
 			if !sdk {
 				exitAtoms = append(exitAtoms, "serves_exit")
 			}
-			admission.add(tag([]byte{BridgeRuleExit}), exitAtoms...)
+			add([]byte{BridgeRuleExit}, exitAtoms...)
 		}
 		if sdk {
 			continue
@@ -133,7 +148,7 @@ func (self *bridgePolicyState) admission(profile BridgePolicyProfile, at time.Ti
 				if self.mapKept(policyMap, at) {
 					mapAtom := fmt.Sprintf("map:%x:%v:%d:%v:%v:%d", policyMap.mapId, policyMap.match, policyMap.protocol,
 						policyMap.ports, policyMap.target, policyMap.targetPort)
-					admission.add(tag(policyMap.mapId), append(slices.Clone(dialAtoms), mapAtom)...)
+					add(policyMap.mapId, append(slices.Clone(dialAtoms), mapAtom)...)
 				}
 			}
 		}
@@ -141,7 +156,7 @@ func (self *bridgePolicyState) admission(profile BridgePolicyProfile, at time.Ti
 			// one tag an address, so an address's end closes its flows alone
 			for _, addr := range hostedAddrs {
 				ruleId := bridgeHostedRuleId(addr)
-				admission.add(tag(ruleId[:]), slices.Concat([]string{"hosted:" + addr.String()}, dialAtoms, allowAllAtoms)...)
+				add(ruleId[:], slices.Concat([]string{"hosted:" + addr.String()}, dialAtoms, allowAllAtoms)...)
 			}
 		}
 		for _, served := range self.served {
@@ -163,7 +178,7 @@ func (self *bridgePolicyState) admission(profile BridgePolicyProfile, at time.Ti
 			if remapKept {
 				atoms = append(atoms, fmt.Sprintf("remap:%x:%v", served.routeId, served.exposed))
 			}
-			admission.add(tag(served.routeId), atoms...)
+			add(served.routeId, atoms...)
 		}
 	}
 	return admission

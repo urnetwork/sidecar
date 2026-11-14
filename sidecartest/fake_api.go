@@ -9,7 +9,9 @@
 // (SidecarApi's transport, a gate's source) sends real requests with no socket. It answers at two origins, api's and
 // the issuer's (SidecarSettings.ApiUrl and AuthUrl), as one api process answers both names. Each request first takes a
 // fault plan of FaultOpHttp keyed by its path: ApplyThenDrop serves it and loses the answer, FailBeforeApply loses the
-// request, and the crash results serve it or not and never answer, until the request's context ends.
+// request, and the crash results serve it or not and never answer, until the request's context ends. A service origin a
+// test hands an engine's handler (ServeService), evs's or gkm's, is served by that handler on the same transport, as
+// the lb routes each service's host, so a sidecar whose clients dial with api's transport reaches the engines too.
 //
 // A bearer names a client of a network, which ClientToken and the core routes mint as a sidecar's strict_exp token
 // (§7.4), JWT-shaped so a sidecar reads its claims as it reads server's: a request without one known here, with one
@@ -73,23 +75,27 @@ type FakeApiSettings struct {
 	// The longest body POST /sidecar/close reads: 64 bytes, a 22-character capability and room for a newline, as
 	// server's handler bounds it.
 	MaxCloseByteCount int64
+	// The most bindings one page of GET /sidecar/identity/<sidecar_id> lists: 64, a format value of the route
+	// (plan-CORE-client-to-sidecar-lookup).
+	IdentityBindingPageCount int
 }
 
 func DefaultFakeApiSettings() *FakeApiSettings {
 	return &FakeApiSettings{
-		Origin:              "https://api.sidecartest.example",
-		AuthOrigin:          "https://auth.sidecartest.example",
-		ServiceDomain:       "sidecartest.example",
-		ClientTokenTimeout:  7 * 24 * time.Hour,
-		ServiceTokenTimeout: 15 * time.Minute,
-		DpopIatWindow:       60 * time.Second,
-		DpopReplayTimeout:   120 * time.Second,
-		DpopMaxJtiByteCount: 256,
-		ProjectionPageCount: 1024,
-		AppendAttemptCount:  64,
-		MaxRequestByteCount: 16 * 1024 * 1024,
-		LeaseReapAfter:      35 * time.Minute,
-		MaxCloseByteCount:   64,
+		Origin:                   "https://api.sidecartest.example",
+		AuthOrigin:               "https://auth.sidecartest.example",
+		ServiceDomain:            "sidecartest.example",
+		ClientTokenTimeout:       7 * 24 * time.Hour,
+		ServiceTokenTimeout:      15 * time.Minute,
+		DpopIatWindow:            60 * time.Second,
+		DpopReplayTimeout:        120 * time.Second,
+		DpopMaxJtiByteCount:      256,
+		ProjectionPageCount:      1024,
+		AppendAttemptCount:       64,
+		MaxRequestByteCount:      16 * 1024 * 1024,
+		LeaseReapAfter:           35 * time.Minute,
+		MaxCloseByteCount:        64,
+		IdentityBindingPageCount: 64,
 	}
 }
 
@@ -98,16 +104,23 @@ type fakeApiClient struct {
 	networkId sidecar.Id
 	clientId  sidecar.Id
 	// the sidecar the client is bound to, zero for none: an unadmitted client may read the log and post a
-	// recovery-signed statement only (§7.9's Recovery `before admission` row)
+	// recovery-signed statement only (§7.9's Recovery `before admission` row). Api's binding, which every token of the
+	// client maps to once it binds, unlike sidecarClaim.
 	sidecarId sidecar.Id
-	// the token's exp, on the api's clock
+	// the token's sidecar_id claim, zero for none (plan-SOCK-client-auth, QD-040): set only by bind's re-mint and kept
+	// by a refresh of the token, never added by one, nor carried by a reissue or a child (server's ByJwt.Renew), so
+	// the tokens a client held before it bound name no sidecar
+	sidecarClaim sidecar.Id
+	// the token's iat and exp, on the api's clock
+	issuedAt   time.Time
 	expireTime time.Time
 	// the token's device and session claims, which a refresh keeps
 	deviceId  sidecar.Id
 	sessionId sidecar.Id
-	// §7.4's marks, which a client's children inherit
+	// §7.4's marks, which a client's children inherit; forwardOnly a sidecar's forwarding client's, and its children's
 	strictExp    bool
 	adminRefused bool
+	forwardOnly  bool
 	// the parent of a child client, zero for a top-level one
 	sourceClientId sidecar.Id
 	// the token's create_time, which a refresh keeps (server's RenewSessionCredential)
@@ -149,6 +162,38 @@ type FakeApi struct {
 	refusedRoutes []string
 	// counts every client token minted, for a test waiting on one
 	mints *sidecar.MonitorValue[uint64]
+	// each service origin's handler, by its host (ServeService)
+	serviceHostHandlers map[string]http.Handler
+}
+
+// Serves the service origin of audience (ServiceOrigin) through handler on this api's transport, as the lb routes the
+// service's host to its block; nil stops serving it. Requests to it take no fault plan of api's: the service's own
+// stores and barriers fault it.
+func (self *FakeApi) ServeService(audience string, handler http.Handler) {
+	origin, err := url.Parse(self.ServiceOrigin(audience))
+	if err != nil {
+		return
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.serviceHostHandlers == nil {
+		self.serviceHostHandlers = map[string]http.Handler{}
+	}
+	if handler == nil {
+		delete(self.serviceHostHandlers, origin.Host)
+		return
+	}
+	self.serviceHostHandlers[origin.Host] = handler
+}
+
+// The handler serving request's host as a service origin, nil for none.
+func (self *FakeApi) serviceHandler(request *http.Request) http.Handler {
+	if request.URL.Scheme != "https" {
+		return nil
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.serviceHostHandlers[request.URL.Host]
 }
 
 // Holds every request a strict_exp bearer makes to allowed, as route_authz.go's fail-closed allowlist does: a route
@@ -234,15 +279,17 @@ func (self *FakeApi) Authenticator() *FakeAuthenticator {
 }
 
 // A bearer for a client of networkId, bound to sidecarId when it is not zero, as a sidecar's strict_exp token: it
-// expires ClientTokenTimeout after now on the api's clock, and every route refuses it after (§7.4). The token is
-// JWT-shaped, its claims server's names, and signed by a key of this api's alone, so it is synthetic and no real api
-// could have made it.
+// expires ClientTokenTimeout after now on the api's clock, and every route refuses it after (§7.4). A bound one names
+// its sidecar in its sidecar_id claim, as the token a sidecar keeps from bind's re-mint does (QD-040, QD-797). The
+// token is JWT-shaped, its claims server's names, and signed by a key of this api's alone, so it is synthetic and no
+// real api could have made it.
 func (self *FakeApi) ClientToken(networkId sidecar.Id, clientId sidecar.Id, sidecarId sidecar.Id) string {
 	now := self.clock.Now()
 	return self.mintClientToken(&fakeApiClient{
 		networkId:    networkId,
 		clientId:     clientId,
 		sidecarId:    sidecarId,
+		sidecarClaim: sidecarId,
 		deviceId:     sidecar.NewId(),
 		sessionId:    sidecar.NewId(),
 		strictExp:    true,
@@ -292,8 +339,11 @@ func (self *FakeApi) client(request *http.Request) *fakeApiClient {
 	return self.clientOfToken(bearer)
 }
 
-// Serves a request in process, as api's router would, the route gate first.
+// Serves a request in process, as api's router would, the route gate first. Every answer carries the api's clock in
+// its Date header, as net/http's server stamps each of api's (RFC 9110 §6.6.1): what a sidecar signs its DPoP iat by
+// (§7.4, QD-757).
 func (self *FakeApi) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Date", self.clock.Now().UTC().Format(http.TimeFormat))
 	refused := func() bool {
 		self.stateLock.Lock()
 		gate := self.routeGate
@@ -339,7 +389,15 @@ func (self fakeApiTransport) RoundTrip(request *http.Request) (*http.Response, e
 		}
 	}
 	if !served {
-		return nil, fmt.Errorf("no route to %s", request.URL.Host)
+		handler := self.api.serviceHandler(request)
+		if handler == nil {
+			return nil, fmt.Errorf("no route to %s", request.URL.Host)
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		response := recorder.Result()
+		response.Request = request
+		return response, nil
 	}
 	if request.Body != nil {
 		body, err := io.ReadAll(request.Body)

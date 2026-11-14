@@ -201,7 +201,7 @@ func TestConfigLogChecksConfigPushesAtItsTip(t *testing.T) {
 	}
 	genesisChain := bridge.GenesisChain(net.signedGenesis)
 	baseOne := signedHeader(1, genesisChain[:], 0, 2)
-	if err := log.CheckBase(baseOne, rows); err != nil {
+	if err := log.CheckBase(baseOne, rows, testConfigStartMs); err != nil {
 		t.Fatal(err)
 	}
 	if err := log.CheckConfigPushes(baseOne, ref.between(0, 2)); err != nil {

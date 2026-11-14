@@ -31,6 +31,12 @@
 (*   enter a state: the ASSUME below does their arithmetic over every       *)
 (*   allowed offset, in the design's real numbers.                          *)
 (* - One path is touched per push, its parent's delta beside it.            *)
+(* - A statement lists only a slot it drew, so each slot object's origin    *)
+(*   (DESIGN-DETAILS 14.2.2) is the one statement that lists it, and a      *)
+(*   retoken here is a rebuild with new slots. details/EvsSlot.tla, this    *)
+(*   model's companion, holds one slot id that several statements list:     *)
+(*   another statement's object, the retoken's takeover, an ERASE's rewrite *)
+(*   and a stalled evacuation run beside its successor.                     *)
 (*                                                                          *)
 (* Twin names a rule to break; a twin config sets it, and TLC must then     *)
 (* refuse the model (run-tlc.sh). "none" is the design.                     *)
@@ -144,7 +150,7 @@ VARIABLES
     pidx,        \* pidx/: the containers an entry names, as [id, kind]
     idx,         \* idx[r][e][p]: the entry of p in path epoch e
     seg,         \* seg[s]: stored, and its LastModified mark
-    slot,        \* slot[P]: "none", "stored" or "deleted", the new slot of push P
+    slot,        \* slot[P]: "none", "stored" or "deleted", the new slot of push P, its origin P
     slotAt,      \* slotAt[P]: its LastModified mark
     pmap,        \* pmap[r]: the map parts uploaded, as [gen, source, at]
     log,         \* log[r]: pages written
@@ -757,8 +763,11 @@ WriteRecord(i) ==
         /\ UNCHANGED <<heads, pack, pidx, idx, seg, slot, slotAt, pmap, log, authority, lifecycle, hour,
                        faultsLeft, pushCount, attemptsMade, authView, foldJob, foldedTo, jobs, oracle>>
 
-\* Step 6's slot round: created If-None-Match; equal bytes on 412 pass only on an object under 23 h
-\* old, else SLOT_STALE, recorded.
+\* Step 6's slot round (DESIGN-DETAILS 14.2.3): created If-None-Match with the statement as the
+\* object's origin; on a 412 the object of its own origin, with equal bytes, passes only while under
+\* 23 h old, else SLOT_STALE, recorded; a 404 is the create again, so a late attempt stores anew what
+\* evacuation deleted. Every slot here is its own statement's: the rows for another statement's
+\* object and the takeover are details/EvsSlot.tla's.
 WriteSlot(i) ==
     LET a == att[i]
         P == a.push
@@ -1199,14 +1208,24 @@ EvacFence ==
         /\ UNCHANGED <<cache, heldBy, leaseLive, blockLive, window, stored, authority, lifecycle, statements,
                        att, instanceState, collector, gc, copyJob, reader, oracle>>
 
-\* Dead or duplicate: the only cleanup, a dead record's new slot with it.
+\* Dead or duplicate: the record leaves its batch, the only cleanup. A dead record's slot goes only as
+\* that record's own (DESIGN-DETAILS 14.2.5): a HEAD that finds the record's statement as its origin
+\* and a LastModified the settle age has passed, then a DELETE naming that LastModified, which takes
+\* that object alone. A mark is longer than the settle age, so a HEAD finds an object stored in its
+\* own mark unsettled, and that slot stays: an attempt that slept since its record (14.5's leaks).
+\* Here every slot is its own statement's, and nothing stores another object under a dead
+\* statement's slot between the HEAD and the DELETE: its own late attempt's 412 leaves the object as
+\* it was. So the two are one step, and a killed run sends no DELETE; details/EvsSlot.tla runs them
+\* apart, with a stalled run beside its successor. EvacuatorSettings.DeleteDeadSlots, off in the
+\* release that brings the origin (14.7), sends no DELETE at all, which only removes behaviors.
 EvacDrop ==
     LET rec == evacuator.rec
         P == rec.push
         dead == evacuator.resolution = "dead"
+        settled == slotAt[P] < hour
     IN  /\ evacuator.stage = "drop"
         /\ batch' = batch \ {rec}
-        /\ slot' = [slot EXCEPT ![P] = IF dead /\ @ = "stored" THEN "deleted" ELSE @]
+        /\ slot' = [slot EXCEPT ![P] = IF dead /\ @ = "stored" /\ settled THEN "deleted" ELSE @]
         /\ reclaimed' = IF dead THEN reclaimed \cup {P} ELSE reclaimed
         /\ evacuator' = NoJob
         /\ UNCHANGED <<heads, pack, pidx, idx, seg, slotAt, pmap, log, authority, lifecycle, statements, att,

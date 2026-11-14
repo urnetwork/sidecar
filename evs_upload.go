@@ -19,8 +19,10 @@
 //
 // A segment's receipt is evs's MAC over its id, size, time and uploader (§11.13), which the push carries back; its
 // upload day is the statement's, so the statement is built after the uploads answer. A 429 or 503 is retried after
-// its wait, at most PushRetryCount times; SEGMENT_STALE, and any other refusal, goes back to the push sender, whose
-// rebuild seals afresh.
+// its wait, at most PushRetryCount times, and so is no answer at all, the lb's 502 or 504 among them: a drain cuts a
+// streamed segment PUT the lb cannot pass to another block, and the client sends the same bytes again (QD-758;
+// §22.8's lb drain row). SEGMENT_STALE, and any other refusal, goes back to the push sender, whose rebuild seals
+// afresh.
 //
 // On every leg. An EvsSealedWrite is not safe for concurrent use but by its own uploads.
 
@@ -331,8 +333,8 @@ func (self *EvsRepo) uploadSegments(ctx context.Context, sealed *EvsSealedWrite,
 	return ctx.Err()
 }
 
-// One segment's PUT under scope (rw when empty), retried after a 429 or 503 that refuses nothing, and its receipt held
-// to the segment.
+// One segment's PUT under scope (rw when empty), retried with its same bytes after a 429 or 503 that refuses nothing
+// or no answer at all, the lb's 502 or 504 among them (retryRefusingNothing), and its receipt held to the segment.
 func (self *EvsRepo) uploadSegment(ctx context.Context, segment *EvsSealedSegment, pushId Id, scope string) error {
 	if scope == "" {
 		scope = evsScopeWrite
@@ -370,7 +372,8 @@ func (self *EvsRepo) uploadSegment(ctx context.Context, segment *EvsSealedSegmen
 
 // Runs call, one attempt at a time with the same bytes, until it answers anything but a 429, a 503 or no answer at
 // all, each one's retry_after waited (the read wait when it names none), at most PushRetryCount times: §11.8's retry
-// id row, where a 503 whose outcome is unknown is resolved by the same request again.
+// id row, where a 503 whose outcome is unknown is resolved by the same request again. The lb's 502 or 504 is no
+// answer at all (evsErrorOfAnswer, QD-758).
 func (self *EvsClient) retryRefusingNothing(ctx context.Context, call func() error) error {
 	var err error
 	for attempt := 0; attempt <= self.settings.PushRetryCount; attempt += 1 {

@@ -150,6 +150,8 @@ type Folder struct {
 	budget     sidecar.WriteBudget
 	heads      *HeadStore
 	records    *RecordCache
+	// finds a window version's record once evacuation emptied its batch (QD-664)
+	locator    *RecordLocator
 	repos      *RepoCache
 	logPages   *LogPageCache
 	priceTable *PriceTable
@@ -169,7 +171,8 @@ type Folder struct {
 }
 
 // A folder for one process until ctx ends. blobs and budget are the engine's, metadata writes held to the budget; a
-// nil clockCheck reads as unsure.
+// nil clockCheck reads as unsure. locator is the process's record locator, which its folds and page-outs read a
+// moved window record through; nil makes one over blobs.
 func NewFolder(
 	ctx context.Context,
 	clock sidecar.Clock,
@@ -178,11 +181,15 @@ func NewFolder(
 	budget sidecar.WriteBudget,
 	heads *HeadStore,
 	records *RecordCache,
+	locator *RecordLocator,
 	repos *RepoCache,
 	priceTable *PriceTable,
 	settings *EvsSettings,
 	log sidecar.Logger,
 ) *Folder {
+	if locator == nil {
+		locator = NewRecordLocator(blobs, nil)
+	}
 	return &Folder{
 		ctx:                   ctx,
 		clock:                 clock,
@@ -191,6 +198,7 @@ func NewFolder(
 		budget:                budget,
 		heads:                 heads,
 		records:               records,
+		locator:               locator,
 		repos:                 repos,
 		logPages:              NewLogPageCache(settings),
 		priceTable:            priceTable,
@@ -453,7 +461,7 @@ func (self *Folder) startFold(ctx context.Context, request *EvsFoldRequest) (*fo
 		cluster:    request.Cluster,
 		barrierKey: barrierRefKey(request.RepoId, request.RefId),
 		startedAt:  self.clock.Now(),
-		pushes:     NewRecordPushSource(self.records, request.Cluster, request.RepoId, request.RefId),
+		pushes:     NewRecordPushSource(self.records, self.locator, request.Cluster, request.RepoId, request.RefId),
 		paths:      map[string]*foldPath{},
 		result:     &EvsFoldResult{},
 	}
@@ -1124,7 +1132,7 @@ func (self *RecordPushSource) allChangesAt(ctx context.Context, version uint64, 
 	}
 	partBytes := make([][]byte, len(push.sealParts))
 	for i, sealPart := range push.sealParts {
-		record, err := ReadRecord(ctx, self.cache, self.cluster, sealPart.Place)
+		record, err := self.readRecord(ctx, sealPart.Place)
 		if err != nil {
 			return nil, nil, err
 		}

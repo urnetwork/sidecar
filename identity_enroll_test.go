@@ -95,7 +95,12 @@ type testEnrollApi struct {
 	enrollRefusal *testApiRefusal
 	bindRefusal   *testApiRefusal
 	onBind        func()
+	// what bind answers as the re-minted token for the bearer and the binding's sidecar; nil re-mints as api does
+	// (testRemintJwt)
+	bindRemint    func(presented string, sidecarId Id) string
 	generationsBy map[Id]int64
+	// each sidecar's newest binding as posted, whose byte-identical repost answers its generation again
+	bindingsBy map[Id][]byte
 	// POST /network/config/delta's next answers, "ok", "lost" or "refused", ok when they run out; and its posts
 	deltaAnswers []string
 	deltaPosts   [][]byte
@@ -106,6 +111,8 @@ type testEnrollApi struct {
 	clients  []Id
 	removed  []Id
 	removers []string
+	// each token bind answered, in order
+	reminted []string
 }
 
 // A refusal: its status and coded body.
@@ -115,7 +122,14 @@ type testApiRefusal struct {
 }
 
 func newTestEnrollApi(t *testing.T) *testEnrollApi {
-	return &testEnrollApi{t: t, networkId: NewId(), adminRefused: true, generationsBy: map[Id]int64{}}
+	return &testEnrollApi{t: t, networkId: NewId(), adminRefused: true, generationsBy: map[Id]int64{}, bindingsBy: map[Id][]byte{}}
+}
+
+// The tokens bind answered, in order.
+func (self *testEnrollApi) remintedTokens() []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return append([]string{}, self.reminted...)
 }
 
 // A JSON answer.
@@ -174,11 +188,20 @@ func (self *testEnrollApi) RoundTrip(request *http.Request) (*http.Response, err
 		if err != nil || binding.NetworkId != self.networkId {
 			return testApiAnswer(http.StatusBadRequest, map[string]string{"error": "bad", "code": "binding_invalid"})
 		}
-		if binding.Generation != self.generationsBy[binding.SidecarId]+1 {
+		// a byte-identical repost, as a restore's re-registration is, answers its generation again
+		repost := bytes.Equal(self.bindingsBy[binding.SidecarId], wire.Binding)
+		if !repost && binding.Generation != self.generationsBy[binding.SidecarId]+1 {
 			return testApiAnswer(http.StatusConflict, map[string]string{"error": "bad", "code": "generation_conflict"})
 		}
 		self.generationsBy[binding.SidecarId] = binding.Generation
-		return testApiAnswer(http.StatusOK, map[string]int64{"generation": binding.Generation})
+		self.bindingsBy[binding.SidecarId] = wire.Binding
+		// the bearer re-minted with the binding's sidecar, as server's bind answers both (QD-040, QD-797)
+		reminted := testRemintJwt(bearer, binding.SidecarId)
+		if self.bindRemint != nil {
+			reminted = self.bindRemint(bearer, binding.SidecarId)
+		}
+		self.reminted = append(self.reminted, reminted)
+		return testApiAnswer(http.StatusOK, map[string]any{"generation": binding.Generation, "by_client_jwt": reminted})
 	case "/network/config/delta":
 		wire := &sidecarConfigDeltaWire{}
 		if err := json.Unmarshal(body, wire); err != nil {
@@ -431,6 +454,165 @@ func TestKeychainPersistedOnlyAfterBind(t *testing.T) {
 		t.Error("the keychain was written before the binding was recorded")
 	}
 	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOffline, 1))
+}
+
+// The bearer of the first request to path, "" for none.
+func (self *testEnrollApi) bearerOf(path string) string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	for i, requestPath := range self.paths {
+		if requestPath == path {
+			return self.bearers[i]
+		}
+	}
+	return ""
+}
+
+// An enrollment keeps bind's re-mint in place of the enrollment's token (QD-040, QD-797): the keychain, SidecarApi and
+// the generation's client hold the token naming the bound sidecar, with the enrollment's network, client and device.
+func TestEnrollKeepsTheRemintedToken(t *testing.T) {
+	world := newTestEnrollWorld(t)
+	if err := world.enroll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOffline, 1))
+	opened := world.platform.awaitOpened(t, 1)
+	identity := world.sidecar.currentIdentity()
+	enrolled := world.api.bearerOf("/sidecar/bind")
+	kept, err := loadSidecarByJwt(world.instance.secrets(world.api.networkId, sidecarCoreSecretsNamespace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reminted := world.api.remintedTokens()
+	if len(reminted) != 1 || kept != reminted[0] || kept == enrolled {
+		t.Fatal("the keychain does not hold bind's re-mint")
+	}
+	if world.sidecar.sidecarApi.currentByJwt() != kept || opened.args.Auth.ByJwt != kept {
+		t.Error("the generation does not present bind's re-mint")
+	}
+	keptIdentity, _ := sidecarJwtIdentityOf(kept)
+	enrolledIdentity, _ := sidecarJwtIdentityOf(enrolled)
+	if claimed, ok := sidecarJwtSidecarId(kept); !ok || claimed != identity.SidecarId || keptIdentity != enrolledIdentity {
+		t.Errorf("the kept token names sidecar %s and %+v", claimed, keptIdentity)
+	}
+}
+
+// A re-mint naming another network, client or device than the enrollment's token, another sidecar than the one bound,
+// or none is refused before anything is kept (QD-797): a first enrollment leaves nothing on disk and removes its client,
+// and a re-enrollment leaves the generation before it, and its token, as they were.
+func TestEnrollRefusesARemintOfAnotherClient(t *testing.T) {
+	edited := func(edit func(claims map[string]any)) func(presented string, sidecarId Id) string {
+		return func(presented string, sidecarId Id) string {
+			return testEditedJwt(testRemintJwt(presented, sidecarId), edit)
+		}
+	}
+	for _, c := range []struct {
+		name   string
+		remint func(presented string, sidecarId Id) string
+	}{
+		{name: "another network", remint: edited(func(claims map[string]any) { claims["network_id"] = NewId().String() })},
+		{name: "another client", remint: edited(func(claims map[string]any) { claims["client_id"] = NewId().String() })},
+		{name: "another device", remint: edited(func(claims map[string]any) { claims["device_id"] = NewId().String() })},
+		{name: "no sidecar", remint: edited(func(claims map[string]any) { delete(claims, "sidecar_id") })},
+		{name: "another sidecar", remint: func(presented string, sidecarId Id) string { return testRemintJwt(presented, NewId()) }},
+	} {
+		world := newTestEnrollWorld(t)
+		world.api.bindRemint = c.remint
+		before := backendSnapshot(t, world.backend)
+		if err := world.enroll(context.Background()); !errors.Is(err, ErrSidecarApiReply) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+		if after := backendSnapshot(t, world.backend); !snapshotsEqual(before, after) {
+			t.Errorf("%s: a refused re-mint left something on disk", c.name)
+		}
+		if len(world.api.removed) != 1 || world.api.removed[0] != world.api.clients[0] {
+			t.Errorf("%s: the new client was not removed", c.name)
+		}
+	}
+
+	world := newTestEnrollWorld(t)
+	if err := world.enroll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	world.platform.connected.Set(true)
+	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOnline, 1))
+	firstClient := world.platform.awaitOpened(t, 1)
+	world.sidecar.runningGeneration().tokenManager.Load().end(SidecarReasonRefused)
+	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateUnenrolled, 1))
+	<-firstClient.closed
+	secrets := world.instance.secrets(world.api.networkId, sidecarCoreSecretsNamespace)
+	held, err := loadSidecarByJwt(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.api.bindRemint = edited(func(claims map[string]any) { claims["client_id"] = NewId().String() })
+	if err := world.enroll(context.Background()); !errors.Is(err, ErrSidecarApiReply) {
+		t.Fatalf("a re-enrollment: %v", err)
+	}
+	if kept, _ := loadSidecarByJwt(secrets); kept != held || world.sidecar.BoundGeneration() != 1 {
+		t.Error("a refused re-mint changed the generation or the token held")
+	}
+}
+
+// restore_required's re-registration on a running sidecar holding a token that names no sidecar, as one enrolled before
+// bind re-minted holds (QD-797): the newest binding is posted again and api's re-mint goes through the generation's
+// manager, into the keychain, SidecarApi and connect's holders, by Reregister as a host runs it and by the manager's
+// own restore as refresh's restore_required runs it. A re-mint naming another client installs nothing, and the token
+// held stays.
+func TestRestoreInstallsTheRemintedToken(t *testing.T) {
+	world := newTestEnrollWorld(t)
+	if err := world.enroll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	world.platform.connected.Set(true)
+	awaitSidecarStatus(t, world.sidecar, atStatus(SidecarStateOnline, 1))
+	opened := world.platform.awaitOpened(t, 1)
+	identity := world.sidecar.currentIdentity()
+	secrets := world.instance.secrets(world.api.networkId, sidecarCoreSecretsNamespace)
+	manager := world.sidecar.runningGeneration().tokenManager.Load()
+	// the enrollment's own token, with no sidecar_id
+	enrolled := world.api.bearerOf("/sidecar/bind")
+	holdEnrolled := func() {
+		t.Helper()
+		if err := manager.install(world.sidecar.sidecarApi.currentByJwt(), enrolled); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requireRemint := func(name string) {
+		t.Helper()
+		reminted := world.api.remintedTokens()
+		kept, _ := loadSidecarByJwt(secrets)
+		auths := opened.installedAuths()
+		if kept != reminted[len(reminted)-1] || world.sidecar.sidecarApi.currentByJwt() != kept || auths[len(auths)-1].ByJwt != kept {
+			t.Fatalf("%s: the re-mint was not installed in every holder", name)
+		}
+		if claimed, ok := sidecarJwtSidecarId(kept); !ok || claimed != identity.SidecarId {
+			t.Fatalf("%s: the token held names sidecar %s", name, claimed)
+		}
+	}
+
+	holdEnrolled()
+	if err := world.sidecar.Reregister(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	requireRemint("Reregister")
+
+	holdEnrolled()
+	if outcome := manager.restore(); outcome != sidecarRefreshRestored {
+		t.Fatalf("the manager's restore: %d", outcome)
+	}
+	requireRemint("the manager's restore")
+
+	holdEnrolled()
+	world.api.bindRemint = func(presented string, sidecarId Id) string {
+		return testEditedJwt(testRemintJwt(presented, sidecarId), func(claims map[string]any) { claims["client_id"] = NewId().String() })
+	}
+	if err := world.sidecar.Reregister(context.Background()); !errors.Is(err, ErrSidecarApiReply) {
+		t.Fatalf("a re-mint of another client: %v", err)
+	}
+	if kept, _ := loadSidecarByJwt(secrets); kept != enrolled || world.sidecar.sidecarApi.currentByJwt() != enrolled {
+		t.Error("a refused re-mint changed the token held")
+	}
 }
 
 // After a refusal, enrolling again keeps the sidecar_id and identity key and binds generation 2 on a new client and

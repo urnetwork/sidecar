@@ -29,6 +29,7 @@ import (
 const (
 	webAuthnRpId                          = "ur.io"
 	webAuthnClientDataTypeGet             = "webauthn.get"
+	webAuthnClientDataTypeCreate          = "webauthn.create"
 	webAuthnFlagsOffset                   = sha256.Size
 	webAuthnFlagUserPresent          byte = 0x01
 	webAuthnFlagUserVerified         byte = 0x04
@@ -204,6 +205,34 @@ func checkWebAuthnAssertion(evidence *WebAuthnEvidence, message []byte, origins 
 	challenge := sha256.Sum256(message)
 	if clientData.Challenge != base64.RawURLEncoding.EncodeToString(challenge[:]) {
 		return fmt.Errorf("%w: challenge", ErrSignedEvidence)
+	}
+	if !slices.Contains(origins, clientData.Origin) {
+		return fmt.Errorf("%w: origin %q", ErrSignedEvidence, clientData.Origin)
+	}
+	return nil
+}
+
+// §16.6's check of the client data a webauthn-es256 key's registration carries beside its attestation object (QD-730):
+// the create ceremony's, so its type is webauthn.create, and its origin equals one of this file's table, as an
+// assertion's does. The challenge is left unread: the credential key in the attestation's authenticator data, which the
+// caller holds equal to the registered public key, is what binds an attestation to its registration. The root's
+// VerifyPresenceAttestation calls this, so the origin table stays here, with one reader.
+func CheckWebAuthnRegistrationClientData(clientDataJson []byte) error {
+	return checkWebAuthnRegistrationClientData(clientDataJson, webAuthnOrigins[:])
+}
+
+// CheckWebAuthnRegistrationClientData's checks with origins in place of webAuthnOrigins. Only tests pass another list,
+// the fixture origins in testdata/ (QD-073).
+func checkWebAuthnRegistrationClientData(clientDataJson []byte, origins []string) error {
+	var clientData struct {
+		Type   string `json:"type"`
+		Origin string `json:"origin"`
+	}
+	if err := json.Unmarshal(clientDataJson, &clientData); err != nil {
+		return fmt.Errorf("%w: client data: %w", ErrSignedEvidence, err)
+	}
+	if clientData.Type != webAuthnClientDataTypeCreate {
+		return fmt.Errorf("%w: client data type", ErrSignedEvidence)
 	}
 	if !slices.Contains(origins, clientData.Origin) {
 		return fmt.Errorf("%w: origin %q", ErrSignedEvidence, clientData.Origin)

@@ -39,6 +39,8 @@ func RegisterEvsTwins(redis *FakeRedis) {
 	redis.RegisterScript(evsLeasePutScriptName, evsLeasePutTwin)
 	redis.RegisterScript(evsLeaseDeleteScriptName, evsLeaseDeleteTwin)
 	redis.RegisterScript(evsLeaseSweepScriptName, evsLeaseSweepTwin)
+	redis.RegisterScript(evsClientRepoPutScriptName, evsClientRepoPutTwin)
+	redis.RegisterScript(evsClientRepoRemoveScriptName, evsClientRepoRemoveTwin)
 	redis.RegisterScript(evsNightlySumsWriteScriptName, evsNightlySumsWriteTwin)
 	redis.RegisterScript(evsNightlySumsMissingScriptName, evsNightlySumsMissingTwin)
 }
@@ -158,6 +160,8 @@ const (
 	evsLeasePutScriptName          = "evs_lease_put"
 	evsLeaseDeleteScriptName       = "evs_lease_delete"
 	evsLeaseSweepScriptName        = "evs_lease_sweep"
+	evsClientRepoPutScriptName     = "evs_client_repo_put"
+	evsClientRepoRemoveScriptName  = "evs_client_repo_remove"
 )
 
 // {evsq_<repo_id>}'s raise: SET to the master's TIME in µs x 1,000 as joined strings when absent, then INCR,
@@ -308,4 +312,73 @@ func evsLeaseSweepTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
 		}
 	}
 	return RedisIntegerReply(int64(len(remove))), nil
+}
+
+// {evsc_<client_id>}'s count: drops the members whose score has lapsed, refuses a new repo at the cap, else scores
+// the repo now and extends the key. KEYS[1] the client's repos; ARGV now ms, the repo, the cap, the newest lapsed
+// score in ms, the ttl in ms. 0 refused, 1 added, 2 renewed. FakeRedis has no sorted set, so the twin keeps the set
+// as a hash of member to score, which no caller reads but these twins; the real Source's ZADD, ZCARD and
+// ZREMRANGEBYSCORE run on the private Redis in server's evshost tests.
+func evsClientRepoPutTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
+	key := call.Keys[0]
+	if _, err := strconv.ParseInt(call.Args[0], 10, 64); err != nil {
+		return nil, err
+	}
+	repo := call.Args[1]
+	limit, err := strconv.ParseInt(call.Args[2], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	lapsed, err := strconv.ParseInt(call.Args[3], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	ttlMs, err := strconv.ParseInt(call.Args[4], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	members, err := call.HashGetAll(key)
+	if err != nil {
+		return nil, err
+	}
+	remove := []string{}
+	for member, value := range members {
+		if score, err := strconv.ParseInt(string(value), 10, 64); err != nil || score <= lapsed {
+			remove = append(remove, member)
+			delete(members, member)
+		}
+	}
+	if 0 < len(remove) {
+		if err := call.HashDelete(key, remove); err != nil {
+			return nil, err
+		}
+	}
+	_, held := members[repo]
+	if !held && limit <= int64(len(members)) {
+		return RedisIntegerReply(0), nil
+	}
+	if err := call.HashSet(key, map[string][]byte{repo: []byte(call.Args[0])}); err != nil {
+		return nil, err
+	}
+	if _, err := call.Expire(key, time.Duration(ttlMs)*time.Millisecond); err != nil {
+		return nil, err
+	}
+	if held {
+		return RedisIntegerReply(2), nil
+	}
+	return RedisIntegerReply(1), nil
+}
+
+// {evsc_<client_id>}'s removal of one repo: how many went. KEYS[1] the client's repos; ARGV the repo.
+func evsClientRepoRemoveTwin(call *FakeRedisScriptCall) (*sidecar.RedisReply, error) {
+	key := call.Keys[0]
+	if _, held, err := call.HashGet(key, call.Args[0]); err != nil {
+		return nil, err
+	} else if !held {
+		return RedisIntegerReply(0), nil
+	}
+	if err := call.HashDelete(key, []string{call.Args[0]}); err != nil {
+		return nil, err
+	}
+	return RedisIntegerReply(1), nil
 }

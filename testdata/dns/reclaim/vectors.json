@@ -1,0 +1,25 @@
+{
+  "comment": "DNS-M5-16's reclaim tuples, each part a 2-byte big-endian length then its bytes, and a synthetic self-signed leaf on a fixed P-256 key with its signature over the first tuple. Regenerate only with a format change.",
+  "vectors": [
+    {
+      "name": "lbl0000001.root.example",
+      "network_id": "0193a1b2c3d4e5f60718293a4b5c6d7e",
+      "incident_id": "0193a1b2c3d4e5f60718293a4b5c6d7f",
+      "signed_bytes": "002275726e6574776f726b2d736964656361722d76312f6c6162656c2d7265636c61696d00176c626c303030303030312e726f6f742e6578616d706c6500100193a1b2c3d4e5f60718293a4b5c6d7e00100193a1b2c3d4e5f60718293a4b5c6d7f"
+    },
+    {
+      "name": "lbl0000001.root.example",
+      "network_id": "0193a1b2c3d4e5f60718293a4b5c6d7e",
+      "incident_id": "0193a1b2c3d4e5f60718293a4b5c6d80",
+      "signed_bytes": "002275726e6574776f726b2d736964656361722d76312f6c6162656c2d7265636c61696d00176c626c303030303030312e726f6f742e6578616d706c6500100193a1b2c3d4e5f60718293a4b5c6d7e00100193a1b2c3d4e5f60718293a4b5c6d80"
+    },
+    {
+      "name": "synthetic-alias.root.example",
+      "network_id": "0193a1b2c3d4e5f60718293a4b5c6d81",
+      "incident_id": "0193a1b2c3d4e5f60718293a4b5c6d7f",
+      "signed_bytes": "002275726e6574776f726b2d736964656361722d76312f6c6162656c2d7265636c61696d001c73796e7468657469632d616c6961732e726f6f742e6578616d706c6500100193a1b2c3d4e5f60718293a4b5c6d8100100193a1b2c3d4e5f60718293a4b5c6d7f"
+    }
+  ],
+  "leaf": "MIIBczCCARqgAwIBAgIBATAKBggqhkjOPQQDAjAiMSAwHgYDVQQDExdsYmwwMDAwMDAxLnJvb3QuZXhhbXBsZTAeFw0yNjAxMDEwMDAwMDBaFw0yNjA0MDEwMDAwMDBaMCIxIDAeBgNVBAMTF2xibDAwMDAwMDEucm9vdC5leGFtcGxlMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEInU3CvWPwadWJsZu0O0bG2zKMP0ffa04AFqX7jRhDcoRM0YAnPNStOasJpYAP69U6TV7nzC6EcfEVvb5l/hDXKNBMD8wPQYDVR0RBDYwNIIXbGJsMDAwMDAwMS5yb290LmV4YW1wbGWCGSoubGJsMDAwMDAwMS5yb290LmV4YW1wbGUwCgYIKoZIzj0EAwIDRwAwRAIgd/Ngpv+R3ESsjH/TKewGN3QOld/0O0GVpHHDWTeOaWkCICqSouzqHmqRLOwKxuLn8y/R3WMDhydIIPs8Eij/CYVu",
+  "signature": "MEUCIQDZMNYXDyOaVE+oNoLm+aGbPhzX16oXju7lrW0DFPMqtAIgNFjjV2lNs6dkyxglx8h49XowQj+oD07laUNBc8kBT2w="
+}

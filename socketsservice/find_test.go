@@ -456,8 +456,8 @@ func TestSocketFindPicksAgainWhenEveryPickedListenerIsRefused(t *testing.T) {
 }
 
 // Who may Find what (§9.4's table): a sidecar may not Find tls/ or smtp/, an edge may not Find a blinded name,
-// a sidecar may not Find another network's blinded name, ur/ waits on SOCK-M9-01, and only an edge sends
-// client_ids. Each answers before any group is read.
+// a sidecar may not Find another network's blinded name, an edge may not Find a ur/ name (namespace_ur.go), and
+// only an edge sends client_ids. Each answers before any group is read.
 func TestSocketFindDeniesWhatItsCallerCannotReach(t *testing.T) {
 	scene := newTestSocketFindScene(t, 1)
 	world := scene.world
@@ -473,7 +473,7 @@ func TestSocketFindDeniesWhatItsCallerCannotReach(t *testing.T) {
 	}{
 		{token: scene.dialer.token, args: &sidecar.SocketFindArgs{Name: "tls/443/blog", NetworkId: &networkId}, code: sidecar.SocketErrorCodeDenied},
 		{token: scene.dialer.token, args: &sidecar.SocketFindArgs{Name: "smtp/25/mx", NetworkId: &networkId}, code: sidecar.SocketErrorCodeDenied},
-		{token: scene.dialer.token, args: &sidecar.SocketFindArgs{Name: "ur/smtpedge", NetworkId: &world.edgeNetworkId}, code: sidecar.SocketErrorCodeDenied},
+		{token: edge.token, args: &sidecar.SocketFindArgs{Name: "ur/smtpedge", NetworkId: &world.edgeNetworkId, ClientIds: edge.clientIdArgs()}, code: sidecar.SocketErrorCodeDenied},
 		{token: scene.dialer.token, args: &sidecar.SocketFindArgs{NameToken: scene.nameToken, NetworkId: &otherNetworkId}, code: sidecar.SocketErrorCodeDenied},
 		{token: edge.token, args: &sidecar.SocketFindArgs{NameToken: scene.nameToken, NetworkId: &networkId, ClientIds: edge.clientIdArgs()}, code: sidecar.SocketErrorCodeDenied},
 		{token: scene.dialer.token, args: &sidecar.SocketFindArgs{NameToken: scene.nameToken, NetworkId: &networkId, ClientIds: edge.clientIdArgs()}, code: sidecar.SocketErrorCodeInvalid},

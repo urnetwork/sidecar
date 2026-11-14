@@ -176,7 +176,7 @@ func TestEvsEnumNumbersStable(t *testing.T) {
 			got:  EvsReadObjectKind_value,
 			want: map[string]int32{
 				"EVS_READ_OBJECT_KIND_UNSPECIFIED": 0, "EVS_READ_OBJECT_SEGMENT": 1, "EVS_READ_OBJECT_SLOT": 2,
-				"EVS_READ_OBJECT_MAP_PART": 3, "EVS_READ_OBJECT_LOG_PAGE": 4, "EVS_READ_OBJECT_BATCH_RECORD": 5,
+				"EVS_READ_OBJECT_MAP_PART": 3, "EVS_READ_OBJECT_LOG_PAGE": 4, "EVS_READ_OBJECT_BATCH_RECORD": 5, "EVS_READ_OBJECT_RESEED": 6,
 			},
 		},
 	}
@@ -217,6 +217,7 @@ func TestEvsSealedValuesKeepTheirNumbers(t *testing.T) {
 		"EvsSealedMetadata": {
 			"1 group GroupHead", "2 provenance EvsProvenance", "3 commits repeated EvsSealedCommit",
 			"4 signed_import bytes", "5 git EvsGitUpdate", "6 ref_name bytes", "7 base EvsOverlay",
+			"8 erasure_note bytes",
 		},
 		"EvsProvenance": {
 			"1 agent_id bytes", "2 tainted bool", "3 agent_cert bytes", "4 agent_key_id bytes", "5 agent_signature bytes",

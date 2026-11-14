@@ -118,8 +118,11 @@ func (self *mlsCipherSuite) extract(kind string, salt []byte, inputKey []byte) (
 	return extracted, nil
 }
 
-// Expands secret under a label and context (RFC §8), hooking the output as kind.
-func (self *mlsCipherSuite) expandWithLabel(kind string, secret []byte, label string, context []byte, length int) ([]byte, error) {
+// Expands secret under a label and context (RFC §8), and hooks the output as kind when hook is set. hook is false
+// for an AEAD nonce alone (ledger QD-755): a nonce is no key, the secret it comes from is hooked, and at 12 bytes
+// the privacy capture cannot search for it and would refuse it as a finding. TestMlsUnhooksOnlyItsAeadNonces holds
+// every caller to that.
+func (self *mlsCipherSuite) expandWithLabel(kind string, hook bool, secret []byte, label string, context []byte, length int) ([]byte, error) {
 	if length < 0 || 0xffff < length {
 		return nil, fmt.Errorf("mls: expand length %d", length)
 	}
@@ -135,20 +138,23 @@ func (self *mlsCipherSuite) expandWithLabel(kind string, secret []byte, label st
 	if err != nil {
 		return nil, fmt.Errorf("mls: expand: %w", err)
 	}
-	testHookSecret(kind, expanded)
+	if hook {
+		testHookSecret(kind, expanded)
+	}
 	return expanded, nil
 }
 
 // A secret of the hash's length, expanded under a label with no context (RFC §8).
 func (self *mlsCipherSuite) deriveSecret(kind string, secret []byte, label string) ([]byte, error) {
-	return self.expandWithLabel(kind, secret, label, nil, self.hashLength)
+	return self.expandWithLabel(kind, true, secret, label, nil, self.hashLength)
 }
 
-// A secret tree expansion (RFC §9.1): the generation is the context, as a big-endian uint32.
-func (self *mlsCipherSuite) deriveTreeSecret(kind string, secret []byte, label string, generation uint32, length int) ([]byte, error) {
+// A secret tree expansion (RFC §9.1): the generation is the context, as a big-endian uint32. hook is
+// expandWithLabel's: false for the ratchet's nonce alone.
+func (self *mlsCipherSuite) deriveTreeSecret(kind string, hook bool, secret []byte, label string, generation uint32, length int) ([]byte, error) {
 	encoder := &mlsEncoder{}
 	encoder.writeUint32(generation)
-	return self.expandWithLabel(kind, secret, label, encoder.encoded, length)
+	return self.expandWithLabel(kind, hook, secret, label, encoder.encoded, length)
 }
 
 // A labeled hash that names a value by its contents (RFC §5.2).

@@ -287,6 +287,10 @@ func makeSocketRegistrarRows(networkId Id, sign socketSignFunction, entry *socke
 		if row := reused([]byte(entry.name)); row != nil {
 			return []*socketRegistrarRow{row}, nil
 		}
+		// a platform client's ur/ entry carries no claim: it holds no identity key (SOCK.md reading 7)
+		if entry.namespace == SocketNamespacePlatform {
+			return []*socketRegistrarRow{{nameKey: []byte(entry.name), identityEpoch: identityEpoch}}, nil
+		}
 		claim, err := signSocketRegistrationClaim(networkId, sign, entry, nil)
 		if err != nil {
 			return nil, err

@@ -164,6 +164,17 @@ func (self *EffectSink) EffectCount() int {
 	return self.effectCount
 }
 
+// Each key the sink did an effect under, once, in no order: what FI-7's oracle reads against the ledger's Reserves.
+func (self *EffectSink) EffectKeys() [][]byte {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	keys := make([][]byte, 0, len(self.keyRefs))
+	for key := range self.keyRefs {
+		keys = append(keys, []byte(key))
+	}
+	return keys
+}
+
 // The spend each Run saw on its context, in order: nothing for a standing grant's run.
 func (self *EffectSink) Spends() []*sidecar.ApprovalSpend {
 	self.stateLock.Lock()

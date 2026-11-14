@@ -19,7 +19,7 @@ func TestAuthKeySeedsReachTheSecretHook(t *testing.T) {
 	recorder.secrets = nil
 	recorder.kinds = map[string]bool{}
 	recorder.stateLock.Unlock()
-	if _, err := ParseAuthKey(text); err != nil {
+	if _, err := ParseAuthKey(text, nil); err != nil {
 		t.Fatal(err)
 	}
 	bundle := testAuthKeyBundle()

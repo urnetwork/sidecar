@@ -479,8 +479,8 @@ func Fs16VetoWins(net *Net) *Schedule {
 }
 
 // FS-16 and DESIGN-DETAILS 5.6: a recovery proposal's window carried across two folds activates at a tick 72 h after
-// its entry at every reader, a tick at 71 h refused. Needs an api that takes activations, so T2 alone until
-// server's tick check takes them.
+// its entry at every reader, a tick at 71 h refused. Needs an api that takes activations, which both tiers' do: T3's
+// sequencer judges a tick as its readers do (TEAM-M2-14).
 func Fs16ActivationAcrossFolds(net *Net) *Schedule {
 	world := newFsTeamWorld()
 	return fsTeamSchedule("FS-16 an activation across folds", world,

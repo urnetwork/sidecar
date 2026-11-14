@@ -19,9 +19,9 @@
 // TestFs3StepSevenPastFiveSeconds runs the clause under FS-3's rules.
 //
 // FS-3 also names A's PUT timing out after the gate closes, its fence and the 200 when its first PUT applied before
-// the fence, nothing committing under the old generation past §10.6's window (FI-3's clause, whose oracle, TEST-M2-05,
-// is not bound), and the multipart seal, deposit, new ref, repo delete, grant expiry and evs restart before the CAS:
-// EVS1-M2-40's report keeps them.
+// the fence, and the multipart seal, deposit, new ref, repo delete, grant expiry and evs restart before the CAS:
+// EVS1-M2-40's report keeps them. Nothing committing under the old generation past §10.6's window is FI-3's clause,
+// which the world's checks name (TEST-M2-05).
 
 package fault
 

@@ -5,6 +5,10 @@
 // sdk_mobile_bind's exclusion. It dials the instance's socket or pipe, sends the hello, reads the daemon's answer,
 // and then either calls control methods by JSON-RPC 2.0 or hands the stream to a relay (mcp, git).
 //
+// A sandboxed macOS app's remote backend cannot reach the instance's socket, so it dials the one in its app-group
+// container (daemon_pair.go), whose name DaemonAppGroupSocketName gives both ends; the app supplies the container,
+// since a build with sdk_mobile_bind links none of the daemon's own files.
+//
 // A refused hello is a *DaemonHelloRefusal, whose version_skew tells a just-upgraded ur to restart the daemon rather
 // than relay through it. A client is not safe for concurrent use: one call at a time, as the daemon answers them.
 
@@ -13,6 +17,8 @@ package sidecar
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +45,22 @@ const (
 	// §5.8's FAILED_PRECONDITION: a network-scoped call with no network to act on, whose message names the networks.
 	DaemonRpcFailedPrecondition = -32004
 )
+
+// The default instance's socket name in an app-group container, and the prefix of every other's.
+const (
+	daemonAppGroupDefaultSocketName = "ur"
+	daemonAppGroupSocketNamePrefix  = "u"
+	daemonAppGroupSocketNameDomain  = "urnetwork-sidecar-v1/app-group-socket/"
+)
+
+// The socket's name in an app-group container for instance.
+func DaemonAppGroupSocketName(instance string) string {
+	if instance == "" || instance == "default" {
+		return daemonAppGroupDefaultSocketName
+	}
+	sum := sha256.Sum256([]byte(daemonAppGroupSocketNameDomain + instance))
+	return daemonAppGroupSocketNamePrefix + hex.EncodeToString(sum[:])[:7]
+}
 
 // A JSON-RPC 2.0 request line. ur_confirmed sits beside params, where only a ur sets it.
 type daemonRpcRequest struct {

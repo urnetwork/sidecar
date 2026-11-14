@@ -11,6 +11,7 @@
 //	bridge     expose                                                 MCP-M4-01, on BridgeFiler.FindRule
 //	evs        agent_config_write and _delete, alias_create, _delete  EVS1-M3-01's EvsRepo.Lookup
 //	restore    restore                                                MCP-M3-22
+//	sender     mail_tls_unauthenticated                               SmtpTlsPolicy.Lookup, registered by SMTP-M9-07
 //
 // A kind with no registered Lookup is refused before its Reserve, so no use is taken that a restart could not
 // reconcile. A gate kind's effect is presented to §8.10's server gate, which consumes the use in the effect's own
@@ -78,6 +79,9 @@ type ApprovalSpend struct {
 	Decisions [][]byte
 	// The action the decisions hash, as stored: the use's own, or the template it falls inside.
 	Action []byte
+	// What the approved request binds beside its action, the socket name, local port, weight and ALPNs every decision's
+	// request_sha256 covers (QD-740, QD-772), which the effect applies; nil for none.
+	Detail *SidecarActionDetail
 }
 
 // The context key of an ApprovalSpend.
@@ -85,7 +89,7 @@ type approvalSpendContextKey struct{}
 
 // ctx carrying spend, a copy.
 func withApprovalSpend(ctx context.Context, spend *ApprovalSpend) context.Context {
-	copied := &ApprovalSpend{ApprovalId: spend.ApprovalId, Action: bytes.Clone(spend.Action)}
+	copied := &ApprovalSpend{ApprovalId: spend.ApprovalId, Action: bytes.Clone(spend.Action), Detail: spend.Detail.clone()}
 	for _, decision := range spend.Decisions {
 		copied.Decisions = append(copied.Decisions, bytes.Clone(decision))
 	}

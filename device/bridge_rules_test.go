@@ -242,6 +242,15 @@ func TestParseBridgeRulesRefusesEachMalformedRow(t *testing.T) {
 		{"link's member id short", func(rules *bridge.BridgeRules) { link(rules).TargetMemberId = []byte{1} }},
 		{"link's rule id short", func(rules *bridge.BridgeRules) { link(rules).RuleId = link(rules).RuleId[:16] }},
 		{"link of weight 0", func(rules *bridge.BridgeRules) { link(rules).Weight = 0 }},
+		{"link's pinned client key short", func(rules *bridge.BridgeRules) {
+			link(rules).TargetClientPublicKey = bytes.Repeat([]byte{0xC7}, 31)
+		}},
+		{"link's pinned client key all zero", func(rules *bridge.BridgeRules) {
+			link(rules).TargetClientPublicKey = make([]byte, 32)
+		}},
+		{"link's pinned client key the identity key", func(rules *bridge.BridgeRules) {
+			link(rules).TargetClientPublicKey = bytes.Clone(link(rules).TargetIdentityPublicKey)
+		}},
 		{"link draining backwards", func(rules *bridge.BridgeRules) {
 			link(rules).DrainingSince = bridgeRulesTestTimeMs
 			link(rules).DrainUntil = bridgeRulesTestTimeMs - 1

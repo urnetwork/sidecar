@@ -132,8 +132,7 @@ type repositoryModule struct {
 	directory string
 	// its path without the release's /vN elements
 	basePath string
-	// "." for the root module, else cli, smtpproof, mlsinterop or sidecarctl as it would be in
-	// development
+	// "." for the root module, else cli, smtpproof or mlsinterop as it would be in development
 	relativeName string
 	file         *moduleFile
 }

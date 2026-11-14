@@ -160,6 +160,8 @@ type EvsSettings struct {
 	MapMaxAge time.Duration
 	// Tail refusals of one map before its mapper asks evs for the block: 2.
 	MapTailRefusalCount int
+	// An erasure with no ERASE for this long is stalled, another device's to finish: 25 h (§11.12's reconcile row).
+	ErasureStallAfter time.Duration
 	// A phone maps only while its index holds at most this many names, §11.6's bound: 100,000. Read only where
 	// MapperMobile is set.
 	MobileMapNameCount int
@@ -278,6 +280,7 @@ func DefaultEvsSettings() *EvsSettings {
 		MapUploadCount:           4,
 		MapMaxAge:                20 * time.Hour,
 		MapTailRefusalCount:      2,
+		ErasureStallAfter:        25 * time.Hour,
 		MobileMapNameCount:       100000,
 		ListedIndexRoundCount:    8,
 		PartsMissingRetryCount:   3,

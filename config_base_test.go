@@ -31,8 +31,9 @@ func (self *testConfigNet) makeBaseWithVerdicts(signer testConfigDevice, rows *b
 	return self.makeEntry(bridge.AuthEntryKindBase, self.sign(signer, bridge.SignedType_SIGNED_PROJECTION_HEADER, header))
 }
 
-// A base entry's Signed header bytes and its rows, as api's CheckBase takes them.
-func (self *testConfigNet) baseParts(entryBytes []byte) ([]byte, []byte) {
+// A base entry's Signed header bytes, its rows and its time, as api's CheckBase takes them: api checks at the time it
+// stamps.
+func (self *testConfigNet) baseParts(entryBytes []byte) ([]byte, []byte, int64) {
 	self.t.Helper()
 	entry := &bridge.AuthEntry{}
 	if err := proto.Unmarshal(entryBytes, entry); err != nil {
@@ -46,7 +47,7 @@ func (self *testConfigNet) baseParts(entryBytes []byte) ([]byte, []byte) {
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	return entry.GetBody(), rows
+	return entry.GetBody(), rows, entry.GetTimeMs()
 }
 
 // A rows-only gate at the tip, as api sequences by: every entry so far applied.
@@ -201,8 +202,8 @@ func TestABaseWhoseBitsDisagreeForks(t *testing.T) {
 	api := net.apiAtTip()
 	for _, c := range cases {
 		entryBytes := net.makeBaseWithVerdicts(net.owner, rows, foldedThrough, 3, 0, c.verdicts)
-		signedHeader, rowsBytes := net.baseParts(entryBytes)
-		if err := api.CheckBase(signedHeader, rowsBytes); !errors.Is(err, ErrConfigRule) {
+		signedHeader, rowsBytes, timeMs := net.baseParts(entryBytes)
+		if err := api.CheckBase(signedHeader, rowsBytes, timeMs); !errors.Is(err, ErrConfigRule) {
 			t.Errorf("%s: api's check %v", c.name, err)
 		}
 		reader := net.newReader()
@@ -211,8 +212,8 @@ func TestABaseWhoseBitsDisagreeForks(t *testing.T) {
 		}
 	}
 	entryBytes := net.makeBaseWithVerdicts(net.owner, rows, foldedThrough, 3, 0, honest)
-	signedHeader, rowsBytes := net.baseParts(entryBytes)
-	if err := api.CheckBase(signedHeader, rowsBytes); err != nil {
+	signedHeader, rowsBytes, timeMs := net.baseParts(entryBytes)
+	if err := api.CheckBase(signedHeader, rowsBytes, timeMs); err != nil {
 		t.Fatalf("the honest base at api: %v", err)
 	}
 	if verdict := net.push(entryBytes); !verdict.Accepted() {
@@ -233,8 +234,8 @@ func TestATailOverTheCapIsRefusedAndForks(t *testing.T) {
 	api := net.apiAtTip()
 	rows := net.statesAt[1].Rows()
 	over := net.makeBase(net.owner, rows, 1, 2, 0)
-	signedHeader, rowsBytes := net.baseParts(over)
-	if err := api.CheckBase(signedHeader, rowsBytes); !errors.Is(err, ErrConfigRule) {
+	signedHeader, rowsBytes, timeMs := net.baseParts(over)
+	if err := api.CheckBase(signedHeader, rowsBytes, timeMs); !errors.Is(err, ErrConfigRule) {
 		t.Errorf("api took a tail of %d: %v", configTailMax+1, err)
 	}
 	reader := net.newReader()
@@ -258,8 +259,8 @@ func TestAFoldedThroughBelowThePreviousBaseForks(t *testing.T) {
 	previousBase := net.n
 	net.admitMember(net.owner, testConfigId("c"), bridge.MemberRole_MEMBER_ROLE_MEMBER)
 	between := net.makeBase(net.owner, net.statesAt[2].Rows(), 2, 3, 0)
-	signedHeader, rowsBytes := net.baseParts(between)
-	if err := net.apiAtTip().CheckBase(signedHeader, rowsBytes); !errors.Is(err, ErrConfigRule) {
+	signedHeader, rowsBytes, timeMs := net.baseParts(between)
+	if err := net.apiAtTip().CheckBase(signedHeader, rowsBytes, timeMs); !errors.Is(err, ErrConfigRule) {
 		t.Errorf("api took a fold between: %v", err)
 	}
 	if _, err := net.newReader().Apply(between, net.source); !errors.Is(err, ErrConfigFork) {

@@ -88,10 +88,10 @@ var (
 // What the eraser runs by.
 type RecordEraserSettings struct {
 	// The entries one erasure names, within ErasureBody.entry_ids' 1,024 (record.proto): each of its ERASEs carries
-	// the erasure's ErasureBody as its note, and an ERASE's note rides inline, at most 16 KiB with its record
-	// (EvsInlineMaxByteCount), which about 850 entry ids fill, so 512 leaves room. A larger erasure is several.
+	// the erasure's ErasureBody as its note, and an ERASE's note rides its push's sealed metadata (QD-682), the push
+	// one part, so 512 keeps a note near 10 KiB. A larger erasure is several.
 	EntryCount int
-	// The keys one ERASE names, so its push stays within one part beside its inline note.
+	// The keys one ERASE names, so its push stays within one part beside its note.
 	EraseKeyCount int
 }
 

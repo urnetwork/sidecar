@@ -6,7 +6,7 @@
 // B writing another path: B's rerun commits at v+2 and evacuation keeps both records.
 //
 // FS-2's new slots are a slot-keyed repo's, which the world's general repo writes none of: EVS1-M2-40's report keeps
-// them. FI-3's oracle is not bound (TEST-M2-05), so the schedules name the world's checks in its place.
+// them. FI-3 holds through the world's checks (TEST-M2-05).
 
 package fault
 

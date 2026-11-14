@@ -1,7 +1,7 @@
 // EVS1-M2-25's tests: the checkpoint rules as tables, chains never past N + 1 locators, chunks rewritten only where
 // touched, a creation after a removal continuing its versions, reserved names refused, directory deltas for parents,
-// and every plan's bytes read back through EVS1-M2-24's verifying reader, over a stand-in evs that commits what the
-// push sender posts into the read tests' world.
+// a write held to the version its caller read (QD-721), and every plan's bytes read back through EVS1-M2-24's
+// verifying reader, over a stand-in evs that commits what the push sender posts into the read tests' world.
 
 package sidecar
 
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1153,9 +1154,10 @@ func TestEvsPlanTakesOnlyRekeyWritesOnAGitModeRef(t *testing.T) {
 	writer.world.mode = protocol.EvsRefMode_EVS_REF_GIT
 	writer.world.push(&evsTestChange{path: "tree.txt", content: []byte("tree")})
 	writer.server.know("tree.txt")
+	standing := uint64(1)
 	rekey := func(content []byte, mode uint32) error {
 		_, err := writer.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
-			Path: "tree.txt", Content: bytes.NewReader(content), Mode: mode, ForceCheckpoint: true, IfVersion: 1,
+			Path: "tree.txt", Content: bytes.NewReader(content), Mode: mode, ForceCheckpoint: true, IfVersion: &standing,
 		}}})
 		return err
 	}
@@ -1166,7 +1168,7 @@ func TestEvsPlanTakesOnlyRekeyWritesOnAGitModeRef(t *testing.T) {
 		t.Errorf("a rekey write changing the mode: %v", err)
 	}
 	unforced, err := writer.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
-		Path: "tree.txt", Content: bytes.NewReader([]byte("tree")), IfVersion: 1,
+		Path: "tree.txt", Content: bytes.NewReader([]byte("tree")), IfVersion: &standing,
 	}}})
 	if !errors.Is(err, ErrEvsGitRef) || unforced != nil {
 		t.Errorf("a write that is no rekey: %v", err)
@@ -1180,5 +1182,256 @@ func TestEvsPlanTakesOnlyRekeyWritesOnAGitModeRef(t *testing.T) {
 	read, info, err := writer.read(t, "tree.txt")
 	if err != nil || string(read) != "tree" || info.Version != 2 {
 		t.Errorf("read back: %q at %d: %v", read, info.Version, err)
+	}
+}
+
+// Runs race once, as the next push or seal arrives and before the stand-in checks it: a commit that lands between a
+// writer's plan and its push.
+func (self *evsTestPushServer) raceNextPush(race func()) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.onPush = func(statement *EvsStatement) {
+		self.stateLock.Lock()
+		self.onPush = nil
+		self.stateLock.Unlock()
+		race()
+	}
+}
+
+// How many statements and segments the stand-in was sent.
+func (self *evsTestPushServer) sentCounts() (int, int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return len(self.postedStatements), len(self.uploads)
+}
+
+// One push of a file held to the version its caller read (EvsPathWrite.IfVersion).
+func (self *evsTestWriter) writeHeld(path string, ifVersion uint64, content string) (*EvsWritePathsResult, error) {
+	self.server.know(path)
+	return self.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{{
+		Path: path, Content: bytes.NewReader([]byte(content)), IfVersion: &ifVersion,
+	}}})
+}
+
+// Requires err to be evs's 409 PATH_CONFLICT as an *EvsPathConflictError naming exactly paths, its text naming none.
+func evsTestRequirePathConflict(t *testing.T, err error, paths ...string) *EvsPathConflictError {
+	t.Helper()
+	var conflict *EvsPathConflictError
+	evsError, ok := EvsErrorOf(err)
+	if !errors.As(err, &conflict) || !ok || evsError.Status != http.StatusConflict || !IsEvsRefusal(err, protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT) {
+		t.Fatalf("no path conflict: %v", err)
+	}
+	if !slices.Equal(conflict.Paths, paths) {
+		t.Fatalf("the conflict names %d paths %q, not %q", len(conflict.Paths), conflict.Paths, paths)
+	}
+	for _, path := range paths {
+		if strings.Contains(err.Error(), path) {
+			t.Errorf("the conflict's text names a path: %v", err)
+		}
+	}
+	return conflict
+}
+
+// QD-721's hold: a write whose caller read is stale answers evs's 409 PATH_CONFLICT naming its path, before anything
+// is sealed or sent, and commits nothing; one on the standing version commits with that version as its
+// base_entry_version; and a commit that lands between the plan and the push is refused by evs's own 5g, the answer
+// naming the same written path.
+func TestEvsWriteIfVersionRefusesAStaleRead(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	stale := writer.otherWriter(t, "stale writer")
+	first, err := writer.write(t, "held/a.txt", []byte("one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := writer.write(t, "held/a.txt", []byte("two"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	posted, uploads := writer.server.sentCounts()
+	_, err = stale.writeHeld("held/a.txt", first.PathVersion, "on one")
+	conflict := evsTestRequirePathConflict(t, err, "held/a.txt")
+	if !errors.Is(err, ErrEvsPathMoved) || conflict.Refusal.PushId != nil {
+		t.Errorf("the planner's own conflict: %v", err)
+	}
+	if len(conflict.Refusal.Paths) != 1 || !conflict.Refusal.Paths[0].Equal(writer.world.tokensAt("held/a.txt", 1)) {
+		t.Error("the refusal does not name the path's tokens")
+	}
+	if nowPosted, nowUploads := writer.server.sentCounts(); nowPosted != posted || nowUploads != uploads {
+		t.Error("a write on a stale read sent something")
+	}
+	if read, info, err := writer.read(t, "held/a.txt"); err != nil || string(read) != "two" || info.Version != second.PathVersion {
+		t.Fatalf("the path after the refusal: %q %v", read, err)
+	}
+
+	third, err := stale.writeHeld("held/a.txt", second.PathVersion, "three")
+	if err != nil || third.PathVersions[0] != second.PathVersion+1 {
+		t.Fatalf("a write on the standing version: %+v %v", third, err)
+	}
+	statement, checked := writer.committedPayload(t, third.Version)
+	based := false
+	for _, change := range checked.Changes {
+		if path, _ := writer.server.pathOf(change.TokenPath, statement.Push.GetPathEpoch()); path == "held/a.txt" {
+			based = change.Change.GetBaseEntryVersion() == second.PathVersion
+		}
+	}
+	if !based {
+		t.Error("the push's base_entry_version is not the caller's read")
+	}
+
+	// a commit between the plan's read and the push: evs's 5g refuses the push, whose base is the caller's read
+	writer.server.raceNextPush(func() {
+		if _, err := writer.write(t, "held/a.txt", []byte("four")); err != nil {
+			t.Error(err)
+		}
+	})
+	_, err = stale.writeHeld("held/a.txt", third.PathVersions[0], "lost")
+	conflict = evsTestRequirePathConflict(t, err, "held/a.txt")
+	if errors.Is(err, ErrEvsPathMoved) || conflict.Refusal.PushId == nil {
+		t.Errorf("evs's conflict reads as the planner's: %v", err)
+	}
+	if read, info, err := writer.read(t, "held/a.txt"); err != nil || string(read) != "four" || info.Version != third.PathVersions[0]+1 {
+		t.Errorf("the path after the race: %q %v", read, err)
+	}
+}
+
+// IfVersion 0 is the create-only write (§15.7's created only if absent): it creates an absent path, answers 409
+// PATH_CONFLICT over a path created since its caller looked, whether before the plan or between the plan and the
+// push, with the creator's bytes left standing, and creates a removed path again on versions that never restart.
+func TestEvsWriteIfVersionZeroCreatesOnly(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	creator := writer.otherWriter(t, "create-only writer")
+	if _, err := creator.writeHeld("new/a.txt", 0, "a"); err != nil {
+		t.Fatalf("a creation of an absent path: %v", err)
+	}
+	if read, _, err := writer.read(t, "new/a.txt"); err != nil || string(read) != "a" {
+		t.Fatalf("the created path: %q %v", read, err)
+	}
+
+	// created meanwhile, before the plan
+	created, err := writer.write(t, "new/b.txt", []byte("theirs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	posted, uploads := writer.server.sentCounts()
+	_, err = creator.writeHeld("new/b.txt", 0, "mine")
+	evsTestRequirePathConflict(t, err, "new/b.txt")
+	if !errors.Is(err, ErrEvsPathMoved) {
+		t.Errorf("the planner's own conflict: %v", err)
+	}
+	if nowPosted, nowUploads := writer.server.sentCounts(); nowPosted != posted || nowUploads != uploads {
+		t.Error("a create-only write over a standing path sent something")
+	}
+	if read, info, err := writer.read(t, "new/b.txt"); err != nil || string(read) != "theirs" || info.Version != created.PathVersion {
+		t.Errorf("the standing path after the refusal: %q %v", read, err)
+	}
+
+	// created meanwhile, between the plan and the push
+	writer.server.raceNextPush(func() {
+		if _, err := writer.write(t, "new/c.txt", []byte("theirs")); err != nil {
+			t.Error(err)
+		}
+	})
+	_, err = creator.writeHeld("new/c.txt", 0, "mine")
+	evsTestRequirePathConflict(t, err, "new/c.txt")
+	if read, _, err := writer.read(t, "new/c.txt"); err != nil || string(read) != "theirs" {
+		t.Errorf("the raced path: %q %v", read, err)
+	}
+
+	// a removed path reads as absent, and is created again
+	if _, err := writer.write(t, "new/b.txt", nil); err != nil {
+		t.Fatal(err)
+	}
+	again, err := creator.writeHeld("new/b.txt", 0, "again")
+	if err != nil || again.PathVersions[0] <= created.PathVersion+1 {
+		t.Fatalf("a creation over a removal: %+v %v", again, err)
+	}
+	if read, _, err := writer.read(t, "new/b.txt"); err != nil || string(read) != "again" {
+		t.Errorf("the path created again: %q %v", read, err)
+	}
+	// and a version of the removed path's past holds nothing
+	if _, err := writer.write(t, "new/b.txt", nil); err != nil {
+		t.Fatal(err)
+	}
+	_, err = creator.writeHeld("new/b.txt", again.PathVersions[0], "back")
+	evsTestRequirePathConflict(t, err, "new/b.txt")
+}
+
+// A write that names no IfVersion is as it was: it replaces whatever stands and creates what does not. And one push
+// of several held writes names every path that moved, in the write's order, and commits none of them.
+func TestEvsWriteWithNoIfVersionIsUnchanged(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	other := writer.otherWriter(t, "plain writer")
+	first, err := writer.write(t, "plain/a.txt", []byte("one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.write(t, "plain/b.txt", []byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	// built on a read of version 1, written with no hold after version 2 landed: it replaces version 2
+	second, err := writer.write(t, "plain/a.txt", []byte("two"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced, err := other.write(t, "plain/a.txt", []byte("over"))
+	if err != nil || replaced.PathVersion != second.PathVersion+1 {
+		t.Fatalf("a write with no hold over a newer version: %+v %v", replaced, err)
+	}
+	if _, err := other.write(t, "plain/new.txt", []byte("new")); err != nil {
+		t.Fatalf("a creation with no hold: %v", err)
+	}
+	if _, err := other.write(t, "plain/new.txt", nil); err != nil {
+		t.Fatalf("a removal with no hold: %v", err)
+	}
+	if read, _, err := writer.read(t, "plain/a.txt"); err != nil || string(read) != "over" {
+		t.Errorf("read back %q %v", read, err)
+	}
+
+	writer.server.know("plain/c.txt")
+	posted, uploads := writer.server.sentCounts()
+	absent := uint64(0)
+	_, err = other.repo.WritePaths(context.Background(), &EvsWritePathsArgs{Writes: []*EvsPathWrite{
+		{Path: "plain/c.txt", Content: bytes.NewReader([]byte("c"))},
+		{Path: "plain/a.txt", Content: bytes.NewReader([]byte("stale")), IfVersion: &first.PathVersion},
+		{Path: "plain/b.txt", Content: bytes.NewReader([]byte("mine")), IfVersion: &absent},
+	}})
+	evsTestRequirePathConflict(t, err, "plain/a.txt", "plain/b.txt")
+	if nowPosted, nowUploads := writer.server.sentCounts(); nowPosted != posted || nowUploads != uploads {
+		t.Error("a refused push sent something")
+	}
+	if _, _, err := writer.read(t, "plain/c.txt"); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Errorf("a refused push committed its unheld path: %v", err)
+	}
+	if read, _, err := writer.read(t, "plain/a.txt"); err != nil || string(read) != "over" {
+		t.Errorf("a refused push changed a held path: %q %v", read, err)
+	}
+}
+
+// evs's 409 on a parent directory alone, which another writer's creation in that directory raced, names no written
+// path: the write's own path did not move, and the same write made again commits beside the other's.
+func TestEvsWriteConflictOnAParentAloneNamesNoWrittenPath(t *testing.T) {
+	writer := newEvsTestWriter(t)
+	writer.seed(t)
+	other := writer.otherWriter(t, "sibling writer")
+	writer.server.raceNextPush(func() {
+		if _, err := writer.write(t, "fresh/b.txt", []byte("b")); err != nil {
+			t.Error(err)
+		}
+	})
+	_, err := other.writeHeld("fresh/a.txt", 0, "a")
+	conflict := evsTestRequirePathConflict(t, err)
+	if errors.Is(err, ErrEvsPathMoved) || len(conflict.Refusal.Paths) == 0 {
+		t.Errorf("a parent's conflict: %v", err)
+	}
+	if _, _, err := writer.read(t, "fresh/a.txt"); !errors.Is(err, ErrEvsPathAbsent) {
+		t.Fatalf("the refused creation: %v", err)
+	}
+	if _, err := other.writeHeld("fresh/a.txt", 0, "a"); err != nil {
+		t.Fatalf("the write made again: %v", err)
+	}
+	for path, want := range map[string]string{"fresh/a.txt": "a", "fresh/b.txt": "b"} {
+		if read, _, err := writer.read(t, path); err != nil || string(read) != want {
+			t.Errorf("%s reads %q %v", path, read, err)
+		}
 	}
 }

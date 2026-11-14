@@ -8,7 +8,8 @@
 // 443, so a session counts on its own origin alone, though cookies do not tell ports apart.
 //
 //	cookie   base64url, no padding, of version || nonce (24 B) || ciphertext and tag
-//	session  session_id (16 B) || member_id (16 B) || issue ms (8 B) || expire ms (8 B), big endian
+//	session  session_id (16 B) || member_id (16 B) || issue ms (8 B) || expire ms (8 B), big endian, and on a
+//	         members-device login the device's sidecar_id (16 B) after them (tls_members_device.go)
 //	pre      state (32 B) || nonce (32 B) || PKCE verifier (32 B) || expire ms (8 B) || return path, the rest
 //
 // The root reaches testHookSecret where it is made and each time it is read back, each derived key where it is
@@ -65,6 +66,8 @@ type tlsSession struct {
 	memberId   Id
 	issueTime  time.Time
 	expireTime time.Time
+	// members-device: the consented device whose statement completed the login (§13.7); zero for a members session
+	deviceSidecarId Id
 }
 
 // One pending edge login: what the callback checks and where it returns.
@@ -177,11 +180,14 @@ func (self *tlsSessionSealer) open(aead cipher.AEAD, cookieName string, origin s
 
 // session as origin's __Host-ur-session value.
 func (self *tlsSessionSealer) sealSession(origin string, session *tlsSession) (string, error) {
-	plaintext := make([]byte, 0, tlsSessionPlaintextByteCount)
+	plaintext := make([]byte, 0, tlsSessionPlaintextByteCount+len(Id{}))
 	plaintext = append(plaintext, session.sessionId[:]...)
 	plaintext = append(plaintext, session.memberId.Bytes()...)
 	plaintext = binary.BigEndian.AppendUint64(plaintext, uint64(session.issueTime.UnixMilli()))
 	plaintext = binary.BigEndian.AppendUint64(plaintext, uint64(session.expireTime.UnixMilli()))
+	if session.deviceSidecarId != (Id{}) {
+		plaintext = append(plaintext, session.deviceSidecarId.Bytes()...)
+	}
 	return self.seal(self.session, tlsSessionCookieName, origin, plaintext)
 }
 
@@ -191,7 +197,7 @@ func (self *tlsSessionSealer) openSession(value string, origin string, now time.
 		return nil
 	}
 	plaintext, err := self.open(self.session, tlsSessionCookieName, origin, value)
-	if err != nil || len(plaintext) != tlsSessionPlaintextByteCount {
+	if err != nil || (len(plaintext) != tlsSessionPlaintextByteCount && len(plaintext) != tlsSessionPlaintextByteCount+len(Id{})) {
 		return nil
 	}
 	session := &tlsSession{}
@@ -202,6 +208,14 @@ func (self *tlsSessionSealer) openSession(value string, origin string, now time.
 	cursor = cursor[len(Id{}):]
 	session.issueTime = time.UnixMilli(int64(binary.BigEndian.Uint64(cursor[:8])))
 	session.expireTime = time.UnixMilli(int64(binary.BigEndian.Uint64(cursor[8:16])))
+	cursor = cursor[16:]
+	if 0 < len(cursor) {
+		copy(session.deviceSidecarId[:], cursor)
+		// only a device's id is ever written there
+		if session.deviceSidecarId == (Id{}) {
+			return nil
+		}
+	}
 	if !now.Before(session.expireTime) {
 		return nil
 	}

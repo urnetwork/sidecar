@@ -9,6 +9,8 @@ import (
 	"errors"
 	"net/netip"
 	"time"
+
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // The tunables of one bridge. A settings value is read, never changed, once a bridge holds it.
@@ -58,6 +60,12 @@ type BridgeSettings struct {
 	// client's own setup bound. The host's NewBridgeLink only constructs, and window clients set up on their own bound.
 	// Positive.
 	LinkBuildTimeout time.Duration
+	// The largest SignedSidecarIdentityBinding a link reads of its target: 4 KiB, where a canonical binding is under
+	// 250 bytes, so this only stops a decoder reading garbage whole. Positive.
+	LinkBindingMaxByteCount int
+	// The WindowDelegation format's limits, which this host's verifier and its links' signers share
+	// (bridge.DefaultWindowDelegationSettings). Nil is the format's own.
+	WindowDelegation *bridge.WindowDelegationSettings
 	// Whether a link's window client may go direct, peer to peer: false until C3 (D-PROTO-10, D-BRIDGE-5), so
 	// BridgeLinkMultiClientSettings overrides direct mode off and a link relays.
 	LinkAllowDirect bool
@@ -128,6 +136,8 @@ func DefaultBridgeSettings() *BridgeSettings {
 		LinkIdleTimeout:          600 * time.Second,
 		LinkRebuildInterval:      6 * 24 * time.Hour,
 		LinkBuildTimeout:         30 * time.Second,
+		LinkBindingMaxByteCount:  4 * 1024,
+		WindowDelegation:         bridge.DefaultWindowDelegationSettings(),
 		LinkCountMax:             64,
 		LinkRoomIdleTimeout:      60 * time.Second,
 		RejectPerSecond:          20,
@@ -195,6 +205,7 @@ func (self *BridgeSettings) validate() error {
 		{name: "RulesMaxFieldCount", value: self.RulesMaxFieldCount},
 		{name: "RevocationMaxCount", value: self.RevocationMaxCount},
 		{name: "RevocationIdMaxByteCount", value: self.RevocationIdMaxByteCount},
+		{name: "LinkBindingMaxByteCount", value: self.LinkBindingMaxByteCount},
 	}
 	for _, count := range positiveCounts {
 		if count.value <= 0 {

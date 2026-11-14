@@ -118,7 +118,7 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 	generationNumber := args.identity.Generation
 	// The generation's proof signer and token are installed before the status names the generation, so a host
 	// or component that acts on that status finds them. A refused move takes them back out.
-	signer, signerErr := newDpopSigner(args.clientKeySeed, self.clock.Now, rand.Reader)
+	signer, signerErr := newDpopSigner(args.clientKeySeed, self.clock.Now, self.apiClockOffset, rand.Reader)
 	if signerErr == nil {
 		self.sidecarApi.setDpopSigner(signer)
 		self.sidecarApi.SetByJwt(args.byJwt)
@@ -189,12 +189,12 @@ func (self *Sidecar) startGeneration(args *sidecarGenerationArgs) {
 			self.tokenRefused(refusedGeneration, reason)
 			self.generationRefused(refusedGeneration)
 		},
-		Restore: func(ctx context.Context) error {
+		Restore: func(ctx context.Context, install func(presentedByJwt string, byJwt string) error) error {
 			var restorers []SidecarRestorer
 			if self.leg != nil {
 				restorers = self.leg.restorers()
 			}
-			return self.restoreRegistrations(ctx, restorers)
+			return self.restoreRegistrations(ctx, restorers, install)
 		},
 	})
 	generation.tokenManager.Store(manager)

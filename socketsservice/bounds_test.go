@@ -37,6 +37,29 @@ func testSocketChargeCount(bound *socketsservice.SocketControlBound, clientId co
 	return allowedCount
 }
 
+// §19.11's sockets_control_qps laid over the bound: a lower burst holds a new client to it and a lower rate refills
+// at it; an edge client keeps its own pair, and a rate that is not positive changes nothing.
+func TestSocketControlBoundTakesTheConfiguredRate(t *testing.T) {
+	bound, clock, settings := testSocketBound()
+	bound.SetRate(2, 3)
+	bound.SetRate(0, 10)
+	clientId := testSocketId()
+	if allowedCount := testSocketChargeCount(bound, clientId, false, 10); allowedCount != 3 {
+		t.Fatalf("%d of a burst of 3 allowed", allowedCount)
+	}
+	_, retryAfter := bound.Charge(clientId, false)
+	if retryAfter != 500*time.Millisecond {
+		t.Fatalf("at 2 calls a second the next token is %v away", retryAfter)
+	}
+	clock.Advance(retryAfter)
+	if allowed, _ := bound.Charge(clientId, false); !allowed {
+		t.Fatal("a call at its token was refused")
+	}
+	if allowedCount := testSocketChargeCount(bound, testSocketId(), true, settings.EdgeBurst); allowedCount != settings.EdgeBurst {
+		t.Fatalf("an edge client's burst was cut to %d", allowedCount)
+	}
+}
+
 func TestSocketControlBoundAllowsItsBurstAndNoMore(t *testing.T) {
 	bound, clock, settings := testSocketBound()
 	clientId := testSocketId()

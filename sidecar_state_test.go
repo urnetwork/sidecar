@@ -256,6 +256,37 @@ func TestNewSidecarBaseStartsLocked(t *testing.T) {
 	}
 }
 
+// Status names, beside a client's state, the generation in that state: the next generation, which a pairing or a
+// re-enrollment binds in the keychain while the old client is up, shows once the machine has moved to it, Offline.
+// Short of a client the keychain's generation shows as it is read.
+func TestStatusNamesTheGenerationOfItsState(t *testing.T) {
+	for _, c := range []struct {
+		state           SidecarState
+		generation      int64
+		boundGeneration int64
+		wantGeneration  int64
+	}{
+		{state: SidecarStateOnline, generation: 1, boundGeneration: 2, wantGeneration: 1},
+		{state: SidecarStateOffline, generation: 1, boundGeneration: 2, wantGeneration: 1},
+		{state: SidecarStateOffline, generation: 2, boundGeneration: 2, wantGeneration: 2},
+		{state: SidecarStateOnline, generation: 2, boundGeneration: 2, wantGeneration: 2},
+		{state: SidecarStateUnenrolled, generation: 1, boundGeneration: 2, wantGeneration: 2},
+		{state: SidecarStateUnenrolled, generation: 0, boundGeneration: 3, wantGeneration: 3},
+		{state: SidecarStateLocked, generation: 0, boundGeneration: 3, wantGeneration: 3},
+		{state: SidecarStateRevoked, generation: 1, boundGeneration: 2, wantGeneration: 2},
+		{state: SidecarStateUnenrolled, generation: 0, boundGeneration: 0, wantGeneration: 0},
+	} {
+		sidecar := newTestSidecar(t)
+		sidecar.lifecycle = plainLifecycleAt(c.state, c.generation)
+		if 0 < c.boundGeneration {
+			sidecar.setIdentity(nil, &SidecarIdentity{Generation: c.boundGeneration})
+		}
+		if status := sidecar.Status(); status.State != c.state || status.Generation != c.wantGeneration {
+			t.Errorf("%s at %d, the keychain at %d: status %s at %d", c.state, c.generation, c.boundGeneration, status.State, status.Generation)
+		}
+	}
+}
+
 func TestATransitionRaisesItsStateEvent(t *testing.T) {
 	sidecar := newTestSidecar(t)
 	events := recordEvents(sidecar)

@@ -2,7 +2,9 @@
 // callers of its own uid. It wires SidecarInstance on the OS backend and newOsKeyStore's wrap of U, the Daemon, and a
 // Sidecar per network sidecar.json records, all on the one instance, so one U opens every network (CORE-M6-01), plus
 // one unenrolled Sidecar a further network's enrollment takes. Each is unlocked by the key store's wrap at start when
-// it can be. Its control methods are the person's commands, a network-scoped one acting on its network argument, else
+// it can be. Each Sidecar it starts follows its network's §7.9 log through its config follower, the network's one
+// judge of the log, which the network's bridge is built over when ur tun first asks (daemon_config.go; QD-796). Its
+// control methods are the person's commands, a network-scoped one acting on its network argument, else
 // .ur's, else the only network (CORE-M3-05); the git mode resolves a session's <net> and hands it to §11's git service,
 // and the mcp mode is §16's server (mcp.McpServer), one go-sdk session per relay connection, which only this binary
 // links (D-MCP-1, D-MCP-2). Its logs go to stderr, never stdout.
@@ -21,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -92,6 +95,11 @@ type urNetworkStatus struct {
 	State      string      `json:"state"`
 	Reason     string      `json:"reason,omitempty"`
 	Generation int64       `json:"generation,omitempty"`
+	// The network's config follower (daemon_config.go): standing, waiting, or refused and why, and the log position it
+	// verified. Empty where the daemon runs none.
+	Config       string `json:"config,omitempty"`
+	ConfigReason string `json:"config_reason,omitempty"`
+	ConfigPin    uint64 `json:"config_pin,omitempty"`
 }
 
 // A pass, from the terminal, in a request: a request may carry one, a reply never does.
@@ -156,12 +164,16 @@ type urDaemonNetwork struct {
 	start func(networkId *sidecar.Id) (*sidecar.Sidecar, error)
 	// ends a Sidecar the daemon no longer hosts
 	stop func(running *sidecar.Sidecar)
+	// the networks' bridges and the instance's ur tun (bridge_wire.go), nil for a target with none
+	bridges *urBridgeDaemon
 
 	// one enrollment at a time, since the further network's Sidecar joins the registry when it lands
 	enrollLock sync.Mutex
 
 	stateLock sync.Mutex
 	further   *sidecar.Sidecar
+	// the root's bridge methods over bridges (bridge_forward.go), built once and shared by ur bridge and the MCP tools
+	daemonBridges *sidecar.DaemonBridges
 }
 
 // The hosted Sidecars, in network order.
@@ -214,6 +226,11 @@ func (self *urDaemonNetwork) networkStatuses() []urNetworkStatus {
 		}
 		if identity := network.Sidecar.Identity(); identity != nil {
 			networkStatus.SidecarId = &identity.SidecarId
+		}
+		if follower := network.Sidecar.ConfigFollower(); follower != nil {
+			followerStatus := follower.Status()
+			networkStatus.Config, networkStatus.ConfigReason = string(followerStatus.State), followerStatus.Reason
+			networkStatus.ConfigPin = followerStatus.Pin.GetVersion()
 		}
 		statuses = append(statuses, networkStatus)
 	}
@@ -294,7 +311,8 @@ func (self *urDaemonNetwork) enroll(ctx context.Context, credential *sidecar.Sid
 		self.further = nil
 		self.stateLock.Unlock()
 	}
-	return target.Status().Generation, nil
+	// the keychain's, which the enrollment wrote: Status names it only once the run loop has moved to it
+	return target.BoundGeneration(), nil
 }
 
 // §5.8's pair (CORE-M8-02): the child's token goes to the hosted Sidecar of its network, else the unenrolled one, which
@@ -472,6 +490,11 @@ func urDaemonCoreMethods(instance string, target urDaemonTarget, keyStoreKind os
 				params := &urEnrollParams{}
 				if err := decodeUrParams(call, params); err != nil || params.AuthKey == "" {
 					return nil, errors.New("enroll takes an auth key")
+				}
+				if mcp.HarnessCloudEnvironmentHoldsKey(urEnviron()) {
+					// the daemon's own environment, which its children inherit, holds a key (QD-041)
+					params.AuthKey = ""
+					return nil, mcp.ErrHarnessCloudKeyEnvironment
 				}
 				credential := &sidecar.SidecarEnrollCredential{
 					AuthKey:        params.AuthKey,
@@ -659,7 +682,45 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			closeSidecar(running)
 		}
 	}()
+	// each network's key and evs clients (daemon_clients.go), and, on a daemon whose state is on disk, its local git tier
+	// under <state>, run by the system git, each mount's hooks exec'ing this daemon's own ur git-hook
+	urDaemonClients = &urDaemonClientsArgs{Log: log}
+	if !ephemeral {
+		gitPath, err := exec.LookPath("git")
+		if err == nil {
+			gitPath, err = filepath.Abs(gitPath)
+		}
+		if err == nil {
+			urDaemonClients.StateDirectory, urDaemonClients.GitPath = stateDirectory, gitPath
+		} else {
+			log.Warningf("[ur]no git found, so this daemon serves no local git tier: %s", err)
+		}
+		if executable, err := os.Executable(); err == nil {
+			urDaemonClients.HookCommand, urDaemonClients.HookEnvironment = urDaemonGitHookCommand(executable, cli.instance)
+		} else {
+			log.Warningf("[ur]this daemon cannot name its own ur, so its git tier takes no push: %s", err)
+		}
+	}
 	network := &urDaemonNetwork{instance: instance, daemon: daemon, stop: closeSidecar}
+	// the bridges and ur tun end with the daemon, the tun's routes removed, on every path Run returns by; each network's
+	// bridge is built over its config follower (daemon_config.go)
+	bridgeArgs := urBridgeDaemonArgsOf(cli.instance, log)
+	bridgeArgs.Build = newUrBridgeBuild(&urBridgeBuildArgs{
+		StateDirectory: stateDirectory,
+		Listeners:      daemon.LocalListeners,
+		Settings:       settings,
+		Log:            log,
+	})
+	// sidecar.json's order of enrollment, which decides who routes a block two networks hold (§17.4)
+	bridgeArgs.JoinOrder = func() []sidecar.Id {
+		order := []sidecar.Id{}
+		for _, record := range instance.Networks() {
+			order = append(order, record.NetworkId)
+		}
+		return order
+	}
+	network.bridges = newUrBridgeDaemon(ctx, bridgeArgs)
+	defer network.bridges.close()
 	if urlsErr != nil {
 		network.noSidecar = urlsErr.Error()
 		log.Warningf("[ur]%s", urlsErr)
@@ -672,6 +733,9 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 			runningLock.Lock()
 			runningSidecars[running] = true
 			runningLock.Unlock()
+			// the network's one judge of its log, which starts at the Sidecar's first client generation; one that does
+			// not start leaves this network unjudged and the others following (CORE-M6-01)
+			startUrConfigFollower(running, log)
 			return running, nil
 		}
 		// a Sidecar per recorded network, each on the one instance, so the key store's wrap of U opens them all
@@ -721,6 +785,29 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		Restore: mcp.NewRestorePoints(&mcp.RestorePointsArgs{Clock: settings.Clock, Ingest: settings.Ingest, Log: log}),
 		Home:    home,
 		Record:  settings.Record,
+		// §16.18's file events, which Ingest.FileEvents turns on (M6's, off by default): fsnotify on each run's worktree
+		FileWatch: urFsnotifyWatch,
+		// §16.7's Run announcement row: a run's start, activity and end to its network's team directory, under the
+		// claims value its session starts under (mcp's ingest_directory.go); a network with no directory hears nothing
+		Lifecycle: mcp.NewDirectoryLifecycle(&mcp.DirectoryLifecycleArgs{
+			Runs: func(networkId sidecar.Id) (mcp.McpDirectoryRuns, error) {
+				hosted, ok := daemon.SidecarForNetwork(networkId)
+				if !ok {
+					return nil, nil
+				}
+				directory := hosted.Directory()
+				if directory == nil {
+					return nil, nil
+				}
+				runs := directory.Runs()
+				if runs == nil {
+					return nil, nil
+				}
+				return runs, nil
+			},
+			Claims: daemon.ResolveClaims,
+			Log:    log,
+		}),
 	})
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), cli.settings.CloseTimeout)
@@ -729,6 +816,18 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	}()
 	// §16.5's tools, each registered from its owner's file, their W calls recorded as tool_call entries through ingest
 	mcp.NewDaemonMcpCatalog(mcpServer, ingest).Install(mcpServer)
+	// §16.5's ur:// resources, each family registered from its owner's file, their updates sent until the daemon ends
+	mcp.NewDaemonMcpResources(ctx, mcpServer).Install()
+	// §16.6's harness evidence: each PermissionRequest the capture sealed, kept for a network's gate to ask about
+	// (MCP-M3-10), on the hook path after the ingest's capture
+	mcp.NewHarnessEvidenceStore(settings.Ingest, settings.Clock).Install(mcpServer)
+	// §16.6's config check over the seals ur install-harness wrote (cmd_install_harness.go): a harness with none, or
+	// whose files no longer hold ur's entries, taints its runs
+	mcpServer.Binder().SetConfigCheck(mcp.NewHarnessConfigHashes(&mcp.HarnessConfigHashesArgs{
+		StateDirectory: stateDirectory,
+		Executable:     urHarnessExecutable,
+		Ingest:         settings.Ingest,
+	}).Check)
 	// ur hook's hook.event, which shares the server's run bindings (§16.7)
 	for _, method := range mcpServer.DaemonMethods() {
 		if err := daemon.RegisterMethod(method); err != nil {
@@ -739,6 +838,10 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	if err := registerUrDaemonMethods(daemon, cli.instance, network, keyStoreKind, sidecar.HostCredentialStores); err != nil {
 		daemon.Close()
 		return err
+	}
+	// the MCP bridge tools file and forward through the bridges ur bridge's methods use (MCP-M4-01)
+	if bridges := network.sharedDaemonBridges(); bridges != nil {
+		mcpServer.SetBridges(bridges)
 	}
 	// a sandboxed macOS app pairs and calls through its app-group container's socket (§5.9; CORE-M8-02); the paths
 	// name the user's home, so only their count is logged

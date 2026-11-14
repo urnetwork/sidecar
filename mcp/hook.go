@@ -5,10 +5,14 @@
 // HookEvent, binds it to a run (hook_bind.go), taints the run for a web tool before it answers, and notes it for the
 // coverage rules (hook_coverage.go). Every record made of a hook event says source hook.
 //
-// An adapter is versioned, and a payload over Ingest.PayloadByteCount, or one it cannot read, is a coverage gap
-// (oversize, hook_failure) on the runs of the hook's harness process, never an error to the harness: hooks fail open
-// (D-MCP-5), and a lapse taints instead. Nothing here echoes a payload's text in an error or a log (I-7, I-13): an error
-// names a field, never a value.
+// An adapter is versioned, written to its harness's published schema at the version MCP-M3-28's conformance pins
+// (testdata/harness/<harness>/<version>/): the events it reads and each event's fields. A payload over
+// Ingest.PayloadByteCount, or one it cannot read, is a coverage gap (oversize, hook_failure) on the runs of the hook's
+// harness process; an event of a name the version does not read is a missed event (missed_event), and a payload naming
+// a field its event's schema does not, as a harness that added one sends, is drift (hook_failure). Each is a lapse in
+// the run's hook coverage, which taints it (I-9), and never an error to the harness: hooks fail open (D-MCP-5). An
+// event that drifted or that the version does not read still binds, and never stands as harness evidence. Nothing here
+// echoes a payload's text in an error or a log (I-7, I-13): an error names a field, never a value.
 //
 // The ack waits for what the event needs first: a web tool's taint, fsynced (§16.6's write-ahead row), and, for a
 // PreToolUse naming paths, the restore point's holds of their bytes (MCP-M3-20's, through SetHookHolds). While the
@@ -52,7 +56,10 @@ const (
 	HookEventStop              HookEventKind = "stop"
 	HookEventCompact           HookEventKind = "compact"
 	HookEventNotification      HookEventKind = "notification"
-	// Any event this adapter version does not know: it still binds and counts for coverage.
+	// A model call the harness reports: Codex's PostModelRequest (§16.18; MCP-M6-03).
+	HookEventModelCall HookEventKind = "model_call"
+	// An event the adapter's version reads only for coverage, or one it does not read at all (HookEvent.Unknown): it
+	// still binds.
 	HookEventOther HookEventKind = "other"
 )
 
@@ -109,6 +116,13 @@ type HookEvent struct {
 	Paths []string
 	// A web tool by Ingest.WebToolNames: by its name, or by a shell call's stage's first word (MCP.md's reading 12).
 	WebTool bool
+	// No event of this name is one the adapter's version reads: what it carried is missed, a lapse that taints the
+	// run's members with a missed_event gap (MCP-M3-28).
+	Unknown bool
+	// The payload names a field the schema the adapter's version was written to does not give its event, as a harness
+	// that added a field would send: what was read may not be all the event meant, a lapse that taints the run's
+	// members with a hook_failure gap, and an asking event that drifted is no harness evidence (MCP-M3-28).
+	Drifted bool
 }
 
 // One harness's reading of its hook payloads, at one version.
@@ -149,6 +163,21 @@ func HookHarnesses() []string {
 // The refusal of a payload's field.
 func hookPayloadError(field string) error {
 	return fmt.Errorf("%w: %s", ErrHookPayload, field)
+}
+
+// Whether payload, one JSON object, names a field outside common and its event's own: the schema it was written to
+// has moved past the adapter version's (MCP-M3-28). A payload that is no object drifted.
+func hookPayloadDrifted(payload []byte, common []string, fields []string) bool {
+	object := map[string]json.RawMessage{}
+	if json.Unmarshal(payload, &object) != nil {
+		return true
+	}
+	for name := range object {
+		if !slices.Contains(common, name) && !slices.Contains(fields, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // SHA-256 of the RFC 8785 form of a tool's arguments; nil for none or for arguments that do not canonicalize.
@@ -385,5 +414,6 @@ func (self *McpServer) HandleHook(ctx context.Context, hello *sidecar.DaemonHell
 		}
 		return err
 	}
-	return self.binder.ingestEvent(ctx, network, networkId, adapter, caller, event, params.Payload)
+	// the caller's hello rides with the event: the directory lifecycle reads the session's claims from it
+	return self.binder.ingestEvent(withHookHello(ctx, hello), network, networkId, adapter, caller, event, params.Payload)
 }

@@ -108,7 +108,7 @@ func (self *evsWorld) folderLoggingTo(log sidecar.Logger) *Folder {
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	return NewFolder(self.ctx, self.clock, self.host.ClockCheck, self.budgetedBlob, self.host.Budget, self.heads, NewRecordCache(self.settings),
+	return NewFolder(self.ctx, self.clock, self.host.ClockCheck, self.budgetedBlob, self.host.Budget, self.heads, NewRecordCache(self.settings), nil,
 		NewRepoCache(self.clock, self.settings), priceTable, self.settings, log)
 }
 
@@ -425,7 +425,7 @@ func TestFormat2FoldKeepsVersionlessVersionsAndTheirLocatorsAsWritten(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	changes, err := NewRecordPushSource(NewRecordCache(world.settings), world.cluster, world.repoId, world.refId).ChangesAt(world.ctx, 3, window[2], x)
+	changes, err := NewRecordPushSource(NewRecordCache(world.settings), nil, world.cluster, world.repoId, world.refId).ChangesAt(world.ctx, 3, window[2], x)
 	if err != nil || len(changes) != 1 || !bytes.Equal(changes[0].EntryVersion, versions[0].GetEntryVersion()) {
 		t.Fatalf("the newest folded version is not its statement's bytes: %v", err)
 	}
@@ -799,7 +799,7 @@ func (self *evsWorld) folderWith(budget sidecar.WriteBudget, log sidecar.Logger)
 	if err != nil {
 		self.t.Fatal(err)
 	}
-	return NewFolder(self.ctx, self.clock, self.host.ClockCheck, self.budgetedBlob, budget, self.heads, NewRecordCache(self.settings),
+	return NewFolder(self.ctx, self.clock, self.host.ClockCheck, self.budgetedBlob, budget, self.heads, NewRecordCache(self.settings), nil,
 		NewRepoCache(self.clock, self.settings), priceTable, self.settings, log)
 }
 

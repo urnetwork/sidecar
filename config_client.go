@@ -3,7 +3,8 @@
 // hint (MembershipChanged, ApprovalRequested, AuthorityHeadChanged, whose version is a log position) and hourly, the
 // pass that recovers a lost hint, and applies what it reads to its ConfigLog as a full reader: every base's config head
 // checked through ConfigHeadReader, and a reader that starts at a base, first or after it fell behind api's retention
-// point, starts there by the base's verdicts and anchor (DESIGN-DETAILS 5.2.4's StartAtBase), never below a pin it held.
+// point, starts there by the base's verdicts and anchor (DESIGN-DETAILS 5.2.4's StartAtBase), never below a pin it held,
+// reading the anchor's head through ConfigHeadAnchorReader under the base's own rows where its reader is one (QD-814).
 //
 // It neither signs nor posts (C-01): CORE-M2-02's acts do, and read back what landed through State and WaitFor. After
 // each applied entry it calls GkmClient.AuthAdvanced and every AddEntryCallback once, in log order, with the entry's
@@ -72,6 +73,39 @@ type ConfigProjectionReader interface {
 // the one named, which forks the base.
 type ConfigHeadReader interface {
 	ReadConfigHead(ctx context.Context, configVersion uint64, configHeadSha256 []byte) (*ConfigHead, error)
+}
+
+// What a reader starting at a base b judges b's config head by, its anchor (DESIGN-DETAILS 5.2.4's StartAtBase;
+// QD-814): the genesis it trusts and the identity keys b's own rows admit. Such a reader holds no state before b, so
+// none at the authorization pins of that head's pushes. *ConfigState is one: StartAtBase passes the state b's rows
+// give, before b's tail re-applies.
+type ConfigHeadAnchor interface {
+	// The Genesis A_0 hashes, whose config_repo_id names the repo the head is read from.
+	Genesis() *bridge.Genesis
+	// The identity key the rows admit for a sidecar, a revoked one's included; nil for none.
+	IdentityKey(sidecarId Id) []byte
+}
+
+// A ConfigHeadReader that also reads an anchor's head (QD-814): the head the base a reader starts at names, judged by
+// descent, as api judges a head: the chain from C_0 to C_v, each push's signature under the identity key anchor
+// admits for its signer, and no config-writer role at a push's own pin. A push whose signer anchor does not admit
+// withholds (ErrConfigHeadUnavailable), as does a repo other than the config repo anchor's genesis names. Every push
+// after the anchor is ReadConfigHead's, judged in full at its own pin. A head reader that judges no push's signer,
+// one reading heads by hash, need not be one.
+type ConfigHeadAnchorReader interface {
+	ConfigHeadReader
+	ReadConfigHeadAtAnchor(ctx context.Context, configVersion uint64, configHeadSha256 []byte, anchor ConfigHeadAnchor) (*ConfigHead, error)
+}
+
+// The config head check names, read through heads: an anchor's, a check with no Previous, through
+// ReadConfigHeadAtAnchor under check.Anchor where heads reads anchors; every other through ReadConfigHead, which
+// judges each push at its own pin and so withholds an anchor's head whose pushes predate this reader's state.
+func readConfigHeadForCheck(ctx context.Context, heads ConfigHeadReader, check *ConfigHeadCheck) (*ConfigHead, error) {
+	configVersion, configHeadSha256 := check.Header.GetConfigVersion(), check.Header.GetConfigHeadSha256()
+	if anchorHeads, ok := heads.(ConfigHeadAnchorReader); ok && check.Previous == nil && check.Anchor != nil {
+		return anchorHeads.ReadConfigHeadAtAnchor(ctx, configVersion, configHeadSha256, check.Anchor)
+	}
+	return heads.ReadConfigHead(ctx, configVersion, configHeadSha256)
 }
 
 // Tunables of a ConfigClient.
@@ -148,8 +182,13 @@ type ConfigClient struct {
 	wake chan struct{}
 	// serializes follows: the log has one applying goroutine at a time
 	followLock sync.Mutex
+	// a write to authlog/ failed, so the store is behind the log until the next follow writes it; under followLock
+	saveDue bool
 
 	configLog atomic.Pointer[ConfigLog]
+	// the log a start from the genesis builds while its first page applies, nil outside one: what VerifiedState
+	// answers before configLog holds it
+	starting atomic.Pointer[ConfigLog]
 	// the newest applied position, which WaitFor watches
 	position *MonitorValue[uint64]
 
@@ -246,6 +285,17 @@ func (self *ConfigClient) State() *ConfigState {
 	return log.State()
 }
 
+// The newest state this client verified, the log a start from the genesis is still building included: while the first
+// page applies, S(n-1) of the entry applying, which State answers only once the page is published. What evs's verifier
+// judges the config repo's pushes at while a base's head is read (QD-804): a base lands on S(n-1), and the first page
+// holds base 1. Nil before the first state. Safe for concurrent use, with no lock.
+func (self *ConfigClient) VerifiedState() *ConfigState {
+	if starting := self.starting.Load(); starting != nil {
+		return starting.State()
+	}
+	return self.State()
+}
+
 // The newest verified (n, A_n), nil before the first read.
 func (self *ConfigClient) Pin() *bridge.AuthPin {
 	state := self.State()
@@ -333,7 +383,8 @@ func (self *ConfigClient) requestFollow() {
 	}
 }
 
-// Calls callback with each entry applied from now on, in log order, on the follower's goroutine; the answer removes it.
+// Calls callback with each entry applied from now on, in log order, on the follower's goroutine, after the entry is
+// kept in authlog/ (publish); the answer removes it.
 func (self *ConfigClient) AddEntryCallback(callback SidecarAuthorityEntryFunction) func() {
 	callbackId := self.callbacks.Add(callback)
 	var once sync.Once
@@ -380,6 +431,24 @@ func (self *ConfigClient) follow(ctx context.Context) error {
 	if fork := self.Fork(); fork != nil {
 		return fork
 	}
+	var saveErr error
+	if self.saveDue {
+		// an earlier write to authlog/ failed: the store catches up before more is applied where it can, and the
+		// follow goes on either way, so a store that stays broken never stops the log
+		if saveErr = self.save(); saveErr == nil {
+			self.saveDue = false
+		}
+	}
+	err := self.followPages(ctx)
+	if err == nil && self.saveDue {
+		// nothing new was applied and kept since: the follower tries again at its retry interval
+		err = saveErr
+	}
+	return err
+}
+
+// follow's pages, under followLock.
+func (self *ConfigClient) followPages(ctx context.Context) error {
 	for range max(self.settings.MaxPagesPerFollow, 1) {
 		log := self.configLog.Load()
 		after := uint64(0)
@@ -453,8 +522,7 @@ func (self *ConfigClient) applyProjection(ctx context.Context, log *ConfigLog, p
 		if started == nil {
 			return false, nil
 		}
-		self.publish(started, nil, nil)
-		err = self.save()
+		err = self.publish(started, nil, nil)
 		self.position.Set(started.Pin().GetVersion())
 		return projection.More, err
 	}
@@ -464,9 +532,9 @@ func (self *ConfigClient) applyProjection(ctx context.Context, log *ConfigLog, p
 	}
 	before := log.State()
 	verdicts, err := log.ApplyRun(projection.Entries, source)
-	self.publish(log, before, verdicts)
-	// kept before WaitFor hears of it, so whoever waited on a position finds it kept across a restart
-	if saveErr := self.save(); saveErr != nil && err == nil {
+	// kept before a callback or WaitFor hears of it, so whoever acted on an entry or waited on a position finds it
+	// kept across a restart
+	if saveErr := self.publish(log, before, verdicts); saveErr != nil && err == nil {
 		err = saveErr
 	}
 	self.position.Set(log.Pin().GetVersion())
@@ -514,7 +582,12 @@ func (self *ConfigClient) start(log *ConfigLog, projection *ConfigProjection, so
 		if err != nil {
 			return nil, err
 		}
-		if _, err := started.ApplyRun(projection.Entries, source); err != nil {
+		// each base of the page is checked on the state it lands on, which configLog holds only once the page is
+		// published: the head reader's verifier finds it through VerifiedState meanwhile
+		self.starting.Store(started)
+		_, err = started.ApplyRun(projection.Entries, source)
+		self.starting.Store(nil)
+		if err != nil {
 			self.onApplyError(started, err)
 			return nil, err
 		}
@@ -547,9 +620,15 @@ func (self *ConfigClient) start(log *ConfigLog, projection *ConfigProjection, so
 	return started, nil
 }
 
-// Installs log as the one this client follows, after it applied verdicts on before: each verdict's entry callbacks and
-// KEYS's AuthAdvanced, in order. Its caller then keeps it and moves the position WaitFor watches.
-func (self *ConfigClient) publish(log *ConfigLog, before *ConfigState, verdicts []ConfigVerdict) {
+// Installs log as the one this client follows, after it applied verdicts on before: the log is kept in authlog/
+// first, so an entry is in this client's store before any entry callback runs (DESIGN-DETAILS 12.2.5's rule, which
+// the bridge's start gate replays from; QD-669), then each verdict's entry callbacks and KEYS's AuthAdvanced, in
+// order. Its caller then moves the position WaitFor watches.
+//
+// Answers the store's error. A write that failed holds no callback back, since a judge that never heard of a
+// revocation would enforce less than one whose store lags, and a lagging store only delays a restart's gate: the
+// next follow writes it again (saveDue).
+func (self *ConfigClient) publish(log *ConfigLog, before *ConfigState, verdicts []ConfigVerdict) error {
 	self.configLog.Store(log)
 	state := log.State()
 	func() {
@@ -557,6 +636,11 @@ func (self *ConfigClient) publish(log *ConfigLog, before *ConfigState, verdicts 
 		defer self.stateLock.Unlock()
 		self.floor = state.Pin()
 	}()
+	saveErr := self.save()
+	self.saveDue = saveErr != nil
+	if saveErr != nil {
+		self.log.Warningf("[config]%s the log through %d was not kept: %v", self.args.NetworkId, state.Pin().GetVersion(), saveErr)
+	}
 	previous := before
 	for _, verdict := range verdicts {
 		after, err := state.StateAt(verdict.Pin)
@@ -577,6 +661,7 @@ func (self *ConfigClient) publish(log *ConfigLog, before *ConfigState, verdicts 
 	if len(verdicts) == 0 && self.args.Gkm != nil {
 		self.args.Gkm.AuthAdvanced(state)
 	}
+	return saveErr
 }
 
 // A fork or a refused run stops here: head_alarm with both pins, and the fork reported to HeadStopState.
@@ -762,7 +847,8 @@ func (self *configClientRowsSource) Rows(networkId Id, rowsSha256 []byte) ([]byt
 }
 
 // The base's head, read and checked (CheckConfigBase), and remembered as verified. A head this device verified before
-// at the same version stands for a restart's anchor; every other check reads it.
+// at the same version stands for a restart's anchor; every other check reads it, an anchor's under the base's own rows
+// (readConfigHeadForCheck).
 func (self *configClientRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigHeadFacts, error) {
 	headSha256 := check.Header.GetConfigHeadSha256()
 	if len(headSha256) != sha256.Size {
@@ -776,7 +862,7 @@ func (self *configClientRowsSource) CheckHead(check *ConfigHeadCheck) (*ConfigHe
 	if self.client.args.Heads == nil {
 		return nil, fmt.Errorf("%w: no config head reader", ErrConfigHeadUnavailable)
 	}
-	head, err := self.client.args.Heads.ReadConfigHead(self.ctx, check.Header.GetConfigVersion(), headSha256)
+	head, err := readConfigHeadForCheck(self.ctx, self.client.args.Heads, check)
 	if err != nil {
 		return nil, err
 	}

@@ -55,6 +55,11 @@ message ProjectionHeader {           // §6 Signed, purpose authority, by a conf
                                      //   k = 1 or the k-th AuthorityCosign only), 3 never; exactly
                                      //   ceil(2*(version-1-folded_through)/8) bytes, padding bits 0; empty when
                                      //   nothing is unfolded
+  repeated bytes shrunk_repo_ids = 11; // QD-746: the repos whose key holders this base's own change shrinks,
+                                     //   KeyHolders(R, version-1, t) not a subset of KeyHolders(R, version, t) at
+                                     //   t this entry's time_ms, which the writer computes from S(version-1) and
+                                     //   S(version); each a 16-byte repo_id of the rows, in ascending byte order,
+                                     //   none twice; empty for none
 }
 
 message ProjectionRows {             // projrows/<network_id>/<rows_sha256>/_: a rows-only verifier's whole state

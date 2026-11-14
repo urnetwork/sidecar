@@ -6,8 +6,10 @@
 //
 //   - clock.go, the injected clock.
 //   - barrier.go, the driver behind testHookBarrier, and actor.go, the processes a schedule runs,
-//     kills and restarts. testhooks.go and testhooks_enabled.go install the driver on the root and on
-//     device/ under sidecar_testhooks; without the tag no site in this module reaches it.
+//     kills and restarts. barrier_stall.go reads the runtime's goroutine dump, by which the driver tells
+//     an actor blocked out of its sight from a slow one. testhooks.go and testhooks_enabled.go install
+//     the driver on the root and on device/ under sidecar_testhooks; without the tag no site in this
+//     module reaches it.
 //   - faults.go, a store fault as a plan the next matching operation gets.
 //   - blob_history.go, what a store's clients saw, and FI-30's check of it.
 //   - privacy_*.go, §22.7's harness: privacy_capture.go the needles (canaries, hooked keys, forbidden
