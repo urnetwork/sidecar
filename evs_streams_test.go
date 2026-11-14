@@ -207,8 +207,8 @@ func TestEvsReadStreamsRefusesItsBounds(t *testing.T) {
 }
 
 // The moved listing: with no value every ref and All; after another writer's first push, only its stream past the
-// sequence the last listing gave; a value above the sequence now, as one from before a restart that went lower, and a
-// head cache that lost its hash, each answer every ref.
+// sequence the last listing gave, its head the only one read; a value above the sequence now, as one from before a
+// restart that went lower, and a head cache that lost its hash, each answer every ref.
 func TestEvsListRefsMovedAfter(t *testing.T) {
 	world := newEvsStreamsWorld(t, 4)
 	for _, writer := range world.writers[:3] {
@@ -221,9 +221,26 @@ func TestEvsListRefsMovedAfter(t *testing.T) {
 	}
 	sequence := listing.PushSequence
 	world.append(t, world.writers[3], 1, 1)
-	moved, err := repo.ListRefs(t.Context(), &sidecar.EvsListRefsArgs{MovedAfter: &sequence})
+	// the cluster reads each listing makes: the moved form reads the one moved head, not the three that stayed
+	gets := func(list func()) int {
+		before := world.world.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpGet)
+		list()
+		return world.world.host.Blobs.RequestCount("meta-1", sidecartest.FaultOpGet) - before
+	}
+	fullGets := gets(func() {
+		if full, err := repo.ListRefs(t.Context(), nil); err != nil || len(full.Refs) != 4 {
+			t.Fatalf("every ref after the fourth push: %+v %v", full, err)
+		}
+	})
+	var moved *sidecar.EvsRefsListing
+	movedGets := gets(func() {
+		moved, err = repo.ListRefs(t.Context(), &sidecar.EvsListRefsArgs{MovedAfter: &sequence})
+	})
 	if err != nil || moved.All || len(moved.Refs) != 1 || moved.Refs[0].GetPushSequence() <= sequence {
 		t.Fatalf("moved after %d: %+v %v", sequence, moved, err)
+	}
+	if movedGets != fullGets-3 {
+		t.Errorf("the moved listing made %d cluster reads, the full one %d", movedGets, fullGets)
 	}
 	streamRefId, err := repo.RefIdOf(t.Context(), sidecar.RecordStreamRefName(world.writers[3]))
 	if err != nil || !bytes.Equal(moved.Refs[0].GetRefId(), streamRefId.Bytes()) {
@@ -246,5 +263,53 @@ func TestEvsListRefsMovedAfter(t *testing.T) {
 	lost, err := repo.ListRefs(t.Context(), &sidecar.EvsListRefsArgs{MovedAfter: &latest})
 	if err != nil || !lost.All || len(lost.Refs) != 4 {
 		t.Fatalf("a lost head cache: %+v %v", lost, err)
+	}
+}
+
+// An emptied slot reads as an erased file only behind a committed ERASE (TestEvsBaseReListsTheLiveSetAfterAnErasure
+// reads one): evs serving a stream entry's slot with its key gone and no ERASE naming it alarms as tampering and
+// refuses the read.
+func TestEvsReadStreamsRefusesASlotEmptiedWithNoErase(t *testing.T) {
+	world := newEvsStreamsWorld(t, 1)
+	writer := world.writers[0]
+	world.append(t, writer, 1, 2)
+	ctx := t.Context()
+	admin := world.world.newClient(world.world.ownerId, sidecartest.NewFakeStore().Root())
+	first, err := sidecar.RecordStreamPath(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, err := admin.Repo(world.repoId).History(ctx, &sidecar.EvsReadArgs{RefName: sidecar.RecordStreamRefName(writer), Path: first})
+	if err != nil || len(history.Versions) != 1 || len(history.Versions[0].SlotIds) == 0 {
+		t.Fatalf("the first entry's history %+v %v", history, err)
+	}
+	slotId := history.Versions[0].SlotIds[0]
+	// evs drops the entry's key with no ERASE: its slot stored with no key, as an ERASE would leave it
+	key := evsservice.SlotKey(world.repoId, slotId)
+	stored, err := world.world.cluster.Get(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Body.Close()
+	if _, err := world.world.cluster.PutIfMatch(ctx, key, stored.Etag, []byte{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	readerId := sidecar.NewId()
+	if err := world.world.Grant(world.repoId, readerId, sidecartest.RecordStreamsScope{Read: true}); err != nil {
+		t.Fatal(err)
+	}
+	alarms := []sidecar.SidecarEvent{}
+	reader := world.world.newClient(readerId, sidecartest.NewFakeStore().Root(), func(args *sidecar.EvsClientArgs) {
+		args.Emit = func(event sidecar.SidecarEvent) {
+			if event.Kind == sidecar.SidecarEventEvsAlarm {
+				alarms = append(alarms, event)
+			}
+		}
+	})
+	if _, err := reader.Repo(world.repoId).ReadStreams(ctx, world.reads()); !errors.Is(err, sidecar.ErrEvsSealInvalid) {
+		t.Fatalf("a slot emptied with no ERASE: %v", err)
+	}
+	if len(alarms) != 1 || alarms[0].EvsAlarm != sidecar.SidecarEvsAlarmTamper {
+		t.Fatalf("alarms %+v", alarms)
 	}
 }

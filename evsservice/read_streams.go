@@ -15,6 +15,8 @@
 //	budget   the reply's frames stay within ReadStreamMaxByteCount, 4 MiB: a version that would pass it is not
 //	         started, and its ref answers `more` with that version, as does every ref after it with a version past
 //	         its pin; a request serves at least one version whatever its size, so a large push never wedges a stream
+//	failed   a store read that fails once the 200 is written ends the reply with an error frame in the end frame's
+//	         place, UNAVAILABLE, as every read does (QD-662); a record that is not its statement's also alarms
 //
 // evs sees no path: a stream's writer rules stay reader checks (§16.11), and a team directory's ERASE, CLOSURE,
 // closure uploads and slots/delete stay admin-only on their own routes (I-EVS-16). Streams are format 1's; cards,
@@ -140,12 +142,12 @@ func (self *EvsEngine) serveReadStreams(request *EvsRequest, body *protocol.EvsR
 			version := version
 			objects, err := read.streamVersionObjects(version)
 			if err != nil {
-				stream.failed = true
-				request.Note("stream_version_failed")
 				if errors.Is(err, ErrEvsStatementMismatch) {
 					self.log.Errorf("[evs] alarm read streams: repo %s ref %s: %v", sidecar.EvsKeyId(request.RepoId), sidecar.EvsKeyId(ref.refId), err)
 					self.metrics.alarms.Add(1, "read")
 				}
+				// the 200 is written: the error frame ends the reply in its end frame's place (QD-662)
+				stream.fail("stream_version_failed", err)
 				return
 			}
 			if served && settings.ReadStreamMaxByteCount < request.replyByteCount+objects.byteCount() {
@@ -327,8 +329,7 @@ func (self *readAttempt) streamExactRange(stream *readStream, readRange *protoco
 	case errors.Is(err, sidecar.ErrBlobNotFound), errors.Is(err, sidecar.ErrBlobRange):
 		return stream.missing(kind, segmentId[:], 0)
 	case err != nil:
-		stream.failed = true
-		self.request.Note("segment_read_failed")
+		stream.fail("segment_read_failed", err)
 		return false
 	}
 	defer object.Body.Close()

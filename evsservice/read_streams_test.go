@@ -1,7 +1,7 @@
 // EVS1-M6-01's server tests on T2's fakes, through the engine's guard: a streams read refuses any other field beside
 // its refs, more refs than its bound, a ref named twice, and a repo that is not record-class, each 400 INVALID before
-// anything is read past the repo; and the moved listing's filter answers only the refs past the value, or every ref
-// with all set for a value past the sequence, an unreadable sequence or hash, or a ref the hash lacks. The streams
+// anything is read past the repo; and the moved listing reads only the refs past the value and those the hash lacks,
+// or every ref with all set for a value past the sequence or an unreadable sequence or hash. The streams
 // read end to end, its versions, more and the budget, runs through the client on record_evs_test.go's world
 // (evs_streams_test.go at the root).
 
@@ -9,6 +9,7 @@ package evsservice
 
 import (
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/urnetwork/sidecar"
@@ -41,35 +42,42 @@ func TestReadStreamsRefusesItsShape(t *testing.T) {
 	}
 }
 
-func TestMovedRefsFilter(t *testing.T) {
+// The moved form's choice of heads: the refs past the value and those the hash lacks, or every ref with all set for a
+// value past the sequence, an unreadable sequence or an unreadable hash; and its value's parse.
+func TestMovedRefsCandidates(t *testing.T) {
 	a, b, c := sidecar.NewId(), sidecar.NewId(), sidecar.NewId()
-	summaries := []*protocol.EvsHeadSummary{
-		{RefId: a.Bytes(), PushSequence: 10}, {RefId: b.Bytes(), PushSequence: 20}, {RefId: c.Bytes(), PushSequence: 30},
-	}
+	refIds := []sidecar.Id{a, b, c}
 	sequences := map[sidecar.Id]uint64{a: 10, b: 20, c: 30}
 	cases := []struct {
 		name         string
-		query        string
+		movedAfter   uint64
 		sequence     uint64
 		sequenceRead bool
 		sequences    map[sidecar.Id]uint64
 		hashRead     bool
-		want         int
+		want         []sidecar.Id
 		all          bool
-		ok           bool
 	}{
-		{name: "past 15", query: "15", sequence: 30, sequenceRead: true, sequences: sequences, hashRead: true, want: 2, ok: true},
-		{name: "past the newest", query: "30", sequence: 30, sequenceRead: true, sequences: sequences, hashRead: true, want: 0, ok: true},
-		{name: "past the sequence, a restart's", query: "31", sequence: 30, sequenceRead: true, sequences: sequences, hashRead: true, want: 3, all: true, ok: true},
-		{name: "no sequence read", query: "15", sequenceRead: false, sequences: sequences, hashRead: true, want: 3, all: true, ok: true},
-		{name: "no hash read", query: "15", sequence: 30, sequenceRead: true, hashRead: false, want: 3, all: true, ok: true},
-		{name: "a ref the hash lacks", query: "15", sequence: 30, sequenceRead: true, sequences: map[sidecar.Id]uint64{a: 10, b: 20}, hashRead: true, want: 3, all: true, ok: true},
-		{name: "a value that does not parse", query: "fifteen", ok: false},
+		{name: "past 15", movedAfter: 15, sequence: 30, sequenceRead: true, sequences: sequences, hashRead: true, want: []sidecar.Id{b, c}},
+		{name: "past the newest", movedAfter: 30, sequence: 30, sequenceRead: true, sequences: sequences, hashRead: true, want: []sidecar.Id{}},
+		{name: "past the sequence, a restart's", movedAfter: 31, sequence: 30, sequenceRead: true, sequences: sequences, hashRead: true, want: refIds, all: true},
+		{name: "no sequence read", movedAfter: 15, sequences: sequences, hashRead: true, want: refIds, all: true},
+		{name: "no hash read", movedAfter: 15, sequence: 30, sequenceRead: true, hashRead: false, want: refIds, all: true},
+		// read to tell whether it stands: serveRefs answers every ref when it does
+		{name: "a ref the hash lacks", movedAfter: 15, sequence: 30, sequenceRead: true, sequences: map[sidecar.Id]uint64{a: 10, b: 20}, hashRead: true, want: []sidecar.Id{b, c}},
 	}
 	for _, c := range cases {
-		refs, all, ok := movedRefs(c.query, c.sequence, c.sequenceRead, c.sequences, c.hashRead, summaries)
-		if ok != c.ok || (ok && (len(refs) != c.want || all != c.all)) {
-			t.Errorf("%s: %d refs, all %t, ok %t", c.name, len(refs), all, ok)
+		candidates, all := movedRefCandidates(c.movedAfter, c.sequence, c.sequenceRead, c.sequences, c.hashRead, refIds)
+		if all != c.all || !slices.Equal(candidates, c.want) {
+			t.Errorf("%s: %v, all %t", c.name, candidates, all)
+		}
+	}
+	if value, ok := parseMovedAfter("15"); !ok || value != 15 {
+		t.Errorf("15 parses as %d, %t", value, ok)
+	}
+	for _, bad := range []string{"fifteen", "", "-1", "18446744073709551616"} {
+		if _, ok := parseMovedAfter(bad); ok {
+			t.Errorf("%q parses", bad)
 		}
 	}
 }

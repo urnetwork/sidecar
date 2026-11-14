@@ -557,7 +557,7 @@ func (self *recordEvsWorld) streamsOn(sidecarId sidecar.Id, client *sidecar.EvsC
 }
 
 // A device of sidecarId on store, its tokens carrying what it asks for, which evs honors as its grants say.
-func (self *recordEvsWorld) newClient(sidecarId sidecar.Id, store sidecar.SidecarStore) *sidecar.EvsClient {
+func (self *recordEvsWorld) newClient(sidecarId sidecar.Id, store sidecar.SidecarStore, adjust ...func(args *sidecar.EvsClientArgs)) *sidecar.EvsClient {
 	self.t.Helper()
 	signer, gkmClient := func() (*sidecartest.FakeGkmSigner, sidecar.GkmClient) {
 		self.stateLock.Lock()
@@ -567,7 +567,7 @@ func (self *recordEvsWorld) newClient(sidecarId sidecar.Id, store sidecar.Sideca
 		return signer, self.gkmClientWithLock(sidecarId)
 	}()
 	identity := &sidecar.SidecarIdentity{NetworkId: self.networkId, SidecarId: sidecarId, ClientId: self.clientId, Generation: 1, IdentityPublicKey: signer.PublicKey()}
-	client, err := sidecar.NewEvsClient(&sidecar.EvsClientArgs{
+	args := &sidecar.EvsClientArgs{
 		NetworkId: self.networkId,
 		EvsUrl:    "https://evs.example",
 		Transport: self,
@@ -587,7 +587,11 @@ func (self *recordEvsWorld) newClient(sidecarId sidecar.Id, store sidecar.Sideca
 		Clock:         &recordEvsWorldClock{clock: self.clock},
 		Log:           sidecar.NewNoopLogger(),
 		Settings:      sidecar.DefaultEvsSettings(),
-	})
+	}
+	for _, adjustArgs := range adjust {
+		adjustArgs(args)
+	}
+	client, err := sidecar.NewEvsClient(args)
 	if err != nil {
 		self.t.Fatal(err)
 	}

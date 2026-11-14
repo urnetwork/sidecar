@@ -15,6 +15,9 @@
 //	         EvsCheckStoredSeal), each key taken from a slot the reply carried; each file a version creates rebuilt
 //	         from the ranges and slots the reply carried, through the receipt gate, and held to its sealed fields;
 //	         a stream read to its head is pinned, as a head read is
+//	erased   a file whose every slot came back emptied reads as erased only where a committed ERASE on the repo's
+//	         erasure ref names each of them (ReadErasures, read once a call); an emptied slot no ERASE names is a key
+//	         evs withheld, which alarms as tampering and refuses the read
 //	moved    GET .../refs?moved_after=<the sequence the caller last listed at>: the refs past it, or every ref with
 //	         All set where evs cannot place the value (a sequence restart, a ref its cache lacks); a caller lists every
 //	         ref, MovedAfter nil, at its first sync each UTC day, since a commit whose raise a crash lost shows only at
@@ -143,8 +146,9 @@ func (self *EvsRepo) ReadStreams(ctx context.Context, reads []*EvsStreamRead) ([
 		}
 	}()
 	answers := []*EvsStreamVersions{}
+	erasures := &evsStreamErasures{}
 	for _, group := range groups {
-		answer, err := self.streamVersions(ctx, group)
+		answer, err := self.streamVersions(ctx, group, erasures)
 		if err != nil {
 			return nil, err
 		}
@@ -154,7 +158,7 @@ func (self *EvsRepo) ReadStreams(ctx context.Context, reads []*EvsStreamRead) ([
 }
 
 // One stream's versions from its group: see the file header's verify row.
-func (self *EvsRepo) streamVersions(ctx context.Context, group *evsStreamGroup) (*EvsStreamVersions, error) {
+func (self *EvsRepo) streamVersions(ctx context.Context, group *evsStreamGroup, erasures *evsStreamErasures) (*EvsStreamVersions, error) {
 	read := group.read
 	answer := &EvsStreamVersions{RefId: read.RefId, Head: group.head, More: group.more, Behind: group.behind, ByteCount: group.byteCount}
 	if group.behind != 0 {
@@ -202,7 +206,7 @@ func (self *EvsRepo) streamVersions(ctx context.Context, group *evsStreamGroup) 
 	keys := newEvsReadKeys(self)
 	result := &evsReadResult{refId: read.RefId, head: verified, keys: keys, objects: group.objects}
 	for _, statement := range walked {
-		version, err := self.streamVersion(ctx, result, group, statement)
+		version, err := self.streamVersion(ctx, result, group, statement, erasures)
 		if err != nil {
 			return nil, err
 		}
@@ -217,7 +221,7 @@ func (self *EvsRepo) streamVersions(ctx context.Context, group *evsStreamGroup) 
 }
 
 // One verified statement's version: its payload from the record the reply carried, its files rebuilt.
-func (self *EvsRepo) streamVersion(ctx context.Context, result *evsReadResult, group *evsStreamGroup, statement *EvsVerifiedStatement) (*EvsStreamVersion, error) {
+func (self *EvsRepo) streamVersion(ctx context.Context, result *evsReadResult, group *evsStreamGroup, statement *EvsVerifiedStatement, erasures *evsStreamErasures) (*EvsStreamVersion, error) {
 	push := statement.Statement.Push
 	record, ok := group.record(push.GetPushId(), 0)
 	if !ok {
@@ -273,7 +277,16 @@ func (self *EvsRepo) streamVersion(ctx context.Context, result *evsReadResult, g
 		if entry.GetKind() != uint32(protocol.EvsEntryKind_EVS_ENTRY_FILE) {
 			continue
 		}
-		if evsStreamFileErased(result.objects, entry) {
+		if evsStreamFileEmptied(result.objects, entry) {
+			named, err := erasures.named(ctx, self, entry)
+			if err != nil {
+				return nil, err
+			}
+			if !named {
+				// evs served the file's slots empty and no committed ERASE names them: a key withheld, no erasure
+				self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
+				return nil, fmt.Errorf("%w: a file's slots served empty with no ERASE naming them", ErrEvsSealInvalid)
+			}
 			version.Files = append(version.Files, &EvsStreamFileRead{TokenPath: change.TokenPath, EntryBytes: change.EntryVersion, Entry: entry, Erased: true})
 			continue
 		}
@@ -312,9 +325,10 @@ func (self *EvsRepo) streamVersion(ctx context.Context, result *evsReadResult, g
 	return version, nil
 }
 
-// Whether every slot a file's chain keeps its keys in came back emptied, as an ERASE leaves it (§11.12's slots row):
-// an erased file. A slot the reply did not carry is no proof of it, and reconstruction asks for that one.
-func evsStreamFileErased(objects *evsReadObjects, entry *protocol.EvsEntryVersion) bool {
+// Whether every slot a file's chain keeps its keys in came back emptied, as an ERASE leaves it (§11.12's slots row),
+// which reads as an erased file once a committed ERASE names each (evsStreamErasures). A slot the reply did not carry
+// is no proof of it, and reconstruction asks for that one.
+func evsStreamFileEmptied(objects *evsReadObjects, entry *protocol.EvsEntryVersion) bool {
 	if len(entry.GetSlotIds()) == 0 {
 		return false
 	}
@@ -329,6 +343,38 @@ func evsStreamFileErased(objects *evsReadObjects, entry *protocol.EvsEntryVersio
 		}
 	}
 	return true
+}
+
+// The slots the repo's committed ERASEs name keys of (§11.12), read from its erasure ref once a streams read meets a
+// file whose slots came back empty: an emptied slot no ERASE names is a key evs withheld, which alarms, never an
+// erasure. A slot is held to the ERASEs by its id, each stream entry keeping its keys in a slot of its own.
+type evsStreamErasures struct {
+	read  bool
+	slots map[Id]bool
+}
+
+// Whether a committed ERASE names a key of each slot the entry keeps its keys in.
+func (self *evsStreamErasures) named(ctx context.Context, repo *EvsRepo, entry *protocol.EvsEntryVersion) (bool, error) {
+	if !self.read {
+		erasures, err := repo.ReadErasures(ctx, 0)
+		if err != nil {
+			return false, err
+		}
+		self.slots = map[Id]bool{}
+		for _, erasure := range erasures {
+			for _, key := range erasure.Keys {
+				self.slots[key.SlotId] = true
+			}
+		}
+		self.read = true
+	}
+	for _, slotIdBytes := range entry.GetSlotIds() {
+		slotId, err := IdFromBytes(slotIdBytes)
+		if err != nil || !self.slots[slotId] {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // A record the group carried, by its push id and number: 0 the push or seal record, else a part's.
