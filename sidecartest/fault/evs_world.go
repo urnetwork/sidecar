@@ -1740,13 +1740,13 @@ func (self *EvsWorld) Nightly() func(ctx context.Context, net *Net) error {
 	}
 }
 
-// The checks every evs row of this world names beside its own: FI-1, FI-2, FI-6 and FI-15, each bound, the world's
-// writes and reads reaching FI-2 and FI-15 through the Net's ledger; the world's own outcome rules (Outcomes), whose
-// record of what committed where the schedules' own checks read (committedVersionOf); and no device alarming.
-// Outcomes cannot see §11.12's shred exception, which FI-2 judges (TEST-M2-04), so a schedule running that exception
-// names FI(2) without Checks.
+// The checks every evs row of this world names beside its own: FI-1, FI-2, FI-3, FI-6 and FI-15, each bound, the
+// world's writes and reads reaching FI-2 and FI-15 through the Net's ledger and its authorization states FI-3 through
+// SetAuthorizationView; the world's own outcome rules (Outcomes), whose record of what committed where the schedules'
+// own checks read (committedVersionOf); and no device alarming. Outcomes cannot see §11.12's shred exception, which
+// FI-2 judges (TEST-M2-04), so a schedule running that exception names FI(2) without Checks.
 func (self *EvsWorld) Checks(invariants ...Invariant) []Invariant {
-	return append([]Invariant{FI(1), FI(2), FI(6), FI(15), self.Outcomes(), self.NoAlarms()}, invariants...)
+	return append([]Invariant{FI(1), FI(2), FI(3), FI(6), FI(15), self.Outcomes(), self.NoAlarms()}, invariants...)
 }
 
 // FI-2's clauses a world can read alone, beside FI(2) in Checks since TEST-M2-04 bound it, and the record of what

@@ -554,8 +554,24 @@ func sortedTokenPaths(path *fi6Path) []sidecar.EvsTokenPath {
 }
 
 // Every record of every batch on every metadata cluster, with the objects it lists as new, and the oldest batch's
-// minute. A batch of format 2 is FI-16's and FI-27's to read (TEST-M10-01).
+// minute. A batch of format 2 is FI-16's and FI-27's to read (TEST-M10-01). One check reads them once: FI-2 and FI-6
+// at one check share what the first read.
 func fi6Batches(ctx context.Context, oracle *Oracle, memory *evsOracleMemory) ([]*fi6BatchRecord, time.Time, []error) {
+	memory.stateLock.Lock()
+	if memory.batchOracle == oracle {
+		records, oldest, errs := memory.batchRecords, memory.batchOldest, memory.batchErrs
+		memory.stateLock.Unlock()
+		return records, oldest, errs
+	}
+	memory.stateLock.Unlock()
+	records, oldest, errs := fi6ReadBatches(ctx, oracle, memory)
+	memory.stateLock.Lock()
+	memory.batchOracle, memory.batchRecords, memory.batchOldest, memory.batchErrs = oracle, records, oldest, errs
+	memory.stateLock.Unlock()
+	return records, oldest, errs
+}
+
+func fi6ReadBatches(ctx context.Context, oracle *Oracle, memory *evsOracleMemory) ([]*fi6BatchRecord, time.Time, []error) {
 	records := []*fi6BatchRecord{}
 	var oldest time.Time
 	errs := []error{}

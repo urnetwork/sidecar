@@ -156,7 +156,7 @@ func checkFi15(ctx context.Context, oracle *Oracle) error {
 				delete(memory.replays, historyRef)
 				continue
 			}
-			replay, replayErrs := fi15ReplayRef(ctx, oracle, repo, ref)
+			replay, replayErrs := fi15ReplayRef(ctx, oracle, repo, ref, memory.replays[historyRef])
 			errs = append(errs, replayErrs...)
 			memory.replays[historyRef] = replay
 		}
@@ -169,13 +169,21 @@ func checkFi15(ctx context.Context, oracle *Oracle) error {
 	return errors.Join(errs...)
 }
 
-// One file-mode ref's history replayed from version 1, every change judged on the way: see the file header.
-func fi15ReplayRef(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, ref *evsStoreRef) (*fi15Replay, []error) {
-	replay := &fi15Replay{byToken: map[uint64]map[string]*fi15Path{}}
+// One file-mode ref's history replayed, every change judged on the way (see the file header): on from previous, an
+// earlier check's replay of the same ref, since a committed version never changes (FI-2 holds that), else from
+// version 1.
+func fi15ReplayRef(ctx context.Context, oracle *Oracle, repo *evsStoreRepo, ref *evsStoreRef, previous *fi15Replay) (*fi15Replay, []error) {
+	replay := previous
+	if replay == nil || uint64(len(ref.versions)) < replay.version {
+		replay = &fi15Replay{byToken: map[uint64]map[string]*fi15Path{}}
+	}
 	memory := evsOracleMemoryOf(oracle.Net)
 	errs := []error{}
 	historyRef := HistoryRef{RepoId: repo.repoId, RefId: ref.refId}
 	for _, version := range ref.versions {
+		if version.version <= replay.version {
+			continue
+		}
 		u := version.version
 		push := version.statement.Push
 		failf := func(format string, a ...any) {
@@ -441,7 +449,7 @@ func fi15CheckRead(replay *fi15Replay, read *LedgerRead) []error {
 				failf("%s served a directory's table, and it does not stand as a directory through v%d", name, v)
 			}
 		default:
-			if stands && !(len(tokenPath) == 0) {
+			if stands && len(tokenPath) != 0 {
 				failf("%s served absent, and it stands through v%d at version %d", name, v, state.version)
 			}
 		}
