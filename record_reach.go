@@ -141,6 +141,9 @@ type RecordReachNote struct {
 	Relays []RecordReachRelay
 	// When the grant ends, Unix milliseconds, 0 for no end the endpoint knows: its receipt flushes then.
 	GrantEndMillis int64
+	// A model host's forward: the manifest in force for the target port (RecordModels.InForce), which the receipt's
+	// header content names (RECORD.md section 12); nil for a forward to no model, and for a port with none.
+	Manifest *RecordContentRef
 }
 
 // What a RecordReach writes through.
@@ -189,6 +192,8 @@ type recordReachReceipt struct {
 	grantEndMillis  int64
 	// the order receipts opened in, the oldest flushing first past ReceiptCount
 	openedSeq uint64
+	// the newest manifest a note of the window named, nil for none
+	manifest *RecordContentRef
 }
 
 // When the receipt flushes, Unix milliseconds: its window's end or its grant's, whichever comes first.
@@ -476,6 +481,10 @@ func (self *RecordReach) Note(note *RecordReachNote) error {
 		}
 		receipt.receipt.StreamCount = recordReachSum(receipt.receipt.GetStreamCount(), note.StreamCount)
 		receipt.receipt.ByteCount = recordReachSum(receipt.receipt.GetByteCount(), note.ByteCount)
+		if note.Manifest != nil {
+			manifest := *note.Manifest
+			receipt.manifest = &manifest
+		}
 		for _, relay := range relays {
 			if !slices.Contains(receipt.receipt.Relays, relay) {
 				receipt.receipt.Relays = append(receipt.receipt.Relays, relay)
@@ -653,6 +662,10 @@ func (self *RecordReach) appendWaiting() {
 			return
 		}
 		err := fmt.Errorf("%w: the receipts have no writer", ErrRecordDraftInvalid)
+		var content []*RecordContentRef
+		if receipt.manifest != nil {
+			content = []*RecordContentRef{receipt.manifest}
+		}
 		if self.writer != nil {
 			_, err = self.writer.Append(&RecordDraft{
 				Kind:      RecordKindReach,
@@ -661,6 +674,7 @@ func (self *RecordReach) appendWaiting() {
 				ActionId:  receipt.actionId,
 				GrantId:   receipt.grantId,
 				Body:      receipt.receipt,
+				Content:   content,
 			})
 		}
 		func() {

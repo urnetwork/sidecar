@@ -69,6 +69,8 @@ type recordRoutes struct {
 	copy bool
 	// The directory's, this sidecar's own stream there.
 	directory *recordRoute
+	// Other ledgers T's entry is copied to, T's body sealed as each log's own entry (record_other_ledger.go).
+	ledgers []*recordRoute
 }
 
 // The network's team logs this sidecar's config names: T, D, or neither.
@@ -80,10 +82,16 @@ func recordTeamLogs(auth RecordAuthView) (*Id, *Id) {
 	return logs.TeamRecordId, logs.DirectoryId
 }
 
-// Whether logId is a team log, T or D: no owner, so neither consent nor a vault's rules apply.
+// Whether logId is a team log, T, D or another ledger: no owner, so neither consent nor a vault's rules apply.
 func recordIsTeamLog(auth RecordAuthView, logId Id) bool {
 	teamRecordId, directoryId := recordTeamLogs(auth)
-	return (teamRecordId != nil && *teamRecordId == logId) || (directoryId != nil && *directoryId == logId)
+	return (teamRecordId != nil && *teamRecordId == logId) || (directoryId != nil && *directoryId == logId) || recordIsLedger(auth, logId)
+}
+
+// Whether logId is one of the network's other ledgers, a `record` repo (RECORD.md section 6.5).
+func recordIsLedger(auth RecordAuthView, logId Id) bool {
+	logs := auth.Logs()
+	return logs != nil && slices.Contains(logs.LedgerIds, logId)
 }
 
 // Whether this sidecar ingests logId's deposits: for a team log, a device writing its stream (a log admin's, or a
@@ -220,7 +228,8 @@ func recordRoutesFor(auth RecordAuthView, sidecarId Id, kind RecordKind, teamOnl
 func recordKindNamesItsLog(kind RecordKind) bool {
 	// a disclosure is of the log it discloses, and an erasure goes in the eraser's stream of the log it erased
 	// (§16.8's Erasure row)
-	return kind == RecordKindDisclosure || kind == RecordKindErasure
+	// and a ledger's scope is of the ledger it scopes (section 6.5)
+	return kind == RecordKindDisclosure || kind == RecordKindErasure || kind == RecordKindLedgerScope
 }
 
 // The route of a draft that names its log (RecordDraft.LogId): the team record, by this sidecar's stream or its
@@ -229,6 +238,20 @@ func recordKindNamesItsLog(kind RecordKind) bool {
 func recordRoutesToLog(auth RecordAuthView, sidecarId Id, kind RecordKind, logId Id) (*recordRoutes, error) {
 	if !recordKindNamesItsLog(kind) {
 		return nil, fmt.Errorf("%w: %s names no log of its own", ErrRecordDraftInvalid, kind)
+	}
+	if recordIsLedger(auth, logId) {
+		// a ledger takes its scope only from a repo admin writing its own stream there
+		if kind == RecordKindLedgerScope && !(auth.Admins(logId, sidecarId) && auth.Writes(logId, sidecarId)) {
+			return nil, fmt.Errorf("%w: only an admin writing ledger %s sets its scope", ErrRecordRouteNoLog, logId)
+		}
+		deposit, ok := recordLogMode(auth, sidecarId, logId)
+		if !ok {
+			return nil, fmt.Errorf("%w: ledger %s takes nothing from this sidecar", ErrRecordRouteNoLog, logId)
+		}
+		return &recordRoutes{team: &recordRoute{logId: logId, deposit: deposit}, teamBody: recordTeamBodySame}, nil
+	}
+	if kind == RecordKindLedgerScope {
+		return nil, fmt.Errorf("%w: a ledger's scope goes to a ledger, and log %s is none", ErrRecordRouteNoLog, logId)
 	}
 	teamRecordId, _ := recordTeamLogs(auth)
 	if teamRecordId != nil && *teamRecordId == logId {

@@ -58,6 +58,10 @@ const (
 	recordInventoryHarnessCount     = 8
 	recordInventoryModelCount       = 16
 	recordInventoryRepoCount        = 64
+	recordModelFieldByteCount       = 128
+	recordCostUsageCount            = 16
+	recordLedgerRepoCount           = 256
+	recordLedgerProjectCount        = 256
 	recordCopyEntryCount            = 64
 	recordCaptureByteCount          = 1024 * 1024
 	recordBlobByteCount             = 8 * 1024 * 1024
@@ -263,6 +267,12 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 			)
 		}
 		return errors.Join(checks...)
+	case *protocol.ModelManifest:
+		return recordModelManifestValidate(typed, false)
+	case *protocol.RunCostBody:
+		return recordBodyRule(len(typed.GetUsage()) <= recordCostUsageCount, "%d model usages", len(typed.GetUsage()))
+	case *protocol.LedgerScopeBody:
+		return recordLedgerScopeValidate(typed)
 	case *protocol.CopyBody:
 		return recordBodyRule(len(typed.GetEntries()) <= recordCopyEntryCount, "%d copied entries", len(typed.GetEntries()))
 	case *protocol.TranscriptBody:
@@ -293,6 +303,94 @@ func RecordBodyValidate(kind RecordKind, body proto.Message) error {
 		return recordDisclosureValidate(typed)
 	}
 	return nil
+}
+
+// ModelField.evidence (RECORD.md section 12): how a manifest's field is known.
+const (
+	// A person typed it, confirmed on /dev/tty or in an app.
+	RecordModelEvidenceDeclared uint32 = 1
+	// The engine said so over loopback on the host.
+	RecordModelEvidenceReported uint32 = 2
+	// The host's daemon hashed the files a person named.
+	RecordModelEvidenceMeasured uint32 = 3
+	// Reserved for hardware attestation; a v1 writer never sets it, and software evidence is never presented as it.
+	RecordModelEvidenceAttested uint32 = 4
+)
+
+// model: a port, and each field an identifier within its bytes with an evidence section 12 names. A reader keeps a
+// field marked attested, which a later writer with hardware evidence may set; writer holds a v1 writer's own, which
+// refuses attested, an empty value, and measured on anything but the weights digest (D-RECORD-11).
+func recordModelManifestValidate(body *protocol.ModelManifest, writer bool) error {
+	checks := []error{recordBodyRule(1 <= body.GetPort() && body.GetPort() <= 0xffff, "model port %d", body.GetPort())}
+	fields := []struct {
+		name     string
+		field    *protocol.ModelField
+		measured bool
+	}{
+		{name: "served_name", field: body.GetServedName()},
+		{name: "engine", field: body.GetEngine()},
+		{name: "engine_version", field: body.GetEngineVersion()},
+		{name: "quantization", field: body.GetQuantization()},
+		{name: "weights_digest", field: body.GetWeightsDigest(), measured: true},
+	}
+	for _, item := range fields {
+		if item.field == nil {
+			continue
+		}
+		evidence := item.field.GetEvidence()
+		checks = append(checks,
+			recordBodyRule(len(item.field.GetValue()) <= recordModelFieldByteCount, "%s of %d bytes", item.name, len(item.field.GetValue())),
+			recordBodyRule(RecordModelEvidenceDeclared <= evidence && evidence <= RecordModelEvidenceAttested, "%s evidence %d", item.name, evidence),
+		)
+		if writer {
+			checks = append(checks,
+				recordBodyRule(evidence != RecordModelEvidenceAttested, "%s claims attested evidence, which is reserved", item.name),
+				recordBodyRule(item.field.GetValue() != "", "%s with no value", item.name),
+				recordBodyRule((evidence == RecordModelEvidenceMeasured) == item.measured || evidence == RecordModelEvidenceAttested,
+					"%s evidence %d: the weights digest alone is measured", item.name, evidence),
+			)
+		}
+	}
+	return errors.Join(checks...)
+}
+
+// The kinds another ledger takes a copy of (RECORD.md section 6.5): context, change, the approval family, restore and
+// coverage. Cost joins only once it goes past the vault.
+var recordKindsLedgerCopied = []RecordKind{
+	RecordKindContext,
+	RecordKindChange,
+	RecordKindApproval,
+	RecordKindApprovalDecision,
+	RecordKindApprovalCancel,
+	RecordKindApprovalUse,
+	RecordKindRestore,
+	RecordKindCoverage,
+}
+
+// Whether another ledger takes a copy of kind's team entry.
+func RecordKindLedgerCopied(kind RecordKind) bool {
+	return slices.Contains(recordKindsLedgerCopied, kind)
+}
+
+// ledger_scope: repos by id and projects by key within their counts, and kinds only among those a ledger copies.
+func recordLedgerScopeValidate(body *protocol.LedgerScopeBody) error {
+	checks := []error{
+		recordBodyRule(len(body.GetRepoIds()) <= recordLedgerRepoCount, "%d ledger repos", len(body.GetRepoIds())),
+		recordBodyRule(len(body.GetProjects()) <= recordLedgerProjectCount, "%d ledger projects", len(body.GetProjects())),
+		recordBodyRule(len(body.GetKinds()) <= len(recordKindsLedgerCopied), "%d ledger kinds", len(body.GetKinds())),
+	}
+	for _, repoId := range body.GetRepoIds() {
+		checks = append(checks, recordBodyRule(len(repoId) == recordIdByteCount, "a ledger repo id of %d bytes", len(repoId)))
+	}
+	for _, project := range body.GetProjects() {
+		checks = append(checks, recordBodyRule(1 <= len(project) && len(project) <= recordProjectByteCount, "a ledger project of %d bytes", len(project)))
+	}
+	seen := map[uint32]bool{}
+	for _, kind := range body.GetKinds() {
+		checks = append(checks, recordBodyRule(RecordKindLedgerCopied(RecordKind(kind)) && !seen[kind], "ledger kind %d twice, or one a ledger does not copy", kind))
+		seen[kind] = true
+	}
+	return errors.Join(checks...)
 }
 
 // Parses stored as kind's body and holds it to RecordBodyValidate: the reader's check of an opened body. A Signed kind
