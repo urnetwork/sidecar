@@ -55,6 +55,10 @@ type EvsSealedWrite struct {
 	Slots []*EvsSealedSlot
 	// the token scope its uploads take: rw, or a deposit's deposit (evs_deposit.go)
 	scope string
+	// format 2: the versionless records, each a kind-5 segment sealed again under every push id the write draws, and
+	// the push they are sealed for now (evs_write_versionless.go)
+	kind5       []*evsSealedKind5
+	kind5PushId Id
 }
 
 // One path sealed.
@@ -79,6 +83,8 @@ type EvsSealedSegment struct {
 	PaddedSize uint64
 	content    *evsSpill
 	Receipt    *protocol.EvsUploadReceipt
+	// a kind-5 segment, whose receipt evs marks versionless (evs_write_versionless.go)
+	versionless bool
 }
 
 // Drops the segments' spills.
@@ -163,7 +169,13 @@ func (self *EvsClient) sealWrite(ctx context.Context, plan *EvsWritePlan, repoKe
 			sealed.Paths = append(sealed.Paths, &EvsSealedPath{Planned: planned})
 			continue
 		}
-		sealedFields, err := EvsSealFields(manifest, planned.Fields)
+		var sealedFields []byte
+		if planned.Versioning != uint32(protocol.EvsVersioning_EVS_VERSIONING_KEPT) {
+			// a versionless version's fields carry content_sha256 (evs_plan_versionless.go)
+			sealedFields, err = EvsSealFieldsFormat2(manifest, planned.Fields, planned.Versioning)
+		} else {
+			sealedFields, err = EvsSealFields(manifest, planned.Fields)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -186,7 +198,7 @@ func (self *EvsClient) sealWrite(ctx context.Context, plan *EvsWritePlan, repoKe
 		var inlineKey *EvsObjectKey
 		for index, link := range planned.Chain {
 			if link.Kept != nil {
-				path.Chain = append(path.Chain, link.Kept)
+				path.Chain = append(path.Chain, evsKeptLocator(link))
 				if plan.slotKeyed {
 					if len(keptSlots) == 0 {
 						return nil, fmt.Errorf("%w: a kept locator under no slot", ErrEvsWriteInvalid)
@@ -197,6 +209,23 @@ func (self *EvsClient) sealWrite(ctx context.Context, plan *EvsWritePlan, repoKe
 				continue
 			}
 			record := link.Record
+			if link.Kind == protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT {
+				// a versionless record: its kind-5 segment names the push, so it is sealed once the sender draws one
+				if plan.slotKeyed && chainKey == nil {
+					if chainKey, err = newChainKey(); err != nil {
+						return nil, err
+					}
+				}
+				locator, err := sealed.addKind5(path, fileId, link, chainKey)
+				if err != nil {
+					return nil, err
+				}
+				if chainKey != nil {
+					nameSlot(chainKey.slotId)
+				}
+				path.Chain = append(path.Chain, locator)
+				continue
+			}
 			body, err := io.ReadAll(io.NewSectionReader(record.Body, 0, record.Body.Size()))
 			if err != nil {
 				return nil, err
@@ -359,8 +388,16 @@ func (self *EvsRepo) uploadSegment(ctx context.Context, segment *EvsSealedSegmen
 	if err != nil {
 		return err
 	}
-	if _, err := DecodeEvsUploadReceipt(receiptBytes); err != nil {
+	decode := DecodeEvsUploadReceipt
+	if segment.versionless {
+		decode = DecodeEvsUploadReceiptFormat2
+	}
+	if _, err := decode(receiptBytes); err != nil {
 		return fmt.Errorf("%w: %w", ErrEvsReplyInvalid, err)
+	}
+	if receipt.GetVersionless() != segment.versionless {
+		// evs marks a kind-5 segment's receipt, and no other (§11.13's receipt row)
+		return fmt.Errorf("%w: a receipt whose versionless mark is not the segment's", ErrEvsReplyInvalid)
 	}
 	if string(receipt.GetSegmentId()) != string(segment.Id[:]) || receipt.GetPaddedSize() != segment.PaddedSize ||
 		string(receipt.GetRepoId()) != string(self.repoId[:]) {

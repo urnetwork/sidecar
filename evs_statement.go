@@ -265,6 +265,10 @@ type EvsSignFunction func(purpose string, signedType bridge.SignedType, body []b
 // One change a push carries: its path, the version it is based on (0 creates), its new entry version's bytes (nil
 // removes the path), and the EvsSourcePath encodings 11.6's read rule names for it while sources stand.
 type EvsPlannedChange struct {
+	// Format 2: what the staged segments its entry version names take of the push's or its part's staged bytes, each
+	// one's length and bytes, which ride outside the payload and count against its 1 MiB all the same
+	// (plan-EVS2-small-readings#13); 0 for a change that stages nothing.
+	StagedByteCount  int
 	TokenPath        EvsTokenPath
 	BaseEntryVersion uint64
 	EntryVersion     []byte
@@ -569,7 +573,15 @@ func (self *EvsStatementBuilder) buildOnePart(push *protocol.EvsPush, changes []
 	listed.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_CHANGE_LIST, evsJoinItems(leaves))
 	listed.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_MERKLE_PROOFS, evsJoinItems(proofs))
 	listedBytes := listed.Encode()
-	if self.format.PayloadMaxByteCount < len(listedBytes) {
+	// the staged bytes ride beside the payload and count with it: their count, then each change's
+	stagedByteCount := 0
+	for _, change := range changes {
+		stagedByteCount += change.planned.StagedByteCount
+	}
+	if 0 < stagedByteCount {
+		stagedByteCount += 4
+	}
+	if self.format.PayloadMaxByteCount < len(listedBytes)+stagedByteCount {
 		return nil, errEvsPayloadTooLarge
 	}
 
@@ -615,9 +627,14 @@ func evsEntryProofs(tree *EvsChangeTree, part int, changes []*evsBuildChange) ([
 }
 
 // A bound on what one change adds to a part: its leaf twice, as a change and in its proof, its entry version, its
-// source paths, and a path of pathLength hashes, with framing.
+// source paths, and a path of pathLength hashes, with framing; and the staged segments its entry version names, which
+// ride beside the part under their own count.
 func evsChangePartByteCount(change *evsBuildChange, pathLength int) int {
-	return 2*len(change.leaf) + len(change.planned.EntryVersion) + len(change.sourceItem) + pathLength*(sha256.Size+2) + 32
+	byteCount := 2*len(change.leaf) + len(change.planned.EntryVersion) + len(change.sourceItem) + pathLength*(sha256.Size+2) + 32
+	if 0 < change.planned.StagedByteCount {
+		byteCount += change.planned.StagedByteCount + 4
+	}
+	return byteCount
 }
 
 // What one part of a push in parts carries before it is encoded.

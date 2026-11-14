@@ -1,7 +1,8 @@
 // ur evs's §11 parts (§11.12, §18.5; EVS1-M2-38): a repo's files and life through the daemon's evs client, each a
 // control method over the only hosted network's client (urEvsTarget):
 //
-//	ur evs ls <repo_id> [--ref=<ref>] [<path>]                a directory's children, verified
+//	ur evs ls <repo_id> [-l] [--ref=<ref>] [<path>]           a directory's children, verified; -l shows each file's
+//	                                                          versioning setting, on, off or index (EVS2-M10-16)
 //	ur evs log <repo_id> [--ref=<ref>] <path>                 a path's versions, newest first
 //	ur evs delete <repo_id>                                   §8.8's RepoDelete filed, then DELETE, after a yes on the
 //	                                                          terminal (§5.8)
@@ -31,7 +32,6 @@ import (
 	"github.com/docopt/docopt-go"
 
 	"github.com/urnetwork/sidecar"
-	"github.com/urnetwork/sidecar/protocol"
 )
 
 // The control methods these parts call.
@@ -61,6 +61,8 @@ type urEvsRepoParams struct {
 	Cuts    []string `json:"cuts,omitempty"`
 	Force   bool     `json:"force,omitempty"`
 	Abandon bool     `json:"abandon,omitempty"`
+	// ls -l: each file's versioning setting beside its name
+	Long bool `json:"long,omitempty"`
 }
 
 // One row of a part's answer: what ur prints, a line each.
@@ -118,19 +120,11 @@ func urEvsRepoMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 			if err != nil {
 				return nil, err
 			}
-			listing, err := repo.List(ctx, &sidecar.EvsReadArgs{RefName: urEvsRefName(params.Ref), Path: params.Path})
+			listing, err := repo.List(ctx, &sidecar.EvsReadArgs{RefName: urEvsRefName(params.Ref), Path: params.Path, Settings: params.Long})
 			if err != nil {
 				return nil, err
 			}
-			lines := []string{fmt.Sprintf("%s at version %d", listingPath(listing.Path), listing.HeadVersion)}
-			for _, entry := range listing.Entries {
-				suffix := ""
-				if entry.Kind == protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
-					suffix = "/"
-				}
-				lines = append(lines, "  "+string(entry.Name)+suffix)
-			}
-			return lines, nil
+			return urEvsListingLines(listing, params.Long), nil
 		}),
 		method(urMethodEvsLog, false, func(ctx context.Context, params *urEvsRepoParams) ([]string, error) {
 			_, repo, _, err := urEvsRepoOf(evs, params)
@@ -375,6 +369,7 @@ func runUrEvsRepo(ctx context.Context, cli *urCli, options docopt.Opts, part str
 	params.Dir = first("<dir>")
 	params.Target = first("--target")
 	params.Cuts = strings("--cut")
+	params.Long = urOptionBool(options, "-l")
 	params.Force = urOptionBool(options, "--force")
 	params.Abandon = urOptionBool(options, "--abandon")
 	if part == urMethodEvsImport {

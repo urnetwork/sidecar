@@ -98,8 +98,19 @@ func evsDirectoryChanges(ctx context.Context, plan *EvsWritePlan, planned map[st
 		parent, name := evsSplitParent(path)
 		parentChildren[parent] = append(parentChildren[parent], &evsChildChange{path: path, name: name, kind: kind, removed: removed})
 	}
+	// a removal below a directory the same push removes takes no delta: its directory goes whole, and the removal
+	// stands beside it so the commit names the version it replaces (§11.7's removal row; EVS2-M10-16)
+	underRemoved := func(path string) bool {
+		for parent, _ := evsSplitParent(path); parent != ""; parent, _ = evsSplitParent(parent) {
+			if above := planned[parent]; above != nil && above.Remove {
+				return true
+			}
+		}
+		return false
+	}
 	for path, change := range planned {
 		switch {
+		case change.Remove && underRemoved(path):
 		case change.Remove:
 			note(path, change.Kind, true)
 		case change.BaseEntryVersion == 0:
