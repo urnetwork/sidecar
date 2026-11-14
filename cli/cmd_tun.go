@@ -300,7 +300,7 @@ func printUrTunStatus(cli *urCli, status *urTunStatus) {
 	switch {
 	case status.DefaultRoute:
 		cli.printf("  exits      the default route rides ur tun to the network's exits; the daemon's own transport " +
-			"keeps today's route by its mark\n")
+			"keeps today's route by its mark, and so does IPv6, which ur tun does not carry\n")
 	case status.ExitsHeld && status.ExitsHeldReason != "":
 		cli.printf("  exits      held: %s; other traffic keeps today's route, and ur tun tries again\n", status.ExitsHeldReason)
 	case status.ExitsHeld:
