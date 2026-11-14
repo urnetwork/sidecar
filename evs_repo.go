@@ -62,6 +62,10 @@ type EvsReadArgs struct {
 	Version uint64
 	// Reads the cluster's head, not evs's cache (§11.9's fresh).
 	Fresh bool
+	// List: reads each file child's versioning setting, one more round per ReadMaxPathCount files (ur evs ls -l).
+	Settings bool
+	// List: shows the index files' root, which a listing of a ref's root hides otherwise (§16.2).
+	IndexFiles bool
 }
 
 // One file version as a read shows it, verified against its signed statement (§11.9).
@@ -99,6 +103,8 @@ type EvsListEntry struct {
 	Kind protocol.EvsEntryKind
 	// The source path epoch a carried row keeps its token and AAD under, else 0 (§11.6).
 	CarriedEpoch uint64
+	// A file's versioning setting, 0 kept, 1 versionless or 2 index, read only when the listing asked for settings.
+	Versioning uint32
 }
 
 // One path's versions, newest first, as History walks them (§11.7's history row).
@@ -119,9 +125,10 @@ type EvsHistoryVersion struct {
 	Time            time.Time
 	// The removal that ended the path at this version, if it is one.
 	Removed bool
-	// 0 kept; format 2's settings are refused before they get here.
+	// 0 kept, 1 versionless, 2 index (§11.7).
 	Versioning uint32
-	// kept (format 1's only state); collected, drop_pending and dropped are format 2's (§11.9).
+	// kept, or collected for a replaced versionless version whose content evs no longer serves; drop_pending and
+	// dropped are EVS2-M10-22's, refused before they get here (§11.9).
 	State string
 	// The slots the version's records name, as its entry lists them: in a record-class repo each chain's key slot,
 	// what an erasure names to destroy the version (§11.12's closure row: "each retained version's slot keys"). None

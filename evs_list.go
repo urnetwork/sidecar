@@ -13,6 +13,9 @@
 // names sealed under parent t_0 (question evs1-m2-24-root-directory-names, option 1; DESIGN-DETAILS 9.2.8): a ref
 // nothing was written to lists it empty.
 //
+// A listing of a ref's root hides the index files' root unless asked, and reads each file's versioning setting when
+// asked, from the newest version of each (EVS2-M10-18; evs_read_versionless.go).
+//
 // On every leg. Safe for concurrent use.
 
 package sidecar
@@ -22,6 +25,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/urnetwork/sidecar/protocol"
 )
@@ -59,12 +63,21 @@ func (self *EvsRepo) List(ctx context.Context, args *EvsReadArgs) (*EvsListing, 
 	listing := &EvsListing{RefId: refId, Path: args.Path, HeadVersion: result.head.Version}
 	cached := &evsListedDirectory{headVersion: result.head.Version, rows: map[string]*evsListedRow{}}
 	for token, row := range opened {
-		listing.Entries = append(listing.Entries, &EvsListEntry{Name: row.name, Kind: row.kind, CarriedEpoch: row.carried})
 		cached.rows[string(row.name)] = &evsListedRow{kind: row.kind, epoch: row.epoch, token: token}
+		if args.Path == "" && !args.IndexFiles && string(row.name) == strings.TrimSuffix(indexFileModePrefix, "/") {
+			// the index files' root, shown only when asked (§16.2)
+			continue
+		}
+		listing.Entries = append(listing.Entries, &EvsListEntry{Name: row.name, Kind: row.kind, CarriedEpoch: row.carried})
 	}
 	slices.SortFunc(listing.Entries, func(a *EvsListEntry, b *EvsListEntry) int { return bytes.Compare(a.Name, b.Name) })
 	if args.Version == 0 {
 		self.client.epochs.cacheListing(self.repoId, refId, args.Path, cached, self.client.settings.ListingCacheCount)
+	}
+	if args.Settings && args.Version == 0 {
+		if err := self.listSettings(ctx, refId, args.Path, listing); err != nil {
+			return nil, err
+		}
 	}
 	return listing, nil
 }

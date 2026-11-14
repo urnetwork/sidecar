@@ -157,6 +157,13 @@ type evsTestWorld struct {
 	omitVersion    uint64
 	serveVersion   map[string]uint64
 	missingObjects bool
+	// format 2, as evs serves versionless content: a path here answers a version that is no longer its newest
+	// `collected` and that version's segments missing; a staged id is served only beside a path whose served version
+	// names it; and beforeRead sees each read request before it is served, with no lock held
+	collectedPaths map[string]bool
+	collectedIds   map[string]bool
+	stagedIds      map[string]bool
+	beforeRead     func(read *protocol.EvsReadRequest)
 	mutatePath     func(reply *protocol.EvsReadPathReply)
 	headOverride   *protocol.EvsHeadSummary
 	logPageCount   int
@@ -775,6 +782,18 @@ func (self *evsTestWorld) pathReplyWithLock(named map[uint64]EvsTokenPath, versi
 		entry := &protocol.EvsEntryVersion{}
 		proto.Unmarshal(held.entryBytes, entry)
 		locators = entry.GetChain()
+		if self.collectedPaths[key] && entry.GetVersioning() != 0 && (version != state.newest || state.removal != nil) {
+			reply.State = protocol.EvsReadPathState_EVS_READ_PATH_COLLECTED
+			if self.collectedIds == nil {
+				self.collectedIds = map[string]bool{}
+			}
+			for _, locator := range locators {
+				if len(locator.GetId()) != 0 {
+					self.collectedIds[string(locator.GetId())] = true
+				}
+			}
+			locators = nil
+		}
 		if entry.GetKind() == uint32(protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY) {
 			reply.Names = &protocol.EvsNameTable{Names: evsTestServedRows(state.rows, max(1, state.home))}
 			reply.NamesThrough = held.commitVersion
@@ -825,6 +844,19 @@ func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Re
 		other.ServeHTTP(writer, request)
 		return
 	}
+	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/read") {
+		self.stateLock.Lock()
+		beforeRead := self.beforeRead
+		self.stateLock.Unlock()
+		if beforeRead != nil {
+			body, _ := io.ReadAll(request.Body)
+			request.Body = io.NopCloser(bytes.NewReader(body))
+			read := &protocol.EvsReadRequest{}
+			if err := proto.Unmarshal(body, read); err == nil {
+				beforeRead(read)
+			}
+		}
+	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	switch {
@@ -850,6 +882,7 @@ func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Re
 			frames = append(frames, &protocol.EvsReadFrame{Statement: &protocol.EvsReadStatement{Version: version, Statement: self.commits[version-1].statement}})
 		}
 		locators := []*protocol.EvsLocator{}
+		namedStaged := map[string]bool{}
 		for _, path := range read.GetPaths() {
 			named := map[uint64]EvsTokenPath{}
 			var first EvsTokenPath
@@ -876,6 +909,11 @@ func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Re
 			}
 			frames = append(frames, &protocol.EvsReadFrame{Path: reply})
 			locators = append(locators, pathLocators...)
+			for _, locator := range pathLocators {
+				if locator.GetStaged() {
+					namedStaged[string(locator.GetId())] = true
+				}
+			}
 		}
 		for _, readPush := range read.GetPushes() {
 			if record, ok := self.pushRecordWithLock(readPush.GetPushId(), readPush.GetVersion(), readPush.GetPart()); ok {
@@ -896,11 +934,18 @@ func (self *evsTestWorld) ServeHTTP(writer http.ResponseWriter, request *http.Re
 				continue
 			}
 			segment, ok := self.segments[string(locator.GetId())]
+			if self.collectedIds[string(locator.GetId())] || (self.stagedIds[string(locator.GetId())] && !namedStaged[string(locator.GetId())]) {
+				ok = false
+			}
 			if !ok || self.missingObjects {
 				frames = append(frames, &protocol.EvsReadFrame{Object: &protocol.EvsReadObject{Kind: protocol.EvsReadObjectKind_EVS_READ_OBJECT_SEGMENT, Id: locator.GetId(), Missing: true}})
 				continue
 			}
-			for _, part := range [][2]uint32{{0, evsSegmentKeyedHeaderByteCount}, {locator.GetOffset(), locator.GetLength()}} {
+			headerByteCount := uint32(evsSegmentKeyedHeaderByteCount)
+			if 4 < len(segment) && segment[4] == evsSegmentFormat2 {
+				headerByteCount = evsKind5KeyedRecordOffset
+			}
+			for _, part := range [][2]uint32{{0, headerByteCount}, {locator.GetOffset(), locator.GetLength()}} {
 				// a range past 1 MiB spans frames, each the next slice at its own offset
 				for at := part[0]; at < part[0]+part[1]; at += 1024 * 1024 {
 					end := min(part[0]+part[1], at+1024*1024)
