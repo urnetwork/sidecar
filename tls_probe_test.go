@@ -1,4 +1,4 @@
-//go:build !ios_extension && !js
+//go:build !ios_extension
 
 // §13.10 step 3's probe: the daemon's own ports and both named agent UIs refused and recorded, and everything else
 // passed, a target that answers nothing included. Targets are loopback listeners on ports the kernel picks.
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -19,6 +20,9 @@ import (
 // A local service answering GET / with body.
 func newTlsProbeTestTarget(t *testing.T, body string) string {
 	t.Helper()
+	if runtime.GOOS == "js" {
+		t.Skip("a Worker has no loopback listener: the native legs probe one")
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Write([]byte(body))
@@ -81,6 +85,9 @@ func TestTlsProbeRefusesTheDaemonsPortsWithoutDialing(t *testing.T) {
 }
 
 func TestTlsProbePassesAnOrdinaryTarget(t *testing.T) {
+	if runtime.GOOS == "js" {
+		t.Skip("a Worker has no loopback listener: the native legs probe one")
+	}
 	recorded := 0
 	record := func(refusal TlsProbeRefusal) {
 		recorded += 1

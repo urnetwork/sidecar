@@ -98,7 +98,7 @@ type mcpTlsUnpublishOut struct {
 
 func init() {
 	registerMcpTools(func(catalog *McpCatalog, server *McpServer) {
-		addTlsTools(catalog, time.Now)
+		addTlsTools(catalog, server.clock.Now)
 	})
 }
 

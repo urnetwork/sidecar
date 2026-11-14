@@ -1,4 +1,4 @@
-//go:build !ios_extension && !js
+//go:build !ios_extension
 
 // The CT client on fixtures (§22.9: staging CT is unreliable): each source's own listing form, Cert Spotter's paging
 // and crt.sh's fetch a certificate, the cursors, and every way a source fails. The fixtures' certificates are
@@ -13,6 +13,7 @@ import (
 	"go/token"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,6 +46,9 @@ type tlsCtFixtureTransport struct {
 
 func newTlsCtFixtureTransport(t *testing.T) *tlsCtFixtureTransport {
 	t.Helper()
+	if runtime.GOOS == "js" {
+		t.Skip("a Worker has no files: the native legs read the fixtures")
+	}
 	transport := &tlsCtFixtureTransport{t: t, pageCount: 2, failStatus: map[string]int{}, failBody: map[string]string{}}
 	read := func(name string, into any) {
 		encoded, err := os.ReadFile("testdata/tls/ct/" + name)
@@ -73,12 +77,20 @@ func (self *tlsCtFixtureTransport) fail(source string, status int, body string) 
 	}
 }
 
-func (self *tlsCtFixtureTransport) requestCount(host string) int {
+// The source a request is for, by its path: Cert Spotter's issuances API, or crt.sh's root.
+func tlsCtFixtureSource(request *http.Request) string {
+	if strings.HasSuffix(request.URL.Path, "/v1/issuances") {
+		return TlsCtSourceCertSpotter
+	}
+	return TlsCtSourceCrtSh
+}
+
+func (self *tlsCtFixtureTransport) requestCount(source string) int {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	count := 0
 	for _, request := range self.requests {
-		if request.URL.Host == host {
+		if tlsCtFixtureSource(request) == source {
 			count += 1
 		}
 	}
@@ -97,7 +109,7 @@ func tlsCtFixtureMatches(names []string, domain string) bool {
 }
 
 func (self *tlsCtFixtureTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	source := map[string]string{"api.certspotter.com": TlsCtSourceCertSpotter, "crt.sh": TlsCtSourceCrtSh}[request.URL.Host]
+	source := tlsCtFixtureSource(request)
 	status, body := func() (int, string) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -189,7 +201,7 @@ func TestTlsCtClientReadsCertSpotterAPageAtATime(t *testing.T) {
 	if len(certificates) != 3 || cursor != "900004" {
 		t.Fatalf("%d certificates to cursor %q", len(certificates), cursor)
 	}
-	if count := transport.requestCount("api.certspotter.com"); count != 3 {
+	if count := transport.requestCount(TlsCtSourceCertSpotter); count != 3 {
 		t.Errorf("%d requests", count)
 	}
 	first := certificates[0]
@@ -295,7 +307,7 @@ func TestTlsCtClientReadsCrtShACertificateAtATime(t *testing.T) {
 	// crt.sh gets no credential of another source
 	transport.stateLock.Lock()
 	for _, request := range transport.requests {
-		if request.URL.Host == "crt.sh" && request.Header.Get("Authorization") != "" {
+		if tlsCtFixtureSource(request) == TlsCtSourceCrtSh && request.Header.Get("Authorization") != "" {
 			t.Errorf("crt.sh was sent Cert Spotter's key")
 		}
 	}
@@ -313,14 +325,14 @@ func TestTlsCtClientReadsCrtShACertificateAtATime(t *testing.T) {
 		t.Errorf("the sources disagree on a certificate's hash")
 	}
 
-	fetched := transport.requestCount("crt.sh")
+	fetched := transport.requestCount(TlsCtSourceCrtSh)
 	again, next, err := source.Issuances(t.Context(), tlsCtTestZone, cursor)
 	if err != nil || len(again) != 0 || next != cursor {
 		t.Errorf("past the cursor: %d certificates to %q, %v", len(again), next, err)
 	}
 	// only the two listings, and no certificate fetched twice
-	if transport.requestCount("crt.sh")-fetched != 2 {
-		t.Errorf("%d requests past the cursor", transport.requestCount("crt.sh")-fetched)
+	if transport.requestCount(TlsCtSourceCrtSh)-fetched != 2 {
+		t.Errorf("%d requests past the cursor", transport.requestCount(TlsCtSourceCrtSh)-fetched)
 	}
 	if _, _, err := source.Issuances(t.Context(), tlsCtTestZone, "not a cursor"); !errors.Is(err, ErrTlsCtSource) {
 		t.Errorf("a cursor that is not crt.sh's: %v", err)
@@ -402,6 +414,9 @@ func TestNewTlsCtClientDialsDirectlyAndRefusesBadSettings(t *testing.T) {
 
 // §12.5's restore replay and §21.6's screen import the client from server, so it links no connect.
 func TestTlsCtClientImportsNoConnect(t *testing.T) {
+	if runtime.GOOS == "js" {
+		t.Skip("a Worker has no files: the native legs read the source")
+	}
 	file, err := parser.ParseFile(token.NewFileSet(), "tls_ct_client.go", nil, parser.ImportsOnly)
 	if err != nil {
 		t.Fatal(err)

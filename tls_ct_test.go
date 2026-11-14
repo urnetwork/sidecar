@@ -300,9 +300,9 @@ func TestTlsCtWatchAnAttestedCertificateDoesNotAlarm(t *testing.T) {
 		t.Errorf("%d known and %d alarms kept", len(state.Known), len(state.Alarms))
 	}
 	// each source's cursor moved, so the next pass reads nothing again
-	requests := fixture.transport.requestCount("crt.sh")
+	requests := fixture.transport.requestCount(TlsCtSourceCrtSh)
 	fixture.pass()
-	if fetched := fixture.transport.requestCount("crt.sh") - requests; fetched != 2 {
+	if fetched := fixture.transport.requestCount(TlsCtSourceCrtSh) - requests; fetched != 2 {
 		t.Errorf("%d crt.sh requests at a pass with nothing new", fetched)
 	}
 }
@@ -477,7 +477,7 @@ func TestTlsCtWatchJudgesNothingWithoutRowsNamesOrConfig(t *testing.T) {
 			t.Errorf("without %s: %d alarms, degraded %t", c.name, alarms, fixture.watch.Degraded())
 		}
 		// nothing was asked of a source either, so no cursor passed a certificate unjudged
-		if count := fixture.transport.requestCount("api.certspotter.com") + fixture.transport.requestCount("crt.sh"); count != 0 {
+		if count := fixture.transport.requestCount(TlsCtSourceCertSpotter) + fixture.transport.requestCount(TlsCtSourceCrtSh); count != 0 {
 			t.Errorf("without %s: %d requests", c.name, count)
 		}
 	}
@@ -491,7 +491,7 @@ func TestTlsCtWatchNotListeningWatchesNothing(t *testing.T) {
 	if alarms := fixture.pass(); alarms != 0 || fixture.watch.Degraded() {
 		t.Errorf("%d alarms, degraded %t", alarms, fixture.watch.Degraded())
 	}
-	if count := fixture.transport.requestCount("api.certspotter.com") + fixture.transport.requestCount("crt.sh"); count != 0 {
+	if count := fixture.transport.requestCount(TlsCtSourceCertSpotter) + fixture.transport.requestCount(TlsCtSourceCrtSh); count != 0 {
 		t.Errorf("%d requests from a sidecar that is not listening", count)
 	}
 }
