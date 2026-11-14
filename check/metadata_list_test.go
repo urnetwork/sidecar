@@ -204,6 +204,40 @@ var metadataListAdditions = []metadataListAddition{
 			"  why: idempotent full-set calls; removal on the client's removal signal (§9.5, §9.8); a revocation-record miss within 120 s of a valid check counts as valid, since only api's and connect's SQL fallback projects the record again (QD-040)\n" +
 			"  ttl: 5 min after the client's last call; the valid time 120 s after the check it records\n",
 	},
+	{
+		// QD-716's list version, after v15's
+		question: "details-3-metadata-rows",
+		block:    "# metadata_list.yml v15;",
+		list:     "# metadata_list.yml v16;",
+	},
+	{
+		// QD-716: v16's line, after v15's
+		question: "details-3-metadata-rows",
+		block:    "# which its token names, and sock-5's {sc_<client_id>}ok, the time a client's token last checked valid at sockets.\n",
+		list: "# which its token names, and sock-5's {sc_<client_id>}ok, the time a client's token last checked valid at sockets.\n" +
+			"# v16, updated 2026-11-13 for the owner's answer QD-716 (details-3-metadata-rows), amends smtp-2 with the key set a\n" +
+			"# sidecar proves under, a proof per part with its reply count and the header block's record count, and the key and\n" +
+			"# scan-state commitments the sidecar publishes, uniformly random group elements (DESIGN-DETAILS 3.2.2, 3.2.5).\n",
+	},
+	{
+		// QD-716: smtp-2's proofs become parts bound to one key part (DESIGN-DETAILS 3.8), whose colon and space
+		// quote the value, as every strict row's are
+		question: "details-3-metadata-rows",
+		block:    "  sees: per connection the network and sidecar (from the ticket), the sending IP",
+		list:     "  sees: \"per connection the network and sidecar (from the ticket), the sending IP",
+	},
+	{
+		// QD-716: the parts, their counts and the commitments, in place of pi1 to pi3 (DESIGN-DETAILS 3.8)
+		question: "details-3-metadata-rows",
+		block:    "the DNSSEC chain, proofs π1 to π3 and, in DATA mode, one per later body part (owner decision 125), the length",
+		list:     "the DNSSEC chain, the id of the key set the sidecar proves under; a proof per part: the key part, one per envelope group, one per header record and, in DATA mode, one per body record (owner decision 125), each with its reply count and, once, the header block's record count; the key commitment and the scan-state commitments the sidecar publishes, uniformly random group elements that depend on no key and no plaintext (D-SMTP-22), the length",
+	},
+	{
+		// QD-716: closing smtp-2's quoted value
+		question: "details-3-metadata-rows",
+		block:    "so no MX reply's plaintext inside TLS (D-SMTP-21, D-SMTP-22)\n  why: send, verify proofs",
+		list:     "so no MX reply's plaintext inside TLS (D-SMTP-21, D-SMTP-22)\"\n  why: send, verify proofs",
+	},
 }
 
 // §2.8's block with each addition in place, in order, and a finding for each that does not apply.
