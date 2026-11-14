@@ -181,6 +181,18 @@ type SidecarIngestSettings struct {
 	// evidence until hook conformance (MCP-M3-28) names them. Cursor reports none: its beforeMCPExecution counts only
 	// where `ur hook cursor` answered ask, which makes Cursor prompt.
 	HarnessPromptingModes []string
+	// §16.18's filesystem capture (MCP-M6-03): file events narrow a run's scan intervals. Off by default, M6's.
+	FileEvents bool
+	// The most directories one worktree's watch holds: 4096. A worktree past it is not watched, a missed_event gap.
+	FileEventDirectoryCount int
+	// §16.18's model calls (MCP-M6-03): Codex's PostModelRequest and harness OpenTelemetry as model_call entries. Off by
+	// default, M6's.
+	ModelCalls bool
+	// The largest OTLP export the telemetry receiver reads, in bytes: 4 MiB. A larger one is a dropped export, a gap.
+	TelemetryByteCount int64
+	// A model_call entry's model, provider and request id each, in bytes: RECORD.md's ModelCallBody, 128 B, which a
+	// longer value is cut to, a truncation gap. The format's value, which every writer of the entry shares.
+	ModelCallFieldByteCount int64
 }
 
 // §16.8's record defaults, with RECORD.md section 18's fields below the first six, whose names stand
@@ -308,6 +320,12 @@ func defaultSidecarIngestSettings() *SidecarIngestSettings {
 		HarnessEvidenceTimeout:      10 * time.Minute,
 		HarnessEvidenceEventCount:   1024,
 		HarnessPromptingModes:       []string{"default", "acceptEdits", "plan"},
+		// §16.18's v1 capture (MCP-M6-03), off until M6's rollout turns it on
+		FileEvents:              false,
+		FileEventDirectoryCount: 4096,
+		ModelCalls:              false,
+		TelemetryByteCount:      4 * 1024 * 1024,
+		ModelCallFieldByteCount: 128,
 	}
 }
 

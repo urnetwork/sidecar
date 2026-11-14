@@ -49,6 +49,8 @@ var codexHookEventFields = map[string][]string{
 	"PostToolUse":       {"tool_name", "tool_input", "tool_response", "tool_use_id"},
 	"PermissionRequest": {"tool_name", "tool_input", "tool_use_id"},
 	"Stop":              {"stop_hook_active"},
+	// §16.18's model calls (MCP-M6-03)
+	"PostModelRequest": {"provider", "request_id", "duration_ms", "usage"},
 }
 
 // Codex's events by its names.
@@ -60,6 +62,7 @@ var codexHookEventKinds = map[string]HookEventKind{
 	"PostToolUse":       HookEventPostToolUse,
 	"PermissionRequest": HookEventPermissionRequest,
 	"Stop":              HookEventStop,
+	"PostModelRequest":  HookEventModelCall,
 }
 
 func (self *codexHookAdapter) Parse(payload []byte, ingest *sidecar.SidecarIngestSettings) (*HookEvent, error) {
