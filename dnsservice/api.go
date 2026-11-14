@@ -228,6 +228,12 @@ type DnsApiDeps struct {
 	// §8.10's gate on dns:<host> for the record routes (DNS-M5-12). nil refuses every write under a grant
 	// with 503 and shows no RRset.
 	RecordGate DnsRecordGate
+	// §12.8's label reclaim through the model (DNS-M5-16). nil answers it 503.
+	Reclaims DnsReclaimStore
+	// POST /dns/key-record's write through the model (DNS-M7-02). nil answers it 503.
+	KeyRecords DnsKeyRecordStore
+	// §8.10's receiver gate for POST /dns/key-record (DNS-M7-02). nil answers it 503.
+	KeyRecordGate DnsKeyRecordGate
 	// Lifecycle only. nil discards.
 	Log sidecar.Logger
 }
@@ -322,7 +328,8 @@ func NewDnsApi(ctx context.Context, host *sidecar.ServiceHost, settings *DnsSett
 
 // Every route the block serves. A later task adds its own list here.
 func (self *DnsApi) routes() []*dnsApiRoute {
-	return slices.Concat(self.feedRoutes(), self.readyRoutes(), self.challengeRoutes(), self.canaryRoutes(), self.recordRoutes())
+	return slices.Concat(self.feedRoutes(), self.readyRoutes(), self.challengeRoutes(), self.canaryRoutes(), self.recordRoutes(),
+		self.reclaimRoutes(), self.keyRecordRoutes())
 }
 
 // The handler every route runs behind: the bearer's class, or a sidecar's service token for the record
