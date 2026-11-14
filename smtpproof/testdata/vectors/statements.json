@@ -4,8 +4,8 @@
    "index": 1,
    "mode": 0,
    "shape": "kind1-v0303-sc02b-client4-server0-header0-body0-localfalse",
-   "public_inputs": 2271,
-   "sha256": "b10817cc3d4bad00ea23e15d3062ae265cf33c9f7b56c537584a608e563d37fb",
+   "public_inputs": 2273,
+   "sha256": "1fe16b6f1ffd7b509bf970b595e362ef4f8308ba159a0ddbc70934f4471c5ec4",
    "templates": [
     "EHLO o1.out.relay.example\r\n"
    ]
@@ -14,8 +14,8 @@
    "index": 2,
    "mode": 1,
    "shape": "kind2-v0303-sc02b-client48-server24-header0-body0-localtrue",
-   "public_inputs": 7163,
-   "sha256": "13ab6c408797d2358324ae7d742bfe72344ed54a7e0f4b30f572e498d5b39e2d",
+   "public_inputs": 5094,
+   "sha256": "1cddc2b720a9173fb20487dfd9b6a22f7aa58926ead978662b85587e65b2fb30",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n",
@@ -26,8 +26,8 @@
    "index": 3,
    "mode": 1,
    "shape": "kind3-v0303-sc02b-client4-server24-header256-body0-localfalse",
-   "public_inputs": 26092,
-   "sha256": "e06dc237662ccce8f5bbb51e04ff334b41a1da1d9d85b79c134ae98f45024d18",
+   "public_inputs": 24023,
+   "sha256": "2bb413ffc9145670e900446a2afe0c832451efb4504dbcf04435045dd4ba8e3f",
    "templates": [
     "BDAT 497 LAST\r\n",
     "QUIT\r\n"
@@ -39,8 +39,8 @@
    "index": 1,
    "mode": 0,
    "shape": "kind1-v0303-sc02b-client4-server0-header0-body0-localfalse",
-   "public_inputs": 2271,
-   "sha256": "5ad3266a2ea2ebbe92fd571c02bcc8b4ef72262ed884afc86e5919c418cbc49e",
+   "public_inputs": 2273,
+   "sha256": "9b2c9457d6f4e41593bec0afbf7f951b78e2225787e86ee8811d54a4d16f02c8",
    "templates": [
     "EHLO o1.out.relay.example\r\n"
    ]
@@ -49,8 +49,8 @@
    "index": 2,
    "mode": 2,
    "shape": "kind2-v0303-sc02b-client48-server24-header0-body0-localtrue",
-   "public_inputs": 7163,
-   "sha256": "0af6c259e5a0e4558c88d3032b7d0a2b4781ba7c6b0b4214cc8d732747381dda",
+   "public_inputs": 5094,
+   "sha256": "6ad893e92ccda91bc25963efe498e09c9d41f258c6af4109e3c7e9f139d64ce2",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n",
@@ -62,22 +62,22 @@
    "index": 3,
    "mode": 2,
    "shape": "kind3-v0303-sc02b-client4-server24-header256-body128-localfalse",
-   "public_inputs": 38508,
-   "sha256": "aee047218f16cbdf440afaf3e4d53e6ea1f391d44f364a0eff8fc6f561312abb"
+   "public_inputs": 36439,
+   "sha256": "583e41771730190cbdb752f3f09c9e1b11e3dc8798a982f997dab5835450c1f3"
   },
   {
    "index": 4,
    "mode": 2,
    "shape": "kind4-v0303-sc02b-client2-server0-header0-body128-localfalse",
-   "public_inputs": 14589,
-   "sha256": "86aa65824dee612bd50ef2085d3bd085efea227a67273bcd055a5548e6802c0d"
+   "public_inputs": 12520,
+   "sha256": "9fc45f59bc10e3d7a55e1b6d86a40f62dc46f367799ce497024f417d501a5a83"
   },
   {
    "index": 5,
    "mode": 2,
    "shape": "kind4-v0303-sc02b-client2-server0-header0-body128-localfalse",
-   "public_inputs": 14589,
-   "sha256": "4ff133e51372638762d4ac37708e83c42abf6ecdafc1c4aefecb08b1401a71b3",
+   "public_inputs": 12520,
+   "sha256": "73488a3fc0142fcccfb064b3382229419e5bc68a39dad442c8551e2cafb9ec96",
    "templates": [
     ".\r\n",
     "QUIT\r\n"
@@ -89,8 +89,8 @@
    "index": 1,
    "mode": 0,
    "shape": "kind1-v0304-s1301-client4-server0-header0-body0-localfalse",
-   "public_inputs": 968,
-   "sha256": "166d5a5bcb6b94293a3380e228f3cb4ae9cdf05e841a5ab7ad021bf9419d510b",
+   "public_inputs": 970,
+   "sha256": "649dfee4a970499ca23b275bde8dd79e633b97efbcc4c01c8bdc2621a7404e92",
    "templates": [
     "EHLO o1.out.relay.example\r\n\u0017"
    ]
@@ -99,8 +99,8 @@
    "index": 2,
    "mode": 1,
    "shape": "kind2-v0304-s1301-client48-server24-header0-body0-localtrue",
-   "public_inputs": 5860,
-   "sha256": "a4ed3ea8452b6726dad8309ce589f98e017ebb40c1a37893390a706b992a9df6",
+   "public_inputs": 5094,
+   "sha256": "929f04d999d49e777eab46ca391a887bb94b8a913e8184a299ba33fc4d5b9d24",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017",
@@ -111,8 +111,8 @@
    "index": 3,
    "mode": 1,
    "shape": "kind3-v0304-s1301-client4-server24-header256-body0-localfalse",
-   "public_inputs": 24789,
-   "sha256": "68ee3138e77b24c0cde9c8dda771b3693256e62cc2818cb95d7613bb86f73b87",
+   "public_inputs": 24023,
+   "sha256": "9b7fc5ecbdeab6bd0251a9df99abb15b87316eec12078edb421c5814f950c283",
    "templates": [
     "BDAT 497 LAST\r\n\u0017",
     "QUIT\r\n\u0017"
@@ -124,8 +124,8 @@
    "index": 1,
    "mode": 0,
    "shape": "kind1-v0304-s1301-client4-server0-header0-body0-localfalse",
-   "public_inputs": 968,
-   "sha256": "217b311c6a7f6668f934aab1cb65a35aa406db1cbc3506cea36bd975264740c3",
+   "public_inputs": 970,
+   "sha256": "254b93dd206dc2f2b33ebb7ae180394797f1f830b349dcc1f293110eda4d48f3",
    "templates": [
     "EHLO o1.out.relay.example\r\n\u0017"
    ]
@@ -134,8 +134,8 @@
    "index": 2,
    "mode": 2,
    "shape": "kind2-v0304-s1301-client48-server24-header0-body0-localtrue",
-   "public_inputs": 5860,
-   "sha256": "ad8bfeb5164d80c7caa1ef6627f73dac3937b23214f98cbec5dd711e4c407d17",
+   "public_inputs": 5094,
+   "sha256": "7b9c0429e8eb8ed9f15560520317531b971d71aec661eb10db696125c31ac854",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017",
@@ -147,22 +147,22 @@
    "index": 3,
    "mode": 2,
    "shape": "kind3-v0304-s1301-client4-server24-header256-body128-localfalse",
-   "public_inputs": 37205,
-   "sha256": "3a2b860ea14c487640fb9b1d0eb94fe5e843f227a19a2d862a794ed9d8ff0391"
+   "public_inputs": 36439,
+   "sha256": "ed3f9cf086ecf090b7381b6511c49a22121f6f3cce65354367fb43cfd41cace6"
   },
   {
    "index": 4,
    "mode": 2,
    "shape": "kind4-v0304-s1301-client2-server0-header0-body128-localfalse",
-   "public_inputs": 13286,
-   "sha256": "5205f22d5adf5f77fc52c0c87311099eae6dde5b59ac89dd257128b38dfbf86c"
+   "public_inputs": 12520,
+   "sha256": "25df0c61fdded54c6644432d21228a1adb97304d7dddc476e2d530b9d8aa30aa"
   },
   {
    "index": 5,
    "mode": 2,
    "shape": "kind4-v0304-s1301-client2-server0-header0-body128-localfalse",
-   "public_inputs": 13286,
-   "sha256": "1647d4935bfe324268e093580eecd45cad92c5f500c4c0b404acbaed2b4668bd",
+   "public_inputs": 12520,
+   "sha256": "4338cc664da4498ea1d479488251b9566f39d4aacf4ab12d37c829244f8169d5",
    "templates": [
     ".\r\n\u0017",
     "QUIT\r\n\u0017"
@@ -174,8 +174,8 @@
    "index": 1,
    "mode": 0,
    "shape": "kind1-v0304-s1303-client1-server0-header0-body0-localfalse",
-   "public_inputs": 965,
-   "sha256": "8b66d9033fca81e79da7d0fa6f03847374ae7e9ce26d10e913147e24c7f93b8f",
+   "public_inputs": 967,
+   "sha256": "92a87f14cce9971a35c4f5bf09750993d756b55c86230d9633e904b21702601a",
    "templates": [
     "EHLO o1.out.relay.example\r\n\u0017"
    ]
@@ -184,8 +184,8 @@
    "index": 2,
    "mode": 1,
    "shape": "kind2-v0304-s1303-client12-server12-header0-body0-localtrue",
-   "public_inputs": 7720,
-   "sha256": "55ebabcad877f6bcef4cece070f2388f65b2ba5f1ce696f4e8a63989de3353d5",
+   "public_inputs": 6954,
+   "sha256": "caee8e1ced908b922cc8d0eb5a0c6372b020e69b73c9657080fc076399dd6fe7",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017",
@@ -196,8 +196,8 @@
    "index": 3,
    "mode": 1,
    "shape": "kind3-v0304-s1303-client2-server12-header64-body0-localfalse",
-   "public_inputs": 26683,
-   "sha256": "74f5079b62f0dd9d397dda4808c3f234c77524e2de08a39b4aa6a00d94dd97fb",
+   "public_inputs": 25917,
+   "sha256": "bb776097a83f2765c3e580262af9eef45cf8dfa0e1c1bad64bfdda6e216e79db",
    "templates": [
     "BDAT 497 LAST\r\n\u0017",
     "QUIT\r\n\u0017"
@@ -209,8 +209,8 @@
    "index": 1,
    "mode": 0,
    "shape": "kind1-v0304-s1303-client1-server0-header0-body0-localfalse",
-   "public_inputs": 965,
-   "sha256": "5cc8ce485b1a36ffb391d0be6a4191e20b8f63c92c2c161237f81ea9d788541a",
+   "public_inputs": 967,
+   "sha256": "ddd0e406591dd96ef6b62e6ab89a304b57b646c77476e3314b5c0dabdcbf8c51",
    "templates": [
     "EHLO o1.out.relay.example\r\n\u0017"
    ]
@@ -219,8 +219,8 @@
    "index": 2,
    "mode": 2,
    "shape": "kind2-v0304-s1303-client12-server12-header0-body0-localtrue",
-   "public_inputs": 7720,
-   "sha256": "6af4be31132847b7945760e2f16d99469cbfd2177d2098b25f69a61ba190427f",
+   "public_inputs": 6954,
+   "sha256": "e3cc77127b91aa9ea527c2b1d0383e8aa8d49bd9999c69b584b48f058c83a4ef",
    "templates": [
     "MAIL FROM:<⟨local×8⟩@b.net.root.example>\r\n\u0017",
     "RCPT TO:<⟨local×3⟩@recipient.example>\r\n\u0017",
@@ -232,22 +232,22 @@
    "index": 3,
    "mode": 2,
    "shape": "kind3-v0304-s1303-client2-server12-header64-body32-localfalse",
-   "public_inputs": 39003,
-   "sha256": "46ba8be87f3dd28a71d2a5bcfc776ef74ed89a27f92bdbc1a4f8805b32b03229"
+   "public_inputs": 38237,
+   "sha256": "d93bb067ae393678254ab80f0d1372d2f08a9d12d449efed8f5eb7e627fef38d"
   },
   {
    "index": 4,
    "mode": 2,
    "shape": "kind4-v0304-s1303-client2-server0-header0-body32-localfalse",
-   "public_inputs": 13478,
-   "sha256": "3f23f02955cfd3cc8dd5794b9bb568a27982c1116659446a12c49f26739f3472"
+   "public_inputs": 12712,
+   "sha256": "0a97bf1452598e311a3fdeb954a46f1c0c0a5af019061a293d6982a66934dfec"
   },
   {
    "index": 5,
    "mode": 2,
    "shape": "kind4-v0304-s1303-client2-server0-header0-body32-localfalse",
-   "public_inputs": 13478,
-   "sha256": "c75e6b08c216b017badac616a653433521f2dbfdd82f408a6aec9157ee125159",
+   "public_inputs": 12712,
+   "sha256": "394850191a885738ed54a61fde1a460b0cacb9196143ac8644f3b31961071077",
    "templates": [
     ".\r\n\u0017",
     "QUIT\r\n\u0017"

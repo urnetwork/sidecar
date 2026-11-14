@@ -49,6 +49,8 @@ type Part struct {
 	Last              bool
 	ServerRecordCount uint64
 	Records           [][]byte
+	// Part 1 only: C, 64 octets.
+	KeyCommitment []byte
 }
 
 // One thing the edge saw, in the order it saw it. Exactly one field is set.
@@ -76,6 +78,8 @@ type PartWitness struct {
 	ClientIv  []byte
 	ServerKey []byte
 	ServerIv  []byte
+	// rho, C's blind, big-endian.
+	KeyBlind []byte
 	// Each opened client record's plaintext, in 1.3 with its inner type octet.
 	ClientPlaintexts [][]byte
 	// Each covered server record's plaintext, likewise.

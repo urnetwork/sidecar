@@ -7,6 +7,7 @@ package smtpproof
 import (
 	"context"
 	"errors"
+	"math/big"
 	"slices"
 	"testing"
 
@@ -24,12 +25,14 @@ type ExportedEvent struct {
 
 // A part's witness, as plain octets.
 type ExportedWitness struct {
-	HandshakeSecret  []byte
-	MasterSecret     []byte
-	ClientKey        []byte
-	ClientIv         []byte
-	ServerKey        []byte
-	ServerIv         []byte
+	HandshakeSecret []byte
+	MasterSecret    []byte
+	ClientKey       []byte
+	ClientIv        []byte
+	ServerKey       []byte
+	ServerIv        []byte
+	// rho, big-endian.
+	KeyBlind         []byte
 	ClientPlaintexts [][]byte
 	ServerPlaintexts [][]byte
 }
@@ -78,6 +81,7 @@ func exportCapture(t *testing.T, fixture *testGateFixture, job *sidecar.SmtpProo
 				ClientIv:         witness.clientIv,
 				ServerKey:        witness.serverKey,
 				ServerIv:         witness.serverIv,
+				KeyBlind:         witness.keyBlind.Bytes(),
 				ClientPlaintexts: witness.clientPlaintexts,
 				ServerPlaintexts: witness.serverPlaintexts,
 			}
@@ -180,6 +184,7 @@ func ExportGateVerdict(capture *ExportedCapture) []string {
 					clientIv:         witness.ClientIv,
 					serverKey:        witness.ServerKey,
 					serverIv:         witness.ServerIv,
+					keyBlind:         new(big.Int).SetBytes(witness.KeyBlind),
 					clientPlaintexts: witness.ClientPlaintexts,
 					serverPlaintexts: witness.ServerPlaintexts,
 				}
@@ -296,6 +301,7 @@ func exportCircuitVerdict(t *testing.T, capture *ExportedCapture, keyed bool) (u
 					clientIv:         witness.ClientIv,
 					serverKey:        witness.ServerKey,
 					serverIv:         witness.ServerIv,
+					keyBlind:         new(big.Int).SetBytes(witness.KeyBlind),
 					clientPlaintexts: witness.ClientPlaintexts,
 					serverPlaintexts: witness.ServerPlaintexts,
 				}

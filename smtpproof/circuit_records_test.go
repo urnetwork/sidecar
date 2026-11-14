@@ -331,7 +331,7 @@ func TestRecordPoolCostIsSpecMds(t *testing.T) {
 	t.Parallel()
 	for _, suite := range []uint16{tlsSuiteAes128GcmSha256, tlsSuiteChacha20Poly1305Sha256} {
 		for _, local := range []bool{true, false} {
-			shape := &partShape{kind: partKindEhlo, version: tlsVersion13, suite: suite, clientBlocks: 2, withoutKeySchedule: true}
+			shape := &partShape{kind: partKindKey, version: tlsVersion13, suite: suite, clientBlocks: 2, withoutKeySchedule: true}
 			name := "aes"
 			keystream := testSpecGadgetSizes["aes keystream block"]
 			if suite == tlsSuiteChacha20Poly1305Sha256 {
