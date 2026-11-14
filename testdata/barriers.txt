@@ -83,6 +83,8 @@ barrier directory.announce.after directory_repo.go
 barrier directory.announce.before directory_repo.go
 barrier directory.fold.after directory_fold.go
 barrier directory.fold.before directory_fold.go
+barrier directory.run.after directory_run.go
+barrier directory.run.before directory_run.go
 barrier directory.sync.after directory_sync.go
 barrier directory.sync.before directory_sync.go
 barrier dnsservice.edge_publish dnsservice/edge.go
