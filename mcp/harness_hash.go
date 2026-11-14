@@ -66,6 +66,8 @@ type HarnessSeal struct {
 	OutwardTools []string `json:"outward_tools"`
 	// The cloud profile's key file, a path and never a key; "" for none.
 	CloudKeyFile string `json:"cloud_key_file,omitempty"`
+	// The fail-closed form was installed (HarnessInstallArgs.RecordRequired).
+	RecordRequired bool `json:"record_required,omitempty"`
 	// In the install's order.
 	Files []*HarnessSealFile `json:"files"`
 	// SHA-256 over the files' hashes in order, hex: RECORD.md's config_sha256.
@@ -89,6 +91,7 @@ func newHarnessSeal(args *HarnessInstallArgs, template *harnessTemplate, adapter
 		Instance:         template.instance,
 		OutwardTools:     slices.Clone(template.outwardTools),
 		CloudKeyFile:     template.cloudKeyFile,
+		RecordRequired:   template.recordRequired,
 	}
 	if args.ProjectDirectory == "" {
 		seal.Home = args.Home
@@ -334,7 +337,46 @@ func harnessDirectoryHolds(directory string, path string) bool {
 func (self *HarnessConfigHashes) templateOf(seal *HarnessSeal) *harnessTemplate {
 	template := newHarnessTemplate(seal.Harness, seal.UrPath, seal.Agent, seal.Instance, seal.OutwardTools, self.args.Ingest)
 	template.cloudKeyFile = seal.CloudKeyFile
+	template.recordRequired = seal.RecordRequired
 	return template
+}
+
+// Every seal under stateDirectory, each read up to byteCount bytes, sorted by its file's name: what `ur status`
+// reads to name the harnesses installed fail-closed (MCP-M6-04). A seal that does not read is left out and counted.
+func ReadHarnessSeals(stateDirectory string, byteCount int64) ([]*HarnessSeal, int, error) {
+	directory := filepath.Join(stateDirectory, harnessSealDirectoryName)
+	entries, err := os.ReadDir(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	seals := []*HarnessSeal{}
+	unreadable := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		seal, err := readHarnessSeal(filepath.Join(directory, entry.Name()), byteCount)
+		if err != nil {
+			unreadable += 1
+			continue
+		}
+		seals = append(seals, seal)
+	}
+	return seals, unreadable, nil
+}
+
+// What the fail-closed form does in a seal's harness, for `ur status`: "" for a fail-open install.
+func HarnessFailClosedNote(seal *HarnessSeal) string {
+	if !seal.RecordRequired {
+		return ""
+	}
+	if seal.Harness == codexHookHarness {
+		return "fail-closed only while each hook runs: Codex documents no fail-closed setting"
+	}
+	return "fail-closed: the harness stops while the daemon cannot take its events"
 }
 
 // Whether one seal's files no longer hold what it sealed: see the file header.

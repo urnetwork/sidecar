@@ -206,3 +206,42 @@ func TestHookCursorAsksWithoutDaemon(t *testing.T) {
 		t.Errorf("stdout %q", stdout.String())
 	}
 }
+
+// --required, the fail-closed form's (MCP-M6-04): with no daemon, and with a daemon that does not answer in time, the
+// hook exits 2, which the harness reads as block; with a daemon that takes the event it exits 0; and without the flag
+// the same failures still exit 0.
+func TestHookRequiredExitsTwoWhenTheDaemonCannotTakeIt(t *testing.T) {
+	directory := shortTestDirectory(t)
+	cli, _, _ := newTestUrCli(filepath.Join(directory, "s"))
+	cli.spawnDaemon = func(args []string) error { return nil }
+	run := func(cli *urCli, args ...string) chan int {
+		cli.stdin = strings.NewReader(`{"session_id":"s1","hook_event_name":"Stop"}`)
+		finished := make(chan int, 1)
+		go func() {
+			finished <- cli.main(context.Background(), append([]string{"ur", "hook", "claude-code"}, args...))
+		}()
+		return finished
+	}
+	if code := awaitTestHook(t, run(cli, "--required")); code != urExitHookRequired {
+		t.Errorf("no daemon, required: exit %d", code)
+	}
+	if code := awaitTestHook(t, run(cli)); code != urExitOk {
+		t.Errorf("no daemon, fail-open: exit %d", code)
+	}
+	hookDaemon := startTestHookDaemon(t, directory)
+	answered, _, _ := newTestUrCli(filepath.Join(directory, "s"))
+	finished := run(answered, "--required")
+	call := hookDaemon.next(t)
+	close(call.release)
+	if code := awaitTestHook(t, finished); code != urExitOk {
+		t.Errorf("a daemon that took the event, required: exit %d", code)
+	}
+	stalled, _, _ := newTestUrCli(filepath.Join(directory, "s"))
+	stalled.ingest.HookExitTimeout = time.Millisecond
+	finished = run(stalled, "--required")
+	held := hookDaemon.next(t)
+	defer close(held.release)
+	if code := awaitTestHook(t, finished); code != urExitHookRequired {
+		t.Errorf("a daemon that did not answer in time, required: exit %d", code)
+	}
+}

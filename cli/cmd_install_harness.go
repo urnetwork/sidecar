@@ -11,7 +11,10 @@
 // again changes nothing, and running it after an edit restores ur's entries. --cloud-key-file, with --project, is the
 // cloud profile (§16.9; QD-041; MCP-M4-02): the committed SessionStart step then first runs ur connect --token-file
 // <path> --ephemeral on the owner-only file a cloud environment's setup step leaves the auth key in, the path as the
-// session's VM reads it. The path is committed; no key ever is.
+// session's VM reads it. The path is committed; no key ever is. --record-required writes the fail-closed form a Team's
+// record_required asks for (D-MCP-5; MCP-M6-04), the local flag that stands for it until a reader of
+// ServiceSettings.record_required lands: ur hook --required on every command, Claude Code's onFailure block and
+// Cursor's failClosed, and `ur status` names each harness installed so.
 
 package main
 
@@ -30,7 +33,7 @@ import (
 func init() {
 	registerUrCommand(&urCommand{
 		name:    "install-harness",
-		usage:   "  ur install-harness <harness> [--agent=<name>] [--project] [--cloud-key-file=<path>]",
+		usage:   "  ur install-harness <harness> [--agent=<name>] [--project] [--cloud-key-file=<path>] [--record-required]",
 		summary: "install ur's MCP entry, outward-tool ask rule and hooks in a harness: " + strings.Join(mcp.HarnessNames(), ", "),
 		run:     runUrInstallHarness,
 	})
@@ -53,6 +56,8 @@ func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) e
 	agent, _ := options.String("--agent")
 	project, _ := options.Bool("--project")
 	cloudKeyFile, _ := options.String("--cloud-key-file")
+	// the fail-closed form, until a reader of ServiceSettings.record_required lands (plan-MCP-record-required)
+	recordRequired, _ := options.Bool("--record-required")
 	urPath, err := urHarnessExecutable()
 	if err != nil {
 		return fmt.Errorf("ur's own path: %w", err)
@@ -73,6 +78,7 @@ func runUrInstallHarness(ctx context.Context, cli *urCli, options docopt.Opts) e
 		UrPath:         urPath,
 		StateDirectory: stateDirectory,
 		CloudKeyFile:   cloudKeyFile,
+		RecordRequired: recordRequired,
 		Ingest:         cli.ingest,
 	}
 	if project {

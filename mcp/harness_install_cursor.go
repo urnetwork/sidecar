@@ -64,15 +64,16 @@ func (self *cursorInstallAdapter) projectSettingsFiles(cwd string) []*harnessFil
 // Cursor's hooks.json.
 type cursorHooksFile struct{}
 
-// One entry, as written.
+// One entry, as written. FailClosed is the fail-closed form's (harness_install.go).
 type cursorHookEntry struct {
-	Command string `json:"command"`
-	Timeout int    `json:"timeout,omitempty"`
+	Command    string `json:"command"`
+	Timeout    int    `json:"timeout,omitempty"`
+	FailClosed bool   `json:"failClosed,omitempty"`
 }
 
 // The template's entry for event.
 func (self *cursorHooksFile) entry(event harnessHookEvent, template *harnessTemplate) *cursorHookEntry {
-	entry := &cursorHookEntry{Command: template.hookCommand()}
+	entry := &cursorHookEntry{Command: template.hookCommand(), FailClosed: template.recordRequired}
 	if event.permission {
 		entry.Timeout = template.permissionTimeoutSeconds
 	}
