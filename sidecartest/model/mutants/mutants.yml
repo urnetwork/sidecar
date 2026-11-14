@@ -2,8 +2,9 @@
 # protocol proves nothing, so every invariant a model's cfg checks names the mutants that break it.
 # A mutant is a twin: a value of the spec's Twin constant that breaks one rule of the design, run by
 # run-tlc.sh at the bounds its twin table gives, which TLC must refuse with this invariant violated.
-# modelled_test.go holds this file to run-tlc.sh's twin tables and each cfg's INVARIANT list, both
-# ways; model_test.go, under sidecar_tlc, runs the mutants.
+# A twin held to a second invariant is named there by its value, a hyphen and a word, and listed
+# here by that name. modelled_test.go holds this file to run-tlc.sh's twin tables and each cfg's
+# INVARIANT list, both ways; model_test.go, under sidecar_tlc, runs the mutants.
 #
 # models      one per spec.
 #   spec      EvsCommit, StoreSettle or IndexRollup.
@@ -38,10 +39,11 @@ models:
   - spec: StoreSettle
     invariants:
       - {invariant: TypeOk, none: "the type invariant, which every mutant's run checks before its own and none can break alone"}
-      - {invariant: NoStaleQuorum, mutants: [ReleaseOnCancel, NoVersionCheck, SettlerRevertsUnseen, HealMinority, NoDriveLock]}
+      - {invariant: NoStaleQuorum, mutants: [ReleaseOnCancel, NoVersionCheck, SettlerRevertsUnseen, HealMinority, NoDriveLock, NoStamp, DeleteReleasesEarly]}
       - {invariant: ReadsSeeCurrent, none: "no twin breaks it yet; EVS1-M2-02 adds one (a read answered from fewer than a read quorum)"}
       - {invariant: LateWritesNeverRead, mutants: [NoDeadlineCheck, RevertBelowQuorumOnly]}
       - {invariant: RefusedNeverLands, none: "no twin breaks it yet; EVS1-M2-02 adds one (a refused write's drive commit left in place)"}
+      - {invariant: FailedDeleteSettled, mutants: [DeleteReleasesEarly-Settled]}
 
   - spec: IndexRollup
     invariants:
