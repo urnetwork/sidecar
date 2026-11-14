@@ -13,7 +13,8 @@
 //	           timeout http_503 non_idempotent with proxy_next_upstream_tries 2 has it, a connection error, a 503 or
 //	           proxy_read_timeout (30 s of the Net's clock) sends the same request once to the next live one. A device
 //	           sees the last answer, or a transport error when none came; what each instance answered is kept by push
-//	           id, so a schedule checks an attempt whose answer the lb dropped
+//	           id, so a schedule checks an attempt whose answer the lb dropped. A T3 row may send some of a device's
+//	           requests past this model, through real nginx to the instances (DeviceTransport, InstanceHandler)
 //	devices    each a sidecar of the network with its own identity key, client and store: every device reads the repo,
 //	           and writers write it. A device's waits answer at once, so a retry the client makes runs on at once and
 //	           never parks a schedule on the clock. A device's evs alarms are kept, and EvsWorldNoAlarms fails on one
