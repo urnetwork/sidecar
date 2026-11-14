@@ -1015,12 +1015,15 @@ func TestVerifierRefusesAPreambleATemplateCouldCarryMoreThan(t *testing.T) {
 		{name: "no envelope domain", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.EnvelopeDomain = "" }},
 		{name: "no MX host", mutation: func(preamble *sidecar.SmtpProofPreamble) { preamble.MxHost = "" }},
 	}
-	verifier := testNoKeysVerifier(t)
-	if _, err := verifier.NewSmtpProofSession(testJob("x\r\n", "bob").Preamble); err != nil {
+	verifier, keySet := testNoKeysVerifier(t)
+	honest := testJob("x\r\n", "bob").Preamble
+	honest.ProofKeySet = keySet
+	if _, err := verifier.NewSmtpProofSession(honest); err != nil {
 		t.Fatalf("an honest preamble: %v", err)
 	}
 	for _, c := range cases {
 		preamble := testJob("x\r\n", "bob").Preamble
+		preamble.ProofKeySet = keySet
 		c.mutation(preamble)
 		if _, err := verifier.NewSmtpProofSession(preamble); err == nil {
 			t.Errorf("%s: accepted", c.name)
@@ -1045,11 +1048,13 @@ func TestNewProverAndVerifierRefuseEveryPartUntilKeysLoad(t *testing.T) {
 			t.Errorf("%s: %v reached the MX", leg.name, commands)
 		}
 	}
-	verifier := testNoKeysVerifier(t)
-	if _, err := verifier.NewSmtpProofSession(&sidecar.SmtpProofPreamble{}); err == nil {
+	verifier, keySet := testNoKeysVerifier(t)
+	if _, err := verifier.NewSmtpProofSession(&sidecar.SmtpProofPreamble{ProofKeySet: keySet}); err == nil {
 		t.Error("a session opened without the edge's own values")
 	}
-	session, err := verifier.NewSmtpProofSession(testJob("x\r\n", "bob").Preamble)
+	preamble := testJob("x\r\n", "bob").Preamble
+	preamble.ProofKeySet = keySet
+	session, err := verifier.NewSmtpProofSession(preamble)
 	if err != nil || session == nil {
 		t.Errorf("%v", err)
 	}

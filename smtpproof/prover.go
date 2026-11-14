@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -68,10 +69,14 @@ func DefaultProverSettings() *ProverSettings {
 }
 
 // Implements sidecar.SmtpProver. Safe for concurrent use: all state is per send, except the last
-// Measure's limits under stateLock.
+// Measure's limits under stateLock and the key sets' readiness, which keys guards.
 type Prover struct {
 	settings *ProverSettings
-	backend  partProver
+	// What Measure proves with. With keys, the newest pinned set with a ready family; a test may give one
+	// of its own and no keys, and then a job naming no key set proves under it.
+	backend partProver
+	// The release's pinned key sets on this host (DESIGN-DETAILS 3.2.7), or nil for a test's backend.
+	keys *proverKeys
 	// The suites offered, or nil for the client's default. Tests pin one to cover each.
 	tlsSuites []uint16
 	// Measure's clock, or nil for the wall clock. Tests give a fake one.
@@ -166,33 +171,66 @@ func newProverSessionStatement(result *tlsHandshakeResult, preamble *sessionPrea
 	return session, nil
 }
 
-// KeySet of sidecar.SmtpProver. Until key sets of version 2 and their pins exist (SMTP-M9-40) this
-// prover is pinned to none, so it names none and a host with it only queues (D-SMTP-18).
+// KeySet of sidecar.SmtpProver: the newest pinned set with a family ready on this host, or none, and
+// then the host only queues (D-SMTP-18).
 func (self *Prover) KeySet() []byte {
+	if self.keys == nil {
+		return nil
+	}
+	if keySet := self.keys.current(); keySet != nil {
+		return keySet.Id()
+	}
 	return nil
 }
 
-// PrepareKeys of sidecar.SmtpProver. With no pinned key set of version 2 (SMTP-M9-40) there is nothing to
-// check: nothing is ready, and nothing is left to do until a release pins a set.
+// PrepareKeys of sidecar.SmtpProver: the host's check of its pinned key sets, one shape at most a call
+// (DESIGN-DETAILS 3.2.7). It fetches transcripts, so a host calls it only once mail is enabled on it
+// (§2.8 smtp-7). With no pin there is nothing to check. The readiness is returned with any error.
 func (self *Prover) PrepareKeys(ctx context.Context) (*sidecar.SmtpProverReadiness, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &sidecar.SmtpProverReadiness{Done: true}, nil
+	if self.keys == nil {
+		return &sidecar.SmtpProverReadiness{Done: true}, nil
+	}
+	return self.keys.prepare(ctx)
+}
+
+// What a job proves under: the backend, the catalog and the suites of the key set it names, which must be
+// a pinned set with a ready family. A Prover with no keys proves a job naming none under its own backend.
+func (self *Prover) jobKeys(keySet []byte) (partProver, *ProofSettings, []uint16, error) {
+	if self.keys == nil {
+		if len(keySet) != 0 {
+			return nil, nil, nil, sidecar.ErrSmtpProofKeySet
+		}
+		return self.backend, self.settings.Proof, self.tlsSuites, nil
+	}
+	set, suites, ok := self.keys.forJob(keySet)
+	if !ok {
+		return nil, nil, nil, sidecar.ErrSmtpProofKeySet
+	}
+	if self.tlsSuites != nil {
+		suites = slices.DeleteFunc(slices.Clone(suites), func(suite uint16) bool { return !slices.Contains(self.tlsSuites, suite) })
+		if len(suites) == 0 {
+			return nil, nil, nil, sidecar.ErrSmtpProofKeySet
+		}
+	}
+	return set.backend, set.proof, suites, nil
 }
 
 // SendSmtp of sidecar.SmtpProver.
 func (self *Prover) SendSmtp(ctx context.Context, conn net.Conn, job *sidecar.SmtpProofJob, channel sidecar.SmtpProofChannel) (*sidecar.SmtpProofResult, error) {
-	// a set this prover cannot prove under is refused before any octet goes out; until SMTP-M9-40 that is
-	// every named set, and a job naming none proves as before
-	if len(job.KeySet) != 0 {
-		return nil, sidecar.ErrSmtpProofKeySet
+	// a set this prover cannot prove under is refused before any octet goes out, and the client offers
+	// only the suites of the families ready in the set it names (DESIGN-DETAILS 3.2.7)
+	backend, proof, suites, err := self.jobKeys(job.KeySet)
+	if err != nil {
+		return nil, err
 	}
 	if job.Preamble == nil || uint32(len(job.RecipientLocals)) != job.Preamble.RecipientCount || len(job.RecipientLocals) == 0 {
 		return nil, errors.New("smtpproof: job's recipients do not match its preamble")
 	}
 	// the edge refuses the same, so nothing here should reach it
-	if err := checkSessionPreamble(newSessionPreamble(job.Preamble, self.settings.Proof)); err != nil {
+	if err := checkSessionPreamble(newSessionPreamble(job.Preamble, proof)); err != nil {
 		return nil, fmt.Errorf("smtpproof: %w", err)
 	}
 	declared := job.Preamble.MessageByteCount
@@ -202,16 +240,18 @@ func (self *Prover) SendSmtp(ctx context.Context, conn net.Conn, job *sidecar.Sm
 	settings := defaultTlsClientSettings()
 	settings.serverName = job.Preamble.MxHost
 	settings.verifyPeer = job.VerifyPeer
-	if self.tlsSuites != nil {
-		settings.suites = self.tlsSuites
+	if suites != nil {
+		settings.suites = suites
 	}
+	sendSettings := self.sendSettings()
+	sendSettings.Proof = proof
 	run := &proverRun{
-		settings: self.sendSettings(),
-		backend:  self.backend,
+		settings: sendSettings,
+		backend:  backend,
 		job:      job,
 		channel:  channel,
 		client:   newTlsClient(conn, settings),
-		preamble: newSessionPreamble(job.Preamble, self.settings.Proof),
+		preamble: newSessionPreamble(job.Preamble, proof),
 		serverIn: make(chan *proverServerEvent),
 		nextPart: 1,
 	}

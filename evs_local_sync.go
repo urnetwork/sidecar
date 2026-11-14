@@ -716,13 +716,16 @@ func (self *evsGitReplayRun) refuse(statement *EvsVerifiedStatement, payload *Ev
 	return nil
 }
 
-// Notes the token paths a stopped version changes as tainted.
+// Notes the token paths a stopped version changes as tainted. The run's per-path versions no longer hold them: evs's
+// entry there is the stopped version's, which the re-creating push's change is based on, so a run that applied the
+// versions before the stop must not hold that change to the version it saw last (8.5).
 func (self *evsGitReplayRun) taint(payload *EvsCheckedPayload, push *protocol.EvsPush) {
 	for _, change := range payload.Changes {
 		tainted := EvsTaintedPath{Epoch: push.GetPathEpoch(), Key: change.TokenPath.KeyString()}
 		if !slices.Contains(self.ref.Tainted, tainted) {
 			self.ref.Tainted = append(self.ref.Tainted, tainted)
 		}
+		delete(self.paths.paths, tainted.Key)
 	}
 }
 
@@ -831,7 +834,8 @@ func (self *evsGitReplayRun) stoodTree(ctx context.Context, metadata *protocol.E
 	case !creating:
 		commit = ref.Peeled
 	case ref.Deleted && ref.LastTip != nil:
-		peeled, err := self.engine.mount.peel(ctx, *ref.LastTip)
+		// through the store: a run that applied the last tip may hold its objects in the sink still, unflushed
+		peeled, _, err := evsGitPeel(ctx, self.store, *ref.LastTip)
 		if err != nil {
 			return nil, err
 		}
@@ -1328,7 +1332,7 @@ func (self *EvsGitSyncEngine) Ref(ctx context.Context, refId Id) (*EvsGitRefStat
 func evsGitRefStateOf(ref *EvsGitRef) *EvsGitRefState {
 	return &EvsGitRefState{
 		Version: ref.Version, Chain: ref.Chain, Tip: ref.Tip, LastTip: ref.LastTip, Deleted: ref.Deleted, Base: ref.Base,
-		StuckAt: ref.StuckAt,
+		StuckAt: ref.StuckAt, Tainted: slices.Clone(ref.Tainted),
 	}
 }
 

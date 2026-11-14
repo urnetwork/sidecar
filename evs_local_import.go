@@ -103,6 +103,8 @@ type EvsGitRefState struct {
 	Base *protocol.EvsOverlay
 	// The version a replaying check refused, 0 for none: the ref takes nothing but a DELETE until one (8.5).
 	StuckAt uint64
+	// The token paths the stopped versions changed, which the push that re-creates the ref writes or removes (8.5).
+	Tainted []EvsTaintedPath
 }
 
 // An import's record (8.2.2's import row): its arguments and its helper refs, so a rerun resumes it. Oids are hex.
@@ -716,8 +718,8 @@ func (self *evsImporter) publish(ctx context.Context, name []byte, refId Id, new
 	}
 	result, err := EvsLocalPublish(ctx, &EvsLocalPublishArgs{
 		Mount: self.mount, Repo: self.repo, RefName: name, Old: state.Tip, New: new, BaseVersion: state.Version,
-		BaseChain: state.Chain, Deleted: state.Deleted, LastTip: state.LastTip, Base: state.Base, Import: new != nil,
-		State: self.sync, OnAttempt: onAttempt,
+		BaseChain: state.Chain, Deleted: state.Deleted, LastTip: state.LastTip, Tainted: state.Tainted, Base: state.Base,
+		Import: new != nil, State: self.sync, OnAttempt: onAttempt,
 	})
 	if err != nil {
 		return err

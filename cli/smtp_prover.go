@@ -1,44 +1,30 @@
 package main
 
 import (
-	"context"
-
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/smtpproof"
 )
 
-// The prover ur injects on desktop builds (§14.9, D-SMTP-18): smtpproof's, over the KeySet this release
+// The prover ur injects on desktop builds (§14.9, D-SMTP-18): smtpproof's, over the key sets this release
 // pins. No production setup has run, so no release pins one yet, and ur injects no prover: a host then
-// queues its mail for one that has, as a phone does. Nothing calls these until ur daemon and
-// SmtpSender exist (SMTP-M9-07 to M9-09), which start the check at idle and inject the prover.
+// queues its mail for one that has, as a phone does. Nothing calls this until ur daemon and SmtpSender
+// exist (SMTP-M9-07 to M9-09), which call PrepareKeys at idle on a host that has enabled mail, since that
+// check fetches the sets' transcripts (§2.8 smtp-7), and inject the prover.
 
-// keyset.json's SHA-256 for this release, or nil before the first production setup. The release sets
-// it beside the KeySet it ships or names (SPEC.md 10.3).
-var smtpKeySetPin []byte
+// keyset.json's SHA-256 of each key set this release pins, newest first (DESIGN-DETAILS 3.2.7). The newest
+// is the set this build's circuits were set up for; an older one stays listed only while this build
+// compiles the same circuits for it, which a host checks by digest. The release sets them beside
+// smtpproof's smtpShapeDigests; none before the first production setup.
+var smtpKeySetPins [][]byte
 
-// The prover a host runs: nil, with no error, when the release pins no KeySet. keyDirectory holds the
-// KeySet and cacheDirectory the proving keys this host has verified.
-func newSmtpProver(keyDirectory string, cacheDirectory string) (sidecar.SmtpProver, error) {
-	if smtpKeySetPin == nil {
-		return nil, nil
-	}
-	keySet, err := smtpproof.OpenKeySet(keyDirectory, smtpKeySetPin)
-	if err != nil {
-		return nil, err
-	}
-	return smtpproof.NewProver(smtpproof.DefaultProverSettings(), keySet, cacheDirectory), nil
-}
-
-// Checks the pinned KeySet's transcripts against this build's circuits and caches the keys they fix,
-// once per release, at idle (SPEC.md 10.2). Until it has passed for a shape, the prover refuses that
-// shape's parts.
-func verifySmtpProverKeys(ctx context.Context, keyDirectory string, cacheDirectory string) error {
-	if smtpKeySetPin == nil {
+// The prover a host runs, or nil when the release pins no key set. directory holds the sets' fetched files
+// and this host's cache of its checks. keysUrl is §18.9's SmtpProofKeysUrl, which the host table gives once
+// OPS-M9-02 lands it; empty fetches nothing, and the host checks only what its directory holds.
+func newSmtpProver(directory string, keysUrl string) sidecar.SmtpProver {
+	if len(smtpKeySetPins) == 0 {
 		return nil
 	}
-	keySet, err := smtpproof.OpenKeySet(keyDirectory, smtpKeySetPin)
-	if err != nil {
-		return err
-	}
-	return keySet.VerifyProvingKeys(ctx, cacheDirectory)
+	keySettings := smtpproof.DefaultKeySettings()
+	keySettings.BaseUrl = keysUrl
+	return smtpproof.NewProver(smtpproof.DefaultProverSettings(), keySettings, smtpKeySetPins, directory)
 }
