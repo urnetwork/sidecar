@@ -226,6 +226,10 @@ barrier evs.repo.cas.after evsservice/repo_state.go
 barrier evs.repo.cas.before evsservice/repo_state.go
 barrier evs.repo.put.after evsservice/place.go
 barrier evs.repo.put.before evsservice/place.go
+barrier evs.reseed.slot_put.after evsservice/reseed.go
+barrier evs.reseed.slot_put.before evsservice/reseed.go
+barrier evs.reseed.statement_put.after evsservice/reseed.go
+barrier evs.reseed.statement_put.before evsservice/reseed.go
 barrier evs.shred.step.after evsservice/shred.go
 barrier evs.shred.step.before evsservice/shred.go
 barrier evs.sweep.delete.after evsservice/sweep.go
