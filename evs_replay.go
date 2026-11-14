@@ -19,6 +19,10 @@
 //
 // A failure raises evs_alarm version_rule, and the walk is refused.
 //
+// Format 2 (ApplyFormat2, evs_verify_format2.go; EVS2-M10-17) adds §11.7's setting and refused rows over each new
+// version and the citation rule over the push's new versions (I-EVS-10), each version's base the entry this replay
+// holds for its path.
+//
 // On every leg. EvsReplayPaths is not safe for concurrent use; the functions are.
 
 package sidecar
@@ -116,6 +120,8 @@ type evsReplayPath struct {
 	removed bool
 	// a directory's entry, else a file's
 	directory bool
+	// its newest version's entry, nil for a removal: the base format 2's citation rule reads (ApplyFormat2)
+	entry *protocol.EvsEntryVersion
 }
 
 // The per-path version rules of a replaying reader over one ref, fed each committed push with its entry versions in
@@ -165,6 +171,7 @@ func (self *EvsReplayPaths) Apply(statement *EvsVerifiedStatement, changes []*Ev
 			return fmt.Errorf("%w: a change whose entry is missing or unasked", ErrEvsEntryRefused)
 		}
 		var version uint64
+		var written *protocol.EvsEntryVersion
 		directory := false
 		if writes {
 			directory = evsEntryVersionIsDirectory(entryBytes)
@@ -180,6 +187,7 @@ func (self *EvsReplayPaths) Apply(statement *EvsVerifiedStatement, changes []*Ev
 				return fmt.Errorf("%w: an entry of another push", ErrEvsEntryRefused)
 			}
 			version = entry.GetVersion()
+			written = entry
 		} else {
 			version = baseEntryVersion + 1
 		}
@@ -212,7 +220,7 @@ func (self *EvsReplayPaths) Apply(statement *EvsVerifiedStatement, changes []*Ev
 				return fmt.Errorf("%w: a creation not at max(b, m) + 1", ErrEvsVersionRule)
 			}
 		}
-		self.paths[key] = &evsReplayPath{version: version, removed: !writes, directory: directory}
+		self.paths[key] = &evsReplayPath{version: version, removed: !writes, directory: directory, entry: written}
 	}
 	return nil
 }

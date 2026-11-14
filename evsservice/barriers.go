@@ -129,6 +129,8 @@ const (
 	// Around a read's entry round: a reader paused across an evacuation or a fold holds here.
 	BarrierReadEntriesBefore = "evs.read.entries.before"
 	BarrierReadEntriesAfter  = "evs.read.entries.after"
+	// EVS2-M10-08: before a read places the clock against a replaced versionless version's T (read_collected.go).
+	BarrierReadCollected = "evs.read.collected"
 )
 
 // EVS1-M6-01: the streams read (§11.9's streams row), keyed by the repo.

@@ -179,6 +179,8 @@ type fakeRecordDepositRef struct {
 	version    uint64
 	deposits   []*sidecar.RecordStreamDepositVersion
 	depositIds map[sidecar.Id]bool
+	// the highest mark a CONSUME carried, never falling and never past the version it was consumed at (QD-176)
+	consumedThrough uint64
 }
 
 // One push id's outcome and the statement it answered.
@@ -313,6 +315,30 @@ func (self *FakeRecordStreams) RemoveStreamEntries(repoId sidecar.Id, writerSide
 			return slices.Contains(paths, entry.Path)
 		})
 	}
+}
+
+// A site loss and the repo placed afresh once its network's log resumed (§19.10): every stream, deposit ref, slot,
+// erasure and push outcome of the repo is gone, its refs start again from version 0 with no consumed_through, and its
+// scopes stand, since the resumed log admits who it did. What comes back is what devices upload again: a mirror's
+// re-seed, which this fake does not model, and a depositor's kept deposits (D-MCP-10).
+func (self *FakeRecordStreams) LoseSite(repoId sidecar.Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	repo := self.repos[repoId]
+	if repo == nil {
+		return
+	}
+	repo.streams = map[sidecar.Id]*fakeRecordStream{}
+	repo.deposits = map[sidecar.Id]*fakeRecordDepositRef{}
+	repo.slots = map[sidecar.Id]map[uint32][]byte{}
+	repo.erasures = nil
+	repo.outcomes = map[sidecar.Id]*fakeRecordOutcome{}
+	repo.receiptCounts = map[fakeRecordReceiptDay]int{}
+	repo.gateClosed = false
+	// the push sequence restarts above every earlier value, with no ref holding one
+	repo.sequence += fakeRecordSequenceStart
+	repo.restartedAt = repo.sequence
+	repo.refSequences = map[FakeRecordRef]uint64{}
 }
 
 // Moves the clock, when it is a FakeClock.
@@ -675,7 +701,7 @@ func (self *fakeRecordStreamsClient) Deposit(ctx context.Context, repoId sidecar
 		if scope.ReceiptOnly {
 			repo.receiptCounts[receiptDay] += 1
 		}
-		commit := &sidecar.RecordStreamCommit{Version: ref.version, TimeMillis: now.UnixMilli()}
+		commit := &sidecar.RecordStreamCommit{Version: ref.version, TimeMillis: now.UnixMilli(), ConsumedThrough: ref.consumedThrough}
 		// the deposit's one key, at index 0 of a slot of its own, which an ERASE or the CONSUME takes
 		slotId := sidecar.NewEvsSlotId()
 		repo.slots[slotId] = map[uint32][]byte{0: nil}
@@ -748,6 +774,7 @@ func (self *fakeRecordStreamsClient) Consume(ctx context.Context, repoId sidecar
 		for _, depositId := range consume.DepositIds {
 			parts = append(parts, depositId[:])
 		}
+		parts = append(parts, binary.BigEndian.AppendUint64(nil, consume.ConsumedThrough))
 		statement := fakeRecordStatement(parts...)
 		if commit, err, ok := repo.retryAnswerWithLock(consume.PushId, statement); ok {
 			return commit, err
@@ -776,6 +803,8 @@ func (self *fakeRecordStreamsClient) Consume(ctx context.Context, repoId sidecar
 			}
 			return consumed
 		})
+		// evs's rule: the higher of the head's mark and the CONSUME's, never past the version consumed at
+		ref.consumedThrough = max(ref.consumedThrough, min(consume.ConsumedThrough, ref.version))
 		ref.version += 1
 		commit := &sidecar.RecordStreamCommit{Version: ref.version, TimeMillis: self.world.clock.Now().UnixMilli()}
 		repo.raiseWithLock(FakeRecordRef{Kind: FakeRecordRefDeposit, SidecarId: consume.DepositorSidecarId})

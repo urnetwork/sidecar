@@ -25,6 +25,9 @@ type recordComponent struct {
 
 // A component running record's push loop.
 func NewRecordComponent(record *SidecarRecord) SidecarComponent {
+	// from here the writer keeps each deposit until its ingest, and the loop sends kept ones again after a site loss
+	// (record_mirror.go)
+	record.Mirrors()
 	return &recordComponent{record: record}
 }
 

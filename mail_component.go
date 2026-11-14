@@ -1,0 +1,474 @@
+//go:build !sidecar_http && !ios_extension
+
+// The mail SidecarComponent (§5.4, §15.5-§15.7; MAIL-M7-17): MailClient on a Sidecar's client generations, Name()
+// "mail". Each pass, at attach, at each change the client hears of (an enable, the network's status turning mail on)
+// and every CheckInterval:
+//
+//	bind      what the Sidecar holds as it stands (MailBinding): the evs component's EvsClient, with its key client
+//	          and statement poster, the config follower's AclEngine, the zone's row from the DnsClient, the Sidecar as
+//	          the outward-action gate, and the generation's SidecarApi for the mail routes. A host that bound its own
+//	          (MailClient made without a Sidecar) keeps it
+//	follow    mailcfg, through MailConfig, which follows its repo itself once built
+//	ingest    the member's mailbox: one MailIngestor running while the generation lives (MAIL-M7-15)
+//	receive   once mail is on, the receive settings say receive, and policy grants this device the listen on
+//	          smtp/25/mx, one receiver (mail_receiver.go) with its sessions (mail_session.go) on the legs that build
+//	          them (mail_component_receive.go): started once, retrying its listen itself, ended with the generation or
+//	          once mail turns off or the grant goes. Revoking the receiver ends its listen at once
+//	idle      Active while mail is on, so a daemon with mail on never idles out (§5.8); `ur status` says so and
+//	          prompts for a mail indexer until one stands (§15.6)
+//
+// connect legs only: the page Worker runs no component (§18.10). Safe for concurrent use.
+
+package sidecar
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+)
+
+var (
+	_ SidecarComponent       = (*MailClient)(nil)
+	_ SidecarActiveComponent = (*MailClient)(nil)
+	_ SidecarRestorer        = (*MailClient)(nil)
+)
+
+// This Sidecar's mail with its component attached, so a network with mail on keeps its daemon up from the start
+// (§5.8): what a host that runs components calls for each network it hosts. A second call answers the same client.
+func (self *Sidecar) StartMail() (*MailClient, error) {
+	client, err := self.Mail()
+	if err != nil {
+		return nil, err
+	}
+	leg, ok := self.leg.(*sidecarConnectLeg)
+	if !ok {
+		return nil, fmt.Errorf("%w: this Sidecar runs no components", ErrSidecarClosed)
+	}
+	if leg.listed(mailComponentName) {
+		return client, nil
+	}
+	if _, err := self.AddComponent(client); err != nil && !leg.listed(mailComponentName) {
+		return nil, err
+	}
+	return client, nil
+}
+
+// What builds a receiver over a Sidecar, on the legs whose sessions build (mail_component_receive.go); nil on the js
+// leg, which runs no receiver.
+var mailSidecarReceiverFactory func(sidecar *Sidecar) mailReceiverFactory
+
+// Builds a receiver for the component, and what closes its parts once the receiver has ended.
+type mailReceiverFactory func(args *mailReceiverFactoryArgs) (*MailReceiver, func(), error)
+
+// What a receiver is built over.
+type mailReceiverFactoryArgs struct {
+	Evs      *EvsClient
+	Config   *MailConfig
+	Root     string
+	Api      MailApi
+	Store    SidecarStore
+	Settings *MailReceiveSettings
+	Clock    Clock
+	Log      Logger
+}
+
+// One generation's running parts, under the client's stateLock.
+type mailComponentRun struct {
+	env    *SidecarEnv
+	ctx    context.Context
+	cancel context.CancelFunc
+	// the ingestor running and its repo
+	ingestRepoId Id
+	ingestCancel context.CancelFunc
+	// the receiver running, what ends it, and what closes its parts after
+	receiver       *MailReceiver
+	receiverCancel context.CancelFunc
+	receiverClose  func()
+}
+
+// What the component keeps on the client beside its run: a test's seams.
+type mailComponentSeams struct {
+	// whether policy grants this device the receiver's listen; nil asks the bound engine
+	mayReceive func() bool
+	// builds the receiver; nil asks mailSidecarReceiverFactory over the client's Sidecar
+	factory mailReceiverFactory
+}
+
+// "mail".
+func (self *MailClient) Name() string {
+	return mailComponentName
+}
+
+// Follows one generation: its passes run until env.Ctx ends. A generation of another network is refused.
+func (self *MailClient) Attach(env *SidecarEnv) error {
+	if env == nil || env.Identity == nil || env.Identity.NetworkId != self.networkId {
+		return fmt.Errorf("%w: mail needs a generation of its own network", ErrMailClientInvalid)
+	}
+	ctx, cancel := context.WithCancel(env.Ctx)
+	run := &mailComponentRun{env: env, ctx: ctx, cancel: cancel}
+	previous := func() *mailComponentRun {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		previous, _ := self.componentRun.(*mailComponentRun)
+		self.componentRun = run
+		return previous
+	}()
+	if previous != nil {
+		previous.cancel()
+	}
+	go self.runGeneration(run)
+	return nil
+}
+
+// Ends the component for good: the running generation's parts, then what the client built.
+func (self *MailClient) Close() {
+	run := func() *mailComponentRun {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		run, _ := self.componentRun.(*mailComponentRun)
+		self.componentRun = nil
+		return run
+	}()
+	if run != nil {
+		run.cancel()
+	}
+	self.closeParts()
+}
+
+// Whether mail is on, which keeps a daemon from idling out (§5.8).
+func (self *MailClient) Active() bool {
+	return self.Enabled()
+}
+
+// restore_required's step for mail (§19.10): the receiver posts its host key's TLSA again. Nil with no receiver.
+func (self *MailClient) Reregister(ctx context.Context) error {
+	receiver := func() *MailReceiver {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		if run, ok := self.componentRun.(*mailComponentRun); ok {
+			return run.receiver
+		}
+		return nil
+	}()
+	if receiver == nil {
+		return nil
+	}
+	return receiver.Reregister(ctx)
+}
+
+// The client's seams, nil for none.
+func (self *MailClient) seams() *mailComponentSeams {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	seams, _ := self.componentSeams.(*mailComponentSeams)
+	return seams
+}
+
+// A generation's passes until it ends, then its parts stopped.
+func (self *MailClient) runGeneration(run *mailComponentRun) {
+	defer self.stopRun(run)
+	for {
+		changed := func() chan struct{} {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return self.changed
+		}()
+		wait := self.settings.CheckInterval
+		if !self.pass(run) {
+			wait = self.settings.UnboundCheckInterval
+		}
+		select {
+		case <-run.ctx.Done():
+			return
+		case <-changed:
+		case <-self.clock.After(wait):
+		}
+	}
+}
+
+// Stops what run started: its ingestor and its receiver, whose parts close after.
+func (self *MailClient) stopRun(run *mailComponentRun) {
+	ingestCancel, receiverCancel, receiverClose := func() (context.CancelFunc, context.CancelFunc, func()) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		ingestCancel, receiverCancel, receiverClose := run.ingestCancel, run.receiverCancel, run.receiverClose
+		run.ingestCancel, run.receiverCancel, run.receiverClose, run.receiver = nil, nil, nil, nil
+		return ingestCancel, receiverCancel, receiverClose
+	}()
+	if ingestCancel != nil {
+		ingestCancel()
+	}
+	if receiverCancel != nil {
+		receiverCancel()
+	}
+	if receiverClose != nil {
+		receiverClose()
+	}
+	self.setReceiverStatus(MailClientReceiverStatus{})
+}
+
+// One pass: see the file header. False while the client has nothing to work on yet.
+func (self *MailClient) pass(run *mailComponentRun) bool {
+	ctx := run.ctx
+	self.bindFromSidecar(ctx, run.env)
+	binding, _, err := self.bound()
+	if err != nil {
+		self.setReceiverStatus(MailClientReceiverStatus{Problem: "mail has nothing to work on yet"})
+		return false
+	}
+	if binding.Api != nil {
+		if network, err := binding.Api.MailStatus(ctx); err == nil {
+			self.setNetworkEnabled(network.Enabled)
+		}
+	}
+	self.passIngest(run, binding)
+	self.passReceive(run, binding)
+	return true
+}
+
+// Binds what the client's Sidecar holds as it stands, where the client was made over a Sidecar.
+func (self *MailClient) bindFromSidecar(ctx context.Context, env *SidecarEnv) {
+	sidecar := self.sidecar
+	if sidecar == nil {
+		return
+	}
+	binding := &MailBinding{Gate: sidecar}
+	if evs := sidecar.mailEvsClient(); evs != nil {
+		binding.Evs = evs
+		binding.Gkm = evs.args.Gkm
+		binding.FileStatement = evs.args.FileStatement
+	}
+	if follower := sidecar.ConfigFollower(); follower != nil {
+		binding.Engine = follower.AclEngine()
+	}
+	if env != nil && env.SidecarApi != nil {
+		binding.Api = env.SidecarApi
+	}
+	if dns, err := sidecar.Dns(); err == nil {
+		if zone, err := dns.Zone(ctx); err == nil {
+			self.setNetworkRow(NetworkLabelRow{
+				Root:      strings.TrimSuffix(zone.Root, "."),
+				NetworkId: zone.NetworkId,
+				Label:     zone.Label,
+				Alias:     zone.Alias,
+			})
+		}
+	}
+	binding.Network = self.networkRow
+	binding.MailIndexer = func() (bool, error) {
+		indexers, err := sidecar.Indexers()
+		if err != nil {
+			return false, err
+		}
+		if len(indexers) == 0 {
+			return false, nil
+		}
+		// a designation stands, and its services ride sealed under its statement's header, which the rows do not keep
+		return false, errMailIndexerServicesSealed
+	}
+	self.Bind(binding)
+}
+
+// Whether a standing designation serves mail cannot be told here: its services are sealed under its statement's
+// header, which ConfigIndexer does not carry.
+var errMailIndexerServicesSealed = errors.New("mail: an indexer's services are sealed")
+
+// The network's EvsClient: the evs component's, nil while none is attached.
+func (self *Sidecar) mailEvsClient() *EvsClient {
+	leg, ok := self.leg.(*sidecarConnectLeg)
+	if !ok {
+		return nil
+	}
+	for _, component := range leg.componentList() {
+		if evsComponent, ok := component.(*EvsComponent); ok {
+			return evsComponent.Client()
+		}
+	}
+	return nil
+}
+
+// Starts the member's mailbox's ingestor, or moves it to a new mailbox, once the mailbox stands.
+func (self *MailClient) passIngest(run *mailComponentRun, binding *MailBinding) {
+	mailboxId, err := self.mailboxId()
+	if err != nil {
+		return
+	}
+	_, parts, err := self.bound()
+	if err != nil {
+		return
+	}
+	running := func() bool {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return run.ingestCancel != nil && run.ingestRepoId == mailboxId
+	}()
+	if running {
+		return
+	}
+	root := self.networkRow().Root
+	ingestor, err := parts.ingestor(mailboxId, &MailIngestArgs{
+		SidecarId: self.sidecarId,
+		Root:      root,
+		Authority: &MailIngestAclAuthority{
+			Engine: binding.Engine,
+			Root:   root,
+			OwnZone: func(zone MailZone) bool {
+				return zone.OfNetwork(self.networkRow())
+			},
+			Clock: self.clock,
+		},
+		Message: func(message *MailMessage) {
+			self.invalidateMonth(message.RepoId, message.Month)
+		},
+		Alarm: func(alarm *MailIngestAlarm) {
+			self.log.Warningf("[mail]ingest alarm %s on %s", alarm.Kind, alarm.RepoId)
+		},
+		Clock:    self.clock,
+		Log:      self.log,
+		Settings: self.settings.Ingest,
+	})
+	if err != nil {
+		self.log.Warningf("[mail]no ingestor for the mailbox: %v", err)
+		return
+	}
+	ingestCtx, ingestCancel := context.WithCancel(run.ctx)
+	previous := func() context.CancelFunc {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		previous := run.ingestCancel
+		run.ingestCancel = ingestCancel
+		run.ingestRepoId = mailboxId
+		return previous
+	}()
+	if previous != nil {
+		previous()
+	}
+	go ingestor.Run(ingestCtx)
+}
+
+// Drops the view's kept month where the mailbox's ingest wrote, so the next list reads it afresh.
+func (self *MailClient) invalidateMonth(repoId Id, month MailYearMonth) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if view := self.views[repoId]; view != nil {
+		view.InvalidateMonth(month)
+	}
+}
+
+// Whether policy grants this device the receiver's listen on smtp/25/mx at the installed state.
+func (self *MailClient) mayReceive(binding *MailBinding) bool {
+	if seams := self.seams(); seams != nil && seams.mayReceive != nil {
+		return seams.mayReceive()
+	}
+	state := binding.Engine.State()
+	if state == nil {
+		return false
+	}
+	return state.MayListen(AclSidecarSubject(self.sidecarId), AclSocketName{PublicName: aclMailReceiverName}, self.clock.Now()).Allowed
+}
+
+// Starts the receiver where mail is on, receive is set and the listen is granted; ends it where any of those stops.
+func (self *MailClient) passReceive(run *mailComponentRun, binding *MailBinding) {
+	why := ""
+	switch {
+	case !self.Enabled():
+		why = "mail is off"
+	case self.settings.Receive == nil || !self.settings.Receive.Enabled:
+		why = "this device does not receive"
+	case !self.mayReceive(binding):
+		why = "policy grants this device no listen on smtp/25/mx"
+	}
+	receiver := func() *MailReceiver {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return run.receiver
+	}()
+	if why != "" {
+		if receiver != nil {
+			self.stopReceiver(run)
+		}
+		self.setReceiverStatus(MailClientReceiverStatus{Problem: why})
+		return
+	}
+	if receiver == nil {
+		var err error
+		receiver, err = self.startReceiver(run, binding)
+		if err != nil {
+			self.setReceiverStatus(MailClientReceiverStatus{Problem: err.Error()})
+			return
+		}
+	}
+	status := receiver.Status()
+	self.setReceiverStatus(MailClientReceiverStatus{
+		Running:    true,
+		Listening:  status.Listening,
+		Serving:    status.Serving,
+		ApprovalId: status.ApprovalId,
+		Problem:    status.Problem,
+	})
+}
+
+// Builds and starts the receiver for run. Its first listen's waiting on a person is no error here: the receiver asks
+// again itself, and Status says what it waits on.
+func (self *MailClient) startReceiver(run *mailComponentRun, binding *MailBinding) (*MailReceiver, error) {
+	factory := mailReceiverFactory(nil)
+	if seams := self.seams(); seams != nil && seams.factory != nil {
+		factory = seams.factory
+	} else if self.sidecar != nil && mailSidecarReceiverFactory != nil {
+		factory = mailSidecarReceiverFactory(self.sidecar)
+	}
+	if factory == nil {
+		return nil, errors.New("this host builds no receiver")
+	}
+	if binding.Api == nil {
+		return nil, errors.New("no api to read the network's limits through")
+	}
+	config, err := self.mailConfig()
+	if err != nil {
+		return nil, err
+	}
+	receiver, closeParts, err := factory(&mailReceiverFactoryArgs{
+		Evs:      binding.Evs,
+		Config:   config,
+		Root:     self.networkRow().Root,
+		Api:      binding.Api,
+		Store:    self.store,
+		Settings: self.settings.Receive,
+		Clock:    self.clock,
+		Log:      self.log,
+	})
+	if err != nil {
+		return nil, err
+	}
+	receiverCtx, receiverCancel := context.WithCancel(run.ctx)
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		run.receiver = receiver
+		run.receiverCancel = receiverCancel
+		run.receiverClose = closeParts
+	}()
+	var pending *ApprovalPendingError
+	if err := receiver.Start(receiverCtx); err != nil && !errors.As(err, &pending) && self.log.V(1).Enabled() {
+		self.log.Infof("[mail]the receiver's first listen did not go through; it asks again: %T", err)
+	}
+	return receiver, nil
+}
+
+// Ends run's receiver and closes its parts.
+func (self *MailClient) stopReceiver(run *mailComponentRun) {
+	receiverCancel, receiverClose := func() (context.CancelFunc, func()) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		receiverCancel, receiverClose := run.receiverCancel, run.receiverClose
+		run.receiver, run.receiverCancel, run.receiverClose = nil, nil, nil
+		return receiverCancel, receiverClose
+	}()
+	if receiverCancel != nil {
+		receiverCancel()
+	}
+	if receiverClose != nil {
+		receiverClose()
+	}
+}

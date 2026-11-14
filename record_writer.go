@@ -42,6 +42,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 
 	"google.golang.org/protobuf/proto"
@@ -173,6 +174,14 @@ type SidecarRecord struct {
 	export     *RecordExport
 
 	stateLock sync.Mutex
+	// the mirrors and kept deposits (record_mirror.go, which no ios_extension leg links), made at the first Mirrors:
+	// held as any, as reach is
+	mirrors any
+	// §16.7's spool, where a depositor keeps its deposits until consumed (D-MCP-10), as Sidecar.Record found it: the
+	// mirrors take it when made
+	kept any
+	// what the loop tends beside its own work, added as a part is made
+	tendHooks []func(ctx context.Context)
 	// one erasure at a time (record_erase.go, which no ios_extension leg links)
 	eraseLock sync.Mutex
 	// a deposit may wait in this device's vault: set at each loop's start, at a commit there and at a hint
@@ -288,6 +297,14 @@ func (self *SidecarRecord) tend(ctx context.Context) {
 	self.accounting.mirrorQueued(ctx)
 	self.log.Tick(ctx)
 	self.export.Tick(ctx)
+	hooks := func() []func(ctx context.Context) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return slices.Clone(self.tendHooks)
+	}()
+	for _, hook := range hooks {
+		hook(ctx)
+	}
 	logIds := self.ingestedLogs()
 	if len(logIds) == 0 || !self.takeIngestDue() {
 		return
@@ -421,6 +438,8 @@ type recordWriter struct {
 	spoolOther  func(id SpoolRecordId, record *SpoolRecord) error
 	commitHooks []func(logId Id)
 	adoptedLogs map[Id]bool
+	// keeps each committed deposit until it is consumed (record_mirror.go); nil keeps none
+	depositKeeper func(logId Id, commit *RecordStreamCommit, batch []byte) error
 }
 
 // A writer over args, reading nothing until its first Append or pump.
@@ -505,6 +524,13 @@ func (self *recordWriter) setSpoolHandlers(taint func(id SpoolRecordId, record *
 	defer self.stateLock.Unlock()
 	self.spoolTaint = taint
 	self.spoolOther = other
+}
+
+// Installs the keeper each committed deposit goes to before its plan is acknowledged (record_mirror.go).
+func (self *recordWriter) setDepositKeeper(keeper func(logId Id, commit *RecordStreamCommit, batch []byte) error) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.depositKeeper = keeper
 }
 
 // Called after each commit of a push or deposit to logId, with no lock held: the ingester's cue (RECORD-M3-04).
@@ -1166,8 +1192,10 @@ func (self *Sidecar) Record() (*SidecarRecord, error) {
 	}
 	// each takes the records' lock itself, so before it is taken here
 	var spool RecordSpool
+	var kept *Spool
 	if built, err := self.Spool(); err == nil {
 		spool = built
+		kept = built
 	}
 	runs, runsErr := self.Runs()
 	self.records.stateLock.Lock()
@@ -1205,6 +1233,9 @@ func (self *Sidecar) Record() (*SidecarRecord, error) {
 	}
 	// where a follow job's lines go: a file on this device, on a leg that has files
 	record.SetExportSink(recordExportFileSink())
+	if kept != nil {
+		record.kept = kept
+	}
 	// §5's membership and key events, mirrored into the member's vault (RECORD-M3-08); Queue never blocks. A Sidecar
 	// NewSidecar did not build raises no events to mirror.
 	if self.eventCallbacks != nil {

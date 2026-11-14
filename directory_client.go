@@ -118,6 +118,11 @@ type DirectoryClient struct {
 	// this sidecar's run announcements (directory_run.go, which no ios_extension leg links), made at the first Runs:
 	// held as any, so this file, which the forwarding leg links, names none of their types
 	runs any
+	// the client's other parts by name, each made at its first use and held as any for the same reason: the worker
+	// item (directory_worker.go), the requests (directory_request.go) and the decisions (directory_decide.go)
+	parts map[string]any
+	// what each part runs after a sync the loop finished without error, in the order added
+	syncHooks []func(ctx context.Context)
 }
 
 // A client over args. Nothing is read until its first Sync.
@@ -181,9 +186,44 @@ func NewDirectoryClient(args *DirectoryClientArgs) (*DirectoryClient, error) {
 		runView:         runView,
 
 		repoWrittenVersions: map[Id]uint64{},
+		parts:               map[string]any{},
 	}
 	self.reader = self.newReader()
 	return self, nil
+}
+
+// The client's part of name, made by build at its first ask and kept: nil when build answers nil, which is asked
+// again at the next call.
+func (self *DirectoryClient) part(name string, build func() any) any {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if part, ok := self.parts[name]; ok {
+		return part
+	}
+	part := build()
+	if part != nil {
+		self.parts[name] = part
+	}
+	return part
+}
+
+// Adds what a part runs after each sync the loop finished without error, with no lock held.
+func (self *DirectoryClient) addSyncHook(hook func(ctx context.Context)) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.syncHooks = append(self.syncHooks, hook)
+}
+
+// Runs the parts' hooks after a sync.
+func (self *DirectoryClient) runSyncHooks(ctx context.Context) {
+	hooks := func() []func(ctx context.Context) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return append([]func(ctx context.Context){}, self.syncHooks...)
+	}()
+	for _, hook := range hooks {
+		hook(ctx)
+	}
 }
 
 // A reader over the copy, its pins in the copy's own store. A push pin before what the state retains is judged at the
@@ -421,6 +461,8 @@ func (self *DirectoryClient) Run(ctx context.Context) {
 				if _, maintainErr := self.MaintainRepos(ctx); maintainErr != nil {
 					self.log.Infof("[directory]repo items: %s", maintainErr)
 				}
+				// the worker item's upkeep, the requests' repair and receipts and the decisions' resume
+				self.runSyncHooks(ctx)
 			}
 			if self.afterSync != nil {
 				self.afterSync(err)

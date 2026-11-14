@@ -10,49 +10,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 )
-
-// A Logger that keeps every line, safe for concurrent use.
-type mailTestLogger struct {
-	stateLock sync.Mutex
-	lines     []string
-}
-
-func (self *mailTestLogger) add(line string) {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	self.lines = append(self.lines, line)
-}
-
-func (self *mailTestLogger) Info(args ...any)                 { self.add(fmt.Sprint(args...)) }
-func (self *mailTestLogger) Infof(format string, args ...any) { self.add(fmt.Sprintf(format, args...)) }
-func (self *mailTestLogger) Warningf(format string, args ...any) {
-	self.add(fmt.Sprintf(format, args...))
-}
-func (self *mailTestLogger) Errorf(format string, args ...any) {
-	self.add(fmt.Sprintf(format, args...))
-}
-func (self *mailTestLogger) V(level int32) Verbose { return &mailTestVerbose{log: self} }
-
-// Every level enabled, so a guarded line is kept too.
-type mailTestVerbose struct {
-	log *mailTestLogger
-}
-
-func (self *mailTestVerbose) Enabled() bool    { return true }
-func (self *mailTestVerbose) Info(args ...any) { self.log.add(fmt.Sprint(args...)) }
-func (self *mailTestVerbose) Infof(format string, args ...any) {
-	self.log.add(fmt.Sprintf(format, args...))
-}
-
-// The lines so far.
-func (self *mailTestLogger) snapshot() []string {
-	self.stateLock.Lock()
-	defer self.stateLock.Unlock()
-	return slices.Clone(self.lines)
-}
 
 // The device key's scalar reaches the hook as the keychain makes it, the key record's post passes its barriers, and no
 // line the receiver logs, through a listen that ends and one the gate refuses, names a host, a name or the key.

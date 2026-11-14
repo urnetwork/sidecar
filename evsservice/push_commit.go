@@ -643,6 +643,8 @@ func (self *pushAttempt) buildNextHead(pageOut *EvsPageOut) (*protocol.EvsHead, 
 	next.GroupId = push.GetGroupId()
 	next.Generation = push.GetGeneration()
 	next.GenerationCommitment = push.GetGenerationCommitment()
+	// a CUT's head carries its own version as index_epoch, which no other push moves (§11.12's cut row)
+	next.IndexEpoch = committedIndexEpoch(prior, push)
 	var coveringPrefixes []sidecar.EvsTokenPath
 	if len(push.GetChangesRoot()) != 0 {
 		coveringPrefixes = self.statement.ChangedPrefixes

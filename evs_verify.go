@@ -56,6 +56,66 @@ var (
 	ErrEvsVersionRule = errors.New("evs: version off the rule")
 )
 
+// Format 2's verdicts on a version (evs_verify_format2.go).
+var (
+	// A version whose versioning §11.7's refused row does not allow where it sits: refused, with an alarm.
+	ErrEvsVersioningRefused = fmt.Errorf("%w: versioning refused where it sits", ErrEvsEntryRefused)
+	// A version a reader ignores, as if its path held none: versioning 2 outside an index root, or a version under an
+	// index root or on ur/lfs that is none of its writer's.
+	ErrEvsVersionIgnored = errors.New("evs: version ignored")
+	// The content of a replaced versionless version, which nothing restores (§11.7's history row): no alarm.
+	ErrEvsCollected = errors.New("evs: content collected")
+)
+
+// The two refs format 2 reserves by name (§11.7's git row, §11.11, §11.14).
+var (
+	EvsIndexRefName = []byte("ur/index")
+	EvsLfsRefName   = []byte("ur/lfs")
+)
+
+// Which reserved ref a version sits on.
+type EvsReservedRef int
+
+const (
+	// Any other ref.
+	EvsReservedRefNone EvsReservedRef = iota
+	// The repo's ur/index, whose every path is under the index root.
+	EvsReservedRefIndex
+	// The repo's ur/lfs, git-lfs's versionless store.
+	EvsReservedRefLfs
+)
+
+// A repo's reserved ref ids, which K_ref gives at every generation.
+type evsReservedRefIds struct {
+	indexRefId Id
+	lfsRefId   Id
+}
+
+// Format 2's reader as a client holds it once its composition installs it (EvsClient.EnableFormat2Reader,
+// evs_verify_format2.go): the rules format 2 adds to a read, behind a seam so that a leg which reads format 1 alone,
+// the network extensions', links none of them.
+type evsFormat2Reader interface {
+	// §11.7's rows over one version a statement wrote at names, where it sits: nil, a refusal, or
+	// ErrEvsVersionIgnored, the last two after an alarm.
+	verifyVersion(verifier *EvsVerifier, repoId Id, refId Id, statement *EvsStatement, names [][]byte, reserved EvsReservedRef, entry *protocol.EvsEntryVersion) error
+	// A format-2 statement's own rules beside the refs table.
+	checkRefRules(state GkmAuthView, statement *EvsStatement, repoId Id, signerId Id) error
+	// Which reserved ref refId is in repo.
+	reservedRef(ctx context.Context, repo *EvsRepo, refId Id) (EvsReservedRef, error)
+}
+
+// The client's format-2 reader, nil for one that reads format 1 alone: a client whose composition installed none, as
+// every client is made, or one its settings hold to format 1 (EvsSettings.MaxFormat). Such a client answers each
+// format-2 construct FORMAT_UNSUPPORTED (D-EVS-39).
+func (self *EvsClient) format2Reader() evsFormat2Reader {
+	if self.settings.MaxFormat < 2 {
+		return nil
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.format2Reads
+}
+
 // The verifying reader of one EvsClient.
 type EvsVerifier struct {
 	client *EvsClient
@@ -141,8 +201,10 @@ func evsRepoAdmin(state GkmAuthView, repo *protocol.AclRepo, sidecarId Id) bool 
 
 // Parses and checks one statement as received for repoId and refId: format 1's shape, its signature by the identity
 // key its signer's admission gives at the statement's own auth pin, and §11.8's refs table at that state. A format-2
-// statement of format 2's shape that its signer's key signed answers ErrEvsFormatUnsupported, which is never a fork
-// and never tampering; one out of shape or unsigned refuses as a format-1 statement does (EVS1-M2-39).
+// statement of format 2's shape that its signer's key signed is taken by a reader of format 2, under the refs table
+// and format 2's own rules (evs_verify_format2.go; EVS2-M10-17), and answers ErrEvsFormatUnsupported to a reader of
+// format 1 alone (EvsClient.format2Reader), which is never a fork and never tampering; one out of shape or unsigned
+// refuses as a format-1 statement does (EVS1-M2-39).
 func (self *EvsVerifier) VerifyStatement(statementBytes []byte, repoId Id, refId Id) (*EvsStatement, error) {
 	statement, err := ParseEvsStatement(statementBytes)
 	var unsupported error
@@ -179,8 +241,15 @@ func (self *EvsVerifier) VerifyStatement(statementBytes []byte, repoId Id, refId
 		return nil, fmt.Errorf("%w: its signature: %w", ErrEvsStatementRefused, err)
 	}
 	if unsupported != nil {
-		// format 2's ref rules are its readers' to judge
-		return nil, unsupported
+		reader := self.client.format2Reader()
+		if reader == nil {
+			// format 2's ref rules are its readers' to judge
+			return nil, unsupported
+		}
+		// a format-2 reader takes it: the refs table as for any statement, then format 2's own rules
+		if err := reader.checkRefRules(state, statement, repoId, signerId); err != nil {
+			return nil, err
+		}
 	}
 	if err := evsCheckRefRules(state, statement, repoId, refId, signerId); err != nil {
 		return nil, err
