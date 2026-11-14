@@ -24,6 +24,15 @@
 // changes (8.2.2's parts row): such parts come after every part with a change, carry no changes_root and are no leaf
 // of the statement's root. Format 2's DROP sections and staged segments are refused as FORMAT_UNSUPPORTED.
 //
+// Section 7, the new slots' bodies, rides to evs and no further (QD-806; question
+// record-slot-104-push-record-slot-bodies): evs writes each body to its slot at step 6 and keeps the push's record
+// with the section emptied (EvsRecordPayload), so the slot object is the one stored copy of every key and a committed
+// ERASE leaves the keys it destroyed in no record a reader can fetch. No hash covers the section, so the record still
+// verifies. A push's checks (EvsCheckPayload and the rest) hold section 7 to the new slots, one body each; a stored
+// record's (EvsCheckRecordPayload, EvsCheckStoredPayload, EvsCheckStoredSeal) take it absent, and check one a record
+// still carries as a push's are checked. A push in parts carries its bodies inside its parts, which parts_sha256 covers,
+// so their records keep them (question push-record-no-slot-bodies-part-slot-bodies).
+//
 // Format 2 (EVS-FORMAT.md's format 2 chapter) runs the same checks through EvsCheckPayloadFormat2, EvsCheckPartFormat2
 // and EvsCheckSealFormat2, which take what format 1 refuses as needing format 2: versioning 1 and 2, kind-5 and staged
 // locators, staged new objects with their staged bytes, which each must match (evs_staged.go), and versionless
@@ -118,6 +127,21 @@ func (self *EvsPayload) SetSection(sectionType protocol.EvsPayloadSection, secti
 	if 0 < sectionType && sectionType <= evsPayloadMaxSectionType {
 		self.sections[sectionType] = sectionBytes
 	}
+}
+
+// A one-part push's payload as its batch record keeps it (QD-806): the payload as received, either format's
+// sections, with section 7, the new slots' bodies, taken out and every other section's bytes as they came, so the
+// statement's hashes hold over it as over the payload received. A payload with no section 7 comes back as it is.
+func EvsRecordPayload(payloadBytes []byte) ([]byte, error) {
+	payload, err := parseEvsPayload(payloadBytes, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_SLOT_BODIES)) == 0 {
+		return payloadBytes, nil
+	}
+	payload.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_SLOT_BODIES, nil)
+	return payload.Encode(), nil
 }
 
 // The payload's bytes, sections ascending.
@@ -314,10 +338,12 @@ type EvsCheckedPayload struct {
 	Changes        []*EvsCheckedChange
 	SealedMetadata []byte
 	NewObjects     []*EvsNewObject
-	SlotBodies     [][]byte
-	Erased         []*EvsErasedKey
-	TailMoves      [][]byte
-	ReuseList      []*EvsReuse
+	// a push's new slots' bodies, one per slot item in order; nil from a record that keeps none (QD-806), whose
+	// slots' keys a reader takes from slot reads alone
+	SlotBodies [][]byte
+	Erased     []*EvsErasedKey
+	TailMoves  [][]byte
+	ReuseList  []*EvsReuse
 	// a creating push's section 15, its sealed ref name as received, and section 16, its overlay base (DESIGN-DETAILS
 	// 8.2.2); nil when absent
 	RefName []byte
@@ -546,12 +572,13 @@ func evsEntryVersionIsDirectory(entryBytes []byte) bool {
 // version's Merkle proof when the change list is not inline. partRoots gives each change's root and its tree's size
 // for the proofs: the statement's for one part, its part's for several.
 func checkEvsSections(statement *EvsStatement, payload *EvsPayload, checked *EvsCheckedPayload, partRoots func(change int) ([]byte, uint64)) error {
-	return checkEvsSectionsOf(statement, payload, checked, partRoots, false)
+	return checkEvsSectionsOf(statement, payload, checked, partRoots, false, false)
 }
 
 // The sections past the change list as checkEvsSections checks them, of either format: format 2 takes staged
-// new-objects items. A DROP's sections are the callers', through evsCheckDropSlices.
-func checkEvsSectionsOf(statement *EvsStatement, payload *EvsPayload, checked *EvsCheckedPayload, partRoots func(change int) ([]byte, uint64), format2 bool) error {
+// new-objects items. A DROP's sections are the callers', through evsCheckDropSlices. stored reads them as a record
+// keeps them, whose section 7 may be absent beside new slots (QD-806), SlotBodies then nil.
+func checkEvsSectionsOf(statement *EvsStatement, payload *EvsPayload, checked *EvsCheckedPayload, partRoots func(change int) ([]byte, uint64), format2 bool, stored bool) error {
 	push := statement.Push
 	if len(payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_INLINE_RECORDS)) != 0 {
 		return fmt.Errorf("%w: inline records in the payload, which format 1 carries only in their locators (QD-735)", ErrEvsPushInvalid)
@@ -581,23 +608,27 @@ func checkEvsSectionsOf(statement *EvsStatement, payload *EvsPayload, checked *E
 		}
 		checked.NewObjects = append(checked.NewObjects, object)
 	}
-	slotBodies, err := EvsPayloadItems(payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_SLOT_BODIES))
-	if err != nil {
-		return err
-	}
-	if len(slotBodies) != slotCount {
-		return fmt.Errorf("%w: %d slot bodies for %d new slots", ErrEvsPushInvalid, len(slotBodies), slotCount)
-	}
-	for _, slotBody := range slotBodies {
-		slot, err := EvsDecodeSlotObject(slotBody)
+	slotBodyBytes := payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_SLOT_BODIES)
+	if !stored || len(slotBodyBytes) != 0 {
+		// a record keeps none (QD-806), and one it still holds is held to the new slots as a push's are
+		slotBodies, err := EvsPayloadItems(slotBodyBytes)
 		if err != nil {
-			return fmt.Errorf("%w: %w", ErrEvsPushInvalid, err)
+			return err
 		}
-		if len(slot.GetKeys()) == 0 {
-			return fmt.Errorf("%w: a new slot with no key", ErrEvsPushInvalid)
+		if len(slotBodies) != slotCount {
+			return fmt.Errorf("%w: %d slot bodies for %d new slots", ErrEvsPushInvalid, len(slotBodies), slotCount)
 		}
+		for _, slotBody := range slotBodies {
+			slot, err := EvsDecodeSlotObject(slotBody)
+			if err != nil {
+				return fmt.Errorf("%w: %w", ErrEvsPushInvalid, err)
+			}
+			if len(slot.GetKeys()) == 0 {
+				return fmt.Errorf("%w: a new slot with no key", ErrEvsPushInvalid)
+			}
+		}
+		checked.SlotBodies = slotBodies
 	}
-	checked.SlotBodies = slotBodies
 
 	erasedBytes := payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_ERASED_LIST)
 	if err := checkEvsHashedSection("the erased list", erasedBytes, push.GetErasedSha256()); err != nil {
@@ -770,14 +801,22 @@ func checkEvsPathMove(move *protocol.EvsPathMove, pathEpoch uint64) error {
 // change list is the statement's own, or under changes_root in section 4; every section matches its statement
 // hash; nothing the statement does not state rides along.
 func EvsCheckPayload(statement *EvsStatement, payloadBytes []byte) (*EvsCheckedPayload, error) {
-	return evsCheckPayloadOf(statement, payloadBytes, false)
+	return evsCheckPayloadOf(statement, payloadBytes, false, false)
+}
+
+// A committed one-part push's payload as its batch record holds it and evs serves it, held to format 1:
+// EvsCheckPayload's checks with section 7, the slot bodies a record does not keep (QD-806), taken absent and its
+// SlotBodies nil. A reader takes keys from slot reads alone, so nothing it reads is lost with the section; a section 7
+// a record still carries is held to the new slots as a push's is.
+func EvsCheckRecordPayload(statement *EvsStatement, payloadBytes []byte) (*EvsCheckedPayload, error) {
+	return evsCheckPayloadOf(statement, payloadBytes, false, true)
 }
 
 // EvsCheckPayload's checks over a format-2 one-part push and its staged bytes as received, which ride outside every
 // hash: format 2's values taken, a DROP's sections checked, and the staged segments matched to the kind-2 new-objects
 // items, one each and in order (§11.6's checks row, EVS-FORMAT.md).
 func EvsCheckPayloadFormat2(statement *EvsStatement, payloadBytes []byte, stagedBytes []byte) (*EvsCheckedPayload, error) {
-	checked, err := evsCheckPayloadOf(statement, payloadBytes, true)
+	checked, err := evsCheckPayloadOf(statement, payloadBytes, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -794,13 +833,14 @@ func EvsCheckPayloadFormat2(statement *EvsStatement, payloadBytes []byte, staged
 // A committed one-part push's payload as its batch record stores it, of either format: EvsCheckPayloadFormat2's
 // checks without the staged bytes, which ride outside every hash and outside a format-1 record. What evs reads back
 // to serve: format-1 data is valid format 2, and an instance serves a format-2 push's stored entries as they are,
-// judging none of format 2's values (§11.6's format row, FS-72).
+// judging none of format 2's values (§11.6's format row, FS-72). Its section 7 is taken absent, as
+// EvsCheckRecordPayload takes it (QD-806).
 func EvsCheckStoredPayload(statement *EvsStatement, payloadBytes []byte) (*EvsCheckedPayload, error) {
-	return evsCheckPayloadOf(statement, payloadBytes, true)
+	return evsCheckPayloadOf(statement, payloadBytes, true, true)
 }
 
-// A one-part push's checks, of either format.
-func evsCheckPayloadOf(statement *EvsStatement, payloadBytes []byte, format2 bool) (*EvsCheckedPayload, error) {
+// A one-part push's checks, of either format, over a push as received or, stored, a record as kept.
+func evsCheckPayloadOf(statement *EvsStatement, payloadBytes []byte, format2 bool, stored bool) (*EvsCheckedPayload, error) {
 	push := statement.Push
 	if push.GetPartCount() != 0 {
 		return nil, fmt.Errorf("%w: a push in parts has no one-part payload", ErrEvsPushInvalid)
@@ -865,7 +905,7 @@ func evsCheckPayloadOf(statement *EvsStatement, payloadBytes []byte, format2 boo
 		return nil, err
 	}
 	changeCount := uint64(len(checked.Changes))
-	if err := checkEvsSectionsOf(statement, payload, checked, func(int) ([]byte, uint64) { return root, changeCount }, format2); err != nil {
+	if err := checkEvsSectionsOf(statement, payload, checked, func(int) ([]byte, uint64) { return root, changeCount }, format2, stored); err != nil {
 		return nil, err
 	}
 	if format2 {
@@ -1065,7 +1105,8 @@ func EvsCheckSealFormat2(statement *EvsStatement, parts [][]byte, partStaged [][
 // A committed push's seal over its parts as their records store them, of either format, as EvsCheckStoredPayload
 // reads a one-part push's: EvsCheckSealFormat2's checks without the staged bytes, which ride outside every hash and
 // outside packs and parcels, so a fold or a reader takes back what step 7 committed and judges none of format 2's
-// values (§11.6's format row).
+// values (§11.6's format row). The joined section 7 is taken absent, as a one-part record's is (QD-806); parts
+// today still carry their bodies (question push-record-no-slot-bodies-part-slot-bodies), which are checked as at the seal.
 func EvsCheckStoredSeal(statement *EvsStatement, parts [][]byte) (*EvsCheckedPayload, []*EvsCheckedPart, error) {
 	return evsCheckSealOf(statement, parts, nil, true)
 }
@@ -1167,7 +1208,7 @@ func evsCheckSealOf(statement *EvsStatement, parts [][]byte, partStaged [][]byte
 				return nil, nil, fmt.Errorf("%w: a DROP in parts whose body is not whole in part 1", ErrEvsPushInvalid)
 			}
 		}
-		if err := checkEvsSectionsOf(statement, joined, checked, partRoots, true); err != nil {
+		if err := checkEvsSectionsOf(statement, joined, checked, partRoots, true, stored); err != nil {
 			return nil, nil, err
 		}
 		var err error

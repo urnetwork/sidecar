@@ -324,7 +324,8 @@ func (self *EvsBatchReader) Record(place *protocol.EvsPlace) (*EvsBatchRecord, e
 	return ParseEvsBatchRecord(recordBytes)
 }
 
-// A push record's body: the statement and the payload as received.
+// A push record's body: the statement and the payload as its record keeps it, which evs writes with section 7, the
+// slot bodies, taken out (EvsRecordPayload; QD-806).
 func EvsPushRecordBody(statement []byte, payload []byte) []byte {
 	return evsJoinItems([][]byte{statement, payload})
 }
