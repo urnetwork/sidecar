@@ -8,6 +8,11 @@
 //	          and opens once RK_g arrives (plan-TEAM-sealed-field-format); a bodiless BridgeWithdraw never waits
 //	void      the AEAD or the padding fails, which is the reader's alarm, the approval was Refused, or the body breaks
 //	          its rule below: the id-level effect stands and the sealed effect is nothing
+//	unformed  void with no alarm, Refused{no such generation} (DESIGN-DETAILS 12.2.3, QD-761 and QD-773): at every
+//	          open, a body sealed to a generation the reader holds whose GenRotate was signed more than
+//	          GenerationFormGrace after the body's entry; and at a writer's fold alone, a body that would wait for a
+//	          generation above the reader's FormedThrough, not 0, once its entry is UnformedVoidWait before the entry at
+//	          the fold asked, which both of the fold's opens use. Nothing else ends a wait
 //	address   the first BridgeAddress in log order wins a host's bits; a second for an addressed host is void; a
 //	          released address is a tombstone for 30 days by the log's time (I-14); the upper /17 takes a host only
 //	          once the lower is full, and never inside an alias or an exposed prefix (§17.4, D-BRIDGE-20)
@@ -46,6 +51,7 @@ import (
 	"math"
 	"net/netip"
 	"slices"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -53,9 +59,9 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
+// §17.4's block: the shape of the address plan every reader holds addresses to, not a limit. The times and limits a
+// verdict reads are BridgeLedgerSettings' fields.
 const (
-	// A released overlay address routes to no new holder for this long, by the log's time (§17.4, I-14).
-	BridgeAddressTombstoneMs = int64(30 * 24 * 60 * 60 * 1000)
 	// A network's block is one IPv4 /16 (§17.4).
 	bridgeBlockPrefixLength = 16
 	// The upper /17 of a block, in host bits: aliases and exposed prefixes from its bottom, spilled hosts from its top.
@@ -64,14 +70,8 @@ const (
 	bridgeLowerHostCount = 127 * 254
 	// The hosts a block's upper /17 holds.
 	bridgeUpperHostCount = 128 * 254
-	// §17.8's bound on a block's addresses, 64,770.
+	// §17.8's bound on a block's addresses, 64,770: every host the block's shape holds.
 	BridgeAddressMaxCount = bridgeLowerHostCount + bridgeUpperHostCount
-	// drain_seconds is 3,600 s at most (§17.8's disposition).
-	bridgeDrainSecondsMax = 3600
-	// The most prefixes one BridgeRoute advertises, port ranges one BridgeMap names, or exits one BridgeEgress lists.
-	bridgeBodyListMaxCount = 64
-	// A site_id is at most this long.
-	bridgeSiteIdMaxByteCount = 32
 )
 
 var (
@@ -242,7 +242,7 @@ type BridgeLedgerEntry struct {
 	Disposition BridgeDisposition
 	// Why it is void, wrapping ErrBridgeVoid. One that also wraps ErrConfigSealInvalid is the reader's alarm.
 	Reason error
-	// The generation a pending entry waits for.
+	// The generation a pending entry waits for, or the one a body a fold froze void as unformed was sealed to.
 	Generation uint64
 }
 
@@ -271,6 +271,11 @@ type BridgeLedgerReader struct {
 	EntryTimeMs func(n uint64) (int64, bool)
 	// The log's time the ledger reads tombstones and retention at. 0 is State's.
 	TimeMs int64
+	// A config writer's G for this fold, from its plan's whole read of gkm (BridgeBodyJudge.FormedThrough), which only
+	// FoldBridgeLedger reads: a body that would wait for a generation above it is frozen void as unformed once its
+	// entry is UnformedVoidWait before the entry at the fold asked (DESIGN-DETAILS 12.2.3). 0 voids nothing, and is
+	// what a checker, a compile and every other open hold; CheckBridgeLedgerFold sets 0 whatever its caller did.
+	FormedThrough uint64
 	// Nil is the defaults.
 	Settings *BridgeLedgerSettings
 }
@@ -296,11 +301,13 @@ type BridgeLedgerTombstone struct {
 	ReleasedAt      uint64
 	ReleasedMs      int64
 	ReleasedMsKnown bool
+	// how long it holds from ReleasedMs: the ledger's AddressTombstoneTimeout
+	holdMs int64
 }
 
 // Whether the tombstone still holds at the log's time timeMs.
 func (self *BridgeLedgerTombstone) Holds(timeMs int64) bool {
-	return !self.ReleasedMsKnown || timeMs < self.ReleasedMs+BridgeAddressTombstoneMs
+	return !self.ReleasedMsKnown || timeMs < self.ReleasedMs+self.holdMs
 }
 
 // One BridgeWithdraw that binds a rule, or reserves an id no filing holds yet.
@@ -445,6 +452,11 @@ type BridgeLedger struct {
 	openedByteCount int
 	// what keeps a fold from writing these rows, nil for nothing
 	foldError error
+	// a fold's void of a body sealed above every formed generation: the reader's FormedThrough, 0 at an open; the
+	// time of the entry at the fold asked, which the wait is read against; and the entries frozen void so, in log order
+	formedThrough uint64
+	askedTimeMs   int64
+	unformed      []*BridgeLedgerEntry
 
 	reader   *BridgeLedgerReader
 	settings *BridgeLedgerSettings
@@ -464,9 +476,10 @@ type bridgeRelease struct {
 	timeMsKnown bool
 }
 
-// An empty ledger for reader at cutoffN and timeMs.
-func newBridgeLedger(reader *BridgeLedgerReader, cutoffN uint64, timeMs int64, folding bool) *BridgeLedger {
-	return &BridgeLedger{
+// An empty ledger for reader at cutoffN and timeMs. A fold's ledger reads the reader's FormedThrough against
+// askedTimeMs, the time of the entry at the fold asked; an open's reads none.
+func newBridgeLedger(reader *BridgeLedgerReader, cutoffN uint64, timeMs int64, folding bool, askedTimeMs int64) *BridgeLedger {
+	ledger := &BridgeLedger{
 		timeMs:     timeMs,
 		cutoffN:    cutoffN,
 		folding:    folding,
@@ -480,6 +493,10 @@ func newBridgeLedger(reader *BridgeLedgerReader, cutoffN uint64, timeMs int64, f
 		reader:     reader,
 		settings:   bridgeLedgerSettingsOrDefault(reader.Settings),
 	}
+	if folding {
+		ledger.formedThrough, ledger.askedTimeMs = reader.FormedThrough, askedTimeMs
+	}
+	return ledger
 }
 
 // The reader's state's position and time, or what it passes.
@@ -506,12 +523,13 @@ func OpenBridgeLedger(rows BridgeLedgerRows, reader *BridgeLedgerReader) (*Bridg
 	if base := reader.State.Base(); base != nil && rows != nil && rows.FoldedThrough() < base.GetFoldedThrough() {
 		return nil, fmt.Errorf("%w: rows through %d under a base folded through %d", ErrBridgeLedgerMalformed, rows.FoldedThrough(), base.GetFoldedThrough())
 	}
-	return openBridgeLedger(rows, reader.State.Bridge().Statements(), reader, cutoffN, timeMs, false)
+	return openBridgeLedger(rows, reader.State.Bridge().Statements(), reader, cutoffN, timeMs, false, 0)
 }
 
-// Opens the rows and every statement past their fold at or below cutoffN, at timeMs.
-func openBridgeLedger(rows BridgeLedgerRows, statements []*BridgeLogStatement, reader *BridgeLedgerReader, cutoffN uint64, timeMs int64, folding bool) (*BridgeLedger, error) {
-	ledger := newBridgeLedger(reader, cutoffN, timeMs, folding)
+// Opens the rows and every statement past their fold at or below cutoffN, at timeMs; a fold's, with askedTimeMs the
+// time of the entry at the fold asked.
+func openBridgeLedger(rows BridgeLedgerRows, statements []*BridgeLogStatement, reader *BridgeLedgerReader, cutoffN uint64, timeMs int64, folding bool, askedTimeMs int64) (*BridgeLedger, error) {
+	ledger := newBridgeLedger(reader, cutoffN, timeMs, folding, askedTimeMs)
 	if rows != nil {
 		ledger.foldedThrough = rows.FoldedThrough()
 		if err := ledger.loadRows(rows); err != nil {
@@ -542,7 +560,7 @@ func (self *BridgeLog) Open(reader *BridgeLedgerReader) *BridgeLedger {
 	unbounded.UnfoldedBodyMaxByteCount = 0
 	bounded := *reader
 	bounded.Settings = &unbounded
-	ledger, _ := openBridgeLedger(nil, self.Statements(), &bounded, cutoffN, timeMs, false)
+	ledger, _ := openBridgeLedger(nil, self.Statements(), &bounded, cutoffN, timeMs, false, 0)
 	return ledger
 }
 
@@ -630,15 +648,43 @@ func (self *BridgeLedger) addressRelease(address *BridgeLedgerAddress) *bridgeRe
 // errBridgePending marks a body whose generation the reader lacks, or an approval no judge ran on.
 var errBridgePending = errors.New("bridge body pending")
 
-// Opens an entry's sealed body into body. A generation the reader lacks marks the entry pending and answers
-// errBridgePending; a seal that does not open answers ErrConfigSealInvalid, the alarm.
+// The writer's half of DESIGN-DETAILS 12.2.3's void (QD-761), for an entry that would wait for generation: at a fold
+// whose writer's whole read of gkm named every formed generation, FormedThrough, a generation above it is unformed once
+// the entry is UnformedVoidWait before the entry at the fold asked, and the entry is frozen void,
+// errBridgeGenerationUnformed. Nil otherwise: at every open, a read that did not count, a generation gkm names (a key
+// that exists and has not reached this writer is never a void), or a wait not yet passed, which all leave it waiting.
+func (self *BridgeLedger) unformedVoid(entry *BridgeLedgerEntry, generation uint64) error {
+	if self.formedThrough == 0 || generation <= self.formedThrough {
+		return nil
+	}
+	statement := entry.Statement
+	// a difference taken only where it is not negative, as unsigned, so no time can wrap it
+	waitMs := self.settings.UnformedVoidWait.Milliseconds()
+	if self.askedTimeMs < statement.TimeMs || uint64(self.askedTimeMs-statement.TimeMs) < uint64(waitMs) {
+		return nil
+	}
+	entry.Generation = generation
+	self.unformed = append(self.unformed, entry)
+	return fmt.Errorf("%w: generation %d is above every generation gkm names, %d, %d ms after its entry", errBridgeGenerationUnformed, generation, self.formedThrough, self.askedTimeMs-statement.TimeMs)
+}
+
+// Opens an entry's sealed body into body. A body whose generation the reader holds but was signed past
+// GenerationFormGrace after the entry is void before its seal is opened, with no alarm; a generation the reader lacks
+// marks the entry pending and answers errBridgePending, but at a fold that finds it unformed (unformedVoid); a seal that
+// does not open answers ErrConfigSealInvalid, the alarm.
 func (self *BridgeLedger) openBody(entry *BridgeLedgerEntry, body proto.Message) error {
 	repoKeyAt := self.reader.RepoKeyAt
 	if repoKeyAt == nil {
 		repoKeyAt = func(generation uint64) *EvsRepoKey { return nil }
 	}
+	if err := bridgeGenerationLate(entry.Statement, repoKeyAt, self.settings.GenerationFormGrace); err != nil {
+		return err
+	}
 	generation, err := OpenConfigBody(entry.Statement.SealedBody, entry.Statement.Seal, repoKeyAt, body)
 	if errors.Is(err, ErrConfigSealGenerationMissing) {
+		if err := self.unformedVoid(entry, generation); err != nil {
+			return err
+		}
 		entry.Disposition, entry.Generation = BridgeDispositionPending, generation
 		return errBridgePending
 	}
@@ -719,7 +765,7 @@ func (self *BridgeLedger) hostBitsFree(hostBits uint32, statement *BridgeLogStat
 // the fold whose time passes it drops, so a statement reads it alike whether a fold came between or not.
 func (self *BridgeLedger) freeAt(address *BridgeLedgerAddress, statement *BridgeLogStatement) bool {
 	release := self.addressRelease(address)
-	if release == nil || statement.N <= release.n || !release.timeMsKnown || statement.TimeMs < release.timeMs+BridgeAddressTombstoneMs {
+	if release == nil || statement.N <= release.n || !release.timeMsKnown || statement.TimeMs < release.timeMs+self.settings.AddressTombstoneTimeout.Milliseconds() {
 		return false
 	}
 	self.dropAddress(address)
@@ -942,7 +988,7 @@ func (self *BridgeLedger) applyRule(entry *BridgeLedgerEntry) error {
 			rule.Pending, rule.Void = entry.Disposition == BridgeDispositionPending, entry.Disposition != BridgeDispositionPending
 			return err
 		}
-		if err := bridgeCheckMapBody(mapBody); err != nil {
+		if err := bridgeCheckMapBody(mapBody, self.settings); err != nil {
 			rule.Void = true
 			return err
 		}
@@ -998,7 +1044,7 @@ func (self *BridgeLedger) applyHeldRule(entry *BridgeLedgerEntry, rule *BridgeLe
 		if err := self.openBody(entry, body); err != nil {
 			return err
 		}
-		if err := bridgeCheckRouteBody(body); err != nil {
+		if err := bridgeCheckRouteBody(body, self.settings); err != nil {
 			return err
 		}
 		body = bridgeBodyWithoutApproval(body)
@@ -1018,7 +1064,7 @@ func (self *BridgeLedger) applyHeldRule(entry *BridgeLedgerEntry, rule *BridgeLe
 		if err := self.openBody(entry, body); err != nil {
 			return err
 		}
-		if err := bridgeCheckMapBody(body); err != nil {
+		if err := bridgeCheckMapBody(body, self.settings); err != nil {
 			return err
 		}
 		body = bridgeBodyWithoutApproval(body)
@@ -1036,11 +1082,12 @@ func (self *BridgeLedger) applyHeldRule(entry *BridgeLedgerEntry, rule *BridgeLe
 
 // A BridgeRouteBody's own shape: a subnet route's prefixes, each at least a /1 with no bits past its length, or an
 // exit with none; an exposed_prefix only on a subnet route of one prefix, of that prefix's length, so host bits map
-// one to one; a site_id, weight and drain_seconds in range.
-func bridgeCheckRouteBody(body *bridge.BridgeRouteBody) error {
+// one to one; a site_id, weight and drain_seconds in range, by settings' limits (nil, the defaults).
+func bridgeCheckRouteBody(body *bridge.BridgeRouteBody, settings *BridgeLedgerSettings) error {
+	settings = bridgeLedgerSettingsOrDefault(settings)
 	switch body.GetKind() {
 	case bridge.BridgeRouteKind_BRIDGE_ROUTE_KIND_SUBNET:
-		if len(body.GetPrefixes()) == 0 || bridgeBodyListMaxCount < len(body.GetPrefixes()) {
+		if len(body.GetPrefixes()) == 0 || settings.BodyListMaxCount < len(body.GetPrefixes()) {
 			return fmt.Errorf("a subnet route of %d prefixes", len(body.GetPrefixes()))
 		}
 	case bridge.BridgeRouteKind_BRIDGE_ROUTE_KIND_EXIT:
@@ -1073,11 +1120,11 @@ func bridgeCheckRouteBody(body *bridge.BridgeRouteBody) error {
 		}
 	}
 	switch {
-	case bridgeSiteIdMaxByteCount < len(body.GetSiteId()):
+	case settings.SiteIdMaxByteCount < len(body.GetSiteId()):
 		return fmt.Errorf("a site_id of %d bytes", len(body.GetSiteId()))
 	case math.MaxUint16 < body.GetWeight():
 		return fmt.Errorf("a weight of %d", body.GetWeight())
-	case bridgeDrainSecondsMax < body.GetDrainSeconds():
+	case uint64(settings.DrainMaximum/time.Second) < uint64(body.GetDrainSeconds()):
 		return fmt.Errorf("drain_seconds of %d", body.GetDrainSeconds())
 	}
 	return nil
@@ -1086,7 +1133,7 @@ func bridgeCheckRouteBody(body *bridge.BridgeRouteBody) error {
 // A new route's body against the ledger: its shape, D-BRIDGE-8 against every other route in force, and room for its
 // exposed prefix, which it answers for the caller to hold once the rule's approval passes.
 func (self *BridgeLedger) checkRoute(rule *BridgeLedgerRule, body *bridge.BridgeRouteBody) (*bridgeUpperRange, error) {
-	if err := bridgeCheckRouteBody(body); err != nil {
+	if err := bridgeCheckRouteBody(body, self.settings); err != nil {
 		return nil, err
 	}
 	if err := self.checkOverlap(rule, body); err != nil {
@@ -1142,8 +1189,9 @@ func (self *BridgeLedger) checkOverlap(rule *BridgeLedgerRule, body *bridge.Brid
 
 // A BridgeMapBody's own shape: a match_prefix of /16 or longer; TCP, UDP or ICMP; ports ascending and disjoint, none
 // on ICMP; a target address of 4 or 16 bytes; a target_port only where at most one range maps onto it; drain_seconds
-// in range.
-func bridgeCheckMapBody(body *bridge.BridgeMapBody) error {
+// in range, by settings' limits (nil, the defaults).
+func bridgeCheckMapBody(body *bridge.BridgeMapBody, settings *BridgeLedgerSettings) error {
+	settings = bridgeLedgerSettingsOrDefault(settings)
 	matchPrefix, err := bridgePrefixOf(body.GetMatchPrefix())
 	if err != nil {
 		return fmt.Errorf("match_prefix: %w", err)
@@ -1160,7 +1208,7 @@ func bridgeCheckMapBody(body *bridge.BridgeMapBody) error {
 	default:
 		return fmt.Errorf("protocol %d", body.GetProtocol())
 	}
-	if bridgeBodyListMaxCount < len(body.GetPorts()) {
+	if settings.BodyListMaxCount < len(body.GetPorts()) {
 		return fmt.Errorf("%d port ranges", len(body.GetPorts()))
 	}
 	previousLast := uint32(0)
@@ -1177,7 +1225,7 @@ func bridgeCheckMapBody(body *bridge.BridgeMapBody) error {
 		return fmt.Errorf("a target_port of %d", body.GetTargetPort())
 	case body.GetTargetPort() != 0 && 1 < len(body.GetPorts()):
 		return errors.New("a target_port with more than one port range")
-	case bridgeDrainSecondsMax < body.GetDrainSeconds():
+	case uint64(settings.DrainMaximum/time.Second) < uint64(body.GetDrainSeconds()):
 		return fmt.Errorf("drain_seconds of %d", body.GetDrainSeconds())
 	}
 	return nil
@@ -1185,17 +1233,22 @@ func bridgeCheckMapBody(body *bridge.BridgeMapBody) error {
 
 // A new rule's approval by the verdict its judge reached where its entry landed, counted against its decision: the
 // rule id the one the approval fixes, and the decision's ids at most its uses, over the rows and the entries alike. No
-// verdict, or an Unopened one, leaves the rule pending; a Refused one voids it.
+// verdict, or an Unopened one, leaves the rule pending, but at a fold that finds its generation unformed
+// (unformedVoid); a Refused one voids it.
 func (self *BridgeLedger) spendApproval(entry *BridgeLedgerEntry, rule *BridgeLedgerRule) error {
 	verdict := entry.Statement.Approval
 	if verdict == nil || verdict.Kind == BridgeBodyUnopened {
-		entry.Disposition = BridgeDispositionPending
-		if generation, err := ConfigSealedGeneration(entry.Statement.SealedBody); err == nil {
-			entry.Generation = generation
+		generation := uint64(0)
+		if sealed, err := ConfigSealedGeneration(entry.Statement.SealedBody); err == nil {
+			generation = sealed
 		}
 		if verdict != nil {
-			entry.Generation = verdict.Generation
+			generation = verdict.Generation
 		}
+		if err := self.unformedVoid(entry, generation); err != nil {
+			return err
+		}
+		entry.Disposition, entry.Generation = BridgeDispositionPending, generation
 		return errBridgePending
 	}
 	switch verdict.Kind {
@@ -1257,7 +1310,7 @@ func (self *BridgeLedger) applyEgress(entry *BridgeLedgerEntry) error {
 	if (len(body.GetExitSidecarIds()) == 0) == (len(body.GetExitTagId()) == 0) {
 		return errors.New("exits names its exit sidecars or one tag, and not both")
 	}
-	if bridgeBodyListMaxCount < len(body.GetExitSidecarIds()) {
+	if self.settings.BodyListMaxCount < len(body.GetExitSidecarIds()) {
 		return fmt.Errorf("%d exits", len(body.GetExitSidecarIds()))
 	}
 	exits := []Id{}
@@ -1333,7 +1386,7 @@ func (self *BridgeLedger) releaseAddresses() {
 		}
 		tombstone := &BridgeLedgerTombstone{
 			SidecarId: address.SidecarId, HostBits: address.HostBits, ReleasedAt: release.n, ReleasedMs: release.timeMs,
-			ReleasedMsKnown: release.timeMsKnown,
+			ReleasedMsKnown: release.timeMsKnown, holdMs: self.settings.AddressTombstoneTimeout.Milliseconds(),
 		}
 		if self.bySidecar[address.SidecarId] == address {
 			delete(self.bySidecar, address.SidecarId)

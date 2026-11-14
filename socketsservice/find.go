@@ -30,8 +30,8 @@
 //
 // Who may Find what (§9.4's table). tls/ and smtp/ names are their edges' to dial, so a sidecar's Find of one
 // is denied; a blinded name is dialed within its own network (§6.4), so an edge's Find of one, or a sidecar's
-// in another network, is denied; ur/ is SOCK-M9-01's, and every Find of it is denied until that lands. Only an
-// urnetwork-edge caller sends client_ids. Nothing here logs a name or the affinity key, which lives for the
+// in another network, is denied; a ur/ name is any sidecar's to Find in urnetwork-edge with no §8 check, an edge's
+// Find of one denied (namespace_ur.go). Only an urnetwork-edge caller sends client_ids. Nothing here logs a name or the affinity key, which lives for the
 // request alone (sock-2). Safe for concurrent use.
 
 package socketsservice
@@ -127,18 +127,23 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 	if caller.edge {
 		payerNetworkId = networkId
 	}
-	if refusal := self.gateRefusal(networkId); refusal != nil {
+	// a ur/ Find is its caller's business at its own network's gate and turn: urnetwork-edge's rollout is no caller's
+	gateNetworkId := networkId
+	if name.namespace == sidecar.SocketNamespacePlatform {
+		gateNetworkId = caller.principal.NetworkId
+	}
+	if refusal := self.gateRefusal(gateNetworkId); refusal != nil {
 		return nil, refusal
 	}
 	if refusal := self.chargeRefusal(caller); refusal != nil {
 		return nil, refusal
 	}
-	release, refusal := self.queueTurn(r.Context(), networkId)
+	release, refusal := self.queueTurn(r.Context(), gateNetworkId)
 	if refusal != nil {
 		return nil, refusal
 	}
 	defer release()
-	if !socketFindReaches(caller, networkId, name) {
+	if !socketFindReaches(caller, networkId, name, self.isUrnetworkEdge(networkId)) {
 		return nil, socketRefusalOf(sidecar.SocketErrorCodeDenied, 0)
 	}
 
@@ -178,6 +183,7 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 		Protocol:        args.Protocol,
 		MinVersion:      args.MinVersion,
 		Alpns:           args.Alpn,
+		AffinityKey:     args.AffinityKey,
 		Reports:         reports,
 	}
 	pick, refusal := self.pick(pickRequest)
@@ -194,6 +200,12 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 	now = self.clock.Now()
 	if viewNow.Position() != view.Position() {
 		if grant, allowed = self.dialCheck(caller, viewNow, networkId, name, now); !allowed {
+			return nil, socketRefusalOf(sidecar.SocketErrorCodeDenied, 0)
+		}
+	}
+	if name.namespace == sidecar.SocketNamespacePlatform {
+		// the service's grant from the tickets' issue, which nothing of §8 allowed (namespace_ur.go)
+		if grant, allowed = self.platformGrant(name, now); !allowed {
 			return nil, socketRefusalOf(sidecar.SocketErrorCodeDenied, 0)
 		}
 	}
@@ -230,8 +242,25 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 			}
 		}
 	}
+	if name.namespace == sidecar.SocketNamespacePlatform {
+		// QD-728: under the sidecar dialer, at its own network's position
+		callerView, err := self.gate.View(caller.principal.NetworkId)
+		if err != nil {
+			return nil, socketRefusalOf(sidecar.SocketErrorCodeUnavailable, self.settings.BehindRetryAfter)
+		}
+		for _, passed := range ticketed {
+			if refusal := self.setPlatformPair(caller.principal.NetworkId, callerView.Position(), passed, caller.principal.ClientId, name); refusal != nil {
+				return nil, refusal
+			}
+		}
+	}
 
 	// 9
+	policyVersion := position
+	if name.namespace == sidecar.SocketNamespacePlatform {
+		// nothing of §8 allowed a ur/ ticket (namespace_ur.go)
+		policyVersion = 0
+	}
 	result := &sidecar.SocketFindResult{}
 	for index, passed := range ticketed {
 		ticketBytes, err := self.signTicket(&socketTicketArgs{
@@ -240,7 +269,7 @@ func (self *SocketsService) find(r *http.Request) (*sidecar.SocketFindResult, *s
 			listener:        passed.listener,
 			dialerClientId:  dialerClientIdOf(passed.listener),
 			dialerNetworkId: caller.principal.NetworkId,
-			policyVersion:   position,
+			policyVersion:   policyVersion,
 			grant:           passed.grant,
 			backup:          0 < index,
 			now:             now,
@@ -296,14 +325,16 @@ func socketFindFormed(caller *socketCaller, args *sidecar.SocketFindArgs, settin
 }
 
 // Whether the caller may Find a name of this namespace in networkId at all (§9.4's table), before any state is
-// read: tls/ and smtp/ by an edge, a blinded name by a sidecar of its own network, and ur/ by nobody until
-// SOCK-M9-01.
-func socketFindReaches(caller *socketCaller, networkId connect.Id, name *socketParsedName) bool {
+// read: tls/ and smtp/ by an edge, a blinded name by a sidecar of its own network, and ur/ by any sidecar in
+// urnetwork-edge, platformNetwork saying networkId is it.
+func socketFindReaches(caller *socketCaller, networkId connect.Id, name *socketParsedName, platformNetwork bool) bool {
 	switch name.namespace {
 	case sidecar.SocketNamespaceTls, sidecar.SocketNamespaceSmtp:
 		return caller.edge
 	case sidecar.SocketNamespaceApplication:
 		return !caller.edge && networkId == caller.principal.NetworkId
+	case sidecar.SocketNamespacePlatform:
+		return !caller.edge && platformNetwork
 	}
 	return false
 }
@@ -313,6 +344,10 @@ func socketFindReaches(caller *socketCaller, networkId connect.Id, name *socketP
 func (self *SocketsService) dialCheck(caller *socketCaller, view SocketGateView, networkId connect.Id, name *socketParsedName, now time.Time) (*socketTicketGrant, bool) {
 	if name.namespace == sidecar.SocketNamespaceSmtp {
 		return nil, true
+	}
+	if name.namespace == sidecar.SocketNamespacePlatform {
+		// no §8 check: the service authorizes (§14.5); the grant is set at signing (namespace_ur.go)
+		return &socketTicketGrant{}, true
 	}
 	request := caller.gateRequest(networkId, name)
 	dial := view.MayDial(request, now)

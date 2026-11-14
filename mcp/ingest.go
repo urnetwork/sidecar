@@ -51,9 +51,6 @@ const (
 	ingestDirectoryName = "ingest"
 	ingestClass         = "ingest"
 	ingestStateVersion  = 1
-	ingestStateMaxBytes = 1024 * 1024
-	// a blob hash is remembered this many times over before the oldest are forgotten, a bound on the state file
-	ingestBlobHashCount = 4096
 )
 
 // Nothing can be sealed: the network has no redactor (no spool), so the event is a gap.
@@ -196,6 +193,8 @@ func NewIngest(args *IngestArgs) *Ingest {
 	server.SetHookCapture(self.captureHook)
 	if self.restore != nil {
 		server.SetHookHolds(self.restore.HookHolds())
+		// run_restore reads the same points (MCP-M3-22)
+		server.SetRestorePoints(self.restore)
 	}
 	return self
 }
@@ -279,7 +278,7 @@ func (self *Ingest) runFor(ctx context.Context, network McpNetwork, networkId si
 		return nil, err
 	}
 	state := &ingestRunState{}
-	found, err := readRestoreJson(store, runId.String(), state)
+	found, err := readRestoreJson(store, runId.String(), state, self.settings.IngestStateByteCount)
 	if err != nil {
 		return nil, err
 	}
@@ -371,10 +370,17 @@ type ingestEntry struct {
 // RunHourByteCount is dropped, oversize. The seq range the writer answers is kept for the Coverage. The run's lock is
 // held. The answer is whether the entry was appended.
 func (self *Ingest) appendWithLock(ctx context.Context, run *ingestRun, entry *ingestEntry) bool {
+	_, ok := self.appendEntryWithLock(ctx, run, entry)
+	return ok
+}
+
+// appendWithLock, answering beside it the first copy of the entry the writer sealed, nil where every copy waits in the
+// spool.
+func (self *Ingest) appendEntryWithLock(ctx context.Context, run *ingestRun, entry *ingestEntry) (*sidecar.RecordEntryRef, bool) {
 	now := self.clock.Now()
 	state := run.state
 	if entry.byteCount != 0 && !self.budgetWithLock(ctx, run, entry.byteCount) {
-		return false
+		return nil, false
 	}
 	if entry.coverageSource != "" && !slices.Contains(state.Sources, entry.coverageSource) {
 		state.Sources = append(state.Sources, entry.coverageSource)
@@ -384,7 +390,7 @@ func (self *Ingest) appendWithLock(ctx context.Context, run *ingestRun, entry *i
 	if err != nil {
 		self.log.Warningf("[ingest]no record writer: %s", err)
 		self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapMissedEvent)
-		return false
+		return nil, false
 	}
 	runId := run.runId
 	refs, err := writer.Append(&sidecar.RecordDraft{
@@ -398,11 +404,15 @@ func (self *Ingest) appendWithLock(ctx context.Context, run *ingestRun, entry *i
 	if err != nil {
 		self.log.Warningf("[ingest]an entry was not appended: %s", err)
 		self.gap(ctx, run.network, run.networkId, run.runId, sidecar.RecordCoverageGapMissedEvent)
-		return false
+		return nil, false
 	}
+	var sealed *sidecar.RecordEntryRef
 	for _, ref := range refs {
 		if ref.Spooled {
 			continue
+		}
+		if sealed == nil {
+			sealed = ref
 		}
 		if state.FirstSeq == 0 || ref.Seq < state.FirstSeq {
 			state.FirstSeq = ref.Seq
@@ -412,7 +422,7 @@ func (self *Ingest) appendWithLock(ctx context.Context, run *ingestRun, entry *i
 		}
 		run.dirty = true
 	}
-	return true
+	return sealed, true
 }
 
 // The hook capture the server calls after each event's binding (hook_coverage.go): the event's entries, the
@@ -472,7 +482,7 @@ func (self *Ingest) captureHook(ctx context.Context, captured *HookCaptured) err
 	case HookEventPostToolUse:
 		self.captureToolCallWithLock(ctx, run, redactor, event, captured.Payload)
 	default:
-		self.captureHookEventWithLock(ctx, run, redactor, event, captured.Payload)
+		captured.EventLeaf = self.captureHookEventWithLock(ctx, run, redactor, event, captured.Payload)
 	}
 	if event.Kind == HookEventPermissionRequest {
 		self.capturePermissionWithLock(ctx, run, event)
@@ -523,6 +533,9 @@ type HookCaptured struct {
 	Payload []byte
 	// The network was Locked, so nothing bound.
 	Locked bool
+	// The leaf of the hook_event entry the capture sealed for the event, nil where it sealed none or the entry waits in
+	// the spool: what a harness decision on the event cites (RECORD.md section 5.1; MCP-M3-10).
+	EventLeaf []byte
 }
 
 // Events seen while the network was Locked, by harness and session, each a missed_event gap on the run once it binds.

@@ -251,15 +251,16 @@ func TestAccessRequestPassesTheGate(t *testing.T) {
 	gate := &testAccessGate{}
 	sidecar.InstallGate(gate)
 	worker := NewId()
-	action := &protocol.CanonicalAction{
+	// the worker alone in the clear, its port and the port's text sealed beside the clear fields (QD-740, QD-771)
+	workerDst := "sidecar:" + strings.ReplaceAll(worker.String(), "-", "")
+	action := testWithSealedDetail(&protocol.CanonicalAction{
 		Kind:            uint32(SidecarActionAccessRequest),
 		Version:         3,
-		GrantDst:        []string{"sidecar:" + strings.ReplaceAll(worker.String(), "-", "") + ":tcp:22"},
+		GrantDst:        []string{workerDst},
 		GrantAllow:      []string{"dial"},
 		TargetSidecarId: worker.Bytes(),
-		TargetPort:      22,
 		Subject:         NewId().Bytes(),
-	}
+	}, &protocol.CanonicalActionDetail{TargetPort: 22, GrantDst: []string{workerDst + ":tcp:22"}})
 	stored, err := proto.Marshal(action)
 	if err != nil {
 		t.Fatal(err)

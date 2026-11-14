@@ -12,12 +12,14 @@
 //	          at <issuer>/oauth/token for an ID token, which must verify under the issuer's id- key set (ES256),
 //	          with iss the issuer, aud the origin alone, the nonce the cookie's, network_id this network, a live
 //	          exp no further than IdTokenMaxLifetime past iat, and sub a member this config holds now; then
-//	          __Host-ur-session (HttpOnly, Secure, SameSite=Lax, 12 h), and 302 back to where the visitor began
+//	          __Host-ur-session (HttpOnly, Secure, SameSite=Lax, 12 h), and 302 back to where the visitor began, or
+//	          under members-device no session yet: the device step begins (tls_members_device.go)
 //
 // The login path and the callback are the front's (/.well-known/ur/), so neither reaches the local service. An origin
-// is https://<sni> with no port, which is all the issuer takes, so a members endpoint on a port other than 443
-// cannot complete a login and refuses its visitors, the closed direction. With no issuer set every login answers
-// 503.
+// is https://<sni>, with :<port> where the endpoint's port is not 443 and never :443, which is how the issuer takes
+// each of tlsedge's four ports (QD-723): every endpoint is its own origin, client and audience, so a code, an ID
+// token, a pending login and a session of the host's 443 endpoint count for nothing on its 8443 one, or the reverse.
+// With no issuer set every login answers 503.
 //
 // Nothing here logs a code, a token, a cookie, a state or a name (I-7, I-13). Safe for concurrent use.
 
@@ -57,8 +59,8 @@ const (
 	// r || s, 32 bytes each (RFC 7518 §3.4)
 	tlsEdgeLoginSignatureByteCount  = 64
 	tlsEdgeLoginCoordinateByteCount = 32
-	// The port an edge origin listens on: https with no port, all the issuer takes as an origin.
-	tlsEdgeLoginPort = 443
+	// https's own port, which an origin never writes: the issuer takes 443 bare alone (QD-723).
+	tlsEdgeLoginBarePort = 443
 )
 
 var (
@@ -97,10 +99,11 @@ func newTlsEdgeLogin(front *TlsFront, issuerUrl string, client *http.Client) *tl
 
 // The origin a connection's visitors are at: the issuer's client_id, the ID token's aud, and what its sessions and
 // pending logins are sealed to, so a session counts on its own origin alone (D-TEAM-15), never on another port of the
-// host, though cookies do not tell ports apart.
+// host, though cookies do not tell ports apart. The port is the target name's, one of tlsedge's four by the name's
+// grammar (ParseSocketName), written unless it is 443.
 func tlsEdgeLoginOrigin(conn *TlsFrontConn) string {
 	origin := "https://" + conn.ServerName()
-	if port := conn.front.target.port(); port != tlsEdgeLoginPort {
+	if port := conn.front.target.port(); port != tlsEdgeLoginBarePort {
 		origin += ":" + strconv.Itoa(int(port))
 	}
 	return origin
@@ -123,7 +126,7 @@ func tlsEdgeLoginReturnPath(r *http.Request, maxByteCount int) string {
 
 // Sends a navigation with no counted session to the issuer (see the file header).
 func (self *tlsEdgeLogin) start(w http.ResponseWriter, r *http.Request, conn *TlsFrontConn) {
-	if self.issuerUrl == "" || self.front.target.port() != tlsEdgeLoginPort {
+	if self.issuerUrl == "" {
 		tlsHttpAnswer(w, http.StatusServiceUnavailable)
 		return
 	}
@@ -208,7 +211,7 @@ func (self *tlsEdgeLogin) takePending(state string, now time.Time) bool {
 	return ok && now.Before(expireTime)
 }
 
-// GET /.well-known/ur/callback (see the file header), under a members grant alone.
+// GET /.well-known/ur/callback (see the file header), under a members or members-device grant alone.
 func (self *tlsEdgeLogin) callback(w http.ResponseWriter, r *http.Request, conn *TlsFrontConn, view *tlsHttpSessionView) {
 	if r.Method != http.MethodGet {
 		tlsHttpAnswer(w, http.StatusMethodNotAllowed)
@@ -219,7 +222,8 @@ func (self *tlsEdgeLogin) callback(w http.ResponseWriter, r *http.Request, conn 
 	header.Set("Referrer-Policy", "no-referrer")
 	now := self.front.clock.Now()
 	grant := self.front.audience.grant(protocol.AclAppMode_ACL_APP_MODE_HTTP, now)
-	if grant == nil || grant.Audience != protocol.AclAudience_ACL_AUDIENCE_MEMBERS || self.issuerUrl == "" {
+	if grant == nil || self.issuerUrl == "" || (grant.Audience != protocol.AclAudience_ACL_AUDIENCE_MEMBERS &&
+		grant.Audience != protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE) {
 		tlsHttpAnswer(w, http.StatusNotFound)
 		return
 	}
@@ -247,6 +251,11 @@ func (self *tlsEdgeLogin) callback(w http.ResponseWriter, r *http.Request, conn 
 	memberId, err := self.verify(r.Context(), idToken, origin, base64.RawURLEncoding.EncodeToString(preLogin.nonce[:]), now)
 	if err != nil || !self.front.policy.MemberActive(memberId, now) {
 		tlsHttpAnswer(w, http.StatusForbidden)
+		return
+	}
+	if grant.Audience == protocol.AclAudience_ACL_AUDIENCE_MEMBERS_DEVICE {
+		// the member is known; the session waits for a consented device's statement
+		self.front.device.begin(w, origin, memberId, preLogin.returnPath, now)
 		return
 	}
 	session := &tlsSession{memberId: memberId, issueTime: now, expireTime: now.Add(self.front.settings.SessionLifetime)}

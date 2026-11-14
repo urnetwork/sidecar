@@ -44,8 +44,11 @@ func indexEntrySeconds(signedTimeMs int64) uint64 {
 	return uint64(max(signedTimeMs, 0) / 1000)
 }
 
-// Refuses what an entry may not hold, for encoder and decoder alike.
-func (self *indexEntry) check(companion bool) error {
+// Refuses what an entry may not hold, for encoder and decoder alike. A full entry whose row and key set D6 skips holds
+// a value past its cap, as one whose key set passes KeySetMax does: no honest writer writes one, since D6 made that
+// version a tombstone (DESIGN-DETAILS 1.2.2; QD-760). A diff's composed set is held to the same test where it is
+// composed, since its base is in another file.
+func (self *indexEntry) check(companion bool, settings *IndexFormatSettings) error {
 	switch self.kind {
 	case indexEntryFull:
 		if self.row == nil {
@@ -56,6 +59,13 @@ func (self *indexEntry) check(companion bool) error {
 		}
 		if self.row.trigramCount != uint64(len(self.keys)) {
 			return indexMalformed("a trigram count that is not its key set's")
+		}
+		// the key set's own cap first, then D6's shard test
+		if indexKeySetMaxByteCount < len(self.keys) || indexKeySetMaxByteCount < self.keys.encodedByteCount() {
+			return indexMalformed("a key set past its cap")
+		}
+		if indexDocumentPastAShard(self.keys, self.row, settings) {
+			return indexMalformed("an entry past a shard")
 		}
 	case indexEntryDiff:
 		if self.row == nil {
@@ -82,8 +92,8 @@ func (self *indexEntry) check(companion bool) error {
 }
 
 // Appends the entry. A row is encoded here too, so what cannot be decoded cannot be written.
-func (self *indexEntry) appendEncoded(dst []byte, companion bool) ([]byte, error) {
-	if err := self.check(companion); err != nil {
+func (self *indexEntry) appendEncoded(dst []byte, companion bool, settings *IndexFormatSettings) ([]byte, error) {
+	if err := self.check(companion, settings); err != nil {
 		return nil, err
 	}
 	dst = append(dst, byte(self.kind))
@@ -111,7 +121,7 @@ func (self *indexEntry) appendEncoded(dst []byte, companion bool) ([]byte, error
 }
 
 // Reads one entry.
-func (self *indexDecoder) entry(companion bool) *indexEntry {
+func (self *indexDecoder) entry(companion bool, settings *IndexFormatSettings) *indexEntry {
 	entry := &indexEntry{kind: indexEntryKind(self.oneByte())}
 	copy(entry.key[:], self.take(indexIdByteCount))
 	entry.version = self.vbyte()
@@ -129,7 +139,7 @@ func (self *indexDecoder) entry(companion bool) *indexEntry {
 	if self.err != nil {
 		return nil
 	}
-	if err := entry.check(companion); err != nil {
+	if err := entry.check(companion, settings); err != nil {
 		self.err = err
 		return nil
 	}

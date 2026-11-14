@@ -176,7 +176,7 @@ func (self *gkmTestView) CascadeVoids(signer []byte, at uint64) bool {
 //	coveredAgent       a non-ephemeral agent the Delegation admitted, carrying tag
 //	ephemeralAgent     an ephemeral agent the Delegation admitted, carrying tag, closing in an hour
 //	uncoveredAgent     a tagged agent with another tag and no Delegation, its admission ending in 7 days
-//	configId           the config, which every admitted sidecar reads
+//	configId           the config, the Genesis's, whose row the state adds (QD-719), which every admitted sidecar reads
 //	repoId             a general repo autogroup:member, tag and the other tag read
 //	outsideId          a general repo only coveredAgent's own sidecar atom reads: outside the Delegation's reach
 type gkmTestNet struct {
@@ -246,7 +246,7 @@ func newGkmTestNet() *gkmTestNet {
 	net.uncoveredAgent = fixture.agent(net.owner, net.otherTag)
 	fixture.admission(net.uncoveredAgent).Row.NotAfter = aclTestNow.Add(7 * 24 * time.Hour).UnixMilli()
 
-	net.configId, _ = fixture.repo(protocol.RepoKind_REPO_KIND_CONFIG, Id{})
+	net.configId = fixture.configRepo(net.ownerDevice, net.owner)
 	net.repoId, _ = fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
 	net.outsideId, _ = fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
 	fixture.rule(autogroupAtoms(protocol.AclAutogroup_ACL_AUTOGROUP_MEMBER), []*protocol.AclTarget{aclRepoTarget(net.repoId)},
@@ -1061,15 +1061,15 @@ func TestGkmNeverEventsDropNoHolder(t *testing.T) {
 	}
 }
 
-// KeyHolders over a real ConfigState, whose base rows carry the admissions, the Delegation and the acl: ConfigState
-// answers what KeyHolders reads.
+// KeyHolders over a real ConfigState, whose base rows carry the admissions, the Delegation and the acl, and whose acl
+// part adds the Genesis's config repo, which no rows hold: ConfigState answers what KeyHolders reads.
 func TestKeyHoldersOverAConfigState(t *testing.T) {
 	net := newTestConfigNet(t)
 	device := net.device("member device", net.ownerMemberId)
 	agentKey := testConfigDeviceKey("agent")
 	agentId := testConfigId("agent")
 	tagId := testConfigId("tag")
-	configId := testConfigId("config repo")
+	configId := Id(net.log.State().Genesis().GetConfigRepoId())
 	repoId := testConfigId("repo")
 	delegationId := sha256.Sum256([]byte("config test delegation"))
 	notAfter := net.timeMs + int64(30*24*time.Hour/time.Millisecond)
@@ -1084,7 +1084,6 @@ func TestKeyHoldersOverAConfigState(t *testing.T) {
 				Targets: []*protocol.AclTarget{{RepoId: repoId.Bytes()}}, Actions: []uint32{uint32(protocol.AclAction_ACL_ACTION_READ)}},
 		},
 		Repos: []*protocol.AclRepo{
-			{RepoId: configId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG},
 			{RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL},
 		},
 	}

@@ -194,15 +194,13 @@ var mcpCatalogDesign = []mcpCatalogDesignTool{
 // The design names whose owners have not landed their tools: every one, at MCP-M3-12. An owner removes its names
 // in the change that registers them.
 var mcpCatalogUnbuilt = []string{
-	"evs_repos", "evs_list", "evs_history", "evs_read", "evs_drop_preview", "evs_write", "evs_delete",
+	"evs_drop_preview",
 	"mail_list", "mail_read", "mail_send", "mail_aliases", "mail_alias_create", "mail_alias_delete",
 	"tls_publish", "tls_unpublish",
 	"bridge_list", "bridge_forward", "bridge_expose", "bridge_close",
 	"dns_records", "dns_set", "dns_delete",
-	"team_members", "team_agents", "acl_grants", "acl_check",
 	"record_query", "run_coverage", "approval_status", "record_append",
 	"directory_list", "directory_requests", "directory_request",
-	"run_restore",
 	"search", "search_agents", "search_status",
 }
 

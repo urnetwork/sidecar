@@ -6,8 +6,9 @@
 // Lifecycle calls stay thin (§11.12's log first row): CreateRepo, Delete, Restore and Shred each file §8.8's statement
 // first, through the core's statement poster, then call the route, which evs refuses without that statement in its
 // projection (409 STATEMENT_MISSING); CreateRepo runs KF1's GkmClient.CreateGroup and activation between the create
-// and the first write. A device killed between the statement and the route leaves a state the log records, which
-// taskworker's reconciler applies, so a retry is safe.
+// and the first write, and asks EvsClientArgs.PrivateCreate before it files a create marked private (QD-748). A device
+// killed between the statement and the route leaves a state the log records, which taskworker's reconciler applies,
+// so a retry is safe.
 //
 // What the client runs on comes in EvsClientArgs as seams, so a test builds one on fakes (§23.5): Sidecar.ServiceToken,
 // Sidecar.Sign, GkmClient (sidecartest.FakeGkm until gkm lands), the component's SidecarStore, the newest verified
@@ -46,6 +47,9 @@ var (
 	// A repo this sidecar, which holds no leaf, created waits keying for a member device to form its group and wrap
 	// generation 1 to it (QD-638): the repo is made and stays keying, and CreateRepo with ResumeRepoId waits again.
 	ErrEvsRepoKeying = errors.New("evs: the repo waits keying for a member device to form its group")
+	// A create marked private found no PrivateCreate to ask whether the network's directory stands, so nothing would
+	// keep the choice: nothing is filed (QD-748).
+	ErrEvsPrivateUnchecked = errors.New("evs: nothing checks a private repo's directory")
 )
 
 // Files one of §8.8's access-log statements (RepoCreate, RepoDelete, RepoRestore): the core's poster builds its
@@ -93,6 +97,12 @@ type EvsClientArgs struct {
 	// failure answers CreateRepo's error with the repo made, and a retry with ResumeRepoId calls it again. Nil for
 	// none.
 	RepoCreated func(ctx context.Context, created *EvsRepoCreated) error
+	// Called with this client before a create marked Private files its RepoCreate (QD-748): the repo's private marker
+	// needs the network's directory standing, so the Sidecar's refuses where none stands, naming it, or files it first
+	// where this device may (directory_private.go). An error refuses the create with nothing of it filed. A create
+	// resumed by its id filed its RepoCreate already and is not asked again. Nil refuses every private create, with
+	// ErrEvsPrivateUnchecked.
+	PrivateCreate func(ctx context.Context, client *EvsClient, args *EvsCreateRepoArgs) error
 }
 
 // A repo CreateRepo made, as EvsClientArgs.RepoCreated takes it.
@@ -265,7 +275,8 @@ type EvsCreateRepoArgs struct {
 	// The repo's display name, which a team network's directory announces a general or record repo under (prose).
 	DisplayName string
 	// --private on every repo-creating command (§16.11's private row): the directory gets a private marker in place of
-	// the announcement, so no device announces the repo on its own.
+	// the announcement, so no device announces the repo on its own. Asked of EvsClientArgs.PrivateCreate before the
+	// RepoCreate is filed, which refuses while the network's directory does not stand (QD-748).
 	Private bool
 	// A group inbox (§15.8): announced with requests closed and no roles offered.
 	GroupInbox bool
@@ -281,11 +292,12 @@ func NewEvsRepoId() Id {
 	return repoId
 }
 
-// §11.12's creation: files RepoCreate, becoming the repo's admin; PUT /evs/v1/repos/<id> places it and writes repo/,
-// keying; KF1's GkmClient.CreateGroup makes its group and generation 1; activation moves repo/ to active, after which
-// the first write may go; then EvsClientArgs.RepoCreated, which a team network's directory announces it by. Each step
-// resumes: evs answers a retried create and activation as the first, and gkm resumes KF1 after a crash. A failure of
-// RepoCreated answers the repo with its error.
+// §11.12's creation: a create marked private asks EvsClientArgs.PrivateCreate first, which refuses while the network's
+// directory does not stand (QD-748); files RepoCreate, becoming the repo's admin; PUT /evs/v1/repos/<id> places it and
+// writes repo/, keying; KF1's GkmClient.CreateGroup makes its group and generation 1; activation moves repo/ to active,
+// after which the first write may go; then EvsClientArgs.RepoCreated, which a team network's directory announces it
+// by. Each step resumes: evs answers a retried create and activation as the first, and gkm resumes KF1 after a crash.
+// A failure of RepoCreated answers the repo with its error.
 func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) (*EvsRepo, error) {
 	if args == nil || args.Kind == protocol.RepoKind_REPO_KIND_UNSPECIFIED {
 		return nil, fmt.Errorf("%w: a repo of no kind", errInvalidSettings)
@@ -300,6 +312,15 @@ func (self *EvsClient) CreateRepo(ctx context.Context, args *EvsCreateRepoArgs) 
 	if args.ResumeRepoId != nil {
 		repoId = *args.ResumeRepoId
 	} else {
+		if args.Private {
+			// the choice lives only in the private marker, which the directory holds: asked before anything is filed
+			if self.args.PrivateCreate == nil {
+				return nil, ErrEvsPrivateUnchecked
+			}
+			if err := self.args.PrivateCreate(ctx, self, args); err != nil {
+				return nil, fmt.Errorf("evs: --private: %w", err)
+			}
+		}
 		create := &protocol.RepoCreate{RepoId: repoId.Bytes(), Kind: args.Kind}
 		if err := self.args.FileStatement(ctx, bridge.SignedType_SIGNED_REPO_CREATE, create); err != nil {
 			return nil, fmt.Errorf("evs: RepoCreate: %w", err)

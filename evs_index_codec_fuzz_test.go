@@ -50,7 +50,7 @@ func testSlotSeeds(t testing.TB) map[string][]byte {
 func testEntrySeeds(t testing.TB) map[string][]byte {
 	seeds := map[string][]byte{}
 	for _, c := range testEntryCases() {
-		encoded, err := c.entry.appendEncoded(nil, c.companion)
+		encoded, err := c.entry.appendEncoded(nil, c.companion, DefaultIndexFormatSettings())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,12 +90,12 @@ func FuzzIndexSlot(f *testing.F) {
 func FuzzIndexEntry(f *testing.F) {
 	f.Fuzz(func(t *testing.T, encoded []byte, companion bool) {
 		decoder := indexDecoder{src: encoded}
-		entry := decoder.entry(companion)
+		entry := decoder.entry(companion, DefaultIndexFormatSettings())
 		if decoder.err != nil {
 			return
 		}
 		used := encoded[:len(encoded)-decoder.remaining()]
-		again, err := entry.appendEncoded(nil, companion)
+		again, err := entry.appendEncoded(nil, companion, DefaultIndexFormatSettings())
 		if err != nil {
 			t.Fatalf("what decoded does not encode: %v", err)
 		}

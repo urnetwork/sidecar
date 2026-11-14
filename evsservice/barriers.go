@@ -94,6 +94,10 @@ const (
 	// Around one new slot's If-None-Match at step 6.
 	BarrierPushSlotPutBefore = "evs.push.slot_put.before"
 	BarrierPushSlotPutAfter  = "evs.push.slot_put.after"
+	// Around a takeover's DELETE of the object its refused statement left, settled and naming its LastModified
+	// (DESIGN-DETAILS 14.2.4): two retokens of one statement are held here.
+	BarrierPushSlotTakeBefore = "evs.push.slot_take.before"
+	BarrierPushSlotTakeAfter  = "evs.push.slot_take.after"
 	// Around the refuse row's recording CAS: the push's refusal fence.
 	BarrierPushRefuseBefore = "evs.push.refuse.before"
 	BarrierPushRefuseAfter  = "evs.push.refuse.after"
@@ -168,6 +172,12 @@ const (
 	// Around each batch's DELETE, keyed by the batch.
 	BarrierEvacuateBatchDeleteBefore = "evs.evacuate.batch_delete.before"
 	BarrierEvacuateBatchDeleteAfter  = "evs.evacuate.batch_delete.after"
+	// Around the HEAD of a slot a dead record lists, and around its DELETE naming the LastModified that HEAD read
+	// (DESIGN-DETAILS 14.2.5), keyed by <repo>:<slot>: a run stalled between the two is held here.
+	BarrierEvacuateSlotHeadBefore   = "evs.evacuate.slot_head.before"
+	BarrierEvacuateSlotHeadAfter    = "evs.evacuate.slot_head.after"
+	BarrierEvacuateSlotDeleteBefore = "evs.evacuate.slot_delete.before"
+	BarrierEvacuateSlotDeleteAfter  = "evs.evacuate.slot_delete.after"
 )
 
 // EVSB-M2-12 and EVSB-M2-13: the nightly pass and orphan GC by the evacuation horizon (DESIGN-DETAILS 2.2.4). The
@@ -230,6 +240,11 @@ func barrierRefKey(repoId sidecar.Id, refId sidecar.Id) string {
 // A segment's barrier key: <repo>:<segment id in hex>.
 func barrierSegmentKey(repoId sidecar.Id, segmentId []byte) string {
 	return sidecar.EvsKeyId(repoId) + ":" + hex.EncodeToString(segmentId)
+}
+
+// A slot's barrier key: <repo>:<slot>.
+func barrierSlotKey(repoId sidecar.Id, slotId sidecar.Id) string {
+	return sidecar.EvsKeyId(repoId) + ":" + sidecar.EvsKeyId(slotId)
 }
 
 // A batch's barrier key: <minute>-<instance>-<seq> in hex, unique as its key is.

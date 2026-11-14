@@ -1,26 +1,116 @@
 // MCP-M3-02's builder and kind table (record_action_build.go, record_action_kinds.go): a field outside a kind's row
 // refused, a required one missing refused, templates matched field by field with recipients a subset, an agent only
 // raising risk, every server path held to its column, and the descriptor lint that keeps the table and record.proto
-// in step.
+// in step. The kinds QD-740 opened build here too: a publish, a listen and an expose at version 1 with no local port,
+// weight or ALPN, a listen naming its socket by grant_dst alone (QD-772), and a forward at version 4 with its port
+// sealed. QD-799's egress_change builds with its subject, mode and exits, and every parser holds its exits' shape.
 
 package sidecar
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
+
+// The sidecar a test's forward dials, as grant_dst names it.
+const testActionTargetDst = "sidecar:5152535455565758595a5b5c5d5e5f60"
+
+// The network a test's actions are filed in, which their details are sealed to (QD-771).
+func testActionDetailNetworkId() Id {
+	return testConfigId("network")
+}
+
+// The key generation a test's details are sealed under.
+const testActionDetailGeneration = 3
+
+// The AEAD nonce a test seals a detail with, fixed so a vector's bytes hold.
+func testActionDetailRandom() *bytes.Reader {
+	return bytes.NewReader(bytes.Repeat([]byte{0x24}, 24))
+}
+
+// detail sealed for clear's sealed_detail as a daemon seals it (NewSealedCanonicalAction), under the test key and a
+// fixed nonce: bound to clear's own fields as the builder stores them, sealed_detail left out and the version fixed,
+// in the test's network (CanonicalActionDetailSealContext). Sealed for any action, one the builder refuses included,
+// so a test of a parser's refusal carries a detail of the same form.
+func testSealActionDetail(clear *protocol.CanonicalAction, detail *protocol.CanonicalActionDetail) []byte {
+	clearBytes, err := canonicalActionClearBytes(clear)
+	if err != nil {
+		panic(err)
+	}
+	sealContext, err := CanonicalActionDetailSealContext(testActionDetailNetworkId(), clearBytes)
+	if err != nil {
+		panic(err)
+	}
+	sealed, err := SealConfigBody(testConfigSealKey(testActionDetailGeneration), sealContext, detail, testActionDetailRandom())
+	if err != nil {
+		panic(err)
+	}
+	return sealed
+}
+
+// action with detail sealed into its sealed_detail (testSealActionDetail), in place, answering action.
+func testWithSealedDetail(action *protocol.CanonicalAction, detail *protocol.CanonicalActionDetail) *protocol.CanonicalAction {
+	action.SealedDetail = testSealActionDetail(action, detail)
+	return action
+}
+
+// What the test's forward seals: its target's port, and the port's text in §8.4's grammar.
+func testForwardDetail() *protocol.CanonicalActionDetail {
+	return &protocol.CanonicalActionDetail{TargetPort: 8443, GrantDst: []string{testActionTargetDst + ":tcp:8443"}}
+}
 
 // One full action of each kind the builder takes, as a daemon fills them: synthetic values only.
 func testBuildableActions() map[string]*protocol.CanonicalAction {
 	repoId := bytes.Repeat([]byte{0x41}, 16)
+	ruleId := bytes.Repeat([]byte{0x46}, 16)
+	subject := bytes.Repeat([]byte{0x47}, 16)
 	return map[string]*protocol.CanonicalAction{
+		"tls_publish": {
+			Kind:           uint32(SidecarActionPublish),
+			Host:           "blog.example",
+			Port:           443,
+			Audience:       uint32(protocol.AclAudience_ACL_AUDIENCE_LINK),
+			AppMode:        uint32(protocol.AclAppMode_ACL_APP_MODE_RAW),
+			ExpiresMillis:  1762387200000,
+			GrantDst:       []string{"dns:blog.example"},
+			GrantAllow:     []string{"publish"},
+			RuleId:         ruleId,
+			Subject:        subject,
+			LinkSpkiSha256: bytes.Repeat([]byte{0x48}, 32),
+		},
+		"socket_listen": {
+			Kind:          uint32(SidecarActionListen),
+			ExpiresMillis: 1762387200000,
+			GrantDst:      []string{"sock:tls/443/blog"},
+			GrantAllow:    []string{"listen"},
+			RuleId:        ruleId,
+			Subject:       subject,
+		},
+		"bridge_forward": testWithSealedDetail(&protocol.CanonicalAction{
+			Kind:          uint32(SidecarActionForward),
+			ExpiresMillis: 1762387200000,
+			GrantDst:      []string{testActionTargetDst},
+			GrantAllow:    []string{"dial"},
+			RuleId:        ruleId,
+			Subject:       subject,
+		}, testForwardDetail()),
+		"bridge_expose": {
+			Kind:            uint32(SidecarActionExpose),
+			ExpiresMillis:   1762387200000,
+			Cidrs:           []string{"192.0.2.0/24"},
+			TargetSidecarId: bytes.Repeat([]byte{0x49}, 16),
+			TargetPort:      8080,
+		},
 		"mail_send": {
 			Kind:       uint32(SidecarActionMail),
 			Recipients: []string{"alice@example.com", "bob@example.net"},
@@ -72,6 +162,17 @@ func testBuildableActions() map[string]*protocol.CanonicalAction {
 			RestorePaths:     []string{"scripts/deploy.sh"},
 			RestorePreviewId: bytes.Repeat([]byte{0x45}, 32),
 		},
+		"mail_tls_unauthenticated": {
+			Kind:          uint32(SidecarActionMailTlsUnauthenticated),
+			Host:          "mail.example",
+			ExpiresMillis: 1762387200000,
+		},
+		"egress_change": {
+			Kind:       uint32(SidecarActionEgressChange),
+			Subject:    subject,
+			EgressMode: uint32(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS),
+			GrantDst:   []string{"sidecar:4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a", "sidecar:4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b"},
+		},
 	}
 }
 
@@ -85,8 +186,8 @@ func buildTestAction(t *testing.T, action *protocol.CanonicalAction) *StoredCano
 	return stored
 }
 
-// Every buildable kind builds at version 1, its bytes parse as the verifiers take them, and the caller's message is
-// left as it was.
+// Every buildable kind builds at its row's version, 1 but for a forward's sealed grant at 4, its bytes parse as the
+// verifiers take them, and the caller's message is left as it was.
 func TestEveryBuildableKindBuilds(t *testing.T) {
 	for name, action := range testBuildableActions() {
 		before := proto.Clone(action)
@@ -95,7 +196,11 @@ func TestEveryBuildableKindBuilds(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 			continue
 		}
-		if stored.Action.GetVersion() != 1 {
+		want := uint32(1)
+		if name == "bridge_forward" {
+			want = canonicalActionVersionSealedGrant
+		}
+		if stored.Action.GetVersion() != want {
 			t.Errorf("%s: version %d", name, stored.Action.GetVersion())
 		}
 		if _, err := ParseStoredCanonicalAction(stored.Bytes); err != nil {
@@ -118,7 +223,7 @@ func TestFieldOutsideKindRefused(t *testing.T) {
 		fields := message.Descriptor().Fields()
 		for i := 0; i < fields.Len(); i += 1 {
 			field := fields.Get(i)
-			if row.allows(field.Number(), 1) {
+			if row.allows(field.Number(), row.Versions[0]) {
 				continue
 			}
 			widened := proto.Clone(action).(*protocol.CanonicalAction)
@@ -159,16 +264,157 @@ func TestRequiredFieldMissingRefused(t *testing.T) {
 			if _, err := NewCanonicalAction(missing); !errors.Is(err, ErrCanonicalActionInvalid) {
 				t.Errorf("%s without field %d answered %v", name, number, err)
 			}
-			// a template may leave it empty: an empty field matches anything
+			// a template may leave it empty: an empty field matches anything, unless the row has a template fill it
 			missing.Scope = true
-			if _, err := NewCanonicalAction(missing); err != nil {
+			_, err := NewCanonicalAction(missing)
+			if slices.Contains(row.TemplateRequired, number) {
+				if !errors.Is(err, ErrCanonicalActionInvalid) {
+					t.Errorf("%s template without field %d answered %v", name, number, err)
+				}
+			} else if err != nil {
 				t.Errorf("%s template without field %d: %v", name, number, err)
 			}
 		}
 	}
 }
 
-// A kind with no row, and the kinds question record-m2-01-canonical-action-detail holds, build nothing.
+// QD-729's row: mail_tls_unauthenticated's host is the recipient domain in its one form, so a trailing dot, a
+// capital, or anything that is not dot-separated LDH labels is refused rather than folded; the expiry is optional; a
+// template names its domain too, so none matches every domain; and no server path takes the kind.
+func TestTlsAllowanceHostIsHeldToItsForm(t *testing.T) {
+	for _, host := range []string{
+		"mail.example.", "Mail.example", "MAIL.EXAMPLE", "mail.Example", "mail..example", ".mail.example", "-mail.example",
+		"mail-.example", "mail example", "mail.example/25", "user@mail.example", "mail.exämple", "mail.example\n", ".",
+	} {
+		action := &protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Host: host}
+		if _, err := NewCanonicalAction(action); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("host %q answered %v", host, err)
+		}
+		action.Scope = true
+		if _, err := NewCanonicalAction(action); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("a template of host %q answered %v", host, err)
+		}
+	}
+	for _, host := range []string{"mail.example", "example", "a-b.c1.example", "xn--mnchen-3ya.example"} {
+		stored, err := NewCanonicalAction(&protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Host: host})
+		if err != nil {
+			t.Errorf("host %q: %v", host, err)
+			continue
+		}
+		if stored.Action.GetHost() != host || stored.Action.GetExpiresMillis() != 0 || stored.Action.GetVersion() != 1 {
+			t.Errorf("host %q built %+v", host, stored.Action)
+		}
+		if err := CheckCanonicalActionForServer(stored); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("a server path took the allowance: %v", err)
+		}
+	}
+	if _, err := NewCanonicalAction(&protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Scope: true}); !errors.Is(err, ErrCanonicalActionInvalid) {
+		t.Errorf("a template of every domain answered %v", err)
+	}
+	// the error names no domain, since a log may carry it (I-13)
+	_, err := NewCanonicalAction(&protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Host: "Secret.example"})
+	if err == nil || strings.Contains(strings.ToLower(err.Error()), "secret.example") {
+		t.Errorf("the refusal: %v", err)
+	}
+	// two domains are two actions, and one domain's two expiries are two
+	first := buildTestAction(t, &protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Host: "mail.example"})
+	other := buildTestAction(t, &protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Host: "other.example"})
+	ending := buildTestAction(t, &protocol.CanonicalAction{Kind: uint32(SidecarActionMailTlsUnauthenticated), Host: "mail.example", ExpiresMillis: 1762387200000})
+	if bytes.Equal(first.Bytes, other.Bytes) || bytes.Equal(first.Bytes, ending.Bytes) {
+		t.Error("two allowances share their bytes")
+	}
+}
+
+// An egress change (QD-799) builds with its subject and mode, and under exits with its exits, and every parser holds
+// its shape: a mode bridge.proto names, exits only under exits, sidecar:<id> entries or one tag:<id> alone, each id in
+// lowercase hex and none twice, and egress_mode on no other kind. Its render names the mode beside its number and says
+// what the route becomes, with no id in an error.
+func TestEgressChangeHoldsItsShape(t *testing.T) {
+	subject := bytes.Repeat([]byte{0x47}, 16)
+	exitA := "sidecar:4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a"
+	exitB := "sidecar:4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b"
+	tag := "tag:5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+	egress := func(mode bridge.BridgeEgressMode, grantDst ...string) *protocol.CanonicalAction {
+		return &protocol.CanonicalAction{Kind: uint32(SidecarActionEgressChange), Subject: subject, EgressMode: uint32(mode), GrantDst: grantDst}
+	}
+	for name, action := range map[string]*protocol.CanonicalAction{
+		"auto":           egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO),
+		"none":           egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE),
+		"exits by id":    egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, exitA, exitB),
+		"exits by a tag": egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, tag),
+	} {
+		stored, err := NewCanonicalAction(action)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if stored.Action.GetVersion() != 1 || CheckCanonicalActionForServer(stored) == nil {
+			t.Errorf("%s: version %d, or a server path took it", name, stored.Action.GetVersion())
+		}
+	}
+	for name, action := range map[string]*protocol.CanonicalAction{
+		"no mode":                 egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_UNSPECIFIED),
+		"a mode no proto names":   egress(bridge.BridgeEgressMode(7)),
+		"auto naming an exit":     egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_AUTO, exitA),
+		"none naming a tag":       egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE, tag),
+		"exits naming none":       egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS),
+		"a tag beside an id":      egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, exitA, tag),
+		"two tags":                egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, tag, "tag:5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b"),
+		"an exit twice":           egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, exitA, exitA),
+		"an exit in capitals":     egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, "sidecar:4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A4A"),
+		"a short exit":            egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, "sidecar:4a4a"),
+		"an exit of another kind": egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, "client:4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a"),
+		"a short subject": {
+			Kind: uint32(SidecarActionEgressChange), Subject: subject[:8], EgressMode: uint32(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_NONE),
+		},
+		"egress_mode on another kind": {Kind: uint32(SidecarActionDnsDelete), DnsName: "old", DnsType: "A", EgressMode: 1},
+	} {
+		if _, err := NewCanonicalAction(action); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("%s: the builder answered %v", name, err)
+		}
+		action.Version = 1
+		encoded, err := proto.Marshal(action)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = ParseStoredCanonicalAction(encoded)
+		if !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("%s: the parser answered %v", name, err)
+		}
+		if err != nil && (strings.Contains(err.Error(), "4a4a") || strings.Contains(err.Error(), "5a5a")) {
+			t.Errorf("%s: the refusal names an id: %v", name, err)
+		}
+	}
+
+	stored := buildTestAction(t, egress(bridge.BridgeEgressMode_BRIDGE_EGRESS_MODE_EXITS, exitA, exitB))
+	approvalId := Id(bytes.Repeat([]byte{0x51}, 16))
+	payloadSha256 := stored.PayloadSha256()
+	actionId := stored.ActionId(approvalId)
+	requestBytes, err := proto.Marshal(&protocol.ApprovalRequest{
+		ApprovalId: approvalId.Bytes(), ActionId: actionId[:], CanonicalAction: stored.Bytes, PayloadSha256: payloadSha256[:],
+		Risk: uint32(SidecarRiskNormal), RequesterSidecarId: subject, NotAfterMillis: 1762387200000, Version: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := ParseStoredApprovalRequest(requestBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	render := RenderApprovalRequest(request)
+	fields := map[string]string{}
+	for _, field := range render.Fields {
+		fields[field.Name] = field.Value
+	}
+	wantMeaning := "Send sidecar 47474747474747474747474747474747's internet traffic only through " + exitA + ", " + exitB + ", and refuse it public egress"
+	if render.KindName != "egress_change" || render.Meaning != wantMeaning || fields["egress_mode"] != "2 (exits)" ||
+		fields["subject"] != hex.EncodeToString(subject) || fields["grant_dst"] != exitA+", "+exitB || !strings.Contains(render.Text(), wantMeaning) {
+		t.Errorf("the render: %+v\n%s", render, render.Text())
+	}
+}
+
+// A kind with no row builds nothing, and neither does a publish, a listen, a forward, an expose or an egress change
+// that fills none of its row.
 func TestUnbuiltKindsRefused(t *testing.T) {
 	for _, kind := range []SidecarActionKind{
 		SidecarActionUnspecified, SidecarActionEgressChange, SidecarActionInvite, SidecarActionShare,
@@ -182,7 +428,7 @@ func TestUnbuiltKindsRefused(t *testing.T) {
 	// access_request's version 3 is unknown until MCP-M6-01
 	action := &protocol.CanonicalAction{
 		Kind:       uint32(SidecarActionAccessRequest),
-		GrantDst:   []string{"sidecar:0102030405060708090a0b0c0d0e0f10:tcp:22"},
+		GrantDst:   []string{"sidecar:0102030405060708090a0b0c0d0e0f10"},
 		GrantAllow: []string{"dial"},
 	}
 	if _, err := NewCanonicalAction(action); !errors.Is(err, ErrCanonicalActionVersionUnknown) {
@@ -216,7 +462,7 @@ func TestBuilderHoldsVersionsAndSizes(t *testing.T) {
 		t.Errorf("a short body hash answered %v", err)
 	}
 	long := proto.Clone(actions["mail_send"]).(*protocol.CanonicalAction)
-	long.Preview = string(bytes.Repeat([]byte{'p'}, canonicalActionPreviewMaxByteCount+1))
+	long.Preview = string(bytes.Repeat([]byte{'p'}, DefaultCanonicalActionSettings().PreviewMaxByteCount+1))
 	if _, err := NewCanonicalAction(long); !errors.Is(err, ErrCanonicalActionInvalid) {
 		t.Errorf("a long preview answered %v", err)
 	}
@@ -324,27 +570,51 @@ func TestServerPathsHoldToTheirColumns(t *testing.T) {
 	}
 }
 
-// The descriptor lint: every field CanonicalAction declares is claimed by a row, by every action, or by QD-064's
-// leaving list, so a field record.proto adds cannot go unbuilt or unrefused; field 37 is filled only at version 2; and
-// every row's fields exist.
+// The descriptor lint: every field CanonicalAction declares is claimed by a row or by every action, so a field
+// record.proto adds cannot go unbuilt or unrefused; local_port, weight, alpn and socket_name are gone from it, their
+// numbers reserved, and are ApprovalRequest's 14, 15, 16 and 17, which a row's request column names (QD-740, QD-772),
+// a row requiring only what its column names; field 37 is filled only at version 2 and field 38 only at the versions
+// that seal a detail; and every row's fields exist.
 func TestKindTableCoversTheDescriptor(t *testing.T) {
-	fields := (&protocol.CanonicalAction{}).ProtoReflect().Descriptor().Fields()
+	descriptor := (&protocol.CanonicalAction{}).ProtoReflect().Descriptor()
+	fields := descriptor.Fields()
 	claimed := map[protoreflect.FieldNumber]bool{}
 	for _, number := range canonicalActionCommonFields {
 		claimed[number] = true
 	}
-	for _, number := range canonicalActionLeavingFields {
-		claimed[number] = true
+	for _, number := range []protoreflect.FieldNumber{23, 24, 25, 34} {
+		if fields.ByNumber(number) != nil || !descriptor.ReservedRanges().Has(number) {
+			t.Errorf("field %d left CanonicalAction, and record.proto does not reserve it", number)
+		}
+	}
+	requestFields := (&protocol.ApprovalRequest{}).ProtoReflect().Descriptor().Fields()
+	for number, name := range map[protoreflect.FieldNumber]protoreflect.Name{
+		approvalRequestFieldLocalPort: "local_port", approvalRequestFieldWeight: "weight", approvalRequestFieldAlpn: "alpn",
+		approvalRequestFieldSocketName: "socket_name",
+	} {
+		if field := requestFields.ByNumber(number); field == nil || field.Name() != name {
+			t.Errorf("ApprovalRequest's field %d is not %s", number, name)
+		}
+		if !slices.Contains(approvalRequestDetailFields, number) {
+			t.Errorf("ApprovalRequest's field %d is no detail field", number)
+		}
 	}
 	for _, row := range canonicalActionKindRows {
-		for _, number := range slices.Concat(row.Required, row.Optional, row.Version2, row.Server) {
+		for _, number := range slices.Concat(row.Required, row.Optional, row.Version2, row.Server, row.TemplateRequired) {
 			if fields.ByNumber(number) == nil {
 				t.Errorf("kind %d names field %d, which CanonicalAction lacks", row.Kind, number)
 			}
-			if slices.Contains(canonicalActionLeavingFields, number) {
-				t.Errorf("kind %d fills field %d, which leaves CanonicalAction", row.Kind, number)
-			}
 			claimed[number] = true
+		}
+		for _, number := range row.Request {
+			if !slices.Contains(approvalRequestDetailFields, number) {
+				t.Errorf("kind %d's request binds field %d, which is none of socket_name, local_port, weight and alpn", row.Kind, number)
+			}
+		}
+		for _, number := range row.RequestRequired {
+			if !slices.Contains(row.Request, number) {
+				t.Errorf("kind %d's request requires field %d, which its request column does not name", row.Kind, number)
+			}
 		}
 		if slices.Contains(slices.Concat(row.Required, row.Optional), canonicalActionFieldVersioning) {
 			t.Errorf("kind %d fills field 37 outside version 2", row.Kind)
@@ -352,11 +622,19 @@ func TestKindTableCoversTheDescriptor(t *testing.T) {
 		if 0 < len(row.Version2) && !slices.Contains(row.Versions, 2) {
 			t.Errorf("kind %d has version-2 fields and no version 2", row.Kind)
 		}
-		// a held kind's builder fields and its server column disagree, which is what its question asks: a forward's
-		// grant shows 8, 10, 11, 28 and 29 to api (QD-064) while MCP.md's row fills 26 and 27
-		for _, number := range row.Server {
-			if row.Held == "" && !row.allows(number, row.Versions[0]) && !slices.Contains(row.Version2, number) {
-				t.Errorf("kind %d lets a server see field %d, which it never fills", row.Kind, number)
+		sealedVersion := slices.Contains(row.Versions, canonicalActionVersionAccessRequest) || slices.Contains(row.Versions, canonicalActionVersionSealedGrant)
+		if slices.Contains(slices.Concat(row.Required, row.Optional), canonicalActionFieldSealedDetail) != sealedVersion {
+			t.Errorf("kind %d fills field 38 outside versions 3 and 4, or takes one of them without it", row.Kind)
+		}
+		for _, number := range slices.Concat(row.Server, row.TemplateRequired) {
+			if !row.allows(number, row.Versions[0]) && !slices.Contains(row.Version2, number) {
+				t.Errorf("kind %d lets a server see, or has a template fill, field %d, which it never fills", row.Kind, number)
+			}
+		}
+		// no server path sees a prefix or a target's port in the clear (owner decision 220)
+		for _, number := range []protoreflect.FieldNumber{9, 27} {
+			if slices.Contains(row.Server, number) {
+				t.Errorf("kind %d lets a server see field %d", row.Kind, number)
 			}
 		}
 	}

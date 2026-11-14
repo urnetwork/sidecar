@@ -243,7 +243,7 @@ func TestACachedKeyIsTrustedOnlyWhileItIsTheVerifiedOne(t *testing.T) {
 
 func TestProductionShapesHaveDistinctKeySetNames(t *testing.T) {
 	seen := map[string]bool{}
-	for _, circuit := range productionKeySetCircuits() {
+	for _, circuit := range productionKeySetCircuits(DefaultProofSettings()) {
 		if seen[circuit.name] {
 			t.Errorf("%s twice", circuit.name)
 		}
@@ -259,8 +259,8 @@ func TestAKeySetProvesARealEhlo(t *testing.T) {
 		t.Skip("set SMTPPROOF_FULL to run a ceremony at a real shape's size")
 	}
 	testNeedCircuits(t)
-	shape := partShapes()[1]
-	circuits := []*keySetCircuit{productionKeySetCircuits()[1]}
+	shape := partShapes(DefaultProofSettings())[1]
+	circuits := []*keySetCircuit{productionKeySetCircuits(DefaultProofSettings())[1]}
 	directory := t.TempDir()
 	pin, err := runKeySetSetup(context.Background(), directory, []byte("a synthetic beacon"), circuits)
 	if err != nil {
@@ -280,7 +280,7 @@ func TestAKeySetProvesARealEhlo(t *testing.T) {
 		t.Fatal(err)
 	}
 	statement, witness := testBdatCapture(t, testTlsLegs()[1]).part(t, 1)
-	if found, err := partShapeFor(statement); err != nil || *found != *shape {
+	if found, err := partShapeFor(DefaultProofSettings(), statement); err != nil || *found != *shape {
 		t.Fatalf("pi1 fits %+v, %v", found, err)
 	}
 	proof, err := prover.backend.provePart(context.Background(), statement, witness)
@@ -297,11 +297,13 @@ func TestAKeySetRefusesAManifestOutOfShape(t *testing.T) {
 	// before anything reads a file it names
 	for name, edit := range map[string]func(manifest *keySetManifest){
 		"a hash that walks out of the cache": func(manifest *keySetManifest) { manifest.Shapes[0].ProvingKey.Sha256 = "../../outside" },
-		"an upper-case hash":                 func(manifest *keySetManifest) { manifest.Shapes[0].VerifyingKey.Sha256 = strings.ToUpper(manifest.Shapes[0].VerifyingKey.Sha256) },
-		"no proving key":                     func(manifest *keySetManifest) { manifest.Shapes[0].ProvingKey = nil },
-		"no contribution":                    func(manifest *keySetManifest) { manifest.Shapes[1].Contributions = nil },
-		"a shape twice":                      func(manifest *keySetManifest) { manifest.Shapes[1].Name = manifest.Shapes[0].Name },
-		"a phase 1 with no contribution":     func(manifest *keySetManifest) { manifest.Phase1[0].Contributions = nil },
+		"an upper-case hash": func(manifest *keySetManifest) {
+			manifest.Shapes[0].VerifyingKey.Sha256 = strings.ToUpper(manifest.Shapes[0].VerifyingKey.Sha256)
+		},
+		"no proving key":                 func(manifest *keySetManifest) { manifest.Shapes[0].ProvingKey = nil },
+		"no contribution":                func(manifest *keySetManifest) { manifest.Shapes[1].Contributions = nil },
+		"a shape twice":                  func(manifest *keySetManifest) { manifest.Shapes[1].Name = manifest.Shapes[0].Name },
+		"a phase 1 with no contribution": func(manifest *keySetManifest) { manifest.Phase1[0].Contributions = nil },
 	} {
 		keySet, _ := testKeySet(t)
 		encoded, err := os.ReadFile(filepath.Join(keySet.directory, keySetManifestName))

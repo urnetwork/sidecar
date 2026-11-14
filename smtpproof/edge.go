@@ -27,6 +27,8 @@ import (
 
 // What an edgeSession may hold. Start from defaultEdgeSettings.
 type edgeSettings struct {
+	// The proofs' catalog and limits: the shapes a part may take, and how many parts and records.
+	proof *ProofSettings
 	// Client octets held for a part still proving. An honest sidecar paces records behind its proofs,
 	// so this bounds a hostile one. A DATA part can hold a whole 2-minute part, hence 256 KiB.
 	maxHeldBytes int
@@ -39,6 +41,7 @@ type edgeSettings struct {
 
 func defaultEdgeSettings() *edgeSettings {
 	return &edgeSettings{
+		proof:             DefaultProofSettings(),
 		maxHeldBytes:      256 * 1024,
 		maxServerBytes:    256 * 1024,
 		maxHandshakeBytes: 256 * 1024,
@@ -88,6 +91,14 @@ type edgePart struct {
 	statement *partStatement
 	// Each opened record by sequence number.
 	openedRecords map[uint64]*edgeOpenedRecord
+	// The commands it opens, which the MX answers: EHLO, MAIL, RCPT, DATA.
+	commands uint32
+	// Whether it opens a header or body record, whose carry the gate keeps; and whether that is the
+	// header block's last, after which a scan starts again.
+	opensScan       bool
+	opensLastHeader bool
+	// Whether it opens the header block's first record, and so names k.
+	namesHeaderCount bool
 	// DATA octets declared through the end of this part.
 	dataOctets uint64
 	// partCommits when its order checks ran.
@@ -128,6 +139,21 @@ type edgeSession struct {
 	serverFinishedRecord []byte
 
 	session *sessionStatement
+	// The key set the session's preamble named, which every part verifies under (DESIGN-DETAILS 3.2.7).
+	keySet []byte
+	// C, from the key part once it lands: the commitment every later part's statement takes, and never a
+	// value a later part carries (DESIGN-DETAILS 3.2.5).
+	keyCommitment []byte
+	// The gate over parts (3.2.5): the next client record a part opens; the replies verified parts proved
+	// and the commands they opened; the mode part 2 named; k, as the part that opened the header block's
+	// first record named it; the carry the next scan opens; DATA's octets so far.
+	nextRecord      uint64
+	repliesProven   uint32
+	commandsCovered uint32
+	mode            uint32
+	headerRecords   uint32
+	carry           []byte
+	dataOctets      uint64
 
 	// E3.
 	serverRecords     [][]byte
@@ -571,6 +597,7 @@ func (self *edgeSession) serverFinished12WithLock(record []byte) error {
 	// the client's Finished took sequence number 0 in each direction
 	self.firstSeq = 1
 	self.nextClientSeq = 1
+	self.nextRecord = 1
 	self.phase = edgePhaseApplication
 	return nil
 }
@@ -760,17 +787,20 @@ func (self *edgeSession) clientApplicationWithLock(record []byte) ([][]byte, err
 	return self.releaseWithLock()
 }
 
-// The verified part covering a client sequence number, if any.
+// The verified part covering a client sequence number, if any. A part that opens no client record
+// covers none.
 func (self *edgeSession) coveringPartWithLock(seq uint64) *edgePart {
 	for _, part := range self.parts {
-		if part.part.FirstRecord <= seq && seq <= part.part.LastRecord {
+		if 0 < len(part.part.Records) && part.part.FirstRecord <= seq && seq <= part.part.LastRecord {
 			return part
 		}
 	}
 	return nil
 }
 
-// Runs E3 over held records in order, returning those now cleared for the MX.
+// Runs E3 over held records in order, returning those now cleared for the MX (DESIGN-DETAILS 3.2.5 step
+// 16): each leaves while a part covers it, equal to the ciphertext that part proved if opened, keeping
+// BDAT's chunk within octet n, and, a message record, only when every relayed server record is covered.
 func (self *edgeSession) releaseWithLock() ([][]byte, error) {
 	var forward [][]byte
 	for 0 < len(self.heldRecords) {
@@ -797,13 +827,13 @@ func (self *edgeSession) releaseWithLock() ([][]byte, error) {
 		if self.preamble.messageByteCount < self.chunkOctets+carried {
 			return nil, edgeCut("a chunk record passes octet %d", self.preamble.messageByteCount)
 		}
-		// held, never cut: a later part, or this one proven again, may clear it (E3 step 5)
+		// held, never cut: a later part, which may open no client record, clears it (E3 step 5)
 		if (!isOpened || opened.message) && self.coveredServer < uint64(len(self.serverRecords)) {
 			return forward, nil
 		}
 		self.chunkOctets += carried
 		if isOpened && opened.quit {
-			if part.part.Mode == partModeBdat && self.chunkOctets != self.preamble.messageByteCount {
+			if self.mode == partModeBdat && self.chunkOctets != self.preamble.messageByteCount {
 				return nil, edgeCut("BDAT's chunk holds %d octets at QUIT, want %d", self.chunkOctets, self.preamble.messageByteCount)
 			}
 			self.finished = true
@@ -843,90 +873,58 @@ func (self *edgeSession) contentBytes(record []byte) (int, error) {
 	return len(ciphertext), nil
 }
 
-// Runs the part-order rules of SPEC.md section 6, and builds the statement. It returns nil, nil for
-// an exact resend of a part already verified.
+// Whether two parts are the same part, field for field and octet for octet: an exact resend.
+func edgePartsEqual(a *sidecar.SmtpProofPart, b *sidecar.SmtpProofPart) bool {
+	return bytes.Equal(a.SendId, b.SendId) && a.Index == b.Index && a.Mode == b.Mode &&
+		a.FirstRecord == b.FirstRecord && a.LastRecord == b.LastRecord && bytes.Equal(a.Proof, b.Proof) &&
+		a.Last == b.Last && a.ServerRecordCount == b.ServerRecordCount &&
+		slices.EqualFunc(a.Records, b.Records, bytes.Equal) && bytes.Equal(a.KeyCommitment, b.KeyCommitment) &&
+		a.ReplyCount == b.ReplyCount && a.HeaderRecordCount == b.HeaderRecordCount && bytes.Equal(a.Carry, b.Carry)
+}
+
+// DESIGN-DETAILS 3.2.5's steps 2 to 12, under stateLock: the part's order, ranges, roles, counts,
+// lengths and carry, then its shape and the statement it verifies against, built from the gate's state
+// and never from the part. It returns no part and no error for an exact resend of the latest, which is a
+// no-op. Any refusal ends the session.
 func (self *edgeSession) preparePartWithLock(part *sidecar.SmtpProofPart) (*edgePart, error) {
-	// a part may overtake the client's Finished, whose stream it is not ordered against; it can only
-	// verify once the session's inputs exist, and clears nothing until then
+	proof := self.settings.proof
+	// 2: a part may overtake the client's Finished, whose stream it is not ordered against; it can only
+	// verify once the session's inputs exist
 	if self.session == nil {
 		return nil, edgeRefuse(checkE3, "part before the handshake finished")
 	}
-	var latest *edgePart
-	if 0 < len(self.parts) {
-		latest = self.parts[len(self.parts)-1]
-	}
-	replacing := latest != nil && part.Index == latest.part.Index
+	// 3: an exact resend of the latest is a no-op, and nothing else replaces a verified part
 	switch {
-	case part.Index == 0:
-		return nil, edgeRefuse(checkE3, "part index 0")
-	case latest == nil && part.Index != 1:
-		return nil, edgeRefuse(checkE3, "the first part is pi1")
-	case latest != nil && !replacing && part.Index != latest.part.Index+1:
-		return nil, edgeRefuse(checkE3, "part %d after part %d", part.Index, latest.part.Index)
-	case latest != nil && latest.part.Last && !replacing:
-		return nil, edgeRefuse(checkE3, "a part after the last")
-	}
-	if replacing && bytes.Equal(part.Proof, latest.part.Proof) && part.ServerRecordCount == latest.part.ServerRecordCount {
-		return nil, nil
-	}
-	if replacing {
-		// the new proof may only cover more of the server's side: records of the original may already
-		// have gone to the MX, so what it opens cannot change
-		original := latest.part
-		if part.ServerRecordCount <= original.ServerRecordCount {
-			return nil, edgeRefuse(checkE3, "a part proven again must cover later server records")
+	case part.Index != 0 && int(part.Index) == len(self.parts):
+		if edgePartsEqual(part, self.parts[len(self.parts)-1].part) {
+			return nil, nil
 		}
-		if part.FirstRecord != original.FirstRecord || part.LastRecord != original.LastRecord ||
-			part.Mode != original.Mode || part.Last != original.Last ||
-			!slices.EqualFunc(part.Records, original.Records, bytes.Equal) {
-			return nil, edgeRefuse(checkE3, "a part proven again must open the same records")
-		}
+		return nil, edgeRefuse(checkE3, "part %d changed after it was verified", part.Index)
+	case int(part.Index) != len(self.parts)+1:
+		return nil, edgeRefuse(checkE3, "part %d after part %d", part.Index, len(self.parts))
+	case proof.PartMaxCount < int(part.Index):
+		return nil, edgeRefuse(checkE3, "more than %d parts", proof.PartMaxCount)
 	}
-	if part.Index == 1 && part.Mode != partModeNone {
-		return nil, edgeRefuse(checkE3, "pi1 carries no mode")
-	}
-	if 2 <= part.Index {
-		if part.Mode != partModeBdat && part.Mode != partModeData {
-			return nil, edgeRefuse(checkE3, "unknown mode %d", part.Mode)
+	finished := 0 < len(self.parts) && self.parts[len(self.parts)-1].part.Last
+
+	// 4: the key part opens EHLO and carries C; no other part carries a key commitment
+	if part.Index == 1 {
+		if len(part.Records) != 1 || part.FirstRecord != self.firstSeq || part.LastRecord != self.firstSeq ||
+			part.Mode != partModeNone || part.ServerRecordCount != 0 || part.ReplyCount != 0 ||
+			part.HeaderRecordCount != 0 || len(part.Carry) != 0 || part.Last {
+			return nil, edgeRefuse(checkE3, "the key part opens the EHLO record alone, and covers and names nothing else")
 		}
-		if 2 < part.Index && part.Mode != self.parts[1].part.Mode {
-			return nil, edgeRefuse(checkE3, "mode changed after pi2")
+		if _, err := decodeCommitment(part.KeyCommitment); err != nil {
+			return nil, edgeRefuse(checkE3, "the key part's commitment: %v", err)
 		}
+	} else if len(part.KeyCommitment) != 0 {
+		return nil, edgeRefuse(checkE3, "part %d carries a key commitment", part.Index)
 	}
 
-	// which part this one follows: a replacement follows what its original followed
-	var previous *edgePart
-	if replacing {
-		if 2 <= len(self.parts) {
-			previous = self.parts[len(self.parts)-2]
-		}
-	} else {
-		previous = latest
+	// 5: the client range, from the next record on, or none
+	if part.FirstRecord != self.nextRecord {
+		return nil, edgeRefuse(checkE3, "part starts at record %d, want %d", part.FirstRecord, self.nextRecord)
 	}
-	firstRecord := self.firstSeq
-	previousCount := uint64(0)
-	previousDataOctets := uint64(0)
-	if previous != nil {
-		firstRecord = previous.part.LastRecord + 1
-		previousCount = previous.part.ServerRecordCount
-		previousDataOctets = previous.dataOctets
-	}
-	if part.FirstRecord != firstRecord {
-		return nil, edgeRefuse(checkE3, "part starts at record %d, want %d", part.FirstRecord, firstRecord)
-	}
-	if part.LastRecord < part.FirstRecord || len(part.Records) == 0 {
-		return nil, edgeRefuse(checkE3, "part covers no record")
-	}
-	if part.ServerRecordCount < previousCount {
-		return nil, edgeRefuse(checkE3, "server_record_count fell")
-	}
-	if uint64(len(self.serverRecords)) < part.ServerRecordCount {
-		return nil, edgeRefuse(checkE3, "part covers server records never relayed")
-	}
-	if part.Index == 1 && part.ServerRecordCount != 0 {
-		return nil, edgeRefuse(checkE3, "pi1 covers no server record")
-	}
-
 	statement := &partStatement{
 		session:                   self.session,
 		index:                     part.Index,
@@ -934,45 +932,142 @@ func (self *edgeSession) preparePartWithLock(part *sidecar.SmtpProofPart) (*edge
 		firstRecord:               part.FirstRecord,
 		lastRecord:                part.LastRecord,
 		last:                      part.Last,
-		previousServerRecordCount: previousCount,
+		previousServerRecordCount: self.coveredServer,
 		serverRecordCount:         part.ServerRecordCount,
+		replyCount:                part.ReplyCount,
+		repliesProven:             self.repliesProven,
+		headerRecordCount:         self.headerRecords,
 	}
-	for i, record := range part.Records {
-		if err := edgeCheckFraming(record); err != nil {
-			return nil, err
+	if len(part.Records) == 0 {
+		if part.LastRecord+1 != part.FirstRecord || part.Last {
+			return nil, edgeRefuse(checkE3, "a part that opens no record has last_record = first_record - 1, and is not the last")
 		}
-		// the outer type is public and the circuit sees only ciphertext, so this is the gate's to check
-		// before any verification, as for a template no plaintext fills: such a record could never equal
-		// one E1 lets through, and Z3 has nothing else to say of it in 1.2
-		if record[0] != tlsRecordApplicationData {
-			return nil, edgeRefuse(checkE3, "a part's record %d is not application_data", i)
+	} else {
+		if finished {
+			return nil, edgeRefuse(checkE3, "after the last part, only a part that opens no record")
 		}
-		seq := part.FirstRecord + uint64(i)
-		if part.Mode == partModeBdat && 3 <= part.Index && i == len(part.Records)-1 {
-			seq = part.LastRecord
+		if proof.PartRecordMaxCount < len(part.Records) {
+			return nil, edgeRefuse(checkE3, "a part opens at most %d records", proof.PartRecordMaxCount)
 		}
-		statement.clientRecords = append(statement.clientRecords, &partRecord{seq: seq, raw: record})
+		for i, record := range part.Records {
+			if err := edgeCheckFraming(record); err != nil {
+				return nil, err
+			}
+			// the outer type is public and the circuit sees only ciphertext, so this is the gate's to check
+			// before any verification: such a record could never equal one E1 lets through
+			if record[0] != tlsRecordApplicationData {
+				return nil, edgeRefuse(checkE3, "a part's record %d is not application_data", i)
+			}
+			seq := part.FirstRecord + uint64(i)
+			// BDAT's last part carries QUIT alone at last_record, past the unopened body
+			if part.Mode == partModeBdat && part.Last && i == len(part.Records)-1 {
+				if part.LastRecord < seq {
+					return nil, edgeRefuse(checkE3, "QUIT before the part's other records")
+				}
+				seq = part.LastRecord
+			}
+			statement.clientRecords = append(statement.clientRecords, &partRecord{seq: seq, raw: record})
+		}
+		if statement.clientRecords[len(statement.clientRecords)-1].seq != part.LastRecord {
+			return nil, edgeRefuse(checkE3, "part's records do not reach last_record")
+		}
 	}
-	for i := previousCount; i < part.ServerRecordCount; i += 1 {
+
+	// 6: the server range, from what is covered, at most what was relayed
+	if part.ServerRecordCount < self.coveredServer {
+		return nil, edgeRefuse(checkE3, "server_record_count fell")
+	}
+	if uint64(len(self.serverRecords)) < part.ServerRecordCount {
+		return nil, edgeRefuse(checkE3, "part covers server records never relayed")
+	}
+	if len(part.Records) == 0 && part.ServerRecordCount == self.coveredServer {
+		return nil, edgeRefuse(checkE3, "a part that opens no record covers at least one more server record")
+	}
+	for i := self.coveredServer; i < part.ServerRecordCount; i += 1 {
 		statement.serverRecords = append(statement.serverRecords, &partRecord{seq: self.firstSeq + i, raw: self.serverRecords[i]})
 	}
-	// a record may not be proven at a position past the part's last
-	if statement.clientRecords[len(statement.clientRecords)-1].seq != part.LastRecord {
-		return nil, edgeRefuse(checkE3, "part's records do not reach last_record")
+
+	// 7: part 2 names the mode, and every later part repeats it
+	switch {
+	case part.Index == 2 && part.Mode != partModeBdat && part.Mode != partModeData:
+		return nil, edgeRefuse(checkE3, "unknown mode %d", part.Mode)
+	case 2 < part.Index && part.Mode != self.mode:
+		return nil, edgeRefuse(checkE3, "mode changed after part 2")
 	}
-	// BDAT's QUIT names its own number, and at one the head already holds it would take that record's
-	// place in openedRecords: the stream would then pass with no header block behind it
-	for i := 1; i < len(statement.clientRecords); i += 1 {
-		if statement.clientRecords[i].seq <= statement.clientRecords[i-1].seq {
-			return nil, edgeRefuse(checkE3, "part's records are not in sequence order")
-		}
+
+	// 8: roles by position and the part's kind; k on the part that opens the header block's first record
+	recipients := uint64(self.preamble.recipientCount)
+	headerFirst := self.firstSeq + 3 + recipients
+	opensHeaderFirst := 1 < part.Index && slices.ContainsFunc(statement.clientRecords, func(record *partRecord) bool { return record.seq == headerFirst })
+	switch {
+	case opensHeaderFirst && (part.HeaderRecordCount < 1 || uint32(proof.HeaderRecordMaxCount) < part.HeaderRecordCount):
+		return nil, edgeRefuse(checkE3, "header_record_count %d is outside 1 to %d", part.HeaderRecordCount, proof.HeaderRecordMaxCount)
+	case !opensHeaderFirst && part.HeaderRecordCount != 0:
+		return nil, edgeRefuse(checkE3, "header_record_count on a part that does not open the header block's first record")
+	case opensHeaderFirst:
+		statement.headerRecordCount = part.HeaderRecordCount
 	}
 	roles, err := partRoles(statement)
 	if err != nil {
 		return nil, edgeRefuse(checkE3, "%v", err)
 	}
+	kind, err := partKindOf(statement, roles)
+	if err != nil {
+		return nil, edgeRefuse(checkE3, "%v", err)
+	}
 
-	gated := &edgePart{part: part, statement: statement, openedRecords: map[uint64]*edgeOpenedRecord{}, dataOctets: previousDataOctets, commits: self.partCommits}
+	// 9: replies, against the commands opened so far
+	gated := &edgePart{
+		part:             part,
+		statement:        statement,
+		openedRecords:    map[uint64]*edgeOpenedRecord{},
+		dataOctets:       self.dataOctets,
+		commits:          self.partCommits,
+		namesHeaderCount: opensHeaderFirst,
+	}
+	opensFirstMessage := false
+	for i, role := range roles {
+		switch role {
+		case recordRoleEhlo, recordRoleMail, recordRoleRcpt, recordRoleData:
+			gated.commands += 1
+		case recordRoleBdat:
+			opensFirstMessage = true
+		case recordRoleHeaderBlock:
+			gated.opensScan = true
+			ordinal := headerOrdinal(statement, statement.clientRecords[i].seq)
+			if ordinal == 1 && part.Mode == partModeData {
+				opensFirstMessage = true
+			}
+			if ordinal == int(statement.headerRecordCount) {
+				gated.opensLastHeader = true
+			}
+		case recordRoleBody:
+			gated.opensScan = true
+		}
+	}
+	coversMore := self.coveredServer < part.ServerRecordCount
+	switch {
+	case part.Index == 1:
+	case part.Index == 2:
+		if part.ReplyCount != 1 || !coversMore || len(roles) == 0 || roles[0] != recordRoleMail {
+			return nil, edgeRefuse(checkE3, "part 2 proves the EHLO reply alone, as one reply, and opens MAIL")
+		}
+	case self.commandsCovered-self.repliesProven < part.ReplyCount:
+		return nil, edgeRefuse(checkE3, "%d replies where %d commands are unanswered", part.ReplyCount, self.commandsCovered-self.repliesProven)
+	case !coversMore && part.ReplyCount != 0:
+		return nil, edgeRefuse(checkE3, "replies with no server record")
+	}
+	if opensFirstMessage {
+		want := uint64(2) + recipients
+		if part.Mode == partModeData {
+			want += 1
+		}
+		if uint64(self.repliesProven)+uint64(part.ReplyCount) != want {
+			return nil, edgeRefuse(checkE3, "the first message record before the envelope's %d replies are proven", want)
+		}
+	}
+
+	// 10: lengths: a template at each command's, the header records' least, and the declared count
 	for i, role := range roles {
 		record := statement.clientRecords[i]
 		contentBytes, err := self.contentBytes(record.raw)
@@ -989,6 +1084,18 @@ func (self *edgeSession) preparePartWithLock(part *sidecar.SmtpProofPart) (*edge
 			opened.message = true
 		case recordRoleHeaderBlock, recordRoleBody:
 			opened.message = true
+			if contentBytes <= 0 {
+				return nil, edgeRefuse(checkE3, "an empty message record")
+			}
+			if role == recordRoleHeaderBlock {
+				minimum := proof.HeaderRecordMinByteCount
+				if headerOrdinal(statement, record.seq) == int(statement.headerRecordCount) {
+					minimum = proof.HeaderLastRecordMinByteCount
+				}
+				if contentBytes < minimum {
+					return nil, edgeRefuse(checkE3, "a header record of %d octets, under %d", contentBytes, minimum)
+				}
+			}
 			if part.Mode == partModeBdat {
 				opened.chunkOctets = uint64(contentBytes)
 			} else {
@@ -1005,17 +1112,46 @@ func (self *edgeSession) preparePartWithLock(part *sidecar.SmtpProofPart) (*edge
 	if part.Mode == partModeData && part.Last && gated.dataOctets != self.preamble.messageByteCount {
 		return nil, edgeRefuse(checkE3, "the last DATA part leaves the octet count short")
 	}
+
+	// 11: a carry on a part that opens a header or body record, and on no other
+	if gated.opensScan {
+		if _, err := decodeCommitment(part.Carry); err != nil {
+			return nil, edgeRefuse(checkE3, "the part's carry: %v", err)
+		}
+	} else if len(part.Carry) != 0 {
+		return nil, edgeRefuse(checkE3, "a carry on a part that opens no header or body record")
+	}
+
+	// 12: the statement, from the gate's state: C, the carry the part opens, and the part's own
+	statement.keyCommitment = bytes.Clone(self.keyCommitment)
+	if part.Index == 1 {
+		statement.keyCommitment = bytes.Clone(part.KeyCommitment)
+	}
+	if kind == partKindHeader || kind == partKindBody {
+		statement.carryIn = bytes.Clone(self.carry)
+	}
+	statement.carryOut = bytes.Clone(part.Carry)
+	if kind == partKindBody && !gated.opensScan {
+		// an empty body's last part opens no body record and leaves the state as it was
+		statement.carryOut = bytes.Clone(self.carry)
+	}
+	if _, err := partShapeFor(proof, statement); err != nil {
+		return nil, edgeRefuse(checkE3, "no shape holds part %d: %v", part.Index, err)
+	}
 	return gated, nil
 }
 
-// VerifyPart of sidecar.SmtpProofSession. A failed proof ends the connection and is a cut (14.7),
-// unless the MX has already closed, which makes the part moot.
+// VerifyPart of sidecar.SmtpProofSession: DESIGN-DETAILS 3.2.5's gate, its fences in order. Each refusal
+// ends the session; a proof that fails to verify is a cut (14.7), unless the MX has already closed,
+// which makes the part moot. The verification runs with no lock held, and a part commits only if no
+// other landed meanwhile.
 func (self *edgeSession) VerifyPart(ctx context.Context, part *sidecar.SmtpProofPart) ([][]byte, error) {
 	var gated *edgePart
 	moot := false
 	err := func() error {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
+		// 1
 		if self.phase == edgePhaseEnded {
 			return errors.New("connection has ended")
 		}
@@ -1036,7 +1172,7 @@ func (self *edgeSession) VerifyPart(ctx context.Context, part *sidecar.SmtpProof
 		return nil, nil
 	}
 
-	// no lock held: this is the slow step, and server records may arrive during it
+	// 13: no lock held: this is the slow step, and server records may arrive during it
 	testHookBarrier("edge.verify.before", "")
 	err = self.verifier.verifyPart(ctx, gated.statement, part.Proof)
 	testHookBarrier("edge.verify.after", "")
@@ -1052,34 +1188,41 @@ func (self *edgeSession) VerifyPart(ctx context.Context, part *sidecar.SmtpProof
 	forward, err := func() ([][]byte, error) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
-		// a refusal elsewhere while this verified ended the gate, and it releases nothing after one
+		// 14: a refusal elsewhere while this verified ended the gate, and it releases nothing after one;
+		// and the checks above stand only if no part landed since
 		if self.phase == edgePhaseEnded {
 			return nil, errors.New("connection has ended")
 		}
-		// the order checks ran against what stood before this verification. A part that landed since has
-		// taken this index, so only an exact resend of that part may pass, as a no-op: anything else
-		// would change what the gate holds with none of a replacement's checks
 		if gated.commits != self.partCommits {
-			again, err := self.preparePartWithLock(part)
-			if err != nil {
-				self.endWithLock()
-				return nil, err
-			}
-			if again != nil {
-				self.endWithLock()
-				return nil, edgeRefuse(checkE3, "part %d arrived while another verified", part.Index)
-			}
-			return nil, nil
+			self.endWithLock()
+			return nil, edgeRefuse(checkE3, "part %d verified while another landed", part.Index)
 		}
+		// 15
+		self.parts = append(self.parts, gated)
 		self.partCommits += 1
-		if 0 < len(self.parts) && self.parts[len(self.parts)-1].part.Index == part.Index {
-			self.parts[len(self.parts)-1] = gated
-		} else {
-			self.parts = append(self.parts, gated)
+		if part.Index == 1 {
+			self.keyCommitment = bytes.Clone(part.KeyCommitment)
 		}
-		if self.coveredServer < part.ServerRecordCount {
-			self.coveredServer = part.ServerRecordCount
+		if 0 < len(part.Records) {
+			self.nextRecord = part.LastRecord + 1
 		}
+		self.coveredServer = part.ServerRecordCount
+		self.repliesProven += part.ReplyCount
+		self.commandsCovered += gated.commands
+		if part.Index == 2 {
+			self.mode = part.Mode
+		}
+		if gated.namesHeaderCount {
+			self.headerRecords = part.HeaderRecordCount
+		}
+		if gated.opensScan {
+			self.carry = bytes.Clone(part.Carry)
+		}
+		if gated.opensLastHeader {
+			self.carry = scanStartCarry()
+		}
+		self.dataOctets = gated.dataOctets
+		// 16
 		forward, err := self.releaseWithLock()
 		if err != nil {
 			self.endWithLock()
@@ -1092,11 +1235,10 @@ func (self *edgeSession) VerifyPart(ctx context.Context, part *sidecar.SmtpProof
 	return forward, err
 }
 
-// MailForwarded of sidecar.SmtpProofSession: whether the gate has handed its caller the MAIL record,
-// pi2's first, which is when §14.7 charges the connection a unit.
+// MailForwarded of sidecar.SmtpProofSession: whether the gate has handed its caller the MAIL record, the
+// record at f+1, which is when §14.7 charges the connection a unit.
 func (self *edgeSession) MailForwarded() bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	// parts land in index order and a replacement keeps its place, so the second is pi2
-	return 2 <= len(self.parts) && self.parts[1].part.FirstRecord < self.handedClientSeq
+	return self.firstSeq+1 < self.handedClientSeq
 }

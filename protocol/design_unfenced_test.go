@@ -82,6 +82,13 @@ message RepoRestore { StatementHeader header = 1; bytes repo_id = 2; bytes delet
 message RepoVersioning {
   StatementHeader header = 1; bytes repo_id = 2; RepoVersioningLock lock = 3; bytes sealed_rules = 4;
 }
+// QD-212's statement as DESIGN-DETAILS 16.2.2 writes it, with the plaintext its sealed_rules opens to and the row
+// AclRepo.prefix_rules folds (16.2.3), which design-records writes into §8.8 (16.8).
+message RepoPrefixRules { StatementHeader header = 1; bytes repo_id = 2; bytes sealed_rules = 3; }
+message PrefixRuleSet { repeated PrefixRule rules = 1; }
+message PrefixRule { bytes subject = 1; repeated bytes path = 2; PrefixAction action = 3; }
+enum PrefixAction { PREFIX_ACTION_UNSPECIFIED = 0; PREFIX_ACTION_WRITE = 1; }
+message AclRepoPrefixRulesRow { bytes signer = 1; uint64 at = 2; }
 message AuditOptIn { StatementHeader header = 1; repeated bytes reader_atoms = 2; int64 not_after = 3; }
 message AuditOptOut { StatementHeader header = 1; }
 // §8.4's autogroups, actions, audiences and modes, §11.12's kinds, and §8.8's names, in the order written.
@@ -726,6 +733,8 @@ message EvsReadPathReply {
   bytes drop_statement = 15; bytes drop_body = 16; uint64 entry_epoch = 17; bool stale_epoch = 18;
 }
 message EvsMerkleProof { bytes leaf = 1; uint64 index = 2; uint64 size = 3; repeated bytes path = 4; }
+// QD-681 (question evs1-m2-28-rooted-delta-proofs): a directory delta's proof to its own statement's changes_root.
+message EvsDeltaProof { repeated EvsMerkleProof proof = 1; }
 message EvsAbsenceProof {
   uint64 version = 1; repeated bytes token_path = 2; repeated EvsMerkleProof below = 3;
   repeated EvsMerkleProof above = 4;
@@ -775,10 +784,11 @@ message EvsDropPreviewReply {
 message EvsDropPreviewPath { bool list_match = 1; uint32 count = 2; repeated uint32 map_parts = 3; bool linked = 4; }
 
 // sidecar/protocol/smtp.proto
-// §6.11's edge codes, numbers as written.
+// §6.11's edge codes, numbers as written, and DESIGN-DETAILS 3.2.5's KEYS (QD-712).
 enum SmtpPreambleCode {
   SMTP_PREAMBLE_CODE_UNSPECIFIED = 0; SMTP_PREAMBLE_OK = 1; SMTP_PREAMBLE_HALTED = 2; SMTP_PREAMBLE_QUOTA = 3;
   SMTP_PREAMBLE_DENIED = 4; SMTP_PREAMBLE_NO_MX = 5; SMTP_PREAMBLE_NO_TLS = 6; SMTP_PREAMBLE_TRY_LATER = 7;
+  SMTP_PREAMBLE_KEYS = 8;
 }
 enum SmtpProofCode { SMTP_PROOF_CODE_UNSPECIFIED = 0; SMTP_PROOF_OK = 1; SMTP_PROOF_INVALID = 2; }
 // §14.8's self-report and §14.14's status, as plan-SMTP-wire-gaps#1 and #2 number them.
@@ -813,14 +823,16 @@ enum CoreHintKind {
 message AgentCert { bytes sidecar_id = 1; bytes agent_id = 2; bytes public_key = 3; int64 not_after_ms = 4; }
 
 // sidecar/protocol/tls.proto
-// plan-TLS-small-readings#1's TlsHint and its kinds, the shape of SocketHint, #2's attestation body, and #8's link
-// token as the owner decided it (QD-134), in its order.
+// plan-TLS-small-readings#1's TlsHint and its kinds, the shape of SocketHint, #2's attestation body, M6's
+// members-device statement over origin and nonce as §13.7 and TLS-M6-06 name it, and #8's link token as the owner
+// decided it (QD-134), in its order.
 message TlsHint { TlsHintKind kind = 1; bytes cert_id = 2; }
 enum TlsHintKind { TLS_HINT_KIND_UNSPECIFIED = 0; TLS_HINT_ORDER = 1; TLS_HINT_ISSUED = 2; TLS_HINT_REVOKED = 3; }
 message TlsKeyAttestation {
   bytes network_id = 1; bytes sidecar_id = 2; bytes spki_sha256 = 3; bytes identifier_set_sha256 = 4;
   uint64 issue_time_millis = 5;
 }
+message TlsEdgeLogin { string origin = 1; bytes nonce = 2; }
 message TlsLinkToken { bytes grant_id = 1; string host = 2; uint64 expire_time_millis = 3; bytes nonce = 4; }
 
 // sidecar/protocol/mail.proto
@@ -961,6 +973,9 @@ enum ApprovalChannel {
   APPROVAL_CHANNEL_UNSPECIFIED = 0; APPROVAL_CHANNEL_DEVICE = 1; APPROVAL_CHANNEL_PRESENCE = 2;
   APPROVAL_CHANNEL_HARNESS = 3;
 }
+// record-m2-01-canonical-action-detail's answer (QD-740): what CanonicalAction.sealed_detail opens to, a dial or
+// route grant's prefixes and ports and a version-3 access request's, with the numbers the answer gives.
+message CanonicalActionDetail { repeated string cidrs = 1; uint32 target_port = 2; repeated string grant_dst = 3; }
 `
 
 // Fields the owner's answers add to messages the design fences, ahead of design-records' fold, each with the question
@@ -997,9 +1012,40 @@ var testFenceAdditions = []struct {
 		question: "plan-ACL-folded-grant-state",
 	},
 	{
+		message:  "AclRows",
+		field:    testFenceField{name: "evidence_default", number: 10, typeName: "uint32", repeated: true},
+		question: "mcp-m3-03-evidence-default-at-gates",
+	},
+	{
 		message:  "AclTarget",
 		field:    testFenceField{name: "client_id", number: 10, typeName: "bytes"},
 		question: "plan-ACL-nonsidecar-subjects",
+	},
+	// QD-743: the folded access log keeps a RepoDelete's entry time and a removed admin's removal position, which
+	// readers need once those entries leave the log's retention
+	{
+		message:  "AclRepoAdminRow",
+		field:    testFenceField{name: "removed_at", number: 4, typeName: "uint64"},
+		question: "acl-m2-06-access-log-positions",
+	},
+	{
+		message:  "AclRepoDeletionRow",
+		field:    testFenceField{name: "deleted_time_ms", number: 5, typeName: "int64"},
+		question: "acl-m2-06-access-log-positions",
+	},
+	// QD-798: the deletion row keeps its RepoDelete's signer, as every access-log row keeps its signer, which repo/'s
+	// deleted state names once the entry leaves the log's retention
+	{
+		message:  "AclRepoDeletionRow",
+		field:    testFenceField{name: "signer", number: 6, typeName: "bytes"},
+		question: "acl-repo-delete-times-deletion-signer",
+	},
+	// QD-212: every RepoPrefixRules that took effect, {signer, at} in position order for the repo's life, which a
+	// verifier started at any base judges a push's pin by (DESIGN-DETAILS 16.2.2, 16.2.3; 5.2.2's amendment 16-C)
+	{
+		message:  "AclRepo",
+		field:    testFenceField{name: "prefix_rules", number: 12, typeName: "AclRepoPrefixRulesRow", repeated: true},
+		question: "DESIGN-DETAILS 16.2.2 (QD-212)",
 	},
 	{
 		message:  "Announcement",
@@ -1046,6 +1092,12 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "tail_verdicts", number: 10, typeName: "bytes"},
 		question: "DESIGN-DETAILS 5.2.2 (details-5-settings-in-rows)",
 	},
+	// QD-746: a base carries the repos its own change shrinks, which a verifier that starts at it cannot compute
+	{
+		message:  "ProjectionHeader",
+		field:    testFenceField{name: "shrunk_repo_ids", number: 11, typeName: "bytes", repeated: true},
+		question: "team-m2-09-base-shrinks",
+	},
 	{
 		message:  "ProjectionRows",
 		field:    testFenceField{name: "proposals", number: 7, typeName: "ProposalRow", repeated: true},
@@ -1066,6 +1118,114 @@ var testFenceAdditions = []struct {
 		field:    testFenceField{name: "indexers", number: 10, typeName: "IndexerRow", repeated: true},
 		question: "team-m2-07-indexer-rows",
 	},
+	{
+		message:  "EvsReadFrame",
+		field:    testFenceField{name: "error", number: 8, typeName: "EvsRefusalReply"},
+		question: "evs1-m2-40-unfolded-listing-frame",
+	},
+	{
+		message:  "EvsReadPathReply",
+		field:    testFenceField{name: "continues", number: 20, typeName: "bool"},
+		question: "evs1-m2-40-unfolded-listing-frame",
+	},
+	{
+		message:  "EvsReadPathReply",
+		field:    testFenceField{name: "delta_proofs", number: 19, typeName: "EvsDeltaProof", repeated: true},
+		question: "evs1-m2-28-rooted-delta-proofs",
+	},
+	{
+		message:  "EvsAbsenceProof",
+		field:    testFenceField{name: "present", number: 5, typeName: "EvsMerkleProof", repeated: true},
+		question: "evs1-m2-28-rooted-delta-proofs",
+	},
+	{
+		message:  "EvsSealedMetadata",
+		field:    testFenceField{name: "erasure_note", number: 8, typeName: "bytes"},
+		question: "evs1-m2-30-erasure-note-format",
+	},
+	// QD-740: a dial or route grant's prefixes and ports ride sealed, at CanonicalAction version 4, and local_port,
+	// weight and alpn ride the ApprovalRequest, which is sealed in its entry
+	{
+		message:  "CanonicalAction",
+		field:    testFenceField{name: "sealed_detail", number: 38, typeName: "bytes"},
+		question: "record-m2-01-canonical-action-detail",
+	},
+	{
+		message:  "ApprovalRequest",
+		field:    testFenceField{name: "local_port", number: 14, typeName: "uint32"},
+		question: "record-m2-01-canonical-action-detail",
+	},
+	{
+		message:  "ApprovalRequest",
+		field:    testFenceField{name: "weight", number: 15, typeName: "int32"},
+		question: "record-m2-01-canonical-action-detail",
+	},
+	{
+		message:  "ApprovalRequest",
+		field:    testFenceField{name: "alpn", number: 16, typeName: "string", repeated: true},
+		question: "record-m2-01-canonical-action-detail",
+	},
+	// QD-772: a socket_listen's name rides the ApprovalRequest beside its local port and weight, and its action names
+	// the socket by its grant_dst alone
+	{
+		message:  "ApprovalRequest",
+		field:    testFenceField{name: "socket_name", number: 17, typeName: "string"},
+		question: "canonical-action-detail-listen-socket-name",
+	},
+	// QD-799: an egress_change action's mode, beside its subject and, under exits, its exits in grant_dst
+	{
+		message:  "CanonicalAction",
+		field:    testFenceField{name: "egress_mode", number: 39, typeName: "uint32"},
+		question: "bridge-m4-19-egress-change-action",
+	},
+	// QD-712 and QD-716: parts bound to one key part (DESIGN-DETAILS 3.2.5), the key set a connection proves under,
+	// the key commitment, each part's reply count, the header block's record count and a scan's carry
+	{
+		message:  "SmtpPreamble",
+		field:    testFenceField{name: "proof_key_set", number: 10, typeName: "bytes"},
+		question: "details-3-metadata-rows",
+	},
+	{
+		message:  "SmtpProof",
+		field:    testFenceField{name: "key_commitment", number: 10, typeName: "bytes"},
+		question: "details-3-key-commitment",
+	},
+	{
+		message:  "SmtpProof",
+		field:    testFenceField{name: "reply_count", number: 11, typeName: "uint32"},
+		question: "details-3-key-commitment",
+	},
+	{
+		message:  "SmtpProof",
+		field:    testFenceField{name: "header_record_count", number: 12, typeName: "uint32"},
+		question: "details-3-key-commitment",
+	},
+	{
+		message:  "SmtpProof",
+		field:    testFenceField{name: "carry", number: 13, typeName: "bytes"},
+		question: "details-3-key-commitment",
+	},
+}
+
+// One field an owner's answer takes out of a message the design fences, its number reserved.
+type testFenceReservation struct {
+	message  string
+	name     string
+	number   int32
+	question string
+}
+
+// Fields the owner's answers take out of messages the design fences, ahead of design-records' fold, each with the
+// question that holds its answer. Each leaves the fence that writes it and its number joins that fence's
+// reservations, so both directions stay exact, and one the design comes to reserve, or stops writing, fails until its
+// line here leaves.
+var testFenceReservations = []testFenceReservation{
+	// QD-740: local_port, weight and alpn leave CanonicalAction for ApprovalRequest's 14, 15 and 16
+	{message: "CanonicalAction", name: "local_port", number: 24, question: "record-m2-01-canonical-action-detail"},
+	{message: "CanonicalAction", name: "weight", number: 25, question: "record-m2-01-canonical-action-detail"},
+	{message: "CanonicalAction", name: "alpn", number: 34, question: "record-m2-01-canonical-action-detail"},
+	// QD-772: socket_name leaves CanonicalAction for ApprovalRequest's 17, and no other kind fills 23
+	{message: "CanonicalAction", name: "socket_name", number: 23, question: "canonical-action-detail-listen-socket-name"},
 }
 
 // One value an owner's answer adds to an enum the design fences.
@@ -1082,4 +1242,6 @@ type testFenceValueAddition struct {
 var testFenceValueAdditions = []testFenceValueAddition{
 	{enum: "MessageType", name: "SMTP_HANDSHAKE", number: 0x1607, question: "smtpproof-start-shts-wire"},
 	{enum: "MessageType", name: "SMTP_HANDSHAKE_RESULT", number: 0x1608, question: "smtpproof-start-shts-wire"},
+	// §14.4's TL4 allowance for a recipient domain (QD-729), appended to the enum testUnfencedFence writes
+	{enum: "SidecarActionKind", name: "SIDECAR_ACTION_KIND_MAIL_TLS_UNAUTHENTICATED", number: 18, question: "smtp-m9-06-tl4-allowance-action"},
 }

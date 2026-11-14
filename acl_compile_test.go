@@ -43,6 +43,8 @@ type aclCompileWorld struct {
 	statements *protocol.AclRows
 	headTimeMs int64
 	position   uint64
+	// The config repo a test names in the view's Genesis, zero for none: no rows hold its row (QD-719).
+	configRepoId Id
 }
 
 func newAclCompileWorld(label string) *aclCompileWorld {
@@ -202,9 +204,23 @@ func (self *aclCompileWorld) compile(t testing.TB) *protocol.AclRows {
 	return rows
 }
 
+// Names the network's config repo, which the view's Genesis then carries with strangers as its signer and its member,
+// so the state adds its row (QD-719).
+func (self *aclCompileWorld) configRepo() Id {
+	self.configRepoId = self.id("repo config")
+	return self.configRepoId
+}
+
 // The state's view over the world's members and sidecars, for AclState on the compiled rows.
 func (self *aclCompileWorld) view() *aclTestView {
 	view := newAclTestFixture().view
+	if self.configRepoId != (Id{}) {
+		view.genesis = &bridge.Genesis{
+			ConfigRepoId:   self.configRepoId.Bytes(),
+			OwnerSidecarId: self.id("genesis owner sidecar").Bytes(),
+			OwnerMemberId:  self.id("genesis owner member").Bytes(),
+		}
+	}
 	for _, member := range self.members {
 		view.members[Id(member.MemberId)] = member
 	}
@@ -702,6 +718,43 @@ func TestCompileAclCarriesTheLogsGrants(t *testing.T) {
 	}
 }
 
+// The log's folded access logs ride the rows whole: a RepoDelete's entry time (QD-743) and signer (QD-798), and a
+// removed admin's row with its removal's position beside the standing ones, which the base compile's retention rule
+// drops (aclRowsKeptAt), never CompileAcl; and the bytes stay equal for equal input.
+func TestCompileAclCarriesTheAccessLogsTimesAndRemovals(t *testing.T) {
+	world := newAclCompileWorld("access log")
+	owner := world.member("owner@acme.example", bridge.MemberRole_MEMBER_ROLE_OWNER)
+	laptop := world.device("laptop", owner)
+	phone := world.device("phone", owner)
+	repoId := world.id("deleted repo")
+	world.statements.Repos = []*protocol.AclRepo{{
+		RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
+		Admins: []*protocol.AclRepoAdminRow{
+			{SidecarId: laptop.Bytes(), Signer: laptop.Bytes(), At: 3},
+			{SidecarId: phone.Bytes(), Signer: laptop.Bytes(), At: 4, RemovedAt: 6},
+		},
+		Deletion: &protocol.AclRepoDeletionRow{
+			DeletionId: world.id("deletion").Bytes(), DeletedAt: 7, DeletedTimeMs: world.headTimeMs - 1000, Signer: laptop.Bytes(),
+		},
+	}}
+	given := proto.Clone(world.statements).(*protocol.AclRows)
+	rows := world.compile(t)
+	if !proto.Equal(world.statements, given) {
+		t.Error("the compile changed its input")
+	}
+	if len(rows.GetRepos()) != 1 || !proto.Equal(rows.GetRepos()[0], given.GetRepos()[0]) {
+		t.Fatalf("the repo rode as %v", rows.GetRepos())
+	}
+	again := world.compile(t)
+	if !bytes.Equal(aclEncodeRows(t, rows), aclEncodeRows(t, again)) {
+		t.Error("equal input compiled to other bytes")
+	}
+	state := world.state(t)
+	if !state.RepoAdminAt(repoId, phone, 5) || state.RepoAdminAt(repoId, phone, 6) {
+		t.Error("the compiled rows do not tell the removed admin's span")
+	}
+}
+
 // CompileAclLocal keeps what rows drop on purpose: ports, prefixes, exact socket globs, aliases, a rule's own naming of
 // harness, and names for previews.
 func TestCompileAclLocalKeepsWhatRowsDrop(t *testing.T) {
@@ -772,6 +825,69 @@ func TestCompileAclMailIndexerKindRules(t *testing.T) {
 		if access := state.EvsAccess(AclSidecarSubject(indexer), repoId, AclTokenAudienceEvs, aclTestNow); access.Rights != AclEvsDeposit {
 			t.Errorf("owner-bound repo %b", access.Rights)
 		}
+	}
+}
+
+// QD-727: rows carry the document's effective evidenceDefault as channel values, sorted, all three where the document
+// names none and for the implicit document; a requests rule that names no evidence compiles to the same list, and one
+// that names its own keeps it (QD-396). The list is part of the bytes every reader compiles, in any order written.
+func TestCompileAclCarriesEvidenceDefault(t *testing.T) {
+	device := uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_DEVICE)
+	presence := uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_PRESENCE)
+	harness := uint32(protocol.ApprovalChannel_APPROVAL_CHANNEL_HARNESS)
+	all := []uint32{device, presence, harness}
+	compile := func(source string) *protocol.AclRows {
+		world := newAclCompileWorld("evidence default")
+		if source != "" {
+			world.setPolicy(t, source)
+		}
+		return world.compile(t)
+	}
+	if got := compile("").GetEvidenceDefault(); !slices.Equal(got, all) {
+		t.Errorf("the implicit document: %v", got)
+	}
+	if got := compile(`{}`).GetEvidenceDefault(); !slices.Equal(got, all) {
+		t.Errorf("a document naming none: %v", got)
+	}
+	if got := compile(`{"evidenceDefault": ["device"]}`).GetEvidenceDefault(); !slices.Equal(got, []uint32{device}) {
+		t.Errorf("a document naming device: %v", got)
+	}
+
+	requests := `"requests": [
+		{"src": ["autogroup:member"], "dst": ["autogroup:self"], "allow": ["dial"], "approver": ["autogroup:self"]},
+		{"src": ["autogroup:member"], "dst": ["autogroup:self"], "allow": ["route"], "approver": ["autogroup:self"], "evidence": ["presence"]}]`
+	narrowed := compile(`{"evidenceDefault": ["harness", "device"], ` + requests + `}`)
+	if got := narrowed.GetEvidenceDefault(); !slices.Equal(got, []uint32{device, harness}) {
+		t.Errorf("a document naming harness and device: %v", got)
+	}
+	if len(narrowed.GetRequests()) != 2 {
+		t.Fatalf("%d requests rows", len(narrowed.GetRequests()))
+	}
+	for i, request := range narrowed.GetRequests() {
+		want := []uint32{device, harness}
+		if slices.Contains(request.GetActions(), uint32(protocol.AclAction_ACL_ACTION_ROUTE)) {
+			want = []uint32{presence}
+		}
+		if !slices.Equal(request.GetEvidence(), want) {
+			t.Errorf("requests[%d]'s evidence %v, want %v", i, request.GetEvidence(), want)
+		}
+	}
+	// the list's order in the document does not reach the bytes
+	reordered := compile(`{` + requests + `, "evidenceDefault": ["device", "harness"]}`)
+	if !bytes.Equal(aclEncodeRows(t, reordered), aclEncodeRows(t, narrowed)) {
+		t.Error("the same default written in another order compiles to other bytes")
+	}
+	if bytes.Equal(aclEncodeRows(t, compile(`{`+requests+`}`)), aclEncodeRows(t, narrowed)) {
+		t.Error("a narrowed default compiles to the default document's bytes")
+	}
+
+	// a state folds statements over a base's rows without losing the default
+	state, err := NewAclState(narrowed, newAclCompileWorld("evidence default").view())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := aclRowsCopy(state.Rows()).GetEvidenceDefault(); !slices.Equal(got, []uint32{device, harness}) {
+		t.Errorf("a fold's copy of the rows: %v", got)
 	}
 }
 

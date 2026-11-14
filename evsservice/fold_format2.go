@@ -393,7 +393,7 @@ func (self *copyRun) removalLists(version uint64, removed bool, tokenPath sideca
 	if err != nil {
 		return false, false, fmt.Errorf("%w: %v", ErrEvsHeadInvalid, err)
 	}
-	source := NewRecordPushSource(self.records, self.cluster, self.repoId, self.refId)
+	source := NewRecordPushSource(self.records, self.locator, self.cluster, self.repoId, self.refId)
 	changes, err := source.ChangesAt(self.ctx, removalVersion, window[removalVersion-first], tokenPath)
 	switch {
 	case errors.Is(err, ErrEvsRecordEvacuated):

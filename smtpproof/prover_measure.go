@@ -5,22 +5,22 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/urnetwork/sidecar"
 )
 
-// The host's own DATA speed (D-SMTP-20). A later DATA part's circuit is fixed, so proving one costs the
-// same whatever it carries: the host proves one full part per suite it holds keys for, over a session
-// made up for the purpose, and the slowest suite sets smtp_data_proof_bytes and whether DATA is open
-// to this host at all. The host records the result at p/ (§15.7), and later sends use it. Before any
-// of that it proves one part of each suite's largest shape, DATA's pi3, so that a host whose memory
-// cannot hold that proof records nothing and only queues (plan-SMTP-small-readings #19).
+// The host's own DATA speed (D-SMTP-20). A body part's circuit is fixed, so proving one costs the same
+// whatever it carries: the host proves one full body record per family it holds keys for, over a session
+// made up for the purpose, and the slowest family sets smtp_data_proof_bytes and whether DATA is open to
+// this host at all. The host records the result at p/ (§15.7), and later sends use it. Before any of that
+// it proves one msg part of each family, so that a host whose memory cannot hold a unit's proof records
+// nothing and only queues (plan-SMTP-small-readings #19). Every catalog shape fills one domain, so any
+// shape stands for the rest (DESIGN-DETAILS 3.2.6); measuring by unit is SMTP-M9-39's.
 
-// The index a measuring part takes: any later DATA part's, all of which share a shape.
-const measurePartIndex = 4
+// The index a measuring body part takes: any part past the message's first.
+const measurePartIndex = 5
 
 // One line of the filler a measuring part carries. Its content does not change the cost.
 const measureLine = "a line of DATA text as a later part carries it, whole and ending CRLF\r\n"
@@ -31,20 +31,24 @@ type proverMeasured struct {
 	dataPartBytes int
 }
 
-// Measure of sidecar.SmtpProver. It proves a part of each suite's largest shape, then a later DATA
-// part, per suite with keys, which takes seconds to minutes, so a host runs it at idle and when its
-// keys or hardware change. With no keys at all it fails, and the settings' limits stand. A proof that
-// fails ends it with no result; one the host has no memory for ends the process, and so leaves none.
+// Measure of sidecar.SmtpProver. It proves a msg part, then a body part, per family with keys, which
+// takes seconds to minutes, so a host runs it at idle and when its keys or hardware change. With no keys
+// at all it fails, and the settings' limits stand. A proof that fails ends it with no result; one the host
+// has no memory for ends the process, and so leaves none.
 func (self *Prover) Measure(ctx context.Context) (*sidecar.SmtpProverMeasure, error) {
-	for _, shape := range measureLargestShapes() {
-		statement, witness, err := newMeasureMessagePart(shape)
+	proof := self.settings.Proof
+	for _, shape := range partShapes(proof) {
+		if shape.kind != partKindMessage {
+			continue
+		}
+		statement, witness, err := newMeasureMessagePart(proof, shape)
 		if err != nil {
 			return nil, err
 		}
 		if failures := relationCheckPart(statement, witness); 0 < len(failures) {
 			return nil, failures[0]
 		}
-		// a suite with no keys sends nothing, so its largest shape is no bar
+		// a family with no keys sends nothing, so its shape is no bar
 		if _, err := self.backend.provePart(ctx, statement, witness); err != nil && !errors.Is(err, errNoKeys) {
 			return nil, err
 		}
@@ -52,12 +56,11 @@ func (self *Prover) Measure(ctx context.Context) (*sidecar.SmtpProverMeasure, er
 	var slowest time.Duration
 	capacity := 0
 	measured := false
-	for _, shape := range partShapes() {
-		// a shape over a late ticket proves only the rare part that covers one, so it sets no cap
-		if shape.kind != partKindBody || 0 < shape.serverBlocks {
+	for _, shape := range partShapes(proof) {
+		if shape.kind != partKindBody {
 			continue
 		}
-		statement, witness, err := newMeasurePart(shape)
+		statement, witness, err := newMeasurePart(proof, shape)
 		if err != nil {
 			return nil, err
 		}
@@ -73,11 +76,9 @@ func (self *Prover) Measure(ctx context.Context) (*sidecar.SmtpProverMeasure, er
 		if err != nil {
 			return nil, err
 		}
-		// what one record of this shape can carry, which a part costs the same however much it uses
-		contentBytes := shape.bodyBlocks * shape.blockBytes()
-		if shape.version == tlsVersion13 {
-			contentBytes -= tlsInnerTypeBytes
-		}
+		// what one body record of this shape carries under 1.3, which a part costs the same however much
+		// it uses
+		contentBytes := shape.bodyBlocks*shape.blockBytes() - tlsInnerTypeBytes
 		if !measured || slowest < elapsed {
 			slowest = elapsed
 		}
@@ -129,37 +130,25 @@ func (self *Prover) now() time.Time {
 	return time.Now()
 }
 
-// Each suite's largest shape: the one with the most keystream blocks, which with Z1 is what a part's
-// cost and memory grow with. For every suite that is DATA's pi3, whose header and body blocks both
-// count (SPEC.md 11.4).
-func measureLargestShapes() []*partShape {
-	var largest []*partShape
-	blocks := func(shape *partShape) int {
-		return shape.clientBlocks + shape.serverBlocks + shape.headerBlocks + shape.bodyBlocks
+// The TLS 1.3 suite a family's measuring session runs under: the family's circuits serve 1.2 alike.
+func measureSuite(family ShapeFamily) uint16 {
+	if family == ShapeFamilyChacha20 {
+		return tlsSuiteChacha20Poly1305Sha256
 	}
-	for _, shape := range partShapes() {
-		at := slices.IndexFunc(largest, func(other *partShape) bool { return other.suite == shape.suite })
-		switch {
-		case at < 0:
-			largest = append(largest, shape)
-		case blocks(largest[at]) < blocks(shape):
-			largest[at] = shape
-		}
-	}
-	return largest
+	return tlsSuiteAes128GcmSha256
 }
 
-// A session no MX took part in, under a shape's version and suite: its secrets are fresh, honest for
-// the relation, and protect nothing.
-func newMeasureSession(shape *partShape, preamble *sessionPreamble) (*sessionStatement, *partWitness, error) {
+// A session no MX took part in, under a version and suite: its secrets are fresh, honest for the
+// relation, and protect nothing.
+func newMeasureSession(version uint16, suite uint16, preamble *sessionPreamble) (*sessionStatement, *partWitness, error) {
 	random := func(size int) []byte {
 		value := make([]byte, size)
 		rand.Read(value)
 		return value
 	}
-	session := &sessionStatement{version: shape.version, suite: shape.suite, preamble: preamble}
+	session := &sessionStatement{version: version, suite: suite, preamble: preamble}
 	witness := &partWitness{}
-	if shape.version == tlsVersion13 {
+	if version == tlsVersion13 {
 		witness.handshakeSecret = random(tlsSecretBytes)
 		testHookSecret("measure_handshake_secret", witness.handshakeSecret)
 		session.helloHash = random(sha256.Size)
@@ -167,8 +156,8 @@ func newMeasureSession(shape *partShape, preamble *sessionPreamble) (*sessionSta
 		shtsHash := sha256.Sum256(tls13TrafficSecret(witness.handshakeSecret, "s hs traffic", session.helloHash))
 		session.shtsHash = shtsHash[:]
 		masterSecret := tls13MasterSecret(witness.handshakeSecret)
-		witness.clientKey, witness.clientIv = tls13TrafficKeys(shape.suite, tls13TrafficSecret(masterSecret, "c ap traffic", session.finishedHash))
-		witness.serverKey, witness.serverIv = tls13TrafficKeys(shape.suite, tls13TrafficSecret(masterSecret, "s ap traffic", session.finishedHash))
+		witness.clientKey, witness.clientIv = tls13TrafficKeys(suite, tls13TrafficSecret(masterSecret, "c ap traffic", session.finishedHash))
+		witness.serverKey, witness.serverIv = tls13TrafficKeys(suite, tls13TrafficSecret(masterSecret, "s ap traffic", session.finishedHash))
 	} else {
 		witness.masterSecret = random(tlsMasterSecretBytes)
 		testHookSecret("measure_master_secret", witness.masterSecret)
@@ -190,7 +179,7 @@ func newMeasureSession(shape *partShape, preamble *sessionPreamble) (*sessionSta
 		block := tls12DeriveKeyBlock(witness.masterSecret, session.clientRandom, session.serverRandom)
 		witness.clientKey, witness.clientIv = block.clientKey, block.clientSalt
 		witness.serverKey, witness.serverIv = block.serverKey, block.serverSalt
-		serverCipher, err := newTlsCipher(tlsVersion12, shape.suite, block.serverKey, block.serverSalt)
+		serverCipher, err := newTlsCipher(tlsVersion12, suite, block.serverKey, block.serverSalt)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -202,13 +191,27 @@ func newMeasureSession(shape *partShape, preamble *sessionPreamble) (*sessionSta
 	testHookSecret("measure_client_iv", witness.clientIv)
 	testHookSecret("measure_server_key", witness.serverKey)
 	testHookSecret("measure_server_iv", witness.serverIv)
+	blind, err := newCommitBlind("measure_key_blind")
+	if err != nil {
+		return nil, nil, err
+	}
+	witness.keyBlind = blind
 	return session, witness, nil
+}
+
+// The C a made-up session's key part would publish, which its later parts open.
+func newMeasureKeyCommitment(witness *partWitness) ([]byte, error) {
+	commitment, err := commitKeys(witness.clientKey, witness.clientIv, witness.serverKey, witness.serverIv, witness.keyBlind)
+	if err != nil {
+		return nil, err
+	}
+	return encodeCommitment(commitment), nil
 }
 
 // Seals each content as an application record of one direction from seq on, returning the records
 // and the plaintexts the relation reads, 1.3's type octet included.
-func newMeasureRecords(shape *partShape, key []byte, iv []byte, seq uint64, contents ...string) ([]*partRecord, [][]byte, error) {
-	sealer, err := newTlsCipher(shape.version, shape.suite, key, iv)
+func newMeasureRecords(session *sessionStatement, key []byte, iv []byte, seq uint64, contents ...string) ([]*partRecord, [][]byte, error) {
+	sealer, err := newTlsCipher(session.version, session.suite, key, iv)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -221,37 +224,13 @@ func newMeasureRecords(shape *partShape, key []byte, iv []byte, seq uint64, cont
 			return nil, nil, err
 		}
 		plaintext := []byte(content)
-		if shape.version == tlsVersion13 {
+		if session.version == tlsVersion13 {
 			plaintext = append(plaintext, tlsRecordApplicationData)
 		}
 		records = append(records, record)
 		plaintexts = append(plaintexts, plaintext)
 	}
 	return records, plaintexts, nil
-}
-
-// A later DATA part filling a shape, over a session made up for it.
-func newMeasurePart(shape *partShape) (*partStatement, *partWitness, error) {
-	content := strings.Repeat(measureLine, shape.bodyBlocks*shape.blockBytes()/len(measureLine))
-	session, witness, err := newMeasureSession(shape, &sessionPreamble{recipientCount: 1, messageByteCount: uint64(len(content))})
-	if err != nil {
-		return nil, nil, err
-	}
-	firstRecord := uint64(measurePartIndex)
-	records, plaintexts, err := newMeasureRecords(shape, witness.clientKey, witness.clientIv, firstRecord, content)
-	if err != nil {
-		return nil, nil, err
-	}
-	witness.clientPlaintexts = plaintexts
-	statement := &partStatement{
-		session:       session,
-		index:         measurePartIndex,
-		mode:          partModeData,
-		firstRecord:   firstRecord,
-		lastRecord:    firstRecord,
-		clientRecords: records,
-	}
-	return statement, witness, nil
 }
 
 // The values a measuring session declares, of the forms SPEC.md section 6 requires, which its header
@@ -262,10 +241,10 @@ const (
 	measureMessageId = "measure@" + measureDomain
 )
 
-// pi3 in DATA mode filling a shape: a header block of Z5's form, then a body record of whole lines,
-// over the replies to MAIL, one RCPT and DATA in one server record, in a session made up for it.
-func newMeasureMessagePart(shape *partShape) (*partStatement, *partWitness, error) {
-	preamble := &sessionPreamble{
+// A measuring session's preamble: one recipient, and each of the issued values' exact forms.
+func newMeasurePreamble(proof *ProofSettings) *sessionPreamble {
+	return &sessionPreamble{
+		proof:            proof,
 		recipientDomain:  measureDomain,
 		recipientCount:   1,
 		messageId:        measureMessageId,
@@ -273,53 +252,113 @@ func newMeasureMessagePart(shape *partShape) (*partStatement, *partWitness, erro
 		dkimSelector:     measureSelector,
 		heloName:         measureDomain,
 		envelopeDomain:   "b." + measureDomain,
-		// each of the issued values' exact forms, its octets all zero
-		xUrRef:     "1." + strings.Repeat("a", 34),
-		feedbackId: "n:c:" + strings.Repeat("a", 26) + ":urnetwork",
+		xUrRef:           "1." + strings.Repeat("a", 34),
+		feedbackId:       "n:c:" + strings.Repeat("a", 26) + ":urnetwork",
 	}
+}
+
+// A body part filling a body shape, one record of whole lines after a one-record header block, over a
+// session made up for it.
+func newMeasurePart(proof *ProofSettings, shape *partShape) (*partStatement, *partWitness, error) {
+	content := strings.Repeat(measureLine, (shape.bodyBlocks*shape.blockBytes()-tlsInnerTypeBytes)/len(measureLine))
+	preamble := newMeasurePreamble(proof)
+	preamble.messageByteCount = uint64(len(content))
+	session, witness, err := newMeasureSession(tlsVersion13, measureSuite(shape.family), preamble)
+	if err != nil {
+		return nil, nil, err
+	}
+	// EHLO, MAIL, RCPT, DATA and the header block's one record came before
+	firstRecord := uint64(measurePartIndex)
+	records, plaintexts, err := newMeasureRecords(session, witness.clientKey, witness.clientIv, firstRecord, content)
+	if err != nil {
+		return nil, nil, err
+	}
+	witness.clientPlaintexts = plaintexts
+	keyCommitment, err := newMeasureKeyCommitment(witness)
+	if err != nil {
+		return nil, nil, err
+	}
+	in := proverStartCarry()
+	state, err := scanBodyRecord([]byte(content), in.state, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	out, err := newProverCarry(state)
+	if err != nil {
+		return nil, nil, err
+	}
+	witness.carryInState = in.state
+	witness.carryInBlind = in.blind
+	witness.carryOutBlind = out.blind
+	statement := &partStatement{
+		session:           session,
+		keyCommitment:     keyCommitment,
+		index:             measurePartIndex,
+		mode:              partModeData,
+		firstRecord:       firstRecord,
+		lastRecord:        firstRecord,
+		repliesProven:     4,
+		headerRecordCount: 1,
+		carryIn:           in.commitment,
+		carryOut:          out.commitment,
+		clientRecords:     records,
+	}
+	return statement, witness, nil
+}
+
+// The msg part in DATA mode: a header block of Z5's form in one record, over the replies to MAIL, one
+// RCPT and DATA in one server record, in a session made up for it.
+func newMeasureMessagePart(proof *ProofSettings, shape *partShape) (*partStatement, *partWitness, error) {
+	preamble := newMeasurePreamble(proof)
 	headerBlock := literalFromPrefix + "<measure@" + measureDomain + ">" + literalCrlf +
 		literalMessageIdPrefix + measureMessageId + ">" + literalCrlf +
 		literalXUrRefPrefix + preamble.xUrRef + literalCrlf +
 		literalFeedbackPrefix + preamble.feedbackId + literalCrlf +
 		literalDkimPrefix + literalDkimDomain + measureDomain + literalDkimSelector + measureSelector + literalDkimEnd + "b=" + literalCrlf +
 		literalCrlf
-	// the body record fills the shape's body blocks, its inner type octet included
-	bodyBytes := shape.bodyBlocks * shape.blockBytes()
-	if shape.version == tlsVersion13 {
-		bodyBytes -= tlsInnerTypeBytes
-	}
-	body := strings.Repeat(measureLine, bodyBytes/len(measureLine))
-	preamble.messageByteCount = uint64(len(headerBlock) + len(body))
-	session, witness, err := newMeasureSession(shape, preamble)
+	preamble.messageByteCount = uint64(len(headerBlock))
+	session, witness, err := newMeasureSession(tlsVersion13, measureSuite(shape.family), preamble)
 	if err != nil {
 		return nil, nil, err
 	}
-	// as if pi1 had opened EHLO, pi2 MAIL, RCPT and DATA, and pi2 had covered the EHLO reply
-	firstRecord := uint64(5)
-	firstServer := uint64(0)
-	if shape.version == tlsVersion12 {
-		// the Finished records took sequence number 0
-		firstRecord += 1
-		firstServer += 1
-	}
-	clientRecords, clientPlaintexts, err := newMeasureRecords(shape, witness.clientKey, witness.clientIv, firstRecord, headerBlock, body)
+	// as if part 1 had opened EHLO and part 2 MAIL, RCPT and DATA over the EHLO reply
+	firstRecord := uint64(4)
+	clientRecords, clientPlaintexts, err := newMeasureRecords(session, witness.clientKey, witness.clientIv, firstRecord, headerBlock)
 	if err != nil {
 		return nil, nil, err
 	}
-	serverRecords, serverPlaintexts, err := newMeasureRecords(shape, witness.serverKey, witness.serverIv, firstServer+1, "250 2.1.0 Ok\r\n250 2.1.5 Ok\r\n354 Go ahead\r\n")
+	serverRecords, serverPlaintexts, err := newMeasureRecords(session, witness.serverKey, witness.serverIv, 1, "250 2.1.0 Ok\r\n250 2.1.5 Ok\r\n354 Go ahead\r\n")
 	if err != nil {
 		return nil, nil, err
 	}
 	witness.clientPlaintexts = clientPlaintexts
 	witness.serverPlaintexts = serverPlaintexts
+	keyCommitment, err := newMeasureKeyCommitment(witness)
+	if err != nil {
+		return nil, nil, err
+	}
+	state, err := scanHeaderRecord(preamble, []byte(headerBlock), scanStart, true, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	out, err := newProverCarry(state)
+	if err != nil {
+		return nil, nil, err
+	}
+	witness.carryOutBlind = out.blind
 	statement := &partStatement{
 		session:                   session,
+		keyCommitment:             keyCommitment,
 		index:                     3,
 		mode:                      partModeData,
 		firstRecord:               firstRecord,
-		lastRecord:                firstRecord + 1,
+		lastRecord:                firstRecord,
 		previousServerRecordCount: 1,
 		serverRecordCount:         2,
+		replyCount:                3,
+		repliesProven:             1,
+		headerRecordCount:         1,
+		carryOut:                  out.commitment,
 		clientRecords:             clientRecords,
 		serverRecords:             serverRecords,
 	}

@@ -58,6 +58,8 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				SessionWriteRate: SidecarRate{Count: 20, Burst: settings.Mcp.SessionWriteRate.Burst, Interval: 1 * time.Second},
 				ResultByteCount:  256 * 1024,
 				CallTimeout:      30 * time.Second,
+				// MCP-M3-13's reading: a read's in-memory bound, past §16.4's result cap
+				ResourceByteCount: 16 * 1024 * 1024,
 				// §16.6's retention row
 				ApprovalFileRetention: 30 * 24 * time.Hour,
 				RunFileRetention:      30 * 24 * time.Hour,
@@ -100,6 +102,13 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				RestorePointByteCount: 256 * 1024 * 1024,
 				RestoreHoldTimeout:    10 * time.Minute,
 				RestoreHoldByteCount:  8 * 1024 * 1024,
+				IngestStateByteCount:  1024 * 1024,
+				IngestBlobHashCount:   4096,
+				// MCP-M3-21's readings for the restore point's files, the apply's hidden names and its copies
+				RestoreManifestByteCount:   64 * 1024 * 1024,
+				RestorePreviewCount:        16,
+				RestoreHiddenNameByteCount: 16,
+				RestoreCopyNameCount:       1024,
 				// §16.6's modes whose evidence never counts, and MCP-M3-19's readings of §16.7's context and run card
 				BypassPermissionModes: []string{"bypassPermissions", "dontAsk", "auto"},
 				InstructionProjectFileNames: []string{
@@ -109,6 +118,23 @@ func TestDefaultSidecarSettingsMatchDesign(t *testing.T) {
 				ChangePathCount:          4096,
 				RunCardPromptByteCount:   2 * 1024,
 				RunCardPathCount:         256,
+				// §16.5's agent-config files, and MCP-M3-16's and MCP-M3-10's readings of §16.6 and §16.7
+				AgentConfigPaths: []string{
+					"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".mcp.json", ".cursorrules",
+					".claude/settings.json", ".claude/settings.local.json",
+					".codex/config.toml", ".codex/hooks.json",
+					".cursor/mcp.json", ".cursor/hooks.json",
+					".ur",
+				},
+				HarnessConfigByteCount:      16 * 1024 * 1024,
+				HarnessConfigDepthCount:     64,
+				HarnessConfigEditCount:      1024,
+				HarnessDiffContextLineCount: 3,
+				PermissionHookTimeout:       75 * time.Second,
+				HarnessInstallRetryCount:    3,
+				HarnessEvidenceTimeout:      10 * time.Minute,
+				HarnessEvidenceEventCount:   1024,
+				HarnessPromptingModes:       []string{"default", "acceptEdits", "plan"},
 			},
 		},
 		// §16.8
@@ -321,6 +347,11 @@ func TestDefaultSettingsTheDesignLeavesOpen(t *testing.T) {
 	// connect's MaxHttpResponseBodyBytes, the bound connect puts on an api answer
 	if settings.ApiResponseByteCount != 2*1024*1024 {
 		t.Errorf("ApiResponseByteCount %d", settings.ApiResponseByteCount)
+	}
+	// §7.4's reading (QD-757): a round trip's reading is good to half of it, and a retry's shift lies between a
+	// Date's whole second and §7.4's window
+	if settings.ApiClockMaxRoundTrip != 30*time.Second || settings.ApiClockRetryShift != 5*time.Second {
+		t.Errorf("ApiClockMaxRoundTrip %s ApiClockRetryShift %s", settings.ApiClockMaxRoundTrip, settings.ApiClockRetryShift)
 	}
 
 	// why those numbers hold together: a hook payload at its limit fits in one request with room for

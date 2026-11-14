@@ -3,14 +3,18 @@
 // §7.9's tokens row at the gate, on T2's shape: the rights a state gives decide each scope, a group edit and a Suspend
 // close a live token's scope at the next state, deposit is no read, the config splits by audience (FS-19), cold state
 // is never a pass, and FS-14's closing case through the real cache over TEAM's log: a subject a group edit drops loses
-// its scope at the gate the moment the edit's {acl_}v event loads, and with the event lost, at the poll. No sleeps: the
-// fake clock fires the poll and loads report as they finish.
+// its scope at the gate the moment the edit's {acl_}v event loads, and with the event lost, at the poll. Then a
+// RepoDelete as a gate holds it: dated by its row (QD-743) and signed by the log's entry or, once the gate's log no
+// longer keeps it or never held it, by its row (QD-798). No sleeps: the fake clock fires the poll and loads report as
+// they finish.
 
 package sidecar
 
 import (
 	"testing"
+	"time"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
@@ -50,7 +54,8 @@ func newAclScopeWorld(t testing.TB, policy string) *aclScopeWorld {
 	self.agent = world.agent("agent", self.owner, "ci")
 	world.group("eng")
 	self.notes = world.repo("notes", protocol.RepoKind_REPO_KIND_GENERAL, Id{})
-	self.config = world.repo("config", protocol.RepoKind_REPO_KIND_CONFIG, Id{})
+	// the config's row is the state's own, from the Genesis (QD-719)
+	self.config = world.configRepo()
 	world.setPolicy(t, policy)
 	return self
 }
@@ -314,6 +319,85 @@ func TestAclGateHonorScopeClosesByEventAndByPoll(t *testing.T) {
 	<-clock.armed
 }
 
+// QD-719 at the real gate, over TEAM's log: no rows hold the config repo's AclRepo, and the cache's state, built from
+// those rows and the Genesis, honors the config's scopes for evs and for gkm as §8.5's kind default gives them: every
+// admitted sidecar's r, a config writer's rw at evs, a member device's rw at gkm, §7.9's bootstrap admin for the
+// Genesis's owner sidecar alone; and a revocation closes a live config scope at the next load.
+func TestAclGateHonorScopeHonorsTheConfigRepo(t *testing.T) {
+	net := newTestConfigNet(t)
+	phone := net.admitMemberDevice("config scope")
+	readOnly := net.device("config scope read only", phone.memberId)
+	net.admitDevice(net.owner, readOnly, uint32(bridge.SidecarCapability_SIDECAR_CAPABILITY_READ_ONLY))
+	ephemeral := net.device("config scope ephemeral", phone.memberId)
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_ADMIT, net.admission(ephemeral, nil, true, net.timeMs+24*60*60*1000, 0))
+	ownerPhone := net.device("config scope owner phone", net.ownerMemberId)
+	net.admitDevice(net.owner, ownerPhone, 0)
+	configId := Id(net.log.State().Genesis().GetConfigRepoId())
+	if acl, err := net.log.State().Acl(); err != nil || len(acl.Rows().GetRepos()) != 0 {
+		t.Fatalf("the rows hold repos: %v", err)
+	}
+
+	source := newAclGateTestSource()
+	source.publish(net)
+	cache, loads := newAclGateTestCache(t, source, newAclGateTestClock(), nil)
+	now := time.UnixMilli(net.timeMs)
+	if answer := cache.HonorScope(net.networkId, phone.sidecarId, configId, AclEvsRead, AclTokenAudienceEvs, now); answer != AclScopeUnknown {
+		t.Fatalf("before the load: %d", answer)
+	}
+	if load := aclGateTestNextLoad(t, loads); load.err != nil {
+		t.Fatal(load.err)
+	}
+	evs, gkm := AclTokenAudienceEvs, AclTokenAudienceGkm
+	cases := []struct {
+		name     string
+		device   testConfigDevice
+		scope    AclEvsRights
+		audience AclTokenAudience
+		want     AclScopeAnswer
+	}{
+		{name: "the bootstrap sidecar reads at evs", device: net.owner, scope: AclEvsRead, audience: evs, want: AclScopeHonored},
+		{name: "writes heads at evs", device: net.owner, scope: AclEvsWrite, audience: evs, want: AclScopeHonored},
+		{name: "places the repo at evs", device: net.owner, scope: AclEvsAdmin, audience: evs, want: AclScopeHonored},
+		{name: "and forms its group at gkm", device: net.owner, scope: AclEvsAdmin, audience: gkm, want: AclScopeHonored},
+		{name: "another config writer writes heads at evs", device: ownerPhone, scope: AclEvsWrite, audience: evs, want: AclScopeHonored},
+		{name: "and administers nothing at evs", device: ownerPhone, scope: AclEvsAdmin, audience: evs, want: AclScopeRefused},
+		{name: "or at gkm", device: ownerPhone, scope: AclEvsAdmin, audience: gkm, want: AclScopeRefused},
+		{name: "a member device reads at evs", device: phone, scope: AclEvsRead, audience: evs, want: AclScopeHonored},
+		{name: "reads at gkm", device: phone, scope: AclEvsRead, audience: gkm, want: AclScopeHonored},
+		{name: "writes no head at evs", device: phone, scope: AclEvsWrite, audience: evs, want: AclScopeRefused},
+		{name: "commits the group at gkm", device: phone, scope: AclEvsWrite, audience: gkm, want: AclScopeHonored},
+		{name: "and administers nothing", device: phone, scope: AclEvsAdmin, audience: gkm, want: AclScopeRefused},
+		{name: "a read_only device reads at evs", device: readOnly, scope: AclEvsRead, audience: evs, want: AclScopeHonored},
+		{name: "and commits nothing at gkm", device: readOnly, scope: AclEvsWrite, audience: gkm, want: AclScopeRefused},
+		{name: "an ephemeral device reads at evs", device: ephemeral, scope: AclEvsRead, audience: evs, want: AclScopeHonored},
+		{name: "reads at gkm", device: ephemeral, scope: AclEvsRead, audience: gkm, want: AclScopeHonored},
+		{name: "and writes at neither", device: ephemeral, scope: AclEvsWrite, audience: gkm, want: AclScopeRefused},
+	}
+	for _, c := range cases {
+		if answer := cache.HonorScope(net.networkId, c.device.sidecarId, configId, c.scope, c.audience, now); answer != c.want {
+			t.Errorf("%s: %d, want %d", c.name, answer, c.want)
+		}
+	}
+	if answer := cache.HonorScope(net.networkId, testConfigId("config scope stranger"), configId, AclEvsRead, evs, now); answer != AclScopeRefused {
+		t.Errorf("an unadmitted sidecar: %d", answer)
+	}
+
+	net.mustPost(net.owner, bridge.SignedType_SIGNED_SIDECAR_REVOKE, net.revocation(phone, bridge.SidecarRevokeReason_SIDECAR_REVOKE_REASON_LOST))
+	source.publish(net)
+	cache.Changed(net.networkId)
+	if load := aclGateTestNextLoad(t, loads); load.err != nil {
+		t.Fatal(load.err)
+	}
+	for _, audience := range []AclTokenAudience{evs, gkm} {
+		if answer := cache.HonorScope(net.networkId, phone.sidecarId, configId, AclEvsRead, audience, now); answer != AclScopeRefused {
+			t.Errorf("a revoked device's config r at %d: %d", audience, answer)
+		}
+		if answer := cache.HonorScope(net.networkId, readOnly.sidecarId, configId, AclEvsRead, audience, now); answer != AclScopeHonored {
+			t.Errorf("another device's config r at %d after the revocation: %d", audience, answer)
+		}
+	}
+}
+
 // A Suspend in the log's tail closes the subject's live scope at the gate's next load, before any base folds it.
 func TestAclGateHonorScopeClosesAtASuspend(t *testing.T) {
 	net := newTestConfigNet(t)
@@ -342,7 +426,10 @@ func TestAclGateHonorScopeClosesAtASuspend(t *testing.T) {
 	}
 }
 
-// A RepoDelete the gate's log keeps is dated by its entry's time and signer; one past the log's window is undated.
+// A RepoDelete is dated by its row's time, the entry's (QD-743), and signed by the entry while the gate's log keeps it;
+// with no log its row's own signer, the same sidecar, signs it (QD-798). A row without that signer, as a row decoded
+// with the field empty, is signed by a log that keeps its entry as before, and with no log is left unsigned, which
+// §11.12's DELETE refuses; so is a row whose signer is no sidecar id.
 func TestAclGateSnapshotDatesARepoDeleteItKeeps(t *testing.T) {
 	net := newTestConfigNet(t)
 	repoId := testConfigId("deleted repo")
@@ -362,14 +449,140 @@ func TestAclGateSnapshotDatesARepoDeleteItKeeps(t *testing.T) {
 	snapshot := &AclGateSnapshot{Pin: state.Pin(), Config: state, Acl: acl}
 	deletion := snapshot.RepoDeletion(repoId)
 	if deletion == nil || deletion.DeletionId != deletionId || deletion.DeletedAt != verdict.Pin.GetVersion() || !deletion.Dated ||
-		deletion.SignerSidecarId != net.owner.sidecarId || deletion.TimeMs != state.TimeMs() || deletion.Now || deletion.Restored {
+		!deletion.Signed || deletion.SignerSidecarId != net.owner.sidecarId || deletion.TimeMs != state.TimeMs() || deletion.Now || deletion.Restored {
 		t.Fatalf("the kept deletion: %+v", deletion)
 	}
-	undated := &AclGateSnapshot{Pin: state.Pin(), Acl: acl}
-	if deletion := undated.RepoDeletion(repoId); deletion == nil || deletion.Dated {
+	rowsOnly := &AclGateSnapshot{Pin: state.Pin(), Acl: acl}
+	if deletion := rowsOnly.RepoDeletion(repoId); deletion == nil || !deletion.Dated || deletion.TimeMs != state.TimeMs() || !deletion.Signed ||
+		deletion.SignerSidecarId != net.owner.sidecarId {
 		t.Errorf("with no log: %+v", deletion)
 	}
 	if deletion := snapshot.RepoDeletion(testConfigId("no such repo")); deletion != nil {
 		t.Errorf("an unknown repo: %+v", deletion)
+	}
+
+	// the row as it would decode with its signer field present and empty: the decoder takes the zero length
+	rowBytes, err := proto.Marshal(acl.Repo(repoId).GetDeletion())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsignedBytes := []byte{}
+	for 0 < len(rowBytes) {
+		number, wireType, tagLength := protowire.ConsumeTag(rowBytes)
+		if tagLength < 0 {
+			t.Fatalf("the row's bytes do not parse at %d", len(rowBytes))
+		}
+		valueLength := protowire.ConsumeFieldValue(number, wireType, rowBytes[tagLength:])
+		if valueLength < 0 {
+			t.Fatalf("the row's bytes do not parse at %d", len(rowBytes))
+		}
+		if number != 6 {
+			unsignedBytes = append(unsignedBytes, rowBytes[:tagLength+valueLength]...)
+		}
+		rowBytes = rowBytes[tagLength+valueLength:]
+	}
+	unsignedBytes = protowire.AppendBytes(protowire.AppendTag(unsignedBytes, 6, protowire.BytesType), nil)
+	unsigned := &protocol.AclRepoDeletionRow{}
+	if err := proto.Unmarshal(unsignedBytes, unsigned); err != nil || len(unsigned.GetSigner()) != 0 || unsigned.GetDeletedAt() != verdict.Pin.GetVersion() {
+		t.Fatalf("a row with an empty signer decodes as %+v: %v", unsigned, err)
+	}
+	for _, c := range []struct {
+		name   string
+		signer []byte
+	}{
+		{name: "an empty signer", signer: unsigned.GetSigner()},
+		{name: "a signer of 3 bytes", signer: []byte{1, 2, 3}},
+		{name: "the zero id", signer: make([]byte, len(Id{}))},
+	} {
+		rows := proto.Clone(acl.Rows()).(*protocol.AclRows)
+		for _, repo := range rows.GetRepos() {
+			if Id(repo.GetRepoId()) == repoId {
+				repo.Deletion = proto.Clone(unsigned).(*protocol.AclRepoDeletionRow)
+				repo.Deletion.Signer = c.signer
+			}
+		}
+		withoutSigner, err := NewAclState(rows, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kept := &AclGateSnapshot{Pin: state.Pin(), Config: state, Acl: withoutSigner}
+		if deletion := kept.RepoDeletion(repoId); deletion == nil || !deletion.Signed || deletion.SignerSidecarId != net.owner.sidecarId {
+			t.Errorf("%s, the log keeping the entry: %+v", c.name, deletion)
+		}
+		noLog := &AclGateSnapshot{Pin: state.Pin(), Acl: withoutSigner}
+		if deletion := noLog.RepoDeletion(repoId); deletion == nil || !deletion.Dated || deletion.Signed || deletion.SignerSidecarId != (Id{}) {
+			t.Errorf("%s, with no log: %+v", c.name, deletion)
+		}
+	}
+}
+
+// QD-743 and QD-798 at the gate over TEAM's log: a RepoDelete whose entry two bases have moved out of the log's
+// retention is still dated by its row's time and signed by its row's signer, the statement's, which the log no longer
+// names.
+func TestAclGateSnapshotDatesARepoDeletePastItsEntrysRetention(t *testing.T) {
+	net := newTestConfigNet(t)
+	repoId, deletionId := testConfigId("gate deleted repo"), testConfigId("gate deletion")
+	deletedTimeMs := aclTestDeletedPastRetention(t, net, repoId, deletionId)
+	state := net.log.State()
+	acl, err := state.Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedAt := acl.Repo(repoId).GetDeletion().GetDeletedAt()
+	if state.keptEntryAt(deletedAt) != nil {
+		t.Fatalf("the log still keeps the RepoDelete's entry at %d", deletedAt)
+	}
+	snapshot := &AclGateSnapshot{Pin: state.Pin(), Config: state, Acl: acl}
+	deletion := snapshot.RepoDeletion(repoId)
+	if deletion == nil || deletion.DeletionId != deletionId || !deletion.Dated || deletion.TimeMs != deletedTimeMs || !deletion.Signed ||
+		deletion.SignerSidecarId != net.owner.sidecarId {
+		t.Errorf("the gate's deletion %+v", deletion)
+	}
+}
+
+// QD-798 at a gate that loaded the network at a later base, as an evs process does that restarts, or first hears of
+// the network, after a base folded the RepoDelete: the gate's cold start begins at that base, so its log never judged
+// the entry, whose bytes it may hold from the run it read, and names no signer for it; the row signs the deletion with
+// the statement's signer, while the reader that sequenced the entry still keeps it and signs it from the entry, with
+// the same sidecar.
+func TestAclGateSignsARepoDeleteFromItsRowAtAGateLoadedAtALaterBase(t *testing.T) {
+	net := newTestConfigNet(t)
+	repoId, deletionId := testConfigId("later base repo"), testConfigId("later base deletion")
+	aclTestOwnedRepo(net, repoId)
+	verdict := net.mustPost(net.owner, bridge.SignedType_SIGNED_REPO_DELETE, &protocol.RepoDelete{
+		Header: net.header(), RepoId: repoId.Bytes(), DeletionId: deletionId.Bytes(),
+	})
+	deletedAt, deletedTimeMs := verdict.Pin.GetVersion(), net.timeMs
+	net.fold(net.owner, deletedAt, 3)
+	if net.log.State().keptEntryAt(deletedAt) == nil {
+		t.Fatal("the reader that sequenced the RepoDelete no longer keeps its entry after one base")
+	}
+
+	source := newAclGateTestSource()
+	source.publish(net)
+	cache, loads := newAclGateTestCache(t, source, newAclGateTestClock(), nil)
+	cache.Changed(net.networkId)
+	if load := aclGateTestNextLoad(t, loads); load.err != nil {
+		t.Fatal(load.err)
+	}
+	snapshot, status := cache.State(net.networkId)
+	if status != AclGateLoaded || snapshot.Pin.GetVersion() != net.n {
+		t.Fatalf("the gate's load: %d at %v", status, snapshot)
+	}
+	if kept := snapshot.Config.keptEntryAt(deletedAt); kept != nil && kept.statement != nil {
+		t.Fatalf("the gate loaded at the base judged the RepoDelete's entry at %d", deletedAt)
+	}
+	deletion := snapshot.RepoDeletion(repoId)
+	if deletion == nil || deletion.DeletionId != deletionId || deletion.DeletedAt != deletedAt || !deletion.Dated || deletion.TimeMs != deletedTimeMs ||
+		!deletion.Signed || deletion.SignerSidecarId != net.owner.sidecarId {
+		t.Errorf("the gate's deletion %+v", deletion)
+	}
+	readerAcl, err := net.log.State().Acl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &AclGateSnapshot{Pin: net.log.State().Pin(), Config: net.log.State(), Acl: readerAcl}
+	if kept := reader.RepoDeletion(repoId); kept == nil || !kept.Signed || kept.SignerSidecarId != deletion.SignerSidecarId {
+		t.Errorf("the reader keeping the entry: %+v", kept)
 	}
 }

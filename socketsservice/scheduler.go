@@ -10,7 +10,9 @@
 // meta review CC-06). Nothing here caps names, listeners or streams (owner decision 66).
 //
 // The store samples: a group above §9.7's 64 listeners comes here as its random 64 (ZRANDMEMBER runs
-// in the script, where no draw of this file can reach it). Affinity is SOCK-M6-01's branch beside this.
+// in the script, where no draw of this file can reach it), unless the Find carries an affinity key, which
+// reads the whole group. Affinity is a branch after the filter (affinity.go): with a key and a listener
+// that opted in, rendezvous order picks; otherwise P2C stands.
 
 package socketsservice
 
@@ -43,6 +45,10 @@ type SocketSchedulerSettings struct {
 	ReporterWindow time.Duration
 	// How many networks must report to eject (§9.6, D-SOCK-6). Default 2.
 	ReporterNetworkCount int
+	// The affinity branch's load bound, as a percent of the mean est of the listeners that opted in: a listener
+	// above it is skipped for its key's next (§9.7's 1.25, https://arxiv.org/abs/1608.01350). Default 125; at least
+	// 100, so the least loaded listener is never above it.
+	AffinityLoadPercent int
 }
 
 // §9.6's and §9.7's values.
@@ -56,6 +62,7 @@ func DefaultSocketSchedulerSettings() *SocketSchedulerSettings {
 		EjectionGroupPercent: 50,
 		ReporterWindow:       30 * time.Second,
 		ReporterNetworkCount: 2,
+		AffinityLoadPercent:  125,
 	}
 }
 
@@ -82,6 +89,8 @@ type SocketCandidate struct {
 	MaxStreams int
 	Serving    bool
 	Draining   bool
+	// The listener honors affinity keys (§9.5, §9.7): only such listeners take part in the affinity branch.
+	Affinity bool
 	// When the lease ends, in milliseconds. At or past it the listener takes no tickets.
 	LeaseExpireMillis int64
 	// In-flight at the last report, and when it came, in milliseconds.
@@ -102,7 +111,9 @@ type SocketPickRequest struct {
 	Protocol   string
 	MinVersion int
 	Alpns      []string
-	NowMillis  int64
+	// §9.7's affinity key, which lives for the request alone (sock-2): empty asks none, and P2C picks.
+	AffinityKey []byte
+	NowMillis   int64
 	// Two uniform draws, one per sampled candidate, which the caller makes: random ARGV to a script.
 	FirstDraw  uint32
 	SecondDraw uint32
@@ -180,7 +191,9 @@ func drawSocketCandidate(candidates []*SocketCandidate, draw uint32, skip int) i
 // §9.7's steps 1 to 3 over what the store read: filter, sample two distinct candidates in proportion
 // to weight, and take the lower (est + 1) / weight, the other being the backup. A tie goes to the first
 // sampled, which weight chose. If ejections and exclusions leave nothing, they are ignored, and nothing
-// else ever is. The arguments are unchanged, so the caller records the primary's ticket itself.
+// else ever is. A request with an affinity key whose filtered candidates include one that opted in picks
+// by rendezvous order instead (affinity.go). The arguments are unchanged, so the caller records the
+// primary's ticket itself.
 func PickSocketListeners(candidates []*SocketCandidate, request *SocketPickRequest, settings *SocketSchedulerSettings) *SocketPickResult {
 	matches := func(candidate *SocketCandidate) bool {
 		if request.NowMillis >= candidate.LeaseExpireMillis || !candidate.Serving || candidate.Draining || candidate.Weight <= 0 {
@@ -227,6 +240,11 @@ func PickSocketListeners(candidates []*SocketCandidate, request *SocketPickReque
 	}
 	if len(pickCandidates) == 0 {
 		return &SocketPickResult{Outcome: SocketPickBusy}
+	}
+	if 0 < len(request.AffinityKey) {
+		if result := pickSocketAffinity(pickCandidates, request, settings); result != nil {
+			return result
+		}
 	}
 
 	slices.SortFunc(pickCandidates, func(a *SocketCandidate, b *SocketCandidate) int {

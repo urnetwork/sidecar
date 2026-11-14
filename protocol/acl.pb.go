@@ -516,19 +516,69 @@ func (RepoAdminChange) EnumDescriptor() ([]byte, []int) {
 	return file_protocol_acl_proto_rawDescGZIP(), []int{7}
 }
 
+type PrefixAction int32
+
+const (
+	PrefixAction_PREFIX_ACTION_UNSPECIFIED PrefixAction = 0
+	PrefixAction_PREFIX_ACTION_WRITE       PrefixAction = 1 // the only action
+)
+
+// Enum value maps for PrefixAction.
+var (
+	PrefixAction_name = map[int32]string{
+		0: "PREFIX_ACTION_UNSPECIFIED",
+		1: "PREFIX_ACTION_WRITE",
+	}
+	PrefixAction_value = map[string]int32{
+		"PREFIX_ACTION_UNSPECIFIED": 0,
+		"PREFIX_ACTION_WRITE":       1,
+	}
+)
+
+func (x PrefixAction) Enum() *PrefixAction {
+	p := new(PrefixAction)
+	*p = x
+	return p
+}
+
+func (x PrefixAction) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PrefixAction) Descriptor() protoreflect.EnumDescriptor {
+	return file_protocol_acl_proto_enumTypes[8].Descriptor()
+}
+
+func (PrefixAction) Type() protoreflect.EnumType {
+	return &file_protocol_acl_proto_enumTypes[8]
+}
+
+func (x PrefixAction) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PrefixAction.Descriptor instead.
+func (PrefixAction) EnumDescriptor() ([]byte, []int) {
+	return file_protocol_acl_proto_rawDescGZIP(), []int{8}
+}
+
 type AclRows struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	HasDocument   bool                   `protobuf:"varint,1,opt,name=has_document,json=hasDocument,proto3" json:"has_document,omitempty"` // owner decisions 50, 105
-	Atoms         []*AclAtom             `protobuf:"bytes,2,rep,name=atoms,proto3" json:"atoms,omitempty"`                                 // §7.9's keyed tag and group ids -> member_ids, sidecar_ids
-	Rules         []*AclRule             `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
-	Requests      []*AclRequestRule      `protobuf:"bytes,4,rep,name=requests,proto3" json:"requests,omitempty"`
-	Repos         []*AclRepo             `protobuf:"bytes,5,rep,name=repos,proto3" json:"repos,omitempty"`
-	Bridge        []byte                 `protobuf:"bytes,6,opt,name=bridge,proto3" json:"bridge,omitempty"`                              // §17's id-only section
-	Audit         *AclAudit              `protobuf:"bytes,7,opt,name=audit,proto3" json:"audit,omitempty"`                                // owner decision 63; Team only
-	Suspensions   []*AclSuspension       `protobuf:"bytes,8,rep,name=suspensions,proto3" json:"suspensions,omitempty"`                    // active Suspends a fold kept (plan-ACL-folded-grant-state #1)
-	SpentGrants   []*AclSpentGrant       `protobuf:"bytes,9,rep,name=spent_grants,json=spentGrants,proto3" json:"spent_grants,omitempty"` // activated and revoked grant ids (plan-ACL-folded-grant-state #3)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	HasDocument bool                   `protobuf:"varint,1,opt,name=has_document,json=hasDocument,proto3" json:"has_document,omitempty"` // owner decisions 50, 105
+	Atoms       []*AclAtom             `protobuf:"bytes,2,rep,name=atoms,proto3" json:"atoms,omitempty"`                                 // §7.9's keyed tag and group ids -> member_ids, sidecar_ids
+	Rules       []*AclRule             `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
+	Requests    []*AclRequestRule      `protobuf:"bytes,4,rep,name=requests,proto3" json:"requests,omitempty"`
+	Repos       []*AclRepo             `protobuf:"bytes,5,rep,name=repos,proto3" json:"repos,omitempty"`
+	Bridge      []byte                 `protobuf:"bytes,6,opt,name=bridge,proto3" json:"bridge,omitempty"`                              // §17's id-only section
+	Audit       *AclAudit              `protobuf:"bytes,7,opt,name=audit,proto3" json:"audit,omitempty"`                                // owner decision 63; Team only
+	Suspensions []*AclSuspension       `protobuf:"bytes,8,rep,name=suspensions,proto3" json:"suspensions,omitempty"`                    // active Suspends a fold kept (plan-ACL-folded-grant-state #1)
+	SpentGrants []*AclSpentGrant       `protobuf:"bytes,9,rep,name=spent_grants,json=spentGrants,proto3" json:"spent_grants,omitempty"` // activated and revoked grant ids (plan-ACL-folded-grant-state #3)
+	// The document's effective evidenceDefault, compiled at each base as each AclRequestRule's evidence is: the
+	// ApprovalDecision.channel values accepted for an action no requests rule names (dns_set, dns_delete,
+	// bridge_expose); default all three (QD-727)
+	EvidenceDefault []uint32 `protobuf:"varint,10,rep,packed,name=evidence_default,json=evidenceDefault,proto3" json:"evidence_default,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *AclRows) Reset() {
@@ -620,6 +670,13 @@ func (x *AclRows) GetSuspensions() []*AclSuspension {
 func (x *AclRows) GetSpentGrants() []*AclSpentGrant {
 	if x != nil {
 		return x.SpentGrants
+	}
+	return nil
+}
+
+func (x *AclRows) GetEvidenceDefault() []uint32 {
+	if x != nil {
+		return x.EvidenceDefault
 	}
 	return nil
 }
@@ -1029,13 +1086,14 @@ type AclRepo struct {
 	OwnerMemberId       []byte                 `protobuf:"bytes,3,opt,name=owner_member_id,json=ownerMemberId,proto3" json:"owner_member_id,omitempty"`
 	ConsentedSidecarIds [][]byte               `protobuf:"bytes,4,rep,name=consented_sidecar_ids,json=consentedSidecarIds,proto3" json:"consented_sidecar_ids,omitempty"` // the owner's (§8.5), whose consenting admission, AdmissionConfirm
 	// and OwnerConfirm signers and positions §7.9's SidecarRow keeps
-	Admins          []*AclRepoAdminRow  `protobuf:"bytes,5,rep,name=admins,proto3" json:"admins,omitempty"`
-	Grants          []*AclRepoGrantRow  `protobuf:"bytes,6,rep,name=grants,proto3" json:"grants,omitempty"`
-	Shares          []*AclRepoShareRow  `protobuf:"bytes,7,rep,name=shares,proto3" json:"shares,omitempty"`
-	Revokes         []*AclRepoRevokeRow `protobuf:"bytes,8,rep,name=revokes,proto3" json:"revokes,omitempty"`                                            // config writers' standing RepoRevokes
-	Deletion        *AclRepoDeletionRow `protobuf:"bytes,9,opt,name=deletion,proto3" json:"deletion,omitempty"`                                          // the newest RepoDelete with any RepoRestore of its deletion_id
-	Lock            RepoVersioningLock  `protobuf:"varint,10,opt,name=lock,proto3,enum=urnetwork.sidecar.RepoVersioningLock" json:"lock,omitempty"`      // the newest RepoVersioning's
-	HoldersShrunkAt uint64              `protobuf:"varint,11,opt,name=holders_shrunk_at,json=holdersShrunkAt,proto3" json:"holders_shrunk_at,omitempty"` // the newest log position that dropped a key holder (§7.9)
+	Admins          []*AclRepoAdminRow       `protobuf:"bytes,5,rep,name=admins,proto3" json:"admins,omitempty"`
+	Grants          []*AclRepoGrantRow       `protobuf:"bytes,6,rep,name=grants,proto3" json:"grants,omitempty"`
+	Shares          []*AclRepoShareRow       `protobuf:"bytes,7,rep,name=shares,proto3" json:"shares,omitempty"`
+	Revokes         []*AclRepoRevokeRow      `protobuf:"bytes,8,rep,name=revokes,proto3" json:"revokes,omitempty"`                                            // config writers' standing RepoRevokes
+	Deletion        *AclRepoDeletionRow      `protobuf:"bytes,9,opt,name=deletion,proto3" json:"deletion,omitempty"`                                          // the newest RepoDelete with any RepoRestore of its deletion_id
+	Lock            RepoVersioningLock       `protobuf:"varint,10,opt,name=lock,proto3,enum=urnetwork.sidecar.RepoVersioningLock" json:"lock,omitempty"`      // the newest RepoVersioning's
+	HoldersShrunkAt uint64                   `protobuf:"varint,11,opt,name=holders_shrunk_at,json=holdersShrunkAt,proto3" json:"holders_shrunk_at,omitempty"` // the newest log position that dropped a key holder (§7.9)
+	PrefixRules     []*AclRepoPrefixRulesRow `protobuf:"bytes,12,rep,name=prefix_rules,json=prefixRules,proto3" json:"prefix_rules,omitempty"`                // every RepoPrefixRules that took effect on this repo, in
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1147,11 +1205,21 @@ func (x *AclRepo) GetHoldersShrunkAt() uint64 {
 	return 0
 }
 
+func (x *AclRepo) GetPrefixRules() []*AclRepoPrefixRulesRow {
+	if x != nil {
+		return x.PrefixRules
+	}
+	return nil
+}
+
+// A RepoAdmin{remove} stamps removed_at and keeps the row, so a reader judges the admin's right at a position before
+// its removal; the next base's compile drops a row whose removal its retention point has passed (QD-743).
 type AclRepoAdminRow struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SidecarId     []byte                 `protobuf:"bytes,1,opt,name=sidecar_id,json=sidecarId,proto3" json:"sidecar_id,omitempty"`
 	Signer        []byte                 `protobuf:"bytes,2,opt,name=signer,proto3" json:"signer,omitempty"`
 	At            uint64                 `protobuf:"varint,3,opt,name=at,proto3" json:"at,omitempty"`
+	RemovedAt     uint64                 `protobuf:"varint,4,opt,name=removed_at,json=removedAt,proto3" json:"removed_at,omitempty"` // the RepoAdmin{remove}'s position; 0 while the admin stands
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1203,6 +1271,13 @@ func (x *AclRepoAdminRow) GetSigner() []byte {
 func (x *AclRepoAdminRow) GetAt() uint64 {
 	if x != nil {
 		return x.At
+	}
+	return 0
+}
+
+func (x *AclRepoAdminRow) GetRemovedAt() uint64 {
+	if x != nil {
+		return x.RemovedAt
 	}
 	return 0
 }
@@ -1417,6 +1492,9 @@ type AclRepoDeletionRow struct {
 	Now           bool                   `protobuf:"varint,2,opt,name=now,proto3" json:"now,omitempty"`
 	DeletedAt     uint64                 `protobuf:"varint,3,opt,name=deleted_at,json=deletedAt,proto3" json:"deleted_at,omitempty"`
 	RestoredAt    uint64                 `protobuf:"varint,4,opt,name=restored_at,json=restoredAt,proto3" json:"restored_at,omitempty"`
+	DeletedTimeMs int64                  `protobuf:"varint,5,opt,name=deleted_time_ms,json=deletedTimeMs,proto3" json:"deleted_time_ms,omitempty"` // the RepoDelete entry's time_ms, which RepoRestore's 7 days and §11.12's
+	// shred start count from once the log no longer keeps the entry (QD-743)
+	Signer        []byte `protobuf:"bytes,6,opt,name=signer,proto3" json:"signer,omitempty"` // the RepoDelete's signer sidecar_id, as every row keeps its signer: what
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1479,6 +1557,75 @@ func (x *AclRepoDeletionRow) GetRestoredAt() uint64 {
 	return 0
 }
 
+func (x *AclRepoDeletionRow) GetDeletedTimeMs() int64 {
+	if x != nil {
+		return x.DeletedTimeMs
+	}
+	return 0
+}
+
+func (x *AclRepoDeletionRow) GetSigner() []byte {
+	if x != nil {
+		return x.Signer
+	}
+	return nil
+}
+
+// One RepoPrefixRules that took effect: its signer and position, and nothing of its body, which stays in the log's
+// entry and the config head's fold record (DESIGN-DETAILS 16.2.3). The set in force at a push's pin is the newest
+// row at or below it.
+type AclRepoPrefixRulesRow struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Signer        []byte                 `protobuf:"bytes,1,opt,name=signer,proto3" json:"signer,omitempty"` // the statement's signer, a sidecar_id
+	At            uint64                 `protobuf:"varint,2,opt,name=at,proto3" json:"at,omitempty"`        // the entry that carried it
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AclRepoPrefixRulesRow) Reset() {
+	*x = AclRepoPrefixRulesRow{}
+	mi := &file_protocol_acl_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AclRepoPrefixRulesRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AclRepoPrefixRulesRow) ProtoMessage() {}
+
+func (x *AclRepoPrefixRulesRow) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_acl_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AclRepoPrefixRulesRow.ProtoReflect.Descriptor instead.
+func (*AclRepoPrefixRulesRow) Descriptor() ([]byte, []int) {
+	return file_protocol_acl_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *AclRepoPrefixRulesRow) GetSigner() []byte {
+	if x != nil {
+		return x.Signer
+	}
+	return nil
+}
+
+func (x *AclRepoPrefixRulesRow) GetAt() uint64 {
+	if x != nil {
+		return x.At
+	}
+	return 0
+}
+
 type AclAudit struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ReaderAtoms   [][]byte               `protobuf:"bytes,1,rep,name=reader_atoms,json=readerAtoms,proto3" json:"reader_atoms,omitempty"`
@@ -1491,7 +1638,7 @@ type AclAudit struct {
 
 func (x *AclAudit) Reset() {
 	*x = AclAudit{}
-	mi := &file_protocol_acl_proto_msgTypes[11]
+	mi := &file_protocol_acl_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1503,7 +1650,7 @@ func (x *AclAudit) String() string {
 func (*AclAudit) ProtoMessage() {}
 
 func (x *AclAudit) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[11]
+	mi := &file_protocol_acl_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1516,7 +1663,7 @@ func (x *AclAudit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AclAudit.ProtoReflect.Descriptor instead.
 func (*AclAudit) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{11}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *AclAudit) GetReaderAtoms() [][]byte {
@@ -1568,7 +1715,7 @@ type AclTarget struct {
 
 func (x *AclTarget) Reset() {
 	*x = AclTarget{}
-	mi := &file_protocol_acl_proto_msgTypes[12]
+	mi := &file_protocol_acl_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1580,7 +1727,7 @@ func (x *AclTarget) String() string {
 func (*AclTarget) ProtoMessage() {}
 
 func (x *AclTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[12]
+	mi := &file_protocol_acl_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1593,7 +1740,7 @@ func (x *AclTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AclTarget.ProtoReflect.Descriptor instead.
 func (*AclTarget) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{12}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *AclTarget) GetAtom() []byte {
@@ -1674,7 +1821,7 @@ type AclSuspension struct {
 
 func (x *AclSuspension) Reset() {
 	*x = AclSuspension{}
-	mi := &file_protocol_acl_proto_msgTypes[13]
+	mi := &file_protocol_acl_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1686,7 +1833,7 @@ func (x *AclSuspension) String() string {
 func (*AclSuspension) ProtoMessage() {}
 
 func (x *AclSuspension) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[13]
+	mi := &file_protocol_acl_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1699,7 +1846,7 @@ func (x *AclSuspension) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AclSuspension.ProtoReflect.Descriptor instead.
 func (*AclSuspension) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{13}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *AclSuspension) GetSubject() []byte {
@@ -1749,7 +1896,7 @@ type AclSpentGrant struct {
 
 func (x *AclSpentGrant) Reset() {
 	*x = AclSpentGrant{}
-	mi := &file_protocol_acl_proto_msgTypes[14]
+	mi := &file_protocol_acl_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1761,7 +1908,7 @@ func (x *AclSpentGrant) String() string {
 func (*AclSpentGrant) ProtoMessage() {}
 
 func (x *AclSpentGrant) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[14]
+	mi := &file_protocol_acl_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1774,7 +1921,7 @@ func (x *AclSpentGrant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AclSpentGrant.ProtoReflect.Descriptor instead.
 func (*AclSpentGrant) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{14}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *AclSpentGrant) GetGrantId() []byte {
@@ -1803,7 +1950,7 @@ type GrantActivate struct {
 
 func (x *GrantActivate) Reset() {
 	*x = GrantActivate{}
-	mi := &file_protocol_acl_proto_msgTypes[15]
+	mi := &file_protocol_acl_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1815,7 +1962,7 @@ func (x *GrantActivate) String() string {
 func (*GrantActivate) ProtoMessage() {}
 
 func (x *GrantActivate) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[15]
+	mi := &file_protocol_acl_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1828,7 +1975,7 @@ func (x *GrantActivate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GrantActivate.ProtoReflect.Descriptor instead.
 func (*GrantActivate) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{15}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GrantActivate) GetHeader() *bridge.StatementHeader {
@@ -1871,7 +2018,7 @@ type EvsShare struct {
 
 func (x *EvsShare) Reset() {
 	*x = EvsShare{}
-	mi := &file_protocol_acl_proto_msgTypes[16]
+	mi := &file_protocol_acl_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1883,7 +2030,7 @@ func (x *EvsShare) String() string {
 func (*EvsShare) ProtoMessage() {}
 
 func (x *EvsShare) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[16]
+	mi := &file_protocol_acl_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1896,7 +2043,7 @@ func (x *EvsShare) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvsShare.ProtoReflect.Descriptor instead.
 func (*EvsShare) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{16}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *EvsShare) GetHeader() *bridge.StatementHeader {
@@ -1937,7 +2084,7 @@ type OwnerConfirm struct {
 
 func (x *OwnerConfirm) Reset() {
 	*x = OwnerConfirm{}
-	mi := &file_protocol_acl_proto_msgTypes[17]
+	mi := &file_protocol_acl_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1949,7 +2096,7 @@ func (x *OwnerConfirm) String() string {
 func (*OwnerConfirm) ProtoMessage() {}
 
 func (x *OwnerConfirm) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[17]
+	mi := &file_protocol_acl_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1962,7 +2109,7 @@ func (x *OwnerConfirm) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OwnerConfirm.ProtoReflect.Descriptor instead.
 func (*OwnerConfirm) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{17}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *OwnerConfirm) GetHeader() *bridge.StatementHeader {
@@ -1990,7 +2137,7 @@ type RepoCreate struct {
 
 func (x *RepoCreate) Reset() {
 	*x = RepoCreate{}
-	mi := &file_protocol_acl_proto_msgTypes[18]
+	mi := &file_protocol_acl_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2002,7 +2149,7 @@ func (x *RepoCreate) String() string {
 func (*RepoCreate) ProtoMessage() {}
 
 func (x *RepoCreate) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[18]
+	mi := &file_protocol_acl_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2015,7 +2162,7 @@ func (x *RepoCreate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RepoCreate.ProtoReflect.Descriptor instead.
 func (*RepoCreate) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{18}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *RepoCreate) GetHeader() *bridge.StatementHeader {
@@ -2051,7 +2198,7 @@ type RepoAdmin struct {
 
 func (x *RepoAdmin) Reset() {
 	*x = RepoAdmin{}
-	mi := &file_protocol_acl_proto_msgTypes[19]
+	mi := &file_protocol_acl_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2063,7 +2210,7 @@ func (x *RepoAdmin) String() string {
 func (*RepoAdmin) ProtoMessage() {}
 
 func (x *RepoAdmin) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[19]
+	mi := &file_protocol_acl_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2076,7 +2223,7 @@ func (x *RepoAdmin) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RepoAdmin.ProtoReflect.Descriptor instead.
 func (*RepoAdmin) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{19}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *RepoAdmin) GetHeader() *bridge.StatementHeader {
@@ -2120,7 +2267,7 @@ type RepoGrant struct {
 
 func (x *RepoGrant) Reset() {
 	*x = RepoGrant{}
-	mi := &file_protocol_acl_proto_msgTypes[20]
+	mi := &file_protocol_acl_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2132,7 +2279,7 @@ func (x *RepoGrant) String() string {
 func (*RepoGrant) ProtoMessage() {}
 
 func (x *RepoGrant) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[20]
+	mi := &file_protocol_acl_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2145,7 +2292,7 @@ func (x *RepoGrant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RepoGrant.ProtoReflect.Descriptor instead.
 func (*RepoGrant) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{20}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *RepoGrant) GetHeader() *bridge.StatementHeader {
@@ -2194,7 +2341,7 @@ type RepoRevoke struct {
 
 func (x *RepoRevoke) Reset() {
 	*x = RepoRevoke{}
-	mi := &file_protocol_acl_proto_msgTypes[21]
+	mi := &file_protocol_acl_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2206,7 +2353,7 @@ func (x *RepoRevoke) String() string {
 func (*RepoRevoke) ProtoMessage() {}
 
 func (x *RepoRevoke) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[21]
+	mi := &file_protocol_acl_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2219,7 +2366,7 @@ func (x *RepoRevoke) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RepoRevoke.ProtoReflect.Descriptor instead.
 func (*RepoRevoke) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{21}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *RepoRevoke) GetHeader() *bridge.StatementHeader {
@@ -2255,7 +2402,7 @@ type RepoDelete struct {
 
 func (x *RepoDelete) Reset() {
 	*x = RepoDelete{}
-	mi := &file_protocol_acl_proto_msgTypes[22]
+	mi := &file_protocol_acl_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2267,7 +2414,7 @@ func (x *RepoDelete) String() string {
 func (*RepoDelete) ProtoMessage() {}
 
 func (x *RepoDelete) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[22]
+	mi := &file_protocol_acl_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2280,7 +2427,7 @@ func (x *RepoDelete) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RepoDelete.ProtoReflect.Descriptor instead.
 func (*RepoDelete) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{22}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *RepoDelete) GetHeader() *bridge.StatementHeader {
@@ -2322,7 +2469,7 @@ type RepoRestore struct {
 
 func (x *RepoRestore) Reset() {
 	*x = RepoRestore{}
-	mi := &file_protocol_acl_proto_msgTypes[23]
+	mi := &file_protocol_acl_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2334,7 +2481,7 @@ func (x *RepoRestore) String() string {
 func (*RepoRestore) ProtoMessage() {}
 
 func (x *RepoRestore) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[23]
+	mi := &file_protocol_acl_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2347,7 +2494,7 @@ func (x *RepoRestore) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RepoRestore.ProtoReflect.Descriptor instead.
 func (*RepoRestore) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{23}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RepoRestore) GetHeader() *bridge.StatementHeader {
@@ -2385,7 +2532,7 @@ type RepoVersioning struct {
 
 func (x *RepoVersioning) Reset() {
 	*x = RepoVersioning{}
-	mi := &file_protocol_acl_proto_msgTypes[24]
+	mi := &file_protocol_acl_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2397,7 +2544,7 @@ func (x *RepoVersioning) String() string {
 func (*RepoVersioning) ProtoMessage() {}
 
 func (x *RepoVersioning) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[24]
+	mi := &file_protocol_acl_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2410,7 +2557,7 @@ func (x *RepoVersioning) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RepoVersioning.ProtoReflect.Descriptor instead.
 func (*RepoVersioning) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{24}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *RepoVersioning) GetHeader() *bridge.StatementHeader {
@@ -2441,6 +2588,176 @@ func (x *RepoVersioning) GetSealedRules() []byte {
 	return nil
 }
 
+// v1, Q-EVS-3 (a) (QD-212; DESIGN-DETAILS 16.2.2): a repo admin or a config writer, only in a general repo that is not
+// deleted. From M2 every verifier checks its id-level rule, reading sealed_rules' length alone, and folds {signer, at}
+// into AclRepo.prefix_rules; readers enforce the rules from M6 (D-PHASE-9).
+type RepoPrefixRules struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Header        *bridge.StatementHeader `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
+	RepoId        []byte                  `protobuf:"bytes,2,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
+	SealedRules   []byte                  `protobuf:"bytes,3,opt,name=sealed_rules,json=sealedRules,proto3" json:"sealed_rules,omitempty"` // a PrefixRuleSet in config_seal's form, sealed to the repo's own generation:
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RepoPrefixRules) Reset() {
+	*x = RepoPrefixRules{}
+	mi := &file_protocol_acl_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RepoPrefixRules) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RepoPrefixRules) ProtoMessage() {}
+
+func (x *RepoPrefixRules) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_acl_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RepoPrefixRules.ProtoReflect.Descriptor instead.
+func (*RepoPrefixRules) Descriptor() ([]byte, []int) {
+	return file_protocol_acl_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *RepoPrefixRules) GetHeader() *bridge.StatementHeader {
+	if x != nil {
+		return x.Header
+	}
+	return nil
+}
+
+func (x *RepoPrefixRules) GetRepoId() []byte {
+	if x != nil {
+		return x.RepoId
+	}
+	return nil
+}
+
+func (x *RepoPrefixRules) GetSealedRules() []byte {
+	if x != nil {
+		return x.SealedRules
+	}
+	return nil
+}
+
+// The plaintext of RepoPrefixRules.sealed_rules, which no server ever holds. A set with no rule names nobody, so
+// nobody may write; the one rule {autogroup:sidecar, no path} restricts nobody.
+type PrefixRuleSet struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rules         []*PrefixRule          `protobuf:"bytes,1,rep,name=rules,proto3" json:"rules,omitempty"` // ascending by (subject, path), no rule twice
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrefixRuleSet) Reset() {
+	*x = PrefixRuleSet{}
+	mi := &file_protocol_acl_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrefixRuleSet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrefixRuleSet) ProtoMessage() {}
+
+func (x *PrefixRuleSet) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_acl_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrefixRuleSet.ProtoReflect.Descriptor instead.
+func (*PrefixRuleSet) Descriptor() ([]byte, []int) {
+	return file_protocol_acl_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *PrefixRuleSet) GetRules() []*PrefixRule {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
+type PrefixRule struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Subject []byte                 `protobuf:"bytes,1,opt,name=subject,proto3" json:"subject,omitempty"` // 16 B: a sidecar_id, a member_id, a tag id, or the autogroup atom of
+	// sidecar, member, tagged or ephemeral
+	Path          [][]byte     `protobuf:"bytes,2,rep,name=path,proto3" json:"path,omitempty"` // the prefix in whole components, §11.6's raw names; none: every path
+	Action        PrefixAction `protobuf:"varint,3,opt,name=action,proto3,enum=urnetwork.sidecar.PrefixAction" json:"action,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrefixRule) Reset() {
+	*x = PrefixRule{}
+	mi := &file_protocol_acl_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrefixRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrefixRule) ProtoMessage() {}
+
+func (x *PrefixRule) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_acl_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrefixRule.ProtoReflect.Descriptor instead.
+func (*PrefixRule) Descriptor() ([]byte, []int) {
+	return file_protocol_acl_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *PrefixRule) GetSubject() []byte {
+	if x != nil {
+		return x.Subject
+	}
+	return nil
+}
+
+func (x *PrefixRule) GetPath() [][]byte {
+	if x != nil {
+		return x.Path
+	}
+	return nil
+}
+
+func (x *PrefixRule) GetAction() PrefixAction {
+	if x != nil {
+		return x.Action
+	}
+	return PrefixAction_PREFIX_ACTION_UNSPECIFIED
+}
+
 type AuditOptIn struct {
 	state         protoimpl.MessageState  `protogen:"open.v1"`
 	Header        *bridge.StatementHeader `protobuf:"bytes,1,opt,name=header,proto3" json:"header,omitempty"`
@@ -2452,7 +2769,7 @@ type AuditOptIn struct {
 
 func (x *AuditOptIn) Reset() {
 	*x = AuditOptIn{}
-	mi := &file_protocol_acl_proto_msgTypes[25]
+	mi := &file_protocol_acl_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2464,7 +2781,7 @@ func (x *AuditOptIn) String() string {
 func (*AuditOptIn) ProtoMessage() {}
 
 func (x *AuditOptIn) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[25]
+	mi := &file_protocol_acl_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2477,7 +2794,7 @@ func (x *AuditOptIn) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditOptIn.ProtoReflect.Descriptor instead.
 func (*AuditOptIn) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{25}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *AuditOptIn) GetHeader() *bridge.StatementHeader {
@@ -2510,7 +2827,7 @@ type AuditOptOut struct {
 
 func (x *AuditOptOut) Reset() {
 	*x = AuditOptOut{}
-	mi := &file_protocol_acl_proto_msgTypes[26]
+	mi := &file_protocol_acl_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2522,7 +2839,7 @@ func (x *AuditOptOut) String() string {
 func (*AuditOptOut) ProtoMessage() {}
 
 func (x *AuditOptOut) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_acl_proto_msgTypes[26]
+	mi := &file_protocol_acl_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2535,7 +2852,7 @@ func (x *AuditOptOut) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditOptOut.ProtoReflect.Descriptor instead.
 func (*AuditOptOut) Descriptor() ([]byte, []int) {
-	return file_protocol_acl_proto_rawDescGZIP(), []int{26}
+	return file_protocol_acl_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *AuditOptOut) GetHeader() *bridge.StatementHeader {
@@ -2549,7 +2866,7 @@ var File_protocol_acl_proto protoreflect.FileDescriptor
 
 const file_protocol_acl_proto_rawDesc = "" +
 	"\n" +
-	"\x12protocol/acl.proto\x12\x11urnetwork.sidecar\x1a\x1aprotocol/bridge/auth.proto\x1a\x1cprotocol/bridge/signed.proto\"\xd5\x03\n" +
+	"\x12protocol/acl.proto\x12\x11urnetwork.sidecar\x1a\x1aprotocol/bridge/auth.proto\x1a\x1cprotocol/bridge/signed.proto\"\x80\x04\n" +
 	"\aAclRows\x12!\n" +
 	"\fhas_document\x18\x01 \x01(\bR\vhasDocument\x120\n" +
 	"\x05atoms\x18\x02 \x03(\v2\x1a.urnetwork.sidecar.AclAtomR\x05atoms\x120\n" +
@@ -2559,7 +2876,9 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x06bridge\x18\x06 \x01(\fR\x06bridge\x121\n" +
 	"\x05audit\x18\a \x01(\v2\x1b.urnetwork.sidecar.AclAuditR\x05audit\x12B\n" +
 	"\vsuspensions\x18\b \x03(\v2 .urnetwork.sidecar.AclSuspensionR\vsuspensions\x12C\n" +
-	"\fspent_grants\x18\t \x03(\v2 .urnetwork.sidecar.AclSpentGrantR\vspentGrants\"\x80\x02\n" +
+	"\fspent_grants\x18\t \x03(\v2 .urnetwork.sidecar.AclSpentGrantR\vspentGrants\x12)\n" +
+	"\x10evidence_default\x18\n" +
+	" \x03(\rR\x0fevidenceDefault\"\x80\x02\n" +
 	"\aAclAtom\x12\x12\n" +
 	"\x04atom\x18\x01 \x01(\fR\x04atom\x12\x1d\n" +
 	"\n" +
@@ -2598,7 +2917,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\tapprovers\x18\x06 \x01(\rR\tapprovers\x124\n" +
 	"\x16default_expiry_seconds\x18\a \x01(\x03R\x14defaultExpirySeconds\x12,\n" +
 	"\x12max_expiry_seconds\x18\b \x01(\x03R\x10maxExpirySeconds\x12\x1a\n" +
-	"\bevidence\x18\t \x03(\rR\bevidence\"\xcc\x04\n" +
+	"\bevidence\x18\t \x03(\rR\bevidence\"\x99\x05\n" +
 	"\aAclRepo\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\fR\x06repoId\x12/\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1b.urnetwork.sidecar.RepoKindR\x04kind\x12&\n" +
@@ -2611,12 +2930,15 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\bdeletion\x18\t \x01(\v2%.urnetwork.sidecar.AclRepoDeletionRowR\bdeletion\x129\n" +
 	"\x04lock\x18\n" +
 	" \x01(\x0e2%.urnetwork.sidecar.RepoVersioningLockR\x04lock\x12*\n" +
-	"\x11holders_shrunk_at\x18\v \x01(\x04R\x0fholdersShrunkAt\"X\n" +
+	"\x11holders_shrunk_at\x18\v \x01(\x04R\x0fholdersShrunkAt\x12K\n" +
+	"\fprefix_rules\x18\f \x03(\v2(.urnetwork.sidecar.AclRepoPrefixRulesRowR\vprefixRules\"w\n" +
 	"\x0fAclRepoAdminRow\x12\x1d\n" +
 	"\n" +
 	"sidecar_id\x18\x01 \x01(\fR\tsidecarId\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
-	"\x02at\x18\x03 \x01(\x04R\x02at\"\xa3\x01\n" +
+	"\x02at\x18\x03 \x01(\x04R\x02at\x12\x1d\n" +
+	"\n" +
+	"removed_at\x18\x04 \x01(\x04R\tremovedAt\"\xa3\x01\n" +
 	"\x0fAclRepoGrantRow\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\fR\asubject\x124\n" +
 	"\x04role\x18\x02 \x01(\x0e2 .urnetwork.sidecar.RepoGrantRoleR\x04role\x12\x18\n" +
@@ -2631,7 +2953,7 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x10AclRepoRevokeRow\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\fR\asubject\x12\x16\n" +
 	"\x06signer\x18\x02 \x01(\fR\x06signer\x12\x0e\n" +
-	"\x02at\x18\x03 \x01(\x04R\x02at\"\x87\x01\n" +
+	"\x02at\x18\x03 \x01(\x04R\x02at\"\xc7\x01\n" +
 	"\x12AclRepoDeletionRow\x12\x1f\n" +
 	"\vdeletion_id\x18\x01 \x01(\fR\n" +
 	"deletionId\x12\x10\n" +
@@ -2639,7 +2961,12 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\n" +
 	"deleted_at\x18\x03 \x01(\x04R\tdeletedAt\x12\x1f\n" +
 	"\vrestored_at\x18\x04 \x01(\x04R\n" +
-	"restoredAt\"\x89\x01\n" +
+	"restoredAt\x12&\n" +
+	"\x0fdeleted_time_ms\x18\x05 \x01(\x03R\rdeletedTimeMs\x12\x16\n" +
+	"\x06signer\x18\x06 \x01(\fR\x06signer\"?\n" +
+	"\x15AclRepoPrefixRulesRow\x12\x16\n" +
+	"\x06signer\x18\x01 \x01(\fR\x06signer\x12\x0e\n" +
+	"\x02at\x18\x02 \x01(\x04R\x02at\"\x89\x01\n" +
 	"\bAclAudit\x12!\n" +
 	"\freader_atoms\x18\x01 \x03(\fR\vreaderAtoms\x12\x1d\n" +
 	"\n" +
@@ -2723,7 +3050,18 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x17\n" +
 	"\arepo_id\x18\x02 \x01(\fR\x06repoId\x129\n" +
 	"\x04lock\x18\x03 \x01(\x0e2%.urnetwork.sidecar.RepoVersioningLockR\x04lock\x12!\n" +
-	"\fsealed_rules\x18\x04 \x01(\fR\vsealedRules\"\x88\x01\n" +
+	"\fsealed_rules\x18\x04 \x01(\fR\vsealedRules\"\x89\x01\n" +
+	"\x0fRepoPrefixRules\x12:\n" +
+	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12\x17\n" +
+	"\arepo_id\x18\x02 \x01(\fR\x06repoId\x12!\n" +
+	"\fsealed_rules\x18\x03 \x01(\fR\vsealedRules\"D\n" +
+	"\rPrefixRuleSet\x123\n" +
+	"\x05rules\x18\x01 \x03(\v2\x1d.urnetwork.sidecar.PrefixRuleR\x05rules\"s\n" +
+	"\n" +
+	"PrefixRule\x12\x18\n" +
+	"\asubject\x18\x01 \x01(\fR\asubject\x12\x12\n" +
+	"\x04path\x18\x02 \x03(\fR\x04path\x127\n" +
+	"\x06action\x18\x03 \x01(\x0e2\x1f.urnetwork.sidecar.PrefixActionR\x06action\"\x88\x01\n" +
 	"\n" +
 	"AuditOptIn\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2\".urnetwork.sidecar.StatementHeaderR\x06header\x12!\n" +
@@ -2793,7 +3131,10 @@ const file_protocol_acl_proto_rawDesc = "" +
 	"\x0fRepoAdminChange\x12!\n" +
 	"\x1dREPO_ADMIN_CHANGE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15REPO_ADMIN_CHANGE_ADD\x10\x01\x12\x1c\n" +
-	"\x18REPO_ADMIN_CHANGE_REMOVE\x10\x02B'Z%github.com/urnetwork/sidecar/protocolb\x06proto3"
+	"\x18REPO_ADMIN_CHANGE_REMOVE\x10\x02*F\n" +
+	"\fPrefixAction\x12\x1d\n" +
+	"\x19PREFIX_ACTION_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13PREFIX_ACTION_WRITE\x10\x01B'Z%github.com/urnetwork/sidecar/protocolb\x06proto3"
 
 var (
 	file_protocol_acl_proto_rawDescOnce sync.Once
@@ -2807,8 +3148,8 @@ func file_protocol_acl_proto_rawDescGZIP() []byte {
 	return file_protocol_acl_proto_rawDescData
 }
 
-var file_protocol_acl_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
-var file_protocol_acl_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_protocol_acl_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
+var file_protocol_acl_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_protocol_acl_proto_goTypes = []any{
 	(AclAutogroup)(0),              // 0: urnetwork.sidecar.AclAutogroup
 	(AclAction)(0),                 // 1: urnetwork.sidecar.AclAction
@@ -2818,78 +3159,87 @@ var file_protocol_acl_proto_goTypes = []any{
 	(RepoGrantRole)(0),             // 5: urnetwork.sidecar.RepoGrantRole
 	(RepoVersioningLock)(0),        // 6: urnetwork.sidecar.RepoVersioningLock
 	(RepoAdminChange)(0),           // 7: urnetwork.sidecar.RepoAdminChange
-	(*AclRows)(nil),                // 8: urnetwork.sidecar.AclRows
-	(*AclAtom)(nil),                // 9: urnetwork.sidecar.AclAtom
-	(*AclPortRange)(nil),           // 10: urnetwork.sidecar.AclPortRange
-	(*AclRule)(nil),                // 11: urnetwork.sidecar.AclRule
-	(*AclRequestRule)(nil),         // 12: urnetwork.sidecar.AclRequestRule
-	(*AclRepo)(nil),                // 13: urnetwork.sidecar.AclRepo
-	(*AclRepoAdminRow)(nil),        // 14: urnetwork.sidecar.AclRepoAdminRow
-	(*AclRepoGrantRow)(nil),        // 15: urnetwork.sidecar.AclRepoGrantRow
-	(*AclRepoShareRow)(nil),        // 16: urnetwork.sidecar.AclRepoShareRow
-	(*AclRepoRevokeRow)(nil),       // 17: urnetwork.sidecar.AclRepoRevokeRow
-	(*AclRepoDeletionRow)(nil),     // 18: urnetwork.sidecar.AclRepoDeletionRow
-	(*AclAudit)(nil),               // 19: urnetwork.sidecar.AclAudit
-	(*AclTarget)(nil),              // 20: urnetwork.sidecar.AclTarget
-	(*AclSuspension)(nil),          // 21: urnetwork.sidecar.AclSuspension
-	(*AclSpentGrant)(nil),          // 22: urnetwork.sidecar.AclSpentGrant
-	(*GrantActivate)(nil),          // 23: urnetwork.sidecar.GrantActivate
-	(*EvsShare)(nil),               // 24: urnetwork.sidecar.EvsShare
-	(*OwnerConfirm)(nil),           // 25: urnetwork.sidecar.OwnerConfirm
-	(*RepoCreate)(nil),             // 26: urnetwork.sidecar.RepoCreate
-	(*RepoAdmin)(nil),              // 27: urnetwork.sidecar.RepoAdmin
-	(*RepoGrant)(nil),              // 28: urnetwork.sidecar.RepoGrant
-	(*RepoRevoke)(nil),             // 29: urnetwork.sidecar.RepoRevoke
-	(*RepoDelete)(nil),             // 30: urnetwork.sidecar.RepoDelete
-	(*RepoRestore)(nil),            // 31: urnetwork.sidecar.RepoRestore
-	(*RepoVersioning)(nil),         // 32: urnetwork.sidecar.RepoVersioning
-	(*AuditOptIn)(nil),             // 33: urnetwork.sidecar.AuditOptIn
-	(*AuditOptOut)(nil),            // 34: urnetwork.sidecar.AuditOptOut
-	(*bridge.StatementHeader)(nil), // 35: urnetwork.sidecar.StatementHeader
-	(*bridge.Signed)(nil),          // 36: urnetwork.sidecar.Signed
+	(PrefixAction)(0),              // 8: urnetwork.sidecar.PrefixAction
+	(*AclRows)(nil),                // 9: urnetwork.sidecar.AclRows
+	(*AclAtom)(nil),                // 10: urnetwork.sidecar.AclAtom
+	(*AclPortRange)(nil),           // 11: urnetwork.sidecar.AclPortRange
+	(*AclRule)(nil),                // 12: urnetwork.sidecar.AclRule
+	(*AclRequestRule)(nil),         // 13: urnetwork.sidecar.AclRequestRule
+	(*AclRepo)(nil),                // 14: urnetwork.sidecar.AclRepo
+	(*AclRepoAdminRow)(nil),        // 15: urnetwork.sidecar.AclRepoAdminRow
+	(*AclRepoGrantRow)(nil),        // 16: urnetwork.sidecar.AclRepoGrantRow
+	(*AclRepoShareRow)(nil),        // 17: urnetwork.sidecar.AclRepoShareRow
+	(*AclRepoRevokeRow)(nil),       // 18: urnetwork.sidecar.AclRepoRevokeRow
+	(*AclRepoDeletionRow)(nil),     // 19: urnetwork.sidecar.AclRepoDeletionRow
+	(*AclRepoPrefixRulesRow)(nil),  // 20: urnetwork.sidecar.AclRepoPrefixRulesRow
+	(*AclAudit)(nil),               // 21: urnetwork.sidecar.AclAudit
+	(*AclTarget)(nil),              // 22: urnetwork.sidecar.AclTarget
+	(*AclSuspension)(nil),          // 23: urnetwork.sidecar.AclSuspension
+	(*AclSpentGrant)(nil),          // 24: urnetwork.sidecar.AclSpentGrant
+	(*GrantActivate)(nil),          // 25: urnetwork.sidecar.GrantActivate
+	(*EvsShare)(nil),               // 26: urnetwork.sidecar.EvsShare
+	(*OwnerConfirm)(nil),           // 27: urnetwork.sidecar.OwnerConfirm
+	(*RepoCreate)(nil),             // 28: urnetwork.sidecar.RepoCreate
+	(*RepoAdmin)(nil),              // 29: urnetwork.sidecar.RepoAdmin
+	(*RepoGrant)(nil),              // 30: urnetwork.sidecar.RepoGrant
+	(*RepoRevoke)(nil),             // 31: urnetwork.sidecar.RepoRevoke
+	(*RepoDelete)(nil),             // 32: urnetwork.sidecar.RepoDelete
+	(*RepoRestore)(nil),            // 33: urnetwork.sidecar.RepoRestore
+	(*RepoVersioning)(nil),         // 34: urnetwork.sidecar.RepoVersioning
+	(*RepoPrefixRules)(nil),        // 35: urnetwork.sidecar.RepoPrefixRules
+	(*PrefixRuleSet)(nil),          // 36: urnetwork.sidecar.PrefixRuleSet
+	(*PrefixRule)(nil),             // 37: urnetwork.sidecar.PrefixRule
+	(*AuditOptIn)(nil),             // 38: urnetwork.sidecar.AuditOptIn
+	(*AuditOptOut)(nil),            // 39: urnetwork.sidecar.AuditOptOut
+	(*bridge.StatementHeader)(nil), // 40: urnetwork.sidecar.StatementHeader
+	(*bridge.Signed)(nil),          // 41: urnetwork.sidecar.Signed
 }
 var file_protocol_acl_proto_depIdxs = []int32{
-	9,  // 0: urnetwork.sidecar.AclRows.atoms:type_name -> urnetwork.sidecar.AclAtom
-	11, // 1: urnetwork.sidecar.AclRows.rules:type_name -> urnetwork.sidecar.AclRule
-	12, // 2: urnetwork.sidecar.AclRows.requests:type_name -> urnetwork.sidecar.AclRequestRule
-	13, // 3: urnetwork.sidecar.AclRows.repos:type_name -> urnetwork.sidecar.AclRepo
-	19, // 4: urnetwork.sidecar.AclRows.audit:type_name -> urnetwork.sidecar.AclAudit
-	21, // 5: urnetwork.sidecar.AclRows.suspensions:type_name -> urnetwork.sidecar.AclSuspension
-	22, // 6: urnetwork.sidecar.AclRows.spent_grants:type_name -> urnetwork.sidecar.AclSpentGrant
-	20, // 7: urnetwork.sidecar.AclRule.targets:type_name -> urnetwork.sidecar.AclTarget
+	10, // 0: urnetwork.sidecar.AclRows.atoms:type_name -> urnetwork.sidecar.AclAtom
+	12, // 1: urnetwork.sidecar.AclRows.rules:type_name -> urnetwork.sidecar.AclRule
+	13, // 2: urnetwork.sidecar.AclRows.requests:type_name -> urnetwork.sidecar.AclRequestRule
+	14, // 3: urnetwork.sidecar.AclRows.repos:type_name -> urnetwork.sidecar.AclRepo
+	21, // 4: urnetwork.sidecar.AclRows.audit:type_name -> urnetwork.sidecar.AclAudit
+	23, // 5: urnetwork.sidecar.AclRows.suspensions:type_name -> urnetwork.sidecar.AclSuspension
+	24, // 6: urnetwork.sidecar.AclRows.spent_grants:type_name -> urnetwork.sidecar.AclSpentGrant
+	22, // 7: urnetwork.sidecar.AclRule.targets:type_name -> urnetwork.sidecar.AclTarget
 	2,  // 8: urnetwork.sidecar.AclRule.audience:type_name -> urnetwork.sidecar.AclAudience
 	3,  // 9: urnetwork.sidecar.AclRule.app_mode:type_name -> urnetwork.sidecar.AclAppMode
-	20, // 10: urnetwork.sidecar.AclRequestRule.targets:type_name -> urnetwork.sidecar.AclTarget
+	22, // 10: urnetwork.sidecar.AclRequestRule.targets:type_name -> urnetwork.sidecar.AclTarget
 	4,  // 11: urnetwork.sidecar.AclRepo.kind:type_name -> urnetwork.sidecar.RepoKind
-	14, // 12: urnetwork.sidecar.AclRepo.admins:type_name -> urnetwork.sidecar.AclRepoAdminRow
-	15, // 13: urnetwork.sidecar.AclRepo.grants:type_name -> urnetwork.sidecar.AclRepoGrantRow
-	16, // 14: urnetwork.sidecar.AclRepo.shares:type_name -> urnetwork.sidecar.AclRepoShareRow
-	17, // 15: urnetwork.sidecar.AclRepo.revokes:type_name -> urnetwork.sidecar.AclRepoRevokeRow
-	18, // 16: urnetwork.sidecar.AclRepo.deletion:type_name -> urnetwork.sidecar.AclRepoDeletionRow
+	15, // 12: urnetwork.sidecar.AclRepo.admins:type_name -> urnetwork.sidecar.AclRepoAdminRow
+	16, // 13: urnetwork.sidecar.AclRepo.grants:type_name -> urnetwork.sidecar.AclRepoGrantRow
+	17, // 14: urnetwork.sidecar.AclRepo.shares:type_name -> urnetwork.sidecar.AclRepoShareRow
+	18, // 15: urnetwork.sidecar.AclRepo.revokes:type_name -> urnetwork.sidecar.AclRepoRevokeRow
+	19, // 16: urnetwork.sidecar.AclRepo.deletion:type_name -> urnetwork.sidecar.AclRepoDeletionRow
 	6,  // 17: urnetwork.sidecar.AclRepo.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
-	5,  // 18: urnetwork.sidecar.AclRepoGrantRow.role:type_name -> urnetwork.sidecar.RepoGrantRole
-	35, // 19: urnetwork.sidecar.GrantActivate.header:type_name -> urnetwork.sidecar.StatementHeader
-	36, // 20: urnetwork.sidecar.GrantActivate.decisions:type_name -> urnetwork.sidecar.Signed
-	35, // 21: urnetwork.sidecar.EvsShare.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 22: urnetwork.sidecar.OwnerConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 23: urnetwork.sidecar.RepoCreate.header:type_name -> urnetwork.sidecar.StatementHeader
-	4,  // 24: urnetwork.sidecar.RepoCreate.kind:type_name -> urnetwork.sidecar.RepoKind
-	35, // 25: urnetwork.sidecar.RepoAdmin.header:type_name -> urnetwork.sidecar.StatementHeader
-	7,  // 26: urnetwork.sidecar.RepoAdmin.change:type_name -> urnetwork.sidecar.RepoAdminChange
-	35, // 27: urnetwork.sidecar.RepoGrant.header:type_name -> urnetwork.sidecar.StatementHeader
-	5,  // 28: urnetwork.sidecar.RepoGrant.role:type_name -> urnetwork.sidecar.RepoGrantRole
-	35, // 29: urnetwork.sidecar.RepoRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 30: urnetwork.sidecar.RepoDelete.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 31: urnetwork.sidecar.RepoRestore.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 32: urnetwork.sidecar.RepoVersioning.header:type_name -> urnetwork.sidecar.StatementHeader
-	6,  // 33: urnetwork.sidecar.RepoVersioning.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
-	35, // 34: urnetwork.sidecar.AuditOptIn.header:type_name -> urnetwork.sidecar.StatementHeader
-	35, // 35: urnetwork.sidecar.AuditOptOut.header:type_name -> urnetwork.sidecar.StatementHeader
-	36, // [36:36] is the sub-list for method output_type
-	36, // [36:36] is the sub-list for method input_type
-	36, // [36:36] is the sub-list for extension type_name
-	36, // [36:36] is the sub-list for extension extendee
-	0,  // [0:36] is the sub-list for field type_name
+	20, // 18: urnetwork.sidecar.AclRepo.prefix_rules:type_name -> urnetwork.sidecar.AclRepoPrefixRulesRow
+	5,  // 19: urnetwork.sidecar.AclRepoGrantRow.role:type_name -> urnetwork.sidecar.RepoGrantRole
+	40, // 20: urnetwork.sidecar.GrantActivate.header:type_name -> urnetwork.sidecar.StatementHeader
+	41, // 21: urnetwork.sidecar.GrantActivate.decisions:type_name -> urnetwork.sidecar.Signed
+	40, // 22: urnetwork.sidecar.EvsShare.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 23: urnetwork.sidecar.OwnerConfirm.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 24: urnetwork.sidecar.RepoCreate.header:type_name -> urnetwork.sidecar.StatementHeader
+	4,  // 25: urnetwork.sidecar.RepoCreate.kind:type_name -> urnetwork.sidecar.RepoKind
+	40, // 26: urnetwork.sidecar.RepoAdmin.header:type_name -> urnetwork.sidecar.StatementHeader
+	7,  // 27: urnetwork.sidecar.RepoAdmin.change:type_name -> urnetwork.sidecar.RepoAdminChange
+	40, // 28: urnetwork.sidecar.RepoGrant.header:type_name -> urnetwork.sidecar.StatementHeader
+	5,  // 29: urnetwork.sidecar.RepoGrant.role:type_name -> urnetwork.sidecar.RepoGrantRole
+	40, // 30: urnetwork.sidecar.RepoRevoke.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 31: urnetwork.sidecar.RepoDelete.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 32: urnetwork.sidecar.RepoRestore.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 33: urnetwork.sidecar.RepoVersioning.header:type_name -> urnetwork.sidecar.StatementHeader
+	6,  // 34: urnetwork.sidecar.RepoVersioning.lock:type_name -> urnetwork.sidecar.RepoVersioningLock
+	40, // 35: urnetwork.sidecar.RepoPrefixRules.header:type_name -> urnetwork.sidecar.StatementHeader
+	37, // 36: urnetwork.sidecar.PrefixRuleSet.rules:type_name -> urnetwork.sidecar.PrefixRule
+	8,  // 37: urnetwork.sidecar.PrefixRule.action:type_name -> urnetwork.sidecar.PrefixAction
+	40, // 38: urnetwork.sidecar.AuditOptIn.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // 39: urnetwork.sidecar.AuditOptOut.header:type_name -> urnetwork.sidecar.StatementHeader
+	40, // [40:40] is the sub-list for method output_type
+	40, // [40:40] is the sub-list for method input_type
+	40, // [40:40] is the sub-list for extension type_name
+	40, // [40:40] is the sub-list for extension extendee
+	0,  // [0:40] is the sub-list for field type_name
 }
 
 func init() { file_protocol_acl_proto_init() }
@@ -2902,8 +3252,8 @@ func file_protocol_acl_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_acl_proto_rawDesc), len(file_protocol_acl_proto_rawDesc)),
-			NumEnums:      8,
-			NumMessages:   27,
+			NumEnums:      9,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

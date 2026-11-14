@@ -4,7 +4,9 @@
 package sidecar
 
 import (
+	"bytes"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -201,6 +203,24 @@ func (self *aclTestFixture) repo(kind protocol.RepoKind, ownerId Id) (Id, *proto
 	return repoId, row
 }
 
+// Names the network's config repo in the view's Genesis, as §7.9's bootstrap does, so the state adds its row (QD-719):
+// no rows hold one. ownerSidecarId and ownerMemberId are the Genesis's signer and its member, strangers when zero.
+func (self *aclTestFixture) configRepo(ownerSidecarId Id, ownerMemberId Id) Id {
+	repoId := NewId()
+	if ownerSidecarId == (Id{}) {
+		ownerSidecarId = NewId()
+	}
+	if ownerMemberId == (Id{}) {
+		ownerMemberId = NewId()
+	}
+	self.view.genesis = &bridge.Genesis{
+		ConfigRepoId:   repoId.Bytes(),
+		OwnerSidecarId: ownerSidecarId.Bytes(),
+		OwnerMemberId:  ownerMemberId.Bytes(),
+	}
+	return repoId
+}
+
 func (self *aclTestFixture) state(t testing.TB) *AclState {
 	t.Helper()
 	state, err := NewAclState(self.rows, self.view)
@@ -352,6 +372,80 @@ func TestAclStateAnswersItsRows(t *testing.T) {
 	}
 	if state.Rows() != fixture.rows {
 		t.Error("rows not kept")
+	}
+}
+
+// QD-719: where the rows hold no AclRepo for the Genesis's config repo, the state adds one of kind config with no
+// owner, admins or access log, and the rows keep their bytes; its holders_shrunk_at is 0 at any position, since the
+// rows take the config's row at its first shrink (QD-762).
+func TestAclStateAddsTheConfigReposRow(t *testing.T) {
+	fixture := newAclTestFixture()
+	generalId, _ := fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
+	configId := fixture.configRepo(Id{}, Id{})
+	fixture.view.pin = &bridge.AuthPin{Version: 7, Chain: make([]byte, 32)}
+	rowsBefore := aclEncodeRows(t, fixture.rows)
+	state := fixture.state(t)
+	row := state.Repo(configId)
+	if row == nil || Id(row.GetRepoId()) != configId || row.GetKind() != protocol.RepoKind_REPO_KIND_CONFIG {
+		t.Fatalf("the config's row: %v", row)
+	}
+	if len(row.GetOwnerMemberId()) != 0 || len(row.GetAdmins()) != 0 || len(row.GetGrants()) != 0 || len(row.GetRevokes()) != 0 ||
+		len(row.GetShares()) != 0 || len(row.GetConsentedSidecarIds()) != 0 || row.GetDeletion() != nil {
+		t.Errorf("the config's row carries more than its id and kind: %v", row)
+	}
+	if row.GetHoldersShrunkAt() != 0 {
+		t.Errorf("holders_shrunk_at %d at position 7, want 0", row.GetHoldersShrunkAt())
+	}
+	if state.Rows() != fixture.rows || len(state.Rows().GetRepos()) != 1 || !bytes.Equal(aclEncodeRows(t, state.Rows()), rowsBefore) {
+		t.Error("the rows changed")
+	}
+	if repoIds := state.RepoIds(); !slices.Equal(repoIds, aclSortedIds(generalId, configId)) {
+		t.Errorf("repo ids %v", repoIds)
+	}
+	if held, ok := state.ConfigRepoId(); !ok || held != configId {
+		t.Errorf("the config repo: %s, %t", held, ok)
+	}
+}
+
+// Rows that hold the config repo's row keep theirs, and a view with no Genesis, or one naming no config repo, gets
+// none.
+func TestAclStateKeepsAConfigRowTheRowsHoldAndAddsNoneWithoutAGenesis(t *testing.T) {
+	fixture := newAclTestFixture()
+	configId := fixture.configRepo(Id{}, Id{})
+	held := &protocol.AclRepo{RepoId: configId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_CONFIG, HoldersShrunkAt: 3}
+	fixture.rows.Repos = append(fixture.rows.Repos, held)
+	state := fixture.state(t)
+	if state.Repo(configId) != held || !slices.Equal(state.RepoIds(), []Id{configId}) {
+		t.Errorf("the rows' own row: %v", state.Repo(configId))
+	}
+
+	bare := newAclTestFixture()
+	state = bare.state(t)
+	if _, ok := state.ConfigRepoId(); ok || len(state.RepoIds()) != 0 {
+		t.Errorf("no genesis: repos %v", state.RepoIds())
+	}
+	for _, configRepoIdBytes := range [][]byte{nil, {1, 2, 3}, make([]byte, 16)} {
+		unnamed := newAclTestFixture()
+		unnamed.configRepo(Id{}, Id{})
+		unnamed.view.genesis.ConfigRepoId = configRepoIdBytes
+		state = unnamed.state(t)
+		if _, ok := state.ConfigRepoId(); ok || len(state.RepoIds()) != 0 {
+			t.Errorf("a genesis naming %x: repos %v", configRepoIdBytes, state.RepoIds())
+		}
+	}
+}
+
+// Rows that give the Genesis's config repo another kind refuse to build: no state judges the config by another kind's
+// rules.
+func TestNewAclStateRefusesAnotherKindForTheConfigRepo(t *testing.T) {
+	for kind := protocol.RepoKind_REPO_KIND_GENERAL; kind <= protocol.RepoKind_REPO_KIND_SECRET; kind += 1 {
+		fixture := newAclTestFixture()
+		configId := fixture.configRepo(Id{}, Id{})
+		fixture.rows.Repos = append(fixture.rows.Repos, &protocol.AclRepo{RepoId: configId.Bytes(), Kind: kind})
+		_, err := NewAclState(fixture.rows, fixture.view)
+		if refused := errors.Is(err, ErrAclRowsInvalid); refused != (kind != protocol.RepoKind_REPO_KIND_CONFIG) {
+			t.Errorf("%s: err = %v", kind, err)
+		}
 	}
 }
 

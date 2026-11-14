@@ -802,7 +802,7 @@ func (self *gkmRekeyRun) pushBatch(ctx context.Context) error {
 	for moved := 0; 0 < len(self.batch); moved += 1 {
 		writes := make([]*EvsPathWrite, len(self.batch))
 		for i, file := range self.batch {
-			writes[i] = &EvsPathWrite{Path: file.path, Content: file.content, ForceCheckpoint: true, IfVersion: file.version}
+			writes[i] = &EvsPathWrite{Path: file.path, Content: file.content, ForceCheckpoint: true, IfVersion: &file.version}
 		}
 		testHookBarrier(gkmBarrierRekeyPushBefore, barrierKey)
 		_, err := self.repo.WritePaths(ctx, &EvsWritePathsArgs{RefName: self.refName, Writes: writes})

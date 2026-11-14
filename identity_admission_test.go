@@ -254,11 +254,12 @@ func TestDelegationSeedsNeverLeaveTheDevice(t *testing.T) {
 	readerSeed := capture.Canary("delegation reader seed")
 	genesis := sha256.Sum256([]byte("a synthetic signed genesis"))
 	head := sha256.Sum256([]byte("a synthetic head"))
+	delegationId := sha256.Sum256([]byte("a synthetic signed delegation"))
 	bundle, err := proto.Marshal(&protocol.AuthKeyBundle{
 		Version:               1,
 		GenesisSha256:         genesis[:],
 		Head:                  &bridge.AuthPin{Version: 3, Chain: head[:]},
-		DelegationId:          sidecar.NewId().Bytes(),
+		DelegationId:          delegationId[:],
 		DelegationSigningSeed: signingSeed,
 		DelegationReaderSeed:  readerSeed,
 		TagIds:                [][]byte{sidecar.NewId().Bytes()},

@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"time"
 )
 
 // The DPoP signer a token source refreshes with: §7.4's proof over (method, url, ath) by the ClientKey.
@@ -37,6 +38,16 @@ type SidecarTokenSourceLogout interface {
 	// Calls callback with each confirmed rejection of a token the source held, once its host found it current, with
 	// the rejection's cause, session_revoked or empty. Returns the removal.
 	AddLogoutCallback(callback func(byJwt string, cause string)) func()
+}
+
+// A token source that takes the token api re-minted for its client at POST /sidecar/bind: the same client's token
+// carrying the bound sidecar_id (QD-040, QD-797), which the source presents and refreshes from then on, so the claim
+// sockets reads survives its refreshes, since a refresh keeps the claim of the token it presents and adds none.
+// Optional beside SidecarTokenSource: a source without it goes on refreshing the token it held, which names no
+// sidecar, and the core adopts each of those (followTokenSource), so sockets denies the sidecar, the closed direction.
+type SidecarTokenSourceRemint interface {
+	// Replaces the source's token with byJwt, a token of the client the source holds. An error leaves the source's own.
+	AdoptByJwt(byJwt string) error
 }
 
 // A confirmed rejection's cause that ends a session (D-SDK-14).
@@ -66,6 +77,24 @@ func (self *Sidecar) handOffDpopSigner(source SidecarTokenSource, signer Sidecar
 		return false
 	}
 	return true
+}
+
+// Hands byJwt, a token bind re-minted with this sidecar's sidecar_id, to the host's source when it takes one
+// (SidecarTokenSourceRemint), so the host refreshes the claim's token rather than the one it held. With no source, or
+// one that takes none, nothing changes; a refusal is logged and the source keeps refreshing its own.
+func (self *Sidecar) handOffRemintedToken(byJwt string) {
+	source := self.hostTokenSource()
+	if source == nil {
+		return
+	}
+	remint, ok := source.(SidecarTokenSourceRemint)
+	if !ok {
+		self.log.Warningf("[token]the host's token source takes no re-minted token: its refreshes name no sidecar")
+		return
+	}
+	if err := remint.AdoptByJwt(byJwt); err != nil {
+		self.log.Warningf("[token]the host's token source refused the re-minted token: %s", err)
+	}
 }
 
 // Follows the host's source for generation until ctx ends: its new tokens, re-sealed and installed, and its logouts.
@@ -124,7 +153,8 @@ func (self *Sidecar) followTokenSource(ctx context.Context, source SidecarTokenS
 }
 
 // The DPoP signer of this sidecar's current ClientKey (§7.4), for a host to install where it refreshes or mints with
-// the child's token (sdk's Api.SetDpopSigner). The seed never leaves the root: this is a signing function.
+// the child's token (sdk's Api.SetDpopSigner). The seed never leaves the root: this is a signing function. Its proofs
+// sign iat by the api's clock as this sidecar's own api client reads it (apiClockOffset).
 // ErrSidecarNoIdentity before enrollment, and the keychain's errors while it is locked or failed.
 func (self *Sidecar) DpopSigner() (SidecarDpopSigner, error) {
 	secrets := self.currentCoreSecrets()
@@ -138,21 +168,37 @@ func (self *Sidecar) DpopSigner() (SidecarDpopSigner, error) {
 	defer record.keys.erase()
 	seed := record.keys.clientKeySeedCopy()
 	defer clear(seed)
-	signer, err := newDpopSigner(seed, self.clock.Now, rand.Reader)
+	signer, err := newDpopSigner(seed, self.clock.Now, self.apiClockOffset, rand.Reader)
 	if err != nil {
 		return nil, err
 	}
 	return signer, nil
 }
 
+// The api's clock less this device's, as this sidecar's api client keeps it from api's answers: what its ClientKey's
+// proofs sign iat by (§7.4, QD-757). Zero where no answer has given one, which is this device's clock alone.
+func (self *Sidecar) apiClockOffset() time.Duration {
+	if self.sidecarApi == nil {
+		return 0
+	}
+	return self.sidecarApi.currentApiClockOffset()
+}
+
 // Posts this sidecar's newest binding again and re-registers each component's registrations (§5.6, §19.10): what a
 // host runs when its token source's refresh answered restore_required (sdk's ErrRefreshRestoreRequired), as the core's
-// own refresher does. ErrSidecarNoIdentity before enrollment; a bind refused with sidecar_revoked is checked against
-// the config as a claim (VerifyRevocationClaim).
+// own refresher does. The token bind re-mints with the sidecar_id is installed through the running generation's
+// manager and handed to the source (QD-797). ErrSidecarNoIdentity before enrollment; a bind refused with
+// sidecar_revoked is checked against the config as a claim (VerifyRevocationClaim).
 func (self *Sidecar) Reregister(ctx context.Context) error {
 	var restorers []SidecarRestorer
 	if self.leg != nil {
 		restorers = self.leg.restorers()
 	}
-	return self.restoreRegistrations(ctx, restorers)
+	var install func(presentedByJwt string, byJwt string) error
+	if generation := self.runningGeneration(); generation != nil {
+		if manager := generation.tokenManager.Load(); manager != nil {
+			install = manager.install
+		}
+	}
+	return self.restoreRegistrations(ctx, restorers, install)
 }

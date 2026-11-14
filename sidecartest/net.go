@@ -139,6 +139,9 @@ type Net struct {
 
 	// the networks of sidecars with HeadCheck attached (headcheck_net.go), which FI-10's oracle reads
 	headCheckNets []*HeadCheckNet
+
+	// the requesting daemons' approval worlds (approval_suite.go), which FI-7's oracle reads
+	approvalWorlds []*ApprovalWorld
 }
 
 // A fresh world. settings may be nil for the defaults. The caller closes it. Under sidecar_testhooks

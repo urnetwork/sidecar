@@ -12,9 +12,11 @@
 // statement or under changes_root in the payload or its parts. A prefix's removal ends every path below it, whose
 // removal version is then one past its last.
 //
-// Statements come from the process's record cache or batch ranges (RecordPushSource); older ones are never needed
-// here, since every version after h is in H's window. Readers check what evs serves against its statements either
-// way (§11.9's reader row).
+// Statements come from the process's record cache or batch ranges (RecordPushSource), and once hourly evacuation has
+// moved a window version's batch, from its container through pidx/ (§11.13; QD-664): a version stays past
+// folded_through until a commit raises it, so an idle ref's last window version is read so 25 h on, by a process that
+// never cached it. Older ones are never needed here, since every version after h is in H's window. Readers check
+// what evs serves against its statements either way (§11.9's reader row).
 //
 // Pure over its inputs but for the push source's reads. Safe for concurrent use.
 
@@ -265,11 +267,15 @@ func newestOfChange(version uint64, pushId sidecar.Id, change *EvsCommittedChang
 type EvsListing struct {
 	// Whether the directory stands at the head.
 	Exists bool
-	// Its rows, by token.
+	// Its rows, by token: the table's and its deltas', applied in order.
 	Names []*protocol.EvsName
-	// The ref version its folded table was folded through, 0 when the window re-created it.
+	// Its folded table as its entry holds it, nil when none was folded or the window removed or re-created the
+	// directory since.
+	Table *protocol.EvsNameTable
+	// The ref version its folded table was folded through, 0 when no table stands.
 	TableThrough uint64
-	// The window versions whose deltas it applied, ascending.
+	// The window versions whose deltas it applied, ascending, since the table, or since the window last removed or
+	// created the directory, which drops what came before: the deltas a reader applies after the table to list it.
 	DeltaVersions []uint64
 }
 
@@ -289,14 +295,16 @@ func Listing(ctx context.Context, read *EvsEntryRead, head *protocol.EvsHead, pu
 	path := read.TokenPath
 	tokenNames := map[sidecar.EvsToken]*protocol.EvsName{}
 	tableThrough := uint64(0)
+	var table *protocol.EvsNameTable
 	if entry := read.Entry; entry != nil && entry.GetNames() != nil && entry.GetMarker() == nil {
+		table = entry.GetNames()
 		tableThrough = entry.GetNamesThrough()
-		for _, name := range entry.GetNames().GetNames() {
+		for _, name := range table.GetNames() {
 			tokenNames[sidecar.EvsToken(name.GetToken())] = name
 		}
 	}
 	from := max(read.FoldedThrough, tableThrough)
-	listing := &EvsListing{Exists: true, TableThrough: tableThrough}
+	listing := &EvsListing{Exists: true, Table: table, TableThrough: tableThrough}
 	for version := from + 1; version <= head.GetVersion(); version += 1 {
 		windowEntry := scan.window[version-scan.firstVersion]
 		if !windowEntry.PathsDigest.MayChange(path) {
@@ -309,18 +317,20 @@ func Listing(ctx context.Context, read *EvsEntryRead, head *protocol.EvsHead, pu
 		for _, change := range changes {
 			switch {
 			case change.TokenPath.Equal(path) && change.Removes(), !change.TokenPath.Equal(path) && change.Removes():
-				// the directory, or a prefix holding it, removed: what was listed is gone
+				// the directory, or a prefix holding it, removed: what was listed is gone, the deltas before with it
 				clear(tokenNames)
-				listing.TableThrough = 0
+				listing.Table, listing.TableThrough = nil, 0
+				listing.DeltaVersions = nil
 			case change.TokenPath.Equal(path):
 				entryVersion, err := parseEvsEntryVersion(change.EntryVersion)
 				if err != nil {
 					return nil, fmt.Errorf("%w: version %d: %v", ErrEvsStatementMismatch, version, err)
 				}
 				if change.BaseEntryVersion == 0 {
-					// a creation replaces what was held, carrying nothing
+					// a creation replaces what was held, carrying nothing, the deltas before it among it
 					clear(tokenNames)
-					listing.TableThrough = 0
+					listing.Table, listing.TableThrough = nil, 0
+					listing.DeltaVersions = nil
 				}
 				for _, removed := range entryVersion.GetNames().GetRemovedTokens() {
 					if len(removed) == sidecar.EvsTokenByteCount {
@@ -348,9 +358,10 @@ func Listing(ctx context.Context, read *EvsEntryRead, head *protocol.EvsHead, pu
 }
 
 // The push source over the ref's batch records: the process's cache, else a range read at each window entry's place
-// (§11.8's read row). A push record's changes come checked from its statement and payload; a seal's from the parts
-// whose runs may hold the path or a prefix of it, each matched to the seal's changes_root. A record that is not the
-// statement its entry names is ErrEvsStatementMismatch. Not safe for concurrent use: one request's.
+// (§11.8's read row), else, once evacuation emptied the batch, the container pidx/ names (ReadRecordLocated). A push
+// record's changes come checked from its statement and payload; a seal's from the parts whose runs may hold the path
+// or a prefix of it, each matched to the seal's changes_root. A record that is not the statement its entry names is
+// ErrEvsStatementMismatch. Not safe for concurrent use: one request's.
 type RecordPushSource struct {
 	cache   *RecordCache
 	cluster sidecar.BlobCluster
@@ -378,35 +389,42 @@ type recordPush struct {
 	drop *sidecar.EvsCheckedDrop
 }
 
-// A source for one ref of one repo on its cluster.
-func NewRecordPushSource(cache *RecordCache, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id) *RecordPushSource {
-	return &RecordPushSource{cache: cache, cluster: cluster, repoId: repoId, refId: refId, versionPushes: map[uint64]*recordPush{}}
+// A source for one ref of one repo on its cluster, reading a record whose batch evacuation emptied through locator
+// (QD-664): every caller in a process passes the process's own, the newest rule's, a fold's, a page-out's, a purge's,
+// a marker collection's and step 4's alike. nil reads batches alone, which only a test of the batch path does.
+func NewRecordPushSource(cache *RecordCache, locator *RecordLocator, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id) *RecordPushSource {
+	return &RecordPushSource{cache: cache, locator: locator, cluster: cluster, repoId: repoId, refId: refId, versionPushes: map[uint64]*recordPush{}}
 }
 
-// The source, reading a record whose batch is gone through locator, as every read of evsservice's goes
-// (locate.go): a window version's record that evacuation moved to a pack is read there, not answered unavailable.
-func (self *RecordPushSource) WithLocator(locator *RecordLocator) *RecordPushSource {
-	self.locator = locator
-	return self
-}
-
-// The record at place: its batch's, else, once evacuation emptied the batch, the pack's that pidx/ names, kept in
-// the cache as a batch's would be.
-func (self *RecordPushSource) readRecord(ctx context.Context, place *protocol.EvsPlace) (*sidecar.EvsBatchRecord, error) {
-	record, err := ReadRecord(ctx, self.cache, self.cluster, place)
-	if !errors.Is(err, ErrEvsRecordEvacuated) || self.locator == nil {
+// The record at place on repo's ref: the cache's, else its batch's, else, once evacuation emptied the batch, the
+// container's that pidx/ names through locator, kept in the cache as a batch's would be, so a process reads pidx/ for
+// a moved record once (§11.13: a batch's records are found through pidx/ once it is gone; QD-664). A record no batch
+// and no container holds is ErrEvsRecordEvacuated, as a gone batch is with no locator, and is the locator's
+// ErrBlobNotFound too; a held batch no container relieves answers the locator's ErrBlobHeld. A nil locator reads
+// batches alone.
+func ReadRecordLocated(ctx context.Context, cache *RecordCache, locator *RecordLocator, cluster sidecar.BlobCluster, repoId sidecar.Id, refId sidecar.Id, place *protocol.EvsPlace) (*sidecar.EvsBatchRecord, error) {
+	record, err := ReadRecord(ctx, cache, cluster, place)
+	if !errors.Is(err, ErrEvsRecordEvacuated) || locator == nil {
 		return record, err
 	}
-	recordBytes, err := self.locator.ReadRecord(ctx, self.cluster, self.repoId, self.refId, place)
-	if err != nil {
+	recordBytes, err := locator.ReadRecord(ctx, cluster, repoId, refId, place)
+	switch {
+	case errors.Is(err, sidecar.ErrBlobNotFound):
+		return nil, fmt.Errorf("%w: %w", ErrEvsRecordEvacuated, err)
+	case err != nil:
 		return nil, err
 	}
 	record, err = sidecar.ParseEvsBatchRecord(recordBytes)
 	if err != nil {
 		return nil, err
 	}
-	self.cache.Put(self.cluster.ClusterId(), place, recordBytes)
+	cache.Put(cluster.ClusterId(), place, recordBytes)
 	return record, nil
+}
+
+// The record at place, by ReadRecordLocated.
+func (self *RecordPushSource) readRecord(ctx context.Context, place *protocol.EvsPlace) (*sidecar.EvsBatchRecord, error) {
+	return ReadRecordLocated(ctx, self.cache, self.locator, self.cluster, self.repoId, self.refId, place)
 }
 
 // See EvsPushSource.

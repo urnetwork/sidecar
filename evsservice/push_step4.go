@@ -12,7 +12,9 @@
 //	        of the window versions after folded_through whose digest may touch a changed path, which the newest rule
 //	        then reads from this process's cache
 //	view    §11.7's newest per changed path, each entry combined only with the head read before it; a directory's
-//	        listing where the push writes its table; the flags of the head's push (IMMUTABLE); C at the push's base
+//	        listing where the push writes its table; for a creates-only stream's directory delta, the directory's
+//	        newest version, a folded table's read from its delta at names_through (QD-722); the flags of the head's
+//	        push (IMMUTABLE); C at the push's base
 //
 // After a 412 (outcome.go) the entries stay as read, keeping the folded_through they were read after, and the gate
 // view is read again and the view built again on the reread head: an entry the reread head's window no longer
@@ -296,7 +298,7 @@ func (self *pushAttempt) readReuse(reuse *sidecar.EvsReuse) (*ReuseRead, error) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEvsHeadInvalid, err)
 	}
-	pushes := NewRecordPushSource(engine.records, self.cluster, self.repoId, reuse.RefId)
+	pushes := NewRecordPushSource(engine.records, engine.locator, self.cluster, self.repoId, reuse.RefId)
 	first := EvsHeadWindowFirstVersion(refHead.Head)
 	for i := len(window) - 1; 0 <= i; i -= 1 {
 		if !window[i].PathsDigest.MayChange(reuse.TokenPath) {
@@ -393,6 +395,14 @@ func (self *pushAttempt) buildView() (*pushOutcome, bool) {
 		if again {
 			return nil, true
 		}
+		if self.streamDirectoryDelta(view, change) {
+			// the entry newestOf read, again after the head when the window had moved past it
+			version, err := self.directoryVersionOf(reads.entries[key], pathRead.Newest)
+			if err != nil {
+				return self.unavailableOn(err), false
+			}
+			pathRead.DirectoryVersion = version
+		}
 		view.Paths[key] = pathRead
 	}
 	due, err := self.pathEpochDueOver(head.Head)
@@ -456,6 +466,59 @@ func (self *pushAttempt) newestOf(change *sidecar.EvsCheckedChange, read *EvsPat
 		return pathRead, false, nil
 	}
 	return nil, true, nil
+}
+
+// Whether change is a directory's delta that 5c's creates-only rule holds to the directory's newest version (QD-722):
+// a change writing a directory on a base, in a push on a record-class repo's owned ref that is no BASE or CLOSURE.
+func (self *pushAttempt) streamDirectoryDelta(view *PushView, change *sidecar.EvsCheckedChange) bool {
+	push := self.statement.Push
+	adminFlags := uint32(protocol.EvsPushFlag_EVS_PUSH_BASE) | uint32(protocol.EvsPushFlag_EVS_PUSH_CLOSURE)
+	if protocol.EvsRefKind(push.GetRefKind()) != protocol.EvsRefKind_EVS_REF_OWNED || view.Repo == nil ||
+		!sidecar.EvsRepoKindRecordClass(view.Repo.GetKind()) || push.GetFlags()&adminFlags != 0 {
+		return false
+	}
+	return change.Change.GetBaseEntryVersion() != 0 && self.writesDirectoryTable(change)
+}
+
+// The newest version of a directory a creates-only stream's delta writes, which 5c holds the delta's base to (QD-722):
+// a window version's, as Newest gives it, or, for a table folded with nothing newer in the window, the version of its
+// delta at names_through, which a table keeps none of. That push's change is found as the read route finds a table's
+// (read.go's versionReply): by the path's token path when the push is of the head's current epoch, else by the leaf
+// place the fold recorded. 0 for a path that does not stand as a directory; a change found nowhere is a fault.
+func (self *pushAttempt) directoryVersionOf(read *EvsPathRead, newest *EvsNewest) (uint64, error) {
+	switch {
+	case !newest.Exists || !newest.Directory:
+		return 0, nil
+	case newest.Change != nil:
+		return newest.Version, nil
+	case read == nil || read.Entry == nil || read.Entry.GetNames() == nil:
+		return 0, fmt.Errorf("%w: a standing directory with no window version and no folded table", ErrEvsIndexEntryInvalid)
+	}
+	head := self.head.Head
+	pushes := newReadPushes(self.engine, self.ctx, self.cluster, self.repoId, self.refId, head)
+	push, err := pushes.at(newest.CommitVersion)
+	if err != nil {
+		return 0, err
+	}
+	var change *sidecar.EvsCheckedChange
+	place := evsLeafPlaceOfTable(read.Entry)
+	switch {
+	case push.statement.Push.GetPathEpoch() == EvsHeadCurrentEpoch(head):
+		change, _, _, err = pushes.changeOf(push, read.TokenPath)
+	case place.index != 0:
+		change, _, _, err = pushes.changeAt(push, place)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if change == nil || !change.WritesEntry() {
+		return 0, fmt.Errorf("%w: version %d writes no directory its table names", ErrEvsIndexEntryInvalid, newest.CommitVersion)
+	}
+	entry, err := parseEvsEntryVersion(change.EntryVersion)
+	if err != nil || protocol.EvsEntryKind(entry.GetKind()) != protocol.EvsEntryKind_EVS_ENTRY_DIRECTORY {
+		return 0, fmt.Errorf("%w: version %d's change of a folded table's directory is no directory's", ErrEvsIndexEntryInvalid, newest.CommitVersion)
+	}
+	return entry.GetVersion(), nil
 }
 
 // Whether change writes a directory's entry version, whose bound 5g checks against its listing.

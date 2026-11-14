@@ -710,12 +710,17 @@ type gkmWrapPathVector struct {
 	SidecarId hexBytes `json:"sidecar_id,omitempty"`
 	Epoch     uint64   `json:"epoch,omitempty"`
 	Owner     bool     `json:"owner,omitempty"`
-	Path      string   `json:"path"`
+	// A forwarding Delegation's reader key object's network and Delegation (QD-763).
+	NetworkId    hexBytes `json:"network_id,omitempty"`
+	DelegationId hexBytes `json:"delegation_id,omitempty"`
+	Path         string   `json:"path"`
 }
 
 // The path a vector names, by its kind.
 func (self *gkmWrapPathVector) build() (string, error) {
 	switch {
+	case self.DelegationId != nil:
+		return GkmDelegationKeyPath(Id(self.NetworkId), self.DelegationId)
 	case self.Owner:
 		return GkmGroupOwnerPath(Id(self.GroupId)), nil
 	case self.SidecarId != nil:
@@ -750,6 +755,8 @@ func gkmVectorPaths() []gkmWrapPathVector {
 		{Name: "welcome pointer", GroupId: groupId, SidecarId: gkmTestId("reader sidecar").Bytes(), Epoch: 7},
 		{Name: "welcome pointer max", GroupId: groupId, SidecarId: gkmTestId("reader sidecar").Bytes(), Epoch: ^uint64(0)},
 		{Name: "group owner", GroupId: groupId, Owner: true},
+		// a key no group names: its network's and its Delegation's ids alone
+		{Name: "delegation key", NetworkId: gkmTestId("network").Bytes(), DelegationId: gkmTestBytes("delegation id", 32)},
 	}
 }
 

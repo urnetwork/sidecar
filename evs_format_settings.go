@@ -36,6 +36,11 @@ type EvsFormatSettings struct {
 	PathMapMaxPartCount int
 	// The ids a record's purge list names at most, past which it is marked instead: 2,048 (§11.13's purge row).
 	PurgeListMaxIdCount int
+	// A slot/ object's keys, 64, each key_index below it, and its bytes as encoded, 8 KiB (§11.8's slot/ row): a
+	// slot of 64 record slot rows, 104 B each, fits (RECORD.md section 5.7; QD-739), and a deposit's HPKE keys of
+	// 1,168 B fit a few.
+	SlotMaxKeyCount  int
+	SlotMaxByteCount int
 	// A DROP's paths: 1 to 1,024 (§11.7's action row).
 	DropMaxPathCount int
 	// A DROP path's listed versions, and a DROP's listed versions over all its paths: 1,048,576, 2^20 (QD-700), so
@@ -49,6 +54,13 @@ type EvsFormatSettings struct {
 	// The listed values a builder puts in a part that holds no change: 32,000, 1,024,000 B (DESIGN-DETAILS 10.2.5). A
 	// checker takes a slice cut anywhere.
 	DropListPartValueCount int
+	// One read reply frame, as encoded: 1 MiB + 64 KiB, an object's 1 MiB slice (EvsReadObject spans frames past it)
+	// with room for its fields, a path with its proofs, or a statement (plan-EVS1-format-bytes#8). evs writes none
+	// past it and a reader refuses one, so evs cannot make a reader buffer more.
+	ReadFrameMaxByteCount int
+	// The deltas one path's reply carries, a frame each after its path frame (QD-662): 255, a head window's entries,
+	// since each delta is a window version past names_through. A reader refuses a path past it.
+	ReadPathDeltaMaxCount int
 }
 
 // The protocol's values, the only source of their defaults.
@@ -64,11 +76,15 @@ func DefaultEvsFormatSettings() *EvsFormatSettings {
 		PathMapMaxByteCount:         8 * 1024 * 1024,
 		PathMapMaxPartCount:         1024,
 		PurgeListMaxIdCount:         2048,
+		SlotMaxKeyCount:             64,
+		SlotMaxByteCount:            8 * 1024,
 		DropMaxPathCount:            1024,
 		DropMaxListedCount:          1024 * 1024,
 		DropMaxBodyByteCount:        256 * 1024,
 		DropWindow:                  7 * 24 * time.Hour,
 		DropListPartValueCount:      32000,
+		ReadFrameMaxByteCount:       1024*1024 + 64*1024,
+		ReadPathDeltaMaxCount:       255,
 	}
 }
 

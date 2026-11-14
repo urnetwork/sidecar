@@ -1,0 +1,4 @@
+go test fuzz v1
+byte('\x0f')
+[]byte("\xf8\a\x01")
+uint16(9)

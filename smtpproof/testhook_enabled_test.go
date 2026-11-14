@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"math/big"
 	"slices"
 	"sync"
 	"testing"
@@ -169,5 +170,26 @@ func TestAServerRecordDuringVerificationHoldsTheMessage(t *testing.T) {
 		if err != nil || len(forwarded) != 0 {
 			t.Errorf("%s: %d forwarded past an uncovered reply, %v", leg.name, len(forwarded), err)
 		}
+	}
+}
+
+// DESIGN-DETAILS 3.2.2: a blind is reported where it is drawn, as the octets the draw produced, and each
+// draw reports its own.
+func TestHooksSeeEveryCommitBlind(t *testing.T) {
+	log := testInstallHookLog(t)
+	first, err := newCommitBlind("smtp_key_blind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooked := new(big.Int).SetBytes(log.kindSecrets["smtp_key_blind"])
+	if hooked.Cmp(first) != 0 {
+		t.Errorf("hooked %x, drew %x", hooked, first)
+	}
+	second, err := newCommitBlind("smtp_carry_blind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if new(big.Int).SetBytes(log.kindSecrets["smtp_carry_blind"]).Cmp(second) != 0 || second.Cmp(first) == 0 {
+		t.Error("a second draw was not hooked as its own")
 	}
 }

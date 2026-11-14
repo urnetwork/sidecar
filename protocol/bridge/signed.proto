@@ -45,7 +45,9 @@ enum SignedType {
 
   // 0x11xx §8 acl statements in §8.8's row order, GrantActivate first: purpose acl, but for AuditOptIn
   // and AuditOptOut, which are purpose authority. RepoVersioning's type is reserved at M2: format-1
-  // code verifies it and folds its lock (D-PHASE-9).
+  // code verifies it and folds its lock (D-PHASE-9). RepoPrefixRules' is too (QD-212; DESIGN-DETAILS
+  // 16.2.2): code from M2 checks it and folds its row, and M6 enforces it; 0x1110 stays QD-013's
+  // ApprovalDelivery, unused.
   SIGNED_GRANT_ACTIVATE = 0x1101;
   SIGNED_GRANT_REVOKE = 0x1102;
   SIGNED_SUSPEND = 0x1103;
@@ -61,6 +63,7 @@ enum SignedType {
   SIGNED_REPO_VERSIONING = 0x110D;
   SIGNED_AUDIT_OPT_IN = 0x110E;
   SIGNED_AUDIT_OPT_OUT = 0x110F;
+  SIGNED_REPO_PREFIX_RULES = 0x1111;
 
   // 0x12xx §7 config records and log statements in §7.9's row order: purpose authority. VersioningRules'
   // type is reserved at M2: format-1 readers apply nothing from it but still apply the head holding it
@@ -104,9 +107,10 @@ enum SignedType {
   SIGNED_EVS_PATH_MAP = 0x1403;
   SIGNED_EVS_IMPORT = 0x1404;
 
-  // 0x15xx §13: a device key's attestation, purpose tls-key (§13.8), and a link audience's token, purpose tls-link
-  // (QD-134). 0x1502 waits for M6's edge-login statement (plan-TLS-small-readings#2).
+  // 0x15xx §13: a device key's attestation, purpose tls-key (§13.8), M6's members-device statement, purpose
+  // edge-login (§13.7, plan-TLS-small-readings#2), and a link audience's token, purpose tls-link (QD-134).
   SIGNED_TLS_KEY_ATTESTATION = 0x1501;
+  SIGNED_TLS_EDGE_LOGIN = 0x1502;
   SIGNED_TLS_LINK = 0x1503;
 
   // 0x16xx §14, 0x17xx §15, 0x1Bxx §12

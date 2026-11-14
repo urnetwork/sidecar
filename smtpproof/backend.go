@@ -37,70 +37,35 @@ const (
 	proofBytes = 3*bn254.SizeOfG1AffineCompressed + bn254.SizeOfG2AffineCompressed + proofCountBytes
 )
 
-// The shapes this build proves. A part outside them is refused, on both sides.
-//
-// Every record starts a fresh keystream block, so blocks count records as well as octets. A one-line
-// reply takes one or two of AES's 16-octet blocks and one of ChaCha20's 64-octet blocks, so ChaCha20's
-// 12 server blocks hold as many such replies as AES's 24, and its 12 client blocks as many commands of
-// up to 63 octets as AES's 48.
-func partShapes() []*partShape {
-	return []*partShape{
-		{kind: partKindEhlo, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 4},
-		{kind: partKindEhlo, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 1},
-		// sized for D-SMTP-16's 10 recipients and a typical EHLO reply, whole or a line per record
-		{kind: partKindEnvelope, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 48, serverBlocks: 24, localOctets: true},
-		{kind: partKindEnvelope, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 12, serverBlocks: 12, localOctets: true},
-		// D-SMTP-16's 4 KiB header block, the envelope's 1 + 10 replies and DATA's 354, each in a record
-		// of its own, and BDAT and QUIT or DATA's end
-		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256},
-		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 12, headerBlocks: 64},
-		// DATA with a 2 KiB first body part beside the header block
-		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256, bodyBlocks: 128},
-		{kind: partKindMessage, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 12, headerBlocks: 64, bodyBlocks: 32},
-		// a later DATA part
-		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 2, bodyBlocks: 128},
-		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, bodyBlocks: 32},
-		// a later DATA part over a late NewSessionTicket. No reply may come during the body (Z8), so the
-		// only server record such a part can cover is a ticket: these hold one of up to 255 octets. A part
-		// with no server record takes the cheaper shape above, which comes first. 1.2 has no ticket here
-		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 2, serverBlocks: 16, bodyBlocks: 128},
-		{kind: partKindBody, version: tlsVersion13, suite: tlsSuiteChacha20Poly1305Sha256, clientBlocks: 2, serverBlocks: 4, bodyBlocks: 32},
-		// TLS 1.2, for Exchange Online among others: AES-128-GCM alone, under each of its two suites
-		{kind: partKindEhlo, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 4},
-		{kind: partKindEhlo, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4},
-		{kind: partKindEnvelope, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 48, serverBlocks: 24, localOctets: true},
-		{kind: partKindEnvelope, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 48, serverBlocks: 24, localOctets: true},
-		{kind: partKindMessage, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256},
-		{kind: partKindMessage, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256},
-		{kind: partKindMessage, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256, bodyBlocks: 128},
-		{kind: partKindMessage, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 4, serverBlocks: 24, headerBlocks: 256, bodyBlocks: 128},
-		{kind: partKindBody, version: tlsVersion12, suite: tlsSuiteEcdheRsaAes128GcmSha256, clientBlocks: 2, bodyBlocks: 128},
-		{kind: partKindBody, version: tlsVersion12, suite: tlsSuiteEcdheEcdsaAes128GcmSha256, clientBlocks: 2, bodyBlocks: 128},
+// The shapes this build proves: ProofSettings' catalog (DESIGN-DETAILS 3.2.6), each filling one domain.
+// A part outside them is refused, on both sides.
+func partShapes(proof *ProofSettings) []*partShape {
+	shapes := make([]*partShape, 0, len(proof.Shapes))
+	for _, entry := range proof.Shapes {
+		shapes = append(shapes, newPartShape(proof, entry))
 	}
+	return shapes
 }
 
-// Which circuit a part's index calls for.
-func partKindOf(statement *partStatement) partKind {
-	switch statement.index {
-	case 1:
-		return partKindEhlo
-	case 2:
-		return partKindEnvelope
-	case 3:
-		return partKindMessage
-	default:
-		return partKindBody
+// The shape a statement proves under, if any (DESIGN-DETAILS 3.2.6's first fit): its kind from the roles
+// of the records it opens, its family from the suite, and of the catalog's shapes of that kind and family
+// (and version, for a key part) the first whose pools hold its records. The prover and the edge call this
+// over the same public values.
+func partShapeFor(proof *ProofSettings, statement *partStatement) (*partShape, error) {
+	roles, err := partRoles(statement)
+	if err != nil {
+		return nil, err
 	}
-}
-
-// The shape a statement proves under, if any: the first whose blocks its records fit.
-func partShapeFor(statement *partStatement) (*partShape, error) {
-	session := statement.session
-	for _, shape := range partShapes() {
-		if shape.version != session.version || shape.suite != session.suite {
+	kind, err := partKindOf(statement, roles)
+	if err != nil {
+		return nil, err
+	}
+	family := suiteFamily(statement.session.suite)
+	for _, shape := range partShapes(proof) {
+		if shape.kind != kind || shape.family != family {
 			continue
 		}
-		if shape.kind != partKindOf(statement) {
+		if kind == partKindKey && shape.version != statement.session.version {
 			continue
 		}
 		if _, err := partAssignment(shape, statement); err == nil {
@@ -134,13 +99,16 @@ type shapeKeySource interface {
 // Proves and verifies parts under the keys it holds or its source gives, and refuses every other
 // part. Safe for concurrent use.
 type groth16Backend struct {
+	// The catalog and limits the shapes come from.
+	proof *ProofSettings
+
 	stateLock sync.Mutex
 	keys      map[partShape]*shapeKeys
 	source    shapeKeySource
 }
 
-func newGroth16Backend() *groth16Backend {
-	return &groth16Backend{keys: map[partShape]*shapeKeys{}}
+func newGroth16Backend(proof *ProofSettings) *groth16Backend {
+	return &groth16Backend{proof: proof, keys: map[partShape]*shapeKeys{}}
 }
 
 func (self *groth16Backend) addKeys(keys *shapeKeys) {
@@ -167,7 +135,7 @@ func (self *groth16Backend) keysFor(shape *partShape) (*shapeKeys, error) {
 // provePart of partProver. r and s come from crypto/rand inside gnark: a repeated pair would break
 // zero knowledge (SPEC.md 10.2), and nothing here seeds them.
 func (self *groth16Backend) provePart(ctx context.Context, statement *partStatement, witness *partWitness) ([]byte, error) {
-	shape, err := partShapeFor(statement)
+	shape, err := partShapeFor(self.proof, statement)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +170,7 @@ func (self *groth16Backend) provePart(ctx context.Context, statement *partStatem
 
 // verifyPart of partVerifier. The statement here is the edge's own, so the public wires are too.
 func (self *groth16Backend) verifyPart(ctx context.Context, statement *partStatement, encoded []byte) error {
-	shape, err := partShapeFor(statement)
+	shape, err := partShapeFor(self.proof, statement)
 	if err != nil {
 		return err
 	}

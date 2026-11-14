@@ -176,3 +176,15 @@ func (self *SocketsService) SignedTicketCount() int64 {
 func (self *SocketsService) ClaimVerifyCount() int64 {
 	return self.claimVerifyCount.Load()
 }
+
+// Runs the worker's reload and let-go step now.
+func (self *SocketProjectionGate) ReloadBehindForTest() {
+	self.reloadBehind()
+}
+
+// How many networks the gate follows.
+func (self *SocketProjectionGate) NetworkCountForTest() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return len(self.networks)
+}

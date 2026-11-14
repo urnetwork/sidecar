@@ -4,8 +4,9 @@
 // or not; a reader pinned before a cut-over refuses a rollback across it; a read naming no current-epoch token path is
 // answered stale_epoch and asked again on the new head; a rooted statement of an epoch the request did not name takes
 // one second round; History crosses two cut-overs by E4; a creation across a cut-over answers 409 (9.1 C); a removal
-// while its row is carried drops the row (G); a creation under immediate pressure sends nothing (F); and the capture
-// over three epochs holds P1.
+// while its row is carried drops the row (G); a creation under immediate pressure sends nothing (F); the capture
+// over three epochs holds P1; and a creation whose push names a generation ahead of its path epoch reads through its
+// source after a cut-over, each sealed value under what its own statement names (QD-666).
 
 package sidecar
 
@@ -98,6 +99,68 @@ func TestEvsReadAcrossACutOverByItsRow(t *testing.T) {
 	if content, _, err := evsTestRead(t, moved, world, "d/f07"); err != nil || string(content) != "file 7" {
 		t.Fatalf("a moved file: %q %v", content, err)
 	}
+}
+
+// QD-666 (question evs1-m2-41-tail-creation-read): a file created in epoch 2 by a push of generation 4, a writer
+// holding a key newer than the ref's epoch while a batched due stands, then carried across a PATH_EPOCH to epoch 3
+// by its tail. Before the copy it reads through source 2, and after it from epoch 3: its row opens under the epoch
+// its statement names, 2, and its sealed fields and record under the generation its statement names, 4, which is
+// neither the epoch's key nor p_new's; so a reader pinned before the creation, one first reading after the cut-over
+// and one whose pin is already at the head all read it and list it, and a file the same push changed reads too.
+func TestEvsGenerationAheadCreationReadsThroughItsSource(t *testing.T) {
+	world := newEvsTestWorld(t)
+	world.push(
+		&evsTestChange{path: "", children: []string{"d"}},
+		&evsTestChange{path: "d", children: []string{"keep"}},
+		&evsTestChange{path: "d/keep", content: []byte("keep 1")},
+	)
+	world.cutOverTo(2)
+	world.copyAll()
+	pinned := world.reader(t, evsTestId("pinned reader"))
+	if content, _, err := evsTestRead(t, pinned, world, "d/keep"); err != nil || string(content) != "keep 1" {
+		t.Fatalf("d/keep before the creation: %q %v", content, err)
+	}
+	// a writer holding generation 4 creates in epoch 2, the ref's current one
+	world.generation = 4
+	world.gkm.newest = 4
+	created := world.push(
+		&evsTestChange{path: "d", children: []string{"n3"}},
+		&evsTestChange{path: "d/n3", content: []byte("created ahead")},
+		&evsTestChange{path: "d/keep", content: []byte("keep 2")},
+	)
+	if push := world.commits[created-1].parsed.Push; push.GetPathEpoch() != 2 || push.GetGeneration() != 4 {
+		t.Fatalf("the creation names epoch %d and generation %d", push.GetPathEpoch(), push.GetGeneration())
+	}
+	// the mapper's PATH_EPOCH to epoch 3, the creation carried by its tail: its entry stays in source 2 until the copy
+	world.cutOver(3)
+	atHead := world.reader(t, evsTestId("reader at the head"))
+	if content, _, err := evsTestRead(t, atHead, world, "d/keep"); err != nil || string(content) != "keep 2" {
+		t.Fatalf("d/keep, written by the generation-ahead push: %q %v", content, err)
+	}
+	readAll := func(when string) {
+		t.Helper()
+		for label, reader := range map[string]*evsTestClient{
+			"pinned before the creation": pinned, "pinned at the head": atHead, "fresh": world.reader(t, evsTestId("fresh reader "+when)),
+		} {
+			if content, _, err := evsTestRead(t, reader, world, "d/n3"); err != nil || string(content) != "created ahead" {
+				t.Fatalf("%s, a reader %s: d/n3: %q %v", when, label, content, err)
+			}
+			if content, _, err := evsTestRead(t, reader, world, "d/keep"); err != nil || string(content) != "keep 2" {
+				t.Fatalf("%s, a reader %s: d/keep: %q %v", when, label, content, err)
+			}
+			listing, err := reader.client.Repo(world.repoId).List(context.Background(), &EvsReadArgs{Path: "d"})
+			if err != nil || len(listing.Entries) != 2 {
+				t.Fatalf("%s, a reader %s: d's listing: %v %v", when, label, listing, err)
+			}
+		}
+	}
+	readAll("before the copy")
+	// the creation was named in its own epoch and, after the cut-over, in the current one and its row's source
+	if epochs := world.epochsNamed("d/n3"); !slicesContains(epochs, 2) || slicesContains(epochs, 1) || slicesContains(epochs, 4) {
+		t.Errorf("d/n3 was named in %v", epochs)
+	}
+	world.copyAll()
+	readAll("after the copy")
 }
 
 // 9.1 B's second case: a reader pinned before the cut-over refuses a rollback across it, the change made in epoch 1

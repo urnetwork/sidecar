@@ -65,6 +65,7 @@ func printUrStatus(cli *urCli, reply *urStatusReply) {
 			state += " (" + network.Reason + ")"
 		}
 		fmt.Fprintf(out, "network:    %s  %s, generation %d\n", network.NetworkId, state, network.Generation)
+		printUrNetworkConfig(cli, &network)
 	}
 	for _, listener := range reply.LocalListeners {
 		exposure := "loopback only"
@@ -88,6 +89,21 @@ func printUrStatus(cli *urCli, reply *urStatusReply) {
 	}
 	if reply.Stats != nil {
 		printUrStats(cli, reply.Stats)
+	}
+}
+
+// A network's config follower, under its network line: the log position it stands at, what it waits for, or why it
+// refused, which is why nothing on the network is admitted.
+func printUrNetworkConfig(cli *urCli, network *urNetworkStatus) {
+	switch {
+	case network.Config == "":
+		fmt.Fprintf(cli.stdout, "  config:   not followed, so nothing on the network is admitted\n")
+	case network.Config == string(sidecar.SidecarConfigFollowerStanding):
+		fmt.Fprintf(cli.stdout, "  config:   followed, at position %d\n", network.ConfigPin)
+	case network.ConfigReason != "":
+		fmt.Fprintf(cli.stdout, "  config:   %s: %s\n", network.Config, network.ConfigReason)
+	default:
+		fmt.Fprintf(cli.stdout, "  config:   %s\n", network.Config)
 	}
 }
 

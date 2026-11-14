@@ -488,6 +488,8 @@ var sidecarRelayedEventKinds = map[SidecarEventKind]bool{
 	SidecarEventMemberRemoved: true,
 	SidecarEventKeyChanged:    true,
 	SidecarEventRefused:       true,
+	// D-TRUST-9's zone watch (DnsWatch)
+	SidecarEventDnsAlarm: true,
 }
 
 // Raises a component's alarm as this sidecar's event (§5.6's alarm row): head_alarm with both pins as Evidence,

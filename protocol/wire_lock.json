@@ -364,6 +364,7 @@
         {"number":4365,"name":"SIGNED_REPO_VERSIONING"},
         {"number":4366,"name":"SIGNED_AUDIT_OPT_IN"},
         {"number":4367,"name":"SIGNED_AUDIT_OPT_OUT"},
+        {"number":4369,"name":"SIGNED_REPO_PREFIX_RULES"},
         {"number":4609,"name":"SIGNED_GENESIS"},
         {"number":4610,"name":"SIGNED_ADMIN_SET"},
         {"number":4611,"name":"SIGNED_MEMBER_ADMIT"},

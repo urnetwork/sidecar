@@ -16,7 +16,7 @@
 //	Unsuspend       the class that suspended it or a higher one, never the subject; a stale id a no-op
 //	EvsShare        a consented device of the owner-bound repo's owner, consented before the share's position
 //	OwnerConfirm    a consented device of the confirmed sidecar's member
-//	the access log  acl_statement_repo.go
+//	the access log  acl_statement_repo.go, RepoPrefixRules among them (DESIGN-DETAILS 16.2.2)
 //
 // Every signer is a sidecar the state admits, standing at the entry's time (not revoked, expired, parked or
 // suspended, an untagged one's member still a member) and not read_only (D-TEAM-24). A k-of-n statement, a completed
@@ -171,6 +171,10 @@ func (self *AclState) CheckStatement(statement *AclStatement, spendCheck AclSpen
 		if statement.Type == bridge.SignedType_SIGNED_REPO_VERSIONING {
 			return self.checkRepoVersioning(statement, body)
 		}
+	case *protocol.RepoPrefixRules:
+		if statement.Type == bridge.SignedType_SIGNED_REPO_PREFIX_RULES {
+			return self.checkRepoPrefixRules(statement, body)
+		}
 	case *protocol.AuditOptIn:
 		if statement.Type == bridge.SignedType_SIGNED_AUDIT_OPT_IN {
 			return self.checkAuditOptIn(statement, body)
@@ -239,7 +243,7 @@ func aclFoldStatement(rows *protocol.AclRows, statement *AclStatement, verdict *
 	case *protocol.OwnerConfirm:
 		effect.OwnerConfirmed = &AclOwnerConfirmed{SidecarId: verdict.TargetId, Signer: verdict.Signer}
 	case *protocol.EvsShare, *protocol.RepoCreate, *protocol.RepoAdmin, *protocol.RepoGrant, *protocol.RepoRevoke,
-		*protocol.RepoDelete, *protocol.RepoRestore, *protocol.RepoVersioning:
+		*protocol.RepoDelete, *protocol.RepoRestore, *protocol.RepoVersioning, *protocol.RepoPrefixRules:
 	default:
 		return nil, effect, fmt.Errorf("%w: %s folds nothing", ErrConfigRule, statement.Type)
 	}
@@ -268,6 +272,8 @@ func aclRowsCopy(rows *protocol.AclRows) *protocol.AclRows {
 		Audit:       rows.GetAudit(),
 		Suspensions: rows.GetSuspensions(),
 		SpentGrants: rows.GetSpentGrants(),
+		// the base's compile, which no statement changes (QD-727)
+		EvidenceDefault: rows.GetEvidenceDefault(),
 	}
 	if unknown := rows.ProtoReflect().GetUnknown(); len(unknown) != 0 {
 		next.ProtoReflect().SetUnknown(unknown)
@@ -461,7 +467,8 @@ func (self *ConfigState) aclSpendCheck() AclSpendCheck {
 }
 
 // The time entry k was sequenced at, from the states this state's log keeps, false when k is above this state or
-// outside what the log retains. RepoRestore's 7 days run from it.
+// outside what the log retains. RepoRestore's 7 days do not read it: they run from the deletion row's own time
+// (QD-743), which every reader holds on every day of the window.
 func (self *ConfigState) aclTimeAt(k uint64) (int64, bool) {
 	if k == self.n {
 		return self.timeMs, true

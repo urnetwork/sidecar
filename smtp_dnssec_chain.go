@@ -52,11 +52,6 @@ const (
 	smtpDnssecDigestSha256             uint8 = 2
 	smtpDnssecDigestSha384             uint8 = 4
 	smtpDnssecNsec3HashSha1            uint8 = 1
-	// The largest dnssec_chain: what one SmtpPreambleResult frame can hold (plan-SMTP-wire-gaps#3).
-	SmtpDnssecChainMaxByteCount = SmtpFrameMaxBodyByteCount
-	// RSA key sizes a zone may sign with (RFC 8624 §3.1).
-	smtpDnssecRsaMinBitCount = 1024
-	smtpDnssecRsaMaxBitCount = 4096
 )
 
 // NSEC3's owner labels: RFC 4648's extended hex alphabet in lowercase, unpadded.
@@ -76,6 +71,12 @@ type SmtpDaneSettings struct {
 	// NSEC3 iterations a denial may use. RFC 9276 asks for 0 and lets a validator refuse more, so a
 	// chain past this is bogus: 100.
 	MaxNsec3IterationCount int
+	// The largest dnssec_chain: what one SmtpPreambleResult frame can hold (plan-SMTP-wire-gaps#3), so
+	// its default is the frame's own bound.
+	MaxChainByteCount int
+	// RSA key sizes a zone may sign with (RFC 8624 §3.1): 1,024 to 4,096 bits.
+	RsaMinBitCount int
+	RsaMaxBitCount int
 }
 
 // A fresh value each call.
@@ -86,13 +87,17 @@ func DefaultSmtpDaneSettings() *SmtpDaneSettings {
 		MaxSignatureCheckCount: 256,
 		MaxCnameDepth:          8,
 		MaxNsec3IterationCount: 100,
+		MaxChainByteCount:      DefaultSmtpFrameSettings().MaxBodyByteCount,
+		RsaMinBitCount:         1024,
+		RsaMaxBitCount:         4096,
 	}
 }
 
-// Whether every limit is in range: positive, and the NSEC3 bound not negative.
+// Whether every limit is in range: positive, the NSEC3 bound not negative, and the RSA bounds in order.
 func (self *SmtpDaneSettings) valid() bool {
 	return self != nil && 0 < self.MaxRrCount && 0 < self.MaxRrsetCount && 0 < self.MaxSignatureCheckCount &&
-		0 < self.MaxCnameDepth && 0 <= self.MaxNsec3IterationCount
+		0 < self.MaxCnameDepth && 0 <= self.MaxNsec3IterationCount && 0 < self.MaxChainByteCount &&
+		0 < self.RsaMinBitCount && self.RsaMinBitCount <= self.RsaMaxBitCount
 }
 
 // What one RRset is keyed by.
@@ -127,7 +132,7 @@ func ParseSmtpDnssecChain(chain []byte, settings *SmtpDaneSettings) (*SmtpDnssec
 	if !settings.valid() {
 		return nil, fmt.Errorf("%w: settings", ErrSmtpDnssecBogus)
 	}
-	if SmtpDnssecChainMaxByteCount < len(chain) {
+	if settings.MaxChainByteCount < len(chain) {
 		return nil, fmt.Errorf("%w: a %d-octet chain", ErrSmtpDnssecBogus, len(chain))
 	}
 	rrs, err := parseSmtpDnsRrs(chain, settings.MaxRrCount)
@@ -550,14 +555,14 @@ func (self *smtpDnssecValidator) verify(rrset *smtpDnsRrset, signature *smtpDnsR
 		data = binary.BigEndian.AppendUint16(data, uint16(len(rdata)))
 		data = append(data, rdata...)
 	}
-	if !smtpDnssecVerifySignature(key, data, signature.signature) {
+	if !smtpDnssecVerifySignature(key, data, signature.signature, self.chain.settings) {
 		return fmt.Errorf("%w: an rrsig does not verify", ErrSmtpDnssecBogus)
 	}
 	return nil
 }
 
 // Whether signature by key is good over data, by the key's algorithm.
-func smtpDnssecVerifySignature(key *smtpDnsDnskey, data []byte, signature []byte) bool {
+func smtpDnssecVerifySignature(key *smtpDnsDnskey, data []byte, signature []byte, settings *SmtpDaneSettings) bool {
 	switch key.algorithm {
 	case smtpDnssecAlgorithmRsaSha256:
 		// RFC 3110: an exponent length of one octet, or zero and then two, the exponent, the modulus
@@ -577,7 +582,7 @@ func smtpDnssecVerifySignature(key *smtpDnsDnskey, data []byte, signature []byte
 		}
 		exponent := new(big.Int).SetBytes(publicKey[offset : offset+exponentByteCount])
 		modulus := new(big.Int).SetBytes(publicKey[offset+exponentByteCount:])
-		if !exponent.IsInt64() || exponent.Int64() < 3 || 1<<31-1 < exponent.Int64() || modulus.BitLen() < smtpDnssecRsaMinBitCount || smtpDnssecRsaMaxBitCount < modulus.BitLen() {
+		if !exponent.IsInt64() || exponent.Int64() < 3 || 1<<31-1 < exponent.Int64() || modulus.BitLen() < settings.RsaMinBitCount || settings.RsaMaxBitCount < modulus.BitLen() {
 			return false
 		}
 		digest := sha256.Sum256(data)

@@ -24,6 +24,10 @@ message AclRows {
   AclAudit audit = 7;                     // owner decision 63; Team only
   repeated AclSuspension suspensions = 8; // active Suspends a fold kept (plan-ACL-folded-grant-state #1)
   repeated AclSpentGrant spent_grants = 9; // activated and revoked grant ids (plan-ACL-folded-grant-state #3)
+  // The document's effective evidenceDefault, compiled at each base as each AclRequestRule's evidence is: the
+  // ApprovalDecision.channel values accepted for an action no requests rule names (dns_set, dns_delete,
+  // bridge_expose); default all three (QD-727)
+  repeated uint32 evidence_default = 10;
 }
 
 // A tag or group atom, or a selector with no table name compiled to a derived atom: the first 16 bytes of
@@ -176,12 +180,20 @@ message AclRepo {
   AclRepoDeletionRow deletion = 9;           // the newest RepoDelete with any RepoRestore of its deletion_id
   RepoVersioningLock lock = 10;              // the newest RepoVersioning's
   uint64 holders_shrunk_at = 11;             // the newest log position that dropped a key holder (§7.9)
+  repeated AclRepoPrefixRulesRow prefix_rules = 12;  // every RepoPrefixRules that took effect on this repo, in
+                                                     // position order, for the repo's life: never shortened or
+                                                     // reordered, a set staying after a later one replaces it, since
+                                                     // pushes pinned in its span are judged by it (DESIGN-DETAILS
+                                                     // 16.2.3); at most AclPrefixSettings.SetMaxCount
 }
 
+// A RepoAdmin{remove} stamps removed_at and keeps the row, so a reader judges the admin's right at a position before
+// its removal; the next base's compile drops a row whose removal its retention point has passed (QD-743).
 message AclRepoAdminRow {
   bytes sidecar_id = 1;
   bytes signer = 2;
   uint64 at = 3;
+  uint64 removed_at = 4;                  // the RepoAdmin{remove}'s position; 0 while the admin stands
 }
 
 message AclRepoGrantRow {
@@ -210,6 +222,19 @@ message AclRepoDeletionRow {
   bool now = 2;
   uint64 deleted_at = 3;
   uint64 restored_at = 4;
+  int64 deleted_time_ms = 5;              // the RepoDelete entry's time_ms, which RepoRestore's 7 days and §11.12's
+                                          // shred start count from once the log no longer keeps the entry (QD-743)
+  bytes signer = 6;                       // the RepoDelete's signer sidecar_id, as every row keeps its signer: what
+                                          // §11.12's deleted{deletion_id, time, signer} names once the log no longer
+                                          // keeps the entry (QD-798)
+}
+
+// One RepoPrefixRules that took effect: its signer and position, and nothing of its body, which stays in the log's
+// entry and the config head's fold record (DESIGN-DETAILS 16.2.3). The set in force at a push's pin is the newest
+// row at or below it.
+message AclRepoPrefixRulesRow {
+  bytes signer = 1;                       // the statement's signer, a sidecar_id
+  uint64 at = 2;                          // the entry that carried it
 }
 
 message AclAudit {                        // a reader every member sees (owner decision 63)
@@ -333,6 +358,34 @@ message RepoVersioning {
   RepoVersioningLock lock = 3;
   bytes sealed_rules = 4;                 // optional: config.proto's VersioningRules. An owner-bound repo's are
                                           // sealed to its own generation, others' to the config's
+}
+
+// v1, Q-EVS-3 (a) (QD-212; DESIGN-DETAILS 16.2.2): a repo admin or a config writer, only in a general repo that is not
+// deleted. From M2 every verifier checks its id-level rule, reading sealed_rules' length alone, and folds {signer, at}
+// into AclRepo.prefix_rules; readers enforce the rules from M6 (D-PHASE-9).
+message RepoPrefixRules {
+  StatementHeader header = 1;
+  bytes repo_id = 2;
+  bytes sealed_rules = 3;                 // a PrefixRuleSet in config_seal's form, sealed to the repo's own generation:
+                                          // 48 B and a positive multiple of 256 B
+}
+
+// The plaintext of RepoPrefixRules.sealed_rules, which no server ever holds. A set with no rule names nobody, so
+// nobody may write; the one rule {autogroup:sidecar, no path} restricts nobody.
+message PrefixRuleSet {
+  repeated PrefixRule rules = 1;          // ascending by (subject, path), no rule twice
+}
+
+message PrefixRule {
+  bytes subject = 1;                      // 16 B: a sidecar_id, a member_id, a tag id, or the autogroup atom of
+                                          // sidecar, member, tagged or ephemeral
+  repeated bytes path = 2;                // the prefix in whole components, §11.6's raw names; none: every path
+  PrefixAction action = 3;
+}
+
+enum PrefixAction {
+  PREFIX_ACTION_UNSPECIFIED = 0;
+  PREFIX_ACTION_WRITE = 1;                // the only action
 }
 
 // Authority statements, purpose authority, k of n (§7.9).

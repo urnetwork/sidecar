@@ -13,11 +13,13 @@
 // extra entry, then the full entry from the lowest writer_sidecar_id and the lowest seq. Honest copies of one version
 // are equal, so the order only makes the result a function. A live winner is a doc-table row with its postings, a
 // tombstone goes to the tombstone table, and on ur/index a ref tombstone takes every row of its ref below its version;
-// each stays for older partitions until the bucket rolls. layout appends the new winners in key order to the youngest
-// shard, opening the next at the cap by take's search, drops each superseded entry from the shard holding it, so a
-// bucket's shards hold one version a key (QD-688), joins adjacent shards that come to under ShardJoinByteCount, and
-// removes an emptied one. The manifest's watermarks rise to the highest seq the merge read of each writer, never a
-// head's.
+// each stays for older partitions until the bucket rolls. layout drops each superseded entry from the shard holding it,
+// so a bucket's shards hold one version a key (QD-688), a shard that this leaves past the cap giving its highest
+// entries to the appended ones; appends the new winners in key order to the youngest shard, opening the next at the
+// cap by take's search; joins adjacent shards that come to under ShardJoinByteCount where the joined shard fits the
+// cap; and removes an emptied one. Every shard it writes was tested against the cap where it last changed, so with
+// D6's skip at extraction a layout is a function of its inputs that always writes (QD-760, QD-775). The manifest's
+// watermarks rise to the highest seq the merge read of each writer, never a head's.
 //
 // A merge writes and removes no file of any writer's: slots stay for their writers to reuse and large entries for
 // their writers to remove. Its manifest, which every merge replaces or creates, is its fence against any other merge,
@@ -43,10 +45,11 @@ import (
 )
 
 var (
-	// A document whose row and postings pass a shard's cap in a shard of its own, so no layout can place it. A key set
-	// within KeySetMax can be one (a chunk of some 200,000 distinct trigrams and more), and DESIGN-DETAILS 1.2.4 does not
-	// say what a merge then writes: the merge fails closed and writes nothing (question
-	// search-m10-10-document-past-a-shard).
+	// An empty shard that takes nothing: in take's step 2, and in step 1 where a give-up's search finds no count. Each
+	// entry of a layout is a tombstone or a row D6 kept, and either fits a shard of its own (QD-760: extraction skips a
+	// document whose lone(d) passes ShardBody, a decoder refuses a full entry past it, and a merge leaves out a diff that
+	// composes past it), so no input a decoder accepts reaches this. It stays as the closed guard: the layout fails,
+	// and the merge, the push past PushDirectByteCount or the roll-up writes nothing.
 	errIndexMergeUnplaceable = errors.New("index document fits no shard")
 	// A merge's inputs do not line up: a shard decoded for none the bucket names, or one missing.
 	errIndexMergeInputs = errors.New("index merge inputs do not match their bucket")
@@ -249,8 +252,9 @@ func (self *indexMergeWinners) appended() []*indexLayoutEntry {
 // The shards' entries, every extra entry and, when absorbing, every sealed slot's and unabsorbed large entry's entry
 // as candidates, the erasure set's documents left out first: what a merge's winners are chosen from. Each writer's
 // highest seq read joins watermarks. A diff composes onto its own writer's base; one whose base no other file of its
-// writer's holds is malformed and left out.
-func indexMergeCandidates(bucket *indexViewBucket, shards []*indexShard, extra []*indexEntry, absorb bool, includeHeads bool, erased func(key [indexIdByteCount]byte, version uint64) bool, watermarks map[Id]uint32) (*indexMergeWinners, []*indexMalformedDiff, error) {
+// writer's holds, or whose composed set D6 skips under the diff's own row (QD-760), is malformed and left out. A merge
+// never skips a document itself: its output is its inputs' newest versions, so it places a winner or fails.
+func indexMergeCandidates(bucket *indexViewBucket, shards []*indexShard, extra []*indexEntry, absorb bool, includeHeads bool, erased func(key [indexIdByteCount]byte, version uint64) bool, watermarks map[Id]uint32, settings *IndexFormatSettings) (*indexMergeWinners, []*indexMalformedDiff, error) {
 	winners := indexNewMergeWinners()
 	for shardIndex, shard := range shards {
 		for _, document := range shard.documents {
@@ -313,7 +317,7 @@ func indexMergeCandidates(bucket *indexViewBucket, shards []*indexShard, extra [
 						if base != nil {
 							keys, err = entry.delta.applyTo(base.keys)
 						}
-						if base == nil || err != nil || uint64(len(keys)) != entry.row.trigramCount {
+						if base == nil || err != nil || uint64(len(keys)) != entry.row.trigramCount || indexDocumentSkipped(keys, entry.row, settings) {
 							malformed = append(malformed, &indexMalformedDiff{path: file.file.path, signerSidecarId: file.file.signerSidecarId})
 							continue
 						}
@@ -353,7 +357,7 @@ func indexMerge(args *indexMergeArgs) (*indexMergeResult, error) {
 			}
 		}
 	}
-	winners, malformed, err := indexMergeCandidates(bucket, args.shards, args.extra, args.absorb, false, erased, watermarks)
+	winners, malformed, err := indexMergeCandidates(bucket, args.shards, args.extra, args.absorb, false, erased, watermarks, args.settings)
 	if err != nil {
 		return nil, err
 	}
@@ -441,6 +445,44 @@ type indexLayoutShard struct {
 	// While unchanged, its bytes before its pad, the replaced version's.
 	unpaddedByteCount int
 	changed           bool
+	// Since its last change, its encoding's length by blocks of 64 before its pad, where measured is set.
+	measuredByteCount int
+	measured          bool
+}
+
+// Takes documents and tombstones as the shard's whole contents, which this layout changed.
+func (self *indexLayoutShard) change(documents []*indexShardDocument, tombstones []*indexShardTombstone) {
+	self.documents, self.tombstones = documents, tombstones
+	self.changed, self.measured = true, false
+}
+
+// Adds entries to the shard, which this layout changed when there is one.
+func (self *indexLayoutShard) place(entries []*indexLayoutEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	documents, tombstones := slices.Clone(self.documents), slices.Clone(self.tombstones)
+	for _, entry := range entries {
+		if entry.document != nil {
+			documents = append(documents, entry.document)
+		} else {
+			tombstones = append(tombstones, entry.tombstone)
+		}
+	}
+	self.change(documents, tombstones)
+}
+
+// The shard's rows and tombstones together, ascending by key and then kind: the order layout appends in.
+func (self *indexLayoutShard) entries() []*indexLayoutEntry {
+	entries := make([]*indexLayoutEntry, 0, len(self.documents)+len(self.tombstones))
+	for _, document := range self.documents {
+		entries = append(entries, &indexLayoutEntry{document: document})
+	}
+	for _, tombstone := range self.tombstones {
+		entries = append(entries, &indexLayoutEntry{tombstone: tombstone})
+	}
+	slices.SortFunc(entries, indexCompareLayoutEntries)
+	return entries
 }
 
 // A partition's shard n as its base holds it.
@@ -516,17 +558,27 @@ func (self *indexLayoutArgs) unpadded(builder *indexShardBuilder, documents []*i
 	return file, err
 }
 
-// 1.2.4's layout: (1) drop from each shard what it no longer keeps; (2) append args.appended to the youngest shard,
-// shard 0 where there is none, taking by take's search and opening the highest n + 1 at the cap; (3) by ascending n,
-// join each shard with the next while the two come to fewer than ShardJoinByteCount before their pads, testing the
-// joined shard again with its next; (4) remove a shard left empty; (5) encode each changed shard by blocks of 64 with
-// the keyed pad at padKey's generation. A shard nothing changed keeps its bytes and is not written.
+// 1.2.4's layout as QD-775 amends it: (1) drop from each shard what it no longer keeps, and test each shard this
+// changed: one that no longer encodes within the cap keeps the count take's search finds for an empty shard over its
+// entries, ascending by key and then kind, and gives up the rest, its highest entries, to the appended ones; (2) append
+// args.appended, with any given up, sorted once, to the youngest shard, shard 0 where there is none, taking by take's
+// search and opening the highest n + 1 at the cap; (3) by ascending n, join each shard with the next where the two
+// come to fewer than ShardJoinByteCount before their pads and the two as one shard encode within the cap, testing the
+// joined shard again with its next, and where a pair fails either test, going on from its second; (4) remove a shard
+// left empty; (5) encode each changed shard by blocks of 64 with the keyed pad at padKey's generation. A shard nothing
+// changed keeps its bytes and is not written, and is never encoded again: step 1 tests only the shards it changed.
+//
+// The cap is asked of the shard encoder each time, never derived: in take, in step 1's test and in step 3's test its
+// errIndexShardFull is the answer "does not encode within" and the layout goes on, so every shard step 5 encodes passed
+// a test where it last changed. From step 5, errIndexShardFull fails the layout, a guard no input a decoder accepts
+// reaches; so does errIndexMergeUnplaceable, an empty shard that takes nothing.
 func indexLayout(args *indexLayoutArgs) (*indexLayoutResult, error) {
 	if args.padKey == nil {
 		return nil, indexMalformed("a layout without its pad key")
 	}
 	builder := indexNewShardBuilder(args.companion)
 	shards := slices.Clone(args.shards)
+	given := []*indexLayoutEntry{}
 	for _, shard := range shards {
 		documents := slices.DeleteFunc(slices.Clone(shard.documents), func(document *indexShardDocument) bool {
 			return !args.keepDocument(document)
@@ -534,12 +586,38 @@ func indexLayout(args *indexLayoutArgs) (*indexLayoutResult, error) {
 		tombstones := slices.DeleteFunc(slices.Clone(shard.tombstones), func(tombstone *indexShardTombstone) bool {
 			return !args.keepTombstone(tombstone)
 		})
-		if len(documents) != len(shard.documents) || len(tombstones) != len(shard.tombstones) {
-			shard.documents, shard.tombstones, shard.changed = documents, tombstones, true
+		if len(documents) == len(shard.documents) && len(tombstones) == len(shard.tombstones) {
+			continue
 		}
+		shard.change(documents, tombstones)
+		// Step 1's test: a removal re-blocks the dictionary by 64, which can lengthen a shard take filled.
+		unpadded, err := args.unpadded(builder, documents, tombstones)
+		switch {
+		case err == nil:
+			shard.measuredByteCount, shard.measured = len(unpadded), true
+			continue
+		case !errors.Is(err, errIndexShardFull):
+			return nil, err
+		}
+		entries := shard.entries()
+		count, err := indexTake(args, builder, &indexLayoutShard{}, entries)
+		if err != nil {
+			return nil, err
+		}
+		// the whole shard failed, so the count is below len(entries); one entry alone always fits (QD-760)
+		if count == 0 {
+			return nil, errIndexMergeUnplaceable
+		}
+		shard.change(nil, nil)
+		shard.place(entries[:count])
+		given = append(given, entries[count:]...)
 	}
 
 	appended := args.appended
+	if 0 < len(given) {
+		appended = slices.Concat(args.appended, given)
+		slices.SortFunc(appended, indexCompareLayoutEntries)
+	}
 	if 0 < len(appended) {
 		if len(shards) == 0 {
 			shards = append(shards, &indexLayoutShard{n: 0, changed: true})
@@ -553,16 +631,7 @@ func indexLayout(args *indexLayoutArgs) (*indexLayoutResult, error) {
 			if count == 0 && youngest.empty() {
 				return nil, errIndexMergeUnplaceable
 			}
-			for _, entry := range appended[:count] {
-				if entry.document != nil {
-					youngest.documents = append(youngest.documents, entry.document)
-				} else {
-					youngest.tombstones = append(youngest.tombstones, entry.tombstone)
-				}
-			}
-			if 0 < count {
-				youngest.changed = true
-			}
+			youngest.place(appended[:count])
 			appended = appended[count:]
 			if 0 < len(appended) {
 				youngest = &indexLayoutShard{n: shards[len(shards)-1].n + 1, changed: true}
@@ -577,22 +646,27 @@ func indexLayout(args *indexLayoutArgs) (*indexLayoutResult, error) {
 			removals = append(removals, &indexPushRemoval{path: args.path(shard.n).String(), version: shard.file.version})
 		}
 	}
-	unpaddedByteCount := func(shard *indexLayoutShard) (int, error) {
+	// A shard's length in step 3's sum: its encoding's where this layout changed it, else its stored bytes' before
+	// their pad, whatever partition those keep (QD-173).
+	length := func(shard *indexLayoutShard) (int, error) {
 		if !shard.changed {
 			return shard.unpaddedByteCount, nil
 		}
-		file, err := args.unpadded(builder, shard.documents, shard.tombstones)
-		if err != nil {
-			return 0, err
+		if !shard.measured {
+			file, err := args.unpadded(builder, shard.documents, shard.tombstones)
+			if err != nil {
+				return 0, err
+			}
+			shard.measuredByteCount, shard.measured = len(file), true
 		}
-		return len(file), nil
+		return shard.measuredByteCount, nil
 	}
 	for index := 0; index+1 < len(shards); {
-		first, err := unpaddedByteCount(shards[index])
+		first, err := length(shards[index])
 		if err != nil {
 			return nil, err
 		}
-		second, err := unpaddedByteCount(shards[index+1])
+		second, err := length(shards[index+1])
 		if err != nil {
 			return nil, err
 		}
@@ -600,10 +674,21 @@ func indexLayout(args *indexLayoutArgs) (*indexLayoutResult, error) {
 			index += 1
 			continue
 		}
+		// Step 3's test: the union is not bounded by the sum, since a list that was a short bitset in a shard of few
+		// documents can become a long gap list beside many, so it is encoded as step 5 would encode it.
 		next := shards[index+1]
-		shards[index].documents = append(shards[index].documents, next.documents...)
-		shards[index].tombstones = append(shards[index].tombstones, next.tombstones...)
-		shards[index].changed = true
+		documents := slices.Concat(shards[index].documents, next.documents)
+		tombstones := slices.Concat(shards[index].tombstones, next.tombstones)
+		joined, err := args.unpadded(builder, documents, tombstones)
+		switch {
+		case errors.Is(err, errIndexShardFull):
+			index += 1
+			continue
+		case err != nil:
+			return nil, err
+		}
+		shards[index].change(documents, tombstones)
+		shards[index].measuredByteCount, shards[index].measured = len(joined), true
 		remove(next)
 		shards = slices.Delete(shards, index+1, index+2)
 	}
@@ -644,7 +729,8 @@ func indexLayout(args *indexLayoutArgs) (*indexLayoutResult, error) {
 // that lo = 0; hi = len; while lo < hi: mid = (lo + hi + 1) / 2; if the shard with appended[0:mid] encodes within the
 // cap then lo = mid else hi = mid - 1; c = lo finds. A shard's length is not quite monotone in its documents, since
 // re-blocking by 64 can save bytes when a key is added, so every implementation runs this same search. The cap is the
-// shard encoder's own, which answers errIndexShardFull past it.
+// shard encoder's own, which answers errIndexShardFull past it. Step 1's give-up runs it on an empty shard over the
+// entries of a shard that failed whole, so its search alone decides there.
 func indexTake(args *indexLayoutArgs, builder *indexShardBuilder, youngest *indexLayoutShard, appended []*indexLayoutEntry) (int, error) {
 	fits := func(count int) (bool, error) {
 		documents := slices.Clone(youngest.documents)

@@ -6,10 +6,11 @@
 //
 //	421     Host, or h2's :authority, and an absolute-form target's authority must equal the SNI, port aside (RFC 9113
 //	        §9.1.1), or the request is answered 421 and goes nowhere
-//	cookies the front's session cookies, __Host-ur-session and a link's __Host-ur-link, and the pending login's
-//	        __Host-ur-pre, count only on Sec-Fetch-Site same-origin or none, or on a top-level GET or HEAD navigation
-//	        (Sec-Fetch-Mode navigate, Sec-Fetch-Dest document); without Fetch Metadata, only with no Origin or the
-//	        host's own. Any other request, from the network's other hosts too, arrives anonymous
+//	cookies the front's session cookies, __Host-ur-session and a link's __Host-ur-link, and the pending logins'
+//	        __Host-ur-pre and __Host-ur-device-pre, count only on Sec-Fetch-Site same-origin or none, or on a
+//	        top-level GET or HEAD navigation (Sec-Fetch-Mode navigate, Sec-Fetch-Dest document); without Fetch
+//	        Metadata, only with no Origin or the host's own. Any other request, from the network's other hosts too,
+//	        arrives anonymous
 //
 // Browsers without Fetch Metadata (before March 2023) still send the cookies on other origins' GETs, which §2.10
 // discloses. tlsHttpSessionView is what one request may count, and it holds no cookie it may not.
@@ -72,6 +73,8 @@ type tlsHttpSessionView struct {
 	session  string
 	link     string
 	preLogin string
+	// members-device's pending device step (tls_members_device.go)
+	devicePending string
 	// The notice was accepted on this host. It holds no standing, so it is read whatever the rule says.
 	noticeAccepted bool
 }
@@ -103,6 +106,7 @@ func newTlsHttpSessionView(r *http.Request, serverName string) *tlsHttpSessionVi
 		view.session = cookieValue(tlsSessionCookieName)
 		view.link = cookieValue(tlsLinkCookieName)
 		view.preLogin = cookieValue(tlsPreLoginCookieName)
+		view.devicePending = cookieValue(tlsDevicePendingCookieName)
 	}
 	return view
 }

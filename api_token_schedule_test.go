@@ -65,7 +65,7 @@ func testClientJwt(claims string) string {
 
 // A client token issued at iat that lives lifetime, with its own jti.
 func testClientJwtAt(jti string, iat time.Time, lifetime time.Duration) string {
-	return testClientJwt(fmt.Sprintf(`{"jti":%q,"iat":%d,"exp":%d,"client_id":"synthetic-client","device_id":"synthetic-device"}`,
+	return testClientJwt(fmt.Sprintf(`{"jti":%q,"iat":%d,"exp":%d,"network_id":"synthetic-network","client_id":"synthetic-client","device_id":"synthetic-device"}`,
 		jti, iat.Unix(), iat.Add(lifetime).Unix()))
 }
 
@@ -109,7 +109,40 @@ func TestOnlyClientTokensRefresh(t *testing.T) {
 		}
 	}
 	identity, ok := sidecarJwtIdentityOf(testClientJwtAt("j", sdkScheduleNow, time.Hour))
-	if !ok || identity.clientId != "synthetic-client" || identity.deviceId != "synthetic-device" {
+	if !ok || identity.networkId != "synthetic-network" || identity.clientId != "synthetic-client" || identity.deviceId != "synthetic-device" {
 		t.Fatalf("%+v", identity)
+	}
+	// a refresh and bind's re-mint are held to all three, so a token missing one names no identity (QD-797)
+	for _, claims := range []string{
+		`{"client_id":"c","device_id":"d"}`,
+		`{"network_id":"n","device_id":"d"}`,
+		`{"network_id":"n","client_id":"c"}`,
+		`{"network_id":7,"client_id":"c","device_id":"d"}`,
+	} {
+		if identity, ok := sidecarJwtIdentityOf(testClientJwt(claims)); ok {
+			t.Errorf("%s names %+v", claims, identity)
+		}
+	}
+}
+
+// The sidecar_id claim bind's re-mint sets (QD-040, QD-797) reads as the sidecar it names, and a token without one,
+// or with one that is not a nonzero id, names none.
+func TestSidecarClaimIsRead(t *testing.T) {
+	sidecarId := NewId()
+	if claimed, ok := sidecarJwtSidecarId(testClientJwt(`{"client_id":"c","sidecar_id":"` + sidecarId.String() + `"}`)); !ok || claimed != sidecarId {
+		t.Fatalf("%s, %t", claimed, ok)
+	}
+	for _, byJwt := range []string{
+		"",
+		"synthetic",
+		testClientJwtAt("j", sdkScheduleNow, time.Hour),
+		testClientJwt(`{"sidecar_id":""}`),
+		testClientJwt(`{"sidecar_id":"` + (Id{}).String() + `"}`),
+		testClientJwt(`{"sidecar_id":"synthetic-not-an-id"}`),
+		testClientJwt(`{"sidecar_id":17}`),
+	} {
+		if claimed, ok := sidecarJwtSidecarId(byJwt); ok {
+			t.Errorf("%q names sidecar %s", byJwt, claimed)
+		}
 	}
 }

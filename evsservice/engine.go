@@ -10,7 +10,8 @@
 //  2. a sidecar's token only, since only a sidecar holds evs scopes: else 403 SCOPE;
 //  3. §19.11's evs gate: a network it does not admit, or a write while `writes: false` holds, answers 503 with
 //     Retry-After, and the engine stays ready;
-//  4. ur_sidecar_id matched to §5's binding (EvsAuthState): 403 SCOPE, or 503 while the state is not loaded;
+//  4. ur_sidecar_id an admitted, unrevoked sidecar of the token's network, as the exchange bound it to the token's
+//     client (EvsAuthState, QD-717): 403 SCOPE, or 503 while the state is not loaded;
 //  5. on a repo route, the token's repo:<id>:<role> scopes against the rights the route takes, the strongest held
 //     honored only while the newest verified state agrees (D-ACL-21): 403 SCOPE, or 503; then, on one that does not
 //     write, §20.6's spent row: a spent network's reply is paced on its own repo and refused on another's
@@ -111,6 +112,8 @@ type EvsEngineDeps struct {
 	// EVSB-M10-01's purge (purge.go), which EVS2-M10-06's step 7 hands each certain commit's candidates. nil queues
 	// nothing, which is safe: evacuation's sweep takes every list.
 	Purge PurgeSink
+	// The holds a slot takeover reads (DESIGN-DETAILS 14.2.4): nil reads hold/ through a HoldCache of the engine's own.
+	Holds *HoldCache
 	// Routes a test serves beside the engine's own, to hold the guard to a route shape no task has built yet.
 	testRoutes []*EvsRoute
 }
@@ -146,6 +149,8 @@ type EvsEngine struct {
 	segments *SegmentLocator
 	// §19.11's format2 gate over the host's gates, read per push (format2_gate.go)
 	format2 Format2Gate
+	// hold/ as a slot takeover reads it, at most 5 s old
+	holds   *HoldCache
 	metrics *evsMetrics
 	handler http.Handler
 	// what the router took at the start, in its order
@@ -222,13 +227,17 @@ func NewEvsEngine(ctx context.Context, host *sidecar.ServiceHost, settings *EvsS
 		stepEightDoneCount: sidecar.NewMonitorValue(0),
 	}
 	self.format2 = NewFormat2Gate(host)
+	self.holds = deps.Holds
+	if self.holds == nil {
+		self.holds = NewHoldCache(host.Blobs, clock, nil)
+	}
 	self.heads = NewHeadStore(clock, host.ClockCheck, host.Redis, settings, log)
 	self.records = NewRecordCache(settings)
 	self.batches = NewBatchWriter(cancelCtx, clock, host.ClockCheck, blobs, self.records, settings, log)
 	self.overlays = NewOverlayChains(self.heads, settings)
-	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.repos, priceTable, settings, log)
-	self.generations = NewGenerationRecords(settings)
 	self.locator = NewRecordLocator(blobs, nil)
+	self.folder = NewFolder(cancelCtx, clock, host.ClockCheck, blobs, host.Budget, self.heads, self.records, self.locator, self.repos, priceTable, settings, log)
+	self.generations = NewGenerationRecords(settings)
 	self.segments = NewSegmentLocator(blobs)
 	self.notifier = deps.CommitNotifier
 	if self.notifier == nil {
@@ -892,16 +901,20 @@ type evsMetrics struct {
 	seconds    sidecar.MetricsHistogram
 	// faults the design says alarm: an immutable key holding other bytes, a placement that does not parse
 	alarms sidecar.MetricsCounter
+	// step 6's slot_foreign: a new slot another statement holds, or no statement, refused 409 SLOT_STALE
+	// (DESIGN-DETAILS 14.2.3), which no alarm follows since an honest retry meets one after a rollout
+	slotForeign sidecar.MetricsCounter
 }
 
 // Declares the series.
 func newEvsMetrics(metrics sidecar.Metrics) *evsMetrics {
 	return &evsMetrics{
-		requests:   metrics.Counter("urnetwork_evs_requests_total", "evs requests by route and status", "route", "status"),
-		refusals:   metrics.Counter("urnetwork_evs_refusals_total", "evs refusals by route and code", "route", "code"),
-		gateClosed: metrics.Counter("urnetwork_evs_gate_closed_total", "evs requests the gate answered 503", "route"),
-		seconds:    metrics.Histogram("urnetwork_evs_request_seconds", "evs request time by route", nil, "route"),
-		alarms:     metrics.Counter("urnetwork_evs_alarms_total", "evs faults that alarm, by kind", "kind"),
+		requests:    metrics.Counter("urnetwork_evs_requests_total", "evs requests by route and status", "route", "status"),
+		refusals:    metrics.Counter("urnetwork_evs_refusals_total", "evs refusals by route and code", "route", "code"),
+		gateClosed:  metrics.Counter("urnetwork_evs_gate_closed_total", "evs requests the gate answered 503", "route"),
+		seconds:     metrics.Histogram("urnetwork_evs_request_seconds", "evs request time by route", nil, "route"),
+		alarms:      metrics.Counter("urnetwork_evs_alarms_total", "evs faults that alarm, by kind", "kind"),
+		slotForeign: metrics.Counter("urnetwork_evs_slot_foreign_total", "new slots step 6 found another statement's or no statement's"),
 	}
 }
 

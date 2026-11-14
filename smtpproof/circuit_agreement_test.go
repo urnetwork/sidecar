@@ -1,8 +1,10 @@
 // The circuits beside the gate and the independent checker, over the same breaks of one real
 // connection's header block: SMTP-M9-23's differential table. The gate's verifier is the relation, the
 // checker reads SPEC.md apart from both and imports nothing from this module, and the circuit is
-// gnark's solver over the edge's own statement, Z1 left out. Each break must be named Z5, with Z6 beside
-// it where it also breaks DATA's framing, by the first two, and refused at pi3 by the third.
+// gnark's solver over the edge's own statement, Z1 left out. Each break must be named Z5 by the first two,
+// and refused at the msg part by the third. A header record's CR and LF are Z5's alone in either mode:
+// DATA's framing of the body starts after the header block (DESIGN-DETAILS 3.2.3), and Z5's rule 1 is the
+// same rule over the header records.
 
 package smtpproof_test
 
@@ -128,9 +130,6 @@ func TestHeaderCircuitTheGateAndTheCheckerRefuseAlike(t *testing.T) {
 			capture := smtpproof.ExportCapture(t, c.leg, c.data)
 			testBreakHeaderBlock(t, c, capture, b)
 			want := []string{"Z5"}
-			if b.framing && c.data {
-				want = append(want, "Z6")
-			}
 			name := fmt.Sprintf("%s: %s", c.name, b.name)
 			if gate := testGateVerdict(capture); !slices.Equal(gate, want) {
 				t.Errorf("%s: the gate names %v, want %v", name, gate, want)
@@ -139,7 +138,7 @@ func TestHeaderCircuitTheGateAndTheCheckerRefuseAlike(t *testing.T) {
 				t.Errorf("%s: the checker names %v, want %v", name, ours, want)
 			}
 			if part, err := smtpproof.ExportCircuitVerdict(t, capture); part != 3 || err != nil {
-				t.Errorf("%s: the circuits refuse part %d (%v), want pi3", name, part, err)
+				t.Errorf("%s: the circuits refuse part %d (%v), want the msg part, 3", name, part, err)
 			}
 		}
 	}

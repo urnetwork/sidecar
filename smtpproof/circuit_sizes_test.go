@@ -64,9 +64,12 @@ var testSpecGadgetSizes = map[string]int{
 	"chacha20 block":                21664,
 	"aes keystream block":           11665,
 	"chacha20 keystream block":      21825,
-	"z1 tls13 client keys":          515322,
 	"z1 tls13 both directions":      708498,
 	"z1 tls12 server finished open": 669147,
+	// DESIGN-DETAILS 3.2.2's gadget, booleans of its bits and blind included (SMTP-M9-36)
+	"commitment opening, aes keys":      3026,
+	"commitment opening, chacha20 keys": 4133,
+	"commitment opening, a carry":       1186,
 }
 
 func TestGadgetSizesAreSpecMds(t *testing.T) {
@@ -169,9 +172,102 @@ func TestGadgetSizesAreSpecMds(t *testing.T) {
 		}
 		return testCompileShape(t, shape).GetNbConstraints() - testCompileShape(t, &without).GetNbConstraints() + keyBooleans + twinNonceXors
 	}
-	// pi1's shapes, which other tests compile too: a part that opens no server record derives the
-	// client's keys alone
-	expect("z1 tls13 client keys", z1(partShapes()[1]))
-	expect("z1 tls13 both directions", z1(&partShape{kind: partKindEnvelope, version: tlsVersion13, suite: tlsSuiteAes128GcmSha256, clientBlocks: 1, serverBlocks: 1}))
-	expect("z1 tls12 server finished open", z1(test12Shape()))
+	// the key part's shapes, which other tests compile too: the key part derives both directions always,
+	// since C commits to both (DESIGN-DETAILS 3.2.3), and no later part derives anything
+	expect("z1 tls13 both directions", z1(partShapes(DefaultProofSettings())[1]))
+	// a 1.2 key part's IVs end in 8 zero octets its derivation makes constants, so its opening of C is
+	// cheaper than its twin's, whose IVs are private bits: that saving comes off what z1 reads
+	keyGenerators, scanGenerators := commitGeneratorSets()
+	keyBits := 8 * (2*tlsAes128KeyBytes + 2*tlsIv13Bytes)
+	zero := make([]bool, keyBits)
+	for direction := range 2 {
+		start := 8 * (direction*(tlsAes128KeyBytes+tlsIv13Bytes) + tlsAes128KeyBytes + tlsSalt12Bytes)
+		for i := range 8 * tlsExplicitNonceBytes {
+			zero[start+i] = true
+		}
+	}
+	whole := testCompile(t, newTestCommitCircuit(keyGenerators, keyBits)).GetNbConstraints()
+	salted := testCompile(t, newTestCommitLayoutCircuit(keyGenerators, zero)).GetNbConstraints()
+	expect("z1 tls12 server finished open", z1(test12Shape())+whole-salted-2*8*tlsExplicitNonceBytes)
+
+	// the commitment gadget alone: its bits' and blind's booleans stay in, the two comparisons of its
+	// output come off
+	for _, c := range []struct {
+		gadget     string
+		generators *commitGenerators
+		bitCount   int
+	}{
+		{gadget: "commitment opening, aes keys", generators: keyGenerators, bitCount: 8 * (2*tlsAes128KeyBytes + 2*tlsIv13Bytes)},
+		{gadget: "commitment opening, chacha20 keys", generators: keyGenerators, bitCount: 8 * (2*tlsChachaKeyBytes + 2*tlsIv13Bytes)},
+		{gadget: "commitment opening, a carry", generators: scanGenerators, bitCount: carryStateBits},
+	} {
+		expect(c.gadget, testCompile(t, newTestCommitCircuit(c.generators, c.bitCount)).GetNbConstraints()-2)
+	}
+}
+
+// A commitment whose bits at the zero positions are the constant 0, as a 1.2 key part's derived IVs end
+// in 8 zero octets. Booleans on the other bits only.
+type testCommitLayoutCircuit struct {
+	generators *commitGenerators
+	zero       []bool
+	Bits       []frontend.Variable
+	BlindBits  []frontend.Variable
+	Commitment []frontend.Variable `gnark:",public"`
+}
+
+func newTestCommitLayoutCircuit(generators *commitGenerators, zero []bool) *testCommitLayoutCircuit {
+	return &testCommitLayoutCircuit{
+		generators: generators,
+		zero:       zero,
+		Bits:       make([]frontend.Variable, len(zero)),
+		BlindBits:  make([]frontend.Variable, commitBlindBits),
+		Commitment: make([]frontend.Variable, 2),
+	}
+}
+
+func (self *testCommitLayoutCircuit) Define(api frontend.API) error {
+	bits := make([]frontend.Variable, len(self.Bits))
+	for i, bit := range self.Bits {
+		if self.zero[i] {
+			bits[i] = 0
+			continue
+		}
+		api.AssertIsBoolean(bit)
+		bits[i] = bit
+	}
+	for _, bit := range self.BlindBits {
+		api.AssertIsBoolean(bit)
+	}
+	assertCommitment(api, self.generators, bits, self.BlindBits, self.Commitment)
+	return nil
+}
+
+// Every catalog shape fills one domain (DESIGN-DETAILS 3.2.6's fill rule): its constraints and public
+// inputs at or under DomainSize less DomainHeadroomCount, and, but for the key shapes, at least 90% of
+// that, so that a unit is spent on what it proves. Each is compiled once here and dropped, which bounds
+// the memory this takes, and while it is held its public inputs are each held to a constraint too
+// (reading 29), so TestEveryPublicWireIsConstrained's rule covers the eleven. Its log is SPEC.md 10.4's
+// and 11.4's figures.
+func TestProductionShapesFillOneDomain(t *testing.T) {
+	testNeedCircuits(t)
+	proof := DefaultProofSettings()
+	bound := proof.DomainSize - proof.DomainHeadroomCount
+	for _, shape := range partShapes(proof) {
+		compiled, err := compilePartShape(shape)
+		if err != nil {
+			t.Fatal(err)
+		}
+		used := compiled.GetNbConstraints() + compiled.GetNbPublicVariables()
+		t.Logf("%s: %d constraints, %d public inputs, %.1f%% of 2^20", partShapeName(shape), compiled.GetNbConstraints(),
+			compiled.GetNbPublicVariables(), 100*float64(used)/float64(proof.DomainSize))
+		if bound < used {
+			t.Errorf("%s: %d constraints and public inputs, over %d", partShapeName(shape), used, bound)
+		}
+		if shape.kind != partKindKey && used < bound*9/10 {
+			t.Errorf("%s: %d constraints and public inputs, under 90%% of %d", partShapeName(shape), used, bound)
+		}
+		if unread := testUnreadPublicInputs(t, compiled); len(unread) != 0 {
+			t.Errorf("%s: public inputs %v appear in no constraint", partShapeName(shape), unread)
+		}
+	}
 }

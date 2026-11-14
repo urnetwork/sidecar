@@ -3,8 +3,8 @@
 // RECORD-M3-12 on T2: sidecar.RecordEvsStreams, EvsRepo.BuildStreamPush and RecordVault.Ensure against an
 // evsservice.EvsEngine over sidecartest's FakeHost, FakeGkm and a FakeGkmAuthLog, every device its own EvsClient. The
 // world grants scopes as §7.8's tokens would: evs honors a right only where the world's grant gives it, so a refusal
-// is evs's own. Its slot rows are 32 B, each wrapped as one of evs's object keys, since RECORD.md's 64 B rows wait on
-// question record-m2-01-slot-row-salt; the production codec's refusal is tested apart.
+// is evs's own. Its slot rows are RECORD.md's 64 B key || salt, each stored as EVS-FORMAT.md's 104 B record slot row
+// block (QD-739).
 
 package sidecar_test
 
@@ -16,6 +16,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -34,49 +35,6 @@ import (
 	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 )
-
-// The world's test codec: a row is 32 B, wrapped under fek_g as an object key, so evs's slot format holds it as it
-// stands.
-type recordEvsTestCodec struct{}
-
-const recordEvsTestRowByteCount = 32
-
-func (self recordEvsTestCodec) Check(rows []*sidecar.RecordSlotRow) error {
-	for i, row := range rows {
-		if len(row.Row) != recordEvsTestRowByteCount || (0 < i && row.KeyIndex <= rows[i-1].KeyIndex) {
-			return fmt.Errorf("a test row of %d bytes or out of order", len(row.Row))
-		}
-	}
-	return nil
-}
-
-func (self recordEvsTestCodec) Wrap(fek *sidecar.EvsFekKey, rows []*sidecar.RecordSlotRow) ([]*protocol.EvsSlotKey, error) {
-	keys := []*protocol.EvsSlotKey{}
-	for _, row := range rows {
-		wrapped, err := sidecar.EvsWrapTestObjectKey(fek, row.Row)
-		if err != nil {
-			return nil, err
-		}
-		keys = append(keys, &protocol.EvsSlotKey{KeyIndex: row.KeyIndex, Generation: fek.Generation(), Wrapped: wrapped})
-	}
-	return keys, nil
-}
-
-func (self recordEvsTestCodec) Open(slot *protocol.EvsSlotObject, fekOf func(generation uint64) (*sidecar.EvsFekKey, error)) ([]*sidecar.RecordSlotRow, error) {
-	rows := []*sidecar.RecordSlotRow{}
-	for _, key := range slot.GetKeys() {
-		fek, err := fekOf(key.GetGeneration())
-		if err != nil {
-			return nil, err
-		}
-		row, err := sidecar.EvsUnwrapTestObjectKey(fek, key.GetWrapped())
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, &sidecar.RecordSlotRow{KeyIndex: key.GetKeyIndex(), Row: row})
-	}
-	return rows, nil
-}
 
 // A device's clock: the world's time, a wait moving the world's clock on by its timeout, so a retry's backoff
 // holds no test and evs sees the time pass, as a fence's or a refusal's retry_after needs.
@@ -278,6 +236,13 @@ func newRecordEvsWorld(t *testing.T) *recordEvsWorld {
 	return world
 }
 
+// The signer of sidecarId, its identity key, as signerWithLock makes it.
+func (self *recordEvsWorld) signer(sidecarId sidecar.Id) *sidecartest.FakeGkmSigner {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.signerWithLock(sidecarId)
+}
+
 // The signer of sidecarId, made a member device of the world's member on first use.
 func (self *recordEvsWorld) signerWithLock(sidecarId sidecar.Id) *sidecartest.FakeGkmSigner {
 	signer := self.signers[sidecarId]
@@ -420,10 +385,6 @@ func (self *recordEvsWorld) Advance(duration time.Duration) {
 	self.clock.Advance(duration)
 }
 
-func (self *recordEvsWorld) RowByteCount() int {
-	return recordEvsTestRowByteCount
-}
-
 // The devices' newest pin, which a push of the suite declares.
 func (self *recordEvsWorld) Pin() *bridge.AuthPin {
 	return self.view().Pin()
@@ -558,7 +519,7 @@ func (self *recordEvsWorld) fileStatement(signerId sidecar.Id) sidecar.EvsFileSt
 	}
 }
 
-// What sidecarId reaches: its own evs client over the world, on a store of its own, with the test codec.
+// What sidecarId reaches: its own evs client over the world, on a store of its own.
 func (self *recordEvsWorld) For(sidecarId sidecar.Id) sidecar.RecordStreams {
 	self.stateLock.Lock()
 	streams := self.streams[sidecarId]
@@ -566,12 +527,12 @@ func (self *recordEvsWorld) For(sidecarId sidecar.Id) sidecar.RecordStreams {
 	if streams != nil {
 		return streams
 	}
-	return self.streamsOn(sidecarId, self.newClient(sidecarId, sidecartest.NewFakeStore().Root()), sidecartest.NewFakeStore().Root(), recordEvsTestCodec{})
+	return self.streamsOn(sidecarId, self.newClient(sidecarId, sidecartest.NewFakeStore().Root()), sidecartest.NewFakeStore().Root())
 }
 
-// A binding of sidecarId on client and store with codec, kept as its For.
-func (self *recordEvsWorld) streamsOn(sidecarId sidecar.Id, client *sidecar.EvsClient, store sidecar.SidecarStore, codec sidecar.RecordSlotRowCodec) *sidecar.RecordEvsStreams {
-	streams, err := sidecar.NewRecordEvsStreams(&sidecar.RecordEvsStreamsArgs{Client: client, Store: store, RowCodec: codec})
+// A binding of sidecarId on client and store, kept as its For.
+func (self *recordEvsWorld) streamsOn(sidecarId sidecar.Id, client *sidecar.EvsClient, store sidecar.SidecarStore) *sidecar.RecordEvsStreams {
+	streams, err := sidecar.NewRecordEvsStreams(&sidecar.RecordEvsStreamsArgs{Client: client, Store: store})
 	if err != nil {
 		self.t.Fatal(err)
 	}
@@ -623,73 +584,407 @@ func (self *recordEvsWorld) newClient(sidecarId sidecar.Id, store sidecar.Sideca
 	return client
 }
 
-// RECORD-M2-03's conformance suite on T2: the binding over the real engine keeps every rule the fake keeps.
+// RECORD-M2-03's conformance suite on T2: the binding over the real engine keeps every rule the fake keeps, on
+// RECORD.md's 64 B rows.
 func TestRecordEvsStreamsConformance(t *testing.T) {
-	sidecartest.RunRecordStreamsSuite(t, newRecordEvsWorld(t))
+	sidecartest.RunRecordStreamsSuite(t, newRecordEvsWorld(t), sidecartest.DefaultRecordStreamsSuiteSettings())
 }
 
-// A push of one entry a path, the test codec's rows, at the world's pin.
+// One row of RECORD.md section 5.2, a fresh key || a fresh salt, with the key and the salt apart.
+func recordEvsWorldRow(world *recordEvsWorld) (row []byte, key []byte, salt []byte) {
+	key = make([]byte, sidecar.RecordKeyByteCount)
+	salt = make([]byte, sidecar.RecordSaltByteCount)
+	if _, err := rand.Read(key); err != nil {
+		world.t.Fatal(err)
+	}
+	if _, err := rand.Read(salt); err != nil {
+		world.t.Fatal(err)
+	}
+	row, err := sidecar.RecordSlotRowJoin(key, salt)
+	if err != nil {
+		world.t.Fatal(err)
+	}
+	return row, key, salt
+}
+
+// A push of one entry a path, each keyed by a fresh row at its index of the push's slot, at the world's pin.
 func recordEvsWorldPush(world *recordEvsWorld, writerId sidecar.Id, paths ...string) *sidecar.RecordStreamPush {
 	push := &sidecar.RecordStreamPush{PushId: sidecar.NewEvsPushId(), WriterSidecarId: writerId, SlotId: sidecar.NewEvsSlotId(), AuthPin: world.Pin()}
 	for index, path := range paths {
-		row := make([]byte, recordEvsTestRowByteCount)
-		if _, err := rand.Read(row); err != nil {
-			world.t.Fatal(err)
-		}
+		row, _, _ := recordEvsWorldRow(world)
 		push.SlotRows = append(push.SlotRows, &sidecar.RecordSlotRow{KeyIndex: uint32(index), Row: row})
 		push.Entries = append(push.Entries, &sidecar.RecordStreamEntry{Path: path, Entry: []byte("entry " + path)})
 	}
 	return push
 }
 
-// The routes of sent that write: uploads, pushes and slot deletions.
-func recordEvsWrites(sent []string) []string {
-	writes := []string{}
-	for _, request := range sent {
-		if strings.HasPrefix(request, http.MethodPut) || strings.HasSuffix(request, "/push") || strings.HasSuffix(request, "/slots/delete") {
-			writes = append(writes, request)
-		}
+// The slot/ object evs stores for slotId: its bytes, and those bytes decoded as evs decodes them.
+func (self *recordEvsWorld) storedSlot(repoId sidecar.Id, slotId sidecar.Id) ([]byte, *protocol.EvsSlotObject) {
+	self.t.Helper()
+	object, err := self.cluster.Get(self.ctx, evsservice.SlotKey(repoId, slotId))
+	if err != nil {
+		self.t.Fatal(err)
 	}
-	return writes
+	defer object.Body.Close()
+	slotBytes, err := io.ReadAll(object.Body)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	slot, err := sidecar.EvsDecodeSlotObject(slotBytes)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return slotBytes, slot
 }
 
-// The production codec while question record-m2-01-slot-row-salt is open: a push of RECORD.md's rows is refused
-// before anything reaches evs, and a row slot opens nothing, while a deposit, whose key and salt ride in its batch,
-// goes as it would.
-func TestRecordEvsStreamsRowsWaitOnTheirQuestion(t *testing.T) {
+// The cluster and key of every object stored on the world's metadata and segment clusters whose bytes hold one of
+// secrets in the clear: slots, heads, logs, indexes, batch records and segments alike.
+func (self *recordEvsWorld) storedHolding(secrets ...[]byte) []string {
+	self.t.Helper()
+	segmentCluster, err := self.host.Blobs.SegmentCluster()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	holding := []string{}
+	for _, cluster := range []sidecar.BlobCluster{self.cluster, segmentCluster} {
+		for startAfter, more := "", true; more; {
+			var infos []*sidecar.BlobInfo
+			infos, more, err = cluster.List(self.ctx, "", startAfter, 1000)
+			if err != nil {
+				self.t.Fatal(err)
+			}
+			for _, info := range infos {
+				startAfter = info.Key
+				object, err := cluster.Get(self.ctx, info.Key)
+				if err != nil {
+					self.t.Fatal(err)
+				}
+				content, err := io.ReadAll(object.Body)
+				object.Body.Close()
+				if err != nil {
+					self.t.Fatal(err)
+				}
+				for _, secret := range secrets {
+					if bytes.Contains(content, secret) {
+						holding = append(holding, cluster.ClusterId()+":"+info.Key)
+						break
+					}
+				}
+			}
+		}
+	}
+	return holding
+}
+
+// Fails the test unless storedHolding finds repoId, which repo/ on the metadata cluster and every segment's public
+// header carry in the clear: a scan that finds nothing it should proves nothing.
+func (self *recordEvsWorld) requireScanFinds(repoId sidecar.Id) {
+	self.t.Helper()
+	segmentCluster, err := self.host.Blobs.SegmentCluster()
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	holding := self.storedHolding(repoId.Bytes())
+	for _, clusterId := range []string{self.cluster.ClusterId(), segmentCluster.ClusterId()} {
+		if !slices.ContainsFunc(holding, func(key string) bool { return strings.HasPrefix(key, clusterId+":") }) {
+			self.t.Fatalf("the scan finds no object of cluster %s holding the repo's id", clusterId)
+		}
+	}
+}
+
+// QD-739 through the binding: a push of RECORD.md's 64 B rows commits a slot whose every key is a 104 B record slot
+// row block at its row's index, of one generation, holding no key or salt in the clear, and a slot read opens each
+// row back. Rows evs's slot cannot hold are refused before anything is journaled or sent.
+func TestRecordEvsStreamsStoresRowsAsRecordSlotRowBlocks(t *testing.T) {
 	world := newRecordEvsWorld(t)
 	repoId, err := world.NewRepo(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	writerId := sidecar.NewId()
-	if err := world.Grant(repoId, writerId, sidecartest.RecordStreamsScope{Read: true, Write: true, Deposit: true}); err != nil {
+	writerId, readerId := sidecar.NewId(), sidecar.NewId()
+	if err := world.Grant(repoId, writerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
 		t.Fatal(err)
 	}
-	unsettled := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), sidecartest.NewFakeStore().Root(), nil)
-	push := recordEvsWorldPush(world, writerId, "e/0/0/1")
-	for _, row := range push.SlotRows {
-		row.Row = append(row.Row, make([]byte, sidecar.RecordSlotRowByteCount-recordEvsTestRowByteCount)...)
-	}
-	before := len(world.sent())
-	if _, err := unsettled.Append(t.Context(), repoId, push); !errors.Is(err, sidecar.ErrRecordSlotRowUnsettled) {
-		t.Fatalf("a push of RECORD.md's rows: %v", err)
-	}
-	if sent := world.sent()[before:]; len(sent) != 0 {
-		t.Fatalf("a refused push sent %v", sent)
-	}
-	// a slot the test codec wrote, which the production codec does not open
-	tested := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), sidecartest.NewFakeStore().Root(), recordEvsTestCodec{})
-	written := recordEvsWorldPush(world, writerId, "e/0/0/1")
-	if _, err := tested.Append(t.Context(), repoId, written); err != nil {
+	if err := world.Grant(repoId, readerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := unsettled.ReadSlot(t.Context(), repoId, written.SlotId); !errors.Is(err, sidecar.ErrRecordSlotRowUnsettled) {
-		t.Fatalf("a row slot opened: %v", err)
+	push := &sidecar.RecordStreamPush{PushId: sidecar.NewEvsPushId(), WriterSidecarId: writerId, SlotId: sidecar.NewEvsSlotId(), AuthPin: world.Pin()}
+	secrets := [][]byte{}
+	// indexes with gaps, as a push whose own entries and ingested ones interleave may leave none
+	for index, keyIndex := range []uint32{0, 1, 5, 63} {
+		row, key, salt := recordEvsWorldRow(world)
+		secrets = append(secrets, key, salt)
+		push.SlotRows = append(push.SlotRows, &sidecar.RecordSlotRow{KeyIndex: keyIndex, Row: row})
+		path, err := sidecar.RecordStreamPath(uint64(index + 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		push.Entries = append(push.Entries, &sidecar.RecordStreamEntry{Path: path, Entry: []byte("entry " + path)})
 	}
-	deposit := &sidecar.RecordStreamDeposit{PushId: sidecar.NewEvsPushId(), DepositorSidecarId: writerId, DepositId: sidecar.Id(sidecar.NewEvsRandomToken()), Batch: []byte("a batch"), AuthPin: world.Pin()}
-	if _, err := unsettled.Deposit(t.Context(), repoId, deposit); err != nil {
-		t.Fatalf("a deposit: %v", err)
+	if _, err := world.For(writerId).Append(t.Context(), repoId, push); err != nil {
+		t.Fatal(err)
+	}
+	_, slot := world.storedSlot(repoId, push.SlotId)
+	if len(slot.GetKeys()) != len(push.SlotRows) {
+		t.Fatalf("the stored slot holds %d keys for %d rows", len(slot.GetKeys()), len(push.SlotRows))
+	}
+	for i, slotKey := range slot.GetKeys() {
+		if slotKey.GetKeyIndex() != push.SlotRows[i].KeyIndex || len(slotKey.GetWrapped()) != sidecar.EvsRecordSlotRowWrappedByteCount ||
+			slotKey.GetGeneration() == 0 || slotKey.GetGeneration() != slot.GetKeys()[0].GetGeneration() {
+			t.Fatalf("stored key %d: index %d, %d B, generation %d", i, slotKey.GetKeyIndex(), len(slotKey.GetWrapped()), slotKey.GetGeneration())
+		}
+	}
+	world.requireScanFinds(repoId)
+	if holding := world.storedHolding(secrets...); len(holding) != 0 {
+		t.Fatalf("a key or salt in the clear in %v", holding)
+	}
+	for _, sidecarId := range []sidecar.Id{writerId, readerId} {
+		read, err := world.For(sidecarId).ReadSlot(t.Context(), repoId, push.SlotId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(read.Rows) != len(push.SlotRows) {
+			t.Fatalf("%d rows read back", len(read.Rows))
+		}
+		for i, row := range read.Rows {
+			if row.KeyIndex != push.SlotRows[i].KeyIndex || !bytes.Equal(row.Row, push.SlotRows[i].Row) {
+				t.Fatalf("row %d read back as another", i)
+			}
+		}
+	}
+
+	refused := map[string]func(push *sidecar.RecordStreamPush){
+		"an object key's width": func(push *sidecar.RecordStreamPush) { push.SlotRows[0].Row = push.SlotRows[0].Row[:32] },
+		"a row a byte long":     func(push *sidecar.RecordStreamPush) { push.SlotRows[1].Row = append(push.SlotRows[1].Row, 0) },
+		"a block's width": func(push *sidecar.RecordStreamPush) {
+			push.SlotRows[0].Row = make([]byte, sidecar.EvsRecordSlotRowWrappedByteCount)
+		},
+		"indexes descending": func(push *sidecar.RecordStreamPush) { push.SlotRows[0].KeyIndex = 2 },
+		"an index past 63":   func(push *sidecar.RecordStreamPush) { push.SlotRows[1].KeyIndex = 64 },
+		"no row":             func(push *sidecar.RecordStreamPush) { push.SlotRows = nil },
+		"65 rows": func(push *sidecar.RecordStreamPush) {
+			push.SlotRows = nil
+			for keyIndex := range uint32(65) {
+				row, _, _ := recordEvsWorldRow(world)
+				push.SlotRows = append(push.SlotRows, &sidecar.RecordSlotRow{KeyIndex: keyIndex, Row: row})
+			}
+		},
+	}
+	for label, refuse := range refused {
+		bad := recordEvsWorldPush(world, writerId, "e/0/0/10", "e/0/0/11")
+		refuse(bad)
+		before := len(world.sent())
+		if _, err := world.For(writerId).Append(t.Context(), repoId, bad); !errors.Is(err, sidecar.ErrRecordDraftInvalid) {
+			t.Errorf("%s: %v", label, err)
+		}
+		if sent := world.sent()[before:]; len(sent) != 0 {
+			t.Errorf("%s: a refused push sent %v", label, sent)
+		}
+	}
+}
+
+// QD-739's erasure through the binding: an ERASE naming one row of a record slot rewrites the slot without that
+// row's whole 104 B block, every other block left byte for byte at its index, so the entry's key and salt go
+// together and no slot read returns either. Neither was ever stored in the clear, the entry files included, and
+// neither is after. What the binding cannot reach, the push's own record holding its slot body as sent, is question
+// record-slot-104-push-record-slot-bodies.
+func TestRecordEvsStreamsEraseTakesARowsKeyAndSaltTogether(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerId, adminId := sidecar.NewId(), sidecar.NewId()
+	if err := world.Grant(repoId, writerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := world.Grant(repoId, adminId, sidecartest.RecordStreamsScope{Read: true, Write: true, Admin: true}); err != nil {
+		t.Fatal(err)
+	}
+	push := &sidecar.RecordStreamPush{PushId: sidecar.NewEvsPushId(), WriterSidecarId: writerId, SlotId: sidecar.NewEvsSlotId(), AuthPin: world.Pin()}
+	keys, salts := [][]byte{}, [][]byte{}
+	for index := range 3 {
+		row, key, salt := recordEvsWorldRow(world)
+		keys, salts = append(keys, key), append(salts, salt)
+		push.SlotRows = append(push.SlotRows, &sidecar.RecordSlotRow{KeyIndex: uint32(index), Row: row})
+		path, err := sidecar.RecordStreamPath(uint64(index + 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		push.Entries = append(push.Entries, &sidecar.RecordStreamEntry{Path: path, Entry: []byte("entry " + path)})
+	}
+	if _, err := world.For(writerId).Append(t.Context(), repoId, push); err != nil {
+		t.Fatal(err)
+	}
+	_, before := world.storedSlot(repoId, push.SlotId)
+	erasedBlock := bytes.Clone(before.GetKeys()[1].GetWrapped())
+	world.requireScanFinds(repoId)
+	if holding := world.storedHolding(keys[1], salts[1]); len(holding) != 0 {
+		t.Fatalf("the key or salt in the clear before the ERASE, in %v", holding)
+	}
+
+	erase := &sidecar.RecordStreamErase{
+		PushId: sidecar.NewEvsPushId(), ErasureId: sidecar.NewId(), Complete: true,
+		Keys: []*sidecar.RecordSlotKey{{SlotId: push.SlotId, KeyIndex: 1}}, SealedNote: []byte("sealed note"),
+	}
+	if _, err := world.For(adminId).Erase(t.Context(), repoId, erase); err != nil {
+		t.Fatal(err)
+	}
+
+	afterBytes, after := world.storedSlot(repoId, push.SlotId)
+	if len(after.GetKeys()) != 2 || after.GetKeys()[0].GetKeyIndex() != 0 || after.GetKeys()[1].GetKeyIndex() != 2 {
+		t.Fatalf("after the ERASE the slot holds %d keys", len(after.GetKeys()))
+	}
+	for i, kept := range []int{0, 2} {
+		if !bytes.Equal(after.GetKeys()[i].GetWrapped(), before.GetKeys()[kept].GetWrapped()) {
+			t.Errorf("row %d's block changed with the ERASE", kept)
+		}
+	}
+	if bytes.Contains(afterBytes, erasedBlock) {
+		t.Fatal("the erased row's block is still in its slot")
+	}
+	for _, sidecarId := range []sidecar.Id{writerId, adminId} {
+		read, err := world.For(sidecarId).ReadSlot(t.Context(), repoId, push.SlotId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(read.Rows) != 2 {
+			t.Fatalf("%d rows read back after the ERASE", len(read.Rows))
+		}
+		for _, row := range read.Rows {
+			if bytes.Contains(row.Row, keys[1]) || bytes.Contains(row.Row, salts[1]) {
+				t.Fatal("a slot read returns the erased key or salt")
+			}
+		}
+	}
+	if holding := world.storedHolding(keys[1], salts[1]); len(holding) != 0 {
+		t.Fatalf("the erased key or salt in the clear after the ERASE, in %v", holding)
+	}
+	// the entry files stay, holding neither: headers and chains still verify after erasure (§16.8)
+	versions, err := world.For(adminId).ReadStream(t.Context(), repoId, writerId, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 1 || len(versions[0].Entries) != 3 {
+		t.Fatal("the ERASE took entry files")
+	}
+	for _, entry := range versions[0].Entries {
+		if bytes.Contains(entry.Entry, keys[1]) || bytes.Contains(entry.Entry, salts[1]) {
+			t.Fatalf("the entry file at %s holds the erased key or salt", entry.Path)
+		}
+	}
+}
+
+// QD-739 from RECORD-M3-01's sealing to evs and back: notes RecordSeal sealed go to their writer's stream with their
+// slot rows; a reader verifies each header and opens each body from the row its entry's key_slot_id and key_index
+// name in the stored slot, the commitment holding; after an ERASE of the first note's row its header still verifies
+// and no slot read gives its row, so its body opens nowhere, while the second note's still opens.
+func TestRecordEvsStreamsSealedEntriesOpenFromTheirRowsUntilErased(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerId, adminId := sidecar.NewId(), sidecar.NewId()
+	if err := world.Grant(repoId, writerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := world.Grant(repoId, adminId, sidecartest.RecordStreamsScope{Read: true, Write: true, Admin: true}); err != nil {
+		t.Fatal(err)
+	}
+	signer := world.signer(writerId)
+	env := &sidecar.RecordSealEnv{Chain: sidecar.NewRecordChainStore(sidecartest.NewFakeStore().Root(), writerId), Sign: signer.Sign}
+	push := &sidecar.RecordStreamPush{PushId: sidecar.NewEvsPushId(), WriterSidecarId: writerId, SlotId: sidecar.NewEvsSlotId(), AuthPin: world.Pin()}
+	wantBodies := [][]byte{}
+	for index := range 2 {
+		text := fmt.Sprint("note ", index)
+		sealed, err := sidecar.RecordSeal(env, testChainNote(repoId, text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := proto.MarshalOptions{Deterministic: true}.Marshal(&protocol.CoordinationBody{Text: text})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantBodies = append(wantBodies, body)
+		path, err := sidecar.RecordStreamPath(sealed.Seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		push.SlotRows = append(push.SlotRows, sealed.SlotRow(uint32(index)))
+		push.Entries = append(push.Entries, &sidecar.RecordStreamEntry{Path: path, Entry: sealed.EntryBytes(&push.SlotId, uint32(index))})
+	}
+	if _, err := world.For(writerId).Append(t.Context(), repoId, push); err != nil {
+		t.Fatal(err)
+	}
+
+	// each entry of the writer's stream by seq, its header verified, and its body opened from the row it names: nil
+	// where its slot holds no live row at its index
+	open := func(readerId sidecar.Id) map[uint64][]byte {
+		streams := world.For(readerId)
+		versions, err := streams.ReadStream(t.Context(), repoId, writerId, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seqBodies := map[uint64][]byte{}
+		for _, version := range versions {
+			for _, streamEntry := range version.Entries {
+				entry := &protocol.RecordEntry{}
+				if err := proto.Unmarshal(streamEntry.Entry, entry); err != nil {
+					t.Fatal(err)
+				}
+				if err := bridge.VerifySigned(entry.GetHeader(), sidecar.RecordEntryPurpose, bridge.SignedType_SIGNED_RECORD_HEADER, bridge.SignedKeyAlgEd25519, signer.PublicKey()); err != nil {
+					t.Fatalf("the header at %s does not verify: %v", streamEntry.Path, err)
+				}
+				header, err := sidecar.ParseStoredRecordHeader(entry.GetHeader().GetBody())
+				if err != nil {
+					t.Fatal(err)
+				}
+				slotId, err := sidecar.IdFromBytes(entry.GetKeySlotId())
+				if err != nil {
+					t.Fatal(err)
+				}
+				slot, err := streams.ReadSlot(t.Context(), repoId, slotId)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var body []byte
+				for _, row := range slot.Rows {
+					if row.KeyIndex != entry.GetKeyIndex() {
+						continue
+					}
+					key, salt, err := sidecar.RecordSlotRowSplit(row.Row)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if body, err = sidecar.RecordOpen(header, entry.GetSealedBody(), key, salt); err != nil {
+						t.Fatalf("the body at %s does not open from its row: %v", streamEntry.Path, err)
+					}
+				}
+				seqBodies[header.Header.GetSeq()] = body
+			}
+		}
+		return seqBodies
+	}
+	for _, readerId := range []sidecar.Id{writerId, adminId} {
+		seqBodies := open(readerId)
+		if len(seqBodies) != 2 || !bytes.Equal(seqBodies[1], wantBodies[0]) || !bytes.Equal(seqBodies[2], wantBodies[1]) {
+			t.Fatal("a reader does not open both notes from their rows")
+		}
+	}
+
+	erase := &sidecar.RecordStreamErase{
+		PushId: sidecar.NewEvsPushId(), ErasureId: sidecar.NewId(), Complete: true,
+		Keys: []*sidecar.RecordSlotKey{{SlotId: push.SlotId, KeyIndex: 0}}, SealedNote: []byte("sealed note"),
+	}
+	if _, err := world.For(adminId).Erase(t.Context(), repoId, erase); err != nil {
+		t.Fatal(err)
+	}
+	for _, readerId := range []sidecar.Id{writerId, adminId} {
+		seqBodies := open(readerId)
+		if len(seqBodies) != 2 || seqBodies[1] != nil || !bytes.Equal(seqBodies[2], wantBodies[1]) {
+			t.Fatal("after the ERASE the erased note still opens, or the other does not")
+		}
 	}
 }
 
@@ -755,7 +1050,7 @@ func TestRecordEvsStreamsRestartResumesTheCounter(t *testing.T) {
 	if _, err := world.For(writerId).Append(t.Context(), repoId, recordEvsWorldPush(world, writerId, "e/0/0/1", "e/0/0/2", "e/0/0/3")); err != nil {
 		t.Fatal(err)
 	}
-	restarted := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), sidecartest.NewFakeStore().Root(), recordEvsTestCodec{})
+	restarted := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), sidecartest.NewFakeStore().Root())
 	counter, err := sidecar.RecordStreamCounter(t.Context(), restarted, repoId, writerId)
 	if err != nil {
 		t.Fatal(err)
@@ -790,7 +1085,7 @@ func TestRecordEvsStreamsRetryAfterALostAnswerSendsTheSameStatement(t *testing.T
 		t.Fatal(err)
 	}
 	store := sidecartest.NewFakeStore().Root()
-	streams := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), store, recordEvsTestCodec{})
+	streams := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), store)
 	push := recordEvsWorldPush(world, writerId, "e/0/0/1", "e/0/0/2")
 	lost := errors.New("the answer was lost")
 	func() {
@@ -811,7 +1106,7 @@ func TestRecordEvsStreamsRetryAfterALostAnswerSendsTheSameStatement(t *testing.T
 		defer world.stateLock.Unlock()
 		world.afterServe = nil
 	}()
-	restarted := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), store, recordEvsTestCodec{})
+	restarted := world.streamsOn(writerId, world.newClient(writerId, sidecartest.NewFakeStore().Root()), store)
 	commit, err := restarted.Append(t.Context(), repoId, push)
 	if err != nil {
 		t.Fatalf("the retry after the restart: %v", err)
@@ -831,10 +1126,143 @@ func TestRecordEvsStreamsRetryAfterALostAnswerSendsTheSameStatement(t *testing.T
 	}
 }
 
-// evs's creates-only rule refuses a delta of a directory that stands, which §16.8's 2,048-entry directories need: a
-// stream's second push into a leaf directory is refused before it uploads anything, pending question
-// record-m3-12-stream-directory-rows, and the stream stays as its first push left it.
-func TestRecordEvsStreamsSecondPushIntoADirectoryWaitsOnItsQuestion(t *testing.T) {
+// A push of the stream's entries from through to, each at section 5.2's path for its counter, all keyed by one row of
+// the push's slot: what a writer that drew those counters appends.
+func recordEvsWorldCounterPush(world *recordEvsWorld, writerId sidecar.Id, from uint64, to uint64) *sidecar.RecordStreamPush {
+	row, _, _ := recordEvsWorldRow(world)
+	push := &sidecar.RecordStreamPush{
+		PushId: sidecar.NewEvsPushId(), WriterSidecarId: writerId, SlotId: sidecar.NewEvsSlotId(), AuthPin: world.Pin(),
+		SlotRows: []*sidecar.RecordSlotRow{{KeyIndex: 0, Row: row}},
+	}
+	for n := from; n <= to; n += 1 {
+		path, err := sidecar.RecordStreamPath(n)
+		if err != nil {
+			world.t.Fatal(err)
+		}
+		push.Entries = append(push.Entries, &sidecar.RecordStreamEntry{Path: path, Entry: []byte(fmt.Sprint("entry ", n))})
+	}
+	return push
+}
+
+// The engine folds every unfolded version of writerId's stream, as its idle fold would: each directory's newest is then
+// a table that keeps no version of its own until the next delta.
+func (self *recordEvsWorld) foldStream(repoId sidecar.Id, writerId sidecar.Id) {
+	self.t.Helper()
+	refId := self.streamRefId(repoId, writerId)
+	head, err := self.engine.Heads().ReadCluster(self.ctx, self.cluster, repoId, refId)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	now := self.clock.Now()
+	if _, err := self.engine.Folder().FoldAll(self.ctx, self.cluster, repoId, refId, head, now, now.Add(15*time.Second)); err != nil {
+		self.t.Fatal(err)
+	}
+}
+
+// writerId's stream's ref id, as Streams lists it.
+func (self *recordEvsWorld) streamRefId(repoId sidecar.Id, writerId sidecar.Id) sidecar.Id {
+	self.t.Helper()
+	heads, err := self.For(writerId).Streams(self.ctx, repoId)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	for _, head := range heads {
+		if head.SidecarId == writerId {
+			return head.RefId
+		}
+	}
+	self.t.Fatalf("no stream of %s", writerId)
+	return sidecar.Id{}
+}
+
+// The counters a stream's versions hold, in order, and whether each version's entries are its path's counters in
+// order: what reading a stream back must give.
+func recordEvsStreamCounters(t *testing.T, versions []*sidecar.RecordStreamVersion) []uint64 {
+	t.Helper()
+	counters := []uint64{}
+	for _, version := range versions {
+		for _, entry := range version.Entries {
+			n, ok := sidecar.RecordStreamPathCounter(entry.Path)
+			if !ok || !bytes.Equal(entry.Entry, []byte(fmt.Sprint("entry ", n))) {
+				t.Fatalf("version %d reads back an entry at %s", version.Version, entry.Path)
+			}
+			counters = append(counters, n)
+		}
+	}
+	return counters
+}
+
+// QD-722 on T2: a stream grows past one push per leaf directory and past 2,048 entries, each push into a standing
+// directory adding its names by that directory's delta on its newest version, which evs's creates-only rule takes on a
+// record-class stream: into e/0/0/ again and again, from e/0/0/ into e/0/1/ by e/0's delta, and after a fold, when the
+// leaf's newest is a folded table that keeps no version of its own and evs reads it from the table's delta. The
+// stream reads back whole, from its first push and from a later one, by the writer and by another device replaying it.
+func TestRecordEvsStreamsGrowPastALeafDirectory(t *testing.T) {
+	world := newRecordEvsWorld(t)
+	repoId, err := world.NewRepo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the reader another device of the vault's member, which writes it too and so reads with no receipt to deposit
+	writerId, readerId := sidecar.NewId(), sidecar.NewId()
+	if err := world.Grant(repoId, writerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := world.Grant(repoId, readerId, sidecartest.RecordStreamsScope{Read: true, Write: true}); err != nil {
+		t.Fatal(err)
+	}
+	streams := world.For(writerId)
+	// e/0/0/ holds 1 to 2,047 and e/0/1/ from 2,048: pushes 2 and 3 are deltas of e/0/0, push 4 fills it and starts
+	// e/0/1 by e/0's delta, and push 5 adds to e/0/1
+	pushes := [][2]uint64{{1, 700}, {701, 1400}, {1401, 2000}, {2001, 2100}, {2101, 2110}}
+	for i, bounds := range pushes {
+		if i == 2 || i == 4 {
+			// folded first: the directory the push adds to is then a table with no version of its own
+			world.foldStream(repoId, writerId)
+		}
+		commit, err := streams.Append(t.Context(), repoId, recordEvsWorldCounterPush(world, writerId, bounds[0], bounds[1]))
+		if err != nil {
+			t.Fatalf("push %d of %d to %d: %v", i+1, bounds[0], bounds[1], err)
+		}
+		if commit.Version != uint64(i+1) {
+			t.Fatalf("push %d committed at %d", i+1, commit.Version)
+		}
+	}
+	want := []uint64{}
+	for n := uint64(1); n <= 2110; n += 1 {
+		want = append(want, n)
+	}
+	versions, err := streams.ReadStream(t.Context(), repoId, writerId, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != len(pushes) || !slices.Equal(recordEvsStreamCounters(t, versions), want) {
+		t.Fatalf("the stream reads back %d versions", len(versions))
+	}
+	later, err := streams.ReadStream(t.Context(), repoId, writerId, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(later) != 2 || !slices.Equal(recordEvsStreamCounters(t, later), want[2000:]) {
+		t.Fatalf("after version 3 the stream reads back %d versions", len(later))
+	}
+	// another device, which holds no replay of the stream, replays it from the first push to read from a later one
+	replayed, err := world.For(readerId).ReadStream(t.Context(), repoId, writerId, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 1 || !slices.Equal(recordEvsStreamCounters(t, replayed), want[2100:]) {
+		t.Fatalf("a replaying reader reads back %d versions after version 4", len(replayed))
+	}
+	if counter, err := sidecar.RecordStreamCounter(t.Context(), streams, repoId, writerId); err != nil || counter != 2110 {
+		t.Fatalf("the counter reads back as %d: %v", counter, err)
+	}
+}
+
+// QD-722 at evs: two pushes the writer built on one read of a leaf directory, each adding its own entry. The first
+// commits; the second's delta, on the version the first replaced, is 409 PATH_CONFLICT naming the leaf, and nothing of
+// it commits. The writer's next push, planned on the newest version, commits.
+func TestRecordEvsStreamsRefusesADeltaOffTheNewestVersion(t *testing.T) {
 	world := newRecordEvsWorld(t)
 	repoId, err := world.NewRepo(t.Context())
 	if err != nil {
@@ -845,19 +1273,54 @@ func TestRecordEvsStreamsSecondPushIntoADirectoryWaitsOnItsQuestion(t *testing.T
 		t.Fatal(err)
 	}
 	streams := world.For(writerId)
-	if _, err := streams.Append(t.Context(), repoId, recordEvsWorldPush(world, writerId, "e/0/0/1")); err != nil {
+	if _, err := streams.Append(t.Context(), repoId, recordEvsWorldCounterPush(world, writerId, 1, 1)); err != nil {
 		t.Fatal(err)
 	}
-	before := len(recordEvsWrites(world.sent()))
-	if _, err := streams.Append(t.Context(), repoId, recordEvsWorldPush(world, writerId, "e/0/0/2")); !errors.Is(err, sidecar.ErrEvsStreamDirectoryDelta) {
-		t.Fatalf("a second push into e/0/0: %v", err)
+	repo := func() *sidecar.EvsRepo {
+		world.stateLock.Lock()
+		defer world.stateLock.Unlock()
+		return world.clients[writerId].Repo(repoId)
+	}()
+	build := func(n uint64) *sidecar.EvsStreamPush {
+		push := recordEvsWorldCounterPush(world, writerId, n, n)
+		built, err := repo.BuildStreamPush(t.Context(), &sidecar.EvsStreamPushArgs{
+			RefName: sidecar.RecordStreamRefName(writerId),
+			PushId:  push.PushId,
+			SlotId:  push.SlotId,
+			SlotKeys: func(fek *sidecar.EvsFekKey) ([]*protocol.EvsSlotKey, error) {
+				// the row as the binding wraps it, one 104 B record slot row block
+				wrapped, err := sidecar.EvsWrapRecordSlotRow(fek, push.SlotRows[0].Row)
+				if err != nil {
+					return nil, err
+				}
+				return []*protocol.EvsSlotKey{{KeyIndex: 0, Generation: fek.Generation(), Wrapped: wrapped}}, nil
+			},
+			Files:   []*sidecar.EvsStreamFile{{Path: push.Entries[0].Path, Content: push.Entries[0].Entry}},
+			AuthPin: push.AuthPin,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return built
 	}
-	if writes := recordEvsWrites(world.sent())[before:]; len(writes) != 0 {
-		t.Fatalf("the refused push wrote %v", writes)
+	first, second := build(2), build(3)
+	if commit, err := repo.PostStreamPush(t.Context(), first); err != nil || commit.Version != 2 {
+		t.Fatalf("the first push: %+v %v", commit, err)
+	}
+	_, err = repo.PostStreamPush(t.Context(), second)
+	evsError, ok := sidecar.EvsErrorOf(err)
+	if !ok || evsError.Status != http.StatusConflict || evsError.Code != protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT || len(evsError.Paths) != 1 {
+		t.Fatalf("a delta off the leaf's newest version: %v", err)
+	}
+	if commit, err := streams.Append(t.Context(), repoId, recordEvsWorldCounterPush(world, writerId, 3, 3)); err != nil || commit.Version != 3 {
+		t.Fatalf("the push planned on the newest version: %+v %v", commit, err)
 	}
 	versions, err := streams.ReadStream(t.Context(), repoId, writerId, 0)
-	if err != nil || len(versions) != 1 {
-		t.Fatalf("the stream reads %d versions: %v", len(versions), err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(recordEvsStreamCounters(t, versions), []uint64{1, 2, 3}) {
+		t.Fatalf("the stream reads back %d versions", len(versions))
 	}
 }
 

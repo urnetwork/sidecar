@@ -7,6 +7,12 @@
 // the newer one said it replaced; a creation ends the walk, its path's earlier life being a removed one this draft
 // does not walk past (§11.7's versions row keeps the numbers apart). At most EvsSettings.HistoryVersionCount versions.
 //
+// A removed path's walk asks for the version below its removal by number, which evs serves from the entry's folded
+// versions as a standing path's (QD-672), so History lists the removed life's versions and their slot keys. Every
+// read by number must answer that version or one below it: an answer that does not descend, such as the removal again,
+// is a server repeating itself, which is the bug QD-672 fixed or a tamper, so the walk stops there with an alarm and
+// History gives the versions walked before it.
+//
 // Across path epochs: a version written in an epoch the request names no token path in is answered with its
 // statement alone, which the reader takes as E4 when its push id is the prev_push_id the newer version names, and
 // asks again naming that statement's epoch (evs_epoch_read.go), one more round per epoch boundary the walk crosses.
@@ -58,8 +64,19 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			}
 			break
 		}
+		// a read by number answers that version or one below it; anything else does not descend (see the file header)
+		descends := func(served uint64) bool {
+			if version == 0 || served <= version {
+				return true
+			}
+			self.client.alarm(self.repoId, refId, SidecarEvsAlarmTamper, args.Path, nil)
+			return false
+		}
 		if verified.Removal != nil {
 			removal := verified.Removal
+			if !descends(removal.GetPathVersion()) {
+				break
+			}
 			pushId, _ := IdFromBytes(removal.GetPushId())
 			signerId, _ := IdFromBytes(verified.Statement.Push.GetSignerSidecarId())
 			clientId, _ := IdFromBytes(verified.Statement.Push.GetClientId())
@@ -81,6 +98,9 @@ func (self *EvsRepo) History(ctx context.Context, args *EvsReadArgs) (*EvsHistor
 			continue
 		}
 		entry := verified.Entry
+		if !descends(entry.GetVersion()) {
+			break
+		}
 		if expectPushId != nil && (!bytes.Equal(entry.GetPushId(), expectPushId) || verified.CommitVersion != expectCommit) {
 			self.client.alarm(self.repoId, refId, SidecarEvsAlarmTamper, args.Path, nil)
 			return nil, fmt.Errorf("%w: a version its successor does not name", ErrEvsEntryRefused)

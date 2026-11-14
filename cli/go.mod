@@ -11,6 +11,8 @@ require (
 	github.com/urnetwork/sidecar/smtpproof v0.0.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.49.0
+	golang.zx2c4.com/wireguard v0.0.0-20261024220952-b3bc704ef0ee
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -25,6 +27,7 @@ require (
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
 	github.com/emersion/go-smtp v0.25.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.6 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
@@ -32,8 +35,12 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/klauspost/compress v1.20.2 // indirect
+	github.com/letsencrypt/challtestsrv v1.4.2 // indirect
+	github.com/letsencrypt/pebble/v2 v2.10.1 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mholt/acmez/v3 v3.1.7 // indirect
+	github.com/miekg/dns v1.1.72 // indirect
 	github.com/mjl-/adns v0.0.0-20260809141028-22f885debe71 // indirect
 	github.com/mjl-/flate v0.0.0-20250221133712-6372d09eb978 // indirect
 	github.com/mjl-/mox v0.0.17 // indirect
@@ -54,6 +61,7 @@ require (
 	github.com/pion/transport/v4 v4.1.0 // indirect
 	github.com/pion/turn/v5 v5.0.12 // indirect
 	github.com/pion/webrtc/v4 v4.2.18 // indirect
+	github.com/pires/go-proxyproto v0.16.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.61.0 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
@@ -72,7 +80,8 @@ require (
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gvisor.dev/gvisor v0.0.0-20260909230408-9b1144b679cb // indirect
 	src.agwa.name/tlshacks v0.0.4 // indirect
 )

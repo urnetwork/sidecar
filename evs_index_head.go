@@ -273,7 +273,7 @@ func indexPlanHead(ctx context.Context, args *indexHeadPlanArgs) (*indexHeadPlan
 					entry.keys = document.keys
 				}
 			}
-			encoded, err := entry.appendEncoded(nil, view.companion)
+			encoded, err := entry.appendEncoded(nil, view.companion, view.settings)
 			if err != nil {
 				return nil, err
 			}
@@ -375,7 +375,7 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, work *index
 	small, large := []*indexEntry{}, []*indexEntry{}
 	for _, entry := range work.entries {
 		pushed[entry.key] = true
-		encoded, err := entry.appendEncoded(nil, view.companion)
+		encoded, err := entry.appendEncoded(nil, view.companion, view.settings)
 		if err != nil {
 			return err
 		}
@@ -474,7 +474,7 @@ func indexPlaceEntries(args *indexHeadPlanArgs, root *indexViewRoot, work *index
 				current.changed = true
 				continue
 			}
-			encoded, err := entry.appendEncoded(nil, view.companion)
+			encoded, err := entry.appendEncoded(nil, view.companion, view.settings)
 			if err != nil {
 				return err
 			}

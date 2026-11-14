@@ -6,10 +6,10 @@
 //	step 4   reads each slot the ERASE's erased list names
 //	5h       a list naming no key those slots still hold gets 409 NOTHING_TO_ERASE, recorded (§11.8's refuse row)
 //	after    once the ERASE commits, and again whenever an attempt of it finds it committed, each named slot is
-//	         rewritten without those keys, If-Match the slot it read, before the 200, under a preservation hold
-//	         too: a slot answering 404 is done, since every key it held is gone (the drops row); a rewrite that
-//	         cannot finish answers 503 unknown, which the client's retry finishes, and queues taskworker's
-//	         evs.erasure_finish for the repo, which FinishErasures runs
+//	         rewritten without those keys, If-Match the slot it read and keeping its origin (DESIGN-DETAILS 14.2.6),
+//	         before the 200, under a preservation hold too: a slot answering 404 is done, since every key it held is
+//	         gone (the drops row); a rewrite that cannot finish answers 503 unknown, which the client's retry
+//	         finishes, and queues taskworker's evs.erasure_finish for the repo, which FinishErasures runs
 //	class    a network's ERASE, CUT and CLOSURE pushes within 60 a minute are P0, past it P1, counted through
 //	         Quota.CountRate's evs_erasure_pushes; every slot rewrite is P0 (§11.13's classes)
 //
@@ -23,8 +23,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
-	"time"
 
 	"github.com/urnetwork/connect"
 
@@ -37,12 +37,6 @@ const evsSlotsDeleteTemplate = "POST /evs/v1/repos/{repo_id}/slots/delete"
 
 // taskworker's job that finishes a repo's committed ERASEs' slot rewrites, its args the repo id.
 const EvsErasureFinishTaskName = "evs.erasure_finish"
-
-// How long after a rewrite that could not finish taskworker tries it.
-const evsErasureFinishDelay = time.Minute
-
-// How many times one slot is read and rewritten again after a 412 or a lost answer.
-const evsSlotRewriteRetryCount = 8
 
 // The slots/delete route.
 func (self *EvsEngine) erasureRoutes() []*EvsRoute {
@@ -100,7 +94,7 @@ func (self *pushAttempt) readErasureSlots() error {
 		if err != nil {
 			return err
 		}
-		objectBytes, err := readAllLimited(object, DefaultEvsSettings().SlotMaxByteCount)
+		objectBytes, err := readAllLimited(object, self.settings.SlotMaxByteCount)
 		object.Body.Close()
 		if err != nil {
 			return err
@@ -146,7 +140,7 @@ func (self *pushAttempt) eraseRules(view *PushView) *EvsCheckRefusal {
 // After an ERASE commits, or an attempt of it finds it committed: every named slot rewritten without its keys. A
 // rewrite that cannot finish answers 503 unknown, and queues the reconciler.
 func (self *pushAttempt) finishErase() *pushOutcome {
-	rewriter := &slotRewriter{budget: self.engine.budget, priceTable: self.engine.priceTable}
+	rewriter := &slotRewriter{budget: self.engine.budget, priceTable: self.engine.priceTable, settings: self.engine.settings}
 	if err := rewriter.rewriteErased(self.ctx, self.cluster, self.repoId, self.payload.Erased); err != nil {
 		self.engine.log.Warningf("[evs] repo %s: an ERASE's slot rewrites did not finish: %v", sidecar.EvsKeyId(self.repoId), err)
 		self.engine.queueErasureFinish(self.ctx, self.repoId)
@@ -159,9 +153,11 @@ func (self *pushAttempt) finishErase() *pushOutcome {
 type slotRewriter struct {
 	budget     sidecar.WriteBudget
 	priceTable *PriceTable
+	settings   *EvsSettings
 }
 
-// Each named slot without its erased keys: read, rewritten If-Match, again on a 412 or a lost answer; a 404 is done.
+// Each named slot without its erased keys: read, rewritten If-Match with the object metadata it read, so a slot keeps
+// its origin (DESIGN-DETAILS 14.2.6), again on a 412 or a lost answer; a 404 is done.
 func (self *slotRewriter) rewriteErased(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, erased []*sidecar.EvsErasedKey) error {
 	slotIndexes := map[sidecar.Id][]uint32{}
 	slotIds := []sidecar.Id{}
@@ -182,7 +178,7 @@ func (self *slotRewriter) rewriteErased(ctx context.Context, cluster sidecar.Blo
 // One slot without the keys at keyIndexes. See rewriteErased.
 func (self *slotRewriter) rewriteSlot(ctx context.Context, cluster sidecar.BlobCluster, repoId sidecar.Id, slotId sidecar.Id, keyIndexes []uint32) error {
 	key := SlotKey(repoId, slotId)
-	for attempt := 0; attempt <= evsSlotRewriteRetryCount; attempt += 1 {
+	for attempt := 0; attempt <= self.settings.SlotRewriteRetryCount; attempt += 1 {
 		object, err := cluster.Get(ctx, key)
 		if errors.Is(err, sidecar.ErrBlobNotFound) {
 			return nil
@@ -190,7 +186,7 @@ func (self *slotRewriter) rewriteSlot(ctx context.Context, cluster sidecar.BlobC
 		if err != nil {
 			return err
 		}
-		objectBytes, err := readAllLimited(object, DefaultEvsSettings().SlotMaxByteCount)
+		objectBytes, err := readAllLimited(object, self.settings.SlotMaxByteCount)
 		object.Body.Close()
 		if err != nil {
 			return err
@@ -207,7 +203,12 @@ func (self *slotRewriter) rewriteSlot(ctx context.Context, cluster sidecar.BlobC
 			return err
 		}
 		writeCtx := self.budget.IssueP0(ctx, cluster.ClusterId(), sidecar.WriteP0KindErasure, price)
-		_, err = cluster.PutIfMatch(writeCtx, key, object.Etag, rewritten, nil)
+		// the origin rides on, so every slot a push wrote says who made it for as long as it stands
+		var options *sidecar.BlobPutOptions
+		if 0 < len(object.Metadata) {
+			options = &sidecar.BlobPutOptions{Metadata: maps.Clone(object.Metadata)}
+		}
+		_, err = cluster.PutIfMatch(writeCtx, key, object.Etag, rewritten, options)
 		var unknown *sidecar.BlobUnknownError
 		switch {
 		case err == nil:
@@ -220,7 +221,7 @@ func (self *slotRewriter) rewriteSlot(ctx context.Context, cluster sidecar.BlobC
 			return err
 		}
 	}
-	return fmt.Errorf("slot %s: %d rewrites lost their race", sidecar.EvsKeyId(slotId), evsSlotRewriteRetryCount)
+	return fmt.Errorf("slot %s: %d rewrites lost their race", sidecar.EvsKeyId(slotId), self.settings.SlotRewriteRetryCount)
 }
 
 // Queues taskworker's evs.erasure_finish for the repo, a minute on. A queue that does not answer is logged: the
@@ -233,7 +234,7 @@ func (self *EvsEngine) queueErasureFinish(ctx context.Context, repoId sidecar.Id
 		Name:    EvsErasureFinishTaskName,
 		OnceKey: sidecar.EvsKeyId(repoId),
 		Args:    repoId.Bytes(),
-		RunAt:   self.clock.Now().Add(evsErasureFinishDelay),
+		RunAt:   self.clock.Now().Add(self.settings.ErasureFinishDelay),
 	})
 	if err != nil {
 		self.log.Warningf("[evs] repo %s: the erasure reconciler not queued: %v", sidecar.EvsKeyId(repoId), err)
@@ -276,13 +277,15 @@ func FinishErasures(ctx context.Context, host *sidecar.ServiceHost, repoId sidec
 		return 0, err
 	}
 	records := NewRecordCache(settings)
-	rewriter := &slotRewriter{budget: host.Budget, priceTable: priceTable}
+	// an ERASE's batch that evacuation emptied is read from its container through pidx/ (QD-664)
+	locator := NewRecordLocator(blobs, nil)
+	rewriter := &slotRewriter{budget: host.Budget, priceTable: priceTable, settings: settings}
 	finished := 0
 	for _, entry := range window {
 		if !entry.RewritesHistory() {
 			continue
 		}
-		record, err := ReadRecord(ctx, records, cluster, entry.Place)
+		record, err := ReadRecordLocated(ctx, records, locator, cluster, repoId, refId, entry.Place)
 		if err != nil {
 			return finished, err
 		}

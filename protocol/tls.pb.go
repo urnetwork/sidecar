@@ -1,9 +1,10 @@
 // What tlsedge tells a listener about a visitor (§13.5), what certs tells a device about its certificates (§13.6),
-// what a device signs for its key (§13.8) and what a publishing device signs for a link audience's guests (QD-134).
-// TlsEdgeOpen rides sealed streams only, as StreamOpen.metadata, and a listener trusts it only as §9.6's admission
-// step 3 allows. §13 gives TlsHint and TlsKeyAttestation no field list, so theirs are plan-TLS-small-readings' first
-// two, every field inside connect-4 or cert-1. TlsLinkToken reaches no server: it travels in a URL and a cookie
-// inside TLS, between the visitor and the front.
+// what a device signs for its key (§13.8), what a member's device signs for a members-device login (§13.7) and what a
+// publishing device signs for a link audience's guests (QD-134). TlsEdgeOpen rides sealed streams only, as
+// StreamOpen.metadata, and a listener trusts it only as §9.6's admission step 3 allows. §13 gives TlsHint and
+// TlsKeyAttestation no field list, so theirs are plan-TLS-small-readings' first two, every field inside connect-4 or
+// cert-1. TlsEdgeLogin and TlsLinkToken reach no server: each travels between the visitor and the front inside TLS,
+// TlsEdgeLogin from the member's app or extension.
 //
 // No oneof: TlsHint rides PushHint.hint and TlsEdgeOpen StreamOpen.metadata (§6.11).
 
@@ -304,6 +305,60 @@ func (x *TlsKeyAttestation) GetIssueTimeMillis() uint64 {
 	return 0
 }
 
+type TlsEdgeLogin struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// consented device's identity key (§13.7's members-device): that device vouches
+	// for the visitor completing this login at this origin
+	Origin        string `protobuf:"bytes,1,opt,name=origin,proto3" json:"origin,omitempty"` // https://<sni>, with :<port> where it is not 443, as the front issued it
+	Nonce         []byte `protobuf:"bytes,2,opt,name=nonce,proto3" json:"nonce,omitempty"`   // 32 random B the front issued for this login, taken once
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TlsEdgeLogin) Reset() {
+	*x = TlsEdgeLogin{}
+	mi := &file_protocol_tls_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TlsEdgeLogin) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TlsEdgeLogin) ProtoMessage() {}
+
+func (x *TlsEdgeLogin) ProtoReflect() protoreflect.Message {
+	mi := &file_protocol_tls_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TlsEdgeLogin.ProtoReflect.Descriptor instead.
+func (*TlsEdgeLogin) Descriptor() ([]byte, []int) {
+	return file_protocol_tls_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *TlsEdgeLogin) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
+}
+
+func (x *TlsEdgeLogin) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
 type TlsLinkToken struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// device's identity key (QD-134): a link audience's guest link, reusable until
@@ -318,7 +373,7 @@ type TlsLinkToken struct {
 
 func (x *TlsLinkToken) Reset() {
 	*x = TlsLinkToken{}
-	mi := &file_protocol_tls_proto_msgTypes[3]
+	mi := &file_protocol_tls_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -330,7 +385,7 @@ func (x *TlsLinkToken) String() string {
 func (*TlsLinkToken) ProtoMessage() {}
 
 func (x *TlsLinkToken) ProtoReflect() protoreflect.Message {
-	mi := &file_protocol_tls_proto_msgTypes[3]
+	mi := &file_protocol_tls_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -343,7 +398,7 @@ func (x *TlsLinkToken) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TlsLinkToken.ProtoReflect.Descriptor instead.
 func (*TlsLinkToken) Descriptor() ([]byte, []int) {
-	return file_protocol_tls_proto_rawDescGZIP(), []int{3}
+	return file_protocol_tls_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *TlsLinkToken) GetGrantId() []byte {
@@ -400,7 +455,10 @@ const file_protocol_tls_proto_rawDesc = "" +
 	"\vspki_sha256\x18\x03 \x01(\fR\n" +
 	"spkiSha256\x122\n" +
 	"\x15identifier_set_sha256\x18\x04 \x01(\fR\x13identifierSetSha256\x12*\n" +
-	"\x11issue_time_millis\x18\x05 \x01(\x04R\x0fissueTimeMillis\"\x81\x01\n" +
+	"\x11issue_time_millis\x18\x05 \x01(\x04R\x0fissueTimeMillis\"<\n" +
+	"\fTlsEdgeLogin\x12\x16\n" +
+	"\x06origin\x18\x01 \x01(\tR\x06origin\x12\x14\n" +
+	"\x05nonce\x18\x02 \x01(\fR\x05nonce\"\x81\x01\n" +
 	"\fTlsLinkToken\x12\x19\n" +
 	"\bgrant_id\x18\x01 \x01(\fR\agrantId\x12\x12\n" +
 	"\x04host\x18\x02 \x01(\tR\x04host\x12,\n" +
@@ -425,13 +483,14 @@ func file_protocol_tls_proto_rawDescGZIP() []byte {
 }
 
 var file_protocol_tls_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_protocol_tls_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_protocol_tls_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_protocol_tls_proto_goTypes = []any{
 	(TlsHintKind)(0),          // 0: urnetwork.sidecar.TlsHintKind
 	(*TlsEdgeOpen)(nil),       // 1: urnetwork.sidecar.TlsEdgeOpen
 	(*TlsHint)(nil),           // 2: urnetwork.sidecar.TlsHint
 	(*TlsKeyAttestation)(nil), // 3: urnetwork.sidecar.TlsKeyAttestation
-	(*TlsLinkToken)(nil),      // 4: urnetwork.sidecar.TlsLinkToken
+	(*TlsEdgeLogin)(nil),      // 4: urnetwork.sidecar.TlsEdgeLogin
+	(*TlsLinkToken)(nil),      // 5: urnetwork.sidecar.TlsLinkToken
 }
 var file_protocol_tls_proto_depIdxs = []int32{
 	0, // 0: urnetwork.sidecar.TlsHint.kind:type_name -> urnetwork.sidecar.TlsHintKind
@@ -453,7 +512,7 @@ func file_protocol_tls_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protocol_tls_proto_rawDesc), len(file_protocol_tls_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

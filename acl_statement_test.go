@@ -551,6 +551,46 @@ func TestAclRepoCreateSigners(t *testing.T) {
 	}
 }
 
+// The config repo's row is the state's own (QD-719), so with no row in the rows a RepoCreate of the Genesis's config
+// repo is a second one, whatever kind it asks, and every access-log statement naming the config is refused: no
+// statement moves the config onto another kind's rules or gives it an admin, a grant or a deletion.
+func TestAclNoStatementMovesTheConfigRepo(t *testing.T) {
+	cast := newAclStatementCast()
+	fixture := cast.fixture
+	configId := fixture.configRepo(Id{}, Id{})
+	state := fixture.state(t)
+	if len(state.Rows().GetRepos()) != 0 {
+		t.Fatalf("the rows hold %d repos", len(state.Rows().GetRepos()))
+	}
+	for kind := protocol.RepoKind_REPO_KIND_GENERAL; kind <= protocol.RepoKind_REPO_KIND_SECRET; kind += 1 {
+		for _, signer := range []Id{cast.ownerDevice, cast.laptop} {
+			create := &protocol.RepoCreate{RepoId: configId.Bytes(), Kind: kind}
+			_, err := state.CheckStatement(fixture.statement(bridge.SignedType_SIGNED_REPO_CREATE, create, signer), nil)
+			if aclTestRefusal(err) != ErrConfigRule {
+				t.Errorf("a RepoCreate of the config repo as %s: %v", kind, err)
+			}
+		}
+	}
+	statements := []struct {
+		name       string
+		signedType bridge.SignedType
+		body       proto.Message
+	}{
+		{name: "RepoAdmin", signedType: bridge.SignedType_SIGNED_REPO_ADMIN, body: &protocol.RepoAdmin{RepoId: configId.Bytes(), SidecarId: cast.laptop.Bytes(),
+			Change: protocol.RepoAdminChange_REPO_ADMIN_CHANGE_ADD}},
+		{name: "RepoGrant", signedType: bridge.SignedType_SIGNED_REPO_GRANT, body: &protocol.RepoGrant{
+			RepoId: configId.Bytes(), Subject: cast.laptop.Bytes(), Role: protocol.RepoGrantRole_REPO_GRANT_ROLE_WRITER}},
+		{name: "RepoRevoke", signedType: bridge.SignedType_SIGNED_REPO_REVOKE, body: &protocol.RepoRevoke{RepoId: configId.Bytes(), Subject: cast.laptop.Bytes()}},
+		{name: "RepoDelete", signedType: bridge.SignedType_SIGNED_REPO_DELETE, body: &protocol.RepoDelete{RepoId: configId.Bytes(), DeletionId: NewId().Bytes()}},
+	}
+	for _, c := range statements {
+		_, err := state.CheckStatement(fixture.statement(c.signedType, c.body, cast.ownerDevice), nil)
+		if aclTestRefusal(err) != ErrConfigRule {
+			t.Errorf("%s of the config repo: %v", c.name, err)
+		}
+	}
+}
+
 // RepoAdmin: a repo admin or a config writer adds and removes; never an add in the directory; in an owner-bound repo
 // an add only by a consented device of its owner, of one.
 func TestAclRepoAdminSigners(t *testing.T) {
@@ -598,66 +638,47 @@ func TestAclRepoAdminSigners(t *testing.T) {
 	}
 }
 
-// A view whose entries' times a test sets, as a ConfigState's log answers them.
-type aclTestTimedView struct {
-	*aclTestView
-	times map[uint64]int64
-}
-
-func (self *aclTestTimedView) aclTimeAt(n uint64) (int64, bool) {
-	timeMs, found := self.times[n]
-	return timeMs, found
-}
-
-// RepoDelete by a repo admin, and RepoRestore of its deletion_id within 7 days of its entry: never a RepoDelete with
-// now, another deletion's id, one whose entry the state cannot date, or past the window.
+// RepoDelete by a repo admin, folded with its entry's time (QD-743), and RepoRestore of its deletion_id within 7 days of
+// that time, the window's last millisecond included, judged from the row alone, since the fixture's view keeps no log:
+// never a RepoDelete with now, another deletion's id, a row carrying no time, or past the window.
 func TestAclRepoDeleteAndRestore(t *testing.T) {
 	cast := newAclStatementCast()
 	fixture := cast.fixture
 	repoId, row := fixture.repo(protocol.RepoKind_REPO_KIND_GENERAL, Id{})
 	row.Admins = []*protocol.AclRepoAdminRow{{SidecarId: cast.laptop.Bytes(), Signer: cast.laptop.Bytes(), At: 1}}
-	timed := &aclTestTimedView{aclTestView: fixture.view, times: map[uint64]int64{}}
-	stateOver := func() *AclState {
-		state, err := NewAclState(fixture.rows, timed)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return state
-	}
-	state := stateOver()
+	state := fixture.state(t)
 	deletionId := NewId().Bytes()
 	deletion := &protocol.RepoDelete{RepoId: repoId.Bytes(), DeletionId: deletionId}
 	if _, err := state.CheckStatement(fixture.statement(bridge.SignedType_SIGNED_REPO_DELETE, deletion, cast.ownerDevice), nil); !errors.Is(err, ErrConfigAuthority) {
 		t.Errorf("a config writer that is no repo admin deletes: %v", err)
 	}
 	statement := fixture.statement(bridge.SignedType_SIGNED_REPO_DELETE, deletion, cast.laptop)
-	verdict, err := state.CheckStatement(statement, nil)
-	if err != nil {
-		t.Fatal(err)
+	statement.TimeMs = aclTestNow.Add(-time.Hour).UnixMilli()
+	state, _ = fixture.apply(t, state, statement)
+	if row := state.Repo(repoId).GetDeletion(); row.GetDeletedAt() != statement.N || row.GetDeletedTimeMs() != statement.TimeMs {
+		t.Fatalf("the deletion row %+v", row)
 	}
-	rows, _, err := state.ApplyStatement(statement, verdict)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture.rows = rows
-	timed.times[statement.N] = statement.TimeMs
-	state = stateOver()
 	if rights := aclTestRights(state, cast.laptop, repoId, AclTokenAudienceEvs); rights != 0 {
 		t.Errorf("a deleted repo: %b", rights)
 	}
 
+	window := DefaultAclAccessLogSettings().RepoRestoreWindow.Milliseconds()
 	restore := &protocol.RepoRestore{RepoId: repoId.Bytes(), DeletionId: deletionId}
-	late := fixture.statement(bridge.SignedType_SIGNED_REPO_RESTORE, restore, cast.laptop)
-	late.TimeMs = statement.TimeMs + aclRepoRestoreWindowMs + 1
+	restoreAt := func(timeMs int64, signer Id) *AclStatement {
+		restoreStatement := fixture.statement(bridge.SignedType_SIGNED_REPO_RESTORE, restore, signer)
+		restoreStatement.TimeMs = timeMs
+		return restoreStatement
+	}
 	cases := []struct {
 		name      string
 		statement *AclStatement
 		refusal   error
 	}{
-		{name: "past 7 days", statement: late, refusal: ErrConfigRule},
+		{name: "a millisecond past 7 days", statement: restoreAt(statement.TimeMs+window+1, cast.laptop), refusal: ErrConfigRule},
 		{name: "another deletion", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_RESTORE, &protocol.RepoRestore{RepoId: repoId.Bytes(), DeletionId: NewId().Bytes()}, cast.laptop), refusal: ErrConfigRule},
-		{name: "not a repo admin", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_RESTORE, restore, cast.phone), refusal: ErrConfigAuthority},
-		{name: "within 7 days", statement: fixture.statement(bridge.SignedType_SIGNED_REPO_RESTORE, restore, cast.laptop)},
+		{name: "not a repo admin", statement: restoreAt(statement.TimeMs+time.Hour.Milliseconds(), cast.phone), refusal: ErrConfigAuthority},
+		{name: "within 7 days", statement: restoreAt(statement.TimeMs+time.Hour.Milliseconds(), cast.laptop)},
+		{name: "the window's last millisecond", statement: restoreAt(statement.TimeMs+window, cast.laptop)},
 	}
 	for _, c := range cases {
 		_, err := state.CheckStatement(c.statement, nil)
@@ -665,54 +686,32 @@ func TestAclRepoDeleteAndRestore(t *testing.T) {
 			t.Errorf("%s: %v, want %v", c.name, err, c.refusal)
 		}
 	}
-	delete(timed.times, statement.N)
-	if _, err := stateOver().CheckStatement(fixture.statement(bridge.SignedType_SIGNED_REPO_RESTORE, restore, cast.laptop), nil); !errors.Is(err, ErrConfigRuleMissing) {
-		t.Errorf("a restore whose delete the state cannot date: %v", err)
-	}
-	timed.times[statement.N] = statement.TimeMs
 
-	restoreStatement := fixture.statement(bridge.SignedType_SIGNED_REPO_RESTORE, restore, cast.laptop)
-	verdict, err = state.CheckStatement(restoreStatement, nil)
+	// a deletion row with no time, which no fold writes, cannot be dated, so its restore is refused as missing
+	undatedRows := proto.Clone(fixture.rows).(*protocol.AclRows)
+	for _, repo := range undatedRows.GetRepos() {
+		if bytes.Equal(repo.GetRepoId(), repoId.Bytes()) {
+			repo.Deletion.DeletedTimeMs = 0
+		}
+	}
+	undated, err := NewAclState(undatedRows, fixture.view)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fixture.rows, _, err = state.ApplyStatement(restoreStatement, verdict); err != nil {
-		t.Fatal(err)
+	if _, err := undated.CheckStatement(restoreAt(statement.TimeMs+time.Hour.Milliseconds(), cast.laptop), nil); !errors.Is(err, ErrConfigRuleMissing) {
+		t.Errorf("a restore whose delete the row does not date: %v", err)
 	}
-	state = stateOver()
+
+	state, _ = fixture.apply(t, state, restoreAt(statement.TimeMs+time.Hour.Milliseconds(), cast.laptop))
 	if rights := aclTestRights(state, cast.laptop, repoId, AclTokenAudienceEvs); !rights.Has(AclEvsAdmin) {
 		t.Errorf("a restored repo: %b", rights)
 	}
 	// a RepoDelete with now is never restored
 	nowDeletion := &protocol.RepoDelete{RepoId: repoId.Bytes(), DeletionId: NewId().Bytes(), Now: true}
-	state, _ = fixture.applyTimed(t, timed, fixture.statement(bridge.SignedType_SIGNED_REPO_DELETE, nowDeletion, cast.laptop))
+	state, _ = fixture.apply(t, state, fixture.statement(bridge.SignedType_SIGNED_REPO_DELETE, nowDeletion, cast.laptop))
 	if _, err := state.CheckStatement(fixture.statement(bridge.SignedType_SIGNED_REPO_RESTORE, &protocol.RepoRestore{RepoId: repoId.Bytes(), DeletionId: nowDeletion.GetDeletionId()}, cast.laptop), nil); !errors.Is(err, ErrConfigRule) {
 		t.Errorf("a restore of a delete with now: %v", err)
 	}
-}
-
-// apply over a timed view.
-func (self *aclTestFixture) applyTimed(t *testing.T, timed *aclTestTimedView, statement *AclStatement) (*AclState, AclStatementEffect) {
-	t.Helper()
-	state, err := NewAclState(self.rows, timed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	verdict, err := state.CheckStatement(statement, nil)
-	if err != nil {
-		t.Fatalf("%s: %v", statement.Type, err)
-	}
-	rows, effect, err := state.ApplyStatement(statement, verdict)
-	if err != nil {
-		t.Fatal(err)
-	}
-	self.rows = rows
-	timed.times[statement.N] = statement.TimeMs
-	next, err := NewAclState(self.rows, timed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return next, effect
 }
 
 // FS-95's format-1 case: a RepoVersioning's signer is verified, its lock folded, and nothing enforced: every right on

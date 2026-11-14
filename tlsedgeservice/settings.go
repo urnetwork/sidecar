@@ -16,10 +16,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/urnetwork/sidecar"
 )
 
 // A tlsedge.yml or settings the engine cannot serve from. The wrapping error names the field, never its
@@ -102,6 +105,31 @@ type TlsEdgeSettings struct {
 	EndpointRateMaxCount int
 	// What an endpoint's bandwidth bucket holds when full, as time at its rate. Default 1 s.
 	BandwidthBurst time.Duration
+
+	// The connection path's (§13.5, §13.6).
+
+	// How long an alert's write may take before the connection is closed without it. Default 2 s.
+	AlertTimeout time.Duration
+	// The most bytes one read of the splice moves. Default 16 KiB, a TLS record and §6's initial window.
+	SpliceBufferByteCount int
+	// How long one Quota.Lease call may take before the connection is refused. Default 2 s.
+	LeaseTimeout time.Duration
+	// The usage windows of meter tls (§20.6): 60 s windows retried for 10 min.
+	Usage *sidecar.QuotaUsageBatcherSettings
+	// How long Drain and Close wait for the last usage window and the last records to be sent. Default
+	// 10 s.
+	FlushTimeout time.Duration
+	// How often connection records leave for the store (§13.9: 10 s batches).
+	RecordFlushInterval time.Duration
+	// Records in one write. Default 1,000.
+	RecordBatchCount int
+	// Records waiting at most, past which a new one is dropped and counted, so a store that lags costs
+	// records and never a connection. Default 65,536.
+	RecordQueueCount int
+	// How long one write of records may take before it reads as failed. Default 10 s.
+	RecordWriteTimeout time.Duration
+	// urnetwork_tlsedge_setup_seconds's bucket bounds, in seconds, rising.
+	SetupSecondsBuckets []float64
 }
 
 // The design's numbers. Root and Blocks stay unset, so these alone do not pass Validate.
@@ -133,6 +161,16 @@ func DefaultTlsEdgeSettings() *TlsEdgeSettings {
 		VisitorRateMaxCount:     64 * 1024,
 		EndpointRateMaxCount:    64 * 1024,
 		BandwidthBurst:          1 * time.Second,
+		AlertTimeout:            2 * time.Second,
+		SpliceBufferByteCount:   16 * 1024,
+		LeaseTimeout:            2 * time.Second,
+		Usage:                   sidecar.DefaultQuotaUsageBatcherSettings(),
+		FlushTimeout:            10 * time.Second,
+		RecordFlushInterval:     10 * time.Second,
+		RecordBatchCount:        1000,
+		RecordQueueCount:        64 * 1024,
+		RecordWriteTimeout:      10 * time.Second,
+		SetupSecondsBuckets:     []float64{0.025, 0.05, 0.1, 0.2, 0.3, 0.5, 1, 1.5, 2.5, 5, 10, 15},
 	}
 }
 
@@ -268,10 +306,24 @@ func (self *TlsEdgeSettings) Validate() error {
 		"VisitorRateMaxCount":     int64(self.VisitorRateMaxCount),
 		"EndpointRateMaxCount":    int64(self.EndpointRateMaxCount),
 		"BandwidthBurst":          int64(self.BandwidthBurst),
+		"AlertTimeout":            int64(self.AlertTimeout),
+		"SpliceBufferByteCount":   int64(self.SpliceBufferByteCount),
+		"LeaseTimeout":            int64(self.LeaseTimeout),
+		"FlushTimeout":            int64(self.FlushTimeout),
+		"RecordFlushInterval":     int64(self.RecordFlushInterval),
+		"RecordBatchCount":        int64(self.RecordBatchCount),
+		"RecordQueueCount":        int64(self.RecordQueueCount),
+		"RecordWriteTimeout":      int64(self.RecordWriteTimeout),
 	} {
 		if value <= 0 {
 			return fmt.Errorf("%w: %s is not positive", ErrTlsEdgeSettingsRefused, name)
 		}
+	}
+	if self.Usage == nil || self.Usage.WindowTimeout <= 0 || self.Usage.RetryTimeout <= 0 {
+		return fmt.Errorf("%w: Usage needs a positive window and retry timeout", ErrTlsEdgeSettingsRefused)
+	}
+	if len(self.SetupSecondsBuckets) == 0 || !slices.IsSorted(self.SetupSecondsBuckets) || self.SetupSecondsBuckets[0] <= 0 {
+		return fmt.Errorf("%w: SetupSecondsBuckets is not a rising list of positive bounds", ErrTlsEdgeSettingsRefused)
 	}
 	if self.ColdLimits == nil {
 		return fmt.Errorf("%w: ColdLimits is missing", ErrTlsEdgeSettingsRefused)

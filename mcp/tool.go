@@ -148,6 +148,8 @@ func AddTool[In, Out any](catalog *McpCatalog, spec *McpToolSpec[In], handler Mc
 		call := McpCallOf(ctx)
 		started := catalog.clock.Now()
 		arguments := mcpArgumentsOf(request)
+		// the gate's harness evidence matches the call by its tool and its arguments' hash (harness_evidence.go)
+		ctx = withMcpToolArguments(ctx, spec.Name, arguments)
 		result, resultBytes, covered, err := mcpRunTool(ctx, catalog, spec, handler, inResolved, call, request, arguments)
 		if (spec.Tier == McpTierWrite || covered) && call != nil && catalog.sink != nil {
 			catalog.sink.RecordMcpCall(ctx, call, spec.Name, arguments, resultBytes, started.UnixMilli(), catalog.clock.Now().UnixMilli(), err)

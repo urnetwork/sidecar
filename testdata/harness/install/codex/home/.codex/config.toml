@@ -1,0 +1,13 @@
+# the person's Codex settings, kept byte for byte
+model = "gpt-example"
+approval_policy = "on-request"
+
+[mcp_servers.docs]
+command = "/opt/docs/bin/docs-mcp"
+args = [
+  "--port",
+  "4000", # the docs port
+]
+
+[profiles.review]
+model = "review-example"

@@ -8,7 +8,14 @@
 //	committed  at this record's place: kept, to be moved. A part follows its seal: it is kept when the committed
 //	           seal's record names its place. At another place, a second copy of its push: dropped, nothing else
 //	           deleted
-//	dead       dropped, and the new slots its record lists are deleted before its batch, the only cleanup
+//	dead       dropped; each slot its record lists is a candidate that deleteMinute decides on its object, and
+//	           deletes only when the object's origin is the record's own statement and the settle age has passed,
+//	           by a DELETE naming its LastModified (DESIGN-DETAILS 14.2.5, QD-765). A slot id a dead record lists may
+//	           name an object a committed push holds: an honest retoken's, which took over its refused statement's
+//	           object under its own origin, or a committed version's that a refused push listed again (14.1's A and
+//	           B), and neither is the dead record's own. While EvacuatorSettings.DeleteDeadSlots is off, in the
+//	           release that brings origins, none is queued and every one stays, counted (14.2.8's interim, QD-766),
+//	           a leak of objects of at most 8 KiB that loses no key
 //	pending    the ref's fence is raised, one head CAS with fence_ms, and the record resolved again on the fenced
 //	           head. While this process's clock is unsure no fence is raised and the record stays. A ref with no
 //	           head has nothing to fence and its record stays too: how a fence reaches such a ref is
@@ -250,13 +257,33 @@ func (self *evacuateRun) resolveRecord(minute *evacuateMinute, place *protocol.E
 	}
 	switch resolution.State {
 	case EvsResolveDead:
+		// each slot it lists is decided on its object in deleteMinute, by the record's statement (14.2.5); with the
+		// switch off, or a statement that does not parse, each stays, counted
 		_, slotIds, err := evacuateRecordObjects(record)
 		if err != nil {
-			// its slots cannot be read from it, so none is deleted: the record goes, as a dead one does
+			// its slots cannot be read from it, so none is counted: the record goes, as a dead one does
 			self.alarm("evacuate_dead_record", placeKey(place), "a dead record of batch minute %d on cluster %s lists objects that do not parse: its slots stay", minute.minute, self.clusterId)
 		}
-		for _, slotId := range slotIds {
-			minute.deadSlots = append(minute.deadSlots, &evacuateSlot{repoId: record.RepoId, slotId: slotId})
+		var statement *sidecar.EvsStatement
+		if 0 < len(slotIds) && self.evacuator.settings.DeleteDeadSlots {
+			statement, err = EvsBatchRecordStatement(record)
+			if err != nil {
+				// whose its slots are cannot be said, so none is this record's to delete
+				statement = nil
+				self.alarm("evacuate_dead_record", placeKey(place), "a dead record of batch minute %d on cluster %s holds a statement that does not parse: its slots stay", minute.minute, self.clusterId)
+			}
+		}
+		if statement == nil {
+			self.result.SlotKeptCount += len(slotIds)
+		} else {
+			for _, slotId := range slotIds {
+				minute.deadSlots = append(minute.deadSlots, &evacuateSlot{
+					repoId:          record.RepoId,
+					slotId:          slotId,
+					pushId:          sidecar.Id(statement.Push.GetPushId()),
+					statementPrefix: [16]byte(statement.Sha256[:16]),
+				})
+			}
 		}
 		self.result.DeadCount += 1
 	case EvsResolveCommitted:
@@ -348,7 +375,8 @@ func (self *evacuateRun) resolve(minute *evacuateMinute, record *sidecar.EvsBatc
 	if err != nil {
 		return nil, "head unread", err
 	}
-	resolution, err := ResolveBatchRecord(self.ctx, record, head.Head, readPage)
+	statementLife := self.evacuator.evsSettings.ResolveStatementLife
+	resolution, err := ResolveBatchRecord(self.ctx, record, head.Head, statementLife, readPage)
 	if err != nil {
 		return nil, "resolve", err
 	}
@@ -373,7 +401,7 @@ func (self *evacuateRun) resolve(minute *evacuateMinute, record *sidecar.EvsBatc
 	}
 	self.refHeads[refKey] = fenced
 	self.result.FenceCount += 1
-	resolution, err = ResolveBatchRecord(self.ctx, record, fenced.Head, readPage)
+	resolution, err = ResolveBatchRecord(self.ctx, record, fenced.Head, statementLife, readPage)
 	if err != nil {
 		return nil, "resolve", err
 	}

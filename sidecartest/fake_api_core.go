@@ -5,10 +5,12 @@
 //	POST /network/auth-client               Client, with the ClientKey's proof: a reissue of the bearer's own client,
 //	                                        or a child of it, which inherits both marks
 //	POST /network/remove-client             OwnClient: the bearer's own client or one of its children
-//	POST /sidecar/bind                      Client: the bearer's own binding, under plan-CORE-binding-wire's rules
+//	POST /sidecar/bind                      Client: the bearer's own binding, under plan-CORE-binding-wire's rules,
+//	                                        answering the bearer re-minted with the bound sidecar_id
 //	GET  /sidecar/identity/<sidecar_id>     Client: a sidecar of the caller's network, with a page of its bindings
 //	GET  /sidecar/identity?client_id=<id>   Client: the sidecar a client of any generation binds
-//	GET  /auth/refresh                      Client, with the ClientKey's proof: a new token, same client and device
+//	GET  /auth/refresh                      Client, with the ClientKey's proof: a new token, same client and device,
+//	                                        and the sidecar_id claim the presented token carries, if any
 //
 // Each copies server's route step for step where server has one (server/controller/sidecar_identity_controller.go,
 // model/sidecar_identity_model.go, controller/auth_controller.go's RefreshToken), and §7.8's text where it has none
@@ -16,6 +18,10 @@
 // fake_api_dpop.go checks it, by the client's newest bound key, else the key its enrollment recorded
 // (plan-TEAM-enroll-client-key); a bind must carry that recorded key. A refresh's refusals are server's: a client
 // with no binding in its network is restore_required (model.SidecarRestoreRequired), a removed one 401.
+//
+// The sidecar_id claim is server's (plan-SOCK-client-auth, QD-040, QD-797): only bind's re-mint sets it, a refresh
+// keeps it as presented and never adds it from the binding, and a reissue or a child carries none, so
+// ClientTokenAuthenticator reads sockets' subject from the token alone, as server's Client-class verifier does.
 //
 // A schedule scripts what the fault queue cannot: EndSession (a 401 with session_revoked), RefuseRefresh (a refused
 // credential, 401), ForgetSidecarIdentities (a Postgres restore that lost the identity tables, so refresh answers
@@ -28,6 +34,7 @@ package sidecartest
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
@@ -35,11 +42,14 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/urnetwork/connect"
 
 	"github.com/urnetwork/sidecar"
 )
@@ -67,10 +77,6 @@ const (
 	fakeApiIdentityActive  = "active"
 	fakeApiIdentityRevoked = "revoked"
 )
-
-// The most bindings one page of GET /sidecar/identity/<sidecar_id> lists, a format value of the route
-// (plan-CORE-client-to-sidecar-lookup).
-const fakeApiIdentityBindingPageCount = 64
 
 // An auth key's id and secret, lowercase RFC 4648 base32 with no padding (config_authkey.go).
 var fakeApiAuthKeyEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
@@ -122,8 +128,11 @@ type fakeApiCoreState struct {
 	identities map[sidecar.Id]*fakeApiIdentity
 	// client_id to its binding, across sidecars
 	clientBindings map[sidecar.Id]*fakeApiClientBinding
-	// the key each enrollment recorded, network_client_owner.client_public_key's (plan-TEAM-enroll-client-key)
+	// the key each enrollment recorded, network_client_owner.client_public_key's (plan-TEAM-enroll-client-key), and
+	// each forwarding client's, which its mint recorded
 	enrollClientKeys map[sidecar.Id]ed25519.PublicKey
+	// each source client's forwarding clients by their key, which a repeat mint for the key reissues
+	forwardClients map[fakeApiForwardKey]*fakeApiClient
 	// clients whose session api ended: every route 401s them with session_revoked
 	endedSessionClientIds map[sidecar.Id]bool
 	// clients whose refresh api refuses with a bare 401
@@ -132,11 +141,17 @@ type fakeApiCoreState struct {
 	previewNetworkIds map[sidecar.Id]bool
 	// how many requests each route has served, by method and pattern
 	routeCounts map[string]int
-	// each client's newest token's iat and exp, and how many it has had
-	newestTokens     map[sidecar.Id]fakeApiTokenTimes
-	clientTokenCount map[sidecar.Id]int
+	// each client's newest token's iat and exp, and every token it has had, oldest first
+	newestTokens map[sidecar.Id]fakeApiTokenTimes
+	clientTokens map[sidecar.Id][]string
 	// enrollment answers admin_refused false whatever the request sent, as an api without the mark would
 	dropEnrollMarks bool
+}
+
+// A forwarding client's source client and key.
+type fakeApiForwardKey struct {
+	sourceClientId sidecar.Id
+	clientKey      string
 }
 
 // A minted token's iat and exp.
@@ -156,11 +171,12 @@ func newFakeApiCoreState() fakeApiCoreState {
 		identities:              map[sidecar.Id]*fakeApiIdentity{},
 		clientBindings:          map[sidecar.Id]*fakeApiClientBinding{},
 		enrollClientKeys:        map[sidecar.Id]ed25519.PublicKey{},
+		forwardClients:          map[fakeApiForwardKey]*fakeApiClient{},
 		endedSessionClientIds:   map[sidecar.Id]bool{},
 		refusedRefreshClientIds: map[sidecar.Id]bool{},
 		routeCounts:             map[string]int{},
 		newestTokens:            map[sidecar.Id]fakeApiTokenTimes{},
-		clientTokenCount:        map[sidecar.Id]int{},
+		clientTokens:            map[sidecar.Id][]string{},
 	}
 }
 
@@ -195,24 +211,34 @@ func (self *FakeApi) RouteCount(route string) int {
 }
 
 // Mints client's token, as server signs a by_jwt: client_id, device_id, session_id, network_id, create_time,
-// strict_exp, iat, exp and a random jti. exp is ClientTokenTimeout from now, §7.4's 7 days. The token maps to a copy
-// of client.
+// strict_exp, sidecar_id when client carries the claim, iat, exp and a random jti. exp is ClientTokenTimeout from now,
+// §7.4's 7 days. The token maps to a copy of client.
 func (self *FakeApi) mintClientToken(client *fakeApiClient) string {
 	now := self.clock.Now()
+	return self.mintClientTokenAt(client, now, now.Add(self.settings.ClientTokenTimeout))
+}
+
+// Mints client's token as mintClientToken does, issued at issuedAt and expiring at expireTime: bind's re-mint keeps the
+// lifetime of the token it replaces (server's RemintSidecarCredential).
+func (self *FakeApi) mintClientTokenAt(client *fakeApiClient, issuedAt time.Time, expireTime time.Time) string {
 	minted := *client
-	minted.expireTime = now.Add(self.settings.ClientTokenTimeout)
+	minted.issuedAt = issuedAt
+	minted.expireTime = expireTime
 	claims := map[string]any{
 		"network_id":  minted.networkId.String(),
 		"client_id":   minted.clientId.String(),
 		"device_id":   minted.deviceId.String(),
 		"session_id":  minted.sessionId.String(),
 		"create_time": minted.createTime.UTC().Format(time.RFC3339Nano),
-		"iat":         now.Unix(),
-		"exp":         minted.expireTime.Unix(),
+		"iat":         issuedAt.Unix(),
+		"exp":         expireTime.Unix(),
 		"jti":         sidecar.NewId().String(),
 	}
 	if minted.strictExp {
 		claims["strict_exp"] = true
+	}
+	if minted.sidecarClaim != (sidecar.Id{}) {
+		claims["sidecar_id"] = minted.sidecarClaim.String()
 	}
 	header, err := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT"})
 	if err != nil {
@@ -230,8 +256,8 @@ func (self *FakeApi) mintClientToken(client *fakeApiClient) string {
 		mac.Write([]byte(signingInput))
 		token := signingInput + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 		self.bearerClients[token] = &minted
-		self.core.newestTokens[minted.clientId] = fakeApiTokenTimes{issuedAt: now, expireTime: minted.expireTime}
-		self.core.clientTokenCount[minted.clientId] += 1
+		self.core.newestTokens[minted.clientId] = fakeApiTokenTimes{issuedAt: issuedAt, expireTime: expireTime}
+		self.core.clientTokens[minted.clientId] = append(self.core.clientTokens[minted.clientId], token)
 		return token
 	}()
 	if self.secretSink != nil {
@@ -514,6 +540,8 @@ type fakeApiAuthClientArgs struct {
 	DeclaresNoEgress bool        `json:"declares_no_egress"`
 	AdminRefused     bool        `json:"admin_refused"`
 	StrictExp        bool        `json:"strict_exp"`
+	ForwardOnly      bool        `json:"forward_only,omitempty"`
+	ClientPublicKey  []byte      `json:"client_public_key,omitempty"`
 }
 
 // POST /network/auth-client's answer, its refusals in a 200's error object as connect/api/bringyour.yml has them.
@@ -522,6 +550,7 @@ type fakeApiAuthClientResult struct {
 	ClientId     *sidecar.Id               `json:"client_id,omitempty"`
 	AdminRefused bool                      `json:"admin_refused,omitempty"`
 	StrictExp    bool                      `json:"strict_exp,omitempty"`
+	ForwardOnly  bool                      `json:"forward_only,omitempty"`
 	Error        *fakeApiAuthClientRefusal `json:"error,omitempty"`
 }
 
@@ -529,10 +558,26 @@ type fakeApiAuthClientRefusal struct {
 	Message string `json:"message"`
 }
 
+// The refusals server's route answers to a forwarding client's mint (model/network_client_owner_model.go), word for
+// word.
+const (
+	fakeApiForwardOnlyMinterMessage   = "A forwarding client is minted by its sidecar's own client, with its proof."
+	fakeApiForwardOnlyKeyMessage      = "A forwarding client needs its 32-byte client_public_key."
+	fakeApiForwardOnlyUnboundMessage  = "A forwarding client's source must be a bound sidecar client."
+	fakeApiClientPublicKeyMarkMessage = "A client_public_key is taken only for a new forwarding client."
+	fakeApiClientPublicKeyMismatch    = "The client_public_key is not the client's."
+)
+
 // POST /network/auth-client (§7.4): with the ClientKey's proof, reissues a token for the bearer's own client, or
 // mints a child of it, which inherits both marks whatever the request says. Any other client is refused in the 200's
 // error object, as server's route answers one it may not touch. A strict_exp child outside preview_networks is 403
 // not_preview.
+//
+// §7.4's forwarding client F (owner decision 197), as server's checkForwardOnlyMint answers it: forward_only asks it
+// of the bearer's own strict_exp client as F's source; F takes its 32-byte client_public_key, which its proofs are
+// checked against, from a bound source alone, and a repeat for the same key reissues the F it made; F's own children,
+// its window clients, inherit the mark and take no key; and a client_public_key comes with no other mint. The answer
+// confirms forward_only. The forwarding allowlist F's tokens pass is not modeled here.
 func (self *FakeApi) handleAuthClient(writer http.ResponseWriter, request *http.Request) {
 	client, bearer := self.requireClient(writer, request)
 	if client == nil {
@@ -548,6 +593,10 @@ func (self *FakeApi) handleAuthClient(writer http.ResponseWriter, request *http.
 	refuse := func(message string) {
 		fakeApiWriteJson(writer, http.StatusOK, &fakeApiAuthClientResult{Error: &fakeApiAuthClientRefusal{Message: message}})
 	}
+	if !args.ForwardOnly && args.ClientPublicKey != nil {
+		refuse(fakeApiClientPublicKeyMarkMessage)
+		return
+	}
 	now := self.clock.Now()
 	switch {
 	case args.ClientId != nil:
@@ -555,33 +604,104 @@ func (self *FakeApi) handleAuthClient(writer http.ResponseWriter, request *http.
 			refuse("Invalid client.")
 			return
 		}
+		if args.ClientPublicKey != nil && !bytes.Equal(args.ClientPublicKey, func() ed25519.PublicKey {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return self.core.enrollClientKeys[client.clientId]
+		}()) {
+			refuse(fakeApiClientPublicKeyMismatch)
+			return
+		}
 		reissued := *client
 		reissued.createTime = now
+		// a reissue is derived as a child is (server's ByJwt.Renew), so it names no sidecar
+		reissued.sidecarClaim = sidecar.Id{}
 		token := self.mintClientToken(&reissued)
 		clientId := client.clientId
-		fakeApiWriteJson(writer, http.StatusOK, &fakeApiAuthClientResult{ByClientJwt: token, ClientId: &clientId, AdminRefused: client.adminRefused, StrictExp: client.strictExp})
+		fakeApiWriteJson(writer, http.StatusOK, &fakeApiAuthClientResult{
+			ByClientJwt: token, ClientId: &clientId, AdminRefused: client.adminRefused, StrictExp: client.strictExp, ForwardOnly: client.forwardOnly,
+		})
 	case args.SourceClientId != nil:
 		if *args.SourceClientId != client.clientId {
-			refuse("Invalid source client.")
+			if args.ForwardOnly {
+				refuse(fakeApiForwardOnlyMinterMessage)
+			} else {
+				refuse("Invalid source client.")
+			}
 			return
+		}
+		forwardOnly := client.forwardOnly
+		var forwardKey *fakeApiForwardKey
+		if args.ForwardOnly {
+			switch {
+			case !client.strictExp:
+				refuse(fakeApiForwardOnlyMinterMessage)
+				return
+			case client.forwardOnly && args.ClientPublicKey != nil:
+				// F's own child, a window client: the mark is inherited
+				refuse(fakeApiClientPublicKeyMarkMessage)
+				return
+			case client.forwardOnly:
+			case len(args.ClientPublicKey) != ed25519.PublicKeySize:
+				refuse(fakeApiForwardOnlyKeyMessage)
+				return
+			case self.clientKey(client.clientId) == nil:
+				refuse(fakeApiForwardOnlyUnboundMessage)
+				return
+			default:
+				forwardOnly = true
+				forwardKey = &fakeApiForwardKey{sourceClientId: client.clientId, clientKey: string(args.ClientPublicKey)}
+			}
 		}
 		strictExp := client.strictExp || args.StrictExp
 		if strictExp && !self.previewAllows(client.networkId) {
 			fakeApiRefuse(writer, http.StatusForbidden, fakeApiCodeNotPreview, "Sidecars are in preview for some networks only.", nil)
 			return
 		}
-		childId := sidecar.NewId()
-		token := self.mintClientToken(&fakeApiClient{
+		if forwardKey != nil {
+			// a repeat for the key reissues the F it made, while F stands
+			held := func() *fakeApiClient {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				held := self.core.forwardClients[*forwardKey]
+				if held == nil || self.removedClientIds[held.clientId] {
+					return nil
+				}
+				return held
+			}()
+			if held != nil {
+				reissued := *held
+				reissued.createTime = now
+				reissued.sidecarClaim = sidecar.Id{}
+				token := self.mintClientToken(&reissued)
+				clientId := held.clientId
+				fakeApiWriteJson(writer, http.StatusOK, &fakeApiAuthClientResult{ByClientJwt: token, ClientId: &clientId, AdminRefused: true, StrictExp: true, ForwardOnly: true})
+				return
+			}
+		}
+		child := &fakeApiClient{
 			networkId:      client.networkId,
-			clientId:       childId,
+			clientId:       sidecar.NewId(),
 			deviceId:       client.deviceId,
 			sessionId:      sidecar.NewId(),
 			strictExp:      strictExp,
 			adminRefused:   true,
+			forwardOnly:    forwardOnly,
 			sourceClientId: client.clientId,
 			createTime:     now,
-		})
-		fakeApiWriteJson(writer, http.StatusOK, &fakeApiAuthClientResult{ByClientJwt: token, ClientId: &childId, AdminRefused: true, StrictExp: strictExp})
+		}
+		if forwardKey != nil {
+			func() {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				held := *child
+				self.core.forwardClients[*forwardKey] = &held
+				self.core.enrollClientKeys[child.clientId] = slices.Clone(ed25519.PublicKey(args.ClientPublicKey))
+			}()
+		}
+		token := self.mintClientToken(child)
+		childId := child.clientId
+		fakeApiWriteJson(writer, http.StatusOK, &fakeApiAuthClientResult{ByClientJwt: token, ClientId: &childId, AdminRefused: true, StrictExp: strictExp, ForwardOnly: forwardOnly})
 	default:
 		refuse("A sidecar reissues its own client or mints a child of it.")
 	}
@@ -627,7 +747,8 @@ type fakeApiBindArgs struct {
 }
 
 type fakeApiBindResult struct {
-	Generation int64 `json:"generation"`
+	Generation  int64  `json:"generation"`
+	ByClientJwt string `json:"by_client_jwt"`
 }
 
 // POST /sidecar/bind (§5.5, §5.6), as server's SidecarBind and BindSidecarIdentity: both signatures verify over the
@@ -636,7 +757,9 @@ type fakeApiBindResult struct {
 // generation; a sidecar_id's first binding is generation 1, each later one the newest plus one under the same
 // identity key, and a re-registration after a restore, its identity row gone, is admitted at any generation, as
 // server's seam admits it until TEAM-M2-16. A bind maps the client's tokens to the sidecar, which the log's routes
-// read as its admission's subject.
+// read as its admission's subject. Both a bind and its retry answer the bearer re-minted with the binding's sidecar as
+// its sidecar_id claim, every other claim as presented, its lifetime included (server's RemintSidecarCredential;
+// QD-040, QD-797): the tokens the client held before name no sidecar, so sockets denies them.
 func (self *FakeApi) handleBind(writer http.ResponseWriter, request *http.Request) {
 	client, _ := self.requireClient(writer, request)
 	if client == nil {
@@ -708,7 +831,12 @@ func (self *FakeApi) handleBind(writer http.ResponseWriter, request *http.Reques
 	}()
 	switch code {
 	case "":
-		fakeApiWriteJson(writer, http.StatusOK, &fakeApiBindResult{Generation: generation})
+		// the bearer as presented, its lifetime kept, now naming the binding's sidecar: what the sidecar keeps
+		reminted := *client
+		reminted.sidecarId = binding.SidecarId
+		reminted.sidecarClaim = binding.SidecarId
+		byClientJwt := self.mintClientTokenAt(&reminted, client.issuedAt, client.expireTime)
+		fakeApiWriteJson(writer, http.StatusOK, &fakeApiBindResult{Generation: generation, ByClientJwt: byClientJwt})
 	case fakeApiCodeBindingInvalid:
 		invalid("The binding does not carry the client's enrolled key.")
 	case fakeApiCodeSidecarRevoked:
@@ -751,7 +879,7 @@ func (self *FakeApi) identityResult(callerNetworkId sidecar.Id, sidecarId sideca
 		return result
 	}
 	result.Bindings = [][]byte{}
-	for generation := identity.newest; 0 < generation && len(result.Bindings) < fakeApiIdentityBindingPageCount; generation -= 1 {
+	for generation := identity.newest; 0 < generation && len(result.Bindings) < self.settings.IdentityBindingPageCount; generation -= 1 {
 		if 0 < beforeGeneration && beforeGeneration <= generation {
 			continue
 		}
@@ -899,7 +1027,70 @@ func (self *FakeApi) NewestClientToken(clientId sidecar.Id) (issuedAt time.Time,
 func (self *FakeApi) ClientTokenCount(clientId sidecar.Id) int {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	return self.core.clientTokenCount[clientId]
+	return len(self.core.clientTokens[clientId])
+}
+
+// Every token this api has minted for the client, oldest first: its enrollment's or mint's, then each re-mint, refresh
+// and reissue. A test's view of what the client was given; no route answers it.
+func (self *FakeApi) ClientTokens(clientId sidecar.Id) []string {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.core.clientTokens[clientId])
+}
+
+// sidecar.Authenticator for audience's Client-class tokens, as server's sidecarhost.NewClientTokenAuthenticator
+// verifies them for sockets (plan-SOCK-client-auth, QD-040): a client token this api minted, refused once past its exp,
+// its client removed or its session ended, whose principal names the token's network and client and, as SidecarId,
+// the token's own sidecar_id claim, nil for a token without one, such as each a client held before bind's re-mint, which
+// sockets denies. A token for any other audience goes to next, as server's verifies service tokens beside the block's
+// Client-class ones; with no next it is refused. Fault plans on authenticator.Authenticate apply, as FakeAuthenticator's
+// do.
+func (self *FakeApi) ClientTokenAuthenticator(audience string, next sidecar.Authenticator) sidecar.Authenticator {
+	return &fakeApiClientTokenAuthenticator{api: self, audience: audience, next: next}
+}
+
+// See ClientTokenAuthenticator.
+type fakeApiClientTokenAuthenticator struct {
+	api      *FakeApi
+	audience string
+	next     sidecar.Authenticator
+}
+
+// See sidecar.Authenticator.
+func (self *fakeApiClientTokenAuthenticator) Authenticate(ctx context.Context, audience string, jwt string) (*sidecar.Principal, error) {
+	if audience == "" {
+		return nil, fmt.Errorf("%w: no audience", sidecar.ErrAuthenticationRefused)
+	}
+	if audience != self.audience {
+		if self.next == nil {
+			return nil, fmt.Errorf("%w: no verifier for this audience", sidecar.ErrAuthenticationRefused)
+		}
+		return self.next.Authenticate(ctx, audience, jwt)
+	}
+	var principal *sidecar.Principal
+	err := hostCall(ctx, self.api.faults, "authenticator.Authenticate", func() error {
+		client := self.api.clientOfToken(jwt)
+		if client == nil {
+			return fmt.Errorf("%w: no client token of this api's that still authenticates", sidecar.ErrAuthenticationRefused)
+		}
+		principal = &sidecar.Principal{
+			NetworkId: connect.Id(client.networkId),
+			ClientId:  connect.Id(client.clientId),
+			Audience:  audience,
+			IssuedAt:  client.issuedAt,
+			ExpiresAt: client.expireTime,
+		}
+		// the claim the token carries, never the binding api holds for its client
+		if client.sidecarClaim != (sidecar.Id{}) {
+			sidecarId := connect.Id(client.sidecarClaim)
+			principal.SidecarId = &sidecarId
+		}
+		return principal.Validate()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return principal, nil
 }
 
 // How many tokens this api has minted, and a channel that closes at the next, armed before the read, so a test waits
