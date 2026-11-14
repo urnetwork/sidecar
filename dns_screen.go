@@ -173,9 +173,9 @@ func ScreenName(name string, facts *ScreenFacts) ScreenVerdict {
 }
 
 // Screens host, one label of a name inside a network's own zone, under the network's facts: a record
-// owner's label or a published host (§13), owner decision QD-807. §12.7's owner table applies and
-// §12.5's reserved block does not, so www, api, status and login allow. The file's header gives the
-// rules.
+// owner's label or a published host (§13), as the owner answered QD-807. §12.7's owner table applies
+// and §12.5's reserved block does not, so www, api, status and login allow. The file's header gives
+// the rules.
 //
 // The caller screens each host label a new name brings and nothing else: none for the apex, @, which
 // is the network's label or alias and was screened when drawn or claimed, and none for * or an
