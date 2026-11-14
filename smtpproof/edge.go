@@ -128,6 +128,9 @@ type edgeSession struct {
 	serverFinishedRecord []byte
 
 	session *sessionStatement
+	// C, from the key part once it lands: the commitment every later part's statement takes, and never a
+	// value a later part carries (DESIGN-DETAILS 3.2.5).
+	keyCommitment []byte
 
 	// E3.
 	serverRecords     [][]byte
@@ -885,6 +888,16 @@ func (self *edgeSession) preparePartWithLock(part *sidecar.SmtpProofPart) (*edge
 	if part.Index == 1 && part.Mode != partModeNone {
 		return nil, edgeRefuse(checkE3, "pi1 carries no mode")
 	}
+	// the key part alone carries C, in its form; a later part's is the gate's (DESIGN-DETAILS 3.2.5 step 4)
+	keyCommitment := self.keyCommitment
+	if part.Index == 1 {
+		if _, err := decodeCommitment(part.KeyCommitment); err != nil {
+			return nil, edgeRefuse(checkE3, "the key part's commitment: %v", err)
+		}
+		keyCommitment = part.KeyCommitment
+	} else if len(part.KeyCommitment) != 0 {
+		return nil, edgeRefuse(checkE3, "part %d carries a key commitment", part.Index)
+	}
 	if 2 <= part.Index {
 		if part.Mode != partModeBdat && part.Mode != partModeData {
 			return nil, edgeRefuse(checkE3, "unknown mode %d", part.Mode)
@@ -929,6 +942,7 @@ func (self *edgeSession) preparePartWithLock(part *sidecar.SmtpProofPart) (*edge
 
 	statement := &partStatement{
 		session:                   self.session,
+		keyCommitment:             bytes.Clone(keyCommitment),
 		index:                     part.Index,
 		mode:                      part.Mode,
 		firstRecord:               part.FirstRecord,
@@ -1072,6 +1086,9 @@ func (self *edgeSession) VerifyPart(ctx context.Context, part *sidecar.SmtpProof
 			return nil, nil
 		}
 		self.partCommits += 1
+		if part.Index == 1 {
+			self.keyCommitment = bytes.Clone(part.KeyCommitment)
+		}
 		if 0 < len(self.parts) && self.parts[len(self.parts)-1].part.Index == part.Index {
 			self.parts[len(self.parts)-1] = gated
 		} else {

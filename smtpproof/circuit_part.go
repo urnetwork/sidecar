@@ -10,7 +10,14 @@ import (
 	"github.com/consensys/gnark/frontend"
 )
 
-// The circuit of one part (SPEC.md sections 5 and 7): Z1, then a pool of keystream blocks.
+// The circuit of one part (SPEC.md sections 5 and 7; DESIGN-DETAILS 3.2.3): Z1 in the key part, the
+// opening of its commitment everywhere else, then a pool of keystream blocks.
+//
+// Z1 runs in two steps. The key part, part 1, derives both directions' keys and IVs from the private
+// handshake secret (1.3) or master secret (1.2) under the edge's handshake inputs, and asserts that the
+// public KeyCommitment C commits to exactly those wires under a private blind. Every later part takes the
+// keys, IVs and blind as private wires, asserts that they open the same C, which the edge supplies from
+// the key part and never from the part itself, and runs its keystreams from them.
 //
 // A record's offsets are functions of public lengths, so the circuit holds no grammar. The edge
 // computes a position template for every opened octet and the circuit only compares (Z2-Z4). Nothing
@@ -24,7 +31,8 @@ import (
 type partKind uint8
 
 const (
-	partKindEhlo partKind = iota + 1
+	// Part 1, the key part: Z1 and the EHLO record.
+	partKindKey partKind = iota + 1
 	partKindEnvelope
 	// π3: the header block, in either mode.
 	partKindMessage
@@ -43,11 +51,19 @@ type partShape struct {
 	// Keystream blocks of the header block, which Z5 scans, and of body records, which Z6 scans.
 	headerBlocks int
 	bodyBlocks   int
-	// Whether the pool's template can hold a local part. π1's cannot, which saves a table per octet.
+	// Whether the pool's template can hold a local part. The key part's cannot, which saves a table per
+	// octet.
 	localOctets bool
-	// Leaves Z1 out, so tests can run every other check quickly over keys given as a witness.
-	// partShapes never holds such a shape, and TestProductionShapesProveZ1 keeps it that way.
+	// Leaves Z1's derivation out of a key part, so tests can run every other check quickly over keys given
+	// as a witness, opened against C as a later part's are. partShapes never holds such a shape, and
+	// TestProductionShapesProveZ1 keeps it that way.
 	withoutKeySchedule bool
+}
+
+// Whether the circuit derives the keys from the handshake (Z1's first step), rather than taking them as
+// private wires that open C (its second).
+func (self *partShape) derivesKeys() bool {
+	return self.kind == partKindKey && !self.withoutKeySchedule
 }
 
 // The octets one keystream block covers.
@@ -112,22 +128,11 @@ type serverFinishedBlock struct {
 type partCircuit struct {
 	shape *partShape
 
-	// 1.3: H_shts, H_sh, H_sf as bits.
+	// The key part's alone. 1.3: H_shts, H_sh, H_sf as bits.
 	ShtsHash     []frontend.Variable `gnark:",public"`
 	HelloHash    []frontend.Variable `gnark:",public"`
 	FinishedHash []frontend.Variable `gnark:",public"`
-	Client       []*poolBlock
-	Server       []*serverBlock
-	Header       *headerScan
-	Body         []*bodyBlock
-	// How many replies the part's server records must hold in all (Z8).
-	ExpectedReplies frontend.Variable `gnark:",public"`
-	// 1 if the EHLO reply must offer CHUNKING (Z9).
-	RequireChunking frontend.Variable `gnark:",public"`
-	// 1 in DATA mode, where the last reply π3 covers is 354 (Z8).
-	DataMode frontend.Variable `gnark:",public"`
-
-	// 1.2: Z1's public inputs, and SF as the record the edge relayed.
+	// The key part's alone. 1.2: Z1's public inputs, and SF as the record the edge relayed.
 	ClientRandom       []frontend.Variable `gnark:",public"`
 	ServerRandom       []frontend.Variable `gnark:",public"`
 	ClientFinishedHash []frontend.Variable `gnark:",public"`
@@ -136,16 +141,31 @@ type partCircuit struct {
 	ResumeShift        []frontend.Variable `gnark:",public"`
 	ResumeTwoBlocks    frontend.Variable   `gnark:",public"`
 	ServerFinished     *serverFinishedBlock
+	// C, x then y: what the key part publishes, and what the edge supplies to every later part
+	// (DESIGN-DETAILS 3.2.2).
+	KeyCommitment []frontend.Variable `gnark:",public"`
+	Client        []*poolBlock
+	Server        []*serverBlock
+	Header        *headerScan
+	Body          []*bodyBlock
+	// How many replies the part's server records must hold in all (Z8).
+	ExpectedReplies frontend.Variable `gnark:",public"`
+	// 1 if the EHLO reply must offer CHUNKING (Z9).
+	RequireChunking frontend.Variable `gnark:",public"`
+	// 1 in DATA mode, where the last reply π3 covers is 354 (Z8).
+	DataMode frontend.Variable `gnark:",public"`
 
-	// 1.3: HS, in bits.
+	// The key part: HS (1.3) or the master secret (1.2), in bits.
 	HandshakeSecret []frontend.Variable
-	// 1.2: the master secret, in bits.
-	MasterSecret []frontend.Variable
-	// Only on a test shape that leaves Z1 out: the keys themselves.
+	MasterSecret    []frontend.Variable
+	// Every later part, and a test's key part without Z1's derivation: the keys and IVs, in bits. An IV
+	// is 12 octets, a 1.2 salt followed by 8 zero octets as the key part committed it.
 	ClientKey []frontend.Variable
 	ClientIv  []frontend.Variable
 	ServerKey []frontend.Variable
 	ServerIv  []frontend.Variable
+	// rho, C's blind, in 251 bits.
+	KeyBlind []frontend.Variable
 }
 
 func newPoolBlock(blockBytes int, local bool) *poolBlock {
@@ -162,18 +182,22 @@ func newPoolBlock(blockBytes int, local bool) *poolBlock {
 
 func newPartCircuit(shape *partShape) *partCircuit {
 	circuit := &partCircuit{shape: shape}
-	if shape.withoutKeySchedule {
+	circuit.KeyCommitment = make([]frontend.Variable, 2)
+	circuit.KeyBlind = make([]frontend.Variable, commitBlindBits)
+	if !shape.derivesKeys() {
 		circuit.ClientKey = make([]frontend.Variable, 8*shape.keyBytes())
 		circuit.ClientIv = make([]frontend.Variable, 8*tlsIv13Bytes)
 		circuit.ServerKey = make([]frontend.Variable, 8*shape.keyBytes())
 		circuit.ServerIv = make([]frontend.Variable, 8*tlsIv13Bytes)
 	}
-	if shape.version == tlsVersion13 {
+	switch {
+	case !shape.derivesKeys():
+	case shape.version == tlsVersion13:
 		circuit.ShtsHash = make([]frontend.Variable, 8*tlsSecretBytes)
 		circuit.HelloHash = make([]frontend.Variable, 8*tlsSecretBytes)
 		circuit.FinishedHash = make([]frontend.Variable, 8*tlsSecretBytes)
 		circuit.HandshakeSecret = make([]frontend.Variable, 8*tlsSecretBytes)
-	} else {
+	default:
 		circuit.ClientRandom = make([]frontend.Variable, 8*tlsRandomBytes)
 		circuit.ServerRandom = make([]frontend.Variable, 8*tlsRandomBytes)
 		circuit.ClientFinishedHash = make([]frontend.Variable, 8*tlsSecretBytes)
@@ -316,7 +340,7 @@ func checkPool(api frontend.API, shape *partShape, stream *circuitKeystream, blo
 	}
 }
 
-// Whether a part needs the server direction: everything but π1 (SPEC.md section 4.3).
+// Whether a part covers server records, and so runs the server direction's keystream.
 func (self *partShape) needsServerKeys() bool {
 	return 0 < self.serverBlocks
 }
@@ -325,7 +349,7 @@ func (self *partCircuit) Define(api frontend.API) error {
 	shape := self.shape
 	var keys *circuitKeys
 	switch {
-	case shape.withoutKeySchedule:
+	case !shape.derivesKeys():
 		keys = &circuitKeys{
 			clientKey: privateBytes(api, self.ClientKey),
 			clientIv:  privateBytes(api, self.ClientIv),
@@ -333,8 +357,9 @@ func (self *partCircuit) Define(api frontend.API) error {
 			serverIv:  privateBytes(api, self.ServerIv),
 		}
 	case shape.version == tlsVersion13:
+		// the key part derives both directions always, since C commits to both
 		keys = tls13CircuitKeys(api, privateBytes(api, self.HandshakeSecret), publicBytes(self.ShtsHash),
-			publicBytes(self.HelloHash), publicBytes(self.FinishedHash), shape.keyBytes(), shape.needsServerKeys())
+			publicBytes(self.HelloHash), publicBytes(self.FinishedHash), shape.keyBytes(), true)
 	default:
 		var chaining circuitHashState
 		for i := range chaining {
@@ -356,6 +381,12 @@ func (self *partCircuit) Define(api frontend.API) error {
 			assertBytesEqual(api, []circuitByte{octet.bits}, serverFinished[i:i+1])
 		}
 	}
+	// Z1's commitment: the key part's derived wires, or a later part's private ones, under rho open C
+	keyGenerators, _ := commitGeneratorSets()
+	for _, bit := range self.KeyBlind {
+		api.AssertIsBoolean(bit)
+	}
+	assertCommitment(api, keyGenerators, commitCircuitBits(keys.clientKey, keys.clientIv, keys.serverKey, keys.serverIv), self.KeyBlind, self.KeyCommitment)
 	clientStream := newCircuitKeystream(api, shape, keys.clientKey, keys.clientIv)
 	checkPool(api, shape, clientStream, self.Client)
 	if self.Header != nil {
@@ -377,8 +408,8 @@ func (self *partCircuit) Define(api frontend.API) error {
 		api.AssertIsEqual(self.RequireChunking, 0)
 		api.AssertIsEqual(self.DataMode, 0)
 	}
-	if shape.version == tlsVersion13 {
-		// 1.2's alone, and a wire of every shape
+	if !shape.derivesKeys() || shape.version == tlsVersion13 {
+		// a 1.2 key part's alone, and a wire of every shape
 		api.AssertIsEqual(self.ResumeTwoBlocks, 0)
 	}
 	return nil
@@ -484,6 +515,8 @@ func newZeroAssignment(shape *partShape) *partCircuit {
 	circuit.ExpectedReplies = 0
 	circuit.RequireChunking = 0
 	circuit.DataMode = 0
+	zero(circuit.KeyCommitment)
+	zero(circuit.KeyBlind)
 	zero(circuit.ServerKey)
 	zero(circuit.ServerIv)
 	zero(circuit.ShtsHash)
@@ -534,13 +567,23 @@ func clientRecordTemplate(session *sessionStatement, role recordRole, record *pa
 func partAssignment(shape *partShape, statement *partStatement) (*partCircuit, error) {
 	session := statement.session
 	circuit := newZeroAssignment(shape)
-	if session.version == tlsVersion13 {
+	switch {
+	case !shape.derivesKeys():
+	case session.version == tlsVersion13:
 		circuit.ShtsHash = assignBits(session.shtsHash)
 		circuit.HelloHash = assignBits(session.helloHash)
 		circuit.FinishedHash = assignBits(session.finishedHash)
-	} else if err := assignHandshake12(shape, statement, circuit); err != nil {
+	default:
+		if err := assignHandshake12(shape, statement, circuit); err != nil {
+			return nil, err
+		}
+	}
+	// the statement's C: the key part's own, or the one the edge kept from it
+	keyCommitment, err := assignCommitment(statement.keyCommitment)
+	if err != nil {
 		return nil, err
 	}
+	circuit.KeyCommitment = keyCommitment
 	roles, err := partRoles(statement)
 	if err != nil {
 		return nil, err
@@ -644,26 +687,30 @@ func assignHandshake12(shape *partShape, statement *partStatement, circuit *part
 	return nil
 }
 
-// The private side, added to a public assignment. A shape that needs no server keys still has wires
-// for them, which stay zero.
+// The private side, added to a public assignment.
 func assignWitness(circuit *partCircuit, statement *partStatement, witness *partWitness) {
-	if statement.session.version == tlsVersion13 {
-		circuit.HandshakeSecret = assignBits(witness.handshakeSecret)
-	} else {
-		circuit.MasterSecret = assignBits(witness.masterSecret)
-	}
-	if circuit.shape.withoutKeySchedule {
-		// the IV wires hold 12 octets; a 1.2 salt fills the first 4
-		padded := func(iv []byte) []frontend.Variable {
-			return assignBits(append(bytes.Clone(iv), make([]byte, tlsIv13Bytes-len(iv))...))
+	if witness.keyBlind != nil && witness.keyBlind.Sign() >= 0 && witness.keyBlind.BitLen() <= commitBlindBits {
+		for i, bit := range commitBlindBitsOf(witness.keyBlind) {
+			circuit.KeyBlind[i] = bit
 		}
-		circuit.ClientKey = assignBits(witness.clientKey)
-		circuit.ClientIv = padded(witness.clientIv)
-		// a test shape's wires exist whether or not it opens a server record
-		if 0 < len(witness.serverKey) {
+	}
+	switch {
+	case !circuit.shape.derivesKeys():
+		// the IV wires hold 12 octets; a 1.2 salt fills the first 4, the rest zero as C holds it
+		padded := func(iv []byte) []frontend.Variable {
+			return assignBits(append(bytes.Clone(iv), make([]byte, max(tlsIv13Bytes-len(iv), 0))...))
+		}
+		if len(witness.clientKey) == circuit.shape.keyBytes() && len(witness.serverKey) == circuit.shape.keyBytes() &&
+			len(witness.clientIv) <= tlsIv13Bytes && len(witness.serverIv) <= tlsIv13Bytes {
+			circuit.ClientKey = assignBits(witness.clientKey)
+			circuit.ClientIv = padded(witness.clientIv)
 			circuit.ServerKey = assignBits(witness.serverKey)
 			circuit.ServerIv = padded(witness.serverIv)
 		}
+	case statement.session.version == tlsVersion13:
+		circuit.HandshakeSecret = assignBits(witness.handshakeSecret)
+	default:
+		circuit.MasterSecret = assignBits(witness.masterSecret)
 	}
 	if circuit.Header != nil {
 		roles, err := partRoles(statement)

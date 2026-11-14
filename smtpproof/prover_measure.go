@@ -202,7 +202,21 @@ func newMeasureSession(shape *partShape, preamble *sessionPreamble) (*sessionSta
 	testHookSecret("measure_client_iv", witness.clientIv)
 	testHookSecret("measure_server_key", witness.serverKey)
 	testHookSecret("measure_server_iv", witness.serverIv)
+	blind, err := newCommitBlind("measure_key_blind")
+	if err != nil {
+		return nil, nil, err
+	}
+	witness.keyBlind = blind
 	return session, witness, nil
+}
+
+// The C a made-up session's key part would publish, which its later parts open.
+func newMeasureKeyCommitment(witness *partWitness) ([]byte, error) {
+	commitment, err := commitKeys(witness.clientKey, witness.clientIv, witness.serverKey, witness.serverIv, witness.keyBlind)
+	if err != nil {
+		return nil, err
+	}
+	return encodeCommitment(commitment), nil
 }
 
 // Seals each content as an application record of one direction from seq on, returning the records
@@ -243,8 +257,13 @@ func newMeasurePart(shape *partShape) (*partStatement, *partWitness, error) {
 		return nil, nil, err
 	}
 	witness.clientPlaintexts = plaintexts
+	keyCommitment, err := newMeasureKeyCommitment(witness)
+	if err != nil {
+		return nil, nil, err
+	}
 	statement := &partStatement{
 		session:       session,
+		keyCommitment: keyCommitment,
 		index:         measurePartIndex,
 		mode:          partModeData,
 		firstRecord:   firstRecord,
@@ -312,8 +331,13 @@ func newMeasureMessagePart(shape *partShape) (*partStatement, *partWitness, erro
 	}
 	witness.clientPlaintexts = clientPlaintexts
 	witness.serverPlaintexts = serverPlaintexts
+	keyCommitment, err := newMeasureKeyCommitment(witness)
+	if err != nil {
+		return nil, nil, err
+	}
 	statement := &partStatement{
 		session:                   session,
+		keyCommitment:             keyCommitment,
 		index:                     3,
 		mode:                      partModeData,
 		firstRecord:               firstRecord,

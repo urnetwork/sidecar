@@ -1,0 +1,40 @@
+{
+ "generators": [
+  {
+   "tag": "key",
+   "index": 0,
+   "x": "24604dc197ba78f100c3af761434bdc611e29e19d7d128a8db628418a3da4614",
+   "y": "0e474ae834abf1fac5ef17aec62a30917c1d735871b85f6b8a510da2a988cbf2"
+  },
+  {
+   "tag": "key",
+   "index": 1,
+   "x": "02607f2090b86190de41fbd9acb1a3c30a7271ad65455361a13e927e45cdb246",
+   "y": "229977a13da70c988ad3a9548900deb6abb59871df41bcabfab3df18ac588bd8"
+  },
+  {
+   "tag": "key",
+   "index": 2,
+   "x": "1d0e7357703b6a685e05650d12ff3bb845c18bd45f81f10c15b5ac5f7a0813e8",
+   "y": "0018898f708488fcc78c7a152f77d1059304aa0046e04927c385647ca72b4e38"
+  },
+  {
+   "tag": "key blind",
+   "index": 0,
+   "x": "2888645985ef6a32786edd0f5c44fad07799a65b8b9d0a168b7b54f421da76cc",
+   "y": "035874c5907934aa39273fc9d3d3701d005c8bc61a8289a19bd2d01a7206c91b"
+  },
+  {
+   "tag": "scan",
+   "index": 0,
+   "x": "20412adea66451ec722fff207353fb8385cee6b63c12b9c546423384de2cf913",
+   "y": "23ca45eeae5d0669acae410b399db09ac2e3c75d04bea5858c72317fd21502a0"
+  },
+  {
+   "tag": "scan blind",
+   "index": 0,
+   "x": "057eeb294f552af576f8c53dd0c23d56b9f45179612d5d2353a4e3182853f153",
+   "y": "0e18e5d2ffbb7c2b3299614d1765fb95857e6c4738923f5fc0ccdddaa2e20b7c"
+  }
+ ]
+}
