@@ -244,3 +244,21 @@ func CanonicalDnsRecordName(owner string) string {
 	}
 	return owner
 }
+
+// The body of POST /dns/key-record (§12.8, DNS-M7-02): a receiver's key for host, its DER SubjectPublicKeyInfo, and
+// the TlsKeyAttestation its identity key signed for that key and the host's identifier set (§13.8), so the TLSA the
+// write publishes names only a key the caller holds.
+type DnsKeyRecordRequest struct {
+	// mx, or mx.<scope> for a Team scope's receiver.
+	Host        string `json:"host"`
+	Spki        []byte `json:"spki"`
+	Attestation []byte `json:"attestation"`
+}
+
+// The answer of POST /dns/key-record: the zone's version once the host's TLSA holds the key.
+type DnsKeyRecordAnswer struct {
+	Version uint64 `json:"version"`
+}
+
+// §12.8's key route on the dns block.
+const DnsKeyRecordPath = "/dns/key-record"
