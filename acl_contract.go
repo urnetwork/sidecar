@@ -23,6 +23,10 @@
 //	  witness    otherwise, two admitted sidecars, neither revoked, parked nor suspended: control, with no reach grant;
 //	             what rides it is the receivers' to enforce, and providers deny IP on it (D-PROTO-18)
 //	  refuse     otherwise
+//	share a→b    a's network and a sidecar b's both have head rows, and a non-companion's two halves hold, each in
+//	             its own network's state: a reaches network:b's and network:a's reaches b (§8.11, acl_share.go): data,
+//	             Reason share, which CreateContract settles as FriendsAndFamily; read before the Public rule, since a
+//	             share is no Public contract
 //	Public a→b   a's network has a head row: a non-companion from a declared no-egress client (§20.8), from a sidecar
 //	             §8.6 hard-denies or a suspended client, or from a subject in exits or none (§17.8, D-BRIDGE-13) is
 //	             refused; anything else is data
@@ -106,6 +110,9 @@ const (
 	AclContractReasonDenied
 	// refused: no reach either way and no witness exception
 	AclContractReasonNoReach
+	// allowed: §8.11's share covers a non-companion between two networks toward a sidecar (acl_share.go), which
+	// CreateContract settles as FriendsAndFamily
+	AclContractReasonShare
 )
 
 // A short name for logs and metric labels.
@@ -141,6 +148,8 @@ func (self AclContractReason) String() string {
 		return "denied"
 	case AclContractReasonNoReach:
 		return "no_reach"
+	case AclContractReasonShare:
+		return "share"
 	}
 	return "unknown"
 }
@@ -226,8 +235,12 @@ type AclContractVerdict struct {
 	Reason AclContractReason
 	// The network whose rule decided. Zero for a skip.
 	NetworkId Id
-	// The reach the rule ran last, naming its rule or why none held (§8.17). Zero when none ran.
+	// The reach the rule ran last, naming its rule or why none held (§8.17). Zero when none ran. For a share, the
+	// source network's half: the source reaching the destination's network.
 	Decision AclDecision
+	// For a share, the destination network's half: the source's network reaching the destination (acl_share.go).
+	// Zero for any other verdict.
+	ShareDecision AclDecision
 	// a reply's verdict should no origin stand
 	noOrigin       AclContractOutcome
 	noOriginReason AclContractReason
@@ -448,6 +461,10 @@ func (self *AclContractGate) decide(request *AclContractRequest, now time.Time) 
 	nowMs := now.UnixMilli()
 	if destination.NetworkId == networkId {
 		return snapshot.Acl.contractNetwork(networkId, request, nowMs)
+	}
+	// a share is no Public contract, so its two halves are read before the Public rule's refusals (acl_share.go)
+	if verdict, shared := self.decideShare(request, snapshot.Acl, *heads, nowMs); shared {
+		return verdict
 	}
 	return snapshot.Acl.contractPublic(networkId, request, nowMs)
 }

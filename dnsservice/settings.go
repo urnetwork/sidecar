@@ -106,6 +106,17 @@ type DnsSettings struct {
 	// holds a released window to (§12.6's Keys), which the monitor validates against too. Public keys,
 	// so config and not secret_files. An edge whose root has none serves nothing.
 	TrustAnchors map[string][]string `yaml:"trust_anchors"`
+	// The roots whose DS the registrar publishes (D-DNS-5; DNS-M7-04), canonical once loaded. The DS
+	// itself is external: a person publishes it once the monitor reports the root's 30 clean canary days,
+	// then lists the root here, and from then on the monitor's public resolvers must validate its canary
+	// rather than only hold it. Each must be a root with trust_anchors, since a DS names a KSK. Empty, the
+	// default, is none: validators treat every root as insecure, so a signing fault harms no one.
+	DsPublished []string `yaml:"ds_published"`
+}
+
+// Whether the registrar publishes root's DS, root canonical.
+func (self *DnsSettings) DsPublishedFor(root string) bool {
+	return slices.Contains(self.DsPublished, root)
 }
 
 // One root's own records (§12.4, §12.7, §13.8, §14.6): what DnsReconcileRootRecords writes at <root>,
@@ -482,6 +493,9 @@ func LoadDnsSettings(data []byte) (*DnsSettings, error) {
 		}
 		settings.TrustAnchors = canonical
 	}
+	for index, root := range settings.DsPublished {
+		settings.DsPublished[index] = dns.CanonicalName(root)
+	}
 	if err := settings.Validate(); err != nil {
 		return nil, err
 	}
@@ -603,6 +617,17 @@ func (self *DnsSettings) Validate() error {
 		}
 		if _, err := ParseDnsTrustAnchors(root, anchors); err != nil {
 			return refuse("trust_anchors: %s: %v", root, err)
+		}
+	}
+	for index, root := range self.DsPublished {
+		if !slices.Contains(self.Roots, root) {
+			return refuse("ds_published: %s is no root", root)
+		}
+		if slices.Contains(self.DsPublished[:index], root) {
+			return refuse("ds_published: %s is listed twice", root)
+		}
+		if len(self.TrustAnchors[root]) == 0 {
+			return refuse("ds_published: %s has no trust_anchors, and a DS names a KSK", root)
 		}
 	}
 	for root, records := range self.RootRecords {
