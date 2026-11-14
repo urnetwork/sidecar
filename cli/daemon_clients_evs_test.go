@@ -7,6 +7,8 @@
 //	       gkm, KF1 by its own key client at its follower's state; git clones it through git-remote-ur and the daemon's
 //	       git mode, served by the network's evs client from its local tier; a commit pushed the same way passes the
 //	       mount's hooks, which relay to the daemon, and evs commits main with it; and a second clone reads it back
+//	admit  on the same world, the daemon's Sidecar admits a device with its own identity key, which its follower, its
+//	       key client and the gate all hold
 //	first  the network's first device bootstrapping on evs: its key client takes the genesis state, chooses a leaf and
 //	       builds its MLS engine under the Genesis's hash, and evs's real create route places the config repo; KF1 at
 //	       that state is refused, since a GenRotate's auth pin is past position 0 while the first head's push is signed
@@ -23,6 +25,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
 	"errors"
 	"os"
 	"os/exec"
@@ -31,8 +35,11 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 	"github.com/urnetwork/sidecar/sidecartest"
 	"github.com/urnetwork/sidecar/sidecartest/enginenet"
 )
@@ -265,6 +272,49 @@ func TestDaemonServesAGitSessionOverEvs(t *testing.T) {
 	readme, err := os.ReadFile(filepath.Join(other, "README"))
 	if err != nil || string(readme) != "served end to end\n" {
 		t.Fatalf("the second clone's README: %q %v", readme, err)
+	}
+}
+
+// The daemon's Sidecar admits a device with its own identity key, as its owner member's device: the SidecarAdmit lands
+// at api, and the daemon's follower, the key client it hands each state and the gate evs and gkm judge by all hold the
+// device admitted, its row naming the admission's hash.
+func TestDaemonAdmitsADeviceTheGateHolds(t *testing.T) {
+	world := newTestUrFollowWorld(t, 1)
+	engines := enginenet.NewEngines(t, world.net, nil)
+	network := world.networks[0]
+	networkId := network.NetworkId()
+	engines.OpenNetwork(networkId)
+	running := world.host(network, nil)
+	world.standing(running, network)
+	if err := engines.Sync(world.ctx, networkId); err != nil {
+		t.Fatal(err)
+	}
+	deviceKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x5d}, ed25519.SeedSize))
+	deviceId := sidecar.NewId()
+	pin, err := engines.PostStatement(world.ctx, running, bridge.SignedType_SIGNED_SIDECAR_ADMIT, func(header *bridge.StatementHeader) proto.Message {
+		return &protocol.SidecarAdmit{
+			Header:            header,
+			NetworkId:         networkId.Bytes(),
+			SidecarId:         deviceId.Bytes(),
+			IdentityPublicKey: deviceKey.Public().(ed25519.PublicKey),
+			IdentityAlg:       "ed25519",
+			MemberId:          network.Owner().MemberId.Bytes(),
+		}
+	})
+	if err != nil {
+		t.Fatalf("the admission: %v", err)
+	}
+	row := running.ConfigFollower().Client().State().SidecarRow(deviceId)
+	if row == nil || len(row.GetAdmissionSha256()) != sha256.Size || len(row.GetAdmissionSigners()) == 0 ||
+		!bytes.Equal(row.GetAdmissionSigners()[0], running.Identity().SidecarId.Bytes()) {
+		t.Fatalf("the follower's row of the admitted device: %v", row)
+	}
+	if state := testUrClientsOf(running).gkm.newestState(); state == nil || state.Pin().GetVersion() < pin.GetVersion() ||
+		state.SidecarRow(deviceId) == nil {
+		t.Fatal("the key client does not hold the admission's state")
+	}
+	if snapshot, status := engines.Gate().State(networkId); status != sidecar.AclGateLoaded || !snapshot.Acl.Admitted(deviceId) {
+		t.Fatal("the gate does not hold the admitted device")
 	}
 }
 
