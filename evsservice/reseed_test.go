@@ -30,7 +30,11 @@ type reseedFixture struct {
 }
 
 func newReseedFixture(t *testing.T) *reseedFixture {
-	push := newPushFixture(t, nil)
+	return reseedFixtureOf(newPushFixture(t, nil))
+}
+
+// push's world put in a recovery.
+func reseedFixtureOf(push *pushFixture) *reseedFixture {
 	fixture := &reseedFixture{pushFixture: push, adminId: push.check.otherId}
 	push.auth.grant(fixture.adminId, push.check.repoId, sidecar.AclEvsAdmin)
 	fixture.project(nil)
@@ -716,6 +720,82 @@ func TestReseedStatementIsKeptAndServedWithTheHead(t *testing.T) {
 	}
 	if !bytes.Equal(stored(), second.GetStatement()) {
 		t.Fatal("reseed/ still holds the first statement")
+	}
+}
+
+// Evacuation and the nightly pass over re-seeded records (§11.13's when and bytes rows): a reseed record is committed
+// where its ref's history names its push, so past 25 h it leaves its batch for a parcel as a push record does, byte
+// for byte; the re-seed's retry, a slot call under its version and a read then find it in the parcel, and the nightly
+// pass counts it there and deletes nothing.
+func TestReseededRecordsEvacuateAndCountAsAnyOther(t *testing.T) {
+	nightly := newNightlyFixture(t)
+	fixture := reseedFixtureOf(nightly.pushFixture)
+	check := fixture.check
+	slotId, slotObject, slot := eraseTestSlot(t, "evacuated", 1)
+	named := fixture.keptWithSlot(slotId, slotObject, slot, "a")
+	fixture.requireCommitted(fixture.reseed(named), 1)
+	next := fixture.kept()
+	fixture.create(next, "b")
+	nextBody := fixture.reseedBody(next)
+	fixture.requireCommitted(fixture.reseed(nextBody), 2)
+	fixture.awaitStepEights()
+	before := fixture.recordAt(check.refId, 1)
+
+	nightly.age()
+	result := nightly.mustRun()
+	if result.KeptCount != 2 || result.DeadCount != 0 || result.ParcelCount != 1 || result.MinuteWaitingCount != 0 || result.HasBatches {
+		t.Fatalf("result %+v", result)
+	}
+	if keys := nightly.keys("meta-1", batchKeyPrefix); len(keys) != 0 {
+		t.Fatalf("batches left: %v", keys)
+	}
+	parcels := nightly.keys("meta-1", parcelKeyPrefix)
+	if len(parcels) != 1 {
+		t.Fatalf("parcels %v", parcels)
+	}
+	after := fixture.recordAt(check.refId, 1)
+	if after.Type != protocol.EvsBatchRecordType_EVS_BATCH_RESEED || !bytes.Equal(after.Body, before.Body) || after.PushId != before.PushId {
+		t.Fatalf("version 1's record from its parcel is type %s", after.Type)
+	}
+
+	// 5a finds the re-seeded push committed, from its parcel
+	fixture.requireCommitted(fixture.reseed(named), 1)
+	fixture.requireCommitted(fixture.reseed(nextBody), 2)
+	if fixture.head().Version() != 2 {
+		t.Fatalf("head at %d after the retries", fixture.head().Version())
+	}
+	// a slot comes last, after its version's record has left its batch
+	if recorder := fixture.reseedSlot(named, slotId, slot); recorder.Code != http.StatusOK {
+		t.Fatalf("status %d (%s) for a slot named by an evacuated version", recorder.Code, refusalOf(t, recorder).GetCode())
+	}
+	if indexes := fixture.slotIndexes(slotId); len(indexes) != 1 {
+		t.Fatalf("slot keys %v", indexes)
+	}
+	// and under the version that does not name it, still not
+	requireRefusal(t, fixture.reseedSlot(nextBody, sidecar.NewId(), slot), http.StatusConflict, protocol.EvsRefusalCode_EVS_REFUSAL_SLOT_UNKNOWN)
+	reply := fixture.readPath(fixture.token(check.signerId), 0, true, checkTestPath("a"))
+	if reply.head.GetVersion() != 2 || len(reply.statements) != 2 || !bytes.Equal(reply.statements[0].GetStatement(), named.GetStatement()) {
+		t.Fatalf("a read of the evacuated ref: head %d, %d statements", reply.head.GetVersion(), len(reply.statements))
+	}
+
+	// the nightly pass counts the records in their parcel and deletes nothing of the repo
+	parcel, err := fixture.cluster.Head(fixture.ctx, parcels[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	pass := nightly.runPass()
+	if !pass.Complete || pass.More || pass.RepoCount != 1 || pass.UnknownNetworkRepoCount != 0 {
+		t.Fatalf("the nightly pass %+v", pass)
+	}
+	stored := pass.NetworkBytes[check.networkId]
+	if stored == nil || stored.ParcelByteCount != parcel.ByteCount || stored.BatchRecordByteCount != 0 {
+		t.Fatalf("stored after evacuation %+v", stored)
+	}
+	if keys := nightly.keys("meta-1", parcelKeyPrefix); len(keys) != 1 || keys[0] != parcels[0] {
+		t.Fatalf("parcels after the nightly pass: %v", keys)
+	}
+	if indexes := fixture.slotIndexes(slotId); len(indexes) != 1 {
+		t.Fatalf("slot keys %v after the nightly pass", indexes)
 	}
 }
 
