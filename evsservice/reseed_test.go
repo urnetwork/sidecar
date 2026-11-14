@@ -314,6 +314,7 @@ type reseedDevice struct {
 	reseedCallCount int
 }
 
+// The admin's device, its mirror empty.
 func (self *reseedFixture) device() *reseedDevice {
 	t := self.t
 	t.Helper()
