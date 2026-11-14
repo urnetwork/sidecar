@@ -347,7 +347,8 @@ func TestSubscriptionsRefuseADeletedOrShreddingRepo(t *testing.T) {
 }
 
 // §11.10's hint row: hints coalesce to 10 a second a repo; a commit inside the interval waits for its end and goes
-// with the newest commit's delta.
+// with the newest commit's delta. Each push's step 8 ends before the next push, so the three raise the push sequence
+// in the order they committed, and the newest commit's hint is the one of the highest sequence.
 func TestHintsCoalesceToTenASecondARepo(t *testing.T) {
 	fixture := newPushFixture(t, nil)
 	fixture.allowSubscribers(1000)
@@ -355,17 +356,20 @@ func TestHintsCoalesceToTenASecondARepo(t *testing.T) {
 	first := fixture.plan()
 	fixture.create(first, "a")
 	fixture.requireCommitted(fixture.push(first), 1)
+	fixture.awaitStepEights()
 	second := fixture.plan()
 	fixture.create(second, "b")
 	fixture.requireCommitted(fixture.push(second), 2)
+	fixture.awaitStepEights()
 	third := fixture.plan()
 	fixture.create(third, "c")
 	fixture.requireCommitted(fixture.push(third), 3)
 	if hints := fixture.hints(fixture.check.clientId); len(hints) != 1 {
 		t.Fatalf("%d hints inside one interval", len(hints))
 	}
-	sent, changed := fixture.engine.notifier.(*EvsHintNotifier).Sent()
-	fixture.clock.Advance(evsHintPerRepoInterval)
+	notifier := fixture.engine.notifier.(*EvsHintNotifier)
+	sent, changed := notifier.Sent()
+	fixture.clock.Advance(notifier.settings.HintPerRepoInterval)
 	if sent < 2 {
 		<-changed
 	}
@@ -377,6 +381,71 @@ func TestHintsCoalesceToTenASecondARepo(t *testing.T) {
 	if err := proto.Unmarshal(hints[1].Body, delta); err != nil || delta.GetVersion() != 3 {
 		t.Fatalf("the coalesced hint carries version %d %v", delta.GetVersion(), err)
 	}
+}
+
+// Step 8s of consecutive commits overlap, so hints reach the notifier in another order than their push sequences:
+// of the hints that wait out one interval, the one of the highest sequence goes, whichever came last, to the clients
+// of each. A lower sequence taking its place would leave the higher one unhinted until the repo's next push.
+func TestHintsCoalesceToTheHighestSequence(t *testing.T) {
+	ctx := t.Context()
+	clock := sidecartest.NewFakeClock(time.Unix(1793836800, 0))
+	host := sidecartest.NewFakeHost(ctx, clock, nil, nil, nil)
+	settings := DefaultEvsHintSettings()
+	notifier := NewEvsHintNotifierWithSettings(ctx, clock, host.Redis, host.Push, nil, settings, sidecar.NewNoopLogger())
+	repoId := testId("reordered repo")
+	firstClientId, secondClientId, thirdClientId := testId("first client"), testId("second client"), testId("third client")
+	hint := func(sequence uint64) *sidecar.ClientHint {
+		return &sidecar.ClientHint{
+			Topic:   sidecar.PushTopicEvs(repoId),
+			Version: sequence,
+			Kind:    uint32(protocol.MessageType_EVS_HEAD_CHANGED),
+			Body:    []byte{byte(sequence)},
+		}
+	}
+	requireHints := func(clientId sidecar.Id, sequences ...uint64) {
+		t.Helper()
+		hints := host.Push.Hints(connect.Id(clientId))
+		if len(hints) != len(sequences) {
+			t.Fatalf("%d hints, not %d", len(hints), len(sequences))
+		}
+		for i, sequence := range sequences {
+			if hints[i].Version != sequence || !bytes.Equal(hints[i].Body, []byte{byte(sequence)}) {
+				t.Fatalf("hint %d carries sequence %d and body %v, not sequence %d", i, hints[i].Version, hints[i].Body, sequence)
+			}
+		}
+	}
+	flush := func(sentCount int) {
+		t.Helper()
+		sent, changed := notifier.Sent()
+		clock.Advance(settings.HintPerRepoInterval)
+		if sent < sentCount {
+			<-changed
+		}
+		if sent, _ := notifier.Sent(); sent != sentCount {
+			t.Fatalf("%d hints sent, not %d", sent, sentCount)
+		}
+	}
+
+	// the repo's first hint goes at once and opens the interval
+	notifier.send(repoId, hint(1), []sidecar.Id{firstClientId})
+	requireHints(firstClientId, 1)
+	// sequence 3 arrives ahead of sequence 2
+	notifier.send(repoId, hint(3), []sidecar.Id{secondClientId})
+	notifier.send(repoId, hint(2), []sidecar.Id{thirdClientId})
+	requireHints(secondClientId)
+	requireHints(thirdClientId)
+	flush(2)
+	requireHints(firstClientId, 1)
+	requireHints(secondClientId, 3)
+	requireHints(thirdClientId, 3)
+
+	// in sequence order the later hint still takes the waiting one's place
+	notifier.send(repoId, hint(4), []sidecar.Id{secondClientId})
+	notifier.send(repoId, hint(5), []sidecar.Id{thirdClientId})
+	flush(3)
+	requireHints(firstClientId, 1)
+	requireHints(secondClientId, 3, 5)
+	requireHints(thirdClientId, 3, 5)
 }
 
 // §22.4's CROSSSLOT lint over evsservice's Redis calls and scripts: each names keys under one hash tag, and the

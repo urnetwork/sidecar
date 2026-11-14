@@ -13,7 +13,8 @@
 //	hint      §6.8's PushHint per matching client: topic evs:<repo_id>, version the push sequence, kind EVS_HEAD_CHANGED
 //	          (0x1401) and the delta EvsHeadChanged{ref_id, version, chain, push_id}, coalesced to HintPerRepoInterval
 //	          a repo (10 a second): a commit inside the interval waits for its end, and the newest commit's hint goes
-//	          then to every client the coalesced commits matched
+//	          then to every client the coalesced commits matched; newest is by push sequence, since step 8s of
+//	          consecutive commits overlap and their hints can arrive here in another order than they raised it
 //
 // Every family touched is soft state: a failure is logged and is a gap, which clients' hourly resync covers, never an
 // alarm. Each script touches one hash tag. Not built: the rev/ check of each holder (§11.10's "holders a rev/ object
@@ -34,11 +35,23 @@ import (
 	"github.com/urnetwork/sidecar/protocol"
 )
 
-// §11.10's hint row: at most 10 hints a second a repo.
-const evsHintPerRepoInterval = 100 * time.Millisecond
+// What tunes the notifier.
+type EvsHintSettings struct {
+	// The least time between two hints of one repo: 100 ms, §11.10's hint row's 10 hints a second a repo. A hint
+	// inside it waits for its end. Non-positive sends every hint at once.
+	HintPerRepoInterval time.Duration
+	// How many repos' lease copies, and how many repos' hint states, a process keeps: 100,000 each, about one
+	// process's busy repos. Past it an entry goes for each one added, a lease copy to be read again and a hint state
+	// only while no hint waits in it. Non-positive keeps one.
+	RepoStateCount int
+}
 
-// How many repos' lease copies and hint states a process keeps; past it, idle ones go.
-const evsHintRepoStateCount = 100 * 1000
+func DefaultEvsHintSettings() *EvsHintSettings {
+	return &EvsHintSettings{
+		HintPerRepoInterval: 100 * time.Millisecond,
+		RepoStateCount:      100 * 1000,
+	}
+}
 
 // A repo's leases as this process last read them, with the version they were read at.
 type evsLeaseCopy struct {
@@ -55,29 +68,39 @@ type evsRepoHintState struct {
 
 // See the file header.
 type EvsHintNotifier struct {
-	ctx   context.Context
-	clock sidecar.Clock
-	redis sidecar.Redis
-	push  sidecar.Push
-	views EvsGateViews
-	log   sidecar.Logger
+	ctx      context.Context
+	clock    sidecar.Clock
+	redis    sidecar.Redis
+	push     sidecar.Push
+	views    EvsGateViews
+	settings *EvsHintSettings
+	log      sidecar.Logger
 
-	stateLock  sync.Mutex
+	stateLock   sync.Mutex
 	leaseCopies map[sidecar.Id]*evsLeaseCopy
-	repoHints  map[sidecar.Id]*evsRepoHintState
+	repoHints   map[sidecar.Id]*evsRepoHintState
 	// hints sent, for a test to wait on
 	sentCount *sidecar.MonitorValue[int]
 }
 
-// The notifier over a host's Redis and Push and the gate views, until ctx ends. A nil redis raises nothing; a nil
-// push or views hints no one.
+// The notifier over a host's Redis and Push and the gate views, until ctx ends, with the default settings. A nil
+// redis raises nothing; a nil push or views hints no one.
 func NewEvsHintNotifier(ctx context.Context, clock sidecar.Clock, redis sidecar.Redis, push sidecar.Push, views EvsGateViews, log sidecar.Logger) *EvsHintNotifier {
+	return NewEvsHintNotifierWithSettings(ctx, clock, redis, push, views, nil, log)
+}
+
+// As NewEvsHintNotifier, with settings, which may be nil for the defaults.
+func NewEvsHintNotifierWithSettings(ctx context.Context, clock sidecar.Clock, redis sidecar.Redis, push sidecar.Push, views EvsGateViews, settings *EvsHintSettings, log sidecar.Logger) *EvsHintNotifier {
+	if settings == nil {
+		settings = DefaultEvsHintSettings()
+	}
 	return &EvsHintNotifier{
 		ctx:         ctx,
 		clock:       clock,
 		redis:       redis,
 		push:        push,
 		views:       views,
+		settings:    settings,
 		log:         log,
 		leaseCopies: map[sidecar.Id]*evsLeaseCopy{},
 		repoHints:   map[sidecar.Id]*evsRepoHintState{},
@@ -149,7 +172,7 @@ func (self *EvsHintNotifier) leases(ctx context.Context, repoId sidecar.Id) ([]*
 	}
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	if evsHintRepoStateCount <= len(self.leaseCopies) {
+	if self.settings.RepoStateCount <= len(self.leaseCopies) {
 		for evicted := range self.leaseCopies {
 			delete(self.leaseCopies, evicted)
 			break
@@ -210,7 +233,11 @@ func evsLeaseMatches(prefix sidecar.EvsTokenPath, changed []sidecar.EvsTokenPath
 	return false
 }
 
-// Sends hint to clientIds now, or, inside the repo's interval, at its end with whatever newer hint joins it.
+// Sends hint to clientIds now, or, inside the repo's interval, at its end: then the waiting hint with the highest
+// push sequence goes, to the clients of every hint that waited. Hints reach here in any order, since each commit's
+// step 8 runs on its own, so a hint that arrives after one with a higher sequence adds its clients and no more:
+// were it to take the waiting hint's place, the higher sequence would not be hinted before the repo's next push or
+// the clients' hourly resync.
 func (self *EvsHintNotifier) send(repoId sidecar.Id, hint *sidecar.ClientHint, clientIds []sidecar.Id) {
 	now := self.clock.Now()
 	sendNow := false
@@ -219,7 +246,7 @@ func (self *EvsHintNotifier) send(repoId sidecar.Id, hint *sidecar.ClientHint, c
 		defer self.stateLock.Unlock()
 		state, ok := self.repoHints[repoId]
 		if !ok {
-			if evsHintRepoStateCount <= len(self.repoHints) {
+			if self.settings.RepoStateCount <= len(self.repoHints) {
 				for evictedRepoId, evicted := range self.repoHints {
 					if evicted.pending == nil {
 						delete(self.repoHints, evictedRepoId)
@@ -238,11 +265,13 @@ func (self *EvsHintNotifier) send(repoId sidecar.Id, hint *sidecar.ClientHint, c
 		}
 		switch {
 		case state.pending != nil:
-			// a hint already waits: the newer one takes its place, for the clients of both
+			// a hint already waits: the one of the higher push sequence stays, for the clients of both
+			if state.pending.Version < hint.Version {
+				state.pending = hint
+			}
+		case now.Sub(state.lastSent) < self.settings.HintPerRepoInterval:
 			state.pending = hint
-		case now.Sub(state.lastSent) < evsHintPerRepoInterval:
-			state.pending = hint
-			self.clock.AfterFunc(state.lastSent.Add(evsHintPerRepoInterval).Sub(now), func() {
+			self.clock.AfterFunc(state.lastSent.Add(self.settings.HintPerRepoInterval).Sub(now), func() {
 				go self.flush(repoId)
 			})
 		default:
