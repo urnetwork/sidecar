@@ -330,7 +330,8 @@ func (self *Ingest) saveRunWithLock(run *ingestRun) {
 	run.dirty = false
 }
 
-// Counts a gap on the run's file, where it occurred, and tells the restore point its next interval is foreign.
+// Counts a gap on the run's file, where it occurred, and, for a gap that can hide a change, tells the restore point its
+// next interval is foreign.
 func (self *Ingest) gap(ctx context.Context, network McpNetwork, networkId sidecar.Id, runId sidecar.Id, code string) {
 	runs, err := network.Runs()
 	if err != nil {
@@ -339,9 +340,23 @@ func (self *Ingest) gap(ctx context.Context, network McpNetwork, networkId sidec
 	if err := runs.AddGap(ctx, runId, code); err != nil && !errors.Is(err, sidecar.ErrRunUnknown) {
 		self.log.Warningf("[ingest]a gap was not counted: %s", err)
 	}
-	if self.restore != nil {
+	if self.restore != nil && ingestGapHidesChange(code) {
 		self.restore.NoteGap(networkId, runId)
 	}
+}
+
+// Whether a coverage gap can hide a change from §16.7's attribution, which then reads the interval foreign: a missed
+// event, a hook that failed, downtime, a changed harness config, a lost run file. A gap that marks only a cut or a
+// stand-in in the record (a redaction, an oversize body, a truncated list or transcript, a tool id the harness never
+// gives, as Cursor never does, a prompt-skipping mode, a spool drop) hides no hook from the restore point, whose ledger
+// keeps every observation itself; were it foreign, no Cursor edit could ever be restored (MCP-M3-27's FS-26).
+func ingestGapHidesChange(code string) bool {
+	switch code {
+	case sidecar.RecordCoverageGapMissedEvent, sidecar.RecordCoverageGapHookFailure, sidecar.RecordCoverageGapDowntime,
+		sidecar.RecordCoverageGapConfigChanged, sidecar.RecordCoverageGapRunFileMissing:
+		return true
+	}
+	return false
 }
 
 // The network's redactor, as the seam gives it.

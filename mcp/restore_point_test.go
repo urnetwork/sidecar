@@ -35,10 +35,15 @@ type restoreTestEnv struct {
 // A repository with one commit holding committed.txt and dir/nested.txt, and a .gitignore of *.log.
 func newRestoreTestEnv(t *testing.T) *restoreTestEnv {
 	t.Helper()
+	return newRestoreTestEnvIn(t, t.TempDir())
+}
+
+// The same repository in dir, an empty directory the test removes.
+func newRestoreTestEnvIn(t *testing.T, dir string) *restoreTestEnv {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not on PATH")
 	}
-	dir := t.TempDir()
 	// macOS gives a symlinked temp dir, which git reports resolved
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 		dir = resolved
