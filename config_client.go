@@ -186,6 +186,9 @@ type ConfigClient struct {
 	saveDue bool
 
 	configLog atomic.Pointer[ConfigLog]
+	// the log a start from the genesis builds while its first page applies, nil outside one: what VerifiedState
+	// answers before configLog holds it
+	starting atomic.Pointer[ConfigLog]
 	// the newest applied position, which WaitFor watches
 	position *MonitorValue[uint64]
 
@@ -280,6 +283,17 @@ func (self *ConfigClient) State() *ConfigState {
 		return nil
 	}
 	return log.State()
+}
+
+// The newest state this client verified, the log a start from the genesis is still building included: while the first
+// page applies, S(n-1) of the entry applying, which State answers only once the page is published. What evs's verifier
+// judges the config repo's pushes at while a base's head is read (QD-804): a base lands on S(n-1), and the first page
+// holds base 1. Nil before the first state. Safe for concurrent use, with no lock.
+func (self *ConfigClient) VerifiedState() *ConfigState {
+	if starting := self.starting.Load(); starting != nil {
+		return starting.State()
+	}
+	return self.State()
 }
 
 // The newest verified (n, A_n), nil before the first read.
@@ -568,7 +582,12 @@ func (self *ConfigClient) start(log *ConfigLog, projection *ConfigProjection, so
 		if err != nil {
 			return nil, err
 		}
-		if _, err := started.ApplyRun(projection.Entries, source); err != nil {
+		// each base of the page is checked on the state it lands on, which configLog holds only once the page is
+		// published: the head reader's verifier finds it through VerifiedState meanwhile
+		self.starting.Store(started)
+		_, err = started.ApplyRun(projection.Entries, source)
+		self.starting.Store(nil)
+		if err != nil {
 			self.onApplyError(started, err)
 			return nil, err
 		}
