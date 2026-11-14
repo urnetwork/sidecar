@@ -424,7 +424,8 @@ func (self *sidecarTlsCt) degraded() bool {
 	return watch != nil && watch.Degraded()
 }
 
-// Why a bridge_alarm fired: QD-557's five, DESIGN-DETAILS 12.7's three and this build's map_refused.
+// Why a bridge_alarm fired: QD-557's five, DESIGN-DETAILS 12.7's three, this build's map_refused and §17.4's
+// shared_block.
 type SidecarBridgeAlarm string
 
 const (
@@ -448,6 +449,9 @@ const (
 	SidecarBridgeAlarmCatchUpWaiting SidecarBridgeAlarm = "catch_up_waiting"
 	// A map onto a block address or one of the daemon's listeners, which the compile voids (§17.6, D-BRIDGE-19).
 	SidecarBridgeAlarmMapRefused SidecarBridgeAlarm = "map_refused"
+	// Another network this device joined first holds the same block, so the device routes it to that network alone
+	// until an admin of either cycles one (§17.4's uniqueness row; BRIDGE-M6-06).
+	SidecarBridgeAlarmSharedBlock SidecarBridgeAlarm = "shared_block"
 )
 
 // Why a record_alarm fired (plan-RECORD-alarm-kinds): a closed set of 14.

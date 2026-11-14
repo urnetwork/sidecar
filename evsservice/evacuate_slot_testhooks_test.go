@@ -8,10 +8,15 @@
 //	       created under its origin, its step 7 fails and its recheck refuses it 412 PATH_EPOCH; its retoken takes
 //	       the slot over after the settle age and commits, and evacuation keeps the slot, the retoken's
 //	B      another writer lists a committed version's young slot with its bytes and is refused 409 SLOT_STALE at its
-//	       own step 6, while a push of its own commits at the barrier after it; evacuation keeps the slot
-//	late   an attempt held between its record and its slot PUT past 26 h: evacuation drops its record and finds no
-//	       slot, the PUT then stores one that nothing deletes, and its step 7 ends on the fence; held instead just
-//	       after its PUT, its slot is unsettled when evacuation HEADs it, and stays
+//	       own step 6's slot round, before any record of its own (QD-806's order), while a push of its own commits
+//	       at the barrier after it; evacuation finds nothing of it and keeps the slot
+//	slept  an attempt held between its slots and its record past 25 h (QD-806's order): evacuation finds no record of
+//	       it and leaves its slot, one no record names; released, it appends its record, which its step 7 cannot
+//	       commit, and 26 h on evacuation deletes the dead record's own settled slot with it
+//
+// In QD-806's order an attempt's record never comes before its slots, so 14.5's late slot PUT, stored after its record
+// left, and an attempt's own slot found unsettled at its record's evacuation no longer arise from one attempt; the
+// unsettled row stays held by evacuate_slot_test.go's row test and the NoSettle twin (slot_twins_testhooks_test.go).
 
 package evsservice
 
@@ -19,7 +24,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
@@ -80,9 +84,9 @@ func TestEvacuationKeepsTheSlotOfARetokenWhoseRefusedAttemptPassedStepSix(t *tes
 }
 
 // B's race at the barriers: another writer lists a committed version's young slot as new with its bytes. Its slot
-// round finds the committed statement's origin and refuses it 409 SLOT_STALE, recorded, before any step 7, while a
-// push of its own creating the same path commits at the barrier after its step 6. 26 h on, evacuation drops its
-// record and keeps the slot, another statement's.
+// round finds the committed statement's origin and refuses it 409 SLOT_STALE, recorded, before any step 7 and before
+// any record of its own (QD-806's order), while a push of its own creating the same path commits at the barrier after
+// its step 6. 26 h on, evacuation finds the two committed records alone and the slot stands, another statement's.
 func TestEvacuationKeepsACommittedVersionsSlotARefusedRelistingListed(t *testing.T) {
 	fixture := newSlotEvacuateFixture(t)
 	slotId, _, slotBody := checkTestSlot(t, "committed at the barrier")
@@ -109,95 +113,63 @@ func TestEvacuationKeepsACommittedVersionsSlotARefusedRelistingListed(t *testing
 	fixture.awaitStepEights()
 	fixture.requireSlotOrigin(slotId, slotBody, committedOrigin)
 
-	// the re-listing's record is dead, and the two committed ones are kept
+	// the re-listing left no record, and the two committed ones are kept
 	fixture.requireEvacuated(func(result *EvacuationResult) bool {
-		return result.DeadCount == 1 && result.KeptCount == 2 && result.SlotForeignCount == 1 && result.SlotDeletedCount == 0
+		return result.DeadCount == 0 && result.KeptCount == 2 && result.SlotForeignCount == 0 && result.SlotDeletedCount == 0
 	})
 	fixture.requireSlotOrigin(slotId, slotBody, committedOrigin)
 	fixture.requireSlotReadBack(map[uint64]sidecar.EvsTokenPath{1: checkTestPath("a")}, checkTestPath("a"), slotId, slotBody)
 }
 
-// The late slot PUT, stored after its record (14.5's first leak): an attempt passes step 6's record and is held
-// before its slot PUT while 26 h pass and evacuation fences the ref, finds the record dead and its slot absent, and
-// drops the record with its batch. The PUT then stores the slot under the attempt's origin, its step 7 ends 503
-// unknown on the fence, and nothing deletes the slot: a later run finds no batch.
-func TestEvacuationLeavesASlotStoredAfterItsDeadRecordLeft(t *testing.T) {
+// The slept attempt, in QD-806's order: an attempt passes its slot round and is held before its record's append
+// while 25 h pass, its slot standing under its origin with no record naming it; evacuation, run then, finds no record
+// of it, keeps the other commit's and deletes nothing. Released, the attempt appends its record, a day younger than
+// its slot, and its step 7, past 5 s of its step 4, reruns step 5, which refuses a statement past its time bound, so
+// it never commits. 26 h on, its record is dead and evacuation deletes its own settled slot with it: where the order
+// 14.5 was written on left a slot stored after its record had left, nothing is left here.
+func TestEvacuationDeletesTheSlotOfAnAttemptThatSleptBeforeItsRecord(t *testing.T) {
 	fixture := newSlotEvacuateFixture(t)
 	fixture.commitCached("x")
-	slotId, _, slotBody := checkTestSlot(t, "late put")
+	slotId, _, slotBody := checkTestSlot(t, "slept")
 	plan := fixture.plan()
-	fixture.createWithSlot(plan, checkTestPath("late"), slotId, slotBody)
+	fixture.createWithSlot(plan, checkTestPath("slept"), slotId, slotBody)
 	body, origin := fixture.bodyAndOrigin(plan)
 	before := fixture.head()
 
-	// the hook runs on the attempt's slot goroutine, so it only records what the run did
+	// the hook runs on the attempt's goroutine, so it only records what the run did
 	var evacuated *EvacuationResult
 	var evacuatedErr error
+	slotStanding := false
 	evacuator := fixture.evacuator()
-	reached := atBarrierOnce(t, BarrierPushSlotPutBefore, barrierRefKey(fixture.check.repoId, fixture.check.refId), func() {
+	reached := atBarrierOnce(t, BarrierPushRecordBefore, barrierRefKey(fixture.check.repoId, fixture.check.refId), func() {
 		fixture.age()
 		evacuated, evacuatedErr = evacuator.Run(fixture.ctx, "meta-1")
+		_, held, _, found := fixture.slotObject(slotId)
+		slotStanding = found && held == origin
 	})
 	recorder := fixture.post(fixture.token(fixture.check.signerId), body)
 	sidecar.SetTestHooks(nil)
 	if *reached != 1 || evacuated == nil || evacuatedErr != nil {
-		t.Fatalf("the attempt reached its slot PUT %d times: %v", *reached, evacuatedErr)
+		t.Fatalf("the attempt reached its record's append %d times: %v", *reached, evacuatedErr)
 	}
-	if evacuated.DeadCount != 1 || evacuated.KeptCount != 1 || evacuated.FenceCount != 1 || evacuated.SlotAbsentCount != 1 || evacuated.HasBatches {
-		t.Fatalf("result %+v", evacuated)
+	if evacuated.DeadCount != 0 || evacuated.KeptCount != 1 || evacuated.SlotAbsentCount != 0 || evacuated.SlotDeletedCount != 0 || !slotStanding {
+		t.Fatalf("result %+v, the slot standing %t", evacuated, slotStanding)
 	}
-	requireRefusal(t, recorder, http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
-	if refusalOf(t, recorder).GetOutcome() != protocol.EvsPushOutcome_EVS_PUSH_OUTCOME_UNKNOWN {
-		t.Fatal("the late attempt's outcome is not unknown")
+	if recorder.Code == http.StatusOK {
+		t.Fatal("the slept attempt committed")
 	}
 	if head := fixture.head(); head.Version() != before.Version() {
-		t.Fatalf("the late attempt committed at %d", head.Version())
+		t.Fatalf("the slept attempt committed at %d", head.Version())
 	}
 	fixture.requireSlotOrigin(slotId, slotBody, origin)
-	fixture.clock.Advance(time.Hour)
-	if result := fixture.mustRun(); result.BatchCount != 0 || result.SlotDeletedCount != 0 {
-		t.Fatalf("a later run %+v", result)
+	if records := fixture.batchRecords(); len(records) != 1 {
+		t.Fatalf("%d records after the release, its own alone wanted", len(records))
 	}
-	fixture.requireSlotOrigin(slotId, slotBody, origin)
-}
 
-// The late slot PUT, unsettled: the attempt is held before its PUT while 25 h pass, and again just after it, when
-// evacuation fences the ref and HEADs the dead record's slot: its own origin, stored within the settle age, so it
-// stays, counted unsettled. The attempt's step 7 ends 503 unknown on the fence.
-func TestEvacuationKeepsTheUnsettledSlotOfAnAttemptThatSlept(t *testing.T) {
-	fixture := newSlotEvacuateFixture(t)
-	fixture.commitCached("x")
-	slotId, _, slotBody := checkTestSlot(t, "unsettled put")
-	plan := fixture.plan()
-	fixture.createWithSlot(plan, checkTestPath("unsettled"), slotId, slotBody)
-	body, origin := fixture.bodyAndOrigin(plan)
-	refKey := barrierRefKey(fixture.check.repoId, fixture.check.refId)
-
-	// the hooks run on the attempt's slot goroutine, so they only record what the run did
-	var evacuated *EvacuationResult
-	var evacuatedErr error
-	evacuator := fixture.evacuator()
-	var hooks *sidecar.TestHooks
-	hooks = &sidecar.TestHooks{Barrier: func(name string, key string) {
-		if key != refKey {
-			return
-		}
-		switch name {
-		case BarrierPushSlotPutBefore:
-			fixture.age()
-		case BarrierPushSlotPutAfter:
-			sidecar.SetTestHooks(nil)
-			evacuated, evacuatedErr = evacuator.Run(fixture.ctx, "meta-1")
-			sidecar.SetTestHooks(hooks)
-		}
-	}}
-	sidecar.SetTestHooks(hooks)
-	t.Cleanup(func() { sidecar.SetTestHooks(nil) })
-	recorder := fixture.post(fixture.token(fixture.check.signerId), body)
-	sidecar.SetTestHooks(nil)
-	if evacuated == nil || evacuatedErr != nil || evacuated.DeadCount != 1 || evacuated.SlotUnsettledCount != 1 || evacuated.SlotDeletedCount != 0 || evacuated.HasBatches {
-		t.Fatalf("result %+v %v", evacuated, evacuatedErr)
+	fixture.requireEvacuated(func(result *EvacuationResult) bool {
+		return result.DeadCount == 1 && result.SlotDeletedCount == 1
+	})
+	if _, _, _, found := fixture.slotObject(slotId); found {
+		t.Fatal("the dead record's own settled slot stands")
 	}
-	requireRefusal(t, recorder, http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
-	fixture.requireSlotOrigin(slotId, slotBody, origin)
 }

@@ -16,7 +16,8 @@
 // FI-1 then holds the closure of what the walk found:
 //
 //   - every committed entry version's segments on the segment cluster and slots on the repo's cluster, each slot
-//     keeping every key its introducing push's slot body held;
+//     keeping every key slot/ held at the first check that found its introducing push committed: a push's record
+//     keeps no slot body (QD-806), so the slot object is the one stored copy of its keys, read there and kept;
 //   - every committed PATH_EPOCH's map: each part under pmap/, and the parts hashing to path_map_sha256;
 //   - every generation a statement or a head pins: gen/<g> with the commitment pinned, and the ladder below it; and a
 //     wrap of a group's newest generation, once seen, stays while that generation is the newest (gkm-7's ttl);
@@ -109,6 +110,9 @@ type evsOracleMemory struct {
 	// FI-1: each group's newest generation and the wraps of it seen
 	newestGenerations map[sidecar.Id]uint64
 	newestWraps       map[sidecar.Id]map[string]bool
+	// FI-1: each committed push's new slot as slot/ held it at the first check that found the push committed, by
+	// repo, ref, version and slot id (evsStoreWalker.introducedSlot)
+	slotIntroductions map[string]*protocol.EvsSlotObject
 	// FI-6's memory (fi6.go)
 	fi6 *fi6Memory
 	// the batch records the check batchOracle read, which FI-2 and FI-6 share (fi6Batches)
@@ -136,6 +140,7 @@ func evsOracleMemoryOf(net *Net) *evsOracleMemory {
 		headVersions:         map[string]uint64{},
 		newestGenerations:    map[sidecar.Id]uint64{},
 		newestWraps:          map[sidecar.Id]map[string]bool{},
+		slotIntroductions:    map[string]*protocol.EvsSlotObject{},
 		fi6:                  newFi6Memory(),
 	}
 	actual, loaded := evsOracleMemories.LoadOrStore(key, memory)
@@ -302,7 +307,8 @@ type evsStoreRepo struct {
 	// seg/<repo>/ and slot/<repo>/ as listed, by key
 	segmentInfos map[string]*sidecar.BlobInfo
 	slotInfos    map[string]*sidecar.BlobInfo
-	// each slot a committed push introduced: its body as the push carried it, by slot id hex
+	// each slot a committed push introduced: its body as slot/ held it when a check first found the push committed,
+	// by slot id hex
 	slotIntroductions map[string]*evsSlotIntroduction
 	// the pb/ keys and gkm groups this walk read
 	batchKeys map[string]bool
@@ -940,21 +946,52 @@ func (self *evsStoreWalker) readVersion(repo *evsStoreRepo, refId sidecar.Id, ve
 	if groupId, err := sidecar.IdFromBytes(statement.Push.GetGroupId()); err == nil {
 		repo.groupIds[groupId] = true
 	}
-	// the slots this push introduced, with their bodies, in the order its kind-3 items list them
-	slotIndex := 0
+	// the slots this push introduced, each with the keys slot/ held when a check first found the push committed: its
+	// record keeps no slot body (QD-806)
 	for _, newObject := range payload.NewObjects {
 		if newObject.Kind != protocol.EvsNewObjectKind_EVS_NEW_OBJECT_SLOT {
 			continue
 		}
-		if slotIndex < len(payload.SlotBodies) {
-			body, err := sidecar.EvsDecodeSlotObject(payload.SlotBodies[slotIndex])
-			if err == nil {
-				repo.slotIntroductions[hex.EncodeToString(newObject.Id)] = &evsSlotIntroduction{version: version, refId: refId, body: body}
-			}
+		body, err := self.introducedSlot(repo, refId, version, newObject.Id)
+		if err != nil {
+			repo.fail("ref %s version %d: its new slot %x: %v", refId, version, newObject.Id, err)
+			continue
 		}
-		slotIndex += 1
+		if body != nil {
+			repo.slotIntroductions[hex.EncodeToString(newObject.Id)] = &evsSlotIntroduction{version: version, refId: refId, body: body}
+		}
 	}
 	return storeVersion, nil
+}
+
+// The keys slot/ held for slotId when a check first found the push at version committed: read on that check and
+// kept, since a push's record keeps no slot body (QD-806) and the slot object is the one stored copy of what the push
+// brought. nil while the slot is not there or does not decode, which fi1CheckSlot reports on the object as it is.
+// Every slot is written before its push's record, so a committed push's slots stand at the check after its commit,
+// and an ERASE is a step of its own.
+func (self *evsStoreWalker) introducedSlot(repo *evsStoreRepo, refId sidecar.Id, version uint64, slotId []byte) (*protocol.EvsSlotObject, error) {
+	memoryKey := fmt.Sprintf("%s/%s/%d/%x", repo.repoId, refId, version, slotId)
+	self.memory.stateLock.Lock()
+	body, ok := self.memory.slotIntroductions[memoryKey]
+	self.memory.stateLock.Unlock()
+	if ok {
+		return body, nil
+	}
+	object, err := self.view.Object(self.ctx, repo.clusterId, evsOracleSlotKey(repo.repoId, slotId))
+	if err != nil {
+		return nil, err
+	}
+	if object == nil {
+		return nil, nil
+	}
+	body, err = sidecar.EvsDecodeSlotObject(object.Body)
+	if err != nil {
+		return nil, nil
+	}
+	self.memory.stateLock.Lock()
+	self.memory.slotIntroductions[memoryKey] = body
+	self.memory.stateLock.Unlock()
+	return body, nil
 }
 
 // The keys a committed, authorized ERASE destroyed in a repo, "<slot id hex>/<key index>", and every ERASE the walk

@@ -88,12 +88,16 @@ const (
 	// Around step 4's reads: the head, then the one round after it.
 	BarrierPushStep4Before = "evs.push.step4.before"
 	BarrierPushStep4After  = "evs.push.step4.after"
-	// Around step 6: the record's batch write, a page-out and the new slots, before step 7 may issue.
+	// Around step 6: the new slots, then the record's batch write (QD-806), before step 7 may issue.
 	BarrierPushStep6Before = "evs.push.step6.before"
 	BarrierPushStep6After  = "evs.push.step6.after"
 	// Around one new slot's If-None-Match at step 6.
 	BarrierPushSlotPutBefore = "evs.push.slot_put.before"
 	BarrierPushSlotPutAfter  = "evs.push.slot_put.after"
+	// Around the record's append at step 6, after the slot round (QD-806): an attempt held at .before has its new
+	// slots stored and no record naming them.
+	BarrierPushRecordBefore = "evs.push.record.before"
+	BarrierPushRecordAfter  = "evs.push.record.after"
 	// Around a takeover's DELETE of the object its refused statement left, settled and naming its LastModified
 	// (DESIGN-DETAILS 14.2.4): two retokens of one statement are held here.
 	BarrierPushSlotTakeBefore = "evs.push.slot_take.before"

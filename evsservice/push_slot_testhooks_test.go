@@ -5,8 +5,11 @@
 //
 //	two retokens  two retokens of one refused statement, the first held at its takeover's DELETE while the second
 //	              takes the slot over and commits: the first's DELETE names the refused statement's LastModified and
-//	              answers 412, its create answers 412 on the second's object, and it is refused 409 SLOT_STALE; the
-//	              committed retoken's slot stands at 26 h
+//	              answers 412, its create answers 412 on the second's object, and it is refused 409 SLOT_STALE, before
+//	              any record of its own (QD-806's order); the committed retoken's slot stands at 26 h
+//	crash         an attempt that dies between its slots and its record (QD-806's order) leaves a slot no record
+//	              names, under its statement's origin; the statement's retry takes it as its own and commits, and the
+//	              slot stands at 26 h
 //	5a first      an attempt that passed step 5 before its own statement committed finds at its slot round its own
 //	              object rewritten by an ERASE, or another statement's object created after its version's removal,
 //	              and is answered its 200 by the cluster read and 5a, never a refusal (I-EVS-3)
@@ -20,13 +23,15 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/sidecartest"
 )
 
 // Two retokens of one refused statement, its object settled: the first reaches its takeover's DELETE and is held
 // there while the second takes the object over, creates its own and commits. The first's DELETE names the refused
 // statement's LastModified and the store answers 412, the second's object being a second or more younger; its create
-// again answers 412 and its GET finds the second's origin, in its own epoch and so not takeable: 409 SLOT_STALE. At
-// 26 h evacuation drops the refused first's record and keeps the committed second's slot.
+// again answers 412 and its GET finds the second's origin, in its own epoch and so not takeable: 409 SLOT_STALE, in its
+// slot round and so before any record of its own (QD-806's order). At 26 h evacuation finds the committed records
+// alone, nothing of the first to judge, and the committed second's slot stands.
 func TestPushSlotTwoRetokensOfOneStatementOneTakesOverTheOtherIsRefused(t *testing.T) {
 	takeover := newTakeoverCase(t, "two retokens", true, nil)
 	fixture := takeover.fixture
@@ -54,9 +59,59 @@ func TestPushSlotTwoRetokensOfOneStatementOneTakesOverTheOtherIsRefused(t *testi
 	fixture.requireSlotOrigin(takeover.slotId, takeover.slotBody, secondOrigin)
 
 	evacuation.requireEvacuated(func(result *EvacuationResult) bool {
-		return result.DeadCount == 1 && result.SlotForeignCount == 1 && result.SlotDeletedCount == 0
+		return result.DeadCount == 0 && result.SlotForeignCount == 0 && result.SlotDeletedCount == 0
 	})
 	fixture.requireSlotOrigin(takeover.slotId, takeover.slotBody, secondOrigin)
+}
+
+// The crash between step 6's slots and its record (QD-806's order; question
+// push-record-no-slot-bodies-slots-before-record): the attempt reaches the record's append with its slot stored under
+// its statement's origin and no batch holding a record of it, and its batch's PUT then fails before it applies, as the
+// store stands after a crash there: 503, nothing having reached a head. The statement's retry, carrying its bodies
+// again, finds its own object of equal bytes, appends its record and commits once. 26 h on, evacuation finds the
+// committed record alone, deletes nothing, and the slot reads back through the committed version.
+func TestPushSlotCrashBetweenItsSlotsAndItsRecordLeavesThemForTheRetry(t *testing.T) {
+	fixture := newSlotEvacuateFixture(t)
+	slotId, _, slotBody := checkTestSlot(t, "crash before the record")
+	plan := fixture.plan()
+	fixture.createWithSlot(plan, checkTestPath("a"), slotId, slotBody)
+	body, origin := fixture.bodyAndOrigin(plan)
+	token := fixture.token(fixture.check.signerId)
+
+	// the hook runs on the attempt's goroutine: it reads what stands at the barrier, then arms the crash
+	standing, recordCount := false, -1
+	reached := atBarrierOnce(t, BarrierPushRecordBefore, barrierRefKey(fixture.check.repoId, fixture.check.refId), func() {
+		_, held, _, found := fixture.slotObject(slotId)
+		standing = found && held == origin
+		recordCount = len(fixture.batchRecords())
+		if _, err := fixture.host.Blobs.Faults().Add(&sidecartest.FaultPlan{
+			Op: sidecartest.FaultOpPut, KeyPrefix: batchKeyPrefix, Result: sidecartest.FailBeforeApply, Repeat: -1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	requireRefusal(t, fixture.post(token, body), http.StatusServiceUnavailable, protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE)
+	sidecar.SetTestHooks(nil)
+	if *reached != 1 || !standing || recordCount != 0 {
+		t.Fatalf("at the record's append %d times: the slot standing %t, %d records", *reached, standing, recordCount)
+	}
+	fixture.host.Blobs.Faults().Clear()
+	fixture.requireSlotOrigin(slotId, slotBody, origin)
+	if records := fixture.batchRecords(); len(records) != 0 {
+		t.Fatalf("%d records after the crash", len(records))
+	}
+
+	fixture.requireCommitted(fixture.post(token, body), 1)
+	fixture.awaitStepEights()
+	fixture.requireSlotOrigin(slotId, slotBody, origin)
+	if foreign, mismatch := fixture.slotCounts(); foreign != 0 || mismatch != 0 {
+		t.Fatalf("counted %v foreign and %v mismatched", foreign, mismatch)
+	}
+	fixture.requireEvacuated(func(result *EvacuationResult) bool {
+		return result.DeadCount == 0 && result.KeptCount == 1 && result.SlotDeletedCount == 0
+	})
+	fixture.requireSlotOrigin(slotId, slotBody, origin)
+	fixture.requireSlotReadBack(map[uint64]sidecar.EvsTokenPath{1: checkTestPath("a")}, checkTestPath("a"), slotId, slotBody)
 }
 
 // 14.2.3's own-origin row answered by 5a: an attempt of a push passes step 5 on a head that does not show the push
