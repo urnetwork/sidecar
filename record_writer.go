@@ -177,6 +177,9 @@ type SidecarRecord struct {
 	eraseLock sync.Mutex
 	// a deposit may wait in this device's vault: set at each loop's start, at a commit there and at a hint
 	ingestDue bool
+	// the reach receipts (record_reach.go, which no ios_extension leg links), made at the first Reach: held as any, so
+	// this file, which the forwarding leg links, names none of their types
+	reach any
 }
 
 // A record over args. Nothing is read until the first Append or Run.
