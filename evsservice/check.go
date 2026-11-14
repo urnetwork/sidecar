@@ -22,8 +22,9 @@
 // Rules other tasks own come through the view's seams, and a seam left nil refuses 503, refusing nothing: a
 // PATH_EPOCH push's map, tail and fold rules (EVS1-M2-16) and an ERASE's or CLOSURE's slot rules (EVS1-M2-20). So
 // nothing those rules guard commits on a check this file did not run. Format 2's own rules for a push that carries
-// format 2 run beside 5c (check_versioning.go: the versioning refusals, and 503 for a DROP or CUT whose rules are
-// EVS2-M10-09's and -11's) and after 5h (check_citation.go: the citation rule), EVS2-M10-06's.
+// format 2 run beside 5c (check_versioning.go: the versioning refusals, a CUT's shape and scope from check_cut.go, and
+// 503 for a DROP, whose rules are EVS2-M10-09's), after 5d's pins (check_cut.go: the index epoch, EVS2-M10-11) and
+// after 5h (check_citation.go: the citation rule), EVS2-M10-06's.
 //
 // Package-level functions are safe for concurrent use; a PushView is read only.
 
@@ -185,7 +186,7 @@ func CheckPush(view *PushView) *EvsCheckRefusal {
 	}
 	// format 2's 5c runs right after 5c's gate, so a format-2 push no rule yet checks answers 503 before a format-1
 	// rule could record a refusal of it; its 5h after format 1's
-	checks := []func(view *PushView) *EvsCheckRefusal{CheckSignature, CheckRefs, checkFormat2Refs, CheckGate, CheckPathEpoch}
+	checks := []func(view *PushView) *EvsCheckRefusal{CheckSignature, CheckRefs, checkFormat2Refs, CheckGate, CheckIndexEpoch, CheckPathEpoch}
 	switch view.Stage {
 	case PushStageOnePart:
 		checks = append(checks, CheckBase, CheckPaths, CheckObjects)

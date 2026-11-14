@@ -114,6 +114,14 @@ func (self *gkmGroupManager) deliverySet(ctx context.Context, state GkmAuthView,
 					continue
 				}
 			}
+			if err := self.auditWrapAllowed(state, sidecarId, at); err != nil {
+				// never ahead of the reader list (gkm_audit.go): it gets this generation by a late delivery
+				// once the list at a signer's state shows it
+				if client.log.V(1).Enabled() {
+					client.log.Infof("[gkm]a rotation skipped a wrap: %v", err)
+				}
+				continue
+			}
 			readerIds = append(readerIds, sidecarId)
 		case GkmHolderDelegation:
 			var publicKey []byte
@@ -463,6 +471,10 @@ func (self *gkmGroupManager) deliverLateInFlow(ctx context.Context, recipient st
 			return nil
 		}
 		sidecarId, _ := IdFromBytes(recipientId)
+		if err := self.auditWrapAllowed(state, sidecarId, at); err != nil {
+			// the reader list at this state does not show the audit reader (gkm_audit.go)
+			return nil
+		}
 		signedKey, err := client.args.Api.ReaderKey(ctx, sidecarId)
 		if err != nil {
 			return err
@@ -548,7 +560,8 @@ func (self *gkmGroupManager) deliverLateInFlow(ctx context.Context, recipient st
 }
 
 // Judges the delivery that holds a late delivery's path in groupId, as any member judges one it reads when it
-// answers wrap-pending (§10.9): a refused one is alarmed, and poisons nothing later.
+// answers wrap-pending (§10.9): a refused one poisons the generation and is alarmed naming its signer (the poisoned
+// row; FS-104), and one valid at its own state poisons nothing, whatever came later.
 func (self *gkmGroupManager) judgeLateWinner(state GkmAuthView, groupId Id, top *gkmHeldGeneration, wrapType GkmWrapType, winner []byte) error {
 	client := self.client
 	signed := &bridge.Signed{}
@@ -565,10 +578,7 @@ func (self *gkmGroupManager) judgeLateWinner(state GkmAuthView, groupId Id, top 
 		return err
 	}
 	if verdict.Refused {
-		client.alarm(&GkmAlarm{
-			Kind: GkmAlarmRefused, RepoId: self.repoId, Generation: top.generation.Rotate.GetGeneration(),
-			SidecarId: delivery.SignerId, Reason: verdict.Reason, Detail: verdict.Detail,
-		})
+		return self.poisonForDeliveries(groupId, top.generation, []*gkmRefusedDelivery{{delivery: delivery, verdict: verdict}})
 	}
 	return nil
 }

@@ -337,6 +337,11 @@ func (self *EvsRepo) reconstruct(ctx context.Context, result *evsReadResult, ver
 // oid. onRecord, when set, sees each record's opened header and locator in chain order, which the write planner reads
 // the chain's facts from.
 func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResult, verified *EvsVerifiedPath, onRecord func(header *EvsRecordHeader, locator *protocol.EvsLocator)) (*evsSpill, *protocol.EvsSealedFields, EvsGitOid, error) {
+	if verified.Collected {
+		// a replaced versionless version: evs holds none of its content, and asking for it would read as a missing
+		// segment
+		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: version %d", ErrEvsCollected, verified.Entry.GetVersion())
+	}
 	entry := verified.Entry
 	push := verified.Statement.Push
 	chain := entry.GetChain()

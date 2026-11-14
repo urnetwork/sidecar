@@ -40,7 +40,9 @@ func (self *EvsEngine) readRecordAt(ctx context.Context, cluster sidecar.BlobClu
 	if err != nil {
 		return nil, err
 	}
-	record, err = sidecar.ParseEvsBatchRecord(recordBytes)
+	// a container holds a format-2 record without its staged bytes and with its purge list, which a format-2
+	// instance reads as its batch's (EVS2-M10-08)
+	record, err = self.records.parseRecord(recordBytes)
 	if err != nil {
 		return nil, err
 	}

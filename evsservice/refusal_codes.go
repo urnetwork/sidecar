@@ -160,6 +160,16 @@ const (
 	// A rule another task owns and has not supplied (PushView's seams), or a read step 4 did not give: refused 503,
 	// so nothing commits unchecked and nothing is settled against the push.
 	EvsCheckReasonUnchecked
+
+	// 5c, a CUT (§11.12's cut row; EVS2-M10-11): one that changes anything but one file, created or replaced as one
+	// staged record of versioning 2, or that carries another push kind's flag: 409 naming the paths, final.
+	EvsCheckReasonCutShape
+	// 5d: a CUT's or an index push's index_epoch below the head's (§11.8's refuse row): 409 INDEX_EPOCH, final, since
+	// a head's index_epoch never falls.
+	EvsCheckReasonIndexEpochBelow
+	// 5d: a CUT's or an index push's index_epoch above the head's: 409 INDEX_EPOCH, recorded, since a later CUT could
+	// bring the head there.
+	EvsCheckReasonIndexEpochAbove
 )
 
 // One row of the table.
@@ -229,6 +239,10 @@ var evsCheckReasonRows = map[EvsCheckReason]evsCheckReasonRow{
 	EvsCheckReasonTailMissing:      {name: "tail_missing", code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT, fate: EvsRefusalFinal},
 
 	EvsCheckReasonUnchecked: {name: "unchecked", code: protocol.EvsRefusalCode_EVS_REFUSAL_UNAVAILABLE, fate: EvsRefusalNothing},
+
+	EvsCheckReasonCutShape:        {name: "cut_shape", code: protocol.EvsRefusalCode_EVS_REFUSAL_PATH_CONFLICT, fate: EvsRefusalFinal},
+	EvsCheckReasonIndexEpochBelow: {name: "index_epoch_below", code: protocol.EvsRefusalCode_EVS_REFUSAL_INDEX_EPOCH, fate: EvsRefusalFinal},
+	EvsCheckReasonIndexEpochAbove: {name: "index_epoch_above", code: protocol.EvsRefusalCode_EVS_REFUSAL_INDEX_EPOCH, fate: EvsRefusalRecorded},
 }
 
 // The reason's name, for the service log and metrics: a closed set.

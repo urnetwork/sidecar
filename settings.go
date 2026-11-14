@@ -507,6 +507,10 @@ type GkmSettings struct {
 	PendingCommitDelay time.Duration
 	// The most a writer adds to PendingCommitDelay, drawn uniformly, so the others do not all commit at once: 5 s.
 	PendingCommitJitter time.Duration
+	// §10.9's Directory group: a writer of the team directory that no hint reached waits a random time of up to
+	// this, which a covering generation ends, before it rotates for a push the gate refused: 15 s. Non-positive
+	// rotates at once.
+	DirectoryRotateWait time.Duration
 	// §10.6's re-add: a joiner whose Welcome has not appeared this long after its epoch is removed and added again
 	// by a writer leaf: 10 min. A writer leaf that adopted the Add from another leaf's commit asks gkm once, this
 	// long after the epoch, whether the Welcome stands (QD-747). Non-positive asks at the next run of the engine.
@@ -590,6 +594,7 @@ func DefaultGkmSettings() *GkmSettings {
 		DropKeyLifetime:              90 * 24 * time.Hour,
 		PendingCommitDelay:           15 * time.Second,
 		PendingCommitJitter:          5 * time.Second,
+		DirectoryRotateWait:          15 * time.Second,
 		WelcomeTimeout:               10 * time.Minute,
 		WelcomeWatchMaxCount:         64,
 		StaleRemoveMargin:            24 * time.Hour,

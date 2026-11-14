@@ -100,6 +100,8 @@ barrier directory.run.after directory_run.go
 barrier directory.run.before directory_run.go
 barrier directory.sync.after directory_sync.go
 barrier directory.sync.before directory_sync.go
+barrier directory.worker.after directory_worker.go
+barrier directory.worker.before directory_worker.go
 barrier dnsservice.edge_publish dnsservice/edge.go
 barrier dnsservice.edge_publish.after dnsservice/edge.go
 barrier dnsservice.edge_publish.before dnsservice/edge.go
@@ -234,6 +236,7 @@ barrier evs.push.step6.after evsservice/push_commit.go
 barrier evs.push.step6.before evsservice/push_commit.go
 barrier evs.push.step8.after evsservice/push_commit.go
 barrier evs.push.step8.before evsservice/push_commit.go
+barrier evs.read.collected evsservice/read_collected.go
 barrier evs.read.entries.after evsservice/read.go
 barrier evs.read.entries.before evsservice/read.go
 barrier evs.read.head.after evsservice/read.go

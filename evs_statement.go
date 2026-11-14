@@ -314,6 +314,9 @@ type EvsPushPlan struct {
 	// (EvsBuildDropLists)
 	DropBody  []byte
 	DropLists []byte
+	// format 2, a CUT's and an index push's: the head's index_epoch the push was built at (§11.8's 5d), 0 for a
+	// head that holds none and for every other push
+	IndexEpoch uint64
 }
 
 // A push built and signed: its statement as signed, and its payload for one part or its parts for several, with the
@@ -355,7 +358,7 @@ func (self *EvsPushPlan) basePush() *protocol.EvsPush {
 		Flags: self.Flags, PathMapSha256: self.PathMapSha256, RefMode: uint32(self.RefMode),
 		GroupId: self.GroupId.Bytes(), GenerationCommitment: self.GenerationCommitment,
 		MapSourceVersion: self.MapSourceVersion, MapSourceChain: self.MapSourceChain,
-		ConsumedThrough: self.ConsumedThrough,
+		ConsumedThrough: self.ConsumedThrough, IndexEpoch: self.IndexEpoch,
 	}
 	if self.OwnerSidecarId != nil {
 		push.OwnerSidecarId = self.OwnerSidecarId.Bytes()
@@ -416,8 +419,8 @@ func evsStateChangeRoot(push *protocol.EvsPush, root [sha256.Size]byte, changeCo
 // Builds the push plan describes and signs its statement: its changes inline if the signed statement stays within
 // 1 KiB, else under changes_root; one payload while it stays within 1 MiB and 1,024 entry writes, else parts.
 func (self *EvsStatementBuilder) Build(plan *EvsPushPlan) (*EvsBuiltPush, error) {
-	if plan.Flags&evsFormat2PushFlags != 0 || len(plan.DropBody) != 0 || len(plan.DropLists) != 0 {
-		return nil, fmt.Errorf("%w: DROP or CUT", ErrEvsFormatUnsupported)
+	if plan.Flags&evsFormat2PushFlags != 0 || len(plan.DropBody) != 0 || len(plan.DropLists) != 0 || plan.IndexEpoch != 0 {
+		return nil, fmt.Errorf("%w: DROP, CUT or an index_epoch", ErrEvsFormatUnsupported)
 	}
 	return self.build(plan, false)
 }

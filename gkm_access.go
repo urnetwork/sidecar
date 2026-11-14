@@ -141,6 +141,10 @@ func gkmLeafWaits(err error) bool {
 // The generation new content seals to. See the file header.
 func (self *GkmGroupClient) EnsureWritable(ctx context.Context, repoId Id) (*EvsRepoKey, error) {
 	manager := self.manager(repoId)
+	// the team directory's unhinted writers wait before a rotation, outside the flow (gkm_directory.go)
+	if err := manager.directoryRotateWait(ctx); err != nil {
+		return nil, err
+	}
 	manager.flowLock.Lock()
 	defer manager.flowLock.Unlock()
 	return manager.ensureWritableInFlow(ctx)
@@ -154,12 +158,16 @@ func (self *gkmGroupManager) ensureWritableInFlow(ctx context.Context) (*EvsRepo
 		return nil, err
 	}
 	// 1
-	if state.Repo(self.repoId) == nil {
+	repo := state.Repo(self.repoId)
+	if repo == nil {
 		return nil, fmt.Errorf("%w: repo %s", ErrGkmNoRepo, self.repoId)
 	}
 	row := state.SidecarRow(client.args.SidecarId)
 	if !gkmRowStanding(row) || gkmRowReadOnly(row) || !gkmWrites(state, self.repoId, client.args.SidecarId) {
 		return nil, ErrGkmNotWriter
+	}
+	if err := GkmDirectoryRepoCheck(repo); err != nil {
+		return nil, err
 	}
 
 	// 2 and 3, unless gkm cannot be reached (KF7)
@@ -171,6 +179,11 @@ func (self *gkmGroupManager) ensureWritableInFlow(ctx context.Context) (*EvsRepo
 		}
 	case err != nil:
 		return nil, err
+	case GkmDirectoryGroup(repo):
+		// no commit from a write: the directory group's Removes and Adds are its hinted devices'
+		if err := self.directoryRotateInFlow(ctx, state); err != nil {
+			return nil, err
+		}
 	default:
 		if err := self.commitAndRotateInFlow(ctx, state); err != nil {
 			return nil, err

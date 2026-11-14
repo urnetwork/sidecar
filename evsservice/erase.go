@@ -314,7 +314,7 @@ func FinishErasures(ctx context.Context, host *sidecar.ServiceHost, repoId sidec
 // A count that does not answer leaves it P1, which the budget pays.
 func (self *pushAttempt) erasureP0() bool {
 	flags := self.statement.Push.GetFlags()
-	if flags&uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE|protocol.EvsPushFlag_EVS_PUSH_CLOSURE) == 0 || self.engine.host.Quota == nil {
+	if flags&uint32(protocol.EvsPushFlag_EVS_PUSH_ERASE|protocol.EvsPushFlag_EVS_PUSH_CLOSURE|protocol.EvsPushFlag_EVS_PUSH_CUT) == 0 || self.engine.host.Quota == nil {
 		return false
 	}
 	refusal, err := self.engine.host.Quota.CountRate(self.ctx, connect.Id(self.networkId), map[string]int64{sidecar.QuotaRateKeyErasurePush: 1}, connect.Id(self.pushId))
