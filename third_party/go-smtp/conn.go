@@ -1042,14 +1042,17 @@ func (c *Conn) handleBdat(arg string) {
 		var r *io.PipeReader
 		r, c.bdatPipe = io.Pipe()
 
-		c.dataResult = make(chan error, 1)
+		// URNETWORK: the transfer's goroutine sends on its own channel, never on a later transfer's, which
+		// c.dataResult names once a reset began another (see URNETWORK.md)
+		dataResult := make(chan error, 1)
+		c.dataResult = dataResult
 
 		go func() {
 			defer func() {
 				if err := recover(); err != nil {
 					c.handlePanic(err, c.bdatStatus)
 
-					c.dataResult <- errPanic
+					dataResult <- errPanic
 					r.CloseWithError(errPanic)
 				}
 			}()
@@ -1069,7 +1072,7 @@ func (c *Conn) handleBdat(arg string) {
 				}
 			}
 
-			c.dataResult <- err
+			dataResult <- err
 			r.CloseWithError(err)
 		}()
 	}
@@ -1102,6 +1105,8 @@ func (c *Conn) handleBdat(arg string) {
 		c.bdatPipe.Close()
 
 		err := <-c.dataResult
+		// URNETWORK: taken, so reset has no transfer to wait for
+		c.dataResult = nil
 
 		if c.server.LMTP {
 			c.bdatStatus.fillRemaining(err)
@@ -1335,13 +1340,22 @@ func (c *Conn) readLine() (string, error) {
 }
 
 func (c *Conn) reset() {
+	// URNETWORK: a transfer cut short by RSET, a new MAIL or EHLO has its Data end before anything is reset, so a
+	// later transaction's Data never runs beside it; waited for outside the lock its Session() takes (see URNETWORK.md)
+	c.locker.Lock()
+	pipe, dataResult := c.bdatPipe, c.dataResult
+	c.bdatPipe, c.dataResult = nil, nil
+	c.locker.Unlock()
+	if pipe != nil {
+		pipe.CloseWithError(ErrDataReset)
+		if dataResult != nil {
+			<-dataResult
+		}
+	}
+
 	c.locker.Lock()
 	defer c.locker.Unlock()
 
-	if c.bdatPipe != nil {
-		c.bdatPipe.CloseWithError(ErrDataReset)
-		c.bdatPipe = nil
-	}
 	c.bdatStatus = nil
 	c.bytesReceived = 0
 

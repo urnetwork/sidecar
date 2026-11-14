@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("EHLO fuzz.example\r\nMAIL FROM:<a@sender.example> BODY=BINARYMIME\r\nRCPT TO:<bob@lbl0000001.root.example>\r\nBDAT 2\r\nabBDAT 2\r\ncdRSET\r\nBDAT 1 LAST\r\nx")

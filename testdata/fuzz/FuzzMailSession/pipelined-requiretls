@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("EHLO fuzz.example\r\nMAIL FROM:<a@sender.example> REQUIRETLS SMTPUTF8\r\nRCPT TO:<alice@lbl0000001.root.example>\r\nRCPT TO:<ALICE@LBL0000001.ROOT.EXAMPLE>\r\nDATA\r\nSubject: =?utf-8?q?caf=C3=A9?=\r\n\r\n..dot-stuffed\r\n.\r\nQUIT\r\n")
