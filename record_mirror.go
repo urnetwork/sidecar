@@ -1,5 +1,7 @@
+//go:build !ios_extension
+
 // RecordMirrors (proposed; RECORD-M3-10): the record's part of D-MCP-10 (R-MCP-11, R-EVS-17, D-EVS-17), on every leg
-// the record writes from. Two halves, neither of which keeps a mirror itself: EvsMirror keeps one (evs_mirror.go,
+// but ios_extension, whose VPN component forwards and writes no record (owner decision 197). Two halves, neither of which keeps a mirror itself: EvsMirror keeps one (evs_mirror.go,
 // slot copies included, each ERASE applied before its next sync), and §16.7's spool holds what a depositor keeps.
 //
 //	mirrors     which indexer mirrors each log, by §16.8's table, among the sidecars the config's IndexerSet designates
@@ -160,22 +162,48 @@ type RecordMirrors struct {
 	logRedeposited map[Id]map[uint64]bool
 }
 
-// The mirrors over writer's bindings. A nil view is RecordMirrorViewUnavailable, a nil spool keeps nothing, which
-// status names, and nil settings are the defaults.
-func newRecordMirrors(writer *recordWriter, view RecordMirrorView, spool RecordDepositSpool, settings *RecordMirrorSettings) *RecordMirrors {
-	if view == nil {
-		view = RecordMirrorViewUnavailable{}
+// Which indexer mirrors each log, and the deposits this device keeps until consumed (RECORD-M3-10), made at the first
+// call: from then the writer hands them each committed deposit, the loop tends them, and Sidecar.Record's spool keeps
+// their deposits. The record's component makes them when it is built, so a daemon's depositor always keeps; a record
+// run with no component keeps nothing before its first call here.
+func (self *SidecarRecord) Mirrors() *RecordMirrors {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	mirrors, _ := self.mirrors.(*RecordMirrors)
+	if mirrors == nil {
+		mirrors = newRecordMirrors(self.writer)
+		if spool, ok := self.kept.(RecordDepositSpool); ok {
+			mirrors.spool = spool
+		}
+		self.mirrors = mirrors
+		self.writer.setDepositKeeper(mirrors.depositCommitted)
+		self.tendHooks = append(self.tendHooks, func(ctx context.Context) {
+			if err := mirrors.Tend(ctx); err != nil && self.writer.log.V(1).Enabled() {
+				self.writer.log.Infof("[record]%s", err)
+			}
+		})
 	}
-	if settings == nil {
-		settings = DefaultRecordMirrorSettings()
-	}
+	return mirrors
+}
+
+// The mirrors over writer's bindings, with the default settings: no view, so status says the mirrors are unknown,
+// and no spool, so nothing is kept, which status names, until Bind.
+func newRecordMirrors(writer *recordWriter) *RecordMirrors {
 	return &RecordMirrors{
 		writer:         writer,
-		settings:       settings,
-		view:           view,
-		spool:          spool,
+		settings:       DefaultRecordMirrorSettings(),
+		view:           RecordMirrorViewUnavailable{},
 		logDeposits:    map[Id]*recordMirrorDepositDocument{},
 		logRedeposited: map[Id]map[uint64]bool{},
+	}
+}
+
+// Replaces the settings, DefaultRecordMirrorSettings until then.
+func (self *RecordMirrors) SetSettings(settings *RecordMirrorSettings) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if settings != nil {
+		self.settings = settings
 	}
 }
 
@@ -592,6 +620,11 @@ func (self *RecordMirrors) Plan() []Id {
 // coverage that cannot be read is named as such, never left out.
 func (self *RecordMirrors) StatusLines(ctx context.Context) []string {
 	view, spool := self.bound()
+	settings := func() *RecordMirrorSettings {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.settings
+	}()
 	lines := []string{}
 	logs, ok := self.Logs()
 	if !ok {
@@ -614,7 +647,7 @@ func (self *RecordMirrors) StatusLines(ctx context.Context) []string {
 			lines = append(lines, fmt.Sprintf("record:     log %s (%s) mirror none: this device is designated to mirror it and holds no mirror", log.LogId, log.Kind))
 		default:
 			reasons := slices.Clone(coverage.Reasons)
-			if !coverage.BehindSince.IsZero() && self.settings.HeadLag <= now.Sub(coverage.BehindSince) {
+			if !coverage.BehindSince.IsZero() && settings.HeadLag <= now.Sub(coverage.BehindSince) {
 				reasons = append([]string{"behind its head since " + coverage.BehindSince.UTC().Format(time.RFC3339)}, reasons...)
 			}
 			if 0 < len(reasons) {

@@ -42,6 +42,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 
 	"google.golang.org/protobuf/proto"
@@ -157,13 +158,6 @@ type SidecarRecordArgs struct {
 	Log    Logger
 	// Reaches the verifiable log's witnesses (record_log_witness.go); the HTTPS client when nil.
 	Witness RecordLogWitness
-	// The config's indexers and this device's mirrors (record_mirror.go); nil is RecordMirrorViewUnavailable until
-	// SidecarRecord.Mirrors().Bind.
-	Mirrors RecordMirrorView
-	// Where a depositor keeps its deposits until consumed, §16.7's spool; nil keeps none, which status names.
-	Kept RecordDepositSpool
-	// DefaultRecordMirrorSettings when nil.
-	MirrorSettings *RecordMirrorSettings
 }
 
 // One network's record on this sidecar: its writer, its reader, its ingester, its read receipts, the approval family's
@@ -178,9 +172,16 @@ type SidecarRecord struct {
 	accounting *RecordAccounting
 	log        *RecordLog
 	export     *RecordExport
-	mirrors    *RecordMirrors
 
 	stateLock sync.Mutex
+	// the mirrors and kept deposits (record_mirror.go, which no ios_extension leg links), made at the first Mirrors:
+	// held as any, as reach is
+	mirrors any
+	// §16.7's spool, where a depositor keeps its deposits until consumed (D-MCP-10), as Sidecar.Record found it: the
+	// mirrors take it when made
+	kept any
+	// what the loop tends beside its own work, added as a part is made
+	tendHooks []func(ctx context.Context)
 	// one erasure at a time (record_erase.go, which no ios_extension leg links)
 	eraseLock sync.Mutex
 	// a deposit may wait in this device's vault: set at each loop's start, at a commit there and at a hint
@@ -215,8 +216,6 @@ func NewSidecarRecord(args *SidecarRecordArgs) (*SidecarRecord, error) {
 		accounting: &RecordAccounting{writer: writer, reader: reader},
 		ingestDue:  true,
 	}
-	self.mirrors = newRecordMirrors(writer, args.Mirrors, args.Kept, args.MirrorSettings)
-	writer.setDepositKeeper(self.mirrors.depositCommitted)
 	writer.addCommitHook(func(logId Id) { self.markIngestDue() })
 	self.log = newRecordLog(self, args.Witness)
 	reader.addSyncHook(self.log.monitor)
@@ -259,11 +258,6 @@ func (self *SidecarRecord) Accounting() *RecordAccounting {
 	return self.accounting
 }
 
-// Which indexer mirrors each log, and the deposits this device keeps until consumed (RECORD-M3-10).
-func (self *SidecarRecord) Mirrors() *RecordMirrors {
-	return self.mirrors
-}
-
 // Notes that a deposit may wait, and wakes the loop.
 func (self *SidecarRecord) markIngestDue() {
 	func() {
@@ -303,8 +297,13 @@ func (self *SidecarRecord) tend(ctx context.Context) {
 	self.accounting.mirrorQueued(ctx)
 	self.log.Tick(ctx)
 	self.export.Tick(ctx)
-	if err := self.mirrors.Tend(ctx); err != nil && self.writer.log.V(1).Enabled() {
-		self.writer.log.Infof("[record]%s", err)
+	hooks := func() []func(ctx context.Context) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return slices.Clone(self.tendHooks)
+	}()
+	for _, hook := range hooks {
+		hook(ctx)
 	}
 	logIds := self.ingestedLogs()
 	if len(logIds) == 0 || !self.takeIngestDue() {
@@ -1193,7 +1192,7 @@ func (self *Sidecar) Record() (*SidecarRecord, error) {
 	}
 	// each takes the records' lock itself, so before it is taken here
 	var spool RecordSpool
-	var kept RecordDepositSpool
+	var kept *Spool
 	if built, err := self.Spool(); err == nil {
 		spool = built
 		kept = built
@@ -1220,8 +1219,6 @@ func (self *Sidecar) Record() (*SidecarRecord, error) {
 		Clock:    self.settings.ClockOrReal(),
 		Settings: self.settings.Record,
 		Log:      self.log,
-		// a depositor's deposits, kept until consumed (D-MCP-10)
-		Kept: kept,
 	}
 	if runsErr == nil {
 		args.Gap = func(runId Id, code string) {
@@ -1236,6 +1233,9 @@ func (self *Sidecar) Record() (*SidecarRecord, error) {
 	}
 	// where a follow job's lines go: a file on this device, on a leg that has files
 	record.SetExportSink(recordExportFileSink())
+	if kept != nil {
+		record.kept = kept
+	}
 	// §5's membership and key events, mirrored into the member's vault (RECORD-M3-08); Queue never blocks. A Sidecar
 	// NewSidecar did not build raises no events to mirror.
 	if self.eventCallbacks != nil {
