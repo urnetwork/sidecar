@@ -158,6 +158,7 @@ func newTestConfigNet(t testing.TB) *testConfigNet {
 			IdentityPublicKey: self.owner.publicKey(),
 			IdentityAlg:       configIdentityAlgEd25519,
 			MemberId:          self.ownerMemberId.Bytes(),
+			AdmissionSha256:   self.chain[:],
 		}},
 	}
 	verdict := self.pushBase(self.owner, rows, 0, 1, 0)

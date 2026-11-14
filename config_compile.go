@@ -21,6 +21,7 @@ package sidecar
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -99,8 +100,11 @@ func configCompileRowsFromRows(rows *bridge.ProjectionRows) (*ConfigCompileRows,
 }
 
 // L(0) for base 1, which the log before it holds nothing of: the Genesis's owner an Owner, and its first device that
-// owner's member device, admitted by itself, with the identity key the Genesis names (§7.9's bootstrap).
-func configGenesisCompileRows(genesis *bridge.Genesis) *ConfigCompileRows {
+// owner's member device, admitted by itself, with the identity key the Genesis names (§7.9's bootstrap). Its admission
+// is the Genesis: genesisChain, A_0 = SHA-256(Signed Genesis), the hash the anchor records, is the row's
+// admission_sha256, which §10.4 has the first device's credential carry, so a reader of a row's admission hash
+// compares bytes for this device as for one a SidecarAdmit admitted (QD-825).
+func configGenesisCompileRows(genesis *bridge.Genesis, genesisChain [sha256.Size]byte) *ConfigCompileRows {
 	return &ConfigCompileRows{
 		Members: []*bridge.MemberRow{{
 			MemberId: bytes.Clone(genesis.GetOwnerMemberId()),
@@ -112,6 +116,7 @@ func configGenesisCompileRows(genesis *bridge.Genesis) *ConfigCompileRows {
 			IdentityPublicKey: bytes.Clone(genesis.GetOwnerIdentityPublicKey()),
 			IdentityAlg:       configIdentityAlgEd25519,
 			MemberId:          bytes.Clone(genesis.GetOwnerMemberId()),
+			AdmissionSha256:   bytes.Clone(genesisChain[:]),
 		}},
 		AclStatements: &protocol.AclRows{},
 	}
