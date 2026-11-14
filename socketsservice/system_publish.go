@@ -35,21 +35,17 @@ func socketSystemPublish(name *socketParsedName) bool {
 	return name != nil && name.namespace == sidecar.SocketNamespaceTls && name.name == sidecar.SocketSystemPublishName
 }
 
-// request as the stand-in asks it: the same caller, subject and sidecar, on smtp/25/mx.
-func socketSystemPublishRequest(request *SocketGateRequest) *SocketGateRequest {
-	standIn := *request
-	standIn.Name = sidecar.SocketSystemPublishListenName
-	standIn.NameToken = nil
-	return &standIn
-}
-
 // The system publish's verdict at now for request's sidecar, which a registration of appMode asks: the sidecar's own
 // smtp/25/mx listen, standing in for the tls/ listen and publish grants, and a refusal for any app mode but http.
 func socketSystemPublishListen(view SocketGateView, request *SocketGateRequest, appMode string, now time.Time) *SocketGateVerdict {
 	if appMode != socketDefaultTlsAppMode {
 		return &SocketGateVerdict{}
 	}
-	return view.MayListen(socketSystemPublishRequest(request), now)
+	// the same caller, subject and sidecar, on smtp/25/mx
+	standIn := *request
+	standIn.Name = sidecar.SocketSystemPublishListenName
+	standIn.NameToken = nil
+	return view.MayListen(&standIn, now)
 }
 
 // The listen verdict a registration's entry rests on (registration step 5): MayListen on its name, except on the system
