@@ -61,6 +61,9 @@ type EvsFormatSettings struct {
 	// The deltas one path's reply carries, a frame each after its path frame (QD-662): 255, a head window's entries,
 	// since each delta is a window version past names_through. A reader refuses a path past it.
 	ReadPathDeltaMaxCount int
+	// A Signed EvsReseed, as a repo admin files it, evs keeps it at reseed/<repo>/<ref> and a read reply carries it:
+	// 4 KiB (§11.13's re-seed row; QD-725). evs refuses one past it and a reader refuses a reply carrying one.
+	ReseedStatementMaxByteCount int
 }
 
 // The protocol's values, the only source of their defaults.
@@ -85,6 +88,7 @@ func DefaultEvsFormatSettings() *EvsFormatSettings {
 		DropListPartValueCount:      32000,
 		ReadFrameMaxByteCount:       1024*1024 + 64*1024,
 		ReadPathDeltaMaxCount:       255,
+		ReseedStatementMaxByteCount: 4 * 1024,
 	}
 }
 
