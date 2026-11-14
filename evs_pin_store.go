@@ -439,7 +439,8 @@ func (self *EvsPinStore) Raise(pin *EvsPin) error {
 
 // Lowers a ref's pin to pin, the re-seeded head a verified EvsReseed names (§11.13): the only way a pin falls, kept
 // as a loss, and the ref's read records with it, headEpoch being that head's current path epoch (QD-816; see the file
-// header). The records are durable first. The same head again keeps the loss, group and gap mark already held.
+// header). The records are durable first. The pin keeps the group and gap mark held, and the same head again keeps
+// the loss already held.
 func (self *EvsPinStore) lowerByReseed(pin *EvsPin, incidentId []byte, at time.Time, headEpoch uint64) error {
 	if err := self.load(); err != nil {
 		return err
