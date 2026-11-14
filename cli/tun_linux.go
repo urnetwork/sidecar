@@ -16,11 +16,20 @@
 //	           of the main table but its default keeps its way, then `not fwmark <ExitsMark> lookup <ExitsTable>`, so
 //	           the rest takes the tun but for the daemon's own connect sockets, which carry connect's egress mark
 //	           (QD-800); the mark goes on first and comes off last, connect's transports dial again once the rules are
-//	           on, so no socket made before the mark stays in the tun's way, and nothing is carved by address
+//	           on, so no socket made before the mark stays in the tun's way
+//	carved     under exits, a throw route in ExitsTable for each IPv4 /32 the bridge carves (§17.4: this host's
+//	           interface addresses, gateways and resolvers, which the tun hands Bridge.SetLocalAddresses and SetCarved
+//	           alike), beside the table's default route, so a lookup of one leaves the table for the main table's rule
+//	           and its default route, and a host whose resolver is off-link keeps its own DNS rather than meeting a tun
+//	           that can only drop it (QD-808). They go on before the rule that reaches the table, follow each SetCarved,
+//	           and come off once nothing reaches the table's default route. Nothing is carved by the platform's
+//	           addresses (QD-800), and an address the local table or an on-link route reaches takes one harmlessly,
+//	           since the rules ahead of the table answer it first
 //
-// Only what this interface added is removed: routes and rules by ur's protocol, routes by the device too, addresses by
-// the device. Close takes the exits off, removes the routes and addresses, reverts the resolver and closes the device,
-// which the kernel deletes with whatever was left on it.
+// Only what this interface added is removed: routes and rules by ur's protocol, routes by the device or as throws too,
+// addresses by the device. Close takes the exits and their throws off, removes the routes and addresses, reverts the
+// resolver and closes the device, which the kernel deletes with whatever was left on it but the throws, which name no
+// device.
 
 package main
 
@@ -69,7 +78,8 @@ const urTunLinuxRuleHeaderByteCount = 12
 
 // Why the default route stays off the tun under exits, besides a refusal of the kernel's.
 var (
-	// Another program's route is in the exits table, which ur tun's default route would join.
+	// Another program's route is in the exits table, which ur tun's default route would join. ur's own throws of
+	// carved addresses, a past end's included, are not.
 	errUrTunExitsTableInUse = errors.New("another program's routes are in the routing table the exits use")
 	// Another program's policy rule matches the exits mark or reads the exits table, which the daemon's own sockets or
 	// the tun's route would then answer to.
@@ -693,6 +703,39 @@ func urTunLinuxRouteBody(index int, prefix netip.Prefix, table uint32, metric ui
 	return body
 }
 
+// The route message of a throw route for an IPv4 address's /32 in table, ur's, at metric, as `ip route add throw
+// <address>/32 table <table>` writes it: a lookup that reaches it leaves the table for the next rule's. It names no
+// device or gateway, which the kernel refuses on a throw. A delete matches only ur's throw at that /32, whatever its
+// scope.
+func urTunLinuxThrowBody(address netip.Addr, table uint32, metric uint32, add bool) []byte {
+	octets := address.As4()
+	body := make([]byte, unix.SizeofRtMsg)
+	body[0] = unix.AF_INET
+	body[1] = 32
+	// the header's one byte names a table under 256; RTA_TABLE names any, and wins
+	if table < 256 {
+		body[4] = uint8(table)
+	}
+	body[5] = urTunRouteProtocol
+	if add {
+		body[6] = unix.RT_SCOPE_UNIVERSE
+	} else {
+		body[6] = unix.RT_SCOPE_NOWHERE
+	}
+	body[7] = unix.RTN_THROW
+	body = append(body, urNetlinkAttribute(unix.RTA_DST, octets[:])...)
+	body = append(body, urNetlinkAttribute(unix.RTA_PRIORITY, urNetlinkUint32(metric))...)
+	body = append(body, urNetlinkAttribute(unix.RTA_TABLE, urNetlinkUint32(table))...)
+	return body
+}
+
+// Whether route is a throw of ur's in the exits table for a carved address: this end's, or a past end's the kernel kept,
+// since a throw names no device and outlives the one whose end deleted the table's default route.
+func urTunLinuxOwnThrow(route urTunLinuxRoute, table uint32) bool {
+	return route.table == table && route.family == unix.AF_INET && route.protocol == urTunRouteProtocol &&
+		route.routeType == unix.RTN_THROW && route.dst.Bits() == 32
+}
+
 // One open device and what this interface set on it. Its configuration calls are serialized.
 type urTunLinuxInterface struct {
 	system     *urTunLinuxSystem
@@ -712,10 +755,13 @@ type urTunLinuxInterface struct {
 	exitsRoute        bool
 	exitsSuppressRule bool
 	exitsMarkRule     bool
-	closed            bool
+	// the IPv4 addresses the bridge carves, sorted (SetCarved), and those a throw route in the exits table holds now
+	carvedAddrs []netip.Addr
+	throwAddrs  []netip.Addr
+	closed      bool
 }
 
-var _ urTunInterface = (*urTunLinuxInterface)(nil)
+var _ urTunCarvedInterface = (*urTunLinuxInterface)(nil)
 
 // wireguard's read: a batch dropped past the slots given is errUrTunSegmentsDropped, which goes on.
 func (self *urTunLinuxInterface) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
@@ -830,11 +876,12 @@ func (self *urTunLinuxInterface) SetResolver(resolver netip.Addr, zones []string
 	return step, nil
 }
 
-// Under exits, marks the daemon's own connect sockets, then puts the default route through the device in the exits table
-// and wg-quick's two rules ahead of the main table's (the file's comment), and has connect's transports dial again, so
-// no socket made before the mark stays in the tun's way. It refuses, and leaves nothing on, where another program holds
-// the table or the mark, or a strict reverse path filter would drop the daemon's replies. Off exits, takes them off.
-// Answers whether the default route rides the device.
+// Under exits, marks the daemon's own connect sockets, then puts the default route through the device in the exits table,
+// a throw beside it for each carved address SetCarved last gave, and wg-quick's two rules ahead of the main table's (the
+// file's comment), and has connect's transports dial again, so no socket made before the mark stays in the tun's way. It
+// refuses, and leaves nothing on, where another program holds the table or the mark, or a strict reverse path filter
+// would drop the daemon's replies; a throw that will not go on refuses nothing, and is SetCarved's to try again. Off
+// exits, takes them off. Answers whether the default route rides the device.
 func (self *urTunLinuxInterface) SetExits(exits bool) (bool, error) {
 	installed, defaultRoute, err := func() (bool, bool, error) {
 		self.stateLock.Lock()
@@ -849,8 +896,15 @@ func (self *urTunLinuxInterface) SetExits(exits bool) (bool, error) {
 		if self.exitsMark && self.exitsRoute && self.exitsSuppressRule && self.exitsMarkRule {
 			return false, true, nil
 		}
-		if err := self.system.exitsRefusal(self.index); err != nil {
+		leftAddrs, err := self.system.exitsRefusal(self.index)
+		if err != nil {
 			return false, false, errors.Join(err, self.clearExitsWithLock())
+		}
+		// a past end's throws are this one's to keep in step, so one of an address no longer carved comes off
+		for _, address := range leftAddrs {
+			if !slices.Contains(self.throwAddrs, address) {
+				self.throwAddrs = append(self.throwAddrs, address)
+			}
 		}
 		if err := self.setExitsWithLock(); err != nil {
 			// nothing of a partial set stays on behind a refusal
@@ -866,8 +920,10 @@ func (self *urTunLinuxInterface) SetExits(exits bool) (bool, error) {
 }
 
 // Puts on what the exits need that is not on yet: the mark first, so every socket connect makes from here keeps
-// today's route, then the default route in the exits table, the rule that keeps the main table's other routes ahead of
-// it, and last the rule that sends the rest to it.
+// today's route, then the default route in the exits table and a throw beside it for each carved address, the rule that
+// keeps the main table's other routes ahead of it, and last the rule that sends the rest to it. A throw that will not go
+// on refuses nothing: its address meets the table's default route, and the tun drops it, until the SetCarved that
+// follows each sync tries it again and answers why.
 func (self *urTunLinuxInterface) setExitsWithLock() error {
 	settings := self.system.settings
 	if !self.exitsMark {
@@ -882,6 +938,8 @@ func (self *urTunLinuxInterface) setExitsWithLock() error {
 		}
 		self.exitsRoute = true
 	}
+	// before the rule that reaches the table, so no lookup of a carved address meets its default route
+	_ = self.setThrowsWithLock(self.carvedAddrs)
 	// a rule already there at the same priority, ur's protocol on it, is this daemon's from an end it did not see
 	if !self.exitsSuppressRule {
 		body := urTunLinuxRuleBody(settings.ExitsRulePriority, true, settings.ExitsTable, settings.ExitsMark)
@@ -904,7 +962,8 @@ func (self *urTunLinuxInterface) setExitsWithLock() error {
 
 // Takes off what the exits put on, the rule that sends traffic to the tun first, keeping account of what would not come
 // off, so a later call tries it again. While that rule stays, the main table's rule ahead of it and the mark stay too,
-// and the default route goes anyway, so a stuck rule finds an empty table and leaves the rest to the main table.
+// and the default route goes anyway, so a stuck rule finds an empty table and leaves the rest to the main table. The
+// carved addresses' throws go once that rule or the default route has: until then a lookup of one still needs its throw.
 func (self *urTunLinuxInterface) clearExitsWithLock() error {
 	settings := self.system.settings
 	var clearErr error
@@ -925,6 +984,9 @@ func (self *urTunLinuxInterface) clearExitsWithLock() error {
 			self.exitsRoute = false
 		}
 	}
+	if !self.exitsMarkRule || !self.exitsRoute {
+		clearErr = errors.Join(clearErr, self.setThrowsWithLock(nil))
+	}
 	if self.exitsSuppressRule && !self.exitsMarkRule {
 		body := urTunLinuxRuleBody(settings.ExitsRulePriority, true, settings.ExitsTable, settings.ExitsMark)
 		if err := self.system.request(unix.RTM_DELRULE, 0, body); err != nil && !errors.Is(err, unix.ENOENT) {
@@ -940,20 +1002,104 @@ func (self *urTunLinuxInterface) clearExitsWithLock() error {
 	return clearErr
 }
 
+// Sets the addresses the bridge carves (§17.4), the IPv4 ones counting, since the exits table is IPv4's (QD-808). While
+// the rule that reaches the exits table and its default route are both on, the throws follow at once: one for each
+// address that holds none, and those of addresses no longer carved off. Otherwise the list waits for SetExits(true),
+// and a throw a clear left on is tried off again. Answers what would not go on or come off, which the next call tries
+// again.
+func (self *urTunLinuxInterface) SetCarved(addresses []netip.Addr) error {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.closed {
+		return errUrTunClosed
+	}
+	carvedAddrs := []netip.Addr{}
+	for _, address := range addresses {
+		if address = address.Unmap(); address.Is4() && !slices.Contains(carvedAddrs, address) {
+			carvedAddrs = append(carvedAddrs, address)
+		}
+	}
+	slices.SortFunc(carvedAddrs, netip.Addr.Compare)
+	self.carvedAddrs = carvedAddrs
+	if self.exitsMarkRule && self.exitsRoute {
+		return self.setThrowsWithLock(carvedAddrs)
+	}
+	return self.setThrowsWithLock(nil)
+}
+
+// Takes off the throw of each address it put one on for that wantedAddrs no longer holds, then puts one on for each of
+// wantedAddrs that holds none. One already there is taken as on, a past end's of ur's that the table kept; one already
+// gone, as off. What would not go on or come off is counted in the answer, and kept as it is for the next call. No
+// address reaches the answer (I-13).
+func (self *urTunLinuxInterface) setThrowsWithLock(wantedAddrs []netip.Addr) error {
+	settings := self.system.settings
+	removeCount := 0
+	var removeErr error
+	keptAddrs := []netip.Addr{}
+	for _, held := range self.throwAddrs {
+		if slices.Contains(wantedAddrs, held) {
+			keptAddrs = append(keptAddrs, held)
+			continue
+		}
+		body := urTunLinuxThrowBody(held, settings.ExitsTable, settings.RouteMetric, false)
+		if err := self.system.request(unix.RTM_DELROUTE, 0, body); err != nil && !errors.Is(err, unix.ESRCH) {
+			if removeCount == 0 {
+				removeErr = err
+			}
+			removeCount += 1
+			keptAddrs = append(keptAddrs, held)
+		}
+	}
+	addCount := 0
+	var addErr error
+	for _, address := range wantedAddrs {
+		if slices.Contains(keptAddrs, address) {
+			continue
+		}
+		body := urTunLinuxThrowBody(address, settings.ExitsTable, settings.RouteMetric, true)
+		if err := self.system.request(unix.RTM_NEWROUTE, unix.NLM_F_CREATE|unix.NLM_F_EXCL, body); err != nil &&
+			!errors.Is(err, unix.EEXIST) {
+			if addCount == 0 {
+				addErr = err
+			}
+			addCount += 1
+			continue
+		}
+		keptAddrs = append(keptAddrs, address)
+	}
+	self.throwAddrs = keptAddrs
+	var setErr error
+	if 0 < removeCount {
+		setErr = errors.Join(setErr, fmt.Errorf("%d throw routes of addresses no longer carved did not come off (%v)",
+			removeCount, removeErr))
+	}
+	if 0 < addCount {
+		setErr = errors.Join(setErr, fmt.Errorf("%d throw routes of carved addresses did not go on, so the tun drops "+
+			"what the host sends them (%v)", addCount, addErr))
+	}
+	return setErr
+}
+
 // Why the exits' default route may not go on now, nil when it may: another program's route in the exits table, or rule
 // on the exits mark or table, which ur tun's would mix with; or a strict reverse path filter on an interface the main
 // table's default route leaves by, which would drop the daemon's own replies there, since a reply arrives unmarked and
-// the filter's lookup of its way back finds the tun. A setting that does not read refuses too.
-func (self *urTunLinuxSystem) exitsRefusal(index int) error {
+// the filter's lookup of its way back finds the tun. A setting that does not read refuses too. Where it may, answers the
+// addresses whose throw of ur's the table already holds, a past end's among them.
+func (self *urTunLinuxSystem) exitsRefusal(index int) ([]netip.Addr, error) {
 	settings := self.settings
 	routes, err := self.routes(unix.AF_UNSPEC)
 	if err != nil {
-		return fmt.Errorf("the routes did not read (%v)", err)
+		return nil, fmt.Errorf("the routes did not read (%v)", err)
 	}
+	throwAddrs := []netip.Addr{}
 	defaultIndexes := []int{}
 	for _, route := range routes {
+		if urTunLinuxOwnThrow(route, settings.ExitsTable) {
+			throwAddrs = append(throwAddrs, route.dst.Addr())
+			continue
+		}
 		if route.table == settings.ExitsTable && (route.protocol != urTunRouteProtocol || !slices.Contains(route.oifs, index)) {
-			return fmt.Errorf("%w, table %d", errUrTunExitsTableInUse, settings.ExitsTable)
+			return nil, fmt.Errorf("%w, table %d", errUrTunExitsTableInUse, settings.ExitsTable)
 		}
 		if route.family != unix.AF_INET || route.table != unix.RT_TABLE_MAIN || route.routeType != unix.RTN_UNICAST ||
 			route.dst.Bits() != 0 {
@@ -967,35 +1113,35 @@ func (self *urTunLinuxSystem) exitsRefusal(index int) error {
 	}
 	rules, err := self.rules(unix.AF_INET)
 	if err != nil {
-		return fmt.Errorf("the policy rules did not read (%v)", err)
+		return nil, fmt.Errorf("the policy rules did not read (%v)", err)
 	}
 	for _, rule := range rules {
 		if rule.protocol != urTunRouteProtocol && ((rule.markSet && rule.mark == settings.ExitsMark) || rule.table == settings.ExitsTable) {
-			return fmt.Errorf("%w, mark %#x and table %d", errUrTunExitsMarkInUse, settings.ExitsMark, settings.ExitsTable)
+			return nil, fmt.Errorf("%w, mark %#x and table %d", errUrTunExitsMarkInUse, settings.ExitsMark, settings.ExitsTable)
 		}
 	}
 	if len(defaultIndexes) == 0 {
-		return nil
+		return throwAddrs, nil
 	}
 	all, err := self.reversePathFilter("all")
 	if err != nil {
-		return fmt.Errorf("the reverse path filter did not read (%v)", err)
+		return nil, fmt.Errorf("the reverse path filter did not read (%v)", err)
 	}
 	for _, oif := range defaultIndexes {
 		name, err := self.linkName(oif)
 		if err != nil {
-			return fmt.Errorf("the default route's interface did not read (%v)", err)
+			return nil, fmt.Errorf("the default route's interface did not read (%v)", err)
 		}
 		value, err := self.reversePathFilter(name)
 		if err != nil {
-			return fmt.Errorf("the reverse path filter did not read (%v)", err)
+			return nil, fmt.Errorf("the reverse path filter did not read (%v)", err)
 		}
 		// the kernel filters by the stricter of all's and the interface's, 1 being strict and 2 loose
 		if all == 1 || value == 1 {
-			return fmt.Errorf("%w on %s: set its rp_filter and all's to 2, loose", errUrTunExitsStrictReversePath, name)
+			return nil, fmt.Errorf("%w on %s: set its rp_filter and all's to 2, loose", errUrTunExitsStrictReversePath, name)
 		}
 	}
-	return nil
+	return throwAddrs, nil
 }
 
 // The rp_filter of an interface, or of all: 0 off, 1 strict, 2 loose.
@@ -1007,8 +1153,9 @@ func (self *urTunLinuxSystem) reversePathFilter(name string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(content)))
 }
 
-// Takes the exits off, reverts the resolver, removes the routes and addresses it added, and closes the device, which
-// the kernel deletes with whatever is left on it. Waits for the device's event listener to end.
+// Takes the exits off, the carved addresses' throws with them, reverts the resolver, removes the routes and addresses it
+// added, and closes the device, which the kernel deletes with whatever is left on it. Waits for the device's event
+// listener to end.
 func (self *urTunLinuxInterface) Close() error {
 	var closeErr error
 	func() {

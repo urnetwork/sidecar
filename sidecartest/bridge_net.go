@@ -23,16 +23,20 @@
 //	          HMACed under the host's provide secret and naming whatever subject, network, class and delegation the
 //	          test chose (FS-38)
 //
-// The platform is the seam between the tiers. On T2 it is in memory: a client registry and an issuer that seals what
-// server's CreateContract seals (C13, PROTO-M4-02): the source's subject, a window client's parent's, its network, the
-// data class, and the request's delegation unchanged. On T3 server's test gives its own, over Postgres and
-// controller.CreateContract. Minting goes around the platform on both tiers, through the provide secret the test
-// stack holds in the host's live client, as an operator holding the platform's provide keys would.
+// The platform is the seam between the tiers: where clients register, and where their out-of-band control goes, as
+// api's control route takes it. On T2 it is in memory: a client registry and an issuer that seals what server's
+// CreateContract seals (C13, PROTO-M4-02): the source's subject, a window client's parent's, its network, the data
+// class, and the request's delegation unchanged. On T3 server's test gives its own, rows in Postgres and every control
+// frame to server's controller. Minting goes around the platform on both tiers, through the provide secret the test
+// stack holds in the host's live client, as an operator holding the platform's provide keys would; the operator also
+// answers the host's return contracts to its own clients, as its platform would.
 //
 // What is not the system here: each sidecar's binding is signed by the world and reaches the host's component through
 // its store's binding cache, since no api serves these sidecars' identities (the component's fetcher has no api and
-// fetches nothing); the host's daemon listener is one the world opens and names. Waits are on monitors and sockets,
-// bounded by BridgeNetSettings.WaitTimeout of real time, since connect's timers are real (X9).
+// fetches nothing); the host's daemon listener is one the world opens and names; a LAN host behind a route is the
+// upstream's loopback listener, which the NAT's dial reaches in its place; and on T3 a client's key reaches server
+// through the platform rather than in band, since the exchange carries no ControlId frame to server. Waits are on
+// monitors and sockets, bounded by BridgeNetSettings.WaitTimeout of real time, since connect's timers are real (X9).
 //
 // Safe for concurrent use. A BridgeNet is closed by its test, before its Net.
 
@@ -61,6 +65,7 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/device"
+	sidecarprotocol "github.com/urnetwork/sidecar/protocol"
 	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
@@ -82,6 +87,11 @@ type BridgeNetSettings struct {
 	// The binding cache the hosts' components keep: 7 days and 16 a sidecar, the component's defaults.
 	BindingRetainTimeout time.Duration
 	BindingMaxCount      int
+	// How often a wait for a host's component to compile and serve looks again: 10 ms. The component raises nothing
+	// when its provider starts or a compile lands, so that wait polls, bounded by WaitTimeout. Positive.
+	ServingPollInterval time.Duration
+	// The largest read an upstream listener or a window's UDP socket takes at once: 64 KiB, a datagram's most.
+	ReadByteCount int
 }
 
 func DefaultBridgeNetSettings() *BridgeNetSettings {
@@ -93,19 +103,24 @@ func DefaultBridgeNetSettings() *BridgeNetSettings {
 		SendTimeout:          5 * time.Second,
 		BindingRetainTimeout: 7 * 24 * time.Hour,
 		BindingMaxCount:      16,
+		ServingPollInterval:  10 * time.Millisecond,
+		ReadByteCount:        64 * 1024,
 	}
 }
 
-// What a BridgeNet's clients register on and take their contracts from: the in-memory registry and issuer on T2,
-// server's Postgres and CreateContract on T3. Safe for concurrent use.
+// What a BridgeNet's clients register on and send their out-of-band control to: the in-memory registry and issuer on
+// T2, server's Postgres and controller on T3. Safe for concurrent use.
 type BridgeNetPlatform interface {
 	// Registers a client of the network and answers its id: a sidecar's own client, or a window client whose subject
 	// is its parent's.
 	AddClient(ctx context.Context, args *BridgeNetClientArgs) (connect.Id, error)
-	// Records a client's provide keys, as connect's ProvideKey control carries them to the platform.
-	SetProvide(ctx context.Context, clientId connect.Id, secretKeys map[protocol.ProvideMode][]byte) error
-	// The platform's answer to sourceId's CreateContract, as its out-of-band control asks it.
-	CreateContract(ctx context.Context, sourceId connect.Id, request *protocol.CreateContract) (*protocol.CreateContractResult, error)
+	// The platform's answers to the control frames clientId sent it, as api's control route answers them: its contracts,
+	// and its provide modes' and key's acks. Borrows frames; the answers are the caller's, to return to the pool.
+	Control(ctx context.Context, clientId connect.Id, frames []*protocol.Frame) ([]*protocol.Frame, error)
+	// Holds publicKey as the key clientId publishes in band, so a contract to it carries that key and its peer's session
+	// can verify it. The world's exchange carries no client's ControlId frames to a platform, so the key's in-band
+	// publication reaches the platform here.
+	RegisterClientKey(ctx context.Context, clientId connect.Id, publicKey []byte) error
 }
 
 // One client a BridgeNet registers.
@@ -215,15 +230,42 @@ func (self *bridgeNetFakePlatform) AddClient(ctx context.Context, args *BridgeNe
 	return clientId, nil
 }
 
-// The fake reads a destination's provide keys from its live client, as Net.MintContract does.
-func (self *bridgeNetFakePlatform) SetProvide(ctx context.Context, clientId connect.Id, secretKeys map[protocol.ProvideMode][]byte) error {
+// The fake reads a destination's key and provide secrets from its live client, as Net.MintContract does, so it holds
+// nothing.
+func (self *bridgeNetFakePlatform) RegisterClientKey(ctx context.Context, clientId connect.Id, publicKey []byte) error {
 	return nil
+}
+
+// Each CreateContract answered as createContract answers it; every other control taken with no answer, as the
+// exchange's issuer does.
+func (self *bridgeNetFakePlatform) Control(ctx context.Context, clientId connect.Id, frames []*protocol.Frame) ([]*protocol.Frame, error) {
+	resultFrames := []*protocol.Frame{}
+	for _, frame := range frames {
+		message, err := connect.FromFrame(frame)
+		if err != nil {
+			continue
+		}
+		request, ok := message.(*protocol.CreateContract)
+		if !ok {
+			continue
+		}
+		result, err := self.createContract(clientId, request)
+		if err != nil {
+			continue
+		}
+		resultFrame, err := connect.ToFrame(result, connect.DefaultProtocolVersion)
+		if err != nil {
+			continue
+		}
+		resultFrames = append(resultFrames, resultFrame)
+	}
+	return resultFrames, nil
 }
 
 // Network contracts between two of the network's clients, sealed with the source's subject and network, the data
 // class and the request's delegation; a companion carries its forward contract's seals, its destination's, and no
 // delegation. Anything else is refused, as shares wait for C18.
-func (self *bridgeNetFakePlatform) CreateContract(ctx context.Context, sourceId connect.Id, request *protocol.CreateContract) (*protocol.CreateContractResult, error) {
+func (self *bridgeNetFakePlatform) createContract(sourceId connect.Id, request *protocol.CreateContract) (*protocol.CreateContractResult, error) {
 	destinationId, err := connect.IdFromBytes(request.GetDestinationId())
 	if err != nil {
 		return nil, err
@@ -260,47 +302,184 @@ func (self *bridgeNetFakePlatform) CreateContract(ctx context.Context, sourceId 
 	return &protocol.CreateContractResult{Contract: contract, CreateContract: request}, nil
 }
 
-// A client's out-of-band control: every CreateContract answered by create, everything else taken with no answer, as
-// the exchange's issuer does.
+// A client's out-of-band control, as api's control route answers it, off the caller's goroutine: a CreateContract the
+// operator answers (mint) is minted, and every other frame goes to the platform. Once SendControl returns, the frames
+// and the callback are this control's (connect/CODESTYLE.md's out-of-band boundary).
 type bridgeNetControl struct {
-	ctx    context.Context
-	create func(ctx context.Context, request *protocol.CreateContract) (*protocol.CreateContractResult, error)
+	ctx      context.Context
+	clientId connect.Id
+	platform BridgeNetPlatform
+	// answers a CreateContract itself and true, the operator's, or false to leave it to the platform; nil for none
+	mint func(request *protocol.CreateContract) (*protocol.CreateContractResult, bool, error)
+	// the world's controls in flight
+	workers *bridgeNetControls
+}
+
+// Why a control is refused once its world has closed.
+var errBridgeNetClosed = errors.New("the bridge world is closed")
+
+// The out-of-band controls in flight across a world's clients, which its close waits for. A client may send a control
+// after its world began to close, a contract's close among them, which is refused at once. Safe for concurrent use.
+type bridgeNetControls struct {
+	stateLock sync.Mutex
+	closed    bool
+	count     *connect.MonitorValue[int]
+}
+
+func newBridgeNetControls() *bridgeNetControls {
+	return &bridgeNetControls{count: connect.NewMonitorValue(0)}
+}
+
+// Counts a control in, false once the world closed.
+func (self *bridgeNetControls) start() bool {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.closed {
+		return false
+	}
+	self.count.Update(func(count int) int { return count + 1 })
+	return true
+}
+
+func (self *bridgeNetControls) finish() {
+	self.count.Update(func(count int) int { return count - 1 })
+}
+
+// Refuses every later control and waits for those in flight.
+func (self *bridgeNetControls) close() {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.closed = true
+	}()
+	for {
+		count, changed := self.count.Get()
+		if count == 0 {
+			return
+		}
+		<-changed
+	}
 }
 
 func (self *bridgeNetControl) SendControl(frames []*protocol.Frame, callback connect.OobResultFunction) {
-	resultFrames := []*protocol.Frame{}
-	defer func() {
+	if !self.workers.start() {
 		for _, frame := range frames {
 			connect.MessagePoolReturn(frame.MessageBytes)
 		}
-		for _, frame := range resultFrames {
-			connect.MessagePoolReturn(frame.MessageBytes)
+		if callback != nil {
+			connect.HandleError(func() {
+				callback(nil, errBridgeNetClosed)
+			})
+		}
+		return
+	}
+	go func() {
+		defer self.workers.finish()
+		resultFrames := []*protocol.Frame{}
+		defer func() {
+			for _, frame := range frames {
+				connect.MessagePoolReturn(frame.MessageBytes)
+			}
+			for _, frame := range resultFrames {
+				connect.MessagePoolReturn(frame.MessageBytes)
+			}
+		}()
+		platformFrames := []*protocol.Frame{}
+		for _, frame := range frames {
+			if self.mint != nil {
+				if message, err := connect.FromFrame(frame); err == nil {
+					if request, ok := message.(*protocol.CreateContract); ok {
+						result, minted, err := self.mint(request)
+						if minted {
+							if err == nil && result != nil {
+								if resultFrame, err := connect.ToFrame(result, connect.DefaultProtocolVersion); err == nil {
+									resultFrames = append(resultFrames, resultFrame)
+								}
+							}
+							continue
+						}
+					}
+				}
+			}
+			platformFrames = append(platformFrames, frame)
+		}
+		var err error
+		if 0 < len(platformFrames) {
+			var answers []*protocol.Frame
+			answers, err = self.platform.Control(self.ctx, self.clientId, platformFrames)
+			resultFrames = append(resultFrames, answers...)
+		}
+		if callback != nil {
+			connect.HandleError(func() {
+				callback(resultFrames, err)
+			})
 		}
 	}()
-	for _, frame := range frames {
-		message, err := connect.FromFrame(frame)
+}
+
+// A client's provide modes, set with the platform's ack waited for, and its key held at the platform, as a client
+// opening on api is open once both hold.
+func (self *BridgeNet) waitClient(ctx context.Context, client *NetClient, provideModes map[protocol.ProvideMode]bool) error {
+	acks := make(chan error, 1)
+	client.Client.ContractManager().SetProvideModesWithReturnTrafficWithOobAckCallback(provideModes, func(err error) {
+		select {
+		case acks <- err:
+		default:
+		}
+	})
+	select {
+	case err := <-acks:
 		if err != nil {
-			continue
+			return fmt.Errorf("the platform refused %s's provide modes: %w", client.Name, err)
 		}
-		request, ok := message.(*protocol.CreateContract)
-		if !ok {
-			continue
-		}
-		result, err := self.create(self.ctx, request)
-		if err != nil || result == nil {
-			continue
-		}
-		resultFrame, err := connect.ToFrame(result, connect.DefaultProtocolVersion)
-		if err != nil {
-			continue
-		}
-		resultFrames = append(resultFrames, resultFrame)
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(self.settings.WaitTimeout):
+		return fmt.Errorf("no ack of %s's provide modes within %s", client.Name, self.settings.WaitTimeout)
 	}
-	if callback != nil {
-		connect.HandleError(func() {
-			callback(resultFrames, nil)
-		})
-	}
+	return self.platform.RegisterClientKey(ctx, client.ClientId, client.Client.ClientKeyManager().PublicKey())
+}
+
+// The parts of §22.7 this world runs (BRIDGE-M4-22): S8 on T2 in sidecartest/scenario and on T3 in server's controller
+// package, and the bridge's asserts, each a test of its own.
+var (
+	_ = RegisterScenario("S8", "", ScenarioTierT2, &ScenarioTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest/scenario", Name: "TestScenarioS8"})
+	_ = RegisterScenario("S8", "", ScenarioTierT3, &ScenarioTest{Repo: "server", Package: "github.com/urnetwork/server/controller", Name: "TestScenarioS8OnT3", Tags: "sidecar_pending"})
+	_ = RegisterPrivacyAssert("unsealed-peer", &PrivacyAssertTest{Repo: "sidecar", Package: "github.com/urnetwork/sidecar/sidecartest", Name: "TestBridgeUnsealedPeerFlowIsDenied"})
+)
+
+// A failure a world raised inside a scenario's flow, which the flow returns.
+type bridgeNetFailure struct {
+	err error
+}
+
+// A world's AdmissionT inside a scenario's flow: a failure panics, and bridgeNetCatch recovers it into the flow's error.
+type bridgeNetFailer struct{}
+
+func (bridgeNetFailer) Helper() {}
+
+func (bridgeNetFailer) Fatal(args ...any) {
+	panic(bridgeNetFailure{err: errors.New(fmt.Sprint(args...))})
+}
+
+func (bridgeNetFailer) Fatalf(format string, args ...any) {
+	panic(bridgeNetFailure{err: fmt.Errorf(format, args...)})
+}
+
+func (bridgeNetFailer) Logf(format string, args ...any) {}
+
+// Runs body, turning a failure the world raises into its error.
+func bridgeNetCatch(body func() error) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			failure, ok := recovered.(bridgeNetFailure)
+			if !ok {
+				panic(recovered)
+			}
+			err = failure.err
+		}
+	}()
+	return body()
 }
 
 // The settings a schedule's world takes on a Net, which server's T3 test sets before it runs a schedule there.
@@ -338,6 +517,12 @@ type BridgeNet struct {
 	devices   []*BridgeNetDevice
 	hosts     []*BridgeNetHost
 	windows   []*BridgeNetWindow
+	// the operator's clients, whose return contracts the operator mints too
+	mintedClientIds map[connect.Id]bool
+	// the local policy of the newest document saved, nil before one (SaveAclPolicy)
+	aclLocal *sidecar.AclLocalPolicy
+	// every client's out-of-band controls in flight
+	controls *bridgeNetControls
 }
 
 // A network on net's tier, bootstrapped by its owner's device, whose head holds settings' block, failing through t: a
@@ -361,6 +546,9 @@ func NewBridgeNet(t AdmissionT, net *Net, settings *BridgeNetSettings) *BridgeNe
 		settings:  settings,
 		platform:  settings.Platform,
 		admission: admission,
+
+		mintedClientIds: map[connect.Id]bool{},
+		controls:        newBridgeNetControls(),
 	}
 	if self.platform == nil {
 		self.platform = newBridgeNetFakePlatform(net, settings)
@@ -398,6 +586,7 @@ func (self *BridgeNet) Close() {
 	for _, host := range hosts {
 		host.Close()
 	}
+	self.controls.close()
 	self.admission.Close()
 }
 
@@ -535,6 +724,60 @@ func (self *BridgeNet) Land(signer *AdmissionDevice, signedType bridge.SignedTyp
 	self.t.Helper()
 	self.admission.MustLand(self.admission.Sign(signer, signedType, statement))
 	return self.admission.Tip().GetVersion()
+}
+
+// The owner's device saves source as the network's ACL document, as `ur acl push` does once a person confirms its
+// preview (§8.8), with its base; every host's compile takes the plan's local policy from then on. The plan.
+func (self *BridgeNet) SaveAclPolicy(source string) *sidecar.AclSavePlan {
+	self.t.Helper()
+	plan, _ := self.admission.SaveAclPolicy([]byte(source), nil)
+	self.stateLock.Lock()
+	self.aclLocal = plan.Local
+	self.stateLock.Unlock()
+	return plan
+}
+
+// The id of the document's one rule that allows route, failing the test unless there is exactly one.
+func BridgeNetRouteRuleId(t AdmissionT, plan *sidecar.AclSavePlan) []byte {
+	t.Helper()
+	ruleIds := [][]byte{}
+	for _, rule := range plan.Rows.GetRules() {
+		if slices.Contains(rule.GetActions(), uint32(sidecarprotocol.AclAction_ACL_ACTION_ROUTE)) {
+			ruleIds = append(ruleIds, rule.GetRuleId())
+		}
+	}
+	if len(ruleIds) != 1 {
+		t.Fatalf("the document holds %d route rules, not one", len(ruleIds))
+	}
+	return ruleIds[0]
+}
+
+// A subnet route of prefix the host advertises under the standing route rules routeRuleIds, its body sealed under the
+// config key and its site id siteId (`ur bridge expose` under a standing grant, §17.7), which must land: its route id.
+func (self *BridgeNet) FileRoute(host *BridgeNetDevice, prefix netip.Prefix, routeRuleIds [][]byte, siteId []byte) []byte {
+	self.t.Helper()
+	header := self.admission.Header()
+	routeId := make([]byte, sha256.Size)
+	rand.Read(routeId)
+	sealed := self.Seal(bridge.SignedType_SIGNED_BRIDGE_ROUTE, header, &bridge.BridgeRouteBody{
+		Prefixes: []*bridge.BridgeIpv4Prefix{BridgeNetPrefix(prefix)},
+		SiteId:   siteId,
+		Weight:   1,
+		Kind:     bridge.BridgeRouteKind_BRIDGE_ROUTE_KIND_SUBNET,
+	})
+	self.Land(host.Device, bridge.SignedType_SIGNED_BRIDGE_ROUTE, &bridge.BridgeRoute{
+		Header: header, RouteId: routeId, Advertiser: host.SidecarId().Bytes(), RouteRuleIds: routeRuleIds, SealedBody: sealed,
+	})
+	return routeId
+}
+
+// A BridgeWithdraw of ruleId in mode, signed by signer, the rule's own or an admin's device, which must land: the
+// position it landed at.
+func (self *BridgeNet) Withdraw(signer *BridgeNetDevice, ruleId []byte, mode bridge.BridgeWithdrawMode) uint64 {
+	self.t.Helper()
+	return self.Land(signer.Device, bridge.SignedType_SIGNED_BRIDGE_WITHDRAW, &bridge.BridgeWithdraw{
+		Header: self.admission.Header(), RuleId: ruleId, Mode: mode,
+	})
 }
 
 // A SidecarRevoke of device by the owner's device, an admin's (§7.9), which must land: the position it landed at.
@@ -842,6 +1085,8 @@ type bridgeNetDials struct {
 	heldCount int
 	// moves at each dial
 	changes *connect.MonitorValue[int]
+	// LAN hosts whose dials reach the upstream's loopback listeners (BridgeNetHost.AddLan)
+	lanHosts map[netip.Addr]bool
 }
 
 // A host's upstream: a TCP and a UDP listener on loopback, each counting what reached it. The UDP listener answers
@@ -849,6 +1094,8 @@ type bridgeNetDials struct {
 type BridgeNetUpstream struct {
 	tcp net.Listener
 	udp net.PacketConn
+	// the largest read each takes at once
+	readByteCount int
 
 	stateLock sync.Mutex
 	accepts   []*BridgeNetAccept
@@ -864,7 +1111,7 @@ type BridgeNetAccept struct {
 	Closed bool
 }
 
-func newBridgeNetUpstream() (*BridgeNetUpstream, error) {
+func newBridgeNetUpstream(readByteCount int) (*BridgeNetUpstream, error) {
 	tcp, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -874,7 +1121,7 @@ func newBridgeNetUpstream() (*BridgeNetUpstream, error) {
 		tcp.Close()
 		return nil, err
 	}
-	self := &BridgeNetUpstream{tcp: tcp, udp: udp, changes: connect.NewMonitorValue(0)}
+	self := &BridgeNetUpstream{tcp: tcp, udp: udp, readByteCount: readByteCount, changes: connect.NewMonitorValue(0)}
 	self.workers.Add(2)
 	go self.acceptTcp()
 	go self.readUdp()
@@ -896,7 +1143,7 @@ func (self *BridgeNetUpstream) acceptTcp() {
 		go func() {
 			defer self.workers.Done()
 			defer conn.Close()
-			buffer := make([]byte, 4096)
+			buffer := make([]byte, self.readByteCount)
 			for {
 				n, err := conn.Read(buffer)
 				if 0 < n {
@@ -917,7 +1164,7 @@ func (self *BridgeNetUpstream) acceptTcp() {
 
 func (self *BridgeNetUpstream) readUdp() {
 	defer self.workers.Done()
-	buffer := make([]byte, 64*1024)
+	buffer := make([]byte, self.readByteCount)
 	for {
 		n, address, err := self.udp.ReadFrom(buffer)
 		if err != nil {
@@ -1050,7 +1297,7 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 		Address:    settings.Address,
 		ctx:        ctx,
 		cancel:     cancel,
-		dials:      &bridgeNetDials{changes: connect.NewMonitorValue(0)},
+		dials:      &bridgeNetDials{changes: connect.NewMonitorValue(0), lanHosts: map[netip.Addr]bool{}},
 		adoptedPin: connect.NewMonitorValue[uint64](0),
 		records:    connect.NewMonitorValue(0),
 	}
@@ -1059,7 +1306,7 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 		self.t.Fatalf(format, args...)
 	}
 	var err error
-	host.Upstream, err = newBridgeNetUpstream()
+	host.Upstream, err = newBridgeNetUpstream(self.settings.ReadByteCount)
 	if err != nil {
 		fail("the upstream: %v", err)
 	}
@@ -1072,18 +1319,20 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 	clientSettings.ClientKeySeed = bytes.Clone(hostDevice.clientKeySeed)
 	clientSettings.EncryptionSettings.ExposeVerifiedPeerClientKey = true
 	host.Client = self.net.exchange.addClientWithControl(ctx, hostDevice.Name, hostDevice.ClientId, clientSettings, &bridgeNetControl{
-		ctx: ctx,
-		create: func(ctx context.Context, request *protocol.CreateContract) (*protocol.CreateContractResult, error) {
-			return self.platform.CreateContract(ctx, hostDevice.ClientId, request)
+		ctx:      ctx,
+		clientId: hostDevice.ClientId,
+		platform: self.platform,
+		mint: func(request *protocol.CreateContract) (*protocol.CreateContractResult, bool, error) {
+			return self.mintReturn(hostDevice.ClientId, request)
 		},
+		workers: self.controls,
 	})
 	provideModes := map[protocol.ProvideMode]bool{protocol.ProvideMode_Network: true}
 	if settings.ProvideFriendsAndFamily {
 		provideModes[protocol.ProvideMode_FriendsAndFamily] = true
 	}
-	host.Client.Client.ContractManager().SetProvideModes(provideModes)
-	if err := self.platform.SetProvide(ctx, hostDevice.ClientId, host.Client.Client.ContractManager().GetProvideSecretKeys()); err != nil {
-		fail("the host's provide keys: %v", err)
+	if err := self.waitClient(ctx, host.Client, provideModes); err != nil {
+		fail("the host's client: %v", err)
 	}
 
 	bridgeSettings := device.DefaultBridgeSettings()
@@ -1153,9 +1402,14 @@ func (self *BridgeNet) StartHost(hostDevice *BridgeNetDevice, settings *BridgeNe
 			return nil
 		},
 		DaemonListeners: func() []string { return []string{daemonAddress} },
-		Clock:           self.net.Clock(),
-		Log:             sidecar.NewNoopLogger(),
-		Settings:        componentSettings,
+		AclLocal: func() *sidecar.AclLocalPolicy {
+			self.stateLock.Lock()
+			defer self.stateLock.Unlock()
+			return self.aclLocal
+		},
+		Clock:    self.net.Clock(),
+		Log:      sidecar.NewNoopLogger(),
+		Settings: componentSettings,
 	})
 	if err != nil {
 		fail("the component: %v", err)
@@ -1200,8 +1454,10 @@ func (self *BridgeNetHost) Close() {
 	}
 }
 
-// Waits until the host's follower stands at n and the role has published a state or entry at or past it, with the
-// component's catch-up done: then a flow meets what n holds. Fails the test past WaitTimeout.
+// Waits until the host's follower stands at n, the role has published what it holds at or past n, the component has
+// compiled at or past the newest entry through n that wants a compile (all but a pure denial, which reaches the role
+// as a delta and through Bridge.Revoke), and the generation's provider serves: then a flow meets what n holds. Fails
+// the test past WaitTimeout.
 func (self *BridgeNetHost) WaitAdopted(n uint64) {
 	t := self.bridgeNet.t
 	t.Helper()
@@ -1210,17 +1466,24 @@ func (self *BridgeNetHost) WaitAdopted(n uint64) {
 	if _, err := self.follower.WaitFor(ctx, n); err != nil {
 		t.Fatalf("%s's follower did not reach %d: %v", self.Device.Name, n, err)
 	}
+	compileAt := uint64(0)
+	for _, read := range self.follower.BridgeEntries(1, n) {
+		if !read.Pure {
+			compileAt = read.N
+		}
+	}
 	for {
 		adopted, changed := self.adoptedPin.Get()
-		if n <= adopted && self.component.Status().Serving {
+		status := self.component.Status()
+		if n <= adopted && compileAt <= status.CompiledPin.GetVersion() && status.Serving {
 			return
 		}
 		select {
 		case <-changed:
-		case <-time.After(10 * time.Millisecond):
-			// the component's serving flag moves without a callback of the bridge's
+		case <-time.After(self.bridgeNet.settings.ServingPollInterval):
+			// the component's compile and serving move without a callback of the bridge's
 		case <-ctx.Done():
-			t.Fatalf("%s adopted %d, not %d, serving %t: %+v", self.Device.Name, adopted, n, self.component.Status().Serving, self.component.Status())
+			t.Fatalf("%s adopted %d, not %d, compiled at %d, not %d: %+v", self.Device.Name, adopted, n, status.CompiledPin.GetVersion(), compileAt, status)
 		}
 	}
 }
@@ -1228,6 +1491,26 @@ func (self *BridgeNetHost) WaitAdopted(n uint64) {
 // The state the role enforces, nil for none.
 func (self *BridgeNetHost) State() *bridge.BridgeState {
 	return self.Bridge.Decision().BridgeState
+}
+
+// The rules of the state the role enforces, nil for none. Fails the test on rules that do not parse.
+func (self *BridgeNetHost) Rules() *bridge.BridgeRules {
+	t := self.bridgeNet.t
+	t.Helper()
+	state := self.State()
+	if state == nil {
+		return nil
+	}
+	rules := &bridge.BridgeRules{}
+	if err := proto.Unmarshal(state.GetRules(), rules); err != nil {
+		t.Fatalf("the state's rules: %v", err)
+	}
+	return rules
+}
+
+// What the host's component reports: its compiles and the alarms they raised.
+func (self *BridgeNetHost) ComponentStatus() sidecar.BridgeComponentStatus {
+	return self.component.Status()
 }
 
 func (self *BridgeNetHost) record(record func()) {
@@ -1370,6 +1653,14 @@ func (self *BridgeNetHost) HoldDials() {
 	}
 }
 
+// Stands the upstream's loopback listeners in for a host at lan on a LAN this host reaches: a dial to lan at a port
+// reaches loopback at that port, the TCP or UDP listener, and is counted under lan.
+func (self *BridgeNetHost) AddLan(lan netip.Addr) {
+	self.dials.stateLock.Lock()
+	defer self.dials.stateLock.Unlock()
+	self.dials.lanHosts[lan] = true
+}
+
 // Lets every held dial go on.
 func (self *BridgeNetHost) OpenDials() {
 	self.dials.open()
@@ -1418,7 +1709,7 @@ func (self *BridgeNetHost) WaitHeldDials(count int) {
 // whatever its context says, as one the kernel has taken.
 func (self *bridgeNetDials) dial(ctx context.Context, network string, address string) (net.Conn, error) {
 	record := &BridgeNetDial{Network: network, Address: address}
-	gate := func() chan struct{} {
+	gate, dialAddress := func() (chan struct{}, string) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
 		self.dials = append(self.dials, record)
@@ -1426,7 +1717,10 @@ func (self *bridgeNetDials) dial(ctx context.Context, network string, address st
 			record.Held = true
 			self.heldCount += 1
 		}
-		return self.gate
+		if addressPort, err := netip.ParseAddrPort(address); err == nil && self.lanHosts[addressPort.Addr()] {
+			return self.gate, netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), addressPort.Port()).String()
+		}
+		return self.gate, address
 	}()
 	self.changes.Update(func(count int) int { return count + 1 })
 	dialCtx := ctx
@@ -1434,7 +1728,7 @@ func (self *bridgeNetDials) dial(ctx context.Context, network string, address st
 		<-gate
 		dialCtx = context.Background()
 	}
-	conn, err := (&net.Dialer{}).DialContext(dialCtx, network, address)
+	conn, err := (&net.Dialer{}).DialContext(dialCtx, network, dialAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -1574,9 +1868,7 @@ func (self *BridgeNet) OpenWindow(name string, subject *BridgeNetDevice, host *B
 		if err != nil {
 			fail("the window client: %v", err)
 		}
-		control = &bridgeNetControl{ctx: ctx, create: func(ctx context.Context, request *protocol.CreateContract) (*protocol.CreateContractResult, error) {
-			return self.platform.CreateContract(ctx, clientId, request)
-		}}
+		control = &bridgeNetControl{ctx: ctx, clientId: clientId, platform: self.platform, workers: self.controls}
 	} else {
 		// the operator's own client, which the platform it runs answers for, so the host's return contracts reach it
 		var err error
@@ -1584,18 +1876,23 @@ func (self *BridgeNet) OpenWindow(name string, subject *BridgeNetDevice, host *B
 		if err != nil {
 			fail("the operator's client: %v", err)
 		}
-		control = &bridgeNetControl{ctx: ctx, create: func(ctx context.Context, request *protocol.CreateContract) (*protocol.CreateContractResult, error) {
-			mintArgs := args.Mint(window, request)
-			if mintArgs == nil {
-				refused := protocol.ContractError_NoPermission
-				return &protocol.CreateContractResult{Error: &refused, CreateContract: request}, nil
-			}
-			contract, err := self.net.MintContract(mintArgs)
-			if err != nil {
-				return nil, err
-			}
-			return &protocol.CreateContractResult{Contract: contract, CreateContract: request}, nil
-		}}
+		self.stateLock.Lock()
+		self.mintedClientIds[clientId] = true
+		self.stateLock.Unlock()
+		control = &bridgeNetControl{ctx: ctx, clientId: clientId, platform: self.platform, workers: self.controls,
+			mint: func(request *protocol.CreateContract) (*protocol.CreateContractResult, bool, error) {
+				mintArgs := args.Mint(window, request)
+				if mintArgs == nil {
+					refused := protocol.ContractError_NoPermission
+					return &protocol.CreateContractResult{Error: &refused, CreateContract: request}, true, nil
+				}
+				contract, err := self.net.MintContract(mintArgs)
+				if err != nil {
+					return nil, true, err
+				}
+				return &protocol.CreateContractResult{Contract: contract, CreateContract: request}, true, nil
+			},
+		}
 	}
 	echoSeed := sha256.Sum256([]byte("bridge net echo " + name))
 	window.echoId = binary.BigEndian.Uint16(echoSeed[:2])
@@ -1629,6 +1926,10 @@ func (self *BridgeNet) OpenWindow(name string, subject *BridgeNetDevice, host *B
 		window.Delegation = self.SignDelegation(delegation, signKey)
 		window.Client.Client.ContractManager().SetWindowDelegation(window.Delegation)
 	}
+	// its provide modes, for its host's return contracts, and its key, with the platform before its first send
+	if err := self.waitClient(ctx, window.Client, map[protocol.ProvideMode]bool{protocol.ProvideMode_Network: true}); err != nil {
+		fail("the window's client: %v", err)
+	}
 
 	tunSettings := connect.DefaultTunSettingsWithBufferSize(64)
 	tunSettings.Log = connect.NewNoopLogger()
@@ -1653,6 +1954,37 @@ func (self *BridgeNet) OpenWindow(name string, subject *BridgeNetDevice, host *B
 	self.windows = append(self.windows, window)
 	self.stateLock.Unlock()
 	return window
+}
+
+// A return contract from sourceId to one of the operator's clients, minted as the operator's platform would answer it,
+// sealed with the destination's own seals and no delegation; minted false for any other destination, which the
+// platform answers. The operator mints its own clients' contracts both ways, so a minted window's session forms and its
+// flows reach the host's checks, where they are refused (FS-38).
+func (self *BridgeNet) mintReturn(sourceId connect.Id, request *protocol.CreateContract) (*protocol.CreateContractResult, bool, error) {
+	destinationId, err := connect.IdFromBytes(request.GetDestinationId())
+	if err != nil {
+		return nil, false, nil
+	}
+	self.stateLock.Lock()
+	minted := self.mintedClientIds[destinationId]
+	self.stateLock.Unlock()
+	if !minted {
+		return nil, false, nil
+	}
+	networkId := connect.Id(self.NetworkId())
+	contract, err := self.net.MintContract(&MintContractArgs{
+		SourceId:              sourceId,
+		DestinationId:         destinationId,
+		ProvideMode:           protocol.ProvideMode_Network,
+		SourceSubjectClientId: &destinationId,
+		SourceNetworkId:       &networkId,
+		ContractClass:         protocol.ContractClass_ContractClassData,
+		TransferByteCount:     max(request.GetTransferByteCount(), self.settings.ContractByteCount),
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	return &protocol.CreateContractResult{Contract: contract, CreateContract: request}, true, nil
 }
 
 // delegation's Signed bytes, as bridge.WindowDelegationSigned writes them, signed by key as the subject's id signs.
@@ -1738,7 +2070,7 @@ func (self *BridgeNetWindow) ExchangeUdp(address netip.AddrPort, payload []byte,
 	}
 	defer conn.Close()
 	conn.SetReadDeadline(time.Now().Add(timeout))
-	buffer := make([]byte, 64*1024)
+	buffer := make([]byte, self.bridgeNet.settings.ReadByteCount)
 	n, err := conn.Read(buffer)
 	if err != nil {
 		return nil, err
@@ -1769,6 +2101,19 @@ func (self *BridgeNetWindow) SendEcho(address netip.Addr, sequence uint16) error
 	if !self.natClient.SendPacket(connect.SourceId(self.Client.ClientId), self.ProvideMode, pooled, self.bridgeNet.settings.SendTimeout) {
 		connect.MessagePoolReturn(pooled)
 		return errors.New("the window refused the echo")
+	}
+	return nil
+}
+
+// A TCP SYN to address from the window's own address, built by hand and sent through the window's link: a peer whose
+// session never forms gets no answer a stack would wait out.
+func (self *BridgeNetWindow) SendSyn(address netip.AddrPort) error {
+	packet := bridgeNetSyn(netip.AddrPortFrom(self.source, 40000), address)
+	pooled := connect.MessagePoolGet(len(packet))
+	copy(pooled, packet)
+	if !self.natClient.SendPacket(connect.SourceId(self.Client.ClientId), self.ProvideMode, pooled, self.bridgeNet.settings.SendTimeout) {
+		connect.MessagePoolReturn(pooled)
+		return errors.New("the window refused the SYN")
 	}
 	return nil
 }
@@ -1819,6 +2164,31 @@ func bridgeNetEchoRequest(source netip.Addr, destination netip.Addr, id uint16, 
 	return packet
 }
 
+// An IPv4 TCP SYN from source to destination, with its checksums.
+func bridgeNetSyn(source netip.AddrPort, destination netip.AddrPort) []byte {
+	tcp := make([]byte, 20)
+	binary.BigEndian.PutUint16(tcp[0:2], source.Port())
+	binary.BigEndian.PutUint16(tcp[2:4], destination.Port())
+	binary.BigEndian.PutUint32(tcp[4:8], 1)
+	tcp[12] = 0x50
+	tcp[13] = 0x02
+	binary.BigEndian.PutUint16(tcp[14:16], 65535)
+	sourceOctets := source.Addr().As4()
+	destinationOctets := destination.Addr().As4()
+	pseudo := append(append(append([]byte{}, sourceOctets[:]...), destinationOctets[:]...), 0, 6, 0, byte(len(tcp)))
+	binary.BigEndian.PutUint16(tcp[16:18], bridgeNetChecksum(append(pseudo, tcp...)))
+	packet := make([]byte, 20+len(tcp))
+	packet[0] = 0x45
+	binary.BigEndian.PutUint16(packet[2:4], uint16(len(packet)))
+	packet[8] = 64
+	packet[9] = 6
+	copy(packet[12:16], sourceOctets[:])
+	copy(packet[16:20], destinationOctets[:])
+	binary.BigEndian.PutUint16(packet[10:12], bridgeNetChecksum(packet[:20]))
+	copy(packet[20:], tcp)
+	return packet
+}
+
 // The sequence of an IPv4 echo reply to id, false for anything else.
 func bridgeNetEchoReply(packet []byte, id uint16) (uint16, bool) {
 	if len(packet) < 20 || packet[0]>>4 != 4 || packet[9] != 1 {
@@ -1844,4 +2214,161 @@ func bridgeNetChecksum(data []byte) uint16 {
 		sum = sum>>16 + sum&0xffff
 	}
 	return ^uint16(sum)
+}
+
+// The host's overlay address in S8, in BridgeNet's default block's lower /17, and the LAN behind it.
+var (
+	bridgeScenarioHostAddress  = netip.MustParseAddr("100.80.7.20")
+	bridgeScenarioLanPrefix    = netip.MustParsePrefix("192.0.2.0/24")
+	bridgeScenarioLanAddress   = netip.MustParseAddr("192.0.2.10")
+	bridgeScenarioOtherAddress = netip.MustParseAddr("192.168.9.10")
+)
+
+// The document S8 saves: every member device routes the LAN through a member device that serves it, with no dial
+// anywhere. A route rule with no via opens nothing yet (question acl-m2-17-no-via-route-advertisers), so it names one.
+const bridgeScenarioS8Policy = `{"grants": [{"src": ["autogroup:member"], "dst": ["ip:192.0.2.0/24"], "via": ["autogroup:member"], "allow": ["route"]}]}`
+
+// S8 (§22.7; §3.7's F7, reach a subnet; R-BRIDGE-3, R-BRIDGE-7, R-BRIDGE-10, D-BRIDGE-3, D-BRIDGE-6, I-10): rules only
+// from the config repo, decided at the host per flow. A member device's window client, its delegation its own, sends
+// from a userspace stack to a member host whose address, block, route and document are all statements and heads of
+// the network's config, compiled by the host's component:
+//
+//   - with no document, an untagged source reaches the host's loopback service through the host's address and the
+//     LAN, any of it, but never the daemon's own listener (rule 0, D-BRIDGE-19);
+//   - once a document exists, the LAN by rule alone: the routed /24 the host serves under a standing route rule passes,
+//     another LAN address, the loopback service no dial rule opens, and the daemon's listener are refused;
+//   - a SidecarRevoke resets the subject's live connection at once, no byte after it reaching the target.
+//
+// settings nil is T2's; server's T3 hands its platform. Payloads and the route's site are canaries, and the host's
+// addresses and the LAN are forbidden values, so the harness's scan finds them nowhere a server saw.
+func BridgeScenarioS8(settings *BridgeNetSettings) *Scenario {
+	return &Scenario{Id: "S8", Run: func(ctx context.Context, run *ScenarioRun) error {
+		return bridgeNetCatch(func() error {
+			return bridgeScenarioS8(run, settings)
+		})
+	}}
+}
+
+func bridgeScenarioS8(run *ScenarioRun, settings *BridgeNetSettings) error {
+	world := NewBridgeNet(bridgeNetFailer{}, run.Net, settings)
+	defer world.Close()
+	capture := run.Net.Capture()
+	hostDevice := world.AddDevice("s8 host")
+	subject := world.AddDevice("s8 subject")
+	host := world.StartHost(hostDevice, &BridgeNetHostSettings{Address: bridgeScenarioHostAddress})
+	host.AddLan(bridgeScenarioLanAddress)
+	host.AddLan(bridgeScenarioOtherAddress)
+	for _, text := range []string{bridgeScenarioHostAddress.String(), bridgeScenarioLanAddress.String(), bridgeScenarioOtherAddress.String(), bridgeScenarioLanPrefix.String()} {
+		capture.Forbid("an address "+text, []byte(text))
+	}
+	window := world.OpenWindow("s8 window", subject, host, nil)
+	tcp := func(address netip.Addr) netip.AddrPort {
+		return netip.AddrPortFrom(address, host.Upstream.TcpPort())
+	}
+	daemon := netip.AddrPortFrom(host.Address, uint16(host.Daemon.Addr().(*net.TCPAddr).Port))
+	waitTimeout := world.Settings().WaitTimeout
+	// a connection that carries a canary to its target, and the hook's decision of it
+	opens := func(clause string, address netip.AddrPort, verdict connect.EgressVerdict) error {
+		before := len(host.Decisions(window.Client.ClientId))
+		payload := run.Canary("bridge payload")
+		conn, err := window.DialTcp(address)
+		if err != nil {
+			return fmt.Errorf("%s: %w", clause, err)
+		}
+		_, err = conn.Write(payload)
+		conn.Close()
+		if err != nil {
+			return fmt.Errorf("%s: %w", clause, err)
+		}
+		if !host.Upstream.WaitFor(waitTimeout, func(accepts []BridgeNetAccept, datagrams [][]byte) bool {
+			return slices.ContainsFunc(accepts, func(accept BridgeNetAccept) bool { return bytes.Equal(accept.Bytes, payload) })
+		}) {
+			return fmt.Errorf("%s: the payload never reached its target", clause)
+		}
+		decision := host.WaitDecisionCount(window.Client.ClientId, before+1)[before]
+		if decision.Verdict != verdict {
+			return fmt.Errorf("%s: decided %s, not %s", clause, decision.Verdict, verdict)
+		}
+		return nil
+	}
+	// a connection the host refuses, every decision of it a denial
+	refused := func(clause string, address netip.AddrPort) error {
+		before := len(host.Decisions(window.Client.ClientId))
+		if conn, err := window.DialTcp(address); err == nil {
+			conn.Close()
+			return fmt.Errorf("%s: the connection opened", clause)
+		}
+		for _, decision := range host.WaitDecisionCount(window.Client.ClientId, before+1)[before:] {
+			if decision.Opens() {
+				return fmt.Errorf("%s: decided %+v", clause, decision)
+			}
+		}
+		return nil
+	}
+
+	if err := opens("no document, the host's loopback service", tcp(host.Address), connect.EgressVerdictMap); err != nil {
+		return err
+	}
+	if err := refused("no document, the daemon's own listener", daemon); err != nil {
+		return err
+	}
+	if err := opens("no document, the LAN", tcp(bridgeScenarioLanAddress), connect.EgressVerdictPass); err != nil {
+		return err
+	}
+	if err := opens("no document, another LAN address", tcp(bridgeScenarioOtherAddress), connect.EgressVerdictPass); err != nil {
+		return err
+	}
+
+	plan := world.SaveAclPolicy(bridgeScenarioS8Policy)
+	if !plan.Rows.GetHasDocument() {
+		return errors.New("the saved head holds no document")
+	}
+	world.FileRoute(hostDevice, bridgeScenarioLanPrefix, [][]byte{BridgeNetRouteRuleId(bridgeNetFailer{}, plan)}, run.Canary("bridge route site"))
+	world.Follow()
+	if err := opens("a document, the routed LAN", tcp(bridgeScenarioLanAddress), connect.EgressVerdictPass); err != nil {
+		return err
+	}
+	if err := refused("a document, a LAN address no rule routes", tcp(bridgeScenarioOtherAddress)); err != nil {
+		return err
+	}
+	if err := refused("a document, the loopback service no dial rule opens", tcp(host.Address)); err != nil {
+		return err
+	}
+	if err := refused("a document, the daemon's own listener", daemon); err != nil {
+		return err
+	}
+
+	// revoke resets: the live connection's target sees nothing after the revocation, and its upstream socket closes
+	dialCount := len(host.Dials())
+	conn, err := window.DialTcp(tcp(bridgeScenarioLanAddress))
+	if err != nil {
+		return fmt.Errorf("the connection to revoke: %w", err)
+	}
+	defer conn.Close()
+	before := run.Canary("bridge payload before the revocation")
+	if _, err := conn.Write(before); err != nil {
+		return err
+	}
+	if !host.WaitDials(func(dials []BridgeNetDial) bool {
+		return dialCount < len(dials) && len(before) <= dials[dialCount].WrittenByteCount
+	}) {
+		return errors.New("the payload before the revocation never reached the target")
+	}
+	n := world.RevokeDevice(subject)
+	world.Follow()
+	host.WaitRevoked(n)
+	if !host.WaitDials(func(dials []BridgeNetDial) bool {
+		return dials[dialCount].Closed
+	}) {
+		return errors.New("the revoked subject's upstream socket stayed open")
+	}
+	conn.SetReadDeadline(time.Now().Add(waitTimeout))
+	if _, err := conn.Read(make([]byte, 16)); err == nil {
+		return errors.New("the revoked connection read on")
+	}
+	conn.Write(run.Canary("bridge payload after the revocation"))
+	if written := host.Dials()[dialCount].WrittenByteCount; written != len(before) {
+		return fmt.Errorf("%d bytes reached the target, not the %d before the revocation", written, len(before))
+	}
+	return nil
 }

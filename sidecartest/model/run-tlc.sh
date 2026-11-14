@@ -223,19 +223,22 @@ EOF
 # symmetry (lives_StoreSettle below, which live mode runs); or an invariant violated, its trace the
 # witness. In order: the two traces of question evs-models-settle-stalled-deletes (QD-744), each
 # passing at its own bounds and refused there with twin DeleteReleasesEarly, so that a pass by
-# simulation is not one its seed could not fail; the first is the cfg's bounds with heal and cancels
-# both on, the widest breadth-first ground; the liveness rows; three writes in the two mixes each
-# counterexample needs, a PUT with two DELETEs and two PUTs with a DELETE, breadth-first and without
-# faults; then by simulation, which shows only that the behaviors it drew (Traces on each worker) kept
-# every invariant: three writes with a crash and a host failure at 4 drives, two and three writes at 6
-# drives on 3 hosts, two writes at 8 drives deeper, and §22.8's own bounds, 8 drives, 3 writes, 2
-# coordinators and 2 host failures.
+# simulation is not one its seed could not fail. The first's bounds are the cfg's with heal and cancels
+# on, whose state outgrows the 12 GB a run may hold on a shared host (stopped twice past 138 M states,
+# no invariant violated), so heal and cancels each run beside the cfg's crash and host failure, and
+# both together by simulation with three-faults. Then the liveness rows; three writes in the two mixes
+# each counterexample needs, a PUT with two DELETEs and two PUTs with a DELETE, breadth-first and
+# without faults; then by simulation, which shows only that the behaviors it drew (Traces on each
+# worker) kept every invariant: three writes with a crash and a host failure at 4 drives, two and three
+# writes at 6 drives on 3 hosts, two writes at 8 drives deeper, and §22.8's own bounds, 8 drives, 3
+# writes, 2 coordinators and 2 host failures.
 grounds_StoreSettle() {
   local deletes="CoordinatorCount=1 HostFailures=0 CoordinatorCrashes=0 MaxPuts=0"
   local three="Writes={w1,w2,w3} CoordinatorCount=1 HostFailures=0 CoordinatorCrashes=0"
   local any="Writes={w1,w2,w3} MaxPuts=3 MaxDeletes=3 Still={}"
   cat <<EOF
-sum                pass           Still={}
+sum-heal           pass           Still={"cancel"}
+sum-cancel         pass           Still={"heal"}
 sum-early          NoStaleQuorum  Still={} Twin="DeleteReleasesEarly"
 revert             pass           DriveCount=8 $deletes Simulate=60 Traces=50000 Seed=7
 revert-early       NoStaleQuorum  DriveCount=8 $deletes Simulate=60 Traces=50000 Seed=7 Twin="DeleteReleasesEarly"

@@ -79,6 +79,9 @@ models:
       - {at: 2026-11-14, commit: 2ab8fd688f1865074017c49ecd3e68316e5fb2eb, tlc: d8fb231, mode: model, result: pass, sources_sha256: 5c09c4f6ff09da273314daac475ae17c5cf03545df8da79be839113247adc938, states: 19774204, depth: 30, seconds: 955}
       - {at: 2026-11-14, commit: 2ab8fd688f1865074017c49ecd3e68316e5fb2eb, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 5c09c4f6ff09da273314daac475ae17c5cf03545df8da79be839113247adc938, states: 2293158, depth: 21, seconds: 96}
       - {at: 2026-11-14, commit: 2ab8fd688f1865074017c49ecd3e68316e5fb2eb, tlc: d8fb231, mode: live, result: pass, sources_sha256: 5c09c4f6ff09da273314daac475ae17c5cf03545df8da79be839113247adc938, states: 330814, depth: 29, seconds: 122}
+      - {at: 2026-11-14, commit: ef621299cc6d8f0f920ab8e07074abf8146359aa, tlc: d8fb231, mode: model, result: pass, sources_sha256: f2fb456922fffec2ddba457ac89647470906542774038da49dc02ffb726ad2b6, states: 19774204, depth: 30, seconds: 803}
+      - {at: 2026-11-14, commit: ef621299cc6d8f0f920ab8e07074abf8146359aa, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: f2fb456922fffec2ddba457ac89647470906542774038da49dc02ffb726ad2b6, states: 2182142, depth: 21, seconds: 44}
+      - {at: 2026-11-14, commit: ef621299cc6d8f0f920ab8e07074abf8146359aa, tlc: d8fb231, mode: live, result: pass, sources_sha256: f2fb456922fffec2ddba457ac89647470906542774038da49dc02ffb726ad2b6, states: 330814, depth: 29, seconds: 68}
 
   - spec: IndexRollup
     owners: [SEARCH-M10-02, SEARCH-M10-46]
