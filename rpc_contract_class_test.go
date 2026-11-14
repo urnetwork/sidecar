@@ -9,7 +9,9 @@ package sidecar
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -50,6 +52,8 @@ func TestContractClassTable(t *testing.T) {
 		{messageType: protocol.MessageType_STREAM_OPEN, flags: request, control: contractClassRejectStream, controlSearch: contractClassRejectStream},
 		{messageType: protocol.MessageType_STREAM_DATA, flags: noReply, control: contractClassDrop, controlSearch: contractClassDrop},
 		{messageType: protocol.MessageType_STREAM_ACCEPT, flags: noReply, control: contractClassDrop, controlSearch: contractClassDrop},
+		// an open's answer, a code and no data, so an opener on control learns its DENIED (FS-21)
+		{messageType: protocol.MessageType_STREAM_REJECT, flags: noReply, control: contractClassPass, controlSearch: contractClassPass},
 		{messageType: protocol.MessageType_STREAM_RESET, flags: noReply, control: contractClassDrop, controlSearch: contractClassDrop},
 		{messageType: protocol.MessageType_TLS_EDGE_OPEN, flags: request, control: contractClassRefuse, controlSearch: contractClassRefuse},
 		{messageType: protocol.MessageType_SMTP_PROOF, flags: request, control: contractClassRefuse, controlSearch: contractClassRefuse},
@@ -162,6 +166,43 @@ func TestContractClassReadPerFrame(t *testing.T) {
 		if code != c.code {
 			t.Errorf("on %s: %v", c.class, err)
 		}
+	}
+}
+
+// Where neither end reaches the other, both directions ride control: an open is rejected DENIED, and
+// the reject, a code and no data, passes the opener's own control receiver, so OpenStream answers
+// DENIED rather than waiting out its call, and no accept function runs (FS-21).
+func TestControlBothWaysOpenStreamAnswersDenied(t *testing.T) {
+	pair := newTestRpcPair(t)
+	a := pair.add(nil, nil)
+	b := pair.add(nil, nil)
+	accepted := make(chan struct{}, 1)
+	if _, err := b.subprotocol.Listen("testnet:echo", func(ctx context.Context, incoming *StreamIncoming) error {
+		accepted <- struct{}{}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.subprotocol.EnsureHello(t.Context(), Id(b.clientId)); err != nil {
+		t.Fatal(err)
+	}
+	a.setContractClass(connectprotocol.ContractClass_ContractClassControl)
+	b.setContractClass(connectprotocol.ContractClass_ContractClassControl)
+	// a failure's bound only: the answer comes at once
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	stream, err := a.subprotocol.OpenStream(ctx, Id(b.clientId), &StreamOpenRequest{Target: "testnet:echo"})
+	if stream != nil {
+		stream.Close()
+	}
+	rejected := &StreamRejectError{}
+	if !errors.As(err, &rejected) || rejected.Code != protocol.StreamRejectCode_SR_DENIED {
+		t.Fatalf("an open on control both ways: %v, want DENIED", err)
+	}
+	select {
+	case <-accepted:
+		t.Error("the accept ran for an open on control")
+	default:
 	}
 }
 

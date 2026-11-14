@@ -67,7 +67,7 @@ models:
   - spec: StoreSettle
     owners: [EVS1-M2-02]
     milestones: [M2]
-    objects: "one key on 8 drives at EC:4 (4 hosts of 2): each drive's version and its own lock on the key, each write's coordinator and its drive commits, the settler and heal (D-OPS-20's settle rule)"
+    objects: "one key on 8 drives at EC:4 (4 hosts of 2): each drive's version, its stamp and its own lock on the key, each write's coordinator and its drive commits, a failed DELETE's key held until each of its commits has answered and each that landed is reverted (QD-744), the settler and heal, whose commit is checked at its drive like any other (D-OPS-20's settle rule)"
     sources:
       - sidecar/sidecartest/model/StoreSettle.tla
       - sidecar/sidecartest/model/StoreSettle.cfg
@@ -76,6 +76,9 @@ models:
     exclude: []
     runs:
       - {at: 2026-11-09, commit: c9e4cdea7ad12d7d4085b5ff7df0ca8a30187b9a, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 9de0263e10f0907d8f503d0352f873592332aebc62ce827b66aee45012259a59, states: 697346, depth: 21, seconds: 10}
+      - {at: 2026-11-14, commit: 2ab8fd688f1865074017c49ecd3e68316e5fb2eb, tlc: d8fb231, mode: model, result: pass, sources_sha256: 5c09c4f6ff09da273314daac475ae17c5cf03545df8da79be839113247adc938, states: 19774204, depth: 30, seconds: 955}
+      - {at: 2026-11-14, commit: 2ab8fd688f1865074017c49ecd3e68316e5fb2eb, tlc: d8fb231, mode: mutants, result: pass, sources_sha256: 5c09c4f6ff09da273314daac475ae17c5cf03545df8da79be839113247adc938, states: 2293158, depth: 21, seconds: 96}
+      - {at: 2026-11-14, commit: 2ab8fd688f1865074017c49ecd3e68316e5fb2eb, tlc: d8fb231, mode: live, result: pass, sources_sha256: 5c09c4f6ff09da273314daac475ae17c5cf03545df8da79be839113247adc938, states: 330814, depth: 29, seconds: 122}
 
   - spec: IndexRollup
     owners: [SEARCH-M10-02, SEARCH-M10-46]
