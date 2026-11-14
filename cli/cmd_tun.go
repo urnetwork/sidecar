@@ -3,7 +3,9 @@
 // bridge is on (the bridge component is an active one, §5.8).
 //
 //	ur tun [--network=<name>]                 brings the tun up over the network's bridge: the block and the granted
-//	                                          prefixes, never the default route; it yields to an app's bridge
+//	                                          prefixes, and the default route under the egress mode exits, the
+//	                                          daemon's own transport kept off it by connect's egress mark (QD-800);
+//	                                          it yields to an app's bridge
 //	ur tun down                               ends it, removing its routes
 //	ur tun ip [<ip> | auto] [--network=<name>]
 //	                                          shows this host's overlay address and the block, or claims an address in
@@ -295,9 +297,14 @@ func printUrTunStatus(cli *urCli, status *urTunStatus) {
 		cli.printf("  names      not set on this host's resolver; %s\n", status.ResolverStep)
 	}
 	cli.printf("  egress     %s\n", status.EgressMode)
-	if status.ExitsHeld {
-		cli.printf("  exits      held: the default route stays off ur tun on this host for now, so other traffic " +
-			"keeps today's route\n")
+	switch {
+	case status.DefaultRoute:
+		cli.printf("  exits      the default route rides ur tun to the network's exits; the daemon's own transport " +
+			"keeps today's route by its mark, and so does IPv6, which ur tun does not carry\n")
+	case status.ExitsHeld && status.ExitsHeldReason != "":
+		cli.printf("  exits      held: %s; other traffic keeps today's route, and ur tun tries again\n", status.ExitsHeldReason)
+	case status.ExitsHeld:
+		cli.printf("  exits      held: other traffic keeps today's route, and ur tun tries again\n")
 	}
 	if status.SyncError != "" {
 		cli.printf("  error      %s, tried again\n", status.SyncError)

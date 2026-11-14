@@ -69,8 +69,13 @@ ur tun ip [<ip>] [--network=<name>]     show this host's overlay address and the
 
 - The daemon needs CAP_NET_ADMIN or root: `sudo setcap cap_net_admin=ep "$(command -v ur)"` grants it to the ur the
   daemon runs as. Without it `ur tun` says so, and `ur bridge` still works over the userspace stack.
-- The tun carries the block, the granted prefixes and `<block>.0.53`, never the default route: under the egress mode
-  `exits` the exits are held off the tun for now, and `ur tun` says so (question bridge-m4-18-linux-exits).
+- The tun carries the block, the granted prefixes and `<block>.0.53`, and under the egress mode `exits` the default
+  route too, in a routing table of its own with wg-quick's rules (`lookup main suppress_prefixlength 0`, then
+  `not fwmark <mark> lookup <table>`): the daemon's own connect sockets carry connect's egress mark, so its transport
+  keeps the host's route (QD-800); IPv6, which the tun does not carry, keeps the host's route too. Where the host
+  refuses it, a strict reverse path filter or a table or mark another program uses, `ur tun` says the exits are held
+  and why, the host's other traffic keeps its route, and it tries again. The route, its rules and the mark come off
+  when the mode leaves `exits` and when the tun ends.
 - The network's names, `~<net>.<root>`, resolve through `<block>.0.53` by systemd-resolved, set for the tun's link.
   Where resolved is absent or refuses, `ur tun` prints the step to take.
 - `ur tun` yields to an app's bridge: on a sidecar paired with an app whose VPN holds the block, it refuses, naming the
