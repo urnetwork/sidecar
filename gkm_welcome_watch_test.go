@@ -4,7 +4,9 @@
 // its Welcome is removed and added again by another writer leaf once gkm answers that no Welcome stands; a Welcome
 // that stands leaves the joiner alone; a leaf that does not write never asks, and one gkm refuses stops asking; an
 // ask gkm does not answer is asked again; a joiner that committed is asked after no more; a joiner with no
-// KeyPackage keeps its leaf; and the hint intake's timer runs the ask when it falls due.
+// KeyPackage keeps its leaf; the hint intake's timer runs the ask when it falls due; and a leaf that reached its
+// epoch by a resync, by a join or in a re-formed group, or that processed its own Remove, holds no watch from before
+// it and asks nothing.
 
 package sidecar_test
 
@@ -13,6 +15,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +23,7 @@ import (
 
 	"github.com/urnetwork/sidecar"
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // An engine world where a has committed d's Add at epoch 2 and, when killed, died before it wrote the Welcome.
@@ -325,5 +329,204 @@ func TestAnUnwelcomedLeafIsRemovedOnlyWithItsAdd(t *testing.T) {
 	pending = pendingWith(1000, func(sidecarId sidecar.Id) bool { return sidecarId != d.id })
 	if len(pending.Removes) != 0 || !slices.Equal(pending.Adds, []sidecar.Id{e.id}) || !slices.Equal(pending.Unanchored, []sidecar.Id{d.id}) {
 		t.Errorf("a joiner that may not join now: removes %v, adds %v, unanchored %v", pending.Removes, pending.Adds, pending.Unanchored)
+	}
+}
+
+// The epochs of the watches a device's keychain holds, with the epoch the record names them current at.
+func (self *gkmFlowWorld) welcomeWatches(device *gkmWorldDevice) (groupId sidecar.Id, epoch uint64, watchEpochs []uint64) {
+	self.t.Helper()
+	groupId, epoch, watchEpochs, err := self.flows[device].client.TestWelcomeWatches(self.repoId)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return groupId, epoch, watchEpochs
+}
+
+// A resync reaches its epoch by no commit this device processed: a leaf that watched an Add, was pruned past, and
+// returned by an external commit holds no watch after it, asks nothing once WelcomeTimeout has passed, and removes
+// no one, even where gkm would answer 404.
+func TestAResyncForgetsTheWelcomeWatches(t *testing.T) {
+	world, _ := newGkmWelcomeWatchWorld(t, 2, true)
+	b := world.flows[world.b]
+	if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatal(err)
+	}
+	if _, epoch, watchEpochs := world.welcomeWatches(world.b); epoch != 2 || !slices.Equal(watchEpochs, []uint64{2}) {
+		t.Fatalf("b's watches after it adopted the Add: %v at epoch %d", watchEpochs, epoch)
+	}
+	// a reader leaf's paths take the group past what gkm still serves b
+	world.selfUpdates(world.c, 3)
+	world.store.prunedBelowEpoch = 4
+	if err := b.client.SyncRepo(world.ctx, world.repoId); err != nil {
+		t.Fatal(err)
+	}
+	if newest, _ := world.store.newestEpoch(world.groupId); newest != 6 || world.pinnedEpoch(world.b) != 6 {
+		t.Fatalf("after the resync: gkm at epoch %d, b at %d", newest, world.pinnedEpoch(world.b))
+	}
+	if _, _, watchEpochs := world.welcomeWatches(world.b); len(watchEpochs) != 0 {
+		t.Errorf("b's watches after its resync: %v", watchEpochs)
+	}
+	world.advance(2 * sidecar.DefaultGkmSettings().WelcomeTimeout)
+	for pass := 0; pass < 2; pass += 1 {
+		if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if newest, _ := world.store.newestEpoch(world.groupId); newest != 6 || world.store.callCount("WelcomeStands") != 0 {
+		t.Errorf("after the timeout: epoch %d, %d asks", newest, world.store.callCount("WelcomeStands"))
+	}
+	if labels := world.rosterLabels(world.engineGroup(world.b)); !slices.Contains(labels, "d") {
+		t.Errorf("the joiner lost its leaf: %v", labels)
+	}
+}
+
+// A join reaches its epoch by no commit this device processed: a leaf that watched an Add, was removed and added
+// again while away, and returned by its Welcome asks nothing of the epochs before its join, and its keychain holds
+// no watch once its engine has run.
+func TestAJoinForgetsTheWelcomeWatches(t *testing.T) {
+	world, _ := newGkmWelcomeWatchWorld(t, 2, true)
+	a, b := world.flows[world.a], world.flows[world.b]
+	if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatal(err)
+	}
+	if _, epoch, watchEpochs := world.welcomeWatches(world.b); epoch != 2 || !slices.Equal(watchEpochs, []uint64{2}) {
+		t.Fatalf("b's watches after it adopted the Add: %v at epoch %d", watchEpochs, epoch)
+	}
+	// b's grant ends and a removes its leaf; a new grant, and a adds it again: b sees neither commit
+	world.drop(world.b)
+	world.repo.HoldersShrunkAt = world.nextPosition()
+	world.stateFor(world.b)
+	if err := a.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatalf("a removes b: %v", err)
+	}
+	if labels := world.rosterLabels(world.engineGroup(world.a)); slices.Contains(labels, "b") {
+		t.Fatalf("b kept its leaf: %v", labels)
+	}
+	world.grant(true, world.b)
+	world.store.publishKeyPackages(world.b, 1, false)
+	world.stateFor()
+	if err := a.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatalf("a adds b again: %v", err)
+	}
+	joinEpoch, _ := world.store.newestEpoch(world.groupId)
+	if epochs := world.store.welcomeEpochs(world.b); !slices.Equal(epochs, []uint64{joinEpoch}) || joinEpoch <= 3 {
+		t.Fatalf("b's Welcome pointers: %v, gkm at epoch %d", epochs, joinEpoch)
+	}
+	if joined, err := b.client.JoinWelcomes(world.ctx); err != nil || len(joined) != 1 {
+		t.Fatalf("b's join: %v %v", joined, err)
+	}
+	if world.pinnedEpoch(world.b) != joinEpoch {
+		t.Fatalf("b joined at epoch %d, not %d", world.pinnedEpoch(world.b), joinEpoch)
+	}
+	// gkm holds no Welcome of the watched epoch: an ask would be answered 404
+	func() {
+		world.store.stateLock.Lock()
+		defer world.store.stateLock.Unlock()
+		for key := range world.store.groupWelcomes {
+			if strings.HasSuffix(key, "/2") {
+				delete(world.store.groupWelcomes, key)
+			}
+		}
+	}()
+	world.advance(2 * sidecar.DefaultGkmSettings().WelcomeTimeout)
+	commits := world.store.callCount("CommitEpoch")
+	for pass := 0; pass < 2; pass += 1 {
+		if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if world.store.callCount("WelcomeStands") != 0 || world.store.callCount("CommitEpoch") != commits {
+		t.Errorf("after the timeout: %d asks, %d commits since the join", world.store.callCount("WelcomeStands"), world.store.callCount("CommitEpoch")-commits)
+	}
+	if _, _, watchEpochs := world.welcomeWatches(world.b); len(watchEpochs) != 0 {
+		t.Errorf("b's watches after its join and a run of its engine: %v", watchEpochs)
+	}
+	if labels := world.rosterLabels(world.engineGroup(world.b)); !slices.Contains(labels, "d") {
+		t.Errorf("the joiner lost its leaf: %v", labels)
+	}
+}
+
+// A re-form reaches its group by no commit this device processed: a leaf that watched an Add at the old group's
+// epoch 2 and joins the re-formed group at its epoch 2 asks nothing there, since the watches name the old group,
+// and its keychain holds no watch once its engine has run.
+func TestAReformForgetsTheWelcomeWatches(t *testing.T) {
+	world, _ := newGkmWelcomeWatchWorld(t, 2, true)
+	a, b := world.flows[world.a], world.flows[world.b]
+	if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatal(err)
+	}
+	oldGroupId := world.groupId
+	if groupId, epoch, watchEpochs := world.welcomeWatches(world.b); groupId != oldGroupId || epoch != 2 || !slices.Equal(watchEpochs, []uint64{2}) {
+		t.Fatalf("b's watches after it adopted the Add: %v at epoch %d", watchEpochs, epoch)
+	}
+	// one of the repo's admins re-forms the group while b has no KeyPackage, so the new group's epoch 1 leaves b out
+	world.members[0].Role = bridge.MemberRole_MEMBER_ROLE_MEMBER
+	world.repo.Admins = []*protocol.AclRepoAdminRow{{SidecarId: world.a.id.Bytes(), Signer: world.a.id.Bytes(), At: 1}}
+	world.stateFor()
+	for _, device := range []*gkmWorldDevice{world.c, world.p, world.x} {
+		world.store.publishKeyPackages(device, 1, false)
+	}
+	newGroupId, err := a.client.ReformGroup(world.ctx, &sidecar.GkmReformArgs{RepoId: world.repoId})
+	if err != nil {
+		t.Fatalf("the re-form: %v", err)
+	}
+	// b uploads a KeyPackage, and a adds it at the new group's epoch 2
+	world.store.publishKeyPackages(world.b, 1, false)
+	if err := a.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatalf("a adds b to the new group: %v", err)
+	}
+	if joined, err := b.client.JoinWelcomes(world.ctx); err != nil || !slices.Contains(joined, world.repoId) {
+		t.Fatalf("b joins the re-formed group: %v %v", joined, err)
+	}
+	if groupId, epoch, _, err := b.client.TestPins(world.repoId); err != nil || groupId != newGroupId || epoch != 2 {
+		t.Fatalf("b in the re-formed group: epoch %d, %v", epoch, err)
+	}
+	world.advance(2 * sidecar.DefaultGkmSettings().WelcomeTimeout)
+	commits := world.store.callCount("CommitEpoch")
+	for pass := 0; pass < 2; pass += 1 {
+		if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if world.store.callCount("WelcomeStands") != 0 || world.store.callCount("CommitEpoch") != commits {
+		t.Errorf("after the timeout: %d asks, %d commits since the join", world.store.callCount("WelcomeStands"), world.store.callCount("CommitEpoch")-commits)
+	}
+	if _, _, watchEpochs := world.welcomeWatches(world.b); len(watchEpochs) != 0 {
+		t.Errorf("b's watches after the re-form and a run of its engine: %v", watchEpochs)
+	}
+}
+
+// A leaf that processes its own Remove holds no leaf to re-add from: its keychain holds no watch after it, and it
+// asks nothing once WelcomeTimeout has passed.
+func TestARemovedLeafForgetsItsWelcomeWatches(t *testing.T) {
+	world, _ := newGkmWelcomeWatchWorld(t, 2, true)
+	a, b := world.flows[world.a], world.flows[world.b]
+	if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatal(err)
+	}
+	if _, epoch, watchEpochs := world.welcomeWatches(world.b); epoch != 2 || !slices.Equal(watchEpochs, []uint64{2}) {
+		t.Fatalf("b's watches after it adopted the Add: %v at epoch %d", watchEpochs, epoch)
+	}
+	world.drop(world.b)
+	world.repo.HoldersShrunkAt = world.nextPosition()
+	world.stateFor()
+	if err := a.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatalf("a removes b: %v", err)
+	}
+	if labels := world.rosterLabels(world.engineGroup(world.a)); slices.Contains(labels, "b") {
+		t.Fatalf("b kept its leaf: %v", labels)
+	}
+	world.advance(2 * sidecar.DefaultGkmSettings().WelcomeTimeout)
+	if err := b.client.RunPending(world.ctx, world.repoId); err != nil {
+		t.Fatalf("b processes its Remove: %v", err)
+	}
+	if world.engineGroup(world.b) != nil && slices.Contains(world.rosterLabels(world.engineGroup(world.b)), "b") {
+		t.Fatalf("b still holds its leaf")
+	}
+	if _, _, watchEpochs := world.welcomeWatches(world.b); len(watchEpochs) != 0 {
+		t.Errorf("b's watches after its Remove: %v", watchEpochs)
+	}
+	if world.store.callCount("WelcomeStands") != 0 {
+		t.Errorf("a removed leaf asked %d times", world.store.callCount("WelcomeStands"))
 	}
 }
