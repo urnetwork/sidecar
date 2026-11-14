@@ -227,7 +227,18 @@ type DirectoryRequestsBinding struct {
 	Events DirectoryRequestEvents
 	// Pushes what this sidecar's record holds (SidecarRecord.Flush), so an entry lands before its notice names it;
 	// unbound, the record's own schedule pushes it.
-	Land     func(ctx context.Context) error
+	Land func(ctx context.Context) error
+	// Signs and files a repo approval's statement and signs a reach approval's decision (RECORD-M6-19); unbound, no
+	// approval is decided, and a denial still is.
+	Statements DirectoryStatements
+	// The decider's journal over the approval ledger; unbound, nothing is decided.
+	Journal *ApprovalLedger
+	// What a requester does with an approval: the statement's check, the spend and the vault's record; unbound, no
+	// approval is taken.
+	Receipts DirectoryReceipts
+	// Opens a reach action's sealed detail (Sidecar.OpenActionDetail), for an approver's check of a worker's services;
+	// unbound, no worker request that seals one is approved.
+	Opener   CanonicalActionDetailOpener
 	Settings *DirectoryRequestSettings
 	Random   io.Reader
 }
@@ -1230,6 +1241,15 @@ func (self *DirectoryAccessRequests) Maintain(ctx context.Context) error {
 	}
 	_, firstErr := self.repairNotices(ctx, fold)
 	self.maintainLeases(fold)
+	keep := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	self.finishCancels(ctx, fold)
+	_, err = self.resumeDecisionsWithLock(ctx)
+	keep(err)
+	keep(self.receiveWithLock(ctx, fold))
 	auth := self.client.auth()
 	sidecarId := self.client.sidecarId
 	events := self.bound().Events

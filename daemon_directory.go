@@ -54,21 +54,6 @@ const DaemonDirectoryUntrustedInclude = "include"
 // A person act whose backend has not landed: nothing was signed.
 var ErrDaemonDirectoryUnbuilt = errors.New("this directory act is not built yet")
 
-// A person's decision on a directory request (§16.11's decide row), as RECORD-M6-19's completion protocol takes it.
-type DirectoryDecideArgs struct {
-	RequestId Id
-	Approve   bool
-	// An approval's subject narrowed to one sidecar of a member subject (§16.11's subjects row); nil keeps the
-	// request's.
-	ForSidecarId *Id
-	// An approval's grant expiry, never later than asked; 0 takes the request's ask.
-	GrantExpiresMillis int64
-	// An approval's role, a repo's RepoGrantRole; 0 takes the request's.
-	Role uint32
-	// A denial's note, prose.
-	Note string
-}
-
 // What the directory's methods act through, for the call's Sidecar. A nil List, TaintAncestors or Announce takes the
 // Sidecar's own; a nil Revoke, Decide or Erase refuses with ErrDaemonDirectoryUnbuilt, signing nothing.
 type DaemonDirectoryBackends struct {

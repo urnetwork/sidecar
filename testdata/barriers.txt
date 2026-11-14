@@ -94,6 +94,16 @@ barrier daemon.directory.list.taint.after daemon_directory.go
 barrier daemon.directory.list.taint.before daemon_directory.go
 barrier directory.announce.after directory_repo.go
 barrier directory.announce.before directory_repo.go
+barrier directory.cancel.entry.after directory_decide.go
+barrier directory.cancel.entry.before directory_decide.go
+barrier directory.decide.entry.after directory_decide.go
+barrier directory.decide.entry.before directory_decide.go
+barrier directory.decide.file.after directory_decide.go
+barrier directory.decide.file.before directory_decide.go
+barrier directory.decide.intent.after directory_decide.go
+barrier directory.decide.intent.before directory_decide.go
+barrier directory.decide.statement.after directory_decide.go
+barrier directory.decide.statement.before directory_decide.go
 barrier directory.fold.after directory_fold.go
 barrier directory.fold.before directory_fold.go
 barrier directory.notice.after directory_notice.go
