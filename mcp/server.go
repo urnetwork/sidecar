@@ -189,6 +189,8 @@ type McpServer struct {
 	subscribeCheck McpSubscribeCheck
 	// run_restore's points (tools_restore.go); nil answers unavailable
 	restorePoints *RestorePoints
+	// the bridge tools' filings and listing (tools_bridge.go); nil answers unavailable
+	bridges McpBridges
 }
 
 // A server for daemon.

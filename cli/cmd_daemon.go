@@ -171,6 +171,8 @@ type urDaemonNetwork struct {
 
 	stateLock sync.Mutex
 	further   *sidecar.Sidecar
+	// the root's bridge methods over bridges (bridge_forward.go), built once and shared by ur bridge and the MCP tools
+	daemonBridges *sidecar.DaemonBridges
 }
 
 // The hosted Sidecars, in network order.
@@ -780,6 +782,10 @@ func runUrDaemon(ctx context.Context, cli *urCli, options docopt.Opts) error {
 	if err := registerUrDaemonMethods(daemon, cli.instance, network, keyStoreKind, sidecar.HostCredentialStores); err != nil {
 		daemon.Close()
 		return err
+	}
+	// the MCP bridge tools file and forward through the bridges ur bridge's methods use (MCP-M4-01)
+	if bridges := network.sharedDaemonBridges(); bridges != nil {
+		mcpServer.SetBridges(bridges)
 	}
 	// a sandboxed macOS app pairs and calls through its app-group container's socket (§5.9; CORE-M8-02); the paths
 	// name the user's home, so only their count is logged
