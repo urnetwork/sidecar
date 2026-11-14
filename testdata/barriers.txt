@@ -53,8 +53,8 @@ barrier bridge_forward.fork.before bridge_forward_follow.go
 barrier bridge_forward.generation.store bridge_forward_keys.go
 barrier bridge_forward.pending.before bridge_forward.go
 barrier bridge_forward.sign bridge_forward_sign.go
-barrier bridge_forward_setup.step.after bridge_forward_setup.go
-barrier bridge_forward_setup.step.before bridge_forward_setup.go
+barrier bridge_forward_setup.step.after bridge_setup_forward.go
+barrier bridge_forward_setup.step.before bridge_setup_forward.go
 barrier bridge_link.close.after device/bridge_link.go
 barrier bridge_link.close.before device/bridge_link.go
 barrier bridge_link.publish.after device/bridge_link.go
@@ -352,6 +352,9 @@ barrier mail.config.remove.after mail_config_write.go
 barrier mail.config.remove.before mail_config_write.go
 barrier mail.config.write.after mail_config_write.go
 barrier mail.config.write.before mail_config_write.go
+barrier mail.deposit.durable mail_deposit.go
+barrier mail.deposit.repo.after mail_deposit.go
+barrier mail.deposit.repo.before mail_deposit.go
 barrier mail.erase.closure.after mail_erase_closure.go
 barrier mail.erase.closure.before mail_erase_closure.go
 barrier mail.erase.keys.after mail_erase_closure.go
@@ -372,6 +375,8 @@ barrier mail.ingest.consume.after mail_ingest.go
 barrier mail.ingest.consume.before mail_ingest.go
 barrier mail.ingest.push.after mail_ingest.go
 barrier mail.ingest.push.before mail_ingest.go
+barrier mail.receiver.publish.after mail_receiver.go
+barrier mail.receiver.publish.before mail_receiver.go
 barrier mail.spam.teach.after mail_spam.go
 barrier mail.spam.teach.before mail_spam.go
 barrier mail.vault.erase.after mail_vault.go
@@ -655,6 +660,7 @@ secret identity_key identity_keys.go
 secret init_secret mls_keyschedule.go
 secret invite_join_secret config_invite.go
 secret joiner_secret mls_welcome.go
+secret mail_spool_key mail_spool.go
 secret measure_client_iv smtpproof/prover_measure.go
 secret measure_client_key smtpproof/prover_measure.go
 secret measure_handshake_secret smtpproof/prover_measure.go

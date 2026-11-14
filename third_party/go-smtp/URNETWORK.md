@@ -3,10 +3,10 @@
 This directory is the source distribution of `github.com/emersion/go-smtp
 v0.25.1` (module zip `h1:y6nzefT6PtFeMItFw97GX/ZCkVbh0rqSXG8b3ang8/w=`,
 fetched through proxy.golang.org and checked against Go's checksum database),
-except for the change to `server.go` below, the added
-`urnetwork_serve_conn_test.go` and this file, and the removed upstream
-`.github/`, `.build.yml` and `.gitignore` (upstream's CI and repository
-settings). The upstream MIT license is kept in `LICENSE`. The module path
+except for the changes to `server.go` and `conn.go` below, the added
+`urnetwork_serve_conn_test.go`, `urnetwork_bdat_reset_test.go` and this file,
+and the removed upstream `.github/`, `.build.yml` and `.gitignore` (upstream's
+CI and repository settings). The upstream MIT license is kept in `LICENSE`. The module path
 stays `github.com/emersion/go-smtp`, so a module replaces it here (QD-193,
 RESOLUTIONS.md's plan-MAIL-go-smtp-fork).
 
@@ -49,6 +49,30 @@ The names follow D-MAIL-3. An offer upstream would likely spell them
 `AfterStartTLS` and `ServeTLSConn`, as go-smtp spells `TLSConfig`; offering it
 is an outward action for the owner.
 
+## The second change: a BDAT transfer cut short by a reset
+
+Upstream runs a BDAT transfer's `Session.Data` on a goroutine of its own and
+hands its result back on `c.dataResult`, which the goroutine reads from the
+connection when it sends. A transfer cut short by RSET, a new MAIL or EHLO
+leaves that goroutine running while the next BDAT assigns a new channel to the
+same field, so the cut transfer's result can land on the next transaction's
+channel and answer its LAST, and `reset` calls `Session.Reset` while the cut
+`Data` still runs, so two transactions' `Data`, or `Reset` and a `Data`, run
+at once. The race detector reports the field (MAIL-M7-14's receiver met it).
+
+`conn.go` changes, each line marked `URNETWORK`:
+
+- the goroutine sends on the channel it was started with, never on whatever
+  `c.dataResult` names when it ends;
+- `reset` takes the pipe and the channel under the lock, releases it, closes
+  the pipe with `ErrDataReset` and waits for the cut transfer's result, outside
+  the lock its `Session()` takes, before it resets anything else;
+- LAST clears `c.dataResult` once it has taken the result, so the `reset` that
+  follows waits for nothing.
+
+`Close` is unchanged: `Server.Close` may call it while the connection's own
+goroutine waits on the same channel at a LAST.
+
 ## Tests
 
 `urnetwork_serve_conn_test.go`, run with `go test -run Urnetwork ./` in this
@@ -66,6 +90,11 @@ directory, over `net.Pipe` with no sleeps:
   reads nothing;
 - `AfterStartTls` on a plain connection refuses with `ErrServeConnNotTls`;
 - without `AfterStartTls`, a connection is greeted as `Serve` greets it.
+
+`urnetwork_bdat_reset_test.go`, the second change: RSET between BDAT chunks,
+then a new transaction sent as one BDAT LAST, which must answer its own 250,
+with `Reset` never running beside a `Data` and no two `Data` at once. Upstream's
+`conn.go` fails it every run.
 
 Upstream's own tests run with `go test ./...` here and still pass.
 
