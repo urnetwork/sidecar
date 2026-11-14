@@ -34,8 +34,9 @@ import (
 
 // The answer for refusal: as is when final or refusing nothing, else after the refuse row records it.
 func (self *pushAttempt) refuse(refusal *EvsCheckRefusal) *pushOutcome {
-	if refusal.Fate != EvsRefusalRecorded || self.part != nil {
-		// a part's refusal needs no record, since only its push's seal commits (§11.8's refuse row)
+	if refusal.Fate != EvsRefusalRecorded || self.part != nil || self.reseed != nil {
+		// a part's refusal needs no record, since only its push's seal commits (§11.8's refuse row); a re-seed's
+		// records none, so the device sends the push again once what it lacked is there (reseed.go)
 		return refusedOutcome(refusal.Reply(self.pushId))
 	}
 	return self.record(refusal)

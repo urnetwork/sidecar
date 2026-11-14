@@ -182,6 +182,14 @@ type EvsSettings struct {
 	// The body a one-part push or a seal may carry: its statement, a payload of at most 1 MiB and its receipts, 2
 	// MiB. Positive.
 	PushBodyMaxByteCount int64
+	// POST .../reseed (§11.13's re-seed row; QD-725). The body one call may carry, a re-seeded push's statement and
+	// payload or a slot, 2 MiB; the Signed EvsReseed a call may file and reseed/<repo>/<ref> may hold, 4 KiB; how
+	// long after its RepoDelete's entry a repo is still restorable and so takes its history back, §11.12's 7 d; and
+	// how many times a statement's write reads reseed/ again after another write came first, 4. All positive.
+	ReseedBodyMaxByteCount      int64
+	ReseedStatementMaxByteCount int
+	ReseedRestoreWindow         time.Duration
+	ReseedStatementRetryCount   int
 	// The gen/<g> records a process keeps, which never change while their repo lives (§10's gen row). Non-positive
 	// keeps none.
 	GenerationCacheCount int
@@ -290,51 +298,55 @@ type EvsSettings struct {
 // The design's values, and 4 KiB blocks until the nvme run.
 func DefaultEvsSettings() *EvsSettings {
 	return &EvsSettings{
-		Place:                     sidecar.DefaultEvsRepoPlaceSettings(),
-		InstanceFormat:            sidecar.EvsRepoFormat2,
-		RepoCacheTtl:              5 * time.Second,
-		RepoCacheCount:            100 * 1000,
-		PriceBlockByteCount:       4 * 1024,
-		RequestBodyMaxByteCount:   16 * 1024 * 1024,
-		DrainTimeout:              30 * time.Second,
-		UnavailableRetryAfter:     time.Second,
-		StoreProbeInterval:        5 * time.Second,
-		StoreProbeTimeout:         2 * time.Second,
-		RevocationStreamInterval:  60 * time.Second,
-		HeadCacheServeAge:         10 * time.Minute,
-		HeadCacheTtl:              10 * time.Minute,
-		FenceRetryCount:           8,
-		BatchFlushDelay:           20 * time.Millisecond,
-		BatchLightLoadRecordCount: 50,
-		BatchLightLoadWindow:      time.Second,
-		BatchWriteInFlightCount:   2,
-		RecordCacheByteCount:      64 * 1024 * 1024,
-		OverlayCacheCount:         100 * 1000,
-		FoldStaleDeadline:         15 * time.Second,
-		FoldHeadRereadMargin:      time.Second,
-		FoldUnfoldedTriggerCount:  96,
-		FoldVersionCount:          64,
-		FoldTriggerInterval:       10 * time.Second,
-		FoldIdleDelay:             10 * time.Minute,
-		FoldCollectMargin:         150 * time.Millisecond,
-		FoldBehindRetryAfter:      time.Second,
-		FoldEntryRetryCount:       16,
-		FoldListPageCount:         1000,
-		FoldRefStateCount:         100 * 1000,
-		LogPageCacheByteCount:     16 * 1024 * 1024,
-		PushStepSevenWindow:       5 * time.Second,
-		PushPageOutReserve:        time.Second,
-		PushConflictRetryCount:    8,
-		PushRerunCount:            8,
-		PushRefusalRetryCount:     8,
-		PushUnknownRereadCount:    3,
-		PushUnknownRereadInterval: 200 * time.Millisecond,
-		PushFenceMargin:           100 * time.Millisecond,
-		RefusalFenceInterval:      time.Second,
-		PushAttemptTimeout:        25 * time.Second,
-		PushBodyMaxByteCount:      2 * 1024 * 1024,
-		GenerationCacheCount:      100 * 1000,
-		LeaseMaxDuration:          evsLeaseMaxDuration,
+		Place:                       sidecar.DefaultEvsRepoPlaceSettings(),
+		InstanceFormat:              sidecar.EvsRepoFormat2,
+		RepoCacheTtl:                5 * time.Second,
+		RepoCacheCount:              100 * 1000,
+		PriceBlockByteCount:         4 * 1024,
+		RequestBodyMaxByteCount:     16 * 1024 * 1024,
+		DrainTimeout:                30 * time.Second,
+		UnavailableRetryAfter:       time.Second,
+		StoreProbeInterval:          5 * time.Second,
+		StoreProbeTimeout:           2 * time.Second,
+		RevocationStreamInterval:    60 * time.Second,
+		HeadCacheServeAge:           10 * time.Minute,
+		HeadCacheTtl:                10 * time.Minute,
+		FenceRetryCount:             8,
+		BatchFlushDelay:             20 * time.Millisecond,
+		BatchLightLoadRecordCount:   50,
+		BatchLightLoadWindow:        time.Second,
+		BatchWriteInFlightCount:     2,
+		RecordCacheByteCount:        64 * 1024 * 1024,
+		OverlayCacheCount:           100 * 1000,
+		FoldStaleDeadline:           15 * time.Second,
+		FoldHeadRereadMargin:        time.Second,
+		FoldUnfoldedTriggerCount:    96,
+		FoldVersionCount:            64,
+		FoldTriggerInterval:         10 * time.Second,
+		FoldIdleDelay:               10 * time.Minute,
+		FoldCollectMargin:           150 * time.Millisecond,
+		FoldBehindRetryAfter:        time.Second,
+		FoldEntryRetryCount:         16,
+		FoldListPageCount:           1000,
+		FoldRefStateCount:           100 * 1000,
+		LogPageCacheByteCount:       16 * 1024 * 1024,
+		PushStepSevenWindow:         5 * time.Second,
+		PushPageOutReserve:          time.Second,
+		PushConflictRetryCount:      8,
+		PushRerunCount:              8,
+		PushRefusalRetryCount:       8,
+		PushUnknownRereadCount:      3,
+		PushUnknownRereadInterval:   200 * time.Millisecond,
+		PushFenceMargin:             100 * time.Millisecond,
+		RefusalFenceInterval:        time.Second,
+		PushAttemptTimeout:          25 * time.Second,
+		PushBodyMaxByteCount:        2 * 1024 * 1024,
+		ReseedBodyMaxByteCount:      2 * 1024 * 1024,
+		ReseedStatementMaxByteCount: 4 * 1024,
+		ReseedRestoreWindow:         7 * 24 * time.Hour,
+		ReseedStatementRetryCount:   4,
+		GenerationCacheCount:        100 * 1000,
+		LeaseMaxDuration:            evsLeaseMaxDuration,
 
 		ReadPathMaxCount:          64,
 		ReadRangeMaxCount:         64,
@@ -453,6 +465,9 @@ func (self *EvsSettings) Validate() error {
 		self.PushUnknownRereadCount <= 0 || self.PushUnknownRereadInterval < 0 || self.RefusalFenceInterval <= 0 ||
 		self.PushAttemptTimeout <= 0 || self.PushBodyMaxByteCount <= 0 {
 		return fmt.Errorf("%w: a push's retry counts, reread count, refusal fence interval, attempt timeout and body bound must be positive", ErrEvsSettings)
+	}
+	if self.ReseedBodyMaxByteCount <= 0 || self.ReseedStatementMaxByteCount <= 0 || self.ReseedRestoreWindow <= 0 || self.ReseedStatementRetryCount <= 0 {
+		return fmt.Errorf("%w: a re-seed's body bound, statement bound, restore window and retry count must be positive", ErrEvsSettings)
 	}
 	if self.LeaseMaxDuration <= 0 || evsLeaseMaxDuration < self.LeaseMaxDuration {
 		return fmt.Errorf("%w: a lease bound %s, outside (0, %s]", ErrEvsSettings, self.LeaseMaxDuration, evsLeaseMaxDuration)

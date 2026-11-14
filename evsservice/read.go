@@ -150,6 +150,8 @@ type readReply struct {
 	statements []*protocol.EvsReadStatement
 	behind     uint64
 	paths      []*protocol.EvsReadPathReply
+	// the ref's Signed EvsReseed, for a read whose pin is above the head (reseed.go); nil for every other read
+	reseed []byte
 }
 
 // One read request on its way: what it asked and what it read.
@@ -298,6 +300,11 @@ func (self *readAttempt) readAt() (*readReply, error) {
 			reply.paths = append(reply.paths, &protocol.EvsReadPathReply{TokenPath: path.tokens.Current.Components()})
 		}
 		return reply, nil
+	}
+	if head.GetVersion() < self.body.GetPinVersion() {
+		// a head below the reader's pin: the shorter history a site loss left, which the reader accepts only under
+		// the ref's Signed EvsReseed (§11.13; QD-725)
+		reply.reseed = self.engine.readReseedStatement(self.ctx, self.cluster, self.repoId, self.refId)
 	}
 	if err := self.readEntries(); err != nil {
 		return nil, err
