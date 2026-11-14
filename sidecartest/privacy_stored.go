@@ -7,10 +7,10 @@
 //     in every metadata cluster. An external commit is a PublicMessage whose sender is new_member_commit; a member's
 //     commit in the clear, any other wire format, or bytes that are no MLSMessage at all fail.
 //   - evs and gkm touch no Postgres and write Redis only in {scp_} hints, {wakeq_} wake entries, {nvb_} budget
-//     reports, from M10 {evsd_} drop hints and the soft state {evsq_} {evsl_} {evsh_} {gka_}, and only api writes
-//     {acl_}e: StoredWriters wraps the host each service is built with, so the check knows the writer as it writes,
-//     never after the fact. Tasks is the host's Postgres-backed service (it writes Postgres wherever a process holds a
-//     pool, §19.4), so a restricted service's call of it is a Postgres touch.
+//     reports, from M10 {evsd_} drop hints and the soft state {evsq_} {evsl_} {evsc_} {evsh_} {gka_}, and only api
+//     writes {acl_}e: StoredWriters wraps the host each service is built with, so the check knows the writer as it
+//     writes, never after the fact. Tasks is the host's Postgres-backed service (it writes Postgres wherever a process
+//     holds a pool, §19.4), so a restricted service's call of it is a Postgres touch.
 //
 // Safe for concurrent use.
 
@@ -118,6 +118,7 @@ func DefaultStoredStateSettings() *StoredStateSettings {
 		{Tag: "evsd_", Name: "drop hints, from M10 (§11.13)"},
 		{Tag: "evsq_", Name: "soft state"},
 		{Tag: "evsl_", Name: "soft state"},
+		{Tag: "evsc_", Name: "soft state"},
 		{Tag: "evsh_", Name: "soft state"},
 		{Tag: "gka_", Name: "soft state"},
 	}
