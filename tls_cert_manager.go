@@ -1165,6 +1165,16 @@ func (self *TlsCertManager) ownRow(record *TlsCertRecord) bool {
 	return record != nil && record.NetworkId == self.networkId && record.SidecarId == self.sidecarId
 }
 
+// GET /tls/certs through the generation attached now: the network's rows as the server answers them, unjudged, which
+// D-TLS-8's CT watch reads logged certificates back against. ErrTlsCertsOffline with no generation attached.
+func (self *TlsCertManager) Rows(ctx context.Context) (*TlsCertsResult, error) {
+	api, err := self.currentApi()
+	if err != nil {
+		return nil, err
+	}
+	return api.TlsCerts(ctx)
+}
+
 // One pass. See the file header. The first error is answered once the rest of the pass has run, so a names source
 // that will not answer still lets a revocation take a certificate away.
 func (self *TlsCertManager) Sync(ctx context.Context) error {

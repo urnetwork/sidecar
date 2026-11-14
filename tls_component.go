@@ -41,6 +41,13 @@ type TlsComponentArgs struct {
 	Manager *TlsCertManagerArgs
 	// Sidecar.setTlsCertificateSource: installs the manager behind TlsDeviceCertificate, nil removing it.
 	SetSource func(source TlsCertificateSource) error
+	// D-TLS-8's CT watch (tls_ct.go). nil runs none. Its NetworkId, Rows, Names, Store, Settings, Clock and Log are
+	// the manager's where it leaves them unset.
+	CtWatch *TlsCtWatchArgs
+	// Sidecar.setTlsCtWatch: attaches the watch to SidecarStatus, nil detaching it.
+	SetCtWatch func(watch sidecarCtWatch)
+	// Called at Close, after the watch has ended: what releases the CT client the args' Sources came from.
+	CloseCtSources func()
 }
 
 // The tls component.
@@ -48,6 +55,10 @@ type TlsComponent struct {
 	manager   *TlsCertManager
 	networkId Id
 	setSource func(source TlsCertificateSource) error
+	// nil when the component runs no CT watch
+	ctWatch        *tlsCtWatch
+	setCtWatch     func(watch sidecarCtWatch)
+	closeCtSources func()
 
 	stateLock sync.Mutex
 	// raised for each generation attached, so an older one's end does not detach a newer one's api
@@ -130,6 +141,11 @@ func (self *Sidecar) TlsComponentArgs() (*TlsComponentArgs, error) {
 	if err != nil {
 		return nil, err
 	}
+	// keyless: a Team's Cert Spotter key has no place to be read from yet
+	ctClient, err := NewTlsCtClient(nil)
+	if err != nil {
+		return nil, err
+	}
 	return &TlsComponentArgs{
 		Manager: &TlsCertManagerArgs{
 			NetworkId:    *networkId,
@@ -144,7 +160,26 @@ func (self *Sidecar) TlsComponentArgs() (*TlsComponentArgs, error) {
 			Log:          self.log,
 		},
 		SetSource: self.setTlsCertificateSource,
+		CtWatch: &TlsCtWatchArgs{
+			Sources: ctClient.Sources(),
+			Identities: func() TlsCtIdentities {
+				return NewTlsCtAuthorityIdentities(self.authority())
+			},
+			Listening: self.tlsListening,
+			Event: func(event SidecarEvent) {
+				self.Alarm(event)
+			},
+		},
+		SetCtWatch:     self.setTlsCtWatch,
+		CloseCtSources: ctClient.Close,
 	}, nil
+}
+
+// Whether this sidecar listens on a published name now, which is when D-TLS-8 has it watch CT. It watches always
+// until §13.10's publishing keeps its hosts (TLS-M5-23's TlsPublishedHosts): a device that watches without listening
+// costs two queries a pass and misses nothing.
+func (self *Sidecar) tlsListening() bool {
+	return true
 }
 
 // A component whose manager runs until Close or ctx ends, attached to no generation yet, installed behind
@@ -163,11 +198,47 @@ func NewTlsComponent(ctx context.Context, args *TlsComponentArgs) (*TlsComponent
 			return nil, err
 		}
 	}
-	return &TlsComponent{
-		manager:   manager,
-		networkId: args.Manager.NetworkId,
-		setSource: args.SetSource,
-	}, nil
+	self := &TlsComponent{
+		manager:        manager,
+		networkId:      args.Manager.NetworkId,
+		setSource:      args.SetSource,
+		setCtWatch:     args.SetCtWatch,
+		closeCtSources: args.CloseCtSources,
+	}
+	if args.CtWatch != nil {
+		watchArgs := *args.CtWatch
+		if watchArgs.NetworkId == (Id{}) {
+			watchArgs.NetworkId = args.Manager.NetworkId
+		}
+		if watchArgs.Rows == nil {
+			watchArgs.Rows = manager.Rows
+		}
+		if watchArgs.Names == nil {
+			watchArgs.Names = args.Manager.Names
+		}
+		if watchArgs.Store == nil {
+			watchArgs.Store = args.Manager.Store
+		}
+		if watchArgs.Settings == nil {
+			watchArgs.Settings = args.Manager.Settings
+		}
+		if watchArgs.Clock == nil {
+			watchArgs.Clock = args.Manager.Clock
+		}
+		if watchArgs.Log == nil {
+			watchArgs.Log = args.Manager.Log
+		}
+		watch, err := newTlsCtWatch(ctx, &watchArgs)
+		if err != nil {
+			self.Close()
+			return nil, err
+		}
+		self.ctWatch = watch
+		if self.setCtWatch != nil {
+			self.setCtWatch(watch)
+		}
+	}
+	return self, nil
 }
 
 // "tls".
@@ -223,7 +294,25 @@ func (self *TlsComponent) Close() {
 	if self.setSource != nil {
 		self.setSource(nil)
 	}
+	if self.ctWatch != nil {
+		if self.setCtWatch != nil {
+			self.setCtWatch(nil)
+		}
+		self.ctWatch.Close()
+	}
+	if self.closeCtSources != nil {
+		self.closeCtSources()
+	}
 	self.manager.Close()
+}
+
+// The CT watch's own view: whether its last pass was degraded and the alarms standing. Zero when the component runs
+// no watch.
+func (self *TlsComponent) CtWatchStatus() TlsCtWatchStatus {
+	if self.ctWatch == nil {
+		return TlsCtWatchStatus{}
+	}
+	return self.ctWatch.Status()
 }
 
 // The Sidecar's tls component, nil when it runs none.

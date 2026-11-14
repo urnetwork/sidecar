@@ -361,23 +361,32 @@ type SidecarTlsSettings struct {
 	CertHintMinInterval time.Duration
 	// How long to wait before asking GET /tls/cert-order/<id> again when its answer names no wait: 5 s.
 	CertOrderPollInterval time.Duration
-	// The bounds a server's retry_after is held to: 1 s, so a zero or tiny wait cannot spin, and 5 min, so a wrong
-	// one cannot park an order past a person's patience.
+	// The least a server's retry_after is held to: 1 s, so a zero or tiny wait cannot spin.
 	CertOrderPollMinInterval time.Duration
+	// The most a server's retry_after is held to: 5 min, so a wrong one cannot park an order past a person's
+	// patience.
 	CertOrderPollMaxInterval time.Duration
-	// How long an order the background pass placed stays the open one before another is placed for the same key and
-	// names: 24 h, past certs' longest hold for a set (§13.8's 34 h refill is the server's to wait out, and the row
-	// it wrote first answers a second order with the same CSR).
-	CertOrderOpenTimeout time.Duration
-	// The wait after an order's refusal or failure before the background pass tries that name again, doubling from
-	// the first to the second: 1 min to 1 h. A person's EnsureTlsCertificate does not wait on it.
+	// The first wait after an order's refusal or failure before the background pass tries that name again: 1 min,
+	// doubling from there. A person's EnsureTlsCertificate does not wait on it.
 	CertRetryMinInterval time.Duration
+	// The longest that wait grows to: 1 h.
 	CertRetryMaxInterval time.Duration
 	// The most certificates a chain may hold, leaf first: 8 (DESIGN-DETAILS 17.2.15's ChainMaxCount).
 	CertChainMaxCount int
 	// The most bytes the chains and orders the manager keeps may take in its store: 1 MiB, some hundreds of chains.
 	// Past it nothing new installs, the closed direction.
 	CertStateMaxByteCount int
+	// About how often D-TLS-8's CT watch runs a pass: 6 hours.
+	CtWatchInterval time.Duration
+	// The most a pass is moved from CtWatchInterval either way, so devices do not ask in step: 30 minutes.
+	CtWatchJitter time.Duration
+	// How long before a certificate's issuance its attesting identity must have been pinned, or the watch alarms:
+	// D-TLS-8's 24 hours.
+	CtIdentityPinMinAge time.Duration
+	// The most certificates the watch remembers as known, the soonest to expire dropped first: 4096.
+	CtKnownMaxCount int
+	// The most bytes the watch's cursors, known certificates and alarms may take in its store: 1 MiB.
+	CtStateMaxByteCount int
 }
 
 // §5.5's agent subkeys (identity_agent.go): each agent registration's Ed25519 subkey, which the daemon holds and
@@ -416,11 +425,15 @@ func DefaultSidecarTlsSettings() *SidecarTlsSettings {
 		CertOrderPollInterval:    5 * time.Second,
 		CertOrderPollMinInterval: time.Second,
 		CertOrderPollMaxInterval: 5 * time.Minute,
-		CertOrderOpenTimeout:     24 * time.Hour,
 		CertRetryMinInterval:     time.Minute,
 		CertRetryMaxInterval:     time.Hour,
 		CertChainMaxCount:        8,
 		CertStateMaxByteCount:    1024 * 1024,
+		CtWatchInterval:          6 * time.Hour,
+		CtWatchJitter:            30 * time.Minute,
+		CtIdentityPinMinAge:      24 * time.Hour,
+		CtKnownMaxCount:          4096,
+		CtStateMaxByteCount:      1024 * 1024,
 	}
 }
 
