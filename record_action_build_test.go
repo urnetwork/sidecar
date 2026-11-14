@@ -425,14 +425,24 @@ func TestUnbuiltKindsRefused(t *testing.T) {
 			t.Errorf("kind %d answered %v", kind, err)
 		}
 	}
-	// access_request's version 3 is unknown until MCP-M6-01
+	// access_request builds at its version 3, which approvers know since MCP-M6-01, and at no other; a build whose
+	// approvers do not know it builds none
 	action := &protocol.CanonicalAction{
 		Kind:       uint32(SidecarActionAccessRequest),
 		GrantDst:   []string{"sidecar:0102030405060708090a0b0c0d0e0f10"},
 		GrantAllow: []string{"dial"},
 	}
-	if _, err := NewCanonicalAction(action); !errors.Is(err, ErrCanonicalActionVersionUnknown) {
+	stored, err := NewCanonicalAction(action)
+	if err != nil || stored.Action.GetVersion() != 3 {
 		t.Errorf("an access request answered %v", err)
+	}
+	if _, err := newCanonicalAction(action, func(version uint32) bool { return version == 1 || version == 4 }); !errors.Is(err, ErrCanonicalActionVersionUnknown) {
+		t.Errorf("an access request for approvers without version 3 answered %v", err)
+	}
+	atOne := proto.Clone(action).(*protocol.CanonicalAction)
+	atOne.Version = 1
+	if _, err := NewCanonicalAction(atOne); !errors.Is(err, ErrCanonicalActionInvalid) {
+		t.Errorf("an access request at version 1 answered %v", err)
 	}
 }
 

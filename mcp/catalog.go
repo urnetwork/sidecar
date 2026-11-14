@@ -196,8 +196,6 @@ var mcpCatalogDesign = []mcpCatalogDesignTool{
 var mcpCatalogUnbuilt = []string{
 	"evs_drop_preview",
 	"mail_list", "mail_read", "mail_send", "mail_aliases", "mail_alias_create", "mail_alias_delete",
-	"bridge_list", "bridge_forward", "bridge_expose", "bridge_close",
-	"dns_records", "dns_set", "dns_delete",
 	"directory_list", "directory_requests", "directory_request",
 	"search", "search_agents", "search_status",
 }

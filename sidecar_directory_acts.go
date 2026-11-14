@@ -8,9 +8,9 @@
 //	          text sealed in field 38 and nowhere in the clear (QD-740; RECORD-M6-18's DirectoryAccessAction,
 //	          through MCP-M3-02's builder), and files nothing before AuthorizeAccessRequest
 //	          passes it, under the member's decision: harness under harness_ok in an untainted run, device or presence
-//	          in a tainted one (owner decisions 74, 75, 142), which the installed gate judges with §16.6's TS1. Until
-//	          approvers know version 3 (MCP-M6-01 adds it to CanonicalActionVersionKnown) the builder refuses every
-//	          such action, and with no gate installed Authorize refuses every action, so nothing passes before both
+//	          in a tainted one (owner decisions 74, 75, 142), which the installed gate judges with §16.6's TS1.
+//	          Approvers know version 3 (CanonicalActionVersionKnown, MCP-M6-01), and with no gate installed Authorize
+//	          refuses every action, so nothing passes before one is
 //	events    access_request: a pending request for a target this device approves (§16.11's notify row);
 //	          access_decided: the requester's, with its outcome, approved, denied, cancelled or expired (the receipt
 //	          and expire rows; QD-178); directory_erasure: a repo owner's revocation still waiting for the directory's

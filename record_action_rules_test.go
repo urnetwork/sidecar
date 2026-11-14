@@ -82,10 +82,10 @@ func testRecordVersionsKnown(versions ...uint32) func(version uint32) bool {
 	}
 }
 
-// §22.5's §16 row at M3: versions 0, 2, 3 and 5 are refused, and 1 parses. Version 4, a dial or route grant's, is
-// known (QD-740), and is no dns action's.
+// §22.5's §16 row: versions 0, 2 and 5 are refused, and 1 parses. Version 3, an access request's (MCP-M6-01), and
+// version 4, a dial or route grant's (QD-740), are known, and neither is a dns action's.
 func TestApproverRefusesUnknownVersion(t *testing.T) {
-	for _, version := range []uint32{0, 2, 3, 5} {
+	for _, version := range []uint32{0, 2, 5} {
 		action := testRecordDnsAction()
 		action.Version = version
 		_, err := ParseStoredCanonicalAction(testRecordStored(t, action))
@@ -101,15 +101,17 @@ func TestApproverRefusesUnknownVersion(t *testing.T) {
 	if !bytes.Equal(parsed.Bytes, stored) || !proto.Equal(parsed.Action, testRecordDnsAction()) {
 		t.Error("the parse did not keep the action or its bytes")
 	}
-	// The set is a set: 2 and 3 are not known, whichever comes first, though 4 is.
-	if CanonicalActionVersionKnown(2) || CanonicalActionVersionKnown(3) || CanonicalActionVersionKnown(5) ||
-		!CanonicalActionVersionKnown(1) || !CanonicalActionVersionKnown(4) {
-		t.Error("the known set is not {1, 4}")
+	// The set is a set: 2 is not known, though 3 and 4 past it are.
+	if CanonicalActionVersionKnown(2) || CanonicalActionVersionKnown(5) || CanonicalActionVersionKnown(0) ||
+		!CanonicalActionVersionKnown(1) || !CanonicalActionVersionKnown(3) || !CanonicalActionVersionKnown(4) {
+		t.Error("the known set is not {1, 3, 4}")
 	}
-	misplaced := testRecordDnsAction()
-	misplaced.Version = 4
-	if _, err := ParseStoredCanonicalAction(testRecordStored(t, misplaced)); !errors.Is(err, ErrCanonicalActionInvalid) {
-		t.Errorf("a dns action at version 4: %v", err)
+	for _, version := range []uint32{3, 4} {
+		misplaced := testRecordDnsAction()
+		misplaced.Version = version
+		if _, err := ParseStoredCanonicalAction(testRecordStored(t, misplaced)); !errors.Is(err, ErrCanonicalActionInvalid) {
+			t.Errorf("a dns action at version %d: %v", version, err)
+		}
 	}
 }
 

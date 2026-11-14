@@ -1,7 +1,7 @@
 // §16.8's rules for a stored CanonicalAction, and its order row for a push's entries, on every leg.
 //
 // An approver refuses a CanonicalAction version it does not know (§16.8, §22.5's §16 row), so the versions this build
-// knows are a set, never a maximum: version 3, access_request's, arrives at M6 and version 2, field 37's, at M10, in
+// knows are a set, never a maximum: version 3, access_request's, arrived at M6 and version 2, field 37's, at M10, in
 // either order (§23.4's M3 row). Only version 2 may carry field 37, and versioning 0 (on) encodes as absent, so no
 // version is ever read from a field's presence.
 //
@@ -100,12 +100,12 @@ var canonicalActionVersion4Fields = []protoreflect.FieldNumber{
 // The actions a version-4 grant asks: §8.4's names of dial and route.
 var canonicalActionSealedGrantAllows = []string{"dial", "route"}
 
-// Whether this build's approvers know a CanonicalAction version: 1 at M3, and 4, a dial or route grant's sealed
-// form (QD-740). MCP-M6-01 adds 3 and RECORD-M10's carrier switch adds 2, each with its rules below already in
-// force.
+// Whether this build's approvers know a CanonicalAction version: 1 at M3, 3, access_request's, at M6 (MCP-M6-01),
+// and 4, a dial or route grant's sealed form (QD-740). RECORD-M10's carrier switch adds 2, its rules below already
+// in force.
 func CanonicalActionVersionKnown(version uint32) bool {
 	switch version {
-	case 1, canonicalActionVersionSealedGrant:
+	case 1, canonicalActionVersionAccessRequest, canonicalActionVersionSealedGrant:
 		return true
 	}
 	return false

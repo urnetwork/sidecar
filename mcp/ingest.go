@@ -56,10 +56,12 @@ const (
 // Nothing can be sealed: the network has no redactor (no spool), so the event is a gap.
 var ErrIngestNoRedactor = errors.New("ingest has no redactor")
 
-// §16.7's run lifecycle, which MCP-M6-02 wires to RECORD-M6-16's DirectoryRuns: SessionStart's title, project and
-// branch, hook activity, and SessionEnd or Coverage. Nothing else of a session reaches it (I-20). Nil wires nothing.
+// §16.7's run lifecycle, which MCP-M6-02 wires to RECORD-M6-16's DirectoryRuns (ingest_directory.go): SessionStart's
+// title, project and branch, hook activity, and SessionEnd or Coverage. Nothing else of a session reaches it (I-20).
+// Nil wires nothing.
 type RunLifecycle interface {
-	// A run's first bound SessionStart, with what §16.11's announcement takes.
+	// A run's first bound SessionStart, with what §16.11's announcement takes; again when its title first arrives
+	// after that, and when a run its Coverage ended moves again.
 	RunStarted(ctx context.Context, networkId sidecar.Id, start *RunLifecycleStart)
 	// A hook event of a started run.
 	RunMoved(ctx context.Context, networkId sidecar.Id, runId sidecar.Id)
@@ -71,6 +73,9 @@ type RunLifecycle interface {
 type RunLifecycleStart struct {
 	RunId   sidecar.Id
 	Harness string
+	// §5.8's agent label of the run's project, empty for none, and the model the harness named.
+	AgentLabel string
+	Model      string
 	// §16.10's run title, 120 B after redaction; empty until known.
 	Title   string
 	Project string
@@ -503,7 +508,9 @@ func (self *Ingest) captureHook(ctx context.Context, captured *HookCaptured) err
 		return nil
 	}
 	if reopened && self.lifecycle != nil && state.Started {
-		// a run ended by idling moved again: its next Coverage supersedes (RECORD.md's re-open row)
+		// a run ended by idling moved again: its next Coverage supersedes (RECORD.md's re-open row), and the
+		// lifecycle, which heard its end, hears it start again
+		self.lifecycleStartWithLock(ctx, run)
 		self.lifecycle.RunMoved(ctx, run.networkId, run.runId)
 	}
 	self.armIdleWithLock(run)
