@@ -3,6 +3,11 @@
 // §22.5's admission table (SOCK-M5-11): one case per step and refusal of §9.6's listener admission, on a fixed clock,
 // a fake policy and tickets the test's service key signs, plus the replay set's bound, the position wait on the clock,
 // and ±10 min of clock offset still admitting inside the ticket's window.
+//
+// §13.9's system publish on the listener (SOCK-M8-01): tls/443/mta-sts admitted and registered on a receiver's own
+// smtp/25/mx listen grant alone, with no tls/ grant and no call to §5.4's gate; a non-receiver refused whatever tls/
+// grants it holds; the grant's expiry and revocation ending the publish's streams; and no other name taking the path.
+// The service's half is socketsservice's system_publish_test.go.
 
 package sidecar
 
@@ -10,6 +15,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +24,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/urnetwork/sidecar/protocol"
+	"github.com/urnetwork/sidecar/protocol/bridge"
 )
 
 // A service key admission trusts, apart from the ticket tests' fixed one.
@@ -37,6 +45,11 @@ type testSocketPolicy struct {
 	listen   map[Id]bool
 	publish  map[Id]bool
 	inbounds []*AclInbound
+	// when set, listen on a name in the clear is allowed only on the names it holds, beside listen's subjects
+	listenNames map[string]bool
+	// the names in the clear MayListen was asked of, in order, and how often MayPublish was asked
+	listenAsked  []string
+	publishAsked int
 }
 
 func newTestSocketPolicy(position uint64) *testSocketPolicy {
@@ -88,13 +101,28 @@ func (self *testSocketPolicy) AllowInbound(inbound *AclInbound, now time.Time) A
 func (self *testSocketPolicy) MayListen(subject AclSubject, socket AclSocketName, now time.Time) AclDecision {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
-	return self.decision(self.listen[subject.Id])
+	allowed := self.listen[subject.Id]
+	if socket.PublicName != "" {
+		self.listenAsked = append(self.listenAsked, socket.PublicName)
+		if self.listenNames != nil {
+			allowed = allowed && self.listenNames[socket.PublicName]
+		}
+	}
+	return self.decision(allowed)
 }
 
 func (self *testSocketPolicy) MayPublish(subject AclSubject, host string, now time.Time) AclDecision {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
+	self.publishAsked += 1
 	return self.decision(self.publish[subject.Id])
+}
+
+// The names MayListen was asked of so far, and how often MayPublish was asked.
+func (self *testSocketPolicy) asked() ([]string, int) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return slices.Clone(self.listenAsked), self.publishAsked
 }
 
 func (self *testSocketPolicy) set(change func(policy *testSocketPolicy)) {
@@ -468,5 +496,169 @@ func TestSocketAdmissionHoldsTheServiceOffset(t *testing.T) {
 		if code := fixture.admit(fixture.request(late), fixture.inputs()); code != protocol.StreamRejectCode_SR_INVALID {
 			t.Errorf("offset %v past the window: %s", offset, code)
 		}
+	}
+}
+
+// An edge's open of a ticket for fixture's listener, changed by mutate.
+func (self *testAdmissionFixture) edgeAdmit(t testing.TB, mutate func(ticket *protocol.SocketTicket)) protocol.StreamRejectCode {
+	t.Helper()
+	return self.admit(self.edgeRequest(self.ticket(t, func(ticket *protocol.SocketTicket) {
+		ticket.DialerNetworkId = self.urnetworkEdge.Bytes()
+		if mutate != nil {
+			mutate(ticket)
+		}
+	})), self.inputs())
+}
+
+// §13.9's system publish at step 6 (SOCK-M8-01): a receiver whose only grant is its smtp/25/mx listen admits an edge's
+// ticket for tls/443/mta-sts, step 6 asking that listen alone and no publish; a non-receiver holding the name's own
+// tls/ listen and every publish is denied, since those count for nothing there; and tls/443/other takes no such path.
+func TestSocketAdmissionSystemPublishStandsOnTheReceiversListen(t *testing.T) {
+	receiver := newTestAdmissionFixture(t, SocketSystemPublishName)
+	receiver.policy.set(func(policy *testSocketPolicy) {
+		policy.listenNames = map[string]bool{SocketSystemPublishListenName: true}
+		policy.publish = map[Id]bool{}
+	})
+	if code := receiver.edgeAdmit(t, nil); code != testAccepted {
+		t.Fatalf("a receiver's system publish: %s", code)
+	}
+	if listenAsked, publishAsked := receiver.policy.asked(); !slices.Equal(listenAsked, []string{SocketSystemPublishListenName}) || publishAsked != 0 {
+		t.Fatalf("step 6 asked listen on %v and publish %d times", listenAsked, publishAsked)
+	}
+
+	stranger := newTestAdmissionFixture(t, SocketSystemPublishName)
+	stranger.policy.set(func(policy *testSocketPolicy) {
+		policy.listenNames = map[string]bool{SocketSystemPublishName: true}
+	})
+	if code := stranger.edgeAdmit(t, nil); code != protocol.StreamRejectCode_SR_DENIED {
+		t.Fatalf("a non-receiver holding the name's tls/ grants: %s", code)
+	}
+
+	other := newTestAdmissionFixture(t, "tls/443/other")
+	other.policy.set(func(policy *testSocketPolicy) {
+		policy.listenNames = map[string]bool{SocketSystemPublishListenName: true}
+	})
+	if code := other.edgeAdmit(t, nil); code != protocol.StreamRejectCode_SR_DENIED {
+		t.Fatalf("tls/443/other on a receiver's smtp/25/mx listen: %s", code)
+	}
+}
+
+// The system publish's listener (SOCK-M8-01): its own entry on a receiver registers tls/443/mta-sts in app mode http
+// with no call to §5.4's gate and no tls/ grant, and edges' splices are admitted; a stream ends at its ticket's grant
+// expiry, which the service signs from the receiver's listen grant; once that grant is revoked, PolicyChanged resets the
+// live stream and the next open is denied.
+func TestSocketListenSystemPublishStandsOnTheReceiversListen(t *testing.T) {
+	fixture := newTestListenFixture(t)
+	fixture.policy.set(func(policy *testSocketPolicy) {
+		policy.listenNames = map[string]bool{SocketSystemPublishListenName: true}
+		policy.publish = map[Id]bool{}
+	})
+	listener, err := fixture.component.listenSystemPublish(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("a receiver's system publish: %v", err)
+	}
+	defer listener.Close()
+	if len(fixture.authorized) != 0 {
+		t.Fatalf("the system publish went through §5.4's gate: %+v", fixture.authorized)
+	}
+	page := testSocketAwait(t, fixture.service.pages, "the page")
+	if registration := page.Registrations[0]; registration.Name != SocketSystemPublishName || registration.Protocol != "tls" || registration.AppMode != "http" {
+		t.Fatalf("the registration %+v", registration)
+	}
+	edgeOpen := func(mutate func(ticket *protocol.SocketTicket)) (*socketPipeEnd, error) {
+		ticketBytes := fixture.ticket(t, listener, func(ticket *protocol.SocketTicket) {
+			ticket.DialerNetworkId = fixture.service.urnetworkEdge.Bytes()
+			if mutate != nil {
+				mutate(ticket)
+			}
+		})
+		return fixture.open(listener, &socketAdmissionRequest{ticketBytes: ticketBytes, sourceId: fixture.dialerId, edge: true})
+	}
+	readReset := func(end *socketPipeEnd) protocol.StreamResetCode {
+		_, err := end.Read(make([]byte, 1))
+		var resetErr *socketStreamResetError
+		if !errors.As(err, &resetErr) {
+			return protocol.StreamResetCode_RST_UNSPECIFIED
+		}
+		return resetErr.Code
+	}
+	expiring, err := edgeOpen(func(ticket *protocol.SocketTicket) {
+		ticket.GrantExpireTimeMillis = uint64(fixture.clock.Now().Add(10 * time.Second).UnixMilli())
+	})
+	if err != nil {
+		t.Fatalf("a receiver refused an edge splice of its system publish: %v", err)
+	}
+	live, err := edgeOpen(nil)
+	if err != nil {
+		t.Fatalf("a receiver refused an edge splice of its system publish: %v", err)
+	}
+	fixture.clock.advance(10 * time.Second)
+	if code := readReset(expiring); code != protocol.StreamResetCode_RST_REVOKED {
+		t.Errorf("at its grant's expiry: %s", code)
+	}
+
+	fixture.policy.set(func(policy *testSocketPolicy) { policy.listenNames = map[string]bool{} })
+	fixture.component.PolicyChanged()
+	if code := readReset(live); code != protocol.StreamResetCode_RST_REVOKED {
+		t.Errorf("at the listen grant's revocation: %s", code)
+	}
+	if listener.inflightCount() != 0 {
+		t.Errorf("%d in flight", listener.inflightCount())
+	}
+	if _, err := edgeOpen(nil); testRejectCode(err) != protocol.StreamRejectCode_SR_DENIED {
+		t.Errorf("an open after the revocation: %v", err)
+	}
+}
+
+// The system publish's entry denies a non-receiver, with no approval filed and nothing registered, whatever tls/
+// grants it holds, and refuses app mode raw as invalid; an ordinary Listen of tls/443/mta-sts, the daemon's included,
+// is denied on a receiver too, the name being the entry's alone; and a receiver's Listen of tls/443/other goes through
+// §5.4's gate as any tls/ name does.
+func TestSocketListenSystemPublishRefusesANonReceiver(t *testing.T) {
+	fixture := newTestListenFixture(t)
+	fixture.component.listenAction = func(name string, settings *SocketListenSettings) (*SidecarAction, error) {
+		return &SidecarAction{Kind: SidecarActionListen, Canonical: []byte(name), Risk: SidecarRiskNormal}, nil
+	}
+	refused := errors.New("the test's gate refuses")
+	fixture.generation.authorize = func(ctx context.Context, action *SidecarAction, decision *bridge.Signed) error {
+		fixture.authorized = append(fixture.authorized, action)
+		return refused
+	}
+	fixture.policy.set(func(policy *testSocketPolicy) {
+		policy.listenNames = map[string]bool{SocketSystemPublishName: true}
+	})
+	if _, err := fixture.component.listenSystemPublish(t.Context(), nil); !errors.Is(err, ErrSocketDenied) {
+		t.Fatalf("a non-receiver's system publish: %v", err)
+	}
+	fixture.policy.set(func(policy *testSocketPolicy) {
+		policy.listenNames = map[string]bool{SocketSystemPublishListenName: true}
+	})
+	if _, err := fixture.component.listenSystemPublish(t.Context(), &SocketListenSettings{AppMode: "raw"}); !errors.Is(err, errSocketRegistrationInvalid) {
+		t.Fatalf("the system publish in app mode raw: %v", err)
+	}
+	for _, address := range []string{SocketSystemPublishName, "abcdefghij:" + SocketSystemPublishName, "TLS/443/MTA-STS"} {
+		parsed, err := ParseSocketAddress(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.component.listen(t.Context(), parsed, nil, false); !errors.Is(err, ErrSocketDenied) {
+			t.Fatalf("an ordinary Listen of %s on a receiver: %v", address, err)
+		}
+	}
+	if len(fixture.authorized) != 0 {
+		t.Fatalf("the system publish went through §5.4's gate: %+v", fixture.authorized)
+	}
+	select {
+	case page := <-fixture.service.pages:
+		t.Fatalf("a refused system publish registered %+v", page.Registrations)
+	default:
+	}
+
+	other, err := ParseSocketAddress("tls/443/other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.component.listen(t.Context(), other, nil, false); !errors.Is(err, refused) || len(fixture.authorized) != 1 {
+		t.Fatalf("tls/443/other on a receiver: %v, %d actions gated", err, len(fixture.authorized))
 	}
 }

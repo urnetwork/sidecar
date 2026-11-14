@@ -14,12 +14,24 @@
 //	5  in flight below max_streams while serving; §20 has not stopped new streams             busy; quota
 //	6  this device's own evaluation of its config, at the ticket's position or later, allows  denied; retry
 //	   the dial (owner decision 6): a dial grant on an application or share/ name for the
-//	   dialer's sidecar; on tls/ the listener's own listen and publish, on smtp/ its listen,
-//	   since an edge's visitor is autogroup:public and the edge holds no config. A device
-//	   behind the ticket's position waits ListenPositionWait for its state, else retry
+//	   dialer's sidecar; on tls/ the listener's own listen and publish (on the system publish
+//	   its smtp/25/mx listen, below), on smtp/ its listen, since an edge's visitor is
+//	   autogroup:public and the edge holds no config. A device behind the ticket's position
+//	   waits ListenPositionWait for its state, else retry
 //
 // Step 6 never trusts the ticket's grant, only its position, which the state must reach. The replay set holds each
 // ticket_id until its expiry and no longer, so it is bounded by the ticket lifetime times the rate tickets arrive.
+//
+// §13.9's system publish, tls/443/mta-sts (§9.10, §15.5; SOCK-M8-01), is the one exception to step 6's tls/ rule: a
+// mail receiver serves its network's MTA-STS policy there with no tls/ grant of its own, its own approved smtp/25/mx
+// listen grant standing in for the tls/ listen and publish grants. So step 6, and each live stream's re-check, ask
+// that listen alone, and its expiry or revocation ends the publish here: a ticket's grant_expire_time_millis is the
+// grant's (the service signs it from the same stand-in), and PolicyChanged resets the streams of a receiver that lost
+// it. The listener's registration, through Sidecar.ListenSystemPublish alone (a receiver's own component's; Listen
+// refuses the name), takes the same stand-in in place of §5.4's gate (socketSystemPublishListenable): the grant's I-8
+// approval is the publish's, and the name serves app mode http alone. No other name takes this path, a
+// tls/443/mta-sts listener's own tls/ grants count for nothing, and the service holds its half (socketsservice's
+// system_publish.go).
 //
 // A platform listener on ur/<service> (SocketPlatformListener; SOCK-M9-01) runs steps 1 to 5 and 7: its dialer is a
 // sidecar that sent it no Hello and no edge, and it holds no config, since the service authorizes what comes through
@@ -34,10 +46,19 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/urnetwork/sidecar/protocol"
+)
+
+// §13.9's system publish (§9.10, §15.5): the one name a mail receiver serves on its own smtp/25/mx listen grant with no
+// tls/ grant of its own, and the name whose listen grant stands in. Identifiers, the same ones ACL's publish check reads
+// (AclState.PublishGrant), so the gates and both ends of a socket agree on them.
+const (
+	SocketSystemPublishName       = aclSystemPublishName
+	SocketSystemPublishListenName = aclSystemPublishListen
 )
 
 // One open as admission judges it.
@@ -235,6 +256,10 @@ func (self *socketAdmission) allows(policy SocketPolicy, request *socketAdmissio
 	now := self.clock.Now()
 	switch self.namespace {
 	case SocketNamespaceTls:
+		if self.name == SocketSystemPublishName {
+			// the receiver's own smtp/25/mx listen stands in for the tls/ listen and publish grants
+			return socketSystemPublishHeld(policy, sidecarId, now)
+		}
 		listenerSubject := AclSidecarSubject(sidecarId)
 		return policy.MayListen(listenerSubject, AclSocketName{PublicName: self.name}, now).Allowed &&
 			policy.MayPublish(listenerSubject, socketTlsHost(self.name), now).Allowed
@@ -249,6 +274,34 @@ func (self *socketAdmission) allows(policy SocketPolicy, request *socketAdmissio
 		SocketName: self.name,
 		NameToken:  ticket.GetNameToken(),
 	}, now).Allowed
+}
+
+// Whether this device's own config, policy, holds sidecarId's smtp/25/mx listen grant at now: what stands in for the
+// system publish's tls/ listen and publish grants on the listener (§9.10, §13.9), so the grant's expiry or revocation
+// ends the publish.
+func socketSystemPublishHeld(policy SocketPolicy, sidecarId Id, now time.Time) bool {
+	if policy == nil {
+		return false
+	}
+	return policy.MayListen(AclSidecarSubject(sidecarId), AclSocketName{PublicName: SocketSystemPublishListenName}, now).Allowed
+}
+
+// The listener's registration of the system publish (SOCK-M8-01): what Listen asks in place of §5.4's gate, since the
+// publish takes no tls/ grant or approval of its own, its receiver's approved smtp/25/mx listen grant standing in, whose
+// I-8 approval it rides (§9.10, §15.5). The name serves app mode http alone (§13.9); this device's own config must hold
+// the grant for its sidecar; and before generation or policy is there the listen is unavailable. nil passes.
+func socketSystemPublishListenable(generation *socketGeneration, policy SocketPolicy, args *socketRegistrationArgs, now time.Time) error {
+	if args.AppMode != socketListenDefaultTlsAppMode {
+		return fmt.Errorf("%w: the system publish serves app mode http", errSocketRegistrationInvalid)
+	}
+	if generation == nil || generation.identity == nil || policy == nil {
+		return &SocketCodeError{Err: ErrSocketUnavailable}
+	}
+	if !socketSystemPublishHeld(policy, generation.identity.SidecarId, now) {
+		// no approval is filed: the publish is a receiver's, and this device holds no receiver's grant
+		return &SocketCodeError{Err: ErrSocketDenied}
+	}
+	return nil
 }
 
 // The host a tls/<port>/<host> name publishes: its last segment, as §13.9's dns:<host> names it.
