@@ -443,8 +443,26 @@ type GkmSettings struct {
 	// The most a writer adds to PendingCommitDelay, drawn uniformly, so the others do not all commit at once: 5 s.
 	PendingCommitJitter time.Duration
 	// §10.6's re-add: a joiner whose Welcome has not appeared this long after its epoch is removed and added again
-	// by a writer leaf: 10 min.
+	// by a writer leaf: 10 min. A writer leaf that adopted the Add from another leaf's commit asks gkm once, this
+	// long after the epoch, whether the Welcome stands (QD-747). Non-positive asks at the next run of the engine.
 	WelcomeTimeout time.Duration
+	// QD-747: the most Adds of other leaves' commits whose Welcomes a device watches for at once, per repo: 64, far
+	// past the Adds ten minutes bring one group. Past it the oldest is dropped unasked, which leaves its joiners
+	// waiting on their uploader; non-positive watches none.
+	WelcomeWatchMaxCount int
+	// A writer leaf commits a stale Remove only this long past §10.9's stale rule (plan-KEYS-stale-remove-evidence):
+	// 24 h, so two clocks a minute apart do not disagree on it. Every committer follows it alike, so a deployment
+	// never changes it on one device alone.
+	StaleRemoveMargin time.Duration
+	// §10.6: at most this many leaves, an epoch's object carries its sealed GroupInfo inline, and above, group-info
+	// holds it: 16, the protocol's value, which gkm's EpochGroupInfoMaxByteCount is sized to.
+	GroupInfoInlineLeafCount int
+	// §10.14's bound on one POST /gkm/reader-keys (QD-066): 256 ids, the protocol's value, which gkm holds too.
+	// Below 1 sends one id a request.
+	ReaderKeysBatchCount int
+	// The bound on one POST /gkm/delegation-keys (QD-637): 256 ids, reader-keys' own and gkm's
+	// DelegationKeysMaxCount. Below 1 sends one id a request.
+	DelegationKeysBatchCount int
 	// §10.6's late wraps: a holder waits a random time up to this before it answers wrap-pending, so one normally
 	// delivers: 15 s.
 	LateDeliverJitter time.Duration
@@ -508,6 +526,11 @@ func DefaultGkmSettings() *GkmSettings {
 		PendingCommitDelay:           15 * time.Second,
 		PendingCommitJitter:          5 * time.Second,
 		WelcomeTimeout:               10 * time.Minute,
+		WelcomeWatchMaxCount:         64,
+		StaleRemoveMargin:            24 * time.Hour,
+		GroupInfoInlineLeafCount:     16,
+		ReaderKeysBatchCount:         256,
+		DelegationKeysBatchCount:     256,
 		LateDeliverJitter:            15 * time.Second,
 		SelfUpdateInterval:           7 * 24 * time.Hour,
 		SelfUpdateIntervalLarge:      30 * 24 * time.Hour,

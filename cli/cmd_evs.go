@@ -1,7 +1,8 @@
 // ur evs (§11.12, §18.5): the command word several areas build. This file registers it and dispatches by its first
 // word; each part lives in its own cmd_evs_<part>.go and adds its usage line and its case here. rekey is KEYS-M2-26's
 // (cmd_evs_rekey.go), lock and unlock ACL-M10-01's (cmd_evs_lock.go); §11's own parts, ls, log, delete, restore,
-// import, export, retry and status, are EVS1-M2-38's (cmd_evs_repo.go), and EVS2's add the rest.
+// import, export, retry and status, are EVS1-M2-38's (cmd_evs_repo.go), reseed EVSB-M2-20's (evs_reseed.go, the name
+// its plan entry gives it), and EVS2's add the rest.
 
 package main
 
@@ -30,8 +31,9 @@ func init() {
 			"  ur evs export <repo_id> <dir> [--ref=<ref>]...",
 			"  ur evs retry <repo_id> [--ref=<ref>]...",
 			"  ur evs status <repo_id>",
+			"  ur evs reseed <repo_id> [--incident=<id>] [--sign]",
 		}, "\n"),
-		summary: "a repo in evs: its files, history, life, imports and exports; rekey; lock and unlock its versioning; a mount's open work",
+		summary: "a repo in evs: its files, history, life, imports and exports; rekey; lock and unlock its versioning; a mount's open work; its re-seed after a site loss",
 		run:     runUrEvs,
 	})
 }
@@ -61,6 +63,8 @@ func runUrEvs(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		return runUrEvsRepo(ctx, cli, options, urMethodEvsRetry)
 	case urOptionBool(options, "status"):
 		return runUrEvsRepo(ctx, cli, options, urMethodEvsStatus)
+	case urOptionBool(options, "reseed"):
+		return runUrEvsReseed(ctx, cli, options)
 	}
-	return errors.New("ur evs takes rekey, lock, unlock, ls, log, delete, restore, import, export, retry or status")
+	return errors.New("ur evs takes rekey, lock, unlock, ls, log, delete, restore, import, export, retry, status or reseed")
 }

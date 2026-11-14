@@ -88,7 +88,7 @@ func bridgeSignWindowDelegation(request *BridgeDelegationRequest, identity *Side
 		TargetSidecarId:       request.TargetSidecarId.Bytes(),
 		NotAfterMs:            request.NotAfter.UnixMilli(),
 	}
-	return bridge.WindowDelegationSigned(delegation, sign)
+	return bridge.WindowDelegationSigned(delegation, sign, nil)
 }
 
 // This Sidecar's bridge component, nil for none.

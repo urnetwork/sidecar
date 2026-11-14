@@ -1,4 +1,4 @@
-# metadata_list.yml v16; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v17; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -59,6 +59,8 @@
 # v16, updated 2026-11-13 for the owner's answer QD-716 (details-3-metadata-rows), amends smtp-2 with the key set a
 # sidecar proves under, a proof per part with its reply count and the header block's record count, and the key and
 # scan-state commitments the sidecar publishes, uniformly random group elements (DESIGN-DETAILS 3.2.2, 3.2.5).
+# v17, updated 2026-11-13 for the owner's answer QD-725 (evsb-m2-19-reseed-route-body), adds evs-29, the Signed
+# EvsReseed statements evs keeps at reseed/<repo>/<ref> and serves with the head after a site loss.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -443,6 +445,13 @@ evs-28:
   sees: "per drop: its id, ref, DROP push id, version and place, not_before_ms, state (pending, cancelled, executing with phase and progress, held, observed, done, refused with reason), freed and held bytes, and the dry run it names; per dry run: the token paths and lists it was asked about, its snapshot and results (candidate segment and slot ids with sizes, which of them other versions name, inline and packed bytes); per job: its owner instance and lease, the drops it covers, its snapshots (each ref's version), cursor, counters, and candidate, mark, delete and held sets"
   why: a resumable deletion job and a dry run for the drop-history action, after its cancellable window, with no metadata write per push (owner decisions 173, 183)
   ttl: drops/ entries 30 d after their drop ends; dropscan/ files 30 d after their job or dry run ends; {evsd_} hints until taken, outside the rdb bundles; all three deleted with the repo at its shred (§11.12's phase 5)
+  owner: §11.13
+evs-29:
+  service: evs
+  store: reseed/<repo>/<ref> (the repo's metadata cluster)
+  sees: "after a site loss, per ref the Signed EvsReseed statements its repo admins filed: repo_id, ref_id, the re-seeded head's version and chain, the recovery's incident id, and the signing sidecar"
+  why: a reader whose pin lies above every surviving copy accepts the shorter history only under a repo admin's EvsReseed, shown as a loss (§11.13, §19.10; QD-725)
+  ttl: the ref's life; deleted with the repo at its shred (§11.12's phase 5)
   owner: §11.13
 gkm-1:
   service: gkm

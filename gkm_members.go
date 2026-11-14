@@ -31,6 +31,16 @@
 // A leaf that may not commit the Remove its tree needs, a read_only one, commits nothing while that leaf stands
 // (R3's wait): its own check refuses the commit before any upload, and a writer leaf's Remove releases it.
 //
+// The WelcomeTimeout re-add (§10.6's Welcomes row, QD-747): a commit's Welcome is its uploader's alone to write, and
+// the uploader keeps the one it owes in the keychain, so only an uploader that never returns loses one. A writer leaf
+// that adopts an Add another leaf uploaded watches for its Welcome (gkm_group.go's pending record): once, at
+// WelcomeTimeout after the epoch, it asks gkm whether welcome/<n> stands; a 200 ends the watch, and on a 404 the
+// joiners are Unwelcomed, removed and added again in one commit, each under a fresh KeyPackage. A joiner that
+// commits, or that any commit removes, is watched no longer, and a device that reaches an epoch by any route but a
+// commit it processed or made forgets what it watched, since it cannot tell what the epochs between changed. gkm's
+// answer is a server's: a false 200 leaves the joiner waiting on its uploader, and a false 404 costs one Remove and
+// Add, which every member checks as any commit.
+//
 // The first wrap of an agent or of a wrapped member device is a late delivery (gkm_deliver.go), which gkm's
 // wrap-pending hint or the granting device's DeliverFirstWrap brings.
 
@@ -57,14 +67,6 @@ const (
 	gkmBarrierCommitEpochBefore = "gkm.commit.epoch.before"
 	gkmBarrierCommitEpochAfter  = "gkm.commit.epoch.after"
 )
-
-// A writer leaf commits a stale Remove only a day past §10.9's stale rule (plan-KEYS-stale-remove-evidence), so
-// two clocks a minute apart do not disagree on it: a rule every committer follows alike.
-const gkmStaleRemoveMargin = 24 * time.Hour
-
-// At most this many leaves, an epoch's object carries its sealed GroupInfo inline; above, group-info holds it
-// (§10.6).
-const gkmGroupInfoInlineLeafCount = 16
 
 var (
 	// A member check refused a commit this device made or received: it is never adopted.
@@ -111,14 +113,16 @@ type GkmPendingArgs struct {
 	Generation *GkmGeneration
 	// Whether this device holds that generation as poisoned.
 	GenerationPoisoned bool
-	// Leaves added at an epoch whose Welcome has not appeared WelcomeTimeout after it.
+	// Leaves added at an epoch whose Welcome has not appeared WelcomeTimeout after it, as gkm answered this device
+	// (QD-747). Each is removed and added again, both or neither: one that may not join now keeps its leaf.
 	Unwelcomed []Id
 	// GkmGroupClientArgs.Anchored; nil reads every device as anchored.
 	Anchored func(sidecarId Id) bool
-	// GkmSettings.SeatCount and ScheduleInterval.
-	SeatCount        int
-	ScheduleInterval time.Duration
-	Now              time.Time
+	// GkmSettings.SeatCount, ScheduleInterval and StaleRemoveMargin.
+	SeatCount         int
+	ScheduleInterval  time.Duration
+	StaleRemoveMargin time.Duration
+	Now               time.Time
 }
 
 // 6.2.4's Pending(S, e): what the group of args.RepoId needs changed at view and args.Now. Pure, so the tests and
@@ -139,8 +143,28 @@ func GkmPendingChanges(view GkmAuthView, args *GkmPendingArgs) (*GkmPending, err
 	seatCount := min(max(args.SeatCount, 0), GkmSeatCount)
 	pending := &GkmPending{}
 
+	// whether a key holder may be added now: a standing member device, consented where the repo is owner-bound,
+	// anchored, and leaf-entitled where the group seats by rank
+	mayJoin := func(sidecarId Id) bool {
+		row := view.SidecarRow(sidecarId)
+		if !gkmRowMemberDevice(row) || !gkmRowStanding(row) {
+			return false
+		}
+		if ownerMemberId := repo.GetOwnerMemberId(); 0 < len(ownerMemberId) && bytes.Equal(ownerMemberId, row.GetMemberId()) &&
+			!slices.ContainsFunc(repo.GetConsentedSidecarIds(), func(consented []byte) bool { return bytes.Equal(consented, sidecarId.Bytes()) }) {
+			pending.Unconsented = append(pending.Unconsented, sidecarId)
+			return false
+		}
+		if args.Anchored != nil && !args.Anchored(sidecarId) {
+			pending.Unanchored = append(pending.Unanchored, sidecarId)
+			return false
+		}
+		// past the first 1,000 of a ranked group it reads by wraps
+		return !leafRanked || GkmLeafEntitled(view, args.RepoId, sidecarId, args.Now)
+	}
+
 	inTree := map[Id]bool{}
-	removed := map[Id]bool{}
+	readdIds := []Id{}
 	for _, member := range args.Roster {
 		inTree[member.SidecarId] = true
 		switch {
@@ -148,19 +172,23 @@ func GkmPendingChanges(view GkmAuthView, args *GkmPendingArgs) (*GkmPending, err
 			// dropped: a revocation, park, Suspend, grant end or expiry
 		case leafRanked && !GkmLeafEntitled(view, args.RepoId, member.SidecarId, args.Now):
 			// §7.9's move: it reads on by wraps
-		case GkmLeafStale(view, member, args.Now.Add(-gkmStaleRemoveMargin)):
+		case GkmLeafStale(view, member, args.Now.Add(-args.StaleRemoveMargin)):
 			// quiet past stale_leaf_days: it returns by resync
 		case slices.Contains(args.Unwelcomed, member.SidecarId):
-			// its Welcome never appeared: removed here and added again below
+			// its Welcome never appeared: removed and added again, or left as it is where it may not join now, since
+			// a Remove of a holder is valid only with its re-add (§10.9's Remove row)
+			if !mayJoin(member.SidecarId) {
+				continue
+			}
+			readdIds = append(readdIds, member.SidecarId)
 		default:
 			continue
 		}
-		removed[member.SidecarId] = true
 		pending.Removes = append(pending.Removes, member)
 	}
 	slices.SortFunc(pending.Removes, func(a MlsMember, b MlsMember) int { return cmp.Compare(a.LeafIndex, b.LeafIndex) })
 
-	// the member devices that read and have no leaf, or lose theirs to a re-add
+	// the member devices that read and have no leaf
 	candidateIds := []Id{}
 	for _, holder := range holders {
 		if holder.Kind != GkmHolderLeaf {
@@ -170,30 +198,15 @@ func GkmPendingChanges(view GkmAuthView, args *GkmPendingArgs) (*GkmPending, err
 		if err != nil {
 			return nil, fmt.Errorf("%w: a holder's id", ErrGkmMalformed)
 		}
-		if inTree[sidecarId] && !slices.Contains(args.Unwelcomed, sidecarId) {
-			continue
-		}
-		row := view.SidecarRow(sidecarId)
-		if !gkmRowMemberDevice(row) || !gkmRowStanding(row) {
-			continue
-		}
-		if ownerMemberId := repo.GetOwnerMemberId(); 0 < len(ownerMemberId) && bytes.Equal(ownerMemberId, row.GetMemberId()) &&
-			!slices.ContainsFunc(repo.GetConsentedSidecarIds(), func(consented []byte) bool { return bytes.Equal(consented, sidecarId.Bytes()) }) {
-			pending.Unconsented = append(pending.Unconsented, sidecarId)
-			continue
-		}
-		if args.Anchored != nil && !args.Anchored(sidecarId) {
-			pending.Unanchored = append(pending.Unanchored, sidecarId)
-			continue
-		}
-		if leafRanked && !GkmLeafEntitled(view, args.RepoId, sidecarId, args.Now) {
-			// past the first 1,000: it reads by wraps
+		if inTree[sidecarId] || !mayJoin(sidecarId) {
 			continue
 		}
 		candidateIds = append(candidateIds, sidecarId)
 	}
-	keptLeafCount := len(args.Roster) - len(pending.Removes)
-	pending.Adds, pending.Waiting = gkmFillSeats(view, candidateIds, max(seatCount-keptLeafCount, 0))
+	// a re-added joiner keeps the seat its leaf holds, and the rest fill what the Removes free
+	keptLeafCount := len(args.Roster) - len(pending.Removes) + len(readdIds)
+	adds, waiting := gkmFillSeats(view, candidateIds, max(seatCount-keptLeafCount, 0))
+	pending.Adds, pending.Waiting = append(readdIds, adds...), waiting
 
 	if args.Generation != nil && args.Generation.Rotate != nil {
 		rotate := args.Generation.Rotate
@@ -287,16 +300,26 @@ func (self *GkmGroupClient) PendingCommitWait(granting bool) time.Duration {
 func (self *gkmGroupManager) pendingInFlow(state GkmAuthView, pins *gkmRepoPins) (*GkmPending, MlsGroup, error) {
 	client := self.client
 	args := &GkmPendingArgs{
-		RepoId:           self.repoId,
-		Anchored:         client.args.Anchored,
-		SeatCount:        client.settings.SeatCount,
-		ScheduleInterval: client.settings.ScheduleInterval,
-		Now:              client.clock.Now(),
+		RepoId:            self.repoId,
+		Anchored:          client.args.Anchored,
+		SeatCount:         client.settings.SeatCount,
+		ScheduleInterval:  client.settings.ScheduleInterval,
+		StaleRemoveMargin: client.settings.StaleRemoveMargin,
+		Now:               client.clock.Now(),
 	}
 	group, err := client.loadGroup(pins.groupId)
 	switch {
 	case err == nil:
 		args.Roster = group.Roster()
+		// the joiners gkm answered have no Welcome (askWelcomesInFlow), and only while the group stands at the epoch
+		// their watches were noted at: this device's own Welcomes are never lost, since they are in the keychain
+		// before their commit is uploaded (writeOwedWelcomes)
+		if group.Epoch() == pins.epoch {
+			args.Unwelcomed, err = self.unwelcomedInFlow(state, pins)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
 	case errors.Is(err, ErrMlsGroupUnknown) || errors.Is(err, ErrMlsNotMember):
 		group = nil
 	default:
@@ -308,9 +331,6 @@ func (self *gkmGroupManager) pendingInFlow(state GkmAuthView, pins *gkmRepoPins)
 	} else if !errors.Is(err, ErrGkmKeyMissing) {
 		return nil, nil, err
 	}
-	// Unwelcomed stays empty: no route shows a leaf whether another's Welcome was written, so the WelcomeTimeout
-	// re-add waits on question keys-m2-19-welcome-timeout-evidence and fails closed. This device's own Welcomes
-	// are never lost: they are in the keychain before their commit is uploaded (writeOwedWelcomes).
 	pending, err := GkmPendingChanges(state, args)
 	if err != nil {
 		return nil, nil, err
@@ -355,6 +375,10 @@ func (self *gkmGroupManager) runPendingInFlow(ctx context.Context) error {
 		}
 		pins, err = client.repoPins(self.repoId)
 		if err != nil {
+			return err
+		}
+		// QD-747: each Add another leaf uploaded whose WelcomeTimeout has passed is asked for, once
+		if err := self.askWelcomesInFlow(ctx, state, pins); err != nil {
 			return err
 		}
 		pending, group, err := self.pendingInFlow(state, pins)
@@ -605,7 +629,7 @@ func (self *gkmGroupManager) uploadCommitInFlow(ctx context.Context, state GkmAu
 	if err != nil {
 		return 0, err
 	}
-	if len(check.Roster) <= gkmGroupInfoInlineLeafCount {
+	if len(check.Roster) <= client.settings.GroupInfoInlineLeafCount {
 		request.SealedGroupInfo = sealedGroupInfo
 		request.GroupInfoGeneration = generation
 	} else {
@@ -683,6 +707,10 @@ func (self *gkmGroupManager) uploadCommitInFlow(ctx context.Context, state GkmAu
 	}
 	// what the commit removed as stale, for §7.10's view (gkm_stale.go)
 	self.noteRosterChange(state, check.Header, removed, check.Roster, epoch, now)
+	// a watched joiner this commit removed, a re-add's among them, is watched no longer; its own Adds are owed above
+	if err := self.noteWelcomeWatches(state, groupId, epoch, now, client.args.SidecarId, nil, removed); err != nil {
+		return 0, err
+	}
 	if groupInfoObject != nil {
 		// above 16 leaves the GroupInfo rides group-info, which rises at each write; a lost one is asked for again
 		// by a joiner's or a resyncer's ?want=
@@ -866,6 +894,8 @@ func (self *gkmGroupManager) processInFlow(ctx context.Context, state GkmAuthVie
 	epochAuthenticator := staged.EpochAuthenticator()
 	headerBytes := staged.AuthenticatedData()
 	removed := staged.Removed()
+	added := staged.Added()
+	committerId := staged.Committer().SidecarId
 	adoptedGroup, adoptErr := staged.Adopt()
 	adopted = true
 	if adoptErr != nil && !errors.Is(adoptErr, ErrMlsNotMember) {
@@ -892,6 +922,18 @@ func (self *gkmGroupManager) processInFlow(ctx context.Context, state GkmAuthVie
 	if adoptErr == nil && adoptedGroup != nil {
 		// what the commit removed as stale, for §7.10's view (gkm_stale.go)
 		self.noteRosterChange(state, header, removed, adoptedGroup.Roster(), entry.GetEpoch(), gkmCommitRosterTime(checkArgs))
+		// its Adds' Welcome is its uploader's to write: watched for, and asked after once WelcomeTimeout has passed
+		// (QD-747); an epoch object with no time is taken at this device's clock
+		epochTime := client.clock.Now()
+		if 0 < object.GetTimeMs() {
+			epochTime = time.UnixMilli(object.GetTimeMs())
+		}
+		if err := self.noteWelcomeWatches(state, groupId, entry.GetEpoch(), epochTime, committerId, added, removed); err != nil {
+			return false, err
+		}
+	} else if err := self.dropWelcomeWatches(); err != nil {
+		// removed: it holds no leaf to re-add from
+		return false, err
 	}
 	// removed: it keeps every RK_g it holds and reads on by wraps if it is still a holder
 	return errors.Is(adoptErr, ErrMlsNotMember), nil

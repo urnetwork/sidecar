@@ -622,6 +622,9 @@ type fiHandWorld struct {
 	admin     *sidecartest.FakeGkmSigner
 	stranger  *sidecartest.FakeGkmSigner
 	view      *sidecartest.FakeGkmAuthView
+	// the log view is the first position of, and that position's fixture, for a test that appends the next
+	log     *sidecartest.FakeGkmAuthLog
+	fixture *sidecartest.FakeGkmAuthFixture
 	// each ref's chain, C_0 first
 	chains   map[sidecar.Id][][sha256.Size]byte
 	batchSeq uint32
@@ -652,14 +655,16 @@ func newFiHandWorld(t *testing.T) *fiHandWorld {
 	sidecarRows, member := sidecartest.FakeGkmAuthMemberDevices(sidecar.NewId(), world.admin.SidecarId, world.stranger.SidecarId)
 	rows.Sidecars = sidecarRows
 	rows.Members = []*bridge.MemberRow{member}
-	world.view = sidecartest.NewFakeGkmAuthLog().Append(&sidecartest.FakeGkmAuthFixture{
+	world.log = sidecartest.NewFakeGkmAuthLog()
+	world.fixture = &sidecartest.FakeGkmAuthFixture{
 		Rows: rows,
 		IdentityKeys: map[sidecar.Id][]byte{
 			world.admin.SidecarId: world.admin.PublicKey(), world.stranger.SidecarId: world.stranger.PublicKey(),
 		},
 		RepoReaders: map[sidecar.Id][]sidecar.Id{world.repoId: {world.admin.SidecarId, world.stranger.SidecarId}},
 		RepoWriters: map[sidecar.Id][]sidecar.Id{world.repoId: {world.admin.SidecarId, world.stranger.SidecarId}},
-	})
+	}
+	world.view = world.log.Append(world.fixture)
 	SetAuthorizationView(net, world.networkId, world.view)
 
 	put := func(key string, body []byte) {

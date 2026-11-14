@@ -200,6 +200,10 @@ type pushAttempt struct {
 	// (push_part.go). At most one is set; both nil for a one-part push.
 	seal *sealReads
 	part *partReads
+
+	// EVSB-M2-20's: set for a re-seeded push at POST .../reseed (reseed.go), whose 5 (b-h) is checkReseed, whose
+	// record is an EVS_BATCH_RESEED record and whose refusals record nothing
+	reseed *reseedAttempt
 }
 
 // Which of §11.8's requests this attempt is: a one-part push, a part or a seal.
@@ -435,8 +439,11 @@ func (self *pushAttempt) runSteps() *pushOutcome {
 		if self.part != nil {
 			return self.appendPart()
 		}
-		if outcome := self.countedRules(); outcome != nil {
-			return outcome
+		// a re-seed is counted against nobody's allowance (QD-084)
+		if self.reseed == nil {
+			if outcome := self.countedRules(); outcome != nil {
+				return outcome
+			}
 		}
 		outcome, again := self.commit()
 		if !again {
@@ -471,6 +478,9 @@ func (self *pushAttempt) afterCommitted(outcome *pushOutcome) *pushOutcome {
 // checks are EVS2-M10-06's, takes 5c's gate answer: 409 VERSIONING outside the gate, recorded for a seal, and 503
 // inside it, refusing nothing, so nothing commits unchecked.
 func (self *pushAttempt) check() *EvsCheckRefusal {
+	if self.reseed != nil {
+		return self.checkReseed()
+	}
 	if self.formatRefusal != nil {
 		if !self.engine.format2Instance() {
 			return self.formatRefusal

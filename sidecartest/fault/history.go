@@ -122,6 +122,10 @@ type Operation struct {
 	Code protocol.EvsRefusalCode
 	// What answered it, for a person reading a failing check: "evs2 200 v63".
 	Answer string
+	// How many store requests the Net's blob history held when it was called, so every request at that index or
+	// later came after it: what FI-2 orders an attempt against a store write by, such as the repo/ CAS that began a
+	// shred (TEST-M2-04). 0 where the recorder does not know it, which no check takes as before anything.
+	StoreArrival int
 }
 
 // nil for an operation a check can read; otherwise what is wrong with it.
@@ -301,13 +305,14 @@ func (self *EvsWorld) History(name string) *History {
 	ref := HistoryRef{RepoId: self.RepoId, RefId: self.RefId()}
 	for _, attempt := range self.Attempts() {
 		operation := &Operation{
-			Kind:     OperationPush,
-			Actor:    pushIdDevices[attempt.PushId],
-			Instance: attempt.Instance,
-			Ref:      ref,
-			PushId:   attempt.PushId,
-			Call:     attempt.Call,
-			Return:   attempt.Return,
+			Kind:         OperationPush,
+			Actor:        pushIdDevices[attempt.PushId],
+			Instance:     attempt.Instance,
+			Ref:          ref,
+			PushId:       attempt.PushId,
+			Call:         attempt.Call,
+			Return:       attempt.Return,
+			StoreArrival: attempt.StoreArrival,
 		}
 		answer := attempt.Answer
 		switch {

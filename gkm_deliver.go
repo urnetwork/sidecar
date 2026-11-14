@@ -162,8 +162,9 @@ func (self *gkmGroupManager) deliverySet(ctx context.Context, state GkmAuthView,
 		}
 	}
 	// the ReaderKeys gkm serves, each held to its sidecar's admitted identity key and to the readerkey check
-	for first := 0; first < len(readerIds); first += gkmReaderKeysBatchCount {
-		batch := readerIds[first:min(first+gkmReaderKeysBatchCount, len(readerIds))]
+	readerKeysBatchCount := max(1, client.settings.ReaderKeysBatchCount)
+	for first := 0; first < len(readerIds); first += readerKeysBatchCount {
+		batch := readerIds[first:min(first+readerKeysBatchCount, len(readerIds))]
 		readerKeys, err := client.args.Api.ReaderKeys(ctx, batch)
 		if err != nil {
 			return nil, err

@@ -45,6 +45,8 @@ api_transport_connect.go
 bridge_compile.go
 bridge_compile_local.go
 bridge_compile_rows.go
+bridge_forward.go
+bridge_forward_sign.go
 bridge_ledger.go
 bridge_ledger_fold.go
 bridge_rows.go
@@ -195,6 +197,7 @@ gkm_verify_commit.go
 gkm_verify_credential.go
 gkm_verify_delivery.go
 gkm_verify_rotation.go
+gkm_welcome_watch.go
 gkm_yield.go
 id.go
 identity_act.go

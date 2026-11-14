@@ -752,6 +752,7 @@ func TestEvsEngineRoutesAreTheRoutersTableWithNoHandler(t *testing.T) {
 		"DELETE /evs/v1/repos/{repo_id}",
 		"POST /evs/v1/repos/{repo_id}/restore",
 		"POST /evs/v1/repos/{repo_id}/activate",
+		"POST /evs/v1/repos/{repo_id}/reseed",
 		"GET /evs/v1/repos/{repo_id}/probe",
 	}
 	if !slices.Equal(names, want) {

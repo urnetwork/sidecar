@@ -59,6 +59,9 @@ func (self *readAttempt) stream(reply *readReply) {
 	if !stream.frame(&protocol.EvsReadFrame{Head: reply.head}) {
 		return
 	}
+	if reply.reseed != nil && !stream.frame(reseedStatementFrame(self.refId, reply.reseed)) {
+		return
+	}
 	for _, statement := range reply.statements {
 		if !stream.frame(&protocol.EvsReadFrame{Statement: statement}) {
 			return

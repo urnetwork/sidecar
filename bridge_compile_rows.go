@@ -25,6 +25,7 @@ package sidecar
 import (
 	"bytes"
 	"cmp"
+	"crypto/ed25519"
 	"math"
 	"net/netip"
 	"slices"
@@ -180,8 +181,11 @@ func (self *bridgeCompiler) build() *bridge.BridgeRules {
 }
 
 // A link to a target sidecar, from its current binding, verified under the identity key the config admits; nil, and a
-// wait, for one with none. A live forwarding Delegation that names a host client links to that client (§17.9's target
-// row; DESIGN-DETAILS 4.7), whose key check is BRIDGE-M8-04's.
+// wait, for one with none. A live forwarding Delegation that names a host client links to that client and pins the
+// client key the Delegation names, which the target's identity key signed (§17.9's target row; DESIGN-DETAILS 4.7): an
+// app host's link holds every contract to that key and never to a fetched binding's, which names the sidecar's own
+// client. A Delegation that names a host client without a 32-byte key of its own pins nothing a link can check, so the
+// target gets no link, and no binding stands in for it.
 func (self *bridgeCompiler) link(target Id) *bridge.BridgeRuleLink {
 	identityKey := self.state.IdentityKey(target)
 	row := self.state.SidecarRow(target)
@@ -197,7 +201,12 @@ func (self *bridgeCompiler) link(target Id) *bridge.BridgeRuleLink {
 		link.TargetMemberId = memberId.Bytes()
 	}
 	if forwarding := self.state.ForwardingDelegation(target); forwarding != nil && len(forwarding.GetHostClientId()) == len(Id{}) {
+		hostClientKey := forwarding.GetHostClientPublicKey()
+		if len(hostClientKey) != ed25519.PublicKeySize || bytes.Equal(hostClientKey, identityKey) {
+			return nil
+		}
 		link.TargetClientId = bytes.Clone(forwarding.GetHostClientId())
+		link.TargetClientPublicKey = bytes.Clone(hostClientKey)
 		return link
 	}
 	binding := self.bindings.Current(target)

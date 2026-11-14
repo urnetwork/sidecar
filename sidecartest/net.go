@@ -286,6 +286,14 @@ func (self *Net) BlobHistory() []*BlobHistoryEntry {
 	return self.blobs.History()
 }
 
+// How many store requests BlobHistory holds now, without copying them: a request at this index or later comes after
+// this call.
+func (self *Net) BlobHistoryCount() int {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return self.blobs.Count()
+}
+
 // Starts a process under name, and keeps builder for its Restart. Returns its memory.
 func (self *Net) AddProcess(name string, builder ProcessBuilder) (any, error) {
 	actor := self.actors.Actor(self.ctx, name)

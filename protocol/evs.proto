@@ -448,6 +448,8 @@ enum EvsReadObjectKind {
   EVS_READ_OBJECT_MAP_PART = 3;
   EVS_READ_OBJECT_LOG_PAGE = 4;
   EVS_READ_OBJECT_BATCH_RECORD = 5;     // a push, part or seal record
+  EVS_READ_OBJECT_RESEED = 6;           // the ref's Signed EvsReseed from reseed/<repo>/<ref>, after the head of a
+                                        // read whose pin is above it (11.13; QD-725)
 }
 
 message EvsRepoObject {                 // repo/<repo>, <= 4 KiB; each change of state one If-Match (11.12), and a
@@ -601,6 +603,16 @@ message EvsPartRequest {                // POST .../push/<push_id>/<k>
   bytes part = 2;                       // EvsPushPart k as sent, whose SHA-256 parts_sha256 covers
   repeated EvsUploadReceipt receipts = 3;
   bytes staged = 4;                     // format 2's, as in EvsPushRequest
+}
+message EvsReseedRequest {              // POST .../reseed (11.13's re-seed row, §19.10; QD-725): one push, one slot or
+                                        // one Signed EvsReseed a call; a 200 carries an EvsPushReply
+  bytes statement = 1;                  // a re-seeded Signed EvsPush as its device kept it, never re-signed; with a
+                                        // slot, the Signed EvsPush of a re-seeded version that names the slot; alone and
+                                        // a Signed EvsReseed, the statement evs keeps at reseed/<repo>/<ref>
+  bytes payload = 2;                    // a one-part push's payload, as EvsPushRequest's
+  repeated bytes parts = 3;             // a push in parts: each EvsPushPart as sent, in part order
+  bytes slot_id = 4;                    // a slot call: the slot's id, 16 B
+  bytes slot = 5;                       // and its EvsSlotObject bytes as the mirror holds them
 }
 message EvsLeaseRequest {               // POST .../push/<push_id>/lease, git mode; a 200 carries no body
   bytes ref_id = 1;
