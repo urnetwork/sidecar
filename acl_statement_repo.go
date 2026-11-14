@@ -1,5 +1,5 @@
 // §8.8's access log of one repo_id (owner decision 8): RepoCreate, RepoAdmin, RepoGrant, RepoRevoke, RepoDelete,
-// RepoRestore and RepoVersioning, each checked at its position here and folded by acl_access_log.go.
+// RepoRestore, RepoVersioning and RepoPrefixRules, each checked at its position here and folded by acl_access_log.go.
 //
 //	RepoCreate      general or record: a member device that is not read_only, or a tagged or ephemeral sidecar
 //	                under a rule giving it admin on evs:* or that repo, within §8.6's ceiling; team_record and
@@ -17,6 +17,10 @@
 //	RepoRestore     a repo admin, of the newest RepoDelete without now, within 7 days of its entry
 //	RepoVersioning  a repo admin or a config writer, in an owner-bound repo a consented device of its owner; never
 //	                the directory or the config; format 1 folds the lock and skips its rules (D-PHASE-9)
+//	RepoPrefixRules a repo admin or a config writer, by RepoVersioning's test, only in a general repo that is not
+//	                deleted; sealed_rules 48 B and a positive multiple of 256 B, at most SealedMaxByteCount, read by
+//	                its length alone; fewer than SetMaxCount sets in the repo's rows (DESIGN-DETAILS 16.2.2). Code
+//	                from M2 checks it and folds its row, and nothing enforces a rule until M6 (D-PHASE-9; QD-212)
 //
 // A repo admin counts while it stands, and in an owner-bound repo while it is a consented device of the owner, in
 // the directory while it is consented, either way not read_only. The config takes no access-log statement: no rows
@@ -396,6 +400,39 @@ func (self *AclState) checkRepoVersioning(statement *AclStatement, versioning *p
 			return nil, fmt.Errorf("%w: only a consented device of its owner sets an owner-bound repo's versioning", ErrConfigAuthority)
 		}
 	} else if !self.repoAdminSigner(repo, signer, statement.N) && !signer.configWriter {
+		return nil, fmt.Errorf("%w: neither a repo admin nor a config writer", ErrConfigAuthority)
+	}
+	return &AclStatementVerdict{Signer: signer.id}, nil
+}
+
+// RepoPrefixRules{repo_id, sealed_rules}: DESIGN-DETAILS 16.2.2's id-level rule, which api, the gates and every device
+// judge alike with no key. The body is never opened: its length is read, and what it holds is the reader's from M6
+// (ACL-M6-04), a set no reader can open leaving the one below it in force.
+func (self *AclState) checkRepoPrefixRules(statement *AclStatement, prefixRules *protocol.RepoPrefixRules) (*AclStatementVerdict, error) {
+	signer, err := self.statementSigner(statement)
+	if err != nil {
+		return nil, err
+	}
+	repo, err := self.statementRepo(prefixRules.GetRepoId())
+	if err != nil {
+		return nil, err
+	}
+	// every other kind is written by fixed sets or only by its owner's devices (16.9, small reading 1; QD-795)
+	if repo.kind != protocol.RepoKind_REPO_KIND_GENERAL {
+		return nil, fmt.Errorf("%w: a %s repo takes no RepoPrefixRules", ErrConfigRule, repo.kind)
+	}
+	if repo.deleted {
+		return nil, fmt.Errorf("%w: a RepoPrefixRules on a deleted repo", ErrConfigRule)
+	}
+	settings := DefaultAclPrefixSettings()
+	if byteCount := len(prefixRules.GetSealedRules()); !settings.SealedByteCountFits(byteCount) {
+		return nil, fmt.Errorf("%w: sealed rules of %d bytes, not 48 B and a positive multiple of 256 B within %d", ErrConfigRule, byteCount, settings.SealedMaxByteCount)
+	}
+	if setCount := len(repo.row.GetPrefixRules()); !settings.SetFits(setCount) {
+		return nil, fmt.Errorf("%w: the repo holds %d rule sets, SetMaxCount's limit of %d", ErrConfigRule, setCount, settings.SetMaxCount)
+	}
+	// checkRepoVersioning's test for a repo that is not owner-bound: an admin standing at S(n-1), or a config writer
+	if !self.repoAdminSigner(repo, signer, statement.N) && !signer.configWriter {
 		return nil, fmt.Errorf("%w: neither a repo admin nor a config writer", ErrConfigAuthority)
 	}
 	return &AclStatementVerdict{Signer: signer.id}, nil
