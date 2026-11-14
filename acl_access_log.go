@@ -14,6 +14,11 @@
 //	             the RepoRestore of its deletion_id, so §11.12's deleted{deletion_id, time, signer} is told from the
 //	             row on any day, the log keeping the entry or not
 //	lock         the newest RepoVersioning's; format 1 folds it and enforces nothing (D-PHASE-9)
+//	prefix_rules each RepoPrefixRules' {signer, at}, appended and never removed or reordered, so in position order
+//	             for the repo's life: a set stays after a later one replaces it, since pushes pinned in its span are
+//	             judged by it, and a compromise cascade voids none. Nothing else moves: no right, holder or key
+//	             changes, so holders_shrunk_at stays and no generation is asked for. M2 folds it and enforces
+//	             nothing (D-PHASE-9; DESIGN-DETAILS 16.2.3)
 //	consented    an owner-bound repo's owner's devices consented at its RepoCreate, and each its owner's
 //	             OwnerConfirm adds; a device consented any other way between bases waits for the next base's compile
 //
@@ -184,6 +189,15 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 				return nil, err
 			}
 			repo.Lock = body.GetLock()
+		case *protocol.RepoPrefixRules:
+			// the row is the repo's copy (repoForWrite), its list with it; the pair is the body's and the position's,
+			// so ApplyStatement, a base's tail re-applied and a writer's compile append the same row (DESIGN-DETAILS
+			// 5.2.2)
+			repo, err := repoForWrite(body.GetRepoId())
+			if err != nil {
+				return nil, err
+			}
+			repo.PrefixRules = append(repo.PrefixRules, &protocol.AclRepoPrefixRulesRow{Signer: signer, At: at})
 		case *protocol.OwnerConfirm:
 			for _, repo := range next {
 				if !aclRepoKindOwnerBound(repo.GetKind()) || !bytes.Equal(repo.GetOwnerMemberId(), verdict.MemberId.Bytes()) ||
