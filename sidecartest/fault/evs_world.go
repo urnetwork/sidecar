@@ -340,13 +340,15 @@ type EvsWorld struct {
 // One attempt of a push as an instance took it, for a history check of §11.8's commit rule (Porcupine, EVS1-M2-42):
 // Call when the instance began it and Return when it answered, both on the world's logical clock, which moves at
 // every event under the world's lock and so orders them as they happened. An attempt its instance never answered,
-// killed or still held, has Return 0 and no Answer: its outcome is unknown and its end open.
+// killed or still held, has Return 0 and no Answer: its outcome is unknown and its end open. StoreArrival is how many
+// store requests the Net's blob history held when it began (Operation.StoreArrival).
 type EvsWorldAttempt struct {
-	PushId   sidecar.Id
-	Instance string
-	Call     int64
-	Return   int64
-	Answer   *EvsWorldAnswer
+	PushId       sidecar.Id
+	Instance     string
+	Call         int64
+	Return       int64
+	Answer       *EvsWorldAnswer
+	StoreArrival int
 }
 
 // A world on net, drawing its ids and keys; it writes nothing until Setup runs as a schedule's first step. settings
@@ -396,15 +398,20 @@ func NewEvsWorld(net *Net, settings *EvsWorldSettings) *EvsWorld {
 		// ran and every world of the process stayed
 		context.AfterFunc(net.Context(), func() { evsWorlds.Delete(key) })
 	}
+	// FI-2's ledger reads the world's attempts as its history gives them (TEST-M2-04)
+	LedgerOf(net).AddSource("evs world "+self.RepoId.String(), func() []*Operation {
+		return self.History("ledger").Operations()
+	})
 	return self
 }
 
 // An attempt beginning now, its call time taken from the logical clock.
 func (self *EvsWorld) beginAttempt(pushId sidecar.Id, instance string) *EvsWorldAttempt {
+	storeArrival := self.net.BlobHistoryCount()
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
 	self.attemptClock += 1
-	attempt := &EvsWorldAttempt{PushId: pushId, Instance: instance, Call: self.attemptClock}
+	attempt := &EvsWorldAttempt{PushId: pushId, Instance: instance, Call: self.attemptClock, StoreArrival: storeArrival}
 	self.attempts = append(self.attempts, attempt)
 	return attempt
 }
@@ -1166,6 +1173,15 @@ func (self *EvsWorld) roundTrip(device *EvsWorldDevice, request *http.Request) (
 		answer := evsWorldAnswerOf("lb", last)
 		self.noteAnswer(pushId, answer)
 	}
+	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/read") && last.Code == http.StatusOK {
+		// what evs served the device, for FI-15's read clause (TEST-M2-04); a reply that does not parse is the client's
+		// to refuse, and records nothing
+		if reads, err := LedgerReadsOf(device.Name, tried[len(tried)-1], self.RepoId, last.Body.Bytes()); err == nil {
+			for _, read := range reads {
+				LedgerOf(self.net).RecordRead(read)
+			}
+		}
+	}
 	return last.Result(), nil
 }
 
@@ -1724,13 +1740,17 @@ func (self *EvsWorld) Nightly() func(ctx context.Context, net *Net) error {
 	}
 }
 
-// The checks every evs row of this world names beside its own: FI-1 and FI-6, which are bound, the outcome rules
-// FI-2's oracle (TEST-M2-04) will hold once it binds (EvsWorldOutcomes), and no device alarming.
+// The checks every evs row of this world names beside its own: FI-1, FI-2, FI-6 and FI-15, each bound, the world's
+// writes and reads reaching FI-2 and FI-15 through the Net's ledger; the world's own outcome rules (Outcomes), whose
+// record of what committed where the schedules' own checks read (committedVersionOf); and no device alarming.
+// Outcomes cannot see §11.12's shred exception, which FI-2 judges (TEST-M2-04), so a schedule running that exception
+// names FI(2) without Checks.
 func (self *EvsWorld) Checks(invariants ...Invariant) []Invariant {
-	return append([]Invariant{FI(1), FI(6), self.Outcomes(), self.NoAlarms()}, invariants...)
+	return append([]Invariant{FI(1), FI(2), FI(6), FI(15), self.Outcomes(), self.NoAlarms()}, invariants...)
 }
 
-// FI-2's clauses a world can read until TEST-M2-04's oracle binds, which a schedule names in its place, as
+// FI-2's clauses a world can read alone, beside FI(2) in Checks since TEST-M2-04 bound it, and the record of what
+// committed where that the schedules' own checks read, as
 // fs_team.go's agreement does for FI-2 and FI-3: every committed version of main names one push id, which commits
 // once and never moves; every 200 an instance or the lb answered names its push id's committed version (a retry
 // returns the original result); no push id a refusal answered ever commits (I-EVS-3); and no evs instance issued a
