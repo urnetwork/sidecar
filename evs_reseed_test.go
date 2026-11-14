@@ -296,3 +296,53 @@ func TestEvsReaderTakesAHeadBelowItsPinOnlyUnderTheServedReseed(t *testing.T) {
 		t.Fatalf("the pin after the next read: %+v", pin)
 	}
 }
+
+// The head an export and a mirror sync start from (pinnedHead) names no pin in its read, so a head below the pin
+// brings a second read that does: refused as a fork with no statement, taken under the admin's.
+func TestEvsPinnedHeadTakesAHeadBelowItsPinUnderTheServedReseed(t *testing.T) {
+	world := newEvsTestWorld(t)
+	world.push(&evsTestChange{path: "a.txt", content: []byte("1")})
+	world.stateLock.Lock()
+	low := proto.Clone(world.headSummaryWithLock()).(*protocol.EvsHeadSummary)
+	world.stateLock.Unlock()
+	lowChain := world.commits[0].chain
+	world.push(&evsTestChange{path: "a.txt", content: []byte("2")})
+	world.config.repo.Admins = []*protocol.AclRepoAdminRow{{SidecarId: world.signer.sidecarId.Bytes()}}
+
+	site := &evsTestLostSite{world: world}
+	reader := newEvsTestClient(t, site, newEvsTestStore(t))
+	reader.client.args.Gkm = world.gkm
+	reader.client.args.Config = func() GkmAuthView { return world.config }
+	identity := &SidecarIdentity{NetworkId: testNetworkId, SidecarId: evsTestId("reader"), ClientId: evsTestId("reader client")}
+	reader.client.args.Identity = func() *SidecarIdentity { return identity }
+	repo := reader.client.Repo(world.repoId)
+	ctx := context.Background()
+	if head, err := repo.readHeadAlone(ctx, world.refId, true); err != nil || head.Version != 2 {
+		t.Fatalf("the head before the loss: %v", err)
+	}
+
+	site.lose(low)
+	if _, err := repo.pinnedHead(ctx, world.refId); !errors.Is(err, ErrEvsHeadForked) {
+		t.Fatalf("a head below the pin with no statement: %v", err)
+	}
+	// once naming no pin, and again from the pin for the statement
+	if asked := site.asked(); len(asked) != 2 || asked[0] != 0 || asked[1] != 2 {
+		t.Fatalf("with no statement it asked from %v", asked)
+	}
+	statement, err := SignEvsReseed(world.signer.sign, world.repoId, world.refId, 1, lowChain, []byte("incident"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	site.lose(low, evsTestReseedFrame(world.refId, statement))
+	head, err := repo.pinnedHead(ctx, world.refId)
+	if err != nil || head.Version != 1 || head.Chain != lowChain {
+		t.Fatalf("the head under the admin's EvsReseed: %+v, %v", head, err)
+	}
+	pin, pinned, err := reader.client.pins.Pin(world.repoId, world.refId)
+	if err != nil || !pinned || pin.Version != 1 || pin.Loss == nil || pin.Loss.FromVersion != 2 {
+		t.Fatalf("the pin under the admin's EvsReseed: %+v, %v", pin, err)
+	}
+	if asked := site.asked(); len(asked) != 3 || asked[0] != 0 || asked[1] != 2 || asked[2] != 0 {
+		t.Fatalf("the accepted read asked from %v", asked)
+	}
+}
