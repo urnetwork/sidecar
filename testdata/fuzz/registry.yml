@@ -108,7 +108,7 @@ rows:
       - {name: FuzzParseReplies, package: smtpproof, owner: SMTP-M0-01, milestone: M0}
       - {name: FuzzSmtpFrame, package: ".", owner: SMTP-M9-01, milestone: M9, seeds: [testdata/fuzz/FuzzSmtpFrame]}
       - {name: FuzzSmtpMxReplies, package: smtpedgeservice, owner: SMTP-M9-12, milestone: M9}
-      - {name: FuzzMailSession, package: ".", owner: MAIL-M7-14, milestone: M7}
+      - {name: FuzzMailSession, package: ".", owner: MAIL-M7-14, milestone: M7, seeds: [testdata/fuzz/FuzzMailSession]}
 
   - id: mail-parsers
     bullet: "go-message, mox, ARF, RUA, TLS-RPT, DSN"
