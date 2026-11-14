@@ -50,7 +50,7 @@ func testSearchEntryOfContent(t testing.TB, refKey []byte, refId Id, kind IndexD
 			t.Fatalf("%s is no text", path)
 		}
 	}
-	prepared, err := documents[0].prepare(testSearchNormalizer(t), false, refId)
+	prepared, err := documents[0].prepare(testSearchNormalizer(t), false, refId, DefaultIndexFormatSettings())
 	if err != nil {
 		t.Fatal(err)
 	}

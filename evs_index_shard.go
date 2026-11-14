@@ -38,8 +38,11 @@ const indexDocumentEntryMinByteCount = indexIdByteCount + 2 + 1 + 6 + 5
 // The longest doc table entry: a doc_key, two VBytes and the longest row.
 const indexDocumentEntryMaxByteCount = indexIdByteCount + 2*indexVByteMaxByteCount + indexRowMaxByteCount
 
-// A builder whose documents would pass a shard's cap, which a merge answers by opening the next shard (§11.14's merges
-// output row), so it is no malformation.
+// A builder whose documents would pass a shard's cap, so it is no malformation. In a layout's take, its step 1 test and
+// its step 3 test it is a test's answer, "does not encode within", and the layout goes on: take opens the next shard,
+// a shard a removal lengthened gives up its highest entries, and a join is not made (§11.14's merges output row;
+// DESIGN-DETAILS 1.2.4; QD-775). From a layout's last encode, or any other caller, it fails what it was building, a
+// guard that QD-760's skip at extraction and QD-775's two tests leave no input a decoder accepts to reach.
 var errIndexShardFull = errors.New("index shard past its cap")
 
 // One live document of a shard: its doc table row and its key set, which the postings hold inverted.
@@ -327,12 +330,13 @@ func (self *indexShardBuilder) encode(shard *indexShard) ([]byte, error) {
 type indexShardDrop func(kind indexEntryKind, key [indexIdByteCount]byte, version uint64) bool
 
 // The shard rewritten in place without what drop takes, padded with zeros to replacedByteCount, the replaced version's
-// exact length: a CLOSURE's rewrite, a DROP's or a roll-up's step 4 (plan-SEARCH-shrink-claim, as the owner decided
-// it). It first builds by blocks of 64; if that outgrows the replaced length, it keeps the replaced partition, each
-// block its surviving keys and an emptied block gone, which always fits, since a removed key saves at least 4 B and
-// costs the next at most 2. It keeps the replaced header's pad_generation either way. Past the replaced length all the
-// same, which only a shard that was never canonical could give, it fails closed: the file is not written, and nothing
-// is padded short.
+// exact length: a CLOSURE's rewrite or a DROP's (plan-SEARCH-shrink-claim, as the owner decided it; a roll-up rewrites
+// nothing in place since DESIGN-DETAILS 1.2.5). It first builds by blocks of 64; if that outgrows the replaced length,
+// or passes the shard's cap, which a removal from a shard a merge's take filled can do through the re-blocking (the
+// case QD-775 settles for a layout), it keeps the replaced partition, each block its surviving keys and an emptied
+// block gone, which always fits, since a removed key saves at least 4 B and costs the next at most 2. It keeps the
+// replaced header's pad_generation either way. Past the replaced length all the same, which only a shard that was never
+// canonical could give, it fails closed: the file is not written, and nothing is padded short.
 func (self *indexShardBuilder) rewriteWithout(shard *indexShard, drop indexShardDrop, replacedByteCount int) ([]byte, *indexShard, error) {
 	rewritten := &indexShard{header: proto.CloneOf(shard.header)}
 	for _, document := range shard.documents {
@@ -346,10 +350,15 @@ func (self *indexShardBuilder) rewriteWithout(shard *indexShard, drop indexShard
 		}
 	}
 	file, survivingKeys, err := self.encodeUnpadded(rewritten)
-	if err != nil {
+	pastCap := errors.Is(err, errIndexShardFull)
+	if err != nil && !pastCap {
 		return nil, nil, err
 	}
-	if replacedByteCount < len(file) {
+	if pastCap {
+		// past the cap by 64, so past any replaced length: the keys that survive, which the encoder did not hand back
+		survivingKeys, _ = indexInvertPostings(rewritten.documents)
+	}
+	if pastCap || replacedByteCount < len(file) {
 		// The replaced partition, each block keeping the keys that survive. Both key lists ascend.
 		_, replacedKeys, err := self.encodeUnpadded(shard)
 		if err != nil {

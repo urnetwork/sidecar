@@ -47,8 +47,14 @@ type IndexFormatSettings struct {
 	// that would keep a ninth is written full.
 	KeepSlotCount int
 	// Two adjacent shards of a partition that come to fewer bytes than this before their pads become one under the
-	// lower n: 524,288 B (ShardJoin). It decides a merge's and a roll-up's bytes, so every device lays out alike.
+	// lower n, where the two as one shard also encode within the shard's cap: 524,288 B (ShardJoin; QD-775). It decides
+	// a merge's and a roll-up's bytes, so every device lays out alike.
 	ShardJoinByteCount int
+	// What D6's shard test counts, beside a document's row, dictionary entries and lists, for the magic, the header
+	// and its length, the doc_key, the version and the time of a shard holding that document alone: 128 B (ShardLone;
+	// DESIGN-DETAILS 11.2.3; QD-760). Format 1 needs at most 95 B there, so a kept document's lone shard encodes at
+	// least 33 B under the cap whoever writes it and when, which is what a merge's take needs of a new shard.
+	ShardLoneByteCount int
 	// A bucket's sealed slots and unabsorbed large entries, in plaintext bytes, at which a merge is due: 131,072 B
 	// (MergeBytes).
 	MergeDueByteCount int
@@ -85,6 +91,7 @@ func DefaultIndexFormatSettings() *IndexFormatSettings {
 		RingSlotCount:         8,
 		KeepSlotCount:         8,
 		ShardJoinByteCount:    512 * 1024,
+		ShardLoneByteCount:    128,
 		MergeDueByteCount:     128 * 1024,
 		LockTerm:              30 * time.Minute,
 		LockGrace:             10 * time.Minute,

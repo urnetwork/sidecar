@@ -791,3 +791,36 @@ func TestDryRunShellPathOnlyWhenNamed(t *testing.T) {
 		}
 	}
 }
+
+// A point whose interrupted apply cannot be recovered, its worktree removed after a kill, is left for its own next load
+// and blocks no other run's point of the network.
+func TestUnrecoverablePointBlocksNoOther(t *testing.T) {
+	env := newRestoreTestEnv(t)
+	point := env.open()
+	env.hookedWrite("toolu_1", "committed.txt", "edited\n")
+	plan, err := point.Plan(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.points.fs = (&restoreTestFs{beforeRename: func(from string, to string) error {
+		if restoreTestInstall(from, to) {
+			panic("killed before the install")
+		}
+		return nil
+	}}).fs()
+	func() {
+		defer func() { recover() }()
+		point.Apply(context.Background(), plan.PreviewId)
+	}()
+	if err := os.RemoveAll(env.dir); err != nil {
+		t.Fatal(err)
+	}
+	env.points = env.newPoints()
+	other, err := env.points.Open(context.Background(), env.network, env.networkId, sidecar.NewId(), t.TempDir())
+	if err != nil || other == nil {
+		t.Fatalf("another run's point: %v", err)
+	}
+	if _, err := env.points.OpenExisting(context.Background(), env.network, env.networkId, env.runId); err == nil {
+		t.Error("the unrecoverable point opened with its apply still open")
+	}
+}
