@@ -307,7 +307,7 @@ func (self *daemonBridgeForward) closeListeners() {
 
 // Ends the forward: no new connection, and a reset of each it carries. reason is nil for a person's close.
 func (self *daemonBridgeForward) close(reason error) {
-	testHookBarrier("bridge.forward.close", self.id)
+	testHookBarrier("bridge_daemon.forward.close", self.id)
 	conns, ended := func() ([]net.Conn, bool) {
 		self.stateLock.Lock()
 		defer self.stateLock.Unlock()
@@ -417,7 +417,7 @@ func (self *daemonBridgeForward) serveTcp(conn net.Conn) {
 		return
 	}
 	defer self.untrack(remote)
-	testHookBarrier("bridge.forward.splice", self.id)
+	testHookBarrier("bridge_daemon.forward.splice", self.id)
 	daemonSocketSplice(&daemonSocketTcpEnd{conn: conn}, &daemonSocketTcpEnd{conn: remote}, self.bridges.settings.ForwardSpliceBufferByteCount)
 }
 

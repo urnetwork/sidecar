@@ -29,6 +29,8 @@ barrier bridge.adopt.after device/bridge_state.go
 barrier bridge.adopt.before device/bridge_state.go
 barrier bridge_component.provide.before bridge_component.go
 barrier bridge_component.revoke.before bridge_component.go
+barrier bridge_daemon.forward.close bridge_daemon_forward.go
+barrier bridge_daemon.forward.splice bridge_daemon_forward.go
 barrier bridge_egress.publish.after device/bridge_egress.go
 barrier bridge_egress.publish.before device/bridge_egress.go
 barrier bridge_file.address.after bridge_file.go
