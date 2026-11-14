@@ -10,8 +10,9 @@
 //	revokes      config writers' standing RepoRevokes, one per subject, until a config writer's RepoGrant of that
 //	             subject, or in an owner-bound repo its owner's EvsShare to it, lifts it
 //	             (plan-ACL-owner-bound-standing-revoke)
-//	deletion     the newest RepoDelete with its entry's time_ms (QD-743), restored_at set by the RepoRestore of its
-//	             deletion_id
+//	deletion     the newest RepoDelete with its entry's time_ms (QD-743) and its signer (QD-798), restored_at set by
+//	             the RepoRestore of its deletion_id, so §11.12's deleted{deletion_id, time, signer} is told from the
+//	             row on any day, the log keeping the entry or not
 //	lock         the newest RepoVersioning's; format 1 folds it and enforces nothing (D-PHASE-9)
 //	consented    an owner-bound repo's owner's devices consented at its RepoCreate, and each its owner's
 //	             OwnerConfirm adds; a device consented any other way between bases waits for the next base's compile
@@ -165,6 +166,7 @@ func FoldAclRepos(repos []*protocol.AclRepo, entries []AclAccessLogEntry) ([]*pr
 			}
 			repo.Deletion = &protocol.AclRepoDeletionRow{
 				DeletionId: bytes.Clone(body.GetDeletionId()), Now: body.GetNow(), DeletedAt: at, DeletedTimeMs: statement.TimeMs,
+				Signer: signer,
 			}
 		case *protocol.RepoRestore:
 			repo, err := repoForWrite(body.GetRepoId())

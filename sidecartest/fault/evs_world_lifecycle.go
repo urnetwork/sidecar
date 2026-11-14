@@ -103,7 +103,7 @@ func (self *EvsWorld) deletionRowWithLock() *protocol.AclRepoDeletionRow {
 	newest := self.deletions[len(self.deletions)-1]
 	return &protocol.AclRepoDeletionRow{
 		DeletionId: newest.deletionId.Bytes(), Now: newest.now, DeletedAt: newest.deletedAt, RestoredAt: newest.restoredAt,
-		DeletedTimeMs: newest.time.UnixMilli(),
+		DeletedTimeMs: newest.time.UnixMilli(), Signer: newest.signer.Bytes(),
 	}
 }
 

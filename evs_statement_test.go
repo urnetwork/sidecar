@@ -539,9 +539,10 @@ func TestEvsPayloadTamperingFailsBeforeAdoption(t *testing.T) {
 	}
 }
 
-// What questions/evs1-m2-01-inline-record-home leaves open fails closed: inline records in section 3 or in a part
-// are refused. Format 2's sections, staged segments, versioning and locators are refused as needing format 2;
-// reserved locator kinds and layouts as INVALID.
+// Inline records ride only in their locators (QD-735): section 3 is refused as INVALID, a part's inline records in
+// TestEvsPartsCheckAloneAndAtTheSeal, and a kind-2 locator holds its record and names no id, offset or length.
+// Format 2's sections, staged segments, versioning and locators are refused as needing format 2; reserved locator
+// kinds and layouts as INVALID.
 func TestEvsPayloadRefusesWhatFormatOneDoesNotCarry(t *testing.T) {
 	signer := newEvsTestSigner("writer")
 	built, _ := evsTestBuildAndCheck(t, signer, evsTestPlan(t, signer, "refusals", 2))
@@ -571,6 +572,29 @@ func TestEvsPayloadRefusesWhatFormatOneDoesNotCarry(t *testing.T) {
 		"layout 1":              func(entry *protocol.EvsEntryVersion) { entry.Layout = 1 },
 		"another push's":        func(entry *protocol.EvsEntryVersion) { entry.PushId = evsTestId("other push").Bytes() },
 		"a file with no fields": func(entry *protocol.EvsEntryVersion) { entry.SealedFields = nil },
+		"an inline locator with no record": func(entry *protocol.EvsEntryVersion) {
+			entry.Chain[0] = &protocol.EvsLocator{Kind: uint32(protocol.EvsLocatorKind_EVS_LOCATOR_INLINE)}
+		},
+		"an inline locator past 16 KiB": func(entry *protocol.EvsEntryVersion) {
+			entry.Chain[0] = &protocol.EvsLocator{Kind: uint32(protocol.EvsLocatorKind_EVS_LOCATOR_INLINE), Inline: make([]byte, EvsInlineMaxByteCount+1)}
+		},
+		"an inline locator naming an id": func(entry *protocol.EvsEntryVersion) {
+			entry.Chain[0] = &protocol.EvsLocator{Kind: uint32(protocol.EvsLocatorKind_EVS_LOCATOR_INLINE), Inline: evsTestBytes("inline", 32), Id: evsTestBytes("segment", 32)}
+		},
+		"an inline locator naming an offset": func(entry *protocol.EvsEntryVersion) {
+			entry.Chain[0] = &protocol.EvsLocator{Kind: uint32(protocol.EvsLocatorKind_EVS_LOCATOR_INLINE), Inline: evsTestBytes("inline", 32), Offset: 104}
+		},
+		"an inline locator naming a length": func(entry *protocol.EvsEntryVersion) {
+			entry.Chain[0] = &protocol.EvsLocator{Kind: uint32(protocol.EvsLocatorKind_EVS_LOCATOR_INLINE), Inline: evsTestBytes("inline", 32), Length: 32}
+		},
+	}
+	// the twin: a kind-2 locator holding its record and nothing else
+	inline := &protocol.EvsEntryVersion{}
+	proto.Unmarshal(plan.Changes[0].EntryVersion, inline)
+	inline.Chain[0] = &protocol.EvsLocator{Kind: uint32(protocol.EvsLocatorKind_EVS_LOCATOR_INLINE), Inline: evsTestBytes("inline", 32)}
+	inlineBytes, _ := proto.MarshalOptions{Deterministic: true}.Marshal(inline)
+	if _, err := checkEvsEntryVersion(inlineBytes, &protocol.EvsPush{PushId: plan.PushId.Bytes(), BaseVersion: plan.BaseVersion}); err != nil {
+		t.Errorf("an inline locator holding its record: %v", err)
 	}
 	for label, mutate := range entries {
 		entry := &protocol.EvsEntryVersion{}
@@ -630,12 +654,98 @@ func TestEvsPartsCheckAloneAndAtTheSeal(t *testing.T) {
 	if _, _, err := EvsCheckSeal(built.Statement, tampered); !errors.Is(err, ErrEvsPushInvalid) {
 		t.Errorf("a seal over a tampered part: %v", err)
 	}
+	// inline records ride only in their locators (QD-735): neither in a part's field 5 nor in its sections
 	inlineRecords := &protocol.EvsPushPart{}
 	proto.Unmarshal(built.Parts[0], inlineRecords)
 	inlineRecords.InlineRecords = [][]byte{{1}}
 	withInline, _ := proto.MarshalOptions{Deterministic: true}.Marshal(inlineRecords)
 	if _, err := EvsCheckPart(built.Statement, withInline); !errors.Is(err, ErrEvsPushInvalid) {
 		t.Errorf("inline records in a part: %v", err)
+	}
+	withInlineParts := slices.Clone(built.Parts)
+	withInlineParts[0] = withInline
+	if _, _, err := EvsCheckSeal(built.Statement, withInlineParts); !errors.Is(err, ErrEvsPushInvalid) {
+		t.Errorf("a seal over a part with inline records: %v", err)
+	}
+	inSections := &protocol.EvsPushPart{}
+	proto.Unmarshal(built.Parts[0], inSections)
+	sections, err := ParseEvsPayload(inSections.GetSections())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections.SetSection(protocol.EvsPayloadSection_EVS_PAYLOAD_INLINE_RECORDS, evsJoinItems([][]byte{{1}}))
+	inSections.Sections = sections.Encode()
+	withSection, _ := proto.MarshalOptions{Deterministic: true}.Marshal(inSections)
+	if _, err := EvsCheckPart(built.Statement, withSection); !errors.Is(err, ErrEvsPushInvalid) {
+		t.Errorf("inline records in a part's sections: %v", err)
+	}
+}
+
+// A writer puts each inline record in its locator and nowhere else (QD-735): a one-part push and a push in parts
+// carry no section 3 and no part's inline_records, and each record's bytes appear once, inside the entry version
+// entry_sha256 covers, so the checks pass with nothing joined or restored.
+func TestEvsBuiltPushCarriesEachInlineRecordOnceInItsLocator(t *testing.T) {
+	signer := newEvsTestSigner("writer")
+	for _, changeCount := range []int{3, 1100} {
+		plan := evsTestPlan(t, signer, fmt.Sprint("inline ", changeCount), changeCount)
+		records := [][]byte{}
+		for k, change := range plan.Changes {
+			entry := &protocol.EvsEntryVersion{}
+			if err := proto.Unmarshal(change.EntryVersion, entry); err != nil {
+				t.Fatal(err)
+			}
+			record := evsTestBytes(fmt.Sprint("inline record ", changeCount, " ", k), 32)
+			entry.Chain = []*protocol.EvsLocator{{Kind: uint32(protocol.EvsLocatorKind_EVS_LOCATOR_INLINE), Inline: record}}
+			entryBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			change.EntryVersion = entryBytes
+			records = append(records, record)
+		}
+		built, checked := evsTestBuildAndCheck(t, signer, plan)
+		carried := [][]byte{built.Statement.Bytes, built.Payload}
+		if 0 < len(built.Payload) {
+			payload, err := ParseEvsPayload(built.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_INLINE_RECORDS) != nil {
+				t.Errorf("%d changes: section 3 in the payload", changeCount)
+			}
+		}
+		for i, partBytes := range built.Parts {
+			part := &protocol.EvsPushPart{}
+			if err := proto.Unmarshal(partBytes, part); err != nil {
+				t.Fatal(err)
+			}
+			sections, err := ParseEvsPayload(part.GetSections())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(part.GetInlineRecords()) != 0 || sections.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_INLINE_RECORDS) != nil {
+				t.Errorf("%d changes: inline records outside their locators in part %d", changeCount, i+1)
+			}
+			carried = append(carried, partBytes)
+		}
+		if (changeCount < 1024) != (len(built.Parts) == 0) {
+			t.Fatalf("%d changes in %d parts", changeCount, len(built.Parts))
+		}
+		all := bytes.Join(carried, nil)
+		for k, record := range records {
+			if count := bytes.Count(all, record); count != 1 {
+				t.Fatalf("%d changes: record %d carried %d times", changeCount, k, count)
+			}
+			holders := 0
+			for _, change := range checked.Changes {
+				if bytes.Contains(change.EntryVersion, record) {
+					holders += 1
+				}
+			}
+			if holders != 1 {
+				t.Fatalf("%d changes: record %d in %d checked entry versions", changeCount, k, holders)
+			}
+		}
 	}
 }
 

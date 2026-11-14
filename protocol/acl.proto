@@ -219,6 +219,9 @@ message AclRepoDeletionRow {
   uint64 restored_at = 4;
   int64 deleted_time_ms = 5;              // the RepoDelete entry's time_ms, which RepoRestore's 7 days and §11.12's
                                           // shred start count from once the log no longer keeps the entry (QD-743)
+  bytes signer = 6;                       // the RepoDelete's signer sidecar_id, as every row keeps its signer: what
+                                          // §11.12's deleted{deletion_id, time, signer} names once the log no longer
+                                          // keeps the entry (QD-798)
 }
 
 message AclAudit {                        // a reader every member sees (owner decision 63)

@@ -11,13 +11,18 @@
 // in parts is checked part by part as each arrives (EvsCheckPart), and whole at its seal (EvsCheckSeal), which joins
 // the parts' slices into the one-part payload they spell.
 //
-// One answer waits on an open question and fails closed meanwhile: section 3 and EvsPushPart.inline_records, which
-// questions/evs1-m2-01-inline-record-home leaves to the locators, are refused if set. Sections 15 and 16, a creating
-// push's sealed ref name and overlay base, are DESIGN-DETAILS 8.2.2's on question evs1-m2-01-ref-creation-fields's
-// option 1: held here to their shape, and to the pushes that may carry them at 5c, which needs the head. A part may
-// hold no change when it holds a slice of a section that did not fit beside the changes (8.2.2's parts row): such
-// parts come after every part with a change, carry no changes_root and are no leaf of the statement's root. Format 2's
-// DROP sections and staged segments are refused as FORMAT_UNSUPPORTED.
+// An inline record travels only inside its entry version's kind-2 locator, as the locator's inline bytes, so
+// entry_sha256 covers it and a push carries it once (QD-735; question evs1-m2-01-inline-record-home). A kind-2
+// locator names no id, offset or length. Section 3 and EvsPushPart.inline_records stay empty in format 1, held for
+// kind 3's push-payload range (§11.6's kinds row): a payload, a part, or a part's sections carrying either is
+// refused as INVALID. EvsPushPlan has no field for one, so a writer cannot put an inline record anywhere but its
+// locator.
+//
+// Sections 15 and 16, a creating push's sealed ref name and overlay base, are DESIGN-DETAILS 8.2.2's on question
+// evs1-m2-01-ref-creation-fields's option 1: held here to their shape, and to the pushes that may carry them at 5c,
+// which needs the head. A part may hold no change when it holds a slice of a section that did not fit beside the
+// changes (8.2.2's parts row): such parts come after every part with a change, carry no changes_root and are no leaf
+// of the statement's root. Format 2's DROP sections and staged segments are refused as FORMAT_UNSUPPORTED.
 //
 // Format 2 (EVS-FORMAT.md's format 2 chapter) runs the same checks through EvsCheckPayloadFormat2, EvsCheckPartFormat2
 // and EvsCheckSealFormat2, which take what format 1 refuses as needing format 2: versioning 1 and 2, kind-5 and staged
@@ -53,7 +58,7 @@ const (
 )
 
 // The sections that ride in an EvsPushPart's own fields, never in its sections: entry versions, sealed metadata,
-// inline records and the change list.
+// inline records and the change list. Format 1 carries no inline records at all, in either place (QD-735).
 var evsPartFieldSections = []protocol.EvsPayloadSection{
 	protocol.EvsPayloadSection_EVS_PAYLOAD_ENTRY_VERSIONS, protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA,
 	protocol.EvsPayloadSection_EVS_PAYLOAD_INLINE_RECORDS, protocol.EvsPayloadSection_EVS_PAYLOAD_CHANGE_LIST,
@@ -406,7 +411,8 @@ func checkEvsEntryVersionOf(entryBytes []byte, push *protocol.EvsPush, format2 b
 }
 
 // A locator format 1 writes: a segment by its 32 B id and a record's place in it, or a record inline of at most
-// 16 KiB.
+// 16 KiB, the record itself and nothing else, since an inline record rides only in its locator (QD-735): a kind-2
+// locator naming an id, an offset or a length points at bytes it does not hold.
 func checkEvsLocator(locator *protocol.EvsLocator) error {
 	return checkEvsLocatorOf(locator, false)
 }
@@ -431,7 +437,8 @@ func checkEvsLocatorOf(locator *protocol.EvsLocator, format2 bool) error {
 			return fmt.Errorf("%w: a segment locator out of shape", ErrEvsPushInvalid)
 		}
 	case protocol.EvsLocatorKind_EVS_LOCATOR_INLINE:
-		if len(locator.GetInline()) == 0 || EvsInlineMaxByteCount < len(locator.GetInline()) || len(locator.GetId()) != 0 {
+		if len(locator.GetInline()) == 0 || EvsInlineMaxByteCount < len(locator.GetInline()) || len(locator.GetId()) != 0 ||
+			locator.GetOffset() != 0 || locator.GetLength() != 0 {
 			return fmt.Errorf("%w: an inline locator out of shape", ErrEvsPushInvalid)
 		}
 	case protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT:
@@ -547,7 +554,7 @@ func checkEvsSections(statement *EvsStatement, payload *EvsPayload, checked *Evs
 func checkEvsSectionsOf(statement *EvsStatement, payload *EvsPayload, checked *EvsCheckedPayload, partRoots func(change int) ([]byte, uint64), format2 bool) error {
 	push := statement.Push
 	if len(payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_INLINE_RECORDS)) != 0 {
-		return fmt.Errorf("%w: inline records in the payload, which questions/evs1-m2-01-inline-record-home holds to the locators", ErrEvsPushInvalid)
+		return fmt.Errorf("%w: inline records in the payload, which format 1 carries only in their locators (QD-735)", ErrEvsPushInvalid)
 	}
 	sealedMetadata := payload.Section(protocol.EvsPayloadSection_EVS_PAYLOAD_SEALED_METADATA)
 	if err := checkEvsHashedSection("sealed metadata", sealedMetadata, push.GetSealedMetadataSha256()); err != nil {
@@ -600,8 +607,9 @@ func checkEvsSectionsOf(statement *EvsStatement, payload *EvsPayload, checked *E
 	if err != nil {
 		return err
 	}
+	slotMaxKeyCount := DefaultEvsFormatSettings().SlotMaxKeyCount
 	for _, item := range erasedItems {
-		if len(item) != evsErasedItemByteCount || EvsSlotMaxKeyCount <= binary.BigEndian.Uint16(item[16:18]) {
+		if len(item) != evsErasedItemByteCount || slotMaxKeyCount <= int(binary.BigEndian.Uint16(item[16:18])) {
 			return fmt.Errorf("%w: an erased item out of shape", ErrEvsPushInvalid)
 		}
 		checked.Erased = append(checked.Erased, &EvsErasedKey{SlotId: Id(item[0:16]), KeyIndex: binary.BigEndian.Uint16(item[16:18])})
@@ -967,7 +975,7 @@ func evsCheckPartOf(statement *EvsStatement, partBytes []byte, format2 bool) (*E
 		return nil, fmt.Errorf("%w: part %d of another push or past its count", ErrEvsPushInvalid, part.GetPart())
 	}
 	if len(part.GetInlineRecords()) != 0 {
-		return nil, fmt.Errorf("%w: inline records in a part, which questions/evs1-m2-01-inline-record-home holds to the locators", ErrEvsPushInvalid)
+		return nil, fmt.Errorf("%w: inline records in a part, which format 1 carries only in their locators (QD-735)", ErrEvsPushInvalid)
 	}
 	var root [sha256.Size]byte
 	if len(leaves) == 0 {

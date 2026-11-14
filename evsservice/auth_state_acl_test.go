@@ -9,6 +9,7 @@
 package evsservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -347,12 +348,13 @@ func TestAclEvsAuthStateReadsRevocations(t *testing.T) {
 	}
 }
 
-// What the projection holds of a repo: its kind and owner, a RepoDelete{now} without a date, a RepoDelete dated by its
-// row (QD-743) with no signer when the gate keeps no log, and no facts for one its row does not date or a repo the gate
-// does not hold.
+// What the projection holds of a repo: its kind and owner, a RepoDelete{now} without a date, a RepoDelete dated and
+// signed by its row (QD-743, QD-798) with no log behind the gate, one whose row carries no signer, as no fold leaves
+// it, dated and unsigned, and no facts for one its row does not date or a repo the gate does not hold.
 func TestAclEvsAuthStateRepoFacts(t *testing.T) {
 	fixture := newAclAuthFixture(t)
 	vaultId, deletedId, datedId, undatedId := testId("acl-vault"), testId("acl-deleted"), testId("acl-dated"), testId("acl-undated")
+	signedId, signer := testId("acl-signed"), testId("acl-deleting admin")
 	deletedTime := fixture.clock.Now().Add(-48 * time.Hour)
 	rows := &protocol.AclRows{HasDocument: true, Repos: []*protocol.AclRepo{
 		{RepoId: vaultId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_VAULT, OwnerMemberId: fixture.member.Bytes()},
@@ -362,6 +364,10 @@ func TestAclEvsAuthStateRepoFacts(t *testing.T) {
 			Deletion: &protocol.AclRepoDeletionRow{DeletionId: testId("dated deletion").Bytes(), DeletedAt: 5, DeletedTimeMs: deletedTime.UnixMilli(), RestoredAt: 6}},
 		{RepoId: undatedId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
 			Deletion: &protocol.AclRepoDeletionRow{DeletionId: testId("deletion").Bytes(), DeletedAt: 5}},
+		{RepoId: signedId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
+			Deletion: &protocol.AclRepoDeletionRow{
+				DeletionId: testId("signed deletion").Bytes(), DeletedAt: 7, DeletedTimeMs: deletedTime.UnixMilli(), Signer: signer.Bytes(),
+			}},
 	}}
 	if err := fixture.states.Install(sidecar.Id(fixture.networkId), rows, fixture.view); err != nil {
 		t.Fatal(err)
@@ -381,7 +387,16 @@ func TestAclEvsAuthStateRepoFacts(t *testing.T) {
 	facts, answer = state.Repo(principal, datedId)
 	if answer != EvsAuthAllowed || facts.Deletion == nil || facts.Deletion.Now || !facts.Deletion.Restored ||
 		!facts.Deletion.Time.Equal(time.UnixMilli(deletedTime.UnixMilli())) || facts.Deletion.SignerSidecarId != (sidecar.Id{}) {
-		t.Errorf("a RepoDelete its row dates: %+v, %d", facts.Deletion, answer)
+		t.Errorf("a RepoDelete its row dates and does not sign: %+v, %d", facts.Deletion, answer)
+	}
+	facts, answer = state.Repo(principal, signedId)
+	if answer != EvsAuthAllowed || facts.Deletion == nil || facts.Deletion.Now || facts.Deletion.Restored ||
+		!facts.Deletion.Time.Equal(time.UnixMilli(deletedTime.UnixMilli())) || facts.Deletion.SignerSidecarId != signer {
+		t.Errorf("a RepoDelete its row dates and signs: %+v, %d", facts.Deletion, answer)
+	}
+	if deletion, err := state.RepoDeletion(t.Context(), sidecar.Id(fixture.networkId), signedId); err != nil || deletion == nil ||
+		deletion.SignerSidecarId != signer || !deletion.Time.Equal(time.UnixMilli(deletedTime.UnixMilli())) {
+		t.Errorf("by network, a RepoDelete its row signs: %+v, %v", deletion, err)
 	}
 	if facts, answer := state.Repo(principal, undatedId); answer != EvsAuthAllowed || facts.Deletion != nil {
 		t.Errorf("an undated RepoDelete: %+v, %d", facts, answer)
@@ -472,8 +487,8 @@ func TestAclEvsAuthStateStartsAShredFromRows(t *testing.T) {
 }
 
 // DELETE without now writes deleted{deletion, time, signer} only from a projection that names both: one that dates
-// the RepoDelete from its row but no longer keeps its entry's signer, or one that does not date it, refuses
-// STATEMENT_MISSING and leaves repo/ active; a RepoDelete{now} needs neither.
+// the RepoDelete but names no signer, neither its log nor its row (a row no fold writes), or one that does not date it,
+// refuses STATEMENT_MISSING and leaves repo/ active; a RepoDelete{now} needs neither.
 func TestRepoDeleteRefusesADeletionWithNoSigner(t *testing.T) {
 	for _, c := range []struct {
 		name     string
@@ -493,6 +508,66 @@ func TestRepoDeleteRefusesADeletionWithNoSigner(t *testing.T) {
 			t.Errorf("%s: %v", c.name, err)
 		case !c.ok && (!errors.As(err, &refusal) || refusal.Code != protocol.EvsRefusalCode_EVS_REFUSAL_STATEMENT_MISSING || next != nil):
 			t.Errorf("%s: %v %v", c.name, next, err)
+		}
+	}
+}
+
+// QD-798's reconciler from rows alone, the real state over a gate that keeps no log, as one whose log no longer keeps
+// the RepoDelete's entry, or never held it: a device filed a RepoDelete three days ago and was killed before calling
+// DELETE, so repo/ is still active when taskworker's walk comes. With the row's signer, the walk applies it as DELETE
+// would, deleted{deletion_id, the row's time, the row's signer}, and queues the start, which at 7 d 10 min past the
+// row's time moves repo/ to shredding with gkm untouched. A row without a signer, which no fold writes, is refused
+// STATEMENT_MISSING as before the field: repo/ stays active, nothing is applied or queued, and the walk does not fail.
+func TestAclEvsAuthStateReconcilesARepoDeleteFromItsRow(t *testing.T) {
+	for _, signed := range []bool{true, false} {
+		fixture := newEvsFixture(t)
+		repoId, admin := testId("repo"), testId("sidecar-a")
+		fixture.activeRepo(repoId, admin)
+		entryTime := fixture.clock.Now().Add(-3 * 24 * time.Hour)
+		deletionId := testId("deletion")
+		row := &protocol.AclRepoDeletionRow{DeletionId: deletionId.Bytes(), DeletedAt: 9, DeletedTimeMs: entryTime.UnixMilli()}
+		if signed {
+			row.Signer = admin.Bytes()
+		}
+		states := sidecartest.NewFakeAclContractStates()
+		rows := &protocol.AclRows{HasDocument: true, Repos: []*protocol.AclRepo{{
+			RepoId: repoId.Bytes(), Kind: protocol.RepoKind_REPO_KIND_GENERAL,
+			Admins:   []*protocol.AclRepoAdminRow{{SidecarId: admin.Bytes(), Signer: admin.Bytes(), At: 2}},
+			Deletion: row,
+		}}}
+		if err := states.Install(sidecar.Id(fixture.networkId), rows, sidecartest.NewFakeAclView()); err != nil {
+			t.Fatal(err)
+		}
+		deletions := NewAclEvsAuthState(states, nil)
+		host := fixture.host.ServiceHost()
+
+		counts, err := RunReconcile(fixture.ctx, host, &EvsReconcileDeps{Deletions: deletions})
+		object := fixture.repoObject(repoId)
+		if !signed {
+			if err != nil || counts.Applied != 0 || counts.Queued != 0 || counts.Failed != 0 || object.GetState() != protocol.EvsRepoState_EVS_REPO_ACTIVE ||
+				len(fixture.shredRequests(repoId)) != 0 {
+				t.Errorf("a row with no signer: %+v %v, repo/ %v", counts, err, object)
+			}
+			continue
+		}
+		if err != nil || counts.Applied != 1 || counts.Queued != 1 {
+			t.Fatalf("the walk: %+v %v", counts, err)
+		}
+		if object.GetState() != protocol.EvsRepoState_EVS_REPO_DELETED || !bytes.Equal(object.GetDeletionId(), deletionId.Bytes()) ||
+			object.GetStateMs() != entryTime.UnixMilli() || !bytes.Equal(object.GetStateSigner(), admin.Bytes()) {
+			t.Fatalf("repo/ %v", object)
+		}
+		if requests := fixture.shredRequests(repoId); len(requests) != 1 || !requests[0].RunAt.Equal(entryTime.Add(evsShredStartAfter)) {
+			t.Fatalf("the start %v", requests)
+		}
+
+		// the start, when the queue runs it, from the same rows
+		probe := &shredProbe{}
+		fixture.clock.AdvanceTo(entryTime.Add(evsShredStartAfter))
+		outcome, err := RunShred(fixture.ctx, host, probe.deps(deletions), EvsShredArgs(repoId, deletionId, false))
+		if state := fixture.repoObject(repoId).GetState(); err != nil || outcome != EvsShredWaiting || state != protocol.EvsRepoState_EVS_REPO_SHREDDING ||
+			len(probe.groupCalls) != 0 {
+			t.Errorf("the start: %v %v %s, gkm %v", outcome, err, state, probe.groupCalls)
 		}
 	}
 }
