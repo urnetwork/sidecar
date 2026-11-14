@@ -142,10 +142,12 @@ type AclPrefixRuleError struct {
 	Path string
 }
 
+// EVS_PREFIX_RULE and the detail, never the path.
 func (self *AclPrefixRuleError) Error() string {
 	return fmt.Sprintf("%s (%s)", ErrAclPrefixRule, self.Detail)
 }
 
+// ErrAclPrefixRule, so errors.Is finds the code.
 func (self *AclPrefixRuleError) Unwrap() error {
 	return ErrAclPrefixRule
 }
@@ -933,6 +935,7 @@ type aclPrefixStoredSets struct {
 	Sets []*aclPrefixStoredSet `json:"sets"`
 }
 
+// One final set as the sealed store keeps it.
 type aclPrefixStoredSet struct {
 	At         uint64 `json:"at"`
 	Signer     []byte `json:"signer"`
@@ -1376,8 +1379,8 @@ type AclPrefixRulesFiled struct {
 	Pin *bridge.AuthPin
 	// The set as filed, in its canonical order.
 	Set *protocol.PrefixRuleSet
-	// The repo's standing admins the set names in no rule, who write nothing while it is in force: what set
-	// --as-written says it leaves unable to write.
+	// The repo's standing admins the state admits whom the set names in no rule, who write nothing while it is in
+	// force: what set --as-written says it leaves unable to write.
 	UnnamedAdmins []Id
 }
 
@@ -1497,13 +1500,11 @@ func (self *AclPrefixRulesFiler) File(ctx context.Context, request *AclPrefixRul
 	}
 	filed := &AclPrefixRulesFiled{Pin: pins[0], Set: next}
 	for _, adminId := range aclPrefixStandingAdmins(repo) {
-		named := false
-		if sidecar := state.Sidecar(adminId); sidecar != nil {
-			named = slices.ContainsFunc(next.GetRules(), func(rule *protocol.PrefixRule) bool { return aclPrefixNames(rule.GetSubject(), sidecar.Row) })
-		} else {
-			named = slices.ContainsFunc(next.GetRules(), func(rule *protocol.PrefixRule) bool { return bytes.Equal(rule.GetSubject(), adminId[:]) })
+		sidecar := state.Sidecar(adminId)
+		if sidecar == nil {
+			continue
 		}
-		if !named {
+		if !slices.ContainsFunc(next.GetRules(), func(rule *protocol.PrefixRule) bool { return aclPrefixNames(rule.GetSubject(), sidecar.Row) }) {
 			filed.UnnamedAdmins = append(filed.UnnamedAdmins, adminId)
 		}
 	}
@@ -1572,16 +1573,18 @@ func aclPrefixStandingAdmins(repo *protocol.AclRepo) []Id {
 }
 
 // rules with a rule {sidecar:<id>, every path} for each standing admin they do not name for every path already
-// (QD-792), so a set that already lets every signer write everywhere, Lift's, gains none.
+// (QD-792), so a set that already lets every signer write everywhere, Lift's, gains none. An admin row whose sidecar
+// the state holds no admission row for any more signs nothing and would name nobody, so it gains none either, and no
+// filing is refused for it.
 func aclPrefixWithAdmins(state *ConfigState, repo *protocol.AclRepo, rules []*protocol.PrefixRule) []*protocol.PrefixRule {
 	withAdmins := slices.Clone(rules)
 	for _, adminId := range aclPrefixStandingAdmins(repo) {
-		var row *bridge.SidecarRow
-		if sidecar := state.Sidecar(adminId); sidecar != nil {
-			row = sidecar.Row
+		sidecar := state.Sidecar(adminId)
+		if sidecar == nil {
+			continue
 		}
 		everywhere := slices.ContainsFunc(rules, func(rule *protocol.PrefixRule) bool {
-			return len(rule.GetPath()) == 0 && (bytes.Equal(rule.GetSubject(), adminId[:]) || aclPrefixNames(rule.GetSubject(), row))
+			return len(rule.GetPath()) == 0 && aclPrefixNames(rule.GetSubject(), sidecar.Row)
 		})
 		if !everywhere {
 			withAdmins = append(withAdmins, &protocol.PrefixRule{Subject: adminId.Bytes(), Action: protocol.PrefixAction_PREFIX_ACTION_WRITE})

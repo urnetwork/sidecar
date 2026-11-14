@@ -1839,6 +1839,11 @@ func TestAclPrefixSetsOpensEachSetOnceAndKeepsItSealed(t *testing.T) {
 	if names := store.names(aclPrefixStoreDirectory); !slices.Equal(names, []string{aclPrefixStoreName(repoId)}) {
 		t.Fatalf("the store holds %v", names)
 	}
+	// off the log's goroutine, the state's own window serves the same bodies
+	fromState, err := NewAclPrefixSets(nil, nil).Sets(ctx, &AclPrefixSetsArgs{State: net.log.State(), RepoId: repoId, EntryAt: AclPrefixStateEntries(net.log.State()), Keys: keys})
+	if err != nil || !slices.Equal(aclTestSetStates(fromState), want) {
+		t.Fatalf("from the state's window: %v, %v", aclTestSetStates(fromState), err)
+	}
 
 	// generation 2 arrives: the pending set opens, and the store keeps all three
 	keys.add(keyTwo)
@@ -2250,6 +2255,26 @@ func TestAclPrefixRulesFilerFilesTheNextSetWithTheAdmins(t *testing.T) {
 	// a Set not as written gains the admins
 	file(&AclPrefixRulesRequest{RepoId: repoId, Change: AclPrefixRulesSet, Rules: []*protocol.PrefixRule{aclTestPrefixRule(ci, "docs")}},
 		append(adminRules(), aclTestPrefixRule(ci, "docs")))
+	// a standing admin whose sidecar the state holds no row for signs nothing: no rule is written for it, it is named
+	// among no unnamed admins, and no filing is refused for it
+	ghost := testConfigId("prefix filer ghost admin")
+	net.withAclRows(func(rows *protocol.AclRows) {
+		for _, repo := range rows.Repos {
+			if Id(repo.GetRepoId()) == repoId {
+				repo.Admins = append(repo.Admins, &protocol.AclRepoAdminRow{SidecarId: ghost.Bytes(), Signer: net.owner.sidecarId.Bytes(), At: net.n})
+			}
+		}
+	})
+	if !slices.ContainsFunc(net.log.State().Repo(repoId).GetAdmins(), func(admin *protocol.AclRepoAdminRow) bool { return bytes.Equal(admin.GetSidecarId(), ghost.Bytes()) }) {
+		t.Fatal("the rows hold no ghost admin")
+	}
+	file(&AclPrefixRulesRequest{RepoId: repoId, Change: AclPrefixRulesAllow, Subject: ci, Paths: [][][]byte{aclTestNames("tools")}},
+		append(adminRules(), aclTestPrefixRule(ci, "docs"), aclTestPrefixRule(ci, "tools")))
+	filed = file(&AclPrefixRulesRequest{RepoId: repoId, Change: AclPrefixRulesSet, AsWritten: true, Rules: []*protocol.PrefixRule{aclTestPrefixRule(ci, "docs")}},
+		[]*protocol.PrefixRule{aclTestPrefixRule(ci, "docs")})
+	if !slices.Equal(filed.UnnamedAdmins, slices.SortedFunc(slices.Values(admins), Id.Cmp)) {
+		t.Errorf("as written with a ghost admin, the unnamed admins %v", filed.UnnamedAdmins)
+	}
 
 	posts := api.postCount()
 	group := testConfigId("prefix filer group")
