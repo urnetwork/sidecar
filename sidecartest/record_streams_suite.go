@@ -37,16 +37,19 @@ type RecordStreamsWorld interface {
 	For(sidecarId sidecar.Id) sidecar.RecordStreams
 }
 
-// A world whose slot rows are another width than RECORD.md section 5.2's 64 B: the T2 harness's, whose row codec wraps
-// a row as one of evs's 32 B object keys while RECORD.md's rows wait on question record-m2-01-slot-row-salt. A world
-// that does not implement it takes 64 B rows.
-type RecordStreamsWorldRows interface {
-	RowByteCount() int
+// What the suite runs by.
+type RecordStreamsSuiteSettings struct {
+	// How long one case may wait on the world before it fails with what it was waiting for. Real time, so only ever
+	// a failure's bound (§22.8): nothing here sleeps.
+	CaseTimeout time.Duration
 }
 
-// How long one case may wait on the world before it fails with what it was waiting for. Real time, so only ever a
-// failure's bound (§22.8): nothing here sleeps.
-const recordStreamsSuiteCaseTimeout = 30 * time.Second
+// 30 s a case, far past what any case takes on a loaded host.
+func DefaultRecordStreamsSuiteSettings() *RecordStreamsSuiteSettings {
+	return &RecordStreamsSuiteSettings{
+		CaseTimeout: 30 * time.Second,
+	}
+}
 
 type recordStreamsSuiteCase struct {
 	name string
@@ -54,11 +57,11 @@ type recordStreamsSuiteCase struct {
 }
 
 // Runs every case on world, each on a fresh repo.
-func RunRecordStreamsSuite(t *testing.T, world RecordStreamsWorld) {
+func RunRecordStreamsSuite(t *testing.T, world RecordStreamsWorld, settings *RecordStreamsSuiteSettings) {
 	t.Helper()
 	for _, suiteCase := range recordStreamsSuiteCases() {
 		func() {
-			ctx, cancel := context.WithTimeout(context.Background(), recordStreamsSuiteCaseTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), settings.CaseTimeout)
 			defer cancel()
 			repoId, err := world.NewRepo(ctx)
 			if err != nil {
@@ -103,14 +106,10 @@ func recordStreamsSuitePin(world RecordStreamsWorld) *bridge.AuthPin {
 	return &bridge.AuthPin{Version: 7, Chain: bytes.Repeat([]byte{0x07}, 32)}
 }
 
-// A push of one entry a path, each keyed by a row of a fresh slot at its index, the world's row width. Push, slot and
-// deposit ids are random, as the record's writer draws them: an Id's first 8 bytes repeat within a millisecond, and
-// evs knows a refused push by its push id's first 8 bytes (§11.8's refusal row).
+// A push of one entry a path, each keyed by a row of RECORD.md section 5.2's 64 B at its index of a fresh slot. Push,
+// slot and deposit ids are random, as the record's writer draws them: an Id's first 8 bytes repeat within a
+// millisecond, and evs knows a refused push by its push id's first 8 bytes (§11.8's refusal row).
 func recordStreamsSuitePush(world RecordStreamsWorld, writerId sidecar.Id, paths ...string) *sidecar.RecordStreamPush {
-	rowByteCount := sidecar.RecordSlotRowByteCount
-	if rows, ok := world.(RecordStreamsWorldRows); ok {
-		rowByteCount = rows.RowByteCount()
-	}
 	push := &sidecar.RecordStreamPush{
 		PushId:          sidecar.NewEvsPushId(),
 		WriterSidecarId: writerId,
@@ -118,7 +117,7 @@ func recordStreamsSuitePush(world RecordStreamsWorld, writerId sidecar.Id, paths
 		AuthPin:         recordStreamsSuitePin(world),
 	}
 	for index, path := range paths {
-		push.SlotRows = append(push.SlotRows, &sidecar.RecordSlotRow{KeyIndex: uint32(index), Row: bytes.Repeat([]byte{byte(index + 1)}, rowByteCount)})
+		push.SlotRows = append(push.SlotRows, &sidecar.RecordSlotRow{KeyIndex: uint32(index), Row: bytes.Repeat([]byte{byte(index + 1)}, sidecar.RecordSlotRowByteCount)})
 		push.Entries = append(push.Entries, &sidecar.RecordStreamEntry{Path: path, Entry: []byte("entry " + path)})
 	}
 	return push
