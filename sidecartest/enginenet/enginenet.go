@@ -83,6 +83,8 @@ type Engines struct {
 	stateLock sync.Mutex
 	// the networks in their bootstrap window, by id
 	windows map[sidecar.Id]*bootstrapWindow
+	// every request the exchange asked the scope source, in order
+	scopeRequests []*sidecartest.FakeApiScopeRequest
 }
 
 // evs and gkm on net's host behind the real gate, the Net's api serving their origins and minting their scopes.
@@ -237,6 +239,13 @@ func (self *Engines) RefHeads(ctx context.Context, repoId sidecar.Id) ([]*protoc
 	return heads, nil
 }
 
+// Every request the exchange has asked the scope source, in order: who asked, for which service, and which scopes.
+func (self *Engines) ScopeRequests() []*sidecartest.FakeApiScopeRequest {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	return append([]*sidecartest.FakeApiScopeRequest{}, self.scopeRequests...)
+}
+
 // The window of networkId while it bootstraps, nil once base 1 landed or for a network that never bootstrapped here.
 func (self *Engines) window(networkId sidecar.Id) *bootstrapWindow {
 	self.stateLock.Lock()
@@ -256,6 +265,11 @@ func (self *Engines) windowOf(principal *sidecar.Principal) *bootstrapWindow {
 // bootstrap window the bootstrapping device's scopes on the config repo. A network the gate has not loaded is told to
 // it and answers a server error, which the sidecar asks again past.
 func (self *Engines) exchangeScopes(ctx context.Context, request *sidecartest.FakeApiScopeRequest) (*sidecartest.FakeApiScopeGrant, error) {
+	func() {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		self.scopeRequests = append(self.scopeRequests, request)
+	}()
 	if window := self.window(request.NetworkId); window != nil {
 		return window.scopes(request)
 	}

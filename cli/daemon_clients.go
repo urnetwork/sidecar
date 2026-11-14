@@ -17,7 +17,8 @@
 //
 //	intake   the network's GkmApi, its gkm hint intake and the key upkeep, built at the first client generation once
 //	         the Sidecar knows its network and identity; the upkeep keeps KeyPackages at gkm only while the newest state
-//	         makes this device a standing member device
+//	         makes this device a standing member device, and the api's repo scopes follow each state the key client
+//	         is given (GkmApi.SetRepoScopes)
 //	group    the GkmGroupClient, chosen from this sidecar's row at the first verified state that names it, the key
 //	         client's newest or else the follower's: an untagged member device that is not ephemeral holds a leaf and
 //	         gets the network's MLS engine, a tagged or ephemeral sidecar holds wraps only and gets none (§7.9's leaves
@@ -201,9 +202,11 @@ type urNetworkClients struct {
 	stateLock sync.Mutex
 	closed    bool
 	api       *sidecar.GkmApi
-	hints     *sidecar.GkmHints
-	upkeep    *sidecar.GkmUpkeep
-	group     *sidecar.GkmGroupClient
+	// the GkmApi's clock, which a scope's grant is judged at
+	clock  sidecar.Clock
+	hints  *sidecar.GkmHints
+	upkeep *sidecar.GkmUpkeep
+	group  *sidecar.GkmGroupClient
 	// whether the group client holds a leaf, chosen at its build (leafChoice)
 	leaf bool
 	evs  *sidecar.EvsClient
@@ -314,7 +317,7 @@ func (self *urNetworkClients) intake() (*sidecar.GkmApi, *sidecar.GkmHints, erro
 		if self.closed {
 			return false
 		}
-		self.api, self.hints, self.upkeep = api, hints, upkeep
+		self.api, self.hints, self.upkeep, self.clock = api, hints, upkeep, apiArgs.Clock
 		return true
 	}()
 	if !kept {
@@ -322,7 +325,53 @@ func (self *urNetworkClients) intake() (*sidecar.GkmApi, *sidecar.GkmHints, erro
 		hints.Close()
 		return nil, nil, errUrClientsClosed
 	}
+	self.setRepoScopes()
 	return api, hints, nil
+}
+
+// Hands the GkmApi the repo scopes the newest state the key client was given grants this sidecar at gkm, each repo's
+// strongest role by §8's table (AclState.EvsAccess for gkm's audience, as the exchange grants them), so its tokens
+// carry them in batches; nothing before the api or a state. A role the state no longer grants leaves the batches, and
+// a call presents its own scope where its repo is in none.
+func (self *urNetworkClients) setRepoScopes() {
+	api, clock := func() (*sidecar.GkmApi, sidecar.Clock) {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.api, self.clock
+	}()
+	state, ok := self.gkm.newestState().(*sidecar.ConfigState)
+	identity := self.running.Identity()
+	if api == nil || !ok || identity == nil {
+		return
+	}
+	acl, err := state.Acl()
+	if err != nil {
+		return
+	}
+	if clock == nil {
+		clock = sidecar.RealClock{}
+	}
+	now := clock.Now()
+	subject := sidecar.AclSidecarSubject(identity.SidecarId)
+	scopes := []sidecar.GkmRepoScope{}
+	for _, repoId := range acl.RepoIds() {
+		rights := acl.EvsAccess(subject, repoId, sidecar.AclTokenAudienceGkm, now).Rights
+		role := ""
+		switch {
+		case rights.Has(sidecar.AclEvsAdmin):
+			role = sidecar.GkmScopeRoleAdmin
+		case rights.Has(sidecar.AclEvsWrite):
+			role = sidecar.GkmScopeRoleWrite
+		case rights.Has(sidecar.AclEvsRead):
+			role = sidecar.GkmScopeRoleRead
+		case rights.Has(sidecar.AclEvsDeposit):
+			role = sidecar.GkmScopeRoleDeposit
+		default:
+			continue
+		}
+		scopes = append(scopes, sidecar.GkmRepoScope{RepoId: repoId, Role: role})
+	}
+	api.SetRepoScopes(scopes)
 }
 
 // The network's group client, built at the first call once a verified state names this sidecar (leafChoice), over the
@@ -773,6 +822,7 @@ func (self *urNetworkGkm) AuthAdvanced(state sidecar.GkmAuthView) {
 	if !advanced {
 		return
 	}
+	self.clients.setRepoScopes()
 	if group, err := self.group(); err == nil {
 		group.AuthAdvanced(state)
 	}
