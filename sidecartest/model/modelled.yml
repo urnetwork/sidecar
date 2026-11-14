@@ -125,7 +125,10 @@ details:
       - sidecar/sidecartest/model/details/PrefixRules*.cfg
       - sidecar/sidecartest/model/details/run-prefixrules.sh
     exclude: []
-    runs: []
+    runs:
+      - {at: 2026-11-13, commit: fefc67b9ffb9370e535af04c3c3b96621a89168f, tlc: d8fb231, mode: design, result: pass, sources_sha256: 2bf5b9a3137f5b79241386b56887b6d866baddd9f5e655c6e7e3c13a4920327d, states: 938648, depth: 6, seconds: 20}
+      - {at: 2026-11-13, commit: fefc67b9ffb9370e535af04c3c3b96621a89168f, tlc: d8fb231, mode: twins, result: pass, sources_sha256: 2bf5b9a3137f5b79241386b56887b6d866baddd9f5e655c6e7e3c13a4920327d, states: 2853, depth: 5, seconds: 3}
+      - {at: 2026-11-13, commit: fefc67b9ffb9370e535af04c3c3b96621a89168f, tlc: d8fb231, mode: reach, result: pass, sources_sha256: 2bf5b9a3137f5b79241386b56887b6d866baddd9f5e655c6e7e3c13a4920327d, states: 2180, depth: 4, seconds: 7}
 
   - model: details/CertOrder
     run: details/run-certorder.sh
