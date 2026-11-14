@@ -242,7 +242,7 @@ func bridgeReachSum(a uint64, b uint64) uint64 {
 }
 
 // Coalesces one event into the waiting table. Answers false when the table is full and the event's key is new: the
-// caller delivers what waits and adds again, or counts the event dropped.
+// caller hands it to the callbacks, or with none counts it dropped.
 func (self *bridgeReach) add(event *BridgeReachEvent) bool {
 	self.stateLock.Lock()
 	defer self.stateLock.Unlock()
@@ -272,34 +272,44 @@ func (self *bridgeReach) drop(event *BridgeReachEvent) {
 	self.droppedCount = bridgeReachSum(self.droppedCount, event.StreamCount)
 }
 
-// Hands every waiting event to every callback, in the order first decided, and answers whether a callback took
-// them. With no callback they stay. Callbacks run under no lock of the bridge's.
-func (self *bridgeReach) deliver() bool {
-	callbacks := self.callbacks.Get()
-	if len(callbacks) == 0 {
-		return false
+// Takes every waiting event out of the table, in the order first decided, counting each one's flows as noted: the
+// caller hands them to the callbacks.
+func (self *bridgeReach) takeWaiting() []BridgeReachEvent {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	events := self.waitingEvents
+	self.waitingEvents = nil
+	clear(self.waitingKeyIndexes)
+	for i := range events {
+		self.notedCount = bridgeReachSum(self.notedCount, events[i].StreamCount)
 	}
-	var events []BridgeReachEvent
-	func() {
-		self.stateLock.Lock()
-		defer self.stateLock.Unlock()
-		events = self.waitingEvents
-		self.waitingEvents = nil
-		clear(self.waitingKeyIndexes)
-		for i := range events {
-			self.notedCount = bridgeReachSum(self.notedCount, events[i].StreamCount)
-		}
-	}()
+	return events
+}
+
+// Calls each callback with each event, in order, under no lock of the bridge's. A callback that panics loses its
+// event and no other.
+func (self *bridgeReach) call(callbacks []BridgeReachFunction, events []BridgeReachEvent) {
 	for _, event := range events {
 		for _, callback := range callbacks {
 			connect.HandleError(func() { callback(event) })
 		}
 	}
+}
+
+// Hands every waiting event to every callback, and answers whether a callback stands to take them. With none they
+// stay.
+func (self *bridgeReach) deliver() bool {
+	callbacks := self.callbacks.Get()
+	if len(callbacks) == 0 {
+		return false
+	}
+	self.call(callbacks, self.takeWaiting())
 	return true
 }
 
-// Takes the ring empty into the waiting table, delivering where a callback stands and the table fills, then delivers
-// what waits. Answers whether the ring held anything.
+// Takes the ring empty into the waiting table, then delivers what waits. An event the full table has no room for
+// goes to the callbacks at once, behind what waited, and with no callback is counted and lost. Answers whether the
+// ring held anything.
 func (self *bridgeReach) drain() bool {
 	took := false
 	if self.queue != nil {
@@ -309,10 +319,18 @@ func (self *bridgeReach) drain() bool {
 			if self.add(&event) {
 				continue
 			}
-			// the table is full: a callback empties it, and with none the event is counted and lost
-			if !self.deliver() || !self.add(&event) {
+			callbacks := self.callbacks.Get()
+			if len(callbacks) == 0 {
 				self.drop(&event)
+				continue
 			}
+			events := self.takeWaiting()
+			func() {
+				self.stateLock.Lock()
+				defer self.stateLock.Unlock()
+				self.notedCount = bridgeReachSum(self.notedCount, event.StreamCount)
+			}()
+			self.call(callbacks, append(events, event))
 		}
 	}
 	self.deliver()

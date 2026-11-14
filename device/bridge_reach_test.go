@@ -573,6 +573,30 @@ func TestBridgeReachWaitsForACallbackInBoundedMemory(t *testing.T) {
 	}
 }
 
+// A waiting table that holds none drops every event while no callback stands, counted, and hands each to a callback
+// that does.
+func TestBridgeReachTableOfNoneHoldsNothing(t *testing.T) {
+	settings := device.DefaultBridgeSettings()
+	settings.ReachWaitingCount = 0
+	reach := device.NewBridgeReachForTest(settings)
+	reach.Offer(reachTestEvent(1, egressTestUntagged))
+	reach.Drain()
+	if noted, waiting, dropped := reach.Counts(); noted != 0 || waiting != 0 || dropped != 1 {
+		t.Fatalf("noted %d, waiting %d, dropped %d", noted, waiting, dropped)
+	}
+	taken := []device.BridgeReachEvent{}
+	reach.AddCallback(func(event device.BridgeReachEvent) { taken = append(taken, event) })
+	reach.Offer(reachTestEvent(1, egressTestUntagged))
+	reach.Offer(reachTestEvent(2, egressTestUntagged))
+	reach.Drain()
+	if len(taken) != 2 || taken[0] != reachTestEvent(1, egressTestUntagged) || taken[1] != reachTestEvent(2, egressTestUntagged) {
+		t.Fatalf("taken %+v", taken)
+	}
+	if noted, waiting, dropped := reach.Counts(); noted != 2 || waiting != 0 || dropped != 1 {
+		t.Fatalf("noted %d, waiting %d, dropped %d", noted, waiting, dropped)
+	}
+}
+
 // On a bridge, flows decided before the sidecar role's callback stands wait for it and reach it once it is added,
 // every flow counted.
 func TestBridgeReachDeliversWhatWaitedToTheFirstCallback(t *testing.T) {
