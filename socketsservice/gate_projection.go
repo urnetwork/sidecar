@@ -206,7 +206,10 @@ type SocketProjectionGate struct {
 	loadCount *sidecar.MonitorValue[uint64]
 	// Resubscription checks finished, for the same.
 	resyncCount *sidecar.MonitorValue[uint64]
-	group       sync.WaitGroup
+	// Worker passes finished, each counted once its asks for loads are made and the wait for the next is armed, so a
+	// test knows no ask of a pass is still to come before it counts loads or moves the clock.
+	passCount *sidecar.MonitorValue[uint64]
+	group     sync.WaitGroup
 
 	stateLock     sync.Mutex
 	networks      map[connect.Id]*socketGateNetwork
@@ -238,6 +241,7 @@ func NewSocketProjectionGate(ctx context.Context, host *sidecar.ServiceHost, sou
 		wake:        make(chan struct{}, 1),
 		loadCount:   sidecar.NewMonitorValue[uint64](0),
 		resyncCount: sidecar.NewMonitorValue[uint64](0),
+		passCount:   sidecar.NewMonitorValue[uint64](0),
 		networks:    map[connect.Id]*socketGateNetwork{},
 	}
 	var cacheSource sidecar.AclGateSource
@@ -285,6 +289,14 @@ func (self *SocketProjectionGate) OverLimitReads() (count int, changed chan stru
 // Loads the gate has taken in, and a channel that closes at the next: what a test of the composition waits on.
 func (self *SocketProjectionGate) Loads() (count uint64, changed chan struct{}) {
 	return self.loadCount.Get()
+}
+
+// Worker passes finished, each with the wait for the next armed, and a channel that closes at the next. A pass asks
+// for a load of every network still behind, the gate's first pass included, which runs on its own goroutine once
+// the gate is made: a test waits here before it counts loads, so that no ask of a pass lands among the loads it
+// triggers itself.
+func (self *SocketProjectionGate) Passes() (count uint64, changed chan struct{}) {
+	return self.passCount.Get()
 }
 
 // The network's state, made on first use.
@@ -551,6 +563,7 @@ func (self *SocketProjectionGate) run() {
 		}
 		self.reloadBehind()
 		wait := self.clock.After(self.settings.BehindReloadInterval)
+		self.passCount.Update(func(count uint64) uint64 { return count + 1 })
 		select {
 		case <-self.ctx.Done():
 			return

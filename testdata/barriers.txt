@@ -558,6 +558,10 @@ barrier stream.open.after stream_open.go
 barrier stream.open.before stream_open.go
 barrier team_directory.file.after config_directory.go
 barrier team_directory.file.before config_directory.go
+barrier tls.cert_install.after tls_cert_manager.go
+barrier tls.cert_install.before tls_cert_manager.go
+barrier tls.cert_promote.after tls_cert_manager.go
+barrier tls.cert_promote.before tls_cert_manager.go
 barrier tls.device_key_put.after tls_key.go
 barrier tls.device_key_put.before tls_key.go
 barrier tls.front_audience.after tls_audience.go
@@ -699,6 +703,7 @@ secret tls_front_pre_login_key tls_session.go
 secret tls_front_reach_key tls_reach_receipt.go
 secret tls_front_session_key tls_session.go
 secret tls_front_session_root tls_session.go
+secret tls_link_client_key tls_publish.go
 secret tls_visitor_cap tlsedgeservice/visitor_key.go
 secret tls_visitor_daily tlsedgeservice/visitor_key.go
 secret tls_visitor_record tlsedgeservice/visitor_key.go

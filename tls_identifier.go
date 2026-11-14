@@ -97,6 +97,24 @@ func TlsIdentifierSet(root string, label string, scope string, aliases []string)
 	return identifierSet, nil
 }
 
+// §13.8's set for one Team custom host (DESIGN-DETAILS 17.2.2): {host}, one certificate per device and custom host.
+// host is a canonical name, never a wildcard, and neither a root in roots nor a name under one, since a name under
+// a URnetwork root stays certs' to order. Pure, like TlsIdentifierSet, and hashed by TlsIdentifierSetHash.
+func TlsCustomIdentifierSet(host string, roots []string) ([]string, error) {
+	if !tlsDnsNameCanonical(host) {
+		return nil, ErrTlsIdentifierSet
+	}
+	for _, root := range roots {
+		if !tlsDnsNameCanonical(root) {
+			return nil, ErrTlsIdentifierSet
+		}
+		if host == root || strings.HasSuffix(host, "."+root) {
+			return nil, ErrTlsIdentifierSet
+		}
+	}
+	return []string{host}, nil
+}
+
 // SHA-256 over a set's names, sorted bytewise, each once and each followed by one 0x00 byte, so the order a caller
 // holds them in changes nothing. What an attestation binds (TlsKeyAttestation.identifier_set_sha256).
 //

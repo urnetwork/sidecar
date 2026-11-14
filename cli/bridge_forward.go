@@ -67,14 +67,32 @@ var urBridgeConfigOf func(ctx context.Context, network *urBridgeNetwork, running
 // The bridge's methods over a target that hosts its networks.
 func urBridgeMethods(target urDaemonTarget) []*sidecar.DaemonMethod {
 	network, ok := target.(*urDaemonNetwork)
-	if !ok || network.bridges == nil || network.daemon == nil {
+	if !ok {
 		return nil
 	}
-	bridges, err := newUrDaemonBridges(network.bridges, network.daemon.LocalListen)
-	if err != nil {
+	bridges := network.sharedDaemonBridges()
+	if bridges == nil {
 		return nil
 	}
 	return bridges.Methods()
+}
+
+// The daemon's one DaemonBridges, which ur bridge's methods and the MCP bridge tools both file and forward through,
+// so a forward either opened is the other's to list and close. Nil for a target with no bridges.
+func (self *urDaemonNetwork) sharedDaemonBridges() *sidecar.DaemonBridges {
+	if self.bridges == nil || self.daemon == nil {
+		return nil
+	}
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	if self.daemonBridges == nil {
+		bridges, err := newUrDaemonBridges(self.bridges, self.daemon.LocalListen)
+		if err != nil {
+			return nil
+		}
+		self.daemonBridges = bridges
+	}
+	return self.daemonBridges
 }
 
 // The root's bridge methods over the daemon's bridges, ending with them.

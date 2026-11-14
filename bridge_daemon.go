@@ -314,6 +314,8 @@ type DaemonBridgeExposeParams struct {
 	// Where a map dials: an IP, empty for 127.0.0.1, and a port, 0 for the port matched.
 	Target     string `json:"target,omitempty"`
 	TargetPort uint32 `json:"target_port,omitempty"`
+	// When a map ends, in ms; 0 for none. A route takes none.
+	ExpiresMs int64 `json:"expires_ms,omitempty"`
 }
 
 // What a filing answers: the ids it filed, or the approval it waits on.
@@ -549,6 +551,12 @@ func (self *DaemonBridges) Expose(ctx context.Context, networkId Id, running *Si
 			return nil, err
 		}
 		request := &BridgeMapRequest{Protocol: protocolNumber, FirstPort: params.Port, TargetPort: params.TargetPort}
+		if params.ExpiresMs < 0 {
+			return nil, fmt.Errorf("%w: a map's expiry is a time", ErrDaemonBridgeParams)
+		}
+		if 0 < params.ExpiresMs {
+			request.Expires = time.UnixMilli(params.ExpiresMs)
+		}
 		if params.Target != "" {
 			target, err := netip.ParseAddr(params.Target)
 			if err != nil {
@@ -558,8 +566,8 @@ func (self *DaemonBridges) Expose(ctx context.Context, networkId Id, running *Si
 		}
 		return daemonBridgeFilingReply(backend.ExposeMap(ctx, origin, request))
 	}
-	if params.Target != "" || 0 < params.TargetPort || params.Protocol != "" {
-		return nil, fmt.Errorf("%w: a route takes no port", ErrDaemonBridgeParams)
+	if params.Target != "" || 0 < params.TargetPort || params.Protocol != "" || params.ExpiresMs != 0 {
+		return nil, fmt.Errorf("%w: a route takes no port and no expiry", ErrDaemonBridgeParams)
 	}
 	request := &BridgeRouteRequest{Exit: params.Exit, Remap: params.Remap}
 	for _, text := range params.Prefixes {
