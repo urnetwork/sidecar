@@ -339,6 +339,7 @@ func (self *Sidecar) Status() SidecarStatus {
 		return status
 	}()
 	self.fillHeadCheckStatus(&status)
+	status.ZoneWatchDegraded = self.dns.zoneWatchDegraded()
 	return status
 }
 

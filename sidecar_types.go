@@ -33,6 +33,8 @@ type Sidecar struct {
 	eventCallbacks *CallbackList[SidecarEventFunction]
 	// ServiceToken's cache, under its own lock (api_service_token.go).
 	serviceTokens sidecarServiceTokens
+	// The network's DnsClient and its zone watch.
+	dns sidecarDns
 	// Running totals for `ur status --stats` (sidecar_stats.go).
 	stats sidecarStats
 	// Raised for each change the run loop must look at that the instance's state does not show: an
@@ -347,6 +349,47 @@ const (
 	SidecarEventBridgeAlarm SidecarEventKind = "bridge_alarm"
 )
 
+// The zone watch's alarm (D-TRUST-9; DNS-M5-22): a record the device did not request, or resolvers that disagree.
+const SidecarEventDnsAlarm SidecarEventKind = "dns_alarm"
+
+// Why a dns_alarm fired.
+type SidecarDnsAlarm string
+
+const (
+	// The two resolvers answered one name and type differently, twice.
+	SidecarDnsAlarmSplit SidecarDnsAlarm = "split"
+	// The resolvers agree on records this device did not request.
+	SidecarDnsAlarmUnrequested SidecarDnsAlarm = "unrequested"
+	// The resolvers agree on records GET /dns/zone does not show.
+	SidecarDnsAlarmZoneMismatch SidecarDnsAlarm = "zone_mismatch"
+)
+
+// The network's DnsClient and the zone watch the daemon attached (dns_client.go, dns_watch.go), which the legs other
+// than ios_extension build, held through interfaces they meet so every leg compiles the Sidecar.
+type sidecarDns struct {
+	stateLock sync.Mutex
+	client    sidecarDnsClient
+	watch     sidecarZoneWatch
+}
+
+// What the Sidecar holds a DnsClient as.
+type sidecarDnsClient interface {
+	isSidecarDnsClient()
+}
+
+// What the Sidecar holds a zone watch as: whether its last pass found a resolver failing.
+type sidecarZoneWatch interface {
+	Degraded() bool
+}
+
+// The attached zone watch's "zone watch degraded", false with none attached.
+func (self *sidecarDns) zoneWatchDegraded() bool {
+	self.stateLock.Lock()
+	watch := self.watch
+	self.stateLock.Unlock()
+	return watch != nil && watch.Degraded()
+}
+
 // Why a bridge_alarm fired: QD-557's five, DESIGN-DETAILS 12.7's three and this build's map_refused.
 type SidecarBridgeAlarm string
 
@@ -516,6 +559,8 @@ type SidecarEvent struct {
 	RecordAlarm SidecarRecordAlarm
 	// bridge_alarm.
 	BridgeAlarm SidecarBridgeAlarm
+	// dns_alarm (D-TRUST-9's zone watch).
+	DnsAlarm SidecarDnsAlarm
 }
 
 // Called for each event, on whatever goroutine raised it. It must not block or call CloseAndWait
@@ -551,6 +596,8 @@ type SidecarStatus struct {
 	WitnessedAt time.Time
 	// The open UNVERIFIED auth pins (§6.4), as AuthPin bytes. Empty: none.
 	Unverified [][]byte
+	// "zone watch degraded": a resolver of D-TRUST-9's zone watch failed at its last pass (DnsWatch).
+	ZoneWatchDegraded bool
 }
 
 // One client generation of a sidecar (§5.5), signed by the ClientKey and the identity key. Its wire
