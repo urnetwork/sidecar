@@ -111,6 +111,12 @@ func SetEvsTier(net *Net, tier *EvsTier) {
 	evsTiers.Store(key, tier)
 }
 
+// The tier named for net, or nil for T2's: what a T3 caller that hosts an evs of its own on the Net's stores builds on,
+// as evsgit's world does for server's TestFs5OnT3 (EVS1-M2-43).
+func EvsTierOf(net *Net) *EvsTier {
+	return evsTierOf(net)
+}
+
 // The tier named for net, or nil for T2's.
 func evsTierOf(net *Net) *EvsTier {
 	if tier, ok := evsTiers.Load(weak.Make(net)); ok {

@@ -369,6 +369,193 @@ func startDelayedPut(t *testing.T, fixture *blobFixture, key string, etag string
 	return answered
 }
 
+// A clock that says when a timer is about to be set. A fake that parks a request sets its caller's timeout
+// just after it parks it, so onAfter runs between a request's parking and its plan's firing.
+type timerWatchClock struct {
+	Clock
+	onAfter func()
+}
+
+func (self *timerWatchClock) After(timeout time.Duration) <-chan time.Time {
+	self.onAfter()
+	return self.Clock.After(timeout)
+}
+
+// What one moment of a parked request's path finds: whether its plan has fired, how many requests are parked
+// and how many timers are set.
+type delayMoment struct {
+	fired       bool
+	parkedCount int
+	timerCount  int
+}
+
+func isClosed(channel <-chan struct{}) bool {
+	select {
+	case <-channel:
+		return true
+	default:
+		return false
+	}
+}
+
+// A Delay fires once its request is parked and its caller's timeout is on the clock, not as the request is
+// taken, so a test that waited for the plan to fire can deliver the request at once. Tip-check at 4418ba43
+// had evsservice's TestBatchKeepsAtMostTwoWritesInFlight deliver one of two PUTs whose plans had fired: the
+// second was taken and not yet parked.
+func TestADelayFiresOnceItsRequestIsParked(t *testing.T) {
+	fakeClock := NewFakeClock(DefaultClockStart())
+	clock := &timerWatchClock{Clock: fakeClock}
+	faults := NewFaultQueue()
+	store := NewFakeBlobs(clock, faults, nil, nil)
+	cluster, err := store.FirstCluster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fired, err := faults.Add(&FaultPlan{Op: FaultOpPut, KeyPrefix: "head/", Result: Delay, Delay: DelayInNetwork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	moment := func() delayMoment {
+		return delayMoment{fired: isClosed(fired), parkedCount: store.DelayedCount(), timerCount: len(fakeClock.PendingTimers())}
+	}
+	// both run on the request's own goroutine, the first with the request parked and its timeout not yet set
+	atTimer, atFire := make(chan delayMoment, 1), make(chan delayMoment, 1)
+	clock.onAfter = func() {
+		atTimer <- moment()
+	}
+	faults.SetOnFire(func(plan *FaultPlan) {
+		atFire <- moment()
+	})
+	answered := make(chan error, 1)
+	go func() {
+		_, err := cluster.PutIfNoneMatch(t.Context(), "head/a/_", []byte("v1"), nil)
+		answered <- err
+	}()
+	<-fired
+	// nothing but the plan's firing was waited for
+	if delivered := store.DeliverDelayed("meta-1", "head/"); delivered != 1 {
+		t.Errorf("delivered %d of a request whose plan fired", delivered)
+	}
+	if err := <-answered; err != nil {
+		t.Errorf("the caller got %v", err)
+	}
+	if got := <-atTimer; got != (delayMoment{fired: false, parkedCount: 1, timerCount: 0}) {
+		t.Errorf("parked, before its timeout is set: %+v", got)
+	}
+	if got := <-atFire; got != (delayMoment{fired: true, parkedCount: 1, timerCount: 1}) {
+		t.Errorf("as the plan fires: %+v", got)
+	}
+}
+
+// The schedule that tip-check at 4418ba43 lost: two PUTs each under its own Delay, and a delivery made as
+// soon as both plans have fired reaches both.
+func TestADeliveryReachesEveryRequestWhosePlanFired(t *testing.T) {
+	fixture := newBlobFixture(t)
+	firedChannels := []<-chan struct{}{}
+	for nth := 1; nth <= 2; nth += 1 {
+		fired, err := fixture.faults.Add(&FaultPlan{Op: FaultOpPut, KeyPrefix: "pb/", Nth: nth, Result: Delay, Delay: DelayInNetwork})
+		if err != nil {
+			t.Fatal(err)
+		}
+		firedChannels = append(firedChannels, fired)
+	}
+	answered := make(chan error, 2)
+	for _, key := range []string{"pb/h/m/a", "pb/h/m/b"} {
+		go func() {
+			_, err := fixture.cluster.PutIfNoneMatch(t.Context(), key, []byte("batch"), nil)
+			answered <- err
+		}()
+	}
+	for _, fired := range firedChannels {
+		<-fired
+	}
+	if delivered := fixture.store.DeliverDelayed("meta-1", "pb/"); delivered != 2 {
+		t.Fatalf("delivered %d of two requests whose plans fired", delivered)
+	}
+	for range 2 {
+		if err := <-answered; err != nil {
+			t.Errorf("a caller got %v", err)
+		}
+	}
+	// and the clock can move past a parked request's timeout as soon as its plan fired
+	fired, err := fixture.faults.Add(&FaultPlan{Op: FaultOpPut, KeyPrefix: "pb/", Result: Delay, Delay: DelayNeverLands})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_, err := fixture.cluster.PutIfNoneMatch(t.Context(), "pb/h/m/c", []byte("batch"), nil)
+		answered <- err
+	}()
+	<-fired
+	fixture.clock.Advance(fixture.cluster.RequestTimeout())
+	wantUnknown(t, <-answered)
+}
+
+// A Delay that displaces an older plan parks the request, and both plans fire once it is parked.
+func TestAPlanDisplacedByADelayFiresOnceTheRequestIsParked(t *testing.T) {
+	fixture := newBlobFixture(t)
+	displaced, err := fixture.faults.Add(&FaultPlan{Op: FaultOpPut, Result: FailBeforeApply})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fired, err := fixture.faults.Add(&FaultPlan{Op: FaultOpPut, Result: Delay, Delay: DelayInNetwork, Displaces: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan error, 1)
+	go func() {
+		_, err := fixture.cluster.PutIfNoneMatch(t.Context(), "head/a/_", []byte("v1"), nil)
+		answered <- err
+	}()
+	<-displaced
+	if delivered := fixture.store.DeliverDelayed("meta-1", "head/"); delivered != 1 {
+		t.Fatalf("delivered %d", delivered)
+	}
+	<-fired
+	if err := <-answered; err != nil {
+		t.Errorf("the caller got %v", err)
+	}
+	if unfired := fixture.faults.Unfired(); len(unfired) != 0 {
+		t.Errorf("unfired %v", unfired)
+	}
+}
+
+// A fake that parks nothing fires a Delay as it takes it, and refuses it: nothing waits on a request that
+// will never park.
+func TestADelayTakenByAFakeThatParksNothingFiresAtOnce(t *testing.T) {
+	faults := NewFaultQueue()
+	fired, err := faults.Add(&FaultPlan{Op: FaultOpPut, KeyPrefix: "approval/", Result: Delay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan := faults.Take(t.Context(), FaultOpPut, "", "approval/a", true); plan == nil || plan.Result != Delay {
+		t.Fatalf("took %v", plan)
+	}
+	if !isClosed(fired) {
+		t.Error("taken and not fired")
+	}
+	// and under an oracle's ctx nothing is taken, parked or fired
+	other, err := faults.Add(&FaultPlan{Op: FaultOpGet, Result: Delay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, parked := faults.takeParking(InspectContext(t.Context()), FaultOpGet, "", "head/a/_", false)
+	parked()
+	if plan != nil || isClosed(other) {
+		t.Errorf("an oracle's read took %v", plan)
+	}
+	// a Delay taken for parking fires at parked, once
+	plan, parked = faults.takeParking(t.Context(), FaultOpGet, "", "head/a/_", false)
+	if plan == nil || isClosed(other) {
+		t.Fatalf("took %v, fired %v, before it parked", plan, isClosed(other))
+	}
+	parked()
+	parked()
+	if !isClosed(other) {
+		t.Error("parked and not fired")
+	}
+}
+
 func TestDelayedWriteLandsBeforeTheNextRequestOnItsKey(t *testing.T) {
 	fixture := newBlobFixture(t)
 	fixture.arm(t, &FaultPlan{Op: FaultOpPut, KeyPrefix: "head/", Result: Delay})
