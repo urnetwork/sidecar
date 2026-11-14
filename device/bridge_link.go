@@ -61,11 +61,22 @@ type BridgeTargetKeyFunction func(ctx context.Context, targetSidecarId connect.I
 
 // What a link reaches, one link per target (Q-BRIDGE-2): the target's client and sidecar, the identity key the rules
 // pin for it (BridgeRuleLink.target_identity_public_key), and on a share link its share (BRIDGE-M6-05), zero here.
+// For an app host the rules also pin the client's own key (BridgeRuleLink.target_client_public_key): the device client
+// its live forwarding Delegation names, which its identity key signed (§17.9's target row; owner decision 197). Such a
+// link holds every contract to that key and fetches no binding, since GET /sidecar/identity names the sidecar's own
+// client, never the device's. A change of the pinned key is another target, so the link is built anew.
 type BridgeLinkTarget struct {
 	ClientId          connect.Id
 	SidecarId         connect.Id
 	IdentityPublicKey [ed25519.PublicKeySize]byte
 	ShareId           connect.Id
+	// An app host's device client key as the rules pin it; zero where the target's binding names the key.
+	HostClientPublicKey [ed25519.PublicKeySize]byte
+}
+
+// Whether the rules pin the target client's key themselves, an app host's.
+func (self BridgeLinkTarget) hostClientPinned() bool {
+	return self.HostClientPublicKey != [ed25519.PublicKeySize]byte{}
 }
 
 // One link of a target as an entry takes it: the target's current link, or one a rebuild replaced, draining from
@@ -102,8 +113,6 @@ type bridgeLinkContextKey struct{}
 const (
 	bridgeBindingClientPurpose   = "binding-client"
 	bridgeBindingIdentityPurpose = "binding-identity"
-	// a canonical binding is under 250 bytes; this only stops a decoder reading garbage whole
-	bridgeBindingMaxByteCount = 4 * 1024
 )
 
 // One link, by id, for as long as it serves an entry. Its client comes and goes: built at a packet, closed at idle.
@@ -660,6 +669,10 @@ func (self *BridgeLinkManager) buildLink(link *bridgeLink) error {
 		return fmt.Errorf("%w: no identity to sign as", ErrBridgeLinkRefused)
 	}
 	clientKey, err := func() (ed25519.PublicKey, error) {
+		if link.target.hostClientPinned() {
+			// an app host: the key its forwarding Delegation names, which the compiled rules carry; nothing is fetched
+			return ed25519.PublicKey(bytes.Clone(link.target.HostClientPublicKey[:])), nil
+		}
 		fetchCtx, fetchCancel := context.WithCancel(self.ctx)
 		defer fetchCancel()
 		stop := self.clock.AfterFunc(self.settings.LinkBuildTimeout, fetchCancel)
@@ -668,7 +681,7 @@ func (self *BridgeLinkManager) buildLink(link *bridgeLink) error {
 		if err != nil {
 			return nil, fmt.Errorf("%w: the target's binding was not fetched", ErrBridgeLinkRefused)
 		}
-		return verifyBridgeTargetBinding(signedBinding, link.target, networkId)
+		return verifyBridgeTargetBinding(signedBinding, link.target, networkId, self.settings.LinkBindingMaxByteCount)
 	}()
 	if err != nil {
 		return err
@@ -820,11 +833,11 @@ func (self *BridgeLinkManager) counts() (openCount int, buildingCount int) {
 // and both signatures over the body as received, the ClientKey's under binding-client and the identity key's under
 // binding-identity. These are the root's VerifySidecarIdentityBinding checks with the pin applied; this package may
 // not import the root (§4.4).
-func verifyBridgeTargetBinding(signedBinding []byte, target BridgeLinkTarget, networkId []byte) (ed25519.PublicKey, error) {
+func verifyBridgeTargetBinding(signedBinding []byte, target BridgeLinkTarget, networkId []byte, maxByteCount int) (ed25519.PublicKey, error) {
 	fault := func(what string) error {
 		return fmt.Errorf("%w: %s", ErrBridgeLinkTargetUnverified, what)
 	}
-	if len(signedBinding) == 0 || bridgeBindingMaxByteCount < len(signedBinding) {
+	if len(signedBinding) == 0 || maxByteCount < len(signedBinding) {
 		return nil, fault("its size")
 	}
 	canonical := func(message proto.Message, encoded []byte) bool {

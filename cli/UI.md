@@ -86,6 +86,35 @@ ur tun ip [<ip>] [--network=<name>]     show this host's overlay address and the
   claim in the log wins. `ip auto` refuses until the check that no browser leaks an overlay address through WebRTC has
   passed (QD-424).
 
+## ur bridge (§17.11)
+
+The network's bridge from the terminal. It lives in the daemon, as `ur tun` does, and needs no tun and no root: a
+forward dials over a userspace stack.
+
+```text
+ur bridge [--network=<name>]                       list addresses, private names, rules and forwards
+ur bridge expose <ranges>... [--remap]             advertise this host's subnets; 0.0.0.0/0 alone is its exit
+ur bridge expose :<port>[=<ip>:<port>] [--udp]     map a port of this host's overlay address
+ur bridge forward <client>:<port>[:<local ip>]:<local port> [--listen=<ip>] [--udp]
+                                                   listen locally and dial the client's port
+ur bridge close <id> [--reset]                     end a forward, withdraw a rule or revoke a grant
+ur bridge egress auto|<exit>[,<exit>]|tag:<t>|none set this device's default route
+ur bridge block [cycle|<cidr>]                     show the network's block, or re-roll or choose it (admins)
+```
+
+- The listing shows pinned and unpinned counts, what the bridge waits on, a block another network on this host
+  shares, and local addresses carved out of the block (§17.17). Rules and forwards are named by their ids.
+- Without an active grant, `expose` and `forward` print `ur approve <id>` and wait, asking the daemon again until
+  the decision lands; a wait that runs out exits 1 and the same command picks the decision up later (§16.6).
+- A forward listens on every interface unless a local ip or `--listen` narrows it, and then serves every host that
+  reaches the listener: it is listed LAN-exposed, here and in `ur status`, and the command warns. It carries its
+  user's own protocol, so no TLS rule applies. It stops at its grant's expiry and when the grant is revoked.
+- `egress` and `block` ask for a yes on the terminal first, and never run from MCP or a hook.
+- `close` is this file's spelling; §17.11 names none. Closing a forward leaves its grant; `close <grant id>` revokes
+  it. `<client>` is a sidecar's id until the daemon follows the network's config, then a private name or an overlay
+  address too.
+- Until the daemon follows a network's config, every `ur bridge` command answers that no bridge runs for the network.
+
 ## ur login --device (§5.6, §7.8; RFC 8628)
 
 For a host with no browser, or one whose browser cannot reach a loopback redirect: the same single-use, user-owned

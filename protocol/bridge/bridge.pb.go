@@ -1058,8 +1058,10 @@ type BridgeRuleLink struct {
 	SiteId                  []byte                 `protobuf:"bytes,7,opt,name=site_id,json=siteId,proto3" json:"site_id,omitempty"`
 	DrainingSince           int64                  `protobuf:"varint,8,opt,name=draining_since,json=drainingSince,proto3" json:"draining_since,omitempty"` // removed (§17.5's removed row): drains from here
 	DrainUntil              int64                  `protobuf:"varint,9,opt,name=drain_until,json=drainUntil,proto3" json:"drain_until,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// 10 and 11 are a share link's share_id and target_network_id (BRIDGE-M6-05; DESIGN-DETAILS 12.2.2)
+	TargetClientPublicKey []byte `protobuf:"bytes,12,opt,name=target_client_public_key,json=targetClientPublicKey,proto3" json:"target_client_public_key,omitempty"` // an app host: the device client key its live forwarding Delegation names
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *BridgeRuleLink) Reset() {
@@ -1153,6 +1155,13 @@ func (x *BridgeRuleLink) GetDrainUntil() int64 {
 		return x.DrainUntil
 	}
 	return 0
+}
+
+func (x *BridgeRuleLink) GetTargetClientPublicKey() []byte {
+	if x != nil {
+		return x.TargetClientPublicKey
+	}
+	return nil
 }
 
 // A map this host holds (§17.6's rule 1, §17.8's BridgeMap): the destination as sent, mapped to target.
@@ -2875,7 +2884,7 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\x0fBridgeRuleEntry\x12;\n" +
 	"\x06prefix\x18\x01 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\x06prefix\x12:\n" +
 	"\x04kind\x18\x02 \x01(\x0e2&.urnetwork.sidecar.BridgeRuleEntryKindR\x04kind\x127\n" +
-	"\x05links\x18\x03 \x03(\v2!.urnetwork.sidecar.BridgeRuleLinkR\x05links\"\xdf\x02\n" +
+	"\x05links\x18\x03 \x03(\v2!.urnetwork.sidecar.BridgeRuleLinkR\x05links\"\x98\x03\n" +
 	"\x0eBridgeRuleLink\x12(\n" +
 	"\x10target_client_id\x18\x01 \x01(\fR\x0etargetClientId\x12*\n" +
 	"\x11target_sidecar_id\x18\x02 \x01(\fR\x0ftargetSidecarId\x12;\n" +
@@ -2886,7 +2895,8 @@ const file_protocol_bridge_bridge_proto_rawDesc = "" +
 	"\asite_id\x18\a \x01(\fR\x06siteId\x12%\n" +
 	"\x0edraining_since\x18\b \x01(\x03R\rdrainingSince\x12\x1f\n" +
 	"\vdrain_until\x18\t \x01(\x03R\n" +
-	"drainUntil\"\xdf\x02\n" +
+	"drainUntil\x127\n" +
+	"\x18target_client_public_key\x18\f \x01(\fR\x15targetClientPublicKey\"\xdf\x02\n" +
 	"\rBridgeRuleMap\x12\x15\n" +
 	"\x06map_id\x18\x01 \x01(\fR\x05mapId\x12F\n" +
 	"\fmatch_prefix\x18\x02 \x01(\v2#.urnetwork.sidecar.BridgeIpv4PrefixR\vmatchPrefix\x12\x1a\n" +
