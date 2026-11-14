@@ -426,7 +426,9 @@ func (self *RestorePoint) recoverJournal(previewId []byte) error {
 }
 
 // Recovers every point of the network an earlier process left an apply open in, once per network in this process,
-// before any of its points is used: a point this process holds already was recovered at its load.
+// before any of its points is used: a point this process holds already was recovered at its load. One that cannot be
+// recovered is logged and left for its own next load or apply; a Locked store answers its error, the network then
+// recovered at a later call.
 func (self *RestorePoints) recoverNetwork(ctx context.Context, network McpNetwork, networkId sidecar.Id) error {
 	self.recoverLock.Lock()
 	defer self.recoverLock.Unlock()
@@ -460,7 +462,12 @@ func (self *RestorePoints) recoverNetwork(ctx context.Context, network McpNetwor
 			continue
 		}
 		if _, err := self.loadPoint(ctx, network, networkId, runId); err != nil {
-			return err
+			if errors.Is(err, sidecar.ErrSidecarStoreLocked) || ctx.Err() != nil {
+				return err
+			}
+			// a point whose apply cannot be recovered now, its worktree gone among the reasons, keeps its journal open
+			// for its own next load or apply, and blocks no other point of the network
+			self.log.Warningf("[restore]run %s's interrupted apply was not recovered: %s", runId, err)
 		}
 	}
 	self.recoveredNetworkIds[networkId] = true
