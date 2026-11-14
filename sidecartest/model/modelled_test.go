@@ -240,10 +240,10 @@ const (
 	tlcFail tlcAction = "fail"
 )
 
-// §22.8's cadence for one model, named name, whose runs need each of requiredModes: at a gate, the newest
-// passing runs stand while the sources they ran at are unchanged, and otherwise TLC runs, or the gate fails
-// naming the missing tool; at a merge, TLC runs where it is, and is reported not run where it is not.
-// missingTool says why TLC cannot run here, and is empty where it can.
+// §22.8's cadence for one model, by its name, its recorded runs and the modes a gate needs passing: at a
+// gate, the newest passing runs stand while the sources they ran at are unchanged, and otherwise TLC runs, or
+// the gate fails naming the missing tool; at a merge, TLC runs where it is, and is reported not run where it
+// is not. missingTool says why TLC cannot run here, and is empty where it can.
 func tlcVerdict(name string, runs []*modelledRun, requiredModes []string, mode string, sources *sourcesState, missingTool string) (tlcAction, string) {
 	if mode == "gate" {
 		if 0 < len(sources.unreadable) {
@@ -378,9 +378,9 @@ var runTlcPattern = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 
 var runDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// What is wrong with a model's recorded runs: a run of a mode the model has no runs of, a result other than
-// pass or fail, or a date, commit, TLC revision or digest out of form. Such a run never stands at a gate,
-// and reads as though it did.
+// What is wrong with a model's recorded runs: a mode that is none of modes, a result other than pass or
+// fail, or a date, commit, TLC revision or digest out of form. Such a run never stands at a gate, and reads
+// as though it did.
 func runFindings(name string, runs []*modelledRun, modes []string) []string {
 	findings := []string{}
 	for index, run := range runs {
