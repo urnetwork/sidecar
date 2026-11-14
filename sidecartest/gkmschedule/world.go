@@ -147,6 +147,9 @@ type FsKeysDevice struct {
 	Transport *FsKeysTransport
 	// takes no state while set
 	Offline bool
+	// how far the device's own clock runs ahead of the world's, negative for one that trails it; its next restart
+	// takes it
+	ClockOffset time.Duration
 	// the client its sidecar is now, which hints reach
 	ClientId connect.Id
 	// whether Publish has uploaded its first keys
@@ -220,6 +223,10 @@ type FsKeysWorld struct {
 	BlobWrite func(op string, key string) FsKeysFault
 	// every position Advance appended, by version - 1
 	views []*sidecartest.FakeGkmAuthView
+	// the same positions as the facts FS-104's oracle reads (delivery.go), by version - 1
+	oracleStates []*sidecartest.DeliveryOracleState
+	// the oldest position the devices retain, their previous base, once Retain moved it
+	previousBase uint64
 	// what the services' host takes in place of the fake host's own stores
 	adjust func(host *sidecar.ServiceHost)
 	// the barrier driver's Blocking, where the world runs on a fault schedule's Net
@@ -620,6 +627,10 @@ func (self *FsKeysDevice) Restart() {
 	world := self.world
 	world.t.Helper()
 	connectSidecarId := connect.Id(self.signer.SidecarId)
+	var deviceClock sidecar.Clock = world.Clock
+	if self.ClockOffset != 0 {
+		deviceClock = world.Clock.WithOffset(self.ClockOffset)
+	}
 	api, err := sidecar.NewGkmApi(&sidecar.GkmApiArgs{
 		GkmUrl:    "https://gkm.example",
 		Transport: self.Transport,
@@ -677,7 +688,7 @@ func (self *FsKeysDevice) Restart() {
 		Alarm:           func(alarm *sidecar.GkmAlarm) { self.Alarms = append(self.Alarms, alarm) },
 		Jitter:          func(max time.Duration) time.Duration { return 0 },
 		Settings:        settings,
-		Clock:           world.Clock,
+		Clock:           deviceClock,
 	})
 	if err != nil {
 		world.t.Fatal(err)
@@ -1036,6 +1047,7 @@ func (self *FsKeysWorld) Advance() *sidecartest.FakeGkmAuthView {
 		ConfigRepoId:       self.ConfigRepoId,
 	})
 	self.views = append(self.views, view)
+	self.oracleStates = append(self.oracleStates, self.oracleState(view.Pin(), rows, repoReaders, expiries, atomRepos))
 	for _, device := range append(slices.Clone(self.Devices), self.clones...) {
 		if !device.Offline {
 			device.Take(view)
