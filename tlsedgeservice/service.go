@@ -185,6 +185,23 @@ func (self *TlsEdgeService) EndpointLimits(networkId sidecar.Id) *TlsEndpointLim
 	return self.limits.Limits(networkId)
 }
 
+// Finished reads of the label map, failed or not, and a channel that closes at the next: what a host's
+// test waits on before it asks Ready.
+func (self *TlsEdgeService) NameLoads() (count uint64, changed chan struct{}) {
+	return self.nameLoadCount.Get()
+}
+
+// Finished kill reloads, failed or not, and a channel that closes at the next.
+func (self *TlsEdgeService) KillLoads() (count uint64, changed chan struct{}) {
+	return self.killLoadCount.Get()
+}
+
+// Changes to the kill set, and a channel that closes at the next: how a host's test sees a key event's
+// kill land with no sleep.
+func (self *TlsEdgeService) KillChanges() (count uint64, changed chan struct{}) {
+	return self.killChangeCount.Get()
+}
+
 // See sidecar.Engine: the store and the dialer given, the label map's first snapshot read, the kill
 // switch read, and the dialer holding K clients.
 func (self *TlsEdgeService) Ready() bool {
