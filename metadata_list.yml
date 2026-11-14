@@ -1,4 +1,4 @@
-# metadata_list.yml v16; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
+# metadata_list.yml v17; v7 was updated 2026-11-05 for owner decisions 112-184 and the peer review's formats and fixes (§6,
 # §7.9, §10, §11). v6 adds to v5 (2026-11-04) connect-1's ShareCert, api-6's push-token slot sentinels, api-7's
 # {acl_}q, cascade signers, recovery bindings, restored bindings' recovery windows and orphaned networks, api-13's
 # per-eraser closure counters, evs-1's secret kind and orphans, evs-3's creation block, fence time, deleted flag
@@ -59,6 +59,8 @@
 # v16, updated 2026-11-13 for the owner's answer QD-716 (details-3-metadata-rows), amends smtp-2 with the key set a
 # sidecar proves under, a proof per part with its reply count and the header block's record count, and the key and
 # scan-state commitments the sidecar publishes, uniformly random group elements (DESIGN-DETAILS 3.2.2, 3.2.5).
+# v17, updated 2026-11-13 for the push sender (SDK-M8-10; §19.4's rate row), names api-6's {wake_<clientId>}
+# counters key by key: the 10 s window, which holds its start, and the APNs and per-topic FCM caps, each within 1 h.
 # Each row gives service, store (tables, Redis families, object families, logs or memory),
 # sees, why, ttl, and owner: the section that designs the value and states its ttl. Withdrawn rows keep
 # their ids so citations resolve. Public: this list ships in DESIGN.md on the public sidecar repo (owner
@@ -155,7 +157,7 @@ api-5:
   owner: §5.15
 api-6:
   service: api; connect residents; owning services; the push sender (taskworker)
-  store: sidecar_push_token (with slot, the Redis hash slot of the client's {scp_} tag, rev, the row's revision, and removed_time; a removed token's row kept as a tombstone); Redis {scp_<clientId>}tok, {scp_<clientId>}tokrev, {scp_<clientId>}ack, {scp_<clientId>}live, {scp_<clientId>}hb, {wake_<clientId>} counters, {wake_<sidecarId>}, {wakeq_<shard>}, {tokgen_<n>} (taskworker's 16,384 per-slot sentinels)
+  store: sidecar_push_token (with slot, the Redis hash slot of the client's {scp_} tag, rev, the row's revision, and removed_time; a removed token's row kept as a tombstone); Redis {scp_<clientId>}tok, {scp_<clientId>}tokrev, {scp_<clientId>}ack, {scp_<clientId>}live, {scp_<clientId>}hb, {wake_<clientId>} counters, {wake_<clientId>}w the push sender's 10 s window per client holding its start, {wake_<clientId>}apns and {wake_<clientId>}fcm_<topic class> its vendor caps, {wake_<sidecarId>}, {wakeq_<shard>}, {tokgen_<n>} (taskworker's 16,384 per-slot sentinels)
   sees: each client's APNs or FCM token and platform, its row's revision and, after the client's removal, when it was removed; per Redis hash slot, the run_id of the master that served it at its last reconcile; wake requests (POST /sidecar/wake, caller and target device of one member); whether a client's resident is live, and whether its stack acked each wake-class hint; whether an HTTP-only client polled in the last 300 s; wake triggers (client, topic, version, hint id, due time); per wake the platform, token, topic class (mail, team, evs, core) and version, send time and vendor result
   why: content-free phone wakes from v0 (owner decision 88; §18.7, §19.4); the liveness of HTTP-only hosts, whose poll marker gates the reaper's lease row (api-4; §6.8, §7.10)
   ttl: tokens until replaced, or removed by an empty POST, on APNs 410 or FCM UNREGISTERED or with their client, each removal leaving a tombstone row (client_id, rev, slot; no token) and its tokrev, kept while the client lives and deleted 24 h after its removal; live markers 90 s, poll markers 300 s; no wake event stored (§18.7); token projections while the token lives; sentinels with no TTL, compared by taskworker's 60 s pass and rewritten when it reconciles their slot, outside the rdb bundles (D-OPS-16); acks 1 h; counters and the hourly wake key at most 1 h, triggers dropped after 60 s, metrics by platform, topic and result only (§19.4)
