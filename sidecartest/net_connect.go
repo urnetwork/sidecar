@@ -317,9 +317,23 @@ func requireRequiredClient(name string, settings *connect.ClientSettings) {
 // Starts a Required client of clientId on the exchange, until ctx ends, when it leaves the exchange. A client whose
 // settings are anything but Required panics (I-3).
 func (self *netExchange) addClient(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings) *NetClient {
+	return self.addClientWithControl(ctx, name, clientId, settings, nil)
+}
+
+// addClient with the out-of-band control the client takes its contracts from: nil is the exchange's fake contract
+// issuer, and a world that seals contracts as a platform does (bridge_net.go) gives its own.
+func (self *netExchange) addClientWithControl(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings, control connect.OutOfBandControl) *NetClient {
 	requireRequiredClient(name, settings)
-	issuer := &netContractIssuer{exchange: self, sourceId: clientId, settings: connect.DefaultContractManagerSettings()}
-	client := connect.NewClient(ctx, clientId, issuer, settings)
+	return self.attachClient(ctx, name, clientId, settings, control)
+}
+
+// addClientWithControl whatever settings' encryption mode: only a test of the refusal of an unsealed peer, the
+// adversary I-3 shuts out, attaches a client that is not Required (bridge_net.go).
+func (self *netExchange) attachClient(ctx context.Context, name string, clientId connect.Id, settings *connect.ClientSettings, control connect.OutOfBandControl) *NetClient {
+	if control == nil {
+		control = &netContractIssuer{exchange: self, sourceId: clientId, settings: connect.DefaultContractManagerSettings()}
+	}
+	client := connect.NewClient(ctx, clientId, control, settings)
 	netClient := &NetClient{
 		Name:          name,
 		ClientId:      clientId,
