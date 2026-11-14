@@ -42,9 +42,9 @@ func localOctet(octet byte) bool {
 		strings.IndexByte("#$&'*+-/=?^_`{|}~.", octet) >= 0
 }
 
-// One to 64 octets of the local set.
-func localForm(value string) bool {
-	if value == "" || 64 < len(value) {
+// One to LocalMaxByteCount octets of the local set.
+func localForm(settings *CheckSettings, value string) bool {
+	if value == "" || settings.LocalMaxByteCount < len(value) {
 		return false
 	}
 	for i := range len(value) {
@@ -56,12 +56,12 @@ func localForm(value string) bool {
 }
 
 // RFC 5321's Domain, as SPEC.md section 6 reads it: labels of letters, digits and hyphens.
-func domainForm(name string) bool {
-	if name == "" || 255 < len(name) {
+func domainForm(settings *CheckSettings, name string) bool {
+	if name == "" || settings.DomainMaxByteCount < len(name) {
 		return false
 	}
 	for _, label := range strings.Split(name, ".") {
-		if label == "" || 63 < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
+		if label == "" || settings.LabelMaxByteCount < len(label) || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
 		for i := range len(label) {
@@ -75,7 +75,7 @@ func domainForm(name string) bool {
 }
 
 // SPEC.md section 6's forms, refused before any template is built.
-func checkPreambleForms(preamble *Preamble) error {
+func checkPreambleForms(settings *CheckSettings, preamble *Preamble) error {
 	if preamble.RecipientCount == 0 {
 		return errors.New("no recipient")
 	}
@@ -83,7 +83,7 @@ func checkPreambleForms(preamble *Preamble) error {
 		"recipient_domain": preamble.RecipientDomain, "header_from_domain": preamble.HeaderFromDomain,
 		"dkim_selector": preamble.DkimSelector, "envelope_domain": preamble.EnvelopeDomain, "helo_name": preamble.HeloName,
 	} {
-		if !domainForm(value) {
+		if !domainForm(settings, value) {
 			return fmt.Errorf("%s is not a Domain", name)
 		}
 	}
@@ -286,7 +286,7 @@ func partShape(preamble *Preamble, version uint16, part *Part, seqs []uint64, k 
 
 // Z4: a command record against its literal form (SPEC.md 4.2). The local part is the template's
 // "local" run, so its length follows from the record's.
-func checkCommand(r role, preamble *Preamble, content []byte) error {
+func checkCommand(settings *CheckSettings, r role, preamble *Preamble, content []byte) error {
 	text := string(content)
 	exact := func(want string) error {
 		if text != want {
@@ -299,7 +299,7 @@ func checkCommand(r role, preamble *Preamble, content []byte) error {
 		if found {
 			local, found = strings.CutSuffix(local, suffix)
 		}
-		if !found || !localForm(local) {
+		if !found || !localForm(settings, local) {
 			return fmt.Errorf("record is not %q with a local part", prefix+"…"+strings.TrimSuffix(suffix, crlf))
 		}
 		return nil
@@ -324,11 +324,12 @@ func checkCommand(r role, preamble *Preamble, content []byte) error {
 }
 
 // Whether a record of contentBytes octets can fill its role's template at all: a literal only at its
-// own length, a path only with a local run of 1 to 64 octets. Header and body records take any length.
-func templateFits(r role, preamble *Preamble, contentBytes int) bool {
+// own length, a path only with a local run of 1 to LocalMaxByteCount octets. Header and body records
+// take any length.
+func templateFits(settings *CheckSettings, r role, preamble *Preamble, contentBytes int) bool {
 	pathFits := func(prefix string, suffix string) bool {
 		local := contentBytes - len(prefix) - len(suffix)
-		return 1 <= local && local <= 64
+		return 1 <= local && local <= settings.LocalMaxByteCount
 	}
 	switch r {
 	case roleEhlo:
@@ -354,7 +355,7 @@ func templateFits(r role, preamble *Preamble, contentBytes int) bool {
 
 // Z5.4's From line, without its CRLF: "From: ", a phrase of the local set and SP ending in SP or none, then
 // "<", a local part, and "@" the declared domain ">".
-func fromForm(preamble *Preamble, line string) bool {
+func fromForm(settings *CheckSettings, preamble *Preamble, line string) bool {
 	rest, found := strings.CutPrefix(line, "From: ")
 	if found {
 		rest, found = strings.CutSuffix(rest, "@"+preamble.HeaderFromDomain+">")
@@ -363,7 +364,7 @@ func fromForm(preamble *Preamble, line string) bool {
 		return false
 	}
 	phrase, local, found := strings.Cut(rest, "<")
-	if !found || !localForm(local) {
+	if !found || !localForm(settings, local) {
 		return false
 	}
 	for i := range len(phrase) {
@@ -376,7 +377,7 @@ func fromForm(preamble *Preamble, line string) bool {
 }
 
 // Z5 over the header block, as SPEC.md section 7 states it, item by item.
-func checkHeaderBlock(preamble *Preamble, block []byte) error {
+func checkHeaderBlock(settings *CheckSettings, preamble *Preamble, block []byte) error {
 	// 1: the octet class, CR only before LF, LF only after CR
 	for i, octet := range block {
 		switch {
@@ -426,7 +427,7 @@ func checkHeaderBlock(preamble *Preamble, block []byte) error {
 	}
 	// 4: from, message-id, x-ur-ref and feedback-id once each, uncontinued, in their literal forms
 	literals := map[string]func(line string) bool{
-		"from":        func(line string) bool { return fromForm(preamble, line) },
+		"from":        func(line string) bool { return fromForm(settings, preamble, line) },
 		"message-id":  func(line string) bool { return line == "Message-ID: <"+preamble.MessageId+">" },
 		"x-ur-ref":    func(line string) bool { return line == "X-UR-Ref: "+preamble.XUrRef },
 		"feedback-id": func(line string) bool { return line == "Feedback-ID: "+preamble.FeedbackId },
@@ -719,7 +720,7 @@ func bodyState(body []byte) uint32 {
 // fixed signature's prefix begin lines of the first record only, each literal whole inside it; and the
 // first record holds each exactly once, in its literal form, every such line ending inside it and not
 // continued there. header holds the records so far, the first firstEnd octets long.
-func checkHeaderPlacement(preamble *Preamble, header []byte, firstEnd int) error {
+func checkHeaderPlacement(settings *CheckSettings, preamble *Preamble, header []byte, firstEnd int) error {
 	bulk := preamble.Flags&flagBulk != 0
 	counts := make([]int, len(scanLiterals))
 	starts := make([]int, len(scanLiterals))
@@ -775,7 +776,7 @@ func checkHeaderPlacement(preamble *Preamble, header []byte, firstEnd int) error
 			return fmt.Errorf("Z5: %q is not whole and in its literal form inside the first record", scanLiterals[literal].text)
 		}
 	}
-	if line, ok := lineAt(0); !ok || !fromForm(preamble, string(line)) {
+	if line, ok := lineAt(0); !ok || !fromForm(settings, preamble, string(line)) {
 		return errors.New("Z5: From is not whole and in its form inside the first record")
 	}
 	tags := scanLiterals[5].text + "d=" + preamble.HeaderFromDomain + "; s=" + preamble.DkimSelector + "; "
@@ -800,7 +801,7 @@ func checkHeaderPlacement(preamble *Preamble, header []byte, firstEnd int) error
 // continuation, no empty line, each line a field or a continuation whose name holds 21-7E but ':' and
 // does not start with '.', CR and LF in pairs but for a CR the next record answers, and a single field's
 // line not continued in a later record.
-func checkHeaderSoFar(preamble *Preamble, header []byte, firstEnd int) error {
+func checkHeaderSoFar(settings *CheckSettings, preamble *Preamble, header []byte, firstEnd int) error {
 	for i, octet := range header {
 		switch {
 		case octet == '\t' || ' ' <= octet && octet <= '~':
@@ -845,7 +846,7 @@ func checkHeaderSoFar(preamble *Preamble, header []byte, firstEnd int) error {
 			}
 		}
 	}
-	return checkHeaderPlacement(preamble, header, firstEnd)
+	return checkHeaderPlacement(settings, preamble, header, firstEnd)
 }
 
 // Z6's rules over DATA's body records so far that the whole body's check cannot wait for: CR and LF in
