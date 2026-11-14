@@ -11,6 +11,7 @@ package socketsservice_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"slices"
 	"testing"
@@ -345,5 +346,67 @@ func TestSocketSystemPublishTakesNoOtherName(t *testing.T) {
 	}
 	if count := scene.process.service.SignedTicketCount(); count != 0 {
 		t.Fatalf("%d tickets signed", count)
+	}
+}
+
+// The stand-in on the production gate, over a network's real authorization log and §8's own evaluator (SOCK-M5-07's
+// world): a member device whose policy grants listen on sock:smtp/25/mx and nothing on tls/ registers the system
+// publish and an edge finds it at the tip, the ticket resting on that rule; a policy that drops the listen and grants
+// the name's own tls/ listen instead ends the receiver's publish, at its next heartbeat or by the sweep the policy's
+// load queues, and the next Find finds no listener.
+func TestSocketSystemPublishOnTheProductionGate(t *testing.T) {
+	log := newTestGateLog(t)
+	network := log.newNetwork()
+	world := newTestSocketWorldOn(t, log.net.Clock())
+	process := log.newProcess(world, nil)
+	if err := process.service.RegisterNamespace(sidecar.SocketNamespaceTls, &testSocketSystemPublishHooks{}); err != nil {
+		t.Fatal(err)
+	}
+	receiver := network.sidecarOf(world, network.listener)
+	saveListen := func(dst string) {
+		source := fmt.Sprintf(`{
+			"grants": [
+				{ "src": ["autogroup:member"], "dst": [%q], "allow": ["listen"] },
+			],
+		}`, dst)
+		network.admission.SaveAclPolicy([]byte(source), sidecartest.AclSaveMembers{})
+	}
+	saveListen("sock:" + sidecar.SocketSystemPublishListenName)
+	view := process.awaitLoaded(network.networkId)
+	listen := view.MayListen(&socketsservice.SocketGateRequest{
+		NetworkId: network.networkId,
+		SidecarId: &receiver.sidecarId,
+		Name:      sidecar.SocketSystemPublishListenName,
+	}, world.clock.Now())
+	if !listen.Allowed || len(listen.GrantId) == 0 {
+		t.Fatalf("the policy's smtp/25/mx listen: %+v", listen)
+	}
+
+	registration := testSocketSystemPublishRegistration(t, receiver, "http")
+	process.registerOk(receiver, 1, registration)
+	edge := world.newEdge(2)
+	networkId := network.networkId
+	findArgs := &sidecar.SocketFindArgs{Name: sidecar.SocketSystemPublishName, NetworkId: &networkId, ClientIds: edge.clientIdArgs()}
+	code, result := process.find(edge.token, findArgs)
+	if code != http.StatusOK || result.Error != nil || result.Primary == nil {
+		t.Fatalf("the edge's Find answered %d, %+v", code, result)
+	}
+	ticket := world.verifyTicket(result.Primary)
+	if !bytes.Equal(ticket.GetListenerClientId(), receiver.clientId.Bytes()) || ticket.GetPolicyVersion() != network.tip() ||
+		!bytes.Equal(ticket.GetGrantId(), listen.GrantId) {
+		t.Fatalf("the ticket %v rests elsewhere than the receiver's listen at the tip", ticket)
+	}
+
+	saveListen("sock:" + sidecar.SocketSystemPublishName)
+	process.changed(network.networkId)
+	code, page := process.register(receiver.token, &sidecar.SocketRegistrationsArgs{SetVersion: 2, Registrations: []*sidecar.SocketRegistration{registration}})
+	// the policy's load queued a sweep, which may have removed the lease before the heartbeat
+	if code != http.StatusOK || page.Error != nil ||
+		(page.Statuses[0] != sidecar.SocketRegistrationStatusRevoked && page.Statuses[0] != sidecar.SocketRegistrationStatusDenied) {
+		t.Fatalf("the heartbeat after the listen went answered %d, %+v", code, page)
+	}
+	code, result = process.find(edge.token, findArgs)
+	if code != http.StatusOK || result.Error == nil || result.Error.Code != sidecar.SocketErrorCodeNoListener {
+		t.Fatalf("a Find after the listen went answered %d, %+v", code, result)
 	}
 }
