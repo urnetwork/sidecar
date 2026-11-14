@@ -142,8 +142,8 @@ func TestCheckGateHoldsACreatingPushToTheNewestRuleSet(t *testing.T) {
 	requireCheckPass(t, "step 5, pinned at the set", CheckPush(fixture.rulesView(pins[3], nil)))
 }
 
-// Each kind of creating push is held: a file-mode ref's first, a branch's creating UPDATE, a tag ref's IMMUTABLE push,
-// each again after a DELETE, and one carrying FORCE, on no head and after a DELETE. Each passes at the set's position.
+// Each kind of creating push is held, on no head and again after a DELETE: a file-mode ref's first, a branch's creating
+// UPDATE, a tag ref's IMMUTABLE push, and one carrying FORCE in either mode. Each passes at the set's position.
 func TestCheckGateHoldsEachKindOfCreatingPush(t *testing.T) {
 	fixture, pins := newCheckRulesFixture(t)
 	git := func(plan *sidecar.EvsPushPlan) {

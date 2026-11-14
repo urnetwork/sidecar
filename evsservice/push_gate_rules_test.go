@@ -4,7 +4,8 @@
 // and by a sibling whose state does not hold the set yet; that sibling commits the same update on a ref whose head
 // holds no record, which is what a final, unrecorded refusal would have let it do on this one; the update built again
 // at the set's position commits as version 1 over the placeholder. On a deleted head the record goes into the
-// tombstone and the next version follows the DELETE's. A part of a creating push in parts is refused with no record.
+// tombstone and the next version follows the DELETE's. A part of a creating push in parts is refused with no record,
+// and the push's seal, which alone commits, is refused and recorded.
 
 package evsservice
 
@@ -203,4 +204,30 @@ func TestPushRefusesAStalePinPartWithNoRecord(t *testing.T) {
 	if !fixture.head().Absent() {
 		t.Fatal("a part's refusal wrote a head")
 	}
+}
+
+// A creating push in parts whose parts this engine took before its state held the set: a part posted after it is
+// refused with no record, and the seal, which alone commits, is refused and recorded in a placeholder head, so an
+// attempt of the seal at a sibling that has not loaded the set meets the record.
+func TestPushRecordsAStalePinSealInAPlaceholderHead(t *testing.T) {
+	fixture := newPushFixture(t, nil)
+	unset := fixture.check.auth
+	token := fixture.token(fixture.check.signerId)
+	built := fixture.built(fixture.partsPlan(protocol.EvsRefMode_EVS_REF_FILE, 1100))
+	places := fixture.postParts(token, built)
+	fixture.fileRuleSet()
+	requireRulesAnswer(t, "a part posted after the set", fixture.postPart(token, built, 0), false)
+	if !fixture.head().Absent() {
+		t.Fatal("a part's refusal wrote a head")
+	}
+	requireRulesAnswer(t, "the seal", fixture.seal(token, built, places), false)
+	placeholder := fixture.head()
+	if placeholder.Absent() || placeholder.Version() != 0 || len(placeholder.Head.GetWindow()) != 0 {
+		t.Fatalf("placeholder %v", placeholder.Head)
+	}
+	requireOneRulesRecord(t, "the placeholder", placeholder.Head, sidecar.Id(built.Statement.Push.GetPushId()))
+	requireRulesAnswer(t, "the seal again", fixture.seal(token, built, places), true)
+	sibling := fixture.sibling(unset)
+	requireRulesAnswer(t, "the seal at the sibling", fixture.postTo(sibling, token,
+		&protocol.EvsPushRequest{Statement: built.Statement.Bytes, PartPlaces: places}), true)
 }
