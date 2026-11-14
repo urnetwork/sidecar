@@ -343,8 +343,16 @@ barrier mail.config.write.after mail_config_write.go
 barrier mail.config.write.before mail_config_write.go
 barrier mail.flags.write.after mail_flags.go
 barrier mail.flags.write.before mail_flags.go
+barrier mail.group.ref.remove.after mail_ingest_group.go
+barrier mail.group.ref.remove.before mail_ingest_group.go
+barrier mail.group.ref.write.after mail_ingest_group.go
+barrier mail.group.ref.write.before mail_ingest_group.go
 barrier mail.index.write.after mail_index_segment.go
 barrier mail.index.write.before mail_index_segment.go
+barrier mail.ingest.consume.after mail_ingest.go
+barrier mail.ingest.consume.before mail_ingest.go
+barrier mail.ingest.push.after mail_ingest.go
+barrier mail.ingest.push.before mail_ingest.go
 barrier mail.spam.teach.after mail_spam.go
 barrier mail.spam.teach.before mail_spam.go
 barrier mail.vault.erase.after mail_vault.go
