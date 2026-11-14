@@ -5,8 +5,9 @@
 // daemon does, so a test drives stock git end to end against the real receive path, publish, sync engine and evs:
 //
 //	evs      evsservice's engine hosted on a sidecartest.FakeHost in this process, as server/cli/evs would host it (T2), with
-//	         every write of an evs request finishing its step 8 before the answer goes back; a T3 caller names its
-//	         own handler and tokens (WorldSettings.Evs)
+//	         every write of an evs request finishing its step 8 before the answer goes back; a T3 caller builds its
+//	         own block on the world's authorization state, gate views and receipt keys, and mints its tokens
+//	         (WorldSettings.Evs; server/evshost's TestFs5OnT3)
 //	devices  each a sidecar of the network with its own identity key, client id, sealed store and EvsClient, a mount
 //	         registry on its own state with the repo's bare repository, and a daemon whose git-hook mode serves that
 //	         bare repository's hooks; each mount runs as ur daemon runs it (EvsLocalRepo.Run), so an owned ref's queue
@@ -64,7 +65,7 @@ type WorldSettings struct {
 	HookCommand []string
 	// The git each device's client runs, an absolute path; empty finds git on PATH.
 	ClientGit string
-	// The evs the devices reach. Nil hosts T2's engine in this process.
+	// The evs the devices reach: a T3 caller's block. Nil hosts T2's engine in this process.
 	Evs *WorldEvs
 	// The engine's settings on T2; nil takes evsservice's defaults with the batch flushed at once.
 	EngineSettings *evsservice.EvsSettings
@@ -81,21 +82,42 @@ func DefaultWorldSettings() *WorldSettings {
 	return &WorldSettings{TokenLifetime: 15 * time.Minute, ReceiptKeyAge: 48 * time.Hour}
 }
 
-// An evs a T3 caller hosts: its handler, and a token that handler's Authenticator verifies.
+// An evs a T3 caller hosts over the world's own seams: NewHost builds its block once the world knows its network, and
+// IssueToken mints a token that block's Authenticator verifies.
 type WorldEvs struct {
-	Handler    http.Handler
+	NewHost    func(ctx context.Context, deps *WorldEvsDeps) (*WorldEvsHost, error)
 	IssueToken func(principal *sidecar.Principal) (string, error)
-	// The blobs the handler's repo objects are placed in, on which the world places its repo.
+}
+
+// What the world gives a T3 caller's block: the network its gates and quota answer for, and the seams evs honors the
+// world's devices by.
+type WorldEvsDeps struct {
+	NetworkId   sidecar.Id
+	AuthState   evsservice.EvsAuthState
+	GateViews   evsservice.EvsGateViews
+	ReceiptKeys *evsservice.ReceiptKeys
+}
+
+// A T3 caller's block as the world reaches it.
+type WorldEvsHost struct {
+	Handler http.Handler
+	// The engine behind the handler, whose step 8s the world waits out before an answer goes back.
+	Engine *evsservice.EvsEngine
+	// The block's stores: gkm's fake keeps its objects in Blobs, and the world places its repo on Cluster, one of
+	// its metadata clusters.
+	Blobs   sidecar.BlobStore
 	Cluster sidecar.BlobCluster
 }
 
 // The world: one network, one member, one repo, and its devices.
 type World struct {
-	t         testing.TB
-	ctx       context.Context
-	settings  *WorldSettings
-	clock     sidecar.Clock
-	host      *sidecartest.FakeHost
+	t        testing.TB
+	ctx      context.Context
+	settings *WorldSettings
+	clock    sidecar.Clock
+	host     *sidecartest.FakeHost
+	// a T3 caller's block's stores, nil on T2, where host holds them
+	evsBlobs  sidecar.BlobStore
 	cluster   sidecar.BlobCluster
 	engine    *evsservice.EvsEngine
 	handler   http.Handler
@@ -202,7 +224,7 @@ func NewWorld(t testing.TB, settings *WorldSettings) *World {
 		signers: map[sidecar.Id]*sidecartest.FakeGkmSigner{}, gkmClients: map[sidecar.Id]sidecar.GkmClient{},
 	}
 	if settings.Evs != nil {
-		world.handler, world.issue, world.cluster = settings.Evs.Handler, settings.Evs.IssueToken, settings.Evs.Cluster
+		world.hostEvs(settings.Evs)
 	} else {
 		world.hostEngine()
 	}
@@ -241,11 +263,7 @@ func (self *World) hostEngine() {
 		t.Fatal(err)
 	}
 	t.Cleanup(quota.Close)
-	receiptKey := sha256.Sum256([]byte("evs git world receipt key"))
-	receiptKeys, err := evsservice.NewReceiptKeys([]*evsservice.ReceiptKey{{KeyId: 1, Key: receiptKey[:], IssueFrom: self.clock.Now().Add(-self.settings.ReceiptKeyAge)}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	receiptKeys := self.receiptKeys()
 	settings := self.settings.EngineSettings
 	if settings == nil {
 		settings = evsservice.DefaultEvsSettings()
@@ -270,12 +288,41 @@ func (self *World) hostEngine() {
 	}
 }
 
-// The blobs gkm keeps its objects in: the host's on T2.
+// A T3 caller's block, built on the world's seams for its network.
+func (self *World) hostEvs(evs *WorldEvs) {
+	t := self.t
+	if evs.NewHost == nil || evs.IssueToken == nil {
+		t.Fatal("a T3 world's evs names its block and its tokens")
+	}
+	authState := &worldAuthState{world: self}
+	host, err := evs.NewHost(self.ctx, &WorldEvsDeps{
+		NetworkId: self.networkId, AuthState: authState, GateViews: authState, ReceiptKeys: self.receiptKeys(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host == nil || host.Handler == nil || host.Blobs == nil || host.Cluster == nil {
+		t.Fatal("a T3 block with no handler or stores")
+	}
+	self.handler, self.engine, self.evsBlobs, self.cluster, self.issue = host.Handler, host.Engine, host.Blobs, host.Cluster, evs.IssueToken
+}
+
+// The upload receipts' keys, one in effect since ReceiptKeyAge before the world's start.
+func (self *World) receiptKeys() *evsservice.ReceiptKeys {
+	receiptKey := sha256.Sum256([]byte("evs git world receipt key"))
+	receiptKeys, err := evsservice.NewReceiptKeys([]*evsservice.ReceiptKey{{KeyId: 1, Key: receiptKey[:], IssueFrom: self.clock.Now().Add(-self.settings.ReceiptKeyAge)}}, nil)
+	if err != nil {
+		self.t.Fatal(err)
+	}
+	return receiptKeys
+}
+
+// The blobs gkm keeps its objects in: the host's on T2, the T3 block's on T3.
 func (self *World) blobs() sidecar.BlobStore {
 	if self.host != nil {
 		return self.host.Blobs
 	}
-	return nil
+	return self.evsBlobs
 }
 
 // The repo's id.
@@ -283,7 +330,7 @@ func (self *World) RepoId() sidecar.Id {
 	return self.repoId
 }
 
-// The T2 engine, nil on T3.
+// The engine the devices reach: T2's, or the T3 block's.
 func (self *World) Engine() *evsservice.EvsEngine {
 	return self.engine
 }
