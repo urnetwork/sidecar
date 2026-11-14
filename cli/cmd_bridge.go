@@ -20,8 +20,8 @@
 // Without an active grant, expose and forward print the approval prompt and wait: the command asks the daemon again
 // until the decision lands or the wait runs out (§16.6). close is a reading: §17.11 names no spelling for ending a
 // forward or a rule, and bridge_close is its MCP twin. Readable addresses reach the person's terminal only; the
-// daemon's logs name opaque ids alone (I-13). `ur bridge public-tls` is §13's, and invite and accept-invite are
-// BRIDGE-M6-03's.
+// daemon's logs name opaque ids alone (I-13). `ur bridge public-tls` is §13's (bridge_public_tls_cmd.go), and invite and
+// accept-invite are BRIDGE-M6-03's.
 
 package main
 
@@ -75,14 +75,14 @@ var errUrBridgeUsage = errors.New("ur bridge: see ur bridge --help")
 func init() {
 	registerUrCommand(&urCommand{
 		name: "bridge",
-		usage: strings.Join([]string{
+		usage: strings.Join(append([]string{
 			"  ur bridge [--network=<name>]",
 			"  ur bridge expose <ranges>... [--udp] [--remap] [--network=<name>]",
 			"  ur bridge forward <spec> [--listen=<ip>] [--udp] [--network=<name>]",
 			"  ur bridge close <id> [--reset] [--network=<name>]",
 			"  ur bridge egress <egress> [--network=<name>]",
 			"  ur bridge block [<block>] [--network=<name>]",
-		}, "\n"),
+		}, urBridgePublicTlsUsage...), "\n"),
 		summary: "list the network's bridge, expose subnets and ports, forward a client's port",
 		run:     runUrBridge,
 	})
@@ -97,6 +97,9 @@ func runUrBridge(ctx context.Context, cli *urCli, options docopt.Opts) error {
 		protocol = "udp"
 	}
 	switch {
+	case options["public-tls"] == true:
+		// §13's (bridge_public_tls_cmd.go)
+		return runUrBridgePublicTls(ctx, cli, options)
 	case options["expose"] == true:
 		ranges, _ := options["<ranges>"].([]string)
 		remap, _ := options.Bool("--remap")
