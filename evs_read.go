@@ -489,13 +489,31 @@ func (self *EvsClient) refEpoch(repoId Id, refId Id) *protocol.EvsPathEpoch {
 }
 
 // Reads the newest committed version of a file, or an older one (args.Version), verified and pinned, then
-// reconstructed, its oid checked, and only then written to out (§11.7's reconstruction row).
+// reconstructed, its oid checked, and only then written to out (§11.7's reconstruction row). A versionless file
+// replaced mid-read is read again from the new head (§18.5), a fresh one, at most
+// EvsSettings.ReadReplacedRestartCount times; an older version that was replaced answers ErrEvsCollected.
 func (self *EvsRepo) ReadHead(ctx context.Context, args *EvsReadArgs, out io.Writer) (*EvsFileInfo, error) {
 	refId, err := self.resolveRefId(ctx, args.RefName, args.RefId)
 	if err != nil {
 		return nil, err
 	}
-	result, err := self.read(ctx, refId, []string{args.Path}, args.Version, args.Fresh)
+	fresh := args.Fresh
+	for restartCount := 0; ; restartCount += 1 {
+		// nothing reaches out before a version's content is whole and checked, so a failed pass wrote none of it
+		info, err := self.readFile(ctx, refId, args, fresh, out)
+		if args.Version != 0 || !errors.Is(err, ErrEvsCollected) {
+			return info, err
+		}
+		if self.client.settings.ReadReplacedRestartCount <= restartCount {
+			return nil, fmt.Errorf("%w: %d times", ErrEvsReplacedMidRead, restartCount+1)
+		}
+		fresh = true
+	}
+}
+
+// One pass of ReadHead: the file at args.Version on a head read fresh or not.
+func (self *EvsRepo) readFile(ctx context.Context, refId Id, args *EvsReadArgs, fresh bool, out io.Writer) (*EvsFileInfo, error) {
+	result, err := self.read(ctx, refId, []string{args.Path}, args.Version, fresh)
 	if err != nil {
 		return nil, err
 	}

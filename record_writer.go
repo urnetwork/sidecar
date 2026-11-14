@@ -109,6 +109,16 @@ type RecordDraft struct {
 	// The one log the entry goes to, for a kind whose row in RECORD.md section 6.3 is the log it is about: a
 	// disclosure, written to the log disclosed or exported. Nil routes by kind. One entry, no projection and no copy.
 	LogId *Id
+	// Entries the header's content names beside T's ref to its vault entry: a reach receipt's manifest in force
+	// (RECORD.md section 12). On the draft's vault and team entries, never on a copy.
+	Content []*RecordContentRef
+}
+
+// An entry a header's content names: its log, its id and its body_commitment, whose salt stays in the entry's slot row.
+type RecordContentRef struct {
+	LogId      Id                `json:"log_id"`
+	EntryId    Id                `json:"entry_id"`
+	Commitment [sha256.Size]byte `json:"commitment"`
 }
 
 // Where one entry of a draft went.
@@ -182,6 +192,11 @@ type SidecarRecord struct {
 	kept any
 	// what the loop tends beside its own work, added as a part is made
 	tendHooks []func(ctx context.Context)
+	// the model manifests, the inventory and the other ledgers (record_model.go, record_inventory.go,
+	// record_other_ledger.go), each made at its first use and held as any, as the mirrors are
+	models    any
+	inventory any
+	ledgers   any
 	// one erasure at a time (record_erase.go, which no ios_extension leg links)
 	eraseLock sync.Mutex
 	// a deposit may wait in this device's vault: set at each loop's start, at a commit there and at a hint
@@ -440,6 +455,8 @@ type recordWriter struct {
 	adoptedLogs map[Id]bool
 	// keeps each committed deposit until it is consumed (record_mirror.go); nil keeps none
 	depositKeeper func(logId Id, commit *RecordStreamCommit, batch []byte) error
+	// the other ledgers a draft's team entry is copied to (record_other_ledger.go); nil copies to none
+	ledgerCopies func(kind RecordKind, runId *Id, body []byte) []Id
 }
 
 // A writer over args, reading nothing until its first Append or pump.
@@ -533,6 +550,13 @@ func (self *recordWriter) setDepositKeeper(keeper func(logId Id, commit *RecordS
 	self.depositKeeper = keeper
 }
 
+// Installs what names the other ledgers a draft's team entry is copied to (record_other_ledger.go).
+func (self *recordWriter) setLedgerCopies(ledgerCopies func(kind RecordKind, runId *Id, body []byte) []Id) {
+	self.stateLock.Lock()
+	defer self.stateLock.Unlock()
+	self.ledgerCopies = ledgerCopies
+}
+
 // Called after each commit of a push or deposit to logId, with no lock held: the ingester's cue (RECORD-M3-04).
 func (self *recordWriter) addCommitHook(hook func(logId Id)) {
 	self.stateLock.Lock()
@@ -608,6 +632,12 @@ func (self *RecordDraft) bodyBytes() ([]byte, error) {
 	if err := RecordBodyValidate(self.Kind, self.Body); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrRecordDraftInvalid, err)
 	}
+	if manifest, ok := self.Body.(*protocol.ModelManifest); ok {
+		// a v1 writer's own: attested evidence is reserved (RECORD.md section 12)
+		if err := recordModelManifestValidate(manifest, true); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrRecordDraftInvalid, err)
+		}
+	}
 	if err := directoryRefuseUnredacted(self.Kind, self.Body, nil); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrRecordDraftInvalid, err)
 	}
@@ -638,14 +668,43 @@ type recordSpoolDraft struct {
 	TeamOnly   bool   `json:"team_only,omitempty"`
 	// RecordDraft.LogId
 	LogId *Id `json:"log_id,omitempty"`
+	// RecordDraft.Content
+	Content []*RecordContentRef `json:"content,omitempty"`
+}
+
+// The draft's own content refs as a header carries them.
+func (self *recordSpoolDraft) contentRefs() []*protocol.ContentRef {
+	refs := []*protocol.ContentRef{}
+	for _, ref := range self.Content {
+		refs = append(refs, &protocol.ContentRef{RepoId: ref.LogId.Bytes(), ObjectId: ref.EntryId.Bytes(), Commitment: bytes.Clone(ref.Commitment[:])})
+	}
+	return refs
 }
 
 // The routes of a spooled draft now: its named log's, or its kind's (record_team.go).
 func (self *recordWriter) routesOf(draft *recordSpoolDraft) (*recordRoutes, error) {
+	auth := self.auth()
 	if draft.LogId != nil {
-		return recordRoutesToLog(self.auth(), self.sidecarId, RecordKind(draft.Kind), *draft.LogId)
+		return recordRoutesToLog(auth, self.sidecarId, RecordKind(draft.Kind), *draft.LogId)
 	}
-	return recordRoutesFor(self.auth(), self.sidecarId, RecordKind(draft.Kind), draft.TeamOnly)
+	routes, err := recordRoutesFor(auth, self.sidecarId, RecordKind(draft.Kind), draft.TeamOnly)
+	if err != nil {
+		return nil, err
+	}
+	ledgerCopies := func() func(kind RecordKind, runId *Id, body []byte) []Id {
+		self.stateLock.Lock()
+		defer self.stateLock.Unlock()
+		return self.ledgerCopies
+	}()
+	if routes.team != nil && ledgerCopies != nil {
+		// each other ledger whose scope covers the run takes T's entry too, from a sidecar writing its own stream there
+		for _, logId := range ledgerCopies(RecordKind(draft.Kind), draft.RunId, draft.Body) {
+			if recordIsLedger(auth, logId) && auth.Writes(logId, self.sidecarId) {
+				routes.ledgers = append(routes.ledgers, &recordRoute{logId: logId})
+			}
+		}
+	}
+	return routes, nil
 }
 
 // The draft's spooled form, tagged so the drain tells it from another producer's capture.
@@ -743,6 +802,13 @@ func (self *recordWriter) Append(draft *RecordDraft) ([]*RecordEntryRef, error) 
 	spoolDraft.Projection = projection
 	spoolDraft.TeamOnly = draft.TeamOnly
 	spoolDraft.LogId = draft.LogId
+	for _, ref := range draft.Content {
+		if ref == nil {
+			return nil, fmt.Errorf("%w: a nil content ref", ErrRecordDraftInvalid)
+		}
+		copied := *ref
+		spoolDraft.Content = append(spoolDraft.Content, &copied)
+	}
 	routes, err := self.routesOf(spoolDraft)
 	if errors.Is(err, errRecordUnrouted) {
 		return self.spoolDraft(spoolDraft, RecordCoverageGapNoVault)
@@ -830,7 +896,7 @@ func (self *recordWriter) sealRoutes(draft *recordSpoolDraft, routes *recordRout
 		remaining += 1
 	}
 	if routes.team != nil {
-		remaining += 1
+		remaining += 1 + len(routes.ledgers)
 		if routes.copy && routes.vault != nil {
 			remaining += 1
 		}
@@ -860,7 +926,7 @@ func (self *recordWriter) sealRoutes(draft *recordSpoolDraft, routes *recordRout
 	refs := []*RecordEntryRef{}
 	var vaultRef *RecordEntryRef
 	if routes.vault != nil && routes.vaultEntry {
-		sealed, err := self.sealOne(draft, routes.vault, kind, draft.Body, nil, capture())
+		sealed, err := self.sealOne(draft, routes.vault, kind, draft.Body, draft.contentRefs(), capture())
 		if err != nil {
 			return refs, err
 		}
@@ -873,7 +939,7 @@ func (self *recordWriter) sealRoutes(draft *recordSpoolDraft, routes *recordRout
 			// one ContentRef to the vault entry, whose salt stays in its slot row (RECORD.md section 5.1)
 			content = []*protocol.ContentRef{{RepoId: vaultRef.LogId.Bytes(), ObjectId: vaultRef.EntryId.Bytes(), Commitment: bytes.Clone(vaultRef.Commitment[:])}}
 		}
-		sealed, err := self.sealOne(draft, routes.team, kind, teamBody, content, capture())
+		sealed, err := self.sealOne(draft, routes.team, kind, teamBody, append(content, draft.contentRefs()...), capture())
 		if err != nil {
 			return refs, err
 		}
@@ -902,6 +968,15 @@ func (self *recordWriter) sealRoutes(draft *recordSpoolDraft, routes *recordRout
 			refs = append(refs, copied.ref)
 		}
 		clear(sealed.salt)
+		// T's body again as each in-scope ledger's own entry: its own id, chain position, key and commitment
+		for _, ledger := range routes.ledgers {
+			copied, err := self.sealOne(draft, ledger, kind, teamBody, nil, capture())
+			if err != nil {
+				return refs, err
+			}
+			clear(copied.salt)
+			refs = append(refs, copied.ref)
+		}
 	}
 	if routes.directory != nil {
 		sealed, err := self.sealOne(draft, routes.directory, kind, draft.Body, nil, capture())

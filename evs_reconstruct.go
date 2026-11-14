@@ -21,6 +21,7 @@ package sidecar
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -251,15 +252,56 @@ func (self *evsReadObjects) close() {
 	self.objects = map[evsReadObjectKey]*evsSpill{}
 }
 
+// The read path a verified reply answers, nil when the result does not hold it.
+func (self *evsReadResult) pathOf(verified *EvsVerifiedPath) *evsReadPath {
+	for index, reply := range self.replies {
+		if reply == verified && index < len(self.paths) {
+			return self.paths[index]
+		}
+	}
+	return nil
+}
+
 // Fetches the ranges and slots a version's chain needs that the reply did not carry, in one more round.
 func (self *EvsRepo) fetchMissing(ctx context.Context, result *evsReadResult, entry *protocol.EvsEntryVersion) error {
+	return self.fetchVersionMissing(ctx, result, entry, nil)
+}
+
+// fetchMissing for the version verified answers. A versionless version's rounds name its path at that version beside
+// their ranges: evs finds a staged segment in the push record of a version the request names, and answers the path
+// `collected` once it is replaced, which marks the version's kind-5 segments missing here for the reader's gone row to
+// decide (evs_read_versionless.go). The state is read unverified, and only ever sends the reader to a fresh, verified
+// read.
+func (self *EvsRepo) fetchVersionMissing(ctx context.Context, result *evsReadResult, entry *protocol.EvsEntryVersion, verified *EvsVerifiedPath) error {
+	var named []*protocol.EvsReadPath
+	if verified != nil && entry.GetVersioning() != 0 {
+		if read := result.pathOf(verified); read != nil && 0 < len(read.epochPaths) {
+			named = []*protocol.EvsReadPath{{TokenPaths: read.epochPaths, Version: entry.GetVersion(), CommitVersion: verified.CommitVersion}}
+		}
+	}
 	ranges := []*protocol.EvsReadRange{}
 	for _, locator := range entry.GetChain() {
-		if protocol.EvsLocatorKind(locator.GetKind()) != protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT {
+		headerByteCount := uint32(evsSegmentKeyedHeaderByteCount)
+		switch protocol.EvsLocatorKind(locator.GetKind()) {
+		case protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT:
+		case protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT:
+			headerByteCount = evsKind5KeyedRecordOffset
+		default:
 			continue
 		}
-		if _, ok := result.objects.segmentRange(locator.GetId(), 0, evsSegmentKeyedHeaderByteCount); !ok {
-			ranges = append(ranges, &protocol.EvsReadRange{SegmentId: locator.GetId(), Offset: 0, Length: evsSegmentKeyedHeaderByteCount})
+		if locator.GetStaged() {
+			// at most 16 KiB, served whole from its push's record or from seg/
+			through := uint64(locator.GetOffset()) + uint64(locator.GetLength())
+			if EvsStagedSegmentMaxByteCount < through {
+				return fmt.Errorf("%w: a staged locator past %d bytes", ErrEvsEntryRefused, EvsStagedSegmentMaxByteCount)
+			}
+			if _, ok := result.objects.segmentRange(locator.GetId(), 0, uint32(through)); !ok {
+				ranges = append(ranges, &protocol.EvsReadRange{SegmentId: locator.GetId(), Offset: 0, Length: uint32(through)})
+			}
+			continue
+		}
+		if _, ok := result.objects.segmentRange(locator.GetId(), 0, headerByteCount); !ok {
+			ranges = append(ranges, &protocol.EvsReadRange{SegmentId: locator.GetId(), Offset: 0, Length: headerByteCount})
 		}
 		if _, ok := result.objects.segmentRange(locator.GetId(), locator.GetOffset(), locator.GetLength()); !ok {
 			ranges = append(ranges, &protocol.EvsReadRange{SegmentId: locator.GetId(), Offset: locator.GetOffset(), Length: locator.GetLength()})
@@ -278,7 +320,7 @@ func (self *EvsRepo) fetchMissing(ctx context.Context, result *evsReadResult, en
 	requestByteCount := uint64(0)
 	for _, readRange := range ranges {
 		if request == nil || EvsReadMaxRangeCount <= len(request.Ranges) || EvsReadMaxRangeByteCount < requestByteCount+uint64(readRange.GetLength()) {
-			request = &protocol.EvsReadRequest{RefId: result.refId.Bytes(), PinVersion: result.head.Version}
+			request = &protocol.EvsReadRequest{RefId: result.refId.Bytes(), PinVersion: result.head.Version, Paths: named}
 			requests = append(requests, request)
 			requestByteCount = 0
 		}
@@ -292,9 +334,19 @@ func (self *EvsRepo) fetchMissing(ctx context.Context, result *evsReadResult, en
 		requests[0].SlotIds = slotIds
 	}
 	for _, request := range requests {
-		_, objects, err := self.client.postRead(ctx, self.repoId, request)
+		reply, objects, err := self.client.postRead(ctx, self.repoId, request)
 		if err != nil {
 			return err
+		}
+		for _, pathReply := range reply.paths {
+			if pathReply.GetState() != protocol.EvsReadPathState_EVS_READ_PATH_COLLECTED {
+				continue
+			}
+			for _, locator := range entry.GetChain() {
+				if protocol.EvsLocatorKind(locator.GetKind()) == protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT {
+					result.objects.missing[hex.EncodeToString(locator.GetId())] = true
+				}
+			}
 		}
 		for key, spill := range objects.objects {
 			if held := result.objects.objects[key]; held != nil {
@@ -338,9 +390,9 @@ func (self *EvsRepo) reconstruct(ctx context.Context, result *evsReadResult, ver
 // the chain's facts from.
 func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResult, verified *EvsVerifiedPath, onRecord func(header *EvsRecordHeader, locator *protocol.EvsLocator)) (*evsSpill, *protocol.EvsSealedFields, EvsGitOid, error) {
 	if verified.Collected {
-		// a replaced versionless version: evs holds none of its content, and asking for it would read as a missing
-		// segment
-		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: version %d", ErrEvsCollected, verified.Entry.GetVersion())
+		// evs answers that it holds none of this replaced versionless version's content, which asking for would read
+		// as a missing segment: the gone row decides what that comes to
+		return nil, nil, EvsGitOid{}, self.versionlessGone(ctx, result, verified)
 	}
 	entry := verified.Entry
 	push := verified.Statement.Push
@@ -366,7 +418,13 @@ func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResu
 	if err != nil {
 		return nil, nil, EvsGitOid{}, err
 	}
-	fields, err := EvsOpenFields(manifest, entry.GetSealedFields())
+	var fields *protocol.EvsSealedFields
+	if entry.GetVersioning() == 0 {
+		fields, err = EvsOpenFields(manifest, entry.GetSealedFields())
+	} else {
+		// a versionless version's fields carry its content_sha256
+		fields, err = EvsOpenFieldsFormat2(manifest, entry.GetSealedFields(), entry.GetVersioning())
+	}
 	if err != nil {
 		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
 		return nil, nil, EvsGitOid{}, err
@@ -380,13 +438,17 @@ func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResu
 		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
 		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: a gitlink with a chain", ErrEvsSealInvalid)
 	}
-	if err := self.fetchMissing(ctx, result, entry); err != nil {
+	if err := self.fetchVersionMissing(ctx, result, entry, verified); err != nil {
 		return nil, nil, EvsGitOid{}, err
 	}
 	content, err := self.applyChain(ctx, result, push, entry, fileId, onRecord)
 	if err != nil {
 		var missing bool
 		missing = errors.Is(err, ErrEvsObjectMissing)
+		if missing && entry.GetVersioning() != 0 {
+			// a versionless version's 404: never an alarm before the fresh head read (§11.7's reads row)
+			return nil, nil, EvsGitOid{}, self.versionlessGone(ctx, result, verified)
+		}
 		if missing {
 			self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmMissingSegment, "", nil)
 		} else if errors.Is(err, ErrEvsSealInvalid) {
@@ -409,7 +471,31 @@ func (self *EvsRepo) reconstructContent(ctx context.Context, result *evsReadResu
 		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
 		return nil, nil, EvsGitOid{}, fmt.Errorf("%w: content whose oid is not its fields'", ErrEvsSealInvalid)
 	}
+	if entry.GetVersioning() != 0 {
+		// a versionless version has no chain of earlier records to hold it to: its whole plaintext's SHA-256 does
+		digest := sha256.New()
+		if _, err := io.Copy(digest, content.reader()); err != nil {
+			content.close()
+			return nil, nil, EvsGitOid{}, err
+		}
+		if !bytes.Equal(digest.Sum(nil), fields.GetContentSha256()) {
+			content.close()
+			self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmTamper, "", nil)
+			return nil, nil, EvsGitOid{}, fmt.Errorf("%w: content whose SHA-256 is not its fields'", ErrEvsSealInvalid)
+		}
+	}
 	return content, fields, oid, nil
+}
+
+// What a versionless version's `collected` or missing content comes to, by the format-2 reader's gone row
+// (evs_read_versionless.go); a client with no such reader takes it as format 1 takes a missing object. Never nil.
+func (self *EvsRepo) versionlessGone(ctx context.Context, result *evsReadResult, verified *EvsVerifiedPath) error {
+	reader := self.client.format2Reader()
+	if reader == nil {
+		self.client.alarm(self.repoId, result.refId, SidecarEvsAlarmMissingSegment, "", nil)
+		return ErrEvsObjectMissing
+	}
+	return reader.contentGone(ctx, self, result, verified)
 }
 
 // A file version with an empty chain: a gitlink, its sealed mode 160000, size 0 and the linked commit's oid, which it
@@ -522,11 +608,18 @@ func (self *EvsRepo) openRecord(ctx context.Context, result *evsReadResult, push
 			return nil, nil, nil, err
 		}
 		return header, bytes.NewReader(body), objectKey, nil
-	case protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT:
+	case protocol.EvsLocatorKind_EVS_LOCATOR_SEGMENT, protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT:
+		// format 2: a kind-5 locator names a kind-5 segment, and a kind-1 locator may name one too, adopted when
+		// versioning turned on; either reads as kind 1 past its header (evs_segment_kind5.go)
+		versionless := protocol.EvsLocatorKind(locator.GetKind()) == protocol.EvsLocatorKind_EVS_LOCATOR_VERSIONLESS_SEGMENT
 		if result.objects.missing[hex.EncodeToString(locator.GetId())] {
 			return nil, nil, nil, ErrEvsObjectMissing
 		}
-		headerRange, ok := result.objects.segmentRange(locator.GetId(), 0, evsSegmentKeyedHeaderByteCount)
+		headerByteCount := uint32(evsSegmentKeyedHeaderByteCount)
+		if versionless {
+			headerByteCount = evsKind5KeyedRecordOffset
+		}
+		headerRange, ok := result.objects.segmentRange(locator.GetId(), 0, headerByteCount)
 		if !ok {
 			return nil, nil, nil, ErrEvsObjectMissing
 		}
@@ -538,9 +631,36 @@ func (self *EvsRepo) openRecord(ctx context.Context, result *evsReadResult, push
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		segmentHeader, err := ParseEvsSegmentHeader(headerBytes)
-		if err != nil {
-			return nil, nil, nil, err
+		var segmentHeader *EvsSegmentHeader
+		wrappedKeyOffset := EvsSegmentHeaderByteCount
+		if 4 < len(headerBytes) && headerBytes[4] == evsSegmentFormat2 {
+			if self.client.format2Reader() == nil {
+				return nil, nil, nil, fmt.Errorf("%w: a kind-5 segment", ErrEvsFormatUnsupported)
+			}
+			if len(headerBytes) < evsKind5KeyedRecordOffset {
+				// a kind-1 locator's header range stops short of a kind-5 header's key block
+				wholeRange, ok := result.objects.segmentRange(locator.GetId(), 0, evsKind5KeyedRecordOffset)
+				if !ok {
+					return nil, nil, nil, ErrEvsObjectMissing
+				}
+				if headerBytes, err = io.ReadAll(wholeRange); err != nil {
+					return nil, nil, nil, err
+				}
+			}
+			kind5Header, err := ParseEvsKind5SegmentHeader(headerBytes)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			segmentHeader = &kind5Header.EvsSegmentHeader
+			wrappedKeyOffset = EvsKind5SegmentHeaderByteCount
+		} else {
+			if versionless {
+				return nil, nil, nil, fmt.Errorf("%w: a versionless locator naming a format-1 segment", ErrEvsSealInvalid)
+			}
+			segmentHeader, err = ParseEvsSegmentHeader(headerBytes)
+			if err != nil {
+				return nil, nil, nil, err
+			}
 		}
 		if segmentHeader.RepoId != self.repoId {
 			return nil, nil, nil, fmt.Errorf("%w: a segment of another repo", ErrEvsSealInvalid)
@@ -570,7 +690,7 @@ func (self *EvsRepo) openRecord(ctx context.Context, result *evsReadResult, push
 			if err != nil {
 				return nil, nil, nil, err
 			}
-			objectKey, err = EvsUnwrapObjectKey(fekKey, headerBytes[EvsSegmentHeaderByteCount:evsSegmentKeyedHeaderByteCount])
+			objectKey, err = EvsUnwrapObjectKey(fekKey, headerBytes[wrappedKeyOffset:wrappedKeyOffset+EvsWrappedKeyByteCount])
 			if err != nil {
 				return nil, nil, nil, err
 			}
