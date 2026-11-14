@@ -39,6 +39,7 @@ barrier bridge_file.egress.after bridge_file.go
 barrier bridge_file.egress.before bridge_file.go
 barrier bridge_file.rule.after bridge_file.go
 barrier bridge_file.rule.before bridge_file.go
+barrier bridge_forward.sign bridge_forward_sign.go
 barrier bridge_forward_setup.step.after bridge_forward_setup.go
 barrier bridge_forward_setup.step.before bridge_forward_setup.go
 barrier bridge_link.close.after device/bridge_link.go
