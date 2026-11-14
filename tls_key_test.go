@@ -76,6 +76,17 @@ func TestDefaultSidecarTlsSettingsMatchDesign(t *testing.T) {
 		KeyRotationInterval: 180 * 24 * time.Hour,
 		SelfSignedLifetime:  30 * 24 * time.Hour,
 		SelfSignedBackdate:  1 * time.Hour,
+		// §6.8's hourly resync, and DESIGN-DETAILS 17.2.15's chain bound
+		CertResyncInterval:       time.Hour,
+		CertHintMinInterval:      time.Second,
+		CertOrderPollInterval:    5 * time.Second,
+		CertOrderPollMinInterval: time.Second,
+		CertOrderPollMaxInterval: 5 * time.Minute,
+		CertOrderOpenTimeout:     24 * time.Hour,
+		CertRetryMinInterval:     time.Minute,
+		CertRetryMaxInterval:     time.Hour,
+		CertChainMaxCount:        8,
+		CertStateMaxByteCount:    1024 * 1024,
 	}
 	if settings := DefaultSidecarSettings(); !reflect.DeepEqual(*settings.Tls, want) {
 		t.Errorf("tls settings %+v, want %+v", *settings.Tls, want)

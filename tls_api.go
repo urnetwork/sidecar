@@ -37,7 +37,29 @@ const (
 	TlsCertStateRevoked TlsCertState = "revoked"
 	// Past its validity.
 	TlsCertStateExpired TlsCertState = "expired"
+
+	// A Team custom host's rows (DESIGN-DETAILS 17.2.4): one certificate per device and custom host, ordered under the
+	// customer's own ACME account by an ordering desktop, in states no pass of certs reads. A reader that knows none
+	// of the four treats each as no certificate, the right answer for an old reader.
+	//
+	// The CSR waits for an ordering desktop.
+	TlsCertStateCustomQueued TlsCertState = "custom_queued"
+	// A desktop took it under its account's lock, and its order is at the CA.
+	TlsCertStateCustomOrdering TlsCertState = "custom_ordering"
+	// Its chain is registered.
+	TlsCertStateCustomIssued TlsCertState = "custom_issued"
+	// A revocation is due, which only an ordering desktop can send.
+	TlsCertStateCustomRevoking TlsCertState = "custom_revoking"
 )
+
+// Whether a row in this state is a custom host's that still waits for its chain: no certificate yet (17.2.4).
+func (self TlsCertState) CustomOpen() bool {
+	return self == TlsCertStateCustomQueued || self == TlsCertStateCustomOrdering
+}
+
+// Why a custom row failed, where its device acts on it (17.2.11): its attestation no longer verified at the ordering
+// desktop, so the device queues a new CSR with a new one when it is next online.
+const TlsCustomReasonAttestation = "attestation"
 
 // What a CA is told when it revokes a certificate, in RFC 5280 §5.3.1's names (§13.8). A row holds one only while its
 // revocation waits for its CA (cert-1). A reader treats a reason it does not know as none given.
@@ -122,6 +144,10 @@ type TlsCertRecord struct {
 	// What the CA is to be told, while State is revoking. Empty in any other state: the row drops it once the CA
 	// has taken the revocation.
 	RevocationReason TlsCertRevocationReason `json:"revocation_reason,omitempty"`
+	// Why a custom row failed, or went back to custom_queued (17.2.3's custom_reason). Off the wire until TLS-M6-05
+	// gives it its json name with §2.8's lines (17.2.16), so no answer sets it yet and a device reads none: the
+	// certificate manager's new CSR after TlsCustomReasonAttestation waits on that.
+	CustomReason string `json:"-"`
 }
 
 // GET /tls/certs's answer: its network's certificates and their attestations, for the CT watch (D-TLS-8) and for a
