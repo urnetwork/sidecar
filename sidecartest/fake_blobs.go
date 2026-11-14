@@ -443,7 +443,7 @@ func (self *fakeBlobCluster) request(
 		return blobClientError(err, isWrite)
 	}
 
-	plan := self.store.faults.take(ctx, op, self.clusterId, key, isWrite)
+	plan, parked := self.store.faults.takeParking(ctx, op, self.clusterId, key, isWrite)
 	result := FaultResult(0)
 	if plan != nil {
 		result = plan.Result
@@ -458,7 +458,7 @@ func (self *fakeBlobCluster) request(
 	case CrashBeforeApply:
 		crashCaller(ctx)
 	case Delay:
-		return self.requestDelayed(ctx, plan, key, isWrite, deadline, serve)
+		return self.requestDelayed(ctx, plan, parked, key, isWrite, deadline, serve)
 	}
 
 	err := func() error {
@@ -482,10 +482,13 @@ func (self *fakeBlobCluster) request(
 }
 
 // Parks a request and waits as a client does: for its answer, its ctx, or its timeout. A client that
-// gives up leaves the request where it is, since a cancel tells the store nothing.
+// gives up leaves the request where it is, since a cancel tells the store nothing. parked fires the
+// plan, and runs only once the request is on the parked list and its timeout is on the clock: whoever
+// waited for the plan to fire can then deliver the request, or move the clock past the timeout.
 func (self *fakeBlobCluster) requestDelayed(
 	ctx context.Context,
 	plan *FaultPlan,
+	parked func(),
 	key string,
 	isWrite bool,
 	deadline time.Time,
@@ -505,6 +508,7 @@ func (self *fakeBlobCluster) requestDelayed(
 	}()
 
 	timedOut := self.store.clock.After(self.RequestTimeout())
+	parked()
 	var err error
 	self.store.blocking(func() {
 		select {

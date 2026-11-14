@@ -323,7 +323,7 @@ func (self *FakeRedis) call(ctx context.Context, op string, keys []string, serve
 	if 0 < len(keys) {
 		faultKey = keys[0]
 	}
-	plan := self.faults.take(ctx, FaultOpRedis, "", faultKey, redisCallWrites(op))
+	plan, parked := self.faults.takeParking(ctx, FaultOpRedis, "", faultKey, redisCallWrites(op))
 	result := FaultResult(0)
 	if plan != nil {
 		result = plan.Result
@@ -334,7 +334,7 @@ func (self *FakeRedis) call(ctx context.Context, op string, keys []string, serve
 	case CrashBeforeApply:
 		crashCaller(ctx)
 	case Delay:
-		return self.callDelayed(ctx, op, plan, serve)
+		return self.callDelayed(ctx, op, plan, parked, serve)
 	}
 	err := func() error {
 		self.stateLock.Lock()
@@ -352,7 +352,11 @@ func (self *FakeRedis) call(ctx context.Context, op string, keys []string, serve
 	return err
 }
 
-func (self *FakeRedis) callDelayed(ctx context.Context, op string, plan *FaultPlan, serve func() error) error {
+// Parks a call and waits as a client does: for its answer, its ctx, or its timeout. One armed never to
+// land is parked nowhere, so no delivery reaches it. parked fires the plan, and runs only once the call
+// is on the parked list and its timeout is on the clock: whoever waited for the plan to fire can then
+// deliver the call, or move the clock past the timeout.
+func (self *FakeRedis) callDelayed(ctx context.Context, op string, plan *FaultPlan, parked func(), serve func() error) error {
 	call := &parkedRedisCall{
 		serve: func() error {
 			self.opCounts[op] += 1
@@ -369,6 +373,7 @@ func (self *FakeRedis) callDelayed(ctx context.Context, op string, plan *FaultPl
 		}()
 	}
 	timedOut := self.clock.After(self.settings.RequestTimeout)
+	parked()
 	var err error
 	self.blocking(func() {
 		select {
