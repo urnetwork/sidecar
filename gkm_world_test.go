@@ -57,6 +57,8 @@ type gkmWorld struct {
 	readerExpiries map[sidecar.Id]time.Time
 	delegations    []*bridge.DelegationRow
 	atomRepos      map[sidecar.Id][]sidecar.Id
+	// the readers the audit block makes readers of the repo, once a base compiled it (gkm_audit_test.go)
+	auditReaders []sidecar.Id
 }
 
 // A world with one general repo and one member, at no state yet.
@@ -176,6 +178,7 @@ func (self *gkmWorld) state() *sidecartest.FakeGkmAuthView {
 		RepoWriters:        map[sidecar.Id][]sidecar.Id{self.repoId: self.writers},
 		RepoReaderExpiries: map[sidecar.Id]map[sidecar.Id]time.Time{self.repoId: self.readerExpiries},
 		AtomRepos:          self.atomRepos,
+		AuditReaders:       map[sidecar.Id][]sidecar.Id{self.repoId: self.auditReaders},
 	}
 	return self.log.Append(fixture)
 }

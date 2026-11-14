@@ -142,6 +142,10 @@ func CheckDelivery(view GkmAuthView, args *GkmDeliveryCheckArgs) (GkmVerdict, er
 	switch delivery.Type {
 	case GkmWrapTypeReader:
 		if !holders.Contains(GkmHolderLeaf, recipient) && !holders.Contains(GkmHolderAgent, recipient) {
+			if verdict, audit := gkmAuditRefusal(view, stateAt, args.RepoId, recipient, at, args.Now); audit {
+				// §10.8: never silent (gkm_audit.go)
+				return verdict, nil
+			}
 			return gkmRefuse(GkmRefusalDelivery, "a ReaderWrap to no key holder at its state"), nil
 		}
 	case GkmWrapTypeDelegation:

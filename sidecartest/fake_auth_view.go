@@ -48,6 +48,9 @@ type FakeGkmAuthFixture struct {
 	RepoReaderExpiries map[sidecar.Id]map[sidecar.Id]time.Time
 	// By tag atom, the repos a read or write grant naming it reads, for ReposGrantedToAtoms.
 	AtomRepos map[sidecar.Id][]sidecar.Id
+	// By repo, the readers the audit block makes readers of it (sidecar.GkmAuditView). They read only where
+	// RepoReaders lists them too.
+	AuditReaders map[sidecar.Id][]sidecar.Id
 	// The Genesis's config repo, whose row Repo adds where the rows hold none. Zero: no config repo.
 	ConfigRepoId sidecar.Id
 }
@@ -60,6 +63,7 @@ func (self *FakeGkmAuthFixture) clone() *FakeGkmAuthFixture {
 		RepoWriters:        map[sidecar.Id][]sidecar.Id{},
 		RepoReaderExpiries: map[sidecar.Id]map[sidecar.Id]time.Time{},
 		AtomRepos:          map[sidecar.Id][]sidecar.Id{},
+		AuditReaders:       map[sidecar.Id][]sidecar.Id{},
 	}
 	if self == nil {
 		return cloned
@@ -85,6 +89,9 @@ func (self *FakeGkmAuthFixture) clone() *FakeGkmAuthFixture {
 	}
 	for atom, repoIds := range self.AtomRepos {
 		cloned.AtomRepos[atom] = slices.Clone(repoIds)
+	}
+	for repoId, readers := range self.AuditReaders {
+		cloned.AuditReaders[repoId] = slices.Clone(readers)
 	}
 	return cloned
 }
@@ -229,6 +236,20 @@ func (self *FakeGkmAuthView) RepoReaders(repoId sidecar.Id) []sidecar.Id {
 
 func (self *FakeGkmAuthView) RepoWriters(repoId sidecar.Id) []sidecar.Id {
 	return slices.Clone(self.fixture.RepoWriters[repoId])
+}
+
+// sidecar.GkmAuditView: the fixture's audit readers of the repo less those whose RepoReaderExpiries has passed at at,
+// sorted.
+func (self *FakeGkmAuthView) AuditReaders(repoId sidecar.Id, at time.Time) []sidecar.Id {
+	readers := []sidecar.Id{}
+	for _, readerId := range self.fixture.AuditReaders[repoId] {
+		if expiry, found := self.fixture.RepoReaderExpiries[repoId][readerId]; found && !at.Before(expiry) {
+			continue
+		}
+		readers = append(readers, readerId)
+	}
+	slices.SortFunc(readers, sidecar.Id.Cmp)
+	return slices.Compact(readers)
 }
 
 // The fixture's readers less those whose RepoReaderExpiries has passed at at, sorted.

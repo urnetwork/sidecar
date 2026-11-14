@@ -114,6 +114,14 @@ func (self *gkmGroupManager) deliverySet(ctx context.Context, state GkmAuthView,
 					continue
 				}
 			}
+			if err := self.auditWrapAllowed(state, sidecarId, at); err != nil {
+				// never ahead of the reader list (gkm_audit.go): it gets this generation by a late delivery
+				// once the list at a signer's state shows it
+				if client.log.V(1).Enabled() {
+					client.log.Infof("[gkm]a rotation skipped a wrap: %v", err)
+				}
+				continue
+			}
 			readerIds = append(readerIds, sidecarId)
 		case GkmHolderDelegation:
 			var publicKey []byte
@@ -463,6 +471,10 @@ func (self *gkmGroupManager) deliverLateInFlow(ctx context.Context, recipient st
 			return nil
 		}
 		sidecarId, _ := IdFromBytes(recipientId)
+		if err := self.auditWrapAllowed(state, sidecarId, at); err != nil {
+			// the reader list at this state does not show the audit reader (gkm_audit.go)
+			return nil
+		}
 		signedKey, err := client.args.Api.ReaderKey(ctx, sidecarId)
 		if err != nil {
 			return err
