@@ -228,7 +228,7 @@ var canonicalActionKindRows = []*CanonicalActionKindFields{
 		Versions: []uint32{1},
 	},
 	{
-		// directory_request's access request at version 3 (16.11), which approvers refuse until MCP-M6-01 adds it; a
+		// directory_request's access request at version 3 (16.11), which approvers know since MCP-M6-01; a
 		// worker's port rides sealed_detail, so its clear fields name no port (QD-740)
 		Kind:     SidecarActionAccessRequest,
 		Required: []protoreflect.FieldNumber{canonicalActionFieldGrantDst, 11},

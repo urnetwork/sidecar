@@ -245,7 +245,7 @@ func (self *testAccessGate) Authorize(ctx context.Context, action *SidecarAction
 
 // §16.11's endorse row: a directory request passes §5.4's gate as a version-3 access_request, its stored bytes what
 // the gate judges; any other kind or version, or bytes that say otherwise, is refused before a gate sees it, and while
-// approvers know no version 3 its builder refuses every such action.
+// the builder takes such an action only because approvers know version 3 (MCP-M6-01).
 func TestAccessRequestPassesTheGate(t *testing.T) {
 	sidecar := newSidecarBase(nil, cheapKeychainSettings())
 	gate := &testAccessGate{}
@@ -312,8 +312,14 @@ func TestAccessRequestPassesTheGate(t *testing.T) {
 		t.Fatalf("a refused action reached the gate: %+v", gate.actions)
 	}
 
-	// fail closed until approvers know version 3 (MCP-M6-01)
-	if _, err := NewCanonicalAction(action); !CanonicalActionVersionKnown(3) && !errors.Is(err, ErrCanonicalActionVersionUnknown) {
+	// the builder stores the action because approvers know version 3 (MCP-M6-01), and would refuse it otherwise
+	if !CanonicalActionVersionKnown(3) {
+		t.Fatal("approvers do not know version 3")
+	}
+	if _, err := NewCanonicalAction(action); err != nil {
+		t.Fatalf("the builder refused a version-3 access request: %v", err)
+	}
+	if _, err := newCanonicalAction(action, func(version uint32) bool { return version == 1 }); !errors.Is(err, ErrCanonicalActionVersionUnknown) {
 		t.Fatalf("the builder made a version-3 action approvers cannot render: %v", err)
 	}
 }
